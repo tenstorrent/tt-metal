@@ -34,7 +34,7 @@ void push_i2s_cb_pair(
     uint32_t total_size,
     uint32_t page_size,
     const CoreRangeSet& core_ranges,
-    Buffer* bound_buffer) {
+    const MeshTensor* bound_buffer) {
     CBDescriptor cb;
     cb.total_size = total_size;
     cb.core_ranges = core_ranges;
@@ -43,7 +43,7 @@ void push_i2s_cb_pair(
         .data_format = data_format,
         .page_size = page_size,
     });
-    cb.buffer = bound_buffer;
+    cb.tensor = bound_buffer;
     desc.cbs.push_back(std::move(cb));
 }
 
@@ -75,11 +75,13 @@ ProgramDescriptor InterleavedToShardedProgramFactory::create_descriptor(
     uint32_t num_units_per_shard_width_last = 0;
     uint32_t padded_offset_bytes = 0;
 
-    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    const auto& src_tensor = input.mesh_tensor();
+    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(src_tensor.dtype());
+    const auto& dst_tensor = output.mesh_tensor();
+    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(dst_tensor.dtype());
 
-    auto shard_spec = output.shard_spec().value();
-    auto shard_strategy = output.memory_config().memory_layout();
+    auto shard_spec = dst_tensor.shard_spec().value();
+    auto shard_strategy = dst_tensor.memory_config().memory_layout();
 
     bool rm_orientation = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
 
@@ -88,13 +90,11 @@ ProgramDescriptor InterleavedToShardedProgramFactory::create_descriptor(
     CoreCoord end_core = cores.back();
 
     bool convert_df = input_cb_data_format != output_cb_data_format;
-    auto* src_buffer = input.buffer();
-    auto* dst_buffer = output.buffer();
-    bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    bool is_blackhole = (input.device()->arch() == tt::ARCH::BLACKHOLE);
+    bool src_is_dram = src_tensor.mesh_buffer().device_local_config().buffer_type == tt::tt_metal::BufferType::DRAM;
+    bool dst_is_dram = dst_tensor.mesh_buffer().device_local_config().buffer_type == tt::tt_metal::BufferType::DRAM;
+    bool is_blackhole = (src_tensor.device().arch() == tt::ARCH::BLACKHOLE);
 
-    if (input.layout() == Layout::TILE) {
+    if (src_tensor.layout() == Layout::TILE) {
         input_unit_size = tt::tile_size(input_cb_data_format);
         output_unit_size = tt::tile_size(output_cb_data_format);
         TT_FATAL(
@@ -106,9 +106,9 @@ ProgramDescriptor InterleavedToShardedProgramFactory::create_descriptor(
         num_units_per_shard_height = shard_spec.shape[0] / TILE_HEIGHT;
         num_units_per_shard_width = shard_spec.shape[1] / TILE_WIDTH;
         num_units_per_shard = num_units_per_shard_height * num_units_per_shard_width;
-        num_units_per_row = input.padded_shape()[-1] / TILE_WIDTH;
+        num_units_per_row = src_tensor.padded_shape()[-1] / TILE_WIDTH;
         num_units_offset = num_units_per_row;
-        uint32_t num_units_height = (input.physical_volume() / input.padded_shape()[-1]) / TILE_HEIGHT;
+        uint32_t num_units_height = (src_tensor.physical_volume() / src_tensor.padded_shape()[-1]) / TILE_HEIGHT;
         num_units_per_shard_height_last =
             num_units_per_shard_height -
             (tt::round_up(num_units_height, num_units_per_shard_height) - num_units_height);
@@ -117,14 +117,14 @@ ProgramDescriptor InterleavedToShardedProgramFactory::create_descriptor(
             (tt::round_up(num_units_per_row, num_units_per_shard_width) - num_units_per_row);
         padded_offset_bytes = (num_units_per_shard_width - num_units_per_shard_width_last) * input_unit_size;
     } else {
-        input_unit_size = static_cast<uint32_t>(shard_spec.shape[1] * input.element_size());
-        output_unit_size = static_cast<uint32_t>(shard_spec.shape[1] * output.element_size());
+        input_unit_size = static_cast<uint32_t>(shard_spec.shape[1] * src_tensor.element_size());
+        output_unit_size = static_cast<uint32_t>(shard_spec.shape[1] * dst_tensor.element_size());
         num_units_per_shard_height = shard_spec.shape[0];
         num_units_per_shard_width = 1;
         num_units_per_shard = num_units_per_shard_height * num_units_per_shard_width;
-        num_units_per_row = static_cast<uint32_t>(input.logical_shape()[-1] * input.element_size());
+        num_units_per_row = static_cast<uint32_t>(src_tensor.logical_shape()[-1] * src_tensor.element_size());
         num_units_offset = 1;
-        uint32_t num_units_height = static_cast<uint32_t>(input.logical_volume() / input.logical_shape()[-1]);
+        uint32_t num_units_height = static_cast<uint32_t>(src_tensor.logical_volume() / src_tensor.logical_shape()[-1]);
         num_units_per_shard_height_last =
             num_units_per_shard_height -
             (tt::round_up(num_units_height, num_units_per_shard_height) - num_units_height);
@@ -135,7 +135,7 @@ ProgramDescriptor InterleavedToShardedProgramFactory::create_descriptor(
         if (keep_l1_aligned) {
             padded_offset_bytes = tt::align(input_unit_size, hal::get_l1_alignment());
         } else {
-            padded_offset_bytes = tt::align(input_unit_size, input.buffer()->alignment());
+            padded_offset_bytes = tt::align(input_unit_size, src_tensor.mesh_buffer().get_reference_buffer()->alignment());
         }
     }
 
@@ -143,13 +143,13 @@ ProgramDescriptor InterleavedToShardedProgramFactory::create_descriptor(
     uint32_t scratch_cb_index = tt::CBIndex::c_1;
     uint32_t out_cb_index = input_cb_index;
     uint32_t num_input_units = num_units_per_shard;
-    uint32_t output_page_size = tt::align(output_unit_size, dst_buffer->alignment());
+    uint32_t output_page_size = tt::align(output_unit_size, dst_tensor.mesh_buffer().get_reference_buffer()->alignment());
 
     ProgramDescriptor desc;
 
     if (convert_df) {
         out_cb_index = tt::CBIndex::c_16;
-        uint32_t input_page_size = tt::align(input_unit_size, src_buffer->alignment());
+        uint32_t input_page_size = tt::align(input_unit_size, src_tensor.mesh_buffer().get_reference_buffer()->alignment());
         // Non-globally-allocated input CB (interleaved input streamed via reader).
         push_i2s_cb_pair(
             desc,
@@ -170,7 +170,7 @@ ProgramDescriptor InterleavedToShardedProgramFactory::create_descriptor(
         num_input_units * output_page_size,
         output_page_size,
         all_cores,
-        /*bound_buffer=*/dst_is_dram ? nullptr : dst_buffer);
+        /*bound_buffer=*/dst_is_dram ? nullptr : &dst_tensor);
 
     uint32_t dram_alignment = hal::get_dram_alignment();
     uint32_t l1_alignment = hal::get_l1_alignment();
@@ -195,16 +195,16 @@ ProgramDescriptor InterleavedToShardedProgramFactory::create_descriptor(
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = all_cores;
     reader_desc.config = ReaderConfigDescriptor{};
-    if (input.layout() == Layout::TILE) {
+    if (src_tensor.layout() == Layout::TILE) {
         std::vector<uint32_t> reader_compile_time_args = {input_cb_index, all_cores.num_cores()};
-        tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(src_tensor).append_to(reader_compile_time_args);
         reader_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
             "reader_unary_sharded_blocks_interleaved_start_id.cpp";
         reader_desc.compile_time_args = std::move(reader_compile_time_args);
     } else {
         std::vector<uint32_t> reader_compile_time_args = {input_cb_index, scratch_cb_index, num_trids};
-        tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(src_tensor).append_to(reader_compile_time_args);
         reader_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
             "reader_unary_stick_layout_sharded_blocks_interleaved_start_id.cpp";
@@ -218,7 +218,7 @@ ProgramDescriptor InterleavedToShardedProgramFactory::create_descriptor(
     writer_desc.config = WriterConfigDescriptor{};
     std::vector<uint32_t> writer_compile_time_args = {out_cb_index};
     if (dst_is_dram) {
-        if (input.layout() == Layout::TILE) {
+        if (src_tensor.layout() == Layout::TILE) {
             writer_desc.kernel_source =
                 "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
                 "writer_unary_sharded_blocks_start_id.cpp";
@@ -251,7 +251,7 @@ ProgramDescriptor InterleavedToShardedProgramFactory::create_descriptor(
 
     for (const auto& core : cores) {
         uint32_t curr_num_units_per_shard = num_units_per_shard;
-        if (input.layout() == Layout::TILE) {
+        if (src_tensor.layout() == Layout::TILE) {
             uint32_t shard_height = num_units_per_shard_height;
             uint32_t shard_width = num_units_per_shard_width;
             uint32_t padded_offset = 0;
@@ -287,7 +287,7 @@ ProgramDescriptor InterleavedToShardedProgramFactory::create_descriptor(
 
             // Reader run-time args: arg 0 is the source-buffer base address (binding).
             KernelDescriptor::RTArgList reader_rt;
-            reader_rt.push_back(src_buffer);
+            reader_rt.push_back(src_tensor.mesh_buffer().get_reference_buffer());
             reader_rt.push_back(shard_height);
             reader_rt.push_back(shard_width);
             reader_rt.push_back(padded_offset);
@@ -301,7 +301,7 @@ ProgramDescriptor InterleavedToShardedProgramFactory::create_descriptor(
             uint32_t pad_offset = (num_units_per_shard_width - shard_width) * output_unit_size;
             if (dst_is_dram) {
                 KernelDescriptor::RTArgList writer_rt;
-                writer_rt.push_back(dst_buffer);
+                writer_rt.push_back(dst_tensor.mesh_buffer().get_reference_buffer());
                 writer_rt.push_back(shard_height);
                 writer_rt.push_back(shard_width);
                 writer_rt.push_back(pad_offset);
@@ -387,7 +387,7 @@ ProgramDescriptor InterleavedToShardedProgramFactory::create_descriptor(
 
             // Reader run-time args: arg 0 is the source-buffer base address (binding).
             KernelDescriptor::RTArgList reader_rt;
-            reader_rt.push_back(src_buffer);
+            reader_rt.push_back(src_tensor.mesh_buffer().get_reference_buffer());
             reader_rt.push_back(num_units_per_row);
             reader_rt.push_back(shard_height);
             reader_rt.push_back(shard_width);
@@ -405,7 +405,7 @@ ProgramDescriptor InterleavedToShardedProgramFactory::create_descriptor(
                 uint32_t output_width_in_pages = tt::div_up(num_units_per_row, input_unit_size);
                 uint32_t start_id = (curr_idx_h * output_width_in_pages) + page_id_within_row;
                 KernelDescriptor::RTArgList writer_rt;
-                writer_rt.push_back(dst_buffer);
+                writer_rt.push_back(dst_tensor.mesh_buffer().get_reference_buffer());
                 writer_rt.push_back(shard_height);
                 writer_rt.push_back(shard_width);
                 writer_rt.push_back(padded_offset_bytes);

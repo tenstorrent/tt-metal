@@ -82,9 +82,8 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreInterleavedProgram
         }}},
     });
 
-    Buffer* src0_buffer = a.buffer();
-    Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    Buffer* src0_buffer = a.mesh_tensor().mesh_buffer().get_reference_buffer();
+    Buffer* dst_buffer = output.mesh_tensor().mesh_buffer().get_reference_buffer();
 
     /** reader
      */

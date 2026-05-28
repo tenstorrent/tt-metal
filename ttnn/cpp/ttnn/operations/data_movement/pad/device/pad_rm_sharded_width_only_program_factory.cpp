@@ -19,7 +19,7 @@ using ttnn::operations::data_movement::pack_two_uint16_into_uint32;
 
 ProgramDescriptor PadRmShardedWidthOnlyProgramFactory::create_descriptor(
     const PadParams& operation_attributes, const PadInputs& tensor_args, Tensor& tensor_return_value) {
-    const auto& input_tensor = tensor_args.input;
+    const auto& input_tensor = tensor_args.input.mesh_tensor();
     Tensor& output = tensor_return_value;
     const auto& output_padded_shape = operation_attributes.output_padded_shape;
     const auto& pad_value = operation_attributes.pad_value;
@@ -36,7 +36,7 @@ ProgramDescriptor PadRmShardedWidthOnlyProgramFactory::create_descriptor(
     auto unpadded_stick_bytes = W * input_tensor.element_size();
     auto padded_stick_bytes = W_padded * input_tensor.element_size();
 
-    IDevice* device = input_tensor.device();
+    IDevice* device = &input_tensor.mutable_device();
 
     // input shard spec
     auto input_shard_spec = input_tensor.shard_spec().value();
@@ -54,8 +54,7 @@ ProgramDescriptor PadRmShardedWidthOnlyProgramFactory::create_descriptor(
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
 
-    Buffer* input_buffer = input_tensor.buffer();
-    Buffer* output_buffer = output.buffer();
+    const auto& output_tensor = output.mesh_tensor();
 
     ProgramDescriptor desc;
 
@@ -72,7 +71,7 @@ ProgramDescriptor PadRmShardedWidthOnlyProgramFactory::create_descriptor(
             .data_format = input_cb_data_format,
             .page_size = unpadded_stick_bytes,
         });
-        cb_input.buffer = input_buffer;
+        cb_input.tensor = &input_tensor;
         desc.cbs.push_back(std::move(cb_input));
     }
 
@@ -88,7 +87,7 @@ ProgramDescriptor PadRmShardedWidthOnlyProgramFactory::create_descriptor(
             .data_format = output_cb_data_format,
             .page_size = padded_stick_bytes,
         });
-        cb_output.buffer = output_buffer;
+        cb_output.tensor = &output_tensor;
         desc.cbs.push_back(std::move(cb_output));
     }
 

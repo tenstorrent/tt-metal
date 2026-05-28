@@ -33,12 +33,12 @@ void emit_runtime_args_hc_rm(
     uint32_t num_sticks_per_core_group_1,
     const CoreRangeSet& core_group_2,
     uint32_t num_sticks_per_core_group_2) {
-    auto* input_buffer = input_tensor.buffer();
-    auto* output_buffer = output_tensor.buffer();
-    auto input_shape = input_tensor.padded_shape();
+    const MeshTensor& input_mesh = input_tensor.mesh_tensor();
+    const MeshTensor& output_mesh = output_tensor.mesh_tensor();
+    auto input_shape = input_mesh.padded_shape();
 
     uint32_t W = input_shape[3], H = input_shape[2], C = input_shape[1];
-    uint32_t W_bytes = W * input_tensor.element_size();
+    uint32_t W_bytes = W * input_mesh.element_size();
 
     uint32_t max_read_size = 2048;
     uint32_t curr_c = 0, curr_h = 0, curr_n = 0;
@@ -66,10 +66,10 @@ void emit_runtime_args_hc_rm(
 
         reader_desc.emplace_runtime_args(
             core,
-            {input_buffer, num_sticks_per_core_read, num_read_per_barrier, curr_sticks_read, curr_c, curr_h, curr_n});
+            {input_mesh, num_sticks_per_core_read, num_read_per_barrier, curr_sticks_read, curr_c, curr_h, curr_n});
 
         writer_desc.emplace_runtime_args(
-            core, {output_buffer, num_sticks_per_core_read, num_read_per_barrier, curr_sticks_write});
+            core, {output_mesh, num_sticks_per_core_read, num_read_per_barrier, curr_sticks_write});
 
         curr_sticks_write += num_sticks_per_core;
 
@@ -122,7 +122,7 @@ tt::tt_metal::ProgramDescriptor TransposeHCRMProgramFactory::create_descriptor(
     auto [num_cores, all_cores, core_group_1, core_group_2, num_sticks_per_core_group_1, num_sticks_per_core_group_2] =
         split_work_to_cores(compute_with_storage_grid_size, NCH);
 
-    Buffer* dst_buffer = output_tensor.buffer();
+    Buffer* dst_buffer = output_tensor.mesh_tensor().mesh_buffer().get_reference_buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     uint32_t src0_cb_index = 0;
@@ -130,7 +130,7 @@ tt::tt_metal::ProgramDescriptor TransposeHCRMProgramFactory::create_descriptor(
     auto num_sticks = num_sticks_per_core_group_1 > num_sticks_per_core_group_2 ? num_sticks_per_core_group_1
                                                                                 : num_sticks_per_core_group_2;
 
-    Buffer* src0_buffer = input_tensor.buffer();
+    Buffer* src0_buffer = input_tensor.mesh_tensor().mesh_buffer().get_reference_buffer();
     uint32_t aligned_page = std::max(src0_buffer->aligned_page_size(), dst_buffer->aligned_page_size());
     auto stick_size = std::max(W * input_tensor.element_size(), aligned_page);
 

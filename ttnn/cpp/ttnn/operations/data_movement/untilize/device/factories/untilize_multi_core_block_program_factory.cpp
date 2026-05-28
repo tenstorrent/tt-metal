@@ -116,9 +116,8 @@ ProgramDescriptor UntilizeMultiCoreBlockProgramFactory::create_descriptor(
         row_size_bytes = input_shape[-1] * a.element_size();
     }
 
-    Buffer* src0_buffer = a.buffer();
-    Buffer* dst_buffer = output.buffer();
-    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    Buffer* src0_buffer = a.mesh_tensor().mesh_buffer().get_reference_buffer();
+    Buffer* dst_buffer = output.mesh_tensor().mesh_buffer().get_reference_buffer();
 
     ProgramDescriptor desc;
 

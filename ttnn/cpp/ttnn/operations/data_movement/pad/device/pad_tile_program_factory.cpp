@@ -28,9 +28,8 @@ ProgramDescriptor PadTileCoreProgramFactory::create_descriptor(
 
     const auto& output_shape = output_padded_shape;
 
-    Buffer* src0_buffer = a.buffer();
-    Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    Buffer* src0_buffer = a.mesh_tensor().mesh_buffer().get_reference_buffer();
+    Buffer* dst_buffer = output.mesh_tensor().mesh_buffer().get_reference_buffer();
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t single_tile_size = tt::tile_size(cb_data_format);

@@ -60,7 +60,7 @@ void emit_runtime_args_wh_tiled(
 
         reader_desc.emplace_runtime_args(
             core,
-            {input_tensor.buffer(),
+            {input_tensor.mesh_tensor(),
              num_tiles_per_core,
              tt::round_down(num_tiles_read, HtWt) + (h * Wt) + w,
              h,
@@ -71,7 +71,7 @@ void emit_runtime_args_wh_tiled(
 
         compute_desc.emplace_runtime_args(core, {num_tiles_per_core});
 
-        writer_desc.emplace_runtime_args(core, {output_tensor.buffer(), num_tiles_per_core, num_tiles_read});
+        writer_desc.emplace_runtime_args(core, {output_tensor.mesh_tensor(), num_tiles_per_core, num_tiles_read});
 
         num_tiles_read += num_tiles_per_core;
     }
@@ -109,11 +109,11 @@ void emit_runtime_args_wh_rm(
             num_hw_blocks_per_core = 0;
         }
 
-        reader_desc.emplace_runtime_args(core, {input_tensor.buffer(), num_sticks_read, num_hw_blocks_per_core});
+        reader_desc.emplace_runtime_args(core, {input_tensor.mesh_tensor(), num_sticks_read, num_hw_blocks_per_core});
 
         compute_desc.emplace_runtime_args(core, {num_hw_blocks_per_core});
 
-        writer_desc.emplace_runtime_args(core, {output_tensor.buffer(), num_sticks_write, num_hw_blocks_per_core});
+        writer_desc.emplace_runtime_args(core, {output_tensor.mesh_tensor(), num_sticks_write, num_hw_blocks_per_core});
 
         num_sticks_read += num_hw_blocks_per_core * H;
         num_sticks_write += num_hw_blocks_per_core * W;
@@ -127,7 +127,6 @@ tt::tt_metal::ProgramDescriptor TransposeWHProgramFactory::create_descriptor(
     const auto& input_tensor = tensor_args.input;
 
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_wh needs to be on device!");
-    TT_ASSERT(input_tensor.buffer() != nullptr, "Operand to transpose_wh needs to be allocated in a buffer on device!");
 
     uint32_t num_tensor_tiles = input_tensor.physical_volume() / TILE_HW;
     uint32_t W = input_tensor.logical_shape()[3], H = input_tensor.logical_shape()[2];
@@ -144,7 +143,7 @@ tt::tt_metal::ProgramDescriptor TransposeWHProgramFactory::create_descriptor(
     tt::DataFormat dst_cb_data_format = datatype_to_dataformat_converter(output_tensor.dtype());
     uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
 
-    Buffer* src0_buffer = input_tensor.buffer();
+    Buffer* src0_buffer = input_tensor.mesh_tensor().mesh_buffer().get_reference_buffer();
     IDevice* device = input_tensor.device();
 
     bool fp32_dest_acc_en = src0_cb_data_format == tt::DataFormat::Float32 ||
@@ -160,8 +159,7 @@ tt::tt_metal::ProgramDescriptor TransposeWHProgramFactory::create_descriptor(
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         split_work_to_cores(compute_with_storage_grid_size, row_major ? NC : num_tensor_tiles);
 
-    Buffer* dst_buffer = output_tensor.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    Buffer* dst_buffer = output_tensor.mesh_tensor().mesh_buffer().get_reference_buffer();
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = row_major ? wt * 2 : 2;

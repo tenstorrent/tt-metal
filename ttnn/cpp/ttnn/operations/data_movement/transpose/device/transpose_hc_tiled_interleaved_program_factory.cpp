@@ -33,17 +33,18 @@ void emit_runtime_args_hc_tiled_interleaved(
     const Tensor& input_tensor,
     Tensor& output_tensor,
     const CoreRange& total_cores) {
-    auto* input_buffer = input_tensor.buffer();
-    auto* output_buffer = output_tensor.buffer();
+    const tt::tt_metal::MeshTensor& input_buffer_meshtensor_rename_me = input_tensor.mesh_tensor();
+    const tt::tt_metal::MeshTensor& output_buffer_meshtensor_rename_me = output_tensor.mesh_tensor();
 
-    auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
+    auto tile_shape = input_buffer_meshtensor_rename_me.tensor_spec().tile().get_tile_shape();
     auto tile_hw = tile_shape[0] * tile_shape[1];
-    uint32_t num_tensor_tiles = input_tensor.physical_volume() / tile_hw;
-    uint32_t num_output_tiles = output_tensor.physical_volume() / tile_hw;
-    uint32_t padded_num_tensor_tiles = num_output_tiles / (output_tensor.padded_shape()[2] /
+    uint32_t num_tensor_tiles = input_buffer_meshtensor_rename_me.physical_volume() / tile_hw;
+    uint32_t num_output_tiles = output_buffer_meshtensor_rename_me.physical_volume() / tile_hw;
+    uint32_t padded_num_tensor_tiles = num_output_tiles / (output_buffer_meshtensor_rename_me.padded_shape()[2] /
                                                            tile_shape[0]);  // only last row of Ct should have padding
 
-    auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size =
+        input_buffer_meshtensor_rename_me.mutable_device().compute_with_storage_grid_size();
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         split_work_to_cores(compute_with_storage_grid_size, num_tensor_tiles);
     auto
@@ -85,10 +86,11 @@ void emit_runtime_args_hc_tiled_interleaved(
         uint32_t padded_end_idx = padded_start_idx + padded_tiles_per_core;
 
         reader_desc.runtime_args.emplace_back(
-            core, std::vector<uint32_t>{input_buffer->address(), num_tiles_per_core, start_idx});
+            core, std::vector<uint32_t>{input_buffer_meshtensor_rename_me.address(), num_tiles_per_core, start_idx});
         writer_desc.runtime_args.emplace_back(
             core,
-            std::vector<uint32_t>{output_buffer->address(), start_idx, end_idx, padded_start_idx, padded_end_idx});
+            std::vector<uint32_t>{
+                output_buffer_meshtensor_rename_me.address(), start_idx, end_idx, padded_start_idx, padded_end_idx});
 
         start_idx = end_idx;
         padded_start_idx = padded_end_idx;
@@ -104,7 +106,6 @@ tt::tt_metal::ProgramDescriptor TransposeHCTiledInterleavedProgramFactory::creat
     const float pad_value = operation_attributes.pad_value;
 
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_hc needs to be on device!");
-    TT_ASSERT(input_tensor.buffer() != nullptr, "Operand to transpose_hc needs to be allocated in a buffer on device!");
 
     ProgramDescriptor desc;
     auto tile = input_tensor.tensor_spec().tile();
@@ -147,7 +148,7 @@ tt::tt_metal::ProgramDescriptor TransposeHCTiledInterleavedProgramFactory::creat
         });
     }
 
-    Buffer* src_buffer = input_tensor.buffer();
+    Buffer* src_buffer = input_tensor.mesh_tensor().mesh_buffer().get_reference_buffer();
     uint32_t element_size = input_tensor.element_size();
     uint32_t padding_val_packed = 0;
     uint32_t num_writes = 0;
@@ -203,7 +204,7 @@ tt::tt_metal::ProgramDescriptor TransposeHCTiledInterleavedProgramFactory::creat
     reader_desc.config = ReaderConfigDescriptor{};
     reader_desc.common_runtime_args = std::move(reader_common_runtime_args);
 
-    Buffer* dst_buffer = output_tensor.buffer();
+    Buffer* dst_buffer = output_tensor.mesh_tensor().mesh_buffer().get_reference_buffer();
     std::vector<uint32_t> writer_compile_time_args = {
         element_size,
         tt::CBIndex::c_0,

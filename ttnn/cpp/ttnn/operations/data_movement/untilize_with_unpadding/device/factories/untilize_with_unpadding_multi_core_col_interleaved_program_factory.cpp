@@ -83,9 +83,8 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreColInterleavedProg
         }}},
     });
 
-    Buffer* src0_buffer = a.buffer();
-    Buffer* dst_buffer = output.buffer();
-    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    Buffer* src0_buffer = a.mesh_tensor().mesh_buffer().get_reference_buffer();
+    Buffer* dst_buffer = output.mesh_tensor().mesh_buffer().get_reference_buffer();
 
     // reader
     uint32_t num_tiles_2d = a.padded_shape()[-1] * a.padded_shape()[-2] / TILE_HW;

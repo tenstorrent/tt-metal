@@ -49,7 +49,7 @@ ProgramDescriptor PadTileMulticoreProgramFactory::create_descriptor(
     auto cores_in_order = corerange_to_cores(all_cores, num_cores, true);
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t page_size = output.buffer()->page_size();
+    uint32_t page_size = output.mesh_tensor().mesh_buffer().page_size();
     uint32_t multi_buffering_size = 2;
     uint32_t input_cb_index = tt::CBIndex::c_0;
     uint32_t output_cb_index = tt::CBIndex::c_1;
@@ -87,9 +87,8 @@ ProgramDescriptor PadTileMulticoreProgramFactory::create_descriptor(
         }}},
     });
 
-    Buffer* input_buffer = a.buffer();
-    Buffer* output_buffer = output.buffer();
-    TT_ASSERT(output_buffer != nullptr, "Output buffer should be allocated on device!");
+    const auto& input_tensor = a.mesh_tensor();
+    const auto& output_tensor = output.mesh_tensor();
 
     uint32_t packed_pad_value;
     bfloat16 bfloat_pad_value = bfloat16(pad_value);
@@ -118,7 +117,7 @@ ProgramDescriptor PadTileMulticoreProgramFactory::create_descriptor(
         (std::uint32_t)page_size,
         (std::uint32_t)output_padded_shape.rank(),
     };
-    TensorAccessorArgs(*input_buffer).append_to(reader_ct_args);
+    TensorAccessorArgs(input_tensor).append_to(reader_ct_args);
 
     std::vector<uint32_t> writer_ct_args = {
         (std::uint32_t)input_cb_index,
@@ -129,7 +128,7 @@ ProgramDescriptor PadTileMulticoreProgramFactory::create_descriptor(
         (std::uint32_t)packed_pad_value,
         (std::uint32_t)output.element_size(),
     };
-    TensorAccessorArgs(*output_buffer).append_to(writer_ct_args);
+    TensorAccessorArgs(output_tensor).append_to(writer_ct_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
@@ -219,8 +218,8 @@ ProgramDescriptor PadTileMulticoreProgramFactory::create_descriptor(
         KernelDescriptor::RTArgList writer_runtime_args;
 
         if (num_pages_per_core != 0) {
-            reader_runtime_args.push_back(input_buffer);
-            writer_runtime_args.push_back(output_buffer);
+            reader_runtime_args.push_back(input_tensor);
+            writer_runtime_args.push_back(output_tensor);
         } else {
             reader_runtime_args.push_back(0u);
             writer_runtime_args.push_back(0u);

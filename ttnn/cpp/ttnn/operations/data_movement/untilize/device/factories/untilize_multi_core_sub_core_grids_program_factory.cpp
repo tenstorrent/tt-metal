@@ -93,8 +93,8 @@ tt::tt_metal::ProgramDescriptor UntilizeMultiCoreSubCoreGridsProgramFactory::cre
         }}},
     });
 
-    Buffer* src0_buffer = a.buffer();
-    Buffer* dst_buffer = output.buffer();
+    Buffer* src0_buffer = a.mesh_tensor().mesh_buffer().get_reference_buffer();
+    Buffer* dst_buffer = output.mesh_tensor().mesh_buffer().get_reference_buffer();
     std::vector<uint32_t> reader_ct_args;
     TensorAccessorArgs(*src0_buffer).append_to(reader_ct_args);
 

@@ -29,31 +29,30 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreNDShardedProgramFa
 
     // const auto& a = input;
     const auto& fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
-    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
+    const auto& input_tensor = input.mesh_tensor();
+    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
-    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    const auto& output_tensor = output.mesh_tensor();
+    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
-    tt::tt_metal::Buffer* src0_buffer = input.buffer();
-    tt::tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    uint32_t tensor_width = input_tensor.padded_shape()[-1];
+    uint32_t output_tensor_width = output_tensor.padded_shape()[-1];
+    uint32_t output_tensor_height = output_tensor.padded_shape()[-2];
 
-    uint32_t tensor_width = input.padded_shape()[-1];
-    uint32_t output_tensor_width = output.padded_shape()[-1];
-    uint32_t output_tensor_height = output.padded_shape()[-2];
-
-    const auto& tile_shape = input.tensor_spec().tile().get_tile_shape();
+    const auto& tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
 
     uint32_t num_tiles_per_input_row = tensor_width / tile_width;
     uint32_t num_tiles_per_output_row = tt::div_up(output_tensor_width, tile_width);
 
-    const auto& nd_shard_spec = input.nd_shard_spec().value();
+    const auto& nd_shard_spec = input_tensor.nd_shard_spec().value();
     uint32_t input_shard_height = nd_shard_spec.shard_shape[-2];
     uint32_t input_shard_width = nd_shard_spec.shard_shape[-1];
 
-    const auto distribution_spec = input.buffer()->buffer_distribution_spec().value();
+    const auto distribution_spec =
+        input_tensor.mesh_buffer().get_reference_buffer()->buffer_distribution_spec().value();
 
     uint32_t num_shards = distribution_spec.num_shards();
     const auto page_mapping = distribution_spec.compute_page_mapping();
@@ -123,7 +122,7 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreNDShardedProgramFa
         (uint32_t)num_tiles_per_input_block,
         (uint32_t)num_shards,
         (uint32_t)num_compute_cores};
-    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input_tensor).append_to(reader_compile_time_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
@@ -134,17 +133,17 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreNDShardedProgramFa
     reader_desc.config = ReaderConfigDescriptor{};
 
     // Writer compile-time args
-    uint32_t output_element_size = output.element_size();
+    uint32_t output_element_size = output_tensor.element_size();
     uint32_t output_page_width =
         output_tensor_width;  // In height-sharded and interleaved cases, the output page is the entire tensor row
     uint32_t output_num_blocks_across_width = 1;
-    if (output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
-        output.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
-        output.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED) {
-        if (output.shard_spec().has_value()) {
-            output_page_width = output.shard_spec().value().shape[1];
+    if (output_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
+        output_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
+        output_tensor.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED) {
+        if (output_tensor.shard_spec().has_value()) {
+            output_page_width = output_tensor.shard_spec().value().shape[1];
         } else {
-            output_page_width = output.nd_shard_spec().value().shard_shape[-1];
+            output_page_width = output_tensor.nd_shard_spec().value().shard_shape[-1];
         }
         output_num_blocks_across_width = tt::div_up(output_tensor_width, output_page_width);
     }
@@ -169,22 +168,22 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreNDShardedProgramFa
         (uint32_t)tile_width,
         (uint32_t)output_tensor_width,
         (uint32_t)output_tensor_height,
-        (uint32_t)input.padded_shape().rank()
+        (uint32_t)input_tensor.padded_shape().rank()
 
     };
     std::vector<uint32_t>
         writer_common_runtime_args;  // Due to tensor squeezing from ND to 4D when the input tensor has rank > 4,
                                      // writer_common_runtime_args will have at most 8 entries.
-    for (const auto dim : output.padded_shape()) {
+    for (const auto dim : output_tensor.padded_shape()) {
         writer_common_runtime_args.push_back(dim);
     }
-    for (const auto dim : input.padded_shape()) {
+    for (const auto dim : input_tensor.padded_shape()) {
         writer_common_runtime_args.push_back(dim);
     }
 
-    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    TensorAccessorArgs(output_tensor).append_to(writer_compile_time_args);
 
-    TensorAccessorArgs(*src0_buffer)
+    TensorAccessorArgs(input_tensor)
         .append_to(writer_compile_time_args);  // For ND sharded input, we need info on the input buffer distribution
 
     // Writer kernel
@@ -211,7 +210,8 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreNDShardedProgramFa
     // Compute compile-time args and kernel
     // Note: This condition is always true for sharded input
     KernelDescriptor::Defines compute_kernel_defines;
-    if (input.dtype() == DataType::INT32 || input.dtype() == DataType::UINT32 || input.dtype() == DataType::FLOAT32) {
+    if (input_tensor.dtype() == DataType::INT32 || input_tensor.dtype() == DataType::UINT32 ||
+        input_tensor.dtype() == DataType::FLOAT32) {
         compute_kernel_defines.emplace_back("DST_ACCUM_MODE", "1");
     }
     KernelDescriptor compute_desc;
@@ -269,10 +269,10 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreNDShardedProgramFa
             }
         }
         // Reader run-time args
-        reader_desc.emplace_runtime_args(core, {src0_buffer, start_shard_id});
+        reader_desc.emplace_runtime_args(core, {input_tensor, start_shard_id});
 
         // Writer run-time args
-        writer_desc.emplace_runtime_args(core, {dst_buffer, src0_buffer, start_shard_id});
+        writer_desc.emplace_runtime_args(core, {output_tensor, input_tensor, start_shard_id});
         start_shard_id++;
 
         // Compute run-time args

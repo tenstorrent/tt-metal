@@ -34,8 +34,8 @@ ProgramDescriptor TilizeMultiCoreWidthShardedProgramFactory::create_descriptor(
     const uint32_t src0_cb_index = tt::CBIndex::c_0;
     const uint32_t output_cb_index = tt::CBIndex::c_16;
 
-    Buffer* src_buffer = input.buffer();
-    Buffer* dst_buffer = output.buffer();
+    Buffer* src_buffer = input.mesh_tensor().mesh_buffer().get_reference_buffer();
+    Buffer* dst_buffer = output.mesh_tensor().mesh_buffer().get_reference_buffer();
 
     ProgramDescriptor desc;
 

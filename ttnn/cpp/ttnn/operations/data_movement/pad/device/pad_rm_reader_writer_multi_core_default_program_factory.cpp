@@ -54,8 +54,8 @@ ProgramDescriptor PadRmReaderWriterMultiCoreDefaultProgramFactory::create_descri
 
     // Input page-based addressing
     uint32_t num_input_pages_in_row = 1;
-    uint32_t input_page_size = a.buffer()->page_size();
-    uint32_t size_of_valid_data_in_last_input_page_in_row = a.buffer()->page_size();
+    uint32_t input_page_size = a.mesh_tensor().mesh_buffer().page_size();
+    uint32_t size_of_valid_data_in_last_input_page_in_row = a.mesh_tensor().mesh_buffer().page_size();
     if (a.is_sharded()) {
         uint32_t shard_width =
             a.shard_spec().has_value() ? a.shard_spec().value().shape[1] : a.nd_shard_spec().value().shard_shape[-1];
@@ -65,8 +65,8 @@ ProgramDescriptor PadRmReaderWriterMultiCoreDefaultProgramFactory::create_descri
 
     // Output page-based addressing
     uint32_t num_output_pages_in_row = 1;
-    uint32_t output_page_size = output.buffer()->page_size();
-    uint32_t size_of_valid_data_in_last_output_page_in_row = output.buffer()->page_size();
+    uint32_t output_page_size = output.mesh_tensor().mesh_buffer().page_size();
+    uint32_t size_of_valid_data_in_last_output_page_in_row = output.mesh_tensor().mesh_buffer().page_size();
     if (output.is_sharded()) {
         uint32_t output_shard_width = output.shard_spec().has_value() ? output.shard_spec().value().shape[1]
                                                                       : output.nd_shard_spec().value().shard_shape[-1];
@@ -99,9 +99,8 @@ ProgramDescriptor PadRmReaderWriterMultiCoreDefaultProgramFactory::create_descri
     // construct const buffer with the pad_value
     bool not_pad_by_zero = pad_value != 0;
 
-    Buffer* src0_buffer = a.buffer();
-    Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    Buffer* src0_buffer = a.mesh_tensor().mesh_buffer().get_reference_buffer();
+    Buffer* dst_buffer = output.mesh_tensor().mesh_buffer().get_reference_buffer();
 
     uint32_t packed_pad_value;
     if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {

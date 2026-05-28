@@ -23,7 +23,6 @@ tt::tt_metal::ProgramDescriptor TransposeCNProgramFactory::create_descriptor(
     bool row_major = input_tensor.layout() == Layout::ROW_MAJOR;
 
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_cn needs to be on device!");
-    TT_ASSERT(input_tensor.buffer() != nullptr, "Operand to transpose_cn needs to be allocated in a buffer on device!");
 
     ProgramDescriptor desc;
 
@@ -36,7 +35,7 @@ tt::tt_metal::ProgramDescriptor TransposeCNProgramFactory::create_descriptor(
     uint32_t page_size = page_shape[0] * page_shape[1];
     uint32_t stick_size = (row_major) ? page_shape[1] * input_tensor.element_size() : tt::tile_size(cb_data_format);
 
-    Buffer* src0_buffer = input_tensor.buffer();
+    Buffer* src0_buffer = input_tensor.mesh_tensor().mesh_buffer().get_reference_buffer();
     IDevice* device = input_tensor.device();
 
     uint32_t num_tensor_pages = input_tensor.physical_volume() / page_size;
@@ -50,8 +49,7 @@ tt::tt_metal::ProgramDescriptor TransposeCNProgramFactory::create_descriptor(
     auto [num_cores, all_cores, core_group_1, core_group_2, num_pages_per_core_group_1, num_pages_per_core_group_2] =
         split_work_to_cores(compute_with_storage_grid_size, num_tensor_pages);
 
-    Buffer* dst_buffer = output_tensor.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    Buffer* dst_buffer = output_tensor.mesh_tensor().mesh_buffer().get_reference_buffer();
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_pages = 2;

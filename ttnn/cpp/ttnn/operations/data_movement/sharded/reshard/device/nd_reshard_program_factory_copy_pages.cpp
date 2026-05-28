@@ -38,21 +38,18 @@ void push_reshard_copy_pages_cb(
 
 ProgramDescriptor NdReshardCopyPagesFactory::create_descriptor(
     const ReshardParams& /*operation_attributes*/, const ReshardInputs& tensor_args, Tensor& output_tensor) {
-    const auto& input = tensor_args.input;
-    auto& output = output_tensor;
-
-    auto* input_buffer = input.buffer();
-    auto* output_buffer = output.buffer();
+    const auto& input = tensor_args.input.mesh_tensor();
+    auto& output = output_tensor.mesh_tensor();
 
     auto input_nd_shard_spec = input.memory_config().nd_shard_spec().value();
 
-    const auto input_accessor_args = TensorAccessorArgs(*input_buffer);
-    const auto output_accessor_args = TensorAccessorArgs(*output_buffer);
+    const auto input_accessor_args = TensorAccessorArgs(input);
+    const auto output_accessor_args = TensorAccessorArgs(output);
 
-    auto aligned_page_size = input_buffer->aligned_page_size();
+    auto aligned_page_size = input.mesh_buffer().get_reference_buffer()->aligned_page_size();
 
     // Create grid + cores
-    auto grid_size = input.device()->compute_with_storage_grid_size();
+    auto grid_size = input.device().compute_with_storage_grid_size();
     auto grid = CoreRangeSet({CoreRange(CoreCoord(0, 0), CoreCoord(grid_size.x - 1, grid_size.y - 1))});
     auto cores = corerange_to_cores(grid, std::nullopt, input_nd_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
 
@@ -94,13 +91,13 @@ ProgramDescriptor NdReshardCopyPagesFactory::create_descriptor(
     // Common runtime args: arg 0 is the buffer base address (binding via Buffer*).
     // emplace_common_runtime_args registers a CommonBufferBinding for the framework
     // fast cache-hit path.
-    reader_desc.emplace_common_runtime_args({input_buffer});
-    writer_desc.emplace_common_runtime_args({output_buffer});
+    reader_desc.emplace_common_runtime_args({input.mesh_buffer().get_reference_buffer()});
+    writer_desc.emplace_common_runtime_args({output.mesh_buffer().get_reference_buffer()});
 
     // Per-core unique runtime args: [start_page, end_page]
     uint32_t start_page = 0;
-    uint32_t num_dev_pages =
-        static_cast<uint32_t>(input_buffer->buffer_distribution_spec()->tensor_shape_in_pages().volume());
+    uint32_t num_dev_pages = static_cast<uint32_t>(
+        input.mesh_buffer().get_reference_buffer()->buffer_distribution_spec()->tensor_shape_in_pages().volume());
     uint32_t n_pages_per_core = num_dev_pages / static_cast<uint32_t>(cores.size());
     uint32_t remainder = num_dev_pages % static_cast<uint32_t>(cores.size());
 

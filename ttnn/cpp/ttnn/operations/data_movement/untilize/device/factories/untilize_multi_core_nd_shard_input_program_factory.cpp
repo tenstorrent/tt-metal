@@ -34,8 +34,8 @@ ProgramDescriptor UntilizeMultiCoreNDShardInputProgramFactory::create_descriptor
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
-    Buffer* src0_buffer = a.buffer();
-    Buffer* dst_buffer = output.buffer();
+    Buffer* src0_buffer = a.mesh_tensor().mesh_buffer().get_reference_buffer();
+    Buffer* dst_buffer = output.mesh_tensor().mesh_buffer().get_reference_buffer();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     uint32_t tensor_width = a.padded_shape()[-1];
@@ -51,7 +51,8 @@ ProgramDescriptor UntilizeMultiCoreNDShardInputProgramFactory::create_descriptor
     uint32_t input_shard_height = nd_shard_spec.shard_shape[-2];
     uint32_t input_shard_width = nd_shard_spec.shard_shape[-1];
 
-    const auto distribution_spec = a.buffer()->buffer_distribution_spec().value();
+    const auto distribution_spec =
+        a.mesh_tensor().mesh_buffer().get_reference_buffer()->buffer_distribution_spec().value();
 
     uint32_t num_shards = distribution_spec.num_shards();
     const auto page_mapping = distribution_spec.compute_page_mapping();

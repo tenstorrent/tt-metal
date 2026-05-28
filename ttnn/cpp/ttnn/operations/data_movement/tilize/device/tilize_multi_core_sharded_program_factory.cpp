@@ -33,8 +33,8 @@ ProgramDescriptor TilizeMultiCoreShardedProgramFactory::create_descriptor(
     const uint32_t src0_cb_index = tt::CBIndex::c_0;
     const uint32_t output_cb_index = tt::CBIndex::c_16;
 
-    Buffer* src_buffer = input.buffer();
-    Buffer* dst_buffer = output.buffer();
+    const MeshTensor& src_tensor = input.mesh_tensor();
+    const MeshTensor& dst_tensor = output.mesh_tensor();
 
     ProgramDescriptor desc;
 
@@ -49,7 +49,7 @@ ProgramDescriptor TilizeMultiCoreShardedProgramFactory::create_descriptor(
             .data_format = input_cb_data_format,
             .page_size = input_single_tile_size,
         });
-        cb_src0.buffer = src_buffer;
+        cb_src0.tensor = &src_tensor;
         desc.cbs.push_back(std::move(cb_src0));
     }
 
@@ -63,7 +63,7 @@ ProgramDescriptor TilizeMultiCoreShardedProgramFactory::create_descriptor(
             .data_format = output_cb_data_format,
             .page_size = output_single_tile_size,
         });
-        cb_output.buffer = dst_buffer;
+        cb_output.tensor = &dst_tensor;
         desc.cbs.push_back(std::move(cb_output));
     }
 

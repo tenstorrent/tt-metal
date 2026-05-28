@@ -29,9 +29,8 @@ ProgramDescriptor UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalP
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
-    Buffer* src0_buffer = a.buffer();
-    Buffer* dst_buffer = output.buffer();
-    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    Buffer* src0_buffer = a.mesh_tensor().mesh_buffer().get_reference_buffer();
+    Buffer* dst_buffer = output.mesh_tensor().mesh_buffer().get_reference_buffer();
 
     const auto& tile_shape = a.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];

@@ -94,11 +94,12 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreShardedProgramFact
             .data_format = input_cb_data_format,
             .page_size = input_single_tile_size,
         }}},
-        .buffer = src_sharded ? a.buffer() : nullptr,
+        .buffer = src_sharded ? a.mesh_tensor().mesh_buffer().get_reference_buffer() : nullptr,
     });
 
     uint32_t num_output_tiles = out_sharded ? (unpad_tensor_w_16 ? 16 : ntiles_per_batch * 2) : ntiles_per_block * 2;
-    uint32_t aligned_page_size = static_cast<uint32_t>(output.buffer()->aligned_page_size());
+    uint32_t aligned_page_size =
+        static_cast<uint32_t>(output.mesh_tensor().mesh_buffer().get_reference_buffer()->aligned_page_size());
     constexpr uint8_t output_cb_index = tt::CBIndex::c_16;
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_output_tiles * output_single_tile_size,
@@ -123,11 +124,11 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreShardedProgramFact
                 .data_format = output_cb_data_format,
                 .page_size = aligned_page_size,
             }}},
-            .buffer = output.buffer(),
+            .tensor = &output.mesh_tensor(),
         });
     }
 
-    Buffer* dst_buffer = output.buffer();
+    Buffer* dst_buffer = output.mesh_tensor().mesh_buffer().get_reference_buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     /** reader

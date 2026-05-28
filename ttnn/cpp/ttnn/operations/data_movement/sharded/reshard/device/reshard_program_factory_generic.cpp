@@ -24,7 +24,7 @@ void push_reshard_generic_cb_pair(
     uint32_t total_size,
     uint32_t page_size,
     const CoreRangeSet& core_ranges,
-    Buffer* bound_buffer) {
+    const MeshTensor& bound_buffer_tensor) {
     CBDescriptor cb;
     cb.total_size = total_size;
     cb.core_ranges = core_ranges;
@@ -33,7 +33,7 @@ void push_reshard_generic_cb_pair(
         .data_format = data_format,
         .page_size = page_size,
     });
-    cb.buffer = bound_buffer;
+    cb.tensor = &bound_buffer_tensor;
     desc.cbs.push_back(std::move(cb));
 }
 
@@ -70,13 +70,13 @@ enum class ReshardStridesInRange { ALL_STRIDES, FIRST_HALF };
 
 std::unordered_map<CoreCoord, std::vector<detail::PageStride>> create_map_for_reshard(
     std::vector<std::vector<std::optional<std::pair<CoreCoord, uint32_t>>>> output_core_to_vector_input_core_page,
-    Buffer* input_buffer,
-    Buffer* output_buffer) {
+    const MeshTensor& input_buffer_tensor,
+    const MeshTensor& output_buffer_tensor) {
     std::unordered_map<CoreCoord, std::vector<detail::PageStride>> ret_map;
-    auto output_cores = output_buffer->get_buffer_page_mapping()->all_cores;
+    auto output_cores = output_buffer_tensor.mesh_buffer().get_reference_buffer()->get_buffer_page_mapping()->all_cores;
     ret_map.reserve(output_cores.size());
 
-    auto* device = input_buffer->device();
+    auto* device = input_buffer_tensor.mesh_buffer().get_reference_buffer()->device();
     auto full_grid = device->compute_with_storage_grid_size();
     uint32_t output_core_id = 0;
     for (auto output_core : output_cores) {
@@ -197,7 +197,7 @@ std::unordered_map<CoreCoord, std::vector<detail::PageStride>> create_map_for_re
                     }
 
                     TT_ASSERT(stride.core.x < full_grid.x and stride.core.y < full_grid.y);
-                    TT_ASSERT(data_stride < output_buffer->num_pages());
+                    TT_ASSERT(data_stride < output_buffer_tensor.mesh_buffer().num_pages());
                     uint32_t num_strides = 1;
                     while (stride_it != end and stride_it->has_value()) {
                         bool stride_not_complete = false;
@@ -372,11 +372,14 @@ std::unordered_map<CoreCoord, std::vector<detail::CompressedStrideBlock>> create
 }
 
 std::unordered_map<CoreCoord, std::vector<detail::PageStride>> get_core_page_ranges(
-    Buffer* input_buffer, Buffer* output_buffer) {
-    const auto& output_buffer_page_mapping = *output_buffer->get_buffer_page_mapping();
-    const auto& input_buffer_page_mapping = *input_buffer->get_buffer_page_mapping();
+    const MeshTensor& input_buffer_tensor, const MeshTensor& output_buffer_tensor) {
+    const auto& output_buffer_page_mapping =
+        *output_buffer_tensor.mesh_buffer().get_reference_buffer()->get_buffer_page_mapping();
+    const auto& input_buffer_page_mapping =
+        *input_buffer_tensor.mesh_buffer().get_reference_buffer()->get_buffer_page_mapping();
 
-    std::vector<std::pair<CoreCoord, uint32_t>> host_page_to_input_core_mapping(input_buffer->num_pages());
+    std::vector<std::pair<CoreCoord, uint32_t>> host_page_to_input_core_mapping(
+        input_buffer_tensor.mesh_buffer().num_pages());
     for (auto mapped_page : input_buffer_page_mapping) {
         auto core = input_buffer_page_mapping.all_cores[mapped_page.core_id];
         host_page_to_input_core_mapping[mapped_page.host_page] = {core, mapped_page.device_page};
@@ -395,29 +398,32 @@ std::unordered_map<CoreCoord, std::vector<detail::PageStride>> get_core_page_ran
         }
         cur_output_core_to_vector_input_core_page[mapped_page.device_page] = {input_core, input_core_page};
     }
-    auto ret_map = create_map_for_reshard(output_core_to_vector_input_core_page, input_buffer, output_buffer);
+    auto ret_map =
+        create_map_for_reshard(output_core_to_vector_input_core_page, input_buffer_tensor, output_buffer_tensor);
     return ret_map;
 }
 
 std::unordered_map<CoreCoord, std::vector<detail::CompressedStrideBlock>> get_core_page_ranges_diff_width(
-    Buffer* input_buffer, Buffer* output_buffer, const Tensor& input) {
-    const auto& output_buffer_page_mapping = *output_buffer->get_buffer_page_mapping();
-    const auto& input_buffer_page_mapping = *input_buffer->get_buffer_page_mapping();
+    const MeshTensor& input_buffer_tensor, const MeshTensor& output_buffer_tensor, const Tensor& input) {
+    const auto& output_buffer_page_mapping =
+        *output_buffer_tensor.mesh_buffer().get_reference_buffer()->get_buffer_page_mapping();
+    const auto& input_buffer_page_mapping =
+        *input_buffer_tensor.mesh_buffer().get_reference_buffer()->get_buffer_page_mapping();
     uint32_t num_rows = 1;
     for (uint32_t i = 0; i < input.logical_shape().rank() - 1; i++) {
         num_rows *= input.logical_shape()[i];
     }
     // Find GCD of page sizes to use as the new base page size
-    uint32_t input_page_size = input_buffer->page_size();
-    uint32_t output_page_size = output_buffer->page_size();
+    uint32_t input_page_size = input_buffer_tensor.mesh_buffer().page_size();
+    uint32_t output_page_size = output_buffer_tensor.mesh_buffer().page_size();
     uint32_t base_page_size = std::gcd(input_page_size, output_page_size);
 
     // Calculate how many base pages make up an input/output page
     uint32_t input_pages_per_original = input_page_size / base_page_size;
     uint32_t output_pages_per_original = output_page_size / base_page_size;
 
-    auto input_width = input_buffer->shard_spec().shape()[1];
-    auto output_width = output_buffer->shard_spec().shape()[1];
+    auto input_width = input_buffer_tensor.shard_spec()->shape[1];
+    auto output_width = output_buffer_tensor.shard_spec()->shape[1];
     auto total_width = input.logical_shape()[-1];
 
     uint32_t total_page_number =
@@ -440,9 +446,9 @@ std::unordered_map<CoreCoord, std::vector<detail::CompressedStrideBlock>> get_co
     // find input invalid base pages if applicable
     for (auto mapped_page : input_buffer_page_mapping) {
         auto core = input_buffer_page_mapping.all_cores[mapped_page.core_id];
-        CoreCoord shard_grid = input_buffer->shard_spec().grid().ranges()[0].grid_size();
+        CoreCoord shard_grid = input_buffer_tensor.shard_spec()->grid.ranges()[0].grid_size();
         bool is_last_in_row = (core.x == shard_grid.x - 1);
-        if (input_buffer->shard_spec().orientation() == ShardOrientation::COL_MAJOR) {
+        if (input_buffer_tensor.shard_spec()->orientation == ShardOrientation::COL_MAJOR) {
             is_last_in_row = (core.y == shard_grid.y - 1);
         }
         uint32_t base_start_page = mapped_page.host_page * input_pages_per_original;
@@ -462,9 +468,9 @@ std::unordered_map<CoreCoord, std::vector<detail::CompressedStrideBlock>> get_co
     // find output invalid base pages if applicable
     for (auto mapped_page : output_buffer_page_mapping) {
         auto core = output_buffer_page_mapping.all_cores[mapped_page.core_id];
-        CoreCoord shard_grid = output_buffer->shard_spec().grid().ranges()[0].grid_size();
+        CoreCoord shard_grid = output_buffer_tensor.shard_spec()->grid.ranges()[0].grid_size();
         bool is_last_in_row = (core.x == shard_grid.x - 1);
-        if (output_buffer->shard_spec().orientation() == ShardOrientation::COL_MAJOR) {
+        if (output_buffer_tensor.shard_spec()->orientation == ShardOrientation::COL_MAJOR) {
             is_last_in_row = (core.y == shard_grid.y - 1);
         }
         uint32_t base_start_page = mapped_page.host_page * output_pages_per_original;
@@ -542,7 +548,8 @@ std::unordered_map<CoreCoord, std::vector<detail::CompressedStrideBlock>> get_co
         }
     }
 
-    auto ret_map = create_map_for_reshard(output_core_to_vector_input_core_page, input_buffer, output_buffer);
+    auto ret_map =
+        create_map_for_reshard(output_core_to_vector_input_core_page, input_buffer_tensor, output_buffer_tensor);
 
     auto processed_ret_map = create_stride_of_strides_ret_map(ret_map);
     return processed_ret_map;
@@ -654,13 +661,14 @@ ProgramDescriptor ReshardGenericFactory::create_descriptor(
     const auto& input = tensor_args.input;
     auto& output = output_tensor;
 
-    auto* device = input.device();
-    auto* input_buffer = input.buffer();
-    auto* output_buffer = output.buffer();
+    const MeshTensor& input_mesh_tensor = input.mesh_tensor();
+    auto* device = &input_mesh_tensor.mutable_device();
+    const MeshTensor& output_mesh_tensor = output.mesh_tensor();
 
-    auto grid = input_buffer->buffer_type() == BufferType::DRAM ? device->dram_grid_size()
-                                                                : device->compute_with_storage_grid_size();
-    auto input_core_type = input_buffer->core_type();
+    auto grid = input_mesh_tensor.mesh_buffer().device_local_config().buffer_type == BufferType::DRAM
+                    ? device->dram_grid_size()
+                    : device->compute_with_storage_grid_size();
+    auto input_core_type = input_mesh_tensor.mesh_buffer().get_reference_buffer()->core_type();
     uint32_t dst_cb_index = 16;
     auto cores = get_optimal_worker_cores_for_sharded_tensor(output);
     auto all_cores = CoreRangeSet(ttsl::Span<const CoreCoord>(cores));
@@ -668,22 +676,23 @@ ProgramDescriptor ReshardGenericFactory::create_descriptor(
     uint32_t total_size = 0;
     uint32_t page_size = 0;
     uint32_t unit_size = 0;
-    auto output_shard_shape = output.shard_spec().value().shape;
-    auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
+    auto output_shard_shape = output_mesh_tensor.shard_spec().value().shape;
+    auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input_mesh_tensor.dtype());
 
-    if (input.layout() == Layout::TILE) {
+    if (input_mesh_tensor.layout() == Layout::TILE) {
         page_size = tt::tile_size(data_format);
         unit_size = page_size;
-        total_size = static_cast<uint32_t>(output.shard_spec().value().numel() / TILE_HW) * unit_size;
+        total_size = static_cast<uint32_t>(output_mesh_tensor.shard_spec().value().numel() / TILE_HW) * unit_size;
     } else {
         // For ROW_MAJOR, use base page size from GCD calculation
-        uint32_t input_page_size = input_buffer->page_size();
-        uint32_t output_page_size = output_buffer->page_size();
+        uint32_t input_page_size = input_mesh_tensor.mesh_buffer().page_size();
+        uint32_t output_page_size = output_mesh_tensor.mesh_buffer().page_size();
         uint32_t base_page_size = std::gcd(input_page_size, output_page_size);
 
         unit_size = base_page_size;
         page_size = base_page_size;
-        total_size = static_cast<uint32_t>(output_shard_shape[0] * output_shard_shape[1] * output.element_size());
+        total_size =
+            static_cast<uint32_t>(output_shard_shape[0] * output_shard_shape[1] * output_mesh_tensor.element_size());
     }
 
     ProgramDescriptor desc;
@@ -694,15 +703,16 @@ ProgramDescriptor ReshardGenericFactory::create_descriptor(
         dst_cb_index,
         data_format,
         total_size,
-        output_buffer->page_size(),
+        output_mesh_tensor.mesh_buffer().page_size(),
         all_cores,
-        /*bound_buffer=*/output_buffer);
+        output_mesh_tensor);
 
-    const std::string kernel_source = input_buffer->page_size() != output_buffer->page_size()
-                                          ? "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
-                                            "reshard_reader_diff_width.cpp"
-                                          : "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
-                                            "reshard_reader.cpp";
+    const std::string kernel_source =
+        input_mesh_tensor.mesh_buffer().page_size() != output_mesh_tensor.mesh_buffer().page_size()
+            ? "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
+              "reshard_reader_diff_width.cpp"
+            : "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
+              "reshard_reader.cpp";
 
     std::vector<uint32_t> compile_args = {
         dst_cb_index, static_cast<uint32_t>(grid.x), static_cast<uint32_t>(grid.y), page_size, unit_size};
@@ -735,15 +745,15 @@ ProgramDescriptor ReshardGenericFactory::create_descriptor(
     for (const auto& core : cores) {
         std::vector<uint32_t> runtime_args_0;
         std::vector<uint32_t> runtime_args_1;
-        if (input_buffer->page_size() != output_buffer->page_size()) {
+        if (input_mesh_tensor.mesh_buffer().page_size() != output_mesh_tensor.mesh_buffer().page_size()) {
             auto output_core_to_page_range_pair =
-                detail::get_core_page_ranges_diff_width(input_buffer, output_buffer, input);
+                detail::get_core_page_ranges_diff_width(input_mesh_tensor, output_mesh_tensor, input);
             const auto& page_stride_vector = output_core_to_page_range_pair.at(core);
             runtime_args_0 = detail::get_runtime_args_for_given_ranges_diff_width(
                 physical_core_coords,
                 page_stride_vector,
                 0,
-                input_buffer->address(),
+                input_mesh_tensor.address(),
                 0,
                 tt::div_up(static_cast<uint32_t>(page_stride_vector.size()), 2u));
             auto output_page_offset = runtime_args_0[physical_core_coords.size() + 1];
@@ -751,17 +761,17 @@ ProgramDescriptor ReshardGenericFactory::create_descriptor(
                 physical_core_coords,
                 page_stride_vector,
                 output_page_offset,
-                input_buffer->address(),
+                input_mesh_tensor.address(),
                 tt::div_up(static_cast<uint32_t>(page_stride_vector.size()), 2u),
                 page_stride_vector.size());
         } else {
-            auto output_core_to_page_range_pair = detail::get_core_page_ranges(input_buffer, output_buffer);
+            auto output_core_to_page_range_pair = detail::get_core_page_ranges(input_mesh_tensor, output_mesh_tensor);
             const auto& page_stride_vector = output_core_to_page_range_pair.at(core);
             runtime_args_0 = detail::get_runtime_args_for_given_ranges(
                 physical_core_coords,
                 page_stride_vector,
                 0,
-                input_buffer->address(),
+                input_mesh_tensor.address(),
                 0,
                 tt::div_up(static_cast<uint32_t>(page_stride_vector.size()), 2u));
             auto output_page_offset =
@@ -771,7 +781,7 @@ ProgramDescriptor ReshardGenericFactory::create_descriptor(
                 physical_core_coords,
                 page_stride_vector,
                 output_page_offset,
-                input_buffer->address(),
+                input_mesh_tensor.address(),
                 tt::div_up(static_cast<uint32_t>(page_stride_vector.size()), 2u),
                 page_stride_vector.size());
         }
@@ -782,7 +792,7 @@ ProgramDescriptor ReshardGenericFactory::create_descriptor(
         rt_args_0.reserve(runtime_args_0.size());
         for (size_t i = 0; i < runtime_args_0.size(); ++i) {
             if (i == grid.x + grid.y) {
-                rt_args_0.push_back(input_buffer);
+                rt_args_0.push_back(input_mesh_tensor.mesh_buffer().get_reference_buffer());
             } else {
                 rt_args_0.push_back(runtime_args_0[i]);
             }
@@ -791,7 +801,7 @@ ProgramDescriptor ReshardGenericFactory::create_descriptor(
         rt_args_1.reserve(runtime_args_1.size());
         for (size_t i = 0; i < runtime_args_1.size(); ++i) {
             if (i == grid.x + grid.y) {
-                rt_args_1.push_back(input_buffer);
+                rt_args_1.push_back(input_mesh_tensor.mesh_buffer().get_reference_buffer());
             } else {
                 rt_args_1.push_back(runtime_args_1[i]);
             }

@@ -33,7 +33,9 @@ tt::tt_metal::ProgramDescriptor ConcatProgramFactory::create_descriptor(
 
     uint32_t num_output_pages;
     uint32_t single_page_size;
-    const uint32_t common_align_len = std::max(input_tensors[0].buffer()->alignment(), output.buffer()->alignment());
+    const uint32_t common_align_len = std::max(
+        input_tensors[0].mesh_tensor().mesh_buffer().get_reference_buffer()->alignment(),
+        output.mesh_tensor().mesh_buffer().get_reference_buffer()->alignment());
     if (rm_layout) {
         num_output_pages = output.physical_volume() / output.padded_shape()[-1];
         single_page_size = tt::align(output.element_size() * output.padded_shape()[-1], common_align_len);
@@ -104,8 +106,7 @@ tt::tt_metal::ProgramDescriptor ConcatProgramFactory::create_descriptor(
     }
 
     const uint32_t num_input_tensors = input_tensors.size();
-    Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    Buffer* dst_buffer = output.mesh_tensor().mesh_buffer().get_reference_buffer();
 
     const uint32_t src0_cb_index = 0;
     // Depth=2 is a prefetch optimization; fall back to depth=1 when it would overflow L1.
@@ -171,9 +172,9 @@ tt::tt_metal::ProgramDescriptor ConcatProgramFactory::create_descriptor(
 
     if (rm_layout) {
         for (uint32_t i = 0; i < num_input_tensors; ++i) {
-            auto* buffer = input_tensors[i].buffer();
-            src_addr[i] = buffer->address();
-            page_size_per_tensor[i] = buffer->page_size();
+            const auto& input_tensor = input_tensors[i].mesh_tensor();
+            src_addr[i] = input_tensor.address();
+            page_size_per_tensor[i] = input_tensor.mesh_buffer().page_size();
             if (dim == num_dims - 1) {
                 num_pages_per_block[i] = num_accum_pages;
             } else {
@@ -187,9 +188,9 @@ tt::tt_metal::ProgramDescriptor ConcatProgramFactory::create_descriptor(
         }
     } else {
         for (uint32_t i = 0; i < num_input_tensors; ++i) {
-            auto* buffer = input_tensors[i].buffer();
-            src_addr[i] = buffer->address();
-            page_size_per_tensor[i] = buffer->page_size();
+            const auto& input_tensor = input_tensors[i].mesh_tensor();
+            src_addr[i] = input_tensor.address();
+            page_size_per_tensor[i] = input_tensor.mesh_buffer().page_size();
             uint32_t dim_pages = input_tensors[i].padded_shape()[dim] / scale_factor;
             num_pages_per_block[i] = num_accum_pages * dim_pages;
             num_output_pages_per_block += num_accum_pages * dim_pages;
@@ -206,7 +207,7 @@ tt::tt_metal::ProgramDescriptor ConcatProgramFactory::create_descriptor(
     reader_compile_time_args.insert(
         reader_compile_time_args.end(), page_size_per_tensor.cbegin(), page_size_per_tensor.cend());
     for (uint32_t i = 0; i < num_input_tensors; ++i) {
-        TensorAccessorArgs(*input_tensors[i].buffer()).append_to(reader_compile_time_args);
+        TensorAccessorArgs(input_tensors[i].mesh_tensor()).append_to(reader_compile_time_args);
     }
 
     KernelDescriptor::Defines concat_defines;

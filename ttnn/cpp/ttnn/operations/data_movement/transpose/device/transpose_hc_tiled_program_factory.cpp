@@ -30,14 +30,14 @@ void emit_runtime_args_hc_tiled(
     uint32_t num_tiles_per_core_group_1,
     const CoreRangeSet& core_group_2,
     uint32_t num_tiles_per_core_group_2) {
-    auto* input_buffer = input_tensor.buffer();
-    auto* output_buffer = output_tensor.buffer();
-    auto input_shape = input_tensor.padded_shape();
+    const MeshTensor& input_mesh = input_tensor.mesh_tensor();
+    const MeshTensor& output_mesh = output_tensor.mesh_tensor();
+    auto input_shape = input_mesh.padded_shape();
 
     uint32_t W = input_shape[3], H = input_shape[2], C = input_shape[1];
     uint32_t HW = H * W;
-    uint32_t HW_bytes = HW * input_tensor.element_size();
-    uint32_t CHW_bytes = C * HW * input_tensor.element_size();
+    uint32_t HW_bytes = HW * input_mesh.element_size();
+    uint32_t CHW_bytes = C * HW * input_mesh.element_size();
 
     uint32_t Wt = W / TILE_WIDTH;
     uint32_t Ct = C / TILE_HEIGHT;
@@ -65,7 +65,7 @@ void emit_runtime_args_hc_tiled(
         reader_desc.runtime_args.emplace_back(
             core,
             std::vector<uint32_t>{
-                input_buffer->address(),
+                input_mesh.address(),
                 Wt,
                 H,
                 Ct,
@@ -81,7 +81,7 @@ void emit_runtime_args_hc_tiled(
                 num_tiles_read % Wt});
 
         writer_desc.runtime_args.emplace_back(
-            core, std::vector<uint32_t>{output_buffer->address(), num_tiles_per_core, num_tiles_read});
+            core, std::vector<uint32_t>{output_mesh.address(), num_tiles_per_core, num_tiles_read});
 
         num_tiles_read += num_tiles_per_core;
     }
@@ -94,7 +94,6 @@ tt::tt_metal::ProgramDescriptor TransposeHCTiledProgramFactory::create_descripto
     const auto& input_tensor = tensor_args.input;
 
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_hc needs to be on device!");
-    TT_ASSERT(input_tensor.buffer() != nullptr, "Operand to transpose_hc needs to be allocated in a buffer on device!");
 
     uint32_t sub_tile_line_bytes = 16 * input_tensor.element_size();
     uint32_t num_tensor_tiles = input_tensor.physical_volume() / TILE_HW;
@@ -119,8 +118,7 @@ tt::tt_metal::ProgramDescriptor TransposeHCTiledProgramFactory::create_descripto
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         split_work_to_cores(compute_with_storage_grid_size, num_tensor_tiles);
 
-    Buffer* dst_buffer = output_tensor.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    Buffer* dst_buffer = output_tensor.mesh_tensor().mesh_buffer().get_reference_buffer();
 
     uint32_t src0_cb_index = 0;
     // check if we need to allocate a scratch buffer
@@ -160,7 +158,7 @@ tt::tt_metal::ProgramDescriptor TransposeHCTiledProgramFactory::create_descripto
         });
     }
 
-    Buffer* src0_buffer = input_tensor.buffer();
+    Buffer* src0_buffer = input_tensor.mesh_tensor().mesh_buffer().get_reference_buffer();
     std::vector<uint32_t> reader_compile_time_args;
     reader_compile_time_args.push_back(sub_tile_line_bytes);
     reader_compile_time_args.push_back(cb_data_format == tt::DataFormat::Float32 ? 1 : 0);

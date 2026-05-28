@@ -68,8 +68,8 @@ ProgramDescriptor UntilizeMultiCoreParallelizeColumnProgramFactory::create_descr
 
     bool row_major = true;
 
-    Buffer* src0_buffer = a.buffer();
-    Buffer* dst_buffer = output.buffer();
+    Buffer* src0_buffer = a.mesh_tensor().mesh_buffer().get_reference_buffer();
+    Buffer* dst_buffer = output.mesh_tensor().mesh_buffer().get_reference_buffer();
 
     const uint32_t src0_cb_index = tt::CBIndex::c_0;
     const uint32_t output_cb_index = tt::CBIndex::c_16;

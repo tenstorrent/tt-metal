@@ -30,8 +30,8 @@ ProgramDescriptor UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdentica
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
-    Buffer* src0_buffer = a.buffer();
-    Buffer* dst_buffer = output.buffer();
+    Buffer* src0_buffer = a.mesh_tensor().mesh_buffer().get_reference_buffer();
+    Buffer* dst_buffer = output.mesh_tensor().mesh_buffer().get_reference_buffer();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     const auto& tile_shape = a.tensor_spec().tile().get_tile_shape();
@@ -49,7 +49,8 @@ ProgramDescriptor UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdentica
     uint32_t num_blocks_per_shard = (shard_height / tile_height) * (shard_vol / (shard_height * shard_width));
     uint32_t num_tiles_per_shard = num_tiles_per_block * num_blocks_per_shard;
 
-    const auto& distribution_spec = a.buffer()->buffer_distribution_spec().value();
+    const auto& distribution_spec =
+        a.mesh_tensor().mesh_buffer().get_reference_buffer()->buffer_distribution_spec().value();
 
     uint32_t total_shards = distribution_spec.num_shards();
     uint32_t num_cores = grid.num_cores();

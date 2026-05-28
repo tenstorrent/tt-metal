@@ -15,20 +15,18 @@ namespace ttnn::prim {
 template <bool local_is_input>
 ProgramDescriptor NdReshardCopyLocalShardFactory<local_is_input>::create_descriptor(
     const ReshardParams& /*operation_attributes*/, const ReshardInputs& tensor_args, Tensor& output_tensor) {
-    const auto& input = tensor_args.input;
-    auto& output = output_tensor;
+    const auto& input = tensor_args.input.mesh_tensor();
+    const auto& output = output_tensor.mesh_tensor();
 
-    auto* input_buffer = input.buffer();
-    auto* output_buffer = output.buffer();
-
-    const auto input_accessor_args = TensorAccessorArgs(*input_buffer);
-    const auto output_accessor_args = TensorAccessorArgs(*output_buffer);
+    const auto input_accessor_args = TensorAccessorArgs(input);
+    const auto output_accessor_args = TensorAccessorArgs(output);
 
     // Choose buffer and aligned page size based on local_is_input flag
-    auto* local_buffer = local_is_input ? input_buffer : output_buffer;
+    auto* local_buffer =
+        local_is_input ? input.mesh_buffer().get_reference_buffer() : output.mesh_buffer().get_reference_buffer();
     auto aligned_page_size = local_buffer->aligned_page_size();
-    auto other_aligned_page_size =
-        local_is_input ? output_buffer->aligned_page_size() : input_buffer->aligned_page_size();
+    auto other_aligned_page_size = local_is_input ? output.mesh_buffer().get_reference_buffer()->aligned_page_size()
+                                                  : input.mesh_buffer().get_reference_buffer()->aligned_page_size();
 
     // This implementation assumes that input and output grids are the same.
     auto cores_vec = local_buffer->buffer_distribution_spec()->cores_with_data();
@@ -52,15 +50,15 @@ ProgramDescriptor NdReshardCopyLocalShardFactory<local_is_input>::create_descrip
         auto output_buffer_type = output.memory_config().memory_layout();
 
         // for block sharded
-        CoreCoord input_shard_grid = input_buffer->shard_spec().grid().ranges()[0].grid_size();
+        CoreCoord input_shard_grid = input.shard_spec()->grid.ranges()[0].grid_size();
         uint32_t input_num_shard_cores = input_shard_grid.x;
-        if (input_buffer->shard_spec().orientation() == ShardOrientation::COL_MAJOR) {
+        if (input.shard_spec()->orientation == ShardOrientation::COL_MAJOR) {
             input_num_shard_cores = input_shard_grid.y;
         }
 
-        CoreCoord output_shard_grid = output_buffer->shard_spec().grid().ranges()[0].grid_size();
+        CoreCoord output_shard_grid = output.shard_spec()->grid.ranges()[0].grid_size();
         uint32_t output_num_shard_cores = output_shard_grid.x;
-        if (output_buffer->shard_spec().orientation() == ShardOrientation::COL_MAJOR) {
+        if (output.shard_spec()->orientation == ShardOrientation::COL_MAJOR) {
             output_num_shard_cores = output_shard_grid.y;
         }
         // for width sharded
@@ -71,11 +69,11 @@ ProgramDescriptor NdReshardCopyLocalShardFactory<local_is_input>::create_descrip
         }
 
         source_width =
-            static_cast<uint32_t>(input_buffer->shard_spec().shape()[1] * input.element_size() * input_num_shard_cores);
-        destination_width = static_cast<uint32_t>(
-            output_buffer->shard_spec().shape()[1] * output.element_size() * output_num_shard_cores);
-        uint32_t input_page_size = input_buffer->page_size();
-        uint32_t output_page_size = output_buffer->page_size();
+            static_cast<uint32_t>(input.shard_spec()->shape[1] * input.element_size() * input_num_shard_cores);
+        destination_width =
+            static_cast<uint32_t>(output.shard_spec()->shape[1] * output.element_size() * output_num_shard_cores);
+        uint32_t input_page_size = input.mesh_buffer().page_size();
+        uint32_t output_page_size = output.mesh_buffer().page_size();
         base_page_size = std::gcd(input_page_size, output_page_size);
     }
     auto compile_time_args = input_accessor_args.get_compile_time_args();
@@ -114,8 +112,16 @@ ProgramDescriptor NdReshardCopyLocalShardFactory<local_is_input>::create_descrip
 
     // Common runtime args: [input_addr, output_addr, num_shards, shard_id_stride]
     // arg 0 / arg 1 are the buffer base addresses (binding via Buffer*).
-    brisc_desc.emplace_common_runtime_args({input_buffer, output_buffer, num_shards, shard_id_stride});
-    ncrisc_desc.emplace_common_runtime_args({input_buffer, output_buffer, num_shards, shard_id_stride});
+    brisc_desc.emplace_common_runtime_args(
+        {input.mesh_buffer().get_reference_buffer(),
+         output.mesh_buffer().get_reference_buffer(),
+         num_shards,
+         shard_id_stride});
+    ncrisc_desc.emplace_common_runtime_args(
+        {input.mesh_buffer().get_reference_buffer(),
+         output.mesh_buffer().get_reference_buffer(),
+         num_shards,
+         shard_id_stride});
 
     // Per-core unique runtime args: [start_shard_id]
     // brisc copies shards [0, num_data_cores*2, num_data_cores*4, num_data_cores*6, ...]

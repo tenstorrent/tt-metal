@@ -25,7 +25,7 @@ void push_reshard_same_height_cb_pair(
     uint32_t total_size,
     uint32_t page_size,
     const CoreRangeSet& core_ranges,
-    Buffer* bound_buffer) {
+    const MeshTensor& bound_tensor) {
     CBDescriptor cb;
     cb.total_size = total_size;
     cb.core_ranges = core_ranges;
@@ -34,7 +34,7 @@ void push_reshard_same_height_cb_pair(
         .data_format = data_format,
         .page_size = page_size,
     });
-    cb.buffer = bound_buffer;
+    cb.tensor = &bound_tensor;
     desc.cbs.push_back(std::move(cb));
 }
 
@@ -46,17 +46,18 @@ ProgramDescriptor ReshardSameHeightFactory<local_is_output>::create_descriptor(
     const auto& input = tensor_args.input;
     const auto& output = output_tensor;
     const auto& local_tensor = local_is_output ? output : input;
-    const auto& remote_tensor = local_is_output ? input : output;
+    const auto& remote_tensor = (local_is_output ? input : output).mesh_tensor();
     const auto local_shard_spec = local_tensor.shard_spec().value();
     const auto remote_shard_spec = remote_tensor.shard_spec().value();
 
     auto* device = input.device();
 
-    const auto remote_core_type = remote_tensor.buffer()->core_type();
+    const auto remote_core_type = remote_tensor.mesh_buffer().get_reference_buffer()->core_type();
     bool interface_with_dram = (remote_core_type == tt::CoreType::DRAM);
     auto local_cores = get_optimal_worker_cores_for_sharded_tensor(local_tensor);
     auto all_cores = CoreRangeSet(ttsl::Span<const CoreCoord>(local_cores));
-    auto remote_cores = remote_tensor.buffer()->buffer_distribution_spec().value().cores_with_data();
+    auto remote_cores =
+        remote_tensor.mesh_buffer().get_reference_buffer()->buffer_distribution_spec().value().cores_with_data();
 
     const auto data_format = tt::tt_metal::datatype_to_dataformat_converter(local_tensor.dtype());
     const uint32_t element_size = tt::datum_size(data_format);
@@ -69,14 +70,12 @@ ProgramDescriptor ReshardSameHeightFactory<local_is_output>::create_descriptor(
 
     constexpr uint32_t cb_index = tt::CBIndex::c_0;
 
-    auto* local_buffer = local_tensor.buffer();
-    auto* remote_buffer = remote_tensor.buffer();
+    const auto& local_mesh_tensor = local_tensor.mesh_tensor();
 
     ProgramDescriptor desc;
 
     // Local sharded CB. Bind to local buffer for dynamic-CB rebinding on cache hits via cb.buffer.
-    push_reshard_same_height_cb_pair(
-        desc, cb_index, data_format, total_size, unit_size, all_cores, /*bound_buffer=*/local_buffer);
+    push_reshard_same_height_cb_pair(desc, cb_index, data_format, total_size, unit_size, all_cores, local_mesh_tensor);
 
     const std::string kernel_name =
         local_is_output
@@ -97,7 +96,7 @@ ProgramDescriptor ReshardSameHeightFactory<local_is_output>::create_descriptor(
     writer_desc.config = WriterConfigDescriptor{};
     writer_desc.compile_time_args = {cb_index, static_cast<uint32_t>(interface_with_dram)};
 
-    auto remote_buffer_type = remote_buffer->buffer_type();
+    auto remote_buffer_type = remote_tensor.mesh_buffer().device_local_config().buffer_type;
 
     // Generate all read/write offsets for each core
     auto [runtime_args_for_each_core, total_num_sticks, local_stride_bytes, remote_stride_bytes] =
@@ -124,14 +123,14 @@ ProgramDescriptor ReshardSameHeightFactory<local_is_output>::create_descriptor(
         runtime_args_0.push_back(total_num_sticks_kernel_0);
         runtime_args_0.push_back(local_stride_bytes);
         runtime_args_0.push_back(remote_stride_bytes);
-        runtime_args_0.push_back(remote_buffer);
+        runtime_args_0.push_back(remote_tensor.mesh_buffer().get_reference_buffer());
         runtime_args_0.push_back(static_cast<uint32_t>(args_for_all_segments.size()));
 
         KernelDescriptor::RTArgList runtime_args_1;
         runtime_args_1.push_back(total_num_sticks_kernel_1);
         runtime_args_1.push_back(local_stride_bytes);
         runtime_args_1.push_back(remote_stride_bytes);
-        runtime_args_1.push_back(remote_buffer);
+        runtime_args_1.push_back(remote_tensor.mesh_buffer().get_reference_buffer());
         runtime_args_1.push_back(static_cast<uint32_t>(args_for_all_segments.size()));
 
         for (const auto& args : args_for_all_segments) {

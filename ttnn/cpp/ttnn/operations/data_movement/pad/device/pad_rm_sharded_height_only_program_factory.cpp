@@ -197,7 +197,8 @@ ProgramDescriptor PadRmShardedHeightOnlyProgramFactory::create_descriptor(
     const auto& pad_value = operation_attributes.pad_value;
     const auto& input_tensor_start = operation_attributes.input_tensor_start;
 
-    const auto& a_shape = a.logical_shape();
+    const auto& src_tensor = a.mesh_tensor();
+    const auto& a_shape = src_tensor.logical_shape();
     uint32_t W = a_shape[3], H = a_shape[2], C = a_shape[1], N = a_shape[0];
     [[maybe_unused]] uint32_t num_unpadded_sticks = H * C * N;
     uint32_t W_padded = output_padded_shape[3], H_padded = output_padded_shape[2], C_padded = output_padded_shape[1],
@@ -209,8 +210,8 @@ ProgramDescriptor PadRmShardedHeightOnlyProgramFactory::create_descriptor(
     log_debug(tt::LogOp, "front_pad: {}", front_pad);
 
     // stick sizes
-    auto stick_size_unpadded = W * a.element_size();
-    auto stick_size_padded = W_padded * a.element_size();
+    auto stick_size_unpadded = W * src_tensor.element_size();
+    auto stick_size_padded = W_padded * src_tensor.element_size();
     uint32_t row_major_min_bytes = 16;
 
     uint32_t zero_pad_stick_size = tt::tt_metal::find_max_divisor(stick_size_padded, 512);
@@ -224,13 +225,14 @@ ProgramDescriptor PadRmShardedHeightOnlyProgramFactory::create_descriptor(
         stick_size_unpadded == stick_size_padded,
         "sharded pad does not support pad on last dim currently as that will cause perf degradation");
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    tt::DataFormat dst_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(src_tensor.dtype());
+    const auto& dst_tensor = output.mesh_tensor();
+    tt::DataFormat dst_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(dst_tensor.dtype());
 
-    IDevice* device = a.device();
+    IDevice* device = &src_tensor.mutable_device();
 
     // input shard spec
-    auto shard_spec_unpadded = a.shard_spec().value();
+    auto shard_spec_unpadded = src_tensor.shard_spec().value();
     uint32_t shard_height_unpadded = shard_spec_unpadded.shape[0];
     bool row_major = shard_spec_unpadded.orientation == ShardOrientation::ROW_MAJOR;
 
@@ -247,7 +249,7 @@ ProgramDescriptor PadRmShardedHeightOnlyProgramFactory::create_descriptor(
     log_debug(tt::LogOp, "num_cores_unpadded: {}", num_cores_unpadded);
 
     // output shard spec
-    auto shard_spec_padded = output.shard_spec().value();
+    auto shard_spec_padded = dst_tensor.shard_spec().value();
     uint32_t shard_height_padded = shard_spec_padded.shape[0];
 
     auto& all_cores_padded = shard_spec_padded.grid;
@@ -267,9 +269,6 @@ ProgramDescriptor PadRmShardedHeightOnlyProgramFactory::create_descriptor(
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
 
-    Buffer* src_buffer = a.buffer();
-    Buffer* dst_buffer = output.buffer();
-
     ProgramDescriptor desc;
 
     // Sharded input CB — globally allocated to the input buffer; framework patches
@@ -284,7 +283,7 @@ ProgramDescriptor PadRmShardedHeightOnlyProgramFactory::create_descriptor(
             .data_format = cb_data_format,
             .page_size = stick_size_unpadded,
         });
-        cb_src0.buffer = src_buffer;
+        cb_src0.tensor = &src_tensor;
         desc.cbs.push_back(std::move(cb_src0));
     }
 
@@ -299,7 +298,7 @@ ProgramDescriptor PadRmShardedHeightOnlyProgramFactory::create_descriptor(
             .data_format = dst_cb_data_format,
             .page_size = stick_size_padded,
         });
-        cb_output.buffer = dst_buffer;
+        cb_output.tensor = &dst_tensor;
         desc.cbs.push_back(std::move(cb_output));
     }
 
@@ -317,9 +316,9 @@ ProgramDescriptor PadRmShardedHeightOnlyProgramFactory::create_descriptor(
     });
 
     uint32_t packed_pad_value;
-    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
+    if (src_tensor.dtype() == DataType::INT32 || src_tensor.dtype() == DataType::UINT32) {
         packed_pad_value = pad_value;
-    } else if (a.dtype() == DataType::UINT16) {
+    } else if (src_tensor.dtype() == DataType::UINT16) {
         packed_pad_value = pack_two_uint16_into_uint32({float_to_uint16(pad_value), float_to_uint16(pad_value)});
     } else {
         packed_pad_value = pack_two_bfloat16_into_uint32({bfloat16(pad_value), bfloat16(pad_value)});
