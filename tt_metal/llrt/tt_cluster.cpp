@@ -87,7 +87,9 @@ namespace tt {
 
 tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
     const llrt::RunTimeOptions& rtoptions, const umd::ClusterDescriptor* cluster_desc) {
-    if (rtoptions.get_simulator_enabled() && !rtoptions.get_mock_enabled()) {
+    // When ttsim is active, derive cluster type from the simulator soc descriptor even if a mock
+    // cluster descriptor is also configured (tt-run MP sweeps set both).
+    if (rtoptions.get_simulator_enabled()) {
         auto soc_desc =
             tt::umd::SimulationChip::get_soc_descriptor_path_from_simulator_path(rtoptions.get_simulator_path());
         auto arch = tt::umd::SocDescriptor::get_arch_from_soc_descriptor_path(soc_desc);
