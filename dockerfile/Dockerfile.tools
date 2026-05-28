@@ -36,6 +36,12 @@ ARG CMAKE_SHA256=5bb505d5e0cca0480a330f7f27ccf52c2b8b5214c5bba97df08899f5ef650c2
 ARG YQ_VERSION=v4.44.6
 ARG YQ_SHA256=0c2b24e645b57d8e7c0566d18643a6d4f5580feeea3878127354a46f2a1e4598
 
+# zstd v1.5.7 (commit f8745da6ff1ad1e7bab384bd1f9d742439278e99).
+# SHA256 is for the release source tarball zstd-1.5.7.tar.gz, matching the
+# upstream zstd-1.5.7.tar.gz.sha256 published with the release.
+ARG ZSTD_VERSION=1.5.7
+ARG ZSTD_SHA256=eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3
+
 # NOTE: OMPI_VERSION is the single source of truth for the OpenMPI version.
 # If you change this value, you MUST also update OMPI_VERSION in:
 #   - dockerfile/Dockerfile (ENV OMPI_VERSION in base stage)
@@ -248,6 +254,42 @@ LABEL org.opencontainers.image.version="${YQ_VERSION}"
 COPY --from=yq-builder /install/ /install/
 
 #############################################################
+# zstd - built from source tarball with make
+# Outputs: /install/bin/zstd, /install/lib/libzstd.*, /install/include/...
+#############################################################
+
+FROM quay.io/pypa/manylinux_2_34_x86_64 AS zstd-builder
+ARG ZSTD_VERSION
+ARG ZSTD_SHA256
+
+# Enforce strict error handling: exit on error, unset vars, pipe failures
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
+
+RUN FILES=(/etc/yum.repos.d/*.repo) && \
+    sed --in-place -e 's/^mirrorlist=/# mirrorlist=/g' -e 's/^# baseurl=/baseurl=/' "${FILES[@]}"
+
+# Build deps matching manylinux (AlmaLinux 9) for ABI compatibility
+RUN dnf install -y \
+    gcc \
+    make \
+    wget \
+    && dnf clean all
+
+COPY dockerfile/scripts/install-zstd.sh /tmp/install-zstd.sh
+RUN ZSTD_VERSION=${ZSTD_VERSION} \
+    ZSTD_SHA256=${ZSTD_SHA256} \
+    INSTALL_PREFIX=/install \
+    /bin/bash /tmp/install-zstd.sh
+
+FROM scratch AS zstd
+ARG ZSTD_VERSION
+LABEL org.opencontainers.image.source="https://github.com/facebook/zstd"
+LABEL org.opencontainers.image.description="Zstandard - fast real-time compression algorithm"
+LABEL org.opencontainers.image.licenses="BSD-3-Clause OR GPL-2.0-only"
+LABEL org.opencontainers.image.version="${ZSTD_VERSION}"
+COPY --from=zstd-builder /install/ /install/
+
+#############################################################
 # SFPI - Tenstorrent SFPI compiler
 # Outputs: /install/opt/tenstorrent/sfpi/...
 #
@@ -302,6 +344,9 @@ SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 RUN FILES=(/etc/yum.repos.d/*.repo) && \
     sed --in-place -e 's/^mirrorlist=/# mirrorlist=/g' -e 's/^# baseurl=/baseurl=/' "${FILES[@]}"
 
+# Install zstd from the pre-built zstd-builder stage (provides libzstd for OpenMPI)
+COPY --from=zstd-builder /install/ /usr/local/
+
 # Build deps matching manylinux (AlmaLinux 9) for ABI compatibility
 RUN dnf install -y \
     autoconf \
@@ -321,7 +366,6 @@ RUN dnf install -y \
     libevent-devel \
     libmpc-devel \
     mpfr-devel \
-    libzstd-devel \
     libtool \
     make \
     perl \

@@ -97,6 +97,7 @@ jobs:
           add_if_missing gdb
           add_if_missing cmake
           add_if_missing yq
+          add_if_missing zstd
           add_if_missing sfpi
           add_if_missing openmpi
 

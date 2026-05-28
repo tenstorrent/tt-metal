@@ -25,11 +25,12 @@ CBA_VERSION=$(grep -E "^ARG CBA_VERSION=" dockerfile/Dockerfile.tools | head -1 
 GDB_VERSION=$(grep -E "^ARG GDB_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
 CMAKE_VERSION=$(grep -E "^ARG CMAKE_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
 YQ_VERSION=$(grep -E "^ARG YQ_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
+ZSTD_VERSION=$(grep -E "^ARG ZSTD_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
 OMPI_VERSION=$(grep -E "^ARG OMPI_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
 SFPI_VERSION=$(grep -E "^sfpi_version=" tt_metal/sfpi-version | cut -d"'" -f2)
 
 # Compute hashes for each tool (version + install script)
-for tool in ccache mold doxygen cba gdb cmake yq; do
+for tool in ccache mold doxygen cba gdb cmake yq zstd; do
     script_name="install-${tool}.sh"
     [[ "$tool" == "cba" ]] && script_name="install-clangbuildanalyzer.sh"
     hash_var="${tool^^}_HASH"
@@ -51,6 +52,7 @@ jq -n \
   --arg gdb "${BASE}/gdb:${GDB_VERSION}-${GDB_HASH}" \
   --arg cmake "${BASE}/cmake:${CMAKE_VERSION}-${CMAKE_HASH}" \
   --arg yq "${BASE}/yq:${YQ_VERSION}-${YQ_HASH}" \
+  --arg zstd "${BASE}/zstd:${ZSTD_VERSION}-${ZSTD_HASH}" \
   --arg sfpi "${BASE}/sfpi:${SFPI_VERSION}-${SFPI_HASH}" \
   --arg openmpi "${BASE}/openmpi:${OMPI_VERSION}-${OPENMPI_HASH}" \
   '{
@@ -61,6 +63,7 @@ jq -n \
     "gdb-tag": $gdb,
     "cmake-tag": $cmake,
     "yq-tag": $yq,
+    "zstd-tag": $zstd,
     "sfpi-tag": $sfpi,
     "openmpi-tag": $openmpi
   }'

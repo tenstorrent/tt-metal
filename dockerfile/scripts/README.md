@@ -14,7 +14,7 @@ The Docker build system uses **pre-built tool images** stored in GHCR (GitHub Co
 
 ### Layer Types
 
-1. **Pre-built Tool Images** (9 tools)
+1. **Pre-built Tool Images** (10 tools)
    - Built by `Dockerfile.tools` and pushed to GHCR
    - Injected into downstream Dockerfiles via Bake `contexts` (overriding `FROM scratch AS <tool>-layer` stubs)
    - Tagged as `ghcr.io/<repo>/tt-metalium/tools/<tool>:<version>-<hash>`
@@ -29,6 +29,7 @@ The Docker build system uses **pre-built tool images** stored in GHCR (GitHub Co
    | gdb | GNU Debugger |
    | cmake | Build system generator |
    | yq | YAML processor |
+   | zstd | Zstandard compression CLI and libzstd |
    | sfpi | SFPI compiler tools |
    | openmpi | MPI implementation for distributed computing |
 
@@ -77,6 +78,7 @@ docker buildx bake -f dockerfile/docker-bake.hcl tools
 | `install-openmpi.sh` | Build and install OpenMPI with ULFM support |
 | `install-sfpi.sh` | Install SFPI compiler tools |
 | `install-yq.sh` | Install yq binary release |
+| `install-zstd.sh` | Build and install Zstandard from source tarball |
 | `compute-hashes.sh` | Utility to compute SHA256 hashes for updates |
 
 ## Updating Tool Versions
@@ -125,6 +127,7 @@ CCACHE_VERSION=4.11.0 ./dockerfile/scripts/compute-hashes.sh
 | gdb | GNU announcement mailing list or FTP .sig files |
 | iwyu | GitHub release (compute from download) |
 | yq | GitHub release checksums file |
+| zstd | GitHub release `*.tar.gz.sha256` sidecar |
 | sfpi | Internal release artifacts |
 | openmpi | OpenMPI download page checksums |
 

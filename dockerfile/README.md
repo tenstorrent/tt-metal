@@ -9,7 +9,7 @@ This directory contains the Docker build system for TT-Metalium, including multi
 ```mermaid
 flowchart TB
     subgraph GHCR [GHCR Container Registry]
-        ToolImages[Tool Images<br/>ccache, mold, doxygen, cba,<br/>gdb, cmake, yq, sfpi, openmpi]
+        ToolImages[Tool Images<br/>ccache, mold, doxygen, cba,<br/>gdb, cmake, yq, zstd, sfpi, openmpi]
         VenvImages[Python Venv Images<br/>ci-build-venv, ci-test-venv]
         MainImages[Main Images<br/>ci-build, ci-test, dev]
         BasicImages[Basic Images<br/>basic-dev, basic-ttnn-runtime]
@@ -149,6 +149,7 @@ Tool image tags are passed between workflows as a single JSON bundle instead of 
   "gdb-tag": "ghcr.io/.../tools/gdb:14.2-<hash>",
   "cmake-tag": "ghcr.io/.../tools/cmake:4.2.3-<hash>",
   "yq-tag": "ghcr.io/.../tools/yq:v4.44.6-<hash>",
+  "zstd-tag": "ghcr.io/.../tools/zstd:1.5.7-<hash>",
   "sfpi-tag": "ghcr.io/.../tools/sfpi:<version>-<hash>",
   "openmpi-tag": "ghcr.io/.../tools/openmpi:v5.0.7-<hash>"
 }
@@ -226,7 +227,7 @@ docker buildx bake -f dockerfile/docker-bake.hcl --no-cache dev
 | `Dockerfile.evaluation` | Evaluation builds | evaluation |
 | `Dockerfile.manylinux` | ManyLinux wheel builds | manylinux |
 | `Dockerfile.python` | Python venv images | ci-build-venv, ci-test-venv |
-| `Dockerfile.tools` | Tool images | ccache, mold, doxygen, cba, gdb, cmake, yq, sfpi, openmpi |
+| `Dockerfile.tools` | Tool images | ccache, mold, doxygen, cba, gdb, cmake, yq, zstd, sfpi, openmpi |
 
 ## Key Files
 

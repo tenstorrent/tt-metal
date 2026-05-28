@@ -11,6 +11,7 @@
 FROM scratch AS ccache-layer
 FROM scratch AS mold-layer
 FROM scratch AS sfpi-layer
+FROM scratch AS zstd-layer
 FROM scratch AS openmpi-layer
 
 #############################################################
@@ -52,6 +53,14 @@ RUN --mount=from=ccache-layer,source=/install,target=/ccache-staging \
     cp -a /ccache-staging/bin/ccache /usr/local/bin/ && \
     ccache --version
 
+# Copy zstd from pre-built tool image
+RUN --mount=from=zstd-layer,source=/install,target=/zstd-staging \
+    cp -a /zstd-staging/bin/* /usr/local/bin/ && \
+    cp -a /zstd-staging/lib/* /usr/local/lib/ && \
+    cp -a /zstd-staging/include/* /usr/local/include/ && \
+    ldconfig && \
+    zstd --version
+
 # Copy OpenMPI (ULFM) from pre-built tool image
 RUN --mount=from=openmpi-layer,source=/install,target=/openmpi-staging \
     cp -a /openmpi-staging/. /opt/ && \
@@ -78,7 +87,6 @@ RUN dnf install -y \
     libevent-devel \
     libibverbs-devel \
     libmpc-devel \
-    libzstd-devel \
     mpfr-devel \
     patchutils \
     pmix-devel \

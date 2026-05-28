@@ -333,7 +333,7 @@ jobs:
             SET+="${target}.contexts.ci-test-venv-layer=docker-image://${HARBOR_PREFIX}${CI_TEST_VENV_TAG}"$'\n'
           }
 
-          ALL_TOOLS=(ccache mold doxygen cba gdb cmake yq sfpi openmpi)
+          ALL_TOOLS=(ccache mold doxygen cba gdb cmake yq zstd sfpi openmpi)
 
           add_main_target() {
             local target="$1"

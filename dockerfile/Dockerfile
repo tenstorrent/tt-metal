@@ -52,6 +52,7 @@ FROM scratch AS cba-layer
 FROM scratch AS gdb-layer
 FROM scratch AS cmake-layer
 FROM scratch AS yq-layer
+FROM scratch AS zstd-layer
 FROM scratch AS sfpi-layer
 FROM scratch AS openmpi-layer
 FROM scratch AS ci-build-venv-layer
@@ -96,9 +97,11 @@ ENV UV_PYTHON_INSTALL_DIR="/usr/local/share/uv"
 
 COPY --from=uv-layer /uv /uvx /usr/local/bin/
 COPY --from=cmake-layer /install/ /usr/local/
+COPY --from=zstd-layer /install/ /usr/local/
 COPY --from=openmpi-layer /install/ /opt/
 
 RUN test -x /usr/local/bin/cmake || { echo "ERROR: cmake not found in cmake-layer" >&2; exit 1; } && \
+    test -x /usr/local/bin/zstd || { echo "ERROR: zstd not found in zstd-layer" >&2; exit 1; } && \
     test -d "${OMPI_PREFIX}/bin" || \
     { echo "ERROR: ${OMPI_PREFIX}/bin not found. OMPI_VERSION (${OMPI_VERSION}) likely differs from Dockerfile.tools ARG OMPI_VERSION." >&2; exit 1; }
 

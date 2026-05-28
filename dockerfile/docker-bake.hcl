@@ -131,6 +131,13 @@ target "yq" {
   tags       = ["tool-yq:local"]
 }
 
+target "zstd" {
+  context    = "."
+  dockerfile = "dockerfile/Dockerfile.tools"
+  target     = "zstd"
+  tags       = ["tool-zstd:local"]
+}
+
 target "sfpi" {
   context    = "."
   dockerfile = "dockerfile/Dockerfile.tools"
@@ -146,7 +153,7 @@ target "openmpi" {
 }
 
 group "tools" {
-  targets = ["ccache", "mold", "doxygen", "cba", "gdb", "cmake", "yq", "sfpi", "openmpi"]
+  targets = ["ccache", "mold", "doxygen", "cba", "gdb", "cmake", "yq", "zstd", "sfpi", "openmpi"]
 }
 
 # =============================================================================
@@ -211,6 +218,7 @@ target "_main-common" {
     gdb-layer            = "target:gdb"
     cmake-layer          = "target:cmake"
     yq-layer             = "target:yq"
+    zstd-layer           = "target:zstd"
     sfpi-layer           = "target:sfpi"
     openmpi-layer        = "target:openmpi"
     # Python venv layers (resolved from Dockerfile.python targets locally)

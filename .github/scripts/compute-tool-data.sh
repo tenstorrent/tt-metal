@@ -55,7 +55,7 @@ done
 TOOL_TAGS=$(.github/scripts/compute-tool-tags.sh "$REPO")
 
 # Tool list
-TOOLS="ccache mold doxygen cba gdb cmake yq sfpi openmpi"
+TOOLS="ccache mold doxygen cba gdb cmake yq zstd sfpi openmpi"
 
 # Check existence for each tool
 ANY_MISSING=false
@@ -91,6 +91,7 @@ jq -n \
     --arg gdb_exists "${EXISTS[gdb]}" \
     --arg cmake_exists "${EXISTS[cmake]}" \
     --arg yq_exists "${EXISTS[yq]}" \
+    --arg zstd_exists "${EXISTS[zstd]}" \
     --arg sfpi_exists "${EXISTS[sfpi]}" \
     --arg openmpi_exists "${EXISTS[openmpi]}" \
     '{
@@ -103,6 +104,7 @@ jq -n \
         gdb_exists: $gdb_exists,
         cmake_exists: $cmake_exists,
         yq_exists: $yq_exists,
+        zstd_exists: $zstd_exists,
         sfpi_exists: $sfpi_exists,
         openmpi_exists: $openmpi_exists
     }'
