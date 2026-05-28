@@ -455,22 +455,21 @@ class TTSeamlessM4Tv2Model:
         ttnn.synchronize_device(self.device)
 
     def clear_runtime_program_cache(self) -> None:
-        """Release the decode trace and per-shape conv/matmul prep caches between modalities.
+        """Release the decode trace + per-shape prep caches and reset the device program cache.
 
-        The *device* program cache is deliberately left alone (enabled, not cleared):
-          * Clearing it does not free runtime L1 — circular buffers are allocated per dispatch,
-            not held by cached programs — so it does not help the next modality "fit".
-          * Once the HiFi-GAN vocoder has populated it, ``(disable_and_)clear_program_cache`` takes
-            many minutes on the BH mesh, stalling the demo between tasks.
-          * Leaving it enabled lets decode-trace capture work and lets the vocoder's repeated
-            same-shape conv chunks reuse compiled programs instead of recompiling each window.
-        Persistent *device* memory (preprocessed conv/matmul weights) is still freed via the
-        per-module prep caches cleared below.
+        Resetting the device program cache between modalities is a major perf lever: it grows
+        unboundedly across the demo's task chain (≈560 entries after T2TT → ≈6200 by S2ST), and a
+        large program cache slows *every* device op on the BH mesh by ~10× (a 31 s vocoder went
+        132 s → 10 s purely by clearing here). ``clear_program_cache`` empties it but keeps it
+        *enabled* so the next modality recompiles once (disk-cache warm) then reuses, and the
+        decode trace can still be captured. With the wide vocoder conv window the cache is small,
+        so the clear itself is sub-second (the old multi-minute clear was an interior=512 artifact).
         """
         # A captured decode trace hard-codes this modality's programs *and* KV/encoder buffer
-        # addresses; release it so a later ``generate()`` re-captures against its own buffers
-        # instead of replaying a stale trace (which hangs in ``execute_trace``).
+        # addresses; release it (before clearing programs) so a later ``generate()`` re-captures
+        # against its own buffers instead of replaying a stale trace (hangs in ``execute_trace``).
         self.release_text_decoder_decode_trace()
+        self.device.clear_program_cache()
         self.vocoder._conv1d_prepared_cache.clear()
         self.vocoder._matmul_pc_cache.clear()
         self.speech_encoder._conv1d_prepared_cache.clear()
@@ -2196,13 +2195,17 @@ class TTSeamlessM4Tv2Model:
             ttnn.deallocate(sequences_tt)
             sequences_tt = _ttnn_ids_from_list([seq_host], self.device)
         attn_enc = kwargs_speech.get("attention_mask", attn_tt_text)
-        if input_features is not None:
+        # Reuse the first-pass encoder output for the T2U decoder-hidden pass — HF parity
+        # (``text_generation_output.encoder_hidden_states[-1]``). The speech encoder is
+        # deterministic, so re-encoding the same features+mask just reproduces ``enc_tt`` bit for
+        # bit; skipping it saves a full speech-encoder forward (~8 s on the demo's S2ST). Only
+        # re-encode if the speech path was handed a *different* attention mask than the first pass.
+        if input_features is not None and attn_enc is not attn_tt_text:
             ttnn.deallocate(enc_tt)
             if enc_attn_owned:
                 ttnn.deallocate(enc_attn_tt)
             enc_tt2, enc_attn_tt2, enc_attn_owned2 = self._encode_speech(input_features, attn_enc)
         else:
-            # Text path reuses the first-pass encoder output (HF parity).
             enc_tt2, enc_attn_tt2, enc_attn_owned2 = enc_tt, enc_attn_tt, enc_attn_owned
         _gt_mark("speech re-encode")
 
