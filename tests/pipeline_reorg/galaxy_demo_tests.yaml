@@ -63,7 +63,7 @@
   model: wan22
   skus:
     wh_galaxy_perf:
-      timeout: 20
+      timeout: 25
   owner_id: U03FJB5TM5Y # Colman Glagovich
   team: models
 
