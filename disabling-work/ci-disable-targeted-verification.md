@@ -2,6 +2,13 @@
 
 This note applies to the "disable deterministic failing tests" workflow.
 
+## Source of Truth (State Log)
+
+- The state log (`disabling-work/disabling-work-so-far.md`) is the canonical record of which PRs the automation has created and which workflows it has touched. It is the single source of truth for what work has already been done.
+- The agent MUST NOT use `gh pr list --search "draft:true author:@me"` (or any other GitHub query) to discover the set of tracked disable PRs. Any PR not listed in the state log is invisible to the automation.
+- The agent still uses `gh` for narrow read/write operations on PRs and runs that the state log already references (checking mergeable status, posting comments, dispatching workflows, viewing run status, etc.) — but never to enumerate prior work.
+- Wiping the state log resets the automation to a fresh-state view. Stale GitHub PRs that match the automation's authoring criteria but aren't in the state log are intentionally ignored.
+
 ## Goal
 
 Avoid running every job in a large workflow after each disable change.
@@ -59,7 +66,7 @@ Examining PRs are existing open draft disable PRs that need maintenance but shou
 - **Log-analyze any verification run that completed since the previous session**, and transition the PR's lifecycle to `verified-pass`, `verified-fail`, or `verification-inconclusive` based on the result. This includes runs that completed at the artifact-acquisition step (build-artifact failure for fresh build, download-artifacts failure for reuse, runner allocation failure, or any other infra failure that prevented pytest from running on the previously-passing jobs) — those are classified `verification-inconclusive`, do NOT consume the PR's one-verification-run budget, and are retry-eligible. See `Verification run inspection (next-session)` under `## Build Reuse (Optional, Strongly Preferred)` below for the full classification rule and example commands.
 - Comment on the PR with what changed this session.
 - Sync the disable-tracking issue with the current disable set.
-- Update the PR's entry in the state log (`disabling-work-so-far.md`).
+- Update the PR's entry in the state log (`disabling-work/disabling-work-so-far.md`).
 
 **No workflow dispatches occur in the examining lane.** Dispatches happen only in the focus lane below.
 
@@ -111,9 +118,9 @@ Examining PRs and focus PRs are **distinct sets** — a single PR is in at most 
 
 ### Order within a session
 
-1. Refresh state (policy + state log + open draft PR list).
+1. Refresh state. Re-read the policy doc and the state log. Enumerate tracked PRs from the state log's Quick Index. Do NOT use `gh pr list` to discover untracked PRs; the state log is authoritative.
 2. Compute examining-PR candidates (existing PRs in non-terminal lifecycle that need rebase / revalidate / log-analysis). Up to 3.
-3. Compute focus-PR candidates by priority (new PRs first, then legacy `batch-committed`, then `verification-inconclusive`). Up to 3.
+3. Compute focus-PR candidates by priority (new PRs first, then legacy `batch-committed`, then `verification-inconclusive`). Up to 3. A workflow is "covered" iff the state log's Quick Index contains at least one PR row for that workflow. To find uncovered workflows, intersect the active pipeline list (from `aggregate-workflow-data`) with the inverse of the state log's tracked-workflows set.
 4. Execute examining-PR work (no dispatches).
 5. Execute focus-PR work (commit + push for new PRs, then dispatch each one).
 6. Update state log and PR comments.
@@ -164,7 +171,7 @@ The agent MUST NOT silently substitute a SHA-mismatched run just to "get reuse w
 4. If not found → dispatch WITHOUT use-artifacts-from-run.
    The workflow will build artifacts fresh. This is acceptable and is NOT a blocker.
    Record the reason ("no SHA-matching successful source run for <workflow>") in the
-   PR comment and disabling-work-so-far.md.
+   PR comment and disabling-work/disabling-work-so-far.md.
 ```
 
 ### Worked example: a pipeline whose `main` runs have been failing for days
@@ -173,7 +180,7 @@ The agent MUST NOT silently substitute a SHA-mismatched run just to "get reuse w
 
 - Take step 4 of the Decision flow above: dispatch the verification workflow WITHOUT `use-artifacts-from-run` (fresh build).
 - The verification run still validates whether previously-passing jobs regress on the PR branch. The only thing the fresh-build path changes is build time — the regression check itself is intact.
-- Record the reason ("no SHA-matching successful source run for <workflow> — main has been failing since <date>; dispatching fresh build per policy") in the PR comment and `disabling-work-so-far.md`.
+- Record the reason ("no SHA-matching successful source run for <workflow> — main has been failing since <date>; dispatching fresh build per policy") in the PR comment and `disabling-work/disabling-work-so-far.md`.
 
 **Treating "no recent successful main run" as "waiting for main to recover" is wrong.** Waiting consumes sessions without producing information. Fresh build is always a valid dispatch path; the artifact-reuse optimization is genuinely optional. The Decision flow's step 4 is the answer; it is NOT a fallback to apologize for.
 
@@ -285,7 +292,7 @@ REQUIREMENT 5 — Source run's head SHA MUST equal the feature branch's rebase b
   The returned `headSha` MUST equal `FEATURE_BASE`, `headBranch` MUST be `main`, and `conclusion` MUST be `success`.
 - If no successful run on the exact rebase-base commit exists for the target workflow, the agent MUST do one of:
   (a) rebase the feature branch onto a slightly older `main` commit that DOES have a matching successful run for the target workflow (then re-run the session-start revalidation), OR
-  (b) take the fresh-build fallback: dispatch the verification run WITHOUT `use-artifacts-from-run` (skip these strict source-run rules and skip the YAML edits) so the workflow builds artifacts fresh. Record the reason ("no SHA-matching successful source run for <workflow>") in the PR comment and `disabling-work-so-far.md`. This is acceptable per the "Build Reuse (Optional, Strongly Preferred)" header — it is NOT a blocker.
+  (b) take the fresh-build fallback: dispatch the verification run WITHOUT `use-artifacts-from-run` (skip these strict source-run rules and skip the YAML edits) so the workflow builds artifacts fresh. Record the reason ("no SHA-matching successful source run for <workflow>") in the PR comment and `disabling-work/disabling-work-so-far.md`. This is acceptable per the "Build Reuse (Optional, Strongly Preferred)" header — it is NOT a blocker.
 - The agent MUST NOT silently fall back to a "close enough" / "recent successful" / "tracy matches" source run on a different commit just to keep reuse. A SHA mismatch is a hard failure of THIS requirement (REQUIREMENT 5), not a soft preference. The correct response to SHA mismatch is option (a) or (b) above, NOT a SHA-mismatched reuse.
 
 Rationale: when the source run was built from a different `main` commit than the feature branch's base, the downloaded build artifacts encode different source code than the tests being executed on the verification branch. The resulting test diffs cannot be cleanly attributed to the disable change — they may instead reflect drift between the build SHA and the test SHA. Agents have repeatedly picked "successful and tracy-matching" runs on a different commit and produced misleading verification results; SHA parity eliminates that failure mode.
@@ -330,7 +337,7 @@ This section applies to every targeted verification run the agent dispatches, re
 
 **The agent does NOT poll or wait on the dispatched run's artifact-acquisition step before ending its session. Dispatching the verification run and immediately ending the session is acceptable and expected.**
 
-Why this matters: queued build jobs in this repo can sit in queue for well over an hour before they actually start. If the agent waits in-session for the artifact-acquisition step to reach a terminal state, the next hourly automation cycle starts before the current cycle has ended, producing overlapping sessions and race conditions on the state log, PR comments, and the `disabling-work-so-far.md` file. Dispatch-and-end avoids that overlap by design.
+Why this matters: queued build jobs in this repo can sit in queue for well over an hour before they actually start. If the agent waits in-session for the artifact-acquisition step to reach a terminal state, the next hourly automation cycle starts before the current cycle has ended, producing overlapping sessions and race conditions on the state log, PR comments, and the `disabling-work/disabling-work-so-far.md` file. Dispatch-and-end avoids that overlap by design.
 
 Instead, the dispatched run's outcome is observed and classified by the **examining lane in the next session** — see `Operating Procedure (One Run Per PR)` and the examining-lane log-analysis step under `Session Scope (Two Lanes — Focus and Examining)` → Lane A. Specifically, in the next session that runs after the dispatched run has reached a terminal state, the examining lane MUST log-analyze the completed run and classify it as one of:
 
@@ -338,7 +345,7 @@ Instead, the dispatched run's outcome is observed and classified by the **examin
 - `verified-fail` — the verification run completed AND at least one previously-passing job is now failing on the PR branch (a real regression — not an out-of-scope failure per "Interpreting Verification Results" above).
 - `verification-inconclusive` — the run finished in any state that prevented pytest from actually exercising the previously-passing jobs. This includes the artifact-acquisition step itself failing (`build-artifact` for fresh build, or `download-artifacts` for artifact reuse, finishing with `conclusion: failure` or `cancelled`, "Could not find build artifact matching expected pattern", "Workflow run X has conclusion: failure (expected: success)", source run not found, build-intent mismatch), runner allocation failure, container-init failure, network/download faults, or any other infra failure. Per "Interpreting Verification Results" above, infra-inconclusive runs do NOT consume the PR's one-verification-run budget and ARE retry-eligible (still subject to the per-session dispatch cap).
 
-The classification belongs to the *next* session. The dispatching session is done as soon as it has dispatched, recorded the run URL, and updated `disabling-work-so-far.md`.
+The classification belongs to the *next* session. The dispatching session is done as soon as it has dispatched, recorded the run URL, and updated `disabling-work/disabling-work-so-far.md`.
 
 Concrete commands the next-session examining lane uses to log-analyze a completed run (substitute the dispatched run ID):
 
@@ -384,28 +391,29 @@ Do not spend disable/fix cycles on out-of-scope failures in this project.
 
 ## Automation Efficiency Guardrails
 
-The 4-hour throttle exists to prevent thrash on PRs that have already had recent heavy work (a verification was just dispatched, a deep log analysis was just performed). It is NOT a license to idle, and it is NOT a blanket skip for every PR whose `updatedAt` is recent.
+The 4-hour throttle exists to prevent thrash on PRs that have already had recent heavy work (a verification was just dispatched, a deep log analysis was just performed). It is NOT a license to idle, and it is NOT a blanket skip for every PR whose state-log `Last touched by automation` field is recent.
 
 ### Default throttle
 
-- Do not perform deep re-analysis for draft PRs updated less than 4 hours ago, EXCEPT when one of the carve-outs below applies.
-- For draft PRs that are throttled (recent updatedAt AND no carve-out applies), allow only lightweight checks:
+- The throttle is driven by a state-log-recorded timestamp, NOT by GitHub's `updatedAt`. Every PR row in the state log carries a required `Last touched by automation: <UTC ISO>` field, which the agent updates every time it does any work on the PR (rebase, dispatch, log analysis, comment, removal).
+- Do not perform deep re-analysis for draft PRs whose `Last touched by automation` is less than 4 hours ago, EXCEPT when one of the carve-outs below applies.
+- For draft PRs that are throttled (recent `Last touched by automation` AND no carve-out applies), allow only lightweight checks:
   - detecting active -> completed run state transitions
   - confirming explicit blocker resolution
   - handling a PR selected as the current focus item because its run just completed
 
-### Throttle carve-outs (MUST NOT be throttled, regardless of updatedAt)
+### Throttle carve-outs (MUST NOT be throttled, regardless of `Last touched by automation`)
 
-The throttle MUST NOT apply to a PR in any of the following lifecycle states. These PRs are eligible to be selected as focus PRs and acted on, even if `updatedAt` is under 4 hours old:
+The throttle MUST NOT apply to a PR in any of the following lifecycle states. These PRs are eligible to be selected as focus PRs and acted on, even if their `Last touched by automation` timestamp is under 4 hours old:
 
 - **`new`** — no disable batch has been committed to the PR yet. The next step is committing the initial disable batch; the throttle has nothing to throttle.
 - **`batch-committed` with no verification ever dispatched** — the PR is sitting in the "waiting to be verified" state. Dispatching its first verification is exactly the work the session should be doing.
 - **`verification-inconclusive`** — these PRs are retry-eligible by policy (see "Interpreting Verification Results"). Throttling them would make them sit forever.
-- **PR is behind `main` and needs a rebase** — rebase + push is allowed regardless of `updatedAt`. (Note: a session-start rebase that itself pushes a merge commit will set the PR's `updatedAt` to "now" — that is precisely the kind of self-bump the throttle must not be tricked by.)
+- **PR is behind `main` and needs a rebase** — rebase + push is allowed regardless of `Last touched by automation`.
 
 ### Why the carve-outs matter
 
-The automation pushes a state-log commit and may merge `main` into each PR at session start. Both of those actions bump `updatedAt`. Without carve-outs, the throttle becomes a self-inflicted starvation loop: every session bumps `updatedAt` to "now", and the next session skips every PR for being <4h old, and the session ends with zero work. The carve-outs above are how the throttle stays scoped to its real purpose (prevent thrash on recently-verified or recently-analyzed PRs) instead of freezing the entire pipeline.
+The automation pushes a state-log commit and may merge `main` into each PR at session start. Both of those actions also bump GitHub's `updatedAt` — which is precisely why the throttle is driven by the state-log-recorded `Last touched by automation` field instead. Without the carve-outs, the throttle could still become a self-inflicted starvation loop on the `new` / `batch-committed`-no-verify / `verification-inconclusive` / `behind-main-needs-rebase` PRs that legitimately need work every session. The carve-outs above are how the throttle stays scoped to its real purpose (prevent thrash on recently-verified or recently-analyzed PRs) instead of freezing the entire pipeline.
 
 ### Focus-PR deep analysis budget
 
@@ -429,7 +437,7 @@ The automation has TWO distinct terminal-style session states. They differ in wh
 
 A session is in **tier 1** when this conjunct holds:
 
-1. Every non-Galaxy single-card workflow in the active pipeline list is already covered by an open or merged draft disable PR created by this automation.
+1. Every non-Galaxy single-card workflow in the active pipeline list is already covered by an open or merged draft disable PR created by this automation (evaluated against the Quick Index in the state log, not against live GitHub PR queries).
 
 When tier 1 holds, the automation MUST:
 
@@ -443,8 +451,8 @@ When tier 1 holds, the automation MUST:
 
 A session is in **tier 2** when BOTH of the following are true:
 
-1. Every disable PR ever created by this automation is `merged`. PRs that were closed without merging count as terminal for this conjunct — they are not "open and unmerged" any longer.
-2. Every non-Galaxy single-card workflow in the active pipeline list is already covered by a **merged** disable PR (tier 1's coverage requirement, tightened from "open or merged" to "merged only").
+1. Every disable PR ever created by this automation is `merged` (evaluated against the Quick Index in the state log, not against live GitHub PR queries). PRs that were closed without merging count as terminal for this conjunct — they are not "open and unmerged" any longer.
+2. Every non-Galaxy single-card workflow in the active pipeline list is already covered by a **merged** disable PR (tier 1's coverage requirement, tightened from "open or merged" to "merged only"; evaluated against the Quick Index in the state log, not against live GitHub PR queries).
 
 When tier 2 holds, the automation MUST do ZERO work — no examining-lane maintenance, no focus-lane dispatches, no new PRs. It MUST emit:
 
@@ -497,6 +505,6 @@ When in doubt between "skip due to throttle" and "do something useful", do somet
 
 - The disable-tracking issue is the source of truth for the current disable set.
 - Keep timeout-involved failures in a separate timeout-tracking issue; do not mix timeout tracking into the disable-tracking issue.
-- Keep `disabling-work-so-far.md` in sync with both PR status and workflow run status.
-- Every disable removal in the PR must be reflected in both the disable-tracking issue and `disabling-work-so-far.md` in the same session.
+- Keep `disabling-work/disabling-work-so-far.md` in sync with both PR status and workflow run status.
+- Every disable removal in the PR must be reflected in both the disable-tracking issue and `disabling-work/disabling-work-so-far.md` in the same session.
 - After the initial disable batch is committed, updates should be removal/revalidation only (no new disables on that PR).

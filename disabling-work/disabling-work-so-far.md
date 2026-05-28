@@ -1,5 +1,7 @@
 # CI Disable Work — Status Log
 
+> **Source of truth.** This file is the canonical record of automation-tracked PRs. Wiping it resets the automation to fresh-state view; stale GitHub PRs not listed here are intentionally invisible.
+
 Last updated: **2026-05-27T19:08 UTC** (session: Tier-1 examining session. Examining PRs: #44938 (rebased onto main `05de578a`, sd35 disable still valid), #45108 (rebased onto main `05de578a`, CCL disables still valid), #45313 (rebased onto main `05de578a`, sampling-test disables still valid). PR #45322 P100 job still queued >3h (runner initialization stall — likely heading to verification-inconclusive). Main advanced to `05de578a1a5`. 0 dispatches this session.)
 
 ---
@@ -8,7 +10,7 @@ Last updated: **2026-05-27T19:08 UTC** (session: Tier-1 examining session. Exami
 
 - Read this file at the start of every automation session and treat it as the authoritative current state for CI disable work.
 - Scan the `## Quick Index` table first; it gives the lifecycle stage per PR before drilling into details.
-- Per-PR sections use uniform field tables (`PR | Disable issue | Timeout issue | Branch | Workflow file | Lifecycle stage | Last rebase | Last revalidation | Verification run | Readiness`); update fields in place rather than rewriting the section.
+- Per-PR sections use uniform field tables (`PR | Disable issue | Timeout issue | Branch | Workflow file | Lifecycle stage | Last rebase | Last revalidation | Verification run | Last touched by automation | Readiness`); update fields in place rather than rewriting the section. `Last touched by automation: <UTC ISO>` is required on every PR row and drives the 4-hour throttle — update it every time the automation does any work on the PR (rebase, dispatch, log analysis, comment, removal).
 - Append new entries to the top of `## Recent Activity` (most recent first); keep at most 30 entries — trim older entries to a single `- Older history truncated — see git history of this file.` line if needed.
 - Commit and push any change to this file before ending the session.
 - Lifecycle stages: `new`, `batch-committed`, `verifying`, `verification-inconclusive`, `verified-pass`, `verified-fail`, `merged`, `out-of-scope`. (`verification-inconclusive` = a verification was dispatched but failed to actually exercise the previously-passing jobs; eligible for re-dispatch and does NOT consume the one-run-per-PR budget.)
