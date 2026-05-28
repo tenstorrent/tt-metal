@@ -794,8 +794,10 @@ def run_ring_joint_sdpa(
 # ============================================================================
 # CHUNKED-PREFILL VALIDATION
 # ============================================================================
-CHUNKED_PREFILL_TOTAL_SEQ = 25 * 1024
-CHUNKED_PREFILL_CHUNK_SIZE = 5 * 1024
+CHUNKED_PREFILL_PER_DEVICE_CHUNK = 640
+CHUNKED_PREFILL_N_CHUNKS = 11  # Last chunk: prefix K = 10 * chunk_size (=25k @ sp=4), current = chunk_size (=2.5k).
+CHUNKED_PREFILL_CHUNK_SIZE = CHUNKED_PREFILL_PER_DEVICE_CHUNK * MESH_CONFIG.sp_size
+CHUNKED_PREFILL_TOTAL_SEQ = CHUNKED_PREFILL_CHUNK_SIZE * CHUNKED_PREFILL_N_CHUNKS
 CHUNKED_PREFILL_PCC_THRESHOLD = 0.99
 CHUNKED_PREFILL_SEED = 1234
 
@@ -808,12 +810,17 @@ def run_ring_joint_sdpa_chunked(
     pcc_threshold: float = CHUNKED_PREFILL_PCC_THRESHOLD,
     q_chunk_size: int = None,
     k_chunk_size: int = None,
+    num_iterations: int = 1,
 ):
     """
     Validate ring joint SDPA chunked-prefill against a full-sequence torch oracle.
 
     SUT: n_chunks calls; each call passes a short Q chunk at absolute positions
     [i*c, (i+1)*c) against a K/V cache holding the first (i+1)*c rows.
+
+    num_iterations > 1 switches to determinism mode: replay the full n_chunks
+    sequence num_iterations times and require bit-exact equality of per-chunk
+    outputs to iteration 0. PCC check is skipped in determinism mode.
     """
     torch.manual_seed(CHUNKED_PREFILL_SEED)
 
@@ -1059,64 +1066,94 @@ def run_ring_joint_sdpa_chunked(
             return perm
 
         # SUT: per-chunk calls with growing K/V cache + growing logical_n.
+        # In determinism mode (num_iterations > 1), the entire n_chunks sequence is
+        # replayed and per-chunk outputs from iteration 0 are compared bit-exact.
+        reference_outputs = None
         per_chunk_results = []
-        for i in range(n_chunks):
-            s, e = i * chunk_size, (i + 1) * chunk_size
+        for it in range(num_iterations):
+            iter_outputs = [] if num_iterations > 1 else None
+            for i in range(n_chunks):
+                s, e = i * chunk_size, (i + 1) * chunk_size
 
-            K_balanced = to_balanced_growing(K_full, i)
-            V_balanced = to_balanced_growing(V_full, i)
-            Q_chunk = Q_full[:, :, s:e, :].contiguous()
+                K_balanced = to_balanced_growing(K_full, i)
+                V_balanced = to_balanced_growing(V_full, i)
+                Q_chunk = Q_full[:, :, s:e, :].contiguous()
 
-            tt_Q = upload_q(Q_chunk)
-            tt_K = upload_k(K_balanced)
-            tt_V = upload_v(V_balanced)
+                tt_Q = upload_q(Q_chunk)
+                tt_K = upload_k(K_balanced)
+                tt_V = upload_v(V_balanced)
 
-            # AllGather output buffer sized to post-gather K/V: N_global == (i+1) * chunk_size.
-            persistent_output_buffer_k = ttnn.from_torch(
-                torch.zeros(b, nhk, e, d_k),
-                dtype=kv_dtype,
-                layout=ttnn.TILE_LAYOUT,
-                device=mesh_device,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    mesh_device, mesh_shape=tuple(mesh_device.shape), dims=persistent_k_shard_dims
-                ),
-            )
-            persistent_output_buffer_v = ttnn.from_torch(
-                torch.zeros(b, nhv, e, d_v),
-                dtype=kv_dtype,
-                layout=ttnn.TILE_LAYOUT,
-                device=mesh_device,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    mesh_device, mesh_shape=tuple(mesh_device.shape), dims=kv_persistent_shard_dims
-                ),
-            )
-
-            try:
-                tt_out = call_sdpa(
-                    tt_Q,
-                    tt_K,
-                    tt_V,
-                    e,
-                    is_causal=True,
-                    p_buf_k=persistent_output_buffer_k,
-                    p_buf_v=persistent_output_buffer_v,
+                # AllGather output buffer sized to post-gather K/V: N_global == (i+1) * chunk_size.
+                persistent_output_buffer_k = ttnn.from_torch(
+                    torch.zeros(b, nhk, e, d_k),
+                    dtype=kv_dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=mesh_device,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(
+                        mesh_device, mesh_shape=tuple(mesh_device.shape), dims=persistent_k_shard_dims
+                    ),
                 )
-            except Exception as exc:
-                pytest.fail(
-                    f"Chunked prefill SDPA call raised on chunk {i} "
-                    f"(Q rows [{s}, {e}), logical_n={e}): {type(exc).__name__}: {exc}"
+                persistent_output_buffer_v = ttnn.from_torch(
+                    torch.zeros(b, nhv, e, d_v),
+                    dtype=kv_dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=mesh_device,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(
+                        mesh_device, mesh_shape=tuple(mesh_device.shape), dims=kv_persistent_shard_dims
+                    ),
                 )
 
-            out_i = to_host(tt_out, chunk_size)
-            expected_i = ref_full[:, :, s:e, :]
+                try:
+                    tt_out = call_sdpa(
+                        tt_Q,
+                        tt_K,
+                        tt_V,
+                        e,
+                        is_causal=True,
+                        p_buf_k=persistent_output_buffer_k,
+                        p_buf_v=persistent_output_buffer_v,
+                    )
+                except Exception as exc:
+                    pytest.fail(
+                        f"Chunked prefill SDPA call raised on iter {it}, chunk {i} "
+                        f"(Q rows [{s}, {e}), logical_n={e}): {type(exc).__name__}: {exc}"
+                    )
 
-            passed, pcc = comp_pcc(expected_i, out_i, pcc_threshold)
-            rmse = torch.sqrt(((expected_i - out_i) ** 2).mean()).item()
+                out_i = to_host(tt_out, chunk_size)
+
+                if num_iterations > 1:
+                    iter_outputs.append(out_i)
+                    continue
+
+                expected_i = ref_full[:, :, s:e, :]
+                passed, pcc = comp_pcc(expected_i, out_i, pcc_threshold)
+                rmse = torch.sqrt(((expected_i - out_i) ** 2).mean()).item()
+                logger.info(
+                    f"Chunk {i:2d} [{s:6d}, {e:6d}) logical_n={e}: PCC={pcc} RMSE={rmse:.6f} "
+                    f"-> {'PASS' if passed else 'FAIL'}"
+                )
+                per_chunk_results.append((i, e, passed, pcc, rmse))
+
+            if num_iterations > 1:
+                if reference_outputs is None:
+                    reference_outputs = iter_outputs
+                else:
+                    diffs = []
+                    for i, (ref, cur) in enumerate(zip(reference_outputs, iter_outputs)):
+                        if not torch.equal(ref, cur):
+                            num_diffs = (ref != cur).sum().item()
+                            max_diff = (ref - cur).abs().max().item()
+                            diffs.append((i, num_diffs, max_diff))
+                            logger.warning(f"  iter {it} chunk {i}: {num_diffs} diffs, max={max_diff}")
+                    if diffs:
+                        details = "; ".join(f"chunk {i}: {n} diffs, max={m}" for i, n, m in diffs)
+                        pytest.fail(f"Chunked prefill determinism failed at iter {it}: {details}")
+
+        if num_iterations > 1:
             logger.info(
-                f"Chunk {i:2d} [{s:6d}, {e:6d}) logical_n={e}: PCC={pcc} RMSE={rmse:.6f} "
-                f"-> {'PASS' if passed else 'FAIL'}"
+                f"Chunked prefill determinism verified: all {num_iterations} runs of {n_chunks} chunks are exactly equal"
             )
-            per_chunk_results.append((i, e, passed, pcc, rmse))
+            return
 
         failures = [(i, e, pcc, rmse) for i, e, passed, pcc, rmse in per_chunk_results if not passed]
         if failures:
@@ -1591,14 +1628,35 @@ def test_ring_joint_attention_perf_check(model_name, q_chunk_size, k_chunk_size,
 
 
 # === TEST 6: CHUNKED-PREFILL ACCURACY ===
-CHUNKED_PREFILL_MODELS = [m for m in ("mla_100k",) if m in MODEL_CONFIGS]
+# Chunked-prefill tests use a kimi-K2.6-style MLA config (16 Q heads, single KV head,
+# DeepSeek V3 dims) kept separate from the global MODEL_CONFIGS so the kimi parameters
+# don't leak into the non-chunked sweep/perf/determinism tests.
+CHUNKED_PREFILL_MODEL_CONFIGS = {
+    "kimi_100k": ModelConfig(
+        name="kimi_100k",
+        nhq=16,
+        nhk=1,
+        nhv=16,
+        d_q=576,
+        d_k=576,
+        d_v=128,
+        is_causal=True,
+        is_balanced=True,
+        q_dtype=ttnn.bfloat16,
+        kv_dtype=ttnn.bfloat8_b,
+        q_chunk_sizes=[96],
+        k_chunk_sizes=[256],
+        seq_len=CHUNKED_PREFILL_CHUNK_SIZE,  # unused by chunked path
+    ),
+}
+CHUNKED_PREFILL_MODELS = list(CHUNKED_PREFILL_MODEL_CONFIGS.keys())
 
 
 def _generate_chunked_configs():
     configs = []
     ids = []
     for model_name in CHUNKED_PREFILL_MODELS:
-        model = MODEL_CONFIGS[model_name]
+        model = CHUNKED_PREFILL_MODEL_CONFIGS[model_name]
         for q, k in product(model.q_chunk_sizes, model.k_chunk_sizes):
             configs.append((model_name, q, k))
             ids.append(f"{model_name}-q{q}-k{k}")
@@ -1619,13 +1677,32 @@ def test_ring_joint_attention_sdpa_chunked_accuracy(model_name, q_chunk_size, k_
     """Validate ring joint SDPA chunked prefill against a full-sequence oracle."""
     mesh_config = MESH_CONFIG
 
-    if model_name not in MODEL_CONFIGS:
-        pytest.skip(f"Model {model_name} not available for current mesh config")
-
     run_ring_joint_sdpa_chunked(
         mesh_config,
-        MODEL_CONFIGS[model_name],
+        CHUNKED_PREFILL_MODEL_CONFIGS[model_name],
         chunk_size=chunk_size,
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
+    )
+
+
+# === TEST 7: CHUNKED-PREFILL DETERMINISM ===
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize("chunk_size", [CHUNKED_PREFILL_CHUNK_SIZE], ids=[f"chunk{CHUNKED_PREFILL_CHUNK_SIZE}"])
+@pytest.mark.parametrize(
+    "model_name,q_chunk_size,k_chunk_size",
+    CHUNKED_CONFIGS,
+    ids=CHUNKED_CONFIG_IDS,
+)
+def test_ring_joint_attention_sdpa_chunked_determinism(model_name, q_chunk_size, k_chunk_size, chunk_size):
+    """Replay ring joint SDPA chunked prefill 3 times and require bit-exact per-chunk outputs."""
+    mesh_config = MESH_CONFIG
+
+    run_ring_joint_sdpa_chunked(
+        mesh_config,
+        CHUNKED_PREFILL_MODEL_CONFIGS[model_name],
+        chunk_size=chunk_size,
+        q_chunk_size=q_chunk_size,
+        k_chunk_size=k_chunk_size,
+        num_iterations=3,
     )
