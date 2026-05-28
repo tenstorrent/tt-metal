@@ -13,6 +13,23 @@ from models.tt_dit.pipelines.ltx.pipeline_ltx_fast import LTXFastPipeline
 from models.tt_dit.utils.test import line_params, ring_params
 
 
+def _with_audio_dev_l1(base: dict) -> dict:
+    """Reserve an L1_SMALL region when the on-device audio decoder is enabled.
+
+    ``ttnn.conv2d`` (used by the on-device audio VAE decoder) requires an
+    L1_SMALL allocator region; the default LTX device params open with
+    ``l1_small_size=0``. When ``LTX_AUDIO_DECODER_ON_DEVICE=1`` we add it; default
+    runs return the base params object unchanged.
+    """
+    if os.environ.get("LTX_AUDIO_DECODER_ON_DEVICE", "0") == "1":
+        return {**base, "l1_small_size": 32768}
+    return base
+
+
+_line_params = _with_audio_dev_l1(line_params)
+_ring_params = _with_audio_dev_l1(ring_params)
+
+
 def _default_checkpoint() -> str:
     """Resolve distilled checkpoint: env var > local file > HF repo string default."""
     explicit = os.environ.get("LTX_CHECKPOINT")
@@ -46,17 +63,17 @@ def _default_gemma() -> str:
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
-        [(2, 2), (2, 2), 0, 1, 2, False, line_params, ttnn.Topology.Linear, True],
-        [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True],
+        [(2, 2), (2, 2), 0, 1, 2, False, _line_params, ttnn.Topology.Linear, True],
+        [(2, 4), (2, 4), 0, 1, 1, True, _line_params, ttnn.Topology.Linear, True],
         # BH on 2x4
-        [(2, 4), (2, 4), 1, 0, 2, True, line_params, ttnn.Topology.Linear, False],
+        [(2, 4), (2, 4), 1, 0, 2, True, _line_params, ttnn.Topology.Linear, False],
         # WH (ring) on 4x8
-        [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True],
+        [(4, 8), (4, 8), 1, 0, 4, False, _ring_params, ttnn.Topology.Ring, True],
         # BH (linear) on 4x8
-        [(4, 8), (4, 8), 1, 0, 2, False, line_params, ttnn.Topology.Linear, False],
+        [(4, 8), (4, 8), 1, 0, 2, False, _line_params, ttnn.Topology.Linear, False],
         # BH (ring) on 4x8
-        [(4, 8), (4, 8), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
-        [(4, 32), (4, 32), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
+        [(4, 8), (4, 8), 1, 0, 2, False, _ring_params, ttnn.Topology.Ring, False],
+        [(4, 32), (4, 32), 1, 0, 2, False, _ring_params, ttnn.Topology.Ring, False],
     ],
     ids=[
         "2x2sp0tp1",
