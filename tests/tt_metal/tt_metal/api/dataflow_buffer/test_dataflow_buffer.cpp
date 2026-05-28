@@ -243,9 +243,9 @@ void run_single_dfb_program(
         producer_spec = experimental::metal2_host_api::KernelSpec{
             .unique_id = PRODUCER,
             .source =
-                experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                    "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer.cpp"},
-            .num_threads = static_cast<uint8_t>(dfb_config.num_producers),
+
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer.cpp",
+            .num_threads = dfb_config.num_producers,
             .dfb_bindings = {{
                 .dfb_spec_name = DFB_NAME,
                 .local_accessor_name = "out",
@@ -269,9 +269,9 @@ void run_single_dfb_program(
         producer_spec = experimental::metal2_host_api::KernelSpec{
             .unique_id = PRODUCER,
             .source =
-                experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                    "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_producer.cpp"},
-            .num_threads = static_cast<uint8_t>(dfb_config.num_producers),
+
+                "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_producer.cpp",
+            .num_threads = dfb_config.num_producers,
             .dfb_bindings = {{
                 .dfb_spec_name = DFB_NAME,
                 .local_accessor_name = "out",
@@ -288,9 +288,9 @@ void run_single_dfb_program(
         consumer_spec = experimental::metal2_host_api::KernelSpec{
             .unique_id = CONSUMER,
             .source =
-                experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                    "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer.cpp"},
-            .num_threads = static_cast<uint8_t>(dfb_config.num_consumers),
+
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer.cpp",
+            .num_threads = dfb_config.num_consumers,
             .dfb_bindings = {{
                 .dfb_spec_name = DFB_NAME,
                 .local_accessor_name = "in",
@@ -315,9 +315,9 @@ void run_single_dfb_program(
         consumer_spec = experimental::metal2_host_api::KernelSpec{
             .unique_id = CONSUMER,
             .source =
-                experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                    "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_consumer.cpp"},
-            .num_threads = static_cast<uint8_t>(dfb_config.num_consumers),
+
+                "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_consumer.cpp",
+            .num_threads = dfb_config.num_consumers,
             .dfb_bindings = {{
                 .dfb_spec_name = DFB_NAME,
                 .local_accessor_name = "in",
@@ -658,8 +658,8 @@ void run_concurrent_dfbs_program(
         kernel_specs.push_back(experimental::metal2_host_api::KernelSpec{
             .unique_id = producer_name,
             .source =
-                experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                    "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_multi_producer.cpp"},
+
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_multi_producer.cpp",
             .num_threads = 1,
             .dfb_bindings = {{
                 .dfb_spec_name = dfb_name,
@@ -691,8 +691,8 @@ void run_concurrent_dfbs_program(
         kernel_specs.push_back(experimental::metal2_host_api::KernelSpec{
             .unique_id = consumer_name,
             .source =
-                experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                    "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_multi_consumer.cpp"},
+
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_multi_consumer.cpp",
             .num_threads = 1,
             .dfb_bindings = {{
                 .dfb_spec_name = dfb_name,
@@ -815,8 +815,8 @@ void run_concurrent_tensix_dm_dfbs_program(
     experimental::metal2_host_api::KernelSpec producer_spec{
         .unique_id = PRODUCER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_seq_producer.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_seq_producer.cpp",
         .num_threads = 1,
         .compiler_options = {.defines = {{"TEST_NUM_DFBS", std::to_string(num_dfbs)}}},
         .compile_time_arg_bindings = {{"num_entries_per_producer", entries_per_dfb}},
@@ -866,8 +866,8 @@ void run_concurrent_tensix_dm_dfbs_program(
         kernel_specs.push_back(experimental::metal2_host_api::KernelSpec{
             .unique_id = consumer_name,
             .source =
-                experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                    "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_multi_consumer_sep.cpp"},
+
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_multi_consumer_sep.cpp",
             .num_threads = 1,
             .dfb_bindings = {{
                 .dfb_spec_name = dfb_name,
@@ -1040,8 +1040,8 @@ void run_sequential_dfbs_program(
     experimental::metal2_host_api::KernelSpec producer_spec{
         .unique_id = PRODUCER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_seq_producer.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_seq_producer.cpp",
         .num_threads = num_producers,
         .compiler_options = {.defines = {{"TEST_NUM_DFBS", std::to_string(num_dfbs)}}},
         .compile_time_arg_bindings =
@@ -1061,8 +1061,8 @@ void run_sequential_dfbs_program(
     experimental::metal2_host_api::KernelSpec consumer_spec{
         .unique_id = CONSUMER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_seq_consumer.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_seq_consumer.cpp",
         .num_threads = num_consumers,
         .compiler_options = {.defines = {{"TEST_NUM_DFBS", std::to_string(num_dfbs)}}},
         .compile_time_arg_bindings =
@@ -1247,9 +1247,9 @@ void run_in_dfb_out_dfb_program(
     experimental::metal2_host_api::KernelSpec producer_spec{
         .unique_id = PRODUCER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer.cpp"},
-        .num_threads = static_cast<uint8_t>(dm2tensix_config.num_producers),
+
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer.cpp",
+        .num_threads = dm2tensix_config.num_producers,
         .dfb_bindings = {{
             .dfb_spec_name = IN_DFB,
             .local_accessor_name = "out",
@@ -1280,8 +1280,8 @@ void run_in_dfb_out_dfb_program(
     experimental::metal2_host_api::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6.cpp",
         .num_threads = 1,
         .dfb_bindings =
             {
@@ -1306,9 +1306,9 @@ void run_in_dfb_out_dfb_program(
     experimental::metal2_host_api::KernelSpec consumer_spec{
         .unique_id = CONSUMER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer.cpp"},
-        .num_threads = static_cast<uint8_t>(tensix2dm_config.num_consumers),
+
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer.cpp",
+        .num_threads = tensix2dm_config.num_consumers,
         .dfb_bindings = {{
             .dfb_spec_name = OUT_DFB,
             .local_accessor_name = "in",
@@ -1962,9 +1962,9 @@ static void run_intra_tensix_dfb_program(
     experimental::metal2_host_api::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_intra.cpp"},
-        .num_threads = static_cast<uint8_t>(num_threads),
+
+            "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_intra.cpp",
+        .num_threads = num_threads,
         .dfb_bindings =
             {
                 {
@@ -2107,8 +2107,8 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4A) {
     experimental::metal2_host_api::KernelSpec dm_producer_spec{
         .unique_id = DM_PRODUCER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer.cpp",
         .num_threads = 1,
         .dfb_bindings = {{
             .dfb_spec_name = REMAPPER_DFB,
@@ -2143,9 +2143,9 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4A) {
     experimental::metal2_host_api::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/compute/dfb_intra_and_consume_all.cpp"},
-        .num_threads = static_cast<uint8_t>(num_neos),
+
+            "tests/tt_metal/tt_metal/test_kernels/compute/dfb_intra_and_consume_all.cpp",
+        .num_threads = num_neos,
         .dfb_bindings =
             {
                 {

@@ -125,9 +125,9 @@ experimental::metal2_host_api::ProgramSpec build_bmm_program_spec(
     experimental::metal2_host_api::KernelSpec reader_spec{
         .unique_id = READER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_bmm_8bank.cpp"},
-        .num_threads = static_cast<uint8_t>(p.num_threads),
+
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_bmm_8bank.cpp",
+        .num_threads = p.num_threads,
         .dfb_bindings =
             {{.dfb_spec_name = SRC0_DFB,
               .local_accessor_name = "src0",
@@ -151,9 +151,9 @@ experimental::metal2_host_api::ProgramSpec build_bmm_program_spec(
     experimental::metal2_host_api::KernelSpec writer_spec{
         .unique_id = WRITER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_bmm_8bank.cpp"},
-        .num_threads = static_cast<uint8_t>(p.num_threads),
+
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_bmm_8bank.cpp",
+        .num_threads = p.num_threads,
         .dfb_bindings =
             {{.dfb_spec_name = DST_DFB,
               .local_accessor_name = "dst",
@@ -168,9 +168,9 @@ experimental::metal2_host_api::ProgramSpec build_bmm_program_spec(
     experimental::metal2_host_api::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/compute/bmm.cpp"},
-        .num_threads = static_cast<uint8_t>(p.num_threads),
+
+            "tests/tt_metal/tt_metal/test_kernels/compute/bmm.cpp",
+        .num_threads = p.num_threads,
         .dfb_bindings =
             {{.dfb_spec_name = SRC0_DFB,
               .local_accessor_name = "src0",

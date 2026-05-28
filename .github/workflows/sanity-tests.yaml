@@ -38,7 +38,7 @@ on:
         type: boolean
         default: true
         description: "Run TT-Train C++ unit tests"
-      run-profiler-regression:
+      run-profiler-tests:
         required: false
         type: boolean
         default: true
@@ -143,7 +143,7 @@ on:
         default: true
         type: boolean
         description: "Run TT-Train C++ unit tests"
-      run-profiler-regression:
+      run-profiler-tests:
         required: false
         default: true
         type: boolean
@@ -264,7 +264,7 @@ jobs:
       ttnn-unit-tests: ${{ steps.set-ttnn-unit-tests.outputs.should-run }}
       models-unit-tests: ${{ steps.set-models-unit-tests.outputs.should-run }}
       tt-train-cpp-unit-tests: ${{ steps.set-tt-train-cpp-unit-tests.outputs.should-run }}
-      run-profiler-regression: ${{ steps.set-run-profiler-regression.outputs.should-run }}
+      run-profiler-tests: ${{ steps.set-run-profiler-tests.outputs.should-run }}
       t3000-apc-fast-tests: ${{ steps.set-t3000-apc-fast-tests.outputs.should-run }}
       ops-unit-tests: ${{ steps.set-ops-unit-tests.outputs.should-run }}
       ttsim-integration-tests: ${{ steps.set-ttsim-integration-tests.outputs.should-run }}
@@ -278,9 +278,9 @@ jobs:
       - id: set-tt-train-cpp-unit-tests
         run: |
           echo "should-run=${{ github.event_name == 'push' || inputs.run-tt-train-cpp-unit-tests }}" >> "$GITHUB_OUTPUT"
-      - id: set-run-profiler-regression
+      - id: set-run-profiler-tests
         run: |
-          echo "should-run=${{ github.event_name == 'push' || inputs.run-profiler-regression }}" >> "$GITHUB_OUTPUT"
+          echo "should-run=${{ github.event_name == 'push' || inputs.run-profiler-tests }}" >> "$GITHUB_OUTPUT"
       - id: set-t3000-apc-fast-tests
         run: |
           echo "should-run=${{ github.event_name == 'push' || inputs.run-t3000-apc-fast-tests }}" >> "$GITHUB_OUTPUT"
@@ -352,25 +352,18 @@ jobs:
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
       ref: ${{ inputs.ref || github.sha }}
 
-  run-profiler-regression:
+  profiler-tests:
     needs: [resolve-artifacts, tests-to-run]
-
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: [
-          { arch: wormhole_b0, runner-label: N300 },
-        ]
-    if: ${{ !cancelled() && needs.resolve-artifacts.result == 'success' && needs.tests-to-run.outputs.run-profiler-regression == 'true'}}
-    uses: ./.github/workflows/run-profiler-regression.yaml
+    if: ${{ !cancelled() && needs.resolve-artifacts.result == 'success' && needs.tests-to-run.outputs.run-profiler-tests == 'true'}}
+    uses: ./.github/workflows/single-card-profiler-tests-impl.yaml
     secrets: inherit
     with:
-      arch: ${{ matrix.test-group.arch}}
-      runner-label: ${{ matrix.test-group.runner-label}}
-      post_commit_only: true
       docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
+      # Sanity historically ran (wormhole_b0, N300) → wh_n300_civ2, post-commit only.
+      enabled-skus: wh_n300_civ2
+      test-selection: post-commit
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}

@@ -52,8 +52,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelMultipleThreads) {
     experimental::metal2_host_api::KernelSpec compute_kernel_spec{
         .unique_id = COMPUTE_KERNEL,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/compute/risc_math.cpp"},
+
+            OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/compute/risc_math.cpp",
         .num_threads = 4,
         .runtime_arguments_schema =
             {
@@ -128,8 +128,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelSingleThread) {
     experimental::metal2_host_api::KernelSpec compute_kernel_spec{
         .unique_id = COMPUTE_KERNEL,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/compute/risc_math.cpp"},
+
+            OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/compute/risc_math.cpp",
         .num_threads = 1,
         .runtime_arguments_schema =
             {
@@ -184,8 +184,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCreateMultipleComputeKernelsSing
     experimental::metal2_host_api::KernelSpec compute_kernel_spec_1{
         .unique_id = COMPUTE_KERNEL_1,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/compute/risc_math.cpp"},
+
+            OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/compute/risc_math.cpp",
         .num_threads = 1,
         .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
     };
@@ -193,8 +193,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCreateMultipleComputeKernelsSing
     experimental::metal2_host_api::KernelSpec compute_kernel_spec_2{
         .unique_id = COMPUTE_KERNEL_2,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/compute/risc_math.cpp"},
+
+            OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/compute/risc_math.cpp",
         .num_threads = 2,
         .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
     };
