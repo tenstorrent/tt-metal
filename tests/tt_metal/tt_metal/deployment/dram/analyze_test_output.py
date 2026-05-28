@@ -87,15 +87,14 @@ def extract_errors(errors: list[dict], chip: str, bank: str) -> dict:
 def process_test(test: dict) -> Test:
     global patterns
 
-    chips: dict[str, Chip] = {}
+    chips: dict[str, Chip] = {
+        str(i): Chip(str(i), "", {str(i): Bank(0, 1, True, {}) for i in range(8)}) for i in range(32)
+    }
     pprint.pp(test)
-    for c in test["chips"]:
-        ch = test["chips"][c]
+    for c, ch in test["chips"].items():
         bdf = ch["bdf"]
         banks: dict[str, Bank] = {}
-        for b in ch["banks"]:
-            bank = ch["banks"][b]
-
+        for b, bank in ch["banks"].items():
             pat: dict = extract_errors(test["errors"], c, b)
             print(b, bank)
             errors = bank["read_errors"] + bank["write_errors"]
@@ -123,7 +122,7 @@ def prepare_rows(tests: list[Test]):
                     f"{error_rate:.2f}ppm" if error_rate else "0",
                 ]
 
-                row += ["FAIL" if bank.patterns[p] else "OK" for p in patterns]
+                row += ["FAIL" if bank.patterns.get(p, False) else "OK" for p in patterns]
 
                 rows.append(row)
 
