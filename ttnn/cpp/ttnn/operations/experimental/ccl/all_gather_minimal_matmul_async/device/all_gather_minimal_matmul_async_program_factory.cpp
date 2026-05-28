@@ -142,7 +142,8 @@ static inline void append_accessors(
     const ttnn::Tensor& ag_input_tensor,
     const std::optional<const ttnn::Tensor>& ternary_a_tensor = std::nullopt,
     const std::optional<const ttnn::Tensor>& ternary_b_tensor = std::nullopt,
-    bool is_injector_core = false) {
+    bool is_injector_core = false,
+    const std::optional<const ttnn::Tensor>& fsdp_local_weight_tensor = std::nullopt) {
     tt::tt_metal::TensorAccessorArgs(*main_tensor.buffer()).append_to(args);
     for (const auto& output_tensor : output_tensors) {
         tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(args);
@@ -152,6 +153,10 @@ static inline void append_accessors(
     }
     if (is_injector_core) {
         tt::tt_metal::TensorAccessorArgs(*ag_input_tensor.buffer()).append_to(args);
+    }
+    if (fsdp_local_weight_tensor.has_value()) {
+        // FSDP-sharded local weight (for in1 kernel reading its own K-slice from DRAM)
+        tt::tt_metal::TensorAccessorArgs(*fsdp_local_weight_tensor.value().buffer()).append_to(args);
     }
     if (ternary_a_tensor.has_value()) {
         tt::tt_metal::TensorAccessorArgs(*ternary_a_tensor.value().buffer()).append_to(args);
@@ -188,7 +193,15 @@ all_gather_minimal_matmul_async_factory_helper(
     uint32_t N_chunks,
     std::optional<float> fused_ternary_scalar,
     const std::optional<const ttnn::Tensor>& fused_ternary_input_a,
-    const std::optional<const ttnn::Tensor>& fused_ternary_input_b) {
+    const std::optional<const ttnn::Tensor>& fused_ternary_input_b,
+    // FSDP fusion args (all unset/default when not fused)
+    const std::optional<const ttnn::Tensor>& persistent_weight_buffer,
+    const std::optional<ttnn::MeshCoordinate>& fsdp_forward_coord,
+    const std::optional<ttnn::MeshCoordinate>& fsdp_backward_coord,
+    uint32_t fsdp_ring_size,
+    uint32_t fsdp_ring_index,
+    const std::vector<ttnn::GlobalSemaphore>& fsdp_semaphore,
+    ttnn::ccl::Topology fsdp_topology) {
     auto* device = input_tensor.device();
 
     if (!config.has_value()) {
@@ -539,6 +552,12 @@ all_gather_minimal_matmul_async_factory_helper(
     in0_defines["IS_IN0"] = "1";
     in0_fabric_defines = in0_defines;
     in0_fabric_defines["USE_MUX"] = "1";
+    auto in1_defines = defines;
+    if (persistent_weight_buffer.has_value()) {
+        in1_defines["FSDP_FUSED"] = "1";
+        in1_defines["IS_IN1"] = "1";
+        in1_defines["USE_MUX"] = "1";
+    }
 
     // Linear uni-ring routing: Dev 0's forward unicast routes N-1 hops to Dev N-1
     // (rather than 1 hop to Dev 1). fabric_set_unicast_route<false>(hdr, distance)
@@ -548,8 +567,67 @@ all_gather_minimal_matmul_async_factory_helper(
         unicast_forward_args[1] = ring_size - 1;  // distance_in_hops = N-1
     }
 
+    const bool fsdp_fused = persistent_weight_buffer.has_value();
+
+    // FSDP-axis ring metrics and fabric mux setup. Mirrors the in0 mux block (above) but
+    // uses fsdp_ring_size / fsdp_ring_index / fsdp_topology and lives on row full_grid_size.y - 2.
+    uint32_t fsdp_num_targets_forward = 0;
+    uint32_t fsdp_num_targets_backward = 0;
+    std::array<uint32_t, 2> fsdp_unicast_forward_args{};
+    std::array<uint32_t, 2> fsdp_unicast_backward_args{};
+    tt::tt_fabric::FabricMuxConfig fsdp_mux_kernel_config = mux_kernel_config;  // overwritten below if fsdp_fused
+    tt::tt_metal::KernelHandle fsdp_mux_kernel_id{};
+    const auto fsdp_mux_connection_valid = [&fsdp_backward_coord, &fsdp_forward_coord](const uint32_t dir) {
+        return (dir && fsdp_backward_coord.has_value()) || (!dir && fsdp_forward_coord.has_value());
+    };
+    if (fsdp_fused) {
+        std::tie(fsdp_num_targets_forward, fsdp_num_targets_backward) =
+            ttnn::ccl::get_forward_backward_line_mcast_distance(fsdp_ring_size, fsdp_ring_index, fsdp_topology, false);
+        std::tie(fsdp_unicast_forward_args, fsdp_unicast_backward_args) =
+            ttnn::ccl::get_forward_backward_line_unicast_configuration(
+                sender_device_coord, fsdp_forward_coord, fsdp_backward_coord, device);
+
+        std::vector<CoreRange> fsdp_mux_core_ranges;
+        for (uint32_t mux_id = 0; mux_id < num_mux_cores; ++mux_id) {
+            uint32_t dir = mux_id % 2;
+            if (fsdp_mux_connection_valid(dir)) {
+                uint32_t link = mux_id / 2;
+                uint32_t mux_x_index = (num_workers_per_link * (link + 1)) - (1 - dir);
+                if (mux_x_index >= full_grid_size.x) {
+                    mux_x_index = mux_x_index - full_grid_size.x;
+                }
+                auto fsdp_mux_logical_core = CoreCoord(mux_x_index, full_grid_size.y - 2);
+                fsdp_mux_core_ranges.emplace_back(fsdp_mux_logical_core);
+            }
+        }
+        CoreRangeSet fsdp_mux_core_range_set = CoreRangeSet(fsdp_mux_core_ranges);
+
+        fsdp_mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
+            num_full_size_channels,
+            num_header_only_channels,
+            num_buffers_per_channel,
+            0,
+            buffer_size_bytes_full_size_channel,
+            mux_base_l1_address);
+
+        if (!fsdp_mux_core_ranges.empty()) {
+            fsdp_mux_kernel_id = tt::tt_metal::CreateKernel(
+                program,
+                "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
+                fsdp_mux_core_range_set,
+                tt::tt_metal::DataMovementConfig{
+                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt::tt_metal::NOC::RISCV_1_default,
+                    .compile_args = fsdp_mux_kernel_config.get_fabric_mux_compile_time_args(),
+                    .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+        }
+    }
     uint32_t in0_addr = ag_output_tensor.buffer()->address();
-    uint32_t in1_addr = weight_tensor.buffer()->address();
+    // When FSDP fusion is active, in1 reads from the (op-managed) persistent_weight_buffer
+    // — which holds the gathered weight [K_full, N_local] — rather than the FSDP-sharded
+    // local weight slice. The FSDP gather kernel populates this buffer before in1 reads.
+    uint32_t in1_addr =
+        fsdp_fused ? persistent_weight_buffer.value().buffer()->address() : weight_tensor.buffer()->address();
     uint32_t in2_addr = use_bias ? bias_tensor.value().buffer()->address() : 0;
     // Note: Dataflow kernels can take a variable number of output tensors.
     // They are appended as a variable-length array at the end of the runtime-args:
@@ -719,89 +797,91 @@ all_gather_minimal_matmul_async_factory_helper(
             .compile_args = in0_receiver_fabric_compile_time_args,
             .defines = in0_fabric_defines});
 
-    std::vector<uint32_t> in1_sender_compile_time_args = {
-        M_tiles,
-        padded_M_tiles,
-        K_tiles,
-        padded_K_tiles,
-        N_tiles,
-        padded_N_tiles,
-        M_block_tiles,
-        K_block_tiles,
-        N_block_tiles,
-        M_blocks_per_core,
-        N_blocks_per_core,
-        in1_tile_size,
-        out_tile_size,
-        in2_tile_size,
-        in1_is_output_writer,
-        true,  // is_injector_core
-        ring_size,
-        ring_index,
-        N_chunks,                         // N_chunks
-        N_tiles_per_chunk,                // N_tiles_per_chunk
-        static_cast<uint32_t>(topology),  // topology
-        K_tiles_per_device,
-        K_block_tail_tiles,
+    // For in1's primary accessor: when fsdp_fused, the kernel reads from PWB (gathered weight),
+    // so the main accessor describes the PWB. When not fsdp_fused, it describes the weight tensor
+    // as before. The FSDP-sharded local weight (the original `weight_tensor`) gets a separate
+    // accessor appended after bias.
+    const ttnn::Tensor& in1_primary_tensor = fsdp_fused ? persistent_weight_buffer.value() : weight_tensor;
+    std::optional<const ttnn::Tensor> in1_fsdp_local_weight =
+        fsdp_fused ? std::optional<const ttnn::Tensor>{weight_tensor} : std::nullopt;
+
+    auto build_in1_ct_args = [&](bool is_injector) {
+        std::vector<uint32_t> ct = {
+            M_tiles,
+            padded_M_tiles,
+            K_tiles,
+            padded_K_tiles,
+            N_tiles,
+            padded_N_tiles,
+            M_block_tiles,
+            K_block_tiles,
+            N_block_tiles,
+            M_blocks_per_core,
+            N_blocks_per_core,
+            in1_tile_size,
+            out_tile_size,
+            in2_tile_size,
+            in1_is_output_writer,
+            (uint32_t)is_injector,  // is_injector_core
+            ring_size,
+            ring_index,
+            N_chunks,                         // N_chunks
+            N_tiles_per_chunk,                // N_tiles_per_chunk
+            static_cast<uint32_t>(topology),  // topology
+            K_tiles_per_device,
+            K_block_tail_tiles,
+        };
+        // FSDP-only CT args. Order matches the kernel's parse order under FSDP_FUSED.
+        if (fsdp_fused) {
+            ct.push_back(fsdp_ring_size);
+            ct.push_back(fsdp_ring_index);
+            ct.push_back(fsdp_num_targets_forward);
+            ct.push_back(fsdp_num_targets_backward);
+            ct.push_back(static_cast<uint32_t>(fsdp_topology));
+            fabric_mux_connection_ct_args(
+                num_workers_per_link,
+                tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+                fsdp_mux_kernel_config,
+                ct);
+            ct.insert(ct.end(), fsdp_unicast_forward_args.begin(), fsdp_unicast_forward_args.end());
+            ct.insert(ct.end(), fsdp_unicast_backward_args.begin(), fsdp_unicast_backward_args.end());
+        }
+        append_accessors(
+            ct,
+            in1_primary_tensor,
+            mm_output_tensors,
+            bias_tensor,
+            input_tensor,
+            fused_ternary_input_a,
+            fused_ternary_input_b,
+            /*is_injector_core=*/false,
+            in1_fsdp_local_weight);
+        return ct;
     };
-    append_accessors(
-        in1_sender_compile_time_args,
-        weight_tensor,
-        mm_output_tensors,
-        bias_tensor,
-        input_tensor,
-        fused_ternary_input_a,
-        fused_ternary_input_b,
-        false);
+
+    std::vector<uint32_t> in1_sender_compile_time_args = build_in1_ct_args(/*is_injector=*/true);
     auto in1_sender_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/kernels/"
         "dm_in1_sender_out.cpp",
         in1_sender_cores,
         tt::tt_metal::DataMovementConfig{
-            .processor = in1_risc, .noc = in1_noc, .compile_args = in1_sender_compile_time_args, .defines = defines});
+            .processor = in1_risc,
+            .noc = in1_noc,
+            .compile_args = in1_sender_compile_time_args,
+            .defines = in1_defines});
 
-    std::vector<uint32_t> in1_receiver_compile_time_args = {
-        M_tiles,
-        padded_M_tiles,
-        K_tiles,
-        padded_K_tiles,
-        N_tiles,
-        padded_N_tiles,
-        M_block_tiles,
-        K_block_tiles,
-        N_block_tiles,
-        M_blocks_per_core,
-        N_blocks_per_core,
-        in1_tile_size,
-        out_tile_size,
-        in2_tile_size,
-        in1_is_output_writer,
-        false,  // is_injector_core
-        ring_size,
-        ring_index,
-        N_chunks,                         // N_chunks
-        N_tiles_per_chunk,                // N_tiles_per_chunk
-        static_cast<uint32_t>(topology),  // topology
-        K_tiles_per_device,
-        K_block_tail_tiles,
-    };
-    append_accessors(
-        in1_receiver_compile_time_args,
-        weight_tensor,
-        mm_output_tensors,
-        bias_tensor,
-        input_tensor,
-        fused_ternary_input_a,
-        fused_ternary_input_b,
-        false);
+    std::vector<uint32_t> in1_receiver_compile_time_args = build_in1_ct_args(/*is_injector=*/false);
     auto in1_receiver_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/kernels/"
         "dm_in1_sender_out.cpp",
         in1_receiver_cores,
         tt::tt_metal::DataMovementConfig{
-            .processor = in1_risc, .noc = in1_noc, .compile_args = in1_receiver_compile_time_args, .defines = defines});
+            .processor = in1_risc,
+            .noc = in1_noc,
+            .compile_args = in1_receiver_compile_time_args,
+            .defines = in1_defines});
 
     std::vector<uint32_t> compute_compile_time_args = {
         K_blocks,
@@ -889,6 +969,35 @@ all_gather_minimal_matmul_async_factory_helper(
         }
     }
 
+    // FSDP mux RT args. Same iteration pattern as in0 mux above, but on row full_grid_size.y - 2
+    // and using FSDP-axis neighbor coords.
+    if (fsdp_fused) {
+        for (uint32_t mux_id = 0; mux_id < num_mux_cores; ++mux_id) {
+            uint32_t dir = mux_id % 2;
+            if (fsdp_mux_connection_valid(dir)) {
+                uint32_t link = mux_id / 2;
+                uint32_t mux_x_index = (num_workers_per_link * (link + 1)) - (1 - dir);
+                if (mux_x_index >= full_grid_size.x) {
+                    mux_x_index = mux_x_index - full_grid_size.x;
+                }
+                auto fsdp_mux_logical_core = CoreCoord(mux_x_index, full_grid_size.y - 2);
+
+                std::vector<uint32_t> fsdp_mux_rt_args;
+                const auto src_node_id = device->get_fabric_node_id(sender_device_coord);
+                if (dir) {
+                    const auto dst_node_id = device->get_fabric_node_id(fsdp_backward_coord.value());
+                    fsdp_mux_rt_args = fsdp_mux_kernel_config.get_fabric_mux_run_time_args(
+                        src_node_id, dst_node_id, link, program, {fsdp_mux_logical_core});
+                } else {
+                    const auto dst_node_id = device->get_fabric_node_id(fsdp_forward_coord.value());
+                    fsdp_mux_rt_args = fsdp_mux_kernel_config.get_fabric_mux_run_time_args(
+                        src_node_id, dst_node_id, link, program, {fsdp_mux_logical_core});
+                }
+                tt::tt_metal::SetRuntimeArgs(program, fsdp_mux_kernel_id, {fsdp_mux_logical_core}, fsdp_mux_rt_args);
+            }
+        }
+    }
+
     // Set common runtime args (same for all cores, updated in override_runtime_arguments)
     // in0 common args: [in0_addr, in2_addr, in3_addr, sem_backward, sem_forward, [ternary_a, ternary_b],
     // output_addrs...]
@@ -914,7 +1023,8 @@ all_gather_minimal_matmul_async_factory_helper(
         tt::tt_metal::SetCommonRuntimeArgs(program, in0_receiver_no_fabric_kernels_id, in0_common_args);
     }
 
-    // in1 common args: [in1_addr, in2_addr, [ternary_a, ternary_b, broadcast_ternary_b], output_addrs...]
+    // in1 common args: [in1_addr, in2_addr, [ternary_a, ternary_b, broadcast_ternary_b],
+    //                   [local_weight_addr, fsdp_sem_backward, fsdp_sem_forward], output_addrs...]
     {
         std::vector<uint32_t> in1_common_args = {
             in1_addr,
@@ -925,6 +1035,14 @@ all_gather_minimal_matmul_async_factory_helper(
             in1_common_args.push_back(fused_ternary_input_b.value().buffer()->address());
             uint32_t ternary_b_M_tiles = fused_ternary_input_b.value().padded_shape()[-2] / tt::constants::TILE_HEIGHT;
             in1_common_args.push_back(ternary_b_M_tiles == 1 ? 1u : 0u);  // broadcast_ternary_b
+        }
+        if (fsdp_fused) {
+            // local_weight_addr: the FSDP-sharded weight (injector reads its own K-slice from this).
+            // fsdp_sem_backward / fsdp_sem_forward: per-direction counters that the injector waits on
+            //   for remote K-slices to land in the local PWB (mirrors in0's out_ready_sem pair).
+            in1_common_args.push_back(weight_tensor.buffer()->address());
+            in1_common_args.push_back(fsdp_semaphore.at(0).address());
+            in1_common_args.push_back(fsdp_semaphore.at(1).address());
         }
         for (const auto& mm_output_tensor : mm_output_tensors) {
             in1_common_args.push_back(mm_output_tensor.buffer()->address());
@@ -1086,6 +1204,7 @@ all_gather_minimal_matmul_async_factory_helper(
         }
 
         // Per-core args only (common values set via SetCommonRuntimeArgs above)
+        auto in1_injector_virtual_core = device->worker_core_from_logical_core(in1_core_order.front());
         std::vector<uint32_t> in1_args = {
             is_in1_sink,
             (std::uint32_t)in1_next_core_physical.x,  // in1_dest_noc_x
@@ -1101,6 +1220,76 @@ all_gather_minimal_matmul_async_factory_helper(
             N_end_tile,
             defer_write_k_block,
         };
+        // FSDP-only per-core args: kernel parses these under FSDP_FUSED. Same on all cores.
+        // mux RT args are appended below; only the last-two in1 cores get valid connections.
+        if (fsdp_fused) {
+            in1_args.push_back(virtual_core.x);
+            in1_args.push_back(virtual_core.y);
+            in1_args.push_back(in1_injector_virtual_core.x);
+            in1_args.push_back(in1_injector_virtual_core.y);
+            in1_args.push_back(in1_core_order_index);
+            in1_args.push_back(in1_core_order.size());
+        }
+        if (fsdp_fused) {
+            // Wire the FSDP mux RT args for both directions. Connections are "valid" only on
+            // the last-two cores in the in1 core order — the fabric senders. Other cores get
+            // the args slots filled (so parsing offsets stay consistent) but with valid=false,
+            // so their build_and_connect() effectively no-ops at runtime.
+            uint32_t worker_idx = in1_idx % num_workers_per_link;
+            auto last_in1_core = in1_core_order.back();
+            const bool is_in1_fabric_sender = in1_core_order_index >= (in1_core_order.size() - 2);
+
+            // Backward sender (second-to-last in core order) → backward fabric mux on row y-2.
+            uint32_t fsdp_mux_index_backward =
+                ((in1_idx / num_workers_per_link) * num_workers_per_link) + (num_workers_per_link - 1);
+            if (fsdp_mux_index_backward >= full_grid_size.x) {
+                fsdp_mux_index_backward -= full_grid_size.x;
+            }
+            auto fsdp_mux_logical_backward = CoreCoord(fsdp_mux_index_backward, full_grid_size.y - 2);
+            CoreCoord fsdp_mux_virtual_backward = device->worker_core_from_logical_core(fsdp_mux_logical_backward);
+            // Termination master for backward fabric: pick the second-to-last in1 core (the backward fabric sender)
+            // on worker index 0. Mirrors the in0 pattern's termination-master selection.
+            auto fsdp_term_master_logical_backward = transpose_core_grid
+                                                         ? CoreCoord(in1_idx - worker_idx, last_in1_core.y - 1)
+                                                         : CoreCoord(last_in1_core.x - 1, in1_idx - worker_idx);
+            CoreCoord fsdp_term_master_virtual_backward =
+                device->worker_core_from_logical_core(fsdp_term_master_logical_backward);
+            fabric_mux_connection_rt_args(
+                is_in1_fabric_sender && fsdp_mux_connection_valid(0),
+                (in1_core_order_index == (in1_core_order.size() - 2)) && !(in1_idx % num_workers_per_link),
+                tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+                fsdp_mux_virtual_backward,
+                worker_idx,
+                core,
+                fsdp_mux_kernel_config,
+                program,
+                fsdp_term_master_virtual_backward,
+                in1_args);
+
+            uint32_t fsdp_mux_index_forward =
+                ((in1_idx / num_workers_per_link) * num_workers_per_link) + num_workers_per_link;
+            if (fsdp_mux_index_forward >= full_grid_size.x) {
+                fsdp_mux_index_forward -= full_grid_size.x;
+            }
+            auto fsdp_mux_logical_forward = CoreCoord(fsdp_mux_index_forward, full_grid_size.y - 2);
+            CoreCoord fsdp_mux_virtual_forward = device->worker_core_from_logical_core(fsdp_mux_logical_forward);
+            auto fsdp_term_master_logical_forward = transpose_core_grid
+                                                        ? CoreCoord(in1_idx - worker_idx, last_in1_core.y)
+                                                        : CoreCoord(last_in1_core.x, in1_idx - worker_idx);
+            CoreCoord fsdp_term_master_virtual_forward =
+                device->worker_core_from_logical_core(fsdp_term_master_logical_forward);
+            fabric_mux_connection_rt_args(
+                is_in1_fabric_sender && fsdp_mux_connection_valid(1),
+                (in1_core_order_index == (in1_core_order.size() - 1)) && !(in1_idx % num_workers_per_link),
+                tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+                fsdp_mux_virtual_forward,
+                worker_idx,
+                core,
+                fsdp_mux_kernel_config,
+                program,
+                fsdp_term_master_virtual_forward,
+                in1_args);
+        }
         if (in1_core_order_index == 0) {
             // in1 sender
             SetRuntimeArgs(program, in1_sender_kernels_id, core, in1_args);
@@ -1161,6 +1350,9 @@ void AllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments(
     // validate guarantees that scalar and tensors are always provided together.
     bool has_fused_ternary = attributes.fused_ternary_scalar.has_value();
 
+    // Output layout: [0]=ag_output, [1]=persistent_weight_buffer (if FSDP), then chunk outputs
+    const size_t mm_outputs_start = 1 + (attributes.fsdp_cluster_axis.has_value() ? 1 : 0);
+
     // Build in0 common args: [in0_addr, in2_addr, in3_addr, sem_backward, sem_forward, [ternary], output_addrs...]
     std::vector<uint32_t> in0_common = {
         output_tensor.at(0).buffer()->address(),
@@ -1176,13 +1368,18 @@ void AllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments(
             tensor_args.fused_ternary_input_b.value().padded_shape()[-2] / tt::constants::TILE_HEIGHT;
         in0_common.push_back(ternary_b_M_tiles == 1 ? 1u : 0u);  // broadcast_ternary_b
     }
-    for (size_t i = 1; i < output_tensor.size(); ++i) {
+    for (size_t i = mm_outputs_start; i < output_tensor.size(); ++i) {
         in0_common.push_back(output_tensor[i].buffer()->address());
     }
 
     // Build in1 common args: [in1_addr, in2_addr, [ternary_a, ternary_b, broadcast_ternary_b], output_addrs...]
+    // When FSDP fusion is active, in1 reads from the gathered persistent_weight_buffer
+    // (output_tensor[1]) instead of from the FSDP-sharded weight_tensor directly.
+    const bool fsdp_fused_override = attributes.fsdp_cluster_axis.has_value();
+    uint32_t in1_in_addr =
+        fsdp_fused_override ? output_tensor.at(1).buffer()->address() : tensor_args.weight_tensor.buffer()->address();
     std::vector<uint32_t> in1_common = {
-        tensor_args.weight_tensor.buffer()->address(),
+        in1_in_addr,
         tensor_args.bias_tensor.has_value() ? tensor_args.bias_tensor.value().buffer()->address() : 0,
     };
     if (has_fused_ternary) {
@@ -1192,7 +1389,12 @@ void AllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments(
             tensor_args.fused_ternary_input_b.value().padded_shape()[-2] / tt::constants::TILE_HEIGHT;
         in1_common.push_back(ternary_b_M_tiles == 1 ? 1u : 0u);  // broadcast_ternary_b
     }
-    for (size_t i = 1; i < output_tensor.size(); ++i) {
+    if (fsdp_fused_override) {
+        in1_common.push_back(tensor_args.weight_tensor.buffer()->address());
+        in1_common.push_back(attributes.fsdp_semaphore.at(0).address());
+        in1_common.push_back(attributes.fsdp_semaphore.at(1).address());
+    }
+    for (size_t i = mm_outputs_start; i < output_tensor.size(); ++i) {
         in1_common.push_back(output_tensor[i].buffer()->address());
     }
 
@@ -1266,7 +1468,14 @@ all_gather_minimal_matmul_async_factory(
     uint32_t N_chunks,
     std::optional<float> fused_ternary_scalar,
     const std::optional<const Tensor>& fused_ternary_input_a,
-    const std::optional<const Tensor>& fused_ternary_input_b) {
+    const std::optional<const Tensor>& fused_ternary_input_b,
+    const std::optional<const Tensor>& persistent_weight_buffer,
+    const std::optional<MeshCoordinate>& fsdp_forward_coord,
+    const std::optional<MeshCoordinate>& fsdp_backward_coord,
+    uint32_t fsdp_ring_size,
+    uint32_t fsdp_ring_index,
+    const std::vector<ttnn::GlobalSemaphore>& fsdp_semaphore,
+    ttnn::ccl::Topology fsdp_topology) {
     tt::tt_metal::Program program{};
 
     return {
@@ -1297,7 +1506,14 @@ all_gather_minimal_matmul_async_factory(
             N_chunks,
             fused_ternary_scalar,
             fused_ternary_input_a,
-            fused_ternary_input_b)};
+            fused_ternary_input_b,
+            persistent_weight_buffer,
+            fsdp_forward_coord,
+            fsdp_backward_coord,
+            fsdp_ring_size,
+            fsdp_ring_index,
+            fsdp_semaphore,
+            fsdp_topology)};
 }
 
 ttnn::device_operation::CachedProgram<AllGatherMinimalMatmulAsyncProgramFactory::shared_variables_t>
@@ -1315,10 +1531,31 @@ AllGatherMinimalMatmulAsyncProgramFactory::create_at(
     std::optional<MeshCoordinate> backward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
         tensor_args.input_tensor, mesh_coordinate, -1, attributes.topology, attributes.cluster_axis);
 
+    // FSDP neighbor lookup along fsdp_cluster_axis (only when FSDP fusion is active).
+    std::optional<MeshCoordinate> fsdp_forward_coord;
+    std::optional<MeshCoordinate> fsdp_backward_coord;
+    uint32_t fsdp_ring_index = 0;
+    if (attributes.fsdp_cluster_axis.has_value()) {
+        fsdp_ring_index = ttnn::ccl::get_linearized_index_from_physical_coord(
+            tensor_args.input_tensor, mesh_coordinate, attributes.fsdp_cluster_axis);
+        fsdp_forward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
+            tensor_args.input_tensor, mesh_coordinate, 1, attributes.fsdp_topology, attributes.fsdp_cluster_axis);
+        fsdp_backward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
+            tensor_args.input_tensor, mesh_coordinate, -1, attributes.fsdp_topology, attributes.fsdp_cluster_axis);
+    }
+
     const auto& act_tensor = tensor_args.input_tensor;
     const auto& weight_tensor = tensor_args.weight_tensor;
     const auto& bias_tensor = tensor_args.bias_tensor;
     const auto& ag_output_tensor = output_tensor.at(0);
+
+    // Output layout: [ag_output, (optional: persistent_weight_buffer), chunks...]
+    // Strip ag_output (always) and persistent_weight_buffer (if FSDP) from mm_output_tensors.
+    size_t mm_outputs_start = 1 + (attributes.fsdp_cluster_axis.has_value() ? 1 : 0);
+    std::optional<ttnn::Tensor> pwb_opt;
+    if (attributes.fsdp_cluster_axis.has_value()) {
+        pwb_opt = output_tensor.at(1);
+    }
 
     return all_gather_minimal_matmul_async_factory(
         act_tensor,
@@ -1326,7 +1563,7 @@ AllGatherMinimalMatmulAsyncProgramFactory::create_at(
         bias_tensor,
         attributes.fused_activation,
         attributes.config,
-        std::vector<ttnn::Tensor>(output_tensor.begin() + 1, output_tensor.end()),
+        std::vector<ttnn::Tensor>(output_tensor.begin() + mm_outputs_start, output_tensor.end()),
         ag_output_tensor,
         attributes.compute_kernel_config,
         mesh_coordinate,
@@ -1345,7 +1582,14 @@ AllGatherMinimalMatmulAsyncProgramFactory::create_at(
         attributes.chunks,
         attributes.fused_ternary_scalar,
         tensor_args.fused_ternary_input_a,
-        tensor_args.fused_ternary_input_b);
+        tensor_args.fused_ternary_input_b,
+        pwb_opt,
+        fsdp_forward_coord,
+        fsdp_backward_coord,
+        attributes.fsdp_ring_size,
+        fsdp_ring_index,
+        attributes.fsdp_semaphore,
+        attributes.fsdp_topology);
 }
 
 }  // namespace ttnn::experimental::prim

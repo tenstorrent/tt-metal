@@ -709,6 +709,332 @@ def test_linear(
                 assert check_result[n][c][i]["relative_rmse"] < 0.02
 
 
+def run_test_linear_fsdp(
+    device,
+    M,
+    K,
+    N,
+    M_block_size,
+    K_block_size,
+    N_block_size,
+    subblock_h,
+    subblock_w,
+    topology,
+    core_grid,
+    num_workers_per_link,
+    num_links,
+    *,
+    tp_axis,
+    fsdp_axis,
+    fsdp_topology,
+    use_bias=True,
+    activation=None,
+    chunks=1,
+    num_iters=1,
+    enable_trace=False,
+    dtype=ttnn.bfloat16,
+    math_fidelity=ttnn.MathFidelity.HiFi2,
+    fp32_acc=True,
+):
+    """
+    FSDP-fused variant. fsdp_axis is also the sp_axis from the model's perspective, so
+    activation M is sharded on it. Layout:
+      - x       : [M, K]        M sharded on fsdp_axis (= sp), K sharded on tp_axis
+      - weight  : [K, N]        K sharded on fsdp_axis,        N sharded on tp_axis
+      - bias    : [1, N]        N sharded on tp_axis (replicated on fsdp_axis)
+      - output  : [M, N]        M sharded on fsdp_axis,        N sharded on tp_axis
+    """
+    assert tp_axis != fsdp_axis, "tp_axis and fsdp_axis must be distinct"
+    tp_size = device.shape[tp_axis]
+    fsdp_size = device.shape[fsdp_axis]
+    assert tp_size > 1 and fsdp_size > 1, "FSDP fusion test requires both axes > 1"
+
+    torch_dtype = torch.float32
+    torch_input = torch.randn((M, K), dtype=torch_dtype)
+    weight_input = torch.randn((K, N), dtype=torch_dtype)
+    bias_input = torch.randn((1, N), dtype=torch_dtype) if use_bias else None
+
+    with torch.no_grad():
+        torch_output = torch_input @ weight_input
+        if bias_input is not None:
+            torch_output = torch_output + bias_input
+        if activation == "gelu":
+            torch_output = torch.nn.functional.gelu(torch_output)
+        torch_output_chunks = torch.chunk(torch_output, chunks, dim=-1)
+
+    # x: M (dim 0) sharded on fsdp_axis (= sp_axis), K (dim 1) sharded on tp_axis
+    x_shard_dims = [None, None]
+    x_shard_dims[fsdp_axis] = 0
+    x_shard_dims[tp_axis] = 1
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=dtype,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=x_shard_dims),
+    )
+
+    # W: K (dim 0) sharded on fsdp_axis, N (dim 1) sharded on tp_axis
+    w_shard_dims = [None, None]
+    w_shard_dims[fsdp_axis] = 0
+    w_shard_dims[tp_axis] = 1
+    tt_weight = ttnn.from_torch(
+        weight_input,
+        dtype=dtype,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=w_shard_dims),
+    )
+
+    # bias: N (dim 1) sharded on tp_axis only
+    tt_bias = None
+    if use_bias:
+        b_shard_dims = [None, None]
+        b_shard_dims[tp_axis] = 1
+        tt_bias = ttnn.from_torch(
+            bias_input,
+            dtype=dtype,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=b_shard_dims),
+        )
+
+    activation_fn = None
+    if activation == "gelu":
+        activation_fn = (ttnn.UnaryOpType.GELU, False)
+    else:
+        assert activation is None, f"Unsupported activation: {activation}"
+
+    ccl_cores = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))}
+    )
+
+    # Semaphores: TP-axis activation gather + FSDP-axis weight gather (both ping-pong pairs)
+    tp_sems = [create_global_semaphores(device, device.get_num_devices(), ccl_cores, 0) for _ in range(num_iters)]
+    fsdp_sems = [create_global_semaphores(device, device.get_num_devices(), ccl_cores, 0) for _ in range(num_iters)]
+
+    # Persistent activation-gather buffer holds the per-device gathered activation
+    # [M/fsdp_size, K] (M is sharded on fsdp_axis, K becomes full after the TP all-gather).
+    per_device_M = M // fsdp_size
+    ag_persistent_buffers = [
+        ttnn.from_torch(
+            torch.zeros((per_device_M, K), dtype=torch_dtype),
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=dtype,
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=[None, None]),
+        )
+        for _ in range(num_iters)
+    ]
+
+    # Persistent gathered-weight buffer: [K, N/tp_size] per device — N is TP-sharded.
+    per_device_N = N // tp_size
+    pwb_shard_dims = [None, None]
+    pwb_shard_dims[tp_axis] = 1
+    pwb_persistent_buffers = [
+        ttnn.from_torch(
+            torch.zeros((K, per_device_N), dtype=torch_dtype),
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=dtype,
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=[None, None]),
+        )
+        for _ in range(num_iters)
+    ]
+
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=math_fidelity,
+        math_approx_mode=False,
+        fp32_dest_acc_en=fp32_acc,
+        packer_l1_acc=True,
+    )
+
+    matmul_config = ttnn.MinimalMatmulConfig(
+        M_block_size=M_block_size,
+        K_block_size=K_block_size,
+        N_block_size=N_block_size,
+        subblock_h=subblock_h,
+        subblock_w=subblock_w,
+        compute_with_storage_grid_size=core_grid,
+    )
+
+    def run_op(i):
+        return ttnn.experimental.all_gather_minimal_matmul_async(
+            tt_input,
+            tt_weight,
+            bias_tensor=tt_bias,
+            fused_activation=activation_fn,
+            compute_kernel_config=compute_config,
+            config=matmul_config,
+            persistent_output_buffer=ag_persistent_buffers[i],
+            multi_device_global_semaphore=tp_sems[i],
+            num_links=num_links,
+            topology=topology,
+            cluster_axis=tp_axis,
+            force_transpose=True,
+            num_workers_per_link=num_workers_per_link,
+            num_buffers_per_channel=48,
+            chunks=chunks,
+            fsdp_cluster_axis=fsdp_axis,
+            fsdp_multi_device_global_semaphore=fsdp_sems[i],
+            persistent_weight_buffer=pwb_persistent_buffers[i],
+            fsdp_topology=fsdp_topology,
+        )
+
+    tt_output_tensor_list = []
+    if enable_trace:
+        run_op(0)
+        ttnn.synchronize_device(device)
+        trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+        tt_out_tensor = run_op(0)
+        ttnn.end_trace_capture(device, trace_id, cq_id=0)
+        ttnn.synchronize_device(device)
+        for _ in range(num_iters):
+            ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
+            ttnn.synchronize_device(device)
+            tt_output_tensor_list.append(tt_out_tensor)
+    else:
+        for i in range(num_iters):
+            ttnn.synchronize_device(device)
+            tt_out_tensor = run_op(i)
+            tt_output_tensor_list.append(tt_out_tensor)
+            ttnn.synchronize_device(device)
+            logger.info(f"Done iteration {i}")
+
+    # Output is [M/fsdp, N/tp] per device — M sharded on fsdp_axis, N sharded on tp_axis.
+    # After ConcatMesh2dToTensor the tensor recovers global [M, N/chunks].
+    concat_dims = [0, 0]
+    concat_dims[fsdp_axis] = 0  # M
+    concat_dims[tp_axis] = 1  # N (after chunk split: N/chunks)
+    chunk_n = N // chunks
+
+    check_result_list = []
+    for n in range(num_iters):
+        tt_output = tt_output_tensor_list[n]
+        check_result = []
+        for c in range(chunks):
+            tt_output_chunk = ttnn.from_device(tt_output[c])
+            tt_output_chunk = ttnn.to_torch(
+                tt_output_chunk,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(device, mesh_shape=tuple(device.shape), dims=concat_dims),
+            )
+            # PCC every (fsdp_i, tp_i) device's slice against the matching slab of torch.
+            check_result_chunk = []
+            for fsdp_i in range(fsdp_size):
+                m_slice = slice(fsdp_i * per_device_M, (fsdp_i + 1) * per_device_M)
+                for tp_i in range(tp_size):
+                    n_per_dev = chunk_n // tp_size
+                    n_slice = slice(tp_i * n_per_dev, (tp_i + 1) * n_per_dev)
+                    tt_device_output = tt_output_chunk[m_slice, n_slice]
+                    torch_slice = torch_output_chunks[c][m_slice, n_slice]
+                    check_result_chunk.append(assert_quality(torch_slice, tt_device_output))
+            check_result.append(check_result_chunk)
+        check_result_list.append(check_result)
+
+    return check_result_list
+
+
+@pytest.mark.parametrize(
+    "mesh_device, mesh_shape, device_params, topology, fsdp_topology, num_links, num_workers_per_link, tp_axis, fsdp_axis, core_grid_x, core_grid_y",
+    [
+        [
+            (4, 8),
+            (4, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": create_fabric_router_config(4096),
+                "trace_region_size": 90112,
+            },
+            ttnn.Topology.Ring,
+            ttnn.Topology.Linear,
+            4,
+            2,
+            0,
+            1,
+            8,
+            7,
+        ],
+    ],
+    ids=["wh_sweep_4x4"],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    "M, K, N, use_bias, activation, chunks, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
+    [
+        (12288, 5120, 15360, True, None, 1, 8, 8, 8, 1, 2),
+    ],
+    ids=["1xqkv"],
+)
+def test_linear_fsdp(
+    mesh_device,
+    mesh_shape,
+    M,
+    K,
+    N,
+    M_block_size,
+    K_block_size,
+    N_block_size,
+    subblock_h,
+    subblock_w,
+    topology,
+    fsdp_topology,
+    core_grid_x,
+    core_grid_y,
+    num_workers_per_link,
+    num_links,
+    tp_axis,
+    fsdp_axis,
+    use_bias,
+    activation,
+    chunks,
+):
+    """
+    Exercises all_gather_minimal_matmul_async with the FSDP weight gather fused in.
+
+    Layout:
+      - x        : [M, K]         replicated on fsdp_axis, K-sharded on tp_axis
+      - weight   : [K, N]         K-sharded on fsdp_axis, N-sharded on tp_axis
+      - bias     : [1, N]         N-sharded on tp_axis (replicated on fsdp_axis)
+      - output   : [M, N/tp]      replicated on fsdp_axis, N-sharded on tp_axis
+    """
+    parent_mesh = mesh_device
+    mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
+
+    check_result = run_test_linear_fsdp(
+        mesh_device,
+        M,
+        K,
+        N,
+        M_block_size,
+        K_block_size,
+        N_block_size,
+        subblock_h,
+        subblock_w,
+        topology,
+        core_grid=ttnn.CoreCoord(core_grid_x, core_grid_y),
+        num_workers_per_link=num_workers_per_link,
+        num_links=num_links,
+        tp_axis=tp_axis,
+        fsdp_axis=fsdp_axis,
+        fsdp_topology=fsdp_topology,
+        use_bias=use_bias,
+        activation=activation,
+        chunks=chunks,
+    )
+
+    fsdp_size = mesh_device.shape[fsdp_axis]
+    tp_size = mesh_device.shape[tp_axis]
+    for n in range(len(check_result)):
+        for c in range(chunks):
+            assert len(check_result[n][c]) == fsdp_size * tp_size
+            for entry in check_result[n][c]:
+                assert entry["pcc"] > 0.999_500
+                assert entry["relative_rmse"] < 0.02
+
+
 @pytest.mark.parametrize(
     "mesh_device, device_params, topology, num_links, num_workers_per_link, sp_axis, tp_axis, core_grid_x, core_grid_y, cluster_axis",
     [

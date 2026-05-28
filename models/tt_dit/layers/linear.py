@@ -208,7 +208,13 @@ class ColParallelLinear(Module):
         Return output fractured on columns.
         If chunks is set, returns a list of tensors split along the output dimension.
         """
-        if self.fsdp_mesh_axis is not None and self.mesh_device.shape[self.fsdp_mesh_axis] > 1:
+        # FSDP gather of the weight along the FSDP mesh axis is fused into
+        # `all_gather_minimal_matmul_async` when we're on the TP path. Otherwise
+        # (no TP, or no FSDP), we materialize the gathered weight up-front as before.
+        fsdp_active = self.fsdp_mesh_axis is not None and self.mesh_device.shape[self.fsdp_mesh_axis] > 1
+        tp_active = parallel_config is not None and parallel_config.tensor_parallel.factor > 1
+
+        if fsdp_active and not tp_active:
             unsqueezed_weight = ttnn.unsqueeze_to_4D(self.weight.data)
             weight = self.ccl_manager.all_gather_persistent_buffer(
                 unsqueezed_weight, dim=2, mesh_axis=self.fsdp_mesh_axis
@@ -216,10 +222,17 @@ class ColParallelLinear(Module):
 
             weight = ttnn.reshape(weight, (weight.shape[-2], weight.shape[-1]))
         else:
+            # Either no FSDP, or we'll fuse the FSDP gather into the matmul op below.
             weight = self.weight.data
 
-        if parallel_config is not None and parallel_config.tensor_parallel.factor > 1:
-            M, K, N = x.padded_shape[-2], weight.padded_shape[-2], weight.padded_shape[-1]
+        if tp_active:
+            # When FSDP fusion is active, weight here is still the FSDP-sharded local
+            # slice [K/fsdp, N/tp]. The fused op will gather it along fsdp_mesh_axis.
+            if fsdp_active:
+                K_full = weight.padded_shape[-2] * self.mesh_device.shape[self.fsdp_mesh_axis]
+            else:
+                K_full = weight.padded_shape[-2]
+            M, K, N = x.padded_shape[-2], K_full, weight.padded_shape[-1]
             full_grid = self.mesh_device.compute_with_storage_grid_size()
             core_grid = ttnn.CoreCoord(full_grid.x, full_grid.y - 1)
             matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
@@ -230,6 +243,21 @@ class ColParallelLinear(Module):
             ag_global_semaphores = self.ccl_manager.get_ag_ping_pong_semaphore(
                 parallel_config.tensor_parallel.mesh_axis
             )
+
+            fsdp_kwargs = {}
+            if fsdp_active:
+                # Persistent buffer for the gathered weight [K_full, N_local].
+                pwb = self.ccl_manager.get_fsdp_weight_buffer(
+                    (1, 1, K_full, weight.padded_shape[-1]), self.fsdp_mesh_axis, dtype=weight.get_dtype()
+                )
+                fsdp_kwargs = {
+                    "fsdp_cluster_axis": self.fsdp_mesh_axis,
+                    "fsdp_multi_device_global_semaphore": self.ccl_manager.get_fsdp_ping_pong_semaphore(
+                        self.fsdp_mesh_axis
+                    ),
+                    "persistent_weight_buffer": pwb,
+                }
+
             outputs = ttnn.experimental.all_gather_minimal_matmul_async(
                 input_tensor=x,
                 weight_tensor=weight,
@@ -248,6 +276,7 @@ class ColParallelLinear(Module):
                 num_buffers_per_channel=48 if not is_blackhole() else 24,
                 chunks=self.chunks if self.chunks is not None else 1,
                 dtype=dtype,
+                **fsdp_kwargs,
             )
 
             if self.chunks is not None and (self.chunks > 1):
