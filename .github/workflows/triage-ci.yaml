@@ -36,10 +36,6 @@ on:
         default: "3"
 
       # ── Create-issues inputs ─────────────────────────────────────────────────
-      create-issues:
-        description: "[create-issues] Actually create issues (false = dry-run)"
-        type: boolean
-        default: false
       max-issues:
         description: "[create-issues] Maximum issues to create (0 = unlimited)"
         type: number
@@ -155,9 +151,8 @@ jobs:
 
   create-issues:
     if: ${{ inputs.mode == 'create-issues' }}
-    uses: tenstorrent/tt-auto-triage/.github/workflows/triage-ci.yaml@ebanerjee/create-issues-copilot
+    uses: tenstorrent/tt-auto-triage/.github/workflows/triage-create-issues.yaml@ebanerjee/create-issues-copilot
     with:
-      create-issues: ${{ inputs.create-issues }}
       issue-repo: ${{ inputs.issue-repo }}
       target-repo: ${{ inputs.target-repo }}
       max-issues: ${{ fromJSON(inputs.max-issues) }}
