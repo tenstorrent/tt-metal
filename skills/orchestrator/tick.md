@@ -5,15 +5,14 @@ SPDX-License-Identifier: Apache-2.0
 
 # Bringup Orchestrator — Per-Tick Prompt
 
-You are running ONE tick of the bringup orchestrator. A tick is the
-atomic unit: load state, decide one action, dispatch one or more
-workers, parse results, mutate state, render the log, commit, then
-schedule the next tick. One tick = one commit. Nothing is committed
-until Step 6, so a mid-tick crash leaves the repo clean and the next
-`/bringup --resume` picks up from the prior tick's commit.
+You are running ONE tick of the bringup orchestrator. A tick is
+atomic: load state → decide one action → dispatch worker(s) → parse →
+mutate → render → commit → schedule the next tick. One tick = one
+commit. Nothing is committed until Step 6, so a mid-tick crash leaves
+the repo clean and `/bringup --resume` picks up from the prior tick.
 
 Do NOT call `git reset --hard`, `git checkout .`, or any other
-destructive git command. If something goes wrong, halt and let the user
+destructive git command. On unrecoverable error, halt and let the user
 inspect.
 
 ## Args
@@ -107,11 +106,29 @@ state["locks"]["device"]["held_since"] = now
 save_state("<model_path>/.bringup_state.json", state)
 ```
 
-Then ONE Agent call with `workers/<result['worker']>-worker.md` (one of
-`ttnn`, `debug`, `optimization`). Spec uses `phase=result["worker"]`,
-`block=result["block"]`, and `history` filled from the component's prior
-attempt count + most recent `last_error`. Only one device worker per
-tick.
+Then ONE Agent call with `workers/<result['worker']>-worker.md`. Only
+one device worker per tick. The spec is JSON-serialized after a
+`## Spec:` line. Common base fields: `phase=result["worker"]`,
+`model_slug`, `model_id`, `device`, `arch_name`, `config`,
+`hf_checkpoint_path`. Worker-specific additions:
+
+- `ttnn` / `debug` / `optimization` / `real_weights` (per-component):
+  `block=result["block"]`, the component's `reference_impl`,
+  `depends_on_status` derived from `depends_on`, `history` from the
+  component's prior attempt count + most recent `last_error` on that
+  phase row (`component[result["worker"]]`).
+- `generation` (NEW, per-use_case): the eligible result carries
+  `result["use_case"]` (not `block`). Look up `uc = next(u for u in
+  state["use_cases"] if u["name"] == result["use_case"])`. Spec
+  includes the full `use_case` dict plus `components=[{"name": n,
+  "tt_path": f"models/demos/{slug}/tt/{n}.py"} for n in
+  uc["components_used"]]` and `history` from `uc["generation"]`.
+- `perf` (NEW, per-use_case): same `result["use_case"]` lookup; spec
+  has the full `use_case` dict and `history` from `uc["perf"]` (no
+  `components` list — perf re-imports what generation already wired).
+
+Each holds the device lock for the single dispatch and releases it in
+Step 4.
 
 ## Step 4: Parse worker results
 
@@ -122,13 +139,39 @@ import json
 result_json = json.loads(response.strip().splitlines()[-1])
 ```
 
-Required keys: `block`, `phase`, `status` (one of `ok`/`fail`/`blocked`),
-`pcc`, `artifacts`, `notes`, `last_error`, `hang_detected`.
+Two backward-compatible shapes:
+
+- **Old** (`reference`, `ttnn`, `debug`, `optimization`): `block`,
+  `phase`, `status`, `pcc`, `artifacts`, `notes`, `last_error`,
+  `hang_detected`.
+- **New** (`real_weights`, `generation`, `perf`): `target`,
+  `target_type` (`"component"` or `"use_case"`), `phase`, `status`,
+  `metric` (e.g. `{"pcc": 0.998}` / `{"bleu": 42.524}` /
+  `{"steady_step_ms": 18.1, "speedup": 1.21}`), `artifacts`, `notes`,
+  `last_error`, `hang_detected`.
+
+Normalize once, then resolve the target dict:
+
+```python
+target = result_json.get("target") or result_json.get("block")
+target_type = result_json.get("target_type", "component")
+phase_name = result_json["phase"]
+status = result_json["status"]
+metric = result_json.get("metric") or (
+    {"pcc": result_json["pcc"]} if "pcc" in result_json else {}
+)
+if target_type == "component":
+    target_dict = next(c for c in state["components"] if c["name"] == target)
+elif target_type == "use_case":
+    target_dict = next(uc for uc in state["use_cases"] if uc["name"] == target)
+else:
+    raise AssertionError(f"unknown target_type {target_type!r}")
+```
 
 ### Architecture, status=ok
 
 Read `models/demos/<model_slug>/architecture_inventory.json`. For each
-entry, append to `state["components"]`:
+`components[]` entry append to `state["components"]`:
 
 ```python
 {
@@ -140,29 +183,43 @@ entry, append to `state["components"]`:
   "ttnn":         {"status": "pending", "attempts": 0},
   "debug":        {"status": "n/a",     "attempts": 0},
   "optimization": {"status": "pending", "attempts": 0},
+  "real_weights": {"status": "pending", "attempts": 0},
 }
 ```
 
+For each `use_cases[]` entry append to `state["use_cases"]` the entry
+fields verbatim plus `"generation": {"status": "pending", "attempts": 0}`
+and `"perf": {"status": "pending", "attempts": 0}`.
+
 ### Reference / device, per result
 
-Locate `component = next(c for c in state["components"] if c["name"] ==
-result_json["block"])` and the phase key (one of `reference`, `ttnn`,
-`debug`, `optimization`):
+Helpers shared with Step 5 (`**metric` unpacks `{"pcc": ...}` /
+`{"bleu": ...}` / `{"steady_step_ms": ..., "speedup": ...}` into the
+row so it surfaces in `BRINGUP_LOG.md`):
 
-- `status="ok"` → `component[phase] = {"status": "done", "pcc":
-  result_json["pcc"], "attempts": old_attempts, "artifacts":
-  result_json["artifacts"], "notes": result_json.get("notes", "")}`.
-  **Exception for ttnn:** defer this assignment until after Step 5's
-  guard passes. If Step 5 rejects, overwrite with the standard fail
-  handling instead. The lines below describe the non-ttnn case; for
-  ttnn, hold the result and fall through to Step 5 before mutating.
-- `status="fail"` → `attempts = old_attempts + 1`. If `attempts >=
-  state["config"]["max_attempts_per_phase"]` set status to `blocked`,
-  else `failing`. Carry `last_error=result_json["last_error"]` and
-  `pcc=result_json["pcc"]`.
-- `status="blocked"` → preserve attempts; record `last_error`.
+```python
+def _success_row(old_attempts, metric, r):
+    return {"status": "done", "attempts": old_attempts,
+            "artifacts": r.get("artifacts", []), "notes": r.get("notes", ""), **metric}
+def _fail_row(old_attempts, last_error, metric, r, max_attempts):
+    attempts = old_attempts + 1
+    return {"status": "blocked" if attempts >= max_attempts else "failing",
+            "attempts": attempts, "last_error": last_error,
+            "artifacts": r.get("artifacts", []), "notes": r.get("notes", ""), **metric}
+old_attempts = target_dict.get(phase_name, {}).get("attempts", 0)
+max_attempts = state["config"]["max_attempts_per_phase"]
+```
 
-### Device-worker cleanup (ttnn/debug/optimization)
+- `status="ok"` → `target_dict[phase_name] = _success_row(old_attempts,
+  metric, result_json)`. **Exception:** for `phase_name in {"ttnn",
+  "real_weights", "generation", "perf"}` defer this write until after
+  Step 5's guard passes; on guard rejection write `_fail_row` instead.
+- `status="fail"` → `target_dict[phase_name] = _fail_row(old_attempts,
+  result_json.get("last_error"), metric, result_json, max_attempts)`.
+- `status="blocked"` → preserve attempts; record `last_error`, `notes`,
+  any `metric` (one-shot blocker; do NOT increment attempts).
+
+### Device-worker cleanup (ttnn/debug/optimization/real_weights/generation/perf)
 
 ALWAYS clear the lock after a device worker returns:
 
@@ -184,36 +241,80 @@ if last_done:
 
 The smoke check is dispatched on the NEXT tick (Step 2 override).
 
-## Step 5: Guard check for TTNN successes
+## Step 5: Guard check for device successes
 
-When the dispatched worker was `ttnn` AND it returned `status="ok"`,
-run the no-shortcuts guard. Per the Step 4 ttnn exception, you have
-NOT yet written `done` for this block. Run the guard now — only
-after it passes do you mark `component["ttnn"] = {"status": "done", ...}`.
-If the guard rejects, apply the standard fail handling instead
-(attempts++, blocked at max).
+For the guarded phases (`ttnn`, `real_weights`, `generation`, `perf`)
+Step 4 deferred the success row. Compute `ok` + `guard_summary` per
+the per-phase rule below, then write `_success_row` if `ok` else
+`_fail_row(..., last_error=guard_summary, ...)`.
 
 ```python
-from skills.orchestrator.lib.guard import verify_block, lint_block
+from skills.orchestrator.lib.guard import verify_block, lint_block, verify_use_case
+slug = state["model_slug"]; ok, guard_summary = True, None
+```
 
-block_file = f"models/demos/{state['model_slug']}/tt/{result_json['block'].lower()}.py"
+**`phase_name == "ttnn"` — no-shortcuts guard.** Lint + traced-op
+assertion + reference cross-check via `verify_block`:
+
+```python
+block_file = f"models/demos/{slug}/tt/{target.lower()}.py"
 traced = result_json.get("traced_ops") or []
 if not traced:
     import json as _json
-    side = f"models/demos/{state['model_slug']}/tt/{result_json['block'].lower()}.traced_ops.json"
+    side = f"models/demos/{slug}/tt/{target.lower()}.traced_ops.json"
     try:
         with open(side) as f: traced = _json.load(f)
     except FileNotFoundError: traced = []
-
-component = next(c for c in state["components"] if c["name"] == result_json["block"])
-verdict = verify_block(block_file, traced, component["kind"], component["reference_impl"])
+v = verify_block(block_file, traced, target_dict["kind"], target_dict["reference_impl"])
+ok = v.ok
+guard_summary = None if ok else (
+    f"no-shortcuts guard: lint={len(v.lint)} "
+    f"missing_kernels={v.missing_kernels} new_host_ops={len(v.new_host_ops)}")
 ```
 
-`verify_block` composes `lint_block`, `assert_traced_ops`, and
-`cross_check_reference` and exposes `.ok`. If `verdict.ok is False`,
-treat the result as `status="fail"` with `last_error="no-shortcuts
-guard: " + summary` and re-apply the standard fail handling
-(attempts++, blocked at max). Otherwise mark ttnn done.
+**`phase_name == "real_weights"` — lint + params-loaded sanity.**
+Re-lint the block file (the loader edits may touch it) and require the
+worker to report a positive parameter count in
+`metric.params_loaded` (or `metric.num_params`):
+
+```python
+block_file = f"models/demos/{slug}/tt/{target.lower()}.py"
+lint = lint_block(block_file)
+params_loaded = metric.get("params_loaded") or metric.get("num_params") or 0
+ok = (not lint) and params_loaded > 0
+guard_summary = None if ok else f"real_weights guard: lint={len(lint)} params_loaded={params_loaded}"
+```
+
+**`phase_name == "generation"` — `verify_use_case`.** `target_dict`
+here is the use_case row (has `components_used`, `hf_class`,
+`validation_metric`):
+
+```python
+v = verify_use_case(
+    model_path=f"models/demos/{slug}/tt/{target}_model.py",
+    use_case=target_dict,
+    demo_path=f"models/demos/{slug}/demo/demo_{target}.py",
+    test_path=f"models/demos/{slug}/tests/test_e2e_{target}.py",
+)
+ok = v.ok
+guard_summary = None if ok else "verify_use_case: " + "; ".join(v.issues)
+```
+
+**`phase_name == "perf"` — re-run the e2e test (parity preserved).**
+The perf skill explicitly allows "no improvement found" as `ok`, so
+the parity gate is the only hard check:
+
+```python
+import subprocess
+test = f"models/demos/{slug}/tests/test_e2e_{target}.py"
+proc = subprocess.run(["pytest", test, "-v"], capture_output=True, text=True, timeout=1800)
+ok = proc.returncode == 0
+guard_summary = None if ok else f"perf guard: e2e parity regressed (exit={proc.returncode}); tail={proc.stdout[-400:]!r}"
+```
+
+**Apply.** `target_dict[phase_name] = _success_row(old_attempts, metric,
+result_json) if ok else _fail_row(old_attempts, guard_summary, metric,
+result_json, max_attempts)`.
 
 ## Step 6: Render log and commit
 
@@ -225,7 +326,7 @@ now = datetime.datetime.now(datetime.timezone.utc).isoformat(
     timespec="seconds").replace("+00:00", "Z")
 state["tick_log"].append({
     "tick": tick_id, "ts": now,
-    "action": f"{result['phase']}[{result_json.get('block', '-')}]",
+    "action": f"{result['phase']}[{target or '-'}]",
     "result": result_json["status"],
 })
 state["updated_at"] = now
@@ -254,16 +355,11 @@ reformatted files and create a NEW commit. Never `--amend` and never
 
 ## Step 7: Schedule next tick (or exit)
 
-Re-check eligibility AFTER mutations:
-
-```python
-phase = eligible_blocks(state)["phase"]
-```
-
-- `phase == "done"` — print a completion summary and DO NOT call
-  `ScheduleWakeup`. This is the final tick.
-- `phase == "deadlock"` — already handled in Step 3; exit.
-- otherwise:
+Re-check eligibility AFTER mutations: `phase =
+eligible_blocks(state)["phase"]`. If `phase == "done"`, print a
+completion summary and do NOT call `ScheduleWakeup` — this is the
+final tick. If `phase == "deadlock"`, already handled in Step 3.
+Otherwise:
 
 ```python
 ScheduleWakeup(
@@ -273,44 +369,45 @@ ScheduleWakeup(
 )
 ```
 
-Then exit. The harness rewakes you at the configured interval.
+Then exit. The harness rewakes at the configured interval.
 
 ## Failure handling
 
-- **Subagent crash** (not a status=fail JSON, but a hard error): treat
-  as `status="fail"` with `last_error="subagent crash: <stderr>"`.
-  Apply standard fail handling, release any device lock, continue to
-  Step 6 — the tick MUST still commit.
+- **Subagent crash** (hard error, not a status=fail JSON): treat as
+  `status="fail"` with `last_error="subagent crash: <stderr>"`. Apply
+  standard fail handling, release device lock, continue to Step 6 —
+  the tick MUST still commit.
 - **`git commit` fails** (pre-commit reformat): re-`git add` and create
-  a NEW commit. Do not `--amend`. Do not skip hooks.
+  a NEW commit. Never `--amend`, never `--no-verify`.
 - **Malformed state file** (`SchemaError` in Step 1): emit
-  `UserWarning`, do NOT `ScheduleWakeup`, halt. Operator repairs by hand.
-- **`tt_smi_reset()` non-zero exit**: log the code in this tick's
-  `notes`, still set `pending_smoke_check`, still rewake. Persistent
-  reset failure surfaces via the smoke check's next-tick hang.
+  `UserWarning`, do NOT `ScheduleWakeup`, halt. Operator repairs.
+- **`tt_smi_reset()` non-zero exit**: log the code in `notes`, still
+  set `pending_smoke_check`, still rewake. Persistent reset failure
+  surfaces via the smoke check's next-tick hang.
 
 ## Glossary
 
 - **tick** — one cycle of this prompt. Atomic: in-memory mutation
   through Steps 1–5, committed exactly once in Step 6.
 - **worker** — a sub-agent dispatched via `Agent`. One of:
-  architecture, reference, ttnn, debug, optimization. Each returns a
-  JSON line.
-- **device lock** — `state["locks"]["device"]`. Field `device.held_by`
-  is `"tick-<N>"` when held, `None` when free. Auto-cleared by
-  `resume_normalize`. Released in Step 4 after the device worker returns.
+  architecture, reference, ttnn, debug, optimization, real_weights,
+  generation, perf. Old workers (architecture/reference/ttnn/debug/
+  optimization) use legacy `{block, pcc, ...}`; new workers
+  (real_weights/generation/perf) use `{target, target_type, phase,
+  metric, ...}`. Step 4 normalizes both.
+- **device lock** — `state["locks"]["device"]`. `held_by` is
+  `"tick-<N>"` when held, `None` when free. Auto-cleared by
+  `resume_normalize`. Released in Step 4 after the device worker.
 - **pending_smoke_check** — set when a worker reports
-  `hang_detected=True`. The next tick re-dispatches a ttnn test on
-  that block to confirm the device is healthy post-`tt_smi_reset`.
-- **last_error** — most recent failure string for a phase. Rendered in
-  `BRINGUP_LOG.md` for `failing`/`blocked` phases by `render_log`.
-- **attempts** — monotonic count of failed dispatches for a phase.
-  Resets to zero on `redo`. At `>= max_attempts_per_phase` the phase
-  auto-promotes to `blocked`.
-- **max_attempts_per_phase** — `state["config"]["max_attempts_per_phase"]`.
-  Default 10.
-- **block** — one entry in `state["components"]`. Has phases
-  reference, ttnn, debug, optimization.
-- **phase** — one of `reference`, `ttnn`, `debug`, `optimization` for
-  components, plus `architecture` (model-level). Architecture is the
-  only phase that creates components.
+  `hang_detected=True`. Next tick re-dispatches a ttnn test on that
+  block to confirm the device is healthy post-`tt_smi_reset`.
+- **last_error / attempts / max_attempts_per_phase** — most recent
+  failure string + monotonic failed-dispatch count for a phase;
+  promoted to `blocked` at `>=
+  state["config"]["max_attempts_per_phase"]` (default 10). `attempts`
+  resets to zero on `redo`.
+- **block / use_case / phase** — a `block` is one entry in
+  `state["components"]` with phases reference/ttnn/debug/optimization/
+  real_weights. A `use_case` is one entry in `state["use_cases"]`
+  with phases generation/perf. Plus the model-level `architecture`
+  phase, which is the only one that creates components and use_cases.
