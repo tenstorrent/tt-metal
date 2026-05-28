@@ -13,7 +13,7 @@ RT-DETR is an end-to-end object detector that overcomes the slow inference speed
 - **Hybrid Encoder** — AIFI transformer on the coarsest scale (20×20) + CCFM neck (FPN top-down + PAN bottom-up) with CSPRepLayer blocks
 - **Transformer Decoder** — 6-layer decoder with deformable cross-attention for bounding box and class prediction
 
-Reference: [DETRs Beat YOLOs on Real-time Object Detection](https://arxiv.org/abs/2304.08069) (Zhao et al., 2023)  
+Reference: [DETRs Beat YOLOs on Real-time Object Detection](https://arxiv.org/abs/2304.08069) (Zhao et al., 2023)
 Official repo: [lyuwenyu/RT-DETR](https://github.com/lyuwenyu/RT-DETR)
 
 ---
@@ -97,7 +97,7 @@ rt_detr/
 source setup.sh
 ```
 
-> **Why `source`?**  
+> **Why `source`?**
 > `bash setup.sh` spawns a child process — any `export` inside it is thrown away when the script exits, so `PYTHONPATH` never makes it back to your shell. `source` (equivalently `. setup.sh`) runs the script inside your current shell so the export sticks for the rest of the session.
 
 ### 3. Make PYTHONPATH permanent
