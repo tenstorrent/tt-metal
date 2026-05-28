@@ -270,18 +270,14 @@
 - id: bh-lb-deepseek-prefill-op-tests
   name: bh_lb_DeepSeek_PREFILL_OP_TESTS
   model-name: deepseek_prefill
-  # All op_unit_tests/ tests whose parametrize IDs identify them as 8-chip configs:
-  # linear-8 / ring-8 (8-chip linear/ring topologies) and 4x2 / 2x4 (8-chip 2D meshes).
-  # `not 32x4` excludes the galaxy variant of test_ring_joint_mla (the "2x4" substring
-  # is contained in "32x4"); `not 8x4` excludes test_mla_matmuls' galaxy mesh.
-  # Two pytest invocations: tt_metal's FabricConfig is process-singleton — once
-  # FABRIC_1D is set, you can't switch to FABRIC_1D_RING in the same session
-  # (TT_FATAL in metal_env.cpp). Linear/mesh configs use FABRIC_1D; ring configs
-  # use FABRIC_1D_RING — so they MUST run in separate pytest processes.
+  # Sweeps the entire op_unit_tests/ folder. The `requires_mesh_topology` mark
+  # in models/demos/deepseek_v3_d_p/tests/conftest.py skips configs whose
+  # devices_needed != num_devices on Blackhole, so on bh_loudbox (8xP150) only
+  # the 8-chip parametrize variants actually run; 2/4/single-chip and galaxy
+  # variants skip cleanly at collection time.
   cmd: |
     exit_code=0
-    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/ -vvv --tb=short -k "(linear-8 or 4x2 or 2x4) and not 32x4 and not 8x4" || exit_code=$?
-    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/ -vvv --tb=short -k "ring-8" || exit_code=$?
+    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/ -vvv --tb=short || exit_code=$?
     exit $exit_code
   skus:
     bh_loudbox:
@@ -320,18 +316,14 @@
 - id: bh-qb-deepseek-prefill-op-tests
   name: bh_qb_DeepSeek_PREFILL_OP_TESTS
   model-name: deepseek_prefill
-  # All op_unit_tests/ tests whose parametrize IDs identify them as 4-chip configs:
-  # linear-4 (matches linear-4-{1,2}link and linear-4x1), ring-4 (matches ring-4-{1,2}link),
-  # 2x2 (matches mesh-2x2 and the 2x2 axis of test_ring_joint_mla), and 1x4
-  # (matches linear-1x4 from test_masked_bincount).
-  # Two pytest invocations: tt_metal's FabricConfig is process-singleton — once
-  # FABRIC_1D is set, you can't switch to FABRIC_1D_RING in the same session
-  # (TT_FATAL in metal_env.cpp). Linear/mesh configs use FABRIC_1D; ring configs
-  # use FABRIC_1D_RING — so they MUST run in separate pytest processes.
+  # Sweeps the entire op_unit_tests/ folder. The `requires_mesh_topology` mark
+  # in models/demos/deepseek_v3_d_p/tests/conftest.py skips configs whose
+  # devices_needed != num_devices on Blackhole, so on bh_llmbox (4xP150) only
+  # the 4-chip parametrize variants actually run; 2/8/single-chip and galaxy
+  # variants skip cleanly at collection time.
   cmd: |
     exit_code=0
-    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/ -vvv --tb=short -k "linear-4 or 2x2 or 1x4" || exit_code=$?
-    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/ -vvv --tb=short -k "ring-4" || exit_code=$?
+    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/ -vvv --tb=short || exit_code=$?
     exit $exit_code
   skus:
     bh_llmbox:
