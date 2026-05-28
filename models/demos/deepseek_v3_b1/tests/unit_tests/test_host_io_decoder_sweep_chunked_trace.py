@@ -185,6 +185,55 @@ def test_run_host_io_decoder_sweep_rank_parallel_config_contract(model_id: str, 
 
 
 @pytest.mark.parametrize(("model_id", "prompt_id"), TRACE_CASES)
+def test_run_host_io_decoder_sweep_multi_slot_stress_config_contract(model_id: str, prompt_id: str) -> None:
+    trace_root = _trace_root()
+    if not (_trace_dir(trace_root, model_id, prompt_id) / "index.json").is_file():
+        pytest.skip("chunked 128K trace is not present")
+
+    args = run_host_io_decoder_sweep._build_arg_parser().parse_args(
+        [
+            "--decoder-layer-indices",
+            "4",
+            "5",
+            "6",
+            "7",
+            "--trace-root",
+            str(trace_root),
+            "--model-id",
+            model_id,
+            "--prompt",
+            prompt_id,
+            "--num-decode-steps",
+            "4096",
+            "--num-replication-slots",
+            "8",
+            "--validate-hidden-states-cross-trace",
+            "--pcc-threshold",
+            "0.97",
+            "--validate-hidden-states-cross-slot",
+            "--validate-kv-cache-cross-slot",
+            "--no-dump-hidden-states",
+            "--no-dump-kv-cache",
+        ]
+    )
+
+    for rank, expected_layer in enumerate([4, 5, 6, 7]):
+        config = run_host_io_decoder_sweep._config_from_args_for_rank(args, rank=rank)
+        assert config.decoder_layer_index == expected_layer
+        assert config.trace_root == trace_root
+        assert config.model_id == model_id
+        assert config.prompt_names == (prompt_id,)
+        assert config.num_decode_steps == 4096
+        assert config.num_replication_slots == 8
+        assert config.validate_hidden_states_cross_trace
+        assert config.validate_hidden_states_cross_slot
+        assert config.validate_kv_cache_cross_slot
+        assert not config.validate_kv_cache_cross_trace
+        assert not config.dump_hidden_states
+        assert not config.dump_kv_cache
+
+
+@pytest.mark.parametrize(("model_id", "prompt_id"), TRACE_CASES)
 def test_run_host_io_decoder_sweep_chunked_trace_smoke(model_id: str, prompt_id: str) -> None:
     trace_root = _trace_root()
     _assert_chunked_trace_is_readable(trace_root, model_id, prompt_id)
@@ -254,6 +303,49 @@ def test_run_host_io_decoder_sweep_chunked_trace_world_size_4(model_id: str, pro
             "--kv-cache-pcc-threshold",
             "0.97",
             "--no-validate-kv-cache-cross-slot",
+            "--no-dump-hidden-states",
+            "--no-dump-kv-cache",
+            "--hf-model-path",
+            hf_model_path,
+            "--cache-path",
+            cache_path,
+        ]
+    )
+    assert exit_code == 0
+
+
+@pytest.mark.parametrize(("model_id", "prompt_id"), TRACE_CASES)
+def test_run_host_io_decoder_sweep_chunked_trace_multi_slot_stress(model_id: str, prompt_id: str) -> None:
+    trace_root = _trace_root()
+    _assert_chunked_trace_is_readable(trace_root, model_id, prompt_id)
+    _require_host_io_sweep_env()
+    if ttnn.get_num_devices() < 8:
+        pytest.skip("HostIoDecoderStage sweep requires 8 devices per rank (4x2 mesh)")
+
+    hf_model_path = os.environ.get("HF_MODEL", str(run_host_io_decoder_sweep.DEFAULT_HF_MODEL_PATH))
+    cache_path = os.environ.get("TT_MDDEL_CACHE", str(run_host_io_decoder_sweep.DEFAULT_CACHE_PATH))
+    exit_code = run_host_io_decoder_sweep.main(
+        [
+            "--decoder-layer-indices",
+            "4",
+            "5",
+            "6",
+            "7",
+            "--trace-root",
+            str(trace_root),
+            "--model-id",
+            model_id,
+            "--prompt",
+            prompt_id,
+            "--num-decode-steps",
+            "4096",
+            "--num-replication-slots",
+            "8",
+            "--validate-hidden-states-cross-trace",
+            "--pcc-threshold",
+            "0.97",
+            "--validate-hidden-states-cross-slot",
+            "--validate-kv-cache-cross-slot",
             "--no-dump-hidden-states",
             "--no-dump-kv-cache",
             "--hf-model-path",
