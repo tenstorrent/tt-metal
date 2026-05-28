@@ -23,6 +23,9 @@ Optional:
     --test-config <path>                Path to test configuration file
                                         (default: tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_stability.yaml)
     --filter <pattern>                  Filter pattern passed to test_tt_fabric --filter
+    --mpi-if <interface>                Network interface for MPI TCP transport (default: ens5f0np0)
+    --mpi-args <args>                   Extra arguments passed directly to mpirun (quoted string)
+                                        e.g. --mpi-args "--tag-output"
     --help                              Display this help message and exit
 
 Example:
@@ -44,6 +47,8 @@ MESH_GRAPH_DESC_PATH_EXPLICIT=false
 TEST_BINARY="./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric"
 TEST_CONFIG="tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_stability.yaml"
 FILTER=""
+MPI_IF="ens5f0np0"
+MPI_EXTRA_ARGS=()
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -118,6 +123,23 @@ while [[ $# -gt 0 ]]; do
             FILTER="$2"
             shift 2
             ;;
+        --mpi-if)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --mpi-if requires a non-empty value"
+                exit 1
+            fi
+            MPI_IF="$2"
+            shift 2
+            ;;
+        --mpi-args)
+            if [[ -z "$2" ]]; then
+                echo "Error: --mpi-args requires a non-empty value"
+                exit 1
+            fi
+            read -ra _extra <<< "$2"
+            MPI_EXTRA_ARGS+=("${_extra[@]}")
+            shift 2
+            ;;
         --help)
             show_help
             exit 0
@@ -174,6 +196,10 @@ echo "Test config: $TEST_CONFIG"
 if [[ -n "$FILTER" ]]; then
     echo "Filter: $FILTER"
 fi
+echo "MPI interface: $MPI_IF"
+if [[ "${#MPI_EXTRA_ARGS[@]}" -gt 0 ]]; then
+    echo "MPI extra args: ${MPI_EXTRA_ARGS[*]}"
+fi
 echo "Log file: $LOG_FILE"
 echo "=========================================="
 echo ""
@@ -201,7 +227,8 @@ if [[ "$DOCKER_IMAGE" == "none" ]]; then
         mpirun-ulfm \
             --tag-output \
             --mca plm_ssh_args "-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR" \
-            --mca btl_tcp_if_exclude docker0,lo,tailscale0 \
+            --mca btl_tcp_if_include "$MPI_IF" \
+            "${MPI_EXTRA_ARGS[@]}" \
             --bind-to none \
             --host "$SINGLE_HOST" \
             -np 1 \
@@ -213,7 +240,8 @@ if [[ "$DOCKER_IMAGE" == "none" ]]; then
         mpirun-ulfm \
             --tag-output \
             --mca plm_ssh_args "-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR" \
-            --mca btl_tcp_if_exclude docker0,lo,tailscale0 \
+            --mca btl_tcp_if_include "$MPI_IF" \
+            "${MPI_EXTRA_ARGS[@]}" \
             --bind-to none \
             --host "$HOSTS" \
             -np 1 \
@@ -244,6 +272,8 @@ elif [[ "$CONFIG" == "4x8" ]]; then
 
     ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
         --empty-entrypoint \
+        --mpi-interface "$MPI_IF" \
+        "${MPI_EXTRA_ARGS[@]}" \
         --bind-to none \
         --host "$SINGLE_HOST" \
         -np 1 \
@@ -254,6 +284,8 @@ elif [[ "$CONFIG" == "4x8" ]]; then
 else
     ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
         --empty-entrypoint \
+        --mpi-interface "$MPI_IF" \
+        "${MPI_EXTRA_ARGS[@]}" \
         --bind-to none \
         --host "$HOSTS" \
         -np 1 \

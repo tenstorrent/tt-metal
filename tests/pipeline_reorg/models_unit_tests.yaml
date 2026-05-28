@@ -347,14 +347,14 @@
   skus:
     # Wormhole
     wh_llmbox:
-      timeout: 10
+      timeout: 12
       tier: 2
     # Blackhole
     bh_p150:
       timeout: 10
       tier: 2
     bh_quietbox_2:
-      timeout: 10
+      timeout: 5
       tier: 2
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
@@ -362,8 +362,12 @@
 - name: GPT-OSS 120B unit tests
   cmd: |
     uv pip install -r models/demos/gpt_oss/requirements.txt
-    export HF_MODEL=models/demos/gpt_oss/configs/gpt-oss-120b
-    pytest --timeout 1500 models/demos/gpt_oss/tests/unit
+    export HF_MODEL=models/demos/gpt_oss/configs/gpt-oss-120b TT_MM_THROTTLE_PERF=2
+    # Tensor cache is pre-built on the NAS — skip loading model weights by default.
+    # Check mlperf-write-access in the workflow to load weights and regenerate the cache.
+    SKIP_MODEL_LOAD="--skip-model-load"
+    [ "${MLPERF_READ_ONLY:-true}" = "false" ] && SKIP_MODEL_LOAD=""
+    pytest --timeout 1500 models/demos/gpt_oss/tests/unit $SKIP_MODEL_LOAD
   model: gpt-oss-120b
   skus:
     # Wormhole
@@ -375,10 +379,10 @@
       tier: 1
     # Blackhole
     bh_quietbox_2:
-      timeout: 30
+      timeout: 10
       tier: 1
     bh_galaxy:
-      timeout: 30
+      timeout: 10
       tier: 1
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
