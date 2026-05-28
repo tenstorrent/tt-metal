@@ -238,6 +238,7 @@ def compute_validation_matrix(
                         "vectors_artifact_name": f"sweeps-vectors-{validation_scope}",
                         "trace_ids": trace_id_list,
                         "hardware_group": hardware_label,
+                        "mesh_device_shape": "",
                     }
                 )
     return {"include": include}
