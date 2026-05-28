@@ -8776,6 +8776,25 @@ def main(argv: Optional[List[str]] = None) -> int:
     pod.add_argument("rel_path", help="Repo-relative path (e.g. models/tt_transformers/tt/rope.py)")
     pod.set_defaults(func=cmd_overlay_drop)
 
+    def _cmd_overlay_clear_skips(args) -> int:
+        from .overlay_manager import clear_persistent_skips
+
+        n = clear_persistent_skips(args.model_id)
+        if n:
+            print(
+                f"cleared {n} persistent skip entrie(s) for `{args.model_id}`. Next run will re-attempt these components."
+            )
+        else:
+            print(f"no persistent skip entries found for `{args.model_id}`.")
+        return 0
+
+    pocs = sub.add_parser(
+        "overlay-clear-skips",
+        help="Clear the persistent harness-skip list for a model (re-attempts those components on next run).",
+    )
+    pocs.add_argument("model_id")
+    pocs.set_defaults(func=_cmd_overlay_clear_skips)
+
     pop = sub.add_parser(
         "overlay-promote",
         help="Apply an overlay to the shared file and remove the overlay; you then PR the resulting diff normally.",

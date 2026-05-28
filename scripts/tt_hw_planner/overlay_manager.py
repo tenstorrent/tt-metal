@@ -108,6 +108,60 @@ def _save_index(model_id: str, idx: Dict[str, dict]) -> None:
     p.write_text(json.dumps(idx, indent=2, sort_keys=True))
 
 
+def _skipped_components_path(model_id: str) -> Path:
+    return _model_dir(model_id) / "skipped_components.json"
+
+
+def load_persistent_skips(model_id: str) -> Dict[str, dict]:
+    """Return the persistent {comp_name: {reason, captured_ts}} dict for `model_id`.
+
+    Empty dict if no skip-list file exists yet. Components on this list are
+    known harness-untestable from a prior run -- the auto-iterate loop reads
+    this at session start and adds these to `permanently_skipped` so no LLM
+    budget is spent re-attempting them.
+    """
+    p = _skipped_components_path(model_id)
+    if not p.is_file():
+        return {}
+    try:
+        return json.loads(p.read_text())
+    except Exception:
+        return {}
+
+
+def persist_skip(model_id: str, comp_name: str, reason: str = "") -> None:
+    """Add `comp_name` to the persistent skip-list for `model_id`. Idempotent.
+
+    Called from the auto-iterate loop when a component is added to
+    `unverified_native_this_run` -- harness-incompatibility detected and not
+    fixable by more LLM iteration. Persisting it means the next `up` run
+    won't waste agent budget re-attempting it.
+    """
+    skips = load_persistent_skips(model_id)
+    if comp_name in skips:
+        return
+    skips[comp_name] = {
+        "reason": reason or "harness-incompatible (auto-detected)",
+        "captured_ts": time.time(),
+    }
+    p = _skipped_components_path(model_id)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(skips, indent=2, sort_keys=True))
+
+
+def clear_persistent_skips(model_id: str) -> int:
+    """Drop the persistent skip-list for `model_id`. Returns the count removed.
+
+    Used when the test harness is fixed (e.g., new capture driver added) and
+    previously un-testable components should be re-attempted on the next run.
+    """
+    skips = load_persistent_skips(model_id)
+    p = _skipped_components_path(model_id)
+    if p.is_file():
+        p.unlink()
+    return len(skips)
+
+
 def _patch_filename(rel_path: str) -> str:
     safe = rel_path.replace("/", "__")
     return f"{safe}.patch"

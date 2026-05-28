@@ -139,8 +139,21 @@ def _run_auto_iterate_loop(
     graduated_this_run: List[str] = []
 
     from .sweep_cache import ValidationSweepCache
+    from ..overlay_manager import load_persistent_skips, persist_skip
 
     _SWEEP_CACHE = ValidationSweepCache()
+
+    _persistent_skips = load_persistent_skips(MODEL)
+    if _persistent_skips:
+        permanently_skipped.extend(sorted(_persistent_skips.keys()))
+        print(
+            f"  [persistent-skips] loaded {len(_persistent_skips)} component(s) from prior "
+            f"runs (harness-untestable): {', '.join(sorted(_persistent_skips.keys()))}"
+        )
+        print(
+            f"  [persistent-skips] to re-attempt them, fix the test scaffold then run: "
+            f"`python -m scripts.tt_hw_planner overlay-clear-skips {MODEL}`"
+        )
 
     unverified_native_this_run: set = set()
     verified_fail: set = set()
@@ -184,6 +197,7 @@ def _run_auto_iterate_loop(
             skipped_components_this_run.discard(comp)
             verified_fail.discard(comp)
             reason_blob = "; ".join(reasons) or "(no skip reason captured)"
+            persist_skip(MODEL, comp, reason_blob)
             print(
                 f"  seed-phase: `{comp}` UNVERIFIED NATIVE — stub is "
                 f"native ttnn but PCC could not be measured because the "
@@ -971,6 +985,7 @@ def _run_auto_iterate_loop(
                             skipped_components_this_run.discard(comp)
                             verified_fail.discard(comp)
                             _pf_reason_blob = "; ".join(_pf_reasons) or "(no skip reason captured)"
+                            persist_skip(MODEL, comp, _pf_reason_blob)
                             print(
                                 f"  pre-flight: `{comp}` UNVERIFIED NATIVE "
                                 f"— stub is native ttnn but PCC could not "
@@ -2614,6 +2629,7 @@ def _run_auto_iterate_loop(
                 skipped_components_this_run.discard(_comp)
                 verified_fail.discard(_comp)
                 _r_blob = "; ".join(_comp_reasons) or "(no skip reason captured)"
+                persist_skip(MODEL, _comp, _r_blob)
                 print(
                     f"  iter {it} side-channel: `{_comp}` UNVERIFIED NATIVE "
                     f"(stub native + harness-SKIP). Removed from candidate "
@@ -2632,6 +2648,7 @@ def _run_auto_iterate_loop(
             unverified_native_this_run.add(iter_target_component)
             verified_fail.discard(iter_target_component)
             skipped_components_this_run.discard(iter_target_component)
+            persist_skip(MODEL, iter_target_component, "harness-incompatible (target SKIP)")
             last_failed_components = []
             last_failed_tests = []
             last_failures = ""
