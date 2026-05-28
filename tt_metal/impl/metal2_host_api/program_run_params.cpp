@@ -27,14 +27,12 @@ using KernelRTASchema = detail::ProgramImpl::KernelRTASchema;
 // Helpers for vararg-value access (now living on AdvancedKernelRunParams).
 const std::vector<AdvancedKernelRunParams::NodeVarargs>& kernel_runtime_varargs(
     const ProgramRunParams::KernelRunParams& kp) {
-    static const std::vector<AdvancedKernelRunParams::NodeVarargs> empty;
-    return kp.advanced_options.has_value() ? kp.advanced_options->runtime_varargs : empty;
+    return kp.advanced_options.runtime_varargs;
 }
 
 const AdvancedKernelRunParams::CommonVarargs& kernel_common_runtime_varargs(
     const ProgramRunParams::KernelRunParams& kp) {
-    static const AdvancedKernelRunParams::CommonVarargs empty;
-    return kp.advanced_options.has_value() ? kp.advanced_options->common_runtime_varargs : empty;
+    return kp.advanced_options.common_runtime_varargs;
 }
 
 // Internal validation function - validates a TensorArg list against the Program's TensorParameters.

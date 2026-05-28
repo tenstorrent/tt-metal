@@ -53,7 +53,7 @@ struct ProgramRunParams {
         // Advanced options (see advanced_options.hpp).
         // Companion to KernelAdvancedOptions on the schema side; holds
         // unnamed-vararg RTA/CRTA values.
-        std::optional<AdvancedKernelRunParams> advanced_options = std::nullopt;
+        AdvancedKernelRunParams advanced_options;
     };
     // KernelRunParams must be specified for ALL kernels in the ProgramSpec.
     std::vector<KernelRunParams> kernel_run_params;

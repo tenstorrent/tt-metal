@@ -175,16 +175,14 @@ bool nodes_intersect(const Nodes& a, const Nodes& b) {
     return a_set.intersects(b_set);
 }
 
-// Helper: return a DFB's alias-with list (empty vector if not set in advanced_options).
+// Helper: return a DFB's alias-with list.
 const std::vector<DFBSpecName>& dfb_alias_with(const DataflowBufferSpec& dfb) {
-    static const std::vector<DFBSpecName> empty;
-    return dfb.advanced_options.has_value() ? dfb.advanced_options->alias_with : empty;
+    return dfb.advanced_options.alias_with;
 }
 
-// Helper: return a kernel's dfb-compute-self-loop-scopes list (empty if not set in advanced_options).
+// Helper: return a kernel's dfb-compute-self-loop-scopes list.
 const std::vector<DFBComputeSelfLoopScope>& kernel_self_loop_scopes(const KernelSpec& kernel) {
-    static const std::vector<DFBComputeSelfLoopScope> empty;
-    return kernel.advanced_options.has_value() ? kernel.advanced_options->dfb_compute_self_loop_scopes : empty;
+    return kernel.advanced_options.dfb_compute_self_loop_scopes;
 }
 
 // Local accessor names for kernel resource bindings must be valid C++ identifiers
@@ -593,8 +591,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
 
     // Validate no per-node thread maps are used (not yet implemented)
     for (const auto& kernel : spec.kernels) {
-        const bool has_node_specific =
-            kernel.advanced_options.has_value() && kernel.advanced_options->node_specific_thread_counts.has_value();
+        const bool has_node_specific = !kernel.advanced_options.node_specific_thread_counts.empty();
         TT_FATAL(
             !has_node_specific,
             "KernelSpec '{}' specifies node_specific_thread_counts, but per-node thread counts are not implemented.",
@@ -1372,7 +1369,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     //////////////////////////////////
 
     for (const auto& sem : spec.semaphores) {
-        const uint32_t init_value = sem.advanced_options.has_value() ? sem.advanced_options->initial_value : 0u;
+        const uint32_t init_value = sem.advanced_options.initial_value;
         if (is_gen2_arch()) {
             TT_FATAL(
                 init_value == 0,
@@ -1808,8 +1805,7 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
     // tensors the CTA payload never carried tensor_shape in the first place (and
     // the device-side accessor doesn't read it), so the flag is a pure host-side
     // validation loosening and has no effect on the CTA/CRTA layout.
-    const bool dyn_shape = tensor_parameter.advanced_options.has_value() &&
-                           tensor_parameter.advanced_options->dynamic_tensor_shape && is_sharded;
+    const bool dyn_shape = tensor_parameter.advanced_options.dynamic_tensor_shape && is_sharded;
 
     tensor_accessor::ArgsConfig args_config;
     if (is_sharded) {
@@ -2430,10 +2426,8 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
 
     // Register TensorParameters with the program for ValidateProgramRunParams to consult at enqueue.
     for (const auto& tensor_parameter : spec.tensor_parameters) {
-        const bool dyn_shape =
-            tensor_parameter.advanced_options.has_value() && tensor_parameter.advanced_options->dynamic_tensor_shape;
-        const bool match_padded_only =
-            tensor_parameter.advanced_options.has_value() && tensor_parameter.advanced_options->match_padded_shape_only;
+        const bool dyn_shape = tensor_parameter.advanced_options.dynamic_tensor_shape;
+        const bool match_padded_only = tensor_parameter.advanced_options.match_padded_shape_only;
         program_impl->register_tensor_parameter(
             tensor_parameter.unique_id, tensor_parameter.spec, dyn_shape, match_padded_only);
     }
@@ -2496,8 +2490,7 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
     SemaphoreNameToIdMap semaphore_name_to_id;
     for (const auto& semaphore_spec : spec.semaphores) {
         const SemaphoreSpecName& semaphore_name = semaphore_spec.unique_id;
-        const uint32_t init_value =
-            semaphore_spec.advanced_options.has_value() ? semaphore_spec.advanced_options->initial_value : 0u;
+        const uint32_t init_value = semaphore_spec.advanced_options.initial_value;
         uint32_t sem_id = program_impl->create_semaphore(
             to_node_range_set(semaphore_spec.target_nodes), init_value, CoreType::WORKER);
         program_impl->register_semaphore_spec_name(semaphore_name, sem_id);
@@ -2632,12 +2625,9 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
         runtime_schema.named_common_runtime_args = user_named_crtas;
 
         // Varargs schema now lives on KernelAdvancedOptions.
-        const size_t num_runtime_varargs =
-            kernel_spec.advanced_options.has_value() ? kernel_spec.advanced_options->num_runtime_varargs : 0;
-        const size_t num_common_runtime_varargs =
-            kernel_spec.advanced_options.has_value() ? kernel_spec.advanced_options->num_common_runtime_varargs : 0;
-        const bool has_per_node_override = kernel_spec.advanced_options.has_value() &&
-                                           kernel_spec.advanced_options->num_runtime_varargs_per_node.has_value();
+        const size_t num_runtime_varargs = kernel_spec.advanced_options.num_runtime_varargs;
+        const size_t num_common_runtime_varargs = kernel_spec.advanced_options.num_common_runtime_varargs;
+        const bool has_per_node_override = !kernel_spec.advanced_options.num_runtime_varargs_per_node.empty();
 
         if (num_runtime_varargs > 0) {
             for (const NodeRange& range : node_ranges.ranges()) {
@@ -2648,7 +2638,7 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
         }
         if (has_per_node_override) {
             std::unordered_set<NodeCoord> seen_overrides;
-            for (const auto& [nodes_spec, num_varargs] : *kernel_spec.advanced_options->num_runtime_varargs_per_node) {
+            for (const auto& [nodes_spec, num_varargs] : kernel_spec.advanced_options.num_runtime_varargs_per_node) {
                 const NodeRangeSet expanded = to_node_range_set(nodes_spec);
                 for (const NodeRange& range : expanded.ranges()) {
                     for (const NodeCoord& node : range) {

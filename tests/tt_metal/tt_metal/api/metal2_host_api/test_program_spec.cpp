@@ -2372,18 +2372,17 @@ TEST(AggregateSpecTypes, VarargCountsOnAdvancedOptions) {
 
     EXPECT_EQ(adv.num_runtime_varargs, 4u);
     EXPECT_EQ(adv.num_common_runtime_varargs, 2u);
-    EXPECT_FALSE(adv.num_runtime_varargs_per_node.has_value());
+    EXPECT_TRUE(adv.num_runtime_varargs_per_node.empty());
 }
 
 TEST(AggregateSpecTypes, VarargPerNodeOverrideOnAdvancedOptions) {
-    // Per-node override path (advanced): ensure designated-init through std::optional works.
+    // Per-node override path (advanced): ensure designated-init works.
     using NumVarargsPerNode = KernelAdvancedOptions::NumVarargsPerNode;
     KernelAdvancedOptions adv{
         .num_runtime_varargs_per_node = NumVarargsPerNode{{NodeCoord{0, 0}, 4}, {NodeCoord{1, 0}, 7}},
     };
 
-    ASSERT_TRUE(adv.num_runtime_varargs_per_node.has_value());
-    EXPECT_EQ(adv.num_runtime_varargs_per_node->size(), 2u);
+    EXPECT_EQ(adv.num_runtime_varargs_per_node.size(), 2u);
     EXPECT_EQ(adv.num_runtime_varargs, 0u);  // scalar left at default in this example
 }
 
@@ -2412,8 +2411,7 @@ TEST(AggregateSpecTypes, SemaphoreSpecDesignatedInitializers) {
     };
 
     EXPECT_EQ(sem.unique_id, "my_semaphore");
-    ASSERT_TRUE(sem.advanced_options.has_value());
-    EXPECT_EQ(sem.advanced_options->initial_value, 7u);
+    EXPECT_EQ(sem.advanced_options.initial_value, 7u);
 }
 
 TEST(AggregateSpecTypes, ProgramSpecDesignatedInitializers) {
@@ -3121,7 +3119,7 @@ TEST_F(ProgramSpecTestGen1, KernelCrtaLayout_AllThreeSectionsConsistent) {
     // Section 1: named CRTAs on the DM kernel.
     spec.kernels[0].runtime_arguments_schema.named_common_runtime_args = {"foo", "bar"};
     // Section 3: vararg CRTAs on the DM kernel.
-    spec.kernels[0].advanced_options.emplace().num_common_runtime_varargs = 3;
+    spec.kernels[0].advanced_options.num_common_runtime_varargs = 3;
 
     // Section 2: two bindings — one plain (1 word), one sharded+dynamic_tensor_shape
     // (1 word + tensor_shape_in_pages rank words).

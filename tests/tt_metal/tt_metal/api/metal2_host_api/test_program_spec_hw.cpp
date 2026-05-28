@@ -103,12 +103,12 @@ TEST_F(ProgramSpecHWTest, DFBAccessorNameLoopback) {
     // Producer: BRISC reads from DRAM → DFB
     auto producer = MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
     producer.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_accessor_loopback_producer.cpp";
-    producer.advanced_options.emplace().num_runtime_varargs = 3;
+    producer.advanced_options.num_runtime_varargs = 3;
 
     // Consumer: NCRISC reads DFB → DRAM
     auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
     consumer.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_accessor_loopback_consumer.cpp";
-    consumer.advanced_options.emplace().num_runtime_varargs = 3;
+    consumer.advanced_options.num_runtime_varargs = 3;
 
     // DFB: both kernels bind it, with different local accessor names
     auto dfb = MakeMinimalDFB("loopback_dfb", entry_size, num_entries);
@@ -373,7 +373,7 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopbackCompute) {
     // verbatim (positional varargs only).
     auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
     consumer.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_accessor_loopback_consumer.cpp";
-    consumer.advanced_options.emplace().num_runtime_varargs = 3;
+    consumer.advanced_options.num_runtime_varargs = 3;
 
     auto out_dfb = MakeMinimalDFB("out_dfb", entry_size, num_entries_in_dfb);
     out_dfb.data_format_metadata = tt::DataFormat::Float16_b;
@@ -575,12 +575,12 @@ TEST_F(ProgramSpecHWTest, TensorAccessorBindingLoopback) {
     // Producer (BRISC): reads input tensor via TA binding, pushes to DFB
     auto producer = MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
     producer.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/tensor_accessor_loopback_producer.cpp";
-    producer.advanced_options.emplace().num_runtime_varargs = 1;
+    producer.advanced_options.num_runtime_varargs = 1;
 
     // Consumer (NCRISC): pops from DFB, writes output tensor via TA binding
     auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
     consumer.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/tensor_accessor_loopback_consumer.cpp";
-    consumer.advanced_options.emplace().num_runtime_varargs = 1;
+    consumer.advanced_options.num_runtime_varargs = 1;
 
     // DFB connecting the two kernels
     auto dfb = MakeMinimalDFB("input_dfb", page_size, num_dfb_entries);

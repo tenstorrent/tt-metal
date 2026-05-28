@@ -609,7 +609,7 @@ TEST_F(ProgramRunParamsTestQuasar, MultiNode_MissingOneNodeFails) {
     auto consumer = MakeMinimalDMKernel("consumer");
 
     // Throw in some varargs (the normal kind, not the weird per-node override kind)
-    producer.advanced_options.emplace().num_runtime_varargs = 2;
+    producer.advanced_options.num_runtime_varargs = 2;
     // consumer has no varargs (defaults)
 
     // Single DFB spanning all nodes
@@ -782,7 +782,7 @@ TEST_F(ProgramRunParamsTestQuasar, VarargOnlyMultiNodeDifferingCountsSucceeds) {
     ProgramSpec spec;
     spec.program_id = "vararg_differing_counts";
     auto kernel = MakeMinimalDMKernel("dm_kernel");
-    kernel.advanced_options.emplace().num_runtime_varargs_per_node =
+    kernel.advanced_options.num_runtime_varargs_per_node =
         KernelAdvancedOptions::NumVarargsPerNode{{node_a, 2}, {node_b, 5}};
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", nodes, {"dm_kernel"})};
@@ -817,7 +817,7 @@ TEST_F(ProgramRunParamsTestQuasar, VarargPerNodeOverrideMixedEntryTypesSucceeds)
     auto kernel = MakeMinimalDMKernel("dm_kernel");
     // Nodes a and b share count 3 (declared via a NodeRangeSet entry).
     // Node c has count 5 (declared via a NodeCoord entry).
-    kernel.advanced_options.emplace().num_runtime_varargs_per_node =
+    kernel.advanced_options.num_runtime_varargs_per_node =
         KernelAdvancedOptions::NumVarargsPerNode{{ab, 3}, {node_c, 5}};
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", all_nodes, {"dm_kernel"})};
@@ -931,7 +931,7 @@ TEST_F(ProgramRunParamsTestQuasar, VarargOnlyRTAsMissingNodeCoverageFails) {
     ProgramSpec spec;
     spec.program_id = "vararg_missing_node";
     auto kernel = MakeMinimalDMKernel("dm_kernel");
-    kernel.advanced_options.emplace().num_runtime_varargs = 2;  // uniform across both nodes
+    kernel.advanced_options.num_runtime_varargs = 2;  // uniform across both nodes
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", nodes, {"dm_kernel"})};
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
@@ -955,7 +955,7 @@ TEST_F(ProgramRunParamsTestQuasar, VarargOnlyUnknownNodeFails) {
     NodeCoord node{0, 0};
     NodeCoord wrong_node{3, 3};
     ProgramSpec spec = MakeMinimalValidProgramSpec();
-    spec.kernels[0].advanced_options.emplace().num_runtime_varargs = 1;
+    spec.kernels[0].advanced_options.num_runtime_varargs = 1;
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     ProgramRunParams params;
@@ -998,7 +998,7 @@ TEST_F(ProgramRunParamsTestQuasar, NamedAndVarargRTAsCoexistSucceeds) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeMinimalValidProgramSpec();
     spec.kernels[0].runtime_arguments_schema.named_runtime_args = {"input_ptr"};
-    spec.kernels[0].advanced_options.emplace().num_runtime_varargs = 3;
+    spec.kernels[0].advanced_options.num_runtime_varargs = 3;
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     ProgramRunParams params;

@@ -96,14 +96,14 @@ TEST_F(KernelThreadSyncTest, BarrierSynchronizesThreads) {
     if (is_quasar) {
         auto spec = MakeMinimalDMKernel("dm_barrier_kernel", static_cast<uint8_t>(expected_num_threads));
         spec.source = kKernelPath;
-        spec.advanced_options.emplace().num_runtime_varargs_per_node = {{node, kKernelArgsCount}};
+        spec.advanced_options.num_runtime_varargs_per_node = {{node, kKernelArgsCount}};
         kernel_configs.push_back({"dm_barrier_kernel", spec, make_layout(l1_base, kRounds)});
         work_unit_kernel_names = {"dm_barrier_kernel"};
     } else {
         auto make_gen1 = [&](const std::string& name, tt::tt_metal::DataMovementProcessor proc, uint32_t layout_base) {
             auto spec = MakeMinimalGen1DMKernel(name, proc);
             spec.source = kKernelPath;
-            spec.advanced_options.emplace().num_runtime_varargs_per_node = {{node, kKernelArgsCount}};
+            spec.advanced_options.num_runtime_varargs_per_node = {{node, kKernelArgsCount}};
             return KernelConfig{name, spec, make_layout(layout_base, kRounds)};
         };
         kernel_configs.push_back(make_gen1("brisc_barrier_kernel", tt::tt_metal::DataMovementProcessor::RISCV_0, l1_base));

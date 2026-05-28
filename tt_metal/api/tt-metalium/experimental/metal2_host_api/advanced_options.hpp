@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -22,22 +21,19 @@ using DFBSpecName = std::string;
 //------------------------------------------------------------
 //
 // Each Metal 2.0 Spec (KernelSpec, DataflowBufferSpec, TensorParameter, ...) may
-// carry a std::optional<*AdvancedOptions> field at the end of the struct. The
-// *AdvancedOptions struct holds members that meet ONE OR MORE of the following:
+// carry a *AdvancedOptions field at the end of its struct.
+// Features in "advanced options" are one (or more) of:
 //
-//   - Niche use case (most users will never set it).
-//   - Not safe by construction (footgun disguised as a feature).
-//   - Placeholder for feedback (unstable; may move or disappear based on real usage).
-//   - Slated for removal (kept only because a replacement does not yet exist;
-//     should carry [[deprecated]] with a message stating the removal plan).
+//   - Not safe by construction (requires extreme caution to use correctly)
+//   - Extremely niche (only relevant to a tiny fraction of use cases)
+//   - Unstable / experimental
 //
 // NOTE: Features that are "advanced" but mainstream and core to the API
 //       belong on the primary Spec. *AdvancedOptions features are limited
 //       to those that are truly niche, unsafe, or unstable.
 //
-// Use the features in *AdvancedOptions with caution!
-// The header comments for each field describe which category it falls into,
-// and any special considerations for use.
+// Use the advanced options with caution!
+// The header comments for each field describe special considerations for use.
 
 struct KernelAdvancedOptions {
     ////////////////////////////////////////////////////////////////////////////////
@@ -53,7 +49,7 @@ struct KernelAdvancedOptions {
     //       Attempting to use it will trigger a runtime error.
     using NodeSpecificThreadCount = std::pair<Nodes, int>;  // {node_set, num_threads}
     using NodeSpecificThreadCounts = std::vector<NodeSpecificThreadCount>;
-    std::optional<NodeSpecificThreadCounts> node_specific_thread_counts = std::nullopt;
+    NodeSpecificThreadCounts node_specific_thread_counts;
 
     ////////////////////////////////////////////////////////////////////////////////
     // Varargs
@@ -97,7 +93,7 @@ struct KernelAdvancedOptions {
     //       existing uses are refactored to avoid it.
     using NumVarargsPerNode = std::vector<std::pair<Nodes, size_t>>;
     [[deprecated("Per-node-vararg-count feature is deprecated and will be removed.")]]
-    std::optional<NumVarargsPerNode> num_runtime_varargs_per_node = std::nullopt;
+    NumVarargsPerNode num_runtime_varargs_per_node;
 
     ////////////////////////////////////////////////////////////////////////////////
     // Multi-threaded self-loop DFBs on compute kernels

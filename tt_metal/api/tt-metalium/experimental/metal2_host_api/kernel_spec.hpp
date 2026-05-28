@@ -6,7 +6,6 @@
 
 #include <cstdint>
 #include <filesystem>
-#include <optional>
 #include <string>
 #include <unordered_map>
 #include <variant>
@@ -148,10 +147,10 @@ struct KernelSpec {
     //
     // For vararg-style positional RTAs/CRTAs, see KernelAdvancedOptions.
     struct RuntimeArgSchema {
-        // Named RTAs: names in declaration order. Must be unique valid C++ identifiers.
+        // Runtime argument names (must be unique, valid C++ identifiers.)
         std::vector<std::string> named_runtime_args;
 
-        // Named CRTAs: names in declaration order. Must be unique valid C++ identifiers.
+        // Common runtime argument names (must be unique, valid C++ identifiers.)
         std::vector<std::string> named_common_runtime_args;
     };
     RuntimeArgSchema runtime_arguments_schema{};
@@ -165,7 +164,7 @@ struct KernelSpec {
     //////////////////////////////////////////////////////////////////////////////
     // Advanced options (see advanced_options.hpp)
     //////////////////////////////////////////////////////////////////////////////
-    std::optional<KernelAdvancedOptions> advanced_options = std::nullopt;
+    KernelAdvancedOptions advanced_options;
 };
 
 }  // namespace tt::tt_metal::experimental::metal2_host_api

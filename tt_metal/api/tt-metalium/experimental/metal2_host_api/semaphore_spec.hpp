@@ -5,7 +5,6 @@
 #pragma once
 
 #include <cstdint>
-#include <optional>
 #include <string>
 #include <variant>
 #include <vector>
@@ -39,7 +38,7 @@ struct SemaphoreSpec {
     //////////////////////////////////////////////////////////////////////////////
     // Advanced options (see advanced_options.hpp)
     //////////////////////////////////////////////////////////////////////////////
-    std::optional<SemaphoreAdvancedOptions> advanced_options = std::nullopt;
+    SemaphoreAdvancedOptions advanced_options;
 };
 
 }  // namespace tt::tt_metal::experimental::metal2_host_api

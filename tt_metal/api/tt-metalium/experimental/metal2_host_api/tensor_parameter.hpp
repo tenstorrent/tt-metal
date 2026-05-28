@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <optional>
 #include <string>
 
 #include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
@@ -28,7 +27,7 @@ struct TensorParameter {
     //////////////////////////////
     // Advanced options (see advanced_options.hpp)
     //////////////////////////////
-    std::optional<TensorParameterAdvancedOptions> advanced_options = std::nullopt;
+    TensorParameterAdvancedOptions advanced_options;
 };
 
 }  // namespace tt::tt_metal::experimental::metal2_host_api
