@@ -55,11 +55,20 @@ from models.experimental.mistral_small_4_119b.tt.mistral4_vision_rope import (
 
 
 def _vision_rms_norm(x: ttnn.Tensor, weight: ttnn.Tensor, compute_kernel_config) -> ttnn.Tensor:
+    # Propagate WIDTH_SHARDED layout through rms_norm so the patch-conv → ln_pre
+    # fast path doesn't pay a sharded→interleaved round-trip. For DRAM/L1
+    # interleaved inputs (block-internal calls after a residual add) fall back
+    # to L1 interleaved output, matching the prior behavior.
+    in_mem = x.memory_config()
+    if in_mem.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+        out_mem = in_mem  # reuse the input's shard_spec
+    else:
+        out_mem = ttnn.L1_MEMORY_CONFIG
     return ttnn.rms_norm(
         x,
         weight=weight,
         epsilon=VISION_NORM_EPS,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
+        memory_config=out_mem,
         compute_kernel_config=compute_kernel_config,
     )
 
@@ -108,6 +117,34 @@ class TtPixtralPatchConv:
 
         self._image_input_tt: ttnn.Tensor | None = None
         self._image_input_shape: tuple[int, int] | None = None
+        self._matmul_program_config = None
+        self._matmul_program_config_mt: int | None = None
+
+    def _build_matmul_program_config(self, num_patches: int):
+        """Sweep-tuned 1D l1/dram/ws config for patch-conv matmul (Mt × 19 × 32 tiles).
+
+        Sweep winner on Blackhole P150 (test_vision_matmul_sweep.py):
+            grid 4×8, in0_block_w=19, out=L1 WIDTH_SHARDED → 7.6 µs / 21 TFLOPs.
+        Kt=19 is prime → only non-trivial in0_block_w is 19 (full K row, no inner-K
+        loop). Output ws cap forces out_subblock_h=1.
+        """
+        TILE = 32
+        mt = (num_patches + TILE - 1) // TILE  # tile-padded M tiles (full M, since 1D mcast_in0)
+        kt = (self.folded_in_channels + TILE - 1) // TILE  # 19
+        dev_grid = self.mesh_device.compute_with_storage_grid_size()
+        gx, gy = min(dev_grid.x, 4), min(dev_grid.y, 8)
+        nt_per_core = max(1, (VISION_HIDDEN_SIZE // TILE) // (gx * gy))
+        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
+            in0_block_w=kt,
+            per_core_M=mt,
+            per_core_N=nt_per_core,
+            out_subblock_h=1,  # sharded output → kernel forces out_subblock_h==1
+            out_subblock_w=nt_per_core,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
 
     def _fold_image_host(self, image: torch.Tensor) -> torch.Tensor:
         """[1, 3, H, W] → [1, 1, num_patches, 588] (im2col with kernel==stride)."""
@@ -146,13 +183,26 @@ class TtPixtralPatchConv:
         return self._image_input_tt, h_patches, w_patches
 
     def forward_device(self, image_tt: ttnn.Tensor, h_patches: int, w_patches: int) -> Tuple[ttnn.Tensor, int, int]:
-        """Pre-folded patch embedding: one matmul, fully trace-compatible."""
+        """Pre-folded patch embedding: one matmul, fully trace-compatible.
+
+        Output is L1 WIDTH_SHARDED (sweep-tuned). The caller is responsible for
+        converting back to DRAM interleaved before any op that can't consume WS.
+        """
+        num_patches = h_patches * w_patches
+        mt = (num_patches + 31) // 32
+        if self._matmul_program_config is None or self._matmul_program_config_mt != mt:
+            self._matmul_program_config = self._build_matmul_program_config(num_patches)
+            self._matmul_program_config_mt = mt
         out = ttnn.linear(
             image_tt,
             self.weight,
             compute_kernel_config=self.compute_kernel_config,
+            program_config=self._matmul_program_config,
             dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.MemoryConfig(
+                memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                buffer_type=ttnn.BufferType.L1,
+            ),
         )
         return out, h_patches, w_patches
 
@@ -318,7 +368,10 @@ class TtPixtralVisionTower:
         assert self._cached_cos is not None and self._cached_sin is not None
 
         x, h_patches, w_patches = self.patch_conv.forward_device(image_tt, h_patches, w_patches)
+        # patch_conv → ln_pre stays L1 WIDTH_SHARDED. Convert to DRAM interleaved
+        # before entering the blocks (their residual-add path is DRAM today).
         x = _vision_rms_norm(x, self.ln_pre_w, self.compute_kernel_config)
+        x = ttnn.sharded_to_interleaved(x, ttnn.DRAM_MEMORY_CONFIG)
 
         for blk in self.blocks:
             x = blk.forward(x, self._cached_cos, self._cached_sin)
