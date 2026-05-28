@@ -196,6 +196,14 @@ public:
     std::set<PhysicalPortConnection> find_cables_containing_channels(
         const std::set<PhysicalChannelEndpoint>& dead_channels) const;
 
+    // Mutating counterpart to find_cables_containing_channels: rebuilds chip_connections_ by
+    // walking the resolved graph and skipping every cable whose expansion intersects the dead
+    // set. After this call, emit_factory_system_descriptor() produces a regenerated FSD that
+    // omits all channels of the affected cables (dead-channel == dead-cable policy).
+    // The cabling descriptor itself is NOT mutated; emit_cabling_descriptor() still emits the
+    // canonical input. Returns the set of cables that were pruned, for diagnostics.
+    std::set<PhysicalPortConnection> prune_dead_channels(const std::set<PhysicalChannelEndpoint>& dead_channels);
+
 private:
     // Track which node_descriptors were explicitly present in source files (not inferred)
     std::unordered_set<std::string> explicit_node_descriptors_;
