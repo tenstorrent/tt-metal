@@ -46,7 +46,7 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
 
     const auto& output_mesh = output_tensor.mesh_tensor();
 
-    auto* device = &input_values_tensor.device_mut();
+    auto* device = &input_values_tensor.mutable_device();
 
     auto input_shape = input_values_tensor.logical_shape();
     const uint32_t tile_height = input_values_tensor.tensor_spec().tile().get_height();

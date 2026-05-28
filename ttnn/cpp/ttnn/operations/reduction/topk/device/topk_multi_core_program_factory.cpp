@@ -99,7 +99,7 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     const uint32_t index_tile_size = tile_size(index_cb_data_format);
     const uint32_t compute_tile_size = tile_size(compute_cb_data_format);
 
-    const auto* device = &input_tensor.device_mut();
+    const auto* device = &input_tensor.mutable_device();
 
     const auto input_shape = input_tensor.padded_shape();
     const uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();

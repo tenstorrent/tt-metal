@@ -181,7 +181,7 @@ ProgramDescriptor ArgMaxMultiCoreProgramFactory::create_descriptor(
     // Last dimension in output i.e. the dim left after reduction
     const auto output_last_dim = reduce_all or keepdim or (rank < 2) ? 1 : input_shape[rank - 2];
 
-    const tt::tt_metal::IDevice* device = &output.device_mut();
+    const tt::tt_metal::IDevice* device = &output.mutable_device();
 
     const auto src_is_dram = input.mesh_buffer().device_local_config().buffer_type == tt::tt_metal::BufferType::DRAM;
 

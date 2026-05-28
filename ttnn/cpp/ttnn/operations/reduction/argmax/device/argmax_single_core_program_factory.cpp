@@ -115,7 +115,7 @@ ProgramDescriptor ArgMaxSingleCoreProgramFactory::create_descriptor(
 
     ProgramDescriptor desc;
     const auto& dst_mesh = output.mesh_tensor();
-    const tt::tt_metal::IDevice* device = &dst_mesh.device_mut();
+    const tt::tt_metal::IDevice* device = &dst_mesh.mutable_device();
     const bool reduce_all = not dim.has_value();
 
     // Circular buffers

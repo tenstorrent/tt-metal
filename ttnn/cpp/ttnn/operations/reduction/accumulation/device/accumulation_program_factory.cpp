@@ -52,7 +52,7 @@ tt::tt_metal::ProgramDescriptor AccumulationProgramFactory::create_descriptor(
 
     ProgramDescriptor desc;
 
-    IDevice* device{&input_tensor.device_mut()};
+    IDevice* device{&input_tensor.mutable_device()};
 
     const auto dst_cb_data_format{datatype_to_dataformat_converter(output_tensor.dtype())};
 

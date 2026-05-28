@@ -22,7 +22,7 @@ tt::tt_metal::ProgramDescriptor EmaDeviceOperation::EmaProgramFactory::create_de
     const EmaParams& operation_attributes, const EmaInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& input = tensor_args.input.mesh_tensor();
     const MeshTensor& output = tensor_return_value.mesh_tensor();
-    IDevice* device = &input.device_mut();
+    IDevice* device = &input.mutable_device();
 
     // Grid sizing
     // -----------
