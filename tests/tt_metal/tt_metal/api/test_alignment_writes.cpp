@@ -81,7 +81,7 @@ TEST_F(MeshDeviceFixture, NocWrite_L1_Misaligned_SanityCheck) {
     unsetenv("TT_METAL_EMULE_ASAN");
 }
 
-// DRAM->L1 read (WH): DRAM lower 8 bits (0x10) != L1 lower 8 bits (0x20) -> abort
+// DRAM->L1 read (WH): DRAM lower 5 bits (0x10) != L1 lower 5 bits (0x00) -> abort (32-byte alignment, mask=0x1F)
 // Constructs DRAM NOC address from the host-side NOC XY of DRAM bank 0.
 TEST_F(MeshDeviceFixture, NocRead_DRAM_Misaligned_SanityCheck_WH) {
     setenv("TT_METAL_EMULE_ASAN", "1", 1);
@@ -100,7 +100,7 @@ TEST_F(MeshDeviceFixture, NocRead_DRAM_Misaligned_SanityCheck_WH) {
     uint32_t dram_lo = static_cast<uint32_t>(dram_src & 0xFFFFFFFFU);
     uint32_t dram_hi = static_cast<uint32_t>(dram_src >> 32);
 
-    // L1 dst: lower 8 bits = 0x20 -- mismatches DRAM lower 8 bits (0x10)
+    // L1 dst: lower 5 bits = 0x00 -- mismatches DRAM lower 5 bits (0x10)
     uint32_t l1_dst = 0x30020;
 
     std::string kernel_src = R"(
