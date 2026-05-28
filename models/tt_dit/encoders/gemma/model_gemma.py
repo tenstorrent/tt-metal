@@ -232,11 +232,13 @@ class GemmaAttention(Module):
         q = self._apply_rope(q, cos, sin)
         k = self._apply_rope(k, cos, sin)
 
-        # GQA: repeat KV heads to match Q heads
+        # GQA: expand KV heads to match Q heads. Must use repeat_interleave (each kv
+        # head duplicated contiguously: [kv0,kv0,kv1,kv1,...]) to match HF repeat_kv —
+        # ttnn.repeat does block-tile ([kv0..kv7,kv0..kv7]) which mispairs q/kv heads.
         if self.num_local_kv_heads < self.num_local_heads:
             repeats = self.num_local_heads // self.num_local_kv_heads
-            k = ttnn.repeat(k, ttnn.Shape([1, repeats, 1, 1]))
-            v = ttnn.repeat(v, ttnn.Shape([1, repeats, 1, 1]))
+            k = ttnn.repeat_interleave(k, repeats, dim=1)
+            v = ttnn.repeat_interleave(v, repeats, dim=1)
 
         # Ensure DRAM interleaved layout for SDPA compatibility
         q = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
@@ -245,12 +247,15 @@ class GemmaAttention(Module):
 
         # SDPA — use is_causal when no mask, or explicit mask when padding present.
         # TTNN SDPA doesn't support both is_causal and attn_mask simultaneously.
+        # Gemma-3 scales by query_pre_attn_scalar**-0.5 = head_dim**-0.5 here; pass it
+        # explicitly rather than relying on the SDPA default.
         attn_output = ttnn.transformer.scaled_dot_product_attention(
             q,
             k,
             v,
             is_causal=(attn_mask is None),
             attn_mask=attn_mask,
+            scale=1.0 / math.sqrt(self.head_dim),
             program_config=self.sdpa_config,
             compute_kernel_config=self.compute_config,
         )
