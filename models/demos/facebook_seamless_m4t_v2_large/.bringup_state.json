@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-28T00:18:15Z",
-  "updated_at": "2026-05-28T22:43:38Z",
+  "updated_at": "2026-05-28T22:57:37Z",
   "components": [
     {
       "name": "layernorm",
@@ -769,9 +769,15 @@
         "status": "n/a"
       },
       "optimization": {
-        "status": "pending",
+        "status": "done",
         "attempts": 0,
-        "notes": "Re-opened for tracy-driven redo. Prior bulk-waved at-ceiling without traced tracy CSV evidence. Previous: {'status': 'done', 'pcc': 0.9999887272354591, 'attempts': 1, 'artifacts': ['models/demos/facebook_seamless_m4t_v2_large/tt/t2u_decoder_layer.py'], 'notes': 'At-ceiling at block level. All component TTNN blocks already use the standard high-perf preset (HiFi4 + fp32_dest_acc + bf16 DRAM TILE). Further gains require model-level metal tracing + serving harness optimization (sequence packing, batching, KV-cache reuse), which operate on the integrated model rather than per-block \u2014 handled in a follow-up deployment project.'}"
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/t2u_decoder_layer.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tt/profile_t2u_decoder_layer.py",
+          "generated/profiler/reports/t2u_decoder_layer_optimized/reports/2026_05_28_22_55_29/ops_perf_results_2026_05_28_22_55_29.csv"
+        ],
+        "notes": "Captured under --traced metal trace replay. Switched Conv1dConfig shard_layout None->BLOCK_SHARDED (C=1024 tile-aligned across 8 cols). Conv2dDeviceOperation 243.6us->175.3us (-28%); total block kernel 576.7us->506.2us (-12.2%); steady-state step_ms 0.615->0.550 (-10.6%). PCC=0.99999. T2ST+S2ST audio-out e2e PASS.",
+        "pcc": 0.9999900265166102
       },
       "real_weights": {
         "status": "done",
@@ -1550,6 +1556,12 @@
       "tick": 45,
       "ts": "2026-05-28T22:43:38Z",
       "action": "device[text_decoder_layer]",
+      "result": "ok"
+    },
+    {
+      "tick": 46,
+      "ts": "2026-05-28T22:57:37Z",
+      "action": "device[t2u_decoder_layer]",
       "result": "ok"
     }
   ],

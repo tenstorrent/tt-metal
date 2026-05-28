@@ -183,10 +183,16 @@ class T2UDecoderLayer(LightweightModule):
 
         # Conv1d compute / config: HiFi4 + fp32 dest accum, matching the other
         # conv-based blocks in this model (variance_predictor,
-        # conformer_convolution_module).
+        # conformer_convolution_module). Explicit BLOCK_SHARDED requested for
+        # the production NAR shape ([B=1, T>=32, C=1024]): C=1024 is tile-
+        # aligned across an 8-column grid (128 channels/col), satisfying the
+        # block-sharded conv kernel's "C >= 256 and per-col tile-multiple"
+        # requirement. This avoids the auto-pick falling back to a slower
+        # height-sharded path on the wider-than-AR sequences used by the T2U
+        # decoder.
         self.conv_config = ttnn.Conv1dConfig(
             weights_dtype=weight_dtype,
-            shard_layout=None,  # auto-pick
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             deallocate_activation=False,
         )
         self.conv_compute_config = ttnn.init_device_compute_kernel_config(

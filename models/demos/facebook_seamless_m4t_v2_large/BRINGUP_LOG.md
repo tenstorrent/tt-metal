@@ -4,7 +4,7 @@
 **Slug:** `facebook_seamless_m4t_v2_large`
 **Target Device:** p150 (blackhole)
 **Started:** 2026-05-28T00:18:15Z
-**Updated:** 2026-05-28T22:43:38Z
+**Updated:** 2026-05-28T22:57:37Z
 
 ## Block Status
 
@@ -83,7 +83,7 @@
 | t2u_decoder_layer | reference | done | 1.000000 | 1 |  |
 | t2u_decoder_layer | ttnn | done | 0.999989 | 1 | POST-norm NAR layer: SeamlessMHA + LN + 2x Conv1d(k=7,pad=3) + ReLU + LN. PCC 0.999989. |
 | t2u_decoder_layer | debug | n/a | — | 0 |  |
-| t2u_decoder_layer | optimization | pending | — | 0 | Re-opened for tracy-driven redo. Prior bulk-waved at-ceiling without traced tracy CSV evidence. Previous: {'status': 'done', 'pcc': 0.9999887272354591, 'attempts': 1, 'artifacts': ['models/demos/facebook_seamless_m4t_v2_large/tt/t2u_decoder_layer.py'], 'notes': 'At-ceiling at block level. All component TTNN blocks already use the standard high-perf preset (HiFi4 + fp32_dest_acc + bf16 DRAM TILE). Further gains require model-level metal tracing + serving harness optimization (sequence packing, batching, KV-cache reuse), which operate on the integrated model rather than per-block — handled in a follow-up deployment project.'} |
+| t2u_decoder_layer | optimization | done | 0.999990 | 0 | Captured under --traced metal trace replay. Switched Conv1dConfig shard_layout None->BLOCK_SHARDED (C=1024 tile-aligned across 8 cols). Conv2dDeviceOperation 243.6us->175.3us (-28%); total block kernel 576.7us->506.2us (-12.2%); steady-state step_ms 0.615->0.550 (-10.6%). PCC=0.99999. T2ST+S2ST audio-out e2e PASS. |
 | t2u_decoder_layer | real_weights | done | 0.999989 | 1 | Validated in Phase 1 (test_real_hf_weights.py); reduced to 2-layer config for goldens, full config 24/6 validated in test_full_config.py. |
 | conformer_adapter_layer | reference | done | 1.000000 | 1 |  |
 | conformer_adapter_layer | ttnn | done | 0.999862 | 1 | Stride=8 downsample adapter. T=128->17. ConvT-then-GLU on ROW_MAJOR (non-tile-aligned T). |
@@ -143,7 +143,6 @@
 
 ## Recent Ticks
 
-- tick 36 (2026-05-28T04:48:52Z): ttnn[seamless_m4t_v2] -- TTNN PHASE COMPLETE 24/24 — ok
 - tick 37 (2026-05-28T05:03:57Z): optimization[layernorm]: at-ceiling — ok
 - tick 38 (2026-05-28T05:04:31Z): optimization[9 leaves bulk at-ceiling]: scaled_word_embedding,sinusoidal_positional_embedding,seamless_mha,seamless_ffn,conformer_ffn,conformer_self_attention,conformer_convolution_module,variance_predictor,hifigan_residual_block — ok
 - tick 39 (2026-05-28T05:06:37Z): optimization[14 composite+submodel bulk at-ceiling]: conformer_feature_projection,conformer_encoder_layer,text_encoder_layer,text_decoder_layer,t2u_decoder_layer,conformer_adapter_layer,speech_encoder,text_encoder,text_decoder,t2u_encoder,t2u_decoder,hifigan_vocoder,code_hifigan_vocoder,seamless_m4t_v2 — ok
@@ -153,6 +152,7 @@
 - tick 43 (2026-05-28T21:26:03Z): device[seamless_mha] — ok
 - tick 44 (2026-05-28T21:39:23Z): device[conformer_encoder_layer] — ok
 - tick 45 (2026-05-28T22:43:38Z): device[text_decoder_layer] — ok
+- tick 46 (2026-05-28T22:57:37Z): device[t2u_decoder_layer] — ok
 
 ## Host-Resident Exceptions
 
