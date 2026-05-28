@@ -82,7 +82,7 @@ Read:
 - `tech_reports/LLMs/vLLM_integration.md`;
 - `models/tt_transformers/tt/generator_vllm.py`;
 
-Add a local registration hook in `vllm/plugins/vllm-tt-plugin/src/vllm_tt_plugin/platform.py`.
+Add a local registration hook or document the plugin registration needed in `vllm/plugins/vllm-tt-plugin/src/vllm_tt_plugin/platform.py`.
 
 ## Verification
 
