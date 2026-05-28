@@ -134,6 +134,7 @@ def reset_graph():
     ttml.autograd.AutoContext.get_instance().reset_graph()
 
 
+@pytest.mark.requires_device
 def test_mla_fused_sdpa_matches_composite_forward_and_backward():
     """Compare fused-SDPA MLA against the old composite path for output and parameter gradients."""
     ctx = ttml.autograd.AutoContext.get_instance()
