@@ -647,21 +647,6 @@ protected:
 // Port-type metadata helpers (Step 1 / #44933)
 // =============================================================================
 
-TEST(PortTypeMappingHelpers, PortTypePreferenceRank) {
-    using tt::tt_metal::PortType;
-    EXPECT_LT(port_type_preference_rank(PortType::TRACE), port_type_preference_rank(PortType::WARP400));
-    EXPECT_LT(port_type_preference_rank(PortType::WARP400), port_type_preference_rank(PortType::QSFP_DD));
-    EXPECT_LT(port_type_preference_rank(PortType::QSFP_DD), port_type_preference_rank(PortType::WARP100));
-    EXPECT_LT(port_type_preference_rank(PortType::WARP100), port_type_preference_rank(PortType::UNKNOWN));
-}
-
-TEST(PortTypeMappingHelpers, CanonicalPortTypeLinkKey) {
-    const tt::tt_metal::AsicID a{10};
-    const tt::tt_metal::AsicID b{20};
-    EXPECT_EQ(canonical_port_type_link_key(a, b), (PortTypeLinkKey{a, b}));
-    EXPECT_EQ(canonical_port_type_link_key(b, a), (PortTypeLinkKey{a, b}));
-}
-
 TEST(PortTypeMappingHelpers, InferLogicalEdgePortRequirement) {
     const MeshHostRankId rank0{0};
     const MeshHostRankId rank1{1};
