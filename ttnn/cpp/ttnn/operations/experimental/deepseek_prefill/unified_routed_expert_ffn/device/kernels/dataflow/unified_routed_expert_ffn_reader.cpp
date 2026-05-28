@@ -226,7 +226,8 @@ void kernel_main() {
             if (this_core_last_row > M_bound) {
                 const uint32_t slot_size_bytes = g_in0_block_num_tiles * get_tile_size(cb_in0_x);
                 const uint32_t total_bytes = 2 * slot_size_bytes;
-                uint64_t* __restrict__ p = reinterpret_cast<uint64_t*>(get_write_ptr(cb_in0_x));
+                volatile tt_l1_ptr uint64_t* p =
+                    reinterpret_cast<volatile tt_l1_ptr uint64_t*>(get_write_ptr(cb_in0_x));
                 const size_t n = total_bytes / sizeof(uint64_t);
                 for (size_t i = 0; i < n; ++i) {
                     p[i] = 0;
@@ -519,4 +520,9 @@ void kernel_main() {
             cb_push_back(cb_in1_down, d_in1_block_num_tiles);
         }
     }  // end chunk loop
+
+    // The last in-flight noc_semaphore_set_multicast (act_valid / in1_valid)
+    // is a posted atomic; without an explicit barrier it can still be in
+    // flight at kernel exit, leading to timing-dependent corruption.
+    noc_async_atomic_barrier();
 }
