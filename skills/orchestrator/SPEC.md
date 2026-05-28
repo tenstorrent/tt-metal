@@ -1,8 +1,14 @@
 # SPEC: Bringup Orchestrator
 
-**Status:** Design approved, not yet implemented.
+**Status:** Design approved, implemented.
 **Date:** 2026-05-27
 **Owner:** ssinghal@tenstorrent.com
+
+> **See also:** [`SPEC_post_bringup.md`](SPEC_post_bringup.md) documents
+> the post-bringup phase extensions (real_weights / generation / perf)
+> and the `use_cases[]` state axis. This spec covers the original 5
+> phases (architecture / reference / ttnn / debug / optimization);
+> together the two specs describe the full pipeline.
 
 ## Purpose
 
