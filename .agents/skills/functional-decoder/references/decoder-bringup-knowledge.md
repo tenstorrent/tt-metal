@@ -23,7 +23,6 @@ Use this reference while bringing up a TTNN decoder layer. It folds in relevant 
 - Reshape norm weights so they broadcast over hidden width.
 - Derive Q/K/V head reshapes from config, including GQA/MQA KV expansion, before optimizing.
 - In `models/common` attention, Q/K weights may need HF-to-TTNN RoPE permutation handling such as `reverse_permute`; inspect the module contract and tests.
-- For one-token decode scaffolding, sparse BF16 linear maps can encode RoPE or GQA reshapes, but this is not representative performance and should not be left unexplained in perf evidence.
 
 ## HF Reference And Synthetic Weights
 
@@ -35,6 +34,7 @@ Use this reference while bringing up a TTNN decoder layer. It folds in relevant 
 - Synthetic input activations should approximate the distribution entering the decoder layer after embeddings/norms, not arbitrary huge random values.
 - Do not create smaller configs - replicate the real config of the reference.
 - If full HF weight download is necessary to collect stats, record why partial shard loading was not practical.
+- Always use real shapes even with synthetic weights
 
 ## Paged KV Cache Checks
 
