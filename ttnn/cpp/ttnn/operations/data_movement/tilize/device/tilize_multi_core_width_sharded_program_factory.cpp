@@ -89,6 +89,11 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreWidthShardedProgramFacto
             .local_accessor_name = "shard",
             .endpoint_type = KernelSpec::DFBEndpointType::PRODUCER,
         }},
+        // Validator requires a kernel to claim each TensorParameter (program_spec.cpp:421).
+        .tensor_bindings = {{
+            .tensor_parameter_name = INPUT,
+            .accessor_name = "input",
+        }},
         .runtime_arguments_schema = {.named_runtime_args = {"num_tiles_per_core"}},
         .config_spec =
             DataMovementConfiguration{
@@ -108,6 +113,10 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreWidthShardedProgramFacto
             .dfb_spec_name = OUT_DFB,
             .local_accessor_name = "out",
             .endpoint_type = KernelSpec::DFBEndpointType::CONSUMER,
+        }},
+        .tensor_bindings = {{
+            .tensor_parameter_name = OUTPUT,
+            .accessor_name = "output",
         }},
         .runtime_arguments_schema = {.named_runtime_args = {"num_units"}},
         .config_spec =

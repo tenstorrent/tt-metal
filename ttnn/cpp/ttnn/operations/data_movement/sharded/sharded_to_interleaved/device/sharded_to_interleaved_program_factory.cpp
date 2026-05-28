@@ -181,6 +181,13 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
             .local_accessor_name = "shard",
             .endpoint_type      = KernelSpec::DFBEndpointType::PRODUCER,
         }},
+        // Claim INPUT for the validator (program_spec.cpp:421). `borrowed_from` on the DFB
+        // doesn't count as a tensor_parameter user; only KernelSpec::tensor_bindings does.
+        // The accessor is generated but unused — the kernel reads only from the borrowed DFB.
+        .tensor_bindings = {{
+            .tensor_parameter_name = INPUT,
+            .accessor_name         = "input",
+        }},
         .runtime_arguments_schema = {.named_runtime_args = {"num_tiles_per_core"}},
         .config_spec = DataMovementConfiguration{
             .gen1_data_movement_config = DataMovementConfiguration::Gen1DataMovementConfig{
