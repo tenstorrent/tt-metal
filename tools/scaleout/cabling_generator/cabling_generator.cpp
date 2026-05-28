@@ -13,6 +13,7 @@
 #include <enchantum/enchantum.hpp>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <unordered_set>
 #include <fmt/base.h>
 #include <google/protobuf/text_format.h>
@@ -1751,6 +1752,130 @@ void CablingGenerator::emit_cabling_descriptor(const std::string& output_path) c
         throw std::runtime_error("Failed to write cabling descriptor to: " + output_path);
     }
     output_file.close();
+}
+
+std::set<PhysicalPortConnection> CablingGenerator::find_cables_containing_channels(
+    const std::set<PhysicalChannelEndpoint>& dead_channels) const {
+    std::set<PhysicalPortConnection> result;
+
+    if (!root_instance_ || dead_channels.empty()) {
+        return result;
+    }
+
+    // Index deployment_hosts_ by HostId value (relies on deployment_hosts_ being in DFS host_id order,
+    // same invariant relied on by build_factory_system_descriptor).
+    auto host_for = [&](HostId hid) -> const Host& { return deployment_hosts_.at(*hid); };
+
+    auto make_port_endpoint = [&](HostId host_id, TrayId tray, PortId port_id, PortType port_type) {
+        const Host& h = host_for(host_id);
+        return PhysicalPortEndpoint{
+            .hostname = h.hostname,
+            .aisle = h.aisle,
+            .rack = h.rack,
+            .shelf_u = h.shelf_u,
+            .tray_id = tray,
+            .port_type = port_type,
+            .port_id = port_id,
+        };
+    };
+
+    // Returns true if the cable's expanded channels intersect the dead set.
+    auto cable_intersects_dead = [&](PortType port_type,
+                                     const Board& start_board,
+                                     const Board& end_board,
+                                     HostId start_host_id,
+                                     TrayId start_tray,
+                                     PortId start_port,
+                                     HostId end_host_id,
+                                     TrayId end_tray,
+                                     PortId end_port) -> bool {
+        const auto& start_channels = start_board.get_port_channels(port_type, start_port);
+        const auto& end_channels = end_board.get_port_channels(port_type, end_port);
+        auto pairs = tt::scaleout_tools::get_asic_channel_connections(port_type, start_channels, end_channels);
+        const std::string& start_host = host_for(start_host_id).hostname;
+        const std::string& end_host = host_for(end_host_id).hostname;
+        for (const auto& [start_chan, end_chan] : pairs) {
+            if (dead_channels.contains(PhysicalChannelEndpoint{start_host, start_tray, start_chan}) ||
+                dead_channels.contains(PhysicalChannelEndpoint{end_host, end_tray, end_chan})) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    auto record = [&](PortType port_type, HostId ha, TrayId ta, PortId pa, HostId hb, TrayId tb, PortId pb) {
+        auto endpoint_a = make_port_endpoint(ha, ta, pa, port_type);
+        auto endpoint_b = make_port_endpoint(hb, tb, pb, port_type);
+        if (endpoint_a < endpoint_b) {
+            result.insert({endpoint_a, endpoint_b});
+        } else {
+            result.insert({endpoint_b, endpoint_a});
+        }
+    };
+
+    // Walk the resolved graph, mirroring generate_connections_from_resolved_graph(). Three layers:
+    // intra-board, inter-board (within a node), and graph-level (between nodes), plus subgraph recursion.
+    std::function<void(const std::unique_ptr<ResolvedGraphInstance>&)> walk =
+        [&](const std::unique_ptr<ResolvedGraphInstance>& graph) {
+            if (!graph) {
+                return;
+            }
+
+            for (const auto& [node_name, node] : graph->nodes) {
+                HostId host_id = node.host_id;
+
+                for (const auto& [tray_id, board] : node.boards) {
+                    for (const auto& [port_type, conns] : board.get_internal_connections()) {
+                        for (const auto& [port_a, port_b] : conns) {
+                            if (cable_intersects_dead(
+                                    port_type, board, board, host_id, tray_id, port_a, host_id, tray_id, port_b)) {
+                                record(port_type, host_id, tray_id, port_a, host_id, tray_id, port_b);
+                            }
+                        }
+                    }
+                }
+
+                for (const auto& [port_type, conns] : node.inter_board_connections) {
+                    for (const auto& [be_a, be_b] : conns) {
+                        TrayId tray_a = be_a.first;
+                        PortId port_a = be_a.second;
+                        TrayId tray_b = be_b.first;
+                        PortId port_b = be_b.second;
+                        const Board& board_a = node.boards.at(tray_a);
+                        const Board& board_b = node.boards.at(tray_b);
+                        if (cable_intersects_dead(
+                                port_type, board_a, board_b, host_id, tray_a, port_a, host_id, tray_b, port_b)) {
+                            record(port_type, host_id, tray_a, port_a, host_id, tray_b, port_b);
+                        }
+                    }
+                }
+            }
+
+            for (const auto& [port_type, conns] : graph->internal_connections) {
+                for (const auto& [pe_a, pe_b] : conns) {
+                    auto [host_a, tray_a, port_a] = pe_a;
+                    auto [host_b, tray_b, port_b] = pe_b;
+                    if (!host_id_to_node_.contains(host_a) || !host_id_to_node_.contains(host_b)) {
+                        continue;
+                    }
+                    const Node* node_a = host_id_to_node_.at(host_a);
+                    const Node* node_b = host_id_to_node_.at(host_b);
+                    const Board& board_a = node_a->boards.at(tray_a);
+                    const Board& board_b = node_b->boards.at(tray_b);
+                    if (cable_intersects_dead(
+                            port_type, board_a, board_b, host_a, tray_a, port_a, host_b, tray_b, port_b)) {
+                        record(port_type, host_a, tray_a, port_a, host_b, tray_b, port_b);
+                    }
+                }
+            }
+
+            for (const auto& [_, sub] : graph->subgraphs) {
+                walk(sub);
+            }
+        };
+
+    walk(root_instance_);
+    return result;
 }
 
 // Helper: Compare two nodes for equality (checks motherboard, boards, host_id, inter_board_connections)
