@@ -37,10 +37,31 @@ add_subdirectory(tracy)
 # When Tracy is enabled, TracyClient consumers need frame pointers preserved (so backtrace
 # walking works) and `-rdynamic` on the final link line (so Tracy can resolve symbols from
 # the dynamic symbol table). Both must be PUBLIC so they propagate to anything linking
-# TracyClient — these used to live in the now-deleted cmake/tracy.cmake.
+# TracyClient.
 if(ENABLE_TRACY AND TARGET TracyClient)
     target_compile_options(TracyClient PUBLIC -fno-omit-frame-pointer)
     target_link_options(TracyClient PUBLIC -rdynamic)
+
+    # Rename the shared library to libtracy.so to follow the project's library naming convention
+    # and install it alongside the other runtime libraries. Without an explicit install rule in a
+    # component CPack already packages, dpkg-shlibdeps cannot locate libTracyClient.so when
+    # resolving dependencies of binaries that link against it, which fails the .deb packaging step.
+    set_target_properties(
+        TracyClient
+        PROPERTIES
+            OUTPUT_NAME
+                "tracy"
+    )
+    install(
+        TARGETS
+            TracyClient
+        LIBRARY
+            DESTINATION ${CMAKE_INSTALL_LIBDIR}
+            COMPONENT metalium-runtime
+        ARCHIVE
+            DESTINATION ${CMAKE_INSTALL_LIBDIR}
+            COMPONENT metalium-runtime
+    )
 endif()
 
 set(NO_FILESELECTOR ON)
