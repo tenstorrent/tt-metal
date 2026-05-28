@@ -52,6 +52,10 @@ class TtTemporalSelfAttention:
         self.num_points = num_points
         self.num_bev_queue = num_bev_queue
 
+        # Cached (H, W) per level for multi_scale_deformable_attn — avoids
+        # the host-sync `.item()` cost on warm calls.
+        self._hw_cache = None
+
     def __call__(
         self,
         query,
@@ -155,7 +159,14 @@ class TtTemporalSelfAttention:
             raise ValueError(
                 f"Last dim of reference_points must be 2 or 4, but got {reference_points.shape[-1]} instead."
             )
-        output = multi_scale_deformable_attn(value, spatial_shapes, sampling_locations, attention_weights, self.device)
+        if self._hw_cache is None:
+            self._hw_cache = [
+                (int(spatial_shapes[lvl, 0].item()), int(spatial_shapes[lvl, 1].item()))
+                for lvl in range(self.num_levels)
+            ]
+        output = multi_scale_deformable_attn(
+            value, spatial_shapes, sampling_locations, attention_weights, self.device, hw_py=self._hw_cache
+        )
         ttnn.deallocate(attention_weights)
         ttnn.deallocate(sampling_locations)
         ttnn.deallocate(sampling_offsets)

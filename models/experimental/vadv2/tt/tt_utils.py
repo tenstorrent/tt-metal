@@ -5,7 +5,16 @@
 import ttnn
 
 
-def multi_scale_deformable_attn(value, value_spatial_shapes, sampling_locations, attention_weights, device):
+def multi_scale_deformable_attn(value, value_spatial_shapes, sampling_locations, attention_weights, device, hw_py=None):
+    """multi_scale_deformable_attn.
+
+    Args:
+        hw_py: optional list of (H, W) Python ints per level. When provided,
+            the reshape on line below skips the `.item()` host syncs that would
+            otherwise be needed to read H/W out of the `value_spatial_shapes`
+            device tensor. Callers in this codebase populate this from a
+            one-time `_hw_cache` they own so warm calls become trace-friendly.
+    """
     bs, _, num_heads, embed_dims = value.shape
     _, num_queries, num_heads, num_levels, num_points, _ = sampling_locations.shape
     value_list = []
@@ -19,7 +28,11 @@ def multi_scale_deformable_attn(value, value_spatial_shapes, sampling_locations,
         value_l_ = ttnn.reshape(value_l_, [value_l_.shape[0], value_l_.shape[1], value_l_.shape[2] * value_l_.shape[3]])
         value_l_ = ttnn.permute(value_l_, (0, 2, 1))
 
-        value_l_ = ttnn.reshape(value_l_, [bs * num_heads, embed_dims, int(H_.item()), int(W_.item())])
+        if hw_py is not None:
+            H_int, W_int = hw_py[level]
+        else:
+            H_int, W_int = int(H_.item()), int(W_.item())
+        value_l_ = ttnn.reshape(value_l_, [bs * num_heads, embed_dims, H_int, W_int])
 
         sampling_grid_l_ = sampling_grids[:, :, :, level]
         sampling_grid_l_ = ttnn.permute(sampling_grid_l_, (0, 2, 1, 3, 4))

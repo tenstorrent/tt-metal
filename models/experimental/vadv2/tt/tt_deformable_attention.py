@@ -51,6 +51,10 @@ class TtCustomMSDeformableAttention:
         self.num_heads = num_heads
         self.num_points = num_points
 
+        # Cached (H, W) per level for multi_scale_deformable_attn — avoids
+        # the host-sync `.item()` cost on warm calls.
+        self._hw_cache = None
+
     def __call__(
         self,
         query,
@@ -138,7 +142,14 @@ class TtCustomMSDeformableAttention:
                 f"Last dim of reference_points must be" f" 2 or 4, but get {reference_points.shape[-1]} instead."
             )
 
-        output = multi_scale_deformable_attn(value, spatial_shapes, sampling_locations, attention_weights, self.device)
+        if self._hw_cache is None:
+            self._hw_cache = [
+                (int(spatial_shapes[lvl, 0].item()), int(spatial_shapes[lvl, 1].item()))
+                for lvl in range(self.num_levels)
+            ]
+        output = multi_scale_deformable_attn(
+            value, spatial_shapes, sampling_locations, attention_weights, self.device, hw_py=self._hw_cache
+        )
 
         output = output = ttnn.linear(output, params.output_proj.weight, bias=params.output_proj.bias)
         if not self.batch_first:
