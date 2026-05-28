@@ -4,7 +4,7 @@
 **Slug:** `facebook_seamless_m4t_v2_large`
 **Target Device:** p150 (blackhole)
 **Started:** 2026-05-28T00:18:15Z
-**Updated:** 2026-05-28T21:26:03Z
+**Updated:** 2026-05-28T21:39:23Z
 
 ## Block Status
 
@@ -68,7 +68,7 @@
 | conformer_encoder_layer | reference | done | 1.000000 | 1 |  |
 | conformer_encoder_layer | ttnn | done | 0.999986 | 1 | Macaron composite: LN+0.5*FFN+SelfAttn(relative_key)+Conv+0.5*FFN+LN. PCC 0.999986. |
 | conformer_encoder_layer | debug | n/a | — | 0 |  |
-| conformer_encoder_layer | optimization | pending | — | 0 | Re-opened for tracy-driven redo. Prior bulk-waved at-ceiling without traced tracy CSV evidence. Previous: {'status': 'done', 'pcc': 0.9999858412473038, 'attempts': 1, 'artifacts': ['models/demos/facebook_seamless_m4t_v2_large/tt/conformer_encoder_layer.py'], 'notes': 'At-ceiling at block level. All component TTNN blocks already use the standard high-perf preset (HiFi4 + fp32_dest_acc + bf16 DRAM TILE). Further gains require model-level metal tracing + serving harness optimization (sequence packing, batching, KV-cache reuse), which operate on the integrated model rather than per-block — handled in a follow-up deployment project.'} |
+| conformer_encoder_layer | optimization | done | 0.999986 | 0 | Pinned q/k/v projection + ctx merge reshapes to L1 (were DRAM) in conformer_self_attention._project_and_split and the post-attn head-merge. tracy: block kernel time 2072 -> 1723 us (-16.8%); traced step_ms 2.12 -> 1.78 ms (-16.0%). Top hotspot pre-change: MatmulDeviceOperation @ 45.71% (947 us). PCC 0.999986 (unchanged). All 3 SPEECH e2e tests pass (s2tt, asr, s2st). |
 | conformer_encoder_layer | real_weights | done | 0.999986 | 1 | Validated in Phase 1 (test_real_hf_weights.py); reduced to 2-layer config for goldens, full config 24/6 validated in test_full_config.py. |
 | text_encoder_layer | reference | done | 1.000000 | 1 |  |
 | text_encoder_layer | ttnn | done | 0.999975 | 1 | Pre-norm NLLB: LN+MHA+resid, LN+FFN+resid. PCC 0.999975. |
@@ -143,7 +143,6 @@
 
 ## Recent Ticks
 
-- tick 34 (2026-05-28T04:34:17Z): ttnn[hifigan_vocoder] — ok
 - tick 35 (2026-05-28T04:40:57Z): ttnn[code_hifigan_vocoder] — ok
 - tick 36 (2026-05-28T04:48:52Z): ttnn[seamless_m4t_v2] -- TTNN PHASE COMPLETE 24/24 — ok
 - tick 37 (2026-05-28T05:03:57Z): optimization[layernorm]: at-ceiling — ok
@@ -153,6 +152,7 @@
 - tick 41 (2026-05-28T10:23:10Z): perf[s2tt] — ok
 - tick 42 (2026-05-28T10:23:51Z): perf[asr]: shares-infra-with-s2tt — ok
 - tick 43 (2026-05-28T21:26:03Z): device[seamless_mha] — ok
+- tick 44 (2026-05-28T21:39:23Z): device[conformer_encoder_layer] — ok
 
 ## Host-Resident Exceptions
 

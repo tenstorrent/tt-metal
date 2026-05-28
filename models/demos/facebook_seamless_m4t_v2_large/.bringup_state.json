@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-28T00:18:15Z",
-  "updated_at": "2026-05-28T21:26:03Z",
+  "updated_at": "2026-05-28T21:39:23Z",
   "components": [
     {
       "name": "layernorm",
@@ -596,9 +596,20 @@
         "status": "n/a"
       },
       "optimization": {
-        "status": "pending",
+        "status": "done",
         "attempts": 0,
-        "notes": "Re-opened for tracy-driven redo. Prior bulk-waved at-ceiling without traced tracy CSV evidence. Previous: {'status': 'done', 'pcc': 0.9999858412473038, 'attempts': 1, 'artifacts': ['models/demos/facebook_seamless_m4t_v2_large/tt/conformer_encoder_layer.py'], 'notes': 'At-ceiling at block level. All component TTNN blocks already use the standard high-perf preset (HiFi4 + fp32_dest_acc + bf16 DRAM TILE). Further gains require model-level metal tracing + serving harness optimization (sequence packing, batching, KV-cache reuse), which operate on the integrated model rather than per-block \u2014 handled in a follow-up deployment project.'}"
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/conformer_self_attention.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tt/profile_conformer_encoder_layer.py",
+          "generated/profiler/reports/conformer_encoder_layer_traced_after/reports/2026_05_28_21_36_46/ops_perf_results_2026_05_28_21_36_46.csv"
+        ],
+        "notes": "Pinned q/k/v projection + ctx merge reshapes to L1 (were DRAM) in conformer_self_attention._project_and_split and the post-attn head-merge. tracy: block kernel time 2072 -> 1723 us (-16.8%); traced step_ms 2.12 -> 1.78 ms (-16.0%). Top hotspot pre-change: MatmulDeviceOperation @ 45.71% (947 us). PCC 0.999986 (unchanged). All 3 SPEECH e2e tests pass (s2tt, asr, s2st).",
+        "pcc": 0.9999860444307033,
+        "tracy_artifact": "generated/profiler/reports/conformer_encoder_layer_traced_after/reports/2026_05_28_21_36_46/ops_perf_results_2026_05_28_21_36_46.csv",
+        "top_hotspot": {
+          "op": "MatmulDeviceOperation",
+          "share": 0.4571
+        }
       },
       "real_weights": {
         "status": "done",
@@ -1515,6 +1526,12 @@
       "tick": 43,
       "ts": "2026-05-28T21:26:03Z",
       "action": "device[seamless_mha]",
+      "result": "ok"
+    },
+    {
+      "tick": 44,
+      "ts": "2026-05-28T21:39:23Z",
+      "action": "device[conformer_encoder_layer]",
       "result": "ok"
     }
   ],

@@ -206,7 +206,10 @@ class ConformerSelfAttention(LightweightModule):
             compute_kernel_config=self.compute_kernel_config,
         )
         # proj is [B, S, embed_dim]. -> [B, S, num_heads, head_dim] -> [B, num_heads, S, head_dim].
-        proj = ttnn.reshape(proj, (batch, seq_len, self.num_heads, self.head_dim))
+        # Pin the reshape output to L1: tracy shows this reshape (~72us/call x3) at ~14% of
+        # the encoder-layer kernel time when materialized to DRAM. Moving to L1 hides the
+        # writeback by keeping the head-split tensor resident for the immediate transpose.
+        proj = ttnn.reshape(proj, (batch, seq_len, self.num_heads, self.head_dim), memory_config=ttnn.L1_MEMORY_CONFIG)
         proj = ttnn.transpose(proj, 1, 2)
         return proj
 
@@ -306,9 +309,11 @@ class ConformerSelfAttention(LightweightModule):
         ttnn.deallocate(attn)
         ttnn.deallocate(v)
 
-        # [B, H, T, D] -> [B, T, H, D] -> [B, T, H*D]
+        # [B, H, T, D] -> [B, T, H, D] -> [B, T, H*D].
+        # Pin the head-merge reshape output to L1 (tracy: ~75us at DRAM, same pattern as
+        # the q/k/v split reshapes above).
         ctx = ttnn.transpose(ctx, 1, 2)
-        ctx = ttnn.reshape(ctx, (batch, seq_len, self.embed_dim))
+        ctx = ttnn.reshape(ctx, (batch, seq_len, self.embed_dim), memory_config=ttnn.L1_MEMORY_CONFIG)
 
         out = ttnn.linear(
             ctx,
