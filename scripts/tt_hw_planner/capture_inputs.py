@@ -455,9 +455,19 @@ def capture_real_inputs(
 
         try:
             from .capture_drivers import try_capture_drivers as _try_capture_drivers
+            from .auto_capture_driver_onboard import (
+                load_learned_drivers as _load_learned_drivers,
+            )
         except Exception:
             _try_capture_drivers = None
+            _load_learned_drivers = None
 
+        if _load_learned_drivers is not None:
+            _loaded = _load_learned_drivers()
+            if _loaded and verbose:
+                print(f"  [capture] loaded {len(_loaded)} learned driver(s)", file=sys.stderr)
+
+        _generic_attempts: List[str] = []
         if _try_capture_drivers is not None:
             _ok_generic, _generic_attempts = _try_capture_drivers(model, pixel_values)
             for _line in _generic_attempts:
@@ -465,6 +475,8 @@ def capture_real_inputs(
                     print(f"  [capture] generic-driver: {_line}", file=sys.stderr)
             if _ok_generic:
                 forward_errors.append("generic-driver: ok")
+
+        _generic_attempts_for_onboard = list(_generic_attempts)
 
         import inspect as _inspect
 
@@ -524,6 +536,49 @@ def capture_real_inputs(
             if not kw:
                 continue
             _try(f"submodule[{path}](**{list(kw.keys())})", lambda _sub=sub, _kw=kw: _sub(**_kw))
+
+        try:
+            from .auto_capture_driver_onboard import auto_onboard_capture_driver as _auto_onboard_drv
+        except Exception:
+            _auto_onboard_drv = None
+
+        _still_uncaptured = [
+            comp_name for comp_name, _s, _p in resolved if comp_name not in state or "output" not in state[comp_name]
+        ]
+        if (
+            _auto_onboard_drv is not None
+            and _still_uncaptured
+            and bool(os.environ.get("TT_PLANNER_AUTO_ONBOARD_DRIVER"))
+        ):
+            if verbose:
+                print(
+                    f"  [capture] generic framework left {len(_still_uncaptured)} "
+                    f"component(s) un-captured; invoking auto-onboard to draft a "
+                    f"custom driver via LLM (TT_PLANNER_AUTO_ONBOARD_DRIVER=1)",
+                    file=sys.stderr,
+                )
+            try:
+                ok, path, msg = _auto_onboard_drv(
+                    model=model,
+                    model_id=model_id,
+                    uncaptured_components=_still_uncaptured,
+                    framework_attempts=_generic_attempts_for_onboard,
+                )
+                if verbose:
+                    print(f"  [capture] auto-onboard: {msg}", file=sys.stderr)
+                if ok:
+                    from .capture_drivers import try_capture_drivers as _retry_drivers
+
+                    _ok_retry, _retry_attempts = _retry_drivers(model, pixel_values)
+                    for _line in _retry_attempts:
+                        if verbose:
+                            print(f"  [capture] post-onboard: {_line}", file=sys.stderr)
+            except Exception as exc:
+                if verbose:
+                    print(
+                        f"  [capture] auto-onboard raised: {type(exc).__name__}: {exc}",
+                        file=sys.stderr,
+                    )
 
     finally:
         for h in handles:
