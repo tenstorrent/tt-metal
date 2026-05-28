@@ -1,0 +1,5 @@
+[
+  "ttnn.layer_norm",
+  "LayerNormDeviceOperation",
+  "tt::tt_metal::create_device_tensor"
+]

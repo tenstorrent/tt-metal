@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-28T00:18:15Z",
-  "updated_at": "2026-05-28T00:43:17Z",
+  "updated_at": "2026-05-28T02:09:29Z",
   "components": [
     {
       "name": "layernorm",
@@ -27,8 +27,15 @@
         ]
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 0.9999962348595699,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/layernorm.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tests/test_tt_layernorm.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tt/layernorm.traced_ops.json"
+        ],
+        "notes": "ttnn.layer_norm on p150, HiFi4 + fp32_dest_acc, bf16 weights/input. PCC 0.99999623"
       },
       "debug": {
         "status": "n/a"
@@ -58,8 +65,15 @@
         ]
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 0.9999986190128566,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/scaled_word_embedding.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tests/test_tt_scaled_word_embedding.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tt/scaled_word_embedding.traced_ops.json"
+        ],
+        "notes": "Scale folded into embedding weight at load; single ttnn.embedding forward."
       },
       "debug": {
         "status": "n/a"
@@ -273,8 +287,13 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 1.0,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/reference/functional.py",
+          "models/demos/facebook_seamless_m4t_v2_large/reference/golden/variance_predictor.pt"
+        ]
       },
       "ttnn": {
         "status": "pending",
@@ -299,8 +318,13 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 1.0,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/reference/functional.py",
+          "models/demos/facebook_seamless_m4t_v2_large/reference/golden/hifigan_residual_block.pt"
+        ]
       },
       "ttnn": {
         "status": "pending",
@@ -327,8 +351,13 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 1.0,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/reference/functional.py",
+          "models/demos/facebook_seamless_m4t_v2_large/reference/golden/conformer_feature_projection.pt"
+        ]
       },
       "ttnn": {
         "status": "pending",
@@ -358,8 +387,13 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 1.0,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/reference/functional.py",
+          "models/demos/facebook_seamless_m4t_v2_large/reference/golden/conformer_encoder_layer.pt"
+        ]
       },
       "ttnn": {
         "status": "pending",
@@ -388,8 +422,13 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 1.0,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/reference/functional.py",
+          "models/demos/facebook_seamless_m4t_v2_large/reference/golden/text_encoder_layer.pt"
+        ]
       },
       "ttnn": {
         "status": "pending",
@@ -418,8 +457,13 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 1.0,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/reference/functional.py",
+          "models/demos/facebook_seamless_m4t_v2_large/reference/golden/text_decoder_layer.pt"
+        ]
       },
       "ttnn": {
         "status": "pending",
@@ -447,8 +491,13 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 1.0,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/reference/functional.py",
+          "models/demos/facebook_seamless_m4t_v2_large/reference/golden/t2u_decoder_layer.pt"
+        ]
       },
       "ttnn": {
         "status": "pending",
@@ -477,8 +526,13 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 1.0,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/reference/functional.py",
+          "models/demos/facebook_seamless_m4t_v2_large/reference/golden/conformer_adapter_layer.pt"
+        ]
       },
       "ttnn": {
         "status": "pending",
@@ -509,8 +563,14 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 1.0,
+        "attempts": 1,
+        "notes": "2-layer override for verification (real model has 24/6); bit-exact vs HF",
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/reference/functional.py",
+          "models/demos/facebook_seamless_m4t_v2_large/reference/golden/speech_encoder.pt"
+        ]
       },
       "ttnn": {
         "status": "pending",
@@ -540,8 +600,14 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 1.0,
+        "attempts": 1,
+        "notes": "2-layer override for verification (real model has 24); structure verified bit-exact, full-model golden too large to commit",
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/reference/functional.py",
+          "models/demos/facebook_seamless_m4t_v2_large/reference/golden/text_encoder.pt"
+        ]
       },
       "ttnn": {
         "status": "pending",
@@ -571,8 +637,14 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 1.0,
+        "attempts": 1,
+        "notes": "2-layer override for verification (real model has 24); structure verified bit-exact, full-model golden too large to commit",
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/reference/functional.py",
+          "models/demos/facebook_seamless_m4t_v2_large/reference/golden/text_decoder.pt"
+        ]
       },
       "ttnn": {
         "status": "pending",
@@ -600,8 +672,14 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 1.0,
+        "attempts": 1,
+        "notes": "2-layer override for verification (real model has 24/6); bit-exact vs HF",
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/reference/functional.py",
+          "models/demos/facebook_seamless_m4t_v2_large/reference/golden/t2u_encoder.pt"
+        ]
       },
       "ttnn": {
         "status": "pending",
@@ -632,8 +710,13 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 1.0,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/reference/functional.py",
+          "models/demos/facebook_seamless_m4t_v2_large/reference/golden/t2u_decoder.pt"
+        ]
       },
       "ttnn": {
         "status": "pending",
@@ -660,8 +743,13 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 1.0,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/reference/functional.py",
+          "models/demos/facebook_seamless_m4t_v2_large/reference/golden/hifigan_vocoder.pt"
+        ]
       },
       "ttnn": {
         "status": "pending",
@@ -689,8 +777,13 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 1.0,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/reference/functional.py",
+          "models/demos/facebook_seamless_m4t_v2_large/reference/golden/code_hifigan_vocoder.pt"
+        ]
       },
       "ttnn": {
         "status": "pending",
@@ -722,8 +815,13 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 1.0,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/reference/functional.py",
+          "models/demos/facebook_seamless_m4t_v2_large/reference/golden/seamless_m4t_v2.pt"
+        ]
       },
       "ttnn": {
         "status": "pending",
@@ -779,6 +877,66 @@
       "tick": 4,
       "ts": "2026-05-28T00:43:17Z",
       "action": "reference[seamless_ffn,conformer_self_attention]:retry-ok",
+      "result": "ok"
+    },
+    {
+      "tick": 5,
+      "ts": "2026-05-28T00:46:55Z",
+      "action": "reference[variance_predictor,hifigan_residual_block]",
+      "result": "ok"
+    },
+    {
+      "tick": 6,
+      "ts": "2026-05-28T00:52:10Z",
+      "action": "reference[conformer_feature_projection,conformer_encoder_layer]",
+      "result": "ok"
+    },
+    {
+      "tick": 7,
+      "ts": "2026-05-28T00:56:00Z",
+      "action": "reference[text_encoder_layer,text_decoder_layer]",
+      "result": "ok"
+    },
+    {
+      "tick": 8,
+      "ts": "2026-05-28T01:02:59Z",
+      "action": "reference[t2u_decoder_layer,conformer_adapter_layer]",
+      "result": "ok"
+    },
+    {
+      "tick": 9,
+      "ts": "2026-05-28T01:28:00Z",
+      "action": "reference[text_encoder,text_decoder]",
+      "result": "ok"
+    },
+    {
+      "tick": 10,
+      "ts": "2026-05-28T01:35:44Z",
+      "action": "reference[speech_encoder,t2u_encoder]",
+      "result": "ok"
+    },
+    {
+      "tick": 11,
+      "ts": "2026-05-28T01:44:33Z",
+      "action": "reference[t2u_decoder,hifigan_vocoder]",
+      "result": "ok"
+    },
+    {
+      "tick": 12,
+      "ts": "2026-05-28T01:51:42Z",
+      "action": "reference[code_hifigan_vocoder,seamless_m4t_v2] -- REFERENCE PHASE COMPLETE",
+      "result": "ok"
+    },
+    {
+      "tick": 13,
+      "ts": "2026-05-28T02:05:47Z",
+      "action": "ttnn[layernorm]",
+      "result": "ok"
+    },
+    {
+      "tick": 14,
+      "ts": "2026-05-28T02:09:29Z",
+      "action": "ttnn[scaled_word_embedding]",
       "result": "ok"
     }
   ],
