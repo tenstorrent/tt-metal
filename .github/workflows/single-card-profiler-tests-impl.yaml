@@ -1,4 +1,4 @@
-name: "[internal] Galaxy profiler tests impl"
+name: "[internal] Single-card profiler tests impl"
 
 on:
   workflow_call:
@@ -12,6 +12,13 @@ on:
       wheel-artifact-name:
         required: true
         type: string
+      enabled-skus:
+        required: false
+        type: string
+      test-selection:
+        required: false
+        type: string
+        default: "all"
       ref:
         required: false
         type: string
@@ -35,7 +42,7 @@ jobs:
     outputs:
       matrix: ${{ steps.build-matrix.outputs.matrix }}
     env:
-      TESTS_YAML_PATH: ./tests/pipeline_reorg/galaxy_profiler_tests.yaml
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/single_card_profiler_tests.yaml
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -61,10 +68,10 @@ jobs:
         run: |
           python3 .github/scripts/utils/prepare_test_matrix.py \
             ${{ env.TESTS_YAML_PATH }} \
-            "wh_galaxy" \
+            "${{ inputs.enabled-skus }}" \
             ./.github/sku_config.yaml
 
-  galaxy-profiler-tests:
+  single-card-profiler-tests:
     needs: load-test-matrix
     strategy:
       fail-fast: false
@@ -78,7 +85,9 @@ jobs:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
-        ARCH_NAME: wormhole_b0
+        # Derive arch from SKU prefix — bh_* runs on blackhole, anything else
+        # is wormhole_b0. Avoids carrying an arch field on every matrix entry.
+        ARCH_NAME: ${{ startsWith(matrix.test-group.sku, 'bh_') && 'blackhole' || 'wormhole_b0' }}
         LOGURU_LEVEL: INFO
         PROFILER_SCRIPTS_ROOT: /work/tools/tracy
         PROFILER_TEST_SCRIPTS_ROOT: /work/tests/tt_metal/tools/profiler
@@ -86,14 +95,14 @@ jobs:
         PROFILER_OUTPUT_DIR: /work/generated/profiler/reports
         DONT_USE_VIRTUAL_ENVIRONMENT: 1
       volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - ${{ github.workspace }}/docker-job:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
         - /mnt/MLPerf:/mnt/MLPerf:ro
       options: "--device /dev/tenstorrent"
     defaults:
       run:
         shell: bash
-        working-directory: /work # https://github.com/actions/runner/issues/878
+        working-directory: /work
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -114,8 +123,30 @@ jobs:
           enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          MODE_FLAG: ${{ inputs.test-selection == 'post-commit' && '--post-commit' || '--full' }}
         run: |
-          bash tests/scripts/wh_6u/run_wh_6u_profiler_tests.sh ${{ matrix.test-group.cmd }}
+          python3 tools/tt-power-sidecar/tt_power_sidecar.py \
+            --backend sysfs \
+            --out /work/power_report.json \
+            -- bash tests/scripts/single_card/run_single_card_profiler_tests.sh "$MODE_FLAG" ${{ matrix.test-group.cmd }}
+      - name: Upload power report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: power-report-profiler-${{ matrix.test-group.cmd }}-${{ matrix.test-group.sku }}
+          # /docker-job/ is the host-side mount of the Docker runner's /work/ directory.
+          # The sidecar writes --out /work/power_report.json inside the container;
+          # this host path is what the upload-artifact action reads.
+          path: ${{ github.workspace }}/docker-job/power_report.json
+          if-no-files-found: warn
+          retention-days: 30
+      - name: 📊 CCache Report
+        if: ${{ !cancelled() }}
+        run: |
+          echo "::group::CCache Statistics"
+          ccache --show-stats || echo "ccache stats not available"
+          echo "::endgroup::"
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
