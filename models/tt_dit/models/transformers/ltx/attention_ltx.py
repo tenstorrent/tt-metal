@@ -18,7 +18,7 @@ import torch
 import ttnn
 from models.common.utility_functions import is_blackhole
 
-from ....layers.linear import ColParallelLinear, Linear
+from ....layers.linear import ColParallelLinear
 from ....layers.module import Module
 from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
@@ -124,19 +124,19 @@ class LTXAttention(Module):
             ccl_manager=ccl_manager,
         )
 
-        # Per-head gate on device. dtype=ttnn.float32 routes the matmul through
-        # HiFi4 + fp32 dest acc + packer_l1_acc (see MATH_FIDELITY in
-        # layers/linear.py) so the K=in_features reduction matches the previous
-        # host fp32 F.linear baseline (PCC ≥ 0.997) without the per-call
-        # device→host→device round-trip and SP all-gather.
+        # Per-head gate: ColParallel sharded on num_heads matches the SDPA-output
+        # head layout the gate multiplies. dtype=ttnn.float32 routes the matmul
+        # through HiFi4 + fp32 dest acc to match the host fp32 baseline (PCC ≥ 0.997).
         self.apply_gated_attention = apply_gated_attention
         if apply_gated_attention:
-            self.to_gate_logits = Linear(
+            self.to_gate_logits = ColParallelLinear(
                 in_features=self.query_input_dim,
                 out_features=self.num_heads,
                 bias=True,
                 dtype=ttnn.float32,
                 mesh_device=mesh_device,
+                mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+                ccl_manager=ccl_manager,
             )
 
         self.dummy_joint_input = bf16_tensor(torch.zeros((1, self.n_local_heads, 0, self.head_dim)), device=mesh_device)
@@ -267,29 +267,29 @@ class LTXAttention(Module):
         )
         return output
 
-    def _compute_gate(self, spatial_1BND: ttnn.Tensor) -> ttnn.Tensor | None:
+    def _compute_gate(
+        self, spatial_1BND: ttnn.Tensor, qkv_parallel_config: DiTParallelConfig | None
+    ) -> ttnn.Tensor | None:
         """Compute per-head gate on device with HiFi4 fp32 compute.
 
-        ``spatial_1BND`` is TP-gathered on dim 3 by ``forward()`` and may still be
-        SP-sharded on N. Each device runs the small ``in_features → num_heads``
-        matmul over its local N shard; mesh_partition heads across TP so the
-        result matches the BHNE layout of the SDPA output. Returns bf16
+        Pass ``qkv_parallel_config=self.parallel_config`` on Ring (fuses the AG of
+        ``spatial_1BND`` into this matmul, mirroring ``to_qkv``); pass ``None`` on
+        Linear where ``forward()`` has already AG'd ``spatial_1BND``. The ColParallel
+        matmul produces output already sharded on ``num_heads`` per TP device — the
+        BHNE layout the SDPA gate multiply expects. Returns bf16
         ``(B, H_local, N_local, 1)``, or None if gating is disabled.
         """
         if not self.apply_gated_attention or self.to_gate_logits.weight._data is None:
             return None
 
-        gate_logits = self.to_gate_logits(spatial_1BND, dtype=ttnn.float32)
+        gate_logits = self.to_gate_logits(spatial_1BND, parallel_config=qkv_parallel_config)
         gate = ttnn.multiply(ttnn.sigmoid(gate_logits), 2.0)
 
-        # (1, B, N, H) → (B, H, N, 1) via squeeze + last-two-dim transpose + unsqueeze.
+        # (1, B, N, H_local) → (B, H_local, N, 1).
         gate = ttnn.squeeze(gate, 0)
         gate = ttnn.transpose(gate, -2, -1)
         gate = ttnn.unsqueeze(gate, -1)
         gate = ttnn.typecast(gate, ttnn.bfloat16)
-
-        if self.parallel_config.tensor_parallel.factor > 1:
-            gate = ttnn.mesh_partition(gate, dim=1, cluster_axis=self.parallel_config.tensor_parallel.mesh_axis)
         return gate
 
     @staticmethod
@@ -458,12 +458,12 @@ class LTXAttention(Module):
                 spatial_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
             )
 
+        qkv_parallel_config = None if needs_explicit_ag else self.parallel_config
+
         # Compute per-head gate on device (HiFi4 + fp32 dest acc) before QKV projections
         # modify spatial_1BND. Reference: gate_logits = to_gate_logits(x), applied after
         # SDPA as: out = out.view(B,T,H,D) * (2*sigmoid(gate_logits)).unsqueeze(-1).
-        gate_bhne = self._compute_gate(spatial_1BND)
-
-        qkv_parallel_config = None if needs_explicit_ag else self.parallel_config
+        gate_bhne = self._compute_gate(spatial_1BND, qkv_parallel_config)
 
         if self.is_self:
             q_1BNF, k_1BNF, v_1BNF = self.to_qkv(
