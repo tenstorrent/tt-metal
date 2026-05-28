@@ -193,7 +193,7 @@ void kernel_main() {
     const auto output_addr_gen = TensorAccessor(output_args, output_addr);
 
     {
-        // DeviceZoneScopedN("combine-ethernet-flow");
+        DeviceZoneScopedN("combine-ethernet-flow");
         //  Sentinel-terminated fabric send loop
         while (true) {
             cb_wait_front(cb_route_info_id, 1);
@@ -211,12 +211,12 @@ void kernel_main() {
             uint32_t output_page_idx = route_info[2];
             uint32_t output_data_addr = cb_base + l1_alignment;
 
-            DPRINT_COMBINE << "Fabric send: route=" << route << " distance=" << distance
-                           << " page_idx=" << output_page_idx << ENDL();
+            // DPRINT_COMBINE << "Fabric send: route=" << route << " distance=" << distance
+            //                << " page_idx=" << output_page_idx << ENDL();
 
 #ifdef DEST_CHIP_ID
             {
-                DeviceZoneScopedN("FABRIC-send");
+                // DeviceZoneScopedN("FABRIC-send");
                 fabric_set_unicast_route<false>(
                     (volatile tt_l1_ptr LowLatencyPacketHeader*)unicast_packet_header, distance);
                 fabric_send_noc_unicast<fabric_max_packet_size>(
