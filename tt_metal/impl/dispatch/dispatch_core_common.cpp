@@ -24,9 +24,8 @@ DispatchCoreAxis get_default_dispatch_core_axis(std::optional<tt::tt_fabric::Fab
         fabric_tensix_config.value_or(tt::tt_fabric::FabricTensixConfig::DISABLED) ==
             tt_fabric::FabricTensixConfig::DISABLED) {
         return DispatchCoreAxis::COL;
-    } else {
-        return DispatchCoreAxis::ROW;
     }
+    return DispatchCoreAxis::ROW;
 }
 
 DispatchCoreType get_default_dispatch_core_type() {
