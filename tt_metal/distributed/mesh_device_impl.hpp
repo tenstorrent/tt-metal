@@ -62,6 +62,7 @@ namespace tt::tt_metal {
 class SubDeviceManagerTracker;
 class ThreadPool;
 struct TraceDescriptor;
+class DriscL1Arena;
 
 namespace distributed {
 
@@ -157,6 +158,14 @@ private:
     // handler). Constructed by init_realtime_profiler_socket() and torn down in close_impl()
     // before the rest of the mesh shutdown so its receiver thread observes a live device.
     std::unique_ptr<RealtimeProfilerManager> realtime_profiler_;
+
+    // DRISC L1 arena for DRAM-sender GlobalCircularBuffer pages_sent allocations.
+    // Constructed eagerly in initialize_impl() when the HAL exposes programmable
+    // DRAM cores; torn down in close_impl(). Held as a shared_ptr so
+    // DriscL1Allocation handles can hold a weak_ptr back and become safe no-ops
+    // if the MeshDevice closes before their owning GCBs are destroyed (mirrors
+    // the MeshBuffer / weak_ptr<MeshDevice> pattern).
+    std::shared_ptr<::tt::tt_metal::DriscL1Arena> drisc_l1_arena_;
     // This is a reference device used to query properties that are the same for all devices in the mesh.
     IDevice* reference_device() const;
     // Recursively quiesce all submeshes.
@@ -290,6 +299,17 @@ public:
     void init_realtime_profiler_socket(const std::shared_ptr<MeshDevice>& mesh_device);
     void trigger_realtime_profiler_sync_check();
     D2HSocket* get_realtime_profiler_socket() const;
+
+    // DRISC L1 arena. Consumed by the DRAM-sender GlobalCircularBuffer ctor for
+    // pages_sent allocations. Constructed eagerly in initialize_impl() when the
+    // HAL exposes programmable DRAM cores; TT_FATAL otherwise.
+    ::tt::tt_metal::DriscL1Arena& drisc_l1_arena();
+
+    // Returns the logical DRAM core for `bank_id` whose physical NoC coord isn't already
+    // claimed by the SOC descriptor as a worker_endpoint or eth_endpoint — i.e. one
+    // safe for a DRISC kernel to occupy. Throws if no free subchannel exists, or
+    // TT_FATALs if bank_id is out of range. Used by the DRAM-sender GCB factory.
+    CoreCoord pick_unused_dram_logical_core(uint32_t bank_id) const;
     bool close() override;
     bool close_impl(MeshDevice* pimpl_wrapper);
     void enable_program_cache() override;

@@ -48,6 +48,7 @@
 #include <experimental/fabric/fabric_types.hpp>
 #include "distributed/fd_mesh_command_queue.hpp"
 #include "distributed/realtime_profiler_manager.hpp"
+#include "impl/buffers/drisc_l1_arena.hpp"
 #include "distributed/sd_mesh_command_queue.hpp"
 #include "tracy/Tracy.hpp"
 #include "tools/profiler/tt_metal_tracy.hpp"
@@ -57,6 +58,8 @@
 #include "debug/inspector/inspector.hpp"
 #include "sub_device/sub_device_manager.hpp"
 #include "sub_device/sub_device_manager_tracker.hpp"
+#include <set>
+#include "llrt/metal_soc_descriptor.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include "context/metal_context.hpp"
 #include <experimental/context/metal_env.hpp>
@@ -921,6 +924,11 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
         realtime_profiler_.reset();
     }
 
+    // DRISC L1 arena is torn down here so any GCB-owned allocation handles have
+    // already been released (GCBs are user-owned and the user's invariant is to
+    // destroy them before close).
+    drisc_l1_arena_.reset();
+
     if (is_initialized()) {
         sub_device_manager_tracker_.reset();
         scoped_devices_.reset();
@@ -1377,6 +1385,13 @@ bool MeshDeviceImpl::initialize_impl(
         }
     }
     Inspector::mesh_device_initialized(this);
+
+    // DRISC L1 arena: always constructed up-front when the HAL exposes programmable DRAM
+    // cores so users don't observe a lazy side-effect on first DRAM-sender GCB creation.
+    if (MetalContext::instance(context_id_).hal().has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
+        drisc_l1_arena_ = std::make_shared<::tt::tt_metal::DriscL1Arena>(context_id_);
+    }
+
     is_internal_state_initialized = true;
     return true;
 }
@@ -1396,6 +1411,42 @@ void MeshDeviceImpl::trigger_realtime_profiler_sync_check() {
 
 D2HSocket* MeshDeviceImpl::get_realtime_profiler_socket() const {
     return realtime_profiler_ ? realtime_profiler_->get_socket() : nullptr;
+}
+
+::tt::tt_metal::DriscL1Arena& MeshDeviceImpl::drisc_l1_arena() {
+    TT_FATAL(
+        drisc_l1_arena_ != nullptr,
+        "DriscL1Arena not constructed; set TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1 before "
+        "initializing the MeshDevice");
+    return *drisc_l1_arena_;
+}
+
+CoreCoord MeshDeviceImpl::pick_unused_dram_logical_core(uint32_t bank_id) const {
+    const auto& soc_desc = MetalContext::instance(context_id_).get_cluster().get_soc_desc(reference_device()->id());
+    const uint32_t num_banks = soc_desc.get_num_dram_views();
+    TT_FATAL(bank_id < num_banks, "bank_id={} out of range (num_banks={})", bank_id, num_banks);
+
+    std::set<std::pair<size_t, size_t>> reserved;
+    for (const auto& c : soc_desc.dram_view_worker_cores.at(bank_id)) {
+        reserved.emplace(c.x, c.y);
+    }
+    for (const auto& c : soc_desc.dram_view_eth_cores.at(bank_id)) {
+        reserved.emplace(c.x, c.y);
+    }
+
+    const uint32_t num_subchannels = soc_desc.get_grid_size(tt::CoreType::DRAM).y;
+    const size_t channel = soc_desc.get_channel_for_dram_view(static_cast<int>(bank_id));
+    for (uint32_t sub = 0; sub < num_subchannels; ++sub) {
+        tt::umd::CoreCoord coord = soc_desc.get_dram_core_for_channel(
+            static_cast<int>(channel), static_cast<int>(sub), tt::CoordSystem::TRANSLATED);
+        if (!reserved.contains({coord.x, coord.y})) {
+            return soc_desc.get_logical_dram_core_for_subchannel(static_cast<int>(bank_id), static_cast<int>(sub));
+        }
+    }
+    TT_THROW(
+        "No unused DRAM subchannel found for bank_id={}; all {} subchannels are reserved as worker/eth endpoints",
+        bank_id,
+        num_subchannels);
 }
 
 program_cache::detail::ProgramCache& MeshDeviceImpl::get_program_cache() { return *program_cache_; }
