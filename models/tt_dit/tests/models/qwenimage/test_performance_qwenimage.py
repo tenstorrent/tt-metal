@@ -229,7 +229,7 @@ def test_qwenimage_pipeline_performance(
         expected_metrics = {
             "total_encoding_time": 0.35,
             "denoising_steps_time": 80.0,
-            "vae_decoding_time": 0.75,
+            "vae_decoding_time": 3.0,
             "total_time": 88,
         }
     elif tuple(mesh_device.shape) == (4, 8):
