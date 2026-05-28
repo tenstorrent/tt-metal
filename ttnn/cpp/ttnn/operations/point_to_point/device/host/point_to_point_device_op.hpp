@@ -128,4 +128,27 @@ ttnn::operations::point_to_point::PointToPointOp::tensor_return_value_t point_to
     const std::optional<ttnn::Tensor>& optional_output_tensor = std::nullopt,
     const std::optional<ttnn::Tensor>& optional_intermediate_tensor = std::nullopt);
 }  // namespace prim
+
+namespace device_operation {
+// `create_output_tensors` resolves `optional_output_tensor` -> `tensor_return_value[1]`
+// and `optional_intermediate_tensor` -> `tensor_return_value[0]` (same Tensor object,
+// same Buffer*).  Letting the default reflective walk enumerate the optionals AND the
+// return slots produces duplicate `Buffer*`s in the buffer list, which trips the
+// aliasing guard in `resolve_bindings` (program_descriptor_patching.cpp).  For
+// contract-2 ops that guard makes the cache-hit fast path a no-op — buffer addresses
+// are never re-patched and the program runs against stale L1/DRAM addresses from the
+// first cache miss (issue #45422).
+//
+// Skip the optionals here: when set they alias entries in `tensor_return_value` and
+// would only add duplicates; when unset they contribute nothing.  The return-value
+// walk still enumerates the canonical intermediate/final buffers.
+template <>
+struct extract_tensor_buffers_t<::ttnn::operations::point_to_point::PointToPointOp::tensor_args_t, void> {
+    template <typename Out>
+    static void call(
+        const ::ttnn::operations::point_to_point::PointToPointOp::tensor_args_t& args, Out& out) {
+        out.push_back(args.input_tensor.buffer());
+    }
+};
+}  // namespace device_operation
 }  // namespace ttnn
