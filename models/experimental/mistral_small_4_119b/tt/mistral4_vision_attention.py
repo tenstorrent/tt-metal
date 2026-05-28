@@ -133,7 +133,7 @@ class TtPixtralAttention:
         ttnn.deallocate(v)
 
         # ── Concat heads → [1, 1, seq, hidden] ──────────────────────────
-        attn_flat = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        attn_flat = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(attn)
 
         # ── Output projection ────────────────────────────────────────────

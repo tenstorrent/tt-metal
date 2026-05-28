@@ -59,7 +59,7 @@ def _vision_rms_norm(x: ttnn.Tensor, weight: ttnn.Tensor, compute_kernel_config)
         x,
         weight=weight,
         epsilon=VISION_NORM_EPS,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
         compute_kernel_config=compute_kernel_config,
     )
 
