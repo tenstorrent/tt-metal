@@ -1,0 +1,12 @@
+[
+  {"src": "Hello world.", "src_lang": "eng", "tgt_lang": "fra", "ref": "Bonjour le monde."},
+  {"src": "Good morning.", "src_lang": "eng", "tgt_lang": "fra", "ref": "Bonjour."},
+  {"src": "Thank you very much.", "src_lang": "eng", "tgt_lang": "fra", "ref": "Merci beaucoup."},
+  {"src": "How are you today?", "src_lang": "eng", "tgt_lang": "fra", "ref": "Comment allez-vous aujourd'hui ?"},
+  {"src": "I love you.", "src_lang": "eng", "tgt_lang": "fra", "ref": "Je t'aime."},
+  {"src": "Where is the train station?", "src_lang": "eng", "tgt_lang": "fra", "ref": "Où est la gare ?"},
+  {"src": "The weather is nice today.", "src_lang": "eng", "tgt_lang": "fra", "ref": "Il fait beau aujourd'hui."},
+  {"src": "I would like a coffee.", "src_lang": "eng", "tgt_lang": "fra", "ref": "Je voudrais un café."},
+  {"src": "What time is it?", "src_lang": "eng", "tgt_lang": "fra", "ref": "Quelle heure est-il ?"},
+  {"src": "See you tomorrow.", "src_lang": "eng", "tgt_lang": "fra", "ref": "À demain."}
+]
