@@ -51,6 +51,16 @@ class DistributedNorm(LightweightModule):
             )
         self.TG = TG
 
+    def update(self, tensor: ttnn.Tensor) -> None:
+        """Pass-through to the wrapped ``RMSNorm.update``.
+
+        ``DistributedNorm`` owns no weights of its own; it just adds the
+        all-gather and (optionally) the sharded distributed-norm program
+        config around the underlying ``RMSNorm.forward``. Updating the
+        gamma therefore delegates to the wrapped norm.
+        """
+        self.norm.update(tensor)
+
     def forward(self, x, mode: Mode, norm_config=None):
         """Apply a norm, possibly gathering inputs if required."""
 
