@@ -27,14 +27,18 @@ from models.experimental.tt_symbiote.modules.linear import (
 )
 
 
-# Step-1 experiment toggle: when enabled (default), the single-device decode
-# fast path runs gate_proj and up_proj as two separate DRAM-sharded matmuls.
-# The gate matmul folds SILU into its program config (no separate unary), and
-# the explicit ``ttnn.mul(silu_gate, up)`` happens without an activation, so
-# we drop the chunk + sharded_to_interleaved that the fused path needed.
-# A/B by exporting ``DOTS_OCR_SPLIT_GATE_UP_DECODE=0`` to fall back to the
-# fused gate+up matmul + chunk + silu-fused multiply.
-_SPLIT_GATE_UP_DECODE = os.environ.get("DOTS_OCR_SPLIT_GATE_UP_DECODE", "1") != "0"
+# Step-1 experiment toggle (opt-in, default OFF): the single-device decode
+# fast path splits gate_proj and up_proj into two separate DRAM-sharded
+# matmuls instead of the fused gate+up matmul + chunk + silu-fused multiply.
+# Off by default because the split path still diverges numerically from the
+# verified fused path on the real model (late decoder layers produce
+# corrupted tokens, e.g. "2273" -> "2.73", table HTML repeating), and the
+# divergence is not in the matmul compute config -- swept LoFi, FP32 dest,
+# packer_l1_acc=False, and matching in0_block_w all reproduce the same
+# corruption. Opt in via ``DOTS_OCR_SPLIT_GATE_UP_DECODE=1`` for A/B work
+# while the root cause (input reshard 16c->8c, per-projection weight setup,
+# or BFP8 output unpack order) is being localized.
+_SPLIT_GATE_UP_DECODE = os.environ.get("DOTS_OCR_SPLIT_GATE_UP_DECODE", "0") != "0"
 
 
 class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFusedGateUp):
@@ -212,8 +216,6 @@ class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFuse
         gate_w, gate_b = self._get_gate_dram_sharded_weight()
         up_w, up_b = self._get_up_dram_sharded_weight()
 
-        # Match the swept config exactly: no fused activation. SILU happens
-        # on the eltwise mul below.
         gate_pc = _decode_gate_or_up_dram_sharded_program_config(input_shape, gate_w.shape, fused_activation=None)
         up_pc = _decode_gate_or_up_dram_sharded_program_config(input_shape, up_w.shape, fused_activation=None)
         assert gate_pc is not None and up_pc is not None, "split gate/up program config did not match expected shape"
@@ -237,19 +239,9 @@ class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFuse
             program_config=up_pc,
         )
 
-        # Deshard both matmul outputs to L1 interleaved so the silu_mul runs
-        # on the same layout the verified fused-gate-up path uses (chunk
-        # produces L1 interleaved halves there too). The DRAM-sharded matmul
-        # kernel requires its own output be width-sharded, so we do the
-        # transition here explicitly rather than asking ttnn.mul to consume
-        # sharded operands.
         gate = ttnn.sharded_to_interleaved(gate, ttnn.L1_MEMORY_CONFIG)
         up = ttnn.sharded_to_interleaved(up, ttnn.L1_MEMORY_CONFIG)
 
-        # silu-fused multiply -- input-A SILU via ``input_tensor_a_activations``
-        # plus ``fast_and_approximate_mode=True`` for the polynomial exp/sigmoid
-        # path. Identical to the fused path's silu_mul once gate and up are
-        # interleaved.
         gate_up_mul = ttnn.mul(
             gate,
             up,

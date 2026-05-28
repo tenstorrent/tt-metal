@@ -1106,6 +1106,7 @@ class TTNNLinearLLamaIColShardedWAllReducedFusedGateUp(TTNNLinearLLamaIColSharde
         self._gate_up_dram_bias = None
         # Decode compute_kernel_config matches the verified DRAM-sharded
         # benchmark (LoFi, 71us). Prefill stays on HiFi2 for BFP4 accuracy.
+        # The split path (``forward_silu_mul_split``) reuses this same config.
         self._gate_up_decode_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=False,

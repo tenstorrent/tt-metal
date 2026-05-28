@@ -580,6 +580,140 @@ def test_dots_ocr_decode_one_layer_sdpa_cost_sweep(mesh_device, num_decode_steps
     [_resolve_mesh_device_shape()],
     indirect=True,
 )
+def test_dots_ocr_mlp_fused_vs_split_pcc(mesh_device):
+    """Localize where the split gate+up path's output diverges from the fused
+    gate+up path's output.
+
+    Runs the same MLP twice on the same input -- once down the fused gate+up
+    matmul + chunk + silu-fused mul path, once down the split gate / up
+    matmuls + silu_mul path -- and prints per-stage PCC: gate matmul, up
+    matmul, silu_mul, and down_proj. The matmul kernels are nominally
+    algebraically equivalent (same source weights, same activation, same
+    compute_kernel_config), so any large PCC drop pinpoints the stage where
+    the split path needs investigation rather than blind config tweaking.
+    """
+    import torch.nn.functional as F
+
+    from models.common.utility_functions import comp_pcc
+    from models.experimental.tt_symbiote.modules import dots_ocr_mlp as dots_ocr_mlp_mod
+
+    torch.manual_seed(0)
+    torch.set_grad_enabled(False)
+
+    from transformers import AutoConfig, AutoModelForCausalLM
+
+    model_config = AutoConfig.from_pretrained(DOTS_OCR_LOCAL_PATH, trust_remote_code=True)
+    model_config.num_hidden_layers = 1
+    hf_model = AutoModelForCausalLM.from_config(model_config, trust_remote_code=True).to(dtype=torch.bfloat16).eval()
+    torch_mlp = hf_model.model.layers[0].mlp
+
+    mlp = dots_ocr_mlp_mod.TTNNDotsOCRMLP.from_torch(torch_mlp)
+    mlp._unique_name = "model.layers.0.mlp"
+    mlp.override_children_module_names()
+    set_device(mlp, mesh_device, register_forward_hook=False, dump_visualization=False)
+    mlp.preprocess_weights()
+    mlp.move_weights_to_device()
+
+    hidden_size = int(torch_mlp.gate_proj.in_features)
+    hidden_states_torch = torch.randn(1, 1, hidden_size, dtype=torch.bfloat16)
+    base_input = ttnn.from_torch(
+        hidden_states_torch,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    fused = mlp.fused_gate_up_proj
+    assert fused.split_decode_available(), "split path weights not built; cannot run A/B"
+
+    def _to_torch(tt_tensor):
+        num_devices = int(mesh_device.get_num_devices()) if hasattr(mesh_device, "get_num_devices") else 1
+        if num_devices > 1:
+            return ttnn.to_torch(
+                tt_tensor,
+                mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
+            )[
+                :1
+            ].to(torch.bfloat16)
+        return ttnn.to_torch(tt_tensor).to(torch.bfloat16)
+
+    fused_out = fused(base_input, output_memory_config=ttnn.L1_MEMORY_CONFIG)
+    if fused_out.memory_config().is_sharded():
+        fused_out = ttnn.sharded_to_interleaved(fused_out, ttnn.L1_MEMORY_CONFIG)
+    fused_gate, fused_up = ttnn.chunk(fused_out, 2, dim=-1)
+    ttnn.synchronize_device(mesh_device)
+
+    split_out = fused.forward_silu_mul_split(base_input)
+    ttnn.synchronize_device(mesh_device)
+
+    fused_gate_torch = _to_torch(fused_gate)
+    fused_up_torch = _to_torch(fused_up)
+
+    fused_silu_mul = F.silu(fused_gate_torch.float()) * fused_up_torch.float()
+
+    split_silu_mul_torch = _to_torch(split_out).float()
+
+    pcc_silu_mul, pcc_silu_mul_msg = comp_pcc(
+        fused_silu_mul.reshape(-1).float(),
+        split_silu_mul_torch.reshape(-1),
+        pcc=0.99,
+    )
+
+    print(
+        f"\n[mlp-pcc] fused_silu_mul vs split_silu_mul: {pcc_silu_mul_msg}",
+        flush=True,
+    )
+
+    fused_in_torch = hidden_states_torch.float().reshape(-1, hidden_size)
+    torch_gate = (fused_in_torch @ torch_mlp.gate_proj.weight.float().T).reshape(1, 1, -1)
+    torch_up = (fused_in_torch @ torch_mlp.up_proj.weight.float().T).reshape(1, 1, -1)
+
+    pcc_fused_gate, pcc_fused_gate_msg = comp_pcc(
+        torch_gate.reshape(-1),
+        fused_gate_torch.reshape(-1).float(),
+        pcc=0.99,
+    )
+    pcc_fused_up, pcc_fused_up_msg = comp_pcc(
+        torch_up.reshape(-1),
+        fused_up_torch.reshape(-1).float(),
+        pcc=0.99,
+    )
+    torch_silu_mul = F.silu(torch_gate) * torch_up
+    pcc_fused_vs_torch, pcc_fused_vs_torch_msg = comp_pcc(
+        torch_silu_mul.reshape(-1),
+        fused_silu_mul.reshape(-1),
+        pcc=0.99,
+    )
+    pcc_split_vs_torch, pcc_split_vs_torch_msg = comp_pcc(
+        torch_silu_mul.reshape(-1),
+        split_silu_mul_torch.reshape(-1),
+        pcc=0.99,
+    )
+    print(
+        f"[mlp-pcc] torch_gate vs fused_gate: {pcc_fused_gate_msg}\n"
+        f"[mlp-pcc] torch_up   vs fused_up:   {pcc_fused_up_msg}\n"
+        f"[mlp-pcc] torch silu_mul vs fused silu_mul: {pcc_fused_vs_torch_msg}\n"
+        f"[mlp-pcc] torch silu_mul vs split silu_mul: {pcc_split_vs_torch_msg}",
+        flush=True,
+    )
+
+    assert pcc_silu_mul, (
+        "split silu_mul output disagrees with fused silu_mul output -- "
+        "this is the root cause of the late-layer decode drift. PCC trace above pinpoints the stage."
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [_dots_ocr_device_params()],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [_resolve_mesh_device_shape()],
+    indirect=True,
+)
 def test_dots_ocr_prefill_one_layer(mesh_device):
     """Exercise one decoder layer in prefill mode with a paged KV cache."""
     from transformers import AutoConfig, AutoModelForCausalLM
