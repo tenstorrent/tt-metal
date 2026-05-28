@@ -58,7 +58,7 @@
   - (1,1,64,320)   G=32  : PCC=0.999991, rel_rms=0.0043, max_abs=0.0694
   - (1,1,1024,256) G=8   : PCC=0.999996, rel_rms=0.0042, max_abs=0.0952
 
-### [ ] Refinement 1 — Numerical configurability + precision fix
+### [~] Refinement 1 — Numerical configurability + precision fix
 
 **Goal**: add `ttnn.float32` and `ttnn.bfloat8_b` to `SUPPORTED["dtype"]` and
 `SUPPORTED["affine_dtype"]`; expose `compute_kernel_config: ttnn.ComputeKernelConfig`
@@ -104,6 +104,72 @@ file it preemptively — measure with the cheap fix first.
 - Precision baseline (the four shapes in
   `test_groupnorm_sc_N_1_HW_C_precision_baseline.py`) does not regress
   (PCC stays ≥ 0.9999 on those shapes).
+
+### [ ] Refinement 1a — Float32 stats CBs via helper-Accumulate restructure
+
+**Goal**: promote the variance/stats intermediate CBs (`cb_running_acc_sum`,
+`cb_running_acc_sumsq`, `cb_group_mean`, `cb_group_rcp_std`, `cb_scratch_a`,
+`cb_scratch_b`, `cb_inv_N_scalar`) to `ttnn.float32` and tag
+`UnpackToDestFp32` on the SFPU-only accumulator CBs — so the cross-iteration
+reduce reload stays at full fp32 precision rather than truncating to TF32
+through srcA. Refinement 1 attempted this and observed NaN output on G > 1
+cases; the empirical landing in R1 was fp32 dest with input-dtype L1 stats
+CBs, which leaves a precision floor in place.
+
+**Implementation plan / specific next levers**:
+1. **Lever A — split the reduce into per-tile streaming + manual accumulator
+   reload.** Instead of relying on `compute_kernel_lib::reduce<>` with
+   `Accumulate{cb_running_acc_sum, iter}`, use a per-tile reduce into a
+   throwaway 1-tile CB and then a manual `copy_tile(running_acc_sum, 0,
+   dst_idx=0)` followed by `add_tiles_to_dst` (or equivalent). This makes
+   the reload path fully visible to the kernel and bypasses whatever the
+   helper's reload sequence is doing under UnpackToDestFp32. Reference:
+   `ttnn/cpp/ttnn/kernel_lib/streaming_reduce_helpers.hpp`.
+2. **Lever B — switch to the matmul-based reduce path** (`use_matmul=true`
+   in `reduce<>`). Different reload sequence — see
+   `reduce_helpers_compute.inl:138` `reduce_with_matmul_init_with_dt`. May
+   handle Float32 accumulator + Float32 input pairing better.
+3. **Lever C — DPRINT the running_acc_sum CB at iter=1 of phase R** to see
+   the actual L1 bit pattern after the first pack and confirm it's
+   well-formed fp32. The inf/1e37 values strongly suggest a stride/format
+   mismatch on the reload unpack.
+
+**Done when**: stats CBs are Float32 + UnpackToDestFp32-tagged on the
+reload-only ones (cb_running_acc_sum, cb_running_acc_sumsq, cb_group_mean,
+cb_group_rcp_std); all 58 acceptance tests still pass; precision matrix
+PCC > 0.99 across all combos; `1x1x16384x320` should additionally lift
+above PCC 0.995 (if not, Refinement 2 — two-pass variance — is needed).
+
+### [ ] Refinement 1b — bf8b activation precision
+
+**Goal**: lift the EXCLUSIONS gate on bf8b activations so the
+`SUPPORTED["dtype"] = [bf16, fp32, bf8b]` actually accepts cells. Currently
+`EXCLUSIONS = [{"dtype": ttnn.bfloat8_b}]` because empirically bf8b works
+only on `Ct=1 + no_affine` (PCC=0.99994); multi-tile or with affine paths
+diverge (max_abs=inf at random positions, PCC drops below 0.99).
+
+**Implementation plan / specific next levers**:
+1. **Lever A — verify the bf8b mask multiply.** The reader builds masks in
+   bf16 always (`write_mask_tile` writes 16-bit values). For a bf8b input
+   tile multiplied by a bf16 mask via `mul<NONE>`, the FPU unpacks input
+   (bf8b → TF32 in srcA) and mask (bf16 → TF32 in srcB) — should be safe.
+   But the pack to `cb_scratch_a` (currently forced to bf16 when input is
+   bf8b in R1) and subsequent reduce reload might be where the inf elements
+   appear. **Probe**: DPRINT `cb_scratch_a` after the mul on a multi-tile
+   case.
+2. **Lever B — try `bfp8_pack_precise = true`** in `ComputeConfigDescriptor`.
+   This activates a more careful bf8b pack mode and may stabilize the
+   per-block shared-exponent encoding for the partial-mask tiles.
+3. **Lever C — pack the output as bf8b but route intermediates through
+   bf16** (already done in R1 — `accumulator_format = bf16` when input is
+   bf8b). If this isn't enough, also force `cb_input_tiles_R/A` to bf16 in
+   compute, requiring a tilize-style bf8b→bf16 step the host has to inject.
+
+**Done when**: `EXCLUSIONS` no longer contains `{"dtype": bf8b}` (or the
+list is narrowed to a specific bf8b corner like `{"dtype": bf8b, "alignment":
+"c_non_aligned"}` only — the structural-gap case the verifier originally
+predicted); `test_groupnorm_sc_N_1_HW_C[bf8b-*]` parametrize cells stay
+above PCC ≥ 0.99.
 
 ### [ ] Refinement 2 — Affine layout TILE
 

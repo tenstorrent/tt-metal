@@ -5,13 +5,18 @@
 //
 // Responsibilities (per batch n):
 //   1. One-shot startup: build scaler_one (1.0 reduce scaler), inv_N_scalar
-//      (1/N_per_g at (0,0)), eps_scalar (eps at (0,0)).
+//      (1/N_per_g at (0,0); bf16 or fp32 depending on stats format).
 //   2. Phase R: for each (g, T_in_g_span, r): push one mask tile to
 //      cb_mask_stream and one input tile to cb_input_tiles_R (or 32 sticks to
 //      cb_input_rm_R for RM input).
 //   3. Phase A: per output T, push HAS_GAMMA gamma sticks (replicated 32x),
 //      HAS_BETA beta sticks (replicated 32x), then for each g touching T push
 //      a mask tile to cb_mask_stream, then for each r push an input tile.
+//
+// Refinement 1: bf16 manual fills for the mask (always bf16) are unchanged.
+// The inv_N scalar can now be either bf16 or fp32 depending on
+// INV_N_IS_FP32; RM-input chunk sizes are derived from element-byte CT args
+// rather than hard-coded `* 2`.
 //
 // Iteration order matches the compute kernel exactly.
 
@@ -35,11 +40,11 @@ constexpr uint32_t CB_INV_N_SCALAR = 10;
 
 constexpr uint32_t TILE_DIM = 32;
 constexpr uint32_t FACE_DIM = 16;
-constexpr uint32_t FACE_HW = FACE_DIM * FACE_DIM;  // 256 bf16 = 512 bytes
-constexpr uint32_t TILE_HW = TILE_DIM * TILE_DIM;  // 1024 bf16 = 2048 bytes
+constexpr uint32_t FACE_HW = FACE_DIM * FACE_DIM;  // 256 elems
+constexpr uint32_t TILE_HW = TILE_DIM * TILE_DIM;  // 1024 elems
 constexpr uint16_t BF16_ONE = 0x3F80;              // 1.0 in bf16 (top 16 bits of 0x3F800000)
 constexpr uint16_t BF16_ZERO = 0x0000;
-constexpr uint32_t CHUNK_BYTES = TILE_DIM * 2;  // 64 bytes — one tile-column chunk per stick (bf16)
+constexpr uint32_t MASK_TILE_BYTES = TILE_HW * 2;  // mask is always bf16 → 2048 bytes
 
 // -----------------------------------------------------------------------------
 // Helpers — mask construction, scalar tile fill, L1 zeroing.
@@ -61,14 +66,12 @@ FORCE_INLINE void zero_l1(uint32_t l1_addr, uint32_t n_bytes) {
     }
 }
 
-// Write a row-replicated mask tile to L1 at l1_addr.
+// Write a row-replicated bf16 mask tile to L1 at l1_addr.
 //   lane_start, lane_end ∈ [0, 32], lane_start ≤ lane_end.
 //   Pattern[c] = 1.0 if lane_start ≤ c < lane_end else 0.0
-// Tile face layout: 4 faces of 16x16 bf16 each, stored as:
-//   face 0 (rows 0-15, cols 0-15) | face 1 (rows 0-15, cols 16-31) |
-//   face 2 (rows 16-31, cols 0-15) | face 3 (rows 16-31, cols 16-31)
+// Tile face layout: 4 faces of 16x16 bf16 each (top-left, top-right,
+// bottom-left, bottom-right).
 FORCE_INLINE void write_mask_tile(uint32_t l1_addr, uint32_t lane_start, uint32_t lane_end) {
-    // Build the 32-element row pattern as 16 uint16_t pairs in 8 uint32_t words.
     uint16_t pattern[TILE_DIM];
     for (uint32_t c = 0; c < TILE_DIM; ++c) {
         pattern[c] = (c >= lane_start && c < lane_end) ? BF16_ONE : BF16_ZERO;
@@ -76,28 +79,28 @@ FORCE_INLINE void write_mask_tile(uint32_t l1_addr, uint32_t lane_start, uint32_
 
     volatile tt_l1_ptr uint16_t* tile = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr);
 
-    // Face 0: rows 0-15, cols 0-15 (pattern[0..15]) — replicate pattern row 16 times.
+    // Face 0: rows 0-15, cols 0-15
     for (uint32_t r = 0; r < FACE_DIM; ++r) {
         uint32_t face_row_base = r * FACE_DIM;
         for (uint32_t c = 0; c < FACE_DIM; ++c) {
             tile[face_row_base + c] = pattern[c];
         }
     }
-    // Face 1: rows 0-15, cols 16-31 (pattern[16..31])
+    // Face 1: rows 0-15, cols 16-31
     for (uint32_t r = 0; r < FACE_DIM; ++r) {
         uint32_t face_row_base = FACE_HW + r * FACE_DIM;
         for (uint32_t c = 0; c < FACE_DIM; ++c) {
             tile[face_row_base + c] = pattern[FACE_DIM + c];
         }
     }
-    // Face 2: rows 16-31, cols 0-15 — same pattern as face 0.
+    // Face 2: rows 16-31, cols 0-15
     for (uint32_t r = 0; r < FACE_DIM; ++r) {
         uint32_t face_row_base = 2 * FACE_HW + r * FACE_DIM;
         for (uint32_t c = 0; c < FACE_DIM; ++c) {
             tile[face_row_base + c] = pattern[c];
         }
     }
-    // Face 3: rows 16-31, cols 16-31 — same as face 1.
+    // Face 3: rows 16-31, cols 16-31
     for (uint32_t r = 0; r < FACE_DIM; ++r) {
         uint32_t face_row_base = 3 * FACE_HW + r * FACE_DIM;
         for (uint32_t c = 0; c < FACE_DIM; ++c) {
@@ -106,13 +109,18 @@ FORCE_INLINE void write_mask_tile(uint32_t l1_addr, uint32_t lane_start, uint32_
     }
 }
 
-// Write a scalar tile (value at (0,0), zero elsewhere) to L1 at l1_addr.
+// Write a bf16 scalar tile (value at (0,0), zero elsewhere) to L1.
 FORCE_INLINE void write_scalar_tile_bf16(uint32_t l1_addr, float value) {
-    // Zero the full tile first.
     zero_l1(l1_addr, TILE_HW * 2);
-    // Set position (0,0) — face 0, row 0, col 0 — to bf16(value).
     volatile tt_l1_ptr uint16_t* tile = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr);
     tile[0] = float_to_bf16_bits(value);
+}
+
+// Write an fp32 scalar tile (value at (0,0), zero elsewhere) to L1.
+FORCE_INLINE void write_scalar_tile_fp32(uint32_t l1_addr, float value) {
+    zero_l1(l1_addr, TILE_HW * 4);
+    volatile tt_l1_ptr float* tile = reinterpret_cast<volatile tt_l1_ptr float*>(l1_addr);
+    tile[0] = value;
 }
 
 // Push one row-replicated mask tile to cb_mask_stream.
@@ -140,11 +148,20 @@ void kernel_main() {
     constexpr uint32_t Ht = get_compile_time_arg_val(8);
     constexpr uint32_t Ct = get_compile_time_arg_val(9);
     constexpr uint32_t EPS_BITS = get_compile_time_arg_val(10);
-    constexpr uint32_t STICK_BYTES = get_compile_time_arg_val(11);
+    [[maybe_unused]] constexpr uint32_t STICK_BYTES = get_compile_time_arg_val(11);
+    constexpr uint32_t INPUT_ELEM_BYTES = get_compile_time_arg_val(12);
+    constexpr uint32_t GAMMA_ELEM_BYTES = get_compile_time_arg_val(13);
+    constexpr uint32_t BETA_ELEM_BYTES = get_compile_time_arg_val(14);
+    constexpr uint32_t INV_N_IS_FP32 = get_compile_time_arg_val(15);
+
+    // Per-tensor "chunk bytes" = 32 channels worth of one element-row.
+    constexpr uint32_t INPUT_CHUNK_BYTES = TILE_DIM * INPUT_ELEM_BYTES;
+    constexpr uint32_t GAMMA_CHUNK_BYTES = TILE_DIM * GAMMA_ELEM_BYTES;
+    constexpr uint32_t BETA_CHUNK_BYTES = TILE_DIM * BETA_ELEM_BYTES;
 
     // TensorAccessorArgs — declared unconditionally with placeholders for absent
     // tensors, chained via next_compile_time_args_offset().
-    constexpr auto input_args = TensorAccessorArgs<12>();
+    constexpr auto input_args = TensorAccessorArgs<16>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
 
@@ -154,7 +171,6 @@ void kernel_main() {
     [[maybe_unused]] uint32_t beta_addr = get_arg_val<uint32_t>(2);
 
     // ----- Constants derived from CT args -----
-    constexpr uint32_t TILE_BYTES = TILE_HW * 2;  // bf16 tile size = 2048 bytes
     // Convert EPS_BITS (uint32 IEEE-754 single bit pattern) → float at runtime.
     float eps_f;
     {
@@ -166,9 +182,6 @@ void kernel_main() {
     // Accessors. Use the args' default AlignedPageSize so RM input (stick-sized
     // pages) and TILE input (tile-sized pages) both work.
     const auto input_accessor = TensorAccessor(input_args, input_addr);
-    // We construct gamma/beta accessors only if needed at runtime — but declare
-    // them at compile time so chain stays consistent. Build them inside the
-    // `if constexpr (HAS_*)` blocks.
 
     // ============================================================
     // ONE-SHOT STARTUP: build scaler/constant tiles
@@ -178,13 +191,17 @@ void kernel_main() {
     dataflow_kernel_lib::
         calculate_and_prepare_reduce_scaler<CB_SCALER_ONE, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_SCALAR>();
 
-    // cb_inv_N_scalar — manual: 1/N_per_g at position (0,0).
-    // (eps is bit-packed into the compute kernel's CT args via SfpuAddScalar —
-    // no scalar CB needed on the compute side.)
+    // cb_inv_N_scalar — manual scalar tile at position (0,0). bf16 or fp32
+    // depending on INV_N_IS_FP32 (matches the stats CB format).
+    // (eps is bit-packed into the compute kernel's CT args via SfpuAddScalar.)
     {
         cb_reserve_back(CB_INV_N_SCALAR, 1);
         uint32_t l1 = get_write_ptr(CB_INV_N_SCALAR);
-        write_scalar_tile_bf16(l1, INV_N);
+        if constexpr (INV_N_IS_FP32 == 1) {
+            write_scalar_tile_fp32(l1, INV_N);
+        } else {
+            write_scalar_tile_bf16(l1, INV_N);
+        }
         cb_push_back(CB_INV_N_SCALAR, 1);
     }
     (void)eps_f;  // retained for potential future use; eps currently flows via CT arg
@@ -229,22 +246,22 @@ void kernel_main() {
                         cb_push_back(CB_INPUT_TILES_R, 1);
                     } else {
                         // ROW_MAJOR_LAYOUT input — read 32 sticks (one tile-row block) of
-                        // the c-tile column T. Valid bytes in this chunk may be < 64 when
-                        // C is not tile-aligned (partial last C-tile).
+                        // the c-tile column T. Valid bytes in this chunk may be < INPUT_CHUNK_BYTES
+                        // when C is not tile-aligned (partial last C-tile).
                         const uint32_t valid_ch = (T_base + TILE_DIM <= C) ? TILE_DIM : (C - T_base);
-                        const uint32_t valid_bytes = valid_ch * 2;
+                        const uint32_t valid_bytes = valid_ch * INPUT_ELEM_BYTES;
                         const uint32_t start_stick = n * HW + r * TILE_DIM;
-                        const uint32_t byte_offset = T * CHUNK_BYTES;
+                        const uint32_t byte_offset = T * INPUT_CHUNK_BYTES;
 
                         cb_reserve_back(CB_INPUT_RM_R, TILE_DIM);
                         uint32_t l1_base = get_write_ptr(CB_INPUT_RM_R);
                         // If partial last-C-tile, zero-fill the buffer so padding lanes are 0.
-                        if (valid_bytes < CHUNK_BYTES) {
-                            zero_l1(l1_base, TILE_DIM * CHUNK_BYTES);
+                        if (valid_bytes < INPUT_CHUNK_BYTES) {
+                            zero_l1(l1_base, TILE_DIM * INPUT_CHUNK_BYTES);
                         }
                         for (uint32_t row = 0; row < TILE_DIM; ++row) {
                             uint64_t noc_addr = input_accessor.get_noc_addr(start_stick + row, byte_offset);
-                            noc_async_read(noc_addr, l1_base + row * CHUNK_BYTES, valid_bytes);
+                            noc_async_read(noc_addr, l1_base + row * INPUT_CHUNK_BYTES, valid_bytes);
                         }
                         noc_async_read_barrier();
                         cb_push_back(CB_INPUT_RM_R, TILE_DIM);
@@ -256,15 +273,6 @@ void kernel_main() {
         // ------------------------------------------------------------
         // PHASE A: per output T, push gamma/beta (if any), then for each g
         //   touching T push a mask tile, then for each r push an input tile.
-        //
-        // Compute interleaves expansion + apply per T (see compute kernel).
-        // The expected push sequence per T is:
-        //   1. (Compute does NOT consume anything new for the means/rcp_std
-        //      expansion EXCEPT the masks below.)
-        //   2. for g touching T (in increasing order): push 1 mask tile.
-        //   3. If HAS_GAMMA: push 32 sticks of gamma (chunk for T) to cb_gamma_rm.
-        //   4. If HAS_BETA: push 32 sticks of beta (chunk for T) to cb_beta_rm.
-        //   5. for r in 0..Ht-1: push 1 input tile.
         // ------------------------------------------------------------
         for (uint32_t T = 0; T < Ct; ++T) {
             const uint32_t T_base = T * TILE_DIM;
@@ -275,7 +283,6 @@ void kernel_main() {
                 const uint32_t g_start_ch = g * Cg;
                 const uint32_t g_end_ch_raw = (g + 1) * Cg;
                 const uint32_t g_end_ch = g_end_ch_raw < C ? g_end_ch_raw : C;
-                // Does group g touch tile T? Intersection [g_start_ch, g_end_ch) ∩ [T_base, T_base+TILE_DIM)
                 if (g_start_ch >= T_base + TILE_DIM) {
                     continue;
                 }
@@ -291,18 +298,18 @@ void kernel_main() {
             // Push gamma sticks (replicated 32×) — chunk for T.
             if constexpr (HAS_GAMMA) {
                 const auto gamma_accessor = TensorAccessor(gamma_args, gamma_addr);
-                const uint32_t valid_bytes = c_in_tile * 2;
-                const uint32_t byte_offset = T * CHUNK_BYTES;
+                const uint32_t valid_bytes = c_in_tile * GAMMA_ELEM_BYTES;
+                const uint32_t byte_offset = T * GAMMA_CHUNK_BYTES;
 
                 cb_reserve_back(CB_GAMMA_RM, TILE_DIM);
                 uint32_t l1_base = get_write_ptr(CB_GAMMA_RM);
-                if (valid_bytes < CHUNK_BYTES) {
-                    zero_l1(l1_base, TILE_DIM * CHUNK_BYTES);
+                if (valid_bytes < GAMMA_CHUNK_BYTES) {
+                    zero_l1(l1_base, TILE_DIM * GAMMA_CHUNK_BYTES);
                 }
                 // Gamma is shape (1, 1, 1, C) — only 1 stick. Read it 32 times into successive L1 rows.
                 for (uint32_t row = 0; row < TILE_DIM; ++row) {
                     uint64_t noc_addr = gamma_accessor.get_noc_addr(0, byte_offset);
-                    noc_async_read(noc_addr, l1_base + row * CHUNK_BYTES, valid_bytes);
+                    noc_async_read(noc_addr, l1_base + row * GAMMA_CHUNK_BYTES, valid_bytes);
                 }
                 noc_async_read_barrier();
                 cb_push_back(CB_GAMMA_RM, TILE_DIM);
@@ -311,17 +318,17 @@ void kernel_main() {
             // Push beta sticks (replicated 32×) — chunk for T.
             if constexpr (HAS_BETA) {
                 const auto beta_accessor = TensorAccessor(beta_args, beta_addr);
-                const uint32_t valid_bytes = c_in_tile * 2;
-                const uint32_t byte_offset = T * CHUNK_BYTES;
+                const uint32_t valid_bytes = c_in_tile * BETA_ELEM_BYTES;
+                const uint32_t byte_offset = T * BETA_CHUNK_BYTES;
 
                 cb_reserve_back(CB_BETA_RM, TILE_DIM);
                 uint32_t l1_base = get_write_ptr(CB_BETA_RM);
-                if (valid_bytes < CHUNK_BYTES) {
-                    zero_l1(l1_base, TILE_DIM * CHUNK_BYTES);
+                if (valid_bytes < BETA_CHUNK_BYTES) {
+                    zero_l1(l1_base, TILE_DIM * BETA_CHUNK_BYTES);
                 }
                 for (uint32_t row = 0; row < TILE_DIM; ++row) {
                     uint64_t noc_addr = beta_accessor.get_noc_addr(0, byte_offset);
-                    noc_async_read(noc_addr, l1_base + row * CHUNK_BYTES, valid_bytes);
+                    noc_async_read(noc_addr, l1_base + row * BETA_CHUNK_BYTES, valid_bytes);
                 }
                 noc_async_read_barrier();
                 cb_push_back(CB_BETA_RM, TILE_DIM);
@@ -337,18 +344,18 @@ void kernel_main() {
                     noc_async_read_barrier();
                     cb_push_back(CB_INPUT_TILES_A, 1);
                 } else {
-                    const uint32_t valid_bytes = c_in_tile * 2;
+                    const uint32_t valid_bytes = c_in_tile * INPUT_ELEM_BYTES;
                     const uint32_t start_stick = n * HW + r * TILE_DIM;
-                    const uint32_t byte_offset = T * CHUNK_BYTES;
+                    const uint32_t byte_offset = T * INPUT_CHUNK_BYTES;
 
                     cb_reserve_back(CB_INPUT_RM_A, TILE_DIM);
                     uint32_t l1_base = get_write_ptr(CB_INPUT_RM_A);
-                    if (valid_bytes < CHUNK_BYTES) {
-                        zero_l1(l1_base, TILE_DIM * CHUNK_BYTES);
+                    if (valid_bytes < INPUT_CHUNK_BYTES) {
+                        zero_l1(l1_base, TILE_DIM * INPUT_CHUNK_BYTES);
                     }
                     for (uint32_t row = 0; row < TILE_DIM; ++row) {
                         uint64_t noc_addr = input_accessor.get_noc_addr(start_stick + row, byte_offset);
-                        noc_async_read(noc_addr, l1_base + row * CHUNK_BYTES, valid_bytes);
+                        noc_async_read(noc_addr, l1_base + row * INPUT_CHUNK_BYTES, valid_bytes);
                     }
                     noc_async_read_barrier();
                     cb_push_back(CB_INPUT_RM_A, TILE_DIM);
