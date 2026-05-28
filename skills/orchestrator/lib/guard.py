@@ -515,3 +515,85 @@ def verify_use_case(
             issues.append(f"{test_path}: file not found")
 
     return UseCaseVerdict(issues=issues)
+
+
+# ---------------------------------------------------------------------------
+# Perf / optimization artifact verifier
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PerfArtifactVerdict:
+    """Composite result of verifying a perf/optimization worker's artifacts."""
+
+    issues: list[str]
+
+    @property
+    def ok(self) -> bool:
+        return not self.issues
+
+
+def verify_optimization_artifact(
+    result: dict,
+    *,
+    require_traced_path: bool = True,
+) -> PerfArtifactVerdict:
+    """Verify an optimization-worker or perf-worker (sub-pass 2) result includes a tracy CSV.
+
+    Bulk "at-ceiling" wave-offs without evidence are the failure mode this
+    guard exists to catch. ``status="ok"`` is only acceptable when a
+    tracy CSV artifact is attached AND (for sub-pass 2) the measurement
+    was taken on the traced path.
+
+    Checks:
+    1. ``result["status"] == "ok"`` requires ``tracy_artifact`` to be a
+       non-empty string.
+    2. ``tracy_artifact`` path must resolve and the file must be non-empty.
+    3. When ``require_traced_path=True``, the worker's notes or the file
+       path must contain evidence that the capture was under ``--traced``
+       mode (look for "traced" substring in notes OR a parent directory
+       containing "traced" in the path).
+
+    Returns PerfArtifactVerdict with issues list. Empty → ok.
+    """
+    issues: list[str] = []
+
+    status = result.get("status")
+    if status != "ok":
+        # Non-ok statuses (fail / blocked) don't require an artifact;
+        # the orchestrator routes them differently.
+        return PerfArtifactVerdict(issues=issues)
+
+    artifact = result.get("tracy_artifact") or ""
+    if not artifact:
+        issues.append("status=ok requires non-empty tracy_artifact field")
+        return PerfArtifactVerdict(issues=issues)
+
+    artifact_path = Path(artifact)
+    if not artifact_path.exists():
+        issues.append(f"tracy_artifact path does not exist: {artifact}")
+        return PerfArtifactVerdict(issues=issues)
+
+    try:
+        if artifact_path.stat().st_size == 0:
+            issues.append(f"tracy_artifact is empty (zero bytes): {artifact}")
+            return PerfArtifactVerdict(issues=issues)
+    except OSError as exc:
+        issues.append(f"tracy_artifact stat failed: {exc}")
+        return PerfArtifactVerdict(issues=issues)
+
+    if require_traced_path:
+        notes = (result.get("notes") or "").lower()
+        path_lower = artifact.lower()
+        # Strip occurrences of "untraced" first so the substring search below
+        # doesn't accept "untraced_capture.csv" as evidence of trace mode.
+        notes_stripped = notes.replace("untraced", "")
+        path_stripped = path_lower.replace("untraced", "")
+        if "traced" not in notes_stripped and "traced" not in path_stripped:
+            issues.append(
+                "no evidence the tracy capture was under --traced "
+                "(notes/path must mention traced; 'untraced' does not count); "
+                "untraced tracy is host-dispatch noise, not op-level evidence"
+            )
+
+    return PerfArtifactVerdict(issues=issues)

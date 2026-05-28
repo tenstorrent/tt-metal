@@ -14,11 +14,13 @@ from skills.orchestrator.lib.guard import (
     HostResidentSubOp,
     KIND_REQUIRED_KERNELS,
     LintViolation,
+    PerfArtifactVerdict,
     UseCaseVerdict,
     assert_traced_ops,
     cross_check_reference,
     lint_block,
     verify_block,
+    verify_optimization_artifact,
     verify_use_case,
 )
 
@@ -414,3 +416,76 @@ def test_verify_use_case_missing_model_file_fails(tmp_path):
     verdict = verify_use_case(tmp_path / "missing.py", use_case)
     assert not verdict.ok
     assert any("not found" in issue for issue in verdict.issues)
+
+
+# ---------------------------------------------------------------------------
+# verify_optimization_artifact
+# ---------------------------------------------------------------------------
+
+
+def test_verify_optimization_artifact_ok_status_requires_artifact():
+    result = {"status": "ok", "tracy_artifact": "", "notes": "no improvement found"}
+    verdict = verify_optimization_artifact(result)
+    assert not verdict.ok
+    assert any("non-empty tracy_artifact" in i for i in verdict.issues)
+
+
+def test_verify_optimization_artifact_missing_file_rejected(tmp_path):
+    result = {
+        "status": "ok",
+        "tracy_artifact": str(tmp_path / "nonexistent_traced_run.csv"),
+        "notes": "traced run done",
+    }
+    verdict = verify_optimization_artifact(result)
+    assert not verdict.ok
+    assert any("does not exist" in i for i in verdict.issues)
+
+
+def test_verify_optimization_artifact_empty_file_rejected(tmp_path):
+    empty = tmp_path / "empty_traced.csv"
+    empty.write_text("")
+    result = {"status": "ok", "tracy_artifact": str(empty), "notes": "traced"}
+    verdict = verify_optimization_artifact(result)
+    assert not verdict.ok
+    assert any("empty" in i for i in verdict.issues)
+
+
+def test_verify_optimization_artifact_untraced_evidence_rejected(tmp_path):
+    csv = tmp_path / "untraced_capture.csv"
+    csv.write_text("OP_CODE,DEVICE_KERNEL_DURATION_NS\nMatmul,1000\n")
+    result = {
+        "status": "ok",
+        "tracy_artifact": str(csv),
+        "notes": "host-dispatch dominated; no single op > 5%",
+    }
+    verdict = verify_optimization_artifact(result, require_traced_path=True)
+    assert not verdict.ok
+    assert any("traced" in i for i in verdict.issues)
+
+
+def test_verify_optimization_artifact_traced_evidence_ok(tmp_path):
+    csv = tmp_path / "traced_run_cpp_device_perf_report.csv"
+    csv.write_text("OP_CODE,DEVICE_KERNEL_DURATION_NS\nMatmul,1000\n")
+    result = {
+        "status": "ok",
+        "tracy_artifact": str(csv),
+        "notes": "captured under --traced; top op 8% of step",
+    }
+    verdict = verify_optimization_artifact(result)
+    assert verdict.ok, verdict.issues
+
+
+def test_verify_optimization_artifact_non_ok_status_skips_check():
+    # status=fail or status=blocked has different routing; artifact not required.
+    for st in ("fail", "blocked"):
+        result = {"status": st, "tracy_artifact": "", "notes": "device hung"}
+        verdict = verify_optimization_artifact(result)
+        assert verdict.ok, f"status={st} should skip artifact check"
+
+
+def test_verify_optimization_artifact_require_traced_false_accepts_either(tmp_path):
+    csv = tmp_path / "any_capture.csv"
+    csv.write_text("OP,US\n")
+    result = {"status": "ok", "tracy_artifact": str(csv), "notes": "untraced is fine here"}
+    verdict = verify_optimization_artifact(result, require_traced_path=False)
+    assert verdict.ok, verdict.issues

@@ -48,13 +48,15 @@ and currently passes its PCC test.
 Your LAST LINE must be a valid JSON object on a single line:
 
 ```json
-{"block": "<name>", "phase": "optimization", "status": "ok"|"fail"|"blocked", "pcc": <float|null>, "artifacts": [<paths>], "notes": "<str>", "last_error": <str|null>, "hang_detected": <bool>}
+{"block": "<name>", "phase": "optimization", "status": "ok"|"fail"|"blocked", "pcc": <float|null>, "artifacts": [<paths>], "notes": "<str>", "tracy_artifact": "<path>", "top_hotspot": {"op": "<str>", "share": <float>}, "last_error": <str|null>, "hang_detected": <bool>}
 ```
 
 Status meanings:
 - `"ok"`: optimization applied (or block was already at ceiling), PCC
-  still > 0.99 post-change, perf metric captured in `"notes"`. Including
-  the "no improvement found" case — that still counts as done.
+  still > 0.99 post-change, perf metric captured in `"notes"`. A null-result
+  ("no improvement") is acceptable ONLY when `tracy_artifact` points at a
+  real captured CSV and `top_hotspot.share` is small enough to justify the
+  call (see Anti-shortcut clauses).
 - `"fail"`: PCC regressed below 0.99 after a change. Caller should
   consider reverting or routing to debug.
 - `"blocked"`: required tool unavailable (e.g. tracy not installed),
@@ -67,16 +69,31 @@ Status meanings:
 2. Confirm `tt/<block>.py` exists and the block's `ttnn` phase reads
    `done` in the orchestrator state implied by the spec. If not →
    `status="blocked"`.
-3. Invoke `Skill(optimization)` and follow its instructions: profile
-   under tracy, identify hot ops, then fuse / shard / improve memory
-   placement as appropriate.
-4. Run the perf measurement and capture a steady-state metric
-   (ms/frame, tok/s, kernel-time, or whatever the existing
-   `reference_impl` uses). Store the metric in `"notes"`.
-5. Do NOT regress PCC. After every change, re-run the block's PCC test
+3. **Capture tracy data for THIS block in isolation** before deciding
+   anything. Build (or reuse) `tt/profile_<block>.py` if a per-block
+   harness doesn't exist. Run it under tracy with production weights
+   and production input shapes — NOT the reduced-config seed=0 PCC
+   harness, which has unrepresentative shapes. The CSV at
+   `generated/profiler/.logs/cpp_device_perf_report.csv` is the
+   authoritative evidence for what's hot in this block.
+4. **Identify the top hotspot** from the CSV. Report its op-code and
+   its share of the block's total device kernel time. This must be
+   included in the result JSON as `top_hotspot`.
+5. Invoke `Skill(optimization)` and follow its instructions to apply
+   ONE targeted change driven by the tracy data: fuse / shard /
+   precision / memory placement, picked from the patterns documented
+   in the skill.
+6. Run the perf measurement and capture a steady-state metric
+   (ms/frame, tok/s, kernel-time). Store before+after numbers in
+   `"notes"`. Re-run tracy after the change to verify the targeted
+   op actually moved.
+7. Do NOT regress PCC. After every change, re-run the block's PCC test
    against the golden tensor and confirm > 0.99.
-6. If no improvement is possible, report the current metric and return
-   `status="ok"` with `"notes"` explaining the block is at its ceiling.
+8. If `top_hotspot.share < 5%` of the block's kernel time and no
+   leverage is available, return `status="ok"` with a `"notes"` field
+   that explicitly says "tracy attached; top op only X% of block kernel
+   time; no targeted optimization warranted." Do NOT bulk-wave without
+   evidence.
 
 ## Anti-shortcut clauses
 
@@ -90,6 +107,21 @@ Status meanings:
   `lib.guard.host_resident_cross_check`.
 - "Optimisation" that introduces a host-side fallback is a regression,
   not progress.
+
+**No tracy = not ok.** `status="ok"` requires a non-empty
+`tracy_artifact` field pointing at a real CSV. The orchestrator's
+`lib.guard.verify_optimization_artifact` checks the path resolves and
+the file is non-empty. Bulk "at-ceiling" verdicts without a CSV are
+rejected and the tick is re-dispatched with `history.last_error =
+"missing tracy artifact"`.
+
+**Tracy must reflect the production path.** If the block is exercised
+in production under metal trace (e.g. an attention block inside the
+AR loop), profile it under `--traced` so device-kernel time is what
+you see — NOT host dispatch noise from an untraced harness. On the
+untraced path every device op looks small (host dispatch dominates);
+that is the symptom that motivates trace and is NOT evidence against
+op-level optimization.
 
 ## Hang detection
 

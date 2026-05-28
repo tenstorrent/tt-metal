@@ -212,8 +212,9 @@ max_attempts = state["config"]["max_attempts_per_phase"]
 
 - `status="ok"` → `target_dict[phase_name] = _success_row(old_attempts,
   metric, result_json)`. **Exception:** for `phase_name in {"ttnn",
-  "real_weights", "generation", "perf"}` defer this write until after
-  Step 5's guard passes; on guard rejection write `_fail_row` instead.
+  "optimization", "real_weights", "generation", "perf"}` defer this
+  write until after Step 5's guard passes; on guard rejection write
+  `_fail_row` instead.
 - `status="fail"` → `target_dict[phase_name] = _fail_row(old_attempts,
   result_json.get("last_error"), metric, result_json, max_attempts)`.
 - `status="blocked"` → preserve attempts; record `last_error`, `notes`,
@@ -243,13 +244,16 @@ The smoke check is dispatched on the NEXT tick (Step 2 override).
 
 ## Step 5: Guard check for device successes
 
-For the guarded phases (`ttnn`, `real_weights`, `generation`, `perf`)
-Step 4 deferred the success row. Compute `ok` + `guard_summary` per
-the per-phase rule below, then write `_success_row` if `ok` else
-`_fail_row(..., last_error=guard_summary, ...)`.
+For the guarded phases (`ttnn`, `optimization`, `real_weights`,
+`generation`, `perf`) Step 4 deferred the success row. Compute `ok` +
+`guard_summary` per the per-phase rule below, then write
+`_success_row` if `ok` else `_fail_row(..., last_error=guard_summary,
+...)`.
 
 ```python
-from skills.orchestrator.lib.guard import verify_block, lint_block, verify_use_case
+from skills.orchestrator.lib.guard import (
+    verify_block, lint_block, verify_use_case, verify_optimization_artifact,
+)
 slug = state["model_slug"]; ok, guard_summary = True, None
 ```
 
@@ -300,16 +304,38 @@ ok = v.ok
 guard_summary = None if ok else "verify_use_case: " + "; ".join(v.issues)
 ```
 
-**`phase_name == "perf"` — re-run the e2e test (parity preserved).**
-The perf skill explicitly allows "no improvement found" as `ok`, so
-the parity gate is the only hard check:
+**`phase_name == "optimization"` — lint + tracy artifact present.**
+The optimization-worker must attach a TRACED tracy CSV path (the
+artifact field `tracy_artifact`, or the first CSV in `artifacts`).
+Bulk "at-ceiling" wave-offs without evidence are rejected.
+
+```python
+block_file = f"models/demos/{slug}/tt/{target.lower()}.py"
+lint = lint_block(block_file)
+v = verify_optimization_artifact(result_json, require_traced_path=True)
+ok = (not lint) and v.ok
+guard_summary = None if ok else (
+    f"optimization guard: lint={len(lint)} artifact_issues={v.issues}"
+)
+```
+
+**`phase_name == "perf"` — re-run e2e + tracy artifact for sub-pass 2.**
+The perf skill explicitly allows "no improvement found" as `ok`, BUT the
+"no improvement" verdict is only acceptable when backed by a TRACED
+tracy CSV (untraced tracy is host-dispatch noise, not op-level
+evidence). Both checks must pass:
 
 ```python
 import subprocess
 test = f"models/demos/{slug}/tests/test_e2e_{target}.py"
 proc = subprocess.run(["pytest", test, "-v"], capture_output=True, text=True, timeout=1800)
-ok = proc.returncode == 0
-guard_summary = None if ok else f"perf guard: e2e parity regressed (exit={proc.returncode}); tail={proc.stdout[-400:]!r}"
+parity_ok = proc.returncode == 0
+v = verify_optimization_artifact(result_json, require_traced_path=True)
+ok = parity_ok and v.ok
+guard_summary = None if ok else (
+    f"perf guard: parity_ok={parity_ok} artifact_issues={v.issues}; "
+    f"tail={proc.stdout[-400:]!r}"
+)
 ```
 
 **Apply.** `target_dict[phase_name] = _success_row(old_attempts, metric,

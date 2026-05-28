@@ -76,7 +76,9 @@ speedup vs baseline (1.0 = no change, 2.0 = 2× faster).
 
 ## Process
 
-Two sub-passes (the perf skill documents both):
+Two sub-passes (the perf skill documents both). **Both** must be
+attempted — sub-pass 2 is NOT skippable just because sub-pass 1
+delivered a win.
 
 ### Sub-pass 1: trace (skipped if `needs_ar=false`)
 1. Migrate the use case's AR path's `SelfAttentionKVCache.update` to
@@ -87,20 +89,47 @@ Two sub-passes (the perf skill documents both):
 2. Add persistent buffers (input_ids, position_ids, self-mask) to the
    model's `text_generator.py` (or equivalent).
 3. Capture metal trace ONCE at end of first generate() warmup; reuse
-   thereafter across positions AND across `generate()` calls.
+   thereafter across positions AND across `generate()` calls. **Pick
+   the right trace lifetime for the pipeline shape**:
+   - **Cross-call** (capture-once-replay-many-calls): works when no
+     post-AR stages allocate device buffers (T2TT, S2TT, ASR — text-out
+     paths).
+   - **Single-call with release** (capture during AR, release before
+     post-AR stages, recapture next call): required when post-AR
+     stages like T2U + vocoder allocate fresh device buffers (T2ST,
+     S2ST — audio-out paths). Wire `generator.release_trace()`
+     between the AR loop and post-AR allocations.
+
+   Picking ONE pattern and concluding "the other failed → no trace
+   possible" is the wrong call. Both patterns must be ruled in or out
+   on their merits, with measured evidence.
 4. Measure traced replay perf. Confirm HF parity preserved.
 
-### Sub-pass 2: targeted tracy
-5. Build `tt/profile_<use_case>.py` if not present.
-6. Profile under tracy. Identify hot ops + memory layout.
-7. Apply ONE targeted optimization (sharding the largest matmul,
+### Sub-pass 2: targeted tracy on the TRACED path
+5. Build `tt/profile_<use_case>.py` if not present. The harness MUST
+   support `--traced` and exercise the trace lifetime that was selected
+   in sub-pass 1.
+6. **Profile under tracy with `--traced` ENABLED**. On the untraced
+   path host dispatch is ~80% of wall and every device op looks
+   small (<5% of wall) — that's the symptom that motivated trace,
+   not evidence against op-level work. Sub-pass 2 measurements ARE
+   INVALID on the untraced path. Only the traced-path tracy CSV is
+   acceptable evidence for this sub-pass.
+7. Identify the top device-kernel hotspots from the TRACED tracy CSV.
+   Build a top-10 table by `total device kernel time per step` (not
+   call count). Report it.
+8. Apply ONE targeted optimization (sharding the largest matmul,
    fusing a hot LN+Linear chain, lowering precision on a
-   non-PCC-sensitive matmul).
-8. Re-validate: e2e test still passes the parity gate; touched blocks
-   still PCC > 0.99.
-9. Write `models/demos/<model_slug>/PERF_NOTES.md` with baseline +
-   after numbers, top hot ops, applied optimization, and
-   recommendations for further work.
+   non-PCC-sensitive matmul — see `skills/optimization/SKILL.md`).
+9. Re-validate: ALL of the use case's e2e tests still pass the parity
+   gate; touched blocks still PCC > 0.99; and rerun the OTHER use
+   cases' e2e tests too if your change touched shared infrastructure
+   (e.g. text_generator.py is shared across all 5 SeamlessM4T use
+   cases).
+10. Write `models/demos/<model_slug>/PERF_NOTES.md` with baseline +
+    after numbers, the top-10 TRACED hotspot table, applied
+    optimization with hottest_op share before/after, and
+    recommendations for further work.
 
 ## Anti-shortcut clauses
 
@@ -109,10 +138,21 @@ Two sub-passes (the perf skill documents both):
   after you return; failure → `status="fail"`.
 - Any touched TTNN block file MUST still pass `lib.guard.lint_block`
   and (for the use case as a whole) `lib.guard.verify_use_case`.
-- "No improvement found" is honest progress. Do not invent fake
-  speedups. The perf skill's "Reality check" documents the
-  SeamlessM4T-v2 lesson: trace alone delivered 1.21×, not 50%,
-  because the floor was device kernel time.
+- "No improvement found" is honest progress, but ONLY when the
+  evidence is the TRACED tracy CSV — untraced "host dispatch
+  dominated" reports are inadmissible as a sub-pass-2 wave-off.
+  The perf skill's "Reality check" documents the SeamlessM4T-v2
+  lesson: trace alone delivered 1.21×, not 50%, because the floor
+  was device kernel time — which is exactly the regime in which
+  sub-pass 2 op-level work matters.
+- Sub-pass 1 success does NOT exempt sub-pass 2. Both passes are
+  expected. If sub-pass 1 already moved the use case from
+  host-dispatch-bound to kernel-bound, sub-pass 2 is MORE valuable,
+  not less.
+- Only ONE trace pattern attempted (cross-call OR single-call) is
+  insufficient evidence to declare "no trace possible." Both
+  patterns must be measured before claiming no AR-loop trace win
+  is available.
 
 ## Hang detection
 
