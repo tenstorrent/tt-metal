@@ -71,7 +71,7 @@ class TtPixtralMLP:
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        hidden = ttnn.multiply(gate, up, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        hidden = ttnn.multiply(gate, up, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(gate)
         ttnn.deallocate(up)
         out = ttnn.linear(
