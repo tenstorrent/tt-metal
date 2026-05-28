@@ -79,63 +79,67 @@ def _get_valid_implied_math_formats(fmt: FormatConfig):
     return [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
 
 
-def _prepare_div_inputs(
+def _prepare_inputs(
     src_A: torch.Tensor,
     data_format: DataFormat,
     src0_idx: int,
     src1_idx: int,
+    mathop: MathOperation,
 ) -> torch.Tensor:
     """
-    Map the [0, 1) uniform stimuli into a numerically friendly range for the
-    SFPU divide kernel, then overwrite a handful of lanes in the dividend and
-    divisor tiles with crafted values that exercise the special-case branches
-    (0/0 -> NaN, x/0 -> ±inf, x/x -> 1.0).
+    Map the [0, 1) uniform stimuli into a numerically friendly range whose
+    bounds depend on the operation being tested.
 
-    The bulk of the tensor is mapped to ±[0.25, 4.0] so the main reciprocal +
+    For DIV, the bulk is mapped to ±[0.25, 4.0] so the reciprocal +
     Newton-Raphson path is not contaminated by accidental zeros or subnormals.
-    Only the lanes listed in `_SPECIAL_CASE_LANES` (within face 0 of the
-    dividend and divisor tiles) are forced to the special-case values.
+    A handful of lanes in face 0 of the operand tiles are then overwritten
+    with crafted values (see `_SPECIAL_CASE_LANES`) to exercise the
+    special-case branches (0/0 -> NaN, x/0 -> ±inf, x/x -> 1.0).
+
+    For MUL, the bulk is mapped to ±[-250, 250] to exercise a wide dynamic
+    range without special-case lane overrides.
     """
     torch_format = format_dict[data_format]
 
-    scaled = (src_A.to(torch.float32) - 0.5) * 8.0
+    if mathop == MathOperation.SfpuElwdiv:
+        scaled = (src_A.to(torch.float32) - 0.5) * 8.0
 
-    sign = torch.where(scaled >= 0, torch.tensor(1.0), torch.tensor(-1.0))
-    abs_scaled = torch.maximum(scaled.abs(), torch.tensor(0.25))
-    scaled = sign * abs_scaled
+        sign = torch.where(scaled >= 0, torch.tensor(1.0), torch.tensor(-1.0))
+        abs_scaled = torch.maximum(scaled.abs(), torch.tensor(0.25))
+        scaled = sign * abs_scaled
 
-    scaled = scaled.to(torch_format)
+        scaled = scaled.to(torch_format)
 
-    flat = scaled.flatten()
-    for lane, dividend, divisor, _ in _SPECIAL_CASE_LANES:
-        flat[src0_idx * _ELEMENTS_PER_TILE + lane] = dividend
-        flat[src1_idx * _ELEMENTS_PER_TILE + lane] = divisor
+        flat = scaled.flatten()
+        for lane, dividend, divisor, _ in _SPECIAL_CASE_LANES:
+            flat[src0_idx * _ELEMENTS_PER_TILE + lane] = dividend
+            flat[src1_idx * _ELEMENTS_PER_TILE + lane] = divisor
+    elif mathop == MathOperation.SfpuElwmul:
+        scaled = (src_A.to(torch.float32) - 0.5) * 500.0
+        scaled = scaled.to(torch_format)
+        flat = scaled.flatten()
 
     return flat.reshape(scaled.shape)
 
 
-@pytest.mark.quasar
-@parametrize(
-    formats_dest_acc=_get_valid_formats_dest_acc(),
-    implied_math_format=lambda formats_dest_acc: _get_valid_implied_math_formats(
-        formats_dest_acc[0]
-    ),
-    tile_indices=_TILE_INDEX_VARIANTS,
-)
-def test_sfpu_binary_div_quasar(formats_dest_acc, implied_math_format, tile_indices):
+def _run_sfpu_binary_test(
+    formats_dest_acc,
+    implied_math_format,
+    tile_indices,
+    mathop: MathOperation,
+):
     """
-    Test binary SFPU DIV on Quasar architecture.
+    Shared test body for binary SFPU operations on Quasar.
 
-    Loads tiles directly into DEST via unpack-to-dest, then runs the BH-style
-    sfpi-vFloat divide helper (`_calculate_sfpu_binary_div_`) once per face
-    via the binary SFPU harness, and verifies the result against a golden
-    reference computed in fp32 by `BinarySFPUGolden._div`.
+    Loads tiles directly into DEST via unpack-to-dest, then runs the
+    binary SFPU helper (`_calculate_sfpu_binary_`) once per face via the
+    binary SFPU harness, and verifies the result against a golden reference
+    computed in fp32 by `BinarySFPUGolden`.
 
-    The bulk of the tile exercises the main reciprocal + Newton-Raphson path
-    with stimuli in ±[0.25, 4.0]. A handful of lanes in face 0 are overwritten
-    with crafted values (see `_SPECIAL_CASE_LANES`) so that 0/0 -> NaN,
-    x/0 -> ±inf, and x/x -> 1.0 branches are all hit. The forced-exact x/x
-    branch is additionally checked bit-exact against 1.0 after the main
+    For DIV, a handful of lanes in face 0 are overwritten with crafted
+    values (see `_SPECIAL_CASE_LANES`) so that 0/0 -> NaN, x/0 -> ±inf,
+    and x/x -> 1.0 branches are all hit. The forced-exact x/x branch is
+    additionally checked bit-exact against 1.0 after the main
     tolerance-based comparison.
     """
     formats, dest_acc = formats_dest_acc
@@ -156,10 +160,9 @@ def test_sfpu_binary_div_quasar(formats_dest_acc, implied_math_format, tile_indi
         spec_B=spec,
     )
 
-    src_A = _prepare_div_inputs(src_A, formats.input_format, src0_idx, src1_idx)
+    src_A = _prepare_inputs(src_A, formats.input_format, src0_idx, src1_idx, mathop)
 
     num_faces = 4
-    mathop = MathOperation.SfpuElwdiv
 
     generate_golden = get_golden_generator(BinarySFPUGolden)
     golden_full = generate_golden(
@@ -184,7 +187,7 @@ def test_sfpu_binary_div_quasar(formats_dest_acc, implied_math_format, tile_indi
     # SFPU reads from DEST directly, so we use UnpDest to load operands there —
     # no need to route through SRC registers and the FPU.
     configuration = TestConfig(
-        "sources/quasar/sfpu_binary_div_quasar_test.cpp",
+        "sources/quasar/sfpu_binary_float_quasar_test.cpp",
         formats,
         templates=[
             MATH_OP(mathop=mathop),
@@ -227,10 +230,39 @@ def test_sfpu_binary_div_quasar(formats_dest_acc, implied_math_format, tile_indi
 
     # The kernel's x/x branch forces an exact 1.0 regardless of reciprocal
     # rounding, so check bit-exact rather than relying on isclose tolerance.
-    for lane, _, _, kind in _SPECIAL_CASE_LANES:
-        if kind != "one":
-            continue
-        actual = res_tensor[lane].item()
-        assert (
-            actual == 1.0
-        ), f"x/x special case at lane {lane}: expected exact 1.0, got {actual}"
+    if mathop == MathOperation.SfpuElwdiv:
+        for lane, _, _, kind in _SPECIAL_CASE_LANES:
+            if kind != "one":
+                continue
+            actual = res_tensor[lane].item()
+            assert (
+                actual == 1.0
+            ), f"x/x special case at lane {lane}: expected exact 1.0, got {actual}"
+
+
+@pytest.mark.quasar
+@parametrize(
+    formats_dest_acc=_get_valid_formats_dest_acc(),
+    implied_math_format=lambda formats_dest_acc: _get_valid_implied_math_formats(
+        formats_dest_acc[0]
+    ),
+    tile_indices=_TILE_INDEX_VARIANTS,
+)
+def test_sfpu_binary_div_quasar(formats_dest_acc, implied_math_format, tile_indices):
+    _run_sfpu_binary_test(
+        formats_dest_acc, implied_math_format, tile_indices, MathOperation.SfpuElwdiv
+    )
+
+
+@pytest.mark.quasar
+@parametrize(
+    formats_dest_acc=_get_valid_formats_dest_acc(),
+    implied_math_format=lambda formats_dest_acc: _get_valid_implied_math_formats(
+        formats_dest_acc[0]
+    ),
+    tile_indices=_TILE_INDEX_VARIANTS,
+)
+def test_sfpu_binary_mul_quasar(formats_dest_acc, implied_math_format, tile_indices):
+    _run_sfpu_binary_test(
+        formats_dest_acc, implied_math_format, tile_indices, MathOperation.SfpuElwmul
+    )
