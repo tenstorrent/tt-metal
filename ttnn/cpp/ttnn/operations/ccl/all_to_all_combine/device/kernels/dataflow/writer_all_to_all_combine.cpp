@@ -112,7 +112,7 @@ void kernel_main() {
     volatile PACKET_HEADER_TYPE * packet_headers[2];
     for(uint8_t i =0;i<2;++i){
         cb_reserve_back(packet_header_cb_id,1);
-        const uint32_t packet_header_addr = get_read_ptr(packet_header_cb_id);
+        const uint32_t packet_header_addr = get_write_ptr(packet_header_cb_id);
         packet_headers[i] = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_addr);
         cb_push_back(packet_header_cb_id,1);
     }
