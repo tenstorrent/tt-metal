@@ -90,7 +90,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // `dst_reg[idx * 32]` (sfpi tile stride) from the current dest base
     // and writes the result at `dst_reg[dst_idx * 32]`
     _llk_math_eltwise_sfpu_params_(
-        _calculate_sfpu_binary_div_<false /*APPROXIMATION_MODE*/, SFPU_BINARY_OPERATION, is_fp32_dest_acc_en>,
+        _calculate_sfpu_binary_<false /*APPROXIMATION_MODE*/, SFPU_BINARY_OPERATION, is_fp32_dest_acc_en>,
         0 /* DST base tile index */,
         num_sfpu_iterations,
         params.SRC0_TILE_IDX,

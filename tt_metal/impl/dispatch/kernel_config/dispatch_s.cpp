@@ -179,7 +179,7 @@ void DispatchSKernel::GenerateStaticConfigs() {
             const uint32_t l1_cache_size = my_dispatch_constants.dispatch_s_device_print_l1_cache_size();
             TT_FATAL(
                 noc_locations_size <= l1_cache_size,
-                "DEVICE_PRINT noc_locations ({} bytes for {} cores) does not fit in the overlaid l1_cache "
+                "DPRINT noc_locations ({} bytes for {} cores) does not fit in the overlaid l1_cache "
                 "({} bytes). Bump TT_METAL_DEVICE_PRINT_DISPATCH_L1_CACHE_BYTES.",
                 noc_locations_size,
                 num_print_cores,

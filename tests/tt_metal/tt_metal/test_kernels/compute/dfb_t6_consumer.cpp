@@ -16,11 +16,11 @@ void kernel_main() {
     // to its TC, so every wait_front/pop_front here is for a tile this consumer owns.
     for (uint32_t tile_id = 0; tile_id < num_entries_per_consumer; tile_id++) {
         dfb.wait_front(1);
-        DEVICE_PRINT_UNPACK("unpack consumer tile id {}\n", tile_id);
+        DPRINT_UNPACK("unpack consumer tile id {}\n", tile_id);
         dfb.pop_front(1);
-        DEVICE_PRINT_PACK("pack consumer tile id {}\n", tile_id);
+        DPRINT_PACK("pack consumer tile id {}\n", tile_id);
     }
-    DEVICE_PRINT("CBWW\n");
+    DPRINT("CBWW\n");
     dfb.finish();
-    DEVICE_PRINT("CBWD\n");
+    DPRINT("CBWD\n");
 }
