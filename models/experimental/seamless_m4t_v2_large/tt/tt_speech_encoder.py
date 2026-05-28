@@ -39,6 +39,14 @@ _BF16_ATTN_MASK_MIN = float(torch.finfo(torch.bfloat16).min)
 _PROFILER_LAYER_DRAIN_INTERVAL = 8
 # Pad short sequences before block-sharded LN; single M-tile (≤32 rows) falls back to L1 interleaved.
 _MIN_BLOCK_LN_TOKEN_ROWS = 32
+# Maximum ``block_h`` (M-tiles per core) for the block-sharded LN. When the natural ``m_tiles``
+# is prime (or near-prime relative to ``device_grid.y``), the divisibility loop in
+# ``_build_ln_sharded_config`` collapses ``grid_y`` to 1 or 2, leaving each core with the full
+# (or half) M dimension. At ``block_h > 4`` the LN circular buffers exceed Blackhole's 1.5 MB L1
+# limit (failure: ``circular buffers ... grow to ~1.7 MB which is beyond max L1 size``). We pad
+# the M dimension up to the next ``m_tiles`` value that yields ``grid_y >= 2`` and ``block_h <= 4``,
+# then slice the LN output back to the original length.
+_MAX_LN_BLOCK_H_TILES = 4
 # Short-seq linears use ``MatmulMultiCoreReuseMultiCast1DProgramConfig`` (see ``common.matmul_program_config``).
 # Long mel (> ``MATMUL_1D_SEQ_THRESHOLD``) uses chunked 1D matmuls to avoid 2D multicast L1 overflow.
 _LONG_SEQ_LINEAR_CHUNK_ROWS = TILE
@@ -183,6 +191,23 @@ class TTSeamlessM4Tv2SpeechEncoder:
         n_tiles = hidden_size // 32
         return m_tiles, n_tiles
 
+    def _pick_grid_friendly_m_tiles(self, m_tiles_orig: int) -> int:
+        """Smallest ``m_tiles >= m_tiles_orig`` whose shard layout has ``grid_y >= 2`` and ``block_h <= _MAX_LN_BLOCK_H_TILES``.
+
+        Mirrors the divisibility loop in ``_build_ln_sharded_config`` so the padded LN always
+        lands in a known-safe CB-size regime. Returns ``m_tiles_orig`` unchanged if no candidate
+        in a bounded search window qualifies (caller will then run the original layout — same
+        behavior as before this padding pass).
+        """
+        device_grid_y = int(self.device.compute_with_storage_grid_size().y)
+        for m in range(m_tiles_orig, m_tiles_orig + device_grid_y * _MAX_LN_BLOCK_H_TILES + 1):
+            grid_y = min(device_grid_y, m)
+            while grid_y > 1 and m % grid_y != 0:
+                grid_y -= 1
+            if grid_y >= 2 and (m // grid_y) <= _MAX_LN_BLOCK_H_TILES:
+                return m
+        return m_tiles_orig
+
     def _build_ln_sharded_config(self, m_tiles: int, n_tiles: int):
         key = (m_tiles, n_tiles)
         cached = self._ln_sharded_cache.get(key)
@@ -240,11 +265,41 @@ class TTSeamlessM4Tv2SpeechEncoder:
         channel_size: int,
         input_sharded: bool,
     ) -> Tuple[ttnn.Tensor, int, int]:
-        """Pad ``[B,S,C]`` to at least 32 token rows so LN uses block-sharded (not width-sharded) layout."""
+        """Pad ``[B,S,C]`` along the M dimension to a grid-friendly tile count for block-sharded LN.
+
+        Two cases trigger padding:
+          1. Short inputs (``token_rows < _MIN_BLOCK_LN_TOKEN_ROWS``) — pad up so LN runs as
+             block-sharded (not the slow single-M-tile width-sharded layout).
+          2. M dimension lands in a CB-overflow band — when the natural ``m_tiles`` would make
+             ``grid_y`` collapse to 1 (or 2 with ``block_h > _MAX_LN_BLOCK_H_TILES``), pad up to
+             the next ``grid_y``-friendly ``m_tiles``. Without this, the LN CB grows past L1 on
+             prime-ish ``m_tiles`` in roughly half of ``[16, 32]``.
+
+        If the input is sharded, it is converted to L1 interleaved before padding (the sharded
+        layout is sized for the original ``m_tiles`` and cannot absorb extra rows in place).
+        """
         token_rows = batch * seq_len
-        if input_sharded or token_rows >= _MIN_BLOCK_LN_TOKEN_ROWS:
+        m_tiles_orig = max(1, (token_rows + 31) // 32)
+        # Decide the target token-row count.
+        if token_rows >= _MIN_BLOCK_LN_TOKEN_ROWS:
+            m_tiles_target = self._pick_grid_friendly_m_tiles(m_tiles_orig)
+            target_token_rows = m_tiles_target * 32
+        elif not input_sharded:
+            target_token_rows = _MIN_BLOCK_LN_TOKEN_ROWS
+        else:
+            # input_sharded with token_rows < 32: shard layout is already sized for m_tiles=1,
+            # leave it as-is (matches pre-existing behavior).
             return x, seq_len, 0
-        pad_rows = _MIN_BLOCK_LN_TOKEN_ROWS - token_rows
+        if target_token_rows <= token_rows:
+            return x, seq_len, 0
+        # Need padding. Bring the input to L1 interleaved first if it arrived sharded.
+        if input_sharded and ttnn.is_sharded(x):
+            x_in = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG, output_dtype=ttnn.bfloat16)
+            owned_in = True
+        else:
+            x_in = x
+            owned_in = False
+        pad_rows = target_token_rows - token_rows
         pad_seq = seq_len + pad_rows // batch
         pad_mc = ttnn.L1_MEMORY_CONFIG
         tail = ttnn.zeros(
@@ -253,8 +308,10 @@ class TTSeamlessM4Tv2SpeechEncoder:
             layout=ttnn.TILE_LAYOUT,
             device=self.device,
         )
-        x_pad = ttnn.concat([x, tail], dim=1, memory_config=pad_mc)
+        x_pad = ttnn.concat([x_in, tail], dim=1, memory_config=pad_mc)
         ttnn.deallocate(tail)
+        if owned_in:
+            ttnn.deallocate(x_in)
         return x_pad, pad_seq, seq_len
 
     def _layer_norm_sharded(
@@ -296,20 +353,24 @@ class TTSeamlessM4Tv2SpeechEncoder:
             compute_kernel_config=self._layernorm_compute_cfg,
         )
         ttnn.deallocate(x_sharded)
-        if output_sharded:
-            if slice_seq > 0:
-                raise ValueError("output_sharded LN with seq padding is not supported")
+        # ``output_sharded=True`` is a hint that downstream prefers sharded. When padding was
+        # applied (``slice_seq > 0``) the sharded output has trailing padded rows; degrade to
+        # interleaved + slice instead. Downstream ops in the speech encoder accept either layout
+        # (e.g. ``_conformer_ffn`` with ``accept_sharded_input=True``).
+        if output_sharded and slice_seq == 0:
             return normed_sharded
         normed = ttnn.sharded_to_interleaved(normed_sharded, ttnn.L1_MEMORY_CONFIG, output_dtype=ttnn.bfloat16)
         ttnn.deallocate(normed_sharded)
         if slice_seq > 0:
-            normed = ttnn.slice(
+            sliced = ttnn.slice(
                 normed,
                 [0, 0, 0],
                 [batch, slice_seq, channel_size],
                 [1, 1, 1],
                 memory_config=ttnn.L1_MEMORY_CONFIG,
             )
+            ttnn.deallocate(normed)
+            normed = sliced
         return normed
 
     @staticmethod
