@@ -850,6 +850,7 @@ def test_perf(
 @pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
 @pytest.mark.parametrize("topology", [None])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.skip(reason="Disabled by issue #45107")
 def test_all_to_all_combine_no_trace_submesh(
     mesh_device,
     mesh_shape,

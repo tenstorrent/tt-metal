@@ -574,6 +574,61 @@ def test_paged_update_cache_negative_override_without_page_table(device):
         )
 
 
+def _sharded_input_with_num_cores(device, x_padded, num_cores):
+    """Like ``_sharded_input`` but builds a height-sharded tensor whose grid has
+    ``num_cores`` cores instead of ``num_users``. Used to force the bad case the
+    program factory can't handle (issue #44923)."""
+    xt = ttnn.Tensor(x_padded, ttnn.bfloat16).to(ttnn.TILE_LAYOUT)
+    total_height = xt.volume() // xt.padded_shape[-1]
+    assert (
+        total_height % num_cores == 0
+    ), f"unsharded test setup: total height {total_height} not divisible by num_cores {num_cores}"
+    compute_grid_size = device.compute_with_storage_grid_size()
+    shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, True)
+    input_shard_spec = ttnn.ShardSpec(
+        shard_grid,
+        [total_height // num_cores, xt.padded_shape[-1]],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec)
+    return xt.to(device, input_mem_config)
+
+
+@pytest.mark.parametrize(
+    "num_users, bad_num_cores",
+    [
+        # Fewer cores than users (two users per core) — the kernel would treat the second user's
+        # data as the first user's overflow, corrupting the cache.
+        (4, 2),
+    ],
+)
+def test_paged_update_cache_negative_input_shard_grid_num_cores_mismatch(num_users, bad_num_cores, device):
+    """Validator must reject input shard grids whose num_cores != num_users; the program
+    factory iterates one user per core and silently miscomputes otherwise (issue #44923)."""
+    torch.manual_seed(9)
+    num_kv_heads = 1
+    max_seq_len = 256
+    head_dim = 256
+
+    cache_shape = [num_users, num_kv_heads, max_seq_len, head_dim]
+    cache_torch = torch.randn(cache_shape).bfloat16().float()
+    cache_tt = ttnn.Tensor(cache_torch, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+
+    cache_idxs = [i for i in range(num_users)]
+    cache_idxs_tt = ttnn.Tensor(torch.tensor(cache_idxs), ttnn.int32).to(device)
+
+    x = torch.randn([1, num_users, num_kv_heads, head_dim]).bfloat16().float()
+    x_padded = torch.nn.functional.pad(x, (0, 0, 0, 32 - num_kv_heads), "constant", 0)
+    xt = _sharded_input_with_num_cores(device, x_padded, bad_num_cores)
+
+    with pytest.raises(RuntimeError, match="num_cores"):
+        ttnn.experimental.paged_update_cache(
+            cache_tt,
+            xt,
+            update_idxs_tensor=cache_idxs_tt,
+        )
+
+
 # ── paged_fill_cache tests ────────────────────────────────────────────────
 
 

@@ -1081,7 +1081,8 @@ DFBConfigReaderProgram create_dfb_config_reader_program(uint32_t entry_size, uin
         .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 1,
         .cap = dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = false};
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
 
     auto dfb_id = experimental::dfb::CreateDataflowBuffer(program, core_range, dfb_config);
     experimental::dfb::BindDataflowBufferToProducerConsumerKernels(program, dfb_id, producer_kernel, consumer_kernel);

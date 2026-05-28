@@ -253,8 +253,8 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
     experimental::metal2_host_api::KernelSpec reader_spec{
         .unique_id = READER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary_2_0.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary_2_0.cpp",
         .num_threads = num_threads,
         .dfb_bindings = {{
             .dfb_spec_name = L1_DFB,
@@ -270,8 +270,8 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
     experimental::metal2_host_api::KernelSpec writer_spec{
         .unique_id = WRITER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary_2_0.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary_2_0.cpp",
         .num_threads = num_threads,
         .dfb_bindings = {{
             .dfb_spec_name = L1_DFB,
@@ -415,6 +415,9 @@ bool reader_datacopy_writer(
     constexpr const char* WRITER = "writer";
     constexpr const char* COMPUTE = "compute";
 
+    // Implicit sync is enabled by default for both DFBs (no DM kernel opts out
+    // via Gen2DataMovementConfig::disable_implicit_sync_for). The program-level
+    // reservation flag set below is independent of per-DFB sync mode.
     experimental::metal2_host_api::DataflowBufferSpec input_dfb_spec{
         .unique_id = INPUT_DFB,
         .entry_size = static_cast<uint32_t>(test_config.tile_byte_size),
@@ -446,8 +449,8 @@ bool reader_datacopy_writer(
     experimental::metal2_host_api::KernelSpec reader_spec{
         .unique_id = READER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary_2_0.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary_2_0.cpp",
         .num_threads = num_threads,
         .dfb_bindings = {{
             .dfb_spec_name = INPUT_DFB,
@@ -463,8 +466,8 @@ bool reader_datacopy_writer(
     experimental::metal2_host_api::KernelSpec writer_spec{
         .unique_id = WRITER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary_2_0.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary_2_0.cpp",
         .num_threads = num_threads,
         .dfb_bindings = {{
             .dfb_spec_name = OUTPUT_DFB,
@@ -480,8 +483,8 @@ bool reader_datacopy_writer(
     experimental::metal2_host_api::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_2_0.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_2_0.cpp",
         .num_threads = num_threads,
         .dfb_bindings =
             {{

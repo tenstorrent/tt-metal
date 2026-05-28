@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 
@@ -39,15 +39,16 @@ FORCE_INLINE auto local_noc_addr(uint32_t addr, uint8_t noc_id = noc_index) {
 }
 
 /**
- * @brief Zero out the exact tile size for a CB using NOC reads from the hardware zeros region
+ * @brief Zero out the exact tile size for a DFB using NOC reads from the hardware zeros region
  *
- * @tparam cb_id Circular buffer ID whose tile byte size should be used
+ * @tparam dfb_id DataflowBuffer ID whose tile byte size should be used
  * @param write_addr L1 address where the zeroed tile should be written
  */
-template <uint32_t cb_id>
+ // todo bob
+template <uint32_t dfb_id>
 FORCE_INLINE void zero_tile(uint32_t write_addr) {
-    constexpr uint32_t bytes_to_zero = get_tile_size(cb_id);
-    static_assert(bytes_to_zero % MEM_ZEROS_SIZE == 0, "CB tile size must be a multiple of MEM_ZEROS_SIZE");
+    constexpr uint32_t bytes_to_zero = get_tile_size(dfb_id);
+    static_assert(bytes_to_zero % MEM_ZEROS_SIZE == 0, "DFB entry size must be a multiple of MEM_ZEROS_SIZE");
     constexpr uint32_t num_zeros_reads = bytes_to_zero / MEM_ZEROS_SIZE;
 
     Noc noc;
@@ -65,16 +66,16 @@ FORCE_INLINE void zero_tile(uint32_t write_addr) {
 }
 
 /**
- * @brief Reserve, zero-fill, and push one tile into a circular buffer
+ * @brief Reserve, zero-fill, and push one tile into a DataflowBuffer
  *
- * @tparam cb_id Circular buffer ID whose tile byte size should be used
+ * @tparam dfb_id DataflowBuffer ID whose tile byte size should be used
  */
-template <uint32_t cb_id>
+template <uint32_t dfb_id>
 FORCE_INLINE void prepare_zero_tile() {
-    ::CircularBuffer cb(cb_id);
-    cb.reserve_back(1);
-    zero_tile<cb_id>(cb.get_write_ptr());
-    cb.push_back(1);
+    ::DataflowBuffer dfb(dfb_id);
+    dfb.reserve_back(1);
+    zero_tile<dfb_id>(dfb.get_write_ptr());
+    dfb.push_back(1);
 }
 
 }  // namespace dataflow_kernel_lib
