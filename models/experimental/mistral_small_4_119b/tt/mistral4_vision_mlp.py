@@ -95,6 +95,7 @@ class TtPixtralMLP:
             self.down_proj,
             self.ffn_down_preset,
             compute_kernel_config=self.compute_kernel_config,
+            output_memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.deallocate(hidden)
         return out

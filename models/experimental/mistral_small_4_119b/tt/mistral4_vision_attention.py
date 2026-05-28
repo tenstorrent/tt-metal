@@ -99,11 +99,14 @@ class TtPixtralAttention:
 
         # ── Fused QKV projection → [1, 1, seq, 3*hidden] ────────────────
         # Sweep-tuned 1D l1/dram/ws on 8×6 grid (49 TFLOPs vs 25 with the default).
+        # Output stays in L1 so the rest of the attention chain (qkv heads,
+        # RoPE, SDPA, concat) doesn't have to bounce through DRAM.
         qkv = vision_linear(
             x,
             self.wqkv,
             self.qkv_preset,
             compute_kernel_config=self.compute_kernel_config,
+            output_memory_config=ttnn.L1_MEMORY_CONFIG,
         )  # [1, 1, seq, 3 * VISION_HIDDEN_SIZE]
 
         # ── Split into heads: each [1, n_heads, seq, head_dim] ──────────
@@ -112,16 +115,26 @@ class TtPixtralAttention:
             num_heads=self.n_heads,
             num_kv_heads=self.n_heads,
             transpose_k_heads=False,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.deallocate(qkv)
 
         # ── Apply 2D RoPE to q and k ─────────────────────────────────────
         q_rot = ttnn.experimental.rotary_embedding_hf(
-            q, cos, sin, is_decode_mode=False, compute_kernel_config=self.compute_kernel_config
+            q,
+            cos,
+            sin,
+            is_decode_mode=False,
+            compute_kernel_config=self.compute_kernel_config,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         k_rot = ttnn.experimental.rotary_embedding_hf(
-            k, cos, sin, is_decode_mode=False, compute_kernel_config=self.compute_kernel_config
+            k,
+            cos,
+            sin,
+            is_decode_mode=False,
+            compute_kernel_config=self.compute_kernel_config,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.deallocate(q)
         ttnn.deallocate(k)
@@ -134,7 +147,7 @@ class TtPixtralAttention:
             is_causal=False,
             scale=self.scale,
             program_config=self.sdpa_program_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )  # [1, n_heads, seq, head_dim]
         ttnn.deallocate(q_rot)
         ttnn.deallocate(k_rot)
@@ -146,11 +159,13 @@ class TtPixtralAttention:
 
         # ── Output projection ────────────────────────────────────────────
         # Sweep-tuned 1D l1/dram/ws on 8×4 grid, in0_block_w=16 (24 TFLOPs).
+        # Output stays L1 — the block's residual add now runs L1-in/L1-out.
         out = vision_linear(
             attn_flat,
             self.o_proj,
             self.o_proj_preset,
             compute_kernel_config=self.compute_kernel_config,
+            output_memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.deallocate(attn_flat)
         return out
