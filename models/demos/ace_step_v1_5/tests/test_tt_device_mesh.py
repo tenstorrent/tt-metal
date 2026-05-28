@@ -171,12 +171,28 @@ def test_emit_session_summary_rollup(monkeypatch):
     from models.demos.ace_step_v1_5.ace_step_perf_log import (
         SessionPassSnapshot,
         SessionPerfState,
+        ace_step_extract_key_metrics,
         ace_step_rtf_per_step,
         emit_session_summary,
     )
 
     assert ace_step_rtf_per_step(wall_s=60.0, duration_sec=60.0, infer_steps=50) == pytest.approx(0.02)
     assert ace_step_rtf_per_step(wall_s=10.0, duration_sec=10.0, infer_steps=8) == pytest.approx(0.125)
+
+    metrics = ace_step_extract_key_metrics(
+        [
+            ("five_hz_lm_generate", 2100.0),
+            ("dit_denoise_loop", 6500.0),
+            ("vae_decode", 2200.0),
+        ],
+        wall_ms=13000.0,
+        params={"lm_num_tokens": 300, "lm_gen_time_s": 2.0},
+    )
+    assert metrics["wall_time_s"] == pytest.approx(13.0)
+    assert metrics["lm_total_time_s"] == pytest.approx(2.0)
+    assert metrics["dit_total_time_s"] == pytest.approx(6.5)
+    assert metrics["vae_decode_time_s"] == pytest.approx(2.2)
+    assert metrics["tokens_per_sec"] == pytest.approx(150.0)
 
     from models.demos.ace_step_v1_5.ttnn_impl.math_perf_env import ace_step_tile_physical_m_dim
 
@@ -203,4 +219,4 @@ def test_emit_session_summary_rollup(monkeypatch):
             modules_ms=[("dit_denoise_loop", 6500.0), ("vae_decode", 2200.0)],
         )
     )
-    emit_session_summary(state)
+    emit_session_summary(state, params={"duration_sec": 60.0, "infer_steps": 50, "llm_debug": True})

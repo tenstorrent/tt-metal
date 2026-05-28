@@ -209,10 +209,17 @@ class AceStepPerfRecorder:
             )
         print(f"[ace_step_v1_5][perf]   {'TOTAL (wall)':40s} {total_ms:10.2f} ms", flush=True)
         _emit_rtf_per_step(wall_ms=total_ms, params=self.params)
+        module_timings = [pair for pair in self.timings_ms if pair[0] != label]
         emit_benchmark_wall_breakdown(
-            [pair for pair in self.timings_ms if pair[0] != label],
+            module_timings,
             wall_ms=total_ms,
             params=self.params,
+        )
+        emit_key_metrics(
+            module_timings,
+            wall_ms=total_ms,
+            params=self.params,
+            show_tokens_per_sec=bool(self.params.get("llm_debug")),
         )
         _perf_banner("end perf summary")
 
@@ -287,6 +294,104 @@ def _emit_rtf_per_step(*, wall_ms: float, params: Optional[Dict[str, Any]] = Non
         float(wall_ms) / 1000.0,
         duration_sec,
         infer_steps,
+    )
+
+
+def ace_step_extract_key_metrics(
+    timings_ms: List[Tuple[str, float]],
+    *,
+    wall_ms: float,
+    params: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Return BENCHMARK.md *Key Metrics* (wall / LM / DiT / VAE / optional tokens/sec)."""
+    lookup = _ms_lookup(timings_ms)
+    for wall_label in _BENCHMARK_WALL_LABELS:
+        lookup.pop(wall_label, None)
+
+    def _sum(labels: frozenset[str]) -> float:
+        return sum(lookup.get(lbl, 0.0) for lbl in labels)
+
+    lm_ms = _sum(_BENCHMARK_LLM_LABELS)
+    dit_ms = _sum(_BENCHMARK_DIT_LABELS)
+    vae_ms = _sum(_BENCHMARK_VAE_LABELS)
+
+    lm_time_s = lm_ms / 1000.0
+    if params and params.get("lm_gen_time_s") is not None:
+        try:
+            lm_time_s = float(params["lm_gen_time_s"])
+        except (TypeError, ValueError):
+            pass
+
+    metrics: Dict[str, Any] = {
+        "wall_time_s": float(wall_ms) / 1000.0,
+        "lm_total_time_s": lm_time_s,
+        "dit_total_time_s": dit_ms / 1000.0,
+        "vae_decode_time_s": vae_ms / 1000.0,
+    }
+
+    if params:
+        num_tokens = params.get("lm_num_tokens")
+        lm_gen_time_s = params.get("lm_gen_time_s")
+        if num_tokens is not None and lm_gen_time_s is not None:
+            try:
+                n_tok = int(num_tokens)
+                gen_s = float(lm_gen_time_s)
+                if n_tok > 0 and gen_s > 0.0:
+                    metrics["lm_num_tokens"] = n_tok
+                    metrics["tokens_per_sec"] = float(n_tok) / gen_s
+            except (TypeError, ValueError):
+                pass
+    return metrics
+
+
+def emit_key_metrics(
+    timings_ms: List[Tuple[str, float]],
+    *,
+    wall_ms: float,
+    params: Optional[Dict[str, Any]] = None,
+    show_tokens_per_sec: bool = False,
+) -> None:
+    """Print the ACE-Step BENCHMARK.md *Key Metrics* table."""
+    if not ace_step_perf_logging_enabled():
+        return
+
+    metrics = ace_step_extract_key_metrics(timings_ms, wall_ms=wall_ms, params=params)
+    bar = "=" * 72
+    print(f"[ace_step_v1_5][perf] {bar}", flush=True)
+    print("[ace_step_v1_5][perf] KEY METRICS (ACE-Step BENCHMARK.md)", flush=True)
+    print(f"[ace_step_v1_5][perf] {bar}", flush=True)
+    print(f"[ace_step_v1_5][perf]   {'Metric':<22s} {'Value':>12s}  Description", flush=True)
+    print(f"[ace_step_v1_5][perf]   {'─' * 22} {'─' * 12}  {'─' * 30}", flush=True)
+
+    rows: List[Tuple[str, str, str]] = [
+        ("Wall Time", f"{metrics['wall_time_s']:.2f} s", "End-to-end time from start to finish"),
+        ("LM Total Time", f"{metrics['lm_total_time_s']:.2f} s", "LLM planning (generation + parsing)"),
+        ("DiT Total Time", f"{metrics['dit_total_time_s']:.2f} s", "Diffusion (all steps combined)"),
+        ("VAE Decode Time", f"{metrics['vae_decode_time_s']:.2f} s", "Decode latents to audio waveform"),
+    ]
+
+    tps = metrics.get("tokens_per_sec")
+    if show_tokens_per_sec and tps is not None:
+        n_tok = metrics.get("lm_num_tokens", "?")
+        rows.append(("Tokens/sec", f"{tps:.1f}", f"LLM throughput ({n_tok} new tokens)"))
+    elif show_tokens_per_sec:
+        rows.append(("Tokens/sec", "n/a", "LM token stats unavailable (was preprocess cached?)"))
+
+    for name, value, desc in rows:
+        print(f"[ace_step_v1_5][perf]   {name:<22s} {value:>12s}  {desc}", flush=True)
+
+    print(f"[ace_step_v1_5][perf] {bar}", flush=True)
+
+    log_extra = ""
+    if show_tokens_per_sec and tps is not None:
+        log_extra = f" tokens_per_sec={tps:.1f}"
+    logger.info(
+        "ACE-Step key metrics: wall={:.2f}s LM={:.2f}s DiT={:.2f}s VAE={:.2f}s{}",
+        metrics["wall_time_s"],
+        metrics["lm_total_time_s"],
+        metrics["dit_total_time_s"],
+        metrics["vae_decode_time_s"],
+        log_extra,
     )
 
 
@@ -458,6 +563,12 @@ def emit_session_summary(state: SessionPerfState, *, params: Optional[Dict[str, 
                 flush=True,
             )
             _emit_rtf_per_step(wall_ms=last.total_ms, params=params)
+            emit_key_metrics(
+                last.modules_ms,
+                wall_ms=last.total_ms,
+                params=params,
+                show_tokens_per_sec=bool((params or {}).get("llm_debug")),
+            )
         warmup = [s for s in state.pass_snapshots if s.is_warmup]
         if warmup and timed:
             print(
