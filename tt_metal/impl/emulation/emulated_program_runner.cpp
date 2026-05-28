@@ -1008,6 +1008,7 @@ static std::string get_extra_include_flags() {
     extra_inc += " -I\"" + project_src + "\"";
     extra_inc += " -I\"" + project_src + "/tt_metal/hw/inc\"";
     extra_inc += " -I\"" + project_src + "/tt_metal/hostdevcommon/api\"";
+    extra_inc += " -I\"" + project_src + "/tt_metal/hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines\"";
     return extra_inc;
 #else
     return {};
