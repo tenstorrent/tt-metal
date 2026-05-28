@@ -151,10 +151,21 @@ SystemMemoryManager::SystemMemoryManager(ContextId context_id, ChipId device_id,
         this->cq_size = dram_backed_command_queues_size / num_hw_cqs;
         TT_ASSERT((this->cq_size % ctx.hal().get_alignment(tt::tt_metal::HalMemType::DRAM)) == 0);
         const IDevice* device = ctx.device_manager()->get_active_device(this->device_id);
-        TT_FATAL(device->is_mmio_capable(), "Device {} is not an MMIO device", this->device_id);
+        TT_FATAL(
+            device->is_mmio_capable() || ctx.get_cluster().get_target_device_type() == tt::TargetDevice::Simulator,
+            "Device {} is not an MMIO device",
+            this->device_id);
         this->dram_region_staging_buffer = std::make_unique<char[]>(dram_backed_command_queues_size);
         this->cq_sysmem_start = this->dram_region_staging_buffer.get();
         this->channel_offset = 0;
+        static constexpr uint32_t AUX_PAGES_PER_CQ_SIM = 2;
+        uint32_t per_cq_reduction_sim = AUX_PAGES_PER_CQ_SIM * DispatchSettings::TRANSFER_PAGE_SIZE;
+        this->cq_size -= per_cq_reduction_sim;
+        uint32_t total_cq_space_sim = static_cast<uint32_t>(num_hw_cqs) * this->cq_size;
+        this->free_region_start_ = this->channel_offset + total_cq_space_sim;
+        this->free_region_size_ = static_cast<uint32_t>(num_hw_cqs) * per_cq_reduction_sim;
+        this->free_region_host_ptr_ = this->cq_sysmem_start + total_cq_space_sim;
+        this->free_region_bump_ = 0;
         this->init_dispatch_core_interfaces(num_hw_cqs, 0);
         return;
     }
