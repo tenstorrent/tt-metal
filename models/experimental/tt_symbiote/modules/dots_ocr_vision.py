@@ -413,12 +413,10 @@ def apply_rotary_tt(
         qf, kf, cos_f, sin_f = q, k, cos, sin
 
     q_embed = ttnn.add(
-        ttnn.mul(qf, cos_f, use_legacy=False),
-        ttnn.mul(_rotate_half(qf), sin_f, use_legacy=False),
+        ttnn.mul(qf, cos_f, use_legacy=False), ttnn.mul(_rotate_half(qf), sin_f, use_legacy=False), dtype=ttnn.bfloat8_b
     )
     k_embed = ttnn.add(
-        ttnn.mul(kf, cos_f, use_legacy=False),
-        ttnn.mul(_rotate_half(kf), sin_f, use_legacy=False),
+        ttnn.mul(kf, cos_f, use_legacy=False), ttnn.mul(_rotate_half(kf), sin_f, use_legacy=False), dtype=ttnn.bfloat8_b
     )
 
     if f32 is not None and out_dtype is not None:
@@ -1207,16 +1205,19 @@ class TTNNDotsVisionAttention(TTNNModule):
         512K) overflows L1 with a "Statically allocated CBs grow to ... B"
         error.
 
-        Tracy ablation (TP=2, S=12288):
+        Sweep results (test_dots_ocr_vision_sdpa_configs.py candidates, S=12288):
 
-            q=256, k=512 -> 12,246 us / SDPA call (baseline -- kept)
-            q=512, k=256 -> 13,464 us / SDPA call (+10%, regressed)
+            BFP4 V, q=256, k=512,  L1 out  -> 13,572 us (test baseline)
+            BFP4 V, q=256, k=512,  DRAM out -> 13,560 us (noise)
+            BFP4 V, q=256, k=1024, DRAM out -> 12,865 us  (-5.2%, kept)
+            BFP4 V, q=256, k=1536, DRAM out -> OOM
+            BFP8 V, q=256, k=1024, DRAM out -> OOM (+7 KB over L1)
 
-        The naive analysis says swapping should halve DRAM K/V re-reads
-        (24 outer Q chunks vs 48), but the kernel doesn't actually win:
-        the larger Q-chunk's softmax + DEST-register packing for the
-        16x8 QK^T tile shape eats the saved bandwidth and then some.
-        Stay at q=256/k=512.
+        The win requires both knobs together: BFP4 V (halves V bandwidth and
+        frees the 7 KB needed for the k=1024 scores CB) plus DRAM output
+        (frees the partial-output CB budget). Either knob alone doesn't move
+        the needle. q=128 variants regressed ~17% (too many outer Q passes),
+        and q=512 variants OOM or also regressed in earlier ablation.
         """
         grid = self.device.compute_with_storage_grid_size()
         grid_size = ttnn.CoreCoord(grid.x, grid.y)
@@ -1226,12 +1227,11 @@ class TTNNDotsVisionAttention(TTNNModule):
         elif seq_len <= 1024:
             q_chunk = k_chunk = 128
         else:
+            # k_chunk=1024 only fits once V is BFP4 (see typecast in forward())
+            # AND SDPA output is routed to DRAM (see _sdpa_padded_with_key_mask).
+            # With BFP8 V + k=1024 the scores CB exceeds L1 by ~7 KB.
             q_chunk = 256
-            k_chunk = 512
-        # q_chunk = 256
-        # k_chunk = 1024  -- TT_THROW CB clash, L1 region ends
-        # at 1,375,520 (allocator at 1,179,200) -- the 256x1024 fp32 acc CB plus
-        # Q/K/V chunk buffers exceed L1 by ~196 KB on 8x8 grid. Stay at k=512.
+            k_chunk = 1024
         # q_chunk = 512
         # k_chunk = 512   -- same product (256K), overflow..
         return SDPAProgramConfig(
@@ -1284,6 +1284,10 @@ class TTNNDotsVisionAttention(TTNNModule):
             owns_attn_mask = True
 
         program_config = self._get_sdpa_program_config(s_pad)
+        # DRAM output frees the partial-output CB budget so q=256/k=1024 fits.
+        # _concat_heads accepts DRAM input; the extra DRAM round-trip on the
+        # 22 MB context tensor (~80 us at 250 GB/s) is repaid by the larger
+        # k_chunk savings.
         ctx = ttnn.transformer.scaled_dot_product_attention(
             q,
             k,
@@ -1292,7 +1296,7 @@ class TTNNDotsVisionAttention(TTNNModule):
             attn_mask=attn_mask,
             program_config=program_config,
             compute_kernel_config=self.sdpa_compute_kernel_config,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(q)
         ttnn.deallocate(k)
@@ -1355,7 +1359,7 @@ class TTNNDotsVisionAttention(TTNNModule):
             num_heads=self.num_heads,
             num_kv_heads=self.num_kv_heads,
             transpose_k_heads=False,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.deallocate(qkv)
 
@@ -1370,7 +1374,13 @@ class TTNNDotsVisionAttention(TTNNModule):
             q = ttnn.experimental.rotary_embedding(q, cos, sin, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             k = ttnn.experimental.rotary_embedding(k, cos, sin, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        # V stays BFP8 from the QKV matmul through SDPA (no BFP4 downcast).
+        # V downcasts BFP8 -> BFP4 here. Halves V's DRAM bandwidth inside SDPA and
+        # frees enough L1 budget for the per-core scores CB to fit k_chunk=1024
+        # (q=256/k=1024 OOMs by ~7 KB if V stays BFP8). With k_chunk doubled the
+        # number of outer K/V passes halves (12288/1024=12 vs 12288/512=24), and
+        # the isolated SDPA sweep measures ~5% per-call savings net of this
+        # typecast.
+        v = ttnn.typecast(v, ttnn.bfloat4_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         # SDPA still requires interleaved Q/K/V (sdpa_device_operation.cpp:44 forbids
         # sharded inputs) and at S=12288 the BFP8 Q+K+V (~46 MB) plus SDPA's static
