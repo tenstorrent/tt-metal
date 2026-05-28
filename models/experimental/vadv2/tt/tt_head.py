@@ -208,6 +208,13 @@ class TtVADHead:
         # call resolves it; True / False thereafter.
         self._sap_pred_map_all_zero_cache = None
 
+        # bev_mask / bev_pos depend only on (bs, bev_h, bev_w) which are static.
+        # `ttnn.zeros` does a host->device write of the zero-fill, which is
+        # forbidden inside trace capture; cache the device tensors so the
+        # zeros/embedding chain only runs on the cold pass.
+        self._bev_mask_cache = {}
+        self._bev_pos_cache = {}
+
     def __call__(
         self,
         mlvl_feats,
@@ -248,10 +255,17 @@ class TtVADHead:
             )
 
         bev_queries = self.bev_embedding.weight
-
-        bev_mask = ttnn.zeros((bs, self.bev_h, self.bev_w), device=self.device, dtype=ttnn.bfloat16)
-        bev_pos = self.positional_encoding(bev_mask)
-        bev_pos = ttnn.to_layout(bev_pos, layout=ttnn.ROW_MAJOR_LAYOUT)
+        bev_key = (bs, self.bev_h, self.bev_w)
+        cached_bev_pos = self._bev_pos_cache.get(bev_key)
+        if cached_bev_pos is None:
+            bev_mask = ttnn.zeros((bs, self.bev_h, self.bev_w), device=self.device, dtype=ttnn.bfloat16)
+            bev_pos = self.positional_encoding(bev_mask)
+            bev_pos = ttnn.to_layout(bev_pos, layout=ttnn.ROW_MAJOR_LAYOUT)
+            self._bev_mask_cache[bev_key] = bev_mask
+            self._bev_pos_cache[bev_key] = bev_pos
+        else:
+            bev_mask = self._bev_mask_cache[bev_key]
+            bev_pos = cached_bev_pos
 
         if only_bev:  # only use encoder to obtain BEV features, TODO: refine the workaround
             return self.transformer.get_bev_features(
@@ -281,8 +295,7 @@ class TtVADHead:
                 img_metas=img_metas,
                 prev_bev=prev_bev,
             )
-        ttnn.deallocate(bev_mask)
-        ttnn.deallocate(bev_pos)
+        # bev_mask / bev_pos stay alive in self._bev_*_cache for the next call.
         (
             bev_embed,
             hs,

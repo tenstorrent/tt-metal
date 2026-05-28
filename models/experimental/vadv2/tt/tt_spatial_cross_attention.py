@@ -50,6 +50,11 @@ class TtSpatialCrossAttention:
         #                   their contributions land in a sink row that is
         #                   sliced off after scatter.
         self._sca_cache = {}
+        # zeros/zeros_like do a host->device write of the fill, forbidden inside
+        # trace capture. Cache the slot accumulator and sentinel-row templates;
+        # each warm call clones them (kernel-level device copy, trace-safe).
+        self._slots_template = None
+        self._sentinel_row_template = None
 
     def __call__(
         self,
@@ -74,7 +79,9 @@ class TtSpatialCrossAttention:
 
         if residual is None:
             inp_residual = query
-            slots = ttnn.zeros_like(query)  # kept on device — old code went via to_torch
+            if self._slots_template is None:
+                self._slots_template = ttnn.zeros_like(query)
+            slots = ttnn.clone(self._slots_template)
         if query_pos is not None:
             query = query + query_pos
 
@@ -220,9 +227,11 @@ class TtSpatialCrossAttention:
         queries_flat = ttnn.reshape(queries, (self.num_cams * max_len, self.embed_dims))
         slots_2d = ttnn.squeeze(slots, 0)
         slots_2d = ttnn.to_layout(slots_2d, ttnn.TILE_LAYOUT)
-        sentinel_row = ttnn.zeros(
-            (1, self.embed_dims), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
-        )
+        if self._sentinel_row_template is None:
+            self._sentinel_row_template = ttnn.zeros(
+                (1, self.embed_dims), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
+            )
+        sentinel_row = ttnn.clone(self._sentinel_row_template)
         slots_extended = ttnn.concat([slots_2d, sentinel_row], dim=0)
         slots_extended = ttnn.scatter_add(slots_extended, 0, all_idx_expanded, queries_flat)
         slots = ttnn.slice(slots_extended, [0, 0], [num_query, self.embed_dims])

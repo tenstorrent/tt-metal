@@ -102,6 +102,56 @@ class TtVADPerceptionTransformer:
         self._decoder_level_start_index_cache = None  # ttnn.zeros((1,)) uint32 TILE
         self._map_decoder_level_start_index_cache = None  # ttnn.zeros((1,)) bfloat16 TILE
 
+        # Persistent device buffers for the only dynamic per-call uploads in
+        # the warm path (shift / can_bus, built from img_metas). Allocated on
+        # first call; in-place updated via copy_host_to_device_tensor on
+        # subsequent calls. When `_skip_dynamic_upload` is True the inline
+        # update is bypassed (caller must seed buffers before begin_trace_capture).
+        self._shift_buffer = None
+        self._can_bus_buffer = None
+        self._skip_dynamic_upload = False
+
+        # Encoder's level_start_index is a constant (0,) uint32 tensor. ttnn.zeros
+        # does a host->device write of the fill, which is forbidden inside trace
+        # capture — build once and reuse.
+        self._encoder_level_start_index_cache = None
+
+    def update_dynamic_inputs(self, img_metas, bev_h, bev_w, grid_length=[0.512, 0.512]):
+        """Build shift / can_bus on host and write them into persistent device buffers.
+
+        First call allocates the buffers via ttnn.from_torch. Subsequent calls reuse
+        the same device handles and update contents via copy_host_to_device_tensor —
+        the trace replay reads from these handles. Must be called outside any
+        trace-capture / execute_trace region.
+        """
+        delta_x = np.array([each["can_bus"][0] for each in img_metas])
+        delta_y = np.array([each["can_bus"][1] for each in img_metas])
+        ego_angle = np.array([each["can_bus"][-2] / np.pi * 180 for each in img_metas])
+        grid_length_y = grid_length[0]
+        grid_length_x = grid_length[1]
+        translation_length = np.sqrt(delta_x**2 + delta_y**2)
+        translation_angle = np.arctan2(delta_y, delta_x) / np.pi * 180
+        bev_angle = ego_angle - translation_angle
+        shift_y = translation_length * np.cos(bev_angle / 180 * np.pi) / grid_length_y / bev_h
+        shift_x = translation_length * np.sin(bev_angle / 180 * np.pi) / grid_length_x / bev_w
+        shift_y = shift_y * self.use_shift
+        shift_x = shift_x * self.use_shift
+        shift_torch = torch.tensor([shift_x, shift_y], dtype=torch.float32).permute(1, 0)
+        can_bus_torch = torch.tensor([each["can_bus"] for each in img_metas], dtype=torch.float32)
+
+        if self._shift_buffer is None:
+            self._shift_buffer = ttnn.from_torch(
+                shift_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
+            )
+            self._can_bus_buffer = ttnn.from_torch(
+                can_bus_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
+            )
+        else:
+            shift_host = ttnn.from_torch(shift_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            can_bus_host = ttnn.from_torch(can_bus_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            ttnn.copy_host_to_device_tensor(shift_host, self._shift_buffer)
+            ttnn.copy_host_to_device_tensor(can_bus_host, self._can_bus_buffer)
+
     def attn_bev_encode(
         self,
         params,
@@ -127,23 +177,12 @@ class TtVADPerceptionTransformer:
         bev_queries = ttnn.to_layout(bev_queries, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         bev_pos = ttnn.reshape(bev_pos, [bev_pos.shape[0], bev_pos.shape[1], bev_pos.shape[2] * bev_pos.shape[3]])
         bev_pos = ttnn.permute(bev_pos, (2, 0, 1))
-        # obtain rotation angle and shift with ego motion
-        delta_x = np.array([each["can_bus"][0] for each in kwargs["img_metas"]])
-        delta_y = np.array([each["can_bus"][1] for each in kwargs["img_metas"]])
-        ego_angle = np.array([each["can_bus"][-2] / np.pi * 180 for each in kwargs["img_metas"]])
-        grid_length_y = grid_length[0]
-        grid_length_x = grid_length[1]
-        translation_length = np.sqrt(delta_x**2 + delta_y**2)
-        translation_angle = np.arctan2(delta_y, delta_x) / np.pi * 180
-        bev_angle = ego_angle - translation_angle
-        shift_y = translation_length * np.cos(bev_angle / 180 * np.pi) / grid_length_y / bev_h
-        shift_x = translation_length * np.sin(bev_angle / 180 * np.pi) / grid_length_x / bev_w
-        shift_y = shift_y * self.use_shift
-        shift_x = shift_x * self.use_shift
-
-        shift = torch.tensor([shift_x, shift_y], dtype=torch.float32).permute(1, 0)  # xy, bs -> bs, xy
-
-        shift = ttnn.from_torch(shift, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+        # Populate persistent shift / can_bus device buffers from img_metas. Bypassed
+        # when a caller has already seeded the buffers (e.g. trace capture / replay).
+        if not self._skip_dynamic_upload:
+            self.update_dynamic_inputs(kwargs["img_metas"], bev_h, bev_w, grid_length)
+        # Clone so the encoder's ttnn.deallocate(shift) does not free the persistent buffer.
+        shift = ttnn.clone(self._shift_buffer)
 
         if prev_bev is not None:
             if prev_bev.shape[1] == bev_h * bev_w:
@@ -159,11 +198,11 @@ class TtVADPerceptionTransformer:
                     tmp_prev_bev = ttnn.reshape(tmp_prev_bev, (bev_h * bev_w, 1, -1))
                     prev_bev[:, i] = tmp_prev_bev[:, 0]
 
-        # add can bus signals
-        can_bus = torch.tensor([each["can_bus"] for each in kwargs["img_metas"]], dtype=torch.float32)
-        can_bus = ttnn.from_torch(can_bus, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+        # add can bus signals (sourced from the persistent buffer; see update_dynamic_inputs)
+        # Clone so downstream ops can't free the persistent buffer.
+        can_bus = ttnn.clone(self._can_bus_buffer)
 
-        can_bus = can_bus = ttnn.linear(can_bus, params.can_bus_mlp["0"].weight, bias=params.can_bus_mlp["0"].bias)
+        can_bus = ttnn.linear(can_bus, params.can_bus_mlp["0"].weight, bias=params.can_bus_mlp["0"].bias)
         can_bus = ttnn.relu(can_bus)
         can_bus = ttnn.linear(can_bus, params.can_bus_mlp["1"].weight, bias=params.can_bus_mlp["1"].bias)
         can_bus = ttnn.relu(can_bus)
@@ -211,7 +250,11 @@ class TtVADPerceptionTransformer:
             self._encoder_spatial_shapes_cache[ss_key] = spatial_shapes_dev
         spatial_shapes = spatial_shapes_dev
 
-        level_start_index = ttnn.zeros((1,), dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=self.device)
+        if self._encoder_level_start_index_cache is None:
+            self._encoder_level_start_index_cache = ttnn.zeros(
+                (1,), dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=self.device
+            )
+        level_start_index = self._encoder_level_start_index_cache
         feat_flatten = ttnn.permute(feat_flatten, (0, 2, 1, 3))  # (num_cam, H*W, bs, embed_dims)
         bev_embed = self.encoder(
             bev_queries,
