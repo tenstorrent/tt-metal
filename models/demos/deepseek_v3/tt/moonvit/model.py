@@ -4,50 +4,240 @@
 """
 Full MoonViT vision tower.
 
-Forward pipeline (matches MoonVitPretrainedModel.forward + final_layernorm):
-    pixel_values, grid_hws
-        -> patch_embed  (Conv2d + 2D learned posemb add)
-        -> encoder      (27 x [norm0 -> attn -> norm1 -> mlp] + final_layernorm)
-        -> patch_merger (2x2 spatial concat -> 4608-dim tokens)
-        -> output: merged tokens (NOT yet projected into LLM hidden)
+Forward pipeline (matches MoonVitPretrainedModel.forward + final_layernorm
++ KimiVLMultiModalProjector when `MoonViT` is constructed with a projector):
 
-The multi-modal projector lives in a separate module (`projector.py`)
-to match the HF layout, where `MoonVitPretrainedModel` and
-`KimiVLMultiModalProjector` are independent. Callers compose them
-explicitly when feeding vision tokens into the LLM.
+    pixel_patches (L, 3, 14, 14) host
+        -> patch_embed     (Conv2d projection + 2D learned posemb add)  device
+        -> 27 x encoder blocks
+              (LN -> attn(cu_seqlens, 2D RoPE) -> residual; LN -> MLP -> residual)
+        -> final_layernorm
+        -> patch_merger (2x2 spatial concat)
+        -> projector (LN -> Linear -> GELU -> Linear)
+        -> vision tokens (L_new, text_hidden)
 
-`DropInMoonViT` is a torch.nn.Module wrapper that lets the ttnn module
-be exercised through the HF KimiVLForConditionalGeneration pipeline for
-end-to-end testing.
+The patch_merger step runs on host (pure shape ops); everything else is
+on device. cu_seqlens and the 2D-RoPE cos/sin are precomputed from grid_hws
+host-side and pushed to device once per forward.
+
+References:
+  - `MoonVitPretrainedModel` and `KimiVLMultiModalProjector` in modeling_kimi_vl.py.
 """
 from __future__ import annotations
 
+from typing import List, Optional
+
+import torch
+
+import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.deepseek_v3.tt.moonvit.block import MoonVisionBlock
+from models.demos.deepseek_v3.tt.moonvit.layernorm import MoonVisionLayerNorm
+from models.demos.deepseek_v3.tt.moonvit.patch_embed import MoonVisionPatchEmbed, MoonVisionPatchProj
+from models.demos.deepseek_v3.tt.moonvit.projector import MoonViTProjector
+from models.demos.deepseek_v3.tt.moonvit.rope import Rope2DSetup
+
+
+def _is_mesh_device(device) -> bool:
+    return type(device).__name__ == "MeshDevice"
 
 
 class MoonViT(LightweightModule):
+    """Full MoonViT vision tower + optional projector composition."""
+
     def __init__(
         self,
-        args,
         mesh_device,
-        dtype,
-        state_dict,
-        weight_cache_path,
+        patch_embed: MoonVisionPatchEmbed,
+        blocks: List[MoonVisionBlock],
+        final_layernorm: MoonVisionLayerNorm,
+        rope: Rope2DSetup,
+        merge_kernel_size,
+        projector: Optional[MoonViTProjector] = None,
+        dtype=ttnn.bfloat16,
     ):
         super().__init__()
-        raise NotImplementedError("Phase 1 — MoonViT")
+        self.device = mesh_device
+        self.dtype = dtype
+        self.patch_embed = patch_embed
+        self.blocks = blocks
+        self.final_layernorm = final_layernorm
+        self.rope = rope
+        self.merge_kernel_size = tuple(merge_kernel_size)
+        self.projector = projector
 
-    def forward(self, pixel_values, grid_hws):
-        raise NotImplementedError("Phase 1 — MoonViT.forward")
+    @classmethod
+    def from_torch(
+        cls,
+        model_args,
+        mesh_device,
+        with_projector: bool = True,
+        dtype=ttnn.bfloat16,
+    ) -> "MoonViT":
+        """Construct the full vision tower from a MoonViTModelArgs.
 
+        Uses the reference factories to extract weights from the loaded
+        HF Kimi-VL model. Loading happens lazily — first access to
+        `model_args.hf_model` triggers the checkpoint download (or hits
+        the local cache).
+        """
+        # Lazily resolve the HF model graph so the encoder.blocks list is in scope.
+        from models.demos.deepseek_v3.tt.moonvit._references import _vision_tower
 
-class DropInMoonViT:
-    """torch.nn.Module-compatible wrapper around the ttnn MoonViT.
+        vt = _vision_tower(model_args)
+        ref_blocks = vt.encoder.blocks
+        num_layers = len(ref_blocks)
 
-    Exposes the same forward signature as HF MoonVitPretrainedModel +
-    KimiVLMultiModalProjector so it can be substituted into
-    KimiVLForConditionalGeneration for end-to-end smoke tests.
-    """
+        # Patch embed (Conv2d projection + learned 2D interp posemb).
+        ref_patch_embed = model_args.reference_patch_embed()
+        patch_embed = MoonVisionPatchEmbed.from_torch(mesh_device, ref_patch_embed, dtype=dtype)
 
-    def __init__(self, tt_model: MoonViT):
-        raise NotImplementedError("Phase 1 — DropInMoonViT")
+        # Encoder blocks.
+        blocks: List[MoonVisionBlock] = []
+        for i, ref_layer in enumerate(ref_blocks):
+            # Force sdpa to keep behavior consistent with our cu_seqlens-aware path.
+            ref_layer.attn_implementation = "sdpa"
+            blocks.append(
+                MoonVisionBlock.from_torch(
+                    mesh_device,
+                    ref_layer,
+                    hidden_size=model_args.hidden_size,
+                    num_heads=model_args.num_attention_heads,
+                    head_dim=model_args.head_dim,
+                    dtype=dtype,
+                )
+            )
+
+        # Final LayerNorm (encoder tail).
+        ref_final_ln = model_args.reference_final_layernorm()
+        final_ln = MoonVisionLayerNorm.from_torch(mesh_device, ref_final_ln, dtype=dtype)
+
+        # 2D RoPE (used by every block).
+        ref_rope = model_args.reference_rope_2d()
+        rope = Rope2DSetup.from_torch(ref_rope)
+
+        # Optional projector.
+        projector: Optional[MoonViTProjector] = None
+        if with_projector:
+            ref_proj = model_args.reference_projector()
+            projector = MoonViTProjector.from_torch(mesh_device, ref_proj, dtype=dtype)
+
+        return cls(
+            mesh_device=mesh_device,
+            patch_embed=patch_embed,
+            blocks=blocks,
+            final_layernorm=final_ln,
+            rope=rope,
+            merge_kernel_size=model_args.merge_kernel_size,
+            projector=projector,
+            dtype=dtype,
+        )
+
+    # ------------------------------------------------------------------
+    # Helpers
+
+    def _build_cu_seqlens(self, grid_hws_pt: torch.Tensor) -> ttnn.Tensor:
+        """Build cu_seqlens uint32 row-major tensor on device."""
+        lengths = torch.cat([torch.zeros(1, dtype=grid_hws_pt.dtype), grid_hws_pt[:, 0] * grid_hws_pt[:, 1]])
+        cu_pt = lengths.cumsum(dim=0, dtype=torch.int32).contiguous()
+        mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if _is_mesh_device(self.device) else None
+        return ttnn.from_torch(
+            cu_pt,
+            device=self.device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=mesh_mapper,
+        )
+
+    def _push_pixel_patches(self, pixel_patches: torch.Tensor) -> ttnn.Tensor:
+        """Flatten (L, 3, 14, 14) patches host-side and push to device."""
+        x_flat = MoonVisionPatchProj.flatten_patches(pixel_patches.to(torch.bfloat16))
+        L = x_flat.shape[0]
+        x_4d = x_flat.view(1, 1, L, -1).contiguous()
+        mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if _is_mesh_device(self.device) else None
+        return ttnn.from_torch(
+            x_4d,
+            device=self.device,
+            dtype=self.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mesh_mapper,
+        )
+
+    def _push_merged(self, merged_pt: torch.Tensor) -> ttnn.Tensor:
+        """Push the host-computed patch_merger output to device.
+
+        merged_pt has shape (L_new_total, kh*kw, vision_hidden); we reshape
+        to (1, 1, L_new_total * kh*kw, vision_hidden) which is what the
+        projector expects (LN-over-last-dim then reshape).
+        """
+        L_new, k_group, D = merged_pt.shape
+        flat = merged_pt.reshape(L_new * k_group, D)
+        x_4d = flat.view(1, 1, L_new * k_group, D).to(torch.bfloat16).contiguous()
+        mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if _is_mesh_device(self.device) else None
+        return ttnn.from_torch(
+            x_4d,
+            device=self.device,
+            dtype=self.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mesh_mapper,
+        )
+
+    # ------------------------------------------------------------------
+    # Forward
+
+    def forward(
+        self,
+        pixel_patches: torch.Tensor,  # (L, 3, 14, 14) host
+        grid_hws: torch.Tensor,  # (N, 2) host
+    ) -> ttnn.Tensor:
+        """End-to-end vision tower forward.
+
+        Args:
+            pixel_patches: host tensor of pre-cut patches.
+            grid_hws: host tensor of per-image (H, W) shapes.
+
+        Returns:
+            device tensor. If projector is present, shape (1, 1, L_new, text_hidden);
+            otherwise (1, 1, L, vision_hidden) — the pre-merge encoder output.
+        """
+        # ----- patch_embed (Conv2d proj + bicubic posemb) on device -----
+        x_tt = self._push_pixel_patches(pixel_patches)
+        x_tt = self.patch_embed(x_tt, grid_hws)  # (1, 1, L, hidden)
+
+        # ----- encoder blocks share cu_seqlens and cos/sin -----
+        cu_tt = self._build_cu_seqlens(grid_hws)
+        # Use the first block's attention staging for cos/sin (they all use the same shapes).
+        cos_pt, sin_pt = self.rope.get_cos_sin(grid_hws, dtype=torch.float32)
+        cos_tt, sin_tt = self.blocks[0].attention.stage_cos_sin(cos_pt, sin_pt)
+
+        for blk in self.blocks:
+            x_tt = blk(x_tt, cu_tt, cos_tt, sin_tt)
+
+        # ----- final layernorm on device -----
+        x_tt = self.final_layernorm(x_tt)
+
+        # ----- patch_merger on host -----
+        # Pull encoder output to host as (L, vision_hidden).
+        x_pt = ttnn.to_torch(
+            x_tt,
+            mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0) if _is_mesh_device(self.device) else None,
+        )
+        if _is_mesh_device(self.device) and x_pt.shape[0] != 1:
+            x_pt = x_pt[:1]
+        L = pixel_patches.shape[0]
+        x_pt_2d = x_pt.view(L, -1)
+        from models.demos.deepseek_v3.tt.moonvit.patch_merger import patch_merger_per_image
+
+        merged_list = patch_merger_per_image(x_pt_2d, grid_hws, self.merge_kernel_size)
+        merged_pt = torch.cat(merged_list, dim=0)  # (L_new, kh*kw, vision_hidden)
+
+        if self.projector is None:
+            # Return the merger output for callers that want the un-projected form.
+            return self._push_merged(merged_pt)
+
+        # ----- projector on device -----
+        merged_tt = self._push_merged(merged_pt)
+        out_tt = self.projector(merged_tt)
+        return out_tt
