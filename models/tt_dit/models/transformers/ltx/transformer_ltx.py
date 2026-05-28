@@ -122,14 +122,14 @@ class LTXTransformerBlock(Module):
             total_shape=[1, 1, self.adaln_coeff, video_dim],
             mesh_axes=[None, None, None, parallel_config.tensor_parallel.mesh_axis],
             device=mesh_device,
-            dtype=ttnn.float32,
+            dtype=ttnn.bfloat16,
         )
         if cross_attention_adaln:
             self.prompt_scale_shift_table = Parameter(
                 total_shape=[1, 1, 2, video_dim],
                 mesh_axes=[None, None, None, None],
                 device=mesh_device,
-                dtype=ttnn.float32,
+                dtype=ttnn.bfloat16,
             )
 
         # === AUDIO PATH (only when has_audio=True) ===
@@ -158,14 +158,14 @@ class LTXTransformerBlock(Module):
                 total_shape=[1, 1, self.adaln_coeff, audio_dim],
                 mesh_axes=[None, None, None, parallel_config.tensor_parallel.mesh_axis],
                 device=mesh_device,
-                dtype=ttnn.float32,
+                dtype=ttnn.bfloat16,
             )
             if cross_attention_adaln:
                 self.audio_prompt_scale_shift_table = Parameter(
                     total_shape=[1, 1, 2, audio_dim],
                     mesh_axes=[None, None, None, None],
                     device=mesh_device,
-                    dtype=ttnn.float32,
+                    dtype=ttnn.bfloat16,
                 )
 
             # === BIDIRECTIONAL CROSS-ATTENTION ===
@@ -189,13 +189,13 @@ class LTXTransformerBlock(Module):
                 total_shape=[1, 1, 5, audio_dim],
                 mesh_axes=[None, None, None, parallel_config.tensor_parallel.mesh_axis],
                 device=mesh_device,
-                dtype=ttnn.float32,
+                dtype=ttnn.bfloat16,
             )
             self.scale_shift_table_a2v_ca_video = Parameter(
                 total_shape=[1, 1, 5, video_dim],
                 mesh_axes=[None, None, None, parallel_config.tensor_parallel.mesh_axis],
                 device=mesh_device,
-                dtype=ttnn.float32,
+                dtype=ttnn.bfloat16,
             )
 
         self.ff_compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -214,25 +214,27 @@ class LTXTransformerBlock(Module):
             rename_substate(state, "audio_ff.net.0.proj", "audio_ff.ff1")
             rename_substate(state, "audio_ff.net.2", "audio_ff.ff2")
 
-        tables = ["scale_shift_table"]
+        # Scale slots pre-incremented (+1) and cast to bf16 so each runtime
+        # modulation fuses to one ttnn.addcmul(shift, x, scale_p1).
+        tables_scale_idxs: dict[str, list[int]] = {}
+        tables_scale_idxs["scale_shift_table"] = [1, 4, 7] if self.cross_attention_adaln else [1, 4]
         if self.cross_attention_adaln:
-            tables.append("prompt_scale_shift_table")
+            tables_scale_idxs["prompt_scale_shift_table"] = [1]
         else:
-            # 6-output mode has no prompt tables — remove if present in checkpoint
             pop_substate(state, "prompt_scale_shift_table")
         if self.has_audio:
-            tables.append("audio_scale_shift_table")
+            tables_scale_idxs["audio_scale_shift_table"] = [1, 4, 7] if self.cross_attention_adaln else [1, 4]
             if self.cross_attention_adaln:
-                tables.append("audio_prompt_scale_shift_table")
+                tables_scale_idxs["audio_prompt_scale_shift_table"] = [1]
             else:
                 pop_substate(state, "audio_prompt_scale_shift_table")
-            tables += [
-                "scale_shift_table_a2v_ca_audio",
-                "scale_shift_table_a2v_ca_video",
-            ]
-        for key in tables:
+            tables_scale_idxs["scale_shift_table_a2v_ca_audio"] = [0, 2]
+            tables_scale_idxs["scale_shift_table_a2v_ca_video"] = [0, 2]
+        for key, scale_idxs in tables_scale_idxs.items():
             if key in state:
-                state[key] = state[key].unsqueeze(0).unsqueeze(0)
+                t = state[key].unsqueeze(0).unsqueeze(0).clone()
+                t[:, :, scale_idxs, :] += 1.0
+                state[key] = t.to(dtype=torch.bfloat16)
 
     def forward(
         self,
@@ -271,19 +273,17 @@ class LTXTransformerBlock(Module):
         video_padding_mask_full: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
         # === VIDEO MODULATION ===
+        # `_p1` chunks carry +1 baked into the scale slot (see _prepare_torch_state).
         shifted_v = self.scale_shift_table.data + video_temb
         chunks = ttnn.chunk(shifted_v, self.adaln_coeff, dim=2)
-        v_shift_sa, v_scale_sa, v_gate_sa = chunks[0], chunks[1], chunks[2]
-        v_shift_ff, v_scale_ff, v_gate_ff = chunks[3], chunks[4], chunks[5]
-        v_gate_sa = ttnn.typecast(v_gate_sa, dtype=ttnn.bfloat16)
-        v_gate_ff = ttnn.typecast(v_gate_ff, dtype=ttnn.bfloat16)
+        v_shift_sa, v_scale_sa_p1, v_gate_sa = chunks[0], chunks[1], chunks[2]
+        v_shift_ff, v_scale_ff_p1, v_gate_ff = chunks[3], chunks[4], chunks[5]
         if self.cross_attention_adaln:
-            v_shift_ca, v_scale_ca, v_gate_ca = chunks[6], chunks[7], chunks[8]
-            v_gate_ca = ttnn.typecast(v_gate_ca, dtype=ttnn.bfloat16)
+            v_shift_ca, v_scale_ca_p1, v_gate_ca = chunks[6], chunks[7], chunks[8]
 
         # === VIDEO SELF-ATTENTION ===
         video_normed = self.norm1(video_1BND)
-        video_normed = video_normed * (1.0 + v_scale_sa) + v_shift_sa
+        video_normed = ttnn.addcmul(v_shift_sa, video_normed, v_scale_sa_p1)
         video_1BND = self.attn1(
             spatial_1BND=video_normed,
             N=video_N,
@@ -297,11 +297,11 @@ class LTXTransformerBlock(Module):
 
         # === VIDEO TEXT CROSS-ATTENTION ===
         if self.cross_attention_adaln:
-            video_ca_input = self.norm2(video_1BND) * (1.0 + v_scale_ca) + v_shift_ca
+            video_ca_input = ttnn.addcmul(v_shift_ca, self.norm2(video_1BND), v_scale_ca_p1)
             if video_prompt_temb is not None:
                 shifted_prompt_v = self.prompt_scale_shift_table.data + video_prompt_temb
-                v_kv_shift, v_kv_scale = ttnn.chunk(shifted_prompt_v, 2, dim=2)
-                video_prompt_mod = video_prompt * (1.0 + v_kv_scale) + v_kv_shift
+                v_kv_shift, v_kv_scale_p1 = ttnn.chunk(shifted_prompt_v, 2, dim=2)
+                video_prompt_mod = ttnn.addcmul(v_kv_shift, video_prompt, v_kv_scale_p1)
             else:
                 video_prompt_mod = video_prompt
             video_ca_out = self.attn2(spatial_1BND=video_ca_input, N=video_N, prompt_1BLP=video_prompt_mod)
@@ -315,7 +315,7 @@ class LTXTransformerBlock(Module):
         if not self.has_audio:
             # === VIDEO-ONLY FEEDFORWARD ===
             video_normed = self.norm3(video_1BND)
-            video_normed = video_normed * (1.0 + v_scale_ff) + v_shift_ff
+            video_normed = ttnn.addcmul(v_shift_ff, video_normed, v_scale_ff_p1)
             if self.parallel_config.tensor_parallel.factor > 1:
                 video_normed = self.ccl_manager.all_gather_persistent_buffer(
                     video_normed, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
@@ -338,17 +338,14 @@ class LTXTransformerBlock(Module):
         # === AUDIO PATH (has_audio=True from here) ===
         shifted_a = self.audio_scale_shift_table.data + audio_temb
         a_chunks = ttnn.chunk(shifted_a, self.adaln_coeff, dim=2)
-        a_shift_sa, a_scale_sa, a_gate_sa = a_chunks[0], a_chunks[1], a_chunks[2]
-        a_shift_ff, a_scale_ff, a_gate_ff = a_chunks[3], a_chunks[4], a_chunks[5]
-        a_gate_sa = ttnn.typecast(a_gate_sa, dtype=ttnn.bfloat16)
-        a_gate_ff = ttnn.typecast(a_gate_ff, dtype=ttnn.bfloat16)
+        a_shift_sa, a_scale_sa_p1, a_gate_sa = a_chunks[0], a_chunks[1], a_chunks[2]
+        a_shift_ff, a_scale_ff_p1, a_gate_ff = a_chunks[3], a_chunks[4], a_chunks[5]
         if self.cross_attention_adaln:
-            a_shift_ca, a_scale_ca, a_gate_ca = a_chunks[6], a_chunks[7], a_chunks[8]
-            a_gate_ca = ttnn.typecast(a_gate_ca, dtype=ttnn.bfloat16)
+            a_shift_ca, a_scale_ca_p1, a_gate_ca = a_chunks[6], a_chunks[7], a_chunks[8]
 
         # === AUDIO SELF-ATTENTION ===
         audio_normed = self.audio_norm1(audio_1BND)
-        audio_normed = audio_normed * (1.0 + a_scale_sa) + a_shift_sa
+        audio_normed = ttnn.addcmul(a_shift_sa, audio_normed, a_scale_sa_p1)
         audio_1BND = self.audio_attn1(
             spatial_1BND=audio_normed,
             N=audio_N,
@@ -363,11 +360,11 @@ class LTXTransformerBlock(Module):
 
         # === AUDIO TEXT CROSS-ATTENTION ===
         if self.cross_attention_adaln:
-            audio_ca_input = self.audio_norm2(audio_1BND) * (1.0 + a_scale_ca) + a_shift_ca
+            audio_ca_input = ttnn.addcmul(a_shift_ca, self.audio_norm2(audio_1BND), a_scale_ca_p1)
             if audio_prompt_temb is not None:
                 shifted_prompt_a = self.audio_prompt_scale_shift_table.data + audio_prompt_temb
-                a_kv_shift, a_kv_scale = ttnn.chunk(shifted_prompt_a, 2, dim=2)
-                audio_prompt_mod = audio_prompt * (1.0 + a_kv_scale) + a_kv_shift
+                a_kv_shift, a_kv_scale_p1 = ttnn.chunk(shifted_prompt_a, 2, dim=2)
+                audio_prompt_mod = ttnn.addcmul(a_kv_shift, audio_prompt, a_kv_scale_p1)
             else:
                 audio_prompt_mod = audio_prompt
             audio_ca_out = self.audio_attn2(spatial_1BND=audio_ca_input, N=audio_N, prompt_1BLP=audio_prompt_mod)
@@ -388,23 +385,22 @@ class LTXTransformerBlock(Module):
 
         # === BIDIRECTIONAL A↔V CROSS-ATTENTION ===
         if not skip_cross_attn:
+            # Chunk layout [scale, shift, scale, shift, gate]: scale slots (idx 0, 2) have +1 baked in.
             shifted_av = self.scale_shift_table_a2v_ca_video.data + av_ca_temb
-            v_ca_scale, v_ca_shift, a_ca_scale_v, a_ca_shift_v, v_ca_gate = ttnn.chunk(shifted_av, 5, dim=2)
-            v_ca_gate = ttnn.typecast(v_ca_gate, dtype=ttnn.bfloat16)
+            v_ca_scale_p1, v_ca_shift, a_ca_scale_v_p1, a_ca_shift_v, v_ca_gate = ttnn.chunk(shifted_av, 5, dim=2)
 
             _av_ca_audio_temb = (
                 av_ca_audio_temb if av_ca_audio_temb is not None else av_ca_temb[:, :, :5, : self.audio_dim]
             )
             shifted_av_a = self.scale_shift_table_a2v_ca_audio.data + _av_ca_audio_temb
-            a_scale_a2v, a_shift_a2v, a_scale_v2a, a_shift_v2a, a_ca_gate = ttnn.chunk(shifted_av_a, 5, dim=2)
-            a_ca_gate = ttnn.typecast(a_ca_gate, dtype=ttnn.bfloat16)
+            a_scale_a2v_p1, a_shift_a2v, a_scale_v2a_p1, a_shift_v2a, a_ca_gate = ttnn.chunk(shifted_av_a, 5, dim=2)
 
             video_normed_xattn = self.norm3(video_1BND)
             audio_normed_xattn = self.audio_norm3(audio_1BND)
 
             # A→V: audio provides context for video
-            video_q_a2v = video_normed_xattn * (1.0 + v_ca_scale) + v_ca_shift
-            audio_kv_a2v = audio_normed_xattn * (1.0 + a_scale_a2v) + a_shift_a2v
+            video_q_a2v = ttnn.addcmul(v_ca_shift, video_normed_xattn, v_ca_scale_p1)
+            audio_kv_a2v = ttnn.addcmul(a_shift_a2v, audio_normed_xattn, a_scale_a2v_p1)
             if self.parallel_config.sequence_parallel.factor > 1:
                 audio_kv_a2v = self.ccl_manager.all_gather_persistent_buffer(
                     audio_kv_a2v, dim=2, mesh_axis=self.parallel_config.sequence_parallel.mesh_axis
@@ -429,8 +425,8 @@ class LTXTransformerBlock(Module):
             video_1BND = ttnn.addcmul(video_1BND, a2v_output, v_ca_gate)
 
             # V→A: video provides context for audio
-            audio_q_v2a = audio_normed_xattn * (1.0 + a_scale_v2a) + a_shift_v2a
-            video_kv_v2a = video_normed_xattn * (1.0 + a_ca_scale_v) + a_ca_shift_v
+            audio_q_v2a = ttnn.addcmul(a_shift_v2a, audio_normed_xattn, a_scale_v2a_p1)
+            video_kv_v2a = ttnn.addcmul(a_ca_shift_v, video_normed_xattn, a_ca_scale_v_p1)
             # Mask on the SP-local shard so `to_kv` runs at M=video_N/sp instead of M=video_N.
             # `norm(*)*(1+scale)+shift` is non-zero in padded slots even when the input
             # residual is zero, so the multiply has to follow the affine. The cross-attn
@@ -454,7 +450,7 @@ class LTXTransformerBlock(Module):
 
         # === VIDEO FEEDFORWARD ===
         video_normed = self.norm3(video_1BND)
-        video_normed = video_normed * (1.0 + v_scale_ff) + v_shift_ff
+        video_normed = ttnn.addcmul(v_shift_ff, video_normed, v_scale_ff_p1)
         if self.parallel_config.tensor_parallel.factor > 1:
             video_normed = self.ccl_manager.all_gather_persistent_buffer(
                 video_normed, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
@@ -473,7 +469,7 @@ class LTXTransformerBlock(Module):
 
         # === AUDIO FEEDFORWARD ===
         audio_normed = self.audio_norm3(audio_1BND)
-        audio_normed = audio_normed * (1.0 + a_scale_ff) + a_shift_ff
+        audio_normed = ttnn.addcmul(a_shift_ff, audio_normed, a_scale_ff_p1)
         if self.parallel_config.tensor_parallel.factor > 1:
             audio_normed = self.ccl_manager.all_gather_persistent_buffer(
                 audio_normed, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
@@ -565,12 +561,14 @@ class LTXTransformerModel(Module):
             embedding_dim=self.inner_dim,
             embedding_coefficient=adaln_coeff,
             mesh_device=mesh_device,
+            dtype=ttnn.bfloat16,
         )
         if cross_attention_adaln:
             self.prompt_adaln_single = LTXAdaLayerNormSingle(
                 embedding_dim=self.inner_dim,
                 embedding_coefficient=2,
                 mesh_device=mesh_device,
+                dtype=ttnn.bfloat16,
             )
         self.norm_out = DistributedLayerNorm(
             self.inner_dim,
@@ -585,7 +583,7 @@ class LTXTransformerModel(Module):
             total_shape=[1, 1, 2, self.inner_dim],
             mesh_axes=[None, None, None, parallel_config.tensor_parallel.mesh_axis],
             device=mesh_device,
-            dtype=ttnn.float32,
+            dtype=ttnn.bfloat16,
         )
         self.proj_out = Linear(self.inner_dim, out_channels, bias=True, mesh_device=mesh_device)
 
@@ -603,12 +601,14 @@ class LTXTransformerModel(Module):
                 embedding_dim=self.audio_inner_dim,
                 embedding_coefficient=adaln_coeff,
                 mesh_device=mesh_device,
+                dtype=ttnn.bfloat16,
             )
             if cross_attention_adaln:
                 self.audio_prompt_adaln_single = LTXAdaLayerNormSingle(
                     embedding_dim=self.audio_inner_dim,
                     embedding_coefficient=2,
                     mesh_device=mesh_device,
+                    dtype=ttnn.bfloat16,
                 )
             self.audio_norm_out = DistributedLayerNorm(
                 self.audio_inner_dim,
@@ -623,7 +623,7 @@ class LTXTransformerModel(Module):
                 total_shape=[1, 1, 2, self.audio_inner_dim],
                 mesh_axes=[None, None, None, parallel_config.tensor_parallel.mesh_axis],
                 device=mesh_device,
-                dtype=ttnn.float32,
+                dtype=ttnn.bfloat16,
             )
             self.audio_proj_out = Linear(self.audio_inner_dim, audio_out_channels, bias=True, mesh_device=mesh_device)
 
@@ -632,21 +632,25 @@ class LTXTransformerModel(Module):
                 embedding_dim=self.inner_dim,
                 embedding_coefficient=4,
                 mesh_device=mesh_device,
+                dtype=ttnn.bfloat16,
             )
             self.av_ca_audio_scale_shift_adaln_single = LTXAdaLayerNormSingle(
                 embedding_dim=self.audio_inner_dim,
                 embedding_coefficient=4,
                 mesh_device=mesh_device,
+                dtype=ttnn.bfloat16,
             )
             self.av_ca_a2v_gate_adaln_single = LTXAdaLayerNormSingle(
                 embedding_dim=self.inner_dim,
                 embedding_coefficient=1,
                 mesh_device=mesh_device,
+                dtype=ttnn.bfloat16,
             )
             self.av_ca_v2a_gate_adaln_single = LTXAdaLayerNormSingle(
                 embedding_dim=self.audio_inner_dim,
                 embedding_coefficient=1,
                 mesh_device=mesh_device,
+                dtype=ttnn.bfloat16,
             )
 
         # === TRANSFORMER BLOCKS ===
@@ -684,12 +688,15 @@ class LTXTransformerModel(Module):
         )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        # Output-proj table is [shift, scale]; bake +1 into the scale slot and cast to bf16.
         tables = ["scale_shift_table"]
         if self.has_audio:
             tables.append("audio_scale_shift_table")
         for key in tables:
             if key in state:
-                state[key] = state[key].unsqueeze(0).unsqueeze(0)
+                t = state[key].unsqueeze(0).unsqueeze(0).clone()
+                t[:, :, 1, :] += 1.0
+                state[key] = t.to(dtype=torch.bfloat16)
 
         # Remove keys not implemented in TTNN
         pop_substate(state, "video_embeddings_connector")
@@ -740,7 +747,7 @@ class LTXTransformerModel(Module):
         video_padding_mask_full: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
         """Run one denoising step on device. Returns video output, or (video, audio) tuple."""
-        from ....utils.tensor import bf16_tensor, float32_tensor
+        from ....utils.tensor import bf16_tensor
 
         # Push video to device (SP-sharded)
         video_1BNI = bf16_tensor(
@@ -750,9 +757,8 @@ class LTXTransformerModel(Module):
             shard_dim=-2,
         )
 
-        # Timestep embedding
         B_size = video_1BNI_torch.shape[1]
-        timestep = float32_tensor(
+        timestep = bf16_tensor(
             timestep_torch.reshape(1, 1, B_size, 1) * 1000.0,
             device=self.mesh_device,
         )
@@ -867,7 +873,6 @@ class LTXTransformerModel(Module):
             else:
                 video_1BND = result
 
-        # Output projection — video
         v_inner_local = video_emb_ts.shape[-1]
         v_emb_1B1D = ttnn.reshape(video_emb_ts, (1, B, 1, v_inner_local))
         if self.parallel_config.tensor_parallel.factor > 1:
@@ -875,9 +880,9 @@ class LTXTransformerModel(Module):
                 v_emb_1B1D, dim=3, cluster_axis=self.parallel_config.tensor_parallel.mesh_axis
             )
         shifted_v = self.scale_shift_table.data + v_emb_1B1D
-        v_shift_out, v_scale_out = ttnn.chunk(shifted_v, 2, dim=2)
+        v_shift_out, v_scale_out_p1 = ttnn.chunk(shifted_v, 2, dim=2)
         video_normed = self.norm_out(video_1BND)
-        video_1BND = video_normed * (1.0 + v_scale_out) + v_shift_out
+        video_1BND = ttnn.addcmul(v_shift_out, video_normed, v_scale_out_p1)
         if self.parallel_config.tensor_parallel.factor > 1:
             video_1BND = self.ccl_manager.all_gather_persistent_buffer(
                 video_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
@@ -895,9 +900,9 @@ class LTXTransformerModel(Module):
                     a_emb_1B1D, dim=3, cluster_axis=self.parallel_config.tensor_parallel.mesh_axis
                 )
             shifted_a = self.audio_scale_shift_table.data + a_emb_1B1D
-            a_shift_out, a_scale_out = ttnn.chunk(shifted_a, 2, dim=2)
+            a_shift_out, a_scale_out_p1 = ttnn.chunk(shifted_a, 2, dim=2)
             audio_normed = self.audio_norm_out(audio_1BND)
-            audio_1BND = audio_normed * (1.0 + a_scale_out) + a_shift_out
+            audio_1BND = ttnn.addcmul(a_shift_out, audio_normed, a_scale_out_p1)
             if self.parallel_config.tensor_parallel.factor > 1:
                 audio_1BND = self.ccl_manager.all_gather_persistent_buffer(
                     audio_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
