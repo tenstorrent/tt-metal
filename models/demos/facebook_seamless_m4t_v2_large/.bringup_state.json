@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-28T00:18:15Z",
-  "updated_at": "2026-05-28T00:35:24Z",
+  "updated_at": "2026-05-28T00:40:13Z",
   "components": [
     {
       "name": "layernorm",
@@ -142,8 +142,10 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "failing",
+        "pcc": null,
+        "attempts": 1,
+        "last_error": "Agent subagent socket connection closed unexpectedly mid-task"
       },
       "ttnn": {
         "status": "pending",
@@ -168,8 +170,13 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 1.0,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/reference/functional.py",
+          "models/demos/facebook_seamless_m4t_v2_large/reference/golden/conformer_ffn.pt"
+        ]
       },
       "ttnn": {
         "status": "pending",
@@ -194,8 +201,10 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "failing",
+        "pcc": null,
+        "attempts": 1,
+        "last_error": "Agent subagent socket connection closed unexpectedly mid-task"
       },
       "ttnn": {
         "status": "pending",
@@ -222,8 +231,13 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 1.0,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/reference/functional.py",
+          "models/demos/facebook_seamless_m4t_v2_large/reference/golden/conformer_convolution_module.pt"
+        ]
       },
       "ttnn": {
         "status": "pending",
@@ -739,6 +753,12 @@
       "ts": "2026-05-28T00:35:24Z",
       "action": "reference[layernorm,scaled_word_embedding,sinusoidal_positional_embedding,seamless_mha]",
       "result": "ok"
+    },
+    {
+      "tick": 3,
+      "ts": "2026-05-28T00:40:13Z",
+      "action": "reference[conformer_ffn,conformer_convolution_module]:ok, reference[seamless_ffn,conformer_self_attention]:fail",
+      "result": "partial"
     }
   ],
   "config": {

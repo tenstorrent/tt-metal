@@ -313,3 +313,370 @@ def seamless_mha_forward(
         state_dict["out_proj"].get("bias"),
     )
     return attn_output
+
+
+def seamless_ffn_forward(
+    x: torch.Tensor,
+    fc1_weight: torch.Tensor,
+    fc1_bias: torch.Tensor,
+    fc2_weight: torch.Tensor,
+    fc2_bias: torch.Tensor,
+    dropout_p: float = 0.0,
+) -> torch.Tensor:
+    """Standalone ``SeamlessM4Tv2FeedForwardNetwork`` forward pass.
+
+    Reproduces the forward of HuggingFace
+    ``transformers.models.seamless_m4t_v2.modeling_seamless_m4t_v2.SeamlessM4Tv2FeedForwardNetwork``:
+
+        h = fc1(x)            # Linear(hidden_size, ffn_dim) + bias
+        h = act(h)             # ReLU (config.activation_function = "relu")
+        h = dropout(h)         # config.activation_dropout (default 0.0)
+        h = fc2(h)             # Linear(ffn_dim, hidden_size) + bias
+
+    This block is reused throughout SeamlessM4T-v2:
+        - NLLB text encoder layer FFN
+        - NLLB text decoder layer FFN
+        - T2U encoder / decoder layer FFN
+
+    For the ``-large`` model: ``hidden_size = 1024``, ``ffn_dim = 8192``,
+    bias is enabled on both projections, activation is ReLU, and
+    ``activation_dropout = 0.0``.
+
+    Note: the HF forward additionally casts ``hidden_states`` to
+    ``self.fc2.weight.dtype`` before the final projection (handles mixed
+    int8/uint8 weight types). For an fp32 reference with fp32 weights this is
+    a no-op, so we omit it here.
+
+    Args:
+        x: Input tensor of shape ``[..., hidden_size]``.
+        fc1_weight: ``[ffn_dim, hidden_size]`` weight of the first linear.
+        fc1_bias: ``[ffn_dim]`` bias of the first linear.
+        fc2_weight: ``[hidden_size, ffn_dim]`` weight of the second linear.
+        fc2_bias: ``[hidden_size]`` bias of the second linear.
+        dropout_p: Dropout probability applied to the post-activation
+            hidden states (default 0.0, matching
+            ``SeamlessM4Tv2Config.activation_dropout``). Dropout is only
+            applied in training mode; this function uses ``training=False``
+            so it is effectively a no-op for verification.
+
+    Returns:
+        Tensor of the same shape as ``x``.
+    """
+    h = F.linear(x, fc1_weight, fc1_bias)
+    h = F.relu(h)
+    if dropout_p > 0.0:
+        # training=False -> identity, included for parity with HF signature.
+        h = F.dropout(h, p=dropout_p, training=False)
+    return F.linear(h, fc2_weight, fc2_bias)
+
+
+def conformer_convolution_module_forward(
+    hidden_states: torch.Tensor,
+    state_dict: Dict[str, Dict[str, torch.Tensor]],
+    kernel_size: int = 31,
+    eps: float = 1e-5,
+    attention_mask: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """Standalone ``SeamlessM4Tv2ConformerConvolutionModule`` forward pass.
+
+    Reproduces the forward of HuggingFace
+    ``transformers.models.seamless_m4t_v2.modeling_seamless_m4t_v2.SeamlessM4Tv2ConformerConvolutionModule``
+    bit-for-bit (no dropout, default ``activation = swish = SiLU``):
+
+        x = LayerNorm(x)                              # (B, T, C)
+        # optional mask zeroing
+        x = x.transpose(1, 2)                         # (B, C, T)
+        x = pointwise_conv1(x)                        # (B, 2C, T), no bias, k=1
+        x = GLU(dim=1)(x)                             # (B, C, T)
+        x = F.pad(x, (kernel_size - 1, 0))            # left-only causal pad
+        x = depthwise_conv(x)                         # (B, C, T), groups=C, k=31, no bias
+        x = LayerNorm(x.transpose(1, 2)).transpose(1, 2)  # (B, C, T)
+        x = swish(x)
+        x = pointwise_conv2(x)                        # (B, C, T), no bias, k=1
+        return x.transpose(1, 2)                      # (B, T, C)
+
+    All three Conv1d layers have ``bias=False``. The depthwise Conv1d has
+    ``groups = hidden_size`` and is CAUSAL (left padding ``kernel_size - 1``,
+    right padding 0). ``layer_norm`` and ``depthwise_layer_norm`` are
+    ``nn.LayerNorm`` over the channel dim with eps 1e-5.
+
+    For SeamlessM4T-v2-Large: ``hidden_size = 1024`` and
+    ``conv_depthwise_kernel_size = 31``.
+
+    Args:
+        hidden_states: Input tensor of shape ``(B, T, hidden_size)``.
+        state_dict: Mapping with the following entries:
+            - ``"layer_norm"``: dict with ``"weight"``, ``"bias"`` (shape
+              ``(hidden_size,)``).
+            - ``"pointwise_conv1"``: dict with ``"weight"`` of shape
+              ``(2 * hidden_size, hidden_size, 1)``.
+            - ``"depthwise_conv"``: dict with ``"weight"`` of shape
+              ``(hidden_size, 1, kernel_size)`` (groups=hidden_size).
+            - ``"depthwise_layer_norm"``: dict with ``"weight"``, ``"bias"``
+              (shape ``(hidden_size,)``).
+            - ``"pointwise_conv2"``: dict with ``"weight"`` of shape
+              ``(hidden_size, hidden_size, 1)``.
+        kernel_size: Depthwise conv kernel size (default 31, matches
+            ``SeamlessM4Tv2Config.conv_depthwise_kernel_size``).
+        eps: LayerNorm epsilon (default 1e-5, matches
+            ``SeamlessM4Tv2Config.layer_norm_eps``).
+        attention_mask: Optional bool/int mask of shape ``(B, T)`` where
+            ``False/0`` indicates a padded position to zero out before the
+            depthwise convolution (mirrors HF ``masked_fill`` step).
+
+    Returns:
+        Tensor of shape ``(B, T, hidden_size)``.
+    """
+    # 1. LayerNorm over channels.
+    ln_weight = state_dict["layer_norm"]["weight"]
+    ln_bias = state_dict["layer_norm"]["bias"]
+    x = F.layer_norm(hidden_states, (hidden_states.shape[-1],), weight=ln_weight, bias=ln_bias, eps=eps)
+
+    # 2. Optional mask: zero padded positions BEFORE depthwise conv.
+    if attention_mask is not None:
+        x = x.masked_fill(~attention_mask.bool().unsqueeze(-1), 0.0)
+
+    # 3. Transpose to channel-first for Conv1d: (B, T, C) -> (B, C, T).
+    x = x.transpose(1, 2)
+
+    # 4. Pointwise conv1 (1x1, bias=False) -> (B, 2C, T).
+    x = F.conv1d(x, state_dict["pointwise_conv1"]["weight"], bias=None)
+
+    # 5. GLU along channel dim: (B, 2C, T) -> (B, C, T).
+    x = F.glu(x, dim=1)
+
+    # 6. Causal left-padding by (kernel_size - 1, 0).
+    x = F.pad(x, (kernel_size - 1, 0))
+
+    # 7. Depthwise conv (groups=channels, bias=False).
+    channels = x.shape[1]
+    x = F.conv1d(x, state_dict["depthwise_conv"]["weight"], bias=None, groups=channels)
+
+    # 8. LayerNorm over channels (transpose to last dim, normalize, transpose back).
+    dwln_weight = state_dict["depthwise_layer_norm"]["weight"]
+    dwln_bias = state_dict["depthwise_layer_norm"]["bias"]
+    x = x.transpose(1, 2)
+    x = F.layer_norm(x, (x.shape[-1],), weight=dwln_weight, bias=dwln_bias, eps=eps)
+    x = x.transpose(1, 2)
+
+    # 9. Swish (= SiLU) activation.
+    x = F.silu(x)
+
+    # 10. Pointwise conv2 (1x1, bias=False).
+    x = F.conv1d(x, state_dict["pointwise_conv2"]["weight"], bias=None)
+
+    # 11. Back to (B, T, C).
+    return x.transpose(1, 2)
+
+
+def conformer_ffn_forward(
+    hidden_states: torch.Tensor,
+    state_dict: Dict[str, Dict[str, torch.Tensor]],
+    act_fn: str = "swish",
+) -> torch.Tensor:
+    """Standalone ``SeamlessM4Tv2ConformerFeedForward`` forward pass.
+
+    Reproduces the forward of HuggingFace
+    ``transformers.models.seamless_m4t_v2.modeling_seamless_m4t_v2.SeamlessM4Tv2ConformerFeedForward``
+    used inside the W2v-BERT-2.0-style Conformer speech encoder. Each Conformer
+    encoder layer contains two of these (``ffn1`` / ``ffn2``), wrapped at the
+    parent layer level in the half-step residual pattern
+    ``residual + 0.5 * FFN(LayerNorm(residual))``. This function implements
+    ONLY the inner FFN (the surrounding LayerNorm + 0.5 scaling + residual
+    live in :class:`SeamlessM4Tv2ConformerEncoderLayer`).
+
+    Op sequence (matches HF v2 exactly; dropouts are no-ops at eval):
+
+        h = intermediate_dense(hidden_states)   # Linear(d, 4d), bias=True
+        h = swish(h)                            # i.e. SiLU
+        h = output_dense(h)                     # Linear(4d, d), bias=True
+
+    For SeamlessM4T-v2-Large the dims are ``d = config.hidden_size = 1024``
+    and ``4d = config.speech_encoder_intermediate_size = 4096``. The activation
+    is selected by ``config.speech_encoder_hidden_act`` which defaults to
+    ``"swish"`` (== ``"silu"``).
+
+    NOTE: this is the Conformer (speech encoder) FFN — it uses SiLU/swish,
+    NOT ReLU. The NLLB text encoder/decoder and T2U FFNs use
+    :func:`seamless_ffn_forward` with ReLU instead.
+
+    Args:
+        hidden_states: Input tensor of shape ``[batch, seq_len, hidden_size]``.
+        state_dict: Mapping with keys ``intermediate_dense`` and
+            ``output_dense``, each containing ``weight`` (shape
+            ``[out_features, in_features]``) and ``bias`` (shape
+            ``[out_features]``). HF uses ``bias=True`` on both Linear layers.
+        act_fn: Activation function name. ``"swish"`` and ``"silu"`` both map
+            to ``F.silu`` (SeamlessM4T-v2 default). ``"gelu"`` and ``"relu"``
+            are also accepted for completeness with other ACT2FN names.
+
+    Returns:
+        Tensor of shape ``[batch, seq_len, hidden_size]``.
+    """
+    h = F.linear(
+        hidden_states,
+        state_dict["intermediate_dense"]["weight"],
+        state_dict["intermediate_dense"].get("bias"),
+    )
+
+    if act_fn in ("swish", "silu"):
+        h = F.silu(h)
+    elif act_fn == "gelu":
+        h = F.gelu(h)
+    elif act_fn == "relu":
+        h = F.relu(h)
+    else:
+        raise ValueError(f"Unsupported activation: {act_fn!r}")
+
+    h = F.linear(
+        h,
+        state_dict["output_dense"]["weight"],
+        state_dict["output_dense"].get("bias"),
+    )
+    return h
+
+
+def conformer_self_attention_forward(
+    hidden_states: torch.Tensor,
+    state_dict: Dict[str, Dict[str, torch.Tensor]],
+    num_heads: int,
+    head_dim: int,
+    distance_embedding_weight: Optional[torch.Tensor] = None,
+    left_max_position_embeddings: int = 64,
+    right_max_position_embeddings: int = 8,
+    position_embeddings_type: Optional[str] = "relative_key",
+    attention_mask: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """Standalone ``SeamlessM4Tv2ConformerSelfAttention`` forward pass.
+
+    Reproduces the forward pass of HuggingFace
+    ``transformers.models.seamless_m4t_v2.modeling_seamless_m4t_v2
+    .SeamlessM4Tv2ConformerSelfAttention`` for the un-cached path. This is
+    the Conformer speech-encoder MHA used in the speech encoder layers of
+    SeamlessM4T-v2. It is identical to a standard 4-projection MHA except
+    for an optional ``relative_key`` positional bias term added to the
+    attention logits.
+
+    The op sequence intentionally matches HF exactly:
+
+        Q = linear_q(x).view(B, T, H, D).transpose(1, 2)
+        K = linear_k(x).view(B, T, H, D).transpose(1, 2)
+        V = linear_v(x).view(B, T, H, D).transpose(1, 2)
+
+        scores = (Q @ K^T) / sqrt(D)
+
+        if position_embeddings_type == "relative_key":
+            distance = clamp(
+                arange(K)[None] - arange(Q)[:, None],
+                -left_max_position_embeddings,
+                +right_max_position_embeddings,
+            )                                                       # [T, T]
+            P = distance_embedding(distance + left_max_position_embeddings)  # [T, T, D]
+            rel = einsum("bhld,lrd->bhlr", Q, P)
+            scores = scores + rel / sqrt(D)
+
+        scores += attention_mask  (if provided; additive log-mask)
+        attn   = softmax(scores, dim=-1)
+        out    = (attn @ V).transpose(1, 2).reshape(B, T, H*D)
+        out    = linear_out(out)
+
+    For SeamlessM4T-v2-Large the relevant config values are:
+        - hidden_size = 1024
+        - speech_encoder_attention_heads = 16  -> head_dim = 64
+        - position_embeddings_type = "relative_key"
+        - left_max_position_embeddings = 64
+        - right_max_position_embeddings = 8
+        - speech_encoder_dropout = 0.0
+    so the dropout on attention weights is a no-op and is omitted here.
+
+    Args:
+        hidden_states: Self-attention input, shape ``[batch, seq_len, hidden]``.
+        state_dict: Mapping from ``linear_q`` / ``linear_k`` / ``linear_v`` /
+            ``linear_out`` to sub-dicts with ``weight`` (shape
+            ``[hidden, hidden]``) and optional ``bias`` (shape
+            ``[hidden]``). HF uses ``bias=True`` everywhere.
+        num_heads: Number of attention heads (16 for v2-Large).
+        head_dim: Per-head dimension (64 for v2-Large). Must satisfy
+            ``num_heads * head_dim == hidden_size``.
+        distance_embedding_weight: ``[L + R + 1, head_dim]`` learned table
+            for the ``relative_key`` positional bias. Required when
+            ``position_embeddings_type == "relative_key"``.
+        left_max_position_embeddings: ``L`` clamp range on the left side
+            (matches ``config.left_max_position_embeddings``; 64 for v2-Large).
+        right_max_position_embeddings: ``R`` clamp range on the right side
+            (matches ``config.right_max_position_embeddings``; 8 for v2-Large).
+        position_embeddings_type: Either ``"relative_key"`` (add relative
+            position bias) or ``None`` (standard MHA, no positional term).
+        attention_mask: Optional additive log-mask broadcast-compatible
+            with ``[batch, 1, seq_len, seq_len]``.
+
+    Returns:
+        Output tensor of shape ``[batch, seq_len, hidden_size]``.
+    """
+    batch_size, seq_len, hidden = hidden_states.shape
+    if num_heads * head_dim != hidden:
+        raise ValueError(f"num_heads({num_heads}) * head_dim({head_dim}) != hidden({hidden})")
+
+    # Project Q/K/V and reshape to [batch, num_heads, seq, head_dim].
+    query = (
+        F.linear(
+            hidden_states,
+            state_dict["linear_q"]["weight"],
+            state_dict["linear_q"].get("bias"),
+        )
+        .view(batch_size, -1, num_heads, head_dim)
+        .transpose(1, 2)
+    )
+    key = (
+        F.linear(
+            hidden_states,
+            state_dict["linear_k"]["weight"],
+            state_dict["linear_k"].get("bias"),
+        )
+        .view(batch_size, -1, num_heads, head_dim)
+        .transpose(1, 2)
+    )
+    value = (
+        F.linear(
+            hidden_states,
+            state_dict["linear_v"]["weight"],
+            state_dict["linear_v"].get("bias"),
+        )
+        .view(batch_size, -1, num_heads, head_dim)
+        .transpose(1, 2)
+    )
+
+    # Content-based scaled dot-product scores: [batch, num_heads, seq, seq].
+    attn_weights = torch.matmul(query, key.transpose(-2, -1)) / math.sqrt(head_dim)
+
+    if position_embeddings_type == "relative_key":
+        if distance_embedding_weight is None:
+            raise ValueError("distance_embedding_weight is required when position_embeddings_type='relative_key'")
+        query_length, key_length = query.shape[2], key.shape[2]
+        position_ids_l = torch.arange(query_length, dtype=torch.long, device=hidden_states.device).view(-1, 1)
+        position_ids_r = torch.arange(key_length, dtype=torch.long, device=hidden_states.device).view(1, -1)
+        distance = position_ids_r - position_ids_l
+        distance = torch.clamp(distance, -left_max_position_embeddings, right_max_position_embeddings)
+
+        # Gather from learned table [L+R+1, head_dim] -> [query_len, key_len, head_dim].
+        positional_embedding = F.embedding(distance + left_max_position_embeddings, distance_embedding_weight)
+        positional_embedding = positional_embedding.to(dtype=query.dtype)
+
+        relative_position_attn_weights = torch.einsum("bhld,lrd->bhlr", query, positional_embedding)
+        attn_weights = attn_weights + (relative_position_attn_weights / math.sqrt(head_dim))
+
+    if attention_mask is not None:
+        attn_weights = attn_weights + attention_mask
+
+    attn_weights = torch.softmax(attn_weights, dim=-1)
+    # Dropout omitted: speech_encoder_dropout=0.0 in v2-Large config.
+
+    # Context: [batch, num_heads, seq, head_dim] -> [batch, seq, hidden].
+    attn_output = torch.matmul(attn_weights, value)
+    attn_output = attn_output.transpose(1, 2).reshape(batch_size, -1, num_heads * head_dim)
+
+    return F.linear(
+        attn_output,
+        state_dict["linear_out"]["weight"],
+        state_dict["linear_out"].get("bias"),
+    )

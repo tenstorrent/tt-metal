@@ -4,7 +4,7 @@
 **Slug:** `facebook_seamless_m4t_v2_large`
 **Target Device:** p150 (blackhole)
 **Started:** 2026-05-28T00:18:15Z
-**Updated:** 2026-05-28T00:35:24Z
+**Updated:** 2026-05-28T00:40:13Z
 
 ## Block Status
 
@@ -26,19 +26,19 @@
 | seamless_mha | ttnn | pending | — | 0 |  |
 | seamless_mha | debug | n/a | — | 0 |  |
 | seamless_mha | optimization | pending | — | 0 |  |
-| seamless_ffn | reference | pending | — | 0 |  |
+| seamless_ffn | reference | failing | — | 1 | Agent subagent socket connection closed unexpectedly mid-task |
 | seamless_ffn | ttnn | pending | — | 0 |  |
 | seamless_ffn | debug | n/a | — | 0 |  |
 | seamless_ffn | optimization | pending | — | 0 |  |
-| conformer_ffn | reference | pending | — | 0 |  |
+| conformer_ffn | reference | done | 1.000000 | 1 |  |
 | conformer_ffn | ttnn | pending | — | 0 |  |
 | conformer_ffn | debug | n/a | — | 0 |  |
 | conformer_ffn | optimization | pending | — | 0 |  |
-| conformer_self_attention | reference | pending | — | 0 |  |
+| conformer_self_attention | reference | failing | — | 1 | Agent subagent socket connection closed unexpectedly mid-task |
 | conformer_self_attention | ttnn | pending | — | 0 |  |
 | conformer_self_attention | debug | n/a | — | 0 |  |
 | conformer_self_attention | optimization | pending | — | 0 |  |
-| conformer_convolution_module | reference | pending | — | 0 |  |
+| conformer_convolution_module | reference | done | 1.000000 | 1 |  |
 | conformer_convolution_module | ttnn | pending | — | 0 |  |
 | conformer_convolution_module | debug | n/a | — | 0 |  |
 | conformer_convolution_module | optimization | pending | — | 0 |  |
@@ -112,6 +112,7 @@
 - tick 1 (2026-05-28T00:25:44Z): architecture[all] — ok
 - tick 2 (2026-05-28T00:33:43Z): reference[layernorm,scaled_word_embedding,sinusoidal_positional_embedding,seamless_mha] — ok
 - tick 2 (2026-05-28T00:35:24Z): reference[layernorm,scaled_word_embedding,sinusoidal_positional_embedding,seamless_mha] — ok
+- tick 3 (2026-05-28T00:40:13Z): reference[conformer_ffn,conformer_convolution_module]:ok, reference[seamless_ffn,conformer_self_attention]:fail — partial
 
 ## Host-Resident Exceptions
 

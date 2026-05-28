@@ -12,7 +12,11 @@ from pathlib import Path
 
 import torch
 
-from models.demos.facebook_seamless_m4t_v2_large.reference.functional import layernorm_forward, seamless_mha_forward
+from models.demos.facebook_seamless_m4t_v2_large.reference.functional import (
+    layernorm_forward,
+    seamless_ffn_forward,
+    seamless_mha_forward,
+)
 
 GOLDEN_DIR = Path(__file__).parent / "golden"
 GOLDEN_DIR.mkdir(parents=True, exist_ok=True)
@@ -195,8 +199,87 @@ def test_seamless_mha_matches_hf() -> float:
     return min(pcc_self, pcc_cross)
 
 
+def test_seamless_ffn_matches_hf() -> float:
+    """Compare reference ``SeamlessM4Tv2FeedForwardNetwork`` forward against HuggingFace.
+
+    Builds an HF ``SeamlessM4Tv2FeedForwardNetwork`` at the SeamlessM4T-v2-Large
+    sizes (``hidden_size=1024``, ``ffn_dim=8192``, activation=``relu``,
+    ``activation_dropout=0.0``), extracts its fc1/fc2 weights and biases, and
+    verifies the standalone reference matches bit-for-bit.
+    """
+    from transformers import SeamlessM4Tv2Config
+    from transformers.models.seamless_m4t_v2.modeling_seamless_m4t_v2 import SeamlessM4Tv2FeedForwardNetwork
+
+    torch.manual_seed(0)
+
+    batch, seq_len, hidden = 1, 64, 1024
+    ffn_dim = 8192
+
+    # Use the canonical SeamlessM4T-v2 config (activation="relu", dropout=0.0).
+    config = SeamlessM4Tv2Config()
+    assert config.hidden_size == hidden, f"unexpected hidden_size {config.hidden_size}"
+    assert config.activation_function == "relu", f"unexpected activation {config.activation_function}"
+
+    hf = SeamlessM4Tv2FeedForwardNetwork(config, ffn_dim=ffn_dim)
+    hf.eval()
+
+    fc1_weight = hf.fc1.weight.detach().clone()
+    fc1_bias = hf.fc1.bias.detach().clone()
+    fc2_weight = hf.fc2.weight.detach().clone()
+    fc2_bias = hf.fc2.bias.detach().clone()
+
+    x = torch.randn(batch, seq_len, hidden, dtype=torch.float32)
+
+    with torch.no_grad():
+        hf_out = hf(x)
+    ref_out = seamless_ffn_forward(
+        x,
+        fc1_weight=fc1_weight,
+        fc1_bias=fc1_bias,
+        fc2_weight=fc2_weight,
+        fc2_bias=fc2_bias,
+        dropout_p=config.activation_dropout,
+    )
+
+    pcc = _pcc(ref_out, hf_out)
+    max_abs = (ref_out - hf_out).abs().max().item()
+    print(f"[seamless_ffn] pcc={pcc:.6f} max_abs_diff={max_abs:.3e}")
+    assert pcc > 0.99, f"seamless_ffn PCC {pcc} <= 0.99"
+    # fp32 reference + fp32 HF -> identical op sequence -> exact match.
+    assert torch.allclose(ref_out, hf_out, atol=1e-5, rtol=1e-4), f"seamless_ffn diverged: max_abs={max_abs}"
+
+    golden_path = GOLDEN_DIR / "seamless_ffn.pt"
+    torch.save(
+        {
+            "input": x,
+            "fc1_weight": fc1_weight,
+            "fc1_bias": fc1_bias,
+            "fc2_weight": fc2_weight,
+            "fc2_bias": fc2_bias,
+            "output": ref_out,
+            "config": {
+                "batch": batch,
+                "seq_len": seq_len,
+                "hidden": hidden,
+                "ffn_dim": ffn_dim,
+                "activation": "relu",
+                "activation_dropout": config.activation_dropout,
+                "dtype": "float32",
+                "block": "seamless_ffn",
+                "model_id": "facebook/seamless-m4t-v2-large",
+                "hf_class": "SeamlessM4Tv2FeedForwardNetwork",
+            },
+        },
+        golden_path,
+    )
+    print(f"[seamless_ffn] saved golden to {golden_path}")
+    return pcc
+
+
 if __name__ == "__main__":
     pcc_ln = test_layernorm_matches_hf()
     print(f"\nFINAL PCC layernorm: {pcc_ln:.6f}")
     pcc_mha = test_seamless_mha_matches_hf()
     print(f"\nFINAL PCC seamless_mha: {pcc_mha:.6f}")
+    pcc_ffn = test_seamless_ffn_matches_hf()
+    print(f"\nFINAL PCC seamless_ffn: {pcc_ffn:.6f}")
