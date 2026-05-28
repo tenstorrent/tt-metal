@@ -141,6 +141,7 @@ def _run(
     n_local_heads: int,
     *,
     use_device_op: bool,
+    persistent_output_buffer: ttnn.Tensor | None = None,
 ) -> ttnn.Tensor:
     # Fused op uses 2 fabric links per direction (multi-link MUX). Composite
     # uses default (1 link) to keep its baseline numbers stable across this
@@ -159,6 +160,7 @@ def _run(
         rope_cos=inp.tt_rope_cos,
         rope_sin=inp.tt_rope_sin,
         dtype=None,
+        persistent_output_buffer=persistent_output_buffer,
         num_preferred_links=num_preferred_links,
         use_device_op=use_device_op,
     )
@@ -197,7 +199,28 @@ def _bench_one(
     """Run one Wan config with the chosen method, return avg us/iter."""
     inp = _build_inputs(submesh, seq_len, use_rope)
     use_device_op = method == "fused"
-    run_op = lambda: _run(inp, submesh, ag_sem, topology, n_local_heads, use_device_op=use_device_op)  # noqa: E731
+    # Device-op MUX path needs a caller-allocated mesh-coherent stats buffer.
+    # Returns None for shapes / TP that don't trigger MUX, in which case the
+    # device op also doesn't need a buffer.
+    persistent_output_buffer = (
+        ttnn.experimental.wan_fused_distributed_rmsnorm_create_stats_buffer(
+            inp.tt_input,
+            TP_AXIS,
+            submesh,
+            num_heads_per_device=n_local_heads,
+        )
+        if use_device_op
+        else None
+    )
+    run_op = lambda: _run(  # noqa: E731
+        inp,
+        submesh,
+        ag_sem,
+        topology,
+        n_local_heads,
+        use_device_op=use_device_op,
+        persistent_output_buffer=persistent_output_buffer,
+    )
     logger.info(f"[{method}] compiling+tracing (seq_len={seq_len}, use_rope={use_rope})")
     per_iter_us = _trace_and_time(submesh, run_op)
     logger.info(f"[{method}] seq_len={seq_len} use_rope={use_rope}: {per_iter_us:.2f} us/iter")

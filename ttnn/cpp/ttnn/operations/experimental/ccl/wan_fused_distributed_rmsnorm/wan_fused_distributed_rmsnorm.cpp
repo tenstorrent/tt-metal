@@ -4,10 +4,14 @@
 
 #include "wan_fused_distributed_rmsnorm.hpp"
 
+#include <tt-metalium/constants.hpp>
+
 #include "device/wan_fused_distributed_rmsnorm_device_operation.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/all_gather_async.hpp"
 #include "ttnn/operations/experimental/transformer/fused_distributed_rmsnorm/rmsnorm_post_all_gather.hpp"
 #include "ttnn/operations/experimental/transformer/fused_distributed_rmsnorm/rmsnorm_pre_all_gather.hpp"
+
+using namespace tt::constants;
 
 namespace ttnn::experimental {
 
@@ -99,6 +103,48 @@ ttnn::Tensor wan_fused_distributed_rmsnorm(
         memory_config,
         compute_kernel_config,
         dtype);
+}
+
+std::optional<ttnn::Tensor> wan_fused_distributed_rmsnorm_create_stats_buffer(
+    const ttnn::Tensor& input_tensor,
+    const uint32_t cluster_axis,
+    const MeshDevice& mesh_device,
+    const uint32_t num_heads_per_device,
+    const bool per_head_norm) {
+    // Build only what compute_sizing actually reads: ring_size + per_head_norm.
+    // The other Params fields aren't used in the sizing math.
+    const auto& mesh_view = mesh_device.get_view();
+    const std::size_t ring_size = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+
+    auto arch = is_device_tensor(input_tensor) ? input_tensor.device()->arch() : ttnn::GetDefaultDevice()->arch();
+    auto kernel_config_val =
+        init_device_compute_kernel_config(arch, std::nullopt, tt::tt_metal::MathFidelity::HiFi4, true, false, false);
+
+    auto params = ttnn::experimental::prim::WanFusedDistributedRmsnormParams(
+        /*epsilon=*/0.0f,
+        num_heads_per_device,
+        per_head_norm,
+        /*dtype=*/std::nullopt,
+        input_tensor.memory_config(),
+        cluster_axis,
+        /*num_links=*/1u,
+        static_cast<uint32_t>(ring_size),
+        ttnn::ccl::Topology::Ring,
+        /*multi_device_global_semaphore=*/{},
+        /*sub_device_id=*/std::nullopt,
+        kernel_config_val);
+
+    const auto sizing = ttnn::experimental::prim::compute_sizing(params, input_tensor);
+    if (!sizing.use_mux) {
+        return std::nullopt;
+    }
+
+    ttnn::Shape stats_shape({1u, 1u, sizing.total_pages, TILE_HEIGHT * sizing.window_size});
+    MemoryConfig stats_mem{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
+    tt::tt_metal::TensorSpec spec(
+        stats_shape,
+        tt::tt_metal::TensorLayout(DataType::FLOAT32, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), stats_mem));
+    return tt::tt_metal::create_device_tensor(spec, &const_cast<MeshDevice&>(mesh_device));
 }
 
 }  // namespace ttnn::experimental
