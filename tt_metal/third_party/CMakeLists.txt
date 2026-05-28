@@ -40,6 +40,9 @@ add_subdirectory(tracy)
 # TracyClient.
 if(ENABLE_TRACY AND TARGET TracyClient)
     target_compile_options(TracyClient PUBLIC -fno-omit-frame-pointer)
+    # Tracy's own sources contain unused variables that the parent project's -Werror would otherwise
+    # reject; suppress the warning PRIVATEly so it does not leak to TracyClient consumers.
+    target_compile_options(TracyClient PRIVATE -Wno-unused-variable)
     target_link_options(TracyClient PUBLIC -rdynamic)
 
     # Rename the shared library to libtracy.so to follow the project's library naming convention
