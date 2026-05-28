@@ -1,0 +1,8 @@
+﻿ttnn.bernoulli
+==============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.bernoulli:
+
+.. autooperation:: ttnn.bernoulli

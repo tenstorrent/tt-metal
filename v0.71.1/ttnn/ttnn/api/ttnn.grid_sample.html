@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ttnn.grid_sample &mdash; TT-NN  documentation</title>
+      <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
+    <link rel="shortcut icon" href="../../_static/favicon.png"/>
+    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.grid_sample.html" />
+  <!--[if lt IE 9]>
+    <script src="../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../../_static/doctools.js?v=888ff710"></script>
+        <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script src="../../_static/posthog.js?v=aa5946f9"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="ttnn.upsample" href="ttnn.upsample.html" />
+    <link rel="prev" title="ttnn.dram_prefetcher" href="ttnn.dram_prefetcher.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../../index.html">
+    TT-NN
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">TTNN</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../about.html">What is TT-NN?</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../installing.html">Install</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tutorials/tutorials/ttnn_intro.html">TT-NN Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tensor.html">Tensor</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="../api.html">APIs</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="../api.html#device">Device</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../api.html#memory-config">Memory Config</a></li>
+<li class="toctree-l2 current"><a class="reference internal" href="../api.html#operations">Operations</a><ul class="current">
+<li class="toctree-l3"><a class="reference internal" href="../api.html#core">Core</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#tensor-creation">Tensor Creation</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#matrix-multiplication">Matrix Multiplication</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#pointwise-unary">Pointwise Unary</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#pointwise-binary">Pointwise Binary</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#pointwise-ternary">Pointwise Ternary</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#quantization">Quantization</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#losses">Losses</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#reduction">Reduction</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#data-movement">Data Movement</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#normalization">Normalization</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#normalization-program-configs">Normalization Program Configs</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#transformer">Transformer</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#ccl">CCL</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#embedding">Embedding</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#convolution">Convolution</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#pooling">Pooling</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#prefetcher">Prefetcher</a></li>
+<li class="toctree-l3 current"><a class="reference internal" href="../api.html#vision">Vision</a><ul class="current">
+<li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.grid_sample</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.upsample.html">ttnn.upsample</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.rotate.html">ttnn.rotate</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#generic">Generic</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#kv-cache">KV Cache</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#backward-operations">Backward operations</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../api.html#model-conversion">Model Conversion</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../api.html#reports">Reports</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../api.html#operation-hooks">Operation Hooks</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../tutorials.html">Tutorials</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../onboarding.html">Onboarding New Functionality</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../converting_torch_model_to_ttnn.html">Converting PyTorch Model to TT-NN</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../adding_new_ttnn_operation.html">Adding New TT-NN Operation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../profiling_ttnn_operations.html">Profiling TT-NN Operations</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../demos.html">Building and Uplifting Demos</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../tools/index.html">Tools</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">TT-NN</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
+      <li class="breadcrumb-item active">ttnn.grid_sample</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../_sources/ttnn/api/ttnn.grid_sample.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="ttnn-grid-sample">
+<h1>ttnn.grid_sample<a class="headerlink" href="#ttnn-grid-sample" title="Permalink to this heading"></a>
+</h1>
+<span class="target" id="id1"></span><dl class="py function">
+<dt class="sig sig-object py" id="ttnn.grid_sample">
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">grid_sample</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">grid</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">mode</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">padding_mode</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">align_corners</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">use_precomputed_grid</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">batch_output_channels</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.grid_sample" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Performs grid sampling on the input tensor using the provided sampling grid.</p>
+<p>Grid sample uses bilinear interpolation to sample input values at arbitrary
+grid locations. This is commonly used for spatial transformations, image warping,
+and implementing spatial transformer networks.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span>
+</dt>
+<dd class="field-odd">
+<ul class="simple">
+<li><p><strong>input_tensor</strong> (<em>ttnn.Tensor</em>) – Input tensor of shape (N, H_in, W_in, C) - channel last format</p></li>
+<li>
+<p><strong>grid</strong> (<em>ttnn.Tensor</em>) – </p>
+<p>Sampling grid with flexible batching support.</p>
+<ul>
+<li>
+<p>Standard mode (use_precomputed_grid=False):</p>
+<ul>
+<li><p>Shape (N, H_grid, W_grid, 2*K) where K is the grid batching factor</p></li>
+<li><p>Contains K sets of normalized coordinates in range [-1, 1] packed into the last dimension</p></li>
+<li><p>Each coordinate pair (x, y): x=-1 (leftmost), x=+1 (rightmost), y=-1 (topmost), y=+1 (bottommost)</p></li>
+<li><p>Data type: BFLOAT16 or FLOAT32 (FLOAT32 provides higher precision for coordinate calculations)</p></li>
+<li><p>When K=1: standard single coordinate per location (maps 1:1 to PyTorch F.grid_sample behavior)</p></li>
+<li><p>When K&gt;1: K coordinate sets are packed per spatial location, typically created by reshaping
+a larger grid from (N, H_grid, W_grid*K, 2) to (N, H_grid, W_grid, 2*K), where the desired grid shape would be W_grid*K</p></li>
+</ul>
+</li>
+<li>
+<p>Precomputed mode (use_precomputed_grid=True):</p>
+<ul>
+<li><p>Shape (N, H_grid, W_grid, 6*K) containing K sets of precomputed data packed into the last dimension</p></li>
+<li><p>Each set has 6 elements: pixel coordinates and bilinear interpolation weights</p></li>
+<li><p>Data type: BFLOAT16 only (precomputed grids must be BFLOAT16)</p></li>
+<li><p>When K=1: standard precomputed grid</p></li>
+<li><p>When K&gt;1: K precomputed sets are packed per spatial location, typically created by reshaping
+a larger precomputed grid from (N, H_grid, W_grid*K, 6) to (N, H_grid, W_grid, 6*K), where the desired grid shape would be W_grid*K</p></li>
+<li><p>Generated using ttnn.prepare_grid_sample_grid() for K=1, then ttnn.reshape() for K&gt;1, both being done on host side</p></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</dd>
+<dt class="field-even">Keyword Arguments<span class="colon">:</span>
+</dt>
+<dd class="field-even">
+<ul class="simple">
+<li><p><strong>mode</strong> (<em>str</em>) – Interpolation mode.</p></li>
+<li><p><strong>padding_mode</strong> (<em>str</em>) – How to handle out-of-bounds coordinates. Currently only “zeros” is supported.</p></li>
+<li><p><strong>align_corners</strong> (<em>bool</em>) – Whether to align corners when mapping normalized coordinates to pixel indices.</p></li>
+<li>
+<p><strong>use_precomputed_grid</strong> (<em>bool</em>) – </p>
+<p>Whether to use precomputed grid coordinates.</p>
+<p>When False (default): grid should be normalized coordinates in [-1, 1]</p>
+<p>When True: grid should be preprocessed using ttnn.prepare_grid_sample_grid()</p>
+</li>
+<li>
+<p><strong>batch_output_channels</strong> (<em>bool</em>) – </p>
+<p>Controls how grid batching factor K affects output dimensions.</p>
+<p>When False (default): extend W dimension - output shape (N, H_grid, W_grid*K, C).
+The K coordinate sets produce K spatial outputs, expanding the width dimension.</p>
+<p>When True: batch output channels - output shape (N, H_grid, W_grid, C*K).
+The K coordinate sets produce K channel groups, expanding the channel dimension.</p>
+<p>Setting this argument to True requires for K (grid batching factor) to be larger than one.
+Note: K doesn’t disappear when batch_output_channels=False, it just gets distributed to the width dimension.</p>
+</li>
+<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Output memory configuration for the operation.</p></li>
+</ul>
+</dd>
+<dt class="field-odd">Returns<span class="colon">:</span>
+</dt>
+<dd class="field-odd">
+<p></p>
+<p><em>ttnn.Tensor</em> –</p>
+<p>Output tensor shape depends on batch_output_channels flag.</p>
+<blockquote>
+<div>
+<ul class="simple">
+<li><p>When batch_output_channels=False (default): (N, H_grid, W_grid*K, C) - W dimension extended</p></li>
+<li><p>When batch_output_channels=True: (N, H_grid, W_grid, C*K) - channels batched</p></li>
+</ul>
+<p>Where K is the grid batching factor.</p>
+</div>
+</blockquote>
+
+</dd>
+</dl>
+<div class="admonition-example admonition">
+<p class="admonition-title">Example</p>
+<div class="doctest highlight-default notranslate">
+<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="c1"># Create input tensor (N=1, H=4, W=4, C=32) - channel last format</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">input_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">32</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+</pre></div>
+</div>
+<div class="doctest highlight-default notranslate">
+<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="c1"># Example 1: Standard single grid (K=1) - both batch_output_channels values produce same result</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">theta</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([[[</span><span class="mf">1.</span><span class="p">,</span> <span class="mf">0.</span><span class="p">,</span> <span class="mf">0.</span><span class="p">],</span> <span class="p">[</span><span class="mf">0.</span><span class="p">,</span> <span class="mf">1.</span><span class="p">,</span> <span class="mf">0.</span><span class="p">]]],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">grid</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">nn</span><span class="o">.</span><span class="n">functional</span><span class="o">.</span><span class="n">affine_grid</span><span class="p">(</span><span class="n">theta</span><span class="p">,</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">4</span><span class="p">),</span> <span class="n">align_corners</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">grid_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">grid</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">output_default</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">grid_sample</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">,</span> <span class="n">grid_tensor</span><span class="p">)</span>  <span class="c1"># batch_output_channels=False (default)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="nb">print</span><span class="p">(</span><span class="n">output_default</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>  <span class="c1"># [1, 4, 4, 32] - same for both when K=1</span>
+</pre></div>
+</div>
+<div class="doctest highlight-default notranslate">
+<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="c1"># Example 2: Grid batching (K=4) - demonstrates proper reshaping workflow</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="c1"># Step 1: Create natural grid as you normally would (like in PyTorch)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">K</span> <span class="o">=</span> <span class="mi">4</span>  <span class="c1"># Grid batching factor</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">natural_grid</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">16</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span> <span class="o">*</span> <span class="mf">0.5</span>  <span class="c1"># Natural shape: (N, H_grid, W_grid*K, 2)</span>
+<span class="gp">&gt;&gt;&gt;</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="c1"># Step 2: Reshape for optimization - pack K coordinate sets into last dimension</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">W_grid</span> <span class="o">=</span> <span class="mi">16</span> <span class="o">//</span> <span class="n">K</span>  <span class="c1"># W_grid = 4</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">batched_grid</span> <span class="o">=</span> <span class="n">natural_grid</span><span class="o">.</span><span class="n">view</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="n">W_grid</span><span class="p">,</span> <span class="mi">2</span><span class="o">*</span><span class="n">K</span><span class="p">)</span>  <span class="c1"># Reshaped: (1, 4, 4, 8)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">batched_grid_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">batched_grid</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt;</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="c1"># batch_output_channels=False (default): W dimension extended</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">output_w_extend</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">grid_sample</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">,</span> <span class="n">batched_grid_tensor</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="nb">print</span><span class="p">(</span><span class="n">output_w_extend</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>  <span class="c1"># [1, 4, 16, 32] - W extended from 4 to 16 (W_grid*K)</span>
+<span class="gp">&gt;&gt;&gt;</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="c1"># batch_output_channels=True: channels batched</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">output_c_extend</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">grid_sample</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">,</span> <span class="n">batched_grid_tensor</span><span class="p">,</span> <span class="n">batch_output_channels</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="nb">print</span><span class="p">(</span><span class="n">output_c_extend</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>  <span class="c1"># [1, 4, 4, 128] - channels batched from 32 to 128 (K*C)</span>
+</pre></div>
+</div>
+<div class="doctest highlight-default notranslate">
+<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="c1"># Example 3: Using FLOAT32 grid for higher precision</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">grid_float32</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">grid</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">output_float32</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">grid_sample</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">,</span> <span class="n">grid_float32</span><span class="p">)</span>  <span class="c1"># Higher precision coordinates</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="nb">print</span><span class="p">(</span><span class="n">output_float32</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>  <span class="c1"># [1, 4, 4, 32]</span>
+</pre></div>
+</div>
+<div class="doctest highlight-default notranslate">
+<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="c1"># Example 4: Using precomputed grid for better performance</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">grid_float32_host</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">grid</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">input_shape</span> <span class="o">=</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">32</span><span class="p">]</span>  <span class="c1"># [N, H, W, C] format</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">prepared_grid</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">prepare_grid_sample_grid</span><span class="p">(</span>
+<span class="gp">... </span>    <span class="n">grid_float32_host</span><span class="p">,</span> <span class="n">input_shape</span><span class="p">,</span> <span class="n">padding_mode</span><span class="o">=</span><span class="s2">"zeros"</span><span class="p">,</span> <span class="n">output_dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span>
+<span class="gp">... </span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">prepared_grid</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_device</span><span class="p">(</span><span class="n">prepared_grid</span><span class="p">,</span> <span class="n">device</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">output_precomputed</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">grid_sample</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">,</span> <span class="n">prepared_grid</span><span class="p">,</span> <span class="n">use_precomputed_grid</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="nb">print</span><span class="p">(</span><span class="n">output_precomputed</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>  <span class="c1"># [1, 4, 4, 32]</span>
+</pre></div>
+</div>
+</div>
+</dd>
+</dl>
+
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="ttnn.dram_prefetcher.html" class="btn btn-neutral float-left" title="ttnn.dram_prefetcher" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="ttnn.upsample.html" class="btn btn-neutral float-right" title="ttnn.upsample" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>
