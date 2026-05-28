@@ -437,11 +437,16 @@ def create_pipeline_configuration_from_num_procs(
 ) -> PipelineConfiguration:
     """Pick topology from process count (4 -> single_galaxy, 16 -> single_pod, 64 -> sp4)."""
     if num_procs == 4:
-        return create_single_galaxy_pipeline_configuration(
+        if enable_speculative_decode:
+            return create_single_galaxy_spec_decode_pipeline_configuration(
+                weight_provider,
+                fp32_dest_acc_en=fp32_dest_acc_en,
+                persistent_mode=persistent_mode,
+            )
+        return create_single_galaxy_deepseek_pipeline_configuration(
             weight_provider,
-            fp32_dest_acc_en=fp32_dest_acc_en,
-            persistent_mode=persistent_mode,
-            enable_mtp=enable_mtp,
+            lm_head_fp32_dest_acc_en=fp32_dest_acc_en,
+            lm_head_persistent_mode=persistent_mode,
         )
     if num_procs == 16:
         if enable_speculative_decode:
