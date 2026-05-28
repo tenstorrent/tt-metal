@@ -183,10 +183,20 @@ def main():
         "--traced",
         action="store_true",
         help=(
-            "Reserved: capture metal trace + execute_trace on the AR "
-            "decode step. Currently NOT supported in the decoder (host-"
-            "side mask construction and ttnn.from_torch per step block "
-            "trace reuse). See PERF_NOTES.md."
+            "Capture a SINGLE metal trace for the AR decode step and "
+            "replay it for every position across every timed call. "
+            "Enabled by Phase 9c (paged_update_cache + tensor-valued "
+            "cur_pos + persistent self/encoder masks). Cross-call "
+            "trace reuse is automatic — no separate flag needed."
+        ),
+    )
+    parser.add_argument(
+        "--reuse-trace",
+        action="store_true",
+        help=(
+            "[Compat] Alias for --traced. Trace reuse across generate() "
+            "calls is now the default behaviour of --traced; this flag "
+            "is provided so older invocations keep working."
         ),
     )
     parser.add_argument(
@@ -205,9 +215,14 @@ def main():
         ),
     )
     args = parser.parse_args()
+    if args.reuse_trace:
+        args.traced = True
 
     if args.traced:
-        print("[profile_t2tt] --traced ENABLED: AR decode steps will run under metal trace+replay")
+        print(
+            "[profile_t2tt] --traced ENABLED: AR decode steps run under a "
+            "single re-usable metal trace (cross-call reuse is the default)."
+        )
 
     # Lazy import so help/parse runs even if heavy deps are missing.
     from transformers import AutoProcessor

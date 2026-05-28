@@ -187,18 +187,23 @@ class TextGenerator(LightweightModule):
         # is implied only by ``lm_head_state_dict["weight"].shape[0]``.
         self._persistent_input_ids_tt: Optional[ttnn.Tensor] = None
         self._persistent_position_ids_tt: Optional[ttnn.Tensor] = None
-        self._persistent_self_masks_tt: dict = {}  # pos -> ttnn.Tensor
+        # Self-attn mask is now a SINGLE persistent buffer (one slot for
+        # all positions). We rewrite its content per step via H2D copy --
+        # because the captured trace reads from the same device address,
+        # this lets a single trace handle all positions.
+        self._persistent_self_mask_tt: Optional[ttnn.Tensor] = None
         self._persistent_encoder_mask_tt: Optional[ttnn.Tensor] = None
         self._vocab_size = int(lm_head_state_dict["weight"].shape[0])
-        # Trace plumbing: one trace per position because ttnn.update_cache
-        # only accepts an integer update_idx -- the constant is baked into
-        # the captured trace, so each position needs its own. Map from
-        # position -> trace_id and from position -> output logits buffer.
-        self._decode_trace_ids: dict = {}
-        self._decode_trace_outputs: dict = {}
-        # Track which positions have a captured trace, so we can lazily
-        # capture only as needed (the e2e tests rarely run to max_seq).
-        self._captured_positions: set = set()
+        # Single decode trace (re-usable across all positions thanks to
+        # paged_update_cache + tensor-valued cur_pos + persistent self mask
+        # buffer). We retain the captured trace id and its output logits
+        # buffer; re-using both across positions AND across generate()
+        # calls is correct because all device addresses are stable.
+        self._decode_trace_id: Optional[int] = None
+        self._decode_trace_output_tt: Optional[ttnn.Tensor] = None
+        # Track whether the program cache for the decode body has been
+        # warmed up at least once (gated by an untraced warmup call).
+        self._decode_kernels_compiled: bool = False
 
     # ----------------------------------------------------------------- helpers
 
@@ -256,49 +261,103 @@ class TextGenerator(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        # Persistent bf16 TILE DRAM buffer for the self-attention mask.
+        # Shape [1, 1, 1, max_decode_seq_len]. We OVERWRITE its content
+        # per step via copy_host_to_device_tensor — because the buffer
+        # ADDRESS is stable, a single captured trace can re-read the
+        # mask each replay and effectively decode any position.
+        max_seq = self.past_key_values.self_attn.max_seq_len
+        default_self_mask = torch.full((1, 1, 1, max_seq), fill, dtype=torch.float32)
+        default_self_mask[:, :, :, :1] = 0.0  # position 0 only at startup
+        self._persistent_self_mask_tt = ttnn.from_torch(
+            default_self_mask,
+            device=self.device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        # Pre-build the per-position host-resident tile tensors once.
+        # Per-step we only need a copy_host_to_device_tensor (no fresh
+        # from_torch/tilize). This trades a small constant memory cost
+        # for a fast per-step path.
+        self._self_mask_hosts: dict = {}
+        for p in range(max_seq):
+            m = self.text_decoder._build_decode_self_attention_mask(
+                batch=1,
+                position=p,
+                max_seq_len=max_seq,
+                dtype=torch.float32,
+            )
+            self._self_mask_hosts[p] = ttnn.from_torch(
+                m,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+            )
+        # Pre-build per-position int32 host tensors for the KV-cache
+        # update_idxs_tensor write. Avoids per-step from_torch.
+        self._cache_pos_hosts: dict = {}
+        for p in range(max_seq):
+            self._cache_pos_hosts[p] = ttnn.from_torch(
+                torch.tensor([int(p)], dtype=torch.int32),
+                dtype=ttnn.int32,
+            )
+        # Pre-build per-position uint32 host tensors for the sinusoidal
+        # position-id write (position + 1 because pad_idx=0 occupies row
+        # 0 of the sinusoidal table).
+        self._sin_pos_hosts: dict = {}
+        for p in range(max_seq):
+            self._sin_pos_hosts[p] = ttnn.from_torch(
+                torch.tensor([[int(p) + 1]], dtype=torch.int32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
 
-    def _ensure_persistent_self_mask(self, position: int) -> ttnn.Tensor:
-        """Build (and cache) the ``[1,1,1,max_seq]`` self-attn mask for ``position``.
+    def _write_self_mask(self, position: int) -> ttnn.Tensor:
+        """Stream the pre-built ``[1,1,1,max_seq]`` self-attn mask for
+        ``position`` into the persistent mask buffer and return that
+        buffer.
 
         Positions ``[0..position]`` get additive zero; positions
-        ``[position+1..max_seq-1]`` get the additive ``-inf`` fill so SDPA
-        ignores empty cache slots beyond what we have written so far.
-
-        These are uploaded ONCE during trace capture and reused on every
-        replay of that particular position. We keep the masks in a dict
-        keyed by position because each captured trace points at the mask
-        buffer it was captured against — sharing one mask across all
-        positions would force a copy per step (which we want to avoid).
+        ``[position+1..max_seq-1]`` get the additive ``-inf`` fill so
+        SDPA ignores empty cache slots beyond what we have written so
+        far. The buffer ADDRESS is unchanged across calls so any trace
+        captured against it stays valid.
         """
-        tt = self._persistent_self_masks_tt.get(position)
-        if tt is not None:
-            return tt
-        max_seq = self.past_key_values.self_attn.max_seq_len
-        mask = self.text_decoder._build_decode_self_attention_mask(
-            batch=1,
-            position=position,
-            max_seq_len=max_seq,
-            dtype=torch.float32,
-        )
-        tt = self.text_decoder._to_tt(mask)
-        self._persistent_self_masks_tt[position] = tt
-        return tt
+        host = self._self_mask_hosts[int(position)]
+        ttnn.copy_host_to_device_tensor(host, self._persistent_self_mask_tt)
+        return self._persistent_self_mask_tt
 
     def _run_decode_body(
         self,
         position: int,
         precomputed_encoder_mask_tt: Optional[ttnn.Tensor],
+        use_pos_tensor: bool = False,
     ) -> ttnn.Tensor:
         """Run the decode_step + lm_head and return the logits tensor.
 
         Inputs are taken from the persistent buffers. Returns the device
         tensor produced by the LM head linear (no D2H -- the caller is
         responsible for ``ttnn.to_torch`` after the trace replay).
+
+        Args:
+            position: integer position (still required because the decode
+                body builds per-position artifacts like the self-mask
+                outside this call; the in-trace cache update uses the
+                persistent device tensor when ``use_pos_tensor`` is True).
+            precomputed_encoder_mask_tt: cross-attn mask buffer.
+            use_pos_tensor: when True, pass the persistent position
+                buffer (a ttnn.Tensor) to the cache update instead of
+                the Python int. Required for trace capture so the
+                update_idxs read comes from device memory.
         """
-        self_mask_tt = self._ensure_persistent_self_mask(position)
+        self_mask_tt = self._persistent_self_mask_tt
+        if use_pos_tensor:
+            pos_arg = self.past_key_values.self_attn.get_persistent_pos_buffer()
+        else:
+            pos_arg = int(position)
         hidden_tt = self.text_decoder.decode_step(
             input_ids=torch.zeros((1, 1), dtype=torch.long),  # unused (persistent buf path)
-            position=int(position),
+            position=pos_arg,
             past_key_values=self.past_key_values,
             precomputed_self_mask_tt=self_mask_tt,
             precomputed_encoder_mask_tt=precomputed_encoder_mask_tt,
@@ -315,56 +374,59 @@ class TextGenerator(LightweightModule):
 
     def _capture_decode_trace(
         self,
-        position: int,
         precomputed_encoder_mask_tt: Optional[ttnn.Tensor],
     ) -> int:
-        """Capture (or reuse) a trace for decode at ``position`` and return its id.
+        """Capture (or reuse) the single decode trace.
 
-        Captures exactly one trace per position. Subsequent calls with
-        the same position return the cached id. The output device
-        tensor (the LM-head linear's result) is retained in
-        :attr:`_decode_trace_outputs[position]` so the caller can D2H
-        from the SAME buffer the captured trace writes to.
+        The captured trace handles ALL positions because:
+          * the new token id is read from ``_persistent_input_ids_tt``
+          * the position id (for sinusoidal lookup) is read from
+            ``_persistent_position_ids_tt``
+          * the KV-cache write position is read from the
+            ``self_attn.get_persistent_pos_buffer()`` int32 tensor
+            (consumed by ``paged_update_cache``'s ``update_idxs_tensor``)
+          * the self-attn mask is read from
+            ``_persistent_self_mask_tt``
+          * the cross-attn mask is read from
+            ``_persistent_encoder_mask_tt``
 
-        Pre-condition: the program cache must already be warm from a
-        prior un-traced run of the same body at this position (otherwise
-        capture will try to compile kernels which is illegal during
-        capture). The caller arranges this by running the body once via
-        :meth:`_run_decode_body` immediately before calling us.
+        All five buffers have stable device addresses, so the trace
+        replays correctly for any position once the caller writes the
+        per-step inputs into them via ``copy_host_to_device_tensor``.
         """
-        if position in self._decode_trace_ids:
-            return self._decode_trace_ids[position]
+        if self._decode_trace_id is not None:
+            return self._decode_trace_id
         ttnn.synchronize_device(self.device)
         trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
         try:
             logits_tt = self._run_decode_body(
-                position=position,
+                position=0,  # not used directly inside the trace body
                 precomputed_encoder_mask_tt=precomputed_encoder_mask_tt,
+                use_pos_tensor=True,
             )
         finally:
             ttnn.end_trace_capture(self.device, trace_id, cq_id=0)
         ttnn.synchronize_device(self.device)
-        self._decode_trace_ids[position] = trace_id
-        # Stash the output handle so `execute_trace`-then-D2H knows
-        # which device tensor holds the freshly computed logits.
-        self._decode_trace_outputs[position] = logits_tt
-        self._captured_positions.add(position)
+        self._decode_trace_id = trace_id
+        self._decode_trace_output_tt = logits_tt
         return trace_id
 
     def _release_decode_traces(self) -> None:
-        """Release every captured decode trace + persistent buffers.
+        """Release the captured decode trace.
 
         Optional; safe to skip when reusing the generator across multiple
-        ``generate()`` calls.
+        ``generate()`` calls (the captured trace is CROSS-CALL safe by
+        design now that paged_update_cache + persistent position buffers
+        replace the int-baked ``ttnn.update_cache``).
         """
-        for trace_id in self._decode_trace_ids.values():
+        if self._decode_trace_id is not None:
             try:
-                ttnn.release_trace(self.device, trace_id)
+                ttnn.release_trace(self.device, self._decode_trace_id)
             except Exception:
                 pass
-        self._decode_trace_ids.clear()
-        self._decode_trace_outputs.clear()
-        self._captured_positions.clear()
+        self._decode_trace_id = None
+        self._decode_trace_output_tt = None
+        self._decode_kernels_compiled = False
 
     def _logits_from_hidden(self, hidden_tt: ttnn.Tensor) -> torch.Tensor:
         """Run hidden state through the LM head and return host ``[vocab]`` logits.
@@ -511,29 +573,16 @@ class TextGenerator(LightweightModule):
 
         # In trace mode, ensure the persistent buffers exist before the
         # encoder-mask precompute so the mask is uploaded INTO the
-        # persistent buffer (whose address is later captured into every
-        # decode trace and must remain stable across generate() calls).
+        # persistent buffer (whose address is captured into the decode
+        # trace and must remain stable across generate() calls).
         if use_trace:
             self._ensure_persistent_buffers()
-            # NOTE on trace lifetime: the per-position trace approach
-            # used here bakes a constant ``update_idx=pos`` into every
-            # captured trace (because the underlying ``ttnn.update_cache``
-            # primitive only accepts a Python int, not a device tensor).
-            # We've empirically observed that replaying these traces in a
-            # second ``generate()`` call (with the captured K/V cache
-            # buffers zero-reset between calls) produces incorrect logits
-            # at the second decode position onward, despite all input
-            # tensor addresses being preserved. This points at additional
-            # implicit state captured by the trace (likely program-cache
-            # IDs or pre-allocated workspace) that doesn't survive a
-            # cross-call replay. Until we migrate the KV cache update to
-            # ``paged_update_cache`` (which takes a ``cur_pos_tensor``
-            # and so allows a SINGLE re-usable trace), we release the
-            # captured traces here at the START of every generate() and
-            # re-capture lazily in the AR loop. This keeps the
-            # correctness guarantee while preserving the (smaller)
-            # within-generation win of trace replay over un-traced.
-            self._release_decode_traces()
+            # The decode trace is CROSS-CALL safe: it reads the position
+            # from a device tensor (via paged_update_cache's
+            # update_idxs_tensor), and all persistent buffers retain
+            # their device addresses across generate() calls. So we do
+            # NOT release the trace here -- subsequent generate() calls
+            # just rewrite the persistent buffers and replay.
 
         tokens: List[int] = [int(decoder_start_token_id), int(tgt_lang_id)]
 
@@ -635,12 +684,15 @@ class TextGenerator(LightweightModule):
 
     def _write_position_id(self, position: int) -> None:
         """Write the sinusoidal-table position id (== position + 1 for non-pad)."""
-        host = ttnn.from_torch(
-            torch.tensor([[int(position) + 1]], dtype=torch.int32),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
+        host = self._sin_pos_hosts[int(position)]
         ttnn.copy_host_to_device_tensor(host, self._persistent_position_ids_tt)
+
+    def _write_cache_pos(self, position: int) -> None:
+        """Write the KV-cache target position into the persistent int32 buffer
+        that ``paged_update_cache`` reads via its ``update_idxs_tensor`` arg.
+        """
+        host = self._cache_pos_hosts[int(position)]
+        ttnn.copy_host_to_device_tensor(host, self.past_key_values.self_attn.get_persistent_pos_buffer())
 
     # Optional callback invoked once per AR step in _generate_traced after
     # ``ttnn.synchronize_device`` so profilers can measure host-perceived
@@ -658,17 +710,19 @@ class TextGenerator(LightweightModule):
         src_logical: int,
         precomp_encoder_mask_tt: Optional[ttnn.Tensor],
     ) -> List[int]:
-        """Metal-trace AR loop.
+        """Metal-trace AR loop using a SINGLE re-usable trace.
 
-        Strategy: one trace per absolute position (positions 1..max-1),
-        because ``ttnn.update_cache(cache, k_new, update_idx=int(pos))``
-        captures ``pos`` as a static constant — a single re-usable trace
-        would always write into slot 0 on replay.
+        Strategy: thanks to ``paged_update_cache(update_idxs_tensor=...)``
+        + persistent self/encoder masks + persistent input/position id
+        buffers, ONE captured trace handles all decode positions. We
+        capture once during the first ``generate()`` (after a single
+        untraced warmup so the program cache is warm) and replay for
+        every step thereafter -- including across subsequent
+        ``generate()`` calls.
 
-        We capture lazily on the first hit of a given position. The first
-        decode call at each new position pays warmup+capture latency; all
-        subsequent calls at that position replay the trace and skip
-        host-side op dispatch entirely.
+        Position 0 (decoder_start_token_id) is always run untraced
+        because its logits are discarded -- folding it into the trace
+        would just add complexity.
         """
         import time as _time
 
@@ -677,30 +731,53 @@ class TextGenerator(LightweightModule):
         # buffer). Call again here for safety -- idempotent.
         self._ensure_persistent_buffers()
 
-        # ---- positions 0 and 1: warmup, no trace ----
-        # Position 0 (decoder_start_token_id): its logits are discarded.
+        # ---- position 0: warmup, no trace. Logits discarded. ----
         self._write_input_ids(tokens[0])
         self._write_position_id(0)
+        self._write_cache_pos(0)
+        self._write_self_mask(0)
         _t0 = _time.perf_counter()
-        _wu0 = self._run_decode_body(position=0, precomputed_encoder_mask_tt=precomp_encoder_mask_tt)
-        ttnn.synchronize_device(self.device)
-        if self.step_callback is not None:
-            self.step_callback(0, (_time.perf_counter() - _t0) * 1000.0, "warmup")
-        ttnn.deallocate(_wu0)
+        if not self._decode_kernels_compiled:
+            _wu0 = self._run_decode_body(
+                position=0,
+                precomputed_encoder_mask_tt=precomp_encoder_mask_tt,
+                use_pos_tensor=True,
+            )
+            ttnn.synchronize_device(self.device)
+            ttnn.deallocate(_wu0)
+            self._decode_kernels_compiled = True
+            if self.step_callback is not None:
+                self.step_callback(0, (_time.perf_counter() - _t0) * 1000.0, "warmup")
+        else:
+            # Subsequent generate() calls: program cache already warm.
+            # Just replay the trace at pos=0 (logits discarded).
+            if self._decode_trace_id is None:
+                # First-call warmup happened before but trace not yet
+                # captured (shouldn't happen given the ordering below).
+                pass
+            else:
+                ttnn.execute_trace(self.device, self._decode_trace_id, cq_id=0, blocking=True)
+                if self.step_callback is not None:
+                    self.step_callback(0, (_time.perf_counter() - _t0) * 1000.0, "replay")
 
-        # Position 1 (tgt_lang_id): first logits we actually sample from.
+        # ---- capture the single decode trace if not already captured ----
+        if self._decode_trace_id is None:
+            _t_cap = _time.perf_counter()
+            self._capture_decode_trace(precomp_encoder_mask_tt)
+            if self.step_callback is not None:
+                self.step_callback(0, (_time.perf_counter() - _t_cap) * 1000.0, "capture")
+
+        # ---- position 1 (tgt_lang_id): first logits we sample from. ----
         self._write_input_ids(tokens[1])
         self._write_position_id(1)
-        # Capture trace for pos=1 so we get this step ALSO under trace if
-        # we ever return to it; but actually pos 1 only happens once per
-        # generate(), so we just run + read.
+        self._write_cache_pos(1)
+        self._write_self_mask(1)
         _t0 = _time.perf_counter()
-        logits_tt = self._run_decode_body(position=1, precomputed_encoder_mask_tt=precomp_encoder_mask_tt)
+        ttnn.execute_trace(self.device, self._decode_trace_id, cq_id=0, blocking=True)
+        logits_tt = self._decode_trace_output_tt
         logits = ttnn.to_torch(logits_tt).to(torch.float32)
         if self.step_callback is not None:
-            self.step_callback(1, (_time.perf_counter() - _t0) * 1000.0, "warmup")
-        ttnn.deallocate(logits_tt)
-        # Strip leading singleton dims.
+            self.step_callback(1, (_time.perf_counter() - _t0) * 1000.0, "replay")
         while logits.dim() > 1:
             if logits.shape[0] == 1:
                 logits = logits.squeeze(0)
@@ -708,7 +785,7 @@ class TextGenerator(LightweightModule):
                 logits = logits[0, -1, :]
                 break
 
-        # ---- AR loop: positions 2..max_total-1 ----
+        # ---- AR loop: positions 2..max_total-1, ALL via the single trace ----
         for pos in range(2, max_total):
             next_token = int(torch.argmax(logits).item())
             tokens.append(next_token)
@@ -717,38 +794,18 @@ class TextGenerator(LightweightModule):
             if pos + 1 >= max_total:
                 break
 
-            # Write inputs for THIS step (decode at slot pos).
+            # Write per-step inputs into the persistent buffers.
             self._write_input_ids(next_token)
             self._write_position_id(pos)
+            self._write_cache_pos(pos)
+            self._write_self_mask(pos)
 
-            if pos not in self._decode_trace_ids:
-                # First time hitting this position: untraced warmup so
-                # the program cache holds every kernel, THEN capture.
-                _t_wu = _time.perf_counter()
-                _wu = self._run_decode_body(
-                    position=pos,
-                    precomputed_encoder_mask_tt=precomp_encoder_mask_tt,
-                )
-                ttnn.synchronize_device(self.device)
-                if self.step_callback is not None:
-                    self.step_callback(pos, (_time.perf_counter() - _t_wu) * 1000.0, "warmup")
-                ttnn.deallocate(_wu)
-
-                _t_cap = _time.perf_counter()
-                self._capture_decode_trace(pos, precomp_encoder_mask_tt)
-                if self.step_callback is not None:
-                    self.step_callback(pos, (_time.perf_counter() - _t_cap) * 1000.0, "capture")
-
-            # Replay the captured trace.
             _t_rep = _time.perf_counter()
-            ttnn.execute_trace(self.device, self._decode_trace_ids[pos], cq_id=0, blocking=True)
-            logits_tt = self._decode_trace_outputs[pos]
+            ttnn.execute_trace(self.device, self._decode_trace_id, cq_id=0, blocking=True)
+            logits_tt = self._decode_trace_output_tt
             logits = ttnn.to_torch(logits_tt).to(torch.float32)
             if self.step_callback is not None:
                 self.step_callback(pos, (_time.perf_counter() - _t_rep) * 1000.0, "replay")
-            # NB: do NOT deallocate logits_tt — it's the persistent
-            # output of the trace and we'll read it again next time the
-            # same position runs (across multiple generate() calls).
             while logits.dim() > 1:
                 if logits.shape[0] == 1:
                     logits = logits.squeeze(0)

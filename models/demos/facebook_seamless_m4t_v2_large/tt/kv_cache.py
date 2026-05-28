@@ -7,8 +7,14 @@ The text decoder has two kinds of attention per layer:
 
 * **Self-attention** is causal over decoder tokens. During autoregressive
   decode, the cache grows by one token per step. We use
-  ``ttnn.update_cache(cache, k_new, update_idx=pos)`` to write the new
-  per-step K/V into the pre-allocated slot.
+  ``ttnn.experimental.paged_update_cache(cache, kv, update_idxs_tensor=pos_tt)``
+  to write the new per-step K/V into the pre-allocated slot. The
+  position is passed as a 1-element int32 tensor (a persistent buffer
+  that we ``copy_host_to_device_tensor`` into per step). This allows a
+  SINGLE metal trace to be captured for all decode positions — the
+  trace replays correctly across positions because the position is
+  read from device memory at execution time, not baked into the kernel
+  args at capture time.
 * **Cross-attention** projects K/V from the encoder output, which is
   fixed for the whole generation. The cross-attn cache is populated
   ONCE right after encoder forward (per layer) and reused on every decode
@@ -18,6 +24,13 @@ Both caches store tensors of shape ``[batch, num_heads, seq_len, head_dim]``
 in DRAM TILE_LAYOUT bfloat16, mirroring how the non-cached MHA path
 already produces them (the projection is followed by a ``reshape ->
 transpose(1, 2)`` to land in this same layout before SDPA).
+
+Compared with the qwen3_tts pattern, we use ``paged_update_cache`` with
+a *single* logical page per cache (i.e. no actual paging — the cache is
+just a single contiguous tensor of shape ``[batch, num_heads, max_seq,
+head_dim]``). This is the minimum-friction switch from the int-baked
+``ttnn.update_cache`` while keeping the SDPA read side completely
+unchanged.
 
 The pattern is copied from
 ``models/demos/qwen3_tts/tt/kv_cache.py`` and adapted for SeamlessM4T-v2
@@ -32,6 +45,7 @@ from typing import Tuple
 import torch
 
 import ttnn
+from models.common.utility_functions import nearest_y
 
 
 class SelfAttentionKVCache:
@@ -104,35 +118,93 @@ class SelfAttentionKVCache:
             layout=ttnn.TILE_LAYOUT,
         )
 
+        # Pre-build the sharded-memory-config for the K/V "new token"
+        # input to ``paged_update_cache``. The op requires:
+        #   * input.shape = [1, batch, num_heads, head_dim]
+        #   * input HEIGHT_SHARDED on L1
+        #   * shard width == head_dim (the last dim)
+        #   * shard height == ceil(num_heads / TILE) * TILE
+        # Per-batch one core. For batch=1 we just pin one core.
+        grid_size = device.compute_with_storage_grid_size()
+        shard_grid = ttnn.num_cores_to_corerangeset(self.batch, grid_size, row_wise=True)
+        shard_shape = (nearest_y(self.num_heads, ttnn.TILE_SIZE), self.head_dim)
+        self._update_input_mem_cfg = ttnn.create_sharded_memory_config(
+            shape=shard_shape,
+            core_grid=shard_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        # Persistent device-side position-index buffer used when the
+        # caller passes a Python int. Stable address so a captured trace
+        # can read it directly. Shape ``[batch]``, dtype int32, ROW_MAJOR
+        # DRAM (as required by paged_update_cache's update_idxs_tensor).
+        self._persistent_pos_tt = ttnn.from_torch(
+            torch.zeros(self.batch, dtype=torch.int32),
+            device=device,
+            dtype=ttnn.int32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def get_persistent_pos_buffer(self) -> ttnn.Tensor:
+        """Return the persistent position-index buffer.
+
+        Callers that want to drive ``update()`` via a tensor (e.g. for
+        trace capture, where the position must vary across replays
+        without re-compiling) should write into this buffer via
+        ``ttnn.copy_host_to_device_tensor(host, get_persistent_pos_buffer())``
+        and then call ``update(..., pos=get_persistent_pos_buffer())``.
+        """
+        return self._persistent_pos_tt
+
     def update(self, layer_idx: int, k_new: ttnn.Tensor, v_new: ttnn.Tensor, pos) -> None:
         """Write a single token's K/V into the layer's cache at ``pos``.
 
         Args:
             layer_idx: which decoder layer's cache to update.
-            k_new: ``[B, num_heads, 1, head_dim]`` TILE_LAYOUT.
+            k_new: ``[B, num_heads, 1, head_dim]`` TILE_LAYOUT. Internally
+                reshaped to ``[1, B, num_heads, head_dim]`` and converted
+                to HEIGHT_SHARDED L1 before the ``paged_update_cache`` op.
             v_new: ``[B, num_heads, 1, head_dim]`` TILE_LAYOUT.
-            pos: target position along the sequence dimension. May be a
-                Python int (baked as a constant into the captured trace
-                for the per-position trace strategy) or a ``ttnn.Tensor``
-                holding the index (not currently used; reserved for a
-                future ``paged_fused_update_cache`` migration). When a
-                tensor is given we currently extract the int via
-                ``to_torch`` — this is a fallback for backwards-compat
-                only.
+            pos: target position along the sequence dimension. May be:
+                * a Python int — we write it into the persistent device
+                  position buffer (one H2D copy of a 1-int tensor) and
+                  use that as the ``update_idxs_tensor``. Safe for
+                  trace capture because the persistent buffer's address
+                  is stable across calls.
+                * a ``ttnn.Tensor`` — used directly as the
+                  ``update_idxs_tensor``. Caller is responsible for
+                  ensuring it's a 1-element int32 ROW_MAJOR DRAM tensor
+                  and that its address is stable across trace replays.
         """
+        # ---- 1. Resolve position into a device tensor. ----
         if isinstance(pos, ttnn.Tensor):
-            # Fallback: ttnn.update_cache only accepts a Python integer
-            # update_idx. Pull the scalar off device. This path is meant
-            # only for callers that opted into the tensor form before the
-            # underlying primitive supports it; it WILL break trace
-            # capture (host read in the hot loop). Prefer the int form.
-            import torch as _torch
-
-            pos = int(_torch.tensor(ttnn.to_torch(pos)).flatten()[0].item())
+            pos_tt = pos
         else:
-            pos = int(pos)
-        ttnn.update_cache(self.k_caches[layer_idx], k_new, update_idx=pos)
-        ttnn.update_cache(self.v_caches[layer_idx], v_new, update_idx=pos)
+            # Write the int into the persistent position buffer.
+            host = ttnn.from_torch(
+                torch.tensor([int(pos)] * self.batch, dtype=torch.int32),
+                dtype=ttnn.int32,
+            )
+            ttnn.copy_host_to_device_tensor(host, self._persistent_pos_tt)
+            pos_tt = self._persistent_pos_tt
+
+        # ---- 2. Reshape K/V from [B, NH, 1, HD] to [1, B, NH, HD] sharded. ----
+        # NB: the caller produced the tensors in [B, NH, 1, HD] for
+        # convenience of the broader code path. paged_update_cache wants
+        # [1, B, NH, HD] HEIGHT_SHARDED on L1. We do reshape + i2s here.
+        k_resh = ttnn.reshape(k_new, (1, self.batch, self.num_heads, self.head_dim))
+        v_resh = ttnn.reshape(v_new, (1, self.batch, self.num_heads, self.head_dim))
+        k_sharded = ttnn.interleaved_to_sharded(k_resh, self._update_input_mem_cfg)
+        v_sharded = ttnn.interleaved_to_sharded(v_resh, self._update_input_mem_cfg)
+        ttnn.deallocate(k_resh)
+        ttnn.deallocate(v_resh)
+
+        # ---- 3. paged_update_cache (no page table — single contiguous cache). ----
+        ttnn.experimental.paged_update_cache(self.k_caches[layer_idx], k_sharded, update_idxs_tensor=pos_tt)
+        ttnn.experimental.paged_update_cache(self.v_caches[layer_idx], v_sharded, update_idxs_tensor=pos_tt)
+        ttnn.deallocate(k_sharded)
+        ttnn.deallocate(v_sharded)
 
     def read(self, layer_idx: int) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
         """Return the full ``[B, num_heads, max_seq, head_dim]`` K and V caches.
