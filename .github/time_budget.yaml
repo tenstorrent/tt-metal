@@ -202,8 +202,6 @@ models:
     wh_llmbox_perf: 685
     wh_galaxy: 280
     wh_galaxy_perf: 150
-    # UF Galaxy perf pool (see sku_config wh_galaxy_perf_uf)
-    wh_galaxy_perf_uf: 75
   device_perf:
     wh_n150: 10
     bh_p150: 10
@@ -214,7 +212,6 @@ models:
     wh_llmbox_perf_release: 1090
     wh_galaxy: 0
     wh_galaxy_perf: 150
-    wh_galaxy_perf_uf: 45
     wh_galaxy_release: 345
     bh_galaxy: 280
     wh_n150: 500
@@ -239,4 +236,4 @@ models:
 
 umd:
   unit:
-    wh_galaxy_perf_uf: 35
+    wh_galaxy_perf: 35
