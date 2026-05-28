@@ -1,0 +1,94 @@
+name: "(Single-card) Profiler tests"
+
+on:
+  workflow_dispatch:
+    inputs:
+      run-blackhole-profiler:
+        description: "Blackhole profiler"
+        required: false
+        type: boolean
+        default: true
+      run-n300-profiler:
+        description: "N300 profiler"
+        required: false
+        type: boolean
+        default: true
+      run-n150-profiler:
+        description: "N150 profiler"
+        required: false
+        type: boolean
+        default: true
+      post-commit-only:
+        description: "Whether to only run tests on post-commit branches (i.e. not on PRs)"
+        required: false
+        type: boolean
+        default: false
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
+      build-type:
+        required: false
+        type: choice
+        default: Release
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+        description: "Build type configuration"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
+
+jobs:
+  compute-skus:
+    runs-on: ubuntu-latest
+    outputs:
+      enabled-skus: ${{ steps.build.outputs.value }}
+    steps:
+      - name: Determine enabled SKUs
+        id: build
+        run: |
+          set -e
+          parts=()
+          [[ "${{ inputs.run-blackhole-profiler }}" == "true" ]] && parts+=("bh_p100a_civ2_viommu" "bh_p150b_civ2_viommu")
+          [[ "${{ inputs.run-n300-profiler }}" == "true" ]] && parts+=("wh_n300_civ2")
+          [[ "${{ inputs.run-n150-profiler }}" == "true" ]] && parts+=("wh_n150_civ2")
+          skus=$(IFS=,; echo "${parts[*]}")
+          if [[ -z "$skus" ]]; then
+            echo "::error::No SKUs selected. Enable at least one of run-blackhole-profiler / run-n300-profiler / run-n150-profiler."
+            exit 1
+          fi
+          echo "value=$skus" >> "$GITHUB_OUTPUT"
+
+  build-artifact:
+    needs: compute-skus
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      tracy: true
+      build-wheel: true
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      build-type: ${{ inputs.build-type || 'Release' }}
+      enable-lto: ${{ inputs.enable-lto || false }}
+
+  single-card-profiler-tests:
+    needs: [build-artifact, compute-skus]
+    uses: ./.github/workflows/single-card-profiler-tests-impl.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enabled-skus: ${{ needs.compute-skus.outputs.enabled-skus }}
+      test-selection: ${{ inputs.post-commit-only == 'true' && 'post-commit' || 'all' }}
