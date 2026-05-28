@@ -36,7 +36,7 @@ on:
         type: boolean
         default: false
       run_profiler_tests:
-        description: 'Run Profiler Regression' 
+        description: 'Run Profiler Regression'
         required: false
         type: boolean
         default: false
