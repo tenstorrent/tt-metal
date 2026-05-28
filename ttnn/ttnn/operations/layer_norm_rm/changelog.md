@@ -216,3 +216,118 @@
   precision baseline (8/8), and the new precision matrix all
   continue to pass — 105/105 across the layer_norm_rm unit-test
   directory.
+
+## Refinement 2 — TILE_LAYOUT input + TILE affine tensors
+- **Date**: 2026-05-28
+- **What was done**: Added `TILE_LAYOUT` to `SUPPORTED["layout"]` and
+  removed the two Phase-0 EXCLUSIONS entries
+  `{"affine": "gamma_only", "affine_layout": TILE_LAYOUT}` and
+  `{"affine": "gamma_beta", "affine_layout": TILE_LAYOUT}`. The op now
+  accepts TILE-layout input and TILE-layout gamma/beta end-to-end.
+
+  Implementation follows the softmax-R3 pattern (mirror image — softmax
+  accepts RM by wrapping to TILE; layer_norm_rm accepts TILE by wrapping
+  to RM). The kernel beneath the entry point is RM-input / RM-output;
+  the entry point wraps:
+    1. TILE input → `ttnn.to_layout(x, ROW_MAJOR_LAYOUT)` on the way in.
+    2. TILE gamma/beta (each handled independently) → same wrap.
+    3. After the kernel runs, if the original input layout was TILE,
+       `ttnn.to_layout(output, TILE_LAYOUT)` restores user-visible layout.
+
+  Zero kernel changes; only `layer_norm_rm.py` (the entry point) and
+  the SUPPORTED/EXCLUSIONS blocks moved. Matches the softmax-R3
+  precedent and `/memory-layouts` §1 ("the layout decision lives at
+  the data-access boundary, not in the math").
+
+  **bf8b structural gap surfaced (side-effect)**: R1 listed
+  `bf8b_hifi4_bf16acc` in SUPPORTED "for honesty, unreachable while
+  layout was RM-only". R2's TILE_LAYOUT addition made it reachable
+  (bf8b in RM is INVALID per `feature_spec.py`, so bf8b cells now run
+  at layout=TILE), but the entry-point's TILE→RM wrap silently
+  downcasts bf8b → bf16 (ttnn.to_layout has no way to preserve a
+  block format outside its block layout), tripping golden's
+  output-dtype check on 220 cells. Per the giving-up protocol
+  (structural capability gap), added
+  `{"precision": "bf8b_hifi4_bf16acc"}` to EXCLUSIONS. A future
+  refinement can revisit this — supporting bf8b would require either
+  an in-kernel bf8b path or a dedicated TILE-input/TILE-output kernel
+  variant. bf8b stays in SUPPORTED for honesty (PRECISION_CONFIG entry
+  exists), excluded at runtime.
+
+- **SUPPORTED at Refinement 2**:
+  - `layout` = `[ROW_MAJOR_LAYOUT, TILE_LAYOUT]`
+  - Every other axis unchanged (still `[fp32, bf16x2, bf8b]` precision /
+    `[float32, bfloat16, bfloat8_b]` affine_dtype /
+    `[TILE_LAYOUT, ROW_MAJOR_LAYOUT]` affine_layout /
+    `["tile_aligned"]` alignment / `[2, 3, 4]` rank / 3 affine modes).
+- **EXCLUSIONS at Refinement 2**:
+  ```python
+  [
+      {"precision": "bf8b_hifi4_bf16acc"},  # structural gap, side-effect of TILE_LAYOUT
+  ]
+  ```
+  The two Phase-0 `(affine=gamma_*, affine_layout=TILE)` pairs were
+  removed; the bf8b entry was added.
+
+- **Accuracy achieved** (measured by
+  `tests/ttnn/unit_tests/operations/layer_norm_rm/test_layer_norm_rm_layout.py`,
+  52 cells):
+  - 36-cell (input_layout × affine_layout × affine_mode × shape)
+    cartesian on fp32 input: PCC ≥ 0.999 (Phase-0 tier band) on every
+    cell. Output's layout mirrors input's layout end-to-end.
+  - 3 explicit `TILE → layer_norm → TILE` round-trip cells: PCC ≥ 0.999,
+    output.layout == TILE_LAYOUT (the explicit "Done when" criterion
+    from op_requirements.md).
+  - 2 mixed-affine-layout cells (gamma=RM,beta=TILE and reverse):
+    PCC ≥ 0.999 — confirms the wrap handles gamma and beta independently.
+  - 2 positive-acceptance cells for the (affine=gamma_*,
+    affine_layout=TILE) cells removed from EXCLUSIONS: PCC ≥ 0.999.
+  - 8 bf16 × TILE cells (4 layout combos × 2 affine modes): PCC ≥ 0.995
+    (bf16_hifi4_fp32acc band) — composes R1 and R2 cleanly.
+  - 1 drift-signal test that asserts SUPPORTED/EXCLUSIONS reflect R2
+    (TILE in SUPPORTED, no Phase-0 EXCLUSIONS pairs, bf8b in EXCLUSIONS).
+
+- **Golden test progress**: **1335 / 1335 supported-pass cells passing**
+  (was 300 / 300 at end of R1, +1035 cells unlocked by R2). 1375
+  xfailed (the 1155 alignment-gated cells queued for R3 + the 220
+  bf8b cells now correctly xfailed via EXCLUSIONS). 2345
+  invalid_skipped. **0 supported_fail, 0 xpass_drift**.
+
+  Breakdown of the +1035 unlocked cells: every cell whose only
+  gap-axes were `{layout, affine_layout}` against R1's SUPPORTED now
+  passes. This matches the verifier-note estimate ("layout + other
+  axes: ~1540 total"; the gap is bf8b cells that became reachable but
+  needed EXCLUSIONS, plus alignment-gated cells still queued for R3).
+
+  "Done when" criterion met:
+  - `SUPPORTED["layout"] == [ROW_MAJOR_LAYOUT, TILE_LAYOUT]` ✓
+  - The two Phase-0 `(affine=gamma_*, affine_layout=TILE)` EXCLUSIONS
+    pairs removed ✓
+  - Every xfail cell whose only gap-axes are `{layout, affine_layout}`
+    passes the golden suite ✓ (1035-cell unlock)
+  - Output tensor's layout mirrors the input tensor's layout
+    (TILE → layer_norm → TILE round-trip) ✓ (3 explicit cells +
+    36 cartesian cells assert this)
+
+- **Issues encountered**:
+  - The 220-cell bf8b dtype-mismatch wave on the first golden-suite
+    run. Diagnosis: `precision=bf8b_hifi4_bf16acc` only runs at
+    `layout=TILE` (RM bf8b is INVALID); R2's TILE_LAYOUT addition
+    triggered these cells; the entry-point wrap drops bf8b → bf16.
+    Resolution: added `{"precision": "bf8b_hifi4_bf16acc"}` to
+    EXCLUSIONS as a structural gap (not in R2's named scope, but
+    surfaced because R2 made it reachable). A follow-up refinement
+    could ship bf8b properly with either an in-kernel bf8b path or a
+    dedicated TILE I/O kernel variant.
+
+- **Tests added**:
+  - `tests/ttnn/unit_tests/operations/layer_norm_rm/test_layer_norm_rm_layout.py`
+    — 52 cells covering the 6 categories above.
+  - `tests/ttnn/unit_tests/operations/layer_norm_rm/probes/probe_001.py`
+    — early 4-combo smoke probe used during development.
+
+- **Tests preserved**: Phase-0 acceptance (32/32), precision baseline
+  (8/8), precision matrix (65/65), all continue to pass. Full
+  **157/157** across `tests/ttnn/unit_tests/operations/layer_norm_rm/`.
+  Full **1335/1335** passing (no supported_fail) across
+  `eval/golden_tests/layer_norm_rm/`.

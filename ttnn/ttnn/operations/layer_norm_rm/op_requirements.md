@@ -115,7 +115,7 @@ dtype-driven via CB format. Expect program-descriptor-only changes.
   pass the golden suite under existing TOLERANCES (no widening). Cells
   that miss the tolerance band move to EXCLUSIONS.
 
-### [ ] Refinement 2 — TILE_LAYOUT input + TILE affine tensors
+### [x] Refinement 2 — TILE_LAYOUT input + TILE affine tensors
 
 **Goal**: add `TILE_LAYOUT` to `SUPPORTED["layout"]` (input tensor) and
 drop the two EXCLUSIONS entries `{"affine": "gamma_*", "affine_layout":
