@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: (C) 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import torch
 import ttnn
 from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
@@ -14,6 +16,7 @@ from models.experimental.tt_symbiote.modules.linear import (
     TTNNLinearLLamaIColShardedWRowSharded,
     _decode_down_proj_dram_sharded_program_config,
     _decode_down_proj_input_memory_config,
+    _decode_gate_or_up_dram_sharded_program_config,
     _decode_gate_up_dram_sharded_program_config,
     _dp_matmul_program_config,
     _dram_sharded_mem_config_2d,
@@ -22,6 +25,16 @@ from models.experimental.tt_symbiote.modules.linear import (
     _linear_mesh_num_devices,
     _ccl_num_links,
 )
+
+
+# Step-1 experiment toggle: when enabled (default), the single-device decode
+# fast path runs gate_proj and up_proj as two separate DRAM-sharded matmuls.
+# The gate matmul folds SILU into its program config (no separate unary), and
+# the explicit ``ttnn.mul(silu_gate, up)`` happens without an activation, so
+# we drop the chunk + sharded_to_interleaved that the fused path needed.
+# A/B by exporting ``DOTS_OCR_SPLIT_GATE_UP_DECODE=0`` to fall back to the
+# fused gate+up matmul + chunk + silu-fused multiply.
+_SPLIT_GATE_UP_DECODE = os.environ.get("DOTS_OCR_SPLIT_GATE_UP_DECODE", "1") != "0"
 
 
 class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFusedGateUp):
@@ -148,6 +161,96 @@ class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFuse
             if self.tt_bias is not None:
                 tt_output += self.tt_bias
         return ttnn.reshape(tt_output, input_tensor_shape[:-1] + [-1])
+
+    def split_decode_available(self) -> bool:
+        """True if the per-projection DRAM-sharded weights are loaded.
+
+        These are only built when ``_gate_up_use_dram_sharded()`` engaged in
+        ``move_weights_to_device_impl`` (single-device, K=1536, N=17920). The
+        MLP forward checks this before taking the split path so prefill,
+        multi-device CCL, and other shapes silently fall through to the fused
+        gate+up matmul.
+        """
+        return (
+            getattr(self, "_gate_dram_weight", None) is not None and getattr(self, "_up_dram_weight", None) is not None
+        )
+
+    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
+    def forward_silu_mul_split(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
+        """Run gate and up as two separate DRAM-sharded matmuls, fuse SILU into
+        the gate matmul kernel, and return silu(gate) * up directly.
+
+        Replaces the fused-gate-up + chunk + silu-fused-multiply trio with:
+            silu_gate = matmul(x, gate_w, fused_activation=SILU)
+            up        = matmul(x, up_w)
+            return    ttnn.mul(silu_gate, up)
+
+        ``ttnn.linear`` has no per-element residual / multiply input, so the
+        final ``ttnn.mul`` cannot be fused into either matmul kernel — the
+        win comes from dropping the chunk + sharded_to_interleaved that the
+        fused path needs to split the [..., 17920] output into two halves,
+        and from running silu inside a matmul kernel (one fewer eltwise pass).
+        """
+        if input_tensor.layout != ttnn.TILE_LAYOUT:
+            input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        input_tensor_shape = list(input_tensor.shape)
+        input_shape = list(input_tensor_shape)
+        if len(input_shape) == 2:
+            input_shape.insert(0, 1)
+        if len(input_shape) == 3:
+            input_shape.insert(1, 1)
+        input_tensor = ttnn.reshape(input_tensor, input_shape)
+
+        dram_shard_cfg = getattr(self, "_gate_up_dram_input_shard_cfg", None)
+        assert dram_shard_cfg is not None, "split_decode requires _gate_up_dram_input_shard_cfg"
+        input_tensor = ttnn.to_memory_config(input_tensor, dram_shard_cfg)
+
+        gate_w, gate_b = self._get_gate_dram_sharded_weight()
+        up_w, up_b = self._get_up_dram_sharded_weight()
+
+        gate_pc = _decode_gate_or_up_dram_sharded_program_config(
+            input_shape, gate_w.shape, fused_activation=ttnn.UnaryOpType.SILU
+        )
+        up_pc = _decode_gate_or_up_dram_sharded_program_config(input_shape, up_w.shape, fused_activation=None)
+        assert gate_pc is not None and up_pc is not None, "split gate/up program config did not match expected shape"
+
+        silu_gate = ttnn.linear(
+            input_tensor,
+            gate_w,
+            bias=gate_b,
+            dtype=ttnn.bfloat8_b,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            compute_kernel_config=self._gate_up_decode_compute_kernel_config,
+            program_config=gate_pc,
+        )
+        up = ttnn.linear(
+            input_tensor,
+            up_w,
+            bias=up_b,
+            dtype=ttnn.bfloat8_b,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            compute_kernel_config=self._gate_up_decode_compute_kernel_config,
+            program_config=up_pc,
+        )
+
+        # Both operands are L1 width-sharded on the same 16c 8x2 grid. Land
+        # the mul output as L1 interleaved (not width-sharded) so the
+        # downstream reshard into the 8c down_proj input layout matches the
+        # existing fused-path semantics exactly (interleaved -> 8c sharded,
+        # the well-tested reshard kernel). The mul kernel deshards the two
+        # operands internally; this avoids a fragile sharded(16c) -> sharded(8c)
+        # to_memory_config that the down_proj reshard would otherwise have
+        # to perform.
+        gate_up_mul = ttnn.mul(
+            silu_gate,
+            up,
+            dtype=ttnn.bfloat8_b,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(silu_gate)
+        ttnn.deallocate(up)
+
+        return ttnn.reshape(gate_up_mul, input_tensor_shape[:-1] + [-1])
 
 
 class TTNNDotsOCRRowShardedNoAllGather(TTNNLinearLLamaIColShardedWRowSharded):
@@ -344,6 +447,28 @@ class TTNNDotsOCRMLP(TTNNModule):
         seq_len = hidden_states.shape[1]
         is_decode = int(seq_len) == 1
         activation_mc = ttnn.L1_MEMORY_CONFIG if is_decode else ttnn.DRAM_MEMORY_CONFIG
+
+        # Step-1 experiment: when single-device decode and the per-projection
+        # DRAM-sharded weights are loaded, run gate/up as two separate matmuls
+        # with SILU fused into the gate kernel. ``forward_silu_mul_split``
+        # returns ``silu(gate) * up`` directly so we skip the fused-gate-up
+        # path's chunk, sharded_to_interleaved, and silu-fused multiply.
+        use_split = (
+            _SPLIT_GATE_UP_DECODE
+            and is_decode
+            and not _tp_requires_ccl(self.fused_gate_up_proj.device)
+            and self.fused_gate_up_proj.split_decode_available()
+        )
+
+        if use_split:
+            gate_up_mul = self.fused_gate_up_proj.forward_silu_mul_split(hidden_states)
+            down_dram_shard_cfg = getattr(self.down_proj, "_down_proj_dram_input_shard_cfg", None)
+            if down_dram_shard_cfg is not None:
+                gate_up_mul = ttnn.to_memory_config(gate_up_mul, down_dram_shard_cfg)
+            down_output_mc = activation_mc if down_dram_shard_cfg is None else None
+            output = self.down_proj(gate_up_mul, output_memory_config=down_output_mc)
+            ttnn.deallocate(gate_up_mul)
+            return output
 
         gate_up = self.fused_gate_up_proj(hidden_states, output_memory_config=activation_mc if is_decode else None)
 

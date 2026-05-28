@@ -226,6 +226,17 @@ _GATE_UP_DRAM_SHARDED_IN0_BLOCK_W = 3
 _GATE_UP_DRAM_SHARDED_PER_CORE_M = 1
 _GATE_UP_DRAM_SHARDED_PER_CORE_N = 35
 
+# MLP gate-only / up-only DRAM-sharded decode config used when the fused gate+up
+# is split into two separate matmuls (single-device decode experiment). N=8960
+# instead of 17920; same 16c 8x2 grid so the sharded LN -> matmul input layout
+# is unchanged. DRAM-sharded weight pads N to 9216 (= ceil(8960 / (32*12)) *
+# (32*12)) which gives a clean per_core_N = 9216 / (32*16) = 18.
+_GATE_OR_UP_DRAM_SHARDED_GRID = _GATE_UP_DRAM_SHARDED_GRID
+_GATE_OR_UP_DRAM_SHARDED_NUM_CORES = _GATE_UP_DRAM_SHARDED_NUM_CORES
+_GATE_OR_UP_DRAM_SHARDED_IN0_BLOCK_W = _GATE_UP_DRAM_SHARDED_IN0_BLOCK_W
+_GATE_OR_UP_DRAM_SHARDED_PER_CORE_M = 1
+_GATE_OR_UP_DRAM_SHARDED_PER_CORE_N = 18
+
 # MLP down-proj DRAM-sharded decode config (verified: 32x8960x1536
 # BFP8/BFP4->BFP8 LoFi, L1 width_sharded in, DRAM width_sharded w, L1 width_sharded
 # out, ~44us on 8 cores 8x1, in0_block_w=7, per_core_M=1, per_core_N=6).
@@ -397,6 +408,26 @@ def _decode_gate_up_dram_sharded_program_config(input_shape, weight_shape):
         per_core_M=_GATE_UP_DRAM_SHARDED_PER_CORE_M,
         per_core_N=_GATE_UP_DRAM_SHARDED_PER_CORE_N,
         fused_activation=None,
+    )
+
+
+def _decode_gate_or_up_dram_sharded_program_config(input_shape, weight_shape, fused_activation=None):
+    """Single-projection (gate-only or up-only) DRAM-sharded decode program
+    config: 32x1536x8960 @ 16c 8x2. Used when the fused gate+up matmul is split
+    into two separate kernels; the gate kernel sets ``fused_activation=SILU``
+    so the SwiGLU silu happens inside the matmul (no separate unary). The up
+    kernel passes ``fused_activation=None``.
+    """
+    if int(input_shape[-2]) > ttnn.TILE_SIZE:
+        return None
+    if int(input_shape[-1]) != 1536 or int(weight_shape[-2]) != 1536 or int(weight_shape[-1]) != 8960:
+        return None
+
+    return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+        in0_block_w=_GATE_OR_UP_DRAM_SHARDED_IN0_BLOCK_W,
+        per_core_M=_GATE_OR_UP_DRAM_SHARDED_PER_CORE_M,
+        per_core_N=_GATE_OR_UP_DRAM_SHARDED_PER_CORE_N,
+        fused_activation=fused_activation,
     )
 
 
@@ -1091,8 +1122,79 @@ class TTNNLinearLLamaIColShardedWAllReducedFusedGateUp(TTNNLinearLLamaIColSharde
                     memory_config=_dram_sharded_mem_config_2d(self.device, k=ttnn.TILE_SIZE, n=int(bias_2d.shape[-1])),
                 )
 
+        # Per-projection (gate-only / up-only) DRAM_WIDTH_SHARDED weights used
+        # by the split-decode experiment (DOTS_OCR_SPLIT_GATE_UP_DECODE). Each
+        # weight is [in, intermediate] = [1536, 8960]; the gate matmul folds
+        # SILU into its program config so the silu in silu(gate)*up runs inside
+        # the matmul kernel. Memory cost: ~3.5 MB / layer / projection (two
+        # projections) = ~7 MB / layer on top of the fused gate+up copies.
+        # Allocated unconditionally when ``use_dram_sharded`` so a runtime
+        # env-var A/B can flip between paths without rebuilding weights.
+        self._gate_dram_weight = None
+        self._gate_dram_bias = None
+        self._up_dram_weight = None
+        self._up_dram_bias = None
+        if use_dram_sharded:
+            # Each half is stored as [out, in] in torch; transpose to [in, out].
+            gate_weight_t = self._gate_weight_torch.T.contiguous()
+            up_weight_t = self._up_weight_torch.T.contiguous()
+            self._gate_dram_weight = ttnn.as_tensor(
+                gate_weight_t,
+                device=self.device,
+                dtype=weight_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=weight_mapper,
+                memory_config=_dram_sharded_mem_config_2d(
+                    self.device,
+                    k=int(gate_weight_t.shape[-2]),
+                    n=int(gate_weight_t.shape[-1]),
+                ),
+            )
+            self._up_dram_weight = ttnn.as_tensor(
+                up_weight_t,
+                device=self.device,
+                dtype=weight_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=weight_mapper,
+                memory_config=_dram_sharded_mem_config_2d(
+                    self.device,
+                    k=int(up_weight_t.shape[-2]),
+                    n=int(up_weight_t.shape[-1]),
+                ),
+            )
+            if self._gate_bias_torch is not None:
+                g_bias_2d = self._gate_bias_torch.reshape((1, -1))
+                self._gate_dram_bias = ttnn.as_tensor(
+                    g_bias_2d,
+                    device=self.device,
+                    dtype=ttnn.bfloat8_b,
+                    layout=ttnn.TILE_LAYOUT,
+                    mesh_mapper=bias_mapper,
+                    memory_config=_dram_sharded_mem_config_2d(
+                        self.device, k=ttnn.TILE_SIZE, n=int(g_bias_2d.shape[-1])
+                    ),
+                )
+            if self._up_bias_torch is not None:
+                u_bias_2d = self._up_bias_torch.reshape((1, -1))
+                self._up_dram_bias = ttnn.as_tensor(
+                    u_bias_2d,
+                    device=self.device,
+                    dtype=ttnn.bfloat8_b,
+                    layout=ttnn.TILE_LAYOUT,
+                    mesh_mapper=bias_mapper,
+                    memory_config=_dram_sharded_mem_config_2d(
+                        self.device, k=ttnn.TILE_SIZE, n=int(u_bias_2d.shape[-1])
+                    ),
+                )
+
     def _get_gate_up_dram_sharded_weight(self):
         return self._gate_up_dram_weight, self._gate_up_dram_bias
+
+    def _get_gate_dram_sharded_weight(self):
+        return self._gate_dram_weight, self._gate_dram_bias
+
+    def _get_up_dram_sharded_weight(self):
+        return self._up_dram_weight, self._up_dram_bias
 
 
 class TTNNLinearLLamaIReplicatedWColSharded(TTNNLinearIReplicatedWColSharded):
