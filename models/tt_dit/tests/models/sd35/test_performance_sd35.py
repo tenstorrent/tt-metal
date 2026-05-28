@@ -53,7 +53,6 @@ def get_expected_metrics(mesh_device):
             (2, 1),
             ttnn.Topology.Linear,
             1,
-            marks=pytest.mark.skip(reason="Disabled by issue #44770"),
         ),
         [(4, 8), (2, 1), (4, 0), (4, 1), ttnn.Topology.Linear, 4],
     ],
