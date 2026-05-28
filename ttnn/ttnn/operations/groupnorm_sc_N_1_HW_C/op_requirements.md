@@ -171,7 +171,7 @@ list is narrowed to a specific bf8b corner like `{"dtype": bf8b, "alignment":
 predicted); `test_groupnorm_sc_N_1_HW_C[bf8b-*]` parametrize cells stay
 above PCC ≥ 0.99.
 
-### [ ] Refinement 2 — Affine layout TILE
+### [x] Refinement 2 — Affine layout TILE
 
 **Goal**: add `ttnn.TILE_LAYOUT` to `SUPPORTED["affine_layout"]`. Today the
 reader expects gamma/beta as row-major sticks (shape `(1,1,1,C)`,
