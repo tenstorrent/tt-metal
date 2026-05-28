@@ -101,7 +101,7 @@ models:
     args:
       - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/llama8b/training_shakespeare_llama_8b_tp8_ddp4.yaml"
       - "--track_memory"
-      - "--batch_size=4"
+      - "--batch_size=12"
       - "--max_steps=2048"
     mgd: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/mgd/bh_galaxy_4_8_ring_ring.textproto"
     tokenize:
