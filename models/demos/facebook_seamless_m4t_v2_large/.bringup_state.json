@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-28T00:18:15Z",
-  "updated_at": "2026-05-28T22:57:37Z",
+  "updated_at": "2026-05-28T23:15:38Z",
   "components": [
     {
       "name": "layernorm",
@@ -1201,9 +1201,18 @@
         "status": "n/a"
       },
       "optimization": {
-        "status": "pending",
+        "status": "done",
         "attempts": 0,
-        "notes": "Re-opened for tracy-driven redo. Prior bulk-waved at-ceiling without traced tracy CSV evidence. Previous: {'status': 'done', 'pcc': 0.9997223535748088, 'attempts': 1, 'artifacts': ['models/demos/facebook_seamless_m4t_v2_large/tt/code_hifigan_vocoder.py'], 'notes': 'At-ceiling at block level. All component TTNN blocks already use the standard high-perf preset (HiFi4 + fp32_dest_acc + bf16 DRAM TILE). Further gains require model-level metal tracing + serving harness optimization (sequence packing, batching, KV-cache reuse), which operate on the integrated model rather than per-block \u2014 handled in a follow-up deployment project.'}"
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/code_hifigan_vocoder.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tt/hifigan_vocoder.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tt/hifigan_residual_block.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tt/profile_code_hifigan_vocoder.py",
+          "generated/profiler/reports/code_hifigan_vocoder_baseline/reports/2026_05_28_23_07_26/ops_perf_results_2026_05_28_23_07_26.csv",
+          "generated/profiler/reports/code_hifigan_vocoder_optimized/reports/2026_05_28_23_13_13/ops_perf_results_2026_05_28_23_13_13.csv"
+        ],
+        "notes": "packer_l1_acc=False -> True in hifigan_vocoder.py and hifigan_residual_block.py conv_compute_config. Traced tracy @ T_in=64: 15928us -> 15707us (-1.38%); Conv2dDeviceOperation 3575us -> 3494us (-2.3%); HaloDeviceOperation 209.8us -> 151.8us (-27.7%). PCC improved 0.9997 -> 0.9999. Audio-out e2e t2st+s2st PASS. Top hotspot remains InterleavedToShardedDeviceOperation 33% (re-shard prep before each conv, intrinsic to the layout-flipping pattern between TILE activations and NHWC ROW_MAJOR for conv).",
+        "pcc": 0.9999092127679803
       },
       "real_weights": {
         "status": "done",
@@ -1562,6 +1571,12 @@
       "tick": 46,
       "ts": "2026-05-28T22:57:37Z",
       "action": "device[t2u_decoder_layer]",
+      "result": "ok"
+    },
+    {
+      "tick": 47,
+      "ts": "2026-05-28T23:15:38Z",
+      "action": "device[code_hifigan_vocoder]",
       "result": "ok"
     }
   ],

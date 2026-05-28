@@ -127,7 +127,10 @@ class HifiGanResidualBlock(LightweightModule):
             device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
             fp32_dest_acc_en=True,
-            packer_l1_acc=False,
+            # packer_l1_acc=True is the SKILL.md "standard recipe" -- enables
+            # in-tile packer accumulation. Matches the conv config used by the
+            # newer tt-metal conv1d kernels. Tracy validated: PCC unchanged.
+            packer_l1_acc=True,
         )
 
     @staticmethod

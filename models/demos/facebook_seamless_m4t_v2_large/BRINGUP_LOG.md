@@ -4,7 +4,7 @@
 **Slug:** `facebook_seamless_m4t_v2_large`
 **Target Device:** p150 (blackhole)
 **Started:** 2026-05-28T00:18:15Z
-**Updated:** 2026-05-28T22:57:37Z
+**Updated:** 2026-05-28T23:15:38Z
 
 ## Block Status
 
@@ -123,7 +123,7 @@
 | code_hifigan_vocoder | reference | done | 1.000000 | 1 |  |
 | code_hifigan_vocoder | ttnn | done | 0.999722 | 1 | Full unit/speaker/lang code-vocoder wrapping HifiGanVocoder. Host-side dur+hard-upsample. PCC 0.9997 vs [1,640]. |
 | code_hifigan_vocoder | debug | n/a | — | 0 |  |
-| code_hifigan_vocoder | optimization | pending | — | 0 | Re-opened for tracy-driven redo. Prior bulk-waved at-ceiling without traced tracy CSV evidence. Previous: {'status': 'done', 'pcc': 0.9997223535748088, 'attempts': 1, 'artifacts': ['models/demos/facebook_seamless_m4t_v2_large/tt/code_hifigan_vocoder.py'], 'notes': 'At-ceiling at block level. All component TTNN blocks already use the standard high-perf preset (HiFi4 + fp32_dest_acc + bf16 DRAM TILE). Further gains require model-level metal tracing + serving harness optimization (sequence packing, batching, KV-cache reuse), which operate on the integrated model rather than per-block — handled in a follow-up deployment project.'} |
+| code_hifigan_vocoder | optimization | done | 0.999909 | 0 | packer_l1_acc=False -> True in hifigan_vocoder.py and hifigan_residual_block.py conv_compute_config. Traced tracy @ T_in=64: 15928us -> 15707us (-1.38%); Conv2dDeviceOperation 3575us -> 3494us (-2.3%); HaloDeviceOperation 209.8us -> 151.8us (-27.7%). PCC improved 0.9997 -> 0.9999. Audio-out e2e t2st+s2st PASS. Top hotspot remains InterleavedToShardedDeviceOperation 33% (re-shard prep before each conv, intrinsic to the layout-flipping pattern between TILE activations and NHWC ROW_MAJOR for conv). |
 | code_hifigan_vocoder | real_weights | done | 0.999722 | 1 | Validated in Phase 1 (test_real_hf_weights.py); reduced to 2-layer config for goldens, full config 24/6 validated in test_full_config.py. |
 | seamless_m4t_v2 | reference | done | 1.000000 | 1 |  |
 | seamless_m4t_v2 | ttnn | done | 0.999738 | 1 | Top-level T2TT: text_encoder + text_decoder + lm_head. PCC 0.99974. |
@@ -143,7 +143,6 @@
 
 ## Recent Ticks
 
-- tick 37 (2026-05-28T05:03:57Z): optimization[layernorm]: at-ceiling — ok
 - tick 38 (2026-05-28T05:04:31Z): optimization[9 leaves bulk at-ceiling]: scaled_word_embedding,sinusoidal_positional_embedding,seamless_mha,seamless_ffn,conformer_ffn,conformer_self_attention,conformer_convolution_module,variance_predictor,hifigan_residual_block — ok
 - tick 39 (2026-05-28T05:06:37Z): optimization[14 composite+submodel bulk at-ceiling]: conformer_feature_projection,conformer_encoder_layer,text_encoder_layer,text_decoder_layer,t2u_decoder_layer,conformer_adapter_layer,speech_encoder,text_encoder,text_decoder,t2u_encoder,t2u_decoder,hifigan_vocoder,code_hifigan_vocoder,seamless_m4t_v2 — ok
 - tick 40 (2026-05-28T10:12:41Z): manual-state-sync[real_weights=done all, generation=done all, perf=done t2tt only] — ok
@@ -153,6 +152,7 @@
 - tick 44 (2026-05-28T21:39:23Z): device[conformer_encoder_layer] — ok
 - tick 45 (2026-05-28T22:43:38Z): device[text_decoder_layer] — ok
 - tick 46 (2026-05-28T22:57:37Z): device[t2u_decoder_layer] — ok
+- tick 47 (2026-05-28T23:15:38Z): device[code_hifigan_vocoder] — ok
 
 ## Host-Resident Exceptions
 
