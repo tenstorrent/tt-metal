@@ -31,20 +31,19 @@
 
 namespace ttnn::experimental::prim {
 
-tt::tt_metal::ProgramDescriptor RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::create_descriptor(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value,
-    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+namespace {
+
+// Per-coord ProgramDescriptor build. Pulled into an anonymous-namespace helper so
+// create_workload_descriptor() can loop coords and reuse this body verbatim. The
+// op-specific name suffix avoids Unity-build collisions across sibling factories.
+tt::tt_metal::ProgramDescriptor build_ring_attention_all_gather_program_descriptor(
+    const RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::operation_attributes_t& operation_attributes,
+    const RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::tensor_args_t& tensor_args,
+    RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::tensor_return_value_t& tensor_return_value,
+    const ttnn::MeshCoordinate& mesh_coordinate) {
     tt::tt_metal::ProgramDescriptor desc;
     std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler> empty_fused_op_signaler;
-    log_debug(tt::LogOp, "DEBUG: create_descriptor is called");
-
-    TT_FATAL(
-        mesh_dispatch_coordinate.has_value(),
-        "RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::create_descriptor requires "
-        "mesh_dispatch_coordinate to be provided");
-    const auto& mesh_coordinate = mesh_dispatch_coordinate.value();
+    log_debug(tt::LogOp, "DEBUG: build_ring_attention_all_gather_program_descriptor is called");
 
     uint32_t device_index = ttnn::ccl::get_linearized_index_from_physical_coord(
         tensor_args.input_tensor[0], mesh_coordinate, operation_attributes.cluster_axis);
@@ -80,6 +79,28 @@ tt::tt_metal::ProgramDescriptor RingAttentionAllGatherAsyncMultiCoreWithWorkersP
         empty_fused_op_signaler);
 
     return desc;
+}
+
+}  // namespace
+
+// Returns a WorkloadDescriptor with one ProgramDescriptor per coord: device_index /
+// forward_coord / backward_coord all depend on the mesh coordinate, so descriptors
+// cannot be shared across coords.
+tt::tt_metal::WorkloadDescriptor
+RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::create_workload_descriptor(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    tt::tt_metal::WorkloadDescriptor wd;
+    const auto coords = tensor_coords.coords();
+    wd.programs.reserve(coords.size());
+    for (const auto& coord : coords) {
+        auto desc = build_ring_attention_all_gather_program_descriptor(
+            operation_attributes, tensor_args, tensor_return_value, coord);
+        wd.programs.push_back({ttnn::MeshCoordinateRange(coord), std::move(desc)});
+    }
+    return wd;
 }
 
 }  // namespace ttnn::experimental::prim
