@@ -537,6 +537,9 @@ def run_perf(
         "total_input_tokens": total_input_tokens,
     }
 
+    mode_label = "full pipeline" if full_pipeline else "direct trace"
+    time_label = "full pipeline time" if full_pipeline else "prefill time"
+
     logger.info("")
     logger.info("=" * 60)
     logger.info(f"  pplx-embed-v1-0.6B Performance  ({tt_device_name})")
@@ -545,12 +548,13 @@ def run_perf(
     logger.info(f"  Input seq length:     {seq_len}")
     logger.info(f"  Total input tokens:   {total_input_tokens}")
     logger.info(f"  Iterations:           {num_iterations}")
+    logger.info(f"  Mode:                 {mode_label}")
     logger.info("-" * 60)
     logger.info(f"  Model build time:     {measurements['build_model_time']:.1f}s")
     logger.info(f"  Compile (1st run):    {measurements['compile_prefill']:.2f}s")
     logger.info("-" * 60)
-    logger.info(f"  Avg prefill time:     {avg_t * 1000:.1f}ms")
-    logger.info(f"  Best prefill time:    {best_t * 1000:.1f}ms")
+    logger.info(f"  Avg {time_label}:     {avg_t * 1000:.1f}ms")
+    logger.info(f"  Best {time_label}:    {best_t * 1000:.1f}ms")
     logger.info(f"  Avg embeddings/s:     {measurements['embeddings/s_avg']:.1f}")
     logger.info(f"  Best embeddings/s:    {measurements['embeddings/s_best']:.1f}")
     logger.info(f"  Avg tokens/s:         {measurements['prefill_t/s_avg']:.0f}")

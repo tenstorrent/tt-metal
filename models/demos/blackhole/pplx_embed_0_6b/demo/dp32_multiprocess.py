@@ -60,6 +60,7 @@ def _worker(
             build_single_device_model,
             generate_synthetic_inputs,
         )
+        from models.tt_transformers.tt.common import copy_host_to_device
 
         apply_workload_env(batch_size, seq_len)
 
@@ -96,36 +97,78 @@ def _worker(
         )
         compile_sec = time.perf_counter() - t_compile0
 
+        # --- Build extended trace (forward + post-processing) ---
+        model = generator.model[0]
+        last_token_idx = seq_len - 1
+        is_batched = batch_size > 1
+        padded_batch = model_args.max_batch_size
+        get_last_token = (last_token_idx // 32) * 32
+
+        # Release all Generator traces before capturing extended trace
+        for key, tid in list(generator.trace_id_prefill.items()):
+            if tid is not None:
+                ttnn.release_trace(device, tid)
+                generator.trace_id_prefill[key] = None
+
+        import torch
+
+        if is_batched:
+            prefill_ids = torch.zeros(padded_batch, seq_len, dtype=torch.long)
+            for slot in range(batch_size):
+                prefill_ids[slot] = input_ids[slot]
+            ext_prefill_kwargs = {"page_table": page_table, "batch_size": batch_size, "user_id": 0}
+        else:
+            prefill_ids = input_ids
+            ext_prefill_kwargs = {"page_table": page_table[0:1]}
+
+        host_inputs_full = model.prepare_prefill_inputs_trace(prefill_ids, **ext_prefill_kwargs)
+        rot_g, rot_l = host_inputs_full[1], host_inputs_full[2]
+        ext_host_inputs = (host_inputs_full[0], host_inputs_full[3], host_inputs_full[4])
+
+        fwd_kw = dict(rot_mats_global=rot_g, rot_mats_local=rot_l, kv_cache=kv_caches[0])
+        if is_batched:
+            fwd_kw["batch_size"] = batch_size
+            fwd_kw["user_id"] = 0
+
+        def _fwd_post(di):
+            tr = model.transform_and_embed_prefill_inputs_device(*di)
+            out = model.ttnn_prefill_forward(x=tr[0], page_table=tr[1], chunk_page_table=tr[2], **fwd_kw)
+            if is_batched:
+                return model.process_hidden_states_after_prefill_trace_batched(out, get_last_token)
+            return model.process_hidden_states_after_prefill_trace(out, last_token_idx)
+
+        # Warm-run post-processing kernels
+        di = copy_host_to_device(ext_host_inputs, mesh_device=device)
+        _ = _fwd_post(di)
+        ttnn.synchronize_device(device)
+
+        # Capture extended trace
+        di = copy_host_to_device(ext_host_inputs, mesh_device=device)
+        ext_trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+        ext_trace_output = _fwd_post(di)
+        ttnn.end_trace_capture(device, ext_trace_id, cq_id=0)
+        ttnn.synchronize_device(device)
+        ext_device_inputs = di
+
+        # Warmup with extended trace
         for _ in range(warmup):
-            generator.prev_page_table = None
-            generator.prefill_forward_text(
-                input_ids,
-                page_table=page_table,
-                kv_cache=kv_caches,
-                prompt_lens=prompt_lens,
-                enable_trace=True,
-                return_hidden_states=True,
-                warmup_prefill=False,
-            )
+            copy_host_to_device(ext_host_inputs, device_tensors=ext_device_inputs, mesh_device=device)
+            ttnn.execute_trace(device, ext_trace_id, cq_id=0, blocking=False)
+            h = ext_trace_output.cpu(blocking=False)
             ttnn.synchronize_device(device)
+            _ = ttnn.to_torch(ttnn.get_device_tensors(h)[0])
 
         # ---- All workers rendezvous here before measurement ----
         barrier.wait()
 
         device_secs: list[float] = []
         for _ in range(iterations):
-            generator.prev_page_table = None
             t0 = time.perf_counter()
-            generator.prefill_forward_text(
-                input_ids,
-                page_table=page_table,
-                kv_cache=kv_caches,
-                prompt_lens=prompt_lens,
-                enable_trace=True,
-                return_hidden_states=True,
-                warmup_prefill=False,
-            )
+            copy_host_to_device(ext_host_inputs, device_tensors=ext_device_inputs, mesh_device=device)
+            ttnn.execute_trace(device, ext_trace_id, cq_id=0, blocking=False)
+            h = ext_trace_output.cpu(blocking=False)
             ttnn.synchronize_device(device)
+            _ = ttnn.to_torch(ttnn.get_device_tensors(h)[0])
             device_secs.append(time.perf_counter() - t0)
 
         try:
@@ -175,7 +218,7 @@ def _orchestrate(args: argparse.Namespace) -> None:
         f"  warmup={warmup}  measured_iters={iterations}\n"
         f"  CPU cores: {total_cores} total, {cores_per_worker}/worker\n"
         f"  Barrier sync: all workers rendezvous after warmup\n"
-        f"  Full pipeline: trace + RMSNorm post-proc + D2H + host extraction\n"
+        f"  Full pipeline: extended trace (fwd + post-proc) + D2H + torch\n"
         f"  Each worker: TT_VISIBLE_DEVICES=<chip>, open_device(0), "
         f"independent model + trace\n"
     )
@@ -262,7 +305,7 @@ def _orchestrate(args: argparse.Namespace) -> None:
     print(f"  Warmup iters:           {warmup}")
     print(f"  Measured iters:         {iterations}")
     print(f"  CPU pinning:            {cores_per_worker} cores/worker")
-    print(f"  Mode:                   full pipeline (trace + post-proc + D2H)")
+    print(f"  Mode:                   full pipeline (extended trace + D2H)")
     print("-" * 60)
     print(f"  Avg open_device time:   {_mean('open_sec'):.1f}s")
     print(f"  Avg model build time:   {_mean('build_sec'):.1f}s")
@@ -293,8 +336,9 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\
 Supported (batch-size, seq-len) combinations with optimized settings:
-  (1, 512)    L1-backed activations
+  (1, 512)    L1-backed activations + big matmul grid
   (8, 512)    L1-backed activations (TT_BATCHED_L1_PREFILL)
+  (16, 512)   DRAM-resident + big matmul grid
   (32, 512)   DRAM-resident + big matmul grid
   (1, 1024)   DRAM-resident + big matmul grid
   (1, 2048)   DRAM-resident + big matmul grid
