@@ -135,6 +135,13 @@ targets:
         - resnet50_3
       trace: [96, 97, 98, 99]
 
+    # BH p300a models (traces 100-102, blackhole p300a 2-card)
+    - model:
+        - llama-3.1-8b-instruct
+        - llama-3.3-70b-instruct
+        - tt_dit
+      trace: [100, 101, 102]
+
 registry:
   - trace_id: 1
     status: draft
@@ -1226,6 +1233,48 @@ registry:
     tt_metal_sha: f19f708f6442c3f3a35cc2c88dcb0f7616ea9e42
     config_count: 136
     loaded_at: '2026-05-27'
+    notes: ''
+    pytest_args: null
+    tt_kmd: "TT-KMD 2.4.1"
+    tt_smi: "5.2.0"
+    tt_firmware: "18.12.1.0"
+
+  - trace_id: 100
+    status: draft
+    models: [llama-3.1-8b-instruct]
+    hardware: {board_type: Blackhole, device_series: p300a, card_count: 2}
+    trace_uid: bf71f5ab-fa1b-48bc-93ec-8802de406834
+    tt_metal_sha: f5339e9aa03623c3610ca6192bbf0ede608ef734
+    config_count: 352
+    loaded_at: '2026-05-28'
+    notes: ''
+    pytest_args: '-k batch-1 or batch-32 or long-context-16k or reasoning-1'
+    tt_kmd: "TT-KMD 2.4.1"
+    tt_smi: "5.2.0"
+    tt_firmware: "18.12.1.0"
+
+  - trace_id: 101
+    status: draft
+    models: [llama-3.3-70b-instruct]
+    hardware: {board_type: Blackhole, device_series: p300a, card_count: 2}
+    trace_uid: bacc7703-faea-4380-bbc8-be427c6347cb
+    tt_metal_sha: f5339e9aa03623c3610ca6192bbf0ede608ef734
+    config_count: 233
+    loaded_at: '2026-05-28'
+    notes: ''
+    pytest_args: '-k batch-1 or batch-32 or long-context-16k or reasoning-1'
+    tt_kmd: "TT-KMD 2.4.1"
+    tt_smi: "5.2.0"
+    tt_firmware: "18.12.1.0"
+
+  - trace_id: 102
+    status: draft
+    models: [tt_dit]
+    hardware: {board_type: Blackhole, device_series: p300a, card_count: 2}
+    trace_uid: 7fc01bd5-1c87-4b0a-933c-a59dd8682da1
+    tt_metal_sha: f5339e9aa03623c3610ca6192bbf0ede608ef734
+    config_count: 206
+    loaded_at: '2026-05-28'
     notes: ''
     pytest_args: null
     tt_kmd: "TT-KMD 2.4.1"

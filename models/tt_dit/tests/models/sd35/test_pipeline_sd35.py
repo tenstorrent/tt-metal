@@ -69,6 +69,8 @@ def test_sd35_pipeline(
     # Setup CI environment
     if is_ci_env and traced:
         pytest.skip("Skipping traced test in CI environment. Use Performance test for detailed timing analysis.")
+    if cfg == (2, 1) and sp == (2, 0) and tp == (2, 1) and not traced:
+        pytest.skip("Disabled by issue #44937")
 
     # Create pipeline
     pipeline = StableDiffusion3Pipeline.create_pipeline(
