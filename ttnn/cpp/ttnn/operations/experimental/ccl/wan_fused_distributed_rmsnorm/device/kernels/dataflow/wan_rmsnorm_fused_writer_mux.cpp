@@ -439,6 +439,7 @@ void kernel_main() {
         }
         cb_push_back(stats_packed_gathered_cb, ring_size);
         cb_pop_front(stats_packed_gathered_cb, ring_size);
+
         cb_push_back(stats_gathered_cb, chunk_stats_tiles);
 
         // Drain this chunk's output_cb tiles to DRAM. Compute always pushes
