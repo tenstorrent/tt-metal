@@ -156,8 +156,11 @@ def compute_validation_matrix(
 
     registry = {entry["trace_id"]: entry for entry in manifest.get("registry", []) if entry.get("trace_id") is not None}
 
-    scope_trace_ids = _get_scope_trace_ids(manifest, validation_scope)
-    scoped_ids = [tid for tid in trace_ids if tid in scope_trace_ids] if scope_trace_ids else trace_ids
+    if validation_scope == "lead_models":
+        scope_trace_ids = _get_scope_trace_ids(manifest, validation_scope)
+        scoped_ids = [tid for tid in trace_ids if tid in scope_trace_ids] if scope_trace_ids else trace_ids
+    else:
+        scoped_ids = trace_ids
 
     generation_manifest = _load_generation_manifest(vectors_dir)
     grouping_mode = generation_manifest.get("vector_grouping_mode")
@@ -195,7 +198,7 @@ def compute_validation_matrix(
             continue
 
         trace_id_list = sorted(trace_ids_by_hardware.get(hardware_group, []))
-        if not trace_id_list and hardware_group is not None:
+        if validation_scope == "lead_models" and not trace_id_list and hardware_group is not None:
             continue
 
         # Sub-group by mesh shape only when the hardware group has multiple
