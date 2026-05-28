@@ -24,20 +24,6 @@ def _default_checkpoint() -> str:
     return "Lightricks/LTX-2.3:ltx-2.3-22b-dev.safetensors"
 
 
-def _default_upsampler() -> str:
-    """Resolve spatial upsampler: env var > local file > HF (auto-downloaded here)."""
-    explicit = os.environ.get("LTX_UPSAMPLER")
-    if explicit:
-        return explicit
-    local = os.path.expanduser("~/.cache/ltx-checkpoints/ltx-2.3-spatial-upscaler-x2-1.1.safetensors")
-    if os.path.exists(local):
-        return local
-    from huggingface_hub import hf_hub_download
-
-    logger.info("Resolving HuggingFace upsampler Lightricks/LTX-2.3:ltx-2.3-spatial-upscaler-x2-1.1.safetensors")
-    return hf_hub_download(repo_id="Lightricks/LTX-2.3", filename="ltx-2.3-spatial-upscaler-x2-1.1.safetensors")
-
-
 def _default_distilled_lora() -> str:
     """Resolve distilled stage-2 LoRA: env var > local file > HF (auto-downloaded here)."""
     explicit = os.environ.get("DISTILLED_LORA_PATH")
@@ -112,7 +98,6 @@ def test_pipeline_av_two_stages(
 ):
     """LTX-2.3 22B 2-stage AV pipeline: full-guidance s1 + distilled-LoRA s2 refine."""
     ckpt = _default_checkpoint()
-    upsampler = _default_upsampler()
     distilled_lora = _default_distilled_lora()
     gemma = _default_gemma()
 
@@ -159,7 +144,6 @@ def test_pipeline_av_two_stages(
         pipeline.generate(
             prompt,
             output_path=output_filename,
-            upsampler_path=upsampler,
             num_frames=num_frames,
             height=height,
             width=width,

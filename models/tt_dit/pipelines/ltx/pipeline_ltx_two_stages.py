@@ -7,8 +7,9 @@ Mirrors the reference ``ltx_pipelines.ti2vid_two_stages.TI2VidTwoStagesPipeline`
 
 - **Stage 1**: half-res AV denoise on the base 22B checkpoint with full
   ``MultiModalGuider`` guidance (CFG + STG + AV-modality).
-- **Spatial upsample**: stage-1 latent is x2-upsampled on CPU via the
-  reference ``VideoUpsampler`` block (re-uses the helper in ``LTXFastPipeline``).
+- **Spatial upsample**: stage-1 latent is x2-upsampled on-device via the
+  ``LTXLatentUpsampler`` (eagerly constructed and coresident-excluded with the
+  transformer and VAE — see ``LTXPipeline._register_coresident_exclusions``).
 - **Stage 2**: full-res AV refine with the distilled LoRA fused into the
   transformer and no guidance (``SimpleDenoiser`` equivalent), starting from
   the upsampled video latent + stage-1 audio latent renoised at
@@ -32,7 +33,6 @@ from ...utils.lora import LoraSpec
 from ...utils.ltx import AudioLatentShape, VideoPixelShape
 from .pipeline_ltx import LTXPipeline
 from .pipeline_ltx_av import LTXAVPipeline
-from .pipeline_ltx_fast import LTXFastPipeline
 
 STAGE_2_DISTILLED_SIGMA_VALUES = [0.909375, 0.725, 0.421875, 0.0]
 
@@ -40,6 +40,8 @@ STAGE_2_DISTILLED_SIGMA_VALUES = [0.909375, 0.725, 0.421875, 0.0]
 class LTXAVTwoStagesPipeline(LTXAVPipeline):
     """Two-stage AV pipeline: full-guidance s1 (variant 0 = base 22B) +
     distilled-LoRA s2 refine (variant 1 = LoRA-fused base)."""
+
+    HAS_UPSAMPLER = True
 
     def __init__(
         self,
@@ -166,7 +168,6 @@ class LTXAVTwoStagesPipeline(LTXAVPipeline):
         prompt: str,
         *,
         output_path: str,
-        upsampler_path: str,
         # LoRA path / strength are consumed by ``__init__`` (variant 1 is built
         # there). Optional here for back-compat; if passed they must match what
         # ``__init__`` saw or generate raises.
@@ -279,12 +280,11 @@ class LTXAVTwoStagesPipeline(LTXAVPipeline):
         )
         logger.info(f"Stage 1: {time.time() - t0:.1f}s")
 
-        # CPU upsample — transformer stays put in DRAM.
         latent_frames = (num_frames - 1) // 8 + 1
         s1_lh, s1_lw = s1_h // 32, s1_w // 32
         s1_spatial = s1_video.reshape(1, latent_frames, s1_lh, s1_lw, 128).permute(0, 4, 1, 2, 3)
         t0 = time.time()
-        upsampled = LTXFastPipeline._upsample_latent_reference(self, s1_spatial, upsampler_path)
+        upsampled = self._upsample_latent_reference(s1_spatial, self._upsampler_path)
         logger.info(f"Upsample: {time.time() - t0:.1f}s")
         upsampled_flat = upsampled.permute(0, 2, 3, 4, 1).reshape(
             1, latent_frames * (height // 32) * (width // 32), 128

@@ -18,8 +18,8 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.tt_dit.models.transformers.ltx.ltx_transformer import LTXTransformerBlock
 from models.tt_dit.models.transformers.ltx.rope_ltx import LTXRopeType, precompute_freqs_cis
+from models.tt_dit.models.transformers.ltx.transformer_ltx import LTXTransformerBlock
 from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.check import assert_quality
@@ -28,7 +28,7 @@ from models.tt_dit.utils.test import line_params, ring_params
 
 sys.path.insert(0, "LTX-2/packages/ltx-core/src")
 
-from models.tt_dit.models.transformers.ltx.ltx_transformer import LTXTransformerModel
+from models.tt_dit.models.transformers.ltx.transformer_ltx import LTXTransformerModel
 
 # Subset of Wan ``test_wan_transformer_block`` mesh rows + LTX ``1x1``.
 _LTX_TRANSFORMER_MESH_PARAMS = [
@@ -40,12 +40,16 @@ _LTX_TRANSFORMER_MESH_PARAMS = [
     pytest.param((4, 8), 1, 0, 2, line_params, ttnn.Topology.Linear, False, id="line_bh_4x8sp1tp0"),
 ]
 
-# 1080p (1088x1920, 145f) fast-pipeline latent grids — half-res / full-res.
-# Derived from `pipeline_ltx_fast.py:49-50`
-# (latent_frames=(num_frames-1)//8+1, latent_h=H//32, latent_w=W//32).
+# 1080p (1088x1920, 145f) fast-pipeline latent volumes. The single-block test
+# shards seq across sp=4 with tile alignment, so F*H*W must be a multiple of
+# `TILE_SIZE * sp_factor = 128` (matches the pipeline's `_video_sp_pad_len`
+# rounding). Production stage_1 pads 9690→9728; stage_2 pads 38760→38784.
+# F=19 (=latent_frames) is kept; H,W repicked to keep seq sp/tile-aligned:
+#   stage_1: 19×16×32 = 9728  — exact match to production padded seq
+#   stage_2: 19×32×64 = 38912 — 128 over production (next sp-aligned chunk)
 _LTX_TRANSFORMER_BLOCK_SHAPE_PARAMS = [
-    pytest.param(19, 17, 30, id="stage_1"),
-    pytest.param(19, 34, 60, id="stage_2"),
+    pytest.param(19, 16, 32, id="stage_1"),
+    pytest.param(19, 32, 64, id="stage_2"),
 ]
 
 

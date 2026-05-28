@@ -24,20 +24,6 @@ def _default_checkpoint() -> str:
     return "Lightricks/LTX-2.3:ltx-2.3-22b-distilled-1.1.safetensors"
 
 
-def _default_upsampler() -> str:
-    """Resolve spatial upsampler: env var > local file > HF (auto-downloaded here)."""
-    explicit = os.environ.get("LTX_UPSAMPLER")
-    if explicit:
-        return explicit
-    local = os.path.expanduser("~/.cache/ltx-checkpoints/ltx-2.3-spatial-upscaler-x2-1.1.safetensors")
-    if os.path.exists(local):
-        return local
-    from huggingface_hub import hf_hub_download
-
-    logger.info("Resolving HuggingFace upsampler Lightricks/LTX-2.3:ltx-2.3-spatial-upscaler-x2-1.1.safetensors")
-    return hf_hub_download(repo_id="Lightricks/LTX-2.3", filename="ltx-2.3-spatial-upscaler-x2-1.1.safetensors")
-
-
 def _default_gemma() -> str:
     """Resolve Gemma path: env var > local HF snapshot > HF repo string default."""
     explicit = os.environ.get("GEMMA_PATH")
@@ -96,7 +82,6 @@ def test_pipeline_av_fast(
 ):
     """LTX-2.3 Fast distilled 2-stage AV pipeline."""
     ckpt = _default_checkpoint()
-    upsampler = _default_upsampler()
     gemma = _default_gemma()
 
     parent_mesh = mesh_device
@@ -159,7 +144,6 @@ def test_pipeline_av_fast(
         pipeline.generate(
             prompt,
             output_path=output_filename,
-            upsampler_path=upsampler,
             num_frames=num_frames,
             height=height,
             width=width,

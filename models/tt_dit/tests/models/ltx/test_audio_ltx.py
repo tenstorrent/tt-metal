@@ -23,8 +23,8 @@ from loguru import logger
 
 import ttnn
 from models.tt_dit.models.transformers.ltx.attention_ltx import LTXAttention
-from models.tt_dit.models.transformers.ltx.ltx_transformer import LTXTransformerBlock, LTXTransformerModel
 from models.tt_dit.models.transformers.ltx.rope_ltx import precompute_freqs_cis
+from models.tt_dit.models.transformers.ltx.transformer_ltx import LTXTransformerBlock, LTXTransformerModel
 from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.mochi import get_rot_transformation_mat

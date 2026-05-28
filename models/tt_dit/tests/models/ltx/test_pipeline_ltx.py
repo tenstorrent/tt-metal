@@ -87,7 +87,7 @@ def _make_pipeline_with_random_weights(
     out_channels=128,
 ):
     """Create an LTXPipeline with random transformer weights (no ltx_core dependency)."""
-    from models.tt_dit.models.transformers.ltx.ltx_transformer import LTXTransformerModel
+    from models.tt_dit.models.transformers.ltx.transformer_ltx import LTXTransformerModel
 
     sp_axis, tp_axis = 0, 1
     parallel_config = DiTParallelConfig(

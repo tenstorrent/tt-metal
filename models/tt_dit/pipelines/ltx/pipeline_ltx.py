@@ -16,6 +16,7 @@ Reference: LTX-2/packages/ltx-pipelines/ + Wan pipeline_wan.py
 
 from __future__ import annotations
 
+import gc
 import glob
 import hashlib
 import json
@@ -25,7 +26,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 from fractions import Fraction
-from typing import TYPE_CHECKING, Callable
+from typing import Callable
 
 import torch
 from huggingface_hub import hf_hub_download, snapshot_download
@@ -39,8 +40,8 @@ import ttnn
 from ...encoders.gemma.embeddings_connector import EmbeddingsConnector, _rms_norm
 from ...encoders.gemma.encoder_pair import GemmaTokenizerEncoderPair
 from ...encoders.gemma.model_gemma import GemmaConfig, GemmaEncoder
-from ...models.transformers.ltx.ltx_transformer import LTXTransformerModel
 from ...models.transformers.ltx.rope_ltx import LTXRopeType, precompute_freqs_cis
+from ...models.transformers.ltx.transformer_ltx import LTXTransformerModel
 from ...models.vae.vae_ltx import LTXVideoDecoder, LTXVideoDecoderTorch
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VaeHWParallelConfig
 from ...parallel.manager import CCLManager
@@ -57,8 +58,7 @@ from ...utils.ltx import (
 )
 from ...utils.tensor import bf16_tensor, bf16_tensor_2dshard
 
-if TYPE_CHECKING:
-    pass
+LTX_UPSAMPLER_HF_REF = "Lightricks/LTX-2.3:ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
 
 
 @dataclass
@@ -179,6 +179,8 @@ class LTXPipeline:
         )
         output = pipeline(prompt="A cat playing piano", num_frames=33, height=480, width=832)
     """
+
+    HAS_UPSAMPLER: bool = False
 
     def __init__(
         self,
@@ -502,14 +504,16 @@ class LTXPipeline:
                 width=self._init_width or None,
             )
 
+        if self.HAS_UPSAMPLER:
+            assert (
+                self._init_height > 0 and self._init_width > 0
+            ), f"{type(self).__name__} requires height/width at create_pipeline."
+            self._upsampler_path = LTXPipeline._resolve_checkpoint_file(LTX_UPSAMPLER_HF_REF)
+
     def _register_coresident_exclusions(self) -> None:
         """All transformer variants exclude each other AND the VAE. LTX-22B +
-        LTX-VAE don't both fit on BH LB (~multi-GB contiguous DRAM per chip
-        for the VAE decode alone), so VAE must evict the active transformer
-        before decode — matches the explicit ``self.transformer = None;
-        gc.collect()`` pattern from the pre-refactor pipelines. Unlike Wan
-        (Wan-VAE is small enough to coexist on BH), LTX needs the eviction
-        on both WH and BH."""
+        LTX-VAE don't both fit on BH LB; VAE must evict the active transformer
+        before decode. LTX needs the eviction on both WH and BH."""
         if not self.dynamic_load:
             return
         models = [s.model for s in self.transformer_states]
@@ -1058,6 +1062,25 @@ class LTXPipeline:
         else:
             return self.vae_decoder.decode(latent_spatial)
 
+    def _upsample_latent_reference(self, video_latent: torch.Tensor, upsampler_path: str) -> torch.Tensor:
+        """Host-torch reference upsampler. ``VideoUpsampler`` performs
+        un_normalize → upsample → re_normalize using its own checkpoint."""
+        sys.path.insert(0, "LTX-2/packages/ltx-core/src")
+        sys.path.insert(0, "LTX-2/packages/ltx-pipelines/src")
+        from ltx_pipelines.utils.blocks import VideoUpsampler
+
+        upsampler_block = VideoUpsampler(
+            checkpoint_path=self.checkpoint_name,
+            upsampler_path=upsampler_path,
+            dtype=torch.bfloat16,
+            device=torch.device("cpu"),
+        )
+        with torch.no_grad():
+            upsampled = upsampler_block(video_latent.bfloat16())
+        del upsampler_block
+        gc.collect()
+        return upsampled.float()
+
     def _warmup_decode(self, num_frames: int, height: int, width: int) -> None:
         """Load VAE + JIT-compile decode kernels with a zero dummy latent at
         the target shape. No-op if no VAE is configured."""
@@ -1109,27 +1132,14 @@ class LTXPipeline:
         return tt_cos, tt_sin
 
     def _prepare_prompt(self, prompt_embeds: torch.Tensor) -> ttnn.Tensor:
-        """Push prompt embeddings to device, padding to cross_attention_dim if needed.
-
-        When the transformer has a caption_projection (19B distilled), skip padding —
-        the projection handles the dimension mapping (3840→4096/2048) inside inner_step.
-        """
-        # (B, L, D) -> (1, B, L, D)
+        """Push prompt embeddings to device, padding/truncating to cross_attention_dim."""
         prompt = prompt_embeds.unsqueeze(0)
-        # Only pad/truncate if no caption projection (22B model outputs at cross_attention_dim directly)
-        has_caption_proj = (
-            self.transformer is not None
-            and hasattr(self.transformer, "_caption_proj_state")
-            and self.transformer._caption_proj_state
-        )
-        if not has_caption_proj:
-            if prompt.shape[-1] < self.cross_attention_dim:
-                pad_size = self.cross_attention_dim - prompt.shape[-1]
-                prompt = torch.nn.functional.pad(prompt, (0, pad_size))
-            elif prompt.shape[-1] > self.cross_attention_dim:
-                prompt = prompt[..., : self.cross_attention_dim]
-        tt_prompt = bf16_tensor(prompt, device=self.mesh_device)
-        return tt_prompt
+        if prompt.shape[-1] < self.cross_attention_dim:
+            pad_size = self.cross_attention_dim - prompt.shape[-1]
+            prompt = torch.nn.functional.pad(prompt, (0, pad_size))
+        elif prompt.shape[-1] > self.cross_attention_dim:
+            prompt = prompt[..., : self.cross_attention_dim]
+        return bf16_tensor(prompt, device=self.mesh_device)
 
     def warmup_buffers(
         self,

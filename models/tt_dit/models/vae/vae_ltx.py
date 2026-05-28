@@ -69,7 +69,10 @@ class LTXCausalConv3d(Module):
     LTX-specific differences vs Wan's conv:
     - No cache mechanism (processes full video, no chunked streaming).
     - Temporal pad is *frame repeat* (causal=True front-only, causal=False
-      symmetric front+back) rather than the zero-pad Wan uses.
+      symmetric front+back) rather than the zero-pad Wan uses. Opt into
+      torch-style symmetric zero padding via ``temporal_padding_mode="zeros"``
+      (matches ``torch.nn.Conv3d(padding=k//2)``; required by the LTX latent
+      upsampler).
     """
 
     def __init__(
@@ -84,8 +87,13 @@ class LTXCausalConv3d(Module):
         ccl_manager: CCLManager,
         dtype: ttnn.DataType = ttnn.bfloat16,
         conv_dims: ConvDims | None = None,
+        temporal_padding_mode: str = "repeat",
     ) -> None:
         super().__init__()
+
+        if temporal_padding_mode not in ("repeat", "zeros"):
+            raise ValueError(f"temporal_padding_mode must be 'repeat' or 'zeros' (got {temporal_padding_mode!r})")
+        self.temporal_padding_mode = temporal_padding_mode
 
         self.unpadded_in_channels = in_channels
         self.unpadded_out_channels = out_channels
@@ -120,6 +128,13 @@ class LTXCausalConv3d(Module):
             internal_padding[2] = 0
         else:
             external_padding[2] = 0
+
+        if temporal_padding_mode == "zeros":
+            # torch.nn.Conv3d(padding=k//2)-equivalent: disable external frame
+            # repeat and let conv3d handle symmetric temporal zero padding.
+            self.time_pad = 0
+            internal_padding[0] = self.kernel_size[0] // 2
+
         self.external_padding = tuple(external_padding)
         self.internal_padding = tuple(internal_padding)
 

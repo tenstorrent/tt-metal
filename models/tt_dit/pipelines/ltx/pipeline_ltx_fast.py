@@ -6,15 +6,15 @@
 
 from __future__ import annotations
 
-import gc
 import os
-import sys
 import time
 
 import torch
 from loguru import logger
 
-from ...models.transformers.ltx.ltx_transformer import LTXTransformerModel
+import ttnn
+
+from ...models.transformers.ltx.transformer_ltx import LTXTransformerModel
 from ...utils.ltx import AudioLatentShape, VideoPixelShape
 from ...utils.tensor import bf16_tensor
 from .pipeline_ltx import LTXPipeline, euler_step
@@ -26,6 +26,8 @@ STAGE_2_DISTILLED_SIGMA_VALUES = [0.909375, 0.725, 0.421875, 0.0]
 
 class LTXFastPipeline(LTXAVPipeline):
     """Distilled 2-stage AV pipeline: half-res denoise → upsample → full-res refine."""
+
+    HAS_UPSAMPLER = True
 
     @staticmethod
     def create_pipeline(mesh_device: ttnn.MeshDevice, **kwargs) -> "LTXFastPipeline":
@@ -320,35 +322,11 @@ class LTXFastPipeline(LTXAVPipeline):
 
         return s1_video, s1_audio
 
-    def _upsample_latent_reference(self, video_latent: torch.Tensor, upsampler_path: str) -> torch.Tensor:
-        sys.path.insert(0, "LTX-2/packages/ltx-core/src")
-        sys.path.insert(0, "LTX-2/packages/ltx-pipelines/src")
-        from ltx_pipelines.utils.blocks import VideoUpsampler
-
-        # VideoUpsampler owns both the video encoder (for per-channel
-        # statistics) and the spatial upsampler lifecycle. It performs
-        # un_normalize → upsample → re_normalize internally (see
-        # ltx_core.model.upsampler.upsample_video), which matches what the
-        # production pipelines do — and what the bare `upsampler(latent)`
-        # call previously was missing.
-        upsampler_block = VideoUpsampler(
-            checkpoint_path=self.checkpoint_name,
-            upsampler_path=upsampler_path,
-            dtype=torch.bfloat16,
-            device=torch.device("cpu"),
-        )
-        with torch.no_grad():
-            upsampled = upsampler_block(video_latent.bfloat16())
-        del upsampler_block
-        gc.collect()
-        return upsampled.float()
-
     def generate(
         self,
         prompt: str,
         *,
         output_path: str,
-        upsampler_path: str,
         num_frames: int = 121,
         height: int = 512,
         width: int = 768,
@@ -400,7 +378,7 @@ class LTXFastPipeline(LTXAVPipeline):
         s1_h, s1_w = s1_height // 32, s1_width // 32
         s1_spatial = s1_video.reshape(1, latent_frames, s1_h, s1_w, 128).permute(0, 4, 1, 2, 3)
         t0 = time.time()
-        upsampled = self._upsample_latent_reference(s1_spatial, upsampler_path)
+        upsampled = self._upsample_latent_reference(s1_spatial, self._upsampler_path)
         logger.info(f"Latent upsample: {time.time() - t0:.1f}s")
         upsampled_flat = upsampled.permute(0, 2, 3, 4, 1).reshape(
             1, latent_frames * (height // 32) * (width // 32), 128

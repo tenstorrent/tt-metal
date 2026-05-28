@@ -17,7 +17,6 @@ Reference: LTX-2 transformer.py BasicAVTransformerBlock
 from __future__ import annotations
 
 import torch
-from loguru import logger
 
 import ttnn
 
@@ -695,22 +694,11 @@ class LTXTransformerModel(Module):
         # Remove keys not implemented in TTNN
         pop_substate(state, "video_embeddings_connector")
         pop_substate(state, "audio_embeddings_connector")
-        # Caption projection: 22B doesn't need it (connector outputs at cross_attn_dim),
-        # 19B needs it (connector outputs at 3840, projection maps to 4096/2048).
-        # For now, pop it — projection runs on host in inner_step if needed.
-        if "caption_projection.linear_1.weight" in state:
-            self._caption_proj_state = pop_substate(state, "caption_projection")
-            logger.info(f"Loaded caption_projection: {list(self._caption_proj_state.keys())}")
-        else:
-            self._caption_proj_state = {}
-            pop_substate(state, "caption_projection")
+        # Caption projection is a 19B-distilled-only artifact (connector dim != cross_attention_dim).
+        # Dropped here so it doesn't appear as an unexpected key during strict loading.
+        pop_substate(state, "caption_projection")
         if self.has_audio:
-            if "audio_caption_projection.linear_1.weight" in state:
-                self._audio_caption_proj_state = pop_substate(state, "audio_caption_projection")
-                logger.info(f"Loaded audio_caption_projection: {list(self._audio_caption_proj_state.keys())}")
-            else:
-                self._audio_caption_proj_state = {}
-                pop_substate(state, "audio_caption_projection")
+            pop_substate(state, "audio_caption_projection")
         # 6-output mode: no prompt_adaln modules
         if not self.cross_attention_adaln:
             pop_substate(state, "prompt_adaln_single")
@@ -832,46 +820,11 @@ class LTXTransformerModel(Module):
                     av_ca_audio_temb, dim=3, cluster_axis=self.parallel_config.tensor_parallel.mesh_axis
                 )
 
-        # Caption projection: map connector output (3840) → cross_attention_dim (4096/2048).
-        # Only needed when connector output dim != cross_attention_dim (e.g., 19B distilled).
-        # Runs on host since it's a small 2-layer MLP applied once per step.
-        if hasattr(self, "_caption_proj_state") and self._caption_proj_state:
-            prompt_host = ttnn.to_torch(ttnn.get_device_tensors(video_prompt_1BLP)[0]).float()
-            w1 = self._caption_proj_state["linear_1.weight"].float()
-            b1 = self._caption_proj_state["linear_1.bias"].float()
-            w2 = self._caption_proj_state["linear_2.weight"].float()
-            b2 = self._caption_proj_state["linear_2.bias"].float()
-            prompt_host = torch.nn.functional.gelu(torch.nn.functional.linear(prompt_host, w1, b1))
-            prompt_host = torch.nn.functional.linear(prompt_host, w2, b2)
-            video_prompt_1BLP = ttnn.from_torch(
-                prompt_host.bfloat16(),
-                device=self.mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat16,
-            )
-
-        if (
-            hasattr(self, "_audio_caption_proj_state")
-            and self._audio_caption_proj_state
-            and audio_prompt_1BLP is not None
-        ):
-            a_prompt_host = ttnn.to_torch(ttnn.get_device_tensors(audio_prompt_1BLP)[0]).float()
-            aw1 = self._audio_caption_proj_state["linear_1.weight"].float()
-            ab1 = self._audio_caption_proj_state["linear_1.bias"].float()
-            aw2 = self._audio_caption_proj_state["linear_2.weight"].float()
-            ab2 = self._audio_caption_proj_state["linear_2.bias"].float()
-            a_prompt_host = torch.nn.functional.gelu(torch.nn.functional.linear(a_prompt_host, aw1, ab1))
-            a_prompt_host = torch.nn.functional.linear(a_prompt_host, aw2, ab2)
-            audio_prompt_1BLP = ttnn.from_torch(
-                a_prompt_host.bfloat16(),
-                device=self.mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat16,
-            )
-
         # Patchify
         video_1BND = self.patchify_proj(video_1BNI)
         audio_1BND = self.audio_patchify_proj(audio_1BNI) if self.has_audio else None
+
+        skip_self_attn_set = frozenset(skip_self_attn_blocks) if skip_self_attn_blocks else frozenset()
 
         # Transformer blocks
         for block_idx, block in enumerate(self.transformer_blocks):
@@ -902,7 +855,7 @@ class LTXTransformerModel(Module):
                 audio_cross_pe_cos_full=audio_cross_pe_cos_full,
                 audio_cross_pe_sin_full=audio_cross_pe_sin_full,
                 skip_cross_attn=skip_cross_attn,
-                skip_self_attn=skip_self_attn_blocks is not None and block_idx in skip_self_attn_blocks,
+                skip_self_attn=block_idx in skip_self_attn_set,
                 audio_attn_mask=audio_attn_mask,
                 audio_padding_mask=audio_padding_mask,
                 audio_padding_mask_full=audio_padding_mask_full,
