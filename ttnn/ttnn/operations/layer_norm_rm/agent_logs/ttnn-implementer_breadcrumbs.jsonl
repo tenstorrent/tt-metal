@@ -1,0 +1,1 @@
+{"event":"test_run","status":"pass","test":"tests/ttnn/unit_tests/operations/layer_norm_rm/test_layer_norm_rm.py::test_layer_norm_rm_acceptance[affine=none-single_tile]","note":"Initial single-tile no-affine test passes with PCC>=0.999","ts":"2026-05-28T11:01:26+00:00"}
