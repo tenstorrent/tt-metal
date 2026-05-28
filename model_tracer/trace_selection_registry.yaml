@@ -45,7 +45,15 @@ targets:
         - gpt_oss
         - wan2_2
         - deepseek_v3
-      trace: [9, 15, 13]
+        - qwen3-32b_3
+        - llama3_70b_galaxy
+        - sd35
+        - flux1
+        - motif
+        - qwenimage
+        - mochi
+        - sentence_bert
+      trace: [9, 13, 15, 16, 23, 26, 27, 29, 30, 31, 33]
 
   model_traced:
     - model:
@@ -109,6 +117,23 @@ targets:
         - segmentation_2
         - vit_3
       trace: [41, 42, 43, 44, 46, 47, 48, 49, 52, 53, 54, 55, 56, 57, 58, 59]
+
+    # BH p150b models (traces 91-95, blackhole p150b 1-card)
+    - model:
+        - llama-3.1-8b-instruct
+        - whisper_4
+        - segmentation_4
+        - resnet50_3
+        - segmentation_5
+      trace: [91, 92, 93, 94, 95]
+
+    # BH p100a models (traces 96-99, blackhole p100a 1-card)
+    - model:
+        - llama-3.1-8b-instruct
+        - whisper_4
+        - informer
+        - resnet50_3
+      trace: [96, 97, 98, 99]
 
 registry:
   - trace_id: 1
@@ -1080,3 +1105,129 @@ registry:
     tt_kmd: "TT-KMD 2.8.0"
     tt_smi: "4.0.0"
     tt_firmware: "19.7.1.0"
+
+  - trace_id: 91
+    status: draft
+    models: [llama-3.1-8b-instruct]
+    hardware: {board_type: Blackhole, device_series: p150b, card_count: 1}
+    trace_uid: 1970ddbb-ce48-4214-af6d-7af59d53d9e6
+    tt_metal_sha: 213a10be7cb02a2f47a1af33f1fc0720b1452533
+    config_count: 324
+    loaded_at: '2026-05-26'
+    notes: ''
+    pytest_args: '-k batch-1 or batch-32 or long-context-16k or reasoning-1'
+    tt_kmd: "TT-KMD 2.6.0-rc1"
+    tt_smi: "4.0.0"
+    tt_firmware: "19.7.1.0"
+
+  - trace_id: 92
+    status: draft
+    models: [whisper_4]
+    hardware: {board_type: Blackhole, device_series: p150b, card_count: 1}
+    trace_uid: 415769fd-19a2-4f91-b3aa-00bea839c74b
+    tt_metal_sha: 213a10be7cb02a2f47a1af33f1fc0720b1452533
+    config_count: 109
+    loaded_at: '2026-05-26'
+    notes: ''
+    pytest_args: null
+    tt_kmd: "TT-KMD 2.6.0-rc1"
+    tt_smi: "4.0.0"
+    tt_firmware: "19.7.1.0"
+
+  - trace_id: 93
+    status: draft
+    models: [segmentation_4]
+    hardware: {board_type: Blackhole, device_series: p150b, card_count: 1}
+    trace_uid: 41b452d6-d6be-43f0-a501-b4901cafacaa
+    tt_metal_sha: 213a10be7cb02a2f47a1af33f1fc0720b1452533
+    config_count: 56
+    loaded_at: '2026-05-26'
+    notes: ''
+    pytest_args: null
+    tt_kmd: "TT-KMD 2.6.0-rc1"
+    tt_smi: "4.0.0"
+    tt_firmware: "19.7.1.0"
+
+  - trace_id: 94
+    status: draft
+    models: [resnet50_3]
+    hardware: {board_type: Blackhole, device_series: p150b, card_count: 1}
+    trace_uid: a719d406-52f3-4aa3-a041-251fa8846187
+    tt_metal_sha: 213a10be7cb02a2f47a1af33f1fc0720b1452533
+    config_count: 136
+    loaded_at: '2026-05-26'
+    notes: ''
+    pytest_args: null
+    tt_kmd: "TT-KMD 2.6.0-rc1"
+    tt_smi: "4.0.0"
+    tt_firmware: "19.7.1.0"
+
+  - trace_id: 95
+    status: draft
+    models: [segmentation_5]
+    hardware: {board_type: Blackhole, device_series: p150b, card_count: 1}
+    trace_uid: 1a5c2549-d26a-4ca4-a9a9-82bd234b37e6
+    tt_metal_sha: 213a10be7cb02a2f47a1af33f1fc0720b1452533
+    config_count: 67
+    loaded_at: '2026-05-26'
+    notes: ''
+    pytest_args: null
+    tt_kmd: "TT-KMD 2.6.0-rc1"
+    tt_smi: "4.0.0"
+    tt_firmware: "19.7.1.0"
+
+  - trace_id: 96
+    status: draft
+    models: [llama-3.1-8b-instruct]
+    hardware: {board_type: Blackhole, device_series: p100a, card_count: 1}
+    trace_uid: 84416194-2c06-4228-bb8f-d3a3bd06defb
+    tt_metal_sha: f19f708f6442c3f3a35cc2c88dcb0f7616ea9e42
+    config_count: 307
+    loaded_at: '2026-05-27'
+    notes: ''
+    pytest_args: '-k batch-1 or batch-32 or long-context-16k or reasoning-1'
+    tt_kmd: "TT-KMD 2.4.1"
+    tt_smi: "5.2.0"
+    tt_firmware: "18.12.1.0"
+
+  - trace_id: 97
+    status: draft
+    models: [whisper_4]
+    hardware: {board_type: Blackhole, device_series: p100a, card_count: 1}
+    trace_uid: b6fbc288-8407-478f-814f-65c120cdd28f
+    tt_metal_sha: f19f708f6442c3f3a35cc2c88dcb0f7616ea9e42
+    config_count: 109
+    loaded_at: '2026-05-27'
+    notes: ''
+    pytest_args: null
+    tt_kmd: "TT-KMD 2.4.1"
+    tt_smi: "5.2.0"
+    tt_firmware: "18.12.1.0"
+
+  - trace_id: 98
+    status: draft
+    models: [informer]
+    hardware: {board_type: Blackhole, device_series: p100a, card_count: 1}
+    trace_uid: 90811f64-7d9e-4f2e-9345-b9110fb0d567
+    tt_metal_sha: f19f708f6442c3f3a35cc2c88dcb0f7616ea9e42
+    config_count: 484
+    loaded_at: '2026-05-27'
+    notes: ''
+    pytest_args: null
+    tt_kmd: "TT-KMD 2.4.1"
+    tt_smi: "5.2.0"
+    tt_firmware: "18.12.1.0"
+
+  - trace_id: 99
+    status: draft
+    models: [resnet50_3]
+    hardware: {board_type: Blackhole, device_series: p100a, card_count: 1}
+    trace_uid: 1ace1c92-b292-456d-b8ca-752b675352d4
+    tt_metal_sha: f19f708f6442c3f3a35cc2c88dcb0f7616ea9e42
+    config_count: 136
+    loaded_at: '2026-05-27'
+    notes: ''
+    pytest_args: null
+    tt_kmd: "TT-KMD 2.4.1"
+    tt_smi: "5.2.0"
+    tt_firmware: "18.12.1.0"
