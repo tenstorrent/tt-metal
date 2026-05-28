@@ -160,7 +160,7 @@
     exit $exit_code
   skus:
     wh_llmbox:
-      timeout: 30
+      timeout: 45
   owner_id: U094PKWHNJ0 # Petar Milojevic
   team: shield
   model-name: deepseek_prefill
