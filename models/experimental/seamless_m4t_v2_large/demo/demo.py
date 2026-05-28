@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 import wave
 from pathlib import Path
 from typing import Any, Optional
@@ -60,6 +61,23 @@ T2ST_WAV = OUTPUT_DIR / "t2st_hindi_speech.wav"
 # both unlock the full ~43 s T2ST audio for the chain tasks (matches HF semantics, no trim).
 MAX_CHAIN_AUDIO_SEC: Optional[float] = None
 S2ST_WAV = OUTPUT_DIR / "s2st_spanish_speech.wav"
+
+# Per-task warmup + measurement iteration counts.
+#
+# Background: the first ``generate()`` for a fresh task hits trace capture + program-cache compile
+# + ``_conv1d_prepared_cache`` build, which is non-trivial and makes the single-call wall-clock
+# vary by tens of percent run-to-run. qwen3-tts solves this by timing each AR step separately and
+# averaging steps[1:] (excluding the compile spike on step 0). Our analogous lever for a single
+# ``generate()`` call would be one untimed warmup, but at ``gen_max_new=128`` the L1 state after a
+# back-to-back replay sometimes fragments enough that a downstream ``slice`` op clashes with a
+# static CB region (seen empirically on BH QB). The e2e perf test works around this by using
+# ``gen_max_new=10``, but the demo's larger workload doesn't tolerate it cleanly.
+#
+# Default behaviour here: 0 in-task warmups (avoids the L1 clash) but ``_DEMO_MEASURE_ITERS`` is
+# still a knob — bump it to read ``min(times)`` across N runs (qwen3's "steady" reading), which is
+# the closest the host can get to the device-limited floor for a single ``generate()`` call.
+_DEMO_WARMUP_ITERS = 0
+_DEMO_MEASURE_ITERS = 1
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -188,6 +206,79 @@ def _print_header(idx: int, name: str, abbrev: str, src: str, tgt: str) -> None:
     print("=" * 78)
 
 
+def _time_generate(device: ttnn.Device, generate_fn):
+    """Time a single ``tt_model.generate(...)`` call with explicit synchronize before/after.
+
+    Returns ``(output, elapsed_seconds)``. The ``synchronize_device`` calls bracket *only* the
+    model runtime — input tensors must already be uploaded to device, and any host post-processing
+    (token decode, waveform readback, WAV write) must happen *outside* this window so it's
+    excluded from the throughput metric.
+    """
+    ttnn.synchronize_device(device)
+    t0 = time.perf_counter()
+    out = generate_fn()
+    ttnn.synchronize_device(device)
+    return out, time.perf_counter() - t0
+
+
+def _warmup_and_time(
+    device: ttnn.Device,
+    generate_fn,
+    release_fn,
+    *,
+    warmup_iters: int = _DEMO_WARMUP_ITERS,
+    measure_iters: int = _DEMO_MEASURE_ITERS,
+):
+    """Run untimed warmup ``generate()`` calls, then return the last timed call's output + min
+    elapsed across ``measure_iters`` runs.
+
+    Why min over avg/median: with greedy decoding the workload is fixed (same prompt → same token
+    counts → same trace replays), so any inter-run variance is host noise (GC, IO, dispatch
+    jitter). The minimum is the closest the host gets to the device-limited steady-state floor.
+
+    The final timed output is kept (caller post-processes it for text/WAV); warmup outputs and
+    earlier timed outputs are released via ``release_fn``.
+    """
+    for _ in range(warmup_iters):
+        warm_out = generate_fn()
+        ttnn.synchronize_device(device)
+        release_fn(warm_out)
+
+    times = []
+    out = None
+    for _ in range(measure_iters):
+        if out is not None:
+            release_fn(out)
+        out, elapsed = _time_generate(device, generate_fn)
+        times.append(elapsed)
+    return out, min(times) if times else 0.0
+
+
+def _text_tokens_generated(sequences_tt: ttnn.Tensor, *, seed_len: int = 2) -> int:
+    """Number of new tokens emitted by the decoder, excluding the 2-token seed
+    ``[decoder_start, lang]`` that ``generate`` always prepends."""
+    return max(0, _tt_row_length(sequences_tt) - seed_len)
+
+
+def _samples_generated(lengths_tt: ttnn.Tensor) -> int:
+    """Valid audio-sample count from the TT vocoder ``waveform_lengths`` tensor."""
+    return int(_readback_first_shard(lengths_tt).long().reshape(-1)[0].item())
+
+
+def _record_text_perf(perf: list, task: str, sequences_tt: ttnn.Tensor, elapsed_s: float) -> None:
+    n_tokens = _text_tokens_generated(sequences_tt)
+    tps = n_tokens / elapsed_s if elapsed_s > 0 else 0.0
+    perf.append((task, "tokens/s", tps, n_tokens, elapsed_s))
+    print(f"  {task} runtime: {elapsed_s * 1000:.1f} ms  →  {tps:.2f} tokens/s ({n_tokens} new tokens)")
+
+
+def _record_speech_perf(perf: list, task: str, lengths_tt: ttnn.Tensor, elapsed_s: float) -> None:
+    n_samples = _samples_generated(lengths_tt)
+    sps = n_samples / elapsed_s if elapsed_s > 0 else 0.0
+    perf.append((task, "samples/s", sps, n_samples, elapsed_s))
+    print(f"  {task} runtime: {elapsed_s * 1000:.1f} ms  →  {sps:.2f} samples/s ({n_samples} audio samples)")
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -291,21 +382,32 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
 
     try:
         tt_model = make_tt_model(device, model, cfg, t2u_cfg)
+        # Per-task throughput log — populated by ``_record_text_perf`` / ``_record_speech_perf``
+        # inside each task block, printed as a summary table at the end of the run.
+        perf_log: list = []
 
         # =========================================================================
         # 1. T2TT — Text-to-Text Translation (English → Hindi)
         # =========================================================================
         _print_header(1, "Text-to-Text Translation", "T2TT", "eng", tgt_translate)
         print(f"  Input text  ({src_lang}): {src_text}")
-        t2tt_out = tt_model.generate(
-            input_ids=torch_ids_to_ttnn(device, input_ids),
-            attention_mask=torch_ids_to_ttnn(device, input_text_attn),
-            generate_speech=False,
-            tgt_lang=tgt_translate,
-            **gen_common,
+        # Pre-upload inputs (preprocessing, not timed).
+        t2tt_ids_tt = torch_ids_to_ttnn(device, input_ids)
+        t2tt_attn_tt = torch_ids_to_ttnn(device, input_text_attn)
+        t2tt_out, t2tt_elapsed = _warmup_and_time(
+            device,
+            lambda: tt_model.generate(
+                input_ids=t2tt_ids_tt,
+                attention_mask=t2tt_attn_tt,
+                generate_speech=False,
+                tgt_lang=tgt_translate,
+                **gen_common,
+            ),
+            release_fn=lambda o: ttnn.deallocate(o.sequences),
         )
         if not isinstance(t2tt_out, TTSeamlessM4Tv2GreedySearchOutput):
             raise TypeError(f"T2TT expected TTSeamlessM4Tv2GreedySearchOutput, got {type(t2tt_out)}")
+        _record_text_perf(perf_log, "T2TT", t2tt_out.sequences, t2tt_elapsed)
         print(f"  Output text ({tgt_translate}): {_decode(tokenizer, t2tt_out.sequences)}")
         ttnn.deallocate(t2tt_out.sequences)
 
@@ -318,17 +420,33 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
         # =========================================================================
         _print_header(2, "Text-to-Speech Translation", "T2ST", "eng", tgt_translate)
         print(f"  Input text  ({src_lang}): {src_text}")
-        t2st_out = tt_model.generate(
-            input_ids=torch_ids_to_ttnn(device, input_ids),
-            attention_mask=torch_ids_to_ttnn(device, input_text_attn),
-            generate_speech=True,
-            return_intermediate_token_ids=True,
-            tgt_lang=tgt_translate,
-            speaker_id=0,
-            **gen_common,
+        t2st_ids_tt = torch_ids_to_ttnn(device, input_ids)
+        t2st_attn_tt = torch_ids_to_ttnn(device, input_text_attn)
+
+        def _release_speech_out(o):
+            ttnn.deallocate(o.waveform)
+            ttnn.deallocate(o.waveform_lengths)
+            if getattr(o, "sequences", None) is not None:
+                ttnn.deallocate(o.sequences)
+            if getattr(o, "unit_sequences", None) is not None:
+                ttnn.deallocate(o.unit_sequences)
+
+        t2st_out, t2st_elapsed = _warmup_and_time(
+            device,
+            lambda: tt_model.generate(
+                input_ids=t2st_ids_tt,
+                attention_mask=t2st_attn_tt,
+                generate_speech=True,
+                return_intermediate_token_ids=True,
+                tgt_lang=tgt_translate,
+                speaker_id=0,
+                **gen_common,
+            ),
+            release_fn=_release_speech_out,
         )
         if not isinstance(t2st_out, TTSeamlessM4Tv2GenerationOutput):
             raise TypeError(f"T2ST expected TTSeamlessM4Tv2GenerationOutput, got {type(t2st_out)}")
+        _record_speech_perf(perf_log, "T2ST", t2st_out.waveform_lengths, t2st_elapsed)
         print(f"  Intermediate text ({tgt_translate}): {_decode(tokenizer, t2st_out.sequences)}")
         hindi_wav_np = _waveform_to_mono_fp32(t2st_out.waveform, t2st_out.waveform_lengths)
         _save_wav(T2ST_WAV, hindi_wav_np, sample_rate=sample_rate)
@@ -367,15 +485,22 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
         # =========================================================================
         _print_header(3, "Speech-to-Text Translation", "S2TT", tgt_translate, tgt_back_text)
         print(f"  Input audio ({tgt_translate}): {T2ST_WAV} ({sample_rate} Hz)")
-        s2tt_out = tt_model.generate(
-            input_features=torch_feats_to_ttnn(device, input_features),
-            attention_mask=torch_ids_to_ttnn(device, input_speech_attn),
-            generate_speech=False,
-            tgt_lang=tgt_back_text,
-            **gen_common,
+        s2tt_feats_tt = torch_feats_to_ttnn(device, input_features)
+        s2tt_attn_tt = torch_ids_to_ttnn(device, input_speech_attn)
+        s2tt_out, s2tt_elapsed = _warmup_and_time(
+            device,
+            lambda: tt_model.generate(
+                input_features=s2tt_feats_tt,
+                attention_mask=s2tt_attn_tt,
+                generate_speech=False,
+                tgt_lang=tgt_back_text,
+                **gen_common,
+            ),
+            release_fn=lambda o: ttnn.deallocate(o.sequences),
         )
         if not isinstance(s2tt_out, TTSeamlessM4Tv2GreedySearchOutput):
             raise TypeError(f"S2TT expected TTSeamlessM4Tv2GreedySearchOutput, got {type(s2tt_out)}")
+        _record_text_perf(perf_log, "S2TT", s2tt_out.sequences, s2tt_elapsed)
         print(f"  Output text ({tgt_back_text}): {_decode(tokenizer, s2tt_out.sequences)}")
 
         tt_model.clear_runtime_program_cache()
@@ -386,17 +511,24 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
         # =========================================================================
         _print_header(4, "Speech-to-Speech Translation", "S2ST", tgt_translate, tgt_speech_other)
         print(f"  Input audio ({tgt_translate}): {T2ST_WAV} ({sample_rate} Hz)")
-        s2st_out = tt_model.generate(
-            input_features=torch_feats_to_ttnn(device, input_features),
-            attention_mask=torch_ids_to_ttnn(device, input_speech_attn),
-            generate_speech=True,
-            return_intermediate_token_ids=True,
-            tgt_lang=tgt_speech_other,
-            speaker_id=0,
-            **gen_common,
+        s2st_feats_tt = torch_feats_to_ttnn(device, input_features)
+        s2st_attn_tt = torch_ids_to_ttnn(device, input_speech_attn)
+        s2st_out, s2st_elapsed = _warmup_and_time(
+            device,
+            lambda: tt_model.generate(
+                input_features=s2st_feats_tt,
+                attention_mask=s2st_attn_tt,
+                generate_speech=True,
+                return_intermediate_token_ids=True,
+                tgt_lang=tgt_speech_other,
+                speaker_id=0,
+                **gen_common,
+            ),
+            release_fn=_release_speech_out,
         )
         if not isinstance(s2st_out, TTSeamlessM4Tv2GenerationOutput):
             raise TypeError(f"S2ST expected TTSeamlessM4Tv2GenerationOutput, got {type(s2st_out)}")
+        _record_speech_perf(perf_log, "S2ST", s2st_out.waveform_lengths, s2st_elapsed)
         print(f"  Intermediate text ({tgt_speech_other}): {_decode(tokenizer, s2st_out.sequences)}")
         spanish_wav_np = _waveform_to_mono_fp32(s2st_out.waveform, s2st_out.waveform_lengths)
         _save_wav(S2ST_WAV, spanish_wav_np, sample_rate=sample_rate)
@@ -415,15 +547,22 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
         gen_common_asr = {**gen_common, "repetition_penalty": 1.0}
         _print_header(5, "Automatic Speech Recognition", "ASR", tgt_translate, tgt_asr)
         print(f"  Input audio ({tgt_translate}): {T2ST_WAV} ({sample_rate} Hz)")
-        asr_out = tt_model.generate(
-            input_features=torch_feats_to_ttnn(device, input_features),
-            attention_mask=torch_ids_to_ttnn(device, input_speech_attn),
-            generate_speech=False,
-            tgt_lang=tgt_asr,
-            **gen_common_asr,
+        asr_feats_tt = torch_feats_to_ttnn(device, input_features)
+        asr_attn_tt = torch_ids_to_ttnn(device, input_speech_attn)
+        asr_out, asr_elapsed = _warmup_and_time(
+            device,
+            lambda: tt_model.generate(
+                input_features=asr_feats_tt,
+                attention_mask=asr_attn_tt,
+                generate_speech=False,
+                tgt_lang=tgt_asr,
+                **gen_common_asr,
+            ),
+            release_fn=lambda o: ttnn.deallocate(o.sequences),
         )
         if not isinstance(asr_out, TTSeamlessM4Tv2GreedySearchOutput):
             raise TypeError(f"ASR expected TTSeamlessM4Tv2GreedySearchOutput, got {type(asr_out)}")
+        _record_text_perf(perf_log, "ASR", asr_out.sequences, asr_elapsed)
         print(f"  Output text ({tgt_asr}): {_decode(tokenizer, asr_out.sequences)}")
 
         print()
@@ -431,6 +570,38 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
         print("  ok — all five tasks completed")
         print("=" * 78)
         print(f"  Audio outputs saved under: {OUTPUT_DIR}")
+        # Per-task throughput summary — wall-clock around ``tt_model.generate(...)`` only;
+        # input upload, output readback, tokenizer decode, and WAV write are excluded.
+        #
+        # Two metrics per task:
+        #   * Throughput  — tokens/s or samples/s (user-facing, but for tasks with EOS-dependent
+        #                  output length this can vary run-to-run as bf16 noise shifts where the
+        #                  decoder emits EOS — affects S2TT in particular).
+        #   * Per-work-unit latency — ms per token (text out) or μs per sample (speech out).
+        #                  Decouples the device cost from output-length variance; this is the
+        #                  more stable number for cross-run comparisons.
+        if perf_log:
+            print()
+            print("-" * 78)
+            print("  TT model runtime summary (excludes pre/post-processing)")
+            print("-" * 78)
+            print(f"  {'Task':<6} {'Runtime':>11} {'Throughput':>22} {'Workload':>20} {'Per-unit':>14}")
+            for task_name, unit, value, count, elapsed_s in perf_log:
+                workload = f"{count} {'samples' if unit == 'samples/s' else 'tokens'}"
+                if unit == "samples/s":
+                    # μs/sample is more readable than ms/sample for 16 kHz audio.
+                    per_unit = f"{(elapsed_s * 1e6 / count) if count else 0.0:.2f} μs/smp"
+                else:
+                    per_unit = f"{(elapsed_s * 1e3 / count) if count else 0.0:.1f} ms/tok"
+                print(
+                    f"  {task_name:<6} {elapsed_s * 1000:>9.1f} ms  "
+                    f"{value:>15.2f} {unit:<6} {workload:>20} {per_unit:>14}"
+                )
+            print("-" * 78)
+            print(
+                "  Note: throughput depends on output length (variable for EOS-terminated tasks).\n"
+                "  For run-to-run comparison the per-unit latency column is more stable."
+            )
 
     finally:
         if original_default is not None:
