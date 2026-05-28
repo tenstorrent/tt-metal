@@ -112,7 +112,14 @@
     mkdir -p generated/test_reports
     export HF_HOME=/home/ubuntu/.cache/huggingface
     python3 -c "import huggingface_hub" 2>/dev/null || pip3 install --quiet "huggingface_hub>=0.30.0"
-    python3 -c "from huggingface_hub import snapshot_download; snapshot_download('meta-llama/Llama-3.1-8B-Instruct', allow_patterns=['tokenizer*', 'special_tokens*', '*.json'])"
+    cat > /tmp/_hf_prefetch.py <<PYEOF
+    from huggingface_hub import snapshot_download
+    snapshot_download(
+        repo_id="meta-llama/Llama-3.1-8B-Instruct",
+        allow_patterns=["tokenizer*", "special_tokens*", "*.json"],
+    )
+    PYEOF
+    python3 /tmp/_hf_prefetch.py
     failed=0
     HF_HOME=/home/ubuntu/.cache/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
       pytest --durations-min=3.0 models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py \
