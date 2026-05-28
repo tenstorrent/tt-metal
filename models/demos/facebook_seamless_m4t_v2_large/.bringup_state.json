@@ -1683,8 +1683,16 @@
         "notes": "Phase 8: re-ASR char-sim=0.92 vs HF. Small diff is re-ASR punctuation artifact."
       },
       "perf": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "metric": {
+          "total_ms": 537.58,
+          "speedup": 1.0
+        },
+        "notes": "At-ceiling at pipeline level. Total 538 ms wall: speech_encoder 53ms, AR text 279ms (52%), HF rerun 158ms, T2U 12ms, vocoder 31ms. Cross-call trace blocked by post-AR T2U+vocoder allocations (same as T2ST). AR floor matches T2TT/S2TT/T2ST at ~23ms/step untraced. test_e2e_s2st PASSES char_sim=0.920 vs gate 0.5.",
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/profile_s2st.py",
+          "models/demos/facebook_seamless_m4t_v2_large/PERF_NOTES.md"
+        ]
       }
     }
   ]
