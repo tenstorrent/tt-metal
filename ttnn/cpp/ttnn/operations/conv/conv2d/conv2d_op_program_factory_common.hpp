@@ -123,4 +123,37 @@ bool is_split_reader_viable(
     DataType output_datatype,
     bool act_reuse_enabled);
 
+// Post-build memory sanity checks for the descriptor-based conv2d factories.
+//
+// Two invariants are asserted:
+//   1. Sum of non-globally-allocated CB total_sizes in `desc.cbs` matches the
+//      predicted `l1_usage.CB_allocation_size`. This is the descriptor-flow
+//      equivalent of the legacy `calculate_total_cb_size(program)` check —
+//      `cb.buffer == nullptr` mirrors the realized `!cb->globally_allocated()`
+//      condition exactly.
+//   2. The L1 allocator delta (`post - pre`) matches the predicted
+//      `l1_usage.tensor_allocation_size` (or the op is running in graph
+//      capture / NO_DISPATCH mode where `post == 0`). `pre_op_l1_allocation_size_bytes`
+//      is snapshotted in `conv2d_device_operation.cpp` before the factory runs.
+//
+// Must be called at the END of `create_workload_descriptor`, AFTER the factory
+// has populated `desc.cbs` and allocated the reader-indices Tensor, so the L1
+// allocator snapshot reflects the same state the legacy post-CreateProgram
+// check observed. The framework adapter materializes the `Program` (and
+// allocates non-globally-allocated CBs) only AFTER `create_workload_descriptor`
+// returns, so the descriptor-side CB walk here measures exactly what the
+// legacy `calculate_total_cb_size(program)` would have measured.
+//
+// `reader_indices_actual_page_size` lets the factory communicate the in-DRAM
+// config tensor's true per-core page size so the predicted READER_INDICES CB
+// footprint matches the CB the factory emitted. When std::nullopt, the
+// worst-case READER_INDICES CB size is used (matches auto-shard estimation
+// behaviour).
+void post_conv2d_op_memory_checks(
+    const tt::tt_metal::ProgramDescriptor& desc,
+    const Conv2dParams& operation_attributes,
+    const Conv2dInputs& tensor_args,
+    Tensor& output_tensor,
+    std::optional<uint32_t> reader_indices_actual_page_size = std::nullopt);
+
 }  // namespace ttnn::prim

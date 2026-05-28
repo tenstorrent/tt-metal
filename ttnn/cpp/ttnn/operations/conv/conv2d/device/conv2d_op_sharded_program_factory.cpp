@@ -1535,13 +1535,15 @@ WorkloadDescriptor Conv2dShardedProgramFactory::create_workload_descriptor(
     desc.kernels.push_back(std::move(reader_kernel_desc));
     desc.kernels.push_back(std::move(compute_kernel_desc));
 
-    // post_conv2d_op_memory_checks() is intentionally NOT called here: it
-    // takes a built `tt::tt_metal::Program&` (it inspects the realised CB
-    // allocation), which is not available inside a descriptor factory.  The
-    // legacy check has been dropped along with the legacy `create()` /
-    // `override_runtime_arguments()` flow; if the post-build verification is
-    // needed in the future it can be re-expressed against the descriptor or
-    // hoisted into the framework.
+    // Descriptor-flow port of the legacy post-`CreateProgram` memory check.
+    // The helper now inspects `desc.cbs` directly (mirroring the realized
+    // Program's `!cb->globally_allocated()` walk) and asserts the L1
+    // allocator delta still matches the predicted output footprint. Must be
+    // called AFTER `desc.cbs` is fully populated and AFTER the reader-indices
+    // Tensor is allocated, but BEFORE the descriptor is moved into the
+    // returned WorkloadDescriptor.
+    post_conv2d_op_memory_checks(
+        desc, operation_attributes, tensor_args, output_tensor, reader_indices_actual_page_size);
 
     WorkloadDescriptor workload_descriptor;
     // Park the reader-indices Tensor so the framework keeps it alive for the
