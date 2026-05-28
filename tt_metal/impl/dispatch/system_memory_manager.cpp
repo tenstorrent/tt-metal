@@ -59,6 +59,21 @@ void* open_ttsim_handle() {
     return handle;
 }
 
+bool dram_backed_cq_dirty_flush_enabled() {
+    static const bool enabled = [] {
+        const char* env = std::getenv("TT_METAL_DRAM_BACKED_CQ_DIRTY_FLUSH");
+        if (env == nullptr) {
+            return false;
+        }
+        const std::string value(env);
+        if (value == "auto") {
+            return std::getenv("TT_METAL_SIMULATOR") != nullptr || std::getenv("TT_UMD_SIMULATOR") != nullptr;
+        }
+        return value == "1" || value == "true" || value == "TRUE" || value == "on" || value == "ON";
+    }();
+    return enabled;
+}
+
 TTSimClockAllDevicesFn get_ttsim_clock_all_devices() {
     static TTSimClockAllDevicesFn fn = [] {
         void* handle = open_ttsim_handle();
