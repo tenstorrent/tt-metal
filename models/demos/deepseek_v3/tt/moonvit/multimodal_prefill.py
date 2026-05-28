@@ -35,6 +35,37 @@ Wrap whichever set of kwargs makes sense at the call site.
 
 Per the plan (Phase 2), the splice runs through a host roundtrip
 (Gemma3 pattern). Device-side splice is a deferred optimization.
+
+Production wiring sketch (for Generator._prefill multimodal branch)::
+
+    # In Generator.__init__ (or lazy on first multimodal call):
+    self._mm_driver = build_driver(
+        model_args=moonvit_model_args,  # MoonViTModelArgs instance
+        mesh_device=self.mesh_device,
+        dtype=ttnn.bfloat16,
+    )
+
+    # In Generator._prefill, when pixel_patches is provided:
+    def embed_text(tokens_tt: ttnn.Tensor) -> ttnn.Tensor:
+        return Embedding2D.forward_prefill(tokens_tt, self.model_run_config_prefill["embedding"])
+
+    def llm_from_embeddings(x_embedded: ttnn.Tensor):
+        return RowBatchedModel.forward_prefill_from_embeddings(
+            x_embedded,
+            user_id=user_id,
+            cfg=self.model_run_config_prefill,
+            rope_tensors=rope_tensors,
+            page_tables=page_tables_to_use,
+            prompt_len=prompt_len,
+        )
+
+    logits_tt = self._mm_driver.run(
+        tokens=tokens,
+        pixel_patches=pixel_patches,
+        grid_hws=grid_hws,
+        embed_text_fn=embed_text,
+        forward_from_embeddings_fn=llm_from_embeddings,
+    )
 """
 from __future__ import annotations
 
