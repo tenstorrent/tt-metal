@@ -59,15 +59,18 @@ Status meanings:
 
 1. Parse the spec; locate `model_id` and `model_slug`.
 2. Invoke `Skill(architecture)` and point it at the Hugging Face
-   `model_id`. Follow its prompts.
+   `model_id`. Follow its prompts — note that the skill now covers
+   BOTH the component inventory and the use_cases inventory.
 3. Produce `models/demos/<model_slug>/ARCHITECTURE.md` — the human-readable
-   block-by-block analysis.
+   block-by-block analysis. Include the `## Use cases` markdown table.
 4. Produce `models/demos/<model_slug>/architecture_inventory.json` —
-   machine-readable, schema below. Components MUST be in topological order
-   (leaves first, composite blocks last).
-5. Validate the inventory: it must parse as JSON, `components` must be a
-   non-empty list, and every component must carry a non-empty
-   `reference_impl` string.
+   machine-readable, with BOTH `components[]` (in topological order) AND
+   `use_cases[]` populated per the schemas below.
+5. Validate the inventory: it must parse as JSON. `components` must be
+   non-empty, every component with a `reference_impl` string. `use_cases`
+   may be empty for models with a single inference path; if non-empty,
+   every entry's `components_used` ⊆ component names AND
+   `validation_metric` ∈ the known set.
 6. If any component has no defensible reference, list it in `notes` and
    return `status="blocked"`.
 
@@ -83,9 +86,28 @@ Status meanings:
       "reference_impl": "<path to existing TTNN reference, e.g. models/demos/llama3_70b_galaxy>",
       "host_resident": {"allowed": false, "justification": null, "reference_link": null}
     }
+  ],
+  "use_cases": [
+    {
+      "name": "<short_token, e.g. t2tt>",
+      "description": "<one-sentence>",
+      "input_modality": "text|audio|image|video|none",
+      "output_modality": "text|audio|image|video|none",
+      "components_used": ["<comp_name>", ...],
+      "needs_ar": true,
+      "needs_audio_out": false,
+      "hf_class": "<HF class name>",
+      "validation_metric": "<bleu|wer|ecapa_cos|perplexity|accuracy|mse|pcc>",
+      "validation_threshold": "<expression like 'HF - 1.0' or '≥ 0.95'>",
+      "hybrid_notes": null
+    }
   ]
 }
 ```
+
+For the use_cases discovery procedure (inspect HF class hierarchy →
+derive modality and metric for each), see
+`skills/architecture/SKILL.md::## Use case inventory`.
 
 ## Anti-shortcut clauses
 
