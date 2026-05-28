@@ -1917,8 +1917,7 @@ void add_inter_mesh_minimal_host_cover_from_hostname_map(
     }
 }
 
-// Port-type-aware inter-mesh preferred constraints: host locality + cross-partition QSFP preference.
-// Replaces add_inter_mesh_minimal_host_cover_from_hostname_map when port_type_links is populated.
+// Inter-mesh preferred constraints using port-type link metadata and host locality.
 void add_inter_mesh_port_type_preferred_constraints(
     const TopologyMappingConfig& config,
     const PhysicalMultiMeshGraph& physical_graph,

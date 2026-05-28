@@ -644,7 +644,7 @@ protected:
 }  // namespace
 
 // =============================================================================
-// Port-type metadata helpers (Step 1 / #44933)
+// Port-type mapping helpers
 // =============================================================================
 
 TEST(PortTypeMappingHelpers, InferLogicalEdgePortRequirement) {

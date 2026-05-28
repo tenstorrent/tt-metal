@@ -110,7 +110,7 @@ PortTypeLinkMap build_port_type_link_map(
 /** Same-host edges prefer TRACE; cross-host edges require QSFP_DD. UNSET ranks yield no policy. */
 LogicalEdgePortRequirement infer_logical_edge_port_requirement(MeshHostRankId rank_a, MeshHostRankId rank_b);
 
-/** ASICs that can satisfy TRACE preference for all same-host logical neighbors (Step 2 input). */
+/** ASICs that can satisfy TRACE preference for all same-host logical neighbors. */
 std::set<tt::tt_metal::AsicID> compute_preferred_asics_for_fabric_node(
     FabricNodeId fabric_node,
     const LogicalAdjacencyMap& logical_adjacency,
@@ -119,7 +119,7 @@ std::set<tt::tt_metal::AsicID> compute_preferred_asics_for_fabric_node(
     const std::map<tt::tt_metal::AsicID, MeshHostRankId>& asic_to_host_rank,
     const PortTypeLinkMap& port_type_links);
 
-/** ASICs that satisfy required port types for all cross-host logical neighbors (Step 3 input). */
+/** ASICs that satisfy required port types for all cross-host logical neighbors. */
 std::set<tt::tt_metal::AsicID> compute_required_asics_for_fabric_node(
     FabricNodeId fabric_node,
     const LogicalAdjacencyMap& logical_adjacency,
@@ -400,7 +400,7 @@ struct PhysicalMultiMeshGraph {
     std::map<MeshId, AdjacencyGraph<PhysicalExitNode>> mesh_exit_node_graphs_;
 };
 
-/** Physical mesh partitions preferred for a logical mesh from cross-partition QSFP connectivity (Step 5 input). */
+/** Physical mesh partitions preferred for a logical mesh from cross-partition QSFP connectivity. */
 std::set<MeshId> compute_preferred_physical_meshes_for_logical_mesh(
     MeshId logical_mesh,
     const AdjacencyGraph<MeshId>& mesh_logical_level_graph,
