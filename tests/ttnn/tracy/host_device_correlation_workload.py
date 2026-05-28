@@ -11,7 +11,7 @@ records to a JSON file whose path is specified by the DEVICE_RECORDS_PATH
 environment variable.
 
 This script is meant to be run under Tracy capture by the outer test
-(test_realtime_profiler.py::test_host_device_correlation).
+(test_host_device_correlation.py).
 """
 
 import ast
