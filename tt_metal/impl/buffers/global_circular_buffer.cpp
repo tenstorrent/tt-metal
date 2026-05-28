@@ -5,6 +5,7 @@
 #include <tt_stl/assert.hpp>
 #include <buffer.hpp>
 #include <buffer_types.hpp>
+#include <circular_buffer_constants.h>
 #include <core_coord.hpp>
 #include <device.hpp>
 #include <global_circular_buffer.hpp>
@@ -176,13 +177,8 @@ void GlobalCircularBuffer::initialize_dram_sender_state_block(
         static_cast<uint32_t>(sender_state_drisc_l1_base_) + kDramSenderStateBlockConfigBlockOffset;
     const auto buffer_address = static_cast<uint32_t>(cb_buffer().address());
 
-    // num_receivers_and_remote_pages_sent_ptr packing — matches remote_cb_pack() in
-    // hw/inc/internal/circular_buffer_interface.h. Duplicated here so this TU doesn't
-    // need to include a kernel-only header.
-    constexpr uint32_t kPackedAddrMask = 0x00FFFFFFu;
-    constexpr uint32_t kPackedCountShift = 24;
-    const uint32_t packed_num_recv_and_remote = (max_num_receivers_per_sender << kPackedCountShift) |
-                                                (static_cast<uint32_t>(pages_sent_worker_l1_base_) & kPackedAddrMask);
+    const uint32_t packed_num_recv_and_remote =
+        remote_cb_pack(max_num_receivers_per_sender, static_cast<uint32_t>(pages_sent_worker_l1_base_));
 
     // Block header is identical across (device, sender) pairs; only the receiver
     // NOC XY table varies per sender. Compose once, swap in the table per sender.
@@ -218,8 +214,7 @@ void GlobalCircularBuffer::initialize_dram_sender_state_block(
 
     const auto& devices = mesh_device->get_devices();
     const std::vector<uint8_t> pages_sent_zero_bytes(2 * sizeof(uint32_t) * max_num_receivers_per_sender, 0);
-    const uint64_t pages_sent_write_addr =
-        dram_l1_noc_offset + static_cast<uint64_t>(pages_sent_drisc_l1_base_);
+    const uint64_t pages_sent_write_addr = dram_l1_noc_offset + static_cast<uint64_t>(pages_sent_drisc_l1_base_);
     for (size_t s = 0; s < sender_receiver_core_mapping_.size(); ++s) {
         const auto& [sender_logical, _receivers] = sender_receiver_core_mapping_[s];
         const auto& recv_phys = receiver_coords_per_sender_[s];

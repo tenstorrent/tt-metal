@@ -34,23 +34,25 @@
 #include "api/socket_api.h"
 #include "experimental/drisc_mode.h"
 #include "experimental/gddr_dma.h"
+#include "tt_metal/impl/buffers/dram_sender_state_block.hpp"
 
 // DRISC firmware doesn't define cb_interface (no CB infra on DRAM cores).
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 
 namespace {
 
-// ---- Sender state block offsets (must match dram_sender_state_block.hpp) ----
-constexpr uint32_t kStateConfigPtr = 0x00;
-constexpr uint32_t kStateFifoStartAddr = 0x04;
-constexpr uint32_t kStateFifoLimit = 0x08;
-constexpr uint32_t kStateFifoPageSize = 0x0C;
-constexpr uint32_t kStateFifoWrPtr = 0x10;
-constexpr uint32_t kStateReceiverNocXyPtr = 0x14;
-constexpr uint32_t kStateAlignedPagesSentPtr = 0x18;
-constexpr uint32_t kStateNumRecvAndRemotePtr = 0x1C;
-// Mutable fields beyond byte 0x20 are persistent prefetcher state — currently
-// only fifo_wr_ptr (inside the 32 B iface region above) needs to round-trip.
+// Short aliases for the host-side layout constants — single source of truth in
+// tt_metal/impl/buffers/dram_sender_state_block.hpp. The fields beyond byte
+// 0x20 are persistent prefetcher state; only fifo_wr_ptr (inside the 32 B
+// iface region) needs to round-trip on each request.
+constexpr uint32_t kStateConfigPtr = tt::tt_metal::kDramSenderStateBlockConfigPtrOffset;
+constexpr uint32_t kStateFifoStartAddr = tt::tt_metal::kDramSenderStateBlockFifoStartAddrOffset;
+constexpr uint32_t kStateFifoLimit = tt::tt_metal::kDramSenderStateBlockFifoLimitOffset;
+constexpr uint32_t kStateFifoPageSize = tt::tt_metal::kDramSenderStateBlockFifoPageSizeOffset;
+constexpr uint32_t kStateFifoWrPtr = tt::tt_metal::kDramSenderStateBlockFifoWrPtrOffset;
+constexpr uint32_t kStateReceiverNocXyPtr = tt::tt_metal::kDramSenderStateBlockReceiverNocXyPtrOffset;
+constexpr uint32_t kStateAlignedPagesSentPtr = tt::tt_metal::kDramSenderStateBlockAlignedPagesSentPtrOffset;
+constexpr uint32_t kStateNumRecvAndRemotePtr = tt::tt_metal::kDramSenderStateBlockNumRecvAndRemotePtrOffset;
 
 template <bool single_row, bool single_page>
 FORCE_INLINE void prefetcher_write_chunk(

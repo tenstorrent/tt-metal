@@ -298,12 +298,25 @@ void DramCorePrefetcherManager::start(const experimental::DramCorePrefetcherConf
         kernel_region_size);
     stage_ring_size_ = kernel_region_end - stage_ring_base_;
     stage_ring_size_ &= ~(2 * l1_alignment - 1);
+    // After masking down, make sure the ring is still big enough for at least
+    // one minimal sub-chunk per half. Catches accidental shrink-to-zero if the
+    // socket carve-out ever grows past the L1 region.
+    TT_FATAL(
+        stage_ring_size_ >= 4 * l1_alignment,
+        "DRISC L1 stage ring shrank to {} B after alignment masking — socket buffers consumed too much of the {} B "
+        "kernel region",
+        stage_ring_size_,
+        kernel_region_size);
     ring_half_ = stage_ring_size_ / 2;
 
     // Populate devices_ list once; both allocate_sockets and build_and_launch_programs use it.
+    // Build the coord->index map at the same time so worker_loop fan-out is O(targets).
     devices_.clear();
+    device_index_by_coord_.clear();
     for (auto* device : mesh_device_->get_view().get_devices()) {
+        const uint32_t d = static_cast<uint32_t>(devices_.size());
         devices_.push_back(device);
+        device_index_by_coord_.emplace(mesh_device_->get_view().find_device(device->id()), d);
     }
 
     allocate_sockets();
@@ -396,19 +409,20 @@ void DramCorePrefetcherManager::queue(
 
     Request req;
     req.page = serialize_request_page(gcb, tensors, num_layers);
-    // Target devices: subset if given, else full mesh.
+    // Target devices: subset if given, else full mesh. Caller is responsible
+    // for keeping tensors and the GCB alive until stop() — see the public API doc.
     MeshCoordinateRangeSet effective_subset = device_subset.has_value() ? *device_subset : full_mesh_subset();
     for (const auto& range : effective_subset.ranges()) {
         for (const auto& coord : range) {
+            TT_FATAL(
+                device_index_by_coord_.find(coord) != device_index_by_coord_.end(),
+                "QueueDramCorePrefetcherRequest target MeshCoordinate {} is not in the mesh this prefetcher was "
+                "started "
+                "on",
+                coord);
             req.target_devices.push_back(coord);
         }
     }
-    // Hold tensor lifetimes via shared_ptr to the MeshTensor's backing buffer
-    // (the tensor itself is non-copyable, but its buffer is shared_ptr-managed).
-    // For simplicity v1 stashes raw pointers via a no-op deleter; the contract
-    // is that callers keep the tensors alive until Stop, which the existing
-    // tests already do. A future change can use proper shared_ptrs.
-    (void)req.tensor_refs;  // v1: tensor lifetime is caller's responsibility (matches the pre-queueable API).
 
     {
         std::lock_guard<std::mutex> lk(queue_mu_);
@@ -436,21 +450,16 @@ void DramCorePrefetcherManager::worker_loop() {
         std::vector<uint32_t> remaining_target_sockets;
         remaining_target_sockets.reserve(req.target_devices.size() * num_senders_);
         for (const auto& dev_coord : req.target_devices) {
-            // Find the device index in devices_.
-            for (uint32_t d = 0; d < devices_.size(); ++d) {
-                if (mesh_device_->get_view().find_device(devices_[d]->id()) == dev_coord) {
-                    for (uint32_t s = 0; s < num_senders_; ++s) {
-                        remaining_target_sockets.push_back(d * num_senders_ + s);
-                    }
-                    break;
-                }
-            }
-        }
-        // If this is a stop sentinel, broadcast to ALL sockets regardless of subset.
-        if (req.is_stop_sentinel) {
-            remaining_target_sockets.clear();
-            for (uint32_t i = 0; i < sockets_.size(); ++i) {
-                remaining_target_sockets.push_back(i);
+            auto it = device_index_by_coord_.find(dev_coord);
+            TT_FATAL(
+                it != device_index_by_coord_.end(),
+                "QueueDramCorePrefetcherRequest target MeshCoordinate {} is not in the mesh this prefetcher was "
+                "started "
+                "on; would silently drop the request for that device",
+                dev_coord);
+            const uint32_t d = it->second;
+            for (uint32_t s = 0; s < num_senders_; ++s) {
+                remaining_target_sockets.push_back(d * num_senders_ + s);
             }
         }
 
@@ -467,10 +476,6 @@ void DramCorePrefetcherManager::worker_loop() {
             }
             still_pending = std::move(next_pending);
         }
-
-        if (!req.is_stop_sentinel) {
-            held_.push_back(std::move(req));
-        }
     }
 }
 
@@ -478,13 +483,20 @@ void DramCorePrefetcherManager::stop() {
     if (!active_) {
         return;
     }
-    // Build the stop sentinel — a zero-filled page (num_tensors=0).
+    // Stop = a zero-filled page (num_tensors == 0) broadcast to every device in
+    // the mesh. The kernel exits its request loop on `num_tensors == 0`. The
+    // worker_loop returns once pending is drained and stop_requested_ is set.
     Request sentinel;
     const uint32_t pcie_alignment =
         MetalContext::instance(mesh_device_->impl().get_context_id()).hal().get_alignment(HalMemType::HOST);
     const uint32_t page_bytes = align_up(kRequestPageBytes, pcie_alignment);
-    sentinel.is_stop_sentinel = true;
     sentinel.page.assign(page_bytes, 0);
+    const MeshCoordinateRangeSet full_subset = full_mesh_subset();
+    for (const auto& range : full_subset.ranges()) {
+        for (const auto& coord : range) {
+            sentinel.target_devices.push_back(coord);
+        }
+    }
 
     {
         std::lock_guard<std::mutex> lk(queue_mu_);
@@ -505,9 +517,9 @@ void DramCorePrefetcherManager::stop() {
     sockets_.clear();
     programs_.clear();
     devices_.clear();
+    device_index_by_coord_.clear();
     sender_logical_cores_.clear();
     num_senders_ = 0;
-    held_.clear();
     active_ = false;
 }
 

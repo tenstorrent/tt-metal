@@ -13,6 +13,7 @@ divergence between the two paths surfaces immediately.
 See tt_metal/impl/buffers/prefetcher_matmul_design.md for the contract being validated.
 """
 
+import contextlib
 import os
 import pytest
 import torch
@@ -21,6 +22,20 @@ from loguru import logger
 
 from models.common.utility_functions import run_for_blackhole
 from tests.ttnn.unit_tests.operations.prefetcher_common import round_up as _round_up
+
+
+@contextlib.contextmanager
+def dram_core_prefetcher_session(device):
+    """Open a DRAM-core prefetcher Start/Stop window. Stop runs even on test
+    failure so the next test sees a clean device. Replaces the explicit
+    `start → ... → stop` pair callers used to spell out at every test site.
+    """
+    ttnn.experimental.start_dram_core_prefetcher(device)
+    try:
+        yield
+    finally:
+        ttnn.experimental.stop_dram_core_prefetcher(device)
+        ttnn.synchronize_device(device)
 
 
 pytestmark = [
@@ -51,63 +66,11 @@ def _bank_receivers_row_major(bank_idx: int, recv_per_bank: int, ring_cols: int,
     return ttnn.CoreRangeSet(cores)
 
 
-def _setup_weight_and_gcb_dram_sender_at_row(device, K, N, dtype, recv_per_bank, num_layers, row_offset):
-    """Variant of _setup_weight_and_gcb_dram_sender that places the receiver grid
-    starting at row `row_offset`. Used by the multi-GCB switching test so two
-    GCBs can share the prefetcher without overlapping receivers."""
-    tile_bytes = _TILE_BYTES_BF16 if dtype == ttnn.bfloat16 else _TILE_BYTES_BF8
-    num_dram_banks = device.dram_grid_size().x
-    ring_size = num_dram_banks * recv_per_bank
-    ring_cols = max(c for c in range(min(num_dram_banks, ring_size), 0, -1) if ring_size % c == 0)
-
-    K_padded = _round_up(K, ring_size * ttnn.TILE_SIZE)
-    k_tiles = K_padded // ttnn.TILE_SIZE
-    k_block_w_tiles = k_tiles // ring_size
-    n_per_recv_tiles = (N // num_dram_banks // recv_per_bank) // ttnn.TILE_SIZE
-    push_page_size = k_block_w_tiles * n_per_recv_tiles * tile_bytes
-
-    pt_weight = torch.zeros(1, 1, K_padded, N)
-    pt_weight[:, :, :K, :] = torch.randn(1, 1, K, N)
-
-    dram_core_range_set = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))}
-    )
-    weight_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.DRAM,
-        ttnn.ShardSpec(dram_core_range_set, [K_padded, N // num_dram_banks], ttnn.ShardOrientation.ROW_MAJOR),
-    )
-    tt_weight = ttnn.as_tensor(
-        pt_weight, device=device, dtype=dtype, memory_config=weight_mem_config, layout=ttnn.TILE_LAYOUT
-    )
-
-    addrs = ttnn.from_torch(
-        torch.zeros(1, 1),
-        device=device,
-        dtype=ttnn.uint32,
-        memory_config=ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.BufferType.L1,
-            ttnn.ShardSpec(
-                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
-                [1, 1],
-                ttnn.ShardOrientation.ROW_MAJOR,
-            ),
-        ),
-    )
-
-    bank_to_receivers = [
-        (b, _bank_receivers_row_major(b, recv_per_bank, ring_cols=ring_cols, row_offset=row_offset))
-        for b in range(num_dram_banks)
-    ]
-    gcb_size = _GCB_DEPTH_PAGES * push_page_size
-    gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(device, bank_to_receivers, gcb_size)
-    num_iters_total = num_layers * ring_size
-    return tt_weight, addrs, gcb, num_iters_total, push_page_size, ring_size
-
-
-def _setup_weight_and_gcb_dram_sender(device, K, N, dtype, recv_per_bank, num_layers):
+def _setup_weight_and_gcb_dram_sender(device, K, N, dtype, recv_per_bank, num_layers, row_offset=0):
     """Build a DRAM-sender GCB sized to the prefetcher's per-receiver-per-block push.
+
+    `row_offset` shifts the receiver grid down; the multi-GCB switching test uses
+    it to place two GCBs on disjoint receiver rows for the same prefetcher.
 
     Returns (tt_weight, addrs, gcb, num_iters_total, push_page_size_bytes, ring_size).
     """
@@ -155,7 +118,7 @@ def _setup_weight_and_gcb_dram_sender(device, K, N, dtype, recv_per_bank, num_la
     )
 
     bank_to_receivers = [
-        (b, _bank_receivers_row_major(b, recv_per_bank, ring_cols=ring_cols, row_offset=0))
+        (b, _bank_receivers_row_major(b, recv_per_bank, ring_cols=ring_cols, row_offset=row_offset))
         for b in range(num_dram_banks)
     ]
     gcb_size = _GCB_DEPTH_PAGES * push_page_size
@@ -165,7 +128,7 @@ def _setup_weight_and_gcb_dram_sender(device, K, N, dtype, recv_per_bank, num_la
     logger.info(
         f"[validator-dram] K={K} K_padded={K_padded} N={N} banks={num_dram_banks} ring={ring_size} "
         f"k_block_w_tiles={k_block_w_tiles} push_page={push_page_size} gcb_size={gcb_size} "
-        f"num_layers={num_layers} num_iters_total={num_iters_total}"
+        f"num_layers={num_layers} num_iters_total={num_iters_total} row_offset={row_offset}"
     )
     return tt_weight, addrs, gcb, num_iters_total, push_page_size, ring_size
 
@@ -253,17 +216,15 @@ def test_validator_dram_sender(device, K, N, dtype, recv_per_bank, num_layers):
         device, K, N, dtype, recv_per_bank, num_layers
     )
 
-    ttnn.experimental.start_dram_core_prefetcher(device)
-    ttnn.experimental.queue_dram_core_prefetcher_request(device, [tt_weight], num_layers=num_layers, global_cb=gcb)
-    ttnn.experimental.test_dram_prefetcher_validator(
-        device,
-        tt_weight,
-        num_layers=num_layers,
-        print_stride=max(1, ring_size // 4),
-        global_cb=gcb,
-    )
-    ttnn.experimental.stop_dram_core_prefetcher(device)
-    ttnn.synchronize_device(device)
+    with dram_core_prefetcher_session(device):
+        ttnn.experimental.queue_dram_core_prefetcher_request(device, [tt_weight], num_layers=num_layers, global_cb=gcb)
+        ttnn.experimental.test_dram_prefetcher_validator(
+            device,
+            tt_weight,
+            num_layers=num_layers,
+            print_stride=max(1, ring_size // 4),
+            global_cb=gcb,
+        )
     logger.info(f"[validator-dram] K={K} N={N} recv_per_bank={recv_per_bank} num_layers={num_layers} OK")
 
 
@@ -278,11 +239,11 @@ def test_validator_dram_sender_multi_gcb_switching(device, K, N, dtype, recv_per
     runs on the same DRAM sender cores for both.
     """
     # GCB A: receiver grid on rows [0, recv_per_bank).
-    tt_weight_a, addrs_a, gcb_a, _, _, ring_size = _setup_weight_and_gcb_dram_sender_at_row(
-        device, K, N, dtype, recv_per_bank, num_layers=1, row_offset=0
+    tt_weight_a, addrs_a, gcb_a, _, _, ring_size = _setup_weight_and_gcb_dram_sender(
+        device, K, N, dtype, recv_per_bank, num_layers=1
     )
     # GCB B: receiver grid on rows [recv_per_bank, 2*recv_per_bank). Disjoint from A.
-    tt_weight_b, addrs_b, gcb_b, _, _, _ = _setup_weight_and_gcb_dram_sender_at_row(
+    tt_weight_b, addrs_b, gcb_b, _, _, _ = _setup_weight_and_gcb_dram_sender(
         device, K, N, dtype, recv_per_bank, num_layers=1, row_offset=recv_per_bank
     )
 
@@ -291,25 +252,21 @@ def test_validator_dram_sender_multi_gcb_switching(device, K, N, dtype, recv_per
         f"A=row[0,{recv_per_bank}) B=row[{recv_per_bank},{2 * recv_per_bank})"
     )
 
-    ttnn.experimental.start_dram_core_prefetcher(device)
-
-    # Interleave A → B → A so the third request hits A's persistent ring state
-    # established by the first A request and skipped over by the B request.
-    ttnn.experimental.queue_dram_core_prefetcher_request(device, [tt_weight_a], num_layers=1, global_cb=gcb_a)
-    ttnn.experimental.test_dram_prefetcher_validator(
-        device, tt_weight_a, num_layers=1, print_stride=max(1, ring_size // 4), global_cb=gcb_a
-    )
-    ttnn.experimental.queue_dram_core_prefetcher_request(device, [tt_weight_b], num_layers=1, global_cb=gcb_b)
-    ttnn.experimental.test_dram_prefetcher_validator(
-        device, tt_weight_b, num_layers=1, print_stride=max(1, ring_size // 4), global_cb=gcb_b
-    )
-    ttnn.experimental.queue_dram_core_prefetcher_request(device, [tt_weight_a], num_layers=1, global_cb=gcb_a)
-    ttnn.experimental.test_dram_prefetcher_validator(
-        device, tt_weight_a, num_layers=1, print_stride=max(1, ring_size // 4), global_cb=gcb_a
-    )
-
-    ttnn.experimental.stop_dram_core_prefetcher(device)
-    ttnn.synchronize_device(device)
+    with dram_core_prefetcher_session(device):
+        # Interleave A → B → A so the third request hits A's persistent ring state
+        # established by the first A request and skipped over by the B request.
+        ttnn.experimental.queue_dram_core_prefetcher_request(device, [tt_weight_a], num_layers=1, global_cb=gcb_a)
+        ttnn.experimental.test_dram_prefetcher_validator(
+            device, tt_weight_a, num_layers=1, print_stride=max(1, ring_size // 4), global_cb=gcb_a
+        )
+        ttnn.experimental.queue_dram_core_prefetcher_request(device, [tt_weight_b], num_layers=1, global_cb=gcb_b)
+        ttnn.experimental.test_dram_prefetcher_validator(
+            device, tt_weight_b, num_layers=1, print_stride=max(1, ring_size // 4), global_cb=gcb_b
+        )
+        ttnn.experimental.queue_dram_core_prefetcher_request(device, [tt_weight_a], num_layers=1, global_cb=gcb_a)
+        ttnn.experimental.test_dram_prefetcher_validator(
+            device, tt_weight_a, num_layers=1, print_stride=max(1, ring_size // 4), global_cb=gcb_a
+        )
     logger.info("[validator-dram-multi-gcb] A→B→A interleaved OK")
 
 
@@ -321,33 +278,29 @@ def test_validator_dram_sender_mixed_num_receivers(device):
     """
     K, N, dtype = 448, 1792, ttnn.bfloat16
     # GCB A: recv_per_bank=1 (rows [0, 1)).
-    tt_weight_a, addrs_a, gcb_a, _, _, ring_a = _setup_weight_and_gcb_dram_sender_at_row(
-        device, K, N, dtype, recv_per_bank=1, num_layers=1, row_offset=0
+    tt_weight_a, addrs_a, gcb_a, _, _, ring_a = _setup_weight_and_gcb_dram_sender(
+        device, K, N, dtype, recv_per_bank=1, num_layers=1
     )
     # GCB B: recv_per_bank=2 (rows [1, 3)) — different receiver count.
-    tt_weight_b, addrs_b, gcb_b, _, _, ring_b = _setup_weight_and_gcb_dram_sender_at_row(
+    tt_weight_b, addrs_b, gcb_b, _, _, ring_b = _setup_weight_and_gcb_dram_sender(
         device, K, N, dtype, recv_per_bank=2, num_layers=1, row_offset=1
     )
 
     logger.info(f"[validator-dram-mixed] A: recv=1 ring={ring_a} rows[0,1) | " f"B: recv=2 ring={ring_b} rows[1,3)")
 
-    ttnn.experimental.start_dram_core_prefetcher(device)
-
-    ttnn.experimental.queue_dram_core_prefetcher_request(device, [tt_weight_a], num_layers=1, global_cb=gcb_a)
-    ttnn.experimental.test_dram_prefetcher_validator(
-        device, tt_weight_a, num_layers=1, print_stride=max(1, ring_a // 4), global_cb=gcb_a
-    )
-    ttnn.experimental.queue_dram_core_prefetcher_request(device, [tt_weight_b], num_layers=1, global_cb=gcb_b)
-    ttnn.experimental.test_dram_prefetcher_validator(
-        device, tt_weight_b, num_layers=1, print_stride=max(1, ring_b // 4), global_cb=gcb_b
-    )
-    ttnn.experimental.queue_dram_core_prefetcher_request(device, [tt_weight_a], num_layers=1, global_cb=gcb_a)
-    ttnn.experimental.test_dram_prefetcher_validator(
-        device, tt_weight_a, num_layers=1, print_stride=max(1, ring_a // 4), global_cb=gcb_a
-    )
-
-    ttnn.experimental.stop_dram_core_prefetcher(device)
-    ttnn.synchronize_device(device)
+    with dram_core_prefetcher_session(device):
+        ttnn.experimental.queue_dram_core_prefetcher_request(device, [tt_weight_a], num_layers=1, global_cb=gcb_a)
+        ttnn.experimental.test_dram_prefetcher_validator(
+            device, tt_weight_a, num_layers=1, print_stride=max(1, ring_a // 4), global_cb=gcb_a
+        )
+        ttnn.experimental.queue_dram_core_prefetcher_request(device, [tt_weight_b], num_layers=1, global_cb=gcb_b)
+        ttnn.experimental.test_dram_prefetcher_validator(
+            device, tt_weight_b, num_layers=1, print_stride=max(1, ring_b // 4), global_cb=gcb_b
+        )
+        ttnn.experimental.queue_dram_core_prefetcher_request(device, [tt_weight_a], num_layers=1, global_cb=gcb_a)
+        ttnn.experimental.test_dram_prefetcher_validator(
+            device, tt_weight_a, num_layers=1, print_stride=max(1, ring_a // 4), global_cb=gcb_a
+        )
     logger.info("[validator-dram-mixed] mixed-num_receivers interleave OK")
 
 

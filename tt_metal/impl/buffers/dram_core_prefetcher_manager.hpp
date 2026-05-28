@@ -12,6 +12,7 @@
 #include <mutex>
 #include <optional>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
@@ -46,10 +47,11 @@ class MeshDevice;
 //     fixed-size socket page and pushes it onto the internal queue. The host
 //     worker thread fans it out to every socket whose mesh coord is in
 //     `subset` via non-blocking try_write so one slow socket can't starve the
-//     others. Tensor shared_ptrs are held until stop().
-//   * stop() pushes the stop sentinel onto the queue, joins the worker thread
-//     (which broadcasts the sentinel to every socket), WaitProgramDone on
-//     each device, releases held resources.
+//     others. The caller is responsible for keeping tensors and the GCB alive
+//     until stop() (see the public dram_core_prefetcher.hpp note).
+//   * stop() pushes a zero-tensor request targeting the full mesh, joins the
+//     worker thread (the kernel exits on `num_tensors == 0`), WaitProgramDone
+//     on each device, releases per-cycle resources.
 //   * Destructor calls stop().
 class DramCorePrefetcherManager {
 public:
@@ -89,11 +91,8 @@ private:
     static constexpr uint32_t kSocketFifoPages = 16;
 
     struct Request {
-        // is_stop_sentinel == true means a Stop broadcast: send to every socket.
-        bool is_stop_sentinel = false;
         std::vector<uint8_t> page;  // size = kRequestPageBytes; identical bytes for every target
         std::vector<MeshCoordinate> target_devices;
-        std::vector<std::shared_ptr<const MeshTensor>> tensor_refs;
     };
 
     void worker_loop();
@@ -133,15 +132,16 @@ private:
     // sockets_[d * num_senders_ + s] = socket for (device d, sender s).
     std::vector<std::unique_ptr<H2DSocket>> sockets_;
 
+    // MeshCoordinate -> index into devices_, populated once at start() so
+    // worker_loop fan-out is O(targets) instead of O(targets * devices).
+    std::unordered_map<MeshCoordinate, uint32_t> device_index_by_coord_;
+
     // Host worker thread + queue
     std::thread host_worker_;
     std::mutex queue_mu_;
     std::condition_variable queue_cv_;
     std::deque<Request> pending_;
     std::atomic<bool> stop_requested_{false};
-
-    // Tensor refs of completed requests, held alive until stop().
-    std::vector<Request> held_;
 };
 
 }  // namespace distributed
