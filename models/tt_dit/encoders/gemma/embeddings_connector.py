@@ -14,11 +14,14 @@ Reference: ltx_core.text_encoders.gemma.embeddings_connector
 
 from __future__ import annotations
 
+import torch
+
 import ttnn
 
 from ...layers.linear import ColParallelLinear, Linear, RowParallelLinear
 from ...layers.module import Module, ModuleList, Parameter
-from ...utils.substate import pop_substate, rename_substate
+from ...layers.normalization import RMSNorm
+from ...utils.substate import rename_substate
 
 
 def _rms_norm(x: ttnn.Tensor, eps: float = 1e-6) -> ttnn.Tensor:
@@ -55,6 +58,13 @@ class ConnectorBlock(Module):
         self.to_v = ColParallelLinear(dim, dim, **col_kwargs)
         self.to_out = Linear(dim, dim, bias=True, mesh_device=mesh_device)
 
+        # Gemma-style QK normalization over the full inner dim, applied before RoPE
+        # (reference Attention uses torch.nn.RMSNorm(inner_dim): raw weight, no +1).
+        self.q_norm = RMSNorm(dim, norm_eps=eps, bias=False, mesh_device=mesh_device)
+        self.k_norm = RMSNorm(dim, norm_eps=eps, bias=False, mesh_device=mesh_device)
+        # Per-head gated attention: gates = 2*sigmoid(to_gate_logits(x)), applied to attn output.
+        self.to_gate_logits = Linear(dim, num_heads, bias=True, mesh_device=mesh_device)
+
         # Feed-forward (GELU gated)
         self.ff1 = ColParallelLinear(
             dim, ff_dim, bias=True, activation_fn="gelu", mesh_device=mesh_device, mesh_axis=tp_axis
@@ -78,15 +88,16 @@ class ConnectorBlock(Module):
         rename_substate(state, "attn1.to_out.0", "to_out")
         rename_substate(state, "ff.net.0.proj", "ff1")
         rename_substate(state, "ff.net.2", "ff2")
-        # Remove norms we handle ourselves and unused keys
-        pop_substate(state, "attn1.q_norm")
-        pop_substate(state, "attn1.k_norm")
-        pop_substate(state, "attn1.to_gate_logits")
+        # QK norms and the gated-attention gate (reference Attention uses these).
+        rename_substate(state, "attn1.q_norm", "q_norm")
+        rename_substate(state, "attn1.k_norm", "k_norm")
+        rename_substate(state, "attn1.to_gate_logits", "to_gate_logits")
 
     def forward(self, x, rope_cos=None, rope_sin=None):
         # Self-attention with residual
         residual = x
         x = _rms_norm(x, self.eps)
+        attn_in = x  # normed input, reused for the per-head gate
         q = self.to_q(x, compute_kernel_config=self.compute_config)
         k = self.to_k(x, compute_kernel_config=self.compute_config)
         v = self.to_v(x, compute_kernel_config=self.compute_config)
@@ -104,6 +115,13 @@ class ConnectorBlock(Module):
 
             q_host = ttnn.to_torch(ttnn.get_device_tensors(q)[0]).float()
             k_host = ttnn.to_torch(ttnn.get_device_tensors(k)[0]).float()
+
+            # Gemma QK-norm over the full inner dim, BEFORE RoPE (matches reference).
+            qn = ttnn.to_torch(ttnn.get_device_tensors(self.q_norm.weight.data)[0]).float().flatten()
+            kn = ttnn.to_torch(ttnn.get_device_tensors(self.k_norm.weight.data)[0]).float().flatten()
+            q_host = q_host * torch.rsqrt(q_host.pow(2).mean(-1, keepdim=True) + self.eps) * qn
+            k_host = k_host * torch.rsqrt(k_host.pow(2).mean(-1, keepdim=True) + self.eps) * kn
+
             q_host = _apply_interleaved_rotary_emb(q_host, rope_cos.float(), rope_sin.float())
             k_host = _apply_interleaved_rotary_emb(k_host, rope_cos.float(), rope_sin.float())
 
@@ -161,8 +179,22 @@ class ConnectorBlock(Module):
                 mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
                 use_hyperparams=True,
             )
+        attn_out = ttnn.squeeze(attn_out, 0)  # (B, T, H*D), full
+
+        # Per-head gated attention: gates = 2*sigmoid(to_gate_logits(attn_in)).
+        # Computed on host in fp32 (exact; bf16 device gating compounds error).
+        ao = ttnn.to_torch(ttnn.get_device_tensors(attn_out)[0]).float()
+        gin = ttnn.to_torch(ttnn.get_device_tensors(attn_in)[0]).float()
+        # tt_dit Linear stores weight transposed as [in, out] = [dim, H].
+        gw = ttnn.to_torch(ttnn.get_device_tensors(self.to_gate_logits.weight.data)[0]).float()  # (dim, H)
+        gb = ttnn.to_torch(ttnn.get_device_tensors(self.to_gate_logits.bias.data)[0]).float().flatten()  # (H,)
+        gate_logits = gin @ gw + gb  # (B, T, H)
+        gates = 2.0 * torch.sigmoid(gate_logits)  # (B, T, H)
+        b, t, hd = ao.shape
+        ao = (ao.view(b, t, self.num_heads, self.head_dim) * gates.unsqueeze(-1)).view(b, t, hd)
+        attn_out = ttnn.from_torch(ao.bfloat16(), device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+
         attn_out = self.to_out(attn_out, compute_kernel_config=self.compute_config)
-        attn_out = ttnn.squeeze(attn_out, 0)
         x = attn_out + residual
 
         # FF with residual

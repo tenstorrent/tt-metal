@@ -887,12 +887,15 @@ class LTXPipeline:
                     ttnn.deallocate(hs)
                 ttnn.deallocate(tt_stacked)
 
-                # FeatureExtractorV2: per-token RMS norm + flatten
-                # Reshape to [B, T, D, L] for per-token per-layer normalization
+                # FeatureExtractorV2: per-token RMS norm + flatten.
+                # The reference stacks via torch.stack(hidden_states, dim=-1) -> [B,T,D,L]
+                # (dim-major) and flattens to a D-major [B,T,D*L] vector for aggregate_embed.
+                # Our ttnn.concat(hs_list, dim=-1) yields a LAYER-major buffer [B,T,L*D], so we
+                # reshape to [B,T,L,D] then permute to [B,T,D,L] to match the reference ordering.
                 B_enc, T_enc = stacked_torch.shape[0], stacked_torch.shape[1]
                 D_gemma = 3840  # Gemma hidden size
                 L_layers = len(hs_list)  # 49
-                encoded = stacked_torch.reshape(B_enc, T_enc, D_gemma, L_layers)
+                encoded = stacked_torch.reshape(B_enc, T_enc, L_layers, D_gemma).permute(0, 1, 3, 2)
                 variance = torch.mean(encoded**2, dim=2, keepdim=True)
                 normed = encoded * torch.rsqrt(variance + 1e-6)
                 normed = normed.reshape(B_enc, T_enc, D_gemma * L_layers)

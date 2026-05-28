@@ -20,6 +20,7 @@ file(
     layernorm/device/kernels/*
     layernorm_distributed/device/kernels/*
     rmsnorm_distributed/device/kernels/*
+    all_gather_rms_norm/device/kernels/*
     softmax/device/kernels/*
     kernel_util/compute/*
     kernel_util/dataflow/*

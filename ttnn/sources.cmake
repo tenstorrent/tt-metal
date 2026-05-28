@@ -67,6 +67,9 @@ set(TTNNCPP_SRCS
     cpp/ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_device_operation.cpp
     cpp/ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_program_factory.cpp
     cpp/ttnn/operations/experimental/ccl/rms_allgather/rms_allgather.cpp
+    cpp/ttnn/operations/normalization/all_gather_rms_norm/all_gather_rms_norm.cpp
+    cpp/ttnn/operations/normalization/all_gather_rms_norm/device/all_gather_rms_norm_device_operation.cpp
+    cpp/ttnn/operations/normalization/all_gather_rms_norm/device/all_gather_rms_norm_program_factory.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/dispatch/dispatch.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/combine/combine.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_expert_ffn_common.cpp
@@ -274,6 +277,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/normalization/rmsnorm/rmsnorm_nanobind.cpp
     cpp/ttnn/operations/normalization/rmsnorm/rmsnorm_nanobind.cpp
     cpp/ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_distributed_nanobind.cpp
+    cpp/ttnn/operations/normalization/all_gather_rms_norm/all_gather_rms_norm_nanobind.cpp
     cpp/ttnn/operations/normalization/softmax/softmax_nanobind.cpp
     cpp/ttnn/operations/pool/generic/generic_pools_nanobind.cpp
     cpp/ttnn/operations/pool/grid_sample/grid_sample_nanobind.cpp
