@@ -88,23 +88,6 @@ bool can_use_streaming_compute(
     return true;
 }
 
-// Check whether all data formats used by the compute kernel are uniform (allows skipping reconfigs).
-bool check_uniform_dataformat(
-    const Tensor& q,
-    const Tensor& k,
-    const Tensor& v,
-    const Tensor& out,
-    const std::optional<Tensor>& attn_mask,
-    bool use_streaming_compute) {
-    const tt::DataFormat q_df = tt::tt_metal::datatype_to_dataformat_converter(q.dtype());
-    const tt::DataFormat k_df = tt::tt_metal::datatype_to_dataformat_converter(k.dtype());
-    const tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(v.dtype());
-    const tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(out.dtype());
-    const tt::DataFormat mask_df = select_mask_dataformat(attn_mask, use_streaming_compute);
-    const tt::DataFormat im_df = tt::DataFormat::Float16_b;
-    return (q_df == k_df && q_df == v_df && q_df == out_df && q_df == mask_df && q_df == im_df);
-}
-
 // Compute the largest granularity that evenly divides both DHt and vDHt (up to dst_size).
 uint32_t compute_dht_granularity(uint32_t DHt, uint32_t vDHt, uint32_t dst_size) {
     uint32_t g = std::min({DHt, vDHt, dst_size});
@@ -575,9 +558,6 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
 
-    const bool uniform_dataformat = check_uniform_dataformat(
-        input_tensor_q, input_tensor_k, input_tensor_v, output_tensor, attn_mask, use_streaming_compute);
-
     std::vector<uint32_t> compute_compile_time_args = {
         // matmul args
         B,
@@ -609,12 +589,11 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         static_cast<uint32_t>(is_chunked),
         scale_packed,
         sliding_window_size.value_or(0),
-        static_cast<uint32_t>(use_attention_sink),
-        static_cast<uint32_t>(use_streaming_compute),  // arg 30
-        valid_Skt,                                     // arg 31: unpadded K tile count for streaming padded_k_tiles
-        static_cast<uint32_t>(uniform_dataformat),     // arg 32: skip reconfig when all formats match
-        k_partial_col,                                 // arg 33: K partial-tile col (0 = no partial)
-        static_cast<uint32_t>(use_zigzag_balancing),   // arg 34
+        static_cast<std::uint32_t>(use_attention_sink),
+        static_cast<std::uint32_t>(use_streaming_compute),  // arg 30
+        valid_Skt,                                    // arg 31: unpadded K tile count for streaming padded_k_tiles
+        k_partial_col,                                // arg 32: K partial-tile col (0 = no partial)
+        static_cast<uint32_t>(use_zigzag_balancing),  // arg 33: unified zigzag remap
     };
 
     std::map<std::string, std::string> defines_map;
