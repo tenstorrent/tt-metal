@@ -136,9 +136,9 @@ ProgramDescriptor ZeroCacheRangeOperation::create_descriptor(
     // empty so the framework uses the descriptor-rebuild slow path -- needed because
     // page_starts / page_ends also vary across dispatches.
     for (uint32_t i = 0; i < cores.size(); i++) {
-        writer_desc.runtime_args.emplace_back(
+        writer_desc.emplace_runtime_args(
             cores[i],
-            KernelDescriptor::CoreRuntimeArgs{
+            {
                 dst_buffer->address(),
                 page_starts[i],
                 page_ends[i],
