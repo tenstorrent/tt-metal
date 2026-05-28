@@ -33,7 +33,7 @@ bool run_im2col_test(
 
     experimental::metal2_host_api::KernelSpec dm_kernel_spec{
         .unique_id = DM_KERNEL,
-        .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{kernel_path},
+        .source = kernel_path,
         .num_threads = 1,
         .compile_time_arg_bindings = {{"num_of_addresses", num_of_addresses}},
         .config_spec =
