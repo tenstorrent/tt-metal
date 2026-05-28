@@ -30,7 +30,10 @@ void WanFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Input must be on device");
     TT_FATAL(input.buffer() != nullptr, "Input must be allocated");
     TT_FATAL(input.layout() == Layout::TILE, "Input layout must be TILE, got {}", input.layout());
-    TT_FATAL(input.dtype() == DataType::BFLOAT16, "Input dtype must be BFLOAT16, got {}", input.dtype());
+    TT_FATAL(
+        input.dtype() == DataType::BFLOAT16 || input.dtype() == DataType::FLOAT32,
+        "Input dtype must be BFLOAT16 or FLOAT32, got {}",
+        input.dtype());
 
     const auto& shape = input.logical_shape();
     TT_FATAL(shape.rank() == 4, "Input rank must be 4, got {}", shape.rank());
@@ -121,6 +124,52 @@ void WanFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
             "per_head_norm requires num_heads_per_device > 1 (got {})",
             args.num_heads_per_device);
     }
+
+    // The MUX path (TP>1 with multiple workers) requires a caller-supplied
+    // persistent buffer for the gathered-stats DRAM scratch. The buffer must
+    // be allocated as a mesh-coherent MeshBuffer (same DRAM address on every
+    // chip in the cluster) — required for the fabric mcast. Allocating it
+    // outside the op lets the caller pre-create one MeshBuffer per cluster
+    // and reuse it across launches; we reject mismatched shape/dtype/layout
+    // up front so a wrong tensor doesn't silently corrupt the AG.
+    const auto sizing = compute_sizing(args, input);
+    if (sizing.use_mux) {
+        TT_FATAL(
+            tensor_args.persistent_output_buffer.has_value(),
+            "persistent_output_buffer is required for TP>1 with multiple workers (use_mux). "
+            "Allocate it as a regular device tensor with shape "
+            "[1, 1, {}, {}], dtype=FLOAT32, layout=ROW_MAJOR, DRAM INTERLEAVED.",
+            sizing.total_pages,
+            TILE_HEIGHT * sizing.window_size);
+        const auto& buf = tensor_args.persistent_output_buffer.value();
+        TT_FATAL(buf.storage_type() == StorageType::DEVICE, "persistent_output_buffer must be on device");
+        TT_FATAL(buf.buffer() != nullptr, "persistent_output_buffer must be allocated");
+        TT_FATAL(
+            buf.layout() == Layout::ROW_MAJOR,
+            "persistent_output_buffer layout must be ROW_MAJOR (got {})",
+            buf.layout());
+        TT_FATAL(
+            buf.dtype() == DataType::FLOAT32, "persistent_output_buffer dtype must be FLOAT32 (got {})", buf.dtype());
+        TT_FATAL(
+            buf.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM,
+            "persistent_output_buffer must be in DRAM");
+        TT_FATAL(
+            buf.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
+            "persistent_output_buffer must be INTERLEAVED");
+        const auto& b_shape = buf.logical_shape();
+        TT_FATAL(b_shape.rank() == 4, "persistent_output_buffer rank must be 4 (got {})", b_shape.rank());
+        const uint32_t expected_pages = sizing.total_pages;
+        const uint32_t expected_page_width = TILE_HEIGHT * sizing.window_size;
+        TT_FATAL(
+            b_shape[0] == 1 && b_shape[1] == 1 && b_shape[2] == expected_pages && b_shape[3] == expected_page_width,
+            "persistent_output_buffer shape must be [1, 1, {}, {}], got [{}, {}, {}, {}]",
+            expected_pages,
+            expected_page_width,
+            b_shape[0],
+            b_shape[1],
+            b_shape[2],
+            b_shape[3]);
+    }
 }
 
 WanFusedDistributedRmsnormDeviceOperation::spec_return_value_t
@@ -169,8 +218,19 @@ WanFusedDistributedRmsnormDeviceOperation::create_output_tensors(
     std::vector<Tensor> tensors;
     tensors.reserve(specs.size());
     auto* mesh_device = tensor_args.input.device();
-    for (const auto& spec : specs) {
-        tensors.push_back(create_device_tensor(spec, mesh_device));
+    // tensors[0] = user-visible output (always allocated fresh).
+    tensors.push_back(create_device_tensor(specs[0], mesh_device));
+    // tensors[1] = stats DRAM scratch (only present when use_mux). Caller
+    // must provide a pre-allocated mesh-coherent buffer via
+    // tensor_args.persistent_output_buffer; we validated it in
+    // validate_on_program_cache_miss.
+    if (specs.size() > 1) {
+        // Re-check here so cache hits also get a clean error if the caller
+        // forgot the buffer (validate_on_program_cache_miss runs only once).
+        TT_FATAL(
+            tensor_args.persistent_output_buffer.has_value(),
+            "persistent_output_buffer is required for TP>1 with multiple workers");
+        tensors.push_back(tensor_args.persistent_output_buffer.value());
     }
     return tensors;
 }
