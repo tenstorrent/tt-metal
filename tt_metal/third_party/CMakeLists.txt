@@ -206,10 +206,9 @@ add_subdirectory(tracy/capture)
 
 # Land the host-side Tracy CLI tools at ${CMAKE_BINARY_DIR}/tools/profiler/bin so they line
 # up with PROFILER_BIN_DIR in tools/tracy/common.py and the path baked into the artifact
-# packaging step (.github/workflows/build-artifact.yaml: TRACY_CLI_DIR=build/tools/profiler/bin)
-# and the CLI smoke test (tests/scripts/tracy/tracy_cli_smoke_test.sh: TRACY_BIN_DIR). Vendored
-# Tracy CMake puts them in their own subdirs by default; override here so we don't touch the
-# vendored CMakeLists.
+# packaging step (.github/workflows/build-artifact.yaml: TRACY_CLI_DIR=build/tools/profiler/bin).
+# Vendored Tracy CMake puts them in their own subdirs by default; override here so we don't
+# touch the vendored CMakeLists.
 set(TRACY_CLI_BIN_DIR "${CMAKE_BINARY_DIR}/tools/profiler/bin")
 set_target_properties(
     tracy-csvexport
