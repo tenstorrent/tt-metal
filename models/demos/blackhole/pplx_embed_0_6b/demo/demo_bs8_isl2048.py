@@ -3,25 +3,22 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-pplx-embed-v1-0.6B perf demo, fixed at batch=1 / ISL=512.
+pplx-embed-v1-0.6B perf demo, fixed at batch=8 / ISL=2048.
 
-All recommended optimizations are turned on by default (same Qwen3 architecture).
+DRAM-optimized: bs=8 ISL=2048 activation (8*2048*1024*2 B = 32 MB) exceeds
+P150 L1 budget. Activations are DRAM-resident with QWEN_MM_BIG_GRID_BH=1.
 
 Usage:
-    # Single device (P150)
-    HF_MODEL=perplexity-ai/pplx-embed-v1-0.6b MESH_DEVICE=P150 pytest \
-      models/demos/blackhole/pplx_embed_0_6b/demo/demo_bs1_isl512.py -sv
-
-    # Standalone (no pytest)
-    python models/demos/blackhole/pplx_embed_0_6b/demo/demo_bs1_isl512.py
+    pytest models/demos/blackhole/pplx_embed_0_6b/demo/demo_bs8_isl2048.py -sv
+    python models/demos/blackhole/pplx_embed_0_6b/demo/demo_bs8_isl2048.py
 """
 
 import pytest
 
 from models.demos.blackhole.pplx_embed_0_6b.demo._common import apply_workload_env, run_perf, standalone_main
 
-BATCH_SIZE = 1
-SEQ_LEN = 512
+BATCH_SIZE = 8
+SEQ_LEN = 2048
 NUM_ITERATIONS = 10
 
 apply_workload_env(BATCH_SIZE, SEQ_LEN)
@@ -33,7 +30,7 @@ apply_workload_env(BATCH_SIZE, SEQ_LEN)
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
-def test_perf_bs1_isl512(mesh_device, is_ci_env):
+def test_perf_bs8_isl2048(mesh_device, is_ci_env):
     run_perf(
         mesh_device,
         batch_size=BATCH_SIZE,
@@ -47,7 +44,7 @@ def test_perf_bs1_isl512(mesh_device, is_ci_env):
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="pplx-embed-v1-0.6B bs=1 ISL=512 perf demo")
+    parser = argparse.ArgumentParser(description="pplx-embed-v1-0.6B bs=8 ISL=2048 perf demo")
     parser.add_argument("--device-id", type=int, default=0)
     parser.add_argument("--iterations", type=int, default=NUM_ITERATIONS)
     parser.add_argument(

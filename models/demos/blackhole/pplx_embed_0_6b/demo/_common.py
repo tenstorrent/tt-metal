@@ -28,7 +28,7 @@ import ttnn
 from models.demos.blackhole.pplx_embed_0_6b.tt.attention import PplxBidirectionalAttention
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.tt_transformers.tt.common import PagedAttentionConfig, get_padded_prefill_len
+from models.tt_transformers.tt.common import PagedAttentionConfig, copy_host_to_device, get_padded_prefill_len
 from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import (
@@ -85,8 +85,13 @@ class PplxModelArgs(ModelArgs):
         return div1024 * 1024
 
     def get_trace_prefill_supported_seq_lens(self):
-        """Same ISL sweep range as Qwen3-Embedding-0.6B."""
-        return [128, 256, 512, 1024, 2048, 4096, 8192]
+        """ISL sweep range capped at ``max_seq_len`` to avoid warmup assertion failures."""
+        all_lens = [128, 256, 512, 1024, 2048, 4096, 8192]
+        return [s for s in all_lens if s <= self.max_seq_len]
+
+    def filter_warmup_seq_lens(self, to_warmup_seq_lens):
+        """Cap warmup sequence lengths at max_seq_len."""
+        return [s for s in to_warmup_seq_lens if s <= self.max_seq_len]
 
     def load_state_dict(self):
         """Load weights from safetensors, bypassing AutoModel/AutoModelForCausalLM.
@@ -173,6 +178,57 @@ def apply_recommended_env(batched_l1: bool) -> None:
     os.environ.setdefault("QWEN_SDPA_BIG_CHUNK_BS1", "1")
     if batched_l1:
         os.environ.setdefault("TT_BATCHED_L1_PREFILL", "1")
+
+
+# ---------------------------------------------------------------------------
+# Per-workload optimization configs
+# ---------------------------------------------------------------------------
+
+# Maps (batch_size, seq_len) to optimized settings.  The dp32 multiprocess
+# script and individual demo files both look up from here so every
+# combination is tuned in exactly one place.
+#
+# "batched_l1"  – whether the total activation (bs * seq * hidden * 2 B)
+#                 fits in P150 L1 (~8 MiB).  When True we set
+#                 TT_BATCHED_L1_PREFILL=1.
+# "dram_grid"   – when activations spill to DRAM, the per-core L1 budget
+#                 is freed and we can widen the MinimalMatmul grid from
+#                 (8,8)=64 to (8,10)=80 cores via QWEN_MM_BIG_GRID_BH=1.
+
+WORKLOAD_CONFIGS = {
+    # L1-backed activations (total activation < 10 MB fits in P150 L1)
+    (1, 512): {"batched_l1": False, "dram_grid": True},  # 1 MB
+    (1, 1024): {"batched_l1": False, "dram_grid": True},  # 2 MB
+    (1, 2048): {"batched_l1": False, "dram_grid": True},  # 4 MB
+    (8, 512): {"batched_l1": True, "dram_grid": False},  # 8 MB
+    # DRAM-backed activations (> 10 MB, use wider matmul grid)
+    (16, 512): {"batched_l1": False, "dram_grid": True},  # 16 MB
+    (8, 1024): {"batched_l1": False, "dram_grid": True},  # 16 MB
+    (8, 2048): {"batched_l1": False, "dram_grid": True},  # 32 MB
+    (32, 512): {"batched_l1": False, "dram_grid": True},  # 32 MB
+    (32, 1024): {"batched_l1": False, "dram_grid": True},  # 64 MB
+    (32, 2048): {"batched_l1": False, "dram_grid": True},  # 128 MB
+}
+
+
+def apply_workload_env(batch_size: int, seq_len: int) -> None:
+    """Apply optimized env vars for a specific (batch_size, seq_len) workload.
+
+    Looks up ``WORKLOAD_CONFIGS`` for the exact pair.  Falls back to a
+    heuristic for unseen combinations: L1-backed if total activation fits
+    in ~8 MiB, DRAM + big matmul grid otherwise.
+    """
+    cfg = WORKLOAD_CONFIGS.get((batch_size, seq_len))
+    if cfg is None:
+        activation_bytes = batch_size * seq_len * 1024 * 2
+        fits_l1 = activation_bytes <= 8 * 1024 * 1024
+        cfg = {"batched_l1": batch_size > 1 and fits_l1, "dram_grid": not fits_l1}
+
+    apply_recommended_env(batched_l1=cfg["batched_l1"])
+    if cfg["dram_grid"]:
+        os.environ.setdefault("QWEN_MM_BIG_GRID_BH", "1")
+    if cfg.get("minimal_mm_bs1"):
+        os.environ.setdefault("QWEN_MINIMAL_MM_BS1", "1")
 
 
 def pplx_optimizations(model_args):
@@ -338,10 +394,93 @@ def run_perf(
     trace_id = generator.trace_id_prefill.get(trace_key)
     use_direct_trace = (trace_id is not None) and not full_pipeline
 
+    # --- Optimized full-pipeline path ---
+    # Capture an *extended* trace that includes post-processing ops (slice +
+    # norm + to_layout) so they execute as part of trace replay rather than
+    # as individually dispatched ops.  Pre-compute host inputs once to skip
+    # Generator Python overhead in the hot loop.
+    ext_trace_id = None
+    ext_trace_output = None
+    ext_device_inputs = None
+    ext_host_inputs = None
+    if full_pipeline and trace_id is not None:
+        model = generator.model[0]
+        last_token_idx = seq_len - 1
+        is_batched = batch_size > 1
+        padded_batch = model_args.max_batch_size
+
+        # Release all Generator traces — we'll capture a new extended trace
+        # that includes post-processing ops.  Releasing all avoids "unsafe
+        # allocation" warnings from warmup traces at shorter seq_lens.
+        for key, tid in list(generator.trace_id_prefill.items()):
+            if tid is not None:
+                ttnn.release_trace(mesh_device, tid)
+                generator.trace_id_prefill[key] = None
+
+        # Prepare inputs matching what the Generator would produce
+        if is_batched:
+            prefill_ids = torch.zeros(padded_batch, seq_len, dtype=torch.long)
+            padded_last_token_idx = [0] * padded_batch
+            for slot in range(batch_size):
+                prefill_ids[slot] = input_ids[slot]
+                padded_last_token_idx[slot] = last_token_idx
+            ext_last_token_idx = padded_last_token_idx
+            get_last_token = (last_token_idx // 32) * 32
+            prefill_kwargs = {"page_table": page_table, "batch_size": batch_size, "user_id": 0}
+        else:
+            prefill_ids = input_ids
+            ext_last_token_idx = last_token_idx
+            get_last_token = (last_token_idx // 32) * 32
+            prefill_kwargs = {"page_table": page_table[0:1]}
+
+        host_inputs_full = model.prepare_prefill_inputs_trace(prefill_ids, **prefill_kwargs)
+        rot_mats_global = host_inputs_full[1]
+        rot_mats_local = host_inputs_full[2]
+        ext_host_inputs = (host_inputs_full[0], host_inputs_full[3], host_inputs_full[4])
+
+        fwd_kwargs = dict(
+            rot_mats_global=rot_mats_global,
+            rot_mats_local=rot_mats_local,
+            kv_cache=kv_caches[0],
+        )
+        if is_batched:
+            fwd_kwargs["batch_size"] = batch_size
+            fwd_kwargs["user_id"] = 0
+
+        def _forward_and_postprocess(dinputs):
+            transformed = model.transform_and_embed_prefill_inputs_device(*dinputs)
+            tt_out = model.ttnn_prefill_forward(
+                x=transformed[0],
+                page_table=transformed[1],
+                chunk_page_table=transformed[2],
+                **fwd_kwargs,
+            )
+            if is_batched:
+                return model.process_hidden_states_after_prefill_trace_batched(tt_out, get_last_token)
+            return model.process_hidden_states_after_prefill_trace(tt_out, last_token_idx)
+
+        # Warm-run to ensure all post-processing kernels are compiled
+        device_inputs = copy_host_to_device(ext_host_inputs, mesh_device=mesh_device)
+        _ = _forward_and_postprocess(device_inputs)
+        ttnn.synchronize_device(mesh_device)
+
+        # Capture extended trace: forward + post-processing in one replay unit
+        device_inputs = copy_host_to_device(ext_host_inputs, mesh_device=mesh_device)
+        ext_trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        ext_trace_output = _forward_and_postprocess(device_inputs)
+        ttnn.end_trace_capture(mesh_device, ext_trace_id, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
+        ext_device_inputs = device_inputs
+        logger.info("Captured extended trace (forward + post-processing)")
+
     if use_direct_trace:
         logger.info(f"Running {num_iterations} iterations via direct trace replay (key={trace_key})...")
+    elif ext_trace_id is not None:
+        logger.info(f"Running {num_iterations} iterations via extended trace (forward + post-proc)...")
     else:
         logger.info(f"Running {num_iterations} iterations via generator (no direct trace)...")
+
+    dim = model_args.dim
 
     iteration_times = []
     last_iter_idx = num_iterations - 1
@@ -355,6 +494,12 @@ def run_perf(
             if use_direct_trace:
                 ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
                 ttnn.synchronize_device(mesh_device)
+            elif ext_trace_id is not None:
+                copy_host_to_device(ext_host_inputs, device_tensors=ext_device_inputs, mesh_device=mesh_device)
+                ttnn.execute_trace(mesh_device, ext_trace_id, cq_id=0, blocking=False)
+                hidden_host = ext_trace_output.cpu(blocking=False)
+                ttnn.synchronize_device(mesh_device)
+                _ = ttnn.to_torch(ttnn.get_device_tensors(hidden_host)[0])
             else:
                 generator.prev_page_table = None
                 generator.prefill_forward_text(
@@ -440,7 +585,7 @@ def standalone_main(
     batch_size: int, seq_len: int, iterations: int, device_id: int = 0, full_pipeline: bool = False
 ) -> None:
     """`python <entry_file>` path — opens its own device, no pytest fixture."""
-    apply_recommended_env(batched_l1=batch_size > 1)
+    apply_workload_env(batch_size, seq_len)
 
     logger.info(f"Opening device {device_id}...")
     device = ttnn.open_device(

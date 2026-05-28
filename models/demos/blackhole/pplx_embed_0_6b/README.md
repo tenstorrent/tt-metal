@@ -27,16 +27,24 @@ pplx-embed-v1-0.6B is a text embedding model from Perplexity AI built on the Qwe
 ## Quick Start
 
 ```bash
-# Single device (P150), pytest
-HF_MODEL=perplexity-ai/pplx-embed-v1-0.6b MESH_DEVICE=P150 pytest \
-  models/demos/blackhole/pplx_embed_0_6b/demo/demo_bs1_isl512.py -sv
+# Single device (P150), bs=1 ISL=512
+TT_VISIBLE_DEVICES=1 python models/demos/blackhole/pplx_embed_0_6b/demo/demo_bs1_isl512.py
 
-# Standalone (no pytest)
-python models/demos/blackhole/pplx_embed_0_6b/demo/demo_bs1_isl512.py
+# Other batch/ISL combinations
+TT_VISIBLE_DEVICES=1 python models/demos/blackhole/pplx_embed_0_6b/demo/demo_bs8_isl512.py
+TT_VISIBLE_DEVICES=1 python models/demos/blackhole/pplx_embed_0_6b/demo/demo_bs32_isl512.py
+TT_VISIBLE_DEVICES=1 python models/demos/blackhole/pplx_embed_0_6b/demo/demo_bs1_isl1024.py
+TT_VISIBLE_DEVICES=1 python models/demos/blackhole/pplx_embed_0_6b/demo/demo_bs1_isl2048.py
+
+# Full pipeline latency (includes Generator overhead, post-processing, D2H)
+TT_VISIBLE_DEVICES=1 python models/demos/blackhole/pplx_embed_0_6b/demo/demo_bs1_isl512.py --full-pipeline
+
+# Via pytest
+pytest models/demos/blackhole/pplx_embed_0_6b/demo/demo_bs1_isl512.py -sv
 
 # DP=32 multi-process on Galaxy (32x P150)
 python models/demos/blackhole/pplx_embed_0_6b/demo/dp32_multiprocess.py \
-  --num-devices 32 --iterations 10 --warmup 2
+  --batch-size 1 --seq-len 512 --num-devices 32 --iterations 10
 ```
 
 ## Directory Structure
@@ -47,48 +55,88 @@ models/demos/blackhole/pplx_embed_0_6b/
 ├── README.md
 ├── tt/
 │   ├── __init__.py
-│   └── attention.py          # PplxBidirectionalAttention subclass (is_causal=False)
+│   └── attention.py              # PplxBidirectionalAttention (is_causal=False)
 ├── demo/
 │   ├── __init__.py
-│   ├── _common.py            # Model builder, optimizations, run_perf
-│   ├── demo_bs1_isl512.py    # BS=1, ISL=512 perf demo (pytest + standalone)
-│   └── dp32_multiprocess.py  # DP=32 multi-process Galaxy benchmark
+│   ├── _common.py                # Model builder, WORKLOAD_CONFIGS, run_perf
+│   ├── demo_bs1_isl512.py        # BS=1,  ISL=512  (L1 activations)
+│   ├── demo_bs8_isl512.py        # BS=8,  ISL=512  (L1 batched activations)
+│   ├── demo_bs32_isl512.py       # BS=32, ISL=512  (DRAM optimized)
+│   ├── demo_bs1_isl1024.py       # BS=1,  ISL=1024 (DRAM optimized)
+│   ├── demo_bs1_isl2048.py       # BS=1,  ISL=2048 (DRAM optimized)
+│   ├── demo_bs8_isl1024.py       # BS=8,  ISL=1024 (DRAM optimized)
+│   ├── demo_bs8_isl2048.py       # BS=8,  ISL=2048 (DRAM optimized)
+│   ├── demo_bs32_isl1024.py      # BS=32, ISL=1024 (DRAM optimized)
+│   ├── demo_bs32_isl2048.py      # BS=32, ISL=2048 (DRAM optimized)
+│   ├── dp32_multiprocess.py      # DP=32 multi-process Galaxy benchmark
+│   └── eval_accuracy.py          # Accuracy evaluation (STS-B)
 └── tests/
     └── perf/
-        └── __init__.py
+        ├── __init__.py
+        ├── new_perf_bs1_isl512.py   # Tracy signpost test (bs=1, ISL=512)
+        ├── new_perf_bs8_isl512.py   # Tracy signpost test (bs=8, ISL=512)
+        └── new_perf_bs32_isl512.py  # Tracy signpost test (bs=32, ISL=512)
 ```
 
 ## Performance
 
-### Single device (P150)
+### Single Device (P150) — Direct Trace Replay
 
-| Batch | ISL | Mode           | Avg Prefill | Best Prefill | Best emb/s | Best tok/s |
-|-------|-----|----------------|-------------|--------------|------------|------------|
-| 1     | 512 | Direct trace   | 7.1ms       | 7.1ms        | 142        | 72,511     |
-| 1     | 512 | Full pipeline   | 8.0ms       | 7.8ms        | 128        | 65,507     |
+Direct trace replay measures pure device execution via `ttnn.execute_trace` + sync, bypassing Generator Python overhead, post-processing, and D2H copy.
 
-- **Direct trace**: Pure device execution via `ttnn.execute_trace` + sync (no post-processing overhead).
-- **Full pipeline**: Includes Generator loop, RMSNorm post-processing, D2H, and host extraction.
+| Batch | ISL  | Prefill (avg) | Prefill (best) | Embeddings/s (best) | Tokens/s (best) | Memory   |
+|------:|-----:|--------------:|---------------:|--------------------:|----------------:|----------|
+|     1 |  512 |         7.2ms |          7.1ms |               140.6 |          71,991 | L1 + big grid |
+|     8 |  512 |        43.8ms |         43.7ms |               182.9 |          93,651 | L1       |
+|    32 |  512 |       199.1ms |        198.9ms |               160.9 |          82,366 | DRAM     |
+|     1 | 1024 |        18.0ms |         17.9ms |                55.9 |          57,207 | L1       |
+|     1 | 2048 |        33.4ms |         33.4ms |                30.0 |          61,377 | L1       |
+|     8 | 1024 |       134.4ms |        134.4ms |                59.5 |          60,968 | DRAM     |
+|     8 | 2048 |       269.6ms |        269.5ms |                29.7 |          60,801 | DRAM     |
+|    32 | 1024 |       520.4ms |        520.0ms |                61.5 |          63,019 | DRAM     |
+|    32 | 2048 |      1045.4ms |       1045.1ms |                30.6 |          62,706 | DRAM     |
+
+### Workload Optimization Strategy
+
+| Workload    | Strategy     | Key Knobs |
+|-------------|-------------|-----------|
+| bs=1  ISL=512  | L1 activations (1 MB) + big grid | `QWEN_SDPA_BIG_CHUNK_BS1=1`, `QWEN_MM_BIG_GRID_BH=1` |
+| bs=1  ISL=1024 | L1 activations (2 MB) | `QWEN_SDPA_BIG_CHUNK_BS1=1` |
+| bs=1  ISL=2048 | L1 activations (4 MB) | `QWEN_SDPA_BIG_CHUNK_BS1=1` |
+| bs=8  ISL=512  | L1 batched (8 MB)     | `TT_BATCHED_L1_PREFILL=1` |
+| bs=8  ISL=1024 | DRAM (16 MB)          | `QWEN_MM_BIG_GRID_BH=1` (80-core matmul) |
+| bs=8  ISL=2048 | DRAM (32 MB)          | `QWEN_MM_BIG_GRID_BH=1` |
+| bs=32 ISL=512  | DRAM (32 MB)          | `QWEN_MM_BIG_GRID_BH=1` |
+| bs=32 ISL=1024 | DRAM (64 MB)          | `QWEN_MM_BIG_GRID_BH=1` |
+| bs=32 ISL=2048 | DRAM (128 MB)         | `QWEN_MM_BIG_GRID_BH=1` |
+
+All workloads additionally use: BFP4 weights, BFP8 activations, LOFI math fidelity, head-split TMs, L1 RoPE, block-sharded LayerNorm, KV cache fill skip, and SDPA LOFI.
+
+### Full Pipeline (Extended Trace)
+
+Full pipeline measures end-to-end latency including H2D, trace replay, post-processing (slice + norm + to_layout), and D2H + torch conversion. The `--full-pipeline` flag captures an *extended trace* that folds post-processing device ops into the trace replay, reducing Python dispatch overhead from ~0.7ms to ~0.1ms:
+
+| Batch | ISL  | Direct (best) | Full Pipeline (best) | Overhead |
+|------:|-----:|--------------:|---------------------:|---------:|
+|     1 |  512 |         7.1ms |                7.2ms |    0.1ms |
 
 ### DP=32 Multi-Process (Galaxy, 32x P150)
 
-Each chip runs as an independent subprocess with `TT_VISIBLE_DEVICES` isolation, dedicated CPU cores, and barrier-synchronized measurement. Timing includes the full pipeline: trace execution, RMSNorm post-processing, D2H copy, and host extraction.
+Each chip runs as an independent subprocess with `TT_VISIBLE_DEVICES` isolation, dedicated CPU cores, and barrier-synchronized measurement. Supports all `(batch_size, seq_len)` combinations:
 
-| Chips | Batch/chip | ISL | Per-chip mean | Per-chip min | Slowest median | Throughput (median) | Throughput (best) |
-|-------|-----------|-----|---------------|--------------|----------------|--------------------|--------------------|
-| 32    | 1         | 512 | 8.0ms         | 7.4ms        | 8.2ms          | 3,886 emb/s (2.0M tok/s) | 4,308 emb/s (2.2M tok/s) |
+```bash
+python models/demos/blackhole/pplx_embed_0_6b/demo/dp32_multiprocess.py \
+  --batch-size 1 --seq-len 512 --num-devices 32
 
-Key properties:
-- **Near-perfect scaling**: all 32 chips achieve ~8.0ms per-chip (same as single-device full pipeline).
-- **Full pipeline**: includes Generator prefill trace, RMSNorm post-processing, D2H, and host extraction.
-- **CPU pinning**: 2 cores/worker (64 total) prevents OS scheduler contention.
-- **Barrier sync**: all workers finish warmup before any measurement begins.
+python models/demos/blackhole/pplx_embed_0_6b/demo/dp32_multiprocess.py \
+  --batch-size 32 --seq-len 2048 --num-devices 32
+```
 
 ## Implementation Notes
 
-- **No `tt_transformers` modifications**: all changes are localized to this directory.
-- **Bidirectional SDPA**: `PplxBidirectionalAttention` wraps the SDPA call in `forward_prefill` to inject `is_causal=False` without duplicating the entire method.
-- **Weight loading**: `PplxModelArgs` subclass overrides `get_hf_model_cls()` to use `AutoModel` (no LM head) and enables `trust_remote_code` for the custom HF config.
-- **Optimization knobs**: BFP4 weights (all layers), BFP8 activations, head-split TMs, L1 RoPE, block-sharded LayerNorm, KV cache fill skip, SDPA LOFI (safe for embeddings), bigger SDPA chunks for bs=1.
-- **Direct trace replay**: Benchmark loop uses `ttnn.execute_trace` directly to eliminate Generator Python overhead and post-trace D2H processing, measuring pure device execution latency.
-- **DP=32 multi-process**: `dp32_multiprocess.py` spawns one `multiprocessing.Process` per chip with `TT_VISIBLE_DEVICES` isolation, CPU affinity pinning, and a `Barrier` for synchronized measurement. Direct trace replay ensures near-zero Python overhead per chip.
+- **No `tt_transformers` modifications**: all changes are localized to this directory (except one-line `trust_remote_code` fix in `model_config.py`).
+- **Bidirectional SDPA**: `PplxBidirectionalAttention` wraps the SDPA call in `forward_prefill` to inject `is_causal=False`.
+- **Weight loading**: `PplxModelArgs` subclass loads weights directly from safetensors, bypassing the custom HF `modeling.py` that requires a newer `transformers` version.
+- **Centralized optimization config**: `WORKLOAD_CONFIGS` in `_common.py` maps every `(batch_size, seq_len)` pair to its optimized env-var settings. Both individual demo files and `dp32_multiprocess.py` use `apply_workload_env()` for consistent tuning.
+- **Direct trace replay**: Benchmark loop uses `ttnn.execute_trace` directly for lowest-overhead measurement. Pass `--full-pipeline` to measure end-to-end latency with an *extended trace* that includes post-processing ops (slice + norm + to_layout) inside the trace replay, reducing dispatch overhead to ~0.1ms.
+- **DP=32 multi-process**: `dp32_multiprocess.py` spawns one `multiprocessing.Process` per chip with `TT_VISIBLE_DEVICES` isolation, CPU affinity pinning, and a `Barrier` for synchronized measurement.

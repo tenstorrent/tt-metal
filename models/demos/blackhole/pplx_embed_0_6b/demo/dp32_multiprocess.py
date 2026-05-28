@@ -13,10 +13,15 @@ The benchmark loop runs the full Generator pipeline (prefill trace +
 RMSNorm post-processing + D2H + host extraction) to measure end-to-end
 latency including all post-processing overhead.
 
+Supports all (batch_size, seq_len) combinations defined in WORKLOAD_CONFIGS
+with their optimized env-var settings.
+
 Usage:
     python models/demos/blackhole/pplx_embed_0_6b/demo/dp32_multiprocess.py
     python models/demos/blackhole/pplx_embed_0_6b/demo/dp32_multiprocess.py \\
-        --num-devices 32 --iterations 10 --warmup 2
+        --batch-size 8 --seq-len 512 --num-devices 32
+    python models/demos/blackhole/pplx_embed_0_6b/demo/dp32_multiprocess.py \\
+        --batch-size 32 --seq-len 2048 --iterations 5
 """
 from __future__ import annotations
 
@@ -27,12 +32,11 @@ import statistics
 import sys
 import time
 
-BATCH_SIZE = 1
-SEQ_LEN = 512
-
 
 def _worker(
     chip_id: int,
+    batch_size: int,
+    seq_len: int,
     iterations: int,
     warmup: int,
     barrier: mp.Barrier,
@@ -52,12 +56,12 @@ def _worker(
 
     try:
         from models.demos.blackhole.pplx_embed_0_6b.demo._common import (
-            apply_recommended_env,
+            apply_workload_env,
             build_single_device_model,
             generate_synthetic_inputs,
         )
 
-        apply_recommended_env(batched_l1=False)
+        apply_workload_env(batch_size, seq_len)
 
         import ttnn
 
@@ -74,11 +78,11 @@ def _worker(
 
         t_build0 = time.perf_counter()
         generator, model_args, kv_caches, page_table = build_single_device_model(
-            device, batch_size=BATCH_SIZE, seq_len=SEQ_LEN
+            device, batch_size=batch_size, seq_len=seq_len
         )
         build_sec = time.perf_counter() - t_build0
 
-        input_ids, prompt_lens = generate_synthetic_inputs(model_args.tokenizer, BATCH_SIZE, SEQ_LEN)
+        input_ids, prompt_lens = generate_synthetic_inputs(model_args.tokenizer, batch_size, seq_len)
 
         t_compile0 = time.perf_counter()
         generator.prefill_forward_text(
@@ -158,6 +162,8 @@ def _worker(
 
 def _orchestrate(args: argparse.Namespace) -> None:
     n = args.num_devices
+    batch_size = args.batch_size
+    seq_len = args.seq_len
     iterations = args.iterations
     warmup = args.warmup
 
@@ -165,7 +171,7 @@ def _orchestrate(args: argparse.Namespace) -> None:
     cores_per_worker = max(1, total_cores // n)
 
     print(
-        f"Multi-process DP={n} pplx-embed-v1-0.6B (bs={BATCH_SIZE}, ISL={SEQ_LEN})\n"
+        f"Multi-process DP={n} pplx-embed-v1-0.6B (bs={batch_size}, ISL={seq_len})\n"
         f"  warmup={warmup}  measured_iters={iterations}\n"
         f"  CPU cores: {total_cores} total, {cores_per_worker}/worker\n"
         f"  Barrier sync: all workers rendezvous after warmup\n"
@@ -184,7 +190,7 @@ def _orchestrate(args: argparse.Namespace) -> None:
     for i in range(n):
         p = ctx.Process(
             target=_worker,
-            args=(i, iterations, warmup, barrier, result_dict, cores_per_worker),
+            args=(i, batch_size, seq_len, iterations, warmup, barrier, result_dict, cores_per_worker),
             name=f"chip-{i}",
         )
         p.start()
@@ -232,7 +238,7 @@ def _orchestrate(args: argparse.Namespace) -> None:
     def _mean(key: str) -> float:
         return sum(float(r[key]) for r in oks) / len(oks)
 
-    global_batch = BATCH_SIZE * len(oks)
+    global_batch = batch_size * len(oks)
     device_mean = _mean("device_sec")
     device_median = _mean("device_sec_median")
     device_min = min(r["device_sec_min"] for r in oks)
@@ -242,17 +248,17 @@ def _orchestrate(args: argparse.Namespace) -> None:
 
     emb_per_sec_mean = global_batch / slowest_median
     emb_per_sec_best = global_batch / device_min
-    tok_per_sec_mean = global_batch * SEQ_LEN / slowest_median
-    tok_per_sec_best = global_batch * SEQ_LEN / device_min
+    tok_per_sec_mean = global_batch * seq_len / slowest_median
+    tok_per_sec_best = global_batch * seq_len / device_min
 
     print()
     print("=" * 60)
     print(f"  pplx-embed-v1-0.6B Multi-Process DP={len(oks)}")
     print("=" * 60)
-    print(f"  Batch size (per chip):  {BATCH_SIZE}")
+    print(f"  Batch size (per chip):  {batch_size}")
     print(f"  Chips active:           {len(oks)}/{n}")
     print(f"  Global batch size:      {global_batch}")
-    print(f"  Input seq length:       {SEQ_LEN}")
+    print(f"  Input seq length:       {seq_len}")
     print(f"  Warmup iters:           {warmup}")
     print(f"  Measured iters:         {iterations}")
     print(f"  CPU pinning:            {cores_per_worker} cores/worker")
@@ -282,8 +288,25 @@ def _orchestrate(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description="Multi-process DP=32 pplx-embed-v1-0.6B benchmark")
+    p = argparse.ArgumentParser(
+        description="Multi-process DP pplx-embed-v1-0.6B benchmark",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""\
+Supported (batch-size, seq-len) combinations with optimized settings:
+  (1, 512)    L1-backed activations
+  (8, 512)    L1-backed activations (TT_BATCHED_L1_PREFILL)
+  (32, 512)   DRAM-resident + big matmul grid
+  (1, 1024)   DRAM-resident + big matmul grid
+  (1, 2048)   DRAM-resident + big matmul grid
+  (8, 1024)   DRAM-resident + big matmul grid
+  (8, 2048)   DRAM-resident + big matmul grid
+  (32, 1024)  DRAM-resident + big matmul grid
+  (32, 2048)  DRAM-resident + big matmul grid
+""",
+    )
     p.add_argument("--num-devices", type=int, default=32)
+    p.add_argument("--batch-size", type=int, default=1, help="Per-chip batch size (default: 1)")
+    p.add_argument("--seq-len", type=int, default=512, help="Input sequence length (default: 512)")
     p.add_argument("--iterations", type=int, default=10)
     p.add_argument("--warmup", type=int, default=2)
     args = p.parse_args()
