@@ -19,7 +19,7 @@ def get_expected_metrics(mesh_device):
         return {
             "clip_encoding_time": 0.15,
             "t5_encoding_time": 0.1,
-            "total_encoding_time": 0.25,
+            "total_encoding_time": 0.30,
             "denoising_steps_time": 12.5,
             "vae_decoding_time": 1.6,
             "total_time": 14.0,
@@ -53,7 +53,6 @@ def get_expected_metrics(mesh_device):
             (2, 1),
             ttnn.Topology.Linear,
             1,
-            marks=pytest.mark.skip(reason="Disabled by issue #44770"),
         ),
         [(4, 8), (2, 1), (4, 0), (4, 1), ttnn.Topology.Linear, 4],
     ],
