@@ -494,6 +494,14 @@ def main() -> None:
             "Single-chip runs ignore mesh-specific parts."
         ),
     )
+    ap.add_argument(
+        "--llm-debug",
+        action="store_true",
+        help=(
+            "Deep LLM perf logging: show Tokens/sec in KEY METRICS and enable constrained-decoding debug logs "
+            "(ACE-Step BENCHMARK.md --llm-debug)."
+        ),
+    )
     args = ap.parse_args()
 
     from models.demos.ace_step_v1_5.official_lm_preprocess import configure_acestep_logging
@@ -654,6 +662,7 @@ def main() -> None:
             "split_device": bool(split_device),
             "mesh_ttnn_preprocess": bool(mesh_ttnn_preprocess),
             "session_pass": 0,
+            "llm_debug": bool(args.llm_debug),
         },
     )
 
@@ -929,10 +938,22 @@ def main() -> None:
             use_random_seed=False,
             seeds=[int(args.seed)],
             audio_format="wav",
-            constrained_decoding_debug=True,
+            constrained_decoding_debug=bool(args.llm_debug),
         )
         with perf.timed("five_hz_lm_generate"):
             filtered = build_filtered_dit_kwargs_for_handler(dit_handler, llm_handler, params, config, progress=None)
+        lm_perf = getattr(llm_handler, "last_lm_perf", None)
+        if isinstance(lm_perf, dict):
+            perf.set_params(**lm_perf)
+            if bool(args.llm_debug) and lm_perf.get("lm_num_tokens") and lm_perf.get("lm_gen_time_s"):
+                n_tok = int(lm_perf["lm_num_tokens"])
+                gen_s = float(lm_perf["lm_gen_time_s"])
+                if gen_s > 0.0:
+                    print(
+                        f"[ace_step_v1_5][perf][llm-debug] LM generated {n_tok} tokens in {gen_s:.2f}s "
+                        f"({n_tok / gen_s:.1f} tok/s)",
+                        flush=True,
+                    )
         qwen_safetensors = text_model_dir / "model.safetensors"
         if not qwen_safetensors.is_file():
             raise FileNotFoundError(f"Missing Qwen embedding weights at {qwen_safetensors}")
