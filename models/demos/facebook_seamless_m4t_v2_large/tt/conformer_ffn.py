@@ -52,11 +52,23 @@ class ConformerFfn(LightweightModule):
         intermediate_bias,
         output_weight,
         output_bias,
+        act_fn: str = "swish",
         weight_dtype=ttnn.bfloat16,
         weight_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     ):
         super().__init__()
         self.device = device
+        # Select activation in the same way as the reference
+        # ``conformer_ffn_forward(act_fn=...)``. ``"swish"`` and ``"silu"`` are
+        # aliases (both -> SiLU). The Conformer adapter layer uses ``"relu"``.
+        if act_fn in ("swish", "silu"):
+            self._act = ttnn.silu
+        elif act_fn == "gelu":
+            self._act = ttnn.gelu
+        elif act_fn == "relu":
+            self._act = ttnn.relu
+        else:
+            raise ValueError(f"Unsupported activation: {act_fn!r}")
 
         intermediate, hidden = intermediate_weight.shape
         self.hidden = int(hidden)
@@ -115,7 +127,7 @@ class ConformerFfn(LightweightModule):
             dtype=ttnn.bfloat16,
             compute_kernel_config=self.compute_kernel_config,
         )
-        activated = ttnn.silu(hidden, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        activated = self._act(hidden, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(hidden)
         output = ttnn.linear(
             activated,

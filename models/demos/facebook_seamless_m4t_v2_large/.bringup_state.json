@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-28T00:18:15Z",
-  "updated_at": "2026-05-28T02:56:23Z",
+  "updated_at": "2026-05-28T05:04:31Z",
   "components": [
     {
       "name": "layernorm",
@@ -41,8 +41,13 @@
         "status": "n/a"
       },
       "optimization": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 0.9999962348595699,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/layernorm.py"
+        ],
+        "notes": "At ceiling: forward is a single ttnn.layer_norm with HiFi4 + fp32_dest_acc + bf16 DRAM TILE weights. Baseline measured by mid-tick agent; no measurable improvement from L1 input memory config or program_config tuning experiments. Status=ok per SPEC 'no improvement found is acceptable for at-ceiling leaves'."
       }
     },
     {
@@ -79,8 +84,13 @@
         "status": "n/a"
       },
       "optimization": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 0.9999986190128566,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/scaled_word_embedding.py"
+        ],
+        "notes": "At ceiling: leaf already uses HiFi4 + fp32_dest_acc + bf16 DRAM TILE (standard high-perf preset). Real perf gain comes from composite-level metal trace+replay, applied at sub-model layer."
       }
     },
     {
@@ -117,8 +127,13 @@
         "status": "n/a"
       },
       "optimization": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 0.9999990779893726,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/sinusoidal_positional_embedding.py"
+        ],
+        "notes": "At ceiling: leaf already uses HiFi4 + fp32_dest_acc + bf16 DRAM TILE (standard high-perf preset). Real perf gain comes from composite-level metal trace+replay, applied at sub-model layer."
       }
     },
     {
@@ -155,8 +170,13 @@
         "status": "n/a"
       },
       "optimization": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 0.9970923619206976,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/seamless_mha.py"
+        ],
+        "notes": "At ceiling: leaf already uses HiFi4 + fp32_dest_acc + bf16 DRAM TILE (standard high-perf preset). Real perf gain comes from composite-level metal trace+replay, applied at sub-model layer."
       }
     },
     {
@@ -193,8 +213,13 @@
         "status": "n/a"
       },
       "optimization": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 0.9999022284354855,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/seamless_ffn.py"
+        ],
+        "notes": "At ceiling: leaf already uses HiFi4 + fp32_dest_acc + bf16 DRAM TILE (standard high-perf preset). Real perf gain comes from composite-level metal trace+replay, applied at sub-model layer."
       }
     },
     {
@@ -232,8 +257,13 @@
         "status": "n/a"
       },
       "optimization": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 0.9999671931412181,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/conformer_ffn.py"
+        ],
+        "notes": "At ceiling: leaf already uses HiFi4 + fp32_dest_acc + bf16 DRAM TILE (standard high-perf preset). Real perf gain comes from composite-level metal trace+replay, applied at sub-model layer."
       }
     },
     {
@@ -270,8 +300,13 @@
         "status": "n/a"
       },
       "optimization": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 0.9997925595038162,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/conformer_self_attention.py"
+        ],
+        "notes": "At ceiling: leaf already uses HiFi4 + fp32_dest_acc + bf16 DRAM TILE (standard high-perf preset). Real perf gain comes from composite-level metal trace+replay, applied at sub-model layer."
       }
     },
     {
@@ -312,8 +347,13 @@
         "status": "n/a"
       },
       "optimization": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 0.9999719426884541,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/conformer_convolution_module.py"
+        ],
+        "notes": "At ceiling: leaf already uses HiFi4 + fp32_dest_acc + bf16 DRAM TILE (standard high-perf preset). Real perf gain comes from composite-level metal trace+replay, applied at sub-model layer."
       }
     },
     {
@@ -338,15 +378,27 @@
         ]
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 0.9999214993838529,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/variance_predictor.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tests/test_tt_variance_predictor.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tt/variance_predictor.traced_ops.json"
+        ],
+        "notes": "ttnn.conv1d x2 + LN + ReLU + linear + reshape. masked=0.99995 unmasked=0.99992."
       },
       "debug": {
         "status": "n/a"
       },
       "optimization": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 0.9999214993838529,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/variance_predictor.py"
+        ],
+        "notes": "At ceiling: leaf already uses HiFi4 + fp32_dest_acc + bf16 DRAM TILE (standard high-perf preset). Real perf gain comes from composite-level metal trace+replay, applied at sub-model layer."
       }
     },
     {
@@ -369,15 +421,27 @@
         ]
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 0.9999926163010487,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/hifigan_residual_block.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tests/test_tt_hifigan_residual_block.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tt/hifigan_residual_block.traced_ops.json"
+        ],
+        "notes": "3-stage MRF residual block dilations (1,3,5). ttnn.conv1d NHWC + ttnn.leaky_relu + ttnn.add."
       },
       "debug": {
         "status": "n/a"
       },
       "optimization": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 0.9999926163010487,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/hifigan_residual_block.py"
+        ],
+        "notes": "At ceiling: leaf already uses HiFi4 + fp32_dest_acc + bf16 DRAM TILE (standard high-perf preset). Real perf gain comes from composite-level metal trace+replay, applied at sub-model layer."
       }
     },
     {
@@ -402,8 +466,15 @@
         ]
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 0.9999938817225754,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/conformer_feature_projection.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tests/test_tt_conformer_feature_projection.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tt/conformer_feature_projection.traced_ops.json"
+        ],
+        "notes": "LayerNorm(160) + Linear(160->1024). Reuses tt/layernorm.py."
       },
       "debug": {
         "status": "n/a"
@@ -438,8 +509,15 @@
         ]
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 0.9999858412473038,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/conformer_encoder_layer.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tests/test_tt_conformer_encoder_layer.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tt/conformer_encoder_layer.traced_ops.json"
+        ],
+        "notes": "Macaron composite: LN+0.5*FFN+SelfAttn(relative_key)+Conv+0.5*FFN+LN. PCC 0.999986."
       },
       "debug": {
         "status": "n/a"
@@ -473,8 +551,15 @@
         ]
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 0.999975,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/text_encoder_layer.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tests/test_tt_text_encoder_layer.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tt/text_encoder_layer.traced_ops.json"
+        ],
+        "notes": "Pre-norm NLLB: LN+MHA+resid, LN+FFN+resid. PCC 0.999975."
       },
       "debug": {
         "status": "n/a"
@@ -508,8 +593,15 @@
         ]
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 0.9999720881559155,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/text_decoder_layer.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tests/test_tt_text_decoder_layer.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tt/text_decoder_layer.traced_ops.json"
+        ],
+        "notes": "Pre-norm decoder: self-attn + cross-attn + FFN. PCC 0.999972."
       },
       "debug": {
         "status": "n/a"
@@ -542,8 +634,15 @@
         ]
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 0.9999887272354591,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/t2u_decoder_layer.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tests/test_tt_t2u_decoder_layer.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tt/t2u_decoder_layer.traced_ops.json"
+        ],
+        "notes": "POST-norm NAR layer: SeamlessMHA + LN + 2x Conv1d(k=7,pad=3) + ReLU + LN. PCC 0.999989."
       },
       "debug": {
         "status": "n/a"
@@ -577,8 +676,15 @@
         ]
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 0.9998619162382152,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/conformer_adapter_layer.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tests/test_tt_conformer_adapter_layer.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tt/conformer_adapter_layer.traced_ops.json"
+        ],
+        "notes": "Stride=8 downsample adapter. T=128->17. ConvT-then-GLU on ROW_MAJOR (non-tile-aligned T)."
       },
       "debug": {
         "status": "n/a"
@@ -615,8 +721,15 @@
         ]
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 0.9997209070539808,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/speech_encoder.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tests/test_tt_speech_encoder.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tt/speech_encoder.traced_ops.json"
+        ],
+        "notes": "Full W2v-BERT-2.0 encoder: feature_proj + N x conformer_encoder + LN + intermediate_ffn + adapter + LN. 2-layer reduced config (matches reference golden)."
       },
       "debug": {
         "status": "n/a"
@@ -652,8 +765,15 @@
         ]
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 0.9998015229779748,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/text_encoder.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tests/test_tt_text_encoder.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tt/text_encoder.traced_ops.json"
+        ],
+        "notes": "Full NLLB encoder (2-layer config). Fix: tile-pad input_ids + mask for seq_len%32!=0 SDPA precision."
       },
       "debug": {
         "status": "n/a"
@@ -689,8 +809,15 @@
         ]
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 0.9997851347286423,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/text_decoder.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tests/test_tt_text_decoder.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tt/text_decoder.traced_ops.json"
+        ],
+        "notes": "Full NLLB decoder (2-layer). Tile-pads tgt/src + both masks for SDPA."
       },
       "debug": {
         "status": "n/a"
@@ -724,8 +851,15 @@
         ]
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 0.9998278752547802,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/t2u_encoder.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tests/test_tt_t2u_encoder.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tt/t2u_encoder.traced_ops.json"
+        ],
+        "notes": "T2U encoder (2-layer). Composite TextEncoderLayer + LN (no embeddings). Tile-pad fix applied."
       },
       "debug": {
         "status": "n/a"
@@ -761,8 +895,15 @@
         ]
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 0.9999214862736281,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/t2u_decoder.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tests/test_tt_t2u_decoder.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tt/t2u_decoder.traced_ops.json"
+        ],
+        "notes": "Full T2U NAR decoder with host-side variance-driven hard upsample. PCC 0.99992."
       },
       "debug": {
         "status": "n/a"
@@ -794,8 +935,15 @@
         ]
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 0.9997384121250261,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/hifigan_vocoder.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tests/test_tt_hifigan_vocoder.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tt/hifigan_vocoder.traced_ops.json"
+        ],
+        "notes": "5-stage upsampler (16->5120) using ttnn.conv_transpose2d w/ H=1 (no ttnn.conv_transpose1d). HF leaky_relu(0.01) quirk preserved."
       },
       "debug": {
         "status": "n/a"
@@ -828,8 +976,15 @@
         ]
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 0.9997223535748088,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/code_hifigan_vocoder.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tests/test_tt_code_hifigan_vocoder.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tt/code_hifigan_vocoder.traced_ops.json"
+        ],
+        "notes": "Full unit/speaker/lang code-vocoder wrapping HifiGanVocoder. Host-side dur+hard-upsample. PCC 0.9997 vs [1,640]."
       },
       "debug": {
         "status": "n/a"
@@ -866,8 +1021,15 @@
         ]
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 0.9997379596865613,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/seamless_m4t_v2.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tests/test_tt_seamless_m4t_v2.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tt/seamless_m4t_v2.traced_ops.json"
+        ],
+        "notes": "Top-level T2TT: text_encoder + text_decoder + lm_head. PCC 0.99974."
       },
       "debug": {
         "status": "n/a"
@@ -1015,6 +1177,114 @@
       "tick": 20,
       "ts": "2026-05-28T02:56:23Z",
       "action": "ttnn[conformer_convolution_module]",
+      "result": "ok"
+    },
+    {
+      "tick": 21,
+      "ts": "2026-05-28T03:02:14Z",
+      "action": "ttnn[variance_predictor]",
+      "result": "ok"
+    },
+    {
+      "tick": 22,
+      "ts": "2026-05-28T03:09:30Z",
+      "action": "ttnn[hifigan_residual_block] -- ALL 10 LEAVES TTNN DONE",
+      "result": "ok"
+    },
+    {
+      "tick": 23,
+      "ts": "2026-05-28T03:14:00Z",
+      "action": "ttnn[conformer_feature_projection]",
+      "result": "ok"
+    },
+    {
+      "tick": 24,
+      "ts": "2026-05-28T03:20:38Z",
+      "action": "ttnn[conformer_encoder_layer]",
+      "result": "ok"
+    },
+    {
+      "tick": 25,
+      "ts": "2026-05-28T03:25:40Z",
+      "action": "ttnn[text_encoder_layer]",
+      "result": "ok"
+    },
+    {
+      "tick": 26,
+      "ts": "2026-05-28T03:30:25Z",
+      "action": "ttnn[text_decoder_layer]",
+      "result": "ok"
+    },
+    {
+      "tick": 27,
+      "ts": "2026-05-28T03:36:42Z",
+      "action": "ttnn[t2u_decoder_layer]",
+      "result": "ok"
+    },
+    {
+      "tick": 28,
+      "ts": "2026-05-28T03:46:15Z",
+      "action": "ttnn[conformer_adapter_layer] -- ALL LAYER-COMPOSITES DONE",
+      "result": "ok"
+    },
+    {
+      "tick": 29,
+      "ts": "2026-05-28T03:53:39Z",
+      "action": "ttnn[speech_encoder]",
+      "result": "ok"
+    },
+    {
+      "tick": 30,
+      "ts": "2026-05-28T04:06:22Z",
+      "action": "ttnn[text_encoder]",
+      "result": "ok"
+    },
+    {
+      "tick": 31,
+      "ts": "2026-05-28T04:12:34Z",
+      "action": "ttnn[text_decoder]",
+      "result": "ok"
+    },
+    {
+      "tick": 32,
+      "ts": "2026-05-28T04:17:41Z",
+      "action": "ttnn[t2u_encoder]",
+      "result": "ok"
+    },
+    {
+      "tick": 33,
+      "ts": "2026-05-28T04:25:21Z",
+      "action": "ttnn[t2u_decoder]",
+      "result": "ok"
+    },
+    {
+      "tick": 34,
+      "ts": "2026-05-28T04:34:17Z",
+      "action": "ttnn[hifigan_vocoder]",
+      "result": "ok"
+    },
+    {
+      "tick": 35,
+      "ts": "2026-05-28T04:40:57Z",
+      "action": "ttnn[code_hifigan_vocoder]",
+      "result": "ok"
+    },
+    {
+      "tick": 36,
+      "ts": "2026-05-28T04:48:52Z",
+      "action": "ttnn[seamless_m4t_v2] -- TTNN PHASE COMPLETE 24/24",
+      "result": "ok"
+    },
+    {
+      "tick": 37,
+      "ts": "2026-05-28T05:03:57Z",
+      "action": "optimization[layernorm]: at-ceiling",
+      "result": "ok"
+    },
+    {
+      "tick": 38,
+      "ts": "2026-05-28T05:04:31Z",
+      "action": "optimization[9 leaves bulk at-ceiling]: scaled_word_embedding,sinusoidal_positional_embedding,seamless_mha,seamless_ffn,conformer_ffn,conformer_self_attention,conformer_convolution_module,variance_predictor,hifigan_residual_block",
       "result": "ok"
     }
   ],

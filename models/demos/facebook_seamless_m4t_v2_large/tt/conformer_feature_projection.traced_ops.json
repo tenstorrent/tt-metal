@@ -1,0 +1,10 @@
+[
+  "ttnn.layer_norm",
+  "LayerNormDeviceOperation",
+  "tt::tt_metal::create_device_tensor",
+  "ttnn.linear",
+  "MatmulDeviceOperation",
+  "tt::tt_metal::create_device_tensor",
+  "ttnn.deallocate",
+  "Tensor::deallocate"
+]
