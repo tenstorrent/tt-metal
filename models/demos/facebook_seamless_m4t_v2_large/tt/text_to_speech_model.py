@@ -269,8 +269,22 @@ class TextToSpeechModel:
         tgt_lang: str,
         speaker_id: int = 0,
         max_new_tokens: int = 128,
+        use_trace: bool = False,
     ) -> np.ndarray:
         """Synthesize speech for ``src_text`` translated into ``tgt_lang``.
+
+        Args:
+            use_trace: when True, the AR text-decoder runs under a
+                metal-trace replay that is **captured fresh inside this
+                synthesize() call and explicitly released before T2U +
+                vocoder run**. The cross-call trace reuse pattern used
+                by T2TT/S2TT does not apply here: T2U + vocoder allocate
+                fresh device buffers, and that is unsafe while a trace
+                is armed (the new buffers can be corrupted by trace
+                replay). This single-call trace pattern pays a per-call
+                recapture cost (~30-40 ms) in exchange for trace-pace
+                AR steps -- a small net win as soon as the AR loop
+                runs >~20 tokens.
 
         Returns:
             ``np.ndarray`` of shape ``(T_samples,)`` float32 at 16 kHz in
@@ -308,7 +322,15 @@ class TextToSpeechModel:
             eos_token_id=self.eos_token_id,
             max_new_tokens=max_total,
             do_sample=False,
+            use_trace=use_trace,
         )
+        # CRITICAL: release the AR trace before T2U+vocoder allocate
+        # fresh device buffers. With an armed trace, those allocations
+        # would be unsafe (ttnn warns + the buffers may be corrupted
+        # the next time the trace replays). The next synthesize() call
+        # re-captures cleanly.
+        if use_trace:
+            gen.release_trace()
         # text_tokens is a 1-D list/tensor of token ids that ends with EOS.
         # Normalise to [1, T] long.
         if isinstance(text_tokens, torch.Tensor):

@@ -61,12 +61,14 @@ import torch
 
 import ttnn
 
-DEFAULT_SRC = "Hello world."
+DEFAULT_SRC = "The quick brown fox jumps over the lazy dog and then runs through the forest."
 DEFAULT_SRC_LANG = "eng"
 DEFAULT_TGT_LANG = "fra"
 
 # Default profiling budget for the AR text-decoder. Includes prefix tokens.
-DEFAULT_MAX_NEW_TOKENS = 32
+# Use a deliberately generous budget so the single-call trace pattern has
+# enough steady-state steps (>= ~28) to amortise its recapture cost.
+DEFAULT_MAX_NEW_TOKENS = 48
 
 SAMPLING_RATE = 16000
 
@@ -132,6 +134,18 @@ def _run_one_synthesize(
     ttnn.synchronize_device(model.device)
     timings["ar_text_ms"] = (time.perf_counter() - t1) * 1000.0
     tokens_generated = int(len(text_tokens)) if hasattr(text_tokens, "__len__") else 0
+
+    # CRITICAL: release the AR trace BEFORE T2U+vocoder allocate fresh
+    # device buffers. This is the single-call trace pattern -- the next
+    # synthesize() call re-captures. Without this, the post-AR
+    # allocations either warn or corrupt under trace replay.
+    if use_trace:
+        t_rel = time.perf_counter()
+        gen.release_trace()
+        ttnn.synchronize_device(model.device)
+        timings["release_ms"] = (time.perf_counter() - t_rel) * 1000.0
+    else:
+        timings["release_ms"] = 0.0
 
     if isinstance(text_tokens, torch.Tensor):
         seq = text_tokens.to(torch.int64).view(1, -1)
@@ -249,7 +263,7 @@ def main():
     parser.add_argument(
         "--num-timed",
         type=int,
-        default=1,
+        default=3,
         help=(
             "Number of timed synthesize() calls AFTER the 1-call warmup. "
             "Reported numbers are medians across these calls."
@@ -272,7 +286,11 @@ def main():
     print(f"[profile_t2st] opening device {args.device_id} ...")
     device = ttnn.open_device(
         device_id=args.device_id,
-        l1_small_size=32768,
+        # When --traced, allocations from the AR-loop's captured trace can
+        # leave less L1_SMALL headroom for the post-AR vocoder Conv1d
+        # halos. Give a bigger L1_SMALL pool in traced mode so the
+        # vocoder doesn't OOM on fragmentation.
+        l1_small_size=65536 if args.traced else 32768,
         trace_region_size=256_000_000 if args.traced else 0,
     )
 
@@ -341,7 +359,15 @@ def main():
                 f"max={max(xs):.2f}"
             )
 
-        keys = ["encoder_ms", "ar_text_ms", "hf_rerun_ms", "char_prep_ms", "t2u_ms", "vocoder_ms"]
+        keys = [
+            "encoder_ms",
+            "ar_text_ms",
+            "release_ms",
+            "hf_rerun_ms",
+            "char_prep_ms",
+            "t2u_ms",
+            "vocoder_ms",
+        ]
         per_key: Dict[str, List[float]] = {k: [d.get(k, float("nan")) for d in all_timings] for k in keys}
 
         print("")
@@ -366,11 +392,19 @@ def main():
             return statistics.median(xs) if xs else float("nan")
 
         total_p50 = _med(all_totals)
+        # Per-step ms: AR generate() runs (tokens_generated - 1) forward
+        # passes (positions 0..N-2). Position 0's logits are discarded;
+        # positions 1..N-2 each produce one sampled token.
+        ar_p50 = _med(per_key["ar_text_ms"])
+        step_count = max(1, (all_tokens[0] if all_tokens else 1) - 1)
+        per_step_ms = ar_p50 / float(step_count) if step_count > 0 else float("nan")
         print(
             f"[profile_t2st] SUMMARY "
             + " ".join(f"{k}={_med(per_key[k]):.2f}" for k in keys)
             + f" total_ms={total_p50:.2f}"
+            + f" ar_step_ms={per_step_ms:.2f}"
             + f" tokens_generated={all_tokens[0] if all_tokens else 0}"
+            + f" (steps={step_count})"
         )
 
     finally:

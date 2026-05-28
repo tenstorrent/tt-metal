@@ -418,15 +418,39 @@ class TextGenerator(LightweightModule):
         ``generate()`` calls (the captured trace is CROSS-CALL safe by
         design now that paged_update_cache + persistent position buffers
         replace the int-baked ``ttnn.update_cache``).
+
+        NOTE: we deliberately keep ``_decode_kernels_compiled = True``
+        across releases. The program cache survives ``ttnn.release_trace``,
+        so the next ``generate()`` call can go straight to the capture
+        step (which itself executes the body once, serving as pos 0)
+        without a redundant untraced warmup. This is what makes the
+        single-call trace pattern (used by T2ST/S2ST, where post-AR
+        T2U+vocoder allocations forbid an armed trace at end of call)
+        affordable.
         """
         if self._decode_trace_id is not None:
             try:
                 ttnn.release_trace(self.device, self._decode_trace_id)
             except Exception:
                 pass
+        if self._decode_trace_output_tt is not None:
+            try:
+                ttnn.deallocate(self._decode_trace_output_tt)
+            except Exception:
+                pass
         self._decode_trace_id = None
         self._decode_trace_output_tt = None
-        self._decode_kernels_compiled = False
+        # Do NOT reset _decode_kernels_compiled -- program cache survives release.
+
+    def release_trace(self) -> None:
+        """Public alias for :meth:`_release_decode_traces`.
+
+        Callers that orchestrate post-AR stages allocating fresh device
+        buffers (T2ST/S2ST T2U+vocoder) MUST call this between the AR
+        ``generate()`` and the next stage. With an armed trace, fresh
+        allocations are unsafe (the trace replay can corrupt them).
+        """
+        self._release_decode_traces()
 
     def _logits_from_hidden(self, hidden_tt: ttnn.Tensor) -> torch.Tensor:
         """Run hidden state through the LM head and return host ``[vocab]`` logits.
@@ -749,11 +773,17 @@ class TextGenerator(LightweightModule):
             if self.step_callback is not None:
                 self.step_callback(0, (_time.perf_counter() - _t0) * 1000.0, "warmup")
         else:
-            # Subsequent generate() calls: program cache already warm.
-            # Just replay the trace at pos=0 (logits discarded).
+            # Program cache is warm. Two sub-cases:
+            #  * cross-call-trace path (e.g. T2TT/S2TT): trace already
+            #    captured, just replay at pos=0 (logits discarded).
+            #  * single-call-trace path (T2ST/S2ST): the previous
+            #    generate() released the trace before T2U+vocoder, so
+            #    _decode_trace_id is None. We do NOTHING here -- the
+            #    capture call below will RUN the body once (with the
+            #    pos=0 buffers we just wrote) which serves as pos 0's
+            #    execution. This is what amortises away the otherwise
+            #    redundant untraced pos-0 warmup.
             if self._decode_trace_id is None:
-                # First-call warmup happened before but trace not yet
-                # captured (shouldn't happen given the ordering below).
                 pass
             else:
                 ttnn.execute_trace(self.device, self._decode_trace_id, cq_id=0, blocking=True)

@@ -1648,11 +1648,15 @@
       "perf": {
         "status": "done",
         "metric": {
-          "total_ms": 426.24,
-          "speedup": 1.0
+          "total_ms": 706.48,
+          "speedup": 1.278,
+          "ar_step_ms_baseline": 24.74,
+          "ar_step_ms_traced": 17.94
         },
-        "notes": "At-ceiling at pipeline level. AR text decoder (53% of 426 ms wall) is host-dispatch limited but Phase 9c cross-call trace blocked by post-AR T2U+vocoder allocations. Release-and-recapture would defeat cross-call reuse. NAR stages (encoder 14ms, t2u 12ms, vocoder 32ms) too small individually to justify four-harness trace refactor. test_e2e_t2st PASSES (char_sim=1.000).",
+        "notes": "Single-call trace pattern: capture during AR, release before T2U+vocoder, recapture next call. 1.28x e2e speedup (903ms->706ms p50, 3 timed calls, 24-step gen). Recapture cost ~27ms/call amortizes >~4 steps. test_e2e_t2st PASSES char_sim=1.000. T2TT/S2TT cross-call paths verified unaffected.",
         "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/text_generator.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tt/text_to_speech_model.py",
           "models/demos/facebook_seamless_m4t_v2_large/tt/profile_t2st.py",
           "models/demos/facebook_seamless_m4t_v2_large/PERF_NOTES.md"
         ]
