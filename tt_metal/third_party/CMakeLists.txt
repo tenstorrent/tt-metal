@@ -147,6 +147,32 @@ endif()
 add_subdirectory(tracy/csvexport)
 add_subdirectory(tracy/capture)
 
+# Land the host-side Tracy CLI tools at ${CMAKE_BINARY_DIR}/tools/profiler/bin so they line
+# up with PROFILER_BIN_DIR in tools/tracy/common.py and the path baked into the artifact
+# packaging step (.github/workflows/build-artifact.yaml: TRACY_CLI_DIR=build/tools/profiler/bin)
+# and the CLI smoke test (tests/scripts/tracy/tracy_cli_smoke_test.sh: TRACY_BIN_DIR). Vendored
+# Tracy CMake puts them in their own subdirs by default; override here so we don't touch the
+# vendored CMakeLists.
+set(TRACY_CLI_BIN_DIR "${CMAKE_BINARY_DIR}/tools/profiler/bin")
+set_target_properties(
+    tracy-csvexport
+    tracy-capture
+    tracy-capture-daemon
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            "${TRACY_CLI_BIN_DIR}"
+)
+
+# Aggregate target referenced by the artifact workflow's failure message
+# ("Build tracy_profiler_cli_tools before packaging the profiler artifact.") so a single
+# `cmake --build ... --target tracy_profiler_cli_tools` produces both binaries.
+add_custom_target(
+    tracy_profiler_cli_tools
+    DEPENDS
+        tracy-csvexport
+        tracy-capture
+)
+
 # Tracy profiler WASM viewer (Emscripten).
 #
 # emsdk is fetched via CPM (just the installer/manager scripts ~250 KB). The
