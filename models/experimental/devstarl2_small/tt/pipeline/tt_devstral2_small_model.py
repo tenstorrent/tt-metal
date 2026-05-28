@@ -84,9 +84,9 @@ class TtDevstral2SmallModel(LightweightModule):
     def language_model(self, value: TtMinistral3Model) -> None:
         self._language_model = value
 
-    def get_projected_image_features(self, pixel_values, image_sizes, position_ids_tt: ttnn.Tensor) -> ttnn.Tensor:
+    def get_projected_image_features(self, pixel_values, image_sizes, position_ids) -> ttnn.Tensor:
         """Last vision hidden states through projector; matches HF ``get_image_features`` concatenation."""
-        vt = self.vision_tower(pixel_values, image_sizes, position_ids_tt)
+        vt = self.vision_tower(pixel_values, image_sizes, position_ids)
         seq_len, hidden = int(vt.shape[2]), int(vt.shape[3])
         tokens = ttnn.reshape(vt, (seq_len, hidden))
         if tokens.memory_config().buffer_type == ttnn.BufferType.L1:

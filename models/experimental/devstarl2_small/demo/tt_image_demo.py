@@ -113,12 +113,11 @@ def _image_sizes_list_from_batch(image_sizes: torch.Tensor) -> list[tuple[int, i
     return [(int(image_sizes[i, 0].item()), int(image_sizes[i, 1].item())) for i in range(image_sizes.shape[0])]
 
 
-def _vision_position_ids_tt(
+def _vision_position_ids(
     hf_inner: Mistral3Model,
     pixel_values: torch.Tensor,
     image_sizes_list: list[tuple[int, int]],
-    mesh_device,
-) -> ttnn.Tensor:
+) -> torch.Tensor:
     vision_cfg = hf_inner.config.vision_config
     patch_sz = int(vision_cfg.patch_size)
     hf_vm = hf_inner.vision_tower
@@ -126,15 +125,7 @@ def _vision_position_ids_tt(
     pv = pixel_values.to(dtype=target_dtype)
     pe_conv = hf_vm.patch_conv(pv)
     plist = [e[..., : s[0] // patch_sz, : s[1] // patch_sz] for e, s in zip(pe_conv, image_sizes_list)]
-    position_ids = position_ids_in_meshgrid(plist, max_width=_max_patch_grid_side(vision_cfg))
-    return ttnn.from_torch(
-        position_ids.unsqueeze(0).to(torch.int32),
-        device=mesh_device,
-        dtype=ttnn.uint32,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
+    return position_ids_in_meshgrid(plist, max_width=_max_patch_grid_side(vision_cfg))
 
 
 def _merge_image_into_text_embeds(
@@ -412,9 +403,8 @@ def run_tt(
             embed_dtype=embed_dtype,
         )
 
-        pos_vision = _vision_position_ids_tt(hf_inner, pixel_values, image_sizes_list, mesh_device)
+        pos_vision = _vision_position_ids(hf_inner, pixel_values, image_sizes_list)
         img_tt = tt_devstral.get_projected_image_features(pixel_values, image_sizes_list, pos_vision)
-        ttnn.deallocate(pos_vision)
 
         img_torch = ttnn.to_torch(img_tt, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
         ttnn.deallocate(img_tt)
