@@ -229,12 +229,7 @@
 #define MEM_ERISC_FABRIC_ROUTING_PATH_SIZE_2D COMPRESSED_ROUTING_PATH_SIZE_2D
 #define MEM_ERISC_FABRIC_ROUTING_PATH_SIZE MEM_ERISC_FABRIC_ROUTING_PATH_SIZE_2D  // Union size
 #define MEM_ERISC_MAILBOX_SIZE 12768
-// Bumped 25K -> 32K to fit the current FABRIC_2D router program (~26000 bytes)
-// on ACTIVE_ETH cores for single-galaxy multi-mesh paths
-// (e.g. dual 4x4 / dual 2x4 cross-mesh with assign_z_direction=true). ACTIVE_ETH
-// has no worker_l1_size-equivalent runtime knob, so the HAL constant is the only
-// lever. See related #43079 / #43085.
-#define MEM_ERISC_KERNEL_CONFIG_SIZE (32 * 1024)
+#define MEM_ERISC_KERNEL_CONFIG_SIZE (25 * 1024)
 #define MEM_ERISC_BASE 0
 
 // From the top of L1. Common.
