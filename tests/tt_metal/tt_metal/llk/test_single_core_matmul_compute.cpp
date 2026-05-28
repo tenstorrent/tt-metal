@@ -26,8 +26,8 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
-#include <tt-metalium/experimental/host_api.hpp>
+#include "impl/dataflow_buffer/dataflow_buffer.hpp"
+#include "impl/host_api/temp_quasar_api.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include "llk_device_fixture.hpp"
