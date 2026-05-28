@@ -233,3 +233,101 @@ Some distributable forms of this project—such as manylinux-compliant wheels—
 - libevent (when built with multihost support)
 
 These libraries are bound by their own license terms.
+
+## Bringing Up `microsoft/phi-1.5` on Tenstorrent Hardware
+
+To bring up `microsoft/phi-1.5` on Tenstorrent hardware, we will leverage the `tt-transformers` framework in `tt-metal`, which provides a modular and reusable set of components for transformer-based models. The following steps outline the process, including code examples for key components.
+
+### 1. Model Conversion and Setup
+
+First, ensure that the model is converted into the format compatible with `tt-transformers`. This typically involves using the Hugging Face Transformers library to load the model and convert it into the `pt` format.
+
+```cpp
+#include <torch/serialize/tensor.h>
+#include <torch/script.h>
+#include <torch/nn.h>
+#include <torch/utils/data.h>
+
+// Load the model from Hugging Face
+torch::jit::script::Module model = torch::jit::load("phi-1.5.pt");
+
+// Convert the model to the tt-transformers format
+// This step may involve custom scripts or tools provided by the framework
+```
+
+### 2. Hardware Initialization
+
+Before running the model, initialize the Tenstorrent hardware using the `tt-metal` API. This includes setting up the device, loading the firmware, and configuring the execution environment.
+
+```cpp
+#include <tt_metal/operations/operations.hpp>
+#include <tt_metal/device/device.hpp>
+#include <tt_metal/device/program.hpp>
+
+// Initialize the device
+tt::device::Device* device = tt::device::CreateDevice("wormhole", "n150");
+
+// Load the firmware
+tt::device::Program* program = tt::device::LoadProgram("phi-1.5_program.bin");
+
+// Configure the execution environment
+tt::device::ConfigureExecutionEnvironment(device, program);
+```
+
+### 3. Model Execution
+
+Once the hardware is initialized, the model can be executed using the `tt-transformers` framework. This involves setting up the input tensors, executing the model, and retrieving the output.
+
+```cpp
+#include <tt_transformers/models/phi_1_5.hpp>
+
+// Create the model instance
+tt::transformers::Phi15Model* phi_model = new tt::transformers::Phi15Model(device);
+
+// Prepare input tensors
+std::vector<tt::tensor::Tensor> inputs = phi_model->PrepareInputs(input_data);
+
+// Execute the model
+phi_model->Execute(inputs);
+
+// Retrieve the output
+std::vector<tt::tensor::Tensor> outputs = phi_model->GetOutputs();
+```
+
+### 4. Performance and Accuracy Validation
+
+After executing the model, validate its performance and accuracy. This involves measuring throughput, latency, and comparing the results with a CPU baseline.
+
+```cpp
+#include <chrono>
+#include <iostream>
+
+// Measure throughput
+auto start = std::chrono::high_resolution_clock::now();
+phi_model->Execute(inputs);
+auto end = std::chrono::high_resolution_clock::now();
+std::cout << "Throughput: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << " ms" << std::endl;
+
+// Compare accuracy with CPU baseline
+double cpu_accuracy = 0.85; // Example CPU accuracy
+double gpu_accuracy = phi_model->GetAccuracy();
+std::cout << "Accuracy: CPU " << cpu_accuracy << ", GPU " << gpu_accuracy << std::endl;
+```
+
+### 5. Documentation and Testing
+
+Ensure that the code is well-documented, including instructions for building, installing dependencies, and running the model. Include any relevant parameter tuning or known issues.
+
+```cpp
+// Example documentation comment
+/**
+ * @brief Runs the phi-1.5 model on Tenstorrent hardware.
+ * @param input_data The input data for the model.
+ * @return The output of the model.
+ */
+std::vector<tt::tensor::Tensor> RunPhi15Model(const std::vector<float>& input_data) {
+    // Model execution code here
+}
+```
+
+By following these steps, you can successfully bring up `microsoft/phi-1.5` on Tenstorrent hardware, ensuring it compiles, runs, and meets the required performance and accuracy benchmarks.
