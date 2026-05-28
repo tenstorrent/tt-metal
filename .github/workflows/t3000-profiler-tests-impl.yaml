@@ -1,4 +1,4 @@
-name: "[internal] Galaxy profiler tests impl"
+name: "[internal] T3000 profiler tests impl"
 
 on:
   workflow_call:
@@ -35,7 +35,7 @@ jobs:
     outputs:
       matrix: ${{ steps.build-matrix.outputs.matrix }}
     env:
-      TESTS_YAML_PATH: ./tests/pipeline_reorg/galaxy_profiler_tests.yaml
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/t3k_profiler_tests.yaml
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -61,10 +61,10 @@ jobs:
         run: |
           python3 .github/scripts/utils/prepare_test_matrix.py \
             ${{ env.TESTS_YAML_PATH }} \
-            "wh_galaxy" \
+            "wh_llmbox" \
             ./.github/sku_config.yaml
 
-  galaxy-profiler-tests:
+  t3000-profiler-tests:
     needs: load-test-matrix
     strategy:
       fail-fast: false
@@ -86,14 +86,14 @@ jobs:
         PROFILER_OUTPUT_DIR: /work/generated/profiler/reports
         DONT_USE_VIRTUAL_ENVIRONMENT: 1
       volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - ${{ github.workspace }}/docker-job:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
         - /mnt/MLPerf:/mnt/MLPerf:ro
       options: "--device /dev/tenstorrent"
     defaults:
       run:
         shell: bash
-        working-directory: /work # https://github.com/actions/runner/issues/878
+        working-directory: /work
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -115,7 +115,7 @@ jobs:
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
-          bash tests/scripts/wh_6u/run_wh_6u_profiler_tests.sh ${{ matrix.test-group.cmd }}
+          bash tests/scripts/t3000/run_t3000_profiler_tests.sh ${{ matrix.test-group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}

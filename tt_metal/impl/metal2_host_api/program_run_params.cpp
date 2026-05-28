@@ -24,6 +24,17 @@ namespace tt::tt_metal::experimental::metal2_host_api {
 // Type alias for readability
 using KernelRTASchema = detail::ProgramImpl::KernelRTASchema;
 
+// Helpers for vararg-value access (now living on AdvancedKernelRunParams).
+const std::vector<AdvancedKernelRunParams::NodeVarargs>& kernel_runtime_varargs(
+    const ProgramRunParams::KernelRunParams& kp) {
+    return kp.advanced_options.runtime_varargs;
+}
+
+const AdvancedKernelRunParams::CommonVarargs& kernel_common_runtime_varargs(
+    const ProgramRunParams::KernelRunParams& kp) {
+    return kp.advanced_options.common_runtime_varargs;
+}
+
 // Internal validation function - validates a TensorArg list against the Program's TensorParameters.
 // Shared by SetProgramRunParameters (full path) and UpdateTensorArgs (partial path).
 //   - No duplicate tensor_parameter_name entries
@@ -148,7 +159,7 @@ void ValidateProgramRunParams(const Program& program, const ProgramRunParams& pa
 
         // Validate vararg RTA counts per node
         std::unordered_set<NodeCoord> nodes_with_vararg_params;
-        for (const auto& [node_coord, args] : kernel_params.runtime_varargs) {
+        for (const auto& [node_coord, args] : kernel_runtime_varargs(kernel_params)) {
             auto [it_node, node_inserted] = nodes_with_vararg_params.insert(node_coord);
             TT_FATAL(
                 node_inserted,
@@ -189,11 +200,11 @@ void ValidateProgramRunParams(const Program& program, const ProgramRunParams& pa
 
         // Validate vararg CRTA count
         TT_FATAL(
-            kernel_params.common_runtime_varargs.size() == schema->num_common_runtime_varargs,
+            kernel_common_runtime_varargs(kernel_params).size() == schema->num_common_runtime_varargs,
             "Kernel '{}' expects {} vararg common runtime args, but {} were provided",
             kernel_name,
             schema->num_common_runtime_varargs,
-            kernel_params.common_runtime_varargs.size());
+            kernel_common_runtime_varargs(kernel_params).size());
 
         // Validate named RTAs: every declared name set per-node, no extras, no duplicate node entries.
         const auto& named_rta_names = schema->named_runtime_args;
@@ -489,7 +500,7 @@ void SetProgramRunParameters(Program& program, const ProgramRunParams& params) {
 
         // Build a node -> vararg-values-span lookup.
         std::unordered_map<NodeCoord, const std::vector<uint32_t>*> varargs_by_node;
-        for (const auto& [node, args] : kernel_params.runtime_varargs) {
+        for (const auto& [node, args] : kernel_runtime_varargs(kernel_params)) {
             varargs_by_node[node] = &args;
         }
 
@@ -546,7 +557,7 @@ void SetProgramRunParameters(Program& program, const ProgramRunParams& params) {
         std::vector<uint32_t> combined_crtas;
         combined_crtas.reserve(
             schema->named_common_runtime_args.size() + binding_section_words +
-            kernel_params.common_runtime_varargs.size());
+            kernel_common_runtime_varargs(kernel_params).size());
         for (const auto& name : schema->named_common_runtime_args) {
             auto v_it = kernel_params.named_common_runtime_args.find(name);
             TT_FATAL(
@@ -568,8 +579,8 @@ void SetProgramRunParameters(Program& program, const ProgramRunParams& params) {
         }
         combined_crtas.insert(
             combined_crtas.end(),
-            kernel_params.common_runtime_varargs.begin(),
-            kernel_params.common_runtime_varargs.end());
+            kernel_common_runtime_varargs(kernel_params).begin(),
+            kernel_common_runtime_varargs(kernel_params).end());
 
         // Set common runtime args
         // TODO: Why on earth does SetCommonRuntimeArgs() only work the first time??
