@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-28T00:18:15Z",
-  "updated_at": "2026-05-28T00:25:44Z",
+  "updated_at": "2026-05-28T00:33:43Z",
   "components": [
     {
       "name": "layernorm",
@@ -18,8 +18,15 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 1.0,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/reference/functional.py",
+          "models/demos/facebook_seamless_m4t_v2_large/reference/test_functional.py",
+          "models/demos/facebook_seamless_m4t_v2_large/reference/golden/layernorm.pt"
+        ],
+        "notes": "F.layer_norm wrapper; bit-equiv to nn.LayerNorm on [1,128,1024]"
       },
       "ttnn": {
         "status": "pending",
@@ -44,8 +51,15 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 1.0,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/reference/functional.py",
+          "models/demos/facebook_seamless_m4t_v2_large/reference/golden/scaled_word_embedding.pt",
+          "models/demos/facebook_seamless_m4t_v2_large/reference/_run_scaled_word_embedding_golden.py"
+        ],
+        "notes": "Bit-equiv to HF SeamlessM4Tv2ScaledWordEmbedding (hidden=1024, vocab=256102, scale=sqrt(1024)=32)"
       },
       "ttnn": {
         "status": "pending",
@@ -70,8 +84,15 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 1.0,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/reference/functional.py",
+          "models/demos/facebook_seamless_m4t_v2_large/reference/test_functional_sinusoidal_positional_embedding.py",
+          "models/demos/facebook_seamless_m4t_v2_large/reference/golden/sinusoidal_positional_embedding.pt"
+        ],
+        "notes": "Bit-equiv to HF SeamlessM4Tv2SinusoidalPositionalEmbedding; 5/5 pytest. Both encoder and decoder-incremental modes covered."
       },
       "ttnn": {
         "status": "pending",
@@ -96,8 +117,15 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 0.9999999999999992,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/reference/functional.py",
+          "models/demos/facebook_seamless_m4t_v2_large/reference/test_functional.py",
+          "models/demos/facebook_seamless_m4t_v2_large/reference/golden/seamless_mha.pt"
+        ],
+        "notes": "BART-style MHA with bias; self+cross modes, [1,64,1024] x 16 heads. KV-cache deferred to decoder layer integration."
       },
       "ttnn": {
         "status": "pending",
@@ -706,6 +734,12 @@
       "tick": 1,
       "ts": "2026-05-28T00:25:44Z",
       "action": "architecture[all]",
+      "result": "ok"
+    },
+    {
+      "tick": 2,
+      "ts": "2026-05-28T00:33:43Z",
+      "action": "reference[layernorm,scaled_word_embedding,sinusoidal_positional_embedding,seamless_mha]",
       "result": "ok"
     }
   ],
