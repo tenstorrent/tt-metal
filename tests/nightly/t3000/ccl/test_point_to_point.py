@@ -309,9 +309,7 @@ def test_point_to_point_cache_hit_with_output_tensor(mesh_device):
         tt_in = _to_device(input_torch)
         # Allocate a fresh output buffer for each iter so the buffer address differs.
         tt_out = _to_device(torch.zeros(multi_device_shape, dtype=torch.bfloat16))
-        out = ttnn.point_to_point(
-            tt_in, coord0, coord1, topology=ttnn.Topology.Linear, output_tensor=tt_out
-        )
+        out = ttnn.point_to_point(tt_in, coord0, coord1, topology=ttnn.Topology.Linear, output_tensor=tt_out)
         out_torch = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
         ttnn.deallocate(tt_in)
         ttnn.deallocate(tt_out)
