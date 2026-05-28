@@ -162,7 +162,6 @@ jobs:
               "additional-server-args": "--data_parallel_size 2 --async-scheduling",
               "structured-output": true,
               "sampling-tests": true,
-              "sampling-test-filter": "not test_get_tt_config_rejects_mismatched_config_sources",
               "multimodal": false,
               "owner_id": "U08GELBB1AP"
             },
