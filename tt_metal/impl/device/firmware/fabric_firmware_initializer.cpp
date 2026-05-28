@@ -504,10 +504,10 @@ void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms)
 }
 
 uint32_t FabricFirmwareInitializer::get_fabric_router_sync_timeout_ms() const {
-    if (rtoptions_.get_simulator_enabled()) {
-        return 15000;
-    }
     auto timeout = rtoptions_.get_fabric_router_sync_timeout_ms();
+    if (rtoptions_.get_simulator_enabled()) {
+        return timeout.value_or(15000);
+    }
     return timeout.value_or(10000);
 }
 
