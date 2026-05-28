@@ -712,6 +712,13 @@ class Generator(WarmupForwardMixin):
             logits_source = self.tt_logits_accumulated_batched if use_batched_prefill else self.tt_logits_accumulated
             concat_sub_core_grids = getattr(self.model_args, "sub_core_grids", None)
 
+            if not explicit_seeded_prefill:
+                # Build the slot batch while the prefill sub-device manager is
+                # still active.  The default concat path is correct for this
+                # interleaved logits layout, but cannot run after switching to
+                # the narrower decode sub-device manager.
+                tt_logits_batch = ttnn.concat(logits_source, dim=2)
+
             # Sample using the sampling module. Logits are in sharded format
             # (before all-gather), same as decode.
             self.model.switch_mode("decode")
@@ -802,8 +809,7 @@ class Generator(WarmupForwardMixin):
                     sampling_module.reset_prompt_tokens(sampling_prompt_tokens)
                 sampling_module.reset_output_state(slot_output_tokens)
             else:
-                # Concatenate along slot dimension -> [1, 1, 32, vocab_shard]
-                tt_logits_batch = ttnn.concat(logits_source, dim=2, sub_core_grids=concat_sub_core_grids)
+                # tt_logits_batch was concatenated before switching to decode.
                 sampling_params = _scatter_params_to_slots(sampling_params, empty_slots)
                 # print("sampling_params_scattered", sampling_params, "empty_slots", empty_slots)
 
