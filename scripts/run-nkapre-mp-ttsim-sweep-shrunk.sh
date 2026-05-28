@@ -34,6 +34,7 @@ unset TT_METAL_SLOW_DISPATCH_MODE
 export TT_METAL_DISABLE_SFPLOADMACRO=1
 export TT_METAL_DRAM_BACKED_CQ=1
 export TT_METAL_SIMULATOR_CQ_WAIT_CLOCKS=10000
+export AGENT_LOG_PATH="${AGENT_LOG_PATH:-/data/rsong/tt-metal-fork/.cursor/debug-ae7d0a.log}"
 export LD_LIBRARY_PATH="${BUILD_DIR}/tt_metal:${BUILD_DIR}/tt_metal/third_party/umd/lib:${BUILD_DIR}/ttnn:${BUILD_DIR}/tt_stl:${BUILD_DIR}/lib:${LD_LIBRARY_PATH:-}"
 export PATH="${REPO_ROOT}/python_env/bin:${PATH}"
 
