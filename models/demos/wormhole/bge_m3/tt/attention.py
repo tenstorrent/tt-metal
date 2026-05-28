@@ -16,7 +16,10 @@ _SDPA_Q_CHUNK_MAIN = 128
 _SDPA_K_CANDIDATES_MAIN = (256, 128)
 _SDPA_Q_CHUNKS_FLEX = (256, 128, 64, 32)
 _SDPA_K_CHUNKS_FLEX = (256, 128, 64, 32)
-_SDPA_B1S512_K_CHUNK = 128
+# B1/S512 sweep (k_chunk x grid) showed q=32, k=512, grid=8x8 is the winner:
+# 38.7 us/call vs prod (q=128, k=128, grid=11x10) ~43 us/call -- 10% faster.
+_SDPA_B1S512_Q_CHUNK = 32
+_SDPA_B1S512_K_CHUNK = 512
 _MAX_QKV_MM_CHUNK_SEQ_LEN = 8192
 _MAX_WO_MM_CHUNK_SEQ_LEN = 8192
 
@@ -267,7 +270,7 @@ def _sdpa_chunks_for_seq_len(seq_len, batch_size=None):
         if seq_len == 512 and batch_size == 32:
             return 256, 512
         if seq_len == 512 and batch_size == 1:
-            return _SDPA_Q_CHUNK_MAIN, _SDPA_B1S512_K_CHUNK
+            return _SDPA_B1S512_Q_CHUNK, _SDPA_B1S512_K_CHUNK
         for k_chunk in _SDPA_K_CANDIDATES_MAIN:
             if k_chunk <= seq_len and seq_len % k_chunk == 0:
                 return _SDPA_Q_CHUNK_MAIN, k_chunk
@@ -298,8 +301,14 @@ def _sdpa_compute_grid(mesh_device):
 
 def _sdpa_program_config(seq_len, mesh_device, batch_size=None):
     q_chunk, k_chunk = _sdpa_chunks_for_seq_len(seq_len, batch_size=batch_size)
+    grid = _sdpa_compute_grid(mesh_device)
+    # B1/S512 on Blackhole: 8x8=64 cores beats the default 11x10=110 grid.
+    # Sweep showed ~10% lower SDPA device time at smaller grid (less dispatch
+    # overhead vs. number of head-batch pairs).
+    if seq_len == 512 and batch_size == 1 and mesh_device is not None and ttnn_is_blackhole(mesh_device):
+        grid = ttnn.CoreCoord(8, 8)
     kwargs = {
-        "compute_with_storage_grid_size": _sdpa_compute_grid(mesh_device),
+        "compute_with_storage_grid_size": grid,
         "q_chunk_size": q_chunk,
         "k_chunk_size": k_chunk,
         "exp_approx_mode": _sdpa_exp_approx(seq_len, mesh_device),
