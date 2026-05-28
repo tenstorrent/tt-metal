@@ -63,5 +63,5 @@ void kernel_main() {
     /* wait on IDMA to finish */
     while (!idma_acked_cmdbuf_0());
 
-    DPRINT << "IDMA 1D strided done: " << DEC() << num_elements << " elements, src_stride=" << src_stride << ENDL();
+    DPRINT("IDMA 1D strided done: {} elements, src_stride={}\n", num_elements, src_stride);
 }
