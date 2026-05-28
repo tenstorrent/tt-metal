@@ -156,6 +156,14 @@ void kernel_main() {
     constexpr uint32_t BETA_ELEM_BYTES = get_compile_time_arg_val(14);
     constexpr uint32_t INV_N_IS_FP32 = get_compile_time_arg_val(15);
     constexpr uint32_t AFFINE_LAYOUT_CODE = get_compile_time_arg_val(16);  // 0=TILE, 1=RM
+    // Refinement 3: number of valid rows in the last HW-tile-row (1..32).
+    // == 32 when HW % 32 == 0 (the Phase 0 path). For hw_non_aligned the
+    // last r in the (g, T_in_g_span, r) loop reads only HW_LAST_ROWS sticks
+    // from the input tensor (RM input only — for TILE input the trailing
+    // rows of the last tile are already zero-padded by ttnn's tilize), and
+    // zero-fills the remaining rows of the L1 staging block so the masked
+    // tile contributes zero to the reduction.
+    constexpr uint32_t HW_LAST_ROWS = get_compile_time_arg_val(17);
 
     // Per-tensor "chunk bytes" = 32 channels worth of one element-row.
     constexpr uint32_t INPUT_CHUNK_BYTES = TILE_DIM * INPUT_ELEM_BYTES;
@@ -164,7 +172,7 @@ void kernel_main() {
 
     // TensorAccessorArgs — declared unconditionally with placeholders for absent
     // tensors, chained via next_compile_time_args_offset().
-    constexpr auto input_args = TensorAccessorArgs<17>();
+    constexpr auto input_args = TensorAccessorArgs<18>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
 
@@ -250,19 +258,24 @@ void kernel_main() {
                     } else {
                         // ROW_MAJOR_LAYOUT input — read 32 sticks (one tile-row block) of
                         // the c-tile column T. Valid bytes in this chunk may be < INPUT_CHUNK_BYTES
-                        // when C is not tile-aligned (partial last C-tile).
+                        // when C is not tile-aligned (partial last C-tile). Refinement 3:
+                        // for hw_non_aligned, the last r-iteration reads only HW_LAST_ROWS
+                        // sticks instead of 32 — the remaining rows are zero-filled so they
+                        // contribute zero to the reduction.
                         const uint32_t valid_ch = (T_base + TILE_DIM <= C) ? TILE_DIM : (C - T_base);
                         const uint32_t valid_bytes = valid_ch * INPUT_ELEM_BYTES;
+                        const uint32_t valid_rows = (r + 1 == Ht) ? HW_LAST_ROWS : TILE_DIM;
                         const uint32_t start_stick = n * HW + r * TILE_DIM;
                         const uint32_t byte_offset = T * INPUT_CHUNK_BYTES;
 
                         cb_reserve_back(CB_INPUT_RM_R, TILE_DIM);
                         uint32_t l1_base = get_write_ptr(CB_INPUT_RM_R);
-                        // If partial last-C-tile, zero-fill the buffer so padding lanes are 0.
-                        if (valid_bytes < INPUT_CHUNK_BYTES) {
+                        // Zero-fill on any partial-* (C non-aligned or last-tile-row HW
+                        // partial). When neither is partial, skip the cost.
+                        if (valid_bytes < INPUT_CHUNK_BYTES || valid_rows < TILE_DIM) {
                             zero_l1(l1_base, TILE_DIM * INPUT_CHUNK_BYTES);
                         }
-                        for (uint32_t row = 0; row < TILE_DIM; ++row) {
+                        for (uint32_t row = 0; row < valid_rows; ++row) {
                             uint64_t noc_addr = input_accessor.get_noc_addr(start_stick + row, byte_offset);
                             noc_async_read(noc_addr, l1_base + row * INPUT_CHUNK_BYTES, valid_bytes);
                         }
@@ -368,16 +381,20 @@ void kernel_main() {
                     noc_async_read_barrier();
                     cb_push_back(CB_INPUT_TILES_A, 1);
                 } else {
+                    // Phase A RM read. Same partial-row handling as phase R: for the
+                    // last HW-tile-row (r == Ht - 1), only HW_LAST_ROWS sticks are
+                    // logically present in the activation tensor; zero-fill the rest.
                     const uint32_t valid_bytes = c_in_tile * INPUT_ELEM_BYTES;
+                    const uint32_t valid_rows = (r + 1 == Ht) ? HW_LAST_ROWS : TILE_DIM;
                     const uint32_t start_stick = n * HW + r * TILE_DIM;
                     const uint32_t byte_offset = T * INPUT_CHUNK_BYTES;
 
                     cb_reserve_back(CB_INPUT_RM_A, TILE_DIM);
                     uint32_t l1_base = get_write_ptr(CB_INPUT_RM_A);
-                    if (valid_bytes < INPUT_CHUNK_BYTES) {
+                    if (valid_bytes < INPUT_CHUNK_BYTES || valid_rows < TILE_DIM) {
                         zero_l1(l1_base, TILE_DIM * INPUT_CHUNK_BYTES);
                     }
-                    for (uint32_t row = 0; row < TILE_DIM; ++row) {
+                    for (uint32_t row = 0; row < valid_rows; ++row) {
                         uint64_t noc_addr = input_accessor.get_noc_addr(start_stick + row, byte_offset);
                         noc_async_read(noc_addr, l1_base + row * INPUT_CHUNK_BYTES, valid_bytes);
                     }

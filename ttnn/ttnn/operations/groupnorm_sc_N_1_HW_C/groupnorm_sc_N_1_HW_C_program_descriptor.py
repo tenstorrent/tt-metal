@@ -119,7 +119,15 @@ def create_program_descriptor(
     N, _one, HW, C = shape
     G = int(num_groups)
     Cg = C // G
-    Ht = HW // 32  # design enforces HW % 32 == 0 in Phase 0
+    # Refinement 3: HW is no longer required to be a multiple of 32. The
+    # kernels iterate over ceil(HW / 32) HW-tile-rows; the last tile-row
+    # covers HW_LAST_ROWS valid rows (1..32). Reductions are unaffected
+    # because the reader zero-fills the padding rows for RM input (and
+    # ttnn's TILE_LAYOUT padding already zero-fills the trailing rows for
+    # TILE input), so they contribute 0 to sum / sumsq. INV_N still uses
+    # the true HW (not the padded multiple of 32).
+    Ht = (HW + 31) // 32
+    HW_LAST_ROWS = HW - (Ht - 1) * 32  # ∈ [1, 32], = 32 when HW % 32 == 0
     Ct = (C + 31) // 32
 
     has_gamma = 1 if gamma is not None else 0
@@ -538,7 +546,7 @@ def create_program_descriptor(
     #  5: C
     #  6: G
     #  7: Cg
-    #  8: Ht
+    #  8: Ht                        (padded — ceil(HW / 32))
     #  9: Ct
     # 10: eps_bits
     # 11: stick_bytes              (activation RM stick size = C * input_elem_bytes)
@@ -547,7 +555,8 @@ def create_program_descriptor(
     # 14: beta_elem_bytes          (1, 2, or 4 — used only when has_beta=1)
     # 15: inv_n_is_fp32            (0=bf16, 1=fp32 — drives the scalar-tile writer)
     # 16: affine_layout_code       (0=TILE, 1=ROW_MAJOR — gamma/beta layout; R2)
-    # 17..: TensorAccessorArgs (input, gamma_or_placeholder, beta_or_placeholder)
+    # 17: hw_last_rows             (1..32 — valid rows in the last HW-tile-row; R3)
+    # 18..: TensorAccessorArgs (input, gamma_or_placeholder, beta_or_placeholder)
     reader_ct_args = [
         input_layout_code,
         has_gamma,
@@ -566,6 +575,7 @@ def create_program_descriptor(
         beta_elem_bytes,
         1 if inv_n_format == ttnn.float32 else 0,
         affine_layout_code,
+        HW_LAST_ROWS,
     ]
 
     input_accessor = ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args()

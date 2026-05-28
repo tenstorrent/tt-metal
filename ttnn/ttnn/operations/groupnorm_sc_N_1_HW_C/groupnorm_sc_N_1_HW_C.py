@@ -53,7 +53,7 @@ INPUT_TAGGERS = {
 SUPPORTED = {
     "dtype": [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b],
     "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
-    "alignment": ["tile_aligned", "c_non_aligned"],
+    "alignment": ["tile_aligned", "c_non_aligned", "hw_non_aligned"],
     "affine": ["gamma_beta", "gamma_only", "no_affine"],
     "affine_dtype": [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b],
     # Refinement 2 added ttnn.TILE_LAYOUT. Both layouts share the kernels via a
