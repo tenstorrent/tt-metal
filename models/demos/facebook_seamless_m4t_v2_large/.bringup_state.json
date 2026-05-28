@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "model_id": "facebook/seamless-m4t-v2-large",
+  "model_slug": "facebook_seamless_m4t_v2_large",
+  "device": "p150",
+  "arch_name": "blackhole",
+  "started_at": "2026-05-28T00:18:15Z",
+  "updated_at": "2026-05-28T00:18:15Z",
+  "components": [],
+  "locks": {
+    "device": {
+      "held_by": null,
+      "held_since": null
+    }
+  },
+  "tick_log": [],
+  "config": {
+    "max_parallel_reference": 4,
+    "max_attempts_per_phase": 10,
+    "tick_interval_sec": 60
+  }
+}
