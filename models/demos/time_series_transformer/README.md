@@ -28,7 +28,7 @@ time_series_transformer/
 ## Setup
 ```bash
 source python_env/bin/activate
-pip install -r models/demos/time_series_transformer/requirements.txt
+python_env/bin/python -m pip install -r models/demos/time_series_transformer/requirements.txt
 ```
 
 ## Generate Reference Tensors

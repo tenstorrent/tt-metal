@@ -119,12 +119,8 @@ def main():
     static_categorical_features = batch["static_categorical_features"]
     static_real_features        = batch["static_real_features"]
     future_time_features        = batch["future_time_features"]
-
-    # ── Fix shapes ────────────────────────────────────────────────────────────
-    if past_values.dim() == 2:
-        past_values = past_values.unsqueeze(-1)
-    if past_observed_mask.dim() == 2:
-        past_observed_mask = past_observed_mask.unsqueeze(-1)
+    future_values               = batch["future_values"]
+    future_observed_mask        = batch["future_observed_mask"]
 
     # ── Validate past_len against actual tensor ───────────────────────────────
     expected_past_len = cfg.context_length + max(cfg.lags_sequence)
@@ -194,6 +190,8 @@ def main():
             past_observed_mask=past_observed_mask,
             static_categorical_features=static_categorical_features,
             static_real_features=static_real_features,
+            future_values=future_values,
+            future_observed_mask=future_observed_mask,
         )
     print("Forward pass complete.")
 
