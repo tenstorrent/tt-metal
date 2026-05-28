@@ -24,7 +24,7 @@ namespace compute_kernel_lib {
  * the writer's contract, not by in0_num_subblocks / in1_num_subblocks / subblock
  * dimensions.
  *
- * SubblockMajor (default, legacy): tiles in the OUTPUT CB are grouped per
+ * SubblockMajor (default): tiles in the OUTPUT CB are grouped per
  *   subblock — subblock(0,0)'s tiles, then subblock(0,1)'s tiles, ..., then the
  *   next M-row-group's subblocks. Compute issues one sequential pack_tile_block per
  *   subblock at the natural fifo_wr_ptr position. Required by writer kernels that
@@ -66,9 +66,6 @@ enum class OutputCBLayout { SubblockMajor, TileRowMajor };
  *                  TileRowMajor + untilize combination has no caller and isn't
  *                  expressible via the strided fifo math; route through
  *                  Interm + reblock_and_untilize for that path instead.
- *
- * Replaces the previous (pack_last_to_interm, pack_relu) bool pair: the impossible
- * combination (Interm + Relu) is unrepresentable.
  */
 enum class LastBlockTarget : uint8_t { Out, OutWithRelu, Interm, OutWithUntilize };
 
@@ -122,16 +119,13 @@ namespace matmul_config {
  *        state. Independent of `reconfig` — pass reconfig=NONE separately if the
  *        caller also handles dataformat reconfig externally.
  *
- * The previously-available `Full` mode (which called mm_block_init / hw_configure
- * from inside the helper) has been REMOVED. Full / hw_configure-bearing inits are
- * unsafe to call mid-kernel — they issue slow MMIO writes that can race with
- * executing units (see compute_kernel_hw_startup.h:26-30 for the idle-units
- * requirement) and have been observed to cause race conditions during op generation.
  * Callers MUST issue mm_block_init() (or compute_kernel_hw_startup + mm_init for
  * scalar-matmul-first kernels) exactly ONCE at the very top of kernel_main, and
  * leave the helper's Short default to handle every subsequent matmul_block call.
- * Activation init (ActivationInitHelper::init()) is similarly the caller's boot-time
- * responsibility — the helper does not issue it.
+ * hw_configure-bearing inits are unsafe to call mid-kernel — they issue slow MMIO
+ * writes that can race with executing units (see compute_kernel_hw_startup.h:26-30
+ * for the idle-units requirement). Activation init (ActivationInitHelper::init()) is
+ * similarly the caller's boot-time responsibility — the helper does not issue it.
  */
 enum class InitMode : uint8_t { Short, None };
 
@@ -255,8 +249,9 @@ struct NoPostCompute {
 // reconfigs srca/srcb formats AND re-issues llk_unpack_AB_matmul_init +
 // llk_math_matmul_init. The helper does NOT redo this restore for you; the
 // per-K-block reload path inside the helper covers reload-time state but does
-// not run on every block. See conv2d_kernel_lib::ConvTilizePreKBlock /
-// conv3d_kernel_lib::Conv3dTilizePreKBlock for the canonical pattern.
+// not run on every block. See ConvTilizePreKBlock in
+// ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/conv_bmm_tilize.cpp
+// for the canonical pattern.
 struct NoPreKBlock {
     ALWI void operator()(uint32_t, uint32_t, bool) const {}
 };
@@ -343,17 +338,12 @@ struct NoIn1BaseOffset {
  * landing on the same CB as a still-fronted reader will overwrite live tiles.
  *
  * In particular, matmul-as-reduce patterns (e.g. SDPA's row-sum fold against
- * a column-identity tile) MUST allocate a separate output CB. Earlier history
- * had a dedicated `matmul_reduce_inplace` helper that aliased in == out via
- * an interleaved pop / reserve-back ordering; that helper was removed in
- * favor of this canonical contract. Callers needing the reduce-via-matmul
- * pattern should call matmul_block with num_k_blocks=1 + an in1 column of
- * ones + a separate output CB sized identically to the input — see SDPA's
- * `matmul_reduce` wrapper in
+ * a column-identity tile) MUST allocate a separate output CB. Callers needing
+ * the reduce-via-matmul pattern should call matmul_block with num_k_blocks=1
+ * + an in1 column of ones + a separate output CB sized identically to the
+ * input — see SDPA's `matmul_reduce` wrapper in
  * `ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp`
- * for the canonical pattern. This separation is the same design decision
- * applied to `row_major_output` in commit 908a4dc3592 (factory-side forced
- * separate L1 regions for out_cb and interm0_cb when row-major pack is on).
+ * for the canonical pattern.
  *
  * The one supported aliasing is interm_buf overlaying out_buf in L1 (conv2d's
  * `partials_cb_uses_output` path); opt in via `pin_interm_to_captured_base=true`,
@@ -411,10 +401,8 @@ struct NoIn1BaseOffset {
  * only if you are perf-tuning a back-to-back call sequence and can prove the previous
  * op left the unpacker / packer in a matching state. init_mode=None skips both the init
  * AND the reconfig — use when the caller has already issued an explicit mm_block_init_short
- * + reconfig pair before the helper call (the SDPA wrapper pattern). The previously-
- * available init_mode=Full has been REMOVED: hw_configure-bearing inits are unsafe mid-kernel
- * and have caused race conditions during op generation. See matmul_config::InitMode and
- * matmul_config::DataFormatReconfig.
+ * + reconfig pair before the helper call (the SDPA wrapper pattern). See
+ * matmul_config::InitMode and matmul_config::DataFormatReconfig.
  *
  * SKIP_COMPUTE: When this macro is defined by the calling TU (microbenchmark path),
  * the inner ckernel::matmul_block() call is omitted. All other pipeline work (waits,
