@@ -14,7 +14,9 @@ constexpr uint32_t EXP_SHIFT = 6;    // 64 exponents for block formats
 ALWI constexpr uint32_t get_full_tile_size_impl(DataFormat format) {
     switch (format) {
         case DataFormat::UInt8:
+#ifndef ARCH_QUASAR
         case DataFormat::Lf8:
+#endif
         case DataFormat::Int8:
             return (1 << DATUM_SHIFT);
         case DataFormat::Float16:
@@ -23,8 +25,11 @@ ALWI constexpr uint32_t get_full_tile_size_impl(DataFormat format) {
             return (1 << (DATUM_SHIFT + 1));
         case DataFormat::Float32:
         case DataFormat::Int32:
+#ifndef ARCH_QUASAR
         case DataFormat::UInt32:
+#endif
             return (1 << (DATUM_SHIFT + 2));
+#ifndef ARCH_QUASAR
         case DataFormat::Bfp8:
         case DataFormat::Bfp8_b:
             return (1 << DATUM_SHIFT) + (1 << EXP_SHIFT);
@@ -34,6 +39,7 @@ ALWI constexpr uint32_t get_full_tile_size_impl(DataFormat format) {
         case DataFormat::Bfp2:
         case DataFormat::Bfp2_b:
             return (1 << (DATUM_SHIFT - 2)) + (1 << EXP_SHIFT);
+#endif
         default:
             return 0;
     }
