@@ -9,7 +9,6 @@
 #include "internal/hw_thread.h"
 #include "api/debug/waypoint.h"
 #include "api/debug/dprint.h"
-#include "api/debug/device_print.h"
 #include "internal/debug/stack_usage.h"
 #include "internal/debug/sanitize.h"
 #include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_init.h"
@@ -110,7 +109,6 @@ void device_setup() {
     // instn_buf
     // pc_buf
     // clock gating
-    // NOC setup
     set_deassert_addresses();
     setup_isr_csrs();
     // wzeromem
@@ -127,16 +125,14 @@ inline __attribute__((always_inline)) void signal_subordinate_completion() {
 
 inline void run_triscs(uint32_t enables) {
     // Wait for init_sync_registers to complete. Should always be done by the time we get here.
-    DPRINT << "DM-FW: waiting for TRISCs to complete" << ENDL();
-    DEVICE_PRINT("DM-FW: waiting for TRISCs to complete\n");
+    DPRINT("DM-FW: waiting for TRISCs to complete\n");
     while (subordinate_sync->allNeo0 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
            subordinate_sync->allNeo1 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
            subordinate_sync->allNeo2 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
            subordinate_sync->allNeo3 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE) {
         invalidate_l1_cache();
     }
-    DPRINT << "DM-FW: running TRISCs " << enables << ENDL();
-    DEVICE_PRINT("DM-FW: running TRISCs {}\n", enables);
+    DPRINT("DM-FW: running TRISCs {}\n", enables);
     invalidate_trisc_instruction_cache();
     if (enables &
         (1u << static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::E0_MATH0))) {
@@ -198,8 +194,7 @@ extern "C" uint32_t _start1() {
     extern uint32_t __ldm_tdata_init[];
     do_thread_crt1(__ldm_tdata_init);
     WAYPOINT("I");
-    DPRINT << "DM0-FW: initialized" << ENDL();
-    DEVICE_PRINT("DM0-FW: initialized\n");
+    DPRINT("DM0-FW: initialized\n");
 
     // handle noc_tobank ???
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
@@ -216,11 +211,11 @@ extern "C" uint32_t _start1() {
         thread_sync_init();
 
         deassert_trisc();
-        DPRINT << "DM0-FW: deasserted TRISC" << ENDL();
-        DEVICE_PRINT("DM0-FW: deasserted TRISC\n");
+        DPRINT("DM0-FW: deasserted TRISC\n");
         wait_subordinates();
         mailboxes->go_messages[0].signal = RUN_MSG_DONE;
 
+        noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
         trigger_sync_register_init();
 
         DeviceProfilerInit();
@@ -232,8 +227,7 @@ extern "C" uint32_t _start1() {
             // written in order, so it will arrive in order. We also have a barrier
             // before mcasting the launch message (as a hang workaround), which
             // ensures that the unicast data will also have been received.
-            DPRINT << "DM0-FW: waiting for GO message" << ENDL();
-            DEVICE_PRINT("DM0-FW: waiting for GO message\n");
+            DPRINT("DM0-FW: waiting for GO message\n");
             while (((go_message_signal = mailboxes->go_messages[mailboxes->go_message_index].signal) != RUN_MSG_GO) &&
                    !(mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.preload &
                      DISPATCH_ENABLE_FLAG_PRELOAD)) {
@@ -294,7 +288,7 @@ extern "C" uint32_t _start1() {
                 // noc_mode = launch_msg_address->kernel_config.brisc_noc_mode;
                 my_relative_x_ = my_logical_x_ - launch_msg_address->kernel_config.sub_device_origin_x;
                 my_relative_y_ = my_logical_y_ - launch_msg_address->kernel_config.sub_device_origin_y;
-                noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
+                overlay_cmd_buff_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
                 // re-initialize the NoCs
                 // uint8_t cmd_buf;
                 // if (noc_mode == DM_DEDICATED_NOC) {
@@ -413,6 +407,7 @@ extern "C" uint32_t _start1() {
         setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
         my_relative_x_ = my_logical_x_ - launch_msg->kernel_config.sub_device_origin_x;
         my_relative_y_ = my_logical_y_ - launch_msg->kernel_config.sub_device_origin_y;
+        overlay_cmd_buff_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
 
         WAYPOINT("R1");
         while (*((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) != RUN_SYNC_MSG_GO) {

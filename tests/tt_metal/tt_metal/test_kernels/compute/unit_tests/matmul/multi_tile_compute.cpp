@@ -39,7 +39,7 @@ void kernel_main() {
                 int in0_tile_index = in0_index_r_offset + k;
                 int in1_tile_index = in1_index_c_offset + c;
                 matmul_tiles(in0_cb, in1_cb, in0_tile_index, in1_tile_index, out_tile_index);
-                in1_index_c_offset += k;
+                in1_index_c_offset += out_c;
             }
             out_tile_index++;
         }

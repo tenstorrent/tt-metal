@@ -80,6 +80,14 @@ def test_reduce(
     ):
         pytest.skip("LoFi fails in these cases for reduce")
 
+    if (
+        formats.input_format == DataFormat.Bfp8_b
+        or formats.output_format == DataFormat.Bfp8_b
+    ) and is_reduce_to_one:
+        pytest.skip(
+            "Bfp8_b reduce accumulates error easily. Issue in tt-metal repo: #45143"
+        )
+
     tile_shape = construct_tile_shape(tile_dimensions)
 
     if is_reduce_to_one:

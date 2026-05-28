@@ -23,21 +23,8 @@ using tt::tt_metal::TensorMemoryLayout;
 using ttnn::ccl::Shape4D;
 using shape_t = Shape4D<uint32_t>;
 
-void dprint(ttnn::ccl::cmd::CclCommandTensor const& command_tensor) {
-    DPRINT << "\ttensor_slice_shape.w: " << (uint32_t)command_tensor.tensor_slice_shape.w << "\n";
-    DPRINT << "\ttensor_slice_shape.z: " << (uint32_t)command_tensor.tensor_slice_shape.z << "\n";
-    DPRINT << "\ttensor_slice_shape.y: " << (uint32_t)command_tensor.tensor_slice_shape.y << "\n";
-    DPRINT << "\ttensor_slice_shape.x: " << (uint32_t)command_tensor.tensor_slice_shape.x << "\n";
-    DPRINT << "\ttensor_slice_offset.w: " << (uint32_t)command_tensor.tensor_slice_offset.w << "\n";
-    DPRINT << "\ttensor_slice_offset.z: " << (uint32_t)command_tensor.tensor_slice_offset.z << "\n";
-    DPRINT << "\ttensor_slice_offset.y: " << (uint32_t)command_tensor.tensor_slice_offset.y << "\n";
-    DPRINT << "\ttensor_slice_offset.x: " << (uint32_t)command_tensor.tensor_slice_offset.x << "\n";
-    DPRINT << "\tworker_start_offset_in_slice.w: " << (uint32_t)command_tensor.worker_start_offset_in_slice.w << "\n";
-    DPRINT << "\tworker_start_offset_in_slice.z: " << (uint32_t)command_tensor.worker_start_offset_in_slice.z << "\n";
-    DPRINT << "\tworker_start_offset_in_slice.y: " << (uint32_t)command_tensor.worker_start_offset_in_slice.y << "\n";
-    DPRINT << "\tworker_start_offset_in_slice.x: " << (uint32_t)command_tensor.worker_start_offset_in_slice.x << "\n";
-    DPRINT << "\tworker_pages_per_slice: " << (uint32_t)command_tensor.worker_pages_per_slice << "\n";
-    DEVICE_PRINT(
+void dprint(const ttnn::ccl::cmd::CclCommandTensor& command_tensor) {
+    DPRINT(
         "\ttensor_slice_shape: ({}, {}, {}, {})\n"
         "\ttensor_slice_offset: ({}, {}, {}, {})\n"
         "\tworker_start_offset_in_slice: ({}, {}, {}, {})\n"
@@ -59,8 +46,7 @@ void dprint(ttnn::ccl::cmd::CclCommandTensor const& command_tensor) {
 
 void print_tensor_command(uint32_t command_index, ttnn::ccl::cmd::CclCommandTensor const& command_tensor) {
 #ifdef DEBUG_PRINT_ENABLED
-    DPRINT << "cmd[" << (uint32_t)command_index << "]:\n";
-    DEVICE_PRINT("cmd[{}]:\n", command_index);
+    DPRINT("cmd[{}]:\n", command_index);
     dprint(command_tensor);
 #endif
 }
@@ -334,8 +320,7 @@ void kernel_main() {
     const uint32_t local_l1_scratch_buffer_address = get_write_ptr(cb_id);
 
 #ifdef DEBUG_PRINT_ENABLED
-    DPRINT << "ccl_send has " << (uint32_t)num_commands << " commands" << ENDL();
-    DEVICE_PRINT("ccl_send has {} commands\n", num_commands);
+    DPRINT("ccl_send has {} commands\n", num_commands);
 #endif
 
     for (std::size_t i = 0; i < num_commands; ++i) {
