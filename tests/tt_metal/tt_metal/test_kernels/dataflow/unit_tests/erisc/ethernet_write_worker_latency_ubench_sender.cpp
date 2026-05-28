@@ -16,8 +16,7 @@ FORCE_INLINE void send_uni_dir(
         total_msgs = num_messages * NUM_BUFFER_SLOTS;
     }
 
-    DPRINT << "SENDER MAIN LOOP" << ENDL();
-    DEVICE_PRINT("SENDER MAIN LOOP\n");
+    DPRINT("SENDER MAIN LOOP\n");
 
     uint32_t sender_buffer_read_ptr = 0;
     uint32_t sender_buffer_write_ptr = 0;
