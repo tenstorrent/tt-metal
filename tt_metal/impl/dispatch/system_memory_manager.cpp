@@ -646,6 +646,29 @@ void SystemMemoryManager::issue_queue_push_back(std::uint32_t push_size_B, const
         const std::uint32_t dram_channel =
             device->allocator_impl()->get_dram_channel_from_bank_id(this->get_dram_region_bank_id());
         if (dram_backed_cq_dirty_flush_enabled()) {
+            // #region agent log
+            {
+                static std::atomic<int> dirty_flush_log_count{0};
+                if (dirty_flush_log_count.fetch_add(1) < 20) {
+                    std::FILE* f = std::fopen("/data/rsong/tt-metal-fork/.cursor/debug-ae7d0a.log", "a");
+                    if (f) {
+                        std::fprintf(
+                            f,
+                            "{\"sessionId\":\"ae7d0a\",\"hypothesisId\":\"H_DIRTY_FLUSH\","
+                            "\"location\":\"system_memory_manager.cpp:issue_queue_push_back\","
+                            "\"message\":\"DIRTY_FLUSH\",\"data\":{\"device_id\":%u,\"cq_id\":%u,"
+                            "\"dram_target_addr\":%u,\"push_size_B\":%u,\"pid\":%d},\"timestamp\":%ld}\n",
+                            (unsigned)this->device_id,
+                            (unsigned)cq_id,
+                            (unsigned)(wr_ptr_bytes - this->channel_offset),
+                            (unsigned)push_size_B,
+                            (int)getpid(),
+                            (long)std::time(nullptr));
+                        std::fclose(f);
+                    }
+                }
+            }
+            // #endregion
             const std::uint32_t dram_target_addr = wr_ptr_bytes - this->channel_offset;
             ctx.get_cluster().write_dram_vec(
                 this->cq_sysmem_start + (dram_target_addr - this->get_dram_region_base_addr()),
@@ -833,14 +856,10 @@ std::uint32_t SystemMemoryManager::completion_queue_wait_front(
         // #region agent log
         // Log first poll and every 5000th poll to track wr_ptr from device + rd_ptr expectation.
         if (poll_count == 0 || (poll_count % 5000) == 0) {
-            std::uint32_t issue_rd = 0;
-            std::uint32_t issue_wr = 0;
-            std::uint32_t dispatch_progress = 0;
-            if (poll_count == 0) {
-                issue_rd = get_cq_issue_rd_ptr<true>(this->device_id, cq_id, this->cq_size);
-                issue_wr = get_cq_issue_wr_ptr<true>(this->device_id, cq_id, this->cq_size);
-                dispatch_progress = get_cq_dispatch_progress(this->device_id, cq_id);
-            }
+            std::uint32_t issue_rd = get_cq_issue_rd_ptr<true>(this->device_id, cq_id, this->cq_size);
+            std::uint32_t issue_wr = get_cq_issue_wr_ptr<true>(this->device_id, cq_id, this->cq_size);
+            std::uint32_t dispatch_progress = get_cq_dispatch_progress(this->device_id, cq_id);
+            std::uint32_t dispatch_go_signal = get_cq_dispatch_go_signal(this->device_id, cq_id);
             std::FILE* f = std::fopen("/data/rsong/tt-metal-fork/.cursor/debug-ae7d0a.log", "a");
             if (f) {
                 std::fprintf(
@@ -850,7 +869,7 @@ std::uint32_t SystemMemoryManager::completion_queue_wait_front(
                     "\"message\":\"POLL\",\"data\":{\"device_id\":%u,\"cq_id\":%u,"
                     "\"poll_count\":%d,\"wr_ptr_raw\":%u,\"wr_ptr\":%u,\"wr_toggle\":%u,"
                     "\"rd_ptr\":%u,\"rd_toggle\":%u,\"issue_rd\":%u,\"issue_wr\":%u,"
-                    "\"dispatch_progress\":%u,\"pid\":%d},\"timestamp\":%ld}\n",
+                    "\"dispatch_progress\":%u,\"dispatch_go_signal\":%u,\"pid\":%d},\"timestamp\":%ld}\n",
                     (unsigned)this->device_id,
                     (unsigned)cq_id,
                     poll_count,
@@ -862,6 +881,7 @@ std::uint32_t SystemMemoryManager::completion_queue_wait_front(
                     (unsigned)issue_rd,
                     (unsigned)issue_wr,
                     (unsigned)dispatch_progress,
+                    (unsigned)dispatch_go_signal,
                     (int)getpid(),
                     (long)std::time(nullptr));
                 std::fclose(f);
@@ -1016,6 +1036,31 @@ void SystemMemoryManager::fetch_queue_write(
         this->prefetch_q_windows[cq_id]->write32(this->prefetch_q_dev_ptrs[cq_id], entry_val);
     }
     this->prefetch_q_dev_ptrs[cq_id] += entry_bytes;
+    // #region agent log
+    {
+        static std::atomic<int> fetch_q_log_count{0};
+        if (fetch_q_log_count.fetch_add(1) < 30) {
+            std::FILE* f = std::fopen("/data/rsong/tt-metal-fork/.cursor/debug-ae7d0a.log", "a");
+            if (f) {
+                std::fprintf(
+                    f,
+                    "{\"sessionId\":\"ae7d0a\",\"hypothesisId\":\"H_FETCH_Q\","
+                    "\"location\":\"system_memory_manager.cpp:fetch_queue_write\","
+                    "\"message\":\"FETCH_Q_WRITE\",\"data\":{\"device_id\":%u,\"cq_id\":%u,"
+                    "\"command_size_B\":%u,\"prefetch_q_dev_ptr\":%u,\"stall\":%u,\"pid\":%d},"
+                    "\"timestamp\":%ld}\n",
+                    (unsigned)this->device_id,
+                    (unsigned)cq_id,
+                    (unsigned)command_size_B,
+                    (unsigned)this->prefetch_q_dev_ptrs[cq_id],
+                    (unsigned)stall_prefetcher,
+                    (int)getpid(),
+                    (long)std::time(nullptr));
+                std::fclose(f);
+            }
+        }
+    }
+    // #endregion
 }
 
 bool SystemMemoryManager::is_dram_backed() const {

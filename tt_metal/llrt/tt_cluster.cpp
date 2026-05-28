@@ -1608,6 +1608,14 @@ void Cluster::register_sim_fabric_endpoint_direction(
 }
 #endif  // TT_UMD_BUILD_SIMULATION
 
+void Cluster::sim_arm_launch_watcher(ChipId chip_id, CoreCoord virtual_core, bool is_eth) const {
+    if (this->target_type_ != tt::TargetDevice::Simulator) {
+        return;
+    }
+    tt::umd::CoreCoord core_coord(virtual_core.x, virtual_core.y);
+    this->get_driver()->sim_arm_launch_watcher(chip_id, core_coord, is_eth);
+}
+
 }  // namespace tt
 
 std::ostream& operator<<(std::ostream& os, const tt_target_dram& dram) {

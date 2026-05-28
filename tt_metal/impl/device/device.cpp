@@ -366,12 +366,7 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
             dev_msgs::launch_msg_t msg = kernel->launch_msg;  // copy
             dev_msgs::go_msg_t::ConstView go_msg = kernel->go_msg.view();
             CoreCoord virtual_core = this->virtual_core_from_logical_core(logical_dispatch_core, core_type);
-            tt::llrt::write_launch_msg_to_core(
-                this->id(),
-                virtual_core,
-                msg.view(),
-                go_msg,
-                hal.get_dev_addr(this->get_programmable_core_type(virtual_core), HalL1MemAddrType::LAUNCH));
+            tt::llrt::write_launch_msg_to_core(this->id(), virtual_core, msg.view(), go_msg, true);
         }
     }
 
@@ -438,12 +433,7 @@ void Device::configure_fabric() {
             msg.kernel_config().host_assigned_id() = fabric_program_->get_runtime_id();
 
             auto physical_core = this->virtual_core_from_logical_core(logical_core, core_type);
-            tt::llrt::write_launch_msg_to_core(
-                this->id(),
-                physical_core,
-                msg,
-                go_msg,
-                hal.get_dev_addr(this->get_programmable_core_type(physical_core), HalL1MemAddrType::LAUNCH));
+            tt::llrt::write_launch_msg_to_core(this->id(), physical_core, msg, go_msg, true);
         }
     }
     log_info(tt::LogMetal, "Fabric initialized on Device {}", this->id_);

@@ -78,6 +78,9 @@ uint32_t get_cq_completion_rd_ptr(ChipId chip_id, uint8_t cq_id, uint32_t cq_siz
 
 uint32_t get_cq_dispatch_progress(ChipId chip_id, uint8_t cq_id);
 
+// Low byte of go_msg.signal on the dispatch core (RUN_MSG_* constants in dev_msgs.h).
+uint32_t get_cq_dispatch_go_signal(ChipId chip_id, uint8_t cq_id);
+
 // Return the expected number of workers to be in the finished state
 uint32_t calculate_expected_workers_to_finish(const tt::tt_metal::IDevice* device, const SubDeviceId& sub_device_id, tt::tt_metal::HalProgrammableCoreType core_type);
 

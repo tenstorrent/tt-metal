@@ -6,9 +6,13 @@
 #include "fabric_firmware_initializer.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <cstdio>
+#include <ctime>
 #include <optional>
 #include <string_view>
+#include <unistd.h>
 
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -454,8 +458,34 @@ void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms)
         std::vector<std::uint32_t> master_router_status{0};
         auto start_time = std::chrono::steady_clock::now();
         while (master_router_status[0] != expected_status) {
+            cluster_.advance_device_execution(dev->id());
             detail::ReadFromDeviceL1(
                 dev, master_router_logical_core, router_sync_address, 4, master_router_status, CoreType::ETH);
+            // #region agent log
+            {
+                static std::atomic<int> fab_poll_log{0};
+                const int n = fab_poll_log.fetch_add(1);
+                if (n == 0 || (n % 2000) == 0) {
+                    std::FILE* f = std::fopen("/data/rsong/tt-metal-fork/.cursor/debug-ae7d0a.log", "a");
+                    if (f) {
+                        std::fprintf(
+                            f,
+                            "{\"sessionId\":\"ae7d0a\",\"hypothesisId\":\"H_FAB_ROUTER_SYNC\","
+                            "\"location\":\"fabric_firmware_initializer.cpp:wait_for_handshake\","
+                            "\"message\":\"POLL\",\"data\":{\"device_id\":%u,\"master_chan\":%u,"
+                            "\"status\":%u,\"expected\":%u,\"poll\":%d,\"pid\":%d},\"timestamp\":%ld}\n",
+                            (unsigned)dev->id(),
+                            (unsigned)master_router_chan,
+                            (unsigned)master_router_status[0],
+                            (unsigned)expected_status,
+                            n,
+                            (int)getpid(),
+                            (long)std::time(nullptr));
+                        std::fclose(f);
+                    }
+                }
+            }
+            // #endregion
             if (master_router_status[0] == expected_status) {
                 break;
             }

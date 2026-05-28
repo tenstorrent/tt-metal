@@ -149,6 +149,11 @@ void write_launch_msg_to_core(
     tt_driver_atomics::sfence();
     if (send_go) {
         cluster.write_core_immediate(go_msg.data(), go_msg.size(), {static_cast<size_t>(chip), core}, go_addr);
+        if (tt::tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled()) {
+            const bool is_eth = dispatch_core_type == tt_metal::HalProgrammableCoreType::ACTIVE_ETH ||
+                                dispatch_core_type == tt_metal::HalProgrammableCoreType::IDLE_ETH;
+            cluster.sim_arm_launch_watcher(chip, core, is_eth);
+        }
     }
 }
 
