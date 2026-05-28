@@ -94,22 +94,62 @@ def create_program_descriptor(
     BLOCK_SIZE = _pick_block_size(Wt)
     NUM_BLOCKS = Wt // BLOCK_SIZE
 
-    # Bytes for one strip-chunk: BLOCK_SIZE tiles wide * 32 elements/tile * 4 B
-    chunk_bytes = BLOCK_SIZE * TILE_DIM * 4
-
-    # Input / output stick sizes (one RM stick per row, W*4 bytes).
-    input_page_size = input_tensor.buffer_page_size()
-    output_page_size = output_tensor.buffer_page_size()
-    assert input_page_size == W * 4, f"input page size mismatch: {input_page_size} != {W*4}"
-    assert output_page_size == W * 4, f"output page size mismatch: {output_page_size} != {W*4}"
-
-    # CB page sizes.
-    tile_size_fp32 = ttnn.tile_size(ttnn.float32)  # 4096
-    rm_chunk_page_size = chunk_bytes  # row-mode CB page for gamma/beta
-
     has_gamma = gamma is not None
     has_beta = beta is not None
     epsilon_bits = _fp32_bits(epsilon)
+
+    # ------- Per-tensor byte-size derivations (Refinement 1) -------
+    # All page sizes derive from each tensor's own dtype, so the descriptor
+    # supports mixed-precision input/gamma/beta combinations (e.g. bf16 input
+    # with fp32 gamma).
+    input_bpe = input_tensor.element_size()
+    output_bpe = output_tensor.element_size()
+    affine_bpe = gamma.element_size() if has_gamma else (beta.element_size() if has_beta else input_bpe)
+
+    # Input / output stick sizes (one RM stick per row, W * bpe bytes).
+    input_page_size = input_tensor.buffer_page_size()
+    output_page_size = output_tensor.buffer_page_size()
+    assert input_page_size == W * input_bpe, f"input page size mismatch: {input_page_size} != {W * input_bpe}"
+    assert output_page_size == W * output_bpe, f"output page size mismatch: {output_page_size} != {W * output_bpe}"
+
+    # Bytes for one strip-chunk per row:
+    #   input/output:  BLOCK_SIZE tiles wide * 32 elements/tile * input_bpe
+    #   gamma/beta:    BLOCK_SIZE tiles wide * 32 elements/tile * affine_bpe
+    # These can differ when input dtype != affine dtype (mixed-precision).
+    input_chunk_bytes = BLOCK_SIZE * TILE_DIM * input_bpe
+    affine_chunk_bytes = BLOCK_SIZE * TILE_DIM * affine_bpe
+
+    # ------- CB tile sizes (Refinement 1) -------
+    # Reader/writer CBs follow their backing tensor's dtype. Scaler CB stays
+    # Float32 (precision deviation, matches softmax-R2). Intermediate CBs
+    # follow fp32_dest_acc_en — Float32 when True (preserves dest-accumulator
+    # fp32 gain across phase boundaries), input dtype when False.
+    input_tile_size = ttnn.tile_size(input_tensor.dtype)
+    output_tile_size = ttnn.tile_size(output_tensor.dtype)
+    gamma_tile_size = ttnn.tile_size(gamma.dtype) if has_gamma else input_tile_size  # unused when no gamma
+    beta_tile_size = ttnn.tile_size(beta.dtype) if has_beta else input_tile_size  # unused when no beta
+
+    # Scaler CB stays Float32 — see softmax_program_descriptor.py:158-167 for the
+    # full rationale. The reduce LLK multiplies SrcA by SrcB and downcasts the
+    # product to the smaller-precision input. fp32 scaler preserves the full
+    # SrcA precision through the multiply-accumulate, both for fp32 input and
+    # for bf16 input + fp32 dest acc (where the upcast-then-multiply through
+    # Float32 scaler matches the dest accumulator width).
+    scaler_dtype = ttnn.float32
+    scaler_page_size = ttnn.tile_size(scaler_dtype)
+
+    # Intermediate-CB format policy (per /numeric-formats-metal §4).
+    # cb_tilized_x, cb_centered, cb_mean, cb_inv_std, cb_gamma_tilized,
+    # cb_beta_tilized park running-accumulator / centered / normalized state
+    # across phase boundaries. When fp32_dest_acc_en=True we keep them at
+    # Float32 regardless of input dtype — otherwise the dest-accumulator fp32
+    # gain is erased at the pack-to-CB boundary. When fp32_dest_acc_en=False
+    # we match input dtype (dest is bf16-wide anyway).
+    if compute_kernel_config.fp32_dest_acc_en:
+        intermediate_dtype = ttnn.float32
+    else:
+        intermediate_dtype = input_tensor.dtype
+    intermediate_tile_size = ttnn.tile_size(intermediate_dtype)
 
     # ------- Core grid + work distribution -------
     device = input_tensor.device()
@@ -131,103 +171,103 @@ def create_program_descriptor(
     #   * Scaler CB holds 1 tile, pushed once at boot and never popped until end.
 
     cbs = [
-        # cb_input_rm: 2 * BLOCK_SIZE pages of tile_size each (TILE-granularity reader).
+        # cb_input_rm: 2 * BLOCK_SIZE pages of input tile_size (TILE-granularity reader).
         ttnn.CBDescriptor(
-            total_size=2 * BLOCK_SIZE * tile_size_fp32,
+            total_size=2 * BLOCK_SIZE * input_tile_size,
             core_ranges=all_cores,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(
                     buffer_index=CB_INPUT_RM,
-                    data_format=ttnn.float32,
-                    page_size=tile_size_fp32,
+                    data_format=input_tensor.dtype,
+                    page_size=input_tile_size,
                 )
             ],
         ),
-        # cb_output_rm: 2 * BLOCK_SIZE pages of tile_size each.
+        # cb_output_rm: 2 * BLOCK_SIZE pages of output tile_size.
         ttnn.CBDescriptor(
-            total_size=2 * BLOCK_SIZE * tile_size_fp32,
+            total_size=2 * BLOCK_SIZE * output_tile_size,
             core_ranges=all_cores,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(
                     buffer_index=CB_OUTPUT_RM,
-                    data_format=ttnn.float32,
-                    page_size=tile_size_fp32,
+                    data_format=output_tensor.dtype,
+                    page_size=output_tile_size,
                 )
             ],
         ),
-        # cb_scaler: 1 tile, fp32 (preserves precision for fp32 input + fp32 dst).
+        # cb_scaler: 1 tile, fp32 (preserves precision — see scaler_dtype rationale above).
         ttnn.CBDescriptor(
-            total_size=tile_size_fp32,
+            total_size=scaler_page_size,
             core_ranges=all_cores,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(
                     buffer_index=CB_SCALER,
-                    data_format=ttnn.float32,
-                    page_size=tile_size_fp32,
+                    data_format=scaler_dtype,
+                    page_size=scaler_page_size,
                 )
             ],
         ),
         # cb_tilized_x: BLOCK_SIZE tiles (sequential intermediate, full block).
         ttnn.CBDescriptor(
-            total_size=BLOCK_SIZE * tile_size_fp32,
+            total_size=BLOCK_SIZE * intermediate_tile_size,
             core_ranges=all_cores,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(
                     buffer_index=CB_TILIZED_X,
-                    data_format=ttnn.float32,
-                    page_size=tile_size_fp32,
+                    data_format=intermediate_dtype,
+                    page_size=intermediate_tile_size,
                 )
             ],
         ),
         # cb_centered: BLOCK_SIZE tiles (sequential intermediate, full block).
         ttnn.CBDescriptor(
-            total_size=BLOCK_SIZE * tile_size_fp32,
+            total_size=BLOCK_SIZE * intermediate_tile_size,
             core_ranges=all_cores,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(
                     buffer_index=CB_CENTERED,
-                    data_format=ttnn.float32,
-                    page_size=tile_size_fp32,
+                    data_format=intermediate_dtype,
+                    page_size=intermediate_tile_size,
                 )
             ],
         ),
-        # cb_mean: 1 tile, fp32 (per-row mean, persistent across passes).
+        # cb_mean: 1 tile, intermediate dtype (per-row mean, persistent across passes).
         ttnn.CBDescriptor(
-            total_size=tile_size_fp32,
+            total_size=intermediate_tile_size,
             core_ranges=all_cores,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(
                     buffer_index=CB_MEAN,
-                    data_format=ttnn.float32,
-                    page_size=tile_size_fp32,
+                    data_format=intermediate_dtype,
+                    page_size=intermediate_tile_size,
                 )
             ],
         ),
-        # cb_inv_std: 1 tile, fp32 (variance then 1/sqrt(var+eps)).
+        # cb_inv_std: 1 tile, intermediate dtype (variance then 1/sqrt(var+eps)).
         ttnn.CBDescriptor(
-            total_size=tile_size_fp32,
+            total_size=intermediate_tile_size,
             core_ranges=all_cores,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(
                     buffer_index=CB_INV_STD,
-                    data_format=ttnn.float32,
-                    page_size=tile_size_fp32,
+                    data_format=intermediate_dtype,
+                    page_size=intermediate_tile_size,
                 )
             ],
         ),
     ]
 
     if has_gamma:
-        # cb_gamma_rm: 2 pages of chunk_bytes (ROW-granularity reader push).
+        # cb_gamma_rm: 2 pages of affine_chunk_bytes (ROW-granularity reader push).
         cbs.append(
             ttnn.CBDescriptor(
-                total_size=2 * rm_chunk_page_size,
+                total_size=2 * affine_chunk_bytes,
                 core_ranges=all_cores,
                 format_descriptors=[
                     ttnn.CBFormatDescriptor(
                         buffer_index=CB_GAMMA_RM,
-                        data_format=ttnn.float32,
-                        page_size=rm_chunk_page_size,
+                        data_format=gamma.dtype,
+                        page_size=affine_chunk_bytes,
                     )
                 ],
             )
@@ -235,13 +275,13 @@ def create_program_descriptor(
         # cb_gamma_tilized: BLOCK_SIZE tiles (sequential intermediate).
         cbs.append(
             ttnn.CBDescriptor(
-                total_size=BLOCK_SIZE * tile_size_fp32,
+                total_size=BLOCK_SIZE * intermediate_tile_size,
                 core_ranges=all_cores,
                 format_descriptors=[
                     ttnn.CBFormatDescriptor(
                         buffer_index=CB_GAMMA_TILIZED,
-                        data_format=ttnn.float32,
-                        page_size=tile_size_fp32,
+                        data_format=intermediate_dtype,
+                        page_size=intermediate_tile_size,
                     )
                 ],
             )
@@ -250,47 +290,49 @@ def create_program_descriptor(
     if has_beta:
         cbs.append(
             ttnn.CBDescriptor(
-                total_size=2 * rm_chunk_page_size,
+                total_size=2 * affine_chunk_bytes,
                 core_ranges=all_cores,
                 format_descriptors=[
                     ttnn.CBFormatDescriptor(
                         buffer_index=CB_BETA_RM,
-                        data_format=ttnn.float32,
-                        page_size=rm_chunk_page_size,
+                        data_format=beta.dtype,
+                        page_size=affine_chunk_bytes,
                     )
                 ],
             )
         )
         cbs.append(
             ttnn.CBDescriptor(
-                total_size=BLOCK_SIZE * tile_size_fp32,
+                total_size=BLOCK_SIZE * intermediate_tile_size,
                 core_ranges=all_cores,
                 format_descriptors=[
                     ttnn.CBFormatDescriptor(
                         buffer_index=CB_BETA_TILIZED,
-                        data_format=ttnn.float32,
-                        page_size=tile_size_fp32,
+                        data_format=intermediate_dtype,
+                        page_size=intermediate_tile_size,
                     )
                 ],
             )
         )
 
     # ------- Compile-time args -------
-    # Reader CT args:
+    # Reader CT args (Refinement 1: split chunk_bytes into input vs affine):
     #   [0] BLOCK_SIZE
     #   [1] NUM_BLOCKS
-    #   [2] chunk_bytes
-    #   [3] scaler_bits  (1.0f / W, fp32 bit pattern)
-    #   [4] HAS_GAMMA    (0 or 1)
-    #   [5] HAS_BETA     (0 or 1)
-    #   [6..] TensorAccessorArgs(input_tensor)
+    #   [2] input_chunk_bytes  (BLOCK_SIZE * 32 * input_bpe)
+    #   [3] affine_chunk_bytes (BLOCK_SIZE * 32 * affine_bpe) — for gamma/beta
+    #   [4] scaler_bits        (1.0f / W, fp32 bit pattern)
+    #   [5] HAS_GAMMA          (0 or 1)
+    #   [6] HAS_BETA           (0 or 1)
+    #   [7..] TensorAccessorArgs(input_tensor)
     #   [..]  TensorAccessorArgs(gamma) — placeholder when absent
     #   [..]  TensorAccessorArgs(beta)  — placeholder when absent
     scaler_bits = _fp32_bits(1.0 / float(W))
     reader_ct_args = [
         BLOCK_SIZE,
         NUM_BLOCKS,
-        chunk_bytes,
+        input_chunk_bytes,
+        affine_chunk_bytes,
         scaler_bits,
         1 if has_gamma else 0,
         1 if has_beta else 0,
@@ -308,12 +350,13 @@ def create_program_descriptor(
     # Writer CT args:
     #   [0] BLOCK_SIZE
     #   [1] NUM_BLOCKS
-    #   [2] chunk_bytes
+    #   [2] output_chunk_bytes  (BLOCK_SIZE * 32 * output_bpe)
     #   [3..] TensorAccessorArgs(output_tensor)
+    output_chunk_bytes = BLOCK_SIZE * TILE_DIM * output_bpe
     writer_ct_args = [
         BLOCK_SIZE,
         NUM_BLOCKS,
-        chunk_bytes,
+        output_chunk_bytes,
     ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 

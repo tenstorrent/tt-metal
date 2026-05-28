@@ -115,12 +115,31 @@ INPUT_TAGGERS = {
 # eval/golden_tests/layer_norm_rm/feature_spec.py and op_requirements.md).
 
 SUPPORTED = {
-    "precision": ["fp32_hifi4_fp32acc"],
+    # Refinement 1: extended to all four PRECISION_CONFIG modes.
+    # The default (compute_kernel_config=None) still resolves to
+    # fp32_hifi4_fp32acc — Phase-0 callers see byte-identical behaviour.
+    # bf8b_hifi4_bf16acc is only reachable when input layout is TILE
+    # (bf8b in ROW_MAJOR is INVALID); for layer_norm_rm Phase 0–R1 the
+    # SUPPORTED layout is still ROW_MAJOR only, so this precision name
+    # is unreachable through any test path. It is listed here for
+    # honesty — if Refinement 2 adds TILE_LAYOUT, bf8b becomes reachable
+    # immediately without an op-file change.
+    "precision": [
+        "fp32_hifi4_fp32acc",
+        "bf16_hifi4_fp32acc",
+        "bf16_hifi4_bf16acc",
+        "bf8b_hifi4_bf16acc",
+    ],
     "layout": [ttnn.ROW_MAJOR_LAYOUT],
     "alignment": ["tile_aligned"],
     "rank": [2, 3, 4],
     "affine": ["gamma_beta", "gamma_only", "no_affine"],
-    "affine_dtype": [ttnn.float32],
+    # Refinement 1: extended to all three affine dtypes. bf8b in
+    # ROW_MAJOR is INVALID (per feature_spec.py) and bf8b in TILE is
+    # currently EXCLUDED below (TILE-layout affine isn't supported
+    # until Refinement 2), so bf8b is also unreachable here today; it
+    # is listed for the same honesty reason as precision above.
+    "affine_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
     # Both TILE and ROW_MAJOR appear: when an affine tensor is supplied
     # the op accepts ROW_MAJOR_LAYOUT only (the kernel tilizes internally).
     # When no affine is supplied, feature_spec.py canonicalises the

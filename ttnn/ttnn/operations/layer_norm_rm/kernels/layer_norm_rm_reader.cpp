@@ -24,11 +24,13 @@
 // CT arg layout (see program descriptor):
 //   [0] BLOCK_SIZE
 //   [1] NUM_BLOCKS
-//   [2] chunk_bytes
-//   [3] scaler_bits (= __builtin_bit_cast(uint32_t, 1.0f / W))
-//   [4] HAS_GAMMA
-//   [5] HAS_BETA
-//   [6..] TensorAccessorArgs(input)
+//   [2] input_chunk_bytes  (BLOCK_SIZE * 32 * input_bpe)
+//   [3] affine_chunk_bytes (BLOCK_SIZE * 32 * affine_bpe)
+//                          differs from input_chunk_bytes when input dtype != affine dtype
+//   [4] scaler_bits (= __builtin_bit_cast(uint32_t, 1.0f / W))
+//   [5] HAS_GAMMA
+//   [6] HAS_BETA
+//   [7..] TensorAccessorArgs(input)
 //   [..]  TensorAccessorArgs(gamma) — placeholder when absent
 //   [..]  TensorAccessorArgs(beta)  — placeholder when absent
 //
@@ -55,17 +57,18 @@ constexpr uint32_t cb_scaler = 8;
 void kernel_main() {
     constexpr uint32_t BLOCK_SIZE = get_compile_time_arg_val(0);
     constexpr uint32_t NUM_BLOCKS = get_compile_time_arg_val(1);
-    constexpr uint32_t chunk_bytes = get_compile_time_arg_val(2);
-    constexpr uint32_t scaler_bits = get_compile_time_arg_val(3);
-    constexpr uint32_t HAS_GAMMA = get_compile_time_arg_val(4);
-    constexpr uint32_t HAS_BETA = get_compile_time_arg_val(5);
+    constexpr uint32_t input_chunk_bytes = get_compile_time_arg_val(2);
+    constexpr uint32_t affine_chunk_bytes = get_compile_time_arg_val(3);
+    constexpr uint32_t scaler_bits = get_compile_time_arg_val(4);
+    constexpr uint32_t HAS_GAMMA = get_compile_time_arg_val(5);
+    constexpr uint32_t HAS_BETA = get_compile_time_arg_val(6);
     (void)BLOCK_SIZE;
 
     // CT args for accessors are chained — declared unconditionally so the
     // CT-arg offsets line up regardless of which optional tensors are
     // present. The actual TensorAccessor instantiation is gated by the
     // HAS_GAMMA / HAS_BETA flags below.
-    constexpr auto input_args = TensorAccessorArgs<6>();
+    constexpr auto input_args = TensorAccessorArgs<7>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
 
@@ -99,38 +102,40 @@ void kernel_main() {
             dataflow_kernel_lib::read_sticks_for_tilize<cb_input_rm, dataflow_kernel_lib::TilizeGranularity::TILE>(
                 input_accessor,
                 /*total_num_rows=*/32,
-                /*row_bytes=*/chunk_bytes,
+                /*row_bytes=*/input_chunk_bytes,
                 /*start_page=*/strip_start_row,
-                /*byte_offset_within_page=*/c * chunk_bytes);
+                /*byte_offset_within_page=*/c * input_chunk_bytes);
         }
 
         // Pass B: read the strip again for variance computation.
         for (uint32_t c = 0; c < NUM_BLOCKS; ++c) {
             dataflow_kernel_lib::read_sticks_for_tilize<cb_input_rm, dataflow_kernel_lib::TilizeGranularity::TILE>(
-                input_accessor, 32, chunk_bytes, strip_start_row, c * chunk_bytes);
+                input_accessor, 32, input_chunk_bytes, strip_start_row, c * input_chunk_bytes);
         }
 
         // Pass C: read the strip once more, optionally gamma and beta.
         // Optional-tensor accessors are constructed inside the if-constexpr
         // branches (scoped to the strip; lifted out of the per-chunk loop).
+        // Affine reads use affine_chunk_bytes (may differ from input_chunk_bytes
+        // when input dtype != affine dtype — bf16 input + fp32 gamma, etc.).
         for (uint32_t c = 0; c < NUM_BLOCKS; ++c) {
             dataflow_kernel_lib::read_sticks_for_tilize<cb_input_rm, dataflow_kernel_lib::TilizeGranularity::TILE>(
-                input_accessor, 32, chunk_bytes, strip_start_row, c * chunk_bytes);
+                input_accessor, 32, input_chunk_bytes, strip_start_row, c * input_chunk_bytes);
 
             if constexpr (HAS_GAMMA != 0) {
                 const auto gamma_accessor = TensorAccessor(gamma_args, gamma_addr);
                 dataflow_kernel_lib::read_sticks_for_tilize<cb_gamma_rm, dataflow_kernel_lib::TilizeGranularity::ROW>(
                     gamma_accessor,
                     /*total_num_rows=*/1,
-                    /*row_bytes=*/chunk_bytes,
+                    /*row_bytes=*/affine_chunk_bytes,
                     /*start_page=*/0,
-                    /*byte_offset_within_page=*/c * chunk_bytes);
+                    /*byte_offset_within_page=*/c * affine_chunk_bytes);
             }
 
             if constexpr (HAS_BETA != 0) {
                 const auto beta_accessor = TensorAccessor(beta_args, beta_addr);
                 dataflow_kernel_lib::read_sticks_for_tilize<cb_beta_rm, dataflow_kernel_lib::TilizeGranularity::ROW>(
-                    beta_accessor, 1, chunk_bytes, 0, c * chunk_bytes);
+                    beta_accessor, 1, affine_chunk_bytes, 0, c * affine_chunk_bytes);
             }
         }
     }
