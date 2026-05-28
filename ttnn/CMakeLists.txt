@@ -242,6 +242,7 @@ target_link_libraries(
         TTNN::Ops::Examples
         TTNN::Ops::Experimental::AdaptivePool
         TTNN::Ops::Experimental::BcastTo
+        TTNN::Ops::Experimental::MultiScaleDeformableAttn
         TTNN::Ops::Experimental::CCL
         TTNN::Ops::Experimental::CNN
         TTNN::Ops::Experimental::Conv3d
@@ -497,6 +498,7 @@ add_subdirectory(cpp/ttnn/operations/embedding_backward)
 add_subdirectory(cpp/ttnn/operations/examples)
 add_subdirectory(cpp/ttnn/operations/experimental/adaptive_pool)
 add_subdirectory(cpp/ttnn/operations/experimental/bcast_to)
+add_subdirectory(cpp/ttnn/operations/experimental/multi_scale_deformable_attn)
 add_subdirectory(cpp/ttnn/operations/experimental/ccl)
 add_subdirectory(cpp/ttnn/operations/experimental/cnn)
 add_subdirectory(cpp/ttnn/operations/experimental/conv3d)
