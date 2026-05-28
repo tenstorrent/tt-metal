@@ -43,16 +43,47 @@ _REQUIRED_KEYS = frozenset(
         "locks",
         "tick_log",
         "config",
+        "use_cases",
     }
 )
 
 _SCHEMA_VERSION = 1
 
-# The four phase keys present on each component (per SPEC.md). Used by
-# resume_normalize to demote in_progress workers whose owning session is gone.
-# Public because downstream tasks (render_log, redo, skip) consume the same
-# canonical phase ordering.
-PHASE_NAMES = ("reference", "ttnn", "debug", "optimization")
+# The phase keys present on each component. The first four are per SPEC.md;
+# ``real_weights`` is the post-bringup phase added per SPEC_post_bringup.md and
+# runs after optimization. Used by resume_normalize to demote in_progress
+# workers whose owning session is gone. Public because downstream tasks
+# (render_log, redo, skip) consume the same canonical phase ordering.
+PHASE_NAMES = ("reference", "ttnn", "debug", "optimization", "real_weights")
+
+# The per-use_case phase keys. Distinct from PHASE_NAMES because use_cases
+# are an orthogonal axis (model-level capabilities) rather than per-component
+# blocks. Per SPEC_post_bringup.md §Use cases.
+USE_CASE_PHASES = ("generation", "perf")
+
+# Validation metrics a use_case is allowed to declare. Kept as a closed set so
+# typos in plans surface at save time. Extend cautiously — adding a metric
+# implies the corresponding worker / report knows how to compute it.
+KNOWN_VALIDATION_METRICS = frozenset({"bleu", "wer", "ecapa_cos", "perplexity", "accuracy", "mse", "pcc"})
+
+# Required keys on every use_case entry. Per SPEC_post_bringup.md §Use cases.
+# ``hybrid_notes`` is intentionally omitted — it's optional and may be None.
+REQUIRED_USE_CASE_KEYS = frozenset(
+    {
+        "name",
+        "description",
+        "input_modality",
+        "output_modality",
+        "components_used",
+        "needs_ar",
+        "needs_audio_out",
+        "hf_class",
+        "validation_metric",
+        "validation_threshold",
+        "generation",
+        "perf",
+    }
+)
 
 # Default tunables baked into a fresh state by bootstrap(). Public because
 # downstream tasks read these as the canonical defaults. The dict is flat and
@@ -73,14 +104,59 @@ class SchemaError(Exception):
     """Raised when a state dict fails schema validation."""
 
 
+def _validate_use_case(uc: dict, index: int) -> None:
+    """Validate a single use_case entry against the post-bringup schema.
+
+    Required keys per ``REQUIRED_USE_CASE_KEYS``. ``validation_metric`` must
+    be in ``KNOWN_VALIDATION_METRICS`` (a closed set so typos surface at save
+    time). ``components_used`` must be a list of strings. ``needs_ar`` and
+    ``needs_audio_out`` must be bools (not truthy str/int — those are usually
+    bugs in a plan).
+
+    Raises ``SchemaError`` with the use_case index so the operator can find
+    the offending entry in a list of many.
+    """
+    missing = sorted(REQUIRED_USE_CASE_KEYS - uc.keys())
+    if missing:
+        raise SchemaError(f"use_cases[{index}] missing required keys: {missing}")
+
+    metric = uc["validation_metric"]
+    if metric not in KNOWN_VALIDATION_METRICS:
+        raise SchemaError(
+            f"use_cases[{index}].validation_metric {metric!r} not in " f"{sorted(KNOWN_VALIDATION_METRICS)}"
+        )
+
+    components_used = uc["components_used"]
+    if not isinstance(components_used, list) or not all(isinstance(c, str) for c in components_used):
+        raise SchemaError(f"use_cases[{index}].components_used must be a list of strings")
+
+    # Tight bool check — `isinstance(True, int)` is True in Python so an
+    # explicit `type(...) is bool` guard is required to reject 0/1 ints.
+    for bool_field in ("needs_ar", "needs_audio_out"):
+        value = uc[bool_field]
+        if type(value) is not bool:
+            raise SchemaError(f"use_cases[{index}].{bool_field} must be a bool, got {type(value).__name__}")
+
+
 def _validate(state: dict) -> None:
     """Validate top-level required keys and schema_version.
 
+    - Back-fills ``use_cases`` with an empty list if the loaded state is from
+      a pre-post-bringup version of the schema; the field is then mandatory
+      so legacy reads round-trip through save_state without further fiddling.
     - Raises ``SchemaError`` listing all missing required keys (sorted, so the
       error message is deterministic).
     - Raises ``SchemaError`` if ``schema_version`` is not ``_SCHEMA_VERSION``.
+    - Validates each use_case entry against ``_validate_use_case``.
     - Emits a ``UserWarning`` (does not raise) for unknown top-level keys.
     """
+    # Back-compat: state files from before the use_cases axis was added do
+    # not carry the key. Synthesize it as [] so the legacy file loads without
+    # operator intervention. This mutates the input dict — load_state then
+    # returns it, so the caller sees the synthesized field too.
+    if "use_cases" not in state:
+        state["use_cases"] = []
+
     missing = sorted(_REQUIRED_KEYS - state.keys())
     if missing:
         raise SchemaError(f"missing required keys: {missing}")
@@ -88,6 +164,14 @@ def _validate(state: dict) -> None:
     version = state["schema_version"]
     if version != _SCHEMA_VERSION:
         raise SchemaError(f"schema_version must be {_SCHEMA_VERSION}, got {version!r}")
+
+    use_cases = state["use_cases"]
+    if not isinstance(use_cases, list):
+        raise SchemaError(f"use_cases must be a list, got {type(use_cases).__name__}")
+    for i, uc in enumerate(use_cases):
+        if not isinstance(uc, dict):
+            raise SchemaError(f"use_cases[{i}] must be a dict, got {type(uc).__name__}")
+        _validate_use_case(uc, i)
 
     extras = set(state.keys()) - _REQUIRED_KEYS
     if extras:
@@ -171,6 +255,7 @@ def bootstrap(model_id: str, device: str, arch_name: str) -> dict:
         "started_at": now,
         "updated_at": now,
         "components": [],
+        "use_cases": [],
         "locks": {"device": {"held_by": None, "held_since": None}},
         "tick_log": [],
         "config": dict(DEFAULT_CONFIG),
@@ -196,6 +281,18 @@ def resume_normalize(state: dict) -> dict:
     for component in state["components"]:
         for phase in PHASE_NAMES:
             phase_dict = component.get(phase)
+            if isinstance(phase_dict, dict) and phase_dict.get("status") == "in_progress":
+                phase_dict["status"] = "pending"
+
+    # Use cases run a separate (generation, perf) pipeline. Any worker that
+    # held one of these phases is gone for the same reason as a component
+    # worker, so demote analogously. `state.get` is used because legacy state
+    # files predate the use_cases key and resume_normalize is sometimes called
+    # on a freshly-loaded dict before _validate's back-fill takes effect in
+    # all entry points.
+    for use_case in state.get("use_cases", []):
+        for phase in USE_CASE_PHASES:
+            phase_dict = use_case.get(phase)
             if isinstance(phase_dict, dict) and phase_dict.get("status") == "in_progress":
                 phase_dict["status"] = "pending"
 
@@ -258,9 +355,10 @@ def render_log(state: dict) -> str:
 
     Layout (top to bottom): header block, ``## Block Status`` table with one
     row per ``(component, phase)`` pair iterated in component order then
-    ``PHASE_NAMES`` order, ``## Recent Ticks`` (last 10 tick_log entries,
-    chronological), and ``## Host-Resident Exceptions`` (components flagged
-    with ``host_resident.allowed = True``, or ``_None._`` if none).
+    ``PHASE_NAMES`` order, ``## Use cases`` table (one row per use_case,
+    or ``_None yet._`` if empty), ``## Recent Ticks`` (last 10 tick_log
+    entries, chronological), and ``## Host-Resident Exceptions`` (components
+    flagged with ``host_resident.allowed = True``, or ``_None._`` if none).
     """
     lines = []
 
@@ -294,6 +392,33 @@ def render_log(state: dict) -> str:
                 attempts_cell = str(phase_dict.get("attempts", 0))
                 notes_cell = _escape_cell(_fmt_notes(phase_dict))
             lines.append(f"| {name} | {phase} | {status_cell} | {pcc_cell} | {attempts_cell} | {notes_cell} |")
+    lines.append("")
+
+    # --- Use cases ---
+    # Each use_case is a (model-level) capability with its own generation/perf
+    # mini-pipeline. The columns are intentionally compact — full details
+    # (validation_metric, components_used, hf_class, ...) live in state.json
+    # and the spec; the table is a status dashboard, not a data dump.
+    lines.append("## Use cases")
+    lines.append("")
+    use_cases = state.get("use_cases") or []
+    if not use_cases:
+        lines.append("_None yet._")
+    else:
+        lines.append("| Name | Input | Output | needs_ar | Generation | Perf |")
+        lines.append("| :--- | :--- | :--- | :--- | :--- | :--- |")
+        for uc in use_cases:
+            name = _escape_cell(str(uc.get("name", "")))
+            input_modality = _escape_cell(str(uc.get("input_modality", "")))
+            output_modality = _escape_cell(str(uc.get("output_modality", "")))
+            needs_ar = "yes" if uc.get("needs_ar") else "no"
+            gen = uc.get("generation") or {}
+            perf = uc.get("perf") or {}
+            gen_status = gen.get("status") or _EM_DASH
+            perf_status = perf.get("status") or _EM_DASH
+            lines.append(
+                f"| {name} | {input_modality} | {output_modality} | {needs_ar} | {gen_status} | {perf_status} |"
+            )
     lines.append("")
 
     # --- Recent Ticks ---

@@ -8,6 +8,8 @@ import re
 import pytest
 
 from skills.orchestrator.lib.state import (
+    PHASE_NAMES,
+    USE_CASE_PHASES,
     SchemaError,
     bootstrap,
     load_state,
@@ -17,6 +19,30 @@ from skills.orchestrator.lib.state import (
     save_state,
     skip,
 )
+
+
+def _minimal_use_case(name: str) -> dict:
+    """Return a use_case dict populated with all required keys at sensible defaults.
+
+    Mirrors the shape documented in skills/orchestrator/SPEC_post_bringup.md.
+    Tests can append the result to ``state["use_cases"]`` to exercise the
+    happy path, then mutate specific fields to drive failure tests.
+    """
+    return {
+        "name": name,
+        "description": "one-sentence description",
+        "input_modality": "text",
+        "output_modality": "audio",
+        "components_used": ["Attention", "RMSNorm"],
+        "needs_ar": True,
+        "needs_audio_out": True,
+        "hf_class": "FooModel",
+        "validation_metric": "pcc",
+        "validation_threshold": ">= 0.99",
+        "hybrid_notes": None,
+        "generation": {"status": "pending"},
+        "perf": {"status": "pending"},
+    }
 
 
 def _valid_state() -> dict:
@@ -342,10 +368,16 @@ def test_render_log_matches_golden():
         "| RMSNorm | ttnn | done | 0.999985 | 1 |  |\n"
         "| RMSNorm | debug | n/a | — | 0 |  |\n"
         "| RMSNorm | optimization | pending | — | 0 |  |\n"
+        "| RMSNorm | real_weights | — | — | 0 |  |\n"
         "| Attention | reference | done | 0.999900 | 1 |  |\n"
         "| Attention | ttnn | failing | 0.810000 | 3 | QK-norm mismatch |\n"
         "| Attention | debug | in_progress | — | 1 | K matrix amplified by k_norm |\n"
         "| Attention | optimization | blocked | — | 0 |  |\n"
+        "| Attention | real_weights | — | — | 0 |  |\n"
+        "\n"
+        "## Use cases\n"
+        "\n"
+        "_None yet._\n"
         "\n"
         "## Recent Ticks\n"
         "\n"
@@ -418,11 +450,14 @@ def test_render_log_empty_components():
     assert "## Block Status" in output
     assert "| Block | Phase | Status | PCC | Attempts | Notes |" in output
     # No data rows: no line starts with "| " followed by anything other than
-    # the header / alignment row.
+    # the header / alignment row (Block Status or Use cases tables).
     data_rows = [
         ln
         for ln in output.splitlines()
-        if ln.startswith("| ") and not ln.startswith("| Block ") and not ln.startswith("| :--- ")
+        if ln.startswith("| ")
+        and not ln.startswith("| Block ")
+        and not ln.startswith("| Name ")
+        and not ln.startswith("| :--- ")
     ]
     assert data_rows == [], f"expected no data rows, got {data_rows!r}"
 
@@ -787,3 +822,199 @@ def test_redo_then_render_log_shows_pending_row():
     row = lines[0]
     assert "pending" in row
     assert " 0 " in row  # attempts column
+
+
+# ---------------------------------------------------------------------------
+# Post-bringup: use_cases axis + real_weights phase
+# (see skills/orchestrator/SPEC_post_bringup.md)
+# ---------------------------------------------------------------------------
+
+
+def test_phase_names_includes_real_weights():
+    """real_weights joins the canonical PHASE_NAMES tuple."""
+    assert "real_weights" in PHASE_NAMES
+
+
+def test_use_case_phases():
+    """USE_CASE_PHASES is the canonical (generation, perf) tuple."""
+    assert USE_CASE_PHASES == ("generation", "perf")
+
+
+def test_bootstrap_includes_empty_use_cases():
+    """A freshly bootstrapped state carries an empty use_cases list."""
+    state = bootstrap("Acme/Foo-1B", "n150", "wormhole_b0")
+    assert state["use_cases"] == []
+
+
+def test_bootstrap_with_use_cases_passes_validate(tmp_path):
+    """bootstrap output (with use_cases=[]) round-trips through save_state."""
+    state = bootstrap("Acme/Foo-1B", "n150", "wormhole_b0")
+    save_state(tmp_path / "s.json", state)
+
+
+def test_use_case_missing_required_keys_raises(tmp_path):
+    """A use_case entry missing required keys must fail validation."""
+    state = bootstrap("Acme/Foo-1B", "n150", "wormhole_b0")
+    state["use_cases"].append({"name": "x"})  # missing all other required keys
+    with pytest.raises(SchemaError):
+        save_state(tmp_path / "s.json", state)
+
+
+def test_use_case_with_all_required_keys_passes(tmp_path):
+    """A use_case entry with all required keys round-trips through save_state."""
+    state = bootstrap("Acme/Foo-1B", "n150", "wormhole_b0")
+    state["use_cases"].append(_minimal_use_case("uc1"))
+    save_state(tmp_path / "s.json", state)  # must not raise
+
+
+def test_use_case_validation_metric_unknown_raises(tmp_path):
+    """validation_metric outside KNOWN_VALIDATION_METRICS must fail validation."""
+    state = bootstrap("Acme/Foo-1B", "n150", "wormhole_b0")
+    uc = _minimal_use_case("uc1")
+    uc["validation_metric"] = "made_up_metric"
+    state["use_cases"].append(uc)
+    with pytest.raises(SchemaError):
+        save_state(tmp_path / "s.json", state)
+
+
+def test_use_case_components_used_must_be_list_of_strings(tmp_path):
+    """components_used must be a list whose elements are all strings."""
+    state = bootstrap("Acme/Foo-1B", "n150", "wormhole_b0")
+    uc = _minimal_use_case("uc1")
+    uc["components_used"] = ["Attention", 42]  # 42 is not a string
+    state["use_cases"].append(uc)
+    with pytest.raises(SchemaError):
+        save_state(tmp_path / "s.json", state)
+
+
+def test_use_case_needs_ar_must_be_bool(tmp_path):
+    """needs_ar must be a bool (not a truthy str/int)."""
+    state = bootstrap("Acme/Foo-1B", "n150", "wormhole_b0")
+    uc = _minimal_use_case("uc1")
+    uc["needs_ar"] = "yes"
+    state["use_cases"].append(uc)
+    with pytest.raises(SchemaError):
+        save_state(tmp_path / "s.json", state)
+
+
+def test_use_case_needs_audio_out_must_be_bool(tmp_path):
+    """needs_audio_out must be a bool."""
+    state = bootstrap("Acme/Foo-1B", "n150", "wormhole_b0")
+    uc = _minimal_use_case("uc1")
+    uc["needs_audio_out"] = 1
+    state["use_cases"].append(uc)
+    with pytest.raises(SchemaError):
+        save_state(tmp_path / "s.json", state)
+
+
+def test_load_state_missing_use_cases_backfills_empty_list(tmp_path):
+    """Older state files (no use_cases key) load successfully with use_cases=[]."""
+    # Construct a legacy-shaped state file: valid for the original schema,
+    # but with no use_cases key. _validate should backfill use_cases=[] so
+    # the file loads cleanly.
+    legacy = {
+        "schema_version": 1,
+        "model_id": "Acme/Foo-1B",
+        "model_slug": "acme_foo_1b",
+        "device": "n150",
+        "arch_name": "wormhole_b0",
+        "started_at": "2026-05-27T14:00:00Z",
+        "updated_at": "2026-05-27T14:00:00Z",
+        "components": [],
+        "locks": {"device": {"held_by": None, "held_since": None}},
+        "tick_log": [],
+        "config": {
+            "max_parallel_reference": 4,
+            "max_attempts_per_phase": 10,
+            "tick_interval_sec": 60,
+        },
+    }
+    path = tmp_path / "legacy.json"
+    path.write_text(json.dumps(legacy))
+
+    loaded = load_state(path)
+    assert loaded["use_cases"] == []
+
+
+def test_resume_normalize_demotes_use_case_in_progress():
+    """A use_case phase whose status is in_progress is demoted to pending."""
+    state = bootstrap("Acme/Foo-1B", "n150", "wormhole_b0")
+    uc = _minimal_use_case("uc1")
+    uc["generation"] = {"status": "in_progress"}
+    state["use_cases"].append(uc)
+
+    resume_normalize(state)
+
+    assert state["use_cases"][0]["generation"]["status"] == "pending"
+
+
+def test_resume_normalize_demotes_use_case_perf_in_progress():
+    """The perf phase is also demoted from in_progress to pending."""
+    state = bootstrap("Acme/Foo-1B", "n150", "wormhole_b0")
+    uc = _minimal_use_case("uc1")
+    uc["perf"] = {"status": "in_progress"}
+    state["use_cases"].append(uc)
+
+    resume_normalize(state)
+
+    assert state["use_cases"][0]["perf"]["status"] == "pending"
+
+
+def test_resume_normalize_preserves_use_case_done():
+    """resume_normalize does not touch use_case phases whose status is not in_progress."""
+    state = bootstrap("Acme/Foo-1B", "n150", "wormhole_b0")
+    uc = _minimal_use_case("uc1")
+    uc["generation"] = {"status": "done"}
+    uc["perf"] = {"status": "failing"}
+    state["use_cases"].append(uc)
+
+    resume_normalize(state)
+
+    assert state["use_cases"][0]["generation"]["status"] == "done"
+    assert state["use_cases"][0]["perf"]["status"] == "failing"
+
+
+def test_render_log_includes_use_cases_section():
+    """The rendered log carries a ## Use cases section listing each use case."""
+    state = bootstrap("Acme/Foo-1B", "n150", "wormhole_b0")
+    state["use_cases"].append(_minimal_use_case("uc1"))
+
+    output = render_log(state)
+
+    assert "## Use cases" in output
+    assert "uc1" in output
+
+
+def test_render_log_use_cases_empty_placeholder():
+    """When there are no use cases, the section reads _None yet._."""
+    state = bootstrap("Acme/Foo-1B", "n150", "wormhole_b0")
+    output = render_log(state)
+
+    # Locate the Use cases section and assert the placeholder appears in it.
+    assert "## Use cases" in output
+    uc_section = output.split("## Use cases", 1)[1]
+    assert "_None yet._" in uc_section
+
+
+def test_render_log_use_cases_table_columns():
+    """The use_cases table carries the expected columns and per-row values."""
+    state = bootstrap("Acme/Foo-1B", "n150", "wormhole_b0")
+    uc = _minimal_use_case("uc1")
+    uc["generation"] = {"status": "done"}
+    uc["perf"] = {"status": "pending"}
+    state["use_cases"].append(uc)
+
+    output = render_log(state)
+    uc_section = output.split("## Use cases", 1)[1]
+
+    # Header row with all six columns
+    assert "| Name | Input | Output | needs_ar | Generation | Perf |" in uc_section
+    # The single data row carries the use case fields
+    data_rows = [ln for ln in uc_section.splitlines() if ln.startswith("| ") and "uc1" in ln]
+    assert len(data_rows) == 1, f"expected exactly one uc1 row, got {data_rows!r}"
+    row = data_rows[0]
+    assert "uc1" in row
+    assert "text" in row
+    assert "audio" in row
+    assert "done" in row
+    assert "pending" in row
