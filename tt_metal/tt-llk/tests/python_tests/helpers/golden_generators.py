@@ -479,6 +479,29 @@ def quantize_mx_tensor_chunked(
     return quantized
 
 
+def quantize_input_to_unpack_format(
+    operand: torch.Tensor,
+    input_format: Optional[DataFormat],
+    *,
+    all_mx_formats: bool = False,
+) -> torch.Tensor:
+    """
+    Quantize input stimuli to match the values visible after hardware unpack.
+
+    Some callers only model MXFP4 today; keep that as the default and let broader
+    MX golden paths opt in explicitly.
+    """
+    if input_format == DataFormat.Bfp4_b:
+        return _bfp4b_to_float16b(operand)
+    if input_format == DataFormat.Bfp8_b:
+        return _bfp8b_to_float16b(operand)
+    if input_format is not None and input_format.is_mx_format():
+        if all_mx_formats or input_format == DataFormat.MxFp4:
+            return quantize_mx_tensor_chunked(operand, input_format)
+        return operand
+    return operand
+
+
 class SrcFormatModel:
     """
     Source register holds data in TF32 format.
@@ -1444,13 +1467,9 @@ class DataCopyGolden:
         torch_format = format_dict[data_format]
 
         # Quantize input to match what hardware actually sees after unpack from L1.
-        if input_format is not None:
-            if input_format == DataFormat.Bfp4_b:
-                operand1 = _bfp4b_to_float16b(operand1)
-            elif input_format == DataFormat.Bfp8_b:
-                operand1 = _bfp8b_to_float16b(operand1)
-            elif input_format.is_mx_format():
-                operand1 = quantize_mx_tensor_chunked(operand1, input_format)
+        operand1 = quantize_input_to_unpack_format(
+            operand1, input_format, all_mx_formats=True
+        )
 
         height, width = input_dimensions[0], input_dimensions[1]
 
@@ -2934,9 +2953,7 @@ class UntilizeGolden:
     ):
         from helpers.tilize_untilize import untilize_block
 
-        if input_format == DataFormat.MxFp4:
-            # Quantize MXFP4 inputs to match pack/unpack precision before untilize.
-            operand = quantize_mx_tensor_chunked(operand, input_format)
+        operand = quantize_input_to_unpack_format(operand, input_format)
 
         result = untilize_block(
             operand, stimuli_format=data_format, dimensions=dimensions
