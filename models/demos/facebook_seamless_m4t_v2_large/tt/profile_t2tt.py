@@ -69,6 +69,7 @@ def _run_one_translate(
     max_new_tokens: int,
     per_step_log: Optional[List[float]] = None,
     prefill_log: Optional[List[float]] = None,
+    use_trace: bool = False,
 ) -> Tuple[str, int]:
     """Run one TTNN translate and time it with optional per-step instrumentation.
 
@@ -125,6 +126,23 @@ def _run_one_translate(
         return out
 
     gen.decode_step = timed_decode_step
+
+    # When use_trace=True, the traced AR loop bypasses decode_step. Use
+    # the step_callback hook on the generator to record per-step latency
+    # (kind in {"warmup", "capture", "replay"}). Only "replay" entries
+    # represent steady-state cost; we tag the log so the reporting code
+    # can filter.
+    original_callback = gen.step_callback
+
+    def trace_callback(position: int, ms: float, kind: str) -> None:
+        if per_step_log is not None:
+            # Annotate the entry with the kind via a tuple; the reporting
+            # code below splits replay-only stats from warmup/capture.
+            per_step_log.append((ms, kind, position))
+        step_count[0] += 1
+
+    if use_trace:
+        gen.step_callback = trace_callback
     try:
         tokens = gen.generate(
             encoder_hidden_states=enc_hidden_padded,
@@ -134,9 +152,12 @@ def _run_one_translate(
             eos_token_id=model.eos_token_id,
             max_new_tokens=max_new_tokens,
             do_sample=False,
+            use_trace=use_trace,
         )
     finally:
         gen.decode_step = original_decode_step
+        if use_trace:
+            gen.step_callback = original_callback
 
     text = model.processor.decode(tokens, skip_special_tokens=True)
     return text, step_count[0]
@@ -186,13 +207,7 @@ def main():
     args = parser.parse_args()
 
     if args.traced:
-        print(
-            "[profile_t2tt] WARNING: --traced is reserved and currently "
-            "falls back to baseline measurement. See PERF_NOTES.md for "
-            "the path forward (decode_step needs to externalize host-side "
-            "mask + embedding construction before metal trace replay is "
-            "viable)."
-        )
+        print("[profile_t2tt] --traced ENABLED: AR decode steps will run under metal trace+replay")
 
     # Lazy import so help/parse runs even if heavy deps are missing.
     from transformers import AutoProcessor
@@ -214,7 +229,14 @@ def main():
     processor = AutoProcessor.from_pretrained(wl.HF_PATH)
 
     print(f"[profile_t2tt] opening device {args.device_id} ...")
-    device = ttnn.open_device(device_id=args.device_id, l1_small_size=32768)
+    # Allocate enough trace region so we can capture multiple per-position
+    # decode traces (one per AR slot we hit). 256 MB is comfortable
+    # headroom for max_decode_seq_len=128 with ~365 ops/step.
+    device = ttnn.open_device(
+        device_id=args.device_id,
+        l1_small_size=32768,
+        trace_region_size=256_000_000 if args.traced else 0,
+    )
 
     try:
         print(f"[profile_t2tt] building TextToTextModel ...")
@@ -236,6 +258,7 @@ def main():
             max_new_tokens=args.max_new_tokens,
             per_step_log=warmup_step_log,
             prefill_log=warmup_prefill,
+            use_trace=args.traced,
         )
         warmup_total_ms = (time.perf_counter() - t_w0) * 1000.0
         print(f"[profile_t2tt] WARMUP output: {warmup_text!r}")
@@ -260,6 +283,7 @@ def main():
                 max_new_tokens=args.max_new_tokens,
                 per_step_log=step_log,
                 prefill_log=prefill_log,
+                use_trace=args.traced,
             )
             total_ms = (time.perf_counter() - t_t0) * 1000.0
             all_step_logs.append(step_log)
@@ -268,15 +292,29 @@ def main():
             all_tokens.append(steps)
             all_texts.append(text)
 
-        # Steady-state per-step: exclude the very first decode_step of each
-        # call (positions 0 and 1 are warmup-of-the-cache style; the LM head
+        # Steady-state per-step: when use_trace, only "replay" entries count
+        # (warmup + capture are first-hit-of-position costs). When not
+        # tracing, exclude the very first decode_step of each call
+        # (positions 0 and 1 are warmup-of-the-cache style; the LM head
         # path is the same but cache state diverges).
         steady_steps: List[float] = []
+        capture_costs: List[float] = []
+        warmup_costs: List[float] = []
         for log in all_step_logs:
-            if len(log) > 2:
-                steady_steps.extend(log[2:])
+            if log and isinstance(log[0], tuple):
+                # Trace mode: filter by kind tag.
+                for ms, kind, _pos in log:
+                    if kind == "replay":
+                        steady_steps.append(ms)
+                    elif kind == "capture":
+                        capture_costs.append(ms)
+                    else:
+                        warmup_costs.append(ms)
             else:
-                steady_steps.extend(log)
+                if len(log) > 2:
+                    steady_steps.extend(log[2:])
+                else:
+                    steady_steps.extend(log)
 
         # ------- 3. Report -------
         def _stat(name: str, xs: List[float]) -> str:
@@ -297,11 +335,18 @@ def main():
         print(f"warmup_total_ms: {warmup_total_ms:.1f}")
         print(f"warmup_steps:    {warmup_steps}")
         if warmup_step_log:
-            print(f"warmup_first_step_ms: {warmup_step_log[0]:.2f}")
-            print(f"warmup_last_step_ms:  {warmup_step_log[-1]:.2f}")
+            _first = warmup_step_log[0]
+            _last = warmup_step_log[-1]
+            _first_ms = _first[0] if isinstance(_first, tuple) else _first
+            _last_ms = _last[0] if isinstance(_last, tuple) else _last
+            print(f"warmup_first_step_ms: {_first_ms:.2f}")
+            print(f"warmup_last_step_ms:  {_last_ms:.2f}")
         print("")
         print(_stat("prefill_ms       (encoder + cross-attn populate)", all_prefill_logs))
         print(_stat("steady_decode_step_ms (AR loop, position >= 2)", steady_steps))
+        if args.traced:
+            print(_stat("capture_step_ms (first-hit-of-pos trace capture)", capture_costs))
+            print(_stat("warmup_step_ms  (first-hit-of-pos untraced warmup)", warmup_costs))
         print(_stat("timed_total_ms                              ", all_totals))
         print(f"tokens_generated_per_call: {all_tokens}")
         for i, text in enumerate(all_texts):

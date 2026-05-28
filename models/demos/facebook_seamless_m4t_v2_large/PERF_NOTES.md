@@ -154,6 +154,141 @@ Recommended ordered work for the next perf pass:
 5. Optional follow-up: 2-CQ overlap of decode_step kernel launch with
    greedy argmax + host token append (sub-millisecond, but cheap to add).
 
+## Phase 9b — Metal-trace pass (current PR)
+
+Added the structural plumbing for metal trace + replay on
+`TextGenerator.decode_step`, gated behind a new `use_trace=True` kwarg
+on `generate()`. Default is **`use_trace=False`** because of a
+correctness regression in trace re-use across `generate()` calls
+documented below.
+
+### What landed
+
+1. `tt/kv_cache.py`
+   - `SelfAttentionKVCache.reset()` now streams a host-side zero tensor
+     into each cache buffer via `copy_host_to_device_tensor` instead of
+     re-allocating via `ttnn.mul(..., output_tensor=...)`. Preserves
+     the cache buffer ADDRESS across `generate()` calls so any captured
+     trace continues to point at the right K/V slot. (Matches the
+     qwen3_tts cross-call trace pattern at `server.py:1414-1415`.)
+   - `CrossAttentionKVCache.__init__` now pre-allocates persistent K/V
+     buffers per layer; `populate()` uses `ttnn.fill_cache` to write the
+     freshly projected encoder K/V into the existing buffers (instead of
+     replacing the tensor handles); `reset()` is a no-op on the
+     buffers (only flips the `_populated[i]` flag) for the same
+     trace-pointer-stability reason.
+   - `SelfAttentionKVCache.update(layer_idx, k_new, v_new, pos)` now
+     accepts a `ttnn.Tensor` for `pos` as a backwards-compat overload
+     (auto-extracts the scalar). Currently unused — the trace path bakes
+     `pos` as a Python int constant per captured trace.
+2. `tt/sinusoidal_positional_embedding.py`
+   - `forward(precomputed_position_ids_tt=…)` skips the host-side
+     cumsum + H2D upload and gathers directly into the persistent
+     position-id buffer.
+3. `tt/text_decoder.py::decode_step`
+   - New `persistent_input_ids_tt`, `persistent_position_ids_tt` kwargs
+     let the caller hand in pre-allocated device buffers (overwritten
+     per step via `copy_host_to_device_tensor`).
+4. `tt/text_generator.py`
+   - `__init__` allocates the persistent input-id, position-id, and
+     encoder-mask buffers lazily (`_ensure_persistent_buffers`).
+   - `_precompute_encoder_mask` writes the per-call cross-attn mask
+     INTO the persistent encoder-mask buffer (when trace mode is
+     active) so the buffer ADDRESS captured into every decode trace
+     remains valid across `generate()` calls.
+   - `_run_decode_body(position)` is the trace-captureable body (calls
+     `text_decoder.decode_step` with the persistent buffers, then
+     `ttnn.linear` for the LM head).
+   - `_capture_decode_trace(position)` captures one trace PER absolute
+     decode position because `ttnn.update_cache` only accepts a
+     Python-int `update_idx` (no `cur_pos_tensor` form yet).
+   - `_generate_traced` is the AR loop under trace: untraced warmup at
+     pos 0–1, then for each AR position lazily capture (untraced
+     warmup pass + `begin_trace_capture`) on first hit and replay
+     thereafter.
+   - `step_callback(position, ms, kind)` hook lets a profiler measure
+     per-step latency tagged by phase (`warmup` / `capture` / `replay`).
+5. `tt/profile_t2tt.py`
+   - `--traced` flag now actually enables trace replay; opens the
+     device with `trace_region_size=256_000_000`.
+   - Per-step report splits replay (steady-state) from warmup/capture
+     (first-hit cost).
+
+### Measured numbers (T2TT, "Hello world.", 9-token output)
+
+| Phase                                          | Untraced | Traced (per-call recapture) |
+| ---------------------------------------------- | -------: | --------------------------: |
+| prefill_ms                                     |    13.05 |                       14.43 |
+| steady_decode_step_ms (p50 replay)             |    20.34 |                       17.62 |
+| capture_step_ms (per first-hit-of-pos)         |        — |                       18.4 |
+| warmup_step_ms (per first-hit-of-pos)          |        — |                       17.7 |
+| total_ms / translate() (9 tokens, 1 generate)  |   200.30 |                      450.10 |
+
+The replay path is ~13% faster than untraced (17.62 vs 20.34 ms/step),
+but the per-call recapture cost (warmup + capture ≈ 36 ms per AR
+position) currently dominates for short sequences. Net total wall-clock
+is WORSE than the baseline on T2TT-short.
+
+### Correctness regression in cross-call trace re-use
+
+Initial integration captured each decode trace ONCE and reused it
+across subsequent `generate()` calls. With every other piece of the
+trace-readable state held persistent (input-id buffer, position-id
+buffer, self-attn KV cache via in-place zero, cross-attn KV cache via
+`fill_cache`, encoder-mask buffer via `copy_host_to_device_tensor`,
+LM-head weight, all decoder weights), the captured trace nonetheless
+produced INCORRECT logits at the second decoded position onward (pos 2
+matched the warmup-gen run bit-exact; pos 3 diverged). Same prompt,
+same input-id sequence, same persistent buffer addresses. The
+divergence is consistent with implicit state captured by the trace
+(probably program-cache IDs or pre-allocated workspace) that doesn't
+survive a cross-call replay against the same K/V buffer.
+
+Whisper's analogous decoder (`models/demos/audio/whisper/tt/whisper_generator.py`)
+sidesteps this by:
+
+1. Using `ttnn.experimental.paged_update_cache(cache, k, update_idxs_tensor=cur_pos)`
+   so a SINGLE trace re-runs at any position via the on-device
+   `current_decode_pos` tensor.
+2. Doing on-device `argmax` + `ttnn.copy(token, persistent_token_buf)`
+   + `ttnn.plus_one(decode_pos)` *inside* the trace, so the next
+   replay reads its own previous output as input — no host
+   intervention between steps.
+
+This pattern requires re-writing the seamless self-attention block to
+use the sharded `[1, B, H, d]` HEIGHT-sharded K/V input layout that
+`paged_update_cache` expects (Whisper does this around
+`ttnn_optimized_functional_whisper.py:527-557`). That's substantial
+work touching `SeamlessMHA` (4 projections, all four buses), the
+`TextDecoderLayer` glue, and the K/V cache layout — out of scope for
+this phase.
+
+### What's still live
+
+The `use_trace=False` default path still benefits from the structural
+work in this phase:
+
+- Persistent encoder-mask buffer + `copy_host_to_device_tensor` upload
+  (one alloc per generator, not per step).
+- Persistent cross-attn KV cache buffers (one alloc per generator, not
+  per encoder forward).
+- Tensor-input path on the sinusoidal positional embedding.
+
+These do not measurably move the steady-state number on T2TT-short
+(host dispatch is still 365 ops/step at ~20 ms) but they're prerequisites
+for the next iteration. All 5 e2e tests pass on the `use_trace=False`
+path (BLEU=42.524, WER=0.0, char-sim=1.0/0.92+ for T2TT/S2TT/T2ST/S2ST,
+2/2 token-match tests).
+
+### Next steps
+
+The textbook trace win still requires migrating
+`SeamlessMHA.attend_and_out_project` to take a `cur_pos_tensor` and
+issuing `ttnn.experimental.paged_update_cache` against a HEIGHT-sharded
+K/V input. Once that's in, the per-position trace approach is replaced
+by a SINGLE trace and the warmup+capture overhead amortises to zero
+across calls.
+
 ## Files touched in this phase
 
 - `models/demos/facebook_seamless_m4t_v2_large/tt/profile_t2tt.py` (new)

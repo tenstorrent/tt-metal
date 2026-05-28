@@ -95,6 +95,7 @@ class SinusoidalPositionalEmbedding(LightweightModule):
         input_ids: Optional[torch.Tensor] = None,
         inputs_embeds_shape: Optional[tuple] = None,
         past_key_values_length: int = 0,
+        precomputed_position_ids_tt: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """Gather sinusoidal rows for the requested positions.
 
@@ -107,11 +108,27 @@ class SinusoidalPositionalEmbedding(LightweightModule):
                 sequential ``padding_idx + 1 .. padding_idx + seq_len``.
             past_key_values_length: number of cached tokens to offset by
                 during incremental decoding.
+            precomputed_position_ids_tt: optional pre-allocated device
+                tensor of shape ``(batch, seq_len)`` uint32 ROW_MAJOR
+                holding the position ids the caller wants gathered. When
+                supplied, the host-side position computation + H2D
+                upload is skipped entirely (lets the gather op be
+                captured into a metal trace). The caller is responsible
+                for writing the correct ids into this buffer before each
+                call (via ``ttnn.copy_host_to_device_tensor``).
 
         Returns:
             ttnn TILE_LAYOUT tensor of shape
             ``(batch, seq_len, hidden_size)`` placed in DRAM.
         """
+        if precomputed_position_ids_tt is not None:
+            return ttnn.embedding(
+                precomputed_position_ids_tt,
+                self.weight,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
         if (input_ids is None) == (inputs_embeds_shape is None):
             raise ValueError("Exactly one of input_ids or inputs_embeds_shape must be provided.")
 

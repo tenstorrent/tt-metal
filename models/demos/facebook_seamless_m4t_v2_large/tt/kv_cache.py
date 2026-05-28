@@ -75,8 +75,8 @@ class SelfAttentionKVCache:
         # per layer, zero-initialised in DRAM TILE_LAYOUT.
         self.k_caches = []
         self.v_caches = []
+        zeros = torch.zeros(self.batch, self.num_heads, self.max_seq_len, self.head_dim, dtype=torch.bfloat16)
         for _ in range(self.num_layers):
-            zeros = torch.zeros(self.batch, self.num_heads, self.max_seq_len, self.head_dim, dtype=torch.bfloat16)
             self.k_caches.append(
                 ttnn.from_torch(
                     zeros,
@@ -95,18 +95,44 @@ class SelfAttentionKVCache:
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
             )
+        # Pre-build a host-side zeros tensor for fast H2D zero-resets
+        # (avoids allocating during reset()). Same dtype/layout as the
+        # cache so copy_host_to_device_tensor can stream it in.
+        self._zero_host = ttnn.from_torch(
+            zeros,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+        )
 
-    def update(self, layer_idx: int, k_new: ttnn.Tensor, v_new: ttnn.Tensor, pos: int) -> None:
+    def update(self, layer_idx: int, k_new: ttnn.Tensor, v_new: ttnn.Tensor, pos) -> None:
         """Write a single token's K/V into the layer's cache at ``pos``.
 
         Args:
             layer_idx: which decoder layer's cache to update.
             k_new: ``[B, num_heads, 1, head_dim]`` TILE_LAYOUT.
             v_new: ``[B, num_heads, 1, head_dim]`` TILE_LAYOUT.
-            pos: target position along the sequence dimension.
+            pos: target position along the sequence dimension. May be a
+                Python int (baked as a constant into the captured trace
+                for the per-position trace strategy) or a ``ttnn.Tensor``
+                holding the index (not currently used; reserved for a
+                future ``paged_fused_update_cache`` migration). When a
+                tensor is given we currently extract the int via
+                ``to_torch`` — this is a fallback for backwards-compat
+                only.
         """
-        ttnn.update_cache(self.k_caches[layer_idx], k_new, update_idx=int(pos))
-        ttnn.update_cache(self.v_caches[layer_idx], v_new, update_idx=int(pos))
+        if isinstance(pos, ttnn.Tensor):
+            # Fallback: ttnn.update_cache only accepts a Python integer
+            # update_idx. Pull the scalar off device. This path is meant
+            # only for callers that opted into the tensor form before the
+            # underlying primitive supports it; it WILL break trace
+            # capture (host read in the hot loop). Prefer the int form.
+            import torch as _torch
+
+            pos = int(_torch.tensor(ttnn.to_torch(pos)).flatten()[0].item())
+        else:
+            pos = int(pos)
+        ttnn.update_cache(self.k_caches[layer_idx], k_new, update_idx=pos)
+        ttnn.update_cache(self.v_caches[layer_idx], v_new, update_idx=pos)
 
     def read(self, layer_idx: int) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
         """Return the full ``[B, num_heads, max_seq, head_dim]`` K and V caches.
@@ -120,13 +146,14 @@ class SelfAttentionKVCache:
     def reset(self) -> None:
         """Zero every layer's cache (clear all stored values).
 
-        Uses an in-place multiply by 0.0 to avoid reallocating the DRAM
-        buffer (which would change the tensor handle the caller may have
-        captured in a trace).
+        Streams a host-side zero tensor into each cache buffer via
+        ``copy_host_to_device_tensor``. This preserves the device tensor
+        handles (captured into traces) while overwriting their contents
+        -- matching the qwen3_tts cross-call trace-reuse pattern.
         """
         for i in range(self.num_layers):
-            self.k_caches[i] = ttnn.mul(self.k_caches[i], 0.0, output_tensor=self.k_caches[i])
-            self.v_caches[i] = ttnn.mul(self.v_caches[i], 0.0, output_tensor=self.v_caches[i])
+            ttnn.copy_host_to_device_tensor(self._zero_host, self.k_caches[i])
+            ttnn.copy_host_to_device_tensor(self._zero_host, self.v_caches[i])
 
 
 class CrossAttentionKVCache:
@@ -170,9 +197,34 @@ class CrossAttentionKVCache:
         self.head_dim = int(head_dim)
         self.dtype = dtype
 
-        # Per-layer placeholders. Filled by populate() right after encoder forward.
-        self.k_caches: list = [None] * self.num_layers
-        self.v_caches: list = [None] * self.num_layers
+        # Pre-allocate persistent K/V buffers per layer so the device
+        # addresses stay stable across generate() calls. Captured decode
+        # traces hold a pointer to these buffers; on a second
+        # generate() we OVERWRITE them via the populate() call below
+        # rather than reallocating. Shape per K and V:
+        # [batch, num_heads, encoder_seq_len, head_dim].
+        self.k_caches: list = []
+        self.v_caches: list = []
+        zeros = torch.zeros(self.batch, self.num_heads, self.encoder_seq_len, self.head_dim, dtype=torch.bfloat16)
+        for _ in range(self.num_layers):
+            self.k_caches.append(
+                ttnn.from_torch(
+                    zeros,
+                    device=device,
+                    dtype=dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            )
+            self.v_caches.append(
+                ttnn.from_torch(
+                    zeros,
+                    device=device,
+                    dtype=dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            )
         self._populated = [False] * self.num_layers
 
     def populate(self, layer_idx: int, k: ttnn.Tensor, v: ttnn.Tensor) -> None:
@@ -180,11 +232,23 @@ class CrossAttentionKVCache:
 
         The caller already projected ``encoder_hidden_states`` through the
         layer's cross-attention K and V weights and reshaped to
-        ``[B, num_heads, src_len, head_dim]``. We retain the tensors as-is
-        — they will be re-used by every decode step.
+        ``[B, num_heads, src_len, head_dim]``. We copy them into the
+        pre-allocated persistent buffers (constructed once at __init__)
+        rather than retaining the new pointers -- this keeps the device
+        addresses stable across generate() calls so any captured decode
+        trace that reads from the cross-attn cache remains valid.
         """
-        self.k_caches[layer_idx] = k
-        self.v_caches[layer_idx] = v
+        # ``ttnn.fill_cache(cache, input, batch_idx)`` writes the whole
+        # input tensor along the seq dim into cache[batch_idx, ...]. With
+        # batch=1, this overwrites slot 0 with the freshly projected K/V.
+        # K/V have shape ``[1, num_heads, encoder_seq_len, head_dim]``
+        # (already tile-padded to match the cache slot exactly).
+        ttnn.fill_cache(self.k_caches[layer_idx], k, 0)
+        ttnn.fill_cache(self.v_caches[layer_idx], v, 0)
+        # The new k/v device tensors aren't needed any more -- their
+        # data has been copied into the persistent cache buffers.
+        ttnn.deallocate(k)
+        ttnn.deallocate(v)
         self._populated[layer_idx] = True
 
     def is_populated(self, layer_idx: int) -> bool:
@@ -197,14 +261,13 @@ class CrossAttentionKVCache:
         return self.k_caches[layer_idx], self.v_caches[layer_idx]
 
     def reset(self) -> None:
-        """Drop all stored encoder K/V tensors (e.g. between utterances)."""
+        """Mark every layer's encoder K/V cache as un-populated (zero in-place).
+
+        Does NOT deallocate the buffers -- they're persistent so captured
+        decode traces stay valid across generate() calls. The next
+        populate() call overwrites the buffer contents via update_cache.
+        """
         for i in range(self.num_layers):
-            if self.k_caches[i] is not None:
-                ttnn.deallocate(self.k_caches[i])
-                self.k_caches[i] = None
-            if self.v_caches[i] is not None:
-                ttnn.deallocate(self.v_caches[i])
-                self.v_caches[i] = None
             self._populated[i] = False
 
 

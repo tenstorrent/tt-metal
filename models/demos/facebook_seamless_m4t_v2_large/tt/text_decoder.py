@@ -386,6 +386,8 @@ class TextDecoder(LightweightModule):
         encoder_seq_len_logical: Optional[int] = None,
         precomputed_self_mask_tt: Optional[ttnn.Tensor] = None,
         precomputed_encoder_mask_tt: Optional[ttnn.Tensor] = None,
+        persistent_input_ids_tt: Optional[ttnn.Tensor] = None,
+        persistent_position_ids_tt: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """Run one autoregressive decode step.
 
@@ -413,6 +415,20 @@ class TextDecoder(LightweightModule):
                 generate() call, so it can be uploaded ONCE and reused.
                 When supplied, ``encoder_attention_mask`` and
                 ``encoder_seq_len_logical`` are ignored.
+            persistent_input_ids_tt: optional pre-allocated device uint32
+                ROW_MAJOR ``[B, 1]`` tensor holding the new token id.
+                When supplied we DO NOT re-upload from host -- the caller
+                is expected to have just written the right value via
+                ``ttnn.copy_host_to_device_tensor``. Required for trace
+                capture; the host upload path is otherwise unchanged.
+            persistent_position_ids_tt: optional pre-allocated device
+                uint32 ROW_MAJOR ``[B, 1]`` tensor holding the absolute
+                positional index to gather into the sinusoidal table
+                (i.e. for our padding-aware case, ``position + 1`` when
+                the new token is not padding). When supplied we route
+                the sinusoidal embed through
+                ``SinusoidalPositionalEmbedding`` 's tensor-input path
+                which skips all host-side cumsum + H2D.
 
         Returns:
             ttnn tensor of shape ``[B, 1, embed_dim]`` — the decoder's
@@ -424,24 +440,36 @@ class TextDecoder(LightweightModule):
 
         # 1. Token embedding (scaled) for the single new token. ttnn.embedding
         #    requires uint32 ROW_MAJOR ids.
-        tt_input_ids = ttnn.from_torch(
-            input_ids.to(torch.int32),
-            device=self.device,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        owns_input_ids = False
+        if persistent_input_ids_tt is not None:
+            tt_input_ids = persistent_input_ids_tt
+        else:
+            tt_input_ids = ttnn.from_torch(
+                input_ids.to(torch.int32),
+                device=self.device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            owns_input_ids = True
         inputs_embeds = self.embed_tokens(tt_input_ids)
+        if owns_input_ids:
+            ttnn.deallocate(tt_input_ids)
 
-        # 2. Positional embedding for absolute position `position` —
-        #    SinusoidalPositionalEmbedding's padding-aware indexing
-        #    (cumsum of non-pad mask + past_key_values_length) gives the
-        #    correct row when we hand it the single new id with
-        #    ``past_key_values_length=position``.
-        embed_pos = self.embed_positions(
-            input_ids=input_ids,
-            past_key_values_length=position,
-        )
+        # 2. Positional embedding for absolute position `position`.
+        if persistent_position_ids_tt is not None:
+            embed_pos = self.embed_positions(
+                precomputed_position_ids_tt=persistent_position_ids_tt,
+            )
+        else:
+            # Host-side padding-aware indexing (cumsum of non-pad mask +
+            # past_key_values_length) gives the correct row when we hand
+            # the layer the single new id with
+            # ``past_key_values_length=position``.
+            embed_pos = self.embed_positions(
+                input_ids=input_ids,
+                past_key_values_length=position,
+            )
         hidden_states = ttnn.add(inputs_embeds, embed_pos)
         ttnn.deallocate(inputs_embeds)
         ttnn.deallocate(embed_pos)
