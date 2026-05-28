@@ -28,7 +28,7 @@
 | seamless_mha | reference | done | 1.000000 | 1 |  |
 | seamless_mha | ttnn | done | 0.997092 | 1 | self_pcc=0.99983, cross_pcc=0.99709 on p150. ttnn.linear + fused SDPA. |
 | seamless_mha | debug | n/a | — | 0 |  |
-| seamless_mha | optimization | done | 0.997092 | 1 | At ceiling: leaf already uses HiFi4 + fp32_dest_acc + bf16 DRAM TILE (standard high-perf preset). Real perf gain comes from composite-level metal trace+replay, applied at sub-model layer. |
+| seamless_mha | optimization | pending | — | 0 | Re-opened for tracy-driven redo. Prior bulk-waved at-ceiling without traced tracy CSV evidence. Previous: {'status': 'done', 'pcc': 0.9970923619206976, 'attempts': 1, 'artifacts': ['models/demos/facebook_seamless_m4t_v2_large/tt/seamless_mha.py'], 'notes': 'At ceiling: leaf already uses HiFi4 + fp32_dest_acc + bf16 DRAM TILE (standard high-perf preset). Real perf gain comes from composite-level metal trace+replay, applied at sub-model layer.'} |
 | seamless_mha | real_weights | done | 0.997092 | 1 | Validated in Phase 1 (test_real_hf_weights.py); reduced to 2-layer config for goldens, full config 24/6 validated in test_full_config.py. |
 | seamless_ffn | reference | done | 1.000000 | 2 |  |
 | seamless_ffn | ttnn | done | 0.999902 | 1 | 2x ttnn.linear + ttnn.relu, bf16 weights/DRAM, HiFi4+fp32_dest_acc. PCC 0.99990. |
@@ -68,7 +68,7 @@
 | conformer_encoder_layer | reference | done | 1.000000 | 1 |  |
 | conformer_encoder_layer | ttnn | done | 0.999986 | 1 | Macaron composite: LN+0.5*FFN+SelfAttn(relative_key)+Conv+0.5*FFN+LN. PCC 0.999986. |
 | conformer_encoder_layer | debug | n/a | — | 0 |  |
-| conformer_encoder_layer | optimization | done | 0.999986 | 1 | At-ceiling at block level. All component TTNN blocks already use the standard high-perf preset (HiFi4 + fp32_dest_acc + bf16 DRAM TILE). Further gains require model-level metal tracing + serving harness optimization (sequence packing, batching, KV-cache reuse), which operate on the integrated model rather than per-block — handled in a follow-up deployment project. |
+| conformer_encoder_layer | optimization | pending | — | 0 | Re-opened for tracy-driven redo. Prior bulk-waved at-ceiling without traced tracy CSV evidence. Previous: {'status': 'done', 'pcc': 0.9999858412473038, 'attempts': 1, 'artifacts': ['models/demos/facebook_seamless_m4t_v2_large/tt/conformer_encoder_layer.py'], 'notes': 'At-ceiling at block level. All component TTNN blocks already use the standard high-perf preset (HiFi4 + fp32_dest_acc + bf16 DRAM TILE). Further gains require model-level metal tracing + serving harness optimization (sequence packing, batching, KV-cache reuse), which operate on the integrated model rather than per-block — handled in a follow-up deployment project.'} |
 | conformer_encoder_layer | real_weights | done | 0.999986 | 1 | Validated in Phase 1 (test_real_hf_weights.py); reduced to 2-layer config for goldens, full config 24/6 validated in test_full_config.py. |
 | text_encoder_layer | reference | done | 1.000000 | 1 |  |
 | text_encoder_layer | ttnn | done | 0.999975 | 1 | Pre-norm NLLB: LN+MHA+resid, LN+FFN+resid. PCC 0.999975. |
@@ -78,12 +78,12 @@
 | text_decoder_layer | reference | done | 1.000000 | 1 |  |
 | text_decoder_layer | ttnn | done | 0.999972 | 1 | Pre-norm decoder: self-attn + cross-attn + FFN. PCC 0.999972. |
 | text_decoder_layer | debug | n/a | — | 0 |  |
-| text_decoder_layer | optimization | done | 0.999972 | 1 | At-ceiling at block level. All component TTNN blocks already use the standard high-perf preset (HiFi4 + fp32_dest_acc + bf16 DRAM TILE). Further gains require model-level metal tracing + serving harness optimization (sequence packing, batching, KV-cache reuse), which operate on the integrated model rather than per-block — handled in a follow-up deployment project. |
+| text_decoder_layer | optimization | pending | — | 0 | Re-opened for tracy-driven redo. Prior bulk-waved at-ceiling without traced tracy CSV evidence. Previous: {'status': 'done', 'pcc': 0.9999720881559155, 'attempts': 1, 'artifacts': ['models/demos/facebook_seamless_m4t_v2_large/tt/text_decoder_layer.py'], 'notes': 'At-ceiling at block level. All component TTNN blocks already use the standard high-perf preset (HiFi4 + fp32_dest_acc + bf16 DRAM TILE). Further gains require model-level metal tracing + serving harness optimization (sequence packing, batching, KV-cache reuse), which operate on the integrated model rather than per-block — handled in a follow-up deployment project.'} |
 | text_decoder_layer | real_weights | done | 0.999972 | 1 | Validated in Phase 1 (test_real_hf_weights.py); reduced to 2-layer config for goldens, full config 24/6 validated in test_full_config.py. |
 | t2u_decoder_layer | reference | done | 1.000000 | 1 |  |
 | t2u_decoder_layer | ttnn | done | 0.999989 | 1 | POST-norm NAR layer: SeamlessMHA + LN + 2x Conv1d(k=7,pad=3) + ReLU + LN. PCC 0.999989. |
 | t2u_decoder_layer | debug | n/a | — | 0 |  |
-| t2u_decoder_layer | optimization | done | 0.999989 | 1 | At-ceiling at block level. All component TTNN blocks already use the standard high-perf preset (HiFi4 + fp32_dest_acc + bf16 DRAM TILE). Further gains require model-level metal tracing + serving harness optimization (sequence packing, batching, KV-cache reuse), which operate on the integrated model rather than per-block — handled in a follow-up deployment project. |
+| t2u_decoder_layer | optimization | pending | — | 0 | Re-opened for tracy-driven redo. Prior bulk-waved at-ceiling without traced tracy CSV evidence. Previous: {'status': 'done', 'pcc': 0.9999887272354591, 'attempts': 1, 'artifacts': ['models/demos/facebook_seamless_m4t_v2_large/tt/t2u_decoder_layer.py'], 'notes': 'At-ceiling at block level. All component TTNN blocks already use the standard high-perf preset (HiFi4 + fp32_dest_acc + bf16 DRAM TILE). Further gains require model-level metal tracing + serving harness optimization (sequence packing, batching, KV-cache reuse), which operate on the integrated model rather than per-block — handled in a follow-up deployment project.'} |
 | t2u_decoder_layer | real_weights | done | 0.999989 | 1 | Validated in Phase 1 (test_real_hf_weights.py); reduced to 2-layer config for goldens, full config 24/6 validated in test_full_config.py. |
 | conformer_adapter_layer | reference | done | 1.000000 | 1 |  |
 | conformer_adapter_layer | ttnn | done | 0.999862 | 1 | Stride=8 downsample adapter. T=128->17. ConvT-then-GLU on ROW_MAJOR (non-tile-aligned T). |
@@ -123,7 +123,7 @@
 | code_hifigan_vocoder | reference | done | 1.000000 | 1 |  |
 | code_hifigan_vocoder | ttnn | done | 0.999722 | 1 | Full unit/speaker/lang code-vocoder wrapping HifiGanVocoder. Host-side dur+hard-upsample. PCC 0.9997 vs [1,640]. |
 | code_hifigan_vocoder | debug | n/a | — | 0 |  |
-| code_hifigan_vocoder | optimization | done | 0.999722 | 1 | At-ceiling at block level. All component TTNN blocks already use the standard high-perf preset (HiFi4 + fp32_dest_acc + bf16 DRAM TILE). Further gains require model-level metal tracing + serving harness optimization (sequence packing, batching, KV-cache reuse), which operate on the integrated model rather than per-block — handled in a follow-up deployment project. |
+| code_hifigan_vocoder | optimization | pending | — | 0 | Re-opened for tracy-driven redo. Prior bulk-waved at-ceiling without traced tracy CSV evidence. Previous: {'status': 'done', 'pcc': 0.9997223535748088, 'attempts': 1, 'artifacts': ['models/demos/facebook_seamless_m4t_v2_large/tt/code_hifigan_vocoder.py'], 'notes': 'At-ceiling at block level. All component TTNN blocks already use the standard high-perf preset (HiFi4 + fp32_dest_acc + bf16 DRAM TILE). Further gains require model-level metal tracing + serving harness optimization (sequence packing, batching, KV-cache reuse), which operate on the integrated model rather than per-block — handled in a follow-up deployment project.'} |
 | code_hifigan_vocoder | real_weights | done | 0.999722 | 1 | Validated in Phase 1 (test_real_hf_weights.py); reduced to 2-layer config for goldens, full config 24/6 validated in test_full_config.py. |
 | seamless_m4t_v2 | reference | done | 1.000000 | 1 |  |
 | seamless_m4t_v2 | ttnn | done | 0.999738 | 1 | Top-level T2TT: text_encoder + text_decoder + lm_head. PCC 0.99974. |

@@ -188,13 +188,9 @@
         "status": "n/a"
       },
       "optimization": {
-        "status": "done",
-        "pcc": 0.9970923619206976,
-        "attempts": 1,
-        "artifacts": [
-          "models/demos/facebook_seamless_m4t_v2_large/tt/seamless_mha.py"
-        ],
-        "notes": "At ceiling: leaf already uses HiFi4 + fp32_dest_acc + bf16 DRAM TILE (standard high-perf preset). Real perf gain comes from composite-level metal trace+replay, applied at sub-model layer."
+        "status": "pending",
+        "attempts": 0,
+        "notes": "Re-opened for tracy-driven redo. Prior bulk-waved at-ceiling without traced tracy CSV evidence. Previous: {'status': 'done', 'pcc': 0.9970923619206976, 'attempts': 1, 'artifacts': ['models/demos/facebook_seamless_m4t_v2_large/tt/seamless_mha.py'], 'notes': 'At ceiling: leaf already uses HiFi4 + fp32_dest_acc + bf16 DRAM TILE (standard high-perf preset). Real perf gain comes from composite-level metal trace+replay, applied at sub-model layer.'}"
       },
       "real_weights": {
         "status": "done",
@@ -594,13 +590,9 @@
         "status": "n/a"
       },
       "optimization": {
-        "status": "done",
-        "pcc": 0.9999858412473038,
-        "attempts": 1,
-        "artifacts": [
-          "models/demos/facebook_seamless_m4t_v2_large/tt/conformer_encoder_layer.py"
-        ],
-        "notes": "At-ceiling at block level. All component TTNN blocks already use the standard high-perf preset (HiFi4 + fp32_dest_acc + bf16 DRAM TILE). Further gains require model-level metal tracing + serving harness optimization (sequence packing, batching, KV-cache reuse), which operate on the integrated model rather than per-block \u2014 handled in a follow-up deployment project."
+        "status": "pending",
+        "attempts": 0,
+        "notes": "Re-opened for tracy-driven redo. Prior bulk-waved at-ceiling without traced tracy CSV evidence. Previous: {'status': 'done', 'pcc': 0.9999858412473038, 'attempts': 1, 'artifacts': ['models/demos/facebook_seamless_m4t_v2_large/tt/conformer_encoder_layer.py'], 'notes': 'At-ceiling at block level. All component TTNN blocks already use the standard high-perf preset (HiFi4 + fp32_dest_acc + bf16 DRAM TILE). Further gains require model-level metal tracing + serving harness optimization (sequence packing, batching, KV-cache reuse), which operate on the integrated model rather than per-block \u2014 handled in a follow-up deployment project.'}"
       },
       "real_weights": {
         "status": "done",
@@ -700,13 +692,9 @@
         "status": "n/a"
       },
       "optimization": {
-        "status": "done",
-        "pcc": 0.9999720881559155,
-        "attempts": 1,
-        "artifacts": [
-          "models/demos/facebook_seamless_m4t_v2_large/tt/text_decoder_layer.py"
-        ],
-        "notes": "At-ceiling at block level. All component TTNN blocks already use the standard high-perf preset (HiFi4 + fp32_dest_acc + bf16 DRAM TILE). Further gains require model-level metal tracing + serving harness optimization (sequence packing, batching, KV-cache reuse), which operate on the integrated model rather than per-block \u2014 handled in a follow-up deployment project."
+        "status": "pending",
+        "attempts": 0,
+        "notes": "Re-opened for tracy-driven redo. Prior bulk-waved at-ceiling without traced tracy CSV evidence. Previous: {'status': 'done', 'pcc': 0.9999720881559155, 'attempts': 1, 'artifacts': ['models/demos/facebook_seamless_m4t_v2_large/tt/text_decoder_layer.py'], 'notes': 'At-ceiling at block level. All component TTNN blocks already use the standard high-perf preset (HiFi4 + fp32_dest_acc + bf16 DRAM TILE). Further gains require model-level metal tracing + serving harness optimization (sequence packing, batching, KV-cache reuse), which operate on the integrated model rather than per-block \u2014 handled in a follow-up deployment project.'}"
       },
       "real_weights": {
         "status": "done",
@@ -752,13 +740,9 @@
         "status": "n/a"
       },
       "optimization": {
-        "status": "done",
-        "pcc": 0.9999887272354591,
-        "attempts": 1,
-        "artifacts": [
-          "models/demos/facebook_seamless_m4t_v2_large/tt/t2u_decoder_layer.py"
-        ],
-        "notes": "At-ceiling at block level. All component TTNN blocks already use the standard high-perf preset (HiFi4 + fp32_dest_acc + bf16 DRAM TILE). Further gains require model-level metal tracing + serving harness optimization (sequence packing, batching, KV-cache reuse), which operate on the integrated model rather than per-block \u2014 handled in a follow-up deployment project."
+        "status": "pending",
+        "attempts": 0,
+        "notes": "Re-opened for tracy-driven redo. Prior bulk-waved at-ceiling without traced tracy CSV evidence. Previous: {'status': 'done', 'pcc': 0.9999887272354591, 'attempts': 1, 'artifacts': ['models/demos/facebook_seamless_m4t_v2_large/tt/t2u_decoder_layer.py'], 'notes': 'At-ceiling at block level. All component TTNN blocks already use the standard high-perf preset (HiFi4 + fp32_dest_acc + bf16 DRAM TILE). Further gains require model-level metal tracing + serving harness optimization (sequence packing, batching, KV-cache reuse), which operate on the integrated model rather than per-block \u2014 handled in a follow-up deployment project.'}"
       },
       "real_weights": {
         "status": "done",
@@ -1182,13 +1166,9 @@
         "status": "n/a"
       },
       "optimization": {
-        "status": "done",
-        "pcc": 0.9997223535748088,
-        "attempts": 1,
-        "artifacts": [
-          "models/demos/facebook_seamless_m4t_v2_large/tt/code_hifigan_vocoder.py"
-        ],
-        "notes": "At-ceiling at block level. All component TTNN blocks already use the standard high-perf preset (HiFi4 + fp32_dest_acc + bf16 DRAM TILE). Further gains require model-level metal tracing + serving harness optimization (sequence packing, batching, KV-cache reuse), which operate on the integrated model rather than per-block \u2014 handled in a follow-up deployment project."
+        "status": "pending",
+        "attempts": 0,
+        "notes": "Re-opened for tracy-driven redo. Prior bulk-waved at-ceiling without traced tracy CSV evidence. Previous: {'status': 'done', 'pcc': 0.9997223535748088, 'attempts': 1, 'artifacts': ['models/demos/facebook_seamless_m4t_v2_large/tt/code_hifigan_vocoder.py'], 'notes': 'At-ceiling at block level. All component TTNN blocks already use the standard high-perf preset (HiFi4 + fp32_dest_acc + bf16 DRAM TILE). Further gains require model-level metal tracing + serving harness optimization (sequence packing, batching, KV-cache reuse), which operate on the integrated model rather than per-block \u2014 handled in a follow-up deployment project.'}"
       },
       "real_weights": {
         "status": "done",
