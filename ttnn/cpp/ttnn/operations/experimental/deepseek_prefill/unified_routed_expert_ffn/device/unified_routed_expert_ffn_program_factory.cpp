@@ -5,6 +5,8 @@
 #include "unified_routed_expert_ffn_program_factory.hpp"
 
 #include <cstdint>
+#include <map>
+#include <unordered_map>
 #include <utility>
 
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -73,6 +75,14 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // silu and multiply).
     constexpr uint32_t GRID_X = 11;
     constexpr uint32_t GRID_Y = 8;
+    const auto grid_size = t.x.device()->compute_with_storage_grid_size();
+    TT_FATAL(
+        grid_size.x >= GRID_X && grid_size.y >= GRID_Y,
+        "unified_routed_expert_ffn: expected at least {}x{} compute grid, got {}x{}",
+        GRID_X,
+        GRID_Y,
+        grid_size.x,
+        grid_size.y);
     const uint32_t chunk_M_tiles = op.chunk_M_tiles;
     const uint32_t per_core_M = chunk_M_tiles / GRID_Y;
     TT_FATAL(

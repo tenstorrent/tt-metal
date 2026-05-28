@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <tuple>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
