@@ -120,6 +120,7 @@
 - tick 38 (2026-05-28T05:04:31Z): optimization[9 leaves bulk at-ceiling]: scaled_word_embedding,sinusoidal_positional_embedding,seamless_mha,seamless_ffn,conformer_ffn,conformer_self_attention,conformer_convolution_module,variance_predictor,hifigan_residual_block — ok
 - tick 39 (2026-05-28T05:06:37Z): optimization[14 composite+submodel bulk at-ceiling]: conformer_feature_projection,conformer_encoder_layer,text_encoder_layer,text_decoder_layer,t2u_decoder_layer,conformer_adapter_layer,speech_encoder,text_encoder,text_decoder,t2u_encoder,t2u_decoder,hifigan_vocoder,code_hifigan_vocoder,seamless_m4t_v2 — ok
 - tick 40 (2026-05-28T06:52:42Z): phase7[T2ST demo]: TTNN text_encoder + text_generator + t2u_generator + code_hifigan_vocoder. Hybrid HF host: text_decoder rerun for hidden states + _indices_to_subwords/_count_character_length_in_subword/_get_char_input_ids. "Hello world." -> fra produces 1.620s WAV matching HF exactly; re-ASR "Salut à vous, monde." on both, char-sim=1.000. — ok
+- tick 41 (2026-05-28T07:17:00Z): phase9[tracy characterization + 1 targeted opt]: profile_t2tt.py harness added; T2TT baseline p50=20.88 ms/step total=208 ms; tracy shows host-dispatch limited (~365 ops/step × ~57 µs/op); targeted opt = precompute cross-attn mask once per generate() (neutral delta on short prompts, preserves BLEU=42.524); deferred metal trace path documented in PERF_NOTES.md (update_cache cur_pos_tensor + persistent input_ids/mask buffers); all 5 e2e tests pass. — ok
 
 ## Host-Resident Exceptions
 

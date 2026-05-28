@@ -256,6 +256,8 @@ class TextGenerator(LightweightModule):
         position: int,
         encoder_attention_mask: Optional[torch.Tensor] = None,
         encoder_seq_len_logical: Optional[int] = None,
+        precomputed_self_mask_tt: Optional[ttnn.Tensor] = None,
+        precomputed_encoder_mask_tt: Optional[ttnn.Tensor] = None,
     ) -> torch.Tensor:
         """Run one autoregressive step and return ``[vocab_size]`` host logits.
 
@@ -273,6 +275,12 @@ class TextGenerator(LightweightModule):
                 output. When None we let the decoder use the full
                 tile-padded length (correct only when there was no
                 tile padding).
+            precomputed_self_mask_tt: optional pre-built ``[B, 1, 1, max_seq]``
+                self-attn mask for THIS position. Skips the host-side
+                build + upload per step.
+            precomputed_encoder_mask_tt: optional pre-built
+                ``[B, 1, 1, enc_seq_total]`` cross-attn mask. Invariant
+                across all decode steps of one generate() call.
         """
         if not (0 <= position < self.max_decode_seq_len):
             raise ValueError(f"position({position}) outside [0, max_decode_seq_len={self.max_decode_seq_len})")
@@ -283,6 +291,8 @@ class TextGenerator(LightweightModule):
             past_key_values=self.past_key_values,
             encoder_attention_mask=encoder_attention_mask,
             encoder_seq_len_logical=encoder_seq_len_logical,
+            precomputed_self_mask_tt=precomputed_self_mask_tt,
+            precomputed_encoder_mask_tt=precomputed_encoder_mask_tt,
         )
         return self._logits_from_hidden(hidden_tt)
 
@@ -322,50 +332,102 @@ class TextGenerator(LightweightModule):
 
         tokens: List[int] = [int(decoder_start_token_id), int(tgt_lang_id)]
 
-        # ----- 2. Warm-up: feed positions 0 and 1 to populate self-attn cache -----
-        # decoder_start_token_id (position 0) — its output logits are
-        # discarded (HF's generation loop never reads them).
-        _ = self.decode_step(
-            prev_token=tokens[0],
-            position=0,
-            encoder_attention_mask=encoder_attention_mask,
-            encoder_seq_len_logical=src_logical,
-        )
-
-        # tgt_lang_id (position 1) — its output IS the first sampled position.
-        logits = self.decode_step(
-            prev_token=tokens[1],
-            position=1,
-            encoder_attention_mask=encoder_attention_mask,
-            encoder_seq_len_logical=src_logical,
-        )
-
-        # ----- 3. AR loop — positions 2, 3, ... -----
-        # We sample after each forward; total length is bounded by
-        # max_new_tokens AND max_decode_seq_len (cache capacity).
-        # ``max_new_tokens`` counts the prefix tokens too (matches HF
-        # default semantics for short-form generation).
         max_total = min(int(max_new_tokens), self.max_decode_seq_len)
         if max_total < 2:
             return tokens[:max_total]
 
-        for pos in range(2, max_total):
-            # Greedy: argmax over vocab. The logits we hold were produced
-            # by the PREVIOUS decode_step (whose KV was written at
-            # position pos-1) -- this is the token prediction for slot pos.
-            next_token = int(torch.argmax(logits).item())
-            tokens.append(next_token)
-            if next_token == int(eos_token_id):
-                break
-            if pos + 1 >= max_total:
-                # Reached the budget; no point in running one more step.
-                break
-            # Run one more step to get logits for slot pos+1.
-            logits = self.decode_step(
-                prev_token=next_token,
-                position=pos,
+        # ----- 1b. Pre-compute the per-call invariant cross-attn mask -----
+        # Optimization (Phase-9): the cross-attention mask is invariant across
+        # every decode step in this generate() call (encoder output is fixed
+        # and the 2D padding mask is fixed). Uploading it ONCE here saves
+        # max_total - 1 redundant host->device transfers (and the matching
+        # max_total tilize passes) versus rebuilding inside decode_step.
+        # The self-attention mask still depends on `position`, so we leave
+        # that per-step for now -- it could in principle also be batched
+        # but the encoder mask is the bigger win on Blackhole here (it's the
+        # wider tensor: max_seq=128 vs. enc_seq up to 64-128 depending on
+        # prompt) and the simpler change.
+        precomp_encoder_mask_tt = self._precompute_encoder_mask(
+            encoder_attention_mask=encoder_attention_mask,
+            encoder_seq_len_logical=src_logical,
+            batch=1,
+        )
+
+        try:
+            # ----- 2. Warm-up: feed positions 0 and 1 to populate self-attn cache -----
+            # decoder_start_token_id (position 0) — its output logits are
+            # discarded (HF's generation loop never reads them).
+            _ = self.decode_step(
+                prev_token=tokens[0],
+                position=0,
                 encoder_attention_mask=encoder_attention_mask,
                 encoder_seq_len_logical=src_logical,
+                precomputed_encoder_mask_tt=precomp_encoder_mask_tt,
             )
 
+            # tgt_lang_id (position 1) — its output IS the first sampled position.
+            logits = self.decode_step(
+                prev_token=tokens[1],
+                position=1,
+                encoder_attention_mask=encoder_attention_mask,
+                encoder_seq_len_logical=src_logical,
+                precomputed_encoder_mask_tt=precomp_encoder_mask_tt,
+            )
+
+            # ----- 3. AR loop — positions 2, 3, ... -----
+            # We sample after each forward; total length is bounded by
+            # max_new_tokens AND max_decode_seq_len (cache capacity).
+            # ``max_new_tokens`` counts the prefix tokens too (matches HF
+            # default semantics for short-form generation).
+            for pos in range(2, max_total):
+                # Greedy: argmax over vocab. The logits we hold were produced
+                # by the PREVIOUS decode_step (whose KV was written at
+                # position pos-1) -- this is the token prediction for slot pos.
+                next_token = int(torch.argmax(logits).item())
+                tokens.append(next_token)
+                if next_token == int(eos_token_id):
+                    break
+                if pos + 1 >= max_total:
+                    # Reached the budget; no point in running one more step.
+                    break
+                # Run one more step to get logits for slot pos+1.
+                logits = self.decode_step(
+                    prev_token=next_token,
+                    position=pos,
+                    encoder_attention_mask=encoder_attention_mask,
+                    encoder_seq_len_logical=src_logical,
+                    precomputed_encoder_mask_tt=precomp_encoder_mask_tt,
+                )
+        finally:
+            if precomp_encoder_mask_tt is not None:
+                ttnn.deallocate(precomp_encoder_mask_tt)
+
         return tokens
+
+    # ------------------------------------------------------------------ mask precompute helpers
+    def _precompute_encoder_mask(
+        self,
+        encoder_attention_mask: Optional[torch.Tensor],
+        encoder_seq_len_logical: int,
+        batch: int,
+    ) -> Optional["ttnn.Tensor"]:
+        """Build and upload the (per-call invariant) cross-attention mask.
+
+        Returns None if no mask is needed (no key padding + no tile pad).
+        """
+        td = self.text_decoder
+        enc_seq_total = self.past_key_values.cross_attn.encoder_seq_len
+        if encoder_attention_mask is not None:
+            src_len = int(encoder_attention_mask.shape[1])
+        else:
+            src_len = int(encoder_seq_len_logical)
+        if encoder_attention_mask is None and enc_seq_total == src_len:
+            return None
+        enc_mask_torch = td._build_decode_encoder_attention_mask(
+            encoder_attention_mask_2d=encoder_attention_mask,
+            batch=batch,
+            encoder_seq_len_total=enc_seq_total,
+            src_len=src_len,
+            dtype=torch.float32,
+        )
+        return td._to_tt(enc_mask_torch)

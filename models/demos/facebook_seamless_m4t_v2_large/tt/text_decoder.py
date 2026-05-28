@@ -384,6 +384,8 @@ class TextDecoder(LightweightModule):
         past_key_values,
         encoder_attention_mask: Optional[torch.Tensor] = None,
         encoder_seq_len_logical: Optional[int] = None,
+        precomputed_self_mask_tt: Optional[ttnn.Tensor] = None,
+        precomputed_encoder_mask_tt: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """Run one autoregressive decode step.
 
@@ -398,6 +400,19 @@ class TextDecoder(LightweightModule):
                 :meth:`populate_cross_attention_cache`).
             encoder_attention_mask: optional 2D host ``[B, S]`` padding
                 mask. Combined with the tile-pad mask internally.
+            precomputed_self_mask_tt: optional pre-built ttnn tensor of
+                shape ``[B, 1, 1, max_seq_len]`` for the self-attention
+                mask AT THIS POSITION. When supplied, we skip the host-
+                side mask build + tile upload (a meaningful per-step win
+                in the AR loop). Caller is responsible for keeping the
+                tensor valid until the step returns, and for deallocating
+                it.
+            precomputed_encoder_mask_tt: optional pre-built ttnn tensor of
+                shape ``[B, 1, 1, encoder_seq_len_total]`` for the cross-
+                attention mask. Invariant across all decode steps of one
+                generate() call, so it can be uploaded ONCE and reused.
+                When supplied, ``encoder_attention_mask`` and
+                ``encoder_seq_len_logical`` are ignored.
 
         Returns:
             ttnn tensor of shape ``[B, 1, embed_dim]`` — the decoder's
@@ -431,42 +446,49 @@ class TextDecoder(LightweightModule):
         ttnn.deallocate(inputs_embeds)
         ttnn.deallocate(embed_pos)
 
-        # 3. Build the [B, 1, 1, max_seq] self-attn mask for this step.
-        max_seq_len = past_key_values.self_attn.max_seq_len
-        self_mask_torch = self._build_decode_self_attention_mask(
-            batch=batch,
-            position=position,
-            max_seq_len=max_seq_len,
-            dtype=torch.float32,
-        )
-        self_attention_mask_tt = self._to_tt(self_mask_torch)
-
-        # 4. Build the [B, 1, 1, enc_seq_total] cross-attn mask. We always
-        #    need this when the populated encoder length includes tile
-        #    padding — those K/V rows came from projecting zero encoder
-        #    hidden states (bias-only) and must be masked to -inf to match
-        #    the non-cached forward. The logical src_len is taken from
-        #    ``encoder_attention_mask`` (preferred), then ``encoder_seq_len_logical``
-        #    (positional override), else from the cache slot (assumes no
-        #    tile padding existed).
-        enc_seq_total = past_key_values.cross_attn.encoder_seq_len
-        if encoder_attention_mask is not None:
-            src_len = int(encoder_attention_mask.shape[1])
-        elif encoder_seq_len_logical is not None:
-            src_len = int(encoder_seq_len_logical)
+        # 3. Self-attention mask: prefer the caller-supplied precomputed
+        #    tensor. Fallback: build it host-side + upload per step (the
+        #    original / single-call path).
+        owns_self_mask = False
+        if precomputed_self_mask_tt is not None:
+            self_attention_mask_tt = precomputed_self_mask_tt
         else:
-            src_len = enc_seq_total
-        if encoder_attention_mask is not None or enc_seq_total != src_len:
-            enc_mask_torch = self._build_decode_encoder_attention_mask(
-                encoder_attention_mask_2d=encoder_attention_mask,
+            max_seq_len = past_key_values.self_attn.max_seq_len
+            self_mask_torch = self._build_decode_self_attention_mask(
                 batch=batch,
-                encoder_seq_len_total=enc_seq_total,
-                src_len=src_len,
+                position=position,
+                max_seq_len=max_seq_len,
                 dtype=torch.float32,
             )
-            encoder_mask_tt = self._to_tt(enc_mask_torch)
+            self_attention_mask_tt = self._to_tt(self_mask_torch)
+            owns_self_mask = True
+
+        # 4. Cross-attention mask: prefer the caller-supplied precomputed
+        #    tensor (uploaded once per generate() — invariant across
+        #    decode steps). Fallback: rebuild every step.
+        owns_encoder_mask = False
+        if precomputed_encoder_mask_tt is not None:
+            encoder_mask_tt = precomputed_encoder_mask_tt
         else:
-            encoder_mask_tt = None
+            enc_seq_total = past_key_values.cross_attn.encoder_seq_len
+            if encoder_attention_mask is not None:
+                src_len = int(encoder_attention_mask.shape[1])
+            elif encoder_seq_len_logical is not None:
+                src_len = int(encoder_seq_len_logical)
+            else:
+                src_len = enc_seq_total
+            if encoder_attention_mask is not None or enc_seq_total != src_len:
+                enc_mask_torch = self._build_decode_encoder_attention_mask(
+                    encoder_attention_mask_2d=encoder_attention_mask,
+                    batch=batch,
+                    encoder_seq_len_total=enc_seq_total,
+                    src_len=src_len,
+                    dtype=torch.float32,
+                )
+                encoder_mask_tt = self._to_tt(enc_mask_torch)
+                owns_encoder_mask = True
+            else:
+                encoder_mask_tt = None
 
         # 5. Stack of decoder layers with KV cache.
         for i, layer in enumerate(self.layers):
@@ -482,9 +504,11 @@ class TextDecoder(LightweightModule):
         # 6. Final LayerNorm.
         hidden_states = self.final_layer_norm(hidden_states)
 
-        # Clean up scratch device tensors.
-        ttnn.deallocate(self_attention_mask_tt)
-        if encoder_mask_tt is not None:
+        # Clean up scratch device tensors we ALLOCATED in this call. Caller-
+        # supplied precomputed masks are NOT deallocated here.
+        if owns_self_mask:
+            ttnn.deallocate(self_attention_mask_tt)
+        if owns_encoder_mask and encoder_mask_tt is not None:
             ttnn.deallocate(encoder_mask_tt)
 
         return hidden_states
