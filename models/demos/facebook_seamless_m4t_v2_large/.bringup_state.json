@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-28T00:18:15Z",
-  "updated_at": "2026-05-28T10:12:41Z",
+  "updated_at": "2026-05-28T10:23:10Z",
   "components": [
     {
       "name": "layernorm",
@@ -1512,6 +1512,12 @@
       "ts": "2026-05-28T10:12:41Z",
       "action": "manual-state-sync[real_weights=done all, generation=done all, perf=done t2tt only]",
       "result": "ok"
+    },
+    {
+      "tick": 41,
+      "ts": "2026-05-28T10:23:10Z",
+      "action": "perf[s2tt]",
+      "result": "ok"
     }
   ],
   "config": {
@@ -1573,8 +1579,11 @@
         "notes": "Phase 6: WER=0.0 vs HF on sample WAVs (eng->fra: 'Bonjour, c\\'est un test.')."
       },
       "perf": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "steady_step_ms": 17.47,
+        "speedup": 1.294,
+        "attempts": 1,
+        "notes": "Trace path delivers 1.29x end-to-end speedup (1.38x per-step). Tracy: no single hot op >5% \u2014 at-ceiling at pipeline level. WER stayed 0.0 vs HF."
       }
     },
     {

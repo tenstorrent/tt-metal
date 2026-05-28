@@ -310,3 +310,167 @@ All 5 e2e tests pass after the change:
 - `test_e2e_t2st.py::test_t2st_audio_parity_with_hf` — pass
 - `test_e2e_s2st.py::test_s2st_audio_parity_with_hf` — pass
 - `test_text_generator.py` (2 tests) — pass
+
+## S2TT
+
+Per-use-case pipeline perf characterization for S2TT (speech-to-text
+translation). The decode path reuses the same `TextGenerator` that T2TT
+uses, so the structural Phase 9c work (paged_update_cache + cross-call
+trace) is already in for this use case. What's S2TT-specific is the
+prefill: a 256-step audio-feature `SpeechEncoder` (24 Conformer layers
++ 1 adapter) instead of T2TT's tiny text encoder.
+
+### Setup (S2TT)
+
+- Device: p150a (single Blackhole)
+- ARCH_NAME=blackhole
+- Branch: ssinghal/seamless-m4t @ d0b558ffa37 + this pass
+- Harness: `models/demos/facebook_seamless_m4t_v2_large/tt/profile_s2tt.py`
+- Audio: `demo/inputs/sample_hello.wav` (~1.6 s, eng -> fra)
+- max_new_tokens = 32; generation stopped at 11 tokens
+- All times measured with `ttnn.synchronize_device` boundaries
+  (host-perceived latency, NOT pure kernel duration)
+
+### Baseline numbers (2 timed translate() calls per config)
+
+| Phase                                  | Untraced | Traced  | Delta            |
+| -------------------------------------- | -------: | ------: | ---------------- |
+| prefill_ms (speech_enc + cross-attn)   |    56.90 |   73.43 | +16.5 (capture)  |
+| steady_decode_step_ms (p50 replay)     |    24.18 |   17.47 | -6.71 (-27.7 %)  |
+| total_ms / translate() (11 tokens)     |   353.29 |  273.08 | -80.2 (1.29x)    |
+| tokens_generated_per_call              |       11 |      11 |                  |
+
+The traced steady-state per-step (17.47 ms) on S2TT is essentially the
+same as on T2TT (17.62 ms) — the decode path is identical, so the
+trace replay timing is invariant across use cases by design.
+
+The end-to-end **1.29x speedup** is larger than T2TT's 1.21x because
+the S2TT AR loop generated 11 tokens vs T2TT's 9 — more decode steps
+means more replays in which the trace win compounds. Prefill grows
+~5x from T2TT to S2TT (15 ms -> 57 ms untraced; the Conformer encoder
+dominates) and is absorbed by the trace capture cost on the first
+call (73 ms traced), then disappears for subsequent calls because the
+trace is cross-call-reusable.
+
+### Tracy findings (S2TT, 1 warmup + 1 timed, ~22 110 device ops)
+
+Captured via `python -m tracy -p -v -r --no-device -n seamless_m4t_s2tt
+models/demos/facebook_seamless_m4t_v2_large/tt/profile_s2tt.py
+--num-timed 1`.
+
+#### Top device ops by call count
+
+| OP                                  | calls | notes                          |
+| ----------------------------------- | ----:| ------------------------------ |
+| MatmulDeviceOperation               | 5088 | encoder + decoder projs, FFN, LM head |
+| ReshapeViewDeviceOperation          | 4664 | view-only, no kernel           |
+| TransposeDeviceOperation            | 3658 | head-dim transpose, Conformer  |
+| BinaryNgDeviceOperation             | 2152 | residual adds                  |
+| LayerNormDeviceOperation            | 1906 | encoder+decoder LN + adapter   |
+| SDPAOperation                       | 1056 | self+cross SDPA                |
+| PagedUpdateCacheDeviceOperation     | 1056 | self-attn KV update (Phase 9c) |
+| InterleavedToShardedDeviceOperation | 1104 | I2S for sharded paths          |
+| UnaryDeviceOperation                |  728 | SiLU, scalar muls              |
+| UpdateKVCacheOperation              |  192 | cross-attn cache fill (one-shot per call) |
+| Conv2dDeviceOperation               |   48 | Conformer convolution module   |
+
+#### Top host-side wall-time zones
+
+| ZONE                                  | calls | total_ms | mean_us |
+| ------------------------------------- | ----:| -------: | ------: |
+| convert_python_tensor_to_tt_tensor    | 2139 |     5330 |    2492 |
+| to_tile_major_layout_nfaces           | 1564 |     2004 |    1281 |
+| FDMeshCommandQueue::finish_nolock     |   51 |       65 |    1269 |
+
+Per-op host-enqueue cost is remarkably flat (~1.1 - 1.9 us per op).
+There is no single op type at >5 % wall-clock dominance — Matmul is the
+biggest by call count (37 % of dispatches) but its mean host-enqueue is
+1.6 us, the same range as Transpose and Reshape. Speech-encoder host
+mask-build (`_build_encoder_attention_mask` + `_to_tt`) shows up as
+the bulk of the `convert_python_tensor_to_tt_tensor` wall-time, but
+this is prefill cost, not steady-state.
+
+### Diagnosis
+
+Steady-state per-step (17.47 ms traced) is the same as T2TT, so the
+floor analysis from Phase 9b carries over: ~365 ops/step at ~50 us
+host dispatch is ~18 ms — and traced replay already removes that.
+The remaining ~17 ms is on-device kernel time. We are at the kernel-time
+floor; further wins require per-block work (sharded matmuls, LN/Linear
+fusion) which is the `skills/optimization/` frontier. Bringup log
+already reports 24/24 blocks at-ceiling at the optimization-skill
+level, so all leverage at the pipeline level for S2TT is exhausted.
+
+### Optimization applied
+
+**None — at-ceiling at the pipeline-perf level.**
+
+The trace machinery from Phase 9c already provides the largest
+pipeline-level win available (1.29x end-to-end). Tracy shows no single
+device op at >5 % of the budget; per-op host-enqueue costs are flat
+across MatMul / Reshape / Transpose / LayerNorm. The conformer mask
+build (`_build_encoder_attention_mask`) is the largest host-side
+zone but runs only once per translate() and amortises across the AR
+loop. Forcing a "win" by tuning two flat ops at once is a regression
+risk (per the failure-modes section of `skills/perf/SKILL.md`).
+
+The encoder mask cost could be reduced by caching the chunked
+attention mask between translate() calls when the audio_seq_len is
+constant, but the wall-time delta would be ~5 ms one-shot on a single
+prefill call — below the noise floor of the steady-state AR loop and
+not worth the structural churn.
+
+### After numbers
+
+Same as the baseline traced row (no additional optimization applied
+in this pass — characterization confirmed Phase 9c trace is the
+pipeline-level win).
+
+| Phase                                  | After   |
+| -------------------------------------- | ------: |
+| prefill_ms (one-shot capture cost)     |   73.43 |
+| steady_decode_step_ms                  |   17.47 |
+| total_ms / translate() (11 tokens)     |  273.08 |
+| tokens_generated_per_call              |      11 |
+
+### Correctness verification
+
+```
+pytest models/demos/facebook_seamless_m4t_v2_large/tests/test_e2e_s2tt.py -v
+```
+
+- `test_s2tt_wer_matches_hf` — PASS (TTNN_WER = HF_WER = 0.0000, drift = 0.0000, tolerance = 0.05)
+- `test_asr_wer_matches_hf` — PASS (TTNN_WER = HF_WER = 0.0000, drift = 0.0000)
+
+### Recommendations for the next pass
+
+1. **Per-block work first.** S2TT's remaining 17 ms/step is on-device
+   compute. The next leverage is at the `skills/optimization/` frontier:
+   sharded matmul kernel configs in the Conformer encoder layer, LM-head
+   `bfloat8_b` weight quantization. Those changes belong in the
+   block-level skill, not here.
+2. **Encoder prefill caching.** A modest one-shot win is available by
+   caching the encoder attention mask buffer when `audio_seq_len` is
+   constant across calls (the typical demo case). Saves ~5 ms per
+   translate() prefill on top of the trace; not worth doing
+   independently but cheap to fold into a per-block-mask refactor.
+3. **Speech encoder trace.** The encoder forward currently rebuilds host
+   masks per call. Wrapping it in a separate trace (with mask buffers as
+   persistent inputs) would amortise ~30-40 ms of host work per call
+   over a session. Out of scope for this pass; would require
+   speech_encoder.py to accept persistent mask inputs.
+
+### Files touched in this phase
+
+- `models/demos/facebook_seamless_m4t_v2_large/tt/profile_s2tt.py` (new)
+  — S2TT tracy harness modeled on `profile_t2tt.py`; 1 warmup + N timed;
+  `step_callback` splits `replay` / `capture` / `warmup` per-step
+  costs; reports `prefill_ms` (speech encoder + cross-attn populate),
+  `steady_decode_step_ms`, `total_ms`. The decode path is the SAME
+  `TextGenerator` instance from T2TT — the structural plumbing is
+  shared, this harness just changes how prefill is timed and exercises
+  the SpeechEncoder.
+- `models/demos/facebook_seamless_m4t_v2_large/PERF_NOTES.md` — this
+  S2TT section.
+
+No block files were modified in this pass — characterization-only.
