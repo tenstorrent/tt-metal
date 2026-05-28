@@ -466,7 +466,9 @@
     export HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/ TT_MM_THROTTLE_PERF=2
     # Catch silent CB overflows / NOC asserts on the failing leg. Watcher
     # writes to /work/generated/watcher/watcher.log and TT_THROWs the moment
-    # any kernel writes past a CB's allocated pages — see issue #45327.
+    # any kernel writes past a CB allocated page count — see issue #45327.
+    # NOTE: no apostrophes here on purpose; the cmd JSON is shell-interpolated
+    # with single quotes in models-e2e-tests-impl.yaml apply-filters step.
     export TT_METAL_WATCHER=60
     SKIP_MODEL_LOAD="--skip-model-load"
     [ "${MLPERF_READ_ONLY:-true}" = "false" ] && SKIP_MODEL_LOAD=""
