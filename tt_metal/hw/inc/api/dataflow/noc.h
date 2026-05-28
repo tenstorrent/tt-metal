@@ -6,7 +6,11 @@
 
 #include "api/dataflow/dataflow_api.h"
 
+template <typename DSpecT>
+class TensorAccessor;
+
 struct MulticastEndpoint;
+class CircularBuffer;
 class DataflowBuffer;
 
 // Concrete arg struct for the DFB-specific Noc overloads.
@@ -666,6 +670,66 @@ public:
      * core.
      */
     void async_full_barrier() const { noc_async_full_barrier(noc_id_); }
+
+    /**
+     * @brief Zeroes a local-L1 destination buffer (overload 1).
+     *
+     * @see write_zeros_l1_barrier.
+     *
+     * @param dst Destination object (CircularBuffer or DataflowBuffer)
+     * @param size_bytes Number of bytes to zero
+     * @param args Additional arguments for destination address calculation (offset within @p dst)
+     * @tparam Dst Must be CircularBuffer or DataflowBuffer
+     */
+    template <typename Dst>
+    void write_zeros(const Dst& dst, uint32_t size_bytes, const dst_args_t<Dst>& args = {}) const;
+
+    /**
+     * @brief Zeroes pages of a DRAM tensor using a caller-pre-zeroed scratch buffer (overload 2).
+     *
+     * Reads up to NOC_MAX_BURST_SIZE bytes per chunk from the start of @p scratch, so
+     * the caller's pre-zeroed prefix must cover at least min(@p size_bytes, NOC_MAX_BURST_SIZE)
+     * bytes. If the scratch is shorter, the impl will read garbage past the zero region and
+     * write it to DRAM. Caller MUST zero the scratch first via overload (1) +
+     * write_zeros_l1_barrier() before the first call. For Scratch = DataflowBuffer the impl
+     * asserts scratch.get_entry_size() is large enough (under WATCHER_ENABLED).
+     *
+     * @see write_zeros_dram_barrier.
+     *
+     * @param accessor Destination DRAM tensor accessor
+     * @param size_bytes Number of bytes to zero per page
+     * @param args Destination page args (page_id, offset_bytes)
+     * @param scratch Pre-zeroed L1 scratch buffer (CircularBuffer or DataflowBuffer)
+     * @tparam DSpecT TensorAccessor type spec; must satisfy DSpecT::is_dram
+     * @tparam Scratch Must be CircularBuffer or DataflowBuffer
+     *
+     * @code
+     *   noc.write_zeros(scratch, scratch_bytes);
+     *   noc.write_zeros_l1_barrier();
+     *   for (p) noc.write_zeros(addr_gen, page_size, {.page_id = p}, scratch);
+     *   noc.write_zeros_dram_barrier();
+     * @endcode
+     */
+    template <typename DSpecT, typename Scratch>
+    void write_zeros(
+        const ::TensorAccessor<DSpecT>& accessor,
+        uint32_t size_bytes,
+        const dst_args_t<::TensorAccessor<DSpecT>>& args,
+        const Scratch& scratch) const;
+
+    /**
+     * @brief Barrier for L1 destinations zeroed via write_zeros overload (1).
+     *
+     * @see write_zeros (overload 1).
+     */
+    void write_zeros_l1_barrier() const;
+
+    /**
+     * @brief Barrier for DRAM destinations zeroed via write_zeros overload (2).
+     *
+     * @see write_zeros (overload 2).
+     */
+    void write_zeros_dram_barrier() const;
 
 #ifdef ARCH_QUASAR
     /**
