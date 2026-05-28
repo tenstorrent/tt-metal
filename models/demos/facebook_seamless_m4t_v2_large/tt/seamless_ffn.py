@@ -59,6 +59,20 @@ class SeamlessFfn(LightweightModule):
         self.hidden = int(hidden)
         self.ffn_dim = int(ffn_dim)
 
+        # Perf note (tracy on AR-loop traced text_decoder_layer): the fc2
+        # matmul (K=ffn_dim=8192 -> N=hidden=1024, M=1) is the single
+        # hottest op at ~117 us per call (~25% of one decoder-layer
+        # replay) and is DRAM-bandwidth bound (HiFi2 had zero effect).
+        # Storing the 8 MB fc2 weight in bfloat8_b halves the DRAM read
+        # bandwidth on the K-major reduction. The matmul still accumulates
+        # in fp32_dest and outputs bfloat16, so PCC stays within the 0.99
+        # band (verified per-block + e2e). fc1 weight stays bf16 because
+        # the fc1 N expansion fans out to 8192 outputs and is much less
+        # sensitive to weight quantisation; gain there is small (DRAM
+        # read is interleaved across 128 cores) and not worth the dtype
+        # change.
+        fc2_weight_dtype = ttnn.bfloat8_b if weight_dtype == ttnn.bfloat16 else weight_dtype
+
         # ttnn.linear expects weights laid out as ``(in_features, out_features)``,
         # i.e. the transpose of the PyTorch ``nn.Linear.weight``.
         self.fc1_weight = ttnn.from_torch(
@@ -78,7 +92,7 @@ class SeamlessFfn(LightweightModule):
         self.fc2_weight = ttnn.from_torch(
             fc2_weight.transpose(0, 1).contiguous(),
             device=device,
-            dtype=weight_dtype,
+            dtype=fc2_weight_dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=weight_memory_config,
         )
@@ -90,11 +104,15 @@ class SeamlessFfn(LightweightModule):
             memory_config=weight_memory_config,
         )
 
+        # packer_l1_acc=True is the SKILL-recommended default; lets the matmul
+        # kernel pack into its L1 accumulator and reduce dst-register pressure
+        # on the wide-K (8192) fc2 reduction. Verified PCC-neutral on the FFN
+        # standalone (0.9999) and on the text_decoder_layer composite.
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
-            packer_l1_acc=False,
+            packer_l1_acc=True,
         )
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:

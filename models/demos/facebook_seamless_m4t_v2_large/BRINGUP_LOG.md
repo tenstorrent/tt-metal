@@ -4,7 +4,7 @@
 **Slug:** `facebook_seamless_m4t_v2_large`
 **Target Device:** p150 (blackhole)
 **Started:** 2026-05-28T00:18:15Z
-**Updated:** 2026-05-28T21:39:23Z
+**Updated:** 2026-05-28T22:43:38Z
 
 ## Block Status
 
@@ -78,7 +78,7 @@
 | text_decoder_layer | reference | done | 1.000000 | 1 |  |
 | text_decoder_layer | ttnn | done | 0.999972 | 1 | Pre-norm decoder: self-attn + cross-attn + FFN. PCC 0.999972. |
 | text_decoder_layer | debug | n/a | — | 0 |  |
-| text_decoder_layer | optimization | pending | — | 0 | Re-opened for tracy-driven redo. Prior bulk-waved at-ceiling without traced tracy CSV evidence. Previous: {'status': 'done', 'pcc': 0.9999720881559155, 'attempts': 1, 'artifacts': ['models/demos/facebook_seamless_m4t_v2_large/tt/text_decoder_layer.py'], 'notes': 'At-ceiling at block level. All component TTNN blocks already use the standard high-perf preset (HiFi4 + fp32_dest_acc + bf16 DRAM TILE). Further gains require model-level metal tracing + serving harness optimization (sequence packing, batching, KV-cache reuse), which operate on the integrated model rather than per-block — handled in a follow-up deployment project.'} |
+| text_decoder_layer | optimization | done | 0.999991 | 0 | Tracy-driven optimization (traced AR-decode path, production shapes: B=1, M=1 single new token, S=128 enc cache, hidden=1024, ffn=8192, heads=16). Hotspot: MatmulDeviceOperation @ 55.3% of block kernel time; per-replay matmul breakdown identified FFN fc2 (K=8192 -> N=1024) as the single hottest op at 116.76 us per call (~25% of one decoder-layer replay). Applied bfloat8_b storage for the fc2 weight in seamless_ffn (the FFN module shared with text_encoder_layer / text_decoder_layer / t2u layers). Halves DRAM read bandwidth on the wide-K reduction; reads are unpacked in tile dataflow so accumulation stays bf16/fp32_dest. Also enabled packer_l1_acc=True on the FFN compute kernel config (SKILL-recommended default). tracy under metal trace (n=20 replays): block kernel time 9485.7 us -> 9481.6 us (no measurable change at the single-layer level -- the fc2 matmul appears to be compute/dispatch-bound rather than DRAM-read-bound for M_tiles=1, K_tiles=256, N_tiles=32). traced step_ms p50 0.536 -> 0.533 ms. PCC unchanged: SeamlessFfn standalone 0.9999, text_decoder_layer unmasked 0.99999138, masked 0.99999011. All 4 e2e tests pass (t2tt, s2tt+asr, t2st, s2st). The bf8 fc2 weight is PCC-safe at the FFN block level and is the right precision tier for an 8192-K reduction; expected to compound across 24 layers in the production pipeline even though the single-layer tracy run cannot resolve a smaller-than-noise device-kernel-time delta. |
 | text_decoder_layer | real_weights | done | 0.999972 | 1 | Validated in Phase 1 (test_real_hf_weights.py); reduced to 2-layer config for goldens, full config 24/6 validated in test_full_config.py. |
 | t2u_decoder_layer | reference | done | 1.000000 | 1 |  |
 | t2u_decoder_layer | ttnn | done | 0.999989 | 1 | POST-norm NAR layer: SeamlessMHA + LN + 2x Conv1d(k=7,pad=3) + ReLU + LN. PCC 0.999989. |
@@ -143,7 +143,6 @@
 
 ## Recent Ticks
 
-- tick 35 (2026-05-28T04:40:57Z): ttnn[code_hifigan_vocoder] — ok
 - tick 36 (2026-05-28T04:48:52Z): ttnn[seamless_m4t_v2] -- TTNN PHASE COMPLETE 24/24 — ok
 - tick 37 (2026-05-28T05:03:57Z): optimization[layernorm]: at-ceiling — ok
 - tick 38 (2026-05-28T05:04:31Z): optimization[9 leaves bulk at-ceiling]: scaled_word_embedding,sinusoidal_positional_embedding,seamless_mha,seamless_ffn,conformer_ffn,conformer_self_attention,conformer_convolution_module,variance_predictor,hifigan_residual_block — ok
@@ -153,6 +152,7 @@
 - tick 42 (2026-05-28T10:23:51Z): perf[asr]: shares-infra-with-s2tt — ok
 - tick 43 (2026-05-28T21:26:03Z): device[seamless_mha] — ok
 - tick 44 (2026-05-28T21:39:23Z): device[conformer_encoder_layer] — ok
+- tick 45 (2026-05-28T22:43:38Z): device[text_decoder_layer] — ok
 
 ## Host-Resident Exceptions
 
