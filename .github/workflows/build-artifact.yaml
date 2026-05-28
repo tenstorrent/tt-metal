@@ -87,7 +87,7 @@ on:
         required: false
         type: string
         default: ""
-        description: "Git ref used only for wheel checkout/versioning" 
+        description: "Git ref used only for wheel checkout/versioning"
       use-artifacts-from-run:
         required: false
         type: string
