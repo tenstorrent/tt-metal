@@ -1,8 +1,0 @@
-﻿ttnn.hardtanh\_bw
-=================
-
-.. currentmodule:: ttnn
-
-.. _ttnn.hardtanh_bw:
-
-.. autooperation:: ttnn.hardtanh_bw

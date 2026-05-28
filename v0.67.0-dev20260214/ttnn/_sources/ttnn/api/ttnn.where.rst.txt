@@ -1,8 +1,0 @@
-﻿ttnn.where
-==========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.where:
-
-.. autooperation:: ttnn.where

@@ -1,8 +1,0 @@
-﻿ttnn.all\_to\_all\_combine
-==========================
-
-.. currentmodule:: ttnn
-
-.. _ttnn.all_to_all_combine:
-
-.. autooperation:: ttnn.all_to_all_combine

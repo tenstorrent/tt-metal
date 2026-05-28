@@ -1,8 +1,0 @@
-﻿ttnn.swish
-==========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.swish:
-
-.. autooperation:: ttnn.swish

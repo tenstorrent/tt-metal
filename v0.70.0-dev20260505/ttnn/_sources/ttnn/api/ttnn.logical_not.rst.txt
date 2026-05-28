@@ -1,8 +1,0 @@
-﻿ttnn.logical\_not
-=================
-
-.. currentmodule:: ttnn
-
-.. _ttnn.logical_not:
-
-.. autooperation:: ttnn.logical_not

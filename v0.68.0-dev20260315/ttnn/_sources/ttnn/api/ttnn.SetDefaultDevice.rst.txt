@@ -1,8 +1,0 @@
-﻿ttnn.SetDefaultDevice
-=====================
-
-.. currentmodule:: ttnn
-
-.. _ttnn.SetDefaultDevice:
-
-.. autodata:: ttnn.SetDefaultDevice

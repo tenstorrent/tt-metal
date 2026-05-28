@@ -1,8 +1,0 @@
-﻿ttnn.open\_device
-=================
-
-.. currentmodule:: ttnn
-
-.. _ttnn.open_device:
-
-.. autodata:: ttnn.open_device

@@ -1,8 +1,0 @@
-﻿ttnn.addcdiv
-============
-
-.. currentmodule:: ttnn
-
-.. _ttnn.addcdiv:
-
-.. autooperation:: ttnn.addcdiv

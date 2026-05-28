@@ -1,8 +1,0 @@
-﻿ttnn.dump\_tensor
-=================
-
-.. currentmodule:: ttnn
-
-.. _ttnn.dump_tensor:
-
-.. autooperation:: ttnn.dump_tensor

@@ -1,8 +1,0 @@
-﻿ttnn.frac
-=========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.frac:
-
-.. autooperation:: ttnn.frac

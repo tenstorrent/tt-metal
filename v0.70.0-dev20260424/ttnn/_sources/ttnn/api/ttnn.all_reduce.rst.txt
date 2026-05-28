@@ -1,8 +1,0 @@
-﻿ttnn.all\_reduce
-================
-
-.. currentmodule:: ttnn
-
-.. _ttnn.all_reduce:
-
-.. autooperation:: ttnn.all_reduce

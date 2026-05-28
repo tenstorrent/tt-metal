@@ -1,8 +1,0 @@
-﻿ttnn.cumprod
-============
-
-.. currentmodule:: ttnn
-
-.. _ttnn.cumprod:
-
-.. autooperation:: ttnn.cumprod

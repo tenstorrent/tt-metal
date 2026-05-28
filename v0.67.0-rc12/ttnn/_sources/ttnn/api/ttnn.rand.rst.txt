@@ -1,8 +1,0 @@
-﻿ttnn.rand
-=========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.rand:
-
-.. autooperation:: ttnn.rand

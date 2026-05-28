@@ -1,8 +1,0 @@
-﻿ttnn.quantize
-=============
-
-.. currentmodule:: ttnn
-
-.. _ttnn.quantize:
-
-.. autooperation:: ttnn.quantize

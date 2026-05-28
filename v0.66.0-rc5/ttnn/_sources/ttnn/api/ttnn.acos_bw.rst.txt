@@ -1,8 +1,0 @@
-﻿ttnn.acos\_bw
-=============
-
-.. currentmodule:: ttnn
-
-.. _ttnn.acos_bw:
-
-.. autooperation:: ttnn.acos_bw

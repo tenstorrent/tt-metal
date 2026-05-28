@@ -1,8 +1,0 @@
-﻿ttnn.rpow
-=========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.rpow:
-
-.. autooperation:: ttnn.rpow

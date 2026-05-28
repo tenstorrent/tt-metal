@@ -1,8 +1,0 @@
-﻿ttnn.ldexp\_
-============
-
-.. currentmodule:: ttnn
-
-.. _ttnn.ldexp_:
-
-.. autooperation:: ttnn.ldexp_

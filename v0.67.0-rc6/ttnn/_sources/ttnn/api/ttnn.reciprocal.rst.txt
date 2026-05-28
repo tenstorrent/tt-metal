@@ -1,8 +1,0 @@
-﻿ttnn.reciprocal
-===============
-
-.. currentmodule:: ttnn
-
-.. _ttnn.reciprocal:
-
-.. autooperation:: ttnn.reciprocal

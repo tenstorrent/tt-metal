@@ -1,8 +1,0 @@
-﻿ttnn.relu\_max
-==============
-
-.. currentmodule:: ttnn
-
-.. _ttnn.relu_max:
-
-.. autooperation:: ttnn.relu_max

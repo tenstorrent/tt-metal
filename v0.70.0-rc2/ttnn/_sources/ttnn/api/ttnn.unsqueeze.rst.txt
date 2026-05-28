@@ -1,8 +1,0 @@
-﻿ttnn.unsqueeze
-==============
-
-.. currentmodule:: ttnn
-
-.. _ttnn.unsqueeze:
-
-.. autooperation:: ttnn.unsqueeze

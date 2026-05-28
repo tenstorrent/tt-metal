@@ -1,8 +1,0 @@
-﻿ttnn.reduce\_scatter
-====================
-
-.. currentmodule:: ttnn
-
-.. _ttnn.reduce_scatter:
-
-.. autooperation:: ttnn.reduce_scatter

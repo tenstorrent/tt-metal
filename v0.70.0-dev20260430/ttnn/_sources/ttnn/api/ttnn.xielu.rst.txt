@@ -1,8 +1,0 @@
-﻿ttnn.xielu
-==========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.xielu:
-
-.. autooperation:: ttnn.xielu

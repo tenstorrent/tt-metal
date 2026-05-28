@@ -1,8 +1,0 @@
-﻿ttnn.avg\_pool2d
-================
-
-.. currentmodule:: ttnn
-
-.. _ttnn.avg_pool2d:
-
-.. autooperation:: ttnn.avg_pool2d

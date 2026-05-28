@@ -1,8 +1,0 @@
-﻿ttnn.floor\_bw
-==============
-
-.. currentmodule:: ttnn
-
-.. _ttnn.floor_bw:
-
-.. autooperation:: ttnn.floor_bw

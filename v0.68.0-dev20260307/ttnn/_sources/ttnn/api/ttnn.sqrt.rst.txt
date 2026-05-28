@@ -1,8 +1,0 @@
-﻿ttnn.sqrt
-=========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.sqrt:
-
-.. autooperation:: ttnn.sqrt

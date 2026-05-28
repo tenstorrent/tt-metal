@@ -1,8 +1,0 @@
-﻿ttnn.prelu
-==========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.prelu:
-
-.. autooperation:: ttnn.prelu

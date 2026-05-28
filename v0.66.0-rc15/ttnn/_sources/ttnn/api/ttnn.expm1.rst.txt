@@ -1,8 +1,0 @@
-﻿ttnn.expm1
-==========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.expm1:
-
-.. autooperation:: ttnn.expm1

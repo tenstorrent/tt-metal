@@ -1,8 +1,0 @@
-﻿ttnn.gcd
-========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.gcd:
-
-.. autooperation:: ttnn.gcd

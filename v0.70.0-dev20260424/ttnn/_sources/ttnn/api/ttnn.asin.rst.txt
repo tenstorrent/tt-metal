@@ -1,8 +1,0 @@
-﻿ttnn.asin
-=========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.asin:
-
-.. autooperation:: ttnn.asin

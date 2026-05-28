@@ -1,8 +1,0 @@
-﻿ttnn.max\_bw
-============
-
-.. currentmodule:: ttnn
-
-.. _ttnn.max_bw:
-
-.. autooperation:: ttnn.max_bw

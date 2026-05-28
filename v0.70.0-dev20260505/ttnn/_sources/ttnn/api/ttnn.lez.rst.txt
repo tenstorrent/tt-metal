@@ -1,8 +1,0 @@
-﻿ttnn.lez
-========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.lez:
-
-.. autooperation:: ttnn.lez

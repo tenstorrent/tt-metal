@@ -1,8 +1,0 @@
-﻿ttnn.to\_device
-===============
-
-.. currentmodule:: ttnn
-
-.. _ttnn.to_device:
-
-.. autooperation:: ttnn.to_device

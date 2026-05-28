@@ -1,8 +1,0 @@
-﻿ttnn.ge\_
-=========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.ge_:
-
-.. autooperation:: ttnn.ge_

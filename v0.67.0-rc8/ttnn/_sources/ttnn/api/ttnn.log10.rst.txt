@@ -1,8 +1,0 @@
-﻿ttnn.log10
-==========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.log10:
-
-.. autooperation:: ttnn.log10

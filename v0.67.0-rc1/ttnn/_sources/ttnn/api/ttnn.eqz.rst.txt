@@ -1,8 +1,0 @@
-﻿ttnn.eqz
-========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.eqz:
-
-.. autooperation:: ttnn.eqz

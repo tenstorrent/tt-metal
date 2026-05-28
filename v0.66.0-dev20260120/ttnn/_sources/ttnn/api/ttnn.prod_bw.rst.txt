@@ -1,8 +1,0 @@
-﻿ttnn.prod\_bw
-=============
-
-.. currentmodule:: ttnn
-
-.. _ttnn.prod_bw:
-
-.. autooperation:: ttnn.prod_bw

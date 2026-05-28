@@ -1,8 +1,0 @@
-﻿ttnn.xlogy
-==========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.xlogy:
-
-.. autooperation:: ttnn.xlogy

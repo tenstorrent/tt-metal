@@ -1,8 +1,0 @@
-﻿ttnn.erfc\_bw
-=============
-
-.. currentmodule:: ttnn
-
-.. _ttnn.erfc_bw:
-
-.. autooperation:: ttnn.erfc_bw

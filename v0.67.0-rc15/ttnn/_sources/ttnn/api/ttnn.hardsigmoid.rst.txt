@@ -1,8 +1,0 @@
-﻿ttnn.hardsigmoid
-================
-
-.. currentmodule:: ttnn
-
-.. _ttnn.hardsigmoid:
-
-.. autooperation:: ttnn.hardsigmoid

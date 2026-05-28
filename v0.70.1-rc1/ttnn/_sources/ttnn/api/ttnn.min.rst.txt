@@ -1,8 +1,0 @@
-﻿ttnn.min
-========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.min:
-
-.. autooperation:: ttnn.min

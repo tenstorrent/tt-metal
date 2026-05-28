@@ -1,8 +1,0 @@
-﻿ttnn.sparse\_matmul
-===================
-
-.. currentmodule:: ttnn
-
-.. _ttnn.sparse_matmul:
-
-.. autooperation:: ttnn.sparse_matmul

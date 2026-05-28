@@ -1,8 +1,0 @@
-﻿ttnn.selu\_bw
-=============
-
-.. currentmodule:: ttnn
-
-.. _ttnn.selu_bw:
-
-.. autooperation:: ttnn.selu_bw

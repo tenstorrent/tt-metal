@@ -1,8 +1,0 @@
-﻿ttnn.rdiv\_bw
-=============
-
-.. currentmodule:: ttnn
-
-.. _ttnn.rdiv_bw:
-
-.. autooperation:: ttnn.rdiv_bw

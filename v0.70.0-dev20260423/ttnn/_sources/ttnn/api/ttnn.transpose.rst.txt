@@ -1,8 +1,0 @@
-﻿ttnn.transpose
-==============
-
-.. currentmodule:: ttnn
-
-.. _ttnn.transpose:
-
-.. autooperation:: ttnn.transpose

@@ -1,8 +1,0 @@
-﻿ttnn.erfinv
-===========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.erfinv:
-
-.. autooperation:: ttnn.erfinv

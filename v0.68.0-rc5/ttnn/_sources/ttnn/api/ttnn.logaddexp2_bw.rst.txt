@@ -1,8 +1,0 @@
-﻿ttnn.logaddexp2\_bw
-===================
-
-.. currentmodule:: ttnn
-
-.. _ttnn.logaddexp2_bw:
-
-.. autooperation:: ttnn.logaddexp2_bw

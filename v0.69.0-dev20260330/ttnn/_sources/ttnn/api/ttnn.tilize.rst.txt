@@ -1,8 +1,0 @@
-﻿ttnn.tilize
-===========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.tilize:
-
-.. autooperation:: ttnn.tilize

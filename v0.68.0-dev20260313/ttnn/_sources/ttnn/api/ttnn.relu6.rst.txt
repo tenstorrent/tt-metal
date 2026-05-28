@@ -1,8 +1,0 @@
-﻿ttnn.relu6
-==========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.relu6:
-
-.. autooperation:: ttnn.relu6

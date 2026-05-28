@@ -1,8 +1,0 @@
-﻿ttnn.mac
-========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.mac:
-
-.. autooperation:: ttnn.mac

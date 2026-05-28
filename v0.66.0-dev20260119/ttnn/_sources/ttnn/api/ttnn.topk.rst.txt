@@ -1,8 +1,0 @@
-﻿ttnn.topk
-=========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.topk:
-
-.. autooperation:: ttnn.topk

@@ -1,8 +1,0 @@
-﻿ttnn.elu
-========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.elu:
-
-.. autooperation:: ttnn.elu

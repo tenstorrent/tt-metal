@@ -1,8 +1,0 @@
-﻿ttnn.broadcast
-==============
-
-.. currentmodule:: ttnn
-
-.. _ttnn.broadcast:
-
-.. autooperation:: ttnn.broadcast

@@ -1,8 +1,0 @@
-﻿ttnn.reallocate
-===============
-
-.. currentmodule:: ttnn
-
-.. _ttnn.reallocate:
-
-.. autooperation:: ttnn.reallocate

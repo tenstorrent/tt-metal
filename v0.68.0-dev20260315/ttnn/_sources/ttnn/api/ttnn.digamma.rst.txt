@@ -1,8 +1,0 @@
-﻿ttnn.digamma
-============
-
-.. currentmodule:: ttnn
-
-.. _ttnn.digamma:
-
-.. autooperation:: ttnn.digamma

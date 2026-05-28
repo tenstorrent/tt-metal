@@ -1,8 +1,0 @@
-﻿ttnn.conj
-=========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.conj:
-
-.. autooperation:: ttnn.conj

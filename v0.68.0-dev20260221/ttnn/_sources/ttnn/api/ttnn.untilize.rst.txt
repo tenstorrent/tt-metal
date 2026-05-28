@@ -1,8 +1,0 @@
-﻿ttnn.untilize
-=============
-
-.. currentmodule:: ttnn
-
-.. _ttnn.untilize:
-
-.. autooperation:: ttnn.untilize

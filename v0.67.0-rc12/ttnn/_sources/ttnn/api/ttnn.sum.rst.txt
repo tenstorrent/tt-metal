@@ -1,8 +1,0 @@
-﻿ttnn.sum
-========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.sum:
-
-.. autooperation:: ttnn.sum

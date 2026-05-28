@@ -1,8 +1,0 @@
-﻿ttnn.softplus
-=============
-
-.. currentmodule:: ttnn
-
-.. _ttnn.softplus:
-
-.. autooperation:: ttnn.softplus

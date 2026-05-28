@@ -1,8 +1,0 @@
-﻿ttnn.square
-===========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.square:
-
-.. autooperation:: ttnn.square

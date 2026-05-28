@@ -1,8 +1,0 @@
-﻿ttnn.logical\_or
-================
-
-.. currentmodule:: ttnn
-
-.. _ttnn.logical_or:
-
-.. autooperation:: ttnn.logical_or

@@ -1,8 +1,0 @@
-﻿ttnn.unary\_chain
-=================
-
-.. currentmodule:: ttnn
-
-.. _ttnn.unary_chain:
-
-.. autooperation:: ttnn.unary_chain

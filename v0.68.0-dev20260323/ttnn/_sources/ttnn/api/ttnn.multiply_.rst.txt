@@ -1,8 +1,0 @@
-﻿ttnn.multiply\_
-===============
-
-.. currentmodule:: ttnn
-
-.. _ttnn.multiply_:
-
-.. autooperation:: ttnn.multiply_

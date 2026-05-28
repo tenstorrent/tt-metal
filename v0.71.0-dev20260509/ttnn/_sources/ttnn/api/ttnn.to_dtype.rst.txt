@@ -1,8 +1,0 @@
-﻿ttnn.to\_dtype
-==============
-
-.. currentmodule:: ttnn
-
-.. _ttnn.to_dtype:
-
-.. autooperation:: ttnn.to_dtype

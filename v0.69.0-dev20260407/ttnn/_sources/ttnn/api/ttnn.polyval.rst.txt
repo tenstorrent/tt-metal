@@ -1,8 +1,0 @@
-﻿ttnn.polyval
-============
-
-.. currentmodule:: ttnn
-
-.. _ttnn.polyval:
-
-.. autooperation:: ttnn.polyval

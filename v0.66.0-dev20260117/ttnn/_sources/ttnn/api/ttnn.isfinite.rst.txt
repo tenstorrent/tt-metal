@@ -1,8 +1,0 @@
-﻿ttnn.isfinite
-=============
-
-.. currentmodule:: ttnn
-
-.. _ttnn.isfinite:
-
-.. autooperation:: ttnn.isfinite

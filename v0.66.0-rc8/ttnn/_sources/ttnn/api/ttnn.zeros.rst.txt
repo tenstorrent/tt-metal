@@ -1,8 +1,0 @@
-﻿ttnn.zeros
-==========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.zeros:
-
-.. autooperation:: ttnn.zeros

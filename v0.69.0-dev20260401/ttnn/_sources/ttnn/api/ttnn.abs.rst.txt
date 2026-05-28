@@ -1,8 +1,0 @@
-﻿ttnn.abs
-========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.abs:
-
-.. autooperation:: ttnn.abs

@@ -1,8 +1,0 @@
-﻿ttnn.isinf
-==========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.isinf:
-
-.. autooperation:: ttnn.isinf

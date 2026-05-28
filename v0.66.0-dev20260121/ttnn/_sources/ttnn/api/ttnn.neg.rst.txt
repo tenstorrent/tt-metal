@@ -1,8 +1,0 @@
-﻿ttnn.neg
-========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.neg:
-
-.. autooperation:: ttnn.neg

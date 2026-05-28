@@ -1,8 +1,0 @@
-﻿ttnn.cos\_bw
-============
-
-.. currentmodule:: ttnn
-
-.. _ttnn.cos_bw:
-
-.. autooperation:: ttnn.cos_bw

@@ -1,8 +1,0 @@
-﻿ttnn.reshard
-============
-
-.. currentmodule:: ttnn
-
-.. _ttnn.reshard:
-
-.. autooperation:: ttnn.reshard

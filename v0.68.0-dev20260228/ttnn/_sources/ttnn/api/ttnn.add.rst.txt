@@ -1,8 +1,0 @@
-﻿ttnn.add
-========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.add:
-
-.. autooperation:: ttnn.add

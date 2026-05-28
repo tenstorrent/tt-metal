@@ -1,8 +1,0 @@
-﻿ttnn.tan
-========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.tan:
-
-.. autooperation:: ttnn.tan

@@ -1,8 +1,0 @@
-﻿ttnn.update\_cache
-==================
-
-.. currentmodule:: ttnn
-
-.. _ttnn.update_cache:
-
-.. autooperation:: ttnn.update_cache

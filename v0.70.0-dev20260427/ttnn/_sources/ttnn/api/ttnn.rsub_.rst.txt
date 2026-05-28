@@ -1,8 +1,0 @@
-﻿ttnn.rsub\_
-===========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.rsub_:
-
-.. autooperation:: ttnn.rsub_

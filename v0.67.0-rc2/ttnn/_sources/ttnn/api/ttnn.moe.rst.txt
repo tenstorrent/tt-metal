@@ -1,8 +1,0 @@
-﻿ttnn.moe
-========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.moe:
-
-.. autooperation:: ttnn.moe

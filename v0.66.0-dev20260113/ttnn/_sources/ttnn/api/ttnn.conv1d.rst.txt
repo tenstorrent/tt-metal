@@ -1,8 +1,0 @@
-﻿ttnn.conv1d
-===========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.conv1d:
-
-.. autooperation:: ttnn.conv1d

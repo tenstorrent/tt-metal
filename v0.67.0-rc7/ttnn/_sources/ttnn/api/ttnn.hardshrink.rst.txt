@@ -1,8 +1,0 @@
-﻿ttnn.hardshrink
-===============
-
-.. currentmodule:: ttnn
-
-.. _ttnn.hardshrink:
-
-.. autooperation:: ttnn.hardshrink

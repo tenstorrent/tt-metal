@@ -1,8 +1,0 @@
-﻿ttnn.exp\_bw
-============
-
-.. currentmodule:: ttnn
-
-.. _ttnn.exp_bw:
-
-.. autooperation:: ttnn.exp_bw

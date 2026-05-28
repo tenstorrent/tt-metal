@@ -1,8 +1,0 @@
-﻿ttnn.bitwise\_not
-=================
-
-.. currentmodule:: ttnn
-
-.. _ttnn.bitwise_not:
-
-.. autooperation:: ttnn.bitwise_not

@@ -1,8 +1,0 @@
-﻿ttnn.relu\_bw
-=============
-
-.. currentmodule:: ttnn
-
-.. _ttnn.relu_bw:
-
-.. autooperation:: ttnn.relu_bw

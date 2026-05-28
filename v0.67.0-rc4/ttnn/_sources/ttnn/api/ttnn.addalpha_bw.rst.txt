@@ -1,8 +1,0 @@
-﻿ttnn.addalpha\_bw
-=================
-
-.. currentmodule:: ttnn
-
-.. _ttnn.addalpha_bw:
-
-.. autooperation:: ttnn.addalpha_bw

@@ -1,8 +1,0 @@
-﻿ttnn.lerp
-=========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.lerp:
-
-.. autooperation:: ttnn.lerp

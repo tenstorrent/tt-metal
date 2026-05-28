@@ -1,8 +1,0 @@
-﻿ttnn.assign
-===========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.assign:
-
-.. autooperation:: ttnn.assign

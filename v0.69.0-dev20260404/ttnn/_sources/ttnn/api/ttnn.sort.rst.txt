@@ -1,8 +1,0 @@
-﻿ttnn.sort
-=========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.sort:
-
-.. autooperation:: ttnn.sort

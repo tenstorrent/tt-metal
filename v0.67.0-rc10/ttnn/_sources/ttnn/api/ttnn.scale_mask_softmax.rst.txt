@@ -1,8 +1,0 @@
-﻿ttnn.scale\_mask\_softmax
-=========================
-
-.. currentmodule:: ttnn
-
-.. _ttnn.scale_mask_softmax:
-
-.. autooperation:: ttnn.scale_mask_softmax
