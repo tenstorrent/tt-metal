@@ -71,6 +71,8 @@ The high-level path should be a thin deterministic loop over the low-level metho
 
 The generator should own tokenizer loading, page-table setup, KV-cache reset, and any trace-side state reset needed between runs. Keep vLLM-facing low-level methods explicit enough that `generator_vllm.py` can delegate to them rather than duplicating model logic.
 
+Decode tracing should be maintained as a fully-traced decode path that does not need host involvement within a forward pass. If necessary you may do a nominal amount of host work between steps e.g. copying the output tensor to the input, incrementing the position, but it should not be necessary to move tensors back to the host for this and where possible they should be part of the trace. If in doubt check what models/tt_transformers does.
+
 ## vLLM Adapter
 
 `tt/generator_vllm.py` should be a thin adapter when the generator's low-level methods already match vLLM needs, and a thicker adapter only when the model shape contract requires it.
@@ -128,6 +130,10 @@ python -m models.common.readiness_check.run_autoregressive \
 
 The first two are scored numerically (top-1 / top-5 / top-100). The third — `run_autoregressive` — has both the HF reference and the ported model generate a completion to the same prompt (loaded from `models/common/readiness_check/autoregressive_prompt.txt`) and writes `hf_completion.txt` and `tt_completion.txt` side by side under `<model_dir>/readiness_autoregressive/`. There is **no programmatic check** — you must read both completions yourself and judge whether the ported model's output is reasonable given the reference. Expect minor lexical drift from bf8 quantization; you're looking for coherent, on-topic continuation, not token-exact match. Severe divergence (incoherent text, immediate repetition, wrong language, runs of identical tokens) means the model is broken even if teacher-forcing top-100 looks healthy. Include the verdict — and a short excerpt from each — in the work log.
 
+You must also run and generate the following performance figures from warmed-up sessions with sampling on-device enabled:
+1. 128-token prefill time-to-first-token (ms)
+2. End-to-end decode t/s/u (average over next 32 tokens following above prefill, as observed at the host)
+
 ### vLLM Server Integration Test
 
 After the three readiness checks above pass, verify the vLLM serving path.
@@ -159,7 +165,7 @@ Include your verdict in the work log. The runner writes `server.log`, `sampling_
 
 **Reproducibility-only failures are out of scope.** There are known framework bugs that cause sampled outputs to not be bit-exact across runs, positions, or batches. Tests that *only* assert exact reproducibility — typical names: `test_top1_is_greedy`, `test_topk`, `test_uniform_seed_deterministic`, `test_specific_seed_reproducible`, `test_same_seeds_reproduce_across_batches`, `test_*_mixed_batch`, `test_mixed_params_batch` — can fail for this reason on any model and are not your problem to fix. If those are the **only** failures, note them in the work log and move on. Failures involving actual correctness (gibberish output, wrong logprobs *values*, missing logprobs entirely, crashes) are still in scope.
 
-**Record the working server invocation in the work log.** Once you have the runner passing end-to-end, write down the exact `--max-model-len` and `--tt-config` values you used (e.g. `--max-model-len 32768 --tt-config '{"trace_region_size": 85000000, "fabric_config": "FABRIC_1D"}'`). Future runs, handoffs, and CI submissions all need this — discovering it by trial-and-error each time is wasted hardware time. If you also discovered env vars that mattered (e.g. `TT_LLAMA_TEXT_VER`), record those too.
+**Record the working server invocation in the work log.** Once you have the runner passing end-to-end, write down the exact `--max-model-len` and `--tt-config` values you used (e.g. `--max-model-len 32768 --tt-config '{"trace_region_size": 0, "fabric_config": "FABRIC_1D"}'`). Future runs, handoffs, and CI submissions all need this — discovering it by trial-and-error each time is wasted hardware time. If you also discovered env vars that mattered (e.g. `TT_LLAMA_TEXT_VER`), record those too.
 
 `--max-model-len` and `--tt-config` are typed first-class flags on the runner — use those rather than smuggling `--max_model_len` or `--plugin-config` through `--additional-server-args`. Reserve `--additional-server-args` for genuinely uncommon flags (e.g. `--async-scheduling`, `--tokenizer <path>`).
 
@@ -189,6 +195,8 @@ models/autoports/<model>/tt/generator_vllm.py
 models/autoports/<model>/doc/productize/work_log.md
 models/autoports/<model>/doc/productize/README.md
 ```
+
+Your README should lead with the top-1/top-5/top-100 figures for the full model and the 128-token prefill ms and mean over 32 token decode t/s/u for the full model.
 
 ## Useful References
 
