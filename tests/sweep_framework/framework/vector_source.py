@@ -203,7 +203,6 @@ class VectorExportSource(VectorSource):
     @staticmethod
     def _get_grouping_kind(module_name: str) -> str | None:
         """Classify a manifest module name by shared suffix parsing rules.
-        
         When both hw and mesh suffixes are present (e.g. .hw_..._1c.mesh_4x8),
         return 'hw' since that is the primary grouping mode. The mesh suffix
         is a sub-grouping within the hw group.
