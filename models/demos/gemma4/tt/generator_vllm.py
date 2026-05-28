@@ -1,6 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
+import torch
+
 import ttnn
 from models.demos.gemma4.tt.common import create_tt_model
 from models.tt_transformers.tt.generator import create_submeshes
@@ -49,6 +53,11 @@ class Gemma4ForCausalLM(HybridAttentionForCausalLM):
         # standalone demo. Do not split sampling into a second trace that
         # assumes the first trace input tensor is a token buffer.
         self.enable_split_sampling = False
+        # Mirrors the env-var check in :meth:`initialize_vllm_model` so the
+        # forward-side padding logic doesn't need to re-read the environment
+        # on every step. Defaults to on; flip ``GEMMA4_BOUNDED_SLIDING_KV_CACHE=0``
+        # to fall back to the legacy unbounded path through the paged ops.
+        self._bounded_sliding_kv_cache = os.environ.get("GEMMA4_BOUNDED_SLIDING_KV_CACHE", "1") != "0"
 
     def _get_prefill_user_page_table(
         self,
@@ -114,6 +123,23 @@ class Gemma4ForCausalLM(HybridAttentionForCausalLM):
 
         target_prefill_len = prefill_seq_len if prefill_seq_len is not None else prefill_len
         num_blocks = num_blocks_in_seq(target_prefill_len, effective_block_size)
+        # Bounded sliding-window cache: ``paged_fill_cache`` /
+        # ``paged_update_cache`` with ``cache_position_modulo`` set require
+        # ``page_table.shape[1] >= sliding_window / effective_block_size``
+        # so the modulo wrap can address every position in
+        # ``[0, sliding_window)``. The sliced page_table needs to satisfy
+        # this even when the warmup or early-prefill ``target_prefill_len``
+        # is smaller than the sliding window. Unused slots are never
+        # referenced at runtime; the ``-1`` padding below makes any stray
+        # read produce an obvious out-of-range block ID rather than
+        # silently clobbering block 0.
+        if self._bounded_sliding_kv_cache:
+            text_config = getattr(self.model[0].hf_config, "text_config", self.model[0].hf_config)
+            sliding_window = getattr(text_config, "sliding_window", None)
+            if sliding_window is not None and effective_block_size > 0:
+                min_blocks_for_bounded = num_blocks_in_seq(sliding_window, effective_block_size)
+                if min_blocks_for_bounded > num_blocks:
+                    num_blocks = min_blocks_for_bounded
         if page_table.shape[1] < num_blocks:
             padding = torch.ones(1, num_blocks - page_table.shape[1], dtype=torch.int32) * -1
             page_table = torch.cat([page_table, padding], dim=1)
@@ -309,6 +335,17 @@ class Gemma4ForCausalLM(HybridAttentionForCausalLM):
         model_path = hf_config._name_or_path
         submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
 
+        # Opt into the bounded sliding-window KV cache path on sliding layers.
+        # vLLM's hybrid manager already produces SlidingWindowSpec-shaped page
+        # tables for sliding layers; the flag makes Gemma4Attention pass
+        # ``cache_position_modulo=sliding_window`` to the three paged ops so
+        # they correctly address the bounded physical pool. Default-off in
+        # ``create_tt_model``; flipped on here because the bridge is the
+        # path that actually receives bounded buffers from vLLM. Env-var
+        # override ``GEMMA4_BOUNDED_SLIDING_KV_CACHE=0`` lets the legacy
+        # unbounded path back in if a regression appears.
+        bounded_sliding_kv_cache = os.environ.get("GEMMA4_BOUNDED_SLIDING_KV_CACHE", "1") != "0"
+
         model_args = []
         model = []
         state_dict = None
@@ -324,6 +361,7 @@ class Gemma4ForCausalLM(HybridAttentionForCausalLM):
                 paged_attention_config=None,
                 create_kv_cache=False,
                 model_path=model_path,
+                bounded_sliding_kv_cache=bounded_sliding_kv_cache,
             )
             _patch_model_args(
                 model_args_i,
@@ -346,6 +384,7 @@ class Gemma4ForCausalLM(HybridAttentionForCausalLM):
 
     def prefill_forward(self, *args, page_tables_per_layer=None, **kwargs):
         page_tables_per_layer = self._build_per_layer_page_tables(page_tables_per_layer, kwargs.get("page_table"))
+        page_tables_per_layer = self._pad_sliding_page_tables_for_bounded(page_tables_per_layer, kwargs.get("kv_cache"))
         per_submesh = self._chunk_page_tables_per_dp(page_tables_per_layer)
         # Push the per-layer block IDs into the persistent device buffers
         # *before* entering ``Generator.prefill_forward_text`` — that path
@@ -361,6 +400,7 @@ class Gemma4ForCausalLM(HybridAttentionForCausalLM):
 
     def decode_forward(self, *args, page_tables_per_layer=None, **kwargs):
         page_tables_per_layer = self._build_per_layer_page_tables(page_tables_per_layer, kwargs.get("page_table"))
+        page_tables_per_layer = self._pad_sliding_page_tables_for_bounded(page_tables_per_layer, kwargs.get("kv_cache"))
         per_submesh = self._chunk_page_tables_per_dp(page_tables_per_layer)
         if per_submesh is not None:
             for m, pt_for_submesh in zip(self.model, per_submesh):
@@ -471,4 +511,86 @@ class Gemma4ForCausalLM(HybridAttentionForCausalLM):
         for layer_idx, source_idx in kv_shared_map.items():
             if 0 <= layer_idx < len(out) and 0 <= source_idx < len(out):
                 out[layer_idx] = out[source_idx]
+        return out
+
+    def _pad_sliding_page_tables_for_bounded(self, page_tables_per_layer, kv_cache):
+        """Pad sliding-layer page tables out to ``sliding_window/block_size``
+        columns so the bounded paged ops' static shape check passes on short
+        prompts.
+
+        The paged-cache kernels with ``cache_position_modulo`` set require
+        ``page_table_shape[1] >= modulo / effective_block_size`` so the
+        modulo wrap can address every position in ``[0, sliding_window)``.
+        vLLM's hybrid kv-cache manager allocates block columns *lazily* as
+        the prompt fills, so for a short prompt (e.g. 256 tokens at
+        block_size=64 → 4 columns) the per-layer page_table is smaller than
+        the bounded path needs and the kernel correctly TT_FATALs.
+
+        Pad each sliding layer's page_table by repeating the last valid
+        column. The padded slots are never accessed at runtime: every
+        active position is < ``current_pos``, and vLLM has already
+        allocated real blocks for positions in ``[0, current_pos]``. The
+        repeat (vs. zeros) is purely defensive — if a future code path
+        dereferenced a padded slot it would land on a real allocated block
+        instead of clobbering block 0.
+
+        Full-attention layers are left alone; ``cache_position_modulo`` is
+        only set on sliding layers, so their page-table sizing is governed
+        by the legacy ``input_shape[2]`` check that doesn't have this
+        problem.
+
+        No-op when:
+
+          - bounded mode is off (``GEMMA4_BOUNDED_SLIDING_KV_CACHE=0``)
+          - the model has no sliding layers / no ``sliding_window``
+          - ``kv_cache`` is not available (warmup pathways before
+            allocation, or non-paged callers); the check below will catch
+            any genuine size mismatch
+        """
+        if not self._bounded_sliding_kv_cache:
+            return page_tables_per_layer
+        if not page_tables_per_layer:
+            return page_tables_per_layer
+        model = self.model[0]
+        text_config = getattr(model.hf_config, "text_config", model.hf_config)
+        sliding_window = getattr(text_config, "sliding_window", None)
+        layer_types = getattr(text_config, "layer_types", None)
+        if sliding_window is None or layer_types is None:
+            return page_tables_per_layer
+
+        # Read block_size off the first available K-cache. Layout per the
+        # vLLM bridge's allocator: ``kv_cache[submesh_idx][layer_idx][0]``
+        # is the K cache for that layer; its declared ``shape[2]`` is the
+        # block_size vLLM used when sizing the page tables it just gave us.
+        block_size = None
+        if kv_cache is not None:
+            try:
+                block_size = int(kv_cache[0][0].shape[2])
+            except (TypeError, IndexError, AttributeError):
+                block_size = None
+        if block_size is None:
+            # Fallback: read off whatever layer-attached cache exists.
+            try:
+                block_size = int(model.layers[0].self_attn.kv_cache[0].shape[2])
+            except (TypeError, IndexError, AttributeError):
+                return page_tables_per_layer  # Truly can't determine; let the kernel surface the size mismatch.
+
+        if sliding_window % block_size != 0:
+            return page_tables_per_layer  # Misalignment — bounded path can't be used; let the kernel fail loudly.
+        target_cols = sliding_window // block_size
+
+        out = []
+        for i, pt in enumerate(page_tables_per_layer):
+            if (
+                pt is None
+                or i >= len(layer_types)
+                or layer_types[i] != "sliding_attention"
+                or not hasattr(pt, "shape")
+                or pt.shape[-1] >= target_cols
+            ):
+                out.append(pt)
+                continue
+            pad_amount = target_cols - pt.shape[-1]
+            last_col = pt[..., -1:].repeat(*([1] * (pt.dim() - 1)), pad_amount)
+            out.append(torch.cat([pt, last_col], dim=-1))
         return out
