@@ -27,48 +27,38 @@ on:
         description: "Comma-separated substrings to filter workflow names (e.g. 'ops-unit-tests,Blackhole'). Empty = all."
         type: string
         default: ""
+      consecutive-failures-high-volume:
+        description: "Consecutive failures required to file an issue for high-volume workflows (more than 'high-volume-runs-per-day' main runs in last 24h)."
+        type: number
+        default: 4
+      consecutive-failures-low-volume:
+        description: "Consecutive failures required to file an issue for low-volume workflows."
+        type: number
+        default: 2
+      high-volume-runs-per-day:
+        description: "Strict cutoff (>) for classifying a workflow as high-volume based on main runs in the last 24h."
+        type: number
+        default: 5
 
 permissions:
   contents: read
   actions: read
 
 jobs:
-  cursor-cli-smoke-test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-
-      - name: Ensure CURSOR_API_KEY is configured
-        env:
-          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
-        run: |
-          if [ -z "$CURSOR_API_KEY" ]; then
-            echo "Missing secret CURSOR_API_KEY"
-            exit 1
-          fi
-
-      - name: Install Cursor CLI
-        run: |
-          set -euo pipefail
-          install_script="$(mktemp)"
-          curl --fail --show-error --silent --location \
-            --proto '=https' --tlsv1.2 \
-            https://cursor.com/install \
-            -o "$install_script"
-          bash "$install_script"
-          rm -f "$install_script"
-          echo "$HOME/.cursor/bin" >> "$GITHUB_PATH"
-
-      - name: Run simple Cursor prompt
-        env:
-          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
-        run: |
-          set -euo pipefail
-          output="$(agent -p "Reply with exactly: CURSOR_CI_OK")"
-          echo "Agent output: $output"
-          if [[ "$output" != *"CURSOR_CI_OK"* ]]; then
-            echo "Unexpected agent output; expected CURSOR_CI_OK"
-            exit 1
-          fi
+  auto-issues:
+    uses: tenstorrent/tt-auto-triage/.github/workflows/triage-ci.yaml@ebanerjee/create-issues-copilot
+    with:
+      create-issues: ${{ inputs.create-issues }}
+      issue-repo: ${{ inputs.issue-repo }}
+      target-repo: ${{ inputs.target-repo }}
+      max-issues: ${{ fromJSON(inputs.max-issues) }}
+      llm-backend: ${{ inputs.llm-backend }}
+      workflow-filter: ${{ inputs.workflow-filter }}
+      consecutive-failures-high-volume: ${{ fromJSON(inputs.consecutive-failures-high-volume) }}
+      consecutive-failures-low-volume: ${{ fromJSON(inputs.consecutive-failures-low-volume) }}
+      high-volume-runs-per-day: ${{ fromJSON(inputs.high-volume-runs-per-day) }}
+    secrets:
+      AGGREGATE_READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      ISSUE_WRITE_TOKEN: ${{ secrets.EVAN_RESTRICTED_TOKEN }}
+      CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
+      COPILOT_PAT: ${{ secrets.AUTO_TRIAGE_TOKEN }}
