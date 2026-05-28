@@ -145,7 +145,7 @@ TEST_F(RTATestFixture, SentinelPatternHandlingAndMissingRTADetection) {
 
         experimental::metal2_host_api::KernelSpec dm_spec{
             .unique_id = DM_KERNEL_NAME,
-            .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{rta_crta_kernel_path},
+            .source = rta_crta_kernel_path,
             .num_threads = 1,
             .compile_time_arg_bindings = {{"l1_scratch_addr", l1_unreserved_base}},
             .config_spec =
@@ -156,7 +156,7 @@ TEST_F(RTATestFixture, SentinelPatternHandlingAndMissingRTADetection) {
         };
         experimental::metal2_host_api::KernelSpec compute_spec{
             .unique_id = COMPUTE_KERNEL_NAME,
-            .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{rta_crta_kernel_path},
+            .source = rta_crta_kernel_path,
             .num_threads = 1,
             .compile_time_arg_bindings = {{"l1_scratch_addr", compute_scratch_addr}},
             .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
@@ -272,11 +272,14 @@ TEST_F(RTATestFixture, CorrectArgDispatchAndPayloadValidation) {
 
     experimental::metal2_host_api::KernelSpec dm_spec{
         .unique_id = DM_KERNEL_NAME,
-        .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{rta_crta_kernel_path},
-        .num_threads = is_quasar ? static_cast<uint8_t>(num_dms_) : uint8_t{1},
-        .runtime_arguments_schema =
-            {.num_runtime_varargs = default_rtas.size(), .num_common_runtime_varargs = default_crtas.size()},
+        .source = rta_crta_kernel_path,
+        .num_threads = is_quasar ? num_dms_ : 1u,
         .config_spec = dm_cfg,
+        .advanced_options =
+            experimental::metal2_host_api::KernelAdvancedOptions{
+                .num_runtime_varargs = default_rtas.size(),
+                .num_common_runtime_varargs = default_crtas.size(),
+            },
     };
     if (is_quasar) {
         dm_spec.compile_time_arg_bindings = {{"dm_id", 0}, {"l1_scratch_addr", l1_unreserved_base}};
@@ -300,14 +303,18 @@ TEST_F(RTATestFixture, CorrectArgDispatchAndPayloadValidation) {
         experimental::metal2_host_api::ProgramRunParams params;
         experimental::metal2_host_api::ProgramRunParams::KernelRunParams krp{
             .kernel_spec_name = DM_KERNEL_NAME,
-            .common_runtime_varargs = default_crtas,
+            .advanced_options =
+                experimental::metal2_host_api::AdvancedKernelRunParams{
+                    .common_runtime_varargs = default_crtas,
+                },
         };
         for (const auto& c : core_range1) {
-            krp.runtime_varargs.push_back({experimental::metal2_host_api::NodeCoord{c}, default_rtas});
+            krp.advanced_options.runtime_varargs.push_back({experimental::metal2_host_api::NodeCoord{c}, default_rtas});
         }
         if (!is_quasar) {
             for (const auto& c : core_range2) {
-                krp.runtime_varargs.push_back({experimental::metal2_host_api::NodeCoord{c}, rtas_range2});
+                krp.advanced_options.runtime_varargs.push_back(
+                    {experimental::metal2_host_api::NodeCoord{c}, rtas_range2});
             }
         }
         params.kernel_run_params = {krp};
@@ -386,22 +393,22 @@ TEST_P(RTAAssertTest, OutOfBoundsArgAccessDetection) {
 
     // RTA test reads index == default_rtas.size() (one past the end), so the kernel must declare
     // exactly default_rtas.size() varargs to make that access OOB.
-    experimental::metal2_host_api::KernelSpec::RuntimeArgSchema schema;
+    experimental::metal2_host_api::KernelAdvancedOptions adv_opts;
     if (params.test_rta) {
-        schema.num_runtime_varargs = default_rtas.size();
+        adv_opts.num_runtime_varargs = default_rtas.size();
     } else {
-        schema.num_common_runtime_varargs = default_crtas.size();
+        adv_opts.num_common_runtime_varargs = default_crtas.size();
     }
 
     experimental::metal2_host_api::KernelSpec kspec{
         .unique_id = OOB_KERNEL_NAME,
-        .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{rta_crta_kernel_path},
+        .source = rta_crta_kernel_path,
         .compiler_options = {.defines = m2_defines},
-        .runtime_arguments_schema = schema,
+        .advanced_options = adv_opts,
     };
     if (params.processor_class == HalProcessorClassType::DM) {
         if (is_quasar) {
-            kspec.num_threads = static_cast<uint8_t>(num_dms_);
+            kspec.num_threads = num_dms_;
             kspec.compile_time_arg_bindings = {{"dm_id", 0}};
         } else {
             kspec.num_threads = 1;
@@ -437,10 +444,10 @@ TEST_P(RTAAssertTest, OutOfBoundsArgAccessDetection) {
     experimental::metal2_host_api::ProgramRunParams::KernelRunParams krp{.kernel_spec_name = OOB_KERNEL_NAME};
     if (params.test_rta) {
         for (const auto& c : core_range) {
-            krp.runtime_varargs.push_back({experimental::metal2_host_api::NodeCoord{c}, default_rtas});
+            krp.advanced_options.runtime_varargs.push_back({experimental::metal2_host_api::NodeCoord{c}, default_rtas});
         }
     } else {
-        krp.common_runtime_varargs = default_crtas;
+        krp.advanced_options.common_runtime_varargs = default_crtas;
     }
     params_m2.kernel_run_params = {krp};
     experimental::metal2_host_api::SetProgramRunParameters(program, params_m2);
@@ -468,16 +475,19 @@ TEST_F(RTATestFixture, QuasarMultiDMOutOfBoundsArgDetection) {
     constexpr const char* MULTI_DM_KERNEL_NAME = "multi_dm_oob";
     experimental::metal2_host_api::KernelSpec dm_spec{
         .unique_id = MULTI_DM_KERNEL_NAME,
-        .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{rta_crta_kernel_path},
-        .num_threads = static_cast<uint8_t>(num_dms_),
+        .source = rta_crta_kernel_path,
+        .num_threads = num_dms_,
         .compiler_options =
             {.defines = {{"MAX_RTA_IDX", std::to_string(default_rtas.size())}, {"TEST_MULTI_DM_RTA", "1"}}},
         .compile_time_arg_bindings = {{"num_dms", num_dms_}, {"l1_sync_addr", l1_unreserved_base}},
-        .runtime_arguments_schema = {.num_runtime_varargs = default_rtas.size()},
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        .advanced_options =
+            experimental::metal2_host_api::KernelAdvancedOptions{
+                .num_runtime_varargs = default_rtas.size(),
+            },
     };
     experimental::metal2_host_api::WorkUnitSpec wu{
         .unique_id = "main",
@@ -494,7 +504,7 @@ TEST_F(RTATestFixture, QuasarMultiDMOutOfBoundsArgDetection) {
     experimental::metal2_host_api::ProgramRunParams params;
     experimental::metal2_host_api::ProgramRunParams::KernelRunParams krp{.kernel_spec_name = MULTI_DM_KERNEL_NAME};
     for (const auto& c : core_range) {
-        krp.runtime_varargs.push_back({experimental::metal2_host_api::NodeCoord{c}, default_rtas});
+        krp.advanced_options.runtime_varargs.push_back({experimental::metal2_host_api::NodeCoord{c}, default_rtas});
     }
     params.kernel_run_params = {krp};
     experimental::metal2_host_api::SetProgramRunParameters(program, params);

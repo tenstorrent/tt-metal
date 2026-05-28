@@ -122,7 +122,7 @@ runs:
     # - Build ccache: Large binaries, infrequent changes, high retention
     # - Kernel ccache: Smaller JIT objects, frequent compilations, different eviction policies
     - name: Set up kernel ccache
-      if: ${{ inputs.enable-kernel-ccache == 'true' }}
+      if: ${{ inputs.enable-kernel-ccache == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) }}
       working-directory: ${{ inputs.path }}
       run: |
         echo "Enabling TT Metal kernel ccache"
