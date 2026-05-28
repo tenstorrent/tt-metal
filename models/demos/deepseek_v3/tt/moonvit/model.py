@@ -241,3 +241,121 @@ class MoonViT(LightweightModule):
         merged_tt = self._push_merged(merged_pt)
         out_tt = self.projector(merged_tt)
         return out_tt
+
+
+class DropInMoonViT(torch.nn.Module):
+    """torch.nn.Module-compatible wrapper around the ttnn MoonViT vision tower.
+
+    Faithfully mirrors HF `MoonVitPretrainedModel.forward(pixel_values, grid_hws)`:
+    accepts host torch tensors and returns a list of per-image 3D tensors of
+    shape ``(L_new_i, kh*kw, vision_hidden)``. The wrapped tt-metal MoonViT
+    must be constructed WITHOUT the projector (``with_projector=False``); the
+    HF projector is a separate module that consumers chain externally — see
+    `DropInKimiVLMultiModalProjector` below.
+
+    Use case: any HF code (e.g., `KimiVLForConditionalGeneration`) that
+    delegates vision encoding to ``model.vision_tower(pixel_values, grid_hws)``
+    can substitute an instance of this class in place of the HF tower with
+    no other changes. Useful for A/B comparing our impl against HF in
+    existing HF-based pipelines.
+    """
+
+    def __init__(self, tt_model: "MoonViT"):
+        super().__init__()
+        if tt_model.projector is not None:
+            raise ValueError(
+                "DropInMoonViT requires a MoonViT built with with_projector=False; "
+                "got one with a projector. Build a vision-tower-only MoonViT via "
+                "MoonViT.from_torch(..., with_projector=False) and use "
+                "DropInKimiVLMultiModalProjector separately for the projector."
+            )
+        self.tt_model = tt_model
+        self.mesh_device = tt_model.device
+        self.merge_kernel_size = tt_model.merge_kernel_size
+
+    def forward(
+        self,
+        pixel_values: torch.Tensor,
+        grid_hws: torch.Tensor,
+    ) -> List[torch.Tensor]:
+        """Run the tt-metal vision tower; return outputs in HF list format.
+
+        Args:
+            pixel_values: host tensor of pre-cut patches, shape (L, 3, 14, 14)
+                (as produced by HF KimiVLImageProcessor).
+            grid_hws: host tensor of per-image (H, W) shapes, (N, 2).
+
+        Returns:
+            list of N torch CPU tensors, each of shape
+            ``(L_new_i, kh*kw, vision_hidden)`` — same as HF `patch_merger`.
+        """
+        out_tt = self.tt_model(pixel_values, grid_hws)
+        is_mesh = _is_mesh_device(self.mesh_device)
+        out_pt = ttnn.to_torch(
+            out_tt,
+            mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0) if is_mesh else None,
+        )
+        if is_mesh and out_pt.shape[0] != 1:
+            out_pt = out_pt[:1]
+
+        # MoonViT (without projector) yields (1, 1, L_new_total * kh*kw, vision_hidden).
+        # Reshape to (L_new_total, kh*kw, vision_hidden) then split per-image.
+        kh, kw = self.merge_kernel_size
+        k_group = kh * kw
+        vision_hidden = out_pt.shape[-1]
+        merged = out_pt.view(-1, vision_hidden)
+        l_new_total = merged.shape[0] // k_group
+        merged = merged.view(l_new_total, k_group, vision_hidden)
+
+        outputs: List[torch.Tensor] = []
+        cursor = 0
+        for h, w in grid_hws.tolist():
+            new_h, new_w = int(h) // kh, int(w) // kw
+            n = new_h * new_w
+            outputs.append(merged[cursor : cursor + n].contiguous())
+            cursor += n
+        if cursor != l_new_total:
+            raise RuntimeError(
+                f"DropInMoonViT: per-image L_new sum ({cursor}) != L_new_total "
+                f"({l_new_total}); grid_hws inconsistent with tt_model output."
+            )
+        return outputs
+
+
+class DropInKimiVLMultiModalProjector(torch.nn.Module):
+    """torch.nn.Module-compatible wrapper around the ttnn `MoonViTProjector`.
+
+    Mirrors HF `KimiVLMultiModalProjector.forward(image_features)` exactly:
+    accepts the list output of `DropInMoonViT` (or HF MoonVitPretrainedModel)
+    and returns a single torch tensor of shape ``(L_new_total, text_hidden)``.
+    """
+
+    def __init__(self, tt_projector, mesh_device, dtype=ttnn.bfloat16):
+        super().__init__()
+        self.tt_projector = tt_projector
+        self.mesh_device = mesh_device
+        self.dtype = dtype
+
+    def forward(self, image_features: List[torch.Tensor]) -> torch.Tensor:
+        # Mirror HF: torch.cat along dim=0 of the list -> (L_new_total, kh*kw, vision_hidden).
+        concat = torch.cat(image_features, dim=0)
+        l_new, k_group, vision_hidden = concat.shape
+        flat = concat.reshape(l_new * k_group, vision_hidden)
+        x_4d = flat.view(1, 1, l_new * k_group, vision_hidden).to(torch.bfloat16).contiguous()
+        is_mesh = _is_mesh_device(self.mesh_device)
+        x_tt = ttnn.from_torch(
+            x_4d,
+            device=self.mesh_device,
+            dtype=self.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh else None,
+        )
+        out_tt = self.tt_projector(x_tt)
+        out_pt = ttnn.to_torch(
+            out_tt,
+            mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0) if is_mesh else None,
+        )
+        if is_mesh and out_pt.shape[0] != 1:
+            out_pt = out_pt[:1]
+        return out_pt.view(l_new, -1)
