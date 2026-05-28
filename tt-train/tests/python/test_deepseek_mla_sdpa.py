@@ -24,6 +24,7 @@ SEED = 2026
 
 
 def _make_config(seq_len: int = 64) -> DeepSeekConfig:
+    """Build a minimal DeepSeek config that exercises MLA's fused SDPA shape path."""
     return DeepSeekConfig(
         vocab_size=64,
         dim=64,
@@ -43,6 +44,7 @@ def _make_config(seq_len: int = 64) -> DeepSeekConfig:
 
 
 def _make_inputs(batch_size: int = 2, seq_len: int = 64, dim: int = 64):
+    """Create deterministic MLA activations plus the explicit mask used by the old composite path."""
     rng = np.random.default_rng(SEED)
     x_np = rng.standard_normal((batch_size, 1, seq_len, dim), dtype=np.float32)
     mask_np = np.tril(np.ones((seq_len, seq_len), dtype=np.float32)).reshape(1, 1, seq_len, seq_len)
@@ -52,6 +54,7 @@ def _make_inputs(batch_size: int = 2, seq_len: int = 64, dim: int = 64):
 
 
 def _old_composite_forward(module: MultiHeadLatentAttention, x: ttml.autograd.Tensor, mask: ttml.autograd.Tensor):
+    """Run the pre-fused MLA attention path as the reference implementation."""
     B, _, S, _ = list(x.get_value().shape)
     n_heads = module.n_heads
     qk_nope = module.qk_nope_head_dim
@@ -87,10 +90,17 @@ def _old_composite_forward(module: MultiHeadLatentAttention, x: ttml.autograd.Te
 
 
 def _to_numpy(tensor: ttml.autograd.Tensor) -> np.ndarray:
+    """Convert a TTML tensor to an fp32 numpy array for host-side comparison."""
     return np.asarray(tensor.to_numpy(ttnn.DataType.FLOAT32), dtype=np.float32)
 
 
+def _grad_to_numpy(param) -> np.ndarray:
+    """Convert an initialized TTML parameter gradient to an fp32 numpy array."""
+    return np.asarray(param.get_grad_tensor().to_numpy(ttnn.DataType.FLOAT32), dtype=np.float32)
+
+
 def _compare_arrays(a: np.ndarray, b: np.ndarray) -> dict[str, float]:
+    """Return absolute-error and cosine-similarity metrics for two arrays."""
     af = np.asarray(a, dtype=np.float32).reshape(-1)
     bf = np.asarray(b, dtype=np.float32).reshape(-1)
     diff = np.abs(af - bf)
@@ -107,6 +117,7 @@ def _compare_arrays(a: np.ndarray, b: np.ndarray) -> dict[str, float]:
 
 
 def _assert_close(name: str, metrics: dict[str, float], abs_mean_limit: float = 5e-3) -> None:
+    """Assert BF16-tolerant closeness from the metrics produced by `_compare_arrays`."""
     assert metrics["abs_mean"] < abs_mean_limit, f"{name} mean abs diff too high: {metrics}"
     assert metrics["abs_max"] < 5e-2, f"{name} max abs diff too high: {metrics}"
 
@@ -118,11 +129,13 @@ def _assert_close(name: str, metrics: dict[str, float], abs_mean_limit: float = 
 
 @pytest.fixture(autouse=True)
 def reset_graph():
+    """Clear the TTML autograd graph after each test case."""
     yield
     ttml.autograd.AutoContext.get_instance().reset_graph()
 
 
 def test_mla_fused_sdpa_matches_composite_forward_and_backward():
+    """Compare fused-SDPA MLA against the old composite path for output and parameter gradients."""
     ctx = ttml.autograd.AutoContext.get_instance()
     ctx.open_device()
 
@@ -157,9 +170,7 @@ def test_mla_fused_sdpa_matches_composite_forward_and_backward():
         loss.backward(False)
         ttnn.synchronize_device(device)
         composite_grads = {
-            name: np.asarray(param.get_grad_tensor().to_numpy(ttnn.DataType.FLOAT32), dtype=np.float32)
-            for name, param in module.parameters().items()
-            if param.is_grad_initialized()
+            name: _grad_to_numpy(param) for name, param in module.parameters().items() if param.is_grad_initialized()
         }
         ctx.reset_graph()
 
@@ -169,9 +180,7 @@ def test_mla_fused_sdpa_matches_composite_forward_and_backward():
         loss.backward(False)
         ttnn.synchronize_device(device)
         fused_grads = {
-            name: np.asarray(param.get_grad_tensor().to_numpy(ttnn.DataType.FLOAT32), dtype=np.float32)
-            for name, param in module.parameters().items()
-            if param.is_grad_initialized()
+            name: _grad_to_numpy(param) for name, param in module.parameters().items() if param.is_grad_initialized()
         }
         ctx.reset_graph()
 
