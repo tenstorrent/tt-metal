@@ -65,6 +65,12 @@ def _new_comparison_records_data() -> dict:
     }
 
 
+def reset_comparison_records_data():
+    """Clear accumulated comparison-mode sidecar data (call at test boundaries)."""
+    global _comparison_records_data
+    _comparison_records_data = _new_comparison_records_data()
+
+
 # Glob patterns for frames to strip from stack traces (pathlib-style).
 # Matches ttnn internals (decorators/graph), pytest, pluggy, and the pytest entry script.
 _STACK_TRACE_INTERNAL_PATTERNS = (
@@ -268,6 +274,7 @@ def end_graph_capture_to_file(report_path):
         _write_python_io_sidecar(report_path)
     if has_comparison_records():
         _write_comparison_records_sidecar(report_path)
+        reset_comparison_records_data()
     if not is_graph_capture_active():
         _python_io_recording_enabled = False
         if _python_stack_traces_auto_for_session:
@@ -473,7 +480,7 @@ def flush_comparison_records_to_db(report_dir):
         conn.commit()
     finally:
         conn.close()
-        _comparison_records_data = _new_comparison_records_data()
+        reset_comparison_records_data()
 
 
 @contextlib.contextmanager

@@ -62,6 +62,8 @@ def pre_and_post(request):
     if ttnn.CONFIG_OVERRIDES is not None:
         ttnn.load_config_from_dictionary(json.loads(ttnn.CONFIG_OVERRIDES))
 
+    ttnn.graph.reset_comparison_records_data()
+
     report_name = f"{request.node.nodeid}: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} (UTC)"
     with ttnn.manage_config("report_name", ttnn.CONFIG.report_name or report_name):
         if ttnn.CONFIG.enable_logging and ttnn.CONFIG.report_name is not None:
