@@ -99,7 +99,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     std::vector<experimental::metal2_host_api::KernelSpecName> kernel_names;
     std::vector<experimental::metal2_host_api::ProgramRunParams::KernelRunParams> kernel_run_params;
     auto add_dm_kernel =
-        [&](const char* name, uint8_t num_threads, std::optional<tt::tt_metal::DataMovementProcessor> gen1_processor) {
+        [&](const char* name, uint32_t num_threads, std::optional<tt::tt_metal::DataMovementProcessor> gen1_processor) {
             // Always provide both gen1 and gen2 configs; the runtime picks the one matching the
             // current arch. The unused config is ignored on the other arch.
             auto gen1_proc = gen1_processor.value_or(tt::tt_metal::DataMovementProcessor::RISCV_0);
@@ -115,7 +115,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
             };
             kernel_specs.push_back(experimental::metal2_host_api::KernelSpec{
                 .unique_id = name,
-                .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{kernel_path_metal2},
+                .source = kernel_path_metal2,
                 .num_threads = num_threads,
                 .runtime_arguments_schema = {.named_common_runtime_args = {"sync_flag_addr"}},
                 .config_spec = dm_cfg,
@@ -137,9 +137,9 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     }
     kernel_specs.push_back(experimental::metal2_host_api::KernelSpec{
         .unique_id = COMPUTE_KERNEL_NAME,
-        .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{kernel_path_metal2},
+        .source = kernel_path_metal2,
         // Quasar Tensix has 4 Neos so the compute kernel fans out across all of them; WH/BH has 1 TRISC group.
-        .num_threads = static_cast<uint8_t>(is_quasar ? 4 : 1),
+        .num_threads = is_quasar ? 4u : 1u,
         .runtime_arguments_schema = {.named_common_runtime_args = {"sync_flag_addr"}},
         .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
     });
