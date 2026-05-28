@@ -102,10 +102,15 @@ class ConnectorBlock(Module):
         k = self.to_k(x, compute_kernel_config=self.compute_config)
         v = self.to_v(x, compute_kernel_config=self.compute_config)
 
-        # Apply INTERLEAVED RoPE to Q and K BEFORE head split.
+        # Apply SPLIT RoPE to Q and K BEFORE head split (the connector config uses
+        # rope_type=split). cos/sin are the reference split-format (B,H,seq,head_dim/2);
+        # use the reference apply_split_rotary_emb so precompute/apply conventions match.
         # TP all_gather → host RoPE → re-shard. Connector is 1024 tokens so overhead is small.
         if rope_cos is not None and rope_sin is not None:
-            from models.tt_dit.models.transformers.ltx.rope_ltx import _apply_interleaved_rotary_emb
+            import sys
+
+            sys.path.insert(0, "LTX-2/packages/ltx-core/src")
+            from ltx_core.model.transformer.rope import apply_split_rotary_emb
 
             tp = self.parallel_config.tensor_parallel.factor
             tp_axis = self.parallel_config.tensor_parallel.mesh_axis
@@ -122,8 +127,8 @@ class ConnectorBlock(Module):
             q_host = q_host * torch.rsqrt(q_host.pow(2).mean(-1, keepdim=True) + self.eps) * qn
             k_host = k_host * torch.rsqrt(k_host.pow(2).mean(-1, keepdim=True) + self.eps) * kn
 
-            q_host = _apply_interleaved_rotary_emb(q_host, rope_cos.float(), rope_sin.float())
-            k_host = _apply_interleaved_rotary_emb(k_host, rope_cos.float(), rope_sin.float())
+            q_host = apply_split_rotary_emb(q_host, rope_cos.float(), rope_sin.float())
+            k_host = apply_split_rotary_emb(k_host, rope_cos.float(), rope_sin.float())
 
             q = ttnn.from_torch(
                 q_host.bfloat16(), device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16

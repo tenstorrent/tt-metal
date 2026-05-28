@@ -97,17 +97,24 @@ def test_connector_blocks_isolated(*, mesh_device):
     missing, unexpected = ref.load_state_dict(ref_sd, strict=False)
     logger.info(f"ref connector load: missing={list(missing)[:4]} unexpected={list(unexpected)[:4]}")
 
-    # --- identical random input, NO padding (all-real → no register replacement) ---
+    # --- identical random input WITH PADDING (left-pad) → register replacement active ---
+    # This mirrors the real encode path: only n_real real tokens, the rest become registers.
     seq = 256
     dim = 4096
+    n_real = 17
     torch.manual_seed(0)
     x = (torch.randn(1, seq, dim) * 0.5).bfloat16()
-    attn_mask = torch.zeros(1, 1, 1, seq)  # additive mask, all-real
+    binary_mask = torch.zeros(1, seq, dtype=torch.long)
+    binary_mask[:, seq - n_real :] = 1  # left-pad: real tokens at the end
+    additive_mask = torch.where(binary_mask[:, None, None, :].bool(), 0.0, -1e9)  # (1,1,1,seq)
 
     with torch.no_grad():
-        ref_out = ref(x.float().clone(), attn_mask)[0].float()
+        ref_out = ref(x.float().clone(), additive_mask)[0].float()
 
-    # device: replicate _run_connector's rope -> blocks -> final norm (no registers)
+    # device: replicate _run_connector — register replacement -> rope -> blocks -> final norm
+    registers = ttnn.to_torch(ttnn.get_device_tensors(pipe.video_connector.learnable_registers.data)[0]).float()
+    x_replaced = LTXAVPipeline._replace_padded_with_registers(x.float(), binary_mask, registers, 128).bfloat16()
+
     rope_cos, rope_sin = precompute_freqs_cis(
         torch.arange(seq, dtype=torch.float32)[None, None, :],
         dim=dim,
@@ -118,14 +125,14 @@ def test_connector_blocks_isolated(*, mesh_device):
         rope_type=LTXRopeType.INTERLEAVED,
         freq_grid_generator=generate_freq_grid_pytorch,
     )
-    tt_x = ttnn.from_torch(x, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    tt_x = ttnn.from_torch(x_replaced, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
     for block in pipe.video_connector.transformer_1d_blocks:
         tt_x = block(tt_x, rope_cos=rope_cos, rope_sin=rope_sin)
     tt_x = _rms_norm(tt_x)
     dev_out = ttnn.to_torch(ttnn.get_device_tensors(tt_x)[0]).float()
 
     logger.info(
-        f"CONNECTOR BLOCKS  ref={tuple(ref_out.shape)} dev={tuple(dev_out.shape)}  PCC={pcc(dev_out, ref_out):.4f}"
+        f"CONNECTOR (with registers)  ref={tuple(ref_out.shape)} dev={tuple(dev_out.shape)}  PCC={pcc(dev_out, ref_out):.4f}"
     )
 
 

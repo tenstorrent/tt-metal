@@ -877,9 +877,12 @@ class LTXPipeline:
             all_hidden_states = self.gemma_encoder(tt_ids, attention_mask=tokens.attention_mask)
 
             if self.video_connector is not None:
-                # Collect 49 hidden states (embedding + 48 layers, skip final norm)
-                # Concat on device to avoid 49 separate D2H transfers
-                hs_list = all_hidden_states[:-1]
+                # Collect the 49 hidden states the reference FeatureExtractorV2 sees. HF
+                # output_hidden_states = [embed, L0_out..L46_out, final_norm(L47)] — i.e. the
+                # LAST entry is post-final-norm, NOT the raw last-layer output. Our encoder
+                # returns [embed, L0_out..L47_out, final_norm], so drop the raw last layer
+                # (index -2) and keep the final-norm state.
+                hs_list = list(all_hidden_states[:-2]) + [all_hidden_states[-1]]
                 tt_stacked = ttnn.concat(hs_list, dim=-1)  # (B, seq, D*L) on device
                 stacked_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_stacked)[0]).float()
                 # Free device memory
@@ -931,12 +934,14 @@ class LTXPipeline:
                             connector.num_learnable_registers,
                         )
 
-                    # Compute 1D RoPE for connector blocks (matching reference Embeddings1DConnector).
-                    # Uses reference precompute_freqs_cis directly since 1D grid format differs from
-                    # our video/audio 4D grid convention.
+                    # Compute 1D RoPE for connector blocks, matching the reference
+                    # Embeddings1DConnector config from the checkpoint: rope_type=SPLIT,
+                    # positional_embedding_max_pos=[4096], frequencies_precision=float64
+                    # (double-precision freq grid). These were previously hardcoded to
+                    # INTERLEAVED/[1]/float32, which silently wrecked the connector output.
                     sys.path.insert(0, "LTX-2/packages/ltx-core/src")
                     from ltx_core.model.transformer.rope import LTXRopeType as RefRopeType
-                    from ltx_core.model.transformer.rope import generate_freq_grid_pytorch
+                    from ltx_core.model.transformer.rope import generate_freq_grid_np
                     from ltx_core.model.transformer.rope import precompute_freqs_cis as ref_precompute
 
                     seq_len = projected.shape[1]
@@ -947,11 +952,11 @@ class LTXPipeline:
                         dim=dim,
                         out_dtype=torch.bfloat16,
                         theta=10000.0,
-                        max_pos=[1],
+                        max_pos=[4096],
                         num_attention_heads=num_heads,
-                        rope_type=RefRopeType.INTERLEAVED,
-                        freq_grid_generator=generate_freq_grid_pytorch,
-                    )  # INTERLEAVED: (1, seq_len, dim) — applied to flat Q/K before head split
+                        rope_type=RefRopeType.SPLIT,
+                        freq_grid_generator=generate_freq_grid_np,
+                    )  # SPLIT: cos/sin (B, H, seq, head_dim/2)
 
                     # Push back to device and run transformer blocks with RoPE
                     tt_x = ttnn.from_torch(
