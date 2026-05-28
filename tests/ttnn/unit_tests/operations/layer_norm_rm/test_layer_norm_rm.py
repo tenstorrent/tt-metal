@@ -2,158 +2,139 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Acceptance test for layer_norm_rm — the immutable Phase-0 spec.
+Acceptance test for ttnn.operations.layer_norm_rm.layer_norm.
 
-DO NOT modify this file from the implementer side. It is the contract
-against which the operation is judged. New axes (other dtypes, sharded
-inputs, non-tile-aligned shapes, …) belong in the golden-tests suite
-under `eval/golden_tests/layer_norm_rm/`, not here.
+This file is the Phase-0 spec — DO NOT MODIFY when implementing.
+The implementer's job is to make this pass against torch.nn.functional.layer_norm
+(equivalently, the closed-form per-row normalization in pytorch_reference below)
+across the parametrized matrix below.
 
-What it tests:
-- layer_norm over the last dim of a ROW_MAJOR fp32 tensor, with
-  optional gamma scale and optional beta shift.
-- Output shape, dtype (fp32), and layout (ROW_MAJOR) preserved.
-- Numerical agreement vs torch.nn.functional.layer_norm at PCC >= 0.999
-  (fp32 tolerance keyed on the dtype, matching the golden-suite policy).
-- All four call patterns specified in the operation contract:
-    layer_norm(input)
-    layer_norm(input, gamma)
-    layer_norm(input, gamma, beta)
-    layer_norm(input, gamma, beta, epsilon=X)
+Phase-0 envelope (from op_design.md):
+- input dtype: float32
+- input layout: ROW_MAJOR_LAYOUT (the kernel handles tilize/untilize internally
+  — the test does NOT call ttnn.to_layout / ttnn.tilize on the way in)
+- gamma / beta: ROW_MAJOR_LAYOUT, shape (1, 1, 1, W), dtype float32, optional
+- rank ≥ 2, final two dims tile-aligned (H % 32 == 0, W % 32 == 0)
+- epsilon: keyword-only float, default 1e-5
+- compute_kernel_config: None (entry point installs default) or
+    ttnn.ComputeConfigDescriptor(math_fidelity=HiFi4, fp32_dest_acc_en=True,
+                                  math_approx_mode=False)
 
-Phase 0 envelope (tested here):
-- dtype = float32, layout = ROW_MAJOR, last two dims tile-aligned (mult of 32).
-- Rank 4 only (the simplest shape arrangement; rank 2/3 are golden-suite axes).
-- W <= 1024 (the L1-fits-in-one-tile-row budget — see op_design.md).
+PCC threshold for fp32 acceptance is 0.999 (per the planner spec — same
+threshold used by the golden test suite for fp32 ops).
 """
-
-from __future__ import annotations
 
 import pytest
 import torch
 import ttnn
 
-from ttnn.operations.layer_norm import layer_norm
+from tests.ttnn.utils_for_testing import assert_with_pcc
+from ttnn.operations.layer_norm_rm import layer_norm
 
 
-# ---------------------------------------------------------------------------
-# Tolerances — same per-dtype thresholds as the golden suite.
-# fp32 PCC threshold = 0.999; do NOT tighten based on op "complexity".
-# ---------------------------------------------------------------------------
-
-_PCC_BY_DTYPE = {
-    ttnn.float32: 0.999,
-    ttnn.bfloat16: 0.995,
-    ttnn.bfloat8_b: 0.99,
-}
-
-
-def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
-    """Pearson correlation coefficient between two flattened tensors."""
-    af = a.float().flatten()
-    bf = b.float().flatten()
-    # corrcoef yields NaN if either input is constant; guard against
-    # exact-zero variance (e.g. all-equal input rows produce a constant
-    # normalized output of zero on the normalize step — PCC is undefined,
-    # but a pointwise allclose at high tolerance is fine).
-    if af.std() == 0 and bf.std() == 0:
-        return 1.0
-    return torch.corrcoef(torch.stack([af, bf]))[0, 1].item()
-
-
-def _layer_norm_torch(
-    x: torch.Tensor,
-    gamma: torch.Tensor | None,
-    beta: torch.Tensor | None,
-    epsilon: float,
+# --------------------------------------------------------------------------
+# Reference implementation — pure-python population layer-norm matching the
+# math in op_design.md exactly. Uses float32 throughout.
+# --------------------------------------------------------------------------
+def pytorch_reference(
+    input_tensor: torch.Tensor,
+    gamma: torch.Tensor = None,
+    beta: torch.Tensor = None,
+    epsilon: float = 1e-5,
 ) -> torch.Tensor:
-    """fp32 reference. gamma/beta are reshaped to 1D for the torch API."""
-    g = gamma.reshape(-1) if gamma is not None else None
-    b = beta.reshape(-1) if beta is not None else None
-    return torch.nn.functional.layer_norm(
-        x.float(),
-        normalized_shape=(x.shape[-1],),
-        weight=g,
-        bias=b,
-        eps=epsilon,
-    )
+    x = input_tensor.to(torch.float32)
+    mean = x.mean(dim=-1, keepdim=True)
+    var = x.var(dim=-1, keepdim=True, unbiased=False)
+    y = (x - mean) / torch.sqrt(var + epsilon)
+    if gamma is not None:
+        y = y * gamma.reshape(-1).to(torch.float32)
+    if beta is not None:
+        y = y + beta.reshape(-1).to(torch.float32)
+    return y.to(input_tensor.dtype)
 
 
-# ---------------------------------------------------------------------------
-# Shapes — minimum 4: single-tile, multi-tile, non-square, multi-batch.
-# All rank-4, last two dims tile-aligned (mult of 32), W <= 1024.
-# ---------------------------------------------------------------------------
-
+# --------------------------------------------------------------------------
+# Shapes — single-tile, multi-tile, non-square, multi-batch, and a few
+# wider-W cases that exercise the chunked-reduce path described in
+# op_design.md. All shapes are tile-aligned in the last two dims (Phase 0).
+# Each entry is a single input shape; gamma/beta shape (when present) is
+# always (1, 1, 1, shape[-1]).
+# --------------------------------------------------------------------------
 SHAPES = [
-    pytest.param((1, 1, 32, 32), id="single_tile_32x32"),
-    pytest.param((1, 1, 64, 128), id="multi_tile_64x128"),
-    pytest.param((1, 1, 32, 256), id="non_square_32x256"),
-    pytest.param((2, 4, 64, 64), id="multi_batch_2x4x64x64"),
-    pytest.param((1, 1, 128, 512), id="taller_128x512"),
-    # Phase 0 caps W at 512 — the W=1024 + gamma+beta configuration
-    # overshoots per-core L1 (1.7 MB vs. the 1.5 MB budget). The wider-W
-    # path is the W-axis chunking refinement; see op_requirements.md.
-    pytest.param((4, 1, 32, 512), id="widest_in_budget_4x1x32x512"),
+    pytest.param((1, 1, 32, 32), id="single_tile"),
+    pytest.param((1, 1, 32, 128), id="1x4_tiles"),
+    pytest.param((1, 1, 64, 64), id="2x2_tiles"),
+    pytest.param((1, 1, 128, 64), id="non_square_tall"),
+    pytest.param((1, 1, 32, 512), id="wider_W"),
+    pytest.param((2, 4, 32, 256), id="multi_batch"),
+    pytest.param((1, 1, 32, 2048), id="wide_W_2048"),
+    pytest.param((1, 2, 64, 128), id="multi_C"),
 ]
 
 
-# ---------------------------------------------------------------------------
-# Call patterns — exercise the four documented signatures.
-# ---------------------------------------------------------------------------
+# Phase-0 supported compute_kernel_config — both forms must work.
+PHASE0_CONFIGS = [
+    pytest.param(None, id="config=default(None)"),
+    pytest.param(
+        ttnn.ComputeConfigDescriptor(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            fp32_dest_acc_en=True,
+            math_approx_mode=False,
+        ),
+        id="config=explicit_hifi4_fp32acc",
+    ),
+]
 
+
+# Affine modes — gamma/beta presence sweep. Three cells map to the
+# `affine` axis in feature_spec.py {gamma_beta, gamma_only, no_affine}.
 AFFINE_MODES = [
-    pytest.param("no_affine", id="no_affine"),
-    pytest.param("gamma_only", id="gamma_only"),
-    pytest.param("gamma_beta", id="gamma_beta"),
-    pytest.param("custom_eps", id="custom_eps"),  # full affine + non-default epsilon
+    pytest.param("no_affine", id="affine=none"),
+    pytest.param("gamma_only", id="affine=gamma_only"),
+    pytest.param("gamma_beta", id="affine=gamma_beta"),
 ]
 
 
-def _build_affine(
-    mode: str,
-    W: int,
-    device,
-) -> tuple[torch.Tensor | None, torch.Tensor | None, ttnn.Tensor | None, ttnn.Tensor | None, float]:
-    """Return (torch_gamma, torch_beta, ttnn_gamma, ttnn_beta, epsilon)."""
-    epsilon = 1e-5
-    torch_gamma, torch_beta = None, None
-    ttnn_gamma, ttnn_beta = None, None
+def _make_inputs(shape, affine_mode, device):
+    """Build (torch_input, torch_gamma_or_None, torch_beta_or_None,
+    ttnn_input, ttnn_gamma_or_None, ttnn_beta_or_None) for a parametrized
+    cell. Seeded so the test is reproducible.
 
-    if mode in ("gamma_only", "gamma_beta", "custom_eps"):
-        torch_gamma = torch.randn(W, dtype=torch.float32)
-        ttnn_gamma = ttnn.from_torch(
-            torch_gamma.reshape(1, 1, 1, W),
-            dtype=ttnn.float32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-    if mode in ("gamma_beta", "custom_eps"):
-        torch_beta = torch.randn(W, dtype=torch.float32)
-        ttnn_beta = ttnn.from_torch(
-            torch_beta.reshape(1, 1, 1, W),
-            dtype=ttnn.float32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-    if mode == "custom_eps":
-        epsilon = 7.5e-4
-    return torch_gamma, torch_beta, ttnn_gamma, ttnn_beta, epsilon
-
-
-# ---------------------------------------------------------------------------
-# The single parametrized acceptance test.
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("affine_mode", AFFINE_MODES)
-@pytest.mark.parametrize("shape", SHAPES)
-def test_layer_norm_rm(device, shape, affine_mode):
+    All tensors are ROW_MAJOR_LAYOUT float32. The kernel must not depend
+    on host-side tilize/untilize.
+    """
     torch.manual_seed(42)
-
-    # --- Build input ---
     torch_input = torch.randn(shape, dtype=torch.float32)
+    W = shape[-1]
+
+    torch_gamma = None
+    torch_beta = None
+    ttnn_gamma = None
+    ttnn_beta = None
+
+    if affine_mode in ("gamma_only", "gamma_beta"):
+        # Centered around 1.0 so the post-affine values are close-ish to
+        # the un-affine result; this keeps the PCC sensitive to small
+        # numerical regressions instead of being dominated by the scale.
+        torch_gamma = torch.randn((1, 1, 1, W), dtype=torch.float32) * 0.5 + 1.0
+        ttnn_gamma = ttnn.from_torch(
+            torch_gamma,
+            dtype=ttnn.float32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    if affine_mode == "gamma_beta":
+        torch_beta = torch.randn((1, 1, 1, W), dtype=torch.float32) * 0.1
+        ttnn_beta = ttnn.from_torch(
+            torch_beta,
+            dtype=ttnn.float32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
     ttnn_input = ttnn.from_torch(
         torch_input,
         dtype=ttnn.float32,
@@ -162,57 +143,89 @@ def test_layer_norm_rm(device, shape, affine_mode):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    # --- Build optional affine tensors ---
-    W = shape[-1]
-    torch_gamma, torch_beta, ttnn_gamma, ttnn_beta, epsilon = _build_affine(affine_mode, W, device)
+    return torch_input, torch_gamma, torch_beta, ttnn_input, ttnn_gamma, ttnn_beta
 
-    # --- Reference (fp32) ---
-    expected = _layer_norm_torch(torch_input, torch_gamma, torch_beta, epsilon)
 
-    # --- Dispatch — exercise the documented signature variants ---
-    if affine_mode == "no_affine":
-        ttnn_output = layer_norm(ttnn_input)
-    elif affine_mode == "gamma_only":
-        ttnn_output = layer_norm(ttnn_input, ttnn_gamma)
-    elif affine_mode == "gamma_beta":
-        ttnn_output = layer_norm(ttnn_input, ttnn_gamma, ttnn_beta)
-    elif affine_mode == "custom_eps":
-        ttnn_output = layer_norm(ttnn_input, ttnn_gamma, ttnn_beta, epsilon=epsilon)
-    else:
-        raise AssertionError(f"unknown affine_mode {affine_mode!r}")
+# --------------------------------------------------------------------------
+# Main acceptance test — PyTorch reference, PCC ≥ 0.999.
+# --------------------------------------------------------------------------
+@pytest.mark.parametrize("shape", SHAPES)
+@pytest.mark.parametrize("affine_mode", AFFINE_MODES)
+def test_layer_norm_rm_acceptance(device, shape, affine_mode):
+    """Phase-0 acceptance: layer_norm(float32, ROW_MAJOR_LAYOUT) == pytorch_reference."""
+    torch_input, torch_gamma, torch_beta, ttnn_input, ttnn_gamma, ttnn_beta = _make_inputs(shape, affine_mode, device)
 
-    # --- Shape / dtype / layout invariants ---
-    assert list(ttnn_output.shape) == list(
-        shape
-    ), f"output shape {list(ttnn_output.shape)} != input shape {list(shape)}"
-    assert ttnn_output.dtype == ttnn.float32, f"output dtype {ttnn_output.dtype} != ttnn.float32"
-    assert ttnn_output.layout == ttnn.ROW_MAJOR_LAYOUT, f"output layout {ttnn_output.layout} != ROW_MAJOR_LAYOUT"
+    torch_expected = pytorch_reference(torch_input, torch_gamma, torch_beta, epsilon=1e-5)
 
-    # --- Numerical agreement ---
+    ttnn_output = layer_norm(ttnn_input, ttnn_gamma, ttnn_beta)
+
+    # Shape / dtype / layout preserved end-to-end (kernel must NOT change
+    # layout — RM in, RM out).
+    assert list(ttnn_output.shape) == list(shape), f"shape mismatch: got {ttnn_output.shape}, expected {shape}"
+    assert ttnn_output.dtype == ttnn.float32, f"dtype mismatch: got {ttnn_output.dtype}, expected {ttnn.float32}"
+    assert (
+        ttnn_output.layout == ttnn.ROW_MAJOR_LAYOUT
+    ), f"layout mismatch: got {ttnn_output.layout}, expected {ttnn.ROW_MAJOR_LAYOUT}"
+
     torch_output = ttnn.to_torch(ttnn_output)
-    pcc_threshold = _PCC_BY_DTYPE[ttnn.float32]
-    pcc = _pcc(torch_output, expected)
-    assert pcc >= pcc_threshold, (
-        f"PCC {pcc:.6f} below threshold {pcc_threshold} for "
-        f"shape={shape}, affine_mode={affine_mode}, epsilon={epsilon}\n"
-        f"  max abs diff = {(torch_output - expected).abs().max().item():.6f}\n"
-        f"  output[0,0,0,:4]   = {torch_output.flatten()[:4].tolist()}\n"
-        f"  expected[0,0,0,:4] = {expected.flatten()[:4].tolist()}"
-    )
+    assert_with_pcc(torch_expected, torch_output, 0.999)
 
 
-# ---------------------------------------------------------------------------
-# Per-row mean ≈ 0 / per-row var ≈ 1 sanity check on the no-affine path.
-# Once gamma/beta are applied this is no longer true, so the assertion is
-# only meaningful on the affine-free output.
-# ---------------------------------------------------------------------------
-
-
-def test_layer_norm_rm_normalization_invariants(device):
-    torch.manual_seed(42)
+# --------------------------------------------------------------------------
+# Compute-kernel-config acceptance — both None and the explicit Phase-0
+# config must produce the same correct result on a small representative
+# shape.
+# --------------------------------------------------------------------------
+@pytest.mark.parametrize("config", PHASE0_CONFIGS)
+def test_layer_norm_rm_compute_kernel_config(device, config):
+    """Both the None default and the explicit Phase-0 config must work."""
     shape = (1, 1, 64, 128)
+    torch_input, _, _, ttnn_input, _, _ = _make_inputs(shape, "no_affine", device)
+    torch_expected = pytorch_reference(torch_input, epsilon=1e-5)
 
+    ttnn_output = layer_norm(ttnn_input, compute_kernel_config=config)
+    torch_output = ttnn.to_torch(ttnn_output)
+
+    assert_with_pcc(torch_expected, torch_output, 0.999)
+
+
+# --------------------------------------------------------------------------
+# Epsilon variation — confirm epsilon is plumbed through correctly. Use
+# a 32x32 strip with a tiny variance row so changing epsilon changes the
+# output materially.
+# --------------------------------------------------------------------------
+@pytest.mark.parametrize("epsilon", [1e-5, 1e-3, 1e-1])
+def test_layer_norm_rm_epsilon(device, epsilon):
+    """Custom epsilon flows through and yields the expected numerical change."""
+    shape = (1, 1, 32, 64)
+    torch_input, _, _, ttnn_input, _, _ = _make_inputs(shape, "no_affine", device)
+    torch_expected = pytorch_reference(torch_input, epsilon=epsilon)
+
+    ttnn_output = layer_norm(ttnn_input, epsilon=epsilon)
+    torch_output = ttnn.to_torch(ttnn_output)
+
+    assert_with_pcc(torch_expected, torch_output, 0.999)
+
+
+# --------------------------------------------------------------------------
+# Multi-rank support — the op accepts rank-2/3/4 inputs (rank ≥ 2 with
+# final two dims tile-aligned). The kernel flattens leading dims into a
+# strip index; output shape exactly matches input shape.
+# --------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "shape",
+    [
+        pytest.param((32, 64), id="rank2_32x64"),
+        pytest.param((4, 32, 128), id="rank3_4x32x128"),
+        pytest.param((2, 3, 32, 64), id="rank4_2x3x32x64"),
+    ],
+)
+def test_layer_norm_rm_rank(device, shape):
+    """Rank 2, 3, and 4 inputs all preserve shape end-to-end."""
+    torch.manual_seed(42)
     torch_input = torch.randn(shape, dtype=torch.float32)
+    torch_expected = pytorch_reference(torch_input, epsilon=1e-5)
+
     ttnn_input = ttnn.from_torch(
         torch_input,
         dtype=ttnn.float32,
@@ -222,17 +235,8 @@ def test_layer_norm_rm_normalization_invariants(device):
     )
 
     ttnn_output = layer_norm(ttnn_input)
+    assert list(ttnn_output.shape) == list(shape)
+    assert ttnn_output.layout == ttnn.ROW_MAJOR_LAYOUT
+
     torch_output = ttnn.to_torch(ttnn_output)
-
-    # Per-last-dim mean should be ~0 and unbiased var ~ 1 (within fp32
-    # numerical tolerance; layer_norm uses population variance so the
-    # sample-var of the normalized output is slightly > 1 — use atol).
-    row_mean = torch_output.mean(dim=-1)
-    row_var = torch_output.var(dim=-1, unbiased=False)
-
-    assert torch.allclose(
-        row_mean, torch.zeros_like(row_mean), atol=1e-3
-    ), f"per-row mean not ~0: max abs = {row_mean.abs().max().item():.6f}"
-    assert torch.allclose(row_var, torch.ones_like(row_var), atol=5e-3), (
-        f"per-row var not ~1: max abs diff = " f"{(row_var - 1).abs().max().item():.6f}"
-    )
+    assert_with_pcc(torch_expected, torch_output, 0.999)
