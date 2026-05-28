@@ -92,7 +92,7 @@ def test_hash_cb_sfpu(formats, num_tiles, seed, dest_acc):
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
-        sfpu=True,
+        is_sfpu=True,
     )
 
     hw_hash = _run_hash_kernel(
@@ -123,7 +123,7 @@ def test_hash_cb_sfpu_determinism(formats, num_tiles, seed, dest_acc):
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
-        sfpu=True,
+        is_sfpu=True,
     )
 
     h1 = _run_hash_kernel(
