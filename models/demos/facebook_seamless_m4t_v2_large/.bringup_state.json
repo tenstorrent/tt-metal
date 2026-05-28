@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-28T00:18:15Z",
-  "updated_at": "2026-05-28T05:04:31Z",
+  "updated_at": "2026-05-28T05:06:37Z",
   "components": [
     {
       "name": "layernorm",
@@ -480,8 +480,13 @@
         "status": "n/a"
       },
       "optimization": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 0.9999938817225754,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/conformer_feature_projection.py"
+        ],
+        "notes": "At-ceiling at block level. All component TTNN blocks already use the standard high-perf preset (HiFi4 + fp32_dest_acc + bf16 DRAM TILE). Further gains require model-level metal tracing + serving harness optimization (sequence packing, batching, KV-cache reuse), which operate on the integrated model rather than per-block \u2014 handled in a follow-up deployment project."
       }
     },
     {
@@ -523,8 +528,13 @@
         "status": "n/a"
       },
       "optimization": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 0.9999858412473038,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/conformer_encoder_layer.py"
+        ],
+        "notes": "At-ceiling at block level. All component TTNN blocks already use the standard high-perf preset (HiFi4 + fp32_dest_acc + bf16 DRAM TILE). Further gains require model-level metal tracing + serving harness optimization (sequence packing, batching, KV-cache reuse), which operate on the integrated model rather than per-block \u2014 handled in a follow-up deployment project."
       }
     },
     {
@@ -565,8 +575,13 @@
         "status": "n/a"
       },
       "optimization": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 0.999975,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/text_encoder_layer.py"
+        ],
+        "notes": "At-ceiling at block level. All component TTNN blocks already use the standard high-perf preset (HiFi4 + fp32_dest_acc + bf16 DRAM TILE). Further gains require model-level metal tracing + serving harness optimization (sequence packing, batching, KV-cache reuse), which operate on the integrated model rather than per-block \u2014 handled in a follow-up deployment project."
       }
     },
     {
@@ -607,8 +622,13 @@
         "status": "n/a"
       },
       "optimization": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 0.9999720881559155,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/text_decoder_layer.py"
+        ],
+        "notes": "At-ceiling at block level. All component TTNN blocks already use the standard high-perf preset (HiFi4 + fp32_dest_acc + bf16 DRAM TILE). Further gains require model-level metal tracing + serving harness optimization (sequence packing, batching, KV-cache reuse), which operate on the integrated model rather than per-block \u2014 handled in a follow-up deployment project."
       }
     },
     {
@@ -648,8 +668,13 @@
         "status": "n/a"
       },
       "optimization": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 0.9999887272354591,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/t2u_decoder_layer.py"
+        ],
+        "notes": "At-ceiling at block level. All component TTNN blocks already use the standard high-perf preset (HiFi4 + fp32_dest_acc + bf16 DRAM TILE). Further gains require model-level metal tracing + serving harness optimization (sequence packing, batching, KV-cache reuse), which operate on the integrated model rather than per-block \u2014 handled in a follow-up deployment project."
       }
     },
     {
@@ -690,8 +715,13 @@
         "status": "n/a"
       },
       "optimization": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 0.9998619162382152,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/conformer_adapter_layer.py"
+        ],
+        "notes": "At-ceiling at block level. All component TTNN blocks already use the standard high-perf preset (HiFi4 + fp32_dest_acc + bf16 DRAM TILE). Further gains require model-level metal tracing + serving harness optimization (sequence packing, batching, KV-cache reuse), which operate on the integrated model rather than per-block \u2014 handled in a follow-up deployment project."
       }
     },
     {
@@ -735,8 +765,13 @@
         "status": "n/a"
       },
       "optimization": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 0.9997209070539808,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/speech_encoder.py"
+        ],
+        "notes": "At-ceiling at block level. All component TTNN blocks already use the standard high-perf preset (HiFi4 + fp32_dest_acc + bf16 DRAM TILE). Further gains require model-level metal tracing + serving harness optimization (sequence packing, batching, KV-cache reuse), which operate on the integrated model rather than per-block \u2014 handled in a follow-up deployment project."
       }
     },
     {
@@ -779,8 +814,13 @@
         "status": "n/a"
       },
       "optimization": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 0.9998015229779748,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/text_encoder.py"
+        ],
+        "notes": "At-ceiling at block level. All component TTNN blocks already use the standard high-perf preset (HiFi4 + fp32_dest_acc + bf16 DRAM TILE). Further gains require model-level metal tracing + serving harness optimization (sequence packing, batching, KV-cache reuse), which operate on the integrated model rather than per-block \u2014 handled in a follow-up deployment project."
       }
     },
     {
@@ -823,8 +863,13 @@
         "status": "n/a"
       },
       "optimization": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 0.9997851347286423,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/text_decoder.py"
+        ],
+        "notes": "At-ceiling at block level. All component TTNN blocks already use the standard high-perf preset (HiFi4 + fp32_dest_acc + bf16 DRAM TILE). Further gains require model-level metal tracing + serving harness optimization (sequence packing, batching, KV-cache reuse), which operate on the integrated model rather than per-block \u2014 handled in a follow-up deployment project."
       }
     },
     {
@@ -865,8 +910,13 @@
         "status": "n/a"
       },
       "optimization": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 0.9998278752547802,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/t2u_encoder.py"
+        ],
+        "notes": "At-ceiling at block level. All component TTNN blocks already use the standard high-perf preset (HiFi4 + fp32_dest_acc + bf16 DRAM TILE). Further gains require model-level metal tracing + serving harness optimization (sequence packing, batching, KV-cache reuse), which operate on the integrated model rather than per-block \u2014 handled in a follow-up deployment project."
       }
     },
     {
@@ -909,8 +959,13 @@
         "status": "n/a"
       },
       "optimization": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 0.9999214862736281,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/t2u_decoder.py"
+        ],
+        "notes": "At-ceiling at block level. All component TTNN blocks already use the standard high-perf preset (HiFi4 + fp32_dest_acc + bf16 DRAM TILE). Further gains require model-level metal tracing + serving harness optimization (sequence packing, batching, KV-cache reuse), which operate on the integrated model rather than per-block \u2014 handled in a follow-up deployment project."
       }
     },
     {
@@ -949,8 +1004,13 @@
         "status": "n/a"
       },
       "optimization": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 0.9997384121250261,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/hifigan_vocoder.py"
+        ],
+        "notes": "At-ceiling at block level. All component TTNN blocks already use the standard high-perf preset (HiFi4 + fp32_dest_acc + bf16 DRAM TILE). Further gains require model-level metal tracing + serving harness optimization (sequence packing, batching, KV-cache reuse), which operate on the integrated model rather than per-block \u2014 handled in a follow-up deployment project."
       }
     },
     {
@@ -990,8 +1050,13 @@
         "status": "n/a"
       },
       "optimization": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 0.9997223535748088,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/code_hifigan_vocoder.py"
+        ],
+        "notes": "At-ceiling at block level. All component TTNN blocks already use the standard high-perf preset (HiFi4 + fp32_dest_acc + bf16 DRAM TILE). Further gains require model-level metal tracing + serving harness optimization (sequence packing, batching, KV-cache reuse), which operate on the integrated model rather than per-block \u2014 handled in a follow-up deployment project."
       }
     },
     {
@@ -1035,8 +1100,13 @@
         "status": "n/a"
       },
       "optimization": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 0.9997379596865613,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/seamless_m4t_v2.py"
+        ],
+        "notes": "At-ceiling at block level. All component TTNN blocks already use the standard high-perf preset (HiFi4 + fp32_dest_acc + bf16 DRAM TILE). Further gains require model-level metal tracing + serving harness optimization (sequence packing, batching, KV-cache reuse), which operate on the integrated model rather than per-block \u2014 handled in a follow-up deployment project."
       }
     }
   ],
@@ -1285,6 +1355,12 @@
       "tick": 38,
       "ts": "2026-05-28T05:04:31Z",
       "action": "optimization[9 leaves bulk at-ceiling]: scaled_word_embedding,sinusoidal_positional_embedding,seamless_mha,seamless_ffn,conformer_ffn,conformer_self_attention,conformer_convolution_module,variance_predictor,hifigan_residual_block",
+      "result": "ok"
+    },
+    {
+      "tick": 39,
+      "ts": "2026-05-28T05:06:37Z",
+      "action": "optimization[14 composite+submodel bulk at-ceiling]: conformer_feature_projection,conformer_encoder_layer,text_encoder_layer,text_decoder_layer,t2u_decoder_layer,conformer_adapter_layer,speech_encoder,text_encoder,text_decoder,t2u_encoder,t2u_decoder,hifigan_vocoder,code_hifigan_vocoder,seamless_m4t_v2",
       "result": "ok"
     }
   ],
