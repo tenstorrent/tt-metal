@@ -288,6 +288,57 @@ def test_wan_fused_distributed_rmsnorm_device_op_tp1_per_token_weight(
     indirect=True,
     ids=["bh_2x4_line"],
 )
+def test_wan_fused_distributed_rmsnorm_device_op_tp1_fp32_input(
+    mesh_device: ttnn.MeshDevice,
+) -> None:
+    """TP=1 with FP32 input. Validates the host-side fp32_dest_acc_en + unpack-
+    to-dest-fp32 fix so the unpacker doesn't silently downcast through SrcA to
+    TF32. Output cast to BFLOAT16 to compare against an fp32 torch reference.
+    """
+    N, H = 32, 256
+    submesh = mesh_device.create_submesh(ttnn.MeshShape(1, 1))
+    ccl_manager = CCLManager(mesh_device=submesh, num_links=1, topology=ttnn.Topology.Linear)
+    ag_sem = ccl_manager.get_ag_ping_pong_semaphore(0)
+
+    EPS = 1e-6
+    torch.manual_seed(0)
+    x_torch = torch.randn((1, 1, N, H), dtype=torch.float32)
+    weight_torch = torch.randn(H, dtype=torch.bfloat16)
+    tt_x = from_torch(x_torch, device=submesh, dtype=ttnn.float32)
+    tt_weight = from_torch(weight_torch.reshape(1, H), device=submesh, dtype=ttnn.bfloat16)
+
+    logger.info(f"FP32 input: N={N} H={H}")
+    out = ttnn.experimental.wan_fused_distributed_rmsnorm(
+        tt_x,
+        0,
+        submesh,
+        ag_sem,
+        topology=ttnn.Topology.Linear,
+        epsilon=EPS,
+        num_heads_per_device=1,
+        weight=tt_weight,
+        dtype=ttnn.bfloat16,
+        use_device_op=True,
+        compute_kernel_config=ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        ),
+    )
+
+    out_torch = to_torch(out)
+    ref = _torch_rmsnorm(x_torch, weight_torch, EPS)
+    assert_quality(ref, out_torch, pcc=0.999)
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "device_params"),
+    [((2, 4), {**line_params, "trace_region_size": 90112})],
+    indirect=True,
+    ids=["bh_2x4_line"],
+)
 @pytest.mark.parametrize(
     ("N", "num_heads", "head_dim", "has_weight"),
     [

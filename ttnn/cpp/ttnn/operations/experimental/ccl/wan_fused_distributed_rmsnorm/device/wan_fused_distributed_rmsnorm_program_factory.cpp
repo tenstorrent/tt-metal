@@ -719,6 +719,19 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         static_cast<uint32_t>(per_token_bias),
     };
 
+    // Float32 input requires fp32 dest accumulation; otherwise the unpacker
+    // would silently downcast through SrcA to TF32 / Float16_b (~10 mantissa
+    // bits) and the pre-phase sum(x**2) loses precision when |x| is large.
+    // Our compute kernel uses mul_tiles (SrcA/SrcB FPU path), which still
+    // truncates SrcA to TF32 even when fp32_dest_acc_en is true — TF32's 10
+    // mantissa bits is comparable to bf16, so we accept that precision floor
+    // and don't set UnpackToDestFp32 (that mode only takes effect on the
+    // unpack-to-dest paths like transpose_dest, used by Welford kernels).
+    TT_FATAL(
+        !(input_format == tt::DataFormat::Float32 && !fp32_dest_acc_en),
+        "wan_fused_distributed_rmsnorm with Float32 input requires fp32_dest_acc_en=true in the "
+        "compute kernel config.");
+
     KernelHandle compute_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/wan_fused_distributed_rmsnorm/device/kernels/compute/"
