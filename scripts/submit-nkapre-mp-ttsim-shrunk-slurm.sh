@@ -7,7 +7,7 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${REPO}/scripts/lib/nkapre-slurm-b-aisle.sh"
 
 export TT_METAL_HOME="${TT_METAL_HOME:-${REPO}}"
-export CRAQ_SIM="${CRAQ_SIM:-/data/rsong/craq-sim}"
+export CRAQ_SIM="${CRAQ_SIM:-/data/rsong/craq-sim2}"
 STAMP="${RESULTS_STAMP:-$(date -u +%Y%m%dT%H%M%SZ)}"
 export RESULTS_STAMP="${STAMP}"
 export RESULTS_DIR="${REPO}/craq-parity-results/mp-run-shrunk-${STAMP}"

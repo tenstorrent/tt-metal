@@ -18,7 +18,7 @@ require_bh_glx_compute
 
 export TT_METAL_HOME="$REPO"
 export BUILD_DIR="${REPO}/build_Debug"
-export CRAQ_SIM="${CRAQ_SIM:-/data/rsong/craq-sim}"
+export CRAQ_SIM="${CRAQ_SIM:-/data/rsong/craq-sim2}"
 export TTSIM_USE_DAEMON="${TTSIM_USE_DAEMON:-auto}"
 export PER_CMD_TIMEOUT="${PER_CMD_TIMEOUT:-1800}"
 unset TT_METAL_SIMULATOR_HOME TT_METAL_SIMULATOR TT_METAL_MOCK_CLUSTER_DESC_PATH

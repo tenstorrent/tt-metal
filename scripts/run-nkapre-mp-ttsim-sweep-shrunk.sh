@@ -37,7 +37,7 @@ export TT_METAL_SIMULATOR_CQ_WAIT_CLOCKS=10000
 export LD_LIBRARY_PATH="${BUILD_DIR}/tt_metal:${BUILD_DIR}/tt_metal/third_party/umd/lib:${BUILD_DIR}/ttnn:${BUILD_DIR}/tt_stl:${BUILD_DIR}/lib:${LD_LIBRARY_PATH:-}"
 export PATH="${REPO_ROOT}/python_env/bin:${PATH}"
 
-CRAQ_SIM="${CRAQ_SIM:-/data/rsong/craq-sim}"
+CRAQ_SIM="${CRAQ_SIM:-/data/rsong/craq-sim2}"
 WH_SIM_DIR="$RESULTS_DIR/sim_wh_multichip"
 mkdir -p "$WH_SIM_DIR"
 cp "$CRAQ_SIM/src/_out/release_wh/libttsim.so" "$WH_SIM_DIR/libttsim.so"
