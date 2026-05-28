@@ -208,6 +208,7 @@ class Generator(WarmupForwardMixin):
         self.trace_output_decode = defaultdict(lambda: None)
         self._disable_prefill_tracing = False  # Whether to disable prefill traces
         self._disable_decode_tracing = False  # Whether to disable decode traces
+        self._decode_inputs_need_reset = False
 
     def _set_prefill_column_mask(self, tt_column_mask):
         # Keep mask available on whichever TT_CCL instance attention currently uses.
@@ -841,6 +842,8 @@ class Generator(WarmupForwardMixin):
                     log_probs_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_lp)[0])
                     prefill_log_probs = log_probs_torch[0, 0, 0, :][empty_slots]
 
+        self._decode_inputs_need_reset = True
+
         if return_logits:
             # TODO: the current solution runs the argmax even if we are returning logits
             # This is inefficient and should be fixed
@@ -1266,6 +1269,9 @@ class Generator(WarmupForwardMixin):
             reset_inputs = True
         if reset_batch:
             reset_inputs = True
+        if self._decode_inputs_need_reset:
+            reset_inputs = True
+            self._decode_inputs_need_reset = False
         if sampling_params is not None:
             temperature_values = getattr(sampling_params, "temperature", None)
             if isinstance(temperature_values, torch.Tensor):
