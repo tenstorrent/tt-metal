@@ -227,21 +227,21 @@ void kernel_main() {
     constexpr uint32_t matmul_partials_cb = get_compile_time_arg_val(22);
     constexpr uint32_t tilized_in0_cb_id = get_compile_time_arg_val(23);
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(24);
-    constexpr bool partials_cb_uses_output = get_compile_time_arg_val(26);
-    constexpr uint32_t in0_nblocks_w_tilize = get_compile_time_arg_val(27);
-    constexpr bool check_skip_compute = get_compile_time_arg_val(28);
-    constexpr bool pack_relu = get_compile_time_arg_val(29);
-    constexpr bool packer_untilize = get_compile_time_arg_val(30);
-    constexpr bool packer_l1_acc = get_compile_time_arg_val(31);
-    constexpr bool fuse_bias = get_compile_time_arg_val(32);
-    constexpr bool split_reader = get_compile_time_arg_val(33);
-    constexpr bool activation_reuse = get_compile_time_arg_val(34);
+    constexpr bool partials_cb_uses_output = get_compile_time_arg_val(25);
+    constexpr uint32_t in0_nblocks_w_tilize = get_compile_time_arg_val(26);
+    constexpr bool check_skip_compute = get_compile_time_arg_val(27);
+    constexpr bool pack_relu = get_compile_time_arg_val(28);
+    constexpr bool packer_untilize = get_compile_time_arg_val(29);
+    constexpr bool packer_l1_acc = get_compile_time_arg_val(30);
+    constexpr bool fuse_bias = get_compile_time_arg_val(31);
+    constexpr bool split_reader = get_compile_time_arg_val(32);
+    constexpr bool activation_reuse = get_compile_time_arg_val(33);
 
-    constexpr uint32_t image_width_in_tiles = get_compile_time_arg_val(35);
-    constexpr uint32_t window_reuse_offset = get_compile_time_arg_val(36);
-    constexpr uint32_t tilized_cb_row_offset = get_compile_time_arg_val(37);
-    constexpr uint32_t tilized_cb_second_reader_offset = get_compile_time_arg_val(38);
-    constexpr bool split_reader_cb_shared = get_compile_time_arg_val(39) == 1;
+    constexpr uint32_t image_width_in_tiles = get_compile_time_arg_val(34);
+    constexpr uint32_t window_reuse_offset = get_compile_time_arg_val(35);
+    constexpr uint32_t tilized_cb_row_offset = get_compile_time_arg_val(36);
+    constexpr uint32_t tilized_cb_second_reader_offset = get_compile_time_arg_val(37);
+    constexpr bool split_reader_cb_shared = get_compile_time_arg_val(38) == 1;
 
     constexpr uint32_t out_block_num_tiles = in0_num_subblocks * in1_num_subblocks * out_subblock_num_tiles;
     constexpr uint32_t out_block_w = in1_block_w;

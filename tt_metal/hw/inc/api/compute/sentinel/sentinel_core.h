@@ -6,7 +6,6 @@
 
 #include "api/compute/common_globals.h"
 #include "api/compute/reconfig_data_format.h"
-#include "api/compute/pack.h"
 
 // Constants and types needed by both SentinelCore and testing components
 #define RECONFIG_NOTHING_CHANGED 0x00
@@ -185,7 +184,12 @@ ALWI void SentinelCore::inject_single_operand(uint32_t cb) {
             return;
         }
         if (m_enabled) {
-            reconfig_data_format_srca<false, true>(m_srca_cb, cb);
+#ifdef ARCH_QUASAR
+            // Quasar unpack reconfig does not support stride/tile-dim changes; force is_tile_dim_reconfig_en=false.
+            reconfig_data_format_srca<false /* to_from_int8 */, false /* is_tile_dim_reconfig_en */>(m_srca_cb, cb);
+#else
+            reconfig_data_format_srca<false /* to_from_int8 */, true /* is_tile_dim_reconfig_en */>(m_srca_cb, cb);
+#endif
         }
 
         DPRINT << "reconfig_data_format_srca - ";
@@ -196,7 +200,12 @@ ALWI void SentinelCore::inject_single_operand(uint32_t cb) {
             return;
         }
         if (m_enabled) {
-            reconfig_data_format_srcb<false, true>(m_srcb_cb, cb);
+#ifdef ARCH_QUASAR
+            // Quasar unpack reconfig does not support stride/tile-dim changes; force is_tile_dim_reconfig_en=false.
+            reconfig_data_format_srcb<false /* to_from_int8 */, false /* is_tile_dim_reconfig_en */>(m_srcb_cb, cb);
+#else
+            reconfig_data_format_srcb<false /* to_from_int8 */, true /* is_tile_dim_reconfig_en */>(m_srcb_cb, cb);
+#endif
         }
 
         DPRINT << "reconfig_data_format_srcb - ";
@@ -207,7 +216,7 @@ ALWI void SentinelCore::inject_single_operand(uint32_t cb) {
             return;
         }
         if (m_enabled) {
-            pack_reconfig_data_format(m_pack_cb, cb);
+            pack_reconfig_data_format<false /* is_tile_dim_reconfig_en */>(m_pack_cb, cb);
         }
 
         DPRINT << "pack_reconfig_data_format - ";

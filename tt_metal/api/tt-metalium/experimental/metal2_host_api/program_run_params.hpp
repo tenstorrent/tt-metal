@@ -11,6 +11,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
 #include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
@@ -49,18 +50,10 @@ struct ProgramRunParams {
         // Every arg in this kernel's RuntimeArgSchema::named_common_runtime_args must be set.
         std::unordered_map<std::string, uint32_t> named_common_runtime_args;
 
-        // Unnamed runtime argument "varargs"
-        // (these are specified per-node; length can vary per-node)
-        struct NodeVarargs {
-            NodeCoord node;
-            std::vector<uint32_t> args;
-        };
-        std::vector<NodeVarargs> runtime_varargs;
-
-        // Unnamed common runtime argument "varargs"
-        // (common to all nodes on which the kernel runs)
-        using CommonVarargs = std::vector<uint32_t>;
-        CommonVarargs common_runtime_varargs;
+        // Advanced options (see advanced_options.hpp).
+        // Companion to KernelAdvancedOptions on the schema side; holds
+        // unnamed-vararg RTA/CRTA values.
+        AdvancedKernelRunParams advanced_options;
     };
     // KernelRunParams must be specified for ALL kernels in the ProgramSpec.
     std::vector<KernelRunParams> kernel_run_params;
@@ -93,13 +86,10 @@ struct ProgramRunParams {
         std::optional<uint32_t> entry_size = std::nullopt;
         std::optional<uint32_t> num_entries = std::nullopt;
 
-        // DFB borrowed memory
-        // For DFBs built on borrowed memory, the underlying memory is passed as an argument.
-        // using BorrowedMemory = std::variant<BufferView, MeshTensorView>; // non-owning view types, TBD
-        // std::optional<BorrowedMemory> borrowed_memory = std::nullopt;
+        // Note: borrowed-memory DFBs update their backing L1 SRAM address from
+        // the corresponding tensor_arg.
     };
-    // DFBRunParams must be specified for those DFBs built on borrowed memory.
-    // It is optional for regular DFBs.
+    // DFBRunParams is optional. Provide entries only when overriding DFB sizes.
     std::vector<DFBRunParams> dfb_run_params;
 };
 
@@ -144,9 +134,8 @@ struct ProgramRunParamsView {
         uint32_t* entry_size;   // points to the value that will be used to allocate DFB ephemeral memory
         uint32_t* num_entries;  // always set to non-null location
 
-        // DFB borrowed memory
-        // For DFBs built on borrowed memory, the underlying memory is passed as an argument.
-        // (TODO)
+        // Note: borrowed-memory DFBs update their backing L1 SRAM address from
+        // the corresponding tensor_arg.
     };
     std::unordered_map<DFBSpecName, DFBRunParamsView> dfb_run_params;
 };

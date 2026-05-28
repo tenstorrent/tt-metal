@@ -33,7 +33,7 @@ on:
         default: true
         description: "Set to false to allow write access to MLPerf mount"
       test-group:
-        description: "Select which test group to run (SP1/4 tests can be run between 7 and 11 AM UTC)"
+        description: "Select which test group to run (SP1/4 tests can be run between 12 and 4 PM UTC)"
         required: false
         default: "all"
         type: choice
@@ -42,12 +42,13 @@ on:
           - deepseek_prefill
           - deepseek_decode
           - wan22
+          - single_galaxy_deepseek
           - sp1_deepseek
           - sp4_deepseek
 
   schedule:
-    # Run daily at 6 AM UTCP_a
-    - cron: "0 6 * * 1-5"
+    # Run daily at 11 AM UTC
+    - cron: "0 11 * * 1-5"
 
 permissions:
   contents: write
@@ -66,6 +67,7 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
       build-wheel: true
+      tracy: true  # required for device-perf tests (e.g. galaxy DeepSeek Prefill PERF)
 
   deepseek-prefill-tests:
     name: "DeepSeek Prefill Tests"
@@ -112,19 +114,6 @@ jobs:
       mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
       job-prefix: "[Wan2.2] "
 
-  # NOTE: Disabled SP1 tests for now as we debug SP4 pipeline
-  # deepseek-sp1-tests:
-  #   name: "SP1 DeepSeek Tests"
-  #   needs: build-artifact
-  #   if: ${{ inputs.test-group == 'all' || inputs.test-group == 'sp1_deepseek' || github.event_name == 'schedule' }}
-  #   secrets: inherit
-  #   uses: ./.github/workflows/demo-sp-multihost-impl.yaml
-  #   with:
-  #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-  #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-  #     sp-config: sp1
-
   deepseek-sp4-tests:
     name: "SP4 DeepSeek Tests"
     needs: build-artifact
@@ -136,3 +125,28 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       sp-config: sp4
+
+  deepseek-sp1-tests:
+    name: "SP1 DeepSeek Tests"
+    needs: build-artifact
+    if: ${{ inputs.test-group == 'all' || inputs.test-group == 'sp1_deepseek' || github.event_name == 'schedule' }}
+    secrets: inherit
+    uses: ./.github/workflows/demo-sp-multihost-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      sp-config: sp1
+
+  # todo)) proven to work by itself but mess up SP1 allocationp; disabled until issue (https://github.com/tenstorrent/tt-metal/issues/44917) is resolved
+  # deepseek-single-galaxy-tests:
+  #   name: "Single Galaxy DeepSeek Tests"
+  #   needs: build-artifact
+  #   if: ${{ inputs.test-group == 'all' || inputs.test-group == 'single_galaxy_deepseek' || github.event_name == 'schedule' }}
+  #   secrets: inherit
+  #   uses: ./.github/workflows/demo-sp-multihost-impl.yaml
+  #   with:
+  #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+  #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+  #     sp-config: spsg

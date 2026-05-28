@@ -283,8 +283,8 @@ inline void _llk_pack_fast_tilize_uninit_(
     // DEST remap is NOT cleared here — set/owned by the math thread (see init comment).
     // BH-specific: restore strides modified by fast-tilize init (WH doesn't modify them).
     // Note: set_packer_strides's first param is semantically pack_src_format.
-    set_packer_strides(pack_src_format, TILE_C_DIM);
+    set_packer_strides<PackMode::Default>(pack_src_format, TILE_C_DIM);
     // Restore X counter, addr_mods, and MOP via _llk_pack_init_ (aligned with WH approach)
     TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
-    _llk_pack_init_<false, false, false>(FACE_R_DIM, TILE_C_DIM, 4);
+    _llk_pack_init_<PackMode::Default, false /* zero_output */, false /* skip_addrmod_config */>(FACE_R_DIM, TILE_C_DIM, 4 /* num_faces */, 1 /* num_tiles */);
 }

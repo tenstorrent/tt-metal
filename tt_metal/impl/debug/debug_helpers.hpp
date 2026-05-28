@@ -9,6 +9,7 @@
 #include <vector>
 #include <cctype>
 #include <cstdio>
+#include <enchantum/enchantum.hpp>
 #include <fmt/core.h>
 #include <fmt/ranges.h>
 
@@ -23,6 +24,7 @@
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include <llrt/tt_cluster.hpp>
 #include "llrt/hal.hpp"
+#include "internal/tt-2xx/quasar/error_handling.h"
 #include "internal/tt-2xx/quasar/overlay/remapper_common.hpp"
 
 namespace tt::tt_metal {
@@ -130,14 +132,27 @@ inline std::string get_debug_assert_message(
         case dev_msgs::DebugAssertNCriscNOCPostedWritesSentTripped:
             return "detected an inter-kernel data race due to kernel completing with pending NOC "
                    "transactions (missing NOC posted writes sent barrier).";
+        case dev_msgs::DebugAssertNCriscNOCPacketTagClearedTripped:
+            return "detected invalid NOC command buffer state before starting the next kernel "
+                   "(write-capable NOC packet tags must be zero so implicit transaction ID users start with "
+                   "transaction ID 0).";
         case dev_msgs::DebugAssertRtaOutOfBounds: return "accessed unique runtime arg index out of bounds.";
         case dev_msgs::DebugAssertCrtaOutOfBounds: return "accessed common runtime arg index out of bounds.";
         case dev_msgs::DebugAssertHwFault:
-            return fmt::format(
-                "hardware fault occurred at PC 0x{:x}. Cause: 0x{:x}, faulting address or instruction: 0x{:08x}",
-                line_num,
-                hw_fault_info & 0xffffffff,
-                (hw_fault_info >> 32) & 0xffffffff);
+            if ((hw_fault_info & 0xffffffff) <= 7) {
+                return fmt::format(
+                    "hardware fault occurred at PC 0x{:x}. Cause: {}, faulting address or instruction: 0x{:08x}",
+                    line_num,
+                    enchantum::to_string(static_cast<DmErrors>(hw_fault_info & 0xffffffff)),
+                    (hw_fault_info >> 32) & 0xffffffff);
+            } else {
+                return fmt::format(
+                    "hardware fault occurred with cause: {}, additional code: 0x{:08x}, faulting address or "
+                    "instruction: 0x{:08x}",
+                    enchantum::to_string(static_cast<TriscErrors>((hw_fault_info >> 8) & 0x3f)),
+                    hw_fault_info & 0xff,
+                    (hw_fault_info >> 32) & 0xffffffff);
+            }
         default: return "";
     }
 }
@@ -241,10 +256,10 @@ inline EnableSymbolsInfo get_enable_symbols_info(HalProgrammableCoreType core_ty
 // Format client name for tile counter output.
 // DM clients show paired DMs (e.g., DM0/DM4) because DM0-3 and DM4-7 share tile counter groups.
 inline void fprintClientName(FILE* f, uint32_t client_id) {
-    if (client_id < NEO_0) {
-        fprintf(f, "DM%u/DM%u", client_id, client_id + NEO_0);
+    if (client_id < overlay::NEO_0) {
+        fprintf(f, "DM%u/DM%u", client_id, client_id + overlay::NEO_0);
     } else {
-        fprintf(f, "NEO_%u", client_id - NEO_0);
+        fprintf(f, "NEO_%u", client_id - overlay::NEO_0);
     }
 }
 }  // namespace tt::tt_metal

@@ -2,26 +2,27 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import ttnn
-from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from models.common.utility_functions import torch_random
+import re
 from functools import partial
+
+import torch
+
+import ttnn
+from models.common.utility_functions import torch_random
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
+    get_mesh_shape,
     mesh_tensor_to_torch,
     reconcile_golden_to_actual,
 )
-
-from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import (
     build_op_kwargs,
     extract_named_tensor_kwargs,
 )
-import re
+from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
+from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 
 
 def dict_to_layernorm_program_config(cfg):
@@ -32,6 +33,8 @@ def dict_to_layernorm_program_config(cfg):
 
     if "LayerNormShardedMultiCoreProgramConfig" in cfg_type:
         m = re.search(r"x\s*=\s*(\d+).*?y\s*=\s*(\d+)", val_str)
+        if not m:
+            m = re.search(r"compute_with_storage_grid_size\s*=\s*(\d+)\s*-\s*(\d+)", val_str)
         grid = ttnn.CoreCoord(int(m.group(1)), int(m.group(2))) if m else ttnn.CoreCoord(8, 4)
 
         def _int(name, default=0):
@@ -124,9 +127,25 @@ def run(
     if program_config is not None:
         op_kwargs["program_config"] = program_config
 
-    # Do NOT inject memory_config — the master trace only records it when the model
-    # explicitly passed it as a kwarg.  Injecting from vector metadata causes
-    # extra_key diffs in validation.
+    # Use __absent_keys__ to inject memory_config only when the master trace had it.
+    # When the master had memory_config=None, we must pass None explicitly.
+    absent_keys = set(kwargs.get("__absent_keys__") or [])
+    if "memory_config" not in absent_keys:
+        traced_memory_config = kwargs.get("memory_config")
+        if traced_memory_config is not None and traced_memory_config != "__ABSENT__":
+            from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
+
+            parsed_mc = (
+                parse_dict_value("memory_config", traced_memory_config)
+                if isinstance(traced_memory_config, dict)
+                else traced_memory_config
+            )
+            if parsed_mc is not None:
+                op_kwargs["memory_config"] = parsed_mc
+            else:
+                op_kwargs["memory_config"] = None
+        else:
+            op_kwargs["memory_config"] = None
 
     input_shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 

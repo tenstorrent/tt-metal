@@ -601,6 +601,24 @@ def _strip_object_addresses(value):
     return value
 
 
+_SHAPE_RE = re.compile(r"^Shape\(\[([0-9,\s]+)\]\)$")
+
+
+def _parse_shape_object(obj):
+    """Convert a serialized Shape dict to a plain int list.
+
+    The tracer sometimes serializes ttnn.Shape as
+    {"type": "Shape", "value": "Shape([1, 32, 32, 384])"} instead of a
+    plain list [1, 32, 32, 384].  Canonicalize to the list form so the
+    hash is stable regardless of serialization path.
+    """
+    if isinstance(obj, dict) and obj.get("type") == "Shape" and isinstance(obj.get("value"), str):
+        m = _SHAPE_RE.match(obj["value"])
+        if m:
+            return [int(x.strip()) for x in m.group(1).split(",")]
+    return None
+
+
 def _normalize_for_hash(obj):
     """
     Normalize arguments in-place for stable config_hash computation.
@@ -620,7 +638,11 @@ def _normalize_for_hash(obj):
 
         for k in list(obj.keys()):
             v = obj[k]
-            if isinstance(v, str):
+            # Serialized Shape objects → plain int lists
+            parsed = _parse_shape_object(v) if isinstance(v, dict) else None
+            if parsed is not None:
+                obj[k] = parsed
+            elif isinstance(v, str):
                 obj[k] = _strip_object_addresses(v)
             else:
                 _normalize_for_hash(v)
@@ -743,12 +765,23 @@ def update_master_file(master_file_path, operations, test_source, trace_uid=None
     new_configs_added = 0
     next_config_id = max_config_id + 1
 
+    # Python-wrapper ops that delegate to a different C++ op.
+    # The tracer captures the C++ name; remap to the wrapper name so the
+    # sweep trace matches the master JSON.
+    _OP_ALIASES = {
+        "ttnn.avg_pool2d": "ttnn.global_avg_pool2d",
+    }
+
     print(f"\n💾 Updating master JSON with {len(operations)} operations...")
     for operation in tqdm(operations, desc="Updating master", unit="op"):
         if not operation:
             continue
 
         op_name = operation.get("operation", "unknown")
+
+        # Remap Python-wrapper ops only when the master has the alias
+        if op_name in _OP_ALIASES and _OP_ALIASES[op_name] in master_data.get("operations", {}):
+            op_name = _OP_ALIASES[op_name]
         op_args = operation.get("arguments", [])
 
         # Canonicalize non-finite floats (inf/-inf/nan -> string forms) BEFORE the
@@ -762,19 +795,33 @@ def update_master_file(master_file_path, operations, test_source, trace_uid=None
         if op_name not in master_data["operations"]:
             master_data["operations"][op_name] = {"configurations": []}
 
-        # Create argument signature for deduplication
-        args_str = json.dumps(op_args, sort_keys=True, default=str)
-        arg_signature = hashlib.md5(args_str.encode()).hexdigest()
+        # Create argument signature for deduplication.
+        # When sweep_source_hash is present (sweep validation mode), use it as
+        # the dedup key — each sweep vector maps to exactly one master config,
+        # so different vectors must produce distinct configs even if their
+        # serialized arguments happen to hash identically.
+        sweep_source_hash = operation.get("sweep_source_hash")
+        if sweep_source_hash:
+            arg_signature = None  # Not used; matching uses sweep_source_hash directly
+        else:
+            args_str = json.dumps(op_args, sort_keys=True, default=str)
+            arg_signature = hashlib.md5(args_str.encode()).hexdigest()
 
         # Check if this configuration already exists
         matching_config = None
         for existing_config in master_data["operations"][op_name]["configurations"]:
-            if isinstance(existing_config, dict) and "arguments" in existing_config:
-                existing_args = existing_config["arguments"]
-                existing_sig = hashlib.md5(json.dumps(existing_args, sort_keys=True, default=str).encode()).hexdigest()
-                if existing_sig == arg_signature:
+            if isinstance(existing_config, dict):
+                if sweep_source_hash and existing_config.get("sweep_source_hash") == sweep_source_hash:
                     matching_config = existing_config
                     break
+                elif not sweep_source_hash and "arguments" in existing_config:
+                    existing_args = existing_config["arguments"]
+                    existing_sig = hashlib.md5(
+                        json.dumps(existing_args, sort_keys=True, default=str).encode()
+                    ).hexdigest()
+                    if existing_sig == arg_signature:
+                        matching_config = existing_config
+                        break
 
         if matching_config is None:
             # New configuration - assign new config_id
@@ -797,7 +844,6 @@ def update_master_file(master_file_path, operations, test_source, trace_uid=None
                 ],
             }
 
-            sweep_source_hash = operation.get("sweep_source_hash")
             if sweep_source_hash:
                 config_entry["sweep_source_hash"] = sweep_source_hash
 
@@ -1353,10 +1399,11 @@ def recompute_config_hashes(json_file):
             old_hash = config.get("config_hash")
             op_args = config.get("arguments", {})
 
-            machine_info = None
-            executions = config.get("executions", [])
-            if executions and isinstance(executions[0], dict):
-                machine_info = executions[0].get("machine_info")
+            machine_info = config.get("traced_machine_info")
+            if machine_info is None:
+                executions = config.get("executions", [])
+                if executions and isinstance(executions[0], dict):
+                    machine_info = executions[0].get("machine_info")
             new_hash = _compute_config_hash(op_name, op_args, machine_info)
 
             if new_hash != old_hash:

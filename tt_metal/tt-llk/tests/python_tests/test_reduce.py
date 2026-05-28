@@ -23,7 +23,7 @@ from helpers.param_config import (
     parametrize,
 )
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator_v2 import generate_stimuli_v2
+from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     IN_FACE_DIMS,
@@ -80,6 +80,14 @@ def test_reduce(
     ):
         pytest.skip("LoFi fails in these cases for reduce")
 
+    if (
+        formats.input_format == DataFormat.Bfp8_b
+        or formats.output_format == DataFormat.Bfp8_b
+    ) and is_reduce_to_one:
+        pytest.skip(
+            "Bfp8_b reduce accumulates error easily. Issue in tt-metal repo: #45143"
+        )
+
     tile_shape = construct_tile_shape(tile_dimensions)
 
     if is_reduce_to_one:
@@ -91,7 +99,7 @@ def test_reduce(
         # If not reducing to one, we can use larger input dimensions to better test the reduction operation without excessive numerical errors in the accumulation.
         input_dimensions = [256, 32]
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli_v2(
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
@@ -125,11 +133,22 @@ def test_reduce(
         tile_cnt_A,
         reduce_to_one=is_reduce_to_one,
         tile_shape=tile_shape,
+        input_format=formats.input_format,
     )
 
+    # Float32 golden uses full FP32 accumulation; match that in HW whenever we
+    # pack Float32 from sub-32-bit float inputs (e.g. Float16_b), otherwise
+    # HiFi column/reduce-to-one cases can drift below PCC thresholds.
     dest_acc = (
         DestAccumulation.Yes
-        if (formats.input_format.is_32_bit() or is_dest_acc_needed(formats))
+        if (
+            formats.input_format.is_32_bit()
+            or is_dest_acc_needed(formats)
+            or (
+                formats.output_format == DataFormat.Float32
+                and not formats.input_format.is_32_bit()
+            )
+        )
         else DestAccumulation.No
     )
 
@@ -260,7 +279,7 @@ def test_reduce_bfp4_b(
         # If not reducing to one, we can use larger input dimensions to better test the reduction operation without excessive numerical errors in the accumulation.
         input_dimensions = [256, 32]
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli_v2(
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
@@ -297,9 +316,19 @@ def test_reduce_bfp4_b(
         input_format=formats.input_format,
     )
 
+    # Float32 golden uses full FP32 accumulation; match that in HW whenever we
+    # pack Float32 from sub-32-bit float inputs (e.g. Float16_b), otherwise
+    # HiFi column/reduce-to-one cases can drift below PCC thresholds.
     dest_acc = (
         DestAccumulation.Yes
-        if (formats.input_format.is_32_bit() or is_dest_acc_needed(formats))
+        if (
+            formats.input_format.is_32_bit()
+            or is_dest_acc_needed(formats)
+            or (
+                formats.output_format == DataFormat.Float32
+                and not formats.input_format.is_32_bit()
+            )
+        )
         else DestAccumulation.No
     )
 

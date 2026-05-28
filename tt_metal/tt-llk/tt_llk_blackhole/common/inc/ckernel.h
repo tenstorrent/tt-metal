@@ -586,9 +586,6 @@ inline void record_kernel_runtime(std::uint64_t kernel_runtime)
     debug_mailbox_base[mailbox_end - 1] = (kernel_runtime >> 48) & 0xffff;
 }
 
-void debug_dump(const std::uint8_t *data, std::uint32_t byte_size);
-void debug_dump_seek(std::uint8_t offset);
-
 // If the TRACK_x bit is set, then the Tensix hardware will automatically
 // stall TRISC memory accesses and/or Tensix instructions to x in order
 // to guarantee correct ordering. This should eliminate most cases where
