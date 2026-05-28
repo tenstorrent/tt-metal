@@ -93,8 +93,22 @@ def prefill_forward(
             # Mirrors split_qkv_heads_prefill's local head count.
             num_local_kv_heads = 1 if weights.kv_replicated else config.num_key_value_heads // tp
             eff_bs = effective_block_size(k_cache, config.head_dim, num_local_kv_heads)
-            ttnn.experimental.paged_fill_cache(k_cache, tt_k, page_table, batch_idx=user_id, block_size=eff_bs)
-            ttnn.experimental.paged_fill_cache(v_cache, tt_v, page_table, batch_idx=user_id, block_size=eff_bs)
+            # Bounded sliding-window cache: when set, paged_fill_cache wraps the
+            # per-tile virtual position into a circular buffer of
+            # ``cache_position_modulo`` tokens before the page_table lookup. Earlier
+            # tile writes that would wrap past the later writes are skipped on-device.
+            # ``None`` = legacy unbounded behavior.
+            paged_modulo_kwargs = (
+                {"cache_position_modulo": config.cache_position_modulo}
+                if config.cache_position_modulo is not None
+                else {}
+            )
+            ttnn.experimental.paged_fill_cache(
+                k_cache, tt_k, page_table, batch_idx=user_id, block_size=eff_bs, **paged_modulo_kwargs
+            )
+            ttnn.experimental.paged_fill_cache(
+                v_cache, tt_v, page_table, batch_idx=user_id, block_size=eff_bs, **paged_modulo_kwargs
+            )
         else:
             ttnn.fill_cache(k_cache, tt_k, batch_idx=user_id)
             ttnn.fill_cache(v_cache, tt_v, batch_idx=user_id)

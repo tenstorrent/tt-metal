@@ -31,6 +31,7 @@ def create_tt_model(
     paged_attention_config=None,
     create_kv_cache=True,
     model_path=None,
+    bounded_sliding_kv_cache: bool = False,
 ):
     """
     Create Gemma4 model with all weights loaded to device.
@@ -94,6 +95,7 @@ def create_tt_model(
         paged_attention_config=paged_attention_config,
         create_kv_cache=create_kv_cache,
         precision=precision,
+        bounded_sliding_kv_cache=bounded_sliding_kv_cache,
     )
 
     return model_args, model, model.tt_kv_cache, state_dict

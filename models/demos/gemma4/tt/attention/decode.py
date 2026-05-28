@@ -104,6 +104,14 @@ def decode_forward(
     # 5. KV cache update — skip for KV-shared layers (source layer already updated the cache)
     # Use position_idx_cache (int32) for cache ops when position_idx is uint32 (embedding lookup format)
     cache_pos = position_idx_cache if position_idx_cache is not None else position_idx
+    # Bounded sliding-window cache: when set, the op wraps absolute positions into a
+    # circular buffer of ``cache_position_modulo`` tokens before the page_table lookup.
+    # ``None`` = legacy unbounded behavior (set on full-attention layers or when the
+    # bounded-cache mode isn't wired up). Empty kwargs dict on the legacy path keeps
+    # kernel signatures and program-cache keys for existing callers byte-identical.
+    paged_modulo_kwargs = (
+        {"cache_position_modulo": config.cache_position_modulo} if config.cache_position_modulo is not None else {}
+    )
     if kv_cache is not None:
         k_cache, v_cache = kv_cache
         if not is_kv_shared:
@@ -127,6 +135,7 @@ def decode_forward(
                     page_table=page_table,
                     block_size=eff_bs,
                     num_kv_heads=num_local_kv_heads,
+                    **paged_modulo_kwargs,
                 )
                 ttnn.experimental.paged_update_cache(
                     v_cache,
@@ -135,6 +144,7 @@ def decode_forward(
                     page_table=page_table,
                     block_size=eff_bs,
                     num_kv_heads=num_local_kv_heads,
+                    **paged_modulo_kwargs,
                 )
             else:
                 ttnn.experimental.paged_update_cache(k_cache, tt_k, update_idxs_tensor=cache_pos)
@@ -183,6 +193,7 @@ def decode_forward(
             # for a different layer type under HMA cross-group sharing — same
             # rationale as the num_kv_heads override on paged_update_cache.
             num_kv_heads=sdpa_num_local_kv_heads,
+            **paged_modulo_kwargs,
         )
     else:
         tt_sdpa = ttnn.transformer.scaled_dot_product_attention_decode(

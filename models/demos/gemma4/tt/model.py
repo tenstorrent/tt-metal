@@ -121,6 +121,7 @@ class Gemma4Model:
         paged_attention_config=None,
         create_kv_cache=True,
         precision=None,
+        bounded_sliding_kv_cache: bool = False,
         # Legacy parameters — ignored
         transformation_mats=None,
     ):
@@ -284,6 +285,7 @@ class Gemma4Model:
                     break
 
         # Decoder layers (each creates its own KV cache if requested)
+        self.bounded_sliding_kv_cache = bounded_sliding_kv_cache
         self.layers = []
         for i in range(n_layers):
             layer = Gemma4DecoderLayer(
@@ -301,6 +303,7 @@ class Gemma4Model:
                 mesh_config=mesh_config,
                 max_seq_len=max_seq_len,
                 max_local_batch_size=max_local_batch_size,
+                bounded_sliding_kv_cache=bounded_sliding_kv_cache,
             )
             # Create KV cache for non-shared layers only
             # Shared layers will use their source layer's KV cache
@@ -308,6 +311,19 @@ class Gemma4Model:
                 from models.demos.gemma4.tt.attention.kv_cache import init_kv_cache
 
                 attn_cfg = Gemma4AttentionConfig(hf_config, i)
+                # Bounded SlidingWindowSpec allocation for sliding layers: only enough
+                # physical blocks to cover one sliding-window-sized region per user,
+                # instead of one max_seq_len-sized region. Mirrors vLLM's hybrid
+                # kv_cache_groups. Full-attention layers keep the existing allocation.
+                max_num_blocks_override = None
+                if (
+                    bounded_sliding_kv_cache
+                    and attn_cfg.is_sliding
+                    and attn_cfg.sliding_window is not None
+                    and paged_attention_config is not None
+                ):
+                    sliding_blocks_per_seq = attn_cfg.sliding_window // paged_attention_config.block_size
+                    max_num_blocks_override = sliding_blocks_per_seq * max_local_batch_size
                 kv_cache = init_kv_cache(
                     mesh_device=mesh_device,
                     config=attn_cfg,
@@ -315,6 +331,7 @@ class Gemma4Model:
                     max_seq_len=max_seq_len,
                     paged_attention_config=paged_attention_config,
                     cache_dtype=ttnn.bfloat16,
+                    max_num_blocks_override=max_num_blocks_override,
                 )
                 layer.self_attn.kv_cache = kv_cache
             self.layers.append(layer)
