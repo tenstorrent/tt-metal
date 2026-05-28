@@ -30,12 +30,14 @@ Run:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import pathlib
 import time
 
 import pytest
+import requests
 import torch
 from safetensors.torch import load_file as load_st
 
@@ -45,13 +47,14 @@ _SNAPSHOT = pathlib.Path(
     "/home/tt-admin/.cache/huggingface/hub/models--Qwen--Qwen3.6-27B"
     "/snapshots/6a9e13bd6fc8f0983b9b99948120bc37f49c13e9"
 )
-_LLAMA70B_PROMPT_FILE = pathlib.Path(
-    "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json"
-)
+_PROMPT_DIR = pathlib.Path("models/demos/llama3_70b_galaxy/demo/sample_prompts")
+_CONTEXT_CACHE_DIR = pathlib.Path("models/tt_transformers/demo/context_cache")
 
 _B = 1
 # QWEN36_PERF_T_PREFILL env var overrides ISL (default 128).  Common values
-# for benchmarking: 128, 2048, 4096, 8192.
+# for benchmarking: 128, 2048, 4096, 8192.  Values >= 1024 load the matching
+# ``input_data_long_{T//1024}k.json`` file (Gutenberg-context-backed); smaller
+# values use ``input_data_questions_prefill_128.json``.
 _T_PREFILL = int(os.environ.get("QWEN36_PERF_T_PREFILL", "128"))
 _H = 5120
 _N_LAYERS = 64
@@ -76,6 +79,69 @@ def bh_glx_mesh():
     yield mesh
     ttnn.close_mesh_device(mesh)
     ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+
+
+def _load_and_cache_context(context_url: str, cache_dir: pathlib.Path, max_length: int | None = None) -> str:
+    """Mirrors ``llama3_70b_galaxy/demo/text_demo.py::load_and_cache_context``.
+
+    Downloads the Gutenberg-style context URL on first use and clips to
+    ``max_length`` characters (matching the llama3_70b_galaxy demo).
+    """
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_file = cache_dir / hashlib.md5(context_url.encode()).hexdigest()
+    if cache_file.exists():
+        context_text = cache_file.read_text()
+    else:
+        resp = requests.get(context_url, timeout=30)
+        resp.raise_for_status()
+        context_text = resp.text
+        cache_file.write_text(context_text)
+    if max_length:
+        context_text = context_text[:max_length]
+    return context_text
+
+
+def _load_prompt_for_isl(t_prefill: int) -> str:
+    """Pick the right ``input_data_*.json`` for the requested ISL and assemble.
+
+    For ``t_prefill < 1024`` returns the first ``prompt`` from
+    ``input_data_questions_prefill_128.json`` (existing behaviour, char-only
+    prompt with no external context).
+
+    For ``t_prefill >= 1024`` loads ``input_data_long_{t_prefill//1024}k.json``,
+    downloads its ``context`` URL, clips to its ``max_length`` characters and
+    concatenates ``context + "\\n\\n" + prompt`` so the assembled string
+    tokenises to at least ``t_prefill`` tokens. The caller is responsible for
+    tokenising and truncating to ``t_prefill`` tokens.
+    """
+    if t_prefill < 1024:
+        prompt_file = _PROMPT_DIR / "input_data_questions_prefill_128.json"
+        with open(prompt_file) as f:
+            data = json.load(f)
+        return data[0]["prompt"]
+
+    k = t_prefill // 1024
+    prompt_file = _PROMPT_DIR / f"input_data_long_{k}k.json"
+    if not prompt_file.exists():
+        raise FileNotFoundError(f"no long-context prompt file for ISL {t_prefill} (looked for {prompt_file})")
+    with open(prompt_file) as f:
+        data = json.load(f)
+    entry = data[0]
+    prompt = entry["prompt"]
+    context_url = entry.get("context")
+    if context_url:
+        # The llama3_70b_galaxy json files tune ``max_length`` for the llama
+        # tokeniser. Qwen3.6's BPE compresses English ~10% denser, so the
+        # llama 16000-char clip for 4k tokenises to ~3.8k Qwen tokens.  Use a
+        # 6 chars/token floor (well above any English BPE ratio) so the
+        # assembled string reliably exceeds ``t_prefill`` Qwen tokens; the
+        # caller truncates to exactly ``t_prefill``.
+        max_length = max(entry.get("max_length") or 0, t_prefill * 6)
+        context_text = _load_and_cache_context(context_url, _CONTEXT_CACHE_DIR, max_length=max_length)
+        # Mirror the instruct-mode assembly used by text_demo.py: wrap the
+        # context in a fenced block then append the question prompt.
+        prompt = "```" + context_text + "```\n\n" + prompt
+    return prompt
 
 
 def _load_full_state_dict(snapshot_dir: pathlib.Path) -> dict:
@@ -238,13 +304,12 @@ def test_qwen36_64L_decode_intrace_perf(bh_glx_mesh):
     from models.demos.llama3_70b_galaxy.tt.llama_common import PagedAttentionConfig
 
     tok = AutoTokenizer.from_pretrained(str(_SNAPSHOT), trust_remote_code=True)
-    with open(_LLAMA70B_PROMPT_FILE) as f:
-        prompts = json.load(f)
-    prompt = prompts[0]["prompt"]
-    print(f"[perf] prompt: {prompt!r}")
+    prompt = _load_prompt_for_isl(_T_PREFILL)
+    preview = prompt if len(prompt) <= 200 else f"{prompt[:120]!r} ... {prompt[-80:]!r}"
+    print(f"[perf] prompt ({len(prompt)} chars): {preview}")
     ids = tok(prompt, return_tensors="pt").input_ids
     T_prompt = int(ids.shape[-1])
-    print(f"[perf] prompt token count = {T_prompt}")
+    print(f"[perf] prompt token count = {T_prompt} (target ISL = {_T_PREFILL})")
 
     if T_prompt > _T_PREFILL:
         ids = ids[:, :_T_PREFILL]

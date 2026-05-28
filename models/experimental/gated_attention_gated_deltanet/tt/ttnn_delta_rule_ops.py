@@ -1306,7 +1306,7 @@ def chunk_gated_delta_rule_ttnn(
         o = o[:, :T, :]
 
     o = ttnn.reshape(o, [B, H, T, V], memory_config=mem_cfg_in)
-    o = ttnn.transpose(o, 1, 2, memory_config=mem_cfg_in)
+    o = ttnn.transpose(o, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     o = ttnn.typecast(o, ttnn.bfloat16, memory_config=mem_cfg_in)
 
     final_state = ttnn.reshape(S, [B, H, K, V], memory_config=ttnn.L1_MEMORY_CONFIG)
