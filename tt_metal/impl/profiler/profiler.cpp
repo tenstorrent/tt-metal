@@ -73,8 +73,15 @@ kernel_profiler::PacketTypes get_packet_type(uint32_t timer_id) {
 
 void add_program_sub_device_meta_data(nlohmann::json& meta_data, tt::ChipId device_id, uint32_t runtime_id) {
     using CacheKey = std::pair<tt::ChipId, uint32_t>;
+    struct CacheKeyHash {
+        std::size_t operator()(const CacheKey& k) const noexcept {
+            const std::size_t h1 = std::hash<tt::ChipId>{}(k.first);
+            const std::size_t h2 = std::hash<std::uint32_t>{}(k.second);
+            return h1 ^ (h2 + 0x9e3779b9 + (h1 << 6) + (h1 >> 2));  // boost::hash_combine
+        }
+    };
     static std::mutex cache_mutex;
-    static std::unordered_map<CacheKey, std::optional<tt::ProgramSubDeviceInfo>> sub_device_info_cache;
+    static std::unordered_map<CacheKey, std::optional<tt::ProgramSubDeviceInfo>, CacheKeyHash> sub_device_info_cache;
 
     const CacheKey cache_key{device_id, runtime_id};
     std::optional<tt::ProgramSubDeviceInfo> sub_device_info;
