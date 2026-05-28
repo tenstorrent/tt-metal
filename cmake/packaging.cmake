@@ -3,8 +3,12 @@ set(CPACK_PACKAGE_CONTACT "support@tenstorrent.com")
 set(CMAKE_PROJECT_HOMEPAGE_URL "https://tenstorrent.com")
 set(CPACK_PACKAGE_NAME tt)
 
-# Suppress the summary so that we can have per-component summaries
-set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "")
+# CPackDeb requires a non-empty summary/description for generated packages.
+# Some install rules from dependencies land in the implicit "Development"
+# component, so keep a default summary and an explicit Development description
+# to make Debian package generation robust across CMake/CPack versions.
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Tenstorrent Metalium and TT-NN runtime and SDK packages")
+set(CPACK_DEBIAN_DEVELOPMENT_DESCRIPTION "Development files installed by third-party dependencies")
 set(CPACK_DEBIAN_METALIUM_PACKAGE_SECTION "libs")
 set(CPACK_DEBIAN_METALIUM-DEV_PACKAGE_SECTION "devel")
 set(CPACK_DEBIAN_METALIUM-JIT_PACKAGE_SECTION "libs")
