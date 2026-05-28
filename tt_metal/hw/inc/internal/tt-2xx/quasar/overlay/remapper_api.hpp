@@ -716,6 +716,41 @@ public:
     }
 
     /**
+     * @brief Load pre-computed raw register values directly for a single pair.
+     *
+     * Bypasses all bitfield manipulation; use when the host has pre-computed the
+     * exact clientR and clientL register values (e.g. from dfb_dm0_remapper_slot_t).
+     * Does not update current_pair_idx.
+     *
+     * @param pair_idx    Pair index (0-63)
+     * @param clientR_raw Pre-computed value for the ClientR config register
+     * @param clientL_raw Pre-computed value for the ClientL config register
+     */
+    void load_pair_raw(uint32_t pair_idx, uint32_t clientR_raw, uint32_t clientL_raw) {
+        if (pair_idx < REMAP_NUM_PAIRS) {
+            clientR_configs[pair_idx].val = clientR_raw;
+            clientL_configs[pair_idx].val = clientL_raw;
+        }
+    }
+
+    /**
+     * @brief Flush accumulated ClientL and ClientR configs to hardware for pairs [0, high_watermark).
+     *
+     * Call once after all pair state has been accumulated via set_pair_index /
+     * configure_clientL_all_fields / set_clientR_slot inside the merged DFB loop.
+     * Because pair indices are assigned monotonically, high_watermark equals the
+     * count of distinct active pairs, so only the necessary WRITE_REG32 calls are issued.
+     *
+     * @param high_watermark One past the highest pair index that was configured.
+     */
+    void write_pairs_up_to(uint32_t high_watermark) {
+        const uint32_t limit = (high_watermark < REMAP_NUM_PAIRS) ? high_watermark : REMAP_NUM_PAIRS;
+        for (uint32_t i = 0; i < limit; i++) {
+            write_all_configs(i);
+        }
+    }
+
+    /**
      * @brief Clear all configuration registers for current pair (local copies)
      */
     void clear_all_configs() { clear_all_configs(current_pair_idx); }

@@ -104,8 +104,10 @@ struct DataflowBufferImpl {
     }
 
     uint32_t total_size() const { return config.entry_size * config.num_entries; }
-    uint32_t serialized_size() const;
-    std::vector<uint8_t> serialize_for_core(const CoreCoord& core) const;
+    uint32_t serialized_size() const;        // shared per-DFB layout only (dfb_initializer_t + per_risc entries)
+    uint32_t dm0_blob_serialized_size() const; // DM0 blob only (blob_hdr + rmp_slots + txn_entries)
+    std::vector<uint8_t> serialize_for_core(const CoreCoord& core) const;        // shared layout only
+    std::vector<uint8_t> serialize_dm0_blob_for_core(const CoreCoord& core) const; // DM0 blob only
 
     // Override entry_size and/or num_entries. Recomputes capacity/stride and, on a re-entry
     // (already-finalized) DFB with implicit sync, recomputes the txn descriptors in place while
