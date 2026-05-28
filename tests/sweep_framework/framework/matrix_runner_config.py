@@ -324,7 +324,9 @@ def get_lead_models_test_group_name_for_hardware_group(hardware_group):
     if hardware_group is None:
         return LEAD_MODELS_DEFAULT_TEST_GROUP
 
-    _, device_series, card_count = hardware_group
+    board_type, device_series, card_count = hardware_group
+    if board_type == "blackhole":
+        return LEAD_MODELS_DEFAULT_TEST_GROUP
     wants_galaxy = device_series == "tt_galaxy_wh" or card_count > 1
     return "lead-models-galaxy" if wants_galaxy else LEAD_MODELS_DEFAULT_TEST_GROUP
 

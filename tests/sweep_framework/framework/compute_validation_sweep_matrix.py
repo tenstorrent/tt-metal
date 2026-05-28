@@ -105,6 +105,17 @@ def _get_hardware_from_master_json(master_json: dict):
     return None
 
 
+def _get_scope_trace_ids(manifest: dict, validation_scope: str) -> set[int]:
+    """Return trace IDs declared under a specific scope in the registry targets."""
+    targets = manifest.get("targets", {})
+    scope_entries = targets.get(validation_scope, [])
+    scope_ids = set()
+    for entry in scope_entries:
+        for tid in entry.get("trace", []):
+            scope_ids.add(int(tid))
+    return scope_ids
+
+
 def _get_trace_ids_by_hardware(trace_ids: list[int], registry: dict) -> dict:
     """Group trace IDs by the normalized hardware tuple declared in the workflow manifest."""
     trace_ids_by_hardware = defaultdict(list)
@@ -145,6 +156,9 @@ def compute_validation_matrix(
 
     registry = {entry["trace_id"]: entry for entry in manifest.get("registry", []) if entry.get("trace_id") is not None}
 
+    scope_trace_ids = _get_scope_trace_ids(manifest, validation_scope)
+    scoped_ids = [tid for tid in trace_ids if tid in scope_trace_ids] if scope_trace_ids else trace_ids
+
     generation_manifest = _load_generation_manifest(vectors_dir)
     grouping_mode = generation_manifest.get("vector_grouping_mode")
     if grouping_mode and grouping_mode != "hw":
@@ -159,7 +173,7 @@ def compute_validation_matrix(
         print(f"No vector JSON files found in {vectors_dir}", file=sys.stderr)
         sys.exit(1)
 
-    trace_ids_by_hardware = _get_trace_ids_by_hardware(trace_ids, registry)
+    trace_ids_by_hardware = _get_trace_ids_by_hardware(scoped_ids, registry)
 
     hardware_modules = defaultdict(list)
     unmatched_modules = []
@@ -180,6 +194,10 @@ def compute_validation_matrix(
         if not base_modules:
             continue
 
+        trace_id_list = sorted(trace_ids_by_hardware.get(hardware_group, []))
+        if not trace_id_list and hardware_group is not None:
+            continue
+
         # Sub-group by mesh shape only when the hardware group has multiple
         # distinct mesh topologies (e.g. N300 with both [1,1] and [1,2]).
         mesh_to_modules = defaultdict(set)
@@ -197,7 +215,6 @@ def compute_validation_matrix(
         else:
             test_group_name = get_test_group_name_for_hardware_group(hardware_group)
         runner_config = get_runner_config(test_group_name)
-        trace_id_list = sorted(trace_ids_by_hardware.get(hardware_group, []))
 
         if needs_mesh_split:
             for mesh_str, mesh_modules in sorted(mesh_to_modules.items()):
