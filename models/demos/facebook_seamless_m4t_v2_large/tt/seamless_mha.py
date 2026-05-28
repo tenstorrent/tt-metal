@@ -108,6 +108,103 @@ class SeamlessMHA(LightweightModule):
         proj = ttnn.transpose(proj, 1, 2)
         return proj
 
+    # ------------------------------------------------------------------ KV-cache helpers
+    #
+    # Public hooks used by the text decoder's cached (AR-decode) path. The
+    # default forward() above is unchanged and still works without any
+    # cache. These helpers expose the projection + SDPA building blocks so
+    # the decoder layer can:
+    #   * (cross-attn prefill) project encoder K/V once and store them;
+    #   * (cross-attn decode) reuse the cached K/V for every step;
+    #   * (self-attn decode)  project Q/K/V for the single new token,
+    #                          update the per-layer cache, then run SDPA
+    #                          against the full cache.
+    def project_kv(self, current_states: ttnn.Tensor):
+        """Project ``current_states`` through K and V, return ``(k, v)``
+        with shape ``[B, num_heads, S, head_dim]``.
+
+        Used to pre-compute the encoder K/V for the cross-attention cache.
+        """
+        batch = current_states.shape[0]
+        src_len = current_states.shape[1]
+        k = self._project_and_split(current_states, self.k_weight, self.k_bias, batch, src_len)
+        v = self._project_and_split(current_states, self.v_weight, self.v_bias, batch, src_len)
+        return k, v
+
+    def project_qkv_single_token(self, hidden_states: ttnn.Tensor):
+        """Project a single decoder token through Q, K, V.
+
+        ``hidden_states``: ``[B, 1, embed_dim]``. Returns three tensors
+        each of shape ``[B, num_heads, 1, head_dim]`` ready for the KV
+        cache update / SDPA.
+        """
+        batch = hidden_states.shape[0]
+        tgt_len = hidden_states.shape[1]
+        q = self._project_and_split(hidden_states, self.q_weight, self.q_bias, batch, tgt_len)
+        k = self._project_and_split(hidden_states, self.k_weight, self.k_bias, batch, tgt_len)
+        v = self._project_and_split(hidden_states, self.v_weight, self.v_bias, batch, tgt_len)
+        return q, k, v
+
+    def project_q(self, hidden_states: ttnn.Tensor):
+        """Project ``hidden_states`` through Q only.
+
+        Returns ``[B, num_heads, T, head_dim]``. Used by the cross-attn
+        decode path where K/V come from the static encoder cache.
+        """
+        batch = hidden_states.shape[0]
+        tgt_len = hidden_states.shape[1]
+        return self._project_and_split(hidden_states, self.q_weight, self.q_bias, batch, tgt_len)
+
+    def attend_and_out_project(
+        self,
+        q: ttnn.Tensor,
+        k: ttnn.Tensor,
+        v: ttnn.Tensor,
+        attention_mask: ttnn.Tensor = None,
+    ) -> ttnn.Tensor:
+        """Run SDPA + out_proj on pre-projected Q/K/V tensors.
+
+        Q is ``[B, num_heads, T, head_dim]``, K/V are
+        ``[B, num_heads, S, head_dim]``. Returns ``[B, T, embed_dim]``.
+
+        Caller owns the lifetimes of ``q`` (deallocated here) and K/V
+        (kept alive — typically aliases of the KV cache buffer).
+        """
+        batch = q.shape[0]
+        tgt_len = q.shape[2]
+
+        sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+
+        attn_output = ttnn.transformer.scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            scale=self.scaling,
+            attn_mask=attention_mask,
+            is_causal=False,
+            compute_kernel_config=sdpa_compute_kernel_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(q)
+
+        attn_output = ttnn.transpose(attn_output, 1, 2)
+        attn_output = ttnn.reshape(attn_output, (batch, tgt_len, self.embed_dim))
+
+        out = ttnn.linear(
+            attn_output,
+            self.o_weight,
+            bias=self.o_bias,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
+        )
+        ttnn.deallocate(attn_output)
+        return out
+
     def forward(
         self,
         hidden_states: ttnn.Tensor,

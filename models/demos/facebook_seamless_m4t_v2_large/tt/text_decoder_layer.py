@@ -168,27 +168,55 @@ class TextDecoderLayer(LightweightModule):
         encoder_hidden_states: Optional[ttnn.Tensor] = None,
         self_attention_mask: Optional[ttnn.Tensor] = None,
         encoder_attention_mask: Optional[ttnn.Tensor] = None,
+        past_key_values=None,
+        position: Optional[int] = None,
+        layer_idx: Optional[int] = None,
     ) -> ttnn.Tensor:
         """Run one NLLB-style text decoder layer.
 
         Args:
             hidden_states: ttnn tensor of shape ``[B, T, embed_dim]`` in
-                TILE_LAYOUT.
+                TILE_LAYOUT. When ``past_key_values`` is provided ``T`` is
+                always 1 (the single new decoder token).
             encoder_hidden_states: optional ttnn tensor of shape
                 ``[B, S, embed_dim]``. If ``None`` the cross-attention block
                 is skipped (matches HF behaviour where ``cross_attn_weights``
                 is ``None`` and the residual stream is untouched between
-                self-attn and FFN).
+                self-attn and FFN). When ``past_key_values`` is provided
+                this argument is unused — cross-attention K/V come from the
+                already-populated cache.
             self_attention_mask: optional ttnn tensor broadcastable to
-                ``[B, 1, T, T]`` representing an additive log-mask for the
-                causal self-attention.
+                ``[B, 1, T, T]`` (non-cached) or ``[B, 1, 1, max_seq]``
+                (cached) representing an additive log-mask for the self
+                attention.
             encoder_attention_mask: optional ttnn tensor broadcastable to
                 ``[B, 1, T, S]`` representing an additive log-mask for the
                 cross-attention.
+            past_key_values: optional
+                :class:`models.demos.facebook_seamless_m4t_v2_large.tt.kv_cache.TextDecoderKVCache`
+                bundle. When provided the layer runs in incremental-decode
+                mode: it expects ``T == 1``, writes the new self-attn K/V
+                into the cache at ``position``, and reads cross-attn K/V
+                from the already-populated cross-attention cache for the
+                given ``layer_idx``.
+            position: integer index (0-based) at which to write the new
+                self-attn K/V. Required when ``past_key_values`` is given.
+            layer_idx: this layer's index in the decoder stack. Required
+                when ``past_key_values`` is given.
 
         Returns:
             ttnn tensor of shape ``[B, T, embed_dim]``.
         """
+        if past_key_values is not None:
+            return self._forward_cached(
+                hidden_states=hidden_states,
+                self_attention_mask=self_attention_mask,
+                encoder_attention_mask=encoder_attention_mask,
+                past_key_values=past_key_values,
+                position=position,
+                layer_idx=layer_idx,
+            )
+
         # 1. Self-attention residual (pre-norm).
         residual = hidden_states
         x = self.self_attn_layer_norm(hidden_states)
@@ -207,6 +235,71 @@ class TextDecoderLayer(LightweightModule):
             )
             x = ttnn.add(x, residual)
             ttnn.deallocate(residual)
+
+        # 3. FFN residual (pre-norm).
+        residual = x
+        x = self.ffn_layer_norm(x)
+        x = self.ffn(x)
+        x = ttnn.add(x, residual)
+        ttnn.deallocate(residual)
+        return x
+
+    # ------------------------------------------------------------------ cached path
+    def _forward_cached(
+        self,
+        hidden_states: ttnn.Tensor,
+        self_attention_mask: Optional[ttnn.Tensor],
+        encoder_attention_mask: Optional[ttnn.Tensor],
+        past_key_values,
+        position: Optional[int],
+        layer_idx: Optional[int],
+    ) -> ttnn.Tensor:
+        """Incremental-decode forward: one new token + KV cache.
+
+        Matches the math of :meth:`forward` exactly for the single new
+        decoder position. The self-attention K/V is computed only for
+        the new token and merged into the per-layer cache at
+        ``position``; the SDPA then attends over the FULL cache (the
+        mask zeros out future positions). Cross-attention skips K and V
+        projection entirely — those tensors were stored once in
+        ``past_key_values.cross_attn`` by the encoder-prefill step.
+        """
+        if position is None:
+            raise ValueError("position must be provided in cached forward.")
+        if layer_idx is None:
+            raise ValueError("layer_idx must be provided in cached forward.")
+
+        # 1. Self-attention residual (pre-norm) with KV cache update.
+        residual = hidden_states
+        x = self.self_attn_layer_norm(hidden_states)
+
+        # Project Q,K,V from the single new token.
+        q_new, k_new, v_new = self.self_attn.project_qkv_single_token(x)
+        ttnn.deallocate(x)
+
+        # Update the per-layer self-attn cache at `position` and read the
+        # full cache for SDPA. K/V tensors are tile-padded by SDPA's mask.
+        past_key_values.self_attn.update(layer_idx, k_new, v_new, pos=position)
+        ttnn.deallocate(k_new)
+        ttnn.deallocate(v_new)
+        k_full, v_full = past_key_values.self_attn.read(layer_idx)
+
+        # SDPA + out_proj.
+        x = self.self_attn.attend_and_out_project(q_new, k_full, v_full, attention_mask=self_attention_mask)
+        x = ttnn.add(x, residual)
+        ttnn.deallocate(residual)
+
+        # 2. Cross-attention residual (pre-norm). Always present in cached
+        #    mode — the caller already populated the cross-attn cache.
+        residual = x
+        x = self.cross_attention_layer_norm(x)
+        # Q from the current decoder hidden; K/V from the static cross cache.
+        q = self.cross_attention.project_q(x)
+        ttnn.deallocate(x)
+        k_cross, v_cross = past_key_values.cross_attn.read(layer_idx)
+        x = self.cross_attention.attend_and_out_project(q, k_cross, v_cross, attention_mask=encoder_attention_mask)
+        x = ttnn.add(x, residual)
+        ttnn.deallocate(residual)
 
         # 3. FFN residual (pre-norm).
         residual = x

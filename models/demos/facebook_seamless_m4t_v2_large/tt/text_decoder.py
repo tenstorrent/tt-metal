@@ -288,6 +288,207 @@ class TextDecoder(LightweightModule):
 
     # ----------------------------------------------------------------- forward
 
+    # ------------------------------------------------------------------ cross-attn prefill
+    def populate_cross_attention_cache(
+        self,
+        past_key_values,
+        encoder_hidden_states_torch: torch.Tensor,
+    ) -> None:
+        """Project encoder hidden states through each layer's cross-attn K/V
+        weights and store the result in the cross-attention KV cache.
+
+        Run this ONCE per generation, immediately after the encoder forward,
+        BEFORE the first decode step.
+
+        Args:
+            past_key_values: a
+                :class:`models.demos.facebook_seamless_m4t_v2_large.tt.kv_cache.TextDecoderKVCache`
+                whose ``cross_attn.encoder_seq_len`` matches the
+                tile-padded encoder length we feed in here.
+            encoder_hidden_states_torch: host-side ``[B, S, H]`` float
+                tensor. We tile-pad along ``S`` with zeros to match the
+                cross-attn cache slot before projecting.
+        """
+        src_len = int(encoder_hidden_states_torch.shape[1])
+        src_pad = _pad_to_tile(src_len)
+        if src_pad > 0:
+            enc_padded = self._pad_encoder_hidden(encoder_hidden_states_torch, src_pad)
+        else:
+            enc_padded = encoder_hidden_states_torch
+        encoder_hidden_tt = self._to_tt(enc_padded.to(torch.float32))
+
+        for i, layer in enumerate(self.layers):
+            # NB: the pre-norm in HF BART-style cross-attention applies to
+            # the *decoder* (Q) side, NOT to the encoder K/V side. So we
+            # feed encoder_hidden_states straight into K/V projections.
+            k_cross, v_cross = layer.cross_attention.project_kv(encoder_hidden_tt)
+            past_key_values.cross_attn.populate(i, k_cross, v_cross)
+
+        ttnn.deallocate(encoder_hidden_tt)
+
+    # ------------------------------------------------------------------ decode-step mask
+    def _build_decode_self_attention_mask(
+        self,
+        batch: int,
+        position: int,
+        max_seq_len: int,
+        dtype: torch.dtype,
+    ) -> torch.Tensor:
+        """Build a ``[B, 1, 1, max_seq_len]`` additive mask for one decode step.
+
+        Positions ``[0 .. position]`` are unmasked (additive 0); positions
+        ``[position+1 .. max_seq_len-1]`` get ``finfo(dtype).min`` so SDPA
+        ignores empty cache slots.
+        """
+        fill = float(torch.finfo(dtype).min)
+        mask = torch.zeros((batch, 1, 1, max_seq_len), dtype=dtype)
+        if position + 1 < max_seq_len:
+            mask[:, :, :, position + 1 :] = fill
+        return mask
+
+    def _build_decode_encoder_attention_mask(
+        self,
+        encoder_attention_mask_2d: Optional[torch.Tensor],
+        batch: int,
+        encoder_seq_len_total: int,
+        src_len: int,
+        dtype: torch.dtype,
+    ) -> torch.Tensor:
+        """Build a ``[B, 1, 1, encoder_seq_len_total]`` cross-attn mask.
+
+        Positions ``[0 .. src_len)`` carry the (optional) caller-supplied
+        2D padding mask; positions ``[src_len .. encoder_seq_len_total)``
+        are tile-padding and get the "minus" fill so they contribute
+        nothing post-softmax.
+        """
+        fill = float(torch.finfo(dtype).min)
+        mask = torch.full((batch, 1, 1, encoder_seq_len_total), fill, dtype=dtype)
+        if encoder_attention_mask_2d is None:
+            mask[:, :, :, :src_len] = 0.0
+        else:
+            keep = encoder_attention_mask_2d.to(torch.bool)  # [B, S]
+            for b in range(batch):
+                row = torch.where(
+                    keep[b],
+                    torch.zeros(src_len, dtype=dtype),
+                    torch.full((src_len,), fill, dtype=dtype),
+                )
+                mask[b, 0, 0, :src_len] = row
+        return mask
+
+    # ------------------------------------------------------------------ decode step
+    def decode_step(
+        self,
+        input_ids: torch.Tensor,
+        position: int,
+        past_key_values,
+        encoder_attention_mask: Optional[torch.Tensor] = None,
+        encoder_seq_len_logical: Optional[int] = None,
+    ) -> ttnn.Tensor:
+        """Run one autoregressive decode step.
+
+        Args:
+            input_ids: host int tensor of shape ``[B, 1]`` — the single
+                token to append to the cache and consume.
+            position: 0-based index of this new token within the cache.
+                Must satisfy ``position < past_key_values.self_attn.max_seq_len``.
+            past_key_values: a populated
+                :class:`models.demos.facebook_seamless_m4t_v2_large.tt.kv_cache.TextDecoderKVCache`
+                (cross-attn already populated via
+                :meth:`populate_cross_attention_cache`).
+            encoder_attention_mask: optional 2D host ``[B, S]`` padding
+                mask. Combined with the tile-pad mask internally.
+
+        Returns:
+            ttnn tensor of shape ``[B, 1, embed_dim]`` — the decoder's
+            ``last_hidden_state`` for this step.
+        """
+        if input_ids.shape[1] != 1:
+            raise ValueError(f"decode_step expects T=1, got input_ids.shape={tuple(input_ids.shape)}")
+        batch = int(input_ids.shape[0])
+
+        # 1. Token embedding (scaled) for the single new token. ttnn.embedding
+        #    requires uint32 ROW_MAJOR ids.
+        tt_input_ids = ttnn.from_torch(
+            input_ids.to(torch.int32),
+            device=self.device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        inputs_embeds = self.embed_tokens(tt_input_ids)
+
+        # 2. Positional embedding for absolute position `position` —
+        #    SinusoidalPositionalEmbedding's padding-aware indexing
+        #    (cumsum of non-pad mask + past_key_values_length) gives the
+        #    correct row when we hand it the single new id with
+        #    ``past_key_values_length=position``.
+        embed_pos = self.embed_positions(
+            input_ids=input_ids,
+            past_key_values_length=position,
+        )
+        hidden_states = ttnn.add(inputs_embeds, embed_pos)
+        ttnn.deallocate(inputs_embeds)
+        ttnn.deallocate(embed_pos)
+
+        # 3. Build the [B, 1, 1, max_seq] self-attn mask for this step.
+        max_seq_len = past_key_values.self_attn.max_seq_len
+        self_mask_torch = self._build_decode_self_attention_mask(
+            batch=batch,
+            position=position,
+            max_seq_len=max_seq_len,
+            dtype=torch.float32,
+        )
+        self_attention_mask_tt = self._to_tt(self_mask_torch)
+
+        # 4. Build the [B, 1, 1, enc_seq_total] cross-attn mask. We always
+        #    need this when the populated encoder length includes tile
+        #    padding — those K/V rows came from projecting zero encoder
+        #    hidden states (bias-only) and must be masked to -inf to match
+        #    the non-cached forward. The logical src_len is taken from
+        #    ``encoder_attention_mask`` (preferred), then ``encoder_seq_len_logical``
+        #    (positional override), else from the cache slot (assumes no
+        #    tile padding existed).
+        enc_seq_total = past_key_values.cross_attn.encoder_seq_len
+        if encoder_attention_mask is not None:
+            src_len = int(encoder_attention_mask.shape[1])
+        elif encoder_seq_len_logical is not None:
+            src_len = int(encoder_seq_len_logical)
+        else:
+            src_len = enc_seq_total
+        if encoder_attention_mask is not None or enc_seq_total != src_len:
+            enc_mask_torch = self._build_decode_encoder_attention_mask(
+                encoder_attention_mask_2d=encoder_attention_mask,
+                batch=batch,
+                encoder_seq_len_total=enc_seq_total,
+                src_len=src_len,
+                dtype=torch.float32,
+            )
+            encoder_mask_tt = self._to_tt(enc_mask_torch)
+        else:
+            encoder_mask_tt = None
+
+        # 5. Stack of decoder layers with KV cache.
+        for i, layer in enumerate(self.layers):
+            hidden_states = layer(
+                hidden_states,
+                self_attention_mask=self_attention_mask_tt,
+                encoder_attention_mask=encoder_mask_tt,
+                past_key_values=past_key_values,
+                position=position,
+                layer_idx=i,
+            )
+
+        # 6. Final LayerNorm.
+        hidden_states = self.final_layer_norm(hidden_states)
+
+        # Clean up scratch device tensors.
+        ttnn.deallocate(self_attention_mask_tt)
+        if encoder_mask_tt is not None:
+            ttnn.deallocate(encoder_mask_tt)
+
+        return hidden_states
+
     def forward(
         self,
         input_ids: torch.Tensor,
