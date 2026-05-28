@@ -498,9 +498,29 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     // The pack always pushes block_size tiles (LLK packer requirement) even
     // when only `tiles_in_block = num_tile_cols % block_size` are valid, so
     // we round the CB size UP to a multiple of block_size.
+    //
+    // Format mirrors composite's rmsnorm_post_allgather: FP32 when
+    // fp32_dest_acc_en is on (preserves full precision across sub-phases),
+    // bf16 otherwise. With bf16 here, every sub-phase output gets rounded
+    // to 8 mantissa bits — composite-vs-fused diverges noticeably when the
+    // input distribution has high variance (e.g. matmul-output values).
+    const tt::DataFormat intermediate_format = fp32_dest_acc_en ? fp32_format : bf16_format;
+    const uint32_t intermediate_tile_size = tt::tile_size(intermediate_format);
     const uint32_t intermediate_cb_tiles = tt::div_up(num_tile_cols, block_size) * block_size;
-    create_cb(intermediate_cb_id, program, worker_core_set, bf16_tile_size, intermediate_cb_tiles, bf16_format);
-    create_cb(rotated_input_cb_id, program, worker_core_set, bf16_tile_size, intermediate_cb_tiles, bf16_format);
+    create_cb(
+        intermediate_cb_id,
+        program,
+        worker_core_set,
+        intermediate_tile_size,
+        intermediate_cb_tiles,
+        intermediate_format);
+    create_cb(
+        rotated_input_cb_id,
+        program,
+        worker_core_set,
+        intermediate_tile_size,
+        intermediate_cb_tiles,
+        intermediate_format);
     // output_cb is double-buffered so the writer can drain block N while compute
     // produces block N+1.
     create_cb(output_cb_id, program, worker_core_set, output_tile_size, block_size * 2, output_format);
