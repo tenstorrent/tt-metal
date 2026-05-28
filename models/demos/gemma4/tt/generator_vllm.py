@@ -7,6 +7,7 @@ import torch
 
 import ttnn
 from models.demos.gemma4.tt.common import create_tt_model
+from models.demos.gemma4.tt.generator_trace import patch_gemma4_trace_model_args
 from models.tt_transformers.tt.generator import create_submeshes
 from models.tt_transformers.tt.generator_vllm import HybridAttentionForCausalLM, allocate_vllm_kv_cache
 
@@ -22,11 +23,10 @@ def _patch_model_args(model_args, mesh_device, max_batch_size, max_seq_len, mode
     model_args.max_batch_size = max_batch_size
     model_args.max_seq_len = max_seq_len
     model_args.max_prefill_chunk_size = max_seq_len
-    model_args.trace_prefill_supported_seq_lens = []
+    patch_gemma4_trace_model_args(model_args, prefill_trace_enabled=False)
     model_args.optimizations = _Gemma4VllmOptimizations()
     model_args.mesh_device = mesh_device
     model_args._gemma4_model_path = model_path
-    model_args.can_enable_trace = lambda prefill_seq_len, num_cached_tokens=0: False
     model_args.is_llama_vision = lambda: False
 
 

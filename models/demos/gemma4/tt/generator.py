@@ -8,6 +8,11 @@ from loguru import logger
 from transformers import AutoTokenizer
 
 from models.demos.gemma4.tt.common import create_tt_model
+from models.demos.gemma4.tt.generator_trace import (
+    maybe_disable_pli_prefill_trace,
+    patch_gemma4_trace_model_args,
+    warmup_gemma4_batched_prefill_traces,
+)
 from models.tt_transformers.tt.common import get_padded_prefill_len
 from models.tt_transformers.tt.generator import MAX_BATCHED_PREFILL_SEQ_LEN, SUPPORTED_PREFILL_BATCH_SIZES, Generator
 from models.tt_transformers.tt.model_config import determine_device_name
@@ -22,19 +27,13 @@ def _patch_model_args(model_args, mesh_device, max_batch_size, max_seq_len, mode
     model_args.max_seq_len = max_seq_len
     model_args.max_context_len = max_seq_len
     model_args.max_prefill_chunk_size = max_seq_len
-    model_args.trace_prefill_supported_seq_lens = [128, 512, 1024, 2048]
     model_args.mesh_device = mesh_device
     model_args.device_name = determine_device_name(mesh_device)
     model_args.model_name = model_path
     model_args.base_model_name = Path(model_path).name
     model_args.tokenizer = tokenizer
     model_args.processor = None
-    uses_pli = bool(model_args.hidden_size_per_layer_input)
-    model_args.can_enable_trace = (
-        lambda prefill_seq_len, num_cached_tokens=0: not uses_pli
-        and num_cached_tokens == 0
-        and prefill_seq_len in model_args.trace_prefill_supported_seq_lens
-    )
+    patch_gemma4_trace_model_args(model_args, prefill_trace_enabled=True)
     model_args.is_llama_vision = lambda: False
     model_args.encode_prompt = lambda prompt, instruct=False: (
         tokenizer.apply_chat_template(
@@ -58,29 +57,20 @@ class Gemma4Generator(Generator):
         # Gemma4 decode already returns sampled tokens when on-device sampling is enabled.
         self.enable_split_sampling = False
 
-    @staticmethod
-    def _model_uses_pli(model) -> bool:
-        """True for E2B/E4B-style models with per-layer-input embeddings."""
-        return bool(getattr(model, "hidden_size_per_layer_input", 0))
-
     def _maybe_disable_pli_prefill_trace(self, enable_trace: bool, batch_size: int = 1) -> bool:
-        """PLI prefill uploads per-layer inputs via ttnn.from_torch inside forward.
-
-        That host-device traffic during trace capture triggers TT_FATAL
-        (``Writes are not supported during trace capture``). Decode trace is
-        unaffected — PLI is prepared on host and copied in out-of-trace.
-        """
-        if enable_trace and self._model_uses_pli(self.model[0]):
-            logger.info(
-                "Disabling prefill trace on PLI model (batch_size={}): "
-                "in-forward ttnn.from_torch PLI upload is incompatible with trace capture",
-                batch_size,
-            )
-            return False
-        return enable_trace
+        return maybe_disable_pli_prefill_trace(enable_trace, self.model[0], batch_size=batch_size)
 
     def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, non_greedy_decoding_on_device):
         enable_trace = self._maybe_disable_pli_prefill_trace(enable_trace)
+        if enable_trace:
+            warmup_gemma4_batched_prefill_traces(
+                self,
+                kv_cache,
+                enable_trace=enable_trace,
+                can_sample_on_device=can_sample_on_device,
+                non_greedy_decoding_on_device=non_greedy_decoding_on_device,
+            )
+            return
         super().warmup_model_prefill(
             kv_cache=kv_cache,
             enable_trace=enable_trace,
