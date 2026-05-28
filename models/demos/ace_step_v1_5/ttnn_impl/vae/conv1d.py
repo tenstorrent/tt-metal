@@ -27,10 +27,10 @@ from .._ttnn import get_ttnn
 from ..math_perf_env import (
     ace_step_concat_kwargs,
     ace_step_dense_linear_program_config,
+    ace_step_ensure_dram_activation,
     ace_step_init_vae_conv_compute_kernel_config,
     ace_step_reshape_kwargs,
     ace_step_vae_activation_compute_dtype,
-    ace_step_vae_activation_memory_config,
     ace_step_vae_activation_storage_dtype,
     ace_step_vae_conv1d_im2col_matmul_enabled,
     ace_step_vae_conv1d_im2col_matmul_program_config,
@@ -453,6 +453,13 @@ class TtConv1d:
         t = int(input_length)
         self._ensure_packed(b, t)
 
+        if self.kernel_size > 1:
+            dram_mc = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
+            x = ace_step_ensure_dram_activation(ttnn, x, dram_mc)
+            if x.layout != ttnn.ROW_MAJOR_LAYOUT:
+                kw = {"memory_config": dram_mc} if dram_mc is not None else {}
+                x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, **kw)
+
         # Determine output memory config.
         out_mc = self._output_memory_config()  # DRAM for k>1 by default
         use_sharded = False
@@ -463,27 +470,40 @@ class TtConv1d:
                 out_mc = sharded_mc
                 use_sharded = True
 
-        ret = ttnn.conv1d(
-            input_tensor=x,
-            weight_tensor=self._weight_dev,
-            in_channels=self.in_channels,
-            out_channels=self.out_channels,
-            device=self.device,
-            bias_tensor=self._bias_dev,
-            kernel_size=self.kernel_size,
-            stride=self.stride,
-            padding=self.padding,
-            dilation=self.dilation,
-            batch_size=b,
-            input_length=t,
-            conv_config=self.conv_config,
-            compute_config=self.compute_config,
-            groups=1,
-            return_output_dim=True,
-            return_weights_and_bias=False,
-            dtype=self._compute_dtype,
-            memory_config=out_mc,
-        )
+        try:
+            ret = ttnn.conv1d(
+                input_tensor=x,
+                weight_tensor=self._weight_dev,
+                in_channels=self.in_channels,
+                out_channels=self.out_channels,
+                device=self.device,
+                bias_tensor=self._bias_dev,
+                kernel_size=self.kernel_size,
+                stride=self.stride,
+                padding=self.padding,
+                dilation=self.dilation,
+                batch_size=b,
+                input_length=t,
+                conv_config=self.conv_config,
+                compute_config=self.compute_config,
+                groups=1,
+                return_output_dim=True,
+                return_weights_and_bias=False,
+                dtype=self._compute_dtype,
+                memory_config=out_mc,
+            )
+        except RuntimeError as exc:
+            msg = str(exc).lower()
+            if use_sharded and ("circular buffer" in msg or "statically allocated" in msg):
+                self._sharded_output_cache[(b, t)] = False
+                return self._run_conv1d(
+                    x,
+                    batch_size=b,
+                    input_length=t,
+                    return_tile=return_tile,
+                    return_sharded=False,
+                )
+            raise
         out, out_length = ret
         out = ttnn.squeeze(out, 0)
         out = ttnn.reshape(out, (b, out_length, self.out_channels), **_sr)
@@ -636,7 +656,8 @@ class TtConvTranspose1d:
             self._compute_dtype = activation_dtype
         self.weights_dtype = weights_dtype or ace_step_vae_host_weight_staging_dtype(ttnn)
         self._vae_conv_perf = True
-        self._l1_mem = ace_step_vae_activation_memory_config(ttnn)
+        # k>1 conv-transpose stays DRAM I/O (static CB clash on Blackhole if activations live in L1).
+        self._l1_mem = ace_step_vae_conv1d_memory_config(ttnn, kernel_size=self.kernel_size)
         # Conv-transpose kernels are always k>1 in Oobleck (``2 * stride``); use BFP8 weights for BW.
         self._conv_weight_dtype = ace_step_vae_conv_weight_dtype(ttnn, self.weights_dtype, kernel_size=self.kernel_size)
 
