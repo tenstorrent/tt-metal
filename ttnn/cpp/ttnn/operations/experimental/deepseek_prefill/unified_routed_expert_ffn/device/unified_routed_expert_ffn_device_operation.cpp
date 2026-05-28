@@ -73,12 +73,24 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
     }
 
     // Aux tensors: counts / global_expert_idx_table are small UINT32 vectors
-    // the reader fetches via DRAM accessor.
+    // the reader fetches via DRAM accessor. The reader does a single
+    // noc_async_read_page(page=0, ...) and then indexes anywhere in
+    // [0, num_experts), so the full vector must fit in one page (= one tile
+    // for TILE layout, 1024 uint32 entries). Validate here so larger expert
+    // counts produce a clean assertion instead of silent OOB reads at runtime.
     for (const auto& [name, a] : std::initializer_list<std::pair<const char*, const ttnn::Tensor&>>{
              {"counts", t.counts}, {"global_expert_idx_table", t.global_expert_idx_table}}) {
         TT_FATAL(a.storage_type() == tt::tt_metal::StorageType::DEVICE, "{} must be on device", name);
         TT_FATAL(a.dtype() == tt::tt_metal::DataType::UINT32, "{} must be UINT32", name);
         TT_FATAL(is_dram_interleaved(a), "{} must be DRAM-interleaved", name);
+        const uint32_t num_entries = a.logical_shape()[-1];
+        TT_FATAL(
+            num_entries <= tt::constants::TILE_HW,
+            "{} length ({}) must fit in one tile ({} entries) — reader fetches "
+            "only page 0 of this tensor",
+            name,
+            num_entries,
+            tt::constants::TILE_HW);
     }
     TT_FATAL(
         op.local_expert_id < t.global_expert_idx_table.logical_shape()[-1],
