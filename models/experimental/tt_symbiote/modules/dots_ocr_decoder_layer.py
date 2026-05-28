@@ -39,15 +39,6 @@ def _take_local_dp_batch(hidden_states, device):
     )
 
 
-def _use_bfp8_decoder_weights(layer_idx) -> bool:
-    if layer_idx is None:
-        return False
-    layer_idx = int(layer_idx)
-    # Layers 0..6 stay BFP4 for decode speed; later layers are more sensitive
-    # for OCR spelling/table tokens.
-    return layer_idx >= 7
-
-
 class TTNNDotsOCRLocalShardRMSNorm(TTNNDistributedRMSNorm):
     def move_weights_to_device_impl(self):
         # Inherit the distributed-RMSNorm weight setup (weight_distributed +
@@ -169,8 +160,6 @@ class TTNNDotsOCRDecoderLayer(TTNNModule):
         )
         new_layer.self_attn = TTNNDotsOCRAttention.from_torch(torch_layer.self_attn)
         new_layer.mlp = TTNNDotsOCRMLP.from_torch(torch_layer.mlp)
-        if _use_bfp8_decoder_weights(getattr(new_layer.self_attn, "layer_idx", None)):
-            new_layer.mlp.fused_gate_up_proj.set_weight_dtype(ttnn.bfloat8_b)
         return new_layer
 
     def call(self, *args, **kwds):

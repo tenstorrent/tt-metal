@@ -228,14 +228,21 @@ _GATE_UP_DRAM_SHARDED_PER_CORE_N = 35
 
 # MLP gate-only / up-only DRAM-sharded decode config used when the fused gate+up
 # is split into two separate matmuls (single-device decode experiment). N=8960
-# instead of 17920; same 16c 8x2 grid so the sharded LN -> matmul input layout
-# is unchanged. DRAM-sharded weight pads N to 9216 (= ceil(8960 / (32*12)) *
-# (32*12)) which gives a clean per_core_N = 9216 / (32*16) = 18.
-_GATE_OR_UP_DRAM_SHARDED_GRID = _GATE_UP_DRAM_SHARDED_GRID
-_GATE_OR_UP_DRAM_SHARDED_NUM_CORES = _GATE_UP_DRAM_SHARDED_NUM_CORES
-_GATE_OR_UP_DRAM_SHARDED_IN0_BLOCK_W = _GATE_UP_DRAM_SHARDED_IN0_BLOCK_W
+# instead of 17920. From the 32x1536x8960 matmul sweep (DS ws/ds/ws): the
+# fastest PCC-passing config is 8c 8x1 with in0_block_w=6, per_core_N=35,
+# measured at 65.84us / 13.38 TFLOPs / PCC=0.9998 (vs ~71us baseline).
+# per_core_N=35 makes N=8960 land exactly on the 8 output cores (8*35*32 =
+# 8960, no padding), and in0_block_w=6 doubles the L1 weight-block reuse vs
+# the 16c 8x2 / in0_block_w=3 sibling config. The input is 8c 8x1 instead of
+# matching the sharded RMSNorm's 16c 8x2 output, so the LN -> gate/up path
+# now does one 16c -> 8c reshard before both matmuls share the resharded
+# input. The down_proj already runs on this same 8c 8x1 grid, so the input
+# layout is consistent end-to-end through the MLP.
+_GATE_OR_UP_DRAM_SHARDED_GRID = (8, 1)
+_GATE_OR_UP_DRAM_SHARDED_NUM_CORES = _GATE_OR_UP_DRAM_SHARDED_GRID[0] * _GATE_OR_UP_DRAM_SHARDED_GRID[1]
+_GATE_OR_UP_DRAM_SHARDED_IN0_BLOCK_W = 6
 _GATE_OR_UP_DRAM_SHARDED_PER_CORE_M = 1
-_GATE_OR_UP_DRAM_SHARDED_PER_CORE_N = 18
+_GATE_OR_UP_DRAM_SHARDED_PER_CORE_N = 35
 
 # MLP down-proj DRAM-sharded decode config (verified: 32x8960x1536
 # BFP8/BFP4->BFP8 LoFi, L1 width_sharded in, DRAM width_sharded w, L1 width_sharded
@@ -411,12 +418,22 @@ def _decode_gate_up_dram_sharded_program_config(input_shape, weight_shape):
     )
 
 
+def _decode_gate_or_up_split_input_memory_config(k: int = 1536) -> ttnn.MemoryConfig:
+    """L1 width-sharded input layout for the 8c 8x1 split gate / up matmul (decode)."""
+    return _l1_width_sharded_mem_config(k=k, grid=_GATE_OR_UP_DRAM_SHARDED_GRID)
+
+
 def _decode_gate_or_up_dram_sharded_program_config(input_shape, weight_shape, fused_activation=None):
     """Single-projection (gate-only or up-only) DRAM-sharded decode program
-    config: 32x1536x8960 @ 16c 8x2. Used when the fused gate+up matmul is split
-    into two separate kernels; the gate kernel sets ``fused_activation=SILU``
-    so the SwiGLU silu happens inside the matmul (no separate unary). The up
-    kernel passes ``fused_activation=None``.
+    config: 32x1536x8960 @ 8c 8x1, in0_block_w=6, per_core_N=35. Used when the
+    fused gate+up matmul is split into two separate kernels; the gate kernel
+    sets ``fused_activation=SILU`` so the SwiGLU silu happens inside the matmul
+    (no separate unary). The up kernel passes ``fused_activation=None``.
+
+    Config from the 32x1536x8960 DRAM-sharded matmul sweep (65.84us, 13.38
+    TFLOPs, PCC=0.9998). N=8960 lands exactly on 8 output cores
+    (8 * 35 * 32 = 8960), so the kernel writes no padding tiles into the
+    output -- silu(gate) * up downstream sees a tile-aligned logical width.
     """
     if int(input_shape[-2]) > ttnn.TILE_SIZE:
         return None
@@ -1130,6 +1147,16 @@ class TTNNLinearLLamaIColShardedWAllReducedFusedGateUp(TTNNLinearLLamaIColSharde
         # projections) = ~7 MB / layer on top of the fused gate+up copies.
         # Allocated unconditionally when ``use_dram_sharded`` so a runtime
         # env-var A/B can flip between paths without rebuilding weights.
+        #
+        # The split-decode input lives on 8c 8x1 (matches the matmul sweep's
+        # fastest config) -- different from the fused gate+up's 16c 8x2 input
+        # layout, so the forward reshards the LN output once before reusing
+        # it across both projections.
+        self._gate_or_up_split_input_shard_cfg = (
+            _decode_gate_or_up_split_input_memory_config(int(self._gate_weight_torch.shape[1]))
+            if use_dram_sharded
+            else None
+        )
         self._gate_dram_weight = None
         self._gate_dram_bias = None
         self._up_dram_weight = None

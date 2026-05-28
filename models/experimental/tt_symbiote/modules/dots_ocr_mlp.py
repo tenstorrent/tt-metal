@@ -201,9 +201,12 @@ class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFuse
             input_shape.insert(1, 1)
         input_tensor = ttnn.reshape(input_tensor, input_shape)
 
-        dram_shard_cfg = getattr(self, "_gate_up_dram_input_shard_cfg", None)
-        assert dram_shard_cfg is not None, "split_decode requires _gate_up_dram_input_shard_cfg"
-        input_tensor = ttnn.to_memory_config(input_tensor, dram_shard_cfg)
+        # The split matmul wants its input on 8c 8x1 (per the 32x1536x8960
+        # sweep). Sharded LN emits 16c 8x2, so reshard once here and share
+        # the resharded input across both gate and up.
+        split_shard_cfg = getattr(self, "_gate_or_up_split_input_shard_cfg", None)
+        assert split_shard_cfg is not None, "split_decode requires _gate_or_up_split_input_shard_cfg"
+        input_tensor = ttnn.to_memory_config(input_tensor, split_shard_cfg)
 
         gate_w, gate_b = self._get_gate_dram_sharded_weight()
         up_w, up_b = self._get_up_dram_sharded_weight()
