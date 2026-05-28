@@ -58,7 +58,9 @@ void kernel_main() {
     //  18: block_ct_dim                          - tiles per chunk pushed to cb_dispatched_buffer_id;
     //                                              matches the compute kernel's per-block consumption
     //                                              size so producer/consumer line up 1:1
-    //  19+: TensorAccessorArgs for dispatched_buffer, then TensorAccessorArgs for dispatched_metadata
+    //  19: cb_counter_total_pages                - full page capacity of c_1 (counter + trailer)
+    //                                              used for cb_reserve_back / cb_push_back / cb_wait_front
+    //  20+: TensorAccessorArgs for dispatched_buffer, then TensorAccessorArgs for dispatched_metadata
     constexpr uint32_t cb_experts_tok_counter_id = get_compile_time_arg_val(0);
     constexpr uint32_t experts_tok_counter_pages = get_compile_time_arg_val(1);
     constexpr uint32_t experts_per_chip = get_compile_time_arg_val(2);
@@ -78,7 +80,8 @@ void kernel_main() {
     constexpr uint32_t cb_metadata_batch_id = get_compile_time_arg_val(16);
     constexpr uint32_t aligned_dispatched_metadata_page_size = get_compile_time_arg_val(17);
     constexpr uint32_t block_ct_dim = get_compile_time_arg_val(18);
-    constexpr auto dispatched_buffer_args = TensorAccessorArgs<19>();
+    constexpr uint32_t cb_counter_total_pages = get_compile_time_arg_val(19);
+    constexpr auto dispatched_buffer_args = TensorAccessorArgs<20>();
     constexpr auto dispatched_metadata_args =
         TensorAccessorArgs<dispatched_buffer_args.next_compile_time_args_offset()>();
 
@@ -106,18 +109,18 @@ void kernel_main() {
     // Note: don't reset counter_ready_sem — zero_init_writer on this same core also waits on it
     // to read the sender's receive_buf_addr from c_1. Since neither kernel re-uses the sem within
     // a single invocation, leaving it latched at >=1 is safe.
-    cb_reserve_back(cb_experts_tok_counter_id, experts_tok_counter_pages);
+    cb_reserve_back(cb_experts_tok_counter_id, cb_counter_total_pages);
 
     volatile tt_l1_ptr uint32_t* counter_ready_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(counter_ready_semaphore_id));
     noc_semaphore_wait(counter_ready_sem_ptr, 1);
 
-    cb_push_back(cb_experts_tok_counter_id, experts_tok_counter_pages);
+    cb_push_back(cb_experts_tok_counter_id, cb_counter_total_pages);
 
     // ===== Step 2: Read per-expert token counts =====
     // zero_init_writer independently reads the sender's receive_buf_addr from c_1 at offset
     // experts_tok_counter_pages * aligned_experts_tok_counter_page_size (same L1 layout).
-    cb_wait_front(cb_experts_tok_counter_id, experts_tok_counter_pages);
+    cb_wait_front(cb_experts_tok_counter_id, cb_counter_total_pages);
     uint32_t token_counter_base = get_read_ptr(cb_experts_tok_counter_id);
     const volatile tt_l1_ptr uint32_t* counter_l1_src =
         reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(token_counter_base) + counter_offset;

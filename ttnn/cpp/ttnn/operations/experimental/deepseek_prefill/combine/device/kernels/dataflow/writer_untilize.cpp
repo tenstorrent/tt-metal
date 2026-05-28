@@ -101,6 +101,8 @@ void kernel_main() {
     //  +10: counter_offset                        - uint32 offset into counter buffer for this chip
     //  +11: max_dispatch_buffer_token_size        - per-chip dispatch capacity (overflow clamp)
     //  +12: full_ct_dim                           - hidden_size / tile_width (tiles per batch, for start_page_tiled)
+    //  +13: cb_counter_total_pages                - full page capacity of c_1 (counter + trailer);
+    //                                              used for cb_wait_front on the multicasted CB
     constexpr uint32_t cb_untilize_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset());
     constexpr uint32_t cb_experts_tok_counter_id =
         get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 1);
@@ -120,6 +122,8 @@ void kernel_main() {
     constexpr uint32_t max_dispatch_buffer_token_size =
         get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 11);
     constexpr uint32_t full_ct_dim = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 12);
+    constexpr uint32_t cb_counter_total_pages =
+        get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 13);
     constexpr uint32_t counter_data_total_size = experts_tok_counter_pages * aligned_experts_tok_counter_page_size;
     // read_batch_size doubles as tile_height: one tile-row of input -> read_batch_size element rows.
     constexpr uint32_t tile_height = read_batch_size;
@@ -163,11 +167,12 @@ void kernel_main() {
     // receive_buf_addr from c_1's trailer on this core.
     //   trailer[0] = sender's c_18 L1 offset (receive buffer for untilized data)
     //   trailer[1] = sender's c_19 L1 offset (metadata ring for routing info)
+    // counter_ready_sem_ptr is kept around for the end-of-kernel sem reset that re-arms it
+    // for the next invocation.
     volatile tt_l1_ptr uint32_t* counter_ready_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(counter_ready_semaphore_id));
-    noc_semaphore_wait(counter_ready_sem_ptr, 1);
-
-    uint32_t counter_cb_base = get_write_ptr(cb_experts_tok_counter_id);
+    cb_wait_front(cb_experts_tok_counter_id, cb_counter_total_pages);
+    uint32_t counter_cb_base = get_read_ptr(cb_experts_tok_counter_id);
     const volatile tt_l1_ptr uint32_t* trailer =
         reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(counter_cb_base + counter_data_total_size);
     uint32_t sender_receive_buf_l1_offset = trailer[0];
@@ -316,5 +321,6 @@ void kernel_main() {
     noc_async_write_barrier();
     noc_semaphore_inc(sender_data_ready_noc_addr, 1);
     noc_async_atomic_barrier();
+    cb_pop_front(cb_experts_tok_counter_id, cb_counter_total_pages);
 #endif
 }

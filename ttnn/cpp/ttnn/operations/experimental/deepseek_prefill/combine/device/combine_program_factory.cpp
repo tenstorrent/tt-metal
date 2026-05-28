@@ -774,7 +774,11 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
                 per_core_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_9));  // 16: cb_metadata_batch_id
                 per_core_args.push_back(detail::get_aligned_page_size(dispatched_metadata));  // 17
                 per_core_args.push_back(block_ct_dim);                                        // 18: block_ct_dim
-                // 19+: TensorAccessorArgs for dispatched_buffer + dispatched_metadata
+                // 19: cb_counter_total_pages = full page capacity of c_1 on the untilizer
+                // (counter pages + trailer page). Passed so reader_untilize can reserve / push /
+                // wait the entire CB, not just the counter slice.
+                per_core_args.push_back(detail::get_num_pages(expert_token_counts) + 1);  // cb_counter_total_pages
+                // 20+: TensorAccessorArgs for dispatched_buffer + dispatched_metadata
                 tt::tt_metal::TensorAccessorArgs(dispatched_buffer.buffer()).append_to(per_core_args);
                 tt::tt_metal::TensorAccessorArgs(dispatched_metadata.buffer()).append_to(per_core_args);
 
@@ -875,6 +879,9 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         zi_compile_time_args.push_back(counter_offset);                            // counter_offset
         zi_compile_time_args.push_back((uint32_t)max_dispatch_buffer_token_size);  // max_dispatch_buffer_token_size
         zi_compile_time_args.push_back(full_ct_dim);                               // full_ct_dim (= hidden_size / 32)
+        // cb_counter_total_pages = full page capacity of c_1 on the untilizer (counter pages +
+        // trailer page). Used so writer_untilize cb_wait_fronts the entire CB.
+        zi_compile_time_args.push_back(detail::get_num_pages(expert_token_counts) + 1);  // cb_counter_total_pages
 
         std::map<std::string, std::string> zi_defines;
         zi_defines["IS_TILE_LAYOUT"] = is_tile_layout ? "1" : "0";
@@ -974,6 +981,9 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             read_batch_size,                             // 7: read_batch_size
             full_ct_dim,                                 // 8: full_ct_dim = hidden_size / 32
             block_ct_dim,                                // 9: block_ct_dim
+            // 10: cb_counter_total_pages = full page capacity of c_1 on the untilizer
+            // (counter pages + trailer page). Used so this kernel cb_wait_fronts the entire CB.
+            detail::get_num_pages(expert_token_counts) + 1,
         };
         compute_kd.config = tt::tt_metal::ComputeConfigDescriptor{};
         untilize_compute_kernel_id = static_cast<tt::tt_metal::KernelHandle>(desc.kernels.size());

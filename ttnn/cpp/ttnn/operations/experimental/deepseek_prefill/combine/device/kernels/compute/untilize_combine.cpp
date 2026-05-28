@@ -31,6 +31,8 @@
 //   7: read_batch_size                 - rows per untilize batch (== tile_height for this op)
 //   8: full_ct_dim                     - hidden_size / tile_width (tiles per batch)
 //   9: block_ct_dim                    - tiles per pack call (largest divisor of full_ct_dim <= 8)
+//  10: cb_counter_total_pages          - full page capacity of c_1 (counter + trailer); used
+//                                        for cb_wait_front on the multicasted CB
 //
 // Runtime args (per untilizer core):
 //   0: expert_start_idx                - first expert handled by the owning sender
@@ -48,6 +50,7 @@ void kernel_main() {
     constexpr uint32_t read_batch_size = get_compile_time_arg_val(7);
     constexpr uint32_t full_ct_dim = get_compile_time_arg_val(8);
     constexpr uint32_t block_ct_dim = get_compile_time_arg_val(9);
+    constexpr uint32_t cb_counter_total_pages = get_compile_time_arg_val(10);
     constexpr uint32_t num_blocks = full_ct_dim / block_ct_dim;
     // read_batch_size doubles as tile_height: one tile-row of input -> read_batch_size element rows.
     constexpr uint32_t tile_height = read_batch_size;
@@ -66,7 +69,7 @@ void kernel_main() {
     // core pushes the counter CB once after counter_ready_sem fires, so cb_wait_front here
     // doubles as the gate for "counter data is live in L1".  The CB is never popped — both
     // this kernel and zero_init_writer rely on the data staying resident.
-    cb_wait_front(cb_experts_tok_counter_id, experts_tok_counter_pages);
+    cb_wait_front(cb_experts_tok_counter_id, cb_counter_total_pages);
 
     // Snapshot per-expert token counts.  read_tile_value has UNPACK read from L1 and broadcast
     // to MATH / PACK via mailbox, so all three TRISCs end up with identical counts and walk the
