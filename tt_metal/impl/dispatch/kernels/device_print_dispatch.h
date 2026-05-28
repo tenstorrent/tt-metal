@@ -281,6 +281,11 @@ private:
                 if (write_position == read_position) {
                     continue;
                 }
+                // Skip cores whose cached state reflects an in-flight stall handshake.
+                if ((write_position & DEVICE_PRINT_WRITE_STALL_FLAG) != 0 ||
+                    read_position == DEVICE_PRINT_RESET_BUFFER_MAGIC) {
+                    continue;
+                }
             }
             noc_locations_to_process[num_noc_locations_to_process++] = i;
         }

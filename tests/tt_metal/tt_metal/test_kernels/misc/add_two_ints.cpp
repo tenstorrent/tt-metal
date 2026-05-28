@@ -4,6 +4,10 @@
 
 #include <cstdint>
 #include "api/debug/dprint.h"
+#ifdef ARCH_QUASAR
+#include "api/core_local_mem.h"
+#include "experimental/kernel_args.h"
+#endif
 
 /**
  * add two ints
@@ -12,13 +16,18 @@
  */
 
 void kernel_main() {
-    tt_l1_ptr std::uint32_t* arg_a = (tt_l1_ptr uint32_t*)get_arg_addr(0);
-    tt_l1_ptr std::uint32_t* arg_b = (tt_l1_ptr uint32_t*)get_arg_addr(1);
+#ifdef ARCH_QUASAR
+    uint32_t a = get_arg(args::a);
+    uint32_t b = get_arg(args::b);
+    constexpr uint32_t l1_address = get_arg(args::l1_address);
+    CoreLocalMem<std::uint32_t> result(l1_address);
+#else
+    uint32_t a = get_arg_val<uint32_t>(0);
+    uint32_t b = get_arg_val<uint32_t>(1);
     constexpr uint32_t l1_address = get_compile_time_arg_val(0);
-
     volatile tt_l1_ptr std::uint32_t* result = (tt_l1_ptr uint32_t*)(l1_address);
+#endif
 
-    result[0] = arg_a[0] + arg_b[0];
-    DPRINT << "Adding two ints: " << arg_a[0] << " + " << arg_b[0] << " = " << result[0] << ENDL();
-    DEVICE_PRINT("Adding two ints: {} + {} = {}\n", arg_a[0], arg_b[0], result[0]);
+    result[0] = a + b;
+    DPRINT("Adding two ints: {} + {} = {}\n", a, b, result[0]);
 }
