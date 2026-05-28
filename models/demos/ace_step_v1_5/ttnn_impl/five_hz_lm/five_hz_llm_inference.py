@@ -113,6 +113,8 @@ class LocalFiveHzLMHandler:
         self._ttnn_causal_max_seq_len = 16384
         # Increments on each TTNN LM sample when ``_ttnn_logits_device`` is set (feeds ``ttnn.rand`` seed).
         self._ttnn_sample_counter = 0
+        self.last_lm_perf: Dict[str, Any] | None = None
+        self._lm_gen_token_count = 0
 
     def set_ttnn_logits_device(self, device) -> None:
         """Attach the open TTNN device; LM CFG logit combine (narrow or full-vocab) uses TTNN when set."""
@@ -1401,6 +1403,8 @@ class LocalFiveHzLMHandler:
             input_length = inputs["input_ids"].shape[1]
 
         generated_ids = generated_ids[input_length:]
+        num_new_tokens = int(generated_ids.numel())
+        self._lm_gen_token_count = int(getattr(self, "_lm_gen_token_count", 0)) + num_new_tokens
 
         # Move to CPU for decoding (tokenizer needs CPU tensors)
         if generated_ids.device.type != "cpu":
@@ -1603,6 +1607,16 @@ class LocalFiveHzLMHandler:
             def progress(*args, **kwargs):
                 pass
 
+        self._lm_gen_token_count = 0
+
+        def _lm_extra(time_costs: Dict[str, Any], **extra: Any) -> Dict[str, Any]:
+            payload: Dict[str, Any] = {
+                "time_costs": time_costs,
+                "num_tokens": int(self._lm_gen_token_count),
+            }
+            payload.update(extra)
+            return payload
+
         infer_type = (infer_type or "").strip().lower()
         if infer_type not in {"dit", "llm_dit"}:
             error_msg = f"invalid infer_type: {infer_type!r} (expected 'dit' or 'llm_dit')"
@@ -1684,7 +1698,7 @@ class LocalFiveHzLMHandler:
                     "audio_codes": [] if is_batch else "",
                     "success": False,
                     "error": status,
-                    "extra_outputs": {"time_costs": {"phase1_time": phase1_time}},
+                    "extra_outputs": _lm_extra({"phase1_time": phase1_time}),
                 }
 
             # Parse metadata from CoT output
@@ -1729,12 +1743,12 @@ class LocalFiveHzLMHandler:
                     "audio_codes": [""] * actual_batch_size,
                     "success": True,
                     "error": None,
-                    "extra_outputs": {
-                        "time_costs": {
+                    "extra_outputs": _lm_extra(
+                        {
                             "phase1_time": phase1_time,
                             "total_time": phase1_time,
                         }
-                    },
+                    ),
                 }
             else:
                 return {
@@ -1742,12 +1756,12 @@ class LocalFiveHzLMHandler:
                     "audio_codes": "",
                     "success": True,
                     "error": None,
-                    "extra_outputs": {
-                        "time_costs": {
+                    "extra_outputs": _lm_extra(
+                        {
                             "phase1_time": phase1_time,
                             "total_time": phase1_time,
                         }
-                    },
+                    ),
                 }
 
         # ========== PHASE 2: Audio Codes Generation ==========
@@ -1833,13 +1847,13 @@ class LocalFiveHzLMHandler:
                     "audio_codes": [],
                     "success": False,
                     "error": error_msg,
-                    "extra_outputs": {
-                        "time_costs": {
+                    "extra_outputs": _lm_extra(
+                        {
                             "phase1_time": phase1_time,
                             "phase2_time": 0.0,
                             "total_time": phase1_time,
                         }
-                    },
+                    ),
                 }
             finally:
                 self._clear_accelerator_cache()
@@ -1864,15 +1878,15 @@ class LocalFiveHzLMHandler:
                 "audio_codes": audio_codes_list,
                 "success": True,
                 "error": None,
-                "extra_outputs": {
-                    "time_costs": {
+                "extra_outputs": _lm_extra(
+                    {
                         "phase1_time": phase1_time,
                         "phase2_time": phase2_time,
                         "total_time": total_time,
                     },
-                    "codes_counts": codes_counts,
-                    "total_codes": sum(codes_counts),
-                },
+                    codes_counts=codes_counts,
+                    total_codes=sum(codes_counts),
+                ),
             }
         else:
             # Single mode: generate codes for one item
@@ -1907,13 +1921,13 @@ class LocalFiveHzLMHandler:
                     "audio_codes": "",
                     "success": False,
                     "error": status,
-                    "extra_outputs": {
-                        "time_costs": {
+                    "extra_outputs": _lm_extra(
+                        {
                             "phase1_time": phase1_time,
                             "phase2_time": phase2_time,
                             "total_time": total_time,
                         }
-                    },
+                    ),
                 }
 
             phase2_time = time.time() - phase2_start
@@ -1930,14 +1944,14 @@ class LocalFiveHzLMHandler:
                 "audio_codes": audio_codes,
                 "success": True,
                 "error": None,
-                "extra_outputs": {
-                    "time_costs": {
+                "extra_outputs": _lm_extra(
+                    {
                         "phase1_time": phase1_time,
                         "phase2_time": phase2_time,
                         "total_time": total_time,
                     },
-                    "codes_count": codes_count,
-                },
+                    codes_count=codes_count,
+                ),
             }
 
     def build_formatted_prompt(
