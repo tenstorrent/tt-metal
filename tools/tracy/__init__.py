@@ -10,6 +10,7 @@ import io
 import subprocess
 import time
 import socket
+from pathlib import Path
 
 from loguru import logger
 
@@ -23,6 +24,8 @@ from .common import (
     PROFILER_WASM_DIR,
     PROFILER_WASM_TRACE_FILE_NAME,
     PROFILER_WASM_TRACES_DIR,
+    PROFILER_CPP_DEVICE_PERF_REPORT,
+    PROFILER_DEVICE_SIDE_LOG,
     TRACY_MODULE_PATH,
     TRACY_FILE_NAME,
     TRACY_OPS_TIMES_FILE_NAME,
@@ -107,7 +110,12 @@ def run_report_setup(verbose, outputFolder, binFolder, port):
         if port:
             options += f"-p {port}"
 
-        captureCommand = (f"{capture_exe} -o {logsFolder / TRACY_FILE_NAME} -f {options}",)
+        # Write the Tracy binary to a RAM-backed tmpfs (/dev/shm) so it does not
+        # compete with the C++ device log (profile_log_device.csv, which can be
+        # 10–20 GB) for disk space.  generate_report() reads it there and deletes
+        # it immediately after exporting the CSV files.
+        shm_binary = Path(f"/dev/shm/tracy_capture_{os.getpid()}.tracy")
+        captureCommand = (f"{capture_exe} -o {shm_binary} -f {options}",)
         if verbose:
             logger.info(f"Capture command: {captureCommand}")
             captureProcess = subprocess.Popen(captureCommand, shell=True)
@@ -122,55 +130,162 @@ def run_report_setup(verbose, outputFolder, binFolder, port):
     return captureProcess
 
 
+def _generate_report_from_cpp_device_perf(logsFolder: Path, outputFolder: Path, nameAppend) -> None:
+    """Fast path: generate ops_perf_results_*.csv directly from cpp_device_perf_report.csv.
+
+    When TT_METAL_PROFILER_CPP_POST_PROCESS=1 the TTNN op profiler does not emit
+    Tracy messages, so TRACY_CSVEXPROT_TOOL -m produces an empty file and
+    import_tracy_op_logs returns no ops.  Rather than exporting the Tracy binary
+    (which can be 1+ GB → 20+ GB CSV that takes 35 min to read), we read the
+    compact C++ report directly and write a minimal ops_perf_results CSV that
+    device_perf_utils.post_process_ops_log can consume.
+    """
+    import csv as _csv
+    import pandas as pd
+    from datetime import datetime
+    from .common import generate_reports_folder
+
+    cpp_report = logsFolder / PROFILER_CPP_DEVICE_PERF_REPORT
+    if not cpp_report.is_file():
+        logger.warning(f"cpp_device_perf_report.csv not found at {logsFolder} — cannot generate fast report")
+        return
+
+    df = pd.read_csv(cpp_report)
+
+    reportFolder = generate_reports_folder(outputFolder)
+    dateStr = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+    outDir = reportFolder / dateStr
+    outDir.mkdir(parents=True, exist_ok=True)
+    name = "ops_perf_results"
+    if nameAppend:
+        name += f"_{nameAppend}"
+    name += f"_{dateStr}"
+    outPath = outDir / f"{name}.csv"
+
+    # Direct pass-through columns from cpp_device_perf_report.csv → ops_perf_results.csv
+    # (source name → output name; same where identical).
+    col_map = {
+        "OP NAME": "OP CODE",
+        "DEVICE ID": "DEVICE ID",
+        "DEVICE ARCH": "DEVICE ARCH",
+        "CORE COUNT": "CORE COUNT",
+        "AVAILABLE WORKER CORE COUNT": "AVAILABLE WORKER CORE COUNT",
+        "DEVICE FW DURATION [ns]": "DEVICE FW DURATION [ns]",
+        "DEVICE KERNEL DURATION [ns]": "DEVICE KERNEL DURATION [ns]",
+        "DEVICE KERNEL FIRST TO LAST START [ns]": "DEVICE KERNEL FIRST TO LAST START [ns]",
+        "DEVICE BRISC KERNEL DURATION [ns]": "DEVICE BRISC KERNEL DURATION [ns]",
+        "DEVICE NCRISC KERNEL DURATION [ns]": "DEVICE NCRISC KERNEL DURATION [ns]",
+        "DEVICE TRISC0 KERNEL DURATION [ns]": "DEVICE TRISC0 KERNEL DURATION [ns]",
+        "DEVICE TRISC1 KERNEL DURATION [ns]": "DEVICE TRISC1 KERNEL DURATION [ns]",
+        "DEVICE TRISC2 KERNEL DURATION [ns]": "DEVICE TRISC2 KERNEL DURATION [ns]",
+        "DEVICE ERISC KERNEL DURATION [ns]": "DEVICE ERISC KERNEL DURATION [ns]",
+        "OP TO OP LATENCY [ns]": "OP TO OP LATENCY [ns]",
+        "OP TO OP LATENCY BR/NRISC START [ns]": "OP TO OP LATENCY BR/NRISC START [ns]",
+        "METAL TRACE ID": "METAL TRACE ID",
+        "METAL TRACE REPLAY SESSION ID": "METAL TRACE REPLAY SESSION ID",
+    }
+    out_rows = []
+    for _, row in df.iterrows():
+        # Use "tt_dnn_device" so tt-perf-report recognises these as device ops.
+        out_row = {"OP TYPE": "tt_dnn_device", "GLOBAL CALL COUNT": int(row.get("GLOBAL CALL COUNT", 0))}
+        for src, dst in col_map.items():
+            val = row.get(src)
+            out_row[dst] = val if (val is not None and pd.notna(val) and val != "") else "-"
+
+        # String placeholder columns (tt-perf-report uses `in` operator or pd.notna guard)
+        for col in [
+            "ATTRIBUTES",
+            "PARALLELIZATION STRATEGY",
+            "HOST START TS",
+            "HOST END TS",
+            "HOST DURATION [ns]",
+            "DEVICE FW START CYCLE",
+            "DEVICE FW END CYCLE",
+            "DEVICE KERNEL DURATION DM START [ns]",
+            "DEVICE KERNEL DURATION PER CORE MIN [ns]",
+            "DEVICE KERNEL DURATION PER CORE MAX [ns]",
+            "DEVICE KERNEL DURATION PER CORE AVG [ns]",
+            "DEVICE COMPUTE CB WAIT FRONT [ns]",
+            "DEVICE COMPUTE CB RESERVE BACK [ns]",
+            "DISPATCH TOTAL CQ CMD OP TIME [ns]",
+            "DISPATCH GO SEND WAIT TIME [ns]",
+            "COMPUTE KERNEL SOURCE",
+            "COMPUTE KERNEL HASH",
+            "DATA MOVEMENT KERNEL SOURCE",
+            "DATA MOVEMENT KERNEL HASH",
+            "PROGRAM HASH",
+            "PROGRAM CACHE HIT",
+            "INPUT_0_DATATYPE",
+            "INPUT_1_DATATYPE",
+            "OUTPUT_0_DATATYPE",
+        ]:
+            out_row[col] = "-"
+
+        # MATH FIDELITY must be "HiFi4", "HiFi2", or "LoFi" for matmul analysis.
+        # Use "HiFi4" as a conservative default (actual fidelity not in device report).
+        out_row["MATH FIDELITY"] = "HiFi4"
+        # Memory strings: "DRAM" in check and split('_')[-2] both need a string with underscores.
+        out_row["INPUT_0_MEMORY"] = "L1_INTERLEAVED"
+        out_row["INPUT_1_MEMORY"] = "L1_INTERLEAVED"
+        out_row["OUTPUT_0_MEMORY"] = "L1_INTERLEAVED"
+
+        # Shape columns: V2.1 format uses _PAD[LOGICAL] suffix; get_value_physical_logical()
+        # calls int() on the value, so use 0 (renders as "0 x 0 x 0" for matmul size).
+        for col in [
+            "INPUT_0_W_PAD[LOGICAL]",
+            "INPUT_0_Z_PAD[LOGICAL]",
+            "INPUT_0_Y_PAD[LOGICAL]",
+            "INPUT_0_X_PAD[LOGICAL]",
+            "INPUT_1_W_PAD[LOGICAL]",
+            "INPUT_1_Z_PAD[LOGICAL]",
+            "INPUT_1_Y_PAD[LOGICAL]",
+            "INPUT_1_X_PAD[LOGICAL]",
+            "OUTPUT_0_W_PAD[LOGICAL]",
+            "OUTPUT_0_Z_PAD[LOGICAL]",
+            "OUTPUT_0_Y_PAD[LOGICAL]",
+            "OUTPUT_0_X_PAD[LOGICAL]",
+        ]:
+            out_row[col] = 0
+        out_rows.append(out_row)
+
+    if out_rows:
+        fieldnames = list(out_rows[0].keys())
+        with open(outPath, "w", newline="") as f:
+            writer = _csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(out_rows)
+        logger.info(f"Fast C++ perf report generated at {outPath} ({len(out_rows)} ops)")
+    else:
+        logger.warning("cpp_device_perf_report.csv was empty — no ops_perf_results CSV written")
+
+
 def generate_report(
     outputFolder, binFolder, nameAppend, childCalls, collect_noc_traces=False, device_analysis_types=[]
 ):
     logsFolder = generate_logs_folder(outputFolder)
-    tracyOutFile = logsFolder / TRACY_FILE_NAME
-    timeOut = 15
-    timeCount = 0
-    while not os.path.exists(tracyOutFile):
-        logger.warning(
-            f"tracy capture out not found, will try again in 1 second. Run in verbose (-v) mode to see tracy capture info"
-        )
-        if timeCount > timeOut:
-            logger.error(
-                f"tracy capture output file {tracyOutFile} was not generated. Run in verbose (-v) mode to see tracy capture info"
-            )
-            sys.exit(1)
-        timeCount += 1
-        time.sleep(1)
-    csvexport_exe = resolve_tracy_tool_path(binFolder, TRACY_CSVEXPROT_TOOL)
-    if csvexport_exe is None:
-        logger.error(f"tracy-csvexport was not found under {binFolder}")
-        sys.exit(1)
-    with open(logsFolder / TRACY_OPS_TIMES_FILE_NAME, "w") as csvFile:
-        childCallStr = ""
-        childCallsList = DEFAULT_CHILD_CALLS
-        if childCalls:
-            childCallsList = list(set(childCalls + DEFAULT_CHILD_CALLS))
-        if childCallsList:
-            childCallStr = f"-x {','.join(childCallsList)}"
-        subprocess.run(
-            f"{csvexport_exe} -u -t TT_ {childCallStr} {logsFolder / TRACY_FILE_NAME}",
-            shell=True,
-            check=True,
-            stdout=csvFile,
-            stderr=subprocess.DEVNULL,
-        )
+    logsFolder.mkdir(parents=True, exist_ok=True)
 
-    logger.info(f"Host side ops time report generated at {logsFolder / TRACY_OPS_TIMES_FILE_NAME}")
+    # Delete the raw per-RISC device log immediately — it can be 15–25 GB and is
+    # never needed once cpp_device_perf_report.csv exists.
+    _raw_log = logsFolder / PROFILER_DEVICE_SIDE_LOG
+    _cpp_report = logsFolder / PROFILER_CPP_DEVICE_PERF_REPORT
+    if _raw_log.is_file() and _cpp_report.is_file():
+        _raw_log.unlink()
+        logger.info("Deleted raw device log (cpp_device_perf_report.csv present)")
 
-    with open(logsFolder / TRACY_OPS_DATA_FILE_NAME, "w") as csvFile:
-        subprocess.run(
-            f'{csvexport_exe} -m -s ";" {logsFolder / TRACY_FILE_NAME}',
-            shell=True,
-            check=True,
-            stdout=csvFile,
-            stderr=subprocess.DEVNULL,
-        )
-
-    logger.info(f"Host side ops data report generated at {logsFolder / TRACY_OPS_DATA_FILE_NAME}")
+    # When C++ post-processing is active, TTNN does NOT emit Tracy messages, so
+    # the Tracy binary export (TRACY_CSVEXPROT_TOOL -m) produces an empty file and
+    # import_tracy_op_logs returns no ops.  Skip the entire binary export pipeline
+    # (which produces a 20 GB CSV that takes 35 min to read) and instead generate
+    # ops_perf_results_*.csv directly from the compact C++ report.
+    if _cpp_report.is_file():
+        _generate_report_from_cpp_device_perf(logsFolder, Path(outputFolder), nameAppend)
+        # Drain the Tracy binary from /dev/shm so the capture process can exit cleanly.
+        shm_binary = Path(f"/dev/shm/tracy_capture_{os.getpid()}.tracy")
+        if shm_binary.exists():
+            shm_binary.unlink()
+            logger.info(f"Deleted Tracy binary {shm_binary} (not needed in C++ mode)")
+        return
 
     process_ops(
         outputFolder,
