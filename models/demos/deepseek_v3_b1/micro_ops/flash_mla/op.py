@@ -919,6 +919,7 @@ class FlashMLADecode:
                 trisc_args=trisc_per_core_args,
             ),
             noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
+            defines=[("DEBUG_CB_HASH", "1")],  # #43563 hash sdpa_output_cb at flash_mla.hpp end
         )
 
         kernel_result = unified_kernel.get_kernel_descriptors()

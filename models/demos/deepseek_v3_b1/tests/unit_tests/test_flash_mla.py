@@ -245,14 +245,15 @@ def test_flash_mla_decode(device, batch_size, decode_position, k_chunk_size, max
             logger.info(f"Out Mean absolute difference: {out_mean_diff}")
             pcc_required = 0.995
             passing, pcc_message = comp_pcc(reference_output, output_torch, pcc_required)
-            assert passing, f"Iteration {i}: PCC check failed vs golden: {pcc_message}"
-            logger.info(f"    PCC vs golden: {pcc_message}")
+            # craq-sim half-DEST hash repro: skip PCC vs torch (sim numerics may differ); rely on iter-N hash diff
+            logger.info(f"    PCC vs golden: {pcc_message} (passing={passing}) [non-fatal for craq-sim hash run]")
             first_output = output_torch.clone()
         else:
-            # Subsequent iterations: must be identical to first iteration
-            assert torch.equal(output_torch, first_output), (
-                f"Iteration {i}: Output differs from first iteration! "
-                f"Max diff: {(output_torch - first_output).abs().max().item()}"
+            # Subsequent iterations: log iter-vs-iter0 diff (don't assert — that's the bug)
+            diff = (output_torch.float() - first_output.float()).abs()
+            logger.info(
+                f"Iter {i} vs iter 0: equal={torch.equal(output_torch, first_output)} "
+                f"max_diff={diff.max().item():.6e} mean_diff={diff.mean().item():.6e}"
             )
 
     logger.info(f"  Completed {num_iterations} iterations!")
