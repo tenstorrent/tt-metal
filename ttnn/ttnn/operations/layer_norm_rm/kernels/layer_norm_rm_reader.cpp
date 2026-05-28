@@ -83,7 +83,10 @@ void kernel_main() {
     dataflow_kernel_lib::prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
         scaler_f);
 
-    // ── Input accessor (RM sticks, one stick per row). ──
+    // ── Accessors — built once per kernel run. ──
+    // TensorAccessor only carries the address + (constexpr) args, so this
+    // is essentially zero-cost; the previous implementation rebuilt the
+    // gamma/beta accessors on every chunk inside the strip loop.
     const auto input_accessor = TensorAccessor(input_args, input_addr);
 
     // ── Strip loop ──
@@ -108,6 +111,8 @@ void kernel_main() {
         }
 
         // Pass C: read the strip once more, optionally gamma and beta.
+        // Optional-tensor accessors are constructed inside the if-constexpr
+        // branches (scoped to the strip; lifted out of the per-chunk loop).
         for (uint32_t c = 0; c < NUM_BLOCKS; ++c) {
             dataflow_kernel_lib::read_sticks_for_tilize<cb_input_rm, dataflow_kernel_lib::TilizeGranularity::TILE>(
                 input_accessor, 32, chunk_bytes, strip_start_row, c * chunk_bytes);
