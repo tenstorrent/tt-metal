@@ -115,6 +115,12 @@ def _parse_args() -> argparse.Namespace:
         help="Use unified single-phase loading: keep vision + text resident together with bfloat8_b vision weights.",
     )
     p.add_argument(
+        "--no-trace",
+        action="store_true",
+        help="Disable decode-step trace capture. Every decode step stays on the eager dispatch path "
+        "(much slower steady-state — useful for debugging or comparing trace vs eager latency).",
+    )
+    p.add_argument(
         "--backend",
         choices=("ttnn", "hf", "both"),
         default="ttnn",
@@ -316,6 +322,7 @@ def generate(
     prompt: str,
     image_token_id: int,
     max_new_tokens: int,
+    use_trace: bool = True,
 ) -> str:
     seq_len = input_ids.shape[-1]
     num_image_tokens = int((input_ids[0] == image_token_id).sum().item())
@@ -378,7 +385,7 @@ def generate(
         # The first decode step (step 1) compiles all decode kernels eagerly.
         # Capture the trace once right after, so steps 2+ replay it instead of
         # re-dispatching every op from host — the main decode speedup.
-        if step == 1:
+        if step == 1 and use_trace:
             model.capture_decode_trace()
 
         generated_ids.append(tok_id)
@@ -545,6 +552,7 @@ def main() -> None:
                     prompt=args.prompt,
                     image_token_id=image_token_id,
                     max_new_tokens=args.max_new_tokens,
+                    use_trace=not args.no_trace,
                 )
             del model
         finally:
