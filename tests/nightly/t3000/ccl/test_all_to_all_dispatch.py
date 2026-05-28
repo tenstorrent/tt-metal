@@ -669,9 +669,13 @@ def run_all_to_all_dispatch_test(
                     break
             if not passed:
                 break
-    num_program_cache_entries = 1
+    # PR #44408 workaround: non-trace iters use per-iter input buffers, so the op's
+    # buffer-address-hashed program cache misses once per iter. Trace mode reuses
+    # iter-0 buffers (see run_op) and still produces a single entry.
+    # Revert to a constant `1` (+1 for skew) once ScalarBinding lands.
+    num_program_cache_entries = 1 if trace_mode else num_iters
     if test_skew:
-        num_program_cache_entries = 2
+        num_program_cache_entries += 1
     logger.info(f"Device has {mesh_device.cache_entries_counter.total} program cache entries")
     assert (
         mesh_device.cache_entries_counter.total == num_program_cache_entries
