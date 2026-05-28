@@ -42,6 +42,7 @@ MAX_BATCHED_PREFILL_SEQ_LEN = 128 * 1024
 
 # Power-of-2 batch sizes supported by trace caching for batched prefill.
 SUPPORTED_PREFILL_BATCH_SIZES = (1, 2, 4, 8, 16, 32)
+DECODE_PAGE_TABLE_INPUT_IDX = 3
 
 
 def max_prefill_chunk_size_cutoff(sequence_length, max_prefill_chunk_size):
@@ -1425,28 +1426,40 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         self._prev_sampling_on_device = sampling_on_device
         sampling_mode_changed = prev_sampling_on_device is not None and prev_sampling_on_device != sampling_on_device
         reset_inputs = reset_batch or not sampling_on_device or sampling_mode_changed
-        if self.prev_page_table is None or any(
-            not torch.equal(prev, curr) for prev, curr in zip(self.prev_page_table, page_table)
-        ):
-            # If the page table has changed, it means additional pages have been added or inputs are shuffled
-            reset_inputs = True
-            if page_table is not None:
-                self.prev_page_table = tuple(pt.clone() for pt in page_table)
+        page_table_changed = page_table is not None and (
+            self.prev_page_table is None
+            or any(not torch.equal(prev, curr) for prev, curr in zip(self.prev_page_table, page_table))
+        )
 
         for i in range(self.data_parallel):
             refresh_trace_inputs = reset_inputs or getattr(
                 self.model[i], "_tt_vllm_always_refresh_decode_trace_inputs", False
             )
-            if not refresh_trace_inputs:
-                continue
-
             user_page_table = page_table[i] if page_table is not None else None
-            host_inputs_i = self.model[i].prepare_decode_inputs_host(tokens[i], current_pos[i], user_page_table)
 
-            copy_host_to_device(
-                host_tensors=host_inputs_i,
-                device_tensors=self.trace_inputs_decode[sampling_on_device][i],
-            )
+            if refresh_trace_inputs:
+                # Full resets are required when host token/position inputs are
+                # authoritative again, or for models that explicitly opt out of
+                # partial decode trace input refreshes.
+                host_inputs_i = self.model[i].prepare_decode_inputs_host(tokens[i], current_pos[i], user_page_table)
+                copy_host_to_device(
+                    host_tensors=host_inputs_i,
+                    device_tensors=self.trace_inputs_decode[sampling_on_device][i],
+                )
+            elif page_table_changed:
+                # With async device sampling, token/position inputs may
+                # intentionally be stale on host: the previous decode updates
+                # them on device. Page tables still need refreshing when new KV
+                # blocks are allocated, so copy only that trace input and
+                # preserve device-produced tokens.
+                host_inputs_i = self.model[i].prepare_decode_inputs_host(tokens[i], current_pos[i], user_page_table)
+                host_page_table = host_inputs_i[DECODE_PAGE_TABLE_INPUT_IDX]
+                device_page_table = self.trace_inputs_decode[sampling_on_device][i][DECODE_PAGE_TABLE_INPUT_IDX]
+                if host_page_table is not None:
+                    ttnn.copy_host_to_device_tensor(host_page_table, device_page_table)
+
+        if page_table_changed:
+            self.prev_page_table = tuple(pt.clone() for pt in page_table)
         for i, trace_id in self.trace_ids_decode[sampling_on_device].items():
             ttnn.execute_trace(self.model_args[i].mesh_device, trace_id, cq_id=0, blocking=False)
         outputs = self.trace_output_decode[sampling_on_device]
