@@ -4,7 +4,7 @@
 **Slug:** `facebook_seamless_m4t_v2_large`
 **Target Device:** p150 (blackhole)
 **Started:** 2026-05-28T00:18:15Z
-**Updated:** 2026-05-28T10:23:51Z
+**Updated:** 2026-05-28T21:26:03Z
 
 ## Block Status
 
@@ -28,7 +28,7 @@
 | seamless_mha | reference | done | 1.000000 | 1 |  |
 | seamless_mha | ttnn | done | 0.997092 | 1 | self_pcc=0.99983, cross_pcc=0.99709 on p150. ttnn.linear + fused SDPA. |
 | seamless_mha | debug | n/a | — | 0 |  |
-| seamless_mha | optimization | pending | — | 0 | Re-opened for tracy-driven redo. Prior bulk-waved at-ceiling without traced tracy CSV evidence. Previous: {'status': 'done', 'pcc': 0.9970923619206976, 'attempts': 1, 'artifacts': ['models/demos/facebook_seamless_m4t_v2_large/tt/seamless_mha.py'], 'notes': 'At ceiling: leaf already uses HiFi4 + fp32_dest_acc + bf16 DRAM TILE (standard high-perf preset). Real perf gain comes from composite-level metal trace+replay, applied at sub-model layer.'} |
+| seamless_mha | optimization | done | 0.997114 | 0 | Tracy-driven optimization (traced path, production shapes B=1, T=128 enc / T=1 dec, S=128). Hotspot identified: ReshapeViewDeviceOperation was 40.4% of block kernel time at avg 18.9us/call due to DRAM-interleaved coalesce on the per-head split. Applied L1_MEMORY_CONFIG to the linear -> reshape -> transpose chain in _project_and_split. Result (traced, n=20 replays): enc_self 0.307ms -> 0.238ms (-22%), dec_cross 0.086ms -> 0.082ms (-5%), dec_self 0.146ms -> 0.140ms (-4%). Total block kernel time across 20 replays: 9.34ms -> 7.92ms (-15.2%). Reshape avg/call dropped 18.9us -> 12.0us (-37%); share 40.4% -> 30.2%. PCC unchanged: self-attn 0.99982, cross-attn 0.99711 (was 0.99709). All 4 e2e tests (t2tt, s2tt, t2st, s2st) pass. |
 | seamless_mha | real_weights | done | 0.997092 | 1 | Validated in Phase 1 (test_real_hf_weights.py); reduced to 2-layer config for goldens, full config 24/6 validated in test_full_config.py. |
 | seamless_ffn | reference | done | 1.000000 | 2 |  |
 | seamless_ffn | ttnn | done | 0.999902 | 1 | 2x ttnn.linear + ttnn.relu, bf16 weights/DRAM, HiFi4+fp32_dest_acc. PCC 0.99990. |
@@ -143,7 +143,6 @@
 
 ## Recent Ticks
 
-- tick 33 (2026-05-28T04:25:21Z): ttnn[t2u_decoder] — ok
 - tick 34 (2026-05-28T04:34:17Z): ttnn[hifigan_vocoder] — ok
 - tick 35 (2026-05-28T04:40:57Z): ttnn[code_hifigan_vocoder] — ok
 - tick 36 (2026-05-28T04:48:52Z): ttnn[seamless_m4t_v2] -- TTNN PHASE COMPLETE 24/24 — ok
@@ -153,6 +152,7 @@
 - tick 40 (2026-05-28T10:12:41Z): manual-state-sync[real_weights=done all, generation=done all, perf=done t2tt only] — ok
 - tick 41 (2026-05-28T10:23:10Z): perf[s2tt] — ok
 - tick 42 (2026-05-28T10:23:51Z): perf[asr]: shares-infra-with-s2tt — ok
+- tick 43 (2026-05-28T21:26:03Z): device[seamless_mha] — ok
 
 ## Host-Resident Exceptions
 

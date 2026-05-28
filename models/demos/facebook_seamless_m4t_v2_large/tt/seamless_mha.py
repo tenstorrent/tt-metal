@@ -95,17 +95,27 @@ class SeamlessMHA(LightweightModule):
         )
 
     def _project_and_split(self, x: ttnn.Tensor, weight, bias, batch, seq_len):
-        """Project x with linear(weight,bias), reshape to [B, num_heads, S, head_dim]."""
+        """Project x with linear(weight,bias), reshape to [B, num_heads, S, head_dim].
+
+        Perf note: tracy on the AR-loop production path (traced) shows
+        ``ReshapeViewDeviceOperation`` accounts for ~40% of this block's
+        device kernel time when the projection output is DRAM-interleaved
+        — the reshape has to walk DRAM to re-tile. Placing the projection
+        output (and therefore the reshape input) in L1 keeps the
+        re-tilization local and avoids the DRAM coalesce on the per-head
+        split, leaving the downstream SDPA to pull K/V from L1 as well.
+        Numerically a no-op (same kernel config, same fidelity).
+        """
         proj = ttnn.linear(
             x,
             weight,
             bias=bias,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
         )
         # proj is [B, S, embed_dim]. Reshape -> [B, S, num_heads, head_dim] -> transpose to [B, num_heads, S, head_dim].
-        proj = ttnn.reshape(proj, (batch, seq_len, self.num_heads, self.head_dim))
-        proj = ttnn.transpose(proj, 1, 2)
+        proj = ttnn.reshape(proj, (batch, seq_len, self.num_heads, self.head_dim), memory_config=ttnn.L1_MEMORY_CONFIG)
+        proj = ttnn.transpose(proj, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
         return proj
 
     # ------------------------------------------------------------------ KV-cache helpers

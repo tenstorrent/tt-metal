@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-28T00:18:15Z",
-  "updated_at": "2026-05-28T10:23:51Z",
+  "updated_at": "2026-05-28T21:26:03Z",
   "components": [
     {
       "name": "layernorm",
@@ -188,9 +188,15 @@
         "status": "n/a"
       },
       "optimization": {
-        "status": "pending",
+        "status": "done",
         "attempts": 0,
-        "notes": "Re-opened for tracy-driven redo. Prior bulk-waved at-ceiling without traced tracy CSV evidence. Previous: {'status': 'done', 'pcc': 0.9970923619206976, 'attempts': 1, 'artifacts': ['models/demos/facebook_seamless_m4t_v2_large/tt/seamless_mha.py'], 'notes': 'At ceiling: leaf already uses HiFi4 + fp32_dest_acc + bf16 DRAM TILE (standard high-perf preset). Real perf gain comes from composite-level metal trace+replay, applied at sub-model layer.'}"
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/seamless_mha.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tt/profile_seamless_mha.py",
+          "generated/profiler/reports/seamless_mha_traced_v2/reports/2026_05_28_21_22_26/ops_perf_results_2026_05_28_21_22_26.csv"
+        ],
+        "notes": "Tracy-driven optimization (traced path, production shapes B=1, T=128 enc / T=1 dec, S=128). Hotspot identified: ReshapeViewDeviceOperation was 40.4% of block kernel time at avg 18.9us/call due to DRAM-interleaved coalesce on the per-head split. Applied L1_MEMORY_CONFIG to the linear -> reshape -> transpose chain in _project_and_split. Result (traced, n=20 replays): enc_self 0.307ms -> 0.238ms (-22%), dec_cross 0.086ms -> 0.082ms (-5%), dec_self 0.146ms -> 0.140ms (-4%). Total block kernel time across 20 replays: 9.34ms -> 7.92ms (-15.2%). Reshape avg/call dropped 18.9us -> 12.0us (-37%); share 40.4% -> 30.2%. PCC unchanged: self-attn 0.99982, cross-attn 0.99711 (was 0.99709). All 4 e2e tests (t2tt, s2tt, t2st, s2st) pass.",
+        "pcc": 0.9971139784694775
       },
       "real_weights": {
         "status": "done",
@@ -1503,6 +1509,12 @@
       "tick": 42,
       "ts": "2026-05-28T10:23:51Z",
       "action": "perf[asr]: shares-infra-with-s2tt",
+      "result": "ok"
+    },
+    {
+      "tick": 43,
+      "ts": "2026-05-28T21:26:03Z",
+      "action": "device[seamless_mha]",
       "result": "ok"
     }
   ],
