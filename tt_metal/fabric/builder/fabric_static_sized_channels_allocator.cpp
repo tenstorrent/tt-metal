@@ -730,12 +730,30 @@ void FabricStaticSizedChannelsAllocator::emit_channel_allocations_ct_args(
     emit_ct_args(ct_args);
 
     // Channel-to-entry index mappings
-    // The allocator emits entries in order: VC0 senders, VC1 senders, VC0 receivers, VC1 receivers.
-    // The router may use fewer channels than allocated. When there are unused channels,
-    // VC1 sender entries need to skip over the unused VC0 entry slots.
-    size_t num_used_sender_channels = num_used_vc0_sender_channels + num_used_vc1_sender_channels;
-    size_t num_unused_channels = total_sender_channels - num_used_sender_channels;
-    bool has_unused_channels = (num_unused_channels > 0) && num_used_sender_channels > 0;
+    //
+    // The allocator emits entries in order: VC0 senders [0 .. total_vc0), VC1 senders
+    // [total_vc0 .. total_vc0+total_vc1), then receiver entries. The router may use fewer
+    // sender channels per VC than were allocated (e.g. interior chips have no Z upstream,
+    // so the last VC0/VC1 slot is allocated but unused). When emitting the kernel-side
+    // SENDER_TO_ENTRY_IDX mapping we must skip past the *per-VC* unused slots, not the
+    // total unused slots, so that VC1 sch_idx i maps to allocator entry
+    //   total_vc0_sender_channels + (i - num_used_vc0_sender_channels)
+    // = i + (total_vc0_sender_channels - num_used_vc0_sender_channels)
+    // = i + num_unused_vc0_sender_channels
+    //
+    // Adding `num_unused_channels` (the historical, buggy value) over-skips by
+    // `num_unused_vc1_sender_channels`, which silently routes VC1 sch_idx[k] to the
+    // *next* VC1 entry, e.g. sch=6 (the third used VC1 channel = "from-N upstream"
+    // on a SOUTH router) ends up reading the unused VC1[3] "from-Z" slot. The upstream
+    // router is still configured (correctly) to write into the VC1[2] base address, so
+    // forwarded data is dropped on the floor while credits keep flowing, producing the
+    // classic "downstream transmits zero-content packets" symptom observed on multi-hop
+    // cross-mesh VC1 paths through interior chips.
+    const size_t total_vc0_sender_channels = get_num_sender_channels(0);
+    const size_t num_unused_vc0_sender_channels = total_vc0_sender_channels - num_used_vc0_sender_channels;
+    const size_t num_used_sender_channels = num_used_vc0_sender_channels + num_used_vc1_sender_channels;
+    const size_t num_unused_channels = total_sender_channels - num_used_sender_channels;
+    const bool has_unused_channels = (num_unused_channels > 0) && num_used_sender_channels > 0;
 
     // Sender channel-to-entry index
     if (has_unused_channels) {
@@ -743,13 +761,20 @@ void FabricStaticSizedChannelsAllocator::emit_channel_allocations_ct_args(
             if (i < num_used_vc0_sender_channels) {
                 ct_args.push_back(static_cast<uint32_t>(i));
             } else {
-                // VC1 channels skip the unused VC0 channel entries
-                ct_args.push_back(static_cast<uint32_t>(i + num_unused_channels));
+                // VC1 channels skip the unused VC0 channel entries only — *not* the
+                // unused VC1 slots, which sit after the used VC1 entries.
+                ct_args.push_back(static_cast<uint32_t>(i + num_unused_vc0_sender_channels));
             }
         }
-        // Padding for unused channels — map to their actual (unserviced) entry indices
-        for (size_t i = 0; i < num_unused_channels; ++i) {
+        // Padding for unused channels — map to their actual (unserviced) entry indices.
+        // The unused entries are the VC0 tail [num_used_vc0 .. total_vc0) followed by
+        // the VC1 tail [total_vc0 + num_used_vc1 .. total_vc0 + total_vc1).
+        for (size_t i = 0; i < num_unused_vc0_sender_channels; ++i) {
             ct_args.push_back(static_cast<uint32_t>(num_used_vc0_sender_channels + i));
+        }
+        const size_t num_unused_vc1_sender_channels = num_unused_channels - num_unused_vc0_sender_channels;
+        for (size_t i = 0; i < num_unused_vc1_sender_channels; ++i) {
+            ct_args.push_back(static_cast<uint32_t>(total_vc0_sender_channels + num_used_vc1_sender_channels + i));
         }
     } else {
         for (size_t i = 0; i < num_used_sender_channels; ++i) {

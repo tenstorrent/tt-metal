@@ -705,6 +705,25 @@ public:
 
     std::unordered_map<RoutingDirection, uint32_t> get_hops_to_chip(
         FabricNodeId src_node_id, FabricNodeId dst_node_id) const override {
+        // Cross-mesh route: prefer a direct Z-link hop when the destination is a Z-neighbor.
+        // The hop map cannot express a cardinal count that means "in the *other* mesh's
+        // coordinate space" — coordinate subtraction across meshes is meaningless — so for
+        // Z-link inter-mesh setups we emit {Z: 1} for direct Z-neighbors. For inter-mesh
+        // setups whose stitching is cardinal (no Z direction assigned in the MGD), fall
+        // through to the displacement-based path so we preserve the prior behavior for
+        // cardinal-stitched multi-mesh topologies.
+        if (src_node_id.mesh_id != dst_node_id.mesh_id) {
+            const auto z_neighbors = get_all_neighbor_node_ids(src_node_id, RoutingDirection::Z);
+            const bool dst_is_direct_z_neighbor =
+                std::find(z_neighbors.begin(), z_neighbors.end(), dst_node_id) != z_neighbors.end();
+            if (dst_is_direct_z_neighbor) {
+                return {{RoutingDirection::Z, 1}};
+            }
+            // Non-Z-neighbor cross-mesh: fall through to displacement. This matches main
+            // for cardinal-stitched multi-mesh and is a known approximation for Z-link
+            // multi-hop cross-mesh (which the 2D routing path doesn't depend on anyway).
+        }
+
         const auto& src_coord = get_device_coord(src_node_id);
         const auto& dst_coord = get_device_coord(dst_node_id);
 
@@ -920,7 +939,8 @@ public:
                 // always goes through the control plane and fans out to every Z-neighbor.
                 // On architectures without Z-links the control plane returns empty here.
                 if (direction == RoutingDirection::Z) {
-                    for (const auto& neighbor : get_all_neighbor_node_ids(src_node, direction)) {
+                    const auto z_neighbors = get_all_neighbor_node_ids(src_node, direction);
+                    for (const auto& neighbor : z_neighbors) {
                         bool is_valid = (neighbor != src_node);
                         if (is_valid && topology_ == Topology::Linear) {
                             is_valid = are_devices_linear({src_node, neighbor});
@@ -1448,16 +1468,9 @@ public:
                 break;
             }
             case tt::tt_fabric::Topology::NeighborExchange: {
-                // NeighborExchange sync only supports N/S/E/W — its hop map is keyed by direction
-                // (one entry per direction), which collapses multi-Z by construction.
-                auto z_neighbors = get_all_neighbor_node_ids(src_device, RoutingDirection::Z);
-                TT_FATAL(
-                    z_neighbors.empty(),
-                    "NeighborExchange sync does not support Z-link topologies. "
-                    "Device {} has {} Z-link neighbor(s). "
-                    "Disable sync (in test yaml) or use host-driven monitoring.",
-                    src_device,
-                    z_neighbors.size());
+                // Cardinal sync only — Z-link neighbors are handled separately by
+                // create_sync_patterns_for_topology (one CHIP_UNICAST {Z:1} per Z partner)
+                // because the hop map is keyed by direction and would collapse multi-Z.
                 multi_directional_hops = this->get_hops_to_nearest_neighbors(src_device);
                 global_sync_val = multi_directional_hops.size();
                 break;
