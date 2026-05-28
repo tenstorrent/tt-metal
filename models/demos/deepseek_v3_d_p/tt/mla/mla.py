@@ -552,6 +552,8 @@ class ttMLA:
         chunk_start_global: Optional[int] = None,
         cache_user_id: int = 0,
         num_cache_layers: Optional[int] = None,
+        chunked_q_chunk_size: int = 32,
+        chunked_k_chunk_size: int = 32,
     ) -> ttnn.Tensor:
         signpost(header="MLA_START")
         num_heads_local = self.num_heads // self.tp_factor
@@ -807,15 +809,15 @@ class ttMLA:
                 persistent_output_buffer_v=self.chunked_persistent_v_buf,
                 joint_strategy="rear",
                 logical_n=chunk_end_global,
-                # SDPA chunk sizes capped at 32/32: the L1 budget is driven by
-                # Sk_chunk_t * DHt and Sk_chunk_t * vDHt CB allocations, and larger
-                # configs (e.g. 256/128 from MLA_SDPA_CONFIG[4096]) overflow L1 with
-                # MLA's head dims (DHt=18, vDHt=16). Latent V removes V's DRAM copy
-                # but the V CB is still allocated, so L1 pressure is unchanged.
+                # SDPA chunk sizes are caller-tunable. The L1 budget is driven by
+                # Sk_chunk_t * DHt and Sk_chunk_t * vDHt CB allocations; with MLA's
+                # head dims (DHt=18, vDHt=16) the safe default is 32/32. Larger
+                # configs may fit after recent CB optimizations — sweep via the
+                # chunked_q_chunk_size / chunked_k_chunk_size forward kwargs.
                 program_config=ttnn.SDPAProgramConfig(
                     compute_with_storage_grid_size=self.ring_sdpa_compute_grid,
-                    q_chunk_size=32,
-                    k_chunk_size=32,
+                    q_chunk_size=chunked_q_chunk_size,
+                    k_chunk_size=chunked_k_chunk_size,
                     exp_approx_mode=False,
                 ),
                 compute_kernel_config=self.default_compute_kernel_config,

@@ -371,15 +371,17 @@ def test_mla(
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "seq_len", [8192, 10 * 1024, 25 * 1024, 50 * 1024], ids=["seq8k", "seq10k", "seq25k", "seq50k"]
+    "seq_len", [1280, 8192, 10 * 1024, 25 * 1024, 50 * 1024], ids=["seq1280", "seq8k", "seq10k", "seq25k", "seq50k"]
 )
 @pytest.mark.parametrize("num_chunks", [1, 2, 4, 5, 8, 10], ids=lambda n: f"N{n}")
+@pytest.mark.parametrize("q_chunk_size", [32, 64, 128, 160, 256, 320, 512], ids=lambda q: f"q{q}")
 @pytest.mark.timeout(0)
 def test_mla_chunked_prefill(
     request,
     mesh_device,
     seq_len,
     num_chunks,
+    q_chunk_size,
     device_params,
 ):
     """
@@ -412,11 +414,18 @@ def test_mla_chunked_prefill(
             f"requires chunk_size % (TILE_SIZE*sp) == 0 (got chunk_size={chunk_size})"
         )
 
+    chunk_size_local = chunk_size // sp
+    if chunk_size_local % q_chunk_size != 0:
+        pytest.skip(
+            f"q_chunk_size={q_chunk_size} does not divide chunk_size_local={chunk_size_local} "
+            f"(seq_len={seq_len}, num_chunks={num_chunks}, sp={sp})"
+        )
+
     config.max_seq_len = seq_len
 
     logger.info(
         f"Chunked prefill: seq_len={seq_len} num_chunks={num_chunks} chunk_size={chunk_size} "
-        f"sp={sp} tp={mesh_shape[tp_axis]}"
+        f"sp={sp} tp={mesh_shape[tp_axis]} q_chunk_size={q_chunk_size}"
     )
 
     # Reference (always run — small seq_len keeps this cheap and avoids cache I/O).
@@ -498,6 +507,7 @@ def test_mla_chunked_prefill(
             rope_tensors=rope_tensors,
             kvpe_cache=tt_kvpe_cache,
             chunk_start_global=chunk_start,
+            chunked_q_chunk_size=q_chunk_size,
         )
 
         out_host = ttnn.to_torch(
