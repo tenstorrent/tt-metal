@@ -362,7 +362,7 @@ void run_single_core_reduce_program(
 
     experimental::metal2_host_api::KernelSpec reader_spec{
         .unique_id = READER,
-        .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{reader_kernel_path},
+        .source = reader_kernel_path,
         .num_threads = 1,
         .compiler_options = {.defines = reader_defines},
         .dfb_bindings =
@@ -394,8 +394,8 @@ void run_single_core_reduce_program(
     experimental::metal2_host_api::KernelSpec writer_spec{
         .unique_id = WRITER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank_2_0.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank_2_0.cpp",
         .num_threads = 1,
         .dfb_bindings = {{
             .dfb_spec_name = DST_DFB,
@@ -417,8 +417,7 @@ void run_single_core_reduce_program(
 
     experimental::metal2_host_api::KernelSpec compute_spec{
         .unique_id = COMPUTE,
-        .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{get_compute_kernel_name(test_config.reduce_dim)},
+        .source = get_compute_kernel_name(test_config.reduce_dim),
         .num_threads = 1,
         .compiler_options = {.defines = build_reduce_defines(test_config)},
         .dfb_bindings =
