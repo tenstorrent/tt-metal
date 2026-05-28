@@ -583,6 +583,20 @@ def conv_unpad_height(tensor_BTHWC, logical_h):
     return tensor_BTHWC[:, :, :logical_h, :, :]
 
 
+def conv_pad_width(tensor_BTHWC, w_factor):
+    """Pad width to the next multiple of w_factor (mirrors conv_pad_height)."""
+    B, T, H, W, C = tensor_BTHWC.shape
+    pad_w = (w_factor - W % w_factor) % w_factor
+    if pad_w > 0:
+        tensor_BTHWC = torch.nn.functional.pad(tensor_BTHWC, (0, 0, 0, pad_w))
+    return tensor_BTHWC, W
+
+
+def conv_unpad_width(tensor_BTHWC, logical_w):
+    """Remove width padding added by conv_pad_width."""
+    return tensor_BTHWC[:, :, :, :logical_w, :]
+
+
 def conv_pad_in_channels(tensor):
     C_in = tensor.shape[-1]
     padded_C_in = aligned_channels(C_in)

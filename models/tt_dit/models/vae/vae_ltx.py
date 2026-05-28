@@ -30,7 +30,31 @@ import ttnn
 from ...layers.module import Module, ModuleList, Parameter
 from ...parallel.config import VaeHWParallelConfig
 from ...parallel.manager import CCLManager
-from ...utils.conv3d import ConvDims, _ntuple, aligned_channels, get_conv3d_config
+from ...utils.conv3d import ConvDims, _ntuple, aligned_channels, conv_pad_height, conv_pad_width, get_conv3d_config
+from ...utils.tensor import typed_tensor
+
+
+def _get_w_mask(cache, x_BTHWC, logical_w, parallel_config, mesh_device, dtype):
+    """Cached mask that zeros width-padding columns beyond logical_w.
+
+    C++ neighbor_pad supports H masking via ``logical_h`` but not W; this
+    pre-conv mul-mask covers the W case.
+    """
+    sharded_w = x_BTHWC.shape[3]
+    key = (sharded_w, logical_w)
+    if key not in cache:
+        padded_w = sharded_w * parallel_config.width_parallel.factor
+        mask = torch.ones(1, 1, 1, padded_w, 1)
+        mask[:, :, :, logical_w:, :] = 0.0
+        cache[key] = typed_tensor(
+            mask,
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_axis=parallel_config.width_parallel.mesh_axis,
+            shard_dim=3,
+            dtype=dtype,
+        )
+    return cache[key]
 
 
 class LTXCausalConv3d(Module):
@@ -127,6 +151,8 @@ class LTXCausalConv3d(Module):
         self.weight = Parameter(total_shape=[d, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
         self.bias = Parameter(total_shape=[1, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
 
+        self._w_mask_cache: dict[tuple, ttnn.Tensor] = {}
+
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         """Prepare Conv3d weights from PyTorch format."""
         # LTX-2 stores weights under "conv.weight" and "conv.bias"
@@ -155,11 +181,19 @@ class LTXCausalConv3d(Module):
         if "bias" in state:
             state["bias"] = state["bias"].reshape(1, -1)
 
-    def forward(self, x_BTHWC: ttnn.Tensor, causal: bool = True) -> ttnn.Tensor:
+    def forward(
+        self,
+        x_BTHWC: ttnn.Tensor,
+        causal: bool = True,
+        logical_h: int = 0,
+        logical_w: int = 0,
+    ) -> ttnn.Tensor:
         """
         Args:
             x_BTHWC: (B, T, H_per_device, W_per_device, C) ROW_MAJOR, H/W fractured on the mesh
             causal: True = causal temporal pad (front only). False = symmetric.
+            logical_h: pre-pad H (full, unsharded). 0 = no H masking needed.
+            logical_w: pre-pad W (full, unsharded). 0 = no W masking needed.
 
         Returns:
             (B, T_out, H_per_device, W_per_device, C_out) ROW_MAJOR.
@@ -185,6 +219,18 @@ class LTXCausalConv3d(Module):
         # only on the dimensions that have ``factor > 1``.
         h_pad_needed = self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1
         w_pad_needed = self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1
+
+        # Width pre-conv mul-mask: zero pad columns before the halo so they don't
+        # propagate non-zero values through the conv (neighbor_pad has no W-mask).
+        if (
+            logical_w > 0
+            and self.parallel_config.width_parallel.factor > 1
+            and x_BTHWC.shape[3] * self.parallel_config.width_parallel.factor > logical_w
+        ):
+            x_BTHWC = ttnn.mul(
+                x_BTHWC,
+                _get_w_mask(self._w_mask_cache, x_BTHWC, logical_w, self.parallel_config, self.mesh_device, self.dtype),
+            )
 
         if h_pad_needed or w_pad_needed:
             dims, pad_left, pad_right = [], [], []
@@ -217,7 +263,7 @@ class LTXCausalConv3d(Module):
                 axes=axes,
                 neighbor_sems=neighbor_sems,
                 num_links=links,
-                logical_h=0,
+                logical_h=(logical_h if h_pad_needed else 0),
                 t_front_pad=0,
             )
 
@@ -339,11 +385,18 @@ class LTXResnetBlock3D(Module):
         for k in keys_to_remove:
             del state[k]
 
-    def forward(self, x_BTHWC: ttnn.Tensor, causal: bool = True) -> ttnn.Tensor:
+    def forward(
+        self,
+        x_BTHWC: ttnn.Tensor,
+        causal: bool = True,
+        logical_h: int = 0,
+        logical_w: int = 0,
+    ) -> ttnn.Tensor:
         """
         Args:
             x_BTHWC: (B, T, H, W, C) in ROW_MAJOR layout
             causal: Temporal padding mode for convolutions
+            logical_h / logical_w: pre-pad full spatial dims for masking inside convs
 
         Returns:
             (B, T, H, W, C_out) in ROW_MAJOR layout
@@ -354,12 +407,12 @@ class LTXResnetBlock3D(Module):
         h = self.norm1(x_BTHWC)
         h = ttnn.silu(h)
         h = ttnn.to_layout(h, ttnn.ROW_MAJOR_LAYOUT) if h.layout != ttnn.ROW_MAJOR_LAYOUT else h
-        h = self.conv1(h, causal=causal)
+        h = self.conv1(h, causal=causal, logical_h=logical_h, logical_w=logical_w)
 
         h = self.norm2(h)
         h = ttnn.silu(h)
         h = ttnn.to_layout(h, ttnn.ROW_MAJOR_LAYOUT) if h.layout != ttnn.ROW_MAJOR_LAYOUT else h
-        h = self.conv2(h, causal=causal)
+        h = self.conv2(h, causal=causal, logical_h=logical_h, logical_w=logical_w)
 
         # Skip connection
         if self.has_shortcut:
@@ -369,7 +422,7 @@ class LTXResnetBlock3D(Module):
                 if residual.layout != ttnn.ROW_MAJOR_LAYOUT
                 else residual
             )
-            residual = self.conv_shortcut(residual, causal=causal)
+            residual = self.conv_shortcut(residual, causal=causal, logical_h=logical_h, logical_w=logical_w)
 
         return ttnn.add(residual, h)
 
@@ -409,9 +462,15 @@ class LTXUNetMidBlock3D(Module):
                 )
             )
 
-    def forward(self, x_BTHWC: ttnn.Tensor, causal: bool = True) -> ttnn.Tensor:
+    def forward(
+        self,
+        x_BTHWC: ttnn.Tensor,
+        causal: bool = True,
+        logical_h: int = 0,
+        logical_w: int = 0,
+    ) -> ttnn.Tensor:
         for block in self.res_blocks:
-            x_BTHWC = block(x_BTHWC, causal=causal)
+            x_BTHWC = block(x_BTHWC, causal=causal, logical_h=logical_h, logical_w=logical_w)
         return x_BTHWC
 
 
@@ -469,7 +528,18 @@ class LTXDepthToSpaceUpsample(Module):
         x = ttnn.reshape(x, (B, T * p1, H * p2, W * p3, C))
         return x
 
-    def forward(self, x_BTHWC: ttnn.Tensor, causal: bool = True) -> ttnn.Tensor:
+    def forward(
+        self,
+        x_BTHWC: ttnn.Tensor,
+        causal: bool = True,
+        logical_h: int = 0,
+        logical_w: int = 0,
+    ) -> tuple[ttnn.Tensor, int, int]:
+        """Upsample by `stride`; returns (out, new_logical_h, new_logical_w).
+
+        Depth-to-space scales H by p2 and W by p3, so logicals scale the same way.
+        ``logical_h``/``logical_w`` of 0 stays 0 (no masking needed downstream).
+        """
         import math
 
         B, T, H, W, _ = x_BTHWC.shape
@@ -486,7 +556,7 @@ class LTXDepthToSpaceUpsample(Module):
             if p1 == 2:
                 x_in = x_in[:, 1:, :, :, :]
 
-        x_BTHWC = self.conv(x_BTHWC, causal=causal)
+        x_BTHWC = self.conv(x_BTHWC, causal=causal, logical_h=logical_h, logical_w=logical_w)
 
         # Depth-to-space on conv output
         x = self._depth_to_space_bthwc(x_BTHWC, B, T, H, W)
@@ -498,7 +568,9 @@ class LTXDepthToSpaceUpsample(Module):
         if self.residual:
             x = ttnn.add(x, x_in)
 
-        return x
+        new_logical_h = logical_h * p2 if logical_h else 0
+        new_logical_w = logical_w * p3 if logical_w else 0
+        return x, new_logical_h, new_logical_w
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         pass  # Conv handles its own state via LTXCausalConv3d._prepare_torch_state
@@ -845,8 +917,12 @@ class LTXVideoDecoder(Module):
         """
         from ...utils.tensor import fast_device_to_host, typed_tensor_2dshard
 
-        # Convert to BTHWC and shard across H (dim 2) and W (dim 3) on the mesh.
+        # Pad H/W to mesh factors so each device gets an integer shard; track the
+        # pre-pad dims as logical_h/logical_w so each conv masks the pad slots.
         sample = sample_BCTHW.permute(0, 2, 3, 4, 1)  # (B, T, H, W, C)
+        sample, logical_h = conv_pad_height(sample, self.parallel_config.height_parallel.factor)
+        sample, logical_w = conv_pad_width(sample, self.parallel_config.width_parallel.factor)
+
         sample_tt = typed_tensor_2dshard(
             sample,
             self.mesh_device,
@@ -865,15 +941,21 @@ class LTXVideoDecoder(Module):
         sample_tt = ttnn.add(ttnn.multiply(sample_tt, std), mean)
         sample_tt = ttnn.to_layout(sample_tt, ttnn.ROW_MAJOR_LAYOUT)
 
-        # conv_in → up_blocks → norm → silu → conv_out, all fractured on H/W.
-        sample_tt = self.conv_in(sample_tt, causal=self.causal)
+        # logical_h / logical_w scale up through each LTXDepthToSpaceUpsample so
+        # later convs mask the correct (now-larger) real region.
+        sample_tt = self.conv_in(sample_tt, causal=self.causal, logical_h=logical_h, logical_w=logical_w)
         for up_block in self.up_blocks:
-            sample_tt = up_block(sample_tt, causal=self.causal)
+            if isinstance(up_block, LTXDepthToSpaceUpsample):
+                sample_tt, logical_h, logical_w = up_block(
+                    sample_tt, causal=self.causal, logical_h=logical_h, logical_w=logical_w
+                )
+            else:
+                sample_tt = up_block(sample_tt, causal=self.causal, logical_h=logical_h, logical_w=logical_w)
 
         sample_tt = self.norm_out(sample_tt)
         sample_tt = ttnn.silu(sample_tt)
         sample_tt = ttnn.to_layout(sample_tt, ttnn.ROW_MAJOR_LAYOUT)
-        sample_tt = self.conv_out(sample_tt, causal=self.causal)
+        sample_tt = self.conv_out(sample_tt, causal=self.causal, logical_h=logical_h, logical_w=logical_w)
 
         # Gather fractured (B, T, H_per_device, W_per_device, C_out) back to a
         # single torch tensor. fast_device_to_host concatenates along the dims
@@ -887,6 +969,9 @@ class LTXVideoDecoder(Module):
             concat_dims,
             ccl_manager=self.ccl_manager,
         )  # (B, T_out, H_out, W_out, C_out)
+
+        # Crop padded H/W rows/columns before the final depth-to-space unpatch.
+        result = result[:, :, :logical_h, :logical_w, :]
 
         # Unpatchify: (B, T, H/4, W/4, 48) → (B, 3, T, H, W) via depth-to-space.
         result = result.permute(0, 4, 1, 2, 3)
