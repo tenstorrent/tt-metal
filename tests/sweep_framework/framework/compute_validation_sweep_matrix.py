@@ -28,7 +28,7 @@ from constants import (
     strip_grouping_suffix,
     strip_mesh_suffix,
 )
-from matrix_runner_config import (
+from matrix_runner_config import (, get_allowed_mesh_shapes_for_test_group
     GENERATION_MANIFEST_FILENAME,
     get_lead_models_test_group_name_for_hardware_group,
     get_runner_config,
@@ -189,6 +189,16 @@ def compute_validation_matrix(
             mesh_str = f"{mesh[0]}x{mesh[1]}" if mesh else ""
             mesh_to_modules[mesh_str].add(base)
 
+        # Filter to mesh shapes the runner supports (e.g. Galaxy allows 4x8, 8x4
+        # but not 4x4 or 1x32). Unsupported shapes crash with SIGSEGV on device open.
+        allowed_meshes = set(get_allowed_mesh_shapes_for_test_group(
+            validation_scope if validation_scope != "lead_models" else "model_traced",
+            test_group_name))
+        if allowed_meshes:
+            mesh_to_modules = {
+                ms: mods for ms, mods in mesh_to_modules.items()
+                if not ms or ms in allowed_meshes
+            }
         needs_mesh_split = len(mesh_to_modules) > 1
 
         hardware_label = _get_hardware_display_label(hardware_group)
