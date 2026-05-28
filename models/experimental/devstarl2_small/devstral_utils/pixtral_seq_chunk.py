@@ -200,6 +200,95 @@ def vision_use_sharded_nlp_concat(
     return 0 < int(n_local_heads) <= grid_x
 
 
+def _vision_mlp_block_shard_enabled() -> bool:
+    return os.environ.get("PIXTRAL_VISION_MLP_BLOCK_SHARD", "1").strip() not in ("0", "false", "False")
+
+
+def vision_mlp_block_shard_eligible(
+    m: int,
+    k: int,
+    n: int,
+    grid_x: int = 8,
+    grid_y: int = 8,
+    in0_block_w: int = 4,
+) -> bool:
+    """True when 2D block-sharded matmul matches 1024³ sweep winner (bs/dram/bs, w=4)."""
+    if not _vision_mlp_block_shard_enabled():
+        return False
+    m, k, n = int(m), int(k), int(n)
+    if m % TILE or k % TILE or n % TILE:
+        return False
+    mt, kt, nt = m // TILE, k // TILE, n // TILE
+    if mt % grid_y or nt % grid_x or kt % grid_x:
+        return False
+    return (kt // grid_x) % int(in0_block_w) == 0
+
+
+def vision_mlp_block_shard_in0_memcfg(
+    seq_len: int,
+    feature_dim: int,
+    grid_x: int = 8,
+    grid_y: int = 8,
+) -> ttnn.MemoryConfig:
+    return ttnn.create_sharded_memory_config(
+        (1, 1, int(seq_len), int(feature_dim)),
+        core_grid=ttnn.CoreGrid(y=grid_y, x=grid_x),
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
+
+def vision_mlp_block_shard_out_memcfg() -> ttnn.MemoryConfig:
+    return ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+    )
+
+
+def vision_mlp_block_shard_matmul_progcfg(
+    m: int,
+    k: int,
+    n: int,
+    grid_x: int = 8,
+    grid_y: int = 8,
+    in0_block_w: int = 4,
+    *,
+    fuse_batch: bool = True,
+) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
+    mt, kt, nt = m // TILE, k // TILE, n // TILE
+    per_core_m = mt // grid_y
+    per_core_n = nt // grid_x
+    out_subblock_w = 4 if per_core_n % 4 == 0 else (2 if per_core_n % 2 == 0 else 1)
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(grid_x, grid_y),
+        in0_block_w=in0_block_w,
+        out_subblock_h=1,
+        out_subblock_w=out_subblock_w,
+        out_block_h=per_core_m,
+        out_block_w=per_core_n,
+        per_core_M=per_core_m,
+        per_core_N=per_core_n,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=fuse_batch,
+    )
+
+
+def vision_mlp_prepare_block_shard_input(
+    tensor: ttnn.Tensor,
+    seq_len: int,
+    feature_dim: int,
+    grid_x: int = 8,
+    grid_y: int = 8,
+) -> ttnn.Tensor:
+    mem = vision_mlp_block_shard_in0_memcfg(seq_len, feature_dim, grid_x, grid_y)
+    if tensor.is_sharded():
+        if tensor.memory_config() == mem:
+            return tensor
+        return ttnn.to_memory_config(tensor, mem)
+    return ttnn.interleaved_to_sharded(tensor, mem)
+
+
 def vision_nlp_concat_input_memcfg(
     seq_len: int,
     head_dim: int,
