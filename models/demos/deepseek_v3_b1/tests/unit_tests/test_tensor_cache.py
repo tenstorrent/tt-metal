@@ -1345,7 +1345,6 @@ class TestForceCacheOverride:
             raw_tensors=lambda: {"raw": data_a},
         )
         paths = cold_cache._content_addressed_paths(compute_artifact_id(fingerprint))
-        mtime0 = paths.data_path.stat().st_mtime_ns
         with open(paths.object_dir / "metadata.json") as f:
             meta = json.load(f)
         hash0 = meta["content_hash"]
@@ -1402,7 +1401,6 @@ class TestForceCacheOverride:
             raw_tensors=lambda: {"raw": data_a},
         )
         paths = cache._content_addressed_paths(compute_artifact_id(fingerprint))
-        mtime0 = paths.data_path.stat().st_mtime_ns
         with open(paths.object_dir / "metadata.json") as f:
             meta = json.load(f)
         hash0 = meta["content_hash"]
