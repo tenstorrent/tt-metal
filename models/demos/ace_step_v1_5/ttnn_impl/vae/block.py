@@ -13,6 +13,7 @@ from __future__ import annotations
 import math
 
 from .._ttnn import get_ttnn
+from ..math_perf_env import ace_step_vae_ensure_interleaved, ace_step_vae_synchronize
 from .conv1d import TtConvTranspose1d
 from .residual import TtOobleckResidualUnit
 from .snake import TtSnake1d
@@ -100,8 +101,14 @@ class TtOobleckDecoderBlock:
 
         Output: ``[B, T*stride, output_dim]`` row-major.
         """
+        ttnn = self.ttnn
+        dram_mc = ttnn.DRAM_MEMORY_CONFIG
+        x = ace_step_vae_ensure_interleaved(ttnn, x, memory_config=dram_mc)
+        if x.layout != ttnn.ROW_MAJOR_LAYOUT:
+            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, memory_config=dram_mc)
         x = self.snake1(x)
         x = self.conv_t1(x)
+        ace_step_vae_synchronize(ttnn, self.device)
         x = self.res_unit1(x)
         x = self.res_unit2(x)
         x = self.res_unit3(x)

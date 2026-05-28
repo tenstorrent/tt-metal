@@ -13,6 +13,7 @@ from ..math_perf_env import (
     ace_step_flush_device_profiler,
     ace_step_profiler_flush_every_layer,
     ace_step_vae_activation_storage_dtype,
+    ace_step_vae_ensure_interleaved,
     ace_step_vae_host_weight_staging_dtype,
 )
 from .block import TtOobleckDecoderBlock, _strip_prefix
@@ -175,10 +176,13 @@ class TtOobleckDecoder:
     def _forward(self, x):
         """Core decode computation without normalization; used for both eager and traced paths."""
         ttnn = self.ttnn
+        dram_mc = ttnn.DRAM_MEMORY_CONFIG
         x = self.conv1(x)
+        x = ace_step_vae_ensure_interleaved(ttnn, x, memory_config=dram_mc)
         self._maybe_flush_device_profiler()
         for block in self.blocks:
             x = block(x)
+            x = ace_step_vae_ensure_interleaved(ttnn, x, memory_config=dram_mc)
             self._maybe_flush_device_profiler()
         x = self.snake1(x)
         self._maybe_flush_device_profiler()
