@@ -860,7 +860,7 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuBinaryParameterizedFixture, TensixSfpuBinar
 
     if (MetalContext::instance().get_cluster().arch() == ARCH::WORMHOLE_B0 ||
         MetalContext::instance().get_cluster().arch() == ARCH::BLACKHOLE) {
-        GTEST_SKIP() << "Binary SFPU op test (div_binary / add_int / mul_int) not fixed for WH/BH";
+        GTEST_SKIP() << "Binary SFPU op test (div_binary / add_int / mul_int / gt_int) not fixed for WH/BH";
     }
 
     // add_int/mul_int: Int8 L1 inputs promoted to sign-mag Int32 output. div_binary stays bfloat16.
