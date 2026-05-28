@@ -577,7 +577,6 @@ jobs:
           cmake --build build --target install
           # WASM viewer is an ALL custom target, not part of install; required for profiler CI HTTP tests.
           if [ "${{ inputs.tracy }}" = "true" ]; then
-            source build/emsdk/emsdk_env.sh
             cmake --build build --target tracy_profiler_wasm
           fi
 
