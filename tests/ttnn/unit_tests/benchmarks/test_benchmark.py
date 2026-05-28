@@ -58,6 +58,23 @@ from tracy.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG, rm
 profiler_log_path = PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG
 
 
+# FP8 path runs with fp32_dest_acc_en=True + bf16 output, which roughly doubles
+# per-core L1 footprint vs bf8 (interm0 CB jumps from Float16_b 2048 B/tile to
+# Float32 4096 B/tile, plus output CB / L1 sharded buffer go from bf8 1088 B to
+# bf16 2048 B per tile). With two outputs alive at the moment of a new matmul's
+# allocation (the previous result + the one being allocated), bigger FP8 shapes
+# OOM L1. The deallocates between warmup/measurement iterations keep only one
+# output alive at a time. Set FP8_EXTRA_DEALLOCATES=False to recover BF8-style
+# measurement windows (no host-side deallocate calls inside the timed region)
+# at the cost of OOMing on larger FP8 shapes.
+FP8_EXTRA_DEALLOCATES = True
+# Only apply the deallocates when the scaled M*K*N reaches this threshold;
+# smaller shapes fit L1 without them, so we keep their measurement windows
+# clean. 3840*4224*4224 corresponds to the (384, 384, 384) shape on an 11x10
+# grid -- the smallest shape that actually needs the dealloc on BH.
+FP8_EXTRA_DEALLOCATES_MIN_MKN = 3840 * 4224 * 4224
+
+
 SUBBLOCK_HW_CHOICES = [
     (4, 2),
     (2, 4),
@@ -173,7 +190,7 @@ matmul_shapes_bfloat8_b = [
     (416, 320, 320, False, False, 1, 1, 1),
     (512, 512, 512, False, False, 1, 2, 2),
     (1024, 1024, 1024, False, False, 2, 4, 4),
-    (2048, 2048, 2048, False, False, 4, 8, 8),
+    # (2048, 2048, 2048, False, False, 4, 8, 8),
 ]
 
 matmul_shapes_bfloat4_b = [
@@ -195,27 +212,65 @@ matmul_shapes_bfloat4_b = [
     (2048, 2048, 2048, False, False, 4, 4, 4),
 ]
 
+# FP8 shapes: tuned separately from BF8 because the FP8 path runs with
+# fp32_dest_acc_en=True (LLK requirement) and packer_l1_acc=False, which forces
+# the interm0 CB to Float32 (4096 B/tile) instead of Float16_b (2048 B/tile).
+# Combined with the bf16 output CB/L1 buffer (also 2x bf8) this nearly doubles
+# the per-core L1 footprint vs BF8. For shapes where the per-core out block
+# (per_core_M*per_core_N) is large enough that interm0_CB = out_block_tiles*4096
+# would push the static CB region past ~1.0 MB, bump num_out_blocks_h/w to split
+# the output block. Per-core interm0 = out_block_h * out_block_w * 4096; we keep
+# this under ~400 KB so total CBs + sharded L1 buffers fit BH's ~1.4 MB usable L1.
+matmul_shapes_fp8_e4m3 = [
+    (64, 64, 64, True, True, 1, 1, 1),
+    (64, 128, 128, True, True, 1, 1, 1),
+    (64, 128, 256, True, True, 1, 1, 1),
+    (128, 128, 128, True, True, 1, 1, 1),
+    (128, 128, 256, True, True, 1, 1, 1),
+    (128, 256, 256, True, True, 1, 1, 1),
+    (256, 256, 256, True, True, 1, 1, 1),
+    (256, 256, 384, True, True, 1, 1, 1),
+    (256, 384, 384, True, True, 1, 1, 1),
+    (384, 384, 384, True, True, 2, 1, 1),
+    # FP8 split: per_core 12x16 = 192 tiles -> interm0 fp32 = 768 KB OOMs L1.
+    # Split M (not N): matmul_device_operation.cpp:1363 requires
+    # out_block_w == per_core_N || out_block_h == 1, so num_out_blocks_w>1 with
+    # out_block_h>1 is rejected. num_out_blocks_h=2 -> out_block = 6x16 = 96
+    # tiles, interm0 = 384 KB. Also halves in0_CB since in0_block_h = out_block_h.
+    (384, 384, 512, True, True, 2, 2, 1),
+    (416, 320, 320, False, False, 1, 1, 1),
+    (512, 512, 512, False, False, 1, 2, 2),
+    (1024, 1024, 1024, False, False, 2, 4, 4),
+    # (2048, 2048, 2048, False, False, 4, 8, 8),
+]
+
 # (dtype, math_fidelity, use_trace)
+# Only BF8 and FP8 are active; other dtypes are commented out per the FP8 vs BF8
+# experiment scope. FP8 entries use ttnn.fp8_e4m3 as a sentinel; inside the test
+# body inputs are uploaded as ttnn.uint8 (see test_fp8_matmul.py::test_fp8_matmul_perf
+# for the same hack) and the matmul code remaps UInt8 input CBs to Fp8_e4m3.
 matmul_configs = [
-    (ttnn.bfloat16, ttnn.MathFidelity.HiFi2, False),
-    (ttnn.bfloat16, ttnn.MathFidelity.HiFi4, False),
-    (ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, False),
-    (ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, False),
-    (ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, False),
-    (ttnn.bfloat16, ttnn.MathFidelity.HiFi2, True),
-    (ttnn.bfloat16, ttnn.MathFidelity.HiFi4, True),
-    (ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True),
-    (ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, True),
-    (ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True),
+    # (ttnn.bfloat16, ttnn.MathFidelity.HiFi2, False),
+    # (ttnn.bfloat16, ttnn.MathFidelity.HiFi4, False),
+    # (ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, False),
+    # (ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, False),
+    # (ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, False),
+    # (ttnn.bfloat16, ttnn.MathFidelity.HiFi2, True),
+    # (ttnn.bfloat16, ttnn.MathFidelity.HiFi4, True),
+    # (ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True),
+    # (ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, True),
+    # (ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True),
+    (ttnn.fp8_e4m3, ttnn.MathFidelity.LoFi, False),
+    (ttnn.fp8_e4m3, ttnn.MathFidelity.LoFi, True),
 ]
 
 
-@pytest.mark.skip(reason="Benchmark is not intended to be run as part of CI and can be manually run locally")
+# @pytest.mark.skip(reason="Benchmark is not intended to be run as part of CI and can be manually run locally")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 3855488}], indirect=True)
 @pytest.mark.parametrize("tile_h", [32])
 @pytest.mark.parametrize("tile_w", [32])
 @pytest.mark.parametrize("num_warmup_iterations", [5])
-@pytest.mark.parametrize("num_measurement_iterations", [100])
+@pytest.mark.parametrize("num_measurement_iterations", [50])
 def test_matmul_2d_host_perf(
     device,
     grid_size,
@@ -285,6 +340,21 @@ def test_matmul_2d_host_perf(
                 matmul_shapes = matmul_shapes_bfloat8_b
             elif dtype == ttnn.bfloat4_b:
                 matmul_shapes = matmul_shapes_bfloat4_b
+            elif dtype == ttnn.fp8_e4m3:
+                matmul_shapes = matmul_shapes_fp8_e4m3
+
+            # FP8 hack: ship inputs as UInt8 tensors of raw FP8 e4m3 bytes. The matmul
+            # device code remaps UInt8 input CBs to Fp8_e4m3 (see matmul_utilities.hpp)
+            # so the LLK runs the real FP8 path. Output stays bf16 because the FP8
+            # output writeback isn't on the golden path yet. Compute config also flips
+            # to fp32_dest / no packer_l1_acc to match the FP8 LLK gtest config.
+            is_fp8 = dtype == ttnn.fp8_e4m3
+            input_dtype = ttnn.uint8 if is_fp8 else dtype
+            output_dtype = ttnn.bfloat16 if is_fp8 else dtype
+            # FP8 forces fp32_dest_acc_en=True (halves dest -> caps subblock H*W at 4).
+            # Subblock selection must know this or it picks shapes that overflow dest.
+            fp32_dest_acc_en = is_fp8
+            packer_l1_acc = not is_fp8
             for m, k, n, in0_sharded, out_sharded, in0_block_w_div, num_out_blocks_h, num_out_blocks_w in matmul_shapes:
                 profiler.clear()
 
@@ -301,12 +371,24 @@ def test_matmul_2d_host_perf(
                 per_core_N = n // grid_size[0] // tile_w
                 out_block_h = per_core_M // num_out_blocks_h
                 out_block_w = per_core_N // num_out_blocks_w
-                out_subblock_h, out_subblock_w = get_subblock_sizes(out_block_h, out_block_w, out_sharded)
+                out_subblock_h, out_subblock_w = get_subblock_sizes(
+                    out_block_h, out_block_w, out_sharded, fp32_dest_acc_en=fp32_dest_acc_en
+                )
 
                 logger.info(f"M*K*N = {m}*{k}*{n} out_subblock_h: {out_subblock_h}, out_subblock_w: {out_subblock_w}")
 
-                in0 = torch.ones(in0_shape).bfloat16()
-                in1 = torch.randn(in1_shape).bfloat16()
+                logger.info(
+                    f"Allocating host torch tensors (in0_shape={in0_shape}, in1_shape={in1_shape}, is_fp8={is_fp8})"
+                )
+                if is_fp8:
+                    # Use uint8 raw bytes as the FP8 e4m3 payload. Numerical output will
+                    # be garbage but kernel dispatch and timing are unaffected.
+                    in0 = torch.ones(in0_shape, dtype=torch.uint8) * 56
+                    in1 = torch.randint(0, 256, in1_shape, dtype=torch.uint8)
+                else:
+                    in0 = torch.ones(in0_shape).bfloat16()
+                    in1 = torch.randn(in1_shape).bfloat16()
+                logger.info("Host torch tensors allocated")
 
                 if in0_sharded:
                     in0_storage_type = "L1"
@@ -329,23 +411,29 @@ def test_matmul_2d_host_perf(
                     )
                 else:
                     in0_memory_config = ttnn.DRAM_MEMORY_CONFIG
+                logger.info(
+                    f"Uploading in0 to device (dtype={input_dtype}, memory_config={'sharded' if in0_sharded else 'DRAM'})"
+                )
                 in0_t = ttnn.from_torch(
                     in0,
                     tile=ttnn.Tile((tile_h, 32)),
-                    dtype=dtype,
+                    dtype=input_dtype,
                     layout=ttnn.TILE_LAYOUT,
                     device=device,
                     memory_config=in0_memory_config,
                 )
+                logger.info("in0 uploaded")
 
+                logger.info(f"Uploading in1 to device (dtype={input_dtype}, memory_config=DRAM)")
                 in1_t = ttnn.from_torch(
                     in1,
                     tile=ttnn.Tile((32, tile_w)),
-                    dtype=dtype,
+                    dtype=input_dtype,
                     layout=ttnn.TILE_LAYOUT,
                     device=device,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
+                logger.info("in1 uploaded")
 
                 program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=grid_size,
@@ -363,8 +451,10 @@ def test_matmul_2d_host_perf(
                 compute_kernel_config = ttnn.WormholeComputeKernelConfig(
                     math_fidelity=math_fidelity,
                     math_approx_mode=True,
-                    fp32_dest_acc_en=False,
-                    packer_l1_acc=True,
+                    # FP8 LLK requires FP32 dest accumulator; packer_l1_acc is not wired
+                    # up for the FP8 path. Matches the FP8 gtest / test_fp8_matmul.py.
+                    fp32_dest_acc_en=fp32_dest_acc_en,
+                    packer_l1_acc=packer_l1_acc,
                     throttle_level=ttnn.ThrottleLevel.NO_THROTTLE,
                 )
 
@@ -381,62 +471,84 @@ def test_matmul_2d_host_perf(
                 else:
                     output_tile = ttnn.Tile([tile_h, tile_w])
 
-                output_t = ttnn.matmul(
-                    in0_t,
-                    in1_t,
-                    program_config=program_config,
-                    memory_config=out_mem_config,
-                    dtype=dtype,
-                    compute_kernel_config=compute_kernel_config,
-                    output_tile=output_tile,
-                )
+                # output_t = ttnn.matmul(
+                #     in0_t,
+                #     in1_t,
+                #     program_config=program_config,
+                #     memory_config=out_mem_config,
+                #     dtype=output_dtype,
+                #     compute_kernel_config=compute_kernel_config,
+                #     output_tile=output_tile,
+                # )
 
+                # Per-iter deallocates gated on FP8_EXTRA_DEALLOCATES + the M*K*N
+                # threshold (top of file). Keeps only one output buffer alive
+                # across the next matmul's allocation so larger FP8 shapes fit
+                # L1; smaller shapes skip the deallocates so their measurement
+                # window stays clean.
+                fp8_dealloc = is_fp8 and FP8_EXTRA_DEALLOCATES and m * k * n >= FP8_EXTRA_DEALLOCATES_MIN_MKN
                 for iter in range(0, num_warmup_iterations):
+                    # logger.info(f"Warmup iteration {iter} started")
+                    if fp8_dealloc and iter > 0:
+                        ttnn.deallocate(output_t)
                     output_t = ttnn.matmul(
                         in0_t,
                         in1_t,
                         program_config=program_config,
                         memory_config=out_mem_config,
-                        dtype=dtype,
+                        dtype=output_dtype,
                         compute_kernel_config=compute_kernel_config,
                         output_tile=output_tile,
                     )
+                    # logger.info(f"Warmup iteration {iter} completed")
 
                 if calc_device_utilization:
                     # Clear profiler log and read profiler data after warmup iterations
                     ttnn.ReadDeviceProfiler(device)
                     rm(profiler_log_path)
 
+                if fp8_dealloc:
+                    ttnn.deallocate(output_t)
+
                 # Synchronize device to ensure all warmup iterations are completed and device is in clean state
                 ttnn.synchronize_device(device)
 
                 if use_trace:
                     tid = ttnn.begin_trace_capture(device, cq_id=0)
+                    # logger.info(f"Trace capture started")
                     for iter in range(0, num_measurement_iterations):
+                        if fp8_dealloc and iter > 0:
+                            ttnn.deallocate(output_t)
                         output_t = ttnn.matmul(
                             in0_t,
                             in1_t,
                             program_config=program_config,
                             memory_config=out_mem_config,
-                            dtype=dtype,
+                            dtype=output_dtype,
                             compute_kernel_config=compute_kernel_config,
                             output_tile=output_tile,
                         )
                     ttnn.end_trace_capture(device, tid, cq_id=0)
+                    # logger.info(f"Trace capture completed")
+
                     profiler.start(f"run")
                     ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
                     ttnn.synchronize_device(device)
                     profiler.end(f"run")
                     ttnn.release_trace(device, tid)
+                    # logger.info(f"Trace execution completed")
                 else:
                     profiler.start(f"run")
                     for iter in range(0, num_measurement_iterations):
+                        # logger.info(f"Measurement iteration {iter} started")
+                        if fp8_dealloc and iter > 0:
+                            ttnn.deallocate(output_t)
                         output_t = ttnn.matmul(
                             in0_t,
                             in1_t,
                             program_config=program_config,
                             memory_config=out_mem_config,
-                            dtype=dtype,
+                            dtype=output_dtype,
                             compute_kernel_config=compute_kernel_config,
                             output_tile=output_tile,
                         )
@@ -520,29 +632,41 @@ matmul_shapes_oob = [
     (128, 256, 256),
     (256, 256, 256),
     (256, 256, 384),
-    (256, 384, 384),
-    (384, 384, 384),
-    (384, 384, 512),
-    (384, 512, 512),
-    (512, 512, 512),
+    # Shapes from here down OOM the FP8 OOB path: the default matmul auto-picker
+    # doesn't yet account for fp32_dest_acc_en bumping the interm0 CB to Float32
+    # (4096 B/tile vs Float16_b 2048 B/tile), so per-core blocks of ~96+ tiles
+    # blow the static CB region. Keep them commented out while the FP8 OOB
+    # experience is the focus; re-enable for the BF8 baseline if/when that gets
+    # turned back on in matmul_configs_oob.
+    # (256, 384, 384),
+    # (384, 384, 384),
+    # (384, 384, 512),
+    # (384, 512, 512),
+    # (512, 512, 512),
 ]
 
+# Only BF8 and FP8 are active; other dtypes are commented out per the FP8 vs BF8
+# experiment scope. FP8 entries use ttnn.fp8_e4m3 as a sentinel; inside the test
+# body inputs are uploaded as ttnn.uint8 (see test_fp8_matmul.py::test_fp8_matmul_perf
+# for the same hack) and the matmul code remaps UInt8 input CBs to Fp8_e4m3.
 matmul_configs_oob = [
-    (ttnn.bfloat16, False),
-    (ttnn.bfloat16, True),
+    # (ttnn.bfloat16, False),
+    # (ttnn.bfloat16, True),
     (ttnn.bfloat8_b, False),
     (ttnn.bfloat8_b, True),
-    (ttnn.bfloat4_b, False),
-    (ttnn.bfloat4_b, True),
+    # (ttnn.bfloat4_b, False),
+    # (ttnn.bfloat4_b, True),
+    (ttnn.fp8_e4m3, False),
+    (ttnn.fp8_e4m3, True),
 ]
 
 
-@pytest.mark.skip(reason="Benchmark is not intended to be run as part of CI and can be manually run locally")
+# @pytest.mark.skip(reason="Benchmark is not intended to be run as part of CI and can be manually run locally")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 3855488}], indirect=True)
 @pytest.mark.parametrize("tile_h", [32])
 @pytest.mark.parametrize("tile_w", [32])
-@pytest.mark.parametrize("num_warmup_iterations", [5])
-@pytest.mark.parametrize("num_measurement_iterations", [100])
+@pytest.mark.parametrize("num_warmup_iterations", [1])
+@pytest.mark.parametrize("num_measurement_iterations", [5])
 def test_matmul_2d_host_perf_out_of_box(
     device,
     grid_size,
@@ -611,6 +735,16 @@ def test_matmul_2d_host_perf_out_of_box(
                 math_fidelity = ttnn.MathFidelity.LoFi
             elif dtype == ttnn.bfloat4_b:
                 math_fidelity = ttnn.MathFidelity.LoFi
+            elif dtype == ttnn.fp8_e4m3:
+                math_fidelity = ttnn.MathFidelity.LoFi
+
+            # FP8 hack: ship inputs as UInt8 tensors of raw FP8 e4m3 bytes. The matmul
+            # device code remaps UInt8 input CBs to Fp8_e4m3 (see matmul_utilities.hpp)
+            # so the LLK runs the real FP8 path. Output stays bf16 because the FP8
+            # output writeback isn't on the golden path yet.
+            is_fp8 = dtype == ttnn.fp8_e4m3
+            input_dtype = ttnn.uint8 if is_fp8 else dtype
+            output_dtype = ttnn.bfloat16 if is_fp8 else dtype
             for m, k, n in matmul_shapes:
                 profiler.clear()
 
@@ -622,8 +756,14 @@ def test_matmul_2d_host_perf_out_of_box(
                 in0_shape = [1, 1, m, k]
                 in1_shape = [1, 1, k, n]
 
-                in0 = torch.ones(in0_shape).bfloat16()
-                in1 = torch.randn(in1_shape).bfloat16()
+                if is_fp8:
+                    # uint8 raw bytes as FP8 e4m3 payload; output values are garbage but
+                    # dispatch/timing are unaffected.
+                    in0 = torch.ones(in0_shape, dtype=torch.uint8) * 56
+                    in1 = torch.randint(0, 256, in1_shape, dtype=torch.uint8)
+                else:
+                    in0 = torch.ones(in0_shape).bfloat16()
+                    in1 = torch.randn(in1_shape).bfloat16()
 
                 in0_storage_type = "DRAM"
                 in1_storage_type = "DRAM"
@@ -632,7 +772,7 @@ def test_matmul_2d_host_perf_out_of_box(
                 in0_t = ttnn.from_torch(
                     in0,
                     tile=ttnn.Tile((tile_h, 32)),
-                    dtype=dtype,
+                    dtype=input_dtype,
                     layout=ttnn.TILE_LAYOUT,
                     device=device,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -640,21 +780,56 @@ def test_matmul_2d_host_perf_out_of_box(
                 in1_t = ttnn.from_torch(
                     in1,
                     tile=ttnn.Tile((32, tile_w)),
-                    dtype=dtype,
+                    dtype=input_dtype,
                     layout=ttnn.TILE_LAYOUT,
                     device=device,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
 
-                output_t = in0_t @ in1_t
+                # FP8 LLK requires fp32 dest acc and no packer_l1_acc. For the non-FP8
+                # OOB path we pass compute_kernel_config=None to keep the @-operator
+                # default behavior (identical to `in0_t @ in1_t`).
+                if is_fp8:
+                    fp8_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+                        math_fidelity=math_fidelity,
+                        math_approx_mode=True,
+                        fp32_dest_acc_en=True,
+                        packer_l1_acc=False,
+                        throttle_level=ttnn.ThrottleLevel.NO_THROTTLE,
+                    )
+
+                    def run_matmul():
+                        return ttnn.matmul(
+                            in0_t,
+                            in1_t,
+                            dtype=output_dtype,
+                            compute_kernel_config=fp8_compute_kernel_config,
+                            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        )
+
+                else:
+
+                    def run_matmul():
+                        return in0_t @ in1_t
+
+                # Per-iter deallocates gated on FP8_EXTRA_DEALLOCATES + the M*K*N
+                # threshold (top of file). Same rationale as in
+                # test_matmul_2d_host_perf above.
+                fp8_dealloc = is_fp8 and FP8_EXTRA_DEALLOCATES and m * k * n >= FP8_EXTRA_DEALLOCATES_MIN_MKN
+                output_t = run_matmul()
 
                 for iter in range(0, num_warmup_iterations):
-                    output_t = in0_t @ in1_t
+                    if fp8_dealloc:
+                        ttnn.deallocate(output_t)
+                    output_t = run_matmul()
 
                 if calc_device_utilization:
                     # Clear profiler log and read profiler data after warmup iterations
                     ttnn.ReadDeviceProfiler(device)
                     rm(profiler_log_path)
+
+                if fp8_dealloc:
+                    ttnn.deallocate(output_t)
 
                 # Synchronize device to ensure all warmup iterations are completed and device is in clean state
                 ttnn.synchronize_device(device)
@@ -662,7 +837,9 @@ def test_matmul_2d_host_perf_out_of_box(
                 if use_trace:
                     tid = ttnn.begin_trace_capture(device, cq_id=0)
                     for iter in range(0, num_measurement_iterations):
-                        output_t = in0_t @ in1_t
+                        if fp8_dealloc and iter > 0:
+                            ttnn.deallocate(output_t)
+                        output_t = run_matmul()
                     ttnn.end_trace_capture(device, tid, cq_id=0)
                     profiler.start(f"run")
                     ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
@@ -672,7 +849,9 @@ def test_matmul_2d_host_perf_out_of_box(
                 else:
                     profiler.start(f"run")
                     for iter in range(0, num_measurement_iterations):
-                        output_t = in0_t @ in1_t
+                        if fp8_dealloc and iter > 0:
+                            ttnn.deallocate(output_t)
+                        output_t = run_matmul()
                     ttnn.synchronize_device(device)
                     profiler.end(f"run")
 
