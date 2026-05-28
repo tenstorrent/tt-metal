@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// v3 fused SwiGLU compute kernel — PACKER_L1_ACC variant.
+// Fused SwiGLU compute kernel — PACKER_L1_ACC variant.
 //
 // Pattern (modelled on bmm_large_block_zm_fused_bias_activation.cpp without
 // FUSE_BIAS):
@@ -26,26 +26,24 @@
 //     into dst, optionally applies SILU on the pack, and packs into the
 //     final CB (cb_gate_intermed / cb_up_intermed / cb_out).
 //
-// This avoids the dst-reload pattern from v2 (which was producing Inf
-// outputs) by letting the packer handle cross-K-block accumulation.
+// Cross-K-block accumulation is handled by the packer (PACKER_L1_ACC), not by
+// reloading dst between K-blocks — a dst-reload approach produced Inf outputs.
 //
 // File map:
-//   matmul_phase_v3            (~L56)  — single-matmul phase that accumulates
-//                                         via PACKER_L1_ACC across K-blocks.
-//                                         Used for the down matmul (and gate
-//                                         alone if up isn't fused).
-//   matmul_phase_fused_gu_v3   (~L194) — gate+up fused matmul phase: one
-//                                         K-block read of x feeds two
-//                                         output CBs (gate, up) via two
-//                                         matmul subblocks per pass.
-//   multiply_phase_v3          (~L346) — elementwise silu(gate) * up,
-//                                         producing the activated CB.
-//   kernel_main                (~L384) — chunk loop: read counts/idx from
-//                                         scratch CBs, decide effective_chunks
-//                                         via the UNPACK→{MATH,PACK} mailbox
-//                                         handshake, then per-chunk dispatch
-//                                         the fused-GU phase, multiply phase,
-//                                         and down phase.
+//   matmul_phase           (~L56)  — single-matmul phase that accumulates
+//                                     via PACKER_L1_ACC across K-blocks. Used
+//                                     for the down matmul (and gate alone if
+//                                     up isn't fused).
+//   matmul_phase_fused_gu  (~L194) — gate+up fused matmul phase: one K-block
+//                                     read of x feeds two output CBs (gate,
+//                                     up) via two matmul subblocks per pass.
+//   multiply_phase         (~L346) — elementwise silu(gate) * up, producing
+//                                     the activated CB.
+//   kernel_main            (~L384) — chunk loop: read counts/idx from scratch
+//                                     CBs, decide effective_chunks via the
+//                                     UNPACK→{MATH,PACK} mailbox handshake,
+//                                     then per-chunk dispatch the fused-GU
+//                                     phase, multiply phase, and down phase.
 //
 // Thread-private symbols `mailbox_write`/`mailbox_read` live in the
 // `ckernel` namespace (one mailbox slot per (sender, receiver) thread
@@ -79,8 +77,7 @@ template <
     uint32_t out_subblock_num_tiles,
     uint32_t out_block_num_tiles,
     bool apply_silu_on_final>
-FORCE_INLINE void matmul_phase_v3(
-    uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t partials_cb_id, uint32_t final_cb_id) {
+FORCE_INLINE void matmul_phase(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t partials_cb_id, uint32_t final_cb_id) {
     // Reconfig packer for partials format (previous phase's final_cb format
     // would otherwise leak). pack_reconfig_data_format (the reconfig variant)
     // does NOT reset L1_ACC — we do that explicitly below.
@@ -199,8 +196,8 @@ FORCE_INLINE void matmul_phase_v3(
 //      matmul x*up → partials_up. Each pack goes to its respective partials
 //      CB; L1_ACC progression (overwrite for block 0, accumulate after) is
 //      the SAME for both partials (PACKER_L1_ACC is a global packer state).
-//   3. Pop x, gate, up once per K-block (vs once per K-block per phase in
-//      v1, which read x from DRAM twice).
+//   3. Pop x, gate, up once per K-block (the same x K-block feeds both
+//      matmuls, so x is read from DRAM once per K-block instead of twice).
 // After the K-loop, copy partials_gu → gate_intermed (with silu fused on
 // the pack), then partials_up → up_intermed (no activation). Both partials
 // CBs are Float16_b so switching between them needs no format reconfig.
@@ -217,7 +214,7 @@ template <
     uint32_t out_subblock_w,
     uint32_t out_subblock_num_tiles,
     uint32_t out_block_num_tiles>
-FORCE_INLINE void matmul_phase_fused_gu_v3(
+FORCE_INLINE void matmul_phase_fused_gu(
     uint32_t x_cb_id,
     uint32_t gate_cb_id,
     uint32_t up_cb_id,
@@ -363,13 +360,13 @@ FORCE_INLINE void matmul_phase_fused_gu_v3(
 
     // Up partials are NOT copied to a separate cb_up_intermed: the multiply
     // phase reads cb_partials_up directly (bf16) and pairs each tile with
-    // cb_gate_intermed (bf8 after silu+pack). This saves 48KB of L1 vs the
-    // v1 design and lets cb_in0_down_full stay double-buffered.
+    // cb_gate_intermed (bf8 after silu+pack). Skipping the copy saves 48KB of
+    // L1 and lets cb_in0_down_full stay double-buffered.
     (void)up_intermed_cb_id;
 }
 
 template <uint32_t out_block_num_tiles, uint32_t out_subblock_num_tiles>
-FORCE_INLINE void multiply_phase_v3(uint32_t gate_cb_id, uint32_t up_cb_id, uint32_t activated_cb_id) {
+FORCE_INLINE void multiply_phase(uint32_t gate_cb_id, uint32_t up_cb_id, uint32_t activated_cb_id) {
     cb_wait_front(gate_cb_id, out_block_num_tiles);
     cb_wait_front(up_cb_id, out_block_num_tiles);
 
@@ -514,11 +511,12 @@ void kernel_main() {
             g_in0_block_w);
 
         // Phases 1 & 2 fused: gate matmul + up matmul share the same per-K-block
-        // x push from the reader. Halves x DRAM mcast bytes vs v1's sequential
-        // phases. Both matmuls accumulate into their own partials CB; after the
-        // K-loop, partials_gu -> gate_intermed (with silu) and partials_up ->
-        // up_intermed are produced by the same fused function.
-        matmul_phase_fused_gu_v3<
+        // x push from the reader, so x DRAM mcast bytes are halved (one x read
+        // per K-block feeds both matmuls). Both matmuls accumulate into their
+        // own partials CB; after the K-loop, partials_gu -> gate_intermed (with
+        // silu) and partials_up -> up_intermed are produced by the same fused
+        // function.
+        matmul_phase_fused_gu<
             g_in0_block_w,
             g_in0_num_subblocks,
             g_in0_block_num_tiles,
@@ -536,9 +534,9 @@ void kernel_main() {
         // Phase 3: elementwise multiply (cb_gate_intermed is silu(partials_gu)
         // in bf8; cb_partials_up is the up matmul accumulator in bf16). The
         // multiply does the format conversion via reconfig_data_format inside
-        // multiply_phase_v3 — both unpacker srcs get reset to the input CB
+        // multiply_phase — both unpacker srcs get reset to the input CB
         // formats.
-        multiply_phase_v3<gu_out_block_num_tiles, gu_out_subblock_num_tiles>(
+        multiply_phase<gu_out_block_num_tiles, gu_out_subblock_num_tiles>(
             cb_gate_intermed, cb_partials_up, cb_activated);
         (void)cb_up_intermed;
 
@@ -551,7 +549,7 @@ void kernel_main() {
             d_out_subblock_w,
             d_out_subblock_h,
             d_in0_block_w);
-        matmul_phase_v3<
+        matmul_phase<
             d_in0_block_w,
             d_in0_num_subblocks,
             d_in0_block_num_tiles,

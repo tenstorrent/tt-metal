@@ -25,11 +25,11 @@ bool is_dram_interleaved(const ttnn::Tensor& t) {
 void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& op, const tensor_args_t& t) {
     TT_FATAL(t.x.storage_type() == tt::tt_metal::StorageType::DEVICE, "x must be on device");
-    // x is restricted to BFLOAT8_B for v1 — the only dtype the existing
-    // callers (TtRoutedExpert typecasts the dispatched buffer to BF8_B
-    // before this op) and tests exercise. The kernel CB-size config can
-    // also accept BFLOAT16, but that path is untested; reintroduce when
-    // a real caller + PCC test for BF16 lands.
+    // x is restricted to BFLOAT8_B — the only dtype the existing callers
+    // (TtRoutedExpert typecasts the dispatched buffer to BF8_B before this
+    // op) and tests exercise. The kernel CB-size config can also accept
+    // BFLOAT16, but that path is untested; reintroduce when a real caller
+    // + PCC test for BF16 lands.
     TT_FATAL(t.x.dtype() == tt::tt_metal::DataType::BFLOAT8_B, "x must be BFLOAT8_B, got {}", t.x.dtype());
     TT_FATAL(t.x.layout() == tt::tt_metal::Layout::TILE, "x must be TILE layout");
     TT_FATAL(is_dram_interleaved(t.x), "x must be DRAM-interleaved");

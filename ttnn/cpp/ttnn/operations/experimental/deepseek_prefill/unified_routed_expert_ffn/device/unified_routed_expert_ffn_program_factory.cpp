@@ -39,8 +39,8 @@ constexpr uint32_t CB_IDX_SCRATCH = tt::CBIndex::c_11;
 constexpr uint32_t CB_IN0_DOWN_FULL = tt::CBIndex::c_12;
 // Second gate/up matmul partials CB. With the fused gate+up phase, each
 // K-block accumulates simultaneously into partials_gu (gate matmul) and
-// partials_up (up matmul) using the SAME shared x K-block, halving x DRAM
-// reads vs the v1 sequential-phases design.
+// partials_up (up matmul) using the SAME shared x K-block — one x read
+// per K-block feeds both matmuls instead of two.
 constexpr uint32_t CB_PARTIALS_UP = tt::CBIndex::c_13;
 }  // namespace
 
@@ -102,9 +102,9 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     const uint32_t N_gate_tiles_padded = per_core_N_gu * GRID_X;
     const uint32_t K_down_tiles_padded = N_gate_tiles_padded;  // down K = gate N
 
-    // With 11x8 = 88 cores, per_core_N_gu (= 6) and per_core_N_d (= 21) are
-    // smaller than in v1 (8x8), freeing ~250KB of L1 per core. Use it to
-    // double in0_block_w_gu, halving the gate / up K-loop iteration count.
+    // With 11x8 = 88 cores, per_core_N_gu (= 6) and per_core_N_d (= 21) leave
+    // ~250KB of headroom per core vs an 8x8 layout. Use it to double
+    // in0_block_w_gu, halving the gate / up K-loop iteration count.
     const uint32_t in0_block_w_gu = 16;
     const uint32_t in0_block_w_d = per_core_N_gu;
     TT_FATAL(
@@ -172,11 +172,11 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     const tt::DataFormat down_df = tt::tt_metal::datatype_to_dataformat_converter(t.down_proj.dtype());
     const tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(tensor_return_value.dtype());
     // Intermediate and partials share the same format — required by the
-    // v2 compute kernel's mm_init pattern (mm_init's 3rd arg drives the
-    // packer's data-format config; mismatched formats need explicit pack
-    // reconfig that the v2 kernel doesn't do). Use bfp8_b for both: 1KB/tile
-    // is half the bf16 cost so we fit in L1 with both intermediates and
-    // partials sized to the full per-core block.
+    // compute kernel's mm_init pattern (mm_init's 3rd arg drives the packer's
+    // data-format config; mismatched formats need explicit pack reconfig that
+    // the kernel doesn't do). Use bfp8_b for both: 1KB/tile is half the bf16
+    // cost so we fit in L1 with both intermediates and partials sized to the
+    // full per-core block.
     const tt::DataFormat intermed_df = tt::DataFormat::Bfp8_b;
     const tt::DataFormat partials_gu_df = tt::DataFormat::Float16_b;
     const tt::DataFormat partials_d_df = tt::DataFormat::Float16_b;
