@@ -1,6 +1,8 @@
 #!/bin/bash
 set -eo pipefail
 
+source "$(dirname "${BASH_SOURCE[0]}")/utils.sh"
+
 # Default ARCH_NAME for local runs when not set by CI.
 export ARCH_NAME="${ARCH_NAME:-wormhole_b0}"
 
@@ -22,36 +24,8 @@ tt_run() {
     "${PYTHON:-python3}" "${ttrun_py}" "$@"
 }
 
-# Pick cnx1 when present, else first up non-virtual NIC.
-default_mpi_tcp_interface() {
-    if [[ -d /sys/class/net/cnx1 ]]; then
-        echo "cnx1"
-        return 0
-    fi
-    local n state
-    for n in /sys/class/net/*; do
-        n="${n##*/}"
-        case "${n}" in
-            lo | docker* | br-* | veth* | tailscale* | cali* | flannel*) continue ;;
-        esac
-        state="$(cat "/sys/class/net/${n}/operstate" 2>/dev/null || true)"
-        if [[ "${state}" == "up" ]]; then
-            echo "${n}"
-            return 0
-        fi
-    done
-    echo "cnx1"
-}
-
 export_tcp_interface_for_multihost() {
     export TCP_INTERFACE="${TCP_INTERFACE:-$(default_mpi_tcp_interface)}"
-}
-
-extract_hosts_from_hostfile() {
-    local host_count="$1"
-    local hostfile="${2:-/etc/mpirun/hostfile}"
-
-    awk '!/^#/ && NF {print $1}' "$hostfile" | head -n "$host_count" | paste -sd,
 }
 
 ###############################################################################
@@ -230,7 +204,7 @@ run_quad_galaxy_unit_tests() {
   local mpirun_args_base="$mpi_args_base --mca btl self,tcp --mca btl_tcp_if_include ${tcp_interface} --tag-output"
   local mpirun_args="$mpi_host $mpirun_args_base"
 
-  local descriptor_path="${DESCRIPTOR_PATH:-/etc/mpirun}"
+  local mesh_graph="tt_metal/fabric/mesh_graph_descriptors/quad_galaxy_torus_xy_graph_descriptor.textproto"
 
   # TODO: Currently failing
   #mpirun-ulfm $mpi_run_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/test/tt_metal/tt_fabric/test_physical_discovery ; fail=$((fail + $?))
@@ -238,7 +212,7 @@ run_quad_galaxy_unit_tests() {
   local cv_log="${TT_METAL_HOME}/generated/artifacts/test_summary_junit/cluster_validation_console.log"
   mkdir -p "${TT_METAL_HOME}/generated/artifacts/test_summary_junit"
   set +e
-  mpirun-ulfm $mpirun_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib -x TT_METAL_CACHE="${TT_METAL_CACHE}" ./build/tools/scaleout/run_cluster_validation --send-traffic --cabling-descriptor-path ${descriptor_path}/cabling_descriptor.textproto --deployment-descriptor-path ${descriptor_path}/deployment_descriptor.textproto 2>&1 | tee "$cv_log"
+  mpirun-ulfm $mpirun_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib -x TT_METAL_CACHE="${TT_METAL_CACHE}" ./build/tools/scaleout/run_cluster_validation 2>&1 | tee "$cv_log"
   ec="${PIPESTATUS[0]}"
   set -e
   fail=$((fail + ec))
@@ -251,7 +225,7 @@ run_quad_galaxy_unit_tests() {
   _test_run_summary_append_junit_rows "infra_quad_mesh_device_trace" "${j_mesh}" "$ec"
 
   # TODO: Currently failing on 1D/2D tests
-  #tt_run --tcp-interface "$tcp_interface" --rank-binding "$rank_binding_yaml" --mpi-args "$tt_mpi_args" bash -c "./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=\"MultiHost.TestQuadGalaxy*\"" ; fail=$((fail + $?))
+  #tt_run --tcp-interface "$tcp_interface" --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts" bash -c "./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=\"MultiHost.TestQuadGalaxy*\"" ; fail=$((fail + $?))
 
   j_ccl="$(_test_run_summary_junit_path infra_quad_ccl_quad_host_mesh)"
   _test_run_summary_exec tt_run --tcp-interface "$tcp_interface" --rank-binding "$rank_binding_yaml" --mpi-args "$tt_mpi_args" env TT_METAL_CACHE="${TT_METAL_CACHE}" pytest -svv --junitxml="${j_ccl}" tests/nightly/tg/ccl/ -k "quad_host_mesh"
@@ -376,6 +350,10 @@ setup_dual_galaxy_env() {
         echo "File '$RANK_BINDING_YAML' does not exist."
         exit 1
     fi
+    if ! test -f "$MESH_GRAPH_DESCRIPTOR"; then
+        echo "File '$MESH_GRAPH_DESCRIPTOR' does not exist."
+        exit 1
+    fi
 
     resolve_deepseekv3_model
     resolve_deepseekv3_cache
@@ -401,6 +379,10 @@ setup_quad_galaxy_env() {
     fi
     if ! test -f "$RANK_BINDING_YAML"; then
         echo "File '$RANK_BINDING_YAML' does not exist."
+        exit 1
+    fi
+    if ! test -f "$MESH_GRAPH_DESCRIPTOR"; then
+        echo "File '$MESH_GRAPH_DESCRIPTOR' does not exist."
         exit 1
     fi
 

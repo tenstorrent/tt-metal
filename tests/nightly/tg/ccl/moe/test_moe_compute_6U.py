@@ -10,6 +10,9 @@ import os
 import pytest
 import random
 import torch
+
+torch.set_num_threads(os.cpu_count())
+
 import ttnn
 from ttnn.operations.ccl import MoEActivationFunction
 
@@ -1067,6 +1070,19 @@ def compute_matmul_golden(
     # (L, E/D, N, K) -> (L, E, N, K)
     torch_w2 = torch_w2.repeat([1, devices, 1, 1])
 
+    # Cast to fp32 for CPU matmul: torch's bf16 CPU matmul falls through to a
+    # single-threaded reference loop on many builds (even with OMP/MKL enabled),
+    # making the golden compute take tens of minutes on large shapes. fp32 uses
+    # MKL/oneDNN parallel kernels and is ~100x faster here. Result is cast back
+    # to the original dtype before return so downstream golden compute is
+    # unchanged. Verified on BH single-LB run: bf16 path hung past 15 min in
+    # `compute_matmul_golden`; fp32 path completes in seconds.
+    _orig_dtype = torch_input_ref.dtype
+    torch_input_ref = torch_input_ref.float()
+    torch_w0 = torch_w0.float()
+    torch_w1 = torch_w1.float()
+    torch_w2 = torch_w2.float()
+
     # Compute gate activations for each expert
     # (L, E, T, K) @ (L, E, K, N) -> (L, E, T, N)
     torch_w0_output_ref = torch_input_ref @ torch_w0
@@ -1074,13 +1090,13 @@ def compute_matmul_golden(
         # True PyTorch MoE math: x @ W + bias.
         # Bias shape: (L, E, N) - broadcasts across tokens (L, E, T, N) automatically.
         # Weights are replicated per-device, so bias must be too.
-        b0 = torch_b0.repeat([1, devices, 1])  # (L, E, N)
+        b0 = torch_b0.repeat([1, devices, 1]).float()  # (L, E, N)
         torch_w0_output_ref = torch_w0_output_ref + b0.unsqueeze(2)  # broadcast T dimension
 
     torch_w1_output_ref = torch_input_ref @ torch_w1
     if torch_b1 is not None:
         # Same reasoning as b0.
-        b1 = torch_b1.repeat([1, devices, 1])  # (L, E, N)
+        b1 = torch_b1.repeat([1, devices, 1]).float()  # (L, E, N)
         torch_w1_output_ref = torch_w1_output_ref + b1.unsqueeze(2)
 
     if activation_type == MoEActivationFunction.SILU:
@@ -1100,8 +1116,11 @@ def compute_matmul_golden(
     torch_output_ref = torch_intermediate_ref @ torch_w2
     if torch_b2 is not None:
         # Same reasoning as b0: true PyTorch bias addition.
-        b2 = torch_b2.repeat([1, devices, 1])  # (L, E, K)
+        b2 = torch_b2.repeat([1, devices, 1]).float()  # (L, E, K)
         torch_output_ref = torch_output_ref + b2.unsqueeze(2)
+
+    # Cast back to the input dtype to keep downstream golden compute unchanged.
+    torch_output_ref = torch_output_ref.to(_orig_dtype)
 
     # pull device dim back out for comparison
     # (L, E, T, H) -> (L, D, E/D, T, H)

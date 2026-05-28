@@ -6,6 +6,7 @@
 #include <gtest/gtest.h>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <set>
 #include <string>
 #include <unordered_set>
@@ -43,7 +44,9 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     auto* device = mesh_device->get_devices()[0];
     const auto& hal = MetalContext::instance().hal();
     const bool is_quasar = hal.get_arch() == tt::ARCH::QUASAR;
-    const std::string path = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_pause.cpp";
+    // TENSIX cores run the Metal 2.0 variant of the kernel; ETH cores stay on the legacy kernel/API.
+    const std::string path_metal2 = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_pause_2_0.cpp";
+    const std::string path_legacy = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_pause.cpp";
 
     CoreCoord xy_start = {0, 0}, xy_end;
 
@@ -70,58 +73,83 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
         has_ieth_cores = false;
     }
 
-    Program program = Program();
-    constexpr const char* DM_KERNEL_NAME = "pause_dm";
+    // TENSIX kernels are launched via Metal 2.0 on both gen1 (WH/BH) and gen2 (Quasar).
+    // On Quasar a single DM KernelSpec covers DM2..DM7 (DM0/DM1 are reserved); on WH/BH
+    // gen1 requires one KernelSpec per processor, so BRISC and NCRISC are split.
+    std::vector<experimental::metal2_host_api::KernelSpec> kernel_specs;
+    std::vector<experimental::metal2_host_api::KernelSpecName> kernel_names;
+    std::vector<experimental::metal2_host_api::ProgramRunParams::KernelRunParams> kernel_run_params;
+    auto add_dm_kernel =
+        [&](const char* name, uint32_t num_threads, std::optional<tt::tt_metal::DataMovementProcessor> gen1_processor) {
+            // Always provide both gen1 and gen2 configs; the runtime picks the one matching the
+            // current arch. The unused config is ignored on the other arch.
+            auto gen1_proc = gen1_processor.value_or(tt::tt_metal::DataMovementProcessor::RISCV_0);
+            auto gen1_noc = (gen1_proc == tt::tt_metal::DataMovementProcessor::RISCV_1)
+                                ? tt::tt_metal::NOC::RISCV_1_default
+                                : tt::tt_metal::NOC::RISCV_0_default;
+            experimental::metal2_host_api::DataMovementConfiguration dm_cfg{
+                .gen1_data_movement_config =
+                    experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
+                        .processor = gen1_proc, .noc = gen1_noc},
+                .gen2_data_movement_config =
+                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{},
+            };
+            kernel_specs.push_back(experimental::metal2_host_api::KernelSpec{
+                .unique_id = name,
+                .source = path_metal2,
+                .num_threads = num_threads,
+                .runtime_arguments_schema = {.named_common_runtime_args = {"wait_cycles"}},
+                .config_spec = dm_cfg,
+            });
+            kernel_names.emplace_back(name);
+            kernel_run_params.push_back({
+                .kernel_spec_name = name,
+                .named_common_runtime_args = {{"wait_cycles", delay_cycles}},
+            });
+        };
 
     if (is_quasar) {
         // On Quasar, launch kernel on all user DMs (DM2..DM7). DM0/DM1 are reserved for internal use.
         // TODO: Watcher features for ERISCs and TRISCs are temporarily skipped on Quasar until basic runtime bring-up.
         constexpr uint32_t kQuasarUserDmCores = 6;
-        experimental::metal2_host_api::KernelSpec dm_spec{
-            .unique_id = DM_KERNEL_NAME,
-            .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{path},
-            .num_threads = static_cast<uint8_t>(kQuasarUserDmCores),
-            .runtime_arguments_schema = {.named_common_runtime_args = {"wait_cycles"}},
-            .config_spec =
-                experimental::metal2_host_api::DataMovementConfiguration{
-                    .gen2_data_movement_config =
-                        experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
-        };
-        experimental::metal2_host_api::WorkUnitSpec wu{
-            .unique_id = "main",
-            .kernels = {DM_KERNEL_NAME},
-            .target_nodes = experimental::metal2_host_api::NodeRange{CoreRange(xy_start, xy_end)},
-        };
-        experimental::metal2_host_api::ProgramSpec spec{
-            .program_id = "watcher_pause",
-            .kernels = {dm_spec},
-            .work_units = {wu},
-        };
-        program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
-
-        experimental::metal2_host_api::ProgramRunParams params;
-        params.kernel_run_params = {
-            {.kernel_spec_name = DM_KERNEL_NAME, .named_common_runtime_args = {{"wait_cycles", delay_cycles}}},
-        };
-        experimental::metal2_host_api::SetProgramRunParameters(program, params);
-        workload.add_program(device_range, std::move(program));
+        add_dm_kernel("pause_dm", static_cast<uint8_t>(kQuasarUserDmCores), std::nullopt);
     } else {
-        auto brisc_kid = CreateKernel(
-            program,
-            path,
-            CoreRange(xy_start, xy_end),
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
-        auto ncrisc_kid = CreateKernel(
-            program,
-            path,
-            CoreRange(xy_start, xy_end),
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
-        auto trisc_kid = CreateKernel(program, path, CoreRange(xy_start, xy_end), ComputeConfig{});
+        add_dm_kernel("pause_brisc", 1, tt::tt_metal::DataMovementProcessor::RISCV_0);
+        add_dm_kernel("pause_ncrisc", 1, tt::tt_metal::DataMovementProcessor::RISCV_1);
 
-        SetCommonRuntimeArgs(program, brisc_kid, args);
-        SetCommonRuntimeArgs(program, ncrisc_kid, args);
-        SetCommonRuntimeArgs(program, trisc_kid, args);
+        constexpr const char* COMPUTE_KERNEL_NAME = "pause_compute";
+        kernel_specs.push_back(experimental::metal2_host_api::KernelSpec{
+            .unique_id = COMPUTE_KERNEL_NAME,
+            .source = path_metal2,
+            .num_threads = 1,
+            .runtime_arguments_schema = {.named_common_runtime_args = {"wait_cycles"}},
+            .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
+        });
+        kernel_names.emplace_back(COMPUTE_KERNEL_NAME);
+        kernel_run_params.push_back({
+            .kernel_spec_name = COMPUTE_KERNEL_NAME,
+            .named_common_runtime_args = {{"wait_cycles", delay_cycles}},
+        });
+    }
 
+    experimental::metal2_host_api::WorkUnitSpec wu{
+        .unique_id = "main",
+        .kernels = kernel_names,
+        .target_nodes = experimental::metal2_host_api::NodeRange{CoreRange(xy_start, xy_end)},
+    };
+    experimental::metal2_host_api::ProgramSpec spec{
+        .program_id = "watcher_pause",
+        .kernels = kernel_specs,
+        .work_units = {wu},
+    };
+    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+
+    experimental::metal2_host_api::ProgramRunParams params;
+    params.kernel_run_params = std::move(kernel_run_params);
+    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+
+    // ETH cores: invoke the original (legacy) kernel via the legacy host API.
+    if (!is_quasar) {
         auto create_eth_kernels = [&](bool is_active) {
             std::set<CoreRange> eth_core_ranges;
             auto eth_cores =
@@ -139,8 +167,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
             if (!is_active) {
                 eth_config.eth_mode = Eth::IDLE;
             }
-            KernelHandle erisc_kid = CreateKernel(program, path, eth_core_ranges, eth_config);
-
+            KernelHandle erisc_kid = CreateKernel(program, path_legacy, eth_core_ranges, eth_config);
             SetCommonRuntimeArgs(program, erisc_kid, args);
         };
 
@@ -150,8 +177,8 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
         if (has_ieth_cores) {
             create_eth_kernels(false);
         }
-        workload.add_program(device_range, std::move(program));
     }
+    workload.add_program(device_range, std::move(program));
 
     // Run the program
     fixture->RunProgram(mesh_device, workload);

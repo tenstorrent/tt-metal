@@ -93,19 +93,54 @@ void PagedFillCacheDeviceOperation::validate_on_program_cache_miss(
         effective_block_size,
         tt::constants::TILE_HEIGHT);
 
-    TT_FATAL(
-        input_shape[2] <= effective_block_size * page_table_shape[1],
-        "Input seq_len ({}) must fit in max_num_blocks_per_seq ({}) * block_size ({})",
-        input_shape[2],
-        page_table_shape[1],
-        effective_block_size);
+    if (args.cache_position_modulo.has_value()) {
+        const uint32_t modulo = args.cache_position_modulo.value();
+        TT_FATAL(modulo > 0, "cache_position_modulo must be > 0 when provided");
+        TT_FATAL(
+            modulo % effective_block_size == 0,
+            "cache_position_modulo ({}) must be a positive multiple of effective block_size ({}); "
+            "otherwise a wrapped position would split across blocks and the kernel can't address it.",
+            modulo,
+            effective_block_size);
+        TT_FATAL(
+            modulo <= effective_block_size * page_table_shape[1],
+            "cache_position_modulo ({}) must fit in max_num_blocks_per_seq ({}) * block_size ({})",
+            modulo,
+            page_table_shape[1],
+            effective_block_size);
+    } else {
+        // Legacy path: input must fit in the page_table address space directly.
+        TT_FATAL(
+            input_shape[2] <= effective_block_size * page_table_shape[1],
+            "Input seq_len ({}) must fit in max_num_blocks_per_seq ({}) * block_size ({})",
+            input_shape[2],
+            page_table_shape[1],
+            effective_block_size);
+    }
 
     if (tensor_args.batch_idx_tensor_opt.has_value()) {
         const auto& tensor = tensor_args.batch_idx_tensor_opt.value();
-        TT_FATAL(tensor.physical_volume() == 1, "Batch idx tensor must have a single element");
+        const auto input_batch = input_shape[0];
+        TT_FATAL(
+            tensor.physical_volume() == input_batch,
+            "Batch idx tensor must have input_tensor batch dim ({}) elements, got {}",
+            input_batch,
+            tensor.physical_volume());
         TT_FATAL(
             tensor.dtype() == DataType::UINT32 || tensor.dtype() == DataType::INT32,
             "Batch idx tensor must be an integer type");
+        // The writer kernel reads the tensor as a single contiguous noc page
+        // via TensorAccessor::get_noc_addr(0). That only resolves correctly for
+        // a ROW_MAJOR, INTERLEAVED, DRAM-resident buffer; sharded or L1-resident
+        // tensors would have batch_idx values scattered across NoC locations
+        // the single read won't cover.
+        TT_FATAL(tensor.layout() == Layout::ROW_MAJOR, "Batch idx tensor must be in ROW_MAJOR layout");
+        TT_FATAL(
+            tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "Batch idx tensor must have INTERLEAVED memory layout");
+        TT_FATAL(
+            tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
+            "Batch idx tensor must be DRAM-resident");
     }
 }
 
@@ -127,9 +162,9 @@ ttsl::hash::hash_t PagedFillCacheDeviceOperation::compute_program_hash(
 
     // Exclude batch_idx_fallback and noop (runtime-only).
     // Include mesh_coords (affects program factory selection).
-    // Include block_size_override (enters compile-time args).
+    // Include block_size_override and cache_position_modulo (enter compile-time args).
     return operation::hash_operation<PagedFillCacheDeviceOperation>(
-        args.mesh_coords, args.block_size_override, tensor_args, program_factory.index());
+        args.mesh_coords, args.block_size_override, args.cache_position_modulo, tensor_args, program_factory.index());
 }
 
 }  // namespace ttnn::experimental::prim
@@ -143,7 +178,8 @@ Tensor paged_fill_cache(
     const std::optional<Tensor>& batch_idx_tensor,
     uint32_t batch_idx_fallback,
     const std::optional<std::set<ttnn::MeshCoordinate>>& mesh_coords,
-    std::optional<uint32_t> block_size_override) {
+    std::optional<uint32_t> block_size_override,
+    std::optional<uint32_t> cache_position_modulo) {
     using OperationType = ttnn::experimental::prim::PagedFillCacheDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
@@ -151,6 +187,7 @@ Tensor paged_fill_cache(
         .mesh_coords = mesh_coords,
         .noop = false,
         .block_size_override = block_size_override,
+        .cache_position_modulo = cache_position_modulo,
     };
     auto tensor_args = OperationType::tensor_args_t{
         .cache_tensor = cache_tensor,

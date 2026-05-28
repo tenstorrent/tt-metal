@@ -7,7 +7,11 @@
 #include <optional>
 #include <variant>
 
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/program_descriptors.hpp>
+#include "ttnn/tensor/memory_config/memory_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
 #include "repeat_and_interleave_eltwise_mul_program_factory.hpp"
 
 #include "repeat_and_interleave_eltwise_mul_device_operation_types.hpp"
@@ -26,8 +30,6 @@ struct RepeatAndInterleaveEltwiseMulDeviceOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t& args, const tensor_args_t&);
-
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttnn::experimental::prim
@@ -37,8 +39,8 @@ namespace ttnn::prim {
 Tensor repeat_and_interleave_eltwise_mul(
     const Tensor& a,
     const Tensor& b,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<DataType> dtype,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
+    std::optional<tt::tt_metal::DataType> dtype,
     std::optional<tt::tt_metal::MathFidelity> math_fidelity,
     const std::optional<Tensor>& preallocated_output = std::nullopt);
 
