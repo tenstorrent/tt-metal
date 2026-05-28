@@ -253,6 +253,29 @@ def _normalize_wav_for_save(wav: "torch.Tensor") -> "torch.Tensor":
     return (wav / denom).clamp(-1.0, 1.0)
 
 
+def _configure_vae_quality(*, frames: int, mesh_sku: str | None, duration_sec: float) -> None:
+    """Use BF16 VAE compute/weights for long mesh clips (BFP8 tiled decode sounds noisy)."""
+    from models.demos.ace_step_v1_5.ttnn_impl.math_perf_env import ace_step_vae_quality_decode_enabled
+
+    os.environ["ACE_STEP_VAE_LATENT_FRAMES"] = str(int(frames))
+    os.environ["ACE_STEP_VAE_DURATION_SEC"] = str(float(duration_sec))
+    if mesh_sku is not None:
+        os.environ["ACE_STEP_VAE_MESH_SKU"] = str(mesh_sku)
+    if not ace_step_vae_quality_decode_enabled(
+        latent_frames=int(frames),
+        mesh_sku=mesh_sku,
+        duration_sec=float(duration_sec),
+    ):
+        return
+    # Force (not setdefault): BFP8 conv weights are chosen at VAE module init time.
+    os.environ["ACE_STEP_VAE_BFLOAT8_ACTIVATIONS"] = "0"
+    os.environ["ACE_STEP_VAE_BF16_CONV_WEIGHTS"] = "1"
+    print(
+        "[ace_step_v1_5] VAE quality mode (long mesh clip): BF16 activation compute + BF16 k>1 conv weights",
+        flush=True,
+    )
+
+
 def _audio_to_numpy_frames_channels(wav: "torch.Tensor") -> np.ndarray:
     """Return ``[num_frames, num_channels]`` float32 numpy from ``[C,T]`` or ``[T,C]``."""
     if wav.ndim != 2:
@@ -543,6 +566,12 @@ def main() -> None:
             cfg_interval_end = 0.95
         print(
             "[ace_step_v1_5] --clarity: mesh APG, VAE overlap≥12, CFG interval end=0.95",
+            flush=True,
+        )
+    elif split_device and float(args.duration_sec) >= 30.0 and cfg_interval_end >= 1.0:
+        cfg_interval_end = 0.95
+        print(
+            "[ace_step_v1_5] long clip (≥30s): CFG interval end=0.95 (reduces end-of-chain noise)",
             flush=True,
         )
     host_only_preprocess = bool(split_device)
@@ -866,6 +895,7 @@ def main() -> None:
         null_emb = cached.null_emb
         frames = int(cached.frames)
         perf.set_params(frames=frames)
+        _configure_vae_quality(frames=frames, mesh_sku=mesh_sku, duration_sec=float(args.duration_sec))
         condition_tensors_on_device = False
         enc_hs_tt_one = None
         ctx_tt_one = None
@@ -976,6 +1006,7 @@ def main() -> None:
             with perf.timed("handler_preprocess", device=dev):
                 payload, frames = handler_prepare_condition_payload(dit_handler, filtered)
             perf.set_params(frames=int(frames))
+            _configure_vae_quality(frames=int(frames), mesh_sku=mesh_sku, duration_sec=float(args.duration_sec))
             if use_trace:
                 release_preprocess_device_traces(
                     device=dev,
@@ -1172,10 +1203,14 @@ def main() -> None:
 
                 act_dtype_vae = ace_step_vae_activation_storage_dtype(ttnn)
                 w_dtype_vae = ace_step_vae_host_weight_staging_dtype(ttnn)
-                if ace_step_vae_bfloat8_activations_enabled():
+                if ace_step_vae_bfloat8_activations_enabled(
+                    latent_frames=int(frames),
+                    mesh_sku=mesh_sku,
+                    duration_sec=float(args.duration_sec),
+                ):
                     print(
                         "[ace_step_v1_5] VAE: bfloat8 activation compute enabled "
-                        "(default on; set ACE_STEP_VAE_BFLOAT8_ACTIVATIONS=0 to disable; inter-op buffers stay BF16 ROW_MAJOR)",
+                        "(set ACE_STEP_VAE_BFLOAT8_ACTIVATIONS=0 to disable; inter-op buffers stay BF16 ROW_MAJOR)",
                         flush=True,
                     )
                 if tt_vae is None:
@@ -1708,10 +1743,14 @@ def main() -> None:
 
             act_dtype_vae = ace_step_vae_activation_storage_dtype(ttnn)
             w_dtype_vae = ace_step_vae_host_weight_staging_dtype(ttnn)
-            if ace_step_vae_bfloat8_activations_enabled():
+            if ace_step_vae_bfloat8_activations_enabled(
+                latent_frames=int(frames),
+                mesh_sku=mesh_sku,
+                duration_sec=float(args.duration_sec),
+            ):
                 print(
                     "[ace_step_v1_5] VAE: bfloat8 activation compute enabled "
-                    "(default on; set ACE_STEP_VAE_BFLOAT8_ACTIVATIONS=0 to disable; inter-op buffers stay BF16 ROW_MAJOR)",
+                    "(set ACE_STEP_VAE_BFLOAT8_ACTIVATIONS=0 to disable; inter-op buffers stay BF16 ROW_MAJOR)",
                     flush=True,
                 )
             if ace_step_device_num_chips(dev) > 1:
@@ -1825,7 +1864,8 @@ def main() -> None:
             f"[ace_step_v1_5] writing wav shape={tuple(wav_to_save.shape)} -> {out_path}",
             flush=True,
         )
-        _save_wav_fallback(wav_to_save, out_path, sample_rate=48000)
+        with perf.timed("audio_save"):
+            _save_wav_fallback(wav_to_save, out_path, sample_rate=48000)
         print(f"Wrote: {out_path}", flush=True)
     else:
         if pred_latents is None:
@@ -1845,7 +1885,8 @@ def main() -> None:
             f"[ace_step_v1_5] writing wav shape={tuple(wav_to_save.shape)} -> {out_path}",
             flush=True,
         )
-        _save_wav_fallback(wav_to_save, out_path, sample_rate=48000)
+        with perf.timed("audio_save"):
+            _save_wav_fallback(wav_to_save, out_path, sample_rate=48000)
         print(f"Wrote: {out_path}", flush=True)
 
     if perf.enabled:
@@ -1857,7 +1898,7 @@ def main() -> None:
             )
         )
     perf.emit_summary(label="demo_total")
-    emit_session_summary(demo_session.session_perf)
+    emit_session_summary(demo_session.session_perf, params=perf.params)
     from loguru import logger
 
     logger.success("Wrote: {}", run_out_path.resolve())

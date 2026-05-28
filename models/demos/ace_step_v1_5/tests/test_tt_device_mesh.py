@@ -137,6 +137,9 @@ def test_resolve_vae_tiling_mesh_long_clip():
     chunk, overlap = ace_step_resolve_vae_tiling(frames=375, mesh_sku="BH_QB", chunk_cli=32, overlap_cli=4)
     assert chunk == 32
     assert overlap >= 8
+    chunk2, overlap2 = ace_step_resolve_vae_tiling(frames=1500, mesh_sku="BH_QB", chunk_cli=32, overlap_cli=4)
+    assert chunk2 == 32
+    assert overlap2 >= 14
 
 
 def test_mesh_perf_log_default():
@@ -165,7 +168,20 @@ def test_cached_preprocess_reuse():
 
 def test_emit_session_summary_rollup(monkeypatch):
     monkeypatch.setenv("ACE_STEP_DEMO_PERF_LOG", "1")
-    from models.demos.ace_step_v1_5.ace_step_perf_log import SessionPassSnapshot, SessionPerfState, emit_session_summary
+    from models.demos.ace_step_v1_5.ace_step_perf_log import (
+        SessionPassSnapshot,
+        SessionPerfState,
+        ace_step_rtf_per_step,
+        emit_session_summary,
+    )
+
+    assert ace_step_rtf_per_step(wall_s=60.0, duration_sec=60.0, infer_steps=50) == pytest.approx(0.02)
+    assert ace_step_rtf_per_step(wall_s=10.0, duration_sec=10.0, infer_steps=8) == pytest.approx(0.125)
+
+    from models.demos.ace_step_v1_5.ttnn_impl.math_perf_env import ace_step_tile_physical_m_dim
+
+    assert ace_step_tile_physical_m_dim(batch=128, one=1, seq=5) == 4096
+    assert ace_step_tile_physical_m_dim(batch=1, one=1, seq=256) == 256
 
     state = SessionPerfState(session_t0=time.perf_counter())
     state.note_init("handler_init", 32000.0)
