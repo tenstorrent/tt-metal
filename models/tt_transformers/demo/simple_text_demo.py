@@ -40,6 +40,19 @@ models_not_supported_for_device_sampling = {"Mistral-7B"}
 # sampling path, while the current single-device path regresses throughput.
 accuracy_only_host_sampling_models = {"phi-1"}
 
+MESH_DEVICE_SHAPE_MAP = {
+    "N150": (1, 1),
+    "N300": (1, 2),
+    "N150x4": (1, 4),
+    "T3K": (1, 8),
+    "TG": (8, 4),
+    "P150": (1, 1),
+    "P300": (1, 2),
+    "P150x4": (1, 4),
+    "P150x8": (1, 8),
+    "BHGLX": (8, 4),
+}
+
 
 def is_greedy_sampling_request(sampling_params: dict) -> bool:
     temperature = sampling_params.get("temperature", 0)
@@ -79,20 +92,8 @@ def should_disable_device_sampling(
 
 
 def get_test_mesh_shape():
-    mesh_shape_map = {
-        "N150": (1, 1),
-        "N300": (1, 2),
-        "N150x4": (1, 4),
-        "T3K": (1, 8),
-        "TG": (8, 4),
-        "P150": (1, 1),
-        "P300": (1, 2),
-        "P150x4": (1, 4),
-        "P150x8": (1, 8),
-        "BHGLX": (8, 4),
-    }
     mesh_device = os.environ.get("MESH_DEVICE")
-    return mesh_shape_map[mesh_device] if mesh_device in mesh_shape_map else len(ttnn.get_device_ids())
+    return MESH_DEVICE_SHAPE_MAP[mesh_device] if mesh_device in MESH_DEVICE_SHAPE_MAP else len(ttnn.get_device_ids())
 
 
 class TokenAccuracy:
@@ -320,6 +321,13 @@ def get_default_mesh_device_param():
         except Exception as e:
             logger.warning(f"Falling back to local device count for default mesh sizing: {e}")
     return len(ttnn.get_device_ids())
+
+
+def get_parametrized_mesh_device():
+    mesh_device = os.environ.get("MESH_DEVICE")
+    if mesh_device in MESH_DEVICE_SHAPE_MAP:
+        return MESH_DEVICE_SHAPE_MAP[mesh_device]
+    return get_default_mesh_device_param()
 
 
 def prepare_generator_args(
@@ -910,20 +918,7 @@ _trace_region_size = (
 )
 @pytest.mark.parametrize(
     "mesh_device",
-    [
-        {
-            "N150": (1, 1),
-            "N300": (1, 2),
-            "N150x4": (1, 4),
-            "T3K": (1, 8),
-            "TG": (8, 4),
-            "P150": (1, 1),
-            "P300": (1, 2),
-            "P150x4": (1, 4),
-            "P150x8": (1, 8),
-            "BHGLX": (8, 4),
-        }.get(os.environ.get("MESH_DEVICE"), get_default_mesh_device_param())
-    ],
+    [get_parametrized_mesh_device()],
     indirect=True,
 )
 def test_demo_text(

@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 from models.tt_transformers.demo.simple_text_demo import (
+    get_parametrized_mesh_device,
     is_greedy_sampling_request,
     normalize_greedy_sampling_params,
     should_disable_device_sampling,
@@ -49,6 +50,12 @@ def test_greedy_sampling_normalization_matches_host_argmax_semantics():
 
     assert is_greedy_sampling_request(sampling_params)
     assert normalize_greedy_sampling_params(sampling_params) == {"temperature": 0, "top_p": 1.0, "top_k": 1}
+
+
+def test_parametrized_mesh_device_uses_env_mapping_without_hardware_probe(monkeypatch):
+    monkeypatch.setenv("MESH_DEVICE", "N150")
+
+    assert get_parametrized_mesh_device() == (1, 1)
 
 
 def test_phi1_single_device_lm_head_budget_allows_one_split():
