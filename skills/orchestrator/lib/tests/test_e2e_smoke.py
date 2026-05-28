@@ -301,3 +301,62 @@ def test_smoke_deadlock_detection():
     blocking = {entry["name"]: entry["blocks_downstream"] for entry in result["blocking"]}
     assert "RMSNorm" in blocking
     assert "Attention" in blocking["RMSNorm"]
+
+
+def test_smoke_post_bringup_walk():
+    """Walk the dispatch decision tree through the new phases.
+
+    Uses the hand-crafted post_bringup_fixture.json: 2 components at
+    optimization=done, 2 use_cases pending. Expected progression:
+
+        real_weights → real_weights → generation → generation → perf → perf → done
+    """
+    from pathlib import Path
+    from skills.orchestrator.lib.state import load_state
+
+    fixture = Path("skills/orchestrator/lib/tests/fixtures/post_bringup_fixture.json")
+    state = load_state(fixture)
+
+    # Step 1: components need real_weights (no real_weights field yet)
+    result = eligible_blocks(state)
+    assert result["worker"] == "real_weights"
+    first_block = result["block"]
+    state["components"][[c["name"] for c in state["components"]].index(first_block)]["real_weights"] = {
+        "status": "done"
+    }
+
+    # Step 2: the other component
+    result = eligible_blocks(state)
+    assert result["worker"] == "real_weights"
+    second_block = result["block"]
+    assert second_block != first_block
+    state["components"][[c["name"] for c in state["components"]].index(second_block)]["real_weights"] = {
+        "status": "done"
+    }
+
+    # Step 3: generation for first use_case
+    result = eligible_blocks(state)
+    assert result["worker"] == "generation"
+    first_uc = result["use_case"]
+    state["use_cases"][[uc["name"] for uc in state["use_cases"]].index(first_uc)]["generation"] = {"status": "done"}
+
+    # Step 4: generation OR perf next — orchestrator picks per dispatch order.
+    # Per dag.py: generation candidates checked first, so the OTHER use_case wins.
+    result = eligible_blocks(state)
+    assert result["worker"] == "generation"
+    second_uc = result["use_case"]
+    assert second_uc != first_uc
+    state["use_cases"][[uc["name"] for uc in state["use_cases"]].index(second_uc)]["generation"] = {"status": "done"}
+
+    # Step 5: perf for first use_case
+    result = eligible_blocks(state)
+    assert result["worker"] == "perf"
+    state["use_cases"][[uc["name"] for uc in state["use_cases"]].index(result["use_case"])]["perf"] = {"status": "done"}
+
+    # Step 6: perf for second use_case
+    result = eligible_blocks(state)
+    assert result["worker"] == "perf"
+    state["use_cases"][[uc["name"] for uc in state["use_cases"]].index(result["use_case"])]["perf"] = {"status": "done"}
+
+    # Step 7: done
+    assert eligible_blocks(state) == {"phase": "done"}

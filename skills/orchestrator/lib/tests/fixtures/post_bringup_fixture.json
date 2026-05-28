@@ -1,0 +1,128 @@
+{
+  "schema_version": 1,
+  "model_id": "acme/fake-multi-uc",
+  "model_slug": "acme_fake_multi_uc",
+  "device": "n150",
+  "arch_name": "wormhole_b0",
+  "started_at": "2026-05-28T09:51:59Z",
+  "updated_at": "2026-05-28T09:51:59Z",
+  "components": [
+    {
+      "name": "Linear",
+      "kind": "linear",
+      "depends_on": [],
+      "reference_impl": "models/demos/bert/tt/ttnn_optimized_bert.py",
+      "host_resident": {
+        "allowed": false,
+        "justification": null,
+        "reference_link": null
+      },
+      "reference": {
+        "status": "done",
+        "pcc": 1.0,
+        "attempts": 1
+      },
+      "ttnn": {
+        "status": "done",
+        "pcc": 0.999,
+        "attempts": 1
+      },
+      "debug": {
+        "status": "n/a"
+      },
+      "optimization": {
+        "status": "done"
+      }
+    },
+    {
+      "name": "Attention",
+      "kind": "attention",
+      "depends_on": [
+        "Linear"
+      ],
+      "reference_impl": "models/demos/llama3_70b_galaxy/tt/llama_attention.py",
+      "host_resident": {
+        "allowed": false,
+        "justification": null,
+        "reference_link": null
+      },
+      "reference": {
+        "status": "done",
+        "pcc": 0.9999,
+        "attempts": 1
+      },
+      "ttnn": {
+        "status": "done",
+        "pcc": 0.998,
+        "attempts": 1
+      },
+      "debug": {
+        "status": "n/a"
+      },
+      "optimization": {
+        "status": "done"
+      }
+    }
+  ],
+  "use_cases": [
+    {
+      "name": "uc_ar",
+      "description": "AR generation use case",
+      "input_modality": "text",
+      "output_modality": "text",
+      "components_used": [
+        "Linear",
+        "Attention"
+      ],
+      "needs_ar": true,
+      "needs_audio_out": false,
+      "hf_class": "FakeForAR",
+      "validation_metric": "bleu",
+      "validation_threshold": "HF - 1.0",
+      "hybrid_notes": null,
+      "generation": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "perf": {
+        "status": "pending",
+        "attempts": 0
+      }
+    },
+    {
+      "name": "uc_one_shot",
+      "description": "One-shot inference (encoder-only)",
+      "input_modality": "text",
+      "output_modality": "text",
+      "components_used": [
+        "Linear"
+      ],
+      "needs_ar": false,
+      "needs_audio_out": false,
+      "hf_class": "FakeForOneShot",
+      "validation_metric": "pcc",
+      "validation_threshold": "\u2265 0.99",
+      "hybrid_notes": null,
+      "generation": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "perf": {
+        "status": "pending",
+        "attempts": 0
+      }
+    }
+  ],
+  "locks": {
+    "device": {
+      "held_by": null,
+      "held_since": null
+    }
+  },
+  "tick_log": [],
+  "config": {
+    "max_parallel_reference": 4,
+    "max_attempts_per_phase": 10,
+    "tick_interval_sec": 60
+  }
+}
