@@ -79,8 +79,18 @@ class TtPixtralAttention:
 
         self.o_proj = _load_weight(state_dict, p + "o_proj.weight", True, dtype, mesh_device)
 
-        self.qkv_preset = build_qkv_preset(mesh_device)
-        self.o_proj_preset = build_o_proj_preset(mesh_device)
+        # Presets depend on the actual sequence length (num_patches), which
+        # isn't known until the first forward. Build them lazily and cache.
+        self.qkv_preset = None
+        self.o_proj_preset = None
+        self._preset_m: int | None = None
+
+    def _ensure_presets(self, m: int) -> None:
+        if self._preset_m == m:
+            return
+        self.qkv_preset = build_qkv_preset(self.mesh_device, m)
+        self.o_proj_preset = build_o_proj_preset(self.mesh_device, m)
+        self._preset_m = m
 
     def forward(
         self,
@@ -96,6 +106,7 @@ class TtPixtralAttention:
             [1, 1, seq_len, hidden=1024]
         """
         seq_len = x.shape[-2]
+        self._ensure_presets(seq_len)
 
         # ── Fused QKV projection → [1, 1, seq, 3*hidden] ────────────────
         # Sweep-tuned 1D l1/dram/ws on 8×6 grid (49 TFLOPs vs 25 with the default).
