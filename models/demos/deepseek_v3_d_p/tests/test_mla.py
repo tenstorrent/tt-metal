@@ -374,7 +374,8 @@ def test_mla(
     "seq_len", [1280, 8192, 10 * 1024, 25 * 1024, 50 * 1024], ids=["seq1280", "seq8k", "seq10k", "seq25k", "seq50k"]
 )
 @pytest.mark.parametrize("num_chunks", [1, 2, 4, 5, 8, 10], ids=lambda n: f"N{n}")
-@pytest.mark.parametrize("q_chunk_size", [32, 64, 128, 160, 256, 320, 512], ids=lambda q: f"q{q}")
+@pytest.mark.parametrize("q_chunk_size", [64], ids=lambda q: f"q{q}")
+@pytest.mark.parametrize("k_chunk_size", [32, 64, 128, 120, 256, 512], ids=lambda k: f"k{k}")
 @pytest.mark.timeout(0)
 def test_mla_chunked_prefill(
     request,
@@ -382,6 +383,7 @@ def test_mla_chunked_prefill(
     seq_len,
     num_chunks,
     q_chunk_size,
+    k_chunk_size,
     device_params,
 ):
     """
@@ -508,6 +510,7 @@ def test_mla_chunked_prefill(
             kvpe_cache=tt_kvpe_cache,
             chunk_start_global=chunk_start,
             chunked_q_chunk_size=q_chunk_size,
+            chunked_k_chunk_size=k_chunk_size,
         )
 
         out_host = ttnn.to_torch(
