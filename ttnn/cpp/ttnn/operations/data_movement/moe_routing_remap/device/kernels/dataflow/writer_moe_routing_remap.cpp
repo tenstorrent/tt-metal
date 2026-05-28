@@ -24,7 +24,7 @@ void kernel_main() {
     const auto local_weights_addrgen = TensorAccessor(local_weights_args, local_weights_base_address);
 
     cb_reserve_back(local_weights_cb_id, 1);
-    const uint32_t local_weights_l1_addr = get_read_ptr(local_weights_cb_id);
+    const uint32_t local_weights_l1_addr = get_write_ptr(local_weights_cb_id);
     cb_push_back(local_weights_cb_id, 1);
 
     fill_with_val<weight_addr_t>(local_weights_l1_addr, num_cluster_experts, 0u);
