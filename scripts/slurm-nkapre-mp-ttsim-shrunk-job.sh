@@ -40,5 +40,8 @@ ninja -j32 tt_metal ttnn test_mesh_socket_main multi_host_fabric_tests test_tt_f
     distributed_multiprocess_tests unit_tests_dual_rank_2x2 unit_tests_dual_rank_2x4 unit_tests_ttnn \
     2>&1 | tail -15
 
+# tt-run imports ttnn/ttnn/_ttnn.so from the source tree; sync after every build.
+cp -f "${BUILD_DIR}/ttnn/_ttnn.so" "${REPO}/ttnn/ttnn/_ttnn.so"
+
 cd "${REPO}"
 "${REPO}/scripts/run-nkapre-mp-ttsim-sweep-shrunk.sh" 2>&1 | tee "${RESULTS_DIR}/run.log"
