@@ -1570,8 +1570,10 @@ void Cluster::register_sim_fabric_endpoint_direction(
     if (this->target_type_ != tt::TargetDevice::Simulator) {
         return;
     }
+#if defined(TT_UMD_BUILD_SIMULATION)
     this->get_driver()->register_sim_fabric_endpoint_direction(
         chip_id, static_cast<uint32_t>(eth_chan_id), static_cast<uint32_t>(direction));
+#endif
 }
 
 }  // namespace tt
