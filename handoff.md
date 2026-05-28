@@ -1,6 +1,51 @@
 # MP Fabric / ttsimd Daemon — Agent Handoff
 
-Last updated: 2026-05-27
+Last updated: 2026-05-28 (session 2 — sem-zero clamp fix)
+
+## Latest session breakthroughs (2026-05-28)
+
+### MAJOR WIN: mesh_socket TIMEOUT → FAIL in 22s (sem-zero clamp)
+
+Three sequential fixes landed today and reduced mesh_socket from TIMEOUT(1800s) to FAIL(22s) with full fabric init succeeded:
+
+| # | Failure | Fix | Commit |
+|---|---------|-----|--------|
+| 1 | `ImportError: write_to_device_buffer(..., CoreRangeSet*)` | Restored 7-arg overload | tt-metal `da3a463eff5` |
+| 2 | Fabric router sync timeout (cross-rank chip mismatch) | Honor `TTSIMD_PHYSICAL_CHIP_IDS` in `ttsimd::translate_chip_id_locked` | craq-sim `6c819313` |
+| 3 | `tile_mmio_rd8: addr=0xffb123a3` daemon abort | Permissive WH RISCV_DEBUG byte MMIO | craq-sim `acaaca6a` |
+| **4** | **mesh_socket TIMEOUT at "Creating sockets" (dispatch_go_signal=0 forever)** | **Clamp `t_tile_dispatch_kernel` sem-zero so it cannot overwrite BRISC kernel text** | **craq-sim `6f54fa6f`** |
+
+Fix #4 root-cause walkthrough (runtime evidence in `.cursor/debug-ae7d0a.log`):
+
+- Instrumented `tt_metal/llrt/llrt.cpp:write_binary_to_address` (H_BIN_WRITE) confirmed host writes 31076 B BRISC binary to chip(0,0) noc(18,25) tile_id=56 L1 0x81e0, first_word=0xfe010113.
+- Instrumented `craq-sim/src/tile.cpp:tile_wr_bytes` (H_TILE_WR) confirmed the write reaches the SAME `g_t_tiles[56].sram` at addr 0x81e0 size 31076.
+- Instrumented `craq-sim/src/libttsim.cpp:t_tile_dispatch_kernel` (H_DISPATCH_TENSIX) reads launch_msg fields after the write: `sem_offset=0x30, sem_base=0x8190, sem_bytes=256, kernel_entry=0x81e0`.
+- `[sem_base, sem_base+sem_bytes) = [0x8190, 0x8290)` OVERLAPS `kernel_entry=0x81e0` → the 256 B fixed sem zero wipes the first 128 B of the kernel binary. Dispatch FW boots into all-zero L1, never raises GO, host CQ stalls forever.
+- Fix clamps `sem_bytes = min(sem_bytes, kernel_text_base - sem_base)` so the zero never extends into the kernel-text window.
+
+### New failure point (next blocker)
+
+`2.mp/mesh_socket_shrunk` now reaches **"Fabric initialized on 4 devices"** on both ranks (8/8 chips), then aborts inside `libttsim_clock_all_devices` during `FabricFirmwareInitializer::wait_for_fabric_router_sync`:
+
+```
+ttsimd.log: [162528] ERROR: UndefinedBehavior: rv32_step: invalid pc=0x49960
+mpi: libttsim_rpc: failed to read response/callback prefix
+stack: TTSimCommunicator::advance_clock → libttsim_clock_all_devices → rv32_step
+```
+
+The dispatch BRISC FW is now actually executing (great — sem-zero clamp worked) and runs far enough to jump to L1 `0x49960`, where there's no valid instruction. Likely causes:
+1. FD dispatch kernel returns from a function and the stack/return-addr was scribbled (no kernel-config layout protection in sim).
+2. A jump table or vtable lookup mis-resolves to an unmapped L1 page.
+3. Out-of-bounds NOC-write from BRISC clobbers BRISC's own instruction stream.
+
+Suggested next steps:
+- Add a deeper rv32_step error message that prints surrounding L1 bytes + the last 8 PC values for diagnosis.
+- Compare BRISC's intended jump targets against `kernel_config_base + binary_size` to confirm no kernel-config writes are landing in the BRISC text region.
+- Check whether a second launch (rd_ptr=1) in the launch ring is firing with a yet-uninitialized kernel_config slot.
+
+### Latest results
+
+- Job 12830: `mesh_socket_shrunk` → `FAIL rc=134 dur=22s` (vs prior `TIMEOUT 1800s`). Results dir: `mp-run-shrunk-20260528T022207Z/`.
 
 ## Goal
 
