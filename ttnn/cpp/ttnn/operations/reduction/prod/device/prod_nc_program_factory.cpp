@@ -19,7 +19,7 @@ using namespace tt::tt_metal;
 tt::tt_metal::ProgramDescriptor ProdNcDeviceOperation::ProdNcProgramFactory::create_descriptor(
     const ProdNcParams& operation_attributes, const ProdNcInputs& tensor_args, Tensor& /*tensor_return_value*/) {
     const auto& input = tensor_args.input;
-    const auto& output = tensor_args.output;
+    const auto& output = tensor_args.output.mesh_tensor();
     const int64_t dim = operation_attributes.dim;
 
     TT_FATAL(dim == 0 || dim == 1, "Dimension ({}) must be either 0 or 1", dim);
@@ -82,7 +82,7 @@ tt::tt_metal::ProgramDescriptor ProdNcDeviceOperation::ProdNcProgramFactory::cre
          num_cols_per_core_group_1,
          num_cols_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid, num_output_tiles);
 
-    validate_reduce_op_program_grid("Prod_nc", all_cores, grid, nullptr, true, {{&output, "output"}});
+    validate_reduce_op_program_grid("Prod_nc", all_cores, grid, nullptr, true, {{&tensor_args.output, "output"}});
 
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
@@ -129,11 +129,11 @@ tt::tt_metal::ProgramDescriptor ProdNcDeviceOperation::ProdNcProgramFactory::cre
     ////////////////////////////////////////////////////////////////////////////
 
     std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(dim)};
-    tt::tt_metal::TensorAccessorArgs(*input.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input.mesh_tensor()).append_to(reader_compile_time_args);
 
     constexpr uint32_t cb_id_out = tt::CBIndex::c_3;
     std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(cb_id_out)};
-    tt::tt_metal::TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output).append_to(writer_compile_time_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source = "ttnn/cpp/ttnn/operations/reduction/prod/device/kernels/dataflow/reader_prod_nc.cpp";
@@ -195,7 +195,7 @@ tt::tt_metal::ProgramDescriptor ProdNcDeviceOperation::ProdNcProgramFactory::cre
 
         reader_desc.emplace_runtime_args(
             core,
-            {input.buffer(),
+            {input.mesh_tensor(),
              num_reduce_input_tile,
              num_tiles_per_core,
              input_tile_offset,
@@ -206,10 +206,10 @@ tt::tt_metal::ProgramDescriptor ProdNcDeviceOperation::ProdNcProgramFactory::cre
 
         writer_desc.emplace_runtime_args(
             core,
-            {output.buffer(),
+            {output,
              num_tiles_per_core,
              tile_offset,
-             static_cast<uint32_t>(ttnn::operations::is_dram(output))});
+             static_cast<uint32_t>(ttnn::operations::is_dram(tensor_args.output))});
 
         if (core_group_1.contains(core)) {
             compute_desc_1.emplace_runtime_args(core, {num_reduce_input_tile, num_tiles_per_core});
