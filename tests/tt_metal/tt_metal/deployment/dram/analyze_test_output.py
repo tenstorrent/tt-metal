@@ -91,13 +91,11 @@ def process_test(test: dict) -> Test:
     chips: dict[str, Chip] = {
         str(i): Chip(str(i), "", {str(i): Bank(0, 1, True, {}) for i in range(8)}) for i in range(32)
     }
-    pprint.pp(test)
     for c, ch in test["chips"].items():
         bdf = ch["bdf"]
         banks: dict[str, Bank] = {}
         for b, bank in ch["banks"].items():
             pat: dict = extract_errors(test["errors"], c, b)
-            print(b, bank)
             errors = bank["read_errors"] + bank["write_errors"]
             banks[b] = Bank(errors, bank["checked_bytes"], errors == 0, pat)
 
