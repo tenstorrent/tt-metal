@@ -5,6 +5,7 @@
 import ttnn
 import warnings
 from models.experimental.vadv2.tt.tt_utils import multi_scale_deformable_attn
+from models.experimental.vadv2.tt.matmul_helpers import linear_flatten_batch
 
 
 class TtTemporalSelfAttention:
@@ -92,7 +93,7 @@ class TtTemporalSelfAttention:
         query = ttnn.concat([value[:bs], query], dim=-1)
 
         value = ttnn.to_layout(value, ttnn.TILE_LAYOUT)
-        value = ttnn.linear(value, params.value_proj.weight, bias=params.value_proj.bias)
+        value = linear_flatten_batch(value, params.value_proj.weight, bias=params.value_proj.bias)
         if key_padding_mask is not None:
             mask = key_padding_mask[..., None]
             value = ttnn.where(mask, ttnn.zeros_like(value), value)
@@ -101,13 +102,17 @@ class TtTemporalSelfAttention:
 
         query = ttnn.to_layout(query, ttnn.TILE_LAYOUT)
 
-        sampling_offsets = ttnn.linear(query, params.sampling_offsets.weight, bias=params.sampling_offsets.bias)
+        sampling_offsets = linear_flatten_batch(
+            query, params.sampling_offsets.weight, bias=params.sampling_offsets.bias
+        )
         sampling_offsets = ttnn.reshape(
             sampling_offsets, (bs, num_query, self.num_heads, self.num_bev_queue, self.num_levels, self.num_points, 2)
         )
         sampling_offsets = ttnn.reallocate(sampling_offsets)
 
-        attention_weights = ttnn.linear(query, params.attention_weights.weight, bias=params.attention_weights.bias)
+        attention_weights = linear_flatten_batch(
+            query, params.attention_weights.weight, bias=params.attention_weights.bias
+        )
         ttnn.deallocate(query)
         attention_weights = ttnn.reshape(
             attention_weights, (bs, num_query, self.num_heads, self.num_bev_queue, self.num_levels * self.num_points)
@@ -176,7 +181,7 @@ class TtTemporalSelfAttention:
         output = ttnn.to_layout(output, ttnn.TILE_LAYOUT)
         output = ttnn.mean(output, dim=-1, keepdim=True)
         output = ttnn.permute(output, (2, 0, 1))
-        output = ttnn.linear(output, params.output_proj.weight, bias=params.output_proj.bias)
+        output = linear_flatten_batch(output, params.output_proj.weight, bias=params.output_proj.bias)
 
         if not self.batch_first:
             output = ttnn.permute(output, (1, 0, 2))

@@ -5,6 +5,7 @@
 import warnings
 import ttnn
 from models.experimental.vadv2.tt.tt_utils import multi_scale_deformable_attn
+from models.experimental.vadv2.tt.matmul_helpers import linear_flatten_batch
 
 
 class TtSpatialCrossAttention:
@@ -245,7 +246,7 @@ class TtSpatialCrossAttention:
         count = ttnn.unsqueeze(count, -1)
         slots = ttnn.to_layout(slots, layout=ttnn.TILE_LAYOUT)
         slots = ttnn.div(slots, count)
-        slots = ttnn.linear(slots, self.params.output_proj.weight, bias=self.params.output_proj.bias)
+        slots = linear_flatten_batch(slots, self.params.output_proj.weight, bias=self.params.output_proj.bias)
         ttnn.deallocate(count)
         ttnn.deallocate(key)
         ttnn.deallocate(value)
@@ -339,18 +340,22 @@ class TtMSDeformableAttention3D:
         assert (ttnn.sum(spatial_shapes[:, 0] * spatial_shapes[:, 1])) == num_value
         value = ttnn.to_layout(value, ttnn.TILE_LAYOUT)
 
-        value = ttnn.linear(value, params.value_proj.weight, bias=params.value_proj.bias)
+        value = linear_flatten_batch(value, params.value_proj.weight, bias=params.value_proj.bias)
         if key_padding_mask is not None:
             mask = key_padding_mask[..., None]
             value = ttnn.where(mask, ttnn.zeros_like(value), value)
         value = ttnn.reshape(value, (bs, num_value, self.num_heads, -1))
         query = ttnn.to_layout(query, ttnn.TILE_LAYOUT)
 
-        sampling_offsets = ttnn.linear(query, params.sampling_offsets.weight, bias=params.sampling_offsets.bias)
+        sampling_offsets = linear_flatten_batch(
+            query, params.sampling_offsets.weight, bias=params.sampling_offsets.bias
+        )
         sampling_offsets = ttnn.reshape(
             sampling_offsets, (bs, num_query, self.num_heads, self.num_levels, self.num_points, 2)
         )
-        attention_weights = ttnn.linear(query, params.attention_weights.weight, bias=params.attention_weights.bias)
+        attention_weights = linear_flatten_batch(
+            query, params.attention_weights.weight, bias=params.attention_weights.bias
+        )
         attention_weights = ttnn.reshape(
             attention_weights, (bs, num_query, self.num_heads, self.num_levels * self.num_points)
         )
