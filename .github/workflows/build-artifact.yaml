@@ -476,8 +476,8 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: .cpmcache.tar.zst
-          key: cpm-z22-${{ hashFiles('third_party/CMakeLists.txt', 'tt_metal/third_party/umd/third_party/CMakeLists.txt', 'tt-train/cmake/dependencies.cmake') }}
-          restore-keys: cpm-z22-
+          key: cpm-zmax-${{ hashFiles('third_party/CMakeLists.txt', 'tt_metal/third_party/umd/third_party/CMakeLists.txt', 'tt-train/cmake/dependencies.cmake') }}
+          restore-keys: cpm-zmax-
 
       - name: 📦 Unpack CPM cache
         run: |
@@ -527,7 +527,7 @@ jobs:
       - name: 📦 Pack CPM cache
         if: steps.cpm-cache.outputs.cache-hit != 'true'
         run: |
-          [ -d .cpmcache ] && tar -I 'zstd -T0 --ultra -22' -cf .cpmcache.tar.zst .cpmcache || true
+          [ -d .cpmcache ] && tar -I 'zstd -T0 --max -v' -cf .cpmcache.tar.zst .cpmcache || true
 
       - name: 📦 Save CPM source cache
         if: steps.cpm-cache.outputs.cache-hit != 'true'
