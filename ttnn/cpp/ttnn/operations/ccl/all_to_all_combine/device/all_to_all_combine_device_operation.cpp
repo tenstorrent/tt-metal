@@ -16,6 +16,16 @@ namespace ttnn::operations::ccl {
 
 void AllToAllCombineDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    log_info(
+        tt::LogOp,
+        "[a2a_combine DBG] CACHE MISS — building fresh workload (input.buffer={:p} addr=0x{:x} | mapping.buffer={:p} "
+        "addr=0x{:x} | metadata.buffer={:p} addr=0x{:x})",
+        (void*)tensor_args.input_tensor.buffer(),
+        tensor_args.input_tensor.buffer()->address(),
+        (void*)tensor_args.mapping_tensor.buffer(),
+        tensor_args.mapping_tensor.buffer()->address(),
+        (void*)tensor_args.metadata_tensor.buffer(),
+        tensor_args.metadata_tensor.buffer()->address());
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& metadata_tensor = tensor_args.metadata_tensor;
     const auto& mapping_tensor = tensor_args.mapping_tensor;
@@ -111,7 +121,18 @@ void AllToAllCombineDeviceOperation::validate_on_program_cache_miss(
 }
 
 void AllToAllCombineDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {}
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
+    log_info(
+        tt::LogOp,
+        "[a2a_combine DBG] CACHE HIT — reusing cached workload (input.buffer={:p} addr=0x{:x} | mapping.buffer={:p} "
+        "addr=0x{:x} | metadata.buffer={:p} addr=0x{:x})",
+        (void*)tensor_args.input_tensor.buffer(),
+        tensor_args.input_tensor.buffer()->address(),
+        (void*)tensor_args.mapping_tensor.buffer(),
+        tensor_args.mapping_tensor.buffer()->address(),
+        (void*)tensor_args.metadata_tensor.buffer(),
+        tensor_args.metadata_tensor.buffer()->address());
+}
 
 AllToAllCombineDeviceOperation::spec_return_value_t AllToAllCombineDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
