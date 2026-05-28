@@ -453,6 +453,19 @@ def capture_real_inputs(
 
         _try("model(pixel_values=...)", lambda: model(pixel_values=pixel_values))
 
+        try:
+            from .capture_drivers import try_capture_drivers as _try_capture_drivers
+        except Exception:
+            _try_capture_drivers = None
+
+        if _try_capture_drivers is not None:
+            _ok_generic, _generic_attempts = _try_capture_drivers(model, pixel_values)
+            for _line in _generic_attempts:
+                if verbose:
+                    print(f"  [capture] generic-driver: {_line}", file=sys.stderr)
+            if _ok_generic:
+                forward_errors.append("generic-driver: ok")
+
         import inspect as _inspect
 
         def _build_kwargs_for(submodule: Any) -> Dict[str, Any]:
