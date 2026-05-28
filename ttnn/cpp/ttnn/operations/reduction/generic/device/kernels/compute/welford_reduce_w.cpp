@@ -198,7 +198,7 @@ void kernel_main() {
             // MOV ops and reprograms the SFPU replay buffer. Re-establish welford state:
             //   1. welford_reinit re-establishes UNPACK+MATH datacopy config (parallel of the
             //      do_scale path which calls this after mul_tiles_bcast_scalar)
-            //   2. llk_math_welfords_sfpu_init re-programs the replay buffer with the welford
+            //   2. welford_init<false>() re-programs the replay buffer with the welford
             //      recurrence, without clearing LREG4/5 (which would lose the running
             //      mean/M2 accumulator).
             //
@@ -208,7 +208,7 @@ void kernel_main() {
             // transpose_wh_init_short, so the per-iteration init/reinit triple is gated out.
             if constexpr (welford_fp32_input) {
                 welford_reinit(cb_in);
-                MATH((llk_math_welfords_sfpu_init()));
+                welford_init<false>();
             }
 
             if (wt < (Wt - 1)) {

@@ -20,12 +20,17 @@ namespace ckernel {
 /**
  * @brief Initializes the Welford's algorithm.
  * Programs the address mod and replay buffers for the Welford's algorithm.
- * Clears the previous mean and m2 values stored in the registers.
+ * Clears the previous mean and m2 values stored in the registers when `clear_stats` is true.
  * This call is blocking and is only available on the compute engine.
+ * @tparam clear_stats When true, clears the previous mean and m2 values stored in the registers.
+ *                     When false, the previous mean and m2 values are preserved.
  */
+template <bool clear_stats = true>
 ALWI void welford_init() {
     MATH((llk_math_welfords_sfpu_init()));
-    MATH((llk_math_welfords_sfpu_clear_previous_mean_and_m2()));
+    if constexpr (clear_stats) {
+        MATH((llk_math_welfords_sfpu_clear_previous_mean_and_m2()));
+    }
 }
 
 /**

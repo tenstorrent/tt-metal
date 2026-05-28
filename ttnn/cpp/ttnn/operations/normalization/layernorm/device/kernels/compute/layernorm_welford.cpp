@@ -215,10 +215,11 @@ void kernel_main() {
                 // are needed to restore welford state before welford_update:
                 //   1. welford_reinit reprograms UNPACK A for an UnpackToDest (transpose=0) read
                 //      and rebuilds MATH-side address mods / MOP for the welford datacopy path.
-                //   2. llk_math_welfords_sfpu_init re-records all 32 slots of the SFPU replay
-                //      buffer with the welford recurrence (via _program_welfords_replay_buffer_).
+                //   2. welford_init<false>() re-records all 32 slots of the SFPU replay buffer
+                //      with the welford recurrence, without clearing the running mean / M2
+                //      accumulator in LREG4/5.
                 welford_reinit(cb_x_welford);
-                MATH((llk_math_welfords_sfpu_init()));
+                welford_init<false>();
             }
             welford_update<W>(input_dst, start_N, *p_reciprocals);
             start_N += tile_width;
@@ -237,7 +238,7 @@ void kernel_main() {
         transpose_wh_tile(cb_x_welford, Wt - 1, input_dst);
         if constexpr (welford_fp32_alias) {
             welford_reinit(cb_x_welford);
-            MATH((llk_math_welfords_sfpu_init()));
+            welford_init<false>();
         }
         welford_update_rows<W>(input_dst, start_N, 0, last_tile_rows, *p_reciprocals);
 
