@@ -119,6 +119,64 @@ class RMSNorm(LightweightModule):
             packer_l1_acc=True,
         )
 
+    @staticmethod
+    def _inplace_copy(src: ttnn.Tensor, dst: ttnn.Tensor, target_dtype) -> None:
+        """Convert ``src`` to ``dst``'s layout/dtype/shape/memcfg, then
+        ``ttnn.copy`` it into ``dst``. ``dst``'s device buffer is
+        preserved. Mirrors ``Attention._inplace_copy``.
+        """
+        converted = src
+
+        if converted.layout != dst.layout:
+            converted = ttnn.to_layout(converted, layout=dst.layout)
+
+        if converted.dtype != target_dtype:
+            converted = ttnn.typecast(converted, dtype=target_dtype)
+
+        if tuple(converted.shape) != tuple(dst.shape):
+            converted = ttnn.reshape(converted, list(dst.shape))
+
+        if converted.memory_config() != dst.memory_config():
+            converted = ttnn.to_memory_config(converted, dst.memory_config())
+
+        ttnn.copy(input_a=converted, input_b=dst)
+
+    def update(self, tensor: ttnn.Tensor) -> None:
+        """In-place replace the on-device RMSNorm gamma via ``ttnn.copy``.
+
+        ``tensor`` must be shaped and sharded the same way ``__init__``
+        builds ``self.weight`` -- nominally ``(1, 1, dim // SHARD_HEIGHT,
+        SHARD_HEIGHT)`` in ``ttnn.ROW_MAJOR_LAYOUT``, replicated across the
+        mesh. Any divergence in layout, dtyp, shape, or memory_config is
+        handled on device (no host roundtrip).
+
+        When the constructor populated ``self.weight_distributed`` (the
+        column-sharded mirror used by the distributed RMSNorm path),
+        that buffer is kept in sync entirely on device: we project the
+        freshly-updated ``self.weight`` from its replicated layout into
+        the same sharded layout via ``ttnn.mesh_partition`` -- the
+        inverse direction of the all-gather pair that ``_distributed_rmsnorm``
+        uses in its forward -- and ``ttnn.copy`` the result into the
+        existing ``self.weight_distributed`` buffer. Address is preserved
+        on both buffers across the update, so any captured trace and the
+        DRAM prefetcher's recorded addresses remain valid.
+
+        ``ttnn.mesh_partition``'s ``dim=2, cluster_axis=1`` arguments are
+        the inverse of ``self.weight_distributed``'s constructor mesh
+        mapper, ``ShardTensor2dMesh(dims=(None, 2))`` -- "don't shard
+        along mesh axis 0; shard the tensor's axis 2 along mesh axis 1".
+        """
+        self._inplace_copy(tensor, self.weight, self.weight.dtype)
+
+        if getattr(self, "weight_distributed", None) is not None:
+            partitioned = ttnn.mesh_partition(
+                self.weight,
+                memory_config=self.weight_distributed.memory_config(),
+                dim=2,
+                cluster_axis=1,
+            )
+            self._inplace_copy(partitioned, self.weight_distributed, self.weight_distributed.dtype)
+
     def forward(
         self,
         x: ttnn.Tensor,

@@ -436,6 +436,127 @@ class Attention(LightweightModule):
             for k_or_v in [cache_k, cache_v]
         ]
 
+    @staticmethod
+    def _inplace_copy(src: ttnn.Tensor, dst: ttnn.Tensor, target_dtype) -> None:
+        """Run the ``Embedding.update`` conversion pipeline against an
+        arbitrary destination buffer.
+
+        Conversion steps (each skipped when already matching):
+
+        1. ``ttnn.to_layout``        -> ``dst.layout``
+        2. ``ttnn.typecast``         -> ``target_dtype``
+        3. ``ttnn.reshape``          -> ``dst.shape``
+        4. ``ttnn.to_memory_config`` -> ``dst.memory_config()``
+        5. ``ttnn.copy(input_a=converted, input_b=dst)``
+           -- in-place. ``dst``'s device buffer is preserved (no
+           reallocation) so any captured trace, and the DRAM prefetcher's
+           recorded buffer addresses, remain valid.
+        """
+        converted = src
+
+        if converted.layout != dst.layout:
+            converted = ttnn.to_layout(converted, layout=dst.layout)
+
+        if converted.dtype != target_dtype:
+            converted = ttnn.typecast(converted, dtype=target_dtype)
+
+        if tuple(converted.shape) != tuple(dst.shape):
+            converted = ttnn.reshape(converted, list(dst.shape))
+
+        if converted.memory_config() != dst.memory_config():
+            converted = ttnn.to_memory_config(converted, dst.memory_config())
+
+        ttnn.copy(input_a=converted, input_b=dst)
+
+    def _update_wqkv(self, tensor: ttnn.Tensor) -> None:
+        """In-place replace ``self.wqkv`` via ``ttnn.copy``.
+
+        The caller must provide a tensor shaped and sharded the same way
+        the constructor builds ``self.wqkv``: shape
+        ``(1, 1, H, qkv_size_per_device)``, ``ttnn.TILE_LAYOUT``,
+        ``ShardTensor2dMesh(dims=(2, 3))`` (or ``(3, 2)`` on TG).
+        Reproduce the constructor's chunk-transpose-concat flow before
+        calling.
+        """
+        self._inplace_copy(tensor, self.wqkv, self.wqkv_dtype)
+
+    def _update_wo(self, tensor: ttnn.Tensor) -> None:
+        """In-place replace ``self.wo`` (and ``self.wo_sharded_ring`` when
+        the prefetcher is enabled) via ``ttnn.copy``.
+
+        Both buffers must be kept in sync because the decode forward path
+        reads from ``wo_sharded_ring`` instead of ``wo`` whenever
+        ``self.prefetcher is not None``.
+        """
+        self._inplace_copy(tensor, self.wo, self.wo_dtype)
+        wo_sharded_ring = getattr(self, "wo_sharded_ring", None)
+        if wo_sharded_ring is not None:
+            self._inplace_copy(tensor, wo_sharded_ring, self.wo_dtype)
+
+    def _update_wqkv_bias(self, bias_1d: ttnn.Tensor) -> None:
+        """In-place replace ``self.wqkv_bias_prefill`` and every entry of
+        ``self.wqkv_bias_decode`` from a single logical bias.
+        """
+
+        raise NotImplementedError("wqkv_bias update is not yet implemented")
+
+    def _update_qk_norm(self, which: str, weight: ttnn.Tensor) -> None:
+        """In-place replace the gamma weight of the optional Q-/K-RMSNorm."""
+
+        raise NotImplementedError(f"{which} update is not yet implemented")
+
+    def update(
+        self,
+        *,
+        wqkv: ttnn.Tensor,
+        wo: ttnn.Tensor,
+        wqkv_bias=None,
+        q_norm=None,
+        k_norm=None,
+    ) -> None:
+        """In-place replace the on-device attention weights via ``ttnn.copy``.
+
+        Same buffer-preservation guarantee as ``Embedding.update``: every
+        physical buffer's device allocation is preserved, so any captured
+        trace -- and the DRAM prefetcher's recorded buffer addresses --
+        remain valid across an update.
+
+        Required:
+            wqkv: ``(1, 1, H, qkv_size_per_device)`` fused ``[Q | K | V]``,
+                  ``ttnn.TILE_LAYOUT``, ``ShardTensor2dMesh(dims=(2, 3))``
+                  (or ``(3, 2)`` on TG). Reproduce the constructor's
+                  host-side chunk-transpose-concat flow before calling.
+            wo:   ``(1, 1, n_heads * head_dim_per_device, H)``,
+                  ``ttnn.TILE_LAYOUT``. Also updates
+                  ``self.wo_sharded_ring`` when the prefetcher is enabled.
+
+        Optional, must match construction-time presence:
+            wqkv_bias: logical 1D bias of length ``qkv_size_total``.
+                       NOT YET IMPLEMENTED (see ``_update_wqkv_bias``).
+            q_norm:    ``(head_dim,)`` RMSNorm gamma.
+                       NOT YET IMPLEMENTED (see ``_update_qk_norm``).
+            k_norm:    ``(head_dim,)`` RMSNorm gamma.
+                       NOT YET IMPLEMENTED (see ``_update_qk_norm``).
+
+        Raises ``ValueError`` if ``wqkv_bias`` presence does not match
+        whether the module was constructed with a QKV bias.
+        """
+        self._update_wqkv(wqkv)
+        self._update_wo(wo)
+
+        if (wqkv_bias is None) != (self.wqkv_bias_prefill is None):
+            raise ValueError(
+                "wqkv_bias must be supplied iff Attention was constructed "
+                "with a QKV bias (state dict had `wq.bias`)."
+            )
+        if wqkv_bias is not None:
+            self._update_wqkv_bias(wqkv_bias)
+
+        if q_norm is not None:
+            self._update_qk_norm("q_norm", q_norm)
+        if k_norm is not None:
+            self._update_qk_norm("k_norm", k_norm)
+
     def to_qk_fused_memory_config(self, q_tensor: ttnn.Tensor, k_tensor: ttnn.Tensor):
         """
         Convert Q and K tensors to height-sharded memory layouts suitable for
