@@ -144,6 +144,8 @@ After the three readiness checks above pass, verify the vLLM serving path.
 
 Once registered:
 
+The runner is a single entry point with selectable stages — `serve`, `sampling`, `qualitative` — so you can run the full bringup end-to-end, hold the server open for iterating on a single check, or attach to an existing server and run one check. The default `--stages serve,sampling,qualitative` reproduces the full launch-check-shutdown flow:
+
 ```bash
 python -m models.common.readiness_check.run_vllm_server \
   --model-dir models/autoports/<model_name> \
@@ -153,12 +155,31 @@ python -m models.common.readiness_check.run_vllm_server \
   --tt-config '{"trace_region_size": <bytes>, ...}'  # if the model needs specific TT plugin tuning
 ```
 
+To hold the server open without running checks (useful when iterating on a single check, because trace compile can take 10+ minutes on first start):
+
+```bash
+python -m models.common.readiness_check.run_vllm_server \
+  --stages serve \
+  --model-dir ... --hf-model ... --mesh-device ... [--max-model-len ...] [--tt-config ...]
+```
+
+To run a single check against that running server from another shell:
+
+```bash
+python -m models.common.readiness_check.run_vllm_server \
+  --stages sampling \
+  --server-url http://localhost:8000 \
+  --model-dir ... --hf-model ...
+```
+
+`--stages` accepts a comma-separated list (e.g. `--stages sampling,qualitative`). `--server-url` is required whenever `serve` is omitted from the stages and rejected when it's included. Server-launch flags (`--mesh-device`, `--max-model-len`, `--tt-config`, `--port`, `--additional-server-args`) apply only when `serve` is in the stages.
+
 The runner **enforces on-device sampling** (`sample_on_device_mode: all` in the TT plugin config). A ported model that cannot serve sampling from the device is not production-ready — making the model wrapper expose its on-device sampler is part of this stage, not a follow-up. Your `tt/model.py` must wire `models.common.sampling` (or an equivalent on-device sampler) into the decode path; the readiness runner will fail fast if it can't. `--tt-config` merges into the runner defaults, so callers can extend (e.g. add `trace_region_size`, `fabric_config`) but `sample_on_device_mode` is always set.
 
-The runner owns the launch — env vars, CLI flags, server-ready polling, fast-fail markers, and shutdown all live inside it. You should not need to read the workflow files to invoke it. Once `/health` is up (default budget: 20 minutes; trace compile can take 10+ on first start), it runs:
+The runner owns server launch — env vars, CLI flags, server-ready polling, fast-fail markers, and shutdown all live inside it. You should not need to read the workflow files to invoke it. When `serve` is in `--stages`, it waits for `/health` (default budget: 20 minutes; trace compile can take 10+ on first start) before any checks run. The check stages then run in order:
 
-1. **Sampling tests** — invokes `pytest vllm/plugins/vllm-tt-plugin/tests/tt/` against the running server. These are the canonical plugin tests (greedy determinism, seeded reproducibility, seed variety, logprobs, penalties, request isolation). Pass/fail is programmatic; on failure the runner stops and dumps the server-log tail.
-2. **Qualitative completions** — runs prompts from `models/common/readiness_check/vllm_prompts.txt` with both greedy (`temperature=0`) and sampled (`temperature=0.7, top_p=0.9`) settings, saving them to `<model_dir>/readiness_vllm/vllm_qualitative_outputs.json` for **manual review**. Read each prompt and both completions and check:
+1. **Sampling** (`--stages ... sampling`) — invokes `pytest vllm/plugins/vllm-tt-plugin/tests/tt/` against the live server. These are the canonical plugin tests (greedy determinism, seeded reproducibility, seed variety, logprobs, penalties, request isolation). Pass/fail is programmatic; on failure the runner stops and dumps the server-log tail.
+2. **Qualitative** (`--stages ... qualitative`) — runs prompts from `models/common/readiness_check/vllm_prompts.txt` with both greedy (`temperature=0`) and sampled (`temperature=0.7, top_p=0.9`) settings, saving them to `<model_dir>/readiness_vllm/vllm_qualitative_outputs.json` for **manual review**. Read each prompt and both completions and check:
    - both outputs coherent and on-topic
    - no repetition loops, gibberish, or wrong-language drift
    - greedy and sampled both reasonable
