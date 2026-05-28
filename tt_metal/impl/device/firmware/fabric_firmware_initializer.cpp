@@ -289,6 +289,8 @@ void FabricFirmwareInitializer::init(
         if (rtoptions_.get_simulator_enabled()) {
             for (auto* dev : devices_) {
                 const auto fabric_node_id = control_plane_.get_fabric_node_id_from_physical_chip_id(dev->id());
+                cluster_.get_driver()->register_sim_fabric_node_id(
+                    dev->id(), uint32_t(fabric_node_id.mesh_id.get()), uint32_t(fabric_node_id.chip_id));
                 for (const auto& [eth_chan, direction] :
                      control_plane_.get_active_fabric_eth_channels(fabric_node_id)) {
                     cluster_.get_driver()->register_sim_fabric_endpoint_direction(
