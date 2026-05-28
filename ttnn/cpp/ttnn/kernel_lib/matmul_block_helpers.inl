@@ -153,7 +153,7 @@ ALWI void matmul_block(
     const uint32_t interm_cb_id = buf_id(interm_buf);
 
     // Fail fast on shape / CB invariants before doing any init or pipeline work.
-    ASSERT(shape.in0_block_w > 0);
+    ASSERT(shape.in0_block_k > 0);
     ASSERT(shape.in0_num_subblocks > 0);
     ASSERT(shape.in1_num_subblocks > 0);
     ASSERT(shape.num_k_blocks > 0);
@@ -201,11 +201,11 @@ ALWI void matmul_block(
     }
     if constexpr (init_mode == matmul_config::InitMode::Short) {
         mm_block_init_short(
-            in0_cb_id, in1_cb_id, transpose, shape.out_subblock_w, shape.out_subblock_h, shape.in0_block_w);
+            in0_cb_id, in1_cb_id, transpose, shape.out_subblock_w, shape.out_subblock_h, shape.in0_block_k);
     }
 
     const uint32_t out_num_tiles = shape.out_subblock_h * shape.out_subblock_w;
-    const uint32_t in0_subblock_num_tiles = shape.out_subblock_h * shape.in0_block_w;
+    const uint32_t in0_subblock_num_tiles = shape.out_subblock_h * shape.in0_block_k;
     const uint32_t in0_block_num_tiles = in0_subblock_num_tiles * shape.in0_num_subblocks;
     // in1_per_core_w: actual N-width of the in1 CB per K-block.
     // Derived from subblocks by default; callers with padded per_core_N_compute must
@@ -220,7 +220,7 @@ ALWI void matmul_block(
     if (out_row_width == 0) {
         out_row_width = in1_per_core_w;
     }
-    const uint32_t in1_block_num_tiles = in1_per_core_w * shape.in0_block_w;
+    const uint32_t in1_block_num_tiles = in1_per_core_w * shape.in0_block_k;
     const uint32_t out_block_num_tiles = out_num_tiles * shape.in0_num_subblocks * shape.in1_num_subblocks;
     const uint32_t row_group_tiles = shape.out_subblock_h * out_row_width;
 
@@ -251,12 +251,12 @@ ALWI void matmul_block(
 
             pre_k_block(block, shape.num_k_blocks, last_out);
 
-            // Per-K-block inner-dim step count. Default no-op returns shape.in0_block_w so the
+            // Per-K-block inner-dim step count. Default no-op returns shape.in0_block_k so the
             // loop runs the full K-tile span; ring-aware callers override this to
-            // shrink the FMA loop on K-blocks whose unpadded width is < shape.in0_block_w.
-            // The LLK call's kt_dim arg below stays shape.in0_block_w — that's the in1 row
+            // shrink the FMA loop on K-blocks whose unpadded width is < shape.in0_block_k.
+            // The LLK call's kt_dim arg below stays shape.in0_block_k — that's the in1 row
             // stride in L1, not the FMA step count.
-            const uint32_t inner_steps = k_block_inner_dim(block, shape.in0_block_w);
+            const uint32_t inner_steps = k_block_inner_dim(block, shape.in0_block_k);
 
             // Per-K-block in0 source. Default no-op returns the bound in0_cb_id, so
             // active_in0_buf aliases in0_buf and behavior is unchanged. Ring-aware
@@ -367,7 +367,7 @@ ALWI void matmul_block(
                             interm_buf.pop_front(out_num_tiles);
                         }
                         mm_block_init_short_with_dt(
-                            in0_cb_id, in1_cb_id, interm_cb_id, transpose, shape.out_subblock_w, shape.out_subblock_h, shape.in0_block_w);
+                            in0_cb_id, in1_cb_id, interm_cb_id, transpose, shape.out_subblock_w, shape.out_subblock_h, shape.in0_block_k);
                     }
 
                     // Compute output sub-block via hardware block matmul.
@@ -390,7 +390,7 @@ ALWI void matmul_block(
                             transpose,
                             effective_subblock_w,
                             shape.out_subblock_h,
-                            shape.in0_block_w);
+                            shape.in0_block_k);
 #else
                         (void)in0_index;
                         (void)in1_index;
