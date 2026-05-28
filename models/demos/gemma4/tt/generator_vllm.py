@@ -368,8 +368,12 @@ class Gemma4ForCausalLM(HybridAttentionForCausalLM):
         with self._route_per_layer_page_tables(per_submesh):
             # Skip ``HybridAttentionForCausalLM.decode_forward``, which is a
             # NotImplementedError placeholder; route to ``Generator``'s
-            # actual decode implementation.
-            return super().decode_forward_text(*args, **kwargs)
+            # actual decode implementation. ``decode_forward_text`` was
+            # renamed to ``decode_forward`` in tt_transformers/generator.py
+            # (commit 72217c1af4f, 2026-03-26); calling the old name now
+            # raises AttributeError as soon as decode warmup runs. Use
+            # the same skip pattern as the GptOssForCausalLM sibling.
+            return super(HybridAttentionForCausalLM, self).decode_forward(*args, **kwargs)
 
     def allocate_kv_cache(self, *args, **kwargs):
         # Legacy uniform path (vLLM falls back here when ``get_kv_cache_spec``
