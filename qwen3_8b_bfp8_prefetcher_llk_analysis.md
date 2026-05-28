@@ -109,4 +109,37 @@ The customer's report attributes Galaxy‑works to the dtype path being correct.
 
 ---
 
-*If after (2) the layout dumps are clean and the unpacked SrcA is still garbage, I'll change my mind and look at silicon. Until then I'd bet against an LLK or hardware bug.*
+## Addendum: cross‑check against `tt-isa-documentation`
+
+After writing the analysis above I re‑verified each LLK / Tensix ISA claim against the local copy of `tt-isa-documentation` (Blackhole A0 and Wormhole B0 trees). Refs are repo‑relative paths.
+
+| Claim in this report | ISA source | Verdict |
+|---|---|---|
+| `TTI_UNPACR(SrcA, 0, …)` carries no data‑format / geometry in its encoding; all behavior is driven by THCON CFG state | `WormholeB0/TensixTile/TensixCoprocessor/UNPACR_Regular.md` (BH file is a stub pointing at WH); lines 62, 84–101 — `InDataFormat`, `OutDataFormat`, `DatumSizeBytes`, `XDim`/`YDim`/`ZDim`/`WDim` all read from `ConfigState.THCON_SEC[…]` not from the instruction | **Confirmed** |
+| BFP8 → BF16 and BFP4 → BF16 share the same FPU path under `MathFidelity::LoFi` | `WormholeB0/TensixTile/TensixCoprocessor/SrcASrcB.md:96‑97` — fidelity table. BFP8 *can* use 2 phases at full precision, but LoFi = phase 0 only for both | **Confirmed** |
+| The BH MOP body `TTI_RDCFG → TTI_ADDDMAREG → TTI_STALLWAIT(STALL_CFG, THCON) → TTI_WRCFG → TTI_NOP` is correct ordering and is data‑format‑independent | `BlackholeA0/TensixTile/TensixCoprocessor/STALLWAIT.md` — WRCFG blocks under B7 (STALL_CFG), `THCON` is C0 ("ThCon has outstanding requests"). `WRCFG.md` line 3 — "behavior is identical between Wormhole and Blackhole". `ConfigurationUnit.md` line 19, 24, 35 — WRCFG is 2 cycles, must be followed by a cycle of separation before the new value is consumed (matches the trailing `TTI_NOP`) | **Confirmed** |
+| WH's `TTI_REG2FLOP` and BH's `TTI_WRCFG` write to the same THCON CFG storage; routing differs (ThCon vs Config Unit) | `WormholeB0/TensixTile/TensixCoprocessor/REG2FLOP_Configuration.md` line 3 — "In most cases, the `WRCFG` instruction should be used instead, unless explicitly trying to avoid contention around the Configuration Unit." Same `ThConCfgBase` storage written by both | **Confirmed**; report wording is correct ("functionally equivalent"), routing nuance noted |
+| MOP replay buffer cannot "capture geometry from a previous ELF" | `WormholeB0/TensixTile/TensixCoprocessor/MOPExpander.md` — the expander has no model of data format or tile geometry; it is a pure instruction macro. Replay buffer holds the literal instructions recorded by `lltt::record` / `load_replay_buf` at init. Customer's hypothesis #3 in the original report is impossible at the hardware level | **Customer hypothesis disproven** |
+| `TILE_SIZE_A` GPR is loaded from CB `fifo_page_size` in `_llk_unpack_hw_configure_` and is the sole stride source the MOP body uses for advancing `THCON_SEC0_REG3_Base_address` | `tt-llk/tt_llk_blackhole/llk_lib/llk_unpack_common.h:60`; `llk_unpack_AB_matmul.h:64` & `:94`. No ISA contradiction | **Confirmed** |
+| BFP8 always reads the exponent section regardless of `NoBFPExpSection`; BFP4 only reads it when `NoBFPExpSection=false` | `WormholeB0/TensixTile/TensixCoprocessor/UNPACR_Regular.md:126‑133` — `if (InDataFormat == BFP8 ‖ InDataFormat == BFP8a ‖ !ConfigDescriptor.NoBFPExpSection)` | **Confirmed** — and notably this is the *one* place in the unpack pipeline where BFP4 and BFP8 take asymmetric branches. If `NoBFPExpSection` were wrongly set on the BFP8 path, BFP8 would still read the exp section (no change), but the *advance* of `InAddr` past the exp section is gated on the same condition — so if for some reason `NoBFPExpSection=true` *and* the layout was BFP4 with no exp section, BFP8 would read past where the producer wrote. Worth probing |
+
+### Two ISA caveats worth flagging to the customer
+
+These came up while verifying and are *not* yet captured in the customer's debug list:
+
+1. **`REG2_Force_shared_exp` + `UNP[…].FORCED_SHARED_EXP_shared_exp`** (`UNPACR_Regular.md:126, 304‑305`). When set, the unpacker substitutes a single hardcoded exponent for **every datum**, ignoring the per‑face exponent block in L1. If this register is true on the BFP8 path but false on BFP4 (or holds a stale value from an earlier kernel), the symptom is precisely "magnitudes 2^60–2^109" — random scale applied to correct mantissas. **The U43 probe in the report inspects THCON_SEC0/SEC1; it likely does not cover `UNP[…]` regs.** This is the single most plausible silicon‑side cause that's consistent with every diagnostic the customer ran. Worth a 30‑minute probe of `UNP0_FORCED_SHARED_EXP` and `UNP1_FORCED_SHARED_EXP` plus the `REG2_Force_shared_exp` bit per unpacker before anything else.
+
+2. **Blackhole `UnpackRowWidth` for BFP2/4 is documented as "not yet characterized"** (`UNPACR_Regular.md:210‑214`). Quote: *"`UnpackRowWidth = (DatumSizeBytes <= 1) ? 16 : 32;` // Note: behavior not yet characterized for BFP2/4 formats"*. For the customer's repro both BFP4 (`DatumSizeBytes=0.5`) and BFP8 (`DatumSizeBytes=1`) compute to 16, so this is *not* the failing axis — but the ISA team has formally not committed to BFP4 silicon behavior matching the spec. If the customer's "BFP4 works" baseline is itself coincidentally correct rather than spec‑guaranteed, the comparison to BFP8 may be unreliable. I'd recommend also re‑running the BFP4 baseline with an output‑value sanity check, not just a "no crash" check.
+
+3. **SrcA burst alignment on 16‑row boundaries is `UndefinedBehavior()`** (`UNPACR_Regular.md:336‑341`). Quote: *"for SrcA, a burst that spans a 16‑row set boundary may not commit all of its datums per the formula below. This spec marks the bank‑edge boundary cases as UndefinedBehavior() pending characterization."* This is format‑independent, so it's not BFP8‑specific, but it's a hazard for any matmul with `out_subblock_h × out_subblock_w` straddling 16‑row banks. Worth a glance at the customer's `out_subblock_h=1, out_subblock_w=8` configuration to confirm no straddle.
+
+### What I did *not* re‑verify
+
+- WH/BH unpacker silicon RTL — out of scope; ISA doc is the contract.
+- The `Prefetcher` Python orchestration on the customer's `tenstorrent-p1` branch — I'd need to clone their fork to inspect.
+
+The conclusions in the body above stand after this cross‑check. The single substantive update is **suspect (1) above (`Force_shared_exp` + `FORCED_SHARED_EXP`) as the most plausible silicon‑side root cause** — it explains the symptom shape (random scale, BFP8‑specific in practice when the bit is set per‑unpacker, byte‑exact L1, correct THCON cfg) better than anything else I have, and it's testable in well under an hour by the customer.
+
+---
+
+*If after (2) the layout dumps are clean, the `FORCED_SHARED_EXP` probe is also clean, and the unpacked SrcA is still garbage, I'll change my mind and look at silicon. Until then I'd bet against an LLK or hardware bug.*
