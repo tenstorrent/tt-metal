@@ -285,12 +285,15 @@ def create_chunk_masks(chunk_size, device):
     strict_lower = ttnn.reshape(strict_lower, [1, chunk_size, chunk_size], memory_config=None)
     eye = _create_eye_matrix_ttnn(chunk_size, device, dtype=ttnn.float32, memory_config=None)
     eye = ttnn.reshape(eye, [1, chunk_size, chunk_size], memory_config=None)
+    eye_32 = _create_eye_matrix_ttnn(32, device, dtype=ttnn.float32, memory_config=None)
+    eye_32 = ttnn.reshape(eye_32, [1, 32, 32], memory_config=None)
     lower_causal = _create_tril_ones_ttnn(chunk_size, device, dtype=ttnn.float32, memory_config=None)
     return {
         "triu_ones": triu_ones,
         "tril_mask": tril_mask,
         "strict_lower": strict_lower,
         "eye": eye,
+        "eye_32": eye_32,
         "lower_causal": lower_causal,
     }
 

@@ -17,14 +17,20 @@ from models.demos.qwen35_27b.tt.gdn_chunk_ops import _create_tril_ones, _create_
 
 _TILE = 32
 
-# Cached constant: [1, 1, 32, 32] fp32 identity tile for batched Neumann.
-_eye_32_cache = {}
 
+def _compute_L_inv_ttnn(L_mat_4d, BH, NC, C, mesh_device, _cmc=None, eye_32=None):
+    """Compute diagonal block inverses of L_mat using _solve_lower_triangular_ttnn.
 
-def _get_eye_32(mesh_device):
-    key = id(mesh_device)
-    if key not in _eye_32_cache:
-        _eye_32_cache[key] = ttnn.from_torch(
+    L_mat_4d: [BH, NC, C, C] float32 lower-triangular, positive diagonal (~2)
+    eye_32:   [1, 32, 32] float32 identity pre-allocated on device (required for trace compat)
+    Returns:  [BH, NC, C, 32] float32 — 4 diagonal block inverses stacked as [C, 32]
+
+    Each 32x32 diagonal block B is inverted via the same D^{-1}-Neumann-NS path
+    used by _solve_lower_triangular_ttnn in the parallel scan.
+    """
+    if eye_32 is None:
+        # Fallback for tests that don't pass cached_masks — not trace-compatible.
+        eye_32 = ttnn.from_torch(
             torch.eye(32, dtype=torch.float32).unsqueeze(0),  # [1, 32, 32]
             dtype=ttnn.float32,
             layout=ttnn.TILE_LAYOUT,
@@ -32,19 +38,6 @@ def _get_eye_32(mesh_device):
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-    return _eye_32_cache[key]
-
-
-def _compute_L_inv_ttnn(L_mat_4d, BH, NC, C, mesh_device, _cmc=None):
-    """Compute diagonal block inverses of L_mat using _solve_lower_triangular_ttnn.
-
-    L_mat_4d: [BH, NC, C, C] float32 lower-triangular, positive diagonal (~2)
-    Returns:  [BH, NC, C, 32] float32 — 4 diagonal block inverses stacked as [C, 32]
-
-    Each 32x32 diagonal block B is inverted via the same D^{-1}-Neumann-NS path
-    used by _solve_lower_triangular_ttnn in the parallel scan.
-    """
-    eye_32 = _get_eye_32(mesh_device)  # [1, 32, 32]
     Ct = C // 32  # = 4
     batch = BH * NC
     L_flat = ttnn.reshape(L_mat_4d, [batch, C, C], memory_config=_cmc)
@@ -61,14 +54,20 @@ def _compute_L_inv_ttnn(L_mat_4d, BH, NC, C, mesh_device, _cmc=None):
         ttnn.deallocate(block)
         inv_blocks.append(block_inv)  # [batch, 32, 32]
 
-    ttnn.deallocate(L_flat)
+    # Do NOT deallocate L_flat: it is a reshape (view) of L_mat_4d which is the
+    # same L_unit_4d tensor passed as a kernel input.  Freeing L_flat frees L_unit_4d's
+    # buffer while the C++ kernel still needs to read from it.
 
     L_inv_flat = ttnn.concat(inv_blocks, dim=1, memory_config=_cmc)
     for blk in inv_blocks:
         ttnn.deallocate(blk)
 
+    # Do NOT deallocate L_inv_flat here — ttnn.reshape returns a view that shares
+    # the same DRAM buffer. Freeing L_inv_flat while L_inv_4d (the view) is still
+    # in use causes the kernel to read from freed memory on later runs when the
+    # allocator reuses that address. The caller's ttnn.deallocate(L_inv_4d) will
+    # release the buffer when it is no longer needed.
     L_inv_4d = ttnn.reshape(L_inv_flat, [BH, NC, C, 32], memory_config=_cmc)
-    ttnn.deallocate(L_inv_flat)
     return L_inv_4d
 
 
@@ -149,11 +148,13 @@ def chunk_gated_delta_rule_seq(
     g_c = ttnn.reshape(g, [batch, chunk_size], memory_config=None)
     del q, v, k_beta, v_beta
 
+    _eye_32 = None
     if cached_masks is not None:
         triu_ones = cached_masks["triu_ones"]
         tril_mask = cached_masks["tril_mask"]
         _eye_1cc = cached_masks["eye"]
         lower_causal = cached_masks["lower_causal"]
+        _eye_32 = cached_masks.get("eye_32")
     else:
         triu_ones = _create_triu_ones(chunk_size, mesh_device, dtype=ttnn.float32)
         triu_ones = ttnn.reshape(triu_ones, [1, chunk_size, chunk_size])
@@ -325,11 +326,12 @@ def chunk_gated_delta_rule_seq(
         return ttnn.to_layout(t4, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     L_unit_4d = _to4d_f32(L_unit, chunk_size, chunk_size)
-    ttnn.deallocate(L_unit)
+    # Do NOT deallocate L_unit/v_beta_sc/k_bd_sc here: _to4d_f32 returns a reshape
+    # (view) followed by to_layout (no-op when already TILE+DRAM), so the 4D tensor
+    # aliases the original buffer.  Calling ttnn.deallocate on the original while the
+    # view is still in use as a kernel input causes use-after-free on the 3rd+ call.
     v_beta_sc_4d = _to4d_f32(v_beta_sc, chunk_size, V)
-    ttnn.deallocate(v_beta_sc)
     k_bd_sc_4d = _to4d_f32(k_bd_sc, chunk_size, K)
-    ttnn.deallocate(k_bd_sc)
 
     def _ensure_f32_dram(t):
         if t.dtype != ttnn.float32:
@@ -348,7 +350,7 @@ def chunk_gated_delta_rule_seq(
     # Compute diagonal block inverses of L_unit via Neumann+NS (_solve_lower_triangular_ttnn).
     # L_unit has unit diagonal so D^{-1} inside _solve_lower_triangular_ttnn is trivial (D=I),
     # and the 2 NS steps correct any float32 error from Neumann on the nilpotent N.
-    L_inv_4d = _compute_L_inv_ttnn(L_unit_4d, BH, num_chunks, chunk_size, mesh_device, _cmc)
+    L_inv_4d = _compute_L_inv_ttnn(L_unit_4d, BH, num_chunks, chunk_size, mesh_device, _cmc, eye_32=_eye_32)
 
     # Initial state
     S0_tt = None

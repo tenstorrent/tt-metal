@@ -59,7 +59,15 @@ def create_chunk_masks(chunk_size, device):
         mesh_mapper=ttnn.ReplicateTensorToMesh(device),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    return {"triu_ones": triu_ones, "tril_mask": tril_mask, "lower_causal": lower_causal, "eye": eye}
+    eye_32 = ttnn.from_torch(
+        torch.eye(32, dtype=torch.float32).unsqueeze(0),
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    return {"triu_ones": triu_ones, "tril_mask": tril_mask, "lower_causal": lower_causal, "eye": eye, "eye_32": eye_32}
 
 
 def l2_norm(x, dim=-1, eps=1e-6):
@@ -128,9 +136,12 @@ def _solve_lower_triangular_ttnn(L, eye_1cc, mesh_device):
     D_diag = ttnn.sum(D_mat, dim=-1, memory_config=mc)  # [batch, C]
     D_inv = ttnn.reciprocal(D_diag, memory_config=mc)  # [batch, C]  all in (0, 1]
     ttnn.deallocate(D_diag)
-    D_inv_row = ttnn.reshape(D_inv, [batch, C, 1], memory_config=mc)  # for row-scaling N
-    D_inv_col = ttnn.reshape(D_inv, [batch, 1, C], memory_config=mc)  # for col-scaling L_inv
-    ttnn.deallocate(D_inv)
+    # Clone after reshape: ttnn.reshape returns a view sharing D_inv's buffer.
+    # Freeing D_inv while the views exist causes use-after-free when TTNN's allocator
+    # reuses the buffer before D_inv_col is consumed (observed on the 3rd+ call).
+    D_inv_row = ttnn.clone(ttnn.reshape(D_inv, [batch, C, 1], memory_config=mc), memory_config=mc)
+    D_inv_col = ttnn.clone(ttnn.reshape(D_inv, [batch, 1, C], memory_config=mc), memory_config=mc)
+    ttnn.deallocate(D_inv)  # safe: D_inv_row and D_inv_col are independent copies
 
     # N = D^{-1} (L - D)  via row scaling (no full matrix multiply needed)
     L_strict = ttnn.subtract(L, D_mat, memory_config=mc)
@@ -224,8 +235,19 @@ def _solve_lower_triangular_blocked_ttnn(L, eye_1cc, mesh_device):
         packer_l1_acc=False,
     )
 
-    # 32×32 identity for diagonal block inversions (sliced from the caller's eye_1cc)
-    eye_bb = ttnn.slice(eye_1cc, [0, 0, 0], [1, _B, _B], memory_config=mc)
+    # Create a fresh 32×32 identity for diagonal block inversions.
+    # Slicing eye_1cc then deallocating the view (even after cloning) can corrupt
+    # eye_1cc's DRAM buffer when ttnn.slice returns an alias of the source buffer.
+    import torch as _torch
+
+    eye_bb = ttnn.from_torch(
+        _torch.eye(_B, dtype=_torch.float32).unsqueeze(0),
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        memory_config=mc,
+    )
 
     # ---- Step 1: invert each diagonal block independently ----
     # Each call handles [batch, B, B] — no aliasing, unambiguous ownership.
