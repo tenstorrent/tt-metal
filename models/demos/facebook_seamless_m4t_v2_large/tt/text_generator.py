@@ -161,11 +161,19 @@ class TextGenerator(LightweightModule):
         # 2. LM head — bias=False, weight tied to shared.weight (HF). The
         # raw HF weight is (vocab, hidden); ttnn.linear expects
         # (in_features, out_features), so transpose on host.
+        #
+        # Perf sub-pass 2: the LM head is the largest single matmul in the
+        # traced AR step (1024 -> 256128 vocab, ~20% of replay device kernel
+        # time). Storing the weight at bfloat8_b roughly halves the DRAM
+        # read for the per-step matmul; the LM head feeds directly into
+        # greedy argmax so the epsilon-level drift introduced by bfloat8_b
+        # weight quantization is safe (this is the canonical bfloat8_b
+        # target for autoregressive decoders).
         lm_w = lm_head_state_dict["weight"]
         self.lm_head_weight = ttnn.from_torch(
             lm_w.t().contiguous(),
             device=device,
-            dtype=weight_dtype,
+            dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             memory_config=weight_memory_config,
         )

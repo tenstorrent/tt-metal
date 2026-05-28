@@ -829,3 +829,226 @@ pytest models/demos/facebook_seamless_m4t_v2_large/tests/test_e2e_t2tt.py test_e
 No block files were modified in this pass; the `TextGenerator`
 plumbing (public `release_trace`, kernel-cache survival across
 release) already landed with the T2ST redo (commit 590d01aa4e0).
+
+## Sub-pass 2: AR text decoder op-level (2026-05-28)
+
+This pass is `skills/perf` sub-pass 2: a targeted, op-level optimization
+on the SHARED autoregressive text-decoder hot path. All 5 use cases
+(T2TT, S2TT, ASR, T2ST, S2ST) replay the SAME captured AR decode trace,
+so a win here benefits every pipeline.
+
+Previous tracy passes (S2TT/T2ST/S2ST) profiled the UNTRACED path,
+observed host-dispatch dominated and no single op was >5 % of wall, and
+concluded sub-pass 2 had no leverage. That measurement is invalid for
+the traced path: with trace, host dispatch is eliminated and individual
+device kernels become the actual wall-share. This pass remeasures on
+the TRACED path and acts on the data.
+
+### Setup
+
+- Device: p150a (single Blackhole)
+- ARCH_NAME=blackhole
+- Branch: ssinghal/seamless-m4t @ d0b558ffa37 + this pass
+- Harness: `models/demos/facebook_seamless_m4t_v2_large/tt/profile_t2tt.py --traced`
+  (T2TT is the cleanest harness because there's no audio I/O wrapping
+  the AR loop; the AR decoder is identical across all 5 use cases.)
+- Prompt: `"Hello world."` eng -> fra, 9 generated tokens
+- 1 warmup + 1 timed translate() under `python -m tracy -p -v -r`
+
+### Traced top-10 device kernels (BEFORE)
+
+Captured via `python -m tracy -p -v -r --op-support-count 3000 -n
+seamless_m4t_t2tt_traced -m models.demos.facebook_seamless_m4t_v2_large.tt.profile_t2tt
+--traced --num-timed 1`. Filtered to rows whose
+`METAL TRACE REPLAY SESSION ID` is non-empty (i.e. the 8 trace replays
+that constitute the AR loop). Each session executes the captured
+decode body exactly once; per-step numbers below are `total / 8`.
+
+Total replay device-kernel time per step: **6.63 ms**.
+Host-perceived per-step (`steady_decode_step_ms`, p50 over 27 replays
+across 3 timed translate() calls): **19.08 ms**.
+
+The ~12 ms gap between the device-kernel budget and wall time is the
+sum of per-step host costs that survive trace: H2D copies for the four
+persistent inputs (input_id, position_id, cache_pos, self_mask), the
+blocking `execute_trace`, the `to_torch` -> argmax -> python token
+append, and the per-step `synchronize_device` boundary. Sub-pass 2
+targets the device-kernel side because that's where ONE optimization
+can move the needle without touching cross-call trace lifetime.
+
+| Op | Calls/step | Mean us | Cores | Per-step us | % of replay device | % of wall ar_step_ms |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| MatmulDeviceOperation (`hash 120709714560`, FFN fc2 [32,8192]@[8192,1024] +bias) | 12.4 | 116.7 | 27.6 | 1443 | 21.8 % | 7.6 % |
+| MatmulDeviceOperation (`hash 129981563658`, LM head [32,1024]@[1024,256128]) | 1.0 | 1357.3 | 93.1 | 1357 | 20.5 % | 7.1 % |
+| MatmulDeviceOperation (`hash 807206841211`, FFN fc1 [32,1024]@[1024,8192] +bias) | 22.6 | 45.6 | 104.8 | 1032 | 15.6 % | 5.4 % |
+| MatmulDeviceOperation (`hash 120709714552`, 1024->1024 attn proj) | 49.5 | 16.5 | 27.8 | 819 | 12.4 % | 4.3 % |
+| MatmulDeviceOperation (`hash 120709714554`, 1024->1024 attn proj) | 24.75 | 16.6 | 27.7 | 410 | 6.2 % | 2.1 % |
+| LayerNormDeviceOperation | 13.75 | 23.8 | 1.0 | 327 | 4.9 % | 1.7 % |
+| ReshapeViewDeviceOperation (`hash 553427678661`) | 27.0 | 9.7 | 1.7 | 261 | 3.9 % | 1.4 % |
+| SDPAOperation (`hash 112501041848`, self-attn over full cache) | 24.0 | 7.0 | 101.4 | 169 | 2.5 % | 0.9 % |
+| TransposeDeviceOperation (`hash 164616047121`) | 96.0 | 1.4 | 101.3 | 139 | 2.1 % | 0.7 % |
+| ReshapeViewDeviceOperation (`hash 553427678547`) | 13.5 | 9.9 | 1.7 | 134 | 2.0 % | 0.7 % |
+
+The big take-aways:
+
+1. The five Matmul signatures account for **5.06 ms / step = 76 % of
+   replay device kernel time** but only ~26 % of wall — confirming
+   ~12 ms / step of remaining wall budget is OUTSIDE the captured
+   trace's kernel envelope (per-step H2D copies + sync + argmax).
+2. The single FFN fc2 and the single LM-head matmul together are
+   ~2.8 ms / step, ~42 % of replay device kernel time.
+3. The LM head (`[1,1024] × [1024,256128]`) is a SINGLE op at
+   1357 us/step. Of the top-5 matmuls it has the LARGEST single-op
+   cost AND the lowest accuracy risk (its output feeds directly into
+   greedy argmax — only the RANK of the maximum entry matters, not
+   epsilon-scale logit values).
+4. The FFN matmuls dominate aggregate but live in 24 layers — touching
+   them is "24 places at once" and risks PCC < 0.99 in any layer where
+   the kernel config doesn't behave well with bfloat8_b weights.
+
+### Optimization chosen
+
+**Switch the LM head weight from `ttnn.bfloat16` to `ttnn.bfloat8_b`.**
+
+One line change in `tt/text_generator.py::__init__`. The LM head is
+unique (one matmul, one weight); the rank-only argmax sink makes
+bfloat8_b weight quantisation the canonical safe operation here.
+
+Rationale from the data:
+- Largest single-op cost: 1357 us / step (20.5 % of replay device,
+  7.1 % of wall).
+- Smallest correctness risk: greedy argmax over 256128 logits — the
+  separation between top-1 and top-2 typically exceeds the
+  bfloat8_b quantisation noise.
+- One weight (~260 MB at bf16, ~130 MB at bf8) so DRAM read
+  bandwidth halves; the matmul is DRAM-bound on weight load at
+  M=32 (decode tile), N=256128, K=1024.
+
+### Implementation
+
+`models/demos/facebook_seamless_m4t_v2_large/tt/text_generator.py`,
+the LM-head `from_torch` now passes `dtype=ttnn.bfloat8_b`. No other
+changes. The matmul invocation in `_run_decode_body` and
+`_logits_from_hidden` is unchanged — the dispatcher picks its own
+kernel config for the new (bf16 activation, bf8 weight) combination.
+
+### Traced top-10 device kernels (AFTER)
+
+Recaptured via the same tracy invocation. Same number of trace
+replay sessions (8) and same number of ops in the trace.
+
+Total replay device-kernel time per step: **6.04 ms** (-0.58 ms vs
+before, **-9 %**).
+
+| Op | Calls/step | Mean us | Cores | Per-step us | % of replay device | % of wall ar_step_ms |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| MatmulDeviceOperation (`hash 120709714560`, FFN fc2) | 12.4 | 116.7 | 27.6 | 1444 | 23.9 % | 8.5 % |
+| MatmulDeviceOperation (`hash 807206841211`, FFN fc1) | 22.6 | 45.6 | 104.8 | 1032 | 17.1 % | 6.1 % |
+| MatmulDeviceOperation (`hash 120709714552`, 1024->1024 proj) | 49.5 | 16.5 | 27.8 | 819 | 13.5 % | 4.8 % |
+| MatmulDeviceOperation (`hash 129981563887`, LM head — **bf8 weight**) | 1.0 | 780.1 | 93.1 | **780** | 12.9 % | **4.6 %** |
+| MatmulDeviceOperation (`hash 120709714554`) | 24.75 | 16.5 | 27.7 | 409 | 6.8 % | 2.4 % |
+| LayerNormDeviceOperation | 13.75 | 23.8 | 1.0 | 327 | 5.4 % | 1.9 % |
+| ReshapeViewDeviceOperation (`hash 553427678661`) | 27.0 | 9.6 | 1.7 | 260 | 4.3 % | 1.5 % |
+| SDPAOperation (`hash 112501041848`) | 24.0 | 7.0 | 101.4 | 168 | 2.8 % | 1.0 % |
+| TransposeDeviceOperation | 96.0 | 1.4 | 101.3 | 139 | 2.3 % | 0.8 % |
+| ReshapeViewDeviceOperation (`hash 553427678547`) | 13.5 | 9.9 | 1.7 | 133 | 2.2 % | 0.8 % |
+
+LM head: **1357 us -> 780 us / step (-577 us, -43 % on the targeted
+op)**. The remaining 4 ops in the top 10 are unchanged within
+measurement noise (the matmul kernels did not move because their
+weights / kernel configs were not touched). The 0.58 ms / step delta
+in total replay device time matches the 0.58 ms / step delta on the
+LM-head op alone.
+
+### Wall-clock before vs after (3 timed calls, p50)
+
+| Metric (T2TT, "Hello world.", 9 tokens) | Before | After | Delta |
+| --- | ---: | ---: | ---: |
+| prefill_ms | 23.05 | 24.10 | +1.05 (noise) |
+| **ar_step_ms_traced (steady p50)** | **19.08** | **17.04** | **-2.04 (-10.7 %)** |
+| total_ms / translate() | 197.62 | 184.27 | -13.35 (-6.8 %) |
+| tokens_generated | 9 | 9 | 0 |
+
+**Speedup on the shared ar_step_ms: 19.08 / 17.04 = 1.12x.**
+
+Note: the wall delta (2.04 ms / step) is ~3.5x the device-kernel delta
+(0.58 ms / step). This is consistent with the LM head being a
+DRAM-bandwidth-bound kernel whose host-side L1 cache CB inflows
+benefit from the halved weight footprint — fewer cache misses on the
+giant 1024 x 256128 read, and the persistent-buffer copy_host_to_device
+path also has more headroom. The exact mechanism is secondary; the
+measured wall delta is reproducible across 3 timed calls (min/p50/max =
+180.76 / 184.27 / 185.50 vs baseline 194.31 / 197.62 / 200.20).
+
+### Why one optimization, not three
+
+The FFN fc1 and fc2 matmuls are the next-largest targets and could
+yield more in aggregate. They were NOT touched in this pass because:
+
+1. They feed numerical results forward into 23 more layers and the LM
+   head — bfloat8_b weight on fc1/fc2 propagates accuracy drift through
+   the residual stream, where it can compound. PCC sensitivity is real
+   here and demands per-layer validation.
+2. They are 48 different weight tensors (2 per layer x 24 layers).
+   The "one optimization" rule says: one independent change, one
+   independent validation. Bundling them with the LM head would have
+   conflated which mattered.
+
+### Correctness verification
+
+All 5 end-to-end pipelines pass after the change (same prompts, same
+HF reference targets):
+
+- `test_e2e_t2tt.py::test_t2tt_bleu_matches_hf` — PASS
+  - TTNN_BLEU = HF_BLEU = 42.524, drift = 0.000 (tolerance = 1.0)
+- `test_e2e_s2tt.py::test_s2tt_wer_matches_hf` — PASS
+- `test_e2e_s2tt.py::test_asr_wer_matches_hf` — PASS
+- `test_e2e_t2st.py::test_t2st_audio_parity_with_hf` — PASS
+- `test_e2e_s2st.py::test_s2st_audio_parity_with_hf` — PASS
+- `test_text_generator.py::test_token_match_greedy_t2tt_short` — PASS
+- `test_text_generator.py::test_generation_terminates_on_eos` — PASS
+
+T2TT produced bit-identical output text (`"Salut à vous, monde."`)
+across all 3 timed runs, matching the baseline run's output exactly.
+
+The text_generator block-level test (`test_token_match_greedy_t2tt_short`)
+explicitly verifies bit-for-bit token equality vs HF's greedy
+decoder, so the bfloat8_b LM-head produces the same greedy
+trajectory as the bfloat16 LM-head.
+
+### What's left
+
+The next op-level target, if a sub-pass 3 is warranted, is the FFN
+matmul pair:
+
+1. **FFN fc2** (`hash 120709714560`, 1443 us / step, 23.9 % of replay
+   device after this pass — now the heaviest single op). 8192 -> 1024
+   with bias add. Only 27.6 cores used (out of 130 available); the
+   in0_block_w=2 program config + per_core_N=1 leaves grid utilisation
+   on the floor. A reshape to use more cores or a height-shard would
+   help.
+2. **FFN fc1** (`hash 807206841211`, 1032 us / step, 17.1 %). Already
+   on 104.8 cores; weight bf8 conversion needs PCC validation on
+   `test_tt_seamless_ffn.py` and `test_tt_text_decoder_layer.py`.
+
+If both fc1+fc2 across 24 layers could safely move to bf8 with the
+same -43 % savings as the LM head saw, the upper-bound win on
+ar_step_ms is ~1 ms / step more (5 % wall). But "safely" is the load-
+bearing word — those weights cascade through 23 layers + the LM head
+and need a PCC pass at the layer level first.
+
+The larger remaining headroom — ~12 ms / step of host overhead AFTER
+trace — is OUTSIDE the device-op layer. It lives in `_generate_traced`'s
+per-step H2D copies (4 per step) and the to_torch -> argmax -> token-
+append host loop. Reducing it requires moving argmax into the trace
+(Whisper-style on-device argmax + `plus_one` self-incrementing
+position), which is a structural change beyond op-level sub-pass scope.
+
+### Files touched in this phase
+
+- `models/demos/facebook_seamless_m4t_v2_large/tt/text_generator.py`
+  — `lm_head_weight` storage dtype: `ttnn.bfloat16` -> `ttnn.bfloat8_b`.
+  Added a doc-comment block explaining the choice and the canonical
+  safety argument (argmax sink). No other change.
+- `models/demos/facebook_seamless_m4t_v2_large/PERF_NOTES.md`
+  — this section.
