@@ -4093,7 +4093,8 @@ class AttentionBlock:
                     brisc_args=ctx["per_core_brisc_args"],
                     trisc_args=ctx["per_core_trisc_args"],
                 ),
-                defines=ctx["device_kernel_defines"],
+                # #43563 half-DEST debug: gate hash_cb at flash_mla.hpp on DEBUG_CB_HASH
+                defines=ctx["device_kernel_defines"] + [("DEBUG_CB_HASH", "1")],
                 noc_mode=noc_mode,
             )
 

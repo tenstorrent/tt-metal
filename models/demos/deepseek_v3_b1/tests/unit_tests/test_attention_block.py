@@ -51,30 +51,16 @@ from models.demos.deepseek_v3_b1.weights.transforms.attention import (
 @pytest.mark.parametrize(
     "position_id",
     [
-        pytest.param(
-            0,
-            marks=pytest.mark.skip(
-                reason="[SKIP REASON]: AttentionBlock output PCC check failed for both slot_id=0 and slot_id=1 "
-                "Blackhole FABRIC_2D_TORUS_X cases at position_id=0. Issue: #42714"
-            ),
-        ),
-        127,
-        511,
-        1023,
-        2047,
-        4096,  # (1 + partial,1,1,1): partial into dev0 (if SP = 4)
-        pytest.param(6644, marks=pytest.mark.skip_post_commit),  # (2,2,1 + partial,1): partial into dev2 (if SP = 4)
-        pytest.param(9916, marks=pytest.mark.skip_post_commit),  # (3,2 + partial,2,2): partial into dev1 (if SP = 4)
-        pytest.param(11664, marks=pytest.mark.skip_post_commit),  # (3,3,3,2 + partial): partial into dev3 (if SP = 4)
-        pytest.param(8191, marks=pytest.mark.skip_post_commit),  # For benchmarking 8K seq len
+        127,  # craq-sim hash-only repro: 1 chunk, cheapest
     ],
-)  # Must test 128 chunk aligned decode positions, add other tests when causal masks are in for SDPA
-@pytest.mark.parametrize("slot_id, num_slots", [(0, 2), (1, 2)])
+)
+@pytest.mark.parametrize("slot_id, num_slots", [(0, 1)])
 @pytest.mark.parametrize(
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
+            # craq-sim: mock 2x4 cluster is pure mesh (no torus wrap). Use FABRIC_2D.
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
             "fabric_router_config": create_fabric_router_config(15232),
             "trace_region_size": 573440,
             "worker_l1_size": 1374544,
@@ -83,8 +69,7 @@ from models.demos.deepseek_v3_b1.weights.transforms.attention import (
     indirect=True,
 )
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
-@pytest.mark.parametrize("num_internal_iterations", [1])
-@pytest.mark.requires_grid_size((13, 10))
+@pytest.mark.parametrize("num_internal_iterations", [2])  # need iter-0/iter-1 hash compare
 @requires_hybrid_allocator
 def test_attention_block(
     bh_2d_mesh_device,
