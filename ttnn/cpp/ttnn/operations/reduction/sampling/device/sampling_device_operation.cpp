@@ -46,7 +46,7 @@ void SamplingDeviceOperation::validate_on_program_cache_miss(
         "Input values and indices must have the same shape!");
     auto input_shape = input_values_tensor.logical_shape();
     TT_FATAL(input_shape.rank() == 4, "Sampling input_values must be rank-4; got rank {}", input_shape.rank());
-    TT_FATAL(input_shape[0] * input_shape[1] * input_shape[2] == 32, "Input must have 32 users!");
+    // TT_FATAL(input_shape[0] * input_shape[1] * input_shape[2] == 32, "Input must have 32 users!");
     TT_FATAL(
         input_shape[3] != 0 && input_shape[3] % 32 == 0,
         "Input inner dim ({}) must be non-zero and divisible by 32, pad if needed!",
@@ -93,7 +93,9 @@ void SamplingDeviceOperation::validate_on_program_cache_miss(
     }
 
     // Check size, layout and dtype of k, p, temp
-    TT_FATAL(k.dtype() == DataType::UINT32, "Only UINT32 dtypes are supported for k!");
+    TT_FATAL(
+        k.dtype() == DataType::UINT32 || k.dtype() == DataType::INT32,
+        "Only UINT32 & INT32 dtypes are supported for k!");
     TT_FATAL(p.dtype() == DataType::BFLOAT16, "Only BFLOAT16 dtypes are supported for p!");
     TT_FATAL(temp.dtype() == DataType::BFLOAT16, "Only BFLOAT16 dtypes are supported for temp!");
     TT_FATAL(k.layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR layout is supported for k!");

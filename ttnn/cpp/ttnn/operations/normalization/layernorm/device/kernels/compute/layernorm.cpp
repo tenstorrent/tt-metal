@@ -259,8 +259,8 @@ void kernel_main() {
         add_tiles(cb_ex2, cb_eps, 0, 0, dst0);
 
         cb_ex2pe_obj.reserve_back(1);  // 1
-        rsqrt_tile_init<LEGACY_RSQRT>();
-        rsqrt_tile<LEGACY_RSQRT>(dst0);
+        // rsqrt_tile_init<LEGACY_RSQRT>();
+        // rsqrt_tile<LEGACY_RSQRT>(dst0);
         pack_reconfig_data_format(cb_ex2pe);
         pack_tile(dst0, cb_ex2pe);
         cb_ex2pe_obj.push_back(1);
