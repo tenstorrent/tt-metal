@@ -144,7 +144,7 @@ After the three readiness checks above pass, verify the vLLM serving path.
 
 Once registered:
 
-The runner is a single entry point with selectable stages — `serve`, `sampling`, `qualitative` — so you can run the full bringup end-to-end, hold the server open for iterating on a single check, or attach to an existing server and run one check. The default `--stages serve,sampling,qualitative` reproduces the full launch-check-shutdown flow:
+The runner is a single entry point with selectable stages — `serve`, `sampling`, `qualitative`, `benchmark` — so you can run the full bringup end-to-end, hold the server open for iterating on a single check, or attach to an existing server and run one check. The default `--stages serve,sampling,qualitative,benchmark` reproduces the full launch-check-shutdown flow:
 
 ```bash
 python -m models.common.readiness_check.run_vllm_server \
@@ -183,8 +183,9 @@ The runner owns server launch — env vars, CLI flags, server-ready polling, fas
    - both outputs coherent and on-topic
    - no repetition loops, gibberish, or wrong-language drift
    - greedy and sampled both reasonable
+3. **Benchmark** (`--stages ... benchmark`) — fires synthetic random-token prompts at the server under concurrency (defaults: 128-tok prompts × 128-tok outputs × 32 requests × 8 concurrent, `ignore_eos=True` so each request emits exactly the configured output length) and aggregates serving-path TTFT P50/P99, ITL P50/P99, aggregate output throughput, and mean per-user decode t/s/u. Results saved to `<model_dir>/readiness_vllm/vllm_benchmark.json`. Workload is configurable via `--benchmark-prompt-len`, `--benchmark-output-len`, `--benchmark-num-requests`, `--benchmark-concurrency` — record any non-default values in the work log alongside the numbers, since the metrics are only comparable at fixed workload.
 
-Include your verdict in the work log. The runner writes `server.log`, `sampling_tests.log`, and `vllm_qualitative_outputs.json` under `<model_dir>/readiness_vllm/`; debug failures from those. If vLLM crashed mid-run, kill any leftover `EngineCore` / `vllm.entrypoints` zombie processes before retrying — they hold chip locks even after `tt-smi -r`.
+Include your verdict in the work log. The runner writes `server.log`, `sampling_tests.log`, `vllm_qualitative_outputs.json`, and `vllm_benchmark.json` under `<model_dir>/readiness_vllm/`; debug failures from those. If vLLM crashed mid-run, kill any leftover `EngineCore` / `vllm.entrypoints` zombie processes before retrying — they hold chip locks even after `tt-smi -r`.
 
 **Reproducibility-only failures are out of scope.** There are known framework bugs that cause sampled outputs to not be bit-exact across runs, positions, or batches. Tests that *only* assert exact reproducibility — typical names: `test_top1_is_greedy`, `test_topk`, `test_uniform_seed_deterministic`, `test_specific_seed_reproducible`, `test_same_seeds_reproduce_across_batches`, `test_*_mixed_batch`, `test_mixed_params_batch` — can fail for this reason on any model and are not your problem to fix. If those are the **only** failures, note them in the work log and move on. Failures involving actual correctness (gibberish output, wrong logprobs *values*, missing logprobs entirely, crashes) are still in scope.
 
@@ -219,7 +220,7 @@ models/autoports/<model>/doc/productize/work_log.md
 models/autoports/<model>/doc/productize/README.md
 ```
 
-Your README should lead with the top-1/top-5/top-100 figures for the full model and the 128-token prefill ms and mean over 32 token decode t/s/u for the full model.
+Your README should lead with the top-1/top-5/top-100 figures for the full model, the 128-token prefill ms and mean over 32 token decode t/s/u (generator-level, from `run_autoregressive`), and the serving-path TTFT P50, ITL P50, and mean per-user decode t/s/u (from the vLLM `benchmark` stage, including the workload config used).
 
 ## Useful References
 
