@@ -162,11 +162,13 @@ void kernel_main() {
 
             if constexpr (HAS_GAMMA != 0) {
                 // centered *= gamma (broadcast row 0 of each gamma tile down).
-                ckl::mul_in_place<ckl::BroadcastDim::ROW, ckl::BinaryInputPolicy::WaitAndPopPerTile>(
+                // ROW broadcast requires all B tiles upfront (binary_op_helpers.inl:576).
+                // WaitUpfrontPopAtEnd: wait for BLOCK_SIZE gamma tiles, pop after consuming.
+                ckl::mul_in_place<ckl::BroadcastDim::ROW, ckl::BinaryInputPolicy::WaitUpfrontPopAtEnd>(
                     cb_centered, cb_gamma_tilized, bin_shape);
             }
             if constexpr (HAS_BETA != 0) {
-                ckl::add_in_place<ckl::BroadcastDim::ROW, ckl::BinaryInputPolicy::WaitAndPopPerTile>(
+                ckl::add_in_place<ckl::BroadcastDim::ROW, ckl::BinaryInputPolicy::WaitUpfrontPopAtEnd>(
                     cb_centered, cb_beta_tilized, bin_shape);
             }
 
