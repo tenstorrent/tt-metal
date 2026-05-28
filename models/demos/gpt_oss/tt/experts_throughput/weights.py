@@ -878,15 +878,17 @@ def create_fused_moe_gpt_config(
     # expensive state_dict prep (bfloat16→float32 expansion + per-device
     # permute/cat across 32 chips × 128 experts) in that case — for
     # gpt-oss-120b this saves ~15-20s per layer on a warm cache.
+    def _tensor_cache_file_path(cache_base, dtype, layout):
+        return f"{cache_base}_dtype_{dtype.name}_layout_{layout.name}.tensorbin"
+
+    def _tensor_cache_exists(cache_base, dtype, layout):
+        return cache_base is not None and os.path.isfile(_tensor_cache_file_path(cache_base, dtype, layout))
+
     _w0_w1_base = get_cache_file_name(tensor_cache_path, f"fused_w0_w1_dtype{weight_dtype}")
     _w2_base = get_cache_file_name(tensor_cache_path, f"fused_w2_dtype{weight_dtype}")
-    _suffix = f"_dtype_{weight_dtype.name}_layout_{ttnn.TILE_LAYOUT.name}.tensorbin"
-    _fused_caches_exist = (
-        _w0_w1_base is not None
-        and _w2_base is not None
-        and os.path.isfile(_w0_w1_base + _suffix)
-        and os.path.isfile(_w2_base + _suffix)
-    )
+    _fused_caches_exist = _tensor_cache_exists(
+        _w0_w1_base, weight_dtype, ttnn.TILE_LAYOUT
+    ) and _tensor_cache_exists(_w2_base, weight_dtype, ttnn.TILE_LAYOUT)
 
     # --- Extract ALL expert weights from state_dict ---
     # Each device owns E = experts_per_device unique experts.
