@@ -101,16 +101,18 @@ ProgramDescriptor MSDAOperation::create_descriptor(
     const auto attn_fmt = datatype_to_dataformat_converter(attn.dtype());
     const auto output_fmt = datatype_to_dataformat_converter(output.dtype());
 
-    // CB indices.
-    constexpr uint32_t value_scratch_cb = tt::CBIndex::c_0;   // raw stick scratch (reader-only)
-    constexpr uint32_t grid_cb = tt::CBIndex::c_1;            // grid scratch (reader-only)
-    constexpr uint32_t attn_cb = tt::CBIndex::c_2;            // attn scratch (reader-only)
-    constexpr uint32_t input_tile_cb = tt::CBIndex::c_3;      // reader -> compute (tile)
-    constexpr uint32_t scalar_tile_cb = tt::CBIndex::c_4;     // reader -> compute (tile)
-    constexpr uint32_t output_tile_cb = tt::CBIndex::c_16;    // compute -> writer (tile)
-    constexpr uint32_t output_scratch_cb = tt::CBIndex::c_5;  // writer-only stick scratch
+    // CB indices. CBFormatDescriptor::buffer_index is uint8_t — keep these
+    // typed the same so push_cb's aggregate init doesn't trigger a narrowing
+    // conversion (forbidden in brace-init).
+    constexpr uint8_t value_scratch_cb = tt::CBIndex::c_0;   // raw stick scratch (reader-only)
+    constexpr uint8_t grid_cb = tt::CBIndex::c_1;            // grid scratch (reader-only)
+    constexpr uint8_t attn_cb = tt::CBIndex::c_2;            // attn scratch (reader-only)
+    constexpr uint8_t input_tile_cb = tt::CBIndex::c_3;      // reader -> compute (tile)
+    constexpr uint8_t scalar_tile_cb = tt::CBIndex::c_4;     // reader -> compute (tile)
+    constexpr uint8_t output_tile_cb = tt::CBIndex::c_16;    // compute -> writer (tile)
+    constexpr uint8_t output_scratch_cb = tt::CBIndex::c_5;  // writer-only stick scratch
 
-    auto push_cb = [&](uint32_t idx, uint32_t pages, uint32_t page_size, tt::DataFormat fmt) {
+    auto push_cb = [&](uint8_t idx, uint32_t pages, uint32_t page_size, tt::DataFormat fmt) {
         descriptor.cbs.push_back(CBDescriptor{
             .total_size = pages * page_size,
             .core_ranges = all_cores,

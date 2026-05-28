@@ -21,14 +21,23 @@
 // Row r ∈ [16, 32) spans BL[1024+(r-16)*32 ..] + BR[1536+(r-16)*32 ..].
 // For COL bcast the scalar tile is read at col 0 of TL (rows 0..15) and
 // col 0 of BL (rows 16..31): bytes 0, 32, 64, ..., 480 and 1024, 1056,
-// ..., 1504. We zero the rest of the tile defensively.
+// ..., 1504. Non-col-0 lanes of the scalar tile are never written — the
+// compute kernel calls mul_tiles_bcast<COL> with clear_fp32_dst_acc=true so
+// DST is cleared on entry and only col-0 broadcasts contribute.
 //
 // Per-tile runtime args (3 per tile): (n, q_start, v_rows). 1 ≤ v_rows ≤ 32.
-// Out-of-bounds corners contribute zero via scalar=0 (input row is left
-// untouched). Tail rows (r ≥ v_rows) are zero-filled in both tiles.
+// Zero-fill contract:
+//   * scalar tile: col 0 is explicitly written for all 32 rows. Tail rows
+//     (r ≥ v_rows) and OOB-corner rows get bf16 0, so their contribution
+//     zeroes out at the multiply.
+//   * input tile: only valid rows (r < v_rows AND corner in-bounds) are
+//     written; tail/OOB rows are left as whatever the CB slot held from a
+//     previous iter. That's safe because the matching scalar lane is 0, so
+//     stale bytes contribute 0 to the accumulator.
 
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"

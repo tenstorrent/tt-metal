@@ -28,16 +28,20 @@ target_sources(
         ${TTNN_OP_EXPERIMENTAL_MSDA_SRCS}
 )
 
-target_link_libraries(ttnn_op_experimental_multi_scale_deformable_attn PRIVATE TT::Metalium PUBLIC TTNN::Core)
+target_include_directories(ttnn_op_experimental_multi_scale_deformable_attn PRIVATE ${FixmeOpIncDirs})
+target_link_libraries(ttnn_op_experimental_multi_scale_deformable_attn PUBLIC TTNN::Core PRIVATE TT::Metalium)
+
+install(TARGETS ttnn_op_experimental_multi_scale_deformable_attn LIBRARY COMPONENT tar)
 
 install(
     TARGETS
         ttnn_op_experimental_multi_scale_deformable_attn
+    FILE_SET
+    api
+        COMPONENT ttnn-dev
     FILE_SET
     kernels
         DESTINATION
             ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/experimental/multi_scale_deformable_attn
         COMPONENT ttnn-runtime
 )
-
-install(TARGETS ttnn_op_experimental_multi_scale_deformable_attn FILE_SET api COMPONENT ttnn-dev LIBRARY COMPONENT tar)

@@ -9,10 +9,16 @@
 //     dest[h, w] = input_tile[h, w] * scalar_tile[h, 0]   (COL broadcast)
 //     pack into output_cb with L1 accumulate (after first iter)
 //
-// Reader fills all 32 rows of input_tile with per-query value sticks and
-// writes per-query scalars into col 0 of TL/BL faces. Tail rows (queries
-// past v_rows for the last tile in a sub-batch) are zero-filled by the
-// reader so they accumulate to zero.
+// Reader contract:
+//   * input_tile: only rows that are both in-range (r < v_rows) AND have an
+//     in-bounds corner are written. Tail / OOB rows are left untouched
+//     (stale CB bytes).
+//   * scalar_tile: col 0 of TL/BL is explicitly written for all 32 rows,
+//     with bf16 0 for tail / OOB-corner rows. Non-col-0 lanes are not
+//     written.
+// We rely on mul_tiles_bcast<COL>'s clear_fp32_dst_acc=true to zero DST so
+// that only col-0 broadcasts contribute, and on scalar=0 to zero out the
+// contribution of any stale input row.
 
 #include <cstdint>
 
