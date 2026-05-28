@@ -236,13 +236,13 @@ void RunTestOnCore(
             .gen2_data_movement_config =
                 experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{},
         };
-        uint8_t num_threads = is_quasar ? 6 : 1;
+        uint32_t num_threads = is_quasar ? 6u : 1u;
         if (!is_quasar) {
             noc = static_cast<int>(gen1_noc);
         }
         experimental::metal2_host_api::KernelSpec dm_spec{
             .unique_id = DRAM_COPY_KERNEL_NAME,
-            .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{kernel_metal2},
+            .source = kernel_metal2,
             .num_threads = num_threads,
             .compiler_options = {.defines = defines},
             .compile_time_arg_bindings = cta_bindings,
