@@ -102,6 +102,13 @@ RUNNER_PROFILES = {
         "tt_smi_cmd": "tt-smi -r",
         "matrix_output_key": "p150b",
     },
+    "p300a": {
+        "arch": "blackhole",
+        "runs_on": "P300-viommu",
+        "runner_label": "P300",
+        "tt_smi_cmd": "tt-smi -r",
+        "matrix_output_key": "p150b",
+    },
     "t3k": {
         "arch": "wormhole_b0",
         "runs_on": ["config-t3000", "arch-wormhole_b0", "in-service", "pipeline-functional"],
@@ -136,6 +143,7 @@ TEST_GROUPS = {
     "n300-llmbox-ccl": {"runner_profile": "n300-llmbox"},
     "blackhole-p150b-sweeps": {"runner_profile": "p150b"},
     "blackhole-p100a-sweeps": {"runner_profile": "p100a"},
+    "blackhole-p300a-sweeps": {"runner_profile": "p300a"},
     "wormhole-t3k-sweeps": {"runner_profile": "t3k"},
     "wormhole-galaxy-sweeps": {"runner_profile": "galaxy-topology-6u"},
     "lead-models-single-chip": {"runner_profile": "n150"},
@@ -214,6 +222,7 @@ TEST_GROUP_HARDWARE_CAPABILITY_RULES = {
     "wormhole-n300-sweeps": ({"board_type": "wormhole", "device_series": "n300", "card_count": 1},),
     "blackhole-p150b-sweeps": ({"board_type": "blackhole", "device_series": "p150b", "card_count": 1},),
     "blackhole-p100a-sweeps": ({"board_type": "blackhole", "device_series": "p100a", "card_count": 1},),
+    "blackhole-p300a-sweeps": ({"board_type": "blackhole", "device_series": "p300a", "card_count": 2},),
     "wormhole-t3k-sweeps": ({"device_series": "n300", "card_count": 4},),
     "wormhole-galaxy-sweeps": ({"device_series": "tt_galaxy_wh"},),
     "lead-models-single-chip": ({"max_card_count": 1, "excluded_device_series": ("tt_galaxy_wh",)},),
@@ -256,6 +265,10 @@ LOCAL_HARDWARE_MESH_CAPABILITY_RULES = (
         "match": {"board_type": "blackhole", "device_series": "p100a", "card_count": 1},
         "allowed_mesh_shapes": ("1x1",),
     },
+    {
+        "match": {"board_type": "blackhole", "device_series": "p300a", "card_count": 2},
+        "allowed_mesh_shapes": ("1x1", "1x2"),
+    },
 )
 
 
@@ -291,6 +304,8 @@ def get_test_group_name_for_hardware_group(hardware_group):
 
     board_type, device_series, card_count = hardware_group
 
+    if device_series == "p300a":
+        return "blackhole-p300a-sweeps"
     if device_series == "p100a":
         return "blackhole-p100a-sweeps"
     if board_type == "blackhole" or device_series == "p150b":
