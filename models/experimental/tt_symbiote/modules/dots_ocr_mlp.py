@@ -177,19 +177,20 @@ class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFuse
 
     @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward_silu_mul_split(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
-        """Run gate and up as two separate DRAM-sharded matmuls, fuse SILU into
-        the gate matmul kernel, and return silu(gate) * up directly.
+        """Run gate and up as two separate DRAM-sharded matmuls, then a single
+        silu-fused multiply, and return silu(gate) * up.
 
-        Replaces the fused-gate-up + chunk + silu-fused-multiply trio with:
-            silu_gate = matmul(x, gate_w, fused_activation=SILU)
-            up        = matmul(x, up_w)
-            return    ttnn.mul(silu_gate, up)
-
-        ``ttnn.linear`` has no per-element residual / multiply input, so the
-        final ``ttnn.mul`` cannot be fused into either matmul kernel — the
-        win comes from dropping the chunk + sharded_to_interleaved that the
-        fused path needs to split the [..., 17920] output into two halves,
-        and from running silu inside a matmul kernel (one fewer eltwise pass).
+        Original sweep result for the matmul kernel (32x1536x8960 DS ws/ds/ws
+        @ 8c 8x1, in0_block_w=6, per_core_N=35, fused_activation=None) was
+        65.84 us standalone. Pushing ``fused_activation=SILU`` into the gate
+        matmul regressed it to ~98 us because the decode compute config has
+        ``math_approx_mode=False`` -- SILU then runs through the exact
+        polynomial post-pack on every output tile. Keeping the matmul kernel
+        identical to the swept config (no fused activation) and running SILU
+        as the input-A activation on the eltwise ``ttnn.mul`` recovers the
+        65 us per matmul. Same code shape as the original fused-gate-up
+        path's silu_mul, just with already-split gate / up operands so the
+        chunk and sharded_to_interleaved disappear.
         """
         if input_tensor.layout != ttnn.TILE_LAYOUT:
             input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -211,13 +212,13 @@ class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFuse
         gate_w, gate_b = self._get_gate_dram_sharded_weight()
         up_w, up_b = self._get_up_dram_sharded_weight()
 
-        gate_pc = _decode_gate_or_up_dram_sharded_program_config(
-            input_shape, gate_w.shape, fused_activation=ttnn.UnaryOpType.SILU
-        )
+        # Match the swept config exactly: no fused activation. SILU happens
+        # on the eltwise mul below.
+        gate_pc = _decode_gate_or_up_dram_sharded_program_config(input_shape, gate_w.shape, fused_activation=None)
         up_pc = _decode_gate_or_up_dram_sharded_program_config(input_shape, up_w.shape, fused_activation=None)
         assert gate_pc is not None and up_pc is not None, "split gate/up program config did not match expected shape"
 
-        silu_gate = ttnn.linear(
+        gate = ttnn.linear(
             input_tensor,
             gate_w,
             bias=gate_b,
@@ -236,21 +237,28 @@ class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFuse
             program_config=up_pc,
         )
 
-        # Both operands are L1 width-sharded on the same 16c 8x2 grid. Land
-        # the mul output as L1 interleaved (not width-sharded) so the
-        # downstream reshard into the 8c down_proj input layout matches the
-        # existing fused-path semantics exactly (interleaved -> 8c sharded,
-        # the well-tested reshard kernel). The mul kernel deshards the two
-        # operands internally; this avoids a fragile sharded(16c) -> sharded(8c)
-        # to_memory_config that the down_proj reshard would otherwise have
-        # to perform.
+        # Deshard both matmul outputs to L1 interleaved so the silu_mul runs
+        # on the same layout the verified fused-gate-up path uses (chunk
+        # produces L1 interleaved halves there too). The DRAM-sharded matmul
+        # kernel requires its own output be width-sharded, so we do the
+        # transition here explicitly rather than asking ttnn.mul to consume
+        # sharded operands.
+        gate = ttnn.sharded_to_interleaved(gate, ttnn.L1_MEMORY_CONFIG)
+        up = ttnn.sharded_to_interleaved(up, ttnn.L1_MEMORY_CONFIG)
+
+        # silu-fused multiply -- input-A SILU via ``input_tensor_a_activations``
+        # plus ``fast_and_approximate_mode=True`` for the polynomial exp/sigmoid
+        # path. Identical to the fused path's silu_mul once gate and up are
+        # interleaved.
         gate_up_mul = ttnn.mul(
-            silu_gate,
+            gate,
             up,
+            input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+            fast_and_approximate_mode=True,
             dtype=ttnn.bfloat8_b,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        ttnn.deallocate(silu_gate)
+        ttnn.deallocate(gate)
         ttnn.deallocate(up)
 
         return ttnn.reshape(gate_up_mul, input_tensor_shape[:-1] + [-1])
