@@ -1,6 +1,23 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+"""Single-shot PCC test for the SeamlessM4Tv2 speech encoder at its design maximum sequence length.
+
+HF's speech encoder has no fixed maximum input length: chunked self-attention
+(``speech_encoder_chunk_size`` = 20000 mel frames in the HF config) lets it process arbitrarily long
+audio bounded only by DRAM. The single test below runs at ``seq=4096`` mel frames (~82 s at the
+SeamlessM4T mel rate), which exercises every long-audio code path in one go: chunked 1D matmul
+(active above ``MATMUL_1D_SEQ_THRESHOLD`` = 128), DRAM residual / LN (above
+``_LONG_AUDIO_RES_DRAM_THRESHOLD`` = 1024 mel frames), uncached relative-position tables (above
+``_MAX_CACHED_REL_POS_TABLE_BYTES`` = 32 MB, which seq=4096 vastly exceeds at ~2 GB per layer).
+
+Inputs longer than 4096 are designed to keep working via the existing 20000-frame chunked-attention
+window; this test is the PCC floor — the longest mel input where the model still runs in a single
+non-windowed attention pass, exercising the worst-case DRAM rel-pos table per layer.
+
+Real weights only — if ``huggingface_hub`` is missing or the download fails the test is skipped.
+"""
+
 import pytest
 import torch
 import ttnn
@@ -13,28 +30,30 @@ from models.experimental.seamless_m4t_v2_large.reference.torch_speech_encoder im
     load_pretrained_speech_encoder,
 )
 from models.experimental.seamless_m4t_v2_large.scripts.download_weights import ensure_seamless_m4t_v2_large_weights
-
-
 from models.experimental.seamless_m4t_v2_large.tt.common import to_torch_replicated_first_shard
-from models.experimental.seamless_m4t_v2_large.tt.model_preprocessing import create_speech_encoder_parameters
-from models.experimental.seamless_m4t_v2_large.tt.tt_speech_encoder import TTSeamlessM4Tv2SpeechEncoder
 from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import (
-    mesh_default_device,
     MESH_DEVICE_PARAMETRIZE_TEXT,
     from_torch_bfloat16_tile,
+    mesh_default_device,
 )
+from models.experimental.seamless_m4t_v2_large.tt.model_preprocessing import create_speech_encoder_parameters
+from models.experimental.seamless_m4t_v2_large.tt.tt_speech_encoder import TTSeamlessM4Tv2SpeechEncoder
 
 PCC_THRESHOLD = 0.99
+MAX_SEQ = 4096  # ~82 s mel; full long-audio path (DRAM rel-pos, DRAM residuals, chunked 1D matmul)
 
 
-def _run_speech_encoder_pcc(device, *, seq: int = 48) -> None:
-    """Shared PCC body. Mesh-safe readback via ``to_torch_replicated_first_shard``.
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_TEXT, indirect=["mesh_device", "device_params"])
+def test_seamless_m4t_v2_speech_encoder_max_seq_pcc(mesh_device, device_params, reset_seeds):
+    """Speech encoder PCC ≥ 0.99 at ``mel_seq=4096``, all long-audio paths active.
 
-    HF's speech encoder has no fixed max audio sequence length — chunked attention
-    (``speech_encoder_chunk_size = 20000`` mel frames) lets it process arbitrarily long inputs
-    bounded only by DRAM. Parametrising ``seq`` exposes a long-audio regression test that
-    exercises the chunked-attention mask path and L1 budget at larger feature lengths.
+    Above ``speech_encoder_chunk_size`` (20000) the encoder uses windowed attention to handle
+    arbitrarily long inputs; this test pins the longest *non-windowed* mel input we test in CI.
     """
+    _ = reset_seeds
+    _ = device_params
+
     try:
         weights_dir = ensure_seamless_m4t_v2_large_weights()
     except ImportError as e:
@@ -42,90 +61,39 @@ def _run_speech_encoder_pcc(device, *, seq: int = 48) -> None:
     except Exception as e:
         pytest.skip(f"Could not prepare seamless-m4t-v2-large weights: {e}")
 
-    torch.manual_seed(0)
-    speech_enc, cfg = load_pretrained_speech_encoder(weights_dir, dtype=torch.bfloat16)
-
-    # Mel sequence (feature dim must match ``feature_projection_input_dim``).
-    batch = 1
-    n_mels = cfg.feature_projection_input_dim
-    input_features = torch.randn(batch, seq, n_mels, dtype=torch.bfloat16)
-    attention_mask = torch.ones(batch, seq, dtype=torch.long)
-
-    ref = forward_torch_speech_encoder(
-        speech_enc,
-        input_features,
-        attention_mask,
-    ).to(torch.bfloat16)
-
-    params = create_speech_encoder_parameters(speech_enc, device=device)
-    tt_model = TTSeamlessM4Tv2SpeechEncoder(
-        device,
-        params,
-        hidden_size=cfg.hidden_size,
-        feature_projection_input_dim=cfg.feature_projection_input_dim,
-        speech_encoder_attention_heads=cfg.speech_encoder_attention_heads,
-        speech_encoder_intermediate_size=cfg.speech_encoder_intermediate_size,
-        speech_encoder_layers=cfg.speech_encoder_layers,
-        layer_norm_eps=cfg.layer_norm_eps,
-        speech_encoder_chunk_size=cfg.speech_encoder_chunk_size,
-        speech_encoder_left_chunk_num=cfg.speech_encoder_left_chunk_num,
-        matmul_token_rows=64,
-    )
-
-    tt_x = from_torch_bfloat16_tile(device, input_features, memory_config=ttnn.L1_MEMORY_CONFIG)
-    m1 = from_torch_bfloat16_tile(device, attention_mask, memory_config=ttnn.L1_MEMORY_CONFIG)
-
-    tt_out = tt_model(tt_x, conv_attention_mask_1d=m1)
-    tt_cpu = to_torch_replicated_first_shard(tt_out).to(torch.bfloat16)
-    pcc_passed, pcc_message = check_with_pcc(ref, tt_cpu, pcc=PCC_THRESHOLD)
-    logger.info(pcc_message)
-    assert pcc_passed, pcc_message
-
-
-@pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_TEXT, indirect=["mesh_device", "device_params"])
-def test_seamless_m4t_v2_speech_encoder_pcc(mesh_device, device_params, reset_seeds):
-    _ = reset_seeds
-    _ = device_params
     with mesh_default_device(mesh_device):
-        _run_speech_encoder_pcc(mesh_device)
+        torch.manual_seed(0)
+        speech_enc, cfg = load_pretrained_speech_encoder(weights_dir, dtype=torch.bfloat16)
 
+        batch = 1
+        seq = MAX_SEQ
+        n_mels = cfg.feature_projection_input_dim
+        input_features = torch.randn(batch, seq, n_mels, dtype=torch.bfloat16)
+        attention_mask = torch.ones(batch, seq, dtype=torch.long)
 
-@pytest.mark.timeout(1800)
-@pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_TEXT, indirect=["mesh_device", "device_params"])
-def test_seamless_m4t_v2_speech_encoder_long_audio_pcc(mesh_device, device_params, reset_seeds):
-    """PCC check at a longer mel sequence so chunked-attention and adaptor paths are exercised.
+        ref = forward_torch_speech_encoder(speech_enc, input_features, attention_mask).to(torch.bfloat16)
 
-    HF has no fixed max audio sequence — speech-encoder accepts any length, with chunked attention
-    keyed by ``speech_encoder_chunk_size``. 512 frames (~10 s at 50 fps mel) exercises the
-    long-audio path (chunked 1D matmul when mel > 128, relative-position DRAM offload).
-    """
-    _ = reset_seeds
-    _ = device_params
-    with mesh_default_device(mesh_device):
-        _run_speech_encoder_pcc(mesh_device, seq=256)
+        params = create_speech_encoder_parameters(speech_enc, device=mesh_device)
+        tt_model = TTSeamlessM4Tv2SpeechEncoder(
+            mesh_device,
+            params,
+            hidden_size=cfg.hidden_size,
+            feature_projection_input_dim=cfg.feature_projection_input_dim,
+            speech_encoder_attention_heads=cfg.speech_encoder_attention_heads,
+            speech_encoder_intermediate_size=cfg.speech_encoder_intermediate_size,
+            speech_encoder_layers=cfg.speech_encoder_layers,
+            layer_norm_eps=cfg.layer_norm_eps,
+            speech_encoder_chunk_size=cfg.speech_encoder_chunk_size,
+            speech_encoder_left_chunk_num=cfg.speech_encoder_left_chunk_num,
+            matmul_token_rows=64,
+        )
 
+        tt_x = from_torch_bfloat16_tile(mesh_device, input_features, memory_config=ttnn.L1_MEMORY_CONFIG)
+        m1 = from_torch_bfloat16_tile(mesh_device, attention_mask, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-@pytest.mark.timeout(3600)
-@pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_TEXT, indirect=["mesh_device", "device_params"])
-def test_seamless_m4t_v2_speech_encoder_very_long_mel_pcc(mesh_device, device_params, reset_seeds):
-    """PCC at ~13 s mel length (671 frames) — matches full demo T2ST wav fed into S2TT."""
-    _ = reset_seeds
-    _ = device_params
-    with mesh_default_device(mesh_device):
-        _run_speech_encoder_pcc(mesh_device, seq=672)
+        tt_out = tt_model(tt_x, conv_attention_mask_1d=m1)
+        tt_cpu = to_torch_replicated_first_shard(tt_out).to(torch.bfloat16)
 
-
-@pytest.mark.timeout(3600)
-@pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_TEXT, indirect=["mesh_device", "device_params"])
-def test_seamless_m4t_v2_speech_encoder_max_mel_pcc(mesh_device, device_params, reset_seeds):
-    """PCC at the full demo T2ST audio length (~43 s ≈ 2125 mel frames).
-
-    Exercises the long-audio DRAM path: residual / LN bypass the block-sharded L1 layout and the
-    relative-position embedding table runs uncached per layer (a single 2125-mel table is ~580 MB
-    bf16; caching 24 layers' worth would overflow DRAM). This is the regime the demo's chain
-    tasks (S2TT/S2ST/ASR) exercise when no audio trim is applied.
-    """
-    _ = reset_seeds
-    _ = device_params
-    with mesh_default_device(mesh_device):
-        _run_speech_encoder_pcc(mesh_device, seq=2125)
+        ok, msg = check_with_pcc(ref, tt_cpu, pcc=PCC_THRESHOLD)
+        logger.info(f"SeamlessM4Tv2 speech encoder PCC @ mel_seq={seq}: {msg} (threshold {PCC_THRESHOLD})")
+        assert ok, msg
