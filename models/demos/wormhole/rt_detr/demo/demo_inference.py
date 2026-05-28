@@ -4,6 +4,7 @@
 
 import json
 import sys
+import time
 from pathlib import Path
 
 import torch
@@ -27,169 +28,27 @@ from tt.weight_utils import get_backbone_parameters, get_decoder_parameters, get
 
 # COCO category ID mapping (80 classes, non-contiguous IDs)
 coco_class_ids = [
-    1,
-    2,
-    3,
-    4,
-    5,
-    6,
-    7,
-    8,
-    9,
-    10,
-    11,
-    13,
-    14,
-    15,
-    16,
-    17,
-    18,
-    19,
-    20,
-    21,
-    22,
-    23,
-    24,
-    25,
-    27,
-    28,
-    31,
-    32,
-    33,
-    34,
-    35,
-    36,
-    37,
-    38,
-    39,
-    40,
-    41,
-    42,
-    43,
-    44,
-    46,
-    47,
-    48,
-    49,
-    50,
-    51,
-    52,
-    53,
-    54,
-    55,
-    56,
-    57,
-    58,
-    59,
-    60,
-    61,
-    62,
-    63,
-    64,
-    65,
-    67,
-    70,
-    72,
-    73,
-    74,
-    75,
-    76,
-    77,
-    78,
-    79,
-    80,
-    81,
-    82,
-    84,
-    85,
-    86,
-    87,
-    88,
-    89,
-    90,
+    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 19, 20, 21,
+    22, 23, 24, 25, 27, 28, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42,
+    43, 44, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61,
+    62, 63, 64, 65, 67, 70, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 84,
+    85, 86, 87, 88, 89, 90,
 ]
 
 coco_class_names = [
-    "person",
-    "bicycle",
-    "car",
-    "motorcycle",
-    "airplane",
-    "bus",
-    "train",
-    "truck",
-    "boat",
-    "traffic light",
-    "fire hydrant",
-    "stop sign",
-    "parking meter",
-    "bench",
-    "bird",
-    "cat",
-    "dog",
-    "horse",
-    "sheep",
-    "cow",
-    "elephant",
-    "bear",
-    "zebra",
-    "giraffe",
-    "backpack",
-    "umbrella",
-    "handbag",
-    "tie",
-    "suitcase",
-    "frisbee",
-    "skis",
-    "snowboard",
-    "sports ball",
-    "kite",
-    "baseball bat",
-    "baseball glove",
-    "skateboard",
-    "surfboard",
-    "tennis racket",
-    "bottle",
-    "wine glass",
-    "cup",
-    "fork",
-    "knife",
-    "spoon",
-    "bowl",
-    "banana",
-    "apple",
-    "sandwich",
-    "orange",
-    "broccoli",
-    "carrot",
-    "hot dog",
-    "pizza",
-    "donut",
-    "cake",
-    "chair",
-    "couch",
-    "potted plant",
-    "bed",
-    "dining table",
-    "toilet",
-    "tv",
-    "laptop",
-    "mouse",
-    "remote",
-    "keyboard",
-    "cell phone",
-    "microwave",
-    "oven",
-    "toaster",
-    "sink",
-    "refrigerator",
-    "book",
-    "clock",
-    "vase",
-    "scissors",
-    "teddy bear",
-    "hair drier",
-    "toothbrush",
+    "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train",
+    "truck", "boat", "traffic light", "fire hydrant", "stop sign",
+    "parking meter", "bench", "bird", "cat", "dog", "horse", "sheep", "cow",
+    "elephant", "bear", "zebra", "giraffe", "backpack", "umbrella", "handbag",
+    "tie", "suitcase", "frisbee", "skis", "snowboard", "sports ball", "kite",
+    "baseball bat", "baseball glove", "skateboard", "surfboard",
+    "tennis racket", "bottle", "wine glass", "cup", "fork", "knife", "spoon",
+    "bowl", "banana", "apple", "sandwich", "orange", "broccoli", "carrot",
+    "hot dog", "pizza", "donut", "cake", "chair", "couch", "potted plant",
+    "bed", "dining table", "toilet", "tv", "laptop", "mouse", "remote",
+    "keyboard", "cell phone", "microwave", "oven", "toaster", "sink",
+    "refrigerator", "book", "clock", "vase", "scissors", "teddy bear",
+    "hair drier", "toothbrush",
 ]
 
 idx_to_name = {i: name for i, name in enumerate(coco_class_names)}
@@ -226,15 +85,18 @@ def run_ttnn_rtdetr_inference(img, torch_model, tt_params, device):
     """End-to-End TTNN forward pass."""
 
     # 1. TTNN Backbone
+    t0 = time.perf_counter()
     x_tt = _to_device(img, device, nchw_to_nhwc=True)
     s3_tt, s4_tt, s5_tt = presnet50(x_tt, tt_params["backbone"], device)
     ttnn.deallocate(x_tt)
+    t_backbone = time.perf_counter()
 
     # 2. TTNN Encoder
     p3_tt, p4_tt, p5_tt = hybrid_encoder(s3_tt, s4_tt, s5_tt, tt_params["encoder"], device)
     ttnn.deallocate(s3_tt)
     ttnn.deallocate(s4_tt)
     ttnn.deallocate(s5_tt)
+    t_encoder = time.perf_counter()
 
     # 3. Pull and reshape for the Decoder handoff (PyTorch bridge)
     p3_pt = _pull(p3_tt, device).squeeze(1).reshape(1, 80, 80, 256).permute(0, 3, 1, 2)
@@ -266,6 +128,7 @@ def run_ttnn_rtdetr_inference(img, torch_model, tt_params, device):
         spatial_shapes=spatial_shapes_tensor,
         device=device,
     )
+    t_decoder = time.perf_counter()
 
     # 6. Pull final query output for prediction heads
     query_torch = _pull(query_out, device).view(1, 300, 256)
@@ -278,8 +141,17 @@ def run_ttnn_rtdetr_inference(img, torch_model, tt_params, device):
 
     # 8. Clean up remaining TTNN tensors
     ttnn.deallocate(query_tt)
+    t_end = time.perf_counter()
 
-    return logits, boxes
+    timings = {
+        "backbone_ms":  (t_backbone - t0)       * 1000,
+        "encoder_ms":   (t_encoder  - t_backbone) * 1000,
+        "decoder_ms":   (t_decoder  - t_encoder)  * 1000,
+        "heads_ms":     (t_end      - t_decoder)  * 1000,
+        "e2e_ms":       (t_end      - t0)         * 1000,
+    }
+
+    return logits, boxes, timings
 
 
 # Visualisation
@@ -374,7 +246,7 @@ def main():
             img_tensor = transform(orig_img).unsqueeze(0)
 
             with torch.no_grad():
-                logits, boxes = run_ttnn_rtdetr_inference(img_tensor, model, tt_params, device)
+                logits, boxes, timings = run_ttnn_rtdetr_inference(img_tensor, model, tt_params, device)
 
             # Post-process
             scores_all, labels_all = torch.max(logits[0].sigmoid(), dim=-1)
@@ -413,6 +285,15 @@ def main():
                     )
             else:
                 print("    (no detections above threshold)")
+
+            # Timing summary
+            print(f"\n  Timing:")
+            print(f"    backbone  : {timings['backbone_ms']:7.2f} ms")
+            print(f"    encoder   : {timings['encoder_ms']:7.2f} ms")
+            print(f"    decoder   : {timings['decoder_ms']:7.2f} ms")
+            print(f"    heads     : {timings['heads_ms']:7.2f} ms")
+            print(f"    {'─'*26}")
+            print(f"    end-to-end: {timings['e2e_ms']:7.2f} ms  ({1000/timings['e2e_ms']:.1f} FPS)")
 
             # save
             out_img_path = output_dir / f"{img_path.stem}_detected{img_path.suffix}"

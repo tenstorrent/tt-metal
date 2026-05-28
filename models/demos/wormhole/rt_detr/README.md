@@ -13,7 +13,7 @@ RT-DETR is an end-to-end object detector that overcomes the slow inference speed
 - **Hybrid Encoder** — AIFI transformer on the coarsest scale (20×20) + CCFM neck (FPN top-down + PAN bottom-up) with CSPRepLayer blocks
 - **Transformer Decoder** — 6-layer decoder with deformable cross-attention for bounding box and class prediction
 
-Reference: [DETRs Beat YOLOs on Real-time Object Detection](https://arxiv.org/abs/2304.08069) (Zhao et al., 2023)
+Reference: [DETRs Beat YOLOs on Real-time Object Detection](https://arxiv.org/abs/2304.08069) (Zhao et al., 2023)  
 Official repo: [lyuwenyu/RT-DETR](https://github.com/lyuwenyu/RT-DETR)
 
 ---
@@ -53,7 +53,7 @@ Official repo: [lyuwenyu/RT-DETR](https://github.com/lyuwenyu/RT-DETR)
 ```
 rt_detr/
 ├── demo/
-│   ├── demo_inference.py                  # Demo inference script
+│   ├── demo.py                  # Demo inference script
 │   ├── demo_images/             # Input images
 │   └── demo_output/             # Annotated output images
 ├── tt/
@@ -97,7 +97,7 @@ rt_detr/
 source setup.sh
 ```
 
-> **Why `source`?**
+> **Why `source`?**  
 > `bash setup.sh` spawns a child process — any `export` inside it is thrown away when the script exits, so `PYTHONPATH` never makes it back to your shell. `source` (equivalently `. setup.sh`) runs the script inside your current shell so the export sticks for the rest of the session.
 
 ### 3. Make PYTHONPATH permanent
@@ -160,10 +160,10 @@ Expected results:
 
 | Test | Threshold | Result |
 |---|---|---|
-| `test_pred_logits_pcc` | PCC ≥ 0.90 |  pass |
-| `test_pred_boxes_pcc` | PCC ≥ 0.90 |  pass |
+| `test_pred_logits_pcc` | PCC ≥ 0.90 | pass |
+| `test_pred_boxes_pcc` | PCC ≥ 0.90 | pass |
 | `test_top5_labels_and_scores` | score diff < 0.05 | pass |
-| `test_box_iou_fired_detections` | IoU > 0.90 |  pass |
+| `test_box_iou_fired_detections` | IoU > 0.90 | pass |
 
 The test loads `demo/demo_images/sample.jpg` as the input image. If that file is absent it falls back to a zero tensor.
 
@@ -199,19 +199,61 @@ python tests/evaluate_coco.py
 
 ---
 
-| Metric | Value | Notes |
+## Performance
+
+Performance was measured on the Wormhole B0 N300 device using a batch size of 1.
+
+| Metric | Latency | Throughput |
 | :--- | :--- | :--- |
+| **Device Execution (TTNN Trace)** | 61.11 ms | 16.36 FPS |
+| **End-to-End Wall-Clock Time** | ~300.0 ms | 3.3 FPS |
+
+**Note on Hybrid Execution & Fallbacks:**
+The End-to-End wall-clock time includes PyTorch CPU fallbacks. While the ResNet Backbone, Hybrid Encoder, Self-Attention, FFNs, and LayerNorms execute natively on the Wormhole chip in `HiFi4` and `HiFi2` precision, the **Deformable Cross-Attention** remains on the Host CPU. Forcing Deformable Attention onto the device using current ops caused massive TM overhead due to uncoalesced memory scatter/gather operations, so the host fallback was maintained to preserve optimal end-to-end pipeline speed.
+
+### Summary
+
+| Metric | Value | Notes |
+|:---|:---|:---|
 | Hardware | Wormhole N300 (B0) | Tenstorrent accelerator |
 | Batch size | 1 | Single image inference |
 | Weight precision | BF16 | HiFi4 math fidelity |
 | Device latency | **61.11 ms** | On-device FW duration |
 | Host latency | 139.95 ms | Includes dispatch + cold cache |
 | Device throughput | **~16 FPS** | 1000 / 61.11 ms |
-| Ops traced | 1,860 | All on-device, zero PyTorch fallbacks |
+| Ops traced | 1,860 | On-device ops only — excludes CPU cross-attention fallback |
 | Core utilisation | 56% at max (64 cores) | 1,042 / 1,860 ops at full 64 cores |
 | Top bottleneck | Matmul — 27.5% | Of total device kernel time |
 
-> Full op-level analysis: [`performance_report.md`](./performance_report.md) · Trace: `ops_perf_results_rtdetr_2026_05_25_05_51_41.csv`
+### Latency
+
+| Metric | Value |
+|---|---|
+| End-to-end host time | 139.95 ms |
+| Device compute time (FW) | 61.11 ms |
+| Total device kernel time | 59.05 ms |
+| FW overhead | ~2.06 ms (~3.4%) |
+
+> **Note:** The host time of 139.95 ms was measured on a first-run (cold cache) trace and includes kernel compilation overhead. Device kernel times are representative of steady-state execution as they measure raw Tensix cycles independent of cache state. A cache-warm trace will yield a lower host-side baseline.
+
+### Operations on Device
+
+The backbone and encoder execute fully on-device. In the decoder, self-attention and FFN run on-device, but the deformable cross-attention step in each of the 6 decoder layers falls back to PyTorch CPU — the query tensor is transferred host↔device once per layer. This cross-attention fallback executes outside the TTNN dispatch graph and is therefore not captured in the profiler trace above; the reported host time of 139.95 ms reflects the on-device portion only and does not include the CPU cross-attention cost.
+
+### Device Time by Operation Class
+
+| Operation | Calls | Device Kernel Time | Share |
+|---|---|---|---|
+| MatmulDeviceOperation | 206 | 16.23 ms | 27.5% |
+| TilizeWithValPaddingDeviceOperation | 194 | 11.97 ms | 20.3% |
+| Conv2dDeviceOperation | 66 | 6.53 ms | 11.1% |
+| BinaryNgDeviceOperation | 278 | 6.31 ms | 10.7% |
+| CopyDeviceOperation | 154 | 3.45 ms | 5.8% |
+| UnaryDeviceOperation | 122 | 2.73 ms | 4.6% |
+| SDPAOperation | 14 | 0.73 ms | 1.2% |
+| LayerNormDeviceOperation | 40 | 0.60 ms | 1.0% |
+| Other | 166 | 10.50 ms | 17.8% |
+
 ---
 
 ## Implementation Notes
@@ -222,7 +264,7 @@ python tests/evaluate_coco.py
 
 **Mesh device** — Targets a 1×2 Wormhole mesh. Weights are replicated via `ReplicateTensorToMesh`; outputs are pulled back with `ConcatMeshToTensor`.
 
-**Decoder cross-attention** — Deformable multi-scale attention is not yet natively implemented in TTNN for Wormhole. Each of the 6 decoder layers falls back to the PyTorch CPU implementation for the cross-attention step, with one host↔device query transfer per layer.
+**Decoder cross-attention** — Deformable multi-scale attention is not yet natively implemented in TTNN for Wormhole. The cross-attention step in each of the 6 decoder layers falls back to PyTorch CPU, with one host↔device query transfer per layer. This is the primary remaining opportunity to move computation fully on-device.
 
 **Memory management** — All intermediate TTNN tensors are explicitly deallocated with `ttnn.deallocate` to prevent L1/DRAM fragmentation across the backbone→encoder→decoder pipeline.
 
