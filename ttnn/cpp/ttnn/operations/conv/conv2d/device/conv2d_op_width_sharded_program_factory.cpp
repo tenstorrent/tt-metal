@@ -23,66 +23,6 @@
 
 namespace ttnn::prim {
 
-namespace {
-
-// Build CBDescriptor entries from CBInfo, mirroring allocate_cbs() (in
-// conv2d_op_program_factory_common.cpp) but emitting onto a ProgramDescriptor.
-// The set of globally-allocated CBs (ACT_SHARDED/OUT/MATMUL_PARTIALS/READER_INDICES)
-// is wired to the supplied raw Buffer*s, which is what the framework's fast
-// cache-hit path patches.
-void emit_cb_descriptors(
-    std::vector<CBInfo>& cb_info,
-    tt::tt_metal::ProgramDescriptor& desc,
-    const CoreRangeSet& all_cores_set,
-    tt::tt_metal::Buffer* input_buffer,
-    tt::tt_metal::Buffer* output_buffer,
-    tt::tt_metal::Buffer* indices_buffer) {
-    uint32_t cb_index = 0;
-    for (auto& cb : cb_info) {
-        if (cb.num_pages == 0) {
-            // Skip circular buffers with zero pages (matches allocate_cbs behavior).
-            continue;
-        }
-
-        tt::tt_metal::Buffer* buffer = nullptr;
-        if (cb.is_globally_allocated) {
-            if (cb.name == Conv2dCb::ACT_SHARDED) {
-                buffer = input_buffer;
-            } else if (cb.name == Conv2dCb::OUT || cb.name == Conv2dCb::MATMUL_PARTIALS) {
-                buffer = output_buffer;
-            } else if (cb.name == Conv2dCb::READER_INDICES) {
-                buffer = indices_buffer;
-            } else {
-                TT_THROW(
-                    "Unexpected circular buffer name {}. Expected one of: SHARDED_ACT_CB, OUT0_CB, READER_INDICES_CB",
-                    enchantum::to_string(cb.name));
-            }
-        }
-
-        cb.index = cb_index++;
-        desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-            .total_size = cb.num_pages * cb.page_size,
-            .core_ranges = all_cores_set,
-            .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(cb.index),
-                .data_format = cb.data_format,
-                .page_size = cb.page_size,
-            }}},
-            .buffer = buffer,
-        });
-    }
-
-    for (auto& cb : cb_info) {
-        if (cb.overlapped_by_cb.has_value()) {
-            // If this CB is overlapped by another CB, mirror the overlapped CB's index.
-            const CBInfo& overlapped_cb = get_cb_info_by_name(cb_info, cb.overlapped_by_cb.value());
-            cb.index = overlapped_cb.index;
-        }
-    }
-}
-
-}  // namespace
-
 namespace unary = ttnn::operations::unary;
 using ttnn::operations::conv::conv_skip_mcast;
 using ttnn::operations::conv::SkipMcast;
@@ -737,12 +677,11 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         }
     }
 
-    // NOTE: post_conv2d_op_memory_checks() operates on a tt::tt_metal::Program;
-    // in the ProgramDescriptor world the framework realises the Program on cache
-    // miss after this returns, so the original CB-size / L1-allocator sanity
-    // check cannot be invoked here.  The CB sizing comes from get_cb_info()
-    // which is shared with the legacy path, so behavioural equivalence is
-    // preserved.
+    // Descriptor-path CB-size check (mirrors the legacy post_conv2d_op_memory_checks
+    // CB-sizing equality).  The L1-allocator delta half of the legacy check requires a
+    // realised Program and so isn't reachable here: the framework realises the Program
+    // after this function returns.
+    post_conv2d_op_memory_checks_descriptor(desc, operation_attributes, tensor_args, reader_indices_actual_page_size);
 
     desc.kernels.push_back(std::move(act_kernel_desc));
     desc.kernels.push_back(std::move(weights_kernel_desc));
