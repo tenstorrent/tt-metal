@@ -35,6 +35,26 @@ class LTXAVPipeline(LTXPipeline):
         kwargs["pipeline_class"] = LTXAVPipeline
         return LTXPipeline.create_pipeline(mesh_device, **kwargs)
 
+    def _ensure_device_encoder(self) -> None:
+        """Lazily load the on-device Gemma encoder + video/audio connectors (once)."""
+        if self.gemma_encoder is not None:
+            return
+        from safetensors import safe_open
+
+        connector_prefixes = (
+            "text_embedding_projection.video_aggregate_embed.",
+            "text_embedding_projection.audio_aggregate_embed.",
+            "model.diffusion_model.video_embeddings_connector.",
+            "model.diffusion_model.audio_embeddings_connector.",
+        )
+        self.load_gemma_encoder(self.gemma_path, num_layers=48, sequence_length=1024)
+        conn_state = {}
+        with safe_open(self.checkpoint_name, "pt") as f:
+            for k in f.keys():
+                if k.startswith(connector_prefixes):
+                    conn_state[k] = f.get_tensor(k)
+        self.load_embeddings_connectors(conn_state)
+
     def warmup_buffers(
         self,
         *,
@@ -124,13 +144,20 @@ class LTXAVPipeline(LTXPipeline):
         total_t0 = time.time()
 
         t0 = time.time()
-        results = self.encode_prompts_reference([prompt, neg])
-        logger.info(f"Encoding: {time.time() - t0:.1f}s")
-
-        v_embeds = results[0].video_encoding.float()
-        a_embeds = results[0].audio_encoding.float()
-        neg_v = results[1].video_encoding.float()
-        neg_a = results[1].audio_encoding.float()
+        if os.environ.get("LTX_DEVICE_ENCODE") == "1":
+            # On-device Gemma encode (GemmaEncoder + connectors) instead of the CPU reference.
+            self._ensure_device_encoder()
+            enc = self.encode_prompts_device([prompt, neg])
+            v_embeds, a_embeds = enc[0][0].float(), enc[0][1].float()
+            neg_v, neg_a = enc[1][0].float(), enc[1][1].float()
+            logger.info(f"Encoding (device): {time.time() - t0:.1f}s")
+        else:
+            results = self.encode_prompts_reference([prompt, neg])
+            v_embeds = results[0].video_encoding.float()
+            a_embeds = results[0].audio_encoding.float()
+            neg_v = results[1].video_encoding.float()
+            neg_a = results[1].audio_encoding.float()
+            logger.info(f"Encoding: {time.time() - t0:.1f}s")
 
         self._prepare_transformer(0)
 

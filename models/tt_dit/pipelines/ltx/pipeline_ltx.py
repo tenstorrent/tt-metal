@@ -693,7 +693,7 @@ class LTXPipeline:
         gemma_hidden_size: int = 3840,
         gemma_num_layers: int = 49,  # embedding layer + 48 decoder layers
         video_num_blocks: int = 8,
-        audio_num_blocks: int = 2,
+        audio_num_blocks: int = 8,
         video_dim: int = 4096,
         audio_dim: int = 2048,
         num_heads: int = 32,
