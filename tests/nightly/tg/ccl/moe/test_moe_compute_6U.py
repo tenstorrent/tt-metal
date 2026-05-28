@@ -135,14 +135,14 @@ _MODELS_1x8 = [
     MoEModelConfig("gpt_oss",      N=2880, hidden_size=2880, selected_experts_k=4, experts_per_device_values=(4,), has_bias_values=(True,), test_modes=("perf", "correctness"), activation_types=(MoEActivationFunction.SWIGLU,)),
 ]
 
-# BH single Loudbox 1x8 LINE — every chip hosts experts (EP=8). Subset of MoE shapes that
-# fit BH LB's L1 budget. tokens_per_device kept low (8) to keep host-side golden-compute
-# fast on real hardware. Multi-layer pinned to 1 (num_layers=1) because num_layers>1 hits
-# a DRAM->L1 reshard hang on BH LB (deferred follow-up). The hidden=7168 deepseek_v3 entry
-# is the only BH coverage of output_width_shard_dim=4; gpt_oss covers width_dim=3.
+# BH single Loudbox 1x8 LINE — every chip hosts experts (EP=8). Same model shapes as the
+# WH _MODELS_1x8 / _MODELS_1x16 entries (gpt_oss matches _MODELS_1x8.gpt_oss; deepseek_v3
+# matches _MODELS_1x16.deepseek_v3). BH-specific overrides: tokens_per_device=8 to keep
+# host-side golden-compute fast on real hardware, num_layers=1 because num_layers>1 hits
+# a DRAM->L1 reshard hang on BH LB (deferred follow-up).
 _MODELS_BH_LB_1x8 = [
-    MoEModelConfig("gpt_oss_bh_lb",     N=2880, hidden_size=2880, selected_experts_k=8, has_bias_values=(False, True), tokens_per_device=8, num_layers=1, num_iterations=2),
-    MoEModelConfig("deepseek_v3_bh_lb", N=2048, hidden_size=7168, selected_experts_k=8, has_bias_values=(False, True), tokens_per_device=8, num_layers=1, num_iterations=2),
+    MoEModelConfig("gpt_oss",     N=2880, hidden_size=2880, selected_experts_k=4, experts_per_device_values=(4,), has_bias_values=(True,), tokens_per_device=8, num_layers=1, num_iterations=2, activation_types=(MoEActivationFunction.SWIGLU,)),
+    MoEModelConfig("deepseek_v3", N=2048, hidden_size=7168, selected_experts_k=8, has_bias_values=(False, True), tokens_per_device=8, num_layers=1, num_iterations=2),
 ]
 # fmt: on
 
@@ -912,10 +912,7 @@ def gen_sparse_buffer_and_indices(
     else:
         num_dispatch_devices = num_devices
 
-    # Cluster-axis-aware: experts are partitioned across num_dispatch_devices only.
-    # On 2x4 cax=1 (num_devices=8, num_dispatch_devices=4) using num_devices would
-    # collapse experts_per_device by 2x and mis-target the sparse_buffer below.
-    experts_per_device = experts // num_dispatch_devices
+    experts_per_device = experts // num_devices
 
     # Total tokens in sparse buffer = tokens_per_device * num_dispatch_devices
     total_tokens = tokens_per_device * num_dispatch_devices
@@ -985,8 +982,7 @@ def compute_selective_tilize_golden(
     selected_experts_k = expert_indices.shape[2]
     hidden_size = sparse_buffer.shape[2]
     experts = expert_mapping.shape[1]
-    # Cluster-axis-aware: see gen_sparse_buffer_and_indices for rationale.
-    experts_per_device = experts // num_dispatch_devices
+    experts_per_device = experts // num_devices
 
     # Total possible tokens that could be sent to any expert
     total_tokens = tokens_per_device * num_dispatch_devices
@@ -1053,8 +1049,7 @@ def compute_expert_activation_golden(expert_indices, expert_scores, expert_mappi
     tokens_per_device = expert_indices.shape[1]
     selected_experts_k = expert_indices.shape[2]
     experts = expert_mapping.shape[1]
-    # Cluster-axis-aware: see gen_sparse_buffer_and_indices for rationale.
-    experts_per_device = experts // num_dispatch_devices
+    experts_per_device = experts // num_devices
 
     # Build activation rows for each device
     # golden_activation[device] = list of (token_id, k_indices, scores)
@@ -1120,8 +1115,7 @@ def compute_e_t_golden(expert_indices, expert_mapping, mesh_shape, cluster_axis)
     tokens_per_device = expert_indices.shape[1]
     selected_experts_k = expert_indices.shape[2]
     experts = expert_mapping.shape[1]
-    # Cluster-axis-aware: see gen_sparse_buffer_and_indices for rationale.
-    experts_per_device = experts // num_dispatch_devices
+    experts_per_device = experts // num_devices
 
     # Build e_t lists for each device and each local expert
     # golden_e_t[device][local_expert] = [token_id_0, token_id_1, ...]
@@ -1163,41 +1157,19 @@ def compute_matmul_golden(
     torch_b1=None,
     torch_b2=None,
     activation_type=MoEActivationFunction.SILU,
-    num_dispatch_devices=None,
 ):
-    # For 1xN meshes (legacy), num_dispatch_devices == devices and the math is unchanged.
-    # For multi-axis meshes with cluster_axis<full (e.g. 2x4 BH single LB with cluster_axis=1),
-    # experts are partitioned across num_dispatch_devices only, so weights must be replicated
-    # `num_dispatch_devices` times (not `devices`) to align with `experts`. The non-dispatch axis
-    # copies are byte-identical to the dispatch-axis copy (same expert mapping, same tokens), so
-    # we run matmul on one copy and broadcast the result back to `devices` along dim 1 for the
-    # downstream validators that index `matmul_goldens[l, d, e, t, h]` with d in [0, devices).
-    if num_dispatch_devices is None:
-        num_dispatch_devices = devices
-    assert (
-        devices % num_dispatch_devices == 0
-    ), f"devices ({devices}) must be divisible by num_dispatch_devices ({num_dispatch_devices})"
-    num_replicated = devices // num_dispatch_devices
+    tokens = tokens_per_device * devices
 
-    tokens = tokens_per_device * num_dispatch_devices
-
-    # When devices > num_dispatch_devices, the off-axis device entries in torch_input_ref are
-    # the all-zero slots left by compute_selective_tilize_golden (target_device is always on the
-    # dispatch axis), so taking the first num_dispatch_devices entries along dim 1 drops only
-    # zero-padding — never real data.
-    if devices != num_dispatch_devices:
-        torch_input_ref = torch_input_ref[:, :num_dispatch_devices, ...]
-
-    # (L, num_dispatch_devices, E/D, T, H) -> (L, E, T, H)
+    # (L, D, E/D, T, H) -> (L, E, T, H)
     torch_input_ref = torch_input_ref.reshape(layers, experts, tokens, hidden)
 
-    # in the test setup the expert weights are duplicated over (dispatch) devices, do so here
+    # in the test setup the expert weights are duplicated over devices, do so here
     # (L, E/D, K, N) -> (L, E, K, N)
-    torch_w0 = torch_w0.repeat([1, num_dispatch_devices, 1, 1])
+    torch_w0 = torch_w0.repeat([1, devices, 1, 1])
     # (L, E/D, K, N) -> (L, E, K, N)
-    torch_w1 = torch_w1.repeat([1, num_dispatch_devices, 1, 1])
+    torch_w1 = torch_w1.repeat([1, devices, 1, 1])
     # (L, E/D, N, K) -> (L, E, N, K)
-    torch_w2 = torch_w2.repeat([1, num_dispatch_devices, 1, 1])
+    torch_w2 = torch_w2.repeat([1, devices, 1, 1])
 
     # Cast to fp32 for CPU matmul: torch's bf16 CPU matmul falls through to a
     # single-threaded reference loop on many builds (even with OMP/MKL enabled),
@@ -1218,16 +1190,14 @@ def compute_matmul_golden(
     if torch_b0 is not None:
         # True PyTorch MoE math: x @ W + bias.
         # Bias shape: (L, E, N) - broadcasts across tokens (L, E, T, N) automatically.
-        # Weights are replicated per-dispatch-device (post-fix), so bias replication must
-        # match — using `devices` here would inflate to num_devices and shape-mismatch the
-        # matmul output that's been built from num_dispatch_devices copies of the experts.
-        b0 = torch_b0.repeat([1, num_dispatch_devices, 1]).float()  # (L, E, N)
+        # Weights are replicated per-device, so bias must be too.
+        b0 = torch_b0.repeat([1, devices, 1]).float()  # (L, E, N)
         torch_w0_output_ref = torch_w0_output_ref + b0.unsqueeze(2)  # broadcast T dimension
 
     torch_w1_output_ref = torch_input_ref @ torch_w1
     if torch_b1 is not None:
         # Same reasoning as b0.
-        b1 = torch_b1.repeat([1, num_dispatch_devices, 1]).float()  # (L, E, N)
+        b1 = torch_b1.repeat([1, devices, 1]).float()  # (L, E, N)
         torch_w1_output_ref = torch_w1_output_ref + b1.unsqueeze(2)
 
     if activation_type == MoEActivationFunction.SILU:
@@ -1246,24 +1216,16 @@ def compute_matmul_golden(
     # (L, E, T, N) @ (L, E, N, K) -> (L, E, T, K)
     torch_output_ref = torch_intermediate_ref @ torch_w2
     if torch_b2 is not None:
-        # Same reasoning as b0: true PyTorch bias addition, replicated per dispatch device.
-        b2 = torch_b2.repeat([1, num_dispatch_devices, 1]).float()  # (L, E, K)
+        # Same reasoning as b0: true PyTorch bias addition, replicated per device.
+        b2 = torch_b2.repeat([1, devices, 1]).float()  # (L, E, K)
         torch_output_ref = torch_output_ref + b2.unsqueeze(2)
 
     # Cast back to the input dtype to keep downstream golden compute unchanged.
     torch_output_ref = torch_output_ref.to(_orig_dtype)
 
     # pull device dim back out for comparison
-    # (L, E, T, H) -> (L, num_dispatch_devices, E/num_dispatch_devices, T, H)
-    out = torch_output_ref.reshape(layers, num_dispatch_devices, experts // num_dispatch_devices, tokens, hidden)
-
-    # Broadcast along the device dim so downstream validators that index [l, d, e, t, h] with
-    # d in [0, devices) see the same golden on every replicated-axis copy. Assumes contiguous
-    # dispatch-axis copies (row-major mesh, cluster_axis=1). Currently only used by 1xN tests
-    # where devices == num_dispatch_devices and the broadcast is a no-op.
-    if devices != num_dispatch_devices:
-        out = out.repeat(1, num_replicated, 1, 1, 1)
-    return out
+    # (L, E, T, H) -> (L, devices, E/devices, T, H)
+    return torch_output_ref.reshape(layers, devices, experts // devices, tokens, hidden)
 
 
 def compute_combine_golden(
@@ -1278,11 +1240,7 @@ def compute_combine_golden(
     cluster_axis,
 ):
     cluster_factor, cluster_size, devices = get_cluster_dims(cluster_axis, mesh_shape)
-    # Cluster-axis-aware: cluster_size == num_dispatch_devices (mesh_shape[cluster_axis]),
-    # not the full device count. On 2x4 cax=1 cluster_size=4 vs devices=8; using devices
-    # would collapse experts_per_device to 1 and the (e, dense_token_index) indexing into
-    # matmul_goldens would walk off the expert axis.
-    experts_per_device = experts // cluster_size
+    experts_per_device = experts // devices
 
     output_ref_tensor = torch.zeros(layers, select_experts_k, tokens * cluster_factor, hidden_size).bfloat16()
     output_data_map = torch.zeros(output_ref_tensor.shape[:-1])
@@ -1440,12 +1398,7 @@ def run_moe_compute_test(
     num_replicated_devices = num_devices // num_dispatch_devices
     total_tokens = tokens_per_device * num_dispatch_devices
     experts_per_cluster = experts // num_replicated_devices
-    # Cluster-axis-aware: experts are partitioned along the cluster axis, not the full mesh.
-    # For 1xN topologies this equals experts // num_devices (legacy behavior).
-    # For multi-axis meshes (e.g. 2x4 BH single LB with cluster_axis=1) it correctly
-    # divides experts among the 4 dispatch devices instead of all 8 — otherwise the
-    # weight/golden creation below shape-mismatches the post-fix op output.
-    experts_per_device = experts // num_dispatch_devices
+    experts_per_device = experts // num_devices
 
     logger.info(f"Test configuration:")
     logger.info(f"  mesh_shape: {mesh_shape}")
@@ -1657,7 +1610,6 @@ def run_moe_compute_test(
         torch_b1=torch_b1 if has_bias else None,
         torch_b2=torch_b2 if has_bias else None,
         activation_type=activation_type,
-        num_dispatch_devices=num_dispatch_devices,
     )
 
     # compute goldens for combine
@@ -1756,22 +1708,7 @@ def run_moe_compute_test(
     combine_barrier_semaphore = ttnn.create_global_semaphore(mesh_device, combine_core_range_set, 0)
     mux_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange((1, 1), (3, 3))])
 
-    # On multi-axis meshes the op writes the same `total_tokens` worth of output on each
-    # non-dispatch (replicated) row of the mesh — the rows are byte-identical because the
-    # tilize/matmul/combine inputs replicate across that axis. The output tensor therefore
-    # needs enough space for one copy per replicated row so each device's shard slot lines
-    # up with what the op writes (`total_tokens / num_dispatch_devices` tokens per device).
-    # The combine golden (compute_combine_golden) also sizes its output as
-    # `tokens * cluster_factor`, so this matches it shape-for-shape:
-    #   1xN cluster_axis=1: num_replicated_devices = 1 → same as before (backward-compat)
-    #   2x4 cluster_axis=1: num_replicated_devices = 2 → 32 → 64 in dim 1, 8 per device
-    # Without this, ShardTensorToMesh(dim=1) on (K, total_tokens, H) gives only
-    # total_tokens/num_devices slots per device (e.g. 4 vs the 8 the op writes), so each
-    # device truncates half its output and the validator asserts a (K, 32, H) vs (K, 64, H)
-    # shape mismatch even when all per-expert/matmul/activation/e_t checks pass.
-    torch_combine_output_tensor = torch.zeros(
-        [selected_experts_k, total_tokens * num_replicated_devices, hidden_size], dtype=torch.bfloat16
-    )
+    torch_combine_output_tensor = torch.zeros([selected_experts_k, total_tokens, hidden_size], dtype=torch.bfloat16)
     tt_combine_output_tensors = [
         ttnn.from_torch(
             torch_combine_output_tensor,
