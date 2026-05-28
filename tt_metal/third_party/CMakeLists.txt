@@ -11,6 +11,139 @@ add_subdirectory(umd)
 add_subdirectory(tracy)
 
 set(NO_FILESELECTOR ON)
+
+# Repair CMAKE_(C|CXX)_COMPILER_(AR|RANLIB) before building the Tracy CLI tools.
+#
+# Tracy's csvexport/capture pull zstd via CPM, which uses add_library(... STATIC ...).
+# CMake static-library rules dereference the language-specific archiver
+# (CMAKE_<LANG>_COMPILER_AR), and Clang on Linux often leaves it as
+# `CMAKE_<LANG>_COMPILER_AR-NOTFOUND` because llvm-ar-<N> isn't installed beside
+# clang-<N>. That literal then leaks into the Ninja link command and ccache fails
+# trying to invoke it. Tracy's own config sets RULE_LAUNCH_LINK to ccache (see
+# tt_metal/third_party/tracy/cmake/config.cmake), which makes the failure surface
+# even on the archive step. Fall back to the generic CMAKE_AR/CMAKE_RANLIB (which
+# CMake does discover via /usr/bin/ar), so Tracy's vendored zstd builds without
+# requiring the LTO-aware llvm-ar-<N> on PATH.
+if(NOT WIN32)
+    if(NOT CMAKE_AR OR "${CMAKE_AR}" MATCHES "NOTFOUND")
+        find_program(
+            _tt_resolved_ar
+            NAMES
+                ar
+                llvm-ar
+                gcc-ar
+                NO_CACHE
+        )
+        if(_tt_resolved_ar)
+            set(CMAKE_AR "${_tt_resolved_ar}" CACHE FILEPATH "Path to archiver for static libraries" FORCE)
+        endif()
+        unset(_tt_resolved_ar)
+    endif()
+    if(NOT CMAKE_RANLIB OR "${CMAKE_RANLIB}" MATCHES "NOTFOUND")
+        find_program(
+            _tt_resolved_ranlib
+            NAMES
+                ranlib
+                llvm-ranlib
+                gcc-ranlib
+                NO_CACHE
+        )
+        if(_tt_resolved_ranlib)
+            set(CMAKE_RANLIB "${_tt_resolved_ranlib}" CACHE FILEPATH "Path to ranlib for static libraries" FORCE)
+        endif()
+        unset(_tt_resolved_ranlib)
+    endif()
+    foreach(_tt_lang IN ITEMS C CXX ASM)
+        if(
+            CMAKE_AR
+            AND NOT "${CMAKE_AR}"
+                MATCHES
+                "NOTFOUND"
+            AND (
+                NOT CMAKE_${_tt_lang}_COMPILER_AR
+                OR "${CMAKE_${_tt_lang}_COMPILER_AR}"
+                    MATCHES
+                    "NOTFOUND"
+            )
+        )
+            set(CMAKE_${_tt_lang}_COMPILER_AR "${CMAKE_AR}" CACHE FILEPATH "Archiver for ${_tt_lang}" FORCE)
+            set(CMAKE_${_tt_lang}_COMPILER_AR "${CMAKE_AR}")
+        endif()
+        if(
+            CMAKE_RANLIB
+            AND NOT "${CMAKE_RANLIB}"
+                MATCHES
+                "NOTFOUND"
+            AND (
+                NOT CMAKE_${_tt_lang}_COMPILER_RANLIB
+                OR "${CMAKE_${_tt_lang}_COMPILER_RANLIB}"
+                    MATCHES
+                    "NOTFOUND"
+            )
+        )
+            set(CMAKE_${_tt_lang}_COMPILER_RANLIB "${CMAKE_RANLIB}" CACHE FILEPATH "Ranlib for ${_tt_lang}" FORCE)
+            set(CMAKE_${_tt_lang}_COMPILER_RANLIB "${CMAKE_RANLIB}")
+        endif()
+    endforeach()
+    unset(_tt_lang)
+
+    # CMake's Compiler/Clang.cmake (line ~89-107 in cmake-4.2) interpolates the value of
+    # CMAKE_<LANG>_COMPILER_AR / _RANLIB *at compiler detection time* into the IPO archive
+    # templates (CMAKE_<LANG>_ARCHIVE_CREATE_IPO, _APPEND_IPO, _FINISH_IPO). Those templates
+    # are what static-lib link rules end up referencing for Clang on Linux, so updating the
+    # cache variables alone leaves the frozen NOTFOUND strings in rules.ninja. Re-stamp the
+    # templates here with the resolved tools so the rules embed valid paths in this configure
+    # pass (no two-pass dance needed).
+    foreach(_tt_lang IN ITEMS C CXX)
+        if(CMAKE_AR AND NOT "${CMAKE_AR}" MATCHES "NOTFOUND")
+            set(CMAKE_${_tt_lang}_ARCHIVE_CREATE_IPO "\"${CMAKE_AR}\" qc <TARGET> <LINK_FLAGS> <OBJECTS>")
+            set(CMAKE_${_tt_lang}_ARCHIVE_APPEND_IPO "\"${CMAKE_AR}\" q <TARGET> <LINK_FLAGS> <OBJECTS>")
+        endif()
+        if(CMAKE_RANLIB AND NOT "${CMAKE_RANLIB}" MATCHES "NOTFOUND")
+            set(CMAKE_${_tt_lang}_ARCHIVE_FINISH_IPO "\"${CMAKE_RANLIB}\" <TARGET>")
+        endif()
+    endforeach()
+    unset(_tt_lang)
+
+    # project() writes CMakeFiles/<ver>/CMake{C,CXX}Compiler.cmake at compiler detection time
+    # and re-includes them on every subsequent configure, overriding the CACHE FORCE above.
+    # Patch the persisted files so future configures (where the IPO template re-stamping is
+    # not even reached if some other code calls project() again) don't reintroduce NOTFOUND.
+    foreach(_tt_lang_pair IN ITEMS "C;CMakeCCompiler.cmake" "CXX;CMakeCXXCompiler.cmake")
+        list(GET _tt_lang_pair 0 _tt_lang)
+        list(GET _tt_lang_pair 1 _tt_filename)
+        file(GLOB _tt_compiler_info_files "${CMAKE_BINARY_DIR}/CMakeFiles/*/${_tt_filename}")
+        foreach(_tt_compiler_info_file IN LISTS _tt_compiler_info_files)
+            file(READ "${_tt_compiler_info_file}" _tt_txt)
+            if(CMAKE_AR AND NOT "${CMAKE_AR}" MATCHES "NOTFOUND")
+                string(
+                    REPLACE
+                    "set(CMAKE_${_tt_lang}_COMPILER_AR \"CMAKE_${_tt_lang}_COMPILER_AR-NOTFOUND\")"
+                    "set(CMAKE_${_tt_lang}_COMPILER_AR \"${CMAKE_AR}\")"
+                    _tt_txt
+                    "${_tt_txt}"
+                )
+            endif()
+            if(CMAKE_RANLIB AND NOT "${CMAKE_RANLIB}" MATCHES "NOTFOUND")
+                string(
+                    REPLACE
+                    "set(CMAKE_${_tt_lang}_COMPILER_RANLIB \"CMAKE_${_tt_lang}_COMPILER_RANLIB-NOTFOUND\")"
+                    "set(CMAKE_${_tt_lang}_COMPILER_RANLIB \"${CMAKE_RANLIB}\")"
+                    _tt_txt
+                    "${_tt_txt}"
+                )
+            endif()
+            file(WRITE "${_tt_compiler_info_file}" "${_tt_txt}")
+        endforeach()
+    endforeach()
+    unset(_tt_lang)
+    unset(_tt_filename)
+    unset(_tt_lang_pair)
+    unset(_tt_compiler_info_file)
+    unset(_tt_compiler_info_files)
+    unset(_tt_txt)
+endif()
+
 add_subdirectory(tracy/csvexport)
 add_subdirectory(tracy/capture)
 
