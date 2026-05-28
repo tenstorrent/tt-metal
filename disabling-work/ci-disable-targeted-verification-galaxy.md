@@ -11,6 +11,90 @@
 
 This note applies to the "disable deterministic failing tests" workflow.
 
+## Main-run evidence — non-negotiable invariant
+
+> Every disabled test MUST trace back to a specific failing job on `main`, linked directly in the PR description. If a dev asks "why is this disabled?" they MUST be able to click one link and see the failing run. This is the non-negotiable invariant. If you cannot produce that link, you cannot disable the test.
+
+This invariant is the principle the rest of this document supports. The full evidence model — what goes in the PR description, what goes in PR comments, what goes in the linked issue, and how the evidence is refreshed on every PR touch — is specified in `Main-run evidence model`, `Refresh evidence on every PR touch`, and `Anti-stale-disable invariant` below. It is the FIRST item of `Operating Procedure (One Run Per PR)`.
+
+## Main-run evidence model
+
+The PR description, the linked tracking issue, and PR comments serve distinct purposes. Mixing them is the failure mode that lets stale disables survive on branches.
+
+### PR description = main-run evidence (one row per disabled test)
+
+The PR description MUST contain, for EACH test (or test parametrization) currently disabled in this PR, a direct link to a specific job-step run on `main` that shows that test failing with the deterministic signature.
+
+- The link MUST be a job URL (e.g. `https://github.com/tenstorrent/tt-metal/actions/runs/<run-id>/job/<job-id>`), NOT just a run URL — devs need to land directly on the failing job's log.
+- The evidence MUST be the most recent failing main run for that test that the automation can find at the time of the PR touch. "Recent" means latest completed main run as of the current session.
+- If multiple tests share the same failing job, you MAY link the same job URL multiple times (once per test). Do NOT collapse tests into a single line — devs want one row per disabled test.
+- The PR description MUST NOT contain links to verification dispatch runs, pruned-workflow runs, or temp-branch runs. Those live in PR comments only.
+- The PR description MUST NOT contain narrative beyond a one-line summary and the evidence table. Keep it dev-readable at a glance.
+
+Required PR description format (use this verbatim):
+
+```
+<one-line summary>
+
+| Disabled test | Most recent failing main run (job link) | Run completed at |
+|---|---|---|
+| path/to/test::TestClass::test_name[params] | https://github.com/tenstorrent/tt-metal/actions/runs/<run-id>/job/<job-id> | YYYY-MM-DD HH:MM UTC |
+```
+
+### PR comments = verification, dispatch, and automation status
+
+All links to dispatched verification runs (the pruned workflow on the feature branch) MUST be posted as PR comments, NEVER in the description.
+
+Each verification-dispatch comment MUST include all three of:
+
+- The dispatched run URL.
+- The source-of-build-artifacts run URL (if reused) or the literal string "built fresh".
+- The commit SHA the branch was rebased on at dispatch time.
+
+Automation status updates (rebase log, revalidation log, evidence-refresh log, throttle notes, removal of disables that started passing on main) also go in PR comments — NEVER in the description.
+
+### Linked issue = mirror of PR description
+
+The linked tracking issue for each disable PR MUST always reflect the current evidence table from the PR description.
+
+- The issue body is regenerated from the PR description's evidence table on every PR touch. This is a deterministic overwrite — do NOT append.
+- The issue MUST NOT contain verification-dispatch links. Those are PR-comment-only.
+- If a test is removed from the PR (because it started passing on main), it MUST be removed from the issue at the same time. Add an issue comment noting the removal with the passing-on-main evidence link.
+
+## Refresh evidence on every PR touch
+
+Whenever the automation touches a PR — rebase, revalidation pass, Examining-lane work, OR Focus-lane preparation BEFORE dispatch — it MUST do the following for every test currently in the PR:
+
+1. Look up the latest completed main run for that test's job.
+2. **If the test is STILL failing deterministically on main:**
+   - Update the PR description's evidence row for that test with the new job URL and the run's `Run completed at` timestamp.
+   - Regenerate the linked issue body from the updated PR description evidence table.
+3. **If the test is NOT failing on the latest main run (i.e. it has started passing):**
+   - Remove the disable for that test from the feature branch.
+   - Remove the test's row from the PR description's evidence table.
+   - Remove the test's entry from the linked issue (regenerate from the trimmed PR description).
+   - Add a PR comment noting the removal: `` Removed disable for `<test>` — passing on main as of run `<url>` at `<timestamp>`. ``
+
+This refresh:
+
+- MUST happen even for Examining PRs that will not dispatch this session.
+- MUST happen for Focus PRs BEFORE dispatch, so verification only runs against the genuinely-still-failing set.
+- Is performed in addition to the existing rebase + revalidation steps in `Session Start Rebase + Revalidation` and `Session Scope (Two Lanes — Focus and Examining)` → Lane A — those sections describe **when** the automation touches a PR; this section describes **what evidence work** that touch entails.
+
+## Anti-stale-disable invariant
+
+This is the operational version of the rationale blockquote at the top of this document. The rules here are MUST / MUST NOT.
+
+- Before ANY new disable lands in a PR (initial batch), the automation MUST find ≥3 consecutive failing main runs for that EXACT test+parametrization with the SAME error signature. This restates the existing eligibility rule (see `PR Disable Batch Policy`) so the agent treats it as part of the evidence invariant rather than an unrelated batch policy.
+- Before EVERY PR touch (Examining or pre-dispatch Focus), the automation MUST re-verify each currently-disabled test is still failing on the latest main run, per `Refresh evidence on every PR touch` above. Tests passing on main are removed immediately, evidence and all.
+- If the automation cannot reach the failing main runs for a currently-disabled test (e.g. job logs expired, run was deleted, GitHub API returns 404), it MUST NOT silently keep the disable. It MUST add a PR comment with the literal text:
+
+  ```
+  Evidence link broken — please review.
+  ```
+
+  No `@`-mention is permitted in this comment. Do not ping `ebanerjeeTT` here or anywhere else.
+
 ## Goal
 
 Avoid running every job in a large workflow after each disable change.
@@ -64,10 +148,10 @@ Cap: **up to 3 examining PRs per session.**
 Examining PRs are existing open draft disable PRs that need maintenance but should NOT consume a workflow-dispatch slot this session. The default eligibility is "PRs in a non-terminal lifecycle"; under **tier 1** terminal state (see `Terminal States (Two Tiers)` → tier 1), eligibility expands to ANY non-merged open draft disable PR — `verified-pass` / `verified-fail` PRs included — because they still need ongoing rebase + disable-revalidation maintenance to stay merge-ready. For each examining PR, the agent performs ALL of:
 
 - Rebase the PR branch onto the latest `origin/main` and push the merge.
-- Revalidate every currently-disabled test against the latest `main` runs; remove disables for tests that have been fixed on `main`.
+- Revalidate every currently-disabled test against the latest `main` runs AND refresh main-run evidence per `Refresh evidence on every PR touch`. Tests now passing on main are removed from the branch, the PR description's evidence table, and the issue (with a removal comment on the PR). For tests still failing, the PR description's evidence row is updated to point to the latest failing main job-link.
 - **Log-analyze any verification run that completed since the previous session**, and transition the PR's lifecycle to `verified-pass`, `verified-fail`, or `verification-inconclusive` based on the result. This includes runs that completed at the artifact-acquisition step (build-artifact failure for fresh build, download-artifacts failure for reuse, runner allocation failure, or any other infra failure that prevented pytest from running on the previously-passing jobs) — those are classified `verification-inconclusive`, do NOT consume the PR's one-verification-run budget, and are retry-eligible. See `Verification run inspection (next-session)` under `## Build Reuse (Optional, Strongly Preferred)` below for the full classification rule and example commands.
-- Comment on the PR with what changed this session.
-- Sync the disable-tracking issue with the current disable set.
+- Comment on the PR with what changed this session (rebase log, revalidation log, evidence-refresh log, any disables removed because they started passing on main). NEVER move these notes into the PR description.
+- Sync the disable-tracking issue with the current disable set BY REGENERATING the issue body from the PR description's evidence table (deterministic overwrite — see `Main-run evidence model` → `Linked issue = mirror of PR description`).
 - Update the PR's entry in the state log (`disabling-work/disabling-work-so-far-galaxy.md`).
 
 **No workflow dispatches occur in the examining lane.** Dispatches happen only in the focus lane below.
@@ -86,8 +170,10 @@ Focus-slot fill priority (in this exact order):
 
 Per-focus-PR flow:
 
-- **New PR (priority 1):** commit the initial disable batch + push, then dispatch the verification run — same session.
-- **Legacy `batch-committed` PR (priority 2)** or **`verification-inconclusive` PR (priority 3):** rebase first (if applicable), then dispatch.
+- **Pre-dispatch evidence refresh (ALL focus PRs):** before dispatching, run `Refresh evidence on every PR touch` against the current disable set. Tests now passing on main are removed BEFORE the verification dispatch, so verification only runs against the genuinely-still-failing set. Update the PR description's evidence table and regenerate the linked issue from it.
+- **New PR (priority 1):** commit the initial disable batch, populate the PR description's evidence table (one row per disabled test, with the job-link URL captured in `Operating Procedure` step 1), generate the linked issue body from that table, push, then dispatch the verification run — same session.
+- **Legacy `batch-committed` PR (priority 2)** or **`verification-inconclusive` PR (priority 3):** rebase first (if applicable), run the pre-dispatch evidence refresh above, then dispatch.
+- **Verification-dispatch comment (ALL focus PRs):** immediately after dispatch, post a PR comment containing the dispatched run URL, the source-of-build-artifacts run URL (or the literal string "built fresh"), and the commit SHA the branch was rebased on at dispatch time. NEVER put this in the PR description.
 
 The 3-dispatch session cap is the hard limit. A focus PR whose dispatch would exceed the cap MUST be deferred to the next session; the OUTPUT must explicitly name which other PRs consumed the dispatch slots.
 
@@ -381,15 +467,15 @@ Do not spend disable/fix cycles on out-of-scope failures in this project.
 
 > **Newly created PRs flow straight through this procedure in the same session.** A focus PR that was created in this session's second-pass fill (see "Session Scope (Up to Three PRs)") is eligible for — and required to receive — its initial verification dispatch (steps 5–7 below) in the same session as its creation, subject to the 3-dispatch session cap and the artifact-reuse / fresh-build rules. Do not defer a newly created PR's first dispatch to the next session unless the 3-dispatch cap is already exhausted by other focus PRs.
 
-1. Identify deterministic failures from completed runs on `main` and confirm each candidate has the same error signature across at least 3 consecutive `main` runs.
-2. Before any verification run, build exactly one initial disable batch from those `main`-proven failures and commit it to the PR branch.
+1. **Produce the main-run evidence link.** Identify deterministic failures from completed runs on `main` and confirm each candidate has the same error signature across at least 3 consecutive `main` runs. For each candidate, capture the most recent failing job-link URL (`https://github.com/tenstorrent/tt-metal/actions/runs/<run-id>/job/<job-id>`) and the run's completion timestamp; this is the main-run evidence the PR description and issue MUST carry per `Main-run evidence model`. **If you cannot produce that link, you cannot disable the test** (`Main-run evidence — non-negotiable invariant`).
+2. Before any verification run, build exactly one initial disable batch from those `main`-proven failures and commit it to the PR branch. Populate the PR description with the evidence table (one row per disabled test, with the job-link URL and completion timestamp captured in step 1) and generate the linked issue body from that same table. Verification-dispatch links and automation status updates do NOT go in the PR description — only PR comments (see `Main-run evidence model`).
 3. Do not use PR-branch verification to discover or add new disables; verification is not a disable-discovery pass.
 4. Build the one-run target job set only for regression confirmation in jobs that were passing on `main`.
 5. Create a temporary verification branch from the current feature branch.
 6. In the temporary branch, modify workflow/job selection so only target jobs run.
-7. Dispatch exactly one targeted verification run for the PR.
+7. Dispatch exactly one targeted verification run for the PR. Immediately after dispatch, post the verification-dispatch comment on the PR (see `Session Scope (Two Lanes — Focus and Examining)` → Lane B → Per-focus-PR flow).
 8. After that run, do not add new disables and do not run another verification pass for the same PR.
-9. Subsequent PR updates are removal-only when latest `main` proves a previously disabled test is fixed.
+9. Subsequent PR updates are removal-only when latest `main` proves a previously disabled test is fixed (per `Refresh evidence on every PR touch`).
 
 ## Automation Efficiency Guardrails
 
@@ -505,8 +591,12 @@ When in doubt between "skip due to throttle" and "do something useful", do somet
 
 ## Draft PR / Issue / Status File Management (Mandatory)
 
-- The disable-tracking issue is the source of truth for the current disable set.
+- The PR description's evidence table is the source of truth for the current disable set and the per-test main-run evidence (see `Main-run evidence model`). The linked tracking issue is regenerated from that table on every PR touch — deterministic overwrite, do NOT append.
 - Keep timeout-involved failures in a separate timeout-tracking issue; do not mix timeout tracking into the disable-tracking issue.
-- Keep `disabling-work/disabling-work-so-far-galaxy.md` in sync with both PR status and workflow run status.
-- Every disable removal in the PR must be reflected in both the disable-tracking issue and `disabling-work/disabling-work-so-far-galaxy.md` in the same session.
-- After the initial disable batch is committed, updates should be removal/revalidation only (no new disables on that PR).
+- Keep `disabling-work/disabling-work-so-far-galaxy.md` in sync with both PR status and workflow run status, and per `State log impact` below carry the same per-test main-run evidence link the PR description does (or reference the PR description as the source of truth).
+- Every disable removal in the PR must be reflected in the PR description's evidence table, the linked tracking issue, AND `disabling-work/disabling-work-so-far-galaxy.md` in the same session, with a PR comment noting the removal (see `Refresh evidence on every PR touch`).
+- After the initial disable batch is committed, updates should be removal / revalidation / evidence-refresh only (no new disables on that PR).
+
+### State log impact
+
+Each PR entry in `disabling-work/disabling-work-so-far-galaxy.md` SHOULD list, per disabled test, the most recent failing main-run job-link (`/runs/<id>/job/<jid>`) and the run completion timestamp. The next session uses these as the starting point before re-checking. The existing per-PR section format already supports this via a `Disables (with main evidence)` table — preserve any existing PR entries unchanged when extending the schema. If keeping the state log compact is preferred, the per-PR section MAY instead include a one-line pointer to the PR description as the source of truth (e.g. `Main-run evidence: see PR description.`); in that case the PR description's evidence table is authoritative.
