@@ -1,4 +1,5 @@
 from dataclasses import dataclass, asdict
+from argparse import ArgumentParser
 from pathlib import Path
 from typing import Any
 
@@ -142,6 +143,20 @@ def write_csv(path: str | Path, rows: list[list], columns: list[str]) -> None:
 def main():
     inf = "out.json"
     outf = "out.csv"
+
+    parser = ArgumentParser()
+    parser.add_argument("-i", type=str, help="Input JSON file to analyze")
+    parser.add_argument("-o", type=str, help="Output file to write CSV data to")
+    opts = parser.parse_args()
+
+    if opts.i:
+        inf = opts.i
+
+    if opts.o:
+        outf = opts.o
+
+    print(f"Reading {inf} and writing to {outf}")
+
     with open(inf, "r") as f:
         data = json.load(f)
 
