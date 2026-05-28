@@ -38,9 +38,12 @@ from models.experimental.devstral2_123B_instruct.tt.ccl_helpers import all_reduc
 from models.experimental.devstral2_123B_instruct.tt.mem_config import (
     get_compute_kernel_config,
     get_compute_kernel_config_hifi4,
+    get_decode_qkv_matmul_program_config,
+    get_decode_width_sharded_matmul_output_mem_config,
     get_linear_program_config,
     get_prefill_qkv_matmul_output_mem_config,
     get_prefill_qkv_matmul_program_config,
+    use_width_sharded_decode_norm_matmul,
     use_width_sharded_prefill_norm_matmul,
     get_sdpa_decode_compute_kernel_config,
     get_sdpa_decode_output_mem_config,
@@ -330,6 +333,22 @@ class TtAttention:
 
     def _project_qkv_decode(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """Fused ``[Q | K | V]`` activation for ``nlp_create_qkv_heads_decode``."""
+        act_mem = self._act_mem("decode")
+        n = int(self.qkv_proj.shape[-1])
+        if use_width_sharded_decode_norm_matmul(self.args, "decode"):
+            qkv = self._linear(
+                x,
+                self.qkv_proj,
+                mode="decode",
+                kind="qkv",
+                output_dtype=self.qkv_proj_output_dtype,
+                compute_kernel_config=self._compute_kernel_config_hifi4,
+                memory_config=get_decode_width_sharded_matmul_output_mem_config(),
+                program_config=get_decode_qkv_matmul_program_config(self.args, self.mesh_device, n=n),
+            )
+            if qkv.memory_config().is_sharded():
+                qkv = ttnn.sharded_to_interleaved(qkv, act_mem)
+            return qkv
         return self._linear(
             x,
             self.qkv_proj,

@@ -29,9 +29,12 @@ from models.experimental.devstral2_123B_instruct.tt.ccl_helpers import all_reduc
 from models.experimental.devstral2_123B_instruct.tt.mem_config import (
     get_compute_kernel_config,
     get_compute_kernel_config_hifi4,
+    get_decode_width_sharded_matmul_output_mem_config,
+    get_decode_width_sharded_matmul_program_config,
     get_linear_program_config,
     get_prefill_width_sharded_matmul_output_mem_config,
     get_prefill_width_sharded_matmul_program_config,
+    use_width_sharded_decode_norm_matmul,
     use_width_sharded_prefill_norm_matmul,
 )
 from models.experimental.devstral2_123B_instruct.tt.model_args import Devstral2Args
@@ -121,6 +124,7 @@ class TtMLP:
             *,
             kind: str,
             activation: Optional[str] = None,
+            fused_activation: Optional[str] = None,
             output_dtype: Optional[ttnn.DataType] = None,
             compute_kernel_config=None,
             memory_config: Optional[ttnn.MemoryConfig] = None,
@@ -137,6 +141,7 @@ class TtMLP:
                     seq_len=seq_len,
                     k=k,
                     n=n,
+                    fused_activation=fused_activation,
                 )
             return ttnn.linear(
                 inp,
@@ -150,6 +155,37 @@ class TtMLP:
                 else self._compute_kernel_config,
             )
 
+        def _decode_width_sharded_linear(
+            inp,
+            weight,
+            *,
+            kind: str,
+            fused_activation: Optional[str] = None,
+            output_dtype: Optional[ttnn.DataType] = None,
+            compute_kernel_config=None,
+            keep_sharded: bool = False,
+        ) -> ttnn.Tensor:
+            """Width-sharded matmul on the decode norm 8×8 grid."""
+            n = int(weight.shape[-1])
+            out = _linear(
+                inp,
+                weight,
+                kind=kind,
+                activation=None,
+                output_dtype=output_dtype,
+                compute_kernel_config=compute_kernel_config,
+                memory_config=get_decode_width_sharded_matmul_output_mem_config(),
+                program_config=get_decode_width_sharded_matmul_program_config(
+                    self.args,
+                    self.mesh_device,
+                    n=n,
+                    fused_activation=fused_activation,
+                ),
+            )
+            if not keep_sharded and out.memory_config().is_sharded():
+                out = ttnn.sharded_to_interleaved(out, act_mem)
+            return out
+
         def _prefill_width_sharded_linear(
             inp,
             weight,
@@ -158,6 +194,7 @@ class TtMLP:
             fused_activation: Optional[str] = None,
             output_dtype: Optional[ttnn.DataType] = None,
             compute_kernel_config=None,
+            keep_sharded: bool = False,
         ) -> ttnn.Tensor:
             """Width-sharded matmul on the prefill norm grid.
 
@@ -181,11 +218,21 @@ class TtMLP:
                     fused_activation=fused_activation,
                 ),
             )
-            if out.memory_config().is_sharded():
+            if not keep_sharded and out.memory_config().is_sharded():
                 out = ttnn.sharded_to_interleaved(out, act_mem)
             return out
 
+        def _swiglu_mul(gate: ttnn.Tensor, up: ttnn.Tensor) -> ttnn.Tensor:
+            """``silu(gate) * up``; keep width-sharded when both matmul outputs share a layout."""
+            if gate.memory_config().is_sharded() and gate.memory_config() == up.memory_config():
+                inner = ttnn.mul(gate, up, memory_config=gate.memory_config())
+                if inner.memory_config().is_sharded():
+                    inner = ttnn.sharded_to_interleaved(inner, act_mem)
+                return inner
+            return ttnn.mul(gate, up, memory_config=act_mem)
+
         use_ws = use_width_sharded_prefill_norm_matmul(self.args, mode, seq_len)
+        use_decode_ws = use_width_sharded_decode_norm_matmul(self.args, mode)
         if use_ws:
             gate = _prefill_width_sharded_linear(
                 x,
@@ -194,6 +241,7 @@ class TtMLP:
                 fused_activation="silu",
                 output_dtype=self.gate_proj_output_dtype,
                 compute_kernel_config=self._compute_kernel_config_hifi4,
+                keep_sharded=True,
             )
             up = _prefill_width_sharded_linear(
                 x,
@@ -201,13 +249,32 @@ class TtMLP:
                 kind="up",
                 output_dtype=self.up_proj_output_dtype,
                 compute_kernel_config=self._compute_kernel_config_hifi4,
+                keep_sharded=True,
+            )
+        elif use_decode_ws:
+            gate = _decode_width_sharded_linear(
+                x,
+                self.gate_proj,
+                kind="gate",
+                fused_activation="silu",
+                output_dtype=self.gate_proj_output_dtype,
+                compute_kernel_config=self._compute_kernel_config_hifi4,
+                keep_sharded=True,
+            )
+            up = _decode_width_sharded_linear(
+                x,
+                self.up_proj,
+                kind="up",
+                output_dtype=self.up_proj_output_dtype,
+                compute_kernel_config=self._compute_kernel_config_hifi4,
+                keep_sharded=True,
             )
         else:
             gate = _linear(
                 x,
                 self.gate_proj,
                 kind="gate",
-                activation="silu",
+                fused_activation="silu",
                 output_dtype=self.gate_proj_output_dtype,
                 compute_kernel_config=self._compute_kernel_config_hifi4,
             )
@@ -218,7 +285,7 @@ class TtMLP:
                 output_dtype=self.up_proj_output_dtype,
                 compute_kernel_config=self._compute_kernel_config_hifi4,
             )
-        inner = ttnn.mul(gate, up, memory_config=act_mem)
+        inner = _swiglu_mul(gate, up) if (use_ws or use_decode_ws) else ttnn.mul(gate, up, memory_config=act_mem)
         ttnn.deallocate(gate)
         ttnn.deallocate(up)
 

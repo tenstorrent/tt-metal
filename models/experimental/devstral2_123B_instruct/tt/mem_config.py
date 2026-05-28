@@ -108,14 +108,8 @@ def _largest_divisor_at_most(n: int, cap: int) -> int:
 
 
 def _pick_width_shard_grid(hidden: int) -> ttnn.CoreGrid:
-    """32-core width grid for decode RMSNorm (one tile row per core shard)."""
-    hidden_padded = pad_to_tile(hidden)
-    for grid_y, grid_x in ((4, 8), (8, 4), (2, 8), (4, 4)):
-        num_cores = grid_y * grid_x
-        shard_w = hidden_padded // num_cores
-        if hidden_padded % num_cores == 0 and shard_w % ttnn.TILE_SIZE == 0:
-            return ttnn.CoreGrid(y=grid_y, x=grid_x)
-    return ttnn.CoreGrid(y=4, x=4)
+    """64-core (8×8) width grid for decode — matches prefill so norm output feeds matmul directly."""
+    return _pick_prefill_width_shard_grid(hidden)
 
 
 def _pick_prefill_width_shard_grid(hidden: int) -> ttnn.CoreGrid:
@@ -131,7 +125,7 @@ def _pick_prefill_width_shard_grid(hidden: int) -> ttnn.CoreGrid:
 
 @lru_cache(maxsize=8)
 def get_decode_width_sharded_activation_mem_config(hidden_size: int) -> ttnn.MemoryConfig:
-    """L1 WIDTH-sharded activations for decode (``M`` padded to one tile row, hidden split)."""
+    """L1 WIDTH-sharded activations for decode (``M`` padded to one tile row, hidden split on 8×8)."""
     hidden_padded = pad_to_tile(hidden_size)
     grid = _pick_width_shard_grid(hidden_padded)
     shard_w = hidden_padded // grid.num_cores
@@ -331,6 +325,44 @@ def get_prefill_qkv_matmul_program_config(
 def use_width_sharded_prefill_norm_matmul(args: Devstral2Args, mode: str, seq_len: int) -> bool:
     """True when prefill linears may consume width-sharded RMSNorm output (QKV, gate, up)."""
     return mode == "prefill" and int(seq_len) <= args.kv_block_size
+
+
+def use_width_sharded_decode_norm_matmul(args: Devstral2Args, mode: str) -> bool:
+    """True when decode QKV / gate / up may consume width-sharded RMSNorm output on the 8×8 grid."""
+    _ = args
+    return mode == "decode"
+
+
+def get_decode_width_sharded_matmul_output_mem_config() -> ttnn.MemoryConfig:
+    """WIDTH-sharded L1 matmul output on the decode norm 8×8 grid."""
+    return get_prefill_width_sharded_matmul_output_mem_config()
+
+
+def get_decode_width_sharded_matmul_program_config(
+    args: Devstral2Args,
+    mesh_device,
+    *,
+    n: int,
+    fused_activation: Optional[str] = None,
+) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
+    """1D mcast matmul on the decode RMSNorm 8×8 grid (``M`` padded to one tile row)."""
+    return get_prefill_width_sharded_matmul_program_config(
+        args,
+        mesh_device,
+        seq_len=ttnn.TILE_SIZE,
+        n=n,
+        fused_activation=fused_activation,
+    )
+
+
+def get_decode_qkv_matmul_program_config(
+    args: Devstral2Args,
+    mesh_device,
+    *,
+    n: int,
+) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
+    """Alias for decode QKV (no fused activation)."""
+    return get_decode_width_sharded_matmul_program_config(args, mesh_device, n=n, fused_activation=None)
 
 
 def _pick_1d_grid(mesh_device, *, n_tiles: int) -> tuple[int, int]:

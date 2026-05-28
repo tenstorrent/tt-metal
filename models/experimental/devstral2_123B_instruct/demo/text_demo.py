@@ -30,6 +30,9 @@ Decode uses traced replay; **2CQ** (CQ1=input H2D, CQ0=forward/trace) is on by d
 
 Set ``DEVSTRAL2_TRACE_PREFILL=0`` to run chunked prefill without trace capture.
 
+Throughput logging (end of run) reports **TT device time only** — prefill trace forward and
+decode trace replay tok/s, excluding H2D, logits D2H, sampling, and compile/capture warmup.
+
 Usage (pytest, single Loudbox / 1x8 mesh by default)::
 
     pytest models/experimental/devstral2_123B_instruct/demo/text_demo.py
@@ -284,6 +287,29 @@ def _prefill_flexible_kwargs(
     )
 
 
+def _time_tt_op(t0: float) -> float:
+    """Elapsed seconds since ``t0`` (``time.perf_counter``)."""
+    return time.perf_counter() - t0
+
+
+def _log_tt_throughput(stats: dict, *, padded_prompt_len: int) -> None:
+    """Log TT-only prefill forward and decode trace-replay throughput."""
+    tt_prefill_s = stats["tt_prefill_s"]
+    tt_decode_s = stats["tt_decode_s"]
+    tt_decode_steps = stats["tt_decode_steps"]
+    if tt_prefill_s > 0:
+        logger.info(
+            f"Prefill TT forward: {tt_prefill_s * 1000:.0f}ms "
+            f"({padded_prompt_len / tt_prefill_s:.1f} prompt tok/s, device only)"
+        )
+    if tt_decode_steps > 0 and tt_decode_s > 0:
+        tt_decode_tok_per_s = tt_decode_steps / tt_decode_s
+        logger.info(
+            f"Decode TT throughput: {tt_decode_steps} trace replay(s) in {tt_decode_s * 1000:.0f}ms "
+            f"({tt_decode_tok_per_s:.2f} tok/s/user; excludes H2D, logits D2H, sampling, compile/capture)"
+        )
+
+
 def _logits_to_torch(tt_logits: ttnn.Tensor, mesh_device, vocab_size: int) -> torch.Tensor:
     """Concat the column-parallel ``lm_head`` outputs back to a full vocab row."""
     out_last = int(tt_logits.shape[-1])
@@ -418,10 +444,16 @@ def _generate(
     decode_trace_id = None
     prefill_trace_logits = None
     decode_trace_logits = None
+    decoded = ""
+    stats = {
+        "tt_prefill_s": 0.0,
+        "tt_decode_s": 0.0,
+        "tt_decode_steps": 0,
+    }
     rotary_emb = model.model.rotary_emb
     try:
         # ── Chunked paged prefill (``paged_fill_cache`` + ``chunked_scaled_dot_product_attention``) ──
-        t_prefill = time.time()
+        t_prefill_compile = time.perf_counter()
         next_token: Optional[int] = None
 
         if trace_prefill:
@@ -455,8 +487,9 @@ def _generate(
                 warm_logits = model(prefill_chunk_dev, mode="prefill", **flex)
                 warm_logits.deallocate(True)
             ttnn.synchronize_device(mesh_device)
+            compile_prefill_s = _time_tt_op(t_prefill_compile)
             logger.info(
-                f"Prefill compile pass: {(time.time() - t_prefill) * 1000:.0f}ms "
+                f"Prefill compile pass: {compile_prefill_s * 1000:.0f}ms "
                 f"({num_prefill_chunks} chunk(s), flexible trace)"
             )
 
@@ -480,12 +513,11 @@ def _generate(
                 chunk_page_table=chunk_page_table,
                 rope_dev_bufs=rope_dev_bufs,
             )
-            t_capture = time.time()
+            t_tt_prefill = time.perf_counter()
             prefill_trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
             prefill_trace_logits = model(prefill_chunk_dev, mode="prefill", **flex)
             ttnn.end_trace_capture(mesh_device, prefill_trace_id, cq_id=0)
             ttnn.synchronize_device(mesh_device)
-            logger.info(f"Prefill trace captured in {(time.time() - t_capture) * 1000:.0f}ms")
 
             for chunk_idx in range(1, num_prefill_chunks):
                 chunk_start = chunk_idx * kv_block_size
@@ -505,15 +537,19 @@ def _generate(
                 ttnn.execute_trace(mesh_device, prefill_trace_id, cq_id=0, blocking=True)
                 ttnn.synchronize_device(mesh_device)
 
+            stats["tt_prefill_s"] = _time_tt_op(t_tt_prefill)
+
             last_chunk_start = (num_prefill_chunks - 1) * kv_block_size
             ttnn.synchronize_device(mesh_device)
             logits_torch = _logits_to_torch(prefill_trace_logits, mesh_device, args.vocab_size)
             local_pos = (prompt_len - 1) - last_chunk_start
             next_token = int(logits_torch[local_pos].argmax().item())
             logger.info(
-                f"Chunked prefill trace ({num_prefill_chunks} chunk(s)): " f"{(time.time() - t_prefill) * 1000:.0f}ms"
+                f"Chunked prefill trace ({num_prefill_chunks} chunk(s)): "
+                f"TT forward={stats['tt_prefill_s'] * 1000:.0f}ms"
             )
         else:
+            t_tt_prefill = time.perf_counter()
             for chunk_idx in range(num_prefill_chunks):
                 chunk_start = chunk_idx * kv_block_size
                 chunk_tokens = input_ids_padded[:, chunk_start : chunk_start + kv_block_size]
@@ -529,11 +565,14 @@ def _generate(
 
             last_chunk_start = (num_prefill_chunks - 1) * kv_block_size
             ttnn.synchronize_device(mesh_device)
+            stats["tt_prefill_s"] = _time_tt_op(t_tt_prefill)
             logits_torch = _logits_to_torch(prefill_trace_logits, mesh_device, args.vocab_size)
             local_pos = (prompt_len - 1) - last_chunk_start
             next_token = int(logits_torch[local_pos].argmax().item())
             prefill_trace_logits.deallocate(True)
-            logger.info(f"Chunked prefill ({num_prefill_chunks} chunk(s)): {(time.time() - t_prefill) * 1000:.0f}ms")
+            logger.info(
+                f"Chunked prefill ({num_prefill_chunks} chunk(s)): " f"TT forward={stats['tt_prefill_s'] * 1000:.0f}ms"
+            )
 
         assert next_token is not None
         logger.info(f"First generated token {next_token} = {tokenizer.decode([next_token])!r}")
@@ -547,9 +586,6 @@ def _generate(
         # ── Decode: 1) untraced compile, 2) capture trace at iter 1, 3) replay ───
         generated = [next_token]
         current_pos = prompt_len
-        compile_decode_time = 0.0
-        capture_decode_time = 0.0
-        t_decode_start = time.time()
         for iteration in range(max_new_tokens - 1):
             if eos_token_id is not None and next_token == eos_token_id:
                 logger.info("EOS reached; stopping.")
@@ -558,43 +594,44 @@ def _generate(
             if iteration == 0:
                 # Untraced compile pass (kernel cache only; do not sample — avoids an extra
                 # decode step and KV write before trace capture).
-                t_compile = time.time()
+                t_compile = time.perf_counter()
                 stage_decode_inputs(decode_2cq, mesh_device, decode_tok_dev, decode_pos_dev, next_token, current_pos)
                 tt_out = model(decode_tok_dev, mode="decode", current_pos=decode_pos_dev)
                 tt_out.deallocate(True)
                 ttnn.synchronize_device(mesh_device)
                 signal_decode_step_done(decode_2cq)
-                compile_decode_time = time.time() - t_compile
-                logger.info(f"Decode compile pass: {compile_decode_time*1000:.0f}ms")
+                compile_ms = (time.perf_counter() - t_compile) * 1000
+                logger.info(f"Decode compile pass: {compile_ms:.0f}ms")
 
-                # Capture trace bound to (decode_tok_dev, decode_pos_dev); first replay logits
-                # come from this capture pass.
-                t_capture = time.time()
+                # Capture trace bound to (decode_tok_dev, decode_pos_dev).
+                t_capture = time.perf_counter()
                 stage_decode_inputs(decode_2cq, mesh_device, decode_tok_dev, decode_pos_dev, next_token, current_pos)
                 decode_trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
                 decode_trace_logits = model(decode_tok_dev, mode="decode", current_pos=decode_pos_dev)
                 ttnn.end_trace_capture(mesh_device, decode_trace_id, cq_id=0)
                 ttnn.synchronize_device(mesh_device)
                 signal_decode_step_done(decode_2cq)
-                capture_decode_time = time.time() - t_capture
+                capture_decode_s = _time_tt_op(t_capture)
                 suffix = " (2CQ)" if decode_2cq is not None else ""
-                logger.info(f"Decode trace captured in {capture_decode_time*1000:.0f}ms{suffix}")
+                logger.info(f"Decode trace captured in {capture_decode_s * 1000:.0f}ms{suffix} (TT forward only)")
 
                 logits_torch = _logits_to_torch(decode_trace_logits, mesh_device, args.vocab_size)
                 next_token = int(logits_torch[0].argmax().item())
                 generated.append(next_token)
                 current_pos += 1
             else:
-                # Replay: refresh inputs, execute trace, then sync before reading logits.
                 stage_decode_inputs(decode_2cq, mesh_device, decode_tok_dev, decode_pos_dev, next_token, current_pos)
+                t_decode = time.perf_counter()
                 ttnn.execute_trace(mesh_device, decode_trace_id, cq_id=0, blocking=False)
                 ttnn.synchronize_device(mesh_device)
                 signal_decode_step_done(decode_2cq)
+                stats["tt_decode_s"] += _time_tt_op(t_decode)
+                stats["tt_decode_steps"] += 1
+
                 logits_torch = _logits_to_torch(decode_trace_logits, mesh_device, args.vocab_size)
                 next_token = int(logits_torch[0].argmax().item())
                 generated.append(next_token)
                 current_pos += 1
-        decode_time = time.time() - t_decode_start
         decoded = tokenizer.decode(generated, skip_special_tokens=True)
     finally:
         if prefill_trace_id is not None:
@@ -607,12 +644,8 @@ def _generate(
     logger.info("=== Response ===")
     logger.info(decoded)
 
-    num_decoded = len(generated)
-    if num_decoded > 1 and decode_time > 0:
-        logger.info(
-            f"Decode: {num_decoded - 1} steps in {decode_time*1000:.0f}ms "
-            f"(~{(num_decoded - 1)/decode_time:.2f} tok/s/user)"
-        )
+    if stats["tt_prefill_s"] > 0 or stats["tt_decode_steps"] > 0:
+        _log_tt_throughput(stats, padded_prompt_len=padded_prompt_len)
     return decoded
 
 

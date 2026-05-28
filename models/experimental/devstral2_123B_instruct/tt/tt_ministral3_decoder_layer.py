@@ -17,7 +17,9 @@ from typing import Optional, Sequence
 import ttnn
 
 from models.experimental.devstral2_123B_instruct.tt.mem_config import (
+    get_decode_width_sharded_activation_mem_config,
     get_prefill_width_sharded_activation_mem_config,
+    use_width_sharded_decode_norm_matmul,
     use_width_sharded_prefill_norm_matmul,
 )
 from models.experimental.devstral2_123B_instruct.tt.model_args import Devstral2Args
@@ -96,11 +98,11 @@ class TtDecoderLayer:
         mesh_device = self.self_attn.mesh_device
         act_mem = self.args.get_activation_mem_config(mode, mesh_device)
         seq_len = max(1, int(x.shape[-2]))
-        ws_norm_out_mem = (
-            get_prefill_width_sharded_activation_mem_config(seq_len, self.args.hidden_size)
-            if use_width_sharded_prefill_norm_matmul(self.args, mode, seq_len)
-            else act_mem
-        )
+        ws_norm_out_mem = act_mem
+        if use_width_sharded_prefill_norm_matmul(self.args, mode, seq_len):
+            ws_norm_out_mem = get_prefill_width_sharded_activation_mem_config(seq_len, self.args.hidden_size)
+        elif use_width_sharded_decode_norm_matmul(self.args, mode):
+            ws_norm_out_mem = get_decode_width_sharded_activation_mem_config(self.args.hidden_size)
         input_norm_out_mem = ws_norm_out_mem
 
         # Attention sub-block.
