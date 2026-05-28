@@ -90,7 +90,10 @@ SHAPES = [
     pytest.param((1, 1, 32, 256), id="non_square_32x256"),
     pytest.param((2, 4, 64, 64), id="multi_batch_2x4x64x64"),
     pytest.param((1, 1, 128, 512), id="taller_128x512"),
-    pytest.param((4, 1, 32, 1024), id="widest_in_budget_4x1x32x1024"),
+    # Phase 0 caps W at 512 — the W=1024 + gamma+beta configuration
+    # overshoots per-core L1 (1.7 MB vs. the 1.5 MB budget). The wider-W
+    # path is the W-axis chunking refinement; see op_requirements.md.
+    pytest.param((4, 1, 32, 512), id="widest_in_budget_4x1x32x512"),
 ]
 
 
