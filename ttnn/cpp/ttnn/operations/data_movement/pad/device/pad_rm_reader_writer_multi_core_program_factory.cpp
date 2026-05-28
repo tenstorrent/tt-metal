@@ -162,7 +162,7 @@ split_across_cores(CoreCoord grid_size, uint32_t nbatch, uint32_t ntiles_h, uint
 // create_workload_descriptor() can build it once on cache miss and park it on
 // WorkloadDescriptor::buffers, deferring ~Tensor (which force-deallocates the
 // device memory) until the cached workload is evicted (see #44565).
-Tensor build_pad_value_const_tensor(const PadInputs& tensor_args, float pad_value) {
+Tensor build_pad_value_const_tensor_mc(const PadInputs& tensor_args, float pad_value) {
     MeshDevice* device = tensor_args.input.device();
     uint32_t pad_value_const_buffer_size = 32;  // noc transfers in chunks of 32
     auto pad_value_const_buffer =
@@ -177,7 +177,7 @@ Tensor build_pad_value_const_tensor(const PadInputs& tensor_args, float pad_valu
         .to_device(device, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1});
 }
 
-ProgramDescriptor build_program_descriptor(
+ProgramDescriptor build_pad_rm_mc_program_descriptor(
     const PadParams& operation_attributes,
     const PadInputs& tensor_args,
     Tensor& output,
@@ -413,12 +413,12 @@ WorkloadDescriptor PadRmReaderWriterMultiCoreProgramFactory::create_workload_des
     // shared_ptr<MeshBuffer>) is required because ~Tensor force-deallocates the
     // device memory through DeviceStorage::deallocate regardless of external
     // shared_ptr<MeshBuffer> owners (see #44565).
-    Tensor pad_value_const_tensor = build_pad_value_const_tensor(tensor_args, operation_attributes.pad_value);
+    Tensor pad_value_const_tensor = build_pad_value_const_tensor_mc(tensor_args, operation_attributes.pad_value);
     auto pad_value_owner = std::make_shared<Tensor>(std::move(pad_value_const_tensor));
     Buffer* pad_value_const_buffer = pad_value_owner->buffer();
     wd.buffers.push_back({pad_value_owner, pad_value_const_buffer});
 
-    auto desc = build_program_descriptor(operation_attributes, tensor_args, output, pad_value_const_buffer);
+    auto desc = build_pad_rm_mc_program_descriptor(operation_attributes, tensor_args, output, pad_value_const_buffer);
 
     auto ranges = tensor_coords.ranges();
     for (size_t i = 0; i + 1 < ranges.size(); ++i) {
