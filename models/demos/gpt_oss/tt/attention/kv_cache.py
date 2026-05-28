@@ -18,6 +18,7 @@ def init_kv_cache(
     paged_attention_config=None,
     cache_dtype=ttnn.bfloat8_b,
     tensor_cache_path=None,
+    max_num_blocks_override: int | None = None,
 ):
     """
     Initialize KV cache for both paged and non-paged attention.
@@ -29,6 +30,11 @@ def init_kv_cache(
         paged_attention_config: Optional paged attention configuration
         cache_dtype: Data type for cache tensors (default: bfloat8_b)
         tensor_cache_path: Optional path for cache file
+        max_num_blocks_override: When set (only meaningful in paged mode), size the
+            physical block pool to this value instead of paged_attention_config.max_num_blocks.
+            vLLM's hybrid kv_cache_groups uses this for SlidingWindowSpec layers: the
+            sliding-window cache holds only sliding_window/block_size blocks per sequence,
+            while the per-layer page_table is zero-padded to max_model_len/block_size.
 
     Returns:
         List [k_cache, v_cache]
@@ -37,8 +43,11 @@ def init_kv_cache(
     kv_cache_repeats = mesh_device.shape[0] if config.users_row_sharded else 1
     if paged_attention_config:
         # Paged attention cache shape: [max_num_blocks, num_kv_heads, block_size, head_dim]
+        max_num_blocks = (
+            max_num_blocks_override if max_num_blocks_override is not None else paged_attention_config.max_num_blocks
+        )
         cache_shape = [
-            paged_attention_config.max_num_blocks * kv_cache_repeats,
+            max_num_blocks * kv_cache_repeats,
             config.num_kv_heads // mesh_device.shape[1],
             paged_attention_config.block_size,
             config.head_dim,

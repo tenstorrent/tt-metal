@@ -36,6 +36,7 @@ class Attention:
         weight_dtype=ttnn.bfloat8_b,
         tensor_cache_path=None,
         create_kv_cache=True,
+        bounded_sliding_kv_cache: bool = False,
     ):
         """
         Initialize attention layer.
@@ -68,6 +69,19 @@ class Attention:
         if not self.use_sliding_window:
             object.__setattr__(config, "sliding_window", None)
 
+        # vLLM-style hybrid kv_cache_groups: SlidingWindowSpec layers allocate only
+        # sliding_window/block_size blocks per sequence and pass cache_position_modulo
+        # to the three paged ops, which wrap absolute positions into the bounded slots.
+        # Full-attention layers keep the existing max_seq_len allocation.
+        self.bounded_sliding_kv_cache = (
+            bounded_sliding_kv_cache
+            and self.use_sliding_window
+            and config.sliding_window is not None
+            and paged_attention_config is not None
+        )
+        if self.bounded_sliding_kv_cache:
+            object.__setattr__(config, "cache_position_modulo", config.sliding_window)
+
         # Load weights
         self.weights = load_attention_weights(
             mesh_device=mesh_device,
@@ -80,12 +94,20 @@ class Attention:
 
         # Initialize KV cache
         if create_kv_cache:
+            max_num_blocks_override = None
+            if self.bounded_sliding_kv_cache:
+                # Bounded SlidingWindowSpec allocation: only enough physical blocks to
+                # cover one sliding-window-sized region per user, instead of one
+                # max_seq_len-sized region. Mirrors vLLM's kv_cache_groups.
+                sliding_blocks_per_seq = config.sliding_window // paged_attention_config.block_size
+                max_num_blocks_override = sliding_blocks_per_seq * config.max_local_batch_size
             self.kv_cache = init_kv_cache(
                 mesh_device=mesh_device,
                 config=config,
                 mesh_config=mesh_config,
                 paged_attention_config=paged_attention_config,
                 tensor_cache_path=tensor_cache_path,
+                max_num_blocks_override=max_num_blocks_override,
             )
             self.layer_past = self.kv_cache  # For tt-transformers compatibility
         else:
