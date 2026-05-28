@@ -58,21 +58,15 @@ void kernel_main() {
         // Its math-side init (called from transpose_wh_init_short) records slots [16, 32) of the math-thread
         // replay buffer, clobbering the LREG2 / LREG3 portions of welford's recurrence (welford
         // records slots [0, 32), which is 4 LREG variants of 8 instructions each, fully unrolled).
-        // Re-establish welford state after each transpose_wh_tile so welford_update replays
-        // welford ops, not stale transpose-dest ops. LREG4/5 (running mean / M2) survive
-        // transpose_dest because it only uses FPU MOVs. The pre-transpose transpose_wh_init_short
-        // also reprograms UNPACK A for a transposed read (welford_reinit had toggled it back to
-        // transpose=0). Two distinct calls are
-        // needed to restore welford state before welford_update:
-        //   1. welford_reinit reprograms UNPACK A for an UnpackToDest (transpose=0) read
-        //      and rebuilds MATH-side address mods / MOP for the welford datacopy path.
-        //   2. welford_init<false>() re-records all 32 slots of the SFPU replay buffer
-        //      with the welford recurrence, without clearing the running mean / M2
-        //      accumulator in LREG4/5.
+        // welford_init<false>() after each transpose_wh_tile re-records all 32 slots with the
+        // welford recurrence so welford_update replays welford ops, not stale transpose-dest
+        // ops. The <false> tag preserves the running mean / M2 accumulator in LREG4/5, which
+        // survive transpose_dest anyway because it only uses FPU MOVs. UNPACK A is left in
+        // transpose=1 by transpose_wh_tile; welford_update is pure SFPU and does not consume
+        // that state, and the next iteration's transpose_wh_init_short reprograms it.
         // For bf16 input the unpack-to-DEST fp32 path is inactive: transpose_wh_tile routes
-        // through SrcA without touching the math-thread replay buffer, and welford_update is
-        // pure SFPU and does not disturb UNPACK/MATH datacopy state set by the pre-loop
-        // transpose_wh_init.
+        // through SrcA without touching the math-thread replay buffer, so the recovery is
+        // gated out.
         for (uint32_t wt = 0; wt < Wt; wt += block_size) {
             cb_wait_front(cb_inp, block_size);
             uint32_t r;
@@ -82,7 +76,6 @@ void kernel_main() {
                 }
                 transpose_wh_tile(cb_inp, r, dst0);
                 if constexpr (welford_unpack_fp32_active) {
-                    welford_reinit(cb_inp);
                     welford_init<false>();
                 }
                 welford_update<W>(dst0, start_N, *p_reciprocals);
@@ -95,7 +88,6 @@ void kernel_main() {
                 }
                 transpose_wh_tile(cb_inp, r, dst0);
                 if constexpr (welford_unpack_fp32_active) {
-                    welford_reinit(cb_inp);
                     welford_init<false>();
                 }
                 welford_update_rows<W>(dst0, start_N, 0, last_tile_rows, *p_reciprocals);

@@ -320,15 +320,11 @@ void kernel_main() {
             transpose_wh_tile(cb_x_welford, w + index_h_offset, welford_input_dst);
             if constexpr (welford_fp32_alias) {
                 // transpose_wh_tile took the UnpackToDestFp32 path. Its math-side init clobbered
-                // the welford recurrence at slots [16, 32) (LREG2 / LREG3 portions) and the
-                // unpack side left UNPACK A configured for a transposed read. Two distinct calls
-                // are needed to restore welford state before welford_update:
-                //   1. welford_reinit reprograms UNPACK A for an UnpackToDest (transpose=0) read
-                //      and rebuilds MATH-side address mods / MOP for the welford datacopy path.
-                //   2. welford_init<false>() re-records all 32 slots of the SFPU replay buffer
-                //      with the welford recurrence, without clearing the running mean / M2
-                //      accumulator in LREG4/5.
-                welford_reinit(cb_x_welford);
+                // the welford recurrence at SFPU replay slots [16, 32). welford_init<false>()
+                // re-records all 32 slots with the welford recurrence; the <false> tag preserves
+                // the running mean / M2 accumulator in LREG4/5. UNPACK A is left in transpose=1;
+                // welford_update is pure SFPU and does not consume that state, and the next
+                // iteration's transpose_wh_init_short reprograms it.
                 welford_init<false>();
             }
             welford_update<per_core_recip_lut_size>(welford_input_dst, sample_idx, *p_reciprocals);
@@ -341,7 +337,6 @@ void kernel_main() {
             }
             transpose_wh_tile(cb_x_welford, block_wt - 1, welford_input_dst);
             if constexpr (welford_fp32_alias) {
-                welford_reinit(cb_x_welford);
                 welford_init<false>();
             }
             welford_update_rows<per_core_recip_lut_size>(

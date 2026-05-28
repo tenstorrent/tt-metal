@@ -118,9 +118,8 @@ void kernel_main() {
         // Without scaling, transpose and welford (both SFPU-compatible)
         // can share a single DST window for the entire loop.
         // On the do_scale path, transpose_wh_init_short(cb_scaled) runs before each
-        // welford_update; it re-inits UNPACK and MATH via llk_math_eltwise_unary_datacopy_init
-        // (same MATH-side effect as welford_reinit), so a separate welford_reinit after the mul
-        // is not required here.
+        // welford_update; it re-inits UNPACK and MATH via llk_math_eltwise_unary_datacopy_init,
+        // so a separate UNPACK/MATH reinit after the FPU mul is not required here.
         if constexpr (!do_scale) {
             reconfig_data_format_srca(cb_in);
             // cb_in's UnpackToDestFp32 mode (FP32 input only) was already programmed by
@@ -185,29 +184,23 @@ void kernel_main() {
             } else {
                 cb_in_obj.wait_front(onetile);
                 if constexpr (welford_fp32_input) {
-                    // Re-records the transpose-dest setup at math-thread replay slots [16, 32)
-                    // and reprograms UNPACK A for a transposed read (the previous iteration's
-                    // welford_reinit toggled UNPACK A back to transpose=0).
+                    // Re-records the transpose-dest setup at math-thread replay slots [16, 32).
                     transpose_wh_init_short(cb_in);
                 }
                 transpose_wh_tile(cb_in, 0, input_dst);
                 cb_in_obj.pop_front(onetile);
             }
 
-            // For fp32 input, transpose_wh_tile takes the UnpackToDest path which uses FPU
-            // MOV ops and reprograms the SFPU replay buffer. Re-establish welford state:
-            //   1. welford_reinit re-establishes UNPACK+MATH datacopy config (parallel of the
-            //      do_scale path which calls this after mul_tiles_bcast_scalar)
-            //   2. welford_init<false>() re-programs the replay buffer with the welford
-            //      recurrence, without clearing LREG4/5 (which would lose the running
-            //      mean/M2 accumulator).
+            // For fp32 input, transpose_wh_tile takes the UnpackToDest path whose math-side init
+            // overwrites the upper half of the SFPU replay buffer (slots [16, 32)), clobbering
+            // welford's recurrence. welford_init<false>() re-records all 32 slots without clearing
+            // LREG4/5 (which would lose the running mean/M2 accumulator). UNPACK A is left in
+            // transpose=1 by transpose_wh_tile; welford_update is pure SFPU and does not consume
+            // that state, and the next iteration's transpose_wh_init[_short] reprograms it.
             //
             // For bf16 input the unpack-to-DEST fp32 path is inactive: transpose_wh_tile routes
-            // through SrcA without touching the SFPU replay buffer, and welford_update is pure
-            // SFPU and does not disturb the UNPACK/MATH datacopy state set by the pre-loop
-            // transpose_wh_init_short, so the per-iteration init/reinit triple is gated out.
+            // through SrcA without touching the SFPU replay buffer, so the recovery is gated out.
             if constexpr (welford_fp32_input) {
-                welford_reinit(cb_in);
                 welford_init<false>();
             }
 

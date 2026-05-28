@@ -137,9 +137,9 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherWelfordProgramFactory::crea
     // UnpackToDestFp32 routes the unpack to DEST instead of SrcA, preserving FP32 precision.
     // Unfortunately, that path also uses the math-thread replay buffer, which
     // collides with Welford's recurrence slots; welford_unpack_fp32_active gates the
-    // post-transpose welford_reinit + sfpu_init that the non-FUSE compute kernel branch
-    // needs to recover Welford state. The bf16/SrcA path leaves the replay buffer alone,
-    // so the reinit is unnecessary there.
+    // post-transpose welford_init<false>() that the non-FUSE compute kernel branch
+    // needs to re-record the SFPU replay buffer with the welford recurrence. The bf16/SrcA
+    // path leaves the replay buffer alone, so the recovery is unnecessary there.
     // The flag is only set on the non-FUSE kernel branch. In the FUSE_PRE_ADD path, c_0 is
     // consumed by add_tiles which reads via SrcA/SrcB, and per UnpackToDestMode's contract
     // setting UnpackToDestFp32 on a CB makes it incompatible with SrcA/B unpacking.
