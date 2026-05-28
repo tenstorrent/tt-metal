@@ -396,6 +396,9 @@ void sub_exp_block_bcast_cols(
 #pragma GCC unroll 1
             for (uint32_t i = 0; i < tiles_per_row; i++) {
                 if (global_col_base > 0) {
+                    // Same race pattern as the Phase 1 mask l1_acc — l1_acc=1 reads reduce_cb
+                    // (cur.sum). Prior kt_subblock's pack to reduce_cb must be L1-committed first.
+                    PACK(TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::PACK));
                     PACK((llk_pack_reconfig_l1_acc(1)));
                 } else {
                     PACK((llk_pack_reconfig_l1_acc(0)));
@@ -404,6 +407,19 @@ void sub_exp_block_bcast_cols(
                 for (uint32_t j = 0; j < tiles_per_column; ++j) {
                     pack_tile<true>(dst_index++, reduce_cb, max_row_base + i);
                     if (global_col_base == 0 && j == 0) {
+                        // Same-position RMW barrier: j>=1's l1_acc=1 read of reduce_cb[max_row_base+i]
+                        // must see j=0's REPLACE commit. STALL_THCON+PACK forces the next THCON op
+                        // (the reconfig's CFG write) to wait for L1 to drain. Same pattern as the
+                        // Phase 1 mask barrier — STALL_CFG inside llk_pack_reconfig_l1_acc only stalls
+                        // the PACK frontend, not L1 commit.
+                        PACK(TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::PACK));
+                        PACK((llk_pack_reconfig_l1_acc(1)));
+                    } else if (j + 1 < tiles_per_column) {
+                        // Same-position RMW barrier (consecutive l1_acc=1 packs): j+1 reads
+                        // reduce_cb[max_row_base+i] which j just wrote. Re-issue an l1_acc(1)
+                        // reconfig (same value, the CFG write is THCON-routed) to observe the
+                        // STALL_THCON+PACK and drain L1 commits before j+1's read.
+                        PACK(TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::PACK));
                         PACK((llk_pack_reconfig_l1_acc(1)));
                     }
                 }
@@ -882,6 +898,15 @@ static void sdpa_inner_loop_step(
                 // MOP is configured for actual_sbw tiles (blocked matmul); mask needs 1 tile per pack.
                 configure_single_tile_pack(cb_qkt_im);
                 copy_tile_to_dst_init_short(cb_mask_in);
+                // PACK→PACK barrier: the next l1_acc=1 pack reads cb_qkt_im from L1 (read-modify-
+                // write). Q@KT's writes must be fully committed to L1 first, otherwise the read
+                // returns partial / stale bytes and the mask stamp produces non-deterministic
+                // values. STALL_THCON+PACK forces the pack engine to drain (including L1 write
+                // commit) before any subsequent THCON-routed op (the l1_acc reconfig + the
+                // l1_acc reads themselves). The reconfig's own STALL_CFG+PACK is not sufficient —
+                // it stalls CFG, not THCON. Observed as ~30k diff / max-diff 0.1875 in chunked-
+                // prefill ring_iter > 0 where this mask fires every K-chunk of every iter.
+                PACK(TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::PACK));
                 PACK((llk_pack_reconfig_l1_acc(1)));
                 apply_lightweight_mask_streaming<KT_stride, is_causal_sdpa>(
                     cb_mask_in,
@@ -1006,6 +1031,9 @@ static void sdpa_inner_loop_step(
                     cb_wait_front(cb_v_in, Sk_chunk_t * vDHt);
                 }
                 if (kt_sub > 0) {
+                    // Same race pattern as the Phase 1 mask l1_acc — l1_acc=1 reads out_cb,
+                    // prior kt_sub's pack writes to out_cb must be L1-committed first.
+                    PACK(TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::PACK));
                     PACK((llk_pack_reconfig_l1_acc(1)));
                 }
 
@@ -1077,6 +1105,9 @@ static void sdpa_inner_loop_step(
         // remainder (sbh=qktv_remainder_h). Normalization is independently guarded at call sites.
         // prev.out is consumed row-by-row: always read from CB front, then pop after use.
         auto salad_correct_row = [&](uint32_t salad_row, uint32_t w_salad, uint32_t sbh) {
+            // Same race pattern as the Phase 1 mask l1_acc — l1_acc=1 reads out_cb and cur.sum,
+            // prior V matmul / sub_exp packs to those CBs must be L1-committed first.
+            PACK(TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::PACK));
             PACK((llk_pack_reconfig_l1_acc(1)));
             {
                 MaybeDeviceZoneScopedN(profiling_enabled, "S_CORR_FUSED");
