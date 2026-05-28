@@ -59,6 +59,21 @@ void* open_ttsim_handle() {
     return handle;
 }
 
+bool dram_backed_cq_dirty_flush_enabled() {
+    static const bool enabled = [] {
+        const char* env = std::getenv("TT_METAL_DRAM_BACKED_CQ_DIRTY_FLUSH");
+        if (env == nullptr) {
+            return false;
+        }
+        const std::string value(env);
+        if (value == "auto") {
+            return std::getenv("TT_METAL_SIMULATOR") != nullptr || std::getenv("TT_UMD_SIMULATOR") != nullptr;
+        }
+        return value == "1" || value == "true" || value == "TRUE" || value == "on" || value == "ON";
+    }();
+    return enabled;
+}
+
 TTSimClockAllDevicesFn get_ttsim_clock_all_devices() {
     static TTSimClockAllDevicesFn fn = [] {
         void* handle = open_ttsim_handle();
@@ -607,6 +622,7 @@ void SystemMemoryManager::issue_queue_push_back(uint32_t push_size_B, const uint
     const uint32_t push_size_16B = align(push_size_B, alignment) >> 4;
 
     SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
+    const uint32_t issue_q_write_ptr_before_push = cq_interface.issue_fifo_wr_ptr << 4;
     uint32_t issue_q_wr_ptr = ctx.dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_WR);
 
     // Capture before advancing: issue_fifo_wr_ptr points to the slot just written; after the advance below it points to
