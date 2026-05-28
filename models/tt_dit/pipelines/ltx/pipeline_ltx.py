@@ -56,6 +56,7 @@ from ...utils.ltx import (
     get_pixel_coords,
     video_get_patch_grid_bounds,
 )
+from ...utils.mochi import get_rot_transformation_mat
 from ...utils.tensor import bf16_tensor, bf16_tensor_2dshard
 
 LTX_UPSAMPLER_HF_REF = "Lightricks/LTX-2.3:ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
@@ -1092,22 +1093,25 @@ class LTXPipeline:
         self._prepare_vae()
         self.decode_latents(dummy, latent_frames, latent_h, latent_w)
 
+    @staticmethod
+    def _reshape_interleaved_to_bhnd(t: torch.Tensor, num_heads: int) -> torch.Tensor:
+        """Reshape interleaved (B, N, dim) to (B, num_heads, N, head_dim) for rotary_embedding_llama."""
+        B, N, dim = t.shape
+        head_dim = dim // num_heads
+        return t.reshape(B, N, num_heads, head_dim).permute(0, 2, 1, 3).contiguous()
+
     def _prepare_rope(
         self, num_frames: int, latent_height: int, latent_width: int, fps: float = 24.0
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Compute video RoPE using reference SPLIT rotation with pixel-space coordinates.
-
-        Uses the official LTX-2 VideoLatentPatchifier for positions, matching the reference
-        pipeline's precompute_freqs_cis with SPLIT rotation. No trans_mat needed.
-        """
+        """Compute video RoPE in INTERLEAVED layout for ttnn.experimental.rotary_embedding_llama."""
         v_shape = VideoLatentShape(batch=1, channels=128, frames=num_frames, height=latent_height, width=latent_width)
         v_coords = video_get_patch_grid_bounds(v_shape)
         v_positions = get_pixel_coords(v_coords, scale_factors=(8, 32, 32), causal_fix=True).float()
         v_positions[:, 0, ...] = v_positions[:, 0, ...] / fps
 
-        # NOTE: positions MUST stay fp32 (was .bfloat16() - introduced catastrophic phase error in
-        # high-frequency RoPE channels: 1700x worse than fp32, completely randomizing cos/sin in the
-        # top half of head_dim).
+        # Positions MUST stay fp32 — bf16 introduced catastrophic phase error in
+        # high-frequency RoPE channels (1700x worse than fp32, randomizing the top
+        # half of head_dim).
         cos_freq, sin_freq = precompute_freqs_cis(
             v_positions,
             dim=self.inner_dim,
@@ -1116,13 +1120,14 @@ class LTXPipeline:
             max_pos=self.positional_embedding_max_pos,
             use_middle_indices_grid=True,
             num_attention_heads=self.num_attention_heads,
-            rope_type=LTXRopeType.SPLIT,
-        )  # (1, num_heads, N, D_half)
+            rope_type=LTXRopeType.INTERLEAVED,
+        )  # (1, N, dim)
 
-        # SP padding: pad sequence dim to ttnn.TILE_SIZE * sp_factor so ring SDPA's
-        # N_local % TILE_HEIGHT == 0 and N_global == N_local * ring_size checks pass.
-        # Padded slots use cos=1, sin=0 (identity rotation) — matches the audio path
-        # convention so padded Q/K stay well-defined; SDPA still masks them via logical_n.
+        cos_freq = self._reshape_interleaved_to_bhnd(cos_freq, self.num_attention_heads)
+        sin_freq = self._reshape_interleaved_to_bhnd(sin_freq, self.num_attention_heads)
+
+        # Pad seq dim to ttnn.TILE_SIZE * sp_factor; padded slots use cos=1, sin=0
+        # (identity rotation) — SDPA still masks them via logical_n.
         cos_freq, sin_freq = self._pad_video_rope_sp(cos_freq, sin_freq)
 
         sp_axis = self.parallel_config.sequence_parallel.mesh_axis
@@ -1130,6 +1135,13 @@ class LTXPipeline:
         tt_cos = bf16_tensor_2dshard(cos_freq, device=self.mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
         tt_sin = bf16_tensor_2dshard(sin_freq, device=self.mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
         return tt_cos, tt_sin
+
+    def _prepare_trans_mat(self) -> ttnn.Tensor:
+        """Per-tile (1,1,32,32) rotation matrix for ttnn.experimental.rotary_embedding_llama.
+        Cached on the pipeline; replicated across the mesh."""
+        if getattr(self, "_cached_trans_mat", None) is None:
+            self._cached_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=self.mesh_device)
+        return self._cached_trans_mat
 
     def _prepare_prompt(self, prompt_embeds: torch.Tensor) -> ttnn.Tensor:
         """Push prompt embeddings to device, padding/truncating to cross_attention_dim."""
@@ -1247,6 +1259,7 @@ class LTXPipeline:
 
         # 2. Prepare RoPE
         rope_cos, rope_sin = self._prepare_rope(latent_frames, latent_height, latent_width)
+        trans_mat = self._prepare_trans_mat()
 
         # 3. Compute sigma schedule
         sigmas = compute_sigmas(
@@ -1285,7 +1298,7 @@ class LTXPipeline:
                 video_prompt_1BLP=tt_prompt,
                 video_rope_cos=rope_cos,
                 video_rope_sin=rope_sin,
-                trans_mat=None,
+                trans_mat=trans_mat,
                 video_N=video_N_real,
                 timestep_torch=timestep_torch,
             )
@@ -1302,7 +1315,7 @@ class LTXPipeline:
                     video_prompt_1BLP=tt_negative_prompt,
                     video_rope_cos=rope_cos,
                     video_rope_sin=rope_sin,
-                    trans_mat=None,
+                    trans_mat=trans_mat,
                     video_N=video_N_real,
                     timestep_torch=timestep_torch,
                 )
@@ -1339,30 +1352,29 @@ class LTXPipeline:
         return latent
 
     def _prepare_audio_rope(self, audio_N: int, audio_N_real: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Compute audio RoPE using AudioPatchifier time-in-seconds positions with SPLIT rotation."""
+        """Compute audio RoPE in INTERLEAVED layout for ttnn.experimental.rotary_embedding_llama."""
         a_shape = AudioLatentShape(batch=1, channels=8, frames=audio_N_real, mel_bins=16)
         a_positions = audio_get_patch_grid_bounds(a_shape).float()  # (1, 1, N, 2)
 
-        # NOTE: positions MUST stay fp32 (was .bfloat16() - introduced catastrophic phase error in
-        # high-frequency RoPE channels: 1700x worse than fp32 for audio, completely randomizing
-        # cos/sin in the top half of head_dim. HF reference uses fp32/fp64 throughout.
+        # Positions MUST stay fp32 — bf16 randomizes the top half of head_dim.
         a_cos, a_sin = precompute_freqs_cis(
             a_positions,
             dim=2048,
             out_dtype=torch.float32,
             theta=self.positional_embedding_theta,
-            max_pos=[20],  # 1D temporal only
+            max_pos=[20],
             use_middle_indices_grid=True,
             num_attention_heads=32,
-            rope_type=LTXRopeType.SPLIT,
-        )  # (1, 32, audio_N_real, D_half)
+            rope_type=LTXRopeType.INTERLEAVED,
+        )  # (1, N, 2048)
+        a_cos = self._reshape_interleaved_to_bhnd(a_cos, num_heads=32)  # (1, 32, N, 64)
+        a_sin = self._reshape_interleaved_to_bhnd(a_sin, num_heads=32)
 
-        # Pad to audio_N if needed
         if audio_N > audio_N_real:
-            d_half = a_cos.shape[-1]
-            a_cos_padded = torch.ones(1, 32, audio_N, d_half)
+            head_dim = a_cos.shape[-1]
+            a_cos_padded = torch.ones(1, 32, audio_N, head_dim)
             a_cos_padded[:, :, :audio_N_real, :] = a_cos
-            a_sin_padded = torch.zeros(1, 32, audio_N, d_half)
+            a_sin_padded = torch.zeros(1, 32, audio_N, head_dim)
             a_sin_padded[:, :, :audio_N_real, :] = a_sin
             a_cos, a_sin = a_cos_padded, a_sin_padded
 
@@ -1415,25 +1427,24 @@ class LTXPipeline:
             max_pos=[cross_pe_max_pos],
             use_middle_indices_grid=True,
             num_attention_heads=32,
-            rope_type=LTXRopeType.SPLIT,
+            rope_type=LTXRopeType.INTERLEAVED,
         )
 
-        # NOTE: positions MUST stay fp32 (was .bfloat16() - introduced catastrophic phase error in
-        # high-frequency RoPE channels: 1700x worse than fp32, completely randomizing cos/sin in the
-        # top half of head_dim).
-        v_cos, v_sin = precompute_freqs_cis(v_temporal, **rope_kwargs)  # (1, 32, video_N, 32)
-        a_cos, a_sin = precompute_freqs_cis(a_positions, **rope_kwargs)  # (1, 32, audio_N_real, 32)
+        # Positions MUST stay fp32 — bf16 randomizes the top half of head_dim.
+        v_cos, v_sin = precompute_freqs_cis(v_temporal, **rope_kwargs)  # (1, video_N, 2048)
+        a_cos, a_sin = precompute_freqs_cis(a_positions, **rope_kwargs)  # (1, audio_N_real, 2048)
+        v_cos = self._reshape_interleaved_to_bhnd(v_cos, num_heads=32)  # (1, 32, video_N, 64)
+        v_sin = self._reshape_interleaved_to_bhnd(v_sin, num_heads=32)
+        a_cos = self._reshape_interleaved_to_bhnd(a_cos, num_heads=32)
+        a_sin = self._reshape_interleaved_to_bhnd(a_sin, num_heads=32)
 
-        # Pad video cross-PE to the same SP boundary used by the main video RoPE
-        # (cos=1, sin=0 in padded slots — identity rotation).
         v_cos, v_sin = self._pad_video_rope_sp(v_cos, v_sin)
 
-        # Pad audio cross-PE to audio_N (matching the audio RoPE padding scheme: cos=1, sin=0).
         if audio_N > audio_N_real:
-            d_half = a_cos.shape[-1]
-            a_cos_padded = torch.ones(1, 32, audio_N, d_half)
+            head_dim = a_cos.shape[-1]
+            a_cos_padded = torch.ones(1, 32, audio_N, head_dim)
             a_cos_padded[:, :, :audio_N_real, :] = a_cos
-            a_sin_padded = torch.zeros(1, 32, audio_N, d_half)
+            a_sin_padded = torch.zeros(1, 32, audio_N, head_dim)
             a_sin_padded[:, :, :audio_N_real, :] = a_sin
             a_cos, a_sin = a_cos_padded, a_sin_padded
 
@@ -1677,6 +1688,7 @@ class LTXPipeline:
             a_xpe_cos_full,
             a_xpe_sin_full,
         ) = self._prepare_av_cross_pe(latent_frames, latent_h, latent_w, audio_N, audio_N_real)
+        trans_mat = self._prepare_trans_mat()
         tt_attn_mask, tt_pad_mask_sp, tt_pad_mask_full = self._prepare_audio_masks(audio_N, audio_N_real)
         tt_v_pad_mask_sp, tt_v_pad_mask_full = self._prepare_video_masks(video_N, video_N_real)
 
@@ -1761,7 +1773,7 @@ class LTXPipeline:
                     audio_rope_cos=a_cos,
                     audio_rope_sin=a_sin,
                     audio_N=audio_N,
-                    trans_mat=None,
+                    trans_mat=trans_mat,
                     timestep_torch=torch.tensor([sigma]),
                     video_cross_pe_cos=v_xpe_cos,
                     video_cross_pe_sin=v_xpe_sin,

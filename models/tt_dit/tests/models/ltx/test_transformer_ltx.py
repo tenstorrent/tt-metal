@@ -23,7 +23,16 @@ from models.tt_dit.models.transformers.ltx.transformer_ltx import LTXTransformer
 from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.check import assert_quality
+from models.tt_dit.utils.mochi import get_rot_transformation_mat
 from models.tt_dit.utils.tensor import bf16_tensor, bf16_tensor_2dshard
+
+
+def _interleaved_to_bhnd(t: torch.Tensor, num_heads: int) -> torch.Tensor:
+    B, N, dim = t.shape
+    head_dim = dim // num_heads
+    return t.reshape(B, N, num_heads, head_dim).permute(0, 2, 1, 3).contiguous()
+
+
 from models.tt_dit.utils.test import line_params, ring_params
 
 sys.path.insert(0, "LTX-2/packages/ltx-core/src")
@@ -142,7 +151,8 @@ def test_ltx_transformer_block(
     # Prompt modulation: 2 params (shift, scale for prompt cross-attention KV)
     prompt_temb = torch.randn(B, 1, 2 * dim, dtype=torch.float32)
 
-    # RoPE — SPLIT format: (B, H, N, D_half) = (1, 32, 256, 64)
+    # Torch ref consumes SPLIT cos/sin; TT runtime consumes INTERLEAVED + trans_mat
+    # (load-time Q/K permute makes the two paths mathematically equivalent).
     t_ids = torch.arange(F)
     h_ids = torch.arange(H)
     w_ids = torch.arange(W)
@@ -156,7 +166,16 @@ def test_ltx_transformer_block(
         num_attention_heads=num_heads,
         rope_type=LTXRopeType.SPLIT,
     )
-    # cos_freq shape: (1, 32, 256, 64) = (B, H, N, D_half)
+    cos_inter, sin_inter = precompute_freqs_cis(
+        indices_grid,
+        dim=dim,
+        out_dtype=torch.float32,
+        max_pos=[20, 2048, 2048],
+        num_attention_heads=num_heads,
+        rope_type=LTXRopeType.INTERLEAVED,
+    )
+    cos_inter = _interleaved_to_bhnd(cos_inter, num_heads)
+    sin_inter = _interleaved_to_bhnd(sin_inter, num_heads)
 
     # PyTorch forward
     from ltx_core.model.transformer.transformer import TransformerArgs
@@ -196,11 +215,10 @@ def test_ltx_transformer_block(
     prompt_temb_reshaped = prompt_temb.reshape(B, 2, dim).unsqueeze(0)  # (1, B, 2, D)
     tt_prompt_temb = bf16_tensor(prompt_temb_reshaped, device=mesh_device)
 
-    # RoPE for TT: SPLIT format (B, H, N, D_half) — no trans_mat needed
-    tt_cos = bf16_tensor_2dshard(cos_freq, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
-    tt_sin = bf16_tensor_2dshard(sin_freq, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
+    tt_cos = bf16_tensor_2dshard(cos_inter, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
+    tt_sin = bf16_tensor_2dshard(sin_inter, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
+    tt_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=mesh_device)
 
-    # TT forward — trans_mat=None uses SPLIT rope path
     tt_out = tt_block(
         video_1BND=tt_spatial,
         video_prompt=tt_prompt,
@@ -208,7 +226,7 @@ def test_ltx_transformer_block(
         video_N=seq_len,
         video_rope_cos=tt_cos,
         video_rope_sin=tt_sin,
-        trans_mat=None,
+        trans_mat=tt_trans_mat,
         video_prompt_temb=tt_prompt_temb,
     )
 
@@ -363,23 +381,22 @@ def test_ltx_transformer_model(
     # For use_middle_indices_grid=True, average start/end (same here)
     indices_grid_for_rope = indices_grid_for_rope.unsqueeze(0)  # (1, T, 3)
 
-    # SPLIT-format RoPE returns (B, H, N, head_dim/2) directly — no reshape needed.
-    # Must match the rope_type used by torch_model (now SPLIT) and TT attention
-    # (selected by passing trans_mat=None below).
-    cos_freq, sin_freq = precompute_freqs_cis(
+    # TT runtime uses INTERLEAVED + trans_mat (load-time Q/K permute equivalents SPLIT-on-unpermuted).
+    cos_inter, sin_inter = precompute_freqs_cis(
         indices_grid_for_rope,
         dim=dim,
         out_dtype=torch.float32,
         theta=10000.0,
         max_pos=[20, 2048, 2048],
         num_attention_heads=num_heads,
-        rope_type=LTXRopeType.SPLIT,
+        rope_type=LTXRopeType.INTERLEAVED,
     )
-    tt_cos = bf16_tensor_2dshard(cos_freq, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
-    tt_sin = bf16_tensor_2dshard(sin_freq, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
+    cos_inter = _interleaved_to_bhnd(cos_inter, num_heads)
+    sin_inter = _interleaved_to_bhnd(sin_inter, num_heads)
+    tt_cos = bf16_tensor_2dshard(cos_inter, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
+    tt_sin = bf16_tensor_2dshard(sin_inter, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
+    tt_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=mesh_device)
 
-    # Use inner_step: takes timestep value, multiplies by 1000 internally for adaln.
-    # trans_mat=None selects the SPLIT RoPE path in TT attention to match torch.
     spatial_torch = latent.unsqueeze(0)  # (1, B, N, in_channels)
     timestep_torch = torch.tensor([timestep_val])
 
@@ -388,7 +405,7 @@ def test_ltx_transformer_model(
         video_prompt_1BLP=tt_prompt,
         video_rope_cos=tt_cos,
         video_rope_sin=tt_sin,
-        trans_mat=None,
+        trans_mat=tt_trans_mat,
         video_N=seq_len,
         timestep_torch=timestep_torch,
     )
@@ -518,22 +535,23 @@ def test_ltx_transformer_inner_step(
 
     from models.tt_dit.models.transformers.ltx.rope_ltx import precompute_freqs_cis
 
-    # SPLIT-format RoPE — matches torch_model's rope_type and TT's SPLIT path
-    # (selected by trans_mat=None below).
+    # TT runtime uses INTERLEAVED + trans_mat; torch ref keeps SPLIT (load-time permute makes them equivalent).
     indices_grid = torch.stack([grid_t.flatten(), grid_h.flatten(), grid_w.flatten()], dim=-1).float().unsqueeze(0)
-    cos_freq, sin_freq = precompute_freqs_cis(
+    cos_inter, sin_inter = precompute_freqs_cis(
         indices_grid,
         dim=dim,
         out_dtype=torch.float32,
         theta=10000.0,
         max_pos=[20, 2048, 2048],
         num_attention_heads=num_heads,
-        rope_type=LTXRopeType.SPLIT,
+        rope_type=LTXRopeType.INTERLEAVED,
     )
-    tt_cos = bf16_tensor_2dshard(cos_freq, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
-    tt_sin = bf16_tensor_2dshard(sin_freq, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
+    cos_inter = _interleaved_to_bhnd(cos_inter, num_heads)
+    sin_inter = _interleaved_to_bhnd(sin_inter, num_heads)
+    tt_cos = bf16_tensor_2dshard(cos_inter, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
+    tt_sin = bf16_tensor_2dshard(sin_inter, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
+    tt_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=mesh_device)
 
-    # Call inner_step (torch spatial input, cached device tensors)
     spatial_torch = latent.unsqueeze(0)  # (1, B, N, in_channels)
     timestep_torch = torch.tensor([timestep_val])
 
@@ -542,7 +560,7 @@ def test_ltx_transformer_inner_step(
         video_prompt_1BLP=tt_prompt,
         video_rope_cos=tt_cos,
         video_rope_sin=tt_sin,
-        trans_mat=None,
+        trans_mat=tt_trans_mat,
         video_N=seq_len,
         timestep_torch=timestep_torch,
     )
