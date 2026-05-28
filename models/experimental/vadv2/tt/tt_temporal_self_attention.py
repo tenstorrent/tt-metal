@@ -104,8 +104,6 @@ class TtTemporalSelfAttention:
         sampling_offsets = ttnn.reallocate(sampling_offsets)
 
         attention_weights = ttnn.linear(query, params.attention_weights.weight, bias=params.attention_weights.bias)
-        ttnn.deallocate(params.attention_weights.weight)
-        ttnn.deallocate(params.attention_weights.bias)
         ttnn.deallocate(query)
         attention_weights = ttnn.reshape(
             attention_weights, (bs, num_query, self.num_heads, self.num_bev_queue, self.num_levels * self.num_points)
@@ -168,8 +166,6 @@ class TtTemporalSelfAttention:
         output = ttnn.mean(output, dim=-1, keepdim=True)
         output = ttnn.permute(output, (2, 0, 1))
         output = ttnn.linear(output, params.output_proj.weight, bias=params.output_proj.bias)
-        ttnn.deallocate(params.output_proj.weight)
-        ttnn.deallocate(params.output_proj.bias)
 
         if not self.batch_first:
             output = ttnn.permute(output, (1, 0, 2))

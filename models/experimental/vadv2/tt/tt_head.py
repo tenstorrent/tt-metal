@@ -212,20 +212,22 @@ class TtVADHead:
         bs, num_cam, _, _, _ = mlvl_feats[0].shape
         if not self.as_two_stage:
             object_query_embeds = self.query_embedding.weight
-        self.bbox_coder = CustomNMSFreeCoder(
-            self.bbox_coder["pc_range"],
-            voxel_size=self.bbox_coder["voxel_size"],
-            post_center_range=self.bbox_coder["post_center_range"],
-            max_num=self.bbox_coder["max_num"],
-            num_classes=self.bbox_coder["num_classes"],
-        )
-        self.map_bbox_coder = MapNMSFreeCoder(
-            self.map_bbox_coder["pc_range"],
-            voxel_size=self.map_bbox_coder["voxel_size"],
-            post_center_range=self.map_bbox_coder["post_center_range"],
-            max_num=self.map_bbox_coder["max_num"],
-            num_classes=self.map_bbox_coder["num_classes"],
-        )
+        if isinstance(self.bbox_coder, dict):
+            self.bbox_coder = CustomNMSFreeCoder(
+                self.bbox_coder["pc_range"],
+                voxel_size=self.bbox_coder["voxel_size"],
+                post_center_range=self.bbox_coder["post_center_range"],
+                max_num=self.bbox_coder["max_num"],
+                num_classes=self.bbox_coder["num_classes"],
+            )
+        if isinstance(self.map_bbox_coder, dict):
+            self.map_bbox_coder = MapNMSFreeCoder(
+                self.map_bbox_coder["pc_range"],
+                voxel_size=self.map_bbox_coder["voxel_size"],
+                post_center_range=self.map_bbox_coder["post_center_range"],
+                max_num=self.map_bbox_coder["max_num"],
+                num_classes=self.map_bbox_coder["num_classes"],
+            )
 
         if self.map_query_embed_type == "all_pts":
             map_query_embeds = self.map_query_embedding.weight
@@ -271,10 +273,8 @@ class TtVADHead:
                 img_metas=img_metas,
                 prev_bev=prev_bev,
             )
-        ttnn.deallocate(bev_queries)
         ttnn.deallocate(bev_mask)
         ttnn.deallocate(bev_pos)
-        ttnn.deallocate(map_query_embeds)
         (
             bev_embed,
             hs,

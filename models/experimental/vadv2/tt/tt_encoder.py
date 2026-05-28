@@ -445,8 +445,6 @@ class TtBEVFormerLayer:
                     weight=self.params.norms[f"norm{norm_index}"].weight,
                     bias=self.params.norms[f"norm{norm_index}"].bias,
                 )
-                ttnn.deallocate(self.params.norms[f"norm{norm_index}"].weight)
-                ttnn.deallocate(self.params.norms[f"norm{norm_index}"].bias)
                 norm_index += 1
 
             # spatial cross attention

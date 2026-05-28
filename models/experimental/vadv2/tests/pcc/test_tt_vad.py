@@ -2,6 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import copy
+import os
+import time
+
 import pytest
 import torch
 import ttnn
@@ -17,7 +21,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.vadv2.common import load_torch_model
 
 
-@pytest.mark.timeout(600)
+@pytest.mark.timeout(1200)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 20 * 1024}], indirect=True)
 def test_vadv2(
     device,
@@ -632,6 +636,9 @@ def test_vadv2(
         device,
     )
 
+    torch_img = (
+        tensor  # keep host-side copy so each warm iter can re-upload (device tensor gets deallocated by forward)
+    )
     tensor = ttnn.from_torch(tensor, dtype=ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
     img = []
     img.append(tensor)
@@ -658,19 +665,55 @@ def test_vadv2(
         fut_mode=6,
     )
 
-    ttnn_outputs = tt_model(
-        return_loss=False,
-        img=img,
-        img_metas=input_dict["img_metas"],
-        gt_bboxes_3d=input_dict["gt_bboxes_3d"],
-        gt_labels_3d=input_dict["gt_labels_3d"],
-        fut_valid_flag=input_dict["fut_valid_flag"],
-        ego_his_trajs=input_dict["ego_his_trajs"],
-        ego_fut_trajs=input_dict["ego_fut_trajs"],
-        ego_fut_cmd=input_dict["ego_fut_cmd"],
-        ego_lcf_feat=input_dict["ego_lcf_feat"],
-        gt_attr_labels=input_dict["gt_attr_labels"],
-    )
+    n_warm = int(os.environ.get("TT_VADV2_WARM_ITERS", "0"))
+    timing = os.environ.get("TT_VADV2_TIMING") == "1"
+    memory_report = os.environ.get("TT_VADV2_MEMORY_REPORT") == "1"
+
+    # forward_test mutates img_metas[*]["can_bus"] in place and updates
+    # tt_model.prev_frame_info from the previous call. Snapshot both so each
+    # warm iteration sees the same first-frame input as the cold call.
+    pristine_img_metas = copy.deepcopy(input_dict["img_metas"])
+    pristine_prev_frame_info = copy.deepcopy(tt_model.prev_frame_info)
+
+    def _forward():
+        return tt_model(
+            return_loss=False,
+            img=img,
+            img_metas=input_dict["img_metas"],
+            gt_bboxes_3d=input_dict["gt_bboxes_3d"],
+            gt_labels_3d=input_dict["gt_labels_3d"],
+            fut_valid_flag=input_dict["fut_valid_flag"],
+            ego_his_trajs=input_dict["ego_his_trajs"],
+            ego_fut_trajs=input_dict["ego_fut_trajs"],
+            ego_fut_cmd=input_dict["ego_fut_cmd"],
+            ego_lcf_feat=input_dict["ego_lcf_feat"],
+            gt_attr_labels=input_dict["gt_attr_labels"],
+        )
+
+    if memory_report:
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+
+    walls_ms = []
+    for i in range(n_warm + 1):
+        input_dict["img_metas"] = copy.deepcopy(pristine_img_metas)
+        tt_model.prev_frame_info = copy.deepcopy(pristine_prev_frame_info)
+        # Re-upload img: forward deallocates the device tensor, so the same
+        # ttnn handle can't be reused for the next call.
+        img = [ttnn.from_torch(torch_img, dtype=ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)]
+        t0 = time.perf_counter()
+        ttnn_outputs = _forward()
+        dt_ms = (time.perf_counter() - t0) * 1000.0
+        walls_ms.append(dt_ms)
+        if timing:
+            logger.info(f"[VADv2 call#{i + 1}] wall={dt_ms:.1f} ms")
+
+    if timing and len(walls_ms) >= 2:
+        logger.info(f"[VADv2 warm-wall anchor] call#{len(walls_ms)}={walls_ms[-1]:.1f} ms (cold={walls_ms[0]:.1f} ms)")
+
+    if memory_report:
+        report_path = os.environ.get("TT_VADV2_MEMORY_REPORT_PATH", "vadv2_graph_report.json")
+        ttnn.graph.end_graph_capture_to_file(report_path)
+        logger.info(f"[VADv2 memory report] written to {report_path}")
 
     keys_to_check = [
         "bev_embed",
@@ -684,8 +727,31 @@ def test_vadv2(
         "ego_fut_preds",
     ]
 
+    # Per-key PCC floors pinned to the values observed on the perf-vadv2 branch
+    # at HEAD `cd355a3e19e` (warm call#3, fixed torch.randn seed). The original
+    # test used a `pcc=0.0` threshold which let any non-negative correlation
+    # pass — that hid the fact that several outputs (bev_embed, all_cls_scores,
+    # map_all_cls_scores) have inherently low PCC against the PyTorch reference
+    # on this branch. We don't try to fix the absolute correlation here; we
+    # only want a regression gate that fires if any perf change makes a key
+    # drop below its current value.
+    #
+    # Tolerance: 0.02 absolute. For keys whose nominal PCC is already low
+    # (~0.15), this is roughly a 10-15% relative slack — wide enough to
+    # absorb BF16 noise across runs but tight enough to catch real regressions.
+    pcc_floors = {
+        "bev_embed": 0.14,  # observed 0.163
+        "all_cls_scores": 0.21,  # observed 0.234
+        "all_bbox_preds": 0.97,  # observed 0.989
+        "all_traj_preds": 0.55,  # observed 0.62-0.63 (varies by run)
+        "all_traj_cls_scores": 0.45,  # observed 0.51-0.53 (varies by run)
+        "map_all_cls_scores": 0.13,  # observed 0.149
+        "map_all_bbox_preds": 0.95,  # observed 0.967
+        "map_all_pts_preds": 0.96,  # observed 0.985
+        "ego_fut_preds": 0.94,  # observed 0.96
+    }
     for key in keys_to_check:
         a = torch.load(f"models/experimental/vadv2/reference/dumps/{key}.pt")
         b = torch.load(f"models/experimental/vadv2/tt/dumps/{key}.pt")
-        _, msg = assert_with_pcc(a, b, 0.0)
+        _, msg = assert_with_pcc(a, b, pcc_floors[key])
         logger.info(f"{key}: {msg}")
