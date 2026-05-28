@@ -9,7 +9,7 @@ import pathlib
 import re
 from abc import ABC, abstractmethod
 
-from .constants import parse_hardware_suffix, parse_mesh_suffix, strip_grouping_suffix
+from .constants import parse_hardware_suffix, parse_mesh_suffix, strip_grouping_suffix, strip_mesh_suffix
 from .matrix_runner_config import (
     GENERATION_MANIFEST_FILENAME,
     SUPPORTED_VECTOR_GROUPING_MODES,
