@@ -20,8 +20,17 @@
 inline void llk_pack_hw_configure(const std::uint32_t pack_output) {
     const std::uint32_t output_id = get_output_id(pack_output);
 
-    // Program buffer descriptors for all 32 dataflow buffers, i is the logical dfb id
-    for (std::uint32_t i = 0; i < NUM_CIRCULAR_BUFFERS; ++i) {
+    // Program buffer descriptors for all 32 dataflow buffers, i is the logical dfb id.
+    // Skip non-participating DFBs (gate matched the state in which A2 implicit-sync
+    // passes; reverting to a plain unfiltered loop caused the implicit-sync 3-DFB
+    // runtime to hang at credit-ack handshake). Loop bound is dfb::NUM_DFBS because
+    // g_dfb_logical_to_compact[] is sized NUM_DFBS (=32) and NUM_CIRCULAR_BUFFERS
+    // resolves to 64 on Quasar — GCC -Werror=aggressive-loop-optimizations rejects
+    // the direct OOB array access at the gate.
+    for (std::uint32_t i = 0; i < dfb::NUM_DFBS; ++i) {
+        if (g_dfb_logical_to_compact[i] == 0xFF) {
+            continue;
+        }
         const DataFormat l1_data_format = static_cast<DataFormat>(pack_dst_format[i]);
 
         if (l1_data_format == DataFormat::Invalid) {

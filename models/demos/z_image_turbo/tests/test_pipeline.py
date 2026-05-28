@@ -6,17 +6,22 @@ Full Z-Image-Turbo pipeline test — warmup + generate on (1,4) mesh.
 
 Verifies the complete end-to-end flow: text encoder → DIT denoising loop → VAE
 decode, including Metal Trace capture and replay for all three models.
-
-The pipeline opens its own mesh device internally, so no device fixture is needed.
 """
 
+import pytest
 from PIL import Image
 
+import ttnn
 from models.demos.z_image_turbo.tt.z_image_turbo import ZImageTurbo
 
 
-def test_z_image_turbo_pipeline(tmp_path):
-    pipeline = ZImageTurbo()
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [(ZImageTurbo.DEFAULT_MESH_SHAPE, {"fabric_config": ttnn.FabricConfig.FABRIC_1D})],
+    indirect=["mesh_device", "device_params"],
+)
+def test_z_image_turbo_pipeline(mesh_device, tmp_path):
+    pipeline = ZImageTurbo(mesh_device=mesh_device)
 
     warmup_image = pipeline.warmup(steps=9, seed=42)
     assert isinstance(warmup_image, Image.Image), "Warmup did not return a PIL Image"

@@ -31,11 +31,9 @@
 
 #define ENABLE_DISPATCH_DEBUG 0
 #if ENABLE_DISPATCH_DEBUG
-#define DPRINT_DISPATCH DPRINT
+#define DPRINT_DISPATCH(...) DPRINT(__VA_ARGS__)
 #else
-#define DPRINT_DISPATCH \
-    if (0)              \
-    DebugPrinter()
+#define DPRINT_DISPATCH(...)
 #endif
 
 void kernel_main() {

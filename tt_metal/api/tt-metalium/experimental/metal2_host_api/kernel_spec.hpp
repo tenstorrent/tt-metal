@@ -6,93 +6,22 @@
 
 #include <cstdint>
 #include <filesystem>
-#include <optional>
 #include <string>
 #include <unordered_map>
 #include <variant>
 #include <vector>
 
+#include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
+#include <tt-metalium/experimental/metal2_host_api/compute_configuration.hpp>
+#include <tt-metalium/experimental/metal2_host_api/data_movement_configuration.hpp>
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
-#include <tt-metalium/base_types.hpp>    // For MathFidelity, UnpackToDestMode (global scope)
-#include <tt-metalium/kernel_types.hpp>  // For DataMovementProcessor, NOC, etc.
 
 namespace tt::tt_metal::experimental::metal2_host_api {
 
-struct ComputeConfiguration {
-    // Tensix hardware resource configuration for compute kernels.
-    // Gen1 and Gen2 configurations are identical.
-    //
-    // The Tensix Engine is a 3-stage pipeline (Unpack → Math → Pack).
-    // There are two math engines:
-    //  - FPU reads operands from the SrcA / SrcB register files (~19-bit),
-    //    writes to the Dest register file (16- or 32-bit, configurable).
-    //  - SFPU runs SIMD transcendentals. It can only access Dest.
-    // The fields below configure this pipeline.
-
-    // Number of multiply passes the FPU runs to use more mantissa bits
-    MathFidelity math_fidelity = MathFidelity::HiFi4;
-
-    // Configure Dest register to hold 32-bit elements (instead of the default 16-bit)
-    bool fp32_dest_acc_en = false;
-
-    // Dest register sync mode:
-    //   false (Half) — Dest is split in half; math and pack pipeline (double-buffered)
-    //   true  (Full) — Dest is one buffer; twice the capacity, no math/pack overlap
-    bool dst_full_sync_en = false;
-
-    // Pack-side precision tweak for the Bfp8 block-float format.
-    // (Affects how exponents are reconciled when converting Dest contents to Bfp8)
-    bool bfp8_pack_precise = false;
-
-    // Select fast-and-approximate vs slow-and-precise variants of SFPU transcendentals
-    bool math_approx_mode = false;
-
-    // Per-DFB choice of how the unpacker delivers data into the math stage:
-    //   Default          — unpack via SrcA/B regs (~19-bit elements; full FPU access)
-    //   UnpackToDestFp32 — unpack via Dest regs with full FP32 precision (SFPU only)
-    //
-    // This choice matters only when ALL of the following hold for the DFB binding:
-    //   1. The kernel is the consumer endpoint (unpacking data into the kernel)
-    //   2. The DFB's data format is Float32.
-    //   3. fp32_dest_acc_en is true (Dest must be 32-bit-wide to hold FP32).
-    //
-    // You MUST provide an unpack_to_dest_mode entry for the DFB if these conditions hold;
-    // failing to do so will trigger an error. Otherwise, supplying an entry is optional
-    // and only Default is accepted.
-    using UnpackToDestModeEntry = std::pair<DFBSpecName, tt::tt_metal::UnpackToDestMode>;
-    std::vector<UnpackToDestModeEntry> unpack_to_dest_mode;
-};
-
-struct DataMovementConfiguration {
-    // The DM configuration is different for Gen1 and Gen2.
-
-    struct Gen1DataMovementConfig {
-        tt::tt_metal::DataMovementProcessor processor = tt::tt_metal::DataMovementProcessor::RISCV_0;
-        tt::tt_metal::NOC noc = tt::tt_metal::NOC::RISCV_0_default;
-        tt::tt_metal::NOC_MODE noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC;
-    };
-    std::optional<Gen1DataMovementConfig> gen1_data_movement_config = std::nullopt;
-
-    struct Gen2DataMovementConfig {
-        // Opt-out of DFB implicit sync (on a per-DFB basis)
-        //  - Implicit sync enables streamlined kernel-side syntax, but triggers ISR handling.
-        //  - Use this control to revert to legacy explicit sync APIs (for specific bound DFBs).
-        //  - This feature is mainly for debug purposes, or for backwards-compatible code style.
-        // Any bound DFB not listed here will use implicit sync by default.
-        std::vector<DFBSpecName> disable_implicit_sync_for;
-    };
-    std::optional<Gen2DataMovementConfig> gen2_data_movement_config = std::nullopt;
-};
-
 // A name identifying a KernelSpec within a ProgramSpec.
-//
-// CONVENTION: define names as `constexpr const char*` constants, e.g.:
-//   constexpr const char* READER_KERNEL = "reader";
-//   KernelSpec{.unique_id = READER_KERNEL, ...};
-// Reusing a single constant helps catch typos and errors at compile time.
 using KernelSpecName = std::string;
 
 // A KernelSpec is a descriptor for a Tenstorrent kernel:
@@ -126,30 +55,19 @@ struct KernelSpec {
     KernelSpecName unique_id;
 
     // Kernel source: either a path to a source file, or the source code itself.
-    // (Force callers to choose explicitly between path and inline code.)
-    struct SourceFilePath {
-        std::filesystem::path path;
-    };
+    // String literals bind directly to the path variant alternative; wrap inline
+    // source code with SourceCode{...}.
     struct SourceCode {
         std::string code;
     };
-    std::variant<SourceFilePath, SourceCode> source;
+    std::variant<std::filesystem::path, SourceCode> source;
 
     // NOTE: The kernel's target node set is a DERIVED property, based on the
     //       WorkUnitSpec(s) that include this kernel.
 
     // Kernel threading:
     // Number of kernel threads
-    uint8_t num_threads = 1;
-
-    // (Optional) Per-node thread count specification
-    // The default threading is num_threads. However, you may override this on a per-node basis.
-    // NOTE: This feature is currently unsupported. It's an open question if we EVER want to support it.
-    //       Here as a placeholder; specifying it will trigger a runtime error.
-    using Nodes = std::variant<NodeCoord, NodeRange, NodeRangeSet>;
-    using NodeSpecificThreadCount = std::pair<Nodes, uint8_t>;  // {node_set, num_threads}
-    using NodeSpecificThreadCounts = std::vector<NodeSpecificThreadCount>;
-    std::optional<NodeSpecificThreadCounts> node_specific_thread_counts = std::nullopt;
+    uint32_t num_threads = 1;
 
     // Kernel type (methods)
     bool is_dm_kernel() const { return std::holds_alternative<DataMovementConfiguration>(config_spec); }
@@ -177,11 +95,11 @@ struct KernelSpec {
     // DFB bindings
     // Declares that this kernel requires a DFB resource (declared at the ProgramSpec level)
     // The kernel constructs the accessor via DataflowBufferAccessor(dfb::<local_accessor_name>)
-    enum class DFBEndpointType { PRODUCER, CONSUMER, RELAY };
+    enum class DFBEndpointType { PRODUCER, CONSUMER };
     struct DFBBinding {
         DFBSpecName dfb_spec_name;        // identify the DFB within the ProgramSpec
         std::string local_accessor_name;  // DFB accessor name (used in the kernel source code)
-        DFBEndpointType endpoint_type;    // producer, consumer, or relay
+        DFBEndpointType endpoint_type;    // producer or consumer
         DFBAccessPattern access_pattern = DFBAccessPattern::STRIDED;  // strided, all, or blocked
     };
     std::vector<DFBBinding> dfb_bindings;
@@ -224,44 +142,16 @@ struct KernelSpec {
     // Schema for runtime arguments (RTA) and common runtime arguments (CRTA)
     // (The VALUES of these arguments are set as ProgramRunParams.)
     //
-    // Two mechanisms are supported per kernel:
-    //   - Named RTAs/CRTAs: referenced by name in kernel code via `args::<name>`.
-    //     (Currently, only uint32_t type is supported.)
-    //   - Vararg RTAs/CRTAs: positional, variable-count, always uint32_t.
-    //     Indexed from 0 in kernel code via `get_vararg(idx)` / `get_common_vararg(idx)`.
-    //     Vararg indices are stable across schema changes (e.g., moving a named arg from RTA→CRTA).
+    // Named RTAs/CRTAs: referenced by name in kernel code via `args::<name>`.
+    // (Currently, only uint32_t type is supported.)
+    //
+    // For vararg-style positional RTAs/CRTAs, see KernelAdvancedOptions.
     struct RuntimeArgSchema {
-        // Named RTAs: names in declaration order. Must be unique valid C++ identifiers.
+        // Runtime argument names (must be unique, valid C++ identifiers.)
         std::vector<std::string> named_runtime_args;
 
-        // Named CRTAs: names in declaration order. Must be unique valid C++ identifiers.
+        // Common runtime argument names (must be unique, valid C++ identifiers.)
         std::vector<std::string> named_common_runtime_args;
-
-        //----------------------
-        // Advanced options
-
-        // Runtime varargs: dynamic RTAs
-        // Some kernels are designed to take a variable number of arguments.
-        //  e.g. N arguments representing the dimensions of an N-dimensional tensor,
-        //       where N is passed to the kernel as a CTA.
-        // Varargs are accessed positionally, since the kernel does not know how many to expect.
-        // The vararg schema specifies the number of RTA varargs for this kernel.
-        // Use ProgramRunParams to set the vararg values (per node).
-        size_t num_runtime_varargs = 0;
-
-        // Per-node vararg number override: different per-node vararg counts
-        // In very rare cases, the kernel running on different nodes requires a DIFFERENT
-        // number of varargs on different nodes.
-        // Use num_runtime_varargs_per_node to override the number of varargs.
-        // Any kernel target node not specified in the override defaults to num_runtime_varargs.
-        using NumVarargsPerNode = std::vector<std::pair<Nodes, size_t>>;  // {nodes, num_varargs}
-        std::optional<NumVarargsPerNode> num_runtime_varargs_per_node = std::nullopt;
-        // TODO: This feature is truly bizarre. Investigate removing it from the API.
-
-        // Common runtime varargs: dynamic number of CRTAs
-        // These are similar to runtime varargs. However, when specifying the argument values
-        // (in ProgramRunParams), all nodes of the kernel receive the common values.
-        size_t num_common_runtime_varargs = 0;
     };
     RuntimeArgSchema runtime_arguments_schema{};
 
@@ -272,32 +162,9 @@ struct KernelSpec {
     ConfigSpec config_spec;
 
     //////////////////////////////////////////////////////////////////////////////
-    // Advanced options / niche use cases
+    // Advanced options (see advanced_options.hpp)
     //////////////////////////////////////////////////////////////////////////////
-
-    // Niche use case: Self-loop DFBs on compute kernels only
-    // This applies only to compute kernels that bind BOTH the producer and consumer
-    // endpoints of the same DFB (self-loop).
-    //
-    // The compute kernel threads can communicate via the DFB in two topologies:
-    //
-    //   INTRA (intra-thread): Each kernel thread uses the DFB in its own self-loop.
-    //         (no cross-thread communication). This is the common case.
-    //   INTER (inter-thread): Within the kernel, some threads produce data for other
-    //          threads to consume.
-    //
-    // Only the INTRA case is currently supported. INTER will trigger a validation error.
-    // There are currently no known use cases for an INTER-thread self-loop. This option
-    // is present in the API for completeness, to surface any use cases that may arise.
-    //
-    struct DFBComputeSelfLoopScope {
-        DFBSpecName dfb_spec_name;
-        enum class Scope { INTRA, INTER };
-        Scope scope = Scope::INTRA;
-        // If the INTER case were enabled, we would need an additional field to describe
-        // the inter-thread communication pattern here.
-    };
-    std::vector<DFBComputeSelfLoopScope> dfb_compute_self_loop_scopes;
+    KernelAdvancedOptions advanced_options;
 };
 
 }  // namespace tt::tt_metal::experimental::metal2_host_api
