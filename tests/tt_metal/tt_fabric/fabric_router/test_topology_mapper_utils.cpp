@@ -3969,6 +3969,204 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_PartialRankBinding_OneHos
 }
 
 // =============================================================================
+// Iterative Inter-Mesh Minimum Host Cover Tests
+// =============================================================================
+// map_multi_mesh_to_physical drives an iterative host-cover loop for multi-host /
+// multi-mesh placements when config.hostname_to_asics is populated: it tries the
+// smallest host cover first (descending partition order) and only widens by one
+// host when the inter-mesh solver returns UNSAT. These tests pin down:
+//   1. that a packable workload uses the minimum number of hosts,
+//   2. that the cover widens when topology makes the minimum cover infeasible,
+//   3. that the single-host-fits-all path still installs the hard same-rank
+//      constraint (unchanged regression behaviour).
+// All cases use disable_rank_bindings=true to keep the focus on the inter-mesh
+// cover logic.
+
+namespace {
+
+// Count distinct hosts that the result actually placed mapped ASICs on.
+std::set<std::string> hosts_used_by_result(
+    const TopologyMappingResult& result,
+    const std::map<std::string, std::set<tt::tt_metal::AsicID>>& hostname_to_asics) {
+    std::set<std::string> hosts_used;
+    for (const auto& [_, asic] : result.fabric_node_to_asic) {
+        for (const auto& [hostname, host_asics] : hostname_to_asics) {
+            if (host_asics.contains(asic)) {
+                hosts_used.insert(hostname);
+                break;
+            }
+        }
+    }
+    return hosts_used;
+}
+
+}  // namespace
+
+TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_MinimumHostCover_PrefersFewerHosts) {
+    // 4 isolated single-node logical meshes (no inter-mesh edges).
+    // Physical: 8 single-ASIC meshes distributed across 4 hosts, 2 meshes per host.
+    // Min host cover = ceil(4 targets / 2 meshes-per-host) = 2 hosts; the solver
+    // must pack the 4 targets onto exactly 2 hosts even though 4 are available.
+    using namespace ::tt::tt_fabric;
+
+    LogicalMultiMeshGraph logical;
+    AdjacencyGraph<MeshId>::AdjacencyMap logical_mesh_level_adj;
+    for (uint32_t i = 0; i < 4; ++i) {
+        const MeshId m{i};
+        std::map<FabricNodeId, std::vector<FabricNodeId>> mesh_adj{{FabricNodeId(m, 0), {}}};
+        logical.mesh_adjacency_graphs_[m] = AdjacencyGraph<FabricNodeId>(mesh_adj);
+        logical_mesh_level_adj[m] = {};
+    }
+    logical.mesh_level_graph_ = AdjacencyGraph<MeshId>(logical_mesh_level_adj);
+
+    PhysicalMultiMeshGraph physical;
+    AdjacencyGraph<MeshId>::AdjacencyMap physical_mesh_level_adj;
+    std::vector<tt::tt_metal::AsicID> asics;
+    for (uint64_t i = 0; i < 8; ++i) {
+        const tt::tt_metal::AsicID a{100 + i};
+        asics.push_back(a);
+        const MeshId m{static_cast<uint32_t>(i)};
+        std::map<tt::tt_metal::AsicID, std::vector<tt::tt_metal::AsicID>> mesh_adj{{a, {}}};
+        physical.mesh_adjacency_graphs_[m] = AdjacencyGraph<tt::tt_metal::AsicID>(mesh_adj);
+        physical_mesh_level_adj[m] = {};
+    }
+    physical.mesh_level_graph_ = AdjacencyGraph<MeshId>(physical_mesh_level_adj);
+
+    TopologyMappingConfig config;
+    config.disable_rank_bindings = true;
+    config.hostname_to_asics["host0"] = {asics[0], asics[1]};
+    config.hostname_to_asics["host1"] = {asics[2], asics[3]};
+    config.hostname_to_asics["host2"] = {asics[4], asics[5]};
+    config.hostname_to_asics["host3"] = {asics[6], asics[7]};
+
+    const auto result = map_multi_mesh_to_physical(logical, physical, config);
+
+    ASSERT_TRUE(result.success) << result.error_message;
+    verify_bidirectional_consistency(result);
+    EXPECT_EQ(result.fabric_node_to_asic.size(), 4u);
+
+    const auto hosts_used = hosts_used_by_result(result, config.hostname_to_asics);
+    EXPECT_EQ(hosts_used.size(), 2u) << "Iterative inter-mesh cover should pack 4 isolated meshes onto exactly 2 hosts "
+                                     << "(min cover = ceil(4/2)=2); used " << hosts_used.size() << " host(s) instead";
+}
+
+TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_MinimumHostCover_WidensWhenInfeasible) {
+    // Logical: 4 single-node meshes connected as a line m0-m1-m2-m3.
+    // Physical: 5 single-ASIC meshes across 3 hosts:
+    //   hostA = pm0, pm1   (largest partition)
+    //   hostB = pm2, pm3   (largest partition)
+    //   hostC = pm4        (singleton bridging A and B)
+    // Mesh-level edges: pm0-pm1, pm2-pm3, pm1-pm4, pm4-pm2.
+    //
+    // The initial 2-host cover {hostA, hostB} has enough capacity (4 meshes for
+    // 4 targets) but is topologically disconnected (no direct A<->B mesh edge),
+    // so the inter-mesh solve returns UNSAT for the 4-line. The cover must widen
+    // to {hostA, hostB, hostC} (adding the bridging singleton) for the solve to
+    // succeed; the result therefore touches all 3 hosts.
+    using namespace ::tt::tt_fabric;
+
+    LogicalMultiMeshGraph logical;
+    AdjacencyGraph<MeshId>::AdjacencyMap logical_mesh_level_adj;
+    for (uint32_t i = 0; i < 4; ++i) {
+        const MeshId m{i};
+        std::map<FabricNodeId, std::vector<FabricNodeId>> mesh_adj{{FabricNodeId(m, 0), {}}};
+        logical.mesh_adjacency_graphs_[m] = AdjacencyGraph<FabricNodeId>(mesh_adj);
+    }
+    logical_mesh_level_adj[MeshId{0}] = {MeshId{1}};
+    logical_mesh_level_adj[MeshId{1}] = {MeshId{0}, MeshId{2}};
+    logical_mesh_level_adj[MeshId{2}] = {MeshId{1}, MeshId{3}};
+    logical_mesh_level_adj[MeshId{3}] = {MeshId{2}};
+    logical.mesh_level_graph_ = AdjacencyGraph<MeshId>(logical_mesh_level_adj);
+
+    PhysicalMultiMeshGraph physical;
+    std::vector<tt::tt_metal::AsicID> asics;
+    for (uint64_t i = 0; i < 5; ++i) {
+        const tt::tt_metal::AsicID a{100 + i};
+        asics.push_back(a);
+        std::map<tt::tt_metal::AsicID, std::vector<tt::tt_metal::AsicID>> mesh_adj{{a, {}}};
+        physical.mesh_adjacency_graphs_[MeshId{static_cast<uint32_t>(i)}] =
+            AdjacencyGraph<tt::tt_metal::AsicID>(mesh_adj);
+    }
+    AdjacencyGraph<MeshId>::AdjacencyMap physical_mesh_level_adj;
+    physical_mesh_level_adj[MeshId{0}] = {MeshId{1}};
+    physical_mesh_level_adj[MeshId{1}] = {MeshId{0}, MeshId{4}};
+    physical_mesh_level_adj[MeshId{2}] = {MeshId{3}, MeshId{4}};
+    physical_mesh_level_adj[MeshId{3}] = {MeshId{2}};
+    physical_mesh_level_adj[MeshId{4}] = {MeshId{1}, MeshId{2}};
+    physical.mesh_level_graph_ = AdjacencyGraph<MeshId>(physical_mesh_level_adj);
+
+    TopologyMappingConfig config;
+    config.disable_rank_bindings = true;
+    config.hostname_to_asics["hostA"] = {asics[0], asics[1]};
+    config.hostname_to_asics["hostB"] = {asics[2], asics[3]};
+    config.hostname_to_asics["hostC"] = {asics[4]};
+
+    const auto result = map_multi_mesh_to_physical(logical, physical, config);
+
+    ASSERT_TRUE(result.success) << result.error_message;
+    verify_bidirectional_consistency(result);
+    EXPECT_EQ(result.fabric_node_to_asic.size(), 4u);
+
+    const auto hosts_used = hosts_used_by_result(result, config.hostname_to_asics);
+    EXPECT_EQ(hosts_used.size(), 3u)
+        << "Initial 2-host cover {hostA,hostB} is topologically disconnected for the 4-line; "
+        << "solver must widen to all 3 hosts. Used " << hosts_used.size() << " instead";
+    EXPECT_TRUE(hosts_used.contains("hostC"))
+        << "Widened cover must include the singleton bridge host (hostC) carrying the connecting mesh";
+}
+
+TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_SingleHostFitsAll_UsesSingleHost) {
+    // Regression: when one host has enough capacity to fit every unbound logical
+    // mesh, compute_inter_mesh_host_cover_info_from_hostname_map installs a hard
+    // set_same_rank_groups_constraint (info.active stays false) instead of driving
+    // the iterative loop. Verify a 2-mesh placement onto a 2-host system lands on
+    // a single host even though two hosts are available.
+    using namespace ::tt::tt_fabric;
+
+    LogicalMultiMeshGraph logical;
+    AdjacencyGraph<MeshId>::AdjacencyMap logical_mesh_level_adj;
+    for (uint32_t i = 0; i < 2; ++i) {
+        const MeshId m{i};
+        std::map<FabricNodeId, std::vector<FabricNodeId>> mesh_adj{{FabricNodeId(m, 0), {}}};
+        logical.mesh_adjacency_graphs_[m] = AdjacencyGraph<FabricNodeId>(mesh_adj);
+    }
+    logical_mesh_level_adj[MeshId{0}] = {MeshId{1}};
+    logical_mesh_level_adj[MeshId{1}] = {MeshId{0}};
+    logical.mesh_level_graph_ = AdjacencyGraph<MeshId>(logical_mesh_level_adj);
+
+    PhysicalMultiMeshGraph physical;
+    std::vector<tt::tt_metal::AsicID> asics;
+    for (uint64_t i = 0; i < 4; ++i) {
+        const tt::tt_metal::AsicID a{100 + i};
+        asics.push_back(a);
+        std::map<tt::tt_metal::AsicID, std::vector<tt::tt_metal::AsicID>> mesh_adj{{a, {}}};
+        physical.mesh_adjacency_graphs_[MeshId{static_cast<uint32_t>(i)}] =
+            AdjacencyGraph<tt::tt_metal::AsicID>(mesh_adj);
+    }
+    AdjacencyGraph<MeshId>::AdjacencyMap physical_mesh_level_adj;
+    physical_mesh_level_adj[MeshId{0}] = {MeshId{1}};
+    physical_mesh_level_adj[MeshId{1}] = {MeshId{0}};
+    physical_mesh_level_adj[MeshId{2}] = {MeshId{3}};
+    physical_mesh_level_adj[MeshId{3}] = {MeshId{2}};
+    physical.mesh_level_graph_ = AdjacencyGraph<MeshId>(physical_mesh_level_adj);
+
+    TopologyMappingConfig config;
+    config.disable_rank_bindings = true;
+    config.hostname_to_asics["host0"] = {asics[0], asics[1]};
+    config.hostname_to_asics["host1"] = {asics[2], asics[3]};
+
+    const auto result = map_multi_mesh_to_physical(logical, physical, config);
+
+    ASSERT_TRUE(result.success) << result.error_message;
+    verify_bidirectional_consistency(result);
+    EXPECT_EQ(result.fabric_node_to_asic.size(), 2u);
+
+    const auto hosts_used = hosts_used_by_result(result, config.hostname_to_asics);
+    EXPECT_EQ(hosts_used.size(), 1u)
+        << "Single-host-fits-all path should place both meshes on a single host (hard same-rank constraint)";
+}
+
+// =============================================================================
 // Tier 2: build_physical_multi_mesh_adjacency_graph with PGD and PSD Tests
 // =============================================================================
 // Tests for build_physical_multi_mesh_adjacency_graph using PhysicalGroupingDescriptor

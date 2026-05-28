@@ -713,20 +713,47 @@ std::optional<std::string> resolve_local_hostname_from_hostname_asics_map(
     return std::nullopt;
 }
 
-// Minimal host cover for inter-mesh mapping: partition physical meshes by host, then apply.
-// `rank_bound_logical_to_physical`: logical meshes already fixed by rank bindings → skip those and their physical
-// meshes for host-alignment bias (empty when rank bindings are disabled).
-// TODO: THis can be removed and replaced with cost hieristics when using a SAT solver because preferred constraints
-// aren't very effective here
-// https://github.com/tenstorrent/tt-metal/issues/40640
-void add_inter_mesh_minimal_host_cover_from_hostname_map(
+// Inter-mesh "minimum host cover" state. Built once per mapping run by
+// compute_inter_mesh_host_cover_info_from_hostname_map; used by map_multi_mesh_to_physical to drive an iterative
+// hard-restriction loop that tries the smallest host count first and grows the cover only when the solver fails.
+struct InterMeshHostCoverInfo {
+    // Physical-mesh partitions ordered by descending size (one set per host, plus singletons for
+    // multi-host physical meshes). Rank-bound physical meshes are excluded.
+    std::vector<std::set<MeshId>> host_partitions_desc;
+
+    // Logical meshes that are not already pinned by rank bindings and therefore should be confined
+    // to the chosen host cover.
+    std::set<MeshId> unbound_logical_targets;
+
+    // Smallest k such that sum of |host_partitions_desc[0..k)| >= |unbound_logical_targets|.
+    // 0 if iterative cover is not applicable (see `active`).
+    std::size_t min_cover_size = 0;
+
+    // True iff iterative cover tightening should be driven by the caller. False when (a) hostname
+    // info is absent, (b) there is at most one unbound target, (c) no eligible physical partitions
+    // exist, or (d) a single host already fits all targets and we installed the hard same-rank
+    // constraint directly (in which case the caller has nothing more to do).
+    bool active = false;
+};
+
+// Compute the minimum-host-cover state for inter-mesh mapping. If a single host already fits all unbound logical
+// targets, install the existing hard `set_same_rank_groups_constraint` and leave `info.active = false` so the caller
+// does not also drive iterative tightening. Otherwise, populate `info` so the caller can iteratively install
+// progressively wider hard `add_required_constraint` restrictions (smallest cover first), retrying on failure.
+//
+// This replaces the previous "preferred globals" soft fallback whose effectiveness was bounded by the SAT engine's
+// preferred-hit lower bound and could spill targets onto extra hosts. See
+// https://github.com/tenstorrent/tt-metal/issues/40640.
+InterMeshHostCoverInfo compute_inter_mesh_host_cover_info_from_hostname_map(
     const TopologyMappingConfig& config,
     const PhysicalMultiMeshGraph& physical_graph,
     const AdjacencyGraph<MeshId>& mesh_logical_level_graph,
     ::tt::tt_fabric::MappingConstraints<MeshId, MeshId>& inter_mesh_constraints,
     const std::map<MeshId, MeshId>& rank_bound_logical_to_physical) {
+    InterMeshHostCoverInfo info;
+
     if (config.hostname_to_asics.empty()) {
-        return;
+        return info;
     }
 
     std::set<MeshId> bound_physical_mesh_ids;
@@ -734,14 +761,13 @@ void add_inter_mesh_minimal_host_cover_from_hostname_map(
         bound_physical_mesh_ids.insert(physical_mesh_id);
     }
 
-    std::set<MeshId> logical_target_set;
     for (const MeshId& m : mesh_logical_level_graph.get_nodes()) {
         if (!rank_bound_logical_to_physical.contains(m)) {
-            logical_target_set.insert(m);
+            info.unbound_logical_targets.insert(m);
         }
     }
-    if (logical_target_set.size() <= 1) {
-        return;
+    if (info.unbound_logical_targets.size() <= 1) {
+        return info;
     }
 
     // Build global_mesh_groups in one pass: one group per host for single-host meshes, singleton for multi-host.
@@ -772,35 +798,75 @@ void add_inter_mesh_minimal_host_cover_from_hostname_map(
         }
     }
     if (global_mesh_groups.empty()) {
-        return;
+        return info;
     }
 
-    const auto [single_group_fits, preferred_globals] =
+    const auto [single_group_fits, _preferred_globals] =
         ::tt::tt_fabric::PhysicalGroupingDescriptor::find_minimum_coverage_group(
-            logical_target_set, global_mesh_groups);
+            info.unbound_logical_targets, global_mesh_groups);
     if (single_group_fits) {
+        // One host has enough capacity for every target: install the existing hard same-rank constraint and stop.
+        // No iterative tightening is needed in this case.
         std::vector<std::set<MeshId>> target_groups;
-        target_groups.push_back(logical_target_set);
+        target_groups.push_back(info.unbound_logical_targets);
         if (inter_mesh_constraints.set_same_rank_groups_constraint(target_groups, global_mesh_groups)) {
-            return;
+            return info;  // info.active stays false
         }
         log_warning(
             tt::LogFabric,
-            "Inter-mesh host alignment: failed to set same-rank groups constraint; falling back to preferred globals");
+            "Inter-mesh host alignment: failed to set same-rank groups constraint; falling back to iterative "
+            "minimum-host-cover tightening");
     }
-    if (!preferred_globals.empty()) {
-        if (!single_group_fits) {
-            log_debug(
-                tt::LogFabric,
-                "Inter-mesh host alignment: target count {} exceeds largest single partition; preferring minimal host "
-                "cover ({} preferred globals)",
-                logical_target_set.size(),
-                preferred_globals.size());
-        }
-        for (const MeshId& target : logical_target_set) {
-            inter_mesh_constraints.add_preferred_constraint(target, preferred_globals);
+
+    // Sort partitions by descending size (ties broken by smallest element for determinism) and compute the smallest
+    // initial cover size that has enough capacity for all unbound targets.
+    info.host_partitions_desc = std::move(global_mesh_groups);
+    std::sort(
+        info.host_partitions_desc.begin(),
+        info.host_partitions_desc.end(),
+        [](const std::set<MeshId>& a, const std::set<MeshId>& b) {
+            if (a.size() != b.size()) {
+                return a.size() > b.size();
+            }
+            return *a.begin() < *b.begin();
+        });
+
+    std::size_t covered = 0;
+    info.min_cover_size = info.host_partitions_desc.size();
+    for (std::size_t i = 0; i < info.host_partitions_desc.size(); ++i) {
+        covered += info.host_partitions_desc[i].size();
+        if (covered >= info.unbound_logical_targets.size()) {
+            info.min_cover_size = i + 1;
+            break;
         }
     }
+    info.active = true;
+    return info;
+}
+
+// Restrict every unbound logical target to the union of the first `cover_size` host partitions via
+// hard `add_required_constraint`. Returns false if any restriction makes the constraint set infeasible
+// (e.g. conflicts with pinning constraints from build_inter_mesh_constraints) — the caller can react
+// by widening `cover_size` and retrying.
+bool apply_inter_mesh_required_host_cover(
+    ::tt::tt_fabric::MappingConstraints<MeshId, MeshId>& constraints,
+    const InterMeshHostCoverInfo& info,
+    std::size_t cover_size) {
+    if (!info.active || cover_size == 0) {
+        return true;
+    }
+    cover_size = std::min(cover_size, info.host_partitions_desc.size());
+
+    std::set<MeshId> allowed;
+    for (std::size_t i = 0; i < cover_size; ++i) {
+        allowed.insert(info.host_partitions_desc[i].begin(), info.host_partitions_desc[i].end());
+    }
+    for (const MeshId& target : info.unbound_logical_targets) {
+        if (!constraints.add_required_constraint(target, allowed)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 // Physical mesh partition (among unbound) that minimally covers required_asics, else nullopt.
@@ -1022,24 +1088,34 @@ std::map<AsicPosition, std::set<tt::tt_metal::AsicID>> build_asic_positions_map(
     return asic_positions_to_asic_ids;
 }
 
+// Bundle returned by build_inter_mesh_constraints. Carries the base constraints (pinnings, rank bindings, logical
+// mesh-0 anchor, and the hard same-rank constraint when one host fits everything) plus the iterative host-cover
+// state. When `host_cover_info.active` is true, map_multi_mesh_to_physical drives the cover tightening loop;
+// otherwise the bundle behaves identically to the prior single-shot build.
+struct InterMeshConstraintsBundle {
+    ::tt::tt_fabric::MappingConstraints<MeshId, MeshId> constraints;
+    InterMeshHostCoverInfo host_cover_info;
+};
+
 // Helper function to build inter-mesh constraints
 // Maps logical meshes to physical meshes based on matching mesh host ranks
 // A logical mesh maps to a physical mesh if the ASICs in that physical mesh have matching ranks
-::tt::tt_fabric::MappingConstraints<MeshId, MeshId> build_inter_mesh_constraints(
+InterMeshConstraintsBundle build_inter_mesh_constraints(
     const TopologyMappingConfig& config,
     const PhysicalMultiMeshGraph& physical_graph,
     const AdjacencyGraph<MeshId>& mesh_logical_level_graph,
     const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank,
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank) {
-    ::tt::tt_fabric::MappingConstraints<MeshId, MeshId> inter_mesh_constraints;
+    InterMeshConstraintsBundle bundle;
+    auto& inter_mesh_constraints = bundle.constraints;
 
     // Skip if rank bindings are disabled
     if (config.disable_rank_bindings) {
-        add_inter_mesh_minimal_host_cover_from_hostname_map(
+        bundle.host_cover_info = compute_inter_mesh_host_cover_info_from_hostname_map(
             config, physical_graph, mesh_logical_level_graph, inter_mesh_constraints, {});
         add_logical_mesh_zero_anchor_inter_mesh_preference(
             config, physical_graph, mesh_logical_level_graph, {}, inter_mesh_constraints);
-        return inter_mesh_constraints;
+        return bundle;
     }
 
     std::map<MeshId, std::set<MeshId>> mesh_level_pinnings;
@@ -1094,11 +1170,11 @@ std::map<AsicPosition, std::set<tt::tt_metal::AsicID>> build_asic_positions_map(
         inter_mesh_constraints.add_required_constraint(logical_mesh_id, physical_it->second);
     }
 
-    add_inter_mesh_minimal_host_cover_from_hostname_map(
+    bundle.host_cover_info = compute_inter_mesh_host_cover_info_from_hostname_map(
         config, physical_graph, mesh_logical_level_graph, inter_mesh_constraints, rank_bound_logical_to_physical);
     add_logical_mesh_zero_anchor_inter_mesh_preference(
         config, physical_graph, mesh_logical_level_graph, rank_bound_logical_to_physical, inter_mesh_constraints);
-    return inter_mesh_constraints;
+    return bundle;
 }
 
 // Helper function to determine inter-mesh validation mode
@@ -1692,10 +1768,45 @@ TopologyMappingResult map_multi_mesh_to_physical(
     const auto& mesh_logical_graph = adjacency_map_logical.mesh_level_graph_;
     const auto& mesh_physical_graph = adjacency_map_physical.mesh_level_graph_;
 
-    // Build inter-mesh constraints and determine validation mode
-    auto inter_mesh_constraints = build_inter_mesh_constraints(
+    // Build inter-mesh constraints + iterative host-cover state, and determine validation mode.
+    auto inter_mesh_bundle = build_inter_mesh_constraints(
         config, adjacency_map_physical, mesh_logical_graph, fabric_node_id_to_mesh_rank, asic_id_to_mesh_rank);
     auto inter_mesh_validation_mode = determine_inter_mesh_validation_mode(config);
+
+    // Iterative host-cover state: start at the smallest cover that has enough capacity for all unbound targets,
+    // then grow by one host on each inter-mesh UNSAT (rebuilding the live constraints from the bundle plus the
+    // accumulated intra-mesh forbidden pairs). When `active` is false this loop degenerates to a single attempt
+    // with the bundle's constraints unchanged (preserving the prior behaviour for single-host-fits-all and for
+    // configs without hostname info).
+    const auto& host_cover_info = inter_mesh_bundle.host_cover_info;
+    std::size_t cover_size = host_cover_info.active ? host_cover_info.min_cover_size : 0;
+
+    // Build the live inter-mesh constraints by composing the bundle's base, the current host-cover restriction
+    // (when applicable), and every previously-added forbidden mesh pair. Called once up front and again whenever
+    // the cover is widened.
+    ::tt::tt_fabric::MappingConstraints<MeshId, MeshId> inter_mesh_constraints;
+    std::vector<std::pair<MeshId, MeshId>> accumulated_forbidden_pairs;
+    auto rebuild_inter_mesh_constraints = [&]() -> bool {
+        inter_mesh_constraints = inter_mesh_bundle.constraints;
+        if (!apply_inter_mesh_required_host_cover(inter_mesh_constraints, host_cover_info, cover_size)) {
+            return false;
+        }
+        for (const auto& [logical, physical] : accumulated_forbidden_pairs) {
+            if (!inter_mesh_constraints.add_forbidden_constraint(logical, physical)) {
+                return false;
+            }
+        }
+        return true;
+    };
+    rebuild_inter_mesh_constraints();
+    if (host_cover_info.active) {
+        log_info(
+            tt::LogFabric,
+            "Inter-mesh host cover: starting with {} of {} host partition(s) (covering {} unbound logical target(s))",
+            cover_size,
+            host_cover_info.host_partitions_desc.size(),
+            host_cover_info.unbound_logical_targets.size());
+    }
 
     // Track statistics for error reporting
     unsigned int retry_attempt = 0;
@@ -1724,8 +1835,10 @@ TopologyMappingResult map_multi_mesh_to_physical(
 
     // Maximum retry attempts to prevent infinite loops
     // This should be sufficient for most cases: if we have N logical meshes and M physical meshes,
-    // worst case is N*M attempts (trying each logical mesh with each physical mesh)
-    const unsigned int max_retry_attempts = (logical_meshes.size() * physical_meshes.size()) + 1;
+    // worst case is N*M attempts (trying each logical mesh with each physical mesh), plus one
+    // extra attempt for each host partition the iterative cover may have to add when widening.
+    const unsigned int max_retry_attempts = (logical_meshes.size() * physical_meshes.size()) +
+                                            static_cast<unsigned int>(host_cover_info.host_partitions_desc.size()) + 1;
     log_debug(tt::LogFabric, "Maximum retry attempts: {}", max_retry_attempts);
 
     while (!success) {
@@ -1766,8 +1879,23 @@ TopologyMappingResult map_multi_mesh_to_physical(
         auto solver_result = ::tt::tt_fabric::solve_topology_mapping(
             mesh_logical_graph, mesh_physical_graph, inter_mesh_constraints, inter_mesh_validation_mode, quiet_mode);
 
-        // If the solver fails, return error results for all meshes with detailed information
+        // If the inter-mesh solver fails, first try widening the host cover (we may have started with too few
+        // hosts to embed the logical mesh graph). Only treat it as a hard failure once we've already opened the
+        // cover up to every available host partition (or the cover mechanism is not active for this config).
         if (!solver_result.success) {
+            if (host_cover_info.active && cover_size < host_cover_info.host_partitions_desc.size()) {
+                const std::size_t previous_cover_size = cover_size;
+                ++cover_size;
+                log_info(
+                    tt::LogFabric,
+                    "Inter-mesh mapping infeasible with {} host(s); widening cover to {} host(s) and retrying",
+                    previous_cover_size,
+                    cover_size);
+                // Rebuild may fail if the wider cover itself conflicts with existing pinnings; in that case keep
+                // expanding on subsequent iterations until either it becomes feasible or we exhaust partitions.
+                rebuild_inter_mesh_constraints();
+                continue;
+            }
             log_info(tt::LogFabric, "Multi-mesh mapping attempt {} failed: Inter-mesh mapping failed", retry_attempt);
             log_debug(tt::LogFabric, "Inter-mesh mapping error: {}", solver_result.error_message);
             result.success = false;
@@ -1875,6 +2003,8 @@ TopologyMappingResult map_multi_mesh_to_physical(
                             "Exit node constraint error")) {
                         return result;  // Mapping should return early
                     }
+                    // Mirror the forbidden pair so cover-expansion rebuilds preserve it.
+                    accumulated_forbidden_pairs.emplace_back(logical_mesh_id, physical_mesh_id);
                     continue;  // Skip to next physical mesh
                 }
             }
@@ -1912,6 +2042,8 @@ TopologyMappingResult map_multi_mesh_to_physical(
                         "Constraint error")) {
                     return result;  // Mapping should return early
                 }
+                // Mirror the forbidden pair so cover-expansion rebuilds preserve it.
+                accumulated_forbidden_pairs.emplace_back(logical_mesh_id, physical_mesh_id);
             } else {
                 mapped_mesh_pairs++;
                 // Add the mapping to the result using MappingResult directly
