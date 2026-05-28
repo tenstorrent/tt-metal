@@ -119,7 +119,9 @@
 - tick 37 (2026-05-28T05:03:57Z): optimization[layernorm]: at-ceiling — ok
 - tick 38 (2026-05-28T05:04:31Z): optimization[9 leaves bulk at-ceiling]: scaled_word_embedding,sinusoidal_positional_embedding,seamless_mha,seamless_ffn,conformer_ffn,conformer_self_attention,conformer_convolution_module,variance_predictor,hifigan_residual_block — ok
 - tick 39 (2026-05-28T05:06:37Z): optimization[14 composite+submodel bulk at-ceiling]: conformer_feature_projection,conformer_encoder_layer,text_encoder_layer,text_decoder_layer,t2u_decoder_layer,conformer_adapter_layer,speech_encoder,text_encoder,text_decoder,t2u_encoder,t2u_decoder,hifigan_vocoder,code_hifigan_vocoder,seamless_m4t_v2 — ok
+- tick 40 (2026-05-28T06:52:42Z): phase7[T2ST demo]: TTNN text_encoder + text_generator + t2u_generator + code_hifigan_vocoder. Hybrid HF host: text_decoder rerun for hidden states + _indices_to_subwords/_count_character_length_in_subword/_get_char_input_ids. "Hello world." -> fra produces 1.620s WAV matching HF exactly; re-ASR "Salut à vous, monde." on both, char-sim=1.000. — ok
 
 ## Host-Resident Exceptions
 
-_None._
+- T2ST text decoder rerun: after the AR TTNN text_generator returns sequences, we need a full-sequence last_hidden_state to feed the T2U model. Our TTNN text_decoder is wired for AR (per-step) and would require a separate prefill mode. For v1 we run HF SeamlessM4Tv2ForTextToSpeech.text_decoder on the host once over sequences[:, :-1]. Documented in tt/text_to_speech_model.py.
+- T2ST char-input prep: _indices_to_subwords, _count_character_length_in_subword, _get_char_input_ids are tokeniser-bound (read generation_config.id_to_text and char_to_id). Re-using HF helpers avoids a bit-exact re-implementation risk.
