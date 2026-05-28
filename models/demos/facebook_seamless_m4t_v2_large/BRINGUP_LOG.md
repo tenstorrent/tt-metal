@@ -138,7 +138,7 @@
 | t2tt | text | text | yes | done | done |
 | s2tt | audio | text | yes | done | done |
 | asr | audio | text | yes | done | done |
-| t2st | text | audio | yes | done | pending |
+| t2st | text | audio | yes | done | done |
 | s2st | audio | audio | yes | done | pending |
 
 ## Recent Ticks

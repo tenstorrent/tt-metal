@@ -1646,8 +1646,16 @@
         "notes": "Phase 7: TTNN audio matches HF; re-ASR char-sim=1.0. 'Salut a vous, monde.'"
       },
       "perf": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "metric": {
+          "total_ms": 426.24,
+          "speedup": 1.0
+        },
+        "notes": "At-ceiling at pipeline level. AR text decoder (53% of 426 ms wall) is host-dispatch limited but Phase 9c cross-call trace blocked by post-AR T2U+vocoder allocations. Release-and-recapture would defeat cross-call reuse. NAR stages (encoder 14ms, t2u 12ms, vocoder 32ms) too small individually to justify four-harness trace refactor. test_e2e_t2st PASSES (char_sim=1.000).",
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/profile_t2st.py",
+          "models/demos/facebook_seamless_m4t_v2_large/PERF_NOTES.md"
+        ]
       }
     },
     {
