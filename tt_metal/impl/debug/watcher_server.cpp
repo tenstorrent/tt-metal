@@ -191,8 +191,78 @@ void WatcherServer::Impl::detach_devices() {
 }
 
 void WatcherServer::Impl::dump(FILE* f) {
-    for (auto& device_id_and_reader : device_id_to_reader_) {
-        device_id_and_reader.second.Dump(f);
+    // Single-device fast path: skip the thread/memstream overhead.
+    if (device_id_to_reader_.size() <= 1) {
+        for (auto& device_id_and_reader : device_id_to_reader_) {
+            device_id_and_reader.second.Dump(f);
+        }
+        return;
+    }
+
+    // Parallel per-device dump. On T3K we have 4 MMIO chips, each with an independent
+    // PCIe io_lock_ and an independent NON_MMIO mutex (keyed by MMIO partner), so dumps
+    // of different chips don't contend on UMD locks. We fan out one task per device,
+    // each writing into its own in-memory FILE buffer, then concatenate them into the
+    // real logfile in device-id order so the on-disk layout matches the serial version.
+    struct PerDevice {
+        WatcherDeviceReader* reader;
+        char* buf = nullptr;
+        size_t buf_len = 0;
+        FILE* mem = nullptr;
+    };
+    std::vector<PerDevice> per_device;
+    per_device.reserve(device_id_to_reader_.size());
+    for (auto& [device_id, reader] : device_id_to_reader_) {
+        (void)device_id;
+        per_device.push_back({&reader, nullptr, 0, nullptr});
+    }
+    for (auto& pd : per_device) {
+        pd.mem = open_memstream(&pd.buf, &pd.buf_len);
+        if (pd.mem == nullptr) {
+            // Allocation failure — clean up anything we already opened, fall back to serial.
+            for (auto& pd2 : per_device) {
+                if (pd2.mem != nullptr) {
+                    fclose(pd2.mem);
+                    free(pd2.buf);
+                    pd2.mem = nullptr;
+                    pd2.buf = nullptr;
+                }
+            }
+            for (auto& device_id_and_reader : device_id_to_reader_) {
+                device_id_and_reader.second.Dump(f);
+            }
+            return;
+        }
+    }
+
+    std::vector<std::future<void>> futures;
+    futures.reserve(per_device.size());
+    for (auto& pd : per_device) {
+        futures.push_back(std::async(std::launch::async, [reader = pd.reader, mem = pd.mem]() { reader->Dump(mem); }));
+    }
+
+    std::exception_ptr first_exc = nullptr;
+    for (auto& fut : futures) {
+        try {
+            fut.get();
+        } catch (...) {
+            if (!first_exc) {
+                first_exc = std::current_exception();
+            }
+        }
+    }
+
+    // Flush + concatenate even on partial failure so the user sees whatever was produced.
+    for (auto& pd : per_device) {
+        fclose(pd.mem);
+        if (pd.buf != nullptr) {
+            fwrite(pd.buf, 1, pd.buf_len, f);
+            free(pd.buf);
+        }
+    }
+
+    if (first_exc) {
+        std::rethrow_exception(first_exc);
     }
 }
 

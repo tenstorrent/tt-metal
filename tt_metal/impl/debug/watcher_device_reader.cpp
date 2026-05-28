@@ -325,7 +325,8 @@ WatcherDeviceReader::WatcherDeviceReader(
     WatcherServer& watcher_server) :
     f(f), device_id(device_id), env(env), watcher_server(watcher_server), kernel_names(kernel_names) {
     // On init, read out eth link retraining register so that we can see if retraining has occurred. WH only for now.
-    if (env.get_cluster().arch() == ARCH::WORMHOLE_B0 && env.get_rtoptions().get_watcher_enabled()) {
+    if (env.get_cluster().arch() == ARCH::WORMHOLE_B0 && env.get_rtoptions().get_watcher_enabled() &&
+        !env.get_rtoptions().watcher_eth_disabled()) {
         std::vector<uint32_t> read_data;
         for (const CoreCoord& eth_core : env.get_control_plane().get_active_ethernet_cores(device_id)) {
             CoreCoord virtual_core =
@@ -349,7 +350,8 @@ WatcherDeviceReader::WatcherDeviceReader(
 
 WatcherDeviceReader::~WatcherDeviceReader() {
     // On close, read out eth link retraining register so that we can see if retraining has occurred.
-    if (env.get_cluster().arch() == ARCH::WORMHOLE_B0 && env.get_rtoptions().get_watcher_enabled()) {
+    if (env.get_cluster().arch() == ARCH::WORMHOLE_B0 && env.get_rtoptions().get_watcher_enabled() &&
+        !env.get_rtoptions().watcher_eth_disabled()) {
         std::vector<uint32_t> read_data;
         for (const CoreCoord& eth_core : env.get_control_plane().get_active_ethernet_cores(device_id)) {
             CoreCoord virtual_core =
@@ -404,12 +406,15 @@ void WatcherDeviceReader::Dump(FILE* file) {
         }
     }
 
-    // Dump eth cores
-    for (const CoreCoord& eth_core : env.get_control_plane().get_active_ethernet_cores(device_id)) {
-        Core::Create(eth_core, HalProgrammableCoreType::ACTIVE_ETH, *this, dump_data).Dump();
-    }
-    for (const CoreCoord& eth_core : env.get_control_plane().get_inactive_ethernet_cores(device_id)) {
-        Core::Create(eth_core, HalProgrammableCoreType::IDLE_ETH, *this, dump_data).Dump();
+    // Dump eth cores (skipped when TT_METAL_WATCHER_DISABLE_ETH=1; the host-side read can stall
+    // for tens of seconds on contended/unresponsive eth cores and block the watcher mutex.)
+    if (!env.get_rtoptions().watcher_eth_disabled()) {
+        for (const CoreCoord& eth_core : env.get_control_plane().get_active_ethernet_cores(device_id)) {
+            Core::Create(eth_core, HalProgrammableCoreType::ACTIVE_ETH, *this, dump_data).Dump();
+        }
+        for (const CoreCoord& eth_core : env.get_control_plane().get_inactive_ethernet_cores(device_id)) {
+            Core::Create(eth_core, HalProgrammableCoreType::IDLE_ETH, *this, dump_data).Dump();
+        }
     }
 
     // Dump DRAM cores (Blackhole only)
