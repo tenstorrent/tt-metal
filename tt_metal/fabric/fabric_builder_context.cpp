@@ -13,7 +13,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <cstdint>
 
 namespace tt::tt_fabric {
 
@@ -47,8 +46,8 @@ void FabricBuilderContext::compute_max_channel_counts() {
     max_receiver_channels_per_vc_.fill(0);
 
     for (const auto& mapping : possible_mappings) {
-        std::uint32_t num_vcs = mapping.get_num_virtual_channels();
-        for (std::uint32_t vc = 0; vc < num_vcs; ++vc) {
+        uint32_t num_vcs = mapping.get_num_virtual_channels();
+        for (uint32_t vc = 0; vc < num_vcs; ++vc) {
             auto sender_count = mapping.get_num_sender_channels_for_vc(vc);
             max_sender_channels_per_vc_[vc] =
                 std::max(max_sender_channels_per_vc_[vc], static_cast<std::size_t>(sender_count));
@@ -171,7 +170,7 @@ void FabricBuilderContext::set_num_fabric_initialized_routers(ChipId chip_id, si
     num_initialized_routers_[chip_id] = num_routers;
 }
 
-std::uint32_t FabricBuilderContext::get_num_fabric_initialized_routers(ChipId chip_id) const {
+uint32_t FabricBuilderContext::get_num_fabric_initialized_routers(ChipId chip_id) const {
     TT_FATAL(chip_id < num_devices_, "Device ID {} exceeds maximum supported devices {}", chip_id, num_devices_);
     TT_FATAL(
         num_initialized_routers_[chip_id] != UNINITIALIZED_ROUTERS,
@@ -214,16 +213,15 @@ std::vector<size_t> FabricBuilderContext::get_fabric_router_addresses_to_clear()
     return addresses_to_clear;
 }
 
-std::pair<std::uint32_t, std::uint32_t> FabricBuilderContext::get_fabric_router_sync_address_and_status() const {
+std::pair<uint32_t, uint32_t> FabricBuilderContext::get_fabric_router_sync_address_and_status() const {
     return std::make_pair(router_config_->edm_status_address, EDMStatus::LOCAL_HANDSHAKE_COMPLETE);
 }
 
-std::optional<std::pair<std::uint32_t, EDMStatus>> FabricBuilderContext::get_fabric_router_ready_address_and_signal()
-    const {
+std::optional<std::pair<uint32_t, EDMStatus>> FabricBuilderContext::get_fabric_router_ready_address_and_signal() const {
     return std::make_pair(router_config_->edm_status_address, EDMStatus::READY_FOR_TRAFFIC);
 }
 
-std::pair<std::uint32_t, std::uint32_t> FabricBuilderContext::get_fabric_router_termination_address_and_signal() const {
+std::pair<uint32_t, uint32_t> FabricBuilderContext::get_fabric_router_termination_address_and_signal() const {
     return std::make_pair(router_config_->termination_signal_address, TerminationSignal::IMMEDIATELY_TERMINATE);
 }
 
