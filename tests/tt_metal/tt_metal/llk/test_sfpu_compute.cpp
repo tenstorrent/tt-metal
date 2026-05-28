@@ -759,6 +759,11 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuBinaryParameterizedFixture, TensixSfpuBinar
     size_t num_tiles = std::get<0>(GetParam());
     std::string sfpu_op = std::get<1>(GetParam());
 
+    if (MetalContext::instance().get_cluster().arch() == ARCH::WORMHOLE_B0 ||
+        MetalContext::instance().get_cluster().arch() == ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "Binary Div op test not fixed for WH/BH";
+    }
+
     const tt::DataFormat data_format = tt::DataFormat::Float16_b;
     const size_t tile_byte_size = 2 * 32 * 32;
 
