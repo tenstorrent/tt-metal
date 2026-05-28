@@ -970,19 +970,19 @@ static void merge_resolved_graph_instances(
             const Node& source_node = it->second;
 
             if (target.nodes.contains(name)) {
-                // Same name at the same level -> same host. The host_id should have been
-                // collapsed in merge(), but even if there is a mismatch, reassign_host_ids_dfs()
-                // will renumber everything after the merge completes. Use the target's host_id
-                // to ensure consistency for the remainder of the merge operation.
+                // Same name at the same level -> same host. merge() calls remap_level() before
+                // this function, which synchronises source host_ids to match target host_ids for
+                // shared nodes. A mismatch here means remap_level() has a bug: throw so the
+                // caller gets a clear diagnostic rather than silently producing a merged graph
+                // with internal_connections referencing a host_id that has no corresponding node.
                 if (target.nodes[name].host_id != source_node.host_id) {
-                    log_warning(
-                        tt::LogDistributed,
-                        "Node '{}' has different host_id in source ({}) vs target ({}) from {} - "
-                        "using target's host_id (will be reassigned by DFS renumbering)",
+                    throw std::runtime_error(fmt::format(
+                        "Node '{}' has conflicting host_id: {} (source) vs {} (target) from {} - "
+                        "remap_level() should have equalised these before merge",
                         name,
                         source_node.host_id.get(),
                         target.nodes[name].host_id.get(),
-                        get_source_description(new_source_file));
+                        get_source_description(new_source_file)));
                 }
                 // Validate inter_board_connections match or are torus-compatible
                 // For torus-compatible nodes, we merge the connections
