@@ -755,7 +755,7 @@ void post_conv2d_op_memory_checks(
         device->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
 
     // Descriptor-flow analogue of `calculate_total_cb_size(program)`: in the
-    // realized Program a CB is "globally allocated" iff it was created with a
+    // realized Program a CB is "globally allocated" if it was created with a
     // Buffer*; in the descriptor that maps 1:1 to `cb.buffer != nullptr`.
     uint32_t actual_cb_size = 0;
     for (const auto& cb : desc.cbs) {
