@@ -19,6 +19,7 @@ For each task we:
 from __future__ import annotations
 
 import os
+import time
 from typing import Any, Tuple
 
 import numpy as np
@@ -28,7 +29,7 @@ import ttnn
 from loguru import logger
 from transformers import AutoProcessor, AutoTokenizer
 
-from models.common.utility_functions import profiler, run_for_blackhole
+from models.common.utility_functions import run_for_blackhole
 from models.experimental.seamless_m4t_v2_large.reference.torch_seamless_m4t_v2_model import (
     load_pretrained_seamless_m4t_v2_model,
 )
@@ -44,19 +45,23 @@ from models.experimental.seamless_m4t_v2_large.tt.tt_seamless_m4t_v2_model impor
     TTSeamlessM4Tv2GreedySearchOutput,
     TTSeamlessM4Tv2Model,
 )
+from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.perf.perf_utils import prep_perf_report
 
 # ---------------------------------------------------------------------------------------------
 # Task table — parametrize the single perf test over all 5 inference tasks.
-# (use_speech_input, tgt_lang, generate_speech, expected_tokens_per_sec)
-# Targets are tokens/sec (generated text-tokens per second) at ``_MAX_NEW_TOKENS=10``.
+# (use_speech_input, tgt_lang, generate_speech, expected_inference_time_s)
+# ``expected_inference_time_s`` is the per-call wall-clock time bound (passed to
+# ``prep_perf_report``). The *reported* throughput is task-specific:
+#   text outputs  → tokens/sec  = _MAX_NEW_TOKENS / inference_time
+#   speech outputs → samples/sec = audio_samples_emitted / inference_time
 # ---------------------------------------------------------------------------------------------
 _TASKS = {
-    "t2tt": (False, "hin", False, 5.0),  # eng text -> hin text
-    "t2st": (False, "hin", True, 2.5),  # eng text -> hin speech
-    "s2tt": (True, "eng", False, 5.0),  # hin speech -> eng text
-    "s2st": (True, "spa", True, 2.0),  # hin speech -> spa speech
-    "asr": (True, "eng", False, 5.0),  # speech -> same-lang text
+    "t2tt": (False, "hin", False, 2.0),  # eng text -> hin text
+    "t2st": (False, "hin", True, 4.0),  # eng text -> hin speech
+    "s2tt": (True, "eng", False, 2.0),  # hin speech -> eng text
+    "s2st": (True, "spa", True, 5.0),  # hin speech -> spa speech
+    "asr": (True, "eng", False, 2.0),  # speech -> same-lang text
 }
 _TASK_PARAMS = [(t,) + _TASKS[t] for t in _TASKS]
 _TASK_IDS = list(_TASKS.keys())
@@ -223,32 +228,42 @@ def _verify_speech_tensors(
 
 
 # ---------------------------------------------------------------------------------------------
-# The single perf test, parametrized over 5 tasks.
+# Inner runner — mirrors ``_run_devstral2_perf`` (one helper per model that returns a timings
+# dict so the test body stays thin and BenchmarkData consumption is uniform).
 # ---------------------------------------------------------------------------------------------
 
 
-@run_for_blackhole()
-@pytest.mark.models_performance_bare_metal
-@pytest.mark.timeout(3600)
-@pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_E2E_2CQ_GENERATE, indirect=["mesh_device", "device_params"])
-@pytest.mark.parametrize(
-    "task,use_speech_input,tgt_lang,generate_speech,expected_tokens_per_sec",
-    _TASK_PARAMS,
-    ids=_TASK_IDS,
-)
-def test_seamless_m4t_v2_generate_perf(
+def _run_seamless_perf(
     mesh_device,
-    device_params,
+    *,
     task: str,
     use_speech_input: bool,
     tgt_lang: str,
     generate_speech: bool,
-    expected_tokens_per_sec: float,
-):
-    """Per-task generate() perf on TP=N + 2CQ + Trace, compared to HF for correctness."""
-    _ = device_params
+    max_new_tokens: int,
+    measure_iters: int,
+) -> dict:
+    """Execute the full ``TTSeamlessM4Tv2Model.generate`` flow for one task and return per-phase
+    timings. Mirrors devstral2's ``_run_devstral2_perf``:
+
+      * **Build** (untimed): host weight load + HF reference (kept for correctness verification).
+      * **Compile pass** (untimed-info-only): the first ``generate()`` call — compiles all device
+        programs, captures the decode trace, warms ``_conv1d_prepared_cache``. Equivalent to
+        devstral2's separate prefill+decode "compile pass" steps, but seamless does both in a
+        single ``generate`` call.
+      * **TTFT replay** (timed): one steady-state ``generate()`` call (trace already captured) →
+        time-to-first-token-ish bound. Equivalent to devstral2's single ``execute_trace`` after
+        capture.
+      * **Measurement replays** (timed): ``measure_iters - 1`` additional replays, averaged →
+        steady-state per-call throughput. Equivalent to devstral2's loop of ``execute_trace``.
+
+    Returns ``{build_time_s, compile_time_s, ttft_s, replay_time_avg_s, throughput, throughput_unit,
+    workload, max_new_tokens, ...}``.
+    """
     weights_dir = _weights_dir_or_skip()
 
+    # ── Build (untimed) — host weight load + HF reference for correctness verify ────────────
+    t_build = time.time()
     torch.manual_seed(0)
     model, cfg = load_pretrained_seamless_m4t_v2_model(weights_dir, dtype=torch.bfloat16)
     t2u_cfg = model.t2u_model.config
@@ -264,27 +279,17 @@ def test_seamless_m4t_v2_generate_perf(
         tgt_lang=tgt_lang,
         do_sample=False,
         num_beams=1,
-        max_new_tokens=_MAX_NEW_TOKENS,
+        max_new_tokens=max_new_tokens,
         generate_speech=generate_speech,
     )
 
-    # HF reference (computed once on CPU, no device traffic).
+    # HF reference (CPU only).
     with torch.no_grad():
         if use_speech_input:
-            hf_out = model.generate(
-                input_features=input_features.float(),
-                attention_mask=enc_attn,
-                **common_kwargs,
-            )
+            hf_out = model.generate(input_features=input_features.float(), attention_mask=enc_attn, **common_kwargs)
         else:
-            hf_out = model.generate(
-                input_ids=input_ids,
-                attention_mask=enc_attn,
-                **common_kwargs,
-            )
+            hf_out = model.generate(input_ids=input_ids, attention_mask=enc_attn, **common_kwargs)
     if generate_speech:
-        # HF generate(generate_speech=True) returns a (waveform, lengths) tuple by default and
-        # a dataclass with .waveform / .waveform_lengths when return_intermediate_token_ids=True.
         if isinstance(hf_out, (tuple, list)) and len(hf_out) == 2:
             wav_t, lens_t = hf_out
         else:
@@ -299,13 +304,12 @@ def test_seamless_m4t_v2_generate_perf(
     else:
         hf_text_ids = hf_out.sequences[0].cpu().tolist() if hasattr(hf_out, "sequences") else hf_out[0].cpu().tolist()
         hf_wav = np.zeros(0, dtype=np.float32)
+    build_time = time.time() - t_build
 
     with mesh_default_device(mesh_device):
         tt_model = _make_tt_model(mesh_device, model, cfg, t2u_cfg)
 
-        # Re-uploads tensors per call (lightweight uint32/bf16 ROW/TILE) — avoids stale-tensor
-        # issues across iterations and makes timings comparable.
-        def _call_generate(verify: bool, ctx: str) -> None:
+        def _call_generate(verify: bool, ctx: str) -> int:
             if use_speech_input:
                 tt_out = tt_model.generate(
                     input_features=_torch_feats_to_ttnn(mesh_device, input_features),
@@ -326,56 +330,155 @@ def test_seamless_m4t_v2_generate_perf(
                     **common_kwargs,
                 )
             if generate_speech:
-                # TT generate(generate_speech=True) returns a tuple (waveform, lengths) by default
-                # and a dataclass when return_intermediate_token_ids=True. Accept both.
                 if isinstance(tt_out, TTSeamlessM4Tv2GenerationOutput):
                     wav_tt, lens_tt = tt_out.waveform, tt_out.waveform_lengths
                 else:
                     assert isinstance(tt_out, (tuple, list)) and len(tt_out) == 2, type(tt_out)
                     wav_tt, lens_tt = tt_out
+                num_samples = int(to_torch_replicated_first_shard(lens_tt).long().reshape(-1)[0].item())
                 if verify:
                     _verify_speech_tensors(wav_tt, lens_tt, hf_wav, ctx=ctx, strict_len=not use_speech_input)
                 ttnn.deallocate(wav_tt)
                 ttnn.deallocate(lens_tt)
-            else:
-                # TT text generate returns the dataclass with .sequences.
-                seq_tt = tt_out.sequences if isinstance(tt_out, TTSeamlessM4Tv2GreedySearchOutput) else tt_out
-                if verify:
-                    _verify_text(seq_tt, hf_text_ids, ctx=ctx, strict=not use_speech_input)
-                ttnn.deallocate(seq_tt)
+                return num_samples
+            seq_tt = tt_out.sequences if isinstance(tt_out, TTSeamlessM4Tv2GreedySearchOutput) else tt_out
+            if verify:
+                _verify_text(seq_tt, hf_text_ids, ctx=ctx, strict=not use_speech_input)
+            ttnn.deallocate(seq_tt)
+            return 0
 
-        # Warmup (compiles + captures decode trace + verifies correctness vs HF).
-        profiler.clear()
-        profiler.start("warmup")
-        _call_generate(verify=True, ctx=f"{task}_warmup")
-        profiler.end("warmup")
+        # ── Compile pass (untimed info) — first generate() compiles + captures decode trace ─
+        t_compile = time.time()
+        _call_generate(verify=True, ctx=f"{task}_compile")
+        ttnn.synchronize_device(mesh_device)
+        compile_time = time.time() - t_compile
 
-        # Measured iterations.
-        profiler.start("inference")
-        for i in range(_NUM_MEASUREMENT_ITERS):
-            _call_generate(verify=False, ctx=f"{task}_iter{i}")
-        profiler.end("inference")
+        # ── TTFT replay (timed) — single steady-state replay, analogous to devstral2's TTFT ─
+        ttnn.synchronize_device(mesh_device)
+        t_ttft = time.time()
+        sample_count_ttft = _call_generate(verify=False, ctx=f"{task}_ttft")
+        ttnn.synchronize_device(mesh_device)
+        ttft_s = time.time() - t_ttft
+
+        # ── Measurement replays (timed) — averaged. devstral2 runs 32; we use ``measure_iters``.
+        sample_counts = [sample_count_ttft]
+        t_meas_start = time.time()
+        for i in range(max(0, measure_iters - 1)):
+            sample_counts.append(_call_generate(verify=False, ctx=f"{task}_iter{i}"))
+        ttnn.synchronize_device(mesh_device)
+        replay_time_avg = (time.time() - t_meas_start) / max(1, measure_iters - 1) if measure_iters > 1 else ttft_s
+
+    # ── Throughput metric (post-processing on host) ──────────────────────────────────────────
+    avg_num_samples = sum(sample_counts) / len(sample_counts) if sample_counts else 0
+    if generate_speech:
+        throughput = avg_num_samples / replay_time_avg if replay_time_avg > 0 else 0.0
+        throughput_unit = "samples_per_sec"
+        workload = int(avg_num_samples)
+    else:
+        throughput = max_new_tokens / replay_time_avg if replay_time_avg > 0 else 0.0
+        throughput_unit = "tokens_per_sec"
+        workload = max_new_tokens
+
+    return {
+        "task": task,
+        "build_time_s": build_time,
+        "compile_time_s": compile_time,
+        "ttft_s": ttft_s,
+        "ttft_ms": ttft_s * 1000,
+        "replay_time_avg_s": replay_time_avg,
+        "replay_time_avg_ms": replay_time_avg * 1000,
+        "throughput": throughput,
+        "throughput_unit": throughput_unit,
+        "workload": workload,
+        "max_new_tokens": max_new_tokens,
+        "measure_iters": measure_iters,
+    }
+
+
+# ---------------------------------------------------------------------------------------------
+# The single perf test, parametrized over 5 tasks. Body is thin — calls ``_run_seamless_perf``,
+# then publishes timings via ``prep_perf_report`` + ``BenchmarkData`` (devstral2 pattern).
+# ---------------------------------------------------------------------------------------------
+
+
+@run_for_blackhole()
+@pytest.mark.models_performance_bare_metal
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_E2E_2CQ_GENERATE, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize(
+    "task,use_speech_input,tgt_lang,generate_speech,expected_inference_time_s",
+    _TASK_PARAMS,
+    ids=_TASK_IDS,
+)
+def test_seamless_m4t_v2_generate_perf(
+    mesh_device,
+    device_params,
+    task: str,
+    use_speech_input: bool,
+    tgt_lang: str,
+    generate_speech: bool,
+    expected_inference_time_s: float,
+):
+    """Per-task generate() perf on TP=N + 2CQ + Trace, compared to HF for correctness."""
+    _ = device_params
+
+    results = _run_seamless_perf(
+        mesh_device,
+        task=task,
+        use_speech_input=use_speech_input,
+        tgt_lang=tgt_lang,
+        generate_speech=generate_speech,
+        max_new_tokens=_MAX_NEW_TOKENS,
+        measure_iters=_NUM_MEASUREMENT_ITERS,
+    )
 
     num_devices = int(mesh_device.shape[0]) * int(mesh_device.shape[1])
     batch_size = 1 * num_devices
-    warmup_time = profiler.get("warmup")
-    inference_time_avg = profiler.get("inference") / _NUM_MEASUREMENT_ITERS
-    # tokens/sec → per-call inference time bound: t_max = max_new_tokens / target_tokens_per_sec.
-    expected_inference_time = _MAX_NEW_TOKENS / expected_tokens_per_sec
+    model_name = f"ttnn_seamless_m4t_v2_large_generate_TP{num_devices}_2cq_trace_{task}"
+    comments = f"generate_task_{task}_TP{num_devices}_2cq_trace_max_new_tokens{_MAX_NEW_TOKENS}"
+
+    # devstral2 convention: treat steady-state replay as inference time; compile+build+TTFT as
+    # the "compile/warmup" bucket on the prep_perf_report side.
+    inference_time = results["replay_time_avg_s"]
+    inference_and_compile_time = (
+        results["build_time_s"]
+        + results["compile_time_s"]
+        + results["ttft_s"]
+        + inference_time * max(0, _NUM_MEASUREMENT_ITERS - 1)
+    )
 
     prep_perf_report(
-        model_name=f"ttnn_seamless_m4t_v2_large_generate_TP{num_devices}_2cq_trace_{task}",
+        model_name=model_name,
         batch_size=batch_size,
-        inference_and_compile_time=warmup_time,
-        inference_time=inference_time_avg,
+        inference_and_compile_time=inference_and_compile_time,
+        inference_time=inference_time,
         expected_compile_time=600,
-        expected_inference_time=expected_inference_time,
-        comments=f"generate_task_{task}_TP{num_devices}_2cq_trace_max_new_tokens{_MAX_NEW_TOKENS}",
+        expected_inference_time=expected_inference_time_s,
+        comments=comments,
         inference_time_cpu=0.0,
     )
-    tokens_per_sec = _MAX_NEW_TOKENS / inference_time_avg
+
+    # Per-metric publication to the benchmark database (devstral2 pattern).
+    profiler = BenchmarkProfiler()
+    profiler.start("run")
+    profiler.end("run")
+    step = "seamless_e2e"
+    profiler.start(step)
+    profiler.end(step)
+    benchmark_data = BenchmarkData()
+    for k, v in results.items():
+        if isinstance(v, (int, float)):
+            benchmark_data.add_measurement(profiler, 0, step, k, float(v))
+    benchmark_data.save_partial_run_json(
+        profiler,
+        run_type="end_to_end_perf",
+        ml_model_name=model_name,
+        batch_size=batch_size,
+    )
+
     logger.info(
         f"SeamlessM4Tv2 generate task={task} TP={num_devices} "
-        f"warmup={warmup_time:.2f}s inference_avg={inference_time_avg:.4f}s "
-        f"tokens_per_sec={tokens_per_sec:.2f} (max_new_tokens={_MAX_NEW_TOKENS})"
+        f"build={results['build_time_s']:.2f}s compile={results['compile_time_s']:.2f}s "
+        f"TTFT={results['ttft_ms']:.1f}ms replay_avg={results['replay_time_avg_ms']:.2f}ms "
+        f"({results['throughput']:.2f} {results['throughput_unit']})"
     )
