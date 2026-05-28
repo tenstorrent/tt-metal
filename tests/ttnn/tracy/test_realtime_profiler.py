@@ -48,18 +48,18 @@ from pathlib import Path
 
 import pytest
 
+from tools.tracy.common import PROFILER_ARTIFACTS_DIR, PROFILER_BIN_DIR, TT_METAL_HOME
+
 
 # ---------------------------------------------------------------------------
 # Common paths / constants
 # ---------------------------------------------------------------------------
 
-TT_METAL_HOME = Path(os.environ.get("TT_METAL_HOME", Path.cwd()))
-PROFILER_BIN_DIR = TT_METAL_HOME / "build" / "tools" / "profiler" / "bin"
 CAPTURE_TOOL = PROFILER_BIN_DIR / "tracy-capture"
 CSVEXPORT_TOOL = PROFILER_BIN_DIR / "tracy-csvexport"
 
 # Root artifact dir; each test writes into a named sub-directory.
-ARTIFACTS_ROOT = TT_METAL_HOME / "generated" / "profiler" / "realtime_profiler_tests"
+ARTIFACTS_ROOT = PROFILER_ARTIFACTS_DIR / "realtime_profiler_tests"
 
 # External workload scripts that are re-executed in a subprocess under Tracy
 # capture for the correlation / sync tests.  They are kept as standalone
