@@ -29,7 +29,10 @@ public:
 
     DispatchCoreConfig(DispatchCoreType type, DispatchCoreAxis axis) : type_(type), axis_(axis) {}
 
-    static DispatchCoreType get_default_dispatch_core_type();
+    /// Create default dispatch core config,
+    ///
+    /// Default type: ETH for N300, T3K, N300_2x2 clusters; else WORKER
+    /// Default axis: Blackhole without MUX -> COL; otherwise ROW
     static DispatchCoreConfig create_dispatch_core_config(
         std::optional<DispatchCoreType> dispatch_core_type = std::nullopt,
         std::optional<DispatchCoreAxis> dispatch_core_axis = std::nullopt,

@@ -20,20 +20,16 @@ namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
 DispatchCoreAxis get_default_dispatch_core_axis(std::optional<tt::tt_fabric::FabricTensixConfig> fabric_tensix_config) {
-    if (tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE) {
-        if (fabric_tensix_config.value_or(tt::tt_fabric::FabricTensixConfig::DISABLED) ==
-            tt::tt_fabric::FabricTensixConfig::MUX) {
-            return DispatchCoreAxis::ROW;
-        }
+    if (tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE &&
+        fabric_tensix_config.value_or(tt::tt_fabric::FabricTensixConfig::DISABLED) ==
+            tt_fabric::FabricTensixConfig::DISABLED) {
         return DispatchCoreAxis::COL;
+    } else {
+        return DispatchCoreAxis::ROW;
     }
-    return DispatchCoreAxis::ROW;
 }
 
-}  // namespace CMAKE_UNIQUE_NAMESPACE
-}  // namespace
-
-DispatchCoreType DispatchCoreConfig::get_default_dispatch_core_type() {
+DispatchCoreType get_default_dispatch_core_type() {
     const auto cluster_type = tt::tt_metal::GetClusterType();
     if (cluster_type == tt::tt_metal::ClusterType::N300 || cluster_type == tt::tt_metal::ClusterType::T3K ||
         cluster_type == tt::tt_metal::ClusterType::N300_2x2) {
@@ -41,6 +37,9 @@ DispatchCoreType DispatchCoreConfig::get_default_dispatch_core_type() {
     }
     return DispatchCoreType::WORKER;
 }
+
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
 
 DispatchCoreConfig DispatchCoreConfig::create_dispatch_core_config(
     std::optional<DispatchCoreType> dispatch_core_type,
@@ -58,22 +57,9 @@ DispatchCoreConfig DispatchCoreConfig::create_dispatch_core_config(
         TT_THROW("ROW dispatch core axis is not supported for blackhole arch unless fabric tensix MUX is enabled");
     }
 
-    if (dispatch_core_type.has_value() && dispatch_core_axis.has_value()) {
-        return DispatchCoreConfig(dispatch_core_type.value(), dispatch_core_axis.value());
-    }
-    if (dispatch_core_type.has_value()) {
-        return DispatchCoreConfig(
-            dispatch_core_type.value(), CMAKE_UNIQUE_NAMESPACE::get_default_dispatch_core_axis(fabric_tensix_config));
-    }
-    if (dispatch_core_axis.has_value()) {
-        if (dispatch_core_axis.value() == DispatchCoreAxis::COL) {
-            return DispatchCoreConfig(DispatchCoreType::WORKER, dispatch_core_axis.value());
-        }
-        return DispatchCoreConfig(get_default_dispatch_core_type(), dispatch_core_axis.value());
-    }
-
     return DispatchCoreConfig(
-        get_default_dispatch_core_type(), CMAKE_UNIQUE_NAMESPACE::get_default_dispatch_core_axis(fabric_tensix_config));
+        dispatch_core_type.value_or(CMAKE_UNIQUE_NAMESPACE::get_default_dispatch_core_type()),
+        dispatch_core_axis.value_or(CMAKE_UNIQUE_NAMESPACE::get_default_dispatch_core_axis(fabric_tensix_config)));
 }
 
 DispatchCoreAxis DispatchCoreConfig::get_default_axis() {

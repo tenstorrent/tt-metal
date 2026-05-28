@@ -12,17 +12,6 @@
 
 namespace tt::tt_metal {
 
-TEST(DispatchCoreConfigTest, CreateDispatchCoreConfigDefaultsFollowClusterPolicy) {
-    const auto config = DispatchCoreConfig::create_dispatch_core_config();
-
-    const auto expected_type = DispatchCoreConfig::get_default_dispatch_core_type();
-    EXPECT_EQ(config.get_dispatch_core_type(), expected_type);
-
-    const auto expected_axis =
-        tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE ? DispatchCoreAxis::COL : DispatchCoreAxis::ROW;
-    EXPECT_EQ(config.get_dispatch_core_axis(), expected_axis);
-}
-
 TEST(DispatchCoreConfigTest, CreateDispatchCoreConfigConstructorRules) {
     EXPECT_ANY_THROW(DispatchCoreConfig::create_dispatch_core_config(DispatchCoreType::ETH, DispatchCoreAxis::COL));
 
