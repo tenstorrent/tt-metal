@@ -361,7 +361,6 @@ tile_size = ttnn._ttnn.tensor.tile_size
 element_size = ttnn._ttnn.tensor.element_size
 
 import ttnn.reflection
-import ttnn.database
 
 from ttnn.decorators import (
     attach_golden_function,

@@ -16,7 +16,6 @@ from loguru import logger
 import pytest
 
 import ttnn
-import ttnn.database
 
 
 def pytest_addoption(parser):
@@ -72,10 +71,6 @@ def pre_and_post(request):
                 logger.warning(f"Removing existing log directory: {report_path}")
                 shutil.rmtree(report_path)
         yield
-
-    if ttnn.database.SQLITE_CONNECTION is not None:
-        ttnn.database.SQLITE_CONNECTION.close()
-        ttnn.database.SQLITE_CONNECTION = None
 
     ttnn.tracer.disable_tracing()
     ttnn.CONFIG = original_config
