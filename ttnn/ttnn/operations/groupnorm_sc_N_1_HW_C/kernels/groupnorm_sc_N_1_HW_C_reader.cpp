@@ -34,6 +34,8 @@ constexpr uint32_t CB_INPUT_TILES_R = 2;
 constexpr uint32_t CB_INPUT_TILES_A = 3;
 constexpr uint32_t CB_GAMMA_RM = 4;
 constexpr uint32_t CB_BETA_RM = 5;
+constexpr uint32_t CB_GAMMA_TILE = 6;
+constexpr uint32_t CB_BETA_TILE = 7;
 constexpr uint32_t CB_SCALER_ONE = 8;
 constexpr uint32_t CB_MASK_STREAM = 9;
 constexpr uint32_t CB_INV_N_SCALAR = 10;
@@ -153,6 +155,7 @@ void kernel_main() {
     constexpr uint32_t GAMMA_ELEM_BYTES = get_compile_time_arg_val(13);
     constexpr uint32_t BETA_ELEM_BYTES = get_compile_time_arg_val(14);
     constexpr uint32_t INV_N_IS_FP32 = get_compile_time_arg_val(15);
+    constexpr uint32_t AFFINE_LAYOUT_CODE = get_compile_time_arg_val(16);  // 0=TILE, 1=RM
 
     // Per-tensor "chunk bytes" = 32 channels worth of one element-row.
     constexpr uint32_t INPUT_CHUNK_BYTES = TILE_DIM * INPUT_ELEM_BYTES;
@@ -161,7 +164,7 @@ void kernel_main() {
 
     // TensorAccessorArgs — declared unconditionally with placeholders for absent
     // tensors, chained via next_compile_time_args_offset().
-    constexpr auto input_args = TensorAccessorArgs<16>();
+    constexpr auto input_args = TensorAccessorArgs<17>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
 
@@ -295,43 +298,64 @@ void kernel_main() {
                 push_mask_tile(lane_start, lane_end);
             }
 
-            // Push gamma sticks (replicated 32×) — chunk for T.
+            // Push gamma data for T.
+            //   AFFINE_LAYOUT_CODE == 0 (TILE): read 1 tile directly into
+            //     cb_gamma_tile (page_id = T; gamma is (1,1,1,C) tile-padded
+            //     to (1,1,32,padded_C), so its tile grid is 1 × Ct).
+            //   AFFINE_LAYOUT_CODE == 1 (RM): replicate the stick 32× into
+            //     cb_gamma_rm; compute then tilizes into cb_gamma_tile.
             if constexpr (HAS_GAMMA) {
                 const auto gamma_accessor = TensorAccessor(gamma_args, gamma_addr);
-                const uint32_t valid_bytes = c_in_tile * GAMMA_ELEM_BYTES;
-                const uint32_t byte_offset = T * GAMMA_CHUNK_BYTES;
+                if constexpr (AFFINE_LAYOUT_CODE == 0) {
+                    cb_reserve_back(CB_GAMMA_TILE, 1);
+                    uint32_t l1 = get_write_ptr(CB_GAMMA_TILE);
+                    noc_async_read_tile(T, gamma_accessor, l1);
+                    noc_async_read_barrier();
+                    cb_push_back(CB_GAMMA_TILE, 1);
+                } else {
+                    const uint32_t valid_bytes = c_in_tile * GAMMA_ELEM_BYTES;
+                    const uint32_t byte_offset = T * GAMMA_CHUNK_BYTES;
 
-                cb_reserve_back(CB_GAMMA_RM, TILE_DIM);
-                uint32_t l1_base = get_write_ptr(CB_GAMMA_RM);
-                if (valid_bytes < GAMMA_CHUNK_BYTES) {
-                    zero_l1(l1_base, TILE_DIM * GAMMA_CHUNK_BYTES);
+                    cb_reserve_back(CB_GAMMA_RM, TILE_DIM);
+                    uint32_t l1_base = get_write_ptr(CB_GAMMA_RM);
+                    if (valid_bytes < GAMMA_CHUNK_BYTES) {
+                        zero_l1(l1_base, TILE_DIM * GAMMA_CHUNK_BYTES);
+                    }
+                    // Gamma is shape (1, 1, 1, C) — only 1 stick. Read it 32 times into successive L1 rows.
+                    for (uint32_t row = 0; row < TILE_DIM; ++row) {
+                        uint64_t noc_addr = gamma_accessor.get_noc_addr(0, byte_offset);
+                        noc_async_read(noc_addr, l1_base + row * GAMMA_CHUNK_BYTES, valid_bytes);
+                    }
+                    noc_async_read_barrier();
+                    cb_push_back(CB_GAMMA_RM, TILE_DIM);
                 }
-                // Gamma is shape (1, 1, 1, C) — only 1 stick. Read it 32 times into successive L1 rows.
-                for (uint32_t row = 0; row < TILE_DIM; ++row) {
-                    uint64_t noc_addr = gamma_accessor.get_noc_addr(0, byte_offset);
-                    noc_async_read(noc_addr, l1_base + row * GAMMA_CHUNK_BYTES, valid_bytes);
-                }
-                noc_async_read_barrier();
-                cb_push_back(CB_GAMMA_RM, TILE_DIM);
             }
 
-            // Push beta sticks (replicated 32×) — chunk for T.
+            // Push beta data for T — same dispatch as gamma.
             if constexpr (HAS_BETA) {
                 const auto beta_accessor = TensorAccessor(beta_args, beta_addr);
-                const uint32_t valid_bytes = c_in_tile * BETA_ELEM_BYTES;
-                const uint32_t byte_offset = T * BETA_CHUNK_BYTES;
+                if constexpr (AFFINE_LAYOUT_CODE == 0) {
+                    cb_reserve_back(CB_BETA_TILE, 1);
+                    uint32_t l1 = get_write_ptr(CB_BETA_TILE);
+                    noc_async_read_tile(T, beta_accessor, l1);
+                    noc_async_read_barrier();
+                    cb_push_back(CB_BETA_TILE, 1);
+                } else {
+                    const uint32_t valid_bytes = c_in_tile * BETA_ELEM_BYTES;
+                    const uint32_t byte_offset = T * BETA_CHUNK_BYTES;
 
-                cb_reserve_back(CB_BETA_RM, TILE_DIM);
-                uint32_t l1_base = get_write_ptr(CB_BETA_RM);
-                if (valid_bytes < BETA_CHUNK_BYTES) {
-                    zero_l1(l1_base, TILE_DIM * BETA_CHUNK_BYTES);
+                    cb_reserve_back(CB_BETA_RM, TILE_DIM);
+                    uint32_t l1_base = get_write_ptr(CB_BETA_RM);
+                    if (valid_bytes < BETA_CHUNK_BYTES) {
+                        zero_l1(l1_base, TILE_DIM * BETA_CHUNK_BYTES);
+                    }
+                    for (uint32_t row = 0; row < TILE_DIM; ++row) {
+                        uint64_t noc_addr = beta_accessor.get_noc_addr(0, byte_offset);
+                        noc_async_read(noc_addr, l1_base + row * BETA_CHUNK_BYTES, valid_bytes);
+                    }
+                    noc_async_read_barrier();
+                    cb_push_back(CB_BETA_RM, TILE_DIM);
                 }
-                for (uint32_t row = 0; row < TILE_DIM; ++row) {
-                    uint64_t noc_addr = beta_accessor.get_noc_addr(0, byte_offset);
-                    noc_async_read(noc_addr, l1_base + row * BETA_CHUNK_BYTES, valid_bytes);
-                }
-                noc_async_read_barrier();
-                cb_push_back(CB_BETA_RM, TILE_DIM);
             }
 
             // Push input tiles for the inner r-loop.

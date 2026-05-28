@@ -110,6 +110,20 @@ void kernel_main() {
     constexpr uint32_t Cg = get_compile_time_arg_val(7);
     constexpr uint32_t Ht = get_compile_time_arg_val(8);
     constexpr uint32_t Ct = get_compile_time_arg_val(9);
+    // (slot 10 = EPS_BITS — bit-packed for SfpuAddScalar, accessed inside the
+    // R/post block where it's actually used. Don't re-declare here.)
+    constexpr uint32_t AFFINE_LAYOUT_CODE = get_compile_time_arg_val(11);  // 0=TILE, 1=RM
+
+    // Broadcast mode for the apply-phase gamma / beta operands.
+    //   AFFINE_LAYOUT_CODE == 1 (RM): the reader replicated the gamma stick 32×
+    //     and compute tilized it → the resulting cb_gamma_tile is row-replicated
+    //     across all 32 rows → BroadcastDim::NONE is correct (full-tile mul/add).
+    //   AFFINE_LAYOUT_CODE == 0 (TILE): the reader pushed a single TILE-laid
+    //     gamma page; only row 0 is logically valid (the (1,1,1,C) → tile pad
+    //     zeros rows 1-31) → BroadcastDim::ROW broadcasts row 0 down all 32
+    //     input rows.
+    constexpr ckl::BroadcastDim AFFINE_BCAST =
+        (AFFINE_LAYOUT_CODE == 0) ? ckl::BroadcastDim::ROW : ckl::BroadcastDim::NONE;
 
     // ----- One-time hardware startup -----
     // Pick CBs that cover the main binary streaming pattern. The helpers handle
@@ -357,13 +371,23 @@ void kernel_main() {
                 }
             }
 
-            // Tilize gamma / beta sticks for this T. ASYMMETRIC mode — the RM CB
-            // holds 32 row-sized pages of 64 bytes each (one tile-column chunk).
-            if constexpr (HAS_GAMMA) {
-                ckl::tilize<1, CB_GAMMA_RM, CB_GAMMA_TILE>(1, 32);
-            }
-            if constexpr (HAS_BETA) {
-                ckl::tilize<1, CB_BETA_RM, CB_BETA_TILE>(1, 32);
+            // Stage gamma / beta tile for this T.
+            //
+            // AFFINE_LAYOUT_CODE == 1 (ROW_MAJOR): reader pushed 32 RM sticks
+            //   into cb_gamma_rm; tilize them into cb_gamma_tile (row-replicated
+            //   full tile). Apply-phase mul/add then uses BroadcastDim::NONE.
+            // AFFINE_LAYOUT_CODE == 0 (TILE): reader pushed 1 tile directly
+            //   into cb_gamma_tile. Only row 0 is logically valid (the rest is
+            //   the (1,1,1,C) → (1,1,32,padded_C) zero pad). Apply-phase mul/add
+            //   then uses BroadcastDim::ROW so row 0 broadcasts down all 32
+            //   input rows. No tilize step is needed here.
+            if constexpr (AFFINE_LAYOUT_CODE == 1) {
+                if constexpr (HAS_GAMMA) {
+                    ckl::tilize<1, CB_GAMMA_RM, CB_GAMMA_TILE>(1, 32);
+                }
+                if constexpr (HAS_BETA) {
+                    ckl::tilize<1, CB_BETA_RM, CB_BETA_TILE>(1, 32);
+                }
             }
 
             // ----- Apply loop -----
@@ -403,16 +427,16 @@ void kernel_main() {
                         ckl::BinaryInputPolicy::NoWaitNoPop>(
                         CB_SCRATCH_A, CB_RCP_STD_TILE_T, CB_SCRATCH_B, ckl::BinaryInputBlockShape::single());
 
-                    // * gamma → cb_scratch_a
+                    // * gamma → cb_scratch_a  (broadcast: NONE for RM gamma_tile, ROW for TILE gamma_tile)
                     ckl::mul<
-                        ckl::BroadcastDim::NONE,
+                        AFFINE_BCAST,
                         ckl::BinaryInputPolicy::WaitAndPopPerTile,
                         ckl::BinaryInputPolicy::NoWaitNoPop>(
                         CB_SCRATCH_B, CB_GAMMA_TILE, CB_SCRATCH_A, ckl::BinaryInputBlockShape::single());
 
-                    // + beta → cb_output_tiles
+                    // + beta → cb_output_tiles  (broadcast: NONE for RM beta_tile, ROW for TILE beta_tile)
                     ckl::add<
-                        ckl::BroadcastDim::NONE,
+                        AFFINE_BCAST,
                         ckl::BinaryInputPolicy::WaitAndPopPerTile,
                         ckl::BinaryInputPolicy::NoWaitNoPop>(
                         CB_SCRATCH_A, CB_BETA_TILE, CB_OUTPUT_TILES, ckl::BinaryInputBlockShape::single());
@@ -424,7 +448,7 @@ void kernel_main() {
                         CB_SCRATCH_A, CB_RCP_STD_TILE_T, CB_SCRATCH_B, ckl::BinaryInputBlockShape::single());
 
                     ckl::mul<
-                        ckl::BroadcastDim::NONE,
+                        AFFINE_BCAST,
                         ckl::BinaryInputPolicy::WaitAndPopPerTile,
                         ckl::BinaryInputPolicy::NoWaitNoPop>(
                         CB_SCRATCH_B, CB_GAMMA_TILE, CB_OUTPUT_TILES, ckl::BinaryInputBlockShape::single());
@@ -436,7 +460,7 @@ void kernel_main() {
                         CB_SCRATCH_A, CB_RCP_STD_TILE_T, CB_SCRATCH_B, ckl::BinaryInputBlockShape::single());
 
                     ckl::add<
-                        ckl::BroadcastDim::NONE,
+                        AFFINE_BCAST,
                         ckl::BinaryInputPolicy::WaitAndPopPerTile,
                         ckl::BinaryInputPolicy::NoWaitNoPop>(
                         CB_SCRATCH_B, CB_BETA_TILE, CB_OUTPUT_TILES, ckl::BinaryInputBlockShape::single());

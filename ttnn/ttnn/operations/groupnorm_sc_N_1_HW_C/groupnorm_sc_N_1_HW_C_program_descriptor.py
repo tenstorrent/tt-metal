@@ -70,6 +70,21 @@ def _input_layout_code(layout) -> int:
     raise ValueError(f"Unsupported input layout: {layout}")
 
 
+def _affine_layout_code(layout) -> int:
+    """Affine (gamma/beta) layout code.
+
+    0 = TILE_LAYOUT — reader reads one tile per Ct directly from DRAM into
+        cb_gamma_tile / cb_beta_tile; compute uses BroadcastDim::ROW.
+    1 = ROW_MAJOR_LAYOUT — reader replicates the stick 32× into
+        cb_gamma_rm / cb_beta_rm; compute tilizes then uses BroadcastDim::NONE.
+    """
+    if layout == ttnn.TILE_LAYOUT:
+        return 0
+    if layout == ttnn.ROW_MAJOR_LAYOUT:
+        return 1
+    raise ValueError(f"Unsupported affine layout: {layout}")
+
+
 def _dtype_elem_bytes(dtype) -> int:
     """Bytes-per-element for an *unpacked* dtype (used for RM-layout reads).
 
@@ -110,6 +125,17 @@ def create_program_descriptor(
     has_gamma = 1 if gamma is not None else 0
     has_beta = 1 if beta is not None else 0
     input_layout_code = _input_layout_code(input_tensor.layout)
+
+    # Affine layout: derive from gamma (preferred) or beta. The op-file
+    # validate() asserts they share layout (single (affine_dtype, affine_layout)
+    # axis). When no_affine, affine_layout is unused — default to ROW_MAJOR.
+    if gamma is not None:
+        affine_layout = gamma.layout
+    elif beta is not None:
+        affine_layout = beta.layout
+    else:
+        affine_layout = ttnn.ROW_MAJOR_LAYOUT
+    affine_layout_code = _affine_layout_code(affine_layout)
 
     eps_bits = _float_bits(eps)
 
@@ -261,26 +287,38 @@ def create_program_descriptor(
         )
     )
 
-    # gamma / beta RM CBs — only when present. Page size depends on gamma's
-    # element size (32 channels × elem_bytes per chunk).
+    # gamma / beta CBs — only when present.
+    #
+    # affine_layout_code == 1 (ROW_MAJOR_LAYOUT):
+    #   Reader writes the stick 32× into cb_gamma_rm (32 sticks × stick_bytes).
+    #   Compute calls `tilize<>` which produces a row-replicated tile in
+    #   cb_gamma_tile. Apply-phase mul/add uses BroadcastDim::NONE.
+    #
+    # affine_layout_code == 0 (TILE_LAYOUT) — Refinement 2:
+    #   Reader reads one TILE-laid page (shape (1,1,1,C) → padded to (1,1,32,
+    #   padded_C); only row 0 is logically valid) directly into cb_gamma_tile.
+    #   No replicate-32 staging — cb_gamma_rm / cb_beta_rm are not allocated
+    #   for this path. Apply-phase mul/add uses BroadcastDim::ROW so the
+    #   single valid row broadcasts down all 32 rows of the input tile.
     rm_pad_align = ttnn.get_dram_alignment()
     if has_gamma:
-        gamma_rm_chunk_bytes = TILE_DIM * gamma_elem_bytes
-        gamma_rm_page = ((gamma_rm_chunk_bytes + rm_pad_align - 1) // rm_pad_align) * rm_pad_align
         gamma_tile_bytes = ttnn.tile_size(gamma.dtype)
-        cbs.append(
-            ttnn.CBDescriptor(
-                total_size=32 * gamma_rm_page,
-                core_ranges=core_grid,
-                format_descriptors=[
-                    ttnn.CBFormatDescriptor(
-                        buffer_index=CB_GAMMA_RM,
-                        data_format=gamma.dtype,
-                        page_size=gamma_rm_page,
-                    )
-                ],
+        if affine_layout_code == 1:  # ROW_MAJOR
+            gamma_rm_chunk_bytes = TILE_DIM * gamma_elem_bytes
+            gamma_rm_page = ((gamma_rm_chunk_bytes + rm_pad_align - 1) // rm_pad_align) * rm_pad_align
+            cbs.append(
+                ttnn.CBDescriptor(
+                    total_size=32 * gamma_rm_page,
+                    core_ranges=core_grid,
+                    format_descriptors=[
+                        ttnn.CBFormatDescriptor(
+                            buffer_index=CB_GAMMA_RM,
+                            data_format=gamma.dtype,
+                            page_size=gamma_rm_page,
+                        )
+                    ],
+                )
             )
-        )
         cbs.append(
             ttnn.CBDescriptor(
                 total_size=gamma_tile_bytes,
@@ -295,22 +333,23 @@ def create_program_descriptor(
             )
         )
     if has_beta:
-        beta_rm_chunk_bytes = TILE_DIM * beta_elem_bytes
-        beta_rm_page = ((beta_rm_chunk_bytes + rm_pad_align - 1) // rm_pad_align) * rm_pad_align
         beta_tile_bytes = ttnn.tile_size(beta.dtype)
-        cbs.append(
-            ttnn.CBDescriptor(
-                total_size=32 * beta_rm_page,
-                core_ranges=core_grid,
-                format_descriptors=[
-                    ttnn.CBFormatDescriptor(
-                        buffer_index=CB_BETA_RM,
-                        data_format=beta.dtype,
-                        page_size=beta_rm_page,
-                    )
-                ],
+        if affine_layout_code == 1:  # ROW_MAJOR
+            beta_rm_chunk_bytes = TILE_DIM * beta_elem_bytes
+            beta_rm_page = ((beta_rm_chunk_bytes + rm_pad_align - 1) // rm_pad_align) * rm_pad_align
+            cbs.append(
+                ttnn.CBDescriptor(
+                    total_size=32 * beta_rm_page,
+                    core_ranges=core_grid,
+                    format_descriptors=[
+                        ttnn.CBFormatDescriptor(
+                            buffer_index=CB_BETA_RM,
+                            data_format=beta.dtype,
+                            page_size=beta_rm_page,
+                        )
+                    ],
+                )
             )
-        )
         cbs.append(
             ttnn.CBDescriptor(
                 total_size=beta_tile_bytes,
@@ -491,7 +530,7 @@ def create_program_descriptor(
     # ============================================================
 
     # Reader CT args layout (all scalars first, then TensorAccessorArgs at the end)
-    #  0: input_layout_code
+    #  0: input_layout_code         (0=TILE, 1=ROW_MAJOR — activation)
     #  1: has_gamma
     #  2: has_beta
     #  3: N
@@ -507,7 +546,8 @@ def create_program_descriptor(
     # 13: gamma_elem_bytes         (1, 2, or 4 — used only when has_gamma=1)
     # 14: beta_elem_bytes          (1, 2, or 4 — used only when has_beta=1)
     # 15: inv_n_is_fp32            (0=bf16, 1=fp32 — drives the scalar-tile writer)
-    # 16..: TensorAccessorArgs (input, gamma_or_placeholder, beta_or_placeholder)
+    # 16: affine_layout_code       (0=TILE, 1=ROW_MAJOR — gamma/beta layout; R2)
+    # 17..: TensorAccessorArgs (input, gamma_or_placeholder, beta_or_placeholder)
     reader_ct_args = [
         input_layout_code,
         has_gamma,
@@ -525,6 +565,7 @@ def create_program_descriptor(
         gamma_elem_bytes,
         beta_elem_bytes,
         1 if inv_n_format == ttnn.float32 else 0,
+        affine_layout_code,
     ]
 
     input_accessor = ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args()
@@ -577,7 +618,7 @@ def create_program_descriptor(
     )
 
     # Compute CT args:
-    #  0: input_layout_code
+    #  0: input_layout_code         (0=TILE, 1=ROW_MAJOR — activation)
     #  1: has_gamma
     #  2: has_beta
     #  3: N
@@ -588,6 +629,7 @@ def create_program_descriptor(
     #  8: Ht
     #  9: Ct
     # 10: eps_bits (fp32 bit-packed for SFPU AddScalar)
+    # 11: affine_layout_code       (0=TILE, 1=ROW_MAJOR — gamma/beta layout; R2)
     compute_ct_args = [
         input_layout_code,
         has_gamma,
@@ -600,6 +642,7 @@ def create_program_descriptor(
         Ht,
         Ct,
         eps_bits,
+        affine_layout_code,
     ]
 
     # UnpackToDestFp32 tags: applied only to CBs whose every consumer reads

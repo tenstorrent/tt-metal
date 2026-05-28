@@ -56,7 +56,14 @@ SUPPORTED = {
     "alignment": ["tile_aligned", "c_non_aligned"],
     "affine": ["gamma_beta", "gamma_only", "no_affine"],
     "affine_dtype": [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b],
-    "affine_layout": [ttnn.ROW_MAJOR_LAYOUT],
+    # Refinement 2 added ttnn.TILE_LAYOUT. Both layouts share the kernels via a
+    # CT-arg dispatch on AFFINE_LAYOUT_CODE — TILE-laid weights are read as one
+    # tile per Ct (the logical (1,1,1,C) is zero-padded into (1,1,32,padded_C)
+    # in tile storage; only row 0 is valid). The apply-phase mul/add then uses
+    # BroadcastDim::ROW for TILE weights so row 0 broadcasts down to all 32
+    # rows of the input tile. RM-laid weights still go through the original
+    # reader-side replicate-32 + compute-side tilize path.
+    "affine_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
 }
 
 
