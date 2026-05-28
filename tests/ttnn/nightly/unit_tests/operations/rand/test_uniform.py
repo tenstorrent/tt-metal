@@ -121,6 +121,14 @@ def test_uniform(shape, rand_range, dtype, seed, device):
 @pytest.mark.parametrize("dtype", ["bfloat16", "float32"])
 @pytest.mark.parametrize("seed", [0])
 def test_uniform_callback(shape, rand_range, dtype, seed, device):
+    """
+    NOTE: seed is now part of compute_program_hash (descriptor framework can't re-apply
+    non-Buffer RTAs on cache hit), so different-seed calls each produce a new cache
+    entry. This test was previously asserting that changing seed still cache-hit, which
+    relied on legacy override_runtime_arguments patching the seed RTA every dispatch.
+    Reframed to verify same-seed cache-hit, which is what the cache invariant actually
+    is now.
+    """
     torch.manual_seed(seed)
     num_program_cache_entries_list = []
     for _ in range(2):
@@ -128,9 +136,6 @@ def test_uniform_callback(shape, rand_range, dtype, seed, device):
         # Add dummy tensor to make sure that created tensor in 2 iteration don't share the same addr
         tt_dummy_tensor = ttnn.empty([1, 1, 32, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
         num_program_cache_entries_list.append(device.num_program_cache_entries())
-
-        # Cache must hit when we change seed and seed runtime arg is overrode
-        seed = seed + 1
 
     logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
     assert num_program_cache_entries_list[0] > 0

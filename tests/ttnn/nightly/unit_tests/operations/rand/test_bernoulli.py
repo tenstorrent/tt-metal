@@ -97,7 +97,11 @@ def test_bernoulli_api_contract(shape, in_dtype, out_dtype, device, is_out_alloc
 @pytest.mark.parametrize("out_dtype", ["float32"])
 def test_bernoulli_callback(shape, seed, in_dtype, out_dtype, device):
     """
-    Tests program cache hits for the bernoulli operation.
+    Tests program cache hits for the bernoulli operation on identical (same-seed) calls.
+
+    NOTE: seed is now part of compute_program_hash (descriptor framework can't re-apply
+    non-Buffer RTAs on cache hit), so calls with different seeds each produce a new
+    cache entry. Same-seed calls still hit cache, which is what this test verifies.
     """
     num_program_cache_entries_list = []
     for i in range(2):
@@ -105,8 +109,8 @@ def test_bernoulli_callback(shape, seed, in_dtype, out_dtype, device):
         npu_input = ttnn.from_torch(
             cpu_input, device=device, dtype=get_lib_dtype(ttnn, in_dtype), layout=ttnn.TILE_LAYOUT
         )
-        # The operation itself is simple, the main point is to check the cache.
-        ttnn.bernoulli(npu_input, seed + i, dtype=get_lib_dtype(ttnn, out_dtype))
+        # Same seed each iteration → must cache-hit on the second call.
+        ttnn.bernoulli(npu_input, seed, dtype=get_lib_dtype(ttnn, out_dtype))
         # Add dummy tensor to make sure that created tensor in 2nd iteration doesn't share the same addr
         ttnn.empty([1, 1, 32, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
         num_program_cache_entries_list.append(device.num_program_cache_entries())
@@ -162,7 +166,7 @@ def test_bernoulli_seed_distinguishes_cache_entries(device):
     out_a = ttnn.to_torch(ttnn.bernoulli(npu_input, seed=1234, dtype=ttnn.float32))
     cache_after_a = device.num_program_cache_entries()
 
-    out_b = ttnn.to_torch(ttnn.bernoulli(npu_input, seed=1234, dtype=ttnn.float32))
+    ttnn.bernoulli(npu_input, seed=1234, dtype=ttnn.float32)
     cache_after_b = device.num_program_cache_entries()
 
     out_c = ttnn.to_torch(ttnn.bernoulli(npu_input, seed=5678, dtype=ttnn.float32))

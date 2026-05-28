@@ -73,7 +73,7 @@ def test_dropout_seed_distinguishes_cache_entries(device):
     out_a = ttnn.to_torch(ttnn.experimental.dropout(tensor, probability=0.5, scale=2.0, seed=1234))
     cache_after_a = device.num_program_cache_entries()
 
-    out_b = ttnn.to_torch(ttnn.experimental.dropout(tensor, probability=0.5, scale=2.0, seed=1234))
+    ttnn.experimental.dropout(tensor, probability=0.5, scale=2.0, seed=1234)
     cache_after_b = device.num_program_cache_entries()
 
     out_c = ttnn.to_torch(ttnn.experimental.dropout(tensor, probability=0.5, scale=2.0, seed=5678))

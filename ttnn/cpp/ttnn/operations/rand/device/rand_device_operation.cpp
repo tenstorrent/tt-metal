@@ -50,7 +50,8 @@ ttsl::hash::hash_t RandDeviceOperation::compute_program_hash(
         operation_attributes.memory_config,
         operation_attributes.seed,
         operation_attributes.from,
-        operation_attributes.to);
+        operation_attributes.to,
+        operation_attributes.mesh_dim_is_sharded);
 }
 
 }  // namespace ttnn::operations::rand

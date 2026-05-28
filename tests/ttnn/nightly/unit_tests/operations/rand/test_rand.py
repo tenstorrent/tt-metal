@@ -540,7 +540,7 @@ def test_rand_seed_range_distinguish_cache_entries(device):
     a = ttnn.to_torch(ttnn.rand(shape=shape, low=0.0, high=1.0, seed=1234, **common))
     cache_a = device.num_program_cache_entries()
 
-    b_same = ttnn.to_torch(ttnn.rand(shape=shape, low=0.0, high=1.0, seed=1234, **common))
+    ttnn.rand(shape=shape, low=0.0, high=1.0, seed=1234, **common)
     cache_b = device.num_program_cache_entries()
 
     c_seed = ttnn.to_torch(ttnn.rand(shape=shape, low=0.0, high=1.0, seed=5678, **common))
