@@ -82,6 +82,129 @@ def attr_chain(node: ast.AST) -> list[str] | None:
     return None
 
 
+def quick_scan_for_types(file_path: Path, module_roots: list[Path]) -> tuple[
+    list[tuple[str, str, str]],         # classes: (module_dotted, class_qualname, class_name)
+    list[tuple[str, str, list[str]]],   # funcs:   (module_dotted, func_qualname, return_type_chain)
+    list[tuple[str, str, list[str]]],   # module_vars: (module_dotted, var_name, type_chain)
+]:
+    """Fast pre-scan: collect class defs, function return annotations, and
+    module-level variable type-inferences from constructor calls.
+
+    Used by the type-propagator pre-pass to build global tables BEFORE the
+    main per-file walks run. The main walk consults these globals to
+    type-infer local-variable assignments like `x = Foo()` (constructor →
+    type Foo) or `x = make_foo()` (function → type from `-> Foo` annotation).
+    Module-level vars enable patterns like:
+        # in utility_functions.py
+        profiler = Profiler()
+        # in other_file.py
+        from utility_functions import profiler
+        profiler.start()    # → resolves to Profiler.start
+
+    Returns (classes, funcs, module_vars).
+    """
+    try:
+        tree = ast.parse(file_path.read_text(), filename=str(file_path))
+    except Exception:
+        return [], [], []
+    module = module_dotted_path(file_path, module_roots)
+    classes: list[tuple[str, str, str]] = []
+    funcs: list[tuple[str, str, list[str]]] = []
+    module_vars: list[tuple[str, str, list[str]]] = []
+
+    def walk(node: ast.AST, qn_parts: list[str]) -> None:
+        if isinstance(node, ast.ClassDef):
+            new_parts = qn_parts + [node.name]
+            classes.append((module, ".".join(new_parts), node.name))
+            for ch in node.body:
+                walk(ch, new_parts)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            new_parts = qn_parts + [node.name]
+            if node.returns is not None:
+                rt = _peel_receiver_type(node.returns)
+                if rt:
+                    funcs.append((module, ".".join(new_parts), rt))
+            for ch in node.body:
+                walk(ch, new_parts)
+
+    for ch in tree.body:
+        walk(ch, [])
+
+    # Module-level `var = ClassName(...)` pattern. Only direct, top-level
+    # assignments — no walking into if/else, try, etc.
+    for stmt in tree.body:
+        if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name):
+            target = stmt.targets[0].id
+            if isinstance(stmt.value, ast.Call):
+                fn_chain = attr_chain(stmt.value.func)
+                if fn_chain:
+                    module_vars.append((module, target, fn_chain))
+    return classes, funcs, module_vars
+
+
+def load_pytype_stubs(stub_root: Path) -> dict[tuple[str, str], dict[str, list[str]]]:
+    """Parse pytype-generated .pyi stubs to extract inferred parameter types.
+
+    Pytype produces .pyi stub files under `pyi/<package>/<module>.pyi` with
+    function signatures whose parameter annotations include types pytype
+    INFERRED — even when the source had no annotation. We harvest those to
+    fill in `local_types` for unannotated parameters.
+
+    Returns dict[(module_dotted, function_qualname)] → {param_name: type_chain}
+    where qualname is dotted (e.g. "ClassName.method" or "function").
+
+    Annotation types that resolve to `Any`, `nothing`, or single-letter
+    generic typevars (`_T0`) are skipped — they don't help resolve methods.
+    """
+    out: dict[tuple[str, str], dict[str, list[str]]] = {}
+    pyi_dir = stub_root / "pyi"
+    if not pyi_dir.exists():
+        return out
+
+    def collect(node: ast.AST, qualname_parts: list[str], module_dotted: str) -> None:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            qualname = ".".join(qualname_parts + [node.name])
+            params: dict[str, list[str]] = {}
+            args = node.args
+            for arg in (*args.posonlyargs, *args.args, *args.kwonlyargs):
+                if arg.annotation is None:
+                    continue
+                rt = _peel_receiver_type(arg.annotation)
+                if not rt:
+                    continue
+                # Skip uninformative inferences.
+                last = rt[-1]
+                if last in ("Any", "nothing"):
+                    continue
+                if len(last) <= 3 and last.startswith("_T") and last[2:].isdigit():
+                    continue  # generic typevar like _T0
+                params[arg.arg] = rt
+            if params:
+                out[(module_dotted, qualname)] = params
+            # Nested functions/classes can still have stub entries.
+            for child in node.body:
+                collect(child, qualname_parts + [node.name], module_dotted)
+        elif isinstance(node, ast.ClassDef):
+            for child in node.body:
+                collect(child, qualname_parts + [node.name], module_dotted)
+
+    for pyi_file in pyi_dir.rglob("*.pyi"):
+        rel = pyi_file.relative_to(pyi_dir)
+        parts = list(rel.with_suffix("").parts)
+        if parts and parts[-1] == "__init__":
+            parts = parts[:-1]
+        module_dotted = ".".join(parts)
+        if not module_dotted:
+            continue
+        try:
+            tree = ast.parse(pyi_file.read_text(), filename=str(pyi_file))
+        except Exception:
+            continue
+        for child in tree.body:
+            collect(child, [], module_dotted)
+    return out
+
+
 def _peel_receiver_type(ann: ast.expr | None) -> list[str] | None:
     """Extract a single dotted type chain from a (possibly wrapped) annotation.
 
@@ -280,6 +403,35 @@ def _registration_decorator(call: ast.Call) -> tuple[str, str] | None:
 
 
 class FileIndexer(ast.NodeVisitor):
+    # Class-level registry of pytype-inferred types, set by index_file/_gather.
+    # Maps (module_dotted, function_qualname) → {param_name: type_chain}.
+    inferred_types: dict[tuple[str, str], dict[str, list[str]]] = {}
+
+    # Class-name registry built by the quick pre-scan. Maps a bare class name
+    # to its full qualified name(s). When we see `x = Foo(...)` in a function
+    # body, we ask this map "is Foo a known class?" — if yes, infer x's type
+    # as the class.
+    classes_by_name: dict[str, list[str]] = {}
+
+    # Function return-type registry built by the quick pre-scan. Maps
+    # (module_dotted, function_qualname) → return type chain. When we see
+    # `x = func(...)` in a function body, we look up func's return type and
+    # type x accordingly.
+    func_returns: dict[tuple[str, str], list[str]] = {}
+
+    # Module-level variable type registry. Maps (module_dotted, var_name)
+    # to a type chain inferred from a module-level constructor call:
+    # `profiler = Profiler()` → ('utility_functions', 'profiler') → ['Profiler'].
+    # When another file imports `profiler` and calls `profiler.X()`, the
+    # main walk consults this map to attach receiver_type.
+    module_var_types: dict[tuple[str, str], list[str]] = {}
+
+    # Inter-procedural inference: populated by a POST-pass that looks at
+    # actual call sites of each function and propagates known argument
+    # types back to the callee's unannotated parameters. Keyed by
+    # (function_node_id, param_name) → type_chain.
+    inferred_param_types: dict[tuple[str, str], list[str]] = {}
+
     def __init__(self, file_path: Path, module_dotted: str) -> None:
         self.file_path = str(file_path.resolve())
         self.is_package = file_path.name == "__init__.py"
@@ -308,6 +460,16 @@ class FileIndexer(ast.NodeVisitor):
         self.class_methods: dict[str, dict[str, str]] = {}
         self.imports: dict[str, ImportEntry] = {}
         self.dunder_all: list[str] | None = None
+
+        # Per-function parameter names (positional + kw-only, in order),
+        # keyed by function node_id. Used by inter-procedural inference to
+        # map call-site arg positions to param names.
+        self.func_params: dict[str, list[str]] = {}
+        # Call sites seen in this file: (caller_func_id, target_call_chain,
+        # positional_arg_types, keyword_arg_types). arg_types are
+        # type_chains or None. caller_func_id is the function-node-id
+        # containing the call (so we know the scope for ref updates).
+        self.call_sites: list[tuple[str, list[str], list[list[str] | None], dict[str, list[str]]]] = []
         self.wildcard_imports: list[tuple[str, int]] = []
         # class node id → list of (base_chain, lineno) for B6 inherits resolution.
         self.class_base_chains: dict[str, list[tuple[list[str], int]]] = {}
@@ -444,6 +606,37 @@ class FileIndexer(ast.NodeVisitor):
                 # will look it up in class_methods_global by python class name.
                 cls_node = self.nodes[self.scope_stack[-1]]
                 local_types[first] = [cls_node.name]
+        # Pytype fallback: for parameters with no source annotation, use the
+        # type pytype inferred. Source annotations always win — only fills
+        # gaps. Keyed by (module_dotted, function_qualname).
+        if FileIndexer.inferred_types:
+            inferred_params = FileIndexer.inferred_types.get((self.module_dotted, qualname), {})
+            for param_name, inferred_type in inferred_params.items():
+                if param_name not in local_types:
+                    local_types[param_name] = inferred_type
+        # Type propagator: scan top-level body assignments and infer the
+        # type of the LHS variable from the RHS expression.
+        #   x = Foo()              → x: Foo            (constructor call)
+        #   x = some_func(...)     → x: return-type    (if known)
+        # Only top-level statements scanned — assignments in conditionals
+        # are skipped for simplicity. Existing param annotations win.
+        self._infer_assignment_types(node.body, local_types)
+        # Apply inter-procedural-inferred param types when no source
+        # annotation or pytype stub typed the param. Inferred from call
+        # sites in a post-pass (see resolve_interprocedural_param_types()).
+        if FileIndexer.inferred_param_types:
+            for arg in (*args.posonlyargs, *args.args, *args.kwonlyargs):
+                if arg.arg in local_types:
+                    continue
+                inferred = FileIndexer.inferred_param_types.get((nid, arg.arg))
+                if inferred:
+                    local_types[arg.arg] = inferred
+        # Save param names so the inter-procedural inference pass can map
+        # caller-arg positions back to parameter names.
+        param_names: list[str] = []
+        for arg in (*args.posonlyargs, *args.args, *args.kwonlyargs):
+            param_names.append(arg.arg)
+        self.func_params[nid] = param_names
         self.local_type_stack.append(local_types)
         # Pre-scan body for `var = ttnn...get_golden_function(<op>)`-style
         # alias assignments. This must happen before walking the body so
@@ -600,8 +793,29 @@ class FileIndexer(ast.NodeVisitor):
         # is a known annotated local in the current function scope, record
         # the receiver's declared type so the stitcher can resolve chain[1]
         # against the class's method/field bindings.
-        if receiver_type is None and len(chain) >= 2 and self.local_type_stack:
-            receiver_type = self.local_type_stack[-1].get(chain[0])
+        if receiver_type is None and chain and self.local_type_stack:
+            # Cover BOTH the standard case (chain length >= 2: x.method()) AND
+            # the __call__ case (chain length 1, kind=='call': model(x) where
+            # model is a typed local). The stitcher routes the length-1 case
+            # to <type>.__call__ or <type>.forward.
+            if len(chain) >= 2 or (len(chain) == 1 and kind == "call"):
+                receiver_type = self.local_type_stack[-1].get(chain[0])
+        # Module-var fallback: when chain[0] isn't a local but IS a name
+        # imported from a module whose top-level vars we pre-scanned —
+        # e.g. `from utility_functions import profiler` + `profiler.start()` —
+        # look up the imported name in the source module's module_var_types.
+        if receiver_type is None and len(chain) >= 2 and FileIndexer.module_var_types:
+            # Same-module top-level var.
+            t = FileIndexer.module_var_types.get((self.module_dotted, chain[0]))
+            if t:
+                receiver_type = t
+            else:
+                # Imported `from X import name`: look up in source module.
+                imp = self.imports.get(chain[0])
+                if imp is not None and not imp.is_module and imp.target_name is not None:
+                    t = FileIndexer.module_var_types.get((imp.target_module, imp.target_name))
+                    if t:
+                        receiver_type = t
         self.refs.append(PyRef(
             src=src,
             target_chain=chain,
@@ -617,6 +831,24 @@ class FileIndexer(ast.NodeVisitor):
     def visit_Call(self, node: ast.Call) -> None:
         chain = attr_chain(node.func)
         src = self.scope_stack[-1]
+        # Inter-procedural inference: record this call site with the types
+        # of its positional / keyword arguments. The post-pass will use
+        # these to infer the callee's unannotated parameter types.
+        # Only meaningful when we're inside a function (have a local scope
+        # to look types up in) AND the call's target is a chain we can
+        # later resolve.
+        if chain and self.local_type_stack:
+            pos_types: list[list[str] | None] = []
+            for arg in node.args:
+                pos_types.append(self._infer_expr_type(arg))
+            kw_types: dict[str, list[str]] = {}
+            for kw in node.keywords:
+                if kw.arg is None:
+                    continue
+                t = self._infer_expr_type(kw.value)
+                if t:
+                    kw_types[kw.arg] = t
+            self.call_sites.append((src, chain, pos_types, kw_types))
         if chain:
             # For Attribute chains (`obj.method`), use the column of the LAST
             # component — that's the position Jedi needs to resolve the method.
@@ -664,6 +896,127 @@ class FileIndexer(ast.NodeVisitor):
         # Recurse normally into all children (func + args + keywords). visit_Attribute
         # will dedup the func-as-attribute against the call ref above.
         self.generic_visit(node)
+
+    def _infer_expr_type(self, expr: ast.expr) -> list[str] | None:
+        """Best-effort type chain for an expression.
+
+        Used during call-site arg type collection (inter-procedural pass).
+        Only handles the easy cases:
+          - bare Name → local_types lookup
+          - Name with module_var_types lookup (cross-file imports)
+          - Call to a known class → that class's type
+          - Call to a function with annotated return → return type
+
+        Returns None when we can't determine a useful type.
+        """
+        if isinstance(expr, ast.Name):
+            if self.local_type_stack:
+                t = self.local_type_stack[-1].get(expr.id)
+                if t:
+                    return t
+            # Same-module module var.
+            t = FileIndexer.module_var_types.get((self.module_dotted, expr.id))
+            if t:
+                return t
+            # Imported `from X import Y`.
+            imp = self.imports.get(expr.id)
+            if imp is not None and not imp.is_module and imp.target_name is not None:
+                t = FileIndexer.module_var_types.get((imp.target_module, imp.target_name))
+                if t:
+                    return t
+            return None
+        if isinstance(expr, ast.Call):
+            fn_chain = attr_chain(expr.func)
+            if fn_chain:
+                # Constructor.
+                if fn_chain[-1] in FileIndexer.classes_by_name:
+                    return fn_chain
+                # Known return type.
+                rt = self._lookup_func_return_type(fn_chain)
+                if rt:
+                    return rt
+            return None
+        return None
+
+    def _infer_assignment_types(
+        self, body: list[ast.stmt], local_types: dict[str, list[str]]
+    ) -> None:
+        """Scan a function body for top-level assignments that we can type-infer.
+
+        Two patterns handled (no flow-sensitivity — last assignment wins
+        per name, but we walk in source order so this generally matches
+        what a reader would expect):
+
+        1. Constructor calls: `x = Foo(...)` or `x = ttnn.Tensor(...)` —
+           if the call's func chain ends in a known class name, infer x
+           as that class.
+
+        2. Function calls with known return type: `x = make_thing(...)`
+           where `make_thing` has a `-> SomeType` annotation, or it's
+           imported from another file whose annotation we collected
+           pre-pass. Look up via `func_returns`.
+
+        We deliberately DO NOT recurse into if/else, for, with, try, etc.
+        Flow-sensitive analysis is a whole project on its own; this
+        catches the common pattern of `obj = Thing(...); obj.use(...)`
+        at the top of a function body.
+        """
+        for stmt in body:
+            if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1
+                    and isinstance(stmt.targets[0], ast.Name)):
+                continue
+            var_name = stmt.targets[0].id
+            # Skip if already typed (param annotation wins).
+            if var_name in local_types:
+                continue
+            value = stmt.value
+            if not isinstance(value, ast.Call):
+                continue
+            func_chain = attr_chain(value.func)
+            if not func_chain:
+                continue
+            # (1) Constructor call: chain ends in a known class name.
+            tail = func_chain[-1]
+            cls_qns = FileIndexer.classes_by_name.get(tail)
+            if cls_qns:
+                local_types[var_name] = func_chain
+                continue
+            # (2) Function call with known return type.
+            #     Resolve func_chain → (module_dotted, function_qualname),
+            #     then look up its return type.
+            ret_type = self._lookup_func_return_type(func_chain)
+            if ret_type:
+                local_types[var_name] = ret_type
+
+    def _lookup_func_return_type(self, func_chain: list[str]) -> list[str] | None:
+        """Look up the return type for a function call chain in the current scope.
+
+        Resolves through self.imports and module_defs to find the function's
+        (module_dotted, qualname), then queries FileIndexer.func_returns.
+        Returns None when the chain isn't resolvable or the function has
+        no return annotation.
+        """
+        if not func_chain:
+            return None
+        # Case A: bare name — local module function.
+        if len(func_chain) == 1:
+            name = func_chain[0]
+            # Try imports first (cross-module).
+            imp = self.imports.get(name)
+            if imp is not None and not imp.is_module and imp.target_name is not None:
+                return FileIndexer.func_returns.get((imp.target_module, imp.target_name))
+            # Else try same-module qualname.
+            return FileIndexer.func_returns.get((self.module_dotted, name))
+        # Case B: dotted chain — first segment is an imported module or alias.
+        head = func_chain[0]
+        imp = self.imports.get(head)
+        if imp is None:
+            return None
+        if imp.is_module:
+            qualname = ".".join(func_chain[1:])
+            return FileIndexer.func_returns.get((imp.target_module, qualname))
+        # `from X import Y` then `Y.method(...)` — skip for now.
+        return None
 
     def _capture_attach_golden_function(self, call: ast.Call) -> None:
         # Positional: attach_golden_function(operation, golden_function=...)
@@ -1092,6 +1445,12 @@ def main() -> None:
         help="Root directory whose immediate subdirs are top-level package names (repeatable)",
     )
     ap.add_argument("--out", required=True)
+    ap.add_argument(
+        "--pytype-stubs",
+        default=None,
+        help="Root of pytype-generated stubs (the directory containing pyi/). "
+             "Used to fill in receiver_type for unannotated parameters.",
+    )
     args = ap.parse_args()
 
     files = _gather_files(args)
@@ -1099,6 +1458,46 @@ def main() -> None:
         print("error: at least one --file or --dir is required", file=sys.stderr)
         sys.exit(2)
     roots = [Path(r) for r in args.module_root] or [Path(".")]
+
+    if args.pytype_stubs:
+        stubs_path = Path(args.pytype_stubs)
+        FileIndexer.inferred_types = load_pytype_stubs(stubs_path)
+        print(f"[py_index] loaded {len(FileIndexer.inferred_types)} pytype-inferred function signatures",
+              file=sys.stderr)
+
+    # Type-propagator pre-pass: scan all files for class definitions and
+    # function return annotations. Cheap (one ast.parse per file) and
+    # populates the globals that `_infer_assignment_types` consults during
+    # the main walk.
+    classes_by_name: dict[str, list[str]] = {}
+    func_returns: dict[tuple[str, str], list[str]] = {}
+    module_var_types: dict[tuple[str, str], list[str]] = {}
+    for fp in files:
+        cls_records, fn_records, mv_records = quick_scan_for_types(fp, roots)
+        for module, qualname, name in cls_records:
+            classes_by_name.setdefault(name, []).append(f"{module}.{qualname}")
+        for module, qualname, ret_type in fn_records:
+            func_returns[(module, qualname)] = ret_type
+        for module, var_name, type_chain in mv_records:
+            # Heuristic: only keep if the type_chain ends in a known class —
+            # otherwise we'd record `parser = argparse.ArgumentParser()`-style
+            # entries whose type is external/non-resolvable.
+            if type_chain[-1] in classes_by_name or len(type_chain) >= 2:
+                module_var_types[(module, var_name)] = type_chain
+    # Second pass: filter module_var_types to only keep known classes.
+    module_var_types = {
+        k: v for k, v in module_var_types.items()
+        if v[-1] in classes_by_name
+    }
+    FileIndexer.classes_by_name = classes_by_name
+    FileIndexer.func_returns = func_returns
+    FileIndexer.module_var_types = module_var_types
+    print(
+        f"[py_index] type-propagator: {len(classes_by_name)} class names, "
+        f"{len(func_returns)} func return-types, "
+        f"{len(module_var_types)} module-var types pre-collected",
+        file=sys.stderr,
+    )
 
     all_nodes: dict[str, Node] = {}
     all_edges: list[Edge] = []
@@ -1322,6 +1721,68 @@ def main() -> None:
     for fi in indexers:
         a4_edges += fi.resolve_self_method_via_mro(class_methods_global, class_parents)
 
+    # Pass 6: shallow inter-procedural parameter inference.
+    # Look at every call site we collected, resolve the target to a
+    # function node id, and aggregate caller arg types per parameter
+    # position. When a parameter has consistent caller-arg types
+    # across all (visible) call sites, infer that as the param's type.
+    # Then update existing refs whose chain[0] is the inferred-typed
+    # parameter to attach receiver_type for the stitcher.
+    fid_to_fi: dict[str, "FileIndexer"] = {}
+    for fi in indexers:
+        for fid in fi.func_params:
+            fid_to_fi[fid] = fi
+    # Aggregate caller-arg types per (func_id, param_name).
+    type_collector: dict[tuple[str, str], set[tuple[str, ...]]] = defaultdict(set)
+    for fi in indexers:
+        for caller_id, target_chain, pos_types, kw_types in fi.call_sites:
+            target_id = _resolve_chain_to_node(fi, target_chain)
+            if not target_id:
+                continue
+            target_fi = fid_to_fi.get(target_id)
+            if target_fi is None:
+                continue
+            params = target_fi.func_params.get(target_id, [])
+            if not params:
+                continue
+            # Skip the implicit 'self' / 'cls' parameter at position 0
+            # for methods — caller positions start at the next param.
+            if params and params[0] in ("self", "cls"):
+                effective_params = params[1:]
+            else:
+                effective_params = params
+            for i, t in enumerate(pos_types):
+                if t and i < len(effective_params):
+                    type_collector[(target_id, effective_params[i])].add(tuple(t))
+            for kname, t in kw_types.items():
+                if t and kname in params:
+                    type_collector[(target_id, kname)].add(tuple(t))
+    # Keep only parameters where ALL call sites passed the same type.
+    inferred_params_global: dict[tuple[str, str], list[str]] = {}
+    for (fid, pname), types in type_collector.items():
+        if len(types) == 1:
+            inferred_params_global[(fid, pname)] = list(next(iter(types)))
+    FileIndexer.inferred_param_types = inferred_params_global
+
+    # Apply to existing refs: for refs whose chain[0] is an inferred-typed
+    # parameter of their enclosing function, set receiver_type. Don't
+    # overwrite already-set receiver_types.
+    interproc_refs_updated = 0
+    for fi in indexers:
+        for r in fi.refs:
+            if r.receiver_type:
+                continue
+            if not r.target_chain:
+                continue
+            recv = r.target_chain[0]
+            params = fi.func_params.get(r.src)
+            if not params or recv not in params:
+                continue
+            inferred = inferred_params_global.get((r.src, recv))
+            if inferred:
+                r.receiver_type = inferred
+                interproc_refs_updated += 1
+
     # Aggregate.
     for fi in indexers:
         all_nodes.update(fi.nodes)
@@ -1346,7 +1807,9 @@ def main() -> None:
         f"{imports_edges} imports-edges, "
         f"{inherits_edges} inherits-edges, "
         f"{a4_edges} via MRO, "
-        f"{b4_edges} via Jedi type-resolver), "
+        f"{b4_edges} via Jedi type-resolver, "
+        f"{interproc_refs_updated} refs receiver-type-tagged via inter-procedural inference"
+        f" [{len(inferred_params_global)} params inferred]), "
         f"{len(out['refs'])} refs, {len(out['registrations'])} registrations, "
         f"{len(out['diagnostics'])} diags -> {args.out}",
         file=sys.stderr,

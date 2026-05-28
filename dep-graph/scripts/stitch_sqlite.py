@@ -334,32 +334,85 @@ def insert_py_nodes_and_refs(con: sqlite3.Connection, py_json: Path) -> dict:
                 continue  # bound entry wins
             cpp_class_members.setdefault(key, []).append((node_id, "raw"))
 
+    # Build a Python-only class-methods table for receiver_type resolution
+    # of types that have NO cpp binding (BenchmarkProfiler, ModelArgs, etc.).
+    # Keyed by (bare_class_name, method_name) → list of method node_ids.
+    # We collect from `qualified_name LIKE '%.<ClassName>.<MethodName>'`
+    # patterns in the python nodes table.
+    py_class_methods: dict[tuple[str, str], list[str]] = {}
+    py_classes_by_name: dict[str, set[str]] = {}  # bare_name → set of class qns
+    for row in con.execute(
+        "SELECT id, qualified_name, name, kind FROM nodes WHERE language='python' AND kind='class'"
+    ):
+        node_id, qn, name, kind = row
+        py_classes_by_name.setdefault(name, set()).add(qn)
+    # Now find each python method/function whose qualified_name is
+    # `<class_qn>.<method_name>` and bucket by (class_name, method_name).
+    for row in con.execute(
+        "SELECT id, qualified_name, name, kind FROM nodes "
+        "WHERE language='python' AND kind IN ('method', 'function')"
+    ):
+        node_id, qn, name, kind = row
+        # method qualname structure: <module>.<ClassName>.<method_name>
+        # Strip trailing .<method_name> to get the candidate class qn.
+        if "." not in qn:
+            continue
+        candidate_class_qn, method_name = qn.rsplit(".", 1)
+        if method_name != name:
+            continue
+        # Is candidate_class_qn an actual class node we recorded?
+        class_bare_name = candidate_class_qn.rsplit(".", 1)[-1]
+        if candidate_class_qn in py_classes_by_name.get(class_bare_name, set()):
+            py_class_methods.setdefault(
+                (class_bare_name, method_name), []
+            ).append(node_id)
+
+    # Set of "module name" tokens we should reject as receiver_type[0] —
+    # things that look like external/stdlib namespaces.
+    EXTERNAL_PREFIXES = {
+        "torch", "numpy", "np", "pandas", "pd", "matplotlib", "plt", "PIL",
+        "scipy", "sklearn", "transformers", "tokenizers", "huggingface_hub",
+        "torchvision", "torchaudio",
+    }
+
     # Resolution helper bound to the maps above.
     def resolve_via_receiver_type(receiver_type, member_name):
-        """Given ['ttnn','MemoryConfig'] and 'is_sharded', return list of
-        (cpp_node_id, helper_label) edge targets.
+        """Given a receiver_type chain and a method name, return list of
+        (target_node_id, helper_label, crosses_language) edge targets.
 
-        Filters by module prefix: only resolve when the receiver_type's
-        leading component names a module that exposes cpp bindings. Without
-        this, `torch.Tensor.reshape()` would be wrongly resolved to
-        `tt::tt_metal::Tensor::reshape` because both have last-component
-        'Tensor' (Flaw 4). Bare receivers (no prefix) are dropped — too
-        ambiguous to risk without import-context tracking.
+        Two resolution paths:
+          - cpp binding: look up receiver_type[-1] in class_cpp_by_pyname →
+            check cpp_class_members for the method.
+          - py class fallback: when the cpp path returns nothing, look up
+            receiver_type[-1] in py_class_methods. Resolves to a Python
+            method node (no cross-language edge).
+
+        Rejects receiver_types whose leading namespace is an external
+        library (torch, numpy, etc.) — those wouldn't match anyway and
+        risk false positives if a tt-metal class shares a method name.
         """
-        if not receiver_type or len(receiver_type) < 2:
+        if not receiver_type:
             return []
-        if receiver_type[0] != "ttnn":
+        if receiver_type[0] in EXTERNAL_PREFIXES:
             return []
         py_class_name = receiver_type[-1]
+        out: list[tuple[str, str, int]] = []
+
+        # 1. C++ binding resolution (cpp class members).
         cpp_classes = class_cpp_by_pyname.get(py_class_name, [])
-        if not cpp_classes:
-            return []
-        out = []
-        for cpp_class in cpp_classes:
-            hits = cpp_class_members.get((cpp_class, member_name), [])
-            for node_id, src in hits:
-                label = f"{py_class_name}/{src}" if src else py_class_name
-                out.append((node_id, label))
+        if cpp_classes:
+            for cpp_class in cpp_classes:
+                hits = cpp_class_members.get((cpp_class, member_name), [])
+                for node_id, src in hits:
+                    label = f"{py_class_name}/{src}" if src else py_class_name
+                    out.append((node_id, label, 1))
+            if out:
+                return out
+
+        # 2. Python-only class resolution (no cpp binding for this type).
+        py_hits = py_class_methods.get((py_class_name, member_name), [])
+        for node_id in py_hits:
+            out.append((node_id, f"py:{py_class_name}", 0))
         return out
 
     by_pyname_pyimpl: dict[str, list[tuple[str | None, list[str] | None, str | None]]] = {}
@@ -383,15 +436,25 @@ def insert_py_nodes_and_refs(con: sqlite3.Connection, py_json: Path) -> dict:
         # known receiver type — chain[0] doesn't need to be `ttnn`. e.g.
         # `memory_config.is_sharded()` where memory_config: ttnn.MemoryConfig.
         receiver_type = r.get("receiver_type")
-        if receiver_type and chain and len(chain) >= 2:
-            member_name = chain[1]
-            type_hits = resolve_via_receiver_type(receiver_type, member_name)
+        if receiver_type and chain:
+            type_hits: list[tuple[str, str, int]] = []
+            if len(chain) >= 2:
+                # `obj.method(...)`: chain[1] is the method name.
+                type_hits = resolve_via_receiver_type(receiver_type, chain[1])
+            elif len(chain) == 1 and kind == "calls":
+                # `model(args)` where model is a typed local. In Python this
+                # invokes `model.__call__`. Try __call__ first, then forward
+                # (PyTorch-style; many tt-metal model classes have forward).
+                for candidate in ("__call__", "forward"):
+                    type_hits = resolve_via_receiver_type(receiver_type, candidate)
+                    if type_hits:
+                        break
             if type_hits:
-                for cpp_id, label in type_hits:
+                for tgt_id, label, crosses in type_hits:
                     cross_rows.append((
-                        r["src"], cpp_id, kind,
+                        r["src"], tgt_id, kind,
                         r["site_file"], int(r["site_line"]),
-                        1, None, f"receiver_type:{label}", None,
+                        crosses, None, f"receiver_type:{label}", None,
                     ))
                     resolved_via_receiver_type += 1
                 continue  # this ref handled; don't fall through

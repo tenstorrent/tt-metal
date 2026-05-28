@@ -821,3 +821,41 @@ chains:
         AND cpp_qualified_name = 'tt::tt_metal::Tensor::padded_shape'
         AND helper = 'def_prop_ro'
     expect_min: 1
+
+  - name: "Type propagator resolves constructor-assignment receiver types"
+    description: >
+      For `profiler = Profiler()` followed by `profiler.start()`, the
+      type propagator infers profiler's type from the constructor call
+      and attaches receiver_type to subsequent method calls. The
+      stitcher's py-class-method resolver then emits an edge to
+      Profiler.start. Validates the propagator end-to-end on a
+      well-known pure-Python class (BenchmarkProfiler is the dominant
+      in-codebase instance — 800+ calls).
+    query: |
+      SELECT COUNT(*) FROM edges WHERE via_helper LIKE 'receiver_type:py:BenchmarkProfiler%'
+    expect_min: 50
+
+  - name: "Module-var type tracking resolves cross-file imports"
+    description: >
+      `profiler = Profiler()` at module scope in utility_functions.py;
+      other files do `from utility_functions import profiler` and call
+      `profiler.start()`. The module_var_types table tracks profiler's
+      inferred type and attaches receiver_type to refs through imports.
+    query: |
+      SELECT COUNT(*) FROM edges WHERE via_helper LIKE 'receiver_type:py:Profiler%'
+    expect_min: 30
+
+  - name: "Kernel-source via variable assignment (Flaw 13)"
+    description: >
+      `welford_reduce_program_factory.cpp` does `std::string compute_kernel;`
+      then conditionally assigns kernel paths in different branches before
+      `desc.kernel_source = compute_kernel`. Pre-Flaw-13 the variable
+      indirection lost the kernel link entirely. After the fix, all three
+      welford compute kernels (hw / w / h) are linked via launches edges
+      from WelfordReduceProgramFactory.
+    query: |
+      SELECT COUNT(DISTINCT dst) FROM edges e
+      JOIN nodes nd ON nd.id = e.dst
+      WHERE e.kind = 'launches'
+        AND nd.qualified_name LIKE '%welford_reduce_%.cpp'
+    expect_min: 3

@@ -821,53 +821,138 @@ class Indexer:
     def _resolve_string_value(cls, cursor: cindex.Cursor, depth: int = 0) -> str | None:
         """Resolve a cursor to its effective string-literal value, if any.
 
-        Handles three shapes:
+        Single-value version. For multi-value resolution (covering
+        variables assigned across multiple branches), use
+        `_resolve_string_values_all`.
+        """
+        vals = cls._resolve_string_values_all(cursor, scope=None, depth=depth)
+        return vals[0] if vals else None
+
+    @classmethod
+    def _resolve_string_values_all(
+        cls,
+        cursor: cindex.Cursor,
+        scope: cindex.Cursor | None,
+        depth: int = 0,
+        _visited_usrs: set | None = None,
+    ) -> list[str]:
+        """Resolve a cursor to ALL possible string-literal values it can take.
+
+        Handles:
           - direct STRING_LITERAL
           - UNEXPOSED_EXPR / cast wrappers — descend
-          - DECL_REF_EXPR pointing at a constexpr/const `VAR_DECL` whose
-            initializer is a string literal (e.g. `constexpr const char* KERNEL_X = "...";`)
-
-        Returns the unquoted string, or None.
+          - DECL_REF_EXPR → VAR_DECL with string-literal initializer
+          - DECL_REF_EXPR → VAR_DECL with NO initializer but assigned
+            via `var = "literal"` later in the enclosing function (Flaw 13:
+            kernel_source through variable assignment). Requires `scope`
+            (the enclosing FUNCTION_DECL cursor) to find those assignments.
+          - Ternary / conditional operators — both branches harvested.
         """
-        if depth > 8:
-            return None
+        if depth > 12:
+            return []
+        if _visited_usrs is None:
+            _visited_usrs = set()
         try:
             kind = cursor.kind
         except ValueError:
-            return None
+            return []
         if kind == cindex.CursorKind.STRING_LITERAL:
             sp = cursor.spelling
             if sp and sp.startswith('"') and sp.endswith('"'):
-                return sp[1:-1]
-            return sp
+                return [sp[1:-1]]
+            return [sp] if sp else []
         if kind == cindex.CursorKind.DECL_REF_EXPR:
             ref = cursor.referenced
-            if ref is not None:
-                try:
-                    rk = ref.kind
-                except ValueError:
-                    rk = None
-                if rk == cindex.CursorKind.VAR_DECL:
-                    try:
-                        children = list(ref.get_children())
-                    except ValueError:
-                        children = []
-                    for ch in children:
-                        r = cls._resolve_string_value(ch, depth + 1)
-                        if r is not None:
-                            return r
-            return None
+            if ref is None:
+                return []
+            try:
+                rk = ref.kind
+            except ValueError:
+                rk = None
+            if rk != cindex.CursorKind.VAR_DECL:
+                return []
+            usr = ref.get_usr()
+            if usr in _visited_usrs:
+                return []
+            _visited_usrs = _visited_usrs | {usr}
+            # First: try the initializer (constexpr / const cases).
+            results: list[str] = []
+            try:
+                children = list(ref.get_children())
+            except ValueError:
+                children = []
+            for ch in children:
+                results.extend(cls._resolve_string_values_all(ch, scope, depth + 1, _visited_usrs))
+            # Fallback: scan the enclosing function's body for assignments
+            # to this variable (`var = expr`). Catches the multi-branch
+            # pattern where `compute_kernel` is declared empty and then
+            # set in different control-flow paths.
+            if scope is not None:
+                for rhs in cls._find_assignments_to(ref, scope, usr):
+                    results.extend(cls._resolve_string_values_all(rhs, scope, depth + 1, _visited_usrs))
+            # Dedup while preserving order.
+            seen = set()
+            uniq: list[str] = []
+            for v in results:
+                if v not in seen:
+                    seen.add(v)
+                    uniq.append(v)
+            return uniq
         if kind == cindex.CursorKind.LAMBDA_EXPR:
-            return None
+            return []
+        # Default: walk children, collect from any child that has values.
         try:
             children = list(cursor.get_children())
         except ValueError:
-            return None
+            return []
+        out: list[str] = []
         for ch in children:
-            r = cls._resolve_string_value(ch, depth + 1)
-            if r is not None:
-                return r
-        return None
+            out.extend(cls._resolve_string_values_all(ch, scope, depth + 1, _visited_usrs))
+        return out
+
+    @staticmethod
+    def _find_assignments_to(
+        var_decl: cindex.Cursor,
+        scope: cindex.Cursor,
+        var_usr: str,
+    ) -> list[cindex.Cursor]:
+        """Find all `var = expr` operator= calls in `scope`'s subtree where
+        the LHS is `var_decl`. Returns the RHS cursors.
+        """
+        if not var_usr:
+            return []
+        results: list[cindex.Cursor] = []
+
+        def walk(c: cindex.Cursor) -> None:
+            try:
+                ck = c.kind
+            except ValueError:
+                return
+            if ck == cindex.CursorKind.CALL_EXPR and c.spelling == "operator=":
+                try:
+                    args = list(c.get_arguments())
+                except Exception:
+                    args = []
+                if len(args) >= 2:
+                    lhs = args[0]
+                    try:
+                        if lhs.kind == cindex.CursorKind.DECL_REF_EXPR:
+                            ref = lhs.referenced
+                            if ref is not None and ref.get_usr() == var_usr:
+                                results.append(args[1])
+                    except (ValueError, AttributeError):
+                        pass
+            try:
+                for ch in c.get_children():
+                    walk(ch)
+            except ValueError:
+                pass
+
+        try:
+            walk(scope)
+        except Exception:
+            pass
+        return results
 
     def _maybe_extract_kernel_source(
         self,
@@ -899,39 +984,45 @@ class Indexer:
             return
         if lhs.spelling not in self._KERNEL_PATH_FIELDS:
             return
-        path = self._resolve_string_value(rhs)
-        if not path:
+        # Multi-value resolution: catches the Flaw 13 pattern where the
+        # RHS is a local variable that gets assigned different kernel
+        # paths in different control-flow branches. e.g.
+        #   std::string compute_kernel;
+        #   if (...) compute_kernel = "a.cpp"; else compute_kernel = b ? "x.cpp" : "y.cpp";
+        #   desc.kernel_source = compute_kernel;
+        paths = self._resolve_string_values_all(rhs, scope=current_function)
+        # Filter to actual kernel-file paths.
+        paths = [p for p in paths if p and any(p.endswith(s) for s in self._KERNEL_PATH_SUFFIXES)]
+        if not paths:
             return
-        if not any(path.endswith(s) for s in self._KERNEL_PATH_SUFFIXES):
-            return
-        # Synthesize the kernel_file node (same shape as _extract_kernel_launch).
-        kernel_id = f"kernel:{path}"
-        if kernel_id not in self.nodes:
-            self.nodes[kernel_id] = Node(
-                id=kernel_id,
-                language="cpp",
-                kind="kernel_file",
-                name=path.rsplit("/", 1)[-1],
-                qualified_name=path,
-                file=path,
-                line_start=0,
-                line_end=0,
-                signature=path,
-                is_definition=False,
-                discovered_in=[tu_path],
-            )
-        elif tu_path not in self.nodes[kernel_id].discovered_in:
-            self.nodes[kernel_id].discovered_in.append(tu_path)
         site_file = call.location.file.name if call.location and call.location.file else ""
         site_line = call.location.line if call.location else 0
-        self.edges.append(Edge(
-            src=node_id(current_function),
-            dst=kernel_id,
-            kind="launches",
-            site_file=site_file,
-            site_line=site_line,
-            via="KernelDescriptor.kernel_source",
-        ))
+        for path in paths:
+            kernel_id = f"kernel:{path}"
+            if kernel_id not in self.nodes:
+                self.nodes[kernel_id] = Node(
+                    id=kernel_id,
+                    language="cpp",
+                    kind="kernel_file",
+                    name=path.rsplit("/", 1)[-1],
+                    qualified_name=path,
+                    file=path,
+                    line_start=0,
+                    line_end=0,
+                    signature=path,
+                    is_definition=False,
+                    discovered_in=[tu_path],
+                )
+            elif tu_path not in self.nodes[kernel_id].discovered_in:
+                self.nodes[kernel_id].discovered_in.append(tu_path)
+            self.edges.append(Edge(
+                src=node_id(current_function),
+                dst=kernel_id,
+                kind="launches",
+                site_file=site_file,
+                site_line=site_line,
+                via="KernelDescriptor.kernel_source",
+            ))
 
     def _extract_kernel_launch(
         self,
