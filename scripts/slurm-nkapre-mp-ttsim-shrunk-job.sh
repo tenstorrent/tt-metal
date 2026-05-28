@@ -36,7 +36,9 @@ echo "=== Compute node: $(hostname -s) ==="
 echo "=== RESULTS_DIR=${RESULTS_DIR} ==="
 
 cd "${REPO}/build_Debug"
-ninja -j32 test_mesh_socket_main multi_host_fabric_tests test_tt_fabric 2>&1 | tail -5
+ninja -j32 tt_metal ttnn test_mesh_socket_main multi_host_fabric_tests test_tt_fabric \
+    distributed_multiprocess_tests unit_tests_dual_rank_2x2 unit_tests_dual_rank_2x4 unit_tests_ttnn \
+    2>&1 | tail -15
 
 cd "${REPO}"
 "${REPO}/scripts/run-nkapre-mp-ttsim-sweep-shrunk.sh" 2>&1 | tee "${RESULTS_DIR}/run.log"
