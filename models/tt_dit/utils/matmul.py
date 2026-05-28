@@ -520,13 +520,20 @@ class FusedMMRSConfig(NamedTuple):
     subblock_w: int
     num_buffers_per_channel: int | None
     chunk_width_in_mm_blocks: int
+    # When None, get_params() auto-computes num_workers_per_link from the RS-zone capacity.
+    # Set explicitly only when a sweep found a non-default value to be optimal.
+    num_workers_per_link: int | None = None
 
     def get_params(self, core_grid, num_links):
-        rs_zone_capacity = (core_grid.y - self.compute_with_storage_grid_size.y) * core_grid.x
-        num_workers_per_link = rs_zone_capacity // (2 * num_links) - 1
+        if self.num_workers_per_link is not None:
+            num_workers_per_link = self.num_workers_per_link
+        else:
+            rs_zone_capacity = (core_grid.y - self.compute_with_storage_grid_size.y) * core_grid.x
+            num_workers_per_link = rs_zone_capacity // (2 * num_links) - 1
         config_dict = self._asdict()
         num_buffers_per_channel = config_dict.pop("num_buffers_per_channel")
         chunk_width_in_mm_blocks = config_dict.pop("chunk_width_in_mm_blocks")
+        config_dict.pop("num_workers_per_link")
 
         # Order is important. Guaranteed for python 3.7+
         return {
@@ -544,7 +551,7 @@ if is_blackhole():
 else:
     default_fused_mmrs_config = FusedMMRSConfig(ttnn.CoreCoord(8, 7), 2, 8, 8, 1, 1, None, 1)
 
-# core_grid: {MKN: mm_core_grid, M, K, N, sub_h, sub_w, num_w_p_link, num_buffers_per_channel, chunk_width_in_mm_blocks}
+# core_grid: {MKN: mm_core_grid, M, K, N, sub_h, sub_w, num_buffers_per_channel, chunk_width_in_mm_blocks, num_workers_per_link}
 fused_mmrs_configs = {
     ttnn.CoreCoord(8, 9): {
         (9472, 5120, 1280): FusedMMRSConfig(ttnn.CoreCoord(8, 7), 8, 8, 8, 2, 2, None, 1),
