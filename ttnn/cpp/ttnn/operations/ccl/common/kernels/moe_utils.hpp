@@ -806,7 +806,7 @@ template <
     ttnn::operations::ccl::common::ReplicateGroup Axis,
     bool DoubleAntipodalAtomicInc = false,
     class SenderType = WorkerToFabricEdmSender>
-FORCE_INLINE void fabric_multicast_bidirectional_atomic_inc_ring_1d(
+FORCE_INLINE void fabric_multicast_bidirectional_atomic_inc_1d(
     std::array<SenderType, 4>& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header_pos,
     volatile PACKET_HEADER_TYPE* packet_header_neg,
@@ -814,12 +814,12 @@ FORCE_INLINE void fabric_multicast_bidirectional_atomic_inc_ring_1d(
     using ttnn::operations::ccl::common::ReplicateGroup;
     static_assert(
         Topology == tt::tt_fabric::Topology::Ring || Topology == tt::tt_fabric::Topology::Linear,
-        "fabric_multicast_bidirectional_atomic_inc_ring_1d only supports Ring or Linear 1D topology");
+        "fabric_multicast_bidirectional_atomic_inc_1d only supports Ring or Linear 1D topology");
     // ReplicateGroup::NONE would silently fall through the COLS/ROWS ternaries and compute
     // axis_position/dispatch_devices off the wrong dim — a concrete axis is required.
     static_assert(
         Axis == ReplicateGroup::COLS || Axis == ReplicateGroup::ROWS,
-        "fabric_multicast_bidirectional_atomic_inc_ring_1d requires a concrete dispatch axis (COLS or ROWS)");
+        "fabric_multicast_bidirectional_atomic_inc_1d requires a concrete dispatch axis (COLS or ROWS)");
 
     const auto cmd_header = tt::tt_fabric::NocUnicastAtomicIncCommandHeader{semaphore_noc_addr, 1, true};
 

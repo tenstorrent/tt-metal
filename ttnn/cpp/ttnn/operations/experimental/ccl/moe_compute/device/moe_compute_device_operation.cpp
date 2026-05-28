@@ -7,7 +7,6 @@
 #include "moe_compute_device_operation.hpp"
 #include "moe_compute_program_factory.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
-#include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/experimental/ccl/moe/selective_reduce_combine/device/selective_reduce_combine_device_operation.hpp"
 
 #include <tt-metalium/constants.hpp>
@@ -173,14 +172,7 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
     uint32_t num_devices = mesh_view.num_devices();
 
     uint32_t experts = tilize_mapping_shape[-1];
-    // Cluster-axis-aware: experts are partitioned along the cluster axis on the Full path
-    // (e.g. on a 2x4 BH single Loudbox with cluster_axis=1, divide by 4 not 8). For ComputeOnly
-    // mode there is no cluster axis, so fall back to the full mesh size.
-    const auto cluster_axis_opt = args.cluster_axis();
-    const uint32_t cluster_devices = cluster_axis_opt.has_value()
-                                         ? ((*cluster_axis_opt == 0) ? mesh_view.num_rows() : mesh_view.num_cols())
-                                         : num_devices;
-    uint32_t experts_per_device = tt::div_up(experts, cluster_devices);
+    uint32_t experts_per_device = tt::div_up(experts, num_devices);
     uint32_t total_tokens =
         tilize_input_shape[0] *
         tilize_input_shape[1];  // tokens_per_device from input, total tokens across all dispatch devices
@@ -438,21 +430,25 @@ std::vector<ttnn::Tensor> moe_compute(
     std::optional<ttnn::experimental::prim::SelectiveReduceCombineParams> combine_params;
     if (!compute_only) {
         // Full path: cluster_axis is required here; the validation block above ensures has_value().
-        // Auto-detect num_links from the mesh's actual fabric routing planes (matches the pattern
-        // used by all_gather/reduce_scatter/all_to_all_dispatch). On WH 6U this returns 4; on BH
-        // single LB it returns 2 (the physical eth-channel count between adjacent chips). Without
-        // this, the hardcoded default=4 trips a fabric "Requested link index N is out of bounds"
-        // error on BH and forces external callers to pass num_links=2 explicitly.
-        const uint32_t resolved_num_links =
-            num_links.value_or(operations::ccl::common::get_num_links(*mesh_device, cluster_axis.value()));
-        // Auto-downgrade Ring → Linear when the mesh can't close a ring (e.g. BH single
-        // Loudbox p150_x8, which is 2x4 LINE/LINE). Without this, downstream writers run
-        // ring-shaped multicast paths on a line and index into never-opened fabric_connections
-        // slots — undefined behavior (uninitialized L1 stack → hang on a never-ticking
-        // flow-control word, or stray NOC write). See the kernel-side `Topology` template guard
-        // in fabric_multicast_bidirectional_atomic_inc_ring_1d (moe_utils.hpp).
+        // num_links default is 4 (matches WH 6U eth-channel count). On BH single Loudbox the actual
+        // eth-channel count is 2, so callers there must override (the default=4 trips a fabric
+        // "Requested link index N is out of bounds" error on BH). The CCL pattern of falling back
+        // to `get_num_links()` is not used here: that helper subtracts 1 on non-mmio-capable meshes
+        // (#27196 territory) and returns 1 on BH single LB, which is wrong (should be 2). Until that
+        // helper is BH-aware, keep the hardcoded 4 default and require explicit override on BH.
+        const uint32_t resolved_num_links = num_links.value_or(4);
+        // Resolve `topology` via the shared CCL helper. This (a) substitutes the fabric
+        // default when `topology` is nullopt, (b) maps Torus → Mesh when the tensor doesn't
+        // span a wrap edge so the TT_FATAL below can reject it, and (c) downgrades Ring → Linear
+        // for the trivial `mesh_shape[cluster_axis] == 2` case. Notably, it does NOT detect
+        // physically-LINE meshes whose tensor still spans the full cluster axis (e.g. BH single
+        // Loudbox 2x4 LINE/LINE with cluster_axis=1) — that case still resolves to Ring here.
+        // BH LB callers must pass topology=Linear explicitly; the kernel-side `Topology` template
+        // guard in fabric_multicast_bidirectional_atomic_inc_1d (moe_utils.hpp) then routes the
+        // multicast through the line-aware code path. (Fixing get_usable_topology() to consult
+        // physical mesh wrap capability is a separate follow-up that affects all CCL ops.)
         const auto resolved_topology = ttnn::ccl::get_usable_topology(tilize_input_tensor, topology, cluster_axis);
-        // Mirror the kernel-side static_assert in fabric_multicast_bidirectional_atomic_inc_ring_1d
+        // Mirror the kernel-side static_assert in fabric_multicast_bidirectional_atomic_inc_1d
         // (moe_utils.hpp). `get_usable_topology` can return Mesh when the fabric default is Torus
         // and the tensor doesn't span a wrap edge; the combine kernel only handles Ring/Linear and
         // would silently produce wrong wait counts → on-device hang. Reject at the host boundary

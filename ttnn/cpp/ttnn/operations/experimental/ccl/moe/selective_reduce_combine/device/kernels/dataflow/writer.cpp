@@ -335,7 +335,7 @@ void kernel_main() {
         // at the op API boundary in moe_compute_device_operation.cpp). For Linear topology, the helper
         // derives per-device positive/negative ranges from linearized_mesh_coord so endpoints elide the
         // absent-direction send via `if constexpr` — required to avoid UB on LINE endpoints.
-        fabric_multicast_bidirectional_atomic_inc_ring_1d<
+        fabric_multicast_bidirectional_atomic_inc_1d<
             linearized_mesh_coord,
             topology,
             mesh_rows,
