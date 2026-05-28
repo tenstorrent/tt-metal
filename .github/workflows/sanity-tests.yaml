@@ -463,7 +463,7 @@ jobs:
             }
           api-key: ${{ secrets.TT_CHAT_API_KEY }}
           api-url: ${{ secrets.TT_CHAT_URL }}
-          expected-jobs: []
+          expected-jobs: ""
           run-result: ${{ steps.aggregate.outputs.run-result }}
       - name: Show report
         if: always() && steps.ai-run-summary.outputs.report-file != ''
