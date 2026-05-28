@@ -11,8 +11,7 @@ void kernel_main() {
     // Arg 0 is patched by the ProgramDescriptor framework to the current dst buffer base on
     // every dispatch (BufferBinding).  Arg 9 carries the per-core byte offset into that buffer
     // (output_tensor_start[-1] * elem_size + width_offset).  Splitting base+offset is what makes
-    // this safe on cache hits — see the legacy override_runtime_arguments path that this
-    // descriptor migration replaced.
+    // this safe on program-cache hits.
     const uint32_t dst_base_addr = get_arg_val<uint32_t>(0);
     const uint32_t output_stick_size = get_arg_val<uint32_t>(1);
     const uint32_t input_stick_size = get_arg_val<uint32_t>(2);
@@ -26,7 +25,6 @@ void kernel_main() {
     const uint32_t dst_addr = dst_base_addr + dst_addr_offset_bytes;
 
 #ifdef UNPAD_INPUT_WIDTH
-    // Variable-length section starts at arg 10 (was 9), padding_width_ntiles trailing it shifted from 21 to 22.
     const uint32_t padding_width_ntiles = get_arg_val<uint32_t>(22);
 #endif
 

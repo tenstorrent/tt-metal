@@ -83,7 +83,7 @@ ProgramDescriptor SliceWriteTiledShardedInputProgramFactory::create_descriptor(
         TILE_HEIGHT);
 
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     const uint32_t src0_cb_index = tt::CBIndex::c_0;
 
