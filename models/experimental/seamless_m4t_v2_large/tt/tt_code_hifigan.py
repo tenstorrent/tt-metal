@@ -993,6 +993,19 @@ class TTSeamlessM4Tv2CodeHifiGan:
         return self._hifi_gan_once(x_nlc, hg, batch=batch, tlen=tlen)
 
     def _hifi_gan_once(self, x_nlc: ttnn.Tensor, hg: Any, *, batch: int, tlen: int) -> ttnn.Tensor:
+        import os as _os_vt, time as _t_vt
+
+        _vt_on = bool(_os_vt.environ.get("VOC_TIMING"))
+
+        def _vt(name: str, t0: float) -> float:
+            if _vt_on:
+                ttnn.synchronize_device(self.device)
+                now = _t_vt.time()
+                print(f"[VOC-TIMING] {name} (tlen={tlen}): {now - t0:.1f}s", flush=True)
+                return now
+            return t0
+
+        _vt0 = _t_vt.time()
         cp = hg.conv_pre
         h, tlen = self._conv1d(
             x_nlc,
@@ -1008,6 +1021,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
             groups=1,
         )
         ttnn.deallocate(x_nlc)
+        _vt0 = _vt("conv_pre", _vt0)
 
         for i, up_layer in enumerate(hg.upsampler):
             h = ttnn.leaky_relu(h, negative_slope=self.leaky_slope, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -1019,6 +1033,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
                 in_channels=int(up_layer["in_channels"]),
                 out_channels=int(up_layer["out_channels"]),
             )
+            _vt0 = _vt(f"stage{i} conv_transpose -> tlen={tlen}", _vt0)
             channels = self.cfg.upsample_initial_channel // (2 ** (i + 1))
             acc = None
             for j in range(self.num_kernels):
@@ -1034,6 +1049,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
             ttnn.deallocate(acc)
             ttnn.deallocate(h)
             h = acc_scaled
+            _vt0 = _vt(f"stage{i} resblocks", _vt0)
 
         # Match HF: line 2489 of ``modeling_seamless_m4t_v2.py`` calls
         # ``nn.functional.leaky_relu(hidden_states)`` with the default 0.01 slope, NOT
