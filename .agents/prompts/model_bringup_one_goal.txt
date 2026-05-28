@@ -5,7 +5,7 @@ Output directory: models/autoports/<model_name>/
 
 Work on the current branch and use the full mesh device available on this machine. Choose the implementation path, intermediate checkpoints, and file structure that best fit the model and hardware. Do not treat a partial prototype, diagnostic-only path, reduced-scope run, skipped validation, or unexplained blocker as completion.
 
-The final result should be a clean de-novo TTNN implementation. Read the HuggingFace source and learn from nearby tt-metal model code, but do not blindly copy or import another model's forward pass. Reuse shared helpers where they genuinely fit, and keep the model's forward logic direct, readable, and local to this autoport. Prefer optimized or fused TTNN operations when their contracts fit, especially paged attention and other transformer composites, instead of hand-building them from lower-level primitives. You should use models.common.sampling for on-device sampling.
+The final result should be a clean de-novo TTNN implementation. Read the HuggingFace source and learn from nearby tt-metal model code, but do not copy or import another model's forward pass, folder or modules. Reuse shared helpers where they genuinely fit, and keep the model's forward logic direct, readable, and local to this autoport. Prefer optimized or fused TTNN operations when their contracts fit, especially paged attention and other transformer composites, instead of hand-building them from lower-level primitives. You should use models.common.sampling for on-device sampling.
 
 Implement the model under `models/autoports/<model_name>/` with real weights, end-to-end generation, readiness checks, performance work, and future serving integration. The TTNN path should cover all necessary model components for autoregressive generation, e.g.: embeddings, decoder layers or blocks, attention, RoPE or positional handling, KV cache, MLP or MoE, residual/norm order, final norm, LM head, logits, smpling and any model-specific routing or layer-kind differences.
 
@@ -22,7 +22,7 @@ The high-level generation path should be a thin deterministic loop over the low-
 
 Correctness requirements:
 
-- Fully-traced decode path that does not need host involvement
+- Fully-traced decode path that does not need host involvement within each forward pass. If necessary you may do a nominal amount of host work between steps e.g. copying the output tensor to the input, incrementing the position, but it should not be necessary to move tensors back to the host for this and where possible they should be part of the trace. If in doubt check what models/tt_transformers does.
 - Paged KV-cache, including page-table handling, current-position handling, prompt lengths, decode positions, and reuse across repeated decode steps.
 - Test the advertised prefill/decode sequence length where feasible. If the full maximum does not fit, test the longest useful length you can fit and record the measured limit.
 - Validate deterministic behavior for repeated identical inputs under argmax sampling.
@@ -69,6 +69,12 @@ python -m models.common.readiness_check.run_vllm_server \
 
 Performance and optimization requirements:
 
+Read and follow the advice in `tech_reports/LLMs/llms.md` - optimize on-device performance and particularly for decode measure the performance of traced execution. If there are significant op/host gaps you can note them but you should still follow the steps below to optimize on-device performance. Always perform optimization using real model shapes, do not use reduced shapes!
+
+A note on the term "sharding" - tt-metal uses this to mean two things. On-device sharding (e.g. L1-sharded activations, DRAM-sharded weights) are sharded across the cores/dram banks of a single device (which is a grid of cores). You should absolutely consider these as in-scope for this stage! Multi-chip sharding (e.g. with a mesh mapper) is about distributing tensors across multiple devices in a mesh. Any time tt-perf-report mentions sharding it is probably talking about on-device sharding and is in-scope for you.
+
+Sometimes it takes a few attempts to root-cause an issue, especially accuracy issues. When you find the root cause, go back and check to see whether you can now undo the other changes you made in your attempt to find the cause. For example, a common first-step when debugging an accuracy issue is to switch to BF16 precision. This may help a small amount in all cases. But then if you find the real root cause that actually moves the needle where it needs to be, you should then go back and see if you can unwind the BF16 precision changes. Always remember we have two goals - correcness _and_ performance. Only sacrifice as much performance as is _proven necessary_ to improve correctness to where it needs to be!
+
 - Measure warmed prefill and warmed decode latency on device.
 - Capture `tt-perf-report` output for the final measured prefill and decode paths, including the command used and the main conclusions about compute, DRAM, communication, and data movement.
 - Improve performance where evidence shows clear opportunities without weakening correctness. Track before/after latency and PCC for material changes.
@@ -93,9 +99,9 @@ Artifacts to leave:
 - TTNN code under `models/autoports/<model_name>/tt/`, including the model, generator, and serving adapter.
 - Focused tests under `models/autoports/<model_name>/tests/` covering layer/block parity, prefill, decode, cache behavior, generation, and readiness integration.
 - `models/autoports/<model_name>/doc/bringup/work_log.md` with commands, hardware, branch/commit, environment, failures, fixes, measurements, and important decisions.
-- `models/autoports/<model_name>/doc/bringup/README.md` with final status, model id or local checkpoint, HF revision/path, hardware, layer/block kinds, implementation contract, state-dict mapping, PCC results, readiness results, sequence limits, trace evidence, watcher/fallback status, latency, perf-report conclusions, multi-chip results if applicable, and remaining risks.
+- `models/autoports/<model_name>/doc/bringup/README.md` with final status, model id or local checkpoint, HF revision/path, hardware, layer/block kinds, implementation contract, state-dict mapping, PCC results, readiness results, sequence limits, trace evidence, watcher/fallback status, latency, perf-report conclusions, multi-chip results if applicable, and remaining risks. Lead with the top-1/top-5/top-100 figures for the full model and the 128-token prefill ms and mean over 32 token decode t/s/u for the full model.
 - Perf report artifacts such as `prefill_perf_report.txt`, `prefill_perf_report.csv`, `decode_perf_report.txt`, and `decode_perf_report.csv` under an organized `doc/bringup/tracy/` subdirectory.
 
 Keep full model weights, binary tensors, program-cache directories, giant profiler captures, and noisy exploratory logs out of git. Link to bulky or transient evidence from the work log when needed.
 
-The goal is complete only when the implementation runs end-to-end from tokens through logits/generation on real model weights and passes the shared readiness checks, when auto-regressively generated prompts look sensible and coherent, when an honest checklist shows the model is making use of the full device mesh available, all optimization steps above have been implemented or attempted and rejected and when the model is as close to peak hardware performance as you can reasonably get it whilst using the existing TTNN API.
+The goal is complete only when the implementation runs end-to-end from tokens through logits/generation on real model weights and passes the shared readiness checks, when auto-regressively generated prompts look sensible and coherent, when an honest checklist shows the model is making use of the full device mesh available, all optimization steps above have been implemented or attempted and rejected and when the model is as close to peak hardware performance as you can reasonably get it whilst using the existing TTNN API. Install any packages and dependencies that you need.

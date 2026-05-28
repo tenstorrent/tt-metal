@@ -30,11 +30,15 @@ class OptimizedDecoder(LightweightModule):
     def decode_forward(self, ...): ...
 ```
 
-Reuse or wrap the functional implementation when that is the clearest path, but make sure tests and perf evidence exercise the optimized path.
+Reuse or wrap the functional implementation from models/autoports/<model>/tt/functional_decoder.py when that is the clearest path, but make sure tests and perf evidence exercise the optimized path.
 
 ## How To Approach It
 
 Start from the functional decoder report and code. Reproduce enough of the baseline to know current PCC, sequence limits, cache behavior, trace behavior, and latency.
+
+Read and follow the advice in `tech_reports/LLMs/llms.md` - optimize on-device performance and particularly for decode measure the performance of traced execution. If there are significant op/host gaps you can note them but you should still follow the steps below to optimize on-device performance. Always perform optimization using real model shapes, do not use reduced shapes!
+
+A note on the term "sharding" - tt-metal uses this to mean two things. On-device sharding (e.g. L1-sharded activations, DRAM-sharded weights) are sharded across the cores/dram banks of a single device (which is a grid of cores). You should absolutely consider these as in-scope for this stage! Multi-chip sharding (e.g. with a mesh mapper) is about distributing tensors across multiple devices in a mesh. Any time tt-perf-report mentions sharding it is probably talking about on-device sharding and is in-scope for you.
 
 Profile warmed prefill and decode separately. Use `tt-perf-report` as a conversation with the hardware, not as an oracle: classify bottlenecks, try applicable advice, keep changes that improve the target without unacceptable correctness or complexity cost, and record why rejected advice was rejected. We'd like to improve tt-perf-report and its advice to be more useful so please call out potential improvements in your final report.
 
@@ -52,6 +56,7 @@ Final optimized evidence should show:
 - Stress or repeated-run coverage appropriate to the risk of the changes.
 - Warmed prefill and decode latency before/after optimization.
 - `tt-perf-report` output and the main performance conclusions.
+- Watcher still clean. Watcher should be run by setting TT_METAL_WATCHER=10, don't skip asserts or anything.
 - Optimization checklist:
 -[ ] Decoder path fully traced with no host fallbacks
 -[ ] Decode activations generally width-sharded in L1 across norm, attention, residual, MLP, and output projection boundaries.
@@ -61,3 +66,5 @@ Final optimized evidence should show:
 -[ ] Shard specs and core grids that divide tensor dimensions cleanly into tiles where possible, code grids as large as this and the model/hardware allows.
 -[ ] DRAM-sharded decode matmuls
 -[ ] For MoE models: optimized the routed active-expert path using `all_to_all_dispatch_metadata` + `moe_compute` where the model/hardware fits, including packed W0/W1/W2 weights, expert mapping, combine/reduce, and no dense all-expert runtime path.
+
+If this checklist is not completed, take this as a sign that you should go back and perform those optimization steps to improve on-device performance. For this stage that is what we are most interested in optimizing; op/host gap will be reduced by tracing.
