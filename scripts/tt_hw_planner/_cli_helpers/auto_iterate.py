@@ -1884,6 +1884,19 @@ def _run_auto_iterate_loop(
                 _extra_targets = pick_n_distinct_targets(
                     _ungraduated_ranked, n=parallel_agents - 1, exclude=list(_exclude)
                 )
+                for _extra in _extra_targets:
+                    if _extra in pre_apply_hashes:
+                        continue
+                    _ex_safe = _safe_id(_extra)
+                    _ex_stub_path = demo_dir / "_stubs" / f"{_ex_safe}.py"
+                    pre_apply_state[_extra] = _stub_uses_torch_wrapper(_ex_stub_path)
+                    try:
+                        pre_apply_hashes[_extra] = (
+                            hashlib.sha1(_ex_stub_path.read_bytes()).hexdigest() if _ex_stub_path.is_file() else ""
+                        )
+                    except Exception:
+                        pre_apply_hashes[_extra] = ""
+                    _snapshot_preiter_native_stub(_extra)
                 if _at_cap_now:
                     print(f"  [parallel] skipping at-cap component(s) from extras: " f"{sorted(_at_cap_now)}")
                 for _extra in _extra_targets:
