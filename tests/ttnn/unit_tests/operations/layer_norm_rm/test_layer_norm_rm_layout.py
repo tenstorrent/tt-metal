@@ -252,24 +252,31 @@ def test_layer_norm_rm_accepts_tile_affine(device, affine_mode):
 
 
 # --------------------------------------------------------------------------
-# 5. Drift signal — confirm EXCLUSIONS is empty and SUPPORTED reflects R2.
-#    Catches op-file regressions where someone re-adds the excluded cells.
+# 5. Drift signal — confirm SUPPORTED and EXCLUSIONS reflect R2.
+#    Catches op-file regressions where someone re-adds the lifted cells
+#    or drops the bf8b structural-gap entry.
 # --------------------------------------------------------------------------
 def test_layer_norm_rm_supported_reflects_r2():
-    """SUPPORTED['layout'] contains both layouts; EXCLUSIONS empty after R2."""
+    """SUPPORTED['layout'] contains both layouts; bf8b in EXCLUSIONS; lifted pairs gone."""
     assert (
         ttnn.TILE_LAYOUT in SUPPORTED["layout"]
     ), f"SUPPORTED['layout']={SUPPORTED['layout']} missing TILE_LAYOUT after R2"
     assert (
         ttnn.ROW_MAJOR_LAYOUT in SUPPORTED["layout"]
     ), f"SUPPORTED['layout']={SUPPORTED['layout']} missing ROW_MAJOR_LAYOUT (non-regression)"
-    # The two (affine=gamma_*, affine_layout=TILE) pairs must NOT appear.
+    # The two Phase-0 (affine=gamma_*, affine_layout=TILE) pairs must NOT appear.
     forbidden = [
         {"affine": "gamma_only", "affine_layout": ttnn.TILE_LAYOUT},
         {"affine": "gamma_beta", "affine_layout": ttnn.TILE_LAYOUT},
     ]
     for entry in forbidden:
         assert entry not in EXCLUSIONS, f"EXCLUSIONS still contains {entry} after R2 — should have been removed"
+    # bf8b joined EXCLUSIONS: R2 made it reachable (TILE-only) but the
+    # entry-point's TILE→RM wrap can't preserve bf8b (bf8b in RM is INVALID).
+    assert {"precision": "bf8b_hifi4_bf16acc"} in EXCLUSIONS, (
+        "EXCLUSIONS missing the bf8b structural-gap entry — bf8b cannot round-trip through "
+        "the TILE→RM entry-point wrap because bf8b in RM is INVALID."
+    )
 
 
 # --------------------------------------------------------------------------

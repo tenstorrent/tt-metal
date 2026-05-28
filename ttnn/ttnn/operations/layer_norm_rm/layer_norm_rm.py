@@ -124,6 +124,11 @@ SUPPORTED = {
     # is unreachable through any test path. It is listed here for
     # honesty — if Refinement 2 adds TILE_LAYOUT, bf8b becomes reachable
     # immediately without an op-file change.
+    # All four PRECISION_CONFIG modes listed for honesty. bf8b is excluded
+    # at runtime (see EXCLUSIONS below) — it's structurally incompatible
+    # with the TILE→RM wrap. Phase 0 / R1 listed bf8b "for honesty,
+    # unreachable while layout was RM-only"; R2 made it reachable but the
+    # wrap exposes a structural gap, so it moves to EXCLUSIONS.
     "precision": [
         "fp32_hifi4_fp32acc",
         "bf16_hifi4_fp32acc",
@@ -158,12 +163,26 @@ SUPPORTED = {
 # 3. EXCLUSIONS
 # ---------------------------------------------------------------------------
 #
-# Refinement 2: removed the two `(affine=gamma_*, affine_layout=TILE)`
-# pairs. TILE-layout gamma/beta is now accepted — the entry point converts
-# them to ROW_MAJOR_LAYOUT before invoking the kernel, mirroring the input-
-# layout wrap. No exclusions remain for this op today.
+# Refinement 2:
+#   * Removed the two `(affine=gamma_*, affine_layout=TILE)` pairs from
+#     Phase 0 — TILE-layout gamma/beta is now accepted via the entry-
+#     point wrap to ROW_MAJOR_LAYOUT.
+#
+#   * Added `{"precision": "bf8b_hifi4_bf16acc"}` — bf8b input only
+#     exists in TILE layout (bf8b in RM is INVALID per feature_spec.py).
+#     The entry-point's TILE→RM wrap silently downcasts bf8b → bf16
+#     (ttnn.to_layout has no way to preserve a block format outside its
+#     block layout), so the output round-trips back as bf16 instead of
+#     bf8b. This is a structural capability gap: supporting bf8b would
+#     require either an in-kernel bf8b path (not in scope here) or a
+#     dedicated TILE-input/TILE-output kernel variant. A future
+#     refinement can revisit this; the cell stays in SUPPORTED for
+#     honesty (the listed precision name has a PRECISION_CONFIG entry)
+#     but is rejected at runtime by EXCLUSIONS.
 
-EXCLUSIONS = []
+EXCLUSIONS = [
+    {"precision": "bf8b_hifi4_bf16acc"},
+]
 
 
 # ---------------------------------------------------------------------------
