@@ -55,15 +55,29 @@ from models.experimental.mistral_small_4_119b.tt.mistral4_vision_rope import (
 
 
 def _vision_rms_norm(x: ttnn.Tensor, weight: ttnn.Tensor, compute_kernel_config) -> ttnn.Tensor:
-    # Propagate WIDTH_SHARDED layout through rms_norm so the patch-conv → ln_pre
-    # fast path doesn't pay a sharded→interleaved round-trip. For DRAM/L1
-    # interleaved inputs (block-internal calls after a residual add) fall back
-    # to L1 interleaved output, matching the prior behavior.
+    # Always run rms_norm on a WIDTH_SHARDED tensor so it dispatches to the
+    # sharded multi-core kernel (~32 cores) instead of the default 4-core path.
+    # Block-internal calls (DRAM input from residual add) get an extra
+    # interleaved→sharded convert; the norm time drop (~16 µs → ~7 µs on
+    # M=128, H=1024) more than pays it back. Propagate WS shard_spec when the
+    # input is already WS (ln_pre fast path).
     in_mem = x.memory_config()
     if in_mem.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
-        out_mem = in_mem  # reuse the input's shard_spec
+        out_mem = in_mem
     else:
-        out_mem = ttnn.L1_MEMORY_CONFIG
+        # Round M and K up to tile (32) so the shard shape is tile-aligned —
+        # logical M (e.g. 100 patches) would otherwise produce (100, 32) shards
+        # which the framework rejects.
+        TILE = 32
+        m_padded = (int(x.shape[-2]) + TILE - 1) // TILE * TILE
+        k_padded = (int(x.shape[-1]) + TILE - 1) // TILE * TILE
+        out_mem = ttnn.create_sharded_memory_config(
+            (1, 1, m_padded, k_padded),
+            core_grid=ttnn.CoreGrid(y=4, x=8),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        x = ttnn.to_memory_config(x, out_mem)
     return ttnn.rms_norm(
         x,
         weight=weight,

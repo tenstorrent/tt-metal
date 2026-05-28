@@ -64,25 +64,32 @@ class TtPixtralMLP:
         self.ffn_down_preset = build_ffn_down_preset(mesh_device)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        # Sweep-tuned 1D l1/dram/ws on 8×8 grid (gate and up share the shape).
+        # ffn_norm output is WS L1; gate and up both need it in L1 interleaved
+        # (their preset's in0). Convert once here so vision_linear's per-call
+        # to_memory_config becomes a no-op for both, saving one shard→intlv op.
+        if x.memory_config().memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+            x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+        # gate/up keep their WS output (skip per-matmul WS→DRAM convert); the
+        # multiply runs WS×WS→WS and down's vision_linear reshards in0 to its
+        # own (smaller) WS grid in one to_memory_config call.
         gate = vision_linear(
             x,
             self.gate_proj,
             self.ffn_up_preset,
             compute_kernel_config=self.compute_kernel_config,
             activation="silu",
+            keep_sharded=True,
         )
         up = vision_linear(
             x,
             self.up_proj,
             self.ffn_up_preset,
             compute_kernel_config=self.compute_kernel_config,
+            keep_sharded=True,
         )
-        hidden = ttnn.multiply(gate, up, memory_config=ttnn.L1_MEMORY_CONFIG)
+        hidden = ttnn.multiply(gate, up, memory_config=gate.memory_config())
         ttnn.deallocate(gate)
         ttnn.deallocate(up)
-        # Sweep-tuned 1D ws/dram/ws on 8×2 grid, in0_block_w=8 (33 TFLOPs).
-        # vision_linear converts hidden (L1 interleaved) → L1 width-sharded for in0.
         out = vision_linear(
             hidden,
             self.down_proj,
