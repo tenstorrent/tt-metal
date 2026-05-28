@@ -220,4 +220,15 @@ class TtSnake1d:
         # When output_memory_config=L1_MEMORY_CONFIG the result stays in L1, saving the
         # DRAM write here and the downstream _maybe_l1 copy in k=1 conv.
         _rm_out_kw = {"memory_config": self._output_mc} if self._output_mc is not None else {}
-        return ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT, **_rm_out_kw)
+        out = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT, **_rm_out_kw)
+        # Free L1 TILE staging before k>7 conv1d compile (untilize output is DRAM).
+        try:
+            ttnn.deallocate(y4)
+        except Exception:
+            pass
+        if squeeze_back:
+            try:
+                ttnn.deallocate(x4)
+            except Exception:
+                pass
+        return out
