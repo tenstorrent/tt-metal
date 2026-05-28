@@ -75,6 +75,15 @@ repos:
       pass_filenames: false
 - repo: local
   hooks:
+    - id: check-kernel-cb-ptrs
+      name: Forbid get_read_ptr on cb_reserve_back'd CBs (issue #39432)
+      entry: python3 scripts/check_kernel_cb_ptrs.py
+      language: system
+      pass_filenames: true
+      types_or: [c++, c]
+      files: /kernels?/.*\.(cpp|cc|h|hpp)$
+- repo: local
+  hooks:
     - id: block-ttnn-pybind-changes
       name: Prevent edits to frozen pybind11 sources under ttnn
       entry: python3 scripts/block_ttnn_pybind_changes.py
