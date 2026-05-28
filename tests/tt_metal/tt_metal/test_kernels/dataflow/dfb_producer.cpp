@@ -32,8 +32,7 @@ void kernel_main() {
         if (page_id >= chunk_offset + entries_per_core) {
             break;
         }
-        // DPRINT << "producer tile id " << tile_id << " page id " << page_id << ENDL();
-        // DEVICE_PRINT("producer tile id {} page id {}\n", tile_id, page_id);
+        // DPRINT("producer tile id {} page id {}\n", tile_id, page_id);
         if constexpr (implicit_sync) {
 #ifdef ARCH_QUASAR
             noc.async_read<Noc::TxnIdMode::ENABLED>(tensor_accessor, dfb, {.page_id = page_id}, {});
@@ -45,9 +44,7 @@ void kernel_main() {
             dfb.push_back(1);
         }
     }
-    // DPRINT << "PFW" << ENDL();
-    // DEVICE_PRINT("PFW\n");
+    // DPRINT("PFW\n");
     dfb.finish();
-    // DPRINT << "PFD" << ENDL();
-    // DEVICE_PRINT("PFD\n");
+    // DPRINT("PFD\n");
 }

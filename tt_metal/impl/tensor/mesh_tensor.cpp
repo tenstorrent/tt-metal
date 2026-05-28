@@ -35,9 +35,9 @@ std::shared_ptr<distributed::MeshBuffer> MeshTensor::mesh_buffer_invariant_break
     return impl().raw_mesh_buffer();
 }
 
-const distributed::MeshDevice& MeshTensor::device() const { return device_mut(); }
+const distributed::MeshDevice& MeshTensor::device() const { return mutable_device(); }
 
-distributed::MeshDevice& MeshTensor::device_mut() const { return *mesh_buffer().device(); }
+distributed::MeshDevice& MeshTensor::mutable_device() const { return *mesh_buffer().device(); }
 
 const TensorSpec& MeshTensor::tensor_spec() const { return impl().spec(); }
 

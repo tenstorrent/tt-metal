@@ -27,11 +27,9 @@
 
 #define ENABLE_COMBINE_DEBUG 0
 #if ENABLE_COMBINE_DEBUG
-#define DPRINT_COMBINE DPRINT
+#define DPRINT_COMBINE(...) DPRINT(__VA_ARGS__)
 #else
-#define DPRINT_COMBINE \
-    if (0)             \
-    DebugPrinter()
+#define DPRINT_COMBINE(...)
 #endif
 
 // Signal last element to compute to break out of loop
@@ -116,7 +114,7 @@ void kernel_main() {
     uint32_t local_expert_counts[experts_per_chip];
     for (uint32_t e = 0; e < experts_per_chip; e++) {
         local_expert_counts[e] = counter_l1_src[e];
-        DPRINT_COMBINE << "Expert " << e << ": tokens=" << counter_l1_src[e] << ENDL();
+        DPRINT_COMBINE("Expert {}: tokens={}\n", e, counter_l1_src[e]);
     }
 
     // ===== Step 3: For each assigned batch: trigger compute to untilize and read tiles =====
@@ -142,7 +140,7 @@ void kernel_main() {
         } else if (start_token + expert_tokens > max_dispatch_buffer_token_size) {
             expert_tokens = max_dispatch_buffer_token_size - start_token;
         }
-        DPRINT_COMBINE << "Expert " << local_expert << ": tokens=" << expert_tokens << ENDL();
+        DPRINT_COMBINE("Expert {}: tokens={}\n", local_expert, expert_tokens);
 
         uint32_t actual_batches = (expert_tokens + read_batch_size - 1) / read_batch_size;
 

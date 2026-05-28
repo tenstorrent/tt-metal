@@ -35,6 +35,17 @@ struct PagedUpdateCacheParams {
     // cache_num_heads * cache_block_size * cache_head_dim is enforced in
     // validate_on_program_cache_miss.
     const std::optional<uint32_t> num_kv_heads_override;
+    // Optional circular-buffer capacity (in tokens) for the cache view. When set, the
+    // kernel computes ``update_idx %= cache_position_modulo`` before resolving the
+    // page_table entry, so a bounded sliding-window cache of capacity N can be
+    // indexed by absolute positions ≥ N without falling off the page_table or
+    // collapsing to physical block 0. Required when paired with vLLM's
+    // SlidingWindowSpec, which sizes the per-layer page_table to
+    // sliding_window/block_size entries and zero-pads the rest. Must be a multiple of
+    // (effective) block_size — otherwise a wrapped position would split across blocks
+    // and the kernel can't address it. Paged-mode only (validated in
+    // validate_on_program_cache_miss).
+    const std::optional<uint32_t> cache_position_modulo;
 };
 
 struct PagedUpdateCacheInputs {

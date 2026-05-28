@@ -331,19 +331,6 @@ struct watcher_msg_t {
     struct debug_ring_buf_msg_t debug_ring_buf;
 };
 
-#ifndef CODEGEN
-// Host code does not need to use dprint_buf_msg_t (it uses DebugPrintMemLayout directly), skip because codegen can't
-// see DebugPrintMemLayout.
-struct dprint_buf_msg_t {
-    union {
-        DebugPrintMemLayout data[PROCESSOR_COUNT];
-        DevicePrintMemoryLayout shared_data;
-    };
-
-    static_assert(sizeof(data) == sizeof(shared_data));
-};
-#endif
-
 // NOC alignment max from BH
 constexpr uint32_t TT_ARCH_MAX_NOC_WRITE_ALIGNMENT = 16;
 
@@ -418,7 +405,7 @@ struct mailboxes_t {
     volatile uint8_t shared_globals_ready[MaxNumKernels];  // WAIT/GO per processor (Quasar DM kernel startup). +1 for
                                                            // the compute kernel.
     struct watcher_msg_t watcher;
-    struct dprint_buf_msg_t dprint_buf;  // CODEGEN:skip
+    struct DevicePrintMemoryLayout dprint_buf;  // CODEGEN:skip
     struct core_info_msg_t core_info;
     uint32_t aerisc_run_flag;  // 1: run active ethernet firmware, 0: return to base firmware (active erisc)
     alignas(TT_ARCH_MAX_NOC_WRITE_ALIGNMENT)  // CODEGEN:skip

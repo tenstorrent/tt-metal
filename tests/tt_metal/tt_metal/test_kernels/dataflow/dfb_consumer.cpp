@@ -22,8 +22,7 @@ void kernel_main() {
     DataflowBuffer dfb(dfb::in);
     Noc noc;
 
-    // DPRINT << "consumer_idx: " << consumer_idx << " num_entries_per_consumer: " << num_entries_per_consumer <<
-    // ENDL(); DEVICE_PRINT("consumer_idx: {} num_entries_per_consumer: {}\n", consumer_idx, num_entries_per_consumer);
+    // DPRINT("consumer_idx: {} num_entries_per_consumer: {}\n", consumer_idx, num_entries_per_consumer);
 
     uint32_t entry_size = dfb.get_entry_size();
     const auto tensor_accessor = TensorAccessor(ta::dst_tensor);
@@ -40,8 +39,7 @@ void kernel_main() {
         if (page_id >= chunk_offset + entries_per_core) {
             break;
         }
-        // DPRINT << "consumer tile id " << tile_id << " page id " << page_id << ENDL();
-        // DEVICE_PRINT("consumer tile id {} page id {}\n", tile_id, page_id);
+        // DPRINT("consumer tile id {} page id {}\n", tile_id, page_id);
         if constexpr (implicit_sync) {
 #ifdef ARCH_QUASAR
             noc.async_write<Noc::TxnIdMode::ENABLED>(dfb, tensor_accessor, {}, {.page_id = page_id});
@@ -54,9 +52,7 @@ void kernel_main() {
         }
     }
     dfb.finish();
-    // DPRINT << "CBW" << ENDL();
-    // DEVICE_PRINT("CBW\n");
+    // DPRINT("CBW\n");
     dfb.write_barrier(noc);
-    // DPRINT << "CBWD" << ENDL();
-    // DEVICE_PRINT("CBWD\n");
+    // DPRINT("CBWD\n");
 }
