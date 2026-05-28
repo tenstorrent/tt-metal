@@ -14,8 +14,7 @@
 namespace tt::tt_metal::experimental::metal2_host_api {
 
 // Forward-declare *Name typedefs that AdvancedOptions members reference.
-// Each is also declared in its owning spec header; C++ permits redeclaration
-// of identical typedefs in the same namespace.
+// (Each is also declared in its owning spec header.)
 using DFBSpecName = std::string;
 
 //------------------------------------------------------------
@@ -76,6 +75,7 @@ struct KernelAdvancedOptions {
     //--------------------------------
     // TODO: This is currently unimplemented.
     //       However, certain variadic kernels require this workaround.
+    //       (#45388 tracks the implementation of this feature.)
 
     //--------------------------------
     // Runtime varargs

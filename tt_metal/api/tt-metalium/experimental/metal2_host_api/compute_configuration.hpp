@@ -14,9 +14,9 @@ namespace tt::tt_metal::experimental::metal2_host_api {
 
 struct ComputeConfiguration {
     // Tensix hardware resource configuration for compute kernels.
-    // Gen1 and Gen2 configurations are identical.
-    //
-    // The Tensix Engine is a 3-stage pipeline (Unpack → Math → Pack).
+    // (Common to all Tenstorrent accelerators.)
+
+    // The Tensix Engine pipeline consists of Unpack, Math, and Pack stages.
     // There are two math engines:
     //  - FPU reads operands from the SrcA / SrcB register files (~19-bit),
     //    writes to the Dest register file (16- or 32-bit, configurable).
