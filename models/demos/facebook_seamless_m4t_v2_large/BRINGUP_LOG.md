@@ -4,7 +4,7 @@
 **Slug:** `facebook_seamless_m4t_v2_large`
 **Target Device:** p150 (blackhole)
 **Started:** 2026-05-28T00:18:15Z
-**Updated:** 2026-05-28T02:09:29Z
+**Updated:** 2026-05-28T02:56:23Z
 
 ## Block Status
 
@@ -19,27 +19,27 @@
 | scaled_word_embedding | debug | n/a | — | 0 |  |
 | scaled_word_embedding | optimization | pending | — | 0 |  |
 | sinusoidal_positional_embedding | reference | done | 1.000000 | 1 |  |
-| sinusoidal_positional_embedding | ttnn | pending | — | 0 |  |
+| sinusoidal_positional_embedding | ttnn | done | 0.999999 | 1 | encoder + decoder-incremental both PCC>0.999999 on p150 |
 | sinusoidal_positional_embedding | debug | n/a | — | 0 |  |
 | sinusoidal_positional_embedding | optimization | pending | — | 0 |  |
 | seamless_mha | reference | done | 1.000000 | 1 |  |
-| seamless_mha | ttnn | pending | — | 0 |  |
+| seamless_mha | ttnn | done | 0.997092 | 1 | self_pcc=0.99983, cross_pcc=0.99709 on p150. ttnn.linear + fused SDPA. |
 | seamless_mha | debug | n/a | — | 0 |  |
 | seamless_mha | optimization | pending | — | 0 |  |
 | seamless_ffn | reference | done | 1.000000 | 2 |  |
-| seamless_ffn | ttnn | pending | — | 0 |  |
+| seamless_ffn | ttnn | done | 0.999902 | 1 | 2x ttnn.linear + ttnn.relu, bf16 weights/DRAM, HiFi4+fp32_dest_acc. PCC 0.99990. |
 | seamless_ffn | debug | n/a | — | 0 |  |
 | seamless_ffn | optimization | pending | — | 0 |  |
 | conformer_ffn | reference | done | 1.000000 | 1 | SwiGLU/SiLU FFN bit-equiv to HF SeamlessM4Tv2ConformerFeedForward at [1,128,1024]. Subagent died on return; PCC re-verified post-hoc. |
-| conformer_ffn | ttnn | pending | — | 0 |  |
+| conformer_ffn | ttnn | done | 0.999967 | 1 | ttnn.linear x2 + ttnn.silu, hidden=1024 intermediate=4096, bf16 DRAM. |
 | conformer_ffn | debug | n/a | — | 0 |  |
 | conformer_ffn | optimization | pending | — | 0 |  |
 | conformer_self_attention | reference | done | 1.000000 | 2 |  |
-| conformer_self_attention | ttnn | pending | — | 0 |  |
+| conformer_self_attention | ttnn | done | 0.999793 | 1 | Manual QK^T+relbias+mask+softmax+@V; bias precomputed [1,T,D,T] on host. unmasked=masked PCC=0.99979. |
 | conformer_self_attention | debug | n/a | — | 0 |  |
 | conformer_self_attention | optimization | pending | — | 0 |  |
 | conformer_convolution_module | reference | done | 1.000000 | 1 | Causal depthwise (left pad 30), all convs bias=False, swish=SiLU; bit-equiv to HF at [1,128,1024]. |
-| conformer_convolution_module | ttnn | pending | — | 0 |  |
+| conformer_convolution_module | ttnn | done | 0.999972 | 1 | Pointwise via ttnn.linear, ttnn.glu, causal ttnn.conv1d (depthwise k=31, pad=[30,0]). PCC 0.99997. |
 | conformer_convolution_module | debug | n/a | — | 0 |  |
 | conformer_convolution_module | optimization | pending | — | 0 |  |
 | variance_predictor | reference | done | 1.000000 | 1 |  |
@@ -109,16 +109,16 @@
 
 ## Recent Ticks
 
-- tick 5 (2026-05-28T00:46:55Z): reference[variance_predictor,hifigan_residual_block] — ok
-- tick 6 (2026-05-28T00:52:10Z): reference[conformer_feature_projection,conformer_encoder_layer] — ok
-- tick 7 (2026-05-28T00:56:00Z): reference[text_encoder_layer,text_decoder_layer] — ok
-- tick 8 (2026-05-28T01:02:59Z): reference[t2u_decoder_layer,conformer_adapter_layer] — ok
-- tick 9 (2026-05-28T01:28:00Z): reference[text_encoder,text_decoder] — ok
-- tick 10 (2026-05-28T01:35:44Z): reference[speech_encoder,t2u_encoder] — ok
 - tick 11 (2026-05-28T01:44:33Z): reference[t2u_decoder,hifigan_vocoder] — ok
 - tick 12 (2026-05-28T01:51:42Z): reference[code_hifigan_vocoder,seamless_m4t_v2] -- REFERENCE PHASE COMPLETE — ok
 - tick 13 (2026-05-28T02:05:47Z): ttnn[layernorm] — ok
 - tick 14 (2026-05-28T02:09:29Z): ttnn[scaled_word_embedding] — ok
+- tick 15 (2026-05-28T02:26:23Z): ttnn[sinusoidal_positional_embedding] — ok
+- tick 16 (2026-05-28T02:31:09Z): ttnn[seamless_mha] — ok
+- tick 17 (2026-05-28T02:35:53Z): ttnn[seamless_ffn] — ok
+- tick 18 (2026-05-28T02:40:42Z): ttnn[conformer_ffn] — ok
+- tick 19 (2026-05-28T02:48:25Z): ttnn[conformer_self_attention] — ok
+- tick 20 (2026-05-28T02:56:23Z): ttnn[conformer_convolution_module] — ok
 
 ## Host-Resident Exceptions
 

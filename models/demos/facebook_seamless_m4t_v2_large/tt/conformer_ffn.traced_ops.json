@@ -1,0 +1,15 @@
+[
+  "ttnn.linear",
+  "MatmulDeviceOperation",
+  "tt::tt_metal::create_device_tensor",
+  "ttnn.silu",
+  "UnaryDeviceOperation",
+  "tt::tt_metal::create_device_tensor",
+  "ttnn.deallocate",
+  "Tensor::deallocate",
+  "ttnn.linear",
+  "MatmulDeviceOperation",
+  "tt::tt_metal::create_device_tensor",
+  "ttnn.deallocate",
+  "Tensor::deallocate"
+]

@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-28T00:18:15Z",
-  "updated_at": "2026-05-28T02:09:29Z",
+  "updated_at": "2026-05-28T02:56:23Z",
   "components": [
     {
       "name": "layernorm",
@@ -103,8 +103,15 @@
         ]
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 0.9999990779893726,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/sinusoidal_positional_embedding.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tests/test_tt_sinusoidal_positional_embedding.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tt/sinusoidal_positional_embedding.traced_ops.json"
+        ],
+        "notes": "encoder + decoder-incremental both PCC>0.999999 on p150"
       },
       "debug": {
         "status": "n/a"
@@ -134,8 +141,15 @@
         ]
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 0.9970923619206976,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/seamless_mha.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tests/test_tt_seamless_mha.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tt/seamless_mha.traced_ops.json"
+        ],
+        "notes": "self_pcc=0.99983, cross_pcc=0.99709 on p150. ttnn.linear + fused SDPA."
       },
       "debug": {
         "status": "n/a"
@@ -165,8 +179,15 @@
         ]
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 0.9999022284354855,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/seamless_ffn.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tests/test_tt_seamless_ffn.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tt/seamless_ffn.traced_ops.json"
+        ],
+        "notes": "2x ttnn.linear + ttnn.relu, bf16 weights/DRAM, HiFi4+fp32_dest_acc. PCC 0.99990."
       },
       "debug": {
         "status": "n/a"
@@ -197,8 +218,15 @@
         "notes": "SwiGLU/SiLU FFN bit-equiv to HF SeamlessM4Tv2ConformerFeedForward at [1,128,1024]. Subagent died on return; PCC re-verified post-hoc."
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 0.9999671931412181,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/conformer_ffn.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tests/test_tt_conformer_ffn.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tt/conformer_ffn.traced_ops.json"
+        ],
+        "notes": "ttnn.linear x2 + ttnn.silu, hidden=1024 intermediate=4096, bf16 DRAM."
       },
       "debug": {
         "status": "n/a"
@@ -228,8 +256,15 @@
         ]
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 0.9997925595038162,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/conformer_self_attention.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tests/test_tt_conformer_self_attention.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tt/conformer_self_attention.traced_ops.json"
+        ],
+        "notes": "Manual QK^T+relbias+mask+softmax+@V; bias precomputed [1,T,D,T] on host. unmasked=masked PCC=0.99979."
       },
       "debug": {
         "status": "n/a"
@@ -263,8 +298,15 @@
         "notes": "Causal depthwise (left pad 30), all convs bias=False, swish=SiLU; bit-equiv to HF at [1,128,1024]."
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "pcc": 0.9999719426884541,
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/conformer_convolution_module.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tests/test_tt_conformer_convolution_module.py",
+          "models/demos/facebook_seamless_m4t_v2_large/tt/conformer_convolution_module.traced_ops.json"
+        ],
+        "notes": "Pointwise via ttnn.linear, ttnn.glu, causal ttnn.conv1d (depthwise k=31, pad=[30,0]). PCC 0.99997."
       },
       "debug": {
         "status": "n/a"
@@ -937,6 +979,42 @@
       "tick": 14,
       "ts": "2026-05-28T02:09:29Z",
       "action": "ttnn[scaled_word_embedding]",
+      "result": "ok"
+    },
+    {
+      "tick": 15,
+      "ts": "2026-05-28T02:26:23Z",
+      "action": "ttnn[sinusoidal_positional_embedding]",
+      "result": "ok"
+    },
+    {
+      "tick": 16,
+      "ts": "2026-05-28T02:31:09Z",
+      "action": "ttnn[seamless_mha]",
+      "result": "ok"
+    },
+    {
+      "tick": 17,
+      "ts": "2026-05-28T02:35:53Z",
+      "action": "ttnn[seamless_ffn]",
+      "result": "ok"
+    },
+    {
+      "tick": 18,
+      "ts": "2026-05-28T02:40:42Z",
+      "action": "ttnn[conformer_ffn]",
+      "result": "ok"
+    },
+    {
+      "tick": 19,
+      "ts": "2026-05-28T02:48:25Z",
+      "action": "ttnn[conformer_self_attention]",
+      "result": "ok"
+    },
+    {
+      "tick": 20,
+      "ts": "2026-05-28T02:56:23Z",
+      "action": "ttnn[conformer_convolution_module]",
       "result": "ok"
     }
   ],

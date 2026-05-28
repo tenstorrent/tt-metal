@@ -1,0 +1,14 @@
+{
+  "block": "conformer_self_attention",
+  "ops": [
+    "ttnn.linear",
+    "ttnn.reshape",
+    "ttnn.transpose",
+    "ttnn.permute",
+    "ttnn.matmul",
+    "ttnn.multiply",
+    "ttnn.add",
+    "ttnn.softmax",
+    "ttnn.deallocate"
+  ]
+}

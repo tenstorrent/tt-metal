@@ -84,6 +84,10 @@ KIND_REQUIRED_KERNELS: dict[str, list[set[str]]] = {
     "embedding": [
         {"ttnn.embedding"},
     ],
+    "conv": [
+        {"ttnn.conv1d", "ttnn.conv2d", "ttnn.linear", "ttnn.matmul"},
+    ],
+    "other": [],
 }
 
 

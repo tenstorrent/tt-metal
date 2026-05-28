@@ -1,0 +1,10 @@
+{
+  "block": "seamless_mha",
+  "ops": [
+    "ttnn.linear",
+    "ttnn.reshape",
+    "ttnn.transpose",
+    "ttnn.transformer.scaled_dot_product_attention",
+    "ttnn.deallocate"
+  ]
+}
