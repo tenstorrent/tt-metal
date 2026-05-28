@@ -24,6 +24,12 @@ End-to-end demo metrics:
 | **Full demo runtime** (s)             | 29.9914       | 17.4228    |
 
 
+## Prerequisite
+
+```bash
+export HF_MODEL=mistralai/Mistral-Small-3.1-24B-Instruct-2503
+```
+
 ## End-to-end demo test
 
 ```bash
