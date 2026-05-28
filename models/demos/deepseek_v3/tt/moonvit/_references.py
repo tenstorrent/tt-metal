@@ -22,7 +22,6 @@ from __future__ import annotations
 import copy
 from typing import Any
 
-
 # --- Attribute-path helpers ---------------------------------------------------
 
 
@@ -54,8 +53,7 @@ def _vision_tower(args):
         except AttributeError:
             continue
     raise AttributeError(
-        f"Could not locate vision_tower on {type(model).__name__}. "
-        "Tried: vision_tower, model.vision_tower."
+        f"Could not locate vision_tower on {type(model).__name__}. " "Tried: vision_tower, model.vision_tower."
     )
 
 
@@ -66,9 +64,7 @@ def _projector(args):
             return _resolve(model, path)
         except AttributeError:
             continue
-    raise AttributeError(
-        f"Could not locate multi_modal_projector on {type(model).__name__}."
-    )
+    raise AttributeError(f"Could not locate multi_modal_projector on {type(model).__name__}.")
 
 
 def _encoder_layer(args, layer_num: int):
@@ -83,13 +79,11 @@ def _encoder_layer(args, layer_num: int):
             blocks = getattr(enc, path)
             if layer_num >= len(blocks):
                 raise IndexError(
-                    f"Requested encoder layer {layer_num} but encoder.{path} "
-                    f"has only {len(blocks)} entries."
+                    f"Requested encoder layer {layer_num} but encoder.{path} " f"has only {len(blocks)} entries."
                 )
             return blocks[layer_num]
     raise AttributeError(
-        f"Could not find a block list on encoder ({type(enc).__name__}). "
-        "Tried: blocks, layers, encoder_layers."
+        f"Could not find a block list on encoder ({type(enc).__name__}). " "Tried: blocks, layers, encoder_layers."
     )
 
 
@@ -115,8 +109,7 @@ def reference_layernorm(args, layer_num: int = 0, which: str = "norm0") -> Any:
     layer = _encoder_layer(args, layer_num)
     if not hasattr(layer, which):
         raise AttributeError(
-            f"Encoder layer {layer_num} has no `{which}` "
-            f"(found: {[n for n, _ in layer.named_children()]})."
+            f"Encoder layer {layer_num} has no `{which}` " f"(found: {[n for n, _ in layer.named_children()]})."
         )
     return _clone(getattr(layer, which))
 
@@ -127,8 +120,7 @@ def reference_mlp(args, layer_num: int = 0) -> Any:
     if hasattr(layer, "mlp"):
         return _clone(layer.mlp)
     raise AttributeError(
-        f"Encoder layer {layer_num} has no `mlp` "
-        f"(found: {[n for n, _ in layer.named_children()]})."
+        f"Encoder layer {layer_num} has no `mlp` " f"(found: {[n for n, _ in layer.named_children()]})."
     )
 
 
@@ -169,7 +161,6 @@ def reference_patch_merger(args) -> Any:
     # Import lazily — trust_remote_code modules aren't on sys.path until
     # the model has been loaded.
     args.hf_model  # ensure trust_remote_code module is registered
-    import importlib
 
     # The HF cache loads modeling_kimi_vl into a synthetic module path.
     # Walk sys.modules to find it.

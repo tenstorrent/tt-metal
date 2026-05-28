@@ -28,7 +28,6 @@ from typing import Any
 
 import torch
 
-
 # Default HF model id; override via DEEPSEEK_MOONVIT_HF_MODEL env var or constructor kwarg.
 DEFAULT_HF_MODEL_ID = "moonshotai/Kimi-VL-A3B-Instruct"
 
@@ -117,9 +116,7 @@ class MoonViTModelArgs:
         if self._hf_config is None:
             from transformers import AutoConfig
 
-            self._hf_config = AutoConfig.from_pretrained(
-                self.hf_model_id, trust_remote_code=self.trust_remote_code
-            )
+            self._hf_config = AutoConfig.from_pretrained(self.hf_model_id, trust_remote_code=self.trust_remote_code)
             self._assert_hf_matches_plan()
         return self._hf_config
 
