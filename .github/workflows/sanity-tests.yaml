@@ -427,7 +427,7 @@ jobs:
       - ttnn-unit-tests
       - models-unit-tests
       - tt-train-cpp-unit-tests
-      - run-profiler-regression
+      - profiler-tests
       - t3000-apc-fast-tests
       - ops-unit-tests
       - ttsim-integration-tests
