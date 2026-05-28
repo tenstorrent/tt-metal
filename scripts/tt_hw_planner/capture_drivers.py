@@ -98,12 +98,17 @@ def _synthesize_for_param(
     param: inspect.Parameter,
     model: Any,
     pixel_values: Any,
+    *,
+    aggressive: bool = False,
 ) -> Any:
     """Best-effort synthesis of a single required parameter.
 
-    Strategy: name-based dispatch first (mirrors the existing _arg_for in
-    capture_inputs.py for the common cases), then type-annotation fallback,
-    then recursive session-object synthesis for session/state-named params.
+    `aggressive=True` is set by callers that are CONSTRUCTING a class
+    (e.g. building a Sam2VideoInferenceSession to be passed as a required
+    model.forward arg). In aggressive mode `Optional[Tensor]` is treated
+    as `Tensor` -- because passing None into a class meant to be the
+    forward's session would leave it un-initialized, defeating the point
+    of constructing it at all.
     """
     name_lower = name.lower()
 
@@ -118,6 +123,15 @@ def _synthesize_for_param(
     ann = param.annotation
     if ann is not inspect.Parameter.empty:
         if _is_optional_or_none(ann):
+            if aggressive and _is_tensor_annotation(ann):
+                try:
+                    import torch
+
+                    if pixel_values is not None and hasattr(pixel_values, "shape"):
+                        return pixel_values
+                    return torch.randn(1, 64, 768)
+                except ImportError:
+                    return None
             return None
         if _is_tensor_annotation(ann):
             try:
@@ -132,6 +146,49 @@ def _synthesize_for_param(
             return 0
         if ann is str:
             return ""
+
+        cls_result = _try_construct_class_typed_arg(ann, model, pixel_values)
+        if cls_result is not _OMIT:
+            return cls_result
+
+    return _OMIT
+
+
+_FACTORY_METHOD_PATTERN = re.compile(r"^(?:from_|new_from|create_from|build_from)")
+
+
+def _try_construct_class_typed_arg(cls: Any, model: Any, pixel_values: Any) -> Any:
+    """Try to construct an instance of `cls` by:
+      1. Iterating its classmethods matching common factory patterns
+         (`from_*`, `new_from_*`, `create_from_*`, `build_from_*`) and
+         invoking the first one that succeeds with synthesized args.
+      2. Falling back to default construction `cls()` (synthesizing
+         required positional/keyword args).
+
+    Generic across any model that uses a custom class (e.g. a session,
+    state, or context object) as a required forward argument. Matches by
+    classmethod name pattern -- never references a specific HF class.
+    """
+    if not inspect.isclass(cls):
+        return _OMIT
+
+    for method_name in dir(cls):
+        if not _FACTORY_METHOD_PATTERN.match(method_name):
+            continue
+        method = getattr(cls, method_name, None)
+        if not callable(method):
+            continue
+        try:
+            instance = _invoke_with_synthesized_args(method, model, pixel_values)
+            if instance is not None:
+                return instance
+        except Exception:
+            continue
+
+    try:
+        return _invoke_with_synthesized_args(cls, model, pixel_values, aggressive=True)
+    except Exception:
+        pass
 
     return _OMIT
 
@@ -158,8 +215,14 @@ def _invoke_with_synthesized_args(
     method: Callable,
     model: Any,
     pixel_values: Any,
+    *,
+    aggressive: bool = False,
 ) -> Any:
     """Invoke `method` by introspecting its signature and synthesizing required args.
+
+    `aggressive=True` propagates to `_synthesize_for_param` and is set by
+    `_try_construct_class_typed_arg` when constructing a class instance to
+    be used as a required forward argument. See that function's docstring.
 
     Returns None on any failure (caller decides what that means). Never raises.
     """
@@ -174,8 +237,15 @@ def _invoke_with_synthesized_args(
         if param.kind in (param.VAR_POSITIONAL, param.VAR_KEYWORD):
             continue
         if param.default is not inspect.Parameter.empty:
+            if not aggressive:
+                continue
+            if _is_tensor_annotation(param.annotation):
+                synth = _synthesize_for_param(pname, param, model, pixel_values, aggressive=True)
+                if synth is _OMIT or synth is None:
+                    continue
+                kwargs[pname] = synth
             continue
-        synth = _synthesize_for_param(pname, param, model, pixel_values)
+        synth = _synthesize_for_param(pname, param, model, pixel_values, aggressive=aggressive)
         if synth is _OMIT:
             return None
         kwargs[pname] = synth
