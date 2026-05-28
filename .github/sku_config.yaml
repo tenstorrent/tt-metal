@@ -51,14 +51,6 @@ skus:
       - topology-6u
       - in-service
 
-  # Temporary SKU separating UF machines
-  wh_galaxy_perf_uf:
-    runs_on:
-      - arch-wormhole_b0
-      - pipeline-perf-uf
-      - topology-6u
-      - in-service
-
   wh_galaxy_release:
     runs_on:
       - arch-wormhole_b0
