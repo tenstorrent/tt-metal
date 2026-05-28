@@ -130,23 +130,26 @@ SUPPORTED = {
         "bf16_hifi4_bf16acc",
         "bf8b_hifi4_bf16acc",
     ],
-    "layout": [ttnn.ROW_MAJOR_LAYOUT],
+    # Refinement 2: TILE_LAYOUT support for the input tensor. Handled at
+    # the entry point via ttnn.to_layout (TILE → RM on the way in, RM →
+    # TILE on the way out). The kernel itself is RM-input / RM-output —
+    # the layout decision lives at the data-access boundary, not in the
+    # math (see /memory-layouts §1 and softmax-R3's mirror-image wrap).
+    "layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
     "alignment": ["tile_aligned"],
     "rank": [2, 3, 4],
     "affine": ["gamma_beta", "gamma_only", "no_affine"],
     # Refinement 1: extended to all three affine dtypes. bf8b in
-    # ROW_MAJOR is INVALID (per feature_spec.py) and bf8b in TILE is
-    # currently EXCLUDED below (TILE-layout affine isn't supported
-    # until Refinement 2), so bf8b is also unreachable here today; it
-    # is listed for the same honesty reason as precision above.
+    # ROW_MAJOR is INVALID (per feature_spec.py); Refinement 2 lifts the
+    # input-layout restriction, making bf8b in TILE reachable.
     "affine_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
-    # Both TILE and ROW_MAJOR appear: when an affine tensor is supplied
-    # the op accepts ROW_MAJOR_LAYOUT only (the kernel tilizes internally).
-    # When no affine is supplied, feature_spec.py canonicalises the
-    # affine_layout axis to TILE_LAYOUT (so the cartesian's "no_affine"
-    # case has a single non-INVALID survivor). We keep both layouts in
-    # SUPPORTED and EXCLUDE the (TILE + affine-present) combos below,
-    # so the canonical no_affine cell isn't xfailed in the golden suite.
+    # Refinement 2: both TILE and ROW_MAJOR are now accepted for the
+    # supplied affine tensor. The entry point converts TILE-layout
+    # gamma/beta to ROW_MAJOR before invoking the kernel (the kernel's
+    # in-kernel tilize expects RM data). For the no_affine cell,
+    # feature_spec.py canonicalises (affine_dtype, affine_layout) to
+    # (float32, TILE_LAYOUT) — validate() mirrors that canonical pair
+    # via _NO_TENSOR_AFFINE_{DTYPE,LAYOUT} below.
     "affine_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
 }
 
@@ -155,15 +158,12 @@ SUPPORTED = {
 # 3. EXCLUSIONS
 # ---------------------------------------------------------------------------
 #
-# When gamma/beta is actually supplied, the op requires ROW_MAJOR for
-# those tensors (the in-kernel tilize wraps RM data). TILE-layout affine
-# tensors are EXCLUSIONS, not INVALID: a future refinement could accept
-# TILE gamma/beta directly (skipping the in-kernel tilize for those CBs).
+# Refinement 2: removed the two `(affine=gamma_*, affine_layout=TILE)`
+# pairs. TILE-layout gamma/beta is now accepted — the entry point converts
+# them to ROW_MAJOR_LAYOUT before invoking the kernel, mirroring the input-
+# layout wrap. No exclusions remain for this op today.
 
-EXCLUSIONS = [
-    {"affine": "gamma_only", "affine_layout": ttnn.TILE_LAYOUT},
-    {"affine": "gamma_beta", "affine_layout": ttnn.TILE_LAYOUT},
-]
+EXCLUSIONS = []
 
 
 # ---------------------------------------------------------------------------
@@ -305,8 +305,7 @@ def layer_norm(
     memory_config: ttnn.MemoryConfig = None,
 ) -> ttnn.Tensor:
     """
-    Per-row layer normalization over the last dim of a ROW_MAJOR_LAYOUT
-    float32 tensor.
+    Per-row layer normalization over the last dim of an input tensor.
 
         y[..., h, w] = ((x[..., h, w] - mean(x[..., h, :])) /
                         sqrt(var(x[..., h, :]) + epsilon))
@@ -314,10 +313,14 @@ def layer_norm(
                        + (beta[w]  if beta  else 0)
 
     Args:
-        input_tensor: rank ∈ {2, 3, 4}, float32, ROW_MAJOR_LAYOUT, on-device.
+        input_tensor: rank ∈ {2, 3, 4}, float32 / bfloat16 / bfloat8_b,
+            layout ∈ {ROW_MAJOR_LAYOUT, TILE_LAYOUT}, on-device.
             The final two dims must be tile-aligned (H % 32 == 0, W % 32 == 0).
-        gamma: optional scale tensor of shape (1, 1, 1, W), float32, RM.
-        beta:  optional shift tensor of shape (1, 1, 1, W), float32, RM.
+        gamma: optional scale tensor of shape (1, 1, 1, W); dtype ∈
+            {float32, bfloat16, bfloat8_b}; layout ∈ {ROW_MAJOR_LAYOUT,
+            TILE_LAYOUT}.
+        beta:  optional shift tensor of shape (1, 1, 1, W); same dtype /
+            layout surface as gamma.
         epsilon: positive float; added to the variance before rsqrt.
         compute_kernel_config: None (entry point installs the Phase-0
             default of math_fidelity=HiFi4, fp32_dest_acc_en=True), or an
@@ -328,6 +331,8 @@ def layer_norm(
 
     Returns:
         Output tensor with the same shape, dtype, and layout as input_tensor.
+        Layout is preserved end-to-end — the op wraps with ttnn.to_layout
+        so the RM-input / RM-output kernel below sees the canonical form.
     """
     if compute_kernel_config is None:
         compute_kernel_config = _default_compute_kernel_config()
@@ -343,33 +348,63 @@ def layer_norm(
     device = input_tensor.device()
     output_memory_config = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
 
-    # Output shape = input shape; same dtype and (RM) layout.
-    output_shape = list(input_tensor.shape)
+    # ------------------------------------------------------------------
+    # Refinement 2 entry-point wrapping.
+    #
+    # The kernel beneath this entry point is an RM-input / RM-output
+    # layer-norm. SUPPORTED["layout"] now allows TILE_LAYOUT for the
+    # input tensor and TILE_LAYOUT for gamma/beta — handled here by
+    # converting any TILE tensor to ROW_MAJOR before the kernel runs
+    # and restoring the user's original layout on the way out.
+    #
+    # This mirrors softmax-R3 (which accepts RM by wrapping to TILE).
+    # ------------------------------------------------------------------
+    original_layout = input_tensor.layout
+    needs_layout_convert = original_layout == ttnn.TILE_LAYOUT
+
+    work_input = input_tensor
+    work_gamma = gamma
+    work_beta = beta
+    if needs_layout_convert:
+        work_input = ttnn.to_layout(work_input, ttnn.ROW_MAJOR_LAYOUT)
+    if work_gamma is not None and work_gamma.layout == ttnn.TILE_LAYOUT:
+        work_gamma = ttnn.to_layout(work_gamma, ttnn.ROW_MAJOR_LAYOUT)
+    if work_beta is not None and work_beta.layout == ttnn.TILE_LAYOUT:
+        work_beta = ttnn.to_layout(work_beta, ttnn.ROW_MAJOR_LAYOUT)
+
+    work_shape = list(work_input.shape)
 
     # allocate_tensor_on_device requires POSITIONAL args, not keyword args.
-    output_tensor = ttnn.allocate_tensor_on_device(
-        ttnn.Shape(output_shape),
-        input_tensor.dtype,
-        input_tensor.layout,
+    # The inner output is always RM (the kernel writes RM sticks).
+    work_output = ttnn.allocate_tensor_on_device(
+        ttnn.Shape(work_shape),
+        work_input.dtype,
+        work_input.layout,
         device,
         output_memory_config,
     )
 
     program_descriptor = create_program_descriptor(
-        input_tensor,
-        output_tensor,
-        gamma=gamma,
-        beta=beta,
+        work_input,
+        work_output,
+        gamma=work_gamma,
+        beta=work_beta,
         epsilon=epsilon,
         compute_kernel_config=compute_kernel_config,
     )
 
     # Build the IO tensor list — output tensor must be LAST.
-    io_tensors = [input_tensor]
-    if gamma is not None:
-        io_tensors.append(gamma)
-    if beta is not None:
-        io_tensors.append(beta)
-    io_tensors.append(output_tensor)
+    io_tensors = [work_input]
+    if work_gamma is not None:
+        io_tensors.append(work_gamma)
+    if work_beta is not None:
+        io_tensors.append(work_beta)
+    io_tensors.append(work_output)
 
-    return ttnn.generic_op(io_tensors, program_descriptor)
+    output_tensor = ttnn.generic_op(io_tensors, program_descriptor)
+
+    # Restore the user's original layout (TILE if they supplied TILE).
+    if needs_layout_convert:
+        output_tensor = ttnn.to_layout(output_tensor, original_layout)
+
+    return output_tensor
