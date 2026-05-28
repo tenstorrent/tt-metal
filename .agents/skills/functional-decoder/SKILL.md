@@ -37,8 +37,6 @@ The exact forward signatures should fit the model. Keep them keyword-friendly an
 
 Start by understanding the HF model Load `AutoConfig`, inspect the installed `configuration_*.py` and `modeling_*.py`, and identify the decoder layer, attention, RoPE, cache API, MLP/MoE path, residual order, norm behavior, activation, bias flags, head shapes, and layer-kind differences. Trace through the model's execution line by line to make sure you understand it.
 
-Read nearby TTNN implementations before inventing new structure. Good starting points are `models/common/modules/*`, `models/demos/gpt_oss/tt/*` and `models/demos/gemma4/tt/*`.
-
 Implement correctness first. BF16, tile layout, and DRAM memory are fine while proving semantics. Move weight conversion, reshaping, dtype selection, `ttnn.as_tensor`, and cache construction into `from_state_dict` or setup helpers. Keep runtime prefill/decode free of hidden `torch`, `from_torch`, `to_torch`, or host fallback except explicit test boundaries.
 
 For MoE models, validate the real router/gate and active experts end-to-end. Component tests for gate or experts are useful diagnostics, but the decoder result should include the gate-selected expert path a real model run would use. Target single-user bringup with a routed runtime path: prepare W0/W1/W2 using `ttnn.experimental.moe_compute_utils`, dispatch selected tokens with `ttnn.experimental.all_to_all_dispatch_metadata`, compute experts with `ttnn.experimental.moe_compute`, then use the model-appropriate score-weighted combine/reduce. If `models/common/modules/moe/tt_moe_decode.py` exists in your checkout, start there; otherwise read the DeepSeek MoE optimized path and the `all_to_all_dispatch_metadata` / `moe_compute` tests.
@@ -55,4 +53,4 @@ Use `PCC >= 0.995` as the default acceptance bar for prefill and decode unless t
 - Full advertised prefill/decode sequence length (test the longest you can fit if the reference model's maximum is too large for the device to fit)
 - Determinism for repeated identical inputs tested.
 - Evidence there are no torch or host calls required within a single prefill or decode pass - everything runs and stays on device.
-- Watcher-clean run when the environment supports it, or a clear reason it was not run.
+- Watcher-clean run when the environment supports it, or a clear reason it was not run. Watcher should be run by setting TT_METAL_WATCHER=10, don't skip asserts or anything.
