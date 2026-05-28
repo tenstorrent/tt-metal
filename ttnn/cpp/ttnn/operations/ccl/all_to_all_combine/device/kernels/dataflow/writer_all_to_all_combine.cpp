@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
@@ -103,6 +104,13 @@ void kernel_main() {
     const auto init_semaphore_addr = get_arg_val<uint32_t>(rt_arg_count++);
     const uint32_t token_start_idx = get_arg_val<uint32_t>(rt_arg_count++);
     const uint32_t token_end_idx = get_arg_val<uint32_t>(rt_arg_count++);
+
+    // DEBUG: print the values the kernel ACTUALLY reads at runtime (DPRINT no-ops
+    // if device-side prints aren't enabled, so this is safe to leave compiled in).
+    DPRINT << "[a2a_combine KERNEL DBG] linearized_mesh_coord=" << (uint32_t)linearized_mesh_coord
+           << " src_chip_id=" << (uint32_t)src_chip_id << " output_base_addr=0x" << HEX() << output_base_addr
+           << " global_sema=0x" << HEX() << global_semaphore_addr << " init_sema=0x" << HEX() << init_semaphore_addr
+           << " tok_range=[" << DEC() << token_start_idx << "," << token_end_idx << ")" << ENDL();
 
     std::array<WorkerToFabricEdmSender, Num_Directions> fabric_connections;
     open_direction_connections_async(directions, fabric_connections, rt_arg_count);
