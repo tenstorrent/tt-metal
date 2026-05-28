@@ -270,6 +270,7 @@ class WanTransformer3DModel(Module):
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = True,
         model_type: str = "t2v",
+        output_dtype: ttnn.DataType = ttnn.float32,
     ) -> None:
         super().__init__()
 
@@ -280,6 +281,7 @@ class WanTransformer3DModel(Module):
         self.fsdp_mesh_axis = self.parallel_config.sequence_parallel.mesh_axis if is_fsdp else None
         self.model_type = model_type
         self.cached_rope_features = {}
+        self.output_dtype = output_dtype
 
         assert model_type in ["t2v", "i2v"], "model_type must be either t2v or i2v"
         if model_type == "i2v":
@@ -635,17 +637,17 @@ class WanTransformer3DModel(Module):
                 spatial_norm_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
             )
 
-        proj_out_1BNI = self.proj_out(
-            spatial_norm_1BND, compute_kernel_config=self.hifi4_compute_kernel_config, dtype=ttnn.float32
+        spatial_1BNI = self.proj_out(
+            spatial_norm_1BND, compute_kernel_config=self.hifi4_compute_kernel_config, dtype=self.output_dtype
         )
 
+        # Gather fp32 spatial output across sequence parallel devices (remains on device)
         if gather_output:
-            # Gather fp32 spatial output across sequence parallel devices (remains on device)
-            proj_out_1BNI = self.ccl_manager.all_gather_persistent_buffer(
-                proj_out_1BNI, dim=2, mesh_axis=self.parallel_config.sequence_parallel.mesh_axis
+            spatial_1BNI = self.ccl_manager.all_gather_persistent_buffer(
+                spatial_1BNI, dim=2, mesh_axis=self.parallel_config.sequence_parallel.mesh_axis
             )
 
-        return proj_out_1BNI
+        return spatial_1BNI
 
     # Prep run is False because we warmup the entire pipeline first. Remove if this is not desired.
     @traced_function(device=lambda self: self.mesh_device, clone_prep_inputs=False, prep_run=False)
