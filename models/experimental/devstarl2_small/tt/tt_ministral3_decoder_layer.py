@@ -11,6 +11,13 @@ from models.experimental.devstarl2_small.tt.tt_ministralattn import TtMinistralA
 from models.experimental.devstarl2_small.tt.tt_ministralmlp import TtMinistralMLP
 from models.experimental.devstarl2_small.tt.tt_ministralrmsnorm import TtMinistralRMSNorm
 from models.tt_transformers.tt.common import Mode
+from models.tt_transformers.tt.model_config import (
+    MathFidelitySetting,
+    ModelOptimizations,
+    OpGroup,
+    PrecisionSetting,
+    TensorGroup,
+)
 
 
 class TtMinistral3DecoderLayer(LightweightModule):
@@ -33,6 +40,22 @@ class TtMinistral3DecoderLayer(LightweightModule):
         super().__init__()
         self.layer_num = layer_num
         self.tt_ccl = tt_ccl  # fabric num_links for all_gather
+        model_args.decoders_optimizations.set_decoder_conf(
+            layer_num,
+            ModelOptimizations(
+                {
+                    "TensorPrecision": {
+                        TensorGroup.WQKV: PrecisionSetting.BFP8,
+                        TensorGroup.WO: PrecisionSetting.BFP8,
+                        TensorGroup.ACTIVATION: PrecisionSetting.BFP8,
+                    },
+                    "OpFidelity": {
+                        OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI2,
+                        OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI2,
+                    },
+                }
+            ),
+        )
 
         self.input_layernorm = TtMinistralRMSNorm(
             mesh_device,
@@ -48,7 +71,7 @@ class TtMinistral3DecoderLayer(LightweightModule):
             tt_ccl,
             model_args,
             meta_state_dict,
-            weight_cache_path,
+            model_args.weight_cache_path(ttnn.bfloat8_b) if weight_cache_path is not None else None,
             layer_num,
             dtype,
             transformation_mats,

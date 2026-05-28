@@ -22,9 +22,17 @@ class TtMinistralAttention(Attention):
         original_max_position_embeddings: int | None = None,
         **kwargs,
     ):
+        configuration = kwargs["configuration"]
         self.llama_4_scaling_beta = llama_4_scaling_beta
         self.original_max_position_embeddings = original_max_position_embeddings
         super().__init__(*args, **kwargs)
+        # Decoder-layer profiling target: keep only QKV/WO prefill on HiFi2 + BF8 inputs.
+        self.li_qkv_prefill_compute_kernel_cfg = configuration.compute_kernel_config_hifi2
+        self.li_o_prefill_compute_kernel_cfg = configuration.compute_kernel_config_hifi2
+        if self.wqkv.dtype != ttnn.bfloat8_b:
+            self.wqkv = ttnn.typecast(self.wqkv, dtype=ttnn.bfloat8_b)
+        if self.wo.dtype != ttnn.bfloat8_b:
+            self.wo = ttnn.typecast(self.wo, dtype=ttnn.bfloat8_b)
 
         if self.use_hf_rope:  # legacy rotary_embedding, not rotary_embedding_hf
             self.rotary_embedding_decode = self._hf_rope_decode_legacy
@@ -147,15 +155,10 @@ class TtMinistralAttention(Attention):
         pos_row = self._reshape_decode_positions(current_pos, b)
         scale_f = self._llama4_scale_factor_from_positions_ttnn(pos_row)
         scale_4d = ttnn.reshape(scale_f, (1, b, 1, 1))
-        scale_tt = ttnn.typecast(scale_4d, ttnn.bfloat16)
-
-        q_bf16 = q_heads if q_heads.dtype == ttnn.bfloat16 else ttnn.typecast(q_heads, dtype=ttnn.bfloat16)
-        out = ttnn.mul(q_bf16, scale_tt, dtype=ttnn.bfloat16)
-        if q_heads.dtype != ttnn.bfloat16:
-            out = ttnn.typecast(out, dtype=q_heads.dtype)
+        mul_dtype = q_heads.dtype if q_heads.dtype in (ttnn.bfloat16, ttnn.bfloat8_b) else ttnn.bfloat16
+        scale_tt = ttnn.typecast(scale_4d, mul_dtype)
+        out = ttnn.mul(q_heads, scale_tt, dtype=mul_dtype)
         ttnn.deallocate(scale_tt)
-        if q_bf16 is not q_heads:
-            ttnn.deallocate(q_bf16)
         return out
 
     def _apply_llama4_query_scale_prefill(self, q_heads, position_ids: ttnn.Tensor | None = None):
@@ -178,15 +181,10 @@ class TtMinistralAttention(Attention):
             return q_heads
 
         scale_4d = ttnn.reshape(scale_f, (batch_dim, 1, seq_dim, 1))
-        scale_tt = ttnn.typecast(scale_4d, ttnn.bfloat16)
-
-        q_bf16 = q_heads if q_heads.dtype == ttnn.bfloat16 else ttnn.typecast(q_heads, dtype=ttnn.bfloat16)
-        out = ttnn.mul(q_bf16, scale_tt, dtype=ttnn.bfloat16)
-        if q_heads.dtype != ttnn.bfloat16:
-            out = ttnn.typecast(out, dtype=q_heads.dtype)
+        mul_dtype = q_heads.dtype if q_heads.dtype in (ttnn.bfloat16, ttnn.bfloat8_b) else ttnn.bfloat16
+        scale_tt = ttnn.typecast(scale_4d, mul_dtype)
+        out = ttnn.mul(q_heads, scale_tt, dtype=mul_dtype)
         ttnn.deallocate(scale_tt)
-        if q_bf16 is not q_heads:
-            ttnn.deallocate(q_bf16)
         return out
 
     def forward_prefill(
@@ -201,10 +199,15 @@ class TtMinistralAttention(Attention):
         position_ids: ttnn.Tensor | None = None,
     ):
         """Prefill with optional device position_ids for Llama-4 Q scaling."""
+        x_prefill = x_11SH
+        if x_prefill.dtype != ttnn.bfloat8_b:
+            x_prefill = ttnn.typecast(x_prefill, dtype=ttnn.bfloat8_b)
         self._prefill_position_ids_for_llama4_scale = position_ids
+        old_activation_dtype = self.activation_dtype
+        self.activation_dtype = ttnn.bfloat8_b
         try:
             return super().forward_prefill(
-                x_11SH,
+                x_prefill,
                 rot_mats,
                 user_id=user_id,
                 page_table=page_table,
@@ -213,6 +216,7 @@ class TtMinistralAttention(Attention):
                 kv_cache=kv_cache,
             )
         finally:
+            self.activation_dtype = old_activation_dtype
             self._prefill_position_ids_for_llama4_scale = None
 
     def forward(

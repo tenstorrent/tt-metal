@@ -12,6 +12,10 @@ from models.experimental.devstarl2_small.devstral_utils.pixtral_seq_chunk import
     pad_seq_to_chunk_multiple,
     pixtral_effective_mm_seq_len,
     trim_seq_dim2,
+    vision_mlp_block_shard_eligible,
+    vision_mlp_block_shard_matmul_progcfg,
+    vision_mlp_block_shard_out_memcfg,
+    vision_mlp_prepare_block_shard_input,
     vision_seq_memcfg,
 )
 
@@ -109,9 +113,46 @@ class MistralTTVisionMLP(LightweightModule):
 
         def run_chunk(xc: ttnn.Tensor, m_len: int) -> ttnn.Tensor:
             chunk_seq_len = int(xc.shape[-2])
-            pc_w13 = self.model_config["IMAGE_MLP_FC_PROGCFG"](m_len, mm_seq_len)
-            pc_w2 = self.model_config["IMAGE_MLP_PROJ_PROGCFG"](m_len, mm_seq_len)
-            w13_mem_cfg = vision_seq_memcfg(chunk_seq_len, self.hidden_shard)
+            m_compute = min(int(m_len), int(mm_seq_len))
+            fuse_batch = int(m_len) <= int(mm_seq_len)
+            batched = len(xc.shape) == 4 and int(xc.shape[1]) > 1
+            grid_x, grid_y = 8, 8
+
+            use_bs_w13 = not batched and vision_mlp_block_shard_eligible(
+                m_compute, self.vision_dim, self.hidden_shard, grid_x, grid_y
+            )
+            use_bs_w2 = not batched and vision_mlp_block_shard_eligible(
+                m_compute, self.hidden_shard, self.vision_dim, grid_x, grid_y
+            )
+
+            if use_bs_w13:
+                xc = vision_mlp_prepare_block_shard_input(xc, chunk_seq_len, self.vision_dim, grid_x, grid_y)
+                pc_w13 = vision_mlp_block_shard_matmul_progcfg(
+                    m_compute,
+                    self.vision_dim,
+                    self.hidden_shard,
+                    grid_x,
+                    grid_y,
+                    fuse_batch=fuse_batch,
+                )
+                w13_mem_cfg = vision_mlp_block_shard_out_memcfg()
+            else:
+                pc_w13 = self.model_config["IMAGE_MLP_FC_PROGCFG"](m_len, mm_seq_len)
+                w13_mem_cfg = vision_seq_memcfg(chunk_seq_len, self.hidden_shard)
+
+            if use_bs_w2:
+                pc_w2 = vision_mlp_block_shard_matmul_progcfg(
+                    m_compute,
+                    self.hidden_shard,
+                    self.vision_dim,
+                    grid_x,
+                    grid_y,
+                    fuse_batch=fuse_batch,
+                )
+                w2_out_mem = vision_mlp_block_shard_out_memcfg()
+            else:
+                pc_w2 = self.model_config["IMAGE_MLP_PROJ_PROGCFG"](m_len, mm_seq_len)
+                w2_out_mem = vision_seq_memcfg(chunk_seq_len, self.vision_dim)
 
             w1_out = ttnn.linear(
                 xc,
@@ -139,11 +180,14 @@ class MistralTTVisionMLP(LightweightModule):
             ttnn.deallocate(w1_out)
             ttnn.deallocate(w3_out)
 
+            if use_bs_w2:
+                w2_in = vision_mlp_prepare_block_shard_input(w2_in, chunk_seq_len, self.hidden_shard, grid_x, grid_y)
+
             w2_out = ttnn.linear(
                 w2_in,
                 self.w2,
                 dtype=ttnn.bfloat16,
-                memory_config=vision_seq_memcfg(chunk_seq_len, self.vision_dim),
+                memory_config=w2_out_mem,
                 compute_kernel_config=self.compute_kernel_config,
                 program_config=pc_w2,
             )
