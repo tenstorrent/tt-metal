@@ -187,10 +187,17 @@ class TtLanguageModel(LightweightModule):
             weight_memory_config=weight_memory_config,
         )
 
+        # The lm_head's own optimized default is a bfloat8_b weight: the wide
+        # 1536 -> 151936 projection is DRAM-bandwidth-bound on the ~233M-param
+        # weight read, and bf8 halves that read for a ~-36% traced win on what
+        # is ~72% of the whole assembly's device-kernel time. We must NOT force
+        # the assembly-wide activation dtype (bf16) onto it -- that would revert
+        # the inherited lm_head optimization. The bf8 weight is safe because the
+        # logits feed an argmax downstream (PCC holds at 0.99991). The activation
+        # stays bf16 (handled inside TtLMHead.forward) and the output is bf16.
         self.lm_head = TtLMHead(
             device=device,
             weight=state_dict["lm_head.weight"],
-            dtype=dtype,
             weight_memory_config=weight_memory_config,
         )
 

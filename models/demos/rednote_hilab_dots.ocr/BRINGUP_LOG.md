@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** p150 (blackhole)
 **Started:** 2026-05-29T00:11:46Z
-**Updated:** 2026-05-29T03:27:29Z
+**Updated:** 2026-05-29T03:35:03Z
 
 ## Block Status
 
@@ -83,7 +83,7 @@
 | language_model | reference | done | 1.000000 | 0 | Full Qwen2ForCausalLM tested at REDUCED 2 layers (full=28), seq 64: embed -> 2x decoder_layer -> final RMSNorm -> lm_head. PCC=1.0 vs HF. Full 28-layer check deferred to real_weights. |
 | language_model | ttnn | done | 0.999911 | 0 | Full Qwen2ForCausalLM assembly at REDUCED 2 layers (full=28), seq 64. Composes verified TtEmbedding -> 2x TtDecoderLayer (GQA 12/2, QKV bias, 1D RoPE theta 1e6, causal) -> final TtRMSNorm (eps 1e-6, applied here before lm_head) -> TtLMHead (untied hidden->vocab no bias) by file-path import. Shared cos/sin + causal mask precomputed on host, threaded through layers. HiFi4+fp32_dest_acc bf16 DRAM TILE. PCC=0.99991 vs golden on p150. Guard ok. |
 | language_model | debug | n/a | — | 0 |  |
-| language_model | optimization | pending | — | 0 |  |
+| language_model | optimization | done | — | 0 | Assembly of already-optimized components (embedding, decoder_layer attn -21.8%/mlp -7.5%/residual L1, final rmsnorm at-ceiling, lm_head bf8 -36%). Traced tracy: MatmulDeviceOperation = 87.9% of 3918us total; the single wide lm_head matmul (1536->151936, seq 64) is ~69% of the block. ASSEMBLY-LEVEL WIN: the lm_head was being constructed with the assembly-wide bf16 dtype, REVERTING its inherited bf8_b weight optimization. Dropped that override so the lm_head uses its own bf8_b default -> top matmul 3083->2697us (-12.5%), block total 4301->3918us (-8.9%). PCC 0.99991->0.99989 (argmax-safe). No single-core fallbacks; remaining matmul time is the inherited (already-optimized) decoder projections + bf8 lm_head -> at-ceiling otherwise. |
 | language_model | real_weights | pending | — | 0 |  |
 
 ## Use cases
@@ -94,7 +94,6 @@
 
 ## Recent Ticks
 
-- tick 25 (2026-05-29T02:20:39Z): device[vision_block] — ok
 - tick 26 (2026-05-29T02:32:56Z): device[vision_patch_merger] — ok
 - tick 27 (2026-05-29T02:40:41Z): device[vision_tower] — ok
 - tick 28 (2026-05-29T02:46:22Z): device[embedding] — ok
@@ -104,6 +103,7 @@
 - tick 32 (2026-05-29T03:11:57Z): device[mlp] — ok
 - tick 33 (2026-05-29T03:19:23Z): device[decoder_layer] — ok
 - tick 34 (2026-05-29T03:27:29Z): device[lm_head] — ok
+- tick 35 (2026-05-29T03:35:03Z): device[language_model] — ok
 
 ## Host-Resident Exceptions
 

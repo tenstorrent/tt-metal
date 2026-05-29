@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-29T00:11:46Z",
-  "updated_at": "2026-05-29T03:27:29Z",
+  "updated_at": "2026-05-29T03:35:03Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -774,8 +774,20 @@
         "attempts": 0
       },
       "optimization": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/profile_language_model.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/language_model.traced_profile.csv"
+        ],
+        "notes": "Assembly of already-optimized components (embedding, decoder_layer attn -21.8%/mlp -7.5%/residual L1, final rmsnorm at-ceiling, lm_head bf8 -36%). Traced tracy: MatmulDeviceOperation = 87.9% of 3918us total; the single wide lm_head matmul (1536->151936, seq 64) is ~69% of the block. ASSEMBLY-LEVEL WIN: the lm_head was being constructed with the assembly-wide bf16 dtype, REVERTING its inherited bf8_b weight optimization. Dropped that override so the lm_head uses its own bf8_b default -> top matmul 3083->2697us (-12.5%), block total 4301->3918us (-8.9%). PCC 0.99991->0.99989 (argmax-safe). No single-core fallbacks; remaining matmul time is the inherited (already-optimized) decoder projections + bf8 lm_head -> at-ceiling otherwise.",
+        "before_us": 4301.1,
+        "after_us": 3918.2,
+        "tracy_artifact": "models/demos/rednote_hilab_dots.ocr/tt/language_model.traced_profile.csv",
+        "top_hotspot": {
+          "op": "MatmulDeviceOperation",
+          "share": 0.879
+        }
       },
       "real_weights": {
         "status": "pending",
@@ -1043,6 +1055,12 @@
       "tick": 34,
       "ts": "2026-05-29T03:27:29Z",
       "action": "device[lm_head]",
+      "result": "ok"
+    },
+    {
+      "tick": 35,
+      "ts": "2026-05-29T03:35:03Z",
+      "action": "device[language_model]",
       "result": "ok"
     }
   ],
