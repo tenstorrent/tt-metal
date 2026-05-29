@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-29T00:11:46Z",
-  "updated_at": "2026-05-29T01:17:43Z",
+  "updated_at": "2026-05-29T01:21:18Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -417,8 +417,15 @@
         "pcc": 1.0
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/rope.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_tt_rope.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/rope.traced_ops.json"
+        ],
+        "notes": "Qwen2 LM RoPE cos/sin tables (theta 1e6, head_dim 128). On-device outer(pos,inv_freq)->cat->cos/sin, fp32. PCC cos=1.0 sin=1.0 vs golden.",
+        "pcc": 0.9999999999999976
       },
       "debug": {
         "status": "n/a",
@@ -766,6 +773,12 @@
       "tick": 13,
       "ts": "2026-05-29T01:17:43Z",
       "action": "device[rmsnorm]",
+      "result": "ok"
+    },
+    {
+      "tick": 14,
+      "ts": "2026-05-29T01:21:18Z",
+      "action": "device[rope]",
       "result": "ok"
     }
   ],

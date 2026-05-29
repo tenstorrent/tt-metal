@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** p150 (blackhole)
 **Started:** 2026-05-29T00:11:46Z
-**Updated:** 2026-05-29T01:17:43Z
+**Updated:** 2026-05-29T01:21:18Z
 
 ## Block Status
 
@@ -56,7 +56,7 @@
 | rmsnorm | optimization | pending | — | 0 |  |
 | rmsnorm | real_weights | pending | — | 0 |  |
 | rope | reference | done | 1.000000 | 0 | Qwen2RotaryEmbedding (theta 1e6, head_dim 128, default rope): position_ids -> (cos,sin). PCC cos=1.0 sin=1.0 vs HF. |
-| rope | ttnn | pending | — | 0 |  |
+| rope | ttnn | done | 1.000000 | 0 | Qwen2 LM RoPE cos/sin tables (theta 1e6, head_dim 128). On-device outer(pos,inv_freq)->cat->cos/sin, fp32. PCC cos=1.0 sin=1.0 vs golden. |
 | rope | debug | n/a | — | 0 |  |
 | rope | optimization | pending | — | 0 |  |
 | rope | real_weights | pending | — | 0 |  |
@@ -94,7 +94,6 @@
 
 ## Recent Ticks
 
-- tick 6 (2026-05-29T00:45:55Z): device[vision_rmsnorm] — ok
 - tick 7 (2026-05-29T00:52:05Z): device[vision_attention] — ok
 - tick 8 (2026-05-29T00:52:15Z): device[vision_attention] — ok
 - tick 9 (2026-05-29T00:57:01Z): device[vision_mlp] — ok
@@ -104,6 +103,7 @@
 - tick 11 (2026-05-29T01:10:25Z): device[vision_patch_merger] — ok
 - tick 12 (2026-05-29T01:13:48Z): device[embedding] — ok
 - tick 13 (2026-05-29T01:17:43Z): device[rmsnorm] — ok
+- tick 14 (2026-05-29T01:21:18Z): device[rope] — ok
 
 ## Host-Resident Exceptions
 
