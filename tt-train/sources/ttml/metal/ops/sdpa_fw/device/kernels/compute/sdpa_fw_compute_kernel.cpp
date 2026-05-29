@@ -188,6 +188,7 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
                 tile_regs_release();
             }
             pack_reconfig_l1_acc(0);
+
             cb_push_back(cb_attention_weights, Sk_chunk_t);
         }
 #else
@@ -238,6 +239,7 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
             cb_attention_weights, alias_cb_cur_max, alias_cb_cur_sum_exp);
 
         matmul_qk_by_v<Sk_chunk_t>(vWt, pv_block_size, cb_attention_weights, cb_value, alias_cb_cur_mm_out);
+
         cb_pop_front(cb_attention_weights, Sk_chunk_t);
         cb_pop_front(cb_value, Sk_chunk_t * vWt);
 

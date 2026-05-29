@@ -859,6 +859,14 @@ TEST_F(SDPABackwardTest, TinyLlamaConfig) {
     // num_heads: 32, num_groups: 4, embedding_dim: 2048, max_sequence_length: 2048
     // head_dim = 2048 / 32 = 64
     // heads_per_group = 32 / 4 = 8
+    //
+    // Widened atol/rtol from 2e-2 to 3e-2 for HiFi3 (Wormhole default). HiFi3 vs HiFi4 on
+    // dV gives essentially identical bulk error (MAE 1.24e-3 vs 1.27e-3, max_abs 3.16e-2 in
+    // both), but HiFi3 leaves a handful of small-|y| elements (|y| ~ 0.5–1) with
+    // |d| ~ 0.020–0.022 just above the 2e-2 atol — xt::allclose passes if
+    // |d| <= atol OR |d| <= rtol*max(|a|,|b|), so small-|y| elements need atol headroom.
+    // 3e-2 covers the observed worst small-|y| outlier (0.022) with margin.
+    // See tt-train/docs/sdpa_accuracy_testing.md for the full analysis.
     SDPABackwardTestConfig config{
         .batch_size = 1U,
         .sequence_length = 256U,  // Using smaller seq for faster test (full is 2048)
@@ -867,8 +875,8 @@ TEST_F(SDPABackwardTest, TinyLlamaConfig) {
         .num_query_heads = 32U,  // num_heads from config
         .num_kv_heads = 4U,      // num_groups from config (8 query heads per kv head)
         .dropout_prob = 0.0F,
-        .atol = 2e-2F,
-        .rtol = 2e-2F,
+        .atol = 3e-2F,
+        .rtol = 3e-2F,
         .test_name = "TinyLlamaConfig (B=1, S=256, D=64, qH=32, kvH=4)"};
     run_sdpa_backward_test(config);
 }

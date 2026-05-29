@@ -6,6 +6,8 @@
 
 #include <bit>
 #include <cmath>
+#include <cstdlib>
+#include <string_view>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -476,6 +478,20 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
         compute_defines[kBalancedParallelismDefKey] = "1";
     }
 
+    // Per-arch math fidelity default. Wormhole has HW bug TT #38306: HiFi4 + fp32_dest_acc +
+    // matmul_block corrupts FP32 dest accumulation, so we default to HiFi3 there. Blackhole is
+    // unaffected and gets HiFi4. SDPA_MATH_FIDELITY={3,4} overrides for experiments / CI.
+    auto math_fidelity = (device->arch() == tt::ARCH::WORMHOLE_B0) ? tt::tt_metal::MathFidelity::HiFi3
+                                                                   : tt::tt_metal::MathFidelity::HiFi4;
+    if (const char* fidelity_env = std::getenv("SDPA_MATH_FIDELITY"); fidelity_env != nullptr) {
+        const std::string_view v{fidelity_env};
+        if (v == "3") {
+            math_fidelity = tt::tt_metal::MathFidelity::HiFi3;
+        } else if (v == "4") {
+            math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
+        }
+    }
+
     SDPABackwardQKernels kernels;
 
     // Reader compile-time arguments
@@ -538,7 +554,7 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
             kComputeKernelPath,
             all_cores,
             tt::tt_metal::ComputeConfig{
-                .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+                .math_fidelity = math_fidelity,
                 .fp32_dest_acc_en = true,
                 .unpack_to_dest_mode = create_unpack_to_dest_mode(),
                 .math_approx_mode = false,
@@ -561,7 +577,7 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
             kComputeKernelPath,
             core_group_1,
             tt::tt_metal::ComputeConfig{
-                .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+                .math_fidelity = math_fidelity,
                 .fp32_dest_acc_en = true,
                 .unpack_to_dest_mode = create_unpack_to_dest_mode(),
                 .math_approx_mode = false,
@@ -585,7 +601,7 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
                 kComputeKernelPath,
                 core_group_2,
                 tt::tt_metal::ComputeConfig{
-                    .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+                    .math_fidelity = math_fidelity,
                     .fp32_dest_acc_en = true,
                     .unpack_to_dest_mode = create_unpack_to_dest_mode(),
                     .math_approx_mode = false,
