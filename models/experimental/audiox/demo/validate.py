@@ -138,13 +138,20 @@ def _build_synthetic_video_prompt(args: argparse.Namespace) -> torch.Tensor | No
 def _summarize_run_details(output_path: Path, elapsed_seconds: float, details: dict) -> dict:
     summary = _summarize_audio_file(output_path)
     summary["elapsed_seconds"] = elapsed_seconds
+    timings = details.get("timings") or {}
     summary["conditioning_tokens"] = details["conditioning_tokens"]
     summary["latent_tokens"] = details["t_latent"]
     diffusion_token_steps = details["t_latent"] * details.get("steps", 0)
     summary["diffusion_token_steps"] = diffusion_token_steps
-    summary["diffusion_tokens_per_second"] = 0.0 if elapsed_seconds == 0 else diffusion_token_steps / elapsed_seconds
+    summary["sampling_seconds"] = timings.get("sampling_seconds")
+    throughput_window_seconds = summary["sampling_seconds"] or elapsed_seconds
+    summary["diffusion_tokens_per_second"] = (
+        0.0 if throughput_window_seconds == 0 else diffusion_token_steps / throughput_window_seconds
+    )
     summary["meets_stage1_generation_time_lt_30s"] = elapsed_seconds < 30.0
     summary["meets_stage1_diffusion_tps_ge_20"] = summary["diffusion_tokens_per_second"] >= 20.0
+    if timings:
+        summary["timings"] = timings
     return summary
 
 

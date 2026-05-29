@@ -56,6 +56,18 @@ class TtContinuousTransformer:
                 for i in range(depth)
             ]
 
+    def deallocate(self) -> None:
+        if self.project_in_w is not None:
+            ttnn.deallocate(self.project_in_w, force=True)
+        if self.project_out_w is not None:
+            ttnn.deallocate(self.project_out_w, force=True)
+
+        if self.layers is None:
+            return
+
+        for layer in self.layers:
+            layer.deallocate()
+
     def __call__(
         self,
         x: ttnn.Tensor,

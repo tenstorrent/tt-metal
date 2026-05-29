@@ -11,14 +11,18 @@ TTNN has no native ``conv_transpose1d``, so the decoder upsample is emulated
 with ``conv_transpose2d`` over a degenerate width-1 dim — mathematically
 identical to the 1D op, kernel ``(2*stride, 1)`` and stride ``(stride, 1)``."""
 
+import os
+
 import torch
 import ttnn
 
 from models.experimental.audiox.tt.common import to_tt
 
 
-_LONG_SEQUENCE_THRESHOLD = 131072
-_LONG_SEQUENCE_CHUNK = 32768
+_LONG_SEQUENCE_THRESHOLD = int(os.getenv("AUDIOX_TT_LONG_SEQUENCE_THRESHOLD", "131072"))
+_LONG_SEQUENCE_CHUNK = int(os.getenv("AUDIOX_TT_LONG_SEQUENCE_CHUNK", "32768"))
+_CONV1D_DRAM_WIDTH_SLICES = int(os.getenv("AUDIOX_TT_CONV1D_WIDTH_SLICES", "256"))
+_CONV_TRANSPOSE_HEIGHT_SLICES = int(os.getenv("AUDIOX_TT_CONV_TRANSPOSE_HEIGHT_SLICES", "128"))
 
 
 def _debug_decoder(message: str) -> None:
@@ -119,7 +123,7 @@ def _conv1d(
         weight_4d = ttnn.reshape(weight, (out_channels, in_channels, 1, kernel_size))
         dram_slice_config = ttnn.Conv2dSliceConfig(
             slice_type=ttnn.Conv2dDRAMSliceWidth,
-            num_slices=256,
+            num_slices=_CONV1D_DRAM_WIDTH_SLICES,
         )
         out, [_, out_length] = ttnn.conv2d(
             input_tensor=x_4d,
@@ -292,7 +296,7 @@ def _conv_transpose1d(
     )
     dram_slice_config = ttnn.Conv2dSliceConfig(
         slice_type=ttnn.Conv2dDRAMSliceHeight,
-        num_slices=128,
+        num_slices=_CONV_TRANSPOSE_HEIGHT_SLICES,
     )
     # No return flags -> single-tensor return. We compute out_length ourselves
     # from the standard ConvTranspose1d formula.
