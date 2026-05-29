@@ -90,22 +90,28 @@ def estimate_l1_bytes(cin_block, cout_block, t_blk, h_blk, w_blk, kernel_size, C
     matmul_K_t = math.ceil(patch_size / 32)
     matmul_N_t = math.ceil(cout_block / 32)
 
+    # Tile size scales with dtype: TILE_HEIGHT*TILE_WIDTH*dtype_bytes.
+    # TILE_SIZE was originally for bf16 (dtype_bytes=2). For fp32, all
+    # tile-based CBs are 2× larger — the original formula underestimates
+    # fp32 CB usage, allowing blockings that actually overflow L1.
+    tile_bytes = TILE_HEIGHT * TILE_HEIGHT * dtype_bytes
+
     vol2col_rm_pages = TILE_HEIGHT if num_patches % TILE_HEIGHT == 0 else min(num_patches, 2 * TILE_HEIGHT)
     cb_vol2col_rm = padded_patch_bytes * vol2col_rm_pages
-    cb_vol2col_tiled = TILE_SIZE * matmul_K_t
-    cb_weight = TILE_SIZE * matmul_K_t * matmul_N_t
+    cb_vol2col_tiled = tile_bytes * matmul_K_t
+    cb_weight = tile_bytes * matmul_K_t * matmul_N_t
 
     use_fp32_partials = C_in_num_blocks > 1
-    partial_tile = FP32_TILE_SIZE if use_fp32_partials else TILE_SIZE
+    partial_tile = FP32_TILE_SIZE if use_fp32_partials else tile_bytes
     cb_interm = partial_tile * matmul_M_t * matmul_N_t
-    cb_result = TILE_SIZE * matmul_M_t * matmul_N_t
+    cb_result = tile_bytes * matmul_M_t * matmul_N_t
 
     cb_reduction = 0
     if C_in_num_blocks > 1:
-        cb_reduction = partial_tile * matmul_M_t * matmul_N_t + TILE_SIZE
+        cb_reduction = partial_tile * matmul_M_t * matmul_N_t + tile_bytes
 
-    cb_bias = TILE_SIZE * matmul_N_t
-    cb_zero = TILE_SIZE if use_fp32_partials else 0
+    cb_bias = tile_bytes * matmul_N_t
+    cb_zero = tile_bytes if use_fp32_partials else 0
 
     T_shard = (t_blk - 1) + kT
     H_shard = (h_blk - 1) + kH
@@ -163,7 +169,9 @@ def _t_needed_to_hide_weight_read(cin_block, cout_block, kernel_size):
     return max(1, math.ceil(weight_us / 4.0))  # 4 µs per M-row tilize
 
 
-def build_all_blockings(C_in, C_out, kernel_size, H, W, T, num_cores=120, max_t_block=None, hw_product=None):
+def build_all_blockings(
+    C_in, C_out, kernel_size, H, W, T, num_cores=120, max_t_block=None, hw_product=None, dtype_bytes=2
+):
     """Build sorted list of (C_in_block, C_out_block, T_out_block, H_out_block, W_out_block) combos.
 
     max_t_block: if set, caps T_block candidates at this value.
@@ -224,7 +232,10 @@ def build_all_blockings(C_in, C_out, kernel_size, H, W, T, num_cores=120, max_t_
                 for h, w in hw:
                     if hw_product is not None and h * w != hw_product:
                         continue
-                    if estimate_l1_bytes(cin, cout, t_blk, h, w, kernel_size, C_in) > L1_BUDGET:
+                    if (
+                        estimate_l1_bytes(cin, cout, t_blk, h, w, kernel_size, C_in, dtype_bytes=dtype_bytes)
+                        > L1_BUDGET
+                    ):
                         skipped_l1 += 1
                         continue
                     cores = compute_parallelism(cin, cout, t_blk, h, w, kernel_size, H, W, T, C_in, C_out, num_cores)
@@ -254,7 +265,7 @@ def build_all_blockings(C_in, C_out, kernel_size, H, W, T, num_cores=120, max_t_
 # ---------------------------------------------------------------------------
 
 
-def _run_once(device, tt_input, tt_weight, tt_bias, cfg, C_out, kernel_size, stride, padding, ckc):
+def _run_once(device, tt_input, tt_weight, tt_bias, cfg, C_out, kernel_size, stride, padding, ckc, dtype=ttnn.bfloat16):
     t0 = time.perf_counter()
     o = ttnn.experimental.conv3d(
         input_tensor=tt_input,
@@ -266,7 +277,7 @@ def _run_once(device, tt_input, tt_weight, tt_bias, cfg, C_out, kernel_size, str
         stride=stride,
         padding=padding,
         padding_mode="zeros",
-        dtype=ttnn.bfloat16,
+        dtype=dtype,
         compute_kernel_config=ckc,
     )
     ttnn.synchronize_device(device)
@@ -303,14 +314,25 @@ def run_sweep(
     max_combos=500,
     max_t_block=None,
     hw_product=None,
+    dtype=ttnn.bfloat16,
 ):
     padded_cin = aligned_channels(C_in)
     _num_cores = grid_size.x * grid_size.y if grid_size else 120
     if grid_size is None:
         grid_size = device.compute_with_storage_grid_size()
 
+    dtype_bytes = 4 if dtype == ttnn.float32 else 2
     combos = build_all_blockings(
-        C_in, C_out, kernel_size, H, W, T, num_cores=_num_cores, max_t_block=max_t_block, hw_product=hw_product
+        C_in,
+        C_out,
+        kernel_size,
+        H,
+        W,
+        T,
+        num_cores=_num_cores,
+        max_t_block=max_t_block,
+        hw_product=hw_product,
+        dtype_bytes=dtype_bytes,
     )
     if max_combos and len(combos) > max_combos:
         print(f"Capping combos from {len(combos)} to {max_combos}")
@@ -334,7 +356,7 @@ def run_sweep(
     tt_input = ttnn.from_torch(
         torch.randn(1, T, H, W, padded_cin, dtype=torch.float32),
         device=device,
-        dtype=ttnn.bfloat16,
+        dtype=dtype,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=mesh_mapper,
@@ -343,7 +365,7 @@ def run_sweep(
     tt_bias = ttnn.from_torch(
         torch.randn(1, C_out, dtype=torch.float32),
         device=device,
-        dtype=ttnn.DataType.BFLOAT16,
+        dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         pad_value=0,
         mesh_mapper=mesh_mapper,
@@ -354,14 +376,12 @@ def run_sweep(
 
     def get_weight(cin):
         if cin not in weight_cache:
-            tt_w = ttnn.from_torch(
-                w,
-                device=device,
-                dtype=ttnn.DataType.BFLOAT16,
-                layout=ttnn.TILE_LAYOUT,
-                pad_value=0,
-                mesh_mapper=mesh_mapper,
-            )
+            # Match the production Conv1dViaConv3d._prepare_torch_state path:
+            # from_torch with NO device/layout (stays on CPU), then
+            # prepare_conv3d_weights handles the reshape and upload. Sending
+            # to device in TILE_LAYOUT first bloats (kH=1,kW=1) to 32×32 tiles
+            # — a 1024× size explosion for 1D (k,1,1) kernels.
+            tt_w = ttnn.from_torch(w, dtype=dtype, pad_value=0)
             weight_cache[cin] = ttnn.experimental.prepare_conv3d_weights(
                 weight_tensor=tt_w,
                 C_in_block=cin,
@@ -371,7 +391,7 @@ def run_sweep(
 
     def make_cfg(cin, cout, t_blk, h_blk, w_blk):
         return ttnn.Conv3dConfig(
-            weights_dtype=ttnn.bfloat16,
+            weights_dtype=dtype,
             output_layout=ttnn.ROW_MAJOR_LAYOUT,
             T_out_block=t_blk,
             W_out_block=w_blk,
@@ -394,7 +414,19 @@ def run_sweep(
     if table_blk is not None:
         cin, cout, t_blk, h_blk, w_blk = table_blk
         cfg_tbl = make_cfg(cin, cout, t_blk, h_blk, w_blk)
-        tbl_args = (device, tt_input, get_weight(cin), tt_bias, cfg_tbl, C_out, kernel_size, stride, padding, ckc)
+        tbl_args = (
+            device,
+            tt_input,
+            get_weight(cin),
+            tt_bias,
+            cfg_tbl,
+            C_out,
+            kernel_size,
+            stride,
+            padding,
+            ckc,
+            dtype,
+        )
         try:
             for _ in range(WARMUP):
                 _run_once(*tbl_args)
@@ -418,7 +450,7 @@ def run_sweep(
         try:
             tt_weight = get_weight(cin)
             cfg = make_cfg(cin, cout, t_blk, h_blk, w_blk)
-            args = (device, tt_input, tt_weight, tt_bias, cfg, C_out, kernel_size, stride, padding, ckc)
+            args = (device, tt_input, tt_weight, tt_bias, cfg, C_out, kernel_size, stride, padding, ckc, dtype)
 
             # Skip T>1 if the same spatial with T=1 was already way off best.
             if t_blk > 1 and best_us < float("inf"):

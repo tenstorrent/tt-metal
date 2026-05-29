@@ -169,7 +169,7 @@ class LTXAVPipeline(LTXPipeline):
         video_pixels = self.decode_latents(video_latent, latent_frames, latent_h, latent_w)
         logger.info(f"VAE decode: {time.time() - t0:.1f}s — {video_pixels.shape}")
 
-        audio_obj = self.decode_audio_reference(audio_latent, num_frames, fps=fps)
+        audio_obj = self.decode_audio(audio_latent, num_frames, fps=fps)
         self.export_video(video_pixels, output_path, fps=fps, audio=audio_obj)
 
         total_time = time.time() - total_t0

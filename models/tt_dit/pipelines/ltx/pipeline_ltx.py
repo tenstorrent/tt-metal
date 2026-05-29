@@ -265,6 +265,12 @@ class LTXPipeline:
         self._tt_audio_decoder = None
         self._audio_vocoder = None
 
+        # On-device audio decode chain (Stage A mel-VAE + Stage B/C vocoder+BWE).
+        # Shells are built at `_instantiate_modules`; weights are loaded via
+        # `_prepare_audio_decoder` (disk-cached, fast on warm hits).
+        self.tt_audio_decoder = None
+        self.tt_vocoder_with_bwe = None
+
         if self.checkpoint_name is not None:
             self._load_config_from_checkpoint()
             self._instantiate_modules(extra_transformer_variants or [])
@@ -539,6 +545,9 @@ class LTXPipeline:
             self._upsampler_path = LTXPipeline._resolve_checkpoint_file(LTX_UPSAMPLER_HF_REF)
             self.upsampler = self._new_upsampler()
 
+        if self.checkpoint_name is not None:
+            self._new_audio_decoder()
+
     def _register_coresident_exclusions(self) -> None:
         """All transformer variants exclude each other AND the VAE. LTX-22B +
         LTX-VAE don't both fit on BH LB; VAE must evict the active transformer
@@ -561,6 +570,16 @@ class LTXPipeline:
         if self.upsampler is not None and self.vae_decoder is not None:
             self.vae_decoder.register_coresident_exclusions(self.upsampler)
             self.upsampler.register_coresident_exclusions(self.vae_decoder)
+
+        # Audio decode runs after video decode; its fp32 vocoder conv3d activations
+        # can't share L1 with the video VAE's weights. Mirror the transformer/VAE
+        # eviction so (re)loading an audio module frees the VAE and vice versa —
+        # the on-demand load in `decode_audio_device` then handles the swap.
+        audio_modules = [m for m in (self.tt_audio_decoder, self.tt_vocoder_with_bwe) if m is not None]
+        if audio_modules and self.vae_decoder is not None:
+            for m in audio_modules:
+                m.register_coresident_exclusions(self.vae_decoder)
+            self.vae_decoder.register_coresident_exclusions(*audio_modules)
 
     def _prime_caches(self) -> None:
         """Load every module in reverse use order so variant 0 is resident in
@@ -2010,6 +2029,18 @@ class LTXPipeline:
 
         return Audio(waveform=waveform, sampling_rate=self._audio_vocoder.output_sampling_rate)
 
+    def decode_audio(self, audio_latent: torch.Tensor, num_frames: int, fps: float = 24.0):
+        """Production audio-decode entry point used by every LTX pipeline.
+
+        Routes to the on-device path when ``LTX_ON_DEVICE_AUDIO`` is set (it
+        falls back to the host reference on failure), otherwise the host
+        reference path. Single dispatcher so all pipelines decode audio the
+        same way.
+        """
+        if os.environ.get("LTX_ON_DEVICE_AUDIO", "").lower() in ("1", "true", "yes"):
+            return self.decode_audio_device(audio_latent, num_frames, fps=fps)
+        return self.decode_audio_reference(audio_latent, num_frames, fps=fps)
+
     def decode_audio_reference(self, audio_latent: torch.Tensor, num_frames: int, fps: float = 24.0):
         """Decode audio latent using reference audio VAE + vocoder (CPU torch).
 
@@ -2083,6 +2114,220 @@ class LTXPipeline:
             logger.warning(f"Audio decode failed: {e}")
             logger.warning(f"Audio decode traceback:\n{traceback.format_exc()}")
             return None
+
+    def _new_audio_decoder(self) -> None:
+        """Construct audio decoder module shells from checkpoint config.
+
+        No weights are loaded — ``_prepare_audio_decoder`` handles that via the
+        disk cache the same way ``_prepare_vae`` does for the video VAE.
+        """
+        sys.path.insert(0, "LTX-2/packages/ltx-core/src")
+        sys.path.insert(0, "LTX-2/packages/ltx-pipelines/src")
+        torch.cuda.synchronize = lambda *a, **kw: None
+
+        from ...models.audio_vae.audio_decoder_ltx import LTXAudioDecoder
+        from ...models.audio_vae.bwe_ltx import LTXMelSTFT, LTXVocoderWithBWE
+        from ...models.audio_vae.vocoder_ltx import LTXVocoder
+
+        with safe_open(self.checkpoint_name, framework="pt") as f:
+            config = json.loads(f.metadata()["config"])
+
+        ad = config["audio_vae"]["model"]["params"]
+        ddconfig = ad["ddconfig"]
+        stft_cfg = config["audio_vae"].get("preprocessing", {}).get("stft", {})
+        mel_cfg = config["audio_vae"].get("preprocessing", {}).get("mel", {})
+        mel_bins = ddconfig.get("mel_bins") or mel_cfg.get("n_mel_channels")
+        if ddconfig.get("norm_type", "pixel") != "pixel" or ddconfig.get("causality_axis", "height") != "height":
+            logger.warning("Audio decoder: checkpoint requires unsupported norm/causality; skipping construction")
+            return
+
+        voc_cfg = config["vocoder"]["vocoder"]
+        bwe_cfg = config["vocoder"]["bwe"]
+
+        mesh_shape = tuple(self.mesh_device.shape)
+        t_axis = 0 if mesh_shape[0] >= mesh_shape[1] else 1
+        t_factor = mesh_shape[t_axis]
+        audio_parallel_config = ParallelFactor(factor=t_factor, mesh_axis=t_axis) if t_factor > 1 else None
+        audio_ccl = self.vae_ccl_manager if audio_parallel_config is not None else None
+
+        self.tt_audio_decoder = LTXAudioDecoder(
+            ch=ddconfig.get("ch", 128),
+            out_ch=ddconfig.get("out_ch", 2),
+            ch_mult=tuple(ddconfig.get("ch_mult", (1, 2, 4))),
+            num_res_blocks=ddconfig.get("num_res_blocks", 2),
+            attn_resolutions=tuple(ddconfig.get("attn_resolutions", ())),
+            resolution=ddconfig.get("resolution", 256),
+            z_channels=ddconfig.get("z_channels", 8),
+            mid_block_add_attention=ddconfig.get("mid_block_add_attention", False),
+            sample_rate=ad.get("sampling_rate", 16000),
+            mel_hop_length=stft_cfg.get("hop_length", 160),
+            is_causal=stft_cfg.get("causal", True),
+            mel_bins=mel_bins,
+            mesh_device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+        )
+
+        def _tt_vocoder(cfg: dict, *, apply_final_activation: bool) -> LTXVocoder:
+            return LTXVocoder(
+                resblock_kernel_sizes=cfg.get("resblock_kernel_sizes", [3, 7, 11]),
+                upsample_rates=cfg.get("upsample_rates", [6, 5, 2, 2, 2]),
+                upsample_kernel_sizes=cfg.get("upsample_kernel_sizes", [16, 15, 8, 4, 4]),
+                resblock_dilation_sizes=cfg.get("resblock_dilation_sizes", [[1, 3, 5], [1, 3, 5], [1, 3, 5]]),
+                upsample_initial_channel=cfg.get("upsample_initial_channel", 1024),
+                resblock=cfg.get("resblock", "AMP1"),
+                activation=cfg.get("activation", "snakebeta"),
+                use_tanh_at_final=cfg.get("use_tanh_at_final", True),
+                apply_final_activation=apply_final_activation,
+                use_bias_at_final=cfg.get("use_bias_at_final", True),
+                in_channels=128,
+                out_channels=2,
+                mesh_device=self.mesh_device,
+                dtype=ttnn.float32,
+                parallel_config=audio_parallel_config,
+                ccl_manager=audio_ccl,
+            )
+
+        main_voc = _tt_vocoder(voc_cfg, apply_final_activation=True)
+        bwe_voc = _tt_vocoder(bwe_cfg, apply_final_activation=False)
+        mel_stft = LTXMelSTFT(
+            filter_length=bwe_cfg["n_fft"],
+            hop_length=bwe_cfg["hop_length"],
+            win_length=bwe_cfg["n_fft"],
+            n_mel_channels=bwe_cfg["num_mels"],
+            mesh_device=self.mesh_device,
+            dtype=ttnn.float32,
+        )
+        self.tt_vocoder_with_bwe = LTXVocoderWithBWE(
+            vocoder=main_voc,
+            bwe_generator=bwe_voc,
+            mel_stft=mel_stft,
+            input_sampling_rate=bwe_cfg["input_sampling_rate"],
+            output_sampling_rate=bwe_cfg["output_sampling_rate"],
+            hop_length=bwe_cfg["hop_length"],
+            mesh_device=self.mesh_device,
+            dtype=ttnn.float32,
+        )
+        logger.info(f"Constructed audio decoder shells (mesh {mesh_shape}, T-shard factor={t_factor})")
+
+    def _prepare_audio_decoder(self) -> None:
+        """Build audio decoder + vocoder weights from the LTX-2 reference Builders.
+
+        The binary disk cache is deliberately bypassed here (unlike ``_prepare_vae``).
+        ``ttnn.experimental.conv3d`` does not zero the output tile-padding columns
+        between logical ``C_out`` and ``round_up(C_out, 32)`` — those bytes are
+        whatever the freshly-allocated DRAM buffer held, so they depend on
+        device-allocator history. Building fresh runs ``prepare_conv3d_weights``
+        hundreds of times, which churns the allocator enough that the leftover
+        bytes read back as zero; loading the identical weights from the binary
+        cache skips that churn, leaving the columns as garbage that explodes the
+        fp32 vocoder/BWE convs (non-32-aligned channels) and saturates the final
+        tanh. The video VAE is unaffected (bf16, 32-aligned channels) so it still
+        caches. Re-enable caching here once conv3d zeros its output padding.
+
+        Cost: rebuilds from the checkpoint each process (~7-15s); within a process
+        the loaded modules are reused, so the serving-loop warm path is unaffected.
+        """
+        if self.tt_audio_decoder is None or self.tt_vocoder_with_bwe is None:
+            return
+        if self.tt_audio_decoder.is_loaded() and self.tt_vocoder_with_bwe.is_loaded():
+            return
+
+        sys.path.insert(0, "LTX-2/packages/ltx-core/src")
+        sys.path.insert(0, "LTX-2/packages/ltx-pipelines/src")
+        torch.cuda.synchronize = lambda *a, **kw: None
+        from ltx_pipelines.utils.blocks import AudioDecoder as RefAudioDecoderBlock
+
+        block = RefAudioDecoderBlock(
+            checkpoint_path=self.checkpoint_name,
+            dtype=torch.float32,
+            device=torch.device("cpu"),
+        )
+
+        if not self.tt_audio_decoder.is_loaded():
+            logger.info("Building audio decoder from checkpoint (disk cache disabled — conv3d output padding bug)")
+            m = block._decoder_builder.build(device=torch.device("cpu"), dtype=torch.float32).eval()
+            self.tt_audio_decoder.load_torch_state_dict(m.state_dict())
+            del m
+
+        if not self.tt_vocoder_with_bwe.is_loaded():
+            # The resampler's Hann filter is a non-persistent reference buffer, so
+            # it is held as a plain device tensor (not a Parameter) and recomputed
+            # at init — the strict state-dict load neither expects nor receives it.
+            logger.info("Building audio vocoder from checkpoint (disk cache disabled — conv3d output padding bug)")
+            m = block._vocoder_builder.build(device=torch.device("cpu"), dtype=torch.float32).eval()
+            self.tt_vocoder_with_bwe.load_torch_state_dict(m.state_dict())
+            del m
+
+        logger.info("Loaded TTNN audio decoder + vocoder")
+
+    def decode_audio_device(
+        self, audio_latent: torch.Tensor, num_frames: int, fps: float = 24.0, *, fallback: bool = True
+    ):
+        """On-device counterpart of ``decode_audio_reference``.
+
+        Routes the audio latent through the tt-dit ``LTXAudioDecoder`` (mel-VAE)
+        and ``LTXVocoderWithBWE`` (vocoder + bandwidth extension). Both modules
+        accept torch input and return torch output, uploading/downloading
+        internally.
+
+        Args:
+            audio_latent: (1, audio_N, 128) raw audio latent from call_av()
+            num_frames: video frame count (for duration trimming)
+            fps: video frame rate
+            fallback: when True (production default) a device failure falls back
+                to the host reference path so a broken device build never drops
+                the audio track. Tests set this False so device failures surface.
+
+        Returns:
+            Audio object with .waveform and .sampling_rate, or None on failure
+        """
+        assert self.checkpoint_name is not None, "checkpoint_name must be set before decode_audio_device"
+        try:
+            sys.path.insert(0, "LTX-2/packages/ltx-core/src")
+            from ltx_core.types import Audio
+
+            # VAE and audio modules can't be L1-coresident on BH-LB. With
+            # dynamic_load the audio (re)load below evicts the VAE via the
+            # coresident exclusions registered in `_register_coresident_exclusions`;
+            # without dynamic_load nothing evicts, so free the VAE explicitly.
+            if not self.dynamic_load and self.vae_decoder is not None and self.vae_decoder.is_loaded():
+                self.vae_decoder.deallocate_weights()
+
+            # Shells are built by `_new_audio_decoder` at instantiation time; this
+            # method only loads weights into them.
+            assert self.tt_audio_decoder is not None and self.tt_vocoder_with_bwe is not None, (
+                "audio decoder shells not built — _new_audio_decoder() must run first "
+                "(it does, via _instantiate_modules, when checkpoint_name is set at construction)"
+            )
+            self._prepare_audio_decoder()
+
+            # Unpatchify: (1, audio_N, 128) -> (1, z, audio_N, 128 // z), matching
+            # `decode_audio_reference` (z=z_channels, 128 // z is the patchify freq).
+            audio_N = audio_latent.shape[1]
+            z = self.tt_audio_decoder.z_channels
+            audio_spatial = audio_latent.reshape(1, audio_N, z, audio_latent.shape[2] // z).permute(0, 2, 1, 3).float()
+
+            mel = self.tt_audio_decoder(audio_spatial)
+            waveform = self.tt_vocoder_with_bwe(mel).squeeze(0).float()
+            sampling_rate = self.tt_vocoder_with_bwe.output_sampling_rate
+
+            # Trim to video duration (mirrors the reference path).
+            video_duration = num_frames / fps
+            target_samples = int(video_duration * sampling_rate)
+            if waveform.shape[-1] > target_samples:
+                waveform = waveform[..., :target_samples]
+            audio_obj = Audio(waveform=waveform, sampling_rate=sampling_rate)
+
+            logger.info(
+                f"Audio decoded on device: {tuple(audio_obj.waveform.shape)} "
+                f"({audio_obj.waveform.shape[-1]/audio_obj.sampling_rate:.2f}s @ {audio_obj.sampling_rate}Hz)"
+            )
+            return audio_obj
+        except Exception as e:
+            if not fallback:
+                raise
+            logger.warning(f"On-device audio decode failed ({e}); falling back to host reference path")
+            return self.decode_audio_reference(audio_latent, num_frames, fps=fps)
 
     def export_video(self, video_pixels: torch.Tensor, output_path: str, fps: int = 24, audio=None) -> None:
         """Export decoded video (and optionally audio) to MP4.

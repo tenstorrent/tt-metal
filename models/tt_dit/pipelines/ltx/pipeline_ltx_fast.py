@@ -414,7 +414,7 @@ class LTXFastPipeline(LTXAVPipeline):
         logger.info(f"VAE decode (forward): {time.time() - t0:.1f}s — {tuple(video_pixels.shape)}")
 
         t0 = time.time()
-        audio_obj = self.decode_audio_reference(s2_audio, num_frames, fps=fps)
+        audio_obj = self.decode_audio(s2_audio, num_frames, fps=fps)
         logger.info(f"Audio decode: {time.time() - t0:.1f}s")
 
         t0 = time.time()

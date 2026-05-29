@@ -462,6 +462,55 @@ _DEFAULT_BLOCKINGS = {
 }
 
 
+# fp32 conv3d has 2× the L1 footprint of bf16, so the bf16 tables above don't
+# transfer — fp32 keeps its own channel-keyed table. Populated by the LTX audio
+# vocoder sweep on BH-LB 1×8 mesh (8-way T-sharded per-chip shapes).
+# Keyed by (in_channels, out_channels, kernel_size_3tuple).
+# See wiki/CONV3D_BLOCKING_SWEEP_RUNBOOK.md for the sweep methodology.
+_FP32_BLOCKINGS: dict = {
+    # Swept on BH-LB 1×8 mesh with L1 budget = 50% of 1.5 MB so blockings are
+    # safe when the audio chain runs co-resident with pipeline allocations.
+    # estimate_l1_bytes was corrected to scale tile sizes by dtype_bytes (fp32=4).
+    # Keys: (in_channels, out_channels, kernel_size_3tuple).
+    # Values: (C_in_block, C_out_block, T_out_block, H_out_block=1, W_out_block=1).
+    #
+    # --- Main vocoder (upsample_rates=[5,2,2,2,2,2], initial_channel=1536) ---
+    (128, 1536, (7, 1, 1)): (128, 32, 29, 1, 1),  # conv_pre
+    (768, 768, (11, 1, 1)): (256, 32, 2, 1, 1),  # stage 0 AMP k11
+    (768, 768, (7, 1, 1)): (192, 32, 6, 1, 1),  # stage 0 AMP k7
+    (768, 768, (3, 1, 1)): (384, 96, 6, 1, 1),  # stage 0 AMP k3
+    (384, 384, (11, 1, 1)): (128, 64, 3, 1, 1),  # stage 1 AMP k11
+    (384, 384, (7, 1, 1)): (384, 32, 3, 1, 1),  # stage 1 AMP k7
+    (384, 384, (3, 1, 1)): (384, 64, 6, 1, 1),  # stage 1 AMP k3
+    (192, 192, (11, 1, 1)): (192, 32, 3, 1, 1),  # stage 2 AMP k11
+    (192, 192, (7, 1, 1)): (192, 96, 3, 1, 1),  # stage 2 AMP k7
+    (192, 192, (3, 1, 1)): (192, 96, 21, 1, 1),  # stage 2 AMP k3
+    (96, 96, (11, 1, 1)): (96, 96, 3, 1, 1),  # stage 3 AMP k11
+    (96, 96, (7, 1, 1)): (96, 96, 4, 1, 1),  # stage 3 AMP k7
+    (96, 96, (3, 1, 1)): (32, 32, 10, 1, 1),  # stage 3 AMP k3
+    # 48 channels: aligned_channels(48)=64, max(32,48)=48 → key is (64,48,...).
+    (64, 48, (11, 1, 1)): (64, 64, 3, 1, 1),  # stage 4 AMP k11
+    (64, 48, (7, 1, 1)): (64, 64, 3, 1, 1),  # stage 4 AMP k7
+    (64, 48, (3, 1, 1)): (64, 32, 6, 1, 1),  # stage 4 AMP k3
+    # 24 channels: aligned(24)=32, max(32,24)=32 → key (32,32,...) same as BWE stage 3.
+    # --- BWE vocoder (upsample_rates=[6,5,2,2,2], initial_channel=512) ---
+    (128, 512, (7, 1, 1)): (64, 32, 7, 1, 1),  # conv_pre
+    (256, 256, (11, 1, 1)): (64, 32, 6, 1, 1),  # stage 0 AMP k11
+    (256, 256, (7, 1, 1)): (256, 32, 3, 1, 1),  # stage 0 AMP k7
+    (256, 256, (3, 1, 1)): (256, 128, 4, 1, 1),  # stage 0 AMP k3
+    (128, 128, (11, 1, 1)): (128, 64, 3, 1, 1),  # stage 1 AMP k11
+    (128, 128, (7, 1, 1)): (128, 128, 2, 1, 1),  # stage 1 AMP k7
+    (128, 128, (3, 1, 1)): (128, 128, 4, 1, 1),  # stage 1 AMP k3
+    (64, 64, (11, 1, 1)): (32, 64, 15, 1, 1),  # stage 2 AMP k11
+    (64, 64, (7, 1, 1)): (64, 64, 3, 1, 1),  # stage 2 AMP k7
+    (64, 64, (3, 1, 1)): (64, 64, 3, 1, 1),  # stage 2 AMP k3
+    (32, 32, (11, 1, 1)): (32, 32, 3, 1, 1),  # stage 3 AMP k11
+    (32, 32, (7, 1, 1)): (32, 32, 4, 1, 1),  # stage 3 AMP k7
+    (32, 32, (3, 1, 1)): (32, 32, 5, 1, 1),  # stage 3 AMP k3
+    # 16 channels: aligned(16)=32 → key (32,32,...) covered by stage 3 above.
+}
+
+
 def register_conv3d_configs(configs: dict) -> None:
     """Register additional conv3d blocking configs from external models.
 
@@ -491,14 +540,21 @@ def get_conv3d_config(
     available the fallback table is used.
     """
     if weights_dtype == ttnn.float32:
+        fp32_blk = _FP32_BLOCKINGS.get((in_channels, out_channels, kernel_size))
+        if fp32_blk is not None:
+            C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = fp32_blk
+            logger.debug(f"conv3d fp32 blocking [exact] ({in_channels},{out_channels},{kernel_size}) -> {fp32_blk}")
+        else:
+            # Conservative default — unchanged from the prior hardcoded fp32 path.
+            C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = 32, 32, 1, 1, 1
         return ttnn.Conv3dConfig(
             weights_dtype=weights_dtype,
             output_layout=ttnn.ROW_MAJOR_LAYOUT,
-            T_out_block=1,
-            W_out_block=1,
-            H_out_block=1,
-            C_out_block=32,
-            C_in_block=32,
+            T_out_block=T_out_block,
+            W_out_block=W_out_block,
+            H_out_block=H_out_block,
+            C_out_block=C_out_block,
+            C_in_block=C_in_block,
             compute_with_storage_grid_size=grid_size,
         )
 

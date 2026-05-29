@@ -31,6 +31,23 @@ class VaeHWParallelConfig(NamedTuple):
     width_parallel: ParallelFactor
 
 
+class AudioTParallelConfig(NamedTuple):
+    """Combined 2-axis T-sharding for the audio vocoder on a 2D mesh.
+
+    Shards the T (time) dimension across both mesh axes simultaneously so all
+    chips do distinct work. axis0 and axis1 together give factor=axis0.factor *
+    axis1.factor total shards. Uses two-entry neighbor_pad_async for a single
+    two-axis halo exchange per conv.
+    """
+
+    axis0: ParallelFactor
+    axis1: ParallelFactor
+
+    @property
+    def factor(self) -> int:
+        return self.axis0.factor * self.axis1.factor
+
+
 class MochiVAEParallelConfig(NamedTuple):
     time_parallel: ParallelFactor
     h_parallel: ParallelFactor

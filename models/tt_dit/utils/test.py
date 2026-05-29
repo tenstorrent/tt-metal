@@ -11,8 +11,8 @@ def create_fabric_router_config():
     return config
 
 
-line_params = {"fabric_config": ttnn.FabricConfig.FABRIC_1D}
-ring_params = {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}
+line_params = {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768}
+ring_params = {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "l1_small_size": 32768}
 line_params_8k = {**line_params, "fabric_router_config": create_fabric_router_config()}
 ring_params_8k = {**ring_params, "fabric_router_config": create_fabric_router_config()}
 
