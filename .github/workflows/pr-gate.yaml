@@ -547,7 +547,7 @@ jobs:
     with:
       docker_image: ${{ needs.build-docker-images.outputs.llk-ci-tag }}
       runs_on: tt-ubuntu-2204-xlarge-stable
-      test_splits: 1
+      test_splits: 2
       pytest_markers: "quasar"
 
   # GitHub has so many design limitations it's not even funny.
