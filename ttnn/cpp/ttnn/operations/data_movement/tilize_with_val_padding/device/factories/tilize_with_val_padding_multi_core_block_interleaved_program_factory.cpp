@@ -35,14 +35,24 @@ void push_padded_cb_pair(
     tt::DataFormat input_cb_data_format,
     tt::DataFormat output_cb_data_format,
     uint32_t dram_alignment) {
-    // dram_alignment is added to solve the mis-alignment problem when loading from DRAM to L1
+    // c_1 is a per-row staging buffer used by the reader when the DRAM source row and the
+    // L1 destination have different alignment offsets: the reader rounds the source address
+    // down to a dram_alignment boundary, issues one noc_async_read of (row_bytes + dram_alignment)
+    // into this buffer, then copies the correctly-offset slice into c_0.
+    //   row_bytes  = TILE_WIDTH * elt_size * num_tiles  (one row of a sub-block)
+    //              = input_single_tile_size / TILE_HEIGHT * num_tiles
+    //   + dram_alignment    : tail bytes from rounding the DRAM read down to alignment
+    //   + dram_alignment    : headroom for aligning the L1 write pointer up to dram_alignment
+    //                         (get_write_ptr only guarantees L1 alignment, not DRAM alignment)
+    uint32_t input_row_bytes = input_single_tile_size / TILE_HEIGHT;
+    uint32_t temp_cb_size = input_row_bytes * num_tiles + 2 * dram_alignment;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = input_single_tile_size + dram_alignment,
+        .total_size = temp_cb_size,
         .core_ranges = core_ranges,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_1),
             .data_format = input_cb_data_format,
-            .page_size = input_single_tile_size + dram_alignment,
+            .page_size = temp_cb_size,
         }}},
     });
     desc.cbs.push_back(CBDescriptor{
@@ -78,7 +88,8 @@ ProgramDescriptor TilizeWithValPaddingMultiCoreBlockInterleavedFactory::create_d
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
-    bool fp32_llk_acc = a.dtype() == DataType::FLOAT32;
+    bool fp32_llk_acc = a.dtype() == DataType::FLOAT32 || a.dtype() == DataType::FP8_E4M3 ||
+                        output.dtype() == DataType::FP8_E4M3 || output.dtype() == DataType::BFLOAT8_B;
 
     IDevice* device = a.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();

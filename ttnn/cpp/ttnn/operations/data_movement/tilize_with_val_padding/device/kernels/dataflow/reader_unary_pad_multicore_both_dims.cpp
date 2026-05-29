@@ -86,7 +86,8 @@ void kernel_main() {
     const auto s = TensorAccessor(src_args, src_addr);
 
     cb_reserve_back(cb_id_in1, 1);
-    uint32_t temp_addr = get_write_ptr(cb_id_in1);
+    uint32_t temp_addr_raw = get_write_ptr(cb_id_in1);
+    uint32_t temp_addr = (temp_addr_raw + dram_alignment - 1) & ~(dram_alignment - 1);
     cb_push_back(cb_id_in1, 1);
 
     auto read_block = [&](uint32_t num_rows,
@@ -104,8 +105,8 @@ void kernel_main() {
         uint32_t original_addr = get_write_ptr(cb_id_in0);
         for (uint32_t k = start_row_id; k < start_row_id + num_rows; k++) {
             uint64_t src_noc_addr = s.get_noc_addr(size_2d + k);
-            if (((src_noc_addr + (uint64_t)start_column_id) & dram_align_mask) ==
-                ((uint64_t)l1_write_addr & dram_align_mask)) {
+            if (((src_noc_addr + (uint64_t)start_column_id) & dram_align_offset) ==
+                ((uint64_t)l1_write_addr & dram_align_offset)) {
                 // Read from DRAM to tmp buffer
                 noc_async_read(src_noc_addr + (uint64_t)start_column_id, (uint64_t)l1_write_addr, width_size);
 
