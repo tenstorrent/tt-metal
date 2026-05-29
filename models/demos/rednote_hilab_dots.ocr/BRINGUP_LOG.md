@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** p150 (blackhole)
 **Started:** 2026-05-29T00:11:46Z
-**Updated:** 2026-05-29T02:46:22Z
+**Updated:** 2026-05-29T02:52:35Z
 
 ## Block Status
 
@@ -53,7 +53,7 @@
 | rmsnorm | reference | done | 1.000000 | 0 | Qwen2RMSNorm (eps 1e-6): fp32 normalize -> cast -> weight*x. PCC=1.0 vs HF Qwen2RMSNorm. |
 | rmsnorm | ttnn | done | 0.999995 | 0 | Qwen2 LM RMSNorm eps=1e-6 (vs vision 1e-5). ttnn.rms_norm HiFi4+fp32_dest_acc bf16 DRAM TILE; weight reshaped [1,1,dim//32,32] row-major. Mirror of TtVisionRMSNorm. PCC=0.99999 vs golden on p150. Guard ok. |
 | rmsnorm | debug | n/a | — | 0 |  |
-| rmsnorm | optimization | pending | — | 0 |  |
+| rmsnorm | optimization | done | 0.999995 | 0 | tracy attached (traced session, 1 op); rms_norm (LayerNormDeviceOperation) is the entire block (100% of 30.5us block kernel time), already multi-core on 32 cores, HiFi4+fp32_dest_acc+packer_l1_acc, bf16 DRAM TILE. K_t=48 divides only 6/8/16/24/48 cores (not the 32/64 grid); width-sharded variants reduce parallelism vs the 32-core height path and overflow static L1 CBs at compile (same as vision_rmsnorm tick 22). No op-level optimization warranted - at ceiling. PCC 0.99999 held. |
 | rmsnorm | real_weights | pending | — | 0 |  |
 | rope | reference | done | 1.000000 | 0 | Qwen2RotaryEmbedding (theta 1e6, head_dim 128, default rope): position_ids -> (cos,sin). PCC cos=1.0 sin=1.0 vs HF. |
 | rope | ttnn | done | 1.000000 | 0 | Qwen2 LM RoPE cos/sin tables (theta 1e6, head_dim 128). On-device outer(pos,inv_freq)->cat->cos/sin, fp32. PCC cos=1.0 sin=1.0 vs golden. |
@@ -94,7 +94,6 @@
 
 ## Recent Ticks
 
-- tick 19 (2026-05-29T01:49:31Z): device[language_model] — ok
 - tick 20 (2026-05-29T01:51:14Z): skip[vision_patch_embed:ttnn] — host_resident: DotsPatchEmbed is a single Conv2d(3,1536,k=14,s=14) over patchified pixels followed by RMSNorm; Conv2d patchify is a one-shot host-side im2col+matmul in the Qwen-VL TTNN demos (qwen25_vl runs patch embed on host then moves tokens to device). Cheap relative to the 42-layer trunk and runs once per image.
 - tick 21 (2026-05-29T01:54:57Z): device[vision_tower] — ok
 - tick 22 (2026-05-29T02:01:02Z): device[vision_rmsnorm] — ok
@@ -104,6 +103,7 @@
 - tick 26 (2026-05-29T02:32:56Z): device[vision_patch_merger] — ok
 - tick 27 (2026-05-29T02:40:41Z): device[vision_tower] — ok
 - tick 28 (2026-05-29T02:46:22Z): device[embedding] — ok
+- tick 29 (2026-05-29T02:52:35Z): device[rmsnorm] — ok
 
 ## Host-Resident Exceptions
 

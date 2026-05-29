@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-29T00:11:46Z",
-  "updated_at": "2026-05-29T02:46:22Z",
+  "updated_at": "2026-05-29T02:52:35Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -451,8 +451,14 @@
         "attempts": 0
       },
       "optimization": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "generated/profiler/reports/2026_05_29_02_51_38/ops_perf_results_2026_05_29_02_51_38.csv",
+          "models/demos/rednote_hilab_dots.ocr/tt/profile_rmsnorm.py"
+        ],
+        "notes": "tracy attached (traced session, 1 op); rms_norm (LayerNormDeviceOperation) is the entire block (100% of 30.5us block kernel time), already multi-core on 32 cores, HiFi4+fp32_dest_acc+packer_l1_acc, bf16 DRAM TILE. K_t=48 divides only 6/8/16/24/48 cores (not the 32/64 grid); width-sharded variants reduce parallelism vs the 32-core height path and overflow static L1 CBs at compile (same as vision_rmsnorm tick 22). No op-level optimization warranted - at ceiling. PCC 0.99999 held.",
+        "pcc": 0.9999954606391631
       },
       "real_weights": {
         "status": "pending",
@@ -960,6 +966,12 @@
       "tick": 28,
       "ts": "2026-05-29T02:46:22Z",
       "action": "device[embedding]",
+      "result": "ok"
+    },
+    {
+      "tick": 29,
+      "ts": "2026-05-29T02:52:35Z",
+      "action": "device[rmsnorm]",
       "result": "ok"
     }
   ],
