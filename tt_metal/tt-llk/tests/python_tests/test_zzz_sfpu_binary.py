@@ -51,6 +51,7 @@ from helpers.utils import passed_test
         MathOperation.SfpuElwadd,
         MathOperation.SfpuElwsub,
         MathOperation.SfpuElwmul,
+        # Disabled: failing due to very small differences in generated stimuli
         # MathOperation.SfpuElwLt,
         # MathOperation.SfpuElwGt,
         # MathOperation.SfpuElwLe,
