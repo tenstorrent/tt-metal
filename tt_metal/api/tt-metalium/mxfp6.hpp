@@ -11,28 +11,57 @@
 #include <optional>
 #include <vector>
 
-// MXFP6R = S1E3M2 / MXFP6P = S1E2M3: 6 bits stored in the high bits of an 8-bit
-// byte (bits 7-2), bits 1-0 are zero.
-//
-// Public pack/unpack API. The underlying MX toolkit (FormatParams, the generic
-// pack/unpack implementation, and the per-format descriptors) is an internal
-// detail and lives in tt_metal/impl/data_format/. The pack_as_mxfp6*_tiles
-// templates are only instantiated for the element types listed at the bottom of
-// mxfp6.cpp.
-
+/**
+ * @brief Pack a dense tensor into MXFP6R (S1E3M2, OCP microscaling) tiles.
+ *
+ * @tparam T Input element type (typically float or bfloat16-like host type).
+ *           Only the types explicitly instantiated at the bottom of mxfp6.cpp
+ *           are supported; others produce a link error.
+ * @param data Flat input data buffer containing all tensor elements.
+ * @param row_major_input True if @p data is row-major; false if tile-major.
+ * @param tile Optional tile shape descriptor; uses the default tile when nullopt.
+ * @return Packed MXFP6R tile payload words.
+ */
 template <typename T>
 std::vector<uint32_t> pack_as_mxfp6r_tiles(
     tt::stl::Span<const T> data, bool row_major_input, const std::optional<tt::tt_metal::Tile>& tile = std::nullopt);
 
+/**
+ * @brief Unpack MXFP6R tiles into a float vector.
+ *
+ * @param mxfp6_tiles Packed MXFP6R tile payload words.
+ * @param row_major_output True to produce row-major output; false for tile-major.
+ * @param tile Optional tile shape descriptor; uses the default tile when nullopt.
+ * @return Decoded values as float.
+ */
 std::vector<float> unpack_mxfp6r_tiles_into_float_vec(
     tt::stl::Span<const uint32_t> mxfp6_tiles,
     bool row_major_output,
     const std::optional<tt::tt_metal::Tile>& tile = std::nullopt);
 
+/**
+ * @brief Pack a dense tensor into MXFP6P (S1E2M3, OCP microscaling) tiles.
+ *
+ * @tparam T Input element type (typically float or bfloat16-like host type).
+ *           Only the types explicitly instantiated at the bottom of mxfp6.cpp
+ *           are supported; others produce a link error.
+ * @param data Flat input data buffer containing all tensor elements.
+ * @param row_major_input True if @p data is row-major; false if tile-major.
+ * @param tile Optional tile shape descriptor; uses the default tile when nullopt.
+ * @return Packed MXFP6P tile payload words.
+ */
 template <typename T>
 std::vector<uint32_t> pack_as_mxfp6p_tiles(
     tt::stl::Span<const T> data, bool row_major_input, const std::optional<tt::tt_metal::Tile>& tile = std::nullopt);
 
+/**
+ * @brief Unpack MXFP6P tiles into a float vector.
+ *
+ * @param mxfp6_tiles Packed MXFP6P tile payload words.
+ * @param row_major_output True to produce row-major output; false for tile-major.
+ * @param tile Optional tile shape descriptor; uses the default tile when nullopt.
+ * @return Decoded values as float.
+ */
 std::vector<float> unpack_mxfp6p_tiles_into_float_vec(
     tt::stl::Span<const uint32_t> mxfp6_tiles,
     bool row_major_output,
