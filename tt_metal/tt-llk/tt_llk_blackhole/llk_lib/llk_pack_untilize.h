@@ -272,8 +272,8 @@ inline void _llk_pack_untilize_uninit_(const std::uint32_t pack_src_format)
 {
     llk::san::pack_operand_check(
         llk::san::IGNORE, pack_src_format, llk::san::IGNORE, llk::san::IGNORE, llk::san::IGNORE, llk::san::IGNORE, llk::san::IGNORE, llk::san::IGNORE);
+    llk::san::operation_uninit<llk::san::Operation::PackUntilize>();
     // sstanisic todo: implement
-    // llk::san::uninit<llk::san::Operation::PackUntilize>();
     // llk_san_extended_state_mask<true>(llk_san_cfg::CH0Strides);
 
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);

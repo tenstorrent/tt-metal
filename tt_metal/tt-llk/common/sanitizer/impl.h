@@ -344,10 +344,11 @@ constexpr size_t _operation_entry_size(
 // Goes in LLK_LIB in Init
 // Store operation type and push arguments to state stack
 template <Operation op, typename... Ts>
-static inline void operation_init_impl(OperationState& state, const Ts... args)
+static inline void operation_init_impl(ThreadOutputContext& context, OperationState& state, const Ts... args)
 {
     state.operation     = op;
     state.expect_uninit = operation_must_uninit<op>;
+    context.operation   = context.current;
 
     constexpr std::uint8_t args_count = _args_count<Ts...>();
 
@@ -390,6 +391,7 @@ void operation_check_impl(const ThreadOutputContext& context, OperationState& st
 {
     if (!thread_silent_get_impl(context))
     {
+        // sstanisic todo: exit early if this fails.
         operation_assert(state.operation, op, context.operation, context.current);
 
         constexpr std::uint8_t args_count = _args_count<Ts...>();
