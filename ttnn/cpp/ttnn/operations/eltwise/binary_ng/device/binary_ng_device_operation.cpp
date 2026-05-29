@@ -638,12 +638,6 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         log_debug(tt::LogOp, "BinaryNgDeviceOperation: Using memory config from output tensor since it is provided");
     }
 
-    // log_info(tt::LogAlways, "Binary TT Variant {}", binary_op_type);
-    // auto s = to_string(input_tensor_a);
-    // log_info(tt::LogAlways, "Input tensor A {}", s);
-    // s = to_string(input_tensor_b);
-    // log_info(tt::LogAlways, "Input tensor B {}", s);
-
     auto operation_attributes = OperationType::operation_attributes_t{
         binary_op_type,
         {lhs_activations.begin(), lhs_activations.end()},
@@ -689,11 +683,6 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     using OperationType = ttnn::operations::binary_ng::BinaryNgDeviceOperation;
-
-    // log_info(tt::LogAlways, "Binary TS Variant {}", binary_op_type);
-    // auto s = to_string(input_tensor_a);
-    // log_info(tt::LogAlways, "A {}", s);
-    // log_info(tt::LogAlways, "Scalar {}", scalar);
 
     // Validate storage type
     TT_FATAL(
