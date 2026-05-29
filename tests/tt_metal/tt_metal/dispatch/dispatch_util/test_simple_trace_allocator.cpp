@@ -42,7 +42,7 @@ protected:
         uint32_t data_type,
         uint32_t size,
         uint64_t program_id) {
-        alloc.regions_[addr] = {.trace_idx = trace_idx, .data_type = data_type, .size = size, .name = program_id};
+        alloc.regions_[addr] = {.trace_idx = trace_idx, .data_type = data_type, .size = size, .program_id = program_id};
     }
 
     std::vector<ExtraData> extra_data_;

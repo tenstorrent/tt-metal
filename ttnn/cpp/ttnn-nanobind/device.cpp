@@ -687,7 +687,7 @@ void device_module(nb::module_& m_device) {
 
             Example:
                 >>> def my_callback(record):
-                ...     print(f"Program {record.name} on chip {record.chip_id}")
+                ...     print(f"Program {record.program_id} on chip {record.chip_id}")
                 >>> handle = ttnn.device.RegisterProgramRealtimeProfilerCallback(my_callback)
         )doc");
 

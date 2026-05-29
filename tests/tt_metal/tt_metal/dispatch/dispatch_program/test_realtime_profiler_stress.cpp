@@ -222,7 +222,7 @@ TEST(RealtimeProfilerStress, RingBufferOverflowFromTrace) {
     // hooked up.
     uint32_t stress_records = 0;
     for (const auto& rec : collected) {
-        if (rec.name == kStressRuntimeId) {
+        if (rec.program_id == kStressRuntimeId) {
             ++stress_records;
         }
     }
@@ -256,7 +256,7 @@ TEST(RealtimeProfilerStress, RingBufferOverflowFromTrace) {
     uint32_t implausible_duration = 0;
     int64_t worst_negative_delta = 0;
     for (const auto& rec : collected) {
-        if (rec.name != kStressRuntimeId) {
+        if (rec.program_id != kStressRuntimeId) {
             continue;
         }
         if (rec.end_timestamp < rec.start_timestamp) {
