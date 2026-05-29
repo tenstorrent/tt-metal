@@ -623,6 +623,14 @@ class TTNNLinearIColShardedWRowSharded(TTNNLinearInputShardedWeightSharded):
 
 
 class TTNNLinearIColShardedWAllReduced(TTNNLinearIColShardedWRowSharded):
+    def _prefill_matmul_override(self, input_shape):
+        """Optional tuned ``(program_config, memory_config)`` for the single-device prefill matmul.
+
+        Subclasses can override to inject a hand-tuned program config (in0 L1-interleaved). Return
+        ``(None, None)`` to keep the adaptive ``_dp_matmul_program_config`` path.
+        """
+        return None, None
+
     @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         """Forward pass: matmul + all_reduce.
@@ -680,8 +688,13 @@ class TTNNLinearIColShardedWAllReduced(TTNNLinearIColShardedWRowSharded):
                 input_tensor = ttnn.to_memory_config(input_tensor, ttnn.L1_MEMORY_CONFIG)
                 memory_config = ttnn.L1_MEMORY_CONFIG
             else:
-                program_config = _dp_matmul_program_config(self.device, input_shape, self.tt_weight.shape)
-                memory_config = _decode_linear_output_memory_config(self.device, input_shape)
+                program_config, memory_config = self._prefill_matmul_override(input_shape)
+                if program_config is not None:
+                    # Tuned prefill config wants in0 L1-interleaved.
+                    input_tensor = ttnn.to_memory_config(input_tensor, ttnn.L1_MEMORY_CONFIG)
+                else:
+                    program_config = _dp_matmul_program_config(self.device, input_shape, self.tt_weight.shape)
+                    memory_config = _decode_linear_output_memory_config(self.device, input_shape)
         weight_tensor = dram_weight if dram_weight is not None else self.tt_weight
         bias_tensor = dram_bias if dram_bias is not None else fused_bias
         tt_output = ttnn.linear(

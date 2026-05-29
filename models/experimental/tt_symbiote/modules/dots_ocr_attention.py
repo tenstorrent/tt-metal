@@ -37,6 +37,32 @@ class _TTNNDotsOCRQKVPrefillLinear(TTNNLinearLLamaIColShardedWAllReduced):
     def _qkv_use_dram_sharded(self) -> bool:
         return False
 
+    def _prefill_matmul_override(self, input_shape):
+        # Tuned QKV prefill matmul from test_prefill_ops_sequence_univ_2.py: 8x8 grid, in0_block_w=6,
+        # 2D mcast, in0/out L1-interleaved (132 TFLOPs, ~1.61x vs the auto-heuristic). The tiling is
+        # specific to M=2816 (88 M-tiles -> per_core_M=11) and N=2048 (64 N-tiles -> per_core_N=8),
+        # so it only fires for that bucket; other sequence lengths fall back to the adaptive config.
+        m_tiles = (int(input_shape[-2]) + 31) // 32
+        n = int(self.tt_weight.shape[-1])
+        if m_tiles == 88 and n == 2048:
+            return (
+                ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+                    in0_block_w=6,
+                    out_subblock_h=1,
+                    out_subblock_w=8,
+                    out_block_h=11,
+                    out_block_w=8,
+                    per_core_M=11,
+                    per_core_N=8,
+                    transpose_mcast=False,
+                    fused_activation=None,
+                    fuse_batch=True,
+                ),
+                ttnn.L1_MEMORY_CONFIG,
+            )
+        return None, None
+
 
 @trace_enabled
 class TTNNDotsOCRAttention(TTNNModule):
@@ -175,18 +201,14 @@ class TTNNDotsOCRAttention(TTNNModule):
         self.core_grid = ttnn.CoreGrid(y=grid.y, x=grid.x)
 
         if self.sdpa.program_config is None:
-            # Prefill SDPA: LoFi + approx softmax + BF16 dest accum + k_chunk=512.
-            # The vision tower runs the same LoFi/exp_approx schedule with
-            # k_chunk=512 successfully, and the text-decoder SDPA inputs are
-            # already BFP8 so the LoFi multiplication delta is well inside
-            # the existing quantization noise. Bumping k_chunk from 256 to
-            # 512 halves the outer-K iteration count for the per-chunk
-            # softmax-reduce loop. ``packer_l1_acc=True`` keeps the
-            # chunked partial-output accumulator in L1 instead of DRAM.
+            # Prefill SDPA: tuned 8x8 grid, q_chunk=256 / k_chunk=256 (both divide M=2816=256*11),
+            # exact softmax (exp_approx_mode=False) + HiFi2 (see compute_kernel_config below).
+            # This 256/256 schedule matches the gpt_oss prefill and llama3-70b configs and the
+            # standalone prefill op-sequence tuning (test_prefill_ops_sequence_univ_2.py).
             self.sdpa.program_config = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(self.core_grid.x, self.core_grid.y),
                 q_chunk_size=256,
-                k_chunk_size=512,
+                k_chunk_size=256,
                 exp_approx_mode=True,
             )
             self.sdpa.decode_program_config = ttnn.SDPAProgramConfig(
@@ -285,7 +307,7 @@ class TTNNDotsOCRAttention(TTNNModule):
         output that flows straight into the Interleaved create_heads factory.
         """
         if hidden_states.layout != ttnn.TILE_LAYOUT:
-            hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         if proj is None:
             proj = self.qkv_proj
@@ -314,7 +336,7 @@ class TTNNDotsOCRAttention(TTNNModule):
             num_heads=self.num_attention_heads,
             num_kv_heads=self.num_key_value_heads,
             transpose_k_heads=False,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.deallocate(qkv_states)
 
@@ -342,12 +364,12 @@ class TTNNDotsOCRAttention(TTNNModule):
             k_fill = (
                 key_states
                 if key_states.dtype == ttnn.bfloat16
-                else ttnn.typecast(key_states, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                else ttnn.typecast(key_states, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
             )
             v_fill = (
                 value_states
                 if value_states.dtype == ttnn.bfloat16
-                else ttnn.typecast(value_states, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                else ttnn.typecast(value_states, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
             )
             past_key_values.paged_fill_on_device(k_fill, v_fill, layer_idx=self.layer_idx, batch_idx=0)
             if k_fill is not key_states:
@@ -367,7 +389,7 @@ class TTNNDotsOCRAttention(TTNNModule):
             transpose_output=False,
         )
 
-        attn_output = ttnn.experimental.nlp_concat_heads(attn_output, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        attn_output = ttnn.experimental.nlp_concat_heads(attn_output, memory_config=ttnn.L1_MEMORY_CONFIG)
         attn_output = ttnn.squeeze(attn_output, 1)
 
         attn_output = self.o_proj(attn_output)

@@ -269,6 +269,30 @@ class TTNNDotsOCRRowShardedNoAllGather(TTNNLinearLLamaIColShardedWRowSharded):
             return ttnn.reshape(tt_output, input_tensor_shape[:-1] + [-1])
 
         matmul_mc = ttnn.DRAM_MEMORY_CONFIG if needs_ccl else (output_memory_config or ttnn.DRAM_MEMORY_CONFIG)
+
+        # Prefill down_proj (K=8960, N=1536): ttnn.matmul's auto-heuristic picks a degenerate
+        # config for this huge-K / small-N shape (~16 ms, ~5% compute, ~0.2% BW). minimal_matmul
+        # is the production prefill path (cf. models/tt_transformers/tt/mlp.py:276 and
+        # model_config.py:1318-1323). Single-device only; the CCL (TP) path keeps ttnn.linear +
+        # reduce_scatter, and decode uses the DRAM-sharded path above.
+        if not needs_ccl and int(input_shape[-2]) > 1:
+            ff2_mm_config = ttnn.MinimalMatmulConfig(
+                M_block_size=8,
+                K_block_size=8,
+                N_block_size=8,
+                compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+            )
+            tt_output = ttnn.experimental.minimal_matmul(
+                input_tensor,
+                self.tt_weight,
+                bias_tensor=fused_bias,
+                config=ff2_mm_config,
+                memory_config=matmul_mc,
+                dtype=ttnn.bfloat8_b,
+                compute_kernel_config=self.compute_kernel_config,
+            )
+            return ttnn.reshape(tt_output, input_tensor_shape[:-1] + [-1])
+
         tt_output = ttnn.linear(
             input_tensor,
             self.tt_weight,
