@@ -17,7 +17,6 @@ from ttnn.device import is_blackhole
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.mla_reference import create_mla_reference
-from models.demos.deepseek_v3_d_p.tests.model_variants import MODEL_VARIANTS
 from models.demos.deepseek_v3_d_p.tests.reference_runners import run_reference_mla
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
@@ -120,40 +119,8 @@ def run_mla_inference(
     return tt_output, hidden_states, chunk_order, shard_dims
 
 
-# sp x tp
-@pytest.mark.parametrize(
-    "mesh_device",
-    [(32, 4), (8, 4), (2, 4)],
-    ids=["32x4", "8x4", "2x4"],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else 1344544,
-        },
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else 1344544,
-        },
-    ],
-    ids=["line", "ring"],
-    indirect=True,
-)
-@pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
-@pytest.mark.parametrize("scale_down_sl", [False, True], ids=["max_sl", "scaled_sl"])
-@pytest.mark.parametrize(
-    "seq_len",
-    [1 * 1024, 5 * 1024, 25 * 1024, 128 * 1024, 100 * 1024],
-    ids=["seq1k", "seq5k", "seq25k", "seq128k", "seq100k"],
-)
-@pytest.mark.parametrize("skip_host_comparison", [False, True], ids=["check_pcc", "skip_check"])
-@pytest.mark.parametrize("is_balanced", [False, True], ids=["sequential", "balanced"])
-@pytest.mark.parametrize("variant", MODEL_VARIANTS.values(), ids=MODEL_VARIANTS.keys())
-@pytest.mark.timeout(0)  # Disable timeout — first run computes and caches CPU reference for large seq lengths
-def test_mla(
+def run_model(
+    variant,
     use_pretrained,
     request,
     mesh_device,
@@ -164,20 +131,8 @@ def test_mla(
     is_ci_env,
     is_ci_v2_env,
     device_params,
-    variant,
 ):
-    """
-    Test comparing reference and TT MLA modules with same weights.
-
-    Args:
-        use_pretrained: Whether to use pretrained weights
-        request: Pytest request object for conditional fixture loading
-        mesh_device: Mesh device fixture
-        seq_len: Sequence length
-    """
-    if variant.supported_meshes is not None and tuple(mesh_device.shape) not in variant.supported_meshes:
-        pytest.skip(f"{variant.name!r} not validated on mesh {tuple(mesh_device.shape)}")
-
+    """MLA reference/TT comparison body — shared across `test_ds_mla` / `test_kimi_mla`."""
     if use_pretrained and not variant.supports_pretrained:
         pytest.skip(f"{variant.name!r}: pretrained weights not available")
 
@@ -385,3 +340,98 @@ def test_mla(
         logger.debug("✓ Distributed synchronization completed")
 
     logger.success(f"✓ Reference and TT comparison with {weight_type} weights successful")
+
+
+_MLA_COMMON_DEVICE_PARAMS = [
+    {
+        "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else 1344544,
+    },
+    {
+        "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+        "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else 1344544,
+    },
+]
+
+
+@pytest.mark.parametrize("mesh_device", [(32, 4), (8, 4), (2, 4)], ids=["32x4", "8x4", "2x4"], indirect=True)
+@pytest.mark.parametrize("device_params", _MLA_COMMON_DEVICE_PARAMS, ids=["line", "ring"], indirect=True)
+@pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
+@pytest.mark.parametrize("scale_down_sl", [False, True], ids=["max_sl", "scaled_sl"])
+@pytest.mark.parametrize(
+    "seq_len",
+    [1 * 1024, 5 * 1024, 25 * 1024, 128 * 1024, 100 * 1024],
+    ids=["seq1k", "seq5k", "seq25k", "seq128k", "seq100k"],
+)
+@pytest.mark.parametrize("skip_host_comparison", [False, True], ids=["check_pcc", "skip_check"])
+@pytest.mark.parametrize("is_balanced", [False, True], ids=["sequential", "balanced"])
+@pytest.mark.parametrize("variant", ["dsv3"], indirect=True, ids=["dsv3"])
+@pytest.mark.timeout(0)
+def test_ds_mla(
+    use_pretrained,
+    request,
+    mesh_device,
+    seq_len,
+    skip_host_comparison,
+    scale_down_sl,
+    is_balanced,
+    is_ci_env,
+    is_ci_v2_env,
+    device_params,
+    variant,
+):
+    run_model(
+        variant,
+        use_pretrained,
+        request,
+        mesh_device,
+        seq_len,
+        skip_host_comparison,
+        scale_down_sl,
+        is_balanced,
+        is_ci_env,
+        is_ci_v2_env,
+        device_params,
+    )
+
+
+@pytest.mark.parametrize("mesh_device", [(8, 4)], ids=["8x4"], indirect=True)
+@pytest.mark.parametrize("device_params", _MLA_COMMON_DEVICE_PARAMS, ids=["line", "ring"], indirect=True)
+@pytest.mark.parametrize("use_pretrained", [False], ids=["random"])
+@pytest.mark.parametrize("scale_down_sl", [False, True], ids=["max_sl", "scaled_sl"])
+@pytest.mark.parametrize(
+    "seq_len",
+    [1 * 1024, 5 * 1024, 25 * 1024],
+    ids=["seq1k", "seq5k", "seq25k"],
+)
+@pytest.mark.parametrize("skip_host_comparison", [False, True], ids=["check_pcc", "skip_check"])
+@pytest.mark.parametrize("is_balanced", [False, True], ids=["sequential", "balanced"])
+@pytest.mark.parametrize("variant", ["kimi"], indirect=True, ids=["kimi"])
+@pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
+@pytest.mark.timeout(0)
+def test_kimi_mla(
+    use_pretrained,
+    request,
+    mesh_device,
+    seq_len,
+    skip_host_comparison,
+    scale_down_sl,
+    is_balanced,
+    is_ci_env,
+    is_ci_v2_env,
+    device_params,
+    variant,
+):
+    run_model(
+        variant,
+        use_pretrained,
+        request,
+        mesh_device,
+        seq_len,
+        skip_host_comparison,
+        scale_down_sl,
+        is_balanced,
+        is_ci_env,
+        is_ci_v2_env,
+        device_params,
+    )

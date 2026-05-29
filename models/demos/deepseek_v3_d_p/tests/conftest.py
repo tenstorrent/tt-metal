@@ -10,6 +10,7 @@ Automatically downloads weights from HuggingFace if not available locally.
 
 import json
 import os
+from functools import lru_cache
 from pathlib import Path
 
 import pytest
@@ -21,6 +22,7 @@ import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
 from models.demos.deepseek_v3.utils.test_utils import dequantize_state_dict, load_state_dict
+from models.demos.deepseek_v3_d_p.tests.model_variants import DSV3, TEST_VARIANTS, TestVariant
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import download_infinitebench_subset
 
 
@@ -82,75 +84,58 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(pytest.mark.skip(reason=skip_reason))
 
 
-def download_model_config_only(cache_dir: Path) -> Path:
+@pytest.fixture
+def variant(request) -> TestVariant:
+    """The active test variant. Driven by indirect parametrize:
+        @pytest.mark.parametrize("variant", ["dsv3"], indirect=True)
+    Tests that don't parametrize fall back to DSv3.
     """
-    Download only DeepSeek-R1-0528 config files (without weight shards).
-    This is fast and only downloads ~few MB for config files.
+    param = getattr(request, "param", None)
+    if param is None:
+        return DSV3
+    return TEST_VARIANTS[param] if isinstance(param, str) else param
 
-    Args:
-        cache_dir: Directory to cache downloaded config
 
-    Returns:
-        Path to the downloaded model directory with config
-    """
+def download_model_config_only(variant: TestVariant, cache_dir: Path) -> Path:
+    """Download only config files (no weight shards) for the variant's HF repo."""
     try:
         from huggingface_hub import snapshot_download
     except ImportError:
         logger.error("huggingface_hub is not installed. Install it with: pip install huggingface_hub")
         raise
 
-    model_id = "deepseek-ai/DeepSeek-R1-0528"
-    logger.info(f"Downloading DeepSeek-R1-0528 config only (no weights) from HuggingFace")
+    logger.info(f"Downloading {variant.hf_repo_id} config-only from HuggingFace")
     logger.info(f"Cache directory: {cache_dir}")
 
-    # Create cache directory
     cache_dir.mkdir(parents=True, exist_ok=True)
 
+    allow_patterns = [
+        "config.json",
+        "*.safetensors.index.json",
+        "generation_config.json",
+        "tokenizer*",
+        "*.py",
+    ]
+
     try:
-        # Download only config files, no weight shards
-        allow_patterns = [
-            "config.json",
-            "*.safetensors.index.json",
-            "generation_config.json",
-            "tokenizer*",
-        ]
-
-        # Add custom model code files (needed for trust_remote_code=True)
-        allow_patterns.extend(
-            [
-                "configuration_deepseek.py",
-                "modeling_deepseek.py",
-                "*.py",  # Include all Python files for custom model code
-            ]
-        )
-
         model_dir = snapshot_download(
-            repo_id=model_id,
+            repo_id=variant.hf_repo_id,
             cache_dir=str(cache_dir),
             allow_patterns=allow_patterns,
-            ignore_patterns=["*.safetensors"],  # Don't download weight files
+            ignore_patterns=["*.safetensors"],
         )
-
         logger.success(f"✓ Config files downloaded to: {model_dir}")
         return Path(model_dir)
-
     except Exception as e:
-        logger.error(f"Failed to download config: {e}")
+        logger.error(f"Failed to download {variant.hf_repo_id} config: {e}")
         raise
 
 
-def download_model_weights(cache_dir: Path, layer_idx: int = 0, num_layers: int = 1) -> Path:
-    """
-    Download DeepSeek-R1-0528 model weights from HuggingFace.
+def download_model_weights(variant: TestVariant, cache_dir: Path, layer_idx: int = 0, num_layers: int = 1) -> Path:
+    """Download model weights for the variant's HF repo.
 
-    Args:
-        cache_dir: Directory to cache downloaded weights
-        layer_idx: Which layer to download weights for (default: 0)
-        num_layers: Number of layers to download weights for (default: 1).
-            When >1, downloads additional shards for layers 0..num_layers-1.
-
-    Returns:
-        Path to the downloaded model directory
+    Pulls shards covering layers [layer_idx, layer_idx+num_layers) plus embeddings
+    and `model.norm.weight`. Other shards are skipped to bound download size.
     """
     try:
         from huggingface_hub import snapshot_download
@@ -158,10 +143,9 @@ def download_model_weights(cache_dir: Path, layer_idx: int = 0, num_layers: int 
         logger.error("huggingface_hub is not installed. Install it with: pip install huggingface_hub")
         raise
 
-    model_id = "deepseek-ai/DeepSeek-R1-0528"
-    logger.info(f"Downloading DeepSeek-R1-0528 weights from HuggingFace (model: {model_id})")
+    logger.info(f"Downloading {variant.hf_repo_id} weights from HuggingFace")
     logger.info(f"Cache directory: {cache_dir}")
-    logger.info(f"Note: Only downloading files needed for layer {layer_idx} to minimize download size")
+    logger.info(f"Pulling shards for layers {layer_idx}..{layer_idx + num_layers - 1} + embed + norm")
 
     # Create cache directory
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -187,7 +171,7 @@ def download_model_weights(cache_dir: Path, layer_idx: int = 0, num_layers: int 
 
         # First download just the index to figure out which shards we need
         index_dir = snapshot_download(
-            repo_id=model_id,
+            repo_id=variant.hf_repo_id,
             cache_dir=str(cache_dir),
             allow_patterns=allow_patterns,
             ignore_patterns=["*.safetensors"],  # Don't download weight files yet
@@ -237,7 +221,7 @@ def download_model_weights(cache_dir: Path, layer_idx: int = 0, num_layers: int 
         logger.info(f"Estimated download size: ~{estimated_size_gb:.1f}GB")
 
         model_dir = snapshot_download(
-            repo_id=model_id,
+            repo_id=variant.hf_repo_id,
             cache_dir=str(cache_dir),
             allow_patterns=allow_patterns + shard_patterns,
         )
@@ -248,11 +232,11 @@ def download_model_weights(cache_dir: Path, layer_idx: int = 0, num_layers: int 
 
     except Exception as e:
         logger.error(f"Failed to download model: {e}")
-        logger.info("You can also manually set DEEPSEEK_V3_HF_MODEL to point to existing weights")
+        logger.info(f"You can also manually set {variant.env_var} to point to existing weights")
         raise
 
 
-def get_or_download_model(layer_idx: int = 0, num_layers: int = 6) -> Path:
+def get_or_download_model(variant: TestVariant, layer_idx: int = 0, num_layers: int = 6) -> Path:
     """
     Get model path, downloading from HuggingFace if necessary.
 
@@ -264,200 +248,131 @@ def get_or_download_model(layer_idx: int = 0, num_layers: int = 6) -> Path:
     Returns:
         Path to model directory with weights
     """
-    # Check environment variable first
-    env_path = os.getenv("DEEPSEEK_V3_HF_MODEL")
+    env_path = os.getenv(variant.env_var)
     if env_path:
-        model_path = Path(env_path)
-        if model_path.exists():
-            index_file = model_path / "model.safetensors.index.json"
-            if index_file.exists():
-                logger.info(f"Using existing model from DEEPSEEK_V3_HF_MODEL: {model_path}")
-                return model_path.resolve()
-            else:
-                logger.warning(f"DEEPSEEK_V3_HF_MODEL set but missing index file: {index_file}")
+        candidate = Path(env_path)
+        if (candidate / "model.safetensors.index.json").exists():
+            logger.info(f"Using existing model from {variant.env_var}: {candidate}")
+            return candidate.resolve()
+        logger.warning(f"{variant.env_var} set but missing index file in {candidate}")
 
-    # Check default location
-    default_path = Path("models/demos/deepseek_v3/reference")
-    if default_path.exists():
-        index_file = default_path / "model.safetensors.index.json"
-        if index_file.exists():
-            logger.info(f"Using model from default location: {default_path}")
-            return default_path.resolve()
+    for label, p in (("default", variant.default_local_path), ("shared", variant.shared_path)):
+        if p is not None and (p / "model.safetensors.index.json").exists():
+            logger.info(f"Using model from {label} location: {p}")
+            return p.resolve()
 
-    # Check shared weights location
-    shared_path = Path("/proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528")
-    if shared_path.exists():
-        index_file = shared_path / "model.safetensors.index.json"
-        if index_file.exists():
-            logger.info(f"Using model from shared location: {shared_path}")
-            return shared_path.resolve()
-
-    # Download from HuggingFace
-    logger.info("Model not found locally. Downloading DeepSeek-R1-0528 from HuggingFace...")
-
-    # Determine cache directory
+    logger.info(f"Model not found locally. Downloading {variant.hf_repo_id} from HuggingFace...")
     cache_dir = Path(os.getenv("HF_HOME", Path.home() / ".cache" / "huggingface"))
-    logger.info(f"Will cache to: {cache_dir}")
-    # Note: Detailed download size is logged by download_model_weights() after analyzing the index
-
-    return download_model_weights(cache_dir, layer_idx, num_layers)
+    return download_model_weights(variant, cache_dir, layer_idx, num_layers)
 
 
-@pytest.fixture(scope="session")
-def model_path():
-    """
-    Get model path and resolve symlinks to ensure all operations can find files.
-    Automatically downloads weights from HuggingFace if not available locally.
-    Downloads weights for layers 0-11 (12 layers total) to support all test cases.
-
-    Checks in order:
-    1. DEEPSEEK_V3_HF_MODEL environment variable
-    2. models/demos/deepseek_v3/reference/ (default location)
-    3. Downloads from HuggingFace to HF cache if not found
-    """
-    return get_or_download_model(layer_idx=0, num_layers=24)
+@lru_cache(maxsize=None)
+def _resolve_model_path(variant_name: str) -> Path:
+    v = TEST_VARIANTS[variant_name]
+    return get_or_download_model(v, layer_idx=0, num_layers=v.num_layers_to_download)
 
 
-@pytest.fixture(scope="session")
-def hf_config(model_path):
-    """
-    Load DeepSeek config for testing.
-    Returns None if model path doesn't exist (weights not available).
-    """
-    # Check if model path exists
-    if not model_path.exists():
+@lru_cache(maxsize=None)
+def _resolve_config_only(variant_name: str):
+    v = TEST_VARIANTS[variant_name]
+    env_path = os.getenv(v.env_var)
+    candidates = []
+    if env_path:
+        candidates.append(Path(env_path))
+    if v.default_local_path is not None:
+        candidates.append(v.default_local_path)
+    if v.shared_path is not None:
+        candidates.append(v.shared_path)
+    for p in candidates:
+        if (p / "config.json").exists():
+            logger.info(f"Using config from {p}")
+            return AutoConfig.from_pretrained(str(p), trust_remote_code=True)
+    logger.info(f"Config not found locally. Downloading {v.hf_repo_id} config-only from HuggingFace...")
+    cache_dir = Path(os.getenv("HF_HOME", Path.home() / ".cache" / "huggingface"))
+    config_path = download_model_config_only(v, cache_dir)
+    return AutoConfig.from_pretrained(str(config_path), trust_remote_code=True)
+
+
+@lru_cache(maxsize=None)
+def _resolve_hf_config(model_path_str: str):
+    p = Path(model_path_str)
+    if not (p / "config.json").exists():
         return None
-
-    # Check if config.json exists
-    config_file = model_path / "config.json"
-    if not config_file.exists():
-        return None
-
     try:
-        config = AutoConfig.from_pretrained(str(model_path), trust_remote_code=True)
-        logger.info(f"Loaded HF config from {model_path}")
-        return config
+        cfg = AutoConfig.from_pretrained(str(p), trust_remote_code=True)
+        logger.info(f"Loaded HF config from {p}")
+        return cfg
     except Exception as e:
-        logger.warning(f"Failed to load config from {model_path}: {e}")
+        logger.warning(f"Failed to load HF config from {p}: {e}")
         return None
 
 
-@pytest.fixture(scope="session")
-def config_only():
-    """
-    Load DeepSeek config for random weight tests (downloads only config, not weights).
-    This is fast and only downloads ~few MB.
-    """
-    # Check environment variable first
-    env_path = os.getenv("DEEPSEEK_V3_HF_MODEL")
+@lru_cache(maxsize=None)
+def _resolve_state_dict(model_path_str: str):
+    p = Path(model_path_str)
+    if not (p / "model.safetensors.index.json").exists():
+        return None
+    try:
+        sd = load_state_dict(p, "")
+        logger.info(f"Loaded state dict from {p}")
+        return sd
+    except Exception as e:
+        logger.warning(f"Failed to load state dict from {p}: {e}")
+        return None
+
+
+@lru_cache(maxsize=None)
+def _resolve_tokenizer(variant_name: str, padding_side: str):
+    v = TEST_VARIANTS[variant_name]
+    env_path = os.getenv(v.env_var)
+    candidates = []
     if env_path:
-        model_path = Path(env_path)
-        if model_path.exists():
-            config_file = model_path / "config.json"
-            if config_file.exists():
-                logger.info(f"Using existing config from DEEPSEEK_V3_HF_MODEL: {model_path}")
-                config = AutoConfig.from_pretrained(str(model_path), trust_remote_code=True)
-                return config
-
-    # Check default location
-    default_path = Path("models/demos/deepseek_v3/reference")
-    if default_path.exists():
-        config_file = default_path / "config.json"
-        if config_file.exists():
-            logger.info(f"Using config from default location: {default_path}")
-            config = AutoConfig.from_pretrained(str(default_path), trust_remote_code=True)
-            return config
-
-    # Check shared weights location
-    shared_path = Path("/proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528")
-    if shared_path.exists():
-        config_file = shared_path / "config.json"
-        if config_file.exists():
-            logger.info(f"Using config from shared location: {shared_path}")
-            config = AutoConfig.from_pretrained(str(shared_path), trust_remote_code=True)
-            return config
-
-    # Download only config files from HuggingFace (not weight shards)
-    logger.info("Config not found locally. Downloading config only (no weights) from HuggingFace...")
-
-    cache_dir = Path(os.getenv("HF_HOME", Path.home() / ".cache" / "huggingface"))
-    logger.info(f"Will cache config to: {cache_dir}")
-
-    config_path = download_model_config_only(cache_dir)
-    config = AutoConfig.from_pretrained(str(config_path), trust_remote_code=True)
-    logger.info(f"Loaded config from {config_path}")
-    return config
-
-
-@pytest.fixture(scope="session", params=["right"])
-def tokenizer(request):
-    """Load DeepSeek tokenizer, searching known model locations.
-
-    Default padding_side is "right" (back-padding). To test with left padding,
-    override in your test: @pytest.mark.parametrize("tokenizer", ["left"], indirect=True)
-    """
-    padding_side = request.param
-    candidates = [
-        os.getenv("DEEPSEEK_V3_HF_MODEL"),
-        "models/demos/deepseek_v3/reference",
-        "/proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528",
-    ]
-    for candidate in candidates:
-        if candidate is None:
-            continue
-        p = Path(candidate)
+        candidates.append(Path(env_path))
+    if v.default_local_path is not None:
+        candidates.append(v.default_local_path)
+    if v.shared_path is not None:
+        candidates.append(v.shared_path)
+    for p in candidates:
         if p.exists() and any(p.glob("tokenizer*")):
             logger.info(f"Loading tokenizer from: {p}")
             tok = AutoTokenizer.from_pretrained(str(p), use_fast=True, trust_remote_code=True)
             tok.padding_side = padding_side
             return tok
-
-    # Fall back to downloading config-only (includes tokenizer files)
     cache_dir = Path(os.getenv("HF_HOME", Path.home() / ".cache" / "huggingface"))
-    config_path = download_model_config_only(cache_dir)
+    config_path = download_model_config_only(v, cache_dir)
     logger.info(f"Loading tokenizer from downloaded config: {config_path}")
     tok = AutoTokenizer.from_pretrained(str(config_path), use_fast=True, trust_remote_code=True)
     tok.padding_side = padding_side
     return tok
 
 
-@pytest.fixture(scope="session")
-def state_dict(model_path):
-    """
-    Load state dict for testing.
-    Returns None if model path doesn't exist (weights not available).
-    """
-    # Check if model path exists
-    if not model_path.exists():
-        return None
-
-    # Check if model.safetensors.index.json exists
-    index_file = model_path / "model.safetensors.index.json"
-    if not index_file.exists():
-        return None
-
-    try:
-        state_dict = load_state_dict(model_path, "")
-        logger.info(f"Loaded state dict from {model_path}")
-        return state_dict
-    except Exception as e:
-        logger.warning(f"Failed to load state dict from {model_path}: {e}")
-        return None
+@pytest.fixture
+def model_path(variant) -> Path:
+    return _resolve_model_path(variant.name)
 
 
-def _check_pretrained_available(model_path: Path = None) -> bool:
-    """
-    Check if pretrained weights are available.
+@pytest.fixture
+def hf_config(variant, model_path):
+    return _resolve_hf_config(str(model_path))
 
-    Args:
-        model_path: Optional model path to check. If None, uses default from env or fallback.
 
-    Returns:
-        True if pretrained weights are available, False otherwise.
-    """
-    if model_path is None:
-        model_path = Path(os.getenv("DEEPSEEK_V3_HF_MODEL", "models/demos/deepseek_v3/reference"))
+@pytest.fixture
+def config_only(variant):
+    return _resolve_config_only(variant.name)
 
+
+@pytest.fixture(params=["right"])
+def tokenizer(request, variant):
+    """Padding side via indirect parametrize. Defaults to right-padding."""
+    return _resolve_tokenizer(variant.name, request.param)
+
+
+@pytest.fixture
+def state_dict(variant, model_path):
+    return _resolve_state_dict(str(model_path))
+
+
+def _check_pretrained_available(model_path: Path) -> bool:
     index_file = model_path / "model.safetensors.index.json"
     config_file = model_path / "config.json"
 
@@ -471,37 +386,27 @@ def _check_pretrained_available(model_path: Path = None) -> bool:
     return available
 
 
-@pytest.fixture(scope="session")
-def weight_cache_path(model_path):
-    """
-    Return a directory for caching TTNN weight tensors (.tensorbin files).
-
-    First run: ttnn.as_tensor() dumps converted weights here.
-    Subsequent runs: weights are loaded directly, bypassing torch conversion.
-
-    The path encodes architecture + device count to prevent cross-config clashes.
-    Returns None if pretrained weights are unavailable (random-weight tests skip caching).
-    """
+@pytest.fixture
+def weight_cache_path(variant, model_path):
+    """Directory for caching TTNN weight tensors. None if pretrained weights aren't on disk."""
     if not _check_pretrained_available(model_path):
         return None
     arch = "bh" if is_blackhole() else "wh"
     num_devices = ttnn.get_num_devices()
     env_cache = os.getenv("TT_DS_PREFILL_TTNN_CACHE")
     if env_cache:
-        cache_dir = Path(env_cache) / f"deepseek_v3_d_p_{arch}_{num_devices}dev"
+        cache_dir = Path(env_cache) / f"{variant.weight_cache_prefix}_{arch}_{num_devices}dev"
     else:
-        cache_dir = model_path / f"tensor_cache_{arch}_{num_devices}dev"
+        cache_dir = model_path / f"tensor_cache_{variant.weight_cache_prefix}_{arch}_{num_devices}dev"
     cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir
 
 
 @pytest.fixture
-def random_weights(variant, request):
-    """
-    Random MLA weights for the model variant.
-    """
-    config = variant.get_config(request)
-    torch.manual_seed(42)  # this is tied to already cached reference results, so keep it consistent for now
+def random_weights(variant, config_only):
+    """Random MLA weights sized from the variant's config."""
+    config = config_only
+    torch.manual_seed(42)  # tied to cached reference results; keep stable
 
     # Use proper initialization scale from config (typically 0.02)
     std = config.initializer_range
@@ -547,26 +452,20 @@ def random_weights(variant, request):
 
 
 @pytest.fixture
-def pretrained_transformer_weights(model_path, hf_config, state_dict, request):
+def pretrained_transformer_weights(variant, model_path, hf_config, state_dict, request):
+    """Dequantized pretrained weights for N-layer transformer in TT state_dict format.
+
+    Skips if the variant doesn't support pretrained weights, or if config/state_dict
+    couldn't be loaded.
     """
-    Dequantized pretrained weights for N-layer transformer in TT state_dict format.
-
-    Extracts embed, norm, and per-layer weights (attention, FFN/MoE) using
-    sub_state_dict() + dequantize_state_dict(), matching the format produced
-    by extract_tt_state_dict() in transformer_helpers.py.
-
-    Parametrize with num_layers (default 6) via indirect fixture or marker:
-        @pytest.mark.parametrize("pretrained_transformer_weights", [4], indirect=True)
-
-    Returns:
-        Tuple of (hf_config, tt_state_dict) or skips if not available
-    """
+    if not variant.supports_pretrained:
+        pytest.skip(f"{variant.name}: pretrained weights not wired")
     if not _check_pretrained_available(model_path):
-        pytest.skip("Pretrained weights not available. Set DEEPSEEK_V3_HF_MODEL or download model.")
+        pytest.skip(f"{variant.name}: pretrained weights not available. Set {variant.env_var} or download.")
     if hf_config is None:
-        pytest.skip("Failed to load HF config. Check model path.")
+        pytest.skip(f"{variant.name}: failed to load HF config")
     if state_dict is None:
-        pytest.skip("Failed to load state dict. Check model path and weights.")
+        pytest.skip(f"{variant.name}: failed to load state dict")
 
     num_layers = request.node.callspec.params.get("num_layers", 1)
     first_k_dense = hf_config.first_k_dense_replace  # 3

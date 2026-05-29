@@ -15,11 +15,11 @@ from typing import Optional
 
 import torch
 
-from models.demos.deepseek_v3_d_p.tests.model_variants import ModelVariant
+from models.demos.deepseek_v3_d_p.tests.model_variants import TestVariant
 
 
 def run_reference_moe(
-    variant: ModelVariant,
+    variant: TestVariant,
     *,
     config,
     gate_weights,
@@ -41,7 +41,7 @@ def run_reference_moe(
 
 
 def run_reference_mla(
-    variant: ModelVariant,
+    variant: TestVariant,
     *,
     config,
     weights,

@@ -104,84 +104,9 @@ def _compare_intermediate_pcc(reference_items, tt_intermediates, number_of_non_p
     return pcc_results
 
 
-@pytest.mark.skipif(not is_blackhole(), reason="Requires Blackhole.")
-@pytest.mark.parametrize("tokenizer", ["right", "left"], indirect=True, ids=["right_pad", "left_pad"])
-@pytest.mark.parametrize("temperature", [[0.5]], ids=["temp_sweep"])
-@pytest.mark.parametrize("return_kv_cache", [True], ids=["kv_cache"])
-@pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
-@pytest.mark.parametrize(
-    "input_source",
-    [
-        "json_prompts",
-        "abc_1k",
-        "abc_short",
-        "p64tok",
-        "p960tok",
-        "pie960",
-        "random",
-        "passkey",
-        "kv_retrieval",
-        "longdialogue_qa_eng",
-        "longbook_qa_eng",
-    ],
-)
-@pytest.mark.parametrize("pcc_validation", [True, False], ids=["pcc", "smoke"])
-@pytest.mark.parametrize("is_balanced", [True, False], ids=["balanced", "regular"])
-@pytest.mark.parametrize(
-    "isl_total, dispatch_buffer_capacity_factor",
-    [(SEQ_LEN_1K, 8), (SEQ_LEN_25K, 8)],
-)
-@pytest.mark.parametrize(
-    "num_layers",
-    [
-        5,
-        12,
-        pytest.param(61, marks=pytest.mark.skipif(not is_galaxy(), reason="Testing entire-prefill only on Galaxy")),
-    ],
-    ids=["5_layers", "12_layers", "61_layers"],
-)
-@pytest.mark.parametrize(
-    "n_routed_experts, gate_fallback_mode",
-    [
-        (64, GateComputeMode.HOST_ALL),
-        (256, GateComputeMode.HOST_ALL),
-        (256, GateComputeMode.DEVICE),
-        (256, GateComputeMode.DEVICE_FP32),
-    ],
-    ids=["e64_host", "e256_host", "e256_device", "e256_device_fp32"],
-)
-@pytest.mark.parametrize("num_iterations", [1, 25, 2000], ids=["iter1", "iter25", "iter2000"])
-@pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
-    [
-        pytest.param(
-            (2, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
-            },
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-            id="mesh-2x4",
-        ),
-        pytest.param(
-            (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
-            },
-            2,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
-        ),
-    ],
-    indirect=["mesh_device", "device_params"],
-)
-@pytest.mark.timeout(0)
-def test_prefill_transformer(
-    config_only,
+def run_model(
+    variant,
+    config,
     mesh_device,
     device_params,
     is_balanced,
@@ -204,7 +129,12 @@ def test_prefill_transformer(
     tokenizer,
     request,
 ):
+    """Prefill-transformer body — shared between `test_ds_prefill_transformer` /
+    `test_kimi_prefill_transformer`."""
     torch.manual_seed(42)
+
+    if use_pretrained and not variant.supports_pretrained:
+        pytest.skip(f"{variant.name}: pretrained weights not wired")
 
     # Skip invalid pretrained combinations
     if use_pretrained and n_routed_experts != 256:
@@ -212,7 +142,6 @@ def test_prefill_transformer(
 
     profiler.clear()
     profiler.start("total_test_time")
-    config = config_only
     config.max_seq_len = isl_total
 
     sp_axis = 0
@@ -274,6 +203,7 @@ def test_prefill_transformer(
         )
 
     cache_key = ReferenceCacheKey(
+        variant_name=variant.name,
         weight_type=weight_type,
         input_source=input_source,
         isl_total=isl_total,
@@ -281,7 +211,7 @@ def test_prefill_transformer(
         n_routed_experts=n_routed_experts,
         padding_side=padding_side,
     )
-    ref_cache_exists = check_reference_cache_exists(cache_key) if (pcc_validation and trace is None) else False
+    ref_cache_exists = check_reference_cache_exists(variant, cache_key) if (pcc_validation and trace is None) else False
 
     logger.info(
         f"Cache status: TTNN={ttnn_cache_complete}, Trace={'YES' if trace else 'NO'}, Reference={ref_cache_exists}"
@@ -375,6 +305,7 @@ def test_prefill_transformer(
             # Use unified loader with flags
             logger.info("Processing layers with unified loader...")
             result = load_and_compute_layer_by_layer(
+                variant=variant,
                 model_path=model_path,
                 config=config,
                 num_layers=num_layers,
@@ -399,7 +330,7 @@ def test_prefill_transformer(
 
             # Save reference cache if computed
             if need_to_compute_reference and ref_snapshots is not None:
-                save_reference_cache(cache_key, ref_snapshots, ref_kvpe_list)
+                save_reference_cache(variant, cache_key, ref_snapshots, ref_kvpe_list)
                 logger.info("Reference cached")
         else:
             # Both caches exist - skip loading entirely
@@ -408,8 +339,8 @@ def test_prefill_transformer(
     else:
         # Random weights - always create HF model
         logger.info("Creating HF model with random weights...")
-        hf_model = create_hf_model(config, num_layers, n_routed_experts=n_routed_experts)
-        state_dict = extract_tt_state_dict(hf_model)
+        hf_model = create_hf_model(variant, config, num_layers, n_routed_experts=n_routed_experts)
+        state_dict = extract_tt_state_dict(variant, hf_model)
         del hf_model
         gc.collect()
 
@@ -587,7 +518,7 @@ def test_prefill_transformer(
         else:
             if ref_snapshots is None:
                 logger.info("Loading reference from cache...")
-                ref_snapshots, ref_kvpe_list = load_reference_cache(cache_key)
+                ref_snapshots, ref_kvpe_list = load_reference_cache(variant, cache_key)
 
             ref_labels = ["embed"] + [f"layer_{i}" for i in range(num_layers)] + ["norm", "lm_head"]
             reference_items = zip(ref_labels, ref_snapshots)
@@ -768,3 +699,224 @@ def test_prefill_transformer(
     # Deferred PCC failure check (after timing report)
     if pcc_validation and has_pcc_failures:
         pytest.fail(f"PCC below {threshold} at: {pcc_failure_msg}")
+
+
+_DS_PT_MESH_PARAMS = [
+    pytest.param(
+        (2, 4),
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
+        },
+        1,
+        ttnn.Topology.Linear,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+        id="mesh-2x4",
+    ),
+    pytest.param(
+        (8, 4),
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
+        },
+        2,
+        ttnn.Topology.Linear,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+        id="mesh-8x4",
+    ),
+]
+
+
+_KIMI_PT_MESH_PARAMS = [
+    pytest.param(
+        (8, 4),
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
+        },
+        2,
+        ttnn.Topology.Linear,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+        id="mesh-8x4",
+    ),
+]
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="Requires Blackhole.")
+@pytest.mark.parametrize("tokenizer", ["right", "left"], indirect=True, ids=["right_pad", "left_pad"])
+@pytest.mark.parametrize("temperature", [[0.5]], ids=["temp_sweep"])
+@pytest.mark.parametrize("return_kv_cache", [True], ids=["kv_cache"])
+@pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
+@pytest.mark.parametrize(
+    "input_source",
+    [
+        "json_prompts",
+        "abc_1k",
+        "abc_short",
+        "p64tok",
+        "p960tok",
+        "pie960",
+        "random",
+        "passkey",
+        "kv_retrieval",
+        "longdialogue_qa_eng",
+        "longbook_qa_eng",
+    ],
+)
+@pytest.mark.parametrize("pcc_validation", [True, False], ids=["pcc", "smoke"])
+@pytest.mark.parametrize("is_balanced", [True, False], ids=["balanced", "regular"])
+@pytest.mark.parametrize(
+    "isl_total, dispatch_buffer_capacity_factor",
+    [(SEQ_LEN_1K, 8), (SEQ_LEN_25K, 8)],
+)
+@pytest.mark.parametrize(
+    "num_layers",
+    [
+        5,
+        12,
+        pytest.param(61, marks=pytest.mark.skipif(not is_galaxy(), reason="Testing entire-prefill only on Galaxy")),
+    ],
+    ids=["5_layers", "12_layers", "61_layers"],
+)
+@pytest.mark.parametrize(
+    "n_routed_experts, gate_fallback_mode",
+    [
+        (64, GateComputeMode.HOST_ALL),
+        (256, GateComputeMode.HOST_ALL),
+        (256, GateComputeMode.DEVICE),
+        (256, GateComputeMode.DEVICE_FP32),
+    ],
+    ids=["e64_host", "e256_host", "e256_device", "e256_device_fp32"],
+)
+@pytest.mark.parametrize("num_iterations", [1, 25, 2000], ids=["iter1", "iter25", "iter2000"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, topology", _DS_PT_MESH_PARAMS, indirect=["mesh_device", "device_params"]
+)
+@pytest.mark.parametrize("variant", ["dsv3"], indirect=True, ids=["dsv3"])
+@pytest.mark.timeout(0)
+def test_ds_prefill_transformer(
+    variant,
+    config_only,
+    mesh_device,
+    device_params,
+    is_balanced,
+    isl_total,
+    dispatch_buffer_capacity_factor,
+    num_layers,
+    n_routed_experts,
+    gate_fallback_mode,
+    num_links,
+    topology,
+    pcc_validation,
+    num_iterations,
+    input_source,
+    use_pretrained,
+    return_kv_cache,
+    temperature,
+    weight_cache_path,
+    is_ci_env,
+    is_ci_v2_env,
+    tokenizer,
+    request,
+):
+    run_model(
+        variant,
+        config_only,
+        mesh_device,
+        device_params,
+        is_balanced,
+        isl_total,
+        dispatch_buffer_capacity_factor,
+        num_layers,
+        n_routed_experts,
+        gate_fallback_mode,
+        num_links,
+        topology,
+        pcc_validation,
+        num_iterations,
+        input_source,
+        use_pretrained,
+        return_kv_cache,
+        temperature,
+        weight_cache_path,
+        is_ci_env,
+        is_ci_v2_env,
+        tokenizer,
+        request,
+    )
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
+@pytest.mark.parametrize("tokenizer", ["right"], indirect=True, ids=["right_pad"])
+@pytest.mark.parametrize("temperature", [[0.5]], ids=["temp_sweep"])
+@pytest.mark.parametrize("return_kv_cache", [True], ids=["kv_cache"])
+@pytest.mark.parametrize("use_pretrained", [False], ids=["random"])
+@pytest.mark.parametrize("input_source", ["random", "json_prompts"])
+@pytest.mark.parametrize("pcc_validation", [True, False], ids=["pcc", "smoke"])
+@pytest.mark.parametrize("is_balanced", [True], ids=["balanced"])
+@pytest.mark.parametrize(
+    "isl_total, dispatch_buffer_capacity_factor",
+    [(SEQ_LEN_1K, 8)],
+)
+@pytest.mark.parametrize("num_layers", [5], ids=["5_layers"])
+@pytest.mark.parametrize(
+    "n_routed_experts, gate_fallback_mode",
+    [(384, GateComputeMode.HOST_ALL)],
+    ids=["e384_host"],
+)
+@pytest.mark.parametrize("num_iterations", [1], ids=["iter1"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, topology", _KIMI_PT_MESH_PARAMS, indirect=["mesh_device", "device_params"]
+)
+@pytest.mark.parametrize("variant", ["kimi"], indirect=True, ids=["kimi"])
+@pytest.mark.timeout(0)
+def test_kimi_prefill_transformer(
+    variant,
+    config_only,
+    mesh_device,
+    device_params,
+    is_balanced,
+    isl_total,
+    dispatch_buffer_capacity_factor,
+    num_layers,
+    n_routed_experts,
+    gate_fallback_mode,
+    num_links,
+    topology,
+    pcc_validation,
+    num_iterations,
+    input_source,
+    use_pretrained,
+    return_kv_cache,
+    temperature,
+    weight_cache_path,
+    is_ci_env,
+    is_ci_v2_env,
+    tokenizer,
+    request,
+):
+    run_model(
+        variant,
+        config_only,
+        mesh_device,
+        device_params,
+        is_balanced,
+        isl_total,
+        dispatch_buffer_capacity_factor,
+        num_layers,
+        n_routed_experts,
+        gate_fallback_mode,
+        num_links,
+        topology,
+        pcc_validation,
+        num_iterations,
+        input_source,
+        use_pretrained,
+        return_kv_cache,
+        temperature,
+        weight_cache_path,
+        is_ci_env,
+        is_ci_v2_env,
+        tokenizer,
+        request,
+    )
