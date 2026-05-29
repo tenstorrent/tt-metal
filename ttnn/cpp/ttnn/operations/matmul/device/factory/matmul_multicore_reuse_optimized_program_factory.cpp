@@ -47,7 +47,7 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
 
     const auto& a = tensor_args.input_tensors.at(0);
     const auto& b = tensor_args.input_tensors.at(1);
-    auto& output = tensor_return_value.at(0).mesh_tensor();
+    const auto& output = tensor_return_value.at(0).mesh_tensor();
 
     bool bcast_batch = operation_attributes.bcast_batch.value();
     bool transpose_a = operation_attributes.transpose_a;

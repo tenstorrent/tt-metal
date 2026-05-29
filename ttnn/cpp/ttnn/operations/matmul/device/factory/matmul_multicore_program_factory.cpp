@@ -35,7 +35,7 @@ ProgramDescriptor MatmulMultiCoreProgramFactory::create_descriptor(
 
     const auto& a = tensor_args.input_tensors.at(0).mesh_tensor();
     const auto& b = tensor_args.input_tensors.at(1).mesh_tensor();
-    auto& output = tensor_return_value.at(0).mesh_tensor();
+    const auto& output = tensor_return_value.at(0).mesh_tensor();
 
     TT_FATAL(operation_attributes.bcast_batch.has_value(), "Error: bcast_batch field should have been populated");
     bool bcast_batch = operation_attributes.bcast_batch.value();
