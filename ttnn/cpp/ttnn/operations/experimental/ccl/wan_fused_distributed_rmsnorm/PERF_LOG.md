@@ -492,3 +492,59 @@ util; now ~61% of 512 GB/s peak). small N2368 1.16× (no-RoPE) / 0.90×
 lever / 1.5× structural ceiling" claim is now disproven by both Opt 3 (read)
 and Opt 4 (write) beating 1.5× on no-RoPE — the real ceiling is DRAM
 *utilization*, and there is still headroom.
+
+## Re-profile after deep-r/w + two dead-end levers (2026-05-29)
+
+Re-profiled N12400 RoPE (TP=4 LINE, non-traced, 64 workers) on the
+post-Opt-4 (deep-write) kernel to find the *new* bottleneck. POST sub-zone
+shares, before (pre-deep-write) → after:
+
+| sub-zone | before share | after share | note |
+|---|---|---|---|
+| P_NORM   | 38% (166us) | **49–56% (194–258us)** | now dominant |
+| P_WEIGHT | 10% | 12% (46us) | flat |
+| P_MM     |  8% |  9% (36us) | flat |
+| P_COS    | 11% | 12% (48us) | flat |
+| P_SIN    | 10% | 11% (46us) | flat |
+| P_ADD    | **22% (95us)** | **7% (27us)** | deep-write killed drain BP |
+
+**Confirmed: Opt-4 (deep-write) crushed the output-drain back-pressure
+(P_ADD 22%→7%).** P_NORM is now the single dominant POST bucket — and it's
+~4–5× larger than the structurally-identical P_WEIGHT/P_COS/P_SIN passes
+(all are full 40-col multiplies). The extra ~150us is the per-row
+reduce<AVG>→eps→rsqrt→serial `cb_wait_front(reduce_result_cb)` chain that
+gates sub-phase-1's ×(1/rms) multiply.
+
+### Dead lever A — intra-kernel pass fusion (P_COS+P_ADD dest-reuse)
+Re-tried the stashed COS+ADD fusion (proven PCC-correct) on the hypothesis
+that deep-write removed the drain that had previously hidden the saved
+compute. **Result: still a regression** — RoPE self_N18944 426 (vs 416),
+N9472 290-ish, N2368 123; no-RoPE flat (path untouched). ~+2% on all RoPE
+shapes. **Root cause (now understood):** DST holds only `block_size`=2 tiles
+(fp32_dest_acc_en + half-sync), so fusing two ops forces *per-block*
+interleaving (mul then dest-reuse-add inside one tile_regs cycle), which
+needs a `reconfig_data_format` + init **per block** (20 blocks/row) instead
+of once per pass. That per-block reconfig overhead exceeds the saved
+pack+CB-roundtrip of one pass. Fusion is structurally dead here, not just
+drain-masked. **Do not retry pass fusion** unless DST capacity grows.
+
+### Dead lever B — dst_full_sync_en=true (block_size 2→4)
+The DST-capacity insight suggested raising block_size by enabling
+`dst_full_sync_en` (get_dest_reg_count: full-sync skips the ÷2, giving 4
+tiles with fp32_dest_acc still on — **precision-neutral**, it's a math↔pack
+scheduling mode, not a fidelity knob). Required changes in *two* places:
+the device-op `init_device_compute_kernel_config` 7th arg AND the program
+factory `ComputeConfig{.dst_full_sync_en=...}` (it was silently defaulting
+false — a mismatch would corrupt). Built, RoPE PCC PASS. **Result:
+regressed everything** — self_N18944 426→463, N9472 249→290, cross_q_N18944
+310→327, cross_q_N9472 190→209 (~+6–16% across the board). Full-sync
+serializes MATH and PACK on DST; that lost pipeline overlap costs more than
+the halved per-block count saves. **Reverted both edits. Keep
+dst_full_sync_en=false / block_size=2.**
+
+### Takeaway
+The compute kernel is at a local optimum for the per-pass structure:
+half-sync math/pack overlap + minimal-reconfig single-pass loops beat both
+fusion and bigger blocks. The remaining large bucket (P_NORM's reduce→rsqrt
+serialization) and the no-RoPE DRAM-utilization gap are the open levers; the
+intra-pass micro-structure is tapped out.
