@@ -10,7 +10,7 @@
 #include "ckernel_sfpu_softshrink.h"
 #include "ckernel_sfpu_hardshrink.h"
 #include "ckernel_sfpu_celu.h"
-#include "sfpu/ckernel_sfpu_activations.h"
+#include "ckernel_sfpu_activations.h"
 
 namespace ckernel {
 
