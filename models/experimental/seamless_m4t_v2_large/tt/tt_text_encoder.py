@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import math
-from typing import Optional
+from typing import Optional, Tuple
 
 import ttnn
 
@@ -18,7 +18,10 @@ from models.experimental.seamless_m4t_v2_large.tt.common import (
     dram_matmul_program_config,
     ensure_interleaved_bsh,
     ensure_l1_width_sharded_activation,
+    find_grid_for_k_n,
+    gather_in0_matmul_program_config,
     sdpa_program_config,
+    width_sharded_l1_memcfg,
     width_sharded_to_l1_interleaved,
 )
 from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import mesh_cluster_axis, get_tp
@@ -477,6 +480,90 @@ class TTSeamlessM4Tv2Encoder:
             compute_kernel_config=self._linear_ln_compute_cfg,
             **kwargs,
         )
+
+    def _gather_in0_grid(self, k_tiles: int, n_tiles: int) -> Tuple[int, int]:
+        """Pick the compute grid for ``gather_in0`` matmul, cached per (k_tiles, n_tiles)."""
+        key = ("grid", k_tiles, n_tiles)
+        cached = self._dram_matmul_pc_cache.get(key)
+        if cached is not None:
+            return cached
+        grid = find_grid_for_k_n(k_tiles, n_tiles)
+        self._dram_matmul_pc_cache[key] = grid
+        return grid
+
+    def _linear_gather_in0(
+        self,
+        x: ttnn.Tensor,
+        weight: ttnn.Tensor,
+        bias: ttnn.Tensor,
+        *,
+        m: int,
+        k: int,
+        n: int,
+        activation: Optional[str] = None,
+    ) -> ttnn.Tensor:
+        """``gather_in0`` matmul: L1-WIDTH-sharded ``x`` × DRAM-WIDTH-sharded ``weight`` → L1-WIDTH-sharded output.
+
+        Args:
+            x: input activation. May be interleaved-L1 (will be converted) or already
+               WIDTH-sharded across K. Shape ``[..., k]`` where the flat token count is ``m``.
+            weight: DRAM-width-sharded weight, ``[k, n]`` per device.
+            bias: TILE bias, broadcasted on M.
+            m, k, n: shape (k, n are per-device dims).
+            activation: optional ``"relu"`` to fuse into the matmul.
+
+        Caller is responsible for choosing weight layout that satisfies ``k % (TILE*num_cores) == 0``
+        and ``n % (TILE*num_cores) == 0`` for the grid this helper picks via ``find_grid_for_k_n``.
+        """
+        if m % TILE != 0:
+            raise ValueError(f"_linear_gather_in0: m={m} must be a multiple of TILE={TILE}")
+        if k % TILE != 0 or n % TILE != 0:
+            raise ValueError(f"_linear_gather_in0: k={k}, n={n} must be multiples of TILE")
+        k_tiles = k // TILE
+        n_tiles = n // TILE
+        m_tiles = m // TILE
+        grid_x, grid_y = self._gather_in0_grid(k_tiles, n_tiles)
+        num_cores = grid_x * grid_y
+
+        # Activation: L1 WIDTH_SHARDED [m_tiles*TILE, k_tiles*TILE] over the grid.
+        in_mem = width_sharded_l1_memcfg(m_tiles, k_tiles, grid_x, grid_y)
+        if not ttnn.is_sharded(x):
+            if len(x.shape) > 2:
+                x = ttnn.reshape(x, (m, k))
+            x_sharded = ttnn.interleaved_to_sharded(x, in_mem)
+        else:
+            x_sharded = x
+
+        # Output: L1 WIDTH_SHARDED [m, padded_n] over the same grid.
+        out_mem = width_sharded_l1_memcfg(m_tiles, n_tiles, grid_x, grid_y)
+
+        fused_activation = None
+        if activation == "relu":
+            fused_activation = ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
+
+        prog_cfg = gather_in0_matmul_program_config(
+            grid_x=grid_x,
+            grid_y=grid_y,
+            m_seq=m,
+            k_dim=k,
+            n_dim=n,
+            fuse_batch=True,
+            fused_activation=fused_activation,
+            fp32_dest_acc_en=True,
+        )
+
+        out = ttnn.linear(
+            x_sharded,
+            weight,
+            bias=bias,
+            dtype=ttnn.bfloat16,
+            memory_config=out_mem,
+            program_config=prog_cfg,
+            compute_kernel_config=self._linear_ln_compute_cfg,
+        )
+        if x_sharded is not x:
+            ttnn.deallocate(x_sharded)
+        return out
 
     def _attention(
         self,
