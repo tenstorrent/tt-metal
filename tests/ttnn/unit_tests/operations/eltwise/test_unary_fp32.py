@@ -174,16 +174,11 @@ def test_sinh_fp32_all_bfloat16_bitpatterns(device):
 
 
 def test_cosh_fp32_all_bfloat16_bitpatterns(device):
-    def finite_nonboundary_or_nonfinite(x):
-        # cosh overflows on device at +/-88.5 while the fp32 result is still finite.
-        return (torch.abs(x) <= 88.0) | ~torch.isfinite(x)
-
     run_unary_fp32_test_with_ulp(
         device,
         ttnn.cosh,
         lambda x: torch.cosh(x.double()).float(),
         max_ulp=1,
-        input_filter=finite_nonboundary_or_nonfinite,
     )
 
 
