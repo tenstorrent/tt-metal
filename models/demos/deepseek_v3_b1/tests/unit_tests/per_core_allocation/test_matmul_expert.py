@@ -13,7 +13,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_pcc
+from models.common.utility_functions import comp_pcc, skip_with_llk_assert
 from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensor, CompressedTensorAssigner
 from models.demos.deepseek_v3_b1.micro_ops.matmul_expert.op import (
     ExpertKernel,
@@ -2441,6 +2441,12 @@ def test_benchmark_down_proj(device, formats_per_device, fmt_ratios):
     )
 
 
+@skip_with_llk_assert(
+    'Hit LLK_ASSERT in cb_push_back: "CB push_back: fifo_wr_ptr would exceed fifo_limit" '
+    "(llk_io_pack.h) on TRISC2/packer from the per-expert cb_out push/pop wraparound trick "
+    "in the accum + primary_at_last_offset path; cores hang and host times out in "
+    "wait_until_cores_done. Issue: #45174"
+)
 def test_benchmark_down_proj_gather_to_next(device):
     """Accum + primary_at_last_offset: 2-core bank splits N, sender NOC-writes its slice
     onto the receiver so receiver's shard holds the bank's full N output.
