@@ -850,13 +850,10 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuBinaryParameterizedFixture, TensixSfpuBinar
     }
 }
 
+// TODO: BinarySFPU ops here can only do 1 tile due to the hardcoding in the macros to indicies (0,1,2)
 INSTANTIATE_TEST_SUITE_P(
     SingleCoreSfpuBinaryCompute,
     SingleCoreSingleMeshDeviceSfpuBinaryParameterizedFixture,
-    ::testing::Values(
-        std::make_tuple(1, "div_binary"),
-        std::make_tuple(4, "div_binary"),
-        std::make_tuple(1, "add_int"),
-        std::make_tuple(4, "add_int")));
+    ::testing::Values(std::make_tuple(1, "div_binary"), std::make_tuple(1, "add_int")));
 
 }  // namespace tt::tt_metal
