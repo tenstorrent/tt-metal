@@ -886,9 +886,9 @@ def create_fused_moe_gpt_config(
 
     _w0_w1_base = get_cache_file_name(tensor_cache_path, f"fused_w0_w1_dtype{weight_dtype}")
     _w2_base = get_cache_file_name(tensor_cache_path, f"fused_w2_dtype{weight_dtype}")
-    _fused_caches_exist = _tensor_cache_exists(
-        _w0_w1_base, weight_dtype, ttnn.TILE_LAYOUT
-    ) and _tensor_cache_exists(_w2_base, weight_dtype, ttnn.TILE_LAYOUT)
+    _fused_caches_exist = _tensor_cache_exists(_w0_w1_base, weight_dtype, ttnn.TILE_LAYOUT) and _tensor_cache_exists(
+        _w2_base, weight_dtype, ttnn.TILE_LAYOUT
+    )
 
     # --- Extract ALL expert weights from state_dict ---
     # Each device owns E = experts_per_device unique experts.
