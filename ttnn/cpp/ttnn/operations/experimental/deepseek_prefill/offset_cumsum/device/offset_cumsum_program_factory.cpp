@@ -12,23 +12,19 @@
 #include "ttnn/operation.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::experimental::prim {
 
-tt::tt_metal::ProgramDescriptor OffsetCumsumProgramFactory::create_descriptor(
-    const OffsetCumsumParams& operation_attributes,
-    const Tensor& input,
-    tensor_return_value_t& tensor_return_value,
-    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
-    TT_FATAL(
-        mesh_dispatch_coordinate.has_value(),
-        "OffsetCumsumProgramFactory::create_descriptor requires a mesh dispatch coordinate");
-    const ttnn::MeshCoordinate& coord = mesh_dispatch_coordinate.value();
-    const uint32_t row_idx = coord[operation_attributes.cluster_axis];
-    const uint32_t experts_per_chip = operation_attributes.experts_per_chip;
+namespace {
 
-    tt::tt_metal::ProgramDescriptor desc;
+struct CreatedProgram {
+    tt::tt_metal::Program program;
+    OffsetCumsumSharedVariables shared_variables;
+};
+
+CreatedProgram create_program(
+    const Tensor& input, std::array<Tensor, 3>& tensor_return_value, uint32_t row_idx, uint32_t experts_per_chip) {
+    tt::tt_metal::Program program{};
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(tt::tt_metal::DataType::UINT32);
 
@@ -54,37 +50,22 @@ tt::tt_metal::ProgramDescriptor OffsetCumsumProgramFactory::create_descriptor(
     uint32_t expert_region_page_size = dst_expert_region_buffer->aligned_page_size();
 
     uint32_t cb_in0_index = tt::CBIndex::c_0;
-    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-        .total_size = input_page_size,
-        .core_ranges = core_set,
-        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(cb_in0_index),
-            .data_format = cb_data_format,
-            .page_size = input_page_size,
-        }}},
-    });
+    tt::tt_metal::CircularBufferConfig cb_in0_config =
+        tt::tt_metal::CircularBufferConfig(input_page_size, {{cb_in0_index, cb_data_format}})
+            .set_page_size(cb_in0_index, input_page_size);
+    tt::tt_metal::CreateCircularBuffer(program, core_set, cb_in0_config);
 
     uint32_t cb_out0_index = tt::CBIndex::c_1;
-    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-        .total_size = offsets_page_size,
-        .core_ranges = core_set,
-        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(cb_out0_index),
-            .data_format = cb_data_format,
-            .page_size = offsets_page_size,
-        }}},
-    });
+    tt::tt_metal::CircularBufferConfig cb_out0_config =
+        tt::tt_metal::CircularBufferConfig(offsets_page_size, {{cb_out0_index, cb_data_format}})
+            .set_page_size(cb_out0_index, offsets_page_size);
+    tt::tt_metal::CreateCircularBuffer(program, core_set, cb_out0_config);
 
     uint32_t cb_local_index = tt::CBIndex::c_2;
-    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-        .total_size = offsets_page_size,
-        .core_ranges = core_set,
-        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(cb_local_index),
-            .data_format = cb_data_format,
-            .page_size = offsets_page_size,
-        }}},
-    });
+    tt::tt_metal::CircularBufferConfig cb_local_config =
+        tt::tt_metal::CircularBufferConfig(offsets_page_size, {{cb_local_index, cb_data_format}})
+            .set_page_size(cb_local_index, offsets_page_size);
+    tt::tt_metal::CreateCircularBuffer(program, core_set, cb_local_config);
 
     std::vector<uint32_t> compile_time_args = {
         cb_in0_index,
@@ -107,29 +88,69 @@ tt::tt_metal::ProgramDescriptor OffsetCumsumProgramFactory::create_descriptor(
     tt::tt_metal::TensorAccessorArgs(dst_totals_buffer).append_to(compile_time_args);
     tt::tt_metal::TensorAccessorArgs(dst_expert_region_buffer).append_to(compile_time_args);
 
-    tt::tt_metal::KernelDescriptor reader_kernel_desc;
-    reader_kernel_desc.kernel_source =
+    std::map<std::string, std::string> kernel_defines;
+    tt::tt_metal::KernelHandle kernel_id = tt::tt_metal::CreateKernel(
+        program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/offset_cumsum/device/kernels/"
-        "reader_offset_cumsum_interleaved.cpp";
-    reader_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
-    reader_kernel_desc.core_ranges = core_set;
-    reader_kernel_desc.compile_time_args = std::move(compile_time_args);
-    reader_kernel_desc.config = tt::tt_metal::ReaderConfigDescriptor{};
+        "reader_offset_cumsum_interleaved.cpp",
+        core_set,
+        tt::tt_metal::ReaderDataMovementConfig(compile_time_args, kernel_defines));
 
-    // Buffer* in the first four positions so the framework records BufferBindings
-    // for the cache-hit fast path; row_idx is plain uint32_t (no override needed —
-    // it is invariant for a given coord, baked into the cached program for that coord).
-    tt::tt_metal::KernelDescriptor::RTArgList reader_rt_args;
-    reader_rt_args.push_back(src_buffer);
-    reader_rt_args.push_back(dst_offsets_buffer);
-    reader_rt_args.push_back(dst_totals_buffer);
-    reader_rt_args.push_back(dst_expert_region_buffer);
-    reader_rt_args.push_back(row_idx);
-    reader_kernel_desc.emplace_runtime_args(core, reader_rt_args);
+    tt::tt_metal::SetRuntimeArgs(
+        program,
+        kernel_id,
+        core,
+        {src_buffer->address(),
+         dst_offsets_buffer->address(),
+         dst_totals_buffer->address(),
+         dst_expert_region_buffer->address(),
+         row_idx});
 
-    desc.kernels.push_back(std::move(reader_kernel_desc));
+    return CreatedProgram{
+        std::move(program),
+        {/* kernel_id = */ kernel_id,
+         /* core      = */ core}};
+}
 
-    return desc;
+}  // namespace
+
+OffsetCumsumProgramFactory::cached_mesh_workload_t OffsetCumsumProgramFactory::create_mesh_workload(
+    const OffsetCumsumParams& operation_attributes,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const Tensor& input,
+    tensor_return_value_t& tensor_return_value) {
+    tt::tt_metal::distributed::MeshWorkload mesh_workload;
+    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+
+    for (const auto& coord : tensor_coords.coords()) {
+        uint32_t row_idx = coord[operation_attributes.cluster_axis];
+
+        auto result = create_program(input, tensor_return_value, row_idx, operation_attributes.experts_per_chip);
+        auto coord_range = ttnn::MeshCoordinateRange(coord);
+        mesh_workload.add_program(coord_range, std::move(result.program));
+        shared_variables.emplace(coord_range, result.shared_variables);
+    }
+
+    return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
+}
+
+void OffsetCumsumProgramFactory::override_runtime_arguments(
+    cached_mesh_workload_t& cached_workload,
+    const OffsetCumsumParams& operation_attributes,
+    const Tensor& input,
+    tensor_return_value_t& tensor_return_value) {
+    for (auto& [coord_range, program] : cached_workload.workload.get_programs()) {
+        auto coord = *(coord_range.begin());
+        uint32_t row_idx = coord[operation_attributes.cluster_axis];
+
+        auto& shared_vars = cached_workload.shared_variables.at(coord_range);
+        auto& runtime_args = GetRuntimeArgs(program, shared_vars.kernel_id, shared_vars.core);
+        runtime_args[0] = input.buffer()->address();
+        runtime_args[1] = tensor_return_value.at(0).buffer()->address();
+        runtime_args[2] = tensor_return_value.at(1).buffer()->address();
+        runtime_args[3] = tensor_return_value.at(2).buffer()->address();
+        runtime_args[4] = row_idx;
+    }
 }
 
 }  // namespace ttnn::experimental::prim

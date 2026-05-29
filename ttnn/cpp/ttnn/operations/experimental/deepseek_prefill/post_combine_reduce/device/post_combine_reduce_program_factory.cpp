@@ -8,7 +8,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 
 namespace ttnn::operations::experimental::deepseek_prefill::post_combine_reduce {
 
@@ -18,13 +18,17 @@ uint32_t get_num_pages(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buf
 uint32_t get_page_size(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->page_size(); }
 uint32_t get_aligned_page_size(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->aligned_page_size(); }
 
-}  // namespace
+struct CreatedProgram {
+    tt::tt_metal::Program program;
+    PostCombineReduceProgramFactory::shared_variables_t shared_variables;
+};
 
-tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descriptor(
+CreatedProgram create_at(
     const PostCombineReduceParams& operation_attributes,
+    [[maybe_unused]] const ttnn::MeshCoordinate& mesh_coordinate,
     const PostCombineReduceInputs& tensor_args,
     ttnn::Tensor& tensor_return_value) {
-    tt::tt_metal::ProgramDescriptor desc;
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     const auto& combine_output = tensor_args.combine_output;
     const auto& weights = tensor_args.weights;
@@ -101,27 +105,17 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
 
     // c_0: Stream one expert at a time through c_0 to minimize L1 footprint.
     uint32_t combine_cb_size = emb_dim_cb_tiles * tile_size;
-    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-        .total_size = combine_cb_size,
-        .core_ranges = core_range_set,
-        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_0),
-            .data_format = input_cb_data_format,
-            .page_size = tile_size,
-        }}},
-    });
+    tt::tt_metal::CircularBufferConfig cb_combine_config =
+        tt::tt_metal::CircularBufferConfig(combine_cb_size, {{tt::CBIndex::c_0, input_cb_data_format}})
+            .set_page_size(tt::CBIndex::c_0, tile_size);
+    tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_combine_config);
 
     // c_1: Stream one weight at a time (matching expert-by-expert input streaming).
     uint32_t weight_cb_size = tile_size;
-    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-        .total_size = weight_cb_size,
-        .core_ranges = core_range_set,
-        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_1),
-            .data_format = weight_cb_data_format,
-            .page_size = tile_size,
-        }}},
-    });
+    tt::tt_metal::CircularBufferConfig cb_weight_config =
+        tt::tt_metal::CircularBufferConfig(weight_cb_size, {{tt::CBIndex::c_1, weight_cb_data_format}})
+            .set_page_size(tt::CBIndex::c_1, tile_size);
+    tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_weight_config);
 
     // c_2 / c_3 CBs (dispatch table, indices) are only allocated when the
     // DeepSeek skip path is in use; the GPT-OSS path does not touch them.
@@ -145,55 +139,36 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
         dispatch_table_page_size_val = get_page_size(expert_dispatch_table);
         dispatch_table_aligned_page_size = get_aligned_page_size(expert_dispatch_table);
         uint32_t dispatch_table_cb_size = dispatch_table_num_pages * dispatch_table_aligned_page_size;
-        desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-            .total_size = dispatch_table_cb_size,
-            .core_ranges = core_range_set,
-            .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_2),
-                .data_format = dispatch_table_cb_data_format,
-                .page_size = dispatch_table_aligned_page_size,
-            }}},
-        });
+        tt::tt_metal::CircularBufferConfig cb_dispatch_table_config =
+            tt::tt_metal::CircularBufferConfig(
+                dispatch_table_cb_size, {{tt::CBIndex::c_2, dispatch_table_cb_data_format}})
+                .set_page_size(tt::CBIndex::c_2, dispatch_table_aligned_page_size);
+        tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_dispatch_table_config);
 
         // c_3: Indices scratch — loaded one chunk at a time (reused per chunk).
         indices_page_size_val = get_page_size(indices);
         indices_aligned_page_size = get_aligned_page_size(indices);
         indices_pages_per_core = TOKENS_PER_CHUNK;
         uint32_t indices_cb_size = indices_pages_per_core * indices_aligned_page_size;
-        desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-            .total_size = indices_cb_size,
-            .core_ranges = core_range_set,
-            .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_3),
-                .data_format = indices_cb_data_format,
-                .page_size = indices_aligned_page_size,
-            }}},
-        });
+        tt::tt_metal::CircularBufferConfig cb_indices_config =
+            tt::tt_metal::CircularBufferConfig(indices_cb_size, {{tt::CBIndex::c_3, indices_cb_data_format}})
+                .set_page_size(tt::CBIndex::c_3, indices_aligned_page_size);
+        tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_indices_config);
     }
 
     // c_16: Output — one chunk at a time (compute produces TOKENS_PER_CHUNK tiles per iteration)
     uint32_t output_cb_size = TOKENS_PER_CHUNK * emb_dim_cb_tiles * tile_size;
-    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-        .total_size = output_cb_size,
-        .core_ranges = core_range_set,
-        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_16),
-            .data_format = output_cb_data_format,
-            .page_size = tile_size,
-        }}},
-    });
+    tt::tt_metal::CircularBufferConfig cb_output_config =
+        tt::tt_metal::CircularBufferConfig(output_cb_size, {{tt::CBIndex::c_16, output_cb_data_format}})
+            .set_page_size(tt::CBIndex::c_16, tile_size);
+    auto cb_output_handle = tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_output_config);
 
     // c_17: Row-major scratch for tilize — one chunk at a time
     uint32_t rowmajor_cb_size = TOKENS_PER_CHUNK * emb_dim_cb_tiles * tile_size;
-    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-        .total_size = rowmajor_cb_size,
-        .core_ranges = core_range_set,
-        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_17),
-            .data_format = output_cb_data_format,
-            .page_size = tile_size,
-        }}},
-    });
+    tt::tt_metal::CircularBufferConfig cb_rowmajor_config =
+        tt::tt_metal::CircularBufferConfig(rowmajor_cb_size, {{tt::CBIndex::c_17, output_cb_data_format}})
+            .set_page_size(tt::CBIndex::c_17, tile_size);
+    tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_rowmajor_config);
 
     auto* combine_buffer = combine_output.buffer();
     auto* weight_buffer = weights.buffer();
@@ -243,39 +218,31 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
         .append_to(writer_compile_time_args);
     writer_compile_time_args.push_back(static_cast<uint32_t>(use_dispatch_table_skip ? 1 : 0));
 
-    // Build kernel descriptors and push them onto desc.kernels.  Stable indices
-    // (0=reader, 1=compute, 2=writer) below let emplace_runtime_args identify
-    // each kernel.
-    tt::tt_metal::KernelDescriptor reader_kernel_desc;
-    reader_kernel_desc.kernel_source =
+    auto reader_kernel_id = tt::tt_metal::CreateKernel(
+        program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/post_combine_reduce/device/kernels/"
-        "deepseek_moe_post_combine_reduce_reader.cpp";
-    reader_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
-    reader_kernel_desc.core_ranges = core_range_set;
-    reader_kernel_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_kernel_desc.config = tt::tt_metal::ReaderConfigDescriptor{};
+        "deepseek_moe_post_combine_reduce_reader.cpp",
+        core_range_set,
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
-    tt::tt_metal::KernelDescriptor compute_kernel_desc;
-    compute_kernel_desc.kernel_source =
+    auto compute_kernel_id = tt::tt_metal::CreateKernel(
+        program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/post_combine_reduce/device/kernels/"
-        "deepseek_moe_post_combine_reduce_compute.cpp";
-    compute_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
-    compute_kernel_desc.core_ranges = core_range_set;
-    compute_kernel_desc.compile_time_args = std::move(compute_compile_time_args);
-    compute_kernel_desc.config = tt::tt_metal::ComputeConfigDescriptor{
-        .math_fidelity = MathFidelity::HiFi4,
-        .fp32_dest_acc_en = false,
-        .dst_full_sync_en = false,
-    };
+        "deepseek_moe_post_combine_reduce_compute.cpp",
+        core_range_set,
+        tt::tt_metal::ComputeConfig{
+            .math_fidelity = MathFidelity::HiFi4,
+            .fp32_dest_acc_en = false,
+            .dst_full_sync_en = false,
+            .compile_args = compute_compile_time_args,
+        });
 
-    tt::tt_metal::KernelDescriptor writer_kernel_desc;
-    writer_kernel_desc.kernel_source =
+    auto writer_kernel_id = tt::tt_metal::CreateKernel(
+        program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/post_combine_reduce/device/kernels/"
-        "deepseek_moe_post_combine_reduce_writer.cpp";
-    writer_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
-    writer_kernel_desc.core_ranges = core_range_set;
-    writer_kernel_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_kernel_desc.config = tt::tt_metal::WriterConfigDescriptor{};
+        "deepseek_moe_post_combine_reduce_writer.cpp",
+        core_range_set,
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     // Distribute chunks of 32 tokens across cores. The first `extra_chunks` cores
     // get (base_chunks_per_core + 1) chunks; the remaining get base_chunks_per_core.
@@ -284,44 +251,98 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
         const CoreCoord& core = cores[i];
         const uint32_t chunks_this_core = base_chunks_per_core + (i < extra_chunks ? 1 : 0);
 
-        // Reader RT args: [combine_buffer*, token_start, chunks_this_core].
-        // Push the buffer pointer first so the framework records a BufferBinding
-        // for the cache-hit fast path.
-        tt::tt_metal::KernelDescriptor::RTArgList reader_rt_args;
-        reader_rt_args.push_back(combine_buffer);
-        reader_rt_args.push_back(token_start);
-        reader_rt_args.push_back(chunks_this_core);
-        reader_kernel_desc.emplace_runtime_args(core, reader_rt_args);
+        std::vector<uint32_t> reader_runtime_args = {
+            combine_buffer->address(),
+            token_start,
+            chunks_this_core,
+        };
 
-        // Compute RT args (no Buffer*).
-        tt::tt_metal::KernelDescriptor::RTArgList compute_rt_args;
-        compute_rt_args.push_back(token_start);
-        compute_rt_args.push_back(chunks_this_core);
-        compute_kernel_desc.emplace_runtime_args(core, compute_rt_args);
+        std::vector<uint32_t> compute_runtime_args = {
+            token_start,
+            chunks_this_core,
+        };
 
         // Writer runtime args: weight_addr, output_addr,
         //   (deepseek only: dispatch_table_addr, indices_addr),
-        //   token_start, chunks_this_core.  All buffer addresses are pushed as
-        //   Buffer* so the framework records bindings for the fast path.
-        tt::tt_metal::KernelDescriptor::RTArgList writer_rt_args;
-        writer_rt_args.push_back(weight_buffer);
-        writer_rt_args.push_back(output_buffer);
+        //   token_start, chunks_this_core. override_runtime_arguments mirrors this layout.
+        std::vector<uint32_t> writer_runtime_args = {
+            weight_buffer->address(),
+            output_buffer->address(),
+        };
         if (use_dispatch_table_skip) {
-            writer_rt_args.push_back(dispatch_table_buffer);
-            writer_rt_args.push_back(indices_buffer);
+            writer_runtime_args.push_back(dispatch_table_buffer->address());
+            writer_runtime_args.push_back(indices_buffer->address());
         }
-        writer_rt_args.push_back(token_start);
-        writer_rt_args.push_back(chunks_this_core);
-        writer_kernel_desc.emplace_runtime_args(core, writer_rt_args);
+        writer_runtime_args.push_back(token_start);
+        writer_runtime_args.push_back(chunks_this_core);
+
+        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
+        tt::tt_metal::SetRuntimeArgs(program, compute_kernel_id, core, compute_runtime_args);
+        tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
 
         token_start += chunks_this_core * TOKENS_PER_CHUNK;
     }
 
-    desc.kernels.push_back(std::move(reader_kernel_desc));
-    desc.kernels.push_back(std::move(compute_kernel_desc));
-    desc.kernels.push_back(std::move(writer_kernel_desc));
+    return CreatedProgram{
+        std::move(program),
+        {
+            .reader_kernel_id = reader_kernel_id,
+            .compute_kernel_id = compute_kernel_id,
+            .writer_kernel_id = writer_kernel_id,
+            .output_cb_handle = cb_output_handle,
+            .cores = cores,
+            .use_dispatch_table_skip = use_dispatch_table_skip,
+        }};
+}
 
-    return desc;
+}  // namespace
+
+PostCombineReduceProgramFactory::cached_mesh_workload_t PostCombineReduceProgramFactory::create_mesh_workload(
+    const PostCombineReduceParams& operation_attributes,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const PostCombineReduceInputs& tensor_args,
+    ttnn::Tensor& tensor_return_value) {
+    tt::tt_metal::distributed::MeshWorkload mesh_workload;
+    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+
+    for (const auto& coord : tensor_coords.coords()) {
+        auto result = create_at(operation_attributes, coord, tensor_args, tensor_return_value);
+        auto coord_range = ttnn::MeshCoordinateRange(coord);
+        mesh_workload.add_program(coord_range, std::move(result.program));
+        shared_variables.emplace(coord_range, std::move(result.shared_variables));
+    }
+
+    return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
+}
+
+void PostCombineReduceProgramFactory::override_runtime_arguments(
+    cached_mesh_workload_t& cached_workload,
+    [[maybe_unused]] const PostCombineReduceParams& operation_attributes,
+    const PostCombineReduceInputs& tensor_args,
+    ttnn::Tensor& tensor_return_value) {
+    auto* combine_buffer = tensor_args.combine_output.buffer();
+    auto* weight_buffer = tensor_args.weights.buffer();
+    auto* output_buffer = tensor_return_value.buffer();
+    auto* indices_buffer = tensor_args.indices.has_value() ? tensor_args.indices->buffer() : nullptr;
+    auto* dispatch_table_buffer =
+        tensor_args.expert_dispatch_table.has_value() ? tensor_args.expert_dispatch_table->buffer() : nullptr;
+
+    for (auto& [range, program] : cached_workload.workload.get_programs()) {
+        const auto& svars = cached_workload.shared_variables.at(range);
+
+        for (const auto& core : svars.cores) {
+            auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, svars.reader_kernel_id, core);
+            reader_runtime_args[0] = combine_buffer->address();
+
+            auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, svars.writer_kernel_id, core);
+            writer_runtime_args[0] = weight_buffer->address();
+            writer_runtime_args[1] = output_buffer->address();
+            if (svars.use_dispatch_table_skip) {
+                writer_runtime_args[2] = dispatch_table_buffer->address();
+                writer_runtime_args[3] = indices_buffer->address();
+            }
+        }
+    }
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::post_combine_reduce
