@@ -105,13 +105,13 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmLoopback) {
     };
 
     experimental::metal2_host_api::WorkUnitSpec main_wu{
-        .unique_id = "main",
+        .name = "main",
         .kernels = {DRAM_TO_L1_0, DRAM_TO_L1_1, DRAM_TO_L1_2, L1_TO_DRAM_0, L1_TO_DRAM_1, L1_TO_DRAM_2},
         .target_nodes = node,
     };
 
     experimental::metal2_host_api::ProgramSpec spec{
-        .program_id = "dm_loopback",
+        .name = "dm_loopback",
         .kernels =
             {make_dram_to_l1_spec(DRAM_TO_L1_0),
              make_dram_to_l1_spec(DRAM_TO_L1_1),

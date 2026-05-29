@@ -134,12 +134,12 @@ static void RunTest(
                 default: TT_THROW("Unsupported processor class type for TENSIX");
             }
             experimental::metal2_host_api::WorkUnitSpec wu{
-                .unique_id = "main",
+                .name = "main",
                 .kernels = {ASSERT_KERNEL_NAME},
                 .target_nodes = experimental::metal2_host_api::NodeCoord{logical_core},
             };
             experimental::metal2_host_api::ProgramSpec spec{
-                .program_id = "watcher_assert",
+                .name = "watcher_assert",
                 .kernels = {assert_kernel_spec},
                 .work_units = {wu},
             };

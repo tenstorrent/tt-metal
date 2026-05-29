@@ -147,12 +147,12 @@ distributed::MeshWorkload initialize_program_data_movement_rta(
     };
 
     experimental::metal2_host_api::WorkUnitSpec wu{
-        .unique_id = "main",
+        .name = "main",
         .kernels = {KERNEL},
         .target_nodes = core_range_set,
     };
     experimental::metal2_host_api::ProgramSpec spec{
-        .program_id = "dm_runtime_args",
+        .name = "dm_runtime_args",
         .kernels = {kernel_spec},
         .work_units = {wu},
     };
@@ -230,13 +230,13 @@ std::pair<distributed::MeshWorkload, std::vector<std::string>> initialize_progra
     }
 
     experimental::metal2_host_api::WorkUnitSpec main_wu{
-        .unique_id = "main",
+        .name = "main",
         .kernels = wu_kernel_names,
         .target_nodes = core_range_set,
     };
 
     experimental::metal2_host_api::ProgramSpec spec{
-        .program_id = "quasar_crta_test",
+        .name = "quasar_crta_test",
         .kernels = kernel_specs,
         .work_units = {main_wu},
     };

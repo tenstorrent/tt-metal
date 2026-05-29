@@ -34,7 +34,8 @@ using WorkUnitSpecName = std::string;
 // Placement: The WorkUnitSpec defines the node placement of its kernels.
 // (A kernel may be included in multiple WorkUnitSpecs.)
 struct WorkUnitSpec {
-    WorkUnitSpecName unique_id;
+    // Human-readable name (debug/messaging only; no uniqueness invariant).
+    WorkUnitSpecName name;
 
     // The kernels that run on this WorkUnitSpec's nodes.
     std::vector<KernelSpecName> kernels;
@@ -48,8 +49,8 @@ struct WorkUnitSpec {
 // Analogous to a function's signature and body — declared once, executed many times.
 // (Each time with a new ProgramRunArgs configuring the mutable execution parameters.)
 struct ProgramSpec {
-    // Program identifier (identifies a Program within a MeshWorkload)
-    ProgramSpecName program_id;
+    // Human-readable name (debug/messaging only; no uniqueness invariant).
+    ProgramSpecName name;
 
     // Kernels, DFBs (local + remote), and semaphores that make up the Program
     std::vector<KernelSpec> kernels;

@@ -202,13 +202,13 @@ void run_single_core_copy_block_matmul_partials(
     };
 
     experimental::metal2_host_api::WorkUnitSpec wu{
-        .unique_id = "main",
+        .name = "main",
         .kernels = {READER, WRITER, COMPUTE},
         .target_nodes = node,
     };
 
     experimental::metal2_host_api::ProgramSpec spec{
-        .program_id = "single_core_copy_block_matmul_partials",
+        .name = "single_core_copy_block_matmul_partials",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {src0_dfb_spec, dst_dfb_spec},
         .work_units = {wu},

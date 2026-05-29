@@ -113,7 +113,7 @@ TEST_F(KernelThreadSyncTest, BarrierSynchronizesThreads) {
     }
 
     ProgramSpec spec;
-    spec.program_id = "kernel_thread_barrier";
+    spec.name = "kernel_thread_barrier";
     for (const auto& cfg : kernel_configs) { spec.kernels.push_back(cfg.spec); }
     spec.work_units = {MakeMinimalWorkUnit("work_unit_0", node, work_unit_kernel_names)};
 

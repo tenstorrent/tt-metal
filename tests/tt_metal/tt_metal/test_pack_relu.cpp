@@ -145,13 +145,13 @@ static void run_pack_relu_test(
     };
 
     experimental::metal2_host_api::WorkUnitSpec wu{
-        .unique_id = "main",
+        .name = "main",
         .kernels = {READER, WRITER, COMPUTE},
         .target_nodes = node,
     };
 
     experimental::metal2_host_api::ProgramSpec spec{
-        .program_id = "pack_relu",
+        .name = "pack_relu",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {input_dfb_spec, output_dfb_spec},
         .work_units = {wu},

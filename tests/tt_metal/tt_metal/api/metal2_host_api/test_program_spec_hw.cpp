@@ -98,7 +98,7 @@ TEST_F(ProgramSpecHWTest, DFBAccessorNameLoopback) {
     // Build ProgramSpec
     // -------------------------------------------------------
     ProgramSpec spec;
-    spec.program_id = "dfb_accessor_loopback";
+    spec.name = "dfb_accessor_loopback";
 
     // Producer: BRISC reads from DRAM → DFB
     auto producer = MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
@@ -232,7 +232,7 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
     auto output_buffer = CreateBuffer(dram_config);
 
     ProgramSpec spec;
-    spec.program_id = "named_args_loopback";
+    spec.name = "named_args_loopback";
 
     // Producer: BRISC reads DRAM → DFB. 1 named RTA, 1 named CRTA, 2 named CTAs, 3 RTA
     // varargs, 1 CRTA vararg.
@@ -358,7 +358,7 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopbackCompute) {
     auto output_buffer = CreateBuffer(dram_config);
 
     ProgramSpec spec;
-    spec.program_id = "named_args_loopback_compute";
+    spec.name = "named_args_loopback_compute";
 
     // Compute kernel: produces out_dfb. The kernel under test — exercises every
     // named-arg accessor (RTA / CRTA / two CTAs) plus RTA + CRTA varargs.
@@ -503,14 +503,14 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
 
     // A WorkUnitSpec describes the kernels that run on a shared set of nodes.
     WorkUnitSpec work_unit{
-        .unique_id = "work_unit_0",
+        .name = "work_unit_0",
         .kernels = {"producer", "consumer"},
         .target_nodes = node,
     };
 
     // The ProgramSpec aggregates everything and is consumed by `MakeProgramFromSpec`.
     ProgramSpec spec{
-        .program_id = "semaphore_accessor_loopback",
+        .name = "semaphore_accessor_loopback",
         .kernels = {producer, consumer},
         .semaphores = {sem},
         .work_units = std::vector<WorkUnitSpec>{work_unit},
@@ -570,7 +570,7 @@ TEST_F(ProgramSpecHWTest, TensorAccessorBindingLoopback) {
     // Build ProgramSpec: 2 DM kernels + 1 DFB + 2 TensorParameters
     // -------------------------------------------------------
     ProgramSpec spec;
-    spec.program_id = "ta_binding_loopback";
+    spec.name = "ta_binding_loopback";
 
     // Producer (BRISC): reads input tensor via TA binding, pushes to DFB
     auto producer = MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
@@ -681,7 +681,7 @@ TEST_F(ProgramSpecHWTest, MultiBindingProducerMaskMismatchFails) {
     BindDFBToKernel(consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
 
     ProgramSpec spec;
-    spec.program_id = "multi_binding_mask_mismatch";
+    spec.name = "multi_binding_mask_mismatch";
     spec.kernels = {producer_g1, producer_g2, consumer};
     spec.dataflow_buffers = {dfb};
     // consumer in both WUs (single-KernelSpec multi-WU membership) → consumer-side mask is fine.

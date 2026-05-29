@@ -390,13 +390,13 @@ void run_single_core_unary_broadcast_quasar(
     };
 
     experimental::metal2_host_api::WorkUnitSpec wu{
-        .unique_id = "main",
+        .name = "main",
         .kernels = {READER, WRITER, COMPUTE},
         .target_nodes = node,
     };
 
     experimental::metal2_host_api::ProgramSpec spec{
-        .program_id = "unary_broadcast_quasar",
+        .name = "unary_broadcast_quasar",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {src_dfb_spec, dst_dfb_spec},
         .tensor_parameters = {{.unique_id = OUT_TENSOR, .spec = out_tensor.tensor_spec()}},

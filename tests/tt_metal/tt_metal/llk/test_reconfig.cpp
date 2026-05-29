@@ -511,13 +511,13 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
     };
 
     experimental::metal2_host_api::WorkUnitSpec wu{
-        .unique_id = "main",
+        .name = "main",
         .kernels = {READER, WRITER, COMPUTE},
         .target_nodes = node,
     };
 
     experimental::metal2_host_api::ProgramSpec spec{
-        .program_id = "reconfig_quasar",
+        .name = "reconfig_quasar",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers =
             {inp0_dfb_spec, inp1_dfb_spec, inp2_dfb_spec, inp3_dfb_spec, inp4_dfb_spec, inp5_dfb_spec, out_dfb_spec},

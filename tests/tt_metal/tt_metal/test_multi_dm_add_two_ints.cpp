@@ -72,18 +72,18 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
     auto k3 = make_dm_kernel_spec(KERNEL_3, 2, MEM_L1_UNCACHED_BASE + (2 * sizeof(int)));
 
     experimental::metal2_host_api::WorkUnitSpec wu_core0{
-        .unique_id = "wu_core0",
+        .name = "wu_core0",
         .kernels = {KERNEL_0, KERNEL_1, KERNEL_2},
         .target_nodes = experimental::metal2_host_api::NodeCoord{0, 0},
     };
     experimental::metal2_host_api::WorkUnitSpec wu_core1{
-        .unique_id = "wu_core1",
+        .name = "wu_core1",
         .kernels = {KERNEL_0, KERNEL_1, KERNEL_3},
         .target_nodes = experimental::metal2_host_api::NodeCoord{1, 0},
     };
 
     experimental::metal2_host_api::ProgramSpec spec{
-        .program_id = "multi_dm_add_two_ints",
+        .name = "multi_dm_add_two_ints",
         .kernels = {k0, k1, k2, k3},
         .work_units = {wu_core0, wu_core1},
     };

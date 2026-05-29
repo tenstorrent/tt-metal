@@ -162,12 +162,12 @@ TEST_F(RTATestFixture, SentinelPatternHandlingAndMissingRTADetection) {
             .config = experimental::metal2_host_api::ComputeConfiguration{},
         };
         experimental::metal2_host_api::WorkUnitSpec wu{
-            .unique_id = "main",
+            .name = "main",
             .kernels = {DM_KERNEL_NAME, COMPUTE_KERNEL_NAME},
             .target_nodes = experimental::metal2_host_api::NodeRangeSet{core_range_set},
         };
         experimental::metal2_host_api::ProgramSpec spec{
-            .program_id = "zero_arg_schema",
+            .name = "zero_arg_schema",
             .kernels = {dm_spec, compute_spec},
             .work_units = {wu},
         };
@@ -287,12 +287,12 @@ TEST_F(RTATestFixture, CorrectArgDispatchAndPayloadValidation) {
         dm_spec.compile_time_args = {{"l1_scratch_addr", l1_unreserved_base}};
     }
     experimental::metal2_host_api::WorkUnitSpec wu{
-        .unique_id = "main",
+        .name = "main",
         .kernels = {DM_KERNEL_NAME},
         .target_nodes = experimental::metal2_host_api::NodeRangeSet{core_range_set},
     };
     experimental::metal2_host_api::ProgramSpec spec{
-        .program_id = "rta_validation",
+        .name = "rta_validation",
         .kernels = {dm_spec},
         .work_units = {wu},
     };
@@ -429,12 +429,12 @@ TEST_P(RTAAssertTest, OutOfBoundsArgAccessDetection) {
     }
 
     experimental::metal2_host_api::WorkUnitSpec wu{
-        .unique_id = "main",
+        .name = "main",
         .kernels = {OOB_KERNEL_NAME},
         .target_nodes = experimental::metal2_host_api::NodeRangeSet{core_range_set},
     };
     experimental::metal2_host_api::ProgramSpec spec{
-        .program_id = "rta_oob",
+        .name = "rta_oob",
         .kernels = {kspec},
         .work_units = {wu},
     };
@@ -490,12 +490,12 @@ TEST_F(RTATestFixture, QuasarMultiDMOutOfBoundsArgDetection) {
             },
     };
     experimental::metal2_host_api::WorkUnitSpec wu{
-        .unique_id = "main",
+        .name = "main",
         .kernels = {MULTI_DM_KERNEL_NAME},
         .target_nodes = experimental::metal2_host_api::NodeRangeSet{core_range_set},
     };
     experimental::metal2_host_api::ProgramSpec spec{
-        .program_id = "multi_dm_oob",
+        .name = "multi_dm_oob",
         .kernels = {dm_spec},
         .work_units = {wu},
     };

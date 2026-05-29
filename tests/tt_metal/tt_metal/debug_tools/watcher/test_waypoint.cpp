@@ -150,12 +150,12 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     });
 
     experimental::metal2_host_api::WorkUnitSpec wu{
-        .unique_id = "main",
+        .name = "main",
         .kernels = kernel_names,
         .target_nodes = experimental::metal2_host_api::NodeRange{CoreRange(xy_start, xy_end)},
     };
     experimental::metal2_host_api::ProgramSpec spec{
-        .program_id = "watcher_waypoints",
+        .name = "watcher_waypoints",
         .kernels = kernel_specs,
         .work_units = {wu},
     };

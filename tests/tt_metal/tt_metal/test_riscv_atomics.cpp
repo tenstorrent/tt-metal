@@ -124,12 +124,12 @@ protected:
         }
 
         experimental::metal2_host_api::WorkUnitSpec main_wu{
-            .unique_id = "main",
+            .name = "main",
             .kernels = kernel_names,
             .target_nodes = core,
         };
         experimental::metal2_host_api::ProgramSpec spec{
-            .program_id = "riscv_atomics",
+            .name = "riscv_atomics",
             .kernels = kernel_specs,
             .work_units = {main_wu},
         };

@@ -120,13 +120,13 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
     };
 
     experimental::metal2_host_api::WorkUnitSpec main_wu{
-        .unique_id = "main",
+        .name = "main",
         .kernels = {DM_READER, DM_TRANSFORM, DM_WRITER},
         .target_nodes = node,
     };
 
     experimental::metal2_host_api::ProgramSpec spec{
-        .program_id = "multi_semaphore_pipeline",
+        .name = "multi_semaphore_pipeline",
         .kernels = {dm_reader_spec, dm_transform_spec, dm_writer_spec},
         .semaphores = {sem0_spec, sem1_spec},
         .work_units = {main_wu},
@@ -329,18 +329,18 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
     };
 
     experimental::metal2_host_api::WorkUnitSpec wu_core_0{
-        .unique_id = "wu_core_0",
+        .name = "wu_core_0",
         .kernels = {DM_TRANSFORM_0, DM_WRITER_0},
         .target_nodes = node_0,
     };
     experimental::metal2_host_api::WorkUnitSpec wu_core_1{
-        .unique_id = "wu_core_1",
+        .name = "wu_core_1",
         .kernels = {DM_READER_1, DM_TRANSFORM_1, DM_WRITER_1},
         .target_nodes = node_1,
     };
 
     experimental::metal2_host_api::ProgramSpec spec{
-        .program_id = "multi_cluster_multi_semaphore_pipeline",
+        .name = "multi_cluster_multi_semaphore_pipeline",
         .kernels = {dm_transform_0_spec, dm_writer_0_spec, dm_reader_1_spec, dm_transform_1_spec, dm_writer_1_spec},
         .semaphores = {sem_core_0_spec, sem_cross_spec, sem0_core_1_spec, sem1_core_1_spec},
         .work_units = {wu_core_0, wu_core_1},

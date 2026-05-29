@@ -167,16 +167,16 @@ TEST(RealtimeProfilerSanity, FiveProgramsBackToBack) {
 
     for (const auto& rec : collected) {
         EXPECT_GT(rec.end_timestamp, rec.start_timestamp)
-            << "RT record end_timestamp must be strictly greater than start_timestamp (pid=" << rec.program_id
+            << "RT record end_timestamp must be strictly greater than start_timestamp (pid=" << rec.name
             << ", chip=" << rec.chip_id << ")";
-        EXPECT_GT(rec.frequency, 0.0) << "RT record frequency must be positive (pid=" << rec.program_id
+        EXPECT_GT(rec.frequency, 0.0) << "RT record frequency must be positive (pid=" << rec.name
                                       << ", chip=" << rec.chip_id << ")";
 
         if (rec.frequency > 0.0 && rec.end_timestamp > rec.start_timestamp) {
             uint64_t duration_cycles = rec.end_timestamp - rec.start_timestamp;
             double duration_ns = static_cast<double>(duration_cycles) / rec.frequency;
             EXPECT_LT(duration_ns, kMaxDurationNs)
-                << "RT record duration is implausibly large (pid=" << rec.program_id << ", chip=" << rec.chip_id
+                << "RT record duration is implausibly large (pid=" << rec.name << ", chip=" << rec.chip_id
                 << ", duration_ns=" << duration_ns << ")";
         }
     }

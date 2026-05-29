@@ -189,14 +189,14 @@ experimental::metal2_host_api::ProgramSpec build_bmm_program_spec(
     };
 
     return experimental::metal2_host_api::ProgramSpec{
-        .program_id = "bmm",
+        .name = "bmm",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {src0_dfb_spec, src1_dfb_spec, dst_dfb_spec},
         .tensor_parameters =
             {{.unique_id = SRC0_T, .spec = tensors.src0.tensor_spec()},
              {.unique_id = SRC1_T, .spec = tensors.src1.tensor_spec()},
              {.unique_id = DST_T, .spec = tensors.dst.tensor_spec()}},
-        .work_units = {{.unique_id = "main", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = target_nodes}},
+        .work_units = {{.name = "main", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = target_nodes}},
     };
 }
 

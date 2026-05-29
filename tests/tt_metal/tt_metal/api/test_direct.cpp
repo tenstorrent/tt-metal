@@ -285,13 +285,13 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
     };
 
     experimental::metal2_host_api::WorkUnitSpec wu{
-        .unique_id = "main",
+        .name = "main",
         .kernels = {READER, WRITER},
         .target_nodes = test_config.node,
     };
 
     experimental::metal2_host_api::ProgramSpec spec{
-        .program_id = "reader_writer",
+        .name = "reader_writer",
         .kernels = {reader_spec, writer_spec},
         .dataflow_buffers = {l1_dfb_spec},
         .work_units = {wu},
@@ -504,13 +504,13 @@ bool reader_datacopy_writer(
     };
 
     experimental::metal2_host_api::WorkUnitSpec wu{
-        .unique_id = "main",
+        .name = "main",
         .kernels = {READER, WRITER, COMPUTE},
         .target_nodes = test_config.node,
     };
 
     experimental::metal2_host_api::ProgramSpec spec{
-        .program_id = "reader_datacopy_writer",
+        .name = "reader_datacopy_writer",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {input_dfb_spec, output_dfb_spec},
         .work_units = {wu},

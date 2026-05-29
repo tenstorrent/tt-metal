@@ -203,7 +203,7 @@ AliasDFBProgramComponents make_alias_dfb_program_spec(
     };
 
     ProgramSpec spec{
-        .program_id       = "alias_dfb",
+        .name       = "alias_dfb",
         .kernels          = {producer, consumer},
         .dataflow_buffers = {dfb_a, dfb_b},
         .tensor_parameters = {
@@ -213,7 +213,7 @@ AliasDFBProgramComponents make_alias_dfb_program_spec(
             {.unique_id = "out_tensor_b", .spec = out_b.tensor_spec()},
         },
         .work_units = {WorkUnitSpec{
-            .unique_id    = "wu",
+            .name    = "wu",
             .kernels      = {"producer", "consumer"},
             .target_nodes = node,
         }},
@@ -422,7 +422,7 @@ AliasBorrowedDFBComponents make_alias_borrowed_dfb_program_spec(
     };
 
     ProgramSpec spec{
-        .program_id        = "alias_borrowed_dfb",
+        .name        = "alias_borrowed_dfb",
         .kernels           = {producer, consumer},
         .dataflow_buffers  = {dfb_borrowed, dfb_alias_spec},
         .tensor_parameters = {
@@ -433,7 +433,7 @@ AliasBorrowedDFBComponents make_alias_borrowed_dfb_program_spec(
             {.unique_id = "ring_tensor",  .spec = ring.tensor_spec()},
         },
         .work_units = {WorkUnitSpec{
-            .unique_id    = "wu",
+            .name    = "wu",
             .kernels      = {"producer", "consumer"},
             .target_nodes = node,
         }},

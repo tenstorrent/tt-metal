@@ -130,7 +130,7 @@ inline DataflowBufferSpec MakeMinimalDFB(
 inline WorkUnitSpec MakeMinimalWorkUnit(
     const std::string& name, const Nodes& nodes, const std::vector<KernelSpecName>& kernels) {
     return WorkUnitSpec{
-        .unique_id = name,
+        .name = name,
         .kernels = kernels,
         .target_nodes = nodes,
     };
@@ -205,7 +205,7 @@ inline ProgramSpec MakeMinimalGen1ValidProgramSpec() {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel", tt::tt_metal::DataMovementProcessor::RISCV_0);
     auto compute_kernel = MakeMinimalComputeKernel("compute_kernel");
@@ -228,7 +228,7 @@ inline ProgramSpec MakeMinimalValidProgramSpec() {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     // Create a DM kernel (producer) and compute kernel (consumer)
     auto dm_kernel = MakeMinimalDMKernel("dm_kernel");

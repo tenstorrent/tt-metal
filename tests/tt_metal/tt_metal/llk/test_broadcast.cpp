@@ -400,13 +400,13 @@ void run_single_core_broadcast(
     };
 
     experimental::metal2_host_api::WorkUnitSpec wu{
-        .unique_id = "main",
+        .name = "main",
         .kernels = {READER, WRITER, COMPUTE},
         .target_nodes = node,
     };
 
     experimental::metal2_host_api::ProgramSpec spec{
-        .program_id = "single_core_broadcast",
+        .name = "single_core_broadcast",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {inp0_dfb_spec, inp1_dfb_spec, out_dfb_spec},
         .work_units = {wu},

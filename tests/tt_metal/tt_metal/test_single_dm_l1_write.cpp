@@ -68,13 +68,13 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
     };
 
     experimental::metal2_host_api::WorkUnitSpec main_wu{
-        .unique_id = "main",
+        .name = "main",
         .kernels = {DM_KERNEL},
         .target_nodes = node,
     };
 
     experimental::metal2_host_api::ProgramSpec spec{
-        .program_id = "single_dm_l1_write",
+        .name = "single_dm_l1_write",
         .kernels = {dm_kernel_spec},
         .work_units = {main_wu},
     };

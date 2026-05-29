@@ -70,13 +70,13 @@ bool run_l2_flush_test(
     };
 
     experimental::metal2_host_api::WorkUnitSpec main_wu{
-        .unique_id = "main",
+        .name = "main",
         .kernels = {DM_KERNEL},
         .target_nodes = node,
     };
 
     experimental::metal2_host_api::ProgramSpec spec{
-        .program_id = "l2_flush",
+        .name = "l2_flush",
         .kernels = {dm_kernel_spec},
         .work_units = {main_wu},
     };
@@ -162,13 +162,13 @@ bool run_l1_dcache_test(
     };
 
     experimental::metal2_host_api::WorkUnitSpec main_wu{
-        .unique_id = "main",
+        .name = "main",
         .kernels = {DM_KERNEL},
         .target_nodes = node,
     };
 
     experimental::metal2_host_api::ProgramSpec spec{
-        .program_id = "l1_dcache",
+        .name = "l1_dcache",
         .kernels = {dm_kernel_spec},
         .work_units = {main_wu},
     };

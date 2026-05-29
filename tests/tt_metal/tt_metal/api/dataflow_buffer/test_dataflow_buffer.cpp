@@ -340,7 +340,7 @@ void run_single_dfb_program(
     }
 
     experimental::metal2_host_api::WorkUnitSpec wu{
-        .unique_id = "main",
+        .name = "main",
         .kernels = {PRODUCER, CONSUMER},
         .target_nodes = core_range_set,
     };
@@ -354,7 +354,7 @@ void run_single_dfb_program(
     }
 
     experimental::metal2_host_api::ProgramSpec spec{
-        .program_id = "single_dfb",
+        .name = "single_dfb",
         .kernels = {producer_spec, consumer_spec},
         .dataflow_buffers = {dfb_spec},
         .tensor_parameters = tensor_parameters,
@@ -722,13 +722,13 @@ void run_concurrent_dfbs_program(
     }
 
     experimental::metal2_host_api::WorkUnitSpec wu{
-        .unique_id = "main",
+        .name = "main",
         .kernels = kernel_names,
         .target_nodes = core_range_set,
     };
 
     experimental::metal2_host_api::ProgramSpec spec{
-        .program_id = "concurrent_dfbs",
+        .name = "concurrent_dfbs",
         .kernels = kernel_specs,
         .dataflow_buffers = dfb_specs,
         .tensor_parameters =
@@ -896,13 +896,13 @@ void run_concurrent_tensix_dm_dfbs_program(
     }
 
     experimental::metal2_host_api::WorkUnitSpec wu{
-        .unique_id = "main",
+        .name = "main",
         .kernels = kernel_names,
         .target_nodes = core_range_set,
     };
 
     experimental::metal2_host_api::ProgramSpec spec{
-        .program_id = "concurrent_tensix_dm_dfbs",
+        .name = "concurrent_tensix_dm_dfbs",
         .kernels = kernel_specs,
         .dataflow_buffers = dfb_specs,
         .tensor_parameters = tensor_parameters,
@@ -1140,13 +1140,13 @@ void run_sequential_dfbs_program(
     }
 
     experimental::metal2_host_api::WorkUnitSpec wu{
-        .unique_id = "main",
+        .name = "main",
         .kernels = {PRODUCER, CONSUMER},
         .target_nodes = core_range_set,
     };
 
     experimental::metal2_host_api::ProgramSpec spec{
-        .program_id = "sequential_dfbs",
+        .name = "sequential_dfbs",
         .kernels = {producer_spec, consumer_spec},
         .dataflow_buffers = dfb_specs,
         .tensor_parameters = tensor_parameters,
@@ -1338,13 +1338,13 @@ void run_in_dfb_out_dfb_program(
     }
 
     experimental::metal2_host_api::WorkUnitSpec wu{
-        .unique_id = "main",
+        .name = "main",
         .kernels = {PRODUCER, COMPUTE, CONSUMER},
         .target_nodes = core_range_set,
     };
 
     experimental::metal2_host_api::ProgramSpec spec{
-        .program_id = "in_dfb_out_dfb",
+        .name = "in_dfb_out_dfb",
         .kernels = {producer_spec, compute_spec, consumer_spec},
         .dataflow_buffers = {in_dfb_spec, out_dfb_spec},
         .tensor_parameters =
@@ -1988,13 +1988,13 @@ static void run_intra_tensix_dfb_program(
     };
 
     experimental::metal2_host_api::WorkUnitSpec wu{
-        .unique_id = "main",
+        .name = "main",
         .kernels = {COMPUTE},
         .target_nodes = core_range_set,
     };
 
     experimental::metal2_host_api::ProgramSpec spec{
-        .program_id = "intra_tensix_dfb",
+        .name = "intra_tensix_dfb",
         .kernels = {compute_spec},
         .dataflow_buffers = {intra_dfb_spec},
         .work_units = {wu},
@@ -2176,13 +2176,13 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4A) {
     };
 
     experimental::metal2_host_api::WorkUnitSpec wu{
-        .unique_id = "main",
+        .name = "main",
         .kernels = {DM_PRODUCER, COMPUTE},
         .target_nodes = core_range_set,
     };
 
     experimental::metal2_host_api::ProgramSpec spec{
-        .program_id = "intra_and_remapper",
+        .name = "intra_and_remapper",
         .kernels = {dm_producer_spec, compute_spec},
         .dataflow_buffers = {remapper_dfb_spec, intra_dfb_spec},
         .tensor_parameters = {{.unique_id = IN_TENSOR, .spec = in_tensor.tensor_spec()}},

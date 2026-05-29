@@ -104,7 +104,7 @@ void run_borrowed_memory_dfb_program(
     // Build ProgramSpec
     // -----------------------------------------------------------------------
     ProgramSpec spec;
-    spec.program_id = "borrowed_memory_dfb_test";
+    spec.name = "borrowed_memory_dfb_test";
 
     // --- Producer kernel (dfb_producer.cpp) ---
     KernelSpec producer_spec = (arch == ARCH::QUASAR)
@@ -272,7 +272,7 @@ void run_update_address_test(
     // Build ProgramSpec
     // -----------------------------------------------------------------------
     ProgramSpec spec;
-    spec.program_id = "borrowed_dfb_update_address";
+    spec.name = "borrowed_dfb_update_address";
 
     KernelSpec producer_spec = (arch == ARCH::QUASAR)
         ? MakeMinimalDMKernel("producer")

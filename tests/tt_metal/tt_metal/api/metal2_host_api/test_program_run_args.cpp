@@ -551,7 +551,7 @@ TEST_F(ProgramRunArgsTestQuasar, SetRunParamsSucceeds_MultiNodeKernel) {
     NodeRangeSet all_nodes(std::set<NodeRange>{NodeRange{node0, node0}, NodeRange{node1, node1}});
 
     ProgramSpec spec;
-    spec.program_id = "multi_node_program";
+    spec.name = "multi_node_program";
 
     // Kernels span both nodes
     auto producer = MakeMinimalDMKernel("producer");
@@ -603,7 +603,7 @@ TEST_F(ProgramRunArgsTestQuasar, MultiNode_MissingOneNodeFails) {
     NodeRangeSet all_nodes(std::set<NodeRange>{NodeRange{node0, node0}, NodeRange{node1, node1}});
 
     ProgramSpec spec;
-    spec.program_id = "multi_node_program";
+    spec.name = "multi_node_program";
 
     auto producer = MakeMinimalDMKernel("producer");
     auto consumer = MakeMinimalDMKernel("consumer");
@@ -780,7 +780,7 @@ TEST_F(ProgramRunArgsTestQuasar, VarargOnlyMultiNodeDifferingCountsSucceeds) {
     NodeRangeSet nodes{std::vector<NodeRange>{NodeRange{node_a, node_a}, NodeRange{node_b, node_b}}};
 
     ProgramSpec spec;
-    spec.program_id = "vararg_differing_counts";
+    spec.name = "vararg_differing_counts";
     auto kernel = MakeMinimalDMKernel("dm_kernel");
     kernel.advanced_options.num_runtime_varargs_per_node =
         KernelAdvancedOptions::NumVarargsPerNode{{node_a, 2}, {node_b, 5}};
@@ -813,7 +813,7 @@ TEST_F(ProgramRunArgsTestQuasar, VarargPerNodeOverrideMixedEntryTypesSucceeds) {
         std::vector<NodeRange>{NodeRange{node_a, node_a}, NodeRange{node_b, node_b}, NodeRange{node_c, node_c}}};
 
     ProgramSpec spec;
-    spec.program_id = "vararg_mixed_entry_types";
+    spec.name = "vararg_mixed_entry_types";
     auto kernel = MakeMinimalDMKernel("dm_kernel");
     // Nodes a and b share count 3 (declared via a NodeRangeSet entry).
     // Node c has count 5 (declared via a NodeCoord entry).
@@ -846,7 +846,7 @@ TEST_F(ProgramRunArgsTestQuasar, VarargScalarDefaultWithSparseOverrideSucceeds) 
         std::vector<NodeRange>{NodeRange{node_a, node_a}, NodeRange{node_b, node_b}, NodeRange{node_c, node_c}}};
 
     ProgramSpec spec;
-    spec.program_id = "vararg_scalar_with_sparse_override";
+    spec.name = "vararg_scalar_with_sparse_override";
     auto kernel = MakeMinimalDMKernel("dm_kernel");
     kernel.advanced_options = KernelAdvancedOptions{
         .num_runtime_varargs = 2,  // default for unlisted nodes
@@ -883,7 +883,7 @@ TEST_F(ProgramRunArgsTestQuasar, VarargSparseOverrideZeroErasesScalarDefault) {
     NodeRangeSet both{std::vector<NodeRange>{NodeRange{node_a, node_a}, NodeRange{node_b, node_b}}};
 
     ProgramSpec spec;
-    spec.program_id = "vararg_zero_override";
+    spec.name = "vararg_zero_override";
     auto kernel = MakeMinimalDMKernel("dm_kernel");
     kernel.advanced_options = KernelAdvancedOptions{
         .num_runtime_varargs = 3,
@@ -929,7 +929,7 @@ TEST_F(ProgramRunArgsTestQuasar, VarargOnlyRTAsMissingNodeCoverageFails) {
     NodeRangeSet nodes{std::vector<NodeRange>{NodeRange{node_a, node_a}, NodeRange{node_b, node_b}}};
 
     ProgramSpec spec;
-    spec.program_id = "vararg_missing_node";
+    spec.name = "vararg_missing_node";
     auto kernel = MakeMinimalDMKernel("dm_kernel");
     kernel.advanced_options.num_runtime_varargs = 2;  // uniform across both nodes
     spec.kernels = {kernel};
@@ -1048,7 +1048,7 @@ inline ProgramSpec MakeBorrowedDFBProgramSpecForRunParams(
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "borrowed_dfb_test_program";
+    spec.name = "borrowed_dfb_test_program";
 
     auto producer = MakeMinimalDMKernel("producer");
     auto consumer = MakeMinimalDMKernel("consumer");

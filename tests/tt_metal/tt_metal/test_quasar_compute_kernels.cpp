@@ -63,13 +63,13 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelMultipleThreads) {
     };
 
     experimental::metal2_host_api::WorkUnitSpec main_wu{
-        .unique_id = "main",
+        .name = "main",
         .kernels = {COMPUTE_KERNEL},
         .target_nodes = node,
     };
 
     experimental::metal2_host_api::ProgramSpec spec{
-        .program_id = "compute_kernel_multiple_threads",
+        .name = "compute_kernel_multiple_threads",
         .kernels = {compute_kernel_spec},
         .work_units = {main_wu},
     };
@@ -139,13 +139,13 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelSingleThread) {
     };
 
     experimental::metal2_host_api::WorkUnitSpec main_wu{
-        .unique_id = "main",
+        .name = "main",
         .kernels = {COMPUTE_KERNEL},
         .target_nodes = node,
     };
 
     experimental::metal2_host_api::ProgramSpec spec{
-        .program_id = "compute_kernel_single_thread",
+        .name = "compute_kernel_single_thread",
         .kernels = {compute_kernel_spec},
         .work_units = {main_wu},
     };
@@ -200,13 +200,13 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCreateMultipleComputeKernelsSing
     };
 
     experimental::metal2_host_api::WorkUnitSpec main_wu{
-        .unique_id = "main",
+        .name = "main",
         .kernels = {COMPUTE_KERNEL_1, COMPUTE_KERNEL_2},
         .target_nodes = experimental::metal2_host_api::NodeCoord{0, 0},
     };
 
     experimental::metal2_host_api::ProgramSpec spec{
-        .program_id = "multiple_compute_kernels",
+        .name = "multiple_compute_kernels",
         .kernels = {compute_kernel_spec_1, compute_kernel_spec_2},
         .work_units = {main_wu},
     };

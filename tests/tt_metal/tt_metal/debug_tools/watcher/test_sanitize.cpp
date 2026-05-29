@@ -267,12 +267,12 @@ void RunTestOnCore(
             .config = dm_cfg,
         };
         experimental::metal2_host_api::WorkUnitSpec wu{
-            .unique_id = "main",
+            .name = "main",
             .kernels = {DRAM_COPY_KERNEL_NAME},
             .target_nodes = experimental::metal2_host_api::NodeCoord{core},
         };
         experimental::metal2_host_api::ProgramSpec spec{
-            .program_id = "watcher_sanitize",
+            .name = "watcher_sanitize",
             .kernels = {dm_spec},
             .work_units = {wu},
         };
