@@ -21,7 +21,7 @@
 #   docker buildx bake all              # Build everything
 #   docker buildx bake --print dev      # Dry run: show what would be built
 #
-#   # Ubuntu 24.04 variant:
+#   # Ubuntu 24.04 variant (PYTHON_VERSION must match — 22.04→3.10, 24.04→3.12):
 #   UBUNTU_VERSION=24.04 PYTHON_VERSION=3.12 docker buildx bake dev
 #
 #   # Force rebuild (no cache):

@@ -158,17 +158,17 @@ Tool image tags are passed between workflows as a single JSON bundle instead of 
 ## When to Use CI vs Local Builds
 
 - **CI (GitHub Actions)**: The `build-docker-artifact.yaml` workflow builds tool images, Python venv images, and main images automatically using manual `docker buildx bake` with GHCR context overrides. Used by merge-gate, pr-gate, and build-artifact.
-- **Local development**: Use `docker buildx bake` (directly or via `build-local.sh`) to build images locally. Bake automatically builds tool and venv dependencies first.
+- **Local development**: Use `docker buildx bake -f dockerfile/docker-bake.hcl <target>` directly. Bake automatically builds tool and venv dependencies first.
 
 ## Local Builds
 
-### Quick Start (bake directly)
+### Quick Start
 
 ```bash
 # Build the development image (tools+venvs built automatically)
 docker buildx bake -f dockerfile/docker-bake.hcl dev
 
-# Build for Ubuntu 24.04
+# Ubuntu 24.04 variant — PYTHON_VERSION must match: 22.04→3.10, 24.04→3.12
 UBUNTU_VERSION=24.04 PYTHON_VERSION=3.12 docker buildx bake -f dockerfile/docker-bake.hcl dev
 
 # Build CI test image
@@ -180,26 +180,6 @@ docker buildx bake -f dockerfile/docker-bake.hcl --print dev
 # Force rebuild with no cache
 docker buildx bake -f dockerfile/docker-bake.hcl --no-cache dev
 ```
-
-### Using the wrapper script
-
-```bash
-./dockerfile/build-local.sh dev
-./dockerfile/build-local.sh --ubuntu 24.04 ci-test
-./dockerfile/build-local.sh --set ci-build.output=type=docker ci-build
-./dockerfile/build-local.sh --no-cache dev
-./dockerfile/build-local.sh --help
-```
-
-### Options
-
-| Option | Description |
-|--------|-------------|
-| `--ubuntu VERSION` | Ubuntu version (default: 22.04) |
-| `--tag TAG` | Output image tag override |
-| `--set KEY=VALUE` | Extra Bake override; repeatable |
-| `--no-cache` | Build without Docker cache |
-| `--print` | Dry run: show what would be built |
 
 ### Targets
 
@@ -234,7 +214,6 @@ docker buildx bake -f dockerfile/docker-bake.hcl --no-cache dev
 | File | Purpose |
 |------|---------|
 | `docker-bake.hcl` | Single source of truth for all build targets and dependencies |
-| `build-local.sh` | Thin wrapper around `docker buildx bake` for local builds |
 | `Dockerfile.tools` | Tool versions, hashes, and install stages |
 
 ## Workflow Files
