@@ -89,7 +89,7 @@ matmul_multi_core_reuse_mcast_1d_optimized_helper(
 
 // ProgramDescriptor-flavored variant of matmul_multi_core_reuse_mcast_1d_optimized_helper.
 //
-// Mirrors the legacy helper's argument list and supports all three 1D paths:
+// Supports all three 1D paths:
 //   * `mcast_in0`        — broadcast in0 across cores (single-B, single-output, c_0 base).
 //   * `!mcast_in0 && !gather_in0` — broadcast in1; same single-B/output/c_0 constraints.
 //   * `gather_in0`       — ring topology used by CCL+matmul fused ops
@@ -97,7 +97,7 @@ matmul_multi_core_reuse_mcast_1d_optimized_helper(
 //     multi-B / multi-output, a non-zero `start_cb_index` (to leave low CB slots free for
 //     the caller's CCL kernels), `restricted_cores`, and an optional GlobalCircularBuffer.
 //
-// The mcast (non-gather) paths still TT_FATAL when callers pass gather_in0-only options
+// The mcast (non-gather) paths TT_FATAL when callers pass gather_in0-only options
 // (multi-B, multi-output, non-zero start_cb_index, restricted_cores, global_cb).
 void matmul_multi_core_reuse_mcast_1d_optimized_helper_descriptor(
     tt::tt_metal::ProgramDescriptor& desc,

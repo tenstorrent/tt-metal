@@ -43,9 +43,9 @@ namespace reuse_mcast_optimized_helpers {
 constexpr uint32_t kNumSemaphoresPerCore = 16;
 
 // Allocate `count` contiguous free semaphore ids on the given CoreRangeSet against an
-// existing ProgramDescriptor.  Mirrors the legacy CreateSemaphore behaviour (pick first
-// free id whose slot is unused on every requested core), but in a block so callers can
-// reserve a stable [base, base+count) range to hand to the matmul helper below.
+// existing ProgramDescriptor.  Picks the first free id whose slot is unused on every
+// requested core, in a block so callers can reserve a stable [base, base+count) range
+// to hand to the matmul helper below.
 static uint32_t allocate_free_semaphore_id_block(
     const tt::tt_metal::ProgramDescriptor& desc,
     const tt::tt_metal::CoreRangeSet& cores,
