@@ -67,7 +67,12 @@ class ComputePipeline:
         return True
 
     def _batch_loop(
-        self, operation: "FusedOperation", config: "GlobalConfig", body_fn
+        self,
+        operation: "FusedOperation",
+        config: "GlobalConfig",
+        body_fn,
+        init_fn=None,
+        uninit_fn=None,
     ) -> str:
         block_tiles_x = operation.block_tiles_x
         block_tiles_y = operation.block_tiles_y
@@ -100,43 +105,65 @@ class ComputePipeline:
                 tile_id_block="0",
             )
 
+        def wrap(block, body):
+            code = ""
+            if init_fn is not None:
+                code += init_fn(block)
+            code += body
+            if uninit_fn is not None:
+                code += uninit_fn(block)
+            return code
+
         code = ""
 
         if full_blocks_x > 0 and full_blocks_y > 0:
-            code += f"for (std::uint32_t block_x = 0; block_x < {full_x_limit}; block_x += {block_tiles_x}) {{\n"
-            code += f"for (std::uint32_t block_y = 0; block_y < {full_y_limit}; block_y += {block_tiles_y}) {{\n"
-            code += body_fn(
-                make_block("block_x", "block_y", block_tiles_x, block_tiles_y)
+            block = make_block("block_x", "block_y", block_tiles_x, block_tiles_y)
+            code += wrap(
+                block,
+                (
+                    f"for (std::uint32_t block_x = 0; block_x < {full_x_limit}; block_x += {block_tiles_x}) {{\n"
+                    f"for (std::uint32_t block_y = 0; block_y < {full_y_limit}; block_y += {block_tiles_y}) {{\n"
+                    + body_fn(block)
+                    + "}\n"
+                    "}\n"
+                ),
             )
-            code += "}\n"
-            code += "}\n"
 
         if remaining_tiles_y > 0 and full_blocks_x > 0:
-            code += f"for (std::uint32_t block_x = 0; block_x < {full_x_limit}; block_x += {block_tiles_x}) {{\n"
-            code += body_fn(
-                make_block("block_x", full_y_limit, block_tiles_x, remaining_tiles_y)
+            block = make_block(
+                "block_x", full_y_limit, block_tiles_x, remaining_tiles_y
             )
-            code += "}\n"
+            code += wrap(
+                block,
+                (
+                    f"for (std::uint32_t block_x = 0; block_x < {full_x_limit}; block_x += {block_tiles_x}) {{\n"
+                    + body_fn(block)
+                    + "}\n"
+                ),
+            )
 
         if remaining_tiles_x > 0 and full_blocks_y > 0:
-            code += f"for (std::uint32_t block_y = 0; block_y < {full_y_limit}; block_y += {block_tiles_y}) {{\n"
-            code += body_fn(
-                make_block(full_x_limit, "block_y", remaining_tiles_x, block_tiles_y)
+            block = make_block(
+                full_x_limit, "block_y", remaining_tiles_x, block_tiles_y
             )
-            code += "}\n"
+            code += wrap(
+                block,
+                (
+                    f"for (std::uint32_t block_y = 0; block_y < {full_y_limit}; block_y += {block_tiles_y}) {{\n"
+                    + body_fn(block)
+                    + "}\n"
+                ),
+            )
 
         if remaining_tiles_x > 0 and remaining_tiles_y > 0:
-            code += body_fn(
-                make_block(
-                    full_x_limit, full_y_limit, remaining_tiles_x, remaining_tiles_y
-                )
+            block = make_block(
+                full_x_limit, full_y_limit, remaining_tiles_x, remaining_tiles_y
             )
+            code += wrap(block, body_fn(block))
 
         return code
 
-    def _zone(
-        self, config: "GlobalConfig", name: str, body: str
-    ) -> str:
+    def _zone(self, config: "GlobalConfig", name: str, body: str) -> str:
         if not config.profiler_enabled:
             return body
         code = "{\n"
@@ -146,9 +173,7 @@ class ComputePipeline:
         code += "}\n"
         return code
 
-    def _zone_loop(
-        self, config: "GlobalConfig", name: str, body: str
-    ) -> str:
+    def _zone_loop(self, config: "GlobalConfig", name: str, body: str) -> str:
         if not config.profiler_enabled:
             return body
         code = "{\n"
@@ -188,21 +213,30 @@ class ComputePipeline:
 
         code += self.unpacker_sync_with_packer(operation, config)
 
+        init_fn = None
+        uninit_fn = None
+        if hoist and unpack_ops[0].unpacker.per_block_init:
+            init_fn = lambda block: unpack_ops[0].unpack_init(operation, config, block)
+            uninit_fn = lambda block: unpack_ops[0].unpack_uninit(
+                operation, config, block
+            )
+
         def batch_body(block: BlockData):
             body = ""
             for cu in self.operations:
-                hoisted = hoist and cu.unpacker is not None and not cu.unpacker.per_block_init
                 if not hoist_reconfig and cu.unpacker is not None:
                     body += cu.unpack_reconfig(operation, config)
-                if not hoisted:
+                if not hoist:
                     body += cu.unpack_init(operation, config, block)
                 body += cu.unpack_run(operation, config, block)
-                if not hoisted:
+                if not hoist:
                     body += cu.unpack_uninit(operation, config, block)
             return body
 
         code += self._zone_loop(
-            config, "TILE_LOOP", self._batch_loop(operation, config, batch_body)
+            config,
+            "TILE_LOOP",
+            self._batch_loop(operation, config, batch_body, init_fn, uninit_fn),
         )
 
         uninit_code = ""
@@ -255,22 +289,29 @@ class ComputePipeline:
             init_code += fpu_ops[0].math_init(operation, config, None)
         code += self._zone(config, "INIT", init_code)
 
+        init_fn = None
+        uninit_fn = None
+        if hoist and fpu_ops[0].fpu.per_block_init:
+            init_fn = lambda block: fpu_ops[0].math_init(operation, config, block)
+            uninit_fn = lambda block: fpu_ops[0].math_uninit(operation, config, block)
+
         def batch_body(block: BlockData):
             body = self._math_wait_for_dest(operation, config)
             for cu in self.operations:
-                hoisted = hoist and cu.fpu is not None and not cu.fpu.per_block_init
                 if not hoist_reconfig and cu.fpu is not None:
                     body += cu.math_reconfig(operation, config)
-                if not hoisted:
+                if not hoist or cu.fpu is None:
                     body += cu.math_init(operation, config, block)
                 body += cu.math_run(operation, config, block)
-                if not hoisted:
+                if not hoist or cu.fpu is None:
                     body += cu.math_uninit(operation, config, block)
             body += self._math_dest_section_done(operation, config)
             return body
 
         code += self._zone_loop(
-            config, "TILE_LOOP", self._batch_loop(operation, config, batch_body)
+            config,
+            "TILE_LOOP",
+            self._batch_loop(operation, config, batch_body, init_fn, uninit_fn),
         )
 
         uninit_code = ""
@@ -343,7 +384,9 @@ class ComputePipeline:
         hoist = len(self.pack_nodes) == 1
         hoist_reconfig = hoist or self._all_same_pack_formats()
 
-        init_code = config.sentinel.hw_configure_pack(config, operation, self.pack_nodes)
+        init_code = config.sentinel.hw_configure_pack(
+            config, operation, self.pack_nodes
+        )
         init_code += self._pack_dest_init(operation, config)
         init_code += self._pack_reduce_mask_config(operation)
         if hoist_reconfig:
@@ -420,7 +463,12 @@ class ComputePipeline:
             )
         return tensor_dst
 
-    def golden(self, operation: "FusedOperation", config: "GlobalConfig", golden_type: GoldenType):
+    def golden(
+        self,
+        operation: "FusedOperation",
+        config: "GlobalConfig",
+        golden_type: GoldenType,
+    ):
         math_tensor = self._math_golden(operation, config, golden_type)
 
         for pack_node in self.pack_nodes:
