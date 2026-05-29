@@ -54,8 +54,9 @@ done
 # Compute tool tags using existing script (always produces canonical ghcr.io tags)
 TOOL_TAGS=$(.github/scripts/compute-tool-tags.sh "$REPO")
 
-# Tool list
-TOOLS="ccache mold doxygen cba gdb cmake yq zstd sfpi openmpi"
+# Derive tool list from docker-bake.hcl (single source of truth)
+TOOLS=$(docker buildx bake -f dockerfile/docker-bake.hcl --print tools 2>/dev/null \
+  | jq -r '.group.tools.targets[]' | sort | tr '\n' ' ' | sed 's/ $//')
 
 # Check existence for each tool
 ANY_MISSING=false
@@ -79,32 +80,17 @@ for tool in $TOOLS; do
     fi
 done
 
-# Output JSON with tool_tags as nested object, not string
-# Use --arg for existence/boolean fields since they may hold "unknown" (not valid JSON for --argjson)
+# Build output JSON dynamically from derived tool list
+# Start with base fields, then add per-tool existence flags
+JQ_ARGS=(--argjson tool_tags "$TOOL_TAGS" --arg any_missing "$ANY_MISSING")
+EXISTS_OBJ="{}"
+for tool in $TOOLS; do
+    JQ_ARGS+=(--arg "${tool}_exists" "${EXISTS[$tool]}")
+    EXISTS_OBJ=$(echo "$EXISTS_OBJ" | jq --arg k "${tool}_exists" --arg v "${EXISTS[$tool]}" '. + {($k): $v}')
+done
+
 jq -n \
     --argjson tool_tags "$TOOL_TAGS" \
     --arg any_missing "$ANY_MISSING" \
-    --arg ccache_exists "${EXISTS[ccache]}" \
-    --arg mold_exists "${EXISTS[mold]}" \
-    --arg doxygen_exists "${EXISTS[doxygen]}" \
-    --arg cba_exists "${EXISTS[cba]}" \
-    --arg gdb_exists "${EXISTS[gdb]}" \
-    --arg cmake_exists "${EXISTS[cmake]}" \
-    --arg yq_exists "${EXISTS[yq]}" \
-    --arg zstd_exists "${EXISTS[zstd]}" \
-    --arg sfpi_exists "${EXISTS[sfpi]}" \
-    --arg openmpi_exists "${EXISTS[openmpi]}" \
-    '{
-        tool_tags: $tool_tags,
-        any_missing: $any_missing,
-        ccache_exists: $ccache_exists,
-        mold_exists: $mold_exists,
-        doxygen_exists: $doxygen_exists,
-        cba_exists: $cba_exists,
-        gdb_exists: $gdb_exists,
-        cmake_exists: $cmake_exists,
-        yq_exists: $yq_exists,
-        zstd_exists: $zstd_exists,
-        sfpi_exists: $sfpi_exists,
-        openmpi_exists: $openmpi_exists
-    }'
+    --argjson exists_obj "$EXISTS_OBJ" \
+    '{tool_tags: $tool_tags, any_missing: $any_missing} + $exists_obj'

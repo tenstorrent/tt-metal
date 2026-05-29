@@ -15,20 +15,6 @@ REPO = "ghcr.io/tenstorrent/tt-metal"
 # Update here whenever the workflow env constant changes.
 BAKE_OUTPUT = "type=image,push=true,compression=zstd,compression-level=22,force-compression=true,oci-mediatypes=true"
 
-
-TOOL_TAGS = {
-    "ccache": f"{REPO}/tt-metalium/tools/ccache:test",
-    "mold": f"{REPO}/tt-metalium/tools/mold:test",
-    "doxygen": f"{REPO}/tt-metalium/tools/doxygen:test",
-    "cba": f"{REPO}/tt-metalium/tools/cba:test",
-    "gdb": f"{REPO}/tt-metalium/tools/gdb:test",
-    "cmake": f"{REPO}/tt-metalium/tools/cmake:test",
-    "yq": f"{REPO}/tt-metalium/tools/yq:test",
-    "zstd": f"{REPO}/tt-metalium/tools/zstd:test",
-    "sfpi": f"{REPO}/tt-metalium/tools/sfpi:test",
-    "openmpi": f"{REPO}/tt-metalium/tools/openmpi:test",
-}
-
 VENV_TAGS = {
     "ci-build-venv": f"{REPO}/tt-metalium/python-venv/ci-build:test",
     "ci-test-venv": f"{REPO}/tt-metalium/python-venv/ci-test:test",
@@ -82,18 +68,45 @@ def run_bake_print(*args: str) -> dict:
     return json.loads(completed.stdout)
 
 
+def get_tools_from_group(group_name: str = "tools") -> list[str]:
+    """Derive all tool names from the bake 'tools' group targets."""
+    bake = run_bake_print(group_name)
+    return sorted(bake["group"][group_name]["targets"])
+
+
+def get_tools_for_target(target: str) -> list[str]:
+    """Derive tool names consumed by a target from its '-layer' contexts."""
+    bake = run_bake_print(target)
+    contexts = bake["target"][target].get("contexts", {})
+    return sorted(
+        key.removesuffix("-layer")
+        for key in contexts
+        if key.endswith("-layer") and not key.startswith("ci-")
+    )
+
+
 def main() -> int:
     if shutil.which("docker") is None:
         print("docker is required for Bake validation", file=sys.stderr)
         return 1
 
+    # Derive TOOL_TAGS from bake's tools group — no hardcoded tool list
+    all_tools = get_tools_from_group("tools")
+    TOOL_TAGS = {t: f"{REPO}/tt-metalium/tools/{t}:test" for t in all_tools}
+
+    # Derive per-target tool lists from bake contexts
+    main_tools = get_tools_for_target("ci-build")
+    basic_tools = get_tools_for_target("basic-dev")
+    manylinux_tools = get_tools_for_target("manylinux")
+    evaluation_tools = get_tools_for_target("evaluation")
+
     sets: list[str] = []
     for target in ("ci-build", "ci-test", "dev"):
-        for tool, tag in TOOL_TAGS.items():
+        for tool in main_tools:
             sets.extend(
                 [
                     "--set",
-                    f"{target}.contexts.{tool}-layer=docker-image://{harbor_prefixed(tag)}",
+                    f"{target}.contexts.{tool}-layer=docker-image://{harbor_prefixed(TOOL_TAGS[tool])}",
                 ]
             )
         sets.extend(
@@ -110,7 +123,7 @@ def main() -> int:
         )
 
     for target in ("basic-dev", "basic-ttnn-runtime"):
-        for tool in ("cmake", "sfpi", "openmpi", "ccache"):
+        for tool in basic_tools:
             sets.extend(
                 [
                     "--set",
@@ -126,7 +139,7 @@ def main() -> int:
             ]
         )
 
-    for tool in ("ccache", "mold", "zstd", "sfpi", "openmpi"):
+    for tool in manylinux_tools:
         sets.extend(
             [
                 "--set",
@@ -142,7 +155,7 @@ def main() -> int:
         ]
     )
 
-    for tool in ("ccache", "sfpi"):
+    for tool in evaluation_tools:
         sets.extend(
             [
                 "--set",

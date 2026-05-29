@@ -90,16 +90,11 @@ jobs:
             fi
           }
 
-          add_if_missing ccache
-          add_if_missing mold
-          add_if_missing doxygen
-          add_if_missing cba
-          add_if_missing gdb
-          add_if_missing cmake
-          add_if_missing yq
-          add_if_missing zstd
-          add_if_missing sfpi
-          add_if_missing openmpi
+          # Derive tool list from bake's tools group (single source of truth)
+          for tool in $(docker buildx bake -f dockerfile/docker-bake.hcl --print tools 2>/dev/null \
+            | jq -r '.group.tools.targets[]' | sort); do
+            add_if_missing "$tool"
+          done
 
           TARGETS="${TARGETS%,}"
 

@@ -333,7 +333,7 @@ jobs:
             SET+="${target}.contexts.ci-test-venv-layer=docker-image://${HARBOR_PREFIX}${CI_TEST_VENV_TAG}"$'\n'
           }
 
-          ALL_TOOLS=(ccache mold doxygen cba gdb cmake yq zstd sfpi openmpi)
+          ALL_TOOLS=($(.github/scripts/get-target-tools.sh ci-build))
 
           add_main_target() {
             local target="$1"
@@ -349,7 +349,7 @@ jobs:
           [ "$CI_TEST_EXISTS" != "true" ] && add_main_target "ci-test" "$CI_TEST_TAG"
           [ "$DEV_EXISTS" != "true" ] && add_main_target "dev" "$DEV_TAG"
 
-          BASIC_TOOLS=(cmake sfpi openmpi ccache)
+          BASIC_TOOLS=($(.github/scripts/get-target-tools.sh basic-dev))
           if [ "$BASIC_DEV_EXISTS" != "true" ]; then
             TARGETS+="basic-dev,"
             add_tool_contexts "basic-dev" "${BASIC_TOOLS[@]}"
@@ -433,7 +433,8 @@ jobs:
 
           SET=""
           # Add tool layer contexts with Harbor prefix for pull-through cache
-          for tool in ccache mold zstd sfpi openmpi; do
+          MANYLINUX_TOOLS=($(.github/scripts/get-target-tools.sh manylinux))
+          for tool in "${MANYLINUX_TOOLS[@]}"; do
             tag=$(echo "$TOOL_TAGS" | jq -r ".\"${tool}-tag\"")
             SET+="manylinux.contexts.${tool}-layer=docker-image://${HARBOR_PREFIX}${tag}"$'\n'
           done
