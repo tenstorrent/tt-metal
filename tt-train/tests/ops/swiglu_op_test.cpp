@@ -12,6 +12,7 @@
 #include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/ops/swiglu_elemwise_bw/swiglu_elemwise_bw.hpp"
+#include "test_utils/comparison.hpp"
 
 class SwiGLUForwardTest : public ::testing::Test {
 protected:
@@ -113,27 +114,10 @@ void CompareKernelVsReference(
     EXPECT_TRUE(xt::all(xt::isfinite(result_kernel_xtensor))) << "SwiGLU kernel result contains NaN or Inf values";
     EXPECT_TRUE(xt::all(xt::isfinite(result_reference))) << "SwiGLU reference result contains NaN or Inf values";
 
-    // We validate using relative L2 error instead of elementwise allclose().
-    //
-    // SwiGLU involves two matmuls + SiLU, so the output magnitude scales with
-    // hidden_dim and tensor size. Combined with BF16 internal math (≈1e-2 relative
-    // noise per element), elementwise tolerances become unstable: they may fail on
-    // large tensors (outliers) or fail on small ones (tiny reference values).
-    //
-    // Relative L2 is scale-invariant and reflects the total numerical deviation of
-    // the tensor, giving consistent results across all shapes. A threshold of 0.01
-    // is standard for BF16 vs FP32 reference comparisons.
-    auto diff = result_kernel_xtensor - result_reference;
-
-    // Compute L2 norms.
-    float diff_l2 = std::sqrt(xt::sum(xt::square(diff))());
-    float ref_l2 = std::sqrt(xt::sum(xt::square(result_reference))());
-    const float eps = 1e-12f;
-    float rel_l2 = diff_l2 / (ref_l2 + eps);
-
-    // Check the error bound.
-    const float tolerance = 1e-2f;
-    EXPECT_LT(rel_l2, tolerance) << "Relative L2 error too large: " << rel_l2 << " (expected < " << tolerance << ")";
+    // Validate with relative L2 instead of elementwise allclose: SwiGLU's two matmuls + SiLU make the
+    // output magnitude scale with hidden_dim and tensor size, so BF16 per-element tolerances are
+    // unstable. Relative L2 is scale-invariant; 0.01 is standard for BF16 vs FP32 references.
+    ttml::test_utils::expect_relative_l2(result_kernel_xtensor, result_reference, /*threshold=*/1e-2, "SwiGLU");
 }
 
 /**

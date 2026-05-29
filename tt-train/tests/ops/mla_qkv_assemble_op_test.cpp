@@ -13,6 +13,7 @@
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "test_utils/comparison.hpp"
 #include "test_utils/random_data.hpp"
 
 class MLAQKVAssembleTest : public ::testing::Test {
@@ -49,15 +50,7 @@ ttnn::Tensor make_input(uint32_t d0, uint32_t d1, uint32_t d2, uint32_t d3, uint
     return ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(host, shape, device, ttnn::Layout::TILE);
 }
 
-void expect_allclose(
-    const xt::xarray<float>& actual,
-    const xt::xarray<float>& expected,
-    double rtol,
-    double atol,
-    const std::string& tag) {
-    ASSERT_EQ(actual.shape(), expected.shape()) << tag << ": shape mismatch";
-    EXPECT_TRUE(xt::allclose(actual, expected, rtol, atol)) << tag << ": value mismatch";
-}
+using ttml::test_utils::expect_allclose;
 
 // ── Forward reference (q, k, v) computed from BF16-rounded packed inputs ───────────────────────────
 struct FwOutputs {
