@@ -220,3 +220,55 @@ def test_emit_session_summary_rollup(monkeypatch):
         )
     )
     emit_session_summary(state, params={"duration_sec": 60.0, "infer_steps": 50, "llm_debug": True})
+
+
+def test_five_hz_lm_bfloat8_optimizations_default():
+    import ttnn
+    from models.demos.ace_step_v1_5.ttnn_impl.math_perf_env import (
+        ace_step_five_hz_lm_bfloat8_weights_enabled,
+        ace_step_five_hz_lm_optimizations,
+    )
+    from models.tt_transformers.tt.model_config import TensorGroup
+
+    class _FakeModelArgs:
+        n_layers = 28
+        model_name = "acestep-5Hz-lm-1.7B"
+
+    assert ace_step_five_hz_lm_bfloat8_weights_enabled()
+    dec = ace_step_five_hz_lm_optimizations(_FakeModelArgs())
+    bf8 = getattr(ttnn, "bfloat8_b", None)
+    assert bf8 is not None
+    for layer in range(_FakeModelArgs.n_layers):
+        for tg in (TensorGroup.FF1_FF3, TensorGroup.FF2, TensorGroup.WQKV, TensorGroup.WO, TensorGroup.KV_CACHE):
+            assert dec.get_tensor_dtype(layer, tg) == bf8
+
+
+def test_five_hz_lm_bfloat8_weights_env_opt_out(monkeypatch):
+    from models.demos.ace_step_v1_5.ttnn_impl.math_perf_env import ace_step_five_hz_lm_bfloat8_weights_enabled
+
+    monkeypatch.setenv("ACE_STEP_LM_BFLOAT8_WEIGHTS", "0")
+    assert not ace_step_five_hz_lm_bfloat8_weights_enabled()
+
+
+def test_five_hz_lm_hifi2_optimizations_default():
+    from models.demos.ace_step_v1_5.ttnn_impl.math_perf_env import ace_step_five_hz_lm_optimizations
+    from models.tt_transformers.tt.model_config import MathFidelitySetting, OpGroup
+
+    class _FakeModelArgs:
+        n_layers = 28
+        model_name = "acestep-5Hz-lm-1.7B"
+
+    dec = ace_step_five_hz_lm_optimizations(_FakeModelArgs())
+    for layer in range(_FakeModelArgs.n_layers):
+        for op in (
+            OpGroup.LI_FF1_FF3,
+            OpGroup.LI_FF2,
+            OpGroup.LI_QKV_DECODE,
+            OpGroup.LI_QKV_PREFILL,
+            OpGroup.SDPA_DECODE,
+            OpGroup.SDPA_PREFILL,
+            OpGroup.LI_O_DECODE,
+            OpGroup.LI_O_PREFILL,
+        ):
+            fid = dec.decoder_optimizations[layer].op_fidelity_settings[op]
+            assert fid == MathFidelitySetting.HIFI2, f"layer={layer} op={op} got {fid}"
