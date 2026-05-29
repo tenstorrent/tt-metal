@@ -237,17 +237,17 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
 
     // Both gen1 and gen2 configs are populated; the runtime picks the one
     // matching the active arch.
-    experimental::metal2_host_api::DataMovementConfiguration reader_dm_cfg{
-        .gen1_data_movement_config =
-            experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
+    experimental::metal2_host_api::KernelDMConfig reader_dm_cfg{
+        .gen1_config =
+            experimental::metal2_host_api::KernelDMConfig::Gen1Config{
                 .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
-        .gen2_data_movement_config = experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{},
+        .gen2_config = experimental::metal2_host_api::KernelDMConfig::Gen2Config{},
     };
-    experimental::metal2_host_api::DataMovementConfiguration writer_dm_cfg{
-        .gen1_data_movement_config =
-            experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
+    experimental::metal2_host_api::KernelDMConfig writer_dm_cfg{
+        .gen1_config =
+            experimental::metal2_host_api::KernelDMConfig::Gen1Config{
                 .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
-        .gen2_data_movement_config = experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{},
+        .gen2_config = experimental::metal2_host_api::KernelDMConfig::Gen2Config{},
     };
 
     experimental::metal2_host_api::KernelSpec reader_spec{
@@ -416,7 +416,7 @@ bool reader_datacopy_writer(
     constexpr const char* COMPUTE = "compute";
 
     // Implicit sync is enabled by default for both DFBs (no DM kernel opts out
-    // via Gen2DataMovementConfig::disable_implicit_sync_for). The program-level
+    // via Gen2Config::disable_implicit_sync_for). The program-level
     // reservation flag set below is independent of per-DFB sync mode.
     experimental::metal2_host_api::DataflowBufferSpec input_dfb_spec{
         .unique_id = INPUT_DFB,
@@ -433,17 +433,17 @@ bool reader_datacopy_writer(
 
     // Both gen1 and gen2 configs are populated; the runtime picks the one
     // matching the active arch.
-    experimental::metal2_host_api::DataMovementConfiguration reader_dm_cfg{
-        .gen1_data_movement_config =
-            experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
+    experimental::metal2_host_api::KernelDMConfig reader_dm_cfg{
+        .gen1_config =
+            experimental::metal2_host_api::KernelDMConfig::Gen1Config{
                 .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
-        .gen2_data_movement_config = experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{},
+        .gen2_config = experimental::metal2_host_api::KernelDMConfig::Gen2Config{},
     };
-    experimental::metal2_host_api::DataMovementConfiguration writer_dm_cfg{
-        .gen1_data_movement_config =
-            experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
+    experimental::metal2_host_api::KernelDMConfig writer_dm_cfg{
+        .gen1_config =
+            experimental::metal2_host_api::KernelDMConfig::Gen1Config{
                 .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
-        .gen2_data_movement_config = experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{},
+        .gen2_config = experimental::metal2_host_api::KernelDMConfig::Gen2Config{},
     };
 
     experimental::metal2_host_api::KernelSpec reader_spec{
@@ -500,7 +500,7 @@ bool reader_datacopy_writer(
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
         .compile_time_args = {{"per_core_tile_cnt", per_core_tile_cnt}},
-        .config = experimental::metal2_host_api::ComputeConfiguration{},
+        .config = experimental::metal2_host_api::KernelComputeConfig{},
     };
 
     experimental::metal2_host_api::WorkUnitSpec wu{

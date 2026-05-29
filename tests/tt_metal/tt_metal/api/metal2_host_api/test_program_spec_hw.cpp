@@ -478,9 +478,9 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
         .num_threads = 1,
         .semaphore_bindings = {{.semaphore_spec_name = "only_sem", .accessor_name = "signal"}},
         .config =
-            DataMovementConfiguration{
-                .gen1_data_movement_config =
-                    DataMovementConfiguration::Gen1DataMovementConfig{
+            KernelDMConfig{
+                .gen1_config =
+                    KernelDMConfig::Gen1Config{
                         .processor = DataMovementProcessor::RISCV_0,
                     },
             },
@@ -493,9 +493,9 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
         .num_threads = 1,
         .semaphore_bindings = {{.semaphore_spec_name = "only_sem", .accessor_name = "waiter"}},
         .config =
-            DataMovementConfiguration{
-                .gen1_data_movement_config =
-                    DataMovementConfiguration::Gen1DataMovementConfig{
+            KernelDMConfig{
+                .gen1_config =
+                    KernelDMConfig::Gen1Config{
                         .processor = DataMovementProcessor::RISCV_1,
                     },
             },

@@ -669,12 +669,12 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     // Validate DM configs
     for (const auto& kernel : spec.kernels) {
         if (kernel.is_data_movement_kernel()) {
-            const auto& data_movement_config = std::get<DataMovementConfiguration>(kernel.config);
+            const auto& data_movement_config = std::get<KernelDMConfig>(kernel.config);
 
             // Both Gen1 and Gen2 configs are optional. But at least one must be specified.
             TT_FATAL(
-                data_movement_config.gen1_data_movement_config.has_value() ||
-                    data_movement_config.gen2_data_movement_config.has_value(),
+                data_movement_config.gen1_config.has_value() ||
+                    data_movement_config.gen2_config.has_value(),
                 "KernelSpec '{}' must specify a DM config for Gen1, Gen2, or both.",
                 kernel.unique_id);
 
@@ -683,7 +683,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             // Gen2 builds: absence is treated as "use defaults" (empty disable_implicit_sync_for).
             if (is_gen1_arch()) {
                 TT_FATAL(
-                    data_movement_config.gen1_data_movement_config.has_value(),
+                    data_movement_config.gen1_config.has_value(),
                     "KernelSpec '{}' must specify a Gen1 DM config when targeting WH or BH.",
                     kernel.unique_id);
             }
@@ -699,8 +699,8 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             if (!kernel.is_data_movement_kernel()) {
                 continue;
             }
-            const auto& dm_config = std::get<DataMovementConfiguration>(kernel.config);
-            const auto& gen1 = dm_config.gen1_data_movement_config.value();
+            const auto& dm_config = std::get<KernelDMConfig>(kernel.config);
+            const auto& gen1 = dm_config.gen1_config.value();
             const NodeRangeSet& nodes = collected.kernel_node_set.at(kernel.unique_id);
             for (const auto& range : nodes.ranges()) {
                 for (const auto& node : range) {
@@ -740,7 +740,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         if (!kernel.is_compute_kernel()) {
             continue;
         }
-        const auto& compute_config = std::get<ComputeConfiguration>(kernel.config);
+        const auto& compute_config = std::get<KernelComputeConfig>(kernel.config);
 
         // Index the kernel's DFB bindings: which are bound, which are consumed.
         std::unordered_set<DFBSpecName> bound_dfbs;
@@ -842,7 +842,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     //
     // Implicit sync is a Gen2-only, DM-only mechanism (ISR-based credit posting from NoC
     // transaction completion). Each DM kernel can opt out per-DFB by listing the DFB's name
-    // in its Gen2DataMovementConfig::disable_implicit_sync_for vector. The opt-out applies to
+    // in its Gen2Config::disable_implicit_sync_for vector. The opt-out applies to
     // the side(s) of the DFB this kernel binds (producer, consumer, or both for a self-loop).
     //
     // Per-kernel rule: every listed name references a DFB the kernel binds (typo guard).
@@ -856,15 +856,15 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             if (!kernel.is_data_movement_kernel()) {
                 continue;
             }
-            const auto& dm_config = std::get<DataMovementConfiguration>(kernel.config);
-            if (!dm_config.gen2_data_movement_config.has_value()) {
+            const auto& dm_config = std::get<KernelDMConfig>(kernel.config);
+            if (!dm_config.gen2_config.has_value()) {
                 continue;
             }
             std::unordered_set<DFBSpecName> bound_dfbs;
             for (const auto& binding : kernel.dfb_bindings) {
                 bound_dfbs.insert(binding.dfb_spec_name);
             }
-            for (const auto& dfb_name : dm_config.gen2_data_movement_config->disable_implicit_sync_for) {
+            for (const auto& dfb_name : dm_config.gen2_config->disable_implicit_sync_for) {
                 TT_FATAL(
                     bound_dfbs.contains(dfb_name),
                     "Kernel '{}' disable_implicit_sync_for entry references DFB '{}', which the kernel does not bind",
@@ -887,12 +887,12 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                     if (!ep.kernel->is_data_movement_kernel()) {
                         continue;
                     }
-                    const auto& dm_config = std::get<DataMovementConfiguration>(ep.kernel->config);
-                    if (!dm_config.gen2_data_movement_config.has_value()) {
+                    const auto& dm_config = std::get<KernelDMConfig>(ep.kernel->config);
+                    if (!dm_config.gen2_config.has_value()) {
                         // Gen1-only DM kernel — can't physically participate in Gen2 implicit sync; abstains.
                         continue;
                     }
-                    const auto& vec = dm_config.gen2_data_movement_config->disable_implicit_sync_for;
+                    const auto& vec = dm_config.gen2_config->disable_implicit_sync_for;
                     const bool lists_dfb = std::find(vec.begin(), vec.end(), dfb_name) != vec.end();
                     if (canonical == nullptr) {
                         canonical = ep.kernel;
@@ -1730,7 +1730,7 @@ KernelRiscMaskMap SolveGen2KernelRiscMasks(const ProgramSpec& spec, const Collec
     return result;
 }
 
-// Gen1 (WH/BH) processor assignment: just read the explicit processor from Gen1DataMovementConfig
+// Gen1 (WH/BH) processor assignment: just read the explicit processor from Gen1Config
 // and returns a KernelRiscMaskMap using the Gen1 bit encoding (RISCV_0: bit 0, RISCV_1: bit 1, compute: bit 2).
 KernelRiscMaskMap BuildGen1KernelRiscMasks(const ProgramSpec& spec) {
     static constexpr uint8_t GEN1_COMPUTE_RISC_BIT = 2;
@@ -1738,8 +1738,8 @@ KernelRiscMaskMap BuildGen1KernelRiscMasks(const ProgramSpec& spec) {
     KernelRiscMaskMap result;
     for (const KernelSpec& kernel : spec.kernels) {
         if (kernel.is_data_movement_kernel()) {
-            const auto& dm_config = std::get<DataMovementConfiguration>(kernel.config);
-            const auto& gen1 = dm_config.gen1_data_movement_config.value();
+            const auto& dm_config = std::get<KernelDMConfig>(kernel.config);
+            const auto& gen1 = dm_config.gen1_config.value();
             result[&kernel] = static_cast<uint16_t>(1u << static_cast<uint8_t>(gen1.processor));
         } else {
             result[&kernel] = static_cast<uint16_t>(1u << GEN1_COMPUTE_RISC_BIT);
@@ -2064,11 +2064,11 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
                 continue;
             }
             any_dm = true;
-            const auto& dm_config = std::get<DataMovementConfiguration>(ep.kernel->config);
-            if (!dm_config.gen2_data_movement_config.has_value()) {
+            const auto& dm_config = std::get<KernelDMConfig>(ep.kernel->config);
+            if (!dm_config.gen2_config.has_value()) {
                 continue;
             }
-            const auto& vec = dm_config.gen2_data_movement_config->disable_implicit_sync_for;
+            const auto& vec = dm_config.gen2_config->disable_implicit_sync_for;
             if (std::find(vec.begin(), vec.end(), dfb_spec->unique_id) != vec.end()) {
                 disabled = true;
             }
@@ -2134,8 +2134,8 @@ std::map<std::string, std::string> to_defines_map(const KernelSpec::CompilerOpti
 
 DataMovementConfig MakeGen1DataMovementConfig(const KernelSpec& kernel_spec) {
     TT_FATAL(kernel_spec.is_data_movement_kernel(), "Expected a DM kernel");
-    const auto& dm_config = std::get<DataMovementConfiguration>(kernel_spec.config);
-    const auto& gen1 = dm_config.gen1_data_movement_config.value();
+    const auto& dm_config = std::get<KernelDMConfig>(kernel_spec.config);
+    const auto& gen1 = dm_config.gen1_config.value();
 
     return DataMovementConfig{
         .processor = gen1.processor,
@@ -2171,7 +2171,7 @@ DataMovementConfig MakeGen1DataMovementConfig(const KernelSpec& kernel_spec) {
 // ----------------------------------------------------------------------------
 
 std::vector<UnpackToDestMode> BuildUnpackToDestModeVector(
-    const std::vector<ComputeConfiguration::UnpackToDestModeEntry>& user_modes, const DFBNameToIdMap& dfb_name_to_id) {
+    const std::vector<KernelComputeConfig::UnpackToDestModeEntry>& user_modes, const DFBNameToIdMap& dfb_name_to_id) {
     const uint32_t max_cbs = tt::tt_metal::hal::get_arch_num_circular_buffers();
     std::vector<UnpackToDestMode> unpack_modes(max_cbs, UnpackToDestMode::Default);
     for (const auto& [dfb_name, mode] : user_modes) {
@@ -2195,7 +2195,7 @@ std::vector<UnpackToDestMode> BuildUnpackToDestModeVector(
 
 ComputeConfig MakeGen1ComputeConfig(const KernelSpec& kernel_spec, const DFBNameToIdMap& dfb_name_to_id) {
     TT_FATAL(kernel_spec.is_compute_kernel(), "Expected a compute kernel");
-    const auto& compute_config = std::get<ComputeConfiguration>(kernel_spec.config);
+    const auto& compute_config = std::get<KernelComputeConfig>(kernel_spec.config);
 
     std::vector<UnpackToDestMode> unpack_modes =
         BuildUnpackToDestModeVector(compute_config.unpack_to_dest_mode, dfb_name_to_id);
@@ -2240,7 +2240,7 @@ experimental::quasar::QuasarDataMovementConfig MakeQuasarDataMovementConfig(cons
 experimental::quasar::QuasarComputeConfig MakeQuasarComputeConfig(
     const KernelSpec& kernel_spec, const DFBNameToIdMap& dfb_name_to_id) {
     TT_FATAL(kernel_spec.is_compute_kernel(), "Expected a compute kernel");
-    const auto& compute_config = std::get<ComputeConfiguration>(kernel_spec.config);
+    const auto& compute_config = std::get<KernelComputeConfig>(kernel_spec.config);
 
     std::vector<UnpackToDestMode> unpack_modes =
         BuildUnpackToDestModeVector(compute_config.unpack_to_dest_mode, dfb_name_to_id);
@@ -2321,7 +2321,7 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
 
     // Step 2a: Build kernel risc masks (arch-specific)
     //  - Gen2: backtracking solver assigns DM cores automatically
-    //  - Gen1: processor is user-specified in Gen1DataMovementConfig
+    //  - Gen1: processor is user-specified in Gen1Config
     KernelRiscMaskMap kernel_to_risc_mask =
         is_gen2_arch() ? SolveGen2KernelRiscMasks(spec, collected) : BuildGen1KernelRiscMasks(spec);
 
@@ -2331,7 +2331,7 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
     // time (deliberately not done here).
     //
     // Gen1: the mask is a deterministic function of the user's KernelSpec config (compute
-    //   placement is fixed; DM processor is user-specified via Gen1DataMovementConfig). A
+    //   placement is fixed; DM processor is user-specified via Gen1Config). A
     //   mismatch is therefore a user error — the user supplied multi-binding KernelSpecs with
     //   incompatible processor placement.
     // Gen2 (Quasar): the mask is solver-assigned. The solver currently doesn't know about
@@ -2381,7 +2381,7 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
                         "DFB '{}' has multiple {} KernelSpecs ('{}', '{}') with mismatched "
                         "processor placement (risc_mask 0x{:x} vs 0x{:x}). Multi-binding "
                         "requires all same-role kernels to share processor placement (for DM "
-                        "kernels, check Gen1DataMovementConfig::processor; for compute, the "
+                        "kernels, check Gen1Config::processor; for compute, the "
                         "placement is determined by the KernelSpec's config type).",
                         dfb.unique_id,
                         role,

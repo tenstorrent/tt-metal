@@ -12,9 +12,9 @@
 
 namespace tt::tt_metal::experimental::metal2_host_api {
 
-struct ComputeConfiguration {
-    // Tensix hardware resource configuration for compute kernels.
-    // (Common to all Tenstorrent accelerators.)
+// KernelComputeConfig: Tensix hardware resource configuration for compute kernels.
+// (Common to all Tenstorrent accelerators.)
+struct KernelComputeConfig {
 
     // The Tensix Engine pipeline consists of Unpack, Math, and Pack stages.
     // There are two math engines:

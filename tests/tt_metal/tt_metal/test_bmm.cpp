@@ -86,21 +86,21 @@ experimental::metal2_host_api::ProgramSpec build_bmm_program_spec(
     // On Quasar we also enable implicit sync on each DFB so the reader/writer kernels can drop
     // explicit reserve_back/wait_front/push_back/pop_front; on WH/BH implicit sync is unsupported
     // and must be disabled to match the explicit-sync kernel branch.
-    experimental::metal2_host_api::DataMovementConfiguration reader_config{
-        .gen1_data_movement_config =
-            experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
+    experimental::metal2_host_api::KernelDMConfig reader_config{
+        .gen1_config =
+            experimental::metal2_host_api::KernelDMConfig::Gen1Config{
                 .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default},
-        .gen2_data_movement_config =
-            experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}};
-    experimental::metal2_host_api::DataMovementConfiguration writer_config{
-        .gen1_data_movement_config =
-            experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
+        .gen2_config =
+            experimental::metal2_host_api::KernelDMConfig::Gen2Config{}};
+    experimental::metal2_host_api::KernelDMConfig writer_config{
+        .gen1_config =
+            experimental::metal2_host_api::KernelDMConfig::Gen1Config{
                 .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default},
-        .gen2_data_movement_config =
-            experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}};
+        .gen2_config =
+            experimental::metal2_host_api::KernelDMConfig::Gen2Config{}};
     if (!use_implicit_sync) {
-        reader_config.gen2_data_movement_config->disable_implicit_sync_for = {SRC0_DFB, SRC1_DFB};
-        writer_config.gen2_data_movement_config->disable_implicit_sync_for = {DST_DFB};
+        reader_config.gen2_config->disable_implicit_sync_for = {SRC0_DFB, SRC1_DFB};
+        writer_config.gen2_config->disable_implicit_sync_for = {DST_DFB};
     }
 
     experimental::metal2_host_api::DataflowBufferSpec src0_dfb_spec{
@@ -185,7 +185,7 @@ experimental::metal2_host_api::ProgramSpec build_bmm_program_spec(
               .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
               .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED}},
         .compile_time_args = {{"batch", p.B_per_core}, {"Mt", p.Mt}, {"Kt", p.Kt}, {"Nt", p.Nt}},
-        .config = experimental::metal2_host_api::ComputeConfiguration{},
+        .config = experimental::metal2_host_api::KernelComputeConfig{},
     };
 
     return experimental::metal2_host_api::ProgramSpec{

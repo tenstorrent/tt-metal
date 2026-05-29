@@ -106,12 +106,12 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
             auto gen1_noc = (gen1_proc == tt::tt_metal::DataMovementProcessor::RISCV_1)
                                 ? tt::tt_metal::NOC::RISCV_1_default
                                 : tt::tt_metal::NOC::RISCV_0_default;
-            experimental::metal2_host_api::DataMovementConfiguration dm_cfg{
-                .gen1_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
+            experimental::metal2_host_api::KernelDMConfig dm_cfg{
+                .gen1_config =
+                    experimental::metal2_host_api::KernelDMConfig::Gen1Config{
                         .processor = gen1_proc, .noc = gen1_noc},
-                .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{},
+                .gen2_config =
+                    experimental::metal2_host_api::KernelDMConfig::Gen2Config{},
             };
             kernel_specs.push_back(experimental::metal2_host_api::KernelSpec{
                 .unique_id = name,
@@ -141,7 +141,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
         // Quasar Tensix has 4 Neos so the compute kernel fans out across all of them; WH/BH has 1 TRISC group.
         .num_threads = is_quasar ? 4u : 1u,
         .runtime_arg_schema = {.common_runtime_arg_names = {"sync_flag_addr"}},
-        .config = experimental::metal2_host_api::ComputeConfiguration{},
+        .config = experimental::metal2_host_api::KernelComputeConfig{},
     });
     kernel_names.emplace_back(COMPUTE_KERNEL_NAME);
     kernel_run_args.push_back({

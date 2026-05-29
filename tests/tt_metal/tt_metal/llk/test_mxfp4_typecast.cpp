@@ -97,9 +97,9 @@ static vector<uint32_t> run_mxfp4_typecast(
         .runtime_arg_schema =
             {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
         .config =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+            experimental::metal2_host_api::KernelDMConfig{
+                .gen2_config =
+                    experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
     };
 
     experimental::metal2_host_api::KernelSpec writer_spec{
@@ -117,9 +117,9 @@ static vector<uint32_t> run_mxfp4_typecast(
         .runtime_arg_schema =
             {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
         .config =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+            experimental::metal2_host_api::KernelDMConfig{
+                .gen2_config =
+                    experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
     };
 
     experimental::metal2_host_api::KernelSpec compute_spec{
@@ -143,7 +143,7 @@ static vector<uint32_t> run_mxfp4_typecast(
              }},
         .compile_time_args = {{"per_core_tile_cnt", num_tiles}},
         .config =
-            experimental::metal2_host_api::ComputeConfiguration{
+            experimental::metal2_host_api::KernelComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
             },
     };

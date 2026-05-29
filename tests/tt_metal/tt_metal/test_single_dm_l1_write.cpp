@@ -62,9 +62,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
                 .common_runtime_arg_names = {"value"},
             },
         .config =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+            experimental::metal2_host_api::KernelDMConfig{
+                .gen2_config =
+                    experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
     };
 
     experimental::metal2_host_api::WorkUnitSpec main_wu{

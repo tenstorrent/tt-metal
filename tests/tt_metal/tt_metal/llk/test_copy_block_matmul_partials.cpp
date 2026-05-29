@@ -127,12 +127,12 @@ void run_single_core_copy_block_matmul_partials(
         .runtime_arg_schema =
             {.runtime_arg_names = {"src_addr", "src_dram_bank_id", "num_tiles", "ublock_size_tiles", "reader_only"}},
         .config =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen1_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
+            experimental::metal2_host_api::KernelDMConfig{
+                .gen1_config =
+                    experimental::metal2_host_api::KernelDMConfig::Gen1Config{
                         .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
-                .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{
+                .gen2_config =
+                    experimental::metal2_host_api::KernelDMConfig::Gen2Config{
                         .disable_implicit_sync_for = {SRC0_DFB}}},
     };
 
@@ -151,12 +151,12 @@ void run_single_core_copy_block_matmul_partials(
         .runtime_arg_schema =
             {.runtime_arg_names = {"dst_addr", "dst_dram_bank_id", "num_tiles", "ublock_size_tiles", "writer_only"}},
         .config =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen1_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
+            experimental::metal2_host_api::KernelDMConfig{
+                .gen1_config =
+                    experimental::metal2_host_api::KernelDMConfig::Gen1Config{
                         .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
-                .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{
+                .gen2_config =
+                    experimental::metal2_host_api::KernelDMConfig::Gen2Config{
                         .disable_implicit_sync_for = {DST_DFB}}},
     };
 
@@ -187,7 +187,7 @@ void run_single_core_copy_block_matmul_partials(
              }},
         .compile_time_args = {{"num_tiles", num_tiles}, {"num_single_transfer", test_config.compute_ublock}},
         .config =
-            experimental::metal2_host_api::ComputeConfiguration{
+            experimental::metal2_host_api::KernelComputeConfig{
                 .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
                 .dst_full_sync_en = test_config.dst_full_sync_en,
                 // When fp32_dest_acc_en is true the src DFB is Float32 and the compute kernel
@@ -195,9 +195,9 @@ void run_single_core_copy_block_matmul_partials(
                 // Default is unpack via SrcA/B, ~19-bit precision.
                 .unpack_to_dest_mode =
                     test_config.fp32_dest_acc_en
-                        ? std::vector<experimental::metal2_host_api::ComputeConfiguration::
+                        ? std::vector<experimental::metal2_host_api::KernelComputeConfig::
                                           UnpackToDestModeEntry>{{SRC0_DFB, tt::tt_metal::UnpackToDestMode::Default}}
-                        : std::vector<experimental::metal2_host_api::ComputeConfiguration::UnpackToDestModeEntry>{},
+                        : std::vector<experimental::metal2_host_api::KernelComputeConfig::UnpackToDestModeEntry>{},
             },
     };
 

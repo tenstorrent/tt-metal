@@ -64,7 +64,7 @@ static void run_pack_relu_test(
     constexpr const char* COMPUTE = "compute";
 
     // Implicit sync is enabled by default for both DFBs (no DM kernel opts out
-    // via Gen2DataMovementConfig::disable_implicit_sync_for). The program-level
+    // via Gen2Config::disable_implicit_sync_for). The program-level
     // reservation flag set below is independent of per-DFB sync mode.
     experimental::metal2_host_api::DataflowBufferSpec input_dfb_spec{
         .unique_id = INPUT_DFB,
@@ -94,9 +94,9 @@ static void run_pack_relu_test(
         .runtime_arg_schema =
             {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
         .config =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+            experimental::metal2_host_api::KernelDMConfig{
+                .gen2_config =
+                    experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
     };
 
     experimental::metal2_host_api::KernelSpec writer_spec{
@@ -114,9 +114,9 @@ static void run_pack_relu_test(
         .runtime_arg_schema =
             {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
         .config =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+            experimental::metal2_host_api::KernelDMConfig{
+                .gen2_config =
+                    experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
     };
 
     experimental::metal2_host_api::KernelSpec compute_spec{
@@ -141,7 +141,7 @@ static void run_pack_relu_test(
              }},
         .compile_time_args = {{"per_core_tile_cnt", num_tiles}},
         .runtime_arg_schema = {.runtime_arg_names = {"relu_config"}},
-        .config = experimental::metal2_host_api::ComputeConfiguration{},
+        .config = experimental::metal2_host_api::KernelComputeConfig{},
     };
 
     experimental::metal2_host_api::WorkUnitSpec wu{

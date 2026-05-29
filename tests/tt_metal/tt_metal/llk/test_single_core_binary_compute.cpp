@@ -334,12 +334,12 @@ bool single_core_binary(
             {.runtime_arg_names =
                  {"src0_addr", "src0_bank_id", "src1_addr", "src1_bank_id", "num_tiles", "src2_addr", "src2_bank_id"}},
         .config =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen1_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
+            experimental::metal2_host_api::KernelDMConfig{
+                .gen1_config =
+                    experimental::metal2_host_api::KernelDMConfig::Gen1Config{
                         .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
-                .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{
+                .gen2_config =
+                    experimental::metal2_host_api::KernelDMConfig::Gen2Config{
                         .disable_implicit_sync_for = {INP0_DFB, INP1_DFB, INP2_DFB}}},
     };
 
@@ -357,12 +357,12 @@ bool single_core_binary(
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
         .config =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen1_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
+            experimental::metal2_host_api::KernelDMConfig{
+                .gen1_config =
+                    experimental::metal2_host_api::KernelDMConfig::Gen1Config{
                         .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
-                .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{
+                .gen2_config =
+                    experimental::metal2_host_api::KernelDMConfig::Gen2Config{
                         .disable_implicit_sync_for = {OUT_DFB}}},
     };
 
@@ -400,7 +400,7 @@ bool single_core_binary(
              }},
         .runtime_arg_schema = {.runtime_arg_names = {"per_core_block_cnt", "per_core_block_size", "acc_to_dst"}},
         .config =
-            experimental::metal2_host_api::ComputeConfiguration{
+            experimental::metal2_host_api::KernelComputeConfig{
                 .math_fidelity = test_config.math_fidelity,
             },
     };

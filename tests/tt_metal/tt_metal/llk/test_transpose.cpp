@@ -206,12 +206,12 @@ void run_single_core_transpose(
         .tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}},
         .runtime_arg_schema = {.runtime_arg_names = {"N", "Ht", "Wt", "HtWt"}},
         .config =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen1_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
+            experimental::metal2_host_api::KernelDMConfig{
+                .gen1_config =
+                    experimental::metal2_host_api::KernelDMConfig::Gen1Config{
                         .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
-                .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{
+                .gen2_config =
+                    experimental::metal2_host_api::KernelDMConfig::Gen2Config{
                         .disable_implicit_sync_for = {INPUT_DFB}}},
     };
 
@@ -230,12 +230,12 @@ void run_single_core_transpose(
         .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
         .config =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen1_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
+            experimental::metal2_host_api::KernelDMConfig{
+                .gen1_config =
+                    experimental::metal2_host_api::KernelDMConfig::Gen1Config{
                         .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
-                .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{
+                .gen2_config =
+                    experimental::metal2_host_api::KernelDMConfig::Gen2Config{
                         .disable_implicit_sync_for = {OUTPUT_DFB}}},
     };
 
@@ -267,7 +267,7 @@ void run_single_core_transpose(
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
         .compile_time_args = {{"NHtWt", Ht * Wt * NC}},
-        .config = experimental::metal2_host_api::ComputeConfiguration{},
+        .config = experimental::metal2_host_api::KernelComputeConfig{},
     };
 
     experimental::metal2_host_api::WorkUnitSpec wu{

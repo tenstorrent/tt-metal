@@ -272,12 +272,12 @@ void run_single_core_tilize_program(
         }},
         .runtime_arg_schema = reader_schema,
         .config =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen1_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
+            experimental::metal2_host_api::KernelDMConfig{
+                .gen1_config =
+                    experimental::metal2_host_api::KernelDMConfig::Gen1Config{
                         .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
-                .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+                .gen2_config =
+                    experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
     };
 
     experimental::metal2_host_api::KernelSpec writer_spec{
@@ -294,12 +294,12 @@ void run_single_core_tilize_program(
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
         .config =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen1_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
+            experimental::metal2_host_api::KernelDMConfig{
+                .gen1_config =
+                    experimental::metal2_host_api::KernelDMConfig::Gen1Config{
                         .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
-                .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+                .gen2_config =
+                    experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
     };
 
     std::string compute_kernel;
@@ -352,7 +352,7 @@ void run_single_core_tilize_program(
              }},
         .compile_time_args = compute_cta_bindings,
         .config =
-            experimental::metal2_host_api::ComputeConfiguration{
+            experimental::metal2_host_api::KernelComputeConfig{
                 .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
                 .dst_full_sync_en = test_config.dst_full_sync_en,
             },
@@ -796,9 +796,9 @@ static void run_quasar_tilize_untilize_test(
         .runtime_arg_schema =
             {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
         .config =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+            experimental::metal2_host_api::KernelDMConfig{
+                .gen2_config =
+                    experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
     };
 
     experimental::metal2_host_api::KernelSpec writer_spec{
@@ -816,9 +816,9 @@ static void run_quasar_tilize_untilize_test(
         .runtime_arg_schema =
             {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
         .config =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+            experimental::metal2_host_api::KernelDMConfig{
+                .gen2_config =
+                    experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
     };
 
     std::string compute_kernel;
@@ -871,7 +871,7 @@ static void run_quasar_tilize_untilize_test(
              }},
         .compile_time_args = compute_cta_bindings,
         .config =
-            experimental::metal2_host_api::ComputeConfiguration{
+            experimental::metal2_host_api::KernelComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
                 .dst_full_sync_en = dst_full_sync_en,
             },

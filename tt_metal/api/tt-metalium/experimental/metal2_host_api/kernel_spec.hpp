@@ -12,8 +12,8 @@
 #include <vector>
 
 #include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
-#include <tt-metalium/experimental/metal2_host_api/compute_configuration.hpp>
-#include <tt-metalium/experimental/metal2_host_api/data_movement_configuration.hpp>
+#include <tt-metalium/experimental/metal2_host_api/kernel_compute_config.hpp>
+#include <tt-metalium/experimental/metal2_host_api/kernel_dm_config.hpp>
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
@@ -70,8 +70,8 @@ struct KernelSpec {
     uint32_t num_threads = 1;
 
     // Kernel type (methods)
-    bool is_data_movement_kernel() const { return std::holds_alternative<DataMovementConfiguration>(config); }
-    bool is_compute_kernel() const { return std::holds_alternative<ComputeConfiguration>(config); }
+    bool is_data_movement_kernel() const { return std::holds_alternative<KernelDMConfig>(config); }
+    bool is_compute_kernel() const { return std::holds_alternative<KernelComputeConfig>(config); }
 
     ///////////////////////////////////////////////////////////////////
     // Kernel compiler options
@@ -158,7 +158,7 @@ struct KernelSpec {
     //////////////////////////////////////////////////////////////////////////////
     // Kernel-controlled hardware resource configuration
     //////////////////////////////////////////////////////////////////////////////
-    std::variant<DataMovementConfiguration, ComputeConfiguration> config;
+    std::variant<KernelDMConfig, KernelComputeConfig> config;
 
     //////////////////////////////////////////////////////////////////////////////
     // Advanced options (see advanced_options.hpp)

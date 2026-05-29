@@ -382,12 +382,12 @@ void run_single_core_reduce_program(
         .compile_time_args = reader_cta_bindings,
         .runtime_arg_schema = {.named_runtime_args = reader_named_runtime_args},
         .config =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen1_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
+            experimental::metal2_host_api::KernelDMConfig{
+                .gen1_config =
+                    experimental::metal2_host_api::KernelDMConfig::Gen1Config{
                         .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
-                .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{
+                .gen2_config =
+                    experimental::metal2_host_api::KernelDMConfig::Gen2Config{
                         .disable_implicit_sync_for = {SRC0_DFB, SRC1_DFB}}},
     };
 
@@ -406,12 +406,12 @@ void run_single_core_reduce_program(
         .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
         .config =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen1_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
+            experimental::metal2_host_api::KernelDMConfig{
+                .gen1_config =
+                    experimental::metal2_host_api::KernelDMConfig::Gen1Config{
                         .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
-                .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{
+                .gen2_config =
+                    experimental::metal2_host_api::KernelDMConfig::Gen2Config{
                         .disable_implicit_sync_for = {DST_DFB}}},
     };
 
@@ -441,7 +441,7 @@ void run_single_core_reduce_program(
              }},
         .compile_time_args = {{"Ht", dims.Ht}, {"Wt", dims.Wt}, {"NC", dims.NC}},
         .config =
-            experimental::metal2_host_api::ComputeConfiguration{
+            experimental::metal2_host_api::KernelComputeConfig{
                 .math_fidelity = test_config.math_fidelity,
                 .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
                 .dst_full_sync_en = test_config.dst_full_sync_en,

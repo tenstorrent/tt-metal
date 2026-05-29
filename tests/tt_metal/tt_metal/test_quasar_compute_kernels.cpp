@@ -59,7 +59,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelMultipleThreads) {
             {
                 .runtime_arg_names = {"l1_address"},
             },
-        .config = experimental::metal2_host_api::ComputeConfiguration{},
+        .config = experimental::metal2_host_api::KernelComputeConfig{},
     };
 
     experimental::metal2_host_api::WorkUnitSpec main_wu{
@@ -135,7 +135,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelSingleThread) {
             {
                 .runtime_arg_names = {"l1_address"},
             },
-        .config = experimental::metal2_host_api::ComputeConfiguration{},
+        .config = experimental::metal2_host_api::KernelComputeConfig{},
     };
 
     experimental::metal2_host_api::WorkUnitSpec main_wu{
@@ -187,7 +187,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCreateMultipleComputeKernelsSing
 
             OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/compute/risc_math.cpp",
         .num_threads = 1,
-        .config = experimental::metal2_host_api::ComputeConfiguration{},
+        .config = experimental::metal2_host_api::KernelComputeConfig{},
     };
 
     experimental::metal2_host_api::KernelSpec compute_kernel_spec_2{
@@ -196,7 +196,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCreateMultipleComputeKernelsSing
 
             OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/compute/risc_math.cpp",
         .num_threads = 2,
-        .config = experimental::metal2_host_api::ComputeConfiguration{},
+        .config = experimental::metal2_host_api::KernelComputeConfig{},
     };
 
     experimental::metal2_host_api::WorkUnitSpec main_wu{

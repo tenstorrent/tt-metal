@@ -91,9 +91,9 @@ void RunTest(
         }},
         .compile_time_args = {{"num_entries", NUM_ENTRIES_PER_PRODUCER}},
         .config =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{
+            experimental::metal2_host_api::KernelDMConfig{
+                .gen2_config =
+                    experimental::metal2_host_api::KernelDMConfig::Gen2Config{
                         .disable_implicit_sync_for = {TILE_COUNTER_DFB}}},
     };
 
@@ -114,7 +114,7 @@ void RunTest(
             {{"num_entries", entries_per_consumer},
              {"num_consumers_to_run", NUM_CONSUMERS_TO_RUN},
              {"sync_flag_addr", tensix_sync_addr}},
-        .config = experimental::metal2_host_api::ComputeConfiguration{},
+        .config = experimental::metal2_host_api::KernelComputeConfig{},
     };
 
     experimental::metal2_host_api::WorkUnitSpec wu{

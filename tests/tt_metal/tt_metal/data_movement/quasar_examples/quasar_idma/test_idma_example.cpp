@@ -41,9 +41,9 @@ static void run_kernel(
         .num_threads = 1,
         .compile_time_args = std::move(compile_time_args),
         .config =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+            experimental::metal2_host_api::KernelDMConfig{
+                .gen2_config =
+                    experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
     };
 
     experimental::metal2_host_api::WorkUnitSpec main_wu{
