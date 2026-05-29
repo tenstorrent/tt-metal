@@ -24,6 +24,7 @@ TOOL_TAGS = {
     "gdb": f"{REPO}/tt-metalium/tools/gdb:test",
     "cmake": f"{REPO}/tt-metalium/tools/cmake:test",
     "yq": f"{REPO}/tt-metalium/tools/yq:test",
+    "zstd": f"{REPO}/tt-metalium/tools/zstd:test",
     "sfpi": f"{REPO}/tt-metalium/tools/sfpi:test",
     "openmpi": f"{REPO}/tt-metalium/tools/openmpi:test",
 }
