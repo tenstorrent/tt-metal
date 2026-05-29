@@ -23,7 +23,9 @@
 #include <tt_stl/span.hpp>
 #include <tt-logger/tt-logger.hpp>
 
-#include "llk_device_fixture.hpp"
+#include "device_fixture.hpp"
+#include "tt_metal/test_utils/comparison.hpp"
+#include "tt_metal/test_utils/float8_utils.hpp"
 
 namespace tt::tt_metal {
 
@@ -244,68 +246,15 @@ static vector<float> mxfp6_to_floats(tt::DataFormat fmt, const vector<uint32_t>&
     TT_THROW("Unsupported MXFP6 DataFormat: {}", static_cast<int>(fmt));
 }
 
-static vector<float> bf16_to_floats(const vector<uint32_t>& packed) {
-    auto bf16_vec = unpack_uint32_vec_into_bfloat16_vec(packed);
-    vector<float> floats;
-    floats.reserve(bf16_vec.size());
-    for (const auto& v : bf16_vec) {
-        floats.push_back(static_cast<float>(v));
-    }
-    return floats;
-}
+// bf16_to_floats lives in tt_metal/test_utils/float8_utils.hpp;
+// expose it in this namespace so mxfp6_tc::bf16_to_floats call sites resolve.
+using tt::test_utils::bf16_to_floats;
 
 // --- Validation ---
-
-static bool check_floats_close(const vector<float>& a, const vector<float>& b, float rtol, float atol) {
-    if (a.size() != b.size()) {
-        return false;
-    }
-    for (size_t i = 0; i < a.size(); i++) {
-        if (!is_close(a[i], b[i], rtol, atol)) {
-            log_info(tt::LogTest, "check_floats_close: mismatch at index {} - a[i] = {}, b[i] = {}", i, a[i], b[i]);
-            return false;
-        }
-    }
-    return true;
-}
-
-static double compute_pcc(const vector<float>& a, const vector<float>& b) {
-    if (a.size() != b.size() || a.empty()) {
-        return 0.0;
-    }
-    const size_t n = a.size();
-    double sum_a = 0.0, sum_b = 0.0;
-    double sum_a2 = 0.0, sum_b2 = 0.0, sum_ab = 0.0;
-    for (size_t i = 0; i < n; i++) {
-        double ai = a[i], bi = b[i];
-        sum_a += ai;
-        sum_b += bi;
-        sum_a2 += ai * ai;
-        sum_b2 += bi * bi;
-        sum_ab += ai * bi;
-    }
-    double denom_a = (n * sum_a2) - (sum_a * sum_a);
-    double denom_b = (n * sum_b2) - (sum_b * sum_b);
-    if (denom_a == 0.0 && denom_b == 0.0) {
-        return (a[0] == b[0]) ? 1.0 : 0.0;
-    }
-    // Check the product, not the factors: even when both denoms are non-zero,
-    // their product can underflow to 0 and turn the sqrt below into a div-by-0.
-    const double denom_product = denom_a * denom_b;
-    if (denom_product == 0.0) {
-        return 0.0;
-    }
-    return (n * sum_ab - sum_a * sum_b) / std::sqrt(denom_product);
-}
-
-static bool check_pcc(const vector<float>& a, const vector<float>& b, double min_pcc) {
-    double pcc = compute_pcc(a, b);
-    if (pcc < min_pcc) {
-        log_info(tt::LogTest, "check_pcc: PCC = {} < min_pcc = {}", pcc, min_pcc);
-        return false;
-    }
-    return true;
-}
+// is_close_vectors + is_close + check_pcc all live in tt_metal/test_utils/comparison.hpp.
+using tt::test_utils::check_pcc;
+using tt::test_utils::is_close;
+using tt::test_utils::is_close_vectors;
 
 // --- Random typecast test driver ---
 //
@@ -351,7 +300,8 @@ static void run_random_typecast_test(
         run_mxfp6_typecast(mesh_device, input_fmt, output_fmt, src_vec, kDefaultNumTiles, fp32_dest_acc_en);
     auto src_floats = unpack_to_floats(input_fmt, src_vec);
     auto dst_floats = unpack_to_floats(output_fmt, result_vec);
-    EXPECT_TRUE(check_floats_close(src_floats, dst_floats, rtol, atol));
+    EXPECT_TRUE(is_close_vectors<float>(
+        src_floats, dst_floats, [rtol, atol](float a, float b) { return is_close(a, b, rtol, atol); }));
     EXPECT_TRUE(check_pcc(src_floats, dst_floats, min_pcc));
 }
 
@@ -532,7 +482,7 @@ namespace mxfp6_tc = unit_tests::llk::mxfp6_typecast;
 // Widening conversion: every MXFP6R value should be representable in BF16.
 // ============================================================================
 
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp6RToFloat16b) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp6RToFloat16b) {
     const auto& mesh_device = *devices_[0];
     mxfp6_tc::run_random_typecast_test(
         mesh_device,
@@ -544,7 +494,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp6RToFloat16b) {
         /*fp32_dest_acc_en=*/false);
 }
 
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp6RToFloat16bFp32Dest) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp6RToFloat16bFp32Dest) {
     const auto& mesh_device = *devices_[0];
     mxfp6_tc::run_random_typecast_test(
         mesh_device,
@@ -563,7 +513,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp6RToFloat16bFp32Dest) {
 // large dynamic range but per-element rounding error scales with magnitude.
 // ============================================================================
 
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp6R) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp6R) {
     const auto& mesh_device = *devices_[0];
     mxfp6_tc::run_random_typecast_test(
         mesh_device,
@@ -575,7 +525,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp6R) {
         /*fp32_dest_acc_en=*/false);
 }
 
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp6RFp32Dest) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp6RFp32Dest) {
     const auto& mesh_device = *devices_[0];
     mxfp6_tc::run_random_typecast_test(
         mesh_device,
@@ -591,7 +541,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp6RFp32Dest) {
 // MXFP6R → MXFP6R (identity)
 // ============================================================================
 
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp6RToMxFp6R) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp6RToMxFp6R) {
     const auto& mesh_device = *devices_[0];
     mxfp6_tc::run_random_typecast_test(
         mesh_device,
@@ -603,7 +553,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp6RToMxFp6R) {
         /*fp32_dest_acc_en=*/false);
 }
 
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp6RToMxFp6RFp32Dest) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp6RToMxFp6RFp32Dest) {
     const auto& mesh_device = *devices_[0];
     mxfp6_tc::run_random_typecast_test(
         mesh_device,
@@ -620,7 +570,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp6RToMxFp6RFp32Dest) {
 // Widening conversion: every MXFP6P value should be representable in BF16.
 // ============================================================================
 
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp6PToFloat16b) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp6PToFloat16b) {
     const auto& mesh_device = *devices_[0];
     mxfp6_tc::run_random_typecast_test(
         mesh_device,
@@ -632,7 +582,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp6PToFloat16b) {
         /*fp32_dest_acc_en=*/false);
 }
 
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp6PToFloat16bFp32Dest) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp6PToFloat16bFp32Dest) {
     const auto& mesh_device = *devices_[0];
     mxfp6_tc::run_random_typecast_test(
         mesh_device,
@@ -651,7 +601,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp6PToFloat16bFp32Dest) {
 // has less headroom than MXFP6R.
 // ============================================================================
 
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp6P) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp6P) {
     const auto& mesh_device = *devices_[0];
     mxfp6_tc::run_random_typecast_test(
         mesh_device,
@@ -663,7 +613,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp6P) {
         /*fp32_dest_acc_en=*/false);
 }
 
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp6PFp32Dest) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp6PFp32Dest) {
     const auto& mesh_device = *devices_[0];
     mxfp6_tc::run_random_typecast_test(
         mesh_device,
@@ -679,7 +629,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp6PFp32Dest) {
 // MXFP6P → MXFP6P (identity)
 // ============================================================================
 
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp6PToMxFp6P) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp6PToMxFp6P) {
     const auto& mesh_device = *devices_[0];
     mxfp6_tc::run_random_typecast_test(
         mesh_device,
@@ -691,7 +641,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp6PToMxFp6P) {
         /*fp32_dest_acc_en=*/false);
 }
 
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp6PToMxFp6PFp32Dest) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp6PToMxFp6PFp32Dest) {
     const auto& mesh_device = *devices_[0];
     mxfp6_tc::run_random_typecast_test(
         mesh_device,
@@ -723,7 +673,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp6PToMxFp6PFp32Dest) {
 //   0b100001 (storage 0x84) = -0.0625
 // ============================================================================
 
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp6RToBf16SpecialCases) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp6RToBf16SpecialCases) {
     const auto& mesh_device = *devices_[0];
     auto layout = mxfp6_tc::get_mxfp6_tile_layout();
 
@@ -791,7 +741,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp6RToBf16SpecialCases) {
 //   0b100001 (storage 0x84) = -0.125
 // ============================================================================
 
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp6PToBf16SpecialCases) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp6PToBf16SpecialCases) {
     const auto& mesh_device = *devices_[0];
     auto layout = mxfp6_tc::get_mxfp6_tile_layout();
 
@@ -847,7 +797,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp6PToBf16SpecialCases) {
 // ±max-normal element. NaN inputs propagate via NaN-scale.
 // ============================================================================
 
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp6RSpecialCases) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp6RSpecialCases) {
     const auto& mesh_device = *devices_[0];
 
     // Block layout (32 BF16 elements per block):
@@ -914,7 +864,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp6RSpecialCases)
 // expectations (MXFP6P is also finite-only).
 // ============================================================================
 
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp6PSpecialCases) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp6PSpecialCases) {
     const auto& mesh_device = *devices_[0];
 
     constexpr uint16_t kBf16PosNaN = 0x7FC0;
