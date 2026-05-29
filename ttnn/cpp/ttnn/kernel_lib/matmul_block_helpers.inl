@@ -5,7 +5,7 @@
 
 #include "api/compute/pack_untilize.h"
 #include "ttnn/cpp/ttnn/kernel_lib/buffer_compat.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/cb_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/dfb_helpers_compute.hpp"
 
 /**
  * @file matmul_block_helpers.inl

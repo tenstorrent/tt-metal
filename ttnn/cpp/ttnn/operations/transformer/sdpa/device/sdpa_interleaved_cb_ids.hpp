@@ -33,6 +33,9 @@ struct CBIds {
     uint32_t sum_A = inactive;
     uint32_t sum_B = inactive;
     uint32_t exp_max_diff = inactive;
+    // matmul_block helper requires in_cb != out_cb; row-sum reduction lands here
+    // instead of overwriting cb_prev_sum / cb_sum_* in place.
+    uint32_t reduced_sum = inactive;
 
     std::vector<uint32_t> reader_compile_time_args() const {
         return {q_in, k_in, v_in, mask_in, attention_sink, page_table, chunk_start_idx_compute, chunk_start_idx_writer};
@@ -61,7 +64,8 @@ struct CBIds {
             max_B,
             sum_A,
             sum_B,
-            exp_max_diff};
+            exp_max_diff,
+            reduced_sum};
     }
 };
 
