@@ -250,50 +250,41 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_unsafe_(sfpi::vFloat val)
  * @param val The input value (sfpi::vFloat vector), can be any floating point number
  * @return sfpi::vFloat Result of exp(val)
  */
-sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat val)
+sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a)
 {
-    sfpi::vFloat result = sfpi::vConst0;
-
-    // Exp computation uses bit-wise manipulation using exponent and mantissa fields
-    // For large values (e.g. |x| > 89), some intermediate values can overflow
-    // To avoid this, we check the value of the input using two thresholds.
-    //
-    // These thresholds are applied after scaling x by 1/log(2) (i.e., on z = x * 1/ln(2)).
-    // Mapped back to the original x domain, they correspond to approximately -88 and 89.
-    constexpr float OVERFLOW_THRESHOLD  = 128.0f;
-    constexpr float UNDERFLOW_THRESHOLD = -127.0f;
-
-    constexpr float INV_LN2 = 1.4426950408889634f; // 1/ln(2)
-    sfpi::vFloat z          = val * INV_LN2;
-
-    // Check for special cases
-    sfpi::vInt exp_bits = sfpi::exexp(z);
-
-    v_if (z >= OVERFLOW_THRESHOLD)
+    sfpi::vFloat c23   = 12582912.0f;
+    sfpi::vFloat log2e = 1.442695f;
+    sfpi::vFloat neg1  = sfpi::vConstNeg1;
+    sfpi::vFloat j     = __builtin_rvtt_sfpmad(log2e.get(), a.get(), c23.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+    sfpi::vInt ia      = 0;
+    j                  = __builtin_rvtt_sfpmad(neg1.get(), c23.get(), j.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+    sfpi::vFloat f     = j * -6.93145752e-1f + a;
+    f                  = j * -1.42860677e-6f + f;
+    sfpi::vFloat r     = 1.37805939e-3f;
+    r                  = r * f + 8.37312452e-3f; // 0x1.125edcp-7
+    r                  = r * f + 4.16695364e-2f; // 0x1.555b5ap-5
+    r                  = r * f + 1.66664720e-1f; // 0x1.555450p-3
+    r                  = r * f + 4.99999851e-1f; // 0x1.fffff6p-2
+    sfpi::vInt i       = sfpi::float_to_uint16(j);
+    sfpi::vInt tmp     = i - 150;
+    r                  = r * f + sfpi::vConst1;
+    v_if (j <= 0)
     {
-        // Overflow
-        result = std::numeric_limits<float>::infinity();
-    }
-    v_elseif (z <= UNDERFLOW_THRESHOLD)
-    {
-        // Underflow
-        result = sfpi::vConst0;
-    }
-    v_elseif (exp_bits == 255)
-    {
-        // infinity (exp = 255 && man != 0) already taken care of by previous conditionals:
-        // if input is infinity or -infinity, then either z >= OVERFLOW_THRESHOLD or z <= UNDERFLOW_THRESHOLD
-        // would have been true and their cases have already been handled.
-        // Thus, we know that if exp == 0 here, then man != 0 as well.
-        result = std::numeric_limits<float>::quiet_NaN();
-    }
-    v_else
-    {
-        result = _sfpu_exp_fp32_accurate_unsafe_(val);
+        i  = -i;
+        ia = 0x83000000;
     }
     v_endif;
-
-    return result;
+    r              = r * f + sfpi::vConst1;
+    sfpi::vFloat s = sfpi::reinterpret<sfpi::vFloat>(0x7f000000 + ia);
+    r              = r * s;
+    sfpi::vFloat t = sfpi::reinterpret<sfpi::vFloat>((i << 23) - ia);
+    r              = r * t;
+    v_if (tmp >= 0)
+    {
+        r = s * s;
+    }
+    v_endif;
+    return r;
 }
 
 /*
