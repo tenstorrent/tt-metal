@@ -17,7 +17,7 @@ auto-padded with zeros, so the corresponding intermediate activations
 are GELU(0)=0 (plus bias which is also zero-padded), and they then
 multiply zero-rows of fc1.weight, contributing nothing to the output.
 
-Reference: `MLP2` in modeling_kimi_vl.py — attributes:
+Reference: `MLP2` in modeling_kimi_k25.py — attributes:
     self.fc0 = nn.Linear(hidden_dim, mlp_dim, bias=True)
     self.activation = PytorchGELUTanh()
     self.fc1 = nn.Linear(mlp_dim, hidden_dim, bias=True)

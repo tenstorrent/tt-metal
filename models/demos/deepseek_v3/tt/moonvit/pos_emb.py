@@ -4,7 +4,7 @@
 """
 Learnable 2D positional embedding with bicubic interpolation.
 
-The HF reference is `Learnable2DInterpPosEmb` in modeling_kimi_vl.py:
+The HF reference is `Learnable2DInterpPosEmb` in modeling_kimi_k25.py:
 the weight lives at a fixed (H_base, W_base, D) grid (default 64x64 for
 MoonViT), and at inference time it is bicubic-interpolated to each
 image's actual (H_i, W_i) patch grid. The interpolated tensor is then

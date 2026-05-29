@@ -19,7 +19,7 @@ activation here is the plain GELU (`transformers.activations.GELUActivation`),
 NOT the tanh-approximated variant used in the encoder MLP — so we use
 `ttnn.gelu` without `fast_and_approximate_mode=True`.
 
-Reference: `KimiVLMultiModalProjector` in modeling_kimi_vl.py.
+Reference: `KimiVLMultiModalProjector` in modeling_kimi_k25.py.
 """
 from __future__ import annotations
 

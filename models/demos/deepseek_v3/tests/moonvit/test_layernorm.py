@@ -5,7 +5,7 @@
 Per-submodule PCC test for MoonVisionLayerNorm.
 
 Compares ttnn.layer_norm against the HF reference torch.nn.LayerNorm
-pulled out of Kimi-VL's MoonVitEncoderLayer.norm0. The MoonViT encoder
+pulled out of K2.6's MoonViTEncoderLayer.norm0. The MoonViT encoder
 uses LayerNorm with eps=1e-5 at four sites in the vision tower — they
 all share the same shape, so a single PCC test at this hidden dim
 covers all of them.

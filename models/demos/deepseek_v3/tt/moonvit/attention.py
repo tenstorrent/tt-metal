@@ -4,7 +4,7 @@
 """
 MoonViT attention block.
 
-Per `MoonVitEncoderLayer.attention_qkvpacked` in modeling_kimi_vl.py:
+Per `MoonVitEncoderLayer.attention_qkvpacked` in modeling_kimi_k25.py:
   xqkv = wqkv(x)                         # [..., L, 3*hidden]
   xq, xk, xv = unbind(xqkv.view(..., 3, num_heads, head_dim), dim=-3)
   xq, xk     = apply_rope(xq, xk, freqs_cis)

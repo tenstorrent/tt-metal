@@ -5,7 +5,7 @@
 2D RoPE for MoonViT.
 
 This implements the interleaved 2D rotary-positional-embedding scheme
-from MoonViT's `Rope2DPosEmb` (modeling_kimi_vl.py). For each token
+from MoonViT's `Rope2DPosEmb` (modeling_kimi_k25.py). For each token
 position with grid coords (y, x), the per-head head_dim is rotated
 pair-wise:
 

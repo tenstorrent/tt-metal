@@ -4,18 +4,17 @@
 """
 HF reference module extraction.
 
-Pulls torch submodules out of the loaded Kimi-VL model so per-submodule
-PCC tests have a known-good torch comparison target.
+Pulls torch submodules out of the loaded K2.6 vision model (the vision-only
+stand-in from `_k26_loader`) so per-submodule PCC tests have a known-good
+torch comparison target.
 
-Attribute paths are resolved at first use against the actual HF model
-graph (because moonshotai/Kimi-VL-A3B-Instruct uses trust_remote_code,
-the class names live in the downloaded checkpoint rather than the
-installed transformers package). If an attribute path is wrong, the
-helpers below raise a clear error pointing at the expected location.
+Attribute paths are resolved at first use against the actual model graph
+(K2.6's classes live in the downloaded checkpoint, not the installed
+transformers package). If a path is wrong, the helpers below raise a clear
+error pointing at the expected location.
 
-The attribute paths below match the structure described in
-modeling_kimi_vl.py at the time of writing (May 2026); update if HF
-re-layouts the model.
+The attribute paths below match modeling_kimi_k25.py at the time of writing
+(May 2026); update if the released model is re-laid-out.
 """
 from __future__ import annotations
 
@@ -24,7 +23,7 @@ from typing import Any
 
 import torch
 
-# --- K2.6 adapters ------------------------------------------------------------
+# --- 2D <-> 3D adapters -------------------------------------------------------
 #
 # K2.6's MoonViT is the 3D (video) variant. For image inputs (T=1) it is
 # numerically identical to the 2D MoonViT this module targets, but three
@@ -32,19 +31,18 @@ import torch
 #
 #   1. Grids are (N,3) [t,h,w], not (N,2) [h,w].
 #   2. `Rope2DPosEmbRepeated.get_freqs_cis(grid_thws, device)` takes a
-#      device arg the A3B `Rope2DPosEmb.get_freqs_cis(grid_hws)` did not.
+#      device arg a plain 2D rope wouldn't.
 #   3. `attention_qkvpacked` / encoder-layer `forward` take an extra
 #      positional `max_seqlen` argument.
 #
-# The PCC tests and TT `from_torch` builders are written to the A3B
-# interface (2D grids, no max_seqlen). Rather than fork every test, we
-# bridge here — the reference layer is exactly the right place, since its
-# whole job is to present a known-good comparison target. The adapters
-# below are only used when `args.is_k26` is true; A3B paths are untouched.
+# The PCC tests and TT `from_torch` builders speak the 2D interface (2D
+# grids, no max_seqlen). Rather than fork every test, we bridge here — the
+# reference layer is exactly the right place, since its whole job is to
+# present a known-good comparison target.
 
 
 def _promote_grid(grid):
-    """Promote an A3B-style (N,2) [h,w] grid to K2.6 (N,3) [t=1,h,w].
+    """Promote a 2D (N,2) [h,w] grid to K2.6's 3D (N,3) [t=1,h,w].
 
     An image is the T=1 case of a video, so prepending a unit temporal
     dimension is exact. (N,3) inputs pass through unchanged.
@@ -85,7 +83,7 @@ class _DelegatingModule(torch.nn.Module):
 class _GridForwardRef(_DelegatingModule):
     """Wrap a K2.6 module whose `forward(x, grid_thws)` wants (N,3) grids.
 
-    Presents the A3B `forward(x, grid_hws)` signature accepting (N,2).
+    Presents a 2D `forward(x, grid_hws)` signature accepting (N,2).
     Covers MoonVision3dPatchEmbed, Learnable2DInterpPosEmbDivided_fixed,
     and the full MoonViT3dPretrainedModel tower.
     """
@@ -95,7 +93,7 @@ class _GridForwardRef(_DelegatingModule):
 
 
 class _RopeRef:
-    """Present K2.6 `Rope2DPosEmbRepeated` via the A3B `Rope2DPosEmb` interface.
+    """Present K2.6 `Rope2DPosEmbRepeated` via a plain 2D-rope interface.
 
     Not an nn.Module — the rope holds only buffers and the tests/`Rope2DSetup`
     read plain scalars off it. Exposes `.dim/.max_height/.max_width/
@@ -116,11 +114,11 @@ class _RopeRef:
 
 
 class _EncoderLayerRef(_DelegatingModule):
-    """Present a K2.6 `MoonViTEncoderLayer` via the A3B interface.
+    """Present a K2.6 `MoonViTEncoderLayer` via the 2D interface.
 
     K2.6's `attention_qkvpacked(x, cu_seqlens, max_seqlen, rope_freqs_cis)`
     and `forward(x, cu_seqlens, max_seqlen, rope_freqs_cis)` both take a
-    `max_seqlen` the A3B callers don't pass — we derive it from cu_seqlens.
+    `max_seqlen` the 2D callers don't pass — we derive it from cu_seqlens.
     Also forces the layer's attention to the requested implementation
     (default `sdpa`, registered by `_k26_loader._register_sdpa_attention`,
     which masks multi-image correctly unlike K2.6's bundled `eager`).
@@ -151,7 +149,7 @@ class _EncoderLayerRef(_DelegatingModule):
 
 
 class _ProjectorRef(_DelegatingModule):
-    """Present K2.6 `PatchMergerMLP` via the A3B `KimiVLMultiModalProjector` interface.
+    """Present K2.6 `PatchMergerMLP` via a `.pre_norm/.linear_1/.linear_2` interface.
 
     K2.6 uses a Sequential `proj` (proj.0 Linear / proj.1 GELU / proj.2 Linear)
     and `pre_norm`, and its forward returns a per-image list. The PCC test and
@@ -162,7 +160,7 @@ class _ProjectorRef(_DelegatingModule):
     def __init__(self, pm):
         super().__init__(pm)
         seq = pm.proj
-        # Expose the Sequential entries under the A3B attribute names.
+        # Expose the Sequential entries under linear_1/linear_2 names.
         self.pre_norm = pm.pre_norm
         self.linear_1 = seq[0]
         self.act = seq[1]
@@ -200,46 +198,22 @@ def _resolve(root, dotted: str):
 
 
 def _vision_tower(args):
-    """The MoonViT vision tower.
+    """The K2.6 MoonViT vision tower, wrapped in `_GridForwardRef`.
 
-    HF KimiVLForConditionalGeneration / KimiK25 both expose `.vision_tower`
-    (our K2.6 stand-in `_K26VisionModel` does too). For K2.6 the tower is
-    wrapped in `_GridForwardRef` so callers can pass A3B-style (N,2) grids;
-    attribute resolution through the wrapper is transparent.
+    The wrapper lets callers pass (N,2) [h,w] grids (promoted to the (N,3)
+    [t=1,h,w] form K2.6 expects); attribute resolution through it is
+    transparent.
     """
-    model = args.hf_model
-    raw = None
-    for path in ("vision_tower", "model.vision_tower"):
-        try:
-            raw = _resolve(model, path)
-            break
-        except AttributeError:
-            continue
-    if raw is None:
-        raise AttributeError(
-            f"Could not locate vision_tower on {type(model).__name__}. " "Tried: vision_tower, model.vision_tower."
-        )
-    if getattr(args, "is_k26", False):
-        return _GridForwardRef(raw)
-    return raw
+    return _GridForwardRef(_resolve(args.hf_model, "vision_tower"))
 
 
 def _projector(args):
-    model = args.hf_model
-    # A3B: multi_modal_projector. K2.6: mm_projector (PatchMergerMLP).
-    for path in ("multi_modal_projector", "model.multi_modal_projector", "mm_projector", "model.mm_projector"):
-        try:
-            return _resolve(model, path)
-        except AttributeError:
-            continue
-    raise AttributeError(
-        f"Could not locate the multimodal projector on {type(model).__name__}. "
-        "Tried: multi_modal_projector, mm_projector (and model.* variants)."
-    )
+    """The K2.6 multimodal projector (PatchMergerMLP)."""
+    return _resolve(args.hf_model, "mm_projector")
 
 
 def _encoder_layer(args, layer_num: int):
-    """One MoonVitEncoderLayer from the encoder's block list.
+    """One MoonViTEncoderLayer from the encoder's block list.
 
     Attribute name for the block list isn't fixed across HF revisions —
     try a few candidates.
@@ -275,7 +249,7 @@ def reference_layernorm(args, layer_num: int = 0, which: str = "norm0") -> Any:
     Args:
         layer_num: index into the encoder block list.
         which: "norm0" (pre-attn) or "norm1" (pre-MLP) — matches the HF
-            attribute names in MoonVitEncoderLayer.
+            attribute names in MoonViTEncoderLayer.
     """
     layer = _encoder_layer(args, layer_num)
     if not hasattr(layer, which):
@@ -296,88 +270,63 @@ def reference_mlp(args, layer_num: int = 0) -> Any:
 
 
 def reference_attention(args, layer_num: int = 0) -> Any:
-    """Return one encoder layer; tests can call .attention_qkvpacked on it.
+    """Return one encoder layer wrapped in `_EncoderLayerRef`.
 
     MoonViT's attention isn't a clean nn.Module — it's a method on the
     layer that takes (x, cu_seqlens, rope_freqs_cis). The test driver
-    invokes that method directly. Cloning the whole layer gives us
-    access to wqkv / wo / norms as needed. For K2.6 the clone is wrapped
-    in `_EncoderLayerRef` to inject `max_seqlen` and force correct masking.
+    invokes that method directly. `_EncoderLayerRef` injects the K2.6
+    `max_seqlen` arg and forces correct sdpa masking; cloning the layer
+    gives access to wqkv / wo / norms for the TT `from_torch` builders.
     """
-    layer = _clone(_encoder_layer(args, layer_num))
-    if getattr(args, "is_k26", False):
-        return _EncoderLayerRef(layer)
-    return layer
+    return _EncoderLayerRef(_clone(_encoder_layer(args, layer_num)))
 
 
 def reference_block(args, layer_num: int = 0) -> Any:
-    """Return one MoonVitEncoderLayer (full block including both norms)."""
-    layer = _clone(_encoder_layer(args, layer_num))
-    if getattr(args, "is_k26", False):
-        return _EncoderLayerRef(layer)
-    return layer
+    """Return one MoonViTEncoderLayer (full block including both norms)."""
+    return _EncoderLayerRef(_clone(_encoder_layer(args, layer_num)))
 
 
 def reference_patch_embed(args) -> Any:
-    """Return MoonVisionPatchEmbed (Conv2d + learned posemb)."""
-    pe = _clone(_resolve(_vision_tower(args), "patch_embed"))
-    if getattr(args, "is_k26", False):
-        return _GridForwardRef(pe)
-    return pe
+    """Return MoonVision3dPatchEmbed (Conv2d + learned posemb), grid-adapted."""
+    return _GridForwardRef(_clone(_resolve(_vision_tower(args), "patch_embed")))
 
 
 def reference_pos_emb(args) -> Any:
-    """Return the Learnable2DInterpPosEmb instance.
+    """Return the Learnable2DInterpPosEmbDivided_fixed instance, grid-adapted.
 
-    Lives inside MoonVisionPatchEmbed.pos_emb in the current HF layout.
+    Lives inside MoonVision3dPatchEmbed.pos_emb.
     """
-    pe = _clone(_resolve(_vision_tower(args), "patch_embed.pos_emb"))
-    if getattr(args, "is_k26", False):
-        return _GridForwardRef(pe)
-    return pe
+    return _GridForwardRef(_clone(_resolve(_vision_tower(args), "patch_embed.pos_emb")))
 
 
 def reference_patch_merger(args) -> Any:
-    """The patch-merger free function (not an nn.Module).
+    """K2.6's `tpool_patch_merger` free function, adapted to (N,2) grids.
 
-    A3B exposes `patch_merger` in modeling_kimi_vl; K2.6 exposes
-    `tpool_patch_merger` (temporal-pool merger) in modeling_kimi_k25. For
-    K2.6 we wrap it so it accepts A3B-style (N,2) grids (T=1 prepended).
+    Wrapped so it accepts 2D (N,2) grids (T=1 prepended). For T=1
+    the temporal pool is identity, so it reduces to spatial 2x2 merging.
     """
     # Ensure the modeling module is imported/registered.
     args.hf_model
 
     import sys
 
-    if getattr(args, "is_k26", False):
-        for name, mod in sys.modules.items():
-            if name.endswith("modeling_kimi_k25") and hasattr(mod, "tpool_patch_merger"):
-                tpool = mod.tpool_patch_merger
-
-                def patch_merger(x, grid_hws, merge_kernel_size=(2, 2)):
-                    return tpool(x, _promote_grid(grid_hws), merge_kernel_size=merge_kernel_size)
-
-                return patch_merger
-        raise RuntimeError(
-            "Could not locate tpool_patch_merger in loaded K2.6 modules. "
-            "Searched sys.modules for a *modeling_kimi_k25 module exposing tpool_patch_merger."
-        )
-
     for name, mod in sys.modules.items():
-        if name.endswith("modeling_kimi_vl") and hasattr(mod, "patch_merger"):
-            return mod.patch_merger
+        if name.endswith("modeling_kimi_k25") and hasattr(mod, "tpool_patch_merger"):
+            tpool = mod.tpool_patch_merger
+
+            def patch_merger(x, grid_hws, merge_kernel_size=(2, 2)):
+                return tpool(x, _promote_grid(grid_hws), merge_kernel_size=merge_kernel_size)
+
+            return patch_merger
     raise RuntimeError(
-        "Could not locate patch_merger function in loaded Kimi-VL modules. "
-        "Searched sys.modules for a *modeling_kimi_vl module exposing patch_merger."
+        "Could not locate tpool_patch_merger in loaded K2.6 modules. "
+        "Searched sys.modules for a *modeling_kimi_k25 module exposing tpool_patch_merger."
     )
 
 
 def reference_projector(args) -> Any:
-    """The multimodal projector (A3B KimiVLMultiModalProjector / K2.6 PatchMergerMLP)."""
-    proj = _clone(_projector(args))
-    if getattr(args, "is_k26", False):
-        return _ProjectorRef(proj)
-    return proj
+    """The multimodal projector (K2.6 PatchMergerMLP), 2D-interface adapted."""
+    return _ProjectorRef(_clone(_projector(args)))
 
 
 def reference_vision_tower(args) -> Any:
@@ -386,17 +335,14 @@ def reference_vision_tower(args) -> Any:
 
 
 def reference_rope_2d(args) -> Any:
-    """Rope2D module — lives at vision_tower.encoder.rope_2d."""
-    rope = _resolve(_vision_tower(args), "encoder.rope_2d")
-    if getattr(args, "is_k26", False):
-        return _RopeRef(_clone(rope))
-    return _clone(rope)
+    """Rope2DPosEmbRepeated module (vision_tower.encoder.rope_2d), grid-adapted."""
+    return _RopeRef(_clone(_resolve(_vision_tower(args), "encoder.rope_2d")))
 
 
 def reference_final_layernorm(args) -> Any:
-    """The final LayerNorm at the end of MoonVitEncoder.
+    """The final LayerNorm at the end of the MoonViT encoder.
 
-    Applied after the last encoder block, before patch_merger:
+    Applied after the last encoder block, before the patch merger:
         hidden_states = self.final_layernorm(hidden_states)
     """
     return _clone(_resolve(_vision_tower(args), "encoder.final_layernorm"))

@@ -24,7 +24,7 @@ The full `MoonVisionPatchEmbed` (Conv2d projection + bicubic-interpolated
   - `MoonVisionPatchEmbed` -- to be added in step 5, composes the
     projection with `Learnable2DInterpPosEmb` from pos_emb.py.
 
-Reference: `MoonVisionPatchEmbed` in modeling_kimi_vl.py.
+Reference: `MoonVisionPatchEmbed` in modeling_kimi_k25.py.
 """
 from __future__ import annotations
 

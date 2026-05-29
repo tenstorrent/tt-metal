@@ -4,7 +4,7 @@
 """
 2x2 spatial patch merger.
 
-Mirrors the HF `patch_merger` free function in modeling_kimi_vl.py.
+Mirrors the HF `patch_merger` free function in modeling_kimi_k25.py.
 For each image with grid (H, W):
     seq    : (H*W, D)
     view   : (H/kh, kh, W/kw, kw, D)
@@ -21,7 +21,7 @@ v1 simple; a device-side variant via ttnn.reshape/ttnn.permute is a
 Phase 4 productionization concern.
 
 References:
-  - `patch_merger` in modeling_kimi_vl.py.
+  - `patch_merger` in modeling_kimi_k25.py.
 """
 from __future__ import annotations
 

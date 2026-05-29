@@ -21,7 +21,7 @@ on device. cu_seqlens and the 2D-RoPE cos/sin are precomputed from grid_hws
 host-side and pushed to device once per forward.
 
 References:
-  - `MoonVitPretrainedModel` and `KimiVLMultiModalProjector` in modeling_kimi_vl.py.
+  - `MoonVitPretrainedModel` and `KimiVLMultiModalProjector` in modeling_kimi_k25.py.
 """
 from __future__ import annotations
 
