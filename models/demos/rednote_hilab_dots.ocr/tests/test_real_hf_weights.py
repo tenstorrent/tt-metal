@@ -49,6 +49,7 @@ _tt_vision_mlp = _load_by_path("dots_tt_vision_mlp_rw", "vision_mlp.py", _TT_DIR
 _tt_vision_block = _load_by_path("dots_tt_vision_block_rw", "vision_block.py", _TT_DIR)
 _tt_vision_patch_merger = _load_by_path("dots_tt_vision_patch_merger_rw", "vision_patch_merger.py", _TT_DIR)
 _tt_vision_tower = _load_by_path("dots_tt_vision_tower_rw", "vision_tower.py", _TT_DIR)
+_tt_embedding = _load_by_path("dots_tt_embedding_rw", "embedding.py", _TT_DIR)
 _loader = _load_by_path("dots_weight_loader", "weight_loader.py", _TT_DIR)
 _functional = _load_by_path("dots_reference_functional_rw", "functional.py", _REF_DIR)
 
@@ -58,7 +59,9 @@ TtVisionMLP = _tt_vision_mlp.TtVisionMLP
 TtVisionBlock = _tt_vision_block.TtVisionBlock
 TtVisionPatchMerger = _tt_vision_patch_merger.TtVisionPatchMerger
 TtVisionTower = _tt_vision_tower.TtVisionTower
+TtEmbedding = _tt_embedding.TtEmbedding
 load_vision_rmsnorm_weight = _loader.load_vision_rmsnorm_weight
+load_embedding_weight = _loader.load_embedding_weight
 load_vision_attention_weights = _loader.load_vision_attention_weights
 load_vision_mlp_weights = _loader.load_vision_mlp_weights
 load_vision_block_weights = _loader.load_vision_block_weights
@@ -70,6 +73,7 @@ vision_mlp_forward = _functional.vision_mlp_forward
 vision_block_forward = _functional.vision_block_forward
 vision_patch_merger_forward = _functional.vision_patch_merger_forward
 vision_tower_forward = _functional.vision_tower_forward
+embedding_forward = _functional.embedding_forward
 
 # Vision attention config (modeling_dots_vision): 12 heads, head_dim 128,
 # fused QKV no-bias, 2D RoPE theta 1e4, block-diagonal bidirectional attention.
@@ -537,6 +541,60 @@ def test_real_hf_weights_vision_tower(device):
     assert params_loaded > 0
 
 
+# LM token embedding (Qwen2 nn.Embedding): the real input lookup table
+# model.embed_tokens.weight [vocab_size 151936, hidden_size 1536]. Untied from
+# lm_head (config.tie_word_embeddings = false). ttnn.embedding is an exact row
+# gather, so real weights should still give PCC ~= 1.0 (bf16 row cast is the
+# only error source).
+VOCAB_SIZE = 151936
+EMBEDDING_HF_KEY = "model.embed_tokens.weight"
+
+
+def _run_embedding_pcc(device):
+    """Load the real LM token-embedding table, run TtEmbedding on device, and
+    compare against the HF PyTorch reference (F.embedding) with the SAME real
+    weight.
+
+    Returns (pcc, params_loaded).
+    """
+    weight = load_embedding_weight(CHECKPOINT_PATH, EMBEDDING_HF_KEY).to(torch.float32)
+    params_loaded = int(weight.numel())
+    assert weight.shape == (VOCAB_SIZE, EMBED_DIM), tuple(weight.shape)
+
+    torch.manual_seed(0)
+    batch, seq_len = 1, 128
+    input_ids = torch.randint(0, VOCAB_SIZE, (batch, seq_len), dtype=torch.int64)
+
+    # HF reference (F.embedding gather) with the REAL embedding table.
+    ref_output = embedding_forward(input_ids, weight)  # [1, 128, 1536]
+
+    tt_emb = TtEmbedding(device=device, weight=weight)
+    # ttnn.embedding consumes row-major uint32 indices.
+    tt_input = ttnn.from_torch(
+        input_ids.to(torch.int32),
+        device=device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_output = tt_emb(tt_input)
+    tt_output_torch = ttnn.to_torch(tt_output).to(torch.float32).reshape(ref_output.shape)
+
+    passing, pcc_message = comp_pcc(ref_output, tt_output_torch, 0.99)
+    print(comp_allclose(ref_output, tt_output_torch))
+    print(f"comp_pcc(embedding, real weights): passing={passing}, message={pcc_message}")
+    msg = str(pcc_message)
+    pcc = float(msg.split("PCC:")[-1].strip()) if "PCC:" in msg else float(pcc_message)
+    print(f"real-weights embedding PCC = {pcc} | params_loaded = {params_loaded}")
+    assert passing, f"embedding real-weights PCC below 0.99: {pcc_message}"
+    return pcc, params_loaded
+
+
+def test_real_hf_weights_embedding(device):
+    pcc, params_loaded = _run_embedding_pcc(device)
+    assert params_loaded > 0
+
+
 if __name__ == "__main__":
     dev = ttnn.open_device(device_id=0, l1_small_size=32768)
     try:
@@ -546,5 +604,6 @@ if __name__ == "__main__":
         _run_vision_block_pcc(dev)
         _run_vision_patch_merger_pcc(dev)
         _run_vision_tower_pcc(dev)
+        _run_embedding_pcc(dev)
     finally:
         ttnn.close_device(dev)

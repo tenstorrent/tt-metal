@@ -240,6 +240,29 @@ def load_vision_patch_embed_weights(checkpoint_path: str) -> Dict[str, torch.Ten
     }
 
 
+def load_embedding_weight(checkpoint_path: str, hf_key: str = "model.embed_tokens.weight") -> torch.Tensor:
+    """Load the real LM token-embedding table [vocab_size, hidden_size].
+
+    The dots.ocr language model (a Qwen2 trunk) holds its input token-embedding
+    table under the HF key ``model.embed_tokens.weight`` -- shape
+    [151936, 1536] (vocab_size x hidden_size). The checkpoint unties input and
+    output embeddings (config.tie_word_embeddings = false), so this is the input
+    lookup table only; the separate ``lm_head.weight`` is a distinct parameter.
+
+    This is the [vocab, hidden] gather table that :class:`tt.embedding.TtEmbedding`
+    consumes directly (no transpose / reshape -- ttnn.embedding indexes rows).
+
+    Args:
+        checkpoint_path: HF snapshot dir.
+        hf_key: which embedding table to pull (default the LM input embedding).
+
+    Returns:
+        torch.Tensor of shape [vocab_size, hidden_size] (fp32).
+    """
+    tensors = load_hf_tensors(checkpoint_path, [hf_key])
+    return tensors[hf_key]
+
+
 def load_vision_tower_weights(checkpoint_path: str, num_layers: int) -> Dict[str, torch.Tensor]:
     """Load the full DotsVisionTransformer (vision tower) real weights.
 

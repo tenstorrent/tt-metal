@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** p150 (blackhole)
 **Started:** 2026-05-29T00:11:46Z
-**Updated:** 2026-05-29T04:10:59Z
+**Updated:** 2026-05-29T04:16:28Z
 
 ## Block Status
 
@@ -49,7 +49,7 @@
 | embedding | ttnn | done | 0.999999 | 0 | ttnn.embedding gather; weight [151936,1536] bf16 ROW_MAJOR in DRAM; uint32 row-major ids -> TILE output. HiFi4+fp32_dest_acc preset (no matmul; exact gather). PCC=0.9999986 vs golden on p150. Guard ok. |
 | embedding | debug | n/a | — | 0 |  |
 | embedding | optimization | done | 0.999999 | 0 | tracy attached (traced replay session); top op EmbeddingsDeviceOperation = 100% of the 21.6us block kernel time. Single ttnn.embedding gather: no matmul to shard, no reshape chain to L1-pin, no activation to fuse. At-ceiling — the gather is the optimal kernel for a 151936x1536 DRAM table lookup. No targeted optimization warranted. PCC=0.9999986 unchanged. |
-| embedding | real_weights | pending | — | 0 |  |
+| embedding | real_weights | done | 1.000000 | 0 | Loaded real model.embed_tokens.weight [151936,1536] bf16 (untied from lm_head). ttnn.embedding exact row gather: PCC=1.0 vs HF F.embedding on p150. params_loaded=233373696. Guard ok (lint=0). |
 | rmsnorm | reference | done | 1.000000 | 0 | Qwen2RMSNorm (eps 1e-6): fp32 normalize -> cast -> weight*x. PCC=1.0 vs HF Qwen2RMSNorm. |
 | rmsnorm | ttnn | done | 0.999995 | 0 | Qwen2 LM RMSNorm eps=1e-6 (vs vision 1e-5). ttnn.rms_norm HiFi4+fp32_dest_acc bf16 DRAM TILE; weight reshaped [1,1,dim//32,32] row-major. Mirror of TtVisionRMSNorm. PCC=0.99999 vs golden on p150. Guard ok. |
 | rmsnorm | debug | n/a | — | 0 |  |
@@ -94,7 +94,6 @@
 
 ## Recent Ticks
 
-- tick 32 (2026-05-29T03:11:57Z): device[mlp] — ok
 - tick 33 (2026-05-29T03:19:23Z): device[decoder_layer] — ok
 - tick 34 (2026-05-29T03:27:29Z): device[lm_head] — ok
 - tick 35 (2026-05-29T03:35:03Z): device[language_model] — ok
@@ -104,6 +103,7 @@
 - tick 39 (2026-05-29T03:58:28Z): device[vision_block] — ok
 - tick 40 (2026-05-29T04:04:31Z): device[vision_patch_merger] — ok
 - tick 41 (2026-05-29T04:10:59Z): device[vision_tower] — ok
+- tick 42 (2026-05-29T04:16:28Z): device[embedding] — ok
 
 ## Host-Resident Exceptions
 
