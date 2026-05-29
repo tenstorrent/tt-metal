@@ -438,3 +438,57 @@ cross_q_N9472 +12%, both well past 1.5×). RoPE shapes are compute-bound
 reads don't help them; the merged-barrier ordering recovered the small NoC
 contention regression deep reads first introduced on RoPE-N18944 (was 421
 with two barriers → 416). Net clearly positive; committed.
+
+## Opt 4: deep output-write — row-deep output_cb + per-row flush (2026-05-29)
+
+**Overturns the Opt-2 "output drain is a dead lever" conclusion.** That
+conclusion was drawn while output_cb was only `block_size*2`=4 tiles, so
+the writer flushed (`noc_async_writes_flushed`) every 2 tiles — write
+concurrency was capped at 2 in-flight, which IS the back-pressure P_ADD
+measured (22% of POST, 5.9× core-to-core spread = DRAM-write contention).
+The drain wasn't a fixed floor; it was throttled by a too-small CB, exactly
+like the reader was throttled by per-2-tile read barriers before Opt 3.
+
+**Change (program factory + writer_mux):**
+- `output_cb` sized `block_size*2` → `2 * padded_row_tiles` (2 full rows).
+- MUX writer drains a row by issuing each col-block's writes as soon as
+  compute pushes it (incremental `cb_wait_front` on the padded cumulative
+  count keeps within-row overlap), then does ONE `noc_async_writes_flushed`
+  + ONE `cb_pop_front(padded_row_tiles)` at the end of the row. Writes now
+  pipeline at DRAM depth; the 2-row CB lets compute fill row r+1 while row r
+  drains. This is the write-side mirror of Opt 3's deep read. (Note: this is
+  NOT the earlier negative "Experiment 1" — that waited for the *whole row*
+  before issuing any write, serializing compute→write; here writes issue
+  per-block and only the flush/pop is batched.)
+
+**Correctness:** preserved. 15/15 RoPE + COMPOSITE_VS_FUSED bisect tests
+PASS, PCC ≥ 99.999%. Same tiles written to the same DRAM addresses; only
+CB size + flush granularity changed.
+
+**Perf (TP=4 LINE, BH 2x4), fused_us before(Opt3) → after / new speedup,
+two stable runs:**
+
+| config | fused before | fused after | speedup |
+|---|---|---|---|
+| self_sp4_N18944  (RoPE) | 416.4 | 417.0 | 1.59× (flat) |
+| self_sp8_N9472   (RoPE) | 263.3 | **244.9** | **1.36×** (was 1.27×) |
+| self_sp32_N2368  (RoPE) | 124.2 | 119.7 | 0.90× (was 0.87×) |
+| cross_q_sp4_N18944      | 321.9 | **311.6** | **1.91×** (was 1.85×) |
+| cross_q_sp8_N9472       | 195.4 | 193.8 | 1.52× (was 1.51×) |
+| cross_q_sp32_N2368      |  85.4 |  84.1 | 1.16× (was 1.14×) |
+| cross_k_prompt_L512     |  43.0 |  42.5 | 1.21× (flat) |
+
+**Net positive, no regressions.** Biggest win is N9472 RoPE (+7%, gated on
+output drain because at 296 rows/64 workers ≈ 4.6 rows/core the drain tail
+is a larger fraction). cross_q_N18944 (no-RoPE target) 1.85→1.91×. The
+RoPE-N18944 and L512 flats are expected — N18944-RoPE is compute-bound
+(drain hidden behind the long RoPE math), L512 has 1 row/core (no
+cross-row overlap to gain). Committed.
+
+### Where this leaves the targets
+no-RoPE: N9472 1.52× ✓, N18944 1.91× (→3× still needs ~40% more DRAM-write
+util; now ~61% of 512 GB/s peak). small N2368 1.16× (no-RoPE) / 0.90×
+(RoPE) — still short of 1.5×, the next focus. The Opt-2 "drain is a dead
+lever / 1.5× structural ceiling" claim is now disproven by both Opt 3 (read)
+and Opt 4 (write) beating 1.5× on no-RoPE — the real ceiling is DRAM
+*utilization*, and there is still headroom.
