@@ -262,9 +262,6 @@ uint32_t process_relay_linear_h_cmd(uintptr_t cmd_ptr, uint32_t& downstream_data
 static uint32_t pcie_read_ptr = pcie_base;
 static uint32_t downstream_data_ptr = downstream_cb_base;
 static uint32_t downstream_data_ptr_s = dispatch_s_buffer_base;
-static uint32_t block_next_start_addr[cmddat_q_blocks];
-static uint32_t rd_block_idx = 0;
-static uint32_t upstream_total_acquired_page_count = 0;
 static uint32_t ringbuffer_wp = scratch_db_base;
 static uint32_t ringbuffer_offset = 0;
 
@@ -1501,7 +1498,6 @@ template <typename RelayInlineState>
 FORCE_INLINE static uint32_t process_exec_buf_relay_inline_cmd(
     uintptr_t& cmd_ptr, uint32_t& local_downstream_data_ptr, PrefetchExecBufState& exec_buf_state) {
     volatile CQPrefetchCmd tt_l1_ptr* cmd = (volatile CQPrefetchCmd tt_l1_ptr*)cmd_ptr;
-    uint8_t dispatcher_type = cmd->relay_inline.dispatcher_type;
     uint32_t length = cmd->relay_inline.length;
     uintptr_t data_ptr = cmd_ptr + sizeof(CQPrefetchCmd);
 
@@ -1969,7 +1965,7 @@ static uint32_t process_exec_buf_relay_linear_packed_cmd(
     uint32_t sub_cmds_length = cmd->relay_linear_packed.count * sizeof(CQPrefetchRelayLinearPackedSubCmd);
     uint32_t stride = cmd->relay_linear_packed.stride;
 
-    void* end = copy_into_l1_cache(cmd_ptr, sub_cmds_length, l1_cache, exec_buf_state, stride);
+    copy_into_l1_cache(cmd_ptr, sub_cmds_length, l1_cache, exec_buf_state, stride);
     process_relay_linear_packed_sub_cmds(noc_xy_addr, total_length, l1_cache);
     return stride;
 }
@@ -2700,8 +2696,6 @@ void kernel_main_hd() {
         fetch_q_get_cmds<preamble_size>(fence, cmd_ptr, pcie_read_ptr);
 
         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
-
-        volatile CQPrefetchCmd tt_l1_ptr* cmd = (volatile CQPrefetchCmd tt_l1_ptr*)cmd_ptr;
 
         uint32_t stride;
         done = process_cmd<false, false>(cmd_ptr, downstream_data_ptr, stride, l1_cache, exec_buf_state);
