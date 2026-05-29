@@ -40,7 +40,7 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
-    mesh_shape = (1, 1)
+    mesh_shape = get_model_traced_mesh_shape()
     device = create_mesh_device(mesh_shape, l1_small_size=65536)
     device_name = ttnn.get_arch_name()
     yield (device, device_name)
