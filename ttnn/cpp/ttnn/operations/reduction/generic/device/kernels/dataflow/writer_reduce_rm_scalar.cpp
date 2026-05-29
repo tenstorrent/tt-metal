@@ -31,7 +31,12 @@
 //   overflow the destination page.
 //
 
-void kernel_main() {
+// CT-arg layout differs per dim - the unused-branch `get_compile_time_arg_val<N>()` calls would
+// otherwise trigger the in-range static_assert even when discarded by `if constexpr`. Templating on
+// REDUCE_DIM moves the body into a template, which makes the discard truly remove the dead reads,
+// so each factory only has to emit the slots its own kernel branch consumes.
+template <ckernel::ReduceDim D>
+FORCE_INLINE void run_writer() {
     //
     // Runtime args. Slots shared between paths; semantics differ:
     //   W reduce: (dst_addr, num_rows, start_page)
@@ -41,27 +46,17 @@ void kernel_main() {
     const uint32_t rt_count = get_arg_val<uint32_t>(1);
     const uint32_t rt_start = get_arg_val<uint32_t>(2);
 
-    //
-    // Compile-time args. Slot 0 (datum_bytes) is shared; slots 1–3 are only consumed by the
-    // H reduce path. The W factory passes zero/ignored values for those slots so both factories
-    // present the same arg layout.
-    //
     constexpr uint32_t datum_bytes = get_compile_time_arg_val(0);
-    constexpr uint32_t Wt = get_compile_time_arg_val(1);
-    constexpr uint32_t W_logical = get_compile_time_arg_val(2);
-    constexpr uint32_t wt_tiles_per_chunk = get_compile_time_arg_val(3);
-    constexpr auto dst_args = TensorAccessorArgs<4>();
 
     constexpr uint32_t cb_id_tile = tt::CBIndex::c_3;
     constexpr uint32_t onetile = 1;
 
     const uint32_t tile_size_bytes = get_tile_size(cb_id_tile);
-    const auto dst_accessor = TensorAccessor(dst_args, dst_addr);
 
     Noc noc;
     CircularBuffer cb_tile(cb_id_tile);
 
-    if constexpr (REDUCE_DIM == ckernel::ReduceDim::REDUCE_ROW) {
+    if constexpr (D == ckernel::ReduceDim::REDUCE_ROW) {
         //
         // === W reduce path ===
         //
@@ -69,6 +64,10 @@ void kernel_main() {
         // (single-shot path for MAX with wt_tiles_per_chunk == Wt, or chunked SUM that ends on
         // is_last_chunk for each ht). Either way the writer sees one tile per pop.
         //
+        // CT-arg layout: (datum_bytes, accessor...). No H-specific slots.
+        constexpr auto dst_args = TensorAccessorArgs<1>();
+        const auto dst_accessor = TensorAccessor(dst_args, dst_addr);
+
         const uint32_t num_rows = rt_count;
         const uint32_t start_page = rt_start;
 
@@ -98,6 +97,13 @@ void kernel_main() {
         // One page per (n, c), W datums per page. Each output tile contributes one row-stripe of
         // up to TILE_WIDTH datums (1–2 face-wise wide writes per tile).
         //
+        // CT-arg layout: (datum_bytes, Wt, W_logical, wt_tiles_per_chunk, accessor...).
+        constexpr uint32_t Wt = get_compile_time_arg_val(1);
+        constexpr uint32_t W_logical = get_compile_time_arg_val(2);
+        constexpr uint32_t wt_tiles_per_chunk = get_compile_time_arg_val(3);
+        constexpr auto dst_args = TensorAccessorArgs<4>();
+        const auto dst_accessor = TensorAccessor(dst_args, dst_addr);
+
         constexpr uint32_t face_w = tt::constants::TILE_WIDTH / 2;
         const uint32_t num_output_tiles_local = rt_count;
         const uint32_t start_output_tile_id = rt_start;
@@ -155,3 +161,5 @@ void kernel_main() {
         }
     }
 }
+
+void kernel_main() { run_writer<REDUCE_DIM>(); }
