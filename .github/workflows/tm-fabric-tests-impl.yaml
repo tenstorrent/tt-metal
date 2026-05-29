@@ -214,7 +214,7 @@ jobs:
         run: echo "TT_METAL_OPERATION_TIMEOUT_SECONDS=0" >> $GITHUB_ENV
       - name: Run Multi-Process tests
         if: ${{ !cancelled() && steps.cluster-validation.outcome == 'success' }}
-        timeout-minutes: 20
+        timeout-minutes: 10
         uses: ./docker-job/.github/actions/run-multi-process-tests
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
