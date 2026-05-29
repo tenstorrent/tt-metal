@@ -346,13 +346,15 @@ def calculate_tile_and_face_counts(
     Returns:
         tuple: (tile_cnt_A, tile_cnt_B, faces_to_generate)
     """
-    assert face_r_dim == MAX_FACE_R_DIM or (
-        face_r_dim < MAX_FACE_R_DIM and face_r_dim == input_dimensions_A[0]
-    ), (
-        f"face_r_dim must be {MAX_FACE_R_DIM} (full face) or < {MAX_FACE_R_DIM} "
-        f"and equal to input_dimensions_A[0] (partial single-tile case); "
-        f"got face_r_dim={face_r_dim}, input_dimensions_A={input_dimensions_A}"
-    )
+    if not (
+        face_r_dim == MAX_FACE_R_DIM
+        or (face_r_dim < MAX_FACE_R_DIM and face_r_dim == input_dimensions_A[0])
+    ):
+        raise ValueError(
+            f"face_r_dim must be {MAX_FACE_R_DIM} (full face) or < {MAX_FACE_R_DIM} "
+            f"and equal to input_dimensions_A[0] (partial single-tile case); "
+            f"got face_r_dim={face_r_dim}, input_dimensions_A={input_dimensions_A}"
+        )
 
     # Handle partial faces
     if face_r_dim < MAX_FACE_R_DIM:
