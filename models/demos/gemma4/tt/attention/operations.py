@@ -132,6 +132,55 @@ def concat_heads(tensor, is_decode_mode: bool):
     return ttnn.experimental.nlp_concat_heads(tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
+def _batch_to_corerange(batch: int, grid_size: ttnn.CoreCoord) -> ttnn.CoreRangeSet:
+    """Map a decode batch size to a single rectangular CoreRange of exactly ``batch`` cores.
+
+    ``nlp_concat_heads_decode`` requires ``num_cores == num_users`` (one user per
+    core). Using a single contiguous rectangle anchored at (0, 0) keeps the op on
+    its fast path and avoids the ``on_subcoregrids`` requirement that a fragmented
+    CoreRangeSet would trigger.
+
+    Covers the supported decode batch sizes {1, 8, 16, 32} on an 8-wide grid as
+    1x1, 8x1, 8x2, 8x4 respectively.
+    """
+    grid_x = grid_size.x
+    if batch <= grid_x:
+        num_x, num_y = batch, 1
+    else:
+        if batch % grid_x != 0:
+            raise ValueError(
+                f"batch={batch} cannot form a single rectangle on a grid {grid_x} wide; "
+                "supported batch sizes are {1, 8, 16, 32}"
+            )
+        num_x, num_y = grid_x, batch // grid_x
+    if num_y > grid_size.y:
+        raise ValueError(f"batch={batch} requires {num_y} rows but grid has only {grid_size.y}")
+    core_range = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_x - 1, num_y - 1))
+    return ttnn.CoreRangeSet({core_range})
+
+
+def concat_heads_decode(tensor, num_local_heads: int, batch: int, mesh_device):
+    """Concatenate attention heads for batched decode (one user per core).
+
+    The SDPA decode output arrives in DRAM as ``[1, batch, num_local_heads, head_dim]``.
+    Reshard it height-sharded onto a single-rect CoreRange of ``batch`` cores, then
+    use ``nlp_concat_heads_decode`` to fold heads back into the (local) hidden dim.
+    """
+    head_dim = tensor.shape[-1]
+    grid_size = mesh_device.compute_with_storage_grid_size()
+    batch_grid = _batch_to_corerange(batch, grid_size)
+    padded_heads = ((num_local_heads + 31) // 32) * 32
+    height_sharded_mem_config = ttnn.create_sharded_memory_config(
+        shape=(padded_heads, head_dim),
+        core_grid=batch_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    tensor = ttnn.to_memory_config(tensor, height_sharded_mem_config)
+    return ttnn.experimental.nlp_concat_heads_decode(tensor, num_heads=num_local_heads)
+
+
 def apply_output_projection(tensor, weights: AttentionWeights):
     """Apply output projection (no bias for Gemma4)."""
     out = ttnn.linear(tensor, weights.o_proj)
