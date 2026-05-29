@@ -63,6 +63,9 @@ class SFTConfig:
     eval_interval: int = 200
     save_interval: int = 500
     checkpoint_dir: str = "checkpoints"
+    # If non-empty, checkpoint files are named "{checkpoint_prefix}_step_{N}.pkl"
+    # instead of "step_{N}.pkl".
+    checkpoint_prefix: str = ""
     seed: Optional[int] = None
     max_seq_len: int = 1024
     learning_rate: float = 2e-5
@@ -70,6 +73,8 @@ class SFTConfig:
     max_grad_norm: float = 0.0
     log_interval: int = 1
     gradient_checkpointing: bool = False
+    # If True, tqdm progress bar (and its loss/lr postfix) is suppressed.
+    disable_progress_bar: bool = False
 
 
 class SFTTrainer:
@@ -119,6 +124,8 @@ class SFTTrainer:
         compute_loss_func: Optional[Callable] = None,
         loss_composer: Any = None,
         attention_mask: Any = None,
+        checkpoint_saver: Optional[Callable[["SFTTrainer", str], None]] = None,
+        checkpoint_loader: Optional[Callable[["SFTTrainer", str], int]] = None,
     ) -> None:
         """
         Args:
@@ -151,6 +158,14 @@ class SFTTrainer:
             attention_mask: Optional attention mask passed as the second
                 argument to ``model(input_ids, mask)``.  ``None`` (default)
                 lets the model generate a causal mask on the fly.
+            checkpoint_saver: Optional ``(trainer, path) -> None`` that
+                replaces the default thin save (which stores only
+                ``{step, model_state}``).  Caller is free to serialise
+                tokenizer, configs, RNG, etc.
+            checkpoint_loader: Optional ``(trainer, path) -> int`` that
+                restores ``model.parameters()`` from ``path`` and returns
+                the step the checkpoint was taken at.  Called by
+                :meth:`load_checkpoint` to support resume.
 
         Note:
             When ``config.gradient_checkpointing`` is ``True`` the model's
@@ -181,6 +196,9 @@ class SFTTrainer:
         self._callbacks = callbacks or []
         self._compute_loss_override = compute_loss_func
         self._loss_composer = self._build_loss_composer(loss_composer)
+        self._checkpoint_saver = checkpoint_saver
+        self._checkpoint_loader = checkpoint_loader
+        self._mask_validated = False
 
     # ------------------------------------------------------------------
     # Public API
@@ -194,7 +212,7 @@ class SFTTrainer:
         of dataset size.
         """
         self.model.train()
-        for cb in self._callbacks:
+        for cb in list(self._callbacks):
             cb.on_train_begin(self)
         data_iter = iter(self.train_dataloader)
         cfg = self.config
@@ -207,7 +225,7 @@ class SFTTrainer:
                 data_iter = iter(self.train_dataloader)
                 return next(data_iter)
 
-        bar = tqdm(range(cfg.max_steps), desc="SFTTrainer")
+        bar = tqdm(range(self.step, cfg.max_steps), desc="SFTTrainer", disable=cfg.disable_progress_bar)
         for _ in bar:
             # self.step is 0-based so external lr_schedule callables (e.g.
             # SpeedrunScheduler.lr_at) receive the expected step index.
@@ -221,19 +239,27 @@ class SFTTrainer:
                 profiler_marker(None, "dataloader_step_done")
 
                 loss = self._compute_loss(batch)
-                micro_losses.append(float(loss.to_numpy(ttnn.DataType.FLOAT32, composer=self._loss_composer).mean()))
+                micro_loss = float(loss.to_numpy(ttnn.DataType.FLOAT32, composer=self._loss_composer).mean())
+                micro_losses.append(micro_loss)
                 profiler_marker(None, "forward_pass_done")
+                for cb in list(self._callbacks):
+                    cb.on_after_forward(self, batch, micro_loss)
 
                 if cfg.gradient_accumulation_steps > 1:
                     loss = ttml.ops.binary.mul(loss, 1.0 / cfg.gradient_accumulation_steps)
                 loss.backward(False)
-                ttml.autograd.AutoContext.get_instance().reset_graph()
                 profiler_marker(None, "backward_pass_done")
+                for cb in list(self._callbacks):
+                    cb.on_after_backward(self, batch)
+                ttml.autograd.AutoContext.get_instance().reset_graph()
 
-            for cb in self._callbacks:
+            for cb in list(self._callbacks):
                 cb.on_before_optimizer_step(self)
 
             if cfg.max_grad_norm > 0:
+                mesh = ttml.maybe_mesh()
+                if mesh is not None and mesh.has_axis("tp") and mesh.axis_size("tp") > 1:
+                    raise ValueError("clip_grad_norm is not supported with tensor parallelism")
                 ttml.core.clip_grad_norm(self.model.parameters(), cfg.max_grad_norm, 2.0, False)
 
             profiler_marker(None, "gradient_sync_done")
@@ -246,8 +272,8 @@ class SFTTrainer:
             step_loss = float(np.mean(micro_losses))
             if cfg.log_interval > 0 and self.step % cfg.log_interval == 0:
                 bar.set_postfix({"loss": f"{step_loss:.4f}", "lr": f"{lr:.2e}"}, refresh=False)
-                for cb in self._callbacks:
-                    cb.on_step_end(self, self.step, step_loss, lr)
+            for cb in list(self._callbacks):
+                cb.on_step_end(self, self.step, step_loss, lr)
 
             if cfg.eval_interval > 0 and self.step % cfg.eval_interval == 0:
                 if self.eval_dataloader is not None:
@@ -260,24 +286,40 @@ class SFTTrainer:
                         },
                         refresh=False,
                     )
-                    for cb in self._callbacks:
+                    for cb in list(self._callbacks):
                         cb.on_eval_end(self, self.step, val_loss)
 
             if cfg.save_interval > 0 and self.step % cfg.save_interval == 0 and self.step > 0:
                 self._save_checkpoint()
-                for cb in self._callbacks:
-                    cb.on_save(
-                        self,
-                        self.step,
-                        os.path.join(cfg.checkpoint_dir, f"step_{self.step}.pkl"),
-                    )
+                save_path = self._checkpoint_path()
+                for cb in list(self._callbacks):
+                    cb.on_save(self, self.step, save_path)
 
             profiler_marker(None, f"iteration_{self.step}", dump_results=True)
             if self.step == 1:
                 profiler_marker(None, "compilation_finished")
 
-        for cb in self._callbacks:
+        for cb in list(self._callbacks):
             cb.on_train_end(self)
+
+    def _checkpoint_path(self) -> str:
+        """Path used for the current-step checkpoint (honors `config.checkpoint_prefix`)."""
+        name = f"step_{self.step}.pkl"
+        if self.config.checkpoint_prefix:
+            name = f"{self.config.checkpoint_prefix}_{name}"
+        return os.path.join(self.config.checkpoint_dir, name)
+
+    def remove_callback(self, cb: TrainerCallback) -> None:
+        """Detach ``cb`` from the trainer's callback list.
+
+        Safe to call from inside a callback method — event iteration takes a
+        snapshot of the list, so the removed callback finishes the current
+        event but receives no further events.
+        """
+        try:
+            self._callbacks.remove(cb)
+        except ValueError:
+            pass
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -296,7 +338,10 @@ class SFTTrainer:
         # Validate loss_mask normalisation: for a standard SFT collate the mask
         # should sum to B*T (one entry per token position).  A large deviation
         # usually indicates a custom collate that forgot to normalise.
-        if batch.loss_mask is not None:
+        # Checked once on the first batch — repeating it would force a
+        # device→host sync every step.
+        if batch.loss_mask is not None and not self._mask_validated:
+            self._mask_validated = True
             mask_np = batch.loss_mask.to_numpy(ttnn.DataType.FLOAT32, composer=self._loss_composer)
             B, _, T, _ = mask_np.shape
             expected = float(B * T)
@@ -322,25 +367,34 @@ class SFTTrainer:
             for batch in self.eval_dataloader:
                 loss = self._compute_loss(batch)
                 losses.append(float(loss.to_numpy(ttnn.DataType.FLOAT32, composer=self._loss_composer).mean()))
+                ttml.autograd.AutoContext.get_instance().reset_graph()
         self.model.train()
         return float(np.mean(losses))
 
     def _save_checkpoint(self) -> None:
-        """Persist model parameters as a pickle checkpoint.
+        """Persist a checkpoint via ``checkpoint_saver`` (or the default).
+
+        The default saver stores ``{step, model_state}`` (model parameters as
+        FLOAT32 numpy arrays).  When ``checkpoint_saver`` was provided to
+        ``__init__`` it is called instead — callers use this hook to embed
+        tokenizers, configs, RNG state, etc.
 
         .. note::
             When a ``peft_config`` is used and the model is wrapped in
-            :class:`LoraModel`, this currently saves *all* parameters (base +
-            LoRA).  Ideally only the LoRA adapter weights should be persisted
-            to keep checkpoints small and avoid redundant copies of the frozen
-            base weights.
+            :class:`LoraModel`, the default saver currently saves *all*
+            parameters (base + LoRA).  Ideally only the LoRA adapter weights
+            should be persisted to keep checkpoints small.
 
-        TODO: when ``peft_config`` is set, filter ``self.model.parameters()``
-        to save only LoRA adapter parameters (e.g. those whose name contains
-        ``lora_``).
+            TODO: when ``peft_config`` is set, filter ``self.model.parameters()``
+            to save only LoRA adapter parameters (e.g. those whose name contains
+            ``lora_``).
         """
         os.makedirs(self.config.checkpoint_dir, exist_ok=True)
-        path = os.path.join(self.config.checkpoint_dir, f"step_{self.step}.pkl")
+        path = self._checkpoint_path()
+
+        if self._checkpoint_saver is not None:
+            self._checkpoint_saver(self, path)
+            return
 
         state = {}
         for name, param in self.model.parameters().items():
@@ -349,6 +403,40 @@ class SFTTrainer:
 
         with open(path, "wb") as f:
             pickle.dump({"step": self.step, "model_state": state}, f)
+
+    def load_checkpoint(self, path: str) -> int:
+        """Restore training state from a checkpoint and advance ``self.step``.
+
+        Delegates to ``checkpoint_loader`` if one was supplied; otherwise reads
+        the default ``{step, model_state}`` format and copies parameters via
+        ``param.assign(...)``.  Returns the step the checkpoint was taken at.
+        Call before :meth:`train` — the loop iterates from ``self.step`` to
+        ``cfg.max_steps`` so resume picks up exactly where the run stopped.
+        """
+        if self._checkpoint_loader is not None:
+            step = int(self._checkpoint_loader(self, path))
+            self.step = step
+            return step
+
+        import ml_dtypes
+
+        with open(path, "rb") as f:
+            ckpt = pickle.load(f)
+        step = int(ckpt["step"])
+        model_state = ckpt["model_state"]
+
+        params = self.model.parameters()
+        for name, arr in model_state.items():
+            if name not in params:
+                continue
+            arr_bf16 = arr.astype(ml_dtypes.bfloat16)
+            restored = ttml.autograd.Tensor.from_numpy(
+                arr_bf16, layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16
+            )
+            params[name].assign(restored)
+
+        self.step = step
+        return step
 
     def _build_optimizer(self, optimizer: Any):
         """Resolve the *optimizer* argument into an ``OptimizerBase``.
@@ -375,8 +463,8 @@ class SFTTrainer:
         warmup = max(0, self.config.warmup_steps)
 
         def schedule(step: int) -> float:
-            if warmup > 0 and step <= warmup:
-                return peak_lr * step / warmup
+            if warmup > 0 and step < warmup:
+                return peak_lr * (step + 1) / warmup
             return peak_lr
 
         return schedule

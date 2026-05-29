@@ -4,8 +4,9 @@
 
 """Concrete TTMLDataloader and SFT collate function for HuggingFace datasets."""
 
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterator, Optional
 
+import ml_dtypes
 import numpy as np
 import ttnn
 
@@ -136,5 +137,62 @@ def sft_collate_fn(
             loss_mask_np,
             ttnn.Layout.TILE,
             ttnn.DataType.BFLOAT16,
+        ),
+    )
+
+
+def causal_lm_collate_fn(
+    examples: list,
+    seq_len: int,
+    mapper: Optional[Any] = None,
+) -> Batch:
+    """Collate causal-LM examples — every position contributes to the loss.
+
+    Each example is a dict with ``"input_ids"`` and ``"labels"`` (already
+    shifted by one for next-token prediction).  Shorter sequences are
+    zero-padded and the padded tail is masked out.  The ``loss_mask`` is
+    renormalised so ``mean(loss * loss_mask)`` equals the per-completion-token
+    loss regardless of batch composition (see :class:`Batch` docstring).
+
+    When ``mapper`` is given (typically ``mesh.axis_mapper("dp", tdim=0)``)
+    all three tensors are sharded across the dp axis.
+    """
+    batch_size = len(examples)
+
+    input_ids_np = np.zeros((batch_size, 1, 1, seq_len), dtype=np.uint32)
+    labels_np = np.zeros((batch_size, seq_len), dtype=np.uint32)
+    loss_mask_np = np.ones((batch_size, 1, seq_len, 1), dtype=np.float32)
+
+    for i, ex in enumerate(examples):
+        ids = ex["input_ids"][:seq_len]
+        lbs = ex["labels"][:seq_len]
+        n = len(ids)
+        input_ids_np[i, 0, 0, :n] = ids
+        labels_np[i, :n] = lbs
+        if n < seq_len:
+            loss_mask_np[i, 0, n:, 0] = 0.0
+
+    total = loss_mask_np.sum()
+    if total > 0:
+        loss_mask_np *= (batch_size * seq_len) / total
+
+    return Batch(
+        input_ids=ttml.autograd.Tensor.from_numpy(
+            input_ids_np,
+            ttnn.Layout.ROW_MAJOR,
+            ttnn.DataType.UINT32,
+            mapper,
+        ),
+        labels=ttml.autograd.Tensor.from_numpy(
+            labels_np,
+            ttnn.Layout.ROW_MAJOR,
+            ttnn.DataType.UINT32,
+            mapper,
+        ),
+        loss_mask=ttml.autograd.Tensor.from_numpy(
+            loss_mask_np.astype(ml_dtypes.bfloat16),
+            ttnn.Layout.TILE,
+            ttnn.DataType.BFLOAT16,
+            mapper,
         ),
     )

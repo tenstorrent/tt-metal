@@ -5,6 +5,7 @@
 """Configuration classes for transformer training."""
 import os
 import yaml
+from dataclasses import dataclass
 from typing import Union
 from ttml.common.utils import get_tt_metal_runtime_root
 
@@ -116,27 +117,34 @@ class TransformerConfig:
             self.original_context_length = self.rope.get("original_context_length", None)
 
 
+@dataclass
 class SchedulerConfig:
     """Configuration for learning rate scheduler."""
 
-    def __init__(self, yaml_config: dict):
-        """Initialize scheduler configuration from YAML config.
+    max_lr: float = 0.001
+    min_lr: float = 0.0
+    warmup_steps: int = 100
+    hold_steps: int = 0
+    total_steps: int = 1000
+    # optional momentum warmup (beta1 ramp)
+    beta1_start: float = 0.85
+    beta1_end: float = 0.95
+    beta1_warmup_steps: int = 0
 
-        Args:
-            yaml_config: Dictionary containing configuration
-        """
+    @classmethod
+    def from_yaml(cls, yaml_config: dict) -> "SchedulerConfig":
         sc = yaml_config.get("scheduler_config", {})
         tc = yaml_config.get("training_config", {})
-        self.max_lr = float(sc.get("max_lr", 0.001))
-        self.min_lr = float(sc.get("min_lr", 0.0))
-        self.warmup_steps = int(sc.get("warmup_steps", 100))
-        self.hold_steps = int(sc.get("hold_steps", 0))
-        self.total_steps = int(tc.get("total_steps", 1000))
-
-        # optional momentum warmup (beta1 ramp)
-        self.beta1_start = float(sc.get("beta1_start", 0.85))
-        self.beta1_end = float(sc.get("beta1_end", 0.95))
-        self.beta1_warmup_steps = int(sc.get("beta1_warmup_steps", 0))
+        return cls(
+            max_lr=float(sc.get("max_lr", 0.001)),
+            min_lr=float(sc.get("min_lr", 0.0)),
+            warmup_steps=int(sc.get("warmup_steps", 100)),
+            hold_steps=int(sc.get("hold_steps", 0)),
+            total_steps=int(tc.get("total_steps", 1000)),
+            beta1_start=float(sc.get("beta1_start", 0.85)),
+            beta1_end=float(sc.get("beta1_end", 0.95)),
+            beta1_warmup_steps=int(sc.get("beta1_warmup_steps", 0)),
+        )
 
 
 class PipelineParallelHostConfig:
