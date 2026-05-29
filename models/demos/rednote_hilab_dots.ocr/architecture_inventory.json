@@ -1,0 +1,149 @@
+{
+  "model_id": "rednote-hilab/dots.ocr",
+  "model_slug": "rednote_hilab_dots.ocr",
+  "device": "p150",
+  "arch_name": "blackhole",
+  "hf_arch": "DotsOCRForCausalLM",
+  "components": [
+    {
+      "name": "vision_patch_embed",
+      "kind": "conv",
+      "depends_on": [],
+      "reference_impl": "models/demos/qwen25_vl/tt/model.py",
+      "host_resident": {
+        "allowed": true,
+        "justification": "DotsPatchEmbed is a single Conv2d(3,1536,k=14,s=14) over patchified pixels followed by RMSNorm; Conv2d patchify is a one-shot host-side im2col+matmul in the Qwen-VL TTNN demos (qwen25_vl runs patch embed on host then moves tokens to device). Cheap relative to the 42-layer trunk and runs once per image.",
+        "reference_link": "models/demos/qwen25_vl/tt/model.py"
+      }
+    },
+    {
+      "name": "vision_rmsnorm",
+      "kind": "norm",
+      "depends_on": [],
+      "reference_impl": "models/demos/qwen25_vl/tt/vision_rmsnorm.py",
+      "host_resident": {"allowed": false, "justification": null, "reference_link": null}
+    },
+    {
+      "name": "vision_attention",
+      "kind": "attention",
+      "depends_on": ["vision_rmsnorm"],
+      "reference_impl": "models/demos/qwen25_vl/tt/vision_attention.py",
+      "host_resident": {"allowed": false, "justification": null, "reference_link": null}
+    },
+    {
+      "name": "vision_mlp",
+      "kind": "mlp",
+      "depends_on": [],
+      "reference_impl": "models/demos/qwen25_vl/tt/vision_mlp.py",
+      "host_resident": {"allowed": false, "justification": null, "reference_link": null}
+    },
+    {
+      "name": "vision_block",
+      "kind": "decoder_layer",
+      "depends_on": ["vision_rmsnorm", "vision_attention", "vision_mlp"],
+      "reference_impl": "models/demos/qwen25_vl/tt/vision_block.py",
+      "host_resident": {"allowed": false, "justification": null, "reference_link": null}
+    },
+    {
+      "name": "vision_patch_merger",
+      "kind": "mlp",
+      "depends_on": ["vision_block"],
+      "reference_impl": "models/demos/qwen25_vl/tt/patch_merger.py",
+      "host_resident": {"allowed": false, "justification": null, "reference_link": null}
+    },
+    {
+      "name": "vision_tower",
+      "kind": "other",
+      "depends_on": ["vision_patch_embed", "vision_block", "vision_rmsnorm", "vision_patch_merger"],
+      "reference_impl": "models/demos/qwen25_vl/tt/model.py",
+      "host_resident": {"allowed": false, "justification": null, "reference_link": null}
+    },
+    {
+      "name": "embedding",
+      "kind": "embedding",
+      "depends_on": [],
+      "reference_impl": "models/tt_transformers/tt/embedding.py",
+      "host_resident": {"allowed": false, "justification": null, "reference_link": null}
+    },
+    {
+      "name": "rmsnorm",
+      "kind": "norm",
+      "depends_on": [],
+      "reference_impl": "models/common/rmsnorm.py",
+      "host_resident": {"allowed": false, "justification": null, "reference_link": null}
+    },
+    {
+      "name": "rope",
+      "kind": "other",
+      "depends_on": [],
+      "reference_impl": "models/tt_transformers/tt/rope.py",
+      "host_resident": {"allowed": false, "justification": null, "reference_link": null}
+    },
+    {
+      "name": "attention",
+      "kind": "attention",
+      "depends_on": ["rmsnorm", "rope"],
+      "reference_impl": "models/tt_transformers/tt/attention.py",
+      "host_resident": {"allowed": false, "justification": null, "reference_link": null}
+    },
+    {
+      "name": "mlp",
+      "kind": "mlp",
+      "depends_on": ["rmsnorm"],
+      "reference_impl": "models/tt_transformers/tt/mlp.py",
+      "host_resident": {"allowed": false, "justification": null, "reference_link": null}
+    },
+    {
+      "name": "decoder_layer",
+      "kind": "decoder_layer",
+      "depends_on": ["attention", "mlp", "rmsnorm", "rope"],
+      "reference_impl": "models/tt_transformers/tt/decoder.py",
+      "host_resident": {"allowed": false, "justification": null, "reference_link": null}
+    },
+    {
+      "name": "lm_head",
+      "kind": "linear",
+      "depends_on": ["rmsnorm"],
+      "reference_impl": "models/tt_transformers/tt/lm_head.py",
+      "host_resident": {"allowed": false, "justification": null, "reference_link": null}
+    },
+    {
+      "name": "language_model",
+      "kind": "other",
+      "depends_on": ["embedding", "decoder_layer", "rmsnorm", "lm_head", "rope"],
+      "reference_impl": "models/tt_transformers/tt/model.py",
+      "host_resident": {"allowed": false, "justification": null, "reference_link": null}
+    }
+  ],
+  "use_cases": [
+    {
+      "name": "ocr",
+      "description": "Document image to structured text (OCR / layout parsing): vision tower encodes image patches, embeddings are scattered into the text token stream, and the Qwen2 decoder autoregressively generates the parsed text output.",
+      "input_modality": "image",
+      "output_modality": "text",
+      "components_used": [
+        "vision_patch_embed",
+        "vision_rmsnorm",
+        "vision_attention",
+        "vision_mlp",
+        "vision_block",
+        "vision_patch_merger",
+        "vision_tower",
+        "embedding",
+        "rmsnorm",
+        "rope",
+        "attention",
+        "mlp",
+        "decoder_layer",
+        "lm_head",
+        "language_model"
+      ],
+      "needs_ar": true,
+      "needs_audio_out": false,
+      "hf_class": "DotsOCRForCausalLM",
+      "validation_metric": "accuracy",
+      "validation_threshold": "HF - 1.0",
+      "hybrid_notes": "Image preprocessing (resize, patchify into pixel_values + image_grid_thw) and tokenizer/chat-template prompt construction stay on the HF host via DotsVLProcessor (a Qwen2_5_VLProcessor subclass). The masked_scatter of vision embeddings into the input embedding stream is a host/glue op. Text-match accuracy is computed against HF greedy decode on a representative document image."
+    }
+  ]
+}
