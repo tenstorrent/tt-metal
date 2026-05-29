@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-29T00:11:46Z",
-  "updated_at": "2026-05-29T01:04:12Z",
+  "updated_at": "2026-05-29T01:10:25Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -247,8 +247,15 @@
         "pcc": 1.0
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/vision_patch_merger.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_tt_vision_patch_merger.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/vision_patch_merger.traced_ops.json"
+        ],
+        "notes": "PatchMerger: ttnn.layer_norm (weight+bias, eps=1e-6) -> ttnn.reshape group 4 patches (1536->6144) -> ttnn.linear+bias -> ttnn.gelu -> ttnn.linear+bias. LN gamma/beta laid out [1,1,dim//32,32] row-major. HiFi4+fp32_dest_acc bf16 DRAM TILE. PCC=0.99999 vs golden. Guard ok.",
+        "pcc": 0.9999899884744794
       },
       "debug": {
         "status": "n/a",
@@ -727,6 +734,12 @@
       "tick": 10,
       "ts": "2026-05-29T01:04:12Z",
       "action": "device[vision_block]",
+      "result": "ok"
+    },
+    {
+      "tick": 11,
+      "ts": "2026-05-29T01:10:25Z",
+      "action": "device[vision_patch_merger]",
       "result": "ok"
     }
   ],

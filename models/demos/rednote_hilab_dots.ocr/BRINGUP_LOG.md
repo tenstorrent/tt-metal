@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** p150 (blackhole)
 **Started:** 2026-05-29T00:11:46Z
-**Updated:** 2026-05-29T01:04:12Z
+**Updated:** 2026-05-29T01:10:25Z
 
 ## Block Status
 
@@ -36,7 +36,7 @@
 | vision_block | optimization | pending | — | 0 |  |
 | vision_block | real_weights | pending | — | 0 |  |
 | vision_patch_merger | reference | done | 1.000000 | 0 | PatchMerger: LayerNorm(eps=1e-6,bias) -> view(merge**2) -> Linear -> GELU -> Linear (all biased). PCC=1.0 vs HF. |
-| vision_patch_merger | ttnn | pending | — | 0 |  |
+| vision_patch_merger | ttnn | done | 0.999990 | 0 | PatchMerger: ttnn.layer_norm (weight+bias, eps=1e-6) -> ttnn.reshape group 4 patches (1536->6144) -> ttnn.linear+bias -> ttnn.gelu -> ttnn.linear+bias. LN gamma/beta laid out [1,1,dim//32,32] row-major. HiFi4+fp32_dest_acc bf16 DRAM TILE. PCC=0.99999 vs golden. Guard ok. |
 | vision_patch_merger | debug | n/a | — | 0 |  |
 | vision_patch_merger | optimization | pending | — | 0 |  |
 | vision_patch_merger | real_weights | pending | — | 0 |  |
@@ -94,7 +94,6 @@
 
 ## Recent Ticks
 
-- tick 3 (2026-05-29T00:30:23Z): reference[vision_block,vision_patch_merger,vision_tower,embedding] — ok
 - tick 4 (2026-05-29T00:34:04Z): reference[rmsnorm,rope,attention,mlp] — ok
 - tick 5 (2026-05-29T00:38:13Z): reference[decoder_layer,lm_head,language_model] — ok
 - tick 6 (2026-05-29T00:45:55Z): device[vision_rmsnorm] — ok
@@ -104,6 +103,7 @@
 - tick 9 (2026-05-29T00:58:10Z): device[vision_mlp] — ok
 - tick 10 (2026-05-29T01:03:33Z): device[vision_block] — ok
 - tick 10 (2026-05-29T01:04:12Z): device[vision_block] — ok
+- tick 11 (2026-05-29T01:10:25Z): device[vision_patch_merger] — ok
 
 ## Host-Resident Exceptions
 
