@@ -16,7 +16,7 @@ namespace ttnn::experimental::prim {
 // experimental/ccl strided_all_gather_minimal_matmul_async and
 // minimal_matmul_strided_reduce_scatter_async ops (framework-blocked
 // CCL ops per #43281).  Migrating requires refactoring those external
-// consumers, which is out of scope for the current Contract-1 batch.
+// consumers, which is out of scope here.
 struct MinimalMatmulProgramFactory {
     struct shared_variables_t {
         uint32_t num_cores{};
