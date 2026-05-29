@@ -138,9 +138,11 @@ class TtVisionAttention(LightweightModule):
 
         # RoPE cos/sin tables: [seq, head_dim] -> broadcast over heads as
         # [1, seq, 1, head_dim]. Stored bf16 TILE for elementwise on device.
+        # cos/sin broadcast over the [1, nh, seq, hd] q/k layout that
+        # nlp_create_qkv_heads produces (heads at dim 1) -> [1, 1, seq, hd].
         cos, sin = _build_rope_tables(rotary_pos_emb, head_dim)
-        cos = cos.reshape(1, seq_length, 1, head_dim)
-        sin = sin.reshape(1, seq_length, 1, head_dim)
+        cos = cos.reshape(1, 1, seq_length, head_dim)
+        sin = sin.reshape(1, 1, seq_length, head_dim)
         self.cos = ttnn.as_tensor(
             cos,
             device=device,
@@ -243,26 +245,25 @@ class TtVisionAttention(LightweightModule):
             memory_config=reshape_mem,
         )
 
-        # Split into q, k, v each [seq, nh*hd]. The reference reshapes
-        # qkv -> [seq, 3, nh, hd]; contiguous QKV ordering means the first
-        # nh*hd columns are q, next k, next v.
-        qkv = ttnn.reshape(qkv, (seq, 3, nh, hd), memory_config=reshape_mem)
-        q = qkv[:, 0, :, :]  # [seq, nh, hd]
-        k = qkv[:, 1, :, :]
-        v = qkv[:, 2, :, :]
-
-        # -> [1, seq, nh, hd] for rope (cos/sin broadcast over heads).
-        q = ttnn.reshape(q, (1, seq, nh, hd))
-        k = ttnn.reshape(k, (1, seq, nh, hd))
+        # Fused QKV-head split: nlp_create_qkv_heads does reshape + slice +
+        # transpose in ONE op, returning q/k/v each as [1, nh, seq, hd] -- the
+        # layout flash SDPA wants. This replaces a manual
+        # reshape->slice->reshape->permute chain that round-tripped ~38% of
+        # vision device-time through DRAM at seq 11224 (tracy: reshape 23.7% +
+        # slice 6.9% + transpose 7.2%). Mirrors qwen25_vl vision. head_dim 128 is
+        # tile-aligned so the sub-tile-head workaround does not apply. The fused
+        # QKV weight lays out q|k|v as contiguous nh*hd blocks (== the reference's
+        # reshape(seq,3,nh,hd) ordering), which is what the op expects.
+        qkv = ttnn.reshape(qkv, (1, 1, seq, 3 * nh * hd))
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            qkv,
+            num_heads=nh,
+            num_kv_heads=nh,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # each [1, nh, seq, hd]
         q = self._apply_rope(q)
         k = self._apply_rope(k)
-
-        # -> [1, nh, seq, hd] (transpose seq<->heads) for batched attention.
-        # Flash SDPA requires its operands in DRAM.
-        q = ttnn.permute(q, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        k = ttnn.permute(k, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        v = ttnn.reshape(v, (1, seq, nh, hd))
-        v = ttnn.permute(v, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         # Memory-efficient flash attention with block-diagonal windowing over
         # cu_seqlens. Same softmax(q k^T * scale + block_diag_mask) @ v math as
@@ -283,9 +284,9 @@ class TtVisionAttention(LightweightModule):
             program_config=self.sdpa_program_config,
         )  # [1, nh, seq, hd]
 
-        # -> [seq, nh*hd]. Head-merge reshape; pin to L1 so the output proj
-        # reads from L1 instead of a DRAM-interleaved coalesce.
-        attn = ttnn.permute(attn, (0, 2, 1, 3))  # [1, seq, nh, hd]
+        # Fused head-merge: nlp_concat_heads ([1, nh, seq, hd] -> [1, 1, seq,
+        # nh*hd]) in one op instead of permute + reshape.
+        attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         attn = ttnn.reshape(attn, (seq, nh * hd), memory_config=reshape_mem)
 
         # Output projection: [seq, dim] @ [dim, dim] -> [seq, dim].
