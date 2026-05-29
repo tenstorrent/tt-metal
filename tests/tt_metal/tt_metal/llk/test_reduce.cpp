@@ -345,19 +345,19 @@ void run_single_core_reduce_program(
     std::string reader_kernel_path;
     experimental::metal2_host_api::KernelSpec::CompileTimeArgs reader_cta_bindings;
     experimental::metal2_host_api::KernelSpec::CompilerOptions::Defines reader_defines;
-    std::vector<std::string> reader_named_runtime_args;
+    std::vector<std::string> reader_runtime_arg_names;
     if (test_config.reduce_dim == ReduceDim::H) {
         reader_kernel_path = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_transpose_wh_interleaved.cpp";
         bfloat16 bfloat_scaler_value = bfloat16(scaler);
         uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
         reader_cta_bindings = {{"scaler", packed_scaler_value}};
         reader_defines.emplace_back("REDUCE_SCALER", "1");
-        reader_named_runtime_args = {"N", "Ht", "Wt", "HtWt"};
+        reader_runtime_arg_names = {"N", "Ht", "Wt", "HtWt"};
     } else {
         reader_kernel_path = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_8bank_2_0.cpp";
         reader_defines.emplace_back("GENERATE_BCAST_SCALER", "1");
         reader_defines.emplace_back("BLOCK_SIZE", "1");
-        reader_named_runtime_args = {"num_tiles", "scaler"};
+        reader_runtime_arg_names = {"num_tiles", "scaler"};
     }
 
     experimental::metal2_host_api::KernelSpec reader_spec{
@@ -380,7 +380,7 @@ void run_single_core_reduce_program(
              }},
         .tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}},
         .compile_time_args = reader_cta_bindings,
-        .runtime_arg_schema = {.runtime_arg_names = reader_named_runtime_args},
+        .runtime_arg_schema = {.runtime_arg_names = reader_runtime_arg_names},
         .config =
             experimental::metal2_host_api::KernelDMConfig{
                 .gen1_config =
