@@ -85,6 +85,7 @@ def _load_weight(
     mesh_mapper=None,
     transform_fn=None,
     cache_file_name=None,
+    memory_config=None,
 ) -> ttnn.Tensor:
     """Load a weight from state_dict to TTNN device with optional transpose.
     Automatically dequantizes FP8 weights using the companion weight_scale_inv key."""
@@ -103,7 +104,7 @@ def _load_weight(
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=mapper,
         cache_file_name=cache_file_name,
     )
@@ -395,6 +396,42 @@ class TtMistral4Attention(LightweightModule):
             mesh_device=mesh_device,
             cache_file_name=_cf(p + "o_proj.weight"),
         )  # [N_HEADS * V_HEAD_DIM, HIDDEN_SIZE]
+
+        # DS variant of o_proj for the decode path (M=1 tile).  Same data, DRAM
+        # bank-sharded across all banks so each compute core reads one bank at
+        # full BW.  Adds ~8 MB DRAM per layer (BFP4).  Sweep on this shape:
+        #   K=N=4096, BFP8 weights → DS gx=4 in0_block_w=8 was the winner.
+        _dram = mesh_device.dram_grid_size()
+        self._num_banks = _dram.x
+        _K = N_HEADS * V_HEAD_DIM  # 4096
+        _N = HIDDEN_SIZE  # 4096
+        _shard_w = math.ceil(math.ceil(_N / self._num_banks) / ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+        _o_proj_decode_memcfg = ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            buffer_type=ttnn.BufferType.DRAM,
+            shard_spec=ttnn.ShardSpec(
+                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(_dram.x - 1, 0))}),
+                [_K, _shard_w],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+        self.o_proj_decode = _load_weight(
+            state_dict,
+            p + "o_proj.weight",
+            transpose=True,
+            dtype=ttnn.bfloat4_b,
+            mesh_device=mesh_device,
+            memory_config=_o_proj_decode_memcfg,
+            cache_file_name=_cf(p + "o_proj.weight.ds"),
+        )
+        self._o_proj_decode_gx = 4  # DS compute-grid width (sweep winner)
+        _NT = _N // ttnn.TILE_SIZE  # 128
+        self.o_proj_decode_pc = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+            in0_block_w=8,
+            per_core_M=1,
+            per_core_N=_NT // self._o_proj_decode_gx,  # 128/4 = 32
+            fused_activation=None,
+        )
 
     # ------------------------------------------------------------------
     def _build_decode_program_configs(self, grid):
@@ -855,16 +892,31 @@ class TtMistral4Attention(LightweightModule):
         ttnn.deallocate(attn_out)
 
         # ── Output projection ──────────────────────────────────────────
+        # M=1 tile → DRAM-bank-sharded weight + DS program config.
+        # Width-shard in0 across the DS compute row (gx=4), output L1
+        # width-sharded, then convert back to L1 interleaved so downstream
+        # ops see the same layout as before.
         attn_flat = ttnn.reshape(attn_out_t, [1, 1, 1, self.n_heads * self.v_head_dim])
         ttnn.deallocate(attn_out_t)
-        attn_flat = ttnn.to_memory_config(attn_flat, _mem)
+        _in0_memcfg = ttnn.create_sharded_memory_config(
+            (1, 1, ttnn.TILE_SIZE, self.n_heads * self.v_head_dim),
+            core_grid=ttnn.CoreGrid(y=1, x=self._o_proj_decode_gx),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        attn_flat = ttnn.to_memory_config(attn_flat, _in0_memcfg)
         out = ttnn.matmul(
             attn_flat,
-            self.o_proj,
+            self.o_proj_decode,
+            program_config=self.o_proj_decode_pc,
             compute_kernel_config=self.lofi_compute_kernel_config,
             dtype=ttnn.bfloat16,
-            memory_config=_mem,
-            program_config=pcs["o"],
+            memory_config=ttnn.MemoryConfig(
+                memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                buffer_type=ttnn.BufferType.L1,
+            ),
         )
         ttnn.deallocate(attn_flat)
+        # Downstream (residual add) expects interleaved L1 — match the prior contract.
+        out = ttnn.to_memory_config(out, _mem)
         return out

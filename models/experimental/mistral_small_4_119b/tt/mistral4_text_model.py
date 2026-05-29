@@ -15,11 +15,10 @@ Usage::
     cos_full, sin_full = rotary(...)              # once, on host
     model.cache_rope_tables(cos_full, sin_full)   # one-shot upload
 
-    logits = model.prefill(input_ids)             # positions [0, seq_len)
-    next_tok = logits[0, -1].argmax()
+    next_tok = model.prefill_next_token(input_ids)        # on-device argmax
     for pos in range(prefill_len, prefill_len + n_tokens):
-        logits = model.decode(next_tok.unsqueeze(0).unsqueeze(0), pos)
-        next_tok = logits[0, 0].argmax()
+        tok = torch.tensor([[next_tok]], dtype=torch.long)
+        next_tok = model.decode_next_token(tok, pos)      # on-device argmax
 """
 
 from __future__ import annotations
@@ -28,6 +27,7 @@ import os
 import pathlib
 
 import torch
+import math
 
 import ttnn
 from models.experimental.mistral_small_4_119b.constants import (
@@ -128,29 +128,75 @@ class TtMistral4TextModel:
         # bfloat4_b: ~32 MB per device after sharding across 4 devices (vs 64 MB at bfloat8_b).
         # Paired with LoFi math (self.lm_head_compute_kernel_config) for ~2x speedup on the
         # LM head matmul. EXPECTED to regress generation quality — gate behind a PCC test.
+        TILE = 32
+        N_PER_DEVICE = 131072 // mesh_device.get_num_devices()  # 16384 for P150x8
+        dram = mesh_device.dram_grid_size()  # P150 → x=8, y=1
+        self.num_banks = dram.x
+        shard_width = math.ceil(math.ceil(N_PER_DEVICE / self.num_banks) / TILE) * TILE
+        lm_head_in1_memcfg = ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            buffer_type=ttnn.BufferType.DRAM,
+            shard_spec=ttnn.ShardSpec(
+                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram.x - 1, 0))}),
+                [4096, shard_width],  # [K, N_per_bank]
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
         self.lm_head_weight = ttnn.as_tensor(
+            lm_head_w,
+            dtype=ttnn.bfloat4_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=lm_head_in1_memcfg,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
+            cache_file_name=_cf("language_model.lm_head.weight"),  # bump or remove the cache, layout changed!
+        )
+        _num_devices = mesh_device.get_num_devices()
+        # N tiles per device: 131072 / num_devices / 32; spread across 64 cores.
+        # Single P150: 131072/1/32/64 = 64. P150×8: 131072/8/32/64 = 8.
+        # _lm_per_core_N = max(1, (131072 // _num_devices // 32) // 64)
+        # self.lm_head_program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        #     compute_with_storage_grid_size=(8, 8),  # 64 cores on BH
+        #     in0_block_w=1,  # K tiles per inner loop
+        #     out_subblock_h=1,
+        #     out_subblock_w=1,
+        #     per_core_M=1,  # M=32 → 1 tile row
+        #     per_core_N=_lm_per_core_N,  # tiles per core; dynamic per device count
+        #     fuse_batch=True,
+        #     mcast_in0=True,
+        # )
+        NT_per_device = N_PER_DEVICE // TILE  # 512
+        self.lm_head_program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+            in0_block_w=8,
+            per_core_M=1,
+            per_core_N=NT_per_device // self.num_banks,  # 512/8 = 64
+            fused_activation=None,
+        )
+
+        # Second weight + program config for prefill paths (M = seq_len > 1 tile).
+        # DS requires M == 1 tile (matmul_device_operation.cpp:757), so prefill cannot
+        # share the DS tensor — it needs DRAM-interleaved weights + the 1D mcast path.
+        self.lm_head_weight_prefill = ttnn.as_tensor(
             lm_head_w,
             dtype=ttnn.bfloat4_b,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
-            cache_file_name=_cf("language_model.lm_head.weight"),
+            cache_file_name=_cf("language_model.lm_head.weight.prefill_interleaved"),
         )
-        _num_devices = mesh_device.get_num_devices()
-        # N tiles per device: 131072 / num_devices / 32; spread across 64 cores.
-        # Single P150: 131072/1/32/64 = 64. P150×8: 131072/8/32/64 = 8.
-        _lm_per_core_N = max(1, (131072 // _num_devices // 32) // 64)
-        self.lm_head_program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(8, 8),  # 64 cores on BH
-            in0_block_w=1,  # K tiles per inner loop
+        _lm_per_core_N = max(1, NT_per_device // 64)  # P150x8 → 8
+        self.lm_head_program_config_prefill = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=1,
             out_subblock_h=1,
             out_subblock_w=1,
-            per_core_M=1,  # M=32 → 1 tile row
-            per_core_N=_lm_per_core_N,  # tiles per core; dynamic per device count
+            per_core_M=1,
+            per_core_N=_lm_per_core_N,
             fuse_batch=True,
             mcast_in0=True,
         )
+
         self.lm_head_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
@@ -319,12 +365,15 @@ class TtMistral4TextModel:
     def _to_logits(self, x: ttnn.Tensor) -> torch.Tensor:
         """Final norm → lm_head → gather to host."""
         x = _rms_norm(x, self.final_norm_w, self.compute_kernel_config, ttnn.L1_MEMORY_CONFIG)
+        # Prefill path: M = seq_len (> 1 tile), so use the interleaved weight + 1D mcast
+        # program config.  DS would assert (kernel requires M == 1 tile).
         logits_tt = ttnn.linear(
             x,
-            self.lm_head_weight,
+            self.lm_head_weight_prefill,
+            program_config=self.lm_head_program_config_prefill,
             compute_kernel_config=self.lm_head_compute_kernel_config,
-            dtype=ttnn.bfloat8_b,  # Precision reduction: BF16 → BF8 (reduces bandwidth)
-            memory_config=ttnn.L1_MEMORY_CONFIG,  # L1: avoid DRAM bottleneck + no interleave overhead
+            dtype=ttnn.bfloat8_b,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.deallocate(x)
         # lm_head_weight is column-sharded across devices (dim=1 of [hidden, vocab]).
@@ -350,36 +399,46 @@ class TtMistral4TextModel:
         trace via ``_readback_argmax()``.
         """
         x_normed = _rms_norm(x_last, self.final_norm_w, self.compute_kernel_config, ttnn.L1_MEMORY_CONFIG)
+
+        in0_memcfg = ttnn.create_sharded_memory_config(
+            (1, 1, 32, 4096),  # M=32 (padded), K=4096
+            core_grid=ttnn.CoreGrid(y=1, x=self.num_banks),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        x_normed = ttnn.to_memory_config(x_normed, in0_memcfg)
         partial = ttnn.linear(
             x_normed,
             self.lm_head_weight,
             program_config=self.lm_head_program_config,
             compute_kernel_config=self.lm_head_compute_kernel_config,
-            dtype=ttnn.bfloat8_b,  # was bfloat16
-            # dtype=ttnn.bfloat16,  # was bfloat16
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )  # per device: [1, 1, 1, vocab/num_devices]
+            dtype=ttnn.bfloat8_b,
+            memory_config=ttnn.MemoryConfig(  # out: L1 width-sharded (matches DS)
+                memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                buffer_type=ttnn.BufferType.L1,
+            ),
+        )
+
         ttnn.deallocate(x_normed)
 
         num_devices = self.mesh_device.get_num_devices()
         if num_devices > 1:
-            gather_mem = (
-                ttnn.L1_MEMORY_CONFIG
-                if os.environ.get("MISTRAL4_DECODE_L1_COLLECTIVES", "0") == "1"
-                else ttnn.DRAM_MEMORY_CONFIG
-            )
             full = ttnn.all_gather(
                 partial,
                 dim=3,
-                num_links=1,
+                num_links=2,  # P150x8 has 2 ethernet channels per device pair
                 topology=ttnn.Topology.Ring,
-                memory_config=gather_mem,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
             )  # per device: [1, 1, 1, vocab]
             ttnn.deallocate(partial)
         else:
             full = partial
-        full = ttnn.typecast(full, dtype=ttnn.bfloat16)
-        idx_tt = ttnn.argmax(full, dim=-1)  # per device: [1, 1, 1] uint32 ROW_MAJOR
+        full = ttnn.typecast(full, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # Multicore argmax requires ROW_MAJOR input (argmax_device_operation.cpp:153).
+        full = ttnn.to_layout(full, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+        idx_tt = ttnn.argmax(
+            full, dim=-1, use_multicore=True, memory_config=ttnn.L1_MEMORY_CONFIG
+        )  # per device: [1, 1, 1] uint32 ROW_MAJOR
         ttnn.deallocate(full)
         # Copy argmax result into pre-allocated output buffer so trace replay can
         # overwrite the same slot on every step without re-allocating.
@@ -405,6 +464,10 @@ class TtMistral4TextModel:
     def prefill(self, input_ids: torch.Tensor) -> torch.Tensor:
         """
         Run prefill and populate all KV caches for positions ``[0, seq_len)``.
+
+        Returns host-side logits; used by PCC tests to compare against a torch
+        reference. Inference callers should use ``prefill_next_token`` (on-device
+        argmax) instead.
 
         Args:
             input_ids: [1, seq_len] long tensor on CPU
@@ -463,12 +526,14 @@ class TtMistral4TextModel:
         # RoPE buffer; deallocation would invalidate the buffer for trace replay.
 
         x = _rms_norm(x, self.final_norm_w, self.compute_kernel_config)
+        # Prefill path: M = seq_len (> 1 tile) — interleaved weight + 1D mcast.
         logits_tt = ttnn.linear(
             x,
-            self.lm_head_weight,
+            self.lm_head_weight_prefill,
+            program_config=self.lm_head_program_config_prefill,
             compute_kernel_config=self.lm_head_compute_kernel_config,
-            dtype=ttnn.bfloat8_b,  # Precision reduction: BF16 → BF8 (reduces bandwidth)
-            memory_config=ttnn.L1_MEMORY_CONFIG,  # L1: avoid DRAM bottleneck + no interleave overhead
+            dtype=ttnn.bfloat8_b,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.deallocate(x)
         return logits_tt
@@ -500,13 +565,25 @@ class TtMistral4TextModel:
         ttnn.deallocate(x)
 
         x_last = _rms_norm(x_last, self.final_norm_w, self.compute_kernel_config)
-        use_bf8_lm_head = os.environ.get("MISTRAL4_PREFILL_BF8_LM_HEAD", "0") == "1"
+        # Last-token-only path: M == 1 tile after the slice, so the DS weight + DS
+        # program config are legal here and reuse the decode-tuned pattern.
+        in0_memcfg = ttnn.create_sharded_memory_config(
+            (1, 1, 32, HIDDEN_SIZE),
+            core_grid=ttnn.CoreGrid(y=1, x=self.num_banks),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        x_last = ttnn.to_memory_config(x_last, in0_memcfg)
         logits_tt = ttnn.linear(
             x_last,
             self.lm_head_weight,
+            program_config=self.lm_head_program_config,
             compute_kernel_config=self.lm_head_compute_kernel_config,
-            dtype=ttnn.bfloat8_b if use_bf8_lm_head else ttnn.bfloat16,
-            memory_config=ttnn.L1_MEMORY_CONFIG if use_bf8_lm_head else ttnn.DRAM_MEMORY_CONFIG,
+            dtype=ttnn.bfloat8_b,
+            memory_config=ttnn.MemoryConfig(  # DS output: L1 width-sharded
+                memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                buffer_type=ttnn.BufferType.L1,
+            ),
         )
         ttnn.deallocate(x_last)
         return logits_tt
@@ -556,38 +633,6 @@ class TtMistral4TextModel:
         )
         ttnn.copy_host_to_device_tensor(cos_host, self._cos_decode)
         ttnn.copy_host_to_device_tensor(sin_host, self._sin_decode)
-
-    def decode(self, input_id: torch.Tensor, current_pos: int) -> torch.Tensor:
-        """
-        Decode one token at position ``current_pos``.
-
-        Args:
-            input_id:    [1, 1] long tensor on CPU (single next token)
-            current_pos: cache slot to write the new K/V into. Typically
-                         prefill_len + decode_step.
-        Returns:
-            logits: [1, 1, vocab_size] bfloat16 CPU tensor
-        """
-        self._decode_upload_step_state(input_id, current_pos)
-
-        cos_tt, sin_tt = self._rope_slice(current_pos, current_pos + 1)
-
-        x = ttnn.embedding(
-            self._decode_input_id_device,
-            self.embed_weight,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        x = ttnn.reshape(x, [1, 1, 1, HIDDEN_SIZE])
-        x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
-
-        for layer, kv_cache in zip(self.decoder_layers, self.kv_caches):
-            x = layer.forward_decode(x, cos_tt, sin_tt, kv_cache, current_pos, self._decode_cur_pos_device)
-
-        ttnn.deallocate(cos_tt)
-        ttnn.deallocate(sin_tt)
-
-        return self._to_logits(x)
 
     # ── Greedy generation entry points (on-device argmax) ──────────────────
 

@@ -211,16 +211,11 @@ def _all_reduce_sum(
     if num_devices == 1:
         return partial
 
-    output_mem = (
-        ttnn.L1_MEMORY_CONFIG
-        if os.environ.get("MISTRAL4_DECODE_L1_COLLECTIVES", "0") == "1"
-        else ttnn.DRAM_MEMORY_CONFIG
-    )
     return ttnn.all_reduce(
         partial,
-        num_links=1,
+        num_links=2,  # P150x8 has 2 ethernet channels per device pair
         topology=ttnn.Topology.Ring,
-        memory_config=output_mem,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
 
