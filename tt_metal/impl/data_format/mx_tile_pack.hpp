@@ -13,8 +13,9 @@
 #include <tt_stl/span.hpp>
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/mx_common.hpp>
 #include <tt-metalium/tile.hpp>
+
+#include "mx_common.hpp"
 
 namespace tt::tt_metal::mx {
 

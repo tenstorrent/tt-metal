@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/mx_common.hpp>
+#include "mx_common.hpp"
 
 #include <tt_stl/assert.hpp>
 
