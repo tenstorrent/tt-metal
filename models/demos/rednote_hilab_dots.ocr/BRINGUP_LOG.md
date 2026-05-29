@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** p150 (blackhole)
 **Started:** 2026-05-29T00:11:46Z
-**Updated:** 2026-05-29T02:14:00Z
+**Updated:** 2026-05-29T02:20:39Z
 
 ## Block Status
 
@@ -33,7 +33,7 @@
 | vision_block | reference | done | 1.000000 | 0 | DotsVisionBlock: pre-norm RMSNorm -> fused-QKV 2D-RoPE bidirectional attn -> residual -> RMSNorm -> SwiGLU -> residual. PCC=1.0 vs HF eager. |
 | vision_block | ttnn | done | 0.999996 | 0 | First composite: pre-norm residual h=h+attn(norm1(h)); h=h+mlp(norm2(h)). Reuses TtVisionRMSNorm/Attention/MLP leaves by file-path import. HiFi4+fp32_dest_acc, bf16. Guard ok. |
 | vision_block | debug | n/a | — | 0 |  |
-| vision_block | optimization | pending | — | 0 |  |
+| vision_block | optimization | done | 0.999996 | 0 | Profiled TtVisionBlock under metal trace (tracy --traced). Composite total device kernel 1055.5->1050.2us. Top hotspot MatmulDeviceOperation 35.8% + ReshapeViewDeviceOperation 30.6% both inside already-optimized leaves (vision_attention -23.8%, vision_mlp -13.8%) -- inherited wins. Applied one composite-boundary lever: pinned both residual ttnn.add ops to L1 (only block-internal ops landing DRAM-interleaved). Residual adds 12.63->8.76us (-30.6%) DRAM->L1. PCC 0.9999956 unchanged. |
 | vision_block | real_weights | pending | — | 0 |  |
 | vision_patch_merger | reference | done | 1.000000 | 0 | PatchMerger: LayerNorm(eps=1e-6,bias) -> view(merge**2) -> Linear -> GELU -> Linear (all biased). PCC=1.0 vs HF. |
 | vision_patch_merger | ttnn | done | 0.999990 | 0 | PatchMerger: ttnn.layer_norm (weight+bias, eps=1e-6) -> ttnn.reshape group 4 patches (1536->6144) -> ttnn.linear+bias -> ttnn.gelu -> ttnn.linear+bias. LN gamma/beta laid out [1,1,dim//32,32] row-major. HiFi4+fp32_dest_acc bf16 DRAM TILE. PCC=0.99999 vs golden. Guard ok. |
@@ -94,7 +94,6 @@
 
 ## Recent Ticks
 
-- tick 15 (2026-05-29T01:27:01Z): device[attention] — ok
 - tick 16 (2026-05-29T01:31:57Z): device[mlp] — ok
 - tick 17 (2026-05-29T01:37:32Z): device[decoder_layer] — ok
 - tick 18 (2026-05-29T01:43:24Z): device[lm_head] — ok
@@ -104,6 +103,7 @@
 - tick 22 (2026-05-29T02:01:02Z): device[vision_rmsnorm] — ok
 - tick 23 (2026-05-29T02:07:56Z): device[vision_attention] — ok
 - tick 24 (2026-05-29T02:14:00Z): device[vision_mlp] — ok
+- tick 25 (2026-05-29T02:20:39Z): device[vision_block] — ok
 
 ## Host-Resident Exceptions
 

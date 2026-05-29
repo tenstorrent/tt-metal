@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-29T00:11:46Z",
-  "updated_at": "2026-05-29T02:14:00Z",
+  "updated_at": "2026-05-29T02:20:39Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -239,8 +239,16 @@
         "attempts": 0
       },
       "optimization": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/profile_vision_block.py",
+          "generated/profiler/reports/2026_05_29_02_19_26/ops_perf_results_2026_05_29_02_19_26.csv"
+        ],
+        "notes": "Profiled TtVisionBlock under metal trace (tracy --traced). Composite total device kernel 1055.5->1050.2us. Top hotspot MatmulDeviceOperation 35.8% + ReshapeViewDeviceOperation 30.6% both inside already-optimized leaves (vision_attention -23.8%, vision_mlp -13.8%) -- inherited wins. Applied one composite-boundary lever: pinned both residual ttnn.add ops to L1 (only block-internal ops landing DRAM-interleaved). Residual adds 12.63->8.76us (-30.6%) DRAM->L1. PCC 0.9999956 unchanged.",
+        "pcc": 0.9999956203298919,
+        "before_us": 1055.5,
+        "after_us": 1050.2
       },
       "real_weights": {
         "status": "pending",
@@ -903,6 +911,12 @@
       "tick": 24,
       "ts": "2026-05-29T02:14:00Z",
       "action": "device[vision_mlp]",
+      "result": "ok"
+    },
+    {
+      "tick": 25,
+      "ts": "2026-05-29T02:20:39Z",
+      "action": "device[vision_block]",
       "result": "ok"
     }
   ],

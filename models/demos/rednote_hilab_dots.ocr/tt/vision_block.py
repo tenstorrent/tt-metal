@@ -142,10 +142,17 @@ class TtVisionBlock(LightweightModule):
         """x: [seq, dim] (TILE layout) -> [seq, dim].
 
         h = h + attn(norm1(h)); h = h + mlp(norm2(h)).
+
+        Both residual adds are pinned to L1. Tracy on the traced composite path
+        showed these two ttnn.add ops are the only block-internal ops that land
+        DRAM-interleaved (~27 us each at the default) -- every leaf sub-op was
+        already L1-pinned during the per-leaf optimization passes. Inheriting L1
+        here keeps the whole block resident in L1 between the attn/mlp output and
+        the residual.
         """
         attn_out = self.attn(self.norm1(x))
-        x = ttnn.add(x, attn_out)
+        x = ttnn.add(x, attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         mlp_out = self.mlp(self.norm2(x))
-        x = ttnn.add(x, mlp_out)
+        x = ttnn.add(x, mlp_out, memory_config=ttnn.L1_MEMORY_CONFIG)
         return x
