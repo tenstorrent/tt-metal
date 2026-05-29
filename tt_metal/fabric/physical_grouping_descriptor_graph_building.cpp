@@ -344,6 +344,36 @@ void PhysicalGroupingDescriptor::assign_corner_orientations_to_grouping(
     }
 }
 
+// Apply optional tray_id from a Location submessage. Omitted or TRAY_ID_UNSET leaves tray_id at 0 (no constraint).
+void apply_optional_location_tray_id(const proto::Location& location, GroupingItemInfo& item_info) {
+    if (!location.has_tray_id()) {
+        return;
+    }
+    const proto::TrayId tray = location.tray_id();
+    if (tray != proto::TRAY_ID_UNSET) {
+        item_info.tray_id = ::tt::tt_metal::TrayID{static_cast<uint32_t>(tray)};
+    }
+}
+
+// When a leaf grouping sets tray_id on one instance, apply it to unset siblings (full-tray templates).
+void propagate_tray_id_to_unset_leaf_siblings(GroupingInfo& info) {
+    std::optional<::tt::tt_metal::TrayID> tray_for_grouping;
+    for (const auto& item : info.items) {
+        if (item.type == GroupingItemInfo::ItemType::ASIC_LOCATION && *item.tray_id > 0) {
+            tray_for_grouping = item.tray_id;
+            break;
+        }
+    }
+    if (!tray_for_grouping.has_value()) {
+        return;
+    }
+    for (auto& item : info.items) {
+        if (item.type == GroupingItemInfo::ItemType::ASIC_LOCATION && *item.tray_id == 0) {
+            item.tray_id = tray_for_grouping.value();
+        }
+    }
+}
+
 GroupingInfo PhysicalGroupingDescriptor::convert_grouping_to_info(const proto::Grouping& grouping) const {
     GroupingInfo info;
 
@@ -362,9 +392,12 @@ GroupingInfo PhysicalGroupingDescriptor::convert_grouping_to_info(const proto::G
 
         // Build GroupingItemInfo for backward compatibility with existing code
         GroupingItemInfo item_info;
-        if (instance.has_asic_location()) {
+        if (instance.has_location()) {
             item_info.type = tt::tt_fabric::GroupingItemInfo::ItemType::ASIC_LOCATION;
-            item_info.asic_location = ::tt::tt_metal::ASICLocation{static_cast<uint32_t>(instance.asic_location())};
+            const auto& location = instance.location();
+            item_info.asic_location =
+                ::tt::tt_metal::ASICLocation{static_cast<uint32_t>(location.asic_location())};
+            apply_optional_location_tray_id(location, item_info);
             info.items.push_back(item_info);
             asic_locations.push_back(*item_info.asic_location);
             has_asic_locations = true;
@@ -372,42 +405,21 @@ GroupingInfo PhysicalGroupingDescriptor::convert_grouping_to_info(const proto::G
             item_info.type = tt::tt_fabric::GroupingItemInfo::ItemType::GROUPING_REF;
             const auto& ref = instance.grouping_ref();
             if (ref.has_preset_type()) {
-                // Convert preset_type enum to string and populate tray_id for TRAY_* types
                 switch (ref.preset_type()) {
-                    case proto::TRAY_1:
-                        item_info.grouping_name = "TRAY_1";
-                        item_info.tray_id = ::tt::tt_metal::TrayID{1};
-                        break;
-                    case proto::TRAY_2:
-                        item_info.grouping_name = "TRAY_2";
-                        item_info.tray_id = ::tt::tt_metal::TrayID{2};
-                        break;
-                    case proto::TRAY_3:
-                        item_info.grouping_name = "TRAY_3";
-                        item_info.tray_id = ::tt::tt_metal::TrayID{3};
-                        break;
-                    case proto::TRAY_4:
-                        item_info.grouping_name = "TRAY_4";
-                        item_info.tray_id = ::tt::tt_metal::TrayID{4};
-                        break;
-                    case proto::HOSTS:
-                        item_info.grouping_name = "HOSTS";
-                        // tray_id remains 0 (default)
-                        break;
-                    case proto::MESH:
-                        item_info.grouping_name = "MESH";
-                        // tray_id remains 0 (default)
-                        break;
-                    default:
-                        // tray_id remains 0 (default)
-                        break;
+                    case proto::HOSTS: item_info.grouping_name = "HOSTS"; break;
+                    case proto::MESH: item_info.grouping_name = "MESH"; break;
+                    default: break;
                 }
             } else if (ref.has_custom_type()) {
                 item_info.grouping_name = ref.custom_type();
-                // tray_id remains 0 (default) for custom types
             }
+            // tray_id applies only inside location, not on grouping_ref instances.
             info.items.push_back(item_info);
         }
+    }
+
+    if (has_asic_locations) {
+        propagate_tray_id_to_unset_leaf_siblings(info);
     }
 
     // Build adjacency graph from connection specification
@@ -862,6 +874,7 @@ std::vector<FlattenedMesh> build_flattened_meshes_for_item(
     const std::unordered_map<std::string, std::unordered_map<std::string, std::vector<tt::tt_fabric::GroupingInfo>>>&
         cache,
     const tt::tt_fabric::PhysicalGroupingDescriptor* desc,
+    const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor,
     const std::vector<std::string>& grouping_path = {}) {
     constexpr int32_t SINGLE_NODE_ROWS = 1;
     constexpr int32_t SINGLE_NODE_COLS = 1;
@@ -873,13 +886,16 @@ std::vector<FlattenedMesh> build_flattened_meshes_for_item(
         mesh.dims = {SINGLE_NODE_ROWS, SINGLE_NODE_COLS};
         const uint32_t node_id = next_global_id++;
 
-        // Extract tray ID from grouping path
         NodeMetadata metadata;
-        for (const auto& path_elem : grouping_path) {
-            ::tt::tt_metal::TrayID tray_id = extract_tray_id(path_elem);
-            if (*tray_id > 0) {
-                metadata.tray_id = tray_id;
-                break;
+        if (*item.tray_id > 0) {
+            metadata.tray_id = item.tray_id;
+        } else {
+            for (const auto& path_elem : grouping_path) {
+                ::tt::tt_metal::TrayID tray_id = extract_tray_id(path_elem);
+                if (*tray_id > 0) {
+                    metadata.tray_id = tray_id;
+                    break;
+                }
             }
         }
 
@@ -897,7 +913,7 @@ std::vector<FlattenedMesh> build_flattened_meshes_for_item(
     }
 
     // Compound case: resolve grouping reference - iterate over ALL possible groupings
-    // Look up by name first; preset types (TRAY_1, HOSTS, MESH) may be keyed by type, so fall back to type lookup
+    // Look up by name first; types (tray, HOSTS, MESH) may be keyed by type, so fall back to type lookup
     std::vector<tt::tt_fabric::GroupingInfo> possible_groupings;
     auto name_it = cache.find(item.grouping_name);
     if (name_it != cache.end()) {
@@ -906,8 +922,7 @@ std::vector<FlattenedMesh> build_flattened_meshes_for_item(
         }
     }
     if (possible_groupings.empty()) {
-        // Fallback: search by type (handles preset refs like TRAY_1, HOSTS where cache key is name "tray_1",
-        // "hosts_required")
+        // Fallback: search by type (handles refs like custom_type "tray" where cache key is grouping name)
         for (const auto& [name, type_map] : cache) {
             auto type_it = type_map.find(item.grouping_name);
             if (type_it != type_map.end()) {
@@ -923,22 +938,16 @@ std::vector<FlattenedMesh> build_flattened_meshes_for_item(
         std::vector<std::string> new_path = grouping_path;
         new_path.push_back(sub_grouping.name);
 
-        // Ensure tray_id is extractable in leaf nodes: add type (e.g. "TRAY_1") if it encodes tray
-        // and the name didn't already provide it. This handles cases where name might not match "tray_N".
+        // Tray identity for PSD matching comes from leaf asic_location tray_id fields, not grouping_ref instances.
         ::tt::tt_metal::TrayID name_tray_id = extract_tray_id(sub_grouping.name);
-        ::tt::tt_metal::TrayID type_tray_id = extract_tray_id(sub_grouping.type);
-        if (*name_tray_id == 0 && *type_tray_id > 0) {
-            new_path.push_back(sub_grouping.type);
-        }
-        // Fallback: ref item has tray_id (e.g. TRAY_1) but neither name nor type encodes it
-        if (*name_tray_id == 0 && *type_tray_id == 0 && *item.tray_id > 0) {
-            new_path.push_back("tray_" + std::to_string(*item.tray_id));
+        if (*name_tray_id > 0) {
+            new_path.push_back("tray_" + std::to_string(*name_tray_id));
         }
 
         // Single-item grouping: recurse directly, add each possibility as its own entry (no join)
         if (sub_grouping.items.size() == SINGLE_ITEM) {
-            std::vector<FlattenedMesh> sub_results =
-                build_flattened_meshes_for_item(sub_grouping.items[0], next_global_id, cache, desc, new_path);
+            std::vector<FlattenedMesh> sub_results = build_flattened_meshes_for_item(
+                sub_grouping.items[0], next_global_id, cache, desc, physical_system_descriptor, new_path);
             // PSD validation is done at the top level only, not at intermediate levels
             for (FlattenedMesh& m : sub_results) {
                 all_results.push_back(std::move(m));
@@ -951,7 +960,7 @@ std::vector<FlattenedMesh> build_flattened_meshes_for_item(
         sub_meshes_per_item.reserve(sub_grouping.items.size());
         for (const auto& sub_item : sub_grouping.items) {
             sub_meshes_per_item.push_back(
-                build_flattened_meshes_for_item(sub_item, next_global_id, cache, desc, new_path));
+                build_flattened_meshes_for_item(sub_item, next_global_id, cache, desc, physical_system_descriptor, new_path));
         }
 
         // Infer layout from corner orientations
@@ -1021,8 +1030,6 @@ std::vector<GroupingInfo> PhysicalGroupingDescriptor::build_flattened_adjacency_
 // Top-level entry point: builds meshes for each item, returns a vector - one per possibility
 std::vector<GroupingInfo> PhysicalGroupingDescriptor::build_flattened_adjacency_mesh(
     const GroupingInfo& grouping, const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor) const {
-    (void)physical_system_descriptor;  // Reserved for future use - can be used for validation/filtering
-
     if (grouping.items.empty()) {
         GroupingInfo result = grouping;
         result.name = grouping.name + "_flat";
@@ -1037,7 +1044,7 @@ std::vector<GroupingInfo> PhysicalGroupingDescriptor::build_flattened_adjacency_
     if (grouping.items.size() == 1) {
         // Single item: return all possibilities directly (no join)
         std::vector<FlattenedMesh> meshes = build_flattened_meshes_for_item(
-            grouping.items[0], next_node_id, resolved_groupings_cache_, this, initial_path);
+            grouping.items[0], next_node_id, resolved_groupings_cache_, this, physical_system_descriptor, initial_path);
         std::vector<GroupingInfo> result;
         result.reserve(meshes.size());
 
@@ -1067,8 +1074,8 @@ std::vector<GroupingInfo> PhysicalGroupingDescriptor::build_flattened_adjacency_
     std::vector<std::vector<FlattenedMesh>> meshes_per_item;
     meshes_per_item.reserve(grouping.items.size());
     for (const auto& item : grouping.items) {
-        auto item_meshes =
-            build_flattened_meshes_for_item(item, next_node_id, resolved_groupings_cache_, this, initial_path);
+        auto item_meshes = build_flattened_meshes_for_item(
+            item, next_node_id, resolved_groupings_cache_, this, physical_system_descriptor, initial_path);
         // If item has no meshes (shouldn't happen for valid groupings), return empty result
         if (item_meshes.empty()) {
             return {};

@@ -30,12 +30,107 @@
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <map>
+#include <chrono>
 
 #include <google/protobuf/text_format.h>
 
 using namespace tt::tt_fabric;
 
 namespace {
+
+// #region agent log
+void agent_log_299cf6(
+    const char* hypothesis_id, const char* location, const char* message, const std::string& data_json) {
+    std::ofstream out("/data/rsong/tt-metal/.cursor/debug-299cf6.log", std::ios::app);
+    if (!out) {
+        return;
+    }
+    const auto ts = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::system_clock::now().time_since_epoch())
+                        .count();
+    out << "{\"sessionId\":\"299cf6\",\"hypothesisId\":\"" << hypothesis_id << "\",\"location\":\"" << location
+        << "\",\"message\":\"" << message << "\",\"timestamp\":" << ts
+        << ",\"data\":" << (data_json.empty() ? "{}" : data_json) << "}\n";
+}
+
+std::string summarize_flattened_slots(const GroupingInfo& grouping) {
+    std::ostringstream os;
+    os << "{\"name\":\"" << grouping.name << "\",\"nodes\":[";
+    bool first = true;
+    for (uint32_t node_id : grouping.adjacency_graph.get_nodes()) {
+        if (node_id >= grouping.items.size()) {
+            continue;
+        }
+        const GroupingItemInfo& item = grouping.items[node_id];
+        if (item.type != GroupingItemInfo::ItemType::ASIC_LOCATION) {
+            continue;
+        }
+        if (!first) {
+            os << ",";
+        }
+        first = false;
+        bool rev_c_path = false;
+        for (const auto& path_elem : item.grouping_path) {
+            if (path_elem.find("_revC") != std::string::npos || path_elem.find("_REV_C") != std::string::npos) {
+                rev_c_path = true;
+                break;
+            }
+        }
+        os << "{\"tray\":" << *item.tray_id << ",\"asic\":" << *item.asic_location
+           << ",\"rev_c_path\":" << (rev_c_path ? "true" : "false") << "}";
+    }
+    os << "]}";
+    return os.str();
+}
+
+bool grouping_name_interest(const std::string& name) {
+    return name.find("4x2_Mesh") != std::string::npos;
+}
+
+std::string summarize_psd_tray_asic_slots(
+    const tt::tt_metal::PhysicalSystemDescriptor& psd,
+    const AdjacencyGraph<tt::tt_metal::AsicID>& physical_graph,
+    uint32_t tray) {
+    std::ostringstream os;
+    os << "[";
+    bool first = true;
+    for (tt::tt_metal::AsicID asic_id : physical_graph.get_nodes()) {
+        if (*psd.get_tray_id(asic_id) != tray) {
+            continue;
+        }
+        if (!first) {
+            os << ",";
+        }
+        first = false;
+        os << *psd.get_asic_location(asic_id);
+    }
+    os << "]";
+    return os.str();
+}
+
+std::string summarize_pgd_to_psd_mapping(
+    const GroupingInfo& grouping_info,
+    const MappingResult<uint32_t, tt::tt_metal::AsicID>& mapping_result,
+    const tt::tt_metal::PhysicalSystemDescriptor& psd) {
+    std::ostringstream os;
+    os << "[";
+    bool first = true;
+    for (const auto& [target_node, asic_id] : mapping_result.target_to_global) {
+        if (target_node >= grouping_info.items.size()) {
+            continue;
+        }
+        const GroupingItemInfo& item = grouping_info.items[target_node];
+        if (!first) {
+            os << ",";
+        }
+        first = false;
+        os << "{\"pgd_tray\":" << *item.tray_id << ",\"pgd_asic\":" << *item.asic_location << ",\"psd_tray\":"
+           << *psd.get_tray_id(asic_id) << ",\"psd_asic\":" << *psd.get_asic_location(asic_id) << "}";
+    }
+    os << "]";
+    return os.str();
+}
+// #endregion
 
 // Helper function to build adjacency graph from row-major mesh connection
 // Always uses LINE connectivity (no wrap-around) with configurable connections per edge
@@ -696,6 +791,18 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
             found_mesh = true;
             for (const auto& mesh_group_info : mesh_it->second) {
                 auto meshes = build_flattened_adjacency_mesh(mesh_group_info, physical_system_descriptor);
+                // #region agent log
+                if (grouping_name_interest(mesh_group_info.name)) {
+                    agent_log_299cf6(
+                        "B",
+                        "matching.cpp:phase1_flatten",
+                        "4x2 flatten variants after can_map_to_psd filter",
+                        fmt::format(
+                            "{{\"base_name\":\"{}\",\"variant_count\":{}}}",
+                            mesh_group_info.name,
+                            meshes.size()));
+                }
+                // #endregion
                 for (auto& meshe : meshes) {
                     mesh_flat_groupings[mesh_group_info.name].push_back(std::move(meshe));
                 }
@@ -709,6 +816,17 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
     // ===== PHASE 2: Match MESH mgd groupings to MESH groupings =====
     // For each MGD mesh instance, find all valid PGD mesh groupings that can contain it
     log_info(tt::LogFabric, "Matching MESH mgd groupings to MESH groupings");
+    if (physical_system_descriptor != nullptr) {
+        // #region agent log
+        agent_log_299cf6(
+            "G",
+            "matching.cpp:phase2",
+            "PSD revC flag at mesh matching start",
+            fmt::format(
+                "{{\"is_bh_galaxy_rev_c\":{}}}",
+                physical_system_descriptor->is_bh_galaxy_rev_c() ? "true" : "false"));
+        // #endregion
+    }
     for (const auto& [mgd_instance_key, mgd_mesh_grouping] : mgd_grouping_infos["MESH"]) {
         const std::string& instance_name = mgd_instance_key;  // Use unique instance key (includes mesh_id)
         const GroupingInfo& mgd_grouping_info = mgd_mesh_grouping;
@@ -783,6 +901,15 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                         find_any_in_psd(flattened_candidate, *physical_system_descriptor, psd_errors);
                     if (!mapped_asics.empty()) {
                         best_matches_psd_placed.emplace_back(name, idx);
+                        // #region agent log
+                        if (grouping_name_interest(name)) {
+                            agent_log_299cf6(
+                                "A",
+                                "matching.cpp:phase2_psd_embed",
+                                "4x2 PGD passed find_any_in_psd",
+                                summarize_flattened_slots(flattened_candidate));
+                        }
+                        // #endregion
                     } else if (!psd_errors.empty()) {
                         log_info(
                             tt::LogFabric,
@@ -810,6 +937,19 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                     if (lookup_it != mesh_flat_groupings.end() && match_idx < lookup_it->second.size()) {
                         const GroupingInfo& flattened_grouping = lookup_it->second[match_idx];
                         result[instance_type][instance_name].push_back(flattened_grouping);
+                        // #region agent log
+                        if (grouping_name_interest(match_name)) {
+                            agent_log_299cf6(
+                                "D",
+                                "matching.cpp:phase2_commit",
+                                "committed 4x2 PGD for MGD instance",
+                                fmt::format(
+                                    "{{\"mgd_instance\":\"{}\",\"node_diff\":{},\"pgd\":{}}}",
+                                    instance_name,
+                                    node_diff,
+                                    summarize_flattened_slots(flattened_grouping)));
+                        }
+                        // #endregion
                     }
                 }
                 committed_pgd_matches = true;
@@ -1055,8 +1195,31 @@ MappingResult<uint32_t, AsicID> solve_for_one_grouping_to_psd(
     configure_pgd_psd_host_alignment_constraints(
         grouping_info, physical_graph, physical_system_descriptor, constraints);
 
-    return solve_topology_mapping(
+    auto mapping_result = solve_topology_mapping(
         grouping_info.adjacency_graph, physical_graph, constraints, ConnectionValidationMode::RELAXED, true);
+
+    // #region agent log
+    if (mapping_result.success && grouping_name_interest(grouping_info.name)) {
+        const bool is_non_revc_flat =
+            grouping_info.name.find("4x2_Mesh_flat") != std::string::npos &&
+            grouping_info.name.find("_revC") == std::string::npos;
+        agent_log_299cf6(
+            "C",
+            "matching.cpp:solve_for_one_grouping_to_psd",
+            is_non_revc_flat ? "non-revC 4x2_Mesh_flat embedded on PSD" : "4x2 solve succeeded",
+            fmt::format(
+                "{{\"relax_pgd_slot_traits\":{},\"psd_is_bh_galaxy_rev_c\":{},\"psd_tray2_asics\":{},"
+                "\"psd_tray3_asics\":{},\"mapping\":{},\"slots\":{}}}",
+                relax_pgd_slot_traits ? "true" : "false",
+                physical_system_descriptor.is_bh_galaxy_rev_c() ? "true" : "false",
+                summarize_psd_tray_asic_slots(physical_system_descriptor, physical_graph, 2),
+                summarize_psd_tray_asic_slots(physical_system_descriptor, physical_graph, 3),
+                summarize_pgd_to_psd_mapping(grouping_info, mapping_result, physical_system_descriptor),
+                summarize_flattened_slots(grouping_info)));
+    }
+    // #endregion
+
+    return mapping_result;
 }
 
 bool is_flattened(const GroupingInfo& grouping) {

@@ -293,8 +293,84 @@ TopologyMappingResult run_topology_mapping(
     TopologyMappingResult result = map_multi_mesh_to_physical(
         logical_graph, physical_graph, config, asic_id_to_mesh_rank, fabric_node_id_to_mesh_rank);
 
+    log_critical(tt::LogFabric, "=== Topology mapping fabric_node -> ASIC ({} entries) ===", result.fabric_node_to_asic.size());
+    for (const auto& [fabric_node_id, asic_id] : result.fabric_node_to_asic) {
+        const auto mesh_host_rank = mesh_graph.get_host_rank_for_chip(fabric_node_id.mesh_id, fabric_node_id.chip_id);
+        const int mesh_host_rank_val = mesh_host_rank.has_value() ? static_cast<int>(mesh_host_rank->get()) : -1;
+        log_critical(
+            tt::LogFabric,
+            "  fabric_node mesh_id={} chip_id={} mesh_host_rank={} -> ASIC tray={} loc={} umd_chip_id={}",
+            fabric_node_id.mesh_id.get(),
+            fabric_node_id.chip_id,
+            mesh_host_rank_val,
+            psd.get_tray_id(asic_id).get(),
+            psd.get_asic_location(asic_id).get(),
+            psd.get_umd_unique_id(asic_id));
+    }
+    log_critical(tt::LogFabric, "=== End topology mapping fabric_node -> ASIC ===");
+
     return result;
 }
+
+namespace {
+
+void log_rank_binding_debug_critical(
+    const PhysicalSystemDescriptor& psd,
+    int rank,
+    int mesh_id,
+    int mesh_host_rank,
+    const std::string& hostname,
+    const std::string& visible_devices,
+    const std::vector<AsicID>& asic_ids) {
+    const auto& cluster = MetalContext::instance().get_cluster();
+
+    log_critical(
+        tt::LogFabric,
+        "Rank binding: rank={} mesh_id={} mesh_host_rank={} hostname={} TT_VISIBLE_DEVICES={}",
+        rank,
+        mesh_id,
+        mesh_host_rank,
+        hostname,
+        visible_devices.empty() ? "(none)" : visible_devices);
+
+    std::vector<AsicID> sorted_asics = asic_ids;
+    std::sort(sorted_asics.begin(), sorted_asics.end(), [&](AsicID a, AsicID b) {
+        const auto tray_a = psd.get_tray_id(a);
+        const auto tray_b = psd.get_tray_id(b);
+        if (tray_a != tray_b) {
+            return tray_a.get() < tray_b.get();
+        }
+        return psd.get_asic_location(a).get() < psd.get_asic_location(b).get();
+    });
+
+    std::set<uint32_t> trays_seen;
+    for (AsicID asic_id : sorted_asics) {
+        const auto tray_id = psd.get_tray_id(asic_id);
+        const auto asic_location = psd.get_asic_location(asic_id);
+        trays_seen.insert(tray_id.get());
+        const tt::ChipId umd_chip_id = psd.get_umd_unique_id(asic_id);
+        const tt::ChipId mmio_device_id = cluster.get_associated_mmio_device(umd_chip_id);
+        log_critical(
+            tt::LogFabric,
+            "  ASIC: tray={} loc={} umd_chip_id={} mmio_device_id={}",
+            tray_id.get(),
+            asic_location.get(),
+            umd_chip_id,
+            mmio_device_id);
+    }
+
+    if (trays_seen.size() > 1) {
+        log_critical(
+            tt::LogFabric,
+            "  WARNING: rank {} mesh_id {} mesh_host_rank {} spans {} trays (expected one tray per binding)",
+            rank,
+            mesh_id,
+            mesh_host_rank,
+            trays_seen.size());
+    }
+}
+
+}  // namespace
 
 /**
  * @brief Extract rank bindings from topology mapping result with topology-aware splitting.
@@ -352,15 +428,16 @@ std::vector<RankBindingConfig> extract_rank_bindings(
         bucket.mesh_host_rank = mesh_host_rank;
     }
 
-    // Build flat list of (mesh_id, hostname, chip_ids, mesh_host_rank, psd_rank) for canonical ordering
+    // Build flat list of (mesh_id, hostname, chip_ids, asic_ids, mesh_host_rank, psd_rank) for canonical ordering
     // Order after sort: mesh_id ascending (rank 0 is first/lowest mesh), then mesh_host_rank, hostname,
     // PSD rank tiebreaker — so sequential MPI rank tracks mesh topology; psd_mpi_rank field keeps PSD identity
-    using Entry = std::tuple<int, std::string, std::vector<tt::ChipId>, int, int>;
+    using Entry = std::tuple<int, std::string, std::vector<tt::ChipId>, std::vector<AsicID>, int, int>;
     std::vector<Entry> entries;
     for (const auto& [mesh_id, hostname_map] : mesh_host_asics) {
         for (const auto& [hostname, rank_map] : hostname_map) {
             for (const auto& [_, asic_data] : rank_map) {
                 const auto& chip_ids = asic_data.chip_ids;
+                const auto& asic_ids = asic_data.asic_ids;
                 const auto& mesh_host_rank = asic_data.mesh_host_rank;
                 if (!mesh_host_rank.has_value()) {
                     continue;
@@ -373,7 +450,12 @@ std::vector<RankBindingConfig> extract_rank_bindings(
                         tt::LogFabric, "Hostname {} not in PSD host_to_rank map, using 0 for rank ordering", hostname);
                 }
                 entries.emplace_back(
-                    mesh_id, hostname, chip_ids, static_cast<int>(*mesh_host_rank.value()), static_cast<int>(psd_rank));
+                    mesh_id,
+                    hostname,
+                    chip_ids,
+                    asic_ids,
+                    static_cast<int>(*mesh_host_rank.value()),
+                    static_cast<int>(psd_rank));
             }
         }
     }
@@ -382,22 +464,24 @@ std::vector<RankBindingConfig> extract_rank_bindings(
         if (std::get<0>(a) != std::get<0>(b)) {
             return std::get<0>(a) < std::get<0>(b);
         }
-        if (std::get<3>(a) != std::get<3>(b)) {
-            return std::get<3>(a) < std::get<3>(b);
+        if (std::get<4>(a) != std::get<4>(b)) {
+            return std::get<4>(a) < std::get<4>(b);
         }
         if (std::get<1>(a) != std::get<1>(b)) {
             return std::get<1>(a) < std::get<1>(b);
         }
         // PSD rank last for deterministic ties only
-        return std::get<4>(a) < std::get<4>(b);
+        return std::get<5>(a) < std::get<5>(b);
     });
 
     // Assign contiguous ranks 0..N-1 and track slot per host for rankfile
     std::vector<RankBindingConfig> rank_bindings;
     std::map<std::string, int> host_slot_counters;
 
+    log_critical(tt::LogFabric, "=== Rank binding extraction ({} binding(s)) ===", entries.size());
+
     for (size_t i = 0; i < entries.size(); ++i) {
-        const auto& [mesh_id, hostname, chip_ids, mesh_host_rank, psd_rank] = entries[i];
+        const auto& [mesh_id, hostname, chip_ids, asic_ids, mesh_host_rank, psd_rank] = entries[i];
 
         RankBindingConfig binding;
         // binding.rank is a sequential MPI rank (0, 1, 2, ...) that must be unique and contiguous,
@@ -438,8 +522,13 @@ std::vector<RankBindingConfig> extract_rank_bindings(
             binding.env_overrides["TT_VISIBLE_DEVICES"] = visible_devices;
         }
 
+        log_rank_binding_debug_critical(
+            psd, binding.rank, binding.mesh_id, binding.mesh_host_rank, hostname, visible_devices, asic_ids);
+
         rank_bindings.push_back(binding);
     }
+
+    log_critical(tt::LogFabric, "=== End rank binding extraction ===");
 
     return rank_bindings;
 }

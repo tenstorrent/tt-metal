@@ -64,33 +64,32 @@ static void expect_neighbors_by_id(
     EXPECT_EQ(actual_ids, expected_set) << "Node " << node_id << " has wrong neighbors";
 }
 
-// Helper to get common groupings (TRAY_1-4, hosts) - can be prepended to any test proto
-// Note: These groupings are no longer required but are commonly used in tests
+// Helper to get common tray/host groupings - can be prepended to any test proto
 static std::string get_required_groupings() {
     return R"proto(
         groupings {
           name: "tray_1"
-          preset_type: TRAY_1
+          custom_type: "tray_1"
           instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+          [ { id: 0 location { asic_location: ASIC_LOCATION_1 tray_id: TRAY_1 } }]
         }
         groupings {
           name: "tray_2"
-          preset_type: TRAY_2
+          custom_type: "tray_2"
           instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+          [ { id: 0 location { asic_location: ASIC_LOCATION_1 tray_id: TRAY_2 } }]
         }
         groupings {
           name: "tray_3"
-          preset_type: TRAY_3
+          custom_type: "tray_3"
           instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+          [ { id: 0 location { asic_location: ASIC_LOCATION_1 tray_id: TRAY_3 } }]
         }
         groupings {
           name: "tray_4"
-          preset_type: TRAY_4
+          custom_type: "tray_4"
           instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+          [ { id: 0 location { asic_location: ASIC_LOCATION_1 tray_id: TRAY_4 } }]
         }
         groupings {
           name: "hosts_required"
@@ -98,7 +97,7 @@ static std::string get_required_groupings() {
           instances:
           [ {
             id: 0
-            grouping_ref { preset_type: TRAY_1 }
+            grouping_ref { custom_type: "tray_1" }
           }]
         }
     )proto";
@@ -116,7 +115,7 @@ static std::string wrap_with_required_groupings(const std::string& test_proto) {
                      name: "meshes_required"
                      custom_type: "meshes"
                      instances:
-                     [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+                     [ { id: 0 location { asic_location: ASIC_LOCATION_1 } }]
                    }
                )proto" +
                test_proto;
@@ -135,9 +134,9 @@ TEST(PhysicalGroupingDescriptorTests, AdjacencyGraph_AllToAll_ThreeNodes) {
           name: "meshes_1"
           custom_type: "meshes"
           instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }
-            , { id: 1 asic_location: ASIC_LOCATION_2 }
-            , { id: 2 asic_location: ASIC_LOCATION_3 }]
+          [ { id: 0 location { asic_location: ASIC_LOCATION_1 } }
+            , { id: 1 location { asic_location: ASIC_LOCATION_2 } }
+            , { id: 2 location { asic_location: ASIC_LOCATION_3 } }]
         }
         groupings {
           name: "pods_1"
@@ -179,8 +178,8 @@ TEST(PhysicalGroupingDescriptorTests, AdjacencyGraph_RowMajorMesh_2x2_LineLine) 
           name: "meshes_2"
           custom_type: "meshes"
           instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }
-            , { id: 1 asic_location: ASIC_LOCATION_2 }]
+          [ { id: 0 location { asic_location: ASIC_LOCATION_1 } }
+            , { id: 1 location { asic_location: ASIC_LOCATION_2 } }]
         }
         groupings {
           name: "grid_1"
@@ -228,7 +227,7 @@ TEST(PhysicalGroupingDescriptorTests, AdjacencyGraph_CustomConnections) {
           name: "meshes_4"
           custom_type: "meshes"
           instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+          [ { id: 0 location { asic_location: ASIC_LOCATION_1 } }]
         }
         groupings {
           name: "custom_topology_1"
@@ -278,8 +277,8 @@ TEST(PhysicalGroupingDescriptorTests, ParsesValidBasicConfiguration) {
           name: "trays_1"
           custom_type: "trays"
           instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }
-            , { id: 1 asic_location: ASIC_LOCATION_2 }]
+          [ { id: 0 location { asic_location: ASIC_LOCATION_1 } }
+            , { id: 1 location { asic_location: ASIC_LOCATION_2 } }]
         }
         groupings {
           name: "meshes_17"
@@ -311,10 +310,7 @@ TEST(PhysicalGroupingDescriptorTests, ParsesFromTriple16x8QuadBhGalaxyFile) {
 // ============================================================================
 
 TEST(PhysicalGroupingDescriptorTests, ValidationSucceedsWithAllRequiredGroupings) {
-    // Test that validation passes when all required groupings are present:
-    // - Exactly one of each TRAY_1, TRAY_2, TRAY_3, TRAY_4
-    // - Exactly one custom_type "hosts"
-    // - At least one "meshes" grouping
+    // Test that validation passes with common tray/host/mesh groupings from wrap_with_required_groupings
     const std::string text_proto = wrap_with_required_groupings(R"proto(
         groupings {
           name: "meshes_1"
@@ -369,7 +365,7 @@ TEST(PhysicalGroupingDescriptorTests, ValidationFailsWhenNonLeafGroupingUsesASIC
           name: "meshes_required"
           custom_type: "meshes"
           instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+          [ { id: 0 location { asic_location: ASIC_LOCATION_1 } }]
         }
         groupings {
           name: "pods_bad"
@@ -379,7 +375,7 @@ TEST(PhysicalGroupingDescriptorTests, ValidationFailsWhenNonLeafGroupingUsesASIC
             id: 0
             grouping_ref { custom_type: "meshes" }
           }
-            , { id: 1 asic_location: ASIC_LOCATION_2 }]
+            , { id: 1 location { asic_location: ASIC_LOCATION_2 } }]
         }
     )proto";
 
@@ -396,7 +392,7 @@ TEST(PhysicalGroupingDescriptorTests, ValidationFailsWhenCircularDependency) {
           name: "meshes_required"
           custom_type: "meshes"
           instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+          [ { id: 0 location { asic_location: ASIC_LOCATION_1 } }]
         }
         groupings {
           name: "pods_cycle"
@@ -431,18 +427,18 @@ TEST(PhysicalGroupingDescriptorTests, MeshGroupingsCanBeLeafNodes) {
           name: "mesh_leaf_1"
           preset_type: MESH
           instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }
-            , { id: 1 asic_location: ASIC_LOCATION_2 }
-            , { id: 2 asic_location: ASIC_LOCATION_3 }
-            , { id: 3 asic_location: ASIC_LOCATION_4 }]
+          [ { id: 0 location { asic_location: ASIC_LOCATION_1 } }
+            , { id: 1 location { asic_location: ASIC_LOCATION_2 } }
+            , { id: 2 location { asic_location: ASIC_LOCATION_3 } }
+            , { id: 3 location { asic_location: ASIC_LOCATION_4 } }]
           row_major_mesh { dims: [ 2, 2 ] }
         }
         groupings {
           name: "mesh_leaf_2"
           preset_type: MESH
           instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_5 }
-            , { id: 1 asic_location: ASIC_LOCATION_6 }]
+          [ { id: 0 location { asic_location: ASIC_LOCATION_5 } }
+            , { id: 1 location { asic_location: ASIC_LOCATION_6 } }]
           row_major_mesh { dims: [ 1, 2 ] }
         }
     )proto";
@@ -461,8 +457,8 @@ TEST(PhysicalGroupingDescriptorTests, MeshGroupingsCanHaveDifferentStructures) {
           name: "mesh_leaf"
           preset_type: MESH
           instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }
-            , { id: 1 asic_location: ASIC_LOCATION_2 }]
+          [ { id: 0 location { asic_location: ASIC_LOCATION_1 } }
+            , { id: 1 location { asic_location: ASIC_LOCATION_2 } }]
           row_major_mesh { dims: [ 1, 2 ] }
         }
         groupings {
@@ -471,17 +467,17 @@ TEST(PhysicalGroupingDescriptorTests, MeshGroupingsCanHaveDifferentStructures) {
           instances:
           [ {
             id: 0
-            grouping_ref { preset_type: TRAY_1 }
+            grouping_ref { custom_type: "tray_1" }
           }]
         }
         groupings {
           name: "mesh_another_leaf"
           preset_type: MESH
           instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_3 }
-            , { id: 1 asic_location: ASIC_LOCATION_4 }
-            , { id: 2 asic_location: ASIC_LOCATION_5 }
-            , { id: 3 asic_location: ASIC_LOCATION_6 }]
+          [ { id: 0 location { asic_location: ASIC_LOCATION_3 } }
+            , { id: 1 location { asic_location: ASIC_LOCATION_4 } }
+            , { id: 2 location { asic_location: ASIC_LOCATION_5 } }
+            , { id: 3 location { asic_location: ASIC_LOCATION_6 } }]
           row_major_mesh { dims: [ 2, 2 ] }
         }
     )proto";
@@ -498,7 +494,7 @@ TEST(PhysicalGroupingDescriptorTests, SingleGroupingCannotMixASICLocationsAndGro
           name: "meshes_required"
           custom_type: "meshes"
           instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+          [ { id: 0 location { asic_location: ASIC_LOCATION_1 } }]
         }
         groupings {
           name: "mesh_mixed_bad"
@@ -506,9 +502,9 @@ TEST(PhysicalGroupingDescriptorTests, SingleGroupingCannotMixASICLocationsAndGro
           instances:
           [ {
             id: 0
-            grouping_ref { preset_type: TRAY_1 }
+            grouping_ref { custom_type: "tray_1" }
           }
-            , { id: 1 asic_location: ASIC_LOCATION_2 }]
+            , { id: 1 location { asic_location: ASIC_LOCATION_2 } }]
         }
     )proto";
 
@@ -529,7 +525,7 @@ TEST(PhysicalGroupingDescriptorTests, HasGroupingReturnsTrueForExistingGrouping)
           name: "meshes_24"
           custom_type: "meshes"
           instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+          [ { id: 0 location { asic_location: ASIC_LOCATION_1 } }]
         }
         groupings {
           name: "pods_5"
@@ -559,16 +555,16 @@ TEST(PhysicalGroupingDescriptorTests, GetGroupingsByNameReturnsAllDefinitions) {
           name: "halftray_3"
           custom_type: "halftray"
           instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }
-            , { id: 1 asic_location: ASIC_LOCATION_2 }]
+          [ { id: 0 location { asic_location: ASIC_LOCATION_1 } }
+            , { id: 1 location { asic_location: ASIC_LOCATION_2 } }]
           row_major_mesh { dims: [ 1, 2 ] }
         }
         groupings {
           name: "halftray_4"
           custom_type: "halftray"
           instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_3 }
-            , { id: 1 asic_location: ASIC_LOCATION_4 }]
+          [ { id: 0 location { asic_location: ASIC_LOCATION_3 } }
+            , { id: 1 location { asic_location: ASIC_LOCATION_4 } }]
           row_major_mesh { dims: [ 1, 2 ] }
         }
         groupings {
@@ -601,8 +597,8 @@ TEST(PhysicalGroupingDescriptorTests, GetGroupingCountReturnsCorrectCount) {
           name: "trays_2"
           custom_type: "trays"
           instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }
-            , { id: 1 asic_location: ASIC_LOCATION_2 }]
+          [ { id: 0 location { asic_location: ASIC_LOCATION_1 } }
+            , { id: 1 location { asic_location: ASIC_LOCATION_2 } }]
           row_major_mesh { dims: [ 1, 2 ] }
         }
         groupings {
@@ -632,7 +628,7 @@ TEST(PhysicalGroupingDescriptorTests, GetGroupingCountReturnsCorrectCount) {
     ;
 
     PhysicalGroupingDescriptor desc(text_proto);
-    // Count includes required groupings: TRAY_1-4 (4), hosts (1), plus trays (1), meshes (1), pods (1) = 8 total
+    // Count includes tray_1-4 (4), hosts (1), plus trays (1), meshes (1), pods (1) = 8 total
     EXPECT_EQ(desc.get_grouping_count(), 8);
 }
 
@@ -646,10 +642,10 @@ TEST(PhysicalGroupingDescriptorTests, AsicCountCalculation_BaseGrouping) {
           name: "meshes_28"
           custom_type: "meshes"
           instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }
-            , { id: 1 asic_location: ASIC_LOCATION_2 }
-            , { id: 2 asic_location: ASIC_LOCATION_3 }
-            , { id: 3 asic_location: ASIC_LOCATION_4 }]
+          [ { id: 0 location { asic_location: ASIC_LOCATION_1 } }
+            , { id: 1 location { asic_location: ASIC_LOCATION_2 } }
+            , { id: 2 location { asic_location: ASIC_LOCATION_3 } }
+            , { id: 3 location { asic_location: ASIC_LOCATION_4 } }]
           row_major_mesh { dims: [ 2, 2 ] }
         }
     )proto");
@@ -667,14 +663,14 @@ TEST(PhysicalGroupingDescriptorTests, AsicCountCalculation_NestedGroupings) {
           name: "trays_3"
           custom_type: "trays"
           instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }
-            , { id: 1 asic_location: ASIC_LOCATION_2 }
-            , { id: 2 asic_location: ASIC_LOCATION_3 }
-            , { id: 3 asic_location: ASIC_LOCATION_4 }
-            , { id: 4 asic_location: ASIC_LOCATION_5 }
-            , { id: 5 asic_location: ASIC_LOCATION_6 }
-            , { id: 6 asic_location: ASIC_LOCATION_7 }
-            , { id: 7 asic_location: ASIC_LOCATION_8 }]
+          [ { id: 0 location { asic_location: ASIC_LOCATION_1 } }
+            , { id: 1 location { asic_location: ASIC_LOCATION_2 } }
+            , { id: 2 location { asic_location: ASIC_LOCATION_3 } }
+            , { id: 3 location { asic_location: ASIC_LOCATION_4 } }
+            , { id: 4 location { asic_location: ASIC_LOCATION_5 } }
+            , { id: 5 location { asic_location: ASIC_LOCATION_6 } }
+            , { id: 6 location { asic_location: ASIC_LOCATION_7 } }
+            , { id: 7 location { asic_location: ASIC_LOCATION_8 } }]
           row_major_mesh { dims: [ 2, 4 ] }
         }
         groupings {
@@ -731,27 +727,27 @@ TEST(PhysicalGroupingDescriptorTests, CornerOrientation_RowMajorMesh) {
     const std::string text_proto_2x4 = R"proto(
         groupings {
           name: "tray_1"
-          preset_type: TRAY_1
+          custom_type: "tray_1"
           instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+          [ { id: 0 location { asic_location: ASIC_LOCATION_1 } }]
         }
         groupings {
           name: "tray_2"
-          preset_type: TRAY_2
+          custom_type: "tray_2"
           instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+          [ { id: 0 location { asic_location: ASIC_LOCATION_1 } }]
         }
         groupings {
           name: "tray_3"
-          preset_type: TRAY_3
+          custom_type: "tray_3"
           instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+          [ { id: 0 location { asic_location: ASIC_LOCATION_1 } }]
         }
         groupings {
           name: "tray_4"
-          preset_type: TRAY_4
+          custom_type: "tray_4"
           instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+          [ { id: 0 location { asic_location: ASIC_LOCATION_1 } }]
         }
         groupings {
           name: "hosts_1"
@@ -759,34 +755,34 @@ TEST(PhysicalGroupingDescriptorTests, CornerOrientation_RowMajorMesh) {
           instances:
           [ {
             id: 0
-            grouping_ref { preset_type: TRAY_1 }
+            grouping_ref { custom_type: "tray_1" }
           }]
         }
         groupings {
           name: "meshes_1"
           custom_type: "meshes"
           instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+          [ { id: 0 location { asic_location: ASIC_LOCATION_1 } }]
         }
         groupings {
           name: "tray_2x4"
           custom_type: "tray_2x4"
           instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }
-            , { id: 1 asic_location: ASIC_LOCATION_2 }
-            , { id: 2 asic_location: ASIC_LOCATION_3 }
-            , { id: 3 asic_location: ASIC_LOCATION_4 }
-            , { id: 4 asic_location: ASIC_LOCATION_5 }
-            , { id: 5 asic_location: ASIC_LOCATION_6 }
-            , { id: 6 asic_location: ASIC_LOCATION_7 }
-            , { id: 7 asic_location: ASIC_LOCATION_8 }]
+          [ { id: 0 location { asic_location: ASIC_LOCATION_1 } }
+            , { id: 1 location { asic_location: ASIC_LOCATION_2 } }
+            , { id: 2 location { asic_location: ASIC_LOCATION_3 } }
+            , { id: 3 location { asic_location: ASIC_LOCATION_4 } }
+            , { id: 4 location { asic_location: ASIC_LOCATION_5 } }
+            , { id: 5 location { asic_location: ASIC_LOCATION_6 } }
+            , { id: 6 location { asic_location: ASIC_LOCATION_7 } }
+            , { id: 7 location { asic_location: ASIC_LOCATION_8 } }]
           row_major_mesh { dims: [ 2, 4 ] }
         }
     )proto";
 
     PhysicalGroupingDescriptor desc_2x4(text_proto_2x4);
     auto trays_2x4 = desc_2x4.get_groupings_by_name("tray_2x4");
-    ASSERT_EQ(trays_2x4.size(), 1u) << "Should have one TRAY_1 grouping";
+    ASSERT_EQ(trays_2x4.size(), 1u) << "Should have one tray_2x4 grouping";
     const auto& tray_2x4 = trays_2x4[0];
 
     // For 2x4 mesh: NW=0, NE=3, SW=4, SE=7
@@ -812,27 +808,27 @@ TEST(PhysicalGroupingDescriptorTests, CornerOrientation_RowMajorMesh) {
     const std::string text_proto_1x4 = R"proto(
         groupings {
           name: "tray_1"
-          preset_type: TRAY_1
+          custom_type: "tray_1"
           instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+          [ { id: 0 location { asic_location: ASIC_LOCATION_1 } }]
         }
         groupings {
           name: "tray_2"
-          preset_type: TRAY_2
+          custom_type: "tray_2"
           instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+          [ { id: 0 location { asic_location: ASIC_LOCATION_1 } }]
         }
         groupings {
           name: "tray_3"
-          preset_type: TRAY_3
+          custom_type: "tray_3"
           instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+          [ { id: 0 location { asic_location: ASIC_LOCATION_1 } }]
         }
         groupings {
           name: "tray_4"
-          preset_type: TRAY_4
+          custom_type: "tray_4"
           instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+          [ { id: 0 location { asic_location: ASIC_LOCATION_1 } }]
         }
         groupings {
           name: "hosts_1"
@@ -840,23 +836,23 @@ TEST(PhysicalGroupingDescriptorTests, CornerOrientation_RowMajorMesh) {
           instances:
           [ {
             id: 0
-            grouping_ref { preset_type: TRAY_1 }
+            grouping_ref { custom_type: "tray_1" }
           }]
         }
         groupings {
           name: "meshes_1"
           custom_type: "meshes"
           instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+          [ { id: 0 location { asic_location: ASIC_LOCATION_1 } }]
         }
         groupings {
           name: "mesh_1x4"
           custom_type: "mesh"
           instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }
-            , { id: 1 asic_location: ASIC_LOCATION_2 }
-            , { id: 2 asic_location: ASIC_LOCATION_3 }
-            , { id: 3 asic_location: ASIC_LOCATION_4 }]
+          [ { id: 0 location { asic_location: ASIC_LOCATION_1 } }
+            , { id: 1 location { asic_location: ASIC_LOCATION_2 } }
+            , { id: 2 location { asic_location: ASIC_LOCATION_3 } }
+            , { id: 3 location { asic_location: ASIC_LOCATION_4 } }]
           row_major_mesh { dims: [ 1, 4 ] }
         }
     )proto";
@@ -899,27 +895,27 @@ TEST(PhysicalGroupingDescriptorTests, CornerOrientation_RowMajorMesh) {
     const std::string text_proto_4x1 = R"proto(
         groupings {
           name: "tray_1"
-          preset_type: TRAY_1
+          custom_type: "tray_1"
           instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+          [ { id: 0 location { asic_location: ASIC_LOCATION_1 } }]
         }
         groupings {
           name: "tray_2"
-          preset_type: TRAY_2
+          custom_type: "tray_2"
           instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+          [ { id: 0 location { asic_location: ASIC_LOCATION_1 } }]
         }
         groupings {
           name: "tray_3"
-          preset_type: TRAY_3
+          custom_type: "tray_3"
           instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+          [ { id: 0 location { asic_location: ASIC_LOCATION_1 } }]
         }
         groupings {
           name: "tray_4"
-          preset_type: TRAY_4
+          custom_type: "tray_4"
           instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+          [ { id: 0 location { asic_location: ASIC_LOCATION_1 } }]
         }
         groupings {
           name: "hosts_1"
@@ -927,23 +923,23 @@ TEST(PhysicalGroupingDescriptorTests, CornerOrientation_RowMajorMesh) {
           instances:
           [ {
             id: 0
-            grouping_ref { preset_type: TRAY_1 }
+            grouping_ref { custom_type: "tray_1" }
           }]
         }
         groupings {
           name: "meshes_1"
           custom_type: "meshes"
           instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+          [ { id: 0 location { asic_location: ASIC_LOCATION_1 } }]
         }
         groupings {
           name: "mesh_4x1"
           custom_type: "mesh"
           instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }
-            , { id: 1 asic_location: ASIC_LOCATION_2 }
-            , { id: 2 asic_location: ASIC_LOCATION_3 }
-            , { id: 3 asic_location: ASIC_LOCATION_4 }]
+          [ { id: 0 location { asic_location: ASIC_LOCATION_1 } }
+            , { id: 1 location { asic_location: ASIC_LOCATION_2 } }
+            , { id: 2 location { asic_location: ASIC_LOCATION_3 } }
+            , { id: 3 location { asic_location: ASIC_LOCATION_4 } }]
           row_major_mesh { dims: [ 4, 1 ] }
         }
     )proto";
@@ -983,27 +979,27 @@ TEST(PhysicalGroupingDescriptorTests, CornerOrientation_RowMajorMesh) {
     const std::string text_proto_1x1 = R"proto(
         groupings {
           name: "tray_1"
-          preset_type: TRAY_1
+          custom_type: "tray_1"
           instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+          [ { id: 0 location { asic_location: ASIC_LOCATION_1 } }]
         }
         groupings {
           name: "tray_2"
-          preset_type: TRAY_2
+          custom_type: "tray_2"
           instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+          [ { id: 0 location { asic_location: ASIC_LOCATION_1 } }]
         }
         groupings {
           name: "tray_3"
-          preset_type: TRAY_3
+          custom_type: "tray_3"
           instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+          [ { id: 0 location { asic_location: ASIC_LOCATION_1 } }]
         }
         groupings {
           name: "tray_4"
-          preset_type: TRAY_4
+          custom_type: "tray_4"
           instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+          [ { id: 0 location { asic_location: ASIC_LOCATION_1 } }]
         }
         groupings {
           name: "hosts_1"
@@ -1011,14 +1007,14 @@ TEST(PhysicalGroupingDescriptorTests, CornerOrientation_RowMajorMesh) {
           instances:
           [ {
             id: 0
-            grouping_ref { preset_type: TRAY_1 }
+            grouping_ref { custom_type: "tray_1" }
           }]
         }
         groupings {
           name: "mesh_1x1"
           preset_type: MESH
           instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+          [ { id: 0 location { asic_location: ASIC_LOCATION_1 } }]
           row_major_mesh { dims: [ 1, 1 ] }
         }
     )proto";
@@ -1253,7 +1249,7 @@ TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyMesh_CornerInferenc
           instances:
           [ {
             id: 0
-            grouping_ref { preset_type: TRAY_1 }
+            grouping_ref { custom_type: "tray_1" }
           }]
         }
         groupings {
@@ -1262,19 +1258,19 @@ TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyMesh_CornerInferenc
           instances:
           [ {
             id: 0
-            grouping_ref { preset_type: TRAY_1 }
+            grouping_ref { custom_type: "tray_1" }
           }
             , {
               id: 1
-              grouping_ref { preset_type: TRAY_1 }
+              grouping_ref { custom_type: "tray_1" }
             }
             , {
               id: 2
-              grouping_ref { preset_type: TRAY_1 }
+              grouping_ref { custom_type: "tray_1" }
             }
             , {
               id: 3
-              grouping_ref { preset_type: TRAY_1 }
+              grouping_ref { custom_type: "tray_1" }
             }]
           row_major_mesh { dims: [ 1, 4 ] }
         }
