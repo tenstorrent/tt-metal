@@ -125,11 +125,11 @@ public:
     ///////////////////////////////////////////////////////////////
 
     // Single descriptor API for program execution parameters
-    void set_run_parameters(const ProgramRunArgs& parameters);
+    void set_run_args(const ProgramRunArgs& params);
 
     // Alternative API for setting the program execution parameters in-place,
     // modifying the underlying dispatch command buffers directly.
-    ProgramRunArgsView get_run_params_view();
+    ProgramRunArgsView get_run_args_view();
 
 
     ///////////////////////////////////////////////////////////////
