@@ -664,32 +664,49 @@ class Gemma4Model:
             embeds = ccl_allgather(embeds, self.mesh_config, self.ccl_manager)
         return embeds
 
-    def compute_host_embeddings(self, token_id):
-        """Compute token embedding + PLI entirely on CPU for a single decode token.
+    def compute_host_embeddings(self, token_ids):
+        """Compute token embedding + PLI entirely on CPU for one decode step.
 
         Embedding and PLI are computed on host to keep them off the device trace,
         reducing traced op count and improving decode throughput on 1x1 mesh.
 
+        Args:
+            token_ids: a single int token id, or a sequence/1D tensor of ``batch``
+                token ids (one per user) for batched decode.
+
         Returns:
             (embeds, pli_combined) where:
-            - embeds: torch.Tensor [1, 1, 1, hidden_size] bfloat16
+            - embeds: torch.Tensor [1, 1, batch, hidden_size] bfloat16
             - pli_combined: torch.Tensor [1, 1, n_layers, pli_size] bfloat16, or None
         """
         import torch.nn.functional as F
 
-        token_tensor = torch.tensor([[token_id]], dtype=torch.long)
+        if isinstance(token_ids, int):
+            ids = [token_ids]
+        elif torch.is_tensor(token_ids):
+            ids = token_ids.reshape(-1).tolist()
+        else:
+            ids = list(token_ids)
+        batch = len(ids)
+
+        token_tensor = torch.tensor([ids], dtype=torch.long)  # [1, batch]
 
         # Token embedding (mirrors embed_tokens but on CPU)
-        embeds = F.embedding(token_tensor, self._embed_weight_cpu).float() * self.embed_scale
+        embeds = F.embedding(token_tensor, self._embed_weight_cpu).float() * self.embed_scale  # [1, batch, H]
 
         # Per-layer input (E2B/E4B)
         pli_combined = None
         if self.hidden_size_per_layer_input and self.per_layer_input_weights:
+            if batch > 1:
+                raise NotImplementedError(
+                    "Batched decode with per-layer inputs (E2B/E4B) is not yet supported; "
+                    "see the batched-decode coverage follow-up. Use batch=1 for PLI models."
+                )
             pli_list = self._compute_per_layer_inputs(token_tensor.int(), embeds)
             if pli_list is not None:
                 pli_combined = torch.stack(pli_list, dim=2)  # [1, 1, n_layers, pli_size]
 
-        embeds = embeds.reshape(1, 1, 1, self.hidden_size).to(torch.bfloat16)
+        embeds = embeds.reshape(1, 1, batch, self.hidden_size).to(torch.bfloat16)
         return embeds, pli_combined
 
     # ── Generator-compatible interface ────────────────────────────────────
@@ -1016,30 +1033,34 @@ class Gemma4Model:
             ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh and self.mesh_device.get_num_devices() > 1 else None
         )
 
-        # Host embedding + PLI (keeps these off the device trace)
-        token_id = tokens[0].item()
-        embeds, pli = self.compute_host_embeddings(token_id)
+        batch = tokens.shape[0] if hasattr(tokens, "shape") else len(tokens)
+
+        # Host embedding + PLI for all B users (keeps these off the device trace)
+        embeds, pli = self.compute_host_embeddings(tokens[:batch])
 
         embeds_tt = ttnn.from_torch(embeds, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=replicate)
 
-        # Position: [1, 32] uint32 padded (for RoPE embedding lookup)
-        pos = current_pos[0].item() if hasattr(current_pos, "item") else int(current_pos[0])
-        pos_padded = F.pad(torch.tensor([pos], dtype=torch.int32).reshape(1, 1), (0, 31), "constant", 0)
+        # Positions: pack the B per-user positions into the first B slots of a
+        # [1, 32] uint32 tensor (for RoPE embedding lookup; remaining slots zero).
+        pos_list = [
+            int(current_pos[b].item()) if hasattr(current_pos[b], "item") else int(current_pos[b]) for b in range(batch)
+        ]
+        pos_padded = F.pad(torch.tensor(pos_list, dtype=torch.int32).reshape(1, batch), (0, 32 - batch), "constant", 0)
         pos_tt = ttnn.from_torch(pos_padded, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32, mesh_mapper=replicate)
 
-        # int32 position for KV cache update + SDPA
+        # int32 positions [B] for KV cache update + SDPA (one per user)
         pos_int32_tt = ttnn.from_torch(
-            torch.tensor([pos], dtype=torch.int32),
+            torch.tensor(pos_list, dtype=torch.int32),
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.int32,
             mesh_mapper=replicate,
         )
 
-        # Page table
+        # Page table: [B, max_blocks], one row per user
         page_table_tt = None
         if page_table is not None:
             page_table_tt = ttnn.from_torch(
-                page_table[0:1] if page_table.dim() > 1 else page_table.unsqueeze(0),
+                page_table[:batch] if page_table.dim() > 1 else page_table.unsqueeze(0),
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 dtype=ttnn.int32,
                 mesh_mapper=replicate,
@@ -1131,6 +1152,9 @@ class Gemma4Model:
         if pli_combined is None:
             pli_combined = self._decode_pli_combined
 
+        # Users live on dim 2 of the decode embedding [1, 1, batch, hidden_size].
+        batch_size = input_embeds.shape[2]
+
         logits = self(
             hidden_states=input_embeds,
             position_idx=current_pos,
@@ -1141,6 +1165,7 @@ class Gemma4Model:
             position_idx_cache=position_idx_cache,
             pli_combined=ttnn.to_layout(pli_combined, ttnn.TILE_LAYOUT) if pli_combined is not None else None,
             page_tables_per_layer=page_tables_per_layer,
+            batch_size=batch_size,
         )
 
         # On-device sampling
