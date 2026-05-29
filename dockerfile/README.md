@@ -281,7 +281,7 @@ Use this checklist when adding a new tool. All listed files must be updated to a
 | 5 | `.github/scripts/compute-tool-tags.sh` | Add version extraction from the real source of truth, compute the content hash from the install script and any version file(s), then add the new `--arg` and `"<tool>-tag"` JSON entry |
 | 6 | `.github/scripts/compute-tool-data.sh` | Add the tool to `TOOLS`, add `<tool>_exists` handling, and include the field in the final JSON. This is what drives missing-image detection in CI |
 | 7 | `.github/workflows/build-docker-tools.yaml` | Add `add_if_missing <tool>` in "Prepare bake overrides" so CI can build and push the new tool image when absent |
-| 8 | `.github/workflows/build-docker-artifact.yaml` | Add the tool anywhere the corresponding downstream images need it: `ALL_TOOLS` for main images, `BASIC_TOOLS` for basic images, and/or the manylinux tool loop |
+| 8 | `.github/workflows/build-docker-artifact.yaml` | Add the tool anywhere the corresponding downstream images need it: `ALL_TOOLS` for main images, `BASIC_TOOLS` for basic images, and/or the manylinux tool loop (`for tool in ccache mold zstd sfpi openmpi`). Also update the manylinux tool list in `.github/scripts/validate-docker-bake-ci.py` to match |
 | 9 | `.github/workflows/build-evaluation-image.yaml` | If `dockerfile/Dockerfile.evaluation` uses the tool, expose `<tool>-tag` from `check-tool-images` and add `<tool>-layer=docker-image://...` to `build-contexts` |
 | 10 | Other explicit `tool-tags` consumers (currently `build-all-docker-images.yaml`) | If a workflow enumerates JSON keys explicitly, add the new `"<tool>-tag"` key there too so prewarming/reporting includes the new image |
 
@@ -315,6 +315,7 @@ Requirements:
 - In consumer Dockerfiles, add both the `FROM scratch AS <tool>-layer` stub and the actual `COPY --from` or `RUN --mount=from` usage.
 - In CI scripts, update both tag computation and existence detection: `.github/scripts/compute-tool-tags.sh` and `.github/scripts/compute-tool-data.sh`.
 - In workflows, update `.github/workflows/build-docker-tools.yaml`, `.github/workflows/build-docker-artifact.yaml`, and, if evaluation uses the tool, `.github/workflows/build-evaluation-image.yaml`.
+- If the tool is consumed by the manylinux image, add it to the `for tool in ...` loop in `build-docker-artifact.yaml` AND update the matching tool list in `.github/scripts/validate-docker-bake-ci.py` — both must stay in sync or validation will fail.
 - Match the style of existing tools such as `ccache`, `cmake`, `openmpi`, or `sfpi`, whichever is structurally closest.
 
 Validation:

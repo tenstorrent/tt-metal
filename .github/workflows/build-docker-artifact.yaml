@@ -433,7 +433,7 @@ jobs:
 
           SET=""
           # Add tool layer contexts with Harbor prefix for pull-through cache
-          for tool in ccache mold sfpi openmpi; do
+          for tool in ccache mold zstd sfpi openmpi; do
             tag=$(echo "$TOOL_TAGS" | jq -r ".\"${tool}-tag\"")
             SET+="manylinux.contexts.${tool}-layer=docker-image://${HARBOR_PREFIX}${tag}"$'\n'
           done

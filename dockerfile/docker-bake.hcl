@@ -312,6 +312,7 @@ target "manylinux" {
   contexts = {
     ccache-layer  = "target:ccache"
     mold-layer    = "target:mold"
+    zstd-layer    = "target:zstd"
     sfpi-layer    = "target:sfpi"
     openmpi-layer = "target:openmpi"
   }

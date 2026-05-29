@@ -125,7 +125,7 @@ def main() -> int:
             ]
         )
 
-    for tool in ("ccache", "mold", "sfpi", "openmpi"):
+    for tool in ("ccache", "mold", "zstd", "sfpi", "openmpi"):
         sets.extend(
             [
                 "--set",
