@@ -936,6 +936,12 @@ static std::string get_extra_include_flags() {
     extra_inc += " -I\"" + project_src + "\"";
     extra_inc += " -I\"" + project_src + "/tt_metal/hw/inc\"";
     extra_inc += " -I\"" + project_src + "/tt_metal/hostdevcommon/api\"";
+    // For `#include <tt-metalium/...>` paths used by some kernel-side headers
+    // (e.g. ttnn/cpp/ttnn/operations/ccl/ccl_host_types.hpp pulls in
+    // tt-metalium/experimental/fabric/fabric_edm_types.hpp). The fabric/CCL
+    // header is host-only API surface; emule doesn't simulate fabric routing
+    // but the kernel parse must succeed.
+    extra_inc += " -I\"" + project_src + "/tt_metal/api\"";
     return extra_inc;
 #else
     return {};
