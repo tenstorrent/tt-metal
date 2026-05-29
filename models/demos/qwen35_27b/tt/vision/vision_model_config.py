@@ -74,6 +74,14 @@ class VisionModelArgs(ModelArgs):
             assert self.qkv_size % tp == 0, f"vision qkv_size ({self.qkv_size}) must be divisible by TP={tp}"
             assert self.dim % tp == 0, f"vision dim ({self.dim}) must be divisible by TP={tp}"
             assert self.hidden_dim % tp == 0, f"vision hidden_dim ({self.hidden_dim}) must be divisible by TP={tp}"
+            # PatchMergerTP shards the merger MLP Megatron-style; its
+            # post-shuffle inner dim (mlp_size = hidden * spatial_merge_size^2)
+            # and the final out_hidden_size must both divide cleanly.
+            vision_cfg = self.hf_config.vision_config
+            mlp_size = vision_cfg.hidden_size * (vision_cfg.spatial_merge_size**2)
+            out_hidden_size = vision_cfg.out_hidden_size
+            assert mlp_size % tp == 0, f"vision merger mlp_size ({mlp_size}) must be divisible by TP={tp}"
+            assert out_hidden_size % tp == 0, f"vision out_hidden_size ({out_hidden_size}) must be divisible by TP={tp}"
 
     def prepare_residual_tensor_prefill(self, x_bsh):
         """
@@ -82,9 +90,22 @@ class VisionModelArgs(ModelArgs):
         B: batch (1)
         S: sequence len
         H: dim
+
+        In TP mode the blocks consume tensors fractured along the hidden dim
+        (dim=3 of the 4D tensor), so we shard at load time across cluster
+        axis 1 instead of replicating + post-load `mesh_partition`-ing.
         """
 
         x_1BSH = x_bsh.unsqueeze(0)
+
+        if self.vision_tp:
+            mesh_mapper = ttnn.ShardTensor2dMesh(
+                self.mesh_device,
+                dims=(None, -1),
+                mesh_shape=self.cluster_shape,
+            )
+        else:
+            mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
 
         # input goes to DRAM
         xs_1BSH = ttnn.from_torch(
@@ -93,7 +114,7 @@ class VisionModelArgs(ModelArgs):
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            mesh_mapper=mesh_mapper,
         )
         return xs_1BSH
 
@@ -111,6 +132,7 @@ class VisionModelArgs(ModelArgs):
             "VisionBlock": "",
             "VisionTransformer": "visual",
             "PatchMerger": "visual.merger",
+            "PatchMergerTP": "visual.merger",
             "norm1": "norm1",
             "norm2": "norm2",
             "DeepstackMerger": f"visual.deepstack_merger_list.{deepstack_merger_num}",
