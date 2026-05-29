@@ -72,7 +72,6 @@ def _run_recv_async_h2d(
             (iteration + 1) * num_pages * page_size_datums,
             dtype=torch.int32,
         ).reshape(tensor_shape)
-        host_input = ttnn.from_torch(torch_input, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
 
         # Pre-allocate the device output tensor that the op will write into.
         output_tensor = ttnn.from_torch(
@@ -87,7 +86,7 @@ def _run_recv_async_h2d(
         # host pushes the matching pages below.
         ttnn.experimental.recv_async_h2d(output_tensor, h2d_socket)
 
-        h2d_socket.write_tensor(host_input)
+        h2d_socket.write_tensor(torch_input)
 
         # Ensure the kernel has popped/written every page before reading the tensor.
         ttnn.synchronize_device(mesh_device)
@@ -206,16 +205,13 @@ def _run_send_async_d2h(
         # reads (below) free space in the FIFO.
         ttnn.experimental.send_async_d2h(input_tensor, d2h_socket)
 
-        host_output = ttnn.from_torch(
-            torch.zeros(tensor_shape, dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
-        )
-        d2h_socket.read_tensor(host_output)
+        result = torch.zeros(torch_input.shape, dtype=torch.uint32)
+        d2h_socket.read_tensor(result)
 
         # Ensure the kernel has finished updating the socket state before the next
         # iteration re-uses the same socket.
         ttnn.synchronize_device(mesh_device)
-
-        result = ttnn.to_torch(host_output).to(torch.int32)
+        result = result.to(torch.int32)
         assert torch.equal(torch_input, result), (
             f"send_async_d2h output mismatch on iteration {iteration} "
             f"(page_size={page_size_bytes}B, num_pages={num_pages}).\n"
@@ -323,8 +319,7 @@ def _run_recv_matmul_send_async(
 
     for iteration in range(num_iterations):
         torch_input = torch.randn(M, K, dtype=torch.float32)
-        host_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-
+        torch_input_bf16 = torch_input.to(torch.bfloat16)
         # 1) Pre-allocate the row-major L1 input tensor that recv_async_h2d will fill,
         # then dispatch the receiver. The kernel parks at socket_wait_for_pages.
         input_tensor_rm = ttnn.from_torch(
@@ -335,7 +330,7 @@ def _run_recv_matmul_send_async(
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.experimental.recv_async_h2d(input_tensor_rm, h2d_socket)
-        h2d_socket.write_tensor(host_input)
+        h2d_socket.write_tensor(torch_input_bf16)
 
         # 2) Convert to tile layout for the matmul; the matmul output stays in tile.
         input_tensor_tile = ttnn.to_layout(input_tensor_rm, ttnn.TILE_LAYOUT)
@@ -346,16 +341,14 @@ def _run_recv_matmul_send_async(
         matmul_output_rm = ttnn.to_layout(matmul_output_tile, ttnn.ROW_MAJOR_LAYOUT)
         ttnn.experimental.send_async_d2h(matmul_output_rm, d2h_socket)
 
-        host_output = ttnn.from_torch(
-            torch.zeros(M, N, dtype=torch.float32), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT
-        )
-        d2h_socket.read_tensor(host_output)
+        result = torch.zeros(M, N, dtype=torch.bfloat16)
+        d2h_socket.read_tensor(result)
         ttnn.synchronize_device(mesh_device)
 
         # 4) Compare to a torch reference. We use PCC because the device matmul is
         # bfloat16 and won't be bit-exact against an fp32 reference.
         torch_expected = torch_input.to(torch.float32) @ torch_weight
-        result = ttnn.to_torch(host_output).to(torch.float32)
+        result = result.to(torch.float32)
         assert_with_pcc(torch_expected, result, pcc=0.99)
 
 
