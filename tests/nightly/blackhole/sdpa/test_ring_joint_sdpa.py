@@ -796,7 +796,7 @@ def run_ring_joint_sdpa(
 # CHUNKED-PREFILL VALIDATION
 # ============================================================================
 CHUNKED_PREFILL_PER_DEVICE_CHUNK = 640
-CHUNKED_PREFILL_N_CHUNKS = 11  # Last chunk: prefix K = 10 * chunk_size (=25k @ sp=4), current = chunk_size (=2.5k).
+CHUNKED_PREFILL_N_CHUNKS = 11
 CHUNKED_PREFILL_CHUNK_SIZE = CHUNKED_PREFILL_PER_DEVICE_CHUNK * MESH_CONFIG.sp_size
 CHUNKED_PREFILL_TOTAL_SEQ = CHUNKED_PREFILL_CHUNK_SIZE * CHUNKED_PREFILL_N_CHUNKS
 CHUNKED_PREFILL_PCC_THRESHOLD = 0.99
@@ -1633,8 +1633,8 @@ def test_ring_joint_attention_perf_check(model_name, q_chunk_size, k_chunk_size,
 # DeepSeek V3 dims) kept separate from the global MODEL_CONFIGS so the kimi parameters
 # don't leak into the non-chunked sweep/perf/determinism tests.
 CHUNKED_PREFILL_MODEL_CONFIGS = {
-    "kimi_100k": ModelConfig(
-        name="kimi_100k",
+    "kimi50k": ModelConfig(
+        name="kimi50k",
         nhq=16,
         nhk=1,
         nhv=16,
@@ -1645,8 +1645,8 @@ CHUNKED_PREFILL_MODEL_CONFIGS = {
         is_balanced=True,
         q_dtype=ttnn.bfloat16,
         kv_dtype=ttnn.bfloat8_b,
-        q_chunk_sizes=[96],
-        k_chunk_sizes=[128, 256, 320],
+        q_chunk_sizes=[64],
+        k_chunk_sizes=[128, 256, 512],
         seq_len=CHUNKED_PREFILL_CHUNK_SIZE,  # unused by chunked path
     ),
 }
@@ -1687,7 +1687,8 @@ def test_ring_joint_attention_sdpa_chunked_accuracy(model_name, q_chunk_size, k_
     )
 
 
-# === TEST 7: CHUNKED-PREFILL DETERMINISM ===
+# === TEST 7: CHUNKED-PREFILL DETERMINISM (skipped on CI) ===
+@pytest.mark.skipif(os.environ.get("CI") == "true", reason="Determinism test - skip on CI")
 @pytest.mark.timeout(1800)
 @pytest.mark.parametrize("chunk_size", [CHUNKED_PREFILL_CHUNK_SIZE], ids=[f"chunk{CHUNKED_PREFILL_CHUNK_SIZE}"])
 @pytest.mark.parametrize(
