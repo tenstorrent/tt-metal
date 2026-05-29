@@ -1,8 +1,5 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-
-"""Structured-pattern strategies: face-identity, custom, identity, ULP sweep."""
-
 from typing import List, Optional
 
 import torch
@@ -18,7 +15,7 @@ from ..utils import _get_dtype_for_format, _get_integer_bounds
 
 
 class FaceIdentityStrategy:
-    """Per-face identity block: ``spec.value`` on the face diagonal, zero elsewhere."""
+    """Per-face identity block: *spec.value* on the face diagonal, zero elsewhere."""
 
     short_circuit = False
 
@@ -109,7 +106,7 @@ class CustomStrategy:
 
 
 class IdentityStrategy:
-    """Tensor-level identity matrix: ``spec.value`` on the diagonal, zero elsewhere."""
+    """Tensor-level identity matrix: *spec.value* on the diagonal, zero elsewhere."""
 
     short_circuit = True
 
