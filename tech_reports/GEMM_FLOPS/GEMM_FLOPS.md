@@ -959,7 +959,7 @@ FP8 does not support this, so the K-loop running sum must stay in dest (already 
 by the first setting) for the full reduction, further constraining sub-block
 geometry.
 
-**`Output dtype: 16 vs 8 Bits:`**
+**`16 Bit Outputs:`**
 FP8's dest must be FP16, FP32, or INT32. This has two consequences. First, it doubles
 the output write bandwidth vs `bfloat8_b` (2 B/element vs 1 B/element),
 penalising DRAM-output shapes at large N. Second, output CBs/buffers are allocated at
