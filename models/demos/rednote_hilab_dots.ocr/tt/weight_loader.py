@@ -105,3 +105,29 @@ def load_vision_attention_weights(checkpoint_path: str, block_idx: int = 0) -> D
         "qkv.weight": tensors[qkv_key],
         "proj.weight": tensors[proj_key],
     }
+
+
+def load_vision_mlp_weights(checkpoint_path: str, block_idx: int = 0) -> Dict[str, torch.Tensor]:
+    """Load a vision-tower MLP block's real SwiGLU weights (no bias).
+
+    The dots vision MLP (modeling_dots_vision.DotsSwiGLUFFN) is an unbiased
+    SwiGLU FFN: ``fc2(silu(fc1(x)) * fc3(x))`` where fc1 is the gate, fc3 the
+    up, and fc2 the down projection (config.use_bias = False). HF keys:
+        vision_tower.blocks.{i}.mlp.fc1.weight  [intermediate, embed_dim]  (gate)
+        vision_tower.blocks.{i}.mlp.fc3.weight  [intermediate, embed_dim]  (up)
+        vision_tower.blocks.{i}.mlp.fc2.weight  [embed_dim, intermediate]  (down)
+    embed_dim 1536, intermediate_size 4224.
+
+    Returns a flat state_dict in the shape :class:`TtVisionMLP` and the eager
+    reference vision_mlp_forward expect:
+        {"fc1.weight": ..., "fc2.weight": ..., "fc3.weight": ...}  (fp32, no bias).
+    """
+    fc1_key = f"vision_tower.blocks.{block_idx}.mlp.fc1.weight"
+    fc2_key = f"vision_tower.blocks.{block_idx}.mlp.fc2.weight"
+    fc3_key = f"vision_tower.blocks.{block_idx}.mlp.fc3.weight"
+    tensors = load_hf_tensors(checkpoint_path, [fc1_key, fc2_key, fc3_key])
+    return {
+        "fc1.weight": tensors[fc1_key],
+        "fc2.weight": tensors[fc2_key],
+        "fc3.weight": tensors[fc3_key],
+    }

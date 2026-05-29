@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** p150 (blackhole)
 **Started:** 2026-05-29T00:11:46Z
-**Updated:** 2026-05-29T03:47:35Z
+**Updated:** 2026-05-29T03:53:12Z
 
 ## Block Status
 
@@ -29,7 +29,7 @@
 | vision_mlp | ttnn | done | 0.999986 | 0 | fused gate(fc1)/up(fc3) ttnn.linear -> ttnn.silu(gate)*up -> down(fc2) ttnn.linear. No bias. HiFi4+fp32_dest_acc bf16 DRAM TILE. PCC=0.9999855 vs golden. Guard ok. |
 | vision_mlp | debug | n/a | — | 0 |  |
 | vision_mlp | optimization | done | 0.999986 | 0 | Tracy captured under --traced (metal trace replay session) at production shapes seq=256 dim=1536 intermediate=4224. Top hotspot MatmulDeviceOperation 74.5% (two linears, matmul-bound, at ceiling). Optimization budget was the gate/up split + SwiGLU elementwise chain (Slice+silu+mul=25.5%) landing DRAM-interleaved. Fix: replaced python-getitem split with ttnn.slice+L1_MEMORY_CONFIG and pinned silu/mul outputs to L1. Block kernel time 293.81->253.26us (-13.8%). Slice 30.82->18.32, silu 18.68->10.03, mul 25.52->8.04us; activation chain 75.0->36.4us (-51%), now INTERLEAVED/L1. Matmuls unchanged ~217us (real floor). PCC 0.9999855 held. |
-| vision_mlp | real_weights | pending | — | 0 |  |
+| vision_mlp | real_weights | done | 0.999996 | 0 | real HF vision MLP fc1/fc2/fc3 (SwiGLU, no bias) loaded into TtVisionMLP; PCC vs HF eager = 0.99999, 19.46M params |
 | vision_block | reference | done | 1.000000 | 0 | DotsVisionBlock: pre-norm RMSNorm -> fused-QKV 2D-RoPE bidirectional attn -> residual -> RMSNorm -> SwiGLU -> residual. PCC=1.0 vs HF eager. |
 | vision_block | ttnn | done | 0.999996 | 0 | First composite: pre-norm residual h=h+attn(norm1(h)); h=h+mlp(norm2(h)). Reuses TtVisionRMSNorm/Attention/MLP leaves by file-path import. HiFi4+fp32_dest_acc, bf16. Guard ok. |
 | vision_block | debug | n/a | — | 0 |  |
@@ -94,7 +94,6 @@
 
 ## Recent Ticks
 
-- tick 28 (2026-05-29T02:46:22Z): device[embedding] — ok
 - tick 29 (2026-05-29T02:52:35Z): device[rmsnorm] — ok
 - tick 30 (2026-05-29T02:58:59Z): device[rope] — ok
 - tick 31 (2026-05-29T03:05:15Z): device[attention] — ok
@@ -104,6 +103,7 @@
 - tick 35 (2026-05-29T03:35:03Z): device[language_model] — ok
 - tick 36 (2026-05-29T03:41:01Z): device[vision_rmsnorm] — ok
 - tick 37 (2026-05-29T03:47:35Z): device[vision_attention] — ok
+- tick 38 (2026-05-29T03:53:12Z): device[vision_mlp] — ok
 
 ## Host-Resident Exceptions
 
