@@ -75,15 +75,22 @@ constexpr uint32_t kMuxRowsThreshold = 4u;
 // Pick num_workers for the MUX/packed path. Two regimes:
 //
 //  - SMALL (num_tile_rows ≤ kSmallShapeRowsLimit): per-worker compute is
-//    tiny, so prioritize compute parallelism. Use max(num_tile_rows,
-//    kMaxMuxWorkersPerChip). This wins for prodlike shapes (N=256 H=640pd).
+//    tiny, so prioritize compute parallelism. Use min(num_tile_rows,
+//    kMaxMuxWorkersPerChip) — one worker per tile-row. This wins for small
+//    shapes where the per-chunk fabric overhead is amortized by more cores.
 //
 //  - LARGE (num_tile_rows > kSmallShapeRowsLimit): per-worker compute is
 //    substantial. Use rows/2 workers so chunks pack 2 rows per fabric
 //    packet — halving the packet count per chip and reducing fabric
 //    overhead. Cap at kMaxMuxWorkersPerChip. This wins for multichunk
 //    shapes (N=512+ at H=64pd).
-constexpr uint32_t kSmallShapeRowsLimit = 8u;
+//
+// Threshold = 16: measured on BH 2x4 LINE, cross_k_prompt_L512 (16 tile-rows,
+// H_per_device=1280) drops 53.3us -> 42.4us going from rows/2 (8 workers) to
+// one-per-row (16 workers). Shapes above 16 rows (N2368=74, N9472=296,
+// N18944=592) regress with one-per-row (more fabric packets), so they keep
+// the rows/2 packing. See PERF_LOG.md.
+constexpr uint32_t kSmallShapeRowsLimit = 16u;
 uint32_t pick_num_workers_tp_gt_1(uint32_t num_tile_rows) {
     if (num_tile_rows < kMuxRowsThreshold) {
         return 1u;
