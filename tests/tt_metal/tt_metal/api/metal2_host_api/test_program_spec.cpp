@@ -2271,7 +2271,7 @@ TEST(AggregateSpecTypes, KernelSpecDesignatedInitializers) {
 
     EXPECT_EQ(dm_kernel.unique_id, "my_dm_kernel");
     EXPECT_EQ(dm_kernel.num_threads, 2);
-    EXPECT_TRUE(dm_kernel.is_dm_kernel());
+    EXPECT_TRUE(dm_kernel.is_data_movement_kernel());
 
     KernelSpec compute_kernel{
         .unique_id = "my_compute_kernel",
@@ -2706,7 +2706,7 @@ TEST_F(ProgramSpecTestGen1, SemaphoreBoundToDMKernelSucceedsOnGen1) {
     spec.semaphores = {sem};
 
     // kernels[0] is the DM kernel in MakeMinimalGen1ValidProgramSpec
-    ASSERT_TRUE(spec.kernels[0].is_dm_kernel());
+    ASSERT_TRUE(spec.kernels[0].is_data_movement_kernel());
     spec.kernels[0].semaphore_bindings = {
         KernelSpec::SemaphoreBinding{.semaphore_spec_name = "sem_0", .accessor_name = "done_flag"}};
 

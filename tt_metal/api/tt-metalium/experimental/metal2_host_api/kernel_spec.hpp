@@ -70,7 +70,7 @@ struct KernelSpec {
     uint32_t num_threads = 1;
 
     // Kernel type (methods)
-    bool is_dm_kernel() const { return std::holds_alternative<DataMovementConfiguration>(config); }
+    bool is_data_movement_kernel() const { return std::holds_alternative<DataMovementConfiguration>(config); }
     bool is_compute_kernel() const { return std::holds_alternative<ComputeConfiguration>(config); }
 
     ///////////////////////////////////////////////////////////////////

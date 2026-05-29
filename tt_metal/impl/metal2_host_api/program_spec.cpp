@@ -647,7 +647,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                     kernel.num_threads);
             }
         }
-        if (kernel.is_dm_kernel()) {
+        if (kernel.is_data_movement_kernel()) {
             if (is_gen2_arch()) {
                 TT_FATAL(
                     kernel.num_threads <= QUASAR_USER_DM_CORES_PER_NODE,
@@ -668,7 +668,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
 
     // Validate DM configs
     for (const auto& kernel : spec.kernels) {
-        if (kernel.is_dm_kernel()) {
+        if (kernel.is_data_movement_kernel()) {
             const auto& data_movement_config = std::get<DataMovementConfiguration>(kernel.config);
 
             // Both Gen1 and Gen2 configs are optional. But at least one must be specified.
@@ -696,7 +696,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         // Maps (node, processor) -> the kernel that already claimed it
         std::map<std::pair<NodeCoord, DataMovementProcessor>, KernelSpecName> claimed;
         for (const auto& kernel : spec.kernels) {
-            if (!kernel.is_dm_kernel()) {
+            if (!kernel.is_data_movement_kernel()) {
                 continue;
             }
             const auto& dm_config = std::get<DataMovementConfiguration>(kernel.config);
@@ -853,7 +853,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     {
         // Per-kernel pass: typo guard.
         for (const auto& kernel : spec.kernels) {
-            if (!kernel.is_dm_kernel()) {
+            if (!kernel.is_data_movement_kernel()) {
                 continue;
             }
             const auto& dm_config = std::get<DataMovementConfiguration>(kernel.config);
@@ -884,7 +884,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 const KernelSpec* canonical = nullptr;
                 bool canonical_lists_dfb = false;
                 for (const auto& ep : endpoints) {
-                    if (!ep.kernel->is_dm_kernel()) {
+                    if (!ep.kernel->is_data_movement_kernel()) {
                         continue;
                     }
                     const auto& dm_config = std::get<DataMovementConfiguration>(ep.kernel->config);
@@ -1409,7 +1409,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             if (kernel_spec->is_compute_kernel()) {
                 compute_engines_needed += kernel_spec->num_threads;
             }
-            if (kernel_spec->is_dm_kernel()) {
+            if (kernel_spec->is_data_movement_kernel()) {
                 dm_cores_needed += kernel_spec->num_threads;
             }
         }
@@ -1694,7 +1694,7 @@ KernelRiscMaskMap SolveGen2KernelRiscMasks(const ProgramSpec& spec, const Collec
     // Collect DM kernels and compute kernels separately
     std::vector<const KernelSpec*> dm_kernels;
     for (const KernelSpec& kernel : spec.kernels) {
-        if (kernel.is_dm_kernel()) {
+        if (kernel.is_data_movement_kernel()) {
             dm_kernels.push_back(&kernel);
         } else {
             // Compute kernels: trivial assignment (one compute kernel per node assumption)
@@ -1737,7 +1737,7 @@ KernelRiscMaskMap BuildGen1KernelRiscMasks(const ProgramSpec& spec) {
 
     KernelRiscMaskMap result;
     for (const KernelSpec& kernel : spec.kernels) {
-        if (kernel.is_dm_kernel()) {
+        if (kernel.is_data_movement_kernel()) {
             const auto& dm_config = std::get<DataMovementConfiguration>(kernel.config);
             const auto& gen1 = dm_config.gen1_data_movement_config.value();
             result[&kernel] = static_cast<uint16_t>(1u << static_cast<uint8_t>(gen1.processor));
@@ -2060,7 +2060,7 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         bool any_dm = false;
         bool disabled = false;
         for (const auto& ep : endpoints) {
-            if (!ep.kernel->is_dm_kernel()) {
+            if (!ep.kernel->is_data_movement_kernel()) {
                 continue;
             }
             any_dm = true;
@@ -2133,7 +2133,7 @@ std::map<std::string, std::string> to_defines_map(const KernelSpec::CompilerOpti
 }
 
 DataMovementConfig MakeGen1DataMovementConfig(const KernelSpec& kernel_spec) {
-    TT_FATAL(kernel_spec.is_dm_kernel(), "Expected a DM kernel");
+    TT_FATAL(kernel_spec.is_data_movement_kernel(), "Expected a DM kernel");
     const auto& dm_config = std::get<DataMovementConfiguration>(kernel_spec.config);
     const auto& gen1 = dm_config.gen1_data_movement_config.value();
 
@@ -2220,7 +2220,7 @@ ComputeConfig MakeGen1ComputeConfig(const KernelSpec& kernel_spec, const DFBName
 // ----------------------------------------------------------------------------
 
 experimental::quasar::QuasarDataMovementConfig MakeQuasarDataMovementConfig(const KernelSpec& kernel_spec) {
-    TT_FATAL(kernel_spec.is_dm_kernel(), "Expected a DM kernel");
+    TT_FATAL(kernel_spec.is_data_movement_kernel(), "Expected a DM kernel");
 
     return experimental::quasar::QuasarDataMovementConfig{
         .num_threads_per_cluster = kernel_spec.num_threads,
@@ -2524,7 +2524,7 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
 
         if (is_gen2_arch()) {
             uint16_t risc_mask = kernel_to_risc_mask.at(&kernel_spec);
-            if (kernel_spec.is_dm_kernel()) {
+            if (kernel_spec.is_data_movement_kernel()) {
                 auto config = MakeQuasarDataMovementConfig(kernel_spec);
                 config.compile_args = ta_bindings.cta_words;  // populate positional CTAs from tensor bindings
                 auto processors = GetDMProcessorSet(DMProcessorMask{(uint8_t)(risc_mask & 0xFF)});
@@ -2558,7 +2558,7 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
                     ta_bindings.crta_layout);
             }
         } else {  // gen1
-            if (kernel_spec.is_dm_kernel()) {
+            if (kernel_spec.is_data_movement_kernel()) {
                 auto config = MakeGen1DataMovementConfig(kernel_spec);
                 config.compile_args = ta_bindings.cta_words;
                 kernel = std::make_shared<DataMovementKernel>(
