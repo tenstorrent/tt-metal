@@ -136,9 +136,6 @@ class LTXAttention(Module):
                 out_features=self.num_heads,
                 bias=True,
                 dtype=ttnn.float32,
-                # Fuse the sigmoid into the matmul (computed in the fp32 dest-acc path before packing),
-                # so _compute_gate doesn't launch a separate ttnn.sigmoid.
-                activation_fn="sigmoid",
                 mesh_device=mesh_device,
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
                 ccl_manager=ccl_manager,
@@ -360,15 +357,16 @@ class LTXAttention(Module):
         if not self.apply_gated_attention or self.to_gate_logits.weight._data is None:
             return None
 
-        # sigmoid is fused into the to_gate_logits matmul (activation_fn="sigmoid"), and the matmul emits
-        # bf16 directly (dtype below), so neither a standalone ttnn.sigmoid nor a typecast is needed here.
-        gate = self.to_gate_logits(spatial_1BND, parallel_config=qkv_parallel_config, dtype=ttnn.bfloat16)
-        gate = ttnn.multiply(gate, 2.0)  # 2 * sigmoid(gate_logits)
+        # Apply sigmoid separately (fusing it into the matmul hit a VecMode assertion in
+        # the unary op for the num_heads-wide output). gate = 2 * sigmoid(gate_logits).
+        gate_logits = self.to_gate_logits(spatial_1BND, parallel_config=qkv_parallel_config)
+        gate = ttnn.multiply(ttnn.sigmoid(gate_logits), 2.0)
 
         # (1, B, N, H_local) → (B, H_local, N, 1).
         gate = ttnn.squeeze(gate, 0)
         gate = ttnn.transpose(gate, -2, -1)
         gate = ttnn.unsqueeze(gate, -1)
+        gate = ttnn.typecast(gate, ttnn.bfloat16)
         return gate
 
     def _sdpa_cross(

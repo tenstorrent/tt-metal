@@ -581,6 +581,21 @@ class LTXPipeline:
                 m.register_coresident_exclusions(self.vae_decoder)
             self.vae_decoder.register_coresident_exclusions(*audio_modules)
 
+    def _register_encoder_exclusions(self, module) -> None:
+        """Register a lazily-built Gemma encoder/connector coresident-excluded with the
+        DiT variants + VAE (bidirectional). Called from load_gemma_encoder /
+        load_embeddings_connectors BEFORE their load, so the encoder's load_torch_state_dict
+        auto-evicts the DiT (and the later DiT/VAE reload auto-evicts the encoder).
+        No-op unless dynamic_load is enabled."""
+        if not self.dynamic_load:
+            return
+        peers = [s.model for s in self.transformer_states]
+        if self.vae_decoder is not None:
+            peers.append(self.vae_decoder)
+        module.register_coresident_exclusions(*peers)
+        for p in peers:
+            p.register_coresident_exclusions(module)
+
     def _prime_caches(self) -> None:
         """Load every module in reverse use order so variant 0 is resident in
         DRAM after ``__init__`` (matches Wan's reverse-use-order priming)."""
@@ -656,14 +671,23 @@ class LTXPipeline:
             max_position_embeddings=sequence_length,
         )
 
-        # Use TP on the same axis as the DiT transformer
+        # Use TP on the same axis as the DiT transformer; FSDP-shard weights on the
+        # sequence-parallel axis (active only when its factor > 1).
         tp_factor = self.parallel_config.tensor_parallel.factor
         tp_axis = self.parallel_config.tensor_parallel.mesh_axis
-        enc_parallel = EncoderParallelConfig(tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis))
+        enc_parallel = EncoderParallelConfig(
+            tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
+            sequence_parallel=self.parallel_config.sequence_parallel,
+        )
 
         enc_ccl = CCLManager(self.mesh_device, topology=ttnn.Topology.Linear)
 
         self.gemma_encoder = GemmaEncoder(config, self.mesh_device, enc_ccl, enc_parallel)
+
+        # dynamic_load: register the encoder coresident-excluded with the DiT variants +
+        # VAE BEFORE loading, so its load_torch_state_dict auto-evicts the DiT (and the
+        # later DiT reload auto-evicts the encoder) — the same mechanism the DiT/VAE use.
+        self._register_encoder_exclusions(self.gemma_encoder)
 
         weight_files = sorted(glob.glob(f"{gemma_path}/model-*.safetensors"))
         if not weight_files:
@@ -708,10 +732,13 @@ class LTXPipeline:
         """
         input_dim = gemma_hidden_size * gemma_num_layers
 
-        # Use same TP as DiT transformer
+        # Use same TP as DiT transformer; FSDP-shard on the sequence-parallel axis.
         tp_factor = self.parallel_config.tensor_parallel.factor
         tp_axis = self.parallel_config.tensor_parallel.mesh_axis
-        enc_parallel = EncoderParallelConfig(tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis))
+        enc_parallel = EncoderParallelConfig(
+            tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
+            sequence_parallel=self.parallel_config.sequence_parallel,
+        )
         enc_ccl = CCLManager(self.mesh_device, topology=ttnn.Topology.Linear)
 
         # --- Video connector ---
@@ -739,6 +766,7 @@ class LTXPipeline:
             if k.startswith(conn_prefix):
                 video_sd[k[len(conn_prefix) :]] = v
 
+        self._register_encoder_exclusions(self.video_connector)
         result = self.video_connector.load_torch_state_dict(video_sd, strict=False)
         if result.missing_keys:
             logger.warning(f"Video connector missing keys: {result.missing_keys}")
@@ -775,6 +803,7 @@ class LTXPipeline:
                             continue
                     audio_sd[sub] = v
 
+            self._register_encoder_exclusions(self.audio_connector)
             result = self.audio_connector.load_torch_state_dict(audio_sd, strict=False)
             if result.missing_keys:
                 logger.warning(f"Audio connector missing keys: {result.missing_keys}")

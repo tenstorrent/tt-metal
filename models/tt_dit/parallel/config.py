@@ -20,6 +20,9 @@ class DiTParallelConfig(NamedTuple):
 
 class EncoderParallelConfig(NamedTuple):
     tensor_parallel: ParallelFactor
+    # Optional FSDP axis: weights additionally sharded on this axis and gathered per-op.
+    # None → no FSDP (default; leaves t5/clip/qwen/umt5 encoders unaffected).
+    sequence_parallel: ParallelFactor | None = None
 
 
 class VAEParallelConfig(NamedTuple):

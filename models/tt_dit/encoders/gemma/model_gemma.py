@@ -155,11 +155,18 @@ class GemmaAttention(Module):
         self.num_local_heads = self.num_heads // tp
         self.num_local_kv_heads = self.num_kv_heads // tp
 
+        # FSDP: shard weights on the sequence-parallel axis (gathered per-op).
+        sp = parallel_config.sequence_parallel
+        fsdp_mesh_axis = sp.mesh_axis if (sp is not None and sp.factor > 1) else None
+
         col_kwargs = {
             "bias": False,
             "mesh_device": mesh_device,
             "mesh_axis": parallel_config.tensor_parallel.mesh_axis,
         }
+        if fsdp_mesh_axis is not None:
+            col_kwargs["fsdp_mesh_axis"] = fsdp_mesh_axis
+            col_kwargs["ccl_manager"] = ccl_manager
 
         self.q_proj = ColParallelLinear(self.hidden_size, self.num_heads * self.head_dim, **col_kwargs)
         self.k_proj = ColParallelLinear(self.hidden_size, self.num_kv_heads * self.head_dim, **col_kwargs)
@@ -304,11 +311,18 @@ class GemmaFF(Module):
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
 
+        # FSDP: shard weights on the sequence-parallel axis (gathered per-op).
+        sp = parallel_config.sequence_parallel
+        fsdp_mesh_axis = sp.mesh_axis if (sp is not None and sp.factor > 1) else None
+
         col_kwargs = {
             "bias": False,
             "mesh_device": mesh_device,
             "mesh_axis": parallel_config.tensor_parallel.mesh_axis,
         }
+        if fsdp_mesh_axis is not None:
+            col_kwargs["fsdp_mesh_axis"] = fsdp_mesh_axis
+            col_kwargs["ccl_manager"] = ccl_manager
 
         self.gate_proj = ColParallelLinear(
             config.hidden_size, config.intermediate_size, activation_fn="gelu_tanh", **col_kwargs
@@ -320,6 +334,7 @@ class GemmaFF(Module):
             bias=False,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
         )
 

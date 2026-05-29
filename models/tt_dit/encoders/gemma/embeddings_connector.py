@@ -48,11 +48,18 @@ class ConnectorBlock(Module):
         self.eps = eps
         tp_axis = parallel_config.tensor_parallel.mesh_axis
 
+        # FSDP: shard weights on the sequence-parallel axis (gathered per-op).
+        sp = parallel_config.sequence_parallel
+        fsdp_mesh_axis = sp.mesh_axis if (sp is not None and sp.factor > 1) else None
+
         # Norms are parameter-free RMS norms (matching reference ltx_core.utils.rms_norm)
         # No learnable weight — implemented as function calls in forward()
 
         # Self-attention (Q, K, V, O projections)
         col_kwargs = {"bias": True, "mesh_device": mesh_device, "mesh_axis": tp_axis}
+        if fsdp_mesh_axis is not None:
+            col_kwargs["fsdp_mesh_axis"] = fsdp_mesh_axis
+            col_kwargs["ccl_manager"] = ccl_manager
         self.to_q = ColParallelLinear(dim, dim, **col_kwargs)
         self.to_k = ColParallelLinear(dim, dim, **col_kwargs)
         self.to_v = ColParallelLinear(dim, dim, **col_kwargs)
@@ -67,10 +74,22 @@ class ConnectorBlock(Module):
 
         # Feed-forward (GELU gated)
         self.ff1 = ColParallelLinear(
-            dim, ff_dim, bias=True, activation_fn="gelu", mesh_device=mesh_device, mesh_axis=tp_axis
+            dim,
+            ff_dim,
+            bias=True,
+            activation_fn="gelu",
+            mesh_device=mesh_device,
+            mesh_axis=tp_axis,
+            **({"fsdp_mesh_axis": fsdp_mesh_axis, "ccl_manager": ccl_manager} if fsdp_mesh_axis is not None else {}),
         )
         self.ff2 = RowParallelLinear(
-            ff_dim, dim, bias=True, mesh_device=mesh_device, mesh_axis=tp_axis, ccl_manager=ccl_manager
+            ff_dim,
+            dim,
+            bias=True,
+            mesh_device=mesh_device,
+            mesh_axis=tp_axis,
+            fsdp_mesh_axis=fsdp_mesh_axis,
+            ccl_manager=ccl_manager,
         )
 
         self.compute_config = ttnn.init_device_compute_kernel_config(

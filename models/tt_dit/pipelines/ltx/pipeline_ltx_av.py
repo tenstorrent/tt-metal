@@ -145,7 +145,11 @@ class LTXAVPipeline(LTXPipeline):
 
         t0 = time.time()
         if os.environ.get("LTX_DEVICE_ENCODE") == "1":
-            # On-device Gemma encode (GemmaEncoder + connectors) instead of the CPU reference.
+            # On-device Gemma encode. Under dynamic_load the encoder is registered
+            # coresident-excluded with the DiT + VAE (see _register_encoder_exclusions),
+            # so loading it auto-evicts the DiT and the later _prepare_transformer(0)
+            # auto-evicts the encoder — no manual deallocation needed. FSDP shards the
+            # encoder weights on the SP axis to further cut per-chip memory.
             self._ensure_device_encoder()
             enc = self.encode_prompts_device([prompt, neg])
             v_embeds, a_embeds = enc[0][0].float(), enc[0][1].float()
