@@ -9,4 +9,7 @@ set(TTNN_OP_EXAMPLES_SRCS
     example_multiple_return/device/example_multiple_return_device_operation.cpp
     example_multiple_return/device/single_core_program_factory.cpp
     example_multiple_return/example_multiple_return.cpp
+    memory_repro/memory_repro.cpp
+    memory_repro/device/memory_repro_device_operation.cpp
+    memory_repro/device/program_factory.cpp
 )

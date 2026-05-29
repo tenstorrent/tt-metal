@@ -8,12 +8,14 @@
 
 #include "ttnn/operations/examples/example/example_nanobind.hpp"
 #include "ttnn/operations/examples/example_multiple_return/example_multiple_return_nanobind.hpp"
+#include "ttnn/operations/examples/memory_repro/memory_repro_nanobind.hpp"
 
 namespace ttnn::operations::examples {
 
 void py_module(nb::module_& mod) {
     bind_example_operation(mod);
     bind_example_multiple_return_operation(mod);
+    bind_memory_repro_operation(mod);
 }
 
 }  // namespace ttnn::operations::examples
