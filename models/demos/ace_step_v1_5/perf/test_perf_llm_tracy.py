@@ -44,6 +44,8 @@ Optional environment variables:
 - ``ACE_STEP_TRACY_EACH_DECODE_STEP``: set to ``1`` for one signpost per decode token (``prefill_decode``).
 - ``ACE_STEP_PROFILER_FLUSH_EVERY``: flush device profiler every N perf iterations (default ``1``).
 - ``ACE_STEP_PERF_MAX_SECONDS``: optional wall-time budget on the timed perf pass.
+- ``ACE_STEP_LM_PREFILL_L1``: prefill L1 activations (Tracy harness defaults to ``1``; PCC tests leave off).
+- ``ACE_STEP_LM_UNIFIED_DECODE_SHARD``: unified decode WIDTH_SHARDED specs (default ``1``).
 
 If Tracy merge reports ``Device data missing``, run without ``-p`` or post-process with
 ``python tools/tracy/process_ops_logs.py --date``.
@@ -146,7 +148,14 @@ def test_perf_ace_step_llm_tracy_profile(device):
     _run_llm_tracy_harness(device, lm_dir=lm_dir, variant_label=variant)
 
 
+def _ace_step_enable_llm_tracy_perf_env() -> None:
+    """Opt-in perf knobs for Tracy (PCC-safe defaults elsewhere)."""
+    os.environ.setdefault("ACE_STEP_LM_PREFILL_L1", "1")
+    os.environ.setdefault("ACE_STEP_LM_UNIFIED_DECODE_SHARD", "1")
+
+
 def _run_llm_tracy_harness(device: ttnn.Device, *, lm_dir: Path, variant_label: str) -> None:
+    _ace_step_enable_llm_tracy_perf_env()
     perf_mode = os.environ.get("ACE_STEP_LLM_PERF_MODE", "prefill_decode").strip().lower()
     valid_modes = ("prefill", "prefill_decode", "handler_cot", "handler_codes", "handler_full")
     if perf_mode not in valid_modes:
