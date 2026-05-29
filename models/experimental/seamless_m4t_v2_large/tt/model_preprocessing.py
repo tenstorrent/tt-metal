@@ -783,6 +783,60 @@ def _tp_linear_pair_gather_in0(
     raise ValueError(f"_tp_linear_pair_gather_in0: parallel must be 'col' or 'row', got {parallel!r}")
 
 
+def _tp_fused_kv_col_parallel_gather_in0(
+    k_proj: torch.nn.Linear,
+    v_proj: torch.nn.Linear,
+    *,
+    device: ttnn.Device,
+    tp: int,
+    weight_dtype: ttnn.DataType = ttnn.bfloat16,
+) -> dict:
+    """Column-parallel fused KV (no Q) with DRAM-WIDTH-sharded weights, ready for gather_in0.
+
+    Per-device layout: ``K_rank | V_rank`` concatenated along output dim.  Used by the
+    text decoder's cross-attention where Q comes from the decoder's hidden state but K/V
+    come from the encoder side (computed once per request).
+    """
+    from models.experimental.seamless_m4t_v2_large.tt.common import pad_n_for_dram_align
+
+    k_w = k_proj.weight.detach()
+    v_w = v_proj.weight.detach()
+    k_b = k_proj.bias.detach()
+    v_b = v_proj.bias.detach()
+
+    H_out = int(k_w.shape[0])
+    in_dim = int(k_w.shape[1])
+    local_out = H_out // tp
+    fused_local_out = 2 * local_out
+    dram_cores = int(device.dram_grid_size().x)
+    padded_fused = pad_n_for_dram_align(fused_local_out, dram_cores)
+
+    weight_slices: list[torch.Tensor] = []
+    bias_slices: list[torch.Tensor] = []
+    for rank in range(tp):
+        s, e = rank * local_out, (rank + 1) * local_out
+        kv_slice = torch.cat([k_w[s:e, :], v_w[s:e, :]], dim=0)  # [2*local_out, in_dim]
+        w_t = kv_slice.T.contiguous().to(torch.bfloat16)  # [in_dim, 2*local_out]
+        if padded_fused > fused_local_out:
+            w_t = torch.nn.functional.pad(w_t, (0, padded_fused - fused_local_out))
+        weight_slices.append(w_t)
+        b_slice = torch.cat([k_b[s:e], v_b[s:e]]).to(torch.bfloat16)
+        if padded_fused > fused_local_out:
+            b_slice = torch.nn.functional.pad(b_slice, (0, padded_fused - fused_local_out))
+        bias_slices.append(b_slice)
+
+    stacked_w = torch.stack(weight_slices, dim=0)  # [tp, in_dim, padded_fused]
+    stacked_b = torch.stack(bias_slices, dim=0)  # [tp, padded_fused]
+    mapper = ttnn.ShardTensorToMesh(device, dim=0)
+
+    w_tt = _dram_width_sharded_weight_tt(
+        stacked_w, k=in_dim, padded_n=padded_fused, device=device, dtype=weight_dtype, mesh_mapper=mapper
+    )
+    b_4d = stacked_b.reshape(tp, 1, 1, padded_fused)
+    b_tt = ttnn.from_torch(b_4d, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=mapper)
+    return {"weight": w_tt, "bias": b_tt}
+
+
 def create_text_decoder_parameters(decoder, *, device: ttnn.Device, tp: Optional[int] = None) -> dict:
     """
     Convert [`SeamlessM4Tv2Decoder`] weights to TTNN tensors on ``device``.
