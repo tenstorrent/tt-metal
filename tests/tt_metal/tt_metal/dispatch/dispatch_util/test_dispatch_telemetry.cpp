@@ -52,6 +52,8 @@ Program create_blank_program(const CoreCoord& core) {
     return program;
 }
 
+}  // namespace
+
 class DispatchTelemetryReadApiTest : public UnitMeshCQFixture {
 protected:
     IDevice* device() const { return devices_.at(0)->get_devices().front(); }
@@ -113,8 +115,6 @@ protected:
     CoreCoord worker_core_{0, 0};
     distributed::MeshWorkload waiting_workload_;
 };
-
-}  // namespace
 
 TEST_F(DispatchTelemetryReadApiTest, ReadDispatchTelemetryFromL1) {
     const CoreCoord core{0, 0};
