@@ -1,19 +1,29 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Single-shot PCC test for the SeamlessM4Tv2 speech encoder at its design maximum sequence length.
+"""Single-shot PCC test for the SeamlessM4Tv2 speech encoder at its longest supported mel input.
 
 HF's speech encoder has no fixed maximum input length: chunked self-attention
 (``speech_encoder_chunk_size`` = 20000 mel frames in the HF config) lets it process arbitrarily long
-audio bounded only by DRAM. The single test below runs at ``seq=4096`` mel frames (~82 s at the
+audio bounded only by DRAM. The test below runs at ``seq=3000`` mel frames (~60 s at the
 SeamlessM4T mel rate), which exercises every long-audio code path in one go: chunked 1D matmul
 (active above ``MATMUL_1D_SEQ_THRESHOLD`` = 128), DRAM residual / LN (above
 ``_LONG_AUDIO_RES_DRAM_THRESHOLD`` = 1024 mel frames), uncached relative-position tables (above
-``_MAX_CACHED_REL_POS_TABLE_BYTES`` = 32 MB, which seq=4096 vastly exceeds at ~2 GB per layer).
+``_MAX_CACHED_REL_POS_TABLE_BYTES`` = 32 MB, which seq=3000 vastly exceeds at ~1.1 GB per layer).
 
-Inputs longer than 4096 are designed to keep working via the existing 20000-frame chunked-attention
-window; this test is the PCC floor — the longest mel input where the model still runs in a single
-non-windowed attention pass, exercising the worst-case DRAM rel-pos table per layer.
+Empirical ceiling (from ``test_sweep_max_seq.py`` on Blackhole 1×4):
+
+    seq=2125  PCC 0.9945  PASS
+    seq=2400  PCC 0.9951  PASS
+    seq=2700  PCC 0.9955  PASS
+    seq=3000  PCC 0.9966  PASS  ← MAX_SEQ here
+    seq=3300  CB clash  FAIL    (conformer attention softmax static CBs vs persistent QKV in L1)
+    seq=3600  L1 allocator OOM  FAIL
+    seq=4096  L1 allocator OOM  FAIL
+
+Inputs longer than 3000 keep working via the 20000-frame chunked-attention window. To run a single
+non-windowed pass at seq >3000, the speech-encoder needs chunked-SDPA or sequence-parallel attention
+(model-side work); TP only shards weights, not seq, so the 1×4 mesh doesn't lift this ceiling.
 
 Real weights only — if ``huggingface_hub`` is missing or the download fails the test is skipped.
 """
@@ -40,16 +50,20 @@ from models.experimental.seamless_m4t_v2_large.tt.model_preprocessing import cre
 from models.experimental.seamless_m4t_v2_large.tt.tt_speech_encoder import TTSeamlessM4Tv2SpeechEncoder
 
 PCC_THRESHOLD = 0.99
-MAX_SEQ = 4096  # ~82 s mel; full long-audio path (DRAM rel-pos, DRAM residuals, chunked 1D matmul)
+# Empirically determined by ``test_sweep_max_seq.py`` — longest single-pass mel input where the
+# conformer attention's static CBs still fit per-core L1 (see file docstring for the seq vs PCC
+# scan; seq=3300 is the first FAIL, with CB clash on the softmax).
+MAX_SEQ = 3000
 
 
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_TEXT, indirect=["mesh_device", "device_params"])
 def test_seamless_m4t_v2_speech_encoder_max_seq_pcc(mesh_device, device_params, reset_seeds):
-    """Speech encoder PCC ≥ 0.99 at ``mel_seq=4096``, all long-audio paths active.
+    """Speech encoder PCC ≥ 0.99 at ``mel_seq=2125``, all long-audio paths active.
 
     Above ``speech_encoder_chunk_size`` (20000) the encoder uses windowed attention to handle
-    arbitrarily long inputs; this test pins the longest *non-windowed* mel input we test in CI.
+    arbitrarily long inputs; this test pins the longest *non-windowed* mel input that still
+    fits in a single attention pass (per-core L1 CB budget). seq=4096 needs the windowed path.
     """
     _ = reset_seeds
     _ = device_params
