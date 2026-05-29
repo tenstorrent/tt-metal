@@ -43,6 +43,7 @@ class ModelPipeline:
         model_path: Path | None = None,
         lm_head_fp32_dest_acc_en: bool = True,
         lm_head_persistent_mode: bool = True,
+        seed: int = 520,
         dense_layer_id_override: int | None = None,
         moe_layer_id_override: int | None = None,
         io_socket_descriptor_prefix: str | None = None,
@@ -55,8 +56,9 @@ class ModelPipeline:
         sram_hot_experts_ceiling: int = 64,
     ):
         logger.info(
-            "Initializing DeepSeek V3 B1 pod pipeline (weights={}, lm_head_fp32={}, lm_head_persistent_mode={})",
+            "Initializing DeepSeek V3 B1 pod pipeline (weights={}, seed={}, lm_head_fp32={}, lm_head_persistent_mode={})",
             weights_mode,
+            seed,
             lm_head_fp32_dest_acc_en,
             lm_head_persistent_mode,
         )
@@ -114,7 +116,7 @@ class ModelPipeline:
                 raise ValueError("weights_mode='state_dict' requires model_path")
             provider = StateDictWeightProvider(model_path)
         elif weights_mode == "synthetic":
-            provider = SyntheticWeightProvider()
+            provider = SyntheticWeightProvider(seed=seed)
         else:
             raise ValueError(f"Unknown weights_mode: {weights_mode!r}")
         config = create_pipeline_configuration_from_num_procs(
