@@ -325,8 +325,7 @@ class Flux2Pipeline:
 
         logger.info("encoding prompts...")
 
-        pce = profiler("encoder", profiler_iteration) if profiler else nullcontext()
-        with pce:
+        with profiler("encoder", profiler_iteration) if profiler else nullcontext():
             self._prepare_prompt_encoder()
             if prompt_upsample_temperature is not None:
                 prompts = self._prompt_encoder.upsample(
