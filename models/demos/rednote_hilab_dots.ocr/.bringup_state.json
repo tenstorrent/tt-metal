@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-29T00:11:46Z",
-  "updated_at": "2026-05-29T01:13:48Z",
+  "updated_at": "2026-05-29T01:17:43Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -374,8 +374,15 @@
         "pcc": 1.0
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/rmsnorm.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_tt_rmsnorm.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/rmsnorm.traced_ops.json"
+        ],
+        "notes": "Qwen2 LM RMSNorm eps=1e-6 (vs vision 1e-5). ttnn.rms_norm HiFi4+fp32_dest_acc bf16 DRAM TILE; weight reshaped [1,1,dim//32,32] row-major. Mirror of TtVisionRMSNorm. PCC=0.99999 vs golden on p150. Guard ok.",
+        "pcc": 0.9999954606391631
       },
       "debug": {
         "status": "n/a",
@@ -753,6 +760,12 @@
       "tick": 12,
       "ts": "2026-05-29T01:13:48Z",
       "action": "device[embedding]",
+      "result": "ok"
+    },
+    {
+      "tick": 13,
+      "ts": "2026-05-29T01:17:43Z",
+      "action": "device[rmsnorm]",
       "result": "ok"
     }
   ],

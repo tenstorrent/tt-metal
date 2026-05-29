@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** p150 (blackhole)
 **Started:** 2026-05-29T00:11:46Z
-**Updated:** 2026-05-29T01:13:48Z
+**Updated:** 2026-05-29T01:17:43Z
 
 ## Block Status
 
@@ -51,7 +51,7 @@
 | embedding | optimization | pending | — | 0 |  |
 | embedding | real_weights | pending | — | 0 |  |
 | rmsnorm | reference | done | 1.000000 | 0 | Qwen2RMSNorm (eps 1e-6): fp32 normalize -> cast -> weight*x. PCC=1.0 vs HF Qwen2RMSNorm. |
-| rmsnorm | ttnn | pending | — | 0 |  |
+| rmsnorm | ttnn | done | 0.999995 | 0 | Qwen2 LM RMSNorm eps=1e-6 (vs vision 1e-5). ttnn.rms_norm HiFi4+fp32_dest_acc bf16 DRAM TILE; weight reshaped [1,1,dim//32,32] row-major. Mirror of TtVisionRMSNorm. PCC=0.99999 vs golden on p150. Guard ok. |
 | rmsnorm | debug | n/a | — | 0 |  |
 | rmsnorm | optimization | pending | — | 0 |  |
 | rmsnorm | real_weights | pending | — | 0 |  |
@@ -94,7 +94,6 @@
 
 ## Recent Ticks
 
-- tick 5 (2026-05-29T00:38:13Z): reference[decoder_layer,lm_head,language_model] — ok
 - tick 6 (2026-05-29T00:45:55Z): device[vision_rmsnorm] — ok
 - tick 7 (2026-05-29T00:52:05Z): device[vision_attention] — ok
 - tick 8 (2026-05-29T00:52:15Z): device[vision_attention] — ok
@@ -104,6 +103,7 @@
 - tick 10 (2026-05-29T01:04:12Z): device[vision_block] — ok
 - tick 11 (2026-05-29T01:10:25Z): device[vision_patch_merger] — ok
 - tick 12 (2026-05-29T01:13:48Z): device[embedding] — ok
+- tick 13 (2026-05-29T01:17:43Z): device[rmsnorm] — ok
 
 ## Host-Resident Exceptions
 
