@@ -864,6 +864,13 @@ def test_demo_for_conditional_generation(
         and not use_per_request_params
     )
 
+    if should_check_perf:
+        pytest.skip(
+            "[CI] Tracked in issue #45496: distil-large-v3 performance regression detected on blackhole "
+            "(AssertionError: Performance regression detected) — failing deterministically on main in "
+            "whisper performance [bh_p150_perf] job; ≥5 consecutive failures"
+        )
+
     ttft, decode_throughput = run_demo_whisper_for_conditional_generation_inference(
         input_path,
         mesh_device,
