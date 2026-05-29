@@ -526,6 +526,7 @@ class TtMistral4Attention(LightweightModule):
             compute_kernel_config=self.lofi_compute_kernel_config,
             dtype=ttnn.bfloat16,
             output_memory_config=ttnn.L1_MEMORY_CONFIG,
+            in0_bf8=True,
         )  # [1, 1, seq, Q_LORA_RANK]
 
         # rms_norm output to L1: small tensor (Q_LORA_RANK ≪ HIDDEN_SIZE) and the
@@ -546,6 +547,7 @@ class TtMistral4Attention(LightweightModule):
             self.q_b_proj_preset,
             compute_kernel_config=self.lofi_compute_kernel_config,
             dtype=ttnn.bfloat16,
+            in0_bf8=True,
         )  # [1, 1, seq, N_HEADS * HEAD_DIM]
         ttnn.deallocate(q_latent)
 
@@ -584,6 +586,7 @@ class TtMistral4Attention(LightweightModule):
             compute_kernel_config=self.lofi_compute_kernel_config,
             dtype=ttnn.bfloat16,
             output_memory_config=ttnn.L1_MEMORY_CONFIG,
+            in0_bf8=True,
         )  # [1, 1, seq, KV_A_PROJ_OUT]
 
         kv_latent = ttnn.slice(kv_combined, [0, 0, 0, 0], [1, 1, seq_len, self.kv_lora_rank])
@@ -608,6 +611,7 @@ class TtMistral4Attention(LightweightModule):
             self.kv_b_proj_preset,
             compute_kernel_config=self.lofi_compute_kernel_config,
             dtype=ttnn.bfloat16,
+            in0_bf8=True,
         )  # [1, 1, seq, KV_B_PROJ_OUT_TOTAL]
         ttnn.deallocate(kv_latent)
         ttnn.deallocate(kv_latent_normed)
@@ -681,6 +685,7 @@ class TtMistral4Attention(LightweightModule):
             self.o_proj_preset,
             compute_kernel_config=self.lofi_compute_kernel_config,
             dtype=ttnn.bfloat16,
+            in0_bf8=True,
         )  # [1, 1, seq, HIDDEN_SIZE]
         ttnn.deallocate(attn_flat)
 

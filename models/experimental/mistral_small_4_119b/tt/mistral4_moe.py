@@ -293,8 +293,9 @@ class TtMistral4SharedMLP(LightweightModule):
         _mem = ttnn.L1_MEMORY_CONFIG
         seq_len = x.shape[2]
         I = self.intermediate_size
+        x_bf8 = x if x.dtype == ttnn.bfloat8_b else ttnn.typecast(x, ttnn.bfloat8_b)
         gate_up = ttnn.linear(
-            x,
+            x_bf8,
             self.gate_up_proj,
             compute_kernel_config=self.compute_kernel_config,
             dtype=ttnn.bfloat16,
@@ -313,8 +314,9 @@ class TtMistral4SharedMLP(LightweightModule):
         ttnn.deallocate(gate_silu)
         ttnn.deallocate(up)
 
+        hidden_bf8 = hidden if hidden.dtype == ttnn.bfloat8_b else ttnn.typecast(hidden, ttnn.bfloat8_b)
         out = ttnn.linear(
-            hidden,
+            hidden_bf8,
             self.down_proj,
             compute_kernel_config=self.compute_kernel_config,
             dtype=ttnn.bfloat16,
@@ -773,6 +775,7 @@ class TtMistral4MoELayer(LightweightModule):
                 self._gate_router_prefill_preset,
                 compute_kernel_config=self.compute_kernel_config,
                 dtype=ttnn.bfloat8_b if self._prefill_bf8_routing else ttnn.bfloat16,
+                in0_bf8=True,
             )
         else:
             gate_logits_tt = ttnn.matmul(
@@ -823,6 +826,7 @@ class TtMistral4MoELayer(LightweightModule):
             self._routing_proj_prefill_preset,
             compute_kernel_config=self.compute_kernel_config,
             dtype=ttnn.bfloat8_b if self._prefill_bf8_routing else ttnn.bfloat16,
+            in0_bf8=True,
         )
         ttnn.deallocate(dense_routing_tt)
         return routing_local
@@ -896,6 +900,9 @@ class TtMistral4MoELayer(LightweightModule):
                 gu_pc = self._expert_1d_mcast_pc(m_tiles, H // 32, 2 * I // 32)
                 d_pc = self._expert_1d_mcast_pc(m_tiles, I // 32, H // 32)
 
+            # Typecast x to bf8 once before the per-expert loop — all 128 expert
+            # gate_up matmuls share this in0. Saves N×typecast ops vs per-call.
+            x_bf8 = x if x.dtype == ttnn.bfloat8_b else ttnn.typecast(x, ttnn.bfloat8_b)
             partial = None
             for i in range(self.experts_per_device):
                 if use_sharded_weight_staging and self.expert_gate_up_sharded_list is not None:
@@ -908,7 +915,7 @@ class TtMistral4MoELayer(LightweightModule):
                     gate_up_weight = self.expert_gate_up_list[i]
                     deallocate_gate_up_weight = False
                 gate_up_i = ttnn.matmul(
-                    x,
+                    x_bf8,
                     gate_up_weight,
                     compute_kernel_config=self.expert_compute_kernel_config,
                     dtype=ttnn.bfloat8_b,

@@ -467,6 +467,7 @@ class TtMistral4TextModel:
             compute_kernel_config=self.lm_head_compute_kernel_config,
             dtype=ttnn.bfloat8_b,
             output_memory_config=ttnn.L1_MEMORY_CONFIG,
+            in0_bf8=True,
         )
         ttnn.deallocate(x)
         return logits_tt
@@ -510,6 +511,7 @@ class TtMistral4TextModel:
             compute_kernel_config=self.lm_head_compute_kernel_config,
             dtype=ttnn.bfloat8_b if use_bf8_lm_head else ttnn.bfloat16,
             output_memory_config=ttnn.L1_MEMORY_CONFIG if use_bf8_lm_head else ttnn.DRAM_MEMORY_CONFIG,
+            in0_bf8=True,
         )
         ttnn.deallocate(x_last)
         return logits_tt

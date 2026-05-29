@@ -335,6 +335,7 @@ def vision_linear(
     activation=None,
     keep_sharded: bool = False,
     output_memory_config: ttnn.MemoryConfig | None = None,
+    in0_bf8: bool = False,
 ) -> ttnn.Tensor:
     """Run ``ttnn.linear`` with a vision matmul preset (program + memory configs).
 
@@ -342,10 +343,13 @@ def vision_linear(
     ops expect that). Pass ``output_memory_config=ttnn.L1_MEMORY_CONFIG`` to keep
     it in L1 instead — useful when the next op also lives in L1 (avoids DRAM
     round-trips). ``keep_sharded=True`` returns the raw sharded output untouched.
+    ``in0_bf8=True`` typecasts the activation to bfloat8_b before the matmul.
     """
     in0 = x
     if _needs_in0_prepare(preset):
         in0 = ttnn.to_memory_config(x, preset.in0_memory_config)
+    if in0_bf8 and in0.dtype != ttnn.bfloat8_b:
+        in0 = ttnn.typecast(in0, ttnn.bfloat8_b)
 
     out = ttnn.linear(
         in0,
