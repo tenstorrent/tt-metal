@@ -1203,6 +1203,28 @@ def ace_step_init_cond_linear_compute_kernel_config(device: Any):
     return ace_step_init_lofi_linear_compute_kernel_config(device)
 
 
+def ace_step_init_cond_linear_fp32acc_compute_kernel_config(device: Any):
+    """LoFi linears with fp32 dest accumulation — for the pinned encoder matmuls.
+
+    The pinned configs (``ace_step_encoder_matmul_program_config``) use ``in0_block_w=8``;
+    with a bf16 dest register that accumulates K in lower precision and drifts PCC. fp32
+    dest accumulation keeps the wide-block speed while restoring (slightly improving) PCC,
+    and matches the compute config the matmul sweep timed against. Requires out_subblock
+    h*w <= 4 (satisfied by the pinned subblocks)."""
+    import ttnn
+
+    init_ck = getattr(ttnn, "init_device_compute_kernel_config", None)
+    if not callable(init_ck):
+        return None
+    return init_ck(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+
 def ace_step_init_cond_sdpa_compute_kernel_config(device: Any):
     """SDPA compute kernel for condition lyric/timbre encoders: LoFi."""
     return ace_step_init_lofi_linear_compute_kernel_config(device)
@@ -1271,6 +1293,15 @@ def ace_step_init_cond_sdpa_program_config(device: Any, *, seq_len: int, num_hea
         return None
 
 
+def ace_step_qwen_ttt_bfp4_weights() -> bool:
+    """Opt IN to BFP4 weights for the tt_transformers Qwen prefill.
+
+    Default is BFP8: the production prefill path hits PCC 0.982 (passes the 0.98 gate) at BFP8,
+    but only 0.914 at BFP4 — the ~5.5% prefill speedup is not worth dropping below the gate.
+    Set ACE_STEP_QWEN_TTT_BFP4_WEIGHTS=1 for max speed when quality headroom allows."""
+    return os.environ.get("ACE_STEP_QWEN_TTT_BFP4_WEIGHTS", "").lower() in ("1", "true", "yes")
+
+
 def ace_step_qwen3_optimizations(model_args: Any):
     """``tt_transformers`` decoder config for ACE Qwen3 caption encoder: LoFi + ``bfloat8_b`` weights.
 
@@ -1291,9 +1322,15 @@ def ace_step_qwen3_optimizations(model_args: Any):
     conf = ModelOptimizations(
         {
             "TensorPrecision": {
-                TensorGroup.FF1_FF3: PrecisionSetting.BFP8,
-                TensorGroup.FF2: PrecisionSetting.BFP8,
-                TensorGroup.WQKV: PrecisionSetting.BFP8,
+                # BFP8 weights by default: the prefill path hits PCC 0.982 (passes the 0.98 gate)
+                # at BFP8 vs only 0.914 at BFP4, and the prefill is traced (dispatch already hidden),
+                # so the ~5.5% BFP4 speedup is not worth crossing the gate. Opt in via
+                # ACE_STEP_QWEN_TTT_BFP4_WEIGHTS=1. (WO stays BFP4 — tt_transformers default, gate-safe.)
+                TensorGroup.FF1_FF3: PrecisionSetting.BFP4
+                if ace_step_qwen_ttt_bfp4_weights()
+                else PrecisionSetting.BFP8,
+                TensorGroup.FF2: PrecisionSetting.BFP4 if ace_step_qwen_ttt_bfp4_weights() else PrecisionSetting.BFP8,
+                TensorGroup.WQKV: PrecisionSetting.BFP4 if ace_step_qwen_ttt_bfp4_weights() else PrecisionSetting.BFP8,
                 TensorGroup.WO: PrecisionSetting.BFP4,
                 TensorGroup.KV_CACHE: PrecisionSetting.BF16,
             },
@@ -1854,6 +1891,11 @@ def ace_step_cond_256x1024_width_sharded_memory_config(
     n_dim = int(out_dim)
     if m_dim != 256 or k_dim != 1024:
         return None
+    # Swept encoder shapes (e.g. fused qkv 1024x4096) run faster L1-interleaved on a wider
+    # grid than width-sharded on 16 cores, and their consumers de-shard anyway — keep them
+    # off the width-shard path so the pinned program config + L1 in/out applies.
+    if ace_step_encoder_matmul_pinned(m_dim, k_dim, n_dim) is not None:
+        return None
 
     # 1D width-sharded tuned on 4x4 in sweep for this bucket.
     gx, gy = 4, 4
@@ -1918,6 +1960,104 @@ def _ace_step_cond_256x1024_1d_width_program_config(
     )
 
 
+# Pinned program configs from the encoder matmul device sweep (test_matmul_encoder_sweep,
+# M=256, in0=bf8 × in1=bf4 → out=bf8, LoFi + fp32 dest acc).  (K, N) -> (family, gx, gy,
+# in0_block_w).  All output L1 interleaved (what every consumer wants).
+#   "1D" = MatmulMultiCoreReuseMultiCast1D (mcast_in0); caps at Nt cores.
+#   "2D" = MatmulMultiCoreReuseMultiCast block-shard; also splits the K reduction over gx,
+#          so N-narrow + K-deep matmuls exceed the 1D Nt-core cap.
+# Measured device time vs the prior heuristic config:
+#   qkv 1024x4096 49.6->18.1us (1D, 2.74x)  wo 2048x1024 36.6->16.7us (2D, 2.19x)
+#   down 3072x1024 53.8->24.9us (2D, 2.16x).
+_ACE_STEP_ENCODER_MM_PINNED = {
+    (1024, 4096): ("1D", 8, 8, 8),  # qkv: Nt=128 already fills 64 cores in 1D; drops width-shard
+    (2048, 1024): ("2D", 8, 8, 8),  # wo:  Nt=32 caps 1D at 32c; 2D splits K=64t over gx=8 → 64c
+    (3072, 1024): ("2D", 8, 8, 6),  # down: Nt=32; 2D splits K=96t over gx=8 (12t/core, ibw|12)
+    # gate_up (1024x6144) intentionally NOT pinned: its 96-core mcast_1d heuristic (22.5us) is
+    # the structural optimum — Nt=192 with per_core_N=2 needs exactly 96 cores; 110 doesn't
+    # divide 192 and 2D caps at 64 (K=32t shallow). A pinned 8x8/64c measured 22.7us in
+    # production (the sweep's standalone 19.4us did not reproduce in the full encoder).
+}
+
+
+def ace_step_encoder_matmul_pinned(m: int, k: int, n: int):
+    """Return ``(family, grid_x, grid_y, in0_block_w)`` for a swept encoder matmul, else ``None``."""
+    if int(m) != 256:
+        return None
+    return _ACE_STEP_ENCODER_MM_PINNED.get((int(k), int(n)))
+
+
+def ace_step_encoder_matmul_program_config(
+    device: Any, *, seq_len: int, in_dim: int, out_dim: int, batch_size: int = 1
+):
+    """Pinned 1D/2D program config for the swept encoder matmuls (else ``None``).
+
+    2D configs (wo/down) accept L1-interleaved in0 — the kernel reads per-core blocks — so no
+    InterleavedToSharded is needed at the call site; output stays L1 interleaved either way.
+    """
+    import ttnn
+
+    m = max(1, int(batch_size)) * max(1, int(seq_len))
+    pin = ace_step_encoder_matmul_pinned(m, in_dim, out_dim)
+    if pin is None or not hasattr(device, "compute_with_storage_grid_size"):
+        return None
+    family, gx, gy, ibw = pin
+    grid = device.compute_with_storage_grid_size()
+    if gx > int(grid.x) or gy > int(grid.y):
+        return None
+    tile = int(getattr(ttnn, "TILE_SIZE", 32))
+    nt = (int(out_dim) + tile - 1) // tile
+    mt = (m + tile - 1) // tile
+    kt = int(in_dim) // tile
+
+    if family == "2D":
+        cfg_cls = getattr(ttnn, "MatmulMultiCoreReuseMultiCastProgramConfig", None)
+        if cfg_cls is None or nt % gx or mt % gy or kt % gx:
+            return None
+        pcm, pcn = mt // gy, nt // gx
+        if (kt // gx) % ibw:
+            return None
+        sh, sw = 1, 1
+        for h, w in [(2, 2), (4, 1), (1, 4), (2, 1), (1, 2), (1, 1)]:
+            if pcm % h == 0 and pcn % w == 0:
+                sh, sw = h, w
+                break
+        return cfg_cls(
+            compute_with_storage_grid_size=(gx, gy),
+            in0_block_w=ibw,
+            out_subblock_h=sh,
+            out_subblock_w=sw,
+            out_block_h=pcm,
+            out_block_w=pcn,
+            per_core_M=pcm,
+            per_core_N=pcn,
+            transpose_mcast=False,
+            fused_activation=None,
+        )
+
+    cfg_cls = getattr(ttnn, "MatmulMultiCoreReuseMultiCast1DProgramConfig", None)
+    cores = gx * gy
+    if cfg_cls is None or nt % cores or kt % ibw:
+        return None
+    pcn = nt // cores
+    sh, sw = 1, 1
+    for h, w in [(2, 2), (4, 1), (1, 4), (2, 1), (1, 2), (1, 1)]:
+        if mt % h == 0 and pcn % w == 0:
+            sh, sw = h, w
+            break
+    return cfg_cls(
+        compute_with_storage_grid_size=(gx, gy),
+        in0_block_w=ibw,
+        out_subblock_h=sh,
+        out_subblock_w=sw,
+        per_core_M=mt,
+        per_core_N=pcn,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
+
 def ace_step_cond_linear_program_config(
     device: Any,
     *,
@@ -1929,6 +2069,11 @@ def ace_step_cond_linear_program_config(
     out_sharded: bool = False,
 ):
     """Program config for condition / Qwen3 linears (e.g. ``256×1024×1024`` attn Q/K)."""
+    pinned = ace_step_encoder_matmul_program_config(
+        device, seq_len=seq_len, in_dim=in_dim, out_dim=out_dim, batch_size=batch_size
+    )
+    if pinned is not None:
+        return pinned
     pc = _ace_step_cond_256x1024_1d_width_program_config(
         device,
         seq_len=seq_len,
@@ -1980,6 +2125,11 @@ def ace_step_cond_mlp_gate_up_linear_program_config(
     """
     short = int(seq_len) <= 64
     n_out = int(out_dim) if out_dim is not None else int(intermediate_size)
+    pinned = ace_step_encoder_matmul_program_config(
+        device, seq_len=seq_len, in_dim=hidden_size, out_dim=n_out, batch_size=batch_size
+    )
+    if pinned is not None:
+        return pinned
     return _mcast_1d_linear_program_config(
         device,
         seq_len=seq_len,

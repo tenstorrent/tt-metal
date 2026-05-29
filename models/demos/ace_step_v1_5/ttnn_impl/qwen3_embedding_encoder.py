@@ -41,6 +41,7 @@ from .math_perf_env import (
     ace_step_ensure_l1_activation,
     ace_step_ensure_tile_layout,
     ace_step_init_cond_linear_compute_kernel_config,
+    ace_step_init_cond_linear_fp32acc_compute_kernel_config,
     ace_step_init_cond_rmsnorm_compute_kernel_config,
     ace_step_init_cond_sdpa_compute_kernel_config,
     ace_step_init_cond_sdpa_program_config,
@@ -771,7 +772,11 @@ class TtQwen3EmbeddingEncoder:
             mesh_mapper=mapper,
         )
 
-        linear_compute_kernel_config = ace_step_init_cond_linear_compute_kernel_config(device)
+        # fp32 dest accumulation pairs with the pinned wide-in0_block_w encoder matmul configs
+        # (ace_step_encoder_matmul_program_config): keeps their speed while holding PCC.
+        linear_compute_kernel_config = ace_step_init_cond_linear_fp32acc_compute_kernel_config(
+            device
+        ) or ace_step_init_cond_linear_compute_kernel_config(device)
         l1_mc = ace_step_linear_l1_memory_config(ttnn)
         sdpa_compute_kernel_config = ace_step_init_cond_sdpa_compute_kernel_config(device)
         sdpa_program_config = ace_step_init_cond_sdpa_program_config(
