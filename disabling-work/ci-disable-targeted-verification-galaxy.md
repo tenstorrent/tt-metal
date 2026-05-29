@@ -17,6 +17,22 @@ Disable PRs (the feature branches the automation creates with the actual test-di
 
 **Quick self-check before starting any work:** run `git remote get-url origin` (or the equivalent for the agent's GitHub surface). If the output is not `git@github.com:tenstorrent/tt-metal.git` or `https://github.com/tenstorrent/tt-metal.git`, STOP and reconfigure before doing anything else. If the agent finds an existing branch named `cursor/<something>` or a session-bootstrap commit in its current location, that is a strong signal it is in the wrong repo — re-check.
 
+## Scope (Galaxy)
+
+This automation covers **every Galaxy pipeline** in the active pipeline list from `aggregate-workflow-data`. Concretely, a workflow is in scope if any of the following holds:
+
+- The workflow file lives at `.github/workflows/galaxy-*.yaml` (or `pipeline-select-galaxy.yaml`).
+- The workflow's display name begins with or contains `(Galaxy)` or `Galaxy`.
+- The workflow runs on a Galaxy SKU (Galaxy 4U / Galaxy 6U / TG / etc.) rather than on a single-card or T3K SKU.
+
+Concrete examples of in-scope workflows (non-exhaustive, taken from the current `.github/workflows/` listing on `main`): `(Galaxy) e2e tests` (`galaxy-e2e-tests.yaml`), `(Galaxy) unit tests` (`galaxy-unit-tests.yaml`), `(Galaxy) demo tests` (`galaxy-demo-tests.yaml`), `(Galaxy) perf tests` (`galaxy-perf-tests.yaml`), `(Galaxy) integration tests` (`galaxy-integration-tests.yaml`), `(Galaxy) Sanity` (`galaxy-sanity.yaml`), `(Galaxy) Health` (`galaxy-health.yaml`), `(Galaxy) Stress` (`galaxy-stress-tests.yaml`), `(Galaxy) profiler tests` (`galaxy-profiler-tests.yaml`), `(Galaxy) deepseek tests` (`galaxy-deepseek-tests.yaml`), `(Galaxy) deepseek prefill tests` (`galaxy-deepseek-prefill-tests.yaml`), `(Galaxy) multi-user isolation tests` (`galaxy-multi-user-isolation-tests.yaml`).
+
+Explicitly **OUT of scope** (owned by the non-Galaxy automation, `ci-disable-targeted-verification.md` + `disabling-work-so-far.md`): every workflow whose runners are single-card SKUs (WH N150 / WH N300 / BH P100 / BH P150 / etc.) or T3K SKUs. Do not touch, comment on, dispatch, classify, or remove PRs / issues tracked by the non-Galaxy automation, even if you find a deterministic failure in one of those pipelines while inspecting a Galaxy adjacency.
+
+**Tie-breaker heuristic.** If unsure whether a workflow is Galaxy or not, the test is: does the workflow file or the workflow's display name contain the substring `galaxy`, OR does its `runs-on` declare a Galaxy SKU? If yes → in scope. Otherwise → out of scope. No other criterion overrides this tie-breaker.
+
+Wherever the rest of this document refers to "Galaxy" as a scope qualifier, it means the full Galaxy set defined here.
+
 ## Source of Truth (State Log)
 
 - The state log (`disabling-work/disabling-work-so-far-galaxy.md`) is the canonical record of which PRs the automation has created and which workflows it has touched. It is the single source of truth for what work has already been done.
@@ -24,8 +40,6 @@ Disable PRs (the feature branches the automation creates with the actual test-di
 - The agent still uses `gh` for narrow read/write operations on PRs and runs that the state log already references (checking mergeable status, posting comments, dispatching workflows, viewing run status, etc.) — but never to enumerate prior work.
 - Wiping the state log resets the automation to a fresh-state view. Stale GitHub PRs that match the automation's authoring criteria but aren't in the state log are intentionally ignored.
 - The agent MUST NOT reconstruct the state log from git history, `git log`, `git show <commit>:disabling-work/disabling-work-so-far-galaxy.md`, the GitHub web UI's file history, the GitHub API's commit/blob endpoints, the agent's own conversation memory of a prior session, or any other source of prior state-log content. The CURRENT working-tree contents of the state log file are the only valid input. If the state log says "no PRs tracked yet" or is otherwise empty of PRs, that IS the truth — the automation MUST behave as a true fresh-start session and rediscover any work it needs from a clean slate (no prior PRs visible, no prior runs visible). "Recovering" or "initializing from git history" is a policy violation and MUST be treated identically to using `gh pr list` to enumerate prior work. Orphaned PRs created by prior broken sessions are invisible until a human manually backfills them into the state log (see `## Session-End Invariants (BLOCKING)` → "Backfill responsibility").
-
-This note applies to the "disable deterministic failing tests" workflow.
 
 ## Main-run evidence — non-negotiable invariant
 
@@ -295,11 +309,11 @@ The only scenario in which the agent should refrain from dispatching is when the
 
 Everything below in this section — the YAML edits, the strict source-run selection rules, the pre-dispatch sanity checks, and the common-failure signatures — applies ONLY when the agent has chosen artifact reuse via step 3 of the decision flow above. When the agent takes the fresh-build fallback (step 4), skip the YAML edits and skip the source-run selection rules (including Requirement 5) entirely for that dispatch.
 
-The reusable mechanism is the `use-artifacts-from-run` input on `.github/workflows/build-artifact.yaml`. It is ALREADY DEFINED there — you do NOT need to modify `build-artifact.yaml`. You only modify the PIPELINE workflow file being dispatched (for example `.github/workflows/t3000-e2e-tests.yaml`) so it accepts the input and threads it into its `build-artifact` job.
+The reusable mechanism is the `use-artifacts-from-run` input on `.github/workflows/build-artifact.yaml`. It is ALREADY DEFINED there — you do NOT need to modify `build-artifact.yaml`. You only modify the PIPELINE workflow file being dispatched (for example `.github/workflows/galaxy-e2e-tests.yaml`) so it accepts the input and threads it into its `build-artifact` job.
 
 ### Step 1: Add the input to the pipeline workflow's `workflow_dispatch.inputs` block
 
-Open the target pipeline workflow file (e.g. `.github/workflows/t3000-e2e-tests.yaml`). Find the `on:` block. Under `workflow_dispatch.inputs`, add this entry (preserve any existing inputs):
+Open the target pipeline workflow file (e.g. `.github/workflows/galaxy-e2e-tests.yaml`). Find the `on:` block. Under `workflow_dispatch.inputs`, add this entry (preserve any existing inputs):
 
 ```yaml
 on:
@@ -373,12 +387,12 @@ REQUIREMENT 2 — Source run MUST share build intent with the TARGET workflow:
 
 REQUIREMENT 3 — Easiest way to satisfy Requirement 2 (RECOMMENDED):
 - Pick the source run from the SAME WORKFLOW the verification is targeting, on `main`, with `conclusion: success`.
-- Example: verifying a Blackhole post-commit PR? → source = most recent `Blackhole post-commit tests` run on `main` with conclusion `success`.
-- Example: verifying a (T3K) T3000 e2e tests PR? → source = most recent `(T3K) T3000 e2e tests` run on `main` with conclusion `success`.
+- Example: verifying a `(Galaxy) e2e tests` PR? → source = most recent `(Galaxy) e2e tests` run on `main` with conclusion `success`.
+- Example: verifying a `(Galaxy) unit tests` PR? → source = most recent `(Galaxy) unit tests` run on `main` with conclusion `success`.
 - This works because the same workflow always uses the same build intent, so the artifact names match by construction.
 
 REQUIREMENT 4 — Merge Gate is only acceptable when build intent demonstrably matches:
-- Merge Gate runs typically build with `tracy: false` and the default build-type. They are NOT suitable for workflows that build with `tracy: true` (such as Blackhole post-commit).
+- Merge Gate runs typically build with `tracy: false` and the default build-type. They are NOT suitable for workflows that build with `tracy: true` (check the target workflow's `build-artifact` job's `with:` block to determine its build intent before assuming Merge Gate reuse is safe).
 - Before using a Merge Gate run, confirm its build intent matches the target workflow's `build-artifact` `with:` block field-by-field.
 - If unsure, fall back to Requirement 3 (same workflow's main runs).
 
@@ -480,9 +494,9 @@ Do not spend disable/fix cycles on out-of-scope failures in this project.
 
 ## Operating Procedure (One Run Per PR)
 
-> Focus-PR selection (which PRs the session acts on at all) is governed by "Session Scope (Up to Three PRs)" above — the agent fills up to three focus slots, falling back to creating new disable PRs when fewer than three existing-PR slots are actionable. The steps below describe the per-PR mechanics once a PR is in focus.
+> Focus-PR selection (which PRs the session acts on at all) is governed by "Session Scope (Two Lanes — Focus and Examining)" above — the agent fills up to three focus slots, falling back to creating new disable PRs when fewer than three existing-PR slots are actionable. The steps below describe the per-PR mechanics once a PR is in focus.
 
-> **Newly created PRs flow straight through this procedure in the same session.** A focus PR that was created in this session's second-pass fill (see "Session Scope (Up to Three PRs)") is eligible for — and required to receive — its initial verification dispatch (steps 5–7 below) in the same session as its creation, subject to the 3-dispatch session cap and the artifact-reuse / fresh-build rules. Do not defer a newly created PR's first dispatch to the next session unless the 3-dispatch cap is already exhausted by other focus PRs.
+> **Newly created PRs flow straight through this procedure in the same session.** A focus PR that was created in this session's second-pass fill (see "Session Scope (Two Lanes — Focus and Examining)") is eligible for — and required to receive — its initial verification dispatch (steps 5–7 below) in the same session as its creation, subject to the 3-dispatch session cap and the artifact-reuse / fresh-build rules. Do not defer a newly created PR's first dispatch to the next session unless the 3-dispatch cap is already exhausted by other focus PRs.
 
 1. **Produce the main-run evidence link.** Identify deterministic failures from completed runs on `main` and confirm each candidate has the same error signature across at least 3 consecutive `main` runs. For each candidate, capture the most recent failing job-link URL (`https://github.com/tenstorrent/tt-metal/actions/runs/<run-id>/job/<job-id>`) and the run's completion timestamp; this is the main-run evidence the PR description and issue MUST carry per `Main-run evidence model`. **If you cannot produce that link, you cannot disable the test** (`Main-run evidence — non-negotiable invariant`).
 2. Before any verification run, build exactly one initial disable batch from those `main`-proven failures and commit it to the PR branch. Populate the PR description with the evidence table (one row per disabled test, with the job-link URL and completion timestamp captured in step 1) and generate the linked issue body from that same table. Verification-dispatch links and automation status updates do NOT go in the PR description — only PR comments (see `Main-run evidence model`).
@@ -522,7 +536,7 @@ The automation pushes a state-log commit and may merge `main` into each PR at se
 
 ### Focus-PR deep analysis budget
 
-- In each automation cycle, perform heavy log / deep failure analysis for at most three focus PRs (matching the three-dispatch session cap). See "Session Scope (Up to Three PRs)" above.
+- In each automation cycle, perform heavy log / deep failure analysis for at most three focus PRs (matching the three-dispatch session cap). See "Session Scope (Two Lanes — Focus and Examining)" above.
 - Keep all non-focus PRs on lightweight status checks only.
 
 ## Safety Constraints
@@ -604,7 +618,7 @@ The `Paralysis check` field in OUTPUT must use one of these exact prefixes:
 
 The tier-2 terminal state defined in `## Terminal States (Two Tiers)` above is the canonical zero-action session; the tier-1 `coverage-complete` outcome is the canonical "no new PRs needed but examining-lane work continues" session; the `limited` outcome above is the canonical sub-3-focus-PR-but-non-terminal session. Anything else with zero focus PRs and zero examining PRs is paralysis.
 
-When in doubt between "skip due to throttle" and "do something useful", do something useful. The throttle is a guard against thrash, not a license to idle. Treating BH-artifact-expiry, "main is broken", or "all PRs <4h old" as session-ending blockers is the failure mode this section exists to prevent.
+When in doubt between "skip due to throttle" and "do something useful", do something useful. The throttle is a guard against thrash, not a license to idle. Treating "no recent successful source run on the target workflow", "main is broken", or "all PRs <4h old" as session-ending blockers is the failure mode this section exists to prevent.
 
 ## Session-End Invariants (BLOCKING)
 
@@ -652,9 +666,9 @@ Interpretation:
 
 ### Backfill responsibility
 
-If a future session inherits a broken state — i.e. PRs exist on GitHub from prior automation work that aren't in the state log — that future session MUST NOT re-discover them via `gh pr list`, `gh search prs`, the GitHub web UI, `git log` / `git show` of prior state-log revisions, the GitHub API's commit/blob endpoints, or any other prior-state-reconstruction path (see `## Source of Truth (State Log)`).
+If a future session inherits a broken state — i.e. PRs exist on GitHub from prior automation work that aren't in the state log — that future session MUST NOT re-discover them via `gh pr list`, `gh search prs`, the GitHub web UI, `git log` / `git show` of prior state-log revisions, the GitHub API's commit/blob endpoints, or any other prior-state-reconstruction path (see `## Source of Truth (State Log)`). This prohibition is unconditional: the future session MUST NOT enumerate, count, or otherwise probe GitHub for PRs that are absent from the state log, even for the purpose of reporting them.
 
-Instead, the future session MUST proceed as a true fresh-start session and let those orphaned PRs be invisible to the automation. Manual human backfill is the ONLY valid recovery path. The future session's final OUTPUT report MUST document the orphaned-PR situation as plainly as possible (e.g. `Orphaned-PR notice: detected N draft author-matching PRs on GitHub absent from the state log; not acting on them per policy. Manual backfill required.`) — but the documentation is fact-of-existence only, NOT enumerated work.
+Instead, the future session MUST proceed as a true fresh-start session and let those orphaned PRs be invisible to the automation. Manual human backfill is the ONLY valid recovery path. The future session's final OUTPUT report MUST include the fixed sentinel line `Orphaned-PR check skipped per Source of Truth policy. If you suspect orphaned automation PRs exist from prior broken sessions, perform a manual backfill before the next session.` verbatim — no count, no list, no enumeration. The sentinel is fact-of-policy only and does NOT require (and MUST NOT involve) looking up any PRs on GitHub.
 
 ## Draft PR / Issue / Status File Management (Mandatory)
 

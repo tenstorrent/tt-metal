@@ -492,9 +492,9 @@ Do not spend disable/fix cycles on out-of-scope failures in this project.
 
 ## Operating Procedure (One Run Per PR)
 
-> Focus-PR selection (which PRs the session acts on at all) is governed by "Session Scope (Up to Three PRs)" above — the agent fills up to three focus slots, falling back to creating new disable PRs when fewer than three existing-PR slots are actionable. The steps below describe the per-PR mechanics once a PR is in focus.
+> Focus-PR selection (which PRs the session acts on at all) is governed by "Session Scope (Two Lanes — Focus and Examining)" above — the agent fills up to three focus slots, falling back to creating new disable PRs when fewer than three existing-PR slots are actionable. The steps below describe the per-PR mechanics once a PR is in focus.
 
-> **Newly created PRs flow straight through this procedure in the same session.** A focus PR that was created in this session's second-pass fill (see "Session Scope (Up to Three PRs)") is eligible for — and required to receive — its initial verification dispatch (steps 5–7 below) in the same session as its creation, subject to the 3-dispatch session cap and the artifact-reuse / fresh-build rules. Do not defer a newly created PR's first dispatch to the next session unless the 3-dispatch cap is already exhausted by other focus PRs.
+> **Newly created PRs flow straight through this procedure in the same session.** A focus PR that was created in this session's second-pass fill (see "Session Scope (Two Lanes — Focus and Examining)") is eligible for — and required to receive — its initial verification dispatch (steps 5–7 below) in the same session as its creation, subject to the 3-dispatch session cap and the artifact-reuse / fresh-build rules. Do not defer a newly created PR's first dispatch to the next session unless the 3-dispatch cap is already exhausted by other focus PRs.
 
 1. **Produce the main-run evidence link.** Identify deterministic failures from completed runs on `main` and confirm each candidate has the same error signature across at least 3 consecutive `main` runs. For each candidate, capture the most recent failing job-link URL (`https://github.com/tenstorrent/tt-metal/actions/runs/<run-id>/job/<job-id>`) and the run's completion timestamp; this is the main-run evidence the PR description and issue MUST carry per `Main-run evidence model`. **If you cannot produce that link, you cannot disable the test** (`Main-run evidence — non-negotiable invariant`).
 2. Before any verification run, build exactly one initial disable batch from those `main`-proven failures and commit it to the PR branch. Populate the PR description with the evidence table (one row per disabled test, with the job-link URL and completion timestamp captured in step 1) and generate the linked issue body from that same table. Verification-dispatch links and automation status updates do NOT go in the PR description — only PR comments (see `Main-run evidence model`).
@@ -534,7 +534,7 @@ The automation pushes a state-log commit and may merge `main` into each PR at se
 
 ### Focus-PR deep analysis budget
 
-- In each automation cycle, perform heavy log / deep failure analysis for at most three focus PRs (matching the three-dispatch session cap). See "Session Scope (Up to Three PRs)" above.
+- In each automation cycle, perform heavy log / deep failure analysis for at most three focus PRs (matching the three-dispatch session cap). See "Session Scope (Two Lanes — Focus and Examining)" above.
 - Keep all non-focus PRs on lightweight status checks only.
 
 ## Safety Constraints
@@ -664,9 +664,9 @@ Interpretation:
 
 ### Backfill responsibility
 
-If a future session inherits a broken state — i.e. PRs exist on GitHub from prior automation work that aren't in the state log — that future session MUST NOT re-discover them via `gh pr list`, `gh search prs`, the GitHub web UI, `git log` / `git show` of prior state-log revisions, the GitHub API's commit/blob endpoints, or any other prior-state-reconstruction path (see `## Source of Truth (State Log)`).
+If a future session inherits a broken state — i.e. PRs exist on GitHub from prior automation work that aren't in the state log — that future session MUST NOT re-discover them via `gh pr list`, `gh search prs`, the GitHub web UI, `git log` / `git show` of prior state-log revisions, the GitHub API's commit/blob endpoints, or any other prior-state-reconstruction path (see `## Source of Truth (State Log)`). This prohibition is unconditional: the future session MUST NOT enumerate, count, or otherwise probe GitHub for PRs that are absent from the state log, even for the purpose of reporting them.
 
-Instead, the future session MUST proceed as a true fresh-start session and let those orphaned PRs be invisible to the automation. Manual human backfill is the ONLY valid recovery path. The future session's final OUTPUT report MUST document the orphaned-PR situation as plainly as possible (e.g. `Orphaned-PR notice: detected N draft author-matching PRs on GitHub absent from the state log; not acting on them per policy. Manual backfill required.`) — but the documentation is fact-of-existence only, NOT enumerated work.
+Instead, the future session MUST proceed as a true fresh-start session and let those orphaned PRs be invisible to the automation. Manual human backfill is the ONLY valid recovery path. The future session's final OUTPUT report MUST include the fixed sentinel line `Orphaned-PR check skipped per Source of Truth policy. If you suspect orphaned automation PRs exist from prior broken sessions, perform a manual backfill before the next session.` verbatim — no count, no list, no enumeration. The sentinel is fact-of-policy only and does NOT require (and MUST NOT involve) looking up any PRs on GitHub.
 
 ## Draft PR / Issue / Status File Management (Mandatory)
 
