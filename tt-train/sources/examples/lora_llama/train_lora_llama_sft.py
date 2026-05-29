@@ -269,6 +269,11 @@ def parse_args():
         action="store_true",
         help="Disable LoRA and train all parameters (full fine-tune).",
     )
+    parser.add_argument(
+        "--gradient_checkpointing",
+        action="store_true",
+        help="Enable activation recomputation in backward (saves memory, ~30%% slower).",
+    )
     return parser.parse_args()
 
 
@@ -420,6 +425,7 @@ def main():
         checkpoint_dir=args.save_dir,
         eval_interval=0,
         profile_warmup_steps=args.profile_warmup_steps,
+        gradient_checkpointing=args.gradient_checkpointing,
     )
 
     trainer = SFTTrainer(

@@ -10,6 +10,7 @@ Port of the C++ loader in tt-train/sources/ttml/models/llama.cpp.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Dict
 
@@ -114,17 +115,29 @@ def load_from_safetensors(
         safetensors_path: Path to directory containing .safetensors file(s).
         config: The LlamaConfig used to build the model.
     """
-    from safetensors.numpy import load_file
+    from safetensors import safe_open
 
     safetensors_dir = Path(safetensors_path)
     st_files = sorted(safetensors_dir.glob("*.safetensors"))
     if not st_files:
         raise FileNotFoundError(f"No .safetensors files found in {safetensors_dir}")
 
-    all_tensors: Dict[str, np.ndarray] = {}
-    for f in st_files:
-        print(f"Loading safetensors file: {f}")
-        all_tensors.update(load_file(str(f)))
+    # Lazily stream tensors instead of slurping every file into RAM. The full
+    # 70B checkpoint is ~140GB; if the truncated model only has a handful of
+    # layers, loading all 80 layers' worth of weights up front will OOM the host.
+    layer_idx_re = re.compile(r"(?:^|\.)(?:model\.)?layers\.(\d+)\.")
+
+    def iter_tensors():
+        for st_file in st_files:
+            print(f"Opening safetensors file: {st_file}")
+            with safe_open(str(st_file), framework="numpy") as f:
+                for key in f.keys():
+                    m = layer_idx_re.search(key)
+                    if m is not None and int(m.group(1)) >= config.num_hidden_layers:
+                        # Skip layers the truncated model doesn't have — never
+                        # materialise them in memory.
+                        continue
+                    yield key, f.get_tensor(key)
 
     parameters = model.parameters()
     used_params: set[str] = set()
@@ -181,7 +194,7 @@ def load_from_safetensors(
 
     weight_tying = config.weight_tying
 
-    for hf_name, hf_arr in all_tensors.items():
+    for hf_name, hf_arr in iter_tensors():
         print(f"Loading tensor: {hf_name}, shape={hf_arr.shape}, dtype={hf_arr.dtype}")
 
         # ── Embedding ──

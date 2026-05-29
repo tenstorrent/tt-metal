@@ -1,0 +1,13 @@
+transformer_config:
+  model_type: "llama"
+  num_heads: 64
+  num_groups: 8
+  embedding_dim: 8192
+  intermediate_dim: 28672
+  dropout_prob: 0.0
+  num_blocks: 1
+  weight_tying: "disabled"
+  vocab_size: 128256
+  max_sequence_length: 512
+  runner_type: default
+  theta: 500000.0

@@ -36,7 +36,7 @@ _IGNORED_OPS = {"ProfilerNoopOperation"}
 #   "  857    0.0 %   FLOP  MatmulDeviceOperation 1024 x 4096 x 4096          0       346 μs      20,120 μs     96  ..."
 # Signpost row example:
 #   " 3559                  🪧 WARMUP_END after=1"
-_TXT_OP_RE = re.compile(r"^\s*(\d+)\s+[\d.]+\s*%\s+(?:FLOP|SLOW)?\s*(.+?)\s+\d+\s+([\d,]+)\s*μs")
+_TXT_OP_RE = re.compile(r"^\s*(\d+)\s+[\d.]+\s*%\s+(?:FLOP|SLOW)?\s*(.+?)\s+\d+\s+([\d,]+)\s*μs(?:\s+([\d,]+)\s*μs)?")
 _TXT_SIGNPOST_RE = re.compile(r"^\s*(\d+)\s+🪧\s+(.+?)\s*$")
 
 
@@ -160,7 +160,9 @@ def run_csv(path: str, top: int) -> int:
 # ============================================================
 
 
-def parse_text_report(path: str) -> tuple[list[tuple[int, str, float]], list[tuple[int, str]]]:
+def parse_text_report(
+    path: str,
+) -> tuple[list[tuple[int, str, float, float]], list[tuple[int, str]]]:
     """Parse a tt-perf-report TXT dump.
 
     tt-perf-report repeats the same op rows across several sections (main
@@ -168,12 +170,12 @@ def parse_text_report(path: str) -> tuple[list[tuple[int, str, float]], list[tup
     advice, etc.) — we dedupe by row ID so each op is counted exactly once.
 
     Returns (ops, signposts) where:
-      ops       = [(row_id, op_code, device_us), ...]
+      ops       = [(row_id, op_code, device_us, op_to_op_gap_us), ...]
       signposts = [(row_id, label), ...]
     """
     seen_op_ids: set[int] = set()
     seen_sp_ids: set[int] = set()
-    ops: list[tuple[int, str, float]] = []
+    ops: list[tuple[int, str, float, float]] = []
     signposts: list[tuple[int, str]] = []
     with open(path) as f:
         for line in f:
@@ -195,23 +197,25 @@ def parse_text_report(path: str) -> tuple[list[tuple[int, str, float]], list[tup
                     seen_op_ids.add(row_id)
                     continue
                 dev_us = float(m.group(3).replace(",", ""))
+                gap_us = float(m.group(4).replace(",", "")) if m.group(4) else 0.0
                 seen_op_ids.add(row_id)
-                ops.append((row_id, op_code, dev_us))
+                ops.append((row_id, op_code, dev_us, gap_us))
     return ops, signposts
 
 
-def _print_range_summary(label: str, ops_in_range: list[tuple[int, str, float]], top: int) -> None:
-    total_us = sum(d for _, _, d in ops_in_range)
-    print(f"\n[{label}]  ops={len(ops_in_range)}  dev_time_total={total_us:,.1f} μs ({total_us/1000:.2f} ms)")
+def _print_topn(tag: str, ops_in_range: list[tuple[int, str, float, float]], top: int) -> None:
+    """Top-N device ops by kernel time, matching the CSV-mode block style."""
+    dev_total_ms = sum(d for _, _, d, _ in ops_in_range) / 1000.0
     per_op: dict[str, list[float]] = defaultdict(list)
-    for _, code, d in ops_in_range:
-        per_op[code].append(d)
+    for _, code, d, _ in ops_in_range:
+        per_op[code].append(d / 1000.0)
     rows = [(c, len(v), sum(v)) for c, v in per_op.items()]
     rows.sort(key=lambda r: r[2], reverse=True)
-    denom = total_us or 1.0
-    print(f"  {'count':>6} {'dev_μs':>14} {'pct':>7}  op")
-    for code, count, us in rows[:top]:
-        print(f"  {count:>6} {us:>12,.1f} {100 * us / denom:>6.1f}%  {code}")
+    denom = dev_total_ms or 1.0
+    print(f"\n[{tag}]  kernel_total={dev_total_ms:.2f} ms")
+    print(f"  {'count':>6} {'dev_ms':>10} {'pct':>7}  op")
+    for code, count, ms in rows[:top]:
+        print(f"  {count:>6} {ms:>10.2f} {100 * ms / denom:>6.1f}%  {code}")
 
 
 def run_txt(
@@ -228,7 +232,7 @@ def run_txt(
     if id_range is not None:
         lo, hi = id_range
         in_range = [r for r in ops if lo <= r[0] <= hi]
-        _print_range_summary(f"IDs {lo}..{hi}", in_range, top)
+        _print_topn(f"IDs {lo}..{hi}", in_range, top)
         return 0
 
     if not signposts:
@@ -240,7 +244,7 @@ def run_txt(
         print("No matched BEGIN/END signpost pairs found.", file=sys.stderr)
         return 1
 
-    grouped_ids: dict[str, list[tuple[int, str, float]]] = defaultdict(list)
+    grouped_ids: dict[str, list[tuple[int, str, float, float]]] = defaultdict(list)
     for tag, begin_id, end_id in phases:
         tag_root = _phase_root(tag)
         if phase_filter is not None and tag_root != phase_filter:
@@ -257,22 +261,42 @@ def run_txt(
         )
         return 1
 
-    print(f"\nPhases found ({len(phases)} pair(s), rolled up by name):\n")
-    print(f"{'Phase':<22} {'Ops':>6} {'Dev time':>16}")
-    print("-" * 48)
-    grand_us = 0.0
-    grand_ops = 0
+    aggs: dict[str, dict[str, float]] = {}
     for tag, rows in grouped_ids.items():
-        total_us = sum(d for _, _, d in rows)
-        grand_us += total_us
-        grand_ops += len(rows)
-        print(f"{tag:<22} {len(rows):>6} {total_us:>12,.1f} μs")
-    print("-" * 48)
-    print(f"{'TOTAL':<22} {grand_ops:>6} {grand_us:>12,.1f} μs ({grand_us/1000:.2f} ms)")
+        dev_ms = sum(d for _, _, d, _ in rows) / 1000.0
+        gap_ms = sum(g for _, _, _, g in rows) / 1000.0
+        aggs[tag] = {
+            "ops": len(rows),
+            "wall_ms": dev_ms + gap_ms,
+            "dev_k_ms": dev_ms,
+            "gap_ms": gap_ms,
+        }
 
-    print(f"\n=== Top {top} device ops per phase (by device time) ===")
+    header = f"{'Phase':<22} {'Ops':>6} {'Wall':>12} {'Dev kernel':>14} {'Gap':>14}"
+    sep = "-" * len(header)
+    print(f"\n{header}")
+    print(sep)
+    totals = {"ops": 0, "wall_ms": 0.0, "dev_k_ms": 0.0, "gap_ms": 0.0}
+    for tag, agg in aggs.items():
+        print(
+            f"{tag:<22} {int(agg['ops']):>6} "
+            f"{agg['wall_ms']:>9.2f} ms "
+            f"{agg['dev_k_ms']:>11.2f} ms "
+            f"{agg['gap_ms']:>11.2f} ms"
+        )
+        for k in totals:
+            totals[k] += agg[k]
+    print(sep)
+    print(
+        f"{'TOTAL':<22} {int(totals['ops']):>6} "
+        f"{totals['wall_ms']:>9.2f} ms "
+        f"{totals['dev_k_ms']:>11.2f} ms "
+        f"{totals['gap_ms']:>11.2f} ms"
+    )
+
+    print(f"\n=== Top {top} device ops per phase (by device kernel time) ===")
     for tag, rows in grouped_ids.items():
-        _print_range_summary(tag, rows, top)
+        _print_topn(tag, rows, top)
 
     return 0
 
