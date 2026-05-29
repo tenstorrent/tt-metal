@@ -962,7 +962,7 @@ geometry.
 **`16 Bit Outputs:`**
 FP8's dest must be FP16, FP32, or INT32. This has two consequences. First, it doubles
 the output write bandwidth vs `bfloat8_b` (2 B/element vs 1 B/element),
-penalising DRAM-output shapes at large N. Second, output CBs/buffers are allocated at
+penalising DRAM-output shapes at large N. Second, output CBs and buffers are allocated at
 bf16 width (2048 B/tile) instead of bf8 width (1088 B/tile), consuming an
 extra ~1 KB/tile of L1.
 
