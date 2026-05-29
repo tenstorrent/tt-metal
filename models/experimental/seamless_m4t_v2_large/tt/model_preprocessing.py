@@ -569,220 +569,6 @@ def _tp_linear_pair(
     raise ValueError(f"_tp_linear_pair: parallel must be 'col' or 'row', got {parallel!r}")
 
 
-# ============================================================================
-# TP-aware DRAM-WIDTH-sharded weight builders for gather_in0 matmul.
-# ----------------------------------------------------------------------------
-# Each per-device weight slice is stored DRAM-WIDTH-sharded (N split across
-# DRAM banks) instead of interleaved DRAM. Combined with L1-WIDTH-sharded
-# activations and the gather_in0 matmul kernel, this avoids the
-# ``sharded → interleaved → sharded`` round-trip between encoder ops on tp > 1
-# (which the existing DRAM-sharded path is gated against because its
-# program config does not compose with per-device weight slicing).
-# ============================================================================
-
-
-def _dram_width_sharded_weight_tt(
-    stacked_2d_or_3d: torch.Tensor,
-    *,
-    k: int,
-    padded_n: int,
-    device: ttnn.Device,
-    dtype: ttnn.DataType,
-    mesh_mapper,
-) -> ttnn.Tensor:
-    """Upload a per-device-stacked weight tensor as DRAM-WIDTH-sharded on each device.
-
-    ``stacked_2d_or_3d`` should be either ``[tp, k, padded_n]`` (for mesh_mapper that
-    shards dim=0) or already per-device ``[k, padded_n]``. The per-device DRAM-width
-    shard splits along the last dim (N) across the device's DRAM banks (y=1 grid).
-    """
-    from models.experimental.seamless_m4t_v2_large.tt.common import dram_width_sharded_weight_memcfg
-
-    mem_config = dram_width_sharded_weight_memcfg(k, padded_n, device)
-    return ttnn.from_torch(
-        stacked_2d_or_3d,
-        dtype=dtype,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=mem_config,
-        mesh_mapper=mesh_mapper,
-    )
-
-
-def _tp_col_parallel_pair_gather_in0(
-    weight_torch: torch.Tensor,
-    bias_torch: torch.Tensor,
-    *,
-    device: ttnn.Device,
-    tp: int,
-    weight_dtype: ttnn.DataType = ttnn.bfloat16,
-) -> dict:
-    """Column-parallel TP linear with DRAM-WIDTH-sharded weights (per-device, ready for gather_in0).
-
-    ``weight_torch`` is the PyTorch ``[out_dim, in_dim]`` weight.  Each device receives a
-    ``[in_dim, padded_local_out]`` slice where ``padded_local_out`` is rounded up to a
-    multiple of ``TILE * dram_cores`` so the DRAM-width-shard splits evenly.  Bias is
-    stored interleaved-DRAM (matches the gather_in0 kernel expectation) and zero-padded
-    to ``padded_local_out``.
-    """
-    from models.experimental.seamless_m4t_v2_large.tt.common import pad_n_for_dram_align
-
-    out_dim, in_dim = weight_torch.shape
-    local_out = out_dim // tp
-    dram_cores = int(device.dram_grid_size().x)
-    padded_local_out = pad_n_for_dram_align(local_out, dram_cores)
-
-    weight_slices: list[torch.Tensor] = []
-    bias_slices: list[torch.Tensor] = []
-    for rank in range(tp):
-        start, end = rank * local_out, (rank + 1) * local_out
-        w_slice = weight_torch[start:end, :].T.contiguous().to(torch.bfloat16)  # [in_dim, local_out]
-        if padded_local_out > local_out:
-            w_slice = torch.nn.functional.pad(w_slice, (0, padded_local_out - local_out))
-        weight_slices.append(w_slice)
-        b_slice = bias_torch[start:end].to(torch.bfloat16)
-        if padded_local_out > local_out:
-            b_slice = torch.nn.functional.pad(b_slice, (0, padded_local_out - local_out))
-        bias_slices.append(b_slice)
-
-    stacked_w = torch.stack(weight_slices, dim=0)  # [tp, in_dim, padded_local_out]
-    stacked_b = torch.stack(bias_slices, dim=0)  # [tp, padded_local_out]
-    mapper = ttnn.ShardTensorToMesh(device, dim=0)
-
-    w_tt = _dram_width_sharded_weight_tt(
-        stacked_w, k=in_dim, padded_n=padded_local_out, device=device, dtype=weight_dtype, mesh_mapper=mapper
-    )
-    b_4d = stacked_b.reshape(tp, 1, 1, padded_local_out)
-    b_tt = ttnn.from_torch(b_4d, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=mapper)
-    return {"weight": w_tt, "bias": b_tt}
-
-
-def _tp_row_parallel_pair_gather_in0(
-    weight_torch: torch.Tensor,
-    bias_torch: torch.Tensor,
-    *,
-    device: ttnn.Device,
-    tp: int,
-    weight_dtype: ttnn.DataType = ttnn.bfloat16,
-) -> dict:
-    """Row-parallel TP linear with DRAM-WIDTH-sharded weights (per-device, ready for gather_in0).
-
-    Each device gets ``[local_in, padded_out]`` where ``local_in = in_dim // tp``.
-    Bias is divided by ``tp`` and replicated on every device so that ``all_reduce_sum`` after
-    the matmul reconstructs the full bias.
-    """
-    from models.experimental.seamless_m4t_v2_large.tt.common import pad_n_for_dram_align
-
-    out_dim, in_dim = weight_torch.shape
-    local_in = in_dim // tp
-    dram_cores = int(device.dram_grid_size().x)
-    padded_out = pad_n_for_dram_align(out_dim, dram_cores)
-
-    weight_slices: list[torch.Tensor] = []
-    for rank in range(tp):
-        start, end = rank * local_in, (rank + 1) * local_in
-        w_slice = weight_torch[:, start:end].T.contiguous().to(torch.bfloat16)  # [local_in, out_dim]
-        if padded_out > out_dim:
-            w_slice = torch.nn.functional.pad(w_slice, (0, padded_out - out_dim))
-        weight_slices.append(w_slice)
-
-    stacked_w = torch.stack(weight_slices, dim=0)  # [tp, local_in, padded_out]
-    mapper = ttnn.ShardTensorToMesh(device, dim=0)
-
-    w_tt = _dram_width_sharded_weight_tt(
-        stacked_w, k=local_in, padded_n=padded_out, device=device, dtype=weight_dtype, mesh_mapper=mapper
-    )
-
-    # Bias divided by tp so the all_reduce sum reconstructs the full bias; replicated on every device.
-    b_scaled = bias_torch.to(torch.bfloat16) / tp
-    if padded_out > out_dim:
-        b_scaled = torch.nn.functional.pad(b_scaled, (0, padded_out - out_dim))
-    b_stacked = b_scaled.unsqueeze(0).expand(tp, -1).contiguous()  # [tp, padded_out]
-    b_4d = b_stacked.reshape(tp, 1, 1, padded_out)
-    b_tt = ttnn.from_torch(b_4d, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=mapper)
-    return {"weight": w_tt, "bias": b_tt}
-
-
-def _tp_fused_qkv_col_parallel_gather_in0(
-    q_proj: torch.nn.Linear,
-    k_proj: torch.nn.Linear,
-    v_proj: torch.nn.Linear,
-    *,
-    device: ttnn.Device,
-    tp: int,
-    weight_dtype: ttnn.DataType = ttnn.bfloat16,
-    q_scale: float = 1.0,
-) -> dict:
-    """Column-parallel fused QKV with DRAM-WIDTH-sharded weights (ready for gather_in0).
-
-    Per-device layout: ``Q_rank | K_rank | V_rank`` concatenated along the output dim.
-    ``q_scale`` (when != 1.0) is pre-folded into the Q rows of the concatenated weight/bias.
-    """
-    from models.experimental.seamless_m4t_v2_large.tt.common import pad_n_for_dram_align
-
-    q_w = q_proj.weight.detach()
-    q_b = q_proj.bias.detach()
-    if q_scale != 1.0:
-        q_w = (q_w * q_scale).to(q_w.dtype)
-        q_b = (q_b * q_scale).to(q_b.dtype)
-    k_w = k_proj.weight.detach()
-    v_w = v_proj.weight.detach()
-    k_b = k_proj.bias.detach()
-    v_b = v_proj.bias.detach()
-
-    H_out = int(q_w.shape[0])
-    in_dim = int(q_w.shape[1])
-    local_out = H_out // tp
-    fused_local_out = 3 * local_out
-    dram_cores = int(device.dram_grid_size().x)
-    padded_fused = pad_n_for_dram_align(fused_local_out, dram_cores)
-
-    weight_slices: list[torch.Tensor] = []
-    bias_slices: list[torch.Tensor] = []
-    for rank in range(tp):
-        s, e = rank * local_out, (rank + 1) * local_out
-        qkv_slice = torch.cat([q_w[s:e, :], k_w[s:e, :], v_w[s:e, :]], dim=0)  # [3*local_out, in_dim]
-        w_t = qkv_slice.T.contiguous().to(torch.bfloat16)  # [in_dim, 3*local_out]
-        if padded_fused > fused_local_out:
-            w_t = torch.nn.functional.pad(w_t, (0, padded_fused - fused_local_out))
-        weight_slices.append(w_t)
-        b_slice = torch.cat([q_b[s:e], k_b[s:e], v_b[s:e]]).to(torch.bfloat16)
-        if padded_fused > fused_local_out:
-            b_slice = torch.nn.functional.pad(b_slice, (0, padded_fused - fused_local_out))
-        bias_slices.append(b_slice)
-
-    stacked_w = torch.stack(weight_slices, dim=0)  # [tp, in_dim, padded_fused]
-    stacked_b = torch.stack(bias_slices, dim=0)  # [tp, padded_fused]
-    mapper = ttnn.ShardTensorToMesh(device, dim=0)
-
-    w_tt = _dram_width_sharded_weight_tt(
-        stacked_w, k=in_dim, padded_n=padded_fused, device=device, dtype=weight_dtype, mesh_mapper=mapper
-    )
-    b_4d = stacked_b.reshape(tp, 1, 1, padded_fused)
-    b_tt = ttnn.from_torch(b_4d, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=mapper)
-    return {"weight": w_tt, "bias": b_tt}
-
-
-def _tp_linear_pair_gather_in0(
-    linear: torch.nn.Linear,
-    *,
-    device: ttnn.Device,
-    tp: int,
-    parallel: str,
-    weight_dtype: ttnn.DataType = ttnn.bfloat16,
-) -> dict:
-    """Dispatcher analogous to ``_tp_linear_pair`` but produces DRAM-WIDTH-sharded weights."""
-    if parallel == "col":
-        return _tp_col_parallel_pair_gather_in0(
-            linear.weight.detach(), linear.bias.detach(), device=device, tp=tp, weight_dtype=weight_dtype
-        )
-    if parallel == "row":
-        return _tp_row_parallel_pair_gather_in0(
-            linear.weight.detach(), linear.bias.detach(), device=device, tp=tp, weight_dtype=weight_dtype
-        )
-    raise ValueError(f"_tp_linear_pair_gather_in0: parallel must be 'col' or 'row', got {parallel!r}")
-
-
 def create_text_decoder_parameters(decoder, *, device: ttnn.Device, tp: Optional[int] = None) -> dict:
     """
     Convert [`SeamlessM4Tv2Decoder`] weights to TTNN tensors on ``device``.
@@ -931,7 +717,6 @@ def _m4t_encoder_self_attn_ffn_layers(
     dram_width_sharded_weights: bool = False,
     prefill_token_rows: int = 32,
     tp: int = 1,
-    use_gather_in0: bool = False,
 ) -> list:
     """Layer parameter dicts shared by text encoder and text-to-unit encoder stacks.
 
@@ -955,24 +740,13 @@ def _m4t_encoder_self_attn_ffn_layers(
     out_proj/fc2 are row-parallel, fc1 is column-parallel (Megatron-LM convention).
     """
     if tp > 1:
-        # TP sharding is incompatible with the original DRAM-sharded per-device weight path
-        # (``MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig`` is gated to tp == 1).
-        # ``use_gather_in0=True`` opts into the gather_in0 variant: per-device weight slices
-        # stored DRAM-width-sharded, paired with L1-width-sharded activations and the
-        # ``MatmulMultiCoreReuseMultiCast1DProgramConfig(gather_in0=True)`` matmul kernel.
-        # The forward path on the model side must dispatch to the matching matmul wrapper
-        # (``TTSeamlessM4Tv2Encoder._linear_gather_in0``) when this flag is set.
-        if use_gather_in0:
-            tp_fused_qkv = _tp_fused_qkv_col_parallel_gather_in0
-            tp_linear = _tp_linear_pair_gather_in0
-        else:
-            tp_fused_qkv = _tp_fused_qkv_col_parallel
-            tp_linear = _tp_linear_pair
+        # TP sharding is incompatible with DRAM-sharded per-device weights.
+        # Use regular TILE layout with ShardTensorToMesh.
         layers = []
         for layer in encoder.layers:
             if fuse_qkv:
                 self_attn = {
-                    "qkv": tp_fused_qkv(
+                    "qkv": _tp_fused_qkv_col_parallel(
                         layer.self_attn.q_proj,
                         layer.self_attn.k_proj,
                         layer.self_attn.v_proj,
@@ -980,7 +754,7 @@ def _m4t_encoder_self_attn_ffn_layers(
                         tp=tp,
                         weight_dtype=attn_weight_dtype,
                     ),
-                    "out_proj": tp_linear(
+                    "out_proj": _tp_linear_pair(
                         layer.self_attn.out_proj,
                         device=device,
                         tp=tp,
@@ -990,28 +764,28 @@ def _m4t_encoder_self_attn_ffn_layers(
                 }
             else:
                 self_attn = {
-                    "q_proj": tp_linear(
+                    "q_proj": _tp_linear_pair(
                         layer.self_attn.q_proj,
                         device=device,
                         tp=tp,
                         parallel="col",
                         weight_dtype=attn_weight_dtype,
                     ),
-                    "k_proj": tp_linear(
+                    "k_proj": _tp_linear_pair(
                         layer.self_attn.k_proj,
                         device=device,
                         tp=tp,
                         parallel="col",
                         weight_dtype=attn_weight_dtype,
                     ),
-                    "v_proj": tp_linear(
+                    "v_proj": _tp_linear_pair(
                         layer.self_attn.v_proj,
                         device=device,
                         tp=tp,
                         parallel="col",
                         weight_dtype=attn_weight_dtype,
                     ),
-                    "out_proj": tp_linear(
+                    "out_proj": _tp_linear_pair(
                         layer.self_attn.out_proj,
                         device=device,
                         tp=tp,
@@ -1030,10 +804,10 @@ def _m4t_encoder_self_attn_ffn_layers(
                     "bias": _ln_to_device(layer.ffn_layer_norm.bias, device=device),
                 },
                 "ffn": {
-                    "fc1": tp_linear(
+                    "fc1": _tp_linear_pair(
                         layer.ffn.fc1, device=device, tp=tp, parallel="col", weight_dtype=ffn_weight_dtype
                     ),
-                    "fc2": tp_linear(
+                    "fc2": _tp_linear_pair(
                         layer.ffn.fc2, device=device, tp=tp, parallel="row", weight_dtype=ffn_weight_dtype
                     ),
                 },
@@ -1103,7 +877,6 @@ def create_text_encoder_parameters(
     device: ttnn.Device,
     prefill_token_rows: int = 32,
     tp: Optional[int] = None,
-    use_gather_in0: bool = False,
 ) -> dict:
     """
     Convert [`SeamlessM4Tv2Encoder`] weights to TTNN tensors on ``device``.
@@ -1112,9 +885,6 @@ def create_text_encoder_parameters(
     When ``tp == 1``: linear weights use L1 width-sharded activations + DRAM width-sharded
     BFP8 weights for ``MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig``.
     When ``tp > 1``: TP column/row-parallel sharding via ``ShardTensorToMesh``.
-    When ``tp > 1`` AND ``use_gather_in0=True``: per-device weight slices stored
-    DRAM-width-sharded, ready for the ``gather_in0`` matmul kernel (the model-side
-    forward must dispatch to ``TTSeamlessM4Tv2Encoder._linear_gather_in0`` accordingly).
     """
     tp = _resolve_tp(device, tp)
     cfg = encoder.config
@@ -1149,10 +919,9 @@ def create_text_encoder_parameters(
         ffn_weight_dtype=ttnn.bfloat8_b,
         attn_weight_dtype=ttnn.bfloat8_b,
         fuse_qkv=True,
-        dram_width_sharded_weights=(tp == 1) and not use_gather_in0,
+        dram_width_sharded_weights=(tp == 1),
         prefill_token_rows=prefill_token_rows,
         tp=tp,
-        use_gather_in0=use_gather_in0,
     )
 
     out = {
