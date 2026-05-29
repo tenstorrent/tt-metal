@@ -75,7 +75,7 @@ struct TensorGeom {
 };
 
 TensorGeom compute_tensor_geom(
-    const MeshTensor& t, uint32_t bank_local_base, uint32_t num_senders, uint32_t num_receivers, uint32_t ring_half) {
+    const MeshTensor& t, uint32_t bank_local_base, uint32_t block_count, uint32_t num_receivers, uint32_t ring_half) {
     const auto* ref_buffer = t.mesh_buffer().get_reference_buffer();
     const auto shard_shape = ref_buffer->shard_spec().shape();
     const uint32_t tile_bytes = tt::tile_size(datatype_to_dataformat_converter(t.dtype()));
@@ -88,13 +88,15 @@ TensorGeom compute_tensor_geom(
         tt::constants::TILE_WIDTH);
     const uint32_t k_tiles_raw = shard_shape[0] / tt::constants::TILE_HEIGHT;
     const uint32_t n_per_bank = shard_shape[1] / tt::constants::TILE_WIDTH;
-    const uint32_t num_blocks = num_senders * num_receivers;
+    TT_FATAL(block_count > 0, "DRAM-core prefetcher block_count must be > 0");
     TT_FATAL(
         n_per_bank % num_receivers == 0,
         "n_per_bank ({}) must divide num_receivers ({}); reduce N_per_bank or grow num_receivers",
         n_per_bank,
         num_receivers);
-    const uint32_t k_block_w_tiles = (k_tiles_raw + num_blocks - 1) / num_blocks;
+    // block_count K-blocks per tensor (replaces the GCB ring size here); the
+    // consuming matmul does wait_front(block_count) per layer.
+    const uint32_t k_block_w_tiles = (k_tiles_raw + block_count - 1) / block_count;
     const uint32_t n_per_recv = n_per_bank / num_receivers;
     const uint32_t row_bytes = n_per_bank * tile_bytes;
     const uint32_t block_bytes = k_block_w_tiles * row_bytes;
@@ -343,7 +345,7 @@ MeshCoordinateRangeSet DramCorePrefetcherManager::full_mesh_subset() const {
 
 std::vector<uint8_t> DramCorePrefetcherManager::serialize_request_page(
     const experimental::GlobalCircularBuffer& gcb,
-    const std::vector<const MeshTensor*>& data_tensors,
+    const std::vector<experimental::DramCorePrefetcherInput>& data_tensors,
     uint32_t num_layers) const {
     const uint32_t num_tensors = static_cast<uint32_t>(data_tensors.size());
     TT_FATAL(
@@ -355,19 +357,21 @@ std::vector<uint8_t> DramCorePrefetcherManager::serialize_request_page(
     // Derive num_receivers from the GCB itself so each Queue call can target a
     // GCB with a different receiver count.
     const uint32_t gcb_num_receivers = gcb.sender_receiver_core_mapping().front().second.num_cores();
-    const uint32_t num_blocks = num_senders_ * gcb_num_receivers;
     const uint32_t gcb_state_addr = static_cast<uint32_t>(experimental::sender_state_drisc_l1_base(gcb));
 
     std::vector<uint32_t> words(kRequestPageHeaderWords + kMaxTensorsPerRequest * kRequestPageTensorWords, 0);
     words[0] = num_tensors;
     words[1] = num_layers;
-    words[2] = num_blocks;
-    words[3] = gcb_state_addr;
+    words[2] = gcb_state_addr;
 
     for (uint32_t t = 0; t < num_tensors; ++t) {
-        const uint32_t bank_local_base = static_cast<uint32_t>(data_tensors[t]->mesh_buffer().address());
+        const experimental::DramCorePrefetcherInput& input = data_tensors[t];
+        TT_FATAL(input.tensor != nullptr, "QueueDramCorePrefetcherRequest: input tensor {} is null", t);
+        // block_count is per-tensor: it sets how many K-blocks the kernel pushes
+        // (and how K is divided in compute_tensor_geom), replacing the GCB ring size.
+        const uint32_t bank_local_base = static_cast<uint32_t>(input.tensor->mesh_buffer().address());
         const TensorGeom g =
-            compute_tensor_geom(*data_tensors[t], bank_local_base, num_senders_, gcb_num_receivers, ring_half_);
+            compute_tensor_geom(*input.tensor, bank_local_base, input.block_count, gcb_num_receivers, ring_half_);
         uint32_t* slot = words.data() + kRequestPageHeaderWords + t * kRequestPageTensorWords;
         slot[0] = g.bank_local_base;
         slot[1] = g.num_sub;
@@ -379,6 +383,7 @@ std::vector<uint8_t> DramCorePrefetcherManager::serialize_request_page(
         slot[7] = g.sub_stride_bytes;
         slot[8] = g.block_stride_bytes;
         slot[9] = g.page_bytes_per_recv;
+        slot[10] = input.block_count;
     }
 
     std::vector<uint8_t> bytes(words.size() * sizeof(uint32_t), 0);
@@ -394,7 +399,7 @@ std::vector<uint8_t> DramCorePrefetcherManager::serialize_request_page(
 void DramCorePrefetcherManager::queue(
     const experimental::GlobalCircularBuffer& gcb,
     const std::optional<MeshCoordinateRangeSet>& device_subset,
-    const std::vector<const MeshTensor*>& tensors,
+    const std::vector<experimental::DramCorePrefetcherInput>& tensors,
     uint32_t num_layers) {
     TT_FATAL(active_, "QueueDramCorePrefetcherRequest called before StartDramCorePrefetcher");
     TT_FATAL(
@@ -540,7 +545,7 @@ void QueueDramCorePrefetcherRequest(
     distributed::MeshDevice* mesh_device,
     const GlobalCircularBuffer& gcb,
     const std::optional<distributed::MeshCoordinateRangeSet>& device_subset,
-    const std::vector<const MeshTensor*>& input_tensors,
+    const std::vector<DramCorePrefetcherInput>& input_tensors,
     uint32_t num_layers) {
     TT_FATAL(mesh_device != nullptr, "QueueDramCorePrefetcherRequest requires a non-null MeshDevice");
     auto& manager = mesh_device->impl().dram_core_prefetcher(mesh_device);

@@ -227,7 +227,7 @@ def test_bw_dram_core_prefetcher(device, op_name, shape):
 
     ttnn.experimental.start_dram_core_prefetcher(device)
     ttnn.experimental.queue_dram_core_prefetcher_request(
-        device, [tt_weight], num_layers=num_prefetch_layers, global_cb=gcb
+        device, [(tt_weight, num_receivers)], num_layers=num_prefetch_layers, global_cb=gcb
     )
 
     # Warmup: drain 1 layer's worth of pages — this also primes the cached MeshWorkload

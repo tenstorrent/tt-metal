@@ -34,6 +34,16 @@ class GlobalCircularBuffer;
 
 struct DramCorePrefetcherConfig {};
 
+// One prefetch work item: a weight tensor plus the number of K-blocks to split
+// its K dimension into. `block_count` is used in place of the GCB ring size when
+// dividing K (k_block_w_tiles = ceil(K_tiles / block_count)), so different
+// tensors — within one request or across GCBs — can use different K-block
+// counts. The consuming matmul must wait_front(block_count) per layer.
+struct DramCorePrefetcherInput {
+    const MeshTensor* tensor = nullptr;
+    uint32_t block_count = 0;
+};
+
 // Build per-device Programs (one DRISC kernel per DRAM sender core), allocate
 // the per-(device, sender) H2D sockets, and spawn the host worker thread that
 // drains the request queue. Returns immediately. No prefetch work is scheduled
@@ -55,17 +65,18 @@ void StartDramCorePrefetcher(distributed::MeshDevice* mesh_device, const DramCor
 //     same mesh device.
 //   - `device_subset` defaults to the full mesh when std::nullopt. Devices
 //     outside the subset do not process this request.
-//   - `input_tensors` is the list of weight tensors to prefetch (at least one).
+//   - `input_tensors` is the list of weight tensors to prefetch (at least one),
+//     each paired with the block_count to divide its K dimension into.
 //   - Per-GCB ring-buffer state is preserved across requests, so successive
 //     Queue calls against the same GCB resume where the previous call left off.
 //
-// The caller is responsible for keeping `input_tensors` and `gcb` alive until
-// Stop returns.
+// The caller is responsible for keeping the tensors in `input_tensors` and
+// `gcb` alive until Stop returns.
 void QueueDramCorePrefetcherRequest(
     distributed::MeshDevice* mesh_device,
     const GlobalCircularBuffer& gcb,
     const std::optional<distributed::MeshCoordinateRangeSet>& device_subset,
-    const std::vector<const MeshTensor*>& input_tensors,
+    const std::vector<DramCorePrefetcherInput>& input_tensors,
     uint32_t num_layers);
 
 // Block until all previously queued requests have been delivered and the

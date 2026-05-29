@@ -217,7 +217,9 @@ def test_validator_dram_sender(device, K, N, dtype, recv_per_bank, num_layers):
     )
 
     with dram_core_prefetcher_session(device):
-        ttnn.experimental.queue_dram_core_prefetcher_request(device, [tt_weight], num_layers=num_layers, global_cb=gcb)
+        ttnn.experimental.queue_dram_core_prefetcher_request(
+            device, [(tt_weight, ring_size)], num_layers=num_layers, global_cb=gcb
+        )
         ttnn.experimental.test_dram_prefetcher_validator(
             device,
             tt_weight,
@@ -255,15 +257,21 @@ def test_validator_dram_sender_multi_gcb_switching(device, K, N, dtype, recv_per
     with dram_core_prefetcher_session(device):
         # Interleave A → B → A so the third request hits A's persistent ring state
         # established by the first A request and skipped over by the B request.
-        ttnn.experimental.queue_dram_core_prefetcher_request(device, [tt_weight_a], num_layers=1, global_cb=gcb_a)
+        ttnn.experimental.queue_dram_core_prefetcher_request(
+            device, [(tt_weight_a, ring_size)], num_layers=1, global_cb=gcb_a
+        )
         ttnn.experimental.test_dram_prefetcher_validator(
             device, tt_weight_a, num_layers=1, print_stride=max(1, ring_size // 4), global_cb=gcb_a
         )
-        ttnn.experimental.queue_dram_core_prefetcher_request(device, [tt_weight_b], num_layers=1, global_cb=gcb_b)
+        ttnn.experimental.queue_dram_core_prefetcher_request(
+            device, [(tt_weight_b, ring_size)], num_layers=1, global_cb=gcb_b
+        )
         ttnn.experimental.test_dram_prefetcher_validator(
             device, tt_weight_b, num_layers=1, print_stride=max(1, ring_size // 4), global_cb=gcb_b
         )
-        ttnn.experimental.queue_dram_core_prefetcher_request(device, [tt_weight_a], num_layers=1, global_cb=gcb_a)
+        ttnn.experimental.queue_dram_core_prefetcher_request(
+            device, [(tt_weight_a, ring_size)], num_layers=1, global_cb=gcb_a
+        )
         ttnn.experimental.test_dram_prefetcher_validator(
             device, tt_weight_a, num_layers=1, print_stride=max(1, ring_size // 4), global_cb=gcb_a
         )
@@ -289,15 +297,21 @@ def test_validator_dram_sender_mixed_num_receivers(device):
     logger.info(f"[validator-dram-mixed] A: recv=1 ring={ring_a} rows[0,1) | " f"B: recv=2 ring={ring_b} rows[1,3)")
 
     with dram_core_prefetcher_session(device):
-        ttnn.experimental.queue_dram_core_prefetcher_request(device, [tt_weight_a], num_layers=1, global_cb=gcb_a)
+        ttnn.experimental.queue_dram_core_prefetcher_request(
+            device, [(tt_weight_a, ring_a)], num_layers=1, global_cb=gcb_a
+        )
         ttnn.experimental.test_dram_prefetcher_validator(
             device, tt_weight_a, num_layers=1, print_stride=max(1, ring_a // 4), global_cb=gcb_a
         )
-        ttnn.experimental.queue_dram_core_prefetcher_request(device, [tt_weight_b], num_layers=1, global_cb=gcb_b)
+        ttnn.experimental.queue_dram_core_prefetcher_request(
+            device, [(tt_weight_b, ring_b)], num_layers=1, global_cb=gcb_b
+        )
         ttnn.experimental.test_dram_prefetcher_validator(
             device, tt_weight_b, num_layers=1, print_stride=max(1, ring_b // 4), global_cb=gcb_b
         )
-        ttnn.experimental.queue_dram_core_prefetcher_request(device, [tt_weight_a], num_layers=1, global_cb=gcb_a)
+        ttnn.experimental.queue_dram_core_prefetcher_request(
+            device, [(tt_weight_a, ring_a)], num_layers=1, global_cb=gcb_a
+        )
         ttnn.experimental.test_dram_prefetcher_validator(
             device, tt_weight_a, num_layers=1, print_stride=max(1, ring_a // 4), global_cb=gcb_a
         )

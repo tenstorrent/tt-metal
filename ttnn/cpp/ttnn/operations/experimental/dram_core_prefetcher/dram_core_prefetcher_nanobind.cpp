@@ -45,7 +45,10 @@ void bind_dram_core_prefetcher(nb::module_& mod) {
 
             Args:
                 mesh_device (ttnn.MeshDevice): the mesh device whose prefetcher to queue on.
-                tensors (List[ttnn.Tensor]): weight tensors to prefetch (at least one).
+                tensors (List[Tuple[ttnn.Tensor, int]]): (weight tensor, block_count) pairs to
+                    prefetch (at least one). block_count is the number of K-blocks to divide
+                    that tensor's K dimension into (the consumer matmul waits on block_count
+                    pages per layer).
                 num_layers (int): number of full ring traversals for this request.
                 global_cb (GlobalCircularBuffer): a DRAM-sender GCB (created via
                     ttnn.experimental.create_global_circular_buffer_with_dram_senders).

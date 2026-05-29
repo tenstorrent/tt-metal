@@ -241,7 +241,7 @@ def test_dram_core_prefetcher_BH_param(
 
     # ---- Run: prefetcher (async) -> matmul (consumes via gcb) -> stop drains ----
     ttnn.experimental.start_dram_core_prefetcher(device)
-    ttnn.experimental.queue_dram_core_prefetcher_request(device, [tt_weight], num_layers=1, global_cb=gcb)
+    ttnn.experimental.queue_dram_core_prefetcher_request(device, [(tt_weight, ring_size)], num_layers=1, global_cb=gcb)
     tt_out = ttnn.linear(
         tt_act,
         tt_weight,
@@ -392,7 +392,7 @@ def test_create_global_circular_buffer_for_matmul_1d(device, layers_buffered):
         dst_full_sync_en=True,
     )
     ttnn.experimental.start_dram_core_prefetcher(device)
-    ttnn.experimental.queue_dram_core_prefetcher_request(device, [tt_weight], num_layers=1, global_cb=gcb)
+    ttnn.experimental.queue_dram_core_prefetcher_request(device, [(tt_weight, ring_size)], num_layers=1, global_cb=gcb)
     tt_out = ttnn.linear(
         tt_act,
         tt_weight,
@@ -552,7 +552,7 @@ def test_dram_core_prefetcher_multi_tensor(device, num_tensors, num_layers):
     ttnn.experimental.start_dram_core_prefetcher(device)
     ttnn.experimental.queue_dram_core_prefetcher_request(
         device,
-        weights,
+        [(w, ring_size) for w in weights],
         num_layers=num_layers,
         global_cb=gcb,
     )

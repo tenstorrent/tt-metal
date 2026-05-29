@@ -68,7 +68,7 @@ public:
     void queue(
         const experimental::GlobalCircularBuffer& gcb,
         const std::optional<MeshCoordinateRangeSet>& device_subset,
-        const std::vector<const MeshTensor*>& tensors,
+        const std::vector<experimental::DramCorePrefetcherInput>& tensors,
         uint32_t num_layers);
 
     void stop();
@@ -78,11 +78,11 @@ public:
 private:
     // ---- Constants shared with the kernel side ----
     // Max tensors per request. Matches the kernel's per-tensor stride in the
-    // socket payload (10 uint32 fields per tensor). 16 is enough for Llama
+    // socket payload (11 uint32 fields per tensor). 16 is enough for Llama
     // production shapes (typical is 5–10 tensors per matmul layer).
     static constexpr uint32_t kMaxTensorsPerRequest = 16;
-    static constexpr uint32_t kRequestPageHeaderWords = 4;   // num_tensors, num_layers, num_blocks, gcb_state_addr
-    static constexpr uint32_t kRequestPageTensorWords = 10;  // see kernel doc
+    static constexpr uint32_t kRequestPageHeaderWords = 3;   // num_tensors, num_layers, gcb_state_addr
+    static constexpr uint32_t kRequestPageTensorWords = 11;  // see kernel doc (slot[10] = block_count)
     static constexpr uint32_t kRequestPageBytes =
         sizeof(uint32_t) * (kRequestPageHeaderWords + kMaxTensorsPerRequest * kRequestPageTensorWords);
 
@@ -102,7 +102,7 @@ private:
     // Serialize a Queue call's bytes into one socket page.
     std::vector<uint8_t> serialize_request_page(
         const experimental::GlobalCircularBuffer& gcb,
-        const std::vector<const MeshTensor*>& data_tensors,
+        const std::vector<experimental::DramCorePrefetcherInput>& data_tensors,
         uint32_t num_layers) const;
     MeshCoordinateRangeSet full_mesh_subset() const;
 

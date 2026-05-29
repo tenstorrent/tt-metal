@@ -16,13 +16,14 @@
 // Per-request payload layout (one socket page, fixed max size):
 //   [0]  num_tensors        (0 = stop)
 //   [1]  num_layers
-//   [2]  num_blocks         (= num_senders * num_receivers, set by host)
-//   [3]  gcb_state_addr     (DRISC L1 base of this GCB's sender state block)
-//   [4 + 10*t + 0..9]       TensorGeom block per tensor t:
+//   [2]  gcb_state_addr     (DRISC L1 base of this GCB's sender state block)
+//   [3 + 11*t + 0..10]      TensorGeom block per tensor t:
 //                             bank_local_base, num_sub, M, rows_per_sub,
 //                             coalesced_page_size, coalesced_num_pages,
 //                             sub_chunk_bytes, sub_stride_bytes,
-//                             block_stride_bytes, page_bytes_per_recv
+//                             block_stride_bytes, page_bytes_per_recv,
+//                             block_count (K-blocks for this tensor; was the
+//                             shared num_blocks/ring size)
 //
 // Per-GCB sender state block layout: see
 // tt_metal/impl/buffers/dram_sender_state_block.hpp.
@@ -208,8 +209,7 @@ void kernel_main() {
             break;
         }
         const uint32_t req_num_layers = payload[1];
-        const uint32_t req_num_blocks = payload[2];
-        const uint32_t gcb_state_addr = payload[3];
+        const uint32_t gcb_state_addr = payload[2];
 
         load_sender_state(gcb_state_addr, iface);
         // num_receivers lives inside the GCB's state block at the sender-side
@@ -220,7 +220,7 @@ void kernel_main() {
 
         for (uint32_t layer = 0; layer < req_num_layers; ++layer) {
             for (uint32_t t = 0; t < req_num_tensors; ++t) {
-                volatile tt_l1_ptr uint32_t* g = payload + 4 + 10 * t;
+                volatile tt_l1_ptr uint32_t* g = payload + 3 + 11 * t;
                 const uint32_t tensor_base = g[0];
                 const uint32_t t_num_sub = g[1];
                 const uint32_t t_M = g[2];
@@ -231,13 +231,14 @@ void kernel_main() {
                 const uint32_t t_sub_stride = g[7];
                 const uint32_t t_block_stride = g[8];
                 const uint32_t t_page_bytes_per_recv = g[9];
+                const uint32_t t_block_count = g[10];
                 const uint32_t t_recv_per_chunk = num_receivers / t_M;
                 const uint32_t t_sub_band_per_block = t_num_sub * t_M;
 
                 experimental::resize_remote_sender_cb_interface</*update_remote_over_noc=*/false>(
                     remote_cb_id, t_page_bytes_per_recv, noc_index);
 
-                const uint32_t total_chunks = req_num_blocks * t_sub_band_per_block;
+                const uint32_t total_chunks = t_block_count * t_sub_band_per_block;
 
                 experimental::dma_async_read(/*stream=*/0, tensor_base, stage_slot_a, t_chunk_bytes);
 
@@ -266,7 +267,7 @@ void kernel_main() {
                         if (next_sb == t_num_sub) {
                             next_sb = 0;
                             ++next_blk;
-                            if (next_blk == req_num_blocks) {
+                            if (next_blk == t_block_count) {
                                 has_next = false;
                             }
                         }

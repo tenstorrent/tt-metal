@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <utility>
 #include <vector>
 
 #include <tt-metalium/global_circular_buffer.hpp>
@@ -29,8 +30,9 @@ namespace ttnn::operations::experimental {
 //        request), so a single prefetcher can serve GCBs with different
 //        num_receivers values.
 //   2. queue_dram_core_prefetcher_request(device, tensors, num_layers, global_cb, device_subset=None)
-//      - Push one request. `tensors` is the list of weight tensors to prefetch
-//        (at least one). device_subset defaults to the full mesh.
+//      - Push one request. `tensors` is a list of (weight tensor, block_count)
+//        pairs (at least one); block_count is the number of K-blocks to divide
+//        that tensor's K dimension into. device_subset defaults to the full mesh.
 //   3. stop_dram_core_prefetcher(device)
 //      - Sends the stop sentinel, joins the worker, waits for the kernels
 //        to exit. Caller must call this before destroying the device.
@@ -38,7 +40,7 @@ void start_dram_core_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_devi
 
 void queue_dram_core_prefetcher_request(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
-    const std::vector<ttnn::Tensor>& tensors,
+    const std::vector<std::pair<ttnn::Tensor, uint32_t>>& tensors,
     uint32_t num_layers,
     const tt::tt_metal::experimental::GlobalCircularBuffer& global_cb,
     const std::optional<tt::tt_metal::distributed::MeshCoordinateRangeSet>& device_subset = std::nullopt);
