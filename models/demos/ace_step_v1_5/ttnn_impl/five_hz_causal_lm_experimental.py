@@ -93,6 +93,10 @@ class AceStepFiveHzExperimentalTtnnCausalLM(nn.Module):
         self.qwen.reset_kv_cache()
         self._cursor = 0
 
+    def set_narrow_audio_vocab_indices(self, indices: torch.Tensor | None) -> None:
+        """Forward narrow audio-code vocab band to the TTNN ``LMHead`` wrapper."""
+        self.qwen.set_narrow_audio_vocab_indices(indices)
+
     def release_trace(self) -> None:
         if hasattr(self.qwen, "release_trace"):
             self.qwen.release_trace()
@@ -146,6 +150,22 @@ class AceStepFiveHzExperimentalTtnnCausalLM(nn.Module):
         # dim first, then normalise to [1, S_out, vocab].
         vocab = int(getattr(self.config, "vocab_size", logits_torch.shape[-1]))
         trail = int(logits_torch.shape[-1])
+        lm_head = getattr(getattr(self.qwen, "tt_model", None), "lm_head", None)
+        used_band = bool(getattr(lm_head, "_ace_narrow_forward_used_band", False))
+        col_band = getattr(lm_head, "_ace_narrow_forward_col_band", None)
+        if used_band and col_band is not None and trail != vocab:
+            col_lo, col_hi = col_band
+            band_w = int(col_hi) - int(col_lo)
+            if trail == band_w:
+                full = torch.zeros(
+                    *logits_torch.shape[:-1],
+                    vocab,
+                    dtype=logits_torch.dtype,
+                    device=logits_torch.device,
+                )
+                full[..., int(col_lo) : int(col_hi)] = logits_torch[..., :band_w]
+                logits_torch = full
+                trail = vocab
         if trail != vocab:
             if trail > vocab:
                 logits_torch = logits_torch[..., :vocab]

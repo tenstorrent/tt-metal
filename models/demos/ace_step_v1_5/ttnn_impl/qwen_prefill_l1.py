@@ -177,10 +177,14 @@ def _patch_distributed_norm_prefill_l1(norm_mod: Any, *, l1_mc: Any) -> None:
 
 
 def _patch_embd_l1_output(embd_module: Any, *, l1_mc: Any) -> None:
+    """Prefill-only L1 embedding output; decode passes an explicit ``memory_config`` — leave it."""
+
     orig_forward = embd_module.forward
 
     def forward(x, memory_config=None):
-        out = orig_forward(x, memory_config=memory_config or l1_mc)
+        if memory_config is not None:
+            return orig_forward(x, memory_config=memory_config)
+        out = orig_forward(x, memory_config=l1_mc)
         return _ensure_l1(ttnn, out, l1_mc=l1_mc)
 
     embd_module.forward = forward  # type: ignore[method-assign]
