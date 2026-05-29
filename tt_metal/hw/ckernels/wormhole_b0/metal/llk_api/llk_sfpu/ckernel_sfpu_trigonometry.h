@@ -498,16 +498,18 @@ sfpi_inline sfpi::vFloat _sfpu_quarter_exp_abs_(sfpi::vFloat x) {
     sfpi::vInt i = float_to_uint8(j, sfpi::RoundMode::NearestEven);
     j = int32_to_float(i, sfpi::RoundMode::NearestEven);
 
-    sfpi::vFloat r, f, w, scale, bias, c0;
+    sfpi::vFloat r, f, scale, bias, c1;
 
     if constexpr (!is_fp32_dest_acc_en) {
         f = j * sfpi::vConstFloatPrgm1 + a;  // f = a - j * ln(2)
 
-        r = 8.361816406e-03f;
-        r = r * f + 4.177856445e-02f;
+        r = 0.038918063f;
+        r = r * f + 0.167377979f;
+        i += 125;
         r = r * f + sfpi::vConstFloatPrgm2;
-        c0 = 0.5f;
-        r = __builtin_rvtt_sfpmad(r.get(), f.get(), c0.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        c1 = sfpi::reinterpret<sfpi::vFloat>(
+            sfpi::reinterpret<sfpi::vInt>(sfpi::vConst1) - 705);  // 0x3f7ffd3f = 0.999957979f
+        r = r * f + c1;
 
     } else {
         f = j * sfpi::vConstFloatPrgm1 + a;  // f = a - j * ln(2)_hi
@@ -517,23 +519,23 @@ sfpi_inline sfpi::vFloat _sfpu_quarter_exp_abs_(sfpi::vFloat x) {
         r = r * f + 8.37312452e-3f;
         r = r * f + 4.16695364e-2f;
         r = r * f + 1.66664720e-1f;
-        r = r * f + 4.99999851e-1f;
+        r = r * f + sfpi::vConstFloatPrgm2;
+        i += 125;
+        r = r * f + 1.0f;
     }
 
-    sfpi::vFloat infinity = std::numeric_limits<float>::infinity();
-    r = r * f + 1.0f;
-    w = 0.25f;
+    // Handle a * log2(e) >= 130, while propagating NaN.
+    sfpi::vFloat y = a * std::numeric_limits<float>::infinity();
     r = r * f + 1.0f;
 
-    // Keep reconstruction quarter-scaled: scale is 0.25 * 2**i. Avoids
-    // materialising 2**i directly near overflow boundary.
-    r *= sfpi::reinterpret<sfpi::vFloat>((i << 23) + sfpi::reinterpret<sfpi::vInt>(w));
-
-    // Handle special case a * log2(e) >= 130, while propagating NaN.
-    v_if(i >= 130) { r = a * infinity; }
+    v_if(i < (125 + 130)) {
+        // Keep reconstruction quarter-scaled: scale is 0.25 * 2**i. Avoids
+        // materialising 2**i directly near overflow boundary.
+        y = r * sfpi::reinterpret<sfpi::vFloat>(i << 23);
+    }
     v_endif;
 
-    return r;
+    return y;
 }
 
 // t = exp(a); cosh(a) = 0.5 * (t + 1/t)
@@ -679,10 +681,10 @@ void cosh_init() {
     sfpi::vConstFloatPrgm0 = 1.442695f;  // log2(e) == 1 / ln(2)
     if constexpr (is_fp32_dest_acc_en) {
         sfpi::vConstFloatPrgm1 = -0.693145752f;    // -ln(2)_hi
-        sfpi::vConstFloatPrgm2 = 1.666667163e-1f;  // c1
+        sfpi::vConstFloatPrgm2 = 4.99999851e-1f;   // c2
     } else {
         sfpi::vConstFloatPrgm1 = -0.6931471805599453f;  // -ln(2)
-        sfpi::vConstFloatPrgm2 = 1.666259766e-01f;      // c1
+        sfpi::vConstFloatPrgm2 = 0.500122011f;          // c2
     }
 }
 
