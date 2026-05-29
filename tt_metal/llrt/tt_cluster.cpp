@@ -521,12 +521,39 @@ std::unordered_map<ChipId, EthCoord> Cluster::get_all_chip_ethernet_coordinates(
 }
 
 ChipId Cluster::get_physical_chip_id_from_eth_coord(const EthCoord& eth_coord) const {
-    for (const auto& [physical_chip_id, coord] : this->get_all_chip_ethernet_coordinates()) {
+    const auto all_coords = this->get_all_chip_ethernet_coordinates();
+    for (const auto& [physical_chip_id, coord] : all_coords) {
         if (coord == eth_coord) {
             return physical_chip_id;
         }
     }
-    TT_FATAL(false, "Physical chip id not found for eth coord");
+    std::string available_coords_str;
+    if (all_coords.empty()) {
+        available_coords_str =
+            "No chip ethernet coordinates available (chip_locations is empty). "
+            "This typically happens on UBB/T3K systems where EthCoords are not populated by the UMD topology discovery.";
+    } else {
+        available_coords_str = "Available chip ethernet coordinates:\n";
+        for (const auto& [chip_id, coord] : all_coords) {
+            available_coords_str += fmt::format(
+                "  ChipId {} -> EthCoord(cluster_id={}, x={}, y={}, rack={}, shelf={})\n",
+                chip_id,
+                coord.cluster_id,
+                coord.x,
+                coord.y,
+                coord.rack,
+                coord.shelf);
+        }
+    }
+    TT_FATAL(
+        false,
+        "Physical chip id not found for eth coord (cluster_id={}, x={}, y={}, rack={}, shelf={}). {}",
+        eth_coord.cluster_id,
+        eth_coord.x,
+        eth_coord.y,
+        eth_coord.rack,
+        eth_coord.shelf,
+        available_coords_str);
     return 0;
 }
 

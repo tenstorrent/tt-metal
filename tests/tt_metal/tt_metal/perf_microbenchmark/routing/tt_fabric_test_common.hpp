@@ -1861,13 +1861,37 @@ private:
 
         // ethernet coordinate chip mapping, which should be migrated away from
         std::map<FabricNodeId, ChipId> chip_to_eth_coord_mapping;
-        for (std::uint32_t mesh_id = 0; mesh_id < eth_coord_mapping.size(); mesh_id++) {
-            if (mesh_id == *local_mesh_id) {
-                for (std::uint32_t chip_id = 0; chip_id < eth_coord_mapping[mesh_id].size(); chip_id++) {
-                    const auto& eth_coord = eth_coord_mapping[mesh_id][chip_id];
-                    chip_to_eth_coord_mapping.insert(
-                        {FabricNodeId(MeshId{mesh_id}, chip_id),
-                         cluster.get_physical_chip_id_from_eth_coord(eth_coord)});
+        const auto& all_eth_coords = cluster.get_all_chip_ethernet_coordinates();
+        if (all_eth_coords.empty()) {
+            // UBB/T3K fallback: EthCoords not available, use visible chip IDs directly
+            const auto& visible_chips = cluster.user_exposed_chip_ids();
+            TT_FATAL(
+                *local_mesh_id < eth_coord_mapping.size(),
+                "local_mesh_id {} out of range (num meshes: {})",
+                *local_mesh_id,
+                eth_coord_mapping.size());
+            TT_FATAL(
+                visible_chips.size() == eth_coord_mapping[*local_mesh_id].size(),
+                "Number of visible chips ({}) does not match expected mesh size ({}) for mesh_id {}. "
+                "EthCoords are not available on this system (UBB board).",
+                visible_chips.size(),
+                eth_coord_mapping[*local_mesh_id].size(),
+                *local_mesh_id);
+            uint32_t chip_idx = 0;
+            for (const auto& physical_chip_id : visible_chips) {
+                chip_to_eth_coord_mapping.insert(
+                    {FabricNodeId(MeshId{*local_mesh_id}, chip_idx), physical_chip_id});
+                chip_idx++;
+            }
+        } else {
+            for (std::uint32_t mesh_id = 0; mesh_id < eth_coord_mapping.size(); mesh_id++) {
+                if (mesh_id == *local_mesh_id) {
+                    for (std::uint32_t chip_id = 0; chip_id < eth_coord_mapping[mesh_id].size(); chip_id++) {
+                        const auto& eth_coord = eth_coord_mapping[mesh_id][chip_id];
+                        chip_to_eth_coord_mapping.insert(
+                            {FabricNodeId(MeshId{mesh_id}, chip_id),
+                             cluster.get_physical_chip_id_from_eth_coord(eth_coord)});
+                    }
                 }
             }
         }

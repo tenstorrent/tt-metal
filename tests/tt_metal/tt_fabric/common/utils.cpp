@@ -109,6 +109,36 @@ std::map<FabricNodeId, ChipId> get_physical_chip_mapping_from_eth_coords_mapping
     const std::vector<std::vector<EthCoord>>& mesh_graph_eth_coords) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     std::map<FabricNodeId, ChipId> physical_chip_ids_mapping;
+
+    // On UBB/T3K systems, chip_locations (EthCoords) are not populated by the UMD topology
+    // discovery. In this case, fall back to mapping user-visible chip IDs directly to
+    // FabricNodeId positions. The visible chips are already constrained by TT_VISIBLE_DEVICES
+    // (set via rank binding) and N300 board expansion.
+    const auto& all_eth_coords = cluster.get_all_chip_ethernet_coordinates();
+    if (all_eth_coords.empty()) {
+        const auto& visible_chips = cluster.user_exposed_chip_ids();
+        uint32_t total_expected_chips = 0;
+        for (const auto& mesh_chips : mesh_graph_eth_coords) {
+            total_expected_chips += mesh_chips.size();
+        }
+        TT_FATAL(
+            visible_chips.size() == total_expected_chips,
+            "Number of visible chips ({}) does not match expected total mesh size ({}) across all meshes. "
+            "EthCoords are not available on this system (UBB board). "
+            "Ensure TT_VISIBLE_DEVICES is configured correctly in the rank binding.",
+            visible_chips.size(),
+            total_expected_chips);
+        auto chip_it = visible_chips.begin();
+        for (std::uint32_t mesh_id = 0; mesh_id < mesh_graph_eth_coords.size(); mesh_id++) {
+            for (std::uint32_t chip_id = 0; chip_id < mesh_graph_eth_coords[mesh_id].size(); chip_id++) {
+                physical_chip_ids_mapping.insert(
+                    {FabricNodeId(MeshId{mesh_id}, chip_id), *chip_it});
+                ++chip_it;
+            }
+        }
+        return physical_chip_ids_mapping;
+    }
+
     for (std::uint32_t mesh_id = 0; mesh_id < mesh_graph_eth_coords.size(); mesh_id++) {
         for (std::uint32_t chip_id = 0; chip_id < mesh_graph_eth_coords[mesh_id].size(); chip_id++) {
             const auto& eth_coord = mesh_graph_eth_coords[mesh_id][chip_id];

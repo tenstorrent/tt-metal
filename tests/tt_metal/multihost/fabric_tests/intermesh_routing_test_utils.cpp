@@ -549,6 +549,36 @@ std::map<FabricNodeId, ChipId> get_physical_chip_mapping_from_eth_coords_mapping
     const std::vector<std::vector<EthCoord>>& mesh_graph_eth_coords, uint32_t local_mesh_id) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     std::map<FabricNodeId, ChipId> physical_chip_ids_mapping;
+
+    // On UBB/T3K systems, chip_locations (EthCoords) are not populated by the UMD topology
+    // discovery. In this case, fall back to mapping user-visible chip IDs directly to
+    // FabricNodeId positions for the local mesh. The visible chips are already constrained
+    // by TT_VISIBLE_DEVICES (set via rank binding) and N300 board expansion.
+    const auto& all_eth_coords = cluster.get_all_chip_ethernet_coordinates();
+    if (all_eth_coords.empty()) {
+        const auto& visible_chips = cluster.user_exposed_chip_ids();
+        TT_FATAL(
+            local_mesh_id < mesh_graph_eth_coords.size(),
+            "local_mesh_id {} out of range (num meshes: {})",
+            local_mesh_id,
+            mesh_graph_eth_coords.size());
+        TT_FATAL(
+            visible_chips.size() == mesh_graph_eth_coords[local_mesh_id].size(),
+            "Number of visible chips ({}) does not match expected mesh size ({}) for mesh_id {}. "
+            "EthCoords are not available on this system (UBB board). "
+            "Ensure TT_VISIBLE_DEVICES is configured correctly in the rank binding.",
+            visible_chips.size(),
+            mesh_graph_eth_coords[local_mesh_id].size(),
+            local_mesh_id);
+        uint32_t chip_idx = 0;
+        for (const auto& physical_chip_id : visible_chips) {
+            physical_chip_ids_mapping.insert(
+                {FabricNodeId(MeshId{local_mesh_id}, chip_idx), physical_chip_id});
+            chip_idx++;
+        }
+        return physical_chip_ids_mapping;
+    }
+
     for (std::uint32_t mesh_id = 0; mesh_id < mesh_graph_eth_coords.size(); mesh_id++) {
         if (mesh_id == local_mesh_id) {
             for (std::uint32_t chip_id = 0; chip_id < mesh_graph_eth_coords[mesh_id].size(); chip_id++) {
