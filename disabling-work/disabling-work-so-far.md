@@ -2,7 +2,7 @@
 
 > **Source of truth.** This file is the canonical record of automation-tracked PRs. Wiping it resets the automation to fresh-state view; stale GitHub PRs not listed here are intentionally invisible.
 
-Last updated: **2026-05-29T11:03 UTC** — Session: Examining lane (3 PRs): PR #45500 all 5 disables removed — superseded by main PR #45313 (commit `19fe34405b1`) which merged equivalent `sampling-test-filter`; branch rebased/skipped to main HEAD `6d54c53a3c6`; PR auto-closed by GitHub (branch = main HEAD, zero diff); lifecycle `out-of-scope`; issue #45499 updated. PR #45511 rebased from `09a0526ebfe5` → `6d54c53a3c6` (new head `c95f10b551b`); evidence refreshed — `TestPerfCountersSingleOp::test_performance_counter_columns[Matmul_perf_counters]` still failing in run [26628589795](https://github.com/tenstorrent/tt-metal/actions/runs/26628589795)/job [78481174299](https://github.com/tenstorrent/tt-metal/actions/runs/26628589795/job/78481174299) (2026-05-29T10:22 UTC); PR description + issue #45510 updated. PR #45484 rebased from `09a0526ebfe5` → `6d54c53a3c6` (new head `f477ad8ffa3`); evidence refreshed — all 4 llk-sd-unit-tests failing in run [26628149873](https://github.com/tenstorrent/tt-metal/actions/runs/26628149873) (2026-05-29T09:18-09:26 UTC); PR description + issue #45483 updated. Lightweight: run [26626298958](https://github.com/tenstorrent/tt-metal/actions/runs/26626298958) completed `failure` (moot — zero disables on PR #45507); moved to Recently Completed. Focus lane: 0 focus PRs — no uncovered non-Galaxy workflows with ≥3 consecutive deterministic failures; `single-card-demo-tests` (2 consecutive, not 3), `blackhole-post-commit` (latest success), `t3000-integration-tests` (1 failure at top, not 3 consecutive), `t3000-demo-tests` (latest success), `t3000-profiler-tests` (inactive since January). No priority-2/3 PRs. Focus slots filled: 0/3. Paralysis check: limited: 0 focus PRs (0 uncovered workflows + 0 priority-2/3 PRs) + 3 examining PRs.
+Last updated: **2026-05-29T12:01 UTC** — Session: Examining lane (3 PRs): PR #45487 rebased from `e1210204db9b` → `eea8521c897` (new head `6f4ea46fa54`); evidence refreshed — `test_demo_for_conditional_generation[...-distil-large-v3-1-2]` still FAILING in newer run [26619741477](https://github.com/tenstorrent/tt-metal/actions/runs/26619741477)/job [78443769654](https://github.com/tenstorrent/tt-metal/actions/runs/26619741477/job/78443769654) (2026-05-29T06:26 UTC); PR description + issue #45496 updated. PR #45492 rebased from `ee5df35e3210` → `eea8521c897` (new head `c68591434a6`); evidence refreshed — `MultiMeshEastMulticast_0` and `_1` still FAILING in newest run [26633893590](https://github.com/tenstorrent/tt-metal/actions/runs/26633893590)/job [78490812784](https://github.com/tenstorrent/tt-metal/actions/runs/26633893590/job/78490812784) (2026-05-29T12:01 UTC); PR description + issue #45491 updated. PR #45514 rebased from `ee5df35e3210` → `eea8521c897` (new head `4cbde07c55f`); seed=0 still failing in run 26621870487 (unchanged); comment posted. Focus lane (1 new PR): [#45529](https://github.com/tenstorrent/tt-metal/pull/45529) (`perf-models.yaml` `models-perf / other_magic_env N300 WH B0` — `test_e2e_performant` + `test_e2e_performant_dp` — 3 consecutive TT_FATAL @ `mesh_trace.cpp:78` (trace buffer 23052288B > allocated 16998400B) across runs 26615579245/26626389617/26633758989; initial disable batch committed; issue [#45528](https://github.com/tenstorrent/tt-metal/issues/45528) created; verification [run 26637010466](https://github.com/tenstorrent/tt-metal/actions/runs/26637010466) dispatched fresh-build on temp branch `ci-disable/verify-perf-models-swin-s-20260529`). 1/3 dispatch slots used. Workflow survey: `single-card-demo-tests` (2 consecutive, not 3), `t3000-integration-tests` (1 failure, not 3), `blackhole-post-commit` (latest success), `t3000-demo-tests` (latest success). Paralysis check: passed: 1 focus PR (dispatched) + 3 examining PRs.
 
 ---
 
@@ -32,6 +32,7 @@ Last updated: **2026-05-29T11:03 UTC** — Session: Examining lane (3 PRs): PR #
 | [#45507](https://github.com/tenstorrent/tt-metal/pull/45507) | T3000 e2e tests (`t3000-e2e-tests.yaml`) — `t3k_ccl_tests [wh_llmbox]` | `verified-pass` | run [26626298958](https://github.com/tenstorrent/tt-metal/actions/runs/26626298958) — completed `failure` (moot; zero disables; failures pre-existing on main) | No — zero disables remain; PR eligible for closure | All 3 tests no longer failing on main. Run 26626298958 completed 2026-05-29T11:03 UTC. |
 | [#45511](https://github.com/tenstorrent/tt-metal/pull/45511) | Sanity tests (`sanity-tests.yaml`) — `profiler-tests / Perf op report [wh_n300_civ2]` | `verified-pass` | [run 26619643533](https://github.com/tenstorrent/tt-metal/actions/runs/26619643533) — **success** (completed 2026-05-29T05:55 UTC) | Yes — pending review | Test still failing; evidence refreshed to run [26628589795](https://github.com/tenstorrent/tt-metal/actions/runs/26628589795)/job [78481174299](https://github.com/tenstorrent/tt-metal/actions/runs/26628589795/job/78481174299) (2026-05-29T10:22 UTC). |
 | [#45514](https://github.com/tenstorrent/tt-metal/pull/45514) | Runtime integration tests (`runtime-integration-tests.yaml`) — `runtime_fd_python_2 [wh_n150_civ2]` / `[bh_p150b_civ2]` | `verified-fail` | [run 26623896690](https://github.com/tenstorrent/tt-metal/actions/runs/26623896690) — failure (`seed=0` correctly SKIPPED; `seed=42` NEW failure on PR branch, was passing on main) | No — verified-fail; needs human review (seed=42 not independently failing on main — masked by seed=0 device hang/timeout) | Disables `test_indexed_slice[DataType.BFLOAT16-4-32-6-0]` on both SKUs. Cannot add seed=42 disable without main-run evidence. |
+| [#45529](https://github.com/tenstorrent/tt-metal/pull/45529) | (Single-card) Model perf tests (`perf-models.yaml`) — `models-perf / other_magic_env N300 WH B0` | `verifying` | [run 26637010466](https://github.com/tenstorrent/tt-metal/actions/runs/26637010466) — queued (dispatched 2026-05-29T12:23 UTC) | No — verifying | Disables `test_e2e_performant` + `test_e2e_performant_dp` in `models/experimental/swin_s/tests/perf/test_e2e_performant.py`. TT_FATAL: trace buffer 23052288B > allocated trace_region_size 16998400B (`mesh_trace.cpp:78`). |
 
 ---
 
@@ -39,7 +40,7 @@ Last updated: **2026-05-29T11:03 UTC** — Session: Examining lane (3 PRs): PR #
 
 | Run | Pipeline | Branch | Started | Status | Notes |
 |-----|----------|--------|---------|--------|-------|
-| _(no active runs)_ | | | | | |
+| [26637010466](https://github.com/tenstorrent/tt-metal/actions/runs/26637010466) | (Single-card) Model perf tests (`perf-models.yaml`) | `ci-disable/verify-perf-models-swin-s-20260529` | 2026-05-29T12:23 UTC | queued/in progress | PR #45529 first verification. `model: all`. Fresh build. No SHA-matching successful source run on `eea8521c897`. |
 
 **Policy:** Concurrent runs across PRs are allowed; each automation session may dispatch at most three new runs.
 
@@ -100,11 +101,11 @@ Main-run evidence: see PR description.
 | PR | [#45487](https://github.com/tenstorrent/tt-metal/pull/45487) — `[skip ci] Disable distil-large-v3 performance check in blackhole-demo-tests whisper performance job` (draft, open) |
 | Disable issue | [#45496](https://github.com/tenstorrent/tt-metal/issues/45496) — `[CI] Track disable: whisper perf test (distil-large-v3 performance regression) in blackhole-demo-tests whisper performance job` (open) |
 | Timeout issue | none |
-| Branch | `ci-disable/blackhole-demo-tests-whisper-perf-20260529` (head SHA `0ce037d988421be76903d117d576ee53065b2411` — rebased to `e1210204db9b322686e4dff457dd58f705782a8a`) |
+| Branch | `ci-disable/blackhole-demo-tests-whisper-perf-20260529` (head SHA `6f4ea46fa5447360336306ae5b07d3895afc84a6` — rebased to `eea8521c897bd6116ca071a66332b6b190b14e86`) |
 | Workflow file | `.github/workflows/blackhole-demo-tests.yaml` |
 | Lifecycle stage | `verified-pass` |
-| Last rebase | 2026-05-29T06:00 UTC — rebased from `9727d4445a8d52c844223ba59618e0e5452b9445` → `e1210204db9b322686e4dff457dd58f705782a8a` (new head `0ce037d988421be76903d117d576ee53065b2411`), no conflicts |
-| Last revalidation | 2026-05-29T06:00 UTC — `test_demo_for_conditional_generation[...-distil-large-v3-1-2]` confirmed still failing; most recent completed run 26556373726 (2026-05-28T05:22 UTC, job 78230061657) still fails. New run 26619741477 queued on `e1210204db9b` — not yet completed. Evidence unchanged |
+| Last rebase | 2026-05-29T12:01 UTC — rebased from `e1210204db9b322686e4dff457dd58f705782a8a` → `eea8521c897bd6116ca071a66332b6b190b14e86` (new head `6f4ea46fa5447360336306ae5b07d3895afc84a6`), no conflicts |
+| Last revalidation | 2026-05-29T12:01 UTC — `test_demo_for_conditional_generation[...-distil-large-v3-1-2]` confirmed still FAILING. Run [26619741477](https://github.com/tenstorrent/tt-metal/actions/runs/26619741477) (completed 2026-05-29T06:26 UTC): job [78443769654](https://github.com/tenstorrent/tt-metal/actions/runs/26619741477/job/78443769654) `whisper / whisper performance [bh_p150_perf]` — FAILURE. Evidence updated in PR description and issue #45496. |
 | Verification run | [26614671489](https://github.com/tenstorrent/tt-metal/actions/runs/26614671489) — **verified-pass** (conclusion `success`; target `whisper performance [bh_p150_perf]` passed) |
 | Last touched by automation | 2026-05-29T06:00 UTC |
 | Readiness | **Yes — verified-pass, ready for merge review** |
@@ -113,7 +114,7 @@ Main-run evidence: see PR description.
 
 | Disabled test | Most recent failing main run (job link) | Run completed at |
 |---|---|---|
-| `models/demos/audio/whisper/demo/demo.py::test_demo_for_conditional_generation[blackhole-device_params0-True-False-None-False-0.0-None-None-None-False-transcribe-English-models/demos/audio/whisper/demo/dataset/conditional_generation-1-distil-whisper/distil-large-v3-1-2]` [bh_p150_perf] | https://github.com/tenstorrent/tt-metal/actions/runs/26556373726/job/78230061657 | 2026-05-28 11:37 UTC |
+| `models/demos/audio/whisper/demo/demo.py::test_demo_for_conditional_generation[blackhole-device_params0-True-False-None-False-0.0-None-None-None-False-transcribe-English-models/demos/audio/whisper/demo/dataset/conditional_generation-1-distil-whisper/distil-large-v3-1-2]` [bh_p150_perf] | https://github.com/tenstorrent/tt-metal/actions/runs/26619741477/job/78443769654 | 2026-05-29 06:26 UTC |
 
 Main-run evidence: see PR description.
 
@@ -152,11 +153,11 @@ Main-run evidence: see PR description.
 | PR | [#45492](https://github.com/tenstorrent/tt-metal/pull/45492) — `[skip ci] Disable IntermeshSplit2x2FabricFixture.MultiMeshEastMulticast_* in t3000-unit-tests t3k_tt_metal_multiprocess_tests` (draft, open; title updated from `IntermeshSplit2x2FabricFixture.*` to `MultiMeshEastMulticast_*` after RandomizedInterMeshUnicast removal) |
 | Disable issue | [#45491](https://github.com/tenstorrent/tt-metal/issues/45491) — `[CI] Track disable: IntermeshSplit2x2FabricFixture.* in t3000-unit-tests t3k_tt_metal_multiprocess_tests` (open; updated to reflect removal) |
 | Timeout issue | none |
-| Branch | `ci-disable/t3000-unit-tests-intermesh-split2x2-20260529` (head SHA `9fd52f1be01daab00eecf86c9942ba65a57df352` — rebased to `ee5df35e32105209e769898f597c4d6b46f5fa06`) |
+| Branch | `ci-disable/t3000-unit-tests-intermesh-split2x2-20260529` (head SHA `c68591434a6d6b3adae4eb0024ee9455dfb77cbd` — rebased to `eea8521c897bd6116ca071a66332b6b190b14e86`) |
 | Workflow file | `.github/workflows/t3000-unit-tests.yaml` |
 | Lifecycle stage | `verified-pass` |
-| Last rebase | 2026-05-29T09:02 UTC — rebased to `ee5df35e32105209e769898f597c4d6b46f5fa06` (new head `9fd52f1be01`), no conflicts |
-| Last revalidation | 2026-05-29T08:02 UTC — `MultiMeshEastMulticast_0` and `MultiMeshEastMulticast_1` still FAILING in latest main run [26620003623](https://github.com/tenstorrent/tt-metal/actions/runs/26620003623) job [78444692420](https://github.com/tenstorrent/tt-metal/actions/runs/26620003623/job/78444692420) (2026-05-29T06:06 UTC). Deep revalidation deferred 2026-05-29T09:02 UTC (throttled — last full analysis 1h ago). |
+| Last rebase | 2026-05-29T12:01 UTC — rebased to `eea8521c897bd6116ca071a66332b6b190b14e86` (new head `c68591434a6`), no conflicts |
+| Last revalidation | 2026-05-29T12:01 UTC — `MultiMeshEastMulticast_0` and `MultiMeshEastMulticast_1` confirmed still FAILING in newest run [26633893590](https://github.com/tenstorrent/tt-metal/actions/runs/26633893590)/job [78490812784](https://github.com/tenstorrent/tt-metal/actions/runs/26633893590/job/78490812784) (completed 2026-05-29T12:01 UTC). Note: `RandomizedInterMeshUnicast` also FAILED in this run — non-consecutive (passed in run 26611455612); not eligible for re-addition per policy. |
 | Verification run | [26612761462](https://github.com/tenstorrent/tt-metal/actions/runs/26612761462) — **verified-pass** (conclusion `success`; target `t3k_tt_metal_multiprocess_tests [wh_llmbox]` passed) |
 | Last touched by automation | 2026-05-29T09:02 UTC |
 | Readiness | **Yes — verified-pass, ready for merge review** |
@@ -313,11 +314,11 @@ Main-run evidence: see PR description.
 | PR | [#45514](https://github.com/tenstorrent/tt-metal/pull/45514) — `[skip ci] Disable test_indexed_slice[DataType.BFLOAT16-4-32-6-0] in runtime-integration-tests runtime_fd_python_2` (draft, open) |
 | Disable issue | [#45513](https://github.com/tenstorrent/tt-metal/issues/45513) — `[CI] Track disable: test_indexed_slice[DataType.BFLOAT16-4-32-6-0] in runtime-integration-tests runtime_fd_python_2` (open) |
 | Timeout issue | none |
-| Branch | `ci-disable/runtime-integration-tests-indexed-fill-20260529` (head SHA `f42962a8bd66f41afab63f0bb1e0c2e754a36934` — rebased to `ee5df35e32105209e769898f597c4d6b46f5fa06`) |
+| Branch | `ci-disable/runtime-integration-tests-indexed-fill-20260529` (head SHA `4cbde07c55f6229a7138b35d4f2134e5048de894` — rebased to `eea8521c897bd6116ca071a66332b6b190b14e86`) |
 | Workflow file | `.github/workflows/runtime-integration-tests.yaml` |
 | Lifecycle stage | `verified-fail` |
-| Last rebase | 2026-05-29T09:02 UTC — rebased to `ee5df35e32105209e769898f597c4d6b46f5fa06` (new head `f42962a8bd6`), no conflicts |
-| Last revalidation | 2026-05-29T09:02 UTC — `test_indexed_slice[DataType.BFLOAT16-4-32-6-0]` (seed=0) still failing on main in run 26621870487/job 78450667711 (2026-05-29T06:59 UTC). Seed=42 analysis: `test_indexed_slice[DataType.BFLOAT16-4-32-6-42]` confirmed NOT independently failing on main — only seed=0 appears in run 26621870487 failures. Root cause: seed=0 times out the device on main; seed=42 never reaches execution; on the PR branch seed=0 is skipped so seed=42 runs and also hits TT_THROW. Cannot disable seed=42 without main-run evidence. PR needs human review. |
+| Last rebase | 2026-05-29T12:01 UTC — rebased to `eea8521c897bd6116ca071a66332b6b190b14e86` (new head `4cbde07c55f`), no conflicts |
+| Last revalidation | 2026-05-29T12:01 UTC — no new `runtime-integration-tests` main run since 26621870487. `test_indexed_slice[DataType.BFLOAT16-4-32-6-0]` (seed=0) confirmed still FAILING in run 26621870487/job 78450667711 (2026-05-29T06:59 UTC). Evidence unchanged. PR needs human review. |
 | Verification run | [26623896690](https://github.com/tenstorrent/tt-metal/actions/runs/26623896690) — **verified-fail** (completed 2026-05-29T07:42 UTC; `test_indexed_slice[DataType.BFLOAT16-4-32-6-0]` correctly SKIPPED; but `test_indexed_slice[DataType.BFLOAT16-4-32-6-42]` NEW FAILURE on wh_n150_civ2 and bh_p150b_civ2 — same TT_THROW signature; seed=42 was passing on main run 26621870487) |
 | Last touched by automation | 2026-05-29T09:02 UTC |
 | Readiness | No — verified-fail; PR needs revision to also disable seed=42 (or all D=6 parametrizations) |
@@ -334,6 +335,33 @@ Main-run evidence: see PR description.
 Main-run evidence: see PR description.
 
 
+## PR #45529 — (Single-card) Model perf tests (test_e2e_performant / test_e2e_performant_dp — swin_s TT_FATAL)
+
+| Field | Value |
+|-------|-------|
+| PR | [#45529](https://github.com/tenstorrent/tt-metal/pull/45529) — `[skip ci] Disable swin_s test_e2e_performant / test_e2e_performant_dp in perf-models (TT_FATAL: trace buffer size exceeds trace_region_size)` (draft, open) |
+| Disable issue | [#45528](https://github.com/tenstorrent/tt-metal/issues/45528) — `[CI] Track disable: test_e2e_performant / test_e2e_performant_dp in perf-models models-perf/other_magic_env N300 WH B0 (swin_s trace region TT_FATAL)` (open) |
+| Timeout issue | none |
+| Branch | `ci-disable/perf-models-swin-s-trace-region-20260529` (head SHA `9145a554b234ef0b7a19de3e2aff7f04acf25e16` — on `eea8521c897bd6116ca071a66332b6b190b14e86`) |
+| Workflow file | `.github/workflows/perf-models.yaml` |
+| Lifecycle stage | `verifying` |
+| Last rebase | 2026-05-29T12:01 UTC — created from `eea8521c897` (main HEAD at session time) |
+| Last revalidation | 2026-05-29T12:01 UTC — initial batch; 3 consecutive failures confirmed: runs 26615579245 (2026-05-29T03:09), 26626389617 (2026-05-29T08:18), 26633758989 (2026-05-29T11:06) — all same TT_FATAL @ `mesh_trace.cpp:78` (trace buffer 23052288B > allocated 16998400B). |
+| Verification run | [26637010466](https://github.com/tenstorrent/tt-metal/actions/runs/26637010466) — dispatched 2026-05-29T12:23 UTC; queued/in progress (fresh build; no SHA-matching source run on `eea8521c897`) |
+| Last touched by automation | 2026-05-29T12:01 UTC |
+| Readiness | No — verifying |
+
+### Disables (with main evidence)
+
+| Disabled test | Most recent failing main run (job link) | Run completed at |
+|---|---|---|
+| `models/experimental/swin_s/tests/perf/test_e2e_performant.py::test_e2e_performant[device_params0-resolution0-1-DataType.BFLOAT16-DataType.BFLOAT16]` [N300 WH B0] | https://github.com/tenstorrent/tt-metal/actions/runs/26633758989/job/78490360978 | 2026-05-29 11:36 UTC |
+| `models/experimental/swin_s/tests/perf/test_e2e_performant.py::test_e2e_performant_dp[wormhole_b0-device_params0-resolution0-1-DataType.BFLOAT16-DataType.BFLOAT16]` [N300 WH B0] | https://github.com/tenstorrent/tt-metal/actions/runs/26633758989/job/78490360978 | 2026-05-29 11:36 UTC |
+
+Main-run evidence: see PR description.
+
+---
+
 ## Blockers
 
 | Blocker | Status | Notes |
@@ -343,6 +371,8 @@ Main-run evidence: see PR description.
 ---
 
 ## Recent Activity
+
+- **2026-05-29T12:01 UTC session.** Examining lane (3 PRs): PR #45487 rebased from `e1210204db9b` → `eea8521c897` (new head `6f4ea46fa54`); evidence refreshed — whisper perf still FAILING in newer run [26619741477](https://github.com/tenstorrent/tt-metal/actions/runs/26619741477)/job [78443769654](https://github.com/tenstorrent/tt-metal/actions/runs/26619741477/job/78443769654) (2026-05-29T06:26 UTC); PR description + issue #45496 updated; comment posted. PR #45492 rebased from `ee5df35e32` → `eea8521c897` (new head `c68591434a6`); evidence refreshed — `MultiMeshEastMulticast_0` and `_1` still FAILING in newest run [26633893590](https://github.com/tenstorrent/tt-metal/actions/runs/26633893590)/job [78490812784](https://github.com/tenstorrent/tt-metal/actions/runs/26633893590/job/78490812784) (2026-05-29T12:01 UTC); `RandomizedInterMeshUnicast` also FAILED (non-consecutive, not re-added); PR description + issue #45491 updated; comment posted. PR #45514 rebased from `ee5df35e32` → `eea8521c897` (new head `4cbde07c55f`); evidence unchanged (most recent run 26621870487; seed=0 still failing); comment posted. Focus lane (1 new PR): [#45529](https://github.com/tenstorrent/tt-metal/pull/45529) (`perf-models.yaml` `models-perf / other_magic_env N300 WH B0` — `test_e2e_performant` + `test_e2e_performant_dp` in `models/experimental/swin_s/tests/perf/test_e2e_performant.py` — 3 consecutive `TT_FATAL @ mesh_trace.cpp:78` (trace buffer 23052288B > allocated 16998400B) across runs 26615579245/26626389617/26633758989; initial disable batch committed with `@pytest.mark.skip`; issue [#45528](https://github.com/tenstorrent/tt-metal/issues/45528) created; verification [run 26637010466](https://github.com/tenstorrent/tt-metal/actions/runs/26637010466) dispatched fresh-build with `model: all` on temp branch `ci-disable/verify-perf-models-swin-s-20260529` — no SHA-matching successful `perf-models` run on `eea8521c897`). 1/3 dispatch slots used. Workflow survey: `single-card-demo-tests` (2 consecutive, not 3), `t3000-integration-tests` (1 consecutive failure, not 3), `blackhole-post-commit` (latest success), `t3000-demo-tests` (latest success). Paralysis check: passed: 1 focus PR (dispatched) + 3 examining PRs.
 
 - **2026-05-29T11:03 UTC session.** Examining lane (3 PRs): PR #45500 — all 5 disabled test groups removed (superseded by main PR #45313 / commit `19fe34405b1` which merged equivalent `sampling-test-filter` into `vllm-nightly-tests-impl.yaml`); branch rebased/skipped to main HEAD `6d54c53a3c6` (commit skipped — our filter change was superseded); PR auto-closed by GitHub (branch = main HEAD, zero diff); lifecycle `out-of-scope`; issue #45499 updated; PR comment posted. PR #45511 rebased from `09a0526ebfe5` → `6d54c53a3c6` (new head `c95f10b551b6d33be7f6d65063780e89c9531b9b`); `TestPerfCountersSingleOp::test_performance_counter_columns[Matmul_perf_counters]` confirmed still failing in run [26628589795](https://github.com/tenstorrent/tt-metal/actions/runs/26628589795)/job [78481174299](https://github.com/tenstorrent/tt-metal/actions/runs/26628589795/job/78481174299) (2026-05-29T10:22 UTC); PR description + issue #45510 updated; PR comment posted. PR #45484 rebased from `09a0526ebfe5` → `6d54c53a3c6` (new head `f477ad8ffa3c53c09a84da7fd7bfd50132ce68b9`); all 4 llk-sd-unit-tests confirmed still failing in run [26628149873](https://github.com/tenstorrent/tt-metal/actions/runs/26628149873) (2026-05-29T09:18-09:26 UTC); PR description + issue #45483 updated; PR comment posted. Lightweight: run [26626298958](https://github.com/tenstorrent/tt-metal/actions/runs/26626298958) completed `failure` (moot — zero disables on PR #45507); moved to Recently Completed; no lifecycle change to PR #45507 (remains `verified-pass`, zero disables). Focus lane: 0 focus PRs — no uncovered non-Galaxy workflows with ≥3 consecutive deterministic failures; `single-card-demo-tests` (2 consecutive, not 3), `blackhole-post-commit` (latest success), `t3000-integration-tests` (1 consecutive failure at top, not 3), `t3000-demo-tests` (latest success), `t3000-profiler-tests` (inactive since January). No priority-2/3 PRs. Focus slots filled: 0/3. Paralysis check: limited: 0 focus PRs (0 uncovered workflows + 0 priority-2/3 PRs available) + 3 examining PRs.
 
