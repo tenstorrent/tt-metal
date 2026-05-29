@@ -164,8 +164,44 @@ static constexpr uint64_t NOC_LOCAL_MASK = (1ULL << NOC_LOCAL_BITS) - 1;
 static constexpr uint32_t NOC_NODE_MASK = (1 << NOC_NODE_ID_BITS) - 1;
 
 // C-linkage bridge functions for JIT kernels.
+// Forward decl — __emule_dram_ptr_at routes through __emule_noc_resolve below.
+extern "C" uint8_t* __emule_noc_resolve(uint32_t x, uint32_t y, uint64_t addr);
+
 extern "C" uint8_t* __emule_dram_ptr(uint64_t offset) {
     return __emule_bridge_dram ? __emule_bridge_dram + offset : nullptr;
+}
+
+// Per-bank DRAM pointer. The Wormhole DRAM controller exposes 12 banks
+// mapped across 6 physical DRAM cores — each core hosts TWO banks at
+// disjoint offsets within its own 2 GB mmap (even bank at offset 0, odd
+// bank at offset 0x40000000). The kernel passes a `bank_id` and an
+// in-bank `addr`; resolution needs both bank→core routing AND the
+// per-bank base offset within that core.
+//
+//   bank_id → dram_bank_to_noc_xy[0][bank_id]  → (x, y) of the DRAM core
+//   bank_id → bank_to_dram_offset[bank_id]     → 0 or 0x40000000
+//   __emule_noc_resolve(x, y, addr + bank_off) → host pointer into that
+//                                                core's mmap
+//
+// Both tables are populated by `populate_bank_mapping` from the metal
+// SoC descriptor, mirroring what real tt-metal computes for the same
+// chip. The host write path (SWEmuleChip::write_to_device, called from
+// EnqueueWriteBuffer) already includes the bank offset in `l1_dest`, so
+// the read path adding `bank_off` here puts the kernel-side and host-side
+// at the same byte.
+//
+// The bank-agnostic `__emule_dram_ptr` above is retained for callers
+// that pre-compute the per-bank offset host-side (interleaved DRAM
+// tensors, kernel-direct addressing). Sharded buffers use the bank-aware
+// `noc_traits_t<AllocatorBank<DRAM>>` specialisation in tt-emule's
+// `include/jit_hw/api/dataflow/endpoints.h`, which calls this function.
+extern "C" uint8_t* __emule_dram_ptr_at(uint32_t bank_id, uint64_t offset) {
+    if (bank_id >= MAX_NUM_BANKS) return nullptr;
+    uint16_t noc_xy = dram_bank_to_noc_xy[0][bank_id];
+    uint32_t x = static_cast<uint32_t>(noc_xy & NOC_NODE_MASK);
+    uint32_t y = static_cast<uint32_t>((noc_xy >> NOC_NODE_ID_BITS) & NOC_NODE_MASK);
+    int32_t bank_off = bank_to_dram_offset[bank_id];
+    return __emule_noc_resolve(x, y, offset + static_cast<int64_t>(bank_off));
 }
 
 extern "C" uint8_t* __emule_local_l1_ptr(uint32_t offset) {
