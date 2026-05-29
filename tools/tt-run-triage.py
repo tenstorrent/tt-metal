@@ -33,11 +33,15 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
+
+from tools.triage import utils
 
 TRIAGE_PY = Path(__file__).resolve().parent / "triage" / "triage.py"
 
@@ -45,6 +49,8 @@ TRIAGE_PY = Path(__file__).resolve().parent / "triage" / "triage.py"
 _TAG_RE = re.compile(r"^\[\d+,(\d+)\]<(stdout|stderr)>:\s?(.*)$")
 # Triage script-section header: `script_name.py:` or `script_name.py [0.42s]:`
 _SCRIPT_HEADER_RE = re.compile(r"^[a-zA-Z_]\w*\.py(?:\s+\[[\d.]+s\])?\s*:\s*$")
+# SGR color escapes — stripped before header matching since per-rank output is colored.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
 def _split_at_dashdash(argv: list[str]) -> tuple[list[str], list[str]]:
@@ -136,6 +142,7 @@ class TextStreamingRenderer:
 
         out_width = None if sys.stdout.isatty() else 10000
         self.console = Console(
+            theme=utils.create_console_theme(False),
             highlight=False,
             width=out_width,
             file=sys.stdout,
@@ -159,8 +166,9 @@ class TextStreamingRenderer:
         self.rendered_scripts: set[str] = set()
 
     def on_line(self, rank: int, payload: str) -> None:
-        if _SCRIPT_HEADER_RE.match(payload.strip()):
-            new_script = payload.strip().rstrip(":")
+        header = _ANSI_RE.sub("", payload).strip()
+        if _SCRIPT_HEADER_RE.match(header):
+            new_script = header.rstrip(":")
             self._flush_rank(rank)
             if new_script not in self.script_lines:
                 self.seen_scripts.append(new_script)
@@ -197,12 +205,16 @@ class TextStreamingRenderer:
         self._update_progress(None, 0)
 
     def _render_script(self, script: str) -> None:
+        from rich.text import Text
+
         self.console.print()
         self.console.print(f"{script}:", markup=False, highlight=False)
         for rank in sorted(self.script_lines[script].keys()):
             self.console.print(f"  [rank {rank}]", markup=False, highlight=False)
             for line in self.script_lines[script][rank]:
-                self.console.print(line, markup=False, highlight=False)
+                # Content arrives pre-colored from the per-rank subprocess; parse the
+                # SGR escapes so Rich measures width correctly and renders the color.
+                self.console.print(Text.from_ansi(line), highlight=False)
 
     def _update_progress(self, script: Optional[str], finished: int) -> None:
         if script is not None:
@@ -224,7 +236,6 @@ def _run_multi_rank(passthrough: list[str], tt_run_args: list[str]) -> int:
         sys.executable,
         str(TRIAGE_PY),
         "--disable-progress",
-        "--disable-colors",
     ] + passthrough
 
     cmd = ["tt-run"] + tt_run_args + triage_cmd
@@ -233,8 +244,14 @@ def _run_multi_rank(passthrough: list[str], tt_run_args: list[str]) -> int:
 
     renderer = TextStreamingRenderer(expected_ranks=rank_count)
 
+    # triage's isatty() sees the MPI pty, not the real sink. Drive width/color off the
+    # wrapper's stdout: fit a terminal, go wide + plain when redirected.
+    interactive = sys.stdout.isatty()
+    cols = shutil.get_terminal_size().columns if interactive else 10000
+    env = {**os.environ, "COLUMNS": str(cols), "TT_TRIAGE_COLOR": "1" if interactive else "0"}
+
     # Merge subprocess stderr into stdout so it doesn't fight the Live progress.
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, env=env)
     assert proc.stdout is not None
 
     try:
