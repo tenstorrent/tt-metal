@@ -1710,9 +1710,15 @@ class TTSeamlessM4Tv2Model:
             import os as _os_dbg
 
             _decode_path_dbg = bool(_os_dbg.environ.get("DECODE_PATH_DBG"))
+            _decode_step_profile = bool(_os_dbg.environ.get("SEAMLESS_DECODE_PROFILE"))
             _dp = {"capture": 0, "trace2cq": 0, "trace1cq": 0, "eager": 0, "fallback": 0}
+            _prof_records: list = []  # (t_setup_ms, t_trace_ms, t_readback_ms, t_total_ms, path)
+            if _decode_step_profile:
+                import time as _t_prof
 
             for _decode_step in range(decode_steps_remaining):
+                if _decode_step_profile:
+                    _t_step_start = _t_prof.perf_counter()
                 cur_tok = int(seq_host[cur_pos])
                 # Sampling does not use the trace (random token breaks the traced path).
                 # Trace path: greedy only; eager path: greedy or sampling.
@@ -1732,6 +1738,9 @@ class TTSeamlessM4Tv2Model:
                                 batch_size=batch_size,
                             )
                             _2cq_op_event = ttnn.record_event(self.device, 0)
+                            _prof_path = "capture"
+                            if _decode_step_profile:
+                                _t_setup = _t_trace = _t_prof.perf_counter() - _t_step_start
                         else:
                             _dp["trace2cq"] += 1
                             rt = self._kv_decode_rt
@@ -1744,10 +1753,17 @@ class TTSeamlessM4Tv2Model:
                             # CQ0 waits for CQ1 uploads before executing the trace.
                             ttnn.wait_for_event(0, write_event)
                             self._reset_kv_decode_cur_pos(cur_pos, batch_size)
+                            if _decode_step_profile:
+                                _t_setup_end = _t_prof.perf_counter()
                             ttnn.execute_trace(self.device, trace_id, cq_id=0, blocking=True)
                             # Update op_event: CQ0 has finished this trace step.
                             _2cq_op_event = ttnn.record_event(self.device, 0)
                             logits = rt.logits_tt
+                            _prof_path = "trace2cq"
+                            if _decode_step_profile:
+                                _t_trace_end = _t_prof.perf_counter()
+                                _t_setup = _t_setup_end - _t_step_start
+                                _t_trace = _t_trace_end - _t_setup_end
                     else:
                         _dp["trace1cq"] += 1
                         logits = self._decode_token_with_kv_cache_traced(
@@ -1759,6 +1775,10 @@ class TTSeamlessM4Tv2Model:
                             cross_attn_cache,
                             batch_size=batch_size,
                         )
+                        _prof_path = "trace1cq"
+                        if _decode_step_profile:
+                            _t_setup = 0.0
+                            _t_trace = _t_prof.perf_counter() - _t_step_start
                 else:
                     _dp["eager"] += 1
                     logits = self._decode_token_with_kv_cache(
@@ -1772,6 +1792,10 @@ class TTSeamlessM4Tv2Model:
                         cross_4d=decode_cross_4d,
                         batch_size=batch_size,
                     )
+                    _prof_path = "eager"
+                    if _decode_step_profile:
+                        _t_setup = 0.0
+                        _t_trace = _t_prof.perf_counter() - _t_step_start
                 # Guard against occasional invalid traced logits buffer; fall back to eager decode.
                 if (
                     use_decode_trace
@@ -1793,6 +1817,8 @@ class TTSeamlessM4Tv2Model:
                     _dp["fallback"] += 1
                     use_decode_trace = False
                     decode_trace_ready = False
+                if _decode_step_profile:
+                    _t_readback_start = _t_prof.perf_counter()
                 if do_sample:
                     next_tt, next_id = self._sample_next_token(
                         logits, 1, temperature=temperature, top_k=top_k, top_p=top_p
@@ -1817,8 +1843,52 @@ class TTSeamlessM4Tv2Model:
                 cur_pos += 1
                 if not cross_valid:
                     cross_valid = True
+                if _decode_step_profile:
+                    _t_step_end = _t_prof.perf_counter()
+                    _t_readback = _t_step_end - _t_readback_start
+                    _t_total = _t_step_end - _t_step_start
+                    _prof_records.append(
+                        (_t_setup * 1000.0, _t_trace * 1000.0, _t_readback * 1000.0, _t_total * 1000.0, _prof_path)
+                    )
                 if eos_ids and next_id in eos_ids:
                     break
+            if _decode_step_profile and _prof_records:
+                import statistics as _stat
+
+                # Drop step 0 (capture/cold) for steady-state — but keep its number visible.
+                cold = _prof_records[0]
+                hot = _prof_records[1:] if len(_prof_records) > 1 else _prof_records
+                hot_setup = [r[0] for r in hot if r[4] == "trace2cq"]
+                hot_trace = [r[1] for r in hot if r[4] == "trace2cq"]
+                hot_readb = [r[2] for r in hot if r[4] == "trace2cq"]
+                hot_total = [r[3] for r in hot if r[4] == "trace2cq"]
+
+                def _stats(xs):
+                    if not xs:
+                        return "n/a"
+                    if len(xs) == 1:
+                        return f"{xs[0]:.3f}"
+                    return f"min={min(xs):.3f} med={_stat.median(xs):.3f} max={max(xs):.3f} mean={_stat.mean(xs):.3f}"
+
+                print("\n=== Per-step decode profile (ms) ===", flush=True)
+                print(f"steps total: {len(_prof_records)} (cold={cold[4]})", flush=True)
+                print(
+                    f"cold step[0]: setup={cold[0]:.3f}  trace={cold[1]:.3f}  readback={cold[2]:.3f}  total={cold[3]:.3f}",
+                    flush=True,
+                )
+                print("steady-state (trace2cq, step[1:]):", flush=True)
+                print(f"  setup    : {_stats(hot_setup)}", flush=True)
+                print(f"  trace    : {_stats(hot_trace)}", flush=True)
+                print(f"  readback : {_stats(hot_readb)}", flush=True)
+                print(f"  total    : {_stats(hot_total)}", flush=True)
+                if hot_total:
+                    print(
+                        f"  share    : setup={sum(hot_setup) / sum(hot_total) * 100.0:.1f}%  "
+                        f"trace={sum(hot_trace) / sum(hot_total) * 100.0:.1f}%  "
+                        f"readback={sum(hot_readb) / sum(hot_total) * 100.0:.1f}%",
+                        flush=True,
+                    )
+                print("=" * 50, flush=True)
             if _decode_path_dbg:
                 _trace_steps = _dp["capture"] + _dp["trace2cq"] + _dp["trace1cq"]
                 print(
