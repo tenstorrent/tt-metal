@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-29T00:11:46Z",
-  "updated_at": "2026-05-29T01:10:25Z",
+  "updated_at": "2026-05-29T01:13:48Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -331,8 +331,15 @@
         "pcc": 1.0
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/embedding.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_tt_embedding.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/embedding.traced_ops.json"
+        ],
+        "notes": "ttnn.embedding gather; weight [151936,1536] bf16 ROW_MAJOR in DRAM; uint32 row-major ids -> TILE output. HiFi4+fp32_dest_acc preset (no matmul; exact gather). PCC=0.9999986 vs golden on p150. Guard ok.",
+        "pcc": 0.9999986231610992
       },
       "debug": {
         "status": "n/a",
@@ -740,6 +747,12 @@
       "tick": 11,
       "ts": "2026-05-29T01:10:25Z",
       "action": "device[vision_patch_merger]",
+      "result": "ok"
+    },
+    {
+      "tick": 12,
+      "ts": "2026-05-29T01:13:48Z",
+      "action": "device[embedding]",
       "result": "ok"
     }
   ],

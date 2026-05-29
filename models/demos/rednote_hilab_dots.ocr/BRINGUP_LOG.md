@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** p150 (blackhole)
 **Started:** 2026-05-29T00:11:46Z
-**Updated:** 2026-05-29T01:10:25Z
+**Updated:** 2026-05-29T01:13:48Z
 
 ## Block Status
 
@@ -46,7 +46,7 @@
 | vision_tower | optimization | pending | — | 0 |  |
 | vision_tower | real_weights | pending | — | 0 |  |
 | embedding | reference | done | 1.000000 | 0 | Qwen2 token embedding (vocab 151936, hidden 1536) lookup. PCC=1.0 vs nn.Embedding. |
-| embedding | ttnn | pending | — | 0 |  |
+| embedding | ttnn | done | 0.999999 | 0 | ttnn.embedding gather; weight [151936,1536] bf16 ROW_MAJOR in DRAM; uint32 row-major ids -> TILE output. HiFi4+fp32_dest_acc preset (no matmul; exact gather). PCC=0.9999986 vs golden on p150. Guard ok. |
 | embedding | debug | n/a | — | 0 |  |
 | embedding | optimization | pending | — | 0 |  |
 | embedding | real_weights | pending | — | 0 |  |
@@ -94,7 +94,6 @@
 
 ## Recent Ticks
 
-- tick 4 (2026-05-29T00:34:04Z): reference[rmsnorm,rope,attention,mlp] — ok
 - tick 5 (2026-05-29T00:38:13Z): reference[decoder_layer,lm_head,language_model] — ok
 - tick 6 (2026-05-29T00:45:55Z): device[vision_rmsnorm] — ok
 - tick 7 (2026-05-29T00:52:05Z): device[vision_attention] — ok
@@ -104,6 +103,7 @@
 - tick 10 (2026-05-29T01:03:33Z): device[vision_block] — ok
 - tick 10 (2026-05-29T01:04:12Z): device[vision_block] — ok
 - tick 11 (2026-05-29T01:10:25Z): device[vision_patch_merger] — ok
+- tick 12 (2026-05-29T01:13:48Z): device[embedding] — ok
 
 ## Host-Resident Exceptions
 
