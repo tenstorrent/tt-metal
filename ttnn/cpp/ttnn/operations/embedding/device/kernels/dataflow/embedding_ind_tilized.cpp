@@ -50,7 +50,7 @@ void kernel_main() {
         if (token == pad_token) {
             src_noc_addr = pad_noc_addr;
         } else {
-            src_noc_addr = get_noc_addr(token, weights);
+            src_noc_addr = weights.get_noc_addr(token);
         }
 #elif defined BINARY
         if (token == 0) {
@@ -66,9 +66,9 @@ void kernel_main() {
         } u;
         u.u = (uint32_t)input_l1_ptr[token_idx] << 16;
         uint32_t token_casted = static_cast<uint32_t>(u.f);
-        src_noc_addr = get_noc_addr(token_casted, weights);
+        src_noc_addr = weights.get_noc_addr(token_casted);
 #else
-        src_noc_addr = get_noc_addr(token, weights);
+        src_noc_addr = weights.get_noc_addr(token);
 #endif
 #endif
         noc_async_read(src_noc_addr, weight_l1_addr, width_size);
@@ -86,8 +86,8 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < num_rows; ++i) {
         if (read_indices) {
-            uint64_t noc_input_src_addr = get_noc_addr(curr_tile, input) + (offset * sizeof(uint32_t));
-            noc_async_read_tile(curr_tile, s, input_l1_addr);
+            uint64_t noc_input_src_addr = input.get_noc_addr(curr_tile) + (offset * sizeof(uint32_t));
+            noc_async_read_page(curr_tile, s, input_l1_addr);
             noc_async_read_barrier();
             read_indices = false;
         }

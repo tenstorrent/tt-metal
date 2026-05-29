@@ -289,7 +289,7 @@ void kernel_main() {
 
             if (dest_device_idx == linearized_mesh_coord) {
                 const uint64_t output_noc_addr =
-                    get_noc_addr(output_page_idx, output_addrgen, dest_token_segment_offset_bytes, /*noc=*/1);
+                    output_addrgen.get_noc_addr(output_page_idx, dest_token_segment_offset_bytes, /*noc=*/1);
                 noc_async_write(src_data_l1_addr, output_noc_addr, source_token_segment_size_bytes, /*noc=*/1);
                 noc_async_writes_flushed(/*noc=*/1);
             } else {
