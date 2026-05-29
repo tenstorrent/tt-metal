@@ -903,6 +903,7 @@ def test_embedding_perf_h2d_forward_d2h(mesh_device, batch_size):
         ((1, 8), 8),
         ((1, 8), 16),
         ((1, 8), 32),
+        ((4, 8), 1),
         ((4, 8), 32),
     ],
     indirect=["mesh_device"],
@@ -911,6 +912,7 @@ def test_embedding_perf_h2d_forward_d2h(mesh_device, batch_size):
         "dp8_perdev8_global64",
         "dp8_perdev16_global128",
         "dp8_perdev32_global256",
+        "dp32_perdev1_global32",
         "dp32_perdev32_global1024",
     ],
 )
