@@ -184,7 +184,7 @@ def run_test_linear_impl(
                 topology=topology,
                 cluster_axis=cluster_axis,
                 chunks_per_sync=16,
-                num_workers_per_link=3,
+                num_workers_per_link=4,
                 num_buffers_per_channel=2,
             )
 
@@ -582,7 +582,7 @@ def run_test_linear(
     "M, K, N, force_transpose, use_bias, activation, chunks, fuse_addcmul, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
     [
         (32768, 4096, 4096, True, False, None, 1, False, 8, 8, 8, 2, 2),
-        (75776, 5120, 3840, True, True, None, 3, False, 7, 5, 16, 1, 2),
+        (75776, 5120, 3840, True, True, None, 1, False, 10, 8, 8, 1, 2),
         (75776, 5120, 1280, True, True, None, 1, True, 10, 8, 8, 2, 1),
         (75776, 5120, 1280, True, True, None, 1, False, 10, 8, 8, 2, 1),
         (75776, 5120, 3456, True, True, "gelu", 1, False, 9, 5, 12, 1, 2),
@@ -744,6 +744,7 @@ def run_test_linear_fsdp(
       - bias    : [1, N]        N sharded on tp_axis (replicated on fsdp_axis)
       - output  : [M, N]        M sharded on fsdp_axis,        N sharded on tp_axis
     """
+    logger.info(f"Running test_linear fsdp with M={M}, K={K}, N={N}")
     assert tp_axis != fsdp_axis, "tp_axis and fsdp_axis must be distinct"
     tp_size = device.shape[tp_axis]
     fsdp_size = device.shape[fsdp_axis]
@@ -813,6 +814,7 @@ def run_test_linear_fsdp(
     tp_sems = [create_global_semaphores(device, device.get_num_devices(), ccl_cores, 0) for _ in range(num_iters)]
     fsdp_sems = [create_global_semaphores(device, device.get_num_devices(), ccl_cores, 0) for _ in range(num_iters)]
 
+    logger.info("Creating persistent buffers")
     # Persistent activation-gather buffer holds the per-device gathered activation
     # [M/fsdp_size, K] (M is sharded on fsdp_axis, K becomes full after the TP all-gather).
     per_device_M = M // fsdp_size
@@ -901,7 +903,10 @@ def run_test_linear_fsdp(
             ttnn.synchronize_device(device)
             tt_out_tensor = run_op(i)
             tt_output_tensor_list.append(tt_out_tensor)
+            logger.info(f"Waiting for op")
             ttnn.synchronize_device(device)
+            logger.info(f"Done op")
+
             logger.info(f"Done iteration {i}")
 
     # Output is [M/fsdp, N/tp] per device — M sharded on fsdp_axis, N sharded on tp_axis.
