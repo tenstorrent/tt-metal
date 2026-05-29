@@ -81,11 +81,8 @@ ALWI void process_corner_tile(
 }
 
 void kernel_main() {
-    constexpr uint32_t W_tiles = get_compile_time_arg_val(0);
-    constexpr uint32_t H_tiles = get_compile_time_arg_val(1);
     constexpr uint32_t has_right_pad = get_compile_time_arg_val(2);
     constexpr uint32_t has_bottom_pad = get_compile_time_arg_val(3);
-    constexpr uint32_t elem_size = get_compile_time_arg_val(4);
     constexpr uint32_t fill_bits_ct = get_compile_time_arg_val(5);
     constexpr uint32_t cb_data_in = get_compile_time_arg_val(6);
     constexpr uint32_t cb_right_mask = get_compile_time_arg_val(7);

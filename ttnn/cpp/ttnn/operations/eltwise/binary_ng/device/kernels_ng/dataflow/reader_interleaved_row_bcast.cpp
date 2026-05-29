@@ -13,7 +13,9 @@
 void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t start_tile_id = get_arg_val<uint32_t>(1);
+#if SRC_SHARDED
     const uint32_t src_num_tiles = get_arg_val<uint32_t>(2);
+#endif
     const uint32_t dst_num_tiles = get_arg_val<uint32_t>(3);
     const uint32_t dst_shard_width = get_arg_val<uint32_t>(4);
     const uint32_t nD_stride = get_arg_val<uint32_t>(5);
@@ -31,7 +33,9 @@ void kernel_main() {
     const uint32_t d_stride_b = get_arg_val<uint32_t>(17);
     const uint32_t n_stride_b = get_arg_val<uint32_t>(18);
     const uint32_t c_stride_b = get_arg_val<uint32_t>(19);
+#if SRC_SHARDED_B
     const uint32_t src_num_tiles_b = get_arg_val<uint32_t>(20);
+#endif
 
     constexpr auto cb_id_src = tt::CBIndex::c_0;
     constexpr auto cb_id_src_b = tt::CBIndex::c_1;
@@ -91,8 +95,8 @@ void kernel_main() {
         start_nd * nD_stride_b + start_d * d_stride_b + start_n * n_stride_b + start_c * c_stride_b;
 #if !SRC_BCAST_B
     tile_offset_b += start_th * Wt;
-#endif
     uint32_t next_c_shift_b = c_stride_b - HtWt;
+#endif
     uint32_t next_n_shift_b = n_stride_b - c_stride_b * C;
     uint32_t next_d_shift_b = d_stride_b - n_stride_b * N;
     uint32_t next_nd_shift_b = nD_stride_b - d_stride_b * D;

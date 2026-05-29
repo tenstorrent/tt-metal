@@ -112,18 +112,17 @@ inline void dbg_thread_halt()
         // Notify math thread that unpack thread is idle
         mailbox_write(ThreadId::MathThreadId, 1);
         // Wait for math thread to complete debug dump
-        volatile std::uint32_t temp = mailbox_read(ThreadId::MathThreadId);
+        (void)mailbox_read(ThreadId::MathThreadId);
     }
     else if constexpr (thread_id == ThreadId::MathThreadId)
     {
         // Wait for all instructions on the running thread to complete
         tensix_sync();
         // Wait for unpack thread to complete
-        volatile std::uint32_t temp = mailbox_read(ThreadId::UnpackThreadId);
+        (void)mailbox_read(ThreadId::UnpackThreadId);
         // Wait for previous packs to finish
         while (semaphore_read(semaphore::MATH_PACK) > 0)
-        {
-        };
+            continue;
     }
 }
 

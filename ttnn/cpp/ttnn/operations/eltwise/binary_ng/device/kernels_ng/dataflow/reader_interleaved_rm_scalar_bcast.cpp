@@ -55,8 +55,11 @@ void kernel_main() {
     const uint32_t current_block_start = get_arg_val<uint32_t>(index++);
     const uint32_t rows_per_tile = get_arg_val<uint32_t>(index++);
     const uint32_t row_width_elements = get_arg_val<uint32_t>(index++);
+#if !SRC_BCAST
     const uint32_t page_size_a_arg = get_arg_val<uint32_t>(index++);
+#else
     const uint32_t page_size_b_arg = get_arg_val<uint32_t>(index++);
+#endif
     const uint32_t alignment_a = get_arg_val<uint32_t>(index++);
     const uint32_t alignment_b = get_arg_val<uint32_t>(index++);
     const uint32_t tiles_per_row = get_arg_val<uint32_t>(index++);
@@ -74,8 +77,11 @@ void kernel_main() {
     constexpr uint32_t src_tile_bytes = get_tile_size(cb_id_src);
     constexpr uint32_t tile_hw = get_tile_hw(cb_id_src);
     constexpr uint32_t element_size = src_tile_bytes / tile_hw;
+#if SRC_BCAST
     const uint32_t element_size_aligned_a = align(element_size, alignment_a);
+#else
     const uint32_t element_size_aligned_b = align(element_size, alignment_b);
+#endif
     const uint32_t row_width_bytes = row_width_elements * element_size;
 
     const uint32_t outHt = cHt;
