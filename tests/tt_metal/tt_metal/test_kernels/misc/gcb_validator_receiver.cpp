@@ -59,8 +59,14 @@ void kernel_main() {
 
     const uint32_t scratch_addr = get_write_ptr(scratch_cb_id);
 
-    DPRINT << "VALIDATOR_START bank=" << bank_id << " recv_idx=" << recv_idx_in_bank << " num_layers=" << num_layers
-           << " num_blocks=" << num_blocks << " page=" << page_bytes << " tile=" << tile_bytes << ENDL();
+    DPRINT(
+        "VALIDATOR_START bank={} recv_idx={} num_layers={} num_blocks={} page={} tile={}\n",
+        bank_id,
+        recv_idx_in_bank,
+        num_layers,
+        num_blocks,
+        page_bytes,
+        tile_bytes);
 
     uint32_t global_iter = 0;
     for (uint32_t layer = 0; layer < num_layers; ++layer) {
@@ -96,9 +102,15 @@ void kernel_main() {
                 }
             }
             if (mismatch_word != words) {
-                DPRINT << "VALIDATOR_MISMATCH layer=" << layer << " blk=" << blk << " bank=" << bank_id
-                       << " recv_idx=" << recv_idx_in_bank << " word=" << mismatch_word << " got=0x" << HEX()
-                       << received[mismatch_word] << " exp=0x" << expected[mismatch_word] << ENDL();
+                DPRINT(
+                    "VALIDATOR_MISMATCH layer={} blk={} bank={} recv_idx={} word={} got=0x{:x} exp=0x{:x}\n",
+                    layer,
+                    blk,
+                    bank_id,
+                    recv_idx_in_bank,
+                    mismatch_word,
+                    (uint32_t)received[mismatch_word],
+                    (uint32_t)expected[mismatch_word]);
                 // Hang so the dispatch timeout surfaces this core.
                 while (true) {
                     ;
@@ -108,8 +120,7 @@ void kernel_main() {
             const bool log = (global_iter < 2) || (global_iter + 1 == num_layers * num_blocks) ||
                              (print_stride > 0 && (global_iter % print_stride == 0));
             if (log) {
-                DPRINT << "VALIDATOR ok layer=" << layer << " blk=" << blk << " bank=" << bank_id
-                       << " recv_idx=" << recv_idx_in_bank << ENDL();
+                DPRINT("VALIDATOR ok layer={} blk={} bank={} recv_idx={}\n", layer, blk, bank_id, recv_idx_in_bank);
             }
 
             experimental::remote_cb_pop_front(remote_cb_id, 1);
@@ -117,7 +128,7 @@ void kernel_main() {
         }
     }
 
-    DPRINT << "VALIDATOR_LOOP_DONE bank=" << bank_id << " recv_idx=" << recv_idx_in_bank << ENDL();
+    DPRINT("VALIDATOR_LOOP_DONE bank={} recv_idx={}\n", bank_id, recv_idx_in_bank);
 
     // Bounded-poll for an extra page (sender overshoot).
     volatile tt_l1_ptr uint32_t* pages_acked_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
@@ -129,15 +140,14 @@ void kernel_main() {
         const uint32_t sent = *pages_sent_ptr;
         const uint32_t acked = *pages_acked_ptr;
         if (sent != acked) {
-            DPRINT << "VALIDATOR_OVERFLOW: sender pushed an extra page; pages_sent=" << sent << " pages_acked=" << acked
-                   << ENDL();
+            DPRINT("VALIDATOR_OVERFLOW: sender pushed an extra page; pages_sent={} pages_acked={}\n", sent, acked);
             while (true) {
                 ;
             }
         }
     }
 
-    DPRINT << "VALIDATOR_DONE ok bank=" << bank_id << " recv_idx=" << recv_idx_in_bank << ENDL();
+    DPRINT("VALIDATOR_DONE ok bank={} recv_idx={}\n", bank_id, recv_idx_in_bank);
     experimental::update_remote_cb_config_in_l1(remote_cb_id);
     noc_async_atomic_barrier();
 }
