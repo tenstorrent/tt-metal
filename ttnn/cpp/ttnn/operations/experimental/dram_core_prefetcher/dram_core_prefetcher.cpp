@@ -9,11 +9,8 @@
 
 namespace ttnn::operations::experimental {
 
-void start_dram_core_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device, bool enable_performance_mode) {
-    tt::tt_metal::experimental::DramCorePrefetcherConfig config{
-        .enable_performance_mode = enable_performance_mode,
-    };
-    tt::tt_metal::experimental::StartDramCorePrefetcher(mesh_device, config);
+void start_dram_core_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device) {
+    tt::tt_metal::experimental::StartDramCorePrefetcher(mesh_device, {});
 }
 
 void queue_dram_core_prefetcher_request(

@@ -32,9 +32,7 @@ namespace experimental {
 
 class GlobalCircularBuffer;
 
-struct DramCorePrefetcherConfig {
-    bool enable_performance_mode = false;
-};
+struct DramCorePrefetcherConfig {};
 
 // Build per-device Programs (one DRISC kernel per DRAM sender core), allocate
 // the per-(device, sender) H2D sockets, and spawn the host worker thread that

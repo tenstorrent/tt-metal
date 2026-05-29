@@ -31,12 +31,9 @@ void bind_dram_core_prefetcher(nb::module_& mod) {
 
             Args:
                 mesh_device (ttnn.MeshDevice): the mesh device to launch on.
-                enable_performance_mode (bool, optional): kept for API parity; currently a no-op.
         )doc",
         &start_dram_core_prefetcher,
-        nb::arg("mesh_device"),
-        nb::kw_only(),
-        nb::arg("enable_performance_mode") = false);
+        nb::arg("mesh_device"));
 
     ttnn::bind_function<"queue_dram_core_prefetcher_request", "ttnn.experimental.">(
         mod,

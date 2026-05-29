@@ -34,8 +34,7 @@ namespace ttnn::operations::experimental {
 //   3. stop_dram_core_prefetcher(device)
 //      - Sends the stop sentinel, joins the worker, waits for the kernels
 //        to exit. Caller must call this before destroying the device.
-void start_dram_core_prefetcher(
-    tt::tt_metal::distributed::MeshDevice* mesh_device, bool enable_performance_mode = false);
+void start_dram_core_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device);
 
 void queue_dram_core_prefetcher_request(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
