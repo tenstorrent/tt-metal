@@ -150,3 +150,109 @@ composite (which is faster for them).
 RoPE/norm compute, or (c) cut the per-chunk fabric fixed cost (batched
 mcast / no-DRAM-roundtrip AG). All three are larger efforts that change
 correctness-sensitive code paths — surfacing to the user before pursuing.
+
+## Worker-scaling sweep (2026-05-29) — N18944 is NOT compute-bound
+
+Earlier I read "TRISC FW span 316us ≈ compute" and inferred compute-bound.
+That inference is unsound: the TRISC span *includes* time stalled in
+cb_wait_front (input_cb from the reader, stats_gathered_cb from the
+writer/fabric) and cb_reserve_back back-pressure on output_cb. FW span
+equality across RISCs does not imply compute-bound.
+
+Decisive test instead of trusting zone spans: sweep the per-chip worker
+cap (new `WAN_RMSNORM_WORKER_CAP` env override on
+`pick_num_workers_tp_gt_1`) and watch how fused wall scales. chunk_size
+stays pinned at 3 (H=1280, 40 cols, L1 budget) across the whole sweep, so
+**fabric packet count is invariant to worker count** — fewer workers just
+means more serial chunks per core. Pure compute would make wall ∝
+rows/worker. Measured (self_sp4_N18944, TP=4 LINE, RoPE, num_links=2):
+
+| cap | workers | rows/core | fused us | speedup | actual/compute-pred |
+|---|---|---|---|---|---|
+| 64 | 64 | 10 | 417.6 | 1.59× | 1.00 |
+| 48 | 48 | 13 | 444.7 | 1.49× | 0.82 |
+| 32 | 32 | 19 | 520.3 | 1.28× | 0.66 |
+| 16 | 16 | 37 | 872.8 | 0.76× | 0.56 |
+
+At 16 workers each core does 3.7× the rows of the 64-worker case yet wall
+is only 2.1× — the rest of the per-core "compute" was hideable CB-stall.
+The 48→64 slope (9.0 us per row/core) extrapolates to a **~327us floor**
+(rows/core→0, i.e. infinite workers) → asymptotic best **2.03×**. Even
+maxing the BH core budget (~106 workers, needs num_links≥2 for channel
+headroom) lands ~378us → **1.76×**, only ~6% over today's 1.59×.
+
+### Conclusion: 3× is structurally unreachable for large shapes
+
+The ~327us floor is data-movement + pipeline fill/drain, not compute, so
+adding cores cannot reach 3× (≈221us). This confirms the prior ceiling
+analysis from a second, independent angle: the fused op's single
+structural win over the composite is reading the input once instead of
+twice (composite: pre-read + post-read + output-write = 3 DRAM passes;
+fused: input-read + output-write = 2 passes), so the DRAM-traffic ceiling
+is ~3/2 = 1.5× of composite's bandwidth-bound time — observed 1.59× is
+already *at* that ceiling. Lifting the worker cap past 64 is therefore NOT
+worth pursuing for the 3× goal (the confirmed-regression stash stays
+parked). The env knob is retained purely as a diagnostic.
+
+Next, to honor the "where does the time actually go" question: add
+per-chunk stall-vs-math device zones (IN_WAIT / PRE / AG_WAIT / POST) to
+attribute the ~327us floor to reader DRAM-read vs writer drain vs fabric
+fill — localizes whether any lever remains (faster reader DRAM pattern,
+faster writer drain) short of an algorithmic change.
+
+## Compute-kernel zone split (2026-05-29) — direct stall-vs-phase zones
+
+Per the user's note ("TRISC FW span includes CB stalls, not just math —
+add detailed zones"), added three per-chunk `DeviceZoneScopedN` zones in
+the compute kernel that tile the chunk timeline:
+  - `RMS_PRE`  — PRE for-loop (input-read stall + square + row-reduce)
+  - `RMS_AGWAIT` — the single `cb_wait_front(stats_gathered_cb)` (pure
+    fabric all-gather stall)
+  - `RMS_POST` — POST for-loop (norm + ×weight + RoPE math + output-drain
+    back-pressure)
+
+Measured on N12400 (388 tile rows, TP=4 LINE, RoPE, NON-traced device-op
+test, 64 worker cores, num_links=2). Per-core totals summed over all
+chunks, averaged across the 64 workers, stable across 8 op invocations
+(run_host_id 5120–5127); a separate run that also wrapped each per-block
+`cb_wait_front(input_cb)` in an `RMS_INWAIT` zone reproduced PRE/AGWAIT/
+POST within <1%, so the zone instrumentation adds no measurable overhead:
+
+| zone | avg us/core | share | what it is |
+|---|---|---|---|
+| RMS_PRE    | ~206 | 31% | input-read stall + sum-of-squares math |
+| RMS_AGWAIT |  ~30 |  5% | fabric all-gather wait (per-chunk) |
+| RMS_POST   | ~415 | 63% | norm + weight + RoPE math + output drain |
+| (RMS_INWAIT, subset of PRE) | ~57 | — | reader-input stall portion of PRE |
+
+(Absolute spans are ~2× the traced-bench TRISC FW span because this is
+the NON-traced unit test — higher per-op dispatch latency, no inter-op
+trace pipelining. The **relative split** is the signal.)
+
+### Findings (confirm the worker-sweep conclusion from a 3rd angle)
+1. **Fabric is hidden** — AGWAIT is only ~5% (≤42us even at its noisiest
+   chunk boundary). Independently confirms the traced-profile AGWAIT≈0.
+   There is no fabric lever left.
+2. **Reader keeps up** — the input-read stall (INWAIT) is only ~57us of
+   the 206us PRE; the other ~150us is the square+reduce math. Reader DRAM
+   throughput is NOT the bottleneck.
+3. **POST dominates (63%)** — norm + weight + RoPE compute plus the
+   output-drain back-pressure. This is the phase to attack IF compute
+   were the lever — but the worker sweep already showed adding workers
+   (more POST parallelism) yields sublinear returns, i.e. POST is gated
+   by shared DRAM-write bandwidth + pipeline fill/drain, not per-core
+   math. So even the dominant phase can't be sped up by parallelism.
+
+### Net: the "where does the time go" question is fully answered
+Fabric ≈5% (hidden), reader-input ≈9%, the remaining ~86% is PRE-math +
+POST(math+drain) — i.e. local compute and DRAM read/write traffic, the
+exact ~327us data-movement floor the worker sweep extrapolated. All three
+independent diagnostics (DRAM-pass-count ceiling = 1.5×, worker sweep
+floor = ~327us/2.03×, zone split = fabric-hidden/compute+drain-bound)
+agree: **the large-shape 3× target is not reachable without an
+algorithmic change to the norm/RoPE math or relaxing fidelity (forbidden).
+Current 1.59× is at the structural DRAM-traffic ceiling.**
+
+The 3 coarse zones are kept in the kernel (zero-cost when the profiler is
+disabled; the SDPA compute kernel keeps zones the same way) for future
+re-profiling.
