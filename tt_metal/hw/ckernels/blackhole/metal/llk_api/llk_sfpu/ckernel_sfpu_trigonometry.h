@@ -464,28 +464,66 @@ sfpi_inline sfpi::vFloat _sfpu_reciprocal_ge1_(sfpi::vFloat x) {
     return y;
 }
 
+template <bool is_fp32_dest_acc_en>
+sfpi_inline sfpi::vFloat _sfpu_quarter_exp_abs_(sfpi::vFloat x) {
+    // j = x * log2(e); i = round(abs(j)); j = (float)i;
+    sfpi::vFloat j = x * sfpi::vConstFloatPrgm0;
+    sfpi::vFloat a = sfpi::setsgn(x, 0);
+    sfpi::vInt i = float_to_uint8(j, sfpi::RoundMode::NearestEven);
+    j = int32_to_float(i, sfpi::RoundMode::NearestEven);
+
+    sfpi::vFloat r, f, scale, bias, c1;
+
+    if constexpr (!is_fp32_dest_acc_en) {
+        f = j * sfpi::vConstFloatPrgm1 + a;  // f = a - j * ln(2)
+
+        r = 0.038918063f;
+        r = r * f + 0.167377979f;
+        i += 125;
+        r = r * f + sfpi::vConstFloatPrgm2;
+        c1 = sfpi::reinterpret<sfpi::vFloat>(
+            sfpi::reinterpret<sfpi::vInt>(sfpi::vConst1) - 705);  // 0x3f7ffd3f = 0.999957979f
+        r = r * f + c1;
+
+    } else {
+        f = j * sfpi::vConstFloatPrgm1 + a;  // f = a - j * ln(2)_hi
+        f = j * -1.42860677e-6f + f;         // f = f - j * ln(2)_lo
+
+        r = 1.37805939e-3f;
+        r = r * f + 8.37312452e-3f;
+        r = r * f + 4.16695364e-2f;
+        r = r * f + 1.66664720e-1f;
+        r = r * f + sfpi::vConstFloatPrgm2;
+        i += 125;
+        r = r * f + 1.0f;
+    }
+
+    // Handle a * log2(e) >= 130, while propagating NaN.
+    sfpi::vFloat y = a * std::numeric_limits<float>::infinity();
+    r = r * f + 1.0f;
+
+    v_if(i < (125 + 130)) {
+        // Keep reconstruction quarter-scaled: scale is 0.25 * 2**i. Avoids
+        // materialising 2**i directly near overflow boundary.
+        y = r * sfpi::reinterpret<sfpi::vFloat>(i << 23);
+    }
+    v_endif;
+
+    return y;
+}
+
 // t = exp(a); cosh(a) = 0.5 * (t + 1/t)
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_cosh() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
         sfpi::vFloat a = sfpi::setsgn(x, 0);
-        sfpi::vFloat y = std::numeric_limits<float>::infinity();
-        y *= a;  // propagate NaN
-        v_if(sfpi::float_to_uint8(a, sfpi::RoundMode::NearestEven) < 89) {
-            sfpi::vFloat t;
-            if constexpr (is_fp32_dest_acc_en) {
-                t = _sfpu_exp_fp32_accurate_unsafe_(a);
-            } else {
-                t = _sfpu_exp_21f_bf16_unsafe_<is_fp32_dest_acc_en>(a);
-            }
-            y = sfpi::addexp(t, -1);
-
-            v_if(sfpi::exexp(t) < 24) {
-                sfpi::vFloat r = _sfpu_reciprocal_ge1_<is_fp32_dest_acc_en>(t);
-                y += 0.5f * r;
-            }
-            v_endif;
+        sfpi::vFloat q = _sfpu_quarter_exp_abs_<is_fp32_dest_acc_en>(a);
+        sfpi::vFloat y = q + q;
+        sfpi::vInt q_exp = sfpi::exexp(q);
+        v_if(q_exp < 24) {
+            sfpi::vFloat r = _sfpu_reciprocal_ge1_<is_fp32_dest_acc_en>(y);
+            y = y + 0.25f * r;
         }
         v_endif;
 
@@ -499,7 +537,7 @@ inline void calculate_cosh() {
 }
 
 template <bool is_fp32_dest_acc_en>
-sfpi_inline sfpi::vFloat _sfpu_quarter_abs_expm1_(sfpi::vFloat x) {
+sfpi_inline sfpi::vFloat _sfpu_quarter_expm1_abs_(sfpi::vFloat x) {
     sfpi::vFloat j = x * sfpi::vConstFloatPrgm0;  // j = x * log2(e)
     sfpi::vFloat a = sfpi::setsgn(x, 0);
     sfpi::vInt i = float_to_uint8(j, sfpi::RoundMode::NearestEven);
@@ -550,7 +588,7 @@ sfpi_inline sfpi::vFloat _sfpu_quarter_abs_expm1_(sfpi::vFloat x) {
 // a = abs(x); t = expm1(a); sinh(a) = 0.5 * (t + t / (t + 1))
 template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _sfpu_sinh_(sfpi::vFloat x) {
-    sfpi::vFloat q = _sfpu_quarter_abs_expm1_<is_fp32_dest_acc_en>(x);
+    sfpi::vFloat q = _sfpu_quarter_expm1_abs_<is_fp32_dest_acc_en>(x);
     sfpi::vFloat e = 4.0f * q + 1.0f;
 
     sfpi::vFloat r = _sfpu_reciprocal_ge1_<is_fp32_dest_acc_en>(e);
@@ -614,7 +652,14 @@ void tangent_init() {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void cosh_init() {
-    _init_exponential_<APPROXIMATION_MODE, p_sfpu::kCONST_1_FP16B, true, is_fp32_dest_acc_en>();
+    sfpi::vConstFloatPrgm0 = 1.442695f;  // log2(e) == 1 / ln(2)
+    if constexpr (is_fp32_dest_acc_en) {
+        sfpi::vConstFloatPrgm1 = -0.693145752f;   // -ln(2)_hi
+        sfpi::vConstFloatPrgm2 = 4.99999851e-1f;  // c2
+    } else {
+        sfpi::vConstFloatPrgm1 = -0.6931471805599453f;  // -ln(2)
+        sfpi::vConstFloatPrgm2 = 0.500122011f;          // c2
+    }
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
