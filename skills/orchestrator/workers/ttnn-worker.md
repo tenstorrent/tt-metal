@@ -87,6 +87,14 @@ Status meanings:
   `reference_impl` model file. The orchestrator runs the
   `lib.guard.host_resident_cross_check` against that reference; missing
   cross-references fail the gate.
+- **Attention head split/merge MUST use the fused ops**
+  `ttnn.experimental.nlp_create_qkv_heads` / `nlp_concat_heads` (reshape the
+  fused QKV to 4D `[B,1,S,(nh+2nkv)*hd]` first). Do NOT transliterate the
+  PyTorch reference's `reshape`+`slice`+`permute` head handling — the fused op
+  has no torch equivalent so it won't be in the reference, but it is the
+  required TTNN idiom (it's the block's biggest hotspot otherwise). See
+  `Skill(ttnn)` §4a. Applies to MHA and GQA (`num_kv_heads`), prefill and the
+  shared decode `_qkv_proj_heads` helper.
 
 If your implementation cannot satisfy this contract, return
 `status="fail"` with `last_error` naming the specific host-resident sub-op

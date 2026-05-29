@@ -99,6 +99,20 @@ What to look for in the output:
 - **Single-core ops are red flags** — `CORE COUNT == 1` for what should be a parallelizable op (LN, matmul, head split, concat) means the kernel fell back to its single-core path because the input wasn't sharded.
 - Group `BinaryNgDeviceOperation` by `binary_op_type` and memory_config: a 20× gap between DRAM (~80 µs/op) and L1 (~4 µs/op) is common, and exposes the missing `memory_config=L1` hint.
 
+### First ask: can this hot op be REPLACED, not just tuned?
+
+Before tuning a hot op's memory_config/sharding, ask whether it should exist at
+all. The most common case: a hot `ReshapeView` + `Slice` + `Transpose` chain
+that is a hand-written **QKV head split** (or head merge). The fix is NOT to
+L1-pin the reshape — it is to **replace the whole chain with the fused
+primitive** `ttnn.experimental.nlp_create_qkv_heads` /
+`nlp_concat_heads` (reshape input to 4D first). Measured: a head-split chain at
+~38% of attention device-kernel time → fused op cut the block ~40%; L1-pinning
+the reshape instead only bought ~24% and left the wasteful op in place. Tuning a
+suboptimal op is a half-fix; eliminating it is the win. Other replace-don't-tune
+cases: materialized `[1,nh,seq,seq]` softmax → flash/windowed SDPA; manual
+`repeat` before multiply → broadcast multiply; `layer_norm`+`linear` → fused.
+
 ## Memory hierarchy + sharding (the biggest lever)
 
 ### The default kills you
