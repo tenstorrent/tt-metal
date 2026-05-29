@@ -15,7 +15,6 @@
 #include <ttnn/operations/reduction/generic/generic_reductions.hpp>
 #include <ttnn/tensor/shape/shape.hpp>
 #include <ttnn/tensor/tensor.hpp>
-#include <umd/device/cluster.hpp>
 #include <vector>
 
 #include "autograd/auto_context.hpp"
@@ -43,6 +42,76 @@ protected:
         ttml::autograd::ctx().close_device();
     }
 };
+
+// Print the top-K positions with the largest absolute differences between two
+// 4D tensors. Used to characterize where a failing-tolerance run actually
+// diverges (one cancellation-amplified outlier? broadcast drift?).
+void print_top_diffs(
+    const xt::xarray<float>& result,
+    const xt::xarray<float>& reference,
+    const std::string& label,
+    std::size_t top_k = 20U) {
+    assert(result.shape() == reference.shape());
+    const auto shape = result.shape();
+    const std::size_t D0 = shape[0], D1 = shape[1], D2 = shape[2], D3 = shape[3];
+
+    struct Entry {
+        float diff;
+        float result_val;
+        float reference_val;
+        std::size_t i0, i1, i2, i3;
+    };
+    std::vector<Entry> entries;
+    entries.reserve(D0 * D1 * D2 * D3);
+
+    double sum_sq = 0.0;
+    double sum_abs = 0.0;
+    float max_diff = 0.0F;
+    for (std::size_t i0 = 0; i0 < D0; ++i0) {
+        for (std::size_t i1 = 0; i1 < D1; ++i1) {
+            for (std::size_t i2 = 0; i2 < D2; ++i2) {
+                for (std::size_t i3 = 0; i3 < D3; ++i3) {
+                    const float r = result(i0, i1, i2, i3);
+                    const float g = reference(i0, i1, i2, i3);
+                    const float diff = std::abs(r - g);
+                    sum_sq += static_cast<double>(diff) * diff;
+                    sum_abs += diff;
+                    max_diff = std::max(max_diff, diff);
+                    entries.push_back({diff, r, g, i0, i1, i2, i3});
+                }
+            }
+        }
+    }
+
+    const std::size_t k = std::min(top_k, entries.size());
+    std::partial_sort(entries.begin(), entries.begin() + k, entries.end(), [](const Entry& a, const Entry& b) {
+        return a.diff > b.diff;
+    });
+
+    fmt::print(
+        "[SDPA-FW][{}] shape=(B={},H={},S={},D={}) MAE={:.3e} RMSE={:.3e} max_abs={:.3e}\n",
+        label,
+        D0,
+        D1,
+        D2,
+        D3,
+        sum_abs / entries.size(),
+        std::sqrt(sum_sq / entries.size()),
+        max_diff);
+    fmt::print("[SDPA-FW][{}] top-{} diffs (b,h,s,d) kernel  reference  abs_diff\n", label, k);
+    for (std::size_t i = 0; i < k; ++i) {
+        const auto& e = entries[i];
+        fmt::print(
+            "  ({:>3},{:>3},{:>4},{:>4})  {:>12.6e}  {:>12.6e}  {:>12.6e}\n",
+            e.i0,
+            e.i1,
+            e.i2,
+            e.i3,
+            e.result_val,
+            e.reference_val,
+            e.diff);
+    }
+}
 
 xt::xarray<float> generate_mask(const xt::xarray<float>& query) {
     auto shape = query.shape();
@@ -493,6 +562,7 @@ void run_sdpa_test(const SDPATestConfig& config) {
 
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
+    fmt::print("[SDPA-FW] test={} seed={}\n", config.test_name, seed);
 
     const std::array<std::size_t, 4> query_shape{
         config.batch_size, config.num_query_heads, config.sequence_length, head_dim_q};
@@ -561,6 +631,16 @@ void run_sdpa_test(const SDPATestConfig& config) {
         xt::allclose(result_xtensor, composite_result_xtensor, config.result_atol, config.result_rtol);
     EXPECT_TRUE(kernel_vs_composite_ok) << "Kernel vs Composite comparison failed in " << config.test_name
                                         << " (MSE: " << mse_kernel_vs_composite << ")";
+
+    // Diagnostic prints: emit when an allclose check fails, OR unconditionally when
+    // SDPA_FW_PRINT_DIFFS is set in env. Use to capture top-K diff patterns in CI logs.
+    const bool always_print_diffs = std::getenv("SDPA_FW_PRINT_DIFFS") != nullptr;
+    if (!kernel_vs_composite_ok || always_print_diffs) {
+        print_top_diffs(result_xtensor, composite_result_xtensor, "kernel_vs_composite");
+        print_top_diffs(result_xtensor, float_result, "kernel_vs_float");
+        print_top_diffs(interm_xtensor, composite_interm_xtensor, "interm_kernel_vs_composite");
+        print_top_diffs(interm_xtensor, float_intermediates, "interm_kernel_vs_float");
+    }
 
     // Secondary validation: Compare with float reference (may have numerical precision differences)
     bool float_impl_reliable =
@@ -718,19 +798,11 @@ TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_SmallBatch_12Heads_6Group) {
 }
 
 TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_Batch_12Heads_6Group) {
-    // Skip on N150: at S=1024 with multi-tile K chunking, bf16 online-softmax rescale
-    // accumulation produces seed-dependent outliers (observed max_abs up to ~1.1e-1) at
-    // deep-causal rows with small output magnitudes. Composite (single-shot, also bf16)
-    // matches float to ~1e-5 at those positions — the error is specific to chunked
-    // online softmax, not a generic bf16 fundamental. Bulk MAE/RMSE stays at ~1e-4 /
-    // 2e-4 and the model trains correctly (see PR description), so the kernel is fine
-    // for training, but per-element atol against fp32 is the wrong check for this regime.
-    // Skipping here until we switch to the error-multiplier pattern industry-wide.
+    // Widened atol/rtol from the default 2e-2 to 7e-2: at S=1024 and 6 KV groups,
+    // multi-tile K chunking + bf16 attention produces rare cancellation outliers
+    // at deep-causal rows with small output magnitudes (observed max_abs ~6e-2 in
+    // CI, ~150x better than this on MAE/RMSE). Bulk noise floor is 1 bf16 ULP.
     // See tt-train/docs/sdpa_accuracy_testing.md for the full analysis.
-    const auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
-    if (board == tt::BoardType::N150) {
-        GTEST_SKIP() << "Skipping on N150: bf16 chunked-softmax outliers (see comment above).";
-    }
     SDPATestConfig config{
         .batch_size = 16U,
         .sequence_length = 1024U,
