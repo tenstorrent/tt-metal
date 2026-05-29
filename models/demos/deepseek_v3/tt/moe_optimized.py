@@ -26,7 +26,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     ReduceScatterAsyncMinimalConfig,
     RepeatConfig,
 )
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, is_ring_fabric
+from models.demos.deepseek_v3.utils.config_helpers import is_ring_fabric
 from models.demos.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
