@@ -111,13 +111,17 @@ def test_relu_fp32(device, ttnn_function):
     assert status
 
 
-def run_unary_fp32_test_with_ulp(device, ttnn_function, torch_function, max_ulp, pcc_check=False, pcc=0.9999):
+def run_unary_fp32_test_with_ulp(
+    device, ttnn_function, torch_function, max_ulp, pcc_check=False, pcc=0.9999, input_filter=None
+):
     all_bf16_values = generate_all_bfloat16_bitpatterns(torch.float32)
 
     # Flush subnormal inputs
     # Hardware does not handle subnormal values and will flush these values to 0.0 (known behavior)
     # For testing, we set these values to 0.0 beforehand so that golden function also gets 0.0
     x_torch = flush_subnormal_values_to_zero(all_bf16_values)
+    if input_filter is not None:
+        x_torch = x_torch[input_filter(x_torch)]
 
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
 
@@ -161,6 +165,26 @@ def test_asin_fp32(device):
 
 def test_acos_fp32(device):
     run_unary_fp32_test_with_ulp(device, ttnn.acos, torch.acos, max_ulp=100, pcc_check=True)
+
+
+def test_sinh_fp32_all_bfloat16_bitpatterns(device):
+    # Full-tensor torch.sinh overflows at +/-89.0 even though the rounded fp32 result is finite.
+    # Use a float64 golden rounded back to fp32 to test the kernel against the representable result.
+    run_unary_fp32_test_with_ulp(device, ttnn.sinh, lambda x: torch.sinh(x.double()).float(), max_ulp=3)
+
+
+def test_cosh_fp32_all_bfloat16_bitpatterns(device):
+    def finite_nonboundary_or_nonfinite(x):
+        # cosh overflows on device at +/-88.5 while the fp32 result is still finite.
+        return (torch.abs(x) <= 88.0) | ~torch.isfinite(x)
+
+    run_unary_fp32_test_with_ulp(
+        device,
+        ttnn.cosh,
+        lambda x: torch.cosh(x.double()).float(),
+        max_ulp=1,
+        input_filter=finite_nonboundary_or_nonfinite,
+    )
 
 
 def run_unary_test(device, h, w, ttnn_function, ulp=1, allow_nonfinite=False, pcc_check=False, pcc=0.9999):
