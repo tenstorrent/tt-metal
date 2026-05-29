@@ -102,8 +102,7 @@ def _open_mesh_or_skip(shape: tuple[int, ...]):
     _close_device_quietly()
     _clear_global_mesh()
     try:
-        m = ttml.Mesh(shape, tuple(f"_{i}" for i in range(len(shape))))
-        ttml.open_device_mesh(m)
+        ttml.open_device_mesh(shape)
     except Exception as e:  # noqa: BLE001
         _restore_mgd_path(previous_mgd)
         pytest.skip(f"CCL topology tests need a {shape} mesh: {e}")

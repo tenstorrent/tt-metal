@@ -669,11 +669,7 @@ def is_fsdp_managed(param_tensor: Any) -> bool:
     """Return True if ``param_tensor`` was sharded by an ``fully_shard`` call."""
     if getattr(param_tensor, "_fsdp_managed", False):
         return True
-    # Fallback: inspect placements (may be stale after CCL ops; use only as hint).
-    placements = _get_placements(param_tensor)
-    if placements is None:
-        return False
-    return any(_is_shard(p) for p in placements)
+    return False
 
 
 def fsdp_axis_of(param_tensor: Any) -> Optional[int]:
