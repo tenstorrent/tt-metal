@@ -410,6 +410,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
         activation: Optional[str] = None,
         batch: Optional[int] = None,
         seq: Optional[int] = None,
+        input_dtype: Optional[ttnn.DataType] = None,
     ) -> ttnn.Tensor:
         """Chunk long mel-seq matmuls into 1D multicast programs (fits L1 vs one 2D prefill)."""
         k = int(weight.shape[-2])
@@ -443,6 +444,12 @@ class TTSeamlessM4Tv2SpeechEncoder:
             chunk = ttnn.slice(x_flat, [start, 0], [end, k], [1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
             if chunk_rows < chunk_m:
                 chunk = self._pad_linear_rows(chunk, chunk_rows, chunk_m)
+            if input_dtype is not None and chunk.dtype != input_dtype:
+                # ``chunk`` is freshly sliced/padded here — we own it, so deallocating before
+                # rebinding to the typecast result is safe (unlike top-level ``x`` in ``_linear``).
+                cast = ttnn.typecast(chunk, input_dtype, memory_config=ttnn.L1_MEMORY_CONFIG)
+                ttnn.deallocate(chunk)
+                chunk = cast
             out_chunk = ttnn.linear(
                 chunk,
                 weight,
@@ -500,6 +507,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
         accept_sharded_input: bool = False,
         batch: Optional[int] = None,
         seq: Optional[int] = None,
+        input_dtype: Optional[ttnn.DataType] = None,
     ) -> ttnn.Tensor:
         if accept_sharded_input and ttnn.is_sharded(x):
             x = width_sharded_to_l1_interleaved(x)
@@ -512,7 +520,11 @@ class TTSeamlessM4Tv2SpeechEncoder:
                 activation=activation,
                 batch=batch,
                 seq=seq,
+                input_dtype=input_dtype,
             )
+        if input_dtype is not None and x.dtype != input_dtype:
+            # Don't deallocate the caller's tensor — they own it. typecast returns a new tensor.
+            x = ttnn.typecast(x, input_dtype, memory_config=ttnn.L1_MEMORY_CONFIG)
         if program_config is None:
             program_config = self._matmul_program_config(
                 token_rows,
@@ -552,6 +564,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
         interleaved_l1: bool = False,
         input_sharded: bool = False,
         output_sharded: bool = False,
+        residual_input_tensor: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         ch = self.hidden_size if channel_size is None else channel_size
         n_tiles = ch // 32
@@ -559,14 +572,23 @@ class TTSeamlessM4Tv2SpeechEncoder:
         # persistent L1 across the rest of the conformer layer, which collides with conv1d
         # kernel CB allocations at seq > _LONG_AUDIO_RES_DRAM_THRESHOLD (Blackhole L1 is 1.5 MB).
         # Plain ``ttnn.layer_norm`` runs on DRAM and adds no persistent L1 pressure.
+        # ``residual_input_tensor`` is forwarded to ``ttnn.layer_norm`` in this path — the fused
+        # add+LN kernel saves one DRAM add dispatch per call.
         if use_sharded and seq_len > _LONG_AUDIO_RES_DRAM_THRESHOLD:
             x_in = x
             if ttnn.is_sharded(x):
                 x_in = ttnn.sharded_to_interleaved(x, ttnn.DRAM_MEMORY_CONFIG, output_dtype=ttnn.bfloat16)
             elif x.memory_config().buffer_type != ttnn.BufferType.DRAM:
                 x_in = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+            res_in = residual_input_tensor
+            if res_in is not None:
+                if ttnn.is_sharded(res_in):
+                    res_in = ttnn.sharded_to_interleaved(res_in, ttnn.DRAM_MEMORY_CONFIG, output_dtype=ttnn.bfloat16)
+                elif res_in.memory_config().buffer_type != ttnn.BufferType.DRAM:
+                    res_in = ttnn.to_memory_config(res_in, ttnn.DRAM_MEMORY_CONFIG)
             normed = ttnn.layer_norm(
                 x_in,
+                residual_input_tensor=res_in,
                 weight=weight,
                 bias=bias,
                 epsilon=eps,
@@ -575,7 +597,13 @@ class TTSeamlessM4Tv2SpeechEncoder:
             )
             if x_in is not x:
                 ttnn.deallocate(x_in)
+            if res_in is not None and res_in is not residual_input_tensor:
+                ttnn.deallocate(res_in)
             return normed
+        # Short-audio paths don't yet have a fused residual+LN kernel that fits our sharded
+        # layouts; emulate by adding the residual first, then dispatching the original LN path.
+        if residual_input_tensor is not None:
+            x = ttnn.add(x, residual_input_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
         if use_sharded and n_tiles >= 4:
             token_rows = batch * seq_len
             if not input_sharded and token_rows < _MIN_BLOCK_LN_TOKEN_ROWS:
@@ -1373,6 +1401,9 @@ class TTSeamlessM4Tv2SpeechEncoder:
         local_ff_dim = int(ffn.intermediate_dense.weight.shape[-1])
         pc1 = self._tuned_matmul_pc(token_rows, hdim, local_ff_dim)
         pc2 = self._tuned_matmul_pc(token_rows, local_ff_dim, hdim)
+        # BFP8 activations into the FFN expand: weight is already bf8 (model_preprocessing.py:1279),
+        # so this turns a bf8×bf16 matmul into bf8×bf8 — halves activation L1 footprint on the
+        # K=1024 → N=local_ff_dim hot path. Post-LN input is well-conditioned for bf8 quantization.
         h = self._linear(
             x,
             ffn.intermediate_dense.weight,
@@ -1382,6 +1413,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
             accept_sharded_input=accept_sharded_input,
             batch=batch,
             seq=seq_len,
+            input_dtype=ttnn.bfloat8_b,
         )
         out = self._linear(
             h,
@@ -1757,22 +1789,22 @@ class TTSeamlessM4Tv2SpeechEncoder:
         )
         ttnn.deallocate(h)
         # Stage 13a: 0.5 scale folded into output_dense weights at preprocessing time.
-        hidden = ttnn.add(res, ff2, memory_config=res_mc)
+        # Fuse the macaron-2 residual add into ``final_layer_norm`` via ``residual_input_tensor``
+        # — saves one DRAM add dispatch per conformer layer in the long-audio path. Short-audio
+        # path emulates the fusion (add then unfused LN) so semantics stay identical.
+        normed = self._layer_norm(
+            ff2,
+            residual_input_tensor=res,
+            weight=layer.final_layer_norm.weight,
+            bias=layer.final_layer_norm.bias,
+            eps=self.layer_norm_eps,
+            batch=batch,
+            seq_len=seq_len,
+            output_sharded=True,
+        )
         ttnn.deallocate(ff2)
         ttnn.deallocate(res)
-
-        return (
-            self._layer_norm(
-                hidden,
-                weight=layer.final_layer_norm.weight,
-                bias=layer.final_layer_norm.bias,
-                eps=self.layer_norm_eps,
-                batch=batch,
-                seq_len=seq_len,
-                output_sharded=True,
-            ),
-            True,
-        )
+        return (normed, True)
 
     def _adapter_layer(
         self,
