@@ -4,14 +4,14 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** p150 (blackhole)
 **Started:** 2026-05-29T00:11:46Z
-**Updated:** 2026-05-29T01:49:31Z
+**Updated:** 2026-05-29T01:51:14Z
 
 ## Block Status
 
 | Block | Phase | Status | PCC | Attempts | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | vision_patch_embed | reference | done | 1.000000 | 0 | reference vs HF (eager) module, PCC=1.0; golden saved |
-| vision_patch_embed | ttnn | pending | — | 0 |  |
+| vision_patch_embed | ttnn | skipped | — | 0 |  |
 | vision_patch_embed | debug | n/a | — | 0 |  |
 | vision_patch_embed | optimization | pending | — | 0 |  |
 | vision_patch_embed | real_weights | pending | — | 0 |  |
@@ -94,7 +94,6 @@
 
 ## Recent Ticks
 
-- tick 10 (2026-05-29T01:04:12Z): device[vision_block] — ok
 - tick 11 (2026-05-29T01:10:25Z): device[vision_patch_merger] — ok
 - tick 12 (2026-05-29T01:13:48Z): device[embedding] — ok
 - tick 13 (2026-05-29T01:17:43Z): device[rmsnorm] — ok
@@ -104,6 +103,7 @@
 - tick 17 (2026-05-29T01:37:32Z): device[decoder_layer] — ok
 - tick 18 (2026-05-29T01:43:24Z): device[lm_head] — ok
 - tick 19 (2026-05-29T01:49:31Z): device[language_model] — ok
+- tick 20 (2026-05-29T01:51:14Z): skip[vision_patch_embed:ttnn] — host_resident: DotsPatchEmbed is a single Conv2d(3,1536,k=14,s=14) over patchified pixels followed by RMSNorm; Conv2d patchify is a one-shot host-side im2col+matmul in the Qwen-VL TTNN demos (qwen25_vl runs patch embed on host then moves tokens to device). Cheap relative to the 42-layer trunk and runs once per image.
 
 ## Host-Resident Exceptions
 

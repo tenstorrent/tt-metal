@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-29T00:11:46Z",
-  "updated_at": "2026-05-29T01:49:31Z",
+  "updated_at": "2026-05-29T01:51:14Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -28,8 +28,7 @@
         "pcc": 1.0
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "skipped"
       },
       "debug": {
         "status": "n/a",
@@ -845,6 +844,12 @@
       "ts": "2026-05-29T01:49:31Z",
       "action": "device[language_model]",
       "result": "ok"
+    },
+    {
+      "tick": 20,
+      "ts": "2026-05-29T01:51:14Z",
+      "action": "skip[vision_patch_embed:ttnn]",
+      "result": "host_resident: DotsPatchEmbed is a single Conv2d(3,1536,k=14,s=14) over patchified pixels followed by RMSNorm; Conv2d patchify is a one-shot host-side im2col+matmul in the Qwen-VL TTNN demos (qwen25_vl runs patch embed on host then moves tokens to device). Cheap relative to the 42-layer trunk and runs once per image."
     }
   ],
   "config": {
