@@ -31,10 +31,11 @@ Use this reference while optimizing a functional TTNN decoder. It captures repo-
 
 - Decode matmuls with small activations and large weights are usually DRAM-bound. Use `ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig`.
 - Prefill matmuls with large M and N are usually compute-bound. Use `ttnn.MatmulMultiCoreReuseMultiCastProgramConfig` over a large 2D grid.
-- `in0_block_w` should be at least 2 when possible and must divide the tiled K dimension. Higher is usually better until L1 pressure or correctness fails.
+- `in0_block_w` should be at least 2 when possible and must divide the tiled K dimension. Higher is usually better until L1 pressure or correctness fails. There can be a trade-off between the number of cores for shard spec and the value of `in0_block_w` - if you end up in the case where the only valid `in0_block_w` is `1` then definitely consider using a different number of cores to allow an `in0_block_w` of `2`, even if this means fewer cores. Note that for dram-sharded matmuls the number of compute cores is always fixed (12 on wormhole for example) regardless of the input/output shard spec core counts, which can give you more flexibility than you would otherwise assume. This setting is so important for matmul performance that it can even be worth padding the weights (although changing the shard spec is probably prefereable to that).
 - Output subblock size should usually be at least `2x1` or `1x2` when legal.
-- If an op runs out of L1, reduce `in0_block_w`, `out_subblock_h`, or `out_subblock_w` and record the evidence.
-- If `tt-perf-report` says a matmul is DRAM-bound and it is not DRAM-sharded, trying DRAM-sharded matmul is mandatory unless the op shape/API makes it impossible.
+- If any `in0_block_w` or output subblock sizes are <2 for a matmul that is a non-trivial percentage of the runtime, call them out explicity in your final output summary and list the exhaustive set of things you tried to enable a value >=2 and why they failed.
+- If an op runs out of L1, first try to increase the core count. If that's not possible, reduce `in0_block_w`, `out_subblock_h`, or `out_subblock_w` and see which combination preserves the most performance whilst avoiding the L1 OOM issue.
+- If `tt-perf-report` says a matmul is DRAM-bound and it is not DRAM-sharded, trying DRAM-sharded matmul is mandatory. You can usually figure out a way to make it work with resharding if necessary and it's also usually worth it. If you find it is not a performance win, record that you tried and why it was not in your final output summary.
 
 ## Precision And Fidelity
 
@@ -46,6 +47,10 @@ Use this reference while optimizing a functional TTNN decoder. It captures repo-
 - For BFP4 weights, LoFi is expected.
 - For BF16 weights or numerically sensitive operations, use HiFi4 or FP32 accumulation where PCC demands it.
 - Evaluate precision changes one group at a time so regressions can be assigned to the right tensor group.
+- Activation size matters for CCLs. Try using BFP8 activations and see if PCC (and final top-1/top-5/benchmark eval scores if run) remain high enough.
+- Prefer fused CCL + matmuls where possible, models/demos/tt_transformers has some good examples of these.
+- Otherwise use async CCLs but be careful to ensure there are sufficient semaphores - other models have some good examples of CCL helper classes that track these.
+- Always test with watcher when using async CCLs, it's easy to make mistakes that end up in data corruption or hangs.
 
 ## Compute Kernel Configs
 
@@ -120,7 +125,7 @@ Check time units before computing latency. Filtered `tt-perf-report` CSVs may ex
 
 For every actionable `tt-perf-report` recommendation:
 
-- try it, or explain why it is inapplicable before trying;
+- try it. If there is a good reason to reject it, call this out in your summary output - we want to improve tt-perf-report's recommendations;
 - record before/after latency, PCC, and any watcher or correctness issue;
 - keep it if it improves the target metric without unacceptable PCC or complexity;
 - reject it only with evidence, then continue optimizing the rest of the decoder.
