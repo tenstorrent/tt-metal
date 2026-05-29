@@ -877,6 +877,57 @@ def test_stub_has_graduated_returns_false_for_missing_file(tmp_path) -> None:
     assert bringup_loop._stub_has_graduated_from_autofill(missing) is False
 
 
+def test_stub_has_graduated_requires_pcc_graduation_snapshot(tmp_path) -> None:
+    """Pin: a stub WITHOUT a `.py.last_good_native` snapshot is NOT
+    classified as graduated, even if its body looks like native ttnn
+    (no torch-fallback markers).
+
+    Why this matters: op-synth scaffolded stubs ship with pre-bound
+    `_apply_*` helpers and no torch fallback. Before this fix, they were
+    misclassified as graduated, causing final_categorization to bucket
+    them as HOT and hiding the work-remaining signal. Only PCC-validated
+    stubs (which write the `.py.last_good_native` snapshot at graduation
+    time) should be marked graduated."""
+    import importlib
+
+    bringup_loop = importlib.import_module("scripts.tt_hw_planner.bringup_loop")
+    stub = tmp_path / "scaffold.py"
+    # Scaffold-style body: native-looking, no torch fallback, NO snapshot.
+    stub.write_text("class Stub:\n" "    def __call__(self, x):\n" "        return self._apply_op(x)\n")
+    assert not stub.with_suffix(".py.last_good_native").is_file()
+    assert bringup_loop._stub_has_graduated_from_autofill(stub) is False, (
+        "stub with no .py.last_good_native snapshot must be classified " "as NOT graduated, regardless of body content"
+    )
+
+
+def test_stub_has_graduated_true_only_with_snapshot_and_no_fallback(tmp_path) -> None:
+    """The positive case: snapshot exists AND current stub has no
+    torch-fallback markers → graduated."""
+    import importlib
+
+    bringup_loop = importlib.import_module("scripts.tt_hw_planner.bringup_loop")
+    stub = tmp_path / "graduated.py"
+    stub.write_text(
+        "import ttnn\n" "class Stub:\n" "    def __call__(self, x):\n" "        return ttnn.matmul(x, self.w)\n"
+    )
+    # Simulate _snapshot_native_stub having run: snapshot file present.
+    stub.with_suffix(".py.last_good_native").write_text(stub.read_text())
+    assert bringup_loop._stub_has_graduated_from_autofill(stub) is True
+
+
+def test_stub_has_graduated_false_when_snapshot_but_current_rolled_back(tmp_path) -> None:
+    """Edge case: snapshot exists (was graduated at some point), but
+    the current stub was rolled back to torch fallback. Should return
+    False because the current body delegates to torch."""
+    import importlib
+
+    bringup_loop = importlib.import_module("scripts.tt_hw_planner.bringup_loop")
+    stub = tmp_path / "regressed.py"
+    stub.write_text("class Stub:\n" "    def __call__(self, x):\n" "        return self._get_torch_submodule()(x)\n")
+    stub.with_suffix(".py.last_good_native").write_text("# stale snapshot\n")
+    assert bringup_loop._stub_has_graduated_from_autofill(stub) is False
+
+
 def test_skip_component_restore_priority_prefers_best_native() -> None:
     """Pin the cap-out restore priority introduced by the audit fixes:
     last_good_native > best_native > preiter_native > bak.

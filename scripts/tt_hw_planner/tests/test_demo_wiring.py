@@ -208,9 +208,16 @@ def _make_fake_demo(tmp_path: Path, comps: List[Dict[str, object]], graduated: D
         stub = demo_dir / "_stubs" / f"{safe}.py"
         if safe in graduated:
             # Graduated: native ttnn (no torch fallback markers).
-            stub.write_text(
-                "import ttnn\n\ndef build(device, m):\n    return _Port(device, m)\n\nclass _Port:\n    def __init__(self, d, m): pass\n    def __call__(self, *a, **k): return None\n"
+            stub_body = (
+                "import ttnn\n\ndef build(device, m):\n    return _Port(device, m)\n\n"
+                "class _Port:\n    def __init__(self, d, m): pass\n"
+                "    def __call__(self, *a, **k): return None\n"
             )
+            stub.write_text(stub_body)
+            # Simulate _snapshot_native_stub having run (component passed PCC).
+            # _stub_has_graduated_from_autofill requires this snapshot as
+            # positive graduation evidence.
+            stub.with_suffix(".py.last_good_native").write_text(stub_body)
             cap = demo_dir / "_captured" / safe
             cap.mkdir()
             (cap / "args.pt").write_text("fake")
