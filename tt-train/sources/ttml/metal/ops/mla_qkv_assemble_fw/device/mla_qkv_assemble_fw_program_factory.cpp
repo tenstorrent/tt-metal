@@ -40,19 +40,19 @@ constexpr auto kKnopeCbIndex = tt::CBIndex::c_1;
 constexpr auto kVCbIndex = tt::CBIndex::c_2;
 constexpr auto kKpeCbIndex = tt::CBIndex::c_3;
 
-// Each Q / k_nope / v CB is double-buffered (2 * kBlockSize) so the reader can fetch the next chunk on
+// Each Q / k_nope / v CB is double-buffered (2 * block_size) so the reader can fetch the next chunk on
 // its NoC while the writer drains the current one on the other NoC.
 constexpr uint32_t kCbDoubleBuffer = 2U;
 
-// kBlockSize is the per-stream chunk: tiles moved per NoC transaction. A sweep over
+// block_size is the per-stream chunk: tiles moved per NoC transaction. A sweep over
 // {1,2,4,6,8,12,16,24,32,48,64} on N300 shows a clear penalty below 4, a small step up to ~6-8, then a
 // flat plateau. Larger values are inert — the per-head stream length (Th, Tn, Tv, each <=
 // head_dim / TILE_W) caps the useful chunk, and head-major outputs prevent coalescing writes across
 // heads — so 8 is the most robust/fastest plateau point. Unlike fused-math kernels (silu, swiglu,
 // polynorm) where block_size is pinned to 4 by the DEST register limit, this is a pure data-movement op
 // with NO compute kernel: the choice is not tied to any register count, only NoC/L1 throughput. L1
-// cost is bounded by kBlockSize (not head_dim) and trivial (~100 KB of the ~1.5 MB budget).
-constexpr uint32_t kBlockSize = 8U;
+// cost is bounded by block_size (not head_dim) and trivial (~100 KB of the ~1.5 MB budget).
+constexpr uint32_t block_size = 8U;
 
 }  // namespace
 
@@ -189,10 +189,10 @@ MLAQKVAssembleFwProgramFactory::cached_program_t MLAQKVAssembleFwProgramFactory:
     const tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(kv_up.dtype());
     const uint32_t single_tile_size = tt::tile_size(data_format);
 
-    // cb_q / cb_knope / cb_v are sized 2 * kBlockSize (see kBlockSize above). cb_kpe instead holds all
+    // cb_q / cb_knope / cb_v are sized 2 * block_size (see block_size above). cb_kpe instead holds all
     // Tr tiles for the whole block because the writer broadcasts them to every head; Tr is small and
     // inherent to the broadcast. Even worst case these CBs are a small fraction of L1, so none is too big.
-    const uint32_t io_cb_num_tiles = kCbDoubleBuffer * kBlockSize;
+    const uint32_t io_cb_num_tiles = kCbDoubleBuffer * block_size;
     const uint32_t kpe_cb_num_tiles = kCbDoubleBuffer * Tr;
 
     [[maybe_unused]] auto cb_q =
@@ -215,12 +215,12 @@ MLAQKVAssembleFwProgramFactory::cached_program_t MLAQKVAssembleFwProgramFactory:
     auto* k_buffer = k.buffer();
     auto* v_buffer = v.buffer();
 
-    std::vector<uint32_t> reader_compile_time_args = {Th, Tn, Tv, Tr, H, kBlockSize};
+    std::vector<uint32_t> reader_compile_time_args = {Th, Tn, Tv, Tr, H, block_size};
     tt::tt_metal::TensorAccessorArgs(q_pre_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(kv_up_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(k_pe_buffer).append_to(reader_compile_time_args);
 
-    std::vector<uint32_t> writer_compile_time_args = {Tn, Tr, Tv, H, kq_HtWt, v_HtWt, Ts, kBlockSize};
+    std::vector<uint32_t> writer_compile_time_args = {Tn, Tr, Tv, H, kq_HtWt, v_HtWt, Ts, block_size};
     tt::tt_metal::TensorAccessorArgs(q_buffer).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(k_buffer).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(v_buffer).append_to(writer_compile_time_args);
