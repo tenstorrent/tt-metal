@@ -75,6 +75,8 @@ TRACE_PCC_THRESHOLD = 0.97
 TRACE_PCC_THRESHOLD_HOST = 0.96
 TRACE_PCC_THRESHOLD_DEVICE_BF16 = 0.88
 TRACE_PCC_THRESHOLD_DEVICE_FP32 = 0.95
+# Determinism: every iteration is expected to be (near-)bit-identical to iter 0.
+DETERMINISM_PCC_THRESHOLD = 0.9999
 
 # Input sources: "random" = random token IDs, "json_prompts" = test_prompts_1024.json,
 # or any InfiniteBench subset name (downloaded on first use via infinitebench_prompt fixture).
@@ -127,6 +129,7 @@ def _compare_intermediate_pcc(reference_items, tt_intermediates, number_of_non_p
     ],
 )
 @pytest.mark.parametrize("pcc_validation", [True, False], ids=["pcc", "smoke"])
+@pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "determinism"])
 @pytest.mark.parametrize("is_balanced", [True, False], ids=["balanced", "regular"])
 @pytest.mark.parametrize(
     "isl_total, dispatch_buffer_capacity_factor",
@@ -196,6 +199,7 @@ def test_prefill_transformer(
     num_links,
     topology,
     pcc_validation,
+    determinism_check,
     num_iterations,
     input_source,
     use_pretrained,
@@ -212,6 +216,15 @@ def test_prefill_transformer(
     # Skip invalid pretrained combinations
     if use_pretrained and n_routed_experts != 256:
         pytest.skip("Pretrained weights only available for 256 experts")
+
+    # determinism_check and pcc_validation are mutually exclusive validation modes:
+    # determinism compares iter N against iter 0; pcc_validation compares against host.
+    if determinism_check and pcc_validation:
+        pytest.skip("determinism_check and pcc_validation are mutually exclusive — pick one validation mode")
+
+    # Determinism check needs at least 2 iterations (iter 0 is the baseline)
+    if determinism_check and num_iterations < 2:
+        pytest.skip("determinism_check requires num_iterations >= 2 (iter 0 is the baseline)")
 
     profiler.clear()
     profiler.start("total_test_time")
@@ -505,15 +518,25 @@ def test_prefill_transformer(
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(0, None)),
     )
 
-    # --- Forward (with per-iteration PCC validation, buffered) ---
-    do_return_kv = pcc_validation and return_kv_cache
+    # --- Forward (with per-iteration validation, buffered) ---
+    # Two validation modes are supported, both producing per-iteration PCC numbers:
+    #   * pcc_validation: compare each iter against host reference (trace/cache).
+    #   * determinism_check: compare iter N>=1 against the iter-0 baseline.
+    need_intermediates = pcc_validation or determinism_check
+    do_return_kv = need_intermediates and return_kv_cache
 
-    # Pre-compute PCC validation setup once before the iteration loop:
+    # Pre-compute validation setup once before the iteration loop:
     # threshold + reference items. This avoids re-loading per iteration.
     threshold = None
     reference_items_list = None
     trace_full_model = False
-    if pcc_validation:
+    # Determinism-mode baselines captured from iter 0 (None until then).
+    baseline_logits = None
+    baseline_first_token_id = None
+    if determinism_check:
+        threshold = DETERMINISM_PCC_THRESHOLD
+        logger.info(f"Determinism check threshold: {threshold} (baseline = iter 0)")
+    elif pcc_validation:
         if trace is not None:
             if gate_fallback_mode == GateComputeMode.DEVICE:
                 threshold = TRACE_PCC_THRESHOLD_DEVICE_BF16
@@ -562,7 +585,7 @@ def test_prefill_transformer(
             tt_tokens,
             tt_kvpe_cache,
             number_of_non_padded_tokens=number_of_non_padded_tokens,
-            return_intermediates=pcc_validation,
+            return_intermediates=need_intermediates,
             read_profiler=False,
             temperature=temperature,
         )
@@ -571,10 +594,45 @@ def test_prefill_transformer(
         end_time = time.time()
         logger.info(f"Iteration {i}: {end_time - start_time} seconds")
 
-        if pcc_validation:
+        if need_intermediates:
             assert tt_intermediates is not None, "Expected intermediates dict"
             profiler.start("pcc_validation")
             iter_pcc = []
+
+            # Determinism iter 0: snapshot baselines (intermediates, KVPE cache, logits,
+            # first-token) for later iterations to compare against. No PCC this iter.
+            if determinism_check and i == 0:
+                excluded = {"first_token", "logits"}
+                reference_items_list = [
+                    (label, val.clone().detach())
+                    for label, val in tt_intermediates.items()
+                    if isinstance(val, torch.Tensor) and label not in excluded
+                ]
+                if do_return_kv:
+                    tt_kvpe_all = ttnn.to_torch(
+                        tt_kvpe_cache,
+                        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
+                    ).to(torch.bfloat16)
+                    tt_kvpe_all_layers = tt_kvpe_all[:, :1, :, :]
+                    if is_balanced:
+                        tt_kvpe_all_layers = reverse_reorder_tensor_chunks(tt_kvpe_all_layers, chunk_order, seq_dim=2)
+                    ref_kvpe_list = [
+                        tt_kvpe_all_layers[layer_idx : layer_idx + 1, :, :, :].clone()
+                        for layer_idx in range(num_layers)
+                    ]
+                if "logits" in tt_intermediates and isinstance(tt_intermediates["logits"], torch.Tensor):
+                    baseline_logits = tt_intermediates["logits"].clone().detach()
+                baseline_first_token_id = first_token_id
+                logger.info(
+                    f"Iteration {i}: captured baseline for determinism check "
+                    f"({len(reference_items_list)} intermediate tensors"
+                    + (f", {num_layers} KVPE layers" if do_return_kv else "")
+                    + (", logits" if baseline_logits is not None else "")
+                    + ")"
+                )
+                per_iter_pcc_buffer.append((i, iter_pcc))
+                profiler.end("pcc_validation")
+                continue
 
             iter_pcc.extend(
                 _compare_intermediate_pcc(
@@ -622,7 +680,26 @@ def test_prefill_transformer(
                         iter_pcc.append((f"{label}_kv", -1.0))
                         iter_pcc.append((f"{label}_pe", -1.0))
 
-            if trace_full_model and trace.logits is not None and "logits" in tt_intermediates:
+            # Logits PCC — host trace logits in pcc_validation mode, iter-0 logits in determinism mode.
+            if determinism_check:
+                if baseline_logits is not None and "logits" in tt_intermediates:
+                    try:
+                        _, logits_pcc = comp_pcc(baseline_logits.float(), tt_intermediates["logits"].float())
+                        logger.debug(f"iter {i} {'logits':<20s}  PCC = {logits_pcc:.6f}")
+                        iter_pcc.append(("logits", logits_pcc))
+                    except Exception as e:
+                        logger.error(f"iter {i} {'logits':<20s}  PCC comparison failed: {e}")
+                        iter_pcc.append(("logits", -1.0))
+                # First-token determinism: ID must exactly match the baseline. Use 1.0/-1.0
+                # so it surfaces in the per-iter PASS/ERROR table alongside PCC entries.
+                if first_token_id == baseline_first_token_id:
+                    iter_pcc.append(("first_token_id", 1.0))
+                else:
+                    logger.error(
+                        f"iter {i} first_token mismatch: {first_token_id} (baseline {baseline_first_token_id})"
+                    )
+                    iter_pcc.append(("first_token_id", -1.0))
+            elif trace_full_model and trace.logits is not None and "logits" in tt_intermediates:
                 try:
                     _, logits_pcc = comp_pcc(trace.logits.float(), tt_intermediates["logits"].float())
                     logger.debug(f"iter {i} {'logits':<20s}  PCC = {logits_pcc:.6f}")
@@ -673,11 +750,16 @@ def test_prefill_transformer(
         )
 
     # --- PCC summary (print buffered per-iteration results, then defer assertion) ---
-    if pcc_validation:
+    if need_intermediates:
+        ref_source = "iter0_baseline" if determinism_check else ("trace" if trace else "host")
         failures = []  # list of (iter_idx, label, pcc)
         for iter_idx, iter_pcc in per_iter_pcc_buffer:
             logger.info(f"\n{'='*60}")
-            logger.info(f"Iteration {iter_idx} PCC results")
+            if determinism_check and iter_idx == 0:
+                logger.info(f"Iteration {iter_idx} (baseline — no comparison)")
+                logger.info(f"{'='*60}")
+                continue
+            logger.info(f"Iteration {iter_idx} PCC results (ref={ref_source})")
             logger.info(f"{'Stage':<20s}  {'PCC':>10s}  {'Status':>8s}")
             logger.info(f"{'-'*60}")
             for label, pcc in iter_pcc:
@@ -698,8 +780,8 @@ def test_prefill_transformer(
             f"First Token: ID={first_token_id} [{repr(token_text)}] prob={first_token_prob*100:.1f}% temp={first_temp}"
         )
 
-        # First-token match against trace metadata (full-layer trace only)
-        if trace_full_model:
+        # First-token match against trace metadata (full-layer trace only — host PCC mode)
+        if pcc_validation and trace_full_model:
             token_match = check_first_token_match(trace, trace_dir, first_token_id, first_token_prob)
             if token_match is False:
                 failures.append((num_iterations - 1, "first_token_match", -1.0))
@@ -720,18 +802,19 @@ def test_prefill_transformer(
                         logger.debug(f"  top{i+1}: ID={t5_id} [{repr(t5_text)}] prob={t5_prob*100:.1f}%")
 
         has_pcc_failures = len(failures) > 0
+        mode_label = "determinism" if determinism_check else "PCC"
 
         if not has_pcc_failures:
             logger.success(
-                f"TtPrefillTransformer PCC test passed across {num_iterations} iteration(s) "
+                f"TtPrefillTransformer {mode_label} test passed across {num_iterations} iteration(s) "
                 f"(num_layers={num_layers}, n_routed_experts={n_routed_experts}, "
                 f"gate_fallback_mode={gate_fallback_mode}, "
-                f"weights={weight_type}, ref_source={'trace' if trace else 'host'})"
+                f"weights={weight_type}, ref_source={ref_source})"
             )
         else:
             pcc_failure_msg = "; ".join(f"iter {it} {label}: {pcc:.6f}" for it, label, pcc in failures)
             logger.error(
-                f"TtPrefillTransformer PCC test has failures "
+                f"TtPrefillTransformer {mode_label} test has failures "
                 f"(num_layers={num_layers}, failures={len(failures)} across {num_iterations} iteration(s))"
             )
     else:
@@ -782,5 +865,5 @@ def test_prefill_transformer(
             generate_pcc_plots(summary_result, output_dir=str(trace_dir))
 
     # Deferred PCC failure check (after timing report)
-    if pcc_validation and has_pcc_failures:
+    if need_intermediates and has_pcc_failures:
         pytest.fail(f"PCC below {threshold} at: {pcc_failure_msg}")
