@@ -9,46 +9,27 @@ endif()
 
 add_subdirectory(umd)
 
-# Propagate the top-level ENABLE_TRACY option into Tracy's own TRACY_ENABLE option *before*
-# add_subdirectory(tracy). Tracy's CMakeLists.txt reads TRACY_ENABLE in tracy_set_option()
-# and, when ON, attaches `target_compile_definitions(TracyClient PUBLIC TRACY_ENABLE)`. That
-# PUBLIC define is what gates the runtime check in tt_metal/llrt/rtoptions.cpp
-# (`#if !defined(TRACY_ENABLE) TT_FATAL(...)` for TT_METAL_DEVICE_PROFILER) and every other
-# Tracy-instrumented call site in tt-metal. Without this propagation a build configured with
-# `-DENABLE_TRACY=ON` still produces binaries that abort the moment device profiling is
-# requested.
-# Seed as CACHE (FORCE) — Tracy's CMakeLists.txt uses `cmake_minimum_required(VERSION 3.10)`,
-# which keeps CMP0077 at OLD inside that scope. Under OLD, `option(TRACY_ENABLE ... OFF)`
-# wipes a normal variable of the same name and re-creates the cache entry at its default,
-# silently overriding `set(TRACY_ENABLE ON)`. Setting the cache value here is honored
-# by `option()` under both OLD and NEW policy.
+# Propagate ENABLE_TRACY into Tracy's option before add_subdirectory(tracy).
+# Use CACHE FORCE so Tracy's option() cannot reset it under older CMake policy behavior.
 if(ENABLE_TRACY)
     set(TRACY_ENABLE ON CACHE BOOL "Enable Tracy profiling instrumentation" FORCE)
 else()
     set(TRACY_ENABLE OFF CACHE BOOL "Enable Tracy profiling instrumentation" FORCE)
 endif()
 
-# Tracy will always be built with fallback timing enabled — avoids hard failures on systems
-# without invariant TSC (some VMs, older hardware) by falling back to OS clocks.
+# Avoid hard failures on hosts without invariant TSC.
 set(TRACY_TIMER_FALLBACK ON CACHE BOOL "Tracy: use lower-resolution timer fallback" FORCE)
 
 add_subdirectory(tracy)
 
-# When Tracy is enabled, TracyClient consumers need frame pointers preserved (so backtrace
-# walking works) and `-rdynamic` on the final link line (so Tracy can resolve symbols from
-# the dynamic symbol table). Both must be PUBLIC so they propagate to anything linking
-# TracyClient.
+# Tracy symbols/backtraces must be available to TracyClient consumers.
 if(ENABLE_TRACY AND TARGET TracyClient)
     target_compile_options(TracyClient PUBLIC -fno-omit-frame-pointer)
-    # Tracy's own sources contain unused variables that the parent project's -Werror would otherwise
-    # reject; suppress the warning PRIVATEly so it does not leak to TracyClient consumers.
+    # Tracy sources emit this warning under our global -Werror; keep suppression local to TracyClient.
     target_compile_options(TracyClient PRIVATE -Wno-unused-variable)
     target_link_options(TracyClient PUBLIC -rdynamic)
 
-    # Rename the shared library to libtracy.so to follow the project's library naming convention
-    # and install it alongside the other runtime libraries. Without an explicit install rule in a
-    # component CPack already packages, dpkg-shlibdeps cannot locate libTracyClient.so when
-    # resolving dependencies of binaries that link against it, which fails the .deb packaging step.
+    # Keep TracyClient in the standard lib output/install paths so wheel/CPack dependency discovery works.
     set_target_properties(
         TracyClient
         PROPERTIES
@@ -75,28 +56,15 @@ endif()
 
 set(NO_FILESELECTOR ON)
 
-# Tracy CLI tools must run from CI artifacts without build/_deps. Capstone defaults to a
-# static library when BUILD_SHARED_LIBS is OFF; tt-metal sets BUILD_SHARED_LIBS ON globally,
-# which makes Tracy's vendored capstone a shared library unless overridden here.
+# Build Tracy CLI deps statically so the binaries run from packaged artifacts without build/_deps.
 set(_tt_tracy_saved_build_shared_libs "${BUILD_SHARED_LIBS}")
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "Create shared libraries" FORCE)
 
-# Tracy adds -march=native by default in its config. Build CLI + TracyServer with a portable
-# x86-64 baseline to avoid illegal-instruction failures on CI hosts without newer ISA subsets.
+# Disable Tracy's -march=native for portable CLI binaries in CI.
 set(NO_ISA_EXTENSIONS ON CACHE BOOL "Disable Tracy -march=native for portable CLI tools" FORCE)
 
-# Repair CMAKE_(C|CXX)_COMPILER_(AR|RANLIB) before building the Tracy CLI tools.
-#
-# Tracy's csvexport/capture pull zstd via CPM, which uses add_library(... STATIC ...).
-# CMake static-library rules dereference the language-specific archiver
-# (CMAKE_<LANG>_COMPILER_AR), and Clang on Linux often leaves it as
-# `CMAKE_<LANG>_COMPILER_AR-NOTFOUND` because llvm-ar-<N> isn't installed beside
-# clang-<N>. That literal then leaks into the Ninja link command and ccache fails
-# trying to invoke it. Tracy's own config sets RULE_LAUNCH_LINK to ccache (see
-# tt_metal/third_party/tracy/cmake/config.cmake), which makes the failure surface
-# even on the archive step. Fall back to the generic CMAKE_AR/CMAKE_RANLIB (which
-# CMake does discover via /usr/bin/ar), so Tracy's vendored zstd builds without
-# requiring the LTO-aware llvm-ar-<N> on PATH.
+# Repair AR/RANLIB when Clang leaves CMAKE_<LANG>_COMPILER_(AR|RANLIB)=NOTFOUND.
+# Needed so Tracy's static deps (zstd, etc.) build reliably in CI.
 if(NOT WIN32)
     if(NOT CMAKE_AR OR "${CMAKE_AR}" MATCHES "NOTFOUND")
         find_program(
@@ -160,13 +128,7 @@ if(NOT WIN32)
     endforeach()
     unset(_tt_lang)
 
-    # CMake's Compiler/Clang.cmake (line ~89-107 in cmake-4.2) interpolates the value of
-    # CMAKE_<LANG>_COMPILER_AR / _RANLIB *at compiler detection time* into the IPO archive
-    # templates (CMAKE_<LANG>_ARCHIVE_CREATE_IPO, _APPEND_IPO, _FINISH_IPO). Those templates
-    # are what static-lib link rules end up referencing for Clang on Linux, so updating the
-    # cache variables alone leaves the frozen NOTFOUND strings in rules.ninja. Re-stamp the
-    # templates here with the resolved tools so the rules embed valid paths in this configure
-    # pass (no two-pass dance needed).
+    # Clang IPO archive templates may already cache NOTFOUND tools; restamp them for this configure.
     foreach(_tt_lang IN ITEMS C CXX)
         if(CMAKE_AR AND NOT "${CMAKE_AR}" MATCHES "NOTFOUND")
             set(CMAKE_${_tt_lang}_ARCHIVE_CREATE_IPO "\"${CMAKE_AR}\" qc <TARGET> <LINK_FLAGS> <OBJECTS>")
@@ -178,10 +140,7 @@ if(NOT WIN32)
     endforeach()
     unset(_tt_lang)
 
-    # project() writes CMakeFiles/<ver>/CMake{C,CXX}Compiler.cmake at compiler detection time
-    # and re-includes them on every subsequent configure, overriding the CACHE FORCE above.
-    # Patch the persisted files so future configures (where the IPO template re-stamping is
-    # not even reached if some other code calls project() again) don't reintroduce NOTFOUND.
+    # Persist the same fix so later re-configures do not reintroduce NOTFOUND.
     foreach(_tt_lang_pair IN ITEMS "C;CMakeCCompiler.cmake" "CXX;CMakeCXXCompiler.cmake")
         list(GET _tt_lang_pair 0 _tt_lang)
         list(GET _tt_lang_pair 1 _tt_filename)
@@ -220,15 +179,11 @@ endif()
 add_subdirectory(tracy/csvexport)
 add_subdirectory(tracy/capture)
 
-# Restore the global shared-lib preference after configuring Tracy CLI subdirectories.
+# Restore global shared-lib preference after Tracy CLI configuration.
 set(BUILD_SHARED_LIBS "${_tt_tracy_saved_build_shared_libs}" CACHE BOOL "Create shared libraries" FORCE)
 unset(_tt_tracy_saved_build_shared_libs)
 
-# Land the host-side Tracy CLI tools at ${CMAKE_BINARY_DIR}/tools/profiler/bin so they line
-# up with PROFILER_BIN_DIR in tools/tracy/common.py and the path baked into the artifact
-# packaging step (.github/workflows/build-artifact.yaml: TRACY_CLI_DIR=build/tools/profiler/bin).
-# Vendored Tracy CMake puts them in their own subdirs by default; override here so we don't
-# touch the vendored CMakeLists.
+# Keep CLI output in the path used by Python tooling and CI packaging.
 set(TRACY_CLI_BIN_DIR "${CMAKE_BINARY_DIR}/tools/profiler/bin")
 set_target_properties(
     tracy-csvexport
@@ -239,8 +194,7 @@ set_target_properties(
             "${TRACY_CLI_BIN_DIR}"
 )
 
-# Last -march on a target wins; override any higher baseline from parent settings for
-# Tracy server/CLI and their key dependencies so generated binaries stay portable in CI.
+# Force a portable ISA baseline for Tracy server/CLI and key deps on x86_64.
 if(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
     set(_tt_tracy_portable_march -march=x86-64-v2)
     foreach(
@@ -271,9 +225,7 @@ if(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
     unset(_tt_tracy_portable_target_type)
 endif()
 
-# Aggregate target referenced by the artifact workflow's failure message
-# ("Build tracy_profiler_cli_tools before packaging the profiler artifact.") so a single
-# `cmake --build ... --target tracy_profiler_cli_tools` produces both binaries.
+# Aggregate target used by CI/artifact workflows.
 add_custom_target(
     tracy_profiler_cli_tools
     DEPENDS
@@ -282,19 +234,8 @@ add_custom_target(
 )
 
 # Tracy profiler WASM viewer (Emscripten).
-#
-# emsdk is fetched via CPM (just the installer/manager scripts ~250 KB). The
-# actual Emscripten toolchain (emcc, Emscripten.cmake, node, ...) is materialized
-# alongside the scripts on first configure via emsdk's own installer
-# (`./emsdk install/activate`), so neither the source tree nor the shared CPM
-# cache is polluted with the install. The CPM GIT_TAG pin determines what
-# `latest` resolves to.
-#
-# CPM_SOURCE_CACHE is shadowed for this single call so CPM falls back to its
-# default ${CMAKE_BINARY_DIR}/_deps/<name>-src/ destination. emsdk.py uses
-# os.path.realpath(__file__) to locate its install root, so the package must
-# live somewhere we can write hundreds of MB into; the build dir is the right
-# place, the shared CPM cache is not.
+# Fetch emsdk via CPM, but install toolchain artifacts under the build tree (not shared CPM cache).
+# Note emsdk has to be installed the repo just has the scripts, not the toolchain artifacts.
 set(_cpm_source_cache_save "${CPM_SOURCE_CACHE}")
 set(CPM_SOURCE_CACHE "")
 CPMAddPackage(
@@ -339,8 +280,7 @@ if(NOT EXISTS "${EMSCRIPTEN_TOOLCHAIN_FILE}")
     message(FATAL_ERROR "Emscripten toolchain file not found at ${EMSCRIPTEN_TOOLCHAIN_FILE} after install/activate.")
 endif()
 
-# Output path is consumed by tools/tracy/common.py (PROFILER_WASM_DIR), profiler CI tests,
-# and the .github/workflows/build-artifact.yaml packaging step. Keep them in sync.
+# Keep output path aligned with Python tooling and CI packaging/tests.
 ExternalProject_Add(
     tracy_profiler_wasm
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/tracy/profiler
