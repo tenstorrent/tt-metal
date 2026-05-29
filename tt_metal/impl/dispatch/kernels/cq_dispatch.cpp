@@ -382,7 +382,6 @@ void process_write_host_h() {
             uint32_t num_noc_packets_written = div_up(xfer_size, NOC_MAX_BURST_SIZE);
             noc_nonposted_writes_num_issued[noc_index] += num_noc_packets_written;
             noc_nonposted_writes_acked[noc_index] += num_noc_packets_written;
-            noc_async_writes_flushed();
 #else
             // completion_queue_push_back below will do a write to host, so we add 1 to the number of data packets
             // written
