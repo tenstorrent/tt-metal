@@ -181,21 +181,23 @@ class TtVisionAttention(LightweightModule):
             mesh_mapper=mesh_mapper,
         )
 
-        # Flash-SDPA chunk sizes: cap the chunk to a tile-aligned size that fits
-        # the sequence (small grids use a smaller chunk; large pages use 128).
-        def _chunk(seq):
-            c = 128
+        # Flash-SDPA chunk sizes. For a real document page (seq in the thousands)
+        # q_chunk=256 / k_chunk=512 is ~1.9x faster than 128/128 at identical
+        # precision (measured: 46.2 -> 24.6 ms at seq=19520) and still fits L1
+        # (512/512 overflows the CB). For small validation grids cap each chunk
+        # to a tile-aligned size <= seq.
+        def _chunk(seq, target):
+            c = target
             while c > 32 and c >= seq:
                 c //= 2
             return max(c, 32)
 
-        qk_chunk = _chunk(seq_length)
         grid = device.compute_with_storage_grid_size()
         self.sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(grid.x, grid.y),
             exp_approx_mode=False,
-            q_chunk_size=qk_chunk,
-            k_chunk_size=qk_chunk,
+            q_chunk_size=_chunk(seq_length, 256),
+            k_chunk_size=_chunk(seq_length, 512),
         )
 
         # fp32 compute to match the reference float path.
