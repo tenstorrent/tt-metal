@@ -11,7 +11,7 @@ from models.demos.gemma4.tt.common import create_tt_model
 from models.demos.gemma4.tt.generator_trace import (
     maybe_disable_pli_prefill_trace,
     patch_gemma4_trace_model_args,
-    warmup_gemma4_batched_prefill_traces,
+    warmup_gemma4_model_prefill,
 )
 from models.tt_transformers.tt.common import get_padded_prefill_len
 from models.tt_transformers.tt.generator import MAX_BATCHED_PREFILL_SEQ_LEN, SUPPORTED_PREFILL_BATCH_SIZES, Generator
@@ -61,18 +61,9 @@ class Gemma4Generator(Generator):
         return maybe_disable_pli_prefill_trace(enable_trace, self.model[0], batch_size=batch_size)
 
     def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, non_greedy_decoding_on_device):
-        enable_trace = self._maybe_disable_pli_prefill_trace(enable_trace)
-        if enable_trace:
-            warmup_gemma4_batched_prefill_traces(
-                self,
-                kv_cache,
-                enable_trace=enable_trace,
-                can_sample_on_device=can_sample_on_device,
-                non_greedy_decoding_on_device=non_greedy_decoding_on_device,
-            )
-            return
-        super().warmup_model_prefill(
-            kv_cache=kv_cache,
+        warmup_gemma4_model_prefill(
+            self,
+            kv_cache,
             enable_trace=enable_trace,
             can_sample_on_device=can_sample_on_device,
             non_greedy_decoding_on_device=non_greedy_decoding_on_device,
