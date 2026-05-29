@@ -388,11 +388,24 @@ PhysicalGroupingDescriptor::build_mgd_to_grouping_info_map(const MeshGraphDescri
         const auto& device_topology = mesh_desc->device_topology();
         std::vector<int32_t> device_dims(device_topology.dims().begin(), device_topology.dims().end());
 
+        // Host span = number of host ranks this mesh occupies = product of host_topology dims.
+        // (e.g. host_topology [2, 1] => 2 host ranks, a cross-host mesh.) Used as the matching key:
+        // a PGD candidate is eligible only if candidate.host_span >= this value.
+        uint32_t host_span = 1;
+        const auto& host_topology = mesh_desc->host_topology();
+        for (int i = 0; i < host_topology.dims_size(); ++i) {
+            host_span *= static_cast<uint32_t>(host_topology.dims(i));
+        }
+        if (host_span == 0) {
+            host_span = 1;
+        }
+
         // Create GroupingInfo
         GroupingInfo grouping_info;
         grouping_info.name = mesh_name;  // Keep original name for matching
         grouping_info.type = mesh_type;
         grouping_info.asic_count = asic_count;
+        grouping_info.host_span = host_span;
         grouping_info.adjacency_graph = std::move(adjacency_graph);
 
         // Create a single item representing the mesh (for corner orientation assignment)
@@ -724,6 +737,15 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
         for (const auto& [name, grouping_infos] : mesh_flat_groupings) {
             for (size_t idx = 0; idx < grouping_infos.size(); ++idx) {
                 const auto& grouping_info = grouping_infos[idx];
+                // Host-span gate (only for explicitly tagged candidates; host_span 0 = unspecified is never
+                // filtered, preserving legacy behavior for untagged large multi-host meshes). An explicitly
+                // tagged candidate may map to an MGD instance only if it can span at least as many hosts as
+                // the instance requires. So a cross-host candidate (e.g. host_span 2) remains eligible for a
+                // host-local instance (fallback onto one host), while an explicitly host-local candidate
+                // (host_span 1) is never stretched across multiple hosts.
+                if (grouping_info.host_span != 0 && grouping_info.host_span < mgd_grouping_info.host_span) {
+                    continue;
+                }
                 size_t n = grouping_info.adjacency_graph.get_nodes().size();
                 if (n >= required_nodes) {
                     candidates_by_diff[n - required_nodes].emplace_back(name, idx);
@@ -927,6 +949,58 @@ void configure_pgd_psd_host_alignment_constraints(
         return;
     }
 
+    // Cross-host placement: when the candidate declares host_span > 1, its top-level instance groups
+    // (slices) must be split across that many distinct hosts (one slice per host). We partition the
+    // target nodes by their top-level sub-grouping (grouping_path index 1 = the slice the node came
+    // from) and require each partition to land on a distinct host via set_same_rank_groups_constraint
+    // (injective slice -> host matching). This applies only when the PSD actually has enough hosts;
+    // otherwise we fall through to the single-host path so a cross-host candidate can still collapse
+    // onto one host (the single-galaxy fallback case).
+    if (grouping_info.host_span > 1 && host_to_asics.size() >= grouping_info.host_span) {
+        std::map<std::string, std::set<uint32_t>> slice_to_targets;
+        bool partition_ok = true;
+        for (uint32_t node_id : all_targets) {
+            const auto& path = grouping_info.items[node_id].grouping_path;
+            if (path.size() < 2) {
+                partition_ok = false;
+                break;
+            }
+            slice_to_targets[path[1]].insert(node_id);
+        }
+
+        if (partition_ok && slice_to_targets.size() == grouping_info.host_span) {
+            std::vector<std::set<uint32_t>> target_groups;
+            target_groups.reserve(slice_to_targets.size());
+            for (auto& [_, targets] : slice_to_targets) {
+                target_groups.push_back(std::move(targets));
+            }
+            std::vector<std::set<AsicID>> host_groups;
+            host_groups.reserve(host_to_asics.size());
+            for (const auto& [_, asics] : host_to_asics) {
+                if (!asics.empty()) {
+                    host_groups.push_back(asics);
+                }
+            }
+            if (constraints.set_same_rank_groups_constraint(target_groups, host_groups)) {
+                return;
+            }
+            log_warning(
+                tt::LogFabric,
+                "PGD host alignment: failed to set cross-host same-rank constraint for '{}' (host_span {}); "
+                "falling back to single-host alignment",
+                grouping_info.name,
+                grouping_info.host_span);
+        } else {
+            log_warning(
+                tt::LogFabric,
+                "PGD host alignment: candidate '{}' declares host_span {} but its targets partition into {} "
+                "top-level group(s); falling back to single-host alignment",
+                grouping_info.name,
+                grouping_info.host_span,
+                slice_to_targets.size());
+        }
+    }
+
     std::vector<std::set<AsicID>> global_groups;
     global_groups.reserve(host_to_asics.size());
     for (auto& [_, asics] : host_to_asics) {
@@ -978,20 +1052,57 @@ std::string build_pgd_mapping_failure_message(
         unmapped_count);
 }
 
+bool can_grouping_slot_counts_fit_psd(
+    const GroupingInfo& grouping_info, const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) {
+    using tt::tt_metal::ASICPosition;
+
+    std::map<ASICPosition, size_t> psd_slot_counts;
+    for (const auto& [_, desc] : physical_system_descriptor.get_asic_descriptors()) {
+        if (*desc.tray_id > 0 && *desc.asic_location <= 8) {
+            psd_slot_counts[{desc.tray_id, desc.asic_location}]++;
+        }
+    }
+
+    std::map<ASICPosition, size_t> required_slot_counts;
+    for (uint32_t node_id : grouping_info.adjacency_graph.get_nodes()) {
+        if (node_id >= grouping_info.items.size()) {
+            continue;
+        }
+        const GroupingItemInfo& item = grouping_info.items[node_id];
+        if (item.type != GroupingItemInfo::ItemType::ASIC_LOCATION) {
+            continue;
+        }
+        if (*item.tray_id == 0 || *item.asic_location > 8) {
+            continue;
+        }
+        required_slot_counts[{item.tray_id, item.asic_location}]++;
+    }
+
+    for (const auto& [slot, needed] : required_slot_counts) {
+        auto it = psd_slot_counts.find(slot);
+        if (it == psd_slot_counts.end() || it->second < needed) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // Helper function to solve the topology mapping with pinning constraints from GroupingInfo
 MappingResult<uint32_t, AsicID> solve_for_one_grouping_to_psd(
     const GroupingInfo& grouping_info,
     const AdjacencyGraph<AsicID>& physical_graph,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     MappingConstraints<uint32_t, AsicID> initial_constraints = {}) {
-    MappingConstraints<uint32_t, AsicID> constraints = std::move(initial_constraints);
+    MappingConstraints<uint32_t, AsicID> base_constraints = std::move(initial_constraints);
 
     // Set quiet mode to suppress verbose constraint validation messages during PGD solving
-    constraints.set_quiet_mode(true);
+    base_constraints.set_quiet_mode(true);
 
     // Build trait maps: graph nodes are 0..n-1, items[i] is the item for node i
+    std::set<uint32_t> all_target_nodes;
     std::map<uint32_t, TrayID> target_tray_traits;
     std::map<uint32_t, ASICLocation> target_location_traits;
+    std::set<std::pair<uint32_t, uint32_t>> required_slot_pairs;
 
     for (uint32_t node_id : grouping_info.adjacency_graph.get_nodes()) {
         if (node_id >= grouping_info.items.size()) {
@@ -1001,6 +1112,7 @@ MappingResult<uint32_t, AsicID> solve_for_one_grouping_to_psd(
         if (item.type != GroupingItemInfo::ItemType::ASIC_LOCATION) {
             continue;
         }
+        all_target_nodes.insert(node_id);
         if (*item.tray_id > 0) {
             target_tray_traits[node_id] = item.tray_id;
         }
@@ -1009,54 +1121,187 @@ MappingResult<uint32_t, AsicID> solve_for_one_grouping_to_psd(
         if (*item.asic_location <= 8) {
             target_location_traits[node_id] = item.asic_location;
         }
+        if (*item.tray_id > 0 && *item.asic_location <= 8) {
+            required_slot_pairs.emplace(*item.tray_id, *item.asic_location);
+        }
     }
+
     // Build trait maps for global nodes (from physical graph)
     std::map<AsicID, TrayID> global_tray_traits;
     std::map<AsicID, ASICLocation> global_location_traits;
+    std::set<AsicID> slot_constrained_globals;
 
     for (const auto& asic_id : physical_graph.get_nodes()) {
         TrayID tray_id = physical_system_descriptor.get_tray_id(asic_id);
         ASICLocation asic_location = physical_system_descriptor.get_asic_location(asic_id);
         global_tray_traits[asic_id] = tray_id;
         global_location_traits[asic_id] = asic_location;
+        if (required_slot_pairs.contains({*tray_id, *asic_location})) {
+            slot_constrained_globals.insert(asic_id);
+        }
     }
+
+    // slot_constrained_globals is the PSD-side slot set for the grouping: every ASIC whose
+    // (tray_id, asic_location) belongs to one of the PGD-required slot pairs. The middle-ground
+    // fallback below uses this set to preserve the same slot multiset while relaxing the exact
+    // per-node slot labeling inside that set.
 
     // When set to 1, do not require PGD (tray_id, asic_location) on logical nodes to match UMD-reported ASIC
     // positions. Use only when slot counts already match but the labeled graph has no embedding (e.g. host / tray
     // order differs from PGD row-major). Host-alignment constraints below still apply. Bring-up only.
     const char* relax_env = std::getenv("TT_METAL_RELAX_PGD_SLOT_CONSTRAINTS");
     const bool relax_pgd_slot_traits = (relax_env != nullptr && relax_env[0] == '1');
+
+    auto solve_with_constraints = [&](MappingConstraints<uint32_t, AsicID> constraints,
+                                      bool relax_exact_slot_traits,
+                                      const std::optional<std::set<AsicID>>& allowed_slot_globals,
+                                      bool emit_relax_log) -> MappingResult<uint32_t, AsicID> {
+        if (emit_relax_log) {
+            log_warning(
+                tt::LogFabric,
+                "TT_METAL_RELAX_PGD_SLOT_CONSTRAINTS=1: skipping PGD tray / ASIC-location trait constraints for "
+                "PGD→PSD embedding");
+        }
+
+        if (allowed_slot_globals.has_value() && !allowed_slot_globals->empty() && !all_target_nodes.empty()) {
+            if (!constraints.add_required_constraint(all_target_nodes, *allowed_slot_globals)) {
+                MappingResult<uint32_t, AsicID> failure;
+                failure.success = false;
+                failure.error_message = "Failed to constrain PGD embedding to matching PSD slot set";
+                return failure;
+            }
+        }
+
+        if (!relax_exact_slot_traits && !target_tray_traits.empty() && !global_tray_traits.empty()) {
+            if (!constraints.add_required_trait_constraint<TrayID>(target_tray_traits, global_tray_traits)) {
+                MappingResult<uint32_t, AsicID> failure;
+                failure.success = false;
+                failure.error_message = "Failed to add required trait constraint for tray_id";
+                return failure;
+            }
+        }
+        if (!relax_exact_slot_traits && !target_location_traits.empty() && !global_location_traits.empty()) {
+            if (!constraints.add_required_trait_constraint<ASICLocation>(
+                    target_location_traits, global_location_traits)) {
+                MappingResult<uint32_t, AsicID> failure;
+                failure.success = false;
+                failure.error_message = "Failed to add required trait constraint for asic_location";
+                return failure;
+            }
+        }
+
+        // PSD-only host partition (ASIC -> hostname): same-rank when the full mesh fits on one host, else
+        // unconstrained.
+        configure_pgd_psd_host_alignment_constraints(
+            grouping_info, physical_graph, physical_system_descriptor, constraints);
+
+        return solve_topology_mapping(
+            grouping_info.adjacency_graph, physical_graph, constraints, ConnectionValidationMode::RELAXED, true);
+    };
+
+    // There are three PGD->PSD solve paths here:
+    // 1. Exact path: keep per-node tray_id / asic_location trait constraints.
+    // 2. Middle-ground fallback: drop exact per-node slot labels, but restrict mapping to
+    //    slot_constrained_globals so the same PSD slot multiset is preserved.
+    // 3. Bring-up override via TT_METAL_RELAX_PGD_SLOT_CONSTRAINTS=1: drop exact slot labels
+    //    without restricting the solve to the matching PSD slot set.
+    //
+    // In all three paths, ConnectionValidationMode::RELAXED only affects graph-edge validation.
+    // It does not relax slot placement rules by itself; slot relaxation is controlled separately
+    // by relax_exact_slot_traits and allowed_slot_globals.
     if (relax_pgd_slot_traits) {
-        log_warning(
+        return solve_with_constraints(std::move(base_constraints), true, std::nullopt, true);
+    }
+
+    auto exact_result = solve_with_constraints(base_constraints, false, std::nullopt, false);
+    const bool has_slot_traits = !required_slot_pairs.empty();
+
+    // Opt-in diagnostic (TT_METAL_PGD_DEBUG_EMBED=1): when the exact slot-labeled embedding fails,
+    // dump both sides of the would-be embedding so the mismatch can be diffed offline -
+    //   PGD: per-node (tray, asic_location), the tail of its grouping_path (host/slice), and neighbors;
+    //   PSD: per-ASIC host + (tray, asic_location) + neighbor (tray, asic_location)@host.
+    // This is the PSD half of the multi-host (8x8 / 8x16) exact-embedding investigation; it pairs with
+    // the hardware-free DiagnoseCrossHostSeamEdges_8x8 test which dumps the PGD-asserted seam edges.
+    if (!exact_result.success && std::getenv("TT_METAL_PGD_DEBUG_EMBED") != nullptr) {
+        std::string pgd_dump = fmt::format(
+            "[PGD-DEBUG-EMBED] candidate '{}' PGD side ({} nodes):\n",
+            grouping_info.name,
+            grouping_info.adjacency_graph.get_nodes().size());
+        for (uint32_t node_id : grouping_info.adjacency_graph.get_nodes()) {
+            if (node_id >= grouping_info.items.size()) {
+                continue;
+            }
+            const GroupingItemInfo& item = grouping_info.items[node_id];
+            std::string path_tail;
+            const auto& gp = item.grouping_path;
+            for (size_t i = (gp.size() >= 2 ? gp.size() - 2 : 0); i < gp.size(); ++i) {
+                path_tail += gp[i] + "/";
+            }
+            std::string nbrs;
+            for (uint32_t nb : grouping_info.adjacency_graph.get_neighbors(node_id)) {
+                nbrs += std::to_string(nb) + " ";
+            }
+            pgd_dump += fmt::format(
+                "  node {}: (T{},L{}) path={} nbrs=[{}]\n",
+                node_id,
+                *item.tray_id,
+                *item.asic_location,
+                path_tail,
+                nbrs);
+        }
+        log_info(tt::LogFabric, "{}", pgd_dump);
+
+        std::string psd_dump = fmt::format("[PGD-DEBUG-EMBED] candidate '{}' PSD side:\n", grouping_info.name);
+        for (const auto& asic_id : physical_graph.get_nodes()) {
+            std::string nbrs;
+            for (const auto& nb : physical_graph.get_neighbors(asic_id)) {
+                nbrs += fmt::format(
+                    "(T{},L{})@{} ",
+                    *physical_system_descriptor.get_tray_id(nb),
+                    *physical_system_descriptor.get_asic_location(nb),
+                    physical_system_descriptor.get_host_name_for_asic(nb));
+            }
+            psd_dump += fmt::format(
+                "  asic {}: host={} (T{},L{}) nbrs=[{}]\n",
+                asic_id.get(),
+                physical_system_descriptor.get_host_name_for_asic(asic_id),
+                *physical_system_descriptor.get_tray_id(asic_id),
+                *physical_system_descriptor.get_asic_location(asic_id),
+                nbrs);
+        }
+        log_info(tt::LogFabric, "{}", psd_dump);
+    }
+
+    if (exact_result.success || !has_slot_traits) {
+        return exact_result;
+    }
+
+    if (!can_grouping_slot_counts_fit_psd(grouping_info, physical_system_descriptor) ||
+        slot_constrained_globals.size() < all_target_nodes.size()) {
+        return exact_result;
+    }
+
+    log_info(
+        tt::LogFabric,
+        "PGD '{}' exact slot-labeled embedding failed; retrying within matching PSD slot set ({} target ASICs, {} "
+        "eligible PSD ASICs)",
+        grouping_info.name,
+        all_target_nodes.size(),
+        slot_constrained_globals.size());
+
+    // Middle-ground fallback: preserve the required PSD slot set, but allow a different internal
+    // permutation of logical nodes within that slot set when no exact slot-labeled embedding exists.
+    auto slot_set_result = solve_with_constraints(std::move(base_constraints), true, slot_constrained_globals, false);
+    if (slot_set_result.success) {
+        log_info(
             tt::LogFabric,
-            "TT_METAL_RELAX_PGD_SLOT_CONSTRAINTS=1: skipping PGD tray / ASIC-location trait constraints for "
-            "PGD→PSD embedding");
+            "PGD '{}' placed via relaxed slot-set fallback (exact slot-labeled embedding failed; {} target ASICs)",
+            grouping_info.name,
+            all_target_nodes.size());
+        return slot_set_result;
     }
 
-    // Add trait constraints for tray_id and asic_location
-    if (!relax_pgd_slot_traits && !target_tray_traits.empty() && !global_tray_traits.empty()) {
-        if (!constraints.add_required_trait_constraint<TrayID>(target_tray_traits, global_tray_traits)) {
-            MappingResult<uint32_t, AsicID> failure;
-            failure.success = false;
-            failure.error_message = "Failed to add required trait constraint for tray_id";
-            return failure;
-        }
-    }
-    if (!relax_pgd_slot_traits && !target_location_traits.empty() && !global_location_traits.empty()) {
-        if (!constraints.add_required_trait_constraint<ASICLocation>(target_location_traits, global_location_traits)) {
-            MappingResult<uint32_t, AsicID> failure;
-            failure.success = false;
-            failure.error_message = "Failed to add required trait constraint for asic_location";
-            return failure;
-        }
-    }
-
-    // PSD-only host partition (ASIC -> hostname): same-rank when the full mesh fits on one host, else unconstrained.
-    configure_pgd_psd_host_alignment_constraints(
-        grouping_info, physical_graph, physical_system_descriptor, constraints);
-
-    return solve_topology_mapping(
-        grouping_info.adjacency_graph, physical_graph, constraints, ConnectionValidationMode::RELAXED, true);
+    return exact_result;
 }
 
 bool is_flattened(const GroupingInfo& grouping) {
@@ -1190,39 +1435,7 @@ solve_for_many_groupings_to_psd_heterogeneous(
 
 bool PhysicalGroupingDescriptor::can_map_to_psd(
     const GroupingInfo& grouping_info, const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) {
-    using tt::tt_metal::ASICPosition;
-
-    // Build a multiset of ASICPosition slots available in the PSD.
-    std::map<ASICPosition, size_t> psd_slot_counts;
-    for (const auto& [_, desc] : physical_system_descriptor.get_asic_descriptors()) {
-        if (*desc.tray_id > 0 && *desc.asic_location <= 8) {
-            psd_slot_counts[{desc.tray_id, desc.asic_location}]++;
-        }
-    }
-
-    // Count how many ASICs the grouping needs per ASICPosition slot.
-    std::map<ASICPosition, size_t> required_slot_counts;
-    for (uint32_t node_id : grouping_info.adjacency_graph.get_nodes()) {
-        if (node_id >= grouping_info.items.size()) {
-            continue;
-        }
-        const GroupingItemInfo& item = grouping_info.items[node_id];
-        if (item.type != GroupingItemInfo::ItemType::ASIC_LOCATION) {
-            continue;
-        }
-        if (*item.tray_id == 0 || *item.asic_location > 8) {
-            continue;
-        }
-        required_slot_counts[{item.tray_id, item.asic_location}]++;
-    }
-
-    for (const auto& [slot, needed] : required_slot_counts) {
-        auto it = psd_slot_counts.find(slot);
-        if (it == psd_slot_counts.end() || it->second < needed) {
-            return false;
-        }
-    }
-    return true;
+    return can_grouping_slot_counts_fit_psd(grouping_info, physical_system_descriptor);
 }
 
 std::unordered_set<tt::tt_metal::AsicID> PhysicalGroupingDescriptor::find_any_in_psd(
@@ -1355,9 +1568,38 @@ std::vector<std::unordered_set<tt::tt_metal::AsicID>> PhysicalGroupingDescriptor
             for (const auto& result : it->second) {
                 if (result.success) {
                     std::unordered_set<tt::tt_metal::AsicID> asic_set;
+                    // Per-placement diagnostic: report which host(s) and top-level slice(s)
+                    // (grouping_path[1]) this committed placement landed on, so cross-host
+                    // (host_span > 1) tiling can be audited against the PSD - i.e. which
+                    // galaxy-to-galaxy seams got tiled and which were skipped.
+                    std::map<std::string, std::map<std::string, size_t>> host_to_slice_counts;
                     for (const auto& [target_node, asic_id] : result.target_to_global) {
                         asic_set.insert(asic_id);
+                        std::string host = physical_system_descriptor.get_host_name_for_asic(asic_id);
+                        std::string slice = "?";
+                        if (target_node < grouping.items.size()) {
+                            const auto& gp = grouping.items[target_node].grouping_path;
+                            if (gp.size() >= 2) {
+                                slice = gp[1];
+                            }
+                        }
+                        ++host_to_slice_counts[host][slice];
                     }
+                    std::string summary;
+                    for (const auto& [host, slice_counts] : host_to_slice_counts) {
+                        summary += fmt::format("{}{{", host);
+                        for (const auto& [slice, count] : slice_counts) {
+                            summary += fmt::format("{}:{} ", slice, count);
+                        }
+                        summary += "} ";
+                    }
+                    log_info(
+                        tt::LogFabric,
+                        "PGD '{}' placement #{}: spans {} host(s) -> {}",
+                        grouping.name,
+                        all_asic_id_sets.size(),
+                        host_to_slice_counts.size(),
+                        summary);
                     all_asic_id_sets.push_back(std::move(asic_set));
                 }
             }

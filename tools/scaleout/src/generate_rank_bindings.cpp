@@ -7,7 +7,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
-#include <fstream>
 #include <map>
 #include <set>
 #include <optional>
@@ -66,14 +65,15 @@ PhysicalSystemDescriptor run_psd_discovery() {
  * Otherwise, search in order:
  * 1. /data/scaleout_configs/<cluster_name>/<cluster_name>_physical_grouping_descriptor.textproto
  * 2. TT_METAL_HOME/tests/tt_metal/tt_fabric/physical_groupings/<cluster_name>_physical_grouping_descriptor.textproto
- * 3. Architecture/cluster-type specific default:
- * tests/tt_metal/tt_fabric/physical_groupings/<arch>_<cluster_type>_physical_grouping_descriptor.textproto
- * 4. Generic default: tests/tt_metal/tt_fabric/physical_groupings/default_physical_grouping_descriptor.textproto
+ * 3. Repo-shipped default under TT_METAL_HOME/tests/tt_metal/tt_fabric/physical_groupings via
+ *    PhysicalGroupingDescriptor::from_repo_default(). For BH Galaxy defaults, this loads the ASIC-common fragment,
+ *    the detected revision fragment, then the composed-common fragment.
  *
  * Cluster name is obtained from TT_CLUSTER_NAME environment variable.
  * Architecture and cluster type are obtained from MetalContext.
  */
-PhysicalGroupingDescriptor find_and_load_pgd(const std::optional<std::string>& pgd_path = std::nullopt) {
+PhysicalGroupingDescriptor find_and_load_pgd(
+    const PhysicalSystemDescriptor& psd, const std::optional<std::string>& pgd_path = std::nullopt) {
     // Check for explicit PGD path from argument first
     if (pgd_path.has_value() && !pgd_path->empty()) {
         std::filesystem::path explicit_path(*pgd_path);
@@ -104,9 +104,8 @@ PhysicalGroupingDescriptor find_and_load_pgd(const std::optional<std::string>& p
     const char* cluster_name_env = std::getenv("TT_CLUSTER_NAME");
     std::string cluster_name = cluster_name_env ? cluster_name_env : "";
 
-    // Get TT_METAL_HOME for fallback paths
+    // Get TT_METAL_HOME for repo-shipped fallback paths.
     const char* tt_metal_home_env = std::getenv("TT_METAL_HOME");
-    std::string tt_metal_home = tt_metal_home_env ? tt_metal_home_env : ".";
 
     std::vector<std::filesystem::path> search_paths;
 
@@ -119,40 +118,18 @@ PhysicalGroupingDescriptor find_and_load_pgd(const std::optional<std::string>& p
 
     // Path 2:
     // TT_METAL_HOME/tests/tt_metal/tt_fabric/physical_groupings/<cluster_name>_physical_grouping_descriptor.textproto
-    if (!cluster_name.empty()) {
-        std::filesystem::path home_path = std::filesystem::path(tt_metal_home) / "tests" / "tt_metal" / "tt_fabric" /
-                                          "physical_groupings" /
+    if (!cluster_name.empty() && tt_metal_home_env != nullptr && tt_metal_home_env[0] != '\0') {
+        std::filesystem::path home_path = std::filesystem::path(tt_metal_home_env) / "tests" / "tt_metal" /
+                                          "tt_fabric" / "physical_groupings" /
                                           (cluster_name + "_physical_grouping_descriptor.textproto");
         search_paths.push_back(home_path);
     }
 
-    // Path 3: Architecture/cluster-type specific default and generic default fallback
-    // Get cluster type and architecture from MetalContext and select appropriate PGD file
-    std::string arch_cluster_filename;
-
-    // Try to get cluster type and architecture, but always fall back to default
+    // Path 3: Repo-shipped default selected from cluster type and architecture.
     auto& context = tt::tt_metal::MetalContext::instance();
     const auto& cluster = context.get_cluster();
     tt::tt_metal::ClusterType cluster_type = cluster.get_cluster_type();
     tt::ARCH arch = cluster.arch();
-
-    // Hardcoded if-else if statement for cluster type and architecture combinations
-    if (cluster_type == tt::tt_metal::ClusterType::GALAXY && arch == tt::ARCH::WORMHOLE_B0) {
-        arch_cluster_filename = "wh_galaxy_physical_grouping_descriptor.textproto";
-    } else if (cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY && arch == tt::ARCH::BLACKHOLE) {
-        arch_cluster_filename = "bh_galaxy_physical_grouping_descriptor.textproto";
-    } else if (cluster_type == tt::tt_metal::ClusterType::T3K && arch == tt::ARCH::WORMHOLE_B0) {
-        arch_cluster_filename = "wh_t3k_physical_grouping_descriptor.textproto";
-    } else {
-        arch_cluster_filename = "default_physical_grouping_descriptor.textproto";
-    }
-
-    // If we found a specific file, add it to search paths (checked before default)
-    std::filesystem::path arch_cluster_path = std::filesystem::path(tt_metal_home) / "tests" / "tt_metal" /
-                                              "tt_fabric" / "physical_groupings" / arch_cluster_filename;
-    search_paths.push_back(arch_cluster_path);
-    log_info(
-        tt::LogFabric, "Will check for architecture/cluster-type specific default: {}", arch_cluster_path.string());
 
     // Try each path in order, but require explicit match (don't just take first existing)
     for (const auto& path : search_paths) {
@@ -162,17 +139,8 @@ PhysicalGroupingDescriptor find_and_load_pgd(const std::optional<std::string>& p
         }
     }
 
-    // If none found, throw error
-    std::string error_msg = "Could not find Physical Grouping Descriptor file. Searched:\n";
-    for (const auto& path : search_paths) {
-        error_msg += "  - " + path.string() + "\n";
-    }
-    if (!cluster_name.empty()) {
-        error_msg += "Cluster name from TT_CLUSTER_NAME: " + cluster_name + "\n";
-    } else {
-        error_msg += "TT_CLUSTER_NAME not set\n";
-    }
-    throw std::runtime_error(error_msg);
+    log_info(tt::LogFabric, "Loading repo-default Physical Grouping Descriptor");
+    return PhysicalGroupingDescriptor::from_repo_default(psd, cluster_type, arch);
 }
 
 /**
@@ -620,7 +588,7 @@ int main(int argc, char** argv) {
 
         // Stage: Load Physical Grouping Descriptor
         log_info(tt::LogFabric, "Stage: Loading Physical Grouping Descriptor...");
-        PhysicalGroupingDescriptor pgd = find_and_load_pgd(args.physical_grouping_descriptor_path);
+        PhysicalGroupingDescriptor pgd = find_and_load_pgd(psd, args.physical_grouping_descriptor_path);
         log_info(tt::LogFabric, "Physical Grouping Descriptor loaded");
 
         // Get current rank - only rank 0 performs topology mapping and file generation

@@ -6,6 +6,7 @@
 #include <fstream>
 #include <sstream>
 #include <ostream>
+#include <cstdlib>
 #include <filesystem>
 #include <algorithm>
 #include <unordered_set>
@@ -26,7 +27,9 @@
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
+#include <tt-metalium/cluster.hpp>
 #include <tt-logger/tt-logger.hpp>
+#include <umd/device/types/arch.hpp>
 #include <map>
 
 #include <google/protobuf/text_format.h>
@@ -131,10 +134,93 @@ PhysicalGroupingDescriptor::PhysicalGroupingDescriptor(const std::string& text_p
 PhysicalGroupingDescriptor::PhysicalGroupingDescriptor(const std::filesystem::path& text_proto_file_path) :
     PhysicalGroupingDescriptor(read_file_to_string(text_proto_file_path)) {}
 
+PhysicalGroupingDescriptor PhysicalGroupingDescriptor::from_fragment_files(
+    const std::vector<std::filesystem::path>& fragment_paths) {
+    return PhysicalGroupingDescriptor(merge_fragment_files_to_string(fragment_paths));
+}
+
+PhysicalGroupingDescriptor PhysicalGroupingDescriptor::from_repo_default(
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    tt::tt_metal::ClusterType cluster_type,
+    tt::ARCH arch) {
+    const auto tt_metal_home = require_tt_metal_home();
+    const auto repo_default_paths =
+        resolve_repo_default_paths(physical_system_descriptor, cluster_type, arch, tt_metal_home);
+
+    if (repo_default_paths.size() == 1) {
+        return PhysicalGroupingDescriptor(repo_default_paths.front());
+    }
+    return from_fragment_files(repo_default_paths);
+}
+
 PhysicalGroupingDescriptor::~PhysicalGroupingDescriptor() = default;
 
 std::string PhysicalGroupingDescriptor::read_file_to_string(const std::filesystem::path& file_path) {
     return ::read_file_to_string(file_path);
+}
+
+std::string PhysicalGroupingDescriptor::merge_fragment_files_to_string(
+    const std::vector<std::filesystem::path>& fragment_paths) {
+    if (fragment_paths.empty()) {
+        throw std::invalid_argument("Expected at least one PhysicalGroupingDescriptor fragment to load");
+    }
+
+    std::string merged_text_proto;
+    for (const auto& fragment_path : fragment_paths) {
+        if (!std::filesystem::exists(fragment_path) || !std::filesystem::is_regular_file(fragment_path)) {
+            throw std::runtime_error("Physical Grouping Descriptor fragment does not exist: " + fragment_path.string());
+        }
+
+        if (!merged_text_proto.empty()) {
+            merged_text_proto += "\n";
+        }
+        merged_text_proto += read_file_to_string(fragment_path);
+    }
+
+    return merged_text_proto;
+}
+
+std::filesystem::path PhysicalGroupingDescriptor::require_tt_metal_home() {
+    const char* tt_metal_home_env = std::getenv("TT_METAL_HOME");
+    if (tt_metal_home_env == nullptr || tt_metal_home_env[0] == '\0') {
+        throw std::runtime_error("TT_METAL_HOME must be set to load repo-default Physical Grouping Descriptors");
+    }
+    return std::filesystem::path(tt_metal_home_env);
+}
+
+std::filesystem::path PhysicalGroupingDescriptor::repo_physical_groupings_root(
+    const std::filesystem::path& tt_metal_home) {
+    return tt_metal_home / "tests" / "tt_metal" / "tt_fabric" / "physical_groupings";
+}
+
+std::vector<std::filesystem::path> PhysicalGroupingDescriptor::resolve_repo_default_paths(
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    tt::tt_metal::ClusterType cluster_type,
+    tt::ARCH arch,
+    const std::filesystem::path& tt_metal_home) {
+    const auto physical_groupings_root = repo_physical_groupings_root(tt_metal_home);
+
+    if (cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY && arch == tt::ARCH::BLACKHOLE) {
+        return resolve_bh_galaxy_fragment_paths(physical_system_descriptor, physical_groupings_root / "bh");
+    }
+    if (cluster_type == tt::tt_metal::ClusterType::GALAXY && arch == tt::ARCH::WORMHOLE_B0) {
+        return {physical_groupings_root / "wh_galaxy_physical_grouping_descriptor.textproto"};
+    }
+    if (cluster_type == tt::tt_metal::ClusterType::T3K && arch == tt::ARCH::WORMHOLE_B0) {
+        return {physical_groupings_root / "wh_t3k_physical_grouping_descriptor.textproto"};
+    }
+    return {physical_groupings_root / "default_physical_grouping_descriptor.textproto"};
+}
+
+std::vector<std::filesystem::path> PhysicalGroupingDescriptor::resolve_bh_galaxy_fragment_paths(
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const std::filesystem::path& bh_physical_groupings_root) {
+    return {
+        bh_physical_groupings_root / "bh_galaxy_common_asic_physical_grouping_descriptor.textproto",
+        bh_physical_groupings_root / (physical_system_descriptor.is_bh_galaxy_rev_c()
+                                          ? "bh_galaxy_rev_c_physical_grouping_descriptor.textproto"
+                                          : "bh_galaxy_rev_ab_physical_grouping_descriptor.textproto"),
+        bh_physical_groupings_root / "bh_galaxy_common_physical_grouping_descriptor.textproto"};
 }
 
 bool PhysicalGroupingDescriptor::has_grouping(const std::string& grouping_name) const {

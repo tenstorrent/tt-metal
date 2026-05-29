@@ -269,6 +269,17 @@ message Grouping {
         // Custom explicit connections - list of edges between specific instances
         CustomConnections custom = 7;
     }
+
+    // Number of distinct hosts this grouping's top-level instances must be split across.
+    //   - 0 or 1 (default): host-local. All top-level instances are expected to live on a single host.
+    //   - N > 1: this grouping is intentionally cross-host; its N top-level instances must be placed on
+    //     N distinct hosts (one top-level instance group per host). Example: a 4x4 mesh composed of
+    //     [SLICE_3, SLICE_0] sets host_span: 2 so SLICE_3 lands on host A and SLICE_0 on host B.
+    // Matching uses this as a per-candidate intent: a candidate is eligible for an MGD mesh instance
+    // only if candidate.host_span >= the MGD instance's host-rank count (product of host_topology dims),
+    // so cross-host candidates may fall back to a single host but host-local candidates never expand.
+    // VALIDATION: if > 1, must evenly divide the number of top-level instances.
+    uint32 host_span = 8;
 }
 
 // Top-level message containing all groupings

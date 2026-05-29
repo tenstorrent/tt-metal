@@ -1,0 +1,280 @@
+# Shared BH Galaxy composed physical groupings.
+#
+# This fragment must be loaded after the revision-invariant ASIC fragment and
+# after the selected BH revision fragment. The rev fragment owns physical-slot
+# halftrays and SLICE_0..SLICE_3; this post-common fragment owns the common
+# TRAY_*, HOSTS, and higher-level MESH compositions built on top of them.
+
+# Common TRAY_* aliases. The selected BH revision fragment defines the physical
+# slot halftrays that occupy each tray's HALF_1 and HALF_2 slots. Each tray is
+# composed as a 2x4 row-major arrangement of its two halves (HALF_1 on the left,
+# HALF_2 on the right) so that intra-tray edges align with the physical cabling.
+groupings {
+  name: "tray_1"
+  preset_type: TRAY_1
+  instances: [
+    { id: 0 grouping_ref { custom_type: "TRAY_1_HALF_1" } },
+    { id: 1 grouping_ref { custom_type: "TRAY_1_HALF_2" } }
+  ]
+  row_major_mesh {
+    dims: [1, 2]
+  }
+}
+
+groupings {
+  name: "tray_2_BH_Galaxy"
+  preset_type: TRAY_2
+  instances: [
+    { id: 0 grouping_ref { custom_type: "TRAY_2_HALF_1" } },
+    { id: 1 grouping_ref { custom_type: "TRAY_2_HALF_2" } }
+  ]
+  row_major_mesh {
+    dims: [1, 2]
+  }
+}
+
+groupings {
+  name: "tray_3_BH_Galaxy"
+  preset_type: TRAY_3
+  instances: [
+    { id: 0 grouping_ref { custom_type: "TRAY_3_HALF_1" } },
+    { id: 1 grouping_ref { custom_type: "TRAY_3_HALF_2" } }
+  ]
+  row_major_mesh {
+    dims: [1, 2]
+  }
+}
+
+groupings {
+  name: "tray_4"
+  preset_type: TRAY_4
+  instances: [
+    { id: 0 grouping_ref { custom_type: "TRAY_4_HALF_1" } },
+    { id: 1 grouping_ref { custom_type: "TRAY_4_HALF_2" } }
+  ]
+  row_major_mesh {
+    dims: [1, 2]
+  }
+}
+
+# Canonical 4x2 stage candidates, one per discovery-aligned slice id.
+groupings {
+  name: "4x2_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 grouping_ref { custom_type: "SLICE_0" } }
+  ]
+}
+
+groupings {
+  name: "4x2_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 grouping_ref { custom_type: "SLICE_1" } }
+  ]
+}
+
+groupings {
+  name: "4x2_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 grouping_ref { custom_type: "SLICE_2" } }
+  ]
+}
+
+groupings {
+  name: "4x2_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 grouping_ref { custom_type: "SLICE_3" } }
+  ]
+}
+
+# Canonical host-local 4x4 stage candidates. Slice ids 0..3 are arranged
+# cyclically across the host, so the four adjacent-slice pairs together cover
+# every host-local 4x4 window the BH Galaxy host (or torus) admits:
+# - [SLICE_0, SLICE_1] is one host-local 4x4 window (full slot-pair: T1+T3 in
+#   rev A/B, T1+T2 in rev C).
+# - [SLICE_1, SLICE_2] is the next window, straddling the central slice
+#   boundary (resolves to the real cross-slot cross-tray cables in either rev).
+# - [SLICE_2, SLICE_3] is the third window (the other full slot-pair: T2+T4 in
+#   rev A/B, T3+T4 in rev C).
+# - [SLICE_3, SLICE_0] is the wrap-around window, included so torus-style
+#   topologies that close the SLICE_3 -> SLICE_0 boundary can match on this
+#   candidate; on a plain (non-torus) host this candidate simply does not embed.
+groupings {
+  name: "4x4_Mesh BH"
+  preset_type: MESH
+  # Host-local window (both slices on one host). Explicitly tagged host_span: 1 so this candidate is
+  # never matched to a cross-host MGD instance (one whose host-rank count > 1).
+  host_span: 1
+  instances: [
+    { id: 0 grouping_ref { custom_type: "SLICE_0" } },
+    { id: 1 grouping_ref { custom_type: "SLICE_1" } }
+  ]
+  row_major_mesh {
+    dims: [1, 2]
+  }
+}
+
+groupings {
+  name: "4x4_Mesh BH"
+  preset_type: MESH
+  host_span: 1
+  instances: [
+    { id: 0 grouping_ref { custom_type: "SLICE_1" } },
+    { id: 1 grouping_ref { custom_type: "SLICE_2" } }
+  ]
+  row_major_mesh {
+    dims: [1, 2]
+  }
+}
+
+groupings {
+  name: "4x4_Mesh BH"
+  preset_type: MESH
+  host_span: 1
+  instances: [
+    { id: 0 grouping_ref { custom_type: "SLICE_2" } },
+    { id: 1 grouping_ref { custom_type: "SLICE_3" } }
+  ]
+  row_major_mesh {
+    dims: [1, 2]
+  }
+}
+
+groupings {
+  name: "4x4_Mesh BH"
+  preset_type: MESH
+  # Cross-host window: SLICE_3 (host A, trays 3/4) wraps to SLICE_0 (host B, trays 1/2).
+  # host_span: 2 marks this candidate as one whose two slices must be split across two distinct
+  # hosts. It is only matched to MGD mesh instances whose host-rank count (product of host_topology
+  # dims) is <= 2, and on a multi-host PSD its two slices are forced onto two different hosts. On a
+  # single-host (single-galaxy) PSD it falls back to a host-local placement that closes the torus wrap.
+  host_span: 2
+  instances: [
+    { id: 0 grouping_ref { custom_type: "SLICE_3" } },
+    { id: 1 grouping_ref { custom_type: "SLICE_0" } }
+  ]
+  row_major_mesh {
+    dims: [1, 2]
+  }
+}
+
+# HOSTS: a 4x8 row-major arrangement assembled from the four canonical slices.
+# Composing from slices (rather than trays) keeps this definition rev-invariant:
+# each SLICE_X already encodes the rev-specific tray pairing it spans
+# (TRAY_1/TRAY_3 in rev A/B, TRAY_1/TRAY_2 in rev C, etc.), so the cross-slice
+# horizontal edges synthesized here resolve to real short-edge cross-tray cables
+# in both revisions without rev-aware tray refs at this level.
+groupings {
+  name: "BH_galaxy_hosts"
+  preset_type: HOSTS
+  instances: [
+    { id: 0 grouping_ref { custom_type: "SLICE_0" } },
+    { id: 1 grouping_ref { custom_type: "SLICE_1" } },
+    { id: 2 grouping_ref { custom_type: "SLICE_2" } },
+    { id: 3 grouping_ref { custom_type: "SLICE_3" } }
+  ]
+  row_major_mesh {
+    dims: [1, 4]
+  }
+}
+
+# 2x8 BH mesh candidates expressed as a row of four 2x2 ASIC variants -- each
+# pair (HALF_1, HALF_2) of a physical slot followed by the (HALF_1, HALF_2) of
+# the cabled-adjacent slot. The two candidates cover the two physical-row 2x8
+# strips of the 4-tray array (slots 1+2 and slots 3+4). Going through ASIC
+# variants keeps these candidates rev-invariant: the physical-slot ASIC
+# orientations are the same across rev A/B and rev C; only the TRAY_X label
+# that sits at each slot differs, and labels do not appear in this composition.
+groupings {
+  name: "2x8_Mesh BH"
+  preset_type: MESH
+  instances: [
+    { id: 0 grouping_ref { custom_type: "ASIC_1256_R" } },
+    { id: 1 grouping_ref { custom_type: "ASIC_3478_R" } },
+    { id: 2 grouping_ref { custom_type: "ASIC_3478_RC" } },
+    { id: 3 grouping_ref { custom_type: "ASIC_1256_RC" } }
+  ]
+  row_major_mesh {
+    dims: [1, 4]
+  }
+}
+
+groupings {
+  name: "2x8_Mesh BH"
+  preset_type: MESH
+  instances: [
+    { id: 0 grouping_ref { custom_type: "ASIC_1256" } },
+    { id: 1 grouping_ref { custom_type: "ASIC_3478" } },
+    { id: 2 grouping_ref { custom_type: "ASIC_3478_C" } },
+    { id: 3 grouping_ref { custom_type: "ASIC_1256_C" } }
+  ]
+  row_major_mesh {
+    dims: [1, 4]
+  }
+}
+
+groupings {
+  name: "4x8_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 grouping_ref { preset_type: HOSTS } }
+  ]
+}
+
+# HOSTS is a 4x8 row-major arrangement (1x4 of 4x2 slices). The 8x8/4x16/8x16/
+# 4x32 compositions below tile HOSTS in shapes that preserve their advertised
+# mesh dimensions.
+groupings {
+  name: "8x8_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 grouping_ref { preset_type: HOSTS } },
+    { id: 1 grouping_ref { preset_type: HOSTS } }
+  ]
+  row_major_mesh {
+    dims: [2, 1]
+  }
+}
+
+groupings {
+  name: "4x16_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 grouping_ref { preset_type: HOSTS } },
+    { id: 1 grouping_ref { preset_type: HOSTS } }
+  ]
+  row_major_mesh {
+    dims: [1, 2]
+  }
+}
+
+groupings {
+  name: "8x16_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 grouping_ref { preset_type: HOSTS } },
+    { id: 1 grouping_ref { preset_type: HOSTS } },
+    { id: 2 grouping_ref { preset_type: HOSTS } },
+    { id: 3 grouping_ref { preset_type: HOSTS } }
+  ]
+  row_major_mesh {
+    dims: [2, 2]
+  }
+}
+
+groupings {
+  name: "4x32_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 grouping_ref { preset_type: HOSTS } },
+    { id: 1 grouping_ref { preset_type: HOSTS } },
+    { id: 2 grouping_ref { preset_type: HOSTS } },
+    { id: 3 grouping_ref { preset_type: HOSTS } }
+  ]
+  row_major_mesh {
+    dims: [1, 4]
+  }
+}

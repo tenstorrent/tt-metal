@@ -351,6 +351,23 @@ GroupingInfo PhysicalGroupingDescriptor::convert_grouping_to_info(const proto::G
     info.name = PhysicalGroupingDescriptor::get_grouping_name(grouping);
     info.type = PhysicalGroupingDescriptor::get_grouping_type_string(grouping);
 
+    // Host span: number of distinct hosts this grouping's top-level instances must be split across.
+    // Semantics: 0 (proto default / unset) means "unspecified" - no host-span constraint, legacy
+    // behavior. A value >= 1 is an explicit declaration: 1 = host-local (must stay on one host), N > 1
+    // = cross-host (its top-level instances must be split across N distinct hosts). When > 1, it must
+    // evenly divide the number of top-level instances so each host receives the same number of groups.
+    info.host_span = grouping.host_span();
+    if (info.host_span > 1) {
+        const uint32_t num_instances = static_cast<uint32_t>(grouping.instances().size());
+        TT_FATAL(
+            num_instances % info.host_span == 0,
+            "Grouping '{}' has host_span {} which does not evenly divide its {} top-level instance(s). "
+            "host_span must partition the top-level instances into equal per-host groups.",
+            info.name,
+            info.host_span,
+            num_instances);
+    }
+
     // Collect instance IDs and build items list
     std::vector<uint32_t> instance_ids;
     std::vector<uint32_t> asic_locations;  // For tray groupings, use ASIC locations as node IDs

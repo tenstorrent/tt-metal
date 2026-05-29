@@ -22,8 +22,13 @@
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 
+namespace tt {
+enum class ARCH;
+}
+
 // Forward declaration
 namespace tt::tt_metal {
+enum class ClusterType : std::uint8_t;
 class PhysicalSystemDescriptor;
 }  // namespace tt::tt_metal
 
@@ -65,6 +70,17 @@ struct GroupingInfo {
     std::vector<GroupingItemInfo> items;
     uint32_t asic_count = 0;  // Total ASICs provided by this grouping, calculated bottom-up during population
 
+    // Number of distinct hosts this grouping spans.
+    //   - 0: unspecified (no host-span constraint). Untagged PGD candidates use this; legacy behavior.
+    //   - 1: explicitly host-local (must stay on a single host).
+    //   - N > 1: cross-host; top-level instances must be split across N distinct hosts (e.g. cross-host
+    //     4x4 = [SLICE_3, SLICE_0] has host_span 2).
+    // For MGD instances this is set to the host-rank count of the mesh (product of host_topology dims, >= 1).
+    // Matching skips a PGD candidate only when it is explicitly tagged (host_span != 0) and cannot span as
+    // many hosts as the MGD instance requires (candidate.host_span < mgd.host_span). Untagged candidates
+    // (host_span 0) are never filtered, so large multi-host meshes keep their existing matching behavior.
+    uint32_t host_span = 0;
+
     // Adjacency graph. For flattened groupings, items[node_id] matches each node in the graph.
     // Empty graph if no connection type is specified.
     AdjacencyGraph<uint32_t> adjacency_graph;
@@ -84,6 +100,15 @@ public:
 
     // Parse from textproto file path
     explicit PhysicalGroupingDescriptor(const std::filesystem::path& text_proto_file_path);
+
+    // Parse by concatenating multiple textproto fragments in-order.
+    static PhysicalGroupingDescriptor from_fragment_files(const std::vector<std::filesystem::path>& fragment_paths);
+
+    // Load the repo-shipped default PGD under TT_METAL_HOME/tests/tt_metal/tt_fabric/physical_groupings.
+    static PhysicalGroupingDescriptor from_repo_default(
+        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+        tt::tt_metal::ClusterType cluster_type,
+        tt::ARCH arch);
 
     ~PhysicalGroupingDescriptor();
 
@@ -236,6 +261,21 @@ private:
 
     // Helper for reading files
     static std::string read_file_to_string(const std::filesystem::path& file_path);
+
+    // Helper for merging multiple textproto fragments into one descriptor payload.
+    static std::string merge_fragment_files_to_string(const std::vector<std::filesystem::path>& fragment_paths);
+
+    // Helper for repo-default PGD resolution under TT_METAL_HOME/tests/tt_metal/tt_fabric/physical_groupings.
+    static std::filesystem::path require_tt_metal_home();
+    static std::filesystem::path repo_physical_groupings_root(const std::filesystem::path& tt_metal_home);
+    static std::vector<std::filesystem::path> resolve_repo_default_paths(
+        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+        tt::tt_metal::ClusterType cluster_type,
+        tt::ARCH arch,
+        const std::filesystem::path& tt_metal_home);
+    static std::vector<std::filesystem::path> resolve_bh_galaxy_fragment_paths(
+        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+        const std::filesystem::path& bh_physical_groupings_root);
 
     // Helper to get validation report from error vector
     static std::string get_validation_report(const std::vector<std::string>& errors);

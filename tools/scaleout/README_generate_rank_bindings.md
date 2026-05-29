@@ -134,7 +134,7 @@ If you do **not** pass `--physical-grouping-descriptor`, the tool picks a PGD fi
 3. **Architecture / cluster-type candidate** under the repo tree — **MetalContext** (discovered cluster type and architecture) picks a **first** filename to try at
    `<TT_METAL_HOME>/tests/tt_metal/tt_fabric/physical_groupings/<filename>`:
    - Galaxy + Wormhole B0 → `wh_galaxy_physical_grouping_descriptor.textproto`
-   - Blackhole Galaxy + Blackhole → `bh_galaxy_physical_grouping_descriptor.textproto`
+  - Blackhole Galaxy + Blackhole → `physical_groupings/bh/bh_galaxy_common_asic_physical_grouping_descriptor.textproto`, the detected revision fragment `bh_galaxy_rev_ab_physical_grouping_descriptor.textproto` or `bh_galaxy_rev_c_physical_grouping_descriptor.textproto`, then `physical_groupings/bh/bh_galaxy_common_physical_grouping_descriptor.textproto`, concatenated in that order
    - T3K + Wormhole B0 → `wh_t3k_physical_grouping_descriptor.textproto`
    - Any other combination → `default_physical_grouping_descriptor.textproto` (only this path is attempted for step 3; there is no separate “specialized then default” for this case).
 

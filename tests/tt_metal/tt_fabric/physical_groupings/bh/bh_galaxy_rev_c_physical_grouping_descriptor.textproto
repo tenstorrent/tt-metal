@@ -1,0 +1,123 @@
+# BH Galaxy rev C physical-slot halftrays and slices.
+#
+# These definitions intentionally mirror devices_per_slice_rev_c in
+# tests/tt_metal/tt_fabric/physical_discovery/test_physical_system_descriptor.cpp
+# TEST(PhysicalMappingGeneration, Generate2x4SliceToPCIeDeviceMapping).
+
+# Physical-slot halftrays. Rev C changes which ASIC grouping occupies tray 2 and
+# tray 3's tray-local halves, while the common TRAY_* assembly stays unchanged.
+# HALF_1/HALF_2 names refer to the tray-local slots used by the common TRAY_*
+# assembly, not to any specific ASIC content.
+groupings {
+  name: "tray_1_half_1"
+  custom_type: "TRAY_1_HALF_1"
+  instances: [
+    { id: 0 grouping_ref { custom_type: "ASIC_1256_R" } }
+  ]
+}
+
+groupings {
+  name: "tray_1_half_2"
+  custom_type: "TRAY_1_HALF_2"
+  instances: [
+    { id: 0 grouping_ref { custom_type: "ASIC_3478_R" } }
+  ]
+}
+
+groupings {
+  name: "tray_2_half_1"
+  custom_type: "TRAY_2_HALF_1"
+  instances: [
+    { id: 0 grouping_ref { custom_type: "ASIC_1256" } }
+  ]
+}
+
+groupings {
+  name: "tray_2_half_2"
+  custom_type: "TRAY_2_HALF_2"
+  instances: [
+    { id: 0 grouping_ref { custom_type: "ASIC_3478" } }
+  ]
+}
+
+groupings {
+  name: "tray_3_half_1"
+  custom_type: "TRAY_3_HALF_1"
+  instances: [
+    { id: 0 grouping_ref { custom_type: "ASIC_3478_RC" } }
+  ]
+}
+
+groupings {
+  name: "tray_3_half_2"
+  custom_type: "TRAY_3_HALF_2"
+  instances: [
+    { id: 0 grouping_ref { custom_type: "ASIC_1256_RC" } }
+  ]
+}
+
+groupings {
+  name: "tray_4_half_1"
+  custom_type: "TRAY_4_HALF_1"
+  instances: [
+    { id: 0 grouping_ref { custom_type: "ASIC_3478_C" } }
+  ]
+}
+
+groupings {
+  name: "tray_4_half_2"
+  custom_type: "TRAY_4_HALF_2"
+  instances: [
+    { id: 0 grouping_ref { custom_type: "ASIC_1256_C" } }
+  ]
+}
+
+# Canonical rev C slices: slice ids 0..3 align with the discovery-side slice
+# tables and remain the public stage-family building blocks.
+groupings {
+  name: "slice_0_bh"
+  custom_type: "SLICE_0"
+  instances: [
+    { id: 0 grouping_ref { custom_type: "TRAY_1_HALF_1" } },
+    { id: 1 grouping_ref { custom_type: "TRAY_2_HALF_1" } }
+  ]
+  row_major_mesh {
+    dims: [2, 1]
+  }
+}
+
+groupings {
+  name: "slice_1_bh"
+  custom_type: "SLICE_1"
+  instances: [
+    { id: 0 grouping_ref { custom_type: "TRAY_1_HALF_2" } },
+    { id: 1 grouping_ref { custom_type: "TRAY_2_HALF_2" } }
+  ]
+  row_major_mesh {
+    dims: [2, 1]
+  }
+}
+
+groupings {
+  name: "slice_2_bh"
+  custom_type: "SLICE_2"
+  instances: [
+    { id: 0 grouping_ref { custom_type: "TRAY_3_HALF_1" } },
+    { id: 1 grouping_ref { custom_type: "TRAY_4_HALF_1" } }
+  ]
+  row_major_mesh {
+    dims: [2, 1]
+  }
+}
+
+groupings {
+  name: "slice_3_bh"
+  custom_type: "SLICE_3"
+  instances: [
+    { id: 0 grouping_ref { custom_type: "TRAY_3_HALF_2" } },
+    { id: 1 grouping_ref { custom_type: "TRAY_4_HALF_2" } }
+  ]
+  row_major_mesh {
+    dims: [2, 1]
+  }
+}

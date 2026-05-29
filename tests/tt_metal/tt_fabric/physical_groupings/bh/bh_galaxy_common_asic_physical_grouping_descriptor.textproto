@@ -1,0 +1,189 @@
+# Shared BH Galaxy ASIC-level physical groupings.
+#
+# This fragment is revision-invariant and must be loaded before the selected BH
+# revision fragment. It defines the reusable 2x2 ASIC building blocks plus the
+# canonical 2x2 MESH candidates built directly on top of them.
+
+# Explicit 2x2 ASIC groupings used to assemble rev-specific physical-slot
+# halftrays.
+# Naming uses row/column terms to avoid tray-axis ambiguity:
+# - base: as listed in the grouping name (for example ASIC_1256 = [[1, 2], [5, 6]])
+# - _r: row-reversed, so the 2x2 top/bottom rows are swapped
+# - _c: column-reversed, so the 2x2 left/right columns are swapped
+# - _rc: both row-reversed and column-reversed (equivalent to a 180-degree rotation)
+groupings {
+  name: "asic_1256"
+  custom_type: "ASIC_1256"
+  instances: [
+    { id: 0 asic_location: ASIC_LOCATION_1 },
+    { id: 1 asic_location: ASIC_LOCATION_2 },
+    { id: 2 asic_location: ASIC_LOCATION_5 },
+    { id: 3 asic_location: ASIC_LOCATION_6 }
+  ]
+  row_major_mesh {
+    dims: [2, 2]
+  }
+}
+
+groupings {
+  name: "asic_1256_r"
+  custom_type: "ASIC_1256_R"
+  instances: [
+    { id: 0 asic_location: ASIC_LOCATION_5 },
+    { id: 1 asic_location: ASIC_LOCATION_6 },
+    { id: 2 asic_location: ASIC_LOCATION_1 },
+    { id: 3 asic_location: ASIC_LOCATION_2 }
+  ]
+  row_major_mesh {
+    dims: [2, 2]
+  }
+}
+
+groupings {
+  name: "asic_1256_c"
+  custom_type: "ASIC_1256_C"
+  instances: [
+    { id: 0 asic_location: ASIC_LOCATION_2 },
+    { id: 1 asic_location: ASIC_LOCATION_1 },
+    { id: 2 asic_location: ASIC_LOCATION_6 },
+    { id: 3 asic_location: ASIC_LOCATION_5 }
+  ]
+  row_major_mesh {
+    dims: [2, 2]
+  }
+}
+
+groupings {
+  name: "asic_1256_rc"
+  custom_type: "ASIC_1256_RC"
+  instances: [
+    { id: 0 asic_location: ASIC_LOCATION_6 },
+    { id: 1 asic_location: ASIC_LOCATION_5 },
+    { id: 2 asic_location: ASIC_LOCATION_2 },
+    { id: 3 asic_location: ASIC_LOCATION_1 }
+  ]
+  row_major_mesh {
+    dims: [2, 2]
+  }
+}
+
+groupings {
+  name: "asic_3478"
+  custom_type: "ASIC_3478"
+  instances: [
+    { id: 0 asic_location: ASIC_LOCATION_3 },
+    { id: 1 asic_location: ASIC_LOCATION_4 },
+    { id: 2 asic_location: ASIC_LOCATION_7 },
+    { id: 3 asic_location: ASIC_LOCATION_8 }
+  ]
+  row_major_mesh {
+    dims: [2, 2]
+  }
+}
+
+groupings {
+  name: "asic_3478_r"
+  custom_type: "ASIC_3478_R"
+  instances: [
+    { id: 0 asic_location: ASIC_LOCATION_7 },
+    { id: 1 asic_location: ASIC_LOCATION_8 },
+    { id: 2 asic_location: ASIC_LOCATION_3 },
+    { id: 3 asic_location: ASIC_LOCATION_4 }
+  ]
+  row_major_mesh {
+    dims: [2, 2]
+  }
+}
+
+groupings {
+  name: "asic_3478_c"
+  custom_type: "ASIC_3478_C"
+  instances: [
+    { id: 0 asic_location: ASIC_LOCATION_4 },
+    { id: 1 asic_location: ASIC_LOCATION_3 },
+    { id: 2 asic_location: ASIC_LOCATION_8 },
+    { id: 3 asic_location: ASIC_LOCATION_7 }
+  ]
+  row_major_mesh {
+    dims: [2, 2]
+  }
+}
+
+groupings {
+  name: "asic_3478_rc"
+  custom_type: "ASIC_3478_RC"
+  instances: [
+    { id: 0 asic_location: ASIC_LOCATION_8 },
+    { id: 1 asic_location: ASIC_LOCATION_7 },
+    { id: 2 asic_location: ASIC_LOCATION_4 },
+    { id: 3 asic_location: ASIC_LOCATION_3 }
+  ]
+  row_major_mesh {
+    dims: [2, 2]
+  }
+}
+
+# Canonical 2x2 MESH candidates, one per explicit 2x2 ASIC grouping.
+groupings {
+  name: "2x2 Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 grouping_ref { custom_type: "ASIC_1256" } }
+  ]
+}
+
+groupings {
+  name: "2x2 Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 grouping_ref { custom_type: "ASIC_1256_R" } }
+  ]
+}
+
+groupings {
+  name: "2x2 Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 grouping_ref { custom_type: "ASIC_1256_C" } }
+  ]
+}
+
+groupings {
+  name: "2x2 Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 grouping_ref { custom_type: "ASIC_1256_RC" } }
+  ]
+}
+
+groupings {
+  name: "2x2 Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 grouping_ref { custom_type: "ASIC_3478" } }
+  ]
+}
+
+groupings {
+  name: "2x2 Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 grouping_ref { custom_type: "ASIC_3478_R" } }
+  ]
+}
+
+groupings {
+  name: "2x2 Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 grouping_ref { custom_type: "ASIC_3478_C" } }
+  ]
+}
+
+groupings {
+  name: "2x2 Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 grouping_ref { custom_type: "ASIC_3478_RC" } }
+  ]
+}
