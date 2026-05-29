@@ -1,3 +1,8 @@
+---
+name: integration
+description: Load real HuggingFace checkpoint weights into TTNN modules and validate full-config PCC against HF. Use when wiring real weights, weight loaders, or real-weight validation.
+---
+
 # SKILL: HF Weight Integration
 
 ## Purpose

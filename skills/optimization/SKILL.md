@@ -1,3 +1,8 @@
+---
+name: performance-optimization
+description: Optimize TTNN models for maximum throughput using metal tracing, memory optimization, op fusion, and L1 sharding. Use when optimizing model performance, implementing tracing, fusing ops, or targeting decode latency.
+---
+
 # SKILL: Performance Optimization
 
 ## Scope: per-block

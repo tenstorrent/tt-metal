@@ -1,3 +1,8 @@
+---
+name: ttnn-implementation
+description: Implement model blocks in TTNN achieving PCC greater than 0.99 against PyTorch reference. Use when writing TTNN code, loading weights, implementing attention or MLP in TTNN, or verifying PCC.
+---
+
 # SKILL: TTNN Implementation
 
 ## Purpose

@@ -1,3 +1,8 @@
+---
+name: perf
+description: Pipeline-level perf for a use case (paged_update_cache + reusable metal trace + targeted tracy on the traced path). Use when optimizing end-to-end generation latency/throughput.
+---
+
 # SKILL: Pipeline Perf (paged_update_cache + reusable trace + targeted tracy)
 
 ## Purpose

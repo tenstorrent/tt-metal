@@ -1,3 +1,8 @@
+---
+name: architecture-mapping
+description: Identify existing TTNN implementations that share architectural blocks with the target model, enabling code reuse and faster bring-up. Use when starting a new model bring-up, analyzing model architecture, or mapping HuggingFace blocks to TTNN equivalents.
+---
+
 # SKILL: Architecture Mapping
 
 ## Purpose

@@ -1,3 +1,8 @@
+---
+name: generation
+description: Build the autoregressive generation loop, demos, and end-to-end use-case validation for a brought-up model (KV cache, sampling, EOS, image/text I/O). Use when implementing generate(), demos, or e2e tests.
+---
+
 # SKILL: Generation (AR Loop + Demos + E2E Validation)
 
 ## Purpose
