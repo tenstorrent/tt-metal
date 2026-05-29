@@ -73,8 +73,23 @@ if str(_TT_METAL_ROOT) not in sys.path:
 
 from models.common.utility_functions import comp_pcc
 from models.experimental.kokoro.reference.model import KModel
-from models.experimental.kokoro.tests.kmodel_pcc_stage_diagnostic import STFT_PHASE_FALLBACK_KWARGS
+
+# from models.experimental.kokoro.tests.kmodel_pcc_stage_diagnostic import STFT_PHASE_FALLBACK_KWARGS
 from models.experimental.kokoro.tt.tt_kmodel import TTKModel, preprocess_tt_kmodel
+
+# Matches ``test_tt_kmodel_stft_and_phase_fallback_pcc`` (config E, device F0 + f0 upsample).
+STFT_PHASE_FALLBACK_KWARGS = dict(
+    use_torch_stft_fallback=True,
+    use_torch_phase_fallback=True,
+    use_torch_sinegen_fallback=False,
+    use_torch_linear_fallback=False,
+    use_torch_tanh_fallback=False,
+    use_torch_stft_conv_fallback=False,
+    use_torch_atan2_fallback=False,
+    use_torch_f0n_conv_fallback=False,
+    use_torch_f0_upsamp_fallback=False,
+    use_fp32_prosody_boundary=True,
+)
 
 # ---------------------------------------------------------------------------
 # Test constants
@@ -287,8 +302,11 @@ def test_tt_kmodel_generator_no_torch_fallback_pcc(device):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.timeout(1800)
 def test_tt_kmodel_stft_and_phase_fallback_pcc(device):
-    """Config E — recommended config: STFT + SineGen + Phase. Empirical PCC ≈ 0.408.
+    """Config E — recommended config: STFT + phase fallback (device SineGen). PCC floor > 0.84.
+
+    First BH run compiles hundreds of kernels (JIT cache ~7% hit); allow up to 30 min cold start.
 
     These CPU fallbacks address the two dominant BH-BF16 precision failure points in the
     vocoder. Each is justified by a per-op test under ``test_tt_torch_stft_pcc.py`` /

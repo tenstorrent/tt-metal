@@ -47,21 +47,13 @@ from models.experimental.kokoro.m_source_rng import (
     patched_m_source_torch_rng,
     upload_m_source_rng,
 )
-from models.experimental.kokoro.reference.istftnet import SineGen
 from models.experimental.kokoro.tt.tt_lstm import tt_bilstm_nlc
-from models.experimental.kokoro.tt.tt_sinegen import TTSineGen, preprocess_tt_sinegen
 from models.experimental.kokoro.tests.kmodel_decode_stack_diagnostic import (
     StageTable,
     _compare_stages,
     _pcc_flat,
     _run_ref_decode_stack,
     _run_tt_decode_stack,
-)
-from models.experimental.kokoro.tests.sinegen_stage_diagnostic import (
-    _STAGE_OPS as _SINEGEN_STAGE_OPS,
-    _classify as _classify_pcc,
-    _run_ref_sinegen_stages,
-    _run_tt_sinegen_stages,
 )
 
 _DEFAULT_TEXT = os.getenv("KOKORO_PCC_DEBUG_TEXT", "Hello from Tenstorrent.")
@@ -541,66 +533,6 @@ def _run_tt_harmonic_stages(
     return caps
 
 
-def _collect_sinegen_rows(
-    device: ttnn.Device,
-    f0_har_btd: torch.Tensor,
-    *,
-    use_torch_phase_fallback: bool,
-    label: str,
-) -> list[tuple[str, float, str, str, str]]:
-    """Ref vs TT SineGen internal stages for one F0 tensor [B,T,1]."""
-    B = int(f0_har_btd.shape[0])
-    T = int(f0_har_btd.shape[1])
-    dim = int(f0_har_btd.shape[2])
-    ref_sg = SineGen(
-        samp_rate=24000.0,
-        upsample_scale=300,
-        harmonic_num=dim - 1,
-        sine_amp=0.1,
-        noise_std=0.003,
-        voiced_threshold=0.0,
-    ).eval()
-    rng = make_zero_m_source_rng(B, T, dim)
-    params = preprocess_tt_sinegen(
-        device=device,
-        sampling_rate=24000.0,
-        upsample_scale=300,
-        harmonic_num=dim - 1,
-        sine_amp=0.1,
-        noise_std=0.003,
-        voiced_threshold=0.0,
-        time_len=T,
-        weights_dtype=ttnn.bfloat16,
-    )
-    tt_sg = TTSineGen(
-        device,
-        params,
-        use_torch_phase_fallback=use_torch_phase_fallback,
-        use_torch_sinegen_fallback=False,
-    )
-    rng_tt = upload_m_source_rng(rng, device, dtype=params.activation_dtype)
-    f0_tt = ttnn.from_torch(
-        f0_har_btd, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
-    with patched_m_source_torch_rng(rng):
-        ref_caps = _run_ref_sinegen_stages(ref_sg, f0_har_btd, rand_ini=rng.rand_ini)
-    tt_caps = _run_tt_sinegen_stages(tt_sg, f0_tt, rand_ini_tt=rng_tt.rand_ini, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    ttnn.deallocate(f0_tt)
-    deallocate_m_source_rng_tt(rng_tt)
-
-    rows: list[tuple[str, float, str, str, str]] = []
-    for key in ref_caps:
-        if key not in tt_caps or key == "S5b_phase_rad_down":
-            continue
-        name, pcc, note = _pcc_flat(f"{label}:{key}", ref_caps[key], tt_caps[key])
-        if use_torch_phase_fallback and key in ("S6_phase_up_rad", "S7_sin_raw", "S8_sine_x_amp", "S9_out_uv_noise"):
-            backend = "torch.cpu (phase chain)"
-        else:
-            backend = "ttnn"
-        rows.append((name, float(pcc), _classify_pcc(float(pcc)), backend, _SINEGEN_STAGE_OPS.get(key, "")))
-    return rows
-
-
 def _backend_for_harmonic_stage(name: str) -> str:
     if "H3" in name or "SineGen" in name:
         return "torch.cpu" if STFT_PHASE_FALLBACK_KWARGS["use_torch_phase_fallback"] else "ttnn"
@@ -611,38 +543,11 @@ def _backend_for_harmonic_stage(name: str) -> str:
     return "ttnn"
 
 
-def _rows_to_md_table(
-    rows: list[tuple[str, float, str, str]],
-    *,
-    extra_col: str | None = None,
-) -> list[str]:
-    if extra_col:
-        lines = [
-            f"| Stage | PCC | Status | {extra_col} | Notes |",
-            "|-------|-----|--------|" + "-" * (len(extra_col) + 2) + "|-------|",
-        ]
-    else:
-        lines = ["| Stage | PCC | Status | Notes |", "|-------|-----|--------|-------|"]
-    for row in rows:
-        if extra_col:
-            name, pcc, status, col, note = row  # type: ignore[misc]
-            lines.append(f"| {name} | {pcc:.6f} | {status} | {col} | {note} |")
-        else:
-            name, pcc, status, note = row  # type: ignore[misc]
-            lines.append(f"| {name} | {pcc:.6f} | {status} | {note} |")
+def _rows_to_md_table(rows: list[tuple[str, float, str]]) -> list[str]:
+    lines = ["| Stage | PCC | Notes |", "|-------|-----|-------|"]
+    for name, pcc, note in rows:
+        lines.append(f"| {name} | {pcc:.6f} | {note} |")
     return lines
-
-
-def _compare_cap_dicts(
-    ref_caps: dict[str, torch.Tensor], tt_caps: dict[str, torch.Tensor]
-) -> list[tuple[str, float, str, str]]:
-    out: list[tuple[str, float, str, str]] = []
-    for k in ref_caps:
-        if k not in tt_caps:
-            continue
-        name, pcc, note = _pcc_flat(k, ref_caps[k], tt_caps[k])
-        out.append((name, float(pcc), _classify_pcc(float(pcc)), note))
-    return out
 
 
 def _verify_e2e_equivalent(tt_model: TTKModel, phonemes: str, ref_s: torch.Tensor, staged_audio: torch.Tensor) -> float:
@@ -663,13 +568,11 @@ class StftPhaseReportData:
     phonemes: str
     e2e_pcc: float
     e2e_equiv_pcc: float
-    prosody_rows: list[tuple[str, float, str, str]]
+    prosody_rows: list[tuple[str, float, str]]
     pred_dur_match: bool
-    harmonic_rows: list[tuple[str, float, str, str, str]]
+    harmonic_rows: list[tuple[str, float, str, str]]
     decode_table: StageTable
     decoder_isolation_pcc: float
-    sinegen_config_e: list[tuple[str, float, str, str, str]]
-    sinegen_device_only: list[tuple[str, float, str, str, str]]
     T_f0: int
     T_har: int
     T_mel: int
@@ -677,7 +580,7 @@ class StftPhaseReportData:
 
 def _format_stft_phase_report(data: StftPhaseReportData) -> str:
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    all_summary_rows = list(data.prosody_rows) + [(n, pcc, s, b) for n, pcc, s, b, _ in data.harmonic_rows]
+    all_summary_rows = [(n, pcc) for n, pcc, _ in data.prosody_rows] + [(n, pcc) for n, pcc, _, _ in data.harmonic_rows]
     degraded = [r for r in all_summary_rows if r[1] == r[1] and r[1] < 0.99]
     degraded.sort(key=lambda x: x[1])
 
@@ -748,12 +651,12 @@ def _format_stft_phase_report(data: StftPhaseReportData) -> str:
             "",
             "Isolates vocoder harmonic branch using **TT prosody F0** so H0 reflects predictor error, not ref F0.",
             "",
-            "| Stage | PCC | Status | Backend | Notes |",
-            "|-------|-----|--------|---------|-------|",
+            "| Stage | PCC | Backend | Notes |",
+            "|-------|-----|---------|-------|",
         ]
     )
-    for name, pcc, status, backend, note in data.harmonic_rows:
-        lines.append(f"| {name} | {pcc:.6f} | {status} | {backend} | {note} |")
+    for name, pcc, backend, note in data.harmonic_rows:
+        lines.append(f"| {name} | {pcc:.6f} | {backend} | {note} |")
     lines.extend(
         [
             "",
@@ -770,44 +673,12 @@ def _format_stft_phase_report(data: StftPhaseReportData) -> str:
     for name, pcc, note, marker in data.decode_table.rows:
         m = f" {marker}" if marker else ""
         lines.append(f"| {name} | {pcc:.6f} | {note}{m} |")
-    lines.extend(
-        [
-            "",
-            "## SineGen internal (S0–S9) on captured TT F0",
-            "",
-            f"F0 source: TT `F0_curve` → ref `f0_upsamp` → `f0_har` shape `[1, {data.T_har}, 1]`.",
-            "Zero RNG (`make_zero_m_source_rng`) on both sides.",
-            "",
-            "### With config E (`use_torch_phase_fallback=True`)",
-            "",
-            "_Isolated walk uses `_run_tt_sinegen_stages` (per-op capture). E2E uses the integrated",
-            "CPU phase fallback inside `TTSineGen.forward`; S7–S9 PCC here can understate fallback quality._",
-            "",
-            "| Stage | PCC | Status | Backend | TTNN ops |",
-            "|-------|-----|--------|---------|----------|",
-        ]
-    )
-    for name, pcc, status, backend, ops in data.sinegen_config_e:
-        lines.append(f"| {name} | {pcc:.6f} | {status} | {backend} | {ops} |")
-    lines.extend(
-        [
-            "",
-            "### Device-only phase chain (no phase fallback — reference for BH BF16 ceiling)",
-            "",
-            "Shows what **no-fallback** SineGen would look like on the same F0; see [`SINEGEN_STAGE_PCC.md`](SINEGEN_STAGE_PCC.md).",
-            "",
-            "| Stage | PCC | Status | Backend | TTNN ops |",
-            "|-------|-----|--------|---------|----------|",
-        ]
-    )
-    for name, pcc, status, backend, ops in data.sinegen_device_only:
-        lines.append(f"| {name} | {pcc:.6f} | {status} | {backend} | {ops} |")
     if degraded:
         lines.extend(["", "## Degraded ops (PCC < 0.99)", ""])
-        lines.append("| Stage | PCC | Status |")
-        lines.append("|-------|-----|--------|")
-        for name, pcc, status, _ in degraded:
-            lines.append(f"| {name} | {pcc:.6f} | {status} |")
+        lines.append("| Stage | PCC |")
+        lines.append("|-------|-----|")
+        for name, pcc in degraded:
+            lines.append(f"| {name} | {pcc:.6f} |")
     lines.extend(
         [
             "",
@@ -898,7 +769,7 @@ def main() -> None:
             T_har = int(f0_har.shape[1])
 
             prosody_rows = [
-                (name, pcc, _classify_pcc(pcc), note)
+                (name, pcc, note)
                 for name, pcc, note in [
                     _pcc_row("1. After PL-BERT + bert_encoder (d_en)", ref_st.d_en_bct, tt_st.d_en_bct),
                     _pcc_row("2. After DurationEncoder (d, pre-align)", ref_st.d_nlc, tt_st.d_nlc),
@@ -923,13 +794,11 @@ def main() -> None:
                     "H5. after tanh [B,T_har]",
                     "H6. after typecast→fp32 (STFT in)",
                 ):
-                    note = "ref-only capture; see SineGen S0–S9 table for TT phase path"
-                    harmonic_rows.append((key, float("nan"), "N/A", _backend_for_harmonic_stage(key), note))
+                    note = "ref-only capture; TT path uses phase fallback in TTSineGen.forward"
+                    harmonic_rows.append((key, float("nan"), _backend_for_harmonic_stage(key), note))
                     continue
                 name, pcc, note = _pcc_flat(key, ref_har[key], tt_har[key])
-                harmonic_rows.append(
-                    (name, float(pcc), _classify_pcc(float(pcc)), _backend_for_harmonic_stage(name), note)
-                )
+                harmonic_rows.append((name, float(pcc), _backend_for_harmonic_stage(name), note))
 
             ref_dec = _run_ref_decode_stack(ref, ref_st.asr_bct, ref_st.F0, ref_st.N, s_style)
             tt_dec = _run_tt_decode_stack(
@@ -948,11 +817,6 @@ def main() -> None:
             )
             _, decoder_iso_pcc = comp_pcc(ref_dec["G7_audio"].unsqueeze(0), tt_dec["G7_audio"].unsqueeze(0), pcc=0.0)
 
-            sinegen_e = _collect_sinegen_rows(device, f0_har, use_torch_phase_fallback=True, label="captured_tt_f0")
-            sinegen_dev = _collect_sinegen_rows(
-                device, f0_har, use_torch_phase_fallback=False, label="captured_tt_f0_no_phase_fb"
-            )
-
             report = _format_stft_phase_report(
                 StftPhaseReportData(
                     text=args.text,
@@ -964,8 +828,6 @@ def main() -> None:
                     harmonic_rows=harmonic_rows,
                     decode_table=decode_table,
                     decoder_isolation_pcc=float(decoder_iso_pcc),
-                    sinegen_config_e=sinegen_e,
-                    sinegen_device_only=sinegen_dev,
                     T_f0=T_f0,
                     T_har=T_har,
                     T_mel=T_mel,
