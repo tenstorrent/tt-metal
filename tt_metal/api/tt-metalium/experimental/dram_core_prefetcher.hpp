@@ -57,7 +57,7 @@ struct DramCorePrefetcherInput {
 //   - No other prefetcher is currently active on this mesh device.
 //   - DRAM programmable cores are available on this mesh
 //     (TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1).
-void StartDramCorePrefetcher(distributed::MeshDevice* mesh_device, const DramCorePrefetcherConfig& config);
+void StartDramCorePrefetcher(distributed::MeshDevice& mesh_device, const DramCorePrefetcherConfig& config);
 
 // Queue one prefetch request. Non-blocking.
 //
@@ -73,7 +73,7 @@ void StartDramCorePrefetcher(distributed::MeshDevice* mesh_device, const DramCor
 // The caller is responsible for keeping the tensors in `input_tensors` and
 // `gcb` alive until Stop returns.
 void QueueDramCorePrefetcherRequest(
-    distributed::MeshDevice* mesh_device,
+    distributed::MeshDevice& mesh_device,
     const GlobalCircularBuffer& gcb,
     const std::optional<distributed::MeshCoordinateRangeSet>& device_subset,
     const std::vector<DramCorePrefetcherInput>& input_tensors,
@@ -82,7 +82,7 @@ void QueueDramCorePrefetcherRequest(
 // Block until all previously queued requests have been delivered and the
 // kernels have exited, then release the prefetcher's resources. No-op if no
 // prefetcher is active.
-void StopDramCorePrefetcher(distributed::MeshDevice* mesh_device);
+void StopDramCorePrefetcher(distributed::MeshDevice& mesh_device);
 
 }  // namespace experimental
 }  // namespace tt::tt_metal

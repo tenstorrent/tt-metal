@@ -10,7 +10,7 @@
 namespace ttnn::operations::experimental {
 
 void start_dram_core_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device) {
-    tt::tt_metal::experimental::StartDramCorePrefetcher(mesh_device, {});
+    tt::tt_metal::experimental::StartDramCorePrefetcher(*mesh_device, {});
 }
 
 void queue_dram_core_prefetcher_request(
@@ -25,11 +25,11 @@ void queue_dram_core_prefetcher_request(
         inputs.push_back({&tensor.mesh_tensor(), block_count});
     }
     tt::tt_metal::experimental::QueueDramCorePrefetcherRequest(
-        mesh_device, global_cb, device_subset, inputs, num_layers);
+        *mesh_device, global_cb, device_subset, inputs, num_layers);
 }
 
 void stop_dram_core_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device) {
-    tt::tt_metal::experimental::StopDramCorePrefetcher(mesh_device);
+    tt::tt_metal::experimental::StopDramCorePrefetcher(*mesh_device);
 }
 
 }  // namespace ttnn::operations::experimental

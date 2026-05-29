@@ -514,26 +514,23 @@ void DramCorePrefetcherManager::stop() {
 // -----------------------------------------------------------------------------
 namespace tt::tt_metal::experimental {
 
-void StartDramCorePrefetcher(distributed::MeshDevice* mesh_device, const DramCorePrefetcherConfig& config) {
-    TT_FATAL(mesh_device != nullptr, "StartDramCorePrefetcher requires a non-null MeshDevice");
-    auto& manager = mesh_device->impl().dram_core_prefetcher(mesh_device);
+void StartDramCorePrefetcher(distributed::MeshDevice& mesh_device, const DramCorePrefetcherConfig& config) {
+    auto& manager = mesh_device.impl().dram_core_prefetcher(&mesh_device);
     manager.start(config);
 }
 
 void QueueDramCorePrefetcherRequest(
-    distributed::MeshDevice* mesh_device,
+    distributed::MeshDevice& mesh_device,
     const GlobalCircularBuffer& gcb,
     const std::optional<distributed::MeshCoordinateRangeSet>& device_subset,
     const std::vector<DramCorePrefetcherInput>& input_tensors,
     uint32_t num_layers) {
-    TT_FATAL(mesh_device != nullptr, "QueueDramCorePrefetcherRequest requires a non-null MeshDevice");
-    auto& manager = mesh_device->impl().dram_core_prefetcher(mesh_device);
+    auto& manager = mesh_device.impl().dram_core_prefetcher(&mesh_device);
     manager.queue(gcb, device_subset, input_tensors, num_layers);
 }
 
-void StopDramCorePrefetcher(distributed::MeshDevice* mesh_device) {
-    TT_FATAL(mesh_device != nullptr, "StopDramCorePrefetcher requires a non-null MeshDevice");
-    auto& manager = mesh_device->impl().dram_core_prefetcher(mesh_device);
+void StopDramCorePrefetcher(distributed::MeshDevice& mesh_device) {
+    auto& manager = mesh_device.impl().dram_core_prefetcher(&mesh_device);
     manager.stop();
 }
 
