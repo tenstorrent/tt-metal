@@ -1,0 +1,15 @@
+[
+  "ttnn.embedding",
+  "ttnn.reshape",
+  "ttnn.rms_norm",
+  "ttnn.linear",
+  "ttnn.permute",
+  "ttnn.neg",
+  "ttnn.concat",
+  "ttnn.mul",
+  "ttnn.add",
+  "ttnn.repeat",
+  "ttnn.matmul",
+  "ttnn.softmax",
+  "ttnn.silu"
+]

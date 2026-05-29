@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** p150 (blackhole)
 **Started:** 2026-05-29T00:11:46Z
-**Updated:** 2026-05-29T01:43:24Z
+**Updated:** 2026-05-29T01:49:31Z
 
 ## Block Status
 
@@ -81,7 +81,7 @@
 | lm_head | optimization | pending | — | 0 |  |
 | lm_head | real_weights | pending | — | 0 |  |
 | language_model | reference | done | 1.000000 | 0 | Full Qwen2ForCausalLM tested at REDUCED 2 layers (full=28), seq 64: embed -> 2x decoder_layer -> final RMSNorm -> lm_head. PCC=1.0 vs HF. Full 28-layer check deferred to real_weights. |
-| language_model | ttnn | pending | — | 0 |  |
+| language_model | ttnn | done | 0.999911 | 0 | Full Qwen2ForCausalLM assembly at REDUCED 2 layers (full=28), seq 64. Composes verified TtEmbedding -> 2x TtDecoderLayer (GQA 12/2, QKV bias, 1D RoPE theta 1e6, causal) -> final TtRMSNorm (eps 1e-6, applied here before lm_head) -> TtLMHead (untied hidden->vocab no bias) by file-path import. Shared cos/sin + causal mask precomputed on host, threaded through layers. HiFi4+fp32_dest_acc bf16 DRAM TILE. PCC=0.99991 vs golden on p150. Guard ok. |
 | language_model | debug | n/a | — | 0 |  |
 | language_model | optimization | pending | — | 0 |  |
 | language_model | real_weights | pending | — | 0 |  |
@@ -94,7 +94,6 @@
 
 ## Recent Ticks
 
-- tick 10 (2026-05-29T01:03:33Z): device[vision_block] — ok
 - tick 10 (2026-05-29T01:04:12Z): device[vision_block] — ok
 - tick 11 (2026-05-29T01:10:25Z): device[vision_patch_merger] — ok
 - tick 12 (2026-05-29T01:13:48Z): device[embedding] — ok
@@ -104,6 +103,7 @@
 - tick 16 (2026-05-29T01:31:57Z): device[mlp] — ok
 - tick 17 (2026-05-29T01:37:32Z): device[decoder_layer] — ok
 - tick 18 (2026-05-29T01:43:24Z): device[lm_head] — ok
+- tick 19 (2026-05-29T01:49:31Z): device[language_model] — ok
 
 ## Host-Resident Exceptions
 

@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-29T00:11:46Z",
-  "updated_at": "2026-05-29T01:43:24Z",
+  "updated_at": "2026-05-29T01:49:31Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -650,8 +650,15 @@
         "pcc": 1.0
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/language_model.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_tt_language_model.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/language_model.traced_ops.json"
+        ],
+        "notes": "Full Qwen2ForCausalLM assembly at REDUCED 2 layers (full=28), seq 64. Composes verified TtEmbedding -> 2x TtDecoderLayer (GQA 12/2, QKV bias, 1D RoPE theta 1e6, causal) -> final TtRMSNorm (eps 1e-6, applied here before lm_head) -> TtLMHead (untied hidden->vocab no bias) by file-path import. Shared cos/sin + causal mask precomputed on host, threaded through layers. HiFi4+fp32_dest_acc bf16 DRAM TILE. PCC=0.99991 vs golden on p150. Guard ok.",
+        "pcc": 0.9999105291926662
       },
       "debug": {
         "status": "n/a",
@@ -831,6 +838,12 @@
       "tick": 18,
       "ts": "2026-05-29T01:43:24Z",
       "action": "device[lm_head]",
+      "result": "ok"
+    },
+    {
+      "tick": 19,
+      "ts": "2026-05-29T01:49:31Z",
+      "action": "device[language_model]",
       "result": "ok"
     }
   ],
