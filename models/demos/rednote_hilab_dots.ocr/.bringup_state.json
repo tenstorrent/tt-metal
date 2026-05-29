@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-29T00:11:46Z",
-  "updated_at": "2026-05-29T03:58:28Z",
+  "updated_at": "2026-05-29T04:04:31Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -330,8 +330,15 @@
         "pcc": 0.9999899884744794
       },
       "real_weights": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/weight_loader.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_real_hf_weights.py"
+        ],
+        "notes": "PatchMerger real HF weights: vision_tower.merger.ln_q.{weight,bias} (LayerNorm gamma+beta, eps 1e-6) + mlp.0/mlp.2 biased Linears (6144x6144, 1536x6144). Unlike the RMSNorm/unbiased vision tower, the merger has LN bias + MLP bias. Loaded 47,196,672 params; PCC=0.99999 vs HF reference. Guard: lint clean.",
+        "pcc": 0.9999934040716645,
+        "params_loaded": 47196672
       }
     },
     {
@@ -1113,6 +1120,12 @@
       "tick": 39,
       "ts": "2026-05-29T03:58:28Z",
       "action": "device[vision_block]",
+      "result": "ok"
+    },
+    {
+      "tick": 40,
+      "ts": "2026-05-29T04:04:31Z",
+      "action": "device[vision_patch_merger]",
       "result": "ok"
     }
   ],

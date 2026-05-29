@@ -47,6 +47,7 @@ _tt_rmsnorm = _load_by_path("dots_tt_vision_rmsnorm_rw", "vision_rmsnorm.py", _T
 _tt_vision_attention = _load_by_path("dots_tt_vision_attention_rw", "vision_attention.py", _TT_DIR)
 _tt_vision_mlp = _load_by_path("dots_tt_vision_mlp_rw", "vision_mlp.py", _TT_DIR)
 _tt_vision_block = _load_by_path("dots_tt_vision_block_rw", "vision_block.py", _TT_DIR)
+_tt_vision_patch_merger = _load_by_path("dots_tt_vision_patch_merger_rw", "vision_patch_merger.py", _TT_DIR)
 _loader = _load_by_path("dots_weight_loader", "weight_loader.py", _TT_DIR)
 _functional = _load_by_path("dots_reference_functional_rw", "functional.py", _REF_DIR)
 
@@ -54,14 +55,17 @@ TtVisionRMSNorm = _tt_rmsnorm.TtVisionRMSNorm
 TtVisionAttention = _tt_vision_attention.TtVisionAttention
 TtVisionMLP = _tt_vision_mlp.TtVisionMLP
 TtVisionBlock = _tt_vision_block.TtVisionBlock
+TtVisionPatchMerger = _tt_vision_patch_merger.TtVisionPatchMerger
 load_vision_rmsnorm_weight = _loader.load_vision_rmsnorm_weight
 load_vision_attention_weights = _loader.load_vision_attention_weights
 load_vision_mlp_weights = _loader.load_vision_mlp_weights
 load_vision_block_weights = _loader.load_vision_block_weights
+load_vision_patch_merger_weights = _loader.load_vision_patch_merger_weights
 vision_rmsnorm_forward = _functional.vision_rmsnorm_forward
 vision_attention_forward = _functional.vision_attention_forward
 vision_mlp_forward = _functional.vision_mlp_forward
 vision_block_forward = _functional.vision_block_forward
+vision_patch_merger_forward = _functional.vision_patch_merger_forward
 
 # Vision attention config (modeling_dots_vision): 12 heads, head_dim 128,
 # fused QKV no-bias, 2D RoPE theta 1e4, block-diagonal bidirectional attention.
@@ -337,6 +341,87 @@ def test_real_hf_weights_vision_block(device):
     assert params_loaded > 0
 
 
+# Vision PatchMerger (DotsPatchMerger, pre_norm='layernorm'): LayerNorm(eps 1e-6,
+# with bias) -> view(-1, context_dim*merge**2) -> Linear -> GELU -> Linear (both
+# biased). context_dim 1536, merge 2 -> hidden 6144, out_dim 1536.
+PATCH_MERGER_CONTEXT_DIM = 1536
+PATCH_MERGER_SPATIAL_MERGE = 2
+PATCH_MERGER_HIDDEN = PATCH_MERGER_CONTEXT_DIM * (PATCH_MERGER_SPATIAL_MERGE**2)  # 6144
+PATCH_MERGER_LN_EPS = 1e-6
+
+
+def _run_vision_patch_merger_pcc(device):
+    """Load the real PatchMerger weights, run TTNN, compare to HF reference.
+
+    The merger has LayerNorm gamma+beta and biased MLP Linears (unlike the
+    rest of the RMSNorm/unbiased vision tower). Returns (pcc, params_loaded).
+    """
+    state_dict = load_vision_patch_merger_weights(CHECKPOINT_PATH)
+    state_dict = {k: v.to(torch.float32) for k, v in state_dict.items()}
+    params_loaded = int(sum(v.numel() for v in state_dict.values()))
+
+    assert state_dict["ln_q.weight"].shape == (PATCH_MERGER_CONTEXT_DIM,), tuple(state_dict["ln_q.weight"].shape)
+    assert state_dict["ln_q.bias"].shape == (PATCH_MERGER_CONTEXT_DIM,), tuple(state_dict["ln_q.bias"].shape)
+    assert state_dict["mlp.0.weight"].shape == (PATCH_MERGER_HIDDEN, PATCH_MERGER_HIDDEN), tuple(
+        state_dict["mlp.0.weight"].shape
+    )
+    assert state_dict["mlp.0.bias"].shape == (PATCH_MERGER_HIDDEN,), tuple(state_dict["mlp.0.bias"].shape)
+    assert state_dict["mlp.2.weight"].shape == (PATCH_MERGER_CONTEXT_DIM, PATCH_MERGER_HIDDEN), tuple(
+        state_dict["mlp.2.weight"].shape
+    )
+    assert state_dict["mlp.2.bias"].shape == (PATCH_MERGER_CONTEXT_DIM,), tuple(state_dict["mlp.2.bias"].shape)
+
+    torch.manual_seed(0)
+    # num_patches must be a multiple of merge**2 (=4); 256 -> 64 merged tokens.
+    n_patches = 256
+    torch_input = torch.randn(n_patches, PATCH_MERGER_CONTEXT_DIM, dtype=torch.float32)
+
+    # HF reference (mirrors DotsPatchMerger exactly) with the REAL weights.
+    ref_output = vision_patch_merger_forward(
+        torch_input,
+        state_dict,
+        context_dim=PATCH_MERGER_CONTEXT_DIM,
+        spatial_merge_size=PATCH_MERGER_SPATIAL_MERGE,
+        ln_eps=PATCH_MERGER_LN_EPS,
+    )
+
+    tt_merger = TtVisionPatchMerger(
+        device=device,
+        ln_weight=state_dict["ln_q.weight"],
+        ln_bias=state_dict["ln_q.bias"],
+        fc1_weight=state_dict["mlp.0.weight"],
+        fc1_bias=state_dict["mlp.0.bias"],
+        fc2_weight=state_dict["mlp.2.weight"],
+        fc2_bias=state_dict["mlp.2.bias"],
+        context_dim=PATCH_MERGER_CONTEXT_DIM,
+        spatial_merge_size=PATCH_MERGER_SPATIAL_MERGE,
+        ln_eps=PATCH_MERGER_LN_EPS,
+    )
+    tt_input = ttnn.from_torch(
+        torch_input,
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_output = tt_merger(tt_input)
+    tt_output_torch = ttnn.to_torch(tt_output).to(torch.float32).reshape(ref_output.shape)
+
+    passing, pcc_message = comp_pcc(ref_output, tt_output_torch, 0.99)
+    print(comp_allclose(ref_output, tt_output_torch))
+    print(f"comp_pcc(vision_patch_merger, real weights): passing={passing}, message={pcc_message}")
+    msg = str(pcc_message)
+    pcc = float(msg.split("PCC:")[-1].strip()) if "PCC:" in msg else float(pcc_message)
+    print(f"real-weights vision_patch_merger PCC = {pcc} | params_loaded = {params_loaded}")
+    assert passing, f"vision_patch_merger real-weights PCC below 0.99: {pcc_message}"
+    return pcc, params_loaded
+
+
+def test_real_hf_weights_vision_patch_merger(device):
+    pcc, params_loaded = _run_vision_patch_merger_pcc(device)
+    assert params_loaded > 0
+
+
 if __name__ == "__main__":
     dev = ttnn.open_device(device_id=0, l1_small_size=32768)
     try:
@@ -344,5 +429,6 @@ if __name__ == "__main__":
         _run_vision_attention_pcc(dev)
         _run_vision_mlp_pcc(dev)
         _run_vision_block_pcc(dev)
+        _run_vision_patch_merger_pcc(dev)
     finally:
         ttnn.close_device(dev)

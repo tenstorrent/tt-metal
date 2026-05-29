@@ -168,3 +168,45 @@ def load_vision_block_weights(checkpoint_path: str, block_idx: int = 0) -> Dict[
         "mlp.fc2.weight": mlp["fc2.weight"],
         "mlp.fc3.weight": mlp["fc3.weight"],
     }
+
+
+def load_vision_patch_merger_weights(checkpoint_path: str) -> Dict[str, torch.Tensor]:
+    """Load the real vision PatchMerger weights (LayerNorm + 2-linear GELU MLP).
+
+    The dots vision PatchMerger (modeling_dots_vision.DotsPatchMerger,
+    pre_norm='layernorm') is, UNLIKE the rest of the vision tower (which is
+    RMSNorm + unbiased Linears), a true biased block: a LayerNorm with both
+    gamma AND beta (eps 1e-6) followed by a 2-linear GELU MLP where BOTH Linears
+    carry bias. HF keys (single merger, lives in shard 2):
+        vision_tower.merger.ln_q.weight    [context_dim]        (LN gamma)
+        vision_tower.merger.ln_q.bias      [context_dim]        (LN beta)
+        vision_tower.merger.mlp.0.weight   [hidden, hidden]     (fc1, biased)
+        vision_tower.merger.mlp.0.bias     [hidden]
+        vision_tower.merger.mlp.2.weight   [out_dim, hidden]    (fc2, biased)
+        vision_tower.merger.mlp.2.bias     [out_dim]
+    context_dim 1536, spatial_merge_size 2 -> hidden = 1536*4 = 6144,
+    out_dim = context_dim = 1536.
+
+    Returns the flat state_dict (fp32) keyed exactly as the eager reference
+    :func:`reference.functional.vision_patch_merger_forward` and
+    :class:`TtVisionPatchMerger` expect:
+        {"ln_q.weight", "ln_q.bias", "mlp.0.weight", "mlp.0.bias",
+         "mlp.2.weight", "mlp.2.bias"}.
+    """
+    keys = [
+        "vision_tower.merger.ln_q.weight",
+        "vision_tower.merger.ln_q.bias",
+        "vision_tower.merger.mlp.0.weight",
+        "vision_tower.merger.mlp.0.bias",
+        "vision_tower.merger.mlp.2.weight",
+        "vision_tower.merger.mlp.2.bias",
+    ]
+    tensors = load_hf_tensors(checkpoint_path, keys)
+    return {
+        "ln_q.weight": tensors["vision_tower.merger.ln_q.weight"],
+        "ln_q.bias": tensors["vision_tower.merger.ln_q.bias"],
+        "mlp.0.weight": tensors["vision_tower.merger.mlp.0.weight"],
+        "mlp.0.bias": tensors["vision_tower.merger.mlp.0.bias"],
+        "mlp.2.weight": tensors["vision_tower.merger.mlp.2.weight"],
+        "mlp.2.bias": tensors["vision_tower.merger.mlp.2.bias"],
+    }

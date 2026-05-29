@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** p150 (blackhole)
 **Started:** 2026-05-29T00:11:46Z
-**Updated:** 2026-05-29T03:58:28Z
+**Updated:** 2026-05-29T04:04:31Z
 
 ## Block Status
 
@@ -39,7 +39,7 @@
 | vision_patch_merger | ttnn | done | 0.999990 | 0 | PatchMerger: ttnn.layer_norm (weight+bias, eps=1e-6) -> ttnn.reshape group 4 patches (1536->6144) -> ttnn.linear+bias -> ttnn.gelu -> ttnn.linear+bias. LN gamma/beta laid out [1,1,dim//32,32] row-major. HiFi4+fp32_dest_acc bf16 DRAM TILE. PCC=0.99999 vs golden. Guard ok. |
 | vision_patch_merger | debug | n/a | — | 0 |  |
 | vision_patch_merger | optimization | done | 0.999990 | 0 | traced tracy at production shape (SEQ=256->64 merged): matmuls 81.1% (303us/96 cores, K=6144, fused bias), LayerNorm 11.6%/8c, reshape 4.9%, GELU 2.3%; all DRAM-interleaved. Tried L1-pinning the LN/reshape/fc1/GELU/fc2 chain: net-neutral (368 vs 372us) since matmuls are compute-bound and the explicit-L1 output split the matmul fused-bias into a separate +6us BinaryNg. Reverted to fused-bias DRAM path. At-ceiling for per-block tuning; matmuls already 96 cores. PCC 0.99999 unchanged. |
-| vision_patch_merger | real_weights | pending | — | 0 |  |
+| vision_patch_merger | real_weights | done | 0.999993 | 0 | PatchMerger real HF weights: vision_tower.merger.ln_q.{weight,bias} (LayerNorm gamma+beta, eps 1e-6) + mlp.0/mlp.2 biased Linears (6144x6144, 1536x6144). Unlike the RMSNorm/unbiased vision tower, the merger has LN bias + MLP bias. Loaded 47,196,672 params; PCC=0.99999 vs HF reference. Guard: lint clean. |
 | vision_tower | reference | done | 1.000000 | 0 | Full DotsVisionTransformer tested at REDUCED 2 layers (full=42, grid 1x4x4=16 patches, bf16=False fp32 path). PCC=1.0 vs HF. Full-depth check deferred to real_weights. |
 | vision_tower | ttnn | done | 0.999982 | 0 | Full DotsVisionTransformer assembly at REDUCED 2 layers (full=42), grid 1x4x4=16 patches. Composes verified TtVisionBlock x2 (pre-norm residual, 2D vision RoPE theta 1e4, block-diagonal cu_seqlens attn) -> post_trunk TtVisionRMSNorm (eps 1e-5) -> TtVisionPatchMerger (LayerNorm eps 1e-6 + GELU MLP, merge 2x2) by file-path import. patch_embed Conv2d+RMSNorm run on host (documented host-resident boundary); 2D RoPE + cu_seqlens precomputed on host, threaded through blocks. HiFi4+fp32_dest_acc bf16 DRAM TILE. PCC=0.99998 vs golden on p150. Guard ok. |
 | vision_tower | debug | n/a | — | 0 |  |
@@ -94,7 +94,6 @@
 
 ## Recent Ticks
 
-- tick 30 (2026-05-29T02:58:59Z): device[rope] — ok
 - tick 31 (2026-05-29T03:05:15Z): device[attention] — ok
 - tick 32 (2026-05-29T03:11:57Z): device[mlp] — ok
 - tick 33 (2026-05-29T03:19:23Z): device[decoder_layer] — ok
@@ -104,6 +103,7 @@
 - tick 37 (2026-05-29T03:47:35Z): device[vision_attention] — ok
 - tick 38 (2026-05-29T03:53:12Z): device[vision_mlp] — ok
 - tick 39 (2026-05-29T03:58:28Z): device[vision_block] — ok
+- tick 40 (2026-05-29T04:04:31Z): device[vision_patch_merger] — ok
 
 ## Host-Resident Exceptions
 
