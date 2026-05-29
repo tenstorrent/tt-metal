@@ -5,9 +5,16 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
-#include "tt_metal/fabric/hw/inc/linear/api.h"
 
-using namespace tt::tt_fabric::linear::experimental;
+#ifdef FABRIC_2D
+#include "tt_metal/fabric/hw/inc/mesh/api.h"
+namespace fabric_api = tt::tt_fabric::mesh::experimental;
+using FabricRange = tt::tt_fabric::mesh::experimental::MeshMcastRange;
+#else
+#include "tt_metal/fabric/hw/inc/linear/api.h"
+namespace fabric_api = tt::tt_fabric::linear::experimental;
+using FabricRange = uint8_t;  // under 1D each connection carries a single hop count
+#endif
 
 // Helper class to send pages to remote device.
 // Deals with how to packetize pages and interact with Fabric APIs.
@@ -18,13 +25,13 @@ public:
         const Noc& noc,
         tt::tt_fabric::RoutingPlaneConnectionManager& manager,
         uint32_t num_connections,
-        uint8_t range_hops_1,
-        uint8_t range_hops_2 = 0u) :
+        FabricRange* ranges,
+        FabricRange* ranges_alt = nullptr) :
         noc{noc},
         fabric_connection{manager},
         // PacketHeaderPool::allocate_header_n (vs allocate_header) allows sending the same packet along multiple
-        // paths in a single API invocation
-        // TODO remove _n
+        // paths in a single API invocation.
+        // TODO remove _n for 1D?
         scatter_route_id_1{PacketHeaderPool::allocate_header_n(num_connections)},
         scatter_route_id_2{
             alternate_routes ? PacketHeaderPool::allocate_header_n(num_connections) : scatter_route_id_1},
@@ -38,32 +45,45 @@ public:
         std::array<uint16_t, max_pages_per_packet - 1> chunk_sizes{};
         chunk_sizes.fill(page_size);
         uint8_t starts[1] = {1};
-        uint8_t ranges_1[1] = {range_hops_1};
-        fabric_multicast_noc_scatter_write_set_state<UnicastScatterWriteUpdateMask::ChunkSizes>(
+
+        fabric_api::fabric_multicast_noc_scatter_write_set_state<UnicastScatterWriteUpdateMask::ChunkSizes>(
             fabric_connection,
             scatter_route_id_1,
+#ifndef FABRIC_2D
             starts,
-            ranges_1,
+#endif
+            ranges,
             NocUnicastScatterCommandHeader(dummy_addrs.data(), chunk_sizes.data(), pages_per_packet));
 
-        fabric_multicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::None>(
-            fabric_connection, unicast_route_id_1, starts, ranges_1);
+        fabric_api::fabric_multicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::None>(
+            fabric_connection,
+            unicast_route_id_1,
+#ifndef FABRIC_2D
+            starts,
+#endif
+            ranges);
 
         // Ring topology: create a second route to alternate with for load balancing.
         // Example for 8 device ring:
         //    forward worker alternates between 4 hops and 3 hops (in that order).
         //    backward worker alternates between 3 hops and 4 hops (in that order).
         if constexpr (alternate_routes) {
-            uint8_t ranges_2[1] = {range_hops_2};
-            fabric_multicast_noc_scatter_write_set_state<UnicastScatterWriteUpdateMask::ChunkSizes>(
+            fabric_api::fabric_multicast_noc_scatter_write_set_state<UnicastScatterWriteUpdateMask::ChunkSizes>(
                 fabric_connection,
                 scatter_route_id_2,
+#ifndef FABRIC_2D
                 starts,
-                ranges_2,
+#endif
+                ranges_alt,
                 NocUnicastScatterCommandHeader(dummy_addrs.data(), chunk_sizes.data(), pages_per_packet));
 
-            fabric_multicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::None>(
-                fabric_connection, unicast_route_id_2, starts, ranges_2);
+            fabric_api::fabric_multicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::None>(
+                fabric_connection,
+                unicast_route_id_2,
+#ifndef FABRIC_2D
+                starts,
+#endif
+                ranges_alt);
         }
     }
 
@@ -84,7 +104,7 @@ public:
             if (chunk_count == pages_per_packet) {
                 noc.async_writes_flushed();
                 scatter_header.chunk_count = chunk_count;
-                fabric_multicast_noc_scatter_write_with_state<
+                fabric_api::fabric_multicast_noc_scatter_write_with_state<
                     UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::PayloadSize>(
                     fabric_connection,
                     use_route_1 ? scatter_route_id_1 : scatter_route_id_2,
@@ -101,7 +121,7 @@ public:
             // Send a single page using multiple packets.
             for (uint32_t packet = 0; packet < packets_per_page; ++packet) {
                 noc.async_writes_flushed();
-                fabric_multicast_noc_unicast_write_with_state<
+                fabric_api::fabric_multicast_noc_unicast_write_with_state<
                     UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize>(
                     fabric_connection,
                     use_route_1 ? unicast_route_id_1 : unicast_route_id_2,
@@ -130,7 +150,7 @@ public:
                     // for chunk_count == 1.
                     // Note: this is hardcoded assuming NOC_SCATTER_WRITE_MIN_CHUNKS == 2. Else need to put
                     // the below unicast_write in a loop.
-                    fabric_multicast_noc_unicast_write_with_state<
+                    fabric_api::fabric_multicast_noc_unicast_write_with_state<
                         UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize>(
                         fabric_connection,
                         use_route_1 ? unicast_route_id_1 : unicast_route_id_2,
@@ -139,7 +159,7 @@ public:
                         page_size);
                 } else {
                     scatter_header.chunk_count = chunk_count;
-                    fabric_multicast_noc_scatter_write_with_state<
+                    fabric_api::fabric_multicast_noc_scatter_write_with_state<
                         UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::PayloadSize>(
                         fabric_connection,
                         use_route_1 ? scatter_route_id_1 : scatter_route_id_2,

@@ -108,16 +108,74 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
     uint32_t num_devices = operation_attributes.ring_size;
     uint32_t device_idx = ::ttnn::ccl::get_linearized_index_from_physical_coord(
         input_tensor, sender_device_coord, operation_attributes.cluster_axis);
+    // TODO verify row-major device_idx matches ShardTensorToMesh order under 2D no-cluster_axis;
+    // manual (2,4) test will catch any mismatch. i.e. in 2D mesh shape, whats the device_slot?
 
-    std::optional<MeshCoordinate> forward_coord = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
-        input_tensor, sender_device_coord, 1, operation_attributes.topology, operation_attributes.cluster_axis);
-    std::optional<MeshCoordinate> backward_coord = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
-        input_tensor, sender_device_coord, -1, operation_attributes.topology, operation_attributes.cluster_axis);
-    TT_FATAL(forward_coord.has_value() || backward_coord.has_value(), "No neighboring devices");
+    // Compute hops + neighbors for each mesh axis.
+    // Each axis ∈ {0, 1} contributes a forward/backward pair: axis 1 -> (E=fwd, W=bwd),
+    // axis 0 -> (S=fwd, N=bwd). In 1D only one axis is active; in 2D both can be.
+    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
+    const bool fabric_is_2d = ::tt::tt_fabric::is_2d_fabric_config(fabric_config);
+    const auto mesh_shape = input_tensor.device()->shape();
 
-    // Get OP Config, topology config
-    auto [num_targets_forward, num_targets_backward] = ::ttnn::ccl::get_forward_backward_line_mcast_distance(
-        num_devices, device_idx, operation_attributes.topology, false);
+    std::optional<MeshCoordinate> e_coord, w_coord, n_coord, s_coord;
+    uint32_t e_hops = 0, w_hops = 0, n_hops = 0, s_hops = 0;
+    bool ew_load_balance = false;
+    bool ns_load_balance = false;
+
+    for (uint32_t axis = 0; axis < 2; ++axis) {
+        const bool is_axis_active = mesh_shape[axis] > 1 && operation_attributes.cluster_axis.value_or(axis) == axis;
+        if (!is_axis_active) {
+            continue;
+        }
+
+        // Ring detection: fabric config wraps this axis AND the device set spans [0..size-1].
+        // TODO consider resolving this (and replace `topology`) in device_operation.cpp
+        bool axis_can_wrap;
+        if (fabric_is_2d) {
+            if (axis == 1) {
+                axis_can_wrap = fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X ||
+                                fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY;
+            } else {
+                axis_can_wrap = fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y ||
+                                fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY;
+            }
+        } else {
+            axis_can_wrap = fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_RING;
+        }
+        const bool axis_is_ring =
+            axis_can_wrap && ::ttnn::ccl::get_boundary_mode(input_tensor, tt::tt_fabric::Topology::Torus, axis) ==
+                                 tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP;
+        const auto axis_topology = axis_is_ring ? tt::tt_fabric::Topology::Ring : tt::tt_fabric::Topology::Linear;
+
+        const uint32_t axis_size = ::ttnn::ccl::get_topological_dimension(input_tensor, axis);
+        const uint32_t axis_index = sender_device_coord[axis];
+        auto [fwd_hops, bwd_hops] = ::ttnn::ccl::get_forward_backward_line_mcast_distance(
+            axis_size, axis_index, axis_topology, /*static_alternate=*/false);
+        auto fwd_coord = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
+            input_tensor, sender_device_coord, 1, axis_topology, axis);
+        auto bwd_coord = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
+            input_tensor, sender_device_coord, -1, axis_topology, axis);
+
+        const bool axis_load_balance = axis_is_ring && (axis_size % 2 == 0);
+        if (axis == 1) {
+            e_hops = fwd_hops;
+            w_hops = bwd_hops;
+            e_coord = fwd_coord;
+            w_coord = bwd_coord;
+            ew_load_balance = axis_load_balance;
+        } else {
+            s_hops = fwd_hops;
+            n_hops = bwd_hops;
+            s_coord = fwd_coord;
+            n_coord = bwd_coord;
+            ns_load_balance = axis_load_balance;
+        }
+    }
+    TT_FATAL(
+        e_coord.has_value() || w_coord.has_value() || n_coord.has_value() || s_coord.has_value(),
+        "No neighboring devices");
+
     // Get worker cores, assuming 1 worker per link
     uint32_t num_workers_per_link = 1;
 
@@ -127,9 +185,9 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
 
     const uint32_t packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
 
-    // In even-sized ring topology, we alternate packet sends across two routes for load balancing
-    const bool load_balance_across_alt_routes =
-        (operation_attributes.topology == ccl::Topology::Ring) && (num_devices % 2 == 0);
+    // Kernel alternates between ranges[] and ranges_alt[] hops on every packet send.
+    // Enabled if any axis is an even-sized ring.
+    const bool load_balance_across_alt_routes = ew_load_balance || ns_load_balance;
 
     ////////////////////////////////////////////////////////////////
     // Page indexing
@@ -238,35 +296,47 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
     CreateCircularBuffer(program, sender_worker_core_range, cb_src0_config);
 
     // KERNEL CREATION
-    // Reader
+    // Reader (covers forward directions E-line + S-rect)
     std::vector<uint32_t> reader_compile_args = {
-        cb0_id,                                                 // cb0_id
-        input_page_size,                                        // input tensor page size
-        kernel_output_page_size,                                // kernel-visible page size = min(input, output)
-        output_pages_per_stripe,                                // stripe length (writes before a stripe jump)
-        output_page_stripe_jump,                                // value added to page_id at stripe boundary
-        cb_page_size,                                           // cb entry size
-        packet_size,                                            // packet_size
-        forward_coord.has_value() ? num_targets_forward : 0,    // range_hops (in reader's direction)
-        backward_coord.has_value() ? num_targets_backward : 0,  // range_hops alternate (opposite dir)
-        load_balance_across_alt_routes,                         // load_balance_across_alt_routes
-        forward_coord.has_value(),                              // num_connections (0 = no neighbor)
+        cb0_id,                             // cb0_id
+        input_page_size,                    // input tensor page size
+        kernel_output_page_size,            // kernel-visible page size = min(input, output)
+        output_pages_per_stripe,            // stripe length (writes before a stripe jump)
+        output_page_stripe_jump,            // value added to page_id at stripe boundary
+        cb_page_size,                       // cb entry size
+        packet_size,                        // packet_size
+        load_balance_across_alt_routes,     // load_balance_across_alt_routes
+        (e_hops > 0) + (s_hops > 0),        // num_connections
+        e_hops,                             // line_hops
+        e_hops,                             // rect_e_hops
+        w_hops,                             // rect_w_hops
+        s_hops,                             // rect_spine_hops
+        ew_load_balance ? w_hops : e_hops,  // line_hops_alt
+        ew_load_balance ? w_hops : e_hops,  // rect_e_hops_alt
+        ew_load_balance ? e_hops : w_hops,  // rect_w_hops_alt
+        ns_load_balance ? n_hops : s_hops,  // rect_spine_hops_alt
     };
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_args);
 
-    // Writer kernel
+    // Writer (covers backward directions W-line + N-rect)
     std::vector<uint32_t> writer_compile_args = {
-        cb0_id,                                                 // cb0_id
-        kernel_output_page_size,                                // kernel-visible page size = min(input, output)
-        output_pages_per_stripe,                                // stripe length (writes before a stripe jump)
-        output_page_stripe_jump,                                // value added to page_id at stripe boundary
-        cb_page_size,                                           // cb entry size
-        packet_size,                                            // packet_size
-        backward_coord.has_value() ? num_targets_backward : 0,  // range_hops (in writer's direction)
-        forward_coord.has_value() ? num_targets_forward : 0,    // range_hops alternate (opposite dir)
-        load_balance_across_alt_routes,                         // load_balance_across_alt_routes
-        backward_coord.has_value(),                             // num_connections (0 = no neighbor)
+        cb0_id,                             // cb0_id
+        kernel_output_page_size,            // kernel-visible page size = min(input, output)
+        output_pages_per_stripe,            // stripe length (writes before a stripe jump)
+        output_page_stripe_jump,            // value added to page_id at stripe boundary
+        cb_page_size,                       // cb entry size
+        packet_size,                        // packet_size
+        load_balance_across_alt_routes,     // load_balance_across_alt_routes
+        (w_hops > 0) + (n_hops > 0),        // num_connections
+        w_hops,                             // line_hops
+        e_hops,                             // rect_e_hops
+        w_hops,                             // rect_w_hops
+        n_hops,                             // rect_spine_hops
+        ew_load_balance ? e_hops : w_hops,  // line_hops_alt
+        ew_load_balance ? w_hops : e_hops,  // rect_e_hops_alt
+        ew_load_balance ? e_hops : w_hops,  // rect_w_hops_alt
+        ns_load_balance ? s_hops : n_hops,  // rect_spine_hops_alt
     };
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
 
@@ -324,8 +394,11 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
         // Reader of first worker is the sole owner of both global semaphores: it fires its forward sem
         // contributions, then waits + resets. Writer just fires + local-incs its backward sem contributions.
         bool owns_out_ready_sem = (link == 0);
-        // Per-link barrier fan-in = N-1 in every case
-        uint32_t barrier_wait_value = num_targets_forward + num_targets_backward;
+        // Per-link barrier fan-in = N-1 in every case. Every other chip sends me one atomic_inc:
+        //   1D: e_hops + w_hops (or n_hops + s_hops) along the active axis = axis_size - 1.
+        //   2D: every chip in the mesh outside me is covered by exactly one of the 4 mcast packets.
+        // Both equal num_devices - 1.
+        uint32_t barrier_wait_value = num_devices - 1;
         // Per-link out_ready fan-in at link-0 drain_sync_core:
         //   num_links * (N-1 remote mcast hits + 2 local incs from reader and writer).
         uint32_t out_ready_sem_wait_value = operation_attributes.num_links * (num_devices + 1);
@@ -351,16 +424,25 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
             barrier_wait_value,                 // barrier_wait_value
         };
         const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
-        if (forward_coord.has_value()) {
-            const auto dst_node = mesh_device->get_fabric_node_id(forward_coord.value());
+        // Reader: E first, then S. Order must match the kernel's ranges[] construction
+        // (which packs E-line into slot 0, S-rect into slot 1 when both are active).
+        std::vector<tt::tt_fabric::FabricNodeId> reader_dst_nodes;
+        if (e_hops > 0 && e_coord.has_value()) {
+            reader_dst_nodes.push_back(mesh_device->get_fabric_node_id(*e_coord));
+        }
+        if (s_hops > 0 && s_coord.has_value()) {
+            reader_dst_nodes.push_back(mesh_device->get_fabric_node_id(*s_coord));
+        }
+        if (!reader_dst_nodes.empty()) {
             append_routing_plane_connection_manager_rt_args(
                 sender_fabric_node_id,
-                {dst_node},
+                reader_dst_nodes,
                 {link},
                 program,
                 worker_sender_reader_kernel_id,
                 {core},
-                reader_rt_args);
+                reader_rt_args,
+                fabric_is_2d ? tt::tt_fabric::FabricApiType::Mesh : tt::tt_fabric::FabricApiType::Linear);
         }
 
         std::vector<uint32_t> writer_rt_args = {
@@ -378,16 +460,25 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
             barrier_core.y,                     // barrier_sem_noc0_y
         };
 
-        if (backward_coord.has_value()) {
-            const auto dst_node = mesh_device->get_fabric_node_id(backward_coord.value());
+        // Writer: W first, then N. Order must match the kernel's ranges[] construction
+        // (which packs W-line into slot 0, N-rect into slot 1 when both are active).
+        std::vector<tt::tt_fabric::FabricNodeId> writer_dst_nodes;
+        if (w_hops > 0 && w_coord.has_value()) {
+            writer_dst_nodes.push_back(mesh_device->get_fabric_node_id(*w_coord));
+        }
+        if (n_hops > 0 && n_coord.has_value()) {
+            writer_dst_nodes.push_back(mesh_device->get_fabric_node_id(*n_coord));
+        }
+        if (!writer_dst_nodes.empty()) {
             append_routing_plane_connection_manager_rt_args(
                 sender_fabric_node_id,
-                {dst_node},
+                writer_dst_nodes,
                 {link},
                 program,
                 worker_sender_writer_kernel_id,
                 {core},
-                writer_rt_args);
+                writer_rt_args,
+                fabric_is_2d ? tt::tt_fabric::FabricApiType::Mesh : tt::tt_fabric::FabricApiType::Linear);
         }
 
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_reader_kernel_id, {core}, reader_rt_args);

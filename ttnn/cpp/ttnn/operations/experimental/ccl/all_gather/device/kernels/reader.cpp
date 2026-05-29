@@ -10,7 +10,6 @@
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/routing_plane_connection_manager.hpp"
-#include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 
 #include <cstdint>
@@ -22,7 +21,6 @@
 // #include "api/debug/device_print.h"
 
 using address_t = uint32_t;
-using namespace tt::tt_fabric::linear::experimental;
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -35,11 +33,17 @@ void kernel_main() {
     constexpr uint32_t output_page_stripe_jump = get_compile_time_arg_val(4);
     constexpr uint32_t cb_page_size = get_compile_time_arg_val(5);
     constexpr uint32_t packet_size = get_compile_time_arg_val(6);
-    constexpr uint8_t range_hops = get_compile_time_arg_val(7);
-    constexpr uint8_t range_hops_alt = get_compile_time_arg_val(8);
-    constexpr bool load_balance_across_alt_routes = get_compile_time_arg_val(9) != 0;
-    constexpr uint32_t num_connections = get_compile_time_arg_val(10);
-    constexpr auto input_tensor_args = TensorAccessorArgs<11>();
+    constexpr bool load_balance_across_alt_routes = get_compile_time_arg_val(7) != 0;
+    constexpr uint32_t num_connections = get_compile_time_arg_val(8);
+    constexpr uint8_t line_hops = get_compile_time_arg_val(9);
+    constexpr uint8_t rect_e_hops = get_compile_time_arg_val(10);
+    constexpr uint8_t rect_w_hops = get_compile_time_arg_val(11);
+    constexpr uint8_t rect_spine_hops = get_compile_time_arg_val(12);
+    constexpr uint8_t line_hops_alt = get_compile_time_arg_val(13);
+    constexpr uint8_t rect_e_hops_alt = get_compile_time_arg_val(14);
+    constexpr uint8_t rect_w_hops_alt = get_compile_time_arg_val(15);
+    constexpr uint8_t rect_spine_hops_alt = get_compile_time_arg_val(16);
+    constexpr auto input_tensor_args = TensorAccessorArgs<17>();
     constexpr auto output_tensor_args = TensorAccessorArgs<input_tensor_args.next_compile_time_args_offset()>();
 
     constexpr bool enable_fabric = (num_connections > 0);
@@ -86,8 +90,32 @@ void kernel_main() {
         open_connections(fabric_connection, num_connections, arg_for_fab);
     }
 
+    // Build ranges + ranges_alt arrays.
+    // Connection order should match host: line first, then rect (only active ones are present,
+    // indexed 0..num_connections-1).
+    FabricRange ranges[2] = {};      // [0] = E-line, [1] = S-rect (Fabric_2D only)
+    FabricRange ranges_alt[2] = {};  // [0] = E-line, [1] = S-rect (Fabric_2D only)
+#ifdef FABRIC_2D
+    {
+        uint32_t idx = 0;
+        if constexpr (line_hops > 0) {
+            ranges[idx] = FabricRange{line_hops, 0, 0, 0};
+            ranges_alt[idx] = FabricRange{line_hops_alt, 0, 0, 0};
+            ++idx;
+        }
+        if constexpr (rect_spine_hops > 0) {
+            ranges[idx] = FabricRange{rect_e_hops, rect_w_hops, 0, rect_spine_hops};
+            ranges_alt[idx] = FabricRange{rect_e_hops_alt, rect_w_hops_alt, 0, rect_spine_hops_alt};
+            ++idx;
+        }
+    }
+#else
+    // 1D: exactly one of (line_hops, rect_spine_hops) is nonzero — that's the active axis.
+    ranges[0] = (line_hops != 0) ? line_hops : rect_spine_hops;
+    ranges_alt[0] = (line_hops != 0) ? line_hops_alt : rect_spine_hops_alt;
+#endif
     FabricWriter<output_page_size, packet_size, load_balance_across_alt_routes> fabric(
-        noc, fabric_connection, num_connections, range_hops, range_hops_alt);
+        noc, fabric_connection, num_connections, ranges, ranges_alt);
 
     // Startup barrier.
     // Reader fires forward, and also owns sem wait + reset.
@@ -96,19 +124,21 @@ void kernel_main() {
     uint64_t barrier_sem_noc_addr_in_pkt = safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, barrier_sem, 0);
     if constexpr (enable_fabric) {
         sem_route_id = PacketHeaderPool::allocate_header_n(num_connections);
-        std::array starts = {static_cast<uint8_t>(1)};
-        std::array ranges = {range_hops};
-        fabric_multicast_noc_unicast_atomic_inc_set_state<
+        uint8_t starts[1] = {1};
+
+        fabric_api::fabric_multicast_noc_unicast_atomic_inc_set_state<
             UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
             fabric_connection,
             sem_route_id,
-            starts.data(),
-            ranges.data(),
+#ifndef FABRIC_2D
+            starts,
+#endif
+            ranges,
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
                 0u,    // ignore
                 1u});  // increment 1
 
-        fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+        fabric_api::fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
             fabric_connection,
             sem_route_id,
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0});
@@ -202,7 +232,7 @@ void kernel_main() {
                 // Send Fabric data in our dir
                 for (uint32_t i = 0; i < outputs_per_cb_page && valid_output_page_id(); ++i) {
                     auto page_id = next_output_page_id();
-                    auto fabric_tensor_page_addr = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                    auto fabric_tensor_page_addr = tt::tt_fabric::addrgen_detail::get_noc_address(
                         output_tensor_accessor, page_id, output_page_byte_offset);
                     fabric.send(l1_read_addr, fabric_tensor_page_addr);
                     l1_read_addr += output_page_size;
@@ -231,7 +261,7 @@ void kernel_main() {
             // Send Fabric data in our dir
             for (uint32_t i = 0; i < outputs_per_cb_page && valid_output_page_id(); ++i) {
                 auto page_id = next_output_page_id();
-                auto fabric_tensor_page_addr = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                auto fabric_tensor_page_addr = tt::tt_fabric::addrgen_detail::get_noc_address(
                     output_tensor_accessor, page_id, output_page_byte_offset);
                 fabric.send(l1_read_addr, fabric_tensor_page_addr);
                 l1_read_addr += output_page_size;
@@ -283,7 +313,7 @@ void kernel_main() {
     if constexpr (enable_fabric) {
         uint64_t out_ready_sem_noc_addr_in_pkt =
             safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr, 0);
-        fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+        fabric_api::fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
             fabric_connection,
             sem_route_id,
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
