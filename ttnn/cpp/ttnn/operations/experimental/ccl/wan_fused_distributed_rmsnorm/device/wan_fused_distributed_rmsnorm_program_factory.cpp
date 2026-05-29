@@ -763,6 +763,7 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         args.num_heads_per_device,
         static_cast<uint32_t>(per_token_weight),
         static_cast<uint32_t>(per_token_bias),
+        float_to_u32(args.epsilon),  // eps_bits: fp32 scalar for fused +eps in reduce post-op
     };
 
     // Float32 input requires fp32 dest accumulation; otherwise the unpacker
