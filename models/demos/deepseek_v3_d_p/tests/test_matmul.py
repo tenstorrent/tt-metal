@@ -348,7 +348,7 @@ def test_matmul_subblocks(mesh_device, in0_block_w, out_subblock_h, out_subblock
 
     # in0_shape = [1, 1, 768, 7168]
     # in1_shape = [1, 1, 7168, 2048]
-    in0_shape = [1, 1, 32, 2048]
+    in0_shape = [1, 1, 768, 2048]
     in1_shape = [1, 1, 2048, 7168]
 
     in0_torch = torch.randn(in0_shape).bfloat16().float()
