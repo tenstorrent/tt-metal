@@ -34,6 +34,7 @@
 #include "api/compute/reduce.h"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/layernorm.h"
 #include "api/compute/matmul.h"
 #include "api/compute/transpose_wh.h"
@@ -98,6 +99,10 @@ void kernel_main() {
     // pops the row's weight/bias tiles at end of each row in the chunk.
     constexpr uint32_t per_token_weight = get_compile_time_arg_val(32);
     constexpr uint32_t per_token_bias = get_compile_time_arg_val(33);
+    // Bit-packed fp32 epsilon for the fused +eps SFPU scalar-add in the reduce
+    // post-op (replaces the prior bf16 epsilon_cb add_tiles path; fp32 is at
+    // least as precise).
+    constexpr uint32_t eps_bits = get_compile_time_arg_val(34);
 
     constexpr uint32_t stats_dest_cb = (is_tp_1 != 0) ? stats_gathered_cb : stats_local_cb;
     // Per-row post reduce reads ring_size tiles. With packed AG enabled the
@@ -242,36 +247,37 @@ void kernel_main() {
                         // (strided stores), so reduce<AVG,REDUCE_ROW> over the row of
                         // ring_size tiles runs on stats_gathered_cb unchanged. For the
                         // per-head path each head's stat is a single tile.
+                        // Fused reduce + eps + rsqrt: the post_reduce_op runs on DST
+                        // (after reduce math, before pack) so we drop a separate
+                        // tile_regs cycle, a reduce_result_cb round-trip, and the two
+                        // eps reconfigs per row. fp32 scalar eps >= the prior bf16
+                        // epsilon_cb add in precision, and rsqrt sees the un-truncated
+                        // fp32 mean still in DST.
+                        auto eps_rsqrt = [](uint32_t dst_idx) {
+                            binop_with_scalar_tile_init();
+                            add_unary_tile(dst_idx, eps_bits);
+                            rsqrt_tile_init<use_legacy_rsqrt>();
+                            rsqrt_tile<use_legacy_rsqrt>(dst_idx);
+                        };
                         if constexpr (per_head_norm != 0) {
                             compute_kernel_lib::reduce<PoolType::AVG, ReduceDim::REDUCE_ROW>(
                                 stats_gathered_cb,
                                 reduce_scalar_avg_cb,
                                 reduce_result_cb,
-                                compute_kernel_lib::ReduceInputBlockShape::single());
+                                compute_kernel_lib::ReduceInputBlockShape::single(),
+                                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                                compute_kernel_lib::NoAccumulation{},
+                                eps_rsqrt);
                         } else {
                             compute_kernel_lib::reduce<PoolType::AVG, ReduceDim::REDUCE_ROW>(
                                 stats_gathered_cb,
                                 reduce_scalar_avg_cb,
                                 reduce_result_cb,
-                                compute_kernel_lib::ReduceInputBlockShape::row(stats_tiles_cols));
+                                compute_kernel_lib::ReduceInputBlockShape::row(stats_tiles_cols),
+                                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                                compute_kernel_lib::NoAccumulation{},
+                                eps_rsqrt);
                         }
-
-                        // mean + eps; rsqrt → reduce_result_cb (in-place)
-                        cb_wait_front(reduce_result_cb, 1);
-                        reconfig_data_format(reduce_result_cb, epsilon_cb);
-                        pack_reconfig_data_format(reduce_result_cb);
-                        add_tiles_init(reduce_result_cb, epsilon_cb);
-                        tile_regs_acquire();
-                        add_tiles(reduce_result_cb, epsilon_cb, 0, 0, 0);
-                        rsqrt_tile_init<use_legacy_rsqrt>();
-                        rsqrt_tile<use_legacy_rsqrt>(0);
-                        tile_regs_commit();
-                        cb_pop_front(reduce_result_cb, 1);
-                        cb_reserve_back(reduce_result_cb, 1);
-                        tile_regs_wait();
-                        pack_tile(0, reduce_result_cb);
-                        tile_regs_release();
-                        cb_push_back(reduce_result_cb, 1);
 
                         cb_wait_front(reduce_result_cb, 1);
 

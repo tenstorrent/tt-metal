@@ -312,3 +312,48 @@ invocations (run_host_id 5123–5130 = the 8 mesh chips):
 
 The six POST sub-zones are left in the kernel alongside the three coarse
 zones (zero-cost when the profiler is disabled).
+
+## Opt 1: fuse reduce + eps + rsqrt via post_reduce_op (2026-05-29)
+
+P_NORM was 38% of POST and the largest single bucket. Its per-row cost
+included a *separate* tile_regs cycle for the `mean + eps; rsqrt` step:
+`add_tiles(reduce_result_cb, epsilon_cb)` → `rsqrt_tile` → pack → a
+`reduce_result_cb` push/pop round-trip → a re-`cb_wait_front`, plus two
+`reconfig_data_format` calls. That is a full DST acquire/commit/pack cycle
+spent on one scalar per row.
+
+**Change:** moved `+eps` and `rsqrt` into the reduce helper's
+`post_reduce_op` callback, so they run on DST *after the reduce math,
+before the pack* — inside the reduce's own tile_regs cycle. The separate
+cycle, the CB round-trip, and the two eps reconfigs are gone. `+eps` is now
+an SFPU scalar add (`add_unary_tile(dst_idx, eps_bits)`, fp32 scalar passed
+as a compile-time arg) instead of a bf16 `epsilon_cb` `add_tiles`.
+
+**Fidelity:** unchanged or better — the eps scalar is now fp32 (was bf16
+`epsilon_cb`), and `rsqrt` sees the un-truncated fp32 mean still resident in
+DST. Same HiFi4, same per-element op order. Correctness preserved:
+COMPOSITE_VS_FUSED PCC 99.9955% (N2368) / 99.9932% (N12400); assert_quality
+PCC 99.9996% — both unchanged vs pre-fusion.
+
+**Perf (TP=4 LINE, BH 2x4), fused_us before → after / new speedup:**
+
+| config | fused before | fused after | speedup |
+|---|---|---|---|
+| self_sp4_N18944  (RoPE) | 416.4 | 413.2 | 1.61× |
+| self_sp8_N9472   (RoPE) | 271.0 | 271.7 | 1.23× |
+| self_sp32_N2368  (RoPE) | 124.3 | 124.5 | 0.87× |
+| cross_q_sp4_N18944      | 344.8 | 346.2 | 1.72× |
+| cross_q_sp8_N9472       | 216.2 | 219.0 | 1.35× |
+| cross_q_sp32_N2368      |  90.5 |  87.4 | 1.12× |
+| cross_k_prompt_L512     |  53.3 |  42.6 | 1.22× |
+
+The win lands where P_NORM is the biggest POST fraction — the **no-RoPE**
+shapes. **L512 jumped 20% (0.97→1.22×, now over 1.0×)**; cross_q N2368
++3.4% (1.08→1.12×). RoPE shapes are flat: their POST is dominated by the
+RoPE matmul + output-drain back-pressure, not norm, so removing norm fixed
+cost barely moves them. Composite numbers reproduced near-exactly (663.4 vs
+663.6), confirming the deltas are real, not run-to-run noise.
+
+**Still short of targets** (small 1.5×, large 3×). N2368-RoPE (0.87×) is the
+worst — its time is RoPE/drain-bound, addressed by the next opts (pass
+fusion of the weight/RoPE muls; output-drain mitigation).
