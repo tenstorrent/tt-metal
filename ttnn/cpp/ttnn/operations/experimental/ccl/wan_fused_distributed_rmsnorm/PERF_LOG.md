@@ -256,3 +256,59 @@ Current 1.59× is at the structural DRAM-traffic ceiling.**
 The 3 coarse zones are kept in the kernel (zero-cost when the profiler is
 disabled; the SDPA compute kernel keeps zones the same way) for future
 re-profiling.
+
+## POST decomposition (2026-05-29) — where exactly does POST's 63% go?
+
+Per the user's follow-up ("dig deeper into POST — is it weight-input wait,
+rope-input wait, weight+rope math, output-CB drain, or something else?"),
+split RMS_POST into six per-row sub-zones mapping 1:1 to the POST
+sub-phases. Same test (N12400, TP=4 LINE, RoPE, non-traced, 64 workers,
+num_links=2). Sub-zone sum reproduces RMS_POST to **99%** (no blind spot).
+Means/max/min are per-core totals over all chunks, averaged across 8 op
+invocations (run_host_id 5123–5130 = the 8 mesh chips):
+
+| sub-zone | mean us | max us | min us | share of POST | what it is |
+|---|---|---|---|---|---|
+| P_NORM   | 166 | 276 |  98 | 38% | reduce<AVG>(stats) + eps + rsqrt + first ×(1/rms) pass over all 40 cols |
+| P_WEIGHT |  46 |  68 |  30 | 10% | weight wait + ×weight (mul_tiles_bcast_rows, 40 cols) |
+| P_MM     |  36 |  53 |  24 |  8% | RoPE rotate matmul (×trans_mat, 40 cols) |
+| P_COS    |  48 |  71 |  32 | 11% | cos wait + ×cos (40 cols) |
+| P_SIN    |  46 |  68 |  30 | 10% | sin wait + ×sin (40 cols) |
+| P_ADD    |  95 | 223 |  38 | 22% | add(rot,unrot)→output + **output_cb drain back-pressure** |
+| RMS_POST | 440 | 599 | 321 | 100% | (sum = 440 ≈ RMS_POST) |
+
+### Direct answer to "where does POST time go"
+- **Normalization math (P_NORM): 38% — the single biggest bucket.** This
+  is NOT a wait: input_cb is already resident (PRE didn't pop it) and stats
+  are already gathered (AGWAIT covered that). It's the reduce<AVG> + the
+  serial eps→rsqrt dependency chain (tile_regs round-trip + a mid-chain
+  `cb_wait_front(reduce_result_cb)` per row) + the first full ×(1/rms) pass
+  over all 40 col-tiles. Genuine TRISC compute.
+- **Weight + RoPE math (P_WEIGHT+P_MM+P_COS+P_SIN): 39%.** Four separate
+  full 40-col passes, each with its own reconfig + tile_regs cycle. The
+  side-input waits folded in here (weight/cos/sin from the reader) are
+  small — these are math-dominated, not input-wait-dominated. So the
+  "rope-input wait" / "weight-input wait" buckets the question asked about
+  are *not* where the time is.
+- **Output-CB drain (P_ADD): 22%.** The add itself is trivial (40 adds);
+  nearly all of P_ADD is `cb_reserve_back(output_cb)` back-pressure waiting
+  for the writer to drain output to DRAM. **Smoking gun: P_ADD has the
+  widest core-to-core spread of any zone — 38→223 us, 5.9×.** That extreme
+  variance is the signature of contention on a shared resource (DRAM write
+  bandwidth across all 64 workers), which is exactly what explains the
+  sublinear core-scaling the worker sweep found. This is the "it can't all
+  be compute" portion: ~22% is DRAM-write back-pressure, not math.
+
+### Implications for the next step (no change made yet — awaiting go-ahead)
+- The 22% output-drain (P_ADD) is shared-DRAM-write-bound at fixed output
+  volume — hard to beat without writing less or rescheduling writes.
+- The compute buckets (P_NORM 38% + weight/rope 39%) are 5 separate full
+  40-col passes, each paying loop + reconfig_data_format + tile_regs
+  fixed overhead. The cleanest fidelity-preserving lever is **pass fusion**:
+  e.g. fold ×(1/rms) (sub-phase 1) and ×weight (sub-phase 2) into one pass
+  (eliminates a full col-loop + a CB round-trip), and similarly chain the
+  two RoPE muls. This cuts fixed per-tile overhead without touching the
+  math precision (still HiFi4, same op order per element).
+
+The six POST sub-zones are left in the kernel alongside the three coarse
+zones (zero-cost when the profiler is disabled).
