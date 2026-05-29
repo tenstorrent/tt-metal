@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** p150 (blackhole)
 **Started:** 2026-05-29T00:11:46Z
-**Updated:** 2026-05-29T01:27:01Z
+**Updated:** 2026-05-29T01:31:57Z
 
 ## Block Status
 
@@ -66,7 +66,7 @@
 | attention | optimization | pending | — | 0 |  |
 | attention | real_weights | pending | — | 0 |  |
 | mlp | reference | done | 1.000000 | 0 | Qwen2MLP SwiGLU SiLU (gate/up/down 1536<->8960, no bias). PCC=1.0 vs HF. |
-| mlp | ttnn | pending | — | 0 |  |
+| mlp | ttnn | done | 0.999985 | 0 | Qwen2 SwiGLU MLP 1536<->8960 no bias; fused gate/up linear, on-device silu+mul; HiFi4+fp32_dest_acc. Guard ok. |
 | mlp | debug | n/a | — | 0 |  |
 | mlp | optimization | pending | — | 0 |  |
 | mlp | real_weights | pending | — | 0 |  |
@@ -94,7 +94,6 @@
 
 ## Recent Ticks
 
-- tick 8 (2026-05-29T00:52:15Z): device[vision_attention] — ok
 - tick 9 (2026-05-29T00:57:01Z): device[vision_mlp] — ok
 - tick 9 (2026-05-29T00:58:10Z): device[vision_mlp] — ok
 - tick 10 (2026-05-29T01:03:33Z): device[vision_block] — ok
@@ -104,6 +103,7 @@
 - tick 13 (2026-05-29T01:17:43Z): device[rmsnorm] — ok
 - tick 14 (2026-05-29T01:21:18Z): device[rope] — ok
 - tick 15 (2026-05-29T01:27:01Z): device[attention] — ok
+- tick 16 (2026-05-29T01:31:57Z): device[mlp] — ok
 
 ## Host-Resident Exceptions
 
