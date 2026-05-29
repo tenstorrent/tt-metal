@@ -356,20 +356,20 @@ void kernel_main() {
                     continue;
                 }
 
-                uint32_t dst_chip = meta0;
-                uint32_t output_page_idx = meta1 * num_experts_per_tok + meta2;
+                // uint32_t dst_chip = meta0;
+                // uint32_t output_page_idx = meta1 * num_experts_per_tok + meta2;
 
                 if constexpr (is_1d_topology<topology>()) {
-                    uint32_t route = get_route<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst_chip);
-                    uint32_t distance =
-                        manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst_chip);
+                    // uint32_t route = get_route<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst_chip);
+                    // uint32_t distance =
+                    //     manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst_chip);
 
                     cb_reserve_back(cb_route_info_id, 1);
                     uint32_t cb_base = get_write_ptr(cb_route_info_id);
                     volatile tt_l1_ptr uint32_t* route_info = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_base);
-                    route_info[0] = route;
-                    route_info[1] = distance;
-                    route_info[2] = output_page_idx;
+                    route_info[0] = meta0;  // route;
+                    route_info[1] = meta1;  // distance;
+                    route_info[2] = meta2;  // output_page_idx;
                     {
                         // DeviceZoneScopedN("sending-for-FABRIC-write");
                         uint32_t output_dst = cb_base + l1_alignment;

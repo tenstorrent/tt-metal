@@ -195,20 +195,28 @@ void kernel_main() {
     {
         DeviceZoneScopedN("combine-ethernet-flow");
         //  Sentinel-terminated fabric send loop
+        uint32_t cnt = 0;
         while (true) {
             cb_wait_front(cb_route_info_id, 1);
             uint32_t cb_base = get_read_ptr(cb_route_info_id);
             volatile tt_l1_ptr uint32_t* route_info = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_base);
-            uint32_t route = route_info[0];
+
+            uint32_t dst_chip = route_info[0];
+            // uint32_t route = route_info[0];
             {
                 // DeviceZoneScopedN("combine-waiting-for-route-info");
-                if (route == ROUTE_INFO_SENTINEL) {
+                if (dst_chip == ROUTE_INFO_SENTINEL) {
                     cb_pop_front(cb_route_info_id, 1);
                     break;
                 }
             }
-            uint32_t distance = route_info[1];
-            uint32_t output_page_idx = route_info[2];
+            uint32_t meta1 = route_info[1];
+            uint32_t meta2 = route_info[2];
+            uint32_t output_page_idx = meta1 * num_experts_per_tok + meta2;
+            uint32_t route = get_route<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst_chip);
+            uint32_t distance = manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst_chip);
+            // uint32_t distance = route_info[1];
+            // uint32_t output_page_idx = route_info[2];
             uint32_t output_data_addr = cb_base + l1_alignment;
 
             // DPRINT_COMBINE << "Fabric send: route=" << route << " distance=" << distance
