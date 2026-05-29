@@ -72,11 +72,14 @@ struct DataflowBufferSpec {
     // Optional; used to pass tile type info from host to kernel
     std::optional<tt::tt_metal::Tile> tile_format_metadata = std::nullopt;
 
-    // Optional override for how the compute engine interprets this DFB's tile faces.
+    // Optional override for this DFB's tile face layout.
     //
-    // By default the face layout is taken from `tile_format_metadata`. Set this when an operand's
-    // data is laid out with a non-default number of faces or rows-per-face (e.g. compact entries that
-    // only populate part of a tile) so the compute engine unpacks it correctly.
+    // A tile is physically stored as a grid of fixed-size sub-blocks called "faces". The compute
+    // engine normally infers how many faces a tile has, and how many rows each face holds, from
+    // `tile_format_metadata`. Set this field only when an entry does not occupy a full tile, so it
+    // holds fewer faces and/or shorter faces than the default; the compute engine then reads exactly
+    // that much data instead of a whole tile. `FaceGeometry` carries those two values (rows-per-face
+    // and number of faces).
     std::optional<FaceGeometry> unpack_face_geometry_metadata = std::nullopt;
 
     //////////////////////////////
