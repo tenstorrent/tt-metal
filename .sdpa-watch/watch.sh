@@ -82,7 +82,8 @@ for entry in "${PIPELINES[@]}"; do
   fi
 
   # New run_id but not yet completed (fresh trigger queued, or a re-attempt
-  # in flight). Reuse the previous cached block instead of analyzing.
+  # in flight). Prefer the previous cached block; if there is none, fall
+  # back to the latest *completed* run so we always show real data.
   if [[ "$status" != "completed" ]]; then
     cached=$(jq -r --arg w "$workflow" '.[$w].summary // ""' "$STATE")
     if [[ -n "$cached" ]]; then
@@ -90,9 +91,20 @@ for entry in "${PIPELINES[@]}"; do
       log "  run #$run_number is $status — reusing previous cached summary"
       continue
     fi
-    blocks+=("▸ *$display* — _run #$run_number $status, no prior data_")
-    log "  run #$run_number is $status, no cache available"
-    continue
+    log "  run #$run_number is $status with no cache — falling back to latest completed"
+    run=$(gh api "repos/$REPO/actions/workflows/$workflow/runs?branch=$BRANCH&status=completed&per_page=1" \
+          --jq '.workflow_runs[0]' 2>/dev/null || echo "null")
+    if [[ -z "$run" || "$run" == "null" ]]; then
+      blocks+=("▸ *$display* — _no completed runs on $BRANCH_")
+      log "  no completed runs found"
+      continue
+    fi
+    run_id=$(jq -r '.id'              <<<"$run")
+    status=$(jq -r '.status // "unknown"'     <<<"$run")
+    conclusion=$(jq -r '.conclusion // "unknown"' <<<"$run")
+    sha=$(jq -r '.head_sha'           <<<"$run")
+    url=$(jq -r '.html_url'           <<<"$run")
+    run_number=$(jq -r '.run_number'  <<<"$run")
   fi
 
   # Cache miss: fetch logs (only on failure) and commit range, run agent.
@@ -108,7 +120,15 @@ for entry in "${PIPELINES[@]}"; do
       combined=""
       while IFS=$'\t' read -r jid jname; do
         [[ -z "$jid" ]] && continue
-        jlog=$(gh api "repos/$REPO/actions/jobs/$jid/logs" 2>/dev/null | tail -c 12000)
+        jlog_full=$(gh api "repos/$REPO/actions/jobs/$jid/logs" 2>/dev/null)
+        # Long CI logs (10MB+) bury FAILED markers in the body while
+        # the last 12k is post-job docker cleanup. Grep for failure
+        # patterns with context — output size is bounded by the number
+        # of matches, not log size. Fall back to a 12k tail only if
+        # nothing matched, so timeout/cleanup signal still gets through.
+        jlog=$(printf '%s' "$jlog_full" \
+               | { grep -E -B 5 -A 100 '##\[error\]|FAILED |AssertionError|Traceback' || true; })
+        [[ -z "$jlog" ]] && jlog=$(printf '%s' "$jlog_full" | tail -c 12000)
         combined+="=== JOB: $jname ===
 $jlog
 
