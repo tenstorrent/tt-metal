@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-29T00:11:46Z",
-  "updated_at": "2026-05-29T04:22:04Z",
+  "updated_at": "2026-05-29T04:28:14Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -567,8 +567,15 @@
         "pcc": 0.9999999999999976
       },
       "real_weights": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/weight_loader.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_real_hf_weights.py"
+        ],
+        "notes": "rope is parameter-free; no checkpoint weights exist; params_loaded counts the config-derived inv_freq table (head_dim/2=64) that was materialized and validated against the real HF config (theta 1e6, head_dim 128, default rope -> attention_scaling 1.0). Validated TtRoPE cos/sin vs real HF Qwen2RotaryEmbedding built from the DotsOCRConfig read out of the real checkpoint config.json; PCC cos=0.9999999999999976 sin=0.9999999999999993 on p150.",
+        "pcc": 0.9999999999999976,
+        "params_loaded": 64
       }
     },
     {
@@ -1165,6 +1172,12 @@
       "tick": 43,
       "ts": "2026-05-29T04:22:04Z",
       "action": "device[rmsnorm]",
+      "result": "ok"
+    },
+    {
+      "tick": 44,
+      "ts": "2026-05-29T04:28:14Z",
+      "action": "device[rope]",
       "result": "ok"
     }
   ],

@@ -51,6 +51,7 @@ _tt_vision_patch_merger = _load_by_path("dots_tt_vision_patch_merger_rw", "visio
 _tt_vision_tower = _load_by_path("dots_tt_vision_tower_rw", "vision_tower.py", _TT_DIR)
 _tt_embedding = _load_by_path("dots_tt_embedding_rw", "embedding.py", _TT_DIR)
 _tt_rmsnorm_lm = _load_by_path("dots_tt_rmsnorm_rw", "rmsnorm.py", _TT_DIR)
+_tt_rope = _load_by_path("dots_tt_rope_rw", "rope.py", _TT_DIR)
 _loader = _load_by_path("dots_weight_loader", "weight_loader.py", _TT_DIR)
 _functional = _load_by_path("dots_reference_functional_rw", "functional.py", _REF_DIR)
 
@@ -62,6 +63,8 @@ TtVisionBlock = _tt_vision_block.TtVisionBlock
 TtVisionPatchMerger = _tt_vision_patch_merger.TtVisionPatchMerger
 TtVisionTower = _tt_vision_tower.TtVisionTower
 TtEmbedding = _tt_embedding.TtEmbedding
+TtRoPE = _tt_rope.TtRoPE
+load_lm_rope_config = _loader.load_lm_rope_config
 load_vision_rmsnorm_weight = _loader.load_vision_rmsnorm_weight
 load_embedding_weight = _loader.load_embedding_weight
 load_vision_attention_weights = _loader.load_vision_attention_weights
@@ -650,6 +653,99 @@ def test_real_hf_weights_rmsnorm(device):
     assert params_loaded > 0
 
 
+# LM RoPE (Qwen2 rotary embedding). PARAMETER-FREE: rope has NO learnable
+# checkpoint weights -- its inv_freq is a config-derived buffer (computed from
+# rope_theta and the per-head dim), not stored in the safetensors. So there are
+# zero checkpoint params to load. The "real-weights validation" for rope is
+# therefore: re-confirm the cos/sin tables generated on-device match the real HF
+# Qwen2RotaryEmbedding instantiated at the PRODUCTION config read from the real
+# checkpoint's config.json (rope_theta 1e6, head_dim 128, default rope ->
+# attention_scaling 1.0). params_loaded counts the config-derived inv_freq table
+# (head_dim/2 = 64) that the module materializes and validates -- a real
+# on-device tensor, even though it is config-derived not checkpoint-loaded.
+def _run_rope_pcc(device):
+    """Validate TtRoPE cos/sin against the real HF Qwen2RotaryEmbedding built
+    from the production config read out of the real checkpoint's config.json.
+
+    rope is parameter-free, so this loads the rope CONFIG (head_dim, rope_theta,
+    attention_scaling) from the real HF checkpoint rather than a weight tensor,
+    builds the HF Qwen2RotaryEmbedding at that config, and compares its cos/sin
+    to the on-device TtRoPE tables. Returns (pcc, params_loaded) where
+    params_loaded is the materialized inv_freq table count (head_dim/2).
+    """
+    from transformers.models.qwen2.configuration_qwen2 import Qwen2Config
+    from transformers.models.qwen2.modeling_qwen2 import Qwen2RotaryEmbedding
+
+    rope_cfg = load_lm_rope_config(CHECKPOINT_PATH)
+    head_dim = rope_cfg["head_dim"]
+    rope_theta = rope_cfg["rope_theta"]
+    attention_scaling = rope_cfg["attention_scaling"]
+    assert head_dim == 128, f"unexpected real rope head_dim {head_dim}"
+    assert rope_theta == 1000000.0, f"unexpected real rope_theta {rope_theta}"
+    assert attention_scaling == 1.0, f"unexpected real attention_scaling {attention_scaling}"
+
+    # HF reference: Qwen2RotaryEmbedding derives head_dim from
+    # hidden_size // num_attention_heads (1536 // 12 = 128) and reads rope_theta
+    # straight from the config, so a Qwen2Config carrying the real hyper-params
+    # reproduces the production rotary module exactly.
+    hf_cfg = Qwen2Config(
+        hidden_size=1536,
+        num_attention_heads=12,
+        num_key_value_heads=2,
+        rope_theta=rope_theta,
+        max_position_embeddings=131072,
+    )
+    hf_rope = Qwen2RotaryEmbedding(config=hf_cfg)
+    # inv_freq is the config-derived buffer the module materializes; head_dim/2.
+    params_loaded = int(hf_rope.inv_freq.numel())
+    assert params_loaded == head_dim // 2, (params_loaded, head_dim)
+
+    seq_len = 128
+    position_ids = torch.arange(seq_len, dtype=torch.int64).reshape(1, seq_len)
+    # HF rope: forward(x, position_ids) -> (cos, sin), x only supplies dtype/device.
+    dummy_x = torch.zeros(1, head_dim, dtype=torch.float32)
+    ref_cos, ref_sin = hf_rope(dummy_x, position_ids)
+    ref_cos = ref_cos.to(torch.float32)  # [1, seq, head_dim]
+    ref_sin = ref_sin.to(torch.float32)
+
+    tt_rope = TtRoPE(
+        device=device,
+        head_dim=head_dim,
+        rope_theta=rope_theta,
+        attention_scaling=attention_scaling,
+    )
+    pos = position_ids.to(torch.float32).reshape(1, 1, seq_len, 1)
+    tt_pos = ttnn.from_torch(
+        pos,
+        device=device,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_cos, tt_sin = tt_rope(tt_pos)
+    got_cos = ttnn.to_torch(tt_cos).to(torch.float32).reshape(ref_cos.shape)
+    got_sin = ttnn.to_torch(tt_sin).to(torch.float32).reshape(ref_sin.shape)
+
+    passing_cos, msg_cos = comp_pcc(ref_cos, got_cos, 0.99)
+    passing_sin, msg_sin = comp_pcc(ref_sin, got_sin, 0.99)
+    print(comp_allclose(ref_cos, got_cos))
+    print(comp_allclose(ref_sin, got_sin))
+    print(f"comp_pcc(rope/cos, real config): passing={passing_cos}, message={msg_cos}")
+    print(f"comp_pcc(rope/sin, real config): passing={passing_sin}, message={msg_sin}")
+    pcc_cos = float(str(msg_cos).split("PCC:")[-1].strip()) if "PCC:" in str(msg_cos) else float(msg_cos)
+    pcc_sin = float(str(msg_sin).split("PCC:")[-1].strip()) if "PCC:" in str(msg_sin) else float(msg_sin)
+    pcc = min(pcc_cos, pcc_sin)
+    print(f"real-config rope PCC (min cos/sin) = {pcc} | params_loaded (inv_freq) = {params_loaded}")
+    assert passing_cos, f"rope cos real-config PCC below 0.99: {msg_cos}"
+    assert passing_sin, f"rope sin real-config PCC below 0.99: {msg_sin}"
+    return pcc, params_loaded
+
+
+def test_real_hf_weights_rope(device):
+    pcc, params_loaded = _run_rope_pcc(device)
+    assert params_loaded > 0
+
+
 if __name__ == "__main__":
     dev = ttnn.open_device(device_id=0, l1_small_size=32768)
     try:
@@ -661,5 +757,6 @@ if __name__ == "__main__":
         _run_vision_tower_pcc(dev)
         _run_embedding_pcc(dev)
         _run_lm_rmsnorm_pcc(dev)
+        _run_rope_pcc(dev)
     finally:
         ttnn.close_device(dev)

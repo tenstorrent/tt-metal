@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** p150 (blackhole)
 **Started:** 2026-05-29T00:11:46Z
-**Updated:** 2026-05-29T04:22:04Z
+**Updated:** 2026-05-29T04:28:14Z
 
 ## Block Status
 
@@ -59,7 +59,7 @@
 | rope | ttnn | done | 1.000000 | 0 | Qwen2 LM RoPE cos/sin tables (theta 1e6, head_dim 128). On-device outer(pos,inv_freq)->cat->cos/sin, fp32. PCC cos=1.0 sin=1.0 vs golden. |
 | rope | debug | n/a | — | 0 |  |
 | rope | optimization | done | 1.000000 | 0 | Tracy traced: 4 ops (multiply 64->70%, cos/sin Unary 25->22%, concat 10->7%). All output was 100% DRAM-interleaved; pinned the whole chain to L1 (memory_config=L1 on multiply/concat/cos/sin). Layout flipped 100% DRAM->100% L1; total kernel 27686->25366 ns (-8.4%); concat -36%, cos/sin -18%. PCC cos=1.0 sin=1.0 (min 0.9999999999999976) unchanged. |
-| rope | real_weights | pending | — | 0 |  |
+| rope | real_weights | done | 1.000000 | 0 | rope is parameter-free; no checkpoint weights exist; params_loaded counts the config-derived inv_freq table (head_dim/2=64) that was materialized and validated against the real HF config (theta 1e6, head_dim 128, default rope -> attention_scaling 1.0). Validated TtRoPE cos/sin vs real HF Qwen2RotaryEmbedding built from the DotsOCRConfig read out of the real checkpoint config.json; PCC cos=0.9999999999999976 sin=0.9999999999999993 on p150. |
 | attention | reference | done | 1.000000 | 0 | Qwen2Attention (GQA 12/2, head_dim 128, QKV bias, o_proj no bias, 1D RoPE, causal eager). PCC=1.0 vs HF eager. |
 | attention | ttnn | done | 0.999989 | 0 | GQA 12/2 head_dim 128, QKV bias, o_proj no bias, 1D RoPE theta 1e6, causal additive mask. Manual head split (fused cat[Wq,Wk,Wv]), repeat_kv n_rep=6, HiFi4+fp32_dest_acc. |
 | attention | debug | n/a | — | 0 |  |
@@ -94,7 +94,6 @@
 
 ## Recent Ticks
 
-- tick 34 (2026-05-29T03:27:29Z): device[lm_head] — ok
 - tick 35 (2026-05-29T03:35:03Z): device[language_model] — ok
 - tick 36 (2026-05-29T03:41:01Z): device[vision_rmsnorm] — ok
 - tick 37 (2026-05-29T03:47:35Z): device[vision_attention] — ok
@@ -104,6 +103,7 @@
 - tick 41 (2026-05-29T04:10:59Z): device[vision_tower] — ok
 - tick 42 (2026-05-29T04:16:28Z): device[embedding] — ok
 - tick 43 (2026-05-29T04:22:04Z): device[rmsnorm] — ok
+- tick 44 (2026-05-29T04:28:14Z): device[rope] — ok
 
 ## Host-Resident Exceptions
 

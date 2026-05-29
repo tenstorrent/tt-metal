@@ -285,6 +285,46 @@ def load_lm_rmsnorm_weight(checkpoint_path: str, hf_key: str = "model.layers.0.i
     return tensors[hf_key]
 
 
+def load_lm_rope_config(checkpoint_path: str) -> Dict[str, float]:
+    """Read the LM rotary-embedding config from the real HF checkpoint.
+
+    The dots.ocr language-model RoPE (a Qwen2 rotary embedding) is
+    PARAMETER-FREE: it has NO learnable checkpoint weights. Its ``inv_freq``
+    table is a config-derived buffer (computed from ``rope_theta`` and the
+    per-head dimension), not stored in the safetensors. So unlike every other
+    block this loader does not pull a tensor from the shards -- it reads the
+    rope hyper-parameters from ``config.json`` and derives ``head_dim`` /
+    ``rope_theta`` / ``attention_scaling`` exactly as HF's Qwen2RotaryEmbedding
+    does, so the on-device table generator can be validated at the production
+    config.
+
+    ``head_dim`` follows HF: an explicit ``config.head_dim`` if present, else
+    ``hidden_size // num_attention_heads``. For dots.ocr that is
+    ``1536 // 12 = 128``. ``rope_theta`` is ``1e6``. ``rope_scaling`` is
+    ``None`` (default rope), so ``attention_scaling = 1.0``.
+
+    Returns:
+        dict with float ``head_dim``, ``rope_theta``, ``attention_scaling``.
+    """
+    config_path = os.path.join(checkpoint_path, "config.json")
+    with open(config_path) as f:
+        cfg = json.load(f)
+    head_dim = cfg.get("head_dim")
+    if head_dim is None:
+        head_dim = cfg["hidden_size"] // cfg["num_attention_heads"]
+    rope_theta = float(cfg["rope_theta"])
+    # Default rope (rope_scaling None / type "default") => attention_scaling 1.0.
+    rope_scaling = cfg.get("rope_scaling")
+    attention_scaling = 1.0
+    if rope_scaling is not None and rope_scaling.get("rope_type", rope_scaling.get("type")) not in (None, "default"):
+        raise NotImplementedError(f"non-default rope_scaling not supported: {rope_scaling}")
+    return {
+        "head_dim": int(head_dim),
+        "rope_theta": rope_theta,
+        "attention_scaling": attention_scaling,
+    }
+
+
 def load_vision_tower_weights(checkpoint_path: str, num_layers: int) -> Dict[str, torch.Tensor]:
     """Load the full DotsVisionTransformer (vision tower) real weights.
 
