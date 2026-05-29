@@ -43,6 +43,7 @@ class ModelPipeline:
         model_path: Path | None = None,
         lm_head_fp32_dest_acc_en: bool = True,
         lm_head_persistent_mode: bool = True,
+        seed: int = 520,
         dense_layer_id_override: int | None = None,
         moe_layer_id_override: int | None = None,
         io_socket_descriptor_prefix: str | None = None,
@@ -59,8 +60,9 @@ class ModelPipeline:
         bspm_budget: float = 3.5,
     ):
         logger.info(
-            "Initializing DeepSeek V3 B1 pod pipeline (weights={}, lm_head_fp32={}, lm_head_persistent_mode={}, speculative_decode={})",
+            "Initializing DeepSeek V3 B1 pod pipeline (weights={}, seed={}, lm_head_fp32={}, lm_head_persistent_mode={}, speculative_decode={})",
             weights_mode,
+            seed,
             lm_head_fp32_dest_acc_en,
             lm_head_persistent_mode,
             enable_speculative_decode,
@@ -140,6 +142,7 @@ class ModelPipeline:
             )
         elif weights_mode == "synthetic":
             provider = SyntheticWeightProvider(
+                seed=seed,
                 bspm_dir=bspm_dir,
                 bspm_variant=bspm_variant,
                 bspm_budget=bspm_budget,
