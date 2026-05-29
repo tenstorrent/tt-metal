@@ -391,17 +391,36 @@ def _mlp_wi_program_config(mesh_device, max_seq_len, max_batch_size, *, hidden_s
 
 
 def _b1s512_mlp_wi_program_config(mesh_device, *, hidden_size, intermediate_size):
-    core_grid = _matmul_core_grid(mesh_device, 512, 1)
+    # MLPwi (FF1, 512x1024x4096 +GELU) is the largest B1/S512 matmul. A 120-core
+    # sweep (sweep_mlp_120cores.py) showed 12x10 beats 11x10 by ~6.9% for this op
+    # only (25.2us vs 27.1us standalone): widening to 12 wide makes per_core_N=11
+    # and fills 96 cores instead of 88. Since per_core_N=11 is not divisible by 2,
+    # the winning subblock is 2x1 (not 1x2). MLPwo/AttnOut showed no gain (N=1024
+    # gives per_core_N=3 at both 11 and 12 wide), so they stay at 11x10.
+    #
+    # Guard: only use 12 wide when the device actually exposes >=12 columns
+    # (Galaxy Blackhole). On an 11-wide device (P150x8 dev box) fall back to the
+    # original 11x10 / sub 1x2 config so this stays portable.
     hidden_tiles = hidden_size // 32
     m_tiles = 512 // 32
     intermediate_tiles = intermediate_size // 32
+    try:
+        dev_gx = int(mesh_device.compute_with_storage_grid_size().x)
+    except Exception:
+        dev_gx = 11
+    if dev_gx >= 12:
+        grid_x, grid_y = 12, 10
+        out_subblock_h, out_subblock_w = 2, 1
+    else:
+        grid_x, grid_y = 11, 10
+        out_subblock_h, out_subblock_w = 1, 2
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(core_grid.x, core_grid.y),
+        compute_with_storage_grid_size=(grid_x, grid_y),
         in0_block_w=min(4, hidden_tiles),
-        out_subblock_h=1,
-        out_subblock_w=2,
-        per_core_M=(m_tiles + core_grid.y - 1) // core_grid.y,
-        per_core_N=(intermediate_tiles + core_grid.x - 1) // core_grid.x,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=(m_tiles + grid_y - 1) // grid_y,
+        per_core_N=(intermediate_tiles + grid_x - 1) // grid_x,
         transpose_mcast=False,
         fused_activation=(ttnn.UnaryOpType.GELU, True),
     )
