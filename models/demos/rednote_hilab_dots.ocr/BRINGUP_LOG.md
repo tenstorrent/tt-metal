@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** p150 (blackhole)
 **Started:** 2026-05-29T00:11:46Z
-**Updated:** 2026-05-29T01:51:14Z
+**Updated:** 2026-05-29T01:54:57Z
 
 ## Block Status
 
@@ -41,7 +41,7 @@
 | vision_patch_merger | optimization | pending | — | 0 |  |
 | vision_patch_merger | real_weights | pending | — | 0 |  |
 | vision_tower | reference | done | 1.000000 | 0 | Full DotsVisionTransformer tested at REDUCED 2 layers (full=42, grid 1x4x4=16 patches, bf16=False fp32 path). PCC=1.0 vs HF. Full-depth check deferred to real_weights. |
-| vision_tower | ttnn | pending | — | 0 |  |
+| vision_tower | ttnn | done | 0.999982 | 0 | Full DotsVisionTransformer assembly at REDUCED 2 layers (full=42), grid 1x4x4=16 patches. Composes verified TtVisionBlock x2 (pre-norm residual, 2D vision RoPE theta 1e4, block-diagonal cu_seqlens attn) -> post_trunk TtVisionRMSNorm (eps 1e-5) -> TtVisionPatchMerger (LayerNorm eps 1e-6 + GELU MLP, merge 2x2) by file-path import. patch_embed Conv2d+RMSNorm run on host (documented host-resident boundary); 2D RoPE + cu_seqlens precomputed on host, threaded through blocks. HiFi4+fp32_dest_acc bf16 DRAM TILE. PCC=0.99998 vs golden on p150. Guard ok. |
 | vision_tower | debug | n/a | — | 0 |  |
 | vision_tower | optimization | pending | — | 0 |  |
 | vision_tower | real_weights | pending | — | 0 |  |
@@ -94,7 +94,6 @@
 
 ## Recent Ticks
 
-- tick 11 (2026-05-29T01:10:25Z): device[vision_patch_merger] — ok
 - tick 12 (2026-05-29T01:13:48Z): device[embedding] — ok
 - tick 13 (2026-05-29T01:17:43Z): device[rmsnorm] — ok
 - tick 14 (2026-05-29T01:21:18Z): device[rope] — ok
@@ -104,6 +103,7 @@
 - tick 18 (2026-05-29T01:43:24Z): device[lm_head] — ok
 - tick 19 (2026-05-29T01:49:31Z): device[language_model] — ok
 - tick 20 (2026-05-29T01:51:14Z): skip[vision_patch_embed:ttnn] — host_resident: DotsPatchEmbed is a single Conv2d(3,1536,k=14,s=14) over patchified pixels followed by RMSNorm; Conv2d patchify is a one-shot host-side im2col+matmul in the Qwen-VL TTNN demos (qwen25_vl runs patch embed on host then moves tokens to device). Cheap relative to the 42-layer trunk and runs once per image.
+- tick 21 (2026-05-29T01:54:57Z): device[vision_tower] — ok
 
 ## Host-Resident Exceptions
 
