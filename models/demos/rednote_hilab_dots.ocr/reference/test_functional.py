@@ -607,6 +607,189 @@ def test_mlp():
     assert p > 0.99, f"mlp PCC {p}"
 
 
+# --------------------------------------------------------------------------- #
+# decoder_layer (one full Qwen2DecoderLayer)
+# --------------------------------------------------------------------------- #
+def test_decoder_layer():
+    torch.manual_seed(0)
+    from transformers.models.qwen2.modeling_qwen2 import Qwen2DecoderLayer, Qwen2RotaryEmbedding
+
+    cfg = _qwen2_config()
+    hidden = cfg.hidden_size
+    seq_len = 128
+    hf = Qwen2DecoderLayer(cfg, layer_idx=0)
+    hf.eval()
+
+    x = torch.randn(1, seq_len, hidden)
+    position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0)
+    rotary = Qwen2RotaryEmbedding(cfg)
+    cos, sin = rotary(x, position_ids)
+
+    # Causal additive mask [1, 1, seq, seq] matching the standalone construction.
+    causal = torch.full((seq_len, seq_len), torch.finfo(x.dtype).min, dtype=x.dtype)
+    causal = torch.triu(causal, diagonal=1)
+    attn_mask = causal[None, None, :, :]
+
+    with torch.no_grad():
+        hf_out = hf(x, position_embeddings=(cos, sin), attention_mask=attn_mask)
+    if isinstance(hf_out, tuple):
+        hf_out = hf_out[0]
+
+    sd = {
+        "input_layernorm.weight": hf.input_layernorm.weight.data,
+        "self_attn.q_proj.weight": hf.self_attn.q_proj.weight.data,
+        "self_attn.q_proj.bias": hf.self_attn.q_proj.bias.data,
+        "self_attn.k_proj.weight": hf.self_attn.k_proj.weight.data,
+        "self_attn.k_proj.bias": hf.self_attn.k_proj.bias.data,
+        "self_attn.v_proj.weight": hf.self_attn.v_proj.weight.data,
+        "self_attn.v_proj.bias": hf.self_attn.v_proj.bias.data,
+        "self_attn.o_proj.weight": hf.self_attn.o_proj.weight.data,
+        "post_attention_layernorm.weight": hf.post_attention_layernorm.weight.data,
+        "mlp.gate_proj.weight": hf.mlp.gate_proj.weight.data,
+        "mlp.up_proj.weight": hf.mlp.up_proj.weight.data,
+        "mlp.down_proj.weight": hf.mlp.down_proj.weight.data,
+    }
+    ref_out = fn.decoder_layer_forward(
+        x,
+        sd,
+        (cos, sin),
+        attention_mask=attn_mask,
+        num_heads=cfg.num_attention_heads,
+        num_kv_heads=cfg.num_key_value_heads,
+        head_dim=cfg.head_dim,
+        eps=cfg.rms_norm_eps,
+        bias=cfg.attention_bias,
+    )
+    p = pcc(hf_out, ref_out)
+    torch.save(
+        {
+            "input": x,
+            "output": hf_out,
+            "state_dict": sd,
+            "position_ids": position_ids,
+            "cos": cos,
+            "sin": sin,
+            "attention_mask": attn_mask,
+            "config": {
+                "hidden_size": hidden,
+                "num_attention_heads": cfg.num_attention_heads,
+                "num_key_value_heads": cfg.num_key_value_heads,
+                "head_dim": cfg.head_dim,
+                "rope_theta": cfg.rope_theta,
+                "rms_norm_eps": cfg.rms_norm_eps,
+                "attention_bias": cfg.attention_bias,
+                "intermediate_size": cfg.intermediate_size,
+            },
+        },
+        os.path.join(GOLDEN_DIR, "decoder_layer.pt"),
+    )
+    assert p > 0.99, f"decoder_layer PCC {p}"
+
+
+# --------------------------------------------------------------------------- #
+# lm_head (untied Linear hidden -> vocab, no bias)
+# --------------------------------------------------------------------------- #
+def test_lm_head():
+    torch.manual_seed(0)
+    hidden_size = _LM_CFG["hidden_size"]  # 1536
+    vocab_size = _LM_CFG["vocab_size"]  # 151936
+    hf = torch.nn.Linear(hidden_size, vocab_size, bias=False)
+    hf.weight.data.normal_(mean=0.0, std=0.02)
+
+    x = torch.randn(1, 128, hidden_size)
+    with torch.no_grad():
+        hf_out = hf(x)
+    ref_out = fn.lm_head_forward(x, hf.weight.data)
+    p = pcc(hf_out, ref_out)
+    torch.save(
+        {
+            "input": x,
+            "output": hf_out,
+            "weight": hf.weight.data,
+            "config": {"hidden_size": hidden_size, "vocab_size": vocab_size, "bias": False},
+        },
+        os.path.join(GOLDEN_DIR, "lm_head.pt"),
+    )
+    assert p > 0.99, f"lm_head PCC {p}"
+
+
+# --------------------------------------------------------------------------- #
+# language_model (full Qwen2ForCausalLM, REDUCED layer count)
+# --------------------------------------------------------------------------- #
+def test_language_model():
+    torch.manual_seed(0)
+    from transformers.models.qwen2.modeling_qwen2 import Qwen2ForCausalLM
+
+    # Reduce depth + vocab for a small golden; full 28-layer / 151936-vocab check
+    # happens in real_weights.
+    REDUCED_LAYERS = 2
+    cfg = _qwen2_config()
+    cfg.num_hidden_layers = REDUCED_LAYERS
+
+    hf = Qwen2ForCausalLM(cfg)
+    hf.eval()
+
+    seq_len = 64
+    input_ids = torch.randint(0, cfg.vocab_size, (1, seq_len))
+    with torch.no_grad():
+        hf_out = hf(input_ids).logits
+
+    sd = {
+        "embed_tokens.weight": hf.model.embed_tokens.weight.data,
+        "norm.weight": hf.model.norm.weight.data,
+        "lm_head.weight": hf.lm_head.weight.data,
+    }
+    for i in range(REDUCED_LAYERS):
+        layer = hf.model.layers[i]
+        sd[f"layers.{i}.input_layernorm.weight"] = layer.input_layernorm.weight.data
+        sd[f"layers.{i}.self_attn.q_proj.weight"] = layer.self_attn.q_proj.weight.data
+        sd[f"layers.{i}.self_attn.q_proj.bias"] = layer.self_attn.q_proj.bias.data
+        sd[f"layers.{i}.self_attn.k_proj.weight"] = layer.self_attn.k_proj.weight.data
+        sd[f"layers.{i}.self_attn.k_proj.bias"] = layer.self_attn.k_proj.bias.data
+        sd[f"layers.{i}.self_attn.v_proj.weight"] = layer.self_attn.v_proj.weight.data
+        sd[f"layers.{i}.self_attn.v_proj.bias"] = layer.self_attn.v_proj.bias.data
+        sd[f"layers.{i}.self_attn.o_proj.weight"] = layer.self_attn.o_proj.weight.data
+        sd[f"layers.{i}.post_attention_layernorm.weight"] = layer.post_attention_layernorm.weight.data
+        sd[f"layers.{i}.mlp.gate_proj.weight"] = layer.mlp.gate_proj.weight.data
+        sd[f"layers.{i}.mlp.up_proj.weight"] = layer.mlp.up_proj.weight.data
+        sd[f"layers.{i}.mlp.down_proj.weight"] = layer.mlp.down_proj.weight.data
+
+    ref_out = fn.language_model_forward(
+        input_ids,
+        sd,
+        num_layers=REDUCED_LAYERS,
+        num_heads=cfg.num_attention_heads,
+        num_kv_heads=cfg.num_key_value_heads,
+        head_dim=cfg.head_dim,
+        rope_theta=cfg.rope_theta,
+        eps=cfg.rms_norm_eps,
+        bias=cfg.attention_bias,
+    )
+    p = pcc(hf_out, ref_out)
+    torch.save(
+        {
+            "input": input_ids,
+            "output": hf_out,
+            "state_dict": sd,
+            "config": {
+                "num_layers": REDUCED_LAYERS,
+                "full_num_hidden_layers": 28,
+                "hidden_size": cfg.hidden_size,
+                "num_attention_heads": cfg.num_attention_heads,
+                "num_key_value_heads": cfg.num_key_value_heads,
+                "head_dim": cfg.head_dim,
+                "rope_theta": cfg.rope_theta,
+                "rms_norm_eps": cfg.rms_norm_eps,
+                "attention_bias": cfg.attention_bias,
+                "intermediate_size": cfg.intermediate_size,
+                "vocab_size": cfg.vocab_size,
+            },
+        },
+        os.path.join(GOLDEN_DIR, "language_model.pt"),
+    )
+    assert p > 0.99, f"language_model PCC {p}"
+
+
 if __name__ == "__main__":
     test_vision_rmsnorm()
     test_vision_patch_embed()
@@ -620,4 +803,7 @@ if __name__ == "__main__":
     test_rope()
     test_attention()
     test_mlp()
+    test_decoder_layer()
+    test_lm_head()
+    test_language_model()
     print("all reference blocks pass")

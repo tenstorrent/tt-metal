@@ -546,3 +546,172 @@ def mlp_forward(x: torch.Tensor, state_dict: Dict[str, torch.Tensor]) -> torch.T
     gate = F.silu(F.linear(x, state_dict["gate_proj.weight"]))
     up = F.linear(x, state_dict["up_proj.weight"])
     return F.linear(gate * up, state_dict["down_proj.weight"])
+
+
+# ---------------------------------------------------------------------------
+# decoder_layer (one full Qwen2DecoderLayer)
+# ---------------------------------------------------------------------------
+def decoder_layer_forward(
+    hidden_states: torch.Tensor,
+    state_dict: Dict[str, torch.Tensor],
+    position_embeddings: tuple,
+    attention_mask: torch.Tensor = None,
+    num_heads: int = 12,
+    num_kv_heads: int = 2,
+    head_dim: int = 128,
+    eps: float = 1e-6,
+    bias: bool = True,
+) -> torch.Tensor:
+    """Qwen2DecoderLayer.forward (pre-norm, residual):
+
+        residual = h
+        h = input_layernorm(h)
+        h = residual + self_attn(h)
+        residual = h
+        h = post_attention_layernorm(h)
+        h = residual + mlp(h)
+
+    Composes rmsnorm + attention + mlp.
+
+    Args:
+        hidden_states: [batch, seq_len, hidden].
+        state_dict: prefixed weights:
+            'input_layernorm.weight',
+            'self_attn.q_proj.weight'(+'.bias'), 'self_attn.k_proj.weight'(+'.bias'),
+            'self_attn.v_proj.weight'(+'.bias'), 'self_attn.o_proj.weight',
+            'post_attention_layernorm.weight',
+            'mlp.gate_proj.weight', 'mlp.up_proj.weight', 'mlp.down_proj.weight'.
+        position_embeddings: (cos, sin) from rope_forward.
+        attention_mask: additive causal mask; if None a causal mask is built.
+    Returns:
+        [batch, seq_len, hidden].
+    """
+    attn_sd = {
+        "q_proj.weight": state_dict["self_attn.q_proj.weight"],
+        "k_proj.weight": state_dict["self_attn.k_proj.weight"],
+        "v_proj.weight": state_dict["self_attn.v_proj.weight"],
+        "o_proj.weight": state_dict["self_attn.o_proj.weight"],
+    }
+    if bias:
+        attn_sd["q_proj.bias"] = state_dict.get("self_attn.q_proj.bias")
+        attn_sd["k_proj.bias"] = state_dict.get("self_attn.k_proj.bias")
+        attn_sd["v_proj.bias"] = state_dict.get("self_attn.v_proj.bias")
+
+    residual = hidden_states
+    normed = rmsnorm_forward(hidden_states, state_dict["input_layernorm.weight"], eps=eps)
+    attn_out = attention_forward(
+        normed,
+        attn_sd,
+        position_embeddings,
+        attention_mask=attention_mask,
+        num_heads=num_heads,
+        num_kv_heads=num_kv_heads,
+        head_dim=head_dim,
+        bias=bias,
+    )
+    hidden_states = residual + attn_out
+
+    residual = hidden_states
+    normed = rmsnorm_forward(hidden_states, state_dict["post_attention_layernorm.weight"], eps=eps)
+    mlp_sd = {
+        "gate_proj.weight": state_dict["mlp.gate_proj.weight"],
+        "up_proj.weight": state_dict["mlp.up_proj.weight"],
+        "down_proj.weight": state_dict["mlp.down_proj.weight"],
+    }
+    hidden_states = residual + mlp_forward(normed, mlp_sd)
+    return hidden_states
+
+
+# ---------------------------------------------------------------------------
+# lm_head (untied Linear hidden -> vocab, no bias)
+# ---------------------------------------------------------------------------
+def lm_head_forward(x: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
+    """LM head: Linear(hidden_size -> vocab_size, bias=False).
+
+    Args:
+        x: [batch, seq_len, hidden_size] final hidden states.
+        weight: [vocab_size, hidden_size] (untied, tie_word_embeddings=False).
+    Returns:
+        logits [batch, seq_len, vocab_size].
+    """
+    return F.linear(x, weight, None)
+
+
+# ---------------------------------------------------------------------------
+# language_model (full Qwen2ForCausalLM: embed -> N decoder layers -> norm -> lm_head)
+# ---------------------------------------------------------------------------
+def language_model_forward(
+    input_ids: torch.Tensor,
+    state_dict: Dict[str, torch.Tensor],
+    num_layers: int,
+    num_heads: int = 12,
+    num_kv_heads: int = 2,
+    head_dim: int = 128,
+    rope_theta: float = 1000000.0,
+    eps: float = 1e-6,
+    bias: bool = True,
+    position_ids: torch.Tensor = None,
+) -> torch.Tensor:
+    """Qwen2ForCausalLM.forward (causal, no KV cache):
+
+        embed_tokens -> rotary_emb(cos,sin) -> N x decoder_layer (causal) -> norm -> lm_head.
+
+    `num_layers` lets the golden run at a REDUCED depth (real config has 28 layers).
+    The full-depth check is deferred to the real_weights phase.
+
+    Args:
+        input_ids: [batch, seq_len] int token ids.
+        state_dict: flat keys:
+            'embed_tokens.weight',
+            'layers.{i}.input_layernorm.weight',
+            'layers.{i}.self_attn.{q,k,v}_proj.weight' (+ '.bias'),
+            'layers.{i}.self_attn.o_proj.weight',
+            'layers.{i}.post_attention_layernorm.weight',
+            'layers.{i}.mlp.{gate,up,down}_proj.weight',
+            'norm.weight', 'lm_head.weight'.
+    Returns:
+        logits [batch, seq_len, vocab_size].
+    """
+    bsz, seq_len = input_ids.shape
+
+    hidden_states = embedding_forward(input_ids, state_dict["embed_tokens.weight"])
+
+    if position_ids is None:
+        position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0).expand(bsz, -1)
+    cos, sin = rope_forward(position_ids, head_dim=head_dim, rope_theta=rope_theta, dtype=hidden_states.dtype)
+
+    # Shared causal additive mask.
+    causal = torch.full((seq_len, seq_len), torch.finfo(hidden_states.dtype).min, dtype=hidden_states.dtype)
+    causal = torch.triu(causal, diagonal=1)
+    attention_mask = causal[None, None, :, :]
+
+    for i in range(num_layers):
+        layer_sd = {
+            "input_layernorm.weight": state_dict[f"layers.{i}.input_layernorm.weight"],
+            "self_attn.q_proj.weight": state_dict[f"layers.{i}.self_attn.q_proj.weight"],
+            "self_attn.k_proj.weight": state_dict[f"layers.{i}.self_attn.k_proj.weight"],
+            "self_attn.v_proj.weight": state_dict[f"layers.{i}.self_attn.v_proj.weight"],
+            "self_attn.o_proj.weight": state_dict[f"layers.{i}.self_attn.o_proj.weight"],
+            "post_attention_layernorm.weight": state_dict[f"layers.{i}.post_attention_layernorm.weight"],
+            "mlp.gate_proj.weight": state_dict[f"layers.{i}.mlp.gate_proj.weight"],
+            "mlp.up_proj.weight": state_dict[f"layers.{i}.mlp.up_proj.weight"],
+            "mlp.down_proj.weight": state_dict[f"layers.{i}.mlp.down_proj.weight"],
+        }
+        if bias:
+            layer_sd["self_attn.q_proj.bias"] = state_dict.get(f"layers.{i}.self_attn.q_proj.bias")
+            layer_sd["self_attn.k_proj.bias"] = state_dict.get(f"layers.{i}.self_attn.k_proj.bias")
+            layer_sd["self_attn.v_proj.bias"] = state_dict.get(f"layers.{i}.self_attn.v_proj.bias")
+        hidden_states = decoder_layer_forward(
+            hidden_states,
+            layer_sd,
+            (cos, sin),
+            attention_mask=attention_mask,
+            num_heads=num_heads,
+            num_kv_heads=num_kv_heads,
+            head_dim=head_dim,
+            eps=eps,
+            bias=bias,
+        )
+
+    hidden_states = rmsnorm_forward(hidden_states, state_dict["norm.weight"], eps=eps)
+    return lm_head_forward(hidden_states, state_dict["lm_head.weight"])

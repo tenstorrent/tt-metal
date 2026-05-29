@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** p150 (blackhole)
 **Started:** 2026-05-29T00:11:46Z
-**Updated:** 2026-05-29T00:34:04Z
+**Updated:** 2026-05-29T00:38:13Z
 
 ## Block Status
 
@@ -70,17 +70,17 @@
 | mlp | debug | n/a | — | 0 |  |
 | mlp | optimization | pending | — | 0 |  |
 | mlp | real_weights | pending | — | 0 |  |
-| decoder_layer | reference | pending | — | 0 |  |
+| decoder_layer | reference | done | 1.000000 | 0 | Qwen2DecoderLayer: input RMSNorm -> GQA self-attn (12q/2kv, head_dim128, RoPE theta 1e6, QKV bias) -> residual -> post-attn RMSNorm -> SwiGLU MLP -> residual. PCC=1.0 vs HF Qwen2DecoderLayer. |
 | decoder_layer | ttnn | pending | — | 0 |  |
 | decoder_layer | debug | n/a | — | 0 |  |
 | decoder_layer | optimization | pending | — | 0 |  |
 | decoder_layer | real_weights | pending | — | 0 |  |
-| lm_head | reference | pending | — | 0 |  |
+| lm_head | reference | done | 1.000000 | 0 | Untied Linear hidden 1536 -> vocab 151936, no bias. PCC=1.0 vs nn.Linear. |
 | lm_head | ttnn | pending | — | 0 |  |
 | lm_head | debug | n/a | — | 0 |  |
 | lm_head | optimization | pending | — | 0 |  |
 | lm_head | real_weights | pending | — | 0 |  |
-| language_model | reference | pending | — | 0 |  |
+| language_model | reference | done | 1.000000 | 0 | Full Qwen2ForCausalLM tested at REDUCED 2 layers (full=28), seq 64: embed -> 2x decoder_layer -> final RMSNorm -> lm_head. PCC=1.0 vs HF. Full 28-layer check deferred to real_weights. |
 | language_model | ttnn | pending | — | 0 |  |
 | language_model | debug | n/a | — | 0 |  |
 | language_model | optimization | pending | — | 0 |  |
@@ -98,6 +98,7 @@
 - tick 2 (2026-05-29T00:21:12Z): reference[vision_patch_embed,vision_rmsnorm,vision_attention,vision_mlp] — ok
 - tick 3 (2026-05-29T00:30:23Z): reference[vision_block,vision_patch_merger,vision_tower,embedding] — ok
 - tick 4 (2026-05-29T00:34:04Z): reference[rmsnorm,rope,attention,mlp] — ok
+- tick 5 (2026-05-29T00:38:13Z): reference[decoder_layer,lm_head,language_model] — ok
 
 ## Host-Resident Exceptions
 

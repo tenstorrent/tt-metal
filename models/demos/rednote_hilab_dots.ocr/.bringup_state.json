@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-29T00:11:46Z",
-  "updated_at": "2026-05-29T00:34:04Z",
+  "updated_at": "2026-05-29T00:38:13Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -477,8 +477,13 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "reference/golden/decoder_layer.pt"
+        ],
+        "notes": "Qwen2DecoderLayer: input RMSNorm -> GQA self-attn (12q/2kv, head_dim128, RoPE theta 1e6, QKV bias) -> residual -> post-attn RMSNorm -> SwiGLU MLP -> residual. PCC=1.0 vs HF Qwen2DecoderLayer.",
+        "pcc": 1.0
       },
       "ttnn": {
         "status": "pending",
@@ -510,8 +515,13 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "reference/golden/lm_head.pt"
+        ],
+        "notes": "Untied Linear hidden 1536 -> vocab 151936, no bias. PCC=1.0 vs nn.Linear.",
+        "pcc": 1.0
       },
       "ttnn": {
         "status": "pending",
@@ -547,8 +557,13 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "reference/golden/language_model.pt"
+        ],
+        "notes": "Full Qwen2ForCausalLM tested at REDUCED 2 layers (full=28), seq 64: embed -> 2x decoder_layer -> final RMSNorm -> lm_head. PCC=1.0 vs HF. Full 28-layer check deferred to real_weights.",
+        "pcc": 1.0
       },
       "ttnn": {
         "status": "pending",
@@ -636,6 +651,12 @@
       "tick": 4,
       "ts": "2026-05-29T00:34:04Z",
       "action": "reference[rmsnorm,rope,attention,mlp]",
+      "result": "ok"
+    },
+    {
+      "tick": 5,
+      "ts": "2026-05-29T00:38:13Z",
+      "action": "reference[decoder_layer,lm_head,language_model]",
       "result": "ok"
     }
   ],
