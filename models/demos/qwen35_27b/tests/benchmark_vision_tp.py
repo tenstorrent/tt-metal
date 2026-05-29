@@ -148,7 +148,7 @@ def _format_table(results):
 def test_benchmark_vision_tp_vs_replicated(mesh_device, reset_seeds, ensure_gc):
     """Run the vision tower in both modes back-to-back and print a comparison."""
 
-    grid_str = os.environ.get("QWEN_VISION_BENCH_GRID", "1,16,16")
+    grid_str = os.environ.get("QWEN_VISION_BENCH_GRID", "1,128,86")
     image_grid_thw = torch.tensor([[int(x) for x in grid_str.split(",")]])
     assert image_grid_thw.shape == (1, 3), f"QWEN_VISION_BENCH_GRID must be 'T,H,W'; got {grid_str!r}"
 
