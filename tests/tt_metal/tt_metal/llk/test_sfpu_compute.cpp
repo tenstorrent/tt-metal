@@ -39,8 +39,6 @@
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <umd/device/types/arch.hpp>
-#include <tt-metalium/experimental/host_api.hpp>
-#include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 
 namespace tt::tt_metal {
@@ -65,6 +63,7 @@ const map<std::string, std::map<std::string, std::string>> sfpu_op_to_op_name = 
     {"log", {{"SFPU_OP_CHAIN_0", "log_tile_init(); log_tile(0);"}}},
     {"tanh", {{"SFPU_OP_CHAIN_0", "tanh_tile_init(); tanh_tile(0);"}}},
     {"sign", {{"SFPU_OP_CHAIN_0", "sign_tile_init(); sign_tile(0);"}}},
+    {"rsqrt", {{"SFPU_OP_CHAIN_0", "rsqrt_tile_init(); rsqrt_tile(0);"}}},
 };
 
 bfloat16 sfpu_function(const std::string& op_name, const bfloat16& input) {
@@ -103,6 +102,9 @@ bfloat16 sfpu_function(const std::string& op_name, const bfloat16& input) {
     if (op_name == "tanh") {
         return bfloat16(std::tanh(static_cast<float>(input)));
     }
+    if (op_name == "rsqrt") {
+        return bfloat16(1.0f / sqrtf(static_cast<float>(input)));
+    }
     if (op_name == "sign") {
         float val = static_cast<float>(input);
         float result = static_cast<float>((val > 0.0f) - (val < 0.0f));
@@ -111,7 +113,7 @@ bfloat16 sfpu_function(const std::string& op_name, const bfloat16& input) {
     TT_THROW("Unsupported op_name in test");
 }
 vector<uint32_t> generate_packed_sfpu_input(const unsigned int numel, const std::string& op_name, const int seed) {
-    if ((op_name == "sqrt") or (op_name == "log")) {
+    if ((op_name == "sqrt") or (op_name == "log") or (op_name == "rsqrt")) {
         return generate_packed_uniform_random_vector<uint32_t, bfloat16>(0.0001f, 4.0f, numel, seed);
     }
     if ((op_name == "exponential") or (op_name == "gelu") or (op_name == "reciprocal")) {
@@ -193,6 +195,7 @@ bool run_sfpu_all_same_buffer(
     sfpu_defines["SFPU_OP_GELU_INCLUDE"] = "1";
     sfpu_defines["SFPU_OP_RECIP_INCLUDE"] = "1";
     sfpu_defines["SFPU_OP_SQRT_INCLUDE"] = "1";
+    sfpu_defines["SFPU_OP_RSQRT_INCLUDE"] = "1";
     sfpu_defines["SFPU_OP_ERF_ERFC_INCLUDE"] = "1";
     sfpu_defines["SFPU_OP_ELU_INCLUDE"] = "1";
     sfpu_defines["SFPU_OP_NEG_INCLUDE"] = "1";
@@ -248,7 +251,8 @@ bool run_sfpu_all_same_buffer(
                     experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
                         .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
                 .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{
+                        .disable_implicit_sync_for = {IN_DFB}}},
     };
 
     experimental::metal2_host_api::KernelSpec writer_spec{
@@ -270,7 +274,8 @@ bool run_sfpu_all_same_buffer(
                     experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
                         .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
                 .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{
+                        .disable_implicit_sync_for = {OUT_DFB}}},
     };
 
     experimental::metal2_host_api::KernelSpec::CompilerOptions::Defines compute_defines;
@@ -401,6 +406,7 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "log"),
         std::make_tuple(1, "tanh"),
         std::make_tuple(1, "sign"),
+        std::make_tuple(1, "rsqrt"),
         std::make_tuple(4, "relu"),
         std::make_tuple(4, "exponential"),
         std::make_tuple(4, "reciprocal"),
@@ -410,7 +416,8 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(4, "silu"),
         std::make_tuple(4, "log"),
         std::make_tuple(4, "tanh"),
-        std::make_tuple(4, "sign")));
+        std::make_tuple(4, "sign"),
+        std::make_tuple(4, "rsqrt")));
 
 class SingleCoreSingleMeshDeviceSfpuParameterizedApproxFixture
     : public LLKMeshDeviceFixture,
@@ -454,6 +461,7 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "log"),
         std::make_tuple(1, "tanh"),
         std::make_tuple(1, "sign"),
+        std::make_tuple(1, "rsqrt"),
         std::make_tuple(4, "relu"),
         std::make_tuple(4, "exponential"),
         std::make_tuple(4, "reciprocal"),
@@ -463,6 +471,7 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(4, "silu"),
         std::make_tuple(4, "log"),
         std::make_tuple(4, "tanh"),
-        std::make_tuple(4, "sign")));
+        std::make_tuple(4, "sign"),
+        std::make_tuple(4, "rsqrt")));
 
 }  // namespace tt::tt_metal
