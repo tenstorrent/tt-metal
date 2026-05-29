@@ -125,6 +125,7 @@ def run(
         kwargs,
         exclude={"starts", "ends", "steps", "slice_dim", "num_devices"},
         output_memory_config=output_memory_config,
+        device=device,
     )
     # Forward slice_dim, num_devices, and output_tensor when master had them.
     absent_keys = set(kwargs.get("__absent_keys__") or [])
