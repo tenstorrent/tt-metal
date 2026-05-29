@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-29T00:11:46Z",
-  "updated_at": "2026-05-29T03:41:01Z",
+  "updated_at": "2026-05-29T03:47:35Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -150,8 +150,15 @@
         "after_us": 739.34
       },
       "real_weights": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/weight_loader.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_real_hf_weights.py"
+        ],
+        "notes": "Loaded real HF vision_tower.blocks.0.attn qkv [4608,1536] + proj [1536,1536] (no bias) via load_vision_attention_weights. Reused golden static cu_seqlens=[0,96,256] + rotary_pos_emb[256,64]. PCC=0.99997 vs HF eager (real weights). bf16 + HiFi4 + fp32_dest_acc held despite real-weight dynamic range. Guard ok (lint=0, params_loaded=9437184).",
+        "pcc": 0.9999686409929011,
+        "params_loaded": 9437184
       }
     },
     {
@@ -1074,6 +1081,12 @@
       "tick": 36,
       "ts": "2026-05-29T03:41:01Z",
       "action": "device[vision_rmsnorm]",
+      "result": "ok"
+    },
+    {
+      "tick": 37,
+      "ts": "2026-05-29T03:47:35Z",
+      "action": "device[vision_attention]",
       "result": "ok"
     }
   ],

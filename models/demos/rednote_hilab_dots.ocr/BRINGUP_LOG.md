@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** p150 (blackhole)
 **Started:** 2026-05-29T00:11:46Z
-**Updated:** 2026-05-29T03:41:01Z
+**Updated:** 2026-05-29T03:47:35Z
 
 ## Block Status
 
@@ -24,7 +24,7 @@
 | vision_attention | ttnn | done | 0.999988 | 0 | manual SDPA chain (qkv linear -> nlp_create_qkv_heads -> 2D RoPE -> matmul+softmax+matmul w/ block-diagonal additive mask -> nlp_concat_heads -> proj). HiFi4+fp32_dest_acc, bf16. PCC=0.999988 vs golden. Guard ok. |
 | vision_attention | debug | n/a | — | 0 |  |
 | vision_attention | optimization | done | — | 1 | Tracy captured under --traced (metal trace replay session) at production shapes seq=256 cu_seqlens=[0,96,256]. Top hotspot ReshapeViewDeviceOperation 33.1%. Fix: L1-pinned the head-split (qkv->[seq,3,nh,hd]) and head-merge (->[seq,nh*hd]) reshape outputs via memory_config=L1_MEMORY_CONFIG. Block kernel time 970.84->739.34us (-23.8%). The reshape op itself unchanged (~253us) but pinning its output to L1 cut the downstream slice/RoPE/transpose chain reading from DRAM (Slice 90.7->24.0us, Binary 180->130.7us, Transpose 80.6->52.7us). PCC 0.99998858 held. |
-| vision_attention | real_weights | pending | — | 0 |  |
+| vision_attention | real_weights | done | 0.999969 | 0 | Loaded real HF vision_tower.blocks.0.attn qkv [4608,1536] + proj [1536,1536] (no bias) via load_vision_attention_weights. Reused golden static cu_seqlens=[0,96,256] + rotary_pos_emb[256,64]. PCC=0.99997 vs HF eager (real weights). bf16 + HiFi4 + fp32_dest_acc held despite real-weight dynamic range. Guard ok (lint=0, params_loaded=9437184). |
 | vision_mlp | reference | done | 1.000000 | 0 | reference vs HF (eager) module, PCC=1.0; golden saved |
 | vision_mlp | ttnn | done | 0.999986 | 0 | fused gate(fc1)/up(fc3) ttnn.linear -> ttnn.silu(gate)*up -> down(fc2) ttnn.linear. No bias. HiFi4+fp32_dest_acc bf16 DRAM TILE. PCC=0.9999855 vs golden. Guard ok. |
 | vision_mlp | debug | n/a | — | 0 |  |
@@ -94,7 +94,6 @@
 
 ## Recent Ticks
 
-- tick 27 (2026-05-29T02:40:41Z): device[vision_tower] — ok
 - tick 28 (2026-05-29T02:46:22Z): device[embedding] — ok
 - tick 29 (2026-05-29T02:52:35Z): device[rmsnorm] — ok
 - tick 30 (2026-05-29T02:58:59Z): device[rope] — ok
@@ -104,6 +103,7 @@
 - tick 34 (2026-05-29T03:27:29Z): device[lm_head] — ok
 - tick 35 (2026-05-29T03:35:03Z): device[language_model] — ok
 - tick 36 (2026-05-29T03:41:01Z): device[vision_rmsnorm] — ok
+- tick 37 (2026-05-29T03:47:35Z): device[vision_attention] — ok
 
 ## Host-Resident Exceptions
 

@@ -83,3 +83,25 @@ def load_vision_rmsnorm_weight(
     """
     tensors = load_hf_tensors(checkpoint_path, [hf_key])
     return tensors[hf_key]
+
+
+def load_vision_attention_weights(checkpoint_path: str, block_idx: int = 0) -> Dict[str, torch.Tensor]:
+    """Load a vision-tower attention block's real QKV + output-proj weights.
+
+    The dots vision attention (modeling_dots_vision.VisionAttention) uses a
+    fused QKV projection and an output proj, both unbiased
+    (config.use_bias = False). HF keys:
+        vision_tower.blocks.{i}.attn.qkv.weight   [3*embed_dim, embed_dim]
+        vision_tower.blocks.{i}.attn.proj.weight  [embed_dim, embed_dim]
+
+    Returns a flat state_dict in the shape :class:`TtVisionAttention` (and the
+    eager reference vision_attention_forward) expects:
+        {"qkv.weight": ..., "proj.weight": ...}  (fp32, no bias).
+    """
+    qkv_key = f"vision_tower.blocks.{block_idx}.attn.qkv.weight"
+    proj_key = f"vision_tower.blocks.{block_idx}.attn.proj.weight"
+    tensors = load_hf_tensors(checkpoint_path, [qkv_key, proj_key])
+    return {
+        "qkv.weight": tensors[qkv_key],
+        "proj.weight": tensors[proj_key],
+    }

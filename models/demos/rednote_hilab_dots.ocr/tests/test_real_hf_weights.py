@@ -44,12 +44,21 @@ def _load_by_path(name, filename, directory):
 
 
 _tt_rmsnorm = _load_by_path("dots_tt_vision_rmsnorm_rw", "vision_rmsnorm.py", _TT_DIR)
+_tt_vision_attention = _load_by_path("dots_tt_vision_attention_rw", "vision_attention.py", _TT_DIR)
 _loader = _load_by_path("dots_weight_loader", "weight_loader.py", _TT_DIR)
 _functional = _load_by_path("dots_reference_functional_rw", "functional.py", _REF_DIR)
 
 TtVisionRMSNorm = _tt_rmsnorm.TtVisionRMSNorm
+TtVisionAttention = _tt_vision_attention.TtVisionAttention
 load_vision_rmsnorm_weight = _loader.load_vision_rmsnorm_weight
+load_vision_attention_weights = _loader.load_vision_attention_weights
 vision_rmsnorm_forward = _functional.vision_rmsnorm_forward
+vision_attention_forward = _functional.vision_attention_forward
+
+# Vision attention config (modeling_dots_vision): 12 heads, head_dim 128,
+# fused QKV no-bias, 2D RoPE theta 1e4, block-diagonal bidirectional attention.
+VISION_NUM_HEADS = 12
+VISION_HEAD_DIM = 128
 
 
 def _run_vision_rmsnorm_pcc(device):
@@ -94,9 +103,83 @@ def test_real_hf_weights_vision_rmsnorm(device):
     assert params_loaded > 0
 
 
+# Reuse the seed-0 golden's static rope freqs + cu_seqlens so the real-weights
+# run uses the exact same precomputed RoPE/block-diagonal tables the synthetic
+# bring-up validated; only the QKV/proj weights swap to the real checkpoint.
+VISION_ATTENTION_GOLDEN_PATH = os.path.join(_REF_DIR, "golden", "vision_attention.pt")
+
+
+def _run_vision_attention_pcc(device):
+    """Load the real vision attention QKV+proj, run TTNN, compare to HF reference.
+
+    Returns (pcc, params_loaded).
+    """
+    state_dict = load_vision_attention_weights(CHECKPOINT_PATH, block_idx=0)
+    qkv_weight = state_dict["qkv.weight"].to(torch.float32)
+    proj_weight = state_dict["proj.weight"].to(torch.float32)
+    params_loaded = int(qkv_weight.numel() + proj_weight.numel())
+    assert qkv_weight.shape == (3 * EMBED_DIM, EMBED_DIM), tuple(qkv_weight.shape)
+    assert proj_weight.shape == (EMBED_DIM, EMBED_DIM), tuple(proj_weight.shape)
+
+    # Static rope freqs + cu_seqlens come from the bring-up golden (same image
+    # grid). Only the weights are swapped to the real checkpoint.
+    golden = torch.load(VISION_ATTENTION_GOLDEN_PATH, map_location="cpu")
+    cu_seqlens = golden["cu_seqlens"]
+    rotary_pos_emb = golden["rotary_pos_emb"].to(torch.float32)  # [seq, head_dim//2]
+    seq_length = int(rotary_pos_emb.shape[0])
+
+    torch.manual_seed(0)
+    torch_input = torch.randn(seq_length, EMBED_DIM, dtype=torch.float32)
+
+    # HF reference (eager) with the REAL weights.
+    ref_output = vision_attention_forward(
+        torch_input,
+        {"qkv.weight": qkv_weight, "proj.weight": proj_weight},
+        cu_seqlens,
+        rotary_pos_emb,
+        num_heads=VISION_NUM_HEADS,
+        bias=False,
+    )
+
+    tt_attn = TtVisionAttention(
+        device=device,
+        qkv_weight=qkv_weight,
+        proj_weight=proj_weight,
+        rotary_pos_emb=rotary_pos_emb,
+        cu_seqlens=cu_seqlens,
+        seq_length=seq_length,
+        num_heads=VISION_NUM_HEADS,
+        head_dim=VISION_HEAD_DIM,
+    )
+    tt_input = ttnn.from_torch(
+        torch_input,
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_output = tt_attn(tt_input)
+    tt_output_torch = ttnn.to_torch(tt_output).to(torch.float32).reshape(ref_output.shape)
+
+    passing, pcc_message = comp_pcc(ref_output, tt_output_torch, 0.99)
+    print(comp_allclose(ref_output, tt_output_torch))
+    print(f"comp_pcc(vision_attention, real weights): passing={passing}, message={pcc_message}")
+    msg = str(pcc_message)
+    pcc = float(msg.split("PCC:")[-1].strip()) if "PCC:" in msg else float(pcc_message)
+    print(f"real-weights vision_attention PCC = {pcc} | params_loaded = {params_loaded}")
+    assert passing, f"vision_attention real-weights PCC below 0.99: {pcc_message}"
+    return pcc, params_loaded
+
+
+def test_real_hf_weights_vision_attention(device):
+    pcc, params_loaded = _run_vision_attention_pcc(device)
+    assert params_loaded > 0
+
+
 if __name__ == "__main__":
     dev = ttnn.open_device(device_id=0, l1_small_size=32768)
     try:
         _run_vision_rmsnorm_pcc(dev)
+        _run_vision_attention_pcc(dev)
     finally:
         ttnn.close_device(dev)
