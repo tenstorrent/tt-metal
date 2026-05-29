@@ -11,8 +11,7 @@
 
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 namespace ttnn::operations::pool {
-// Return a single bf16 scalar for the pool type in u32 (packed in the upper 16 bits).
-// Kernels extract the value via bf16_scalar >> 16.
+// Return a single bf16 scalar for the pool type in u32 (packed in the least 16 bits)
 // For the maxpool it is 1, for the avg pool it is 1/kernel_size or the divisor override used to initialize compile
 // time argument sent to kernels. If there are multiple scalars needed call get_bf16_avg_pool_config_scalars
 uint32_t get_bf16_pool_scalar(
@@ -30,7 +29,7 @@ uint32_t get_bf16_pool_scalar(
             break;
         default: TT_FATAL(false, "Unsupported pool operation type");
     }
-    return std::bit_cast<uint16_t>(bfloat16(value)) << 16;
+    return static_cast<uint32_t>(std::bit_cast<uint16_t>(bfloat16(value))) << 16;
 }
 
 // Return a single bf16 init value for the pool type in u32 (packed in the least 16 bits)
@@ -169,15 +168,22 @@ FactoryParameters get_factory_parameters(
     const bool last_tile_is_partial =
         (in_channels / num_shards_c) % tt::constants::TILE_WIDTH != 0 &&
         (in_channels / num_shards_c) % tt::constants::TILE_WIDTH <= tt::constants::FACE_WIDTH;
+    // For avg pool with full tiles, use FACE_HEIGHT (16) as the boundary instead of TILE_HEIGHT (32).
+    // A 5×5 kernel (25 elements) spans both face groups of the tile (rows 0-15 and 16-31).
+    // Using TILE_HEIGHT as the boundary leaves 5×5 in the bf16-dest path, where the face-group
+    // boundary introduces an extra intermediate bf16 rounding that degrades precision beyond what
+    // the rtol/atol tolerance permits. Using FACE_HEIGHT correctly classifies any kernel that
+    // spans two face groups as "large", enabling fp32_dest_acc and multi-chunk accumulation to
+    // eliminate the face-boundary rounding — matching the existing treatment of 7×7 kernels.
+    // max pool and partial-tile avg pool retain the TILE_HEIGHT-based threshold.
     const uint32_t max_rows_for_reduction =
-        !last_tile_is_partial ? tt::constants::TILE_HEIGHT : tt::constants::TILE_HEIGHT / 2;
+        !last_tile_is_partial ? (is_avg_pool ? tt::constants::FACE_HEIGHT : tt::constants::TILE_HEIGHT)
+                              : tt::constants::TILE_HEIGHT / 2;
     const bool is_large_kernel = kernel_size_hw > max_rows_for_reduction;
     if (return_indices) {
         TT_FATAL(!is_avg_pool, "return_indices only applies for MaxPool");
     }
-    // Avg pool always uses fp32 destination accumulation for accuracy, which limits the destination
-    // register file to 4 tiles (fp32 uses twice the register space of bf16).
-    const uint32_t MAX_TILES_PER_REDUCTION = return_indices ? 1 : is_avg_pool ? 4 : 8;
+    const uint32_t MAX_TILES_PER_REDUCTION = return_indices ? 1 : (is_avg_pool && is_large_kernel) ? 4 : 8;
     const bool is_wide_reduction = in_ntiles_c > MAX_TILES_PER_REDUCTION;
 
     return FactoryParameters{

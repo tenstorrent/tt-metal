@@ -72,10 +72,10 @@ void kernel_main() {
     constexpr uint32_t num_out_sticks = 1;
 
     constexpr bool is_avg_pool = REDUCE_OP == PoolType::AVG;
-    // fp32 dest accumulation uses twice the register space, limiting to 4 tiles per reduction.
-    // pool2d avg passes ct_arg[16]=1 for all avg pool; grid_sample passes 1 only when
-    // fp32_dest_acc_en=true and not using dst_full_sync. Large-kernel avg pool also always
-    // needs 4 tiles regardless of ct_arg[16].
+    // average pool with large kernels requires fp32 accumulation so we can only reduce 4 tiles at a time,
+    // otherwise we can reduce 8 tiles at a time. Callers (e.g. grid_sample under fp32_dest_acc_en) can
+    // also force the 4-tile limit via ct_arg[16] so each chunk fits in half-sync DEST (= 4 fp32 tiles)
+    // without forcing dst_full_sync_en.
     constexpr bool is_large_kernel = window_size_hw > max_sticks_for_reduction;
     constexpr bool force_max_tiles_per_reduction_4 = get_compile_time_arg_val(16);
     constexpr uint32_t MAX_TILES_PER_REDUCTION =
