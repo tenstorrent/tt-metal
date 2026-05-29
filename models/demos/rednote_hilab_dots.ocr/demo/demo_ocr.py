@@ -58,28 +58,36 @@ def _load_by_path(name, filename, directory):
 def host_preprocess(image_path: str, prompt: str, checkpoint_path: str = CHECKPOINT_PATH):
     """DotsVL host preprocessing: image -> (input_ids, pixel_values, grid_thw, tokenizer).
 
-    Uses the Qwen2-VL image processor (patchify) + the tokenizer to build the
-    chat prompt with the <|imgpad|> (151665) image-token expansion sized to the
-    merged patch count. This mirrors what ``DotsVLProcessor`` does (its base
-    Qwen2_5_VLProcessor wiring is version-fragile, so the image processor and
-    tokenizer are driven directly -- functionally identical preprocessing).
+    Builds the prompt with the MODEL'S OWN chat template (chat_template.json),
+    NOT hand-rolled Qwen2.5 ChatML. dots.ocr was trained with the structure
+    ``<|user|>...<|img|><|imgpad|><|endofimg|>...<|endofuser|>``; using the wrong
+    Qwen2.5 ``<|im_start|>/<|vision_start|>`` tokens produces off-distribution
+    gibberish. The template emits a single ``<|imgpad|>`` placeholder which we
+    expand to the real vision-token count (t*h*w // merge**2).
     """
+    import json
+
     from PIL import Image
     from transformers import AutoImageProcessor, AutoTokenizer
 
     img = Image.open(image_path).convert("RGB")
     img_proc = AutoImageProcessor.from_pretrained(checkpoint_path, use_fast=True)
-    tokenizer = AutoTokenizer.from_pretrained(checkpoint_path)
+    tokenizer = AutoTokenizer.from_pretrained(checkpoint_path, trust_remote_code=True)
+    with open(os.path.join(checkpoint_path, "chat_template.json")) as fh:
+        chat_template = json.load(fh)["chat_template"]
 
     enc = img_proc(images=[img], return_tensors="pt")
     pixel_values = enc["pixel_values"]
     grid_thw = enc["image_grid_thw"]  # [num_images, 3]
     t, h, w = grid_thw[0].tolist()
-    merge = 2
-    n_img_tokens = (t * h * w) // (merge * merge)
+    n_img_tokens = (t * h * w) // 4  # spatial_merge_size**2
 
-    img_block = "<|vision_start|>" + "<|imgpad|>" * n_img_tokens + "<|vision_end|>"
-    full_prompt = f"<|im_start|>user\n{img_block}{prompt}<|im_end|>\n<|im_start|>assistant\n"
+    messages = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": prompt}]}]
+    full_prompt = tokenizer.apply_chat_template(
+        messages, tokenize=False, add_generation_prompt=True, chat_template=chat_template
+    )
+    assert full_prompt.count("<|imgpad|>") == 1, full_prompt
+    full_prompt = full_prompt.replace("<|imgpad|>", "<|imgpad|>" * n_img_tokens)
     input_ids = tokenizer(full_prompt, return_tensors="pt")["input_ids"]
     assert int((input_ids == IMAGE_TOKEN_ID).sum()) == n_img_tokens
     return input_ids, pixel_values, grid_thw, tokenizer

@@ -12,12 +12,22 @@ Profiled via `tt/profile_ocr_traced.py --image demo/demo_image1.jpg` under
 prefill**. Per-stage wall (warm, p50 over 3 replays), real weights, 28 LM /
 42 vision layers:
 
-| stage | untraced | traced | trace speedup |
-|-------|----------|--------|---------------|
-| vision (42 L) | 3218 ms | 3252 ms | **0.99×** |
-| LM prefill (28 L) | 1427 ms | 1426 ms | **1.00×** |
-| decode / step | — | 16.5 ms | — |
-| **e2e** | 4695 ms | 4720 ms | 0.99× → `**TABLE II**` |
+| stage | traced | trace speedup |
+|-------|--------|---------------|
+| vision (42 L) | 3201 ms | **0.99×** |
+| LM prefill (28 L) | **1178 ms** (was 1426 ms before lm_head slice) | **1.00×** |
+| decode / step | 16.3 ms | — |
+| **e2e** | 4927 ms | 0.99× |
+
+Real-world demo output (full document, full depth, chat-template prompt):
+`**TABLE II** – ODDS RATIO OF HODGKIN LYMPHOMA AND NON-HODGKIN LYMPHOMA …`
+
+**lm_head slice (landed):** `prefill_from_embeds` now slices `hidden` to the
+last prompt row before norm+lm_head — the wide vocab projection (151936) runs on
+1 row instead of all ~4.9k positions (KV cache for all positions is already
+populated in `prefill_kv`). Full-depth prefill **1426 → 1178 ms (−248 ms)**;
+1-layer prefill 244 → 41 ms. Real-document OCR + fully-traced tests pass at full
+depth, output unchanged, trace-safe.
 
 **Key finding:** at real resolution vision (≈69% of e2e) and prefill (≈30%) are
 **compute-bound — metal trace gives 0%** (it only helped on the 256×96 synthetic
