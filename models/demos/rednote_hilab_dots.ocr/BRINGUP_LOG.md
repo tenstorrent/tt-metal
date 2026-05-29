@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** p150 (blackhole)
 **Started:** 2026-05-29T00:11:46Z
-**Updated:** 2026-05-29T02:40:41Z
+**Updated:** 2026-05-29T02:46:22Z
 
 ## Block Status
 
@@ -48,7 +48,7 @@
 | embedding | reference | done | 1.000000 | 0 | Qwen2 token embedding (vocab 151936, hidden 1536) lookup. PCC=1.0 vs nn.Embedding. |
 | embedding | ttnn | done | 0.999999 | 0 | ttnn.embedding gather; weight [151936,1536] bf16 ROW_MAJOR in DRAM; uint32 row-major ids -> TILE output. HiFi4+fp32_dest_acc preset (no matmul; exact gather). PCC=0.9999986 vs golden on p150. Guard ok. |
 | embedding | debug | n/a | — | 0 |  |
-| embedding | optimization | pending | — | 0 |  |
+| embedding | optimization | done | 0.999999 | 0 | tracy attached (traced replay session); top op EmbeddingsDeviceOperation = 100% of the 21.6us block kernel time. Single ttnn.embedding gather: no matmul to shard, no reshape chain to L1-pin, no activation to fuse. At-ceiling — the gather is the optimal kernel for a 151936x1536 DRAM table lookup. No targeted optimization warranted. PCC=0.9999986 unchanged. |
 | embedding | real_weights | pending | — | 0 |  |
 | rmsnorm | reference | done | 1.000000 | 0 | Qwen2RMSNorm (eps 1e-6): fp32 normalize -> cast -> weight*x. PCC=1.0 vs HF Qwen2RMSNorm. |
 | rmsnorm | ttnn | done | 0.999995 | 0 | Qwen2 LM RMSNorm eps=1e-6 (vs vision 1e-5). ttnn.rms_norm HiFi4+fp32_dest_acc bf16 DRAM TILE; weight reshaped [1,1,dim//32,32] row-major. Mirror of TtVisionRMSNorm. PCC=0.99999 vs golden on p150. Guard ok. |
@@ -94,7 +94,6 @@
 
 ## Recent Ticks
 
-- tick 18 (2026-05-29T01:43:24Z): device[lm_head] — ok
 - tick 19 (2026-05-29T01:49:31Z): device[language_model] — ok
 - tick 20 (2026-05-29T01:51:14Z): skip[vision_patch_embed:ttnn] — host_resident: DotsPatchEmbed is a single Conv2d(3,1536,k=14,s=14) over patchified pixels followed by RMSNorm; Conv2d patchify is a one-shot host-side im2col+matmul in the Qwen-VL TTNN demos (qwen25_vl runs patch embed on host then moves tokens to device). Cheap relative to the 42-layer trunk and runs once per image.
 - tick 21 (2026-05-29T01:54:57Z): device[vision_tower] — ok
@@ -104,6 +103,7 @@
 - tick 25 (2026-05-29T02:20:39Z): device[vision_block] — ok
 - tick 26 (2026-05-29T02:32:56Z): device[vision_patch_merger] — ok
 - tick 27 (2026-05-29T02:40:41Z): device[vision_tower] — ok
+- tick 28 (2026-05-29T02:46:22Z): device[embedding] — ok
 
 ## Host-Resident Exceptions
 
