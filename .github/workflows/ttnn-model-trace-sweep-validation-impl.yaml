@@ -583,8 +583,12 @@ jobs:
           run_pass row
           rc_row=$?
           set -e
-          if [[ $rc_col -ne 0 ]]; then echo "[two-pass] col pass exited $rc_col"; exit $rc_col; fi
-          if [[ $rc_row -ne 0 ]]; then echo "[two-pass] row pass exited $rc_row"; exit $rc_row; fi
+          # pytest exits 1 when any tests fail, but the tracer still collects
+          # traces from passing tests. Only fail on exit codes > 1 (framework
+          # errors like import failures, missing files, segfaults).
+          if [[ $rc_col -gt 1 ]]; then echo "[two-pass] col pass exited $rc_col (framework error)"; exit $rc_col; fi
+          if [[ $rc_row -gt 1 ]]; then echo "[two-pass] row pass exited $rc_row (framework error)"; exit $rc_row; fi
+          if [[ $rc_col -eq 1 || $rc_row -eq 1 ]]; then echo "[two-pass] some tests failed (exit 1) — traces collected for passing tests"; fi
 
       - name: Upload sweep traces
         if: always()
