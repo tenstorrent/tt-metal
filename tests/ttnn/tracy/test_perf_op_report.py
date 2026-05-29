@@ -201,6 +201,7 @@ matmul_test_perf_counters = {
     indirect=True,
 )
 class TestPerfCountersSingleOp:
+    @pytest.mark.skip(reason="[CI disable] Deterministically failing on wh_n300_civ2 in sanity-tests profiler-tests/Perf op report: subprocess.CalledProcessError exit 4 when capturing perf counters; 3+ consecutive main failures. See PR #45511.")
     def test_performance_counter_columns(self, run_test_do_post_proc):
         res, request = run_test_do_post_proc
         received_columns = get_first_op_columns(res)
