@@ -1,0 +1,6 @@
+[
+  "ttnn.linear",
+  "ttnn.silu",
+  "ttnn.mul",
+  "ttnn.linear"
+]

@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-29T00:11:46Z",
-  "updated_at": "2026-05-29T00:52:15Z",
+  "updated_at": "2026-05-29T00:57:31Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -155,8 +155,15 @@
         "pcc": 1.0
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/vision_mlp.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_tt_vision_mlp.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/vision_mlp.traced_ops.json"
+        ],
+        "notes": "fused gate(fc1)/up(fc3) linear -> silu(gate)*up -> down(fc2). No bias. HiFi4+fp32_dest_acc bf16 DRAM TILE. PCC=0.99999 vs seed-0 golden on p150. Guard ok.",
+        "pcc": 0.9999855461457682
       },
       "debug": {
         "status": "n/a",
@@ -689,6 +696,12 @@
       "tick": 8,
       "ts": "2026-05-29T00:52:15Z",
       "action": "device[vision_attention]",
+      "result": "ok"
+    },
+    {
+      "tick": 9,
+      "ts": "2026-05-29T00:57:01Z",
+      "action": "device[vision_mlp]",
       "result": "ok"
     }
   ],
