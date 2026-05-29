@@ -4,7 +4,7 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Low Level Kernels &mdash; TT-Metalium  documentation</title>
+  <title>Low Level Kernels &mdash; TT-Metalium&amp;trade;  documentation</title>
       <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../../../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../../../../_static/tt_theme.css" type="text/css" />
@@ -41,7 +41,7 @@
 </a>
 
 <a href="../../../../index.html">
-    TT-Metalium
+    TT-Metalium&trade;
 </a>
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="../../../../search.html" method="get">
@@ -92,7 +92,7 @@
 
     <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
           <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
-          <a href="../../../../index.html">TT-Metalium</a>
+          <a href="../../../../index.html">TT-Metalium&trade;</a>
       </nav>
 
       <div class="wy-nav-content">
@@ -318,10 +318,10 @@ may change with future architectures.</p>
 <p>However note that <code class="docutils literal notranslate"><span class="pre">v_if</span></code> and alike works via predication. In other words, both sides of the conditional are executed and only the enabled vector elements are written. RISC-V instructions are executed normally. For example:</p>
 <div class="highlight-c++ notranslate">
 <div class="highlight"><pre><span></span><span class="n">v_if</span><span class="w"> </span><span class="p">(</span><span class="n">a</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">b</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="n">DEVICE_PRINT</span><span class="p">(</span><span class="s">"a &lt; b</span><span class="se">\n</span><span class="s">"</span><span class="p">);</span>
+<span class="w">    </span><span class="n">DPRINT</span><span class="p">(</span><span class="s">"a &lt; b</span><span class="se">\n</span><span class="s">"</span><span class="p">);</span>
 <span class="p">}</span><span class="w"> </span><span class="n">v_else</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="n">dst_reg</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">b</span><span class="p">;</span>
-<span class="w">    </span><span class="n">DEVICE_PRINT</span><span class="p">(</span><span class="s">"a &gt;= b</span><span class="se">\n</span><span class="s">"</span><span class="p">);</span>
+<span class="w">    </span><span class="n">DPRINT</span><span class="p">(</span><span class="s">"a &gt;= b</span><span class="se">\n</span><span class="s">"</span><span class="p">);</span>
 <span class="p">}</span>
 <span class="n">v_endif</span><span class="p">;</span>
 </pre></div>

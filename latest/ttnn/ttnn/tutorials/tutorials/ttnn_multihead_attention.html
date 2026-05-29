@@ -4,7 +4,7 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Multi-Head Attention &mdash; TT-NN  documentation</title>
+  <title>Multi-Head Attention &mdash; TT-NN&amp;trade;  documentation</title>
       <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../../../_static/tt_theme.css" type="text/css" />
@@ -44,7 +44,7 @@
 </a>
 
 <a href="../../../index.html">
-    TT-NN
+    TT-NN&trade;
 </a>
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
@@ -102,7 +102,7 @@
 
     <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
           <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
-          <a href="../../../index.html">TT-NN</a>
+          <a href="../../../index.html">TT-NN&trade;</a>
       </nav>
 
       <div class="wy-nav-content">
@@ -206,7 +206,7 @@
     <span class="n">attention_scores</span> <span class="o">=</span> <span class="n">query</span> <span class="o">@</span> <span class="n">key</span>
     <span class="n">attention_scores</span> <span class="o">=</span> <span class="n">attention_scores</span> <span class="o">*</span> <span class="p">(</span><span class="mi">1</span> <span class="o">/</span> <span class="p">(</span><span class="n">head_size</span><span class="o">**</span><span class="mf">0.5</span><span class="p">))</span>
     <span class="n">attention_scores</span> <span class="o">+=</span> <span class="n">attention_mask</span>
-    <span class="n">attention_probs</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">softmax</span><span class="p">(</span><span class="n">attention_scores</span><span class="p">,</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span> <span class="n">numeric_stable</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+    <span class="n">attention_probs</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">softmax</span><span class="p">(</span><span class="n">attention_scores</span><span class="p">,</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span> <span class="n">numeric_stable</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 
     <span class="n">context_layer</span> <span class="o">=</span> <span class="n">attention_probs</span> <span class="o">@</span> <span class="n">value</span>
     <span class="n">context_layer</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">permute</span><span class="p">(</span><span class="n">context_layer</span><span class="p">,</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">))</span>
@@ -545,7 +545,7 @@
 </div>
 </div>
 <p>Note that the optimized multi-head attention is two orders of magnitude faster than the initial version.</p>
-<p>Check that the output of the optimized version matches the output of the original implementation:</p>
+<p>Check that the output of the optimized version matches the output of the original implementation. We use Pearson correlation rather than <code class="docutils literal notranslate"><span class="pre">torch.allclose</span></code> because the optimized path uses <code class="docutils literal notranslate"><span class="pre">bfloat8_b</span></code> matmuls vs <code class="docutils literal notranslate"><span class="pre">bfloat16</span></code> in the unoptimized path.</p>
 <div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate">
 <div class="highlight"><pre><span></span>[ ]:
@@ -555,8 +555,13 @@
 <div class="highlight"><pre><span></span><span class="n">torch_output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_torch</span><span class="p">(</span><span class="n">output</span><span class="p">)</span>
 <span class="n">torch_optimized_output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_torch</span><span class="p">(</span><span class="n">optimized_output</span><span class="p">)</span>
 
-<span class="k">assert</span> <span class="n">torch</span><span class="o">.</span><span class="n">allclose</span><span class="p">(</span><span class="n">torch_output</span><span class="p">,</span> <span class="n">torch_optimized_output</span><span class="p">)</span>
-</pre></div>
+<span class="c1"># Compare via Pearson correlation. PCC tolerates the precision gap between the two paths</span>
+<span class="c1"># (optimized uses bfloat8_b matmuls; unoptimized uses bfloat16), where torch.allclose would not.</span>
+<span class="n">flat_ref</span> <span class="o">=</span> <span class="n">torch_output</span><span class="o">.</span><span class="n">flatten</span><span class="p">()</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+<span class="n">flat_opt</span> <span class="o">=</span> <span class="n">torch_optimized_output</span><span class="o">.</span><span class="n">flatten</span><span class="p">()</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+<span class="n">pcc</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">corrcoef</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">stack</span><span class="p">([</span><span class="n">flat_ref</span><span class="p">,</span> <span class="n">flat_opt</span><span class="p">]))[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">item</span><span class="p">()</span>
+<span class="k">assert</span> <span class="n">pcc</span> <span class="o">&gt;=</span> <span class="mf">0.95</span><span class="p">,</span> <span class="sa">f</span><span class="s2">"Outputs disagree: PCC </span><span class="si">{</span><span class="n">pcc</span><span class="si">:</span><span class="s2">.4f</span><span class="si">}</span><span class="s2"> &lt; 0.95"</span>
+<br></pre></div>
 </div>
 </div>
 <p>Close the device:</p>

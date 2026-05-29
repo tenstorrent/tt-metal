@@ -4,7 +4,7 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ttnn.reshape &mdash; TT-NN  documentation</title>
+  <title>ttnn.reshape &mdash; TT-NN&amp;trade;  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
@@ -41,7 +41,7 @@
 </a>
 
 <a href="../../index.html">
-    TT-NN
+    TT-NN&trade;
 </a>
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
@@ -157,7 +157,7 @@
 
     <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
           <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
-          <a href="../../index.html">TT-NN</a>
+          <a href="../../index.html">TT-NN&trade;</a>
       </nav>
 
       <div class="wy-nav-content">
@@ -206,10 +206,12 @@
 <p>:keyword * <code class="xref py py-attr docutils literal notranslate"><span class="pre">memory_config</span></code>: Memory Config of the output tensor. Default is to match input tensor memory config
 :keyword * <code class="xref py py-attr docutils literal notranslate"><span class="pre">pad_value</span></code>: Value to pad the output tensor. Default is 0
 :kwtype * <code class="xref py py-attr docutils literal notranslate"><span class="pre">pad_value</span></code>: number
-:keyword * <code class="xref py py-attr docutils literal notranslate"><span class="pre">reshape_map_mode</span></code>: Advanced option. Set to RECREATE to recompute and realloc mapping tensor. This may alleviate DRAM fragmentation but is slow. Default is CACHE.
-:kwtype * <code class="xref py py-attr docutils literal notranslate"><span class="pre">reshape_map_mode</span></code>: TileReshapeMapMode
-:keyword * <code class="xref py py-attr docutils literal notranslate"><span class="pre">sub_core_grid</span></code>: Specifies sub-core grid ranges for advanced core selection control. Default uses all the cores in the device.
-:kwtype * <code class="xref py py-attr docutils literal notranslate"><span class="pre">sub_core_grid</span></code>: CoreRangeSet, optional</p>
+:keyword * <code class="xref py py-attr docutils literal notranslate"><span class="pre">reshape_tile_mode</span></code>: Advanced option. Set to RECREATE to recompute and reallocate the mapping tensor. This may alleviate DRAM fragmentation but is slow. Default is CACHE. This keyword is named <code class="xref py py-attr docutils literal notranslate"><span class="pre">reshape_tile_mode</span></code> on all overloads; the small-vector (tuple/list) shape overload previously used the name <code class="docutils literal notranslate"><span class="pre">recreate_mapping_tensor</span></code> for the same option—update callers to <code class="docutils literal notranslate"><span class="pre">reshape_tile_mode</span></code>.
+:kwtype * <code class="xref py py-attr docutils literal notranslate"><span class="pre">reshape_tile_mode</span></code>: TileReshapeMapMode
+:keyword * <code class="xref py py-attr docutils literal notranslate"><span class="pre">sub_core_grids</span></code>: Specifies sub-core grid ranges for advanced core selection control. Default uses all the cores in the device.
+:kwtype * <code class="xref py py-attr docutils literal notranslate"><span class="pre">sub_core_grids</span></code>: CoreRangeSet, optional
+:keyword * <code class="xref py py-attr docutils literal notranslate"><span class="pre">skip_padding_fill</span></code>: If False, <code class="docutils literal notranslate"><span class="pre">pad_value</span></code> is applied to tile padding lanes. If True, <code class="docutils literal notranslate"><span class="pre">pad_value</span></code> is ignored and tile padding is left as-is. Default is False. Note: this option is silently ignored for <code class="docutils literal notranslate"><span class="pre">BFLOAT8_B</span></code> outputs because the BF8 typecast computes a shared exponent across each 16-element sub-block, and unfilled padding would corrupt logical values in straddling sub-blocks; the fill always runs in that case.
+:kwtype * <code class="xref py py-attr docutils literal notranslate"><span class="pre">skip_padding_fill</span></code>: bool</p>
 <dl class="field-list simple">
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>

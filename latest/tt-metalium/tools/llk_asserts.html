@@ -4,7 +4,7 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>LLK Asserts &mdash; TT-Metalium  documentation</title>
+  <title>LLK Asserts &mdash; TT-Metalium&amp;trade;  documentation</title>
       <link rel="stylesheet" href="../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../_static/tt_theme.css" type="text/css" />
@@ -41,7 +41,7 @@
 </a>
 
 <a href="../index.html">
-    TT-Metalium
+    TT-Metalium&trade;
 </a>
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
@@ -65,7 +65,6 @@
 <li class="toctree-l1"><a class="reference internal" href="../tt_metal/apis/index.html">APIs</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../tt_metal/environment_variables/index.html">Environment Variables</a></li>
 <li class="toctree-l1 current"><a class="reference internal" href="index.html">Tools</a><ul class="current">
-<li class="toctree-l2"><a class="reference internal" href="kernel_print.html">Kernel Debug Print</a></li>
 <li class="toctree-l2"><a class="reference internal" href="checkpoint.html">Debug Checkpoints</a></li>
 <li class="toctree-l2"><a class="reference internal" href="device_print.html">Device Debug Print</a></li>
 <li class="toctree-l2"><a class="reference internal" href="watcher.html">Watcher</a></li>
@@ -107,7 +106,7 @@
 
     <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
           <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
-          <a href="../index.html">TT-Metalium</a>
+          <a href="../index.html">TT-Metalium&trade;</a>
       </nav>
 
       <div class="wy-nav-content">
@@ -190,7 +189,7 @@ It takes <strong>two required positional parameters</strong> (no defaults):</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">&lt;assert_output_path&gt;</span></code> — file where the on-timeout triage hook writes the lightweight-assert
 dump (callstacks, template parameters, runtime args, locals).</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">&lt;dprint_output_path&gt;</span></code> — file where <code class="docutils literal notranslate"><span class="pre">DEVICE_PRINT</span></code> output from all cores is written
+<li><p><code class="docutils literal notranslate"><span class="pre">&lt;dprint_output_path&gt;</span></code> — file where <code class="docutils literal notranslate"><span class="pre">DPRINT</span></code> output from all cores is written
 (<code class="docutils literal notranslate"><span class="pre">TT_METAL_DPRINT_FILE</span></code>).</p></li>
 </ul>
 <p>The script also requires <code class="docutils literal notranslate"><span class="pre">TT_METAL_HOME</span></code> to be set — activating the tt-metal Python
@@ -207,7 +206,7 @@ environment is enough.</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">test_output.txt</span></code> — pytest stdout/stderr, including the host-side <code class="docutils literal notranslate"><span class="pre">RuntimeError</span></code> and stack trace.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">assert.txt</span></code> — the lightweight-assert dump from the device when the hang was detected.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">/tmp/tt_dprint.log</span></code> — <code class="docutils literal notranslate"><span class="pre">DEVICE_PRINT</span></code> output (e.g. <code class="docutils literal notranslate"><span class="pre">expected:</span> <span class="pre">…,</span> <span class="pre">actual:</span> <span class="pre">…</span></code> values
+<li><p><code class="docutils literal notranslate"><span class="pre">/tmp/tt_dprint.log</span></code> — <code class="docutils literal notranslate"><span class="pre">DPRINT</span></code> output (e.g. <code class="docutils literal notranslate"><span class="pre">expected:</span> <span class="pre">…,</span> <span class="pre">actual:</span> <span class="pre">…</span></code> values
 emitted near a failing <code class="docutils literal notranslate"><span class="pre">LLK_ASSERT</span></code>).</p></li>
 </ul>
 <p><strong>How the script is designed to work</strong></p>
@@ -247,16 +246,12 @@ when running under CI-like conditions where they are otherwise gated off.</p></t
 </tr>
 <tr class="row-odd">
 <td><p><code class="docutils literal notranslate"><span class="pre">TT_METAL_DPRINT_CORES=all</span></code></p></td>
-<td><p>Subscribes the host dprint server to every core. Without this, <code class="docutils literal notranslate"><span class="pre">DEVICE_PRINT</span></code>
+<td><p>Subscribes the host dprint server to every core. Without this, <code class="docutils literal notranslate"><span class="pre">DPRINT</span></code>
 statements on TRISCs would not be captured.</p></td>
 </tr>
 <tr class="row-even">
-<td><p><code class="docutils literal notranslate"><span class="pre">TT_METAL_DEVICE_PRINT=1</span></code></p></td>
-<td><p>Enables the <code class="docutils literal notranslate"><span class="pre">DEVICE_PRINT</span></code> macro at compile-time in JIT-built kernels.</p></td>
-</tr>
-<tr class="row-odd">
 <td><p><code class="docutils literal notranslate"><span class="pre">TT_METAL_DPRINT_FILE=&lt;dprint_output_path&gt;</span></code></p></td>
-<td><p>Redirects all <code class="docutils literal notranslate"><span class="pre">DEVICE_PRINT</span></code> output to the file you specified instead of stdout,
+<td><p>Redirects all <code class="docutils literal notranslate"><span class="pre">DPRINT</span></code> output to the file you specified instead of stdout,
 making it easy to grep/diff after the run.</p></td>
 </tr>
 </tbody>
@@ -270,7 +265,7 @@ raises a dispatch timeout.</p></li>
 device, finds the asserting TRISC, recovers callstack, template params, runtime args, and
 locals, and writes them to <code class="docutils literal notranslate"><span class="pre">&lt;assert_output_path&gt;</span></code>.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">tt-smi</span> <span class="pre">-r</span></code> resets the device so the next test run is clean.</p></li>
-<li><p>Pytest reports a <code class="docutils literal notranslate"><span class="pre">RuntimeError</span></code> to <code class="docutils literal notranslate"><span class="pre">test_output.txt</span></code>; <code class="docutils literal notranslate"><span class="pre">DEVICE_PRINT</span></code> lines emitted
+<li><p>Pytest reports a <code class="docutils literal notranslate"><span class="pre">RuntimeError</span></code> to <code class="docutils literal notranslate"><span class="pre">test_output.txt</span></code>; <code class="docutils literal notranslate"><span class="pre">DPRINT</span></code> lines emitted
 before the <code class="docutils literal notranslate"><span class="pre">ebreak</span></code> are in <code class="docutils literal notranslate"><span class="pre">&lt;dprint_output_path&gt;</span></code>.</p></li>
 </ol>
 <p>Together, these three files normally pinpoint the failing kernel, the failing line, and the

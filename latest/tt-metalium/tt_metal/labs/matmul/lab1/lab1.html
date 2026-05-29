@@ -4,7 +4,7 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Lab 1: Single Core Matrix Multiplication &mdash; TT-Metalium  documentation</title>
+  <title>Lab 1: Single Core Matrix Multiplication &mdash; TT-Metalium&amp;trade;  documentation</title>
       <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../../../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../../../../_static/tt_theme.css" type="text/css" />
@@ -41,7 +41,7 @@
 </a>
 
 <a href="../../../../index.html">
-    TT-Metalium
+    TT-Metalium&trade;
 </a>
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="../../../../search.html" method="get">
@@ -93,7 +93,7 @@
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#debug-facilities-in-tt-metalium">Debug Facilities in TT-Metalium</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="#debug-print-api">Debug Print API</a></li>
-<li class="toctree-l4"><a class="reference internal" href="#exercise-4-using-device-print-to-debug-a-kernel">Exercise 4: Using DEVICE_PRINT to Debug a Kernel</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#exercise-4-using-dprint-to-debug-a-kernel">Exercise 4: Using DPRINT to Debug a Kernel</a></li>
 <li class="toctree-l4"><a class="reference internal" href="#debugging-hangs-using-stack-traces">Debugging Hangs using Stack Traces</a></li>
 <li class="toctree-l4"><a class="reference internal" href="#exercise-5-using-tt-triage-to-debug-a-hang">Exercise 5: Using tt-triage to Debug a Hang</a></li>
 <li class="toctree-l4"><a class="reference internal" href="#device-performance-profiling">Device Performance Profiling</a></li>
@@ -129,7 +129,7 @@
 
     <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
           <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
-          <a href="../../../../index.html">TT-Metalium</a>
+          <a href="../../../../index.html">TT-Metalium&trade;</a>
       </nav>
 
       <div class="wy-nav-content">
@@ -829,37 +829,33 @@ These methods are useful for debugging hangs and other issues that may not be ap
 </h3>
 <p>Because kernel code runs on the device, it can’t use standard C++ functions to print debug information,
 as the device doesn’t have a terminal.
-The Device Debug Print (DEVICE_PRINT) API is a device-side debugging feature that lets a kernel print values back
+The Device Debug Print (DPRINT) API is a device-side debugging feature that lets a kernel print values back
 to the host while it runs. You can think of it as a constrained, lightweight alternative to <code class="docutils literal notranslate"><span class="pre">printf</span></code> that works inside kernels.
 It is mainly used to inspect scalar variables, addresses, and the contents of tiles stored in circular buffers, which helps when debugging
 numerical issues or hangs.</p>
-<p>The DEVICE_PRINT API is controlled through environment variables on the host side.
-The host-side environment variable <code class="docutils literal notranslate"><span class="pre">TT_METAL_DPRINT_CORES</span></code> specifies which cores’ DEVICE_PRINT information will be forwarded to the host terminal.
-If this environment variable is not set, calls to DEVICE_PRINT APIs produce no output and behave as no-ops at runtime.
-During the DPRINT deprecation period, you must also enable DEVICE_PRINT explicitly with
-<code class="docutils literal notranslate"><span class="pre">TT_METAL_DEVICE_PRINT=1</span></code>; otherwise the build may use the legacy DPRINT path and
-<code class="docutils literal notranslate"><span class="pre">DEVICE_PRINT</span></code> calls may be compiled out. In that transition period, a typical setup is
-<code class="docutils literal notranslate"><span class="pre">export</span> <span class="pre">TT_METAL_DEVICE_PRINT=1</span></code> and <code class="docutils literal notranslate"><span class="pre">export</span> <span class="pre">TT_METAL_DPRINT_CORES=all</span></code>.
+<p>The DPRINT API is controlled through environment variables on the host side.
+The host-side environment variable <code class="docutils literal notranslate"><span class="pre">TT_METAL_DPRINT_CORES</span></code> specifies which cores’ DPRINT information will be forwarded to the host terminal.
+If this environment variable is not set, calls to DPRINT APIs produce no output and behave as no-ops at runtime.
 When debugging, it is common to set this variable to <code class="docutils literal notranslate"><span class="pre">all</span></code> to print from all cores (i.e. <code class="docutils literal notranslate"><span class="pre">export</span> <span class="pre">TT_METAL_DPRINT_CORES=all</span></code>).
 When not debugging, you should unset this variable to disable printing (i.e. <code class="docutils literal notranslate"><span class="pre">unset</span> <span class="pre">TT_METAL_DPRINT_CORES</span></code>).
 Unsetting this variable is particularly important to do when evaluating performance.</p>
 <p>An alternative to printing to the host terminal is to print to a log file, which can be done by setting
 the <code class="docutils literal notranslate"><span class="pre">TT_METAL_DPRINT_FILE</span></code> environment variable (e.g. <code class="docutils literal notranslate"><span class="pre">export</span> <span class="pre">TT_METAL_DPRINT_FILE=log.txt</span></code>).</p>
-<p>To use DEVICE_PRINT in a kernel, you include the debug header and use a fmtlib format-like syntax:
-DEVICE_PRINT supports printing integers, floats, <code class="docutils literal notranslate"><span class="pre">bool</span></code> type and enums.
+<p>To use DPRINT in a kernel, you include the debug header and use a fmtlib format-like syntax:
+DPRINT supports printing integers, floats, <code class="docutils literal notranslate"><span class="pre">bool</span></code> type and enums.
 The following example shows a simple print of local kernel variables, including a Boolean flag:</p>
 <div class="highlight-cpp notranslate">
-<div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"api/debug/device_print.h"</span>
+<div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"api/debug/dprint.h"</span>
 
 <span class="kt">void</span><span class="w"> </span><span class="nf">kernel_main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">iter</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">5</span><span class="p">;</span>
 <span class="w">    </span><span class="kt">bool</span><span class="w"> </span><span class="n">done</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span>
 
-<span class="w">    </span><span class="c1">// DEVICE_PRINT uses a fmtlib format-like syntax; \n flushes the print buffer.</span>
-<span class="w">    </span><span class="n">DEVICE_PRINT</span><span class="p">(</span><span class="s">"iter = {}</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="w"> </span><span class="n">iter</span><span class="p">);</span>
+<span class="w">    </span><span class="c1">// DPRINT uses a fmtlib format-like syntax; \n flushes the print buffer.</span>
+<span class="w">    </span><span class="n">DPRINT</span><span class="p">(</span><span class="s">"iter = {}</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="w"> </span><span class="n">iter</span><span class="p">);</span>
 
 <span class="w">    </span><span class="c1">// Booleans are printed as true/false.</span>
-<span class="w">    </span><span class="n">DEVICE_PRINT</span><span class="p">(</span><span class="s">"done flag = {}</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="w"> </span><span class="n">done</span><span class="p">);</span>
+<span class="w">    </span><span class="n">DPRINT</span><span class="p">(</span><span class="s">"done flag = {}</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="w"> </span><span class="n">done</span><span class="p">);</span>
 <span class="p">}</span>
 </pre></div>
 </div>
@@ -867,7 +863,7 @@ The following example shows a simple print of local kernel variables, including 
 <h4>Printing a Tile in a Dataflow Kernel<a class="headerlink" href="#printing-a-tile-in-a-dataflow-kernel" title="Permalink to this heading"></a>
 </h4>
 <p>Data is passed between kernels using circular buffers (CBs), which often contain tiles of data.
-DEVICE_PRINT can be combined with the <code class="docutils literal notranslate"><span class="pre">TileSlice</span></code> helper to print part or all of a tile from a CB.</p>
+DPRINT can be combined with the <code class="docutils literal notranslate"><span class="pre">TileSlice</span></code> helper to print part or all of a tile from a CB.</p>
 <p>You can only safely sample a tile from a CB <strong>between</strong> the appropriate CB API calls:</p>
 <ul class="simple">
 <li><p>When reading from CBs (e.g. in writer kernels): between <code class="docutils literal notranslate"><span class="pre">cb_wait_front()</span></code> and <code class="docutils literal notranslate"><span class="pre">cb_pop_front()</span></code>.</p></li>
@@ -876,7 +872,7 @@ DEVICE_PRINT can be combined with the <code class="docutils literal notranslate"
 <p>A simplified example of printing a full tile from an output CB in a writer kernel is shown below.</p>
 <div class="highlight-cpp notranslate">
 <div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"api/dataflow/dataflow_api.h"</span>
-<span class="cp">#include</span><span class="w"> </span><span class="cpf">"api/debug/device_print.h"</span>
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">"api/debug/dprint.h"</span>
 <span class="cp">#include</span><span class="w"> </span><span class="cpf">"tt-metalium/constants.hpp"</span>
 
 <span class="kt">void</span><span class="w"> </span><span class="nf">kernel_main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
@@ -890,7 +886,7 @@ DEVICE_PRINT can be combined with the <code class="docutils literal notranslate"
 <span class="w">        </span><span class="c1">// Wait until one tile is available at the front of cb_out.</span>
 <span class="w">        </span><span class="n">cb_wait_front</span><span class="p">(</span><span class="n">cb_out</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
 
-<span class="w">        </span><span class="n">DEVICE_PRINT</span><span class="p">(</span><span class="s">"Output tile {} from cb_out = {}</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="w"> </span><span class="n">t</span><span class="p">,</span><span class="w"> </span><span class="k">static_cast</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="n">cb_out</span><span class="p">));</span>
+<span class="w">        </span><span class="n">DPRINT</span><span class="p">(</span><span class="s">"Output tile {} from cb_out = {}</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="w"> </span><span class="n">t</span><span class="p">,</span><span class="w"> </span><span class="k">static_cast</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="n">cb_out</span><span class="p">));</span>
 
 <span class="w">        </span><span class="c1">// Print each row of a tile.</span>
 <span class="w">        </span><span class="c1">// TileSlice has limited capacity, so we must print one row at a time.</span>
@@ -905,7 +901,7 @@ DEVICE_PRINT can be combined with the <code class="docutils literal notranslate"
 <span class="w">            </span><span class="p">};</span>
 
 <span class="w">            </span><span class="c1">// TileSlice(cb_id, tile_idx, slice_range, cb_type, ptr_type)</span>
-<span class="w">            </span><span class="n">DEVICE_PRINT</span><span class="p">(</span><span class="s">"{}: {}</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="w"> </span><span class="n">row</span><span class="p">,</span>
+<span class="w">            </span><span class="n">DPRINT</span><span class="p">(</span><span class="s">"{}: {}</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="w"> </span><span class="n">row</span><span class="p">,</span>
 <span class="w">               </span><span class="n">TileSlice</span><span class="p">(</span>
 <span class="w">                  </span><span class="k">static_cast</span><span class="o">&lt;</span><span class="kt">uint8_t</span><span class="o">&gt;</span><span class="p">(</span><span class="n">cb_out</span><span class="p">),</span>
 <span class="w">                  </span><span class="cm">/* tile_idx = */</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
@@ -934,29 +930,29 @@ to access the data that has just been written (but not yet “pushed back”) to
 <section id="caveats-and-best-practices">
 <h4>Caveats and Best Practices<a class="headerlink" href="#caveats-and-best-practices" title="Permalink to this heading"></a>
 </h4>
-<p>A few important caveats to keep in mind when using DEVICE_PRINT:</p>
+<p>A few important caveats to keep in mind when using DPRINT:</p>
 <ul>
 <li>
 <p><strong>Flushing behavior</strong></p>
-<p>DEVICE_PRINT output is only guaranteed to flush when you print <code class="docutils literal notranslate"><span class="pre">'\n'</span></code>, or when the device closes.
+<p>DPRINT output is only guaranteed to flush when you print <code class="docutils literal notranslate"><span class="pre">'\n'</span></code>, or when the device closes.
 Always end each logical debug line with <code class="docutils literal notranslate"><span class="pre">'\n'</span></code> if you want to see it promptly.</p>
 </li>
 <li>
 <p><strong>Kernel size and string length</strong></p>
-<p>Each distinct DEVICE_PRINT call embeds a format string (and often the file name and line number) into separate sections of the kernel binary that won’t be loaded to the device.
-Every DEVICE_PRINT call adds instructions to the kernel to serialize data into a buffer that will be transferred to the host.
+<p>Each distinct DPRINT call embeds a format string (and often the file name and line number) into separate sections of the kernel binary that won’t be loaded to the device.
+Every DPRINT call adds instructions to the kernel to serialize data into a buffer that will be transferred to the host.
 You can reduce kernel size by reducing the number of iterations or the problem size while debugging.
 Finally, remove or disable most DEVICE_PRINTs once you have diagnosed the issue.</p>
 </li>
 </ul>
-<p>Taken together, these practices let you use DEVICE_PRINT as a practical, low-level debug tool in TT-Metalium kernels without
+<p>Taken together, these practices let you use DPRINT as a practical, low-level debug tool in TT-Metalium kernels without
 needing deep knowledge of the underlying Tenstorrent architecture, while still avoiding common pitfalls.</p>
 </section>
 </section>
-<section id="exercise-4-using-device-print-to-debug-a-kernel">
-<h3>Exercise 4: Using DEVICE_PRINT to Debug a Kernel<a class="headerlink" href="#exercise-4-using-device-print-to-debug-a-kernel" title="Permalink to this heading"></a>
+<section id="exercise-4-using-dprint-to-debug-a-kernel">
+<h3>Exercise 4: Using DPRINT to Debug a Kernel<a class="headerlink" href="#exercise-4-using-dprint-to-debug-a-kernel" title="Permalink to this heading"></a>
 </h3>
-<p>Add DEVICE_PRINT statements to the writer kernel in our example program to print:</p>
+<p>Add DPRINT statements to the writer kernel in our example program to print:</p>
 <ul class="simple">
 <li><p>Value of the iterator <code class="docutils literal notranslate"><span class="pre">i</span></code> in every iteration of the <code class="docutils literal notranslate"><span class="pre">for</span></code> loop</p></li>
 <li><p>Contents of the resulting tile for the first three tiles processed by the kernel.</p></li>
@@ -1031,7 +1027,7 @@ look for kernel names of interest, such as <code class="docutils literal notrans
 <p>In this case, you should see the call stack for the <code class="docutils literal notranslate"><span class="pre">read_tiles</span></code> kernel contains a call to <code class="docutils literal notranslate"><span class="pre">cb_reserve_back</span></code>, even if you dump stack trace
 repeatedly, indicating a possible source of the problem.
 In general, stack traces alone may not be sufficient to uncover the reason for the hang. In such a case,
-you may need to add DEVICE_PRINT statements to kernel code to help pinpoint the problem. For example,
+you may need to add DPRINT statements to kernel code to help pinpoint the problem. For example,
 printing iterator values in all kernels may be useful to identify the iteration when the hang occurs.</p>
 <p>Note that you can terminate the hung program by pressing <code class="docutils literal notranslate"><span class="pre">Ctrl</span></code> + <code class="docutils literal notranslate"><span class="pre">C</span></code> in the terminal where it is running.
 Once you are done debugging, uncomment the calls to <code class="docutils literal notranslate"><span class="pre">cb_pop_front</span></code> in the compute kernel to restore normal behavior.</p>
@@ -1062,9 +1058,9 @@ with the <code class="docutils literal notranslate"><span class="pre">--build-ty
 <li>
 <p><strong>Make sure DEVICE_PRINTs are disabled</strong></p>
 <p>Ensure that the <code class="docutils literal notranslate"><span class="pre">TT_METAL_DPRINT_CORES</span></code> environment variable is not set.
-The device profiler and kernel DEVICE_PRINT both consume the same limited on-chip SRAM,
-so only one should be enabled at a time. Also, the time spent on DEVICE_PRINT may affect performance measurements,
-leading to misleading results when compared to another run without DEVICE_PRINT.</p>
+The device profiler and kernel DPRINT both consume the same limited on-chip SRAM,
+so only one should be enabled at a time. Also, the time spent on DPRINT may affect performance measurements,
+leading to misleading results when compared to another run without DPRINT.</p>
 </li>
 <li>
 <p><strong>Run the program with profiler enabled</strong></p>
@@ -1334,7 +1330,7 @@ may be higher if the reference solution doesn’t use 32-bit <code class="docuti
 <li><p>Profile the performance of the implementation, taking note of the elapsed firmware time. This will be useful to compare
 against future labs when we optimize the implementation for performance.
 If you previously used the <code class="docutils literal notranslate"><span class="pre">--build-type</span> <span class="pre">Debug</span></code> flag, <strong>do not forget to rebuild the programming examples</strong>
-with the <code class="docutils literal notranslate"><span class="pre">--build-type</span> <span class="pre">Release</span></code> flag, and also to disable DEVICE_PRINT before profiling performance.</p></li>
+with the <code class="docutils literal notranslate"><span class="pre">--build-type</span> <span class="pre">Release</span></code> flag, and also to disable DPRINT before profiling performance.</p></li>
 </ol>
 </section>
 </section>

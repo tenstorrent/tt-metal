@@ -4,7 +4,7 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Memory from a kernel developer’s perspective &mdash; TT-Metalium  documentation</title>
+  <title>Memory from a kernel developer’s perspective &mdash; TT-Metalium&amp;trade;  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
@@ -41,7 +41,7 @@
 </a>
 
 <a href="../../index.html">
-    TT-Metalium
+    TT-Metalium&trade;
 </a>
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
@@ -92,7 +92,7 @@
 
     <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
           <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
-          <a href="../../index.html">TT-Metalium</a>
+          <a href="../../index.html">TT-Metalium&trade;</a>
       </nav>
 
       <div class="wy-nav-content">
@@ -142,7 +142,7 @@
 <span class="w">    </span><span class="n">cb_wait_front</span><span class="p">(</span><span class="n">tt</span><span class="o">::</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_16</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
 <span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">cb_addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_write_ptr</span><span class="p">(</span><span class="n">tt</span><span class="o">::</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_16</span><span class="p">);</span>
 <span class="w">    </span><span class="c1">// Treating it as address because the address is in shared SRAM</span>
-<span class="w">    </span><span class="c1">// DEVICE_PRINT("Value at circular buffer: {}\n", ((uint32_t*)cb_addr)[0]);</span>
+<span class="w">    </span><span class="c1">// DPRINT("Value at circular buffer: {}\n", ((uint32_t*)cb_addr)[0]);</span>
 
 <span class="w">    </span><span class="c1">// `dram_addr` is a DRAM address, however the address is not mapped in the RISC-V address space</span>
 <span class="w">    </span><span class="c1">// and the content must be explicitly fetched from DRAM using NoC APIs and requesting a transfer</span>

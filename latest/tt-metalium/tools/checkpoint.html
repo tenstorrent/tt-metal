@@ -4,7 +4,7 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Debug Checkpoints &mdash; TT-Metalium  documentation</title>
+  <title>Debug Checkpoints &mdash; TT-Metalium&amp;trade;  documentation</title>
       <link rel="stylesheet" href="../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../_static/tt_theme.css" type="text/css" />
@@ -25,7 +25,7 @@
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="Device Debug Print" href="device_print.html" />
-    <link rel="prev" title="Kernel Debug Print" href="kernel_print.html" /> 
+    <link rel="prev" title="Tools" href="index.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -41,7 +41,7 @@
 </a>
 
 <a href="../index.html">
-    TT-Metalium
+    TT-Metalium&trade;
 </a>
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
@@ -65,7 +65,6 @@
 <li class="toctree-l1"><a class="reference internal" href="../tt_metal/apis/index.html">APIs</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../tt_metal/environment_variables/index.html">Environment Variables</a></li>
 <li class="toctree-l1 current"><a class="reference internal" href="index.html">Tools</a><ul class="current">
-<li class="toctree-l2"><a class="reference internal" href="kernel_print.html">Kernel Debug Print</a></li>
 <li class="toctree-l2 current"><a class="current reference internal" href="#">Debug Checkpoints</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="#quick-start">Quick Start</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#overview">Overview</a></li>
@@ -116,7 +115,7 @@
 
     <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
           <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
-          <a href="../index.html">TT-Metalium</a>
+          <a href="../index.html">TT-Metalium&trade;</a>
       </nav>
 
       <div class="wy-nav-content">
@@ -197,14 +196,14 @@ only dumps destination registers.</p>
 </pre></div>
 </div>
 <p>Without a print backend, checkpoints act as barriers only (no dump output). To get CB dump
-output, also enable DPRINT or DEVICE_PRINT:</p>
+output, also enable DPRINT:</p>
 <div class="highlight-bash notranslate">
 <div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">TT_METAL_CHECKPOINT</span><span class="o">=</span><span class="m">1</span>
 <span class="nb">export</span><span class="w"> </span><span class="nv">TT_METAL_DPRINT_CORES</span><span class="o">=</span><span class="m">0</span>,0
 </pre></div>
 </div>
-<p><strong>Standalone dump utilities</strong> (<code class="docutils literal notranslate"><span class="pre">debug_dump_cb</span></code>, <code class="docutils literal notranslate"><span class="pre">debug_dump_l1</span></code>, etc.) require only DPRINT
-or DEVICE_PRINT — no <code class="docutils literal notranslate"><span class="pre">TT_METAL_CHECKPOINT</span></code> needed:</p>
+<p><strong>Standalone dump utilities</strong> (<code class="docutils literal notranslate"><span class="pre">debug_dump_cb</span></code>, <code class="docutils literal notranslate"><span class="pre">debug_dump_l1</span></code>, etc.) require only DPRINT —
+no <code class="docutils literal notranslate"><span class="pre">TT_METAL_CHECKPOINT</span></code> needed:</p>
 <div class="highlight-bash notranslate">
 <div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">TT_METAL_DPRINT_CORES</span><span class="o">=</span><span class="m">0</span>,0
 </pre></div>
@@ -569,7 +568,7 @@ BRISC, NCRISC, TRISC0, and TRISC2 (not TRISC1/Math, which cannot access CB inter
 <code class="docutils literal notranslate"><span class="pre">debug_dump_cb_typed(cb_id,</span> <span class="pre">tile_idx)</span></code><a class="headerlink" href="#debug-dump-cb-typed-cb-id-tile-idx" title="Permalink to this heading"></a>
 </h3>
 <p>Prints tile data interpreted according to the CB’s data format, showing actual float/int values.
-Uses TileSlice internally. Works with both DPRINT and DEVICE_PRINT.</p>
+Uses TileSlice internally.</p>
 <p>Available on TRISC0 (Unpack), TRISC2 (Pack), BRISC, and NCRISC. On BRISC/NCRISC, an additional
 <code class="docutils literal notranslate"><span class="pre">cb_type</span></code> parameter specifies whether the CB is an input or output.</p>
 <div class="highlight-c++ notranslate">
@@ -601,7 +600,7 @@ scratch space, or any L1 region.</p>
   [0x100030] 41500000 41600000 41700000 41800000
 </pre></div>
 </div>
-<p>All three functions are no-ops when DPRINT/DEVICE_PRINT is not enabled.</p>
+<p>All three functions are no-ops when DPRINT is not enabled.</p>
 </section>
 </section>
 <section id="comparison-with-dprint-tensix-dest-regs">
@@ -679,7 +678,7 @@ pipeline at a specific point within a large op.</p>
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="kernel_print.html" class="btn btn-neutral float-left" title="Kernel Debug Print" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="index.html" class="btn btn-neutral float-left" title="Tools" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
         <a href="device_print.html" class="btn btn-neutral float-right" title="Device Debug Print" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
