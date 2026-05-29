@@ -200,12 +200,22 @@ class TtVisionAttention(LightweightModule):
             k_chunk_size=_chunk(seq_length, 512),
         )
 
-        # fp32 compute to match the reference float path.
+        # fp32 compute to match the reference float path (matmuls + RoPE).
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
+        )
+        # The windowed SDPA runs HiFi2 with bf8 Q/K/V (the qwen2.5-VL vision
+        # pattern): vision attention tolerates the reduced precision and it is
+        # ~3x faster than bf16/HiFi4 (15 vs 46 ms at seq=19520). Gated by the
+        # vision-tower PCC>0.99 test.
+        self.sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
         )
 
     def _rotate_half(self, x: ttnn.Tensor) -> ttnn.Tensor:
@@ -264,8 +274,23 @@ class TtVisionAttention(LightweightModule):
             transpose_k_heads=False,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )  # each [1, nh, seq, hd]
-        q = self._apply_rope(q)
-        k = self._apply_rope(k)
+        # Fused RoPE: one kernel per tensor vs the 6-op manual mul/rotate_half/mul
+        # /add chain. cos/sin are [1,1,seq,hd] (broadcast over heads); same
+        # rotate_half convention the fused op implements.
+        q = ttnn._ttnn.operations.experimental.rotary_embedding(q, self.cos, self.sin)
+        k = ttnn._ttnn.operations.experimental.rotary_embedding(k, self.cos, self.sin)
+
+        # rotary_embedding may tile-pad seq (non-tile-aligned grids); align V to K
+        # so windowed SDPA sees matching K/V seq (requires v_shape[2] == Sk).
+        padded_seq = k.shape[2]
+        if v.shape[2] != padded_seq:
+            v = ttnn.pad(v, padding=[(0, 0), (0, 0), (0, padded_seq - v.shape[2]), (0, 0)], value=0.0)
+
+        # bf8 Q/K/V for the HiFi2 SDPA (qwen2.5-VL vision pattern) -- halves
+        # SDPA bandwidth; the [0, seq] window already masks the padded tail.
+        q = ttnn.typecast(q, ttnn.bfloat8_b)
+        k = ttnn.typecast(k, ttnn.bfloat8_b)
+        v = ttnn.typecast(v, ttnn.bfloat8_b)
 
         # Memory-efficient flash attention with block-diagonal windowing over
         # cu_seqlens. Same softmax(q k^T * scale + block_diag_mask) @ v math as
@@ -282,9 +307,13 @@ class TtVisionAttention(LightweightModule):
             v,
             self.cu_seqlens_tt,
             scale=self.scale,
-            compute_kernel_config=self.compute_kernel_config,
+            compute_kernel_config=self.sdpa_compute_kernel_config,
             program_config=self.sdpa_program_config,
-        )  # [1, nh, seq, hd]
+        )  # [1, nh, seq(_padded), hd]
+
+        # Slice back to logical seq if RoPE tile-padded.
+        if attn.shape[2] != seq:
+            attn = attn[:, :, :seq, :]
 
         # Fused head-merge: nlp_concat_heads ([1, nh, seq, hd] -> [1, 1, seq,
         # nh*hd]) in one op instead of permute + reshape.
