@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-29T00:11:46Z",
-  "updated_at": "2026-05-29T01:03:33Z",
+  "updated_at": "2026-05-29T01:04:12Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -205,11 +205,11 @@
         "status": "done",
         "attempts": 0,
         "artifacts": [
-          "tt/vision_block.py",
-          "tests/test_tt_vision_block.py",
-          "tt/vision_block.traced_ops.json"
+          "models/demos/rednote_hilab_dots.ocr/tt/vision_block.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_tt_vision_block.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/vision_block.traced_ops.json"
         ],
-        "notes": "Composite: imports TtVisionRMSNorm x2 + TtVisionAttention + TtVisionMLP; pre-norm residual. HiFi4+fp32_dest_acc bf16. Guard ok.",
+        "notes": "First composite: pre-norm residual h=h+attn(norm1(h)); h=h+mlp(norm2(h)). Reuses TtVisionRMSNorm/Attention/MLP leaves by file-path import. HiFi4+fp32_dest_acc, bf16. Guard ok.",
         "pcc": 0.9999956292416614
       },
       "debug": {
@@ -720,6 +720,12 @@
     {
       "tick": 10,
       "ts": "2026-05-29T01:03:33Z",
+      "action": "device[vision_block]",
+      "result": "ok"
+    },
+    {
+      "tick": 10,
+      "ts": "2026-05-29T01:04:12Z",
       "action": "device[vision_block]",
       "result": "ok"
     }
