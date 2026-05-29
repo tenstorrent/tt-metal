@@ -477,7 +477,7 @@ template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _sfpu_reciprocal_ge1_(sfpi::vFloat x) {
     // initial estimate y = -reciprocal(x)
     sfpi::vFloat y = sfpi::reinterpret<sfpi::vFloat>(0xfef392e0 - sfpi::reinterpret<sfpi::vInt>(x));
-    sfpi::vFloat e = x * neg_y + 1.0f;
+    sfpi::vFloat e = x * y + 1.0f;
 
     if constexpr (is_fp32_dest_acc_en) {
         y = y * e + y;
@@ -583,7 +583,7 @@ sfpi_inline sfpi::vFloat _sfpu_sinh_(sfpi::vFloat x) {
 
     // e < 2^-25: 0.5(t+t/1) = t = x
     sfpi::vFloat y = x;
-    sfpi::vInt t_exp = sfpi::exexp(t);
+    sfpi::vInt t_exp = sfpi::exexp(q);
     v_if(t_exp >= -25) {
         // e ≥ 2^25: 0.5(t+1) = 0.5t
         y = q + q;
