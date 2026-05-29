@@ -123,18 +123,18 @@ class TTSeamlessM4Tv2SpeechEncoder:
         self._rel_pos_idx_torch_cache: dict[Tuple[int, int, int], torch.Tensor] = {}
         # ``(batch, seq_len)`` already passed through ``pre_warm`` for this forward lifetime.
         self._runtime_warmed: set[Tuple[int, int]] = set()
-        # Stage 4: cache the full embedded position table ``[S, S, head_dim]`` per
-        # ``(seq_len, weight_id)`` — eliminates 24× ``ttnn.embedding`` + reshape per forward pass.
-        # Stage 7: scale is pre-folded into the cached table and the tensor is stored in L1
-        # when it fits (≤ 1 MB), eliminating 24× rel_logits scale-multiply + 24× DRAM reshape.
+        # Cache the full embedded position table ``[S, S, head_dim]`` per ``(seq_len, weight_id)``
+        # — eliminates 24× ``ttnn.embedding`` + reshape per forward. The scale is pre-folded into
+        # the cached table and the tensor is stored in L1 when it fits (≤ 1 MB), eliminating
+        # 24× rel_logits scale-multiply + 24× DRAM reshape.
         self._rel_pos_tab_cache: dict[Tuple[int, int, float], ttnn.Tensor] = {}
-        # Stage 4: cache depthwise conv left-pad zero tensors per ``(batch, lp, hidden_size)``
-        # — eliminates 24–25 ``ttnn.zeros`` (FillPad) calls per forward pass (~1.1 ms).
+        # Cache depthwise conv left-pad zero tensors per ``(batch, lp, hidden_size)`` — eliminates
+        # 24–25 ``ttnn.zeros`` (FillPad) calls per forward pass (~1.1 ms).
         self._dw_left_pad_cache: dict[Tuple[int, int, int], ttnn.Tensor] = {}
-        # Stage 5: cache the chunk-attention mask — it depends only on ``(batch, seq_len, dtype)``
-        # since ``speech_encoder_chunk_size`` is fixed at construction time.
+        # Cache the chunk-attention mask — it depends only on ``(batch, seq_len, dtype)`` since
+        # ``speech_encoder_chunk_size`` is fixed at construction time.
         self._chunk_attn_mask_cache: dict[Tuple[int, int, int], Optional[ttnn.Tensor]] = {}
-        # Stage 7: cache the full encoder additive mask ``[B, 1, S, S]`` keyed by
+        # Cache the full encoder additive mask ``[B, 1, S, S]`` keyed by
         # ``(batch, seq_len, conv_mask_buffer_id)`` — same mask reused on every call with a
         # fixed-length input (common in streaming/chunked inference).
         self._encoder_additive_mask_cache: dict[Tuple[int, int, int], Optional[ttnn.Tensor]] = {}
@@ -143,7 +143,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
         # (which forbids ``write_shard_to_device``) reuses them — same pattern as SDXL / vadv2.
         self._conv1d_prepared_cache: Dict[Tuple[Any, ...], Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]] = {}
         self._conv_config_cache: Dict[Tuple[Any, ...], ttnn.Conv1dConfig] = {}
-        # Stage 1 (TTNN model bringup): LoFi linears, HiFi2 attention matmuls, sharded LN cache.
+        # Compute-kernel-config tiers: LoFi linears, HiFi2 attention matmuls, HiFi3 layernorm/SDPA.
         self._linear_compute_cfg = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
@@ -993,7 +993,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
 
     @staticmethod
     def _k_heads_transposed(x: ttnn.Tensor, batch: int, seq: int, num_heads: int, head_dim: int) -> ttnn.Tensor:
-        """Stage 17: extract K directly as ``[B, H, D, S]`` in one permute.
+        """Extract K directly as ``[B, H, D, S]`` in one permute.
 
         Standard ``_heads`` produces ``[B, H, S, D]``; the relative-attention path then
         applies a second permute ``(0,1,3,2)`` to get ``[B, H, D, S]`` for ``Q @ K^T``.
@@ -1258,8 +1258,8 @@ class TTSeamlessM4Tv2SpeechEncoder:
         # For TP>1 the row-parallel out_proj maps [H//tp → H]; read dim from weight.
         local_in_dim = int(attn_module.linear_out.weight.shape[-2])
         pc_out = self._matmul_program_config(token_m, local_in_dim, hsz)
-        # Stage 17: for relative attention, K is extracted directly as [B, H, D, S]
-        # (k_transposed=True), eliminating the downstream kh_t = permute(k,(0,1,3,2)).
+        # For relative attention, K is extracted directly as [B, H, D, S] (k_transposed=True),
+        # eliminating the downstream kh_t = permute(k, (0, 1, 3, 2)).
         q, k, v, qkv_src = self._qkv_heads(
             hidden_states,
             attn_module,
@@ -1273,7 +1273,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
         )
 
         if not use_relative:
-            # Stage 3c: adapter self-attn has no relative positions — use fused SDPA.
+            # Adapter self-attn has no relative positions — use fused SDPA.
             # K is in [B, H, S, D] form (k_transposed=False) as SDPA requires.
             attn_out = ttnn.transformer.scaled_dot_product_attention(
                 q,
@@ -1290,15 +1290,15 @@ class TTSeamlessM4Tv2SpeechEncoder:
             ttnn.deallocate(k)
             ttnn.deallocate(v)
         else:
-            # Stage 4: scores [B, H, S, S] — L1 fits for short seq on single device.
+            # scores [B, H, S, S] — L1 fits for short seq on single device.
             # TP at S>=128 and long audio use DRAM (L1 scores diverge on 1×4 at S=256).
             if self._tp > 1 and seq_len >= 128:
                 scores_mc = ttnn.DRAM_MEMORY_CONFIG
             else:
                 scores_mc = ttnn.L1_MEMORY_CONFIG if seq_len <= 256 else ttnn.DRAM_MEMORY_CONFIG
 
-            # Stage 17: k is already [B, H, D, S] — no permute needed.
-            # Stage 8: Q weights are pre-scaled by 1/√head_dim during preprocessing so
+            # k is already [B, H, D, S] — no permute needed.
+            # Q weights are pre-scaled by 1/√head_dim during preprocessing so
             # scores = pre_scaled_q @ k^T is already the correct scaled dot product.
             scores = ttnn.matmul(
                 q,
@@ -1308,7 +1308,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
             )
             ttnn.deallocate(k)
 
-            # Stage 8: Q is pre-scaled by 1/√head_dim, so pos_tab uses scale=1.0 here —
+            # Q is pre-scaled by 1/√head_dim, so pos_tab uses scale=1.0 here —
             # the einsum over the pre-scaled Q already provides the single correct factor.
             pos_bmm = self._relative_embedding_table(
                 seq_len,
@@ -1374,8 +1374,8 @@ class TTSeamlessM4Tv2SpeechEncoder:
 
     def _glu_last_dim(self, x: ttnn.Tensor, *, batch: int, seq_len: int, width: int) -> ttnn.Tensor:
         half = width // 2
-        # Stage 9: explicit L1 destination — conv1d output is DRAM; pulling slices into
-        # L1 means sigmoid and mul below operate on L1 tensors (faster than DRAM reads).
+        # Explicit L1 destination — conv1d output is DRAM; pulling slices into L1 means
+        # sigmoid and mul below operate on L1 tensors (faster than DRAM reads).
         a = ttnn.slice(x, [0, 0, 0], [batch, seq_len, half], [1, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
         b = ttnn.slice(x, [0, 0, half], [batch, seq_len, width], [1, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
         sig = ttnn.sigmoid(b, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -1551,7 +1551,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
         """Return ``(mask, owned)`` where ``owned`` is always ``False`` — the cache owns
         the tensor for the model lifetime and callers must NOT deallocate it.
         """
-        # Stage 7: cache by (batch, seq_len, mask_buffer_id) for fixed-length inference.
+        # Cache by (batch, seq_len, mask_buffer_id) for fixed-length inference.
         mask_id = self._tensor_stable_id(conv_mask_1d) if conv_mask_1d is not None else -1
         cache_key = (batch, seq_len, mask_id)
         if cache_key in self._encoder_additive_mask_cache:
@@ -1566,8 +1566,8 @@ class TTSeamlessM4Tv2SpeechEncoder:
             one = ttnn.ones(m.shape, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=self.device)
             inv = ttnn.subtract(one, m, memory_config=ttnn.L1_MEMORY_CONFIG)
             ttnn.deallocate(one)
-            # Stage 7: replace S-copy concat with a single ttnn.repeat — avoids allocating
-            # S individual row tensors and the O(S²) intermediate concat output separately.
+            # Use a single ttnn.repeat instead of an S-way concat — avoids allocating S
+            # individual row tensors and the O(S²) intermediate concat output separately.
             pad_bad = ttnn.repeat(inv, [1, 1, seq_len, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
             ttnn.deallocate(inv)
             bad_parts.append((pad_bad, True))
@@ -1649,8 +1649,8 @@ class TTSeamlessM4Tv2SpeechEncoder:
         ttnn.deallocate(neg)
         ttnn.deallocate(zero)
         ttnn.deallocate(inv)
-        # Stage 13b: replace concat([add]*s, dim=2) with repeat — avoids S intermediate
-        # tensor references and the S-input concat dispatch.
+        # Use ttnn.repeat instead of concat([add]*s, dim=2) — avoids S intermediate tensor
+        # references and the S-input concat dispatch.
         # SDPA requires the attn_mask to live in DRAM (kernel assertion).
         out = ttnn.repeat(add, [1, 1, s, 1], memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(add)
@@ -1729,7 +1729,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
             accept_sharded_input=True,
         )
         ttnn.deallocate(h)
-        # Stage 13a: 0.5 scale folded into output_dense weights at preprocessing time.
+        # The macaron 0.5 scale is folded into output_dense weights at preprocessing time.
         hidden = ttnn.add(res, ff, memory_config=res_mc)
         ttnn.deallocate(ff)
         ttnn.deallocate(res)
@@ -1788,7 +1788,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
             accept_sharded_input=True,
         )
         ttnn.deallocate(h)
-        # Stage 13a: 0.5 scale folded into output_dense weights at preprocessing time.
+        # The macaron 0.5 scale is folded into output_dense weights at preprocessing time.
         # Fuse the macaron-2 residual add into ``final_layer_norm`` via ``residual_input_tensor``
         # — saves one DRAM add dispatch per conformer layer in the long-audio path. Short-audio
         # path emulates the fusion (add then unfused LN) so semantics stay identical.
@@ -1914,8 +1914,8 @@ class TTSeamlessM4Tv2SpeechEncoder:
     def warm_relative_position_caches_for_seq_lens(self, seq_lens: list[int]) -> None:
         """Populate ``_rel_pos_tab_cache`` and ``_rel_pos_idx_cache`` for each seq len.
 
-        Conformer self-attention always uses ``scale=1.0`` (Stage 8: Q weights are
-        pre-scaled during preprocessing). Cached tables are ``[S, D, S]`` for ``bmm``.
+        Conformer self-attention always uses ``scale=1.0`` because Q weights are pre-scaled
+        by 1/√head_dim during preprocessing. Cached tables are ``[S, D, S]`` for ``bmm``.
         """
         enc = self.parameters.encoder
         for slen in seq_lens:
@@ -2089,7 +2089,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
             ttnn.deallocate(attn_4d)
 
         im = p.intermediate_ffn
-        # Stage 13a: 0.5 scale folded into intermediate_ffn output_dense weights.
+        # The 0.5 scale is folded into intermediate_ffn output_dense weights at load time.
         long_audio_add_mc = ttnn.DRAM_MEMORY_CONFIG if seq > _LONG_AUDIO_RES_DRAM_THRESHOLD else ttnn.L1_MEMORY_CONFIG
         exp = self._relu_ffn(h, im, batch=batch, seq_len=seq)
         h = ttnn.add(h, exp, memory_config=long_audio_add_mc)
