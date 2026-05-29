@@ -133,4 +133,3 @@ TEST_F(UnitMeshCQSingleCardSharedFixture, TestSimpleL1Read) {
 }
 
 }  // namespace tt::tt_metal
-
