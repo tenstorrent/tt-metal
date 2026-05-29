@@ -201,7 +201,7 @@ def _generate_traced(model, device, lm, cache, inputs_embeds, prompt_len, max_ne
         pf = lm.prefill_from_embeds(hin, cache)
         ttnn.synchronize_device(device)
         timings["prefill_ms"] = (time.perf_counter() - t0) * 1000.0
-        return int(torch.argmax(ttnn.to_torch(pf).to(torch.float32).reshape(prompt_len, -1)[-1]).item())
+        return int(torch.argmax(ttnn.to_torch(pf).to(torch.float32).reshape(-1)).item())
 
     # ---- WARMUP: compile prefill + decode-step, capture the decode trace ----
     cache.reset()
@@ -295,7 +295,7 @@ def _generate_fully_traced(model, device, lm, cache, patch_tokens, ids, prompt_l
     cache.reset()
     pf = lm.prefill_from_embeds(prefill_in, cache)
     ttnn.synchronize_device(device)
-    first_id = int(torch.argmax(ttnn.to_torch(pf).to(torch.float32).reshape(prompt_len, -1)[-1]).item())
+    first_id = int(torch.argmax(ttnn.to_torch(pf).to(torch.float32).reshape(-1)).item())
 
     warm_pos = prompt_len
     write_embed(first_id)
@@ -358,7 +358,7 @@ def _generate_fully_traced(model, device, lm, cache, patch_tokens, ids, prompt_l
 
     ttnn.execute_trace(device, prefill_tid, cq_id=0, blocking=False)
     ttnn.synchronize_device(device)
-    next_id = int(torch.argmax(ttnn.to_torch(prefill_logits).to(torch.float32).reshape(prompt_len, -1)[-1]).item())
+    next_id = int(torch.argmax(ttnn.to_torch(prefill_logits).to(torch.float32).reshape(-1)).item())
 
     gen_tokens = [next_id]
     replay_only_ms = []

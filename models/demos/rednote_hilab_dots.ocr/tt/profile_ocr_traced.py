@@ -167,7 +167,7 @@ def main():
         cache.reset()
         pf = lm.prefill_from_embeds(prefill_in, cache)
         ttnn.synchronize_device(device)
-        first_id = int(torch.argmax(ttnn.to_torch(pf).to(torch.float32).reshape(prompt_len, -1)[-1]).item())
+        first_id = int(torch.argmax(ttnn.to_torch(pf).to(torch.float32).reshape(-1)).item())
 
         # decode compile
         warm_pos = prompt_len
@@ -258,7 +258,7 @@ def main():
         ttnn.execute_trace(device, prefill_tid, cq_id=0, blocking=False)
         ttnn.synchronize_device(device)
         e2e_prefill_ms = (time.perf_counter() - t0) * 1000.0
-        next_id = int(torch.argmax(ttnn.to_torch(prefill_logits).to(torch.float32).reshape(prompt_len, -1)[-1]).item())
+        next_id = int(torch.argmax(ttnn.to_torch(prefill_logits).to(torch.float32).reshape(-1)).item())
 
         gen_tokens = [next_id]
         decode_ms = []

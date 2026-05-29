@@ -235,11 +235,18 @@ class TtLanguageModel(LightweightModule):
         """Prefill from inputs_embeds [prompt_len, hidden]; populate ``kv_cache``.
 
         Runs the full-causal forward over the prompt while writing each layer's
-        K/V into the cache, then norm + lm_head. Returns logits [prompt_len, vocab]
-        (only the last row is used for the first generated token).
+        K/V into the cache, then norm + lm_head. Returns logits [1, vocab] for the
+        LAST prompt position (the only row needed to start generation).
+
+        The per-layer K/V for every position is populated inside ``prefill_kv``
+        above, so we slice ``hidden`` to its final row before norm + lm_head: this
+        runs the wide lm_head (vocab=151936) on 1 row instead of all prompt_len
+        rows (~190 ms saved at full-res prefill). Indices are fixed -> trace-safe.
         """
         for layer_idx, layer in enumerate(self.layers):
             hidden = layer.prefill_kv(hidden, kv_cache, layer_idx)
+        seq = hidden.shape[-2]
+        hidden = ttnn.slice(hidden, (seq - 1, 0), (seq, hidden.shape[-1]))
         hidden = self.norm(hidden)
         return self.lm_head(hidden)
 

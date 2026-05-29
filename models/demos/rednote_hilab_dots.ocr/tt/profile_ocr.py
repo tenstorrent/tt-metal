@@ -149,7 +149,7 @@ def main():
             pf = lm.prefill_from_embeds(hin, cache)
             ttnn.synchronize_device(device)
             t["prefill_ms"] = (time.perf_counter() - t0) * 1000.0
-            nid = int(torch.argmax(ttnn.to_torch(pf).to(torch.float32).reshape(prompt_len, -1)[-1]).item())
+            nid = int(torch.argmax(ttnn.to_torch(pf).to(torch.float32).reshape(-1)).item())
             return t, nid
 
         # ================= WARMUP generation (compiles + captures trace) =======

@@ -278,8 +278,8 @@ class TtOcrModel(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         logits = lm.prefill_from_embeds(hidden, kv_cache)
-        logits = ttnn.to_torch(logits).to(torch.float32).reshape(prompt_len, self.vocab_size)
-        next_id = int(torch.argmax(logits[-1]).item())
+        logits = ttnn.to_torch(logits).to(torch.float32).reshape(-1)  # last-position logits [vocab]
+        next_id = int(torch.argmax(logits).item())
 
         generated = [next_id]
         ids.append(next_id)
