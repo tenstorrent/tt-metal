@@ -593,8 +593,12 @@ def _enrich_ops_from_perf_csv(
         # Build a lookup that matches the C++ ProgramExecutionUID structure:
         # (GLOBAL CALL COUNT, METAL TRACE ID) -> list of perf rows (one per replay session, or one for non-trace)
         perf_rows_by_key: Dict[Tuple[int, Optional[int]], List[Dict[str, Any]]] = {}
+        # Secondary index for the fallback: op_id -> all rows regardless of trace_id.
+        # Avoids the O(M) full-dict scan when the primary key misses due to trace_id mismatch.
+        perf_rows_by_op_id: Dict[int, List[Dict[str, Any]]] = {}
         for (op_id, trace_id, session_id), row in device_perf_by_device[device_id].items():
             perf_rows_by_key.setdefault((op_id, trace_id), []).append(row)
+            perf_rows_by_op_id.setdefault(op_id, []).append(row)
 
         enriched_ops = []
         skipped_missing_device_data = 0
@@ -611,11 +615,9 @@ def _enrich_ops_from_perf_csv(
 
             candidates = perf_rows_by_key.get((op_id, host_trace_id))
             if not candidates:
-                # Fallback: if host didn't record trace id but perf CSV did, allow lookup by op_id only.
-                candidates = []
-                for (cand_op_id, _cand_trace_id), rows in perf_rows_by_key.items():
-                    if cand_op_id == op_id:
-                        candidates.extend(rows)
+                # Fallback: host may not have recorded trace_id while device did.
+                # Use the O(1) secondary index instead of the previous O(M) full scan.
+                candidates = perf_rows_by_op_id.get(op_id, [])
 
             if not candidates:
                 # Host Tracy logs every op, but device profiler data can be partial when the
@@ -626,7 +628,10 @@ def _enrich_ops_from_perf_csv(
             # Create one enriched op per ProgramExecutionUID row in the C++ report.
             for perf_row in candidates:
                 perf_row = perf_row.copy()
-                enriched_op = copy.deepcopy(host_op)
+                # Shallow-copy the top-level dict only; nested structures (input_tensors,
+                # output_tensors, kernel_info, etc.) are read-only in generate_reports so
+                # sharing references is safe and avoids an expensive deepcopy per op.
+                enriched_op = host_op.copy()
 
                 core_count = perf_row.get("CORE COUNT")
                 if core_count is not None:
@@ -1463,9 +1468,19 @@ def generate_reports(
                 ret = signposts[row]["tracy_time"]
             elif type(row) is int:
                 if row > ((1 << TRACE_OP_ID_BITSHIFT) - 1):
-                    ret = traceOps[row]["tracy_time"]
+                    ret = traceOps[row].get("tracy_time", 0)
                 else:
-                    ret = ops[row]["host_time"]["ns_since_start"]
+                    op = ops[row]
+                    if "host_time" in op:
+                        ret = op["host_time"]["ns_since_start"]
+                    elif "tracy_time" in op:
+                        # Messages-only path: use Tracy message timestamp so device ops sort
+                        # chronologically relative to signposts in the output CSV.  Without
+                        # this, all device ops sort before signposts (global_call_count << tracy_time)
+                        # and the signpost filtering in tt-perf-report breaks.
+                        ret = op["tracy_time"]
+                    else:
+                        ret = op.get("global_call_count", row)
             ret = int(ret)
             return ret
 
@@ -1517,12 +1532,16 @@ def generate_reports(
                     if matching_header:
                         csv_row[matching_header] = fieldData
 
-                assert "host_time" in active_op_record, "Corrupted op data"
-                csv_row["HOST START TS"] = int(active_op_record["host_time"]["ns_since_start"])
-                csv_row["HOST END TS"] = int(active_op_record["host_time"]["ns_since_start"]) + int(
-                    active_op_record["host_time"]["exec_time_ns"]
-                )
-                csv_row["HOST DURATION [ns]"] = int(active_op_record["host_time"]["exec_time_ns"])
+                if "host_time" in active_op_record:
+                    csv_row["HOST START TS"] = int(active_op_record["host_time"]["ns_since_start"])
+                    csv_row["HOST END TS"] = int(active_op_record["host_time"]["ns_since_start"]) + int(
+                        active_op_record["host_time"]["exec_time_ns"]
+                    )
+                    csv_row["HOST DURATION [ns]"] = int(active_op_record["host_time"]["exec_time_ns"])
+                elif "tracy_time" in active_op_record:
+                    # Messages-only path (no timing zones): use the Tracy message timestamp so
+                    # tt-perf-report can sort ops correctly relative to signposts.
+                    csv_row["HOST START TS"] = int(active_op_record["tracy_time"])
 
                 if "NOC UTIL (%)" in active_op_record:
                     csv_row["NOC UTIL (%)"] = active_op_record.get("NOC UTIL (%)")
