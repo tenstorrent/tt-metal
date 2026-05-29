@@ -32,21 +32,29 @@ def to_torch_replicated_first_shard(t: ttnn.Tensor) -> Any:
     """Read a replicated TTNN tensor back to torch, returning only the first device's data.
 
     The demo / generate path makes per-step host readbacks of replicated control tensors (token
-    IDs, sequence lengths, vocoder cumsums, T2U duration counts, …). On a multi-device mesh every
-    device sees the same control-flow scalars because inputs are replicated and ops are
-    deterministic, so all shards are identical and reading one is sufficient.
+    IDs, sequence lengths, vocoder cumsums, T2U duration counts, decoder logits, …). On a
+    multi-device mesh every device sees the same data because inputs are replicated and ops are
+    deterministic, so all shards are bit-identical and reading one is sufficient.
 
-    ``ttnn.to_torch`` without a ``mesh_composer`` errors on a tensor with >1 shard
-    (TT_FATAL: "Can't convert a tensor distributed on … mesh to row-major logical tensor.
-    Supply a mesh composer …"), so we wire in ``ConcatMeshToTensor(dim=0)`` and slice the leading
-    per-device chunk off the result. On a 1×1 mesh the composer path is skipped — behaviour is
-    bit-identical to the original ``ttnn.to_torch`` call, so PCC tests (which all run on a
-    single-device fixture) are unaffected.
+    Fast path: ``ttnn.to_torch(ttnn.get_device_tensors(t)[0])`` — pulls only shard 0. This is the
+    same pattern used by ``models/demos/llama3_70b_galaxy/tt/llama_model.py::process_output_decode``
+    and by the devstral2 generator. For per-step decoder logits readback (``[B, 1, V=256k]`` bf16)
+    on a 1×4 mesh this cuts the device→host bytes by 4× vs the older ``ConcatMeshToTensor`` path
+    and removes the host-side concat + slice. Replicated shards are identical by construction so
+    the result matches the prior behaviour bit-for-bit.
 
-    Accepts either a device tensor or a host tensor. Host tensors that came from a
-    multi-device ``ttnn.from_device`` retain multi-shard storage; we look up the mesh device via
-    ``GetDefaultDevice`` so we can still attach a composer.
+    Slow-path fallback (kept for tensors where ``get_device_tensors`` is unavailable): use
+    ``ConcatMeshToTensor(dim=0)`` and slice off the first per-device chunk.
+
+    Accepts either a device tensor or a host tensor.
     """
+    try:
+        shards = ttnn.get_device_tensors(t)
+        if shards:
+            return ttnn.to_torch(shards[0])
+    except Exception:
+        pass
+
     dev = _mesh_device_for_readback(t)
     num_devices = 1
     if dev is not None and hasattr(dev, "get_num_devices"):
