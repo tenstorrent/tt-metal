@@ -5,6 +5,8 @@
 #include "tlb_config.hpp"
 
 #include <tt_stl/assert.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include <exception>
 #include <algorithm>
 #include <cstdint>
 #include <string>
@@ -89,10 +91,24 @@ void configure_static_tlbs(
 
     if (arch == tt::ARCH::BLACKHOLE && sdesc.get_num_dram_channels() == blackhole::NUM_DRAM_CHANNELS) {
         uint32_t dram_addr = 0;
-        for (std::uint32_t dram_channel = 0; dram_channel < blackhole::NUM_DRAM_CHANNELS; dram_channel++) {
+        uint32_t configured = 0;
+        for (uint32_t dram_channel = 0; dram_channel < blackhole::NUM_DRAM_CHANNELS; dram_channel++) {
             tt::umd::CoreCoord dram_core =
                 tt::umd::CoreCoord(blackhole::ddr_to_noc0(dram_channel), tt::CoreType::DRAM, tt::CoordSystem::NOC0);
-            device_driver.configure_tlb(mmio_device_id, dram_core, 4ULL * (1ULL << 30), dram_addr, tt::umd::tlb_data::Posted);
+            try {
+                device_driver.configure_tlb(
+                    mmio_device_id, dram_core, 4ULL * (1ULL << 30), dram_addr, tt::umd::tlb_data::Posted);
+            } catch (const std::exception& e) {
+                log_warning(
+                    tt::LogDevice,
+                    "Configured 4GB static DRAM TLBs for {} of {} channels; host could not map more 4GB TLB "
+                    "windows: {}",
+                    configured,
+                    blackhole::NUM_DRAM_CHANNELS,
+                    e.what());
+                break;
+            }
+            configured++;
         }
     }
 }
