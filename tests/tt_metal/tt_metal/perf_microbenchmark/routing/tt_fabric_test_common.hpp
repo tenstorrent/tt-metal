@@ -104,7 +104,7 @@ public:
         uint32_t tolerance = get_frequency_tolerance_mhz();
 
         std::vector<std::pair<FabricNodeId, uint32_t>> failed_devices;
-        for (const auto& device_id : get_global_node_ids()) {
+        for (const auto& device_id : get_local_node_ids()) {
             uint32_t actual_freq = get_device_frequency_mhz(device_id);
             int32_t diff = static_cast<int32_t>(actual_freq) - static_cast<int32_t>(expected_freq);
             if (std::abs(diff) > static_cast<int32_t>(tolerance)) {
@@ -127,7 +127,7 @@ public:
         log_info(
             tt::LogTest,
             "Device frequency validation passed: {} devices at {}MHz ± {}MHz",
-            get_global_node_ids().size(),
+            get_local_node_ids().size(),
             expected_freq,
             tolerance);
         frequency_validated_ = true;

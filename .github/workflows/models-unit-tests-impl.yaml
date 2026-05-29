@@ -42,7 +42,7 @@ jobs:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/models_unit_tests.yaml
     steps:
       - name: Checkout the repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           sparse-checkout: |
             .github
@@ -103,10 +103,18 @@ jobs:
         HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
         LOGURU_LEVEL: INFO
         GTEST_OUTPUT: xml:/work/generated/test_reports/
+        MLPERF_READ_ONLY: ${{ inputs.mlperf-read-only }} # used by GPT-OSS 120B to toggle --skip-model-load
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf${{ inputs.mlperf-read-only && ':ro' || ':rw' }}
+        # bh_p150 / bh_loudbox / bh_galaxy[_perf] and the WH SKUs run on machines
+        # that host the canonical HF / tt_cache layout under /mnt/MLPerf, so the
+        # standard mount works as-is. bh_quietbox_2 is a local-disk BH runner
+        # whose equivalent layout lives at /localdev/blackhole_demos/huggingface_data
+        # — map that host path onto /mnt/MLPerf/huggingface inside the container
+        # so a single test cmd referencing /mnt/MLPerf/... resolves on both
+        # cache modes.
+        - ${{ matrix.test-group.sku == 'bh_quietbox_2' && format('/localdev/blackhole_demos/huggingface_data:/mnt/MLPerf/huggingface{0}', inputs.mlperf-read-only && ':ro' || ':rw') || format('/mnt/MLPerf:/mnt/MLPerf{0}', inputs.mlperf-read-only && ':ro' || ':rw') }}
       options: "--device /dev/tenstorrent --privileged -v /sys:/sys"
     defaults:
       run:
@@ -114,7 +122,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job

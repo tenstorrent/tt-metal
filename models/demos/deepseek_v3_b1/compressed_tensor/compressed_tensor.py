@@ -184,7 +184,14 @@ class CompressedTensor:
         per_core_allocation: bool = False,
         mesh_mapper_config=None,
         keep_packed_data: bool = False,
+        move_to_device: bool = True,
     ) -> None:
+        # Per-core L1 has no host-stage path (variable per-core packed sizes + allocator
+        # feedback loop in the SRAM trim); enforce move_to_device=True for per-core upfront.
+        if per_core_allocation and not move_to_device:
+            raise ValueError("CompressedTensor: per_core_allocation requires move_to_device=True")
+        if not move_to_device and device is None:
+            raise ValueError("CompressedTensor: move_to_device=False requires a device for mesh shape / mapper")
         self._init_fields(
             shape=tensor.shape,
             assignment=assignment,
@@ -195,6 +202,7 @@ class CompressedTensor:
             mesh_mapper_config=mesh_mapper_config,
             keep_packed_data=keep_packed_data,
         )
+        self._move_to_device = move_to_device
         self._pack_data_and_assignment(
             tensor, memory_config, assignment_memory_config, device, self._per_core_allocation, mesh_mapper_config
         )
@@ -247,6 +255,12 @@ class CompressedTensor:
         self._per_core_allocation = per_core_allocation
         self._min_shard_bytes = min_shard_bytes
         self._memory_config = memory_config
+
+        # Defaults to True; both constructors overwrite this before
+        # ``_finalize_uploads`` runs.  Read by the lockstep upload helpers
+        # to decide whether to pass the real device or ``None`` (host-stage)
+        # to ``ttnn.from_torch``.
+        self._move_to_device = True
 
         # --- Multi-device state ---
         self._num_devices = 1
@@ -330,12 +344,17 @@ class CompressedTensor:
         assignment_memory_config=None,
         tile_hw: int = DEFAULT_TILE_HW,
         min_shard_bytes: int = 0,
+        mesh_mapper_config=None,
         keep_packed_data: bool = False,
+        move_to_device: bool = True,
     ) -> CompressedTensor:
         """Create CompressedTensor from a pre-computed BSPM assignment.
 
         Bypasses CompressedTensorAssigner — uses the provided assignment directly.
-        See :meth:`from_torch` for ``keep_packed_data``.
+        See :meth:`from_torch` for ``keep_packed_data``.  ``move_to_device=False``
+        leaves the lockstep data/assignment as host-staged ttnn.Tensors so the
+        caller can run them through :func:`two_phase_upload`; not supported for
+        per-core allocation.
         """
         return cls(
             tensor,
@@ -345,7 +364,9 @@ class CompressedTensor:
             assignment_memory_config=assignment_memory_config,
             tile_hw=tile_hw,
             min_shard_bytes=min_shard_bytes,
+            mesh_mapper_config=mesh_mapper_config,
             keep_packed_data=keep_packed_data,
+            move_to_device=move_to_device,
         )
 
     def to_torch(self) -> torch.Tensor:
@@ -466,6 +487,70 @@ class CompressedTensor:
                 )
             ]
             return [desc]
+
+    # ==================================================================
+    # Two-phase upload integration (used by UploadableMixin)
+    # ==================================================================
+
+    def backing_tensors(self) -> "list":
+        """Return the host-staged ttnn.Tensors that still need to be uploaded.
+
+        Lockstep mode has up to two tensors (``data`` and ``assignment``);
+        per-core mode is mandated ``move_to_device=True`` at construction so
+        every tensor is already on device and this returns an empty list.
+        Already-on-device tensors are skipped — same convention as
+        :meth:`UploadableMixin.backing_tensors`.
+        """
+        if self._per_core_allocation:
+            return []
+        out = []
+        for t in (self.data, self.assignment):
+            if t is None:
+                continue
+            if ttnn.is_tensor_storage_on_device(t):
+                continue
+            out.append(t)
+        return out
+
+    def with_device_tensors(self, tensor_map: dict) -> "CompressedTensor":
+        """Swap host-staged ``data`` / ``assignment`` with their device copies from ``tensor_map``.
+
+        ``tensor_map`` is keyed by ``tensor_identity_key`` (defined in
+        ``weights.upload``).  Already-on-device tensors are passed through
+        unchanged.  Mutates and returns ``self``.
+        """
+        if self._per_core_allocation:
+            return self
+        # Local import to avoid an import cycle (upload.py imports OverlappedTensor
+        # from weights/overlap/packing, and weights.prepare imports CompressedTensor).
+        from models.demos.deepseek_v3_b1.weights.upload import tensor_identity_key
+
+        if self.data is not None and not ttnn.is_tensor_storage_on_device(self.data):
+            key = tensor_identity_key(self.data)
+            if key in tensor_map:
+                self.data = tensor_map[key]
+        if self.assignment is not None and not ttnn.is_tensor_storage_on_device(self.assignment):
+            key = tensor_identity_key(self.assignment)
+            if key in tensor_map:
+                self.assignment = tensor_map[key]
+        return self
+
+    def deallocate(self, force: bool = True) -> None:
+        """Deallocate all underlying ttnn.Tensors (lockstep ``data``/``assignment``
+        or per-core dicts).  No-op on tensors that aren't device-resident."""
+        if self._per_core_allocation:
+            for per_core in self._multi_device_data_per_core.values():
+                for t in per_core.values():
+                    if t is not None and ttnn.is_tensor_storage_on_device(t):
+                        ttnn.deallocate(t, force=force)
+            for per_core in self._multi_device_assignment_per_core.values():
+                for t in per_core.values():
+                    if t is not None and ttnn.is_tensor_storage_on_device(t):
+                        ttnn.deallocate(t, force=force)
+            return
+        for t in (self.data, self.assignment):
+            if t is not None and ttnn.is_tensor_storage_on_device(t):
+                ttnn.deallocate(t, force=force)
 
     def buffer_address(self) -> int:
         """Return the DRAM buffer address of the packed data tensor (lockstep mode only)."""
@@ -827,13 +912,10 @@ class CompressedTensor:
 
         alignment = _get_alignment(memory_config.buffer_type)
         global_max = max(sz for dev_sizes in all_shard_sizes.values() for sz in dev_sizes)
-        # Single-device path historically rounded up to ``alignment`` even
-        # when the global max was smaller; preserve that floor so warm-load
-        # tensors land at byte-identical sizes.
-        if self._num_devices == 1:
-            self.max_shard_size = max(_align(global_max, alignment), alignment)
-        else:
-            self.max_shard_size = _align(global_max, alignment)
+        # Defensive floor: if every shard is empty (e.g. all-bfp0 assignment),
+        # _align(0, alignment) = 0 would yield page_size 0 in the C++ buffer
+        # path and SIGFPE. Ensure at least `alignment`.
+        self.max_shard_size = max(_align(global_max, alignment), alignment)
 
         logical_shape = ttnn.Shape(list(self.shape))
         self.spec = ttnn.TensorSpec(logical_shape, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT, memory_config.buffer_type)
@@ -870,7 +952,7 @@ class CompressedTensor:
                     data_torch,
                     dtype=ttnn.uint8,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
-                    device=device,
+                    device=device if self._move_to_device else None,
                     memory_config=data_memory_config,
                 )
 
@@ -899,7 +981,7 @@ class CompressedTensor:
                         assign_bytes,
                         dtype=ttnn.uint8,
                         layout=ttnn.ROW_MAJOR_LAYOUT,
-                        device=device,
+                        device=device if self._move_to_device else None,
                         memory_config=assign_mem,
                     )
 
@@ -931,6 +1013,7 @@ class CompressedTensor:
         mesh_mapper_config=None,
         tile_hw: int = DEFAULT_TILE_HW,
         min_shard_bytes: int = 0,
+        move_to_device: bool = True,
     ) -> CompressedTensor:
         """Build a :class:`CompressedTensor` from pre-packed BFP shard bytes.
 
@@ -966,6 +1049,13 @@ class CompressedTensor:
             A device-resident ``CompressedTensor`` byte-equivalent to one
             built by ``__init__`` from the same source weights + assigner.
         """
+        if per_core_allocation and not move_to_device:
+            raise ValueError("CompressedTensor.from_packed_artifacts: per_core_allocation requires move_to_device=True")
+        if not move_to_device and device is None:
+            raise ValueError(
+                "CompressedTensor.from_packed_artifacts: move_to_device=False requires a device for mesh shape / mapper"
+            )
+
         ct = cls.__new__(cls)
         # Stage 1: metadata fields (mirrors __init__).
         # Shape comes from the cache; assignment must already be the same
@@ -986,6 +1076,7 @@ class CompressedTensor:
             mesh_mapper_config=mesh_mapper_config,
             keep_packed_data=False,
         )
+        ct._move_to_device = move_to_device
 
         # Stage 2: derive per-device geometry that the upload helpers expect.
         if mesh_mapper_config is not None and device is not None:
@@ -1064,6 +1155,101 @@ class CompressedTensor:
         ct._finalize_uploads(memory_config, assignment_memory_config, device)
         return ct
 
+    @classmethod
+    def from_dumped_data(
+        cls,
+        data_tensor,
+        *,
+        shape,
+        assignment_flat: np.ndarray,
+        per_device_shape,
+        device,
+        memory_config,
+        tile_hw: int = DEFAULT_TILE_HW,
+        mesh_mapper_config=None,
+        min_shard_bytes: int = 0,
+    ) -> CompressedTensor:
+        """Build a :class:`CompressedTensor` around an already-loaded ``self.data`` tensor.
+
+        Used by the TP8 routed-DRAM cache warm path: cold-write dumps ``ct.data``
+        via :func:`ttnn.dump_tensor` (device-padded layout intact), warm-load reads
+        it back via :func:`ttnn.load_tensor` and wraps it here.  Skips the
+        BFP-pack/repack pipeline entirely — same hot path as the baseline
+        :class:`TensorTarget` cache uses (one C++ ``load_tensor`` per CT, no
+        numpy/torch round-trips).
+
+        ``data_tensor`` must already be the post-pack ttnn.Tensor (host-staged
+        or device-resident) — typically the output of ``ttnn.load_tensor``.
+        Per-device geometry dicts (``_per_device_shard_mapping``,
+        ``_per_device_tile_formats``, ``_per_device_assignment_flat``,
+        ``_per_device_core_assignment``) are populated for **uniform BFP4** only
+        — every tile has format index 1, so the per-device assignment is
+        ``np.ones((per_device_tiles_h, per_device_tiles_w))`` and the mant-bits
+        list is all ``3``.  Downstream kernel paths (e.g.
+        :func:`create_dram_expert_metadata` which calls
+        :meth:`get_assignment_per_shard`) read those dicts; mixed-precision
+        BSPM would need a real per-device assignment slice instead.
+        """
+        ct = cls.__new__(cls)
+        assignment_arr = np.asarray(assignment_flat, dtype=np.int8)
+        h = 1
+        for d in tuple(shape)[:-1]:
+            h *= int(d)
+        tiles_h = h // tile_hw
+        tiles_w = int(shape[-1]) // tile_hw
+        ct._init_fields(
+            shape=shape,
+            assignment=assignment_arr.reshape(tiles_h, tiles_w),
+            memory_config=memory_config,
+            tile_hw=tile_hw,
+            min_shard_bytes=min_shard_bytes,
+            per_core_allocation=False,
+            mesh_mapper_config=mesh_mapper_config,
+            keep_packed_data=False,
+        )
+        ct._move_to_device = ttnn.is_tensor_storage_on_device(data_tensor)
+
+        if mesh_mapper_config is not None and device is not None:
+            ct._num_devices = device.get_num_devices()
+        else:
+            ct._num_devices = 1
+        ct._mesh_shape = device.shape if device is not None else None
+
+        pds = tuple(int(d) for d in (per_device_shape or shape))
+        per_device_2d_h = 1
+        for d in pds[:-1]:
+            per_device_2d_h *= d
+        per_device_tiles_h = per_device_2d_h // tile_hw
+        per_device_tiles_w = pds[-1] // tile_hw
+        ct._per_device_tiles_h = per_device_tiles_h
+        ct._per_device_tiles_w = per_device_tiles_w
+        ct._per_device_shape = pds
+
+        # Populate per-device geometry dicts that downstream kernel-side code
+        # consults (``get_assignment_per_shard``, ``get_data_core_range_set``).
+        # Uniform-BFP4 assumption: every tile has format index 1 (bfp4) so the
+        # per-device assignment is a constant np.ones with per-device shape;
+        # BSPM mixed-precision would need a real per-device slice (not handled
+        # by this warm-load constructor).
+        shard_mapping = compute_shard_page_mapping(pds, memory_config, tile_hw)
+        per_device_assignment_flat = np.ones(per_device_tiles_h * per_device_tiles_w, dtype=np.int8)
+        per_device_core_assignment = ct._build_core_assignment_from(shard_mapping, per_device_assignment_flat)
+        tile_formats: list[int] = []
+        for _core, page_indices in shard_mapping:
+            for page_idx in page_indices:
+                tile_formats.append(_FMT_IDX_TO_MANT_BITS[int(per_device_assignment_flat[page_idx])])
+        for coord in ct._iter_mesh_coords():
+            ct._per_device_shard_mapping[coord] = shard_mapping
+            ct._per_device_assignment_flat[coord] = per_device_assignment_flat
+            ct._per_device_core_assignment[coord] = per_device_core_assignment
+            ct._per_device_tile_formats[coord] = tile_formats
+
+        ct.data = data_tensor
+        ct.spec = ttnn.TensorSpec(
+            ttnn.Shape(list(shape)), ttnn.float32, ttnn.ROW_MAJOR_LAYOUT, memory_config.buffer_type
+        )
+        return ct
+
     def extract_packed_artifacts(self, *, drop: bool = True) -> dict:
         """Return cache-ready post-pack byte buffers, optionally dropping the host copy.
 
@@ -1131,12 +1317,13 @@ class CompressedTensor:
         combined = torch.cat(per_device_torch, dim=0)
         data_memory_config = self._make_sharded_mem_config(memory_config, max_shard_bytes)
         mesh_mapper = ttnn.ShardTensorToMesh(device, dim=0)
+        device_for_torch = device if self._move_to_device else None
 
         self.data = ttnn.from_torch(
             combined,
             dtype=ttnn.uint8,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
+            device=device_for_torch,
             memory_config=data_memory_config,
             mesh_mapper=mesh_mapper,
         )
@@ -1161,7 +1348,7 @@ class CompressedTensor:
                 combined_assign,
                 dtype=ttnn.uint8,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=device,
+                device=device_for_torch,
                 memory_config=assign_mem,
                 mesh_mapper=assign_mapper,
             )

@@ -28,7 +28,7 @@ from ....models.vae.vae_wan2_1 import (
 from ....parallel.config import ParallelFactor, VaeHWParallelConfig
 from ....parallel.manager import CCLManager
 from ....utils.check import assert_quality
-from ....utils.conv3d import conv_pad_height, conv_pad_in_channels, conv_unpad_height, count_convs
+from ....utils.conv3d import conv_pad_height, conv_pad_in_channels, conv_pad_width, conv_unpad_height, count_convs
 from ....utils.tensor import bf16_tensor_2dshard, typed_tensor_2dshard
 
 
@@ -923,7 +923,7 @@ def test_wan_resample(mesh_device, B, dim, T, H, W, mode, resample_out_dim, cach
             feat_idx=torch_feat_idx,
         )
 
-    tt_output, new_logical_h = tt_model(
+    tt_output, new_logical_h, _new_logical_w = tt_model(
         tt_input_tensor,
         logical_h,
         feat_cache=tt_feat_cache,
@@ -1066,7 +1066,7 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
             )
 
         logger.info(f"running tt model")
-        tt_output, new_logical_h = tt_model(
+        tt_output, new_logical_h, _new_logical_w = tt_model(
             tt_input_tensor,
             logical_h,
             feat_cache=tt_feat_cache,
@@ -1263,7 +1263,7 @@ def test_wan_decoder3d(
         logger.info(f"torch output shape: {torch_output.shape}")
 
         logger.info(f"running tt model")
-        tt_output, new_logical_h = tt_model(
+        tt_output, new_logical_h, _new_logical_w = tt_model(
             tt_input_tensor,
             logical_h,
             feat_cache=tt_feat_cache,
@@ -1471,6 +1471,9 @@ def test_wan_decoder(
     tt_input_tensor, logical_h = conv_pad_height(tt_input_tensor, parallel_config.height_parallel.factor)
     if logical_h != tt_input_tensor.shape[2]:
         logger.info(f"padding from {logical_h} to {tt_input_tensor.shape[2]}")
+    tt_input_tensor, logical_w = conv_pad_width(tt_input_tensor, parallel_config.width_parallel.factor)
+    if logical_w != tt_input_tensor.shape[3]:
+        logger.info(f"width padding from {logical_w} to {tt_input_tensor.shape[3]}")
     tt_input_tensor = typed_tensor_2dshard(
         tt_input_tensor,
         mesh_device,
@@ -1481,7 +1484,9 @@ def test_wan_decoder(
 
     logger.info(f"running tt model (t_chunk_size={t_chunk_size})")
     start = time.time()
-    tt_output, new_logical_h = tt_model(tt_input_tensor, logical_h, t_chunk_size=t_chunk_size)
+    tt_output, new_logical_h, _new_logical_w = tt_model(
+        tt_input_tensor, logical_h, t_chunk_size=t_chunk_size, logical_w=logical_w
+    )
 
     concat_dims = [None, None]
     concat_dims[h_axis] = 3
@@ -1508,6 +1513,9 @@ def test_wan_decoder(
         if new_logical_h != tt_output_torch.shape[3]:
             tt_output_torch = tt_output_torch[:, :, :, :new_logical_h, :]
             logger.warning(f"Trimmed tt_output_torch to {tt_output_torch.shape}")
+        if _new_logical_w != tt_output_torch.shape[4]:
+            tt_output_torch = tt_output_torch[:, :, :, :, :_new_logical_w]
+            logger.warning(f"Trimmed tt_output_torch width to {tt_output_torch.shape}")
         assert_quality(torch_output, tt_output_torch, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
     else:
         logger.warning("Skipping check")
@@ -1613,6 +1621,9 @@ def test_wan_decoder_production_blocking(
     tt_input_tensor, logical_h = conv_pad_height(tt_input_tensor, parallel_config.height_parallel.factor)
     if logical_h != tt_input_tensor.shape[2]:
         logger.info(f"padding from {logical_h} to {tt_input_tensor.shape[2]}")
+    tt_input_tensor, logical_w = conv_pad_width(tt_input_tensor, parallel_config.width_parallel.factor)
+    if logical_w != tt_input_tensor.shape[3]:
+        logger.info(f"width padding from {logical_w} to {tt_input_tensor.shape[3]}")
     tt_input_tensor = typed_tensor_2dshard(
         tt_input_tensor,
         mesh_device,
@@ -1623,7 +1634,9 @@ def test_wan_decoder_production_blocking(
 
     logger.info(f"running tt model with production blocking (t_chunk_size={t_chunk_size})")
     start = time.time()
-    tt_output, new_logical_h = tt_model(tt_input_tensor, logical_h, t_chunk_size=t_chunk_size)
+    tt_output, new_logical_h, _new_logical_w = tt_model(
+        tt_input_tensor, logical_h, t_chunk_size=t_chunk_size, logical_w=logical_w
+    )
 
     concat_dims = [None, None]
     concat_dims[h_axis] = 3
@@ -1649,6 +1662,9 @@ def test_wan_decoder_production_blocking(
     if new_logical_h != tt_output_torch.shape[3]:
         tt_output_torch = tt_output_torch[:, :, :, :new_logical_h, :]
         logger.warning(f"Trimmed tt_output_torch to {tt_output_torch.shape}")
+    if _new_logical_w != tt_output_torch.shape[4]:
+        tt_output_torch = tt_output_torch[:, :, :, :, :_new_logical_w]
+        logger.warning(f"Trimmed tt_output_torch width to {tt_output_torch.shape}")
     assert_quality(torch_output, tt_output_torch, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
 
 
@@ -1752,13 +1768,18 @@ def test_wan_encoder_production_blocking(
     tt_input_tensor, logical_h = conv_pad_height(tt_input_tensor, parallel_config.height_parallel.factor * 8)
     if logical_h != tt_input_tensor.shape[2]:
         logger.info(f"padding from {logical_h} to {tt_input_tensor.shape[2]}")
+    tt_input_tensor, logical_w = conv_pad_width(tt_input_tensor, parallel_config.width_parallel.factor * 8)
+    if logical_w != tt_input_tensor.shape[3]:
+        logger.info(f"width padding from {logical_w} to {tt_input_tensor.shape[3]}")
     tt_input_tensor = bf16_tensor_2dshard(
         tt_input_tensor, mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, shard_mapping={h_axis: 2, w_axis: 3}
     )
 
     logger.info(f"running tt encoder (encoder_t_chunk_size={encoder_t_chunk_size}, forward_chunk={forward_chunk})")
     start = time.time()
-    tt_output, new_logical_h = tt_model(tt_input_tensor, logical_h, encoder_t_chunk_size=forward_chunk)
+    tt_output, new_logical_h, _new_logical_w = tt_model(
+        tt_input_tensor, logical_h, encoder_t_chunk_size=forward_chunk, logical_w=logical_w
+    )
 
     concat_dims = [None, None]
     concat_dims[h_axis] = 3
@@ -1784,6 +1805,9 @@ def test_wan_encoder_production_blocking(
     if new_logical_h != tt_output_torch.shape[3]:
         tt_output_torch = tt_output_torch[:, :, :, :new_logical_h, :]
         logger.warning(f"Trimmed tt_output_torch height to {tt_output_torch.shape}")
+    if _new_logical_w != tt_output_torch.shape[4]:
+        tt_output_torch = tt_output_torch[:, :, :, :, :_new_logical_w]
+        logger.warning(f"Trimmed tt_output_torch width to {tt_output_torch.shape}")
     assert_quality(torch_output, tt_output_torch, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
 
 
@@ -1880,6 +1904,7 @@ def test_wan_decoder_chunked_consistency(
     tt_input_host = torch_input.permute(0, 2, 3, 4, 1)
     tt_input_host = conv_pad_in_channels(tt_input_host)
     tt_input_host, logical_h = conv_pad_height(tt_input_host, parallel_config.height_parallel.factor)
+    tt_input_host, logical_w = conv_pad_width(tt_input_host, parallel_config.width_parallel.factor)
 
     concat_dims = [None, None]
     concat_dims[h_axis] = 3
@@ -1893,7 +1918,9 @@ def test_wan_decoder_chunked_consistency(
             shard_mapping={h_axis: 2, w_axis: 3},
             dtype=ttnn.float32 if dtype == ttnn.DataType.FLOAT32 else ttnn.bfloat16,
         )
-        tt_output, new_logical_h = tt_model(tt_input_tensor, logical_h, t_chunk_size=t_chunk_size)
+        tt_output, new_logical_h, _new_logical_w = tt_model(
+            tt_input_tensor, logical_h, t_chunk_size=t_chunk_size, logical_w=logical_w
+        )
         return ttnn.to_torch(
             tt_output,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims),
@@ -2045,7 +2072,7 @@ def test_wan_encoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, nu
         logger.info(f"torch output shape: {torch_output.shape}")
 
         logger.info(f"running tt model")
-        tt_output, new_logical_h = tt_model(
+        tt_output, new_logical_h, _new_logical_w = tt_model(
             tt_input_tensor,
             logical_h,
             feat_cache=tt_feat_cache,
@@ -2223,15 +2250,19 @@ def test_wan_encoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_
     tt_input_tensor, logical_h = conv_pad_height(tt_input_tensor, parallel_config.height_parallel.factor * 8)
     if logical_h != tt_input_tensor.shape[2]:
         logger.info(f"padding from {logical_h} to {tt_input_tensor.shape[2]}")
+    tt_input_tensor, logical_w = conv_pad_width(tt_input_tensor, parallel_config.width_parallel.factor * 8)
+    if logical_w != tt_input_tensor.shape[3]:
+        logger.info(f"width padding from {logical_w} to {tt_input_tensor.shape[3]}")
     tt_input_tensor = bf16_tensor_2dshard(
         tt_input_tensor, mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, shard_mapping={h_axis: 2, w_axis: 3}
     )
 
     logger.info(f"running tt model")
     start = time.time()
-    tt_output, new_logical_h = tt_model(
+    tt_output, new_logical_h, _new_logical_w = tt_model(
         tt_input_tensor,
         logical_h,
+        logical_w=logical_w,
     )
 
     concat_dims = [None, None]
@@ -2262,6 +2293,9 @@ def test_wan_encoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_
         if new_logical_h != tt_output_torch.shape[3]:
             tt_output_torch = tt_output_torch[:, :, :, :new_logical_h, :]
             logger.warning(f"Trimmed tt_output_torch to {tt_output_torch.shape}")
+        if _new_logical_w != tt_output_torch.shape[4]:
+            tt_output_torch = tt_output_torch[:, :, :, :, :_new_logical_w]
+            logger.warning(f"Trimmed tt_output_torch width to {tt_output_torch.shape}")
         assert_quality(torch_output, tt_output_torch, pcc=0.995_000, relative_rmse=0.1)
     else:
         logger.warning("Skipping check")

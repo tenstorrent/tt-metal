@@ -6,26 +6,35 @@
 
 #include <cmath>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tilize_utils.hpp>
-#include <tt-metalium/experimental/host_api.hpp>
-#include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 #include "test_gold_impls.hpp"
 #include "impl/data_format/bfloat16_utils.hpp"
-#include "impl/program/program_impl.hpp"
 
 using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
 
 namespace {
+
+constexpr const char* SRC0_DFB = "src0_dfb";
+constexpr const char* SRC1_DFB = "src1_dfb";
+constexpr const char* DST_DFB = "dst_dfb";
+constexpr const char* SRC0_T = "src0";
+constexpr const char* SRC1_T = "src1";
+constexpr const char* DST_T = "dst";
+constexpr const char* READER = "reader";
+constexpr const char* WRITER = "writer";
+constexpr const char* COMPUTE = "compute";
 
 struct BmmParams {
     uint32_t Mt, Kt, Nt;
@@ -37,100 +46,158 @@ struct BmmParams {
     uint32_t single_tile_size = 2 * 1024;
 };
 
-struct BmmBuffers {
-    std::shared_ptr<Buffer> src0, src1, dst;
+struct BmmTensors {
+    MeshTensor src0;
+    MeshTensor src1;
+    MeshTensor dst;
 };
 
-BmmBuffers create_bmm_dram_buffers(IDevice* dev, const BmmParams& p) {
-    const uint32_t bytesA = p.single_tile_size * p.Mt * p.Kt * p.B_total;
-    const uint32_t bytesB = p.single_tile_size * p.Kt * p.Nt * p.B_total;
-    const uint32_t bytesC = p.single_tile_size * p.Mt * p.Nt * p.B_total;
+// Flat 2D UINT32 page layout: one DRAM page per tile, tile_size bytes each. The element type
+// is UINT32 only so DRAM exposes raw tile-paged storage at the buffer level; the kernels still
+// operate on bfloat16 tiles via TensorAccessor / matmul LLKs.
+TensorSpec make_flat_dram_tensor_spec(uint32_t tile_size, uint32_t num_tiles) {
+    const uint32_t tile_size_words = tile_size / sizeof(uint32_t);
+    auto page_config = PageConfig(Layout::ROW_MAJOR);
+    auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    auto tensor_layout = TensorLayout(DataType::UINT32, page_config, memory_config);
+    return TensorSpec(Shape{num_tiles, tile_size_words}, tensor_layout);
+}
+
+BmmTensors create_bmm_tensors(distributed::MeshDevice& mesh_device, const BmmParams& p) {
+    const uint32_t num_tiles_A = p.Mt * p.Kt * p.B_total;
+    const uint32_t num_tiles_B = p.Kt * p.Nt * p.B_total;
+    const uint32_t num_tiles_C = p.Mt * p.Nt * p.B_total;
     return {
-        CreateBuffer({.device = dev, .size = bytesA, .page_size = p.single_tile_size, .buffer_type = BufferType::DRAM}),
-        CreateBuffer({.device = dev, .size = bytesB, .page_size = p.single_tile_size, .buffer_type = BufferType::DRAM}),
-        CreateBuffer({.device = dev, .size = bytesC, .page_size = p.single_tile_size, .buffer_type = BufferType::DRAM}),
+        MeshTensor::allocate_on_device(
+            mesh_device, make_flat_dram_tensor_spec(p.single_tile_size, num_tiles_A), TensorTopology{}),
+        MeshTensor::allocate_on_device(
+            mesh_device, make_flat_dram_tensor_spec(p.single_tile_size, num_tiles_B), TensorTopology{}),
+        MeshTensor::allocate_on_device(
+            mesh_device, make_flat_dram_tensor_spec(p.single_tile_size, num_tiles_C), TensorTopology{}),
     };
 }
 
-struct BmmDFBHandles {
-    uint32_t src0, src1, dst;
-};
+template <typename TargetNodes>
+experimental::metal2_host_api::ProgramSpec build_bmm_program_spec(
+    const BmmParams& p, const BmmTensors& tensors, const TargetNodes& target_nodes, bool use_implicit_sync) {
+    // Both kernels expose Gen1 + Gen2 data movement configs so the same spec runs on WH/BH and
+    // Quasar; the runtime picks the right one per arch. The kernel sources use the unified
+    // DataflowBuffer device API on both arches (CB-backed on Gen1, DFB-backed on Gen2).
+    // On Quasar we also enable implicit sync on each DFB so the reader/writer kernels can drop
+    // explicit reserve_back/wait_front/push_back/pop_front; on WH/BH implicit sync is unsupported
+    // and must be disabled to match the explicit-sync kernel branch.
+    experimental::metal2_host_api::DataMovementConfiguration reader_config{
+        .gen1_data_movement_config =
+            experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default},
+        .gen2_data_movement_config =
+            experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}};
+    experimental::metal2_host_api::DataMovementConfiguration writer_config{
+        .gen1_data_movement_config =
+            experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default},
+        .gen2_data_movement_config =
+            experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}};
+    if (!use_implicit_sync) {
+        reader_config.gen2_data_movement_config->disable_implicit_sync_for = {SRC0_DFB, SRC1_DFB};
+        writer_config.gen2_data_movement_config->disable_implicit_sync_for = {DST_DFB};
+    }
 
-template <typename CoreSpec>
-BmmDFBHandles create_bmm_quasar_dfbs(Program& program, const CoreSpec& cores, const BmmParams& p) {
-    using namespace tt_metal::experimental::dfb;
-    DataflowBufferConfig src0_cfg = {
+    experimental::metal2_host_api::DataflowBufferSpec src0_dfb_spec{
+        .unique_id = SRC0_DFB,
         .entry_size = p.single_tile_size,
         .num_entries = p.num_input_tiles,
-        .num_producers = p.num_threads,
-        .pap = AccessPattern::STRIDED,
-        .num_consumers = p.num_threads,
-        .cap = AccessPattern::STRIDED,
-        .enable_implicit_sync = false,
-        .data_format = tt::DataFormat::Float16_b};
-    DataflowBufferConfig src1_cfg = {
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    };
+    experimental::metal2_host_api::DataflowBufferSpec src1_dfb_spec{
+        .unique_id = SRC1_DFB,
         .entry_size = p.single_tile_size,
         .num_entries = p.num_input_tiles,
-        .num_producers = p.num_threads,
-        .pap = AccessPattern::STRIDED,
-        .num_consumers = p.num_threads,
-        .cap = AccessPattern::ALL,
-        .enable_implicit_sync = false,
-        .data_format = tt::DataFormat::Float16_b};
-    DataflowBufferConfig dst_cfg = {
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    };
+    experimental::metal2_host_api::DataflowBufferSpec dst_dfb_spec{
+        .unique_id = DST_DFB,
         .entry_size = p.single_tile_size,
         .num_entries = p.num_output_tiles,
-        .num_producers = p.num_threads,
-        .pap = AccessPattern::STRIDED,
-        .num_consumers = p.num_threads,
-        .cap = AccessPattern::STRIDED,
-        .enable_implicit_sync = false,
-        .data_format = tt::DataFormat::Float16_b};
-    return {
-        CreateDataflowBuffer(program, cores, src0_cfg),
-        CreateDataflowBuffer(program, cores, src1_cfg),
-        CreateDataflowBuffer(program, cores, dst_cfg),
+        .data_format_metadata = tt::DataFormat::Float16_b,
     };
-}
 
-struct BmmKernelHandles {
-    KernelHandle reader, writer, compute;
-};
+    experimental::metal2_host_api::KernelSpec reader_spec{
+        .unique_id = READER,
+        .source =
 
-template <typename CoreSpec>
-BmmKernelHandles create_bmm_quasar_kernels(
-    Program& program,
-    const CoreSpec& cores,
-    const BmmParams& p,
-    const std::vector<uint32_t>& reader_cta,
-    const std::vector<uint32_t>& writer_cta) {
-    using namespace tt_metal::experimental::quasar;
-    return {
-        CreateKernel(
-            program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_bmm_8bank.cpp",
-            cores,
-            QuasarDataMovementConfig{.num_threads_per_cluster = p.num_threads, .compile_args = reader_cta}),
-        CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_bmm_8bank.cpp",
-            cores,
-            QuasarDataMovementConfig{.num_threads_per_cluster = p.num_threads, .compile_args = writer_cta}),
-        CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/compute/bmm.cpp",
-            cores,
-            QuasarComputeConfig{
-                .num_threads_per_cluster = p.num_threads,
-                .compile_args = {p.B_per_core, p.Mt, p.Kt, p.Nt}}),
+        .num_threads = p.num_threads,
+        .dfb_bindings =
+            {{.dfb_spec_name = SRC0_DFB,
+              .local_accessor_name = "src0",
+              .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
+              .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED},
+             {.dfb_spec_name = SRC1_DFB,
+              .local_accessor_name = "src1",
+              .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
+              .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED}},
+        .tensor_bindings =
+            {{.tensor_parameter_name = SRC0_T, .accessor_name = "src0"},
+             {.tensor_parameter_name = SRC1_T, .accessor_name = "src1"}},
+        // Only batch_start varies per node; everything else is identical across nodes and
+        // lives in CRTAs for better dispatch efficiency.
+        .runtime_arguments_schema =
+            {.named_runtime_args = {"batch_start"},
+             .named_common_runtime_args = {"Mt", "Kt", "Nt", "MtKt", "KtNt", "batch", "do_bcast"}},
+        .config_spec = reader_config,
     };
-}
 
-void bind_bmm_dfbs(Program& program, const BmmDFBHandles& dfbs, const BmmKernelHandles& kernels) {
-    using namespace tt_metal::experimental::dfb;
-    BindDataflowBufferToProducerConsumerKernels(program, dfbs.src0, kernels.reader, kernels.compute);
-    BindDataflowBufferToProducerConsumerKernels(program, dfbs.src1, kernels.reader, kernels.compute);
-    BindDataflowBufferToProducerConsumerKernels(program, dfbs.dst, kernels.compute, kernels.writer);
+    experimental::metal2_host_api::KernelSpec writer_spec{
+        .unique_id = WRITER,
+        .source =
+
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_bmm_8bank.cpp",
+        .num_threads = p.num_threads,
+        .dfb_bindings =
+            {{.dfb_spec_name = DST_DFB,
+              .local_accessor_name = "dst",
+              .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
+              .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED}},
+        .tensor_bindings = {{.tensor_parameter_name = DST_T, .accessor_name = "dst"}},
+        .runtime_arguments_schema =
+            {.named_runtime_args = {"batch_start"}, .named_common_runtime_args = {"Mt", "Nt", "batch"}},
+        .config_spec = writer_config,
+    };
+
+    experimental::metal2_host_api::KernelSpec compute_spec{
+        .unique_id = COMPUTE,
+        .source =
+
+            "tests/tt_metal/tt_metal/test_kernels/compute/bmm.cpp",
+        .num_threads = p.num_threads,
+        .dfb_bindings =
+            {{.dfb_spec_name = SRC0_DFB,
+              .local_accessor_name = "src0",
+              .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
+              .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED},
+             {.dfb_spec_name = SRC1_DFB,
+              .local_accessor_name = "src1",
+              .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
+              .access_pattern = experimental::metal2_host_api::DFBAccessPattern::ALL},
+             {.dfb_spec_name = DST_DFB,
+              .local_accessor_name = "dst",
+              .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
+              .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED}},
+        .compile_time_arg_bindings = {{"batch", p.B_per_core}, {"Mt", p.Mt}, {"Kt", p.Kt}, {"Nt", p.Nt}},
+        .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
+    };
+
+    return experimental::metal2_host_api::ProgramSpec{
+        .program_id = "bmm",
+        .kernels = {reader_spec, writer_spec, compute_spec},
+        .dataflow_buffers = {src0_dfb_spec, src1_dfb_spec, dst_dfb_spec},
+        .tensor_parameters =
+            {{.unique_id = SRC0_T, .spec = tensors.src0.tensor_spec()},
+             {.unique_id = SRC1_T, .spec = tensors.src1.tensor_spec()},
+             {.unique_id = DST_T, .spec = tensors.dst.tensor_spec()}},
+        .work_units = {{.unique_id = "main", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = target_nodes}},
+    };
 }
 
 bool validate_bmm_result(
@@ -164,9 +231,8 @@ bool validate_bmm_result(
 }  // namespace
 
 TEST_F(MeshDeviceSingleCardFixture, Bmm) {
-    IDevice* dev = devices_[0]->get_devices()[0];
-    Program program = CreateProgram();
-    CoreCoord core = {0, 0};
+    auto& mesh_device = *devices_[0];
+    IDevice* dev = mesh_device.get_devices()[0];
 
     BmmParams p;
     if (dev->arch() != ARCH::QUASAR) {
@@ -180,90 +246,55 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
         p.num_threads = 2;
     }
 
-    auto bufs = create_bmm_dram_buffers(dev, p);
+    auto tensors = create_bmm_tensors(mesh_device, p);
     const uint32_t bytesA = p.single_tile_size * p.Mt * p.Kt * p.B_total;
     const uint32_t bytesB = p.single_tile_size * p.Kt * p.Nt * p.B_total;
 
-    std::vector<uint32_t> reader_cta;
-    TensorAccessorArgs(bufs.src0).append_to(reader_cta);
-    TensorAccessorArgs(bufs.src1).append_to(reader_cta);
-    std::vector<uint32_t> writer_cta;
-    TensorAccessorArgs(bufs.dst).append_to(writer_cta);
+    const experimental::metal2_host_api::NodeCoord node{0, 0};
+    const bool use_implicit_sync = (dev->arch() == ARCH::QUASAR);
+    auto spec = build_bmm_program_spec(p, tensors, node, use_implicit_sync);
+    auto program = experimental::metal2_host_api::MakeProgramFromSpec(mesh_device, spec);
 
-    BmmKernelHandles kernels;
-    if (dev->arch() != ARCH::QUASAR) {
-        uint32_t src0_cb_index = 0;
-        CreateCircularBuffer(
-            program,
-            core,
-            CircularBufferConfig(
-                p.num_input_tiles * p.single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
-                .set_page_size(src0_cb_index, p.single_tile_size));
-
-        uint32_t src1_cb_index = 1;
-        CreateCircularBuffer(
-            program,
-            core,
-            CircularBufferConfig(
-                p.num_input_tiles * p.single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}})
-                .set_page_size(src1_cb_index, p.single_tile_size));
-
-        uint32_t output_cb_index = tt::CBIndex::c_16;
-        CreateCircularBuffer(
-            program,
-            core,
-            CircularBufferConfig(
-                p.num_output_tiles * p.single_tile_size, {{output_cb_index, tt::DataFormat::Float16_b}})
-                .set_page_size(output_cb_index, p.single_tile_size));
-
-        kernels.reader = CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_bmm_8bank.cpp",
-            core,
-            DataMovementConfig{
-                .processor = DataMovementProcessor::RISCV_1,
-                .noc = NOC::RISCV_1_default,
-                .compile_args = reader_cta});
-        kernels.writer = CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_bmm_8bank.cpp",
-            core,
-            DataMovementConfig{
-                .processor = DataMovementProcessor::RISCV_0,
-                .noc = NOC::RISCV_0_default,
-                .compile_args = writer_cta});
-        kernels.compute = CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/compute/bmm.cpp",
-            core,
-            ComputeConfig{.compile_args = {p.B_per_core, p.Mt, p.Kt, p.Nt}});
-    } else {
-        auto dfbs = create_bmm_quasar_dfbs(program, core, p);
-        kernels = create_bmm_quasar_kernels(program, core, p, reader_cta, writer_cta);
-        bind_bmm_dfbs(program, dfbs, kernels);
-    }
+    constexpr uint32_t do_bcast = 0;
+    experimental::metal2_host_api::ProgramRunParams params;
+    params.kernel_run_params = {
+        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+            .kernel_spec_name = READER,
+            .named_runtime_args = {{.node = node, .args = {{"batch_start", 0u}}}},
+            .named_common_runtime_args =
+                {{"Mt", p.Mt},
+                 {"Kt", p.Kt},
+                 {"Nt", p.Nt},
+                 {"MtKt", p.Mt * p.Kt},
+                 {"KtNt", p.Kt * p.Nt},
+                 {"batch", p.B_per_core},
+                 {"do_bcast", do_bcast}},
+        },
+        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+            .kernel_spec_name = WRITER,
+            .named_runtime_args = {{.node = node, .args = {{"batch_start", 0u}}}},
+            .named_common_runtime_args = {{"Mt", p.Mt}, {"Nt", p.Nt}, {"batch", p.B_per_core}},
+        },
+        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{.kernel_spec_name = COMPUTE},
+    };
+    params.tensor_args = {
+        {.tensor_parameter_name = SRC0_T, .tensor = tensors.src0},
+        {.tensor_parameter_name = SRC1_T, .tensor = tensors.src1},
+        {.tensor_parameter_name = DST_T, .tensor = tensors.dst},
+    };
+    experimental::metal2_host_api::SetProgramRunParameters(program, params);
 
     auto src0_vec = create_random_vector_of_bfloat16(bytesA, 1.0f, 0x1234);
     auto src1_vec = create_random_vector_of_bfloat16(bytesB, 1.0f, 0x1234, -0.45f);
-    detail::WriteToBuffer(bufs.src0, src0_vec);
-    detail::WriteToBuffer(bufs.src1, src1_vec);
-
-    constexpr uint32_t do_bcast = 0;
-    SetRuntimeArgs(
-        program,
-        kernels.reader,
-        core,
-        {bufs.src0->address(), bufs.src1->address(), p.Mt, p.Kt, p.Nt, p.Mt * p.Kt, p.Kt * p.Nt, p.B_per_core, do_bcast, 0u});
-    SetRuntimeArgs(
-        program,
-        kernels.writer,
-        core,
-        {bufs.dst->address(), 0u, p.Mt, p.Kt, p.Nt, p.Mt * p.Kt, p.Kt * p.Nt, p.B_per_core, 0u});
+    // MeshTensor doesn't yet expose slow-dispatch read/write APIs, so route through the
+    // underlying reference buffer to populate / read back DRAM.
+    detail::WriteToBuffer(*tensors.src0.mesh_buffer().get_reference_buffer(), src0_vec);
+    detail::WriteToBuffer(*tensors.src1.mesh_buffer().get_reference_buffer(), src1_vec);
 
     detail::LaunchProgram(dev, program, true);
 
     std::vector<uint32_t> result_vec;
-    detail::ReadFromBuffer(bufs.dst, result_vec);
+    detail::ReadFromBuffer(*tensors.dst.mesh_buffer().get_reference_buffer(), result_vec);
 
     int argfail = -1;
     bool pass = validate_bmm_result(p, src0_vec, src1_vec, result_vec, &argfail);
@@ -273,12 +304,8 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
 // This needs to be a separate test because we don't have a way of querying the correct compute grid size
 // when running a multi-neo emu/sim build. Otherwise its the same test with batch split across nodes.
 TEST_F(QuasarMeshDeviceSingleCardFixture, BmmMultinode) {
-    IDevice* dev = devices_[0]->get_devices()[0];
-
-    Program program = CreateProgram();
-    CoreCoord core0 = {0, 0};
-    CoreCoord core1 = {1, 0};
-    CoreRange core_range = {core0, core1};
+    auto& mesh_device = *devices_[0];
+    IDevice* dev = mesh_device.get_devices()[0];
 
     BmmParams p;
     p.Mt = 2; p.Kt = 2; p.Nt = 2;
@@ -286,54 +313,61 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, BmmMultinode) {
     p.B_per_core = 1;   // each core computes exactly one batch
     p.num_threads = 2;
 
-    auto bufs = create_bmm_dram_buffers(dev, p);
+    auto tensors = create_bmm_tensors(mesh_device, p);
     const uint32_t bytesA = p.single_tile_size * p.Mt * p.Kt * p.B_total;
     const uint32_t bytesB = p.single_tile_size * p.Kt * p.Nt * p.B_total;
 
-    std::vector<uint32_t> reader_cta;
-    TensorAccessorArgs(bufs.src0).append_to(reader_cta);
-    TensorAccessorArgs(bufs.src1).append_to(reader_cta);
-    std::vector<uint32_t> writer_cta;
-    TensorAccessorArgs(bufs.dst).append_to(writer_cta);
+    const experimental::metal2_host_api::NodeCoord node0{0, 0};
+    const experimental::metal2_host_api::NodeCoord node1{1, 0};
+    const experimental::metal2_host_api::NodeRange node_range{node0, node1};
 
-    // Create DFBs on the full core range — each core gets its own independent DFB instances
-    auto dfbs = create_bmm_quasar_dfbs(program, core_range, p);
-    auto kernels = create_bmm_quasar_kernels(program, core_range, p, reader_cta, writer_cta);
-    bind_bmm_dfbs(program, dfbs, kernels);
+    // QuasarMeshDeviceSingleCardFixture only opens Quasar devices, so implicit sync is always on.
+    auto spec = build_bmm_program_spec(p, tensors, node_range, /*use_implicit_sync=*/true);
+    auto program = experimental::metal2_host_api::MakeProgramFromSpec(mesh_device, spec);
+
+    constexpr uint32_t do_bcast = 0;
+    // node0 handles batch 0, node1 handles batch 1 (batch_start = node index)
+    experimental::metal2_host_api::ProgramRunParams params;
+    params.kernel_run_params = {
+        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+            .kernel_spec_name = READER,
+            .named_runtime_args =
+                {{.node = node0, .args = {{"batch_start", 0u}}}, {.node = node1, .args = {{"batch_start", 1u}}}},
+            .named_common_runtime_args =
+                {{"Mt", p.Mt},
+                 {"Kt", p.Kt},
+                 {"Nt", p.Nt},
+                 {"MtKt", p.Mt * p.Kt},
+                 {"KtNt", p.Kt * p.Nt},
+                 {"batch", p.B_per_core},
+                 {"do_bcast", do_bcast}},
+        },
+        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+            .kernel_spec_name = WRITER,
+            .named_runtime_args =
+                {{.node = node0, .args = {{"batch_start", 0u}}}, {.node = node1, .args = {{"batch_start", 1u}}}},
+            .named_common_runtime_args = {{"Mt", p.Mt}, {"Nt", p.Nt}, {"batch", p.B_per_core}},
+        },
+        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{.kernel_spec_name = COMPUTE},
+    };
+    params.tensor_args = {
+        {.tensor_parameter_name = SRC0_T, .tensor = tensors.src0},
+        {.tensor_parameter_name = SRC1_T, .tensor = tensors.src1},
+        {.tensor_parameter_name = DST_T, .tensor = tensors.dst},
+    };
+    experimental::metal2_host_api::SetProgramRunParameters(program, params);
 
     auto src0_vec = create_random_vector_of_bfloat16(bytesA, 1.0f, 0x1234);
     auto src1_vec = create_random_vector_of_bfloat16(bytesB, 1.0f, 0x1234, -0.45f);
-    detail::WriteToBuffer(bufs.src0, src0_vec);
-    detail::WriteToBuffer(bufs.src1, src1_vec);
-
-    constexpr uint32_t do_bcast = 0;
-    // core0 handles batch 0, core1 handles batch 1 (batch_offset = core index)
-    SetRuntimeArgs(
-        program,
-        kernels.reader,
-        core0,
-        {bufs.src0->address(), bufs.src1->address(), p.Mt, p.Kt, p.Nt, p.Mt * p.Kt, p.Kt * p.Nt, p.B_per_core, do_bcast, 0u});
-    SetRuntimeArgs(
-        program,
-        kernels.writer,
-        core0,
-        {bufs.dst->address(), 0u, p.Mt, p.Kt, p.Nt, p.Mt * p.Kt, p.Kt * p.Nt, p.B_per_core, 0u});
-
-    SetRuntimeArgs(
-        program,
-        kernels.reader,
-        core1,
-        {bufs.src0->address(), bufs.src1->address(), p.Mt, p.Kt, p.Nt, p.Mt * p.Kt, p.Kt * p.Nt, p.B_per_core, do_bcast, 1u});
-    SetRuntimeArgs(
-        program,
-        kernels.writer,
-        core1,
-        {bufs.dst->address(), 0u, p.Mt, p.Kt, p.Nt, p.Mt * p.Kt, p.Kt * p.Nt, p.B_per_core, 1u});
+    // MeshTensor doesn't yet expose slow-dispatch read/write APIs, so route through the
+    // underlying reference buffer to populate / read back DRAM.
+    detail::WriteToBuffer(*tensors.src0.mesh_buffer().get_reference_buffer(), src0_vec);
+    detail::WriteToBuffer(*tensors.src1.mesh_buffer().get_reference_buffer(), src1_vec);
 
     detail::LaunchProgram(dev, program, true);
 
     std::vector<uint32_t> result_vec;
-    detail::ReadFromBuffer(bufs.dst, result_vec);
+    detail::ReadFromBuffer(*tensors.dst.mesh_buffer().get_reference_buffer(), result_vec);
 
     int argfail = -1;
     bool pass = validate_bmm_result(p, src0_vec, src1_vec, result_vec, &argfail);

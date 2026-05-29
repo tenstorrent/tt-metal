@@ -61,7 +61,7 @@ public:
      * @param vc The virtual channel to use for the transaction (default is NOC_UNICAST_WRITE_VC).
      */
     void up(const Noc& noc, uint32_t noc_x, uint32_t noc_y, uint32_t value, uint8_t vc = NOC_UNICAST_WRITE_VC) {
-        const uint64_t dest_noc_addr = get_noc_addr(noc_x, noc_y);
+        const uint64_t dest_noc_addr = get_noc_addr(noc_x, noc_y, noc.get_noc_id());
         noc_semaphore_inc(dest_noc_addr, value, noc.get_noc_id(), vc);
     }
 
@@ -185,11 +185,11 @@ private:
 #endif
     }
 
-    uint64_t get_noc_addr(uint32_t noc_x, uint32_t noc_y) const {
+    uint64_t get_noc_addr(uint32_t noc_x, uint32_t noc_y, uint8_t noc) const {
 #ifdef ARCH_QUASAR
-        return ::get_noc_addr(noc_x, noc_y, local_l1_addr_ - MEM_L1_UNCACHED_BASE);
+        return ::get_noc_addr(noc_x, noc_y, local_l1_addr_ - MEM_L1_UNCACHED_BASE, noc);
 #else
-        return ::get_noc_addr(noc_x, noc_y, local_l1_addr_);
+        return ::get_noc_addr(noc_x, noc_y, local_l1_addr_, noc);
 #endif
     }
 };

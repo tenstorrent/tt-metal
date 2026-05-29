@@ -4,6 +4,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/bfloat16.hpp
     api/tt-metalium/bfloat4.hpp
     api/tt-metalium/bfloat8.hpp
+    api/tt-metalium/float8.hpp
     api/tt-metalium/buffer.hpp
     api/tt-metalium/buffer_distribution_spec.hpp
     api/tt-metalium/buffer_page_mapping.hpp
@@ -26,7 +27,6 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/core_subset_write/buffer_write.hpp
     api/tt-metalium/experimental/core_subset_write/mesh_command_queue.hpp
     api/tt-metalium/experimental/core_subset_write/tensor.hpp
-    api/tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp
     api/tt-metalium/experimental/device.hpp
     api/tt-metalium/experimental/disaggregation/kv_chunk_address_table.hpp
     api/tt-metalium/experimental/dispatch_context.hpp
@@ -49,7 +49,6 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/fabric/topology_solver.hpp
     api/tt-metalium/experimental/fabric/topology_solver.tpp
     api/tt-metalium/experimental/forge_backdoor/global_semaphore.hpp
-    api/tt-metalium/experimental/host_api.hpp
     api/tt-metalium/experimental/inspector.hpp
     api/tt-metalium/experimental/inspector_config.hpp
     api/tt-metalium/experimental/kernel_cache.hpp
@@ -58,6 +57,9 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/lightmetal/lightmetal_capture_utils.hpp
     api/tt-metalium/experimental/lightmetal/lightmetal_replay.hpp
     api/tt-metalium/experimental/mesh_program_descriptor.hpp
+    api/tt-metalium/experimental/metal2_host_api/advanced_options.hpp
+    api/tt-metalium/experimental/metal2_host_api/compute_configuration.hpp
+    api/tt-metalium/experimental/metal2_host_api/data_movement_configuration.hpp
     api/tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp
     api/tt-metalium/experimental/metal2_host_api/kernel_spec.hpp
     api/tt-metalium/experimental/metal2_host_api/node_coord.hpp
@@ -121,6 +123,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/mesh_event.hpp
     api/tt-metalium/mesh_trace_id.hpp
     api/tt-metalium/mesh_workload.hpp
+    api/tt-metalium/workload_descriptor.hpp
     api/tt-metalium/profiler_optional_metadata.hpp
     api/tt-metalium/profiler_types.hpp
     api/tt-metalium/program.hpp
@@ -146,7 +149,7 @@ set(TT_METAL_PUBLIC_API
 )
 
 set(TT_METAL_SOURCES
-    tt_metal.cpp
+    impl/host_api/tt_metal.cpp
     impl/graph/graph_tracking.cpp
     hal.cpp
 )
@@ -204,6 +207,7 @@ set(JITAPI_FILES
     impl/dispatch/kernels/cq_prefetch.cpp
     impl/dispatch/kernels/cq_realtime_profiler.cpp
     impl/dispatch/kernels/cq_realtime_profiler_push.cpp
+    impl/dispatch/kernels/device_print_dispatch.h
     fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp
     fabric/impl/kernels/tt_fabric_mux.cpp
     kernels/compute/blank.cpp

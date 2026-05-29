@@ -17,7 +17,7 @@ on:
           - llama3.1-8b-dp-galaxy
           - llama3.3-70b-galaxy
           - qwen3-32b-galaxy
-          - gpt-oss-120b-high-batch-galaxy
+          - gpt-oss-120b
           - whisper
       sku:
         description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"
@@ -27,7 +27,17 @@ on:
         options:
           - all
           - "wh_n150 (N150)"
-          - "wh_galaxy_perf (Galaxy)"
+          - "wh_n300 (N300)"
+          - "wh_llmbox (T3000)"
+          - "wh_llmbox_perf (T3000 perf)"
+          - "wh_galaxy (WH Galaxy)"
+          - "wh_galaxy_perf (WH Galaxy perf)"
+          - "bh_p150 (P150)"
+          - "bh_loudbox (BH LoudBox)"
+          - "bh_p300 (P300)"
+          - "bh_quietbox_2 (BH QB2)"
+          - "bh_galaxy (BH Galaxy)"
+          - "bh_galaxy_perf (BH Galaxy perf)"
       platform:
         required: false
         type: choice
@@ -52,11 +62,11 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
-      mlperf-read-only:
+      mlperf-write-access:
         required: false
         type: boolean
-        default: true
-        description: "Mount /mnt/MLPerf as read-only (uncheck for read-write access)"
+        default: false
+        description: "Enable read-write access to /mnt/MLPerf (e.g. to regenerate tensor cache). Default is read-only."
 
 permissions:
   packages: write
@@ -74,7 +84,7 @@ jobs:
       - name: Resolve SKU and model selection
         id: resolve
         run: |
-          ALL_SKUS="wh_n150,wh_galaxy_perf"
+          ALL_SKUS="wh_n150,wh_n300,wh_llmbox,wh_llmbox_perf,wh_galaxy,wh_galaxy_perf,bh_p150,bh_loudbox,bh_p300,bh_quietbox_2,bh_galaxy,bh_galaxy_perf"
           EVENT="${{ github.event_name }}"
           if [[ "$EVENT" == "workflow_dispatch" ]]; then
             SKU_INPUT="${{ inputs.sku || 'all' }}"
@@ -110,5 +120,5 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.resolve-skus.outputs.enabled-skus }}
       model: ${{ needs.resolve-skus.outputs.model }}
-      mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
+      mlperf-read-only: ${{ inputs.mlperf-write-access != true }}
       tier: "1"

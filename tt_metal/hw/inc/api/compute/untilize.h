@@ -77,7 +77,7 @@ ALWI void untilize_block(uint32_t icb, uint32_t full_ct_dim, uint32_t ocb) {
 
         // Datacopy
         for (uint32_t reg_id = 0; reg_id < block_ct_dim; reg_id++) {
-            PACK((llk_pack<DST_ACCUM_MODE, false, false>(reg_id, ocb)));
+            PACK((llk_pack<DST_ACCUM_MODE, false, PackMode::Default>(reg_id, ocb)));
         }
 
         // Release dest

@@ -12,7 +12,6 @@
 #include "ckernel_ops.h"
 #include "ckernel_template.h"
 #include "cunpack_common.h"
-#include "llk_assert.h"
 #include "llk_unpack_common.h"
 
 using namespace ckernel;

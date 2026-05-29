@@ -10,7 +10,6 @@
 #include <string>
 #include <vector>
 
-#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
@@ -39,8 +38,7 @@ using PhysicalAdjacencyMap = std::map<tt::tt_metal::AsicID, std::vector<tt::tt_m
 // Use ASICPosition from tt::tt_metal namespace
 using AsicPosition = tt::tt_metal::ASICPosition;
 
-// Map from AsicID to its physical position (TrayID, ASICLocation)
-// Required only when using pinning constraints
+// Map from AsicID to its physical position (TrayID, ASICLocation); used for pinning validation and anchors.
 using AsicPositionMap = std::map<tt::tt_metal::AsicID, AsicPosition>;
 
 // Pinning constraint: maps an ASIC position to a FabricNodeId
@@ -60,8 +58,8 @@ struct TopologyMappingConfig {
     // specific logical nodes can be mapped to
     std::vector<PinningConstraint> pinnings;
 
-    // Map from AsicID to (TrayID, ASICLocation) - required if pinnings is non-empty.
-    // Used to validate pinning constraints against the physical topology.
+    // Map from AsicID to (TrayID, ASICLocation) from discovery — required when pinnings are non-empty, and populated
+    // for topology mapping anchors (e.g. soft preference for tray 1 / ASIC location 1 on logical mesh 0).
     AsicPositionMap asic_positions;
 
     // Per-mesh validation modes for intra-mesh mapping (fabric node to ASIC).

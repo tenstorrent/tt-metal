@@ -61,7 +61,22 @@ ProgramDescriptor MatmulMultiCoreProgramFactory::create_descriptor(
 
     const auto& cshape = output.padded_shape();  // C=A*B, N1MK*11KN->N1MN
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    TT_FATAL(
+        operation_attributes.program_config.has_value(),
+        "program_config must be provided for MatmulMultiCoreProgramFactory");
+    auto pc = std::get<operations::matmul::MatmulMultiCoreProgramConfig>(operation_attributes.program_config.value());
+    if (!pc.allowed_worker_cores.has_value()) {
+        log_warning(
+            tt::LogOp,
+            "MatmulMultiCoreProgramFactory: program_config.allowed_worker_cores not populated; auto-populating "
+            "from device compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() should invoke "
+            "ttnn::operations::matmul::normalize_program_config() on the program config first. This will become "
+            "a hard error in a future release.");
+        auto device_grid = device->compute_with_storage_grid_size();
+        pc.allowed_worker_cores =
+            CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(device_grid.x - 1, device_grid.y - 1)));
+    }
+    auto compute_with_storage_grid_size = pc.allowed_worker_cores.value().bounding_box().grid_size();
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     uint32_t c_batch_size = get_batch_size(cshape);
     auto num_output_tiles_total = c_batch_size * cshape[-2] * cshape[-1] / TILE_HW;

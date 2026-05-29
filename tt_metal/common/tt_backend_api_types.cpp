@@ -60,6 +60,8 @@ bool tt::is_integer_format(DataFormat format) {
         (format == DataFormat::RawUInt32) || (format == DataFormat::RawUInt16) || (format == DataFormat::RawUInt8));
 }
 
+bool tt::is_fp8_format(DataFormat format) { return format == DataFormat::Fp8_e4m3 || format == DataFormat::Lf8; }
+
 // TT-1.x (Wormhole / Blackhole) host-side enumeration.
 bool is_supported_wormhole_blackhole(tt::DataFormat format, bool is_blackhole) {
     switch (format) {

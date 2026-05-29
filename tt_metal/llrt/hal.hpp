@@ -59,9 +59,10 @@ bool operator==(const HalProcessorIdentifier&, const HalProcessorIdentifier&);
 enum class HalDramMemAddrType : uint8_t {
     BARRIER = 0,
     PROFILER = 1,
-    DRAM_BACKED_COMMAND_QUEUES = 2,
-    UNRESERVED = 3,
-    COUNT = 4
+    DEVICE_PRINT_DISPATCH = 2,
+    DRAM_BACKED_COMMAND_QUEUES = 3,
+    UNRESERVED = 4,
+    COUNT = 5
 };
 
 enum class HalTensixHarvestAxis : uint8_t { ROW = 0x1, COL = 0x2 };

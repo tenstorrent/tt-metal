@@ -76,7 +76,7 @@ ttnn:
     wh_galaxy: 35
   e2e:
     wh_llmbox: 90
-    wh_galaxy: 70
+    wh_galaxy: 90
     bh_galaxy: 70
     bh_p150b_civ2: 55
     bh_deskbox: 145
@@ -85,8 +85,20 @@ ttnn:
     bh_p300: 145
     bh_quietbox_2: 145
   integration:
-    wh_llmbox: 30
-    wh_galaxy: 350
+    wh_llmbox: 30   # t3k_integration_tests.yaml (ttnn entries)
+    wh_galaxy: 340  # galaxy_integration_tests.yaml
+  # Profiler budgets are kept under their own subheading for now while team /
+  # test-framework assignment is being settled. Tracked in
+  # https://github.com/tenstorrent/tt-metal/issues/44285
+  profiler:
+    # Budgets sized against the per-test decomposition of the umbrella
+    # run_profiling_test (each unique test now has its own matrix entry).
+    wh_llmbox: 150              # t3k_profiler_tests.yaml (~141m actual + headroom)
+    wh_galaxy: 50               # galaxy_profiler_tests.yaml (~45m actual + headroom)
+    wh_n150_civ2: 60            # single_card_profiler_tests.yaml (~53m actual + headroom)
+    wh_n300_civ2: 60
+    bh_p100a_civ2_viommu: 60
+    bh_p150b_civ2_viommu: 60
 
 shield:
   e2e:
@@ -110,8 +122,9 @@ scaleout:
     wh_llmbox: 185
     wh_galaxy: 100
     bh_galaxy: 60
-    bh_sp1: 90
-    bh_sp4: 150
+    bh_spsg: 20 # single galaxy
+    bh_sp1: 50
+    bh_sp4: 50
     bh_deskbox: 80
     bh_llmbox: 80
     bh_loudbox: 80
@@ -166,23 +179,29 @@ models:
     wh_n300: 15
     wh_galaxy_perf: 120
     bh_p150b_civ2: 55
-    bh_loudbox: 70
-    bh_llmbox: 40
+    bh_loudbox: 165
+    bh_p150: 60
     bh_p300: 10
+    bh_deskbox: 60
+    bh_quietbox_2: 60
+    bh_llmbox: 40
+    bh_galaxy_perf: 60
   unit:
     wh_llmbox: 175
     wh_llmbox_perf: 230
     wh_n150: 130
     wh_n300: 15
+    wh_galaxy: 45
     wh_galaxy_perf: 45
+    bh_p150: 30
+    bh_quietbox_2: 60
+    bh_galaxy: 60
   integration:
     wh_llmbox: 422
   perf:
     wh_llmbox_perf: 685
     wh_galaxy: 280
     wh_galaxy_perf: 150
-    # UF Galaxy perf pool (see sku_config wh_galaxy_perf_uf)
-    wh_galaxy_perf_uf: 75
   device_perf:
     wh_n150: 10
     bh_p150: 10
@@ -193,9 +212,8 @@ models:
     wh_llmbox_perf_release: 1090
     wh_galaxy: 0
     wh_galaxy_perf: 150
-    wh_galaxy_perf_uf: 45
     wh_galaxy_release: 345
-    bh_galaxy: 250
+    bh_galaxy: 280
     wh_n150: 500
     wh_n150_civ2: 300
     wh_n300: 600
@@ -218,4 +236,4 @@ models:
 
 umd:
   unit:
-    wh_galaxy_perf_uf: 35
+    wh_galaxy_perf: 35

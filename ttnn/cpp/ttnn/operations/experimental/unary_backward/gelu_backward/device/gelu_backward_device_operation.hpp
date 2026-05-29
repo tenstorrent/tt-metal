@@ -8,9 +8,11 @@
 #include <string>
 #include <variant>
 
+#include <tt-metalium/program_descriptors.hpp>
+
+#include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "gelu_backward_program_factory.hpp"
-
 #include "gelu_backward_device_operation_types.hpp"
 
 namespace ttnn::experimental::prim {

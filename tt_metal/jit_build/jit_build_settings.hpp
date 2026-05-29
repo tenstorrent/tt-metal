@@ -15,7 +15,7 @@
 
 namespace tt::tt_metal {
 
-// Dispatch type for named runtime args — determines which device-side accessor to use.
+// Dispatch type for named runtime args: determines which device-side accessor to use.
 enum class RuntimeArgDispatch : uint8_t {
     COMMON,   // get_common_arg_val (shared across all cores)
     PER_CORE  // get_arg_val (unique per core)
@@ -36,6 +36,30 @@ using NamedRuntimeArgNamespaces = std::map<std::string, std::vector<NamedRuntime
 
 // Namespace → [(field, value)] map for named compile-time arg header generation.
 using NamedCTArgNamespaces = std::map<std::string, std::vector<std::pair<std::string, uint32_t>>>;
+
+// Metal 2.0: precomputed layout of a kernel's common runtime args (CRTA) buffer.
+//
+// The CRTA buffer is laid out as three back-to-back sections:
+//   [ user-named CRTAs | TensorBinding section | vararg CRTAs ]
+//
+// Sections 1 and 2 are fixed-size at spec-resolution time. This struct records their
+// sizes (and the resulting vararg section start offset) so consumers don't have to
+// re-derive them by walking the binding handles.
+//
+// Section 2 (TensorBinding) is variable-size: each binding contributes
+// (1 + num_runtime_field_crta_words) words — the always-present base-address word, plus
+// any runtime accessor fields the TensorParameter opted into (currently: shape, for
+// sharded TensorParameters with dynamic_tensor_shape=true).
+struct KernelCrtaLayout {
+    // Section 1 size, in words. Equals the number of user-named CRTAs.
+    uint32_t num_named_words = 0;
+    // Section 2 size, in words. Equals the sum-over-bindings of (1 + num_runtime_field_crta_words).
+    uint32_t binding_section_words = 0;
+    // Start offset of section 3 (varargs), in words.
+    // Stored (not computed on demand) so it can be set from a known value at spec resolution
+    // and asserted against the derived sum if a consumer wants belt-and-suspenders verification.
+    uint32_t vararg_section_offset = 0;
+};
 
 // Abstract base class for kernel specialization
 // Higher levels of the SW derive from this and fill in build details not known to the build system
@@ -72,9 +96,16 @@ public:
     //    positional compile-time-args buffer
     //  - addr_crta_offset: byte offset of the implicit base-address CRTA within the kernel's
     //    common-runtime-args section
+    //  - num_runtime_field_crta_words: number of CRTA words that immediately follow the address
+    //    slot for runtime accessor fields (currently: shape, for sharded TensorParameters with
+    //    dynamic_tensor_shape=true). The binding occupies (1 + num_runtime_field_crta_words)
+    //    CRTA words in total.
     // (The tensor_parameter_name is also part of TensorBindingHandle, but we don't need it for codegen.)
-    virtual void process_tensor_binding_handles(
-        std::function<void(const std::string& accessor_name, uint32_t cta_offset, uint32_t addr_crta_offset)>) const {}
+    virtual void process_tensor_binding_handles(std::function<void(
+                                                    const std::string& accessor_name,
+                                                    uint32_t cta_offset,
+                                                    uint32_t addr_crta_offset,
+                                                    uint32_t num_runtime_field_crta_words)>) const {}
 
     // Named RTA/CRTA schema (Metal 2.0 APIs).
     // The order of names determines the byte offset of each arg within the named-args
@@ -94,6 +125,12 @@ public:
     virtual void process_named_runtime_args(std::function<void(const NamedRuntimeArgNamespaces&)>) const = 0;
     // Called to process named compile-time arg namespaces for generated header (ct:: namespace)
     virtual void process_named_ct_arg_namespaces(std::function<void(const NamedCTArgNamespaces&)>) const = 0;
+
+    // Metal 2.0: full CRTA buffer layout, precomputed at spec resolution time.
+    // Default is the all-zero layout (no named CRTAs, no bindings, varargs start at offset 0),
+    // which matches the legacy-kernel case where the buffer has only varargs.
+    virtual KernelCrtaLayout get_crta_layout() const { return {}; }
+
     // Called to process additional include paths (e.g., kernel source directory for relative includes)
     virtual void process_include_paths(const std::function<void(const std::string& path)>&) const {}
 

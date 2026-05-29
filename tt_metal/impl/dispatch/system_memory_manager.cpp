@@ -6,7 +6,6 @@
 #include "impl/context/metal_context.hpp"
 #include "system_memory_manager.hpp"
 #include <tt-metalium/tt_align.hpp>
-#include <dlfcn.h>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -43,49 +42,6 @@ namespace tt::tt_metal {
 void on_dispatch_timeout_detected();
 
 namespace {
-
-using TTSimClockAllDevicesFn = void (*)(uint32_t);
-
-void* open_ttsim_handle() {
-    void* handle = nullptr;
-    if (const char* sim_path = std::getenv("TT_METAL_SIMULATOR")) {
-#ifdef RTLD_NOLOAD
-        handle = dlopen(sim_path, RTLD_NOW | RTLD_NOLOAD);
-#endif
-    }
-    if (handle == nullptr) {
-        handle = RTLD_DEFAULT;
-    }
-    return handle;
-}
-
-TTSimClockAllDevicesFn get_ttsim_clock_all_devices() {
-    static TTSimClockAllDevicesFn fn = [] {
-        void* handle = open_ttsim_handle();
-        return reinterpret_cast<TTSimClockAllDevicesFn>(dlsym(handle, "libttsim_clock_all_devices"));
-    }();
-    return fn;
-}
-
-uint32_t get_ttsim_cq_wait_clock_cycles() {
-    static uint32_t cycles = [] {
-        if (const char* env = std::getenv("TT_METAL_SIMULATOR_CQ_WAIT_CLOCKS")) {
-            return static_cast<uint32_t>(std::stoul(env));
-        }
-        return 1000u;
-    }();
-    return cycles;
-}
-
-void pump_ttsim_clock_if_enabled(ContextId context_id) {
-    auto& ctx = tt::tt_metal::MetalContext::instance(context_id);
-    if (!ctx.rtoptions().get_simulator_enabled()) {
-        return;
-    }
-    if (auto* clock_all_devices = get_ttsim_clock_all_devices()) {
-        clock_all_devices(get_ttsim_cq_wait_clock_cycles());
-    }
-}
 
 bool wrap_ge(uint32_t a, uint32_t b) {
     // Signed Diff uses 2's Complement to handle wrap
@@ -711,7 +667,8 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
         auto fetch_operation_body = [&]() {
             ctx.get_cluster().read_core(&fence, sizeof(uint32_t), this->prefetcher_cores[cq_id], prefetch_q_rd_ptr);
             this->prefetch_q_dev_fences[cq_id] = fence;
-            pump_ttsim_clock_if_enabled(this->context_id);
+            // Yield to clock the simulator when running on TTSim; no-op on real hardware.
+            ctx.get_cluster().advance_device_execution(this->device_id);
         };
 
         // Condition to check if should continue waiting
@@ -762,7 +719,8 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
         write_ptr_and_toggle = get_cq_completion_wr_ptr<true>(this->device_id, cq_id, this->cq_size);
         write_ptr = write_ptr_and_toggle & 0x7fffffff;
         write_toggle = write_ptr_and_toggle >> 31;
-        pump_ttsim_clock_if_enabled(this->context_id);
+        // Yield to clock the simulator when running on TTSim; no-op on real hardware.
+        tt::tt_metal::MetalContext::instance(this->context_id).get_cluster().advance_device_execution(this->device_id);
     };
 
     // Condition to check if the operation should continue
