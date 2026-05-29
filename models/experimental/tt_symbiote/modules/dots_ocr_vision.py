@@ -170,7 +170,7 @@ def _vision_matmul_program_config(device, m_dim: int, k_dim: int, n_dim: int):
     # which combined with the in0/in1/out CBs trips ``program.cpp:934``
     # at ~1.7 MB. Empirically out_block_h=8 fits all four vision shapes
     # at full DST when out_block_h=12 doesn't.
-    dst_tiles_budget = 8
+    dst_tiles_budget = 16
     candidate_out_block_h = [16, 12, 8, 6, 4, 3, 2, 1]
     best_area = 0
     best_out_block_h = 1
@@ -290,7 +290,7 @@ def _vision_o_proj_bs_program_config(device):
     pc = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(grid_x, grid_y),
         in0_block_w=8,
-        out_subblock_h=1,
+        out_subblock_h=2,
         out_subblock_w=6,
         out_block_h=6,
         out_block_w=6,
@@ -327,7 +327,7 @@ def _vision_mlp_down_l1_pc(device):
     pc = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(grid_x, grid_y),
         in0_block_w=6,
-        out_subblock_h=4,
+        out_subblock_h=8,
         out_subblock_w=2,
         out_block_h=8,
         out_block_w=6,
@@ -344,6 +344,13 @@ def _vision_mlp_down_l1_pc(device):
 def _vision_matmul_compute_config(device, *, math_fidelity: ttnn.MathFidelity) -> ttnn.DeviceComputeKernelConfig:
     """Compute config for vision linear/matmul ops.
 
+    ``dst_full_sync_en=True`` doubles the per-core DST register budget from 8
+    to 16 tiles (LoFi, fp32_dest_acc_en=False). The vision matmul program
+    config (``_vision_matmul_program_config``) uses this to pick larger
+    ``out_subblock_h * out_subblock_w`` (up to 16), roughly halving the
+    matmul-instruction count for the QKV / o_proj / MLP shapes that were
+    previously DST-area-bound at 8.
+
     ``packer_l1_acc=True`` keeps partial output accumulators in L1 across the
     K-loop iterations rather than spilling to DRAM each pass, which directly
     improves throughput on long-K matmuls (K=1536, K=4224 in the dots vision
@@ -356,6 +363,7 @@ def _vision_matmul_compute_config(device, *, math_fidelity: ttnn.MathFidelity) -
         math_approx_mode=True,
         fp32_dest_acc_en=False,
         packer_l1_acc=True,
+        dst_full_sync_en=True,
     )
 
 
