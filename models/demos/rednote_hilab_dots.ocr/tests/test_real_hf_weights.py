@@ -48,6 +48,7 @@ _tt_vision_attention = _load_by_path("dots_tt_vision_attention_rw", "vision_atte
 _tt_vision_mlp = _load_by_path("dots_tt_vision_mlp_rw", "vision_mlp.py", _TT_DIR)
 _tt_vision_block = _load_by_path("dots_tt_vision_block_rw", "vision_block.py", _TT_DIR)
 _tt_vision_patch_merger = _load_by_path("dots_tt_vision_patch_merger_rw", "vision_patch_merger.py", _TT_DIR)
+_tt_vision_tower = _load_by_path("dots_tt_vision_tower_rw", "vision_tower.py", _TT_DIR)
 _loader = _load_by_path("dots_weight_loader", "weight_loader.py", _TT_DIR)
 _functional = _load_by_path("dots_reference_functional_rw", "functional.py", _REF_DIR)
 
@@ -56,16 +57,19 @@ TtVisionAttention = _tt_vision_attention.TtVisionAttention
 TtVisionMLP = _tt_vision_mlp.TtVisionMLP
 TtVisionBlock = _tt_vision_block.TtVisionBlock
 TtVisionPatchMerger = _tt_vision_patch_merger.TtVisionPatchMerger
+TtVisionTower = _tt_vision_tower.TtVisionTower
 load_vision_rmsnorm_weight = _loader.load_vision_rmsnorm_weight
 load_vision_attention_weights = _loader.load_vision_attention_weights
 load_vision_mlp_weights = _loader.load_vision_mlp_weights
 load_vision_block_weights = _loader.load_vision_block_weights
 load_vision_patch_merger_weights = _loader.load_vision_patch_merger_weights
+load_vision_tower_weights = _loader.load_vision_tower_weights
 vision_rmsnorm_forward = _functional.vision_rmsnorm_forward
 vision_attention_forward = _functional.vision_attention_forward
 vision_mlp_forward = _functional.vision_mlp_forward
 vision_block_forward = _functional.vision_block_forward
 vision_patch_merger_forward = _functional.vision_patch_merger_forward
+vision_tower_forward = _functional.vision_tower_forward
 
 # Vision attention config (modeling_dots_vision): 12 heads, head_dim 128,
 # fused QKV no-bias, 2D RoPE theta 1e4, block-diagonal bidirectional attention.
@@ -422,6 +426,117 @@ def test_real_hf_weights_vision_patch_merger(device):
     assert params_loaded > 0
 
 
+# Vision tower (DotsVisionTransformer): patch_embed -> N x vision_block ->
+# post_trunk RMSNorm -> patch_merger. Validated at the SAME reduced layer count
+# the seed-0 bring-up golden used (num_layers=2 vs production 42) so the composed
+# real-weight state_dict and the eager reference agree. The seed-0 golden supplies
+# the same input pixel_values + grid_thw the synthetic run used; only the weights
+# swap to the real checkpoint (composed via load_vision_tower_weights).
+VISION_TOWER_GOLDEN_PATH = os.path.join(_REF_DIR, "golden", "vision_tower.pt")
+
+
+def _run_vision_tower_pcc(device):
+    """Load the full real vision-tower weights, run TtVisionTower on device, and
+    compare against the HF PyTorch reference computed with the SAME real weights
+    at the reduced golden layer count.
+
+    Returns (pcc, params_loaded).
+    """
+    golden = torch.load(VISION_TOWER_GOLDEN_PATH, map_location="cpu", weights_only=False)
+    pixel_values = golden["input"].to(torch.float32)  # [num_patches, ch*tp*ps*ps]
+    grid_thw = torch.as_tensor(golden["grid_thw"])  # [num_images, 3]
+    cfg = golden["config"]
+
+    num_layers = int(cfg["num_layers"])
+    embed_dim = int(cfg["embed_dim"])
+    num_heads = int(cfg["num_heads"])
+    num_channels = int(cfg["num_channels"])
+    temporal_patch_size = int(cfg["temporal_patch_size"])
+    patch_size = int(cfg["patch_size"])
+    spatial_merge_size = int(cfg["spatial_merge_size"])
+    rms_norm_eps = float(cfg["rms_norm_eps"])
+    ln_eps = float(cfg["ln_eps"])
+    post_norm = bool(cfg["post_norm"])
+    hidden_size = int(cfg["hidden_size"])
+
+    # Compose the REAL checkpoint weights for the full tower at the reduced depth.
+    state_dict = load_vision_tower_weights(CHECKPOINT_PATH, num_layers=num_layers)
+    state_dict = {k: v.to(torch.float32) for k, v in state_dict.items()}
+    params_loaded = int(sum(v.numel() for v in state_dict.values()))
+
+    # Shape sanity on the composed real state_dict.
+    assert state_dict["patch_embed.proj.weight"].shape == (embed_dim, num_channels, patch_size, patch_size)
+    assert state_dict["patch_embed.norm.weight"].shape == (embed_dim,)
+    assert state_dict["post_trunk_norm.weight"].shape == (embed_dim,)
+    for i in range(num_layers):
+        assert state_dict[f"blocks.{i}.attn.qkv.weight"].shape == (3 * embed_dim, embed_dim)
+    assert state_dict["merger.mlp.0.weight"].shape == (
+        embed_dim * spatial_merge_size**2,
+        embed_dim * spatial_merge_size**2,
+    )
+
+    # HF PyTorch reference (fp32) with the REAL weights at the reduced depth.
+    ref_output = vision_tower_forward(
+        pixel_values,
+        grid_thw,
+        state_dict,
+        num_layers=num_layers,
+        embed_dim=embed_dim,
+        num_heads=num_heads,
+        num_channels=num_channels,
+        temporal_patch_size=temporal_patch_size,
+        patch_size=patch_size,
+        spatial_merge_size=spatial_merge_size,
+        rms_norm_eps=rms_norm_eps,
+        ln_eps=ln_eps,
+        post_norm=post_norm,
+        bias=False,
+        hidden_size=hidden_size,
+    )
+
+    tt_tower = TtVisionTower(
+        device=device,
+        state_dict=state_dict,
+        grid_thw=grid_thw,
+        num_layers=num_layers,
+        embed_dim=embed_dim,
+        num_heads=num_heads,
+        num_channels=num_channels,
+        temporal_patch_size=temporal_patch_size,
+        patch_size=patch_size,
+        spatial_merge_size=spatial_merge_size,
+        rms_norm_eps=rms_norm_eps,
+        ln_eps=ln_eps,
+        post_norm=post_norm,
+    )
+
+    # Host-resident patch_embed (documented boundary) -> device input tokens.
+    hidden_states = tt_tower.patch_embed(pixel_values)  # [num_patches, embed_dim]
+    tt_input = ttnn.from_torch(
+        hidden_states,
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_output = tt_tower(tt_input)
+    tt_output_torch = ttnn.to_torch(tt_output).to(torch.float32).reshape(ref_output.shape)
+
+    passing, pcc_message = comp_pcc(ref_output, tt_output_torch, 0.99)
+    print(comp_allclose(ref_output, tt_output_torch))
+    print(f"comp_pcc(vision_tower, real weights): passing={passing}, message={pcc_message}")
+    msg = str(pcc_message)
+    pcc = float(msg.split("PCC:")[-1].strip()) if "PCC:" in msg else float(pcc_message)
+    print(f"real-weights vision_tower PCC = {pcc} | params_loaded = {params_loaded} | num_layers = {num_layers}")
+    assert passing, f"vision_tower real-weights PCC below 0.99: {pcc_message}"
+    return pcc, params_loaded
+
+
+def test_real_hf_weights_vision_tower(device):
+    pcc, params_loaded = _run_vision_tower_pcc(device)
+    assert params_loaded > 0
+
+
 if __name__ == "__main__":
     dev = ttnn.open_device(device_id=0, l1_small_size=32768)
     try:
@@ -430,5 +545,6 @@ if __name__ == "__main__":
         _run_vision_mlp_pcc(dev)
         _run_vision_block_pcc(dev)
         _run_vision_patch_merger_pcc(dev)
+        _run_vision_tower_pcc(dev)
     finally:
         ttnn.close_device(dev)

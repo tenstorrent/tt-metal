@@ -210,3 +210,86 @@ def load_vision_patch_merger_weights(checkpoint_path: str) -> Dict[str, torch.Te
         "mlp.2.weight": tensors["vision_tower.merger.mlp.2.weight"],
         "mlp.2.bias": tensors["vision_tower.merger.mlp.2.bias"],
     }
+
+
+def load_vision_patch_embed_weights(checkpoint_path: str) -> Dict[str, torch.Tensor]:
+    """Load the real vision patch-embed weights (Conv2d patchify + RMSNorm).
+
+    DotsPatchEmbed wraps a ``patchifier`` submodule: a Conv2d(3,1536,k=14,s=14)
+    over packed/patchified pixels followed by an RMSNorm (eps 1e-5). The real HF
+    keys carry the extra ``.patchifier.`` segment that the flat reference /
+    TTNN tower keys drop; this maps them onto the flat shape:
+        vision_tower.patch_embed.patchifier.proj.weight  -> proj.weight  [1536,3,14,14]
+        vision_tower.patch_embed.patchifier.proj.bias    -> proj.bias    [1536]
+        vision_tower.patch_embed.patchifier.norm.weight  -> norm.weight  [1536]
+
+    The patch_embed is the documented host-resident boundary; these weights are
+    consumed on host by :func:`tt.vision_tower.host_patch_embed`.
+
+    Returns the flat state_dict (fp32):
+        {"proj.weight", "proj.bias", "norm.weight"}.
+    """
+    proj_w = "vision_tower.patch_embed.patchifier.proj.weight"
+    proj_b = "vision_tower.patch_embed.patchifier.proj.bias"
+    norm_w = "vision_tower.patch_embed.patchifier.norm.weight"
+    tensors = load_hf_tensors(checkpoint_path, [proj_w, proj_b, norm_w])
+    return {
+        "proj.weight": tensors[proj_w],
+        "proj.bias": tensors[proj_b],
+        "norm.weight": tensors[norm_w],
+    }
+
+
+def load_vision_tower_weights(checkpoint_path: str, num_layers: int) -> Dict[str, torch.Tensor]:
+    """Load the full DotsVisionTransformer (vision tower) real weights.
+
+    COMPOSES the already-verified per-component loaders into the single flat
+    state_dict that the eager reference
+    :func:`reference.functional.vision_tower_forward` and the TTNN
+    :class:`tt.vision_tower.TtVisionTower` both consume. The tower is
+    ``patch_embed -> N x vision_block -> [post_trunk_norm] -> patch_merger``:
+
+    - patch_embed: ``load_vision_patch_embed_weights`` (Conv2d + RMSNorm), emitted
+      under the flat ``patch_embed.proj.weight/bias`` + ``patch_embed.norm.weight``
+      keys (HF carries an extra ``.patchifier.`` segment).
+    - each of the ``num_layers`` blocks: ``load_vision_block_weights(ckpt, i)``,
+      re-prefixed ``blocks.{i}.``.
+    - post-trunk RMSNorm: HF key ``vision_tower.post_trunk_norm.weight`` ->
+      ``post_trunk_norm.weight``.
+    - patch merger: ``load_vision_patch_merger_weights``, re-prefixed ``merger.``.
+
+    ``num_layers`` MUST match the layer count of the golden being validated (the
+    bring-up golden runs the REDUCED depth of 2 vs the production 42) so the
+    composed state_dict and the reference run agree.
+
+    Returns the flat tower state_dict (fp32) with keys:
+        patch_embed.proj.weight, patch_embed.proj.bias, patch_embed.norm.weight,
+        blocks.{i}.{norm1.weight, attn.qkv.weight, attn.proj.weight, norm2.weight,
+                    mlp.fc1.weight, mlp.fc2.weight, mlp.fc3.weight} for i in [0, num_layers),
+        post_trunk_norm.weight,
+        merger.{ln_q.weight, ln_q.bias, mlp.0.weight, mlp.0.bias,
+                mlp.2.weight, mlp.2.bias}.
+    """
+    sd: Dict[str, torch.Tensor] = {}
+
+    # patch_embed (host-resident boundary): Conv2d + RMSNorm.
+    pe = load_vision_patch_embed_weights(checkpoint_path)
+    sd["patch_embed.proj.weight"] = pe["proj.weight"]
+    sd["patch_embed.proj.bias"] = pe["proj.bias"]
+    sd["patch_embed.norm.weight"] = pe["norm.weight"]
+
+    # N transformer blocks.
+    for i in range(num_layers):
+        blk = load_vision_block_weights(checkpoint_path, block_idx=i)
+        for k, v in blk.items():
+            sd[f"blocks.{i}.{k}"] = v
+
+    # post-trunk RMSNorm (eps 1e-5).
+    sd["post_trunk_norm.weight"] = load_vision_rmsnorm_weight(checkpoint_path, "vision_tower.post_trunk_norm.weight")
+
+    # patch merger (LayerNorm + GELU MLP, both biased).
+    merger = load_vision_patch_merger_weights(checkpoint_path)
+    for k, v in merger.items():
+        sd[f"merger.{k}"] = v
+
+    return sd

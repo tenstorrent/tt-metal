@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** p150 (blackhole)
 **Started:** 2026-05-29T00:11:46Z
-**Updated:** 2026-05-29T04:04:31Z
+**Updated:** 2026-05-29T04:10:59Z
 
 ## Block Status
 
@@ -44,7 +44,7 @@
 | vision_tower | ttnn | done | 0.999982 | 0 | Full DotsVisionTransformer assembly at REDUCED 2 layers (full=42), grid 1x4x4=16 patches. Composes verified TtVisionBlock x2 (pre-norm residual, 2D vision RoPE theta 1e4, block-diagonal cu_seqlens attn) -> post_trunk TtVisionRMSNorm (eps 1e-5) -> TtVisionPatchMerger (LayerNorm eps 1e-6 + GELU MLP, merge 2x2) by file-path import. patch_embed Conv2d+RMSNorm run on host (documented host-resident boundary); 2D RoPE + cu_seqlens precomputed on host, threaded through blocks. HiFi4+fp32_dest_acc bf16 DRAM TILE. PCC=0.99998 vs golden on p150. Guard ok. |
 | vision_tower | debug | n/a | — | 0 |  |
 | vision_tower | optimization | done | 0.999982 | 0 | Traced tracy on the composite assembly (golden grid 1x4x4=16 patches, reduced 2-layer trunk standing in per-layer for full 42). Total device kernel 1084.8us. Top hotspot MatmulDeviceOperation 64.2% (696.5us/14 ops: QKV+proj+MLP fc1/fc2/fc3 + merger fc1/fc2) -- all inside already-optimized leaves (vision_attention -23.8%, vision_mlp -13.8%, merger matmuls 96c at-ceiling). LayerNorm 15.4% all single-core: post_trunk_norm is a TtVisionRMSNorm instance and inherits that leaf's at-ceiling verdict (K_t=48 doesn't divide 32/64 cores; width-sharded variants overflow static L1 CBs). Reshape 6.4% + Binary 5.4% + Transpose 2.1% are leaf-internal (RoPE/head ops + vision_block residual adds already L1-pinned). The vision_tower.py assembly layer itself adds NO inter-block reshard/transpose and NO DRAM hotspot: block->block boundary lands L1 (residual adds), and post_trunk_norm->merger handoff is already L1. The 72.2% DRAM share is entirely leaf-owned matmul output (intentional: merger fused-bias DRAM path proven net-best in the patch_merger tick; L1-pinning leaf matmuls was net-neutral). No composite-boundary lever available -- at-ceiling, inherits leaf wins. PCC 0.9999818 unchanged. |
-| vision_tower | real_weights | pending | — | 0 |  |
+| vision_tower | real_weights | done | 0.999990 | 0 | load_vision_tower_weights composes patch_embed (patchifier->flat) + 2 blocks + post_trunk_norm + merger; real-HF PCC at reduced num_layers=2 |
 | embedding | reference | done | 1.000000 | 0 | Qwen2 token embedding (vocab 151936, hidden 1536) lookup. PCC=1.0 vs nn.Embedding. |
 | embedding | ttnn | done | 0.999999 | 0 | ttnn.embedding gather; weight [151936,1536] bf16 ROW_MAJOR in DRAM; uint32 row-major ids -> TILE output. HiFi4+fp32_dest_acc preset (no matmul; exact gather). PCC=0.9999986 vs golden on p150. Guard ok. |
 | embedding | debug | n/a | — | 0 |  |
@@ -94,7 +94,6 @@
 
 ## Recent Ticks
 
-- tick 31 (2026-05-29T03:05:15Z): device[attention] — ok
 - tick 32 (2026-05-29T03:11:57Z): device[mlp] — ok
 - tick 33 (2026-05-29T03:19:23Z): device[decoder_layer] — ok
 - tick 34 (2026-05-29T03:27:29Z): device[lm_head] — ok
@@ -104,6 +103,7 @@
 - tick 38 (2026-05-29T03:53:12Z): device[vision_mlp] — ok
 - tick 39 (2026-05-29T03:58:28Z): device[vision_block] — ok
 - tick 40 (2026-05-29T04:04:31Z): device[vision_patch_merger] — ok
+- tick 41 (2026-05-29T04:10:59Z): device[vision_tower] — ok
 
 ## Host-Resident Exceptions
 
