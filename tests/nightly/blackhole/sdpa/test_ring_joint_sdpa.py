@@ -800,6 +800,11 @@ CHUNKED_PREFILL_N_CHUNKS = 11
 CHUNKED_PREFILL_CHUNK_SIZE = CHUNKED_PREFILL_PER_DEVICE_CHUNK * MESH_CONFIG.sp_size
 CHUNKED_PREFILL_TOTAL_SEQ = CHUNKED_PREFILL_CHUNK_SIZE * CHUNKED_PREFILL_N_CHUNKS
 CHUNKED_PREFILL_PCC_THRESHOLD = 0.99
+# Q/V heads are sharded across tp_axis, so every device in a ring holds the same
+# head shard => heads-per-ring == heads-per-device. nhq/nhv below are PER RING; the
+# run multiplies by tp_size for the total head count (e.g. 16 per ring => 64 total on
+# galaxy 4x8), matching the per-ring convention used by the sweep configs.
+CHUNKED_PREFILL_HEADS_PER_RING = 16
 CHUNKED_PREFILL_SEED = 1234
 
 
@@ -839,7 +844,11 @@ def run_ring_joint_sdpa_chunked(
         q_chunk_size = model.q_chunk_sizes[0]
     if k_chunk_size is None:
         k_chunk_size = model.k_chunk_sizes[0]
-    nhq, nhk, nhv = model.nhq, model.nhk, model.nhv
+    # model.nhq/nhk/nhv are PER RING; scale to total head counts across all TP shards
+    # (mirrors the sweep convention; nhk=1 stays 1 for MLA's single shared K head).
+    nhq = model.nhq * mesh_config.tp_size
+    nhk = model.nhk * (mesh_config.tp_size if model.nhk != 1 else 1)
+    nhv = model.nhv * mesh_config.tp_size
     d_q, d_k, d_v = model.d_q, model.d_k, model.d_v
     q_dtype, kv_dtype = model.q_dtype, model.kv_dtype
     is_balanced = False
@@ -1635,9 +1644,9 @@ def test_ring_joint_attention_perf_check(model_name, q_chunk_size, k_chunk_size,
 CHUNKED_PREFILL_MODEL_CONFIGS = {
     "kimi50k": ModelConfig(
         name="kimi50k",
-        nhq=16,
+        nhq=CHUNKED_PREFILL_HEADS_PER_RING,
         nhk=1,
-        nhv=16,
+        nhv=CHUNKED_PREFILL_HEADS_PER_RING,
         d_q=576,
         d_k=576,
         d_v=128,
@@ -1782,7 +1791,8 @@ def test_ring_joint_attention_create_chunked_perf_table(model_name, q_chunk_size
     ]
 
     q_per_dev = chunk_size // ring_size
-    nh_per_dev = model.nhq // mesh_config.tp_size
+    # model.nhq is PER RING, and heads-per-ring == heads-per-device (heads shard across tp_axis).
+    nh_per_dev = model.nhq
     d_q, d_v = model.d_q, model.d_v
     constants = ARCH_CONSTANTS["blackhole"]
     clock_ghz = constants["clock_ghz"]
