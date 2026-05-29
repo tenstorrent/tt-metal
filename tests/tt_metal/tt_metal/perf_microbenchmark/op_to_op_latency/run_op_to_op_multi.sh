@@ -21,6 +21,7 @@ EXTRA_ARGS="${EXTRA_ARGS:---use-trace --num-programs 2 --compute-nops 1000 --use
 TILES_PER_CORE="${TILES_PER_CORE:-2}"
 INPUT_CB_DEPTH="${INPUT_CB_DEPTH:-2}"
 READER_PUSH="${READER_PUSH:-1}"
+MIN_PROG_ID="${MIN_PROG_ID:-1}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TT_METAL_HOME="${TT_METAL_HOME:-$(cd "${SCRIPT_DIR}/../../../../.." && pwd)}"
 export TT_METAL_HOME
@@ -62,6 +63,7 @@ for i in $(seq 1 "${NUM_RUNS}"); do
     --tiles-per-core "${TILES_PER_CORE}" \
     --input-cb-depth-tiles "${INPUT_CB_DEPTH}" \
     --reader-push-tiles "${READER_PUSH}" \
+    --min-prog-id "${MIN_PROG_ID}" \
     --output-dir "${run_dir}"
 done
 

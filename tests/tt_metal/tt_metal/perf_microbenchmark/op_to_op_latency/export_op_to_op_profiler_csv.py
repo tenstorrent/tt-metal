@@ -208,6 +208,9 @@ def build_rt_dispatch_gaps(rt_df: pd.DataFrame, freq_mhz: float, min_prog_id: in
             gap_cycles = go[i + 1] - done[i]
             if gap_cycles < 0:
                 continue
+            # Steady-state only: consecutive program ids (skip trace wrap e.g. 8→3).
+            if pids[i + 1] != pids[i] + 1:
+                continue
             ghz = rt_freq_ghz(rt_df, freq_mhz)
             gap_ns = rt_cycles_to_ns(gap_cycles, ghz)
             rows.append(
@@ -561,6 +564,37 @@ def build_chip_summary(gaps: pd.DataFrame) -> pd.DataFrame:
     return summary
 
 
+def print_done_go_validation_summary(
+    timeline: pd.DataFrame, rt_gaps: pd.DataFrame, min_prog_id: int, freq_mhz: float
+) -> None:
+    """Summarize done/go metrics: chip dispatch (WH ~500-800ns) vs per-core BRISC FW."""
+    print(f"Done/go validation (min_prog_id>={min_prog_id}, freq={freq_mhz:.1f} MHz):")
+    if not rt_gaps.empty and "dispatch_gap_us" in rt_gaps.columns:
+        dg = rt_gaps["dispatch_gap_us"]
+        dg_ns = dg * 1000.0
+        print(
+            f"  chip_dispatch done→go (RT): median={dg.median():.3f} us ({dg_ns.median():.1f} ns) "
+            f"min={dg.min():.3f} max={dg.max():.3f} n={len(dg)}"
+        )
+    else:
+        print("  chip_dispatch done→go (RT): no data")
+    if not timeline.empty and "brisc_done_to_go_us" in timeline.columns:
+        bg = pd.to_numeric(timeline["brisc_done_to_go_us"], errors="coerce").dropna()
+        if not bg.empty:
+            bg_ns = bg * 1000.0
+            print(
+                f"  brisc_done_to_go (per-core device): median={bg.median():.3f} us ({bg_ns.median():.1f} ns) "
+                f"min={bg.min():.3f} max={bg.max():.3f} n={len(bg)}"
+            )
+    if not timeline.empty and "gap_us" in timeline.columns:
+        gap = pd.to_numeric(timeline["gap_us"], errors="coerce").dropna()
+        if not gap.empty:
+            print(
+                f"  op2op gap_us (pack finish→unpack tile0): median={gap.median():.3f} us "
+                f"min={gap.min():.3f} max={gap.max():.3f} n={len(gap)}"
+            )
+
+
 def print_dispatch_summary(rt_programs: pd.DataFrame, rt_gaps: pd.DataFrame) -> None:
     if rt_programs.empty and rt_gaps.empty():
         print("No real-time profiler data (run test with --use-realtime-profiler).", file=sys.stderr)
@@ -795,6 +829,8 @@ def main() -> int:
         print(f"  All cores mean_gap_us={chip.iloc[0]['mean_gap_us']:.3f} median={chip.iloc[0]['median_gap_us']:.3f}")
     print()
     print_buffering_summary(timeline)
+    print()
+    print_done_go_validation_summary(timeline, rt_gaps, args.min_prog_id, freq_mhz)
     print()
     print_dispatch_summary(rt_programs, rt_gaps)
     return 0

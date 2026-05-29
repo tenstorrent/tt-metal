@@ -41,7 +41,7 @@
 //                           (next start - previous end, ns). Inactive on some
 //                           dispatch setups; see
 //                           tech_reports/real_time_profiler/getting-started.md
-//   --no-warmup             skip the warmup enqueue
+//   --trace-warmup-replays N  untimed trace replays before the measured replay (default 0)
 //   --trace-region-size N   trace buffer size, bytes (default 1 MiB)
 //   --device-id N           device under test (default 0)
 //   --output-cb-depth-tiles N  output CB depth in tiles (default 2)
@@ -145,6 +145,8 @@ struct BenchmarkConfig {
     bool use_device_profiler = false;
     bool use_realtime_profiler = false;
     size_t trace_region_size = 1ull << 20;  // 1 MiB
+    // Untimed trace replays before the measured replay (steady-state trace path).
+    uint32_t trace_warmup_replays = 0;
 };
 
 BenchmarkConfig parse_args(const std::vector<std::string>& args) {
@@ -186,6 +188,8 @@ BenchmarkConfig parse_args(const std::vector<std::string>& args) {
     cfg.device_id = test_args::get_command_option_uint32(args, "--device-id", cfg.device_id);
     cfg.trace_region_size =
         test_args::get_command_option_uint32(args, "--trace-region-size", static_cast<uint32_t>(cfg.trace_region_size));
+    cfg.trace_warmup_replays =
+        test_args::get_command_option_uint32(args, "--trace-warmup-replays", cfg.trace_warmup_replays);
     if (test_args::has_command_option(args, "--no-warmup")) {
         cfg.warmup = false;
     }
@@ -1159,7 +1163,8 @@ int main(int argc, char** argv) {
             LogTest,
             "op_to_op_latency: device_id={}, pages_per_core={}, reader_push_tiles={}, input_cb_depth_tiles={}, "
             "output_cb_depth_tiles={}, reader_mode={}, compute_nops={}, num_programs={}, warmup={}, use_trace={}, "
-            "use_device_profiler={}, use_realtime_profiler={}, trace_region_size={}, buffer_tune={}",
+            "use_device_profiler={}, use_realtime_profiler={}, trace_region_size={}, trace_warmup_replays={}, "
+            "buffer_tune={}",
             cfg.device_id,
             cfg.num_pages_per_core,
             cfg.reader_push_tile_count,
@@ -1173,6 +1178,7 @@ int main(int argc, char** argv) {
             cfg.use_device_profiler,
             cfg.use_realtime_profiler,
             cfg.trace_region_size,
+            cfg.trace_warmup_replays,
             cfg.buffer_tune);
         TT_FATAL(cfg.num_programs >= 1, "--num-programs must be >= 1");
         TT_FATAL(cfg.num_pages_per_core >= 1, "--num-pages-per-core must be >= 1");
@@ -1314,6 +1320,20 @@ int main(int argc, char** argv) {
             mesh_device->end_mesh_trace(kCqId, tid);
             distributed::Finish(cq);  // make sure capture is fully committed before timing
 
+            // Untimed replays warm up the trace path; we measure the steady-state replay.
+            for (uint32_t replay = 0; replay < cfg.trace_warmup_replays; ++replay) {
+                mesh_device->replay_mesh_trace(kCqId, tid, /*blocking=*/false);
+                distributed::Finish(cq);
+                if (cfg.use_device_profiler) {
+                    // Flush device profiler so warmup markers do not pollute the timed replay.
+                    tt::tt_metal::ReadMeshDeviceProfilerResults(*mesh_device);
+                }
+            }
+            if (cfg.trace_warmup_replays > 0) {
+                log_info(
+                    LogTest, "Trace: {} untimed warmup replay(s) before measured replay", cfg.trace_warmup_replays);
+            }
+
             {
                 RealtimeProfilerDrainGuard rt_guard(mesh_device.get(), cfg.use_realtime_profiler, rt_profiler_active);
                 const auto t_begin = std::chrono::steady_clock::now();
@@ -1324,7 +1344,7 @@ int main(int argc, char** argv) {
             }
 
             mesh_device->release_mesh_trace(tid);
-            mode_label = "Trace replay";
+            mode_label = cfg.trace_warmup_replays > 0 ? "Trace replay (after warmup)" : "Trace replay";
         } else {
             {
                 RealtimeProfilerDrainGuard rt_guard(mesh_device.get(), cfg.use_realtime_profiler, rt_profiler_active);

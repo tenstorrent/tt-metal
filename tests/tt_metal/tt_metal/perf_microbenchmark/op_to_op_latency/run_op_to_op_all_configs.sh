@@ -6,7 +6,7 @@
 #   1) baseline_push1_cb2     -- original: push-1, CB depth 2, 2 tiles/core
 #   2) push2_cb4_incremental  -- push-2, CB depth 4 (2x push), incremental
 #   3) push2_cb4_batch        -- push-2, CB depth 4, --reader-batch-push
-#   4) push2_cb6_bufftuned    -- push-2, CB depth 6 (Paul's buffer-tune pick)
+#   4) push2_cb6_bufftuned    -- push-2, CB depth 6 (buffer-tune pick)
 #
 # Override NUM_RUNS by passing as arg 1 (default 5).
 set -euo pipefail
