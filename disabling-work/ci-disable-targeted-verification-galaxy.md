@@ -2,6 +2,21 @@
 
 > **Scope: GALAXY PIPELINES ONLY.** This document is the canonical policy for the Galaxy-focused CI-disable automation. The non-Galaxy automation reads `disabling-work/ci-disable-targeted-verification.md` and `disabling-work/disabling-work-so-far.md`; do not confuse the two.
 
+## Repository & Branch (BLOCKING — read first)
+
+This automation operates EXCLUSIVELY on the upstream repository **`tenstorrent/tt-metal`**. All disable PRs, tracking issues, verification workflow dispatches, branch creation, and state-log reads/writes happen on upstream. The automation MUST NOT operate on any fork of `tt-metal` — including the user's own personal fork (e.g. `ebanerjeeTT/tt-metal`) or any other fork — for any of these activities. If the local `gh` auth or workspace `origin` happens to point at a fork, the automation MUST reconfigure to point at `tenstorrent/tt-metal` (e.g. `git remote set-url origin git@github.com:tenstorrent/tt-metal.git`, or pass `--repo tenstorrent/tt-metal` explicitly to every `gh` command) before doing any work.
+
+This policy document and the state log it references live on the **`ebanerjee/markdown-files` branch** of `tenstorrent/tt-metal`. Specifically:
+
+- This file: `tenstorrent/tt-metal:ebanerjee/markdown-files:disabling-work/ci-disable-targeted-verification-galaxy.md`
+- State log: `tenstorrent/tt-metal:ebanerjee/markdown-files:disabling-work/disabling-work-so-far-galaxy.md`
+
+All reads of these files MUST be from the `ebanerjee/markdown-files` branch of `tenstorrent/tt-metal`. Reading from `main` (where they do not exist) or from any other branch is wrong; if the agent does not find these files on `main`, the correct action is to switch to `ebanerjee/markdown-files` and re-read, NOT to "bootstrap" new copies. All writes to these files (state-log updates per `## Session-End Invariants (BLOCKING)`) MUST be commit + push to `tenstorrent/tt-metal:ebanerjee/markdown-files`. Pushing to a fork's `ebanerjee/markdown-files` (or any other branch) is a policy violation.
+
+Disable PRs (the feature branches the automation creates with the actual test-disable code edits) target `tenstorrent/tt-metal:main` as their base branch and originate from feature branches pushed directly to `tenstorrent/tt-metal` (the automation has push permission to upstream). They MUST NOT be opened from a fork. Tracking issues are filed on `tenstorrent/tt-metal`. Verification workflow runs are dispatched on `tenstorrent/tt-metal`'s Actions.
+
+**Quick self-check before starting any work:** run `git remote get-url origin` (or the equivalent for the agent's GitHub surface). If the output is not `git@github.com:tenstorrent/tt-metal.git` or `https://github.com/tenstorrent/tt-metal.git`, STOP and reconfigure before doing anything else. If the agent finds an existing branch named `cursor/<something>` or a session-bootstrap commit in its current location, that is a strong signal it is in the wrong repo — re-check.
+
 ## Source of Truth (State Log)
 
 - The state log (`disabling-work/disabling-work-so-far-galaxy.md`) is the canonical record of which PRs the automation has created and which workflows it has touched. It is the single source of truth for what work has already been done.
