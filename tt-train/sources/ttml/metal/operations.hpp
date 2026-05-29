@@ -6,8 +6,11 @@
 
 #include "ops/cross_entropy_bw/cross_entropy_bw.hpp"
 #include "ops/cross_entropy_fw/cross_entropy_fw.hpp"
+#include "ops/frobenius_normalize/frobenius_normalize.hpp"
 #include "ops/layernorm_bw/layernorm_bw.hpp"
 #include "ops/layernorm_fw/layernorm_fw.hpp"
+#include "ops/mla_qkv_assemble_bw/mla_qkv_assemble_bw.hpp"
+#include "ops/mla_qkv_assemble_fw/mla_qkv_assemble_fw.hpp"
 #include "ops/polynorm_fw/polynorm_fw.hpp"
 #include "ops/profiler_no_op/profiler_no_op.hpp"
 #include "ops/rmsnorm_bw/rmsnorm_bw.hpp"
@@ -20,6 +23,5 @@
 #include "ops/softmax_backward/softmax_backward.hpp"
 #include "ops/subtract_at_target/subtract_at_target.hpp"
 #include "ops/swiglu_elemwise_bw/swiglu_elemwise_bw.hpp"
-#include "ops/frobenius_normalize/frobenius_normalize.hpp"
 #include "optimizers/adamw/adamw.hpp"
 #include "optimizers/sgd/sgd.hpp"
