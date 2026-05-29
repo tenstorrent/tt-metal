@@ -525,6 +525,59 @@ class AceStepQwen3Encoder:
         #    has a valid token to wait on (mirrors the SwinV2 runner init pattern).
         self._trace_op_event = ttnn.record_event(self.device, 0)
 
+    def prefill_eager(self, input_ids) -> Any:
+        """Eager (non-traced) tt_transformers prefill — the same op graph ``forward_traced``
+        captures, but run op-by-op so the device profiler can attribute per-op time.
+
+        Production runs this graph *traced* (profiler can't capture trace replay), so this is
+        the apples-to-apples way to compare the tt_transformers prefill against the eager
+        custom encoder (:meth:`forward`) and to find what to port. Returns normed hidden
+        ``[1,1,max_seq_len,H]``.
+        """
+        from models.tt_transformers.tt.common import copy_host_to_device
+
+        ids_t = _to_torch_int64(input_ids)
+        if ids_t.dim() != 2 or int(ids_t.shape[0]) != 1:
+            raise NotImplementedError("prefill_eager supports [1, S] (B=1) only")
+        s = int(ids_t.shape[1])
+        if s > self.max_seq_len:
+            raise ValueError(f"seq_len {s} > max_seq_len {self.max_seq_len}")
+        if s < self.max_seq_len:
+            pad_id = int(getattr(self.config, "pad_token_id", 0) or 0)
+            pad = torch.full((1, self.max_seq_len - s), pad_id, dtype=ids_t.dtype)
+            ids_padded = torch.cat([ids_t, pad], dim=-1)
+        else:
+            ids_padded = ids_t
+        page_table = torch.arange(0, self._blocks_per_seq, dtype=torch.int32).reshape(1, self._blocks_per_seq)
+        self._ensure_trace_stack()
+        host_inputs = self.tt_model.prepare_prefill_inputs_trace(
+            ids_padded, page_table=page_table, batch_size=1, user_id=0
+        )
+        rot_g, rot_l = host_inputs[1], host_inputs[2]
+        device_payload = copy_host_to_device((host_inputs[0], host_inputs[3], host_inputs[4]), mesh_device=self.device)
+        transformed = self.tt_model.transform_and_embed_prefill_inputs_device(*device_payload)
+        with ace_step_qwen_prefill_l1_op_context():
+            hidden = self.tt_model.ttnn_prefill_forward(
+                x=transformed[0],
+                rot_mats_global=rot_g,
+                rot_mats_local=rot_l,
+                user_id=0,
+                page_table=transformed[1],
+                chunk_page_table=transformed[2],
+                chunk_start_idx=None,
+                get_last_token=-1,
+                kv_cache=self.tt_kv_cache,
+                batch_size=1,
+            )
+        out = self.tt_model.norm(hidden, mode=Mode.PREFILL)
+        for t in device_payload:
+            if t is not None:
+                try:
+                    ttnn.deallocate(t)
+                except Exception:
+                    pass
+        return out
+
     def _replay_trace(self, ids_padded: "torch.Tensor", page_table: "torch.Tensor") -> Any:
         """Stream this call's inputs onto the persistent buffers (CQ 1), then ``execute_trace`` (CQ 0)."""
         if self._trace_id is None:
