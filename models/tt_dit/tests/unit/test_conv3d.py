@@ -12,6 +12,8 @@ from loguru import logger
 import ttnn
 
 from ...layers.conv3d import ContextParallelConv3d as TtContextParallelConv3d
+from ...parallel.config import MochiVAEParallelConfig, ParallelFactor
+from ...parallel.manager import CCLManager
 from ...utils.check import assert_quality
 
 # Common test configurations
@@ -92,6 +94,10 @@ def test_context_parallel_conv3d_forward(mesh_device, input_shape, out_channels,
     """Test complete forward pass of TtContextParallelConv3d."""
     input_channels = input_shape[1]
 
+    # TODO: parameterize this
+    vae_sp_axis = 0
+    vae_tp_axis = 1
+    vae_mesh_shape = (1, 1)
     model_args = conv3d_args.copy()
     model_args.update(
         {
@@ -99,6 +105,15 @@ def test_context_parallel_conv3d_forward(mesh_device, input_shape, out_channels,
             "out_channels": out_channels,
             "kernel_size": kernel_size,
             "stride": stride,
+            "parallel_config": MochiVAEParallelConfig(
+                time_parallel=ParallelFactor(factor=1, mesh_axis=vae_tp_axis),
+                h_parallel=ParallelFactor(factor=vae_mesh_shape[vae_sp_axis], mesh_axis=vae_sp_axis),
+                w_parallel=ParallelFactor(factor=vae_mesh_shape[vae_tp_axis], mesh_axis=vae_tp_axis),
+            ),
+            "ccl_manager": CCLManager(
+                mesh_device=mesh_device,
+                topology=ttnn.Topology.Linear,
+            ),
         }
     )
     # Create the models
