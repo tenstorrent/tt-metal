@@ -6,11 +6,11 @@
 
 Enable module-level timing with either:
 
-- ``ACE_STEP_DEMO_PERF_LOG=1`` (or ``ACE_STEP_PERF_LOG=1``), or
-- multi-device mesh runs (on by default).
+- **Default on** for all runs (single-card and mesh), or
+- ``ACE_STEP_DEMO_PERF_LOG=0`` (or ``ACE_STEP_PERF_LOG=0``) to disable, or
+- ``ACE_STEP_DEMO_PERF_LOG=1`` to force on explicitly.
 
-On multi-device mesh (e.g. ``BH_QB``), perf logging is **on by default** unless
-``ACE_STEP_DEMO_PERF_LOG=0``.
+Prints per-module wall times, KEY METRICS (LM / DiT / **VAE decode**), and ``RTF_per_step``.
 
 Logs go to stdout (``[ace_step_v1_5][perf]``) and loguru at INFO.
 """
@@ -56,11 +56,15 @@ class SessionPerfState:
 
 
 def ace_step_perf_logging_enabled(*, explicit: Optional[bool] = None) -> bool:
-    """Return True when demo/E2E perf logging is active."""
+    """Return True when demo/E2E perf logging is active (default **on**)."""
     if explicit is not None:
         return bool(explicit)
     env = os.environ.get("ACE_STEP_DEMO_PERF_LOG", os.environ.get("ACE_STEP_PERF_LOG", ""))
-    return env.lower() in ("1", "true", "yes")
+    if env.lower() in ("0", "false", "no", "off"):
+        return False
+    if env.lower() in ("1", "true", "yes", "on"):
+        return True
+    return True
 
 
 def sync_device(device: Any) -> None:

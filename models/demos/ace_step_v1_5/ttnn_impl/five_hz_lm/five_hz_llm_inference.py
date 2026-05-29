@@ -677,6 +677,29 @@ class LocalFiveHzLMHandler:
             for b in range(toks.shape[0]):
                 constrained_processor.update_state(toks[b].item())
 
+    def _sync_narrow_audio_vocab_to_model(
+        self,
+        model: Any,
+        constrained_processor: Optional["MetadataConstrainedLogitsProcessor"],
+    ) -> None:
+        """When enabled, pass audio-code token indices into the TTNN ``LMHead`` narrow band."""
+        from models.demos.ace_step_v1_5.ttnn_impl.math_perf_env import ace_step_lm_narrow_audio_vocab_enabled
+
+        from .five_hz_constrained_logits_processor import FSMState
+
+        if not ace_step_lm_narrow_audio_vocab_enabled() or not hasattr(model, "set_narrow_audio_vocab_indices"):
+            return
+        if (
+            constrained_processor is not None
+            and constrained_processor.state == FSMState.CODES_GENERATION
+            and constrained_processor.non_audio_code_mask is not None
+        ):
+            valid_mask = constrained_processor.non_audio_code_mask[0] == 0
+            indices = valid_mask.nonzero(as_tuple=False).squeeze(-1).detach().cpu()
+            model.set_narrow_audio_vocab_indices(indices)
+        else:
+            model.set_narrow_audio_vocab_indices(None)
+
     def _forward_pass(
         self,
         model: Any,
@@ -684,8 +707,10 @@ class LocalFiveHzLMHandler:
         model_kwargs: Dict[str, Any],
         past_key_values: Optional[Any],
         use_cache: bool,
+        constrained_processor: Optional["MetadataConstrainedLogitsProcessor"] = None,
     ) -> Any:
         """Perform forward pass with KV cache support"""
+        self._sync_narrow_audio_vocab_to_model(model, constrained_processor)
         if past_key_values is None:
             outputs = model(
                 input_ids=generated_ids,
@@ -2853,7 +2878,9 @@ class LocalFiveHzLMHandler:
                 range(max_new_tokens), desc="LLM Constrained Decoding", unit="token", disable=self.disable_tqdm
             ):
                 # Forward pass
-                outputs = self._forward_pass(model, generated_ids, model_kwargs, past_key_values, use_cache)
+                outputs = self._forward_pass(
+                    model, generated_ids, model_kwargs, past_key_values, use_cache, constrained_processor
+                )
 
                 # Get logits for the last position
                 next_token_logits = outputs.logits[:, -1, :]  # [batch_size, vocab_size]
@@ -2975,7 +3002,9 @@ class LocalFiveHzLMHandler:
                 range(max_new_tokens), desc="LLM CFG Generation", unit="token", disable=self.disable_tqdm
             ):
                 # Forward pass for the entire batch (conditional + unconditional)
-                outputs = self._forward_pass(model, generated_ids, model_kwargs, past_key_values, use_cache)
+                outputs = self._forward_pass(
+                    model, generated_ids, model_kwargs, past_key_values, use_cache, constrained_processor
+                )
 
                 # Get logits for the last position
                 next_token_logits = outputs.logits[:, -1, :]  # [batch_size*2, vocab_size]
