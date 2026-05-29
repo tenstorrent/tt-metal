@@ -196,3 +196,15 @@ class TtDecoderLayer(LightweightModule):
         mlp_out = self.mlp(self.post_attention_layernorm(x))
         x = ttnn.add(x, mlp_out, memory_config=ttnn.L1_MEMORY_CONFIG)
         return x
+
+    def forward_decode_traced(self, x: ttnn.Tensor, kv_cache, layer_idx: int) -> ttnn.Tensor:
+        """Trace-capturable single-token decode (position read from device memory).
+
+        Identical maths to :meth:`forward_decode` but uses the attention's
+        ``forward_decode_traced`` path so no Python int is baked into kernel args.
+        """
+        attn_out = self.self_attn.forward_decode_traced(self.input_layernorm(x), kv_cache, layer_idx)
+        x = ttnn.add(x, attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
+        mlp_out = self.mlp(self.post_attention_layernorm(x))
+        x = ttnn.add(x, mlp_out, memory_config=ttnn.L1_MEMORY_CONFIG)
+        return x

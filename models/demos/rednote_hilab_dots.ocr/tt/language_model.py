@@ -253,3 +253,29 @@ class TtLanguageModel(LightweightModule):
             hidden = layer.forward_decode(hidden, pos, kv_cache, layer_idx)
         hidden = self.norm(hidden)
         return self.lm_head(hidden)
+
+    def write_decode_pos(self, pos: int, kv_cache):
+        """Stream ``pos`` into all per-step persistent buffers (RoPE + kv_cache).
+
+        Call before executing the captured decode trace at ``pos``. Updates the
+        KV cache's persistent position buffer (used as both the cache
+        ``update_idxs_tensor`` and the SDPA ``cur_pos_tensor``) and every layer's
+        persistent RoPE cos/sin buffers.
+        """
+        kv_cache.write_pos(int(pos))
+        for layer in self.layers:
+            layer.self_attn.write_decode_rope(int(pos))
+
+    def decode_step_traced(self, hidden: ttnn.Tensor, kv_cache):
+        """Trace-capturable cached decode step (position read from device memory).
+
+        Identical maths to :meth:`decode_step` but every per-step input flows
+        through a persistent device buffer (the token embed ``hidden`` written in
+        place by the caller, the position via :meth:`write_decode_pos`), so this
+        whole call can be captured into a single metal trace and replayed at every
+        position. Returns logits [1, vocab].
+        """
+        for layer_idx, layer in enumerate(self.layers):
+            hidden = layer.forward_decode_traced(hidden, kv_cache, layer_idx)
+        hidden = self.norm(hidden)
+        return self.lm_head(hidden)

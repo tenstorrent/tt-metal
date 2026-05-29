@@ -175,6 +175,29 @@ class TtAttention(LightweightModule):
         self._decode_sin_host = decode_sin
         self._decode_max_seq = None if decode_cos is None else decode_cos.shape[0]
 
+        # Persistent single-row cos/sin decode buffers (stable address for metal
+        # trace replay). Updated in place each decode step via
+        # copy_host_to_device_tensor before trace execution, so the captured
+        # trace reads the correct per-position RoPE without rebaking kernel args.
+        self._persistent_decode_cos = None
+        self._persistent_decode_sin = None
+        if decode_cos is not None:
+            zero_row = torch.zeros(1, 1, 1, self.head_dim, dtype=torch.float32)
+            self._persistent_decode_cos = ttnn.from_torch(
+                zero_row,
+                device=device,
+                dtype=self._dtype,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self._persistent_decode_sin = ttnn.from_torch(
+                zero_row,
+                device=device,
+                dtype=self._dtype,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
         # Flash-decode SDPA program config. The default core allocation over-
         # subscribes the tree-reduction on this device for a single short cache
         # (TT_FATAL "got 65 cores/head"); cap the grid to an 8x8 region and let
@@ -185,6 +208,15 @@ class TtAttention(LightweightModule):
             q_chunk_size=0,
             k_chunk_size=0,
         )
+
+    def write_decode_rope(self, pos: int) -> None:
+        """Stream the cos/sin row for ``pos`` into the persistent decode buffers."""
+        cos_row = self._decode_cos_host[pos].reshape(1, 1, 1, self.head_dim)
+        sin_row = self._decode_sin_host[pos].reshape(1, 1, 1, self.head_dim)
+        cos_host = ttnn.from_torch(cos_row, dtype=self._dtype, layout=ttnn.TILE_LAYOUT)
+        sin_host = ttnn.from_torch(sin_row, dtype=self._dtype, layout=ttnn.TILE_LAYOUT)
+        ttnn.copy_host_to_device_tensor(cos_host, self._persistent_decode_cos)
+        ttnn.copy_host_to_device_tensor(sin_host, self._persistent_decode_sin)
 
     def _rotate_half(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """rotate_half(x) = cat(-x[..., d/2:], x[..., :d/2]) on the last dim."""
@@ -405,5 +437,39 @@ class TtAttention(LightweightModule):
             program_config=self._sdpa_decode_program_config,
             compute_kernel_config=self.compute_kernel_config,
         )  # [1, b, nh, hd]
+        attn = ttnn.reshape(attn, (1, nh * hd), memory_config=ttnn.L1_MEMORY_CONFIG)
+        return ttnn.linear(attn, self.o_weight, compute_kernel_config=self.compute_kernel_config, dtype=ttnn.bfloat16)
+
+    def forward_decode_traced(self, x: ttnn.Tensor, kv_cache, layer_idx: int) -> ttnn.Tensor:
+        """Trace-capturable single-token decode.
+
+        Identical maths to :meth:`forward_decode` but reads the decode position
+        ENTIRELY from device memory (the KV-cache persistent ``pos_tt`` for both
+        the cache update and SDPA ``cur_pos_tensor``) and the RoPE cos/sin from
+        this layer's persistent decode buffers. No Python int is baked into any
+        kernel arg, so one captured metal trace replays at every position once the
+        host streams ``pos`` / cos / sin into the persistent buffers before replay.
+        """
+        nh, nkv, hd = self.num_heads, self.num_kv_heads, self.head_dim
+        q, k, v = self._qkv_proj_heads(x, 1)  # q [1,nh,1,hd], k/v [1,nkv,1,hd]
+
+        q = self._rope_with(q, self._persistent_decode_cos, self._persistent_decode_sin)
+        k = self._rope_with(k, self._persistent_decode_cos, self._persistent_decode_sin)
+
+        # Write K/V at the device-held position (persistent pos_tt), then read cache.
+        pos_tt = kv_cache.get_persistent_pos_buffer()
+        kv_cache.update(layer_idx, k, v, pos_tt)
+        k_cache, v_cache = kv_cache.read(layer_idx)
+
+        q_sdpa = ttnn.permute(q, (0, 2, 1, 3))  # [1, 1(=b), nh, hd]
+        attn = ttnn.transformer.scaled_dot_product_attention_decode(
+            q_sdpa,
+            k_cache,
+            v_cache,
+            cur_pos_tensor=pos_tt,
+            scale=self.scale,
+            program_config=self._sdpa_decode_program_config,
+            compute_kernel_config=self.compute_kernel_config,
+        )
         attn = ttnn.reshape(attn, (1, nh * hd), memory_config=ttnn.L1_MEMORY_CONFIG)
         return ttnn.linear(attn, self.o_weight, compute_kernel_config=self.compute_kernel_config, dtype=ttnn.bfloat16)
