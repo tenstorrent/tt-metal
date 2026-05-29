@@ -1246,3 +1246,114 @@ pack_block_contiguous_init(sdpa_output_cb);
 3. Run RMW=1 patch at `position_id=8190` (multi-chunk, MLP-PCC-alternation case) to see if the partial fix moves the downstream MLP PCC gap.
 
 ---
+
+## Attempt 30 — Bump `num_internal_iterations` to 8 (per-iter pattern probe)
+
+**What.** Revert the Attempt-27 RMW (clean Attempt-19-style baseline), set `test_decoder_block.py:886` parametrize to `num_internal_iterations=[8]`, run @ `position_id=127`. The kernel now calls `flash_mla` 8 times within a single program launch; with the hash diagnostic at the end of each `flash_mla` we get **8 consecutive emissions per core**.
+
+**Motivation.** Attempt 19's "iter-0 vs iter-1" framing was 2-trip-count specific. We didn't know if the bank-asymmetry beyond iter-1 is (a) pure parity alternation `A,B,A,B,...`, (b) per-iter drift `A,B,C,D,...`, or (c) something else. With 8 iters and 16 cores we get 128 hash emissions to characterize the pattern.
+
+**Result @ pos=127, `num_internal_iterations=8`.**
+
+- MLP PCC: 0.9901647631143314 (unchanged from 2-iter baseline)
+- Total hash emissions: 128
+- **Unique hash values: 37** (8 × 16 = 128 max if every emission distinct; 32 max if 2 per core; 37 → most cores have 2–3 distinct values, no pure parity)
+
+Per-core hash sequence (iter-0 to iter-7, A/B/C labels assigned per-core in first-seen order):
+
+```
+(6,0,1):  A A A A A A A A                                    # completely stable from iter-0
+(6,0,2):  A A A B B A A A                                    # mostly A, brief flicker mid-run
+(6,1,1):  A B B B B B B B                                    # iter-0 unique, then stable
+(6,1,2):  A B C B B C A B                                    # cycles through 3
+(6,2,1):  A A B A A A B A                                    # mostly A, sporadic B
+(6,2,2):  A A A A B A A B                                    # mostly A, sporadic B
+(6,3,1):  A B B B B C B B                                    # mostly B after iter-0
+(6,3,2):  A A A A A A B A                                    # mostly A, one B near end
+(7,0,1):  A A A A A B B A                                    # mostly A, brief 2-iter B
+(7,0,2):  A B C C C C C C                                    # 3 distinct then stable
+(7,1,1):  A B C C C C C C                                    # 3 distinct then stable
+(7,1,2):  A B C B B B B B                                    # 3 distinct early, stable B
+(7,2,1):  A A B A A A A B                                    # mostly A, sporadic B
+(7,2,2):  A A A A A B B A                                    # mostly A, brief 2-iter B
+(7,3,1):  A A A A A B B A                                    # same pattern as (7,2,2)
+(7,3,2):  A B C B C C C C                                    # stabilizes at C
+```
+
+**Observations.**
+
+1. **No pure parity alternation.** A bank-parity-only bug would predict every core showing `A,B,A,B,A,B,A,B`. None of the 16 cores match that pattern.
+
+2. **Most cores have 2 or 3 distinct hashes**, not 8. So it's NOT random drift either.
+
+3. **(6,0,1) is bit-identical across all 8 iters**, but Attempt 19's 2-iter probe documented this same core diverging at iter-0 vs iter-1. So **whether iter-1 matches iter-0 depends on the total iteration count scheduled**. Reasonable explanation: the kernel's "wind-down" sequence at the end of the last iteration (mcast teardown, semaphore drain, etc.) is dispatched only on the FINAL iter — and dispatcher-level scheduling on TRISC may shift instruction issue ordering for the previous iters' tail when there's more or less wind-down to fold in. That's a host-NoC-side scheduling effect, not a kernel-logic effect.
+
+4. **Many cores converge after iter-0/iter-1 then mostly stabilize**, e.g. `(6,1,1)` and `(7,0,2)`. Plausibly: DEST residual state at the bank-overshoot read location reaches a fixed-point because flash_mla writes and overwrites the same DEST tiles every iteration; once both banks have been written by flash_mla itself the divergent residue is gone.
+
+5. **Some cores have late-run flicker** (e.g. `(7,0,1)` and `(7,2,2)` both `A A A A A B B A`). Not a parity pattern. Suggests a perturbation at iter-5/6 specifically — maybe a scheduling event in the surrounding program (mcast, all-reduce) that bleeds into pack timing.
+
+**Conclusion.** The bug-asymmetry signal is **NOT a clean bank-parity flag**. It's a richer phenomenon involving:
+- An initial transient (iter-0 / iter-1 typically distinct from later iters)
+- A near-steady-state for the bulk of long runs
+- Sporadic per-iter flicker that doesn't follow parity
+
+This reframes the whole investigation. "Bank parity" was probably never the right primary axis. The asymmetry sources are:
+- Residual DEST state at flash_mla entry (which differs between bank 0 and bank 1 in the early iters, but converges as flash_mla itself writes both banks repeatedly)
+- LLK stale state (e.g., `pack_reads_per_xy_plane`, partially addressed by Attempt 27)
+- Some HOST/NoC scheduling effect that depends on `num_internal_iterations` (since (6,0,1) is stable at 8 iters but was bank-asymmetric at 2 iters)
+
+**Next step: re-run with the same configuration to check determinism** — if (6,0,1)'s 8-iter stability and the per-core patterns above replay bit-identically across two runs, the phenomenon is deterministic and the investigation can proceed. If they don't, there's a true non-determinism (race condition or HW-side jitter) that needs a different debugging approach.
+
+**State.** RMW reverted in flash_mla.hpp; parametrize at 8 iters.
+
+---
+
+## Attempt 31 — Re-anchor on deterministic MLP-PCC alternation @ multi-chunk
+
+**Motivation (handed to me by review).** The hash-based investigation (Attempts 19-30) was reading a contaminated channel. Decisive argument: bit-identical MLP PCC across two pytest runs while 15/16 per-core hashes varied across the same two runs implies the per-core hash *cannot* be a faithful proxy for what reaches the MLP output. craqsim's "output identical across iters, hash varies between iter-0 and iter-1" confirms the decoupling is structural, not a race — `hash_cb` reads `fifo_rd_ptr` for the UNPACK-side view of `cb_out_final`, and that read window is not what ultimately lands in the host-visible output. Three months of bisection (Attempts 19-30, incl. my Attempt 27 RMW=1 "4/16 cores fixed") were measured on this contaminated channel and must be discounted.
+
+**Re-anchor.** Pristine kernel (revert Attempt 27 RMW, remove `hash_cb` diagnostic) + `position_id=511` (4 chunks, fastest multi-chunk repro) + `num_internal_iterations ∈ {1, 2}`. The deterministic ground truth is MLP PCC, not the hash.
+
+**Baseline (pristine kernel, two independent runs)**
+
+| Run | iter=1 | iter=2 | Δ |
+|---|---|---|---|
+| 1 | 0.9914568554511025 | 0.9916859209677518 | 2.29e-4 |
+| 2 | 0.9914568554511025 | 0.9916859209677518 | 2.29e-4 |
+
+Bit-identical to 16 digits across runs → **the bug is deterministic**. The "run-to-run hash noise" found in Attempt 30 was a property of the diagnostic, not of the kernel.
+
+**Validation of Attempt 27 RMW patch against this anchor.**
+
+| Patch | iter=1 | iter=2 |
+|---|---|---|
+| Pristine | 0.9914568554511025 | 0.9916859209677518 |
+| + RMW `pack_reads_per_xy_plane=1` | 0.9914568554511025 | 0.9916859209677518 |
+
+Bit-identical with and without the RMW. The RMW affects nothing host-visible. The "4/16 cores collapsed" result it produced was hash-diagnostic artifact only. **Reverted from tree.**
+
+---
+
+## Attempt 32 — Re-enable Austin's iter-top workaround (fix)
+
+**What.** Restored the two lines at `decoder_block_kernel.cpp:3059-3060`:
+
+```cpp
+MATH((llk_math_pack_sync_init<false>()));
+PACK((llk_pack_dest_init<false, false>(0)));
+```
+
+These reset MATH/PACK sync state at the top of every internal iteration, forcing every iter to start in DEST bank 0. Root cause (bank-1 producing numerically different output) remains open per the existing comment at line 3044-3055, but the workaround papers it over deterministically.
+
+**Result.**
+
+| Setup | iter=1 | iter=2 | Δ |
+|---|---|---|---|
+| Pristine | 0.9914568554511025 | 0.9916859209677518 | 2.29e-4 |
+| + workaround | 0.9914568554511025 | **0.9914568554511025** | **0** |
+
+iter=2 now matches iter=1 bit-for-bit at the bank-0 PCC. Alternation eliminated.
+
+**State.** Committed. Anchor (pristine RMW + hash diagnostic dropped from tree); workaround active.
+
+---

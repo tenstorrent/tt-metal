@@ -864,11 +864,9 @@ def test_decoder(
 @pytest.mark.parametrize(
     "position_id",
     [
-        # 0,
-        127,  # only safe value for probe B (cb_out_in unused only at 1-chunk path)
-        # 511 disabled: probe B's cb_pop_front of cb_out_in hangs sdpa_tail at multi-chunk
-        # pytest.param(11664, marks=pytest.mark.skip_post_commit),
-        # 8190 disabled: 64 chunks → too much DPRINT
+        # #43563 re-anchor: multi-chunk is where the deterministic MLP-PCC
+        # alternation lives. 511 = 4 chunks, fastest multi-chunk repro.
+        511,
     ],
 )
 @pytest.mark.parametrize(
@@ -883,7 +881,7 @@ def test_decoder(
     indirect=True,
 )
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
-@pytest.mark.parametrize("num_internal_iterations", [2])  # #43563 hash-debug: only need 2-iter case
+@pytest.mark.parametrize("num_internal_iterations", [1, 2])  # #43563: alternation = (iter=2) - (iter=1)
 @pytest.mark.parametrize(
     "slot_id, num_slots",
     [

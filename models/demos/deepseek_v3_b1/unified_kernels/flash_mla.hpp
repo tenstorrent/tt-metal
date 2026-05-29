@@ -738,12 +738,6 @@ struct FlashMLADecode {
                 sdpa_output_cb = cb_out_o;
                 sdpa_ms_cb = cb_out_ms;
             }
-            // PATCH (#43563): pack_block_contiguous_init programs only the MOP +
-            // REPLAY buffer. The PACR address counters come from whatever
-            // upstream op last ran llk_pack_init. For our 8x32 mini-tile path
-            // PACK_COUNTERS pack_reads_per_xy_plane is left at upstream's
-            // FACE_R_DIM=16; safe value for everything except pack_untilize is 1.
-            PACK((cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(1)));
             pack_block_contiguous_init(sdpa_output_cb);
             uint32_t num_chunks = (k_chunk_end - k_chunk_start + args.num_cores_per_head - 1) / args.num_cores_per_head;
             bool mask_last_chunk = k_chunk_end == k_num_chunks && (cur_pos + 1) % args.k_chunk_size != 0;
@@ -795,11 +789,6 @@ struct FlashMLADecode {
                 PACK(t6_semaphore_get<p_stall::PACK>(semaphore::FPU_SFPU));
             }
             cb_push_back(sdpa_output_cb, out_chunk_tiles);
-            // PATCH (#43563 debug): Attempt 19 hash diagnostic. Bug-present
-            // signal is 32 unique / 32 emissions at pos=127. If the
-            // pack_tile-vs-pack_block_contiguous swap changes this, the pack
-            // pathway is implicated.
-            hash_cb(sdpa_output_cb, out_chunk_tiles, 0x30);
             tile_regs_commit();
             tile_regs_wait();
             tile_regs_release();

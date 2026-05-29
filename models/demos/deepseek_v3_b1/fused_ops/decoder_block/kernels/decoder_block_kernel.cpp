@@ -3054,10 +3054,13 @@ void kernel_main() {
         // bank. Root cause still open; iter-top re-init papers over it by forcing
         // every iter to run in bank 0.
 #if defined(COMPILE_FOR_TRISC)
-        // DISABLED for half-DEST debug: testing whether the iter-PCC alternation
-        // (#43563) is closed by a STALLWAIT in _llk_pack_dest_section_done_ instead.
-        // MATH((llk_math_pack_sync_init<false>()));
-        // PACK((llk_pack_dest_init<false, false>(0)));
+        // Workaround re-enabled for #43563. Resets MATH<->PACK sync state at
+        // iter top, forcing every iteration to start in DEST bank 0. Root
+        // cause (bank-1 producing numerically different output) is still open,
+        // but this papers it over deterministically: iter=1 and iter=2 PCCs
+        // become bit-identical at the bank-0 value. See debug_log.md.
+        MATH((llk_math_pack_sync_init<false>()));
+        PACK((llk_pack_dest_init<false, false>(0)));
 #endif
 #ifdef ENABLE_REDUCE_TO_ONE
 #if defined(COMPILE_FOR_NCRISC)
