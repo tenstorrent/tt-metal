@@ -146,13 +146,52 @@ def _run_auto_iterate_loop(
 
     _persistent_skips = load_persistent_skips(MODEL)
     if _persistent_skips:
-        permanently_skipped.extend(sorted(_persistent_skips.keys()))
+        # Auto-load only categories that are truly permanent for this
+        # run (workload-cold path, verified missing kernels, constraint
+        # mismatches, scaffolder/HF bugs the next run can't fix on its
+        # own). RETRYABLE categories — ITERATION_BUDGET, AGENT_STUCK —
+        # are deliberately NOT pre-loaded: those failures may resolve
+        # with a bigger budget or an improved agent. They stay on
+        # the skip-list (so the user can see them) but the loop will
+        # re-attempt them.
+        # Explicit retryable set; everything else (including unknown
+        # categories from future tool versions or typos) defaults to
+        # PERMANENT so we never silently re-attempt a verdict we don't
+        # understand. Pre-audit behavior was "everything permanent" —
+        # this preserves that safety while adding explicit retry slots.
+        _PERMANENT_SKIP_CATEGORIES = {
+            "COLD",
+            "KERNEL_MISSING",
+            "CONSTRAINT_MISMATCH",
+            "TOOL_BUG",
+            "HF_ERROR",
+        }
+        _RETRYABLE_SKIP_CATEGORIES = {
+            "ITERATION_BUDGET",
+            "AGENT_STUCK",
+        }
+
+        def _is_retryable(entry: dict) -> bool:
+            cat = (entry.get("category") or "COLD").upper()
+            return cat in _RETRYABLE_SKIP_CATEGORIES
+
+        _permanent_skips = {name: entry for name, entry in _persistent_skips.items() if not _is_retryable(entry)}
+        _retryable_skips = {name: entry for name, entry in _persistent_skips.items() if name not in _permanent_skips}
+        permanently_skipped.extend(sorted(_permanent_skips.keys()))
         print(
-            f"  [persistent-skips] loaded {len(_persistent_skips)} component(s) from prior "
-            f"runs (harness-untestable): {', '.join(sorted(_persistent_skips.keys()))}"
+            f"  [persistent-skips] loaded {len(_permanent_skips)} permanent skip(s) from "
+            f"prior runs: {', '.join(sorted(_permanent_skips.keys())) or '(none)'}"
         )
+        if _retryable_skips:
+            _retry_desc = ", ".join(
+                f"{name}={(entry.get('category') or '?')}" for name, entry in sorted(_retryable_skips.items())
+            )
+            print(
+                f"  [persistent-skips] {len(_retryable_skips)} retryable skip(s) from prior "
+                f"runs will be re-attempted this run ({_retry_desc})"
+            )
         print(
-            f"  [persistent-skips] to re-attempt them, fix the test scaffold then run: "
+            f"  [persistent-skips] to clear permanent skips and re-attempt them, run: "
             f"`python -m scripts.tt_hw_planner overlay-clear-skips {MODEL}`"
         )
 
@@ -225,7 +264,10 @@ def _run_auto_iterate_loop(
             skipped_components_this_run.discard(comp)
             verified_fail.discard(comp)
             reason_blob = "; ".join(reasons) or "(no skip reason captured)"
-            persist_skip(MODEL, comp, reason_blob)
+            # Seed-phase UNVERIFIED NATIVE = harness can't run PCC on
+            # this stub (scaffolder bug). Classify as TOOL_BUG so it's
+            # not silently bucketed with workload-COLD components.
+            persist_skip(MODEL, comp, reason_blob, category="TOOL_BUG")
             print(
                 f"  seed-phase: `{comp}` UNVERIFIED NATIVE — stub is "
                 f"native ttnn but PCC could not be measured because the "
@@ -638,51 +680,68 @@ def _run_auto_iterate_loop(
             return
         permanently_skipped.append(comp)
         verified_fail.discard(comp)
-        # Kernel-missing detection: scan the reason + recent failure
-        # signature for a TTNN-op-not-supported signal. The skip-list
-        # entry's category field carries the COLD vs KERNEL_MISSING
-        # distinction. We default to COLD; only upgrade to KERNEL_MISSING
-        # if BOTH (a) a kernel-missing pattern matches AND (b) the op
-        # is VERIFIED missing from ttnn. Verification avoids
-        # false-positive labels (agent fails for a non-kernel reason
-        # but the failure text happened to match a pattern).
+        # Full failure-class decision tree (`failure_classifier.py`):
+        #   classify into 1 of 8 classes with confidence + reason, then
+        #   map to the skip-list `category` field. Replaces the previous
+        #   pattern-only path that conflated TOOL_BUG / HF_ERROR /
+        #   ITERATION_BUDGET / CONSTRAINT_MISMATCH under a single COLD
+        #   bucket. Side effect: skip-list now carries fine-grained
+        #   category labels future runs can act on (e.g. retry
+        #   ITERATION_BUDGET with bigger budget, surface TOOL_BUG to
+        #   the user, etc.).
         skip_category = "COLD"
         skip_reason = reason
         try:
-            from ..kernel_missing import detect_kernel_missing, verify_ttnn_op_exists
+            from ..failure_classifier import classify_failure, skip_category_for_verdict
 
-            scan_text = (reason or "") + "\n" + (last_failures or "") + "\n" + (last_failure_details or "")
-            missing_op = detect_kernel_missing(scan_text)
-            if missing_op:
-                op_exists = verify_ttnn_op_exists(missing_op)
-                if op_exists is False:
-                    skip_category = "KERNEL_MISSING"
-                    skip_reason = f"{reason} — TTNN op verified missing: {missing_op}"
-                    print(
-                        f"  [kernel-missing] `{comp}` flagged with category=KERNEL_MISSING "
-                        f"(verified-missing op: {missing_op})."
-                    )
-                else:
-                    # op_exists is True (op is there) or None (couldn't
-                    # verify). Don't claim kernel-missing; keep COLD
-                    # default so the gap doesn't get falsely attributed
-                    # to TTNN.
-                    print(
-                        f"  [kernel-missing] `{comp}` pattern matched `{missing_op}` "
-                        f"but verify_ttnn_op_exists={op_exists}; keeping category=COLD "
-                        f"to avoid false-positive TTNN flag."
-                    )
-        except Exception:
-            pass
-        # Re-persist with the chosen category (overwrites the default
-        # COLD persist that happened earlier in this function via
-        # the unverified_native path).
+            hot_cold_kind = (_hot_cold or {}).get(comp, "")
+            scan_text = (last_failures or "") + "\n" + (last_failure_details or "")
+            verdict = classify_failure(
+                reason=reason,
+                failure_text=scan_text,
+                hot_cold_kind=hot_cold_kind,
+            )
+            skip_category = skip_category_for_verdict(verdict)
+            # Surface verdict + confidence in the persisted reason so
+            # readers + future runs see the full provenance, not just
+            # the bucket label.
+            skip_reason = f"{reason} — {verdict.class_name} ({verdict.confidence} confidence): {verdict.reason}"
+            if verdict.missing_op:
+                skip_reason += f" [op={verdict.missing_op}]"
+            print(
+                f"  [failure-class] `{comp}` -> {verdict.class_name} "
+                f"({verdict.confidence}); skip category={skip_category}"
+            )
+            # CTA: surface decomposition opportunity to the user without
+            # loading HF inline (would be expensive in the auto-loop
+            # process). Recoverable verdicts get a one-line suggestion;
+            # the user runs `tt_hw_planner decompose ...` out-of-band.
+            from ..component_decomposer import failure_class_warrants_decomposition
+
+            if failure_class_warrants_decomposition(verdict.class_name):
+                print(
+                    f"  [decompose-hint] `{comp}` may benefit from "
+                    f"sub-component decomposition (verdict={verdict.class_name}). "
+                    f"Run: python -m scripts.tt_hw_planner decompose {MODEL} {comp}"
+                )
+        except Exception as _classify_exc:
+            print(f"  [failure-class] classifier raised on `{comp}`: {_classify_exc}", file=sys.stderr)
+        # Persist the verdict to the skip-list. If the classifier raised,
+        # skip_category stays at the safe "COLD" default and skip_reason
+        # stays at the raw input reason — degraded but not crashed.
         try:
             from ..overlay_manager import persist_skip as _persist_skip_cat
 
             _persist_skip_cat(MODEL, comp, reason=skip_reason, category=skip_category)
-        except Exception:
-            pass
+        except Exception as _persist_exc:
+            # In-memory permanently_skipped is already updated so this
+            # run is fine; the loss is next-run visibility into the
+            # skip. Surface to stderr so the user knows their skip-list
+            # didn't persist.
+            print(
+                f"  [persist-skip] failed to write skip-list entry for `{comp}`: " f"{_persist_exc}",
+                file=sys.stderr,
+            )
         safe = _safe_id(comp)
         stub_path = demo_dir / "_stubs" / f"{safe}.py"
         last_good_path = stub_path.with_suffix(".py.last_good_native")
@@ -1064,7 +1123,9 @@ def _run_auto_iterate_loop(
                             skipped_components_this_run.discard(comp)
                             verified_fail.discard(comp)
                             _pf_reason_blob = "; ".join(_pf_reasons) or "(no skip reason captured)"
-                            persist_skip(MODEL, comp, _pf_reason_blob)
+                            # Pre-flight UNVERIFIED NATIVE = harness
+                            # can't run PCC. Classify as TOOL_BUG.
+                            persist_skip(MODEL, comp, _pf_reason_blob, category="TOOL_BUG")
                             print(
                                 f"  pre-flight: `{comp}` UNVERIFIED NATIVE "
                                 f"— stub is native ttnn but PCC could not "
@@ -2781,7 +2842,10 @@ def _run_auto_iterate_loop(
                 skipped_components_this_run.discard(_comp)
                 verified_fail.discard(_comp)
                 _r_blob = "; ".join(_comp_reasons) or "(no skip reason captured)"
-                persist_skip(MODEL, _comp, _r_blob)
+                # Side-channel UNVERIFIED NATIVE = same root cause as
+                # seed-phase: harness can't measure PCC for this stub.
+                # Classify as TOOL_BUG for accurate skip-list labeling.
+                persist_skip(MODEL, _comp, _r_blob, category="TOOL_BUG")
                 print(
                     f"  iter {it} side-channel: `{_comp}` UNVERIFIED NATIVE "
                     f"(stub native + harness-SKIP). Removed from candidate "
@@ -2800,7 +2864,12 @@ def _run_auto_iterate_loop(
             unverified_native_this_run.add(iter_target_component)
             verified_fail.discard(iter_target_component)
             skipped_components_this_run.discard(iter_target_component)
-            persist_skip(MODEL, iter_target_component, "harness-incompatible (target SKIP)")
+            persist_skip(
+                MODEL,
+                iter_target_component,
+                "harness-incompatible (target SKIP)",
+                category="TOOL_BUG",
+            )
             last_failed_components = []
             last_failed_tests = []
             last_failures = ""

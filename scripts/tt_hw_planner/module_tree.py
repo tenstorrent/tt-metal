@@ -362,8 +362,8 @@ def discover_components(
                                       leaf_op_count and keep the top N.
 
     Returns components sorted by descending `leaf_op_count` -- the
-    biggest / most complex blocks first, which matches the
-    `_pick_primary_component` heuristic used by the demo-emit step."""
+    biggest / most complex blocks first, which matches the op-count
+    tiebreaker used by `demo_wiring.select_maximal_antichain`."""
     if not hasattr(model, "named_modules"):
         return []
 

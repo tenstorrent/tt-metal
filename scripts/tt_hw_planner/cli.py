@@ -9205,5 +9205,37 @@ def main(argv: Optional[List[str]] = None) -> int:
     pct.add_argument("--dry-run", action="store_true", help="Show what would be staged without committing")
     pct.set_defaults(func=cmd_commit_tool)
 
+    from .commands.decompose import cmd_decompose
+
+    pdec = sub.add_parser(
+        "decompose",
+        help=(
+            "Decompose a stuck large component into its non-trivial children. "
+            "Use this when the auto-loop pushed a HOT component to CPU "
+            "fallback (verdict AGENT_STUCK / KERNEL_VERIFIED_MISSING / "
+            "ITERATION_BUDGET) — the children may graduate independently."
+        ),
+    )
+    pdec.add_argument("model_id", help="HuggingFace model id")
+    pdec.add_argument("component", help="Component name (must exist in bringup_status.json)")
+    pdec.add_argument(
+        "--min-leaf-count",
+        type=int,
+        default=2,
+        help="Filter out children with fewer than N transitive leaf modules (default: 2)",
+    )
+    pdec.add_argument(
+        "--write-plan",
+        action="store_true",
+        help=(
+            "Persist the proposed children to <demo_dir>/decomposition_plan.json "
+            "as a PLANNING ARTIFACT for humans. Note: no auto-consumer yet; "
+            "the next `up` does NOT automatically re-onboard these children. "
+            "Use the JSON to manually update bringup_status.json or as input "
+            "to a follow-up scaffold."
+        ),
+    )
+    pdec.set_defaults(func=cmd_decompose)
+
     args = parser.parse_args(argv)
     return args.func(args)

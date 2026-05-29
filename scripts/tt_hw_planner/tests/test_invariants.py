@@ -3347,7 +3347,10 @@ def test_auto_emit_runnable_demo_uses_captured_inputs() -> None:
     )
     src = Path(bringup_loop.__file__).read_text()
 
-    assert "_captured/{primary_safe}" in src or "_captured/{primary_safe}" in src, (
+    # The new template loads captured inputs at runtime from
+    # `_captured/<safe>/` using the wired-component table; the literal
+    # `_captured` substring must appear in the template source.
+    assert "_captured" in src, (
         "demo template must load captured inputs from `_captured/<safe>/` "
         "so it matches exactly what the PCC test validated"
     )
@@ -3363,27 +3366,46 @@ def test_auto_emit_runnable_demo_uses_captured_inputs() -> None:
     )
 
 
-def test_auto_emit_demo_picks_largest_graduated_component() -> None:
-    """The primary entry point is the graduated NEW component with the
-    most ops (op-REUSE + op-ADAPT + op-NEW) in its op-synth manifest.
-    Falls back to alphabetic on ties. This guarantees the demo
-    exercises the largest piece of the model's forward path."""
-    from scripts.tt_hw_planner import bringup_loop
+def test_auto_emit_demo_wires_all_graduated_components() -> None:
+    """End-to-end demo must wire EVERY graduated component into the HF
+    reference model, not pick a single primary. Components in COLD or
+    KERNEL_MISSING bucket stay on CPU as HF reference automatically.
+    The maximal-antichain selector ensures parents subsume children when
+    both graduate (the parent's TT forward already contains the child)."""
+    from scripts.tt_hw_planner import bringup_loop, demo_wiring
 
-    src = Path(bringup_loop.__file__).read_text()
+    # The single-primary picker must be GONE — replaced by antichain
+    # selection that wires ALL graduated components.
+    bl_src = Path(bringup_loop.__file__).read_text()
+    assert "def _pick_primary_component(" not in bl_src, (
+        "single-primary picker must be removed in favor of multi-component "
+        "wiring via demo_wiring.select_maximal_antichain"
+    )
 
-    pick_idx = src.find("def _pick_primary_component(")
-    assert pick_idx >= 0, "_pick_primary_component must exist"
-    body = src[pick_idx : pick_idx + 3000]
-    assert 'comp.get("status") != "NEW"' in body or 'status") != "NEW"' in body, (
-        "primary picker must filter to NEW components (REUSE/ADAPT have " "no `_captured/` directory)"
+    # The demo template must iterate over WIRED_COMPONENTS, not load a
+    # single PRIMARY_COMPONENT.
+    assert "WIRED_COMPONENTS" in bl_src, (
+        "demo template must declare WIRED_COMPONENTS table — the list of "
+        "(submodule_path, stub_import_path, name) tuples for every wired "
+        "graduated component"
     )
-    assert "args.pt" in body and "kwargs.pt" in body, (
-        "primary picker must require both args.pt and kwargs.pt to " "exist before considering a component eligible"
+
+    # The demo template must replace each graduated submodule on the HF
+    # model so the forward path exercises ON-DEVICE.
+    assert "_set_submodule(hf_model" in bl_src, (
+        "demo template must install each TT port onto the HF model via "
+        "_set_submodule — that's how mixed CPU/device execution composes"
     )
-    assert "key=lambda" in body and "-t[0]" in body, (
-        "primary picker must sort by -op_count first (descending ops) " "with alphabetic tie-break"
-    )
+
+    # The wiring module must exist and expose the public API the
+    # bringup_loop uses.
+    for fn in (
+        "collect_graduated_components",
+        "select_maximal_antichain",
+        "build_wiring_specs",
+        "format_wiring_literal",
+    ):
+        assert hasattr(demo_wiring, fn), f"demo_wiring must export `{fn}`"
 
 
 def test_auto_emit_op_count_reads_counts_dict() -> None:

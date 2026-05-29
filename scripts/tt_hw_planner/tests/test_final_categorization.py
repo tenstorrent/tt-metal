@@ -249,6 +249,48 @@ def test_kernel_gap_report_empty_when_none() -> None:
     assert msg == ""
 
 
+def test_kernel_gap_report_splits_missing_op_from_constraint(tmp_path, monkeypatch) -> None:
+    """Bug-J regression: after CONSTRAINT_MISMATCH joined the
+    kernel_missing placement bucket, the gap report must split the
+    two cases so the TTNN dev planner sees them distinctly. Missing-op
+    components need a new op; constraint-mismatch components need
+    extended dtype/layout/shape coverage on an existing op."""
+    fc = _fc()
+    om = _om()
+    monkeypatch.setattr(om, "_OVERLAYS_DIR", tmp_path / "overlays")
+    demo = tmp_path / "demo"
+    _make_demo_with_components(demo, ["missing_op_comp", "constraint_comp"])
+    om.persist_skip("test/m", "missing_op_comp", reason="ttnn.foo missing", category="KERNEL_MISSING")
+    om.persist_skip(
+        "test/m", "constraint_comp", reason="ttnn.conv2d float16 unsupported", category="CONSTRAINT_MISMATCH"
+    )
+
+    report = fc.build_final_categorization(model_id="test/m", demo_dir=demo)
+    msg = fc.format_kernel_gap_report("test/m", report)
+
+    # Both sections must appear and be labeled distinctly.
+    assert "TTNN OPERATIONS NEEDED" in msg
+    assert "TTNN CONSTRAINT EXTENSIONS NEEDED" in msg
+
+    # Each component must show up under its OWN section.
+    missing_idx = msg.find("TTNN OPERATIONS NEEDED")
+    constraint_idx = msg.find("TTNN CONSTRAINT EXTENSIONS NEEDED")
+    assert missing_idx >= 0 and constraint_idx >= 0
+    # missing_op_comp belongs under "OPERATIONS NEEDED"
+    # constraint_comp belongs under "CONSTRAINT EXTENSIONS NEEDED"
+    # Either order is fine; just verify the two are in DIFFERENT sections.
+    sec_a_start = min(missing_idx, constraint_idx)
+    sec_b_start = max(missing_idx, constraint_idx)
+    section_a = msg[sec_a_start:sec_b_start]
+    section_b = msg[sec_b_start:]
+    if "TTNN OPERATIONS NEEDED" in section_a:
+        assert "missing_op_comp" in section_a
+        assert "constraint_comp" in section_b
+    else:
+        assert "missing_op_comp" in section_b
+        assert "constraint_comp" in section_a
+
+
 def test_cmd_up_uses_3_category_categorization() -> None:
     """Source-grep: cmd_up imports the new categorization function and
     formats with the 3-category framing."""
@@ -281,6 +323,129 @@ def test_persist_skip_defaults_category_to_cold(tmp_path, monkeypatch) -> None:
     om.persist_skip("test/m", "y", reason="r")
     listing = om.load_persistent_skips("test/m")
     assert listing["y"]["category"] == "COLD"
+
+
+def test_persist_skip_kernel_missing_is_sticky(tmp_path, monkeypatch) -> None:
+    """Once a component has category=KERNEL_MISSING (a verified TTNN
+    gap), later persist calls with a different category MUST NOT
+    downgrade it. The gap doesn't disappear just because a later run's
+    failure trace points elsewhere."""
+    om = _om()
+    monkeypatch.setattr(om, "_OVERLAYS_DIR", tmp_path)
+    om.persist_skip("test/m", "x", reason="initial", category="KERNEL_MISSING")
+    om.persist_skip("test/m", "x", reason="later", category="COLD")
+    listing = om.load_persistent_skips("test/m")
+    assert listing["x"]["category"] == "KERNEL_MISSING"
+    om.persist_skip("test/m", "x", reason="later2", category="TOOL_BUG")
+    assert om.load_persistent_skips("test/m")["x"]["category"] == "KERNEL_MISSING"
+
+
+def test_persist_skip_accepts_expanded_categories(tmp_path, monkeypatch) -> None:
+    """The expanded category schema (CONSTRAINT_MISMATCH, TOOL_BUG,
+    HF_ERROR, ITERATION_BUDGET, AGENT_STUCK) must round-trip through
+    persist_skip / load_persistent_skips intact."""
+    om = _om()
+    monkeypatch.setattr(om, "_OVERLAYS_DIR", tmp_path)
+    for cat in ("CONSTRAINT_MISMATCH", "TOOL_BUG", "HF_ERROR", "ITERATION_BUDGET", "AGENT_STUCK"):
+        om.persist_skip("test/m", f"comp_{cat.lower()}", reason="r", category=cat)
+    listing = om.load_persistent_skips("test/m")
+    for cat in ("CONSTRAINT_MISMATCH", "TOOL_BUG", "HF_ERROR", "ITERATION_BUDGET", "AGENT_STUCK"):
+        assert listing[f"comp_{cat.lower()}"]["category"] == cat
+
+
+def test_persist_skip_non_kernel_categories_can_be_updated(tmp_path, monkeypatch) -> None:
+    """A non-KERNEL_MISSING entry can be overwritten with a different
+    non-KERNEL_MISSING category at the same specificity level (e.g.
+    ITERATION_BUDGET -> AGENT_STUCK when the next run hits a different
+    signal). Both are specificity=2 so newer wins."""
+    om = _om()
+    monkeypatch.setattr(om, "_OVERLAYS_DIR", tmp_path)
+    om.persist_skip("test/m", "x", reason="r1", category="ITERATION_BUDGET")
+    om.persist_skip("test/m", "x", reason="r2", category="AGENT_STUCK")
+    listing = om.load_persistent_skips("test/m")
+    assert listing["x"]["category"] == "AGENT_STUCK"
+
+
+def test_persist_skip_specific_category_not_downgraded_to_cold(tmp_path, monkeypatch) -> None:
+    """Bug-F regression: A specific category (TOOL_BUG, HF_ERROR, ...)
+    must NOT be overwritten by a less-specific COLD on a later persist.
+    Without this guard, a generic default-COLD persist (e.g. from the
+    seed-phase fallback) would silently erase the diagnostic label."""
+    om = _om()
+    monkeypatch.setattr(om, "_OVERLAYS_DIR", tmp_path)
+    for specific in ("TOOL_BUG", "HF_ERROR", "CONSTRAINT_MISMATCH", "ITERATION_BUDGET", "AGENT_STUCK"):
+        comp = f"c_{specific.lower()}"
+        om.persist_skip("test/m", comp, reason="initial", category=specific)
+        # Later generic default-COLD persist (e.g. seed-phase fallback)
+        om.persist_skip("test/m", comp, reason="later", category="COLD")
+        listing = om.load_persistent_skips("test/m")
+        assert listing[comp]["category"] == specific, f"{specific} category should NOT have been downgraded to COLD"
+
+
+def test_persist_skip_cold_upgraded_to_specific(tmp_path, monkeypatch) -> None:
+    """Forward direction of the specificity ladder: a generic COLD CAN
+    be upgraded to a specific category (TOOL_BUG, KERNEL_MISSING, ...)
+    by a later run with better signal."""
+    om = _om()
+    monkeypatch.setattr(om, "_OVERLAYS_DIR", tmp_path)
+    om.persist_skip("test/m", "c1", reason="initial", category="COLD")
+    om.persist_skip("test/m", "c1", reason="later", category="TOOL_BUG")
+    assert om.load_persistent_skips("test/m")["c1"]["category"] == "TOOL_BUG"
+
+
+def test_persist_skip_specific_upgradeable_to_kernel_missing(tmp_path, monkeypatch) -> None:
+    """Specificity ladder top: any category can be upgraded to
+    KERNEL_MISSING when verification confirms the TTNN gap."""
+    om = _om()
+    monkeypatch.setattr(om, "_OVERLAYS_DIR", tmp_path)
+    om.persist_skip("test/m", "c1", reason="initial", category="CONSTRAINT_MISMATCH")
+    om.persist_skip("test/m", "c1", reason="later", category="KERNEL_MISSING")
+    assert om.load_persistent_skips("test/m")["c1"]["category"] == "KERNEL_MISSING"
+
+
+def test_categorizer_routes_constraint_mismatch_to_kernel_missing_bucket(tmp_path, monkeypatch) -> None:
+    """CONSTRAINT_MISMATCH (op exists but dtype/layout/shape failed) is
+    a TTNN gap from the user's perspective — must surface in the
+    KERNEL_MISSING placement bucket."""
+    fc = _fc()
+    om = _om()
+    monkeypatch.setattr(om, "_OVERLAYS_DIR", tmp_path / "overlays")
+    demo = tmp_path / "demo"
+    _make_demo_with_components(demo, ["constraint_comp"])
+    om.persist_skip("test/m", "constraint_comp", reason="dtype issue", category="CONSTRAINT_MISMATCH")
+    report = fc.build_final_categorization(model_id="test/m", demo_dir=demo)
+    assert "constraint_comp" in report.kernel_missing
+    assert "constraint_comp" not in report.cold
+
+
+def test_categorizer_routes_tool_bug_to_cold_bucket(tmp_path, monkeypatch) -> None:
+    """TOOL_BUG is a scaffolder-side issue, NOT a TTNN gap. Component
+    still lands on CPU but in the COLD bucket (not KERNEL_MISSING) so
+    it doesn't pollute the TTNN dev team's flag list."""
+    fc = _fc()
+    om = _om()
+    monkeypatch.setattr(om, "_OVERLAYS_DIR", tmp_path / "overlays")
+    demo = tmp_path / "demo"
+    _make_demo_with_components(demo, ["tool_bug_comp"])
+    om.persist_skip("test/m", "tool_bug_comp", reason="harness issue", category="TOOL_BUG")
+    report = fc.build_final_categorization(model_id="test/m", demo_dir=demo)
+    assert "tool_bug_comp" in report.cold
+    assert "tool_bug_comp" not in report.kernel_missing
+
+
+def test_categorizer_routes_iteration_budget_to_cold_bucket(tmp_path, monkeypatch) -> None:
+    """ITERATION_BUDGET — the loop ran out of attempts. CPU placement
+    is correct for THIS run; the detailed category in the skip-list
+    enables retry next run (auto-iterate auto-loads non-permanent
+    skip categories)."""
+    fc = _fc()
+    om = _om()
+    monkeypatch.setattr(om, "_OVERLAYS_DIR", tmp_path / "overlays")
+    demo = tmp_path / "demo"
+    _make_demo_with_components(demo, ["budget_comp"])
+    om.persist_skip("test/m", "budget_comp", reason="cap", category="ITERATION_BUDGET")
+    report = fc.build_final_categorization(model_id="test/m", demo_dir=demo)
+    assert "budget_comp" in report.cold
 
 
 def test_hot_cold_signal_promotes_skip_cold_to_kernel_missing(tmp_path, monkeypatch) -> None:

@@ -128,7 +128,15 @@ def build_final_categorization(
             # (more reliable). Promote to KERNEL_MISSING since a HOT
             # component on CPU means TTNN dev work or tool budget issue.
             hc_kind = hot_cold_map.get(comp, "").upper()
-            if cat == _KERNEL_MISSING:
+            # KERNEL_MISSING and CONSTRAINT_MISMATCH both map to the
+            # KERNEL_MISSING placement bucket: in both cases the TTNN
+            # stack needs work (a new op, or new dtype/layout support
+            # on an existing op) before the component can move off CPU.
+            # TOOL_BUG / HF_ERROR / ITERATION_BUDGET / AGENT_STUCK map
+            # to COLD placement (they may or may not be permanent;
+            # next-run retry is governed by the detailed category in
+            # the skip-list, not the 3-bucket placement model).
+            if cat in (_KERNEL_MISSING, "CONSTRAINT_MISMATCH"):
                 report.kernel_missing.append(comp)
             elif cat == _COLD and hc_kind == _HOT:
                 report.kernel_missing.append(comp)
@@ -184,20 +192,63 @@ def format_categorization_summary(report: CategorizationReport) -> str:
 
 
 def format_kernel_gap_report(model_id: str, report: CategorizationReport) -> str:
-    """Surface the KERNEL_MISSING list with per-component annotations
-    so the TTNN dev planner can prioritize ops."""
+    """Surface the KERNEL_MISSING placement bucket with per-component
+    annotations so the TTNN dev planner can prioritize work.
+
+    Splits the bucket into two sections based on the underlying detailed
+    skip-list category:
+
+      * Missing-op section   — KERNEL_MISSING entries (TTNN truly lacks
+                                the op). TTNN dev work: implement the op.
+      * Constraint section   — CONSTRAINT_MISMATCH entries (TTNN has the
+                                op but failed for the call's dtype /
+                                layout / shape). TTNN dev work: extend
+                                the existing op's support matrix.
+    """
     if not report.kernel_missing:
         return ""
     from .overlay_manager import load_persistent_skips
 
     skips = load_persistent_skips(model_id)
-    lines: List[str] = []
-    lines.append("")
-    lines.append(f"  TTNN OPERATIONS NEEDED ({len(report.kernel_missing)}):")
+    missing_op_entries: List[str] = []
+    constraint_entries: List[str] = []
+    other_entries: List[str] = []
     for comp in sorted(report.kernel_missing):
         entry = skips.get(comp, {})
         reason = entry.get("reason", "(no annotation)")
-        lines.append(f"    {comp:40} → {reason}")
-    lines.append("")
-    lines.append("  These components stay on CPU fallback until TTNN lands the missing ops.")
+        cat = (entry.get("category") or "").upper()
+        line = f"    {comp:40} → {reason}"
+        if cat == _KERNEL_MISSING:
+            missing_op_entries.append(line)
+        elif cat == "CONSTRAINT_MISMATCH":
+            constraint_entries.append(line)
+        else:
+            # E.g. hot_cold-HOT-but-skip-COLD promotion (no specific
+            # missing-op or constraint signal). Surface separately.
+            other_entries.append(line)
+
+    lines: List[str] = [""]
+    if missing_op_entries:
+        lines.append(f"  TTNN OPERATIONS NEEDED ({len(missing_op_entries)}):")
+        lines.extend(missing_op_entries)
+        lines.append("")
+        lines.append("  These components stay on CPU until TTNN lands the missing op(s).")
+        lines.append("")
+    if constraint_entries:
+        lines.append(f"  TTNN CONSTRAINT EXTENSIONS NEEDED ({len(constraint_entries)}):")
+        lines.extend(constraint_entries)
+        lines.append("")
+        lines.append(
+            "  These components stay on CPU until TTNN extends the existing op's " "dtype/layout/shape support."
+        )
+        lines.append("")
+    if other_entries:
+        lines.append(f"  HOT-PATH ON CPU — TTNN GAP UNCLASSIFIED ({len(other_entries)}):")
+        lines.extend(other_entries)
+        lines.append("")
+        lines.append(
+            "  Workload-HOT but the tool couldn't pin a specific missing op or "
+            "constraint signal. Investigation needed."
+        )
+        lines.append("")
     return "\n".join(lines)

@@ -137,29 +137,53 @@ def persist_skip(model_id: str, comp_name: str, reason: str = "", *, category: s
         want to know when the component was originally flagged)
       - reason: updated to the new value (the latest reason is most
         informative)
-      - category: UPGRADED if the new category is "more specific" than
-        the existing one. Specifically: COLD → KERNEL_MISSING is allowed
-        (a later run can confirm a TTNN gap). KERNEL_MISSING → COLD is
-        NOT allowed (don't downgrade a verified gap). Same-category
-        re-persist is a no-op.
+      - category: KERNEL_MISSING is "sticky" — once a component has a
+        verified-missing TTNN op, later runs CAN'T downgrade it (the
+        gap doesn't go away just because a different failure mode
+        manifests on a re-run). Any other transition is allowed; the
+        newer verdict wins.
 
     Without this update logic, the seed-phase persist (default COLD)
     would block a later _skip_component_to_fallback from labeling the
     same component as KERNEL_MISSING — silently mis-categorizing it.
 
-    `category` is one of:
-      - "COLD"           : not invoked in workload (CPU correct, perf-irrelevant)
-      - "KERNEL_MISSING" : invoked but TTNN op verified missing (TTNN dev work)
+    Valid categories (from `failure_classifier.SKIP_CATEGORY_FOR_CLASS`):
+      - "COLD"               : not invoked in workload (CPU correct, perf-irrelevant)
+      - "KERNEL_MISSING"     : TTNN op verified missing (TTNN dev work)
+      - "CONSTRAINT_MISMATCH": TTNN op present, failure is dtype/layout/shape
+      - "TOOL_BUG"           : scaffolder produced bad inputs (tool fix)
+      - "HF_ERROR"           : HF reference itself errored (not TTNN)
+      - "ITERATION_BUDGET"   : hit attempt cap; retry next run with bigger budget
+      - "AGENT_STUCK"        : NO_OP / empty agent; decomposition didn't help
     """
     new_category = category.upper()
     skips = load_persistent_skips(model_id)
+    # Specificity ladder (lowest -> highest). A more-specific existing
+    # category cannot be downgraded by a less-specific new one. Tied
+    # specificity allows newer-wins (e.g. ITERATION_BUDGET ->
+    # AGENT_STUCK across runs both at "specific" level).
+    _SPECIFICITY = {
+        "": 0,  # missing/legacy
+        "COLD": 1,  # generic fallback
+        "TOOL_BUG": 2,  # specific classifier verdict
+        "HF_ERROR": 2,
+        "CONSTRAINT_MISMATCH": 2,
+        "ITERATION_BUDGET": 2,
+        "AGENT_STUCK": 2,
+        "KERNEL_MISSING": 3,  # sticky: TTNN gap verified
+    }
     if comp_name in skips:
         existing = skips[comp_name]
         existing_category = (existing.get("category") or "").upper()
-        # Upgrade rule: COLD → KERNEL_MISSING allowed; reverse not allowed.
+        # Specificity guard: never downgrade a more-specific category
+        # with a less-specific one. Same-specificity = newer wins.
         category_changed = False
-        if existing_category != "KERNEL_MISSING" and new_category == "KERNEL_MISSING":
-            existing["category"] = "KERNEL_MISSING"
+        old_spec = _SPECIFICITY.get(existing_category, 0)
+        new_spec = _SPECIFICITY.get(new_category, 0)
+        if new_spec < old_spec:
+            pass  # keep existing (more specific)
+        elif existing_category != new_category:
+            existing["category"] = new_category
             category_changed = True
         # Update reason if a richer one is provided
         reason_changed = False

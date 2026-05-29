@@ -89,6 +89,56 @@ def test_strip_markdown_fences_passes_clean_source():
     assert out == src
 
 
+def test_strip_markdown_fences_extracts_first_fenced_block_with_prose():
+    """LLM common pattern: prose preamble + fenced code + prose epilogue.
+    The old stripper only handled whole-response fences; the new one
+    extracts the first embedded fenced block."""
+    ao = _import_module()
+    src = (
+        "Here's a driver function for SAM2:\n\n"
+        "```python\n"
+        "def driver(model, pixel_values):\n"
+        "    return None\n"
+        "```\n\n"
+        "This driver does X, Y, Z."
+    )
+    out = ao._strip_markdown_fences(src)
+    assert out.startswith("def driver")
+    assert "Here's a driver" not in out
+    assert "does X, Y, Z" not in out
+
+
+def test_strip_markdown_fences_handles_py_alias():
+    """The `py` fence alias (instead of `python`) is also common."""
+    ao = _import_module()
+    src = "```py\ndef driver(model, pixel_values):\n    return None\n```"
+    out = ao._strip_markdown_fences(src)
+    assert "def driver" in out
+    assert "```" not in out
+
+
+def test_strip_markdown_fences_drops_prose_preamble_no_fence():
+    """LLM might produce prose before the def without any fence at all."""
+    ao = _import_module()
+    src = "Sure, here is the driver function:\n\n" "def driver(model, pixel_values):\n" "    return None"
+    out = ao._strip_markdown_fences(src)
+    assert out.startswith("def driver")
+    assert "Sure" not in out
+
+
+def test_strip_markdown_fences_keeps_top_level_imports():
+    """If the LLM (incorrectly but commonly) emits top-level imports
+    before the def, we keep them so AST parse can flag them properly
+    rather than silently truncating valid Python."""
+    ao = _import_module()
+    src = "import torch\n\ndef driver(model, pixel_values):\n    return None"
+    out = ao._strip_markdown_fences(src)
+    # The function should be present
+    assert "def driver" in out
+    # The import should NOT be silently truncated
+    assert "import torch" in out
+
+
 def test_validate_driver_accepts_correct_signature():
     ao = _import_module()
     source = "def driver(model, pixel_values):\n    return None"

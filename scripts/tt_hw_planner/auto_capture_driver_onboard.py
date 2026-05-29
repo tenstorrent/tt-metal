@@ -72,6 +72,16 @@ What the generic framework already tried (in order):
 Return ONLY a single Python function `def driver(model, pixel_values):` with
 no markdown, no prose, no top-level imports outside the function body. The
 function will be saved as a learned driver and loaded on future runs.
+
+OUTPUT FORMAT (strict):
+  - The FIRST characters of your response MUST be `def driver(`
+  - No "Here's the driver:" or any prose preamble
+  - No ```python ... ``` fences
+  - No explanatory text after the closing brace
+  - Imports go INSIDE the function body, not at module top
+
+If you cannot satisfy these constraints, respond with exactly `def driver(model, pixel_values): return None`
+(the no-op default). Do NOT explain why -- a malformed response is worse than a no-op.
 """
 
 
@@ -133,11 +143,40 @@ def _build_prompt(
 
 
 def _strip_markdown_fences(text: str) -> str:
+    """Extract Python code from an LLM response.
+
+    Handles three common LLM output shapes:
+
+      1. Bare code  -> "def driver(...): ..."           returned as-is
+      2. Whole-response fenced  ->  "```python\ndef driver...\n```"
+                                    -> strip outer fences
+      3. Code embedded in prose -> "Here's a driver:\n```python\n...\n```\n
+                                    Note: ..."
+                                    -> extract the FIRST fenced block
+
+    Falls back to the input (stripped) if no clear extraction is possible.
+    """
     out = text.strip()
+    # Case 3: prose around a fenced block — extract the first fenced block.
+    m = re.search(r"```(?:python|py)?\s*\n(.*?)\n```", out, re.DOTALL)
+    if m:
+        candidate = m.group(1).strip()
+        if "def driver" in candidate:
+            return candidate
+    # Case 2: response starts with a fence; strip outer fences.
     if out.startswith("```"):
-        out = re.sub(r"^```(?:python)?\s*\n", "", out)
+        out = re.sub(r"^```(?:python|py)?\s*\n", "", out)
         out = re.sub(r"\n```\s*$", "", out)
-    return out.strip()
+        return out.strip()
+    # Case 1: bare code (or unstructured prose containing the def).
+    # If there's prose preamble before `def driver`, drop it.
+    def_idx = out.find("def driver")
+    if def_idx > 0 and not out[:def_idx].strip().endswith(","):
+        # Drop preamble that's clearly not Python (no leading decorators/imports).
+        preamble = out[:def_idx].strip()
+        if not re.search(r"^(?:from|import|@|#)\s", preamble, re.MULTILINE):
+            return out[def_idx:].strip()
+    return out
 
 
 def _validate_driver_source(source: str) -> Tuple[bool, str]:
@@ -225,15 +264,63 @@ def auto_onboard_capture_driver(
     probe = _probe_model(model, model_id)
     prompt = _build_prompt(probe, uncaptured_components, framework_attempts)
 
-    try:
-        response = invoke_llm_cli_one_shot(prompt, agent_bin=agent_bin, model=llm_model, timeout_s=timeout_s)
-    except Exception as exc:
-        return False, None, f"LLM invocation failed: {type(exc).__name__}: {exc}"
+    attempts: List[Tuple[str, str]] = []  # list of (raw_response_first_200_chars, error_message)
 
-    source = _strip_markdown_fences(response)
-    ok, err = _validate_driver_source(source)
+    def _one_attempt(active_prompt: str) -> Tuple[bool, str, str, str]:
+        try:
+            resp = invoke_llm_cli_one_shot(active_prompt, agent_bin=agent_bin, model=llm_model, timeout_s=timeout_s)
+        except Exception as exc:
+            return False, "", "", f"LLM invocation failed: {type(exc).__name__}: {exc}"
+        src = _strip_markdown_fences(resp)
+        ok, err = _validate_driver_source(src)
+        return ok, resp, src, err
+
+    def _persist_debug_log(reason: str, raw_responses: List[Tuple[int, str]]) -> None:
+        """Save the rejected LLM responses to a per-model debug log so
+        the operator can SEE what the LLM produced. Without this, the
+        only artifact of a failed onboarding is a one-line error msg
+        and the raw text is lost."""
+        try:
+            debug_dir = _LEARNED_DRIVERS_DIR / "_rejected"
+            debug_dir.mkdir(parents=True, exist_ok=True)
+            safe = re.sub(r"[^a-zA-Z0-9_]+", "_", probe["model_class"]).lower().strip("_") or "driver"
+            log_path = debug_dir / f"{safe}_last_rejected.txt"
+            with log_path.open("w") as f:
+                f.write(f"# Rejected LLM draft(s) for {probe['model_class']} ({model_id})\n")
+                f.write(f"# Reason: {reason}\n")
+                f.write(f"# Uncaptured components: {uncaptured_components}\n")
+                f.write("\n")
+                for attempt_idx, raw in raw_responses:
+                    f.write(f"\n===== ATTEMPT {attempt_idx} (raw response) =====\n")
+                    f.write(raw)
+                    f.write("\n===== END ATTEMPT =====\n")
+        except Exception:
+            pass  # debug log failure must never block the main flow
+
+    ok, raw, source, err = _one_attempt(prompt)
+    raw_responses: List[Tuple[int, str]] = [(1, raw)]
     if not ok:
-        return False, None, f"validation failed: {err}"
+        attempts.append((raw[:200].replace("\n", " ") if raw else "(empty)", err))
+        # One retry with explicit error feedback so the LLM can self-correct.
+        retry_prompt = (
+            prompt
+            + "\n\nIMPORTANT: A previous draft was REJECTED. Error was:\n    "
+            + err
+            + "\n\nProduce ONLY the bare `def driver(model, pixel_values):` Python source. "
+            + "No markdown fences, no prose, no preamble. Start the response with `def driver`."
+        )
+        ok, raw, source, err = _one_attempt(retry_prompt)
+        raw_responses.append((2, raw))
+        if not ok:
+            attempts.append((raw[:200].replace("\n", " ") if raw else "(empty)", err))
+            _persist_debug_log(f"validation failed after retry: {err}", raw_responses)
+            return (
+                False,
+                None,
+                f"validation failed after retry. attempt 1: {attempts[0][1]} (resp={attempts[0][0]!r}); "
+                f"attempt 2: {attempts[1][1]} (resp={attempts[1][0]!r}). "
+                f"Raw drafts saved to learned_drivers/_rejected/.",
+            )
 
     persisted = _persist_driver(probe["model_class"], source)
     return True, persisted, f"driver synthesized + persisted to {persisted.name}"
