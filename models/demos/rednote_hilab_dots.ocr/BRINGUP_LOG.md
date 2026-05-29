@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** p150 (blackhole)
 **Started:** 2026-05-29T00:11:46Z
-**Updated:** 2026-05-29T01:37:32Z
+**Updated:** 2026-05-29T01:43:24Z
 
 ## Block Status
 
@@ -76,7 +76,7 @@
 | decoder_layer | optimization | pending | — | 0 |  |
 | decoder_layer | real_weights | pending | — | 0 |  |
 | lm_head | reference | done | 1.000000 | 0 | Untied Linear hidden 1536 -> vocab 151936, no bias. PCC=1.0 vs nn.Linear. |
-| lm_head | ttnn | pending | — | 0 |  |
+| lm_head | ttnn | done | 0.999996 | 0 | untied Linear hidden 1536 -> vocab 151936, no bias; HF weight [vocab,hidden] transposed on host. ttnn.linear HiFi4+fp32_dest_acc bf16 DRAM weight. Matches lm_head_forward (bare linear, no final norm). PCC=0.9999958 vs golden. Guard ok. |
 | lm_head | debug | n/a | — | 0 |  |
 | lm_head | optimization | pending | — | 0 |  |
 | lm_head | real_weights | pending | — | 0 |  |
@@ -94,7 +94,6 @@
 
 ## Recent Ticks
 
-- tick 9 (2026-05-29T00:58:10Z): device[vision_mlp] — ok
 - tick 10 (2026-05-29T01:03:33Z): device[vision_block] — ok
 - tick 10 (2026-05-29T01:04:12Z): device[vision_block] — ok
 - tick 11 (2026-05-29T01:10:25Z): device[vision_patch_merger] — ok
@@ -104,6 +103,7 @@
 - tick 15 (2026-05-29T01:27:01Z): device[attention] — ok
 - tick 16 (2026-05-29T01:31:57Z): device[mlp] — ok
 - tick 17 (2026-05-29T01:37:32Z): device[decoder_layer] — ok
+- tick 18 (2026-05-29T01:43:24Z): device[lm_head] — ok
 
 ## Host-Resident Exceptions
 

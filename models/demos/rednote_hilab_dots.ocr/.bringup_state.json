@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-29T00:11:46Z",
-  "updated_at": "2026-05-29T01:37:32Z",
+  "updated_at": "2026-05-29T01:43:24Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -601,8 +601,15 @@
         "pcc": 1.0
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/lm_head.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_tt_lm_head.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/lm_head.traced_ops.json"
+        ],
+        "notes": "untied Linear hidden 1536 -> vocab 151936, no bias; HF weight [vocab,hidden] transposed on host. ttnn.linear HiFi4+fp32_dest_acc bf16 DRAM weight. Matches lm_head_forward (bare linear, no final norm). PCC=0.9999958 vs golden. Guard ok.",
+        "pcc": 0.9999957892916619
       },
       "debug": {
         "status": "n/a",
@@ -818,6 +825,12 @@
       "tick": 17,
       "ts": "2026-05-29T01:37:32Z",
       "action": "device[decoder_layer]",
+      "result": "ok"
+    },
+    {
+      "tick": 18,
+      "ts": "2026-05-29T01:43:24Z",
+      "action": "device[lm_head]",
       "result": "ok"
     }
   ],
