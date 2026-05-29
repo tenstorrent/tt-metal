@@ -96,11 +96,31 @@ class TtMLP(LightweightModule):
             compute_kernel_config=self.compute_kernel_config,
             dtype=ttnn.bfloat16,
         )
-        gate = gate_up[:, : self.intermediate]  # gate_proj
-        up = gate_up[:, self.intermediate :]  # up_proj
+        # Pin the gate/up split + SwiGLU elementwise chain to L1. Without an
+        # explicit memory_config these slice/silu/mul ops land DRAM-interleaved
+        # (the tracy default), so each step re-reads its [seq, intermediate]
+        # operand from DRAM. The [128, 8960] bf16 intermediate fits L1, so
+        # pinning the split outputs and the silu*up product to L1 removes those
+        # DRAM round-trips on the activation chain feeding the down matmul.
+        gate = ttnn.slice(
+            gate_up,
+            [0, 0],
+            [gate_up.shape[0], self.intermediate],
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )  # gate_proj
+        up = ttnn.slice(
+            gate_up,
+            [0, self.intermediate],
+            [gate_up.shape[0], 2 * self.intermediate],
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )  # up_proj
 
-        # SwiGLU: silu(gate) * up.
-        h = ttnn.mul(ttnn.silu(gate), up)
+        # SwiGLU: silu(gate) * up, kept in L1.
+        h = ttnn.mul(
+            ttnn.silu(gate, memory_config=ttnn.L1_MEMORY_CONFIG),
+            up,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
 
         # Down projection: [seq, intermediate] @ [intermediate, dim].
         out = ttnn.linear(

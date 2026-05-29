@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-29T00:11:46Z",
-  "updated_at": "2026-05-29T03:05:15Z",
+  "updated_at": "2026-05-29T03:11:57Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -607,8 +607,15 @@
         "attempts": 0
       },
       "optimization": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/profile_mlp.py",
+          "generated/profiler/reports/2026_05_29_03_11_09/ops_perf_results_2026_05_29_03_11_09.csv",
+          "models/demos/rednote_hilab_dots.ocr/tt/mlp.py"
+        ],
+        "notes": "Tracy captured under --traced (metal trace replay session) at production shapes seq=128 dim=1536 intermediate=8960. Top hotspot MatmulDeviceOperation 90.4% (two linears, matmul-bound, real floor). Optimization budget was the gate/up split + SwiGLU elementwise chain (Slice+silu+mul) landing DRAM-interleaved. Fix: replaced python-getitem split with ttnn.slice+L1_MEMORY_CONFIG and pinned silu/mul outputs to L1. Block kernel time 424.71->392.92us (-7.5%). Slice 31.49->19.18, silu 15.48->10.81, mul 19.84->7.68us; activation chain 66.8->37.7us (-44%), now INTERLEAVED/L1. Matmuls unchanged ~355us. PCC 0.9999850 held.",
+        "pcc": 0.9999850146145711
       },
       "real_weights": {
         "status": "pending",
@@ -1000,6 +1007,12 @@
       "tick": 31,
       "ts": "2026-05-29T03:05:15Z",
       "action": "device[attention]",
+      "result": "ok"
+    },
+    {
+      "tick": 32,
+      "ts": "2026-05-29T03:11:57Z",
+      "action": "device[mlp]",
       "result": "ok"
     }
   ],
