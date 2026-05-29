@@ -9,6 +9,7 @@
 #include <tuple>
 
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -54,11 +55,17 @@ RmPlan make_rm_plan(
 }
 
 void validate_rm_preconditions(
-    const tt::tt_metal::Tensor& input,
-    const tt::tt_metal::Tensor& output,
+    const tt::tt_metal::MeshTensor& input,
+    const tt::tt_metal::MeshTensor& output,
     tt::tt_metal::ReduceOpMath math_op,
     bool negate,
+    tt::tt_metal::ReduceOpDim dim,
     std::string_view dim_label) {
+    TT_FATAL(
+        dim == tt::tt_metal::ReduceOpDim::W || dim == tt::tt_metal::ReduceOpDim::H,
+        "{} RM path only supports ReduceOpDim::W or ReduceOpDim::H, got {}",
+        dim_label,
+        static_cast<int>(dim));
     TT_FATAL(
         input.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
             output.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
@@ -75,7 +82,7 @@ void validate_rm_preconditions(
 }
 
 std::vector<uint32_t> build_rm_reader_ct_args(
-    const RmPlan& plan, uint32_t scaler_bits, const tt::tt_metal::MeshTensor src, tt::tt_metal::ReduceOpDim dim) {
+    const RmPlan& plan, uint32_t scaler_bits, const tt::tt_metal::MeshTensor& src, tt::tt_metal::ReduceOpDim dim) {
     // Slot 8 (H_logical) is only consumed by the reader's REDUCE_COL branch;
     // the W kernel ignores it.
     // Only supports ReduceOpDim::W or ReduceOpDim::H
@@ -95,7 +102,7 @@ std::vector<uint32_t> build_rm_reader_ct_args(
 }
 
 std::vector<uint32_t> build_rm_writer_ct_args(
-    const RmPlan& plan, const tt::tt_metal::MeshTensor dst, tt::tt_metal::ReduceOpDim dim) {
+    const RmPlan& plan, const tt::tt_metal::MeshTensor& dst, tt::tt_metal::ReduceOpDim dim) {
     // Slots 1-3 (Wt, W_logical, wt_tiles_per_chunk) are only consumed by the writer's
     // REDUCE_COL branch; the W kernel ignores them.
     // Only supports ReduceOpDim::W or ReduceOpDim::H

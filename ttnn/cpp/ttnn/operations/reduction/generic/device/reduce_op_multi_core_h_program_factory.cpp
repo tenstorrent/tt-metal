@@ -38,7 +38,8 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     uint32_t HtWt = Ht * Wt;
 
     if (rm_path) {
-        validate_rm_preconditions(a, output, operation_attributes.math_op, operation_attributes.negate, "Reduce H");
+        validate_rm_preconditions(
+            a, output, operation_attributes.math_op, operation_attributes.negate, ReduceOpDim::H, "Reduce H");
     }
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
