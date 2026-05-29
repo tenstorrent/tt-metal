@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include "llk_pack_cb_tile_access.h"
 #include "llk_pack_common_api.h"
 #include "llk_pack_untilize.h"
 #include "llk_param_structs.h"
@@ -60,8 +61,7 @@ inline void llk_pack_untilize_init(
     static_assert(diagonal == false, "Diagonal is only supported on WH");
     const std::uint32_t output_id = get_output_id(output);
 
-    LLK_ASSERT_BLOCK(are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
-        pack_src_format[output_id], pack_dst_format[output_id], face_r_dim));
+    LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format[output_id], pack_dst_format[output_id]));
 
     _llk_pack_untilize_init_<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense>(
         pack_src_format[output_id], pack_dst_format[output_id], face_r_dim, num_faces);
@@ -96,13 +96,13 @@ inline void llk_pack_untilize(
             (block_c_index * ((num_faces > 2) ? num_faces / 2 : num_faces) * block_ct_dim * FACE_C_DIM)) /
             16;
 
-    LLK_ASSERT_BLOCK(are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
-        pack_src_format[output_id], pack_dst_format[output_id], face_r_dim));
+    LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format[output_id], pack_dst_format[output_id]));
+    LLK_ASSERT_BLOCK(ckernel::validate_pack_tile_layout(output_id));
 
     for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {
         _llk_pack_untilize_<block_ct_dim, full_ct_dim, narrow_row, tile_dst_ct_offset, dense>(
             pack_tile_addr, num_faces, block_rt * block_ct_dim + tile_dst_rt_offset);
 
-        pack_tile_addr += full_ct_dim * get_local_cb_interface(output_id).fifo_page_size;
+        pack_tile_addr += full_ct_dim * ckernel::llk_pack_tile_stride(output_id);
     }
 }

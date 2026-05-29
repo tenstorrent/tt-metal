@@ -15,6 +15,7 @@
 #include "llk_param_structs.h"
 #include "experimental/llk_unpack_AB_reduce_custom.h"
 #include "experimental/llk_unpack_AB_reduce_custom_runtime.h"
+#include "llk_unpack_cb_tile_access.h"
 #include "llk_unpack_common.h"
 
 using namespace ckernel;
@@ -75,10 +76,13 @@ inline void llk_unpack_AB_reduce_block_max_row_runtime(
     bool respect_trigger = false) {
     std::uint32_t operandA_id = get_operand_id(operandA);
     std::uint32_t operandB_id = get_operand_id(operandB);
-    std::uint32_t base_address_a = get_local_cb_interface(operandA_id).fifo_rd_ptr - 1;
-    std::uint32_t offset_address_a = get_local_cb_interface(operandA_id).fifo_page_size * row_start_index;
-    std::uint32_t address_a = base_address_a + offset_address_a;
-    std::uint32_t base_address_b = get_local_cb_interface(operandB_id).fifo_rd_ptr - 1;
+    std::uint32_t address_a = llk_unpack_tile_address(operandA_id, row_start_index);
+    std::uint32_t base_address_b = llk_unpack_tile_address(operandB_id, 0);
+
+    // This may miss some cases because block_ct_dim should be used instead of 1.
+    // That value is not available at this point in time and upstream team is okay
+    // with this and does not want to plumb through the value.
+    LLK_ASSERT_BLOCK(validate_unpack_tile_access(operandA_id, row_start_index, 1));
 
     _llk_unpack_AB_reduce_block_max_row_runtime_(address_a, base_address_b, respect_trigger);
 }

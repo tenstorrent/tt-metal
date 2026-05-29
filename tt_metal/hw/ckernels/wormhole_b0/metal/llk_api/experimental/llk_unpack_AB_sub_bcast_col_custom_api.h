@@ -5,6 +5,7 @@
 #pragma once
 
 #include "experimental/llk_unpack_AB_sub_bcast_col_custom.h"
+#include "llk_unpack_cb_tile_access.h"
 #include "llk_unpack_common_api.h"
 
 /*************************************************************************
@@ -24,13 +25,11 @@ inline void llk_unpack_AB_sub_bcast_col_custom(
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
 
-    const std::uint32_t base_address_a = get_local_cb_interface(operandA_id).fifo_rd_ptr - 1;
-    const std::uint32_t offset_address_a = get_local_cb_interface(operandA_id).fifo_page_size * tile_index_a;
-    const std::uint32_t address_a = base_address_a + offset_address_a;
+    const std::uint32_t address_a = llk_unpack_tile_address(operandA_id, tile_index_a);
+    const std::uint32_t address_b = llk_unpack_tile_address(operandB_id, tile_index_b);
 
-    const std::uint32_t base_address_b = get_local_cb_interface(operandB_id).fifo_rd_ptr - 1;
-    const std::uint32_t offset_address_b = get_local_cb_interface(operandB_id).fifo_page_size * tile_index_b;
-    const std::uint32_t address_b = base_address_b + offset_address_b;
+    LLK_ASSERT_BLOCK(validate_unpack_tile_access(operandA_id, tile_index_a, 1));
+    LLK_ASSERT_BLOCK(validate_unpack_tile_access(operandB_id, tile_index_b, 1));
 
     _llk_unpack_AB_sub_bcast_col_custom_(address_a, address_b, ct_dim);
 }

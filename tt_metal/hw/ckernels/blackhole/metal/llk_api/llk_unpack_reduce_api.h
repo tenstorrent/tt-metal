@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include "llk_unpack_cb_tile_access.h"
 #include "llk_unpack_common_api.h"
 #include "llk_unpack_reduce.h"
 
@@ -28,11 +29,9 @@ inline void llk_unpack_reduce_init(const std::uint32_t within_face_16x16_transpo
 template <PoolType type, ReduceDim dim>
 inline void llk_unpack_reduce(const std::uint32_t operand, const std::uint32_t tile_index) {
     std::uint32_t operand_id = get_operand_id(operand);
-    std::uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1;
-    std::uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size * tile_index;
-    std::uint32_t address = base_address + offset_address;
+    std::uint32_t address = llk_unpack_tile_address(operand_id, tile_index);
 
-    LLK_ASSERT(cb_access_within_bounds(operand_id, tile_index, 1), "Indexed tile read exceeds CB boundary");
+    LLK_ASSERT_BLOCK(validate_unpack_tile_access(operand_id, tile_index, 1));
 
     WAYPOINT("UPRW");
     _llk_unpack_reduce_<type, dim>(address);
