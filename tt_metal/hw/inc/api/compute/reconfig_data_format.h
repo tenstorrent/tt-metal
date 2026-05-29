@@ -128,7 +128,10 @@ ALWI void reconfig_data_format_srcb(const uint32_t srcb_old_operand, const uint3
 template <bool is_tile_dim_reconfig_en = false>
 ALWI void pack_reconfig_data_format(const uint32_t new_cb_id) {
 #ifdef ARCH_QUASAR
-    PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE, is_tile_dim_reconfig_en>(new_cb_id)));
+    static_assert(
+        !is_tile_dim_reconfig_en,
+        "Quasar pack reconfig does not support tile-dimension changes; call pack_init instead");
+    PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(new_cb_id)));
 #else
     PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(new_cb_id)));
     if constexpr (is_tile_dim_reconfig_en) {
@@ -164,7 +167,10 @@ ALWI void pack_reconfig_data_format(const uint32_t new_cb_id) {
 template <bool is_tile_dim_reconfig_en = false>
 ALWI void pack_reconfig_data_format(const uint32_t old_cb_id, const uint32_t new_cb_id) {
 #ifdef ARCH_QUASAR
-    PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE, is_tile_dim_reconfig_en>(old_cb_id, new_cb_id)));
+    static_assert(
+        !is_tile_dim_reconfig_en,
+        "Quasar pack reconfig does not support tile-dimension changes; call pack_init instead");
+    PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(old_cb_id, new_cb_id)));
 #else
     PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(old_cb_id, new_cb_id)));
     if constexpr (is_tile_dim_reconfig_en) {

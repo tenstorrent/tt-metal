@@ -44,13 +44,36 @@ inline void _update_clear_dest_bank_id_()
 
 namespace
 {
-// L1 outputs allowed for Float32 / Float16 / Float16_b pack inputs (Quasar Packer Gasket table).
-inline bool is_quasar_pack_float_src_l1_dst_supported(const DataFormat dst)
+// L1 outputs allowed for Float32 pack input (Quasar Packer Gasket table).
+inline bool is_quasar_pack_f32_src_l1_dst_supported(const DataFormat dst)
 {
     switch (dst)
     {
         case DataFormat::Float32:
         case DataFormat::Tf32:
+        case DataFormat::Float16:
+        case DataFormat::Float16_b:
+        case DataFormat::Fp8R:
+        case DataFormat::Fp8P:
+        case DataFormat::MxFp8R:
+        case DataFormat::MxFp8P:
+        case DataFormat::MxFp6R:
+        case DataFormat::MxFp6P:
+        case DataFormat::MxFp4:
+        case DataFormat::MxInt8:
+        case DataFormat::MxInt4:
+        case DataFormat::MxInt2:
+            return true;
+        default:
+            return false;
+    }
+}
+
+// L1 outputs for Float16 / Float16_b pack input (no Float32/Tf32; spec F16 row).
+inline bool is_quasar_pack_f16_src_l1_dst_supported(const DataFormat dst)
+{
+    switch (dst)
+    {
         case DataFormat::Float16:
         case DataFormat::Float16_b:
         case DataFormat::Fp8R:
@@ -90,14 +113,13 @@ __attribute__((noinline, optimize("no-jump-tables"))) inline bool is_quasar_pack
         // -------------------------------------------------------------------------
         // Float32 — Float32, TF32, Float16, Float16_b, FP8*, MX*, MXINT*
         case DataFormat::Float32:
-            return is_quasar_pack_float_src_l1_dst_supported(dst);
+            return is_quasar_pack_f32_src_l1_dst_supported(dst);
 
         // -------------------------------------------------------------------------
-        // Float16 / Float16_b — FP8/MX/L1 F16 set (spec omits Float32/Tf32 vs Float32 row).
-        // TODO: gate Float32/Tf32 via helper flag or split helpers once we tighten this table.
+        // Float16 / Float16_b — FP8/MX/L1 F16 set.
         case DataFormat::Float16:
         case DataFormat::Float16_b:
-            return is_quasar_pack_float_src_l1_dst_supported(dst);
+            return is_quasar_pack_f16_src_l1_dst_supported(dst);
 
         // -------------------------------------------------------------------------
         // INT32 — INT32, INT8, UINT8
@@ -123,7 +145,12 @@ __attribute__((noinline, optimize("no-jump-tables"))) inline bool is_quasar_pack
             return dst == DataFormat::UInt8;
 
         // -------------------------------------------------------------------------
-        // INT16 — INT16 (SFPU UINT16 output path)
+        // UINT16 — UINT16
+        case DataFormat::UInt16:
+            return dst == DataFormat::UInt16;
+
+        // -------------------------------------------------------------------------
+        // INT16 — INT16
         case DataFormat::Int16:
             return dst == DataFormat::Int16;
 

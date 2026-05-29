@@ -709,20 +709,20 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
     auto out1_dram = distributed::MeshBuffer::create(f32_buf_cfg, f32_dram_cfg, mesh_device.get());
     auto out2_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, mesh_device.get());
 
-    constexpr const char* INP0_DFB = "in0";
-    constexpr const char* INP1_DFB = "in1";
-    constexpr const char* INP2_DFB = "in2";
-    constexpr const char* INP3_DFB = "in3";
-    constexpr const char* INP4_DFB = "in4";
-    constexpr const char* INP5_DFB = "in5";
-    constexpr const char* OUT0_DFB = "out0";
-    constexpr const char* OUT1_DFB = "out1";
-    constexpr const char* OUT2_DFB = "out2";
-    constexpr const char* READER = "reader";
-    constexpr const char* WRITER0 = "writer0";
-    constexpr const char* WRITER1 = "writer1";
-    constexpr const char* WRITER2 = "writer2";
-    constexpr const char* COMPUTE = "compute";
+    const std::string INP0_DFB = "in0";
+    const std::string INP1_DFB = "in1";
+    const std::string INP2_DFB = "in2";
+    const std::string INP3_DFB = "in3";
+    const std::string INP4_DFB = "in4";
+    const std::string INP5_DFB = "in5";
+    const std::string OUT0_DFB = "out0";
+    const std::string OUT1_DFB = "out1";
+    const std::string OUT2_DFB = "out2";
+    const std::string READER = "reader";
+    const std::string WRITER0 = "writer0";
+    const std::string WRITER1 = "writer1";
+    const std::string WRITER2 = "writer2";
+    const std::string COMPUTE = "compute";
 
     auto make_f16_input_dfb = [&](const std::string& name) {
         return experimental::metal2_host_api::DataflowBufferSpec{
@@ -783,7 +783,7 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
             .access_pattern = DFBAccess::STRIDED,
         };
     };
-    auto make_writer_spec = [&](const char* writer_id, const char* out_dfb) {
+    auto make_writer_spec = [&](const std::string& writer_id, const std::string& out_dfb) {
         return experimental::metal2_host_api::KernelSpec{
             .unique_id = writer_id,
             .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_2_0.cpp",
