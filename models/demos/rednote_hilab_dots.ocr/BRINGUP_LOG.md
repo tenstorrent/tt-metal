@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** p150 (blackhole)
 **Started:** 2026-05-29T00:11:46Z
-**Updated:** 2026-05-29T03:35:03Z
+**Updated:** 2026-05-29T03:41:01Z
 
 ## Block Status
 
@@ -19,7 +19,7 @@
 | vision_rmsnorm | ttnn | done | 0.999995 | 0 | ttnn.rms_norm eps=1e-5 HiFi4+fp32_dest_acc bf16 DRAM TILE; PCC 0.99999 vs seed-0 golden on p150 |
 | vision_rmsnorm | debug | n/a | — | 0 |  |
 | vision_rmsnorm | optimization | done | 0.999995 | 0 | tracy attached (traced session, 1 op); rms_norm is the entire block (100% of 30.2us block kernel time), already multi-core on 32 cores (1 row-tile/core), HiFi4+fp32_dest_acc+packer_l1_acc, bf16 DRAM TILE. A/B vs width-sharded LayerNormShardedMultiCoreProgramConfig: K_t=48 does not divide 32/64 cores; compiling variants (6-8 cores, block_h=32) overflow static L1 CBs. No op-level optimization warranted - at ceiling. PCC 0.99999 held. |
-| vision_rmsnorm | real_weights | pending | — | 0 |  |
+| vision_rmsnorm | real_weights | done | 0.999997 | 0 | Real HF weight vision_tower.blocks.0.norm1.weight [1536] loaded via weight_loader.load_vision_rmsnorm_weight; PCC 0.999997 vs HF RMSNorm (eps 1e-5) on p150; forward untouched. |
 | vision_attention | reference | done | 1.000000 | 0 | reference vs HF (eager) module, PCC=1.0; golden saved |
 | vision_attention | ttnn | done | 0.999988 | 0 | manual SDPA chain (qkv linear -> nlp_create_qkv_heads -> 2D RoPE -> matmul+softmax+matmul w/ block-diagonal additive mask -> nlp_concat_heads -> proj). HiFi4+fp32_dest_acc, bf16. PCC=0.999988 vs golden. Guard ok. |
 | vision_attention | debug | n/a | — | 0 |  |
@@ -94,7 +94,6 @@
 
 ## Recent Ticks
 
-- tick 26 (2026-05-29T02:32:56Z): device[vision_patch_merger] — ok
 - tick 27 (2026-05-29T02:40:41Z): device[vision_tower] — ok
 - tick 28 (2026-05-29T02:46:22Z): device[embedding] — ok
 - tick 29 (2026-05-29T02:52:35Z): device[rmsnorm] — ok
@@ -104,6 +103,7 @@
 - tick 33 (2026-05-29T03:19:23Z): device[decoder_layer] — ok
 - tick 34 (2026-05-29T03:27:29Z): device[lm_head] — ok
 - tick 35 (2026-05-29T03:35:03Z): device[language_model] — ok
+- tick 36 (2026-05-29T03:41:01Z): device[vision_rmsnorm] — ok
 
 ## Host-Resident Exceptions
 

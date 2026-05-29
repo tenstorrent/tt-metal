@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-29T00:11:46Z",
-  "updated_at": "2026-05-29T03:35:03Z",
+  "updated_at": "2026-05-29T03:41:01Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -89,8 +89,15 @@
         "pcc": 0.9999954353866637
       },
       "real_weights": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/weight_loader.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_real_hf_weights.py"
+        ],
+        "notes": "Real HF weight vision_tower.blocks.0.norm1.weight [1536] loaded via weight_loader.load_vision_rmsnorm_weight; PCC 0.999997 vs HF RMSNorm (eps 1e-5) on p150; forward untouched.",
+        "pcc": 0.999997002946296,
+        "params_loaded": 1536
       }
     },
     {
@@ -1061,6 +1068,12 @@
       "tick": 35,
       "ts": "2026-05-29T03:35:03Z",
       "action": "device[language_model]",
+      "result": "ok"
+    },
+    {
+      "tick": 36,
+      "ts": "2026-05-29T03:41:01Z",
+      "action": "device[vision_rmsnorm]",
       "result": "ok"
     }
   ],
