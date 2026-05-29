@@ -74,6 +74,7 @@ on:
 permissions:
   contents: read
   actions: read
+  issues: write
 
 jobs:
   ping-brain:
@@ -107,12 +108,9 @@ jobs:
               f"<@{BRAIN_UID}> Run the full triage pipeline in order:\n\n"
               + lifecycle_line +
               "2. `/make-new-issues 1`\n"
-              "3. `/check-for-existing-issues` on the issue you just made\n\n"
-              "If the issue does *not* already exist in tt-metal:\n"
-              "4. `/promote-to-metal`\n"
-              "5. `/assign-issue`\n"
-              "6. `/draft-slack-message` (include pings for the owners you found)\n\n"
-              "Combine steps 4-6 into a *single Slack message* -- one concise summary of "
+              "3. `/assign-issue`\n"
+              "4. `/draft-slack-message` (include pings for the owners you found)\n\n"
+              "Combine steps 3-4 into a *single Slack message* -- one concise summary of "
               "what the issue is and who should take care of it. No separate messages per step."
           )
 
@@ -163,6 +161,6 @@ jobs:
       high-volume-runs-per-day: ${{ fromJSON(inputs.high-volume-runs-per-day) }}
     secrets:
       AGGREGATE_READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      ISSUE_WRITE_TOKEN: ${{ secrets.EVAN_RESTRICTED_TOKEN }}
+      ISSUE_WRITE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
       COPILOT_PAT: ${{ secrets.AUTO_TRIAGE_TOKEN }}
