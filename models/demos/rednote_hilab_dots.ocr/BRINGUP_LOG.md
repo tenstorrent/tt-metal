@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** p150 (blackhole)
 **Started:** 2026-05-29T00:11:46Z
-**Updated:** 2026-05-29T04:16:28Z
+**Updated:** 2026-05-29T04:22:04Z
 
 ## Block Status
 
@@ -54,7 +54,7 @@
 | rmsnorm | ttnn | done | 0.999995 | 0 | Qwen2 LM RMSNorm eps=1e-6 (vs vision 1e-5). ttnn.rms_norm HiFi4+fp32_dest_acc bf16 DRAM TILE; weight reshaped [1,1,dim//32,32] row-major. Mirror of TtVisionRMSNorm. PCC=0.99999 vs golden on p150. Guard ok. |
 | rmsnorm | debug | n/a | — | 0 |  |
 | rmsnorm | optimization | done | 0.999995 | 0 | tracy attached (traced session, 1 op); rms_norm (LayerNormDeviceOperation) is the entire block (100% of 30.5us block kernel time), already multi-core on 32 cores, HiFi4+fp32_dest_acc+packer_l1_acc, bf16 DRAM TILE. K_t=48 divides only 6/8/16/24/48 cores (not the 32/64 grid); width-sharded variants reduce parallelism vs the 32-core height path and overflow static L1 CBs at compile (same as vision_rmsnorm tick 22). No op-level optimization warranted - at ceiling. PCC 0.99999 held. |
-| rmsnorm | real_weights | pending | — | 0 |  |
+| rmsnorm | real_weights | done | 0.999997 | 0 | Loaded real LM RMSNorm gamma model.layers.0.input_layernorm.weight [1536] (eps 1e-6) into TtRMSNorm; PCC=0.999997 vs HF Qwen2RMSNorm on p150. |
 | rope | reference | done | 1.000000 | 0 | Qwen2RotaryEmbedding (theta 1e6, head_dim 128, default rope): position_ids -> (cos,sin). PCC cos=1.0 sin=1.0 vs HF. |
 | rope | ttnn | done | 1.000000 | 0 | Qwen2 LM RoPE cos/sin tables (theta 1e6, head_dim 128). On-device outer(pos,inv_freq)->cat->cos/sin, fp32. PCC cos=1.0 sin=1.0 vs golden. |
 | rope | debug | n/a | — | 0 |  |
@@ -94,7 +94,6 @@
 
 ## Recent Ticks
 
-- tick 33 (2026-05-29T03:19:23Z): device[decoder_layer] — ok
 - tick 34 (2026-05-29T03:27:29Z): device[lm_head] — ok
 - tick 35 (2026-05-29T03:35:03Z): device[language_model] — ok
 - tick 36 (2026-05-29T03:41:01Z): device[vision_rmsnorm] — ok
@@ -104,6 +103,7 @@
 - tick 40 (2026-05-29T04:04:31Z): device[vision_patch_merger] — ok
 - tick 41 (2026-05-29T04:10:59Z): device[vision_tower] — ok
 - tick 42 (2026-05-29T04:16:28Z): device[embedding] — ok
+- tick 43 (2026-05-29T04:22:04Z): device[rmsnorm] — ok
 
 ## Host-Resident Exceptions
 

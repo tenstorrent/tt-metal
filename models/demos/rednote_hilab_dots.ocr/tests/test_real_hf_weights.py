@@ -50,10 +50,12 @@ _tt_vision_block = _load_by_path("dots_tt_vision_block_rw", "vision_block.py", _
 _tt_vision_patch_merger = _load_by_path("dots_tt_vision_patch_merger_rw", "vision_patch_merger.py", _TT_DIR)
 _tt_vision_tower = _load_by_path("dots_tt_vision_tower_rw", "vision_tower.py", _TT_DIR)
 _tt_embedding = _load_by_path("dots_tt_embedding_rw", "embedding.py", _TT_DIR)
+_tt_rmsnorm_lm = _load_by_path("dots_tt_rmsnorm_rw", "rmsnorm.py", _TT_DIR)
 _loader = _load_by_path("dots_weight_loader", "weight_loader.py", _TT_DIR)
 _functional = _load_by_path("dots_reference_functional_rw", "functional.py", _REF_DIR)
 
 TtVisionRMSNorm = _tt_rmsnorm.TtVisionRMSNorm
+TtRMSNorm = _tt_rmsnorm_lm.TtRMSNorm
 TtVisionAttention = _tt_vision_attention.TtVisionAttention
 TtVisionMLP = _tt_vision_mlp.TtVisionMLP
 TtVisionBlock = _tt_vision_block.TtVisionBlock
@@ -67,7 +69,9 @@ load_vision_mlp_weights = _loader.load_vision_mlp_weights
 load_vision_block_weights = _loader.load_vision_block_weights
 load_vision_patch_merger_weights = _loader.load_vision_patch_merger_weights
 load_vision_tower_weights = _loader.load_vision_tower_weights
+load_lm_rmsnorm_weight = _loader.load_lm_rmsnorm_weight
 vision_rmsnorm_forward = _functional.vision_rmsnorm_forward
+rmsnorm_forward = _functional.rmsnorm_forward
 vision_attention_forward = _functional.vision_attention_forward
 vision_mlp_forward = _functional.vision_mlp_forward
 vision_block_forward = _functional.vision_block_forward
@@ -595,6 +599,57 @@ def test_real_hf_weights_embedding(device):
     assert params_loaded > 0
 
 
+# LM RMSNorm (Qwen2RMSNorm): eps 1e-6 (distinct from vision 1e-5), hidden 1536.
+# A real LM RMSNorm gamma -- every decoder layer's input_layernorm /
+# post_attention_layernorm and the final model.norm share shape/eps; layer-0
+# input_layernorm is representative.
+LM_RMS_NORM_EPS = 1e-6
+LM_RMSNORM_HF_KEY = "model.layers.0.input_layernorm.weight"
+
+
+def _run_lm_rmsnorm_pcc(device):
+    """Load the real LM RMSNorm gamma, run TtRMSNorm on device, compare to the
+    HF Qwen2RMSNorm reference (eps 1e-6) computed with the SAME real weight.
+
+    Returns (pcc, params_loaded).
+    """
+    weight = load_lm_rmsnorm_weight(CHECKPOINT_PATH, LM_RMSNORM_HF_KEY).to(torch.float32)
+    params_loaded = int(weight.numel())
+    assert weight.shape == (EMBED_DIM,), f"unexpected real LM rmsnorm weight shape {tuple(weight.shape)}"
+
+    torch.manual_seed(0)
+    n_tokens = 256
+    torch_input = torch.randn(n_tokens, EMBED_DIM, dtype=torch.float32)
+
+    # HF reference (mirrors Qwen2RMSNorm exactly, eps 1e-6) with the REAL gamma.
+    ref_output = rmsnorm_forward(torch_input, weight, eps=LM_RMS_NORM_EPS)
+
+    tt_norm = TtRMSNorm(device=device, dim=EMBED_DIM, weight=weight, eps=LM_RMS_NORM_EPS)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_output = tt_norm(tt_input)
+    tt_output_torch = ttnn.to_torch(tt_output).to(torch.float32).reshape(ref_output.shape)
+
+    passing, pcc_message = comp_pcc(ref_output, tt_output_torch, 0.99)
+    print(comp_allclose(ref_output, tt_output_torch))
+    print(f"comp_pcc(rmsnorm, real weights): passing={passing}, message={pcc_message}")
+    msg = str(pcc_message)
+    pcc = float(msg.split("PCC:")[-1].strip()) if "PCC:" in msg else float(pcc_message)
+    print(f"real-weights rmsnorm PCC = {pcc} | params_loaded = {params_loaded}")
+    assert passing, f"rmsnorm real-weights PCC below 0.99: {pcc_message}"
+    return pcc, params_loaded
+
+
+def test_real_hf_weights_rmsnorm(device):
+    pcc, params_loaded = _run_lm_rmsnorm_pcc(device)
+    assert params_loaded > 0
+
+
 if __name__ == "__main__":
     dev = ttnn.open_device(device_id=0, l1_small_size=32768)
     try:
@@ -605,5 +660,6 @@ if __name__ == "__main__":
         _run_vision_patch_merger_pcc(dev)
         _run_vision_tower_pcc(dev)
         _run_embedding_pcc(dev)
+        _run_lm_rmsnorm_pcc(dev)
     finally:
         ttnn.close_device(dev)

@@ -263,6 +263,28 @@ def load_embedding_weight(checkpoint_path: str, hf_key: str = "model.embed_token
     return tensors[hf_key]
 
 
+def load_lm_rmsnorm_weight(checkpoint_path: str, hf_key: str = "model.layers.0.input_layernorm.weight") -> torch.Tensor:
+    """Load a single real LM RMSNorm gamma weight [hidden_size].
+
+    The dots.ocr language model is a Qwen2 trunk that uses Qwen2RMSNorm (eps =
+    config.rms_norm_eps = 1e-6, distinct from the vision tower's 1e-5) for every
+    decoder layer's ``input_layernorm`` / ``post_attention_layernorm`` and the
+    final ``model.norm``. All share the same shape ([hidden_size] = [1536]) and
+    eps, so any is a valid real LM RMSNorm gamma for validating
+    :class:`tt.rmsnorm.TtRMSNorm`; the default picks layer 0's input_layernorm.
+    The final-norm gamma is reachable via ``hf_key='model.norm.weight'``.
+
+    Args:
+        checkpoint_path: HF snapshot dir.
+        hf_key: which RMSNorm weight to pull (default layer 0's input_layernorm).
+
+    Returns:
+        torch.Tensor of shape [hidden_size] (fp32).
+    """
+    tensors = load_hf_tensors(checkpoint_path, [hf_key])
+    return tensors[hf_key]
+
+
 def load_vision_tower_weights(checkpoint_path: str, num_layers: int) -> Dict[str, torch.Tensor]:
     """Load the full DotsVisionTransformer (vision tower) real weights.
 
