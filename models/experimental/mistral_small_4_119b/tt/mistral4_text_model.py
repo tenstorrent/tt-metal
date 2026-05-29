@@ -443,7 +443,9 @@ class TtMistral4TextModel:
         # NOTE: do not deallocate cos_tt/sin_tt — they may alias the cached
         # RoPE buffer; deallocation would invalidate the buffer for trace replay.
 
-        x = _rms_norm(x, self.final_norm_w, self.compute_kernel_config)
+        # Place final-norm output in L1 so the lm_head matmul (M×4096×131072)
+        # reads in0 from L1 instead of DRAM. Matches _to_logits / decode paths.
+        x = _rms_norm(x, self.final_norm_w, self.compute_kernel_config, ttnn.L1_MEMORY_CONFIG)
         logits_tt = ttnn.linear(
             x,
             self.lm_head_weight,
@@ -480,7 +482,9 @@ class TtMistral4TextModel:
         x_last = ttnn.slice(x, [0, 0, seq_len - 1, 0], [1, 1, seq_len, HIDDEN_SIZE])
         ttnn.deallocate(x)
 
-        x_last = _rms_norm(x_last, self.final_norm_w, self.compute_kernel_config)
+        # Place lm_head's in0 in L1 so the M=32 K=4096 N=131072 matmul doesn't
+        # read the activation from DRAM. Matches the other prefill/decode paths.
+        x_last = _rms_norm(x_last, self.final_norm_w, self.compute_kernel_config, ttnn.L1_MEMORY_CONFIG)
         use_bf8_lm_head = os.environ.get("MISTRAL4_PREFILL_BF8_LM_HEAD", "0") == "1"
         logits_tt = ttnn.linear(
             x_last,

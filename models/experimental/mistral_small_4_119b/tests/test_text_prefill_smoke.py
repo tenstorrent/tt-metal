@@ -14,6 +14,17 @@ Run::
     export MISTRAL4_PREFILL_N_LAYERS=36
     export MESH_DEVICE=T3K
     pytest models/experimental/mistral_small_4_119b/tests/test_text_prefill_smoke.py -v -s --timeout=0
+
+Tracy / tt-perf-report (signpost selects the measured ``prefill_device`` pass)::
+
+    export MISTRAL4_PREFILL_SMOKE=1
+    python -m tracy -r -m -p -v --op-support-count 3000 pytest \\
+        models/experimental/mistral_small_4_119b/tests/test_text_prefill_smoke.py -v -s --timeout=0
+    tt-perf-report generated/profiler/reports/<timestamp>/ops_perf_results_<timestamp>.csv
+
+Under Tracy the host warmup ``prefill()`` is skipped and ``ttnn.ReadDeviceProfiler`` drains
+device profiler buffers after the compile pass so the signposted run gets kernel timings.
+Use fewer layers (e.g. ``MISTRAL4_PREFILL_N_LAYERS=2``) when iterating on perf.
 """
 
 from __future__ import annotations
@@ -51,6 +62,7 @@ pytest.importorskip("transformers.models.mistral4.modeling_mistral4", reason="Mi
 
 _N_LAYERS = int(os.environ.get("MISTRAL4_PREFILL_N_LAYERS", "2"))
 _LAST_TOKEN_ONLY = os.environ.get("MISTRAL4_PREFILL_LAST_TOKEN_ONLY", "0") == "1"
+_DEVICE_PROFILING = os.environ.get("TT_METAL_DEVICE_PROFILER") is not None
 
 
 def _state_dict_prefixes(n_layers: int) -> tuple:
@@ -138,11 +150,14 @@ def test_mistral_small_4_prefill_smoke(reset_seeds, mesh_device):
     cos_full, sin_full = rotary(hidden0, position_ids)
     model.cache_rope_tables(cos_full, sin_full)
 
-    logger.info(f"Running TTNN prefill warmup (seq_len={seq_len})...")
-    _log_mem("before prefill warmup")
-    _ = model.prefill(input_ids)
-    ttnn.synchronize_device(mesh_device)
-    _log_mem("after prefill warmup")
+    if _DEVICE_PROFILING:
+        logger.info("Skipping host prefill warmup (device profiler active; compile pass JITs)")
+    else:
+        logger.info(f"Running TTNN prefill warmup (seq_len={seq_len})...")
+        _log_mem("before prefill warmup")
+        _ = model.prefill(input_ids)
+        ttnn.synchronize_device(mesh_device)
+        _log_mem("after prefill warmup")
 
     # prefill() consumes the cached RoPE table (full-range ttnn.slice aliases the
     # buffer, and the trailing ttnn.deallocate frees it). Re-cache before the
@@ -174,19 +189,41 @@ def test_mistral_small_4_prefill_smoke(reset_seeds, mesh_device):
     ttnn.deallocate(_logits_compile)
     logger.info(f"Compile pass wall-clock: {t_compile*1e3:.2f} ms")
 
-    # ── Signposted measured pass — this is what shows up in the perf report ──
-    # Single clean prefill_device call. Tracy filters per-op data to ops AFTER
-    # the last signpost, so anything we run after this will pollute the report.
+    if _DEVICE_PROFILING:
+        # Drain profiler DRAM buffers after compile so the signposted pass is not
+        # dropped when buffers were filled by model construction / compile.
+        ttnn.ReadDeviceProfiler(mesh_device)
+        ttnn.synchronize_device(mesh_device)
+
+    # ── Trace capture (signposted — Tracy per-op data comes from this) ──────
+    # Capture is itself a real forward execution with per-op dispatch (so Tracy
+    # sees per-op timings) AND records the op sequence for replay. Replay is
+    # the production-fast path: same kernels, no host gaps between them. The
+    # perf report's "Running with tracing could save X μs" advice points here.
     signpost("Performance pass")
-    logger.info("Measured prefill pass...")
-    t_measured = time.perf_counter()
+    logger.info("Capturing prefill trace...")
+    ttnn.synchronize_device(mesh_device)
+    t_capture = time.perf_counter()
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
     if _LAST_TOKEN_ONLY:
         logits_tt = model.prefill_device_last_token_logits(input_ids_tt, seq_len)
     else:
         logits_tt = model.prefill_device(input_ids_tt, seq_len)
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     ttnn.synchronize_device(mesh_device)
-    t_measured = time.perf_counter() - t_measured
-    logger.info(f"Measured prefill wall-clock: {t_measured*1e3:.2f} ms")
+    t_capture = time.perf_counter() - t_capture
+    logger.info(f"Trace capture wall-clock: {t_capture*1e3:.2f} ms (per-op data for tt-perf-report)")
+
+    if _DEVICE_PROFILING:
+        ttnn.ReadDeviceProfiler(mesh_device)
+
+    # Trace replay — this is the real production prefill cost.
+    logger.info("Trace replay pass...")
+    t_replay = time.perf_counter()
+    ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+    ttnn.synchronize_device(mesh_device)
+    t_replay = time.perf_counter() - t_replay
+    logger.info(f"Trace replay wall-clock: {t_replay*1e3:.2f} ms")
     _log_mem("after prefill measured")
 
     # Download logits from the measured pass.
