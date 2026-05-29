@@ -10,12 +10,12 @@ Uses HF-style ttnn.experimental.rotary_embedding (no transformation matrices).
 import ttnn
 
 from .operations import (
-    _batch_to_corerange,
     apply_allreduce,
     apply_output_projection,
     apply_per_head_norm,
     apply_qkv_projection,
     apply_rope,
+    apply_rope_hf_manual,
     concat_heads,
     concat_heads_decode,
     effective_block_size,
@@ -24,14 +24,15 @@ from .operations import (
 from .weights import AttentionWeights
 
 
-def _build_decode_rope_mats(position_idx, cos_cache, sin_cache, batch_size, mesh_device):
-    """Build per-user decode cos/sin for ``rotary_embedding_hf``.
+def _build_decode_rope_mats(position_idx, cos_cache, sin_cache, batch_size):
+    """Gather per-user decode cos/sin as interleaved ``[1, batch, 1, head_dim]``.
 
-    Gathers position-specific cos/sin from the 2D caches via ``ttnn.embedding``
+    Looks up position-specific cos/sin from the 2D caches via ``ttnn.embedding``
     (one row per user, taken from the first ``batch_size`` slots of the padded
-    ``position_idx``), reshapes to ``[1, batch, 1, head_dim]`` so users sit on
-    dim 1 (matching the Q/K decode layout), and height-shards onto the same
-    one-user-per-core grid as Q/K. Mirrors tt_transformers ``HfRotarySetup``.
+    ``position_idx``) and reshapes so users sit on dim 1 (matching the Q/K decode
+    layout). The caller either height-shards these for ``rotary_embedding_hf``
+    (head_dim<=256) via :func:`_shard_rope_mats`, or feeds them to the manual HF
+    rope (head_dim>256). Mirrors tt_transformers ``HfRotarySetup``.
     """
     cos = ttnn.embedding(position_idx, cos_cache, layout=ttnn.TILE_LAYOUT)  # [1, 32, head_dim]
     sin = ttnn.embedding(position_idx, sin_cache, layout=ttnn.TILE_LAYOUT)
@@ -41,20 +42,26 @@ def _build_decode_rope_mats(position_idx, cos_cache, sin_cache, batch_size, mesh
     sin = ttnn.transpose(sin, 1, 2)
     cos = cos[:, :batch_size, :, :]  # [1, batch, 1, head_dim]
     sin = sin[:, :batch_size, :, :]
+    return cos, sin
 
+
+def _shard_rope_mats(cos, sin, qk_sharded_mem):
+    """Height-shard interleaved cos/sin onto the *exact* grid Q/K live on.
+
+    ``rotary_embedding_hf`` rotates each user's heads in place on its shard core,
+    so cos/sin must match Q/K core-for-core (``qk_sharded_mem``'s grid, as
+    produced by ``nlp_create_qkv_heads_decode`` — row-major and non-rectangular
+    on wide grids, so a forced single rectangle would misalign users).
+    """
     head_dim = cos.shape[-1]
-    grid_size = mesh_device.compute_with_storage_grid_size()
-    batch_grid = _batch_to_corerange(batch_size, grid_size)
     mem_config = ttnn.create_sharded_memory_config(
         shape=(ttnn.TILE_SIZE, head_dim),
-        core_grid=batch_grid,
+        core_grid=qk_sharded_mem.shard_spec.grid,
         strategy=ttnn.ShardStrategy.HEIGHT,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
-    cos = ttnn.interleaved_to_sharded(cos, mem_config)
-    sin = ttnn.interleaved_to_sharded(sin, mem_config)
-    return cos, sin
+    return ttnn.interleaved_to_sharded(cos, mem_config), ttnn.interleaved_to_sharded(sin, mem_config)
 
 
 def decode_forward(
@@ -123,17 +130,28 @@ def decode_forward(
     use_embedding_rope = len(cos_cache.shape) == 2  # 2D cache = embedding lookup mode
     if use_embedding_rope and batch_size > 1:
         # Batched decode: each user has its own position, so a single broadcast
-        # rotation (the legacy rotary_embedding op) is wrong. Build per-user
-        # cos/sin shaped [1, batch, 1, head_dim] height-sharded onto the same
-        # one-user-per-core grid as Q/K, and apply rotary_embedding_hf (matches
-        # the tt_transformers HfRotarySetup decode path).
-        tt_q = ttnn.to_memory_config(tt_q, q_sharded_mem)
-        if not is_kv_shared:
-            tt_k = ttnn.to_memory_config(tt_k, q_sharded_mem)
-        cos_pos, sin_pos = _build_decode_rope_mats(position_idx, cos_cache, sin_cache, batch_size, mesh_device)
-        tt_q = ttnn.experimental.rotary_embedding_hf(tt_q, cos_pos, sin_pos, is_decode_mode=True)
-        if not is_kv_shared:
-            tt_k = ttnn.experimental.rotary_embedding_hf(tt_k, cos_pos, sin_pos, is_decode_mode=True)
+        # rotation (the legacy rotary_embedding op) is wrong. Gather per-user
+        # cos/sin shaped [1, batch, 1, head_dim] (interleaved) and apply HF RoPE.
+        cos_pos, sin_pos = _build_decode_rope_mats(position_idx, cos_cache, sin_cache, batch_size)
+        head_dim = tt_q.shape[-1]
+        if head_dim <= 256:
+            # Fast path (sliding, head_dim=256): height-shard cos/sin onto Q/K's
+            # grid and use the rotary_embedding_hf kernel (matches HfRotarySetup).
+            tt_q = ttnn.to_memory_config(tt_q, q_sharded_mem)
+            cos_s, sin_s = _shard_rope_mats(cos_pos, sin_pos, q_sharded_mem)
+            tt_q = ttnn.experimental.rotary_embedding_hf(tt_q, cos_s, sin_s, is_decode_mode=True)
+            if not is_kv_shared:
+                tt_k = ttnn.to_memory_config(tt_k, q_sharded_mem)
+                tt_k = ttnn.experimental.rotary_embedding_hf(tt_k, cos_s, sin_s, is_decode_mode=True)
+        else:
+            # Global layers (head_dim=512): rotary_embedding_hf is numerically
+            # broken for head_dim 512, so apply HF RoPE manually on interleaved
+            # tensors (correct for any head_dim + per-user positions). Q is
+            # resharded for SDPA; K is resharded in the KV-cache-update step.
+            tt_q = apply_rope_hf_manual(tt_q, cos_pos, sin_pos)
+            tt_q = ttnn.to_memory_config(tt_q, q_sharded_mem)
+            if not is_kv_shared:
+                tt_k = apply_rope_hf_manual(tt_k, cos_pos, sin_pos)
     elif use_embedding_rope:
         # Gather position-specific cos/sin via ttnn.embedding (fully on-device, trace-safe)
         # position_idx: [1, 32] uint32 padded tensor for embedding lookup
@@ -202,12 +220,15 @@ def decode_forward(
     # the SDPA op falls back to the full device grid, which exceeds 64 cores
     # on Blackhole (>=110 cores) when num_kv_heads is small. The struct's
     # default max_cores_per_head_batch=16 caps the per-head reduction tree.
-    if config.head_dim >= 512:
-        # Global layers: smaller grid — head_dim=512 needs more L1 per core.
+    device_grid = mesh_device.compute_with_storage_grid_size()
+    if config.head_dim >= 512 and batch_size == 1:
+        # Single-user global layers: smaller grid — head_dim=512 needs more L1 per core.
         sdpa_grid = ttnn.CoreCoord(8, 4)
     else:
-        # Sliding layers: use the full device compute grid.
-        device_grid = mesh_device.compute_with_storage_grid_size()
+        # Sliding layers, and all batched decode: use the full device compute grid.
+        # Batched Q is height-sharded row-major across the device grid (one user per
+        # core), so the SDPA grid must cover those cores — an 8-wide grid would miss
+        # users on columns 8..10 of an 11-wide Blackhole grid and corrupt the output.
         sdpa_grid = ttnn.CoreCoord(device_grid.x, device_grid.y)
 
     sdpa_program_config = ttnn.SDPAProgramConfig(

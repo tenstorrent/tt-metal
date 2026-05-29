@@ -250,6 +250,32 @@ class TestFactory:
         )
         return cos_tt, sin_tt
 
+    @staticmethod
+    def create_tt_rope_cache_2d(device, hf_text_config, max_seq_len, layer_idx):
+        """Create the 2D cos/sin cache used by the decode embedding-lookup RoPE path.
+
+        Returns (cos_cache, sin_cache) each [max_seq_len, head_dim] on device,
+        matching the layout of ``Gemma4Model.rope_caches_2d``. Decode attention
+        detects the 2D shape and gathers per-user cos/sin via ``ttnn.embedding``.
+        """
+        from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
+
+        rope = Gemma4TextRotaryEmbedding(hf_text_config)
+        x_dummy = torch.randn(1, max_seq_len, hf_text_config.hidden_size)
+        pos_ids = torch.arange(max_seq_len).unsqueeze(0)
+        layer_type = hf_text_config.layer_types[layer_idx]
+        cos, sin = rope(x_dummy, pos_ids, layer_type=layer_type)  # [1, max_seq_len, head_dim]
+
+        is_mesh = hasattr(device, "shape")
+        replicate = ttnn.ReplicateTensorToMesh(device) if is_mesh else None
+        cos_tt = ttnn.from_torch(
+            cos.squeeze(0), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=replicate
+        )
+        sin_tt = ttnn.from_torch(
+            sin.squeeze(0), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=replicate
+        )
+        return cos_tt, sin_tt
+
 
 def compare_tensors(tt_tensor, torch_tensor, mesh_device=None, pcc_threshold=0.99):
     """Compare TT and torch tensors using PCC. Logs the PCC value."""

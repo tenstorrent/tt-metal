@@ -132,30 +132,51 @@ def concat_heads(tensor, is_decode_mode: bool):
     return ttnn.experimental.nlp_concat_heads(tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
+def apply_rope_hf_manual(x, cos, sin):
+    """Apply HF rotary position embedding manually (slice + rotate_half + fma).
+
+    Computes ``x * cos + rotate_half(x) * sin`` with
+    ``rotate_half(x) = cat([-x2, x1])`` split at ``head_dim // 2`` — the exact HF
+    convention (``transformers`` ``apply_rotary_pos_emb``). ``cos``/``sin`` are
+    ``[1, batch, 1, head_dim]`` and broadcast over the heads dim.
+
+    This exists because ``ttnn.experimental.rotary_embedding_hf`` is numerically
+    incorrect for ``head_dim == 512`` (verified: PCC ~0.76 at 512 vs ~1.0 at 256),
+    which is exactly the Gemma4 global-attention head dim. The manual path is
+    layout-agnostic (works interleaved) and correct for any head_dim and per-user
+    positions, at the cost of a few extra elementwise ops.
+    """
+    head_dim = x.shape[-1]
+    x1 = x[..., : head_dim // 2]
+    x2 = x[..., head_dim // 2 :]
+    rotated = ttnn.concat([ttnn.neg(x2), x1], dim=-1)
+    return ttnn.add(ttnn.mul(x, cos), ttnn.mul(rotated, sin))
+
+
 def _batch_to_corerange(batch: int, grid_size: ttnn.CoreCoord) -> ttnn.CoreRangeSet:
     """Map a decode batch size to a single rectangular CoreRange of exactly ``batch`` cores.
 
     ``nlp_concat_heads_decode`` requires ``num_cores == num_users`` (one user per
     core). Using a single contiguous rectangle anchored at (0, 0) keeps the op on
     its fast path and avoids the ``on_subcoregrids`` requirement that a fragmented
-    CoreRangeSet would trigger.
+    CoreRangeSet would trigger (the SDPA output is resharded here from DRAM, so the
+    rectangle need not match Q/K's row-major decode grid).
 
-    Covers the supported decode batch sizes {1, 8, 16, 32} on an 8-wide grid as
-    1x1, 8x1, 8x2, 8x4 respectively.
+    Picks the widest rectangle that tiles ``batch`` exactly and fits the device
+    grid: e.g. on an 8- or 11-wide grid, batch {1, 8, 16, 32} map to 1x1, 8x1,
+    8x2, 8x4 respectively.
     """
-    grid_x = grid_size.x
-    if batch <= grid_x:
-        num_x, num_y = batch, 1
-    else:
-        if batch % grid_x != 0:
-            raise ValueError(
-                f"batch={batch} cannot form a single rectangle on a grid {grid_x} wide; "
-                "supported batch sizes are {1, 8, 16, 32}"
-            )
-        num_x, num_y = grid_x, batch // grid_x
-    if num_y > grid_size.y:
-        raise ValueError(f"batch={batch} requires {num_y} rows but grid has only {grid_size.y}")
-    core_range = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_x - 1, num_y - 1))
+    grid_x, grid_y = grid_size.x, grid_size.y
+    width = min(batch, grid_x)
+    while width >= 1 and (batch % width != 0 or batch // width > grid_y):
+        width -= 1
+    if width < 1:
+        raise ValueError(
+            f"batch={batch} cannot form a single rectangle on a {grid_x}x{grid_y} grid; "
+            "supported batch sizes are {1, 8, 16, 32}"
+        )
+    height = batch // width
+    core_range = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(width - 1, height - 1))
     return ttnn.CoreRangeSet({core_range})
 
 
