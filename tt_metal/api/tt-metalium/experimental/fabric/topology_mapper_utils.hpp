@@ -58,6 +58,13 @@ struct TopologyMappingConfig {
     // specific logical nodes can be mapped to
     std::vector<PinningConstraint> pinnings;
 
+    // Optional mesh colocation pinnings. Each entry instructs the solver to colocate two logical
+    // meshes within a grouping (see MeshColocationType). For HOST colocation, both meshes are
+    // mapped to physical meshes that belong to one host. Host membership is derived from
+    // hostname_to_asics, so HOST colocation is only enforced when hostname_to_asics is populated.
+    // The relation is transitive: pinning (A, B) and (B, C) forces A, B and C into one group.
+    std::vector<::tt::tt_fabric::MeshColocationPinning> mesh_colocation_pinnings;
+
     // Map from AsicID to (TrayID, ASICLocation) from discovery — required when pinnings are non-empty, and populated
     // for topology mapping anchors (e.g. soft preference for tray 1 / ASIC location 1 on logical mesh 0).
     AsicPositionMap asic_positions;

@@ -713,6 +713,43 @@ std::optional<std::string> resolve_local_hostname_from_hostname_asics_map(
     return std::nullopt;
 }
 
+// Partition physical meshes by host using config.hostname_to_asics.
+// Single-host physical meshes are grouped together per host; multi-host physical meshes become their own
+// singleton group (we cannot attribute them to a single host). Physical meshes in `bound_physical_mesh_ids`
+// and meshes with no nodes are skipped.
+std::vector<std::set<MeshId>> build_inter_mesh_host_partitions(
+    const TopologyMappingConfig& config,
+    const PhysicalMultiMeshGraph& physical_graph,
+    const std::set<MeshId>& bound_physical_mesh_ids) {
+    std::vector<std::set<MeshId>> global_mesh_groups;
+    std::map<std::string, std::size_t> host_group_index;
+    for (const auto& [phys_mesh_id, adj] : physical_graph.mesh_adjacency_graphs_) {
+        if (bound_physical_mesh_ids.contains(phys_mesh_id)) {
+            continue;
+        }
+        if (adj.get_nodes().empty()) {
+            continue;
+        }
+        std::set<std::string> hosts_for_mesh;
+        for (const auto& asic_id : adj.get_nodes()) {
+            auto hostname = hostname_for_asic_from_hostname_map(asic_id, config.hostname_to_asics);
+            if (hostname.has_value()) {
+                hosts_for_mesh.insert(*hostname);
+            }
+        }
+        if (hosts_for_mesh.size() == 1) {
+            auto [it, inserted] = host_group_index.try_emplace(*hosts_for_mesh.begin(), global_mesh_groups.size());
+            if (inserted) {
+                global_mesh_groups.emplace_back();
+            }
+            global_mesh_groups[it->second].insert(phys_mesh_id);
+        } else {
+            global_mesh_groups.push_back({phys_mesh_id});
+        }
+    }
+    return global_mesh_groups;
+}
+
 // Minimal host cover for inter-mesh mapping: partition physical meshes by host, then apply.
 // `rank_bound_logical_to_physical`: logical meshes already fixed by rank bindings → skip those and their physical
 // meshes for host-alignment bias (empty when rank bindings are disabled).
@@ -744,41 +781,27 @@ void add_inter_mesh_minimal_host_cover_from_hostname_map(
         return;
     }
 
-    // Build global_mesh_groups in one pass: one group per host for single-host meshes, singleton for multi-host.
-    std::vector<std::set<MeshId>> global_mesh_groups;
-    std::map<std::string, std::size_t> host_group_index;
-    for (const auto& [phys_mesh_id, adj] : physical_graph.mesh_adjacency_graphs_) {
-        if (bound_physical_mesh_ids.contains(phys_mesh_id)) {
-            continue;
-        }
-        if (adj.get_nodes().empty()) {
-            continue;
-        }
-        std::set<std::string> hosts_for_mesh;
-        for (const auto& asic_id : adj.get_nodes()) {
-            auto hostname = hostname_for_asic_from_hostname_map(asic_id, config.hostname_to_asics);
-            if (hostname.has_value()) {
-                hosts_for_mesh.insert(*hostname);
-            }
-        }
-        if (hosts_for_mesh.size() == 1) {
-            auto [it, inserted] = host_group_index.try_emplace(*hosts_for_mesh.begin(), global_mesh_groups.size());
-            if (inserted) {
-                global_mesh_groups.emplace_back();
-            }
-            global_mesh_groups[it->second].insert(phys_mesh_id);
-        } else {
-            global_mesh_groups.push_back({phys_mesh_id});
-        }
-    }
+    // Build global_mesh_groups: one group per host for single-host meshes, singleton for multi-host.
+    std::vector<std::set<MeshId>> global_mesh_groups =
+        build_inter_mesh_host_partitions(config, physical_graph, bound_physical_mesh_ids);
     if (global_mesh_groups.empty()) {
         return;
     }
 
+    // HOST mesh colocation pinnings own the same-rank-groups mechanism (they impose hard, fine-grained co-host
+    // requirements). When present, this soft minimal-host-cover heuristic must not set same-rank groups, or it
+    // would overwrite/conflict with the pinning constraints. We still emit preferred globals below for packing.
+    const bool host_colocation_pinnings_present = std::any_of(
+        config.mesh_colocation_pinnings.begin(),
+        config.mesh_colocation_pinnings.end(),
+        [](const ::tt::tt_fabric::MeshColocationPinning& p) {
+            return p.type == ::tt::tt_fabric::MeshColocationType::Host;
+        });
+
     const auto [single_group_fits, preferred_globals] =
         ::tt::tt_fabric::PhysicalGroupingDescriptor::find_minimum_coverage_group(
             logical_target_set, global_mesh_groups);
-    if (single_group_fits) {
+    if (single_group_fits && !host_colocation_pinnings_present) {
         std::vector<std::set<MeshId>> target_groups;
         target_groups.push_back(logical_target_set);
         if (inter_mesh_constraints.set_same_rank_groups_constraint(target_groups, global_mesh_groups)) {
@@ -1007,6 +1030,114 @@ void add_logical_mesh_zero_anchor_inter_mesh_preference(
         from_discovery_position_partition.has_value());
 }
 
+// Enforce mesh colocation pinnings at the inter-mesh level.
+//
+// Each pinning (mesh_id_a, mesh_id_b) requires both logical meshes to be colocated within a grouping. Only HOST
+// colocation is currently supported: both meshes must map to physical meshes that belong to a single physical
+// host. Pinnings are transitive: (A, B) and (B, C) merge A, B and C into one co-location group.
+//
+// Implementation: the merged groups become same-rank target groups and the per-host physical-mesh partitions
+// become the global groups. The solver's same-rank-groups feasibility check then guarantees every mesh in a
+// group maps into one host partition (and distinct groups map to distinct hosts). Because inter-mesh mapping is
+// injective (each logical mesh takes a distinct physical mesh), a group of N meshes requires a host with at
+// least N physical meshes.
+void add_inter_mesh_colocation_pinning_constraints(
+    const TopologyMappingConfig& config,
+    const PhysicalMultiMeshGraph& physical_graph,
+    const AdjacencyGraph<MeshId>& mesh_logical_level_graph,
+    ::tt::tt_fabric::MappingConstraints<MeshId, MeshId>& inter_mesh_constraints) {
+    // Gather the HOST-type colocation pinnings (the only grouping enforced today).
+    std::vector<const ::tt::tt_fabric::MeshColocationPinning*> host_pinnings;
+    for (const auto& pinning : config.mesh_colocation_pinnings) {
+        if (pinning.type == ::tt::tt_fabric::MeshColocationType::Host) {
+            host_pinnings.push_back(&pinning);
+        }
+    }
+    if (host_pinnings.empty()) {
+        return;
+    }
+
+    TT_FATAL(
+        !config.hostname_to_asics.empty(),
+        "HOST mesh colocation pinnings were specified but no host information (hostname_to_asics) is available, so "
+        "the solver cannot determine which physical meshes share a host.");
+
+    const auto& logical_nodes = mesh_logical_level_graph.get_nodes();
+    const std::set<MeshId> logical_mesh_set(logical_nodes.begin(), logical_nodes.end());
+
+    // Union-find over pinned mesh pairs to compute transitive co-location groups.
+    std::map<MeshId, MeshId> parent;
+    std::function<MeshId(MeshId)> find = [&](MeshId m) -> MeshId {
+        auto it = parent.find(m);
+        if (it == parent.end() || it->second == m) {
+            return m;
+        }
+        MeshId root = find(it->second);
+        parent[m] = root;
+        return root;
+    };
+    auto unite = [&](MeshId a, MeshId b) {
+        parent.try_emplace(a, a);
+        parent.try_emplace(b, b);
+        MeshId root_a = find(a);
+        MeshId root_b = find(b);
+        if (root_a != root_b) {
+            parent[root_a] = root_b;
+        }
+    };
+
+    for (const auto* pinning : host_pinnings) {
+        const MeshId mesh_a = pinning->mesh_id_a;
+        const MeshId mesh_b = pinning->mesh_id_b;
+        TT_FATAL(
+            mesh_a != mesh_b,
+            "Mesh colocation pinning references the same mesh twice (mesh_id: {}); the two meshes must be distinct.",
+            mesh_a.get());
+        TT_FATAL(
+            logical_mesh_set.contains(mesh_a) && logical_mesh_set.contains(mesh_b),
+            "Mesh colocation pinning references mesh(es) not present in the logical topology: (mesh_id_a: {}, "
+            "mesh_id_b: {}).",
+            mesh_a.get(),
+            mesh_b.get());
+        unite(mesh_a, mesh_b);
+    }
+
+    // Collect merged groups by root; keep only groups with at least two meshes (singletons are unconstrained).
+    std::map<MeshId, std::set<MeshId>> groups_by_root;
+    for (const auto& [mesh_id, _] : parent) {
+        groups_by_root[find(mesh_id)].insert(mesh_id);
+    }
+    std::vector<std::set<MeshId>> target_groups;
+    for (auto& [_, group] : groups_by_root) {
+        if (group.size() >= 2) {
+            target_groups.push_back(std::move(group));
+        }
+    }
+    if (target_groups.empty()) {
+        return;
+    }
+
+    // Host partitions of physical meshes. We intentionally do not exclude rank-bound physical meshes here: a
+    // pinned mesh may itself be rank-bound, and its required physical mesh must remain in its host partition for
+    // the same-rank feasibility check to succeed.
+    const std::vector<std::set<MeshId>> global_groups =
+        build_inter_mesh_host_partitions(config, physical_graph, /*bound_physical_mesh_ids=*/{});
+
+    if (!inter_mesh_constraints.set_same_rank_groups_constraint(target_groups, global_groups)) {
+        TT_THROW(
+            "HOST mesh colocation pinnings are infeasible: could not place the {} colocation group(s) onto single "
+            "host(s). Ensure each group of N meshes can be covered by a host with at least N physical meshes, and "
+            "that the pinnings are compatible with any rank bindings and ASIC pinnings.",
+            target_groups.size());
+    }
+
+    log_info(
+        tt::LogFabric,
+        "Applied {} HOST mesh colocation group(s) across {} host partition(s)",
+        target_groups.size(),
+        global_groups.size());
+}
+
 // Helper function to build ASIC positions to ASIC IDs map
 std::map<AsicPosition, std::set<tt::tt_metal::AsicID>> build_asic_positions_map(
     const ::tt::tt_fabric::AdjacencyGraph<tt::tt_metal::AsicID>& physical_graph, const TopologyMappingConfig& config) {
@@ -1039,6 +1170,8 @@ std::map<AsicPosition, std::set<tt::tt_metal::AsicID>> build_asic_positions_map(
             config, physical_graph, mesh_logical_level_graph, inter_mesh_constraints, {});
         add_logical_mesh_zero_anchor_inter_mesh_preference(
             config, physical_graph, mesh_logical_level_graph, {}, inter_mesh_constraints);
+        add_inter_mesh_colocation_pinning_constraints(
+            config, physical_graph, mesh_logical_level_graph, inter_mesh_constraints);
         return inter_mesh_constraints;
     }
 
@@ -1098,6 +1231,8 @@ std::map<AsicPosition, std::set<tt::tt_metal::AsicID>> build_asic_positions_map(
         config, physical_graph, mesh_logical_level_graph, inter_mesh_constraints, rank_bound_logical_to_physical);
     add_logical_mesh_zero_anchor_inter_mesh_preference(
         config, physical_graph, mesh_logical_level_graph, rank_bound_logical_to_physical, inter_mesh_constraints);
+    add_inter_mesh_colocation_pinning_constraints(
+        config, physical_graph, mesh_logical_level_graph, inter_mesh_constraints);
     return inter_mesh_constraints;
 }
 

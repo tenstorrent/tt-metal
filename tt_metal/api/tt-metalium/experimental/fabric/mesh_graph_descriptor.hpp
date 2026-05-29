@@ -37,7 +37,21 @@ enum RoutingDirection : int;
 class LogicalFabricNodeId;
 class PhysicalAsicPosition;
 class AsicPinning;
+class MeshColocationPinning;
 }  // namespace proto
+
+// Grouping within which two logical meshes can be colocated.
+// HOST: both meshes must map to physical ASICs that belong to the same physical host.
+// Additional grouping types (e.g. tray) can be added here as the proto enum is extended.
+enum class MeshColocationType : uint8_t { Host };
+
+// Relational constraint requesting that two logical meshes be colocated within a grouping (see
+// MeshColocationType). Transitive: pinning (A, B) and (B, C) forces A, B and C into one group.
+struct MeshColocationPinning {
+    MeshColocationType type = MeshColocationType::Host;
+    MeshId mesh_id_a;
+    MeshId mesh_id_b;
+};
 
 inline namespace v1_1 {
 using LocalNodeId = uint32_t;   // Scoped to parent (mesh_id, graph_id, device index)
@@ -215,6 +229,10 @@ public:
 
     const std::vector<std::pair<AsicPosition, FabricNodeId>>& get_pinnings() const { return pinnings_; }
 
+    // Mesh colocation pinnings: each entry instructs the solver to colocate two logical meshes
+    // within a grouping (e.g. the same host). See MeshColocationPinning / MeshColocationType.
+    const std::vector<MeshColocationPinning>& get_mesh_colocation_pinnings() const { return mesh_colocation_pinnings_; }
+
 private:
     // Descriptor fast lookup
     std::shared_ptr<const proto::MeshGraphDescriptor> proto_;
@@ -241,6 +259,7 @@ private:
     std::unordered_map<GlobalNodeId, std::vector<ConnectionId>> connections_by_source_device_id_;
 
     std::vector<std::pair<AsicPosition, FabricNodeId>> pinnings_;
+    std::vector<MeshColocationPinning> mesh_colocation_pinnings_;
 
     static void set_defaults(proto::MeshGraphDescriptor& proto);
     static std::vector<std::string> static_validate(
@@ -263,6 +282,8 @@ private:
     static void validate_graph_topology_and_connections(
         const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
     static void validate_pinnings(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
+    static void validate_mesh_colocation_pinnings(
+        const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
 
     static void validate_legacy_requirements(
         const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
@@ -275,6 +296,9 @@ private:
 
     // Populate Pinnings
     void populate_pinnings();
+
+    // Populate Mesh Colocation Pinnings
+    void populate_mesh_colocation_pinnings();
 
     // Populate Instances
     void populate_top_level_instance();

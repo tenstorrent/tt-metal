@@ -8,6 +8,9 @@
 #include <sstream>
 #include <filesystem>
 #include <algorithm>
+#include <map>
+#include <set>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <memory>
@@ -332,6 +335,7 @@ std::vector<std::string> MeshGraphDescriptor::static_validate(
         validate_graph_descriptors(proto, all_errors);
         validate_graph_topology_and_connections(proto, all_errors);
         validate_pinnings(proto, all_errors);
+        validate_mesh_colocation_pinnings(proto, all_errors);
         if (!all_errors.empty()) {
             return all_errors;
         }
@@ -359,6 +363,8 @@ void MeshGraphDescriptor::populate() {
     populate_connections();
 
     populate_pinnings();
+
+    populate_mesh_colocation_pinnings();
 }
 
 void MeshGraphDescriptor::populate_top_level_instance() {
@@ -1590,6 +1596,56 @@ void MeshGraphDescriptor::validate_pinnings(
         // Note: We can't fully validate chip_id range without knowing which mesh descriptor
         // corresponds to which mesh_id, but we can at least check that mesh_id is reasonable
         // More precise validation would require checking the top_level_instance structure
+    }
+}
+
+void MeshGraphDescriptor::populate_mesh_colocation_pinnings() {
+    mesh_colocation_pinnings_.clear();
+
+    // Extract mesh colocation pinnings from the top-level section
+    for (const auto& pinning : proto_->mesh_colocation_pinnings()) {
+        MeshColocationType type = MeshColocationType::Host;
+        switch (pinning.type()) {
+            case proto::MeshColocationPinning::HOST: type = MeshColocationType::Host; break;
+            default: TT_THROW("Invalid mesh colocation pinning type: {}", pinning.type()); break;
+        }
+        mesh_colocation_pinnings_.push_back(
+            MeshColocationPinning{type, MeshId{pinning.mesh_id_a()}, MeshId{pinning.mesh_id_b()}});
+    }
+}
+
+void MeshGraphDescriptor::validate_mesh_colocation_pinnings(
+    const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages) {
+    // Track duplicate pinnings (order-independent, per colocation type)
+    std::set<std::tuple<int, uint32_t, uint32_t>> seen_pairs;
+
+    for (const auto& pinning : proto.mesh_colocation_pinnings()) {
+        const int type = static_cast<int>(pinning.type());
+        uint32_t mesh_id_a = pinning.mesh_id_a();
+        uint32_t mesh_id_b = pinning.mesh_id_b();
+
+        if (pinning.type() == proto::MeshColocationPinning::INVALID_TYPE) {
+            error_messages.push_back(fmt::format(
+                "Mesh colocation pinning for meshes (mesh_id_a: {}, mesh_id_b: {}) has an invalid/unset colocation "
+                "type",
+                mesh_id_a,
+                mesh_id_b));
+            continue;
+        }
+
+        if (mesh_id_a == mesh_id_b) {
+            error_messages.push_back(fmt::format(
+                "Mesh colocation pinning references the same mesh twice (mesh_id: {}); the two meshes must be distinct",
+                mesh_id_a));
+            continue;
+        }
+
+        // Normalize so (a, b) and (b, a) are treated as duplicates
+        auto key = std::make_tuple(type, std::min(mesh_id_a, mesh_id_b), std::max(mesh_id_a, mesh_id_b));
+        if (!seen_pairs.insert(key).second) {
+            error_messages.push_back(fmt::format(
+                "Duplicate mesh colocation pinning for meshes (mesh_id_a: {}, mesh_id_b: {})", mesh_id_a, mesh_id_b));
+        }
     }
 }
 }  // namespace tt::tt_fabric

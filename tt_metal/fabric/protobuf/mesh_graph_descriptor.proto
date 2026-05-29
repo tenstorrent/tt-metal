@@ -62,6 +62,32 @@ message AsicPinning {
     PhysicalAsicPosition physical_asic_position = 2;
 }
 
+// -----------------------------------------------------------------------------
+// MeshColocationPinning
+// Instructs the topology solver to colocate two logical meshes.
+// Unlike AsicPinning (which pins a single logical fabric node to an exact ASIC position),
+// this is a relational constraint between two meshes: the solver must map both meshes to
+// physical ASICs that belong to the same grouping (e.g. host).
+//
+// Notes:
+// - mesh_id_a and mesh_id_b must be distinct and must refer to mesh instances in the MGD.
+// - The constraint is transitive: pinning (A, B) and (B, C) forces A, B and C onto one host.
+message MeshColocationPinning {
+    enum Type {
+        INVALID_TYPE = 0;
+        HOST = 1;
+    }
+
+    // Type of grouping within which the meshes are to be colocated.
+    Type type = 1;
+
+    // First logical mesh id (matches MeshRef.mesh_id of a mesh instance).
+    uint32 mesh_id_a = 2;
+
+    // Second logical mesh id (matches MeshRef.mesh_id of a mesh instance).
+    uint32 mesh_id_b = 3;
+}
+
 message MeshGraphDescriptor {
     // Reusable mesh templates (definitions) referenced by graphs and instances.
     // Required fields inside each MeshDescriptor: name, arch, device_topology.dims,
@@ -87,6 +113,10 @@ message MeshGraphDescriptor {
     // Top-level pinnings section (separate from descriptors and instances).
     // Maps logical fabric nodes to physical ASIC positions for pinning constraints.
     repeated AsicPinning pinnings = 5;
+
+    // Top-level mesh colocation pinnings (separate from descriptors and instances).
+    // Each entry instructs the solver to colocate two logical meshes.
+    repeated MeshColocationPinning mesh_colocation_pinnings = 6;
 }
 
 // -----------------------------------------------------------------------------

@@ -1106,6 +1106,81 @@ TEST_F(TopologyMapperUtilsTest, Pinning_MapMultiMeshToPhysical_MeshLevelPinnings
     }
 }
 
+// Mesh colocation pinnings: pin two logical meshes so they must map to physical meshes on the same host.
+TEST_F(TopologyMapperUtilsTest, MeshColocationPinning_HostType_PlacesPinnedMeshesOnSameHost) {
+    using namespace ::tt::tt_fabric;
+
+    // Logical topology: 3 meshes, each a 1x2 chain, connected in a line 0-1-2.
+    LogicalMultiMeshGraph logical;
+    std::map<MeshId, std::vector<FabricNodeId>> logical_nodes;
+    for (uint32_t mid = 0; mid < 3; ++mid) {
+        const MeshId m{mid};
+        logical_nodes[m] = {FabricNodeId(m, 0), FabricNodeId(m, 1)};
+        logical.mesh_adjacency_graphs_[m] = AdjacencyGraph<FabricNodeId>(build_chain_adjacency(logical_nodes[m]));
+    }
+    AdjacencyGraph<MeshId>::AdjacencyMap logical_mesh_level;
+    logical_mesh_level[MeshId{0}] = {MeshId{1}};
+    logical_mesh_level[MeshId{1}] = {MeshId{0}, MeshId{2}};
+    logical_mesh_level[MeshId{2}] = {MeshId{1}};
+    logical.mesh_level_graph_ = AdjacencyGraph<MeshId>(logical_mesh_level);
+
+    // Physical topology: 4 meshes, each a 1x2 chain, fully connected at the mesh level so any logical line embeds.
+    PhysicalMultiMeshGraph physical;
+    std::map<MeshId, std::vector<tt::tt_metal::AsicID>> physical_asics;
+    for (uint32_t pid = 0; pid < 4; ++pid) {
+        const MeshId p{pid};
+        physical_asics[p] = {tt::tt_metal::AsicID{1000 + pid * 10}, tt::tt_metal::AsicID{1001 + pid * 10}};
+        physical.mesh_adjacency_graphs_[p] =
+            AdjacencyGraph<tt::tt_metal::AsicID>(build_chain_adjacency(physical_asics[p]));
+    }
+    AdjacencyGraph<MeshId>::AdjacencyMap physical_mesh_level;
+    for (uint32_t a = 0; a < 4; ++a) {
+        for (uint32_t b = 0; b < 4; ++b) {
+            if (a != b) {
+                physical_mesh_level[MeshId{a}].push_back(MeshId{b});
+            }
+        }
+    }
+    physical.mesh_level_graph_ = AdjacencyGraph<MeshId>(physical_mesh_level);
+
+    // Hosts: hostA owns physical meshes 0 and 1; hostB owns physical meshes 2 and 3.
+    TopologyMappingConfig config;
+    config.disable_rank_bindings = true;
+    const std::map<std::string, std::set<MeshId>> host_to_physical_meshes = {
+        {"hostA", {MeshId{0}, MeshId{1}}},
+        {"hostB", {MeshId{2}, MeshId{3}}},
+    };
+    for (const auto& [hostname, phys_meshes] : host_to_physical_meshes) {
+        for (const auto& p : phys_meshes) {
+            for (const auto& asic : physical_asics[p]) {
+                config.hostname_to_asics[hostname].insert(asic);
+            }
+        }
+    }
+
+    // Pin logical meshes 1 and 2 to the same host.
+    config.mesh_colocation_pinnings.push_back(
+        ::tt::tt_fabric::MeshColocationPinning{::tt::tt_fabric::MeshColocationType::Host, MeshId{1}, MeshId{2}});
+
+    const auto result = map_multi_mesh_to_physical(logical, physical, config);
+    ASSERT_TRUE(result.success) << result.error_message;
+    verify_bidirectional_consistency(result);
+
+    // Resolve which host each logical mesh landed on (via its first fabric node's ASIC).
+    auto host_for_asic = [&](tt::tt_metal::AsicID asic) -> std::string {
+        for (const auto& [hostname, asics] : config.hostname_to_asics) {
+            if (asics.contains(asic)) {
+                return hostname;
+            }
+        }
+        return {};
+    };
+    const std::string host_mesh1 = host_for_asic(result.fabric_node_to_asic.at(logical_nodes[MeshId{1}][0]));
+    const std::string host_mesh2 = host_for_asic(result.fabric_node_to_asic.at(logical_nodes[MeshId{2}][0]));
+    EXPECT_FALSE(host_mesh1.empty());
+    EXPECT_EQ(host_mesh1, host_mesh2) << "Same-host pinned logical meshes 1 and 2 must land on the same host";
+}
+
 // =============================================================================
 // Failure Case Tests
 // =============================================================================

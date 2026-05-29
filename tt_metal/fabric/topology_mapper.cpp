@@ -470,10 +470,18 @@ void TopologyMapper::build_mapping(const Cluster& cluster) {
 
         // Extract pinnings from MGD and add to config (only if mesh graph descriptor is available)
         if (mesh_graph_.get_mesh_graph_descriptor_path().has_value()) {
-            const auto& pinnings = mesh_graph_.get_mesh_graph_descriptor().get_pinnings();
+            const auto& mgd = mesh_graph_.get_mesh_graph_descriptor();
+            const auto& pinnings = mgd.get_pinnings();
             for (const auto& [pos, fabric_node] : pinnings) {
                 config.pinnings.emplace_back(pos, fabric_node);
             }
+
+            // Extract mesh colocation pinnings from MGD (e.g. colocate two logical meshes on the same host)
+            const auto& mesh_colocation_pinnings = mgd.get_mesh_colocation_pinnings();
+            config.mesh_colocation_pinnings.insert(
+                config.mesh_colocation_pinnings.end(),
+                mesh_colocation_pinnings.begin(),
+                mesh_colocation_pinnings.end());
         }
 
         // Set per-mesh validation modes based on mesh graph policy
