@@ -61,11 +61,14 @@ def open_tt_device(device_id: int):
     os.environ.setdefault("TT_METAL_SLOW_DISPATCH_MODE", "1")
     if _should_use_local_mesh():
         dispatch_core_config = ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.WORKER)
-        return ttnn.open_mesh_device(
-            mesh_shape=ttnn.MeshShape(1, 1),
-            physical_device_ids=[device_id],
-            dispatch_core_config=dispatch_core_config,
-        )
+        try:
+            return ttnn.open_mesh_device(
+                mesh_shape=ttnn.MeshShape(1, 1),
+                physical_device_ids=[device_id],
+                dispatch_core_config=dispatch_core_config,
+            )
+        except RuntimeError:
+            pass
     return ttnn.open_device(device_id=device_id)
 
 
