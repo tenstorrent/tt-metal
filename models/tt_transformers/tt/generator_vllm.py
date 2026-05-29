@@ -158,10 +158,7 @@ class HybridAttentionForCausalLM(Generator):
         runner side can map each spec back to its model layer index.
         """
         from vllm.utils.torch_utils import STR_DTYPE_TO_TORCH_DTYPE
-
-        # SlidingWindowSpec import intentionally dropped; restore alongside the
-        # branch below when re-enabling kv cache groups.
-        from vllm.v1.kv_cache_interface import FullAttentionSpec
+        from vllm.v1.kv_cache_interface import FullAttentionSpec, SlidingWindowSpec
 
         model_config = vllm_config.model_config
         cache_config = vllm_config.cache_config
@@ -175,6 +172,7 @@ class HybridAttentionForCausalLM(Generator):
                 "hf_config.text_config.layer_types (one of 'full_attention' / "
                 "'sliding_attention' per layer); none found on this model"
             )
+        sliding_window = getattr(text_config, "sliding_window", None)
         num_kv_heads = model_config.get_num_kv_heads(vllm_config.parallel_config)
         head_size = model_config.get_head_size()
         dtype = (
@@ -191,24 +189,39 @@ class HybridAttentionForCausalLM(Generator):
             dtype=dtype,
         )
 
-        # SlidingWindowSpec is temporarily disabled: TT-side decode passes the
-        # absolute position to paged_update_cache / paged_sdpa_decode, but vLLM
-        # zero-pads the sliding group's page_table past sliding_window/block_size
-        # entries, so positions beyond the sliding window collapse onto physical
-        # block 0 and silently corrupt the cache. Emit FullAttentionSpec for every
-        # layer so vLLM allocates a max_model_len cache per layer; the SDPA op's
-        # own sliding_window_size kwarg still trims attention correctly on the
-        # read side.
+        # Hybrid KV cache groups: sliding-window layers get a SlidingWindowSpec so
+        # vLLM's hybrid manager bounds their per-request block budget to the window
+        # (allocating the full prompt for the one-shot prefill, then freeing and
+        # recycling out-of-window blocks for decode), while full-attention layers
+        # get a FullAttentionSpec.
+        #
+        # The TT ops index the per-layer page_table by ABSOLUTE position (logical
+        # indexing — NOT cache_position_modulo): vLLM's block table is logical-
+        # position-indexed, so paged_fill_cache/paged_update_cache write through the
+        # page_table to whatever (recycled) physical block backs that column, and the
+        # SDPA decode op's own sliding_window_size kwarg trims the read window. Out-
+        # of-window columns hold vLLM's null block and are never written past (decode)
+        # or read (SDPA). The ring-buffer cache_position_modulo path is intentionally
+        # left off here — it assumes a model-owned ring layout vLLM never produces.
         spec_per_layer = {}
         for i, lt in enumerate(layer_types):
             name = f"model.layers.{i}.self_attn"
-            if lt not in ("sliding_attention", "full_attention"):
+            if lt == "sliding_attention":
+                if sliding_window is None:
+                    raise ValueError(
+                        f"{cls.__name__}.get_kv_cache_spec: layer {i} is "
+                        "'sliding_attention' but hf_config.text_config.sliding_window "
+                        "is unset"
+                    )
+                spec_per_layer[name] = SlidingWindowSpec(**common, sliding_window=sliding_window)
+            elif lt == "full_attention":
+                spec_per_layer[name] = FullAttentionSpec(**common)
+            else:
                 raise ValueError(
                     f"Unsupported layer_type {lt!r} at layer {i} on "
                     f"{cls.__name__}; expected 'full_attention' or "
                     "'sliding_attention'"
                 )
-            spec_per_layer[name] = FullAttentionSpec(**common)
         return spec_per_layer
 
     def prefill_forward(self, *args, **kwargs):

@@ -37,26 +37,29 @@ def _make_vllm_config(layer_types, sliding_window=1024, num_kv_heads=8, head_siz
 
 
 def test_spec_emits_one_entry_per_layer():
-    """KV cache groups temporarily disabled: every layer is FullAttentionSpec
-    regardless of layer_types entry. Reverts to one uniform spec until the
-    bounded-sliding-cache decode bug is fixed."""
+    """Each layer maps to a spec matching its ``layer_types`` entry:
+    SlidingWindowSpec for sliding layers, FullAttentionSpec for full layers."""
     from vllm.v1.kv_cache_interface import FullAttentionSpec, SlidingWindowSpec
 
     from models.tt_transformers.tt.generator_vllm import HybridAttentionForCausalLM
 
     layers = ["sliding_attention"] * 5 + ["full_attention"] + ["sliding_attention"] * 5
-    spec = HybridAttentionForCausalLM.get_kv_cache_spec(_make_vllm_config(layers))
+    spec = HybridAttentionForCausalLM.get_kv_cache_spec(_make_vllm_config(layers, sliding_window=1024))
 
     assert len(spec) == len(layers)
-    for i in range(len(layers)):
+    for i, lt in enumerate(layers):
         name = f"model.layers.{i}.self_attn"
         assert name in spec
-        assert isinstance(spec[name], FullAttentionSpec)
-        assert not isinstance(spec[name], SlidingWindowSpec)
+        if lt == "sliding_attention":
+            assert isinstance(spec[name], SlidingWindowSpec)
+            assert spec[name].sliding_window == 1024
+        else:
+            assert isinstance(spec[name], FullAttentionSpec)
+            assert not isinstance(spec[name], SlidingWindowSpec)
 
 
 def test_spec_gemma3_27b_pattern():
-    """All layers are FullAttentionSpec while kv cache groups are disabled."""
+    """5:1 sliding:full pattern → 50 SlidingWindowSpec + 10 FullAttentionSpec."""
     from vllm.v1.kv_cache_interface import FullAttentionSpec, SlidingWindowSpec
 
     from models.tt_transformers.tt.generator_vllm import HybridAttentionForCausalLM
@@ -67,8 +70,8 @@ def test_spec_gemma3_27b_pattern():
 
     full_count = sum(isinstance(v, FullAttentionSpec) for v in spec.values())
     sliding_count = sum(isinstance(v, SlidingWindowSpec) for v in spec.values())
-    assert full_count == 60
-    assert sliding_count == 0
+    assert full_count == 10
+    assert sliding_count == 50
 
 
 def test_spec_gpt_oss_alternating_pattern():
@@ -81,8 +84,8 @@ def test_spec_gpt_oss_alternating_pattern():
 
     full_count = sum(isinstance(v, FullAttentionSpec) for v in spec.values())
     sliding_count = sum(isinstance(v, SlidingWindowSpec) for v in spec.values())
-    assert full_count == 24
-    assert sliding_count == 0
+    assert full_count == 12
+    assert sliding_count == 12
 
 
 def test_spec_uniform_full_attention_still_works():
