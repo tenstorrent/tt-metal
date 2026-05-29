@@ -78,12 +78,11 @@ void append_fabric_mux_connection_rt_args(
     tt::tt_metal::Program& program,
     std::vector<uint32_t>& worker_rt_args);
 
-// ProgramDescriptor (Contract-2) variant — same wire layout as the legacy helper
-// (17 args in the order listed above), but allocates the five worker-side
-// semaphores by pushing SemaphoreDescriptors onto desc.semaphores and writes
-// the resulting args into a KernelDescriptor::RTArgList so callers can feed
-// the list directly into KernelDescriptor::emplace_runtime_args. The legacy
-// Program& helper is preserved; consumers migrate one at a time.
+// ProgramDescriptor variant — same wire layout as the Program& overload above
+// (17 args in the order listed), allocates the five worker-side semaphores by
+// pushing SemaphoreDescriptors onto desc.semaphores, and writes the resulting
+// args into a KernelDescriptor::RTArgList so callers can feed the list directly
+// into KernelDescriptor::emplace_runtime_args.
 void append_fabric_mux_connection_rt_args(
     bool mux_connection_valid,
     const tt::tt_metal::CoreCoord& mux_virtual_core,

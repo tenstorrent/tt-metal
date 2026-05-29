@@ -749,17 +749,17 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
 }
 
 // ---------------------------------------------------------------------------
-// ProgramDescriptor (Contract-2) variant of
+// ProgramDescriptor variant of
 // build_ring_strided_reduce_scatter_async_program_artifacts.
 //
-// Mirrors the legacy Program& builder above and supports the same feature set
-// (fused-op signalers, addcmul fusion, sharded tensors), but emits all
-// kernels/CBs/semaphores via desc.{kernels,cbs,semaphores}.push_back instead
-// of CreateKernel / CreateCircularBuffer / CreateSemaphore.  Tensor base
-// addresses are bound via KernelDescriptor::emplace_runtime_args(Buffer*) so
-// the framework patches them every dispatch; GlobalSemaphore addresses ride
-// on the operation_attributes_t and are encoded as plain uint32_t (a
-// different GlobalSemaphore triggers a recompile, same as the legacy path).
+// Supports the full feature set (fused-op signalers, addcmul fusion, sharded
+// tensors).  Emits all kernels/CBs/semaphores via
+// desc.{kernels,cbs,semaphores}.push_back instead of CreateKernel /
+// CreateCircularBuffer / CreateSemaphore.  Tensor base addresses are bound via
+// KernelDescriptor::emplace_runtime_args(Buffer*) so the framework patches them
+// every dispatch; GlobalSemaphore addresses ride on the operation_attributes_t
+// and are encoded as plain uint32_t (a different GlobalSemaphore triggers a
+// recompile).
 //
 // The returned StridedReduceScatterProgramArtifacts uses
 // reader_kernel_id / writer_kernel_id as indices into desc.kernels.  The
@@ -1476,10 +1476,10 @@ void ring_strided_reduce_scatter_async_helper_override_runtime_arguments(
 // Implementations for the TMP namespace - wrappers to ttnn namespace functions
 namespace ttnn::operations::experimental::ccl::strided_reduce_scatter_async::detail {
 
-// Contract-2 Mesh Workload Factory implementation.  Per-coord ProgramDescriptors
-// are built via the ProgramDescriptor variant of the ring builder.  No
-// workload-scoped resources are needed -- GlobalSemaphores live on
-// operation_attributes (caller-allocated) and intermediate / output tensors are
+// Mesh Workload Factory implementation.  Per-coord ProgramDescriptors are built
+// via the ProgramDescriptor variant of the ring builder.  No workload-scoped
+// resources are needed -- GlobalSemaphores live on operation_attributes
+// (caller-allocated) and intermediate / output tensors are
 // supplied by the operation framework (create_output_tensors).
 tt::tt_metal::WorkloadDescriptor RingStridedReduceScatterMeshWorkloadFactory::create_workload_descriptor(
     const operation_attributes_t& operation_attributes,

@@ -783,10 +783,10 @@ void fabric_mux_connection_rt_args(
     std::vector<uint32_t>& worker_rt_args,
     std::optional<uint32_t> = std::nullopt);
 
-// ProgramDescriptor (Contract-2) variant of fabric_mux_connection_rt_args.
-// Mirrors the legacy Program& helper but allocates the five mux-side semaphores by
-// pushing SemaphoreDescriptors into desc.semaphores and recording their IDs into
-// worker_rt_args at the same positions. Semaphore IDs are obtained from
+// ProgramDescriptor variant of fabric_mux_connection_rt_args.
+// Allocates the five mux-side semaphores by pushing SemaphoreDescriptors into
+// desc.semaphores and recording their IDs into worker_rt_args at the same
+// positions. Semaphore IDs are obtained from
 // ProgramDescriptor::find_available_semaphore_id so they don't collide with IDs
 // already allocated on the same worker_logical_core. An optional
 // termination_master_semaphore_id can be supplied if the caller already owns one

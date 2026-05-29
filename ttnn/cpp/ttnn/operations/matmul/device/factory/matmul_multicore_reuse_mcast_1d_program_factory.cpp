@@ -4832,11 +4832,9 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
 }
 
 // ProgramDescriptor variant of process_gather_in0_program_and_create_override_variables.
-//
-// Mirrors the legacy helper's parameter list but drops the Program& output param —
-// instead it returns a ProgramDescriptor whose kernels/CBs/semaphores the caller can
-// append onto its own descriptor (same model as create_program_mcast_in0_descriptor
-// and create_program_mcast_in1_descriptor above).
+// Returns a ProgramDescriptor whose kernels/CBs/semaphores the caller can append
+// onto its own descriptor (same model as create_program_mcast_in0_descriptor and
+// create_program_mcast_in1_descriptor above).
 //
 // The gather_in0 path is the one used by the CCL+matmul fused callers
 // (llama_reduce_scatter_matmul, rs_matmul_op, all_gather_matmul_async) — those
@@ -4849,9 +4847,9 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
 constexpr uint32_t kNumSemaphoresPerCore = 16;
 
 // Allocate `count` contiguous free semaphore ids on the given CoreRangeSet against an
-// existing ProgramDescriptor.  Mirrors the legacy CreateSemaphore behaviour (pick first
-// free id whose slot is unused on every requested core), but in a block so callers can
-// reserve a stable [base, base+count) range to hand to the matmul helpers below.
+// existing ProgramDescriptor.  Picks the first free id whose slot is unused on every
+// requested core, in a block so callers can reserve a stable [base, base+count) range
+// to hand to the matmul helpers below.
 static uint32_t allocate_free_semaphore_id_block(
     const tt::tt_metal::ProgramDescriptor& desc,
     const tt::tt_metal::CoreRangeSet& cores,

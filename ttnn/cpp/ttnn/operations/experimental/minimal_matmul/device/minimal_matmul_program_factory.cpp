@@ -857,13 +857,13 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
 }
 
 // ---------------------------------------------------------------------------
-// ProgramDescriptor (Contract-2) variant of minimal_matmul_factory_helper_common.
+// ProgramDescriptor variant of minimal_matmul_factory_helper_common.
 //
-// Mirrors the legacy Program& helper above and supports the same feature set
-// (matmul fused-op signalers for AG->MM and MM->RS, bias, fused unary
-// activation, fused ternary addcmul inputs, N_chunks splitting), but emits all
-// kernels / CBs / semaphores via desc.{kernels,cbs,semaphores}.push_back
-// instead of CreateKernel / CreateCircularBuffer / CreateSemaphore.
+// Supports the full feature set (matmul fused-op signalers for AG->MM and
+// MM->RS, bias, fused unary activation, fused ternary addcmul inputs, N_chunks
+// splitting).  Emits all kernels / CBs / semaphores via
+// desc.{kernels,cbs,semaphores}.push_back instead of CreateKernel /
+// CreateCircularBuffer / CreateSemaphore.
 //
 // Tensor base addresses are bound via KernelDescriptor::emplace_runtime_args(
 // Buffer*) so the framework patches them every dispatch -- no

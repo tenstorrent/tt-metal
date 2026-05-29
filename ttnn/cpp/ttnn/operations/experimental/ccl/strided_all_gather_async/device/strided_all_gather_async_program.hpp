@@ -58,14 +58,14 @@ struct StridedAllGatherAsyncProgramFactory {
         std::optional<uint32_t> mm_block_wt,
         CoreCoord core_grid_offset = CoreCoord(0, 0));
 
-    // ProgramDescriptor (Contract-2) variant of strided_all_gather_async_minimal_default_helper.
+    // ProgramDescriptor variant of strided_all_gather_async_minimal_default_helper.
     //
-    // Mirrors the legacy Program& helper but appends KernelDescriptors /
-    // CBDescriptors / SemaphoreDescriptors to `desc` instead of creating them
-    // directly on a Program.  Runtime args for the input/output tensors are
-    // emplaced through KernelDescriptor::emplace_runtime_args(Buffer*) so the
-    // framework's fast cache-hit path patches their base addresses every
-    // dispatch -- no override_runtime_arguments hook is needed for tensor addrs.
+    // Appends KernelDescriptors / CBDescriptors / SemaphoreDescriptors to `desc`
+    // instead of creating them directly on a Program.  Runtime args for the
+    // input/output tensors are emplaced through
+    // KernelDescriptor::emplace_runtime_args(Buffer*) so the framework's fast
+    // cache-hit path patches their base addresses every dispatch -- no
+    // override_runtime_arguments hook is needed for tensor addrs.
     //
     // GlobalSemaphore addresses (in `semaphore`) remain stable for the workload
     // lifetime (parked on workload_descriptor.semaphores by the caller) and are

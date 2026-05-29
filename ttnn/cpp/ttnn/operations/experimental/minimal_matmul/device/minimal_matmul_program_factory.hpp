@@ -68,17 +68,16 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     const std::optional<const Tensor>& fused_ternary_input_b = std::nullopt,
     std::optional<ttnn::experimental::ccl::StridedReduceScatterFusedOpSignaler> srs_fused_op_signaler = std::nullopt);
 
-// ProgramDescriptor (Contract-2) variant of minimal_matmul_factory_helper_common.
+// ProgramDescriptor variant of minimal_matmul_factory_helper_common.
 //
-// Mirrors the legacy Program& helper above and emits all kernels / CBs /
-// semaphores via desc.{kernels,cbs,semaphores}.push_back instead of
-// CreateKernel / CreateCircularBuffer / CreateSemaphore.  Tensor base
-// addresses are bound through KernelDescriptor::emplace_runtime_args(Buffer*)
-// so the framework patches them every dispatch -- no override_runtime_arguments
-// hook is needed for tensor addrs.  GlobalSemaphore addresses (when present in
-// the StridedReduceScatterFusedOpSignaler) are encoded as plain uint32_t
-// (same behavior as the legacy path; a different GlobalSemaphore triggers a
-// recompile).
+// Emits all kernels / CBs / semaphores via
+// desc.{kernels,cbs,semaphores}.push_back instead of CreateKernel /
+// CreateCircularBuffer / CreateSemaphore.  Tensor base addresses are bound
+// through KernelDescriptor::emplace_runtime_args(Buffer*) so the framework
+// patches them every dispatch -- no override_runtime_arguments hook is needed
+// for tensor addrs.  GlobalSemaphore addresses (when present in the
+// StridedReduceScatterFusedOpSignaler) are encoded as plain uint32_t; a
+// different GlobalSemaphore triggers a recompile.
 //
 // Same feature set as the legacy helper: matmul fused-op signalers
 // (MinimalMatmulFusedOpSignaler for AG->MM and StridedReduceScatterFusedOpSignaler

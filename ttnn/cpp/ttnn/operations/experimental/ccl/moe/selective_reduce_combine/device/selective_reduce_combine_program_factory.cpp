@@ -139,12 +139,10 @@ void add_termination_master_rt_args(
     }
 }
 
-// ProgramDescriptor (Contract-2) variant of launch_mux_workers above.
-// Mirrors the legacy helper but appends the mux kernel onto the caller's
-// ProgramDescriptor (with its runtime args baked in per logical core) instead
-// of issuing imperative CreateKernel / SetRuntimeArgs calls.  The returned
-// per-link mesh-coord->virtual-core maps and the FabricMuxConfig are identical
-// to the legacy helper; the kernel index is the position of the appended
+// ProgramDescriptor variant of launch_mux_workers above.
+// Appends the mux kernel onto the caller's ProgramDescriptor (with its runtime
+// args baked in per logical core) instead of issuing imperative CreateKernel /
+// SetRuntimeArgs calls.  The kernel index is the position of the appended
 // KernelDescriptor in desc.kernels.
 auto launch_mux_workers_descriptor(
     const MeshDevice& mesh_device,

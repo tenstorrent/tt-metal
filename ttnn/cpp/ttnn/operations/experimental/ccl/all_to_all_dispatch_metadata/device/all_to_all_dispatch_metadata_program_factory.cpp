@@ -27,13 +27,12 @@ namespace ttnn::operations::experimental::ccl {
 
 namespace detail {
 
-// ProgramDescriptor (Contract-2) variant of the legacy launch_mux_workers.
+// ProgramDescriptor variant of launch_mux_workers.
 // Appends a mux KernelDescriptor onto `desc` (with its runtime args baked in
 // per logical core via emplace_runtime_args) instead of issuing imperative
-// CreateKernel / SetRuntimeArgs calls.  Returns the same triple as the legacy
-// helper -- (mux_kernel_index, mux_kernel_config, per-link
-// mesh-coord->virtual-core maps) -- with the kernel handle being the index of
-// the appended KernelDescriptor in desc.kernels.
+// CreateKernel / SetRuntimeArgs calls.  Returns (mux_kernel_index,
+// mux_kernel_config, per-link mesh-coord->virtual-core maps); the kernel
+// handle is the index of the appended KernelDescriptor in desc.kernels.
 auto launch_mux_workers_descriptor(
     const MeshDevice& mesh_device,
     const CoreRangeSet& mux_core_range_set,

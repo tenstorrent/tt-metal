@@ -1604,8 +1604,7 @@ void line_reduce_scatter_minimal_async_helper_override_runtime_arguments(
 }
 
 // ProgramDescriptor variant of build_ring_reduce_scatter_minimal_async_program_artifacts.
-// Mirrors the legacy Program& builder's structure exactly; only the resource-creation calls are
-// translated:
+// Resource creation maps as:
 //   - CreateCircularBuffer  -> push CBDescriptor onto desc.cbs
 //   - CreateKernel          -> push KernelDescriptor onto desc.kernels
 //   - SetRuntimeArgs        -> KernelDescriptor::emplace_runtime_args (Buffer* binding for the
@@ -2208,14 +2207,12 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
 }
 
 // ProgramDescriptor variant of build_line_reduce_scatter_minimal_async_program_artifacts.
-// Mirrors the legacy Program& builder's structure exactly; only the resource-creation calls are
-// translated:
+// Resource creation maps as:
 //   - CreateCircularBuffer  -> push CBDescriptor onto desc.cbs
 //   - CreateKernel          -> push KernelDescriptor onto desc.kernels
 //   - CreateSemaphore       -> push SemaphoreDescriptor onto desc.semaphores (with an id allocated
-//                              via ProgramDescriptor::find_available_semaphore_id; legacy
-//                              CreateSemaphore returns the same id space, which the kernel side
-//                              looks up via get_semaphore(id))
+//                              via ProgramDescriptor::find_available_semaphore_id; the kernel side
+//                              looks up the same id space via get_semaphore(id))
 //   - SetRuntimeArgs        -> KernelDescriptor::emplace_runtime_args (Buffer* binding for the
 //                              fast cache-hit path)
 //   - fused_op_signaler->init_reduce_scatter / append_fabric_mux_connection_rt_args /
@@ -3118,7 +3115,7 @@ void line_reduce_scatter_minimal_async_helper_override_runtime_arguments(
         output);
 }
 
-// Mesh Workload Factory implementations (Contract-2)
+// Mesh Workload Factory implementations
 tt::tt_metal::WorkloadDescriptor RingReduceScatterMeshWorkloadFactory::create_workload_descriptor(
     const ReduceScatterMinimalAsyncParams& operation_attributes,
     const ReduceScatterMinimalAsyncInputs& tensor_args,

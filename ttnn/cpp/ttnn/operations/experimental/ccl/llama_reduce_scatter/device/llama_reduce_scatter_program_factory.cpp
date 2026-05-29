@@ -245,8 +245,8 @@ CoreRangeSet get_worker_cores(const CoreRangeSet& available_cores, const uint32_
 
 }  // namespace detail
 
-// Contract-2 workload builder.  Builds one ProgramDescriptor per mesh coord
-// via create_at_program_processing_descriptor (no fused-op signaler needed).
+// Workload builder.  Builds one ProgramDescriptor per mesh coord via
+// create_at_program_processing_descriptor (no fused-op signaler needed).
 // No workload-scoped resources beyond what the caller supplied; the
 // cross_device_semaphore in operation_attributes is the only external
 // semaphore and remains owned by the caller.
@@ -834,7 +834,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
 }
 
 // Returns-fresh-ProgramDescriptor variant.  Builds an empty descriptor and
-// forwards to the append-style overload below.  Used by Contract-2 callers
+// forwards to the append-style overload below.  Used by callers
 // (LlamaReduceScatterAdd::create_workload_descriptor) that build one isolated
 // ProgramDescriptor per mesh coord.
 tt::tt_metal::ProgramDescriptor

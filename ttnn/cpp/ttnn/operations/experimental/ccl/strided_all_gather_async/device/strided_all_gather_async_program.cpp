@@ -666,11 +666,10 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
         num_cores_per_link};
 }
 
-// ProgramDescriptor (Contract-2) variant of strided_all_gather_async_minimal_default_helper.
-// Mirrors the legacy builder body but appends descriptors instead of creating
-// kernels/CBs/semaphores directly on a Program.  Runtime args are emplaced
-// with Buffer* entries for the input/output tensors so the framework's fast
-// cache-hit path patches their base addresses.
+// ProgramDescriptor variant of strided_all_gather_async_minimal_default_helper.
+// Appends descriptors instead of creating kernels/CBs/semaphores directly on a
+// Program.  Runtime args are emplaced with Buffer* entries for the input/output
+// tensors so the framework's fast cache-hit path patches their base addresses.
 //
 // Sub-helpers used (descriptor overload available on this branch):
 //   - StridedAllGatherFusedOpSignaler::init_all_gather(ProgramDescriptor&, ...)

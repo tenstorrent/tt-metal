@@ -32,12 +32,10 @@ ttnn::prim::matmul_mcast_1d_common_override_variables_t matmul_multi_core_agmm_f
 
 // ProgramDescriptor-flavored variant of matmul_multi_core_agmm_fusion_helper.
 //
-// Mirrors the legacy helper's argument list but drops the Program& output param —
-// kernels / CBs / semaphores are appended onto the caller-supplied
+// Kernels / CBs / semaphores are appended onto the caller-supplied
 // ProgramDescriptor (same shape as matmul_multi_core_reuse_mcast_1d_optimized_helper_descriptor).
 // Only the gather_in0 path of MatmulMultiCoreReuseMultiCast1DProgramConfig is supported:
-// the legacy helper TT_FATALs if mcast_in0 is set or gather_in0 is false, and the descriptor
-// variant preserves that constraint.
+// TT_FATAL fires if mcast_in0 is set or gather_in0 is false.
 //
 // This is a llama-specific fork of the gather_in0 builder: the in0 reader does a 4-step
 // multicast (chunks indexed via the CCL fused-op ring) instead of the ring-hop topology used

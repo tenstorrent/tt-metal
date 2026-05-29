@@ -1896,11 +1896,10 @@ void fabric_mux_connection_rt_args(
     worker_rt_args.push_back(termination_master_virtual_core.y);                   // termination_master_noc_y 16
 }
 
-// ProgramDescriptor (Contract-2) variant — mirrors the legacy Program& helper above.
-// Allocates the same five mux-side semaphores by pushing SemaphoreDescriptors into
-// desc.semaphores and recording their IDs into worker_rt_args. The arg-vector
-// layout (positions 0..16) is identical to the legacy helper so worker kernels
-// are byte-compatible across the two variants.
+// ProgramDescriptor overload — allocates the same five mux-side semaphores by
+// pushing SemaphoreDescriptors into desc.semaphores and recording their IDs
+// into worker_rt_args. The arg-vector layout (positions 0..16) matches the
+// Program& overload so worker kernels are byte-compatible across both.
 void fabric_mux_connection_rt_args(
     const bool mux_connection_valid,
     const bool is_termination_master,
