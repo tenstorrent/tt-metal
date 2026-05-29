@@ -273,18 +273,79 @@ def generate_report(
         _raw_log.unlink()
         logger.info("Deleted raw device log (cpp_device_perf_report.csv present)")
 
-    # When C++ post-processing is active, TTNN does NOT emit Tracy messages, so
-    # the Tracy binary export (TRACY_CSVEXPROT_TOOL -m) produces an empty file and
-    # import_tracy_op_logs returns no ops.  Skip the entire binary export pipeline
-    # (which produces a 20 GB CSV that takes 35 min to read) and instead generate
-    # ops_perf_results_*.csv directly from the compact C++ report.
     if _cpp_report.is_file():
-        _generate_report_from_cpp_device_perf(logsFolder, Path(outputFolder), nameAppend)
-        # Drain the Tracy binary from /dev/shm so the capture process can exit cleanly.
+        # When the compact C++ device report is present, the full Tracy binary export
+        # would produce a 20 GB timing-zones CSV (171 M rows) that takes 35 min to
+        # read.  Instead we export ONLY the Tracy user messages (-m), which contain
+        # the TTNN op metadata JSON (shapes, dtypes, math_fidelity, memory layout).
+        # These messages are typically a few MB and parse in seconds.
+        # The timing-zones export (-u -p TT_) is skipped entirely; device kernel
+        # durations come from cpp_device_perf_report.csv instead.
         shm_binary = Path(f"/dev/shm/tracy_capture_{os.getpid()}.tracy")
-        if shm_binary.exists():
-            shm_binary.unlink()
-            logger.info(f"Deleted Tracy binary {shm_binary} (not needed in C++ mode)")
+        tracyOutFile = shm_binary if shm_binary.exists() else logsFolder / TRACY_FILE_NAME
+
+        # Wait briefly for capturetool to finalise the binary.
+        timeOut = 15
+        timeCount = 0
+        while not tracyOutFile.exists():
+            logger.warning("Tracy binary not found yet, retrying in 1 s...")
+            if timeCount > timeOut:
+                logger.error(f"Tracy binary {tracyOutFile} was not generated.")
+                break
+            timeCount += 1
+            time.sleep(1)
+
+        if tracyOutFile.exists():
+            # Export only messages (op metadata JSON) — fast, typically KB–MB.
+            msgs_path = logsFolder / TRACY_OPS_DATA_FILE_NAME
+            with open(msgs_path, "w") as f:
+                subprocess.run(
+                    f'{binFolder / TRACY_CSVEXPROT_TOOL} -m -s ";" {tracyOutFile}',
+                    shell=True,
+                    stdout=f,
+                    stderr=subprocess.DEVNULL,
+                )
+            logger.info(f"Op metadata messages exported ({msgs_path.stat().st_size} bytes)")
+
+            # Write an empty times file so import_tracy_op_logs does not return early.
+            # Host timing is not needed; device timing comes from cpp_device_perf_report.csv.
+            times_path = logsFolder / TRACY_OPS_TIMES_FILE_NAME
+            with open(times_path, "w") as f:
+                f.write(
+                    "name,src_file,src_line,zone_name,zone_text,ns_since_start,exec_time_ns,thread,special_parent_text\n"
+                )
+
+            # Delete the binary — it is no longer needed and occupies RAM.
+            tracyOutFile.unlink()
+            logger.info(f"Deleted Tracy binary {tracyOutFile} after message export")
+
+            # Run the standard pipeline:
+            #  import_tracy_op_logs reads the messages → builds ops dict with real metadata
+            #  _enrich_ops_from_perf_csv merges with cpp_device_perf_report.csv for timing
+            #  generate_reports writes ops_perf_results_*.csv with full shape/dtype/fidelity
+            process_ops(
+                outputFolder,
+                nameAppend,
+                True,
+                device_only=False,
+                analyze_noc_traces=collect_noc_traces,
+                device_analysis_types=device_analysis_types,
+                force_legacy_device_logs=False,
+            )
+
+            # Check if process_ops produced a report; if not (messages were empty),
+            # fall back to the fast path that uses placeholders.
+            from .common import generate_reports_folder
+
+            report_folder = generate_reports_folder(Path(outputFolder))
+            if report_folder.exists() and any(report_folder.iterdir()):
+                return  # Success — real metadata in the CSV.
+
+        logger.warning(
+            "Tracy messages were empty or binary not found — "
+            "falling back to fast C++ report (shapes/dtypes will be placeholders)."
+        )
+        _generate_report_from_cpp_device_perf(logsFolder, Path(outputFolder), nameAppend)
         return
 
     process_ops(
