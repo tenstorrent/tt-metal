@@ -71,14 +71,26 @@ Status meanings:
    `status="blocked"`.
 3. **Capture tracy data for THIS block in isolation** before deciding
    anything. Build (or reuse) `tt/profile_<block>.py` if a per-block
-   harness doesn't exist. Run it under tracy with production weights
-   and production input shapes — NOT the reduced-config seed=0 PCC
-   harness, which has unrepresentative shapes. The CSV at
-   `generated/profiler/.logs/cpp_device_perf_report.csv` is the
-   authoritative evidence for what's hot in this block.
+   harness doesn't exist. Run it under tracy (`-p -v -r
+   --op-support-count 20000`) with production weights and the
+   **model-determined input size** — NOT the reduced-config seed=0 PCC
+   harness, and NOT a toy/cropped input. The host-vs-device bound FLIPS
+   with input size: a toy input is often dispatch-bound (trace helps) while
+   the real workload is compute-bound (trace ≈ 0%), and the real hotspots
+   only appear at the real size. The CSV at
+   `generated/profiler/reports/<ts>/ops_perf_results_*.csv` is the
+   evidence — but see step 4 on its limits.
 4. **Identify the top hotspot** from the CSV. Report its op-code and
-   its share of the block's total device kernel time. This must be
-   included in the result JSON as `top_hotspot`.
+   its share of the block's total device kernel time as `top_hotspot`.
+   CAVEAT: tracy's traced-op CSV can mislabel/inflate fused ops (SDPA may
+   appear as `MatmulDeviceOperation` with an inflated duration; a slow
+   downstream matmul can be misattributed). Before optimizing a surprising
+   hotspot, CONFIRM it: re-time the suspect op in isolation with
+   PREALLOCATED inputs (never `from_torch` inside the loop) at its real
+   in-context memory_config. If the fused block's wall time ≫ Σ(its
+   components timed individually), it's a layout-interaction stall (a big
+   tensor crossing L1/DRAM into a matmul), not a slow kernel — see the
+   optimization skill's "NEVER pin a LARGE activation to L1".
 5. Invoke `Skill(optimization)` and follow its instructions to apply
    ONE targeted change driven by the tracy data: fuse / shard /
    precision / memory placement, picked from the patterns documented

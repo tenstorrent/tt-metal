@@ -109,18 +109,29 @@ delivered a win.
 5. Build `tt/profile_<use_case>.py` if not present. The harness MUST
    support `--traced` and exercise the trace lifetime that was selected
    in sub-pass 1.
-6. **Profile under tracy with `--traced` ENABLED**. On the untraced
-   path host dispatch is ~80% of wall and every device op looks
-   small (<5% of wall) — that's the symptom that motivated trace,
-   not evidence against op-level work. Sub-pass 2 measurements ARE
-   INVALID on the untraced path. Only the traced-path tracy CSV is
-   acceptable evidence for this sub-pass.
+6. **Profile under tracy with `--traced` ENABLED** (and
+   `--op-support-count 20000`, else the host↔device merge can crash on
+   traced ops). On the untraced path host dispatch is ~80% of wall and
+   every device op looks small (<5% of wall) — that's the symptom that
+   motivated trace, not evidence against op-level work. Sub-pass 2
+   measurements ARE INVALID on the untraced path. Profile at the
+   **model-determined input size** (real prompt/image, full layers) — the
+   host-vs-device bound flips with input size, and the real hotspots only
+   appear at the real workload.
 7. Identify the top device-kernel hotspots from the TRACED tracy CSV.
    Build a top-10 table by `total device kernel time per step` (not
-   call count). Report it.
-8. Apply ONE targeted optimization (sharding the largest matmul,
-   fusing a hot LN+Linear chain, lowering precision on a
-   non-PCC-sensitive matmul — see `skills/optimization/SKILL.md`).
+   call count). Report it. CAVEAT: tracy's traced-op CSV can
+   mislabel/inflate fused ops (SDPA shown as `MatmulDeviceOperation`,
+   inflated durations) — confirm a surprising hotspot against an
+   isolated preallocated-input wall-clock bench before acting; and if a
+   whole stage's wall ≫ Σ(its op kernel times), suspect a layout/L1
+   stall, not a slow kernel (see optimization skill).
+8. Apply ONE targeted optimization. Common high-leverage levers proven
+   across models (see `skills/optimization/SKILL.md`): SDPA q256/k512
+   chunking (prefill AND vision), fused `rotary_embedding`, native GQA in
+   SDPA (drop repeat_kv), bf8+HiFi2 SDPA for VLM vision, lm_head
+   last-token slice in prefill, large-seq activation in DRAM (not L1),
+   sharding the largest matmul, fusing a hot LN+Linear chain.
 9. Re-validate: ALL of the use case's e2e tests still pass the parity
    gate; touched blocks still PCC > 0.99; and rerun the OTHER use
    cases' e2e tests too if your change touched shared infrastructure
