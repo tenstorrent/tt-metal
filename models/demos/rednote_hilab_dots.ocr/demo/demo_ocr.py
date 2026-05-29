@@ -14,7 +14,7 @@ The demo can ALSO run the HuggingFace reference path -- the real
 
 Usage::
 
-    python demo_ocr.py --image demo/sample_ocr.png --prompt "Read the text." \
+    python demo_ocr.py --image demo/demo_image1.jpg --prompt "Read the text." \
         --lm-layers 2 --vision-layers 2 --max-new-tokens 16 --reference
 
 Notes:
@@ -157,7 +157,7 @@ def run_hf_reference(input_ids, pixel_values, grid_thw, lm_layers, vision_layers
 
 def main():
     ap = argparse.ArgumentParser(description="dots.ocr OCR demo (image -> text)")
-    ap.add_argument("--image", default=os.path.join(_HERE, "sample_ocr.png"))
+    ap.add_argument("--image", default=os.path.join(_HERE, "demo_image1.jpg"))
     ap.add_argument("--prompt", default="Read the text in the image.")
     ap.add_argument("--lm-layers", type=int, default=2)
     ap.add_argument("--vision-layers", type=int, default=2)

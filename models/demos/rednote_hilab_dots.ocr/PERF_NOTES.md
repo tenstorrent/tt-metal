@@ -1,8 +1,31 @@
 # dots.ocr — Pipeline Perf Notes (ocr use_case)
 
 Phase: `use_cases.ocr.perf`. Device: **p150 (Blackhole)**, arch `blackhole`.
-Branch: `ssinghal/seamless-m4t`. Sample image: `demo/sample_ocr.png` ("HELLO 2026").
-Prompt: "Read the text in the image."
+Branch: `ssinghal/seamless-m4t`. Real-world workload: `demo/demo_image1.jpg`
+(1700×2250 full document page, model-determined resolution, no cap).
+Real test: `tests/test_dots_ocr_inference.py`.
+
+## Real-workload characterization (full-res `demo_image1.jpg`)
+
+Profiled via `tt/profile_ocr_traced.py --image demo/demo_image1.jpg` under
+`python3 -m tracy -p -v -r`. Input: **19,520 vision patches, 4,897-token
+prefill**. Per-stage wall (warm, p50 over 3 replays), real weights, 28 LM /
+42 vision layers:
+
+| stage | untraced | traced | trace speedup |
+|-------|----------|--------|---------------|
+| vision (42 L) | 3218 ms | 3252 ms | **0.99×** |
+| LM prefill (28 L) | 1427 ms | 1426 ms | **1.00×** |
+| decode / step | — | 16.5 ms | — |
+| **e2e** | 4695 ms | 4720 ms | 0.99× → `**TABLE II**` |
+
+**Key finding:** at real resolution vision (≈69% of e2e) and prefill (≈30%) are
+**compute-bound — metal trace gives 0%** (it only helped on the 256×96 synthetic
+toy image, which was dispatch-bound). The optimization lever is op-level compute
+efficiency in the **vision encoder** (windowed SDPA + matmuls over ~19.5k
+patches), not trace/dispatch. The earlier "prefill matmul needs DRAM-sharding"
+diagnosis was a benchmark artifact (input re-uploaded inside the timing loop);
+isolated MLP matmuls with preallocated inputs are sub-1.3 ms.
 
 ## Headline
 
@@ -62,8 +85,8 @@ token matches at every step**, and the cached sequence `[50712,1593,220,17,15,17
 
 ### Full-depth e2e (the real OCR deliverable)
 
-`tests/test_e2e_ocr.py` now defaults to **28 LM / 42 vision** with a **meaningful
-gate** (char accuracy ≥ 0.5 at full depth, not the old "≥ 0.0" no-op):
+`tests/test_dots_ocr_inference.py` (the real-world test, full document image)
+runs at **28 LM / 42 vision** with a meaningful accuracy gate (`HF - 1.0`):
 
 ```
 [e2e ocr] LM_LAYERS=28 VISION_LAYERS=42 max_new_tokens=12

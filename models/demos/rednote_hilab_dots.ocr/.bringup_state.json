@@ -928,8 +928,7 @@
         "artifacts": [
           "models/demos/rednote_hilab_dots.ocr/tt/ocr_model.py",
           "models/demos/rednote_hilab_dots.ocr/demo/demo_ocr.py",
-          "models/demos/rednote_hilab_dots.ocr/demo/sample_ocr.png",
-          "models/demos/rednote_hilab_dots.ocr/tests/test_e2e_ocr.py"
+          "models/demos/rednote_hilab_dots.ocr/tests/test_dots_ocr_inference.py"
         ],
         "notes": "image->text AR pipeline (vision tower + scatter@151665 + Qwen2 LM trunk, greedy decode) validated at reduced 2 LM / 2 vision layers vs HF DotsOCRForCausalLM at same depth; e2e passes accuracy gate HF-1.0. First 3 tokens match HF exactly; full 28/42 depth deferred for perf.",
         "accuracy": 0.3462,

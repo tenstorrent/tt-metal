@@ -66,7 +66,7 @@ def p50(xs):
 
 def main():
     ap = argparse.ArgumentParser(description="dots.ocr traced-decode step decomposition")
-    ap.add_argument("--image", default=os.path.join(_DEMO_DIR, "sample_ocr.png"))
+    ap.add_argument("--image", default=os.path.join(_DEMO_DIR, "demo_image1.jpg"))
     ap.add_argument("--prompt", default="Read the text in the image.")
     ap.add_argument("--lm-layers", type=int, default=28)
     ap.add_argument("--vision-layers", type=int, default=42)

@@ -4,7 +4,7 @@
 """Warm, post-trace OCR inference perf for rednote-hilab/dots.ocr (p150/blackhole).
 
 Measures the real production OCR pipeline at FULL depth (28 LM / 42 vision layers)
-on ``demo/sample_ocr.png``:
+on ``demo/demo_image1.jpg``:
 
   1. host patch_embed         (Conv2d + RMSNorm on host)
   2. vision encoder (42L)     (TtVisionTower forward, once per image)
@@ -59,7 +59,7 @@ def _load_by_path(name, filename, directory):
 
 def main():
     ap = argparse.ArgumentParser(description="dots.ocr warm OCR inference perf (traced decode)")
-    ap.add_argument("--image", default=os.path.join(_DEMO_DIR, "sample_ocr.png"))
+    ap.add_argument("--image", default=os.path.join(_DEMO_DIR, "demo_image1.jpg"))
     ap.add_argument("--prompt", default="Read the text in the image.")
     ap.add_argument("--lm-layers", type=int, default=28)
     ap.add_argument("--vision-layers", type=int, default=42)

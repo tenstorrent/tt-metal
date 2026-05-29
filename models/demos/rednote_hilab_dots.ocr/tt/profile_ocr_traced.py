@@ -60,7 +60,7 @@ def _load_by_path(name, filename, directory):
 
 def main():
     ap = argparse.ArgumentParser(description="dots.ocr warm OCR perf with vision+prefill+decode all traced")
-    ap.add_argument("--image", default=os.path.join(_DEMO_DIR, "sample_ocr.png"))
+    ap.add_argument("--image", default=os.path.join(_DEMO_DIR, "demo_image1.jpg"))
     ap.add_argument("--prompt", default="Read the text in the image.")
     ap.add_argument("--lm-layers", type=int, default=28)
     ap.add_argument("--vision-layers", type=int, default=42)
