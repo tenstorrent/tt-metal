@@ -10,9 +10,9 @@ Blackhole Loudbox (1×8 mesh).
 
 This folder contains an experimental Tenstorrent (`ttnn`) port of **Mistral [Devstral-2-123B-Instruct-2512](https://huggingface.co/mistralai/Devstral-2-123B-Instruct-2512)** (Ministral3 text stack). PCC tests compare subgraphs and the full model against HuggingFace references.
 
-**Full-model PCC:** End-to-end parity for the whole TT stack (`TtMinistral3Model`, all decoder layers) is measured in `tests/test_ministral3_model_pcc.py` — **~0.98 PCC** on both the full-sequence **prefill** path and the single-token **decode** step (after 128-token KV fill).
+**Full-model PCC:** End-to-end parity for the whole TT stack (`TtMinistral3Model`, all decoder layers) is measured in `tests/test_ministral3_full_model.py` — **~0.98 PCC** on the single-token **decode** step (after 128-token KV prefill).
 
-**Maximum context length:** The HF checkpoint advertises very long context (YaRN / RoPE tables up to 256K positions). On Blackhole Loudbox (1×8), the working KV budget (`max_seq_len`) is what you can actually run. **~150K tokens** is a rough theoretical upper bound on this mesh given per-chip DRAM; but have **only validated end-to-end generation at 32K** (`DEVSTRAL2_MIN_MAX_SEQ_LEN` default in `text_demo.py`).
+**Maximum context length:** The HF checkpoint advertises very long context (YaRN / RoPE tables up to 256K positions). On Blackhole Loudbox (1×8), the working KV budget (`max_seq_len`) is what you can actually run. **Up to 96K tokens** has been verified end-to-end on this mesh (`DEVSTRAL2_MIN_MAX_SEQ_LEN` / `--max-seq-len` default **98304** in `text_demo.py` and `tt_demo_agent.py`).
 
 **Traced prefill/decode** with **2CQ** decode staging is on by default (`DEVSTRAL2_TRACE_PREFILL=1`, `DEVSTRAL2_DECODE_TRACE_2CQ=1`). Set either to `0` to disable.
 
@@ -114,12 +114,11 @@ Measured with ``pytest models/experimental/devstral2_123B_instruct/tests/perf/te
 | Item | Value |
 |------|--------|
 | HF `max_position_embeddings` | 262,144 (model-native RoPE horizon) |
-| Practical `max_seq_len` (TT KV cache) | Sized per run: `prompt + max_new_tokens`, floored by `DEVSTRAL2_MIN_MAX_SEQ_LEN` (default **32,768**) |
-| Theoretical context on 1×8 BH | **~150K** tokens (KV/DRAM bound) |
-| Tested context (text demo) | **32K** |
-| Full-model PCC (prefill + decode) | **~0.98** (`tests/test_ministral3_model_pcc.py`, all layers, `seq_len=128`) |
+| Practical `max_seq_len` (TT KV cache) | Sized per run: `prompt + max_new_tokens`, floored by `DEVSTRAL2_MIN_MAX_SEQ_LEN` (default **98,304**) |
+| Verified context on BH Loudbox (1×8) | **Up to 96K** tokens (end-to-end text generation) |
+| Full-model PCC (decode) | **~0.98** (`tests/test_ministral3_full_model.py`, all layers, 128-token KV fill + 1 decode step) |
 
 ### Limitations
 
-- **Numerical parity:** Full-model PCC against HF is **~0.98** for prefill and decode (`pytest models/experimental/devstral2_123B_instruct/tests/test_ministral3_model_pcc.py -k pcc`), not bit-exact. Per-op PCC tests target higher thresholds; end-to-end drift accumulates across 88 layers.
-- **Context length:** Long context is limited by per-chip KV and RoPE allocation, not by the HF config alone. **~150K tokens** may be reachable in theory on a 1×8 Blackhole mesh, but this port has **only been tested through 32K** (`DEVSTRAL2_MIN_MAX_SEQ_LEN=32768`). Longer prompts need a larger `max_seq_len` / `--max-seq-len` and sufficient device memory.
+- **Numerical parity:** Full-model decode PCC against HF is **~0.98** (`pytest models/experimental/devstral2_123B_instruct/tests/test_ministral3_full_model.py -k decode`), not bit-exact. Per-op PCC tests target higher thresholds; end-to-end drift accumulates across 88 layers.
+- **Context length:** Long context is limited by per-chip KV and RoPE allocation, not by the HF config alone. On Blackhole Loudbox (1×8), **up to 96K tokens** has been verified for end-to-end generation. Defaults use `max_seq_len=98304` (`DEVSTRAL2_MIN_MAX_SEQ_LEN` / `--max-seq-len`). Prompts longer than the configured budget need a larger cap and sufficient device memory.

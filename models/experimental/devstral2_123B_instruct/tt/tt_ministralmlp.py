@@ -28,7 +28,7 @@ import ttnn
 from models.experimental.devstral2_123B_instruct.tt.ccl_helpers import all_reduce_replicate
 from models.experimental.devstral2_123B_instruct.tt.mem_config import (
     get_compute_kernel_config,
-    get_compute_kernel_config_hifi4,
+    get_compute_kernel_config_lofi,
     get_decode_width_sharded_matmul_output_mem_config,
     get_decode_width_sharded_matmul_program_config,
     get_linear_program_config,
@@ -76,7 +76,7 @@ class TtMLP:
 
         wp = resolve_weight_cache_path(weight_cache_path, args)
         # Quantize weights to bfloat8_b for DRAM bandwidth; matmul outputs stay bfloat16 with
-        # HiFi4 fidelity. Quantizing outputs to bf8_b compounds across 88 layers and drops PCC.
+        # LoFi fidelity. Quantizing outputs to bf8_b compounds across 88 layers and drops PCC.
         self.gate_proj_weight_dtype = ttnn.bfloat8_b
         self.gate_proj_output_dtype = ttnn.bfloat16
         self.gate_proj = upload_matmul_weight(
@@ -112,7 +112,7 @@ class TtMLP:
         )
 
         self._compute_kernel_config = get_compute_kernel_config(mesh_device)
-        self._compute_kernel_config_hifi4 = get_compute_kernel_config_hifi4(mesh_device)
+        self._compute_kernel_config_lofi = get_compute_kernel_config_lofi(mesh_device)
 
     def __call__(self, x: ttnn.Tensor, *, mode: str = "decode") -> ttnn.Tensor:
         act_mem = self.args.get_activation_mem_config(mode, self.mesh_device)
@@ -240,7 +240,7 @@ class TtMLP:
                 kind="gate",
                 fused_activation="silu",
                 output_dtype=self.gate_proj_output_dtype,
-                compute_kernel_config=self._compute_kernel_config_hifi4,
+                compute_kernel_config=self._compute_kernel_config_lofi,
                 keep_sharded=True,
             )
             up = _prefill_width_sharded_linear(
@@ -248,7 +248,7 @@ class TtMLP:
                 self.up_proj,
                 kind="up",
                 output_dtype=self.up_proj_output_dtype,
-                compute_kernel_config=self._compute_kernel_config_hifi4,
+                compute_kernel_config=self._compute_kernel_config_lofi,
                 keep_sharded=True,
             )
         elif use_decode_ws:
@@ -258,7 +258,7 @@ class TtMLP:
                 kind="gate",
                 fused_activation="silu",
                 output_dtype=self.gate_proj_output_dtype,
-                compute_kernel_config=self._compute_kernel_config_hifi4,
+                compute_kernel_config=self._compute_kernel_config_lofi,
                 keep_sharded=True,
             )
             up = _decode_width_sharded_linear(
@@ -266,7 +266,7 @@ class TtMLP:
                 self.up_proj,
                 kind="up",
                 output_dtype=self.up_proj_output_dtype,
-                compute_kernel_config=self._compute_kernel_config_hifi4,
+                compute_kernel_config=self._compute_kernel_config_lofi,
                 keep_sharded=True,
             )
         else:
@@ -276,14 +276,14 @@ class TtMLP:
                 kind="gate",
                 fused_activation="silu",
                 output_dtype=self.gate_proj_output_dtype,
-                compute_kernel_config=self._compute_kernel_config_hifi4,
+                compute_kernel_config=self._compute_kernel_config_lofi,
             )
             up = _linear(
                 x,
                 self.up_proj,
                 kind="up",
                 output_dtype=self.up_proj_output_dtype,
-                compute_kernel_config=self._compute_kernel_config_hifi4,
+                compute_kernel_config=self._compute_kernel_config_lofi,
             )
         inner = _swiglu_mul(gate, up) if (use_ws or use_decode_ws) else ttnn.mul(gate, up, memory_config=act_mem)
         ttnn.deallocate(gate)
@@ -294,7 +294,7 @@ class TtMLP:
             self.down_proj,
             kind="down",
             output_dtype=self.down_proj_output_dtype,
-            compute_kernel_config=self._compute_kernel_config_hifi4,
+            compute_kernel_config=self._compute_kernel_config_lofi,
         )
         ttnn.deallocate(inner)
 

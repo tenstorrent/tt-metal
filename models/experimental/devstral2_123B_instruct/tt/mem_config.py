@@ -33,8 +33,8 @@ def get_compute_kernel_config(mesh_device, *, math_fidelity: ttnn.MathFidelity =
     return ttnn.WormholeComputeKernelConfig(**cfg)
 
 
-def get_compute_kernel_config_hifi4(mesh_device):
-    """HiFi4 kernel config for matmuls quantized to bfloat8_b that need full accuracy."""
+def get_compute_kernel_config_lofi(mesh_device):
+    """LoFi kernel config for matmuls quantized to bfloat8_b (outputs stay bfloat16)."""
     return get_compute_kernel_config(mesh_device, math_fidelity=ttnn.MathFidelity.LoFi)
 
 
@@ -231,7 +231,7 @@ def get_embedding_output_mem_config(
 ) -> ttnn.MemoryConfig:
     """Memory config for ``ttnn.embedding`` output (distinct from matmul ``act_mem``).
 
-    - **Prefill:** WIDTH-sharded L1 aligned with width-sharded RMSNorm when ``seq_len <= kv_block_size``.
+    - **Prefill:** WIDTH-sharded L1 aligned with width-sharded RMSNorm when ``seq_len == kv_block_size``.
     - **Decode:** L1 interleaved — WIDTH embed needs ``input_volume % shard_h == 0`` but decode
       ``M=1`` while the norm shard height is ``TILE_SIZE`` (32).
     """
@@ -239,7 +239,8 @@ def get_embedding_output_mem_config(
     if mode == "decode":
         return ttnn.L1_MEMORY_CONFIG
     seq = max(1, int(seq_len))
-    if seq <= args.kv_block_size:
+    # Width-sharded embed requires physical M == shard height (a full kv_block_size chunk).
+    if seq == args.kv_block_size:
         return get_prefill_width_sharded_embedding_mem_config(seq, args.hidden_size)
     return ttnn.L1_MEMORY_CONFIG
 
@@ -323,8 +324,12 @@ def get_prefill_qkv_matmul_program_config(
 
 
 def use_width_sharded_prefill_norm_matmul(args: Devstral2Args, mode: str, seq_len: int) -> bool:
-    """True when prefill linears may consume width-sharded RMSNorm output (QKV, gate, up)."""
-    return mode == "prefill" and int(seq_len) <= args.kv_block_size
+    """True when prefill linears may consume width-sharded RMSNorm output (QKV, gate, up).
+
+    Only for a full ``kv_block_size`` prefill chunk; shorter sequences use interleaved activations
+    (shard height is tile-padded and must match physical ``M``).
+    """
+    return mode == "prefill" and int(seq_len) == args.kv_block_size
 
 
 def use_width_sharded_decode_norm_matmul(args: Devstral2Args, mode: str) -> bool:
