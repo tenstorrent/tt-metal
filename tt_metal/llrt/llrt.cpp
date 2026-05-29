@@ -350,12 +350,11 @@ void wait_until_cores_done(
     [[maybe_unused]] int loop_count = 1;
     auto start = std::chrono::high_resolution_clock::now();
     const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
-    bool is_simulator = rtoptions.get_simulator_enabled();
-    // For simulators, always disable timeout (infinite wait). For non-simulators, a 0
-    // timeout means: use the configured timeout for operations.
-    if (is_simulator) {
-        timeout_ms = 0;
-    } else if (timeout_ms == 0) {
+    // timeout_ms == 0 means "use configured operation timeout". On sim, do not force
+    // infinite wait: dispatch-core teardown can stall forever when sim kernels never
+    // report RUN_MSG_DONE. DispatchKernelInitializer::wait_for_dispatch_cores catches
+    // the resulting throw and continues device cleanup.
+    if (timeout_ms == 0) {
         timeout_ms =
             std::chrono::duration_cast<std::chrono::milliseconds>(rtoptions.get_timeout_duration_for_operations())
                 .count();

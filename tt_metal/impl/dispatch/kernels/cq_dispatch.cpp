@@ -361,16 +361,27 @@ void process_write_host_h() {
 #else
             cq_noc_async_write_with_state_any_len(
                 static_cast<uint32_t>(data_ptr), completion_queue_write_addr, xfer_size);
+#if defined(IS_CQ_DRAM_BACKED) && IS_CQ_DRAM_BACKED == 1
+            uint32_t num_noc_packets_written = div_up(xfer_size, NOC_MAX_BURST_SIZE);
+            noc_nonposted_writes_num_issued[noc_index] += num_noc_packets_written;
+            noc_nonposted_writes_acked[noc_index] += num_noc_packets_written;
+            noc_async_writes_flushed();
+#else
             // completion_queue_push_back below will do a write to host, so we add 1 to the number of data packets
             // written
             uint32_t num_noc_packets_written = div_up(xfer_size, NOC_MAX_BURST_SIZE) + 1;
             noc_nonposted_writes_num_issued[noc_index] += num_noc_packets_written;
             noc_nonposted_writes_acked[noc_index] += num_noc_packets_written;
 #endif
+#endif
 
             // This will update the write ptr on device and host
             // We flush to ensure the ptr has been read out of l1 before we update it again
             completion_queue_push_back(npages);
+#if !defined(FABRIC_RELAY) && defined(IS_CQ_DRAM_BACKED) && IS_CQ_DRAM_BACKED == 1
+            noc_nonposted_writes_num_issued[noc_index] += 1;
+            noc_nonposted_writes_acked[noc_index] += 1;
+#endif
 
             length -= xfer_size;
             data_ptr += xfer_size;
