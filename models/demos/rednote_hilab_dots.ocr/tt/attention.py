@@ -385,21 +385,27 @@ class TtAttention(LightweightModule):
         nh, nkv, hd = self.num_heads, self.num_kv_heads, self.head_dim
         q, k, v = self._qkv_proj_heads(x, seq)
 
-        # RoPE on the full prompt using the prefill cos/sin baked at seq_len.
-        q = self._apply_rope(q)
-        k = self._apply_rope(k)
+        # Fused RoPE: single kernel replaces 6 elementwise ops per tensor.
+        q = ttnn._ttnn.operations.experimental.rotary_embedding(q, self.cos, self.sin)
+        k = ttnn._ttnn.operations.experimental.rotary_embedding(k, self.cos, self.sin)
 
         # Stash the post-RoPE K (shape [1, nkv, seq, hd]) and V into the cache so
         # the decode steps read consistent (already-rotated) K and raw V.
         kv_cache.fill_prefill(layer_idx, k, v)
 
-        # GQA expansion 2 -> 12 for the prefill attention output.
-        kq = self._repeat_kv(k)
-        vq = self._repeat_kv(v)
+        # rotary_embedding may pad seq to tile boundary (e.g. 4891→4896).
+        # Align V to the same padded length so SDPA sees matching K/V seq dims.
+        padded_seq = k.shape[2]
+        if v.shape[2] != padded_seq:
+            v = ttnn.pad(v, padding=[(0, 0), (0, 0), (0, padded_seq - v.shape[2]), (0, 0)], value=0.0)
 
+        # SDPA handles GQA natively (Q=[1,nh,S,hd], K/V=[1,nkv,S,hd] with
+        # nh % nkv == 0) — no need for _repeat_kv expansion.
         if seq <= 1024:
             # Short prompt: materialized fp32-score causal softmax (verified PCC
             # path; fp32 scores matter because real-weight K reaches ±320).
+            kq = self._repeat_kv(k)
+            vq = self._repeat_kv(v)
             k_t = ttnn.permute(kq, (0, 1, 3, 2))
             scores = ttnn.matmul(q, k_t, compute_kernel_config=self.compute_kernel_config, dtype=ttnn.float32)
             scores = ttnn.mul(scores, self.scale)
@@ -408,19 +414,11 @@ class TtAttention(LightweightModule):
             attn = ttnn.matmul(probs, vq, compute_kernel_config=self.compute_kernel_config, dtype=ttnn.bfloat16)
             mem = ttnn.L1_MEMORY_CONFIG
         else:
-            # Long prompt (e.g. a full-document vision prefill, seq in the
-            # thousands): memory-efficient causal flash attention. Same
-            # softmax(q k^T * scale + causal_mask) @ v math as the short path,
-            # but the kernel never materializes the [1, nh, seq, seq] score
-            # matrix -- it streams in O(seq) memory (flash-2 chunked), which is
-            # what lets the full-resolution document prompt prefill without OOM.
-            q_d = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
-            kq_d = ttnn.to_memory_config(kq, ttnn.DRAM_MEMORY_CONFIG)
-            vq_d = ttnn.to_memory_config(vq, ttnn.DRAM_MEMORY_CONFIG)
+            # Long prompt: flash SDPA with native GQA (no repeat_kv needed).
             attn = ttnn.transformer.scaled_dot_product_attention(
-                q_d,
-                kq_d,
-                vq_d,
+                q,
+                k,
+                v,
                 is_causal=True,
                 scale=self.scale,
                 compute_kernel_config=self.compute_kernel_config,
@@ -430,11 +428,15 @@ class TtAttention(LightweightModule):
                         self.device.compute_with_storage_grid_size().y,
                     ),
                     exp_approx_mode=False,
-                    q_chunk_size=128,
-                    k_chunk_size=128,
+                    q_chunk_size=256,
+                    k_chunk_size=256,
                 ),
             )
             mem = ttnn.DRAM_MEMORY_CONFIG
+
+        # Slice back to original seq if RoPE padded to tile boundary.
+        if attn.shape[2] != seq:
+            attn = attn[:, :, :seq, :]
 
         # Fused head-merge: nlp_concat_heads ([1,nh,seq,hd] -> [1,1,seq,nh*hd]).
         attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)

@@ -180,10 +180,16 @@ class TtDecoderLayer(LightweightModule):
         Identical maths to forward() but the self-attention writes its per-token
         K/V into the cache so the AR decode steps can read them.
         """
+        # At large prefill seq the [seq, hidden] activation (e.g. 15 MB at
+        # seq~4900) does not fit L1; pinning the residual/layernorm output to L1
+        # forces the downstream MLP gate_up matmul onto a pathological L1 path
+        # (~34 ms vs ~6 ms with a DRAM input). Gate the residual mem on seq, the
+        # same threshold the MLP/attention use internally.
+        mem = ttnn.L1_MEMORY_CONFIG if x.shape[0] <= 1024 else ttnn.DRAM_MEMORY_CONFIG
         attn_out = self.self_attn.prefill_kv(self.input_layernorm(x), kv_cache, layer_idx)
-        x = ttnn.add(x, attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
+        x = ttnn.add(x, attn_out, memory_config=mem)
         mlp_out = self.mlp(self.post_attention_layernorm(x))
-        x = ttnn.add(x, mlp_out, memory_config=ttnn.L1_MEMORY_CONFIG)
+        x = ttnn.add(x, mlp_out, memory_config=mem)
         return x
 
     def forward_decode(self, x: ttnn.Tensor, pos: int, kv_cache, layer_idx: int) -> ttnn.Tensor:
