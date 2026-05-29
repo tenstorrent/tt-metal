@@ -136,21 +136,6 @@ inline WorkUnitSpec MakeMinimalWorkUnit(
     };
 }
 
-// Helper to bind a DFB to a kernel as producer or consumer
-inline void BindDFBToKernel(
-    KernelSpec& kernel,
-    const std::string& dfb_name,
-    const std::string& accessor_name,
-    DFBEndpointType endpoint_type,
-    DFBAccessPattern access_pattern = DFBAccessPattern::STRIDED) {
-    kernel.dfb_bindings.push_back(KernelSpec::DFBBinding{
-        .dfb_spec_name = dfb_name,
-        .accessor_name = accessor_name,
-        .endpoint_type = endpoint_type,
-        .access_pattern = access_pattern,
-    });
-}
-
 // Helper to create a minimal valid TensorParameter.
 // Default layout: BFLOAT16, ROW_MAJOR, interleaved, shape {1, 32}. Hardware-agnostic;
 // works on any mock device (alignment + virtualized cores resolved by MakeProgramFromSpec).
@@ -213,8 +198,8 @@ inline ProgramSpec MakeMinimalGen1ValidProgramSpec() {
     auto dfb = MakeMinimalDFB("dfb_0");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
 
-    BindDFBToKernel(dm_kernel, "dfb_0", "input_dfb", DFBEndpointType::PRODUCER);
-    BindDFBToKernel(compute_kernel, "dfb_0", "input_dfb", DFBEndpointType::CONSUMER);
+    dm_kernel.dfb_bindings.push_back(ProducerOf("dfb_0", "input_dfb"));
+    compute_kernel.dfb_bindings.push_back(ConsumerOf("dfb_0", "input_dfb"));
 
     spec.kernels = {dm_kernel, compute_kernel};
     spec.dataflow_buffers = {dfb};
@@ -239,8 +224,8 @@ inline ProgramSpec MakeMinimalValidProgramSpec() {
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
 
     // Bind the DFB
-    BindDFBToKernel(dm_kernel, "dfb_0", "input_dfb", DFBEndpointType::PRODUCER);
-    BindDFBToKernel(compute_kernel, "dfb_0", "input_dfb", DFBEndpointType::CONSUMER);
+    dm_kernel.dfb_bindings.push_back(ProducerOf("dfb_0", "input_dfb"));
+    compute_kernel.dfb_bindings.push_back(ConsumerOf("dfb_0", "input_dfb"));
 
     spec.kernels = {dm_kernel, compute_kernel};
     spec.dataflow_buffers = {dfb};

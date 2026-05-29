@@ -177,4 +177,67 @@ struct KernelSpec {
 using DFBEndpointType = KernelSpec::DFBBinding::EndpointType;
 using DFBAccessPattern = KernelSpec::DFBBinding::AccessPattern;
 
+//////////////////////////////////////////////////////////////////////////////
+// Convenience factories for DFBBinding
+//////////////////////////////////////////////////////////////////////////////
+
+// Ergonomic alternatives to writing a designated-init DFBBinding{...}
+
+// Creates a DFB producer binding with a STRIDED access pattern
+// (All DFB producers are STRIDED)
+inline KernelSpec::DFBBinding ProducerOf(DFBSpecName dfb_spec_name, std::string accessor_name) {
+    return KernelSpec::DFBBinding{
+        .dfb_spec_name = std::move(dfb_spec_name),
+        .accessor_name = std::move(accessor_name),
+        .endpoint_type = DFBEndpointType::PRODUCER,
+        .access_pattern = DFBAccessPattern::STRIDED};
+}
+
+// Creates a DFB consumer binding (with a default-STRIDED access pattern)
+// Use this for single-threaded kernels, where the access pattern doesn't matter.
+// For multi-threaded kernels (Quasar), prefer the explicit access pattern
+// helper factories below.
+inline KernelSpec::DFBBinding ConsumerOf(DFBSpecName dfb_spec_name, std::string accessor_name) {
+    return KernelSpec::DFBBinding{
+        .dfb_spec_name = std::move(dfb_spec_name),
+        .accessor_name = std::move(accessor_name),
+        .endpoint_type = DFBEndpointType::CONSUMER,
+        // access pattern defaults to STRIDED
+    };
+}
+
+// Creates a DFB consumer binding with a STRIDED access pattern
+// (The common case for multi-threaded DFB consumers)
+inline KernelSpec::DFBBinding StridedConsumerOf(DFBSpecName dfb_spec_name, std::string accessor_name) {
+    return KernelSpec::DFBBinding{
+        .dfb_spec_name = std::move(dfb_spec_name),
+        .accessor_name = std::move(accessor_name),
+        .endpoint_type = DFBEndpointType::CONSUMER,
+        .access_pattern = DFBAccessPattern::STRIDED,
+    };
+}
+
+// Creates a DFB consumer binding with an ALL access pattern
+inline KernelSpec::DFBBinding AllConsumerOf(DFBSpecName dfb_spec_name, std::string accessor_name) {
+    return KernelSpec::DFBBinding{
+        .dfb_spec_name = std::move(dfb_spec_name),
+        .accessor_name = std::move(accessor_name),
+        .endpoint_type = DFBEndpointType::CONSUMER,
+        .access_pattern = DFBAccessPattern::ALL,
+    };
+}
+
+// Creates a DFB consumer binding with a BLOCKED access pattern
+// Uncomment when BLOCKED support is added (currently TT_FATALs)
+/*
+inline KernelSpec::DFBBinding BlockedConsumerOf(DFBSpecName dfb_spec_name, std::string accessor_name) {
+    return KernelSpec::DFBBinding{
+        .dfb_spec_name = std::move(dfb_spec_name),
+        .accessor_name = std::move(accessor_name),
+        .endpoint_type = DFBEndpointType::CONSUMER,
+        .access_pattern = DFBAccessPattern::BLOCKED,
+    };
+}
+*/
+
 }  // namespace tt::tt_metal::experimental::metal2_host_api

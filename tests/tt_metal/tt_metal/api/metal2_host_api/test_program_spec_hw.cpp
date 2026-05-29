@@ -33,7 +33,6 @@
 namespace tt::tt_metal::experimental::metal2_host_api {
 namespace {
 
-using test_helpers::BindDFBToKernel;
 using test_helpers::BindTensorParameterToKernel;
 using test_helpers::MakeMinimalComputeKernel;
 using test_helpers::MakeMinimalDFB;
@@ -113,8 +112,8 @@ TEST_F(ProgramSpecHWTest, DFBAccessorNameLoopback) {
     // DFB: both kernels bind it, with different local accessor names
     auto dfb = MakeMinimalDFB("loopback_dfb", entry_size, num_entries);
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
-    BindDFBToKernel(producer, "loopback_dfb", "my_local_dfb_name", DFBEndpointType::PRODUCER);
-    BindDFBToKernel(consumer, "loopback_dfb", "a_dfb_named_bob", DFBEndpointType::CONSUMER);
+    producer.dfb_bindings.push_back(ProducerOf("loopback_dfb", "my_local_dfb_name"));
+    consumer.dfb_bindings.push_back(ConsumerOf("loopback_dfb", "a_dfb_named_bob"));
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
@@ -255,8 +254,8 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
 
     auto dfb = MakeMinimalDFB("loopback_dfb", entry_size, num_entries_in_dfb);
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
-    BindDFBToKernel(producer, "loopback_dfb", "loopback_dfb", DFBEndpointType::PRODUCER);
-    BindDFBToKernel(consumer, "loopback_dfb", "loopback_dfb", DFBEndpointType::CONSUMER);
+    producer.dfb_bindings.push_back(ProducerOf("loopback_dfb", "loopback_dfb"));
+    consumer.dfb_bindings.push_back(ConsumerOf("loopback_dfb", "loopback_dfb"));
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
@@ -378,8 +377,8 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopbackCompute) {
     auto out_dfb = MakeMinimalDFB("out_dfb", entry_size, num_entries_in_dfb);
     out_dfb.data_format_metadata = tt::DataFormat::Float16_b;
 
-    BindDFBToKernel(compute, "out_dfb", "out_dfb", DFBEndpointType::PRODUCER);
-    BindDFBToKernel(consumer, "out_dfb", "a_dfb_named_bob", DFBEndpointType::CONSUMER);
+    compute.dfb_bindings.push_back(ProducerOf("out_dfb", "out_dfb"));
+    consumer.dfb_bindings.push_back(ConsumerOf("out_dfb", "a_dfb_named_bob"));
 
     spec.kernels = {compute, consumer};
     spec.dataflow_buffers = {out_dfb};
@@ -585,8 +584,8 @@ TEST_F(ProgramSpecHWTest, TensorAccessorBindingLoopback) {
     // DFB connecting the two kernels
     auto dfb = MakeMinimalDFB("input_dfb", page_size, num_dfb_entries);
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
-    BindDFBToKernel(producer, "input_dfb", "input_dfb", DFBEndpointType::PRODUCER);
-    BindDFBToKernel(consumer, "input_dfb", "input_dfb", DFBEndpointType::CONSUMER);
+    producer.dfb_bindings.push_back(ProducerOf("input_dfb", "input_dfb"));
+    consumer.dfb_bindings.push_back(ConsumerOf("input_dfb", "input_dfb"));
 
     // TensorAccessor bindings: each kernel sees its own tensor under its accessor name
     BindTensorParameterToKernel(producer, "input_tensor", "input_tensor");
@@ -676,9 +675,9 @@ TEST_F(ProgramSpecHWTest, MultiBindingProducerMaskMismatchFails) {
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
 
-    BindDFBToKernel(producer_g1, "dfb", "out", DFBEndpointType::PRODUCER);
-    BindDFBToKernel(producer_g2, "dfb", "out", DFBEndpointType::PRODUCER);
-    BindDFBToKernel(consumer, "dfb", "in", DFBEndpointType::CONSUMER);
+    producer_g1.dfb_bindings.push_back(ProducerOf("dfb", "out"));
+    producer_g2.dfb_bindings.push_back(ProducerOf("dfb", "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf("dfb", "in"));
 
     ProgramSpec spec;
     spec.name = "multi_binding_mask_mismatch";
