@@ -221,7 +221,7 @@ std::set<tt::tt_metal::AsicID> compute_required_asics_for_fabric_node(
         return {};
     }
 
-    const auto physical_asics = physical_asics_from_adjacency(physical_adjacency);
+    auto physical_asics = physical_asics_from_adjacency(physical_adjacency);
     std::set<AsicID> required_asics = physical_asics;
     bool has_cross_host_neighbor = false;
 
