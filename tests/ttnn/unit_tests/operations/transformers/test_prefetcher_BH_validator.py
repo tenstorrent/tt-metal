@@ -284,7 +284,15 @@ def test_validator_dram_sender_mixed_num_receivers(device):
     arg or a per-prefetcher constant: a single Queue against a GCB whose receiver
     count doesn't match the kernel's expectation would walk the wrong NOC table.
     """
-    K, N, dtype = 448, 1792, ttnn.bfloat16
+    K, dtype = 448, ttnn.bfloat16
+    # GCB B uses recv_per_bank=2, so n_per_bank (= N / num_dram_banks / TILE_SIZE,
+    # in tiles) must be divisible by 2. Derive N from the device bank count so this
+    # holds regardless of how many DRAM banks the part has (P150=8, P100=7) —
+    # n_per_bank is then 2 * n_tiles_per_recv (even). A hardcoded N (e.g. 1792)
+    # gives n_per_bank=7 on an 8-bank part, which 2 doesn't divide.
+    num_dram_banks = device.dram_grid_size().x
+    n_tiles_per_recv = 4
+    N = num_dram_banks * 2 * n_tiles_per_recv * ttnn.TILE_SIZE
     # GCB A: recv_per_bank=1 (rows [0, 1)).
     tt_weight_a, addrs_a, gcb_a, _, _, ring_a = _setup_weight_and_gcb_dram_sender(
         device, K, N, dtype, recv_per_bank=1, num_layers=1
