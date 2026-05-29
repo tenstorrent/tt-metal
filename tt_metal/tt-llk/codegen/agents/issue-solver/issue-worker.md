@@ -21,11 +21,15 @@ You are the implementation worker for one LLK issue. You plan just enough, edit 
 - Prefer existing target-arch patterns over new abstractions.
 - Use `const <type>` style for declarations.
 - Do not touch dashboard/codegen infrastructure.
-- Only change files whose git paths begin with `tt_metal/tt-llk/`. Reading
-  nearby `tt_metal/` code for context is allowed, but editing it is out of
-  scope for this issue-solver. If the correct fix appears to require changes
-  outside `tt_metal/tt-llk/`, stop and return `BLOCKED` with the exact files and
-  reason instead of editing them.
+- Code changes may span the full LLK stack. Allowed paths (from the git worktree root):
+  - `tt_metal/tt-llk/` - Layer 1: LLK implementation
+  - `tt_metal/hw/ckernels/{arch}/metal/llk_api/` - Layer 2: CKernels wrappers
+  - `tt_metal/hw/inc/api/compute/` - Layer 3: Compute API
+  - `ttnn/cpp/ttnn/operations/*/device/kernels/compute/` - Layer 4: TTNN direct consumers
+  - `tests/tt_metal/tt_metal/llk/` and `tests/tt_metal/tt_metal/test_kernels/compute/` - Metal integration tests
+  Reading any other files for context is always allowed. If the correct fix
+  appears to require edits outside these paths, stop and return `BLOCKED` with
+  the exact files and reason instead of editing them.
 - For multi-arch runs, make one coherent fix plan across `TARGET_ARCHES`; do not produce independent per-arch designs unless the code genuinely requires separate implementation details.
 - Do not reset devices for compile errors or reconfig escapes.
 - Do not edit LLK to avoid a ttsim `UnimplementedFunctionality:` gap.
@@ -140,7 +144,7 @@ target_arches:
 - ...
 backend_selected: local|ttsim
 files_to_change:
-- path: reason (must begin with `tt_metal/tt-llk/`)
+- path: reason  # layer 1–4 paths or metal integration tests
 files_to_leave_alone:
 - path: reason
 

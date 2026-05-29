@@ -53,10 +53,20 @@ All code-reading and code-editing subagents must operate inside:
 cd "$WORKTREE_DIR/tt_metal/tt-llk"
 ```
 
-All code changes must stay inside the LLK subtree. From the git worktree root,
-every changed file must begin with `tt_metal/tt-llk/`. Reading other `tt_metal/`
-files for context is allowed, but editing them is a scope violation unless the
-caller explicitly changes this contract before Step 0.
+Code changes may span the full LLK stack. From the git worktree root, changed
+files may be in any of these paths:
+
+- `tt_metal/tt-llk/` - Layer 1: LLK implementation
+- `tt_metal/hw/ckernels/{arch}/metal/llk_api/` - Layer 2: CKernels wrappers
+- `tt_metal/hw/inc/api/compute/` - Layer 3: Compute API
+- `ttnn/cpp/ttnn/operations/*/device/kernels/compute/` - Layer 4: TTNN direct consumers
+- `tests/tt_metal/tt_metal/llk/` and `tests/tt_metal/tt_metal/test_kernels/compute/` - Metal integration tests
+
+See `.claude/references/metal-integration.md` for the propagation checklist and
+which layers to update for each change scenario.
+
+Reading any other `tt_metal/` files for context is always allowed. Editing files
+outside the paths listed above is a scope violation.
 
 ## Git Policy
 
