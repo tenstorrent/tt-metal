@@ -390,9 +390,63 @@ inline void reconfigure_exp_threshold(const std::uint32_t pack_dst_format)
     cfg_reg_rmw_tensix<THCON_SEC0_REG1_Exp_threshold_ADDR32, 0, THRESHOLD_RMW_MASK>(threshold_rmw_data);
 }
 
+// Builds packer config word 2 with uncompress enabled and the in/out data formats set. Shared by
+// set_packer_config and _llk_pack_reconfig_data_format_. Callers pass the hardware in-format (after
+// the gasket Float16_b->Float16 conversion for Fp8 output) and the masked output format.
+inline std::uint32_t build_pack_format_config_word(const std::uint32_t pack_hw_src_format, const std::uint32_t pack_output_dst_format)
+{
+    pack_config_u config;
+    config.val[2]            = 0;
+    config.f.uncompress      = 1;
+    config.f.out_data_format = pack_output_dst_format;
+    config.f.in_data_format  = pack_hw_src_format;
+    return config.val[2];
+}
+
+// Validates the packer inputs and computes the PCK_DEST_RD_CTRL word, which is derived identically
+// from the src/dst formats by `_llk_pack_hw_configure_` (through `set_packer_config`) and
+// `_llk_pack_reconfig_data_format_`.
+template <bool is_fp32_dest_acc_en>
+inline dest_rd_ctrl_u _llk_pack_get_dest_rd_ctrl_(const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format, const std::uint32_t num_faces)
+{
+    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    LLK_ASSERT(
+        is_packer_to_L1_conversion_supported(
+            static_cast<DataFormat>(masked_data_format(pack_src_format)), static_cast<DataFormat>(masked_data_format(pack_dst_format))),
+        "Unsupported packer to L1 conversion.");
+
+    dest_rd_ctrl_u dest_rd_ctrl;
+    dest_rd_ctrl.val = 0;
+
+    const bool is_32b_format = pack_src_format == to_underlying(DataFormat::Int32) || pack_src_format == to_underlying(DataFormat::UInt32) ||
+                               pack_src_format == to_underlying(DataFormat::Float32);
+    const bool is_int8_format = pack_src_format == to_underlying(DataFormat::Int8) || pack_src_format == to_underlying(DataFormat::UInt8);
+
+    dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_32b_data = is_32b_format || is_fp32_dest_acc_en;
+    dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_int8     = !(is_fp32_dest_acc_en || is_32b_format) && is_int8_format;
+
+    if (pack_dst_format == to_underlying(DataFormat::UInt8))
+    {
+        dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_unsigned = 1;
+    }
+
+    // Round to 10 bit mantissa from fp32 dest
+    if ((is_fp32_dest_acc_en && (pack_src_format == to_underlying(DataFormat::Float16))) ||
+        (!IS_A_FORMAT(pack_src_format) && (pack_dst_format & 0x1F) == to_underlying(DataFormat::Fp8_e4m3)))
+    {
+        dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Round_10b_mant = 1;
+    }
+
+    return dest_rd_ctrl;
+}
+
 template <bool is_fp32_dest_acc_en>
 inline void set_packer_config(
-    const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format, const std::uint32_t num_faces = 4, const bool partial_face = false)
+    const std::uint32_t pack_src_format,
+    const std::uint32_t pack_dst_format,
+    const dest_rd_ctrl_u dest_rd_ctrl,
+    const std::uint32_t num_faces = 4,
+    const bool partial_face       = false)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     // Get pointer to registers for current state ID
@@ -416,9 +470,7 @@ inline void set_packer_config(
             ? 0
             : (partial_face ? 1 : num_faces); // set to num_faces as exp section size is not used for non-bfp formats except for lf8/int8
 
-    config.f.uncompress      = 1;
-    config.f.out_data_format = pack_output_dst_format;
-    config.f.in_data_format  = pack_hw_src_format;
+    config.val[2] = build_pack_format_config_word(pack_hw_src_format, pack_output_dst_format);
 
     reconfigure_exp_threshold<is_fp32_dest_acc_en>(pack_output_dst_format);
 
@@ -450,27 +502,7 @@ inline void set_packer_config(
     // Reset L1 accumulation flag
     reconfigure_packer_l1_acc(0);
 
-    dest_rd_ctrl_u dest_rd_ctrl;
-    dest_rd_ctrl.val = 0;
-
-    bool is_32b_format = pack_src_format == to_underlying(DataFormat::Int32) || pack_src_format == to_underlying(DataFormat::UInt32) ||
-                         pack_src_format == to_underlying(DataFormat::Float32);
-    bool is_int8_format = pack_src_format == to_underlying(DataFormat::Int8) || pack_src_format == to_underlying(DataFormat::UInt8);
-
-    dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_32b_data = is_32b_format || is_fp32_dest_acc_en;
-    dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_int8     = !(is_fp32_dest_acc_en || is_32b_format) && is_int8_format;
-
-    if (pack_dst_format == to_underlying(DataFormat::UInt8))
-    {
-        dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_unsigned = 1;
-    }
-
-    // Round to 10 bit mantissa from fp32 dest
-    if ((is_fp32_dest_acc_en && (pack_src_format == to_underlying(DataFormat::Float16))) ||
-        (!IS_A_FORMAT(pack_src_format) && (pack_dst_format & 0x1F) == to_underlying(DataFormat::Fp8_e4m3)))
-    {
-        dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Round_10b_mant = 1;
-    }
+    // dest_rd_ctrl is computed by _llk_pack_get_dest_rd_ctrl_ and passed in by the caller.
     cfg[PCK_DEST_RD_CTRL_Read_32b_data_ADDR32] = dest_rd_ctrl.val;
 
     // Save to GPR for quick data format reconfig
@@ -479,12 +511,12 @@ inline void set_packer_config(
 }
 
 // Forward declaration: defined later in this file. Needed here so that the non-dependent call
-// inside `reconfig_packer_data_format`'s LLK_ASSERT is found via unqualified lookup at
+// inside `_llk_pack_reconfig_data_format_`'s LLK_ASSERT is found via unqualified lookup at
 // the template's first-phase name lookup (ADL cannot find it from a std::uint32_t argument).
 __attribute__((noinline)) bool is_pack_reads_per_xy_plane(const std::uint32_t expected, const std::uint32_t nop_count = 10);
 
 template <bool is_fp32_dest_acc_en>
-inline void reconfig_packer_data_format(
+inline void _llk_pack_reconfig_data_format_(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
     const std::uint32_t tile_size,
@@ -492,54 +524,26 @@ inline void reconfig_packer_data_format(
     const std::uint32_t num_faces,
     const bool partial_face)
 {
-    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    const dest_rd_ctrl_u dest_rd_ctrl          = _llk_pack_get_dest_rd_ctrl_<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, num_faces);
     const std::uint32_t pack_output_src_format = masked_data_format(pack_src_format);
     const std::uint32_t pack_output_dst_format = masked_data_format(pack_dst_format);
     // Gasket converts Float16_b -> Float16 before the packer, so hardware in_data_format must be Float16 for Fp8 output.
     const std::uint32_t pack_hw_src_format =
         ((pack_dst_format & 0x1F) == to_underlying(DataFormat::Fp8_e4m3)) ? to_underlying(DataFormat::Float16) : pack_output_src_format;
 
-    LLK_ASSERT(
-        is_packer_to_L1_conversion_supported(static_cast<DataFormat>(pack_output_src_format), static_cast<DataFormat>(pack_output_dst_format)),
-        "Unsupported packer to L1 conversion.");
-
-    // Configure packers
-    pack_config_u config;
-    config.val[2] = 0; // Only need to modify word[2][15:0]
-
-    config.f.uncompress      = 1;
-    config.f.out_data_format = pack_output_dst_format;
-    config.f.in_data_format  = pack_hw_src_format;
-    TT_SETDMAREG(0, LOWER_HALFWORD(config.val[2]), 0, LO_16(p_gpr_pack::TMP_LO));
+    // Configure packers: only word[2][15:0] (uncompress + in/out format) needs updating here.
+    const std::uint32_t format_config_word = build_pack_format_config_word(pack_hw_src_format, pack_output_dst_format);
+    TT_SETDMAREG(0, LOWER_HALFWORD(format_config_word), 0, LO_16(p_gpr_pack::TMP_LO));
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK | p_stall::THCON);
     TTI_WRCFG(p_gpr_pack::TMP_LO, p_cfg::WRCFG_32b, THCON_SEC0_REG1_Row_start_section_size_ADDR32 + 2);
 
     LLK_ASSERT(
         is_pack_reads_per_xy_plane(1),
-        "reconfig_packer_data_format: pack_reads_per_xy_plane counter must be 1 before packer reconfig "
+        "_llk_pack_reconfig_data_format_: pack_reads_per_xy_plane counter must be 1 before packer reconfig "
         "(invariant violated; reduce mask should have been cleared via _llk_pack_reduce_mask_clear_). Please uncomment "
         "DEVICE_PRINT #2111 for debugging.");
 
-    dest_rd_ctrl_u dest_rd_ctrl;
-    dest_rd_ctrl.val = 0;
-
-    bool is_32b_format = pack_src_format == to_underlying(DataFormat::Int32) || pack_src_format == to_underlying(DataFormat::UInt32) ||
-                         pack_src_format == to_underlying(DataFormat::Float32);
-    bool is_int8_format = pack_src_format == to_underlying(DataFormat::Int8) || pack_src_format == to_underlying(DataFormat::UInt8);
-
-    dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_32b_data = is_32b_format || is_fp32_dest_acc_en;
-    dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_int8     = !(is_fp32_dest_acc_en || is_32b_format) && is_int8_format;
-
-    if (pack_dst_format == to_underlying(DataFormat::UInt8))
-    {
-        dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_unsigned = 1;
-    }
-    // Round to 10 bit mantissa from fp32 dest
-    if ((is_fp32_dest_acc_en && (pack_src_format == to_underlying(DataFormat::Float16))) ||
-        (!IS_A_FORMAT(pack_src_format) && (pack_dst_format & 0x1F) == to_underlying(DataFormat::Fp8_e4m3)))
-    {
-        dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Round_10b_mant = 1;
-    }
+    // dest_rd_ctrl is computed by _llk_pack_get_dest_rd_ctrl_ above; apply it with a packer-safe RMW.
     static_assert(
         PCK_DEST_RD_CTRL_Read_32b_data_ADDR32 == PCK_DEST_RD_CTRL_Read_unsigned_ADDR32,
         "PCK_DEST_RD_CTRL_Read_32b_data and Read_unsigned must share ADDR32 for combined RMW");
@@ -573,7 +577,7 @@ inline void reconfig_packer_data_format(
 }
 
 template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
-inline void configure_pack(
+inline void _llk_pack_hw_configure_(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
     const std::uint32_t tile_size,
@@ -583,10 +587,7 @@ inline void configure_pack(
     const bool partial_face                         = false,
     const std::uint32_t relu_config                 = 0)
 {
-    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    LLK_ASSERT(
-        is_packer_to_L1_conversion_supported(static_cast<DataFormat>(pack_src_format & 0xF), static_cast<DataFormat>(pack_dst_format & 0xF)),
-        "Unsupported packer to L1 conversion.");
+    const dest_rd_ctrl_u dest_rd_ctrl = _llk_pack_get_dest_rd_ctrl_<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, num_faces);
     // Get pointer to registers for current state ID
     volatile std::uint32_t* cfg = get_cfg_pointer();
 
@@ -613,7 +614,7 @@ inline void configure_pack(
 
     t6_mutex_release(mutex::REG_RMW);
 
-    set_packer_config<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, num_faces, partial_face);
+    set_packer_config<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, dest_rd_ctrl, num_faces, partial_face);
 
     // PACK_COUNTERS_SEC0_pack_per_xy_plane = cfg_reg_array[3][0 +: 8];
     // PACK_COUNTERS_SEC0_pack_reads_per_xy_plane = cfg_reg_array[3][8 +: 8];
@@ -850,7 +851,7 @@ __attribute__((noinline)) void are_packers_configured_correctly(
 
     static_assert(NUM_PACKERS == 1, "NUM_PACKERS must be 1");
     const pack_config_t config = read_pack_config()[0];
-    // Must match set_packer_config / reconfig_packer_data_format: gasket feeds Float16 into the packer for Fp8_e4m3 L1 output.
+    // Must match set_packer_config / _llk_pack_reconfig_data_format_: gasket feeds Float16 into the packer for Fp8_e4m3 L1 output.
     const std::uint32_t pack_output_src_format = masked_data_format(pack_src_format);
     const std::uint32_t pack_output_dst_format = masked_data_format(pack_dst_format);
 

@@ -336,40 +336,10 @@ inline void pack_init_apply(
 }
 } // namespace llk_pack_internal_bh
 
-template <bool is_fp32_dest_acc_en>
-inline void _llk_pack_reconfig_data_format_(
-    const std::uint32_t pack_src_format,
-    const std::uint32_t pack_dst_format,
-    const std::uint32_t tile_size,
-    const std::uint32_t tile_c_dim = TILE_C_DIM,
-    const std::uint32_t num_faces  = 4,
-    const bool partial_face        = false)
-{
-    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    reconfig_packer_data_format<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, tile_size, tile_c_dim, num_faces, partial_face);
-}
-
 inline void _llk_pack_set_fp32_dest_acc_(bool enable)
 {
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
     cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_32b_data_RMW>(enable);
-}
-
-// If using 8bit datums for unpack src. tilize must be set to false because we skip the blackhole workaround which involves unswizzling rows in the tile,
-// and this unswizzling is not needed for 8bit datums as they are not affected by the blackhole issue.
-template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
-inline void _llk_pack_hw_configure_(
-    const std::uint32_t pack_src_format,
-    const std::uint32_t pack_dst_format,
-    const std::uint32_t tile_size,
-    const std::uint32_t face_r_dim  = FACE_R_DIM,
-    const std::uint32_t tile_c_dim  = TILE_C_DIM,
-    const std::uint32_t num_faces   = 4,
-    const bool partial_face         = false,
-    const std::uint32_t relu_config = 0)
-{
-    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    configure_pack<is_fp32_dest_acc_en, pack_mode>(pack_src_format, pack_dst_format, tile_size, face_r_dim, tile_c_dim, num_faces, partial_face, relu_config);
 }
 
 template <PackMode pack_mode = PackMode::Default, bool zero_output = false, bool skip_addrmod_config = false>
