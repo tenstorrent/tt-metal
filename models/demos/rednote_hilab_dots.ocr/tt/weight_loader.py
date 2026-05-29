@@ -482,6 +482,63 @@ def load_lm_decoder_layer_weights(checkpoint_path: str, layer_idx: int = 0) -> D
     }
 
 
+def load_language_model_weights(checkpoint_path: str, num_layers: int) -> Dict[str, torch.Tensor]:
+    """Load the full Qwen2 language-model (the LM trunk) real weights.
+
+    COMPOSES the already-verified per-component loaders into the single flat
+    state_dict that the eager reference
+    :func:`reference.functional.language_model_forward` and the TTNN
+    :class:`tt.language_model.TtLanguageModel` both consume. The LM trunk is
+    ``embed_tokens -> N x decoder_layer -> final RMSNorm (model.norm) -> lm_head``:
+
+    - input token embedding: ``load_embedding_weight`` (``model.embed_tokens.weight``
+      [vocab_size 151936, hidden_size 1536]), emitted under ``embed_tokens.weight``.
+    - each of the ``num_layers`` decoder layers: ``load_lm_decoder_layer_weights(ckpt, i)``
+      (two Qwen2RMSNorm gammas, GQA self-attention with QKV bias + o no bias,
+      unbiased SwiGLU MLP), re-prefixed ``layers.{i}.``.
+    - final RMSNorm: ``load_lm_rmsnorm_weight(ckpt, 'model.norm.weight')`` (eps
+      1e-6), emitted under ``norm.weight``.
+    - untied LM head: ``load_lm_head_weight`` (``lm_head.weight`` [vocab_size,
+      hidden_size], no bias; config.tie_word_embeddings = false), emitted under
+      ``lm_head.weight``.
+
+    ``num_layers`` MUST match the layer count of the golden being validated (the
+    bring-up golden runs the REDUCED depth of 2 vs the production 28) so the
+    composed state_dict and the reference run agree.
+
+    Returns the flat LM state_dict (fp32) with keys:
+        embed_tokens.weight,
+        layers.{i}.{input_layernorm.weight,
+                    self_attn.q_proj.weight, self_attn.q_proj.bias,
+                    self_attn.k_proj.weight, self_attn.k_proj.bias,
+                    self_attn.v_proj.weight, self_attn.v_proj.bias,
+                    self_attn.o_proj.weight,
+                    post_attention_layernorm.weight,
+                    mlp.gate_proj.weight, mlp.up_proj.weight, mlp.down_proj.weight}
+            for i in [0, num_layers),
+        norm.weight,
+        lm_head.weight.
+    """
+    sd: Dict[str, torch.Tensor] = {}
+
+    # Input token embedding table [vocab_size, hidden_size].
+    sd["embed_tokens.weight"] = load_embedding_weight(checkpoint_path, "model.embed_tokens.weight")
+
+    # N decoder layers (each composed via load_lm_decoder_layer_weights).
+    for i in range(num_layers):
+        layer = load_lm_decoder_layer_weights(checkpoint_path, layer_idx=i)
+        for k, v in layer.items():
+            sd[f"layers.{i}.{k}"] = v
+
+    # Final model.norm RMSNorm (eps 1e-6).
+    sd["norm.weight"] = load_lm_rmsnorm_weight(checkpoint_path, "model.norm.weight")
+
+    # Untied LM head projection (no bias).
+    sd["lm_head.weight"] = load_lm_head_weight(checkpoint_path, "lm_head.weight")
+
+    return sd
+
+
 def load_vision_tower_weights(checkpoint_path: str, num_layers: int) -> Dict[str, torch.Tensor]:
     """Load the full DotsVisionTransformer (vision tower) real weights.
 

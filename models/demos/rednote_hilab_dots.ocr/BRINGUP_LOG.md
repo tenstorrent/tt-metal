@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** p150 (blackhole)
 **Started:** 2026-05-29T00:11:46Z
-**Updated:** 2026-05-29T04:54:46Z
+**Updated:** 2026-05-29T05:03:00Z
 
 ## Block Status
 
@@ -13,8 +13,8 @@
 | vision_patch_embed | reference | done | 1.000000 | 0 | reference vs HF (eager) module, PCC=1.0; golden saved |
 | vision_patch_embed | ttnn | skipped | — | 0 |  |
 | vision_patch_embed | debug | n/a | — | 0 |  |
-| vision_patch_embed | optimization | pending | — | 0 |  |
-| vision_patch_embed | real_weights | pending | — | 0 |  |
+| vision_patch_embed | optimization | skipped | — | 0 |  |
+| vision_patch_embed | real_weights | skipped | — | 0 |  |
 | vision_rmsnorm | reference | done | 1.000000 | 0 | reference vs HF (eager) module, PCC=1.0; golden saved |
 | vision_rmsnorm | ttnn | done | 0.999995 | 0 | ttnn.rms_norm eps=1e-5 HiFi4+fp32_dest_acc bf16 DRAM TILE; PCC 0.99999 vs seed-0 golden on p150 |
 | vision_rmsnorm | debug | n/a | — | 0 |  |
@@ -84,7 +84,7 @@
 | language_model | ttnn | done | 0.999911 | 0 | Full Qwen2ForCausalLM assembly at REDUCED 2 layers (full=28), seq 64. Composes verified TtEmbedding -> 2x TtDecoderLayer (GQA 12/2, QKV bias, 1D RoPE theta 1e6, causal) -> final TtRMSNorm (eps 1e-6, applied here before lm_head) -> TtLMHead (untied hidden->vocab no bias) by file-path import. Shared cos/sin + causal mask precomputed on host, threaded through layers. HiFi4+fp32_dest_acc bf16 DRAM TILE. PCC=0.99991 vs golden on p150. Guard ok. |
 | language_model | debug | n/a | — | 0 |  |
 | language_model | optimization | done | — | 0 | Assembly of already-optimized components (embedding, decoder_layer attn -21.8%/mlp -7.5%/residual L1, final rmsnorm at-ceiling, lm_head bf8 -36%). Traced tracy: MatmulDeviceOperation = 87.9% of 3918us total; the single wide lm_head matmul (1536->151936, seq 64) is ~69% of the block. ASSEMBLY-LEVEL WIN: the lm_head was being constructed with the assembly-wide bf16 dtype, REVERTING its inherited bf8_b weight optimization. Dropped that override so the lm_head uses its own bf8_b default -> top matmul 3083->2697us (-12.5%), block total 4301->3918us (-8.9%). PCC 0.99991->0.99989 (argmax-safe). No single-core fallbacks; remaining matmul time is the inherited (already-optimized) decoder projections + bf8 lm_head -> at-ceiling otherwise. |
-| language_model | real_weights | pending | — | 0 |  |
+| language_model | real_weights | done | 0.999834 | 0 | Full Qwen2 LM trunk (embed_tokens -> 2x decoder_layer -> final RMSNorm -> lm_head) at REDUCED 2 layers (full=28), seq 64. load_language_model_weights composes the per-component real-weight loaders (embed_tokens, load_lm_decoder_layer_weights per layer re-prefixed layers.{i}., model.norm.weight, lm_head.weight). PCC=0.99983 vs real HF eager reference; inherits tick-45 fp32-scores attention + bf8 lm_head. Guard ok (lint=0, params_loaded=560344576). LAST real_weights component -> real_weights phase COMPLETE. real_weights phase COMPLETE (14 device components + vision_patch_embed host-resident skip); propagated the host-resident escape hatch to vision_patch_embed.optimization and .real_weights (->skipped, mirroring its ttnn skip) so the DAG advances. eligible_blocks now returns generation[ocr]. |
 
 ## Use cases
 
@@ -94,7 +94,6 @@
 
 ## Recent Ticks
 
-- tick 39 (2026-05-29T03:58:28Z): device[vision_block] — ok
 - tick 40 (2026-05-29T04:04:31Z): device[vision_patch_merger] — ok
 - tick 41 (2026-05-29T04:10:59Z): device[vision_tower] — ok
 - tick 42 (2026-05-29T04:16:28Z): device[embedding] — ok
@@ -104,6 +103,7 @@
 - tick 46 (2026-05-29T04:42:31Z): device[mlp] — ok
 - tick 47 (2026-05-29T04:48:41Z): device[decoder_layer] — ok
 - tick 48 (2026-05-29T04:54:46Z): device[lm_head] — ok
+- tick 49 (2026-05-29T05:03:00Z): device[language_model] — ok
 
 ## Host-Resident Exceptions
 

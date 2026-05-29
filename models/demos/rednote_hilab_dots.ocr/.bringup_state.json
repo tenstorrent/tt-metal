@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-29T00:11:46Z",
-  "updated_at": "2026-05-29T04:54:46Z",
+  "updated_at": "2026-05-29T05:03:00Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -35,12 +35,10 @@
         "attempts": 0
       },
       "optimization": {
-        "status": "pending",
-        "attempts": 0
+        "status": "skipped"
       },
       "real_weights": {
-        "status": "pending",
-        "attempts": 0
+        "status": "skipped"
       }
     },
     {
@@ -883,8 +881,15 @@
         }
       },
       "real_weights": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/weight_loader.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_real_hf_weights.py"
+        ],
+        "notes": "Full Qwen2 LM trunk (embed_tokens -> 2x decoder_layer -> final RMSNorm -> lm_head) at REDUCED 2 layers (full=28), seq 64. load_language_model_weights composes the per-component real-weight loaders (embed_tokens, load_lm_decoder_layer_weights per layer re-prefixed layers.{i}., model.norm.weight, lm_head.weight). PCC=0.99983 vs real HF eager reference; inherits tick-45 fp32-scores attention + bf8 lm_head. Guard ok (lint=0, params_loaded=560344576). LAST real_weights component -> real_weights phase COMPLETE. real_weights phase COMPLETE (14 device components + vision_patch_embed host-resident skip); propagated the host-resident escape hatch to vision_patch_embed.optimization and .real_weights (->skipped, mirroring its ttnn skip) so the DAG advances. eligible_blocks now returns generation[ocr].",
+        "pcc": 0.9998340706032836,
+        "params_loaded": 560344576
       }
     }
   ],
@@ -1232,6 +1237,12 @@
       "tick": 48,
       "ts": "2026-05-29T04:54:46Z",
       "action": "device[lm_head]",
+      "result": "ok"
+    },
+    {
+      "tick": 49,
+      "ts": "2026-05-29T05:03:00Z",
+      "action": "device[language_model]",
       "result": "ok"
     }
   ],

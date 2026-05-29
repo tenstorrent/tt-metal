@@ -56,6 +56,7 @@ _tt_attention = _load_by_path("dots_tt_attention_rw", "attention.py", _TT_DIR)
 _tt_mlp = _load_by_path("dots_tt_mlp_rw", "mlp.py", _TT_DIR)
 _tt_decoder_layer = _load_by_path("dots_tt_decoder_layer_rw", "decoder_layer.py", _TT_DIR)
 _tt_lm_head = _load_by_path("dots_tt_lm_head_rw", "lm_head.py", _TT_DIR)
+_tt_language_model = _load_by_path("dots_tt_language_model_rw", "language_model.py", _TT_DIR)
 _loader = _load_by_path("dots_weight_loader", "weight_loader.py", _TT_DIR)
 _functional = _load_by_path("dots_reference_functional_rw", "functional.py", _REF_DIR)
 
@@ -72,7 +73,9 @@ TtAttention = _tt_attention.TtAttention
 TtMLP = _tt_mlp.TtMLP
 TtDecoderLayer = _tt_decoder_layer.TtDecoderLayer
 TtLMHead = _tt_lm_head.TtLMHead
+TtLanguageModel = _tt_language_model.TtLanguageModel
 load_lm_head_weight = _loader.load_lm_head_weight
+load_language_model_weights = _loader.load_language_model_weights
 load_lm_rope_config = _loader.load_lm_rope_config
 load_lm_decoder_layer_weights = _loader.load_lm_decoder_layer_weights
 load_lm_attention_weights = _loader.load_lm_attention_weights
@@ -98,6 +101,7 @@ mlp_forward = _functional.mlp_forward
 rope_forward = _functional.rope_forward
 decoder_layer_forward = _functional.decoder_layer_forward
 lm_head_forward = _functional.lm_head_forward
+language_model_forward = _functional.language_model_forward
 
 # Vision attention config (modeling_dots_vision): 12 heads, head_dim 128,
 # fused QKV no-bias, 2D RoPE theta 1e4, block-diagonal bidirectional attention.
@@ -1101,6 +1105,109 @@ def test_real_hf_weights_lm_head(device):
     assert params_loaded > 0
 
 
+# Full LM assembly (Qwen2ForCausalLM): embed_tokens -> N x decoder_layer ->
+# final RMSNorm (model.norm, eps 1e-6) -> lm_head (untied, no bias). Validated at
+# the SAME reduced layer count the seed-0 bring-up golden used (num_layers=2 vs
+# production 28) so the composed real-weight state_dict and the eager reference
+# agree. The seed-0 golden supplies the same input_ids (seq 64) the synthetic run
+# used; only the weights swap to the real checkpoint (composed via
+# load_language_model_weights). This is the LAST real_weights component -- it
+# inherits the tick-45 fp32-scores attention fix and the bf8 lm_head, both
+# validated standalone with real weights, so the deep stack should hold ~0.999.
+LANGUAGE_MODEL_GOLDEN_PATH = os.path.join(_REF_DIR, "golden", "language_model.pt")
+
+
+def _run_language_model_pcc(device):
+    """Load the full real LM-trunk weights, run TtLanguageModel on device, and
+    compare against the HF PyTorch reference (language_model_forward) computed
+    with the SAME real weights at the reduced golden layer count.
+
+    Composes the per-component real-weight loaders via load_language_model_weights
+    and validates the full embed -> N decoder layers -> final norm -> lm_head
+    assembly end to end. Returns (pcc, params_loaded).
+    """
+    golden = torch.load(LANGUAGE_MODEL_GOLDEN_PATH, map_location="cpu", weights_only=False)
+    input_ids = golden["input"].to(torch.int64)  # [1, 64]
+    cfg = golden["config"]
+
+    _, seq_len = input_ids.shape
+    num_layers = int(cfg["num_layers"])
+    num_heads = int(cfg["num_attention_heads"])
+    num_kv_heads = int(cfg["num_key_value_heads"])
+    head_dim = int(cfg["head_dim"])
+    rope_theta = float(cfg["rope_theta"])
+    eps = float(cfg["rms_norm_eps"])
+    bias = bool(cfg["attention_bias"])
+    vocab_size = int(cfg["vocab_size"])
+    hidden = num_heads * head_dim
+
+    # Compose the REAL checkpoint weights for the full LM trunk at the reduced depth.
+    state_dict = load_language_model_weights(CHECKPOINT_PATH, num_layers=num_layers)
+    state_dict = {k: v.to(torch.float32) for k, v in state_dict.items()}
+    params_loaded = int(sum(v.numel() for v in state_dict.values()))
+
+    # Shape sanity on the composed real state_dict.
+    assert state_dict["embed_tokens.weight"].shape == (vocab_size, hidden), tuple(
+        state_dict["embed_tokens.weight"].shape
+    )
+    assert state_dict["norm.weight"].shape == (hidden,), tuple(state_dict["norm.weight"].shape)
+    assert state_dict["lm_head.weight"].shape == (vocab_size, hidden), tuple(state_dict["lm_head.weight"].shape)
+    for i in range(num_layers):
+        assert state_dict[f"layers.{i}.self_attn.q_proj.weight"].shape == (hidden, hidden)
+        assert state_dict[f"layers.{i}.mlp.gate_proj.weight"].shape == (int(cfg["intermediate_size"]), hidden)
+
+    # HF PyTorch reference (fp32) with the REAL weights at the reduced depth.
+    ref_output = language_model_forward(
+        input_ids,
+        state_dict,
+        num_layers=num_layers,
+        num_heads=num_heads,
+        num_kv_heads=num_kv_heads,
+        head_dim=head_dim,
+        rope_theta=rope_theta,
+        eps=eps,
+        bias=bias,
+    )  # [1, seq, vocab]
+
+    tt_model = TtLanguageModel(
+        device=device,
+        state_dict=state_dict,
+        num_layers=num_layers,
+        seq_len=seq_len,
+        num_heads=num_heads,
+        num_kv_heads=num_kv_heads,
+        head_dim=head_dim,
+        rope_theta=rope_theta,
+        eps=eps,
+        bias=bias,
+    )
+
+    # ttnn.embedding consumes row-major uint32 indices.
+    tt_input = ttnn.from_torch(
+        input_ids.to(torch.int32),
+        device=device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_output = tt_model(tt_input)
+    tt_output_torch = ttnn.to_torch(tt_output).to(torch.float32).reshape(ref_output.shape)
+
+    passing, pcc_message = comp_pcc(ref_output, tt_output_torch, 0.99)
+    print(comp_allclose(ref_output, tt_output_torch))
+    print(f"comp_pcc(language_model, real weights): passing={passing}, message={pcc_message}")
+    msg = str(pcc_message)
+    pcc = float(msg.split("PCC:")[-1].strip()) if "PCC:" in msg else float(pcc_message)
+    print(f"real-weights language_model PCC = {pcc} | params_loaded = {params_loaded} | num_layers = {num_layers}")
+    assert passing, f"language_model real-weights PCC below 0.99: {pcc_message}"
+    return pcc, params_loaded
+
+
+def test_real_hf_weights_language_model(device):
+    pcc, params_loaded = _run_language_model_pcc(device)
+    assert params_loaded > 0
+
+
 if __name__ == "__main__":
     dev = ttnn.open_device(device_id=0, l1_small_size=32768)
     try:
@@ -1117,5 +1224,6 @@ if __name__ == "__main__":
         _run_lm_mlp_pcc(dev)
         _run_lm_decoder_layer_pcc(dev)
         _run_lm_head_pcc(dev)
+        _run_language_model_pcc(dev)
     finally:
         ttnn.close_device(dev)
