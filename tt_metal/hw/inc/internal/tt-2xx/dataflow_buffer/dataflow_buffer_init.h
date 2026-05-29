@@ -92,10 +92,12 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
     uint32_t num_dfbs =
         local_dfb_mask;  // kernel config holds local_cb_mask but it gets hijacked to hold number of dfbs
 
-    // Read the global header to find where the shared per-DFB layout begins.
-    // Layout: [dfb_global_header_t(4B)] [DM0 global blob] [shared per-DFB layout...]
+    // Read the global header: carries offsets to DM1 remapper blob, DM0 ISR blob, shared layout.
+    // Layout: [dfb_global_header_t(12B)] [DM1 remapper blob] [DM0 ISR blob] [shared per-DFB layout]
     volatile dfb_global_header_t* ghdr = reinterpret_cast<volatile dfb_global_header_t*>(dfb_config_base);
-    uint32_t per_dfb_layout_offset = ghdr->per_dfb_layout_offset;
+    uint32_t dm1_remapper_blob_offset = ghdr->dm1_remapper_blob_offset;
+    uint32_t dm0_isr_blob_offset      = ghdr->dm0_isr_blob_offset;
+    uint32_t per_dfb_layout_offset    = ghdr->per_dfb_layout_offset;
     volatile uint8_t* shared_base_ptr =
         reinterpret_cast<volatile uint8_t*>(dfb_config_base) + per_dfb_layout_offset;
 
@@ -111,80 +113,65 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
     uint32_t t_after_tc_init_loop = 0;
 
 #ifndef COMPILE_FOR_TRISC
-    // DM0-only accumulator state for the post-loop remapper enable and ISR setup.
-    bool enable_remapper = false;
-    uint8_t remapper_hwm = 0;  // high-watermark: one past the highest pair_index configured; drives write_pairs_up_to()
+    // DM0-only: ISR txn mask and enable timing.
     uint32_t producer_txn_id_mask = 0;
     uint32_t consumer_txn_id_mask = 0;
-    uint32_t end_remapper_config_time = 0;
-    uint32_t end_isr_enable_time = 0;
-    // Granular timing probes. Per-DFB arrays populated by DM0 only.
-    // t_before_tc_writes set by all DMs to split spin-wait from TC HW writes:
-    //   spinwait  = t_before_tc_writes - t_after_merged_loop
-    //   tc_writes = t_after_tc_init_loop - t_before_tc_writes
+    uint32_t end_isr_enable_time  = 0;
+    uint32_t t_after_isr_ie_writes = 0;
+
+    // DM1-only: remapper accumulator and timing.
+    bool enable_remapper   = false;
+    uint8_t remapper_hwm   = 0;   // one past the highest pair_index configured
+    uint32_t end_remapper_config_time  = 0;
+    uint32_t t_after_write_pairs_up_to = 0;
+
+    // Granular timing probes. Per-DFB arrays: DM0 populates t_subpassA/B, DM1 populates t_rmp_pass.
+    // t_before_tc_writes set by all producer DMs to split spin-wait from TC HW writes.
     constexpr uint8_t MAX_PROBE_DFBS = 32;
-    uint32_t t_subpassA[MAX_PROBE_DFBS]   = {};  // loop overhead only for DM0 (no dfb_initializer_t fetch)
-    uint32_t t_subpassB_0[MAX_PROBE_DFBS] = {};  // after remapper SW setup (no HW writes), per DFB (DM0)
-    uint32_t t_subpassB[MAX_PROBE_DFBS]   = {};  // after txn-id threshold writes, per DFB (DM0)
-    uint32_t t_after_write_pairs_up_to = 0;      // after write_pairs_up_to() HW burst in post-loop (DM0; 0 if no remapper)
-    uint32_t t_after_isr_ie_writes = 0;          // after ISR IE mask register writes (DM0)
-    uint32_t t_before_tc_writes    = 0;          // before first llk_intf_reset; all producer DMs
+    uint32_t t_subpassA[MAX_PROBE_DFBS]   = {};  // DM0: loop overhead per DFB (no dfb_initializer_t fetch)
+    uint32_t t_subpassB[MAX_PROBE_DFBS]   = {};  // DM0: after CMDBUF threshold writes per DFB
+    uint32_t t_rmp_pass[MAX_PROBE_DFBS]   = {};  // DM1: after remapper slots processed per DFB
+    uint32_t t_before_tc_writes = 0;             // all producer DMs: before first llk_intf_reset
 #endif
 
     // -----------------------------------------------------------------------
-    // DM0: dedicated contiguous blob loop.
-    // Reads linearly from dfb_config_base + sizeof(dfb_global_header_t) — no dfb_initializer_t
-    // fetches, no per-RISC cache pollution, hardware prefetcher-friendly.
+    // DM1: dedicated remapper blob loop. Runs in parallel with DM0's ISR blob loop.
+    // Reads linearly from dm1_remapper_blob_offset — only remapper slot data,
+    // no ISR/txn pollution, hardware prefetcher-friendly.
+    // After all DFBs: burst-write remapper pairs, enable remapper.
     // -----------------------------------------------------------------------
 #ifndef COMPILE_FOR_TRISC
-    if (hartid == 0) {
-        volatile uint8_t* dm0_blob_ptr =
-            reinterpret_cast<volatile uint8_t*>(dfb_config_base) + sizeof(dfb_global_header_t);
+    if (hartid == 1) {
+        volatile uint8_t* dm1_blob_ptr =
+            reinterpret_cast<volatile uint8_t*>(dfb_config_base) + dm1_remapper_blob_offset;
 
-        // Local non-volatile staging buffer: one blob entry at a time.
-        // All blob structs are 4-byte aligned and sized in multiples of 4, so word-copy is safe.
-        // Size = header(4) + max_rmp_slots(8×16) + max_txn_entries(2×4×16) = 260 bytes = 65 words.
-        constexpr uint32_t MAX_DFB_BLOB_ENTRY_WORDS =
-            (sizeof(dfb_dm0_blob_header_t) +
-             dfb::MAX_DM0_REMAPPER_SLOTS * sizeof(dfb_dm0_remapper_slot_t) +
-             2u * dfb::NUM_TXN_IDS     * sizeof(dfb_dm0_txn_entry_t) + 3u) / 4u;
-        uint32_t local_blob[MAX_DFB_BLOB_ENTRY_WORDS];
+        // Local non-volatile staging buffer for one DFB's remapper entry.
+        // Size = header(4) + max_rmp_slots(8×16) = 132 bytes = 33 words.
+        constexpr uint32_t MAX_DM1_ENTRY_WORDS =
+            (sizeof(dfb_dm1_remapper_entry_header_t) +
+             dfb::MAX_DM0_REMAPPER_SLOTS * sizeof(dfb_dm0_remapper_slot_t) + 3u) / 4u;
+        uint32_t local_rmp[MAX_DM1_ENTRY_WORDS];
 
         for (uint32_t logical_dfb_id = 0; logical_dfb_id < num_dfbs; logical_dfb_id++) {
-            // subpassA for DM0: near-zero interval (loop overhead only — no dfb_initializer_t read).
-            t_subpassA[logical_dfb_id] = rdcycle();
+            // Bulk-copy this DFB's remapper entry into a non-volatile local buffer.
+            const volatile uint32_t* vsrc = reinterpret_cast<const volatile uint32_t*>(dm1_blob_ptr);
+            local_rmp[0] = vsrc[0];  // header word
 
-            // --- Non-volatile bulk-copy of this DFB's blob entry ---
-            // Step 1: read the 4-byte header with a single volatile word load to get entry counts.
-            const volatile uint32_t* vsrc = reinterpret_cast<const volatile uint32_t*>(dm0_blob_ptr);
-            local_blob[0] = vsrc[0];
+            const dfb_dm1_remapper_entry_header_t* local_hdr =
+                reinterpret_cast<const dfb_dm1_remapper_entry_header_t*>(local_rmp);
+            uint8_t num_rmp = local_hdr->num_remapper_slots;
 
-            const dfb_dm0_blob_header_t* local_hdr =
-                reinterpret_cast<const dfb_dm0_blob_header_t*>(local_blob);
-            uint8_t num_rmp  = local_hdr->num_remapper_slots;
-            uint8_t num_prod = local_hdr->num_producer_txns;
-            uint8_t num_cons = local_hdr->num_consumer_txns;
-
-            // Step 2: copy the rest of the entry (slots + txn entries) one word at a time.
-            // After this loop every field access below uses registers, not volatile L1 loads.
-            uint32_t entry_bytes = sizeof(dfb_dm0_blob_header_t)
-                                 + num_rmp  * sizeof(dfb_dm0_remapper_slot_t)
-                                 + (num_prod + num_cons) * sizeof(dfb_dm0_txn_entry_t);
+            uint32_t entry_bytes = sizeof(dfb_dm1_remapper_entry_header_t)
+                                 + num_rmp * sizeof(dfb_dm0_remapper_slot_t);
             uint32_t entry_words = (entry_bytes + 3u) >> 2u;
             for (uint32_t w = 1u; w < entry_words; w++) {
-                local_blob[w] = vsrc[w];
+                local_rmp[w] = vsrc[w];
             }
 
-            // Non-volatile pointers into the local buffer.
             const dfb_dm0_remapper_slot_t* slots =
                 reinterpret_cast<const dfb_dm0_remapper_slot_t*>(
-                    reinterpret_cast<const uint8_t*>(local_blob) + sizeof(dfb_dm0_blob_header_t));
-            const dfb_dm0_txn_entry_t* prod_txns =
-                reinterpret_cast<const dfb_dm0_txn_entry_t*>(slots + num_rmp);
-            const dfb_dm0_txn_entry_t* cons_txns = prod_txns + num_prod;
+                    reinterpret_cast<const uint8_t*>(local_rmp) + sizeof(dfb_dm1_remapper_entry_header_t));
 
-            // Remapper config (SW only): all reads from local non-volatile buffer.
-            // write_pairs_up_to(remapper_hwm) bursts all HW writes in the post-loop.
             for (uint8_t s = 0; s < num_rmp; s++) {
                 const dfb_dm0_remapper_slot_t& slot = slots[s];
                 enable_remapper = true;
@@ -193,11 +180,50 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                 uint8_t hwm = static_cast<uint8_t>(slot.pair_index + 1);
                 if (hwm > remapper_hwm) { remapper_hwm = hwm; }
             }
+            t_rmp_pass[logical_dfb_id] = rdcycle();
 
-            // t_subpassB_0: after remapper SW setup; before HW threshold writes.
-            t_subpassB_0[logical_dfb_id] = rdcycle();
+            dm1_blob_ptr += entry_bytes;
+        }
+    }
+    // -----------------------------------------------------------------------
+    // DM0: dedicated ISR blob loop. Runs in parallel with DM1's remapper blob loop.
+    // Reads linearly from dm0_isr_blob_offset — only CMDBUF/ISR txn data,
+    // no remapper/init pollution, hardware prefetcher-friendly.
+    // -----------------------------------------------------------------------
+    else if (hartid == 0) {
+        volatile uint8_t* dm0_blob_ptr =
+            reinterpret_cast<volatile uint8_t*>(dfb_config_base) + dm0_isr_blob_offset;
 
-            // Producer txn entries from local non-volatile buffer.
+        // Local non-volatile staging buffer for one DFB's ISR entry.
+        // Size = header(4) + max_txn_entries(2×4×16) = 132 bytes = 33 words.
+        constexpr uint32_t MAX_DM0_ISR_ENTRY_WORDS =
+            (sizeof(dfb_dm0_isr_entry_header_t) +
+             2u * dfb::NUM_TXN_IDS * sizeof(dfb_dm0_txn_entry_t) + 3u) / 4u;
+        uint32_t local_isr[MAX_DM0_ISR_ENTRY_WORDS];
+
+        for (uint32_t logical_dfb_id = 0; logical_dfb_id < num_dfbs; logical_dfb_id++) {
+            t_subpassA[logical_dfb_id] = rdcycle();
+
+            const volatile uint32_t* vsrc = reinterpret_cast<const volatile uint32_t*>(dm0_blob_ptr);
+            local_isr[0] = vsrc[0];  // header word
+
+            const dfb_dm0_isr_entry_header_t* local_hdr =
+                reinterpret_cast<const dfb_dm0_isr_entry_header_t*>(local_isr);
+            uint8_t num_prod = local_hdr->num_producer_txns;
+            uint8_t num_cons = local_hdr->num_consumer_txns;
+
+            uint32_t entry_bytes = sizeof(dfb_dm0_isr_entry_header_t)
+                                 + (num_prod + num_cons) * sizeof(dfb_dm0_txn_entry_t);
+            uint32_t entry_words = (entry_bytes + 3u) >> 2u;
+            for (uint32_t w = 1u; w < entry_words; w++) {
+                local_isr[w] = vsrc[w];
+            }
+
+            const dfb_dm0_txn_entry_t* prod_txns =
+                reinterpret_cast<const dfb_dm0_txn_entry_t*>(
+                    reinterpret_cast<const uint8_t*>(local_isr) + sizeof(dfb_dm0_isr_entry_header_t));
+            const dfb_dm0_txn_entry_t* cons_txns = prod_txns + num_prod;
+
             for (uint8_t i = 0; i < num_prod; i++) {
                 const dfb_dm0_txn_entry_t& e = prod_txns[i];
                 producer_txn_id_mask |= (1u << e.txn_id);
@@ -211,7 +237,6 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                 asm volatile("nop");
                 SET_TILES_TO_PROCESS_THRES_TR_ACK(e.txn_id, e.threshold);
             }
-            // Consumer txn entries from local non-volatile buffer.
             for (uint8_t i = 0; i < num_cons; i++) {
                 const dfb_dm0_txn_entry_t& e = cons_txns[i];
                 consumer_txn_id_mask |= (1u << e.txn_id);
@@ -227,17 +252,15 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
             }
             t_subpassB[logical_dfb_id] = rdcycle();
 
-            // Advance dm0_blob_ptr to the next DFB's blob entry.
             dm0_blob_ptr += entry_bytes;
         }
     } else
 #endif  // !COMPILE_FOR_TRISC
     // -----------------------------------------------------------------------
-    // All DMs except DM0 + TRISC: shared per-DFB layout loop.
+    // DM2-7 + TRISC: shared per-DFB layout loop.
     // Populates g_dfb_interface (TC base/limit addrs, txn IDs, entry sizes) for
     // each RISC that participates as a producer or consumer.
-    // DM0 is always a pure coordinator (remapper config + ISR setup via blob loop
-    // above) and never a DFB producer/consumer, so it skips this loop entirely.
+    // DM0 and DM1 are pure coordinators and skip this loop entirely.
     // Stride = sizeof(dfb_initializer_t) + num_riscs * sizeof(dfb_initializer_per_risc_t).
     // -----------------------------------------------------------------------
     {
@@ -363,22 +386,19 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
     t_after_merged_loop = rdcycle();
 
 #ifndef COMPILE_FOR_TRISC
-    // DM0 post-loop: enable remapper, set up ISR interrupt enables, then write
-    // implicit_sync_configured = 1 for all DFBs so other DMs/TRISCs can proceed.
-    if (hartid == 0) {
-        // Flush accumulated pair configs and enable the remapper.
-        // Pair indices are monotonically increasing so only [0, remapper_hwm) need writes.
-        // Interval [t_after_merged_loop  → t_after_write_pairs_up_to] = write_pairs_up_to() HW burst cost.
-        // Interval [t_after_write_pairs_up_to → end_remapper_config_time] = enable_remapper() cost.
-        if (enable_remapper) {
-            g_remapper_configurator.write_pairs_up_to(remapper_hwm);
-            t_after_write_pairs_up_to = rdcycle();
-            g_remapper_configurator.enable_remapper();
-            end_remapper_config_time = rdcycle();
-        }
+    // DM1 post-loop: burst-write accumulated remapper pair configs and enable the remapper.
+    // Runs in parallel with DM0's ISR post-loop. Producers spin on is_remapper_enabled()
+    // before TC init, so DM1's enable_remapper() is the gate for producer TC initialization.
+    if (hartid == 1 && enable_remapper) {
+        g_remapper_configurator.write_pairs_up_to(remapper_hwm);
+        t_after_write_pairs_up_to = rdcycle();
+        g_remapper_configurator.enable_remapper();
+        end_remapper_config_time = rdcycle();
+    }
 
-        // Program which transaction ids should trigger the implicit sync ISR.
-        // Interval [end_remapper_config_time → t_after_isr_ie_writes] = IE register read/write cost.
+    // DM0 post-loop: program ISR IE registers and enable/disable the DFB tile ISR.
+    // The ISR setup is independent of the remapper; DM0 and DM1 post-loops run in parallel.
+    if (hartid == 0) {
         uint64_t reg_val = CMDBUF_RD_REG(OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET);
         reg_val = (reg_val & 0x00000000FFFFFFFFULL) | ((uint64_t)(producer_txn_id_mask & 0xFFFFFFFFULL) << 32);
         CMDBUF_WR_REG(OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET, reg_val);
@@ -394,7 +414,7 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
         } else {
             disable_dfb_tile_isr();
         }
-    }  // end if (hartid == 0) post-loop
+    }  // end DM0 post-loop
 
     // -----------------------------------------------------------------------
     // TC init loop (old Pass 3): all DMs; DM producers spin-wait for remapper.
@@ -414,7 +434,7 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
 
             // DM0 signals ISR-ready to all other DMs and TRISCs once per DFB, not on every poll iteration.
             if (hartid == 0) {
-                init_ptr->implicit_sync_configured = 1;
+                init_ptr->implicit_sync_configured = 1; // see if we could put this in a better place
             }
 
             if (risc_mask & hart_bit) {
@@ -456,40 +476,46 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
     DPRINT << "start_time: " << start_time << ENDL();
 #ifndef COMPILE_FOR_TRISC
     if (hartid == 0) {
-        // Per-DFB breakdown (DM0 only — t_subpassA/B arrays only populated by DM0):
-        //   subpassA   = SW cost: L1 config reads + g_dfb_interface populate
-        //   subpassB_0 = SW cost: blob read + remapper API setup (no HW writes; deferred to post-loop)
+        // DM0 per-DFB breakdown:
+        //   subpassA   = loop overhead (header read, bulk-copy of ISR entry)
         //   subpassB_1 = HW cost: g_txn_dfb_descriptor populate + CMDBUF threshold register writes
         uint32_t total_subpassA  = 0;
-        uint32_t total_subpassB0 = 0;
         uint32_t total_subpassB1 = 0;
         for (uint32_t i = 0; i < num_dfbs; i++) {
             uint32_t prev_end   = (i == 0) ? start_time : t_subpassB[i - 1];
             uint32_t elapsed_a  = t_subpassA[i] - prev_end;
-            uint32_t elapsed_b0 = t_subpassB_0[i] - t_subpassA[i];
-            uint32_t elapsed_b1 = t_subpassB[i] - t_subpassB_0[i];
+            uint32_t elapsed_b1 = t_subpassB[i] - t_subpassA[i];
             total_subpassA  += elapsed_a;
-            total_subpassB0 += elapsed_b0;
             total_subpassB1 += elapsed_b1;
             DPRINT << "DFB" << i
                    << " subpassA=" << elapsed_a
-                   << " subpassB_0=" << elapsed_b0
                    << " subpassB_1=" << elapsed_b1
                    << ENDL();
         }
         DPRINT << "total_subpassA=" << total_subpassA
-               << " total_subpassB0=" << total_subpassB0
                << " total_subpassB1=" << total_subpassB1 << ENDL();
 
-        // DM0-only post-loop milestones (absolute timestamps, in execution order).
-        // [t_after_merged_loop      → t_after_write_pairs_up_to] = write_pairs_up_to() HW burst (0 if no remapper)
-        // [t_after_write_pairs_up_to → end_remapper_config_time]  = enable_remapper() cost
-        // [end_remapper_config_time  → t_after_isr_ie_writes]     = ISR IE register read/write cost
-        // [t_after_isr_ie_writes     → end_isr_enable_time]       = enable_dfb_tile_isr() cost
+        // DM0 post-loop milestones.
+        // [t_after_isr_ie_writes → end_isr_enable_time] = enable_dfb_tile_isr() cost
+        if (t_after_isr_ie_writes) DPRINT << "t_after_isr_ie_writes: " << t_after_isr_ie_writes << ENDL();
+        if (end_isr_enable_time)   DPRINT << "end_isr_enable_time: "   << end_isr_enable_time   << ENDL();
+    }
+    if (hartid == 1) {
+        // DM1 per-DFB breakdown: time to process remapper slots for each DFB.
+        uint32_t total_rmp = 0;
+        for (uint32_t i = 0; i < num_dfbs; i++) {
+            uint32_t prev_end  = (i == 0) ? start_time : t_rmp_pass[i - 1];
+            uint32_t elapsed   = t_rmp_pass[i] - prev_end;
+            total_rmp += elapsed;
+            DPRINT << "DFB" << i << " rmp_pass=" << elapsed << ENDL();
+        }
+        DPRINT << "total_rmp=" << total_rmp << ENDL();
+
+        // DM1 post-loop milestones.
+        // [t_after_merged_loop → t_after_write_pairs_up_to] = write_pairs_up_to() HW burst
+        // [t_after_write_pairs_up_to → end_remapper_config_time] = enable_remapper() cost
         if (t_after_write_pairs_up_to) DPRINT << "t_after_write_pairs_up_to: " << t_after_write_pairs_up_to << ENDL();
         if (end_remapper_config_time)  DPRINT << "end_remapper_config_time: "  << end_remapper_config_time  << ENDL();
-        if (t_after_isr_ie_writes)     DPRINT << "t_after_isr_ie_writes: "     << t_after_isr_ie_writes     << ENDL();
-        if (end_isr_enable_time)       DPRINT << "end_isr_enable_time: "       << end_isr_enable_time       << ENDL();
     }
     // All DMs: spinwait vs TC HW write split, then TC init loop end.
     if (t_before_tc_writes) {

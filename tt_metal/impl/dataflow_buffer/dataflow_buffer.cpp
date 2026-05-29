@@ -349,18 +349,21 @@ uint32_t DataflowBufferImpl::serialized_size() const {
            (groups[0].hw_risc_configs.size() * sizeof(dfb_initializer_per_risc_t));
 }
 
-uint32_t DataflowBufferImpl::dm0_blob_serialized_size() const {
-    if (!MetalContext::instance().hal().has_tile_counter_registers()) {
-        return 0;
-    }
-    uint8_t num_rmp  = use_remapper ? static_cast<uint8_t>(config.num_producers) : 0;
+uint32_t DataflowBufferImpl::dm1_remapper_blob_serialized_size() const {
+    if (!MetalContext::instance().hal().has_tile_counter_registers()) return 0;
+    uint8_t num_rmp = use_remapper ? static_cast<uint8_t>(config.num_producers) : 0;
+    return static_cast<uint32_t>(
+        sizeof(dfb_dm1_remapper_entry_header_t) +
+        num_rmp * sizeof(dfb_dm0_remapper_slot_t));
+}
+
+uint32_t DataflowBufferImpl::dm0_isr_blob_serialized_size() const {
+    if (!MetalContext::instance().hal().has_tile_counter_registers()) return 0;
     uint8_t num_prod = producer_txn_descriptor.num_txn_ids;
     uint8_t num_cons = consumer_txn_descriptor.num_txn_ids;
     return static_cast<uint32_t>(
-        sizeof(dfb_dm0_blob_header_t) +
-        num_rmp  * sizeof(dfb_dm0_remapper_slot_t) +
-        num_prod * sizeof(dfb_dm0_txn_entry_t) +
-        num_cons * sizeof(dfb_dm0_txn_entry_t));
+        sizeof(dfb_dm0_isr_entry_header_t) +
+        (num_prod + num_cons) * sizeof(dfb_dm0_txn_entry_t));
 }
 
 std::vector<uint8_t> DataflowBufferImpl::serialize_for_core(const CoreCoord& core) const {
@@ -610,104 +613,42 @@ std::vector<uint8_t> DataflowBufferImpl::serialize_for_core(const CoreCoord& cor
     return data;
 }
 
-std::vector<uint8_t> DataflowBufferImpl::serialize_dm0_blob_for_core(const CoreCoord& core) const {
-    TT_FATAL(this->configs_finalized, "DFB {} configs not finalized before serialization", this->id);
 
-    if (!MetalContext::instance().hal().has_tile_counter_registers()) {
-        return {};
-    }
+std::vector<uint8_t> DataflowBufferImpl::serialize_dm1_remapper_blob_for_core(const CoreCoord& core) const {
+    TT_FATAL(this->configs_finalized, "DFB {} configs not finalized before serialization", this->id);
+    if (!MetalContext::instance().hal().has_tile_counter_registers()) return {};
 
     auto it = this->core_lookup_.find(core);
     TT_FATAL(it != this->core_lookup_.end(), "DFB {} has no config for core ({}, {})", this->id, core.x, core.y);
     const auto& [group_idx, alloc_addr] = it->second;
-    const DfbGroup* core_group = &this->groups[group_idx];
-    const auto& hw_risc_configs = core_group->hw_risc_configs;
+    const auto& hw_risc_configs = this->groups[group_idx].hw_risc_configs;
 
-    // Recompute per_core_rc with addresses assigned (same logic as serialize_for_core).
+    // Recompute per-core addresses (needed for packed_tile_counter validation; slots don't use addrs directly).
     uint8_t num_producer_tcs = 0;
-    uint8_t num_consumer_tcs = 0;
     for (const auto& rc : hw_risc_configs) {
-        if (rc.is_producer) {
-            num_producer_tcs = std::max(num_producer_tcs, rc.config.num_tcs_to_rr);
-        } else {
-            num_consumer_tcs = std::max(num_consumer_tcs, rc.config.num_tcs_to_rr);
-        }
+        if (rc.is_producer) num_producer_tcs = std::max(num_producer_tcs, rc.config.num_tcs_to_rr);
     }
-    const uint32_t entry_size = this->config.entry_size;
-    const uint32_t effective_stride = this->stride_in_entries;
-    const uint32_t base_step = (effective_stride > 1) ? entry_size : (this->capacity * entry_size);
-
     std::vector<DFBRiscConfig> per_core_rc = hw_risc_configs;
-    uint32_t base = alloc_addr;
-    for (uint8_t tc = 0; tc < num_producer_tcs; tc++) {
-        for (auto& rc : per_core_rc) {
-            if (rc.is_producer && tc < rc.config.num_tcs_to_rr) {
-                rc.config.base_addr[tc] = base;
-                rc.config.limit[tc] =
-                    rc.config.base_addr[tc] + ((entry_size * effective_stride) * (this->capacity - 1)) + entry_size;
-                base += base_step;
-            }
-        }
-    }
-    base = alloc_addr;
-    for (uint8_t tc = 0; tc < num_consumer_tcs; tc++) {
-        for (auto& rc : per_core_rc) {
-            if (rc.is_producer) { continue; }
-            rc.config.base_addr[tc] = base;
-            rc.config.limit[tc] =
-                rc.config.base_addr[tc] + ((entry_size * effective_stride) * (this->capacity - 1)) + entry_size;
-            if (this->config.cap == dfb::AccessPattern::STRIDED && tc < rc.config.num_tcs_to_rr) {
-                base += base_step;
-            }
-        }
-        if (this->config.cap == dfb::AccessPattern::ALL && this->config.num_producers > 1 &&
-            tc < num_consumer_tcs) {
-            base += base_step;
-        }
-    }
 
-    // Collect producer and consumer TCs in risc_mask bit order.
-    std::vector<::dfb::PackedTileCounter> blob_producer_tcs;
-    std::vector<::dfb::PackedTileCounter> blob_consumer_tcs;
-    for (int bit = 0; bit < 16; bit++) {
-        if (!(this->risc_mask & (1 << bit))) { continue; }
-        const DFBRiscConfig* rc = nullptr;
-        for (const auto& c : per_core_rc) {
-            if (c.risc_id == static_cast<uint8_t>(bit)) { rc = &c; break; }
-        }
-        for (uint8_t j = 0; j < rc->config.num_tcs_to_rr; j++) {
-            if (rc->is_producer) {
-                blob_producer_tcs.push_back(rc->config.packed_tile_counter[j]);
-            } else {
-                blob_consumer_tcs.push_back(rc->config.packed_tile_counter[j]);
-            }
-        }
-    }
-
-    uint8_t num_rmp  = this->use_remapper ? static_cast<uint8_t>(this->config.num_producers) : 0;
-    uint8_t num_prod = this->producer_txn_descriptor.num_txn_ids;
-    uint8_t num_cons = this->consumer_txn_descriptor.num_txn_ids;
-
+    uint8_t num_rmp = this->use_remapper ? static_cast<uint8_t>(this->config.num_producers) : 0;
     std::vector<uint8_t> data;
-    data.reserve(dm0_blob_serialized_size());
+    data.reserve(dm1_remapper_blob_serialized_size());
 
-    // Blob header
-    dfb_dm0_blob_header_t blob_hdr = {};
-    blob_hdr.num_remapper_slots = num_rmp;
-    blob_hdr.num_producer_txns  = num_prod;
-    blob_hdr.num_consumer_txns  = num_cons;
-    const auto* bhdr_bytes = reinterpret_cast<const uint8_t*>(&blob_hdr);
-    data.insert(data.end(), bhdr_bytes, bhdr_bytes + sizeof(blob_hdr));
+    // DM1 remapper entry header.
+    dfb_dm1_remapper_entry_header_t hdr = {};
+    hdr.num_remapper_slots = num_rmp;
+    const auto* hdr_bytes = reinterpret_cast<const uint8_t*>(&hdr);
+    data.insert(data.end(), hdr_bytes, hdr_bytes + sizeof(hdr));
 
     // Remapper slots: one per producer RISC that uses the remapper, in risc_mask bit order.
     if (this->use_remapper) {
         for (int bit = 0; bit < 16; bit++) {
-            if (!(this->risc_mask & (1 << bit))) { continue; }
+            if (!(this->risc_mask & (1 << bit))) continue;
             const DFBRiscConfig* rc = nullptr;
             for (const auto& c : per_core_rc) {
                 if (c.risc_id == static_cast<uint8_t>(bit)) { rc = &c; break; }
             }
-            if (!rc->is_producer) { continue; }
+            if (!rc->is_producer) continue;
 
             uint8_t num_clientRs =
                 static_cast<uint8_t>(__builtin_popcount(rc->config.remapper_consumer_ids_mask));
@@ -718,11 +659,11 @@ std::vector<uint8_t> DataflowBufferImpl::serialize_dm0_blob_for_core(const CoreC
             uint32_t clientR_val = 0;
             uint8_t mask_remaining = rc->config.remapper_consumer_ids_mask;
             for (uint8_t r = 0; r < num_clientRs && r < ::dfb::MAX_CLIENT_RS; r++) {
-                uint8_t id_R  = static_cast<uint8_t>(__builtin_ctz(mask_remaining));
+                uint8_t id_R = static_cast<uint8_t>(__builtin_ctz(mask_remaining));
                 mask_remaining &= mask_remaining - 1;
-                uint8_t tc_R  = static_cast<uint8_t>((rc->config.consumer_tcs >> (r * 5)) & 0x1F);
-                clientR_val  |= (static_cast<uint32_t>(id_R  & 0x7u) << (r * 8)) |
-                                (static_cast<uint32_t>(tc_R  & 0x1Fu) << (r * 8 + 3));
+                uint8_t tc_R = static_cast<uint8_t>((rc->config.consumer_tcs >> (r * 5)) & 0x1F);
+                clientR_val |= (static_cast<uint32_t>(id_R & 0x7u) << (r * 8)) |
+                               (static_cast<uint32_t>(tc_R & 0x1Fu) << (r * 8 + 3));
             }
             uint32_t clientL_val =
                 (static_cast<uint32_t>(producer_client_type & 0x7u)) |
@@ -739,8 +680,47 @@ std::vector<uint8_t> DataflowBufferImpl::serialize_dm0_blob_for_core(const CoreC
             data.insert(data.end(), slot_bytes, slot_bytes + sizeof(slot));
         }
     }
+    return data;
+}
 
-    // Producer txn entries
+std::vector<uint8_t> DataflowBufferImpl::serialize_dm0_isr_blob_for_core(const CoreCoord& core) const {
+    TT_FATAL(this->configs_finalized, "DFB {} configs not finalized before serialization", this->id);
+    if (!MetalContext::instance().hal().has_tile_counter_registers()) return {};
+
+    auto it = this->core_lookup_.find(core);
+    TT_FATAL(it != this->core_lookup_.end(), "DFB {} has no config for core ({}, {})", this->id, core.x, core.y);
+    const auto& [group_idx, alloc_addr] = it->second;
+    const auto& hw_risc_configs = this->groups[group_idx].hw_risc_configs;
+
+    // Collect producer/consumer TCs in risc_mask bit order for txn entries.
+    std::vector<::dfb::PackedTileCounter> blob_producer_tcs;
+    std::vector<::dfb::PackedTileCounter> blob_consumer_tcs;
+    for (int bit = 0; bit < 16; bit++) {
+        if (!(this->risc_mask & (1 << bit))) continue;
+        const DFBRiscConfig* rc = nullptr;
+        for (const auto& c : hw_risc_configs) {
+            if (c.risc_id == static_cast<uint8_t>(bit)) { rc = &c; break; }
+        }
+        for (uint8_t j = 0; j < rc->config.num_tcs_to_rr; j++) {
+            if (rc->is_producer) blob_producer_tcs.push_back(rc->config.packed_tile_counter[j]);
+            else blob_consumer_tcs.push_back(rc->config.packed_tile_counter[j]);
+        }
+    }
+
+    uint8_t num_prod = this->producer_txn_descriptor.num_txn_ids;
+    uint8_t num_cons = this->consumer_txn_descriptor.num_txn_ids;
+
+    std::vector<uint8_t> data;
+    data.reserve(dm0_isr_blob_serialized_size());
+
+    // DM0 ISR entry header.
+    dfb_dm0_isr_entry_header_t hdr = {};
+    hdr.num_producer_txns = num_prod;
+    hdr.num_consumer_txns = num_cons;
+    const auto* hdr_bytes = reinterpret_cast<const uint8_t*>(&hdr);
+    data.insert(data.end(), hdr_bytes, hdr_bytes + sizeof(hdr));
+
+    // Producer txn entries.
     for (uint8_t i = 0; i < num_prod; i++) {
         dfb_dm0_txn_entry_t entry = {};
         entry.txn_id               = this->producer_txn_descriptor.txn_ids[i];
@@ -754,7 +734,7 @@ std::vector<uint8_t> DataflowBufferImpl::serialize_dm0_blob_for_core(const CoreC
         data.insert(data.end(), e_bytes, e_bytes + sizeof(entry));
     }
 
-    // Consumer txn entries
+    // Consumer txn entries.
     for (uint8_t i = 0; i < num_cons; i++) {
         dfb_dm0_txn_entry_t entry = {};
         entry.txn_id               = this->consumer_txn_descriptor.txn_ids[i];
@@ -767,7 +747,6 @@ std::vector<uint8_t> DataflowBufferImpl::serialize_dm0_blob_for_core(const CoreC
         const auto* e_bytes = reinterpret_cast<const uint8_t*>(&entry);
         data.insert(data.end(), e_bytes, e_bytes + sizeof(entry));
     }
-
     return data;
 }
 
@@ -791,14 +770,15 @@ uint32_t finalize_dfbs(
         auto kernel_config = kg->launch_msg.view().kernel_config();
         kernel_config.local_cb_offset() = base_offset;
 
-        // Global header (4B) + DM0 blobs + shared per-DFB layouts.
-        // serialized_size() returns shared layout only; dm0_blob_serialized_size() returns DM0 blob only.
+        // Global header (12B) + DM1 remapper blobs + DM0 ISR blobs + shared per-DFB layouts.
         uint32_t kg_dfb_size = hal.has_tile_counter_registers() ? static_cast<uint32_t>(sizeof(dfb_global_header_t)) : 0;
         for (const auto& dfb : dataflow_buffers) {
             TT_ASSERT(dfb->configs_finalized, "DFB {} configs not finalized before serialization", dfb->id);
             for (const CoreRange& kg_range : kg->core_ranges.ranges()) {
                 if (dfb->core_ranges.intersects(kg_range)) {
-                    kg_dfb_size += dfb->serialized_size() + dfb->dm0_blob_serialized_size();
+                    kg_dfb_size += dfb->serialized_size()
+                                 + dfb->dm1_remapper_blob_serialized_size()
+                                 + dfb->dm0_isr_blob_serialized_size();
                     break;
                 }
             }

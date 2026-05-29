@@ -177,6 +177,13 @@ inline void start_subordinate_kernel_run_early(uint32_t enables) {
     }
 }
 
+// Wake DM1 to run setup_local_dfb_interfaces (remapper config) in parallel with DM0's
+// ISR setup. DM1 has a dedicated DFB-init-only loop and never runs user kernels.
+// Called before DM0's own setup_local_dfb_interfaces so both run concurrently.
+inline void start_dm1_dfb_init() {
+    *((volatile uint8_t*)&(subordinate_sync->dm1)) = RUN_SYNC_MSG_GO;
+}
+
 inline void wait_subordinates() {
     WAYPOINT("NTW");
     while (subordinate_sync->allDMs != RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_DONE ||
@@ -326,6 +333,9 @@ extern "C" uint32_t _start1() {
 
                 // DM0 needs to setup DFBs to program implicit synchronization regardless of whether it runs a kernel or not.
                 uint32_t num_local_dfbs = launch_msg_address->kernel_config.local_cb_mask;
+                // Kick DM1 to run remapper config in parallel with DM0's ISR setup.
+                // DM1 will call setup_local_dfb_interfaces independently and signal done when finished.
+                start_dm1_dfb_init();
                 setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
 
                 // Run the kernel
@@ -418,6 +428,11 @@ extern "C" uint32_t _start1() {
         uint32_t num_local_dfbs = launch_msg->kernel_config.local_cb_mask;
 
         setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
+        if (hartid == 1) {
+            *((volatile uint8_t*)&(subordinate_sync->dm1)) = RUN_SYNC_MSG_DONE;
+            continue;
+        }
+
         my_relative_x_ = my_logical_x_ - launch_msg->kernel_config.sub_device_origin_x;
         my_relative_y_ = my_logical_y_ - launch_msg->kernel_config.sub_device_origin_y;
         overlay_cmd_buff_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);

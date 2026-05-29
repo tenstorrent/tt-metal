@@ -1016,24 +1016,34 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                     std::vector<uint8_t> dfb_config_vec(
                         program.impl().get_program_config(index).dfb_size / sizeof(uint8_t));
 
-                    // Layout: [dfb_global_header_t | DM0 blobs (all DFBs) | shared layouts (all DFBs)]
-                    // Compute total DM0 blob size to fill the global header.
-                    uint32_t total_dm0_blob_size = 0;
-                    for (const auto& dfb : dfbs_on_core) {
-                        total_dm0_blob_size += dfb->dm0_blob_serialized_size();
-                    }
-
-                    // Write global header (only on Quasar which has tile counter registers).
+                    // Layout: [dfb_global_header_t | DM1 remapper blobs | DM0 ISR blobs | shared layouts]
                     uint32_t offset = 0;
                     if (MetalContext::instance().hal().has_tile_counter_registers()) {
+                        // Compute blob sizes for header offsets.
+                        uint32_t total_dm1_blob_size = 0;
+                        uint32_t total_dm0_isr_blob_size = 0;
+                        for (const auto& dfb : dfbs_on_core) {
+                            total_dm1_blob_size     += dfb->dm1_remapper_blob_serialized_size();
+                            total_dm0_isr_blob_size += dfb->dm0_isr_blob_serialized_size();
+                        }
+
+                        // Write global header.
                         dfb_global_header_t ghdr = {};
-                        ghdr.per_dfb_layout_offset =
-                            static_cast<uint32_t>(sizeof(dfb_global_header_t)) + total_dm0_blob_size;
+                        ghdr.dm1_remapper_blob_offset = static_cast<uint32_t>(sizeof(dfb_global_header_t));
+                        ghdr.dm0_isr_blob_offset      = ghdr.dm1_remapper_blob_offset + total_dm1_blob_size;
+                        ghdr.per_dfb_layout_offset    = ghdr.dm0_isr_blob_offset      + total_dm0_isr_blob_size;
                         std::memcpy(dfb_config_vec.data() + offset, &ghdr, sizeof(ghdr));
                         offset += sizeof(ghdr);
-                        // DM0 global blob: one blob per DFB, contiguous.
+
+                        // DM1 remapper blobs: one entry per DFB, contiguous.
                         for (const auto& dfb : dfbs_on_core) {
-                            auto blob = dfb->serialize_dm0_blob_for_core(logical_core);
+                            auto blob = dfb->serialize_dm1_remapper_blob_for_core(logical_core);
+                            std::memcpy(dfb_config_vec.data() + offset, blob.data(), blob.size());
+                            offset += blob.size();
+                        }
+                        // DM0 ISR blobs: one entry per DFB, contiguous.
+                        for (const auto& dfb : dfbs_on_core) {
+                            auto blob = dfb->serialize_dm0_isr_blob_for_core(logical_core);
                             std::memcpy(dfb_config_vec.data() + offset, blob.data(), blob.size());
                             offset += blob.size();
                         }
