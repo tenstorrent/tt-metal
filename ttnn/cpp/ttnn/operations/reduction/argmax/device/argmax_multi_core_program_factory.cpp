@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "argmax_device_operation.hpp"
+#include "ttnn/operations/reduction/reduce_op_validation.hpp"
 
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/hal.hpp>
@@ -199,6 +200,15 @@ ProgramDescriptor ArgMaxMultiCoreProgramFactory::create_descriptor(
     const uint32_t num_cores0 = cores0.num_cores();
     const uint32_t num_cores1 = cores1.num_cores();
     const uint32_t num_total_cores = num_cores0 + num_cores1;
+
+    TT_FATAL(num_total_cores > 0, "Argmax multicore requires at least one worker core");
+    validate_reduce_op_program_grid(
+        "Argmax multicore",
+        all_cores,
+        device->compute_with_storage_grid_size(),
+        sub_core_grids.has_value() ? &sub_core_grids.value() : nullptr,
+        true,
+        {});
 
     // Page sizes for input and output tensors based on the ROW_MAJOR layout
     const auto src_page_size = round_up_to_mul32(red_dim_units * input_unit_size);

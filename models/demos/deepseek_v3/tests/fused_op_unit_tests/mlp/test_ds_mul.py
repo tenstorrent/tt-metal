@@ -22,6 +22,7 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     USERS_PER_ROW,
     even_int_div,
     get_activation_sharding_core_counts_for_dram_matmul,
+    get_fabric_config,
 )
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
@@ -349,8 +350,8 @@ def _build_mul_inputs(
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "trace_region_size": 2967552,
+            "fabric_config": get_fabric_config(),
+            "trace_region_size": 0,
         }
     ],
     indirect=True,
@@ -465,8 +466,8 @@ def test_ds_mul(
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "trace_region_size": 2967552,
+            "fabric_config": get_fabric_config(),
+            "trace_region_size": 0,
         }
     ],
     indirect=True,

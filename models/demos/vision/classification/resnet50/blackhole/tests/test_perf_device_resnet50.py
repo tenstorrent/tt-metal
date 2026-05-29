@@ -13,8 +13,8 @@ from models.demos.vision.classification.resnet50.ttnn_resnet.tests.common.perf_d
 @pytest.mark.parametrize(
     "batch_size, test, expected_perf",
     [
-        [16, "True-DataType.BFLOAT8_B-DataType.BFLOAT8_B-MathFidelity.LoFi-16-device_params0", 11009.245],
-        [32, "True-DataType.BFLOAT8_B-DataType.BFLOAT8_B-MathFidelity.LoFi-32-device_params0", 13596.6552],
+        [16, "True-DataType.BFLOAT8_B-DataType.BFLOAT8_B-MathFidelity.LoFi-16-device_params0", 11697.7278],
+        [32, "True-DataType.BFLOAT8_B-DataType.BFLOAT8_B-MathFidelity.LoFi-32-device_params0", 14688.9657],
     ],
 )
 def test_perf_device(batch_size, test, expected_perf):

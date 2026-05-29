@@ -78,7 +78,7 @@ jobs:
     timeout-minutes: ${{ inputs.timeout }}
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ inputs.ref || github.sha }}
           submodules: recursive
@@ -112,7 +112,7 @@ jobs:
         run: |
           # Install minimal dependencies for processing metrics
           uv pip list
-          uv pip install "gitpython==3.1.41" "pydantic==2.9.2" "numpy>=1.24.4,<2" "pyyaml>=5.4"
+          uv pip install "gitpython==3.1.50" "pydantic==2.9.2" "numpy>=1.24.4,<2" "pyyaml>=5.4"
 
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}

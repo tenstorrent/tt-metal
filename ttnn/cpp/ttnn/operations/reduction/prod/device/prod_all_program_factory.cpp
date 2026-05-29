@@ -26,6 +26,8 @@ ProgramDescriptor ProdAllDeviceOperation::ProdAllProgramFactory::create_descript
 
     uint32_t num_tiles = input.physical_volume() / input.tensor_spec().tile().get_tile_hw();
 
+    TT_FATAL(num_tiles > 0, "Prod_all workload num_tiles must be > 0, got {}", num_tiles);
+
     uint32_t num_input_tiles = 2;
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_input_tiles * single_tile_size,

@@ -202,7 +202,7 @@ void kernel_main() {
         noc_async_read_page(i, offsets_addr_gen, offsets_base_addr + i * aligned_offsets_page_size);
     }
     noc_async_read_barrier();
-    uint32_t* offsets = (uint32_t*)offsets_base_addr;
+    tt_l1_ptr uint32_t* offsets = reinterpret_cast<tt_l1_ptr uint32_t*>(offsets_base_addr);
 
     // Read dispatch table into local scratch
     const auto dispatch_table_addr_gen = TensorAccessor(dispatch_table_args, dispatch_table_tensor_address);
@@ -213,7 +213,7 @@ void kernel_main() {
             i, dispatch_table_addr_gen, dispatch_table_base_addr + i * aligned_dispatch_table_page_size);
     }
     noc_async_read_barrier();
-    int32_t* expert_dispatch_table = (int32_t*)dispatch_table_base_addr;
+    tt_l1_ptr int32_t* expert_dispatch_table = reinterpret_cast<tt_l1_ptr int32_t*>(dispatch_table_base_addr);
 
     // Reserve scratch space once — these CBs are not used as FIFOs. Each batch
     // overwrites the same region at offsets [0, batch_count) without push/pop.
@@ -335,8 +335,10 @@ void kernel_main() {
             bool has_non_local = false;
 
             for (uint32_t t = 0; t < batch_count; t++) {
-                int32_t* indices_t = (int32_t*)(indices_base + t * aligned_indices_page_size);
-                uint16_t* weights_t = (uint16_t*)(weights_base + t * aligned_weights_page_size);
+                tt_l1_ptr int32_t* indices_t =
+                    reinterpret_cast<tt_l1_ptr int32_t*>(indices_base + t * aligned_indices_page_size);
+                tt_l1_ptr uint16_t* weights_t =
+                    reinterpret_cast<tt_l1_ptr uint16_t*>(weights_base + t * aligned_weights_page_size);
                 for (uint32_t k = 0; k < num_experts_per_tok; k++) {
                     auto routed_expert = indices_t[k];
                     if (((uint32_t)routed_expert & core_mask) != dispatch_core_idx) {
@@ -437,8 +439,10 @@ void kernel_main() {
 #else
             uint32_t token_input_addr = input_base + t * aligned_input_page_size;
 #endif
-            int32_t* indices = (int32_t*)(indices_base + t * aligned_indices_page_size);
-            uint16_t* weights = (uint16_t*)(weights_base + t * aligned_weights_page_size);
+            tt_l1_ptr int32_t* indices =
+                reinterpret_cast<tt_l1_ptr int32_t*>(indices_base + t * aligned_indices_page_size);
+            tt_l1_ptr uint16_t* weights =
+                reinterpret_cast<tt_l1_ptr uint16_t*>(weights_base + t * aligned_weights_page_size);
 
             for (uint32_t k = 0; k < num_experts_per_tok; ++k) {
                 auto routed_expert = indices[k];

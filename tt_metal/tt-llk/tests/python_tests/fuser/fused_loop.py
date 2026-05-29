@@ -111,6 +111,60 @@ class LoopBlock(FusedLoop):
         return compute_unit.fpu.calculate(operation, config, compute_unit, block)
 
 
+class LoopBlockRow(FusedLoop):
+    def unpack_loop(
+        self,
+        operation: "FusedOperation",
+        config: "GlobalConfig",
+        compute_unit: "ComputeNode",
+        block: "BlockData",
+    ) -> str:
+        code = ""
+        if config.perf_run_type == PerfRunType.PACK_ISOLATE:
+            return code
+        code += f"for (std::uint32_t tile_y = 0; tile_y < {block.block_tiles_y}; tile_y++) {{\n"
+        code += f"std::uint32_t tile_id = {block.tile_count_x} * ({block.block_y} + tile_y) + {block.block_x};\n"
+        block.tile_id_global = "tile_id"
+        block.tile_id_block = f"tile_y * {block.block_tiles_x}"
+        if config.perf_run_type == PerfRunType.MATH_ISOLATE:
+            code += compute_unit.unpacker().perf_set_valid(
+                operation, config, compute_unit, block
+            )
+        else:
+            code += compute_unit.unpacker().unpack(
+                operation, config, compute_unit, block
+            )
+        code += "}\n"
+        return code
+
+    def math_loop(
+        self,
+        operation: "FusedOperation",
+        config: "GlobalConfig",
+        compute_unit: "ComputeNode",
+        block: "BlockData",
+    ) -> str:
+        code = ""
+        if config.perf_run_type == PerfRunType.PACK_ISOLATE:
+            return code
+        code += f"for (std::uint32_t tile_y = 0; tile_y < {block.block_tiles_y}; tile_y++) {{\n"
+        block.tile_id_global = (
+            f"{block.tile_count_x} * ({block.block_y} + tile_y) + {block.block_x}"
+        )
+        block.tile_id_block = f"tile_y * {block.block_tiles_x}"
+        if config.perf_run_type in (
+            PerfRunType.UNPACK_ISOLATE,
+            PerfRunType.L1_CONGESTION,
+        ):
+            code += compute_unit.unpacker().perf_clear_valid(
+                operation, config, compute_unit, block
+            )
+        else:
+            code += compute_unit.fpu.calculate(operation, config, compute_unit, block)
+        code += "}\n"
+        return code
+
+
 class LoopTileByTile(FusedLoop):
     def unpack_loop(
         self,

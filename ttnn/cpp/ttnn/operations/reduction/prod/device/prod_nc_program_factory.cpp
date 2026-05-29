@@ -3,6 +3,7 @@
 
 #include "prod_nc_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include "ttnn/operations/reduction/reduce_op_validation.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -80,6 +81,8 @@ tt::tt_metal::ProgramDescriptor ProdNcDeviceOperation::ProdNcProgramFactory::cre
          core_group_2,
          num_cols_per_core_group_1,
          num_cols_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid, num_output_tiles);
+
+    validate_reduce_op_program_grid("Prod_nc", all_cores, grid, nullptr, true, {{&output, "output"}});
 
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup

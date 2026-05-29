@@ -272,3 +272,32 @@ TEST_F(DevicePrintOutputFixture, PrintReorder) {
 
     TestOutput("tests/tt_metal/tt_metal/test_kernels/device_print/print_reorder.cpp", messages);
 }
+
+TEST_F(DevicePrintOutputFixture, PrintInlineFunction) {
+    std::vector<std::string> messages = {
+        "BEFORE!!!",
+        "INLINE!!!",
+        "AFTER!!!",
+    };
+
+    for (auto& mesh_device : this->devices_) {
+        distributed::MeshWorkload workload;
+        auto zero_coord = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+        Program program = Program();
+        workload.add_program(device_range, std::move(program));
+        auto& program_ = workload.get_programs().at(device_range);
+
+        constexpr CoreCoord core = {0, 0};
+        CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/device_print/print_inline_function.cpp",
+            core,
+            ComputeConfig{});
+
+        RunProgram(mesh_device, workload);
+        MetalContext::instance().dprint_server()->await();
+
+        EXPECT_TRUE(FileContainsAllStrings(dprint_file_name, messages));
+    }
+}

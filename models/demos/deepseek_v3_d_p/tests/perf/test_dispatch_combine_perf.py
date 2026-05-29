@@ -249,7 +249,7 @@ _COMBINE_PERF_PARAMS = [
         "combine", "test_prefill_combine.py", "test_ttnn_combine", "linear", 2, 4_121_973, "CombineDeviceOperation"
     ),
     _perf_param(
-        "combine", "test_prefill_combine.py", "test_ttnn_combine", "ring", 2, 3_177_159, "CombineDeviceOperation"
+        "combine", "test_prefill_combine.py", "test_ttnn_combine", "ring", 2, 2_769_700, "CombineDeviceOperation"
     ),
 ]
 
@@ -282,7 +282,7 @@ _COMBINE_PERF_PARAMS_FULL = [
         ("linear", 1, 5_767_986),
         ("linear", 2, 4_136_638),
         ("ring", 1, 4_968_952),
-        ("ring", 2, 3_136_810),
+        ("ring", 2, 2_769_700),
     ]
 ] + [
     _perf_param(

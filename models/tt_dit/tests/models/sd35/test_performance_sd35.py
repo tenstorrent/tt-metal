@@ -46,7 +46,15 @@ def get_expected_metrics(mesh_device):
 @pytest.mark.parametrize(
     "mesh_device, cfg, sp, tp, topology, num_links",
     [
-        [(2, 4), (2, 1), (2, 0), (2, 1), ttnn.Topology.Linear, 1],
+        pytest.param(
+            (2, 4),
+            (2, 1),
+            (2, 0),
+            (2, 1),
+            ttnn.Topology.Linear,
+            1,
+            marks=pytest.mark.skip(reason="Disabled by issue #44770"),
+        ),
         [(4, 8), (2, 1), (4, 0), (4, 1), ttnn.Topology.Linear, 4],
     ],
     ids=[

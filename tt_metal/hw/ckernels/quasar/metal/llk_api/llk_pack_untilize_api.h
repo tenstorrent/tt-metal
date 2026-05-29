@@ -26,7 +26,7 @@
  *
  * @tparam block_ct_dim  Width of a single block in tiles.
  * @tparam full_ct_dim   Total width of the tensor row in tiles (default = block_ct_dim).
- * @param pack_output    Output DFB identifier.
+ * @param pack_output    Output DataFlow Buffer identifier.
  */
 template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim = block_ct_dim>
 inline void llk_pack_untilize_init(std::uint32_t pack_output) {
@@ -59,7 +59,7 @@ inline void llk_pack_untilize_init(std::uint32_t pack_output) {
  * @tparam full_ct_dim        Total width of the tensor row in tiles, used to compute the
  *                            L1 row stride (default = block_ct_dim).
  * @param block_rt_dim        Number of tile-rows to pack.
- * @param pack_output         Output circular buffer identifier.
+ * @param pack_output         Output DataFlow Buffer identifier.
  * @param block_c_index       Column-block index within the full row, used to offset the L1
  *                            write address when full_ct_dim > block_ct_dim (default 0).
  */

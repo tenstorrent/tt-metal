@@ -14,11 +14,20 @@ from typing import Literal
 from loguru import logger
 from transformers import AutoTokenizer
 
-import ttnn
-from models.demos.deepseek_v3_b1.demo.mesh_device_context import open_mesh_device
-from models.demos.deepseek_v3_b1.demo.model_pipeline import ModelPipeline
-
 DEFAULT_TOKENIZER = "deepseek-ai/DeepSeek-R1-0528"
+SLOW_DISPATCH_ENV = "TT_METAL_SLOW_DISPATCH_MODE"
+HYBRID_ALLOCATOR_ENV = "TT_METAL_ALLOCATOR_MODE_HYBRID"
+
+
+def configure_runtime_env(*, enable_sram_hot_experts: bool) -> None:
+    """Set demo-required TT-Metal environment before TTNN/device initialization."""
+    if os.environ.get(SLOW_DISPATCH_ENV) != "1":
+        os.environ[SLOW_DISPATCH_ENV] = "1"
+        logger.info("Enabled {}=1 for the DeepSeek demo", SLOW_DISPATCH_ENV)
+
+    if enable_sram_hot_experts and os.environ.get(HYBRID_ALLOCATOR_ENV) != "1":
+        os.environ[HYBRID_ALLOCATOR_ENV] = "1"
+        logger.info("Enabled {}=1 for --enable-sram-hot-experts", HYBRID_ALLOCATOR_ENV)
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -82,6 +91,21 @@ def create_parser() -> argparse.ArgumentParser:
         help="Force all MoE stages to use this layer id (e.g. 3); default: use stage-dependent layer ids",
     )
     parser.add_argument(
+        "--bspm-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Model-specific BitSculpt BSPM directory, e.g. results/deepseek-r1-0528. "
+            "MoE layers look up layer_<id>/precision_eval/precision_map_<variant>_<budget>.bspm under this path."
+        ),
+    )
+    parser.add_argument(
+        "--bspm-budget",
+        type=float,
+        default=3.5,
+        help="BitSculpt bit budget per expert used in the BSPM filename (default: 3.5)",
+    )
+    parser.add_argument(
         "--num-slots",
         type=int,
         default=64,
@@ -98,7 +122,7 @@ def create_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "Pin the highest-frequency routed experts to per-core L1 via "
-            "prepare_compressed_sram_slots. Requires TT_METAL_ALLOCATOR_MODE_HYBRID=1."
+            "prepare_compressed_sram_slots. Automatically enables TT_METAL_ALLOCATOR_MODE_HYBRID=1."
         ),
     )
     parser.add_argument(
@@ -141,6 +165,13 @@ def create_parser() -> argparse.ArgumentParser:
             "this is omitted, defaults to deepseek."
         ),
     )
+    parser.add_argument(
+        "--enable-speculative-decode",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable speculative decode; use --no-enable-speculative-decode for base decode",
+    )
+
     return parser
 
 
@@ -167,14 +198,22 @@ def run_demo(
     top_k: int = 1,
     top_p: float = 1.0,
     temperature: float = 0.6,
+    enable_speculative_decode: bool = True,
     enable_sram_hot_experts: bool = False,
     sram_hot_experts_ceiling: int = 64,
+    bspm_dir: Path | None = None,
+    bspm_budget: float = 3.5,
 ) -> None:
     """Run the pod pipeline. Requires 4, 16, or 64 distributed processes."""
+    configure_runtime_env(enable_sram_hot_experts=enable_sram_hot_experts)
+
+    from models.demos.deepseek_v3_b1.demo.mesh_device_context import open_mesh_device
+    from models.demos.deepseek_v3_b1.demo.model_pipeline import ModelPipeline
+
     iterations = max_new_tokens
     logger.info(f"Starting DeepSeek V3 B1 demo (iterations={iterations})")
 
-    with open_mesh_device() as mesh_device:
+    with open_mesh_device(enable_speculative_decode=enable_speculative_decode) as mesh_device:
         model_pipeline = ModelPipeline(
             mesh_device=mesh_device,
             weights_mode=weights_mode,
@@ -190,8 +229,11 @@ def run_demo(
             top_k=top_k,
             top_p=top_p,
             temperature=temperature,
+            enable_speculative_decode=enable_speculative_decode,
             enable_sram_hot_experts=enable_sram_hot_experts,
             sram_hot_experts_ceiling=sram_hot_experts_ceiling,
+            bspm_dir=bspm_dir,
+            bspm_budget=bspm_budget,
         )
 
         my_mesh_id = mesh_device.get_system_mesh_id()
@@ -243,7 +285,6 @@ def run_demo(
 
 
 def main(argv: list[str] | None = None) -> int:
-    ttnn.init_distributed_context()
     parser = create_parser()
     args = parser.parse_args(argv)
 
@@ -259,8 +300,11 @@ def main(argv: list[str] | None = None) -> int:
         if not index_path.is_file():
             parser.error(f"--model-path must contain model.safetensors.index.json (missing {index_path})")
 
-    if args.enable_sram_hot_experts and os.environ.get("TT_METAL_ALLOCATOR_MODE_HYBRID") != "1":
-        parser.error("--enable-sram-hot-experts requires TT_METAL_ALLOCATOR_MODE_HYBRID=1; export it before launching.")
+    configure_runtime_env(enable_sram_hot_experts=args.enable_sram_hot_experts)
+
+    import ttnn
+
+    ttnn.init_distributed_context()
 
     io_socket_descriptor_prefix = args.io_socket_descriptor_prefix
     if args.launch_only and io_socket_descriptor_prefix is None:
@@ -284,8 +328,11 @@ def main(argv: list[str] | None = None) -> int:
         top_k=args.top_k,
         top_p=args.top_p,
         temperature=args.temperature,
+        enable_speculative_decode=args.enable_speculative_decode,
         enable_sram_hot_experts=args.enable_sram_hot_experts,
         sram_hot_experts_ceiling=args.sram_hot_experts_ceiling,
+        bspm_dir=args.bspm_dir,
+        bspm_budget=args.bspm_budget,
     )
     print(end="", file=sys.stdout, flush=True)
     return 0

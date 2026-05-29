@@ -158,7 +158,10 @@ class HybridAttentionForCausalLM(Generator):
         runner side can map each spec back to its model layer index.
         """
         from vllm.utils.torch_utils import STR_DTYPE_TO_TORCH_DTYPE
-        from vllm.v1.kv_cache_interface import FullAttentionSpec, SlidingWindowSpec
+
+        # SlidingWindowSpec import intentionally dropped; restore alongside the
+        # branch below when re-enabling kv cache groups.
+        from vllm.v1.kv_cache_interface import FullAttentionSpec
 
         model_config = vllm_config.model_config
         cache_config = vllm_config.cache_config
@@ -172,8 +175,6 @@ class HybridAttentionForCausalLM(Generator):
                 "hf_config.text_config.layer_types (one of 'full_attention' / "
                 "'sliding_attention' per layer); none found on this model"
             )
-
-        sliding_window = getattr(text_config, "sliding_window", None)
         num_kv_heads = model_config.get_num_kv_heads(vllm_config.parallel_config)
         head_size = model_config.get_head_size()
         dtype = (
@@ -190,24 +191,24 @@ class HybridAttentionForCausalLM(Generator):
             dtype=dtype,
         )
 
+        # SlidingWindowSpec is temporarily disabled: TT-side decode passes the
+        # absolute position to paged_update_cache / paged_sdpa_decode, but vLLM
+        # zero-pads the sliding group's page_table past sliding_window/block_size
+        # entries, so positions beyond the sliding window collapse onto physical
+        # block 0 and silently corrupt the cache. Emit FullAttentionSpec for every
+        # layer so vLLM allocates a max_model_len cache per layer; the SDPA op's
+        # own sliding_window_size kwarg still trims attention correctly on the
+        # read side.
         spec_per_layer = {}
         for i, lt in enumerate(layer_types):
             name = f"model.layers.{i}.self_attn"
-            if lt == "sliding_attention":
-                if sliding_window is None:
-                    raise ValueError(
-                        f"layer_types[{i}] is 'sliding_attention' but "
-                        f"hf_config.sliding_window is None on {cls.__name__}"
-                    )
-                spec_per_layer[name] = SlidingWindowSpec(**common, sliding_window=sliding_window)
-            elif lt == "full_attention":
-                spec_per_layer[name] = FullAttentionSpec(**common)
-            else:
+            if lt not in ("sliding_attention", "full_attention"):
                 raise ValueError(
                     f"Unsupported layer_type {lt!r} at layer {i} on "
                     f"{cls.__name__}; expected 'full_attention' or "
                     "'sliding_attention'"
                 )
+            spec_per_layer[name] = FullAttentionSpec(**common)
         return spec_per_layer
 
     def prefill_forward(self, *args, **kwargs):

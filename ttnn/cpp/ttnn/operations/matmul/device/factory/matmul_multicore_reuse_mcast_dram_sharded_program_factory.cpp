@@ -14,6 +14,8 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/operations/compute_throttle_utils.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/matmul/shared_with_host/activation_type.hpp"
 
@@ -44,6 +46,8 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
     bool fp32_dest_acc_en,
     bool math_approx_mode,
     bool packer_l1_acc,
+    bool dst_full_sync_en,
+    ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level,
     uint32_t B,
     uint32_t /* M */,
     uint32_t N,
@@ -157,6 +161,15 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
         out_subblock_w = preferred_out_subblock_w;
         per_core_N_compute = out_subblock_w * num_subblock_w_per_core_N;
     }
+
+    // Number of in1 columns in the last subblock that are actually backed by reader-pushed tiles.
+    // When the subblock-width optimization above pads per_core_N_compute beyond per_core_N_in1_sender,
+    // the last subblock has out_subblock_w lanes total but only this many lanes correspond to in1
+    // tiles the reader pushed into cb_in1; the rest are padded columns that the output writer drops.
+    // The compute kernel uses this to narrow the matmul_block call for the last subblock so it never
+    // reads cb_in1 tile indices that were not produced for the current block.
+    // When no padding occurs (per_core_N_compute == per_core_N_in1_sender) this equals out_subblock_w.
+    uint32_t last_subblock_w_valid = out_subblock_w - (per_core_N_compute - per_core_N_in1_sender);
 
     uint32_t num_blocks = K / in0_block_w;
     bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
@@ -349,6 +362,12 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
         mm_kernel_defines["IN1_TRANSPOSE_TILE"] = "1";
     }
 
+    const uint32_t num_compute_cores = all_cores_in_rect_grid.num_cores();
+    ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
+        device->arch(), num_compute_cores, mm_kernel_defines);
+    ttnn::operations::compute_throttle_utils::throttle_mm_perf(
+        device->arch(), num_compute_cores, mm_kernel_defines, throttle_level);
+
     // Helper to convert std::map defines to KernelDescriptor::Defines (vector of pairs)
     auto map_to_defines = [](const std::map<std::string, std::string>& m) -> KernelDescriptor::Defines {
         KernelDescriptor::Defines result;
@@ -448,6 +467,7 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
             {"cb_in1_intermediate", tt::CBIndex::c_9},
             {"cb_in0_transposed", tt::CBIndex::c_10},
             {"bias_ntiles", per_core_N_compute},
+            {"last_subblock_w_valid", last_subblock_w_valid},
         };
         if (fused_activation.has_value() && fused_activation.value().op_type != UnaryOpType::RELU) {
             using ttnn::operations::matmul::utilities::get_activation_params;
@@ -462,6 +482,7 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
     compute_kernel_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
         .math_approx_mode = math_approx_mode,
     };
 
@@ -989,6 +1010,8 @@ ProgramDescriptor MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create
         fp32_dest_acc_en,
         math_approx_mode,
         packer_l1_acc,
+        dst_full_sync_en,
+        ttnn::get_throttle_level(operation_attributes.compute_kernel_config),
         B,
         Mt,
         Nt,

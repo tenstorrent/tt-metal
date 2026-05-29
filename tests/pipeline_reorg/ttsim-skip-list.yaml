@@ -44,6 +44,11 @@ wormhole_b0:
   # https://github.com/tenstorrent/tt-metal/pull/42112
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_ng_typecast.py
 
+  # MOVD2B failures (worker crash on 4D INT32/UINT32 concat). Passes on real
+  # wormhole silicon; already deselected for blackhole below for the same reason.
+  # https://github.com/tenstorrent/tt-metal/issues/41286
+  - tests/ttnn/unit_tests/operations/data_movement/test_concat.py::test_tiled_concat
+
 blackhole:
   # Job-level timeouts
   - tests/ttnn/unit_tests/operations/conv/test_conv2d.py
@@ -111,6 +116,8 @@ blackhole:
   - tests/ttnn/unit_tests/operations/pool/test_global_avg_pool2d.py
   - tests/ttnn/unit_tests/operations/reduce/test_reduction_min.py
   - tests/ttnn/unit_tests/operations/sdpa/test_sdpa_prefill.py
+  - tests/ttnn/unit_tests/operations/sdpa/test_bounded_sliding_kv_cache.py
+  - tests/ttnn/unit_tests/operations/transformers/test_paged_cache_flexible_geometry.py
   - tests/ttnn/unit_tests/operations/transformers/test_paged_fused_update_cache.py
 
   # ZEROACC failures

@@ -13,7 +13,7 @@
 // DataFormat comes from tt_backend_api_types.hpp for SW, and tensix_types.h for HW...
 // But wait there's more, SW also includes tensix_types.h so there's both tt::DataFormat and DataFormat there. Use a
 // different name here so that this header can be included in both.
-#if !defined(KERNEL_BUILD) && !defined(FW_BUILD)  // SW
+#if !defined(KERNEL_BUILD) && !defined(FW_BUILD) && !defined(ENV_LLK_INFRA)  // SW
 #include <tt-metalium/tt_backend_api_types.hpp>
 using CommonDataFormat = tt::DataFormat;
 #else
@@ -24,7 +24,9 @@ using CommonDataFormat = DataFormat;
 
 #include <cstddef>
 
+#if !defined(ENV_LLK_INFRA)
 constexpr static std::uint32_t DPRINT_BUFFER_SIZE = 204;  // per thread
+#endif
 
 #define DPRINT_TYPES            \
     DPRINT_PREFIX(CSTR)         \

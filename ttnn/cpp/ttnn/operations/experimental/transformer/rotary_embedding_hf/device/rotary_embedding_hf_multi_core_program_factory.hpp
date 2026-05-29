@@ -25,6 +25,8 @@ struct RotaryEmbeddingHfMultiCore {
         uint32_t Wt;
         uint32_t Ht;
         uint32_t HtWt;
+        bool single_tile;
+        bool single_tile_reader_uses_sharded_args;
     };
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;

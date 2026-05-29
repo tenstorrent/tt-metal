@@ -137,11 +137,13 @@ void kernel_main() {
     DPRINT_COMBINE << "Combine Writer: experts=[" << expert_start_idx << "," << expert_end_idx << ")"
                    << " linearized_mesh_coord=" << linearized_mesh_coord << ENDL();
 
+#if ZERO_INIT
     // Wait for reader to complete zero-init
     volatile tt_l1_ptr uint32_t* zero_init_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zero_init_semaphore_address);
     noc_semaphore_wait(zero_init_sem_ptr, 1);
     noc_semaphore_set(zero_init_sem_ptr, 0);
+#endif
 
 #ifdef DEST_CHIP_ID
     constexpr uint32_t total_mesh_devices = mesh_rows * mesh_cols;
@@ -178,6 +180,7 @@ void kernel_main() {
     DPRINT_COMBINE << "Fabric setup complete" << ENDL();
 #endif
 
+#if INIT_ZEROS
     // Signal ALL readers that global init exchange is done.
     // Each writer increments every reader's barrier sem so each reader
     // collects num_cores signals before proceeding.
@@ -185,6 +188,7 @@ void kernel_main() {
         noc_semaphore_inc(all_core_barrier_noc_addrs[c], 1);
     }
     noc_async_atomic_barrier();
+#endif
 
     const auto output_addr_gen = TensorAccessor(output_args, output_addr);
 
