@@ -2,7 +2,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""PCC tests for ``LTXLatentUpsampler`` vs the ``ltx_core`` reference."""
+"""PCC tests for ``LTXLatentUpsampler`` vs the ``ltx_core`` reference.
+
+All shapes match the production LTX-2 Fast pipeline (mid_channels=1024, num_frames=19,
+2x4 BH mesh, half-res latent 17x30 / 18x32)."""
 
 import sys
 
@@ -15,16 +18,13 @@ from models.tt_dit.models.upsampler.latent_upsampler_ltx import LTXLatentUpsampl
 from models.tt_dit.parallel.config import ParallelFactor, VaeHWParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.check import assert_quality
-from models.tt_dit.utils.conv3d import ConvDims, conv_pad_height, conv_pad_in_channels, conv_pad_width
+from models.tt_dit.utils.conv3d import ConvDims, conv_pad_height, conv_pad_width
 from models.tt_dit.utils.tensor import fast_device_to_host, typed_tensor_2dshard
 
 sys.path.insert(0, "LTX-2/packages/ltx-core/src")
 
 
-_MESH_PARAMS = [
-    ((1, 1), {}),
-    ((2, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 23887872}),
-]
+_MESH_2x4 = ((2, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 23887872})
 
 
 def _parallel_kwargs(mesh_device: ttnn.MeshDevice) -> dict:
@@ -38,70 +38,17 @@ def _parallel_kwargs(mesh_device: ttnn.MeshDevice) -> dict:
 
 
 @pytest.mark.parametrize(
-    "channels, T, H, W",
-    [
-        (512, 3, 8, 12),  # pre-upsample shape (mid_channels at 8x12)
-        (512, 3, 16, 24),  # post-upsample shape (mid_channels at 16x24)
-    ],
-    ids=["pre_upsample", "post_upsample"],
-)
-@pytest.mark.parametrize(
-    "mesh_device, device_params",
-    [_MESH_PARAMS[0]],
-    ids=["1x1"],
-    indirect=["mesh_device", "device_params"],
-)
-def test_ltx_upsampler_resblock(mesh_device: ttnn.MeshDevice, channels: int, T: int, H: int, W: int):
-    """LTXUpsamplerResBlock matches the reference ``ResBlock`` (random weights, single-chip)."""
-    from ltx_core.model.upsampler.res_block import ResBlock as TorchResBlock
-
-    B = 1
-    torch.manual_seed(0xABBA)
-
-    torch_block = TorchResBlock(channels=channels, dims=3)
-    torch_block.eval()
-
-    tt_block = LTXUpsamplerResBlock(
-        channels=channels,
-        input_hw=(H, W),
-        gn_input_nhw=T * H * W,
-        mesh_device=mesh_device,
-        conv_dims=ConvDims(T=T + 2, H=H, W=W),
-        **_parallel_kwargs(mesh_device),
-    )
-    tt_block.load_torch_state_dict(torch_block.state_dict())
-
-    x = torch.randn(B, channels, T, H, W, dtype=torch.float32)
-
-    with torch.no_grad():
-        torch_out = torch_block(x)  # (B, C, T, H, W)
-
-    x_bthwc = x.permute(0, 2, 3, 4, 1).contiguous()  # (B, T, H, W, C)
-    x_bthwc = conv_pad_in_channels(x_bthwc)
-    x_tt = ttnn.from_torch(x_bthwc, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
-
-    tt_out = tt_block(x_tt)
-    tt_out_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])  # (B, T, H, W, C)
-    tt_out_torch = tt_out_torch[:, :, :, :, :channels]
-    tt_out_torch = tt_out_torch.permute(0, 4, 1, 2, 3)  # → (B, C, T, H, W)
-
-    assert tt_out_torch.shape == torch_out.shape, f"shape mismatch: TT {tt_out_torch.shape} vs torch {torch_out.shape}"
-    assert_quality(torch_out, tt_out_torch, pcc=0.995)
-    logger.info(f"PASSED: LTXUpsamplerResBlock({channels} ch, {T}x{H}x{W}) matches reference")
-
-
-@pytest.mark.parametrize(
     "H, W",
     [(17, 30), (18, 32)],
     ids=["nondiv_17x30", "div_18x32"],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params",
-    [_MESH_PARAMS[1]],
+    [_MESH_2x4],
     ids=["2x4"],
     indirect=["mesh_device", "device_params"],
 )
-def test_ltx_upsampler_resblock_production(mesh_device: ttnn.MeshDevice, H: int, W: int):
+def test_ltx_upsampler_resblock(mesh_device: ttnn.MeshDevice, H: int, W: int):
     """Single LTXUpsamplerResBlock at the production shape (channels=1024, 2x4 sharded,
     T=19). ``nondiv_17x30`` exercises the sharded pad/mask/crop path; ``div_18x32`` is
     the no-mask control."""
@@ -153,28 +100,26 @@ def test_ltx_upsampler_resblock_production(mesh_device: ttnn.MeshDevice, H: int,
 
     assert out_torch.shape == torch_out.shape, f"shape mismatch: TT {out_torch.shape} vs torch {torch_out.shape}"
     assert_quality(torch_out, out_torch, pcc=0.99)
-    logger.info(f"PASSED: production LTXUpsamplerResBlock(1024 ch, {T}x{H}x{W}, 2x4) matches reference")
+    logger.info(f"PASSED: LTXUpsamplerResBlock(1024 ch, {T}x{H}x{W}, 2x4) matches reference")
 
 
 @pytest.mark.parametrize(
-    "in_c, mid_c, T, H, W",
-    [
-        (128, 512, 3, 8, 12),
-        (128, 512, 3, 17, 30),
-    ],
-    ids=["fast_default", "nondiv"],
+    "H, W",
+    [(17, 30), (18, 32)],
+    ids=["nondiv_17x30", "div_18x32"],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params",
-    _MESH_PARAMS,
-    ids=["1x1", "2x4"],
+    [_MESH_2x4],
+    ids=["2x4"],
     indirect=["mesh_device", "device_params"],
 )
-def test_ltx_latent_upsampler(mesh_device: ttnn.MeshDevice, in_c: int, mid_c: int, T: int, H: int, W: int):
-    """``LTXLatentUpsampler`` PCC vs reference, random weights, single-chip and 2x4."""
+def test_ltx_latent_upsampler(mesh_device: ttnn.MeshDevice, H: int, W: int):
+    """Full ``LTXLatentUpsampler`` PCC vs reference, random weights at production shape
+    (in=128, mid=1024, T=19, 2x4). No HF checkpoint required."""
     from ltx_core.model.upsampler.model import LatentUpsampler as TorchLatentUpsampler
 
-    B = 1
+    in_c, mid_c, T, B = 128, 1024, 19, 1
     torch.manual_seed(0xC0FFEE)
 
     torch_model = TorchLatentUpsampler(
@@ -208,7 +153,6 @@ def test_ltx_latent_upsampler(mesh_device: ttnn.MeshDevice, in_c: int, mid_c: in
 
     with torch.no_grad():
         torch_out = torch_model(latent)
-
     tt_out = tt_model(latent)
 
     assert tt_out.shape == torch_out.shape, f"shape mismatch: TT {tt_out.shape} vs torch {torch_out.shape}"
@@ -235,7 +179,7 @@ def _resolve_upsampler_checkpoint() -> str | None:
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params",
-    [_MESH_PARAMS[1]],
+    [_MESH_2x4],
     ids=["2x4"],
     indirect=["mesh_device", "device_params"],
 )
