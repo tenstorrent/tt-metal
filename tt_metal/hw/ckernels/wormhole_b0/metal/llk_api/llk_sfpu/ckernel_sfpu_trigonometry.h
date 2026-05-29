@@ -474,7 +474,7 @@ inline void calculate_acos() {
 
 // reciprocal(x) for 2^-126 ≤ x < 2^126
 template <bool is_fp32_dest_acc_en>
-sfpi_inline sfpi::vFloat _sfpu_reciprocal_ge1_(sfpi::vFloat x) {
+sfpi_inline sfpi::vFloat _sfpu_reciprocal_gt0_(sfpi::vFloat x) {
     // initial estimate y = -reciprocal(x)
     sfpi::vFloat y = sfpi::reinterpret<sfpi::vFloat>(0xfef392e0 - sfpi::reinterpret<sfpi::vInt>(x));
     sfpi::vFloat e = x * y + 1.0f;
@@ -549,7 +549,7 @@ inline void calculate_cosh() {
         sfpi::vFloat y = q + q;
         sfpi::vInt q_exp = sfpi::exexp(q);
         v_if(q_exp < 24) {
-            sfpi::vFloat r = _sfpu_reciprocal_ge1_<is_fp32_dest_acc_en>(y);
+            sfpi::vFloat r = _sfpu_reciprocal_gt0_<is_fp32_dest_acc_en>(y);
             y = y + 0.25f * r;
         }
         v_endif;
@@ -619,7 +619,7 @@ sfpi_inline sfpi::vFloat _sfpu_sinh_(sfpi::vFloat x) {
     sfpi::vFloat q = _sfpu_quarter_expm1_abs_<is_fp32_dest_acc_en>(x);
     sfpi::vFloat e = 4.0f * q + 1.0f;
 
-    sfpi::vFloat r = _sfpu_reciprocal_ge1_<is_fp32_dest_acc_en>(e);
+    sfpi::vFloat r = _sfpu_reciprocal_gt0_<is_fp32_dest_acc_en>(e);
 
     // t < 2^-25: t + 1 rounds to 1, so sinh(x) rounds to x. Since q = t / 4, this is q < 2^-27.
     sfpi::vFloat y = x;
