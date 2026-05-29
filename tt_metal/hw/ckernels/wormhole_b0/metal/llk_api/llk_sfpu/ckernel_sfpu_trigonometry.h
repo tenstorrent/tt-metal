@@ -504,12 +504,12 @@ sfpi_inline sfpi::vFloat _sfpu_quarter_exp_abs_(sfpi::vFloat x) {
     if constexpr (!is_fp32_dest_acc_en) {
         f = j * sfpi::vConstFloatPrgm1 + a;  // f = a - j * ln(2)
 
-        r = 0.038918063f;
-        r = r * f + 0.167377979f;
+        r = 0.038877178f;
+        r = r * f + 0.168174848f;
         i += 125;
         r = r * f + sfpi::vConstFloatPrgm2;
         c1 = sfpi::reinterpret<sfpi::vFloat>(
-            sfpi::reinterpret<sfpi::vInt>(sfpi::vConst1) - 705);  // 0x3f7ffd3f = 0.999957979f
+            sfpi::reinterpret<sfpi::vInt>(sfpi::vConst1) - 613);  // 0x3f7ffd9b = 0.999963462f
         r = r * f + c1;
 
     } else {
