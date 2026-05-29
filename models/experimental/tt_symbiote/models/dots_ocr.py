@@ -89,6 +89,15 @@ def _deep_sync_profile_enabled() -> bool:
     return os.environ.get("DOTS_OCR_PROFILE_DECODE_GRAPH", "").lower() in {"1", "true", "yes", "on"}
 
 
+def _dots_ocr_signpost(header: str) -> None:
+    """Emit a Tracy ``TT_SIGNPOST`` marker (visible in device op logs / perf reports)."""
+    try:
+        from tools.tracy import signpost
+    except ImportError:
+        return
+    signpost(header)
+
+
 @contextlib.contextmanager
 def _profile_stage(device, name: str):
     if not _sync_profile_enabled():
@@ -606,6 +615,7 @@ class TTNNDotsOCRPipeline(TTNNModule):
         embedding._unique_name = "model.embed_tokens"
 
         vision_tower = TTNNDotsOCRVisionTower.from_torch(hf_model.vision_tower)
+
         vision_tower._unique_name = "vision_tower"
         vision_tower.override_children_module_names()
 
@@ -817,9 +827,14 @@ class TTNNDotsOCRPipeline(TTNNModule):
             else ttnn.ReplicateTensorToMesh(self.device)
         )
         with _profile_stage(self.device, "prefill.input_ids_h2d"):
+            # Upload directly as uint32 (token ids are non-negative, so the
+            # int32->uint32 reinterpret is lossless). ttnn.embedding requires
+            # uint32 indices; handing them in as uint32 here lets
+            # TTNNEmbedding.forward skip its pad -> typecast -> slice block
+            # (the int32 path it would otherwise take for non-tile seq_len).
             tt_input_ids = ttnn.from_torch(
                 input_ids.to(torch.int32),
-                dtype=ttnn.int32,
+                dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=self.device,
                 mesh_mapper=id_mapper,
@@ -948,6 +963,7 @@ class TTNNDotsOCRPipeline(TTNNModule):
         # Clean up prefill-only tensors
         ttnn.deallocate(tt_cache_position)
 
+        _dots_ocr_signpost("dots_ocr.prefill_end")
         return first_out
 
     # ------------------------------------------------------------------
@@ -1172,6 +1188,26 @@ class TTNNDotsOCRPipeline(TTNNModule):
             one inner list per stream (same decode depth; each stream stops
             appending on EOS unless ``stop_on_eos`` is disabled).
         """
+        _dots_ocr_signpost("dots_ocr.model_start")
+        try:
+            return self._generate_impl(
+                input_ids,
+                pixel_values,
+                image_grid_thw,
+                max_new_tokens,
+                stop_on_eos,
+            )
+        finally:
+            _dots_ocr_signpost("dots_ocr.decode_end")
+
+    def _generate_impl(
+        self,
+        input_ids: torch.Tensor,
+        pixel_values: Optional[torch.Tensor],
+        image_grid_thw: Optional[torch.Tensor],
+        max_new_tokens: int,
+        stop_on_eos: bool,
+    ) -> Union[List[int], List[List[int]]]:
         # Reset cache for fresh generation
         self.paged_cache.reset()
         self._decode_cache_position = None
