@@ -131,9 +131,46 @@ jobs:
         continue-on-error: true
         with:
           name: github-pages
+      - name: Regenerate versions.json on gh-pages
+        # The Sphinx version-selector template (docs/source/common/_templates/versions.html)
+        # fetches /tt-metal/versions.json on every docs page load. Regenerating it from the
+        # current gh-pages tree after each successful deploy keeps the dropdown perfectly
+        # in sync with what's served. See #45572.
+        if: ${{ steps.deployment.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          DEPLOYED_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          # Build versions.json from the current gh-pages tree: 'latest' first, then final
+          # release dirs (vX.Y.Z) sorted descending. RC/dev tags are filtered out.
+          payload=$(gh api "repos/${REPO}/git/trees/gh-pages" --jq '
+            [.tree[] | select(.type == "tree") | .path
+              | select(test("^(latest|v\\d+\\.\\d+\\.\\d+)$"))]
+            | sort_by(
+                if . == "latest" then [9999, 9999, 9999]
+                else (capture("^v(?<a>\\d+)\\.(?<b>\\d+)\\.(?<c>\\d+)$")
+                      | [(.a | tonumber), (.b | tonumber), (.c | tonumber)])
+                end)
+            | reverse
+            | {versions: .}
+          ')
+          echo "Computed versions.json:"; echo "$payload" | jq .
+
+          # The Contents API PUT requires the existing file's sha when updating, and rejects
+          # it when creating. Look it up once; pass it only if the file already exists.
+          existing_sha=$(gh api "repos/${REPO}/contents/versions.json?ref=gh-pages" \
+            --jq '.sha // empty' 2>/dev/null || true)
+          extra_args=()
+          [ -n "$existing_sha" ] && extra_args+=(-f "sha=${existing_sha}")
+          gh api --method PUT "repos/${REPO}/contents/versions.json" \
+            -f message="Update versions.json after ${DEPLOYED_VERSION} deploy" \
+            -f content="$(echo "$payload" | base64 -w0)" \
+            -f branch=gh-pages "${extra_args[@]}"
       - name: Check the docs deployment is up
         if: ${{ github.ref == 'refs/heads/main' }}
-        # TODO: Enhance this by looping over all the published versions in docs/published_versions.json
         run: |
           set -eu # basic shell hygiene
           curl --fail -LI https://docs.tenstorrent.com/tt-metal/latest/ttnn/index.html -o /dev/null -s

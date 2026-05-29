@@ -13,7 +13,9 @@
 </div>
 
 <script>
-const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+// versions.json is regenerated on gh-pages by the docs deploy workflow after every successful
+// deploy, so the dropdown always matches what's actually being served. See #45572.
+const VERSIONS_URL = '/tt-metal/versions.json';
 
 async function loadVersions() {
     try {
