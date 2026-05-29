@@ -304,12 +304,16 @@ class LTXTransformerBlock(Module):
                 video_prompt_mod = ttnn.addcmul(v_kv_shift, video_prompt, v_kv_scale_p1)
             else:
                 video_prompt_mod = video_prompt
-            video_ca_out = self.attn2(spatial_1BND=video_ca_input, N=video_N, prompt_1BLP=video_prompt_mod)
+            video_ca_out = self.attn2(
+                spatial_1BND=video_ca_input, N=video_N, prompt_1BLP=video_prompt_mod, kv_replicated=True
+            )
             video_1BND = ttnn.addcmul(video_1BND, video_ca_out, v_gate_ca)
         else:
             # 6-output mode: cross-attention with fixed norm (no AdaLN shift/scale/gate)
             video_ca_input = self.norm2(video_1BND)
-            video_ca_out = self.attn2(spatial_1BND=video_ca_input, N=video_N, prompt_1BLP=video_prompt)
+            video_ca_out = self.attn2(
+                spatial_1BND=video_ca_input, N=video_N, prompt_1BLP=video_prompt, kv_replicated=True
+            )
             video_1BND = video_1BND + video_ca_out
 
         if not self.has_audio:
@@ -368,11 +372,15 @@ class LTXTransformerBlock(Module):
                 audio_prompt_mod = ttnn.addcmul(a_kv_shift, audio_prompt, a_kv_scale_p1)
             else:
                 audio_prompt_mod = audio_prompt
-            audio_ca_out = self.audio_attn2(spatial_1BND=audio_ca_input, N=audio_N, prompt_1BLP=audio_prompt_mod)
+            audio_ca_out = self.audio_attn2(
+                spatial_1BND=audio_ca_input, N=audio_N, prompt_1BLP=audio_prompt_mod, kv_replicated=True
+            )
             audio_1BND = ttnn.addcmul(audio_1BND, audio_ca_out, a_gate_ca)
         else:
             audio_ca_input = self.audio_norm2(audio_1BND)
-            audio_ca_out = self.audio_attn2(spatial_1BND=audio_ca_input, N=audio_N, prompt_1BLP=audio_prompt)
+            audio_ca_out = self.audio_attn2(
+                spatial_1BND=audio_ca_input, N=audio_N, prompt_1BLP=audio_prompt, kv_replicated=True
+            )
             audio_1BND = audio_1BND + audio_ca_out
 
         # NOTE: we previously zeroed padded slots in `audio_1BND` / `video_1BND` here as

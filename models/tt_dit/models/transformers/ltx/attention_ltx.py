@@ -13,6 +13,8 @@ Reference: LTX-2 attention.py + Wan attention_wan.py
 
 from __future__ import annotations
 
+import os
+
 import torch
 
 import ttnn
@@ -365,7 +367,7 @@ class LTXAttention(Module):
         gate = ttnn.typecast(gate, ttnn.bfloat16)
         return gate
 
-    def _sdpa_gather_q_partition(
+    def _sdpa_cross(
         self,
         q_BHNE: ttnn.Tensor,
         k_BHNE: ttnn.Tensor,
@@ -373,37 +375,45 @@ class LTXAttention(Module):
         *,
         attn_mask: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
-        """SDPA with full K; gather Q (and mask rows) across SP, then partition output.
+        """Cross-attention SDPA. K/V are full-seq; Q stays SP-sharded so the output is the
+        local query shard directly (matches the "Q SP-sharded, K full-seq" design intent).
 
-        Blackhole standard SDPA is wrong for SP-sharded Q × gathered K (audio self + A↔V cross).
+        Fix B: the default keeps Q sharded and runs a local SDPA — no Q all-gather, no output
+        partition, and no sp× redundant full-N attention on every device.
+
+        Legacy path (``LTX_CROSS_SDPA_GATHER_Q=1``): gather Q (and mask rows) to full, run the
+        full SDPA on every SP device, then partition the output back. Kept as a kill-switch
+        because BH SDPA was suspected wrong for SP-sharded Q × full K (see audio self-attn
+        NOTE); use it to A/B the new path until BH correctness is validated on device.
         """
         sp_factor = self.parallel_config.sequence_parallel.factor
-        if sp_factor <= 1:
-            return ttnn.transformer.scaled_dot_product_attention(
-                q_BHNE,
+        use_gather_q = sp_factor > 1 and os.environ.get("LTX_CROSS_SDPA_GATHER_Q", "0") == "1"
+        if use_gather_q:
+            sp_axis = self.parallel_config.sequence_parallel.mesh_axis
+            q_full = self.ccl_manager.all_gather_persistent_buffer(q_BHNE, dim=2, mesh_axis=sp_axis)
+            mask_full = attn_mask
+            if attn_mask is not None:
+                mask_full = self.ccl_manager.all_gather_persistent_buffer(attn_mask, dim=2, mesh_axis=sp_axis)
+            out_full = ttnn.transformer.scaled_dot_product_attention(
+                q_full,
                 k_BHNE,
                 v_BHNE,
-                attn_mask=attn_mask,
+                attn_mask=mask_full,
                 is_causal=False,
                 program_config=self.sdpa_program_config,
                 compute_kernel_config=self.sdpa_compute_kernel_config,
             )
+            return ttnn.mesh_partition(out_full, dim=2, cluster_axis=sp_axis)
 
-        sp_axis = self.parallel_config.sequence_parallel.mesh_axis
-        q_full = self.ccl_manager.all_gather_persistent_buffer(q_BHNE, dim=2, mesh_axis=sp_axis)
-        mask_full = attn_mask
-        if attn_mask is not None:
-            mask_full = self.ccl_manager.all_gather_persistent_buffer(attn_mask, dim=2, mesh_axis=sp_axis)
-        out_full = ttnn.transformer.scaled_dot_product_attention(
-            q_full,
+        return ttnn.transformer.scaled_dot_product_attention(
+            q_BHNE,
             k_BHNE,
             v_BHNE,
-            attn_mask=mask_full,
+            attn_mask=attn_mask,
             is_causal=False,
             program_config=self.sdpa_program_config,
             compute_kernel_config=self.sdpa_compute_kernel_config,
         )
-        return ttnn.mesh_partition(out_full, dim=2, cluster_axis=sp_axis)
 
     def forward(
         self,
@@ -419,6 +429,7 @@ class LTXAttention(Module):
         k_rope_sin: ttnn.Tensor | None = None,
         attn_mask: ttnn.Tensor | None = None,
         skip_qk: bool = False,
+        kv_replicated: bool = False,
     ) -> ttnn.Tensor:
         """
         Same interface as WanAttention.forward().
@@ -498,17 +509,23 @@ class LTXAttention(Module):
         # V still goes through the explicit reshape (no norm to fuse with).
         v_BHNE = create_heads(v_1BNF)
 
-        # Cross-attn: gather K/V across SP only when still sharded. A↔V passes context
-        # that was already SP-gathered in LTXTransformerBlock (audio_kv / video_kv);
-        # gathering again concatenates full copies (128 → 512 on SP=4).
+        # Cross-attn K/V must be full-seq for SDPA (all-to-all). Gather across SP only when the
+        # context is genuinely SP-sharded:
+        #   - text prompt (kv_replicated): replicated by `_prepare_prompt` → already full, never gather
+        #     (Fix A: gathering would duplicate L → sp·L identical copies — wasteful, not needed).
+        #   - a2v: pre-gathered in LTXTransformerBlock → already full (shape == rope len) → skip.
+        #   - v2a: enters SP-sharded (shape < rope len) → gather here.
         is_cross = prompt_1BLP is not None
         sp_factor = self.parallel_config.sequence_parallel.factor
         _k_cos_pe = k_rope_cos if k_rope_cos is not None else rope_cos
         if is_cross and sp_factor > 1:
             sp_axis = self.parallel_config.sequence_parallel.mesh_axis
-            if _k_cos_pe is not None:
+            if kv_replicated:
+                need_gather = False
+            elif _k_cos_pe is not None:
                 need_gather = k_BHNE.shape[2] < _k_cos_pe.shape[2]
             else:
+                # Unknown sharded context with no rope reference: gather conservatively.
                 need_gather = True
             if need_gather:
                 k_BHNE = self.ccl_manager.all_gather_persistent_buffer(k_BHNE, dim=2, mesh_axis=sp_axis)
@@ -593,8 +610,9 @@ class LTXAttention(Module):
                     compute_kernel_config=self.sdpa_compute_kernel_config,
                 )
         else:
-            # Cross-attention: K/V are full-seq after SP gather on dim 2.
-            spatial_BHNE = self._sdpa_gather_q_partition(q_BHNE, k_BHNE, v_BHNE, attn_mask=attn_mask)
+            # Cross-attention: K/V are full-seq (text replicated / a2v pre-gathered / v2a gathered above).
+            # Q stays SP-sharded → local SDPA returns the local output shard directly.
+            spatial_BHNE = self._sdpa_cross(q_BHNE, k_BHNE, v_BHNE, attn_mask=attn_mask)
 
         # Apply per-head gate in BHNE space (before concatenate_heads).
         # Mathematically equivalent to the reference which applies gate after concat_heads
