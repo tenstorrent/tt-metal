@@ -35,7 +35,8 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
     uint32_t Ht = (H + tile_height - 1) / tile_height;
 
     if (rm_path) {
-        validate_rm_preconditions(a, output, operation_attributes.math_op, operation_attributes.negate, "Reduce W");
+        validate_rm_preconditions(
+            a, output, operation_attributes.math_op, operation_attributes.negate, ReduceOpDim::W, "Reduce W");
     }
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =

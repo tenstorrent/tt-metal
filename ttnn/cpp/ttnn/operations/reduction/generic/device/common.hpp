@@ -17,6 +17,7 @@
 
 namespace tt::tt_metal {
 class Buffer;
+class MeshTensor;
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
@@ -81,24 +82,25 @@ RmPlan make_rm_plan(
     tt::tt_metal::ReduceOpMath math_op,
     tt::tt_metal::ReduceOpDim dim);
 
-// The three factory-level RM preconditions: interleaved I/O, SUM only, no negate.
+// The factory-level RM preconditions: interleaved I/O, SUM only, no negate, dim is H or W.
 // `dim_label` is "Reduce W" / "Reduce H" for the fatal messages.
 void validate_rm_preconditions(
-    const tt::tt_metal::Tensor& input,
-    const tt::tt_metal::Tensor& output,
+    const tt::tt_metal::MeshTensor& input,
+    const tt::tt_metal::MeshTensor& output,
     tt::tt_metal::ReduceOpMath math_op,
     bool negate,
+    tt::tt_metal::ReduceOpDim dim,
     std::string_view dim_label);
 
 // Build the reader compile-time args vector for the RM path (slots match
-// reader_unary_reduce_rm.cpp). Returns scalar slots followed by TensorAccessorArgs(src_buffer).
+// reader_unary_reduce_rm.cpp). Returns scalar slots followed by TensorAccessorArgs(src).
 std::vector<uint32_t> build_rm_reader_ct_args(
-    const RmPlan& plan, uint32_t scaler_bits, const tt::tt_metal::Buffer& src_buffer, tt::tt_metal::ReduceOpDim dim);
+    const RmPlan& plan, uint32_t scaler_bits, const tt::tt_metal::MeshTensor& src, tt::tt_metal::ReduceOpDim dim);
 
 // Build the writer compile-time args vector for the RM path (slots match
-// writer_reduce_rm_scalar.cpp). Returns scalar slots followed by TensorAccessorArgs(dst_buffer).
+// writer_reduce_rm_scalar.cpp). Returns scalar slots followed by TensorAccessorArgs(dst).
 std::vector<uint32_t> build_rm_writer_ct_args(
-    const RmPlan& plan, const tt::tt_metal::Buffer& dst_buffer, tt::tt_metal::ReduceOpDim dim);
+    const RmPlan& plan, const tt::tt_metal::MeshTensor& dst, tt::tt_metal::ReduceOpDim dim);
 
 // Build the compute compile-time args vector for the RM path (slots match reduce_rm.cpp).
 // `Ht_arg` is the per-core ht count (W path) or the global Ht_rm (H path); the helper
