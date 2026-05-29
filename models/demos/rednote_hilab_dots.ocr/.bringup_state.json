@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-29T00:11:46Z",
-  "updated_at": "2026-05-29T02:20:39Z",
+  "updated_at": "2026-05-29T02:32:56Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -292,8 +292,14 @@
         "attempts": 0
       },
       "optimization": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/profile_vision_patch_merger.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/vision_patch_merger.traced.tracy.csv"
+        ],
+        "notes": "traced tracy at production shape (SEQ=256->64 merged): matmuls 81.1% (303us/96 cores, K=6144, fused bias), LayerNorm 11.6%/8c, reshape 4.9%, GELU 2.3%; all DRAM-interleaved. Tried L1-pinning the LN/reshape/fc1/GELU/fc2 chain: net-neutral (368 vs 372us) since matmuls are compute-bound and the explicit-L1 output split the matmul fused-bias into a separate +6us BinaryNg. Reverted to fused-bias DRAM path. At-ceiling for per-block tuning; matmuls already 96 cores. PCC 0.99999 unchanged.",
+        "pcc": 0.9999899884744794
       },
       "real_weights": {
         "status": "pending",
@@ -917,6 +923,12 @@
       "tick": 25,
       "ts": "2026-05-29T02:20:39Z",
       "action": "device[vision_block]",
+      "result": "ok"
+    },
+    {
+      "tick": 26,
+      "ts": "2026-05-29T02:32:56Z",
+      "action": "device[vision_patch_merger]",
       "result": "ok"
     }
   ],

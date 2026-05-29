@@ -116,6 +116,15 @@ class TtVisionPatchMerger(LightweightModule):
         x = ttnn.reshape(x, (-1, self.hidden_size))
 
         # mlp.0 -> GELU -> mlp.2 (both biased).
+        #
+        # NB: this block is compute-bound on the two K=6144 matmuls (~80% of
+        # device-kernel time, already on 96 cores). Forcing the fc1/GELU/fc2
+        # chain to L1_MEMORY_CONFIG was measured under traced tracy and is a
+        # no-op on latency (368 vs 372 us): the small merged-token M makes the
+        # intermediate DRAM round-trips cheap relative to the matmul compute,
+        # and an explicit L1 output without core_grid splits the matmul's fused
+        # bias into a separate BinaryNg add (+6 us). The default DRAM-interleaved
+        # output keeps the bias fused into the matmul, so it is left in place.
         x = ttnn.linear(
             x,
             self.fc1_weight,
