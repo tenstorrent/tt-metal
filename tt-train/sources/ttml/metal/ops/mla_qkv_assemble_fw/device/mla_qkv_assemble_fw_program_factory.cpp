@@ -33,14 +33,26 @@ constexpr uint32_t kWriterArgQAddr = 0;
 constexpr uint32_t kWriterArgKAddr = 1;
 constexpr uint32_t kWriterArgVAddr = 2;
 
-// CB indices
+// CB indices. k_nope and v are demuxed into separate CBs so each output stream can be chunked and
+// double-buffered independently; the writer reinserts the broadcast k_pe between them.
 constexpr auto kQCbIndex = tt::CBIndex::c_0;
-constexpr auto kKvUpCbIndex = tt::CBIndex::c_1;
-constexpr auto kKpeCbIndex = tt::CBIndex::c_2;
+constexpr auto kKnopeCbIndex = tt::CBIndex::c_1;
+constexpr auto kVCbIndex = tt::CBIndex::c_2;
+constexpr auto kKpeCbIndex = tt::CBIndex::c_3;
 
-// CB sizing
-constexpr uint32_t kQCbNumTiles = 4U;     // quad-buffered, single-tile micro-blocks
-constexpr uint32_t kKvUpCbNumTiles = 4U;  // quad-buffered, single-tile micro-blocks
+// Each Q / k_nope / v CB is double-buffered (2 * kBlockSize) so the reader can fetch the next chunk on
+// its NoC while the writer drains the current one on the other NoC.
+constexpr uint32_t kCbDoubleBuffer = 2U;
+
+// kBlockSize is the per-stream chunk: tiles moved per NoC transaction. A sweep over
+// {1,2,4,6,8,12,16,24,32,48,64} on N300 shows a clear penalty below 4, a small step up to ~6-8, then a
+// flat plateau. Larger values are inert — the per-head stream length (Th, Tn, Tv, each <=
+// head_dim / TILE_W) caps the useful chunk, and head-major outputs prevent coalescing writes across
+// heads — so 8 is the most robust/fastest plateau point. Unlike fused-math kernels (silu, swiglu,
+// polynorm) where block_size is pinned to 4 by the DEST register limit, this is a pure data-movement op
+// with NO compute kernel: the choice is not tied to any register count, only NoC/L1 throughput. L1
+// cost is bounded by kBlockSize (not head_dim) and trivial (~100 KB of the ~1.5 MB budget).
+constexpr uint32_t kBlockSize = 8U;
 
 }  // namespace
 
@@ -68,7 +80,7 @@ static void assign_per_core_runtime_args(
     uint32_t num_blocks_per_core_group_2,
     const tt::tt_metal::CoreRangeSet& core_group_1,
     const tt::tt_metal::CoreRangeSet& core_group_2,
-    uint32_t S_t,
+    uint32_t Ts,
     uint32_t q_tiles_per_block,
     uint32_t kv_up_tiles_per_block,
     uint32_t kpe_tiles_per_block,
@@ -78,7 +90,7 @@ static void assign_per_core_runtime_args(
     uint32_t v_HtWt,
     uint32_t n_heads) {
     for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; ++i) {
-        tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        const tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         uint32_t num_blocks_per_core = 0;
         if (core_group_1.contains(core)) {
@@ -89,14 +101,14 @@ static void assign_per_core_runtime_args(
             TT_FATAL(false, "MLAQKVAssembleFw: core not in any work group");
         }
 
-        // Block index = b * S_t + sb. Inputs q_pre, kv_up, k_pe are flat across blocks.
+        // Block index = b * Ts + sb. Inputs q_pre, kv_up, k_pe are flat across blocks.
         const uint32_t q_pre_tile_id_start = num_blocks_written * q_tiles_per_block;
         const uint32_t kv_up_tile_id_start = num_blocks_written * kv_up_tiles_per_block;
         const uint32_t k_pe_tile_id_start = num_blocks_written * kpe_tiles_per_block;
 
         // Outputs are head-major: tile_id(b, h, sb, w) = b*H*HtWt + h*HtWt + sb*Wt + w.
-        const uint32_t b_start = num_blocks_written / S_t;
-        const uint32_t sb_start = num_blocks_written % S_t;
+        const uint32_t b_start = num_blocks_written / Ts;
+        const uint32_t sb_start = num_blocks_written % Ts;
         const uint32_t q_tile_id_start = b_start * n_heads * kq_HtWt + sb_start * Th;
         const uint32_t k_tile_id_start = q_tile_id_start;  // q and k share head_dim → same head-stride
         const uint32_t v_tile_id_start = b_start * n_heads * v_HtWt + sb_start * Tv;
@@ -152,20 +164,20 @@ MLAQKVAssembleFwProgramFactory::cached_program_t MLAQKVAssembleFwProgramFactory:
     const uint32_t Tr = args.qk_rope_dim / TILE_WIDTH;
     const uint32_t Tv = args.v_dim / TILE_WIDTH;
     const uint32_t Th = Tn + Tr;
-    const uint32_t S_t = S / TILE_HEIGHT;
+    const uint32_t Ts = S / TILE_HEIGHT;
 
     // q and k share per-head width (qk_head). v has its own width.
-    const uint32_t kq_HtWt = S_t * Th;
-    const uint32_t v_HtWt = S_t * Tv;
+    const uint32_t kq_HtWt = Ts * Th;
+    const uint32_t v_HtWt = Ts * Tv;
 
     const uint32_t q_tiles_per_block = H * Th;
     const uint32_t kv_up_tiles_per_block = H * (Tn + Tv);
     const uint32_t kpe_tiles_per_block = Tr;
 
-    const uint32_t num_blocks = B * S_t;
+    const uint32_t num_blocks = B * Ts;
 
     // ── Work split ──
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_blocks_per_core_group_1, num_blocks_per_core_group_2] =
@@ -174,18 +186,26 @@ MLAQKVAssembleFwProgramFactory::cached_program_t MLAQKVAssembleFwProgramFactory:
     // ── CBs ──
     // Validation guarantees q_pre / kv_up / k_pe share dtype, so any of them yields the same
     // data_format. kv_up is picked because it's also the source-of-truth for B and S above.
-    tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(kv_up.dtype());
+    const tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(kv_up.dtype());
     const uint32_t single_tile_size = tt::tile_size(data_format);
 
+    // cb_q / cb_knope / cb_v are sized 2 * kBlockSize (see kBlockSize above). cb_kpe instead holds all
+    // Tr tiles for the whole block because the writer broadcasts them to every head; Tr is small and
+    // inherent to the broadcast. Even worst case these CBs are a small fraction of L1, so none is too big.
+    const uint32_t io_cb_num_tiles = kCbDoubleBuffer * kBlockSize;
+    const uint32_t kpe_cb_num_tiles = kCbDoubleBuffer * Tr;
+
     [[maybe_unused]] auto cb_q =
-        create_circular_buffer(program, all_cores, kQCbIndex, data_format, single_tile_size, kQCbNumTiles);
+        create_circular_buffer(program, all_cores, kQCbIndex, data_format, single_tile_size, io_cb_num_tiles);
 
-    [[maybe_unused]] auto cb_kv_up =
-        create_circular_buffer(program, all_cores, kKvUpCbIndex, data_format, single_tile_size, kKvUpCbNumTiles);
+    [[maybe_unused]] auto cb_knope =
+        create_circular_buffer(program, all_cores, kKnopeCbIndex, data_format, single_tile_size, io_cb_num_tiles);
 
-    // cb_kpe must hold all Tr tiles for the full block (writer peeks for every head).
+    [[maybe_unused]] auto cb_v =
+        create_circular_buffer(program, all_cores, kVCbIndex, data_format, single_tile_size, io_cb_num_tiles);
+
     [[maybe_unused]] auto cb_kpe =
-        create_circular_buffer(program, all_cores, kKpeCbIndex, data_format, single_tile_size, Tr);
+        create_circular_buffer(program, all_cores, kKpeCbIndex, data_format, single_tile_size, kpe_cb_num_tiles);
 
     // ── Kernels ──
     auto* q_pre_buffer = q_pre.buffer();
@@ -195,17 +215,17 @@ MLAQKVAssembleFwProgramFactory::cached_program_t MLAQKVAssembleFwProgramFactory:
     auto* k_buffer = k.buffer();
     auto* v_buffer = v.buffer();
 
-    std::vector<uint32_t> reader_compile_time_args = {Th, Tn + Tv, Tr, H};
+    std::vector<uint32_t> reader_compile_time_args = {Th, Tn, Tv, Tr, H, kBlockSize};
     tt::tt_metal::TensorAccessorArgs(q_pre_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(kv_up_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(k_pe_buffer).append_to(reader_compile_time_args);
 
-    std::vector<uint32_t> writer_compile_time_args = {Tn, Tr, Tv, H, kq_HtWt, v_HtWt, S_t};
+    std::vector<uint32_t> writer_compile_time_args = {Tn, Tr, Tv, H, kq_HtWt, v_HtWt, Ts, kBlockSize};
     tt::tt_metal::TensorAccessorArgs(q_buffer).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(k_buffer).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(v_buffer).append_to(writer_compile_time_args);
 
-    std::map<std::string, std::string> defines;
+    const std::map<std::string, std::string> defines;
 
     MLAQKVAssembleFwKernels kernels;
     kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, defines, kReaderKernelPath);
@@ -227,7 +247,7 @@ MLAQKVAssembleFwProgramFactory::cached_program_t MLAQKVAssembleFwProgramFactory:
         num_blocks_per_core_group_2,
         core_group_1,
         core_group_2,
-        S_t,
+        Ts,
         q_tiles_per_block,
         kv_up_tiles_per_block,
         kpe_tiles_per_block,
@@ -264,7 +284,7 @@ void MLAQKVAssembleFwProgramFactory::override_runtime_arguments(
     auto& writer_runtime_args = GetRuntimeArgs(program, shared.writer_kernel_id);
 
     for (uint32_t i = 0; i < shared.num_cores; ++i) {
-        tt::tt_metal::CoreCoord core = {i / shared.num_cores_y, i % shared.num_cores_y};
+        const tt::tt_metal::CoreCoord core = {i / shared.num_cores_y, i % shared.num_cores_y};
         {
             auto& ra = reader_runtime_args[core.x][core.y];
             ra[kReaderArgQPreAddr] = q_pre_buffer->address();
