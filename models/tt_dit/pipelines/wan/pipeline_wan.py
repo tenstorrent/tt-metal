@@ -191,6 +191,43 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         else:
             self.torch_transformer_2 = None
 
+        # CFG parallelism: split the parent mesh into `factor` submeshes along the
+        # cfg axis (e.g. 4x8 -> two 4x4). All model components are built on submesh
+        # 0 (the "primary"); a second transformer + CCLManager is built on submesh 1
+        # below. The conditional/unconditional passes then run concurrently, one per
+        # submesh, and are combined on host (see _cfg_parallel_denoise).
+        # When cfg is disabled (factor 1 / None) this is a no-op and the pipeline
+        # builds on the full mesh exactly as before.
+        cfg_parallel = parallel_config.cfg_parallel
+        self.cfg_factor = cfg_parallel.factor if cfg_parallel is not None else 1
+        if self.cfg_factor > 1:
+            assert self.cfg_factor == 2, "CFG parallelism currently supports factor=2 only"
+            assert boundary_ratio is None, (
+                "CFG parallelism currently supports single-transformer (wan2.1) pipelines only; "
+                "wan2.2 MoE (transformer_2) is not yet supported."
+            )
+            assert not dynamic_load, "CFG parallelism is incompatible with dynamic_load."
+            submesh_shape = list(mesh_device.shape)
+            submesh_shape[cfg_parallel.mesh_axis] //= self.cfg_factor
+            logger.info(
+                f"CFG parallel: splitting mesh {tuple(mesh_device.shape)} into "
+                f"{self.cfg_factor} submeshes of shape {tuple(submesh_shape)} on axis {cfg_parallel.mesh_axis}"
+            )
+            # Keep a handle to the parent mesh ONLY to construct the submeshes. After the
+            # split, NEVER run a command-queue op (incl. ttnn.synchronize_device) on the
+            # parent: parent and child submeshes share per-physical-device cq0 completion/
+            # event state, so a synchronize/record-event on the parent waits on a device
+            # completion that never arrives -> permanent hang in finish_nolock. Always
+            # synchronize/operate on the submeshes individually instead.
+            # See memory: cfg-parallel-parent-mesh-cq-hang.
+            self.cfg_parent_mesh = mesh_device
+            self.cfg_submeshes = list(mesh_device.create_submeshes(ttnn.MeshShape(*submesh_shape)))
+            # Build everything below on submesh 0.
+            mesh_device = self.cfg_submeshes[0]
+        else:
+            self.cfg_parent_mesh = None
+            self.cfg_submeshes = None
+
         self.dit_ccl_manager = CCLManager(
             mesh_device=mesh_device,
             num_links=num_links,
@@ -332,6 +369,33 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         self._prepare_transformer(0)
         self._prepare_text_encoder()
         self._prepare_vae()
+
+        # Per-submesh DiT + CCLManager lists. Index 0 is the primary (submesh 0,
+        # or the full mesh when cfg is off). For cfg parallel, build submesh 1's
+        # transformer + CCLManager and load its weights.
+        self.cfg_devices = [self.mesh_device]
+        self.cfg_ccl_managers = [self.dit_ccl_manager]
+        self.cfg_dit = [self.transformer]
+        if self.cfg_factor > 1:
+            submesh1 = self.cfg_submeshes[1]
+            ccl1 = CCLManager(mesh_device=submesh1, num_links=num_links, topology=topology)
+            dit1 = self._build_dit(submesh1, ccl1)
+            cache.load_model(
+                dit1,
+                model_name=os.path.basename(self.checkpoint_name),
+                subfolder="transformer",
+                parallel_config=self.parallel_config,
+                mesh_shape=tuple(submesh1.shape),
+                is_fsdp=self.is_fsdp,
+                get_torch_state_dict=lambda: self.torch_transformer.state_dict(),
+            )
+            self.cfg_devices.append(submesh1)
+            self.cfg_ccl_managers.append(ccl1)
+            self.cfg_dit.append(dit1)
+            # NOTE: the VAE runs only on submesh 0 (self.tt_vae). Decoding + the
+            # fractured device->host egress on a single submesh works fine — the hang
+            # that originally appeared here was the trailing synchronize on the PARENT
+            # mesh, not the submesh egress (see cfg-parallel-parent-mesh-cq-hang).
 
         self.register_to_config(boundary_ratio=boundary_ratio)
         self.register_to_config(expand_timesteps=expand_timesteps)
@@ -531,6 +595,30 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             width=width,
             num_frames=num_frames,
             **extra_kwargs,
+        )
+
+    def _build_dit(self, mesh_device, ccl_manager):
+        """Construct a WanTransformer3DModel (single transformer, wan2.1) on the
+        given device/CCLManager from the loaded torch transformer config. Used to
+        build the per-submesh DiT copies for CFG parallelism."""
+        cfg = self.torch_transformer.config
+        return WanTransformer3DModel(
+            patch_size=cfg.patch_size,
+            num_heads=cfg.num_attention_heads,
+            dim=cfg.num_attention_heads * cfg.attention_head_dim,
+            in_channels=cfg.in_channels,
+            out_channels=cfg.out_channels,
+            text_dim=cfg.text_dim,
+            freq_dim=cfg.freq_dim,
+            ffn_dim=cfg.ffn_dim,
+            cross_attn_norm=cfg.cross_attn_norm,
+            eps=cfg.eps,
+            rope_max_seq_len=cfg.rope_max_seq_len,
+            mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
+            parallel_config=self.parallel_config,
+            is_fsdp=self.is_fsdp,
+            model_type=self.model_type,
         )
 
     def _prepare_text_encoder(self):
@@ -969,117 +1057,133 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         if profiler:
             profiler.start("denoising", profiler_iteration)
 
-        permuted_latent_tt = None
-        rope_args = None
-
         latent_frames, latent_height, latent_width = latents.shape[2], latents.shape[3], latents.shape[4]
-        prepared_prompts = [False, False]
 
-        sp_axis = self.transformer_states[0].model.parallel_config.sequence_parallel.mesh_axis
-        with self.progress_bar(total=num_inference_steps) as progress_bar:
-            for i, t in enumerate(timesteps):
-                warmup_t2 = (
-                    i == 1 and len(timesteps) == 2 and self.transformer_2 is not None
-                )  # Ensure transformer_2 is also warmed up
+        if self.cfg_factor > 1:
+            # CFG parallel: uncond on submesh 0, cond on submesh 1, combined on host.
+            latents = self._cfg_parallel_denoise(
+                prompt_embeds=prompt_embeds,
+                negative_prompt_embeds=negative_prompt_embeds,
+                latents=latents,
+                timesteps=timesteps,
+                guidance_scale=guidance_scale,
+                latent_frames=latent_frames,
+                latent_height=latent_height,
+                latent_width=latent_width,
+            )
+        else:
+            permuted_latent_tt = None
+            rope_args = None
 
-                # 0=> wan2.1 or high-noise stage in wan2.2 (transformer) | 1=> low-noise stage in wan2.2 (transformer_2)
-                transformer_idx = 0 if (t >= boundary_timestep) and not warmup_t2 else 1
-                self._prepare_transformer(transformer_idx)
-                ts = self.transformer_states[transformer_idx]
-                if not prepared_prompts[transformer_idx]:
-                    # Prepare the text conditioning in an optional persistent buffer depending on traced
-                    ts.prompt_buffer = self.prepare_text_conditioning(ts.model, prompt_embeds, ts.prompt_buffer, traced)
-                    ts.negative_prompt_buffer = self.prepare_text_conditioning(
-                        ts.model, negative_prompt_embeds, ts.negative_prompt_buffer, traced
-                    )
-                    prepared_prompts[transformer_idx] = True
+            prepared_prompts = [False, False]
 
-                if permuted_latent_tt is None:
-                    # First iteration, preprocess spatial input and prepare rope features
-                    permuted_latent, patchified_seqlen = ts.model.preprocess_spatial_input_host(latents)
+            sp_axis = self.transformer_states[0].model.parallel_config.sequence_parallel.mesh_axis
+            with self.progress_bar(total=num_inference_steps) as progress_bar:
+                for i, t in enumerate(timesteps):
+                    warmup_t2 = (
+                        i == 1 and len(timesteps) == 2 and self.transformer_2 is not None
+                    )  # Ensure transformer_2 is also warmed up
 
-                    if cond_latents is not None:
-                        cond_latents, _ = ts.model.preprocess_spatial_input_host(cond_latents)
-                        cond_latents = tensor.from_torch(
-                            cond_latents,
+                    # 0=> wan2.1 or high-noise stage in wan2.2 (transformer) | 1=> low-noise stage in wan2.2 (transformer_2)
+                    transformer_idx = 0 if (t >= boundary_timestep) and not warmup_t2 else 1
+                    self._prepare_transformer(transformer_idx)
+                    ts = self.transformer_states[transformer_idx]
+                    if not prepared_prompts[transformer_idx]:
+                        # Prepare the text conditioning in an optional persistent buffer depending on traced
+                        ts.prompt_buffer = self.prepare_text_conditioning(
+                            ts.model, prompt_embeds, ts.prompt_buffer, traced
+                        )
+                        ts.negative_prompt_buffer = self.prepare_text_conditioning(
+                            ts.model, negative_prompt_embeds, ts.negative_prompt_buffer, traced
+                        )
+                        prepared_prompts[transformer_idx] = True
+
+                    if permuted_latent_tt is None:
+                        # First iteration, preprocess spatial input and prepare rope features
+                        permuted_latent, patchified_seqlen = ts.model.preprocess_spatial_input_host(latents)
+
+                        if cond_latents is not None:
+                            cond_latents, _ = ts.model.preprocess_spatial_input_host(cond_latents)
+                            cond_latents = tensor.from_torch(
+                                cond_latents,
+                                device=self.mesh_device,
+                                mesh_axes=[None, None, sp_axis, None],
+                                dtype=ttnn.bfloat16,
+                            )
+                            if self.condition_buffer is None or tuple(self.condition_buffer.shape) != tuple(
+                                cond_latents.shape
+                            ):
+                                self.condition_buffer = cond_latents
+                            else:
+                                ttnn.copy(cond_latents, self.condition_buffer)
+
+                        rope_cos_1HND, rope_sin_1HND, trans_mat = ts.model.get_rope_features(latents)
+                        rope_args = {
+                            "rope_cos_1HND": rope_cos_1HND,
+                            "rope_sin_1HND": rope_sin_1HND,
+                            "trans_mat": trans_mat,
+                        }
+
+                        permuted_latent_tt = tensor.from_torch(
+                            permuted_latent,
                             device=self.mesh_device,
                             mesh_axes=[None, None, sp_axis, None],
-                            dtype=ttnn.bfloat16,
+                            dtype=ts.model.output_dtype,
                         )
-                        if self.condition_buffer is None or tuple(self.condition_buffer.shape) != tuple(
-                            cond_latents.shape
-                        ):
-                            self.condition_buffer = cond_latents
-                        else:
-                            ttnn.copy(cond_latents, self.condition_buffer)
 
-                    rope_cos_1HND, rope_sin_1HND, trans_mat = ts.model.get_rope_features(latents)
-                    rope_args = {
-                        "rope_cos_1HND": rope_cos_1HND,
-                        "rope_sin_1HND": rope_sin_1HND,
-                        "trans_mat": trans_mat,
-                    }
+                    # setup/update latent and condition buffers
+                    if self.latent_buffer is None or tuple(self.latent_buffer.shape) != tuple(permuted_latent_tt.shape):
+                        self.latent_buffer = permuted_latent_tt
+                    else:
+                        ttnn.copy(permuted_latent_tt, self.latent_buffer)
 
-                    permuted_latent_tt = tensor.from_torch(
-                        permuted_latent,
-                        device=self.mesh_device,
-                        mesh_axes=[None, None, sp_axis, None],
-                        dtype=ts.model.output_dtype,
+                    if self.config.expand_timesteps:
+                        # seq_len: num_latent_frames * latent_height//2 * latent_width//2
+                        temp_ts = (mask[0][0][:, ::2, ::2] * t).flatten()
+                        # batch_size, seq_len
+                        timestep = temp_ts.unsqueeze(0).expand(latents.shape[0], -1)
+                    else:
+                        timestep = t.expand(latents.shape[0])
+
+                    permuted_model_input = self.get_model_input(self.latent_buffer, self.condition_buffer)
+
+                    assert timestep.ndim == 1, "Wan2.2-T2V/I2V requires a 1D timestep tensor"
+                    timestep = float32_tensor(
+                        timestep.unsqueeze(1).unsqueeze(1).unsqueeze(1), device=(None if traced else self.mesh_device)
                     )
 
-                # setup/update latent and condition buffers
-                if self.latent_buffer is None or tuple(self.latent_buffer.shape) != tuple(permuted_latent_tt.shape):
-                    self.latent_buffer = permuted_latent_tt
-                else:
-                    ttnn.copy(permuted_latent_tt, self.latent_buffer)
+                    permuted_noise_pred_tt = ts.model.combined_step(
+                        do_classifier_free_guidance=self.do_classifier_free_guidance,
+                        spatial_1BNI=permuted_model_input,
+                        prompt_1BLP=ts.prompt_buffer,
+                        negative_prompt_1BLP=ts.negative_prompt_buffer,
+                        N=patchified_seqlen,
+                        timestep=timestep,
+                        **rope_args,
+                        guidance_scale=ts.guidance_scale,
+                        traced=traced,
+                        gather_output=False,
+                    )
 
-                if self.config.expand_timesteps:
-                    # seq_len: num_latent_frames * latent_height//2 * latent_width//2
-                    temp_ts = (mask[0][0][:, ::2, ::2] * t).flatten()
-                    # batch_size, seq_len
-                    timestep = temp_ts.unsqueeze(0).expand(latents.shape[0], -1)
-                else:
-                    timestep = t.expand(latents.shape[0])
+                    permuted_latent_tt = self._solver.step(
+                        step=i,
+                        latent=self.latent_buffer,
+                        velocity_pred=permuted_noise_pred_tt,
+                    )
 
-                permuted_model_input = self.get_model_input(self.latent_buffer, self.condition_buffer)
+                    progress_bar.update()
 
-                assert timestep.ndim == 1, "Wan2.2-T2V/I2V requires a 1D timestep tensor"
-                timestep = float32_tensor(
-                    timestep.unsqueeze(1).unsqueeze(1).unsqueeze(1), device=(None if traced else self.mesh_device)
-                )
+            self._current_timestep = None
 
-                permuted_noise_pred_tt = ts.model.combined_step(
-                    do_classifier_free_guidance=self.do_classifier_free_guidance,
-                    spatial_1BNI=permuted_model_input,
-                    prompt_1BLP=ts.prompt_buffer,
-                    negative_prompt_1BLP=ts.negative_prompt_buffer,
-                    N=patchified_seqlen,
-                    timestep=timestep,
-                    **rope_args,
-                    guidance_scale=ts.guidance_scale,
-                    traced=traced,
-                    gather_output=False,
-                )
+            permuted_latent_tt = ts.model.ccl_manager.all_gather_persistent_buffer(
+                permuted_latent_tt, dim=2, mesh_axis=sp_axis
+            )
+            permuted_latent = local_device_to_torch(permuted_latent_tt)
 
-                permuted_latent_tt = self._solver.step(
-                    step=i,
-                    latent=self.latent_buffer,
-                    velocity_pred=permuted_noise_pred_tt,
-                )
-
-                progress_bar.update()
-
-        self._current_timestep = None
-
-        permuted_latent_tt = ts.model.ccl_manager.all_gather_persistent_buffer(
-            permuted_latent_tt, dim=2, mesh_axis=sp_axis
-        )
-        permuted_latent = local_device_to_torch(permuted_latent_tt)
-
-        # Postprocess spatial output
-        latents = ts.model.postprocess_spatial_output_host(
-            permuted_latent, F=latent_frames, H=latent_height, W=latent_width, N=patchified_seqlen
-        )
+            # Postprocess spatial output
+            latents = ts.model.postprocess_spatial_output_host(
+                permuted_latent, F=latent_frames, H=latent_height, W=latent_width, N=patchified_seqlen
+            )
 
         if profiler:
             profiler.end("denoising", profiler_iteration)
@@ -1097,27 +1201,12 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
             tt_latents_BTHWC, logical_h, logical_w = self.tt_vae.prepare_input(latents)
 
-            tt_latents_BTHWC = typed_tensor_2dshard(
-                tt_latents_BTHWC,
-                self.mesh_device,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                shard_mapping={
-                    self.vae_parallel_config.height_parallel.mesh_axis: 2,
-                    self.vae_parallel_config.width_parallel.mesh_axis: 3,
-                },
-                dtype=self.tt_vae.dtype,
-            )
-            self._prepare_vae()
-            tt_video_BCTHW, new_logical_h, new_logical_w = self.tt_vae(
-                tt_latents_BTHWC,
-                logical_h,
-                t_chunk_size=self.vae_t_chunk_size,
-                logical_w=logical_w,
-            )
-
+            h_axis = self.vae_parallel_config.height_parallel.mesh_axis
+            w_axis = self.vae_parallel_config.width_parallel.mesh_axis
+            shard_mapping = {h_axis: 2, w_axis: 3}
             concat_dims = [None, None]
-            concat_dims[self.vae_parallel_config.height_parallel.mesh_axis] = 3
-            concat_dims[self.vae_parallel_config.width_parallel.mesh_axis] = 4
+            concat_dims[h_axis] = 3
+            concat_dims[w_axis] = 4
             d2h_permute = (0, 2, 3, 4, 1) if output_type in ("np", "uint8") else None
 
             if output_type == "uint8":
@@ -1127,6 +1216,23 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             else:
                 pre_fn = None
 
+            # VAE runs on self.mesh_device (which is submesh 0 under CFG parallelism, or
+            # the full mesh otherwise). The fractured device->host egress on this single
+            # mesh works in both cases.
+            tt_latents_BTHWC = typed_tensor_2dshard(
+                tt_latents_BTHWC,
+                self.mesh_device,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                shard_mapping=shard_mapping,
+                dtype=self.tt_vae.dtype,
+            )
+            self._prepare_vae()
+            tt_video_BCTHW, new_logical_h, new_logical_w = self.tt_vae(
+                tt_latents_BTHWC,
+                logical_h,
+                t_chunk_size=self.vae_t_chunk_size,
+                logical_w=logical_w,
+            )
             video_torch = fast_device_to_host(
                 tt_video_BCTHW,
                 self.mesh_device,
@@ -1162,6 +1268,123 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         if include_last_latent:
             output.last_latent = last_latent_out
         return output
+
+    def _cfg_parallel_denoise(
+        self,
+        *,
+        prompt_embeds,
+        negative_prompt_embeds,
+        latents,
+        timesteps,
+        guidance_scale,
+        latent_frames,
+        latent_height,
+        latent_width,
+    ):
+        """CFG-parallel denoising (untraced, host-side combine).
+
+        Runs the unconditional pass on submesh 0 and the conditional pass on
+        submesh 1 concurrently (one inner_step each), then combines on host:
+            pred = uncond + guidance_scale * (cond - uncond)
+        The combined prediction is fed to the on-device solver (submesh 0); the
+        updated latent is broadcast back to both submeshes for the next step.
+
+        prompt_embeds / negative_prompt_embeds: T5 hidden states (TT, replicated)
+        produced on submesh 0; they are pulled to host and re-placed per submesh
+        (submesh 0 = uncond, submesh 1 = cond).
+
+        Returns the final latents as a torch tensor (B, C, F, H, W), matching the
+        sequential path's postprocess output.
+        """
+        assert self.cfg_factor == 2
+        devices = self.cfg_devices  # [submesh0, submesh1]
+        dits = self.cfg_dit  # [dit0, dit1]
+        sp_axis = self.parallel_config.sequence_parallel.mesh_axis
+
+        # Per-submesh prompt conditioning: submesh 0 = uncond, submesh 1 = cond.
+        # Wan text embeds are replicated across the mesh, so device-0 shard is the
+        # full tensor; re-place it replicated onto each submesh.
+        uncond_torch = local_device_to_torch(negative_prompt_embeds)
+        cond_torch = local_device_to_torch(prompt_embeds)
+        per_submesh_prompt = [uncond_torch, cond_torch]
+        prompt_bufs = []
+        for i, dit in enumerate(dits):
+            tt_pe = tensor.from_torch(
+                per_submesh_prompt[i],
+                device=devices[i],
+                mesh_axes=[None, None, None, None],
+                dtype=ttnn.bfloat16,
+            )
+            prompt_bufs.append(dit.prepare_text_conditioning(tt_pe))
+
+        # Patchify spatial input on host (identical for both submeshes).
+        permuted_latent, N = dits[0].preprocess_spatial_input_host(latents)
+
+        # Per-submesh RoPE features (built on each submesh).
+        rope_per = [dit.get_rope_features(latents) for dit in dits]
+
+        # Latent state carried as full torch (1, B, N, I) between steps.
+        latent_state = permuted_latent
+
+        with self.progress_bar(total=len(timesteps)) as progress_bar:
+            for step_i, t in enumerate(timesteps):
+                timestep = t.expand(latents.shape[0]).unsqueeze(1).unsqueeze(1).unsqueeze(1)
+
+                preds_full = []
+                for j, dit in enumerate(dits):
+                    # Model spatial input is bf16 (mirrors get_model_input, which
+                    # typecasts the float32 latent down before patch_embedding; the
+                    # float32 latent is kept for the solver below).
+                    spatial_j = tensor.from_torch(
+                        latent_state,
+                        device=devices[j],
+                        mesh_axes=[None, None, sp_axis, None],
+                        dtype=ttnn.bfloat16,
+                    )
+                    timestep_j = float32_tensor(timestep, device=devices[j])
+                    rope_cos, rope_sin, trans_mat = rope_per[j]
+                    pred_j = dit.inner_step(
+                        spatial_j,
+                        prompt_bufs[j],
+                        rope_cos,
+                        rope_sin,
+                        trans_mat,
+                        N,
+                        timestep_j,
+                        gather_output=True,  # gather SP so the host gets the full prediction
+                    )
+                    preds_full.append(local_device_to_torch(pred_j))
+
+                # Classifier-free guidance combine on host.
+                uncond, cond = preds_full[0], preds_full[1]
+                noise_pred = uncond + guidance_scale * (cond - uncond)
+
+                # Solver step on submesh 0 (operates on SP-fractured tensors).
+                latent_dev0 = tensor.from_torch(
+                    latent_state,
+                    device=devices[0],
+                    mesh_axes=[None, None, sp_axis, None],
+                    dtype=dits[0].output_dtype,
+                )
+                noise_dev0 = tensor.from_torch(
+                    noise_pred,
+                    device=devices[0],
+                    mesh_axes=[None, None, sp_axis, None],
+                    dtype=dits[0].output_dtype,
+                )
+                new_latent_dev0 = self._solver.step(step=step_i, latent=latent_dev0, velocity_pred=noise_dev0)
+
+                # Gather to full torch so both submeshes can be re-seeded next step.
+                new_latent_dev0 = dits[0].ccl_manager.all_gather_persistent_buffer(
+                    new_latent_dev0, dim=2, mesh_axis=sp_axis
+                )
+                latent_state = local_device_to_torch(new_latent_dev0)
+                progress_bar.update()
+
+        self._current_timestep = None
+        return dits[0].postprocess_spatial_output_host(
+            latent_state, F=latent_frames, H=latent_height, W=latent_width, N=N
+        )
 
     def run_single_prompt(self, *args, **kwargs):
         return self.__call__(*args, **kwargs).frames

@@ -419,3 +419,113 @@ def test_resolution_sweep(
     _print_table(results, mesh_shape, sp_factor, tp_factor)
     if int(ttnn.distributed_context_get_rank()) == 0:
         _write_csv(results, perf_csv_path)
+
+
+def _build_cfg_pipeline(parent_mesh, *, cfg_axis, sp_axis, tp_axis, num_links, topology, height, width, num_frames):
+    """Build a CFG-parallel WanPipeline21 on the full parent mesh.
+
+    The parent (e.g. 4x8) is split into two submeshes along cfg_axis (-> two 4x4).
+    sp/tp factors are taken from the SUBMESH shape; cfg_parallel splits the parent.
+    """
+    parent_shape = tuple(parent_mesh.shape)
+    submesh_shape = list(parent_shape)
+    submesh_shape[cfg_axis] //= 2
+    sp_factor = submesh_shape[sp_axis]
+    tp_factor = submesh_shape[tp_axis]
+
+    parallel_config = DiTParallelConfig(
+        cfg_parallel=ParallelFactor(factor=2, mesh_axis=cfg_axis),
+        tensor_parallel=ParallelFactor(mesh_axis=tp_axis, factor=tp_factor),
+        sequence_parallel=ParallelFactor(mesh_axis=sp_axis, factor=sp_factor),
+    )
+    vae_parallel_config = VaeHWParallelConfig(
+        height_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
+        width_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
+    )
+    encoder_parallel_config = EncoderParallelConfig(
+        tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
+    )
+    full_latent_T = (num_frames - 1) // 4 + 1
+
+    return WanPipeline21(
+        parent_mesh,
+        parallel_config,
+        vae_parallel_config,
+        encoder_parallel_config,
+        num_links,
+        checkpoint_name="Wan-AI/Wan2.1-T2V-14B-Diffusers",
+        boundary_ratio=None,
+        dynamic_load=False,
+        topology=topology,
+        is_fsdp=True,
+        height=height,
+        width=width,
+        vae_t_chunk_size=full_latent_T,
+        num_frames=num_frames,
+        run_warmup=False,
+    )
+
+
+CFG_SHAPES = [(1, 768, 1024), (1, 1152, 2048)]
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [[(4, 8), line_params]],
+    ids=["wh_4x8_cfg2"],
+    indirect=["mesh_device", "device_params"],
+)
+def test_cfg_parallel(*, mesh_device: ttnn.MeshDevice, is_ci_env: bool, galaxy_type: str) -> None:
+    """CFG parallelism: split the 4x8 parent into two 4x4 submeshes (uncond/cond)."""
+    if galaxy_type == "4U":
+        pytest.skip("4U is not supported for this test")
+
+    only = os.environ.get("WAN_SWEEP_SHAPES")
+    shapes = CFG_SHAPES
+    if only:
+        wanted = {s.strip() for s in only.split(",")}
+        shapes = [s for s in CFG_SHAPES if f"{s[0]}x{s[1]}x{s[2]}" in wanted] or CFG_SHAPES
+
+    pipeline = _build_cfg_pipeline(
+        mesh_device,
+        cfg_axis=1,
+        sp_axis=1,
+        tp_axis=0,
+        num_links=4,
+        topology=ttnn.Topology.Linear,
+        height=max(h for _, h, _ in shapes),
+        width=max(w for _, _, w in shapes),
+        num_frames=NUM_FRAMES,
+    )
+
+    # Construction smoke check: two submeshes, two transformers on distinct devices.
+    assert pipeline.cfg_factor == 2
+    assert len(pipeline.cfg_dit) == 2
+    assert len(pipeline.cfg_submeshes) == 2
+    logger.info("CFG-parallel pipeline constructed: 2 submeshes, 2 transformers.")
+
+    for batch_size, height, width in shapes:
+        label = f"{batch_size}x{height}x{width}"
+        cfg_steps = int(os.environ.get("WAN_CFG_STEPS", NUM_INFERENCE_STEPS))
+        logger.info(f"=== CFG {label} ({cfg_steps} steps) ===")
+        with torch.no_grad():
+            result = pipeline(
+                prompt=[PROMPT] * batch_size,
+                height=height,
+                width=width,
+                num_frames=NUM_FRAMES,
+                num_inference_steps=cfg_steps,
+                guidance_scale=5.0,
+                seed=42,
+                output_type="uint8",
+            )
+        # NOTE: do NOT synchronize the PARENT mesh here. Once it is split into
+        # submeshes (create_submeshes), the parent and child share per-physical-device
+        # cq0 completion/event state; a synchronize/record-event on the parent waits on
+        # a device completion that never arrives -> hang. Synchronize the submeshes.
+        for sm in pipeline.cfg_submeshes or [mesh_device]:
+            ttnn.synchronize_device(sm)
+        logger.info(f"  CFG {label} done")
+        if not is_ci_env and int(ttnn.distributed_context_get_rank()) == 0:
+            frames = result.frames if hasattr(result, "frames") else result[0]
+            _save_output_images(frames=frames, run_id="4x8_cfg2", batch_size=batch_size, height=height, width=width)
