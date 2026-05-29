@@ -156,12 +156,6 @@ public:
 private:
     H2DSocket() = default;
 
-    // Tag for the private ctor used by H2DSocketDramRecvAccess. Bypasses the
-    // MeshBuffer paths (which have no DRAM-core L1 allocator) and consumes
-    // pre-allocated DRISC-L1 offsets for the config and data buffers, plus the
-    // DRAM-L1 NOC offset that host writes need to add on top.
-    struct DramRecvCtorTag {};
-
     // Programmable-core type of the receiver core. Recorded explicitly at
     // construction rather than inferred at use sites: logical coordinates
     // overlap across core types (DRAM logical (x,y) is a different physical
@@ -170,8 +164,11 @@ private:
     // sets Dram; every other path (owner worker ctor, connect()) is Tensix.
     enum class RecvCoreType { Tensix, Dram };
 
+    // DRAM-receiver ctor (invoked only by H2DSocketDramRecvAccess). Bypasses the
+    // MeshBuffer paths (which have no DRAM-core L1 allocator) and consumes
+    // pre-allocated DRISC-L1 offsets for the config and data buffers, plus the
+    // DRAM-L1 NOC offset that host writes need to add on top.
     H2DSocket(
-        DramRecvCtorTag,
         const std::shared_ptr<MeshDevice>& mesh_device,
         const MeshCoreCoord& recv_core,
         uint32_t fifo_size,

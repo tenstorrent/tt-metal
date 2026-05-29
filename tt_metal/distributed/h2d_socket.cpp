@@ -292,7 +292,6 @@ H2DSocket::H2DSocket(
 }
 
 H2DSocket::H2DSocket(
-    DramRecvCtorTag,
     const std::shared_ptr<MeshDevice>& mesh_device,
     const MeshCoreCoord& recv_core,
     uint32_t fifo_size,
@@ -625,13 +624,7 @@ std::unique_ptr<distributed::H2DSocket> H2DSocketDramRecvAccess::create(
     uint32_t data_l1_local_addr,
     uint64_t dram_l1_noc_offset) {
     return std::unique_ptr<distributed::H2DSocket>(new distributed::H2DSocket(
-        distributed::H2DSocket::DramRecvCtorTag{},
-        mesh_device,
-        recv_core,
-        fifo_size,
-        config_l1_local_addr,
-        data_l1_local_addr,
-        dram_l1_noc_offset));
+        mesh_device, recv_core, fifo_size, config_l1_local_addr, data_l1_local_addr, dram_l1_noc_offset));
 }
 
 }  // namespace tt::tt_metal::experimental::detail
