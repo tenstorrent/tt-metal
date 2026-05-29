@@ -363,14 +363,19 @@ def compute_expert_l1_bytes_per_core(
         ), f"n_parallel ({n_par}) must divide num_cores ({num_cores}) for projection {proj_idx}"
         k_par = num_cores // n_par
 
+        # Allocator (``prepare_compressed_sram_slots``) slices linearly by
+        # ``moe_tp`` (= mesh_rows * mesh_cols), assigning the d-th N-slab
+        # (gate/up) or K-slab (down) to linear device d.  Predictor MUST
+        # divide by ``moe_tp`` — dividing by ``mesh_cols`` / ``mesh_rows``
+        # would under-slice on a 4×2 mesh and overestimate per-core bytes.
         if is_down:
-            assert K % mesh_rows == 0, f"down K ({K}) must be divisible by mesh_rows ({mesh_rows})"
-            K_per_dev = K // mesh_rows
+            assert K % moe_tp == 0, f"down K ({K}) must be divisible by moe_tp ({moe_tp})"
+            K_per_dev = K // moe_tp
             N_per_dev = N
         else:
             K_per_dev = K
-            assert N % mesh_cols == 0, f"gate/up N ({N}) must be divisible by mesh_cols ({mesh_cols})"
-            N_per_dev = N // mesh_cols
+            assert N % moe_tp == 0, f"gate/up N ({N}) must be divisible by moe_tp ({moe_tp})"
+            N_per_dev = N // moe_tp
 
         K_per_dev_tiles = K_per_dev // tile_hw
         N_per_dev_tiles = N_per_dev // tile_hw
