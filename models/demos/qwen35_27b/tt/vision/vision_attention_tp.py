@@ -189,6 +189,7 @@ class VisionAttentionTP(LightweightModule):
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, -1), mesh_shape=self.cluster_shape),
             cache_file_name=cache_name("wqkv_col"),
         )
+        print("important point", self.wqkv.shape)
 
         if f"{wq_str}.bias" in self.state_dict:
             bias_chunks = []
