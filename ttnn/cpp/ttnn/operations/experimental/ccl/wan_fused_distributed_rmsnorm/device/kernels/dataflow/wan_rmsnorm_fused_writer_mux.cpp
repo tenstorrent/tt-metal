@@ -48,6 +48,10 @@ using namespace tt::tt_fabric::linear::experimental;
 constexpr uint32_t output_cb = get_compile_time_arg_val(0);
 constexpr uint32_t num_tile_cols = get_compile_time_arg_val(1);
 constexpr uint32_t block_size = get_compile_time_arg_val(2);
+// Compute pushes block_size slots per col-block (LLK packer requirement), so a
+// row occupies div_up(num_tile_cols, block_size) * block_size CB slots. output_cb
+// is sized to 2 * this, so each row's slots are contiguous (never wrap mid-row).
+constexpr uint32_t padded_row_tiles = ((num_tile_cols + block_size - 1u) / block_size) * block_size;
 // stats_local_cb : window_size fp32 stat tiles produced by the compute kernel
 // (reduce<SUM,REDUCE_ROW> output). Real data lives in COL 0 — 32 fp32 values
 // stored at strided offsets within face_00 (col 0 of the top-left face) +
@@ -444,17 +448,32 @@ void kernel_main() {
 
         // Drain this chunk's output_cb tiles to DRAM. Compute always pushes
         // `block_size` slots per col-block (LLK packer requirement) even when
-        // only `tiles_in_block` (clamped) are valid; we wait+pop the full
-        // `block_size` to keep the CB level zero per row, but only NoC-write
-        // the valid tiles. Without this, multi-chunk overflows output_cb
-        // because over-pushed garbage slots never drain.
+        // only `tiles_in_block` (clamped) are valid; we pop the full
+        // padded_row_tiles per row (incl. over-pushed garbage slots) but only
+        // NoC-write the valid tiles. Without popping the padding, multi-chunk
+        // overflows output_cb because over-pushed slots never drain.
         for (uint32_t r = 0; r < rows_in_chunk; r++) {
             const uint32_t tile_row = tile_row_start + row_processed + r;
+            // Deep drain: issue each col-block's writes as soon as compute
+            // pushes it (incremental cb_wait_front keeps within-row overlap),
+            // but defer the flush + pop to the END of the row so the whole
+            // row's writes pipeline at DRAM depth under ONE flush instead of
+            // one per block_size=2 tiles. output_cb is 2 padded rows, so a
+            // row's slots are contiguous and compute can fill row r+1 while
+            // this row drains.
+            uint32_t row_base_rd_ptr = 0;
+            uint32_t cumulative_tiles = 0;
             for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
                 const uint32_t tiles_in_block =
                     ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
-                cb_wait_front(output_cb, block_size);
-                uint32_t output_rd_ptr = get_read_ptr(output_cb);
+                // Compute pushes block_size slots per col-block regardless of
+                // the clamped valid count, so wait for the padded cumulative.
+                cumulative_tiles += block_size;
+                cb_wait_front(output_cb, cumulative_tiles);
+                if (col_tile == 0) {
+                    row_base_rd_ptr = get_read_ptr(output_cb);
+                }
+                uint32_t output_rd_ptr = row_base_rd_ptr + col_tile * output_tile_bytes;
                 for (uint32_t i = 0; i < tiles_in_block; i++) {
                     const uint32_t c = col_tile + i;
                     const uint32_t h = c / head_dim_tiles;
@@ -464,14 +483,13 @@ void kernel_main() {
                     noc_async_write_tile(output_tile_idx, output_accessor, output_rd_ptr);
                     output_rd_ptr += output_tile_bytes;
                 }
-                // Use _flushed (write request committed to NoC) instead of
-                // _barrier (round-trip ACK) — composite post_allgather pattern.
-                // The L1 source slot is safe to reuse once the write request
-                // has left the core. Final _barrier at end of kernel ensures
-                // all in-flight writes complete before MUX disconnect.
-                noc_async_writes_flushed();
-                cb_pop_front(output_cb, block_size);
             }
+            // One flush + one pop per row. _flushed (write request committed to
+            // NoC, not round-trip ACK) — the L1 source slots are safe to reuse
+            // once the requests have left the core; the final _barrier at end of
+            // kernel ensures all in-flight writes complete before MUX disconnect.
+            noc_async_writes_flushed();
+            cb_pop_front(output_cb, padded_row_tiles);
         }
 
         row_processed += rows_in_chunk;
