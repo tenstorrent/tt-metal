@@ -11,10 +11,13 @@ filesystem as the coordination medium:
 1. Every worker computes the ordered list of scopes (file paths) from its
    collection during ``pytest_collection_modifyitems``.
 2. Wrapping ``pytest_runtest_protocol`` (outermost, see below), each worker
-   checks whether its scope has advanced past the one it is currently "in".
-   If so, it crosses the FS barriers for every intermediate scope, in order,
-   *before* yielding control to the actual test protocol.
-3. At session finish, the worker crosses every barrier it has not yet
+   crosses one "entry-barrier" per scope *before* running that scope's first
+   test -- entry-barrier k is the synchronized reset that runs immediately
+   before the first test of scope k. The very first file is included, so
+   every file (not just files 2..N) starts on freshly reset hardware. A
+   worker whose next test jumps several scopes ahead crosses all the
+   intermediate entry-barriers in order before yielding.
+3. At session finish, the worker crosses every entry-barrier it has not yet
    crossed. This is the safety net for workers whose round-robin slice
    happened to end before the last scope -- without it, peers that are still
    marching through later scopes would wait at those scopes' barriers
@@ -30,7 +33,10 @@ Crossing a single barrier:
 * All workers race for ``<barrier_name>.reset.lock`` (``filelock.FileLock``).
   Whoever wins checks ``<barrier_name>.cleared`` -- if it doesn't exist yet,
   it runs ``HardwareController().reset_card()`` and creates it. Everyone
-  else just observes the cleared sentinel and moves on.
+  else just observes the cleared sentinel and moves on. If the reset *fails*,
+  the winner drops a ``<barrier_name>.failed`` sentinel and re-raises instead
+  of marking the barrier cleared, so the run aborts loudly rather than
+  continuing on un-reset hardware.
 * Finally, each worker drops the process-local TestConfig caches that mirror
   on-card state (``BRISC_ELF_LOADED`` / ``LAST_LOADED_ELFS``); after a card
   reset those caches are stale and would cause the next test to hang trying
@@ -84,9 +90,11 @@ class WorkerBarrierPlugin:
         self.barrier_dir.mkdir(parents=True, exist_ok=True)
         self._on_barrier = on_barrier
         self._ordered_scopes: Optional[list[str]] = None
-        # Index of the scope we are currently "inside". Starts at 0 (the
-        # scope of the very first test in the worker's collection).
-        self._current_scope_idx = 0
+        # Index of the next entry-barrier this worker still needs to cross.
+        # Entry-barrier k is the synchronized reset that runs immediately
+        # *before* the first test of scope k executes. Starts at 0 so the
+        # very first file is also preceded by a reset (clean-start guarantee).
+        self._next_barrier_idx = 0
 
     @staticmethod
     def _scope_of(nodeid: str) -> str:
@@ -126,22 +134,25 @@ class WorkerBarrierPlugin:
             # Defensive: an item with a scope nobody else collected. Skip
             # the barrier handling for it rather than crashing the run.
             return
-        while self._current_scope_idx < target_idx:
-            self._cross_barrier(self._current_scope_idx)
-            self._current_scope_idx += 1
+        # Cross every entry-barrier up to *and including* the target scope's
+        # own barrier, so a reset always runs immediately before the first
+        # test of each file -- the first file included.
+        while self._next_barrier_idx <= target_idx:
+            self._cross_barrier(self._next_barrier_idx)
+            self._next_barrier_idx += 1
 
     @pytest.hookimpl(trylast=True)
     def pytest_sessionfinish(self, session, exitstatus):
         if not self._ordered_scopes:
             return
         # If this worker's last test landed before the final scope, cross
-        # every remaining barrier so peers that are still running tests in
-        # those later scopes don't stall on a missing arrival sentinel.
-        # The "len - 1" is intentional: there is no barrier *after* the
-        # final scope, only between consecutive scopes.
-        while self._current_scope_idx < len(self._ordered_scopes) - 1:
-            self._cross_barrier(self._current_scope_idx)
-            self._current_scope_idx += 1
+        # every remaining entry-barrier so peers that are still running tests
+        # in those later scopes don't stall on a missing arrival sentinel.
+        # There is one entry-barrier per scope (the pre-scope reset), so we
+        # cross up to and including the last scope's barrier.
+        while self._next_barrier_idx < len(self._ordered_scopes):
+            self._cross_barrier(self._next_barrier_idx)
+            self._next_barrier_idx += 1
 
     def _cross_barrier(self, scope_idx: int) -> None:
         """Block until every worker has arrived; one of us runs the reset."""
@@ -154,7 +165,13 @@ class WorkerBarrierPlugin:
 
         arrived_file = barrier_dir / f"arrived.{self.worker_id}"
         cleared_file = barrier_dir / "cleared"
+        failed_file = barrier_dir / "failed"
         lock_file = barrier_dir / "reset.lock"
+        scope_name = (
+            self._ordered_scopes[scope_idx]
+            if self._ordered_scopes
+            else f"scope_{scope_idx}"
+        )
 
         arrived_file.touch()
 
@@ -180,19 +197,30 @@ class WorkerBarrierPlugin:
         # Phase 2: serialize on the lock. The first holder runs the reset
         # and creates the cleared sentinel; later holders see it exists and
         # skip. Cheap and idempotent.
+        #
+        # Failure handling: if the reset raises (e.g. `tt-smi -r` fails inside
+        # the CI container), we deliberately do NOT create the `cleared`
+        # sentinel -- silently letting peers run on an un-reset card is exactly
+        # the CI failure mode we are guarding against. Instead we drop a
+        # `failed` sentinel and re-raise so this worker errors loudly; peers
+        # that grab the lock afterwards see `failed` and abort too, so the
+        # whole run fails fast and visibly rather than continuing on dirty or
+        # half-reset hardware.
         with FileLock(str(lock_file)):
+            if failed_file.exists():
+                raise RuntimeError(
+                    f"[{self.worker_id}] Card reset at barrier {scope_idx} "
+                    f"(before scope '{scope_name}') already failed on another "
+                    f"worker; aborting instead of continuing on un-reset "
+                    f"hardware."
+                )
             if not cleared_file.exists():
                 try:
-                    self._on_barrier(
-                        self._ordered_scopes[scope_idx]
-                        if self._ordered_scopes
-                        else f"scope_{scope_idx}"
-                    )
-                finally:
-                    # Always mark cleared, even if reset_card raised, so we
-                    # don't deadlock other workers on a transient failure.
-                    # The exception still propagates up to fail the test.
-                    cleared_file.touch()
+                    self._on_barrier(scope_name)
+                except BaseException:
+                    failed_file.touch()
+                    raise
+                cleared_file.touch()
 
         # Phase 3: drop per-process state that mirrors on-card state. After
         # tt-smi -r nothing is loaded on the card anymore, AND the Python-side

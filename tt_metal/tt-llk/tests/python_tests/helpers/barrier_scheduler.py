@@ -4,7 +4,7 @@
 """Custom pytest-xdist scheduler used together with the worker barrier plugin.
 
 This scheduler is the master-side half of the "parallel within a file, serial
-across files, reset between" pipeline. Its only responsibility is to hand each
+across files, reset before each file" pipeline. Its only responsibility is to hand each
 worker its full, scope-ordered list of test indices in a single batch, then
 mark the worker for shutdown. All cross-worker synchronisation and the
 ``tt-smi -r`` between files happen worker-side, in

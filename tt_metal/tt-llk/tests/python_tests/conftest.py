@@ -226,10 +226,12 @@ def pytest_addoption(parser):
         default=False,
         help="With pytest-xdist (-n N) and --compile-consumer: distribute each "
         "test file's variants across all workers in parallel and synchronise "
-        "the workers between files so HardwareController().reset_card() runs "
-        "once per file boundary. Prevents cross-file hardware state "
-        "contamination at the cost of workers idling at the per-file barrier "
-        "and one extra tt-smi -r per file. No effect when xdist is not active.",
+        "the workers at a barrier before each file so "
+        "HardwareController().reset_card() runs once immediately before every "
+        "file (the first file included). Prevents cross-file hardware state "
+        "contamination and guarantees a clean card at the start of each file, "
+        "at the cost of workers idling at the per-file barrier and one "
+        "tt-smi -r per file. No effect when xdist is not active.",
     )
 
 
@@ -335,7 +337,7 @@ def pytest_configure(config):
         controller = HardwareController()
 
         def _do_reset(scope_name: str):
-            logger.info("Crossing barrier after scope '{}': resetting card", scope_name)
+            logger.info("Resetting card before scope '{}'", scope_name)
             controller.reset_card()
 
         config.pluginmanager.register(
