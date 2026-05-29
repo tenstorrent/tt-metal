@@ -4,18 +4,19 @@
 
 """Full-model PCC (decode only): Hugging Face ``Ministral3Model`` vs ``TtMinistral3Model``.
 
-Downloads all decoder-layer weights from the Hub (embed_tokens, norm, and every
-``layers.<i>`` block) and compares one decode step after a short prefill fill.
+The HF reference is loaded with the same path as ``reference/devstral2_123b_inference.py``
+(``AutoModelForCausalLM`` + ``FineGrainedFP8Config``, FP8 dequant compat patch, disk offload).
+TT weights are bf16 tensors extracted from that loaded model (not shard download via
+``_devstral_weights``).
 
 - **Decode test:** prefill 128 tokens, then decode at position 128 (**129 tokens** total for
   one HF ``ref()`` forward), matching ``test_ministral3_single_layer.py``.
 
-**Note:** The HF reference model is built and run with this same ``MAX_SEQ_LEN`` budget (128).
-Do not raise it here to match ``DEVSTRAL2_TEST_MAX_SEQ_LEN`` — loading/running the full
-123B reference at a larger sequence length will OOM on typical host DRAM.
+**Note:** The HF reference forward stays short (129 tokens for decode PCC). The TT model uses
+``DEVSTRAL2_TEST_MAX_SEQ_LEN`` (98304) for KV/RoPE, matching other Devstral PCC tests.
 
-This test loads the full 123B checkpoint's tensors; mark accordingly and only run on
-machines with sufficient DRAM and a populated HF cache (or set ``HF_TOKEN`` for gated access).
+This test loads the full checkpoint through Transformers; mark accordingly and only run on
+machines with sufficient DRAM/disk offload space and a populated HF cache (or ``HF_TOKEN``).
 """
 
 from __future__ import annotations
@@ -32,11 +33,13 @@ from transformers.models.ministral3.modeling_ministral3 import Ministral3Model
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.experimental.devstral2_123B_instruct.tests._devstral_weights import (
-    load_ministral3_model_weights,
-    require_model_weights,
-    require_text_config,
+from models.experimental.devstral2_123B_instruct.reference.hf_reference_loader import (
+    extract_backbone_bf16_state_dict,
+    load_devstral2_causal_lm,
+    load_devstral2_text_config,
+    prepare_ministral3_backbone_for_pcc,
 )
+from models.experimental.devstral2_123B_instruct.tests._devstral_weights import DEVSTRAL2_TEST_MAX_SEQ_LEN
 from models.experimental.devstral2_123B_instruct.tt.model_args import (
     DEVSTRAL2_LARGE_L1_SMALL_SIZE,
     Devstral2Args,
@@ -46,8 +49,6 @@ from models.experimental.devstral2_123B_instruct.tt.weight_loading import resolv
 from models.tt_transformers.tt.ccl import TT_CCL
 
 PCC_REQUIRED = 0.99
-# On-disk layer-weight cache built with ``max_seq_len=128`` (``…/seq_128/``).
-TT_WEIGHT_CACHE_SEQ_LEN = 128
 
 
 def _mesh_device_param():
@@ -117,15 +118,23 @@ class _FullModelFixtures(NamedTuple):
     num_layers: int
 
 
-def _seq_128_weight_cache_path(mesh_device, text_cfg: Ministral3Config, num_layers: int) -> str:
-    """Path to ``…/layers_{N}/seq_128/`` (layer weights already cached there)."""
-    args_128 = Devstral2Args.from_hf_config(
+def _skip_hf_load_failure(exc: BaseException) -> None:
+    pytest.skip(
+        "Could not load Devstral-2-123B via Hugging Face "
+        "(set HF_TOKEN if gated, ensure offload disk space, or pre-cache weights). "
+        f"Error: {exc}"
+    )
+
+
+def _weight_cache_path(mesh_device, text_cfg: Ministral3Config, num_layers: int) -> str:
+    """Path to ``…/layers_{N}/seq_{DEVSTRAL2_TEST_MAX_SEQ_LEN}/`` for on-disk TT weight caches."""
+    cache_args = Devstral2Args.from_hf_config(
         text_cfg,
         mesh_shape=tuple(mesh_device.shape),
-        max_seq_len=TT_WEIGHT_CACHE_SEQ_LEN,
+        max_seq_len=DEVSTRAL2_TEST_MAX_SEQ_LEN,
         max_batch_size=1,
     )
-    path = resolve_weight_cache_path(None, args_128, num_layers=num_layers)
+    path = resolve_weight_cache_path(None, cache_args, num_layers=num_layers)
     assert path is not None
     return path
 
@@ -134,25 +143,28 @@ def _setup_full_model(
     mesh_device,
     *,
     max_seq_len: int,
-    reuse_seq_128_weight_cache: bool = False,
+    reuse_weight_cache: bool = False,
 ) -> _FullModelFixtures:
-    """Build HF reference and TT model with all decoder layers from the Hub checkpoint."""
-    text_cfg = require_text_config()
+    """Build HF reference (inference load path) and TT model from extracted bf16 weights."""
+    try:
+        text_cfg = load_devstral2_text_config()
+    except Exception as exc:
+        _skip_hf_load_failure(exc)
+
     num_layers = text_cfg.num_hidden_layers
-    weight_cache_path = (
-        _seq_128_weight_cache_path(mesh_device, text_cfg, num_layers) if reuse_seq_128_weight_cache else None
-    )
+    weight_cache_path = _weight_cache_path(mesh_device, text_cfg, num_layers) if reuse_weight_cache else None
     logger.info(
         f"Loading full model: {num_layers} decoder layers "
         f"(max_seq_len={max_seq_len}, weight_cache_path={weight_cache_path})"
     )
 
-    state_dict = require_model_weights(num_layers)
+    try:
+        causal_lm = load_devstral2_causal_lm()
+    except Exception as exc:
+        _skip_hf_load_failure(exc)
 
-    ref_cfg = Ministral3Config(**text_cfg.to_dict())
-    ref_cfg._attn_implementation = "eager"
-    ref = Ministral3Model(ref_cfg).to(dtype=torch.bfloat16).eval()
-    load_ministral3_model_weights(ref, state_dict)
+    ref = prepare_ministral3_backbone_for_pcc(causal_lm)
+    state_dict = extract_backbone_bf16_state_dict(causal_lm, num_layers)
 
     args = Devstral2Args.from_hf_config(
         text_cfg,
@@ -168,7 +180,7 @@ def _setup_full_model(
         tt_ccl,
         weight_cache_path=weight_cache_path,
     )
-    return _FullModelFixtures(text_cfg=ref_cfg, ref=ref, tt_model=tt_model, num_layers=num_layers)
+    return _FullModelFixtures(text_cfg=text_cfg, ref=ref, tt_model=tt_model, num_layers=num_layers)
 
 
 @torch.no_grad()
@@ -196,16 +208,18 @@ def test_ministral3_model_pcc_devstral2_123B_instruct_full_weights_all_layers_de
     """Prefill 128 tokens (KV fill), then one decode step; PCC vs HF last position over 129 tokens."""
     prefill_seq_len = 128
     decode_pos = prefill_seq_len
-    tt_max_seq_len = decode_pos + 1
+    tt_max_seq_len = max(DEVSTRAL2_TEST_MAX_SEQ_LEN, decode_pos + 1)
 
     fixtures = _setup_full_model(
         mesh_device,
         max_seq_len=tt_max_seq_len,
-        reuse_seq_128_weight_cache=True,
+        reuse_weight_cache=True,
     )
     text_cfg = fixtures.text_cfg
     ref = fixtures.ref
     tt_model = fixtures.tt_model
+
+    ref_device = next(ref.parameters()).device
 
     torch.manual_seed(42)
     gen = torch.Generator(device="cpu").manual_seed(42)
@@ -215,6 +229,8 @@ def test_ministral3_model_pcc_devstral2_123B_instruct_full_weights_all_layers_de
     input_ids_decode = input_ids_full[:, prefill_seq_len : prefill_seq_len + 1]
 
     position_ids_full = torch.arange(total_len, dtype=torch.long).unsqueeze(0).expand(batch_size, -1)
+    input_ids_full = input_ids_full.to(ref_device)
+    position_ids_full = position_ids_full.to(ref_device)
     inputs_embeds_full = ref.embed_tokens(input_ids_full)
     causal_mask_full = create_causal_mask(
         config=text_cfg,
@@ -223,12 +239,16 @@ def test_ministral3_model_pcc_devstral2_123B_instruct_full_weights_all_layers_de
         past_key_values=None,
         position_ids=position_ids_full,
     )
-    ref_decode = ref(
-        input_ids=input_ids_full,
-        attention_mask=causal_mask_full,
-        position_ids=position_ids_full,
-        use_cache=False,
-    ).last_hidden_state[:, -1:, :]
+    ref_decode = (
+        ref(
+            input_ids=input_ids_full,
+            attention_mask=causal_mask_full,
+            position_ids=position_ids_full,
+            use_cache=False,
+        )
+        .last_hidden_state[:, -1:, :]
+        .cpu()
+    )
 
     tt_model(_input_ids_to_tt(input_ids_prefill, mesh_device), mode="prefill", start_pos=0)
     current_pos_tt = _current_pos_to_tt(torch.tensor([decode_pos], dtype=torch.long), mesh_device)
