@@ -12,30 +12,46 @@ Profiled via `tt/profile_ocr_traced.py --image demo/demo_image1.jpg` under
 prefill**. Per-stage wall (warm, p50 over 3 replays), real weights, 28 LM /
 42 vision layers:
 
-| stage | traced | trace speedup |
-|-------|--------|---------------|
-| vision (42 L) | 3201 ms | **0.99×** |
-| LM prefill (28 L) | **1178 ms** (was 1426 ms before lm_head slice) | **1.00×** |
-| decode / step | 16.3 ms | — |
-| **e2e** | 4927 ms | 0.99× |
+| stage | traced | notes |
+|-------|--------|-------|
+| vision (42 L) | 3201 ms | now ~80% of e2e — next target |
+| LM prefill (28 L) | **262 ms** (was 1426 ms) | **5.4× — see prefill opts below** |
+| decode / step | ~17 ms | — |
+| **e2e** | **4042 ms** (was 4695 ms) | OCR exact vs HF (16/16 tokens) |
 
-Real-world demo output (full document, full depth, chat-template prompt):
+Real-world demo output (full document, full depth, chat-template prompt),
+**exact token match vs HF DotsOCRForCausalLM (16/16 = 1.0000)**:
 `**TABLE II** – ODDS RATIO OF HODGKIN LYMPHOMA AND NON-HODGKIN LYMPHOMA …`
 
-**lm_head slice (landed):** `prefill_from_embeds` now slices `hidden` to the
-last prompt row before norm+lm_head — the wide vocab projection (151936) runs on
-1 row instead of all ~4.9k positions (KV cache for all positions is already
-populated in `prefill_kv`). Full-depth prefill **1426 → 1178 ms (−248 ms)**;
-1-layer prefill 244 → 41 ms. Real-document OCR + fully-traced tests pass at full
-depth, output unchanged, trace-safe.
+### Prefill optimizations (1426 → 262 ms, all verified exact vs HF)
 
-**Key finding:** at real resolution vision (≈69% of e2e) and prefill (≈30%) are
-**compute-bound — metal trace gives 0%** (it only helped on the 256×96 synthetic
-toy image, which was dispatch-bound). The optimization lever is op-level compute
-efficiency in the **vision encoder** (windowed SDPA + matmuls over ~19.5k
-patches), not trace/dispatch. The earlier "prefill matmul needs DRAM-sharding"
-diagnosis was a benchmark artifact (input re-uploaded inside the timing loop);
-isolated MLP matmuls with preallocated inputs are sub-1.3 ms.
+| change | prefill ms | why |
+|--------|-----------|-----|
+| baseline | 1426 | — |
+| lm_head slice to last token | 1178 | vocab proj (N=151936) on 1 row not ~4.9k |
+| SDPA q/k_chunk 128→256 | 1147 | fits L1, ~2× faster SDPA/layer |
+| fused RoPE + native GQA | 1125 | 1 kernel vs 6-op RoPE; drop `_repeat_kv` |
+| **DRAM residual at large seq** | **262** | **the big one — see below** |
+
+**The DRAM-residual fix (−863 ms, 4.3×):** `decoder_layer.prefill_kv` pinned the
+two residual `ttnn.add`s to `L1_MEMORY_CONFIG` unconditionally. At seq=4891 the
+`[seq,1536]` activation is ~15 MB — far over L1 — and that L1-resident tensor
+flowing (via RMSNorm, which inherits buffer type) into the MLP `gate_up` matmul
+forced a **pathological L1 matmul path: 34 ms/layer vs 6 ms with a DRAM input**
+(same shape/weights/config). The full layer was 36 ms while its components summed
+to ~8 ms — the ~28 ms gap was entirely this L1→matmul interaction. Fix: gate the
+residual `memory_config` on seq (`L1 if seq<=1024 else DRAM`). Generalized to the
+[[skills/optimization]] + [[skills/perf]] frameworks ("NEVER pin a LARGE activation
+to L1").
+
+**Diagnosis note:** the earlier "prefill matmul needs DRAM-sharding" and "31 ms
+gate_up" reads were artifacts — isolated matmuls with preallocated inputs are
+sub-3 ms; tracy's traced-op CSV mislabels SDPA as MatmulDeviceOperation and
+inflates durations. The real bottleneck was found by timing the fused layer vs its
+components with `synchronize` (full ≫ Σparts ⇒ layout-interaction stall).
+
+**Remaining:** vision (3.2 s, ~80% of e2e) is the next target — windowed SDPA
+~46 ms/layer × 42 ≈ 1.9 s dominates it.
 
 ## Headline
 

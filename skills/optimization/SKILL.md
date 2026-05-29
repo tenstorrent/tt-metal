@@ -118,6 +118,29 @@ suboptimal op is a half-fix; eliminating it is the win. Other replace-don't-tune
 cases: materialized `[1,nh,seq,seq]` softmax → flash/windowed SDPA; manual
 `repeat` before multiply → broadcast multiply; `layer_norm`+`linear` → fused.
 
+### Transformer attention prefill — standard fused primitives (common across models)
+
+These recur in every decoder attention block; apply them by default rather than
+transliterating the HF reference op-by-op. Cross-check against
+`models/tt_transformers/tt/attention.py::forward_prefill` — the canonical pattern.
+
+- **Fused RoPE**: replace the hand-written `mul(cos) + mul(rotate_half(x), sin)`
+  chain (rotate_half itself is slice+slice+neg+concat → 6 ops per tensor, ×2 for
+  Q/K = 12 ops/layer) with `ttnn.experimental.rotary_embedding(x, cos, sin)`
+  (cos/sin shaped `[1,1,seq,head_dim]`, input bf16). One kernel per tensor.
+  Note: the op tile-pads seq to a multiple of 32, so pad/realign tensors that
+  bypass it (e.g. V) and slice the SDPA output back to the logical seq.
+- **Native GQA in SDPA**: `ttnn.transformer.scaled_dot_product_attention` accepts
+  Q=`[1,nh,S,hd]` with K/V=`[1,nkv,S,hd]` when `nh % nkv == 0` — it expands KV
+  internally. **Drop the manual `_repeat_kv`** (reshape+`repeat`+`reshape`, often
+  +tilize = ~4 ops/layer). Pass the nkv-headed K/V straight in.
+- **SDPA chunk size**: the prefill `SDPAProgramConfig` `q_chunk_size`/`k_chunk_size`
+  default low (128). For seq ≥ ~2048, **256/256 is ~2× faster** and still fits L1
+  (1024 overflows the CB → TT_THROW). Mirror tt_transformers'
+  `get_attn_sdpa_prefill_program_config` (256 if seq≥2048 else 64). Keep the
+  device's real grid (`compute_with_storage_grid_size()`), NOT a hardcoded (8,8)
+  — that constant is n150-specific; Blackhole/p150 is (13,10).
+
 ## Memory hierarchy + sharding (the biggest lever)
 
 ### The default kills you
@@ -263,6 +286,21 @@ Watch out for static circular-buffer L1 overflow at compile: even when the *data
 - Inherit the input's layout: `mc = x.memory_config(); ttnn.multiply(a, x, memory_config=mc)`.
 
 Inherit-mc is the safer pattern when upstream is sharded (you don't want to unshard for one op then re-shard). Profile after — sometimes the upstream is DRAM and inherit-mc keeps DRAM, in which case explicit L1 helps.
+
+### ⚠️ But NEVER pin a LARGE activation to L1 — it poisons the next matmul (the inverse trap)
+
+L1-pinning helps small/decode tensors (above). At **large prefill seq it backfires catastrophically**, and the cost lands on the *downstream matmul*, not the pinned op — so it's easy to misattribute. A `[seq, hidden]` activation is `seq × hidden × 2` bytes (bf16): at seq≈4900, hidden=1536 that's ~15 MB, far over the 1.5 MB/core L1 budget. Forcing it into L1 makes the next `ttnn.linear` (e.g. MLP `gate_up`) pick a pathological L1 program path.
+
+Measured (dots.ocr LM prefill, seq=4891): the MLP `gate_up` matmul ran **34 ms with an L1-resident input vs 6 ms with a DRAM input** — same shape, same weights, same compute config. The whole decoder layer was 36 ms (its op-by-op components summed to only ~8 ms when timed individually); the missing ~28 ms was entirely this L1→matmul interaction. Root cause was `decoder_layer.prefill_kv` pinning the two residual `ttnn.add`s to `L1_MEMORY_CONFIG` unconditionally; that L1 output flowed through RMSNorm (inherits buffer type) into `gate_up`. Gating the residual mem on seq dropped **full prefill 1426 → 262 ms (5.4×)** with zero output change (exact vs HF).
+
+Rule: **gate the activation/residual `memory_config` on seq**, the same threshold the matmul-heavy submodules use internally:
+```python
+mem = ttnn.L1_MEMORY_CONFIG if x.shape[0] <= 1024 else ttnn.DRAM_MEMORY_CONFIG
+x = ttnn.add(x, attn_out, memory_config=mem)   # residual
+...
+x = ttnn.add(x, mlp_out, memory_config=mem)
+```
+Diagnosis tell: time the fused block AND its components separately with `synchronize`. If `full_block ≫ Σ(components)`, you have a layout-interaction stall (a big tensor crossing an L1/DRAM boundary into a matmul), not a slow kernel. Confirm by re-timing the suspect matmul with its real input's memory_config (L1 vs DRAM), preallocated — see [[feedback_matmul_microbench_upload_contamination]].
 
 ### Memory_config doesn't always stick
 

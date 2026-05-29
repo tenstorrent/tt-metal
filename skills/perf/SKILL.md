@@ -374,6 +374,22 @@ Then read `generated/profiler/.logs/tracy_ops_data.csv` and bucket by
 op-code and by `memory_config.memory_layout` / `buffer_type`. A handful
 of dispatched ops will dominate.
 
+#### Profile at the REAL model-determined input size
+
+The bound (host vs device) **flips with input size** — profiling a toy
+input gives the wrong verdict and sends you optimizing the wrong thing.
+Measured (dots.ocr): the synthetic 256×96 test image (108 vision patches,
+44-token prefill) was **dispatch-bound** — tracing gave 1.8–2.1× on
+vision/prefill. The real full-resolution document (19,520 patches,
+4,891-token prefill) was **compute-bound** — tracing gave 0%, and the real
+bottlenecks (L1-activation poisoning the MLP matmul, SDPA chunk size) only
+appeared at that scale. Always profile at the model-determined resolution
+(no resolution cap, no reduced layers); see the no-shortcuts rule. A
+corollary: trace-replay tracy's per-op CSV can mislabel/misattribute fused
+ops (e.g. SDPA shown as `MatmulDeviceOperation`, inflated durations); when
+an op's in-context time disagrees with an isolated preallocated-input
+bench, trust the wall-clock `synchronize` timing and the isolated bench.
+
 #### Host-vs-device bound triage
 
 Tracy gives you both per-op device kernel time and host-side zone time.
@@ -424,6 +440,27 @@ you have, NOT for the profile you expect. Common patterns:
   `ttnn.linear` pair with the fused variant (where available).
 - **Lower precision on a non-PCC-sensitive matmul** — `bfloat8_b`
   weights for the LM head can win N ms with no parity drop.
+- **Slice prefill to the last token before `lm_head`** — prefill runs
+  the decoder over all `prompt_len` positions to populate the KV cache,
+  but only the LAST position's logits start generation. If
+  `prefill_from_embeds` runs `lm_head` (the wide vocab projection,
+  N=vocab≈150k) over all `prompt_len` rows, slice `hidden[-1:]` before
+  norm+lm_head — the projection then runs on 1 row instead of thousands.
+  Measured (dots.ocr, prompt_len=4891): full-depth prefill −~200 ms;
+  1-layer prefill 244 → 41 ms. KV cache is already populated inside the
+  layer loop, so this is exact (verified 16/16 token match vs HF).
+  Fixed slice indices → trace-safe. Update callers that did
+  `reshape(prompt_len, -1)[-1]` to `reshape(-1)`.
+- **Large-seq activation memory** — at large prefill seq, don't pin the
+  `[seq, hidden]` residual/activation to L1 (it overflows L1 and forces
+  the next matmul onto a pathological path). Gate residual `memory_config`
+  on seq (`L1 if seq<=1024 else DRAM`). This was the single biggest
+  dots.ocr prefill win: 1426 → 262 ms (5.4×). See
+  skills/optimization "NEVER pin a LARGE activation to L1".
+- **Attention prefill fused primitives** — fused `rotary_embedding` (vs
+  manual RoPE chain), native GQA in SDPA (drop `_repeat_kv`), and
+  SDPA `q/k_chunk_size=256` for seq≥2048. See skills/optimization
+  "Transformer attention prefill".
 
 Implement, then VALIDATE: re-run the e2e test (HF parity preserved) and
 re-run the per-block PCC test for whatever block you touched (PCC > 0.99
