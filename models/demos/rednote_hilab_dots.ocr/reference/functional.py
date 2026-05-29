@@ -387,3 +387,162 @@ def embedding_forward(input_ids: torch.Tensor, weight: torch.Tensor, padding_idx
         [*input_ids.shape, hidden_size]
     """
     return F.embedding(input_ids, weight, padding_idx=padding_idx)
+
+
+# ===========================================================================
+# Language-model (Qwen2) blocks
+# ===========================================================================
+# LM config (dots.ocr Qwen2): hidden_size=1536, intermediate_size=8960,
+# num_hidden_layers=28, num_attention_heads=12, num_key_value_heads=2 (GQA),
+# head_dim=128, vocab_size=151936, rope_theta=1e6, rms_norm_eps=1e-6,
+# hidden_act=silu (SwiGLU), attention_bias=true (q/k/v_proj biased, o_proj not),
+# tie_word_embeddings=false.
+
+
+# ---------------------------------------------------------------------------
+# rmsnorm (Qwen2RMSNorm)
+# ---------------------------------------------------------------------------
+def rmsnorm_forward(x: torch.Tensor, weight: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+    """Qwen2RMSNorm forward.
+
+    Mirrors HF exactly: normalize in fp32, cast back to input dtype, then
+    `weight * hidden.to(input_dtype)`. eps defaults to 1e-6 (LM) vs 1e-5 (vision).
+    """
+    input_dtype = x.dtype
+    xf = x.to(torch.float32)
+    variance = xf.pow(2).mean(-1, keepdim=True)
+    xf = xf * torch.rsqrt(variance + eps)
+    return weight * xf.to(input_dtype)
+
+
+# ---------------------------------------------------------------------------
+# rope (Qwen2RotaryEmbedding: position_ids -> (cos, sin))
+# ---------------------------------------------------------------------------
+def rope_forward(
+    position_ids: torch.Tensor,
+    head_dim: int = 128,
+    rope_theta: float = 1000000.0,
+    dtype: torch.dtype = torch.float32,
+    attention_scaling: float = 1.0,
+) -> tuple:
+    """Qwen2RotaryEmbedding.forward (default rope_type, attention_scaling=1.0).
+
+    Builds the rotary cos/sin tables from inv_freq and position ids. The freqs
+    are computed in fp32 then cast to `dtype`.
+
+    Args:
+        position_ids: [batch, seq_len] int positions.
+        head_dim: per-head dim (rotary applies over the full head_dim).
+        rope_theta: base (dots.ocr LM uses 1e6).
+    Returns:
+        (cos, sin) each [batch, seq_len, head_dim].
+    """
+    inv_freq = 1.0 / (rope_theta ** (torch.arange(0, head_dim, 2, dtype=torch.int64).float() / head_dim))
+    inv_freq_expanded = inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1)
+    position_ids_expanded = position_ids[:, None, :].float()
+    freqs = (inv_freq_expanded @ position_ids_expanded).transpose(1, 2)
+    emb = torch.cat((freqs, freqs), dim=-1)
+    cos = emb.cos() * attention_scaling
+    sin = emb.sin() * attention_scaling
+    return cos.to(dtype=dtype), sin.to(dtype=dtype)
+
+
+def _rotate_half_lm(x: torch.Tensor) -> torch.Tensor:
+    x1 = x[..., : x.shape[-1] // 2]
+    x2 = x[..., x.shape[-1] // 2 :]
+    return torch.cat((-x2, x1), dim=-1)
+
+
+def apply_rotary_pos_emb_lm(q, k, cos, sin, unsqueeze_dim: int = 1):
+    """HF apply_rotary_pos_emb for the LM (1D RoPE)."""
+    cos = cos.unsqueeze(unsqueeze_dim)
+    sin = sin.unsqueeze(unsqueeze_dim)
+    q_embed = (q * cos) + (_rotate_half_lm(q) * sin)
+    k_embed = (k * cos) + (_rotate_half_lm(k) * sin)
+    return q_embed, k_embed
+
+
+def _repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
+    batch, num_kv_heads, slen, head_dim = hidden_states.shape
+    if n_rep == 1:
+        return hidden_states
+    hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_kv_heads, n_rep, slen, head_dim)
+    return hidden_states.reshape(batch, num_kv_heads * n_rep, slen, head_dim)
+
+
+# ---------------------------------------------------------------------------
+# attention (Qwen2Attention, GQA + QKV bias + 1D RoPE, causal)
+# ---------------------------------------------------------------------------
+def attention_forward(
+    hidden_states: torch.Tensor,
+    state_dict: Dict[str, torch.Tensor],
+    position_embeddings: tuple,
+    attention_mask: torch.Tensor = None,
+    num_heads: int = 12,
+    num_kv_heads: int = 2,
+    head_dim: int = 128,
+    bias: bool = True,
+) -> torch.Tensor:
+    """Qwen2Attention (eager) forward.
+
+    Fused-less projections q/k/v with bias, GQA (num_heads // num_kv_heads),
+    1D RoPE on q,k, causal eager attention (repeat_kv), o_proj (no bias).
+
+    Args:
+        hidden_states: [batch, seq_len, hidden].
+        state_dict: 'q_proj.weight'(+'.bias'), 'k_proj.weight'(+'.bias'),
+            'v_proj.weight'(+'.bias'), 'o_proj.weight'.
+        position_embeddings: (cos, sin) from rope_forward, each [batch, seq, head_dim].
+        attention_mask: additive mask [batch, 1, q_len, kv_len]; if None a causal
+            mask is constructed.
+    Returns:
+        [batch, seq_len, hidden].
+    """
+    bsz, q_len, _ = hidden_states.shape
+    scaling = head_dim**-0.5
+    n_rep = num_heads // num_kv_heads
+
+    qb = state_dict.get("q_proj.bias") if bias else None
+    kb = state_dict.get("k_proj.bias") if bias else None
+    vb = state_dict.get("v_proj.bias") if bias else None
+
+    q = F.linear(hidden_states, state_dict["q_proj.weight"], qb).view(bsz, q_len, num_heads, head_dim).transpose(1, 2)
+    k = (
+        F.linear(hidden_states, state_dict["k_proj.weight"], kb)
+        .view(bsz, q_len, num_kv_heads, head_dim)
+        .transpose(1, 2)
+    )
+    v = (
+        F.linear(hidden_states, state_dict["v_proj.weight"], vb)
+        .view(bsz, q_len, num_kv_heads, head_dim)
+        .transpose(1, 2)
+    )
+
+    cos, sin = position_embeddings
+    q, k = apply_rotary_pos_emb_lm(q, k, cos, sin)
+
+    k = _repeat_kv(k, n_rep)
+    v = _repeat_kv(v, n_rep)
+
+    attn_weights = torch.matmul(q, k.transpose(2, 3)) * scaling
+
+    if attention_mask is None:
+        causal = torch.full((q_len, q_len), torch.finfo(q.dtype).min, dtype=q.dtype)
+        causal = torch.triu(causal, diagonal=1)
+        attention_mask = causal[None, None, :, :]
+    attn_weights = attn_weights + attention_mask[:, :, :, : k.shape[-2]]
+
+    attn_weights = F.softmax(attn_weights, dim=-1, dtype=torch.float32).to(q.dtype)
+    attn_output = torch.matmul(attn_weights, v)
+    attn_output = attn_output.transpose(1, 2).contiguous().reshape(bsz, q_len, -1)
+    return F.linear(attn_output, state_dict["o_proj.weight"], None)
+
+
+# ---------------------------------------------------------------------------
+# mlp (Qwen2MLP, SwiGLU SiLU, no bias)
+# ---------------------------------------------------------------------------
+def mlp_forward(x: torch.Tensor, state_dict: Dict[str, torch.Tensor]) -> torch.Tensor:
+    """Qwen2MLP: down_proj(silu(gate_proj(x)) * up_proj(x)). All unbiased."""
+    gate = F.silu(F.linear(x, state_dict["gate_proj.weight"]))
+    up = F.linear(x, state_dict["up_proj.weight"])
+    return F.linear(gate * up, state_dict["down_proj.weight"])

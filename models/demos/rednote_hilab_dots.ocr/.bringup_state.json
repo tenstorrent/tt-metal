@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-29T00:11:46Z",
-  "updated_at": "2026-05-29T00:30:23Z",
+  "updated_at": "2026-05-29T00:34:04Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -323,8 +323,13 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "reference/golden/rmsnorm.pt"
+        ],
+        "notes": "Qwen2RMSNorm (eps 1e-6): fp32 normalize -> cast -> weight*x. PCC=1.0 vs HF Qwen2RMSNorm.",
+        "pcc": 1.0
       },
       "ttnn": {
         "status": "pending",
@@ -354,8 +359,13 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "reference/golden/rope.pt"
+        ],
+        "notes": "Qwen2RotaryEmbedding (theta 1e6, head_dim 128, default rope): position_ids -> (cos,sin). PCC cos=1.0 sin=1.0 vs HF.",
+        "pcc": 1.0
       },
       "ttnn": {
         "status": "pending",
@@ -388,8 +398,13 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "reference/golden/attention.pt"
+        ],
+        "notes": "Qwen2Attention (GQA 12/2, head_dim 128, QKV bias, o_proj no bias, 1D RoPE, causal eager). PCC=1.0 vs HF eager.",
+        "pcc": 1.0
       },
       "ttnn": {
         "status": "pending",
@@ -421,8 +436,13 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "reference/golden/mlp.pt"
+        ],
+        "notes": "Qwen2MLP SwiGLU SiLU (gate/up/down 1536<->8960, no bias). PCC=1.0 vs HF.",
+        "pcc": 1.0
       },
       "ttnn": {
         "status": "pending",
@@ -610,6 +630,12 @@
       "tick": 3,
       "ts": "2026-05-29T00:30:23Z",
       "action": "reference[vision_block,vision_patch_merger,vision_tower,embedding]",
+      "result": "ok"
+    },
+    {
+      "tick": 4,
+      "ts": "2026-05-29T00:34:04Z",
+      "action": "reference[rmsnorm,rope,attention,mlp]",
       "result": "ok"
     }
   ],

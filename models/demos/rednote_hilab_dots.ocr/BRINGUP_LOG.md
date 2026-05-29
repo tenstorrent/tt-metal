@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** p150 (blackhole)
 **Started:** 2026-05-29T00:11:46Z
-**Updated:** 2026-05-29T00:30:23Z
+**Updated:** 2026-05-29T00:34:04Z
 
 ## Block Status
 
@@ -50,22 +50,22 @@
 | embedding | debug | n/a | — | 0 |  |
 | embedding | optimization | pending | — | 0 |  |
 | embedding | real_weights | pending | — | 0 |  |
-| rmsnorm | reference | pending | — | 0 |  |
+| rmsnorm | reference | done | 1.000000 | 0 | Qwen2RMSNorm (eps 1e-6): fp32 normalize -> cast -> weight*x. PCC=1.0 vs HF Qwen2RMSNorm. |
 | rmsnorm | ttnn | pending | — | 0 |  |
 | rmsnorm | debug | n/a | — | 0 |  |
 | rmsnorm | optimization | pending | — | 0 |  |
 | rmsnorm | real_weights | pending | — | 0 |  |
-| rope | reference | pending | — | 0 |  |
+| rope | reference | done | 1.000000 | 0 | Qwen2RotaryEmbedding (theta 1e6, head_dim 128, default rope): position_ids -> (cos,sin). PCC cos=1.0 sin=1.0 vs HF. |
 | rope | ttnn | pending | — | 0 |  |
 | rope | debug | n/a | — | 0 |  |
 | rope | optimization | pending | — | 0 |  |
 | rope | real_weights | pending | — | 0 |  |
-| attention | reference | pending | — | 0 |  |
+| attention | reference | done | 1.000000 | 0 | Qwen2Attention (GQA 12/2, head_dim 128, QKV bias, o_proj no bias, 1D RoPE, causal eager). PCC=1.0 vs HF eager. |
 | attention | ttnn | pending | — | 0 |  |
 | attention | debug | n/a | — | 0 |  |
 | attention | optimization | pending | — | 0 |  |
 | attention | real_weights | pending | — | 0 |  |
-| mlp | reference | pending | — | 0 |  |
+| mlp | reference | done | 1.000000 | 0 | Qwen2MLP SwiGLU SiLU (gate/up/down 1536<->8960, no bias). PCC=1.0 vs HF. |
 | mlp | ttnn | pending | — | 0 |  |
 | mlp | debug | n/a | — | 0 |  |
 | mlp | optimization | pending | — | 0 |  |
@@ -97,6 +97,7 @@
 - tick 1 (2026-05-29T00:15:04Z): architecture[all] — ok
 - tick 2 (2026-05-29T00:21:12Z): reference[vision_patch_embed,vision_rmsnorm,vision_attention,vision_mlp] — ok
 - tick 3 (2026-05-29T00:30:23Z): reference[vision_block,vision_patch_merger,vision_tower,embedding] — ok
+- tick 4 (2026-05-29T00:34:04Z): reference[rmsnorm,rope,attention,mlp] — ok
 
 ## Host-Resident Exceptions
 

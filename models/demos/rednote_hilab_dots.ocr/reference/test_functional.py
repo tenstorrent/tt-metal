@@ -425,6 +425,188 @@ def test_embedding():
     assert p > 0.99, f"embedding PCC {p}"
 
 
+# =========================================================================== #
+# Language-model (Qwen2) blocks: rmsnorm, rope, attention, mlp
+# =========================================================================== #
+# dots.ocr LM config (verified from config.json / ARCHITECTURE.md).
+_LM_CFG = dict(
+    hidden_size=1536,
+    intermediate_size=8960,
+    num_hidden_layers=28,
+    num_attention_heads=12,
+    num_key_value_heads=2,
+    head_dim=128,
+    vocab_size=151936,
+    max_position_embeddings=131072,
+    rope_theta=1000000.0,
+    rms_norm_eps=1e-6,
+    hidden_act="silu",
+    attention_bias=True,
+    attention_dropout=0.0,
+    tie_word_embeddings=False,
+)
+
+
+def _qwen2_config():
+    from transformers import Qwen2Config
+
+    # Force eager attention so the HF reference path matches our standalone math.
+    return Qwen2Config(attn_implementation="eager", **_LM_CFG)
+
+
+# --------------------------------------------------------------------------- #
+# rmsnorm (Qwen2RMSNorm, eps 1e-6)
+# --------------------------------------------------------------------------- #
+def test_rmsnorm():
+    torch.manual_seed(0)
+    from transformers.models.qwen2.modeling_qwen2 import Qwen2RMSNorm
+
+    cfg = _qwen2_config()
+    dim, eps = cfg.hidden_size, cfg.rms_norm_eps
+    hf = Qwen2RMSNorm(dim, eps=eps)
+    hf.weight.data.normal_(mean=1.0, std=0.05)
+    x = torch.randn(1, 128, dim)
+    hf_out = hf(x)
+    ref_out = fn.rmsnorm_forward(x, hf.weight.data, eps=eps)
+    p = pcc(hf_out, ref_out)
+    torch.save(
+        {"input": x, "output": hf_out, "weight": hf.weight.data, "eps": eps, "dim": dim},
+        os.path.join(GOLDEN_DIR, "rmsnorm.pt"),
+    )
+    assert p > 0.99, f"rmsnorm PCC {p}"
+
+
+# --------------------------------------------------------------------------- #
+# rope (Qwen2RotaryEmbedding: position_ids -> cos/sin)
+# --------------------------------------------------------------------------- #
+def test_rope():
+    torch.manual_seed(0)
+    from transformers.models.qwen2.modeling_qwen2 import Qwen2RotaryEmbedding
+
+    cfg = _qwen2_config()
+    head_dim = cfg.head_dim
+    seq_len = 128
+    hf = Qwen2RotaryEmbedding(cfg)
+
+    position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0)  # [1, seq_len]
+    x = torch.randn(1, seq_len, head_dim)  # only used for dtype/device
+    hf_cos, hf_sin = hf(x, position_ids)
+
+    ref_cos, ref_sin = fn.rope_forward(position_ids, head_dim=head_dim, rope_theta=cfg.rope_theta)
+    p_cos = pcc(hf_cos, ref_cos)
+    p_sin = pcc(hf_sin, ref_sin)
+    p = min(p_cos, p_sin)
+    torch.save(
+        {
+            "position_ids": position_ids,
+            "cos": hf_cos,
+            "sin": hf_sin,
+            "config": {"head_dim": head_dim, "rope_theta": cfg.rope_theta, "seq_len": seq_len},
+        },
+        os.path.join(GOLDEN_DIR, "rope.pt"),
+    )
+    assert p > 0.99, f"rope PCC cos={p_cos} sin={p_sin}"
+
+
+# --------------------------------------------------------------------------- #
+# attention (Qwen2Attention, GQA 12/2 + QKV bias + 1D RoPE, causal)
+# --------------------------------------------------------------------------- #
+def test_attention():
+    torch.manual_seed(0)
+    from transformers.models.qwen2.modeling_qwen2 import Qwen2Attention, Qwen2RotaryEmbedding
+
+    cfg = _qwen2_config()
+    hidden = cfg.hidden_size
+    seq_len = 128
+    hf = Qwen2Attention(cfg, layer_idx=0)
+    hf.eval()
+
+    x = torch.randn(1, seq_len, hidden)
+    position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0)
+    rotary = Qwen2RotaryEmbedding(cfg)
+    cos, sin = rotary(x, position_ids)
+
+    # Causal additive mask [1, 1, seq, seq] matching the standalone construction.
+    causal = torch.full((seq_len, seq_len), torch.finfo(x.dtype).min, dtype=x.dtype)
+    causal = torch.triu(causal, diagonal=1)
+    attn_mask = causal[None, None, :, :]
+
+    with torch.no_grad():
+        hf_out, _ = hf(x, position_embeddings=(cos, sin), attention_mask=attn_mask)
+
+    sd = {
+        "q_proj.weight": hf.q_proj.weight.data,
+        "q_proj.bias": hf.q_proj.bias.data,
+        "k_proj.weight": hf.k_proj.weight.data,
+        "k_proj.bias": hf.k_proj.bias.data,
+        "v_proj.weight": hf.v_proj.weight.data,
+        "v_proj.bias": hf.v_proj.bias.data,
+        "o_proj.weight": hf.o_proj.weight.data,
+    }
+    ref_out = fn.attention_forward(
+        x,
+        sd,
+        (cos, sin),
+        attention_mask=attn_mask,
+        num_heads=cfg.num_attention_heads,
+        num_kv_heads=cfg.num_key_value_heads,
+        head_dim=cfg.head_dim,
+        bias=cfg.attention_bias,
+    )
+    p = pcc(hf_out, ref_out)
+    torch.save(
+        {
+            "input": x,
+            "output": hf_out,
+            "state_dict": sd,
+            "position_ids": position_ids,
+            "cos": cos,
+            "sin": sin,
+            "attention_mask": attn_mask,
+            "config": {
+                "hidden_size": hidden,
+                "num_attention_heads": cfg.num_attention_heads,
+                "num_key_value_heads": cfg.num_key_value_heads,
+                "head_dim": cfg.head_dim,
+                "rope_theta": cfg.rope_theta,
+                "attention_bias": cfg.attention_bias,
+            },
+        },
+        os.path.join(GOLDEN_DIR, "attention.pt"),
+    )
+    assert p > 0.99, f"attention PCC {p}"
+
+
+# --------------------------------------------------------------------------- #
+# mlp (Qwen2MLP, SwiGLU SiLU, no bias)
+# --------------------------------------------------------------------------- #
+def test_mlp():
+    torch.manual_seed(0)
+    from transformers.models.qwen2.modeling_qwen2 import Qwen2MLP
+
+    cfg = _qwen2_config()
+    hf = Qwen2MLP(cfg)
+    x = torch.randn(1, 128, cfg.hidden_size)
+    hf_out = hf(x)
+    sd = {
+        "gate_proj.weight": hf.gate_proj.weight.data,
+        "up_proj.weight": hf.up_proj.weight.data,
+        "down_proj.weight": hf.down_proj.weight.data,
+    }
+    ref_out = fn.mlp_forward(x, sd)
+    p = pcc(hf_out, ref_out)
+    torch.save(
+        {
+            "input": x,
+            "output": hf_out,
+            "state_dict": sd,
+            "config": {"hidden_size": cfg.hidden_size, "intermediate_size": cfg.intermediate_size},
+        },
+        os.path.join(GOLDEN_DIR, "mlp.pt"),
+    )
+    assert p > 0.99, f"mlp PCC {p}"
+
+
 if __name__ == "__main__":
     test_vision_rmsnorm()
     test_vision_patch_embed()
@@ -434,4 +616,8 @@ if __name__ == "__main__":
     test_vision_patch_merger()
     test_vision_tower()
     test_embedding()
+    test_rmsnorm()
+    test_rope()
+    test_attention()
+    test_mlp()
     print("all reference blocks pass")
