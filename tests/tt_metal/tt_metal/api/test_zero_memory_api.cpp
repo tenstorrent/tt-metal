@@ -28,6 +28,7 @@
 #include "device_fixture.hpp"
 
 #include <cstdint>
+#include <filesystem>
 #include <vector>
 
 #include <tt-metalium/buffer.hpp>
@@ -68,8 +69,9 @@ experimental::metal2_host_api::DataMovementConfiguration make_dm_config(DataMove
         .gen1_data_movement_config =
             experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
                 .processor = processor, .noc = noc},
-        .gen2_data_movement_config =
-            experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}};
+        .gen2_data_movement_config = experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{
+            .disable_implicit_sync_for = {SCRATCH_DFB},
+        }};
 }
 
 }  // namespace
@@ -118,15 +120,13 @@ TEST_F(MeshDeviceSingleCardFixture, ZeroMemoryApiEndToEnd) {
         // Float16_b is the only data format both WH/BH and Quasar accept here; the DFB is
         // just used as a raw L1 scratch region so the choice doesn't affect correctness.
         .data_format_metadata = tt::DataFormat::Float16_b,
-        .disable_implicit_sync = true,
     };
 
     // Producer: tests overload (1) on the DFB, then push_backs the now-zero entry.
     experimental::metal2_host_api::KernelSpec producer_spec{
         .unique_id = L1_PRODUCER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/zero_memory_api_l1_producer.cpp"},
+            std::filesystem::path{"tests/tt_metal/tt_metal/test_kernels/dataflow/zero_memory_api_l1_producer.cpp"},
         .num_threads = 1,
         .dfb_bindings =
             {{.dfb_spec_name = SCRATCH_DFB,
@@ -141,8 +141,7 @@ TEST_F(MeshDeviceSingleCardFixture, ZeroMemoryApiEndToEnd) {
     experimental::metal2_host_api::KernelSpec consumer_spec{
         .unique_id = DRAM_CONSUMER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/zero_memory_api_dram_consumer.cpp"},
+            std::filesystem::path{"tests/tt_metal/tt_metal/test_kernels/dataflow/zero_memory_api_dram_consumer.cpp"},
         .num_threads = 1,
         .dfb_bindings =
             {{.dfb_spec_name = SCRATCH_DFB,
