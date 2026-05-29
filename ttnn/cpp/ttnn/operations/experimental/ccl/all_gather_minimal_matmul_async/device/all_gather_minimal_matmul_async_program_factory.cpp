@@ -1179,57 +1179,66 @@ all_gather_minimal_matmul_async_factory_helper(
         if (in0_core_order_index > (in0_core_order.size() - 3)) {
             uint32_t worker_idx = in0_idx % num_workers_per_link;
             auto last_in0_core = in0_core_order.back();
-            auto termination_master_logical_core_backward = transpose_core_grid
-                                                                ? CoreCoord(in0_idx - worker_idx, last_in0_core.y - 1)
-                                                                : CoreCoord(last_in0_core.x - 1, in0_idx - worker_idx);
-            CoreCoord termination_master_virtual_core_backward =
-                device->worker_core_from_logical_core(termination_master_logical_core_backward);
 
-            // in0 backward sender
-            uint32_t mux_core_index_backward =
-                ((in0_idx / num_workers_per_link) * num_workers_per_link) + (num_workers_per_link - 1);
-            if (mux_core_index_backward >= full_grid_size.x) {
-                mux_core_index_backward = mux_core_index_backward - full_grid_size.x;
+            // Each fabric-sender core only registers as a client of the mux for the SINGLE
+            // direction it actually sends in. (Previously both directions were registered, with
+            // the unused one returning nullptr from build_and_connect — wasting 5 semaphores per
+            // core for nothing.)
+            // Core at size-2 → backward fabric sender → backward mux only.
+            // Core at size-1 → forward  fabric sender → forward  mux only.
+            const bool is_in0_backward_sender = (in0_core_order_index == (in0_core_order.size() - 2));
+            if (is_in0_backward_sender) {
+                auto termination_master_logical_core_backward =
+                    transpose_core_grid ? CoreCoord(in0_idx - worker_idx, last_in0_core.y - 1)
+                                        : CoreCoord(last_in0_core.x - 1, in0_idx - worker_idx);
+                CoreCoord termination_master_virtual_core_backward =
+                    device->worker_core_from_logical_core(termination_master_logical_core_backward);
+
+                uint32_t mux_core_index_backward =
+                    ((in0_idx / num_workers_per_link) * num_workers_per_link) + (num_workers_per_link - 1);
+                if (mux_core_index_backward >= full_grid_size.x) {
+                    mux_core_index_backward = mux_core_index_backward - full_grid_size.x;
+                }
+                auto mux_logical_core_backward = CoreCoord(mux_core_index_backward, full_grid_size.y - 1);
+                CoreCoord mux_virtual_core_backward = device->worker_core_from_logical_core(mux_logical_core_backward);
+                fabric_mux_connection_rt_args(
+                    mux_connection_valid(0),
+                    !(in0_idx % num_workers_per_link),  // termination master at worker_idx 0
+                    tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+                    mux_virtual_core_backward,
+                    worker_idx,
+                    core,
+                    mux_kernel_config,
+                    program,
+                    termination_master_virtual_core_backward,
+                    in0_args);
+            } else {
+                // Forward fabric sender (in0_core_order_index == size - 1).
+                auto termination_master_logical_core_forward = transpose_core_grid
+                                                                   ? CoreCoord(in0_idx - worker_idx, last_in0_core.y)
+                                                                   : CoreCoord(last_in0_core.x, in0_idx - worker_idx);
+                CoreCoord termination_master_virtual_core_forward =
+                    device->worker_core_from_logical_core(termination_master_logical_core_forward);
+
+                uint32_t mux_core_index_forward =
+                    ((in0_idx / num_workers_per_link) * num_workers_per_link) + num_workers_per_link;
+                if (mux_core_index_forward >= full_grid_size.x) {
+                    mux_core_index_forward = mux_core_index_forward - full_grid_size.x;
+                }
+                auto mux_logical_core_forward = CoreCoord(mux_core_index_forward, full_grid_size.y - 1);
+                CoreCoord mux_virtual_core_forward = device->worker_core_from_logical_core(mux_logical_core_forward);
+                fabric_mux_connection_rt_args(
+                    mux_connection_valid(1),
+                    !(in0_idx % num_workers_per_link),  // termination master at worker_idx 0
+                    tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+                    mux_virtual_core_forward,
+                    worker_idx,
+                    core,
+                    mux_kernel_config,
+                    program,
+                    termination_master_virtual_core_forward,
+                    in0_args);
             }
-            auto mux_logical_core_backward = CoreCoord(mux_core_index_backward, full_grid_size.y - 1);
-            CoreCoord mux_virtual_core_backward = device->worker_core_from_logical_core(mux_logical_core_backward);
-            fabric_mux_connection_rt_args(
-                mux_connection_valid(0),
-                (in0_core_order_index == (in0_core_order.size() - 2)) && !(in0_idx % num_workers_per_link),
-                tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-                mux_virtual_core_backward,
-                worker_idx,
-                core,
-                mux_kernel_config,
-                program,
-                termination_master_virtual_core_backward,
-                in0_args);
-
-            auto termination_master_logical_core_forward = transpose_core_grid
-                                                               ? CoreCoord(in0_idx - worker_idx, last_in0_core.y)
-                                                               : CoreCoord(last_in0_core.x, in0_idx - worker_idx);
-            CoreCoord termination_master_virtual_core_forward =
-                device->worker_core_from_logical_core(termination_master_logical_core_forward);
-
-            // in0 forward sender
-            uint32_t mux_core_index_forward =
-                ((in0_idx / num_workers_per_link) * num_workers_per_link) + num_workers_per_link;
-            if (mux_core_index_forward >= full_grid_size.x) {
-                mux_core_index_forward = mux_core_index_forward - full_grid_size.x;
-            }
-            auto mux_logical_core_forward = CoreCoord(mux_core_index_forward, full_grid_size.y - 1);
-            CoreCoord mux_virtual_core_forward = device->worker_core_from_logical_core(mux_logical_core_forward);
-            fabric_mux_connection_rt_args(
-                mux_connection_valid(1),
-                (in0_core_order_index == (in0_core_order.size() - 1)) && !(in0_idx % num_workers_per_link),
-                tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-                mux_virtual_core_forward,
-                worker_idx,
-                core,
-                mux_kernel_config,
-                program,
-                termination_master_virtual_core_forward,
-                in0_args);
         }
         if (in0_core_order_index == 0) {
             // in0 sender
@@ -1269,65 +1278,70 @@ all_gather_minimal_matmul_async_factory_helper(
             in1_args.push_back(in1_core_order_index);
             in1_args.push_back(in1_core_order.size());
         }
-        if (fsdp_fused) {
-            // Wire the FSDP mux RT args for both directions. Connections are "valid" only on
-            // the last-two cores in the in1 core order — the fabric senders. Other cores get
-            // the args slots filled (so parsing offsets stay consistent) but with valid=false,
-            // so their build_and_connect() effectively no-ops at runtime.
+        // Wire the FSDP mux RT args only on the last-two in1 cores (the fabric senders). Each
+        // call creates 5 semaphores per direction, so we cap the per-core semaphore count by
+        // skipping non-fabric cores. The kernel correspondingly skips mux parsing on those cores.
+        const bool is_in1_fabric_sender = in1_core_order_index >= (in1_core_order.size() - 2);
+        if (fsdp_fused && is_in1_fabric_sender) {
             uint32_t worker_idx = in1_idx % num_workers_per_link;
             auto last_in1_core = in1_core_order.back();
-            const bool is_in1_fabric_sender = in1_core_order_index >= (in1_core_order.size() - 2);
 
-            // Backward sender (second-to-last in core order) → backward fabric mux on row y-2.
-            uint32_t fsdp_mux_index_backward =
-                ((in1_idx / num_workers_per_link) * num_workers_per_link) + (num_workers_per_link - 1);
-            if (fsdp_mux_index_backward >= full_grid_size.x) {
-                fsdp_mux_index_backward -= full_grid_size.x;
+            // Each FSDP fabric-sender core only registers as a client of the mux for the SINGLE
+            // direction it actually sends in. Core at size-2 → backward; core at size-1 → forward.
+            // Note: the in1 chain orientation is the *opposite* of in0's (in0 uses
+            // axis_is_x_when_not_transposed=true; in1 uses false). So the transpose branches in
+            // the termination-master formula here are inverted relative to in0's.
+            const bool is_in1_backward_sender = (in1_core_order_index == (in1_core_order.size() - 2));
+            if (is_in1_backward_sender) {
+                uint32_t fsdp_mux_index_backward =
+                    ((in1_idx / num_workers_per_link) * num_workers_per_link) + (num_workers_per_link - 1);
+                if (fsdp_mux_index_backward >= full_grid_size.x) {
+                    fsdp_mux_index_backward -= full_grid_size.x;
+                }
+                auto fsdp_mux_logical_backward = CoreCoord(fsdp_mux_index_backward, full_grid_size.y - 2);
+                CoreCoord fsdp_mux_virtual_backward = device->worker_core_from_logical_core(fsdp_mux_logical_backward);
+                auto fsdp_term_master_logical_backward = transpose_core_grid
+                                                             ? CoreCoord(last_in1_core.x - 1, in1_idx - worker_idx)
+                                                             : CoreCoord(in1_idx - worker_idx, last_in1_core.y - 1);
+                CoreCoord fsdp_term_master_virtual_backward =
+                    device->worker_core_from_logical_core(fsdp_term_master_logical_backward);
+                fabric_mux_connection_rt_args(
+                    fsdp_mux_connection_valid(0),
+                    !(in1_idx % num_workers_per_link),
+                    tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+                    fsdp_mux_virtual_backward,
+                    worker_idx,
+                    core,
+                    fsdp_mux_kernel_config,
+                    program,
+                    fsdp_term_master_virtual_backward,
+                    in1_args);
+            } else {
+                // Forward fabric sender (in1_core_order_index == size - 1).
+                uint32_t fsdp_mux_index_forward =
+                    ((in1_idx / num_workers_per_link) * num_workers_per_link) + num_workers_per_link;
+                if (fsdp_mux_index_forward >= full_grid_size.x) {
+                    fsdp_mux_index_forward -= full_grid_size.x;
+                }
+                auto fsdp_mux_logical_forward = CoreCoord(fsdp_mux_index_forward, full_grid_size.y - 2);
+                CoreCoord fsdp_mux_virtual_forward = device->worker_core_from_logical_core(fsdp_mux_logical_forward);
+                auto fsdp_term_master_logical_forward = transpose_core_grid
+                                                            ? CoreCoord(last_in1_core.x, in1_idx - worker_idx)
+                                                            : CoreCoord(in1_idx - worker_idx, last_in1_core.y);
+                CoreCoord fsdp_term_master_virtual_forward =
+                    device->worker_core_from_logical_core(fsdp_term_master_logical_forward);
+                fabric_mux_connection_rt_args(
+                    fsdp_mux_connection_valid(1),
+                    !(in1_idx % num_workers_per_link),
+                    tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+                    fsdp_mux_virtual_forward,
+                    worker_idx,
+                    core,
+                    fsdp_mux_kernel_config,
+                    program,
+                    fsdp_term_master_virtual_forward,
+                    in1_args);
             }
-            auto fsdp_mux_logical_backward = CoreCoord(fsdp_mux_index_backward, full_grid_size.y - 2);
-            CoreCoord fsdp_mux_virtual_backward = device->worker_core_from_logical_core(fsdp_mux_logical_backward);
-            // Termination master for backward fabric: pick the second-to-last in1 core (the backward fabric sender)
-            // on worker index 0. Mirrors the in0 pattern's termination-master selection.
-            auto fsdp_term_master_logical_backward = transpose_core_grid
-                                                         ? CoreCoord(in1_idx - worker_idx, last_in1_core.y - 1)
-                                                         : CoreCoord(last_in1_core.x - 1, in1_idx - worker_idx);
-            CoreCoord fsdp_term_master_virtual_backward =
-                device->worker_core_from_logical_core(fsdp_term_master_logical_backward);
-            fabric_mux_connection_rt_args(
-                is_in1_fabric_sender && fsdp_mux_connection_valid(0),
-                (in1_core_order_index == (in1_core_order.size() - 2)) && !(in1_idx % num_workers_per_link),
-                tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-                fsdp_mux_virtual_backward,
-                worker_idx,
-                core,
-                fsdp_mux_kernel_config,
-                program,
-                fsdp_term_master_virtual_backward,
-                in1_args);
-
-            uint32_t fsdp_mux_index_forward =
-                ((in1_idx / num_workers_per_link) * num_workers_per_link) + num_workers_per_link;
-            if (fsdp_mux_index_forward >= full_grid_size.x) {
-                fsdp_mux_index_forward -= full_grid_size.x;
-            }
-            auto fsdp_mux_logical_forward = CoreCoord(fsdp_mux_index_forward, full_grid_size.y - 2);
-            CoreCoord fsdp_mux_virtual_forward = device->worker_core_from_logical_core(fsdp_mux_logical_forward);
-            auto fsdp_term_master_logical_forward = transpose_core_grid
-                                                        ? CoreCoord(in1_idx - worker_idx, last_in1_core.y)
-                                                        : CoreCoord(last_in1_core.x, in1_idx - worker_idx);
-            CoreCoord fsdp_term_master_virtual_forward =
-                device->worker_core_from_logical_core(fsdp_term_master_logical_forward);
-            fabric_mux_connection_rt_args(
-                is_in1_fabric_sender && fsdp_mux_connection_valid(1),
-                (in1_core_order_index == (in1_core_order.size() - 1)) && !(in1_idx % num_workers_per_link),
-                tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-                fsdp_mux_virtual_forward,
-                worker_idx,
-                core,
-                fsdp_mux_kernel_config,
-                program,
-                fsdp_term_master_virtual_forward,
-                in1_args);
         }
         if (in1_core_order_index == 0) {
             // in1 sender

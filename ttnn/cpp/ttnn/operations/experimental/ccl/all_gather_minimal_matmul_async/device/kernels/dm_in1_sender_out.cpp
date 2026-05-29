@@ -212,18 +212,27 @@ void kernel_main() {
     // PWB N width in tiles — per-device N. PWB shape is [K_full, N_local] with N_local = N_tiles.
     constexpr uint32_t pwb_N_Wt = N_tiles;
 
-    // Mux connection setup. Cores not in the last-two-of-core-order get invalid connections
-    // (parse still consumes args, but build_and_connect effectively no-ops for them).
+    // Mux connection setup. Each fabric-sender core only parses + connects the single direction
+    // it actually uses; the program factory pushes RT args for exactly one direction per sender.
+    // Non-sender cores get no mux RT args at all (so their argidx never advances into a mux slot).
     uint32_t fsdp_backward_in1_core_order_index = in1_core_order_size - 2;
     uint32_t fsdp_forward_in1_core_order_index = in1_core_order_size - 1;
-    auto fsdp_mux_backward =
-        parse_mux_connection_args<fabric_mux_num_buffers_per_channel, fabric_mux_channel_buffer_size_bytes>(
-            argidx, in1_core_order_index, fsdp_backward_in1_core_order_index);
-    auto fsdp_mux_forward =
-        parse_mux_connection_args<fabric_mux_num_buffers_per_channel, fabric_mux_channel_buffer_size_bytes>(
-            argidx, in1_core_order_index, fsdp_forward_in1_core_order_index);
-    auto* fsdp_mux_handle_backward = fsdp_mux_backward.build_and_connect(fabric_mux_status_address);
-    auto* fsdp_mux_handle_forward = fsdp_mux_forward.build_and_connect(fabric_mux_status_address);
+
+    MuxConnection<fabric_mux_num_buffers_per_channel, fabric_mux_channel_buffer_size_bytes> fsdp_mux_backward{};
+    MuxConnection<fabric_mux_num_buffers_per_channel, fabric_mux_channel_buffer_size_bytes> fsdp_mux_forward{};
+    tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>* fsdp_mux_handle_backward = nullptr;
+    tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>* fsdp_mux_handle_forward = nullptr;
+    if (in1_core_order_index == fsdp_backward_in1_core_order_index) {
+        fsdp_mux_backward =
+            parse_mux_connection_args<fabric_mux_num_buffers_per_channel, fabric_mux_channel_buffer_size_bytes>(
+                argidx, in1_core_order_index, fsdp_backward_in1_core_order_index);
+        fsdp_mux_handle_backward = fsdp_mux_backward.build_and_connect(fabric_mux_status_address);
+    } else if (in1_core_order_index == fsdp_forward_in1_core_order_index) {
+        fsdp_mux_forward =
+            parse_mux_connection_args<fabric_mux_num_buffers_per_channel, fabric_mux_channel_buffer_size_bytes>(
+                argidx, in1_core_order_index, fsdp_forward_in1_core_order_index);
+        fsdp_mux_handle_forward = fsdp_mux_forward.build_and_connect(fabric_mux_status_address);
+    }
 
     // FSDP semaphores (forward + backward counters incremented by remote fabric sends).
     volatile tt_l1_ptr uint32_t* fsdp_sem_forward_ptr =
@@ -241,11 +250,17 @@ void kernel_main() {
     uint64_t fsdp_sem_noc_addr_backward_in_pkt =
         safe_get_noc_addr(injector_virtual_x, injector_virtual_y, fsdp_sem_backward, 0);
 
-    // Packet headers for fabric send. Allocated/initialized once per direction; reused per send.
-    auto fsdp_pkt_hdrs_backward = allocate_and_init_packet_headers(
-        fsdp_num_targets_backward > 0, fsdp_unicast_route_info_backward, in1_reader, 1, in1_tile_size);
-    auto fsdp_pkt_hdrs_forward = allocate_and_init_packet_headers(
-        fsdp_num_targets_forward > 0, fsdp_unicast_route_info_forward, in1_reader, 1, in1_tile_size);
+    // Packet headers for fabric send. Each fabric sender allocates headers for its single
+    // direction only; non-senders never enter the send path so they allocate nothing.
+    PacketHeaders fsdp_pkt_hdrs_backward{};
+    PacketHeaders fsdp_pkt_hdrs_forward{};
+    if (in1_core_order_index == fsdp_backward_in1_core_order_index) {
+        fsdp_pkt_hdrs_backward = allocate_and_init_packet_headers(
+            fsdp_num_targets_backward > 0, fsdp_unicast_route_info_backward, in1_reader, 1, in1_tile_size);
+    } else if (in1_core_order_index == fsdp_forward_in1_core_order_index) {
+        fsdp_pkt_hdrs_forward = allocate_and_init_packet_headers(
+            fsdp_num_targets_forward > 0, fsdp_unicast_route_info_forward, in1_reader, 1, in1_tile_size);
+    }
 #endif
 
     bool k_forward = true;
