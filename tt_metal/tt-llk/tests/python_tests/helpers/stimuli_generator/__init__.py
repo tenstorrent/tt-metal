@@ -4,8 +4,8 @@
 """
 Public entry-point for the stimuli generator package.
 
-Re-exports the symbols historically exposed under ``helpers.stimuli_generator``
-so all existing ``from helpers.stimuli_generator import X`` imports continue to
+Re-exports the symbols historically exposed under `helpers.stimuli_generator`
+so all existing `from helpers.stimuli_generator import X` imports continue to
 resolve. Internally the package is organised as:
 
     spec.py        — StimuliSpec, DistributionKind

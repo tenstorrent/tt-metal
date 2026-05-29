@@ -252,3 +252,76 @@ class SequentialStrategy:
             vals = vals.round().clamp(int_min, int_max)
 
         return vals.to(dtype)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Saw — per-face linspace (deterministic, restarts every face)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class SawStrategy:
+    """Generate a saw pattern within each face.
+
+    Each face gets its own `torch.linspace(spec.low, spec.high, size)`, so the
+    pattern restarts at every face.
+    """
+
+    short_circuit = False
+
+    def generate_face(
+        self,
+        spec: StimuliSpec,
+        stimuli_format: DataFormat,
+        face_r_dim: int,
+        size: int,
+        generator: Optional[torch.Generator],
+    ) -> torch.Tensor:
+        if stimuli_format.is_integer():
+            return self._generate_integer_face(spec, stimuli_format, size)
+        return self._generate_float_face(spec, stimuli_format, size)
+
+    def generate_full_tensor(
+        self,
+        spec: StimuliSpec,
+        stimuli_format: DataFormat,
+        num_elements: int,
+        input_dimensions: Optional[List[int]],
+        generator: Optional[torch.Generator],
+    ) -> torch.Tensor:
+        raise NotImplementedError(
+            "distribution='saw' is per-face only; use generate_face, "
+            "not generate_full_tensor"
+        )
+
+    @staticmethod
+    def _generate_float_face(
+        spec: StimuliSpec, stimuli_format: DataFormat, size: int
+    ) -> torch.Tensor:
+        dtype = _get_dtype_for_format(stimuli_format)
+        if spec.intervals:
+            counts = _split_size_across_intervals(spec.intervals, size)
+            segments = []
+            for (lo, hi), n in zip(spec.intervals, counts):
+                if n > 0:
+                    segments.append(torch.linspace(lo, hi, n, dtype=dtype))
+            return torch.cat(segments)
+        return torch.linspace(spec.low, spec.high, size, dtype=dtype)
+
+    @staticmethod
+    def _generate_integer_face(
+        spec: StimuliSpec, stimuli_format: DataFormat, size: int
+    ) -> torch.Tensor:
+        # Note: SAW on integer formats does not support intervals (matches
+        # legacy behavior — the original _generate_integer_face's SAW branch
+        # ignored spec.intervals).
+        dtype = _get_dtype_for_format(stimuli_format)
+        bounds = integer_face_bounds_or_constant(spec, stimuli_format, size, dtype)
+        if isinstance(bounds, torch.Tensor):
+            return bounds
+        low, high = bounds
+        return (
+            torch.linspace(spec.low, spec.high, size, dtype=torch.float32)
+            .round()
+            .clamp(low, high)
+            .to(dtype=dtype)
+        )

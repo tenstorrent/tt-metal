@@ -1,22 +1,5 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-
-"""
-Distribution strategy registry.
-
-One stateless ``DistributionStrategy`` subclass per :class:`DistributionKind`.
-Each strategy implements at most two methods:
-
-* ``generate_face`` — per-face generation (called by the dispatch in
-  ``generate_face`` and from the per-face loop in ``_generate_source_tensor``);
-* ``generate_full_tensor`` — full-operand generation used when the strategy's
-  ``short_circuit`` flag is True (bypasses the face loop).
-
-Strategies that do not support a given mode raise ``NotImplementedError`` with
-a clear message. The :data:`_STRATEGIES` dict maps every ``DistributionKind``
-member to a single instance of its strategy, instantiated at import time.
-"""
-
 from typing import Dict, List, Optional, Protocol
 
 import torch
@@ -28,9 +11,10 @@ from .deterministic import (
     GaussianLinspaceStrategy,
     LogUniformLinspaceStrategy,
     RampStrategy,
+    SawStrategy,
     SequentialStrategy,
 )
-from .random import GaussianStrategy, LogUniformStrategy, SawStrategy, UniformStrategy
+from .random import GaussianStrategy, LogUniformStrategy, UniformStrategy
 from .structured import (
     CustomStrategy,
     FaceIdentityStrategy,
@@ -42,15 +26,15 @@ from .structured import (
 class DistributionStrategy(Protocol):
     """Protocol every distribution strategy implements.
 
-    Concrete strategies are stateless. ``short_circuit`` controls which mode
-    ``_generate_source_tensor`` uses:
+    Concrete strategies are stateless. `short_circuit` controls which mode
+    `_generate_source_tensor` uses:
 
-    * ``False`` → per-face loop via :meth:`generate_face`;
-    * ``True``  → single :meth:`generate_full_tensor` call (bypassing the loop).
+    * False → per-face loop via `generate_face`;
+    * True  → single `generate_full_tensor` call (bypassing the loop).
 
     Strategies that genuinely support both modes (e.g. sequential / ramp /
     linspace variants) implement both methods. Strategies that only make sense
-    in one mode raise ``NotImplementedError`` in the other.
+    in one mode raise `NotImplementedError` in the other.
     """
 
     short_circuit: bool
@@ -92,5 +76,5 @@ _STRATEGIES: Dict[DistributionKind, DistributionStrategy] = {
 
 
 def lookup_strategy(kind: DistributionKind) -> DistributionStrategy:
-    """Return the strategy registered for ``kind``."""
+    """Return the strategy registered for *kind*."""
     return _STRATEGIES[kind]

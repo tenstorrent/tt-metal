@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Random face-mode distribution strategies: uniform, gaussian, log_uniform, saw."""
+"""Random face-mode distribution strategies: uniform, gaussian, log_uniform."""
 
 import math
 from typing import List, Optional
@@ -18,7 +18,6 @@ from ..utils import (
     _sample_integer_intervals,
     _sample_log_uniform_intervals,
     _sample_uniform_intervals,
-    _split_size_across_intervals,
     integer_face_bounds_or_constant,
 )
 
@@ -207,66 +206,3 @@ class LogUniformStrategy:
         raw_u = torch.rand(size, dtype=torch.float32, generator=generator)
         raw = torch.exp(raw_u * (log_high - log_low) + log_low)
         return raw.round().clamp(low, high).to(dtype=dtype)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Saw (per-face linspace)
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-class SawStrategy:
-    """Per-face sawtooth: linspace from low to high repeated each face."""
-
-    short_circuit = False
-
-    def generate_face(
-        self,
-        spec: StimuliSpec,
-        stimuli_format: DataFormat,
-        face_r_dim: int,
-        size: int,
-        generator: Optional[torch.Generator],
-    ) -> torch.Tensor:
-        if stimuli_format.is_integer():
-            return self._generate_integer_face(spec, stimuli_format, size, generator)
-        return self._generate_float_face(spec, stimuli_format, size, generator)
-
-    def generate_full_tensor(
-        self,
-        spec: StimuliSpec,
-        stimuli_format: DataFormat,
-        num_elements: int,
-        input_dimensions: Optional[List[int]],
-        generator: Optional[torch.Generator],
-    ) -> torch.Tensor:
-        raise NotImplementedError(
-            "distribution='saw' is per-face only; use generate_face, "
-            "not generate_full_tensor"
-        )
-
-    def _generate_float_face(self, spec, stimuli_format, size, generator):
-        dtype = _get_dtype_for_format(stimuli_format)
-        if spec.intervals:
-            counts = _split_size_across_intervals(spec.intervals, size)
-            segments = []
-            for (lo, hi), n in zip(spec.intervals, counts):
-                if n > 0:
-                    segments.append(torch.linspace(lo, hi, n, dtype=dtype))
-            return torch.cat(segments)
-        return torch.linspace(spec.low, spec.high, size, dtype=dtype)
-
-    def _generate_integer_face(self, spec, stimuli_format, size, generator):
-        # Note: SAW on integer formats does not support intervals (matches
-        # legacy behavior — the original _generate_integer_face's SAW branch
-        # ignores spec.intervals).
-        dtype = _get_dtype_for_format(stimuli_format)
-        bounds = integer_face_bounds_or_constant(spec, stimuli_format, size, dtype)
-        if isinstance(bounds, torch.Tensor):
-            return bounds
-        low, high = bounds
-        return (
-            torch.linspace(spec.low, spec.high, size, dtype=torch.float32)
-            .round()
-            .clamp(low, high)
-            .to(dtype=dtype)
-        )
