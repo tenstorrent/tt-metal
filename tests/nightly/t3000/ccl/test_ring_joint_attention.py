@@ -11,6 +11,7 @@ import torch
 import ttnn
 from loguru import logger
 import pytest
+from tests.tests_common.cache_entries_counter import CacheEntriesCounter
 from models.tt_dit.tests.unit.test_ring_joint_attention import (
     run_ring_joint_sdpa,
     run_ring_joint_sdpa_model_config,
@@ -187,9 +188,9 @@ def test_ring_joint_sdpa(
 @pytest.mark.parametrize(
     "dtype, pcc_threshold",
     [
-        pytest.param(ttnn.bfloat16, 0.994, marks=pytest.mark.skip(reason="Disabled by issue #45107")),
-        pytest.param(ttnn.bfloat8_b, 0.944, marks=pytest.mark.skip(reason="Disabled by issue #45107")),
-        pytest.param(ttnn.bfloat4_b, 0.8, marks=pytest.mark.skip(reason="Disabled by issue #45107")),
+        (ttnn.bfloat16, 0.994),
+        (ttnn.bfloat8_b, 0.944),
+        (ttnn.bfloat4_b, 0.8),
     ],
     ids=["bf16", "bf8_b", "bf4_b"],
 )
