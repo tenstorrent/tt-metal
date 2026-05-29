@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** p150 (blackhole)
 **Started:** 2026-05-29T00:11:46Z
-**Updated:** 2026-05-29T00:57:31Z
+**Updated:** 2026-05-29T00:58:10Z
 
 ## Block Status
 
@@ -26,7 +26,7 @@
 | vision_attention | optimization | pending | — | 0 |  |
 | vision_attention | real_weights | pending | — | 0 |  |
 | vision_mlp | reference | done | 1.000000 | 0 | reference vs HF (eager) module, PCC=1.0; golden saved |
-| vision_mlp | ttnn | done | 0.999986 | 0 | fused gate(fc1)/up(fc3) linear -> silu(gate)*up -> down(fc2). No bias. HiFi4+fp32_dest_acc bf16 DRAM TILE. PCC=0.99999 vs seed-0 golden on p150. Guard ok. |
+| vision_mlp | ttnn | done | 0.999986 | 0 | fused gate(fc1)/up(fc3) ttnn.linear -> ttnn.silu(gate)*up -> down(fc2) ttnn.linear. No bias. HiFi4+fp32_dest_acc bf16 DRAM TILE. PCC=0.9999855 vs golden. Guard ok. |
 | vision_mlp | debug | n/a | — | 0 |  |
 | vision_mlp | optimization | pending | — | 0 |  |
 | vision_mlp | real_weights | pending | — | 0 |  |
@@ -103,6 +103,7 @@
 - tick 7 (2026-05-29T00:52:05Z): device[vision_attention] — ok
 - tick 8 (2026-05-29T00:52:15Z): device[vision_attention] — ok
 - tick 9 (2026-05-29T00:57:01Z): device[vision_mlp] — ok
+- tick 9 (2026-05-29T00:58:10Z): device[vision_mlp] — ok
 
 ## Host-Resident Exceptions
 
