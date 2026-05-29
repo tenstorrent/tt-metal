@@ -522,7 +522,7 @@ ALWI void sdpa_tail_l_block(
         cb_wait_front(cb_l2, block_size);
         cb_wait_front(cb_l1, block_size);
     }
-    sdpa_mul_bcast_col_reuse_tiles<block_size>(cb_l2, cb_l1, tile_index, 0);
+    sdpa_mul_bcast_col_reuse_tiles<block_size>(cb_l2, cb_l1, tile_index, 0 /*dst_tile_index*/);
     if constexpr (manage_cbs) {
         cb_pop_front(cb_l2, block_size);
         cb_pop_front(cb_l1, block_size);
@@ -533,10 +533,16 @@ ALWI void sdpa_tail_l_block(
     tile_regs_commit();
     tile_regs_wait();
     if constexpr (untilize) {
-        pack_untilize_dest<block_size, block_size * num_blocks, false, false, TILE_C_DIM, 0, dense>(
-            cb_l_out, 1, block_index);
+        pack_untilize_dest<
+            block_size,
+            block_size * num_blocks,
+            false /*diagonal*/,
+            false /*narrow_row*/,
+            TILE_C_DIM,
+            0 /*tile_dst_ct_offset*/,
+            dense>(cb_l_out, 1 /*block_rt_dim*/, block_index);
     } else {
-        pack_block_contiguous(0, cb_l_out, block_size);
+        pack_block_contiguous(0 /*ifrom_dst*/, cb_l_out, block_size);
     }
     if constexpr (manage_cbs) {
         if constexpr (!untilize) {
@@ -604,7 +610,7 @@ ALWI void sdpa_tail(
     uint32_t cb_l2,
     uint32_t cb_l_out) {
     // Phase 1: MS reduction - computes P1/P2, sets up SRCB
-    sdpa_tail_ms_reduce<SDPA_EXP_APPROX_MODE, normalize, block_size, scale_fp32, vector_mode, true, dense>(
+    sdpa_tail_ms_reduce<SDPA_EXP_APPROX_MODE, normalize, block_size, scale_fp32, vector_mode, true /*pop_ms*/, dense>(
         cb_worker_max_sum, cb_prev_max_sum, cb_cur_max_sum, cb_l1);
 
     // TODO: Update the tile locs in ms_reduce to enable dense packing during entire reduction
@@ -620,15 +626,23 @@ ALWI void sdpa_tail(
     // Phase 2: Process all L blocks
     // Untilize requires operating on all blocks at once
     if constexpr (untilize) {
-        pack_untilize_dest_init<block_size, num_blocks * block_size, false, TILE_C_DIM, dense, false>(cb_l_out);
+        pack_untilize_dest_init<
+            block_size,
+            num_blocks * block_size,
+            false /*narrow_row*/,
+            TILE_C_DIM,
+            dense,
+            false /*configure_remap*/>(cb_l_out);
         cb_reserve_back(cb_l_out, block_size * num_blocks);
     }
     // When normalize=true, first block uses regs still held from MS phase
     if constexpr (normalize) {
-        sdpa_tail_l_block<block_size, num_blocks, untilize, dense, true>(cb_l1, cb_l2, cb_l_out, 0, 0, false);
+        sdpa_tail_l_block<block_size, num_blocks, untilize, dense, true /*manage_cbs*/>(
+            cb_l1, cb_l2, cb_l_out, 0 /*tile_index*/, 0 /*block_index*/, false /*acquire_regs*/);
     }
     for (uint32_t i = (normalize ? 1 : 0); i < num_blocks; i++) {
-        sdpa_tail_l_block<block_size, num_blocks, untilize, dense, true>(cb_l1, cb_l2, cb_l_out, 0, i, true);
+        sdpa_tail_l_block<block_size, num_blocks, untilize, dense, true /*manage_cbs*/>(
+            cb_l1, cb_l2, cb_l_out, 0 /*tile_index*/, i, true /*acquire_regs*/);
     }
     if constexpr (untilize) {
         cb_push_back(cb_l_out, block_size * num_blocks);
@@ -641,7 +655,7 @@ ALWI void sdpa_tail(
     }
 
     // Phase 3: Finalize (postamble + pop MS)
-    sdpa_tail_finalize<false>(cb_worker_max_sum, cb_prev_max_sum);
+    sdpa_tail_finalize<false /*pop_ms*/>(cb_worker_max_sum, cb_prev_max_sum);
 }
 
 }  // namespace ckernel

@@ -96,7 +96,8 @@ ALWI void tilizeA_B_reduce_init(
     uint32_t icb0, uint32_t icb1_scaler, uint32_t block, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1_scaler, ocb, call_line);
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb0, icb1_scaler)));
-    UNPACK((llk_unpack_tilizeA_B_init<neginf_srcA, true, false, zero_srcA_reduce>(icb0, icb1_scaler, block)));
+    UNPACK((llk_unpack_tilizeA_B_init<neginf_srcA, true /*reload_srcB*/, false /*zero_srcA*/, zero_srcA_reduce>(
+        icb0, icb1_scaler, block)));
 
     MATH((llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, DST_ACCUM_MODE, MATH_FIDELITY>()));
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));

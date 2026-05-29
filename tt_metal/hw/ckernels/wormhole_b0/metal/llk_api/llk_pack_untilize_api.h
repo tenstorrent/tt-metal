@@ -11,6 +11,19 @@
  * LLK PACK UNTILIZE
  *************************************************************************/
 
+/**
+ * Configure the packer hardware for an untilize output operand.
+ *
+ * Face geometry (face_r_dim, num_faces), partial-face flag, narrow-tile flag and tile
+ * size are all derived from the output CB metadata associated with the operand id.
+ * Callers no longer thread face geometry through the API, since per-CB face geometry
+ * is recorded in the CB descriptor at program creation time. The relu configuration is
+ * taken from the supplied pack params.
+ *
+ * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
+ * @tparam pack_mode           Packer program mode (e.g. Default, Untilize).
+ * @param  pack_params         Pack parameters carrying the output operand and relu config.
+ */
 template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
 inline void llk_pack_untilize_hw_configure(const llk_pack_params_t* pack_params) {
     const std::uint32_t output_id = get_output_id(pack_params->pack_output);
@@ -32,6 +45,21 @@ inline void llk_pack_untilize_hw_configure(const llk_pack_params_t* pack_params)
         pack_params->relu_config.val);
 }
 
+/**
+ * Initialize the packer for an untilize operation on the given output operand.
+ *
+ * Face geometry (face_r_dim, num_faces) is derived from the output CB metadata. In
+ * debug builds, validates that the packers are configured correctly for the resolved
+ * face row dimension before programming the untilize init sequence.
+ *
+ * @tparam block_ct_dim   Width of a single block in tiles.
+ * @tparam full_ct_dim    Width of the full input in tiles (defaults to block_ct_dim).
+ * @tparam diagonal       Whether to use diagonal packing.
+ * @tparam narrow_row     Whether the input rows are narrow.
+ * @tparam row_num_datums Number of datums per row.
+ * @tparam dense          Pack two 2-face tiles into a single 4-face region (unused on Wormhole; must be false).
+ * @param  output         Output circular buffer / operand index.
+ */
 template <
     std::uint32_t block_ct_dim = 8,
     std::uint32_t full_ct_dim = block_ct_dim,
@@ -52,6 +80,25 @@ inline void llk_pack_untilize_init(std::uint32_t output) {
         pack_dst_format[output_id], face_r_dim, num_faces);
 }
 
+/**
+ * Pack an untilized block of tiles from the destination register into the output CB.
+ *
+ * Iterates over block_rt_dim tile rows, computing the packer write address from the
+ * output CB fifo state for each row. Face geometry (face_r_dim, num_faces) is derived
+ * from the output CB metadata.
+ *
+ * @tparam block_ct_dim       Width of a single block in tiles.
+ * @tparam full_ct_dim        Width of the full input in tiles (defaults to block_ct_dim).
+ * @tparam diagonal           Whether to use diagonal packing.
+ * @tparam narrow_row         Whether the input rows are narrow.
+ * @tparam row_num_datums     Number of datums per row.
+ * @tparam tile_dst_ct_offset Compile-time column offset of the tile in the destination register.
+ * @tparam dense              Pack two 2-face tiles into a single 4-face region (unused on Wormhole; must be false).
+ * @param  block_rt_dim       Height of the block in tiles (number of rows to pack).
+ * @param  output             Output circular buffer / operand index.
+ * @param  block_c_index      Block column index (used when full_ct_dim > block_ct_dim).
+ * @param  tile_dst_rt_offset Runtime row offset of the tile in the destination register.
+ */
 template <
     std::uint32_t block_ct_dim = 8,
     std::uint32_t full_ct_dim = block_ct_dim,

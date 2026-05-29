@@ -10,6 +10,14 @@
  * LLK UNPACK TILIZE
  *************************************************************************/
 
+/**
+ * Initialize the unpacker for a single-operand tilize operation.
+ *
+ * Face row dimension, narrow-tile flag and face count are derived from the operand's CB metadata.
+ *
+ * @param operand Input circular buffer / operand index.
+ * @param ct_dim  Number of tiles along the column (tilize block width).
+ */
 inline void llk_unpack_tilize_init(const std::uint32_t operand, const std::uint32_t ct_dim) {
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
@@ -20,11 +28,27 @@ inline void llk_unpack_tilize_init(const std::uint32_t operand, const std::uint3
         unpack_src_format[operand_id], unpack_dst_format[operand_id], ct_dim, face_r_dim, narrow_tile, num_faces);
 }
 
+/**
+ * Tear down the tilize unpacker configuration so a subsequent operation can reprogram the unpacker.
+ *
+ * @param operand    Input circular buffer / operand index.
+ * @param face_r_dim Face row dimension to restore (defaults to FACE_R_DIM).
+ */
 inline void llk_unpack_tilize_uninit(const std::uint32_t operand, const std::uint32_t face_r_dim = FACE_R_DIM) {
     std::uint32_t operand_id = get_operand_id(operand);
     _llk_unpack_tilize_uninit_((uint)unpack_dst_format[operand_id], face_r_dim);
 }
 
+/**
+ * Unpack and tilize a single tile from the operand's circular buffer into srcA.
+ *
+ * Face geometry and narrow-tile flag are derived from the operand's CB metadata; the source base
+ * address is read from the CB fifo state.
+ *
+ * @param operand      Input circular buffer / operand index.
+ * @param tile_index   Tile index within the input to tilize.
+ * @param block_ct_dim Number of tiles along the column of the tilize block.
+ */
 inline void llk_unpack_tilize(std::uint32_t operand, std::uint32_t tile_index, std::uint32_t block_ct_dim) {
     std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
@@ -47,6 +71,13 @@ inline void llk_unpack_tilize(std::uint32_t operand, std::uint32_t tile_index, s
     WAYPOINT("UPTD");
 }
 
+/**
+ * Unpack and tilize a contiguous block of tiles by repeatedly calling llk_unpack_tilize.
+ *
+ * @param operand          Input circular buffer / operand index.
+ * @param block_c_tiles    Number of column tiles in the block.
+ * @param input_tile_index Starting tile index within the input (defaults to 0).
+ */
 inline void llk_unpack_tilize_block(
     std::uint32_t operand, std::uint32_t block_c_tiles, std::uint32_t input_tile_index = 0) {
     // Not sure if input_tile_index can be arbitrary but it works for moving across rows of files,
@@ -62,6 +93,15 @@ inline void llk_unpack_tilize_block(
  * LLK UNPACK TILIZE SRC A, UNPACK SRC B
  *************************************************************************/
 
+/**
+ * Program the unpacker MOP (macro-op) configuration for the combined tilize-A / unpack-B operation.
+ *
+ * @tparam neginf_srcA      Initialize srcA padding with negative infinity (for reduce-max).
+ * @tparam reload_srcB      Whether srcB is reloaded each iteration.
+ * @tparam zero_srcA        Zero out srcA.
+ * @tparam zero_srcA_reduce Zero out srcA for the reduce path.
+ * @param  num_faces        Number of faces per tile (defaults to 4).
+ */
 template <
     bool neginf_srcA = false,
     std::uint32_t reload_srcB = false,
@@ -71,8 +111,21 @@ inline void llk_unpack_tilizeA_B_mop_config(const std::uint32_t num_faces = 4) {
     _llk_unpack_tilizeA_B_mop_config_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(num_faces);
 }
 
-/// Operand A face row count and face count are taken from circular-buffer unpack metadata (see
-/// set_unpack_face_geometry).
+/**
+ * Initialize the unpacker for the combined tilize-A / unpack-B operation.
+ *
+ * Operand A and B face geometry (face_r_dim, num_faces) and narrow-tile flag are derived from
+ * circular-buffer unpack metadata (see set_unpack_face_geometry). In debug builds, validates that
+ * both unpackers are configured consistently before programming the init sequence.
+ *
+ * @tparam neginf_srcA      Initialize srcA padding with negative infinity (for reduce-max).
+ * @tparam reload_srcB      Whether srcB is reloaded each iteration.
+ * @tparam zero_srcA        Zero out srcA.
+ * @tparam zero_srcA_reduce Zero out srcA for the reduce path.
+ * @param  operandA         Input operand index for tilize source A.
+ * @param  operandB         Input operand index for unpack source B.
+ * @param  ct_dim           Number of tiles along the column (tilize block width).
+ */
 template <
     bool neginf_srcA = false,
     std::uint32_t reload_srcB = false,
@@ -107,6 +160,19 @@ inline void llk_unpack_tilizeA_B_init(
         unpB_face_r_dim);
 }
 
+/**
+ * Unpack and tilize one srcA tile while unpacking the corresponding srcB tile.
+ *
+ * Operand A face geometry and narrow-tile flag are derived from CB unpack metadata; source base
+ * addresses are read from the CB fifo state.
+ *
+ * @tparam zero_srcA    Zero out srcA.
+ * @param  operandA     Input operand index for tilize source A.
+ * @param  operandB     Input operand index for unpack source B.
+ * @param  tile_index_a Tile index within operand A.
+ * @param  tile_index_b Tile index within operand B.
+ * @param  block_ct_dim Number of column tiles in the block.
+ */
 template <bool zero_srcA = false>
 inline void llk_unpack_tilizeA_B(
     std::uint32_t operandA,
@@ -151,6 +217,19 @@ inline void llk_unpack_tilizeA_B(
     WAYPOINT("UPTD");
 }
 
+/**
+ * Unpack and tilize a block of srcA column tiles against srcB by repeatedly calling
+ * llk_unpack_tilizeA_B.
+ *
+ * @tparam neginf_srcA      Initialize srcA padding with negative infinity (for reduce-max).
+ * @tparam reload_srcB      Whether srcB is reloaded each iteration.
+ * @tparam zero_srcA        Zero out srcA.
+ * @tparam zero_srcA_reduce Zero out srcA for the reduce path.
+ * @param  operandA        Input operand index for tilize source A.
+ * @param  operandB        Input operand index for unpack source B.
+ * @param  block_c_tiles_a Number of column tiles in operand A's block.
+ * @param  tile_idx_b      Tile index within operand B.
+ */
 template <
     bool neginf_srcA = false,
     std::uint32_t reload_srcB = false,
@@ -167,17 +246,40 @@ inline void llk_unpack_tilizeA_B_block(
  * LLK UNPACK FAST TILIZE SRC A
  *************************************************************************/
 
+/**
+ * Initialize the unpacker for the fast (hardware-accelerated) srcA tilize path.
+ *
+ * @param operand  Input circular buffer / operand index.
+ * @param full_dim Full row dimension of the input being tilized.
+ */
 inline void llk_unpack_fast_tilize_init(const std::uint32_t operand, std::uint32_t full_dim) {
     const std::uint32_t operand_id = get_operand_id(operand);
 
     _llk_unpack_fast_tilize_init_(unpack_dst_format[operand_id], full_dim);
 }
 
+/**
+ * Tear down the fast srcA tilize configuration.
+ *
+ * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
+ */
 template <bool is_fp32_dest_acc_en>
 inline void llk_unpack_fast_tilize_uninit() {
     _llk_unpack_fast_tilize_uninit_<is_fp32_dest_acc_en>();
 }
 
+/**
+ * Unpack and tilize a block of tiles using the fast srcA tilize path.
+ *
+ * Face count is derived from the operand's CB metadata; the source base address is read from the
+ * CB fifo state.
+ *
+ * @param operand    Input circular buffer / operand index.
+ * @param tile_index Starting tile index within the input.
+ * @param unit_dim   Column dimension of a single tilize unit.
+ * @param num_units  Number of tilize units in the block.
+ * @param full_dim   Full row dimension of the input being tilized.
+ */
 inline void llk_unpack_fast_tilize_block(
     const std::uint32_t operand,
     const std::uint32_t tile_index,
@@ -192,6 +294,12 @@ inline void llk_unpack_fast_tilize_block(
         base_address, tile_index, unpack_src_format[operand_id], unit_dim, num_units, full_dim, num_faces);
 }
 
+/**
+ * Tear down the combined tilize-A / unpack-B configuration so a subsequent operation can reprogram
+ * the unpacker.
+ *
+ * @param operand Input circular buffer / operand index.
+ */
 inline void llk_unpack_tilizeA_B_uninit(const std::uint32_t operand) {
     std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
