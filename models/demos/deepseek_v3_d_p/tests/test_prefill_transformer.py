@@ -505,10 +505,56 @@ def test_prefill_transformer(
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(0, None)),
     )
 
-    # --- Forward ---
+    # --- Forward (with per-iteration PCC validation, buffered) ---
+    do_return_kv = pcc_validation and return_kv_cache
+
+    # Pre-compute PCC validation setup once before the iteration loop:
+    # threshold + reference items. This avoids re-loading per iteration.
+    threshold = None
+    reference_items_list = None
+    trace_full_model = False
+    if pcc_validation:
+        if trace is not None:
+            if gate_fallback_mode == GateComputeMode.DEVICE:
+                threshold = TRACE_PCC_THRESHOLD_DEVICE_BF16
+            elif gate_fallback_mode == GateComputeMode.DEVICE_FP32:
+                threshold = TRACE_PCC_THRESHOLD_DEVICE_FP32
+            elif gate_fallback_mode == GateComputeMode.HOST_ALL:
+                threshold = TRACE_PCC_THRESHOLD_HOST
+            else:
+                threshold = TRACE_PCC_THRESHOLD
+        elif use_pretrained and input_source != "random":
+            threshold = 0.97
+        elif use_pretrained:
+            threshold = 0.95
+        elif n_routed_experts < 256:
+            threshold = 0.985
+        else:
+            threshold = PCC_THRESHOLD  # 0.99
+        logger.info(f"PCC threshold: {threshold} (ref_source={'trace' if trace else 'host'})")
+
+        if trace is not None:
+            reference_items_list = list(trace.ref_snapshots.items())
+        else:
+            if ref_snapshots is None:
+                logger.info("Loading reference from cache...")
+                ref_snapshots, ref_kvpe_list = load_reference_cache(cache_key)
+            ref_labels = ["embed"] + [f"layer_{li}" for li in range(num_layers)] + ["norm", "lm_head"]
+            reference_items_list = list(zip(ref_labels, ref_snapshots))
+
+        trace_full_model = trace is not None and num_layers == trace.metadata.get("n_layers")
+        if trace is not None and not trace_full_model:
+            logger.info(
+                f"Skipping trace logits/first-token checks: "
+                f"num_layers={num_layers} != trace n_layers={trace.metadata.get('n_layers')}"
+            )
+
     profiler.start("tt_forward")
     logger.info("Running TtPrefillTransformer forward...")
-    do_return_kv = pcc_validation and return_kv_cache
+    # Buffer of per-iteration PCC results: list of (iter_idx, list[(label, pcc)]).
+    # PCC is computed every iteration but assertions are deferred until after
+    # all iterations complete and the full summary has been printed.
+    per_iter_pcc_buffer = []
     for i in range(num_iterations):
         logger.info(f"Starting iteration: {i}")
         start_time = time.time()
@@ -524,10 +570,74 @@ def test_prefill_transformer(
         ttnn.synchronize_device(mesh_device)
         end_time = time.time()
         logger.info(f"Iteration {i}: {end_time - start_time} seconds")
+
+        if pcc_validation:
+            assert tt_intermediates is not None, "Expected intermediates dict"
+            profiler.start("pcc_validation")
+            iter_pcc = []
+
+            iter_pcc.extend(
+                _compare_intermediate_pcc(
+                    reference_items_list,
+                    tt_intermediates,
+                    number_of_non_padded_tokens,
+                    padding_side,
+                )
+            )
+
+            if do_return_kv and ref_kvpe_list is not None:
+                tt_kvpe_all = ttnn.to_torch(
+                    tt_kvpe_cache,
+                    mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
+                ).to(torch.bfloat16)
+                tt_kvpe_all_layers = tt_kvpe_all[:, :1, :, :]
+                if is_balanced:
+                    tt_kvpe_all_layers = reverse_reorder_tensor_chunks(tt_kvpe_all_layers, chunk_order, seq_dim=2)
+                kv_lora_rank = config.kv_lora_rank
+                for layer_idx, ref_kvpe in enumerate(ref_kvpe_list):
+                    tt_kvpe_layer = tt_kvpe_all_layers[layer_idx : layer_idx + 1, :, :, :]
+                    label = f"layer_{layer_idx}_kvpe"
+                    try:
+                        _, kv_pcc = comp_pcc(
+                            slice_non_padded(
+                                ref_kvpe[..., :kv_lora_rank], number_of_non_padded_tokens, padding_side
+                            ).float(),
+                            slice_non_padded(
+                                tt_kvpe_layer[..., :kv_lora_rank], number_of_non_padded_tokens, padding_side
+                            ).float(),
+                        )
+                        _, pe_pcc = comp_pcc(
+                            slice_non_padded(
+                                ref_kvpe[..., kv_lora_rank:], number_of_non_padded_tokens, padding_side
+                            ).float(),
+                            slice_non_padded(
+                                tt_kvpe_layer[..., kv_lora_rank:], number_of_non_padded_tokens, padding_side
+                            ).float(),
+                        )
+                        logger.debug(f"iter {i} {label:<20s}  KV PCC = {kv_pcc:.6f}, PE PCC = {pe_pcc:.6f}")
+                        iter_pcc.append((f"{label}_kv", kv_pcc))
+                        iter_pcc.append((f"{label}_pe", pe_pcc))
+                    except Exception as e:
+                        logger.error(f"iter {i} {label:<20s}  KVPE PCC comparison failed: {e}")
+                        iter_pcc.append((f"{label}_kv", -1.0))
+                        iter_pcc.append((f"{label}_pe", -1.0))
+
+            if trace_full_model and trace.logits is not None and "logits" in tt_intermediates:
+                try:
+                    _, logits_pcc = comp_pcc(trace.logits.float(), tt_intermediates["logits"].float())
+                    logger.debug(f"iter {i} {'logits':<20s}  PCC = {logits_pcc:.6f}")
+                    iter_pcc.append(("logits", logits_pcc))
+                except Exception as e:
+                    logger.error(f"iter {i} {'logits':<20s}  PCC comparison failed: {e}")
+                    iter_pcc.append(("logits", -1.0))
+
+            per_iter_pcc_buffer.append((i, iter_pcc))
+            profiler.end("pcc_validation")
+
     profiler.end("tt_forward")
     logger.info(f"Forward pass completed. First token: ID={first_token_id}, prob={first_token_prob:.4f}")
 
-    # --- Save intermediate outputs ---
+    # --- Save intermediate outputs (from last iteration) ---
 
     if pcc_validation:
         assert tt_intermediates is not None, "Expected intermediates dict"
@@ -562,124 +672,23 @@ def test_prefill_transformer(
             test_params=test_params,
         )
 
-    # --- PCC check ---
+    # --- PCC summary (print buffered per-iteration results, then defer assertion) ---
     if pcc_validation:
-        profiler.start("pcc_validation")
+        failures = []  # list of (iter_idx, label, pcc)
+        for iter_idx, iter_pcc in per_iter_pcc_buffer:
+            logger.info(f"\n{'='*60}")
+            logger.info(f"Iteration {iter_idx} PCC results")
+            logger.info(f"{'Stage':<20s}  {'PCC':>10s}  {'Status':>8s}")
+            logger.info(f"{'-'*60}")
+            for label, pcc in iter_pcc:
+                status = "PASS" if pcc > threshold else ("FAIL" if pcc >= 0 else "ERROR")
+                logger.info(f"{label:<20s}  {pcc:>10.6f}  {status:>8s}")
+                if pcc <= threshold:
+                    failures.append((iter_idx, label, pcc))
+            logger.info(f"{'='*60}")
 
-        # --- Determine threshold based on reference source ---
-        if trace is not None:
-            if gate_fallback_mode == GateComputeMode.DEVICE:
-                threshold = TRACE_PCC_THRESHOLD_DEVICE_BF16
-            elif gate_fallback_mode == GateComputeMode.DEVICE_FP32:
-                threshold = TRACE_PCC_THRESHOLD_DEVICE_FP32
-            elif gate_fallback_mode == GateComputeMode.HOST_ALL:
-                threshold = TRACE_PCC_THRESHOLD_HOST
-            else:
-                threshold = TRACE_PCC_THRESHOLD
-        elif use_pretrained and input_source != "random":
-            threshold = 0.97
-        elif use_pretrained:
-            threshold = 0.95
-        elif n_routed_experts < 256:
-            threshold = 0.985
-        else:
-            threshold = PCC_THRESHOLD  # 0.99
-        logger.info(f"PCC threshold: {threshold} (ref_source={'trace' if trace else 'host'})")
-
-        # --- Load reference snapshots (priority: trace > cache > already computed) ---
-        pcc_results = []
-        if trace is not None:
-            reference_items = trace.ref_snapshots.items()
-        else:
-            if ref_snapshots is None:
-                logger.info("Loading reference from cache...")
-                ref_snapshots, ref_kvpe_list = load_reference_cache(cache_key)
-
-            ref_labels = ["embed"] + [f"layer_{i}" for i in range(num_layers)] + ["norm", "lm_head"]
-            reference_items = zip(ref_labels, ref_snapshots)
-
-        pcc_results.extend(
-            _compare_intermediate_pcc(
-                reference_items,
-                tt_intermediates,
-                number_of_non_padded_tokens,
-                padding_side,
-            )
-        )
-
-        # Per-layer KVPE PCC comparison — read back from external cache
-        if do_return_kv and ref_kvpe_list is not None:
-            tt_kvpe_all = ttnn.to_torch(
-                tt_kvpe_cache,
-                mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
-            ).to(torch.bfloat16)
-            # Shape: [num_layers, tp_factor, seq_total, head_dim] — take first TP replica
-            tt_kvpe_all_layers = tt_kvpe_all[:, :1, :, :]
-            if is_balanced:
-                tt_kvpe_all_layers = reverse_reorder_tensor_chunks(tt_kvpe_all_layers, chunk_order, seq_dim=2)
-            kv_lora_rank = config.kv_lora_rank
-            for i, ref_kvpe in enumerate(ref_kvpe_list):
-                tt_kvpe_layer = tt_kvpe_all_layers[i : i + 1, :, :, :]
-                label = f"layer_{i}_kvpe"
-                try:
-                    # ignore padded tokens in comparison
-                    _, kv_pcc = comp_pcc(
-                        slice_non_padded(
-                            ref_kvpe[..., :kv_lora_rank], number_of_non_padded_tokens, padding_side
-                        ).float(),
-                        slice_non_padded(
-                            tt_kvpe_layer[..., :kv_lora_rank], number_of_non_padded_tokens, padding_side
-                        ).float(),
-                    )
-                    # ignore padded tokens in comparison
-                    _, pe_pcc = comp_pcc(
-                        slice_non_padded(
-                            ref_kvpe[..., kv_lora_rank:], number_of_non_padded_tokens, padding_side
-                        ).float(),
-                        slice_non_padded(
-                            tt_kvpe_layer[..., kv_lora_rank:], number_of_non_padded_tokens, padding_side
-                        ).float(),
-                    )
-                    logger.info(f"{label:<20s}  KV PCC = {kv_pcc:.6f}, PE PCC = {pe_pcc:.6f}")
-                    pcc_results.append((f"{label}_kv", kv_pcc))
-                    pcc_results.append((f"{label}_pe", pe_pcc))
-
-                except Exception as e:
-                    logger.error(f"{label:<20s}  KVPE PCC comparison failed: {e}")
-                    pcc_results.append((f"{label}_kv", -1.0))
-                    pcc_results.append((f"{label}_pe", -1.0))
-
-        # --- Logits PCC check (last-token logits vs trace reference) ---
-        # Trace logits / next-token are products of the full traced model. They are
-        # only meaningful when the TT model ran the same number of layers as the trace.
-        trace_full_model = trace is not None and num_layers == trace.metadata.get("n_layers")
-        if trace_full_model and trace.logits is not None and "logits" in tt_intermediates:
-            try:
-                _, logits_pcc = comp_pcc(trace.logits.float(), tt_intermediates["logits"].float())
-                logger.info(f"{'logits':<20s}  PCC = {logits_pcc:.6f}")
-                pcc_results.append(("logits", logits_pcc))
-            except Exception as e:
-                logger.error(f"{'logits':<20s}  PCC comparison failed: {e}")
-                pcc_results.append(("logits", -1.0))
-        elif trace is not None and not trace_full_model:
-            logger.info(
-                f"Skipping trace logits/first-token checks: "
-                f"num_layers={num_layers} != trace n_layers={trace.metadata.get('n_layers')}"
-            )
-
-        profiler.end("pcc_validation")
-
-        # --- Summary table ---
-        logger.info(f"\n{'='*50}")
-        logger.info(f"{'Stage':<20s}  {'PCC':>10s}  {'Status':>8s}")
-        logger.info(f"{'-'*50}")
-        failures = []
-        for label, pcc in pcc_results:
-            status = "PASS" if pcc > threshold else ("FAIL" if pcc >= 0 else "ERROR")
-            logger.info(f"{label:<20s}  {pcc:>10.6f}  {status:>8s}")
-            if pcc <= threshold:
-                failures.append((label, pcc))
-        logger.info(f"{'='*50}")
+        # Use last iteration's PCC for CI summary (preserves existing downstream behavior).
+        pcc_results = per_iter_pcc_buffer[-1][1] if per_iter_pcc_buffer else []
 
         # --- First token info ---
         tok = tokenizer
@@ -693,7 +702,7 @@ def test_prefill_transformer(
         if trace_full_model:
             token_match = check_first_token_match(trace, trace_dir, first_token_id, first_token_prob)
             if token_match is False:
-                failures.append(("first_token_match", -1.0))
+                failures.append((num_iterations - 1, "first_token_match", -1.0))
 
         # Log all temperature results from intermediates
         if tt_intermediates and "first_token" in tt_intermediates:
@@ -714,15 +723,16 @@ def test_prefill_transformer(
 
         if not has_pcc_failures:
             logger.success(
-                f"TtPrefillTransformer PCC test passed "
+                f"TtPrefillTransformer PCC test passed across {num_iterations} iteration(s) "
                 f"(num_layers={num_layers}, n_routed_experts={n_routed_experts}, "
                 f"gate_fallback_mode={gate_fallback_mode}, "
                 f"weights={weight_type}, ref_source={'trace' if trace else 'host'})"
             )
         else:
-            pcc_failure_msg = "; ".join(f"{label}: {pcc:.6f}" for label, pcc in failures)
+            pcc_failure_msg = "; ".join(f"iter {it} {label}: {pcc:.6f}" for it, label, pcc in failures)
             logger.error(
-                f"TtPrefillTransformer PCC test has failures " f"(num_layers={num_layers}, failures={len(failures)})"
+                f"TtPrefillTransformer PCC test has failures "
+                f"(num_layers={num_layers}, failures={len(failures)} across {num_iterations} iteration(s))"
             )
     else:
         pcc_results = []
