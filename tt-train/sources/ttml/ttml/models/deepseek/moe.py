@@ -49,7 +49,12 @@ class Expert(AbstractModuleBase):
         self.w2 = LinearLayer(hidden_dim, dim, has_bias=False)
 
     def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
-        return self.w2(ttml.ops.binary.mul(ttml.ops.unary.silu(self.w1(x)), self.w3(x)))
+        return ttml.ops.swiglu.swiglu(
+            x,
+            self.w1.weight.tensor,
+            self.w2.weight.tensor,
+            self.w3.weight.tensor,
+        )
 
 
 class MoE(AbstractModuleBase):
