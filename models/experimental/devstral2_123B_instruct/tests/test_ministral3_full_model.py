@@ -200,7 +200,7 @@ def _setup_full_model(
     ],
     indirect=True,
 )
-@pytest.mark.timeout(0)
+@pytest.mark.timeout(3600)
 def test_ministral3_model_pcc_devstral2_123B_instruct_full_weights_all_layers_decode(
     mesh_device,
     batch_size,
