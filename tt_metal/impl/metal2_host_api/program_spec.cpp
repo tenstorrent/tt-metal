@@ -181,8 +181,8 @@ const std::vector<DFBSpecName>& dfb_alias_with(const DataflowBufferSpec& dfb) {
 }
 
 // Helper: return a kernel's dfb-compute-self-loop-scopes list.
-const std::vector<DFBComputeSelfLoopScope>& kernel_self_loop_scopes(const KernelSpec& kernel) {
-    return kernel.advanced_options.dfb_compute_self_loop_scopes;
+const std::vector<DFBSelfLoopConnectivity>& kernel_self_loop_scopes(const KernelSpec& kernel) {
+    return kernel.advanced_options.dfb_self_loop_connectivities;
 }
 
 // Local accessor names for kernel resource bindings must be valid C++ identifiers
@@ -313,7 +313,7 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
                     info.dfb_spec_name,
                     dfb_binding.dfb_spec_name);
             }
-            const bool is_producer = (dfb_binding.endpoint_type == KernelSpec::DFBEndpointType::PRODUCER);
+            const bool is_producer = (dfb_binding.endpoint_type == DFBEndpointType::PRODUCER);
             bool& seen_this_type = is_producer ? info.has_producer : info.has_consumer;
             TT_FATAL(
                 !seen_this_type,
@@ -332,9 +332,9 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
 
             CollectedSpecData::DFBEndpointInfo& endpoint_info = collected.dfb_endpoints[dfb_binding.dfb_spec_name];
 
-            if (dfb_binding.endpoint_type == KernelSpec::DFBEndpointType::PRODUCER) {
+            if (dfb_binding.endpoint_type == DFBEndpointType::PRODUCER) {
                 endpoint_info.producers.push_back({&kernel, &dfb_binding});
-            } else if (dfb_binding.endpoint_type == KernelSpec::DFBEndpointType::CONSUMER) {
+            } else if (dfb_binding.endpoint_type == DFBEndpointType::CONSUMER) {
                 endpoint_info.consumers.push_back({&kernel, &dfb_binding});
             } else {
                 TT_FATAL(false, "RELAY endpoints are only used for remote DFB, which is not supported yet");
@@ -747,7 +747,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         std::unordered_set<DFBSpecName> consumed_dfbs;
         for (const auto& binding : kernel.dfb_bindings) {
             bound_dfbs.insert(binding.dfb_spec_name);
-            if (binding.endpoint_type == KernelSpec::DFBEndpointType::CONSUMER) {
+            if (binding.endpoint_type == DFBEndpointType::CONSUMER) {
                 consumed_dfbs.insert(binding.dfb_spec_name);
             }
         }
@@ -806,7 +806,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             continue;
         }
         for (const auto& binding : kernel.dfb_bindings) {
-            if (binding.endpoint_type != KernelSpec::DFBEndpointType::CONSUMER) {
+            if (binding.endpoint_type != DFBEndpointType::CONSUMER) {
                 continue;
             }
             const DataflowBufferSpec* dfb_spec = collected.dfb_by_name.at(binding.dfb_spec_name);
@@ -1101,7 +1101,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                         return entry.scope;
                     }
                 }
-                return DFBComputeSelfLoopScope::Scope::INTRA;
+                return DFBSelfLoopScope::INTRA;
             };
             const KernelSpec* first_kernel = endpoints.producers.front().kernel;
             const auto first_scope = scope_for_kernel(first_kernel);
@@ -1113,7 +1113,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 TT_FATAL(
                     scope_for_kernel(rec.kernel) == first_scope,
                     "DFB '{}' is self-looped; all self-loop participants must agree on "
-                    "DFBComputeSelfLoopScope::Scope, but kernel '{}' specifies a different scope "
+                    "DFBSelfLoopScope, but kernel '{}' specifies a different scope "
                     "than kernel '{}'.",
                     dfb.unique_id,
                     rec.kernel->unique_id,
@@ -1286,7 +1286,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         }
     }
 
-    // Validate KernelSpec::dfb_compute_self_loop_scopes entries.
+    // Validate KernelSpec::dfb_self_loop_connectivities entries.
     // This is a niche advanced option that only applies to compute kernels that self-loop a DFB
     // (bind it as both producer and consumer).
     // All misapplications fail loudly here for the benefit of users (especially AI users).
@@ -1296,7 +1296,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         }
         TT_FATAL(
             kernel.is_compute_kernel(),
-            "KernelSpec '{}' specifies dfb_compute_self_loop_scopes, but is not a compute kernel. "
+            "KernelSpec '{}' specifies dfb_self_loop_connectivities, but is not a compute kernel. "
             "This option applies only to compute kernels.",
             kernel.unique_id);
 
@@ -1304,13 +1304,13 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         for (const auto& entry : kernel_self_loop_scopes(kernel)) {
             TT_FATAL(
                 seen_dfb_names.insert(entry.dfb_spec_name).second,
-                "KernelSpec '{}' has duplicate dfb_compute_self_loop_scopes entries for DFB '{}'.",
+                "KernelSpec '{}' has duplicate dfb_self_loop_connectivities entries for DFB '{}'.",
                 kernel.unique_id,
                 entry.dfb_spec_name);
 
             TT_FATAL(
                 collected.dfb_by_name.contains(entry.dfb_spec_name),
-                "KernelSpec '{}' has a dfb_compute_self_loop_scopes entry referencing unknown DFB '{}'.",
+                "KernelSpec '{}' has a dfb_self_loop_connectivities entry referencing unknown DFB '{}'.",
                 kernel.unique_id,
                 entry.dfb_spec_name);
 
@@ -1320,22 +1320,22 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 if (binding.dfb_spec_name != entry.dfb_spec_name) {
                     continue;
                 }
-                if (binding.endpoint_type == KernelSpec::DFBEndpointType::PRODUCER) {
+                if (binding.endpoint_type == DFBEndpointType::PRODUCER) {
                     has_producer_binding = true;
-                } else if (binding.endpoint_type == KernelSpec::DFBEndpointType::CONSUMER) {
+                } else if (binding.endpoint_type == DFBEndpointType::CONSUMER) {
                     has_consumer_binding = true;
                 }
             }
             TT_FATAL(
                 has_producer_binding && has_consumer_binding,
-                "KernelSpec '{}' has a dfb_compute_self_loop_scopes entry for DFB '{}', but the "
+                "KernelSpec '{}' has a dfb_self_loop_connectivities entry for DFB '{}', but the "
                 "kernel does not self-loop this DFB (does not bind it as BOTH producer and "
                 "consumer). This option applies only to self-looped DFBs.",
                 kernel.unique_id,
                 entry.dfb_spec_name);
 
             TT_FATAL(
-                entry.scope != DFBComputeSelfLoopScope::Scope::INTER,
+                entry.scope != DFBSelfLoopScope::INTER,
                 "KernelSpec '{}' specifies INTER scope for self-looped DFB '{}'. INTER scope is "
                 "not yet supported by the runtime.",
                 kernel.unique_id,
@@ -2024,7 +2024,7 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
     // what matters, not vector ordering). Upstream validation guarantees producer set ==
     // consumer set whenever any overlap exists, and that all self-loop participants agree on
     // the tensix scope; reading from the first producer is therefore safe and representative.
-    // The user can declare scope via KernelSpec::dfb_compute_self_loop_scopes:
+    // The user can declare scope via KernelSpec::dfb_self_loop_connectivities:
     //  - absence of an entry means we infer INTRA (the common case)
     //  - user-specified INTRA is also fine
     //  - user-specified INTER is not currently supported. This will have already failed validation.
@@ -2040,14 +2040,14 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
     }();
     std::optional<experimental::dfb::TensixScope> tensix_scope;
     if (is_self_loop && producer->is_compute_kernel()) {
-        auto user_scope = DFBComputeSelfLoopScope::Scope::INTRA;
+        auto user_scope = DFBSelfLoopScope::INTRA;
         for (const auto& entry : kernel_self_loop_scopes(*producer)) {
             if (entry.dfb_spec_name == dfb_spec->unique_id) {
                 user_scope = entry.scope;
                 break;
             }
         }
-        tensix_scope = (user_scope == DFBComputeSelfLoopScope::Scope::INTRA)
+        tensix_scope = (user_scope == DFBSelfLoopScope::INTRA)
                            ? experimental::dfb::TensixScope::INTRA
                            : experimental::dfb::TensixScope::INTER;  // currently blocked in validation
     }
@@ -2171,7 +2171,7 @@ DataMovementConfig MakeGen1DataMovementConfig(const KernelSpec& kernel_spec) {
 // ----------------------------------------------------------------------------
 
 std::vector<UnpackToDestMode> BuildUnpackToDestModeVector(
-    const std::vector<KernelComputeConfig::UnpackToDestModeEntry>& user_modes, const DFBNameToIdMap& dfb_name_to_id) {
+    const std::vector<KernelComputeConfig::KernelComputeConfig::DFBUnpackToDestMode>& user_modes, const DFBNameToIdMap& dfb_name_to_id) {
     const uint32_t max_cbs = tt::tt_metal::hal::get_arch_num_circular_buffers();
     std::vector<UnpackToDestMode> unpack_modes(max_cbs, UnpackToDestMode::Default);
     for (const auto& [dfb_name, mode] : user_modes) {

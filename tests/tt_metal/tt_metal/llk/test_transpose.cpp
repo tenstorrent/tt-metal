@@ -200,7 +200,7 @@ void run_single_core_transpose(
         .dfb_bindings = {{
             .dfb_spec_name = INPUT_DFB,
             .accessor_name = "out",
-            .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
+            .endpoint_type = experimental::metal2_host_api::DFBEndpointType::PRODUCER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
         .tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}},
@@ -224,7 +224,7 @@ void run_single_core_transpose(
         .dfb_bindings = {{
             .dfb_spec_name = OUTPUT_DFB,
             .accessor_name = "in",
-            .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
+            .endpoint_type = experimental::metal2_host_api::DFBEndpointType::CONSUMER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
         .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}},
@@ -257,13 +257,13 @@ void run_single_core_transpose(
             {{
                  .dfb_spec_name = INPUT_DFB,
                  .accessor_name = "in",
-                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
+                 .endpoint_type = experimental::metal2_host_api::DFBEndpointType::CONSUMER,
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = OUTPUT_DFB,
                  .accessor_name = "out",
-                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
+                 .endpoint_type = experimental::metal2_host_api::DFBEndpointType::PRODUCER,
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
         .compile_time_args = {{"NHtWt", Ht * Wt * NC}},

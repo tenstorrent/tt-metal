@@ -121,7 +121,7 @@ void run_single_core_copy_block_matmul_partials(
         .dfb_bindings = {{
             .dfb_spec_name = SRC0_DFB,
             .accessor_name = "out",
-            .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
+            .endpoint_type = experimental::metal2_host_api::DFBEndpointType::PRODUCER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
         .runtime_arg_schema =
@@ -145,7 +145,7 @@ void run_single_core_copy_block_matmul_partials(
         .dfb_bindings = {{
             .dfb_spec_name = DST_DFB,
             .accessor_name = "in",
-            .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
+            .endpoint_type = experimental::metal2_host_api::DFBEndpointType::CONSUMER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
         .runtime_arg_schema =
@@ -176,13 +176,13 @@ void run_single_core_copy_block_matmul_partials(
             {{
                  .dfb_spec_name = SRC0_DFB,
                  .accessor_name = "in",
-                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
+                 .endpoint_type = experimental::metal2_host_api::DFBEndpointType::CONSUMER,
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = DST_DFB,
                  .accessor_name = "out",
-                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
+                 .endpoint_type = experimental::metal2_host_api::DFBEndpointType::PRODUCER,
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
         .compile_time_args = {{"num_tiles", num_tiles}, {"num_single_transfer", test_config.compute_ublock}},
@@ -196,8 +196,8 @@ void run_single_core_copy_block_matmul_partials(
                 .unpack_to_dest_mode =
                     test_config.fp32_dest_acc_en
                         ? std::vector<experimental::metal2_host_api::KernelComputeConfig::
-                                          UnpackToDestModeEntry>{{SRC0_DFB, tt::tt_metal::UnpackToDestMode::Default}}
-                        : std::vector<experimental::metal2_host_api::KernelComputeConfig::UnpackToDestModeEntry>{},
+                                          KernelComputeConfig::DFBUnpackToDestMode>{{SRC0_DFB, tt::tt_metal::UnpackToDestMode::Default}}
+                        : std::vector<experimental::metal2_host_api::KernelComputeConfig::KernelComputeConfig::DFBUnpackToDestMode>{},
             },
     };
 

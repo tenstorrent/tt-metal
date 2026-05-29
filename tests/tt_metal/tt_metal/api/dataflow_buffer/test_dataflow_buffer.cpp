@@ -248,7 +248,7 @@ void run_single_dfb_program(
             .dfb_bindings = {{
                 .dfb_spec_name = DFB_NAME,
                 .accessor_name = "out",
-                .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
+                .endpoint_type = experimental::metal2_host_api::DFBEndpointType::PRODUCER,
                 .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
             }},
             .tensor_bindings = {{
@@ -274,7 +274,7 @@ void run_single_dfb_program(
             .dfb_bindings = {{
                 .dfb_spec_name = DFB_NAME,
                 .accessor_name = "out",
-                .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
+                .endpoint_type = experimental::metal2_host_api::DFBEndpointType::PRODUCER,
                 .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
             }},
             .compile_time_args = {{"num_entries_per_producer", num_entries_per_producer}},
@@ -293,7 +293,7 @@ void run_single_dfb_program(
             .dfb_bindings = {{
                 .dfb_spec_name = DFB_NAME,
                 .accessor_name = "in",
-                .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
+                .endpoint_type = experimental::metal2_host_api::DFBEndpointType::CONSUMER,
                 .access_pattern = consumer_pattern,
             }},
             .tensor_bindings = {{
@@ -320,7 +320,7 @@ void run_single_dfb_program(
             .dfb_bindings = {{
                 .dfb_spec_name = DFB_NAME,
                 .accessor_name = "in",
-                .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
+                .endpoint_type = experimental::metal2_host_api::DFBEndpointType::CONSUMER,
                 .access_pattern = consumer_pattern,
             }},
             .compile_time_args = {{"num_entries_per_consumer", num_entries_per_consumer}},
@@ -663,7 +663,7 @@ void run_concurrent_dfbs_program(
             .dfb_bindings = {{
                 .dfb_spec_name = dfb_name,
                 .accessor_name = "out",
-                .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
+                .endpoint_type = experimental::metal2_host_api::DFBEndpointType::PRODUCER,
                 .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
             }},
             .tensor_bindings = {{
@@ -696,7 +696,7 @@ void run_concurrent_dfbs_program(
             .dfb_bindings = {{
                 .dfb_spec_name = dfb_name,
                 .accessor_name = "in",
-                .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
+                .endpoint_type = experimental::metal2_host_api::DFBEndpointType::CONSUMER,
                 .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
             }},
             .tensor_bindings = {{
@@ -825,7 +825,7 @@ void run_concurrent_tensix_dm_dfbs_program(
         producer_spec.dfb_bindings.push_back(experimental::metal2_host_api::KernelSpec::DFBBinding{
             .dfb_spec_name = "dfb_" + std::to_string(i),
             .accessor_name = "dfb_" + std::to_string(i),
-            .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
+            .endpoint_type = experimental::metal2_host_api::DFBEndpointType::PRODUCER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         });
     }
@@ -871,7 +871,7 @@ void run_concurrent_tensix_dm_dfbs_program(
             .dfb_bindings = {{
                 .dfb_spec_name = dfb_name,
                 .accessor_name = "in",
-                .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
+                .endpoint_type = experimental::metal2_host_api::DFBEndpointType::CONSUMER,
                 .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
             }},
             .tensor_bindings = {{
@@ -1115,7 +1115,7 @@ void run_sequential_dfbs_program(
         producer_spec.dfb_bindings.push_back(experimental::metal2_host_api::KernelSpec::DFBBinding{
             .dfb_spec_name = dfb_name,
             .accessor_name = "dfb_" + idx,
-            .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
+            .endpoint_type = experimental::metal2_host_api::DFBEndpointType::PRODUCER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         });
         producer_spec.tensor_bindings.push_back(experimental::metal2_host_api::KernelSpec::TensorBinding{
@@ -1126,7 +1126,7 @@ void run_sequential_dfbs_program(
         consumer_spec.dfb_bindings.push_back(experimental::metal2_host_api::KernelSpec::DFBBinding{
             .dfb_spec_name = dfb_name,
             .accessor_name = "dfb_" + idx,
-            .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
+            .endpoint_type = experimental::metal2_host_api::DFBEndpointType::CONSUMER,
             .access_pattern = is_all ? experimental::metal2_host_api::DFBAccessPattern::ALL
                                      : experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         });
@@ -1252,7 +1252,7 @@ void run_in_dfb_out_dfb_program(
         .dfb_bindings = {{
             .dfb_spec_name = IN_DFB,
             .accessor_name = "out",
-            .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
+            .endpoint_type = experimental::metal2_host_api::DFBEndpointType::PRODUCER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
         .tensor_bindings = {{
@@ -1287,14 +1287,14 @@ void run_in_dfb_out_dfb_program(
                 {
                     .dfb_spec_name = IN_DFB,
                     .accessor_name = "in",
-                    .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
+                    .endpoint_type = experimental::metal2_host_api::DFBEndpointType::CONSUMER,
                     .access_pattern = in_is_all ? experimental::metal2_host_api::DFBAccessPattern::ALL
                                                 : experimental::metal2_host_api::DFBAccessPattern::STRIDED,
                 },
                 {
                     .dfb_spec_name = OUT_DFB,
                     .accessor_name = "out",
-                    .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
+                    .endpoint_type = experimental::metal2_host_api::DFBEndpointType::PRODUCER,
                     .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
                 },
             },
@@ -1311,7 +1311,7 @@ void run_in_dfb_out_dfb_program(
         .dfb_bindings = {{
             .dfb_spec_name = OUT_DFB,
             .accessor_name = "in",
-            .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
+            .endpoint_type = experimental::metal2_host_api::DFBEndpointType::CONSUMER,
             .access_pattern = out_is_all ? experimental::metal2_host_api::DFBAccessPattern::ALL
                                          : experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
@@ -1969,13 +1969,13 @@ static void run_intra_tensix_dfb_program(
                 {
                     .dfb_spec_name = INTRA_DFB,
                     .accessor_name = "out",
-                    .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
+                    .endpoint_type = experimental::metal2_host_api::DFBEndpointType::PRODUCER,
                     .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
                 },
                 {
                     .dfb_spec_name = INTRA_DFB,
                     .accessor_name = "in",
-                    .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
+                    .endpoint_type = experimental::metal2_host_api::DFBEndpointType::CONSUMER,
                     .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
                 },
             },
@@ -2112,7 +2112,7 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4A) {
         .dfb_bindings = {{
             .dfb_spec_name = REMAPPER_DFB,
             .accessor_name = "out",
-            .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
+            .endpoint_type = experimental::metal2_host_api::DFBEndpointType::PRODUCER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
         .tensor_bindings = {{
@@ -2150,19 +2150,19 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4A) {
                 {
                     .dfb_spec_name = REMAPPER_DFB,
                     .accessor_name = "remapper_in",
-                    .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
+                    .endpoint_type = experimental::metal2_host_api::DFBEndpointType::CONSUMER,
                     .access_pattern = experimental::metal2_host_api::DFBAccessPattern::ALL,
                 },
                 {
                     .dfb_spec_name = INTRA_DFB,
                     .accessor_name = "intra_out",
-                    .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
+                    .endpoint_type = experimental::metal2_host_api::DFBEndpointType::PRODUCER,
                     .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
                 },
                 {
                     .dfb_spec_name = INTRA_DFB,
                     .accessor_name = "intra_in",
-                    .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
+                    .endpoint_type = experimental::metal2_host_api::DFBEndpointType::CONSUMER,
                     .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
                 },
             },

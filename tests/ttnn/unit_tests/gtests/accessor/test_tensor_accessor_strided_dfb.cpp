@@ -235,8 +235,8 @@ TEST_P(TensorAccessorStridedDFBTest, Gen1StridedPagesCopy) {
         reader = MakeMinimalGen1DMKernel("reader", DataMovementProcessor::RISCV_0);
         writer = MakeMinimalGen1DMKernel("writer", DataMovementProcessor::RISCV_1);
         // STRIDED with 1 thread: stride=1, each thread accesses all DFB entries
-        BindDFBToKernel(reader, "staging_dfb", "my_dfb", KernelSpec::DFBEndpointType::PRODUCER);
-        BindDFBToKernel(writer, "staging_dfb", "my_dfb", KernelSpec::DFBEndpointType::CONSUMER);
+        BindDFBToKernel(reader, "staging_dfb", "my_dfb", DFBEndpointType::PRODUCER);
+        BindDFBToKernel(writer, "staging_dfb", "my_dfb", DFBEndpointType::CONSUMER);
     };
 
     switch (params.dtype) {
@@ -307,8 +307,8 @@ TEST_P(TensorAccessorStridedDFBTest, QuasarStridedPagesCopy) {
         reader = MakeMinimalDMKernel("reader", kNumDMThreads);
         writer = MakeMinimalDMKernel("writer", kNumDMThreads);
         // STRIDED with 3 threads: each thread owns every 3rd DFB entry
-        BindDFBToKernel(reader, "staging_dfb", "my_dfb", KernelSpec::DFBEndpointType::PRODUCER);
-        BindDFBToKernel(writer, "staging_dfb", "my_dfb", KernelSpec::DFBEndpointType::CONSUMER);
+        BindDFBToKernel(reader, "staging_dfb", "my_dfb", DFBEndpointType::PRODUCER);
+        BindDFBToKernel(writer, "staging_dfb", "my_dfb", DFBEndpointType::CONSUMER);
     };
 
     // DFB depth: 2 entries per DM thread (double-buffer) × 3 threads = 6 entries

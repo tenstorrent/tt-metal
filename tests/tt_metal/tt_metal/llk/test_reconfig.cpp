@@ -422,7 +422,7 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
         .data_format_metadata = tt::DataFormat::Float16_b,
     };
 
-    using DFBEndpoint = experimental::metal2_host_api::KernelSpec::DFBEndpointType;
+    using DFBEndpoint = experimental::metal2_host_api::DFBEndpointType;
     using DFBAccess = experimental::metal2_host_api::DFBAccessPattern;
     auto dfb_binding = [](const std::string& name, DFBEndpoint endpoint) {
         return experimental::metal2_host_api::KernelSpec::DFBBinding{

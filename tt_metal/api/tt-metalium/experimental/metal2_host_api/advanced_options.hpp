@@ -113,19 +113,21 @@ struct KernelAdvancedOptions {
     // Only the INTRA case is currently supported. INTER will trigger a validation error.
     // There are currently no known use cases for an INTER-thread self-loop. This option
     // is present in the API for completeness, to surface any use cases that may arise.
-    struct DFBComputeSelfLoopScope {
+    enum class DFBSelfLoopScope { INTRA, INTER };
+
+    struct DFBSelfLoopConnectivity {
         DFBSpecName dfb_spec_name;
-        enum class Scope { INTRA, INTER };
-        Scope scope = Scope::INTRA;
+        DFBSelfLoopScope scope = DFBSelfLoopScope::INTRA;
         // If the INTER case were enabled, we would need an additional field to describe
         // the inter-thread communication pattern here.
     };
-    // Self-loop DFBs on compute kernels — see DFBComputeSelfLoopScope above.
-    std::vector<DFBComputeSelfLoopScope> dfb_compute_self_loop_scopes;
+    // Self-loop DFBs on compute kernels — see DFBSelfLoopConnectivity above.
+    std::vector<DFBSelfLoopConnectivity> dfb_self_loop_connectivities;
 };
 
-// (Convenience alias for type)
-using DFBComputeSelfLoopScope = KernelAdvancedOptions::DFBComputeSelfLoopScope;
+// (Convenience aliases for nested types)
+using DFBSelfLoopScope = KernelAdvancedOptions::DFBSelfLoopScope;
+using DFBSelfLoopConnectivity = KernelAdvancedOptions::DFBSelfLoopConnectivity;
 
 struct DFBAdvancedOptions {
     ////////////////////////////////////////////////////////////////////////////////

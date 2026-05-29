@@ -327,7 +327,7 @@ void run_single_core_unary_broadcast_quasar(
         .dfb_bindings = {{
             .dfb_spec_name = SRC_DFB,
             .accessor_name = "out",
-            .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
+            .endpoint_type = experimental::metal2_host_api::DFBEndpointType::PRODUCER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
         .runtime_arg_schema =
@@ -349,7 +349,7 @@ void run_single_core_unary_broadcast_quasar(
         .dfb_bindings = {{
             .dfb_spec_name = DST_DFB,
             .accessor_name = "in",
-            .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
+            .endpoint_type = experimental::metal2_host_api::DFBEndpointType::CONSUMER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
         .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}},
@@ -376,13 +376,13 @@ void run_single_core_unary_broadcast_quasar(
             {{
                  .dfb_spec_name = SRC_DFB,
                  .accessor_name = "src",
-                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
+                 .endpoint_type = experimental::metal2_host_api::DFBEndpointType::CONSUMER,
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = DST_DFB,
                  .accessor_name = "dst",
-                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
+                 .endpoint_type = experimental::metal2_host_api::DFBEndpointType::PRODUCER,
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
         .compile_time_args = {{"per_core_block_cnt", num_blocks}, {"per_core_block_dim", block_size}},

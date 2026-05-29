@@ -565,8 +565,8 @@ TEST_F(ProgramRunArgsTestQuasar, SetRunParamsSucceeds_MultiNodeKernel) {
     // Single DFB spanning all nodes
     auto dfb = MakeMinimalDFB("dfb");
 
-    BindDFBToKernel(producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(producer, "dfb", "out", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, "dfb", "in", DFBEndpointType::CONSUMER);
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
@@ -615,8 +615,8 @@ TEST_F(ProgramRunArgsTestQuasar, MultiNode_MissingOneNodeFails) {
     // Single DFB spanning all nodes
     auto dfb = MakeMinimalDFB("dfb");
 
-    BindDFBToKernel(producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(producer, "dfb", "out", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, "dfb", "in", DFBEndpointType::CONSUMER);
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
@@ -1055,8 +1055,8 @@ inline ProgramSpec MakeBorrowedDFBProgramSpecForRunParams(
     auto dfb = MakeMinimalDFB("dfb", dfb_entry_size, dfb_num_entries);
     dfb.borrowed_from = tensor_param_name;
 
-    BindDFBToKernel(producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(producer, "dfb", "out", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, "dfb", "in", DFBEndpointType::CONSUMER);
 
     auto tensor_param = MakeMinimalTensorParameter(tensor_param_name, tt::tt_metal::BufferType::L1);
     BindTensorParameterToKernel(producer, tensor_param_name, "borrowed_t");

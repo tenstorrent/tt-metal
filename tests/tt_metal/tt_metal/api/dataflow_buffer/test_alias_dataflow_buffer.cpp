@@ -148,11 +148,11 @@ AliasDFBProgramComponents make_alias_dfb_program_spec(
             {
                 {.dfb_spec_name = "dfb_a",
                  .accessor_name = "out_a",
-                 .endpoint_type = KernelSpec::DFBEndpointType::PRODUCER,
+                 .endpoint_type = DFBEndpointType::PRODUCER,
                  .access_pattern = DFBAccessPattern::STRIDED},
                 {.dfb_spec_name = "dfb_b",
                  .accessor_name = "out_b",
-                 .endpoint_type = KernelSpec::DFBEndpointType::PRODUCER,
+                 .endpoint_type = DFBEndpointType::PRODUCER,
                  .access_pattern = DFBAccessPattern::STRIDED},
             },
         .tensor_bindings =
@@ -179,11 +179,11 @@ AliasDFBProgramComponents make_alias_dfb_program_spec(
             {
                 {.dfb_spec_name = "dfb_a",
                  .accessor_name = "in_a",
-                 .endpoint_type = KernelSpec::DFBEndpointType::CONSUMER,
+                 .endpoint_type = DFBEndpointType::CONSUMER,
                  .access_pattern = DFBAccessPattern::STRIDED},
                 {.dfb_spec_name = "dfb_b",
                  .accessor_name = "in_b",
-                 .endpoint_type = KernelSpec::DFBEndpointType::CONSUMER,
+                 .endpoint_type = DFBEndpointType::CONSUMER,
                  .access_pattern = DFBAccessPattern::STRIDED},
             },
         .tensor_bindings =
@@ -364,11 +364,11 @@ AliasBorrowedDFBComponents make_alias_borrowed_dfb_program_spec(
             {
                 {.dfb_spec_name = "dfb_borrowed",
                  .accessor_name = "out_a",
-                 .endpoint_type = KernelSpec::DFBEndpointType::PRODUCER,
+                 .endpoint_type = DFBEndpointType::PRODUCER,
                  .access_pattern = DFBAccessPattern::STRIDED},
                 {.dfb_spec_name = "dfb_alias",
                  .accessor_name = "out_b",
-                 .endpoint_type = KernelSpec::DFBEndpointType::PRODUCER,
+                 .endpoint_type = DFBEndpointType::PRODUCER,
                  .access_pattern = DFBAccessPattern::STRIDED},
             },
         .tensor_bindings =
@@ -398,11 +398,11 @@ AliasBorrowedDFBComponents make_alias_borrowed_dfb_program_spec(
             {
                 {.dfb_spec_name = "dfb_borrowed",
                  .accessor_name = "in_a",
-                 .endpoint_type = KernelSpec::DFBEndpointType::CONSUMER,
+                 .endpoint_type = DFBEndpointType::CONSUMER,
                  .access_pattern = DFBAccessPattern::STRIDED},
                 {.dfb_spec_name = "dfb_alias",
                  .accessor_name = "in_b",
-                 .endpoint_type = KernelSpec::DFBEndpointType::CONSUMER,
+                 .endpoint_type = DFBEndpointType::CONSUMER,
                  .access_pattern = DFBAccessPattern::STRIDED},
             },
         .tensor_bindings =

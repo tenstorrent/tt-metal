@@ -21,12 +21,6 @@ namespace tt::tt_metal::experimental::metal2_host_api {
 // A name identifying a DataflowBufferSpec within a ProgramSpec.
 using DFBSpecName = std::string;
 
-// DataflowBuffer endpoint access patterns:
-//  - STRIDED: a kernel thread accesses every N-th entry (where N = num_threads)
-//  - ALL: each kernel thread accesses every DFB entry
-//  - BLOCKED: a kernel thread accesses blocks of N entries, in strides of N blocks
-enum class DFBAccessPattern { STRIDED, ALL, BLOCKED };
-
 // A DataflowBufferSpec is a descriptor for a Dataflow Buffer (DFB):
 // A software FIFO for sharing data between a producer kernel and a consumer kernel.
 //

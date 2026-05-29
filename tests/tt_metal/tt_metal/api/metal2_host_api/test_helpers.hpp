@@ -141,7 +141,7 @@ inline void BindDFBToKernel(
     KernelSpec& kernel,
     const std::string& dfb_name,
     const std::string& accessor_name,
-    KernelSpec::DFBEndpointType endpoint_type,
+    DFBEndpointType endpoint_type,
     DFBAccessPattern access_pattern = DFBAccessPattern::STRIDED) {
     kernel.dfb_bindings.push_back(KernelSpec::DFBBinding{
         .dfb_spec_name = dfb_name,
@@ -213,8 +213,8 @@ inline ProgramSpec MakeMinimalGen1ValidProgramSpec() {
     auto dfb = MakeMinimalDFB("dfb_0");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
 
-    BindDFBToKernel(dm_kernel, "dfb_0", "input_dfb", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(compute_kernel, "dfb_0", "input_dfb", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(dm_kernel, "dfb_0", "input_dfb", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(compute_kernel, "dfb_0", "input_dfb", DFBEndpointType::CONSUMER);
 
     spec.kernels = {dm_kernel, compute_kernel};
     spec.dataflow_buffers = {dfb};
@@ -239,8 +239,8 @@ inline ProgramSpec MakeMinimalValidProgramSpec() {
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
 
     // Bind the DFB
-    BindDFBToKernel(dm_kernel, "dfb_0", "input_dfb", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(compute_kernel, "dfb_0", "input_dfb", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(dm_kernel, "dfb_0", "input_dfb", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(compute_kernel, "dfb_0", "input_dfb", DFBEndpointType::CONSUMER);
 
     spec.kernels = {dm_kernel, compute_kernel};
     spec.dataflow_buffers = {dfb};

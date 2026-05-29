@@ -259,13 +259,13 @@ static void matmul_tile_block(
             {{
                  .dfb_spec_name = SRC0_DFB,
                  .accessor_name = "in0",
-                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
+                 .endpoint_type = experimental::metal2_host_api::DFBEndpointType::PRODUCER,
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = SRC1_DFB,
                  .accessor_name = "in1",
-                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
+                 .endpoint_type = experimental::metal2_host_api::DFBEndpointType::PRODUCER,
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
         .runtime_arg_schema =
@@ -298,7 +298,7 @@ static void matmul_tile_block(
         .dfb_bindings = {{
             .dfb_spec_name = DST_DFB,
             .accessor_name = "in",
-            .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
+            .endpoint_type = experimental::metal2_host_api::DFBEndpointType::CONSUMER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
@@ -346,19 +346,19 @@ static void matmul_tile_block(
             {{
                  .dfb_spec_name = SRC0_DFB,
                  .accessor_name = "in0",
-                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
+                 .endpoint_type = experimental::metal2_host_api::DFBEndpointType::CONSUMER,
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = SRC1_DFB,
                  .accessor_name = "in1",
-                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
+                 .endpoint_type = experimental::metal2_host_api::DFBEndpointType::CONSUMER,
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = DST_DFB,
                  .accessor_name = "out",
-                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
+                 .endpoint_type = experimental::metal2_host_api::DFBEndpointType::PRODUCER,
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
         .compile_time_args = compute_cta_bindings,

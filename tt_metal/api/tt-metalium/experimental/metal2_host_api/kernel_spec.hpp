@@ -95,12 +95,19 @@ struct KernelSpec {
     // DFB bindings
     // Declares that this kernel requires a DFB resource (declared at the ProgramSpec level)
     // The kernel constructs the accessor via DataflowBufferAccessor(dfb::<accessor_name>)
-    enum class DFBEndpointType { PRODUCER, CONSUMER };
     struct DFBBinding {
-        DFBSpecName dfb_spec_name;        // identify the DFB within the ProgramSpec
-        std::string accessor_name;  // DFB accessor name (used in the kernel source code)
-        DFBEndpointType endpoint_type;    // producer or consumer
-        DFBAccessPattern access_pattern = DFBAccessPattern::STRIDED;  // strided, all, or blocked
+        // Endpoint role this binding plays for the DFB.
+        enum class EndpointType { PRODUCER, CONSUMER };
+        // How the kernel's threads iterate over the DFB's entries.
+        //   STRIDED: a kernel thread accesses every N-th entry (where N = num_threads)
+        //   ALL:     each kernel thread accesses every DFB entry
+        //   BLOCKED: a kernel thread accesses blocks of N entries, in strides of N blocks
+        enum class AccessPattern { STRIDED, ALL, BLOCKED };
+
+        DFBSpecName dfb_spec_name;   // identify the DFB within the ProgramSpec
+        std::string accessor_name;   // DFB accessor name (used in the kernel source code)
+        EndpointType endpoint_type;  // producer or consumer
+        AccessPattern access_pattern = AccessPattern::STRIDED;
     };
     std::vector<DFBBinding> dfb_bindings;
 
@@ -165,5 +172,9 @@ struct KernelSpec {
     //////////////////////////////////////////////////////////////////////////////
     KernelAdvancedOptions advanced_options;
 };
+
+// Convenience aliases (lift commonly-used nested enums to namespace level)
+using DFBEndpointType = KernelSpec::DFBBinding::EndpointType;
+using DFBAccessPattern = KernelSpec::DFBBinding::AccessPattern;
 
 }  // namespace tt::tt_metal::experimental::metal2_host_api

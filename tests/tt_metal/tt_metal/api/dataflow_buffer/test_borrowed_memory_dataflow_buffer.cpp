@@ -124,7 +124,7 @@ void run_borrowed_memory_dfb_program(
         {.tensor_parameter_name = "dfb_ring_tensor", .accessor_name = "dfb_ring"},
     };
     BindDFBToKernel(producer_spec, "borrowed_dfb", "out",
-                    KernelSpec::DFBEndpointType::PRODUCER, DFBAccessPattern::STRIDED);
+                    DFBEndpointType::PRODUCER, DFBAccessPattern::STRIDED);
 
     // --- Consumer kernel ---
     KernelSpec consumer_spec;
@@ -156,7 +156,7 @@ void run_borrowed_memory_dfb_program(
         }};
     }
     BindDFBToKernel(consumer_spec, "borrowed_dfb", "in",
-                    KernelSpec::DFBEndpointType::CONSUMER, cfg.cap);
+                    DFBEndpointType::CONSUMER, cfg.cap);
 
     // Disable implicit sync on the borrowed DFB for every DM endpoint (Gen2 only;
     // Gen1 has no ISR-based implicit sync to opt out of).
@@ -288,7 +288,7 @@ void run_update_address_test(
         {.tensor_parameter_name = "src_tensor",      .accessor_name = "src_tensor"},
         {.tensor_parameter_name = "dfb_ring_tensor", .accessor_name = "dfb_ring"},
     };
-    BindDFBToKernel(producer_spec, "borrowed_dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(producer_spec, "borrowed_dfb", "out", DFBEndpointType::PRODUCER);
 
     KernelSpec consumer_spec = (arch == ARCH::QUASAR)
         ? MakeMinimalDMKernel("consumer")
@@ -305,7 +305,7 @@ void run_update_address_test(
         .tensor_parameter_name = "dst_tensor",
         .accessor_name         = "dst_tensor",
     }};
-    BindDFBToKernel(consumer_spec, "borrowed_dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(consumer_spec, "borrowed_dfb", "in", DFBEndpointType::CONSUMER);
 
     // Disable implicit sync on the borrowed DFB for both DM endpoints (Gen2 only;
     // Gen1 has no ISR-based implicit sync to opt out of).

@@ -159,8 +159,8 @@ TEST_F(ProgramSpecTestQuasar, SharedLocalAccessorNameForDifferentDFBsFails) {
 
     // Bind two *different* DFBs with the same accessor_name — illegal
     // (self-loop sharing requires the same DFB on both bindings).
-    BindDFBToKernel(kernel, "dfb_0", "same_accessor", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(kernel, "dfb_1", "same_accessor", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(kernel, "dfb_0", "same_accessor", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(kernel, "dfb_1", "same_accessor", DFBEndpointType::CONSUMER);
 
     spec.kernels = {kernel};
     spec.dataflow_buffers = {dfb0, dfb1};
@@ -184,9 +184,9 @@ TEST_F(ProgramSpecTestQuasar, DuplicateProducerBindingForSameLocalAccessorNameFa
 
     // Two PRODUCER bindings on the same kernel sharing a accessor_name —
     // illegal: the self-loop relaxation requires opposite endpoint types.
-    BindDFBToKernel(producer_kernel, "dfb", "shared", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(producer_kernel, "dfb", "shared", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(consumer_kernel, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(producer_kernel, "dfb", "shared", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(producer_kernel, "dfb", "shared", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer_kernel, "dfb", "in", DFBEndpointType::CONSUMER);
 
     spec.kernels = {producer_kernel, consumer_kernel};
     spec.dataflow_buffers = {dfb};
@@ -208,8 +208,8 @@ TEST_F(ProgramSpecTestQuasar, SelfLoopWithSharedLocalAccessorNameSucceeds) {
     // accessor_name across the PRODUCER and CONSUMER bindings.
     auto kernel = MakeMinimalDMKernel("kernel");
     auto dfb = MakeMinimalDFB("dfb");
-    BindDFBToKernel(kernel, "dfb", "acc", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(kernel, "dfb", "acc", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(kernel, "dfb", "acc", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(kernel, "dfb", "acc", DFBEndpointType::CONSUMER);
 
     spec.kernels = {kernel};
     spec.dataflow_buffers = {dfb};
@@ -242,7 +242,7 @@ TEST_F(ProgramSpecTestQuasar, InvalidLocalAccessorNameFails) {
         auto kernel = MakeMinimalDMKernel("kernel");
         auto dfb = MakeMinimalDFB("dfb");
 
-        BindDFBToKernel(kernel, "dfb", bad_name, KernelSpec::DFBEndpointType::PRODUCER);
+        BindDFBToKernel(kernel, "dfb", bad_name, DFBEndpointType::PRODUCER);
 
         spec.kernels = {kernel};
         spec.dataflow_buffers = {dfb};
@@ -264,7 +264,7 @@ TEST_F(ProgramSpecTestQuasar, KernelReferencesUnknownDFBFails) {
 
     auto kernel = MakeMinimalDMKernel("kernel");
     // Bind to a DFB that doesn't exist
-    BindDFBToKernel(kernel, "nonexistent_dfb", "accessor", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(kernel, "nonexistent_dfb", "accessor", DFBEndpointType::PRODUCER);
 
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
@@ -307,7 +307,7 @@ TEST_F(ProgramSpecTestQuasar, DFBWithOnlyProducerFails) {
     auto dfb = MakeMinimalDFB("dfb");
 
     // Only bind as producer, no consumer
-    BindDFBToKernel(kernel, "dfb", "accessor", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(kernel, "dfb", "accessor", DFBEndpointType::PRODUCER);
 
     spec.kernels = {kernel};
     spec.dataflow_buffers = {dfb};
@@ -328,7 +328,7 @@ TEST_F(ProgramSpecTestQuasar, DFBWithOnlyConsumerFails) {
     auto dfb = MakeMinimalDFB("dfb");
 
     // Only bind as consumer, no producer
-    BindDFBToKernel(kernel, "dfb", "accessor", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(kernel, "dfb", "accessor", DFBEndpointType::CONSUMER);
 
     spec.kernels = {kernel};
     spec.dataflow_buffers = {dfb};
@@ -354,9 +354,9 @@ TEST_F(ProgramSpecTestQuasar, DFBWithMultipleProducersInSameWorkUnitFails) {
 
     // Two PRODUCER bindings on the same DFB, both KernelSpecs in the same WorkUnitSpec.
     // Multi-binding requires non-overlapping WU membership per role; this should fail.
-    BindDFBToKernel(producer1, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(producer2, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(producer1, "dfb", "out", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(producer2, "dfb", "out", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, "dfb", "in", DFBEndpointType::CONSUMER);
 
     spec.kernels = {producer1, producer2, consumer};
     spec.dataflow_buffers = {dfb};
@@ -382,9 +382,9 @@ TEST_F(ProgramSpecTestQuasar, DFBWithMultipleConsumersInSameWorkUnitFails) {
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
 
-    BindDFBToKernel(producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(consumer1, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
-    BindDFBToKernel(consumer2, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(producer, "dfb", "out", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer1, "dfb", "in", DFBEndpointType::CONSUMER);
+    BindDFBToKernel(consumer2, "dfb", "in", DFBEndpointType::CONSUMER);
 
     spec.kernels = {producer, consumer1, consumer2};
     spec.dataflow_buffers = {dfb};
@@ -411,9 +411,9 @@ TEST_F(ProgramSpecTestQuasar, DFBWithMultipleConsumersInDifferentWorkUnitsSuccee
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
 
-    BindDFBToKernel(producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(consumer1, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
-    BindDFBToKernel(consumer2, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(producer, "dfb", "out", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer1, "dfb", "in", DFBEndpointType::CONSUMER);
+    BindDFBToKernel(consumer2, "dfb", "in", DFBEndpointType::CONSUMER);
 
     // producer covers both WUs (placed in both); each consumer covers one WU.
     spec.kernels = {producer, consumer1, consumer2};
@@ -440,9 +440,9 @@ TEST_F(ProgramSpecTestQuasar, DFBWithMultipleProducersInDifferentWorkUnitsSuccee
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
 
-    BindDFBToKernel(producer1, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(producer2, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(producer1, "dfb", "out", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(producer2, "dfb", "out", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, "dfb", "in", DFBEndpointType::CONSUMER);
 
     spec.kernels = {producer1, producer2, consumer};
     spec.dataflow_buffers = {dfb};
@@ -467,8 +467,8 @@ TEST_F(ProgramSpecTestQuasar, DFBProducerConsumerCoverageMismatchFails) {
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
 
-    BindDFBToKernel(producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(producer, "dfb", "out", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, "dfb", "in", DFBEndpointType::CONSUMER);
 
     // Producer covers wu_p; consumer covers wu_c. Their coverages differ — invalid.
     spec.kernels = {producer, consumer};
@@ -497,9 +497,9 @@ TEST_F(ProgramSpecTestQuasar, DFBMultiBindingAccessPatternMismatchFails) {
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
 
-    BindDFBToKernel(producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(consumer1, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER, DFBAccessPattern::STRIDED);
-    BindDFBToKernel(consumer2, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER, DFBAccessPattern::ALL);
+    BindDFBToKernel(producer, "dfb", "out", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer1, "dfb", "in", DFBEndpointType::CONSUMER, DFBAccessPattern::STRIDED);
+    BindDFBToKernel(consumer2, "dfb", "in", DFBEndpointType::CONSUMER, DFBAccessPattern::ALL);
 
     spec.kernels = {producer, consumer1, consumer2};
     spec.dataflow_buffers = {dfb};
@@ -528,9 +528,9 @@ TEST_F(ProgramSpecTestQuasar, DFBMultiBindingNumThreadsMismatchFails) {
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
 
-    BindDFBToKernel(producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(consumer1, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
-    BindDFBToKernel(consumer2, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(producer, "dfb", "out", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer1, "dfb", "in", DFBEndpointType::CONSUMER);
+    BindDFBToKernel(consumer2, "dfb", "in", DFBEndpointType::CONSUMER);
 
     spec.kernels = {producer, consumer1, consumer2};
     spec.dataflow_buffers = {dfb};
@@ -563,10 +563,10 @@ TEST_F(ProgramSpecTestQuasar, DFBMultiBindingSelfLoopWithMatchingSidesSucceeds) 
     // INTRA-tensix self-loop DFBs have no DM endpoint; the spec-to-impl translation produces
     // enable_{producer,consumer}_implicit_sync=false automatically (no DM kernel to vote for it).
 
-    BindDFBToKernel(self_loop_1, "dfb", "p", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(self_loop_1, "dfb", "c", KernelSpec::DFBEndpointType::CONSUMER);
-    BindDFBToKernel(self_loop_2, "dfb", "p", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(self_loop_2, "dfb", "c", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(self_loop_1, "dfb", "p", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(self_loop_1, "dfb", "c", DFBEndpointType::CONSUMER);
+    BindDFBToKernel(self_loop_2, "dfb", "p", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(self_loop_2, "dfb", "c", DFBEndpointType::CONSUMER);
 
     spec.kernels = {self_loop_1, self_loop_2};
     spec.dataflow_buffers = {dfb};
@@ -596,10 +596,10 @@ TEST_F(ProgramSpecTestQuasar, DFBSelfLoopWithExtraProducerSideKernelFails) {
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
 
-    BindDFBToKernel(self_loop_1, "dfb", "p", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(self_loop_1, "dfb", "c", KernelSpec::DFBEndpointType::CONSUMER);
-    BindDFBToKernel(extra_producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(extra_consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(self_loop_1, "dfb", "p", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(self_loop_1, "dfb", "c", DFBEndpointType::CONSUMER);
+    BindDFBToKernel(extra_producer, "dfb", "out", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(extra_consumer, "dfb", "in", DFBEndpointType::CONSUMER);
 
     spec.kernels = {self_loop_1, extra_producer, extra_consumer};
     spec.dataflow_buffers = {dfb};
@@ -619,7 +619,7 @@ TEST_F(ProgramSpecTestQuasar, DFBSelfLoopWithExtraProducerSideKernelFails) {
 // value today is INTRA (INTER is rejected upstream as not-yet-supported), so two
 // self-loop participants can't meaningfully disagree on scope. When INTER support lands,
 // add a positive scope-disagreement test that exercises the
-// "must agree on DFBComputeSelfLoopScope::Scope" TT_FATAL.
+// "must agree on DFBSelfLoopScope" TT_FATAL.
 
 // ============================================================================
 // SECTION 2: Semantic Validation Tests (ValidateProgramSpec)
@@ -745,8 +745,8 @@ TEST_F(ProgramSpecTestQuasar, RemoteDFBNotYetSupportedAtRuntime) {
     auto producer = MakeMinimalDMKernel("producer");
     auto consumer = MakeMinimalDMKernel("consumer");
 
-    BindDFBToKernel(producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(producer, "dfb", "out", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, "dfb", "in", DFBEndpointType::CONSUMER);
 
     spec.kernels = {producer, consumer};
     spec.remote_dataflow_buffers = {RemoteDataflowBufferSpec{
@@ -783,8 +783,8 @@ inline ProgramSpec MakeBorrowedDFBProgramSpec(
     auto dfb = MakeMinimalDFB("dfb", dfb_entry_size, dfb_num_entries);
     dfb.borrowed_from = tensor_param_name;
 
-    BindDFBToKernel(producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(producer, "dfb", "out", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, "dfb", "in", DFBEndpointType::CONSUMER);
 
     auto tensor_param = MakeMinimalTensorParameter(tensor_param_name, tensor_buffer_type);
     // The TensorParameter must be bound to at least one kernel (referential-integrity check).
@@ -1027,8 +1027,8 @@ TEST_F(ProgramSpecTestQuasar, DFBWithComputeEndpointRequiresDataFormat) {
     auto dfb = MakeMinimalDFB("dfb");
     // dfb.data_format_metadata is NOT set (nullopt)
 
-    BindDFBToKernel(producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(producer, "dfb", "out", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, "dfb", "in", DFBEndpointType::CONSUMER);
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
@@ -1057,8 +1057,8 @@ TEST_F(ProgramSpecTestQuasar, ComputeConfigUnpackToDestModeReferencesUnboundDFBF
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
 
-    BindDFBToKernel(producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(producer, "dfb", "out", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, "dfb", "in", DFBEndpointType::CONSUMER);
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
@@ -1157,8 +1157,8 @@ TEST_F(ProgramSpecTestQuasar, FP32ProducerOnlyBindingDoesNotRequireEntry) {
     auto dfb = MakeMinimalDFB("dfb_0");
     dfb.data_format_metadata = tt::DataFormat::Float32;
 
-    BindDFBToKernel(producer_compute, "dfb_0", "out", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(consumer_dm, "dfb_0", "in", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(producer_compute, "dfb_0", "out", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer_dm, "dfb_0", "in", DFBEndpointType::CONSUMER);
 
     spec.kernels = {producer_compute, consumer_dm};
     spec.dataflow_buffers = {dfb};
@@ -1185,8 +1185,8 @@ TEST_F(ProgramSpecTestQuasar, UnpackToDestFp32OnProducerBindingFails) {
     auto dfb = MakeMinimalDFB("dfb_0");
     dfb.data_format_metadata = tt::DataFormat::Float32;
 
-    BindDFBToKernel(producer_compute, "dfb_0", "out", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(consumer_dm, "dfb_0", "in", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(producer_compute, "dfb_0", "out", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer_dm, "dfb_0", "in", DFBEndpointType::CONSUMER);
 
     spec.kernels = {producer_compute, consumer_dm};
     spec.dataflow_buffers = {dfb};
@@ -1269,8 +1269,8 @@ TEST_F(ProgramSpecTestQuasar, DataFormatNotSupportedOnTargetArchitectureFails) {
     // Legacy block-float format; not supported on Quasar.
     dfb.data_format_metadata = tt::DataFormat::Bfp8;
 
-    BindDFBToKernel(producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(producer, "dfb", "out", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, "dfb", "in", DFBEndpointType::CONSUMER);
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
@@ -1299,8 +1299,8 @@ TEST_F(ProgramSpecTestQuasar, TooManyDFBsFailsValidation) {
         auto dfb = MakeMinimalDFB(name);
         dfb.data_format_metadata = tt::DataFormat::Float16_b;
         spec.dataflow_buffers.push_back(dfb);
-        BindDFBToKernel(producer, name, "p_" + std::to_string(i), KernelSpec::DFBEndpointType::PRODUCER);
-        BindDFBToKernel(consumer, name, "c_" + std::to_string(i), KernelSpec::DFBEndpointType::CONSUMER);
+        BindDFBToKernel(producer, name, "p_" + std::to_string(i), DFBEndpointType::PRODUCER);
+        BindDFBToKernel(consumer, name, "c_" + std::to_string(i), DFBEndpointType::CONSUMER);
     }
 
     spec.kernels = {producer, consumer};
@@ -1479,8 +1479,8 @@ TEST_F(ProgramSpecTestQuasar, LocalDFBProducerConsumerWorkUnitMembershipMismatch
     auto consumer = MakeMinimalDMKernel("consumer");
     auto dfb = MakeMinimalDFB("dfb");
 
-    BindDFBToKernel(producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(producer, "dfb", "out", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, "dfb", "in", DFBEndpointType::CONSUMER);
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
@@ -1496,7 +1496,7 @@ TEST_F(ProgramSpecTestQuasar, LocalDFBProducerConsumerWorkUnitMembershipMismatch
 }
 
 // ----------------------------------------------------------------------------
-// KernelSpec::dfb_compute_self_loop_scopes validation tests
+// KernelSpec::dfb_self_loop_connectivities validation tests
 // ----------------------------------------------------------------------------
 // This advanced option only applies to compute kernels that self-loop a DFB (bind it
 // as both producer and consumer). All misapplications must fail loudly so authors
@@ -1510,13 +1510,13 @@ TEST_F(ProgramSpecTestQuasar, DFBSelfLoopOnComputeKernelInterScopeFails) {
 
     auto compute = MakeMinimalComputeKernel("compute");
     compute.advanced_options = KernelAdvancedOptions{
-        .dfb_compute_self_loop_scopes = {{.dfb_spec_name = "dfb", .scope = DFBComputeSelfLoopScope::Scope::INTER}}};
+        .dfb_self_loop_connectivities = {{.dfb_spec_name = "dfb", .scope = DFBSelfLoopScope::INTER}}};
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
 
-    BindDFBToKernel(compute, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(compute, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(compute, "dfb", "out", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(compute, "dfb", "in", DFBEndpointType::CONSUMER);
 
     spec.kernels = {compute};
     spec.dataflow_buffers = {dfb};
@@ -1537,12 +1537,12 @@ TEST_F(ProgramSpecTestQuasar, SelfLoopScopeOnDMKernelFails) {
     auto producer = MakeMinimalDMKernel("producer");
     // Misapplied: self-loop scope entries are valid only on compute kernels.
     producer.advanced_options = KernelAdvancedOptions{
-        .dfb_compute_self_loop_scopes = {{.dfb_spec_name = "dfb", .scope = DFBComputeSelfLoopScope::Scope::INTRA}}};
+        .dfb_self_loop_connectivities = {{.dfb_spec_name = "dfb", .scope = DFBSelfLoopScope::INTRA}}};
     auto consumer = MakeMinimalDMKernel("consumer");
 
     auto dfb = MakeMinimalDFB("dfb");
-    BindDFBToKernel(producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(producer, "dfb", "out", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, "dfb", "in", DFBEndpointType::CONSUMER);
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
@@ -1562,13 +1562,13 @@ TEST_F(ProgramSpecTestQuasar, SelfLoopScopeReferencingUnknownDFBFails) {
     auto compute = MakeMinimalComputeKernel("compute");
     // Misapplied: there is no DFB named "ghost" in the spec.
     compute.advanced_options = KernelAdvancedOptions{
-        .dfb_compute_self_loop_scopes = {{.dfb_spec_name = "ghost", .scope = DFBComputeSelfLoopScope::Scope::INTRA}}};
+        .dfb_self_loop_connectivities = {{.dfb_spec_name = "ghost", .scope = DFBSelfLoopScope::INTRA}}};
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
 
-    BindDFBToKernel(compute, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(compute, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(compute, "dfb", "out", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(compute, "dfb", "in", DFBEndpointType::CONSUMER);
 
     spec.kernels = {compute};
     spec.dataflow_buffers = {dfb};
@@ -1588,14 +1588,14 @@ TEST_F(ProgramSpecTestQuasar, SelfLoopScopeOnNonSelfLoopedDFBFails) {
     auto compute = MakeMinimalComputeKernel("compute");
     // Misapplied: the kernel only produces; it does not self-loop the DFB.
     compute.advanced_options = KernelAdvancedOptions{
-        .dfb_compute_self_loop_scopes = {{.dfb_spec_name = "dfb", .scope = DFBComputeSelfLoopScope::Scope::INTRA}}};
+        .dfb_self_loop_connectivities = {{.dfb_spec_name = "dfb", .scope = DFBSelfLoopScope::INTRA}}};
     auto dm_consumer = MakeMinimalDMKernel("dm_consumer");
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
 
-    BindDFBToKernel(compute, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(dm_consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(compute, "dfb", "out", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(dm_consumer, "dfb", "in", DFBEndpointType::CONSUMER);
 
     spec.kernels = {compute, dm_consumer};
     spec.dataflow_buffers = {dfb};
@@ -1615,18 +1615,18 @@ TEST_F(ProgramSpecTestQuasar, DuplicateSelfLoopScopeEntriesFails) {
     auto compute = MakeMinimalComputeKernel("compute");
     // Two entries for the same DFB on the same kernel.
     compute.advanced_options = KernelAdvancedOptions{
-        .dfb_compute_self_loop_scopes =
+        .dfb_self_loop_connectivities =
             {
-                {.dfb_spec_name = "dfb", .scope = DFBComputeSelfLoopScope::Scope::INTRA},
-                {.dfb_spec_name = "dfb", .scope = DFBComputeSelfLoopScope::Scope::INTRA},
+                {.dfb_spec_name = "dfb", .scope = DFBSelfLoopScope::INTRA},
+                {.dfb_spec_name = "dfb", .scope = DFBSelfLoopScope::INTRA},
             },
     };
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
 
-    BindDFBToKernel(compute, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(compute, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(compute, "dfb", "out", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(compute, "dfb", "in", DFBEndpointType::CONSUMER);
 
     spec.kernels = {compute};
     spec.dataflow_buffers = {dfb};
@@ -1635,7 +1635,7 @@ TEST_F(ProgramSpecTestQuasar, DuplicateSelfLoopScopeEntriesFails) {
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("duplicate dfb_compute_self_loop_scopes entries")));
+            ::testing::HasSubstr("duplicate dfb_self_loop_connectivities entries")));
 }
 
 // ============================================================================
@@ -1655,7 +1655,7 @@ TEST_F(ProgramSpecTestQuasar, MinimalValidProgramSpecSucceeds) {
 
 TEST_F(ProgramSpecTestQuasar, DFBSelfLoopOnComputeKernelImplicitIntraSucceeds) {
     // The 99.5% case: a compute kernel that self-loops a DFB and does NOT explicitly declare a
-    // dfb_compute_self_loop_scopes entry. The implementation must default to INTRA so the
+    // dfb_self_loop_connectivities entry. The implementation must default to INTRA so the
     // lower-layer DFB layer (which requires an explicit scope for Tensix-to-Tensix DFBs) accepts
     // the program.
     NodeCoord node{0, 0};
@@ -1670,8 +1670,8 @@ TEST_F(ProgramSpecTestQuasar, DFBSelfLoopOnComputeKernelImplicitIntraSucceeds) {
     // INTRA-tensix self-loop: no DM endpoint, so the spec-to-impl translation produces
     // enable_{producer,consumer}_implicit_sync=false at the lower DFB layer automatically.
 
-    BindDFBToKernel(compute, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(compute, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(compute, "dfb", "out", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(compute, "dfb", "in", DFBEndpointType::CONSUMER);
 
     spec.kernels = {compute};
     spec.dataflow_buffers = {dfb};
@@ -1691,13 +1691,13 @@ TEST_F(ProgramSpecTestQuasar, DFBSelfLoopOnComputeKernelExplicitIntraSucceeds) {
 
     auto compute = MakeMinimalComputeKernel("compute");
     compute.advanced_options = KernelAdvancedOptions{
-        .dfb_compute_self_loop_scopes = {{.dfb_spec_name = "dfb", .scope = DFBComputeSelfLoopScope::Scope::INTRA}}};
+        .dfb_self_loop_connectivities = {{.dfb_spec_name = "dfb", .scope = DFBSelfLoopScope::INTRA}}};
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
 
-    BindDFBToKernel(compute, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(compute, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(compute, "dfb", "out", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(compute, "dfb", "in", DFBEndpointType::CONSUMER);
 
     spec.kernels = {compute};
     spec.dataflow_buffers = {dfb};
@@ -1718,8 +1718,8 @@ TEST_F(ProgramSpecTestQuasar, DMOnlyProgramSucceeds) {
     auto dfb = MakeMinimalDFB("dfb");
     // No data_format_metadata needed for DM-only DFBs
 
-    BindDFBToKernel(producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(producer, "dfb", "out", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, "dfb", "in", DFBEndpointType::CONSUMER);
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
@@ -1739,8 +1739,8 @@ TEST_F(ProgramSpecTestQuasar, MultiNodeProgramSucceeds) {
     auto consumer = MakeMinimalDMKernel("consumer");
     auto dfb = MakeMinimalDFB("dfb");
 
-    BindDFBToKernel(producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(producer, "dfb", "out", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, "dfb", "in", DFBEndpointType::CONSUMER);
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
@@ -1781,8 +1781,8 @@ TEST_F(ProgramSpecTestQuasar, MaxDMThreadsSucceeds) {
     auto dfb = MakeMinimalDFB("dfb");
     dfb.num_entries = 9;  // must be a multiple of the number of threads
 
-    BindDFBToKernel(producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(producer, "dfb", "out", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, "dfb", "in", DFBEndpointType::CONSUMER);
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
@@ -1805,8 +1805,8 @@ TEST_F(ProgramSpecTestQuasar, MaxComputeThreadsSucceeds) {
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
     dfb.num_entries = 4;  // must be a multiple of the number of threads
 
-    BindDFBToKernel(dm, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(compute, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(dm, "dfb", "out", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(compute, "dfb", "in", DFBEndpointType::CONSUMER);
 
     spec.kernels = {dm, compute};
     spec.dataflow_buffers = {dfb};
@@ -1829,10 +1829,10 @@ TEST_F(ProgramSpecTestQuasar, MultipleDFBsSucceeds) {
     auto dfb2 = MakeMinimalDFB("dfb2");
     dfb2.data_format_metadata = tt::DataFormat::Int8;
 
-    BindDFBToKernel(producer, "dfb1", "out1", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(producer, "dfb2", "out2", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(consumer, "dfb1", "in1", KernelSpec::DFBEndpointType::CONSUMER);
-    BindDFBToKernel(consumer, "dfb2", "in2", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(producer, "dfb1", "out1", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(producer, "dfb2", "out2", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, "dfb1", "in1", DFBEndpointType::CONSUMER);
+    BindDFBToKernel(consumer, "dfb2", "in2", DFBEndpointType::CONSUMER);
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb1, dfb2};
@@ -1905,8 +1905,8 @@ TEST_F(ProgramSpecTestQuasar, NodeRangeSetTargetNodesSucceeds) {
     auto consumer = MakeMinimalDMKernel("consumer");
     auto dfb = MakeMinimalDFB("dfb");
 
-    BindDFBToKernel(producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(producer, "dfb", "out", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, "dfb", "in", DFBEndpointType::CONSUMER);
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
@@ -1981,10 +1981,10 @@ TEST_F(ProgramSpecTestQuasar, UnpackToDestModePlacedAtDfbIdSlot) {
     // dfb_1 is FP32 so the user can opt into UnpackToDestFp32 on it.
     dfb1.data_format_metadata = tt::DataFormat::Float32;
 
-    BindDFBToKernel(producer, "dfb_0", "out0", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(producer, "dfb_1", "out1", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(consumer, "dfb_0", "in0", KernelSpec::DFBEndpointType::CONSUMER);
-    BindDFBToKernel(consumer, "dfb_1", "in1", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(producer, "dfb_0", "out0", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(producer, "dfb_1", "out1", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, "dfb_0", "in0", DFBEndpointType::CONSUMER);
+    BindDFBToKernel(consumer, "dfb_1", "in1", DFBEndpointType::CONSUMER);
 
     auto& compute_config = std::get<KernelComputeConfig>(consumer.config);
     compute_config.fp32_dest_acc_en = true;
@@ -2406,7 +2406,7 @@ TEST(AggregateSpecTypes, ProgramSpecDesignatedInitializers) {
                             KernelSpec::DFBBinding{
                                 .dfb_spec_name = "dfb",
                                 .accessor_name = "out",
-                                .endpoint_type = KernelSpec::DFBEndpointType::PRODUCER,
+                                .endpoint_type = DFBEndpointType::PRODUCER,
                                 .access_pattern = DFBAccessPattern::STRIDED,
                             },
                         },
@@ -2423,7 +2423,7 @@ TEST(AggregateSpecTypes, ProgramSpecDesignatedInitializers) {
                             KernelSpec::DFBBinding{
                                 .dfb_spec_name = "dfb",
                                 .accessor_name = "in",
-                                .endpoint_type = KernelSpec::DFBEndpointType::CONSUMER,
+                                .endpoint_type = DFBEndpointType::CONSUMER,
                                 .access_pattern = DFBAccessPattern::STRIDED,
                             },
                         },
@@ -2460,7 +2460,7 @@ TEST(AggregateSpecTypes, NestedStructsDesignatedInitializers) {
     KernelSpec::DFBBinding binding{
         .dfb_spec_name = "my_dfb",
         .accessor_name = "accessor",
-        .endpoint_type = KernelSpec::DFBEndpointType::PRODUCER,
+        .endpoint_type = DFBEndpointType::PRODUCER,
         .access_pattern = DFBAccessPattern::ALL,
     };
     EXPECT_EQ(binding.dfb_spec_name, "my_dfb");
@@ -2539,8 +2539,8 @@ TEST_F(ProgramSpecTestGen1, DMOnlyProgramSucceeds) {
     auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
     auto dfb = MakeMinimalDFB("dfb");
 
-    BindDFBToKernel(producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(producer, "dfb", "out", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, "dfb", "in", DFBEndpointType::CONSUMER);
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
@@ -3154,8 +3154,8 @@ TEST_F(ProgramSpecTestGen1, CompilerIncludePathsForwardedToKernelConfig) {
 
     auto dfb = MakeMinimalDFB("dfb_0");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
-    BindDFBToKernel(dm_kernel, "dfb_0", "input_dfb", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(compute_kernel, "dfb_0", "input_dfb", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(dm_kernel, "dfb_0", "input_dfb", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(compute_kernel, "dfb_0", "input_dfb", DFBEndpointType::CONSUMER);
 
     spec.kernels = {dm_kernel, compute_kernel};
     spec.dataflow_buffers = {dfb};
@@ -3193,11 +3193,11 @@ ProgramSpec MakeAliasProgramSpec(
     KernelSpec producer = MakeMinimalDMKernel("producer_kernel");
     KernelSpec consumer = MakeMinimalDMKernel("consumer_kernel");
 
-    BindDFBToKernel(producer, dfb_a.unique_id, "out_a", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(consumer, dfb_a.unique_id, "in_a", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(producer, dfb_a.unique_id, "out_a", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, dfb_a.unique_id, "in_a", DFBEndpointType::CONSUMER);
 
-    BindDFBToKernel(producer, dfb_b.unique_id, "out_b", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(consumer, dfb_b.unique_id, "in_b", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(producer, dfb_b.unique_id, "out_b", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, dfb_b.unique_id, "in_b", DFBEndpointType::CONSUMER);
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb_a, dfb_b};
@@ -3259,10 +3259,10 @@ TEST_F(ProgramSpecTestQuasar, AliasDFBMatmulStyleSucceeds) {
     KernelSpec consumer = MakeMinimalDMKernel("consumer_kernel");
     KernelSpec other = MakeMinimalDMKernel("other_kernel");
 
-    BindDFBToKernel(producer, "dfb_a", "out_a", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(consumer, "dfb_a", "in_a", KernelSpec::DFBEndpointType::CONSUMER);
-    BindDFBToKernel(producer, "dfb_b", "out_b", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(other, "dfb_b", "in_b", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(producer, "dfb_a", "out_a", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, "dfb_a", "in_a", DFBEndpointType::CONSUMER);
+    BindDFBToKernel(producer, "dfb_b", "out_b", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(other, "dfb_b", "in_b", DFBEndpointType::CONSUMER);
 
     ProgramSpec spec;
     spec.kernels = {producer, consumer, other};
@@ -3289,10 +3289,10 @@ TEST_F(ProgramSpecTestQuasar, AliasDFBFailsOnDifferentNodeCoverage) {
     KernelSpec consumer_a = MakeMinimalDMKernel("consumer_a");
     KernelSpec producer_b = MakeMinimalDMKernel("producer_b");
     KernelSpec consumer_b = MakeMinimalDMKernel("consumer_b");
-    BindDFBToKernel(producer_a, "dfb_a", "out_a", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(consumer_a, "dfb_a", "in_a", KernelSpec::DFBEndpointType::CONSUMER);
-    BindDFBToKernel(producer_b, "dfb_b", "out_b", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(consumer_b, "dfb_b", "in_b", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(producer_a, "dfb_a", "out_a", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer_a, "dfb_a", "in_a", DFBEndpointType::CONSUMER);
+    BindDFBToKernel(producer_b, "dfb_b", "out_b", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer_b, "dfb_b", "in_b", DFBEndpointType::CONSUMER);
 
     ProgramSpec spec;
     spec.kernels = {producer_a, consumer_a, producer_b, consumer_b};
@@ -3321,10 +3321,10 @@ TEST_F(ProgramSpecTestQuasar, AliasDFBFailsOnInconsistentBorrowedFrom) {
 
     KernelSpec producer = MakeMinimalDMKernel("producer_kernel");
     KernelSpec consumer = MakeMinimalDMKernel("consumer_kernel");
-    BindDFBToKernel(producer, "dfb_a", "out_a", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(consumer, "dfb_a", "in_a", KernelSpec::DFBEndpointType::CONSUMER);
-    BindDFBToKernel(producer, "dfb_b", "out_b", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(consumer, "dfb_b", "in_b", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(producer, "dfb_a", "out_a", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, "dfb_a", "in_a", DFBEndpointType::CONSUMER);
+    BindDFBToKernel(producer, "dfb_b", "out_b", DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, "dfb_b", "in_b", DFBEndpointType::CONSUMER);
 
     auto tensor_param = MakeMinimalTensorParameter("borrowed_tensor", tt::tt_metal::BufferType::L1);
     BindTensorParameterToKernel(producer, "borrowed_tensor", "borrowed_t");

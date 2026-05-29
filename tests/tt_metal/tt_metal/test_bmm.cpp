@@ -131,11 +131,11 @@ experimental::metal2_host_api::ProgramSpec build_bmm_program_spec(
         .dfb_bindings =
             {{.dfb_spec_name = SRC0_DFB,
               .accessor_name = "src0",
-              .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
+              .endpoint_type = experimental::metal2_host_api::DFBEndpointType::PRODUCER,
               .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED},
              {.dfb_spec_name = SRC1_DFB,
               .accessor_name = "src1",
-              .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
+              .endpoint_type = experimental::metal2_host_api::DFBEndpointType::PRODUCER,
               .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED}},
         .tensor_bindings =
             {{.tensor_parameter_name = SRC0_T, .accessor_name = "src0"},
@@ -157,7 +157,7 @@ experimental::metal2_host_api::ProgramSpec build_bmm_program_spec(
         .dfb_bindings =
             {{.dfb_spec_name = DST_DFB,
               .accessor_name = "dst",
-              .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
+              .endpoint_type = experimental::metal2_host_api::DFBEndpointType::CONSUMER,
               .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED}},
         .tensor_bindings = {{.tensor_parameter_name = DST_T, .accessor_name = "dst"}},
         .runtime_arg_schema =
@@ -174,15 +174,15 @@ experimental::metal2_host_api::ProgramSpec build_bmm_program_spec(
         .dfb_bindings =
             {{.dfb_spec_name = SRC0_DFB,
               .accessor_name = "src0",
-              .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
+              .endpoint_type = experimental::metal2_host_api::DFBEndpointType::CONSUMER,
               .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED},
              {.dfb_spec_name = SRC1_DFB,
               .accessor_name = "src1",
-              .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
+              .endpoint_type = experimental::metal2_host_api::DFBEndpointType::CONSUMER,
               .access_pattern = experimental::metal2_host_api::DFBAccessPattern::ALL},
              {.dfb_spec_name = DST_DFB,
               .accessor_name = "dst",
-              .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
+              .endpoint_type = experimental::metal2_host_api::DFBEndpointType::PRODUCER,
               .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED}},
         .compile_time_args = {{"batch", p.B_per_core}, {"Mt", p.Mt}, {"Kt", p.Kt}, {"Nt", p.Nt}},
         .config = experimental::metal2_host_api::KernelComputeConfig{},
