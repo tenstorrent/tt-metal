@@ -64,7 +64,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     CoreCoord core_grid_offset,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config);
 
-// ProgramDescriptor (Contract-2) variant of build_ring_reduce_scatter_minimal_async_program_artifacts.
+// ProgramDescriptor variant of build_ring_reduce_scatter_minimal_async_program_artifacts.
 // Pushes circular buffers, kernels, and semaphores onto `desc` rather than creating them on a
 // Program directly. Buffer-carrying runtime args are bound via KernelDescriptor::emplace_runtime_args
 // so the framework's fast cache-hit path patches buffer addresses without rebuilding the program.

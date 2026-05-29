@@ -76,13 +76,13 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     bool reverse_order,
     const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
 
-// ProgramDescriptor (Contract-2) variant of build_all_gather_async_minimal_default_program_artifacts.
+// ProgramDescriptor variant of build_all_gather_async_minimal_default_program_artifacts.
 //
-// Mirrors the legacy builder but appends KernelDescriptors / CBDescriptors /
-// SemaphoreDescriptors to `desc` instead of creating them directly on a
-// Program.  Runtime args are emplaced via KernelDescriptor::emplace_runtime_args
-// with Buffer* entries for the input/output tensors, so the framework's fast
-// cache-hit path patches their base addresses automatically.
+// Appends KernelDescriptors / CBDescriptors / SemaphoreDescriptors to `desc`
+// instead of creating them directly on a Program.  Runtime args are emplaced
+// via KernelDescriptor::emplace_runtime_args with Buffer* entries for the
+// input/output tensors, so the framework's fast cache-hit path patches their
+// base addresses automatically.
 //
 // The fused-op signaler and fabric-mux helpers used here all have
 // ProgramDescriptor overloads (init_all_gather, fabric_mux_connection_rt_args,

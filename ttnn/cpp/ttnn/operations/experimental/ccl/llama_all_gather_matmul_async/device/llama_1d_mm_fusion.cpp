@@ -655,8 +655,7 @@ process_agmm_fusion_program_and_create_override_variables(
 
 // ProgramDescriptor variant of process_agmm_fusion_program_and_create_override_variables.
 //
-// Mirrors the legacy helper's parameter list but drops the Program& output param —
-// kernels / CBs / semaphores are appended onto the caller-supplied ProgramDescriptor
+// Kernels / CBs / semaphores are appended onto the caller-supplied ProgramDescriptor
 // (same shape as create_program_gather_in0_descriptor in the matmul 1D builder).
 // This is the llama-specific multicast variant: in0 is multicast in 4 K-chunks rather
 // than streamed through a worker ring, and the worker grid is the in1 (weight) shard
@@ -826,9 +825,9 @@ static tt::tt_metal::ProgramDescriptor process_agmm_fusion_descriptor(
     TileDescriptor output_tile_desc{output_tile};
 
     /* semaphores — the caller pre-allocates a free id on `all_cores` and passes it in as
-       base_semaphore_id.  Mirrors the legacy CreateSemaphore first-free-id behaviour while
-       avoiding aliasing when this descriptor is appended onto a caller's ProgramDescriptor
-       that already has semaphores on the same cores (CCL+matmul fused path). */
+       base_semaphore_id.  This avoids aliasing when this descriptor is appended onto a
+       caller's ProgramDescriptor that already has semaphores on the same cores (CCL+matmul
+       fused path). */
     uint32_t in0_signal_semaphore_id = base_semaphore_id;
     desc.semaphores.push_back(
         SemaphoreDescriptor{.id = in0_signal_semaphore_id, .core_ranges = all_cores, .initial_value = INVALID});
@@ -1679,9 +1678,9 @@ ttnn::prim::matmul_mcast_1d_common_override_variables_t matmul_multi_core_agmm_f
         std::move(restricted_cores));
 }
 
-// ProgramDescriptor counterpart of matmul_multi_core_agmm_fusion_. Mirrors the legacy
-// inner helper's arg list but appends kernels / CBs / semaphores onto the caller-supplied
-// ProgramDescriptor instead of constructing a Program in place.
+// ProgramDescriptor counterpart of matmul_multi_core_agmm_fusion_. Appends kernels /
+// CBs / semaphores onto the caller-supplied ProgramDescriptor instead of constructing
+// a Program in place.
 static tt::tt_metal::ProgramDescriptor matmul_multi_core_agmm_fusion_descriptor_(
     const Tensor& a,
     const std::vector<Tensor>& b_tensors,

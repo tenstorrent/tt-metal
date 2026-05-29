@@ -853,11 +853,10 @@ void all_gather_async_minimal_default_helper_override_runtime_arguments(
     }
 }
 
-// ProgramDescriptor (Contract-2) variant of build_all_gather_async_minimal_default_program_artifacts.
-// Mirrors the legacy builder body but appends descriptors instead of creating
-// kernels/CBs/semaphores directly on a Program.  Runtime args are emplaced
-// with Buffer* entries for the input/output tensors so the framework's fast
-// cache-hit path patches their base addresses.
+// ProgramDescriptor variant of build_all_gather_async_minimal_default_program_artifacts.
+// Appends descriptors instead of creating kernels/CBs/semaphores directly on a
+// Program.  Runtime args are emplaced with Buffer* entries for the input/output
+// tensors so the framework's fast cache-hit path patches their base addresses.
 //
 // Sub-helpers used (all have descriptor overloads on this branch):
 //   - AllGatherFusedOpSignaler::init_all_gather(ProgramDescriptor&, ...)
