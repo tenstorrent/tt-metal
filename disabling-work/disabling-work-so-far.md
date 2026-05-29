@@ -2,7 +2,7 @@
 
 > **Source of truth.** This file is the canonical record of automation-tracked PRs. Wiping it resets the automation to fresh-state view; stale GitHub PRs not listed here are intentionally invisible.
 
-Last updated: **2026-05-29T13:00 UTC** — Session: Examining lane (3 PRs): PR #45529 — verification run [26637010466](https://github.com/tenstorrent/tt-metal/actions/runs/26637010466) classified `verified-pass` (`conclusion: success`; target job `models-perf / other_magic_env N300 WH B0` passed; all jobs passed; no regressions); branch rebased from `9145a554b23` → `b4d62ee32db` (onto `1e0dc0f68486`); evidence unchanged (most recent failing main run still 26633758989/job 78490360978); issue #45528 updated; PR comment posted. PR #45514 rebased from `4cbde07c55f` → `2c4f615acae` (onto `1e0dc0f68486`); evidence unchanged (latest run still 26621870487; seed=0 still failing); PR comment posted. PR #45487 rebased from `6f4ea46fa54` → `61f72cc9990` (onto `1e0dc0f68486`); evidence unchanged (latest blackhole-demo-tests run still 26619741477; whisper perf still failing); PR comment posted. Focus lane: 0 focus PRs — no uncovered non-Galaxy workflows with ≥3 consecutive deterministic failures; `single-card-demo-tests` (2 consecutive, not 3), `t3000-integration-tests` (1 failure, not 3), `models-t3-unit-tests` (Galaxy-only failures), `models-t2-e2e-tests` (perf threshold violations, tests PASS functionally), `ttnn-run-sweeps` (2 failures + 2 cancelled, not 3 consecutive); no priority-2/3 PRs. Focus slots filled: 0/3. Paralysis check: limited: 0 focus PRs (0 uncovered workflows + 0 priority-2/3 PRs available) + 3 examining PRs.
+Last updated: **2026-05-29T15:00 UTC** — Session: Examining lane (3 PRs): PR #45492 rebased from `c68591434a6` (on `eea8521c897`) → new head `55cae5e2c22` (onto `e4ef235d2cef`), no conflicts; `MultiMeshEastMulticast_0` and `_1` confirmed still FAILING in run [26639257565](https://github.com/tenstorrent/tt-metal/actions/runs/26639257565)/job [78509331966](https://github.com/tenstorrent/tt-metal/actions/runs/26639257565/job/78509331966) (2026-05-29T13:27 UTC); PR description updated; issue #45491 updated; PR comment posted. PR #45494 rebased from `81eb4585d58` (on `19fe34405b1`) → new head `3f117d07f10` (onto `e4ef235d2cef`), no conflicts; `test_all_to_all_combine_no_trace[...fabric_1d_line_axis_0]` and `[...fabric_1d_ring_axis_0]` confirmed still FAILING in run [26628343995](https://github.com/tenstorrent/tt-metal/actions/runs/26628343995)/job [78499713107](https://github.com/tenstorrent/tt-metal/actions/runs/26628343995/job/78499713107) (2026-05-29T09:43 UTC); PR description updated; issue #45493 updated; PR comment posted. PR #45498 rebased from `7a0fdbd0161` (on `19fe34405b1`) → new head `1e6d8233ea1` (onto `e4ef235d2cef`), no conflicts; no newer metal-run-microbenchmarks run; evidence unchanged; PR comment posted. Focus lane: 0 focus PRs — survey: `single-card-demo-tests` run 26641935109 **PASSED** (streak broken); `t3000-integration-tests` 1 consecutive failure only; `ttnn-run-sweeps` nightly infra failures (artifact digest mismatch, out of scope); `t3000-demo-tests` latest SUCCESS; `runtime-unit-tests` `runtime_core`/`runtime_llk` = timeouts (OOS), `MeshWatcherDumpAllFixture.*` only 1 consecutive; `t3000-unit-tests` `MultiHostSocketTests` 2 consecutive only (not 3). No priority-2/3 PRs. Focus slots filled: 0/3. Paralysis check: limited: 0 focus PRs (0 uncovered workflows + 0 priority-2/3 PRs available) + 3 examining PRs.
 
 ---
 
@@ -157,21 +157,21 @@ Main-run evidence: see PR description.
 | PR | [#45492](https://github.com/tenstorrent/tt-metal/pull/45492) — `[skip ci] Disable IntermeshSplit2x2FabricFixture.MultiMeshEastMulticast_* in t3000-unit-tests t3k_tt_metal_multiprocess_tests` (draft, open; title updated from `IntermeshSplit2x2FabricFixture.*` to `MultiMeshEastMulticast_*` after RandomizedInterMeshUnicast removal) |
 | Disable issue | [#45491](https://github.com/tenstorrent/tt-metal/issues/45491) — `[CI] Track disable: IntermeshSplit2x2FabricFixture.* in t3000-unit-tests t3k_tt_metal_multiprocess_tests` (open; updated to reflect removal) |
 | Timeout issue | none |
-| Branch | `ci-disable/t3000-unit-tests-intermesh-split2x2-20260529` (head SHA `c68591434a6d6b3adae4eb0024ee9455dfb77cbd` — rebased to `eea8521c897bd6116ca071a66332b6b190b14e86`) |
+| Branch | `ci-disable/t3000-unit-tests-intermesh-split2x2-20260529` (head SHA `55cae5e2c22` — rebased onto `e4ef235d2cef`) |
 | Workflow file | `.github/workflows/t3000-unit-tests.yaml` |
 | Lifecycle stage | `verified-pass` |
-| Last rebase | 2026-05-29T12:01 UTC — rebased to `eea8521c897bd6116ca071a66332b6b190b14e86` (new head `c68591434a6`), no conflicts |
-| Last revalidation | 2026-05-29T12:01 UTC — `MultiMeshEastMulticast_0` and `MultiMeshEastMulticast_1` confirmed still FAILING in newest run [26633893590](https://github.com/tenstorrent/tt-metal/actions/runs/26633893590)/job [78490812784](https://github.com/tenstorrent/tt-metal/actions/runs/26633893590/job/78490812784) (completed 2026-05-29T12:01 UTC). Note: `RandomizedInterMeshUnicast` also FAILED in this run — non-consecutive (passed in run 26611455612); not eligible for re-addition per policy. |
+| Last rebase | 2026-05-29T15:00 UTC — rebased from `c68591434a6` (on `eea8521c897`) → new head `55cae5e2c22` (onto `e4ef235d2cef`), no conflicts |
+| Last revalidation | 2026-05-29T15:00 UTC — `MultiMeshEastMulticast_0` and `MultiMeshEastMulticast_1` confirmed still FAILING in latest run [26639257565](https://github.com/tenstorrent/tt-metal/actions/runs/26639257565)/job [78509331966](https://github.com/tenstorrent/tt-metal/actions/runs/26639257565/job/78509331966) (completed 2026-05-29T13:27 UTC). `RandomizedInterMeshUnicast` non-consecutive (passed in run 26628953985). `MultiHostSocketTests.*` 2 consecutive failures (26633893590, 26639257565) — not yet 3, not eligible for new PR. |
 | Verification run | [26612761462](https://github.com/tenstorrent/tt-metal/actions/runs/26612761462) — **verified-pass** (conclusion `success`; target `t3k_tt_metal_multiprocess_tests [wh_llmbox]` passed) |
-| Last touched by automation | 2026-05-29T09:02 UTC |
+| Last touched by automation | 2026-05-29T15:00 UTC |
 | Readiness | **Yes — verified-pass, ready for merge review** |
 
 ### Disables (with main evidence)
 
 | Disabled test | Most recent failing main run (job link) | Run completed at |
 |---|---|---|
-| `IntermeshSplit2x2FabricFixture.MultiMeshEastMulticast_0` [wh_llmbox] | https://github.com/tenstorrent/tt-metal/actions/runs/26620003623/job/78444692420 | 2026-05-29 06:06 UTC |
-| `IntermeshSplit2x2FabricFixture.MultiMeshEastMulticast_1` [wh_llmbox] | https://github.com/tenstorrent/tt-metal/actions/runs/26620003623/job/78444692420 | 2026-05-29 06:06 UTC |
+| `IntermeshSplit2x2FabricFixture.MultiMeshEastMulticast_0` [wh_llmbox] | https://github.com/tenstorrent/tt-metal/actions/runs/26639257565/job/78509331966 | 2026-05-29 13:27 UTC |
+| `IntermeshSplit2x2FabricFixture.MultiMeshEastMulticast_1` [wh_llmbox] | https://github.com/tenstorrent/tt-metal/actions/runs/26639257565/job/78509331966 | 2026-05-29 13:27 UTC |
 
 **Note:** `IntermeshSplit2x2FabricFixture.RandomizedInterMeshUnicast` was removed from the disable in this session (passed in main run 26611455612 job 78419112342 at 2026-05-29 01:58 UTC).
 
@@ -186,21 +186,21 @@ Main-run evidence: see PR description.
 | PR | [#45494](https://github.com/tenstorrent/tt-metal/pull/45494) — `[skip ci] Disable test_all_to_all_combine_no_trace in blackhole-e2e-tests ccl nightly tests` (draft, open) |
 | Disable issue | [#45493](https://github.com/tenstorrent/tt-metal/issues/45493) — `[CI] Track disable: test_all_to_all_combine_no_trace in blackhole-e2e-tests ccl nightly tests` (open) |
 | Timeout issue | none |
-| Branch | `ci-disable/blackhole-e2e-tests-all-to-all-combine-no-trace-20260529` (head SHA `81eb4585d58` — rebased to `19fe34405b152c77c34c62f2826bf2226f7fb59c`) |
+| Branch | `ci-disable/blackhole-e2e-tests-all-to-all-combine-no-trace-20260529` (head SHA `3f117d07f10` — rebased onto `e4ef235d2cef`) |
 | Workflow file | `.github/workflows/blackhole-e2e-tests.yaml` |
 | Lifecycle stage | `verified-pass` |
-| Last rebase | 2026-05-29T10:02 UTC — rebased from `9727d4445a8d52c844223ba59618e0e5452b9445` → `19fe34405b152c77c34c62f2826bf2226f7fb59c` (new head `81eb4585d58`), no conflicts |
-| Last revalidation | 2026-05-29T02:02 UTC — `test_all_to_all_combine_no_trace` confirmed still failing on `main`; latest completed run 26589993622 job 78379365051 `ccl nightly tests [bh_llmbox]` still fails |
+| Last rebase | 2026-05-29T15:00 UTC — rebased from `81eb4585d58` (on `19fe34405b1`) → new head `3f117d07f10` (onto `e4ef235d2cef`), no conflicts |
+| Last revalidation | 2026-05-29T15:00 UTC — `test_all_to_all_combine_no_trace[...fabric_1d_line_axis_0]` and `[...fabric_1d_ring_axis_0]` confirmed still FAILING in latest run [26628343995](https://github.com/tenstorrent/tt-metal/actions/runs/26628343995)/job [78499713107](https://github.com/tenstorrent/tt-metal/actions/runs/26628343995/job/78499713107) (completed 2026-05-29T09:43 UTC) |
 | Verification run | [26612913914](https://github.com/tenstorrent/tt-metal/actions/runs/26612913914) — **verified-pass** (completed 2026-05-29T∰02 UTC; conclusion `failure`; target `ccl nightly tests [bh_llmbox]` passed; other SKU load-test-matrix failures pre-existing) |
-| Last touched by automation | 2026-05-29T10:02 UTC |
+| Last touched by automation | 2026-05-29T15:00 UTC |
 | Readiness | **Yes — verified-pass, ready for merge review** |
 
 ### Disables (with main evidence)
 
 | Disabled test | Most recent failing main run (job link) | Run completed at |
 |---|---|---|
-| `test_all_to_all_combine_no_trace[...fabric_1d_line_axis_0]` (all mem/local_reduce combos) [bh_llmbox] | https://github.com/tenstorrent/tt-metal/actions/runs/26589993622/job/78379365051 | 2026-05-28 18:46 UTC |
-| `test_all_to_all_combine_no_trace[...fabric_1d_ring_axis_0]` (all mem/local_reduce combos) [bh_llmbox] | https://github.com/tenstorrent/tt-metal/actions/runs/26589993622/job/78379365051 | 2026-05-28 18:46 UTC |
+| `test_all_to_all_combine_no_trace[...fabric_1d_line_axis_0]` (all mem/local_reduce combos) [bh_llmbox] | https://github.com/tenstorrent/tt-metal/actions/runs/26628343995/job/78499713107 | 2026-05-29 09:43 UTC |
+| `test_all_to_all_combine_no_trace[...fabric_1d_ring_axis_0]` (all mem/local_reduce combos) [bh_llmbox] | https://github.com/tenstorrent/tt-metal/actions/runs/26628343995/job/78499713107 | 2026-05-29 09:43 UTC |
 
 Main-run evidence: see PR description.
 
@@ -213,13 +213,13 @@ Main-run evidence: see PR description.
 | PR | [#45498](https://github.com/tenstorrent/tt-metal/pull/45498) — `[skip ci] Disable T3K Fabric Mux BW bandwidth regression tests in metal-run-microbenchmarks` (draft, open) |
 | Disable issue | [#45497](https://github.com/tenstorrent/tt-metal/issues/45497) — `[CI] Track disable: T3K Fabric Mux BW bandwidth regression tests in metal-run-microbenchmarks` (open) |
 | Timeout issue | none |
-| Branch | `ci-disable/metal-run-microbenchmarks-fabric-mux-bw-20260529` (head SHA `7a0fdbd0161` — rebased to `19fe34405b152c77c34c62f2826bf2226f7fb59c`) |
+| Branch | `ci-disable/metal-run-microbenchmarks-fabric-mux-bw-20260529` (head SHA `1e6d8233ea1` — rebased onto `e4ef235d2cef`) |
 | Workflow file | `.github/workflows/metal-run-microbenchmarks.yaml` |
 | Lifecycle stage | `verified-pass` |
-| Last rebase | 2026-05-29T10:02 UTC — rebased from `80094df9c61e426b145574ffb2c0aebc0c75f02a` → `19fe34405b152c77c34c62f2826bf2226f7fb59c` (new head `7a0fdbd0161`), no conflicts |
+| Last rebase | 2026-05-29T15:00 UTC — rebased from `7a0fdbd0161` (on `19fe34405b1`) → new head `1e6d8233ea1` (onto `e4ef235d2cef`), no conflicts |
 | Last revalidation | 2026-05-29T04:00 UTC — both disabled tests still failing in latest main run [26612909413](https://github.com/tenstorrent/tt-metal/actions/runs/26612909413) job [78423388911](https://github.com/tenstorrent/tt-metal/actions/runs/26612909413/job/78423388911) (2026-05-29T02:25 UTC): same bandwidth mismatch signature |
 | Verification run | [26614829843](https://github.com/tenstorrent/tt-metal/actions/runs/26614829843) — **verified-pass** (completed 2026-05-29T03:06 UTC; conclusion `failure`; disabled tests skipped; 30 passed; 1 pre-existing `[8-8-8-8]` geomean error also failing on main run 26587701074 with same signature) |
-| Last touched by automation | 2026-05-29T10:02 UTC |
+| Last touched by automation | 2026-05-29T15:00 UTC |
 | Readiness | **Yes — verified-pass, ready for merge review** |
 
 ### Disables (with main evidence)
@@ -375,6 +375,8 @@ Main-run evidence: see PR description.
 ---
 
 ## Recent Activity
+
+- **2026-05-29T15:00 UTC session.** Examining lane (3 PRs): PR #45492 rebased from `c68591434a6` (on `eea8521c897`) → new head `55cae5e2c22` (onto `e4ef235d2cef`), no conflicts; `MultiMeshEastMulticast_0` and `_1` confirmed still FAILING in latest t3000-unit-tests main run [26639257565](https://github.com/tenstorrent/tt-metal/actions/runs/26639257565)/job [78509331966](https://github.com/tenstorrent/tt-metal/actions/runs/26639257565/job/78509331966) (2026-05-29T13:27 UTC); PR description + issue #45491 updated; PR comment posted. Note: `MultiHostSocketTests.*` failing in runs 26633893590 and 26639257565 (2 consecutive, not 3 — not eligible for new PR yet). PR #45494 rebased from `81eb4585d58` (on `19fe34405b1`) → new head `3f117d07f10` (onto `e4ef235d2cef`), no conflicts; `test_all_to_all_combine_no_trace[...fabric_1d_line_axis_0]` and `[...fabric_1d_ring_axis_0]` confirmed still FAILING in latest blackhole-e2e-tests main run [26628343995](https://github.com/tenstorrent/tt-metal/actions/runs/26628343995)/job [78499713107](https://github.com/tenstorrent/tt-metal/actions/runs/26628343995/job/78499713107) (2026-05-29T09:43 UTC); PR description + issue #45493 updated; PR comment posted. PR #45498 rebased from `7a0fdbd0161` (on `19fe34405b1`) → new head `1e6d8233ea1` (onto `e4ef235d2cef`), no conflicts; no newer metal-run-microbenchmarks run; evidence unchanged (latest still 26612909413/job 78423388911, 2026-05-29T02:25 UTC); PR comment posted. Focus lane: 0 focus PRs. Workflow survey: `single-card-demo-tests` run 26641935109 PASSED (streak broken — was 2 consecutive failures); `t3000-integration-tests` only 1 consecutive failure (deepseek tests); `ttnn-run-sweeps` nightly — infra failures (artifact digest mismatch, all sweep jobs failing at artifact download — out of scope); `t3000-demo-tests` latest SUCCESS; `runtime-unit-tests` `runtime_core`/`runtime_llk` timeouts (OOS), `MeshWatcherDumpAllFixture.*` only 1 consecutive; `t3000-unit-tests` `MultiHostSocketTests.*` 2 consecutive only (not 3). No priority-2/3 PRs. Focus slots filled: 0/3. Paralysis check: limited: 0 focus PRs (0 uncovered workflows + 0 priority-2/3 PRs available) + 3 examining PRs.
 
 - **2026-05-29T13:00 UTC session.** Examining lane (3 PRs): PR #45529 — verification run [26637010466](https://github.com/tenstorrent/tt-metal/actions/runs/26637010466) classified `verified-pass` (`conclusion: success`; all jobs passed; target `models-perf / other_magic_env N300 WH B0` passed; no regressions); branch rebased from `9145a554b23` → new head `b4d62ee32db` (onto `1e0dc0f68486`), no conflicts; evidence unchanged (most recent failing `perf-models` main run still [26633758989](https://github.com/tenstorrent/tt-metal/actions/runs/26633758989)/job [78490360978](https://github.com/tenstorrent/tt-metal/actions/runs/26633758989/job/78490360978), 2026-05-29T11:36 UTC); issue [#45528](https://github.com/tenstorrent/tt-metal/issues/45528) regenerated from PR description; PR comment posted. PR #45514 rebased from `4cbde07c55f` → new head `2c4f615acae` (onto `1e0dc0f68486`), no conflicts; evidence unchanged (latest `runtime-integration-tests` run still 26621870487; seed=0 still failing); PR comment posted. PR #45487 rebased from `6f4ea46fa54` → new head `61f72cc9990` (onto `1e0dc0f68486`), no conflicts; evidence unchanged (latest `blackhole-demo-tests` run still 26619741477; whisper perf still failing); PR comment posted. Focus lane: 0 focus PRs. Workflow survey: `single-card-demo-tests` (2 consecutive failures, not 3), `t3000-integration-tests` (1 failure, not 3), `models-t3-unit-tests` (Galaxy-only failures — out of scope), `models-t2-e2e-tests` (perf threshold violations only; all tests PASS functionally — out of scope), `ttnn-run-sweeps` (2 failures + 2 cancelled, not 3 consecutive). No priority-2/3 PRs. Focus slots filled: 0/3. Paralysis check: limited: 0 focus PRs (0 uncovered workflows + 0 priority-2/3 PRs available) + 3 examining PRs.
 
