@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-29T00:11:46Z",
-  "updated_at": "2026-05-29T03:11:57Z",
+  "updated_at": "2026-05-29T03:19:23Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -662,8 +662,17 @@
         "attempts": 0
       },
       "optimization": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/decoder_layer.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/profile_decoder_layer.py",
+          "generated/profiler/reports/2026_05_29_03_18_26/ops_perf_results_2026_05_29_03_18_26.csv"
+        ],
+        "notes": "Composite LM decoder layer. Tracy traced (decoder_layer.traced_profile.csv). Top hotspot MatmulDeviceOperation 55.9% + ReshapeView 19.9% = 75.8% device kernel time, all INHERITED from optimized leaves (attention -21.8%, mlp -7.5%). Composite-boundary lever = two residual ttnn.add ops, which landed DRAM-interleaved; pinned both to L1_MEMORY_CONFIG (vision_block pattern). Residual adds 4.33/4.55/4.41us DRAM -> 4.08/2.79us L1. Total 803.4 -> 799.5us (-0.5%); small because composite is dominated by inherited matmul/reshape. PCC 0.99999559 unchanged. At-ceiling on inheritance + small residual L1 win.",
+        "before_us": 803.4,
+        "after_us": 799.5,
+        "pcc": 0.999995591985762
       },
       "real_weights": {
         "status": "pending",
@@ -1013,6 +1022,12 @@
       "tick": 32,
       "ts": "2026-05-29T03:11:57Z",
       "action": "device[mlp]",
+      "result": "ok"
+    },
+    {
+      "tick": 33,
+      "ts": "2026-05-29T03:19:23Z",
+      "action": "device[decoder_layer]",
       "result": "ok"
     }
   ],

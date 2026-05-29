@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** p150 (blackhole)
 **Started:** 2026-05-29T00:11:46Z
-**Updated:** 2026-05-29T03:11:57Z
+**Updated:** 2026-05-29T03:19:23Z
 
 ## Block Status
 
@@ -73,7 +73,7 @@
 | decoder_layer | reference | done | 1.000000 | 0 | Qwen2DecoderLayer: input RMSNorm -> GQA self-attn (12q/2kv, head_dim128, RoPE theta 1e6, QKV bias) -> residual -> post-attn RMSNorm -> SwiGLU MLP -> residual. PCC=1.0 vs HF Qwen2DecoderLayer. |
 | decoder_layer | ttnn | done | 0.999996 | 0 | Qwen2 LM decoder layer composite (pre-norm residual). Composes verified leaves TtRMSNorm x2 (eps 1e-6) + TtAttention (GQA 12/2, QKV bias, 1D RoPE theta 1e6, causal) + TtMLP (SwiGLU) by file-path import. HiFi4+fp32_dest_acc, bf16 DRAM TILE. Guard ok. |
 | decoder_layer | debug | n/a | — | 0 |  |
-| decoder_layer | optimization | pending | — | 0 |  |
+| decoder_layer | optimization | done | 0.999996 | 0 | Composite LM decoder layer. Tracy traced (decoder_layer.traced_profile.csv). Top hotspot MatmulDeviceOperation 55.9% + ReshapeView 19.9% = 75.8% device kernel time, all INHERITED from optimized leaves (attention -21.8%, mlp -7.5%). Composite-boundary lever = two residual ttnn.add ops, which landed DRAM-interleaved; pinned both to L1_MEMORY_CONFIG (vision_block pattern). Residual adds 4.33/4.55/4.41us DRAM -> 4.08/2.79us L1. Total 803.4 -> 799.5us (-0.5%); small because composite is dominated by inherited matmul/reshape. PCC 0.99999559 unchanged. At-ceiling on inheritance + small residual L1 win. |
 | decoder_layer | real_weights | pending | — | 0 |  |
 | lm_head | reference | done | 1.000000 | 0 | Untied Linear hidden 1536 -> vocab 151936, no bias. PCC=1.0 vs nn.Linear. |
 | lm_head | ttnn | done | 0.999996 | 0 | untied Linear hidden 1536 -> vocab 151936, no bias; HF weight [vocab,hidden] transposed on host. ttnn.linear HiFi4+fp32_dest_acc bf16 DRAM weight. Matches lm_head_forward (bare linear, no final norm). PCC=0.9999958 vs golden. Guard ok. |
@@ -94,7 +94,6 @@
 
 ## Recent Ticks
 
-- tick 23 (2026-05-29T02:07:56Z): device[vision_attention] — ok
 - tick 24 (2026-05-29T02:14:00Z): device[vision_mlp] — ok
 - tick 25 (2026-05-29T02:20:39Z): device[vision_block] — ok
 - tick 26 (2026-05-29T02:32:56Z): device[vision_patch_merger] — ok
@@ -104,6 +103,7 @@
 - tick 30 (2026-05-29T02:58:59Z): device[rope] — ok
 - tick 31 (2026-05-29T03:05:15Z): device[attention] — ok
 - tick 32 (2026-05-29T03:11:57Z): device[mlp] — ok
+- tick 33 (2026-05-29T03:19:23Z): device[decoder_layer] — ok
 
 ## Host-Resident Exceptions
 

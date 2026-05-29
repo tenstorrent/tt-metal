@@ -164,8 +164,8 @@ class TtDecoderLayer(LightweightModule):
         residual = h; h = residual + mlp(post_attention_layernorm(h)).
         """
         attn_out = self.self_attn(self.input_layernorm(x))
-        x = ttnn.add(x, attn_out)
+        x = ttnn.add(x, attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         mlp_out = self.mlp(self.post_attention_layernorm(x))
-        x = ttnn.add(x, mlp_out)
+        x = ttnn.add(x, mlp_out, memory_config=ttnn.L1_MEMORY_CONFIG)
         return x
