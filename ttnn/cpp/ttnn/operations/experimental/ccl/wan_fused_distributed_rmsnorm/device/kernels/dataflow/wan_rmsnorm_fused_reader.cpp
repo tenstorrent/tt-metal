@@ -25,6 +25,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include <tt-metalium/constants.hpp>
+#include "tools/profiler/kernel_profiler.hpp"
 
 void kernel_main() {
     constexpr uint32_t input_cb = get_compile_time_arg_val(0);
@@ -180,12 +181,15 @@ void kernel_main() {
 
         const uint32_t input_tile_idx = tile_row * num_tile_cols;
         cb_reserve_back(input_cb, num_tile_cols);
-        uint32_t input_wr_ptr = get_write_ptr(input_cb);
-        for (uint32_t c = 0; c < num_tile_cols; c++) {
-            noc_async_read_tile(input_tile_idx + c, input_accessor, input_wr_ptr);
-            input_wr_ptr += input_tile_bytes;
+        {
+            DeviceZoneScopedN("R_INPUT");
+            uint32_t input_wr_ptr = get_write_ptr(input_cb);
+            for (uint32_t c = 0; c < num_tile_cols; c++) {
+                noc_async_read_tile(input_tile_idx + c, input_accessor, input_wr_ptr);
+                input_wr_ptr += input_tile_bytes;
+            }
+            noc_async_read_barrier();
         }
-        noc_async_read_barrier();
         cb_push_back(input_cb, num_tile_cols);
 
         if constexpr (fuse_rope) {
