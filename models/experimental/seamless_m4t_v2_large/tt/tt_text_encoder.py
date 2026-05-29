@@ -47,6 +47,7 @@ class TTSeamlessM4Tv2Encoder:
         num_hidden_layers: int,
         num_attention_heads: int,
         hidden_size: int,
+        use_gather_in0: bool = False,
     ):
         self.device = device
         self.parameters = parameters
@@ -56,6 +57,17 @@ class TTSeamlessM4Tv2Encoder:
         self.hidden_size = hidden_size
         self._tp = get_tp(device)
         self._cluster_axis = mesh_cluster_axis(device)
+        # ``gather_in0`` opt: width-sharded activations + DRAM-width-sharded weights end-to-end on
+        # tp > 1.  Falls back to the original interleaved-L1 TP path on tp == 1 (the existing
+        # single-device DRAM-sharded path already covers that case).
+        # Default OFF: the gather_in0 program-config has ``per_core_M = m_seq / TILE``, so output
+        # activation per core scales linearly with input sequence length. At the PCC test's
+        # max seq (4096), per-core output is ~768 KB and overflows Blackhole L1 (1.5 MB/core)
+        # after kernel CBs are subtracted. The pattern is well-suited to small-M cases (decode,
+        # text_decoder per-step inference) but not to the text_encoder's wide-prefill use case.
+        # Caller can opt in via ``use_gather_in0=True`` for short-seq workloads (eg ≤ 256 tokens),
+        # but the matching weight prep must be set the same way in ``create_text_encoder_parameters``.
+        self._use_gather_in0 = use_gather_in0 and self._tp > 1
         self._sdpa_compute_cfg = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi3,
@@ -583,7 +595,22 @@ class TTSeamlessM4Tv2Encoder:
         num_local_heads = num_heads // tp  # = num_heads when tp == 1
         local_hidden = hidden_size // tp  # per-device head output dim when tp > 1
 
-        if tp > 1:
+        if tp > 1 and self._use_gather_in0:
+            # gather_in0 path: width-sharded activations + DRAM-width-sharded col-parallel QKV.
+            qkv_dim = 3 * local_hidden
+            qkv_sharded = self._linear_gather_in0(
+                hidden_states,
+                attn_module.qkv.weight,
+                attn_module.qkv.bias,
+                m=batch * seq_q,
+                k=hidden_size,
+                n=qkv_dim,
+            )
+            # ``nlp_create_qkv_heads`` requires interleaved-L1 input; bridge here.
+            qkv = width_sharded_to_l1_interleaved(qkv_sharded)
+            ttnn.deallocate(qkv_sharded)
+            qkv_4d = ttnn.reshape(qkv, (batch, 1, seq_q, qkv_dim))
+        elif tp > 1:
             # TP path: column-parallel QKV (output dim = 3 * hidden_size // tp per device).
             qkv_dim = 3 * local_hidden
             qkv = self._linear_tp(
@@ -638,7 +665,31 @@ class TTSeamlessM4Tv2Encoder:
         merged_4d = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(attn_out)
 
-        if tp > 1:
+        if tp > 1 and self._use_gather_in0:
+            # gather_in0 path: row-parallel out_proj. Input is interleaved L1 ``[B, S, local_H]``;
+            # the wrapper converts to width-sharded internally.
+            merged = ttnn.reshape(merged_4d, (batch, seq_q, local_hidden))
+            proj_sharded = self._linear_gather_in0(
+                merged,
+                attn_module.out_proj.weight,
+                attn_module.out_proj.bias,
+                m=batch * seq_q,
+                k=local_hidden,
+                n=hidden_size,
+            )
+            ttnn.deallocate(merged_4d)
+            # Convert sharded → interleaved before all_reduce (the existing reducer expects
+            # interleaved inputs; a sharded-native variant would save this round trip).
+            proj = width_sharded_to_l1_interleaved(proj_sharded)
+            ttnn.deallocate(proj_sharded)
+            proj = all_reduce_sum_replicate(
+                proj,
+                self.device,
+                cluster_axis=self._cluster_axis,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            return proj
+        elif tp > 1:
             # TP: merged is [B, 1, S, H//tp]; reshape and row-parallel out_proj.
             merged = ttnn.reshape(merged_4d, (batch, seq_q, local_hidden))
             proj = self._linear_tp(
@@ -801,7 +852,41 @@ class TTSeamlessM4Tv2Encoder:
                 input_sharded=ttnn.is_sharded(hidden),
                 output_sharded=(not long_seq) and (tp == 1),
             )
-            if tp > 1:
+            if tp > 1 and self._use_gather_in0:
+                # gather_in0 FFN: col-parallel fc1 (output local_ffn_dim, width-sharded), then
+                # row-parallel fc2 (output H, partial sum, width-sharded). Conversions only at
+                # the SDPA-free LN-input/LN-output boundaries and around all_reduce.
+                local_ffn_dim = ffn_dim // tp
+                ff_sharded = self._linear_gather_in0(
+                    normed,
+                    layer.ffn.fc1.weight,
+                    layer.ffn.fc1.bias,
+                    m=batch * seq,
+                    k=hidden_size,
+                    n=local_ffn_dim,
+                    activation="relu",
+                )
+                ttnn.deallocate(normed)
+                # fc2 input is width-sharded over K=local_ffn_dim; the wrapper accepts sharded
+                # input directly and produces width-sharded output.
+                ff_sharded2 = self._linear_gather_in0(
+                    ff_sharded,
+                    layer.ffn.fc2.weight,
+                    layer.ffn.fc2.bias,
+                    m=batch * seq,
+                    k=local_ffn_dim,
+                    n=hidden_size,
+                )
+                ttnn.deallocate(ff_sharded)
+                ff = width_sharded_to_l1_interleaved(ff_sharded2)
+                ttnn.deallocate(ff_sharded2)
+                ff = all_reduce_sum_replicate(
+                    ff,
+                    self.device,
+                    cluster_axis=self._cluster_axis,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                )
+            elif tp > 1:
                 # TP FFN: column-parallel fc1 (output = ffn_dim//tp), row-parallel fc2 (output = H).
                 ff = self._linear_tp(normed, layer.ffn.fc1.weight, layer.ffn.fc1.bias, activation="relu")
                 ttnn.deallocate(normed)
