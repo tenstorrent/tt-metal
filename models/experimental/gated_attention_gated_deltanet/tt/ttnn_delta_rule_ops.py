@@ -589,6 +589,117 @@ def recurrent_gated_delta_rule_decode_inplace_ttnn(
     return o, state_buffer
 
 
+def _retile_reshape(t, new_shape):
+    """Semantically-correct reshape via ROW_MAJOR round-trip.
+
+    ttnn.reshape on a TILE tensor changes the logical shape but does not re-tile
+    the data when the tile structure changes (e.g. [B,1,H,K] -> [B*H,1,K]).
+    Untilizing first recovers true row-major element order for the current shape,
+    the reshape is then a contiguous no-op, and re-tilizing lays out the new
+    shape correctly. Output is TILE_LAYOUT / DRAM (NOC-readable by the kernel).
+    """
+    t = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    t = ttnn.reshape(t, new_shape)
+    return ttnn.to_layout(t, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+
+def recurrent_gated_delta_rule_decode_kernel(
+    q,
+    k,
+    v,
+    beta,
+    g,
+    state_buffer,
+    scale=None,
+    device=None,
+    decode_output=None,
+):
+    """Single-token (T=1) decode via the fused on-device GDN recurrence kernel.
+
+    Drop-in replacement for recurrent_gated_delta_rule_decode_ttnn: same inputs
+    (q/k un-normed, beta post-sigmoid, g pre-exp) and same return contract
+    (o [B,1,H,V], new_state [B,H,K,V]). The recurrence (decay, kv_mem, delta,
+    state update, query) runs in one kernel dispatch instead of ~8 ttnn ops.
+
+    State is updated in place — the kernel writes the new state back to
+    state_buffer's DRAM buffer (via reshape aliasing, mirroring the prefill
+    kernel path), so this is trace-safe like the ..._inplace_ttnn variant.
+
+    Args:
+        q, k: [B, 1, H, K]   (un-normalized; this fn applies L2-norm + scale)
+        v:    [B, 1, H, V]
+        beta: [B, 1, H]      (post-sigmoid)
+        g:    [B, 1, H]      (pre-exp log-decay; kernel applies exp internally)
+        state_buffer: [B, H, K, V] recurrence state (updated in place)
+        decode_output: optional pre-allocated [B*H, 1, V] buffer (trace-safe);
+            allocated fresh if None.
+    """
+    # Lazy import to avoid an import-time dependency from this generic ops module
+    # onto the Qwen3.5-9B demo package.
+    from models.demos.blackhole.qwen3_5_9b.tt.gdn_kernel.gdn_kernel_op import gdn_recurrence_fused_inplace
+
+    B = q.shape[0]
+    H = q.shape[2]
+    K = q.shape[3]
+    V = v.shape[3]
+    num_pairs = B * H
+
+    # L2-norm + scale (kernel does NOT normalize or scale; it does q @ state)
+    q = l2_norm_ttnn(q, dim=-1)
+    k = l2_norm_ttnn(k, dim=-1)
+    if scale is None:
+        scale = K**-0.5
+    q = ttnn.multiply(q, scale)
+
+    # Build kernel-layout tensors [num_pairs, ...] in TILE_LAYOUT / DRAM.
+    q_fused = _retile_reshape(q, (num_pairs, 1, K))
+    k_row = _retile_reshape(k, (num_pairs, 1, K))
+    # k_col must be DRAM-interleaved for the kernel's TensorAccessor reader.
+    k_col = ttnn.transpose(k_row, -2, -1, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [num_pairs, K, 1]
+    v_fused = _retile_reshape(v, (num_pairs, 1, V))
+    g_fused = _retile_reshape(g, (num_pairs, 1, 1))  # pre-exp; kernel does exp
+    beta_fused = _retile_reshape(beta, (num_pairs, 1, 1))
+
+    # State: [B,H,K,V] -> [num_pairs,K,V] view (leading-dim merge aliases the
+    # same DRAM buffer, so the kernel's in-place write propagates back).
+    state_3d = ttnn.reshape(state_buffer, (num_pairs, K, V))
+
+    if decode_output is None:
+        decode_output = ttnn.zeros(
+            [num_pairs, 1, V],
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    gdn_recurrence_fused_inplace(
+        q_fused,
+        k_row,
+        k_col,
+        v_fused,
+        g_fused,
+        beta_fused,
+        state_3d,
+        decode_output,
+        num_cores=num_pairs,
+    )
+    ttnn.deallocate(q_fused)
+    ttnn.deallocate(k_row)
+    ttnn.deallocate(k_col)
+    ttnn.deallocate(v_fused)
+    ttnn.deallocate(g_fused)
+    ttnn.deallocate(beta_fused)
+
+    # Reshape state view back to [B,H,K,V] (same buffer) for the caller.
+    new_state = ttnn.reshape(state_3d, (B, H, K, V))
+
+    # Output: [num_pairs,1,V] -> [B,H,1,V] -> [B,1,H,V] (mirrors prefill path).
+    o = ttnn.reshape(decode_output, (B, H, 1, V))
+    o = ttnn.transpose(o, 1, 2)
+    return o, new_state
+
+
 def recurrent_gated_delta_rule_ttnn(
     q,
     k,

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
 // Program factory for the gated-delta-attention sequential scan kernel (Path A).
@@ -15,7 +15,6 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operation.hpp"
 
@@ -124,43 +123,21 @@ GatedDeltaAttnSeqProgramFactory::cached_program_t GatedDeltaAttnSeqProgramFactor
     // -----------------------------------------------------------------------
     const std::string kdir = "ttnn/cpp/ttnn/operations/transformer/gated_delta_attn/device/kernels/";
 
-    const std::vector<uint32_t> ct_args = {Ct, Kt, Vt};
-
-    // Reader/writer also carry per-tensor TensorAccessorArgs compile-time blocks,
-    // appended right after {Ct, Kt, Vt} in the SAME order the kernels consume them
-    // (reader: L_unit, v_beta_sc, k_bd_sc, intra_attn, q_decay, k_decay_t, dl_exp,
-    // L_inv, initial_state; writer: out, final_state). Each interleaved-DRAM tensor
-    // appends two args, so the device-side TensorAccessorArgs<3> chain stays aligned.
-    // initial_state is optional: a null buffer still appends two (zeroed) args so the
-    // s0 accessor's compile-time offset is unconditionally present.
-    std::vector<uint32_t> reader_ct_args = ct_args;
-    TensorAccessorArgs(in.L_unit.buffer()).append_to(reader_ct_args);
-    TensorAccessorArgs(in.v_beta_sc.buffer()).append_to(reader_ct_args);
-    TensorAccessorArgs(in.k_bd_sc.buffer()).append_to(reader_ct_args);
-    TensorAccessorArgs(in.intra_attn.buffer()).append_to(reader_ct_args);
-    TensorAccessorArgs(in.q_decay.buffer()).append_to(reader_ct_args);
-    TensorAccessorArgs(in.k_decay_t.buffer()).append_to(reader_ct_args);
-    TensorAccessorArgs(in.dl_exp.buffer()).append_to(reader_ct_args);
-    TensorAccessorArgs(in.L_inv.buffer()).append_to(reader_ct_args);
-    TensorAccessorArgs(in.initial_state.has_value() ? in.initial_state->buffer() : nullptr).append_to(reader_ct_args);
-
-    std::vector<uint32_t> writer_ct_args = ct_args;
-    TensorAccessorArgs(outputs[0].buffer()).append_to(writer_ct_args);
-    TensorAccessorArgs(outputs[1].buffer()).append_to(writer_ct_args);
+    std::vector<uint32_t> ct_args = {Ct, Kt, Vt};
 
     auto reader_id = CreateKernel(
         program,
         kdir + "dataflow/reader_gated_delta_attn.cpp",
         cores,
         DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_ct_args});
+            .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = ct_args});
 
     auto writer_id = CreateKernel(
         program,
         kdir + "dataflow/writer_gated_delta_attn.cpp",
         cores,
         DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = writer_ct_args});
+            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = ct_args});
 
     auto compute_id = CreateKernel(
         program,

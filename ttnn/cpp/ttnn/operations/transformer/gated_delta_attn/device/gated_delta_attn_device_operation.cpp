@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/transformer/gated_delta_attn/device/gated_delta_attn_device_operation.hpp"
@@ -40,14 +40,21 @@ void GatedDeltaAttnSeqDeviceOperation::validate_on_program_cache_miss(
     const uint32_t Dk = attrs.key_dim;
     const uint32_t Dv = attrs.val_dim;
 
-    // The device kernels are hardwired to exactly four 32-wide block rows (Ct == Kt == Vt == 4):
-    // the compute kernel calls fwd_sub_4rows unconditionally and the reader always fetches the 4
-    // L_inv diagonal blocks. Anything other than 128 reads past L_inv or stalls the compute pipeline
-    // waiting on tiles that are never produced, so reject it here until the kernels are generalized.
-    constexpr uint32_t kRequiredDim = 4 * tt::constants::TILE_HEIGHT;  // 128
-    TT_FATAL(C == kRequiredDim, "chunk_size must be exactly {}, got {}", kRequiredDim, C);
-    TT_FATAL(Dk == kRequiredDim, "key_dim must be exactly {}, got {}", kRequiredDim, Dk);
-    TT_FATAL(Dv == kRequiredDim, "val_dim must be exactly {}, got {}", kRequiredDim, Dv);
+    TT_FATAL(
+        C % tt::constants::TILE_HEIGHT == 0,
+        "chunk_size must be divisible by TILE_HEIGHT ({}), got {}",
+        tt::constants::TILE_HEIGHT,
+        C);
+    TT_FATAL(
+        Dk % tt::constants::TILE_WIDTH == 0,
+        "key_dim must be divisible by TILE_WIDTH ({}), got {}",
+        tt::constants::TILE_WIDTH,
+        Dk);
+    TT_FATAL(
+        Dv % tt::constants::TILE_WIDTH == 0,
+        "val_dim must be divisible by TILE_WIDTH ({}), got {}",
+        tt::constants::TILE_WIDTH,
+        Dv);
 
     auto check_shape = [&](const Tensor& t, std::initializer_list<uint32_t> expected, const std::string& nm) {
         auto s = t.logical_shape();
@@ -117,12 +124,7 @@ ttsl::hash::hash_t GatedDeltaAttnSeqDeviceOperation::compute_program_hash(
         in.intra_attn,
         in.q_decay,
         in.k_decay_t,
-        in.dl_exp,
-        // L_inv and initial_state bake TensorAccessorArgs into the reader, so they must be hashed:
-        // otherwise a cache hit can reuse a reader compiled for a different L_inv layout or for absent
-        // initial_state. Hashing the optional also distinguishes state present vs. absent.
-        in.L_inv,
-        in.initial_state);
+        in.dl_exp);
 }
 
 std::vector<Tensor> gated_delta_attn_seq(

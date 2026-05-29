@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -23,13 +23,15 @@ struct GatedDeltaAttnSeqProgramFactory {
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const GatedDeltaAttnSeqParams& attrs, const GatedDeltaAttnSeqInputs& in, std::vector<Tensor>& outputs);
+        const GatedDeltaAttnSeqParams& op_attrs,
+        const GatedDeltaAttnSeqInputs& tensor_args,
+        std::vector<Tensor>& output_tensors);
 
     static void override_runtime_arguments(
-        cached_program_t& cached,
-        const GatedDeltaAttnSeqParams& attrs,
-        const GatedDeltaAttnSeqInputs& in,
-        std::vector<Tensor>& outputs);
+        cached_program_t& cached_program,
+        const GatedDeltaAttnSeqParams& op_attrs,
+        const GatedDeltaAttnSeqInputs& tensor_args,
+        std::vector<Tensor>& output_tensors);
 };
 
 }  // namespace ttnn::prim
