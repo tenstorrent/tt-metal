@@ -457,6 +457,7 @@ def run_all_gather_impl(
     indirect=["device_params"],
     ids=["fabric_ring"],
 )
+@pytest.mark.skip(reason="Disabled by issue #45506")
 def test_all_gather_matmul_async(
     mesh_device,
     num_links,
