@@ -378,11 +378,15 @@ inline uint32_t element_to_u32_bits(const T& v) {
 // Pack `count` exponent bytes (one per row) starting at `exp_bytes` into
 // `count/4` little-endian uint32_t words at `out_dwords`. Caller guarantees
 // `count % 4 == 0`.
+//
+// One bulk copy beats a loop of 4-byte memcpys: `exp_bytes` may be unaligned
+// (it points into a stack buffer of bytes), so we can't legally reinterpret it
+// as `const uint32_t*`, but a single `std::memcpy` of `count` bytes lowers to
+// a tight rep-mov / SIMD copy with no per-iteration call overhead. The output
+// dwords are little-endian-packed, matching the legacy byte-by-byte assembly
+// on every supported (little-endian) host.
 inline void pack_exp_bytes_to_dwords(const uint8_t* exp_bytes, size_t count, uint32_t* out_dwords) {
-    const size_t num_dwords = count / 4;
-    for (size_t i = 0; i < num_dwords; ++i) {
-        std::memcpy(&out_dwords[i], &exp_bytes[i * 4], 4);
-    }
+    std::memcpy(out_dwords, exp_bytes, count);
 }
 
 // ---------------------------------------------------------------------------
