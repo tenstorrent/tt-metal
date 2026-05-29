@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** p150 (blackhole)
 **Started:** 2026-05-29T00:11:46Z
-**Updated:** 2026-05-29T01:31:57Z
+**Updated:** 2026-05-29T01:37:32Z
 
 ## Block Status
 
@@ -71,7 +71,7 @@
 | mlp | optimization | pending | — | 0 |  |
 | mlp | real_weights | pending | — | 0 |  |
 | decoder_layer | reference | done | 1.000000 | 0 | Qwen2DecoderLayer: input RMSNorm -> GQA self-attn (12q/2kv, head_dim128, RoPE theta 1e6, QKV bias) -> residual -> post-attn RMSNorm -> SwiGLU MLP -> residual. PCC=1.0 vs HF Qwen2DecoderLayer. |
-| decoder_layer | ttnn | pending | — | 0 |  |
+| decoder_layer | ttnn | done | 0.999996 | 0 | Qwen2 LM decoder layer composite (pre-norm residual). Composes verified leaves TtRMSNorm x2 (eps 1e-6) + TtAttention (GQA 12/2, QKV bias, 1D RoPE theta 1e6, causal) + TtMLP (SwiGLU) by file-path import. HiFi4+fp32_dest_acc, bf16 DRAM TILE. Guard ok. |
 | decoder_layer | debug | n/a | — | 0 |  |
 | decoder_layer | optimization | pending | — | 0 |  |
 | decoder_layer | real_weights | pending | — | 0 |  |
@@ -94,7 +94,6 @@
 
 ## Recent Ticks
 
-- tick 9 (2026-05-29T00:57:01Z): device[vision_mlp] — ok
 - tick 9 (2026-05-29T00:58:10Z): device[vision_mlp] — ok
 - tick 10 (2026-05-29T01:03:33Z): device[vision_block] — ok
 - tick 10 (2026-05-29T01:04:12Z): device[vision_block] — ok
@@ -104,6 +103,7 @@
 - tick 14 (2026-05-29T01:21:18Z): device[rope] — ok
 - tick 15 (2026-05-29T01:27:01Z): device[attention] — ok
 - tick 16 (2026-05-29T01:31:57Z): device[mlp] — ok
+- tick 17 (2026-05-29T01:37:32Z): device[decoder_layer] — ok
 
 ## Host-Resident Exceptions
 

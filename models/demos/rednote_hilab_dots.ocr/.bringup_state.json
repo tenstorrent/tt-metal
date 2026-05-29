@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-29T00:11:46Z",
-  "updated_at": "2026-05-29T01:31:57Z",
+  "updated_at": "2026-05-29T01:37:32Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -556,8 +556,15 @@
         "pcc": 1.0
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/decoder_layer.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_tt_decoder_layer.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/decoder_layer.traced_ops.json"
+        ],
+        "notes": "Qwen2 LM decoder layer composite (pre-norm residual). Composes verified leaves TtRMSNorm x2 (eps 1e-6) + TtAttention (GQA 12/2, QKV bias, 1D RoPE theta 1e6, causal) + TtMLP (SwiGLU) by file-path import. HiFi4+fp32_dest_acc, bf16 DRAM TILE. Guard ok.",
+        "pcc": 0.9999955911741909
       },
       "debug": {
         "status": "n/a",
@@ -805,6 +812,12 @@
       "tick": 16,
       "ts": "2026-05-29T01:31:57Z",
       "action": "device[mlp]",
+      "result": "ok"
+    },
+    {
+      "tick": 17,
+      "ts": "2026-05-29T01:37:32Z",
+      "action": "device[decoder_layer]",
       "result": "ok"
     }
   ],
