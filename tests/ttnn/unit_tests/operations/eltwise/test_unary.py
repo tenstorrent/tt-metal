@@ -1637,7 +1637,7 @@ def test_unary_cosh_ttnn(input_shapes, torch_dtype, ttnn_dtype, device):
     if ttnn_dtype == ttnn.bfloat16:
         assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1)
     else:
-        assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor, pcc=0.999)
+        assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=3)
 
 
 @pytest.mark.parametrize(
@@ -1668,7 +1668,7 @@ def test_unary_sinh_ttnn(input_shapes, torch_dtype, ttnn_dtype, device):
     if ttnn_dtype == ttnn.bfloat16:
         assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1)
     else:
-        assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor, pcc=0.999)
+        assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=3)
 
 
 @pytest.mark.parametrize(
