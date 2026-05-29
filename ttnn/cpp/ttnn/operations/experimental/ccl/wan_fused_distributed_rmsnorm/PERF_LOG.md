@@ -608,3 +608,44 @@ per-row version pays that the layernorm reference hides:
 
 Reverted to `mul_bcast_cols_init_short` + `mul_tiles_bcast_cols`. The
 P_NRED/P_NMUL diagnostic zones are kept (zero-cost when profiler off).
+
+### DEAD END (lever C, take 2): *batched* reduce + COL-splat + `mul_tiles`
+The per-row splat (above) was slow because of (1) per-row `unary_bcast_init`
+hw_configure and (2) an *exposed* splat round-trip. Both should be fixable by
+**batching across the chunk**: hoist `unary_bcast_init<COL>` to once-per-chunk,
+do all `rows_in_chunk` reduces first, then all `rows_in_chunk` splats into a
+new `splat_cb` (sized `chunk_size_rows` fp32 tiles), then per-row cheap full
+`mul_tiles(input, splat_cb)`. The round-trips of consecutive rows hide behind
+each other instead of stalling the muls.
+
+Implemented (program factory: `splat_cb`=c_21, `reduce_result_cb` grown to
+`chunk_size_rows`, CT arg 35; compute: batched PRE-reduce→splat→per-row mul).
+Correctness: **43/43 device-op tests PASS** (all TP, weight/bias/per_head_*),
+multihead-RoPE PCC ≥ 0.999. Perf (TP=4 LINE bench vs the c3ad603643c baseline):
+
+| config | baseline us | batched-splat us | delta |
+|---|---|---|---|
+| self_N18944 (RoPE)  | 417.0 | 417.8 | +0.8 |
+| self_N9472  (RoPE)  | 244.9 | 243.8 | −1.1 |
+| self_N2368  (RoPE)  | 119.7 | 119.6 | −0.1 |
+| cross_q_N18944      | 311.6 | 309.9 | −1.7 |
+| cross_q_N9472       | 193.8 | 193.4 | −0.4 |
+| cross_q_N2368       |  84.1 |  85.0 | +0.9 |
+| cross_k_L512        |  42.5 |  42.8 | +0.3 |
+
+**Result: a wash** — every delta is within run-to-run noise (±1–2us). The
+large no-RoPE shapes improved ~0.5%; small shapes regressed ~1%. **Confirms
+finding #3 (zone split): the POST norm-multiply is drain-hidden** — the 40
+col-tile muls overlap the output drain / AG wait, so cutting their MOP-dispatch
+count (160→44) does not move the wall clock. The batched version was numerically
+clean and avoided the per-row regression, but the work it saved was already free.
+
+**Reverted** (kept c3ad603643c as HEAD) because the wash carried real L1 cost:
+the extra `splat_cb` + grown `reduce_result_cb` spend the L1 that is the binding
+constraint for worker count and for any future *drain*-focused optimization. If
+a drain win later re-exposes POST compute as the bottleneck, re-introduce this.
+
+**Strategic takeaway:** stop optimizing POST *compute* (norm-mul, weight-mul,
+RoPE matmul are all drain/fabric-hidden per findings #1–#5). The only remaining
+levers that can move the wall are the **output drain (writer NoC)** and the
+**fabric AG**. Next focus there.
