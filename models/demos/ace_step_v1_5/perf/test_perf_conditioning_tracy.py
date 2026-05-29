@@ -209,8 +209,8 @@ def _run_conditioning_tracy_harness(
     variant_label: str,
 ) -> None:
     perf_mode = os.environ.get("ACE_STEP_COND_PERF_MODE", "full").strip().lower()
-    if perf_mode not in ("full", "qwen", "condition"):
-        pytest.fail(f"Unknown ACE_STEP_COND_PERF_MODE={perf_mode!r}; use 'full', 'qwen', or 'condition'.")
+    if perf_mode not in ("full", "qwen", "qwen_ttt", "condition"):
+        pytest.fail(f"Unknown ACE_STEP_COND_PERF_MODE={perf_mode!r}; use 'full', 'qwen', 'qwen_ttt', or 'condition'.")
 
     iters = max(1, int(os.environ.get("ACE_STEP_COND_PERF_ITERS", "8")))
     warmup = max(0, int(os.environ.get("ACE_STEP_PERF_WARMUP", "1")))
@@ -223,8 +223,9 @@ def _run_conditioning_tracy_harness(
     except ValueError:
         flush_every = 1
 
-    run_qwen = perf_mode in ("full", "qwen")
+    run_qwen = perf_mode in ("full", "qwen", "qwen_ttt")
     run_cond = perf_mode in ("full", "condition")
+    qwen_ttt = perf_mode == "qwen_ttt"  # profile the tt_transformers prefill (eager) vs eager custom
 
     profiler = Profiler()
     profiler.clear()
@@ -280,6 +281,8 @@ def _run_conditioning_tracy_harness(
 
     def _run_qwen_once() -> ttnn.Tensor:
         assert qwen_enc is not None and input_ids_np is not None
+        if qwen_ttt:
+            return qwen_enc.prefill_eager(input_ids_np)
         return qwen_enc.forward(input_ids_np, attn_mask_np)
 
     def _run_condition_once(text_hs_tt: ttnn.Tensor) -> ttnn.Tensor:
@@ -319,7 +322,7 @@ def _run_conditioning_tracy_harness(
 
     if perf_mode == "full":
         run_once = _run_full_once
-    elif perf_mode == "qwen":
+    elif perf_mode in ("qwen", "qwen_ttt"):
         run_once = _run_qwen_only_once
     else:
         run_once = _run_cond_only_once
