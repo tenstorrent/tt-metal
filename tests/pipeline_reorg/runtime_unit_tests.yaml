@@ -305,8 +305,7 @@
 # --- BH Multi-Card: Debug Tools (mesh filters + single AERISC) ---
 - name: bh_multicard_debug_tools
   cmd: |
-    # Disabled by issue #45489: DPrintMeshFixture.ActiveEthTestPrint fails deterministically on bh_quietbox
-    # TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='DPrintMeshFixture.ActiveEthTestPrint'
+    TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='DPrintMeshFixture.ActiveEthTestPrint'
     TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='WatcherAssertTest.TensixTestWatcherPause'
     TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='WatcherAssertTest.TestWatcherAssert'
     TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='MeshWatcherFixture.ActiveEthTestWatcherSanitizeEth'
