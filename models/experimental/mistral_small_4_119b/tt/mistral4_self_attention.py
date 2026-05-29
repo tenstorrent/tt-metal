@@ -49,6 +49,8 @@ from models.common.lightweightmodule import LightweightModule
 from models.experimental.mistral_small_4_119b.tt.prefill_matmul_config import (
     build_kv_a_proj_preset,
     build_kv_b_proj_preset,
+    build_o_proj_preset,
+    build_q_a_proj_preset,
     build_q_b_proj_preset,
     prefill_linear,
 )
@@ -291,9 +293,11 @@ class TtMistral4Attention(LightweightModule):
         self.prefill_l1_reshape = os.environ.get("MISTRAL4_ATTN_L1_RESHAPE", "1") == "1"
 
         # Sweep-tuned matmul presets (test_prefill_matmul_sweep.py).
+        self.q_a_proj_preset = build_q_a_proj_preset(mesh_device)
         self.q_b_proj_preset = build_q_b_proj_preset(mesh_device)
         self.kv_a_proj_preset = build_kv_a_proj_preset(mesh_device)
         self.kv_b_proj_preset = build_kv_b_proj_preset(mesh_device)
+        self.o_proj_preset = build_o_proj_preset(mesh_device)
 
         if compute_kernel_config is None:
             compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -513,13 +517,15 @@ class TtMistral4Attention(LightweightModule):
         reshape_mem = ttnn.L1_MEMORY_CONFIG if self.prefill_l1_reshape else ttnn.DRAM_MEMORY_CONFIG
 
         # ── Q projection ──────────────────────────────────────────────────
-        q_latent = ttnn.linear(
+        # Sweep-tuned 1D l1/dram/ws 4×4 w=16 (20.3 TFLOPs, 4.3× over default).
+        # Output to L1 so the downstream q_a_norm reads L1 instead of DRAM.
+        q_latent = prefill_linear(
             x,
             self.q_a_proj,
+            self.q_a_proj_preset,
             compute_kernel_config=self.lofi_compute_kernel_config,
             dtype=ttnn.bfloat16,
-            # Output to L1 so the downstream q_a_norm reads L1 instead of DRAM.
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            output_memory_config=ttnn.L1_MEMORY_CONFIG,
         )  # [1, 1, seq, Q_LORA_RANK]
 
         # rms_norm output to L1: small tensor (Q_LORA_RANK ≪ HIDDEN_SIZE) and the
@@ -668,12 +674,13 @@ class TtMistral4Attention(LightweightModule):
         )  # [1, 1, seq, N_HEADS * V_HEAD_DIM = 4096]
         ttnn.deallocate(attn_out_t)
 
-        out = ttnn.linear(
+        # Sweep-tuned 1D l1/dram/dram 8×4 w=8 (33.3 TFLOPs, 2.3× over default).
+        out = prefill_linear(
             attn_flat,
             self.o_proj,
+            self.o_proj_preset,
             compute_kernel_config=self.lofi_compute_kernel_config,
             dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )  # [1, 1, seq, HIDDEN_SIZE]
         ttnn.deallocate(attn_flat)
 

@@ -92,26 +92,33 @@ def choose_strategy(shape: MatmulShape) -> dict:
 def create_memory_configs(
     shape: MatmulShape, cfg: dict
 ) -> tuple[ttnn.MemoryConfig, ttnn.MemoryConfig, ttnn.MemoryConfig]:
-    layout = cfg["layout"]
+    """Build in0/in1/out memory configs from the layout string 'in0/in1/out'.
+    Codes: 'ws' = L1 WIDTH_SHARDED, 'l1' = L1 interleaved, 'dram' = DRAM interleaved."""
+    in0_code, in1_code, out_code = cfg["layout"].split("/")
 
-    if layout.startswith("ws"):
+    if in0_code == "ws":
         in0_mem = ttnn.create_sharded_memory_config(
             (1, 1, shape.M, shape.K),
             core_grid=ttnn.CoreGrid(y=cfg["grid"][1], x=cfg["grid"][0]),
             strategy=ttnn.ShardStrategy.WIDTH,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
         )
-    else:
+    elif in0_code == "dram":
+        in0_mem = ttnn.DRAM_MEMORY_CONFIG
+    else:  # "l1"
         in0_mem = ttnn.L1_MEMORY_CONFIG
 
-    if layout.endswith("ws"):
+    if out_code == "ws":
         out_mem = ttnn.MemoryConfig(
             memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             buffer_type=ttnn.BufferType.L1,
         )
-    else:
+    elif out_code == "dram":
+        out_mem = ttnn.DRAM_MEMORY_CONFIG
+    else:  # "l1"
         out_mem = ttnn.L1_MEMORY_CONFIG
 
+    # in1 (weight) is always DRAM interleaved.
     in1_mem = ttnn.DRAM_MEMORY_CONFIG
     return in0_mem, in1_mem, out_mem
 
