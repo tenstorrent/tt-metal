@@ -93,7 +93,7 @@ inline void _llk_math_hash_cb_tile_(std::uint32_t dst_tile_idx)
         TT_SFPLOAD(LREG_W, InstrModLoadStore::INT32, ADDR_MOD_7, offset);
 
         // h ^= w  (per-lane 32b XOR; top 9 bits dropped by next mul)
-        TTI_SFPXOR(LREG_H, LREG_W, 0, 0);
+        TTI_SFPXOR(0, LREG_W, LREG_H, 0);
 
         // h *= prime (SFPMUL24_MOD1_LOWER masks operands and result to 23b)
         TTI_SFPMUL24(LREG_H, LREG_PRIME, p_sfpu::LCONST_0, LREG_H, sfpi::SFPMUL24_MOD1_LOWER);
@@ -119,7 +119,7 @@ inline void _llk_math_hash_cb_finish_to_l1_(std::uint32_t l1_hash_addr, std::uin
     {
         TTI_SFPMOV(0, LREG_H, LREG_TMP, 0);
         TTI_SFPSHFT2(0, LREG_TMP, LREG_TMP, 4);
-        TTI_SFPXOR(LREG_H, LREG_TMP, 0, 0);
+        TTI_SFPXOR(0, LREG_TMP, LREG_H, 0);
     }
 
     // ---- Stash lane 0 of LREG_H in DEST[0][row 0] so MATH can read it. ----

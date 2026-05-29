@@ -71,7 +71,7 @@ def _run_hash_kernel(
     res_from_L1 = configuration.run().result
     torch_dtype = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_dtype).flatten()
-    return int(res_tensor[0].item()) & MASK23
+    return int(res_tensor[0].item())
 
 
 @parametrize(
@@ -92,7 +92,6 @@ def test_hash_cb_sfpu(formats, num_tiles, seed, dest_acc):
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
-        is_sfpu=True,
     )
 
     hw_hash = _run_hash_kernel(
@@ -123,7 +122,6 @@ def test_hash_cb_sfpu_determinism(formats, num_tiles, seed, dest_acc):
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
-        is_sfpu=True,
     )
 
     h1 = _run_hash_kernel(

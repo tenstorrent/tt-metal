@@ -8,6 +8,7 @@
 #include "api/compute/tile_move_copy.h"  // copy_tile (UNPACK + MATH A→DEST)
 #include "dev_mem_map.h"
 
+#ifndef ARCH_QUASAR
 #ifdef TRISC_UNPACK
 #include "debug/llk_hash_cb_api.h"
 #endif
@@ -18,6 +19,7 @@
 #ifdef TRISC_PACK
 #include "debug/llk_hash_cb_api.h"
 #endif
+#endif  // !ARCH_QUASAR
 
 namespace ckernel {
 
@@ -101,17 +103,27 @@ static_assert(
  * | label     | A caller-chosen tag to identify this probe in the output | uint32_t | any         | True     |
  */
 // clang-format on
+#ifndef ARCH_QUASAR
 ALWI void hash_cb_trisc(uint32_t cb_id, uint32_t num_tiles, uint32_t label) {
     UNPACK((llk_hash_cb_trisc(cb_id, num_tiles, label)));
 }
+#else
+ALWI void hash_cb_trisc(uint32_t cb_id, uint32_t num_tiles, uint32_t label) {
+    (void)cb_id;
+    (void)num_tiles;
+    (void)label;
+}
+#endif  // !ARCH_QUASAR
 
 // clang-format off
 /**
  * SFPU-side CB hash. Computes a 23-bit ("FNV23") lanewise multiplicative hash
- * over the L1 bytes of `in_cb` on the SFPU, then routes the single-u32 result
- * through L1 (MATH writes the reduced hash to a fixed slot in the MEM_LLK_DEBUG
- * region, UNPACK polls a ready flag and reads it back) before printing via
- * DPRINT in the same format as hash_cb_trisc:
+ * over the tile data of `in_cb` after it has been unpacked/moved to DEST (not
+ * the raw L1 bytes — the values are subject to the INT32 SFPLOAD UnshuffleFP32
+ * permutation). Routes the single-u32 result through L1 (MATH writes the
+ * reduced hash to a fixed slot in the MEM_LLK_DEBUG region, UNPACK polls a
+ * ready flag and reads it back) before printing via DPRINT in the same format
+ * as hash_cb_trisc:
  *     hash[0x<label>] cb=<cb_id> tiles=<n> = 0x<hash>
  *
  * The L1 round trip is deliberate: it exercises the same MATH → L1 → UNPACK
@@ -142,6 +154,7 @@ ALWI void hash_cb_trisc(uint32_t cb_id, uint32_t num_tiles, uint32_t label) {
  * | label     | A caller-chosen tag to identify this probe in the output | uint32_t | any         | True     |
  */
 // clang-format on
+#ifndef ARCH_QUASAR
 ALWI void hash_cb_sfpu(uint32_t in_cb, uint32_t num_tiles, uint32_t label) {
 #ifdef DEBUG_CB_HASH
     // UNPACK pre-clears the ready flag so the post-compute poll only fires on
@@ -175,5 +188,12 @@ ALWI void hash_cb_sfpu(uint32_t in_cb, uint32_t num_tiles, uint32_t label) {
     (void)label;
 #endif
 }
+#else
+ALWI void hash_cb_sfpu(uint32_t in_cb, uint32_t num_tiles, uint32_t label) {
+    (void)in_cb;
+    (void)num_tiles;
+    (void)label;
+}
+#endif  // !ARCH_QUASAR
 
 }  // namespace ckernel
