@@ -2035,11 +2035,14 @@ class LTXPipeline:
         import av
 
         # Convert to (F, H, W, C) uint8
-        frames = (((video_pixels[0] + 1.0) / 2.0).clamp(0.0, 1.0) * 255.0).to(torch.uint8)
+        # In-place [-1,1] → [0,255]: one fp32 copy + in-place passes instead of
+        # allocating a fresh full-size tensor per arithmetic op (127.5 == 255/2).
+        v = video_pixels[0].float()
+        v.add_(1.0).mul_(127.5).clamp_(0.0, 255.0)
         # .contiguous() forces a single bulk (F,H,W,C) copy here, so each per-frame
         # slice below is already contiguous and VideoFrame.from_ndarray just wraps it
         # — otherwise the permuted view makes from_ndarray do a strided copy per frame.
-        frames = frames.permute(1, 2, 3, 0).contiguous().cpu().numpy()  # (F, H, W, C)
+        frames = v.to(torch.uint8).permute(1, 2, 3, 0).contiguous().cpu().numpy()  # (F, H, W, C)
 
         _, height, width, _ = frames.shape
 

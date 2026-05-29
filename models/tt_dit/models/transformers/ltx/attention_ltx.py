@@ -64,7 +64,6 @@ class LTXAttention(Module):
         query_input_dim: int | None = None,
         output_dim: int | None = None,
         apply_gated_attention: bool = False,
-        high_fidelity_sdpa: bool = False,
     ) -> None:
         super().__init__()
 
@@ -167,25 +166,17 @@ class LTXAttention(Module):
             exp_approx_mode=False,
         )
 
-        # SDPA defaults to Wan parity (HiFi2, no fp32 dest acc) for throughput. The A↔V
-        # cross-attn instances pass high_fidelity_sdpa=True: HiFi2 on their long video/audio
-        # K/V compounds ~5% per-block error (a2v_out/v2a_out), polluting the video residual by
-        # block ~30 and degrading v2a_kv at late blocks (44+ → 0.92). HiFi4 there fixes it.
-        if high_fidelity_sdpa:
-            self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-                self.mesh_device.arch(),
-                math_fidelity=ttnn.MathFidelity.HiFi4,
-                math_approx_mode=False,
-                fp32_dest_acc_en=True,
-                packer_l1_acc=True,
-            )
-        else:
-            self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-                self.mesh_device.arch(),
-                math_fidelity=ttnn.MathFidelity.HiFi2,
-                math_approx_mode=False,
-                fp32_dest_acc_en=False,
-            )
+        # SDPA at HiFi4. HiFi2 on long video/audio K/V compounds ~5% per-block error in A↔V
+        # cross-attn (a2v_out/v2a_out) that pollutes the video residual by block ~30 and
+        # degrades v2a_kv at late blocks (44+ → 0.92). HiFi4 trades ~20% SDPA throughput for
+        # stable AV cross-attn quality across 48 blocks × 8 steps.
+        self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            self.mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
 
         self.rope_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
@@ -200,8 +191,8 @@ class LTXAttention(Module):
 
         self.mm_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=True,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
