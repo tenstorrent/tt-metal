@@ -226,14 +226,24 @@ extern "C" uint8_t* __emule_resolve_noc_addr(uint64_t noc_addr) {
     uint32_t noc_y = (noc_addr >> (NOC_LOCAL_BITS + NOC_NODE_ID_BITS)) & NOC_NODE_MASK;
     uint64_t l1_offset = noc_addr & NOC_LOCAL_MASK;
 
-    if (__emule_core_map) {
-        uint64_t key = (uint64_t(noc_x) << 32) | noc_y;
-        auto it = __emule_core_map->find(key);
-        if (it != __emule_core_map->end()) {
-            return it->second->l1_ptr(static_cast<uint32_t>(l1_offset));
-        }
+    if (!__emule_core_map) return nullptr;
+    uint64_t key = (uint64_t(noc_x) << 32) | noc_y;
+    auto it = __emule_core_map->find(key);
+    if (it == __emule_core_map->end()) return nullptr;
+
+    // Worker L1 mmaps are 2 MB slots; DRAM core mmaps are 2 GB. If the kernel
+    // passed a NOC address whose local portion is a TRUNCATED HOST POINTER
+    // (the L1Pool model — get_write_ptr() returns a truncated uint32) the
+    // bottom 21 bits ARE the within-slot offset; the upper bits are slot
+    // base. Mask only when the offset exceeds the slot. For DRAM cores
+    // (l1_size >= 2 MB), don't mask — those offsets are legitimately large.
+    auto* core = it->second;
+    const size_t core_l1_size = core->l1_size();
+    if (l1_offset >= core_l1_size) {
+        constexpr uint32_t L1_SLOT_MASK = (2u * 1024 * 1024) - 1;
+        l1_offset &= L1_SLOT_MASK;
     }
-    return nullptr;
+    return core->l1_ptr(static_cast<uint32_t>(l1_offset));
 }
 
 // Resolve multicast: iterate over rectangle of cores and memcpy to each.
@@ -763,7 +773,12 @@ static std::function<void()> jit_compile_kernel(
     // 7. Compile — output to disk cache path if provided, else temp dir
     std::string so_path = disk_cache_so_path_arg.empty() ? (dir + "/kernel.so") : disk_cache_so_path_arg;
     std::ostringstream cmd;
-    cmd << TT_EMULE_CXX_COMPILER << " -std=c++" << TT_EMULE_CXX_STANDARD << " -fPIC -shared -O2 -Wno-c++11-narrowing"
+    // -O0 -g when TT_EMULE_KERNEL_DEBUG=1, else -O2. Used for backtrace
+    // legibility when chasing kernel-side segfaults — at -O2 the JIT'd kernel
+    // gets inlined enough that gdb only shows kernel_main as the top frame.
+    const char* opt_flags = std::getenv("TT_EMULE_KERNEL_DEBUG") ? "-O0 -g" : "-O2";
+    cmd << TT_EMULE_CXX_COMPILER << " -std=c++" << TT_EMULE_CXX_STANDARD
+        << " -fPIC -shared -Wno-c++11-narrowing " << opt_flags
         << " -I\"" << jit_inc << "\""
         << " -I\"" << parent_inc << "\""
         << " -I\"" << kernel_dir << "\"";
