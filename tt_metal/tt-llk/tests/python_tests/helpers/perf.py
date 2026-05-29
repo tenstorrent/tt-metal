@@ -37,9 +37,7 @@ def read_perf_zone_names_from_elf(elf_dir: Path) -> list[str] | None:
     return ["INIT", "TILE_LOOP"]  # Counter zone 0 = INIT, zone 1 = TILE_LOOP
 
 
-# Maps each run type to the kernel components whose text section sizes contribute to ELF_SIZE.
-# L1_TO_L1 sums across all three components; isolate run types use their single component.
-# L1_CONGESTION is excluded (no ELF_SIZE column).
+# Run-type → kernel components for the ELF_SIZE column. L1_CONGESTION omitted.
 _CODE_SIZE_COMPONENTS = {
     PerfRunType.L1_TO_L1: ["unpack", "math", "pack"],
     PerfRunType.UNPACK_ISOLATE: ["unpack"],
@@ -160,11 +158,7 @@ def dump_scatter(testname: str, report: PerfReport):
     dir = create_benchmark_dir(testname)
     output_path = dir / f"{testname}.html"
 
-    # x-axis: sweep values (left to right, zipped for each sweep)
-    # y-axis: stat values (for each run type, for each stat)
-    # stat_names: e.g. mean(L1_TO_L1), mean(UNPACK_ISOLATE), ...
-    # sweep_names: e.g. tile_cnt, param2, ...
-
+    # x: sweep values, y: stat values per (run_type × stat). Names look like mean(L1_TO_L1).
     fig = go.Figure()
 
     mean_columns = [

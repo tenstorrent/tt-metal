@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #include "boot.h"
-#include "counters.h" // heavy machinery is gated internally by PERF_COUNTERS_COMPILED
+#include "counters.h"
 
 // BRISC firmware
 #ifdef LLK_BOOT_MODE_BRISC
@@ -126,10 +126,8 @@ int main()
 
                 device_setup();
 
-#ifdef PERF_COUNTERS_COMPILED
-                // Configure + arm counters before releasing TRISCs.
+                // Configure + arm counters before releasing TRISCs (no-op in NC builds).
                 llk_perf::configure_and_arm_from_brisc();
-#endif
 
                 clear_trisc_soft_reset();
 

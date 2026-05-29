@@ -1,12 +1,12 @@
 # LLK Performance Counters Guide
 
 ## Quick Links
-- C++ macro and HW programming: [tests/helpers/include/counters.h](../../tests/helpers/include/counters.h)
-- Run-type enum and mock helpers: [tests/helpers/include/perf.h](../../tests/helpers/include/perf.h)
-- Profiler zone macros (NC build): [tests/helpers/include/profiler.h](../../tests/helpers/include/profiler.h)
-- Python config + raw read: [tests/python_tests/helpers/counters.py](../../tests/python_tests/helpers/counters.py)
-- Python derived metrics: [tests/python_tests/helpers/metrics.py](../../tests/python_tests/helpers/metrics.py)
-- Python test driver: [tests/python_tests/helpers/perf.py](../../tests/python_tests/helpers/perf.py)
+- Device-side counter HW driver: [tests/helpers/include/counters.h](../../tests/helpers/include/counters.h)
+- Test-helper mock functions: [tests/helpers/include/perf.h](../../tests/helpers/include/perf.h)
+- Profiler zone macros: [tests/helpers/include/profiler.h](../../tests/helpers/include/profiler.h)
+- Host-side counter readback: [tests/python_tests/helpers/counters.py](../../tests/python_tests/helpers/counters.py)
+- Host-side derived metrics: [tests/python_tests/helpers/metrics.py](../../tests/python_tests/helpers/metrics.py)
+- Test driver: [tests/python_tests/helpers/perf.py](../../tests/python_tests/helpers/perf.py)
 - Test sources: [tests/sources/](../../tests/sources/) (files ending in `_perf.cpp`)
 - Pytest CLI registration: [tests/python_tests/conftest.py](../../tests/python_tests/conftest.py)
 - Upstream tech report (metal-level): [tech_reports/PerfCounters/perf-counters.md](../../../../tech_reports/PerfCounters/perf-counters.md)
@@ -36,7 +36,7 @@ Every test source under `tests/sources/*_perf.cpp` is compiled twice from the sa
 | NC (no counters) | defined | undefined | `ZONE_SCOPED` | Per-zone wall-clock cycles (`RISCV_DEBUG_REG_WALL_CLOCK_L`) |
 | WC (with counters) | defined | defined | `MEASURE_PERF_COUNTERS` | Per-zone HW counter snapshot |
 
-Both macros nest with each other in the source — every `MEASURE_PERF_COUNTERS("name")` is paired 1:1 with a `ZONE_SCOPED("name")` in the same scope. Only one of the two is non-empty in any given build, so wall-clock measurements and counter measurements are **never** taken simultaneously and cannot perturb each other. The host driver runs whichever build is needed and merges the resulting DataFrames by zone name.
+The two macros are mutually exclusive — only one of them is non-empty in any given build, so wall-clock and counter measurements are never taken simultaneously and cannot perturb each other. Pairing them in the source by the same name is a **convention**, not a hardware requirement: it keeps NC wall-clock data and WC counter data joinable by zone name in the host driver. The driver runs whichever build is needed and merges the resulting DataFrames on the zone name.
 
 Source-side, this is the pattern:
 
@@ -49,14 +49,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // ... unpack hw_configure, math_init, pack_init ...
     }
 
-    for (uint32_t tile = 0; tile < TILE_CNT; ++tile)
     {
-        MEASURE_PERF_COUNTERS("BODY")
-        ZONE_SCOPED("BODY")
-        // ... per-tile work ...
+        MEASURE_PERF_COUNTERS("TILE_LOOP")
+        ZONE_SCOPED("TILE_LOOP")
+        for (uint32_t tile = 0; tile < TILE_CNT; ++tile)
+        {
+            // ... per-tile work ...
+        }
     }
 }
 ```
+
+Each zone is registered once at its first encounter (`MEASURE_PERF_COUNTERS` is RAII-scoped and assigns a stable zone id by hashing the name), so placing the macro **outside** the loop is preferred — counter start is not a no-op and would dominate per-iteration cost if done on every tile.
 
 ### `PerfRunType` and the split arm/freeze model
 
@@ -64,8 +68,8 @@ Each LLK perf test is associated with a `PerfRunType` (declared in `perf.h`):
 
 | Run type | Purpose | Arm thread | Freeze thread |
 |----------|---------|-----------|---------------|
-| `L1_TO_L1` | End-to-end pipeline cycles, unpack → pack | UNPACK | PACK |
-| `L1_CONGESTION` | Pipeline cycles under L1 traffic contention | UNPACK | PACK |
+| `L1_TO_L1` | End-to-end pipeline cycles, unpack → math → pack | UNPACK | PACK |
+| `L1_CONGESTION` | Pipeline cycles under L1 traffic contention, unpack → math → pack | UNPACK | PACK |
 | `UNPACK_ISOLATE` | Unpack-only kernels (no math/pack) | UNPACK | UNPACK |
 | `MATH_ISOLATE` | Math/SFPU-only kernels (no unpack/pack) | MATH | MATH |
 | `PACK_ISOLATE` | Pack-only kernels (no unpack/math) | PACK | PACK |
@@ -113,6 +117,7 @@ Because both wall-clock cycles (NC build, `ZONE_SCOPED` start/end timestamps fro
 The LLK test suite uses a two-phase pytest flow: a compile-producer phase that builds every variant in parallel and a compile-consumer phase that runs them on hardware.
 
 ```bash
+source setup_testing_env.sh   # required: sets LLK_HOME, PATH, virtualenv
 cd $LLK_HOME/tests
 export CHIP_ARCH=blackhole   # or wormhole / quasar
 
@@ -261,7 +266,9 @@ The mux is latched at counter-start time. The macro path re-writes it before eac
 
 ## Derived Metrics Reference
 
-Derived metrics are computed in `tests/python_tests/helpers/metrics.py` from the raw counter DataFrame. They mirror the metric set in the metal-level [PerfCounters tech report](../../../../tech_reports/PerfCounters/perf-counters.md) but operate on per-zone snapshots from the LLK test suite rather than per-op aggregates. Every metric appears in the merged CSV as well as the `--dump-raw-metrics` console output.
+Derived metrics are computed in `tests/python_tests/helpers/metrics.py` from the raw counter DataFrame. The metric set mirrors the metal-level [PerfCounters tech report](../../../../tech_reports/PerfCounters/perf-counters.md) — the same catalogue applies to **both Wormhole and Blackhole** (architecture differences are confined to a few WH-only or BH-only counters, called out per-metric). The LLK driver operates on per-zone snapshots rather than per-op aggregates, so all derived values appear in the merged CSV and the `--dump-raw-metrics` console output.
+
+> **Full catalogue.** Metrics #1–#47 in `tech_reports/PerfCounters/perf-counters.md` are the authoritative list. The sections below document the ones the LLK driver surfaces directly; raw counters for every other upstream metric are present in the per-zone CSV, so any upstream formula can be re-evaluated on LLK data without code changes.
 
 ---
 
@@ -401,7 +408,7 @@ Math-to-Pack Handoff = AVAILABLE_MATH / PACKER_BUSY * 100
 
 - **>100%**: Math produces output faster than packer can consume (packer is the bottleneck).
 - **~100%**: Balanced.
-- **<100%**: Math is stalled — math is the bottleneck.
+- **<100%**: Packer is stalled waiting on math — math is the bottleneck.
 
 **Use case:** Identifies math-vs-pack pipeline imbalance.
 
@@ -821,6 +828,63 @@ Fidelity Stall Rate = MATH_FIDELITY_STALL / MATH_INSTRN_AVAILABLE * 100
 **Use case:** Detects whether fidelity is contributing to the cycle budget.
 
 ---
+
+**28. HiFi Fraction**
+
+Fraction of issued math instructions that took more than 1 HF cycle.
+
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | TDMA_UNPACK |
+
+```
+HiFi Fraction = (MATH_INSTRN_HF_2_CYCLE + MATH_INSTRN_HF_4_CYCLE) /
+                (MATH_INSTRN_HF_1_CYCLE + MATH_INSTRN_HF_2_CYCLE + MATH_INSTRN_HF_4_CYCLE) * 100
+```
+
+**Use case:** Quick check of fidelity mix in a workload. 0% = pure LoFi, 100% = pure HiFi.
+
+---
+
+**29. Avg HF Cycles Per Instrn**
+
+Weighted average of HF cycles per issued math instruction (1 for LoFi, 2 for HiFi2, 4 for HiFi4).
+
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | TDMA_UNPACK |
+
+```
+Avg HF Cycles = (HF_1 + 2*HF_2 + 4*HF_4) / (HF_1 + HF_2 + HF_4)
+```
+
+**Use case:** Single-number summary of fidelity impact on math execution.
+
+---
+
+### Reference: metrics in the upstream catalogue not surfaced directly by the LLK driver
+
+These are computable from the per-zone raw counter CSV using the formulas in [`tech_reports/PerfCounters/perf-counters.md`](../../../../tech_reports/PerfCounters/perf-counters.md). All apply to **both Wormhole and Blackhole** unless flagged otherwise.
+
+| # | Metric | Counter group | Note |
+|---|---|---|---|
+| 17 | Math Dest Write Port Stall Rate | TDMA_PACK | — |
+| 21 | MMIO/SFPU/THCON/MOVE Idle Wait | INSTRN_THREAD | — |
+| 22 | RISC Core L1 Util | L1 (mux 1) | Blackhole only |
+| 24 | L1 TDMA Bundle Util | L1 (mux 0) | — |
+| 25 | NoC Ring 0/1 Outgoing/Incoming Util | L1 | — |
+| 26 | NoC Ring 0/1 Outgoing/Incoming Backpressure | L1 | — |
+| 27 | L1 Unpacker/Packer Port Backpressure | L1 | — |
+| 28 | L1 Total Bandwidth Util | L1 | — |
+| 29 | L1 Read vs Write Ratio | L1 | — |
+| 30 | NoC Ring Asymmetry | L1 | — |
+| 31 | L1 Contention Index | L1 | — |
+| 32 / 33 | Unpacker/Packer L1 Efficiency | L1 + TDMA | — |
+| 34 | NoC vs Compute Balance | L1 + FPU | — |
+| 35 | TDMA vs NoC L1 Share | L1 | — |
+| 37 / 41 | Packer Load Imbalance / Packer Engine N Util | TDMA_PACK | Wormhole only (`PACK_COUNT=4`) |
 
 ## Notes and Caveats
 

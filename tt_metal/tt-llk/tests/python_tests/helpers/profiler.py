@@ -285,13 +285,12 @@ def _stats_l1_congestion(data: ProfilerData) -> pd.DataFrame:
         f"{PerfRunType.L1_CONGESTION.name}[PACK]", data.pack().raw()
     )
 
-    if unpack_stats.empty and pack_stats.empty:
+    frames = [df for df in (unpack_stats, pack_stats) if not df.empty]
+    if not frames:
         return pd.DataFrame()
-    if unpack_stats.empty:
-        return pack_stats
-    if pack_stats.empty:
-        return unpack_stats
-    return pd.merge(unpack_stats, pack_stats, on="marker", how="outer", validate="1:1")
+    if len(frames) == 1:
+        return frames[0]
+    return pd.merge(frames[0], frames[1], on="marker", how="outer", validate="1:1")
 
 
 class EntryType(Enum):
