@@ -19,6 +19,7 @@ This is the headline number for pi0.5 — fps of full inference on Blackhole.
 Skipped if the checkpoint isn't present locally.
 """
 
+import os
 import statistics
 import time
 from pathlib import Path
@@ -28,7 +29,10 @@ import pytest
 import torch
 import ttnn
 
-CHECKPOINT_DIR = Path(__file__).resolve().parents[2] / "weights" / "pi05_base"
+from models.experimental.pi0_5.common.checkpoint_meta import action_horizon_from_checkpoint
+
+_DEFAULT_CHECKPOINT_DIR = Path(__file__).resolve().parents[2] / "weights" / "pi05_base"
+CHECKPOINT_DIR = Path(os.environ.get("PI05_CHECKPOINT_DIR", str(_DEFAULT_CHECKPOINT_DIR)))
 
 NUM_WARMUP = 0
 NUM_ITERS = 1
@@ -82,9 +86,14 @@ def test_pi0_5_ttnn_full_e2e_fps(device):
     from models.experimental.pi0_5.common.weight_loader import Pi0_5WeightLoader
     from models.experimental.pi0_5.tt.ttnn_pi0_5_model import Pi0_5ModelTTNN
 
-    print(f"\n📋 Loading PI0.5 TTNN model from {CHECKPOINT_DIR}")
+    action_horizon = action_horizon_from_checkpoint(CHECKPOINT_DIR)
+    num_denoising_steps = int(os.environ.get("PI05_NUM_DENOISE_STEPS", "10"))
+    print(
+        f"\n📋 Loading PI0.5 TTNN model from {CHECKPOINT_DIR}  "
+        f"(action_horizon={action_horizon}, num_denoising_steps={num_denoising_steps})"
+    )
     loader = Pi0_5WeightLoader(str(CHECKPOINT_DIR))
-    cfg = Pi0_5ModelConfig()
+    cfg = Pi0_5ModelConfig(action_horizon=action_horizon, num_denoising_steps=num_denoising_steps)
     model = Pi0_5ModelTTNN(cfg, loader, device)
     print(f"✅ Model loaded")
 
