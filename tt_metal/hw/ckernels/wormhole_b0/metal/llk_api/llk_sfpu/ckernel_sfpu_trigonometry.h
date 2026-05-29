@@ -499,7 +499,7 @@ sfpi_inline sfpi::vFloat _sfpu_quarter_exp_abs_(sfpi::vFloat x) {
     sfpi::vInt i = float_to_uint8(j, sfpi::RoundMode::NearestEven);
     j = int32_to_float(i, sfpi::RoundMode::NearestEven);
 
-    sfpi::vFloat r, f, scale, bias, c1;
+    sfpi::vFloat r, f, c1;
 
     if constexpr (!is_fp32_dest_acc_en) {
         f = j * sfpi::vConstFloatPrgm1 + a;  // f = a - j * ln(2)

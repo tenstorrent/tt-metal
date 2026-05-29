@@ -111,17 +111,13 @@ def test_relu_fp32(device, ttnn_function):
     assert status
 
 
-def run_unary_fp32_test_with_ulp(
-    device, ttnn_function, torch_function, max_ulp, pcc_check=False, pcc=0.9999, input_filter=None
-):
+def run_unary_fp32_test_with_ulp(device, ttnn_function, torch_function, max_ulp, pcc_check=False, pcc=0.9999):
     all_bf16_values = generate_all_bfloat16_bitpatterns(torch.float32)
 
     # Flush subnormal inputs
     # Hardware does not handle subnormal values and will flush these values to 0.0 (known behavior)
     # For testing, we set these values to 0.0 beforehand so that golden function also gets 0.0
     x_torch = flush_subnormal_values_to_zero(all_bf16_values)
-    if input_filter is not None:
-        x_torch = x_torch[input_filter(x_torch)]
 
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
 
