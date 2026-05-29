@@ -21,6 +21,7 @@ from tracy import signpost
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping
 
 COMPUTE_KERNEL_CONFIG_LOFI = ttnn.WormholeComputeKernelConfig(
@@ -373,13 +374,11 @@ class TtRoutedExpert(LightweightModule):
         expert_region_offsets: ttnn.Tensor,
     ) -> ttnn.Tensor:
         """
-        Blackhole forward implementation: delegates the per-local-expert work
-        to the `unified_routed_expert_moe` C++ composite. The composite loops
-        over local experts in C++ — there is no Python per-expert loop and no
-        host-device sync to read counts; each per-expert FFN call reads
-        `expert_token_counts` and `global_expert_idx_table` device-side and
-        bounds its chunk loop accordingly. Per-expert FFN calls still appear
-        as separate device ops in tt-perf-report.
+        On Blackhole, delegates the per-local-expert work to the
+        `unified_routed_expert_moe` C++ composite (no Python per-expert loop,
+        no host-device count sync). On non-Blackhole archs (Wormhole), falls
+        back to the per-expert Python loop with extract → routed_expert_ffn
+        → insert.
 
         Args:
             dispatched_buffer: Dispatched tokens
@@ -400,28 +399,55 @@ class TtRoutedExpert(LightweightModule):
             logger.warning(f"{dispatched_buffer.dtype=} typecasting to {self.activations_dtype}")
             dispatched_buffer = ttnn.typecast(dispatched_buffer, self.activations_dtype)
 
-        # All per-expert dispatch — extract, FFN, insert — runs C++-side
-        # inside ttnn.experimental.deepseek_prefill.unified_routed_expert_moe,
-        # which loops over local experts in C++ (no Python loop, no host-device
-        # count sync). Each per-expert FFN program is still a separate device
-        # op; the FFN's reader/compute/writer kernels read the device-resident
-        # `expert_token_counts` and `global_expert_idx_table` to bound their
-        # chunk loops. The signpost marks the composite's boundary in
-        # tt-perf-report so profile diffs can still spot the routed-expert
-        # block without the per-expert "Expert N/M" landmarks from the
-        # pre-PR Python loop.
-        signpost(header="UnifiedRoutedExpertMoe")
-        expert_outputs = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
-            dispatched_buffer,
-            expert_region_offsets,
-            expert_token_counts,
-            self.global_expert_idx_table,
-            self.gate_projs,
-            self.up_projs,
-            self.down_projs,
-            max_dispatched_tokens_per_expert=self.max_tokens,
-            compute_kernel_config=self.compute_kernel_config,
-        )
+        if is_blackhole():
+            signpost(header="UnifiedRoutedExpertMoe")
+            expert_outputs = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
+                dispatched_buffer,
+                expert_region_offsets,
+                expert_token_counts,
+                self.global_expert_idx_table,
+                self.gate_projs,
+                self.up_projs,
+                self.down_projs,
+                max_dispatched_tokens_per_expert=self.max_tokens,
+                compute_kernel_config=self.compute_kernel_config,
+            )
+            logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
+            return expert_outputs
+
+        # Wormhole fallback: per-expert Python loop with extract → FFN → insert.
+        expert_outputs = dispatched_buffer
+        for local_expert in range(self.experts_per_chip):
+            signpost(f"Expert {local_expert+1}/{self.experts_per_chip}")
+
+            tokens = ttnn.experimental.deepseek_prefill.extract(
+                dispatched_buffer,
+                expert_region_offsets,
+                expert_token_counts,
+                self.global_expert_idx_table,
+                local_expert_id=local_expert,
+                max_dispatched_tokens_per_expert=self.max_tokens,
+            )
+            logger.debug(f"Expert {local_expert}: input shape {tokens.shape}")
+
+            output = ttnn.experimental.deepseek_prefill.routed_expert_ffn(
+                tokens,
+                self.gate_projs[local_expert],
+                self.up_projs[local_expert],
+                self.down_projs[local_expert],
+                compute_kernel_config=self.compute_kernel_config,
+                output=None,
+            )
+            logger.debug(f"Expert {local_expert}: output shape {output.shape}")
+
+            expert_outputs = ttnn.experimental.deepseek_prefill.insert(
+                expert_outputs,
+                output,
+                expert_region_offsets,
+                expert_token_counts,
+                self.global_expert_idx_table,
+                local_expert_id=local_expert,
+            )
 
         logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
         return expert_outputs

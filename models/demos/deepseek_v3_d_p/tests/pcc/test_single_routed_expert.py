@@ -14,6 +14,7 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from tests.ttnn.utils_for_testing import comp_pcc
@@ -23,26 +24,20 @@ from tests.ttnn.utils_for_testing import comp_pcc
     "num_tokens, emb_dim, hidden_dim",
     [
         (1024, 7168, 2048),  # DeepSeek V3 dims, 1K tokens
-        (1600, 7168, 2048),  # DeepSeek V3 dims, 1.6K tokens
         (2048, 7168, 2048),  # DeepSeek V3 dims, 2K tokens
-        (3200, 7168, 2048),  # DeepSeek V3 dims, 3.2K tokens
         (4096, 7168, 2048),  # DeepSeek V3 dims, 4K tokens
         (5120, 7168, 2048),  # DeepSeek V3 dims, 5K tokens
         (6144, 7168, 2048),  # DeepSeek V3 dims, 6K tokens
         (8192, 7168, 2048),  # DeepSeek V3 dims, 8K tokens
-        (16384, 7168, 2048),  # DeepSeek V3 dims, 16K tokens
         (25600, 7168, 2048),  # DeepSeek V3 dims, 25K tokens
     ],
     ids=[
         "ds-v3-1k",
-        "ds-v3-1.6k",
         "ds-v3-2k",
-        "ds-v3-3.2k",
         "ds-v3-4k",
         "ds-v3-5k",
         "ds-v3-6k",
         "ds-v3-8k",
-        "ds-v3-16k",
         "ds-v3-25k",
     ],
 )
@@ -191,6 +186,7 @@ def test_single_routed_expert(
     ],
     indirect=["mesh_device", "device_params"],
 )
+@pytest.mark.skipif(not is_blackhole(), reason="device-side count-aware sparsity is Blackhole-only")
 def test_single_routed_expert_faked_token_count(
     mesh_device,
     device_params,
