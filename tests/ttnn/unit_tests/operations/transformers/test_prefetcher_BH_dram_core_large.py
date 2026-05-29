@@ -665,7 +665,7 @@ def test_dram_core_prefetcher_recv_contig_smoke(device, num_tensors, num_layers)
     ttnn.experimental.start_dram_core_prefetcher(device)
     ttnn.experimental.queue_dram_core_prefetcher_request(
         device,
-        weights,
+        [(w, ring_size) for w in weights],
         num_layers=num_layers,
         global_cb=gcb,
     )
