@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from .pipeline_wan import _UNSET, WanPipeline
+from .pipeline_wan import WanPipeline
 
 
 class WanPipeline21(WanPipeline):
@@ -26,7 +26,7 @@ class WanPipeline21(WanPipeline):
         dynamic_load=None,
         topology=None,
         is_fsdp=None,
-        vae_t_chunk_size=_UNSET,
+        vae_t_chunk_size=None,
         sdpa_t_fracture_w_only=None,
         target_height: int = 0,
         target_width: int = 0,

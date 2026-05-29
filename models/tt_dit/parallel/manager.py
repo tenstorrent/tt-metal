@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -141,6 +142,11 @@ class CCLManager:
 
             self._ping_pong_buffer_cache[cache_key] = buffers
             self._ping_pong_buffer_indices[cache_key] = 0
+            logger.info(
+                "CCLManager: alloc RS ping-pong buffer "
+                f"in={tuple(shape)} out={tuple(output_buffer_shape)} dim={dim} mesh_axis={mesh_axis} "
+                f"(cache size now {len(self._ping_pong_buffer_cache)})"
+            )
             ttnn.synchronize_device(self.mesh_device)
 
         # Get current buffer and alternate index
@@ -185,6 +191,11 @@ class CCLManager:
 
             self._ping_pong_buffer_cache[cache_key] = buffers
             self._ping_pong_buffer_indices[cache_key] = 0
+            logger.info(
+                "CCLManager: alloc AG ping-pong buffer "
+                f"in={tuple(shape)} out={tuple(output_buffer_shape)} dim={dim} mesh_axis={mesh_axis} dtype={dtype} "
+                f"(cache size now {len(self._ping_pong_buffer_cache)})"
+            )
             ttnn.synchronize_device(self.mesh_device)
 
         # Get current buffer and alternate index
@@ -321,6 +332,12 @@ class CCLManager:
 
             self._ping_pong_buffer_cache[cache_key] = buffers
             self._ping_pong_buffer_indices[cache_key] = 0
+            logger.info(
+                "CCLManager: alloc NP ping-pong buffer "
+                f"in={tuple(input_shape)} out={tuple(output_shape)} dims={dims} "
+                f"pad_left={pad_left} pad_right={pad_right} t_front_pad={t_front_pad} dtype={dtype} "
+                f"(cache size now {len(self._ping_pong_buffer_cache)})"
+            )
             ttnn.synchronize_device(self.mesh_device)
 
         current_idx = self._ping_pong_buffer_indices[cache_key]
@@ -399,6 +416,32 @@ class CCLManager:
             logical_h=logical_h,
             t_front_pad=t_front_pad,
         )
+
+    def clear_persistent_buffers(self):
+        """Drop every cached ping-pong buffer (RS/AG/NP) and free its device memory.
+
+        Use between distinct resolutions so DRAM doesn't accumulate one
+        buffer set per (shape, dim, dtype) ever seen by this manager.
+        Caller is responsible for ensuring no in-flight op still holds
+        references to these buffers — we synchronize the device first.
+        """
+        if not self._ping_pong_buffer_cache:
+            return
+        ttnn.synchronize_device(self.mesh_device)
+        n = len(self._ping_pong_buffer_cache)
+
+        # RS slots store [intermediate, output]; AG/NP slots store a single tensor.
+        for slots in self._ping_pong_buffer_cache.values():
+            for slot in slots:
+                if isinstance(slot, (list, tuple)):
+                    for t in slot:
+                        ttnn.deallocate(t)
+                else:
+                    ttnn.deallocate(slot)
+
+        self._ping_pong_buffer_cache.clear()
+        self._ping_pong_buffer_indices.clear()
+        logger.info(f"CCLManager: cleared {n} persistent ping-pong buffer entries")
 
     def reset_global_semaphores(self):
         """Reset all global semaphores to 0"""

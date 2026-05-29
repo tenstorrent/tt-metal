@@ -65,10 +65,29 @@ class UniPCSolver(Solver):
         if self._state is not None:
             self._state = _State(self._state.clean_preds, self._state.corrected, 0)
 
+    def clear_state(self) -> None:
+        """Free the cached on-device state buffers (corrected + clean_preds).
+
+        Call between resolutions so the next step() call reallocates buffers
+        sized for the new latent shape and the old ones get released.
+        """
+        if self._state is None:
+            return
+        ttnn.deallocate(self._state.corrected)
+        for t in self._state.clean_preds:
+            ttnn.deallocate(t)
+        self._state = None
+
     def step(self, *, step: int, latent: ttnn.Tensor, velocity_pred: ttnn.Tensor) -> ttnn.Tensor:
         self._assert_schedule()
 
         clean_pred = latent - self._sigmas[step] * velocity_pred
+
+        # Cached state buffers are tied to the latent shape. Drop them when the shape
+        # changes (e.g. reusing the pipeline across resolutions) so the buffers below
+        # get re-allocated to match.
+        if self._state is not None and tuple(self._state.corrected.shape) != tuple(latent.shape):
+            self._state = None
 
         state = self._state or _State(
             tuple(ttnn.empty_like(latent) for _ in range(self.order)),

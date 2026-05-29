@@ -351,9 +351,38 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         self.latent_buffer = None
         self.condition_buffer = None
 
+        # Spatial shape of the last completed __call__, so we can drop CCL
+        # persistent buffers when the resolution changes (they're keyed on
+        # shape and never reused across resolutions — see CCLManager).
+        self._last_spatial_shape: tuple | None = None
+
         # TODO: Reset buffers for change in resolution. Also reinitialize trace
         if run_warmup:
             self.warmup_buffers(height=height, width=width)
+
+    def _clear_per_resolution_state(self) -> None:
+        """Free every shape-dependent device buffer so the next call rebuilds from scratch.
+
+        Covers CCL ping-pong buffers on all managers, the pipeline's persistent
+        latent/condition input buffers, and the UniPC solver's cached state.
+        Per-transformer prompt buffers are shape-independent and left alone.
+        """
+        if self.latent_buffer is not None:
+            ttnn.deallocate(self.latent_buffer)
+            self.latent_buffer = None
+        if self.condition_buffer is not None:
+            ttnn.deallocate(self.condition_buffer)
+            self.condition_buffer = None
+
+        if self._solver is not None:
+            self._solver.clear_state()
+
+        seen: set[int] = set()
+        for mgr in (self.dit_ccl_manager, self.vae_ccl_manager, self.encoder_ccl_manager):
+            if mgr is None or id(mgr) in seen:
+                continue
+            seen.add(id(mgr))
+            mgr.clear_persistent_buffers()
 
     def prepare_text_conditioning(self, tt_model, prompt_embeds, buffer, traced=False):
         prompt_1BLP = tt_model.prepare_text_conditioning(prompt_embeds)
@@ -883,6 +912,15 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         else:
             batch_size = prompt_embeds.shape[0]
 
+        # Every shape-dependent device buffer (CCL ping-pong, latent/condition
+        # input, UniPC solver state) is keyed on the spatial shape and is never
+        # reused across resolutions — drop them all when the shape changes so
+        # DRAM doesn't accumulate one set per resolution.
+        spatial_shape = (batch_size, num_frames, height, width)
+        if self._last_spatial_shape is not None and self._last_spatial_shape != spatial_shape:
+            self._clear_per_resolution_state()
+        self._last_spatial_shape = spatial_shape
+
         # 3. Encode input prompt
         with profiler("encoder", profiler_iteration) if profiler else nullcontext():
             self._prepare_text_encoder()
@@ -968,7 +1006,9 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                             mesh_axes=[None, None, sp_axis, None],
                             dtype=ttnn.bfloat16,
                         )
-                        if self.condition_buffer is None:
+                        if self.condition_buffer is None or tuple(self.condition_buffer.shape) != tuple(
+                            cond_latents.shape
+                        ):
                             self.condition_buffer = cond_latents
                         else:
                             ttnn.copy(cond_latents, self.condition_buffer)
@@ -988,7 +1028,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                     )
 
                 # setup/update latent and condition buffers
-                if self.latent_buffer is None:
+                if self.latent_buffer is None or tuple(self.latent_buffer.shape) != tuple(permuted_latent_tt.shape):
                     self.latent_buffer = permuted_latent_tt
                 else:
                     ttnn.copy(permuted_latent_tt, self.latent_buffer)
