@@ -243,6 +243,7 @@ def compute_validation_matrix(
                         entry["mesh_device_shape"] = mesh_str
                     include.append(entry)
         else:
+            single_mesh = next(iter(mesh_to_modules), "")
             runner_batches = chunk_modules(base_modules, batch_size)
             total_batches = len(runner_batches)
             for index, batch in enumerate(runner_batches, start=1):
@@ -258,7 +259,7 @@ def compute_validation_matrix(
                         "vectors_artifact_name": f"sweeps-vectors-{validation_scope}",
                         "trace_ids": trace_id_list,
                         "hardware_group": hardware_label,
-                        "mesh_device_shape": "",
+                        "mesh_device_shape": single_mesh,
                     }
                 )
     return {"include": include}
