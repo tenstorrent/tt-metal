@@ -399,3 +399,42 @@ the binding constraint. Same conclusion holds for the analogous
 remaining levers are algorithmic (reduce DRAM traffic, e.g. cross-op
 fusion keeping output L1-resident for the consumer), not intra-kernel
 pass fusion.**
+
+## Opt 3: deep input read + single per-row barrier (2026-05-29)
+
+The reader previously barriered after every `block_size`=2 input tiles, so
+only 2 DRAM reads were ever outstanding and each barrier exposed a full
+read round-trip. On the **no-RoPE** shapes (read-latency-bound, ~44% of
+BH's 512 GB/s peak) this was the dominant cost.
+
+**Change (reader.cpp):** issue a whole tile-row's `num_tile_cols`=40 reads,
+then ONE `noc_async_read_barrier()` (40 reads in flight vs 2). `input_cb` is
+sized to an integer multiple of `num_tile_cols`, so a row reservation never
+wraps the ring (wr_ptr stays contiguous). For the RoPE path, cos/sin reads
+are now issued *first* (few tiles), then the input row, under that same
+single barrier; input is pushed before cos/sin so compute's PRE phase isn't
+delayed (cos/sin aren't consumed until the much-later POST RoPE sub-phase).
+This collapses two per-row barriers into one without delaying input.
+
+**Correctness:** preserved. 15/15 RoPE + COMPOSITE_VS_FUSED bisect tests
+PASS at PCC ≥ 99.999%; bench PCC checks PASS. Same tiles, same DST, only
+the read-issue ordering and barrier granularity changed.
+
+**Perf (TP=4 LINE, BH 2x4), fused_us before → after / new speedup:**
+
+| config | fused before | fused after | speedup |
+|---|---|---|---|
+| self_sp4_N18944  (RoPE) | 413.2 | 416.4 | 1.59× (was 1.62×) |
+| self_sp8_N9472   (RoPE) | 271.7 | 263.3 | 1.27× (was 1.23×) |
+| self_sp32_N2368  (RoPE) | 124.5 | 124.2 | 0.87× (unchanged) |
+| cross_q_sp4_N18944      | 346.2 | 321.9 | **1.85×** (was 1.72×) |
+| cross_q_sp8_N9472       | 219.0 | 195.4 | **1.51×** (was 1.35×) |
+| cross_q_sp32_N2368      |  87.4 |  85.4 | 1.14× (was 1.12×) |
+| cross_k_prompt_L512     |  42.6 |  43.0 | 1.20× (~flat) |
+
+**Big wins on the read-bound no-RoPE shapes** (cross_q_N18944 +7%,
+cross_q_N9472 +12%, both well past 1.5×). RoPE shapes are compute-bound
+(TRISC dominated by the RoPE matmul/cos/sin per the profiling) so deep
+reads don't help them; the merged-barrier ordering recovered the small NoC
+contention regression deep reads first introduced on RoPE-N18944 (was 421
+with two barriers → 416). Net clearly positive; committed.
