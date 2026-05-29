@@ -74,7 +74,7 @@ void kernel_main() {
 
         cb_wait_front(cb_intermediates, kIntermediateTilesPerRow);
         const uint32_t l1_intermediates_read_addr = get_read_ptr(cb_intermediates);
-        noc_async_write_tile(intermediate_base_idx, intermediates_addr_generator, l1_intermediates_read_addr);
+        noc_async_write_page(intermediate_base_idx, intermediates_addr_generator, l1_intermediates_read_addr);
         noc_async_write_barrier();
         cb_pop_front(cb_intermediates, kIntermediateTilesPerRow);
 #endif
@@ -119,7 +119,7 @@ void kernel_main() {
 
         cb_wait_front(cb_intermediates, kIntermediateTilesPerRow);
         const uint32_t l1_intermediates_read_addr = get_read_ptr(cb_intermediates);
-        noc_async_write_tile(intermediate_base_idx, intermediates_addr_generator, l1_intermediates_read_addr);
+        noc_async_write_page(intermediate_base_idx, intermediates_addr_generator, l1_intermediates_read_addr);
         noc_async_write_barrier();
         cb_pop_front(cb_intermediates, kIntermediateTilesPerRow);
 #endif
