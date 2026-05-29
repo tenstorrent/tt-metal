@@ -143,14 +143,14 @@ FORCE_INLINE void read_wrapped_chunk_from_output_tensor_to_address(
         contig_pages = 1;
 #ifdef ROW_MAJOR_LAYOUT
 #ifdef INTERLEAVED_MEM_LAYOUT
-        uint64_t src_noc_addr = get_noc_addr(curr_page_idx, s);
+        uint64_t src_noc_addr = s.get_noc_addr(curr_page_idx);
         noc_async_read(src_noc_addr, local_l1_read_addr, page_size);
 #elif defined SHARDED_MEM_LAYOUT
         ASSERT(false);  // unimplemented
 #endif
 #elif defined TILED_LAYOUT
 #ifdef INTERLEAVED_MEM_LAYOUT
-        noc_async_read_tile(curr_page_idx, s, local_l1_read_addr);
+        noc_async_read_page(curr_page_idx, s, local_l1_read_addr);
         // common with `write_chunk_v2`
 #elif defined SHARDED_MEM_LAYOUT
         auto const& [noc_yx, page_offset, contig_pages_] =

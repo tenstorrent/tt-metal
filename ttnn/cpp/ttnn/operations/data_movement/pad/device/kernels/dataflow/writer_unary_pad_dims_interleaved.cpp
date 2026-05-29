@@ -44,7 +44,7 @@ void kernel_main() {
 
     auto pad_tiles = [&](uint32_t num_tiles) {
         for (uint32_t pad_tile = 0; pad_tile < num_tiles; pad_tile++) {
-            noc_async_write_tile(dst_tile_id, s1, pad_buffer_l1_addr);
+            noc_async_write_page(dst_tile_id, s1, pad_buffer_l1_addr);
             dst_tile_id++;
         }
         noc_async_write_barrier();
@@ -56,7 +56,7 @@ void kernel_main() {
                 for (uint32_t xt = 0; xt < num_unpadded_Xt; xt++) {
                     cb_out0.wait_front(1);
                     uint32_t src_buffer_l1_addr = cb_out0.get_read_ptr();
-                    noc_async_write_tile(dst_tile_id, s1, src_buffer_l1_addr);
+                    noc_async_write_page(dst_tile_id, s1, src_buffer_l1_addr);
                     noc_async_write_barrier();
                     cb_out0.pop_front(1);
                     dst_tile_id++;
