@@ -102,3 +102,51 @@ compute won't reach 3×. Next lever must CUT work on the critical path
 (fuse/shorten the P_NORM dependency chain or the RoPE matmul), not add
 cores. Re-profile N18944 to confirm whether reader DRAM throughput or the
 compute critical path dominates once workers are saturated.
+
+## Ceiling analysis (2026-05-29) — why 3×/1.5× targets are hard
+
+After exhausting the worker-count and multi-link levers, the structural
+ceilings appear to be:
+
+**Large shapes (N9472/N18944) — ceiling ≈ 2×, currently 1.59–1.73×.**
+The fused op's ONLY structural advantage over the composite is eliminating
+the post-kernel DRAM re-read of the input (composite reads input twice:
+once in pre, once in post; fused reads once, keeps it L1-resident). That
+is a ~2× DRAM-traffic reduction → ~2× ceiling IF the composite is purely
+DRAM-bound. Observed 1.59–1.73× is below that because:
+  - Compute (TRISC ~316us avg) ≈ reader (~257us) ≈ writer-worker (~322us)
+    are all balanced — no single lane has slack to absorb the others.
+  - Fabric is already fully hidden (AGWAIT≈0); no fabric lever left.
+  - The ~100us wall-vs-TRISC gap is pipeline fill (first chunk's AG must
+    complete before the first POST) + drain (last chunk's output write
+    after the last POST). With only ~3 chunks/worker, fill+drain is a
+    large fraction and can't be amortized away without a deeper rewrite.
+  - Fidelity is fixed (HiFi4) — cannot trade precision for speed.
+Reaching 3× would require ~halving compute at fixed fidelity (not
+possible with the same math) or a fundamentally different algorithm.
+
+**Small sharded shapes (N2368, sp32) — currently 0.87×/1.07×, want 1.5×.**
+These are dominated by fused-op FIXED overhead (~50us), not compute:
+  - Composite "wastes" ~40us re-reading input yet still BEATS fused by
+    16us → fused carries ~56us of fixed cost the composite doesn't.
+  - That fixed cost is the MUX/fabric handshake (endpoint-ready wait +
+    client-connect + per-chunk mcast + semaphore wait + DRAM round-trip)
+    plus single-program scheduling — a per-chunk latency that does NOT
+    amortize when there is little work per chip.
+  - Worker count does NOT help: MORE workers (one-per-row) regressed
+    N2368 (+24.6%, more fabric packets); FEWER workers add serial compute
+    without cutting packet count (packet count ≈ rows/chunk_size, and
+    chunk_size is capped at 128/num_tile_cols=3 by the L1-residency budget
+    of input_cb). So the packet count — and thus the dominant fixed
+    fabric cost — is essentially fixed regardless of worker count.
+The only path to 1.5× here is cutting the per-chunk fabric fixed cost
+(lighter handshake, batch multiple chunks per mcast, or skip the DRAM
+round-trip for the gathered stats), or routing these tiny shapes to the
+composite (which is faster for them).
+
+**Conclusion / decision point.** The clean, in-scope levers are exhausted
+(committed: L512 0.97→1.22×). The remaining gap to 3×/1.5× needs one of:
+(a) relax the fixed-fidelity constraint, (b) an algorithmic change to the
+RoPE/norm compute, or (c) cut the per-chunk fabric fixed cost (batched
+mcast / no-DRAM-roundtrip AG). All three are larger efforts that change
+correctness-sensitive code paths — surfacing to the user before pursuing.
