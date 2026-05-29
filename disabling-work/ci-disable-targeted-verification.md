@@ -25,11 +25,41 @@ This automation covers **every non-Galaxy pipeline** in the active pipeline list
 - Multi-card non-Galaxy workflows, specifically T3K — e.g. `(T3K) T3000 e2e tests`, `(T3K) T3000 unit tests`, `t3000-demo-tests`, `t3000-perf-tests`, and any other workflow whose runner SKU is a T3K box rather than a Galaxy box.
 - Any other non-Galaxy pipeline that surfaces deterministic test failures.
 
-**Prioritization (not exclusion).** When the agent has a free focus slot and multiple uncovered non-Galaxy workflows are candidates, prefer single-card workflows first because their CI loop is shorter, then T3K, then any remaining non-Galaxy workflows. This is a tie-breaker on which focus slot to fill next, NOT a filter on what is in scope. T3K (and any other non-Galaxy multi-card) workflows MUST NOT be skipped just because a single-card alternative exists; they are tracked, disabled, and verified using the same procedure as single-card workflows.
+**Prioritization (not exclusion).** When the agent has a free focus slot and multiple non-Galaxy workflows with uncovered failing tests are candidates (test-level coverage per `## Multi-PR per workflow` — a workflow that already has an open PR is still a candidate if it has additional uncovered deterministic main failures), prefer single-card workflows first because their CI loop is shorter, then T3K, then any remaining non-Galaxy workflows. This is a tie-breaker on which focus slot to fill next, NOT a filter on what is in scope. T3K (and any other non-Galaxy multi-card) workflows MUST NOT be skipped just because a single-card alternative exists; they are tracked, disabled, and verified using the same procedure as single-card workflows.
 
 The only excluded category is **Galaxy** pipelines, which are owned by the separate Galaxy automation (`ci-disable-targeted-verification-galaxy.md` + `disabling-work-so-far-galaxy.md`). Do not touch Galaxy workflows or any PRs / issues tracked there.
 
 Wherever the rest of this document refers to "non-Galaxy" as a scope qualifier, it means the full non-Galaxy set defined here, NOT just single-card.
+
+## Multi-PR per workflow
+
+A single non-Galaxy workflow MAY have multiple concurrently-open automation disable PRs tracked in the state log, each disabling a distinct, non-overlapping subset of that workflow's deterministic main failures. The existence of an open PR for a workflow does NOT prevent the agent from opening additional PRs for that same workflow when new deterministic main failures appear that aren't yet covered. "Covered" here is test-level, not workflow-level; the rules below make this precise.
+
+### Coverage definitions (test-level)
+
+These definitions are used by the rest of this document wherever "covered" / "uncovered" appears. They replace the old workflow-level coverage rule.
+
+- **Trigger coverage (OPEN-PR-only).** A test is "covered for new-PR-trigger purposes" iff it is in the disable set of some currently-OPEN automation PR tracked in the state log. A test that is in the disable set of a merged automation PR but is STILL deterministically failing on `main` is NOT considered covered for trigger purposes — the merged PR clearly didn't address it, and a new PR is needed.
+- **Tier-1 terminal coverage (OPEN-OR-MERGED).** A test is "tier-1 covered" iff it is in the disable set of some OPEN-OR-MERGED automation PR tracked in the state log. Used by the tier-1 terminal-state conjunct in `## Terminal States (Two Tiers)`.
+- **Tier-2 terminal coverage (MERGED-only).** A test is "tier-2 covered" iff it is in the disable set of some MERGED automation PR tracked in the state log. Used by the tier-2 terminal-state conjunct in `## Terminal States (Two Tiers)`.
+
+A workflow has "uncovered failing tests" (the new-PR-trigger condition) iff at least one of its deterministic main failures (same signature across ≥3 consecutive completed `main` runs) is not covered under the trigger-coverage rule above. Workflow-level questions ("is this workflow in tier-1 coverage?") reduce to "is every one of its deterministic-main-failing tests covered under the relevant rule?".
+
+### Why the trigger and terminal-state rules use different "covered" sets
+
+The asymmetry — trigger uses OPEN-PR-only, tier 1 uses OPEN-OR-MERGED — is intentional and self-consistent in steady state. When a merged PR's disable takes effect, its test starts SKIPping on `main` and therefore drops out of the deterministic-main-failure set entirely, so it's no longer eligible to be "uncovered" under either rule. The asymmetry only matters in the pathological case where a merged disable didn't take effect (the test is still failing on `main` after the merge); in that case the trigger correctly fires and creates a new PR, AND tier 1 correctly fails to hold because the test is a deterministic main failure not in any open PR's disable set (the merged PR's disable set technically lists the test, but the merged disable didn't work). In practice, a re-failed test is treated as uncovered for both trigger and tier-1 purposes until a new disable PR succeeds.
+
+### Cross-PR conflict prevention (initial-batch eligibility)
+
+Whenever the agent computes an initial disable batch for a new PR, that batch MUST exclude every test already in the disable set of any currently-OPEN automation PR tracked in the state log. This prevents two open PRs from racing on the same test. Tests in merged automation PRs that are STILL deterministically failing on `main` (the "merged disable didn't take effect" case above) are eligible — the new PR is the corrective action.
+
+### Per-workflow PR count
+
+There is no per-workflow cap on the number of concurrently-open automation PRs. Each PR remains gated by the per-session caps in `## Session Scope (Two Lanes — Focus and Examining)` (at most 3 focus PRs, 3 examining PRs, 3 dispatches per session).
+
+### Branch naming
+
+Different open PRs for the same workflow use the existing branch-naming convention (`ci-disable/<workflow-tag>-<test-tag>-<date>`); the `<test-tag>` portion is enough to disambiguate. No new naming rule is needed.
 
 ## Source of Truth (State Log)
 
@@ -37,6 +67,7 @@ Wherever the rest of this document refers to "non-Galaxy" as a scope qualifier, 
 - The agent MUST NOT use `gh pr list --search "draft:true author:@me"` (or any other GitHub query) to discover the set of tracked disable PRs. Any PR not listed in the state log is invisible to the automation.
 - The agent still uses `gh` for narrow read/write operations on PRs and runs that the state log already references (checking mergeable status, posting comments, dispatching workflows, viewing run status, etc.) — but never to enumerate prior work.
 - Wiping the state log resets the automation to a fresh-state view. Stale GitHub PRs that match the automation's authoring criteria but aren't in the state log are intentionally ignored.
+- A workflow may have multiple tracked PRs (see `## Multi-PR per workflow`). To enumerate every PR for a given workflow, aggregate all Quick Index rows whose `Workflow` column references that workflow's file. To compute the test-level disable set for a workflow, take the union of the per-PR `Disables (with main evidence)` tables across all those rows.
 - The agent MUST NOT reconstruct the state log from git history, `git log`, `git show <commit>:disabling-work/disabling-work-so-far.md`, the GitHub web UI's file history, the GitHub API's commit/blob endpoints, the agent's own conversation memory of a prior session, or any other source of prior state-log content. The CURRENT working-tree contents of the state log file are the only valid input. If the state log says "no PRs tracked yet" or is otherwise empty of PRs, that IS the truth — the automation MUST behave as a true fresh-start session and rediscover any work it needs from a clean slate (no prior PRs visible, no prior runs visible). "Recovering" or "initializing from git history" is a policy violation and MUST be treated identically to using `gh pr list` to enumerate prior work. Orphaned PRs created by prior broken sessions are invisible until a human manually backfills them into the state log (see `## Session-End Invariants (BLOCKING)` → "Backfill responsibility").
 
 ## Main-run evidence — non-negotiable invariant
@@ -162,7 +193,8 @@ Each PR gets exactly one initial disable batch.
 
 - Before any PR-branch verification run, commit the single allowed initial disable batch based only on deterministic failures already observed on `main`.
 - Eligibility for that initial batch requires the same error signature across at least 3 consecutive completed runs on `main`.
-- After the first disable batch is committed to that PR, do not add new disables to that PR.
+- The initial batch MUST exclude every test already in the disable set of any currently-OPEN automation PR tracked in the state log (see `## Multi-PR per workflow` → `Cross-PR conflict prevention`). This prevents two open PRs from racing on the same test. Tests in MERGED automation PRs that are still deterministically failing on `main` (the "merged disable didn't take effect" case) ARE eligible for the new PR's initial batch.
+- After the first disable batch is committed to that PR, do not add new disables to that PR. If new deterministic main failures appear later for the same workflow, open a SEPARATE new PR for them instead — multiple open PRs per workflow are explicitly allowed.
 - Exception: removal is allowed. If revalidation on `main` shows a previously disabled test is fixed, remove that disable (add the test back).
 
 ## Session Scope (Two Lanes — Focus and Examining)
@@ -192,7 +224,7 @@ Cap: **up to 3 focus PRs per session.** Each focus PR MUST result in exactly one
 
 Focus-slot fill priority (in this exact order):
 
-1. **New PRs for uncovered non-Galaxy workflows.** This is the default and the expected primary use of focus slots — the session target is 3 new PRs unless one of the carve-outs in "Fewer than 3 uncovered workflows" below applies.
+1. **New PRs for non-Galaxy workflows with uncovered deterministic main failures.** Coverage is computed test-by-test, NOT workflow-by-workflow: a workflow has "uncovered failing tests" iff at least one of its deterministic main failures isn't in any currently-OPEN automation PR's disable set tracked in the state log (see `## Multi-PR per workflow` → `Coverage definitions`). A workflow that already has an open PR is STILL eligible for priority-1 fill if it has additional deterministic main failures not yet covered by that PR (or any other open PR). This is the default and the expected primary use of focus slots — the session target is 3 new PRs unless one of the carve-outs in "Fewer than 3 workflows with uncovered failing tests" below applies.
 2. **Legacy `batch-committed` PRs that have never had a verification dispatch.** These predate the same-session-dispatch rule and get their first dispatch when a focus slot is available.
 3. **`verification-inconclusive` PRs needing a re-dispatch.**
 
@@ -209,21 +241,21 @@ The 3-dispatch session cap is the hard limit. A focus PR whose dispatch would ex
 
 The session target is **3 new PRs per session** unless either:
 
-(a) Fewer than 3 uncovered non-Galaxy workflows remain, OR
+(a) Fewer than 3 non-Galaxy workflows with uncovered failing tests remain (a workflow can be eligible even if it already has an open PR, as long as it has at least one additional deterministic main failure not covered by any open automation PR — see `## Multi-PR per workflow`), OR
 
 (b) Legacy `batch-committed` (priority 2) or `verification-inconclusive` (priority 3) PRs absorb focus slots first.
 
-### Fewer than 3 uncovered workflows
+### Fewer than 3 workflows with uncovered failing tests
 
-When fewer than 3 uncovered non-Galaxy workflows exist, create as many new PRs as there are uncovered workflows (0, 1, or 2). Fill any remaining focus slots from priorities 2 and 3 above if such PRs exist.
+When fewer than 3 non-Galaxy workflows have uncovered failing tests, create as many new PRs as there are such workflows (0, 1, or 2). Fill any remaining focus slots from priorities 2 and 3 above if such PRs exist.
 
-If after filling priorities 1, 2, and 3 the agent has fewer than 3 focus PRs because (a) no uncovered workflows remain AND (b) no priority-2 / priority-3 PRs exist to fill the slots, STOP and record the reason in OUTPUT. This is **NOT** terminal state and **NOT** paralysis — it is a legitimate "not enough actionable work this session" outcome. Use the existing `New PR created: N` and `Total dispatches: N` fields with a short reason note, plus a new line:
+If after filling priorities 1, 2, and 3 the agent has fewer than 3 focus PRs because (a) no workflows with uncovered failing tests remain AND (b) no priority-2 / priority-3 PRs exist to fill the slots, STOP and record the reason in OUTPUT. This is **NOT** terminal state and **NOT** paralysis — it is a legitimate "not enough actionable work this session" outcome. Use the existing `New PR created: N` and `Total dispatches: N` fields with a short reason note, plus a new line:
 
 ```
-Focus slots filled: N/3 (reason: <e.g. only 1 uncovered workflow remained, no priority-2/3 PRs available>)
+Focus slots filled: N/3 (reason: <e.g. only 1 workflow with uncovered failing tests remained, no priority-2/3 PRs available>)
 ```
 
-Tier 2 terminal state (every disable PR `merged` AND every non-Galaxy workflow covered by a merged PR) remains the only legitimate ZERO-action session — see `Terminal States (Two Tiers)` below. Tier 1 (every non-Galaxy workflow covered by an open or merged PR, but not all merged yet) still permits up to 3 examining-PR maintenance passes and any available priority-2/3 focus fills; it is NOT a zero-action session.
+Tier 2 terminal state (every disable PR `merged` AND every deterministic main failure on every non-Galaxy workflow covered by a merged PR) remains the only legitimate ZERO-action session — see `Terminal States (Two Tiers)` below. Tier 1 (every deterministic main failure on every non-Galaxy workflow covered by an open or merged PR, but not all merged yet) still permits up to 3 examining-PR maintenance passes and any available priority-2/3 focus fills; it is NOT a zero-action session.
 
 ### Lane independence
 
@@ -236,7 +268,7 @@ Examining PRs and focus PRs are **distinct sets** — a single PR is in at most 
 
 1. Refresh state. Re-read the policy doc and the state log. Enumerate tracked PRs from the state log's Quick Index. Do NOT use `gh pr list` to discover untracked PRs; the state log is authoritative.
 2. Compute examining-PR candidates (existing PRs in non-terminal lifecycle that need rebase / revalidate / log-analysis). Up to 3.
-3. Compute focus-PR candidates by priority (new PRs first, then legacy `batch-committed`, then `verification-inconclusive`). Up to 3. A workflow is "covered" iff the state log's Quick Index contains at least one PR row for that workflow. To find uncovered workflows, intersect the active pipeline list (from `aggregate-workflow-data`) with the inverse of the state log's tracked-workflows set.
+3. Compute focus-PR candidates by priority (new PRs first, then legacy `batch-committed`, then `verification-inconclusive`). Up to 3. **Coverage is test-level, not workflow-level** (see `## Multi-PR per workflow` → `Coverage definitions`). A workflow has "uncovered failing tests" iff the workflow's deterministic-main-failure set (tests with the same error signature across ≥3 consecutive completed `main` runs) contains at least one test that is NOT in the disable set of any currently-OPEN automation PR tracked in the state log. To enumerate workflows-with-uncovered-failing-tests, walk the active pipeline list from `aggregate-workflow-data`, compute each workflow's deterministic-main-failure set, and for each workflow check whether at least one of those tests is missing from the union of every open automation PR's disable set for that workflow (aggregated across all Quick Index rows whose `Workflow` references that workflow file).
 4. Execute examining-PR work (no dispatches).
 5. Execute focus-PR work (commit + push for new PRs, then dispatch each one).
 6. Update the state log (`disabling-work/disabling-work-so-far.md`) AND post any required PR comments. The state log update MUST be committed AND pushed to `origin` on the `ebanerjee/markdown-files` branch before the session ends — see `## Session-End Invariants (BLOCKING)`. A session that created, touched, classified, or removed any PR but did not push a state-log update is a BROKEN session.
@@ -496,7 +528,7 @@ Do not spend disable/fix cycles on out-of-scope failures in this project.
 
 > **Newly created PRs flow straight through this procedure in the same session.** A focus PR that was created in this session's second-pass fill (see "Session Scope (Two Lanes — Focus and Examining)") is eligible for — and required to receive — its initial verification dispatch (steps 5–7 below) in the same session as its creation, subject to the 3-dispatch session cap and the artifact-reuse / fresh-build rules. Do not defer a newly created PR's first dispatch to the next session unless the 3-dispatch cap is already exhausted by other focus PRs.
 
-1. **Produce the main-run evidence link.** Identify deterministic failures from completed runs on `main` and confirm each candidate has the same error signature across at least 3 consecutive `main` runs. For each candidate, capture the most recent failing job-link URL (`https://github.com/tenstorrent/tt-metal/actions/runs/<run-id>/job/<job-id>`) and the run's completion timestamp; this is the main-run evidence the PR description and issue MUST carry per `Main-run evidence model`. **If you cannot produce that link, you cannot disable the test** (`Main-run evidence — non-negotiable invariant`).
+1. **Produce the main-run evidence link.** Identify deterministic failures from completed runs on `main` and confirm each candidate has the same error signature across at least 3 consecutive `main` runs. For each candidate, capture the most recent failing job-link URL (`https://github.com/tenstorrent/tt-metal/actions/runs/<run-id>/job/<job-id>`) and the run's completion timestamp; this is the main-run evidence the PR description and issue MUST carry per `Main-run evidence model`. **If you cannot produce that link, you cannot disable the test** (`Main-run evidence — non-negotiable invariant`). **When collecting candidate failing tests for a new PR's initial batch, the agent MUST exclude any test already in the disable set of any currently-OPEN automation PR tracked in the state log** (see `## Multi-PR per workflow` → `Cross-PR conflict prevention`); the new PR's initial batch is exactly the set of deterministic main failures for the target workflow MINUS the union of all open automation PRs' disable sets for that workflow. Tests in MERGED automation PRs that are still deterministically failing on `main` (i.e. the merged disable didn't take effect) ARE eligible for the new PR's initial batch.
 2. Before any verification run, build exactly one initial disable batch from those `main`-proven failures and commit it to the PR branch. Populate the PR description with the evidence table (one row per disabled test, with the job-link URL and completion timestamp captured in step 1) and generate the linked issue body from that same table. Verification-dispatch links and automation status updates do NOT go in the PR description — only PR comments (see `Main-run evidence model`).
 3. Do not use PR-branch verification to discover or add new disables; verification is not a disable-discovery pass.
 4. Build the one-run target job set only for regression confirmation in jobs that were passing on `main`.
@@ -554,11 +586,11 @@ The automation has TWO distinct terminal-style session states. They differ in wh
 
 A session is in **tier 1** when this conjunct holds:
 
-1. Every non-Galaxy workflow in the active pipeline list is already covered by an open or merged draft disable PR created by this automation (evaluated against the Quick Index in the state log, not against live GitHub PR queries).
+1. **Every deterministic-main-failing test in every non-Galaxy workflow in the active pipeline list is in the disable set of some open-or-merged draft automation PR tracked in the state log** (see `## Multi-PR per workflow` → `Coverage definitions` → Tier-1 terminal coverage). Evaluated test-by-test against the Quick Index in the state log, NOT workflow-by-workflow, and NOT against live GitHub PR queries. A workflow is tier-1 covered iff every one of its deterministic main failures is in some open-or-merged automation PR's disable set; workflows with no current deterministic main failures are trivially tier-1 covered.
 
 When tier 1 holds, the automation MUST:
 
-- **Stop creating new focus PRs** — suppress priority-1 (new PR for uncovered workflow) focus-slot fills for the session. There are no uncovered workflows by definition.
+- **Stop creating new focus PRs** — suppress priority-1 (new PR for workflows with uncovered failing tests) focus-slot fills for the session. There are no workflows with uncovered failing tests by definition (every deterministic-main-failing test is already in some open-or-merged PR).
 - **Continue examining-lane work on up to 3 PRs.** Examining-lane work is the standard rebase + revalidate-disables-against-`main` + log-analyze-completed-runs + comment + issue sync + state-log-update flow. Under tier 1 the examining lane is allowed on ANY open draft disable PR that has not yet been merged, regardless of lifecycle stage (`new`, `batch-committed`, `verifying`, `verification-inconclusive`, `verified-pass`, `verified-fail` — all eligible), because even `verified-pass`/`verified-fail` PRs need ongoing rebase + disable-revalidation maintenance to stay merge-ready. If fewer than 3 non-merged PRs exist, examine all of them (the lane runs at less than capacity).
 - **Continue priority-2 and priority-3 focus-lane fills if any exist.** Legacy `batch-committed`-no-verify PRs (priority 2) and `verification-inconclusive` PRs (priority 3) are existing PRs that still need a first or retry dispatch — those are NOT new-PR creation and remain available in tier 1, subject to the 3-dispatch / 3-focus-PR session caps.
 - **Do NOT emit the top-line `Status: no more work left to do`.** Work is still happening in the examining lane (and possibly in the focus lane at priority 2/3); the session is not at terminal stop.
@@ -569,7 +601,7 @@ When tier 1 holds, the automation MUST:
 A session is in **tier 2** when BOTH of the following are true:
 
 1. Every disable PR ever created by this automation is `merged` (evaluated against the Quick Index in the state log, not against live GitHub PR queries). PRs that were closed without merging count as terminal for this conjunct — they are not "open and unmerged" any longer.
-2. Every non-Galaxy workflow in the active pipeline list is already covered by a **merged** disable PR (tier 1's coverage requirement, tightened from "open or merged" to "merged only"; evaluated against the Quick Index in the state log, not against live GitHub PR queries).
+2. **Every deterministic-main-failing test in every non-Galaxy workflow in the active pipeline list is in the disable set of some merged draft automation PR** tracked in the state log (see `## Multi-PR per workflow` → `Coverage definitions` → Tier-2 terminal coverage). This is tier 1's coverage requirement tightened from "open-or-merged" to "merged-only", evaluated test-by-test against the Quick Index, NOT against live GitHub PR queries.
 
 When tier 2 holds, the automation MUST do ZERO work — no examining-lane maintenance, no focus-lane dispatches, no new PRs. It MUST emit:
 
@@ -580,9 +612,10 @@ This is the ONLY legitimate zero-action session.
 
 ### Relationship between the tiers
 
-- Tier 2 implies tier 1 (every merged PR also counts as an open-or-merged PR for tier 1's coverage conjunct).
+- Tier 2 implies tier 1 (every merged PR also counts as an open-or-merged PR for tier 1's coverage conjunct, evaluated test-by-test).
 - When tier 2 holds, the session takes the tier-2 branch (zero work, terminal status), NOT the tier-1 branch. Check tier 2 first.
 - The previous single-tier terminal state ("every open draft PR `verified-pass`/`verified-fail`/`merged` AND every workflow covered") was insufficient: `verified-pass` PRs that sit unmerged still need rebases + disable-revalidation to stay merge-ready, which the new tier 1 captures. Tier 2 is the strict "literally nothing left to do" stop.
+- Both tier 1 and tier 2 use test-level coverage (see `## Multi-PR per workflow` → `Coverage definitions`), NOT the old workflow-level coverage. A workflow with multiple open PRs each disabling a distinct subset of its failing tests is tier-1 covered iff the UNION of those PRs' disable sets covers every deterministic main failure for that workflow.
 
 Distinguish both tiers from the paralysis failure mode (`Anti-Paralysis` below): paralysis = idled despite having actionable work; tier 1 = no more *new* PRs needed but examining (and priority-2/3 focus) work continues; tier 2 = literally nothing left to do. The OUTPUT FORMAT distinguishes the three via the `Paralysis check` field (`passed` / `limited` / `coverage-complete` / `terminal` / `PARTIAL` / `FAILED`) and the top-line `Status: no more work left to do` (emitted only in tier 2).
 
@@ -592,13 +625,13 @@ A session that ends with **0 focus PRs AND 0 examining PRs** is treated as a **p
 
 The vocabulary distinguishes:
 
-- **Focus PRs** = PRs that received a workflow dispatch this session (priority 1: new PRs for uncovered workflows; priority 2: legacy `batch-committed` PRs; priority 3: `verification-inconclusive` PRs). See `Session Scope (Two Lanes — Focus and Examining)`.
+- **Focus PRs** = PRs that received a workflow dispatch this session (priority 1: new PRs for workflows with uncovered failing tests; priority 2: legacy `batch-committed` PRs; priority 3: `verification-inconclusive` PRs). See `Session Scope (Two Lanes — Focus and Examining)`.
 - **Examining PRs** = PRs that received lightweight maintenance this session (rebase, revalidation, log analysis of a run that completed since the previous session, comment, issue sync, state-log update). NO dispatch.
 
 When the agent finds itself about to terminate with zero actions in either lane, it MUST do one of the following before ending the session:
 
-- Dispatch a focus-lane verification on any eligible PR (priority 2: legacy `batch-committed`-with-no-verification; priority 3: `verification-inconclusive`; priority 1: a brand-new PR for an uncovered non-Galaxy workflow). "No recent successful `main` run" is not a reason to skip — fresh build is always a valid path (see "Worked example: a pipeline whose `main` runs have been failing for days").
-- Create a new disable PR for an uncovered non-Galaxy workflow, up to the per-session focus-PR cap, with its same-session dispatch.
+- Dispatch a focus-lane verification on any eligible PR (priority 2: legacy `batch-committed`-with-no-verification; priority 3: `verification-inconclusive`; priority 1: a brand-new PR for a non-Galaxy workflow with uncovered failing tests — including workflows that already have an open PR but still have additional deterministic main failures not in any open PR's disable set, see `## Multi-PR per workflow`). "No recent successful `main` run" is not a reason to skip — fresh build is always a valid path (see "Worked example: a pipeline whose `main` runs have been failing for days").
+- Create a new disable PR for a non-Galaxy workflow with uncovered failing tests, up to the per-session focus-PR cap, with its same-session dispatch.
 - Examining-lane work on any open draft PR in non-terminal lifecycle: rebase, revalidate, log-analyze a completed verification run, comment, sync the issue, update the state log.
 
 The agent MUST trace which guardrail caused an apparently-empty session and override it where the carve-outs (throttle exceptions, fresh-build fallback, first-class new-PR fill, the examining lane itself) allow.
@@ -608,9 +641,9 @@ The agent MUST trace which guardrail caused an apparently-empty session and over
 The `Paralysis check` field in OUTPUT must use one of these exact prefixes:
 
 - **`passed: N focus PRs (each dispatched) + M examining PRs`** — normal completion. At least one lane produced work and every focus PR received its dispatch.
-- **`limited: N focus PRs (only K uncovered workflows + L priority-2/3 PRs available)`** — fewer than 3 focus slots filled because (a) fewer than 3 uncovered non-Galaxy workflows existed AND (b) priority-2 / priority-3 PRs were not sufficient to fill the remaining slots. Acceptable; NOT a paralysis bug. See `Session Scope (Two Lanes — Focus and Examining)` → "Fewer than 3 uncovered workflows".
-- **`coverage-complete: <K> examining PRs (no new PRs needed; M focus PRs in priorities 2/3 if any)`** — tier-1 terminal state holds (every non-Galaxy workflow is already covered by an open or merged disable PR) but tier 2 does NOT hold (some PRs are still unmerged). Priority-1 new-PR creation is suppressed for the session, but examining-lane work continued on K PRs and any available priority-2/3 focus fills happened on M PRs. The top-line `Status: no more work left to do` is NOT emitted (work is still happening). Acceptable; NOT a paralysis bug. See `Terminal States (Two Tiers)` → tier 1.
-- **`terminal: no more work left to do`** — tier-2 terminal state holds (every disable PR is `merged` AND every non-Galaxy workflow is covered by a merged disable PR). The top-line `Status: no more work left to do` MUST also be emitted. See `Terminal States (Two Tiers)` → tier 2.
+- **`limited: N focus PRs (only K workflows-with-uncovered-failing-tests + L priority-2/3 PRs available)`** — fewer than 3 focus slots filled because (a) fewer than 3 non-Galaxy workflows-with-uncovered-failing-tests existed (test-level coverage per `## Multi-PR per workflow`) AND (b) priority-2 / priority-3 PRs were not sufficient to fill the remaining slots. Acceptable; NOT a paralysis bug. See `Session Scope (Two Lanes — Focus and Examining)` → "Fewer than 3 workflows with uncovered failing tests".
+- **`coverage-complete: <K> examining PRs (no new PRs needed; M focus PRs in priorities 2/3 if any)`** — tier-1 terminal state holds (every deterministic main failure on every non-Galaxy workflow is already in some open-or-merged automation PR's disable set — test-level coverage per `## Multi-PR per workflow`) but tier 2 does NOT hold (some PRs are still unmerged). Priority-1 new-PR creation is suppressed for the session, but examining-lane work continued on K PRs and any available priority-2/3 focus fills happened on M PRs. The top-line `Status: no more work left to do` is NOT emitted (work is still happening). Acceptable; NOT a paralysis bug. See `Terminal States (Two Tiers)` → tier 1.
+- **`terminal: no more work left to do`** — tier-2 terminal state holds (every disable PR is `merged` AND every deterministic main failure on every non-Galaxy workflow is in some merged automation PR's disable set — test-level coverage per `## Multi-PR per workflow`). The top-line `Status: no more work left to do` MUST also be emitted. See `Terminal States (Two Tiers)` → tier 2.
 - **`PARTIAL: created N focus PRs but only dispatched M (cap reason: …)`** — a focus PR was created but its dispatch was skipped despite the 3-dispatch cap NOT being exhausted by other focus PRs. This is a bug. Acceptable ONLY when the cap is provably exhausted, in which case the reason MUST explicitly name which PRs consumed the dispatch slots.
 - **`FAILED: <reason>`** — zero examining PRs AND zero focus PRs, no acceptable terminal-state, coverage-complete, or limited-work justification. Include an explicit guardrail-trace identifying which carve-out, fresh-build fallback, examining-lane action, or new-PR fill the agent failed to invoke. A FAILED paralysis check is a bug report on the automation prompt and should be escalated.
 
