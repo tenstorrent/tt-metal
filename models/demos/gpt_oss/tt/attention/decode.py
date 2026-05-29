@@ -94,17 +94,26 @@ def decode_forward(
     tt_k = ttnn.to_memory_config(tt_k, kv_mem_cfg)
     tt_v = ttnn.to_memory_config(tt_v, kv_mem_cfg)
 
+    # Bounded sliding-window cache: when set, the op wraps absolute positions into a
+    # circular buffer of `cache_position_modulo` tokens before the page_table lookup.
+    # `None` here means legacy unbounded behavior (set on full-attention layers or
+    # when the bounded-cache mode isn't wired up).
+    paged_modulo_kwargs = (
+        {"cache_position_modulo": config.cache_position_modulo} if config.cache_position_modulo is not None else {}
+    )
     ttnn.experimental.paged_update_cache(
         k_cache,
         tt_k,
         update_idxs_tensor=position_idx,
         page_table=page_table,
+        **paged_modulo_kwargs,
     )
     ttnn.experimental.paged_update_cache(
         v_cache,
         tt_v,
         update_idxs_tensor=position_idx,
         page_table=page_table,
+        **paged_modulo_kwargs,
     )
 
     tt_k.deallocate(True)
@@ -138,6 +147,7 @@ def decode_forward(
             compute_kernel_config=program_config.get_compute_kernel_config(),
             # memory_config=height_sharded_mem_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            **paged_modulo_kwargs,
         )
         tt_sdpa_tensor = ttnn.to_memory_config(tt_sdpa_tensor, height_sharded_mem_config)
     else:

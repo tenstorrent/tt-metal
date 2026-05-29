@@ -19,6 +19,14 @@ class AttentionConfig:
 
     users_row_sharded: bool = False
     sliding_window: int | None = None
+    # When set (only on sliding-window layers wired with bounded allocations),
+    # the three paged ops (paged_fill_cache / paged_update_cache /
+    # paged_scaled_dot_product_attention_decode) wrap the absolute position
+    # into a circular buffer of this many tokens before the page_table lookup.
+    # Mirrors vLLM's SlidingWindowSpec: physical cache holds only
+    # cache_position_modulo / block_size blocks per sequence; the per-layer
+    # page_table is zero-padded out to max_model_len / block_size.
+    cache_position_modulo: int | None = None
     scaling: float | None = None  # Computed if None
 
     def __post_init__(self):

@@ -102,6 +102,7 @@ class Model:
         max_local_batch_size=1,
         users_row_sharded=False,
         use_throughput_experts=False,
+        bounded_sliding_kv_cache=False,
     ):
         """
         Initialize GPT-OSS model
@@ -163,6 +164,7 @@ class Model:
             cache_file_name=get_cache_file_name(tensor_cache_path, "model.embed_tokens.weight"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        self.bounded_sliding_kv_cache = bounded_sliding_kv_cache
         self.layers = [
             DecoderLayer(
                 mesh_device,
@@ -180,6 +182,7 @@ class Model:
                 users_row_sharded=users_row_sharded,
                 use_throughput_experts=use_throughput_experts,
                 tokens_per_device=max_local_batch_size,
+                bounded_sliding_kv_cache=bounded_sliding_kv_cache,
             )
             for layer_idx in range(hf_config.num_hidden_layers)
         ]
@@ -288,6 +291,7 @@ class Model:
         create_kv_cache=True,
         users_row_sharded=False,
         use_throughput_experts=False,
+        bounded_sliding_kv_cache=False,
     ):
         """Constructor compatible with tt_transformers.Transformer interface"""
         # Create a dummy CCL manager for GPT-OSS
@@ -310,6 +314,7 @@ class Model:
             max_local_batch_size=args.max_local_batch_size,
             users_row_sharded=users_row_sharded,
             use_throughput_experts=use_throughput_experts,
+            bounded_sliding_kv_cache=bounded_sliding_kv_cache,
         )
 
         # Add tt_transformers compatible attributes
@@ -450,12 +455,15 @@ class Model:
         n = len(page_tables_per_layer)
         if persistent is None or len(persistent) != n:
             persistent = []
+            shapes: list[tuple[int, int] | None] = []
             for pt in page_tables_per_layer:
                 if pt is None:
                     persistent.append(None)
+                    shapes.append(None)
                     continue
                 if isinstance(pt, ttnn.Tensor):
                     persistent.append(pt)
+                    shapes.append(None)
                     continue
                 persistent.append(
                     ttnn.from_torch(
@@ -466,7 +474,14 @@ class Model:
                         mesh_mapper=self._page_table_mesh_mapper(pt.shape[0]),
                     )
                 )
+                shapes.append(tuple(pt.shape))
             self._persistent_per_layer_page_tables = persistent
+            # Record the host-side allocation shape per layer so subsequent
+            # update_persistent_per_layer_page_tables calls can pad smaller
+            # inputs to match — the ttnn Tensor's ``.shape`` exposes the
+            # per-shard logical shape after sharding, not the global host
+            # shape used for from_torch, so reading it back would mismatch.
+            self._persistent_per_layer_alloc_shapes = shapes
         return persistent
 
     def update_persistent_per_layer_page_tables(self, page_tables_per_layer):
@@ -479,9 +494,23 @@ class Model:
         persistent = getattr(self, "_persistent_per_layer_page_tables", None)
         if persistent is None or len(persistent) != len(page_tables_per_layer):
             return
+        alloc_shapes = getattr(self, "_persistent_per_layer_alloc_shapes", None)
         for i, pt in enumerate(page_tables_per_layer):
             if pt is None or persistent[i] is None or isinstance(pt, ttnn.Tensor):
                 continue
+            # Warmup allocates persistent at (max_batch, max_num_blocks_per_req)
+            # with a sharded mapper; runtime requests can carry a smaller batch
+            # (num_reqs < max_batch) which would both shape-mismatch the assert
+            # in copy_host_to_device_tensor and flip the mapper to replicated.
+            # Pad the host tensor to the original allocation shape and reuse
+            # the same mapper choice so layout and shape both match.
+            target_shape = alloc_shapes[i] if alloc_shapes is not None else None
+            if target_shape is not None and tuple(pt.shape) != target_shape:
+                padded = torch.zeros(target_shape, dtype=pt.dtype)
+                rows = min(pt.shape[0], target_shape[0])
+                cols = min(pt.shape[1], target_shape[1])
+                padded[:rows, :cols] = pt[:rows, :cols]
+                pt = padded
             host_pt = ttnn.from_torch(
                 pt,
                 device=None,
