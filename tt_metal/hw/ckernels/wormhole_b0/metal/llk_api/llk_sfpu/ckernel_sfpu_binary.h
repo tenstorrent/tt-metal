@@ -46,26 +46,77 @@ inline void calculate_sfpu_binary(const uint dst_index_in0, const uint dst_index
 
 template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS, bool is_fp32_dest_acc_en>
 inline void calculate_sfpu_binary_mul(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
-    // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
-    constexpr uint dst_tile_size_sfpi = 32;
-    for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
-        sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
+    const int offset0 = (dst_index_in0 * 32) << 1;
+    const int offset1 = (dst_index_in1 * 32) << 1;
+    const int offset_out = (dst_index_out * 32) << 1;
 
-        sfpi::vFloat result = in0 * in1;
+#pragma GCC unroll 0
+    for (int d = 0; d < ITERATIONS; d++) {
+        // Load in0 and in1 from their respective dest tile locations
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, offset0);
+        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_3, offset1);
+        TTI_SFPNOP;  // drain SFPLOAD's 2-cycle latency on LREG1
+
+        // result = in0 * in1 (SFPMUL: dest = a * b + c, with c=0)
+        TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
+        TTI_SFPNOP;  // drain SFPMUL's 2-cycle latency on LREG2
 
         if constexpr (!is_fp32_dest_acc_en) {
-            // Software RNE approach (kept for reference):
-            result = float32_to_bf16_rne(result);
-            // To match FPU behaviour for bfloat16 multiplication, 0 * x = 0 and x * 0 = 0
-            v_if(in0 == 0 || in1 == 0) { result = 0.0f; }
-            v_endif;
-        }
+            // --- RNE rounding (fp32 -> bf16) ---
+            // Copy result for rounding
+            TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG3, 0);   // lreg3 = result copy
+            TTI_SFPSHFT((-16) & 0xFFF, 0, p_sfpu::LREG2, 1);  // lreg2 >>= 16 (get bit16 = bf16 LSB)
+            TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG2, 0);  // lreg2 &= 1 (LREG12 = vConstIntPrgm0 = 1)
+            TTI_SFPIADD(
+                0,
+                p_sfpu::LREG13,
+                p_sfpu::LREG3,
+                sfpi::SFPIADD_MOD1_CC_NONE);  // lreg3 += 0x7FFF (LREG13 = vConstIntPrgm1)
+            TTI_SFPIADD(0, p_sfpu::LREG2, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_CC_NONE);  // lreg3 += lreg2 (add LSB)
 
-        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
-        sfpi::dst_reg++;
+            // To match FPU behaviour for bfloat16 multiplication, 0 * x = 0 and x * 0 = 0
+            // Check if in0 == 0
+            TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
+            // For lanes where in0==0, overwrite result with 0
+            TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG3, 0);
+            TTI_SFPENCC(0, 0, 0, 0);  // re-enable all lanes
+            // Check if in1 == 0
+            TTI_SFPSETCC(0, p_sfpu::LREG1, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
+            // For lanes where in1==0, overwrite result with 0
+            TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG3, 0);
+            TTI_SFPENCC(0, 0, 0, 0);  // re-enable all lanes
+
+            // Store as FP16B (truncates lower 16 bits after rounding)
+            TT_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::FP16B, ADDR_MOD_2, offset_out);
+        } else {
+            // fp32 dest: just store the full-precision result
+            TT_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_2, offset_out);
+        }
     }
 }
+
+// template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS, bool is_fp32_dest_acc_en>
+// inline void calculate_sfpu_binary_mul(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+//     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
+//     constexpr uint dst_tile_size_sfpi = 32;
+//     for (int d = 0; d < ITERATIONS; d++) {
+//         sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
+//         sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
+
+//         sfpi::vFloat result = in0 * in1;
+
+//         if constexpr (!is_fp32_dest_acc_en) {
+//             // Software RNE approach (kept for reference):
+//             result = float32_to_bf16_rne(result);
+//             // To match FPU behaviour for bfloat16 multiplication, 0 * x = 0 and x * 0 = 0
+//             v_if(in0 == 0 || in1 == 0) { result = 0.0f; }
+//             v_endif;
+//         }
+
+//         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
+//         sfpi::dst_reg++;
+//     }
+// }
 
 template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS, bool is_fp32_dest_acc_en>
 inline void calculate_sfpu_binary_div(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
@@ -100,6 +151,10 @@ inline void calculate_sfpu_binary_div(const uint dst_index_in0, const uint dst_i
 template <bool APPROXIMATION_MODE /*unused*/, BinaryOp BINOP>
 inline void sfpu_binary_init() {
     _sfpu_binary_init_<APPROXIMATION_MODE, BINOP>();
+    if constexpr (BINOP == BinaryOp::MUL) {
+        sfpi::vConstIntPrgm0 = 1;
+        sfpi::vConstIntPrgm1 = 0x7fff;
+    }
 }
 
 }  // namespace sfpu

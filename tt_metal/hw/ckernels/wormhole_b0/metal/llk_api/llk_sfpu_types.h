@@ -164,4 +164,5 @@ enum class SfpuType {
     polygamma,
     mish,
     ne,
+    mul_float,
 };

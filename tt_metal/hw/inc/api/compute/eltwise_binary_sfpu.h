@@ -94,7 +94,9 @@ ALWI void add_binary_tile_init() { MATH((llk_math_eltwise_binary_sfpu_binop_init
 
 ALWI void sub_binary_tile_init() { MATH((llk_math_eltwise_binary_sfpu_binop_init<APPROX, ckernel::BinaryOp::SUB>())); }
 
-ALWI void mul_binary_tile_init() { MATH((llk_math_eltwise_binary_sfpu_binop_init<APPROX, ckernel::BinaryOp::MUL>())); }
+ALWI void mul_binary_tile_init() {
+    MATH((llk_math_eltwise_binary_sfpu_binop_mul_init<APPROX, ckernel::BinaryOp::MUL>()));
+}
 
 ALWI void rsub_binary_tile_init() {
     MATH((llk_math_eltwise_binary_sfpu_binop_init<APPROX, ckernel::BinaryOp::RSUB>()));
