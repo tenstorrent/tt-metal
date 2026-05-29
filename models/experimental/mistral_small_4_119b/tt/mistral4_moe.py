@@ -44,6 +44,11 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.experimental.mistral_small_4_119b.tt.prefill_matmul_config import (
+    build_gate_router_preset,
+    build_routing_proj_preset,
+    prefill_linear,
+)
 from models.experimental.mistral_small_4_119b.constants import (
     EXPERT_INTERMEDIATE_SIZE,
     HIDDEN_SIZE,
@@ -584,6 +589,11 @@ class TtMistral4MoELayer(LightweightModule):
         # redundant DRAM reads of the 4096-wide input vector.
         self._gate_pc = self._expert_1d_mcast_pc(1, HIDDEN_SIZE // 32, NUM_EXPERTS // 32)
 
+        # Sweep-tuned prefill matmul presets (test_prefill_matmul_sweep.py).
+        # Used by _compute_routing_weights when seq_len > 1 (prefill path).
+        self._gate_router_prefill_preset = build_gate_router_preset(mesh_device)
+        self._routing_proj_prefill_preset = build_routing_proj_preset(mesh_device)
+
         # Pre-allocate a zeros buffer for scatter in _compute_routing_weights (decode).
         # Avoids a costly FillPadDeviceOperation every decode step.
         self._routing_zeros_decode = ttnn.as_tensor(
@@ -652,6 +662,41 @@ class TtMistral4MoELayer(LightweightModule):
         self._expert_pc_cache[key] = pc
         return pc
 
+    def _expert_prefill_pc(self, k_tiles: int, n_tiles: int):
+        """Sweep-tuned 1D mcast PC for the m_tiles=1 prefill path (seq_len=32).
+
+        At Mt=1 each core's work is tiny (1×per_core_N tiles), so mcast fan-out
+        dominates the actual math. test_prefill_matmul_sweep.py found that
+        8×4 = 32 cores beats the default 8×8 grid for both expert_gate_up
+        (16.21 µs / 33 TFLOPs) and expert_down (32.10 µs / 33 TFLOPs) — fewer
+        cores, more per-core work, same in0_block_w=8."""
+        dev = self.mesh_device.compute_with_storage_grid_size()
+        gx, gy = min(dev.x, 8), min(dev.y, 4)
+        cores = gx * gy
+        assert n_tiles % cores == 0, f"_expert_prefill_pc: n_tiles {n_tiles} not divisible by {cores} cores"
+        per_core_N = n_tiles // cores
+        in0_block_w = 1
+        for cand in (8, 4, 2):
+            if k_tiles % cand == 0:
+                in0_block_w = cand
+                break
+        out_subblock_w = 1
+        for cand in (4, 2, 1):
+            if per_core_N % cand == 0:
+                out_subblock_w = cand
+                break
+        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(gx, gy),
+            in0_block_w=in0_block_w,
+            out_subblock_h=1,  # Mt=1 forces h=1
+            out_subblock_w=out_subblock_w,
+            per_core_M=1,
+            per_core_N=per_core_N,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+
     def _expert_sharded_pc(self, m_tiles: int, k_tiles: int):
         """Program config for expert matmul with WIDTH_SHARDED in1 on 8×8=64 core grid.
 
@@ -719,14 +764,25 @@ class TtMistral4MoELayer(LightweightModule):
         _mem = ttnn.L1_MEMORY_CONFIG
 
         # 1. Gate logits on device: [1, 1, seq, NUM_EXPERTS]
-        gate_logits_tt = ttnn.matmul(
-            x,
-            self.gate_weight,
-            compute_kernel_config=self.compute_kernel_config,
-            dtype=ttnn.bfloat8_b if self._prefill_bf8_routing else ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=self._gate_pc if seq_len == 1 else None,
-        )
+        # Prefill (seq_len > 1) uses sweep-tuned 1D ws/dram/ws 4×1 w=16 preset;
+        # decode (seq_len == 1) keeps the existing 1×4-tile mcast config.
+        if seq_len > 1:
+            gate_logits_tt = prefill_linear(
+                x,
+                self.gate_weight,
+                self._gate_router_prefill_preset,
+                compute_kernel_config=self.compute_kernel_config,
+                dtype=ttnn.bfloat8_b if self._prefill_bf8_routing else ttnn.bfloat16,
+            )
+        else:
+            gate_logits_tt = ttnn.matmul(
+                x,
+                self.gate_weight,
+                compute_kernel_config=self.compute_kernel_config,
+                dtype=ttnn.bfloat8_b if self._prefill_bf8_routing else ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                program_config=self._gate_pc,
+            )
 
         # 2. Apply correction bias if present (device tensor, broadcast [1,1,1,E] → [1,1,S,E])
         if self.gate_bias_tt is not None:
@@ -760,12 +816,12 @@ class TtMistral4MoELayer(LightweightModule):
         ttnn.deallocate(topk_idx_tt)
 
         # 7. Project [1,1,seq,E] → [1,1,seq,EPD] per device.
-        #    routing_shard_proj is [1,1,E,EPD] on each device (different per device),
-        #    pre-computed at __init__ via ShardTensorToMesh — no host round-trip.
-        routing_local = ttnn.matmul(
+        # Sweep-tuned 1D l1/dram/ws 1×4 grid, w=4 (1.2 µs at this tiny shape).
+        routing_local = prefill_linear(
             dense_routing_tt,
             self.routing_shard_proj,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            self._routing_proj_prefill_preset,
+            compute_kernel_config=self.compute_kernel_config,
             dtype=ttnn.bfloat8_b if self._prefill_bf8_routing else ttnn.bfloat16,
         )
         ttnn.deallocate(dense_routing_tt)
@@ -832,6 +888,10 @@ class TtMistral4MoELayer(LightweightModule):
             if use_sharded_weight_staging:
                 gu_pc = self._expert_sharded_pc(m_tiles, H // 32)
                 d_pc = self._expert_sharded_pc(m_tiles, I // 32)
+            elif m_tiles == 1:
+                # Sweep-tuned for seq_len=32: 8×4 grid beats default 8×8 at Mt=1.
+                gu_pc = self._expert_prefill_pc(H // 32, 2 * I // 32)
+                d_pc = self._expert_prefill_pc(I // 32, H // 32)
             else:
                 gu_pc = self._expert_1d_mcast_pc(m_tiles, H // 32, 2 * I // 32)
                 d_pc = self._expert_1d_mcast_pc(m_tiles, I // 32, H // 32)

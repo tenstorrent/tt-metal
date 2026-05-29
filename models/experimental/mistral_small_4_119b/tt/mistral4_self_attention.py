@@ -46,6 +46,12 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.experimental.mistral_small_4_119b.tt.prefill_matmul_config import (
+    build_kv_a_proj_preset,
+    build_kv_b_proj_preset,
+    build_q_b_proj_preset,
+    prefill_linear,
+)
 from models.experimental.mistral_small_4_119b.constants import (
     HEAD_DIM,
     HIDDEN_SIZE,
@@ -74,6 +80,49 @@ def _torch_for_ttnn_upload(w: torch.Tensor, scale_inv: torch.Tensor | None = Non
                 s = s.unsqueeze(-1)
             w = w * s
     return w.to(torch.bfloat16).contiguous()
+
+
+def _sharded_rms_norm(x: ttnn.Tensor, weight: ttnn.Tensor, epsilon: float, out_memory_config) -> ttnn.Tensor:
+    """rms_norm that forces width-sharded input so the sharded multi-core
+    kernel dispatches (~16-32 cores) instead of the default ~1-core path.
+
+    For attention's q_a_norm (K=1024) and kv_a_norm (K=512) this drops the
+    norm from ~16/6 µs on 1 core to ~3 µs on 16/32 cores."""
+    TILE = 32
+    in_mem = x.memory_config()
+    if in_mem.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+        ws_cfg = in_mem
+        x_ws = x
+    else:
+        M_padded = (int(x.shape[-2]) + TILE - 1) // TILE * TILE
+        K_padded = (int(x.shape[-1]) + TILE - 1) // TILE * TILE
+        Kt = K_padded // TILE
+        cores = 1
+        for cand in (32, 16, 8, 4, 2):
+            if Kt % cand == 0:
+                cores = cand
+                break
+        if cores >= 32:
+            gx, gy = 8, 4
+        elif cores >= 16:
+            gx, gy = 8, 2
+        elif cores >= 8:
+            gx, gy = 8, 1
+        elif cores >= 4:
+            gx, gy = 4, 1
+        else:
+            gx, gy = cores, 1
+        ws_cfg = ttnn.create_sharded_memory_config(
+            (1, 1, M_padded, K_padded),
+            core_grid=ttnn.CoreGrid(y=gy, x=gx),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        x_ws = ttnn.to_memory_config(x, ws_cfg)
+    out = ttnn.rms_norm(x_ws, weight=weight, epsilon=epsilon, memory_config=ws_cfg)
+    if out_memory_config.memory_layout != ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+        out = ttnn.to_memory_config(out, out_memory_config)
+    return out
 
 
 def _load_weight(
@@ -240,6 +289,11 @@ class TtMistral4Attention(LightweightModule):
         self.kv_b_per_head = KV_B_PROJ_OUT_PER_HEAD
         self.scale = 1.0 / math.sqrt(self.head_dim)
         self.prefill_l1_reshape = os.environ.get("MISTRAL4_ATTN_L1_RESHAPE", "1") == "1"
+
+        # Sweep-tuned matmul presets (test_prefill_matmul_sweep.py).
+        self.q_b_proj_preset = build_q_b_proj_preset(mesh_device)
+        self.kv_a_proj_preset = build_kv_a_proj_preset(mesh_device)
+        self.kv_b_proj_preset = build_kv_b_proj_preset(mesh_device)
 
         if compute_kernel_config is None:
             compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -464,24 +518,28 @@ class TtMistral4Attention(LightweightModule):
             self.q_a_proj,
             compute_kernel_config=self.lofi_compute_kernel_config,
             dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            # Output to L1 so the downstream q_a_norm reads L1 instead of DRAM.
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )  # [1, 1, seq, Q_LORA_RANK]
 
         # rms_norm output to L1: small tensor (Q_LORA_RANK ≪ HIDDEN_SIZE) and the
         # downstream q_b_proj matmul gets an L1 in0 for cheaper reads.
-        q_latent = ttnn.rms_norm(
+        # _sharded_rms_norm dispatches the multi-core sharded kernel (~32 cores)
+        # instead of the 1-core default.
+        q_latent = _sharded_rms_norm(
             q_latent,
-            weight=self.q_a_norm,
-            epsilon=NORM_EPS,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            self.q_a_norm,
+            NORM_EPS,
+            ttnn.L1_MEMORY_CONFIG,
         )
 
-        q = ttnn.linear(
+        # Sweep-tuned: 1D dram/dram/ws on 8×8 grid, in0_block_w=2 (13.4 TFLOPs).
+        q = prefill_linear(
             q_latent,
             self.q_b_proj,
+            self.q_b_proj_preset,
             compute_kernel_config=self.lofi_compute_kernel_config,
             dtype=ttnn.bfloat16,
-            memory_config=reshape_mem,
         )  # [1, 1, seq, N_HEADS * HEAD_DIM]
         ttnn.deallocate(q_latent)
 
@@ -511,12 +569,15 @@ class TtMistral4Attention(LightweightModule):
         # q_full: [1, N_HEADS, seq, HEAD_DIM]
 
         # ── KV projection ─────────────────────────────────────────────────
-        kv_combined = ttnn.linear(
+        # Sweep-tuned: 1D l1/dram/ws on 1×10 grid (forced by Nt=10), in0_block_w=16.
+        # Output to L1 so the downstream kv_a_norm reads L1 instead of DRAM.
+        kv_combined = prefill_linear(
             x,
             self.kv_a_proj,
+            self.kv_a_proj_preset,
             compute_kernel_config=self.lofi_compute_kernel_config,
             dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_memory_config=ttnn.L1_MEMORY_CONFIG,
         )  # [1, 1, seq, KV_A_PROJ_OUT]
 
         kv_latent = ttnn.slice(kv_combined, [0, 0, 0, 0], [1, 1, seq_len, self.kv_lora_rank])
@@ -524,21 +585,23 @@ class TtMistral4Attention(LightweightModule):
         ttnn.deallocate(kv_combined)
 
         # rms_norm output to L1: KV_LORA_RANK ≪ HIDDEN_SIZE, downstream kv_b_proj
-        # matmul reads from L1.
-        kv_latent_normed = ttnn.rms_norm(
+        # matmul reads from L1. _sharded_rms_norm dispatches the multi-core
+        # sharded kernel (~16 cores at K=512) instead of the 1-core default.
+        kv_latent_normed = _sharded_rms_norm(
             kv_latent,
-            weight=self.kv_a_norm,
-            epsilon=NORM_EPS,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            self.kv_a_norm,
+            NORM_EPS,
+            ttnn.L1_MEMORY_CONFIG,
         )
         # Keep kv_latent alive; will be reused for kv_b_proj
 
-        kv = ttnn.linear(
+        # Sweep-tuned: 1D dram/dram/ws on 8×4 grid, in0_block_w=1 (10.7 TFLOPs).
+        kv = prefill_linear(
             kv_latent_normed,
             self.kv_b_proj,
+            self.kv_b_proj_preset,
             compute_kernel_config=self.lofi_compute_kernel_config,
             dtype=ttnn.bfloat16,
-            memory_config=reshape_mem,
         )  # [1, 1, seq, KV_B_PROJ_OUT_TOTAL]
         ttnn.deallocate(kv_latent)
         ttnn.deallocate(kv_latent_normed)

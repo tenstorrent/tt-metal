@@ -51,13 +51,58 @@ def _rms_norm(
     compute_kernel_config,
     memory_config=ttnn.DRAM_MEMORY_CONFIG,
 ) -> ttnn.Tensor:
-    return ttnn.rms_norm(
-        x,
+    """Width-sharded rms_norm: convert input to WS so the sharded multi-core
+    kernel dispatches (~32 cores) instead of the default ~1-core path.
+
+    For Mistral4 prefill the per-layer norms run on 32-rows × 4096-cols tiles;
+    the default interleaved kernel takes ~57 µs at this shape on 1 core, the
+    sharded path drops it to ~5 µs. The two memory_config converts cost ~3 µs
+    total — large net win at every layer."""
+    TILE = 32
+    in_mem = x.memory_config()
+    if in_mem.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+        ws_cfg = in_mem
+        x_ws = x
+    else:
+        M_padded = (int(x.shape[-2]) + TILE - 1) // TILE * TILE
+        K_padded = (int(x.shape[-1]) + TILE - 1) // TILE * TILE
+        Kt = K_padded // TILE
+        # Largest core count where Kt divides evenly, capped at 32 (8×4).
+        cores = 1
+        for cand in (32, 16, 8, 4, 2):
+            if Kt % cand == 0:
+                cores = cand
+                break
+        if cores >= 32:
+            gx, gy = 8, 4
+        elif cores >= 16:
+            gx, gy = 8, 2
+        elif cores >= 8:
+            gx, gy = 8, 1
+        elif cores >= 4:
+            gx, gy = 4, 1
+        else:
+            gx, gy = cores, 1
+        ws_cfg = ttnn.create_sharded_memory_config(
+            (1, 1, M_padded, K_padded),
+            core_grid=ttnn.CoreGrid(y=gy, x=gx),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        x_ws = ttnn.to_memory_config(x, ws_cfg)
+
+    out = ttnn.rms_norm(
+        x_ws,
         weight=weight,
         epsilon=NORM_EPS,
-        memory_config=memory_config,
+        memory_config=ws_cfg,
         compute_kernel_config=compute_kernel_config,
     )
+
+    # Honor the caller's requested output layout (if different from WS).
+    if memory_config.memory_layout != ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+        out = ttnn.to_memory_config(out, memory_config)
+    return out
 
 
 # ── Decoder layer ──────────────────────────────────────────────────────────

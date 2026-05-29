@@ -397,7 +397,10 @@ class TtMistral4TextModel:
 
         x = self._embed(input_ids)
         x = ttnn.reshape(x, [1, 1, seq_len, HIDDEN_SIZE])
-        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        # Place input in L1 so the first decoder layer's input_norm reads L1
+        # instead of DRAM. Subsequent layers already get L1 input from the
+        # block's L1 residual add.
+        x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
 
         for layer, kv_cache in zip(self.decoder_layers, self.kv_caches):
             x = layer.forward_with_cache(x, cos_tt, sin_tt, kv_cache)
@@ -435,7 +438,10 @@ class TtMistral4TextModel:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         x = ttnn.reshape(x, [1, 1, seq_len, HIDDEN_SIZE])
-        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        # Place input in L1 so the first decoder layer's input_norm reads L1
+        # instead of DRAM. Subsequent layers already get L1 input from the
+        # block's L1 residual add.
+        x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
 
         for layer, kv_cache in zip(self.decoder_layers, self.kv_caches):
             x = layer.forward_with_cache(x, cos_tt, sin_tt, kv_cache)
@@ -474,7 +480,10 @@ class TtMistral4TextModel:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         x = ttnn.reshape(x, [1, 1, seq_len, HIDDEN_SIZE])
-        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        # Place input in L1 so the first decoder layer's input_norm reads L1
+        # instead of DRAM. Subsequent layers already get L1 input from the
+        # block's L1 residual add.
+        x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
 
         for layer, kv_cache in zip(self.decoder_layers, self.kv_caches):
             x = layer.forward_with_cache(x, cos_tt, sin_tt, kv_cache)
@@ -587,7 +596,10 @@ class TtMistral4TextModel:
 
         x = self._embed(input_ids)
         x = ttnn.reshape(x, [1, 1, seq_len, HIDDEN_SIZE])
-        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        # Place input in L1 so the first decoder layer's input_norm reads L1
+        # instead of DRAM. Subsequent layers already get L1 input from the
+        # block's L1 residual add.
+        x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
 
         for layer, kv_cache in zip(self.decoder_layers, self.kv_caches):
             x = layer.forward_with_cache(x, cos_tt, sin_tt, kv_cache)
