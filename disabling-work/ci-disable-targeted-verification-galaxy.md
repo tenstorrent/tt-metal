@@ -8,6 +8,7 @@
 - The agent MUST NOT use `gh pr list --search "draft:true author:@me"` (or any other GitHub query) to discover the set of tracked disable PRs. Any PR not listed in the state log is invisible to the automation.
 - The agent still uses `gh` for narrow read/write operations on PRs and runs that the state log already references (checking mergeable status, posting comments, dispatching workflows, viewing run status, etc.) — but never to enumerate prior work.
 - Wiping the state log resets the automation to a fresh-state view. Stale GitHub PRs that match the automation's authoring criteria but aren't in the state log are intentionally ignored.
+- The agent MUST NOT reconstruct the state log from git history, `git log`, `git show <commit>:disabling-work/disabling-work-so-far-galaxy.md`, the GitHub web UI's file history, the GitHub API's commit/blob endpoints, the agent's own conversation memory of a prior session, or any other source of prior state-log content. The CURRENT working-tree contents of the state log file are the only valid input. If the state log says "no PRs tracked yet" or is otherwise empty of PRs, that IS the truth — the automation MUST behave as a true fresh-start session and rediscover any work it needs from a clean slate (no prior PRs visible, no prior runs visible). "Recovering" or "initializing from git history" is a policy violation and MUST be treated identically to using `gh pr list` to enumerate prior work. Orphaned PRs created by prior broken sessions are invisible until a human manually backfills them into the state log (see `## Session-End Invariants (BLOCKING)` → "Backfill responsibility").
 
 This note applies to the "disable deterministic failing tests" workflow.
 
@@ -211,8 +212,9 @@ Examining PRs and focus PRs are **distinct sets** — a single PR is in at most 
 3. Compute focus-PR candidates by priority (new PRs first, then legacy `batch-committed`, then `verification-inconclusive`). Up to 3. A workflow is "covered" iff the state log's Quick Index contains at least one PR row for that workflow. To find uncovered workflows, intersect the active pipeline list (from `aggregate-workflow-data`) with the inverse of the state log's tracked-workflows set.
 4. Execute examining-PR work (no dispatches).
 5. Execute focus-PR work (commit + push for new PRs, then dispatch each one).
-6. Update state log and PR comments.
+6. Update the state log (`disabling-work/disabling-work-so-far-galaxy.md`) AND post any required PR comments. The state log update MUST be committed AND pushed to `origin` on the `ebanerjee/markdown-files` branch before the session ends — see `## Session-End Invariants (BLOCKING)`. A session that created, touched, classified, or removed any PR but did not push a state-log update is a BROKEN session.
 7. Anti-paralysis / terminal-state check before terminating.
+8. `## Session-End Invariants (BLOCKING)` self-check before terminating.
 
 ### Per-session caps (summary)
 
@@ -588,6 +590,56 @@ The `Paralysis check` field in OUTPUT must use one of these exact prefixes:
 The tier-2 terminal state defined in `## Terminal States (Two Tiers)` above is the canonical zero-action session; the tier-1 `coverage-complete` outcome is the canonical "no new PRs needed but examining-lane work continues" session; the `limited` outcome above is the canonical sub-3-focus-PR-but-non-terminal session. Anything else with zero focus PRs and zero examining PRs is paralysis.
 
 When in doubt between "skip due to throttle" and "do something useful", do something useful. The throttle is a guard against thrash, not a license to idle. Treating BH-artifact-expiry, "main is broken", or "all PRs <4h old" as session-ending blockers is the failure mode this section exists to prevent.
+
+## Session-End Invariants (BLOCKING)
+
+These invariants are the LAST thing the agent checks before ending a session. They are unconditional. A session that fails any of them is BROKEN and MUST be flagged loudly in the final OUTPUT report — no exceptions, no silent skip, no "I'll fix it next session". The whole point of this section is that an automation cycle that creates / touches / dispatches / classifies a PR but does not push the state log is precisely the failure mode this section exists to prevent.
+
+### State-log push is mandatory
+
+The session is NOT considered complete until the state log (`disabling-work/disabling-work-so-far-galaxy.md`) has been ALL of:
+
+(a) Updated locally to reflect every PR created, touched, classified, or removed in this session (Quick Index row, per-PR section, `## Active Runs` / `## Recently Completed Runs` rows, `## Recent Activity` bullet, and `Last touched by automation` field on every row the session worked on).
+(b) Committed on the `ebanerjee/markdown-files` branch.
+(c) Pushed to `origin` on the `ebanerjee/markdown-files` branch.
+
+All three steps are required. A locally-updated-but-not-committed state log is a broken session. A committed-but-not-pushed state log is a broken session. The next automation cycle reads the state log from `origin`, not from the previous session's working tree.
+
+### Definition of a BROKEN session
+
+If ANY of the following is true at the moment the agent is about to end the session, the session is BROKEN and the broken state MUST be the FIRST line of the final OUTPUT report (use the literal prefix `BROKEN SESSION:` followed by the specific failure(s)):
+
+- A new PR was created this session but its Quick Index row AND its per-PR section are not in the state log committed to `origin`.
+- A verification run was dispatched this session but its entry is not in `## Active Runs` (or already moved to `## Recently Completed Runs` if the same session also classified it) committed to `origin`.
+- A PR was rebased, revalidated, evidence-refreshed, log-analyzed, commented on, or had a lifecycle transition (`new`, `batch-committed`, `verifying`, `verification-inconclusive`, `verified-pass`, `verified-fail`, `merged`, `out-of-scope`) but the change is not reflected in the state log committed to `origin`.
+- `Last touched by automation:` was not updated on every PR row the automation worked on this session.
+- `Last updated:` at the top of the state log was not updated to the current session timestamp.
+- The state log was modified locally (`git status` shows it as modified or staged) but was not committed and pushed.
+- The state log was committed locally but the local `HEAD` of `ebanerjee/markdown-files` has not been pushed to `origin`.
+
+A BROKEN session is the failure mode this section exists to surface. The agent MUST NOT silently end. The agent MUST NOT promise to fix it next session. The agent MUST commit and push the state log NOW, or — if a real obstruction prevents the push (auth failure, network failure, branch protection) — the agent MUST emit the `BROKEN SESSION:` line with the obstruction named explicitly so a human can intervene.
+
+### Self-check before terminating
+
+Immediately before ending the session, the agent MUST run the following two commands and act on the output:
+
+```bash
+git status -- disabling-work/disabling-work-so-far-galaxy.md
+git log origin/ebanerjee/markdown-files..HEAD --oneline -- disabling-work/disabling-work-so-far-galaxy.md
+```
+
+Interpretation:
+
+- `git status` shows the state log as **modified or staged but not committed** → the session MUST commit and push it before ending. Do NOT end the session in this state.
+- `git status` is clean for the state log AND `git log` shows **at least one commit ahead of `origin`** that touches the state log → the session MUST push the branch to `origin` before ending. Do NOT end the session in this state.
+- `git status` is clean AND `git log` shows **zero commits ahead of `origin`** that touch the state log AND the session created / touched / dispatched / classified / removed any PR this session → this IS the broken-session condition above. The state log MUST be updated, committed, and pushed before ending.
+- `git status` is clean AND `git log` shows zero commits ahead AND the session did NOT create, touch, dispatch, classify, or remove any PR (true zero-action session under tier 2 terminal state, or a `coverage-complete` / `limited` outcome that genuinely changed nothing) → no state-log push is required for THIS session. Emit the appropriate `Paralysis check` outcome and end normally.
+
+### Backfill responsibility
+
+If a future session inherits a broken state — i.e. PRs exist on GitHub from prior automation work that aren't in the state log — that future session MUST NOT re-discover them via `gh pr list`, `gh search prs`, the GitHub web UI, `git log` / `git show` of prior state-log revisions, the GitHub API's commit/blob endpoints, or any other prior-state-reconstruction path (see `## Source of Truth (State Log)`).
+
+Instead, the future session MUST proceed as a true fresh-start session and let those orphaned PRs be invisible to the automation. Manual human backfill is the ONLY valid recovery path. The future session's final OUTPUT report MUST document the orphaned-PR situation as plainly as possible (e.g. `Orphaned-PR notice: detected N draft author-matching PRs on GitHub absent from the state log; not acting on them per policy. Manual backfill required.`) — but the documentation is fact-of-existence only, NOT enumerated work.
 
 ## Draft PR / Issue / Status File Management (Mandatory)
 
