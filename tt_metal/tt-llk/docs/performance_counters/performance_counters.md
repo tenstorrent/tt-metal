@@ -864,27 +864,365 @@ Avg HF Cycles = (HF_1 + 2*HF_2 + 4*HF_4) / (HF_1 + HF_2 + HF_4)
 
 ---
 
-### Reference: metrics in the upstream catalogue not surfaced directly by the LLK driver
+### TDMA / Math Stall (cont.)
 
-These are computable from the per-zone raw counter CSV using the formulas in [`tech_reports/PerfCounters/perf-counters.md`](../../../../tech_reports/PerfCounters/perf-counters.md). All apply to **both Wormhole and Blackhole** unless flagged otherwise.
+**30. Math Dest Write Port Stall Rate**
 
-| # | Metric | Counter group | Note |
-|---|---|---|---|
-| 17 | Math Dest Write Port Stall Rate | TDMA_PACK | — |
-| 21 | MMIO/SFPU/THCON/MOVE Idle Wait | INSTRN_THREAD | — |
-| 22 | RISC Core L1 Util | L1 (mux 1) | Blackhole only |
-| 24 | L1 TDMA Bundle Util | L1 (mux 0) | — |
-| 25 | NoC Ring 0/1 Outgoing/Incoming Util | L1 | — |
-| 26 | NoC Ring 0/1 Outgoing/Incoming Backpressure | L1 | — |
-| 27 | L1 Unpacker/Packer Port Backpressure | L1 | — |
-| 28 | L1 Total Bandwidth Util | L1 | — |
-| 29 | L1 Read vs Write Ratio | L1 | — |
-| 30 | NoC Ring Asymmetry | L1 | — |
-| 31 | L1 Contention Index | L1 | — |
-| 32 / 33 | Unpacker/Packer L1 Efficiency | L1 + TDMA | — |
-| 34 | NoC vs Compute Balance | L1 + FPU | — |
-| 35 | TDMA vs NoC L1 Share | L1 | — |
-| 37 / 41 | Packer Load Imbalance / Packer Engine N Util | TDMA_PACK | Wormhole only (`PACK_COUNT=4`) |
+Fraction of math cycles stalled by destination register write port contention.
+
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | TDMA_PACK |
+
+```
+Math Dest Write Port Stall = (MATH_INSTRN_AVAILABLE - MATH_NOT_STALLED_DEST_WR_PORT) /
+                             MATH_INSTRN_AVAILABLE * 100
+```
+
+- **High value (>10%)**: Math is stalled waiting for write port to destination register.
+- **Low value (~0%)**: No write port stalls.
+
+The metric is skipped when `MATH_NOT_STALLED_DEST_WR_PORT` reads 0 across the whole zone (would otherwise read a misleading 100%). Common on BH for workloads that don't drive the write-port path.
+
+**Use case:** Detects destination register write contention from the math side.
+
+---
+
+### Additional Idle Waits
+
+**31. MMIO / SFPU / THCON / MOVE Idle Wait**
+
+Fraction of total cycles each thread spent waiting for specific hardware units.
+
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | INSTRN_THREAD |
+
+```
+MMIO Idle Wait T0  = WAITING_FOR_MMIO_IDLE_0  / INSTRN_OUT_L * 100
+SFPU Idle Wait T1  = WAITING_FOR_SFPU_IDLE_1  / INSTRN_OUT_L * 100
+THCON Idle Wait T0 = WAITING_FOR_THCON_IDLE_0 / INSTRN_OUT_L * 100
+MOVE Idle Wait T0  = WAITING_FOR_MOVE_IDLE_0  / INSTRN_OUT_L * 100
+```
+
+- **High value (>5%)**: Significant time waiting on this unit. MOVE wait at ~3% for tilize is expected.
+- **Low value (~0%)**: HW unit never bottlenecks the thread. THCON and MMIO are typically ~0%.
+
+**Use case:** Absolute (not relative to total stalls) measure of time lost to each HW unit.
+
+---
+
+### L1 Memory and NoC (cont.)
+
+**32. L1 TDMA Bundle Util**
+
+Average utilisation of the two TDMA/RISC L1 ports.
+
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | L1 (mux 0) |
+
+```
+L1 TDMA Bundle Util = avg(L1_0_TDMA_BUNDLE_0_RISC, L1_0_TDMA_BUNDLE_1_TRISC) / L1_OUT_L * 100
+```
+
+**Use case:** Measures firmware + TDMA data movement overhead through L1.
+
+---
+
+**33. NoC Ring 0/1 Outgoing/Incoming Util**
+
+Average utilisation of NoC channels per ring direction.
+
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | L1 (Ring 0 on mux 0, Ring 1 on mux 1) |
+
+```
+NoC Ring 0 Outgoing Util = avg(L1_0_NOC_RING0_OUTGOING_0, L1_0_NOC_RING0_OUTGOING_1) / L1_OUT_L * 100
+NoC Ring 0 Incoming Util = avg(L1_0_NOC_RING0_INCOMING_0, L1_0_NOC_RING0_INCOMING_1) / L1_OUT_L * 100
+```
+
+**Use case:** Per-ring, per-direction NoC bandwidth utilisation. Compare outgoing vs incoming for data-flow direction.
+
+---
+
+**34. RISC Core L1 Util**
+
+RISC core L1 memory access utilisation.
+
+| | |
+|---|---|
+| **Architectures** | Blackhole only |
+| **Counter group** | L1 (mux 1) |
+
+```
+RISC Core L1 Util = L1_1_RISC_CORE / L1_OUT_L * 100
+```
+
+- **High (>10%)**: RISC core is actively touching L1 — firmware memory overhead.
+- **Low (~0%)**: Minimal RISC L1 traffic.
+
+**Use case:** Quantifies firmware memory access overhead on BH. Requires the L1 mux-1 slot enabled.
+
+---
+
+### L1 Backpressure
+
+**35. NoC Ring 0/1 Outgoing/Incoming Backpressure**
+
+Fraction of NoC transaction cycles where L1 was not ready.
+
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | L1 |
+
+```
+NoC Ring 0 Outgoing BP = (req0 + req1 - grant0 - grant1) / (req0 + req1) * 100
+```
+
+- **High (>15%)**: NoC is stalled by L1 contention.
+- **Low (<5%)**: NoC traffic flows freely.
+
+**Use case:** High outgoing BP means produced data can't leave the core fast enough.
+
+---
+
+**36. L1 Unpacker / Packer Port Backpressure**
+
+L1 port contention for unpacker and packer.
+
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | L1 (mux 0) |
+
+```
+L1 Unpacker BP   = (L1_0_UNPACKER_0 - L1_0_UNPACKER_0_GRANT) / L1_0_UNPACKER_0 * 100
+L1 Packer Port BP = (L1_0_PORT1     - L1_0_PORT1_GRANT)      / L1_0_PORT1 * 100
+```
+
+- **Unpacker BP high (>80%)**: L1 is busy when unpacker wants in — common (other ports compete).
+- **Packer Port BP low (<5%)**: Normal.
+
+**Blackhole note:** Unpacker grant counter can exceed request on some cores (signal-semantics difference); the metric is suppressed rather than reported as a meaningless negative.
+
+**Use case:** Investigate only when combined with high Thread 0 stall rate.
+
+---
+
+### L1 Composite
+
+**37. L1 Total Bandwidth Util**
+
+Overall L1 bandwidth saturation across all 8 mux-0 ports.
+
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | L1 (mux 0) |
+
+```
+L1 Total BW Util = sum(all 8 port req counts) / (8 * L1_OUT_L) * 100
+```
+
+- **High (>30%)**: L1 heavily utilised — possible bottleneck.
+- **Medium (10-20%)**: Moderate.
+- **Low (<5%)**: Underutilised.
+
+**Use case:** Single-number L1 saturation indicator.
+
+---
+
+**38. L1 Read vs Write Ratio**
+
+Balance between read and write traffic on L1.
+
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | L1 (mux 0) |
+
+```
+L1 R/W Ratio = (Unpacker + NoC_Out) / (Unpacker + NoC_Out + Packer + NoC_In) * 100
+```
+
+Read ports: unpacker, NoC outgoing. Write ports: packer, NoC incoming.
+
+- **~50%**: Balanced (matmul).
+- **>70%**: Read-heavy.
+- **<30%**: Write-heavy.
+
+**Use case:** Diagnoses the dominant L1 data-flow direction.
+
+---
+
+**39. NoC Ring Asymmetry**
+
+Balance between outgoing and incoming NoC traffic.
+
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | L1 (mux 0) |
+
+```
+NoC Asymmetry = NoC_Outgoing / (NoC_Outgoing + NoC_Incoming) * 100
+```
+
+- **~50%**: Balanced send/receive.
+- **>70%**: Send-heavy.
+- **<30%**: Receive-heavy.
+
+**Use case:** Surfaces directional NoC imbalance pointing to data-placement issues.
+
+---
+
+**40. L1 Contention Index**
+
+Average backpressure across active L1 ports.
+
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | L1 (mux 0) |
+
+```
+L1 Contention Index = avg(BP of Unpacker, NoC Out 0, NoC Out 1, NoC In 0, NoC In 1)
+```
+
+- **High (>40%)**: Significant L1 stress.
+- **Medium (15-30%)**: Moderate.
+- **Low (<10%)**: Minimal.
+
+**Use case:** Single-number L1 stress level — easier to compare across zones than individual port BPs.
+
+---
+
+**41. Unpacker L1 Efficiency**
+
+When the unpacker is busy, how often does L1 actually serve it.
+
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | L1 (mux 0) + TDMA_UNPACK |
+
+```
+Unpacker L1 Efficiency = L1_0_UNPACKER_0_GRANT / UNPACK0_BUSY_THREAD0 * 100
+```
+
+- **High (>50%)**: L1 serves unpacker requests efficiently.
+- **Low (<5%)**: L1 is the data-delivery bottleneck.
+
+**Use case:** Low values combined with high unpacker BP confirm L1 is starving the unpacker.
+
+---
+
+**42. Packer L1 Efficiency**
+
+When the packer is busy, how often does L1 serve it.
+
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | L1 (mux 0) + TDMA_PACK |
+
+```
+Packer L1 Efficiency = L1_0_PORT1_GRANT / PACKER_BUSY * 100
+```
+
+- **High (>100%)**: L1 port has headroom (shared with ECC/other clients).
+- **Low (<50%)**: Packer is L1-starved.
+
+**Use case:** Confirms whether L1 write-back is the limiting factor for pack.
+
+---
+
+**43. NoC vs Compute Balance**
+
+Whether the operation is NoC-bound or compute-bound.
+
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | L1 (mux 0) + FPU |
+
+```
+NoC vs Compute = (NoC_Out + NoC_In) / (FPU_COUNTER + NoC_Out + NoC_In) * 100
+```
+
+- **>60%**: NoC-bound.
+- **~50%**: Balanced.
+- **<40%**: Compute-bound (FPU/SFPU is the bottleneck).
+
+**Use case:** Quick optimisation-target picker (compute kernels vs NoC routing).
+
+---
+
+**44. TDMA vs NoC L1 Share**
+
+Fraction of L1 bandwidth used by RISC/TDMA versus NoC.
+
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | L1 (mux 0) |
+
+```
+TDMA vs NoC = (TDMA_Bundle_0 + TDMA_Bundle_1) / (TDMA + NoC_Out + NoC_In) * 100
+```
+
+- **High (>20%)**: Firmware uses significant L1 bandwidth.
+- **Low (<5%)**: NoC dominates L1 traffic.
+
+**Use case:** Spots firmware L1 overhead worth optimising.
+
+---
+
+### Wormhole-only (per-engine packer)
+
+**45. Packer Load Imbalance**
+
+Spread between the most and least utilised packer engines.
+
+| | |
+|---|---|
+| **Architectures** | Wormhole only (`PACK_COUNT=4`) |
+| **Counter group** | TDMA_PACK |
+
+```
+Packer Load Imbalance = (max(BUSY_0..3) - min(BUSY_0..3)) / max(BUSY_0..3) * 100
+```
+
+- **Low (<10%)**: Even distribution across engines.
+- **High (>25%)**: Some engines idle while others saturate — suboptimal tile packing.
+
+**Use case:** WH only — per-engine busy signals are tied to 0 in BH RTL (`PACK_COUNT=1`).
+
+---
+
+**46. Packer Engine N Util**
+
+Per-engine packer utilisation.
+
+| | |
+|---|---|
+| **Architectures** | Wormhole only |
+| **Counter group** | TDMA_PACK |
+
+```
+Packer Engine N Util = PACKER_BUSY_N / TDMA_PACK_OUT_L * 100
+```
+
+**Use case:** WH only. On BH the per-engine `PACKER_BUSY_N` signals are tied off; only the aggregate `PACKER_BUSY` is exposed.
+
+---
 
 ## Notes and Caveats
 
