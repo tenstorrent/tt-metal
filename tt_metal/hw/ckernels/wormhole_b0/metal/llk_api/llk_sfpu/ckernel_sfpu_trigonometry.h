@@ -472,7 +472,7 @@ inline void calculate_acos() {
     calculate_asin_acos_impl<APPROXIMATION_MODE, is_fp32_dest_acc_en, true, ITERATIONS>();
 }
 
-// reciprocal(x) for 1 ≤ x < 2^126
+// reciprocal(x) for 2^-126 ≤ x < 2^126
 template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _sfpu_reciprocal_ge1_(sfpi::vFloat x) {
     // initial estimate y = -reciprocal(x)
@@ -490,6 +490,7 @@ sfpi_inline sfpi::vFloat _sfpu_reciprocal_ge1_(sfpi::vFloat x) {
     return y;
 }
 
+// computes exp(abs(x))/4 without overflow
 template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _sfpu_quarter_exp_abs_(sfpi::vFloat x) {
     // j = x * log2(e); i = round(abs(j)); j = (float)i;
@@ -562,6 +563,7 @@ inline void calculate_cosh() {
     }
 }
 
+// computes expm1(abs(x))/4 without overflow
 template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _sfpu_quarter_expm1_abs_(sfpi::vFloat x) {
     sfpi::vFloat j = x * sfpi::vConstFloatPrgm0;  // j = x * log2(e)

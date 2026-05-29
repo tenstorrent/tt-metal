@@ -464,6 +464,7 @@ sfpi_inline sfpi::vFloat _sfpu_reciprocal_ge1_(sfpi::vFloat x) {
     return y;
 }
 
+// computes exp(abs(x))/4 without overflow
 template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _sfpu_quarter_exp_abs_(sfpi::vFloat x) {
     // j = x * log2(e); i = round(abs(j)); j = (float)i;
@@ -536,6 +537,7 @@ inline void calculate_cosh() {
     }
 }
 
+// computes expm1(abs(x))/4 without overflow
 template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _sfpu_quarter_expm1_abs_(sfpi::vFloat x) {
     sfpi::vFloat j = x * sfpi::vConstFloatPrgm0;  // j = x * log2(e)
