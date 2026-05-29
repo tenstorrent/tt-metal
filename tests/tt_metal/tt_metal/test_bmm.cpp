@@ -98,35 +98,36 @@ experimental::metal2_host_api::ProgramSpec build_bmm_program_spec(
                 .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default},
         .gen2_data_movement_config =
             experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}};
+    if (!use_implicit_sync) {
+        reader_config.gen2_data_movement_config->disable_implicit_sync_for = {SRC0_DFB, SRC1_DFB};
+        writer_config.gen2_data_movement_config->disable_implicit_sync_for = {DST_DFB};
+    }
 
     experimental::metal2_host_api::DataflowBufferSpec src0_dfb_spec{
         .unique_id = SRC0_DFB,
         .entry_size = p.single_tile_size,
         .num_entries = p.num_input_tiles,
         .data_format_metadata = tt::DataFormat::Float16_b,
-        .disable_implicit_sync = !use_implicit_sync,
     };
     experimental::metal2_host_api::DataflowBufferSpec src1_dfb_spec{
         .unique_id = SRC1_DFB,
         .entry_size = p.single_tile_size,
         .num_entries = p.num_input_tiles,
         .data_format_metadata = tt::DataFormat::Float16_b,
-        .disable_implicit_sync = !use_implicit_sync,
     };
     experimental::metal2_host_api::DataflowBufferSpec dst_dfb_spec{
         .unique_id = DST_DFB,
         .entry_size = p.single_tile_size,
         .num_entries = p.num_output_tiles,
         .data_format_metadata = tt::DataFormat::Float16_b,
-        .disable_implicit_sync = !use_implicit_sync,
     };
 
     experimental::metal2_host_api::KernelSpec reader_spec{
         .unique_id = READER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_bmm_8bank.cpp"},
-        .num_threads = static_cast<uint8_t>(p.num_threads),
+
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_bmm_8bank.cpp",
+        .num_threads = p.num_threads,
         .dfb_bindings =
             {{.dfb_spec_name = SRC0_DFB,
               .local_accessor_name = "src0",
@@ -150,9 +151,9 @@ experimental::metal2_host_api::ProgramSpec build_bmm_program_spec(
     experimental::metal2_host_api::KernelSpec writer_spec{
         .unique_id = WRITER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_bmm_8bank.cpp"},
-        .num_threads = static_cast<uint8_t>(p.num_threads),
+
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_bmm_8bank.cpp",
+        .num_threads = p.num_threads,
         .dfb_bindings =
             {{.dfb_spec_name = DST_DFB,
               .local_accessor_name = "dst",
@@ -167,9 +168,9 @@ experimental::metal2_host_api::ProgramSpec build_bmm_program_spec(
     experimental::metal2_host_api::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/compute/bmm.cpp"},
-        .num_threads = static_cast<uint8_t>(p.num_threads),
+
+            "tests/tt_metal/tt_metal/test_kernels/compute/bmm.cpp",
+        .num_threads = p.num_threads,
         .dfb_bindings =
             {{.dfb_spec_name = SRC0_DFB,
               .local_accessor_name = "src0",

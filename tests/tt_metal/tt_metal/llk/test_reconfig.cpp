@@ -399,7 +399,6 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
             .entry_size = f16_tile_size,
             .num_entries = 1,
             .data_format_metadata = tt::DataFormat::Float16_b,
-            .disable_implicit_sync = true,
         };
     };
     auto make_f32_input_dfb = [&](const std::string& name) {
@@ -408,7 +407,6 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
             .entry_size = f32_tile_size,
             .num_entries = 1,
             .data_format_metadata = tt::DataFormat::Float32,
-            .disable_implicit_sync = true,
         };
     };
     experimental::metal2_host_api::DataflowBufferSpec inp0_dfb_spec = make_f16_input_dfb(INP0_DFB);
@@ -422,7 +420,6 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
         .entry_size = f16_tile_size,
         .num_entries = kNumOps,
         .data_format_metadata = tt::DataFormat::Float16_b,
-        .disable_implicit_sync = true,
     };
 
     using DFBEndpoint = experimental::metal2_host_api::KernelSpec::DFBEndpointType;
@@ -439,8 +436,8 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
     experimental::metal2_host_api::KernelSpec reader_spec{
         .unique_id = READER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_six_input.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_six_input.cpp",
         .num_threads = 1,
         .dfb_bindings =
             {dfb_binding(INP0_DFB, DFBEndpoint::PRODUCER),
@@ -467,13 +464,13 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{
+                        .disable_implicit_sync_for = {INP0_DFB, INP1_DFB, INP2_DFB, INP3_DFB, INP4_DFB, INP5_DFB}}},
     };
 
     experimental::metal2_host_api::KernelSpec writer_spec{
         .unique_id = WRITER,
-        .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{"tt_metal/kernels/dataflow/writer_unary.cpp"},
+        .source = "tt_metal/kernels/dataflow/writer_unary.cpp",
         .num_threads = 1,
         .dfb_bindings = {{
             .dfb_spec_name = OUT_DFB,
@@ -485,14 +482,15 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{
+                        .disable_implicit_sync_for = {OUT_DFB}}},
     };
 
     experimental::metal2_host_api::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/compute/reconfig_quasar.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/compute/reconfig_quasar.cpp",
         .num_threads = 1,
         .dfb_bindings =
             {dfb_binding(INP0_DFB, DFBEndpoint::CONSUMER),

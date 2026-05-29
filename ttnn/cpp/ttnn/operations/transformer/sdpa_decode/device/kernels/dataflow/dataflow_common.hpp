@@ -579,6 +579,7 @@ template <
     uint32_t barrier_threshold,
     bool is_page_table_sharded,
     bool use_mcast,
+    uint32_t capacity_t,
     typename KReaderType>
 uint64_t read_k(
     uint32_t k_chunk_tiles,
@@ -601,11 +602,18 @@ uint64_t read_k(
                 uint32_t k_write_ptr_col = k_write_ptr + row * k_tile_bytes;
                 uint32_t virtual_k_tile_row_num = k_chunk_start_row_num + row;
                 uint32_t physical_k_tile_id =
-                    (is_page_table_sharded)
-                        ? virtual_seq_tile_id_to_physical_tile_id<uint16_t, num_kv_heads, block_size_t, DHt>(
-                              virtual_k_tile_row_num, cur_head, page_table_ptr_u16)
-                        : virtual_seq_tile_id_to_physical_tile_id<uint32_t, num_kv_heads, block_size_t, DHt>(
-                              virtual_k_tile_row_num, cur_head, page_table_ptr_u32);
+                    (is_page_table_sharded) ? virtual_seq_tile_id_to_physical_tile_id<
+                                                  uint16_t,
+                                                  num_kv_heads,
+                                                  block_size_t,
+                                                  DHt,
+                                                  capacity_t>(virtual_k_tile_row_num, cur_head, page_table_ptr_u16)
+                                            : virtual_seq_tile_id_to_physical_tile_id<
+                                                  uint32_t,
+                                                  num_kv_heads,
+                                                  block_size_t,
+                                                  DHt,
+                                                  capacity_t>(virtual_k_tile_row_num, cur_head, page_table_ptr_u32);
                 for (uint32_t col = 0; col < DHt; ++col) {
                     noc_async_read_tile(physical_k_tile_id, k_reader, k_write_ptr_col);
                     physical_k_tile_id += 1;
@@ -658,9 +666,9 @@ uint64_t read_k(
             uint32_t virtual_k_tile_row_num = k_chunk_start_row_num + row;
             uint32_t physical_k_tile_id =
                 (is_page_table_sharded)
-                    ? virtual_seq_tile_id_to_physical_tile_id<uint16_t, num_kv_heads, block_size_t, DHt>(
+                    ? virtual_seq_tile_id_to_physical_tile_id<uint16_t, num_kv_heads, block_size_t, DHt, capacity_t>(
                           virtual_k_tile_row_num, cur_head, page_table_ptr_u16)
-                    : virtual_seq_tile_id_to_physical_tile_id<uint32_t, num_kv_heads, block_size_t, DHt>(
+                    : virtual_seq_tile_id_to_physical_tile_id<uint32_t, num_kv_heads, block_size_t, DHt, capacity_t>(
                           virtual_k_tile_row_num, cur_head, page_table_ptr_u32);
             for (uint32_t col = 0; col < DHt; ++col) {
                 noc_async_read_tile(physical_k_tile_id, k_reader, k_write_ptr_col);
@@ -688,6 +696,7 @@ template <
     uint32_t barrier_threshold,
     bool is_page_table_sharded,
     bool reuse_k,
+    uint32_t capacity_t,
     typename VReaderType>
 void read_v(
     uint32_t v_chunk_tiles,
@@ -723,9 +732,9 @@ void read_v(
             // Use vDHt for V tensor's width since V is independent
             uint32_t physical_v_tile_id =
                 (is_page_table_sharded)
-                    ? virtual_seq_tile_id_to_physical_tile_id<uint16_t, num_kv_heads, block_size_t, vDHt>(
+                    ? virtual_seq_tile_id_to_physical_tile_id<uint16_t, num_kv_heads, block_size_t, vDHt, capacity_t>(
                           virtual_v_tile_row_num, cur_head, page_table_ptr_u16)
-                    : virtual_seq_tile_id_to_physical_tile_id<uint32_t, num_kv_heads, block_size_t, vDHt>(
+                    : virtual_seq_tile_id_to_physical_tile_id<uint32_t, num_kv_heads, block_size_t, vDHt, capacity_t>(
                           virtual_v_tile_row_num, cur_head, page_table_ptr_u32);
             for (uint32_t col = 0; col < vDHt; ++col) {
                 noc_async_read_tile(physical_v_tile_id, v_reader, v_write_ptr);

@@ -130,7 +130,15 @@ struct MatmulExpertCompressedDRAM {
         // TP8 path (``enable_routing=false``) where each device runs all chunks 0..N-1
         // sequentially with no gate-routed indices. ``enable_routing=true`` (MoE) leaves
         // it at the default and reads ``index_ptr[exp_i + index_offset]`` from L1 as before.
-        uint32_t enable_indexing_ = 1>
+        uint32_t enable_indexing_ = 1,
+        // Synthesis-mode DRAM count (only read when ``enable_indexing_ == 0``).
+        // Caller pre-computes ``num_active_experts - sram-count``. Slots
+        // ``exp_i < num_dram_experts_pre_selected_`` stay as DRAM
+        // (raw_idx = exp_i); slots at or above are OR'd with ``EXPERT_SRAM_FLAG`` so the
+        // existing ``is_sram_expert(raw_idx)`` filter skips them. Lets the dense MLP run
+        // with ``num_active_experts=8`` even when only the first N chunks are actually
+        // DRAM — avoids the bug-prone low-num_active path.
+        uint32_t num_dram_experts_pre_selected_ = 0>
     struct ReaderCTArgs {
         static constexpr uint32_t cb_in0 = cb_in0_;
         static constexpr uint32_t cb_in1 = cb_in1_;
@@ -188,6 +196,7 @@ struct MatmulExpertCompressedDRAM {
         static constexpr uint32_t gather_sync_sem_addr = gather_sync_sem_addr_;
         static constexpr uint32_t cb_internal_acc = cb_internal_acc_;
         static constexpr bool enable_indexing = enable_indexing_ != 0;
+        static constexpr uint32_t num_dram_experts_pre_selected = num_dram_experts_pre_selected_;
     };
 
     template <
@@ -230,7 +239,9 @@ struct MatmulExpertCompressedDRAM {
         uint32_t gather_sync_sem_addr_,
         uint32_t cb_internal_acc_,
         // Compute-side mirror of ``ReaderCTArgs::enable_indexing``. See doc there.
-        uint32_t enable_indexing_ = 1>
+        uint32_t enable_indexing_ = 1,
+        // Compute-side mirror of ``ReaderCTArgs::num_dram_experts_pre_selected``. See doc there.
+        uint32_t num_dram_experts_pre_selected_ = 0>
     struct ComputeCTArgs {
         static constexpr uint32_t cb_in0 = cb_in0_;
         static constexpr uint32_t cb_in1 = cb_in1_;
@@ -277,6 +288,7 @@ struct MatmulExpertCompressedDRAM {
         static constexpr uint32_t gather_sync_sem_addr = gather_sync_sem_addr_;
         static constexpr uint32_t cb_internal_acc = cb_internal_acc_;
         static constexpr bool enable_indexing = enable_indexing_ != 0;
+        static constexpr uint32_t num_dram_experts_pre_selected = num_dram_experts_pre_selected_;
     };
 
     struct WriterCTArgs {};
@@ -390,7 +402,10 @@ struct MatmulExpertCompressedDRAM {
                 if constexpr (CTArgs::enable_indexing) {
                     raw_idx = static_cast<uint32_t>(index_ptr[exp_i + CTArgs::index_offset]);
                 } else {
-                    raw_idx = exp_i;  // sequential 0..N-1 (no SRAM bit, no L1 read)
+                    // Synthesized: slots before the cutoff are DRAM; at/after get SRAM-flagged
+                    // so the is_sram_expert filter below skips them. Default cutoff = ~0u
+                    // → no slot is ever flagged → all-DRAM (original behavior).
+                    raw_idx = (exp_i < CTArgs::num_dram_experts_pre_selected) ? exp_i : (exp_i | EXPERT_SRAM_FLAG);
                 }
                 if (is_sram_expert(raw_idx)) {
                     continue;  // bit15=1 → SRAM expert, skip
@@ -669,9 +684,10 @@ struct MatmulExpertCompressedDRAM {
                         }
                     }
                 } else {
-                    // Sequential indices 0..N-1 are all DRAM (bit 15 clear) — no L1
-                    // read or mailbox forwarding needed.
-                    num_dram_experts = num_active_experts;
+                    // Synthesized indices: caller pre-computes the count of DRAM slots
+                    // (= num_active_experts - sram-count). Slots before this index stay
+                    // DRAM in synthesis; slots at/after get EXPERT_SRAM_FLAG and skip.
+                    num_dram_experts = CTArgs::num_dram_experts_pre_selected;
                 }
 
                 // Gather receiver: pin PACK's local wr_ptr (on cb_out) to slot 1.
@@ -701,7 +717,8 @@ struct MatmulExpertCompressedDRAM {
                         MATH(raw_idx = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
                         PACK(raw_idx = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
                     } else {
-                        raw_idx = exp_i;  // synthesized; identical on UNPACK/MATH/PACK
+                        // Synthesized: slots before the cutoff are DRAM; at/after get SRAM-flagged.
+                        raw_idx = (exp_i < CTArgs::num_dram_experts_pre_selected) ? exp_i : (exp_i | EXPERT_SRAM_FLAG);
                     }
                     if (is_sram_expert(raw_idx)) {
                         continue;
@@ -720,7 +737,13 @@ struct MatmulExpertCompressedDRAM {
                     const volatile uint32_t* fmt_base_ptr = reinterpret_cast<const volatile uint32_t*>(
                         CTArgs::fmt_cb_l1_addr + fmt_slot * CTArgs::fmt_cb_page_size);
                     uint32_t fmt_meta_offset = 0;
-                    uint32_t act_rd_ptr = in0_base + exp_i * num_tiles_k * in0_page_size;
+                    // cb_in0 is COMPACT: upstream gate_proj/up_proj skip SRAM-
+                    // flagged TopK via `continue`, so DRAM-expert outputs are
+                    // pushed back-to-back. Index by `dram_idx` (count of
+                    // DRAM-flagged TopK positions encountered so far), NOT by
+                    // `exp_i` (TopK position) — using exp_i would read at the
+                    // wrong cb position whenever any earlier TopK was SRAM.
+                    uint32_t act_rd_ptr = in0_base + dram_idx * num_tiles_k * in0_page_size;
 
                     for (uint32_t ng = 0; ng < num_subblocks_n; ng++) {
                         tile_regs_acquire();
@@ -849,7 +872,8 @@ struct MatmulExpertCompressedDRAM {
                         MATH(raw_idx = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
                         PACK(raw_idx = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
                     } else {
-                        raw_idx = exp_i;
+                        // Synthesized: slots before the cutoff are DRAM; at/after get SRAM-flagged.
+                        raw_idx = (exp_i < CTArgs::num_dram_experts_pre_selected) ? exp_i : (exp_i | EXPERT_SRAM_FLAG);
                     }
                     if (is_sram_expert(raw_idx)) {
                         continue;
@@ -996,7 +1020,8 @@ struct MatmulExpertCompressedDRAM {
                         MATH(raw_idx = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
                         PACK(raw_idx = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
                     } else {
-                        raw_idx = exp_i;
+                        // Synthesized: slots before the cutoff are DRAM; at/after get SRAM-flagged.
+                        raw_idx = (exp_i < CTArgs::num_dram_experts_pre_selected) ? exp_i : (exp_i | EXPERT_SRAM_FLAG);
                     }
 
                     if (is_sram_expert(raw_idx)) {

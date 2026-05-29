@@ -27,7 +27,6 @@
 #include <tt-metalium/kernel_types.hpp>
 #include "llk_device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/experimental/host_api.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
@@ -184,21 +183,19 @@ void run_single_core_transpose(
         .entry_size = test_config.single_tile_size,
         .num_entries = num_buffer_tiles,
         .data_format_metadata = tt::DataFormat::Float16_b,
-        .disable_implicit_sync = true,
     };
     experimental::metal2_host_api::DataflowBufferSpec output_dfb_spec{
         .unique_id = OUTPUT_DFB,
         .entry_size = test_config.single_tile_size,
         .num_entries = num_output_buffer_tiles,
         .data_format_metadata = tt::DataFormat::Float16_b,
-        .disable_implicit_sync = true,
     };
 
     experimental::metal2_host_api::KernelSpec reader_spec{
         .unique_id = READER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_transpose_wh_8bank.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_transpose_wh_8bank.cpp",
         .num_threads = 1,
         .dfb_bindings = {{
             .dfb_spec_name = INPUT_DFB,
@@ -214,14 +211,15 @@ void run_single_core_transpose(
                     experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
                         .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
                 .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{
+                        .disable_implicit_sync_for = {INPUT_DFB}}},
     };
 
     experimental::metal2_host_api::KernelSpec writer_spec{
         .unique_id = WRITER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank_2_0.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank_2_0.cpp",
         .num_threads = 1,
         .dfb_bindings = {{
             .dfb_spec_name = OUTPUT_DFB,
@@ -237,7 +235,8 @@ void run_single_core_transpose(
                     experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
                         .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
                 .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{
+                        .disable_implicit_sync_for = {OUTPUT_DFB}}},
     };
 
     experimental::metal2_host_api::KernelSpec::CompilerOptions::Defines compute_defines;
@@ -251,7 +250,7 @@ void run_single_core_transpose(
 
     experimental::metal2_host_api::KernelSpec compute_spec{
         .unique_id = COMPUTE,
-        .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{compute_kernel_path},
+        .source = compute_kernel_path,
         .num_threads = 1,
         .compiler_options = {.defines = compute_defines},
         .dfb_bindings =
