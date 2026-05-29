@@ -244,7 +244,7 @@ void run_single_core_tilize_program(
     if (test_config.untilize_type.has_value() && test_config.untilize_type == UntilizeType::DST) {
         // DST untilize reads face geometry from the output CB metadata (no explicit kernel args).
         output_dfb_spec.unpack_face_geometry_metadata =
-            std::make_pair(test_config.face_r_dim, test_config.num_faces_per_tile);
+            tt::tt_metal::FaceGeometry{test_config.face_r_dim, test_config.num_faces_per_tile};
     }
 
     // Reader kernel: untilize types stream native tiles from DRAM (`reader_unary_2_0`);

@@ -14,6 +14,7 @@
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_constants.h>
+#include <tt-metalium/face_geometry.hpp>
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/program_descriptors.hpp>
@@ -51,7 +52,7 @@ public:
         const std::array<std::optional<tt::DataFormat>, NUM_CIRCULAR_BUFFERS>& data_formats,
         const std::array<std::optional<uint32_t>, NUM_CIRCULAR_BUFFERS>& page_sizes,
         const std::array<std::optional<Tile>, NUM_CIRCULAR_BUFFERS>& tiles,
-        const std::array<std::optional<std::pair<uint32_t, uint32_t>>, NUM_CIRCULAR_BUFFERS>& unpack_face_geometry,
+        const std::array<std::optional<FaceGeometry>, NUM_CIRCULAR_BUFFERS>& unpack_face_geometry,
         const std::unordered_set<uint8_t>& buffer_indices,
         const std::unordered_set<uint8_t>& local_buffer_indices,
         const std::unordered_set<uint8_t>& remote_buffer_indices,
@@ -83,7 +84,7 @@ public:
 
     const std::array<std::optional<Tile>, NUM_CIRCULAR_BUFFERS>& tiles() const;
 
-    const std::array<std::optional<std::pair<uint32_t, uint32_t>>, NUM_CIRCULAR_BUFFERS>& unpack_face_geometry() const;
+    const std::array<std::optional<FaceGeometry>, NUM_CIRCULAR_BUFFERS>& unpack_face_geometry() const;
 
     uint32_t total_size() const;
 
@@ -143,7 +144,7 @@ private:
     std::array<std::optional<tt::DataFormat>, NUM_CIRCULAR_BUFFERS> data_formats_;
     std::array<std::optional<uint32_t>, NUM_CIRCULAR_BUFFERS> page_sizes_;
     std::array<std::optional<Tile>, NUM_CIRCULAR_BUFFERS> tiles_;
-    std::array<std::optional<std::pair<uint32_t, uint32_t>>, NUM_CIRCULAR_BUFFERS> unpack_face_geometry_;
+    std::array<std::optional<FaceGeometry>, NUM_CIRCULAR_BUFFERS> unpack_face_geometry_;
     std::unordered_set<uint8_t> buffer_indices_;
     std::unordered_set<uint8_t> local_buffer_indices_;
     std::unordered_set<uint8_t> remote_buffer_indices_;

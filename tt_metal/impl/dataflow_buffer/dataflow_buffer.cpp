@@ -1547,8 +1547,9 @@ void ProgramImpl::set_dfb_data_fmt_and_tile(const std::vector<CoreRange>& crs, J
             if (tile_opt.has_value() || unpack_geom.has_value()) {
                 Tile default_tile{};
                 const Tile& tile = tile_opt.value_or(default_tile);
-                const uint32_t num_faces = unpack_geom.has_value() ? unpack_geom->second : tile.get_num_faces();
-                const uint32_t face_r_dim = unpack_geom.has_value() ? unpack_geom->first : tile.get_face_shape()[0];
+                const uint32_t num_faces = unpack_geom.has_value() ? unpack_geom->num_faces : tile.get_num_faces();
+                const uint32_t face_r_dim =
+                    unpack_geom.has_value() ? unpack_geom->face_r_dim : tile.get_face_shape()[0];
                 build_options.set_cb_tile_dims_all_cores(
                     cb_index,
                     num_faces,

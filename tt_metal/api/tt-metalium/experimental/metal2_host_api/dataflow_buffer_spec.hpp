@@ -14,6 +14,7 @@
 #include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
+#include <tt-metalium/face_geometry.hpp>
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>  // tt::DataFormat
 
@@ -71,8 +72,12 @@ struct DataflowBufferSpec {
     // Optional; used to pass tile type info from host to kernel
     std::optional<tt::tt_metal::Tile> tile_format_metadata = std::nullopt;
 
-    // Optional unpack face override (face_r_dim, num_faces); forwarded to DataflowBufferConfig / HLK like CBs
-    std::optional<std::pair<uint32_t, uint32_t>> unpack_face_geometry_metadata = std::nullopt;
+    // Optional override for how the compute engine interprets this DFB's tile faces.
+    //
+    // By default the face layout is taken from `tile_format_metadata`. Set this when an operand's
+    // data is laid out with a non-default number of faces or rows-per-face (e.g. compact entries that
+    // only populate part of a tile) so the compute engine unpacks it correctly.
+    std::optional<FaceGeometry> unpack_face_geometry_metadata = std::nullopt;
 
     //////////////////////////////
     // Backing memory

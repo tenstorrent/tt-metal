@@ -113,9 +113,9 @@ CircularBufferConfig::CircularBufferConfig(const CBDescriptor& descriptor) : tot
                 {format_descriptor.tile->height, format_descriptor.tile->width}, format_descriptor.tile->transpose);
         }
         if (format_descriptor.face_geometry) {
-            const auto [face_r_dim, num_faces] = format_descriptor.face_geometry.value();
+            const auto& [face_r_dim, num_faces] = *format_descriptor.face_geometry;
             validate_unpack_face_geometry(face_r_dim, num_faces);
-            this->unpack_face_geometry_[format_descriptor.buffer_index] = {face_r_dim, num_faces};
+            this->unpack_face_geometry_[format_descriptor.buffer_index] = format_descriptor.face_geometry;
         }
     };
     this->buffer_indices_.reserve(descriptor.format_descriptors.size() + descriptor.remote_format_descriptors.size());
@@ -140,7 +140,7 @@ CircularBufferConfig::CircularBufferConfig(
     const std::array<std::optional<tt::DataFormat>, NUM_CIRCULAR_BUFFERS>& data_formats,
     const std::array<std::optional<uint32_t>, NUM_CIRCULAR_BUFFERS>& page_sizes,
     const std::array<std::optional<Tile>, NUM_CIRCULAR_BUFFERS>& tiles,
-    const std::array<std::optional<std::pair<uint32_t, uint32_t>>, NUM_CIRCULAR_BUFFERS>& unpack_face_geometry,
+    const std::array<std::optional<FaceGeometry>, NUM_CIRCULAR_BUFFERS>& unpack_face_geometry,
     const std::unordered_set<uint8_t>& buffer_indices,
     const std::unordered_set<uint8_t>& local_buffer_indices,
     const std::unordered_set<uint8_t>& remote_buffer_indices,
@@ -161,7 +161,7 @@ CircularBufferConfig::CircularBufferConfig(
     buffer_size_(buffer_size) {
     for (const auto& geom : unpack_face_geometry) {
         if (geom.has_value()) {
-            validate_unpack_face_geometry(geom->first, geom->second);
+            validate_unpack_face_geometry(geom->face_r_dim, geom->num_faces);
         }
     }
 }
@@ -248,7 +248,7 @@ CircularBufferConfig& CircularBufferConfig::set_unpack_face_geometry(
             buffer_index);
     }
     validate_unpack_face_geometry(face_r_dim, num_faces);
-    this->unpack_face_geometry_[buffer_index] = std::make_pair(face_r_dim, num_faces);
+    this->unpack_face_geometry_[buffer_index] = FaceGeometry{face_r_dim, num_faces};
     return *this;
 }
 
@@ -256,8 +256,8 @@ const std::array<std::optional<Tile>, NUM_CIRCULAR_BUFFERS>& CircularBufferConfi
     return this->tiles_;
 }
 
-const std::array<std::optional<std::pair<uint32_t, uint32_t>>, NUM_CIRCULAR_BUFFERS>&
-CircularBufferConfig::unpack_face_geometry() const {
+const std::array<std::optional<FaceGeometry>, NUM_CIRCULAR_BUFFERS>& CircularBufferConfig::unpack_face_geometry()
+    const {
     return this->unpack_face_geometry_;
 }
 

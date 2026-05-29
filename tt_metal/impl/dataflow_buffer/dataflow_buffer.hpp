@@ -10,6 +10,7 @@
 #include <variant>
 
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/face_geometry.hpp>
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/kernel_types.hpp>
 
@@ -54,10 +55,11 @@ struct DataflowBufferConfig {
     DataFormat data_format = tt::DataFormat::Float16_b;
     std::optional<Tile> tile = std::nullopt;
     /**
-     * Optional unpack face override @c (face_r_dim, num_faces) for HLK tile dims (same semantics as
-     * @ref CircularBufferConfig::set_unpack_face_geometry). When set, overrides @c Tile face layout for unpack.
+     * Optional override for how the compute engine interprets this DFB's tile faces. When set, it overrides the
+     * face layout otherwise derived from @ref tile. Use it when an operand's data is laid out with a non-default
+     * number of faces or rows-per-face.
      */
-    std::optional<std::pair<uint32_t, uint32_t>> unpack_face_geometry = std::nullopt;
+    std::optional<FaceGeometry> unpack_face_geometry = std::nullopt;
     // Set only when both producer and consumer are the same compute kernel
     std::optional<TensixScope> tensix_scope = std::nullopt;
     // When true, the DFB borrows L1 memory from an externally managed buffer

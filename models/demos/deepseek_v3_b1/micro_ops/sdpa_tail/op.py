@@ -99,7 +99,7 @@ class SdpaTailSingleCore:
         # Tile configuration
         TILE = l1_tensor.tile
         tile_size = TILE.get_tile_size(data_format)
-        l_out_face_geometry = (TILE.face_shape[0], TILE.num_faces)
+        l_out_face_geometry = ttnn.FaceGeometry(TILE.face_shape[0], TILE.num_faces)
 
         # Calculate number of tiles
         num_l_tiles = block_size * num_blocks

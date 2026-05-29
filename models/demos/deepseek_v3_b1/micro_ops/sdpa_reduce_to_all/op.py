@@ -290,7 +290,7 @@ class SdpaReduceToAll:
 
                 tile = input_l_device.tile
                 tile_height, tile_width = tile.tile_shape
-                l_out_face_geometry = (tile.face_shape[0], tile.num_faces)
+                l_out_face_geometry = ttnn.FaceGeometry(tile.face_shape[0], tile.num_faces)
                 element_size_bytes = _get_element_size_bytes(input_l_device.dtype)
                 l1_alignment = 16
                 num_links = 2

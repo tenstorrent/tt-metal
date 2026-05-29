@@ -154,8 +154,7 @@ const std::optional<Tile>& CircularBufferImpl::tile(uint32_t buffer_index) const
     return this->config_.tiles().at(buffer_index);
 }
 
-const std::optional<std::pair<uint32_t, uint32_t>>& CircularBufferImpl::unpack_face_geometry(
-    uint32_t buffer_index) const {
+const std::optional<FaceGeometry>& CircularBufferImpl::unpack_face_geometry(uint32_t buffer_index) const {
     if (!this->uses_buffer_index(buffer_index)) {
         TT_THROW(
             "Cannot access unpack face geometry for buffer index {} because circular buffer is not configured on that "

@@ -61,7 +61,7 @@ CircularBufferConfig from_flatbuffer(
         }
     }
 
-    std::array<std::optional<std::pair<uint32_t, uint32_t>>, NUM_CIRCULAR_BUFFERS> unpack_face_geometry = {};
+    std::array<std::optional<FaceGeometry>, NUM_CIRCULAR_BUFFERS> unpack_face_geometry = {};
     if (config_fb->unpack_face_geometry()) {
         for (const auto* entry : *config_fb->unpack_face_geometry()) {
             const auto index = entry->index();
@@ -70,7 +70,7 @@ CircularBufferConfig from_flatbuffer(
                 "Invalid unpack face geometry index {} from flatbuffer. Expected index < {}",
                 index,
                 NUM_CIRCULAR_BUFFERS);
-            unpack_face_geometry[index] = std::make_pair(entry->face_r_dim(), entry->num_faces());
+            unpack_face_geometry[index] = FaceGeometry{entry->face_r_dim(), entry->num_faces()};
         }
     }
 

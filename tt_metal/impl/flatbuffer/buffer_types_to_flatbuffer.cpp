@@ -61,7 +61,7 @@ flatbuffers::Offset<flatbuffer::CircularBufferConfig> to_flatbuffer(
         for (size_t i = 0; i < array.size(); i++) {
             if (array[i]) {
                 vec.push_back(flatbuffer::CBConfigUnpackFaceGeometry{
-                    static_cast<uint32_t>(i), array[i]->first, array[i]->second});
+                    static_cast<uint32_t>(i), array[i]->face_r_dim, array[i]->num_faces});
             }
         }
         return builder.CreateVectorOfStructs(vec);

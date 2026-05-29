@@ -5,6 +5,7 @@
 #pragma once
 
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/face_geometry.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/circular_buffer_constants.h>
@@ -57,19 +58,12 @@ struct TileDescriptor {
     }
 };
 
-struct FaceGeometry {
-    uint32_t face_r_dim = constants::FACE_HEIGHT;
-    uint32_t num_faces = constants::TILE_HW / constants::FACE_HW;
-
-    constexpr operator std::pair<uint32_t, uint32_t>() const { return {face_r_dim, num_faces}; }
-};
-
 struct CBFormatDescriptor {
     uint8_t buffer_index = 0;
     tt::DataFormat data_format = tt::DataFormat::Float32;
     uint32_t page_size = 0;
     std::optional<TileDescriptor> tile;
-    std::optional<std::pair<uint32_t, uint32_t>> face_geometry;  // {face_r_dim, num_faces}
+    std::optional<FaceGeometry> face_geometry;
 };
 
 struct CBDescriptor {
