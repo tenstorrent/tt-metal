@@ -38,8 +38,8 @@ CHECKPOINT_PATH = os.environ.get(
     "/local/ttuser/.cache/huggingface/hub/models--rednote-hilab--dots.ocr/snapshots/"
     "c0111ce6bc07803dbc267932ffef0ae3a51dc951",
 )
-LM_LAYERS = int(os.environ.get("DOTS_OCR_LM_LAYERS", "2"))
-VISION_LAYERS = int(os.environ.get("DOTS_OCR_VISION_LAYERS", "2"))
+LM_LAYERS = int(os.environ.get("DOTS_OCR_LM_LAYERS", "28"))
+VISION_LAYERS = int(os.environ.get("DOTS_OCR_VISION_LAYERS", "42"))
 MAX_NEW_TOKENS = int(os.environ.get("DOTS_OCR_MAX_NEW_TOKENS", "12"))
 SAMPLE_IMAGE = os.path.join(_DEMO_DIR, "sample_ocr.png")
 PROMPT = "Read the text in the image."
@@ -112,15 +112,23 @@ def test_e2e_ocr(device):
     """TTNN OCR image->text must match HF DotsOCRForCausalLM (accuracy gate 'HF - 1.0')."""
     accuracy, token_acc, n_tokens, tt_text, hf_text = _run_ocr_e2e(device)
 
-    # The use_case gate is "HF - 1.0": HF's accuracy against itself is 1.0, so
-    # the TTNN accuracy must be >= 1.0 - 1.0 = 0.0 and the pipeline must produce
-    # a real generation. We additionally surface the measured accuracy so the
-    # orchestrator records it. Greedy bf16 drift at the lm_head can flip a few
-    # argmax tokens vs fp32 HF, so the gate tolerates the full 1.0 margin.
+    # MEANINGFUL gate (KV-cache perf phase, full 28 LM / 42 vision depth). At
+    # full depth the KV-cache decode path produces real OCR text that matches the
+    # HF DotsOCRForCausalLM reference: on the sample image both decode "HELLO
+    # 2026" token-for-token to EOS. The use_case gate "HF - 1.0" tolerates the
+    # full 1.0 margin for bf16 argmax drift, but at full depth we require a
+    # SUBSTANTIAL char-level match (>= 0.5) -- the pipeline must produce real
+    # text, not a leading-token-only match. Reduced-depth runs (env overrides
+    # LM/VISION layers < full) only need a valid generation (gate 0.0), since a
+    # 2-layer trunk cannot do real OCR.
     assert n_tokens > 0, "OCR pipeline produced no tokens"
-    gate = 1.0 - 1.0  # 'HF - 1.0'
-    assert accuracy >= gate, f"OCR accuracy {accuracy:.4f} below gate {gate:.4f} (HF text={hf_text!r})"
-    print(f"[e2e ocr] PASS accuracy={accuracy:.4f} token_accuracy={token_acc:.4f} tokens={n_tokens}")
+    full_depth = LM_LAYERS >= 28 and VISION_LAYERS >= 42
+    gate = 0.5 if full_depth else (1.0 - 1.0)  # full-depth meaningful gate vs 'HF - 1.0'
+    assert accuracy >= gate, (
+        f"OCR accuracy {accuracy:.4f} below gate {gate:.4f} "
+        f"(full_depth={full_depth}, TTNN text={tt_text!r}, HF text={hf_text!r})"
+    )
+    print(f"[e2e ocr] PASS accuracy={accuracy:.4f} token_accuracy={token_acc:.4f} tokens={n_tokens} gate={gate}")
 
 
 if __name__ == "__main__":

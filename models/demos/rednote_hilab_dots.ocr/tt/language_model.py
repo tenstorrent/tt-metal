@@ -130,15 +130,25 @@ class TtLanguageModel(LightweightModule):
         bias: bool = True,
         dtype=ttnn.bfloat16,
         weight_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        max_seq_len=None,
     ):
         super().__init__()
         self.device = device
         hidden = num_heads * head_dim
+        self.num_layers = num_layers
+        self.num_kv_heads = num_kv_heads
+        self.head_dim = head_dim
 
         # Shared rotary tables + causal mask (precomputed on host, like the
         # standalone decoder_layer block consumed). Threaded into every layer.
         cos, sin = _build_rope_tables(seq_len, head_dim, rope_theta)
         attention_mask = _build_causal_mask(seq_len)
+
+        # Full-length RoPE tables for the cached AR-decode path (one row indexed
+        # per decode step). Built once at max_seq_len and shared into every layer's
+        # attention so a single decode step can RoPE its one token at any position.
+        self.max_seq_len = int(max_seq_len) if max_seq_len is not None else int(seq_len)
+        decode_cos, decode_sin = _build_rope_tables(self.max_seq_len, head_dim, rope_theta)
 
         self.embed_tokens = TtEmbedding(
             device=device,
@@ -174,6 +184,8 @@ class TtLanguageModel(LightweightModule):
                 eps=eps,
                 dtype=dtype,
                 weight_memory_config=weight_memory_config,
+                decode_cos=decode_cos,
+                decode_sin=decode_sin,
             )
             self.layers.append(layer)
 
@@ -213,5 +225,31 @@ class TtLanguageModel(LightweightModule):
         for layer in self.layers:
             hidden = layer(hidden)
 
+        hidden = self.norm(hidden)
+        return self.lm_head(hidden)
+
+    # ------------------------------------------------------------------ #
+    # Cached AR-decode (O(1) per step) entered from embeddings.          #
+    # ------------------------------------------------------------------ #
+    def prefill_from_embeds(self, hidden: ttnn.Tensor, kv_cache):
+        """Prefill from inputs_embeds [prompt_len, hidden]; populate ``kv_cache``.
+
+        Runs the full-causal forward over the prompt while writing each layer's
+        K/V into the cache, then norm + lm_head. Returns logits [prompt_len, vocab]
+        (only the last row is used for the first generated token).
+        """
+        for layer_idx, layer in enumerate(self.layers):
+            hidden = layer.prefill_kv(hidden, kv_cache, layer_idx)
+        hidden = self.norm(hidden)
+        return self.lm_head(hidden)
+
+    def decode_step(self, hidden: ttnn.Tensor, pos: int, kv_cache):
+        """One cached decode step from a single token's embed [1, hidden].
+
+        Reads/writes ``kv_cache`` at ``pos`` per layer (O(1) layer-runs), then
+        norm + lm_head. Returns logits [1, vocab].
+        """
+        for layer_idx, layer in enumerate(self.layers):
+            hidden = layer.forward_decode(hidden, pos, kv_cache, layer_idx)
         hidden = self.norm(hidden)
         return self.lm_head(hidden)

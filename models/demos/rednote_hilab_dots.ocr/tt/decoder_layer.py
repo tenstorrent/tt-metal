@@ -108,6 +108,8 @@ class TtDecoderLayer(LightweightModule):
         eps: float = 1e-6,
         dtype=ttnn.bfloat16,
         weight_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        decode_cos=None,
+        decode_sin=None,
     ):
         super().__init__()
         self.device = device
@@ -139,6 +141,8 @@ class TtDecoderLayer(LightweightModule):
             head_dim=head_dim,
             dtype=dtype,
             weight_memory_config=weight_memory_config,
+            decode_cos=decode_cos,
+            decode_sin=decode_sin,
         )
         self.post_attention_layernorm = TtRMSNorm(
             device=device,
@@ -166,6 +170,29 @@ class TtDecoderLayer(LightweightModule):
         attn_out = self.self_attn(self.input_layernorm(x))
         x = ttnn.add(x, attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
 
+        mlp_out = self.mlp(self.post_attention_layernorm(x))
+        x = ttnn.add(x, mlp_out, memory_config=ttnn.L1_MEMORY_CONFIG)
+        return x
+
+    def prefill_kv(self, x: ttnn.Tensor, kv_cache, layer_idx: int) -> ttnn.Tensor:
+        """Prefill forward that ALSO populates ``kv_cache`` for this layer.
+
+        Identical maths to forward() but the self-attention writes its per-token
+        K/V into the cache so the AR decode steps can read them.
+        """
+        attn_out = self.self_attn.prefill_kv(self.input_layernorm(x), kv_cache, layer_idx)
+        x = ttnn.add(x, attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
+        mlp_out = self.mlp(self.post_attention_layernorm(x))
+        x = ttnn.add(x, mlp_out, memory_config=ttnn.L1_MEMORY_CONFIG)
+        return x
+
+    def forward_decode(self, x: ttnn.Tensor, pos: int, kv_cache, layer_idx: int) -> ttnn.Tensor:
+        """Single-token cached decode (reads/writes ``kv_cache`` at ``pos``).
+
+        x: [1, hidden] TILE -> [1, hidden]. Uses the attention's flash-decode path.
+        """
+        attn_out = self.self_attn.forward_decode(self.input_layernorm(x), pos, kv_cache, layer_idx)
+        x = ttnn.add(x, attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
         mlp_out = self.mlp(self.post_attention_layernorm(x))
         x = ttnn.add(x, mlp_out, memory_config=ttnn.L1_MEMORY_CONFIG)
         return x

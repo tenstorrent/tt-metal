@@ -75,6 +75,8 @@ class TtAttention(LightweightModule):
         head_dim: int = 128,
         dtype=ttnn.bfloat16,
         weight_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        decode_cos=None,
+        decode_sin=None,
     ):
         super().__init__()
         self.device = device
@@ -85,6 +87,7 @@ class TtAttention(LightweightModule):
         self.n_rep = num_heads // num_kv_heads
         self.hidden = num_heads * head_dim
         self.scale = 1.0 / math.sqrt(head_dim)
+        self._dtype = dtype
 
         is_mesh_device = device.__class__.__name__ == "MeshDevice"
         mesh_mapper = ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None
@@ -159,6 +162,28 @@ class TtAttention(LightweightModule):
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
+        )
+
+        # ---- Cached-decode RoPE tables (full max_seq_len, indexed per step) ----
+        # The prefill path above uses the per-seq_len cos/sin baked at construction
+        # for the FULL-causal forward. The cached AR decode path projects ONE token
+        # at position cur_pos and needs cos/sin at THAT position only. We keep the
+        # full [max_seq, head_dim] tables on host and slice the single row per step
+        # (uploaded as a [1, 1, 1, head_dim] tile). decode_cos/decode_sin are passed
+        # from the LM assembly (built once for the whole trunk at max_seq_len).
+        self._decode_cos_host = decode_cos  # torch [max_seq, head_dim] or None
+        self._decode_sin_host = decode_sin
+        self._decode_max_seq = None if decode_cos is None else decode_cos.shape[0]
+
+        # Flash-decode SDPA program config. The default core allocation over-
+        # subscribes the tree-reduction on this device for a single short cache
+        # (TT_FATAL "got 65 cores/head"); cap the grid to an 8x8 region and let
+        # the op pick chunk sizes (q/k_chunk_size=0). q_chunk is unused in decode.
+        self._sdpa_decode_program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            exp_approx_mode=False,
+            q_chunk_size=0,
+            k_chunk_size=0,
         )
 
     def _rotate_half(self, x: ttnn.Tensor) -> ttnn.Tensor:
@@ -274,3 +299,111 @@ class TtAttention(LightweightModule):
             dtype=ttnn.bfloat16,
         )
         return out
+
+    # ------------------------------------------------------------------ #
+    # Cached AR-decode path (KV cache + flash-decode SDPA).               #
+    # ------------------------------------------------------------------ #
+    def _qkv_proj_heads(self, x: ttnn.Tensor, n_tok: int):
+        """Project x -> (q, k, v) head tensors.
+
+        q -> [1, nh,  n_tok, hd]; k, v -> [1, nkv, n_tok, hd] (pre-GQA, pre-RoPE).
+        Mirrors forward()'s QKV/split/permute exactly but for an arbitrary token
+        count (n_tok=prompt_len in prefill, 1 in decode).
+        """
+        nh, nkv, hd = self.num_heads, self.num_kv_heads, self.head_dim
+        qkv = ttnn.linear(
+            x,
+            self.qkv_weight,
+            bias=self.qkv_bias,
+            compute_kernel_config=self.compute_kernel_config,
+            dtype=ttnn.bfloat16,
+        )
+        q = qkv[:, : nh * hd]
+        k = qkv[:, nh * hd : (nh + nkv) * hd]
+        v = qkv[:, (nh + nkv) * hd :]
+        q = ttnn.permute(ttnn.reshape(q, (1, n_tok, nh, hd)), (0, 2, 1, 3))
+        k = ttnn.permute(ttnn.reshape(k, (1, n_tok, nkv, hd)), (0, 2, 1, 3))
+        v = ttnn.permute(ttnn.reshape(v, (1, n_tok, nkv, hd)), (0, 2, 1, 3))
+        return q, k, v
+
+    def _rope_with(self, x: ttnn.Tensor, cos_tt: ttnn.Tensor, sin_tt: ttnn.Tensor) -> ttnn.Tensor:
+        """Apply 1D RoPE to x with explicit cos/sin (broadcast over heads/seq)."""
+        cos_term = ttnn.mul(x, cos_tt)
+        sin_term = ttnn.mul(self._rotate_half(x), sin_tt)
+        return ttnn.add(cos_term, sin_term)
+
+    def prefill_kv(self, x: ttnn.Tensor, kv_cache, layer_idx: int) -> ttnn.Tensor:
+        """Run the full-causal prefill forward AND populate the KV cache.
+
+        x: [prompt_len, hidden] TILE. Returns [prompt_len, hidden] (identical to
+        forward(x)) and writes the per-layer K/V (post-RoPE, pre-GQA, shape
+        [batch, nkv, prompt_len, hd]) into ``kv_cache`` at layer ``layer_idx``.
+        """
+        seq = self.seq_len
+        nh, nkv, hd = self.num_heads, self.num_kv_heads, self.head_dim
+        q, k, v = self._qkv_proj_heads(x, seq)
+
+        # RoPE on the full prompt using the prefill cos/sin baked at seq_len.
+        q = self._apply_rope(q)
+        k = self._apply_rope(k)
+
+        # Stash the post-RoPE K (shape [1, nkv, seq, hd]) and V into the cache so
+        # the decode steps read consistent (already-rotated) K and raw V.
+        kv_cache.fill_prefill(layer_idx, k, v)
+
+        # GQA expansion 2 -> 12 for the prefill attention output.
+        kq = self._repeat_kv(k)
+        vq = self._repeat_kv(v)
+        k_t = ttnn.permute(kq, (0, 1, 3, 2))
+        scores = ttnn.matmul(q, k_t, compute_kernel_config=self.compute_kernel_config, dtype=ttnn.float32)
+        scores = ttnn.mul(scores, self.scale)
+        scores = ttnn.add(scores, self.attn_mask)
+        probs = ttnn.softmax(scores, dim=-1, compute_kernel_config=self.compute_kernel_config)
+        attn = ttnn.matmul(probs, vq, compute_kernel_config=self.compute_kernel_config, dtype=ttnn.bfloat16)
+        attn = ttnn.permute(attn, (0, 2, 1, 3))
+        attn = ttnn.reshape(attn, (seq, nh * hd), memory_config=ttnn.L1_MEMORY_CONFIG)
+        return ttnn.linear(attn, self.o_weight, compute_kernel_config=self.compute_kernel_config, dtype=ttnn.bfloat16)
+
+    def _decode_rope_tiles(self, pos: int):
+        """Upload the single-position cos/sin row as [1, 1, 1, head_dim] tiles."""
+        cos_row = self._decode_cos_host[pos].reshape(1, 1, 1, self.head_dim)
+        sin_row = self._decode_sin_host[pos].reshape(1, 1, 1, self.head_dim)
+        cos_tt = ttnn.from_torch(cos_row, device=self.device, dtype=self._dtype, layout=ttnn.TILE_LAYOUT)
+        sin_tt = ttnn.from_torch(sin_row, device=self.device, dtype=self._dtype, layout=ttnn.TILE_LAYOUT)
+        return cos_tt, sin_tt
+
+    def forward_decode(self, x: ttnn.Tensor, pos: int, kv_cache, layer_idx: int) -> ttnn.Tensor:
+        """Single-token cached decode at sequence position ``pos``.
+
+        x: [1, hidden] TILE (the current token's hidden). Projects Q/K/V for one
+        token, RoPE at ``pos``, writes K/V into ``kv_cache`` at ``pos``, then runs
+        flash-decode SDPA against the full cache (GQA handled by the op). Returns
+        [1, hidden].
+        """
+        nh, nkv, hd = self.num_heads, self.num_kv_heads, self.head_dim
+        q, k, v = self._qkv_proj_heads(x, 1)  # q [1,nh,1,hd], k/v [1,nkv,1,hd]
+
+        cos_tt, sin_tt = self._decode_rope_tiles(pos)
+        q = self._rope_with(q, cos_tt, sin_tt)
+        k = self._rope_with(k, cos_tt, sin_tt)
+
+        # Write this step's K/V (post-RoPE K, raw V) into the cache at pos.
+        # update() expects [batch, nkv, 1, hd]; q/k/v are [1, n*, 1, hd] (batch=1).
+        kv_cache.update(layer_idx, k, v, pos)
+
+        k_cache, v_cache = kv_cache.read(layer_idx)  # [1, nkv, max_seq, hd]
+
+        # Flash-decode SDPA: Q [1, b, nh, hd]; K/V [b, nkv, max_seq, hd]; cur_pos
+        # masks slots > pos. The op performs the GQA 2->12 expansion internally.
+        q_sdpa = ttnn.permute(q, (0, 2, 1, 3))  # [1, 1(=b), nh, hd]
+        attn = ttnn.transformer.scaled_dot_product_attention_decode(
+            q_sdpa,
+            k_cache,
+            v_cache,
+            cur_pos=[pos],
+            scale=self.scale,
+            program_config=self._sdpa_decode_program_config,
+            compute_kernel_config=self.compute_kernel_config,
+        )  # [1, b, nh, hd]
+        attn = ttnn.reshape(attn, (1, nh * hd), memory_config=ttnn.L1_MEMORY_CONFIG)
+        return ttnn.linear(attn, self.o_weight, compute_kernel_config=self.compute_kernel_config, dtype=ttnn.bfloat16)

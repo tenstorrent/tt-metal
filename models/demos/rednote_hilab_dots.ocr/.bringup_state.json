@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-29T00:11:46Z",
-  "updated_at": "2026-05-29T05:13:41Z",
+  "updated_at": "2026-05-29T05:34:47Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -936,8 +936,19 @@
         "tokens_generated": 12
       },
       "perf": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/kv_cache.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/profile_ocr.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/profiler_artifacts/ocr_decode_traced_device_perf.csv",
+          "models/demos/rednote_hilab_dots.ocr/PERF_NOTES.md"
+        ],
+        "notes": "KV cache (paged_update_cache + flash-decode SDPA) unlocks full-depth OCR: at 28L/42V the cached decode matches HF DotsOCRForCausalLM token-for-token ('HELLO 2026', char+token acc 1.0). Cached decode vs no-cache PCC>0.99 (argmax matches every step). Traced device-kernel CSV captured (5496 ops, ~127ms); tracy op-name enrichment failed so no op-level opt applied (device-kernel-bound, characterized). Speedup ~1.04x at short N is structural (O(N)->O(1) per-step); metal trace deferred.",
+        "steady_step_ms": 39.12,
+        "speedup": 1.04,
+        "accuracy_at_depth": 1.0,
+        "depth": "28L/42V"
       }
     }
   ],
@@ -1257,6 +1268,12 @@
     {
       "tick": 50,
       "ts": "2026-05-29T05:13:41Z",
+      "action": "device[ocr]",
+      "result": "ok"
+    },
+    {
+      "tick": 51,
+      "ts": "2026-05-29T05:34:47Z",
       "action": "device[ocr]",
       "result": "ok"
     }

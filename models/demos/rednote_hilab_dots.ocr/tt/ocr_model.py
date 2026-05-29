@@ -66,9 +66,11 @@ def _load_sibling(module_name: str, file_name: str):
 _vt = _load_sibling("dots_ocr_vision_tower", "vision_tower.py")
 _lm = _load_sibling("dots_ocr_language_model", "language_model.py")
 _loader_mod = _load_sibling("dots_ocr_weight_loader", "weight_loader.py")
+_kvc = _load_sibling("dots_ocr_kv_cache", "kv_cache.py")
 
 TtVisionTower = _vt.TtVisionTower
 TtLanguageModel = _lm.TtLanguageModel
+SelfAttentionKVCache = _kvc.SelfAttentionKVCache
 load_vision_tower_weights = _loader_mod.load_vision_tower_weights
 load_language_model_weights = _loader_mod.load_language_model_weights
 load_vision_patch_embed_weights = _loader_mod.load_vision_patch_embed_weights
@@ -178,8 +180,9 @@ class TtOcrModel(LightweightModule):
         return text_embeds
 
     # -- LM trunk on device -------------------------------------------------
-    def _lm_for_seq(self, seq_len: int):
-        lm = self._lm_cache.get(seq_len)
+    def _lm_for_seq(self, seq_len: int, max_seq_len: int = None):
+        key = (seq_len, max_seq_len)
+        lm = self._lm_cache.get(key)
         if lm is None:
             lm = TtLanguageModel(
                 device=self.device,
@@ -193,8 +196,9 @@ class TtOcrModel(LightweightModule):
                 eps=self.eps,
                 bias=self.bias,
                 dtype=self.dtype,
+                max_seq_len=max_seq_len if max_seq_len is not None else seq_len,
             )
-            self._lm_cache[seq_len] = lm
+            self._lm_cache[key] = lm
         return lm
 
     def lm_logits(self, inputs_embeds: torch.Tensor) -> torch.Tensor:
@@ -219,6 +223,13 @@ class TtOcrModel(LightweightModule):
         logits = lm.lm_head(hidden)
         return ttnn.to_torch(logits).to(torch.float32).reshape(seq_len, self.vocab_size)
 
+    def _embed_token(self, token_id: int) -> ttnn.Tensor:
+        """Embed a single token id -> device tensor [1, hidden] (TILE)."""
+        vec = self._embed_table[int(token_id)].reshape(1, self.hidden_size).to(torch.float32)
+        return ttnn.from_torch(
+            vec, device=self.device, dtype=self.dtype, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
     def generate(
         self,
         input_ids: torch.Tensor,
@@ -226,21 +237,62 @@ class TtOcrModel(LightweightModule):
         max_new_tokens: int = 16,
         eos_token_ids=(151643, 151673),
     ):
-        """Greedy AR decode: image + prompt -> generated token ids (list[int]).
+        """Greedy AR decode with a KV cache: image + prompt -> token ids (list[int]).
 
-        prefill (vision tower -> scatter -> LM trunk) then per-step argmax of the
-        last position, re-running the full no-cache LM trunk on the grown
-        sequence each step (the verified trunk carries no KV cache).
+        Pipeline:
+          1. vision tower -> masked_scatter -> inputs_embeds [prompt_len, hidden].
+          2. PREFILL: one full-causal forward over the prompt that ALSO writes
+             every layer's K/V into a :class:`SelfAttentionKVCache`. The last
+             position's logits give the first generated token.
+          3. DECODE: per step, embed the single new token, run ONE cached decode
+             step (O(1) layer-runs via flash-decode SDPA against the cache, GQA
+             handled by the op), argmax. The cache makes each step O(1) instead
+             of re-running the whole O(N) trunk -- this is the perf win that
+             unlocks full-depth generation.
         """
         eos = set(eos_token_ids)
         vision_embeds = self.encode_image(pixel_values)
         ids = input_ids.reshape(-1).to(torch.int64).tolist()
-        generated = []
-        for _ in range(max_new_tokens):
-            cur = torch.tensor(ids, dtype=torch.int64)
-            inputs_embeds = self.build_inputs_embeds(cur, vision_embeds)
-            logits = self.lm_logits(inputs_embeds)
-            next_id = int(torch.argmax(logits[-1]).item())
+        prompt_len = len(ids)
+        max_seq_len = prompt_len + max_new_tokens + 1
+
+        lm = self._lm_for_seq(prompt_len, max_seq_len=max_seq_len)
+        kv_cache = SelfAttentionKVCache(
+            device=self.device,
+            num_layers=self.lm_num_layers,
+            batch=1,
+            num_kv_heads=self.num_kv_heads,
+            max_seq_len=max_seq_len,
+            head_dim=self.head_dim,
+            dtype=self.dtype,
+        )
+
+        # ---- Prefill: scatter vision embeds, run trunk, populate cache. ----
+        cur = torch.tensor(ids, dtype=torch.int64)
+        inputs_embeds = self.build_inputs_embeds(cur, vision_embeds)  # [prompt_len, hidden]
+        hidden = ttnn.from_torch(
+            inputs_embeds.to(torch.float32),
+            device=self.device,
+            dtype=self.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        logits = lm.prefill_from_embeds(hidden, kv_cache)
+        logits = ttnn.to_torch(logits).to(torch.float32).reshape(prompt_len, self.vocab_size)
+        next_id = int(torch.argmax(logits[-1]).item())
+
+        generated = [next_id]
+        ids.append(next_id)
+        if next_id in eos:
+            return generated
+
+        # ---- Cached decode: O(1) per step. ----
+        for step in range(1, max_new_tokens):
+            pos = prompt_len + step - 1  # sequence index of the token being fed
+            tok_embed = self._embed_token(next_id)  # [1, hidden]
+            step_logits = lm.decode_step(tok_embed, pos, kv_cache)
+            step_logits = ttnn.to_torch(step_logits).to(torch.float32).reshape(self.vocab_size)
+            next_id = int(torch.argmax(step_logits).item())
             generated.append(next_id)
             ids.append(next_id)
             if next_id in eos:
