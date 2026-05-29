@@ -54,8 +54,6 @@ def cmd_prepare(args) -> int:
         print(render_bringup_text(plan))
 
     if args.write_script:
-        from pathlib import Path
-
         path = Path(args.write_script).expanduser().resolve()
         _SYSTEM_PREFIXES = ("/etc", "/usr", "/bin", "/sbin", "/boot", "/sys", "/proc", "/dev")
         s = str(path)

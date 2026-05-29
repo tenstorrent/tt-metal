@@ -639,6 +639,36 @@ def capture_real_inputs(
 
 
 CAPTURE_LOADER_SOURCE = '''
+def _captured_submodule_path(component_name):
+    """Read the submodule_path the capture step hooked when it saved
+    inputs for this component. Returns the path string or ``None``.
+
+    BUG-2 FIX: when capture records args for submodule path A but the
+    test resolves a different path B (different entry in
+    ``_CANDIDATE_SUBMODULE_PATHS``), the captured args/kwargs don't
+    fit B's signature and the test fails silently with a misleading
+    ``_make_arg_for() inputs are shape-incompatible`` error. Reading
+    the manifest's recorded path and using it as the FIRST candidate
+    keeps capture's resolution and test's resolution aligned."""
+    import json as _json
+    import re as _re
+    from pathlib import Path as _Path
+    safe = _re.sub(r"[^A-Za-z0-9_]+", "_", component_name).strip("_").lower() or "component"
+    here = _Path(__file__).resolve()
+    demo_dir = here.parents[2]
+    manifest_p = demo_dir / "_captured" / safe / "manifest.json"
+    if not manifest_p.is_file():
+        return None
+    try:
+        data = _json.loads(manifest_p.read_text())
+        path = data.get("submodule_path")
+        if isinstance(path, str) and path:
+            return path
+    except Exception:
+        pass
+    return None
+
+
 def _maybe_load_captured(component_name):
     """Load `(args, kwargs, output)` from `<demo_dir>/_captured/<safe>/...`
     if the planner's capture-inputs step produced them; return `None`

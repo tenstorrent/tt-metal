@@ -4727,6 +4727,47 @@ def _attempt_log_dir(demo_dir: Path, component_name: str) -> Path:
     return demo_dir / "_attempts" / _safe_id(component_name)
 
 
+_FAILING_LINE_PATTERN = re.compile(r'File "([^"]+)", line (\d+)')
+
+
+def _extract_failing_stub_excerpt(traceback_excerpt: str, stub_path: Path) -> Tuple[int, str]:
+    """Parse a Python traceback and return (line_number, source_excerpt)
+    for the LAST frame that references ``stub_path``.
+
+    The excerpt is centered on the failing line with 6 lines of context
+    on each side. Returns (0, "") if no frame in the traceback points to
+    the stub or if the stub file isn't readable.
+
+    Generic across all stubs — never references model-specific paths.
+    """
+    if not traceback_excerpt or not stub_path.is_file():
+        return 0, ""
+    stub_name = stub_path.name
+    failing_line = 0
+    for match in _FAILING_LINE_PATTERN.finditer(traceback_excerpt):
+        path_str, line_str = match.group(1), match.group(2)
+        if stub_name in path_str:
+            try:
+                failing_line = int(line_str)
+            except ValueError:
+                continue
+    if failing_line <= 0:
+        return 0, ""
+    try:
+        src_lines = stub_path.read_text(errors="ignore").splitlines()
+    except Exception:
+        return 0, ""
+    if failing_line > len(src_lines):
+        return 0, ""
+    start = max(0, failing_line - 7)
+    end = min(len(src_lines), failing_line + 6)
+    excerpt_lines: List[str] = []
+    for idx in range(start, end):
+        marker = ">>> " if (idx + 1) == failing_line else "    "
+        excerpt_lines.append(f"{idx + 1:5d} {marker}{src_lines[idx]}")
+    return failing_line, "\n".join(excerpt_lines)
+
+
 def _write_attempt_log(
     *,
     demo_dir: Path,
@@ -4753,6 +4794,7 @@ def _write_attempt_log(
             stub_hash = hashlib.sha1(stub_path.read_bytes()).hexdigest()[:12] if stub_path.is_file() else ""
         except Exception:
             stub_hash = ""
+        failing_line, failing_line_excerpt = _extract_failing_stub_excerpt(traceback_excerpt or "", stub_path)
         entry = {
             "iter": iter_n,
             "stub_path": str(safe_relative_to_root(stub_path)) if stub_path.is_absolute() else str(stub_path),
@@ -4766,6 +4808,8 @@ def _write_attempt_log(
             "traceback_excerpt": (traceback_excerpt or "")[:2000],
             "diagnosis": diagnosis,
             "next_step": next_step,
+            "failing_line": failing_line,
+            "failing_line_excerpt": failing_line_excerpt,
         }
         log_dir = _attempt_log_dir(demo_dir, component_name)
         log_dir.mkdir(parents=True, exist_ok=True)
@@ -4818,6 +4862,24 @@ def _format_attempt_history_block(history: List[Dict[str, object]]) -> str:
         prior_ex = sorted(
             {h.get("exemplar_used") for h in history if h.get("exemplar_used") and h.get("exemplar_used") != "(none)"}
         )
+        last_excerpt = str(last.get("failing_line_excerpt") or "").strip()
+        last_line_no = int(last.get("failing_line") or 0)
+        last_tb = str(last.get("traceback_excerpt") or "").strip()
+        if last_excerpt and last_tb:
+            lines.append("")
+            lines.append("  YOUR PRIOR ATTEMPT FAILED AT THIS EXACT LINE (do NOT write this again):")
+            lines.append(
+                f"    The CURRENT STUB below IS your iter-{last.get('iter', '?')} attempt "
+                f"that crashed at line {last_line_no}. Identify the bug and write SOMETHING "
+                f"DIFFERENT — re-writing the same operation will reproduce the same failure."
+            )
+            lines.append("    Failing-line excerpt (>>> marks the crashing line):")
+            for src_line in last_excerpt.splitlines():
+                lines.append(f"      {src_line}")
+            lines.append("    Literal error from that line:")
+            tb_tail = last_tb.splitlines()[-6:]
+            for tb_line in tb_tail:
+                lines.append(f"      {tb_line}")
         lines.append("")
         lines.append("  CONSTRAINTS FOR THIS ITERATION (do NOT repeat what already failed):")
         if prior_shard:
@@ -5289,16 +5351,21 @@ def _read_file_excerpt(p: Path, *, max_lines: int = 140) -> str:
 
 
 _EXEMPLAR_ROLE_HINTS: List[Tuple[str, Tuple[str, ...]]] = [
-    ("attention", ("attention", "attn", "self_attention", "cross_attention", "multihead")),
-    ("mlp", ("mlp", "feed_forward", "feedforward", "ffn")),
+    ("rotary", ("rotary", "rope")),
+    ("upsample", ("convtranspose", "deconv", "upsample")),
+    ("downsample", ("downsample", "pooling", "pool")),
+    ("backbone", ("backbone", "trunk", "stem")),
+    ("neck", ("neck", "fpn", "feature_pyramid", "lateral", "projection")),
+    ("head", ("lm_head", "predictor", "classifier", "head")),
+    ("fuser", ("fuser", "fusion", "merger")),
+    ("attention", ("self_attention", "cross_attention", "multihead", "attention", "attn")),
+    ("mlp", ("feed_forward", "feedforward", "mlp", "ffn")),
     ("norm", ("layernorm", "rmsnorm", "groupnorm", "norm")),
     ("embed", ("patch_embed", "token_embed", "embedding", "embed")),
-    ("conv", ("conv2d", "convnext", "conv_block", "conv")),
     ("decoder", ("mask_decoder", "decoder_head", "decoder")),
     ("encoder", ("vision_encoder", "image_encoder", "encoder")),
-    ("transformer_block", ("layer", "block", "transformer_block")),
-    ("rotary", ("rotary", "rope")),
-    ("downsample", ("downsample", "pool", "pooling")),
+    ("conv", ("convnext", "conv_block", "conv2d", "conv")),
+    ("transformer_block", ("transformer_block", "layer", "block")),
 ]
 
 
@@ -5307,6 +5374,9 @@ def _exemplar_role_for(name: str, kind: str) -> Optional[str]:
     for role, _hints in _EXEMPLAR_ROLE_HINTS:
         if role in needle:
             return role
+        for hint in _hints:
+            if hint in needle:
+                return role
     if "attn" in needle or "attention" in needle:
         return "attention"
     if "mlp" in needle or "feed" in needle:
@@ -6310,12 +6380,46 @@ def _capture_worktree_deltas_as_overlay(worktree_path, model_id):
 
     Generic across models -- it just diffs the worktree against base and
     stores patches, no model-specific filtering.
+
+    BUG-1 FIX: The original implementation relied on ``git status --porcelain``
+    to find changed files. This silently dropped files in some scenarios
+    (untracked files newly written by autofill that weren't in the index,
+    files whose changes were already staged by a prior overlay-apply, etc.).
+    The fix adds an explicit demo-dir scan as a SECONDARY capture pass:
+    every ``_stubs/*.py`` and ``tests/pcc/*.py`` under the model's demo dir
+    that differs from HEAD also gets captured. Belt-and-suspenders.
     """
     import subprocess as _subprocess
 
     from .overlay_manager import store_patch as _store_patch
 
     captured = 0
+    seen_paths: set = set()
+
+    def _capture_one(rel_path: str) -> bool:
+        """Stage + diff + store one path. Returns True if captured."""
+        if rel_path in seen_paths:
+            return False
+        seen_paths.add(rel_path)
+        _subprocess.run(
+            ["git", "add", "--", rel_path],
+            cwd=str(worktree_path),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        diff_proc = _subprocess.run(
+            ["git", "diff", "HEAD", "--", rel_path],
+            cwd=str(worktree_path),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if diff_proc.returncode != 0 or not diff_proc.stdout.strip():
+            return False
+        rec = _store_patch(model_id, rel_path, diff_proc.stdout, source="captured_from_bringup")
+        return bool(rec)
+
     try:
         status_proc = _subprocess.run(
             ["git", "status", "--porcelain"],
@@ -6336,25 +6440,32 @@ def _capture_worktree_deltas_as_overlay(worktree_path, model_id):
             if path:
                 changed.append(path)
         for f in changed:
-            _subprocess.run(
-                ["git", "add", "--", f],
-                cwd=str(worktree_path),
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            diff_proc = _subprocess.run(
-                ["git", "diff", "HEAD", "--", f],
-                cwd=str(worktree_path),
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if diff_proc.returncode != 0 or not diff_proc.stdout.strip():
-                continue
-            rec = _store_patch(model_id, f, diff_proc.stdout, source="captured_from_bringup")
-            if rec:
+            if _capture_one(f):
                 captured += 1
+
+        # BUG-1 FIX: secondary capture pass that explicitly scans the demo
+        # dir for stub + test files. Catches any path git status missed
+        # (untracked-but-staged-via-overlay-apply, etc.). Generic — uses
+        # the standard tt_hw_planner demo-dir layout.
+        try:
+            from .bringup_loop import find_demo_dir as _find_demo_dir
+
+            demo_dir = _find_demo_dir(model_id, repo_root=Path(worktree_path))
+        except Exception:
+            demo_dir = None
+        if demo_dir is not None and demo_dir.is_dir():
+            scan_paths: List[Path] = []
+            for sub in ("_stubs", "tests/pcc"):
+                sub_dir = demo_dir / sub
+                if sub_dir.is_dir():
+                    scan_paths.extend(sub_dir.glob("*.py"))
+            for full_path in scan_paths:
+                try:
+                    rel_path = str(full_path.relative_to(Path(worktree_path)))
+                except ValueError:
+                    continue
+                if _capture_one(rel_path):
+                    captured += 1
         return captured, True
     except Exception as exc:
         print(f"  [isolation] capture failed: {type(exc).__name__}: {exc}", file=sys.stderr)
@@ -7394,6 +7505,21 @@ def _cmd_up_core(args) -> int:
                 "  continuing --auto to synthesize NEW components and emit real PCC tests."
             )
 
+    if getattr(args, "phase2_only", False):
+        if not getattr(args, "auto", False):
+            args.auto = True
+        # Phase 2's auto-onboard driver defaults to claude. Force the
+        # provider so phase2-only doesn't fall through to the cursor
+        # readiness check (which fails when CURSOR_API_KEY isn't set).
+        # User can still override by passing --auto-agent explicitly
+        # alongside --phase2-only, but in that case they wouldn't be
+        # relying on this implication anyway.
+        args.auto_agent = "claude"
+        print(
+            "  --phase2-only implies --auto --auto-agent claude "
+            "(needed for the auto-onboard driver path inside Phase 2)."
+        )
+
     if getattr(args, "auto", False):
         provider = (getattr(args, "auto_agent", None) or "cursor").lower()
         if provider not in ("cursor", "claude"):
@@ -7484,38 +7610,129 @@ def _cmd_up_core(args) -> int:
             _print_bringup_summary(MODEL, box=BOX, sep=sep)
             return 0
 
-        banner(f"Step 6/6  {loop_goal}")
-        _rc_loop = _run_auto_iterate_loop(
-            MODEL=MODEL,
-            BOX=BOX,
-            mesh=getattr(args, "mesh", None),
-            dtype=getattr(args, "dtype", None),
-            batch=getattr(args, "batch", 1),
-            max_seq_len=getattr(args, "max_seq_len", 1024),
-            max_generated_tokens=getattr(args, "max_generated_tokens", 200),
-            accuracy=getattr(args, "accuracy", False),
-            no_trace=getattr(args, "no_trace", False),
-            no_paged_attention=getattr(args, "no_paged_attention", False),
-            no_instruct=getattr(args, "no_instruct", False),
-            download_first=args.download_first,
-            strict=args.strict,
-            demo_dir=demo_dir,
-            provider=provider,
-            agent_bin=agent_bin,
-            model=model_alias,
-            max_iters=getattr(args, "auto_max_iters", 5),
-            sep=sep,
-            target_components=sorted(set(seed_ungrad)) if seed_ungrad else None,
-            strict_native=strict_native,
-            agent_timeout_s=getattr(args, "auto_agent_timeout", 1500),
-            allow_kill_stale=allow_kill_stale,
-            allow_device_reset=allow_device_reset,
-            max_attempts_per_component=getattr(args, "auto_max_attempts_per_component", 2),
-            allow_partial_cpu=getattr(args, "allow_partial_cpu", False),
-            model_light=model_light,
-            model_heavy=model_heavy,
-            parallel_agents=getattr(args, "parallel_agents", 1),
-        )
+        _phase2_only = bool(getattr(args, "phase2_only", False))
+        _phase2 = bool(getattr(args, "phase2", False)) or _phase2_only
+        if _phase2_only:
+            banner(f"Step 6/6  --phase2-only set: SKIPPING auto-iterate loop, going straight to Phase 2")
+            _rc_loop = 0
+        else:
+            banner(f"Step 6/6  {loop_goal}")
+            _rc_loop = _run_auto_iterate_loop(
+                MODEL=MODEL,
+                BOX=BOX,
+                mesh=getattr(args, "mesh", None),
+                dtype=getattr(args, "dtype", None),
+                batch=getattr(args, "batch", 1),
+                max_seq_len=getattr(args, "max_seq_len", 1024),
+                max_generated_tokens=getattr(args, "max_generated_tokens", 200),
+                accuracy=getattr(args, "accuracy", False),
+                no_trace=getattr(args, "no_trace", False),
+                no_paged_attention=getattr(args, "no_paged_attention", False),
+                no_instruct=getattr(args, "no_instruct", False),
+                download_first=args.download_first,
+                strict=args.strict,
+                demo_dir=demo_dir,
+                provider=provider,
+                agent_bin=agent_bin,
+                model=model_alias,
+                max_iters=getattr(args, "auto_max_iters", 5),
+                sep=sep,
+                target_components=sorted(set(seed_ungrad)) if seed_ungrad else None,
+                strict_native=strict_native,
+                agent_timeout_s=getattr(args, "auto_agent_timeout", 1500),
+                allow_kill_stale=allow_kill_stale,
+                allow_device_reset=allow_device_reset,
+                max_attempts_per_component=getattr(args, "auto_max_attempts_per_component", 2),
+                allow_partial_cpu=getattr(args, "allow_partial_cpu", False),
+                model_light=model_light,
+                model_heavy=model_heavy,
+                parallel_agents=getattr(args, "parallel_agents", 1),
+                only_component=getattr(args, "auto_only_component", None),
+            )
+
+        if _phase2:
+            from .commands.tackle_skipped import run_phase2_stage
+
+            _p2_rc, _p2_dropped, _p2_recaptured = run_phase2_stage(
+                MODEL,
+                demo_dir,
+                sep=sep,
+            )
+            if _p2_recaptured:
+                _focused_tests: List[str] = []
+                for _comp in _p2_recaptured:
+                    _test_path = demo_dir / "tests" / "pcc" / f"test_{_safe_id(_comp)}.py"
+                    if _test_path.is_file():
+                        _focused_tests.append(str(_test_path))
+
+                _need_graduation = False
+                if _focused_tests:
+                    print(f"  [phase2] quick-check PCC on {len(_p2_recaptured)} unblocked component(s)")
+                    try:
+                        _rerun_rc = _run_focused_pytest(
+                            model_id=MODEL,
+                            test_files=_focused_tests,
+                        )
+                        if _rerun_rc == 0:
+                            print(
+                                f"  [phase2] already graduated (PCC passed on fallback stubs): {sorted(_p2_recaptured)}"
+                            )
+                        else:
+                            print(
+                                f"  [phase2] PCC failed (rc={_rerun_rc}) — stubs are still CPU fallback. "
+                                f"Triggering graduation loop on these components."
+                            )
+                            _need_graduation = True
+                    except Exception as _p2_exc:
+                        print(f"  [phase2] focused pytest raised: {type(_p2_exc).__name__}: {_p2_exc}", file=sys.stderr)
+                        _need_graduation = True
+
+                if _need_graduation:
+                    print(
+                        f"  [phase2] running graduation auto-iterate on "
+                        f"{len(_p2_recaptured)} unblocked component(s): {sorted(_p2_recaptured)}"
+                    )
+                    _grad_rc = _run_auto_iterate_loop(
+                        MODEL=MODEL,
+                        BOX=BOX,
+                        mesh=getattr(args, "mesh", None),
+                        dtype=getattr(args, "dtype", None),
+                        batch=getattr(args, "batch", 1),
+                        max_seq_len=getattr(args, "max_seq_len", 1024),
+                        max_generated_tokens=getattr(args, "max_generated_tokens", 200),
+                        accuracy=getattr(args, "accuracy", False),
+                        no_trace=getattr(args, "no_trace", False),
+                        no_paged_attention=getattr(args, "no_paged_attention", False),
+                        no_instruct=getattr(args, "no_instruct", False),
+                        download_first=args.download_first,
+                        strict=args.strict,
+                        demo_dir=demo_dir,
+                        provider=provider,
+                        agent_bin=agent_bin,
+                        model=model_alias,
+                        max_iters=max(2, int(getattr(args, "auto_max_iters", 5)) // 2),
+                        sep=sep,
+                        target_components=sorted(set(_p2_recaptured)),
+                        strict_native=strict_native,
+                        agent_timeout_s=getattr(args, "auto_agent_timeout", 1500),
+                        allow_kill_stale=allow_kill_stale,
+                        allow_device_reset=allow_device_reset,
+                        max_attempts_per_component=getattr(args, "auto_max_attempts_per_component", 2),
+                        allow_partial_cpu=getattr(args, "allow_partial_cpu", False),
+                        model_light=model_light,
+                        model_heavy=model_heavy,
+                        parallel_agents=1,
+                        only_component=None,
+                    )
+                    print(f"  [phase2] graduation auto-iterate rc={_grad_rc}")
+                    if _grad_rc != 0 and _rc_loop == 0:
+                        _rc_loop = _grad_rc
+            if _p2_dropped:
+                print(
+                    f"  [phase2] dropped {len(_p2_dropped)} ModuleList component(s); changes will persist via overlay capture"
+                )
+            print(f"  [phase2] stage rc={_p2_rc}")
+
         if _rc_loop == 0:
             _register_bringup_success(
                 MODEL,
@@ -7841,6 +8058,42 @@ def main(argv: Optional[List[str]] = None) -> int:
             "normal apply + validation sweep. Pass 1 for legacy serial "
             "behaviour. Past 6, prompts begin to dilute and concurrent "
             "Anthropic API calls risk rate-limit throttling."
+        ),
+    )
+    pup.add_argument(
+        "--auto-only-component",
+        default=None,
+        help=(
+            "Sandbox: restrict the auto-iterate loop to a single component "
+            "name (e.g. `vision_neck`). All other failed components are "
+            "ignored for the duration of the run. Useful for cheap A/B "
+            "tests of prompt-enrichment changes on one stuck component "
+            "before committing to a multi-component run."
+        ),
+    )
+    pup.add_argument(
+        "--phase2",
+        action="store_true",
+        help=(
+            "After the standard auto-iterate loop finishes, run the Phase 2 "
+            "stage inside the same worktree: walk the persistent skip-list, "
+            "drop ModuleList components (their files moved to _phase2_dropped/), "
+            "retry capture-inputs for missing-arg/shape-mismatch components "
+            "with TT_PLANNER_AUTO_ONBOARD_DRIVER=1, then re-run PCC on any "
+            "newly-unblocked components. Successful changes persist via the "
+            "existing overlay-capture step. Use this to clean up the skip-list "
+            "AFTER Phase 1 has graduated all currently-testable components."
+        ),
+    )
+    pup.add_argument(
+        "--phase2-only",
+        action="store_true",
+        help=(
+            "Skip the standard auto-iterate loop and run ONLY the Phase 2 "
+            "stage (implies --phase2). Useful for validating skip-list "
+            "handling against an already-graduated model without re-running "
+            "Phase 1. The worktree, scaffold, and overlay-apply steps still "
+            "run -- Phase 2 needs the demo dir to operate on."
         ),
     )
     pup.add_argument(
@@ -8794,6 +9047,74 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     pocs.add_argument("model_id")
     pocs.set_defaults(func=_cmd_overlay_clear_skips)
+
+    from .commands.classify_hot_cold import cmd_classify_hot_cold
+
+    pchc = sub.add_parser(
+        "classify-hot-cold",
+        help=(
+            "Profile the workload to identify which NEW components are "
+            "actually invoked (HOT) vs. never called (COLD). COLD components "
+            "don't need to be on TT device -- CPU fallback is correct for "
+            "them since they're idle in torch too. Persists the result so "
+            "the auto-iterate loop excludes COLD from work. Run after "
+            "scaffold; before `up --auto`."
+        ),
+    )
+    pchc.add_argument("model_id", help="HuggingFace model id")
+    pchc.add_argument(
+        "--image-size",
+        type=int,
+        default=None,
+        help="Override the input image_size (default: read from model.config or 1024).",
+    )
+    pchc.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print classification without persisting to overlays/.",
+    )
+    pchc.add_argument(
+        "--auto-onboard",
+        action="store_true",
+        help=(
+            "If all components classify as COLD (model's forward isn't "
+            "pixel_values-compatible), draft a custom invoker via LLM and "
+            "re-run. Also enabled by TT_PLANNER_AUTO_ONBOARD_HOT_COLD_INVOKER=1."
+        ),
+    )
+    pchc.set_defaults(func=cmd_classify_hot_cold)
+
+    from .commands.tackle_skipped import cmd_tackle_skipped
+
+    pts = sub.add_parser(
+        "tackle-skipped",
+        help=(
+            "Phase 2: walk the persistent skip-list for a model and route "
+            "each entry to the appropriate unblock strategy. ModuleList "
+            "components get dropped (their files moved to _phase2_dropped/), "
+            "missing-arg + shape-mismatch components get retried via "
+            "capture-inputs with the auto-onboard driver path enabled. "
+            "Run AFTER the standard `up --auto` has graduated all "
+            "currently-tested components."
+        ),
+    )
+    pts.add_argument("model_id", help="HuggingFace model id")
+    pts.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the routing decisions and exit without modifying files or invoking LLM.",
+    )
+    pts.add_argument(
+        "--only-modulelist",
+        action="store_true",
+        help="Only process ModuleList entries (free, no LLM cost). Skip capture retries.",
+    )
+    pts.add_argument(
+        "--only-capture",
+        action="store_true",
+        help="Only process capture-retry entries (incurs LLM cost). Skip ModuleList drops.",
+    )
+    pts.set_defaults(func=cmd_tackle_skipped)
 
     pop = sub.add_parser(
         "overlay-promote",

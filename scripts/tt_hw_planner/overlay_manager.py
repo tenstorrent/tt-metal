@@ -162,6 +162,142 @@ def clear_persistent_skips(model_id: str) -> int:
     return len(skips)
 
 
+def _no_emit_tests_path(model_id: str) -> Path:
+    return _model_dir(model_id) / "no_emit_tests.json"
+
+
+def load_no_emit_tests(model_id: str) -> Dict[str, dict]:
+    """Return the persistent ``{comp_name: {reason, captured_ts}}`` dict for
+    components whose standalone PCC test should NOT be emitted on future
+    runs.
+
+    Populated by Phase 2 when it drops ModuleList-style components (they
+    have no testable forward as a unit; the parent's PCC test covers them).
+    Read by ``_emit_pcc_template`` so the next scaffold run doesn't
+    re-create the files we just dropped.
+
+    Empty dict if no file exists yet -- never raises so a malformed file
+    can't crash the scaffold path.
+    """
+    p = _no_emit_tests_path(model_id)
+    if not p.is_file():
+        return {}
+    try:
+        return json.loads(p.read_text())
+    except Exception:
+        return {}
+
+
+def persist_no_emit_test(model_id: str, comp_name: str, reason: str = "") -> None:
+    """Add ``comp_name`` to the persistent no-emit-tests list for ``model_id``.
+
+    Idempotent: re-adding an existing component is a no-op (the captured_ts
+    of the original entry is preserved). Called from Phase 2's ModuleList
+    drop path so the structural decision ("this component is a container
+    with no testable forward") survives scaffold regeneration.
+    """
+    listing = load_no_emit_tests(model_id)
+    if comp_name in listing:
+        return
+    listing[comp_name] = {
+        "reason": reason or "structurally untestable as standalone",
+        "captured_ts": time.time(),
+    }
+    p = _no_emit_tests_path(model_id)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(listing, indent=2, sort_keys=True))
+
+
+def remove_no_emit_test(model_id: str, comp_name: str) -> bool:
+    """Drop a single entry from the no-emit-tests list. Returns True if
+    the entry was present and removed. Used when a human decides to
+    reverse a ModuleList drop (e.g., they wrote a real forward method
+    and want to standalone-test it again)."""
+    listing = load_no_emit_tests(model_id)
+    if comp_name not in listing:
+        return False
+    del listing[comp_name]
+    p = _no_emit_tests_path(model_id)
+    if listing:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(listing, indent=2, sort_keys=True))
+    elif p.is_file():
+        p.unlink()
+    return True
+
+
+def is_no_emit_test(model_id: str, comp_name: str) -> bool:
+    """Fast lookup: is this component on the no-emit list for `model_id`?
+
+    Used as the gate in ``_emit_pcc_template`` so the scaffold can skip
+    emission without loading + parsing the full list each time."""
+    return comp_name in load_no_emit_tests(model_id)
+
+
+def _hot_cold_path(model_id: str) -> Path:
+    return _model_dir(model_id) / "hot_cold.json"
+
+
+def load_hot_cold(model_id: str) -> Dict[str, str]:
+    """Return ``{comp_name: "HOT" | "COLD" | "UNRESOLVED"}`` for the model.
+
+    Populated by the ``classify-hot-cold`` CLI command which runs the
+    workload's forward pass with hooks. Read by the auto-iterate loop
+    so COLD components (never invoked in this workload) don't get
+    targeted by the picker -- they're correctly on CPU fallback and
+    don't need standalone PCC verification.
+
+    Empty dict if no file exists yet -- never raises so a malformed
+    file can't crash the auto-iterate path. In that case the loop
+    treats every NEW component as HOT (conservative)."""
+    p = _hot_cold_path(model_id)
+    if not p.is_file():
+        return {}
+    try:
+        return json.loads(p.read_text())
+    except Exception:
+        return {}
+
+
+def persist_hot_cold(model_id: str, classification: Dict[str, str]) -> None:
+    """Write the classification map. Overwrites any prior file -- the
+    classifier is the source of truth, not an accumulator."""
+    p = _hot_cold_path(model_id)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(classification, indent=2, sort_keys=True))
+
+
+def is_cold_component(model_id: str, comp_name: str) -> bool:
+    """Fast lookup used by the auto-iterate loop. Returns True only if
+    we have a positive COLD classification for this component (UNRESOLVED
+    is treated as if HOT -- conservative -- so we never silently skip a
+    component we lack signal on)."""
+    return load_hot_cold(model_id).get(comp_name) == "COLD"
+
+
+def remove_persistent_skip(model_id: str, comp_name: str) -> bool:
+    """Drop a SINGLE entry from the persistent skip-list. Returns True if
+    the entry was present and removed, False if it wasn't there.
+
+    Used by the Phase-2 ``tackle-skipped`` orchestrator when an individual
+    component has been resolved (e.g., ModuleList components dropped from
+    scaffold, or missing-arg components unblocked by an LLM-drafted driver).
+    The all-or-nothing ``clear_persistent_skips`` is too coarse for this case:
+    other components on the list may still be genuinely untestable.
+    """
+    skips = load_persistent_skips(model_id)
+    if comp_name not in skips:
+        return False
+    del skips[comp_name]
+    p = _skipped_components_path(model_id)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    if skips:
+        p.write_text(json.dumps(skips, indent=2, sort_keys=True))
+    elif p.is_file():
+        p.unlink()
+    return True
+
+
 def _patch_filename(rel_path: str) -> str:
     safe = rel_path.replace("/", "__")
     return f"{safe}.patch"

@@ -43,6 +43,7 @@ def _run_auto_iterate_loop(
     model_light: Optional[str] = None,
     model_heavy: Optional[str] = None,
     parallel_agents: int = 1,
+    only_component: Optional[str] = None,
 ) -> int:
     from ..cli import (
         REPO_ROOT,
@@ -139,7 +140,7 @@ def _run_auto_iterate_loop(
     graduated_this_run: List[str] = []
 
     from .sweep_cache import ValidationSweepCache
-    from ..overlay_manager import load_persistent_skips, persist_skip
+    from ..overlay_manager import load_persistent_skips, load_no_emit_tests, load_hot_cold, persist_skip
 
     _SWEEP_CACHE = ValidationSweepCache()
 
@@ -154,6 +155,33 @@ def _run_auto_iterate_loop(
             f"  [persistent-skips] to re-attempt them, fix the test scaffold then run: "
             f"`python -m scripts.tt_hw_planner overlay-clear-skips {MODEL}`"
         )
+
+    _no_emit_tests = load_no_emit_tests(MODEL)
+    if _no_emit_tests:
+        _new_no_emit = sorted(c for c in _no_emit_tests.keys() if c not in permanently_skipped)
+        permanently_skipped.extend(_new_no_emit)
+        print(
+            f"  [no-emit-tests] loaded {len(_no_emit_tests)} component(s) flagged as "
+            f"structurally untestable (Phase 2 ModuleList drops): "
+            f"{', '.join(sorted(_no_emit_tests.keys()))}"
+        )
+        if _new_no_emit:
+            print(f"  [no-emit-tests] excluding {len(_new_no_emit)} of these from the " f"candidate pool for this run")
+
+    _hot_cold = load_hot_cold(MODEL)
+    if _hot_cold:
+        _cold = sorted(c for c, kind in _hot_cold.items() if kind == "COLD")
+        _new_cold = [c for c in _cold if c not in permanently_skipped]
+        permanently_skipped.extend(_new_cold)
+        _hot_count = sum(1 for k in _hot_cold.values() if k == "HOT")
+        _unres_count = sum(1 for k in _hot_cold.values() if k == "UNRESOLVED")
+        print(f"  [hot-cold] loaded HOT={_hot_count} COLD={len(_cold)} UNRESOLVED={_unres_count}")
+        if _new_cold:
+            print(
+                f"  [hot-cold] excluding {len(_new_cold)} COLD component(s) from "
+                f"the candidate pool (never invoked in this workload — CPU "
+                f"fallback is correct): {', '.join(_new_cold)}"
+            )
 
     unverified_native_this_run: set = set()
     verified_fail: set = set()
@@ -1133,6 +1161,15 @@ def _run_auto_iterate_loop(
             - (set(graduated_this_run) - partial_cpu_set)
             - set(unverified_native_this_run)
         )
+        if only_component:
+            if only_component in candidate_pool:
+                candidate_pool = [only_component]
+            else:
+                candidate_pool = []
+                print(
+                    f"  [sandbox --auto-only-component {only_component!r}] "
+                    f"component not in current candidate pool — nothing to iterate on; exiting clean."
+                )
         if not candidate_pool:
             if permanently_skipped:
                 banner(
@@ -1543,9 +1580,21 @@ def _run_auto_iterate_loop(
             if block:
                 per_comp_failure[comp] = block
 
-        component_blocks: List[str] = []
         iter_choices: Dict[str, Dict[str, str]] = {}
-        for comp in agent_targets:
+
+        def _build_enriched_component_block(comp: str) -> str:
+            """Build the full per-component enriched prompt block.
+
+            Both the primary target and every parallel-extra target call this
+            so they get the SAME convergence helpers: captured I/O contract,
+            activation_diff localization, exemplar, hf source, test source,
+            constraints, op-synth, attempt history.
+
+            Before this refactor, only the primary's block was built, and
+            extras' prompts inherited the primary's block as `components_block`
+            instead of getting their own enrichment. That made extras converge
+            far worse than primaries on the same model run.
+            """
             safe = _safe_id(comp)
             stub_path = demo_dir / "_stubs" / f"{safe}.py"
             response_path = demo_dir / "_synth_responses" / f"{safe}.py"
@@ -1614,7 +1663,12 @@ def _run_auto_iterate_loop(
 
             localization_hint = ""
             full_hf_source = ""
-            if failure_class in ("PCC_ONLY", "DTYPE_MISMATCH", "SHAPE", "TT_FATAL_OPAQUE"):
+            _localize_classes = ("PCC_ONLY", "DTYPE_MISMATCH", "SHAPE", "TT_FATAL_OPAQUE")
+            _crash_in_failure = bool(failure_block) and any(
+                _sig in failure_block
+                for _sig in ("RuntimeError:", "AttributeError:", "IndexError:", "Traceback (most recent call")
+            )
+            if failure_class in _localize_classes or (failure_class == "OTHER" and _crash_in_failure):
                 try:
                     from .. import activation_diff as _act_diff
 
@@ -1654,7 +1708,7 @@ def _run_auto_iterate_loop(
                 f"({len(full_hf_source)})"
             )
 
-            component_blocks.append(
+            return (
                 f"================================================================\n"
                 f"COMPONENT: {comp}\n"
                 f"================================================================\n"
@@ -1690,6 +1744,7 @@ def _run_auto_iterate_loop(
                 f"{exemplar}\n"
             )
 
+        component_blocks: List[str] = [_build_enriched_component_block(comp) for comp in agent_targets]
         components_block = "\n".join(component_blocks) if component_blocks else "(no failing components)"
 
         failure_context = ""
@@ -1894,11 +1949,13 @@ def _run_auto_iterate_loop(
                 )
 
                 _ungraduated_now, _ = _auto_iteration_blockers(MODEL)
+                _extras_pool = set(_ungraduated_now) | set(candidate_pool or [])
+                _extras_pool -= set(graduated_this_run)
                 _exclude = set([iter_target_component]) | set(permanently_skipped)
-                _at_cap_now = {c for c in _ungraduated_now if _is_at_cap(c)}
+                _at_cap_now = {c for c in _extras_pool if _is_at_cap(c)}
                 _exclude |= _at_cap_now
                 _ungraduated_ranked = sorted(
-                    _ungraduated_now,
+                    _extras_pool,
                     key=lambda c: (
                         attempts_per_component.get(c, 0),
                         consecutive_same_class_attempts.get(c, 0),
@@ -1908,6 +1965,8 @@ def _run_auto_iterate_loop(
                 _extra_targets = pick_n_distinct_targets(
                     _ungraduated_ranked, n=parallel_agents - 1, exclude=list(_exclude)
                 )
+                if only_component:
+                    _extra_targets = []
                 for _extra in _extra_targets:
                     if _extra in pre_apply_hashes:
                         continue
@@ -1939,6 +1998,7 @@ def _run_auto_iterate_loop(
                         attempts_so_far=_extra_attempts,
                         prior_failure_class=_extra_blocks["failure_class"],
                     )
+                    _extra_components_block = _build_enriched_component_block(_extra)
                     _extra_prompt = assemble_iter_prompt(
                         hw_header=hw_header,
                         task_block=task_block,
@@ -1951,7 +2011,7 @@ def _run_auto_iterate_loop(
                         escalated_scope_block=_extra_blocks["escalated_scope_block"],
                         native_directive=_extra_blocks["native_directive"],
                         cross_component_block=_extra_blocks["cross_component_block"],
-                        components_block=components_block,
+                        components_block=_extra_components_block,
                         target_header=_extra_target_header,
                     )
                     _parallel_extra_jobs.append(
@@ -1970,6 +2030,29 @@ def _run_auto_iterate_loop(
                         )
                     )
 
+            if os.environ.get("TT_PLANNER_DRY_RUN_PROMPTS", "") == "1":
+                _dr_dir = Path("/tmp") / "tt_planner_dry_run" / _safe_id(MODEL) / f"iter_{it}"
+                _dr_dir.mkdir(parents=True, exist_ok=True)
+                _written: List[Path] = []
+                if iter_target_component:
+                    _p = _dr_dir / f"{_safe_id(iter_target_component)}.prompt.txt"
+                    _p.write_text(prompt)
+                    _written.append(_p)
+                for _job in _parallel_extra_jobs:
+                    _p = _dr_dir / f"{_safe_id(_job.component)}.prompt.txt"
+                    _p.write_text(_job.prompt)
+                    _written.append(_p)
+                print(
+                    f"  [dry-run-prompts] wrote {len(_written)} prompt file(s) "
+                    f"to {_dr_dir}; skipping LLM invocation."
+                )
+                for _p in _written:
+                    print(f"    {_p}  ({_p.stat().st_size} bytes)")
+                print(
+                    "  [dry-run-prompts] TT_PLANNER_DRY_RUN_PROMPTS=1 set; "
+                    "exiting after iter 1 since no agent code was applied."
+                )
+                return 0
             if _parallel_extra_jobs:
                 from .parallel_iterate import AgentJob, run_parallel_agents
 

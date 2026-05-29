@@ -306,19 +306,33 @@ def _build_torch_reference():
     model.eval()
     torch_module = None
     resolved_path = None
-    for path in _CANDIDATE_SUBMODULE_PATHS:
+    # BUG-2 FIX: if capture-inputs recorded a submodule_path in the manifest,
+    # try THAT path FIRST. Capture and test must resolve to the same submodule
+    # or captured args won't fit the test-resolved torch_module's signature.
+    _captured_path = _captured_submodule_path(COMPONENT_NAME)
+    if _captured_path:
         try:
-            torch_module = _resolve(model, path)
-            resolved_path = path
-            break
+            torch_module = _resolve(model, _captured_path)
+            resolved_path = _captured_path
+            print(f"[bringup] resolved torch submodule via captured manifest path `{{_captured_path}}`")
         except (AttributeError, IndexError, KeyError, TypeError):
-            continue
+            torch_module = None
+            resolved_path = None
+    if torch_module is None:
+        for path in _CANDIDATE_SUBMODULE_PATHS:
+            try:
+                torch_module = _resolve(model, path)
+                resolved_path = path
+                break
+            except (AttributeError, IndexError, KeyError, TypeError):
+                continue
     if torch_module is None:
         pytest.skip(
             "none of the canonical submodule paths resolved for "
             f"`{component_name}` of {{HF_MODEL_ID}}; edit `_CANDIDATE_SUBMODULE_PATHS`."
         )
-    print(f"[bringup] resolved torch submodule via `{{resolved_path}}`")
+    if not (_captured_path and resolved_path == _captured_path):
+        print(f"[bringup] resolved torch submodule via `{{resolved_path}}`")
 
     sig = inspect.signature(torch_module.forward)
     kwargs = {{}}
@@ -746,6 +760,15 @@ def _emit_pcc_template(
     safe = _safe_id(component_name)
     fname = f"test_{safe}.py"
     test_path = pcc_dir / fname
+
+    try:
+        from .overlay_manager import is_no_emit_test
+
+        if is_no_emit_test(model_id, component_name):
+            return test_path, False, test_path.exists()
+    except Exception:
+        pass
+
     if test_path.exists() and not overwrite:
         return test_path, False, True
 
