@@ -384,35 +384,28 @@ class TtQwen3EncoderMLP:
         _bf8 = getattr(ttnn, "bfloat8_b", None) or getattr(ttnn, "bfloat16", None)
         _tc_kw = {"memory_config": self._linear_out_l1} if self._linear_out_l1 is not None else {}
         x_bf8 = ttnn.typecast(x, dtype=_bf8, **_tc_kw)
-        if self._fused_gate_up:
-            gu_bf8 = ttnn.linear(x_bf8, self.w_gate_up, bias=None, transpose_b=True, dtype=_bf8, **lin_gu)
-            inter = self.intermediate_size
-            gate_bf8 = ttnn.slice(gu_bf8, (0, 0, 0, 0), (b_x, 1, s, inter))
-            up_bf8 = ttnn.slice(gu_bf8, (0, 0, 0, inter), (b_x, 1, s, 2 * inter))
-            ace_step_safe_deallocate(ttnn, gu_bf8)
-            gate = ttnn.typecast(gate_bf8, dtype=self.dtype, **_tc_kw)
-            up = ttnn.typecast(up_bf8, dtype=self.dtype, **_tc_kw)
-        else:
-            gate_bf8 = ttnn.linear(x_bf8, self.w_gate, bias=None, transpose_b=True, dtype=_bf8, **lin_gu)
-            up_bf8 = ttnn.linear(x_bf8, self.w_up, bias=None, transpose_b=True, dtype=_bf8, **lin_gu)
-            gate = ttnn.typecast(gate_bf8, dtype=self.dtype, **_tc_kw)
-            up = ttnn.typecast(up_bf8, dtype=self.dtype, **_tc_kw)
-        ace_step_safe_deallocate(ttnn, x_bf8)
         _silu_mc = (self._linear_out_l1 if not self._mlp_keep_dram_activations else None) or getattr(
             ttnn, "DRAM_MEMORY_CONFIG", None
         )
+        if self._fused_gate_up:
+            gu_bf8 = ttnn.linear(x_bf8, self.w_gate_up, bias=None, transpose_b=True, dtype=_bf8, **lin_gu)
+            inter = self.intermediate_size
+            gate = ttnn.slice(gu_bf8, (0, 0, 0, 0), (b_x, 1, s, inter))
+            up = ttnn.slice(gu_bf8, (0, 0, 0, inter), (b_x, 1, s, 2 * inter))
+            ace_step_safe_deallocate(ttnn, gu_bf8)
+        else:
+            gate = ttnn.linear(x_bf8, self.w_gate, bias=None, transpose_b=True, dtype=_bf8, **lin_gu)
+            up = ttnn.linear(x_bf8, self.w_up, bias=None, transpose_b=True, dtype=_bf8, **lin_gu)
+        ace_step_safe_deallocate(ttnn, x_bf8)
         gate = (
             ttnn.silu(gate, memory_config=_silu_mc)
             if hasattr(ttnn, "silu")
             else ttnn.gelu(gate, memory_config=_silu_mc)
         )
-        h = ttnn.multiply(gate, up, memory_config=_silu_mc)
+        h_bf8 = ttnn.multiply(gate, up, memory_config=_silu_mc, dtype=_bf8)
         if not self._mlp_keep_dram_activations:
-            h = self._l1_activation(h)
+            h_bf8 = self._l1_activation(h_bf8)
         lin_down = self._down_linear_kwargs(batch_size=b_x, seq_len=s)
-        # Run down-proj matmul in BFP8 as well (BF16→BFP8 activations, BFP8 weights, BFP8 output),
-        # then cast back to the MLP activation dtype for the rest of the block.
-        h_bf8 = ttnn.typecast(h, dtype=_bf8, **_tc_kw)
         out_bf8 = ttnn.linear(h_bf8, self.w_down, bias=None, transpose_b=True, dtype=_bf8, **lin_down)
         ace_step_safe_deallocate(ttnn, h_bf8)
         return ttnn.typecast(out_bf8, dtype=self.dtype, **_tc_kw)
