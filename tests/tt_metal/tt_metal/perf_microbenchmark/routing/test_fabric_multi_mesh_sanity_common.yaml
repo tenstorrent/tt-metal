@@ -1,7 +1,26 @@
+
 Tests:
+
   - name: "MeshNeighborExchange"
+    sync: true
+    fabric_setup:
+      topology: Mesh
+
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      num_links: [1, 2]
+
+    defaults:
+      ftype: unicast
+      size: 32
+      num_packets: 1000
+
+    patterns:
+      - type: neighbor_exchange
+
+  - name: "FlowControlMeshNeighborExchange"
     enable_flow_control: true
-    global_sync: true
+    sync: true
     fabric_setup:
       topology: Mesh
 
@@ -12,13 +31,15 @@ Tests:
 
     defaults:
       ftype: unicast
-      num_packets: 100
+      num_packets: 1000
 
     patterns:
-      - type: all_to_all
+      - type: neighbor_exchange
 
+  # Cross-mesh all-to-all (adjacent-mesh destinations), retained from the
+  # original multi-mesh sanity coverage.
   - name: "MultiMeshAllToAll"
-    global_sync: true
+    sync: true
     fabric_setup:
       topology: Mesh
 
