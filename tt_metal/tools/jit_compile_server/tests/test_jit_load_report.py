@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 import importlib.util
+import io
+import json
 from pathlib import Path
 import sys
 
@@ -196,3 +198,30 @@ def test_build_report_groups_by_source_not_addr():
     assert servers["server-a.log"]["count"] == 5
     assert servers["server-b.log"]["addr"] == "0.0.0.0:9876"
     assert servers["server-b.log"]["count"] == 7
+
+
+def test_main_stdin_collapses_prefixed_lines_into_single_server(monkeypatch, capsys):
+    # tt-logger style per-line prefixes (timestamp + level) would make prefix-based server
+    # inference assign a different server_id per line. Reading from stdin must instead
+    # aggregate everything into one coherent server and attribute kernel hashes to it.
+    stdin_text = "\n".join(
+        [
+            "2026-05-29 19:45:26.001 | INFO     | compile kernels/a/aaaaaaaaaaaaaaaa: targets=1 genfiles=0 outstanding=1",
+            "2026-05-29 19:45:26.050 | INFO     | compile kernels/a/bbbbbbbbbbbbbbbb: targets=1 genfiles=0 outstanding=1",
+            "2026-05-29 19:45:26.100 | INFO     | [jit_server addr=localhost:9876 ts=1000] count=2 dedup_hits=0 total_compile_time_ms=40 queued=0 inflight=0 peak_inflight=1 bytes_in=100 bytes_out=40",
+            "2026-05-29 19:45:27.200 | INFO     | [jit_server addr=localhost:9876 ts=2000] count=5 dedup_hits=1 total_compile_time_ms=90 queued=0 inflight=0 peak_inflight=2 bytes_in=300 bytes_out=120",
+        ]
+    )
+    monkeypatch.setattr(sys, "stdin", io.StringIO(stdin_text))
+
+    assert MODULE.main(["--json"]) == 0
+
+    report = json.loads(capsys.readouterr().out)
+
+    assert len(report["servers"]) == 1
+    server = report["servers"][0]
+    assert server["server"] == MODULE.STDIN_SOURCE_ID
+    assert server["addr"] == "localhost:9876"
+    assert server["count"] == 5
+    assert server["unique_kernel_hashes"] == 2
+    assert report["unique_kernel_hashes_total"] == 2

@@ -45,7 +45,7 @@ import re
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Iterable, Sequence, TextIO
+from typing import Iterable, Sequence
 
 
 JIT_SERVER_LOG_PATTERN = re.compile(
@@ -61,6 +61,12 @@ JIT_SERVER_LOG_PATTERN = re.compile(
 )
 COMPILE_LOG_PATTERN = re.compile(r"compile (?P<kernel_name>\S+): targets=\d+ genfiles=\d+ outstanding=\d+")
 KERNEL_HASH_PATTERN = re.compile(r"[0-9a-fA-F]{16,}")
+
+# When reading from stdin there is no per-file path to attribute samples to, and per-line
+# log prefixes (e.g. tt-logger timestamps) make prefix-based server inference unstable.
+# Use a single constant id so all stdin samples aggregate into one coherent server, and so
+# jit_server samples and compile samples share the same server_id for unique_kernel_hashes.
+STDIN_SOURCE_ID = "<stdin>"
 
 
 @dataclass(frozen=True)
@@ -443,8 +449,8 @@ def _read_samples_from_path(path: Path) -> list[JitServerSample]:
         return parse_jit_server_samples(handle, source_id=str(path))
 
 
-def _read_samples_from_stream(stream: TextIO) -> list[JitServerSample]:
-    return parse_jit_server_samples(stream)
+def _read_samples_from_stream(lines: Iterable[str], source_id: str | None = None) -> list[JitServerSample]:
+    return parse_jit_server_samples(lines, source_id=source_id)
 
 
 def _read_kernel_samples_from_path(path: Path) -> list[KernelCompileSample]:
@@ -452,8 +458,8 @@ def _read_kernel_samples_from_path(path: Path) -> list[KernelCompileSample]:
         return parse_kernel_compile_samples(handle, source_id=str(path))
 
 
-def _read_kernel_samples_from_stream(stream: TextIO) -> list[KernelCompileSample]:
-    return parse_kernel_compile_samples(stream)
+def _read_kernel_samples_from_stream(lines: Iterable[str], source_id: str | None = None) -> list[KernelCompileSample]:
+    return parse_kernel_compile_samples(lines, source_id=source_id)
 
 
 def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
@@ -505,8 +511,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             kernel_samples.extend(_read_kernel_samples_from_path(Path(path)))
     else:
         stdin_lines = list(sys.stdin)
-        samples.extend(_read_samples_from_stream(stdin_lines))
-        kernel_samples.extend(_read_kernel_samples_from_stream(stdin_lines))
+        samples.extend(_read_samples_from_stream(stdin_lines, source_id=STDIN_SOURCE_ID))
+        kernel_samples.extend(_read_kernel_samples_from_stream(stdin_lines, source_id=STDIN_SOURCE_ID))
 
     report = build_report(samples, args.window, kernel_compile_samples=kernel_samples)
     if args.json:
