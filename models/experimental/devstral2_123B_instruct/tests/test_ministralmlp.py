@@ -2,7 +2,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""PCC: TT ``TtMLP`` vs HF ``Ministral3MLP`` on Devstral-2-123B layer-0 weights."""
+"""PCC: TT ``TtMLP`` vs HF ``Ministral3MLP`` on Devstral-2-123B layer-0 weights.
+
+Uses prefill width-sharded activations (same layout as post-attention RMSNorm at ``seq_len <= kv_block_size``).
+"""
 
 from __future__ import annotations
 
@@ -20,6 +23,9 @@ from models.experimental.devstral2_123B_instruct.tests._devstral_weights import 
     require_mlp_weights,
     require_text_config,
     replicated_tt_to_torch,
+)
+from models.experimental.devstral2_123B_instruct.tt.mem_config import (
+    get_prefill_width_sharded_activation_mem_config,
 )
 from models.experimental.devstral2_123B_instruct.tt.model_args import (
     DEVSTRAL2_LARGE_L1_SMALL_SIZE,
@@ -67,6 +73,7 @@ def test_mlp_pcc_real_weights(mesh_device, seq_len):
     tt_mlp = TtMLP(args, mesh_device, state_dict, layer_idx=layer, tt_ccl=tt_ccl)
 
     x = torch.randn(1, 1, seq_len, text_cfg.hidden_size, dtype=torch.bfloat16)
+    ws_mem = get_prefill_width_sharded_activation_mem_config(seq_len, text_cfg.hidden_size)
     tt_x = ttnn.from_torch(
         x,
         device=mesh_device,
@@ -75,7 +82,8 @@ def test_mlp_pcc_real_weights(mesh_device, seq_len):
         memory_config=ttnn.L1_MEMORY_CONFIG,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
-    tt_out = tt_mlp(tt_x)
+    tt_x = ttnn.interleaved_to_sharded(tt_x, ws_mem)
+    tt_out = tt_mlp(tt_x, mode="prefill")
     tt_torch = replicated_tt_to_torch(tt_out)
 
     ref_out = ref(x)

@@ -139,7 +139,7 @@ class TtRMSNorm:
         """
         out_mem = memory_config if memory_config is not None else ttnn.L1_MEMORY_CONFIG
         seq_len = max(1, int(x.shape[-2]))
-        if seq_len <= self.args.kv_block_size:
+        if seq_len == self.args.kv_block_size:
             sharded_mem = get_prefill_width_sharded_activation_mem_config(seq_len, self.args.hidden_size)
             program_config = get_prefill_width_sharded_norm_program_config(seq_len, self.args.hidden_size)
             x = _ensure_memory_config(x, sharded_mem)

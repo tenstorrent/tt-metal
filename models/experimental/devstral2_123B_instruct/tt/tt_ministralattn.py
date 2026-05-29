@@ -37,7 +37,7 @@ import ttnn
 from models.experimental.devstral2_123B_instruct.tt.ccl_helpers import all_reduce_replicate
 from models.experimental.devstral2_123B_instruct.tt.mem_config import (
     get_compute_kernel_config,
-    get_compute_kernel_config_hifi4,
+    get_compute_kernel_config_lofi,
     get_decode_qkv_matmul_program_config,
     get_decode_width_sharded_matmul_output_mem_config,
     get_linear_program_config,
@@ -197,7 +197,7 @@ class TtAttention:
         wp = resolve_weight_cache_path(weight_cache_path, args)
         pfx = prefix
         # Quantize weights to bfloat8_b for DRAM bandwidth; matmul outputs stay bfloat16 with
-        # HiFi4 fidelity. Quantizing outputs to bf8_b compounds across 88 layers and drops PCC.
+        # LoFi fidelity. Quantizing outputs to bf8_b compounds across 88 layers and drops PCC.
         self.qkv_proj_weight_dtype = ttnn.bfloat8_b
         self.qkv_proj_output_dtype = ttnn.bfloat16
         self.qkv_proj = _to_tt_weight(
@@ -257,7 +257,7 @@ class TtAttention:
         )
 
         self._compute_kernel_config = get_compute_kernel_config(mesh_device)
-        self._compute_kernel_config_hifi4 = get_compute_kernel_config_hifi4(mesh_device)
+        self._compute_kernel_config_lofi = get_compute_kernel_config_lofi(mesh_device)
         self._sdpa_decode_program_config = get_sdpa_decode_program_config(mesh_device)
         self._sdpa_decode_compute_kernel_config = get_sdpa_decode_compute_kernel_config(mesh_device)
 
@@ -314,7 +314,7 @@ class TtAttention:
                 kind="qkv",
                 seq_len=seq_len,
                 output_dtype=self.qkv_proj_output_dtype,
-                compute_kernel_config=self._compute_kernel_config_hifi4,
+                compute_kernel_config=self._compute_kernel_config_lofi,
                 memory_config=get_prefill_qkv_matmul_output_mem_config(),
                 program_config=get_prefill_qkv_matmul_program_config(self.args, self.mesh_device, seq_len=seq_len, n=n),
             )
@@ -328,7 +328,7 @@ class TtAttention:
             kind="qkv",
             seq_len=seq_len,
             output_dtype=self.qkv_proj_output_dtype,
-            compute_kernel_config=self._compute_kernel_config_hifi4,
+            compute_kernel_config=self._compute_kernel_config_lofi,
         )
 
     def _project_qkv_decode(self, x: ttnn.Tensor) -> ttnn.Tensor:
@@ -342,7 +342,7 @@ class TtAttention:
                 mode="decode",
                 kind="qkv",
                 output_dtype=self.qkv_proj_output_dtype,
-                compute_kernel_config=self._compute_kernel_config_hifi4,
+                compute_kernel_config=self._compute_kernel_config_lofi,
                 memory_config=get_decode_width_sharded_matmul_output_mem_config(),
                 program_config=get_decode_qkv_matmul_program_config(self.args, self.mesh_device, n=n),
             )
@@ -355,7 +355,7 @@ class TtAttention:
             mode="decode",
             kind="qkv",
             output_dtype=self.qkv_proj_output_dtype,
-            compute_kernel_config=self._compute_kernel_config_hifi4,
+            compute_kernel_config=self._compute_kernel_config_lofi,
         )
 
     def _project_o(self, attn_out_flat: ttnn.Tensor, *, mode: str, seq_len: int = 1) -> ttnn.Tensor:
@@ -366,7 +366,7 @@ class TtAttention:
             kind="o_proj",
             seq_len=seq_len,
             output_dtype=self.o_proj_output_dtype,
-            compute_kernel_config=self._compute_kernel_config_hifi4,
+            compute_kernel_config=self._compute_kernel_config_lofi,
         )
         return all_reduce_replicate(
             dense,
