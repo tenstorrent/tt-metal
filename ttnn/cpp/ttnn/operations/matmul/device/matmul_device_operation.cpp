@@ -1053,8 +1053,15 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                     TT_FATAL(
                         input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
                             (input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
+                             input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::DRAM) ||
+                            // Receiver-contiguous DRAM-core prefetcher: in1 is an NdShardSpec DRAM
+                            // weight (reported as BLOCK_SHARDED) whose data is delivered via the
+                            // global CB receivers, not read directly per its DRAM layout. The
+                            // weight's own layout is irrelevant to the matmul in this case.
+                            (attributes.global_cb.has_value() &&
                              input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::DRAM),
-                        "Input tensor B must be width sharded or DRAM interleaved when using gather_in0.");
+                        "Input tensor B must be width sharded, DRAM interleaved, or a DRAM weight fed "
+                        "via a global circular buffer when using gather_in0.");
                     if (!attributes.global_cb.has_value() && input_tensor_b.is_sharded()) {
                         if (input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::L1) {
                             TT_FATAL(
@@ -1090,10 +1097,17 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                             "Num global CB receivers must be 1 when global CB is not provided.");
                     }
 
-                    // Cross-validate the DRAM-sender global_cb's geometry against the matmul +
                     // weight shape (silent-hang guards). Gated on the DRAM-sender path; see the
                     // helper for why.
+                    // This cross-check encodes the K-row-major DRAM-sender convention: each bank
+                    // holds one wide (K, N/num_banks) width shard and feeds the contiguous ring
+                    // positions [b*rpb, (b+1)*rpb). The receiver-contiguous layout uses an
+                    // NdShardSpec weight (BLOCK_SHARDED) with round-robin shard placement and a
+                    // strided bank->ring mapping, so this convention doesn't apply — skip it for
+                    // non-WIDTH_SHARDED in1. recv-contig correctness is covered by
+                    // test_validator_dram_sender_recv_contig and the bench PCC check.
                     if (attributes.global_cb.has_value() && input_tensor_a.is_sharded() &&
+                        input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
                         tt::tt_metal::experimental::sender_core_type(attributes.global_cb.value()) ==
                             tt::tt_metal::experimental::SenderCoreType::Dram) {
                         validate_dram_sender_global_cb_gather_in0_geometry(
