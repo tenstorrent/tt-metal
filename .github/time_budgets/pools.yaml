@@ -1,0 +1,47 @@
+# Weekly machine-hours per SKU observed for tt-metal jobs in Snowflake.
+# Formula: SUM(JOB_EXECUTION_TIME) / 3600 / 28 * 7, last 28 days, PROJECT = 'tt-metal'.
+# Keys match .github/sku_config.yaml exactly. Updated April 2026.
+#
+# ~3,800 h/wk untracked: legacy multi-host labels (multi-host-galaxy, multi-host-glx-4x,
+# multi-host-t3000, g04glx03, etc.) with no sku_config entry.
+# bh_p300 and bh_p300_viommu share the P300-viommu runner tag and cannot be
+# distinguished in Snowflake; combined hours shown under bh_p300.
+
+# ── CIv2 (tt-ubuntu-2204-* runner labels) ──────────────────────────────────
+wh_n150_civ2:             1053
+wh_n300_civ2:             5035
+wh_llmbox_civ2:            334
+bh_p100a_civ2_viommu:       97
+bh_p150b_civ2_viommu:     1046
+bh_p150b_civ2:            2411
+bh_loudbox_civ2_viommu:      0  # no observed tt-metal jobs in last 28d
+
+# ── CIv1 (comma-separated tag runner labels) ───────────────────────────────
+wh_n150:                   896
+wh_n300:                 12704
+wh_n300_perf:              167
+wh_llmbox:                1152
+wh_llmbox_perf:            340
+wh_llmbox_perf_release:     98
+wh_galaxy:                 152
+wh_galaxy_perf:           2404
+wh_galaxy_release:         853
+wh_galaxy_perf_release:      0
+bh_p100:                   346
+bh_p100_perf:                3
+bh_p150:                    17
+bh_p150_perf:               14
+bh_llmbox:                  81
+bh_loudbox:                562
+bh_p300:                   296  # includes bh_p300_viommu (indistinguishable in Snowflake)
+bh_p300_viommu:              0  # see bh_p300
+bh_quietbox:               582
+bh_quietbox_perf:            6
+bh_quietbox_2:              76
+bh_deskbox:                138
+bh_galaxy:                  39
+bh_galaxy_perf:              0
+bh_galaxy_release:           0
+bh_galaxy_perf_release:      0
+bh_sp1:                      0  # exabox-multihost-with-nfs; no observed tt-metal jobs
+bh_sp4:                      0  # exabox-multihost-with-nfs; same label as bh_sp1
