@@ -988,7 +988,11 @@ void add_cb_descriptors(
         cb_desc.core_ranges = core_ranges;
         cb_desc.format_descriptors.push_back(
             CBFormatDescriptor{.buffer_index = buffer_index, .data_format = data_format, .page_size = page_size});
-        cb_desc.tensor = tensor.has_value() ? &*tensor : nullptr;
+        // Resolve to a Buffer* rather than binding the MeshTensor directly: the experimental
+        // fusion op caches this descriptor and only refreshes CBs backed by `buffer` (see
+        // compute_cb_io_tensor_map / patch_stale_descriptor). A `tensor` binding would never be
+        // patched and would dangle on a fusion cache hit. Tensor::buffer() == this same buffer.
+        cb_desc.buffer = tensor.has_value() ? tensor->mesh_buffer().get_reference_buffer() : nullptr;
         return cb_desc;
     };
 
@@ -1183,7 +1187,8 @@ void add_cb_descriptors(
             .buffer_index = tt::CBIndex::c_25,
             .data_format = cb_config.reciprocal_cb_data_format,
             .page_size = cb_config.reciprocal_CB_size_bytes});
-        recip_cb_desc.tensor = cb_config.recip_tensor.has_value() ? &*cb_config.recip_tensor : nullptr;
+        recip_cb_desc.buffer =
+            cb_config.recip_tensor.has_value() ? cb_config.recip_tensor->mesh_buffer().get_reference_buffer() : nullptr;
         program_descriptor.cbs.push_back(std::move(recip_cb_desc));
     }
 
@@ -1196,7 +1201,8 @@ void add_cb_descriptors(
             .buffer_index = tt::CBIndex::c_7,
             .data_format = cb_config.stats_cb_data_format,
             .page_size = cb_config.stats_single_tile_size});
-        stats_cb_desc.tensor = cb_config.stats_tensor.has_value() ? &*cb_config.stats_tensor : nullptr;
+        stats_cb_desc.buffer =
+            cb_config.stats_tensor.has_value() ? cb_config.stats_tensor->mesh_buffer().get_reference_buffer() : nullptr;
         program_descriptor.cbs.push_back(std::move(stats_cb_desc));
 
         // CB 21: cb_stats_reduced
