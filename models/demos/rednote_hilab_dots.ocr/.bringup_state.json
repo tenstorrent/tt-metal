@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-29T00:11:46Z",
-  "updated_at": "2026-05-29T02:32:56Z",
+  "updated_at": "2026-05-29T02:40:41Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -346,8 +346,21 @@
         "attempts": 0
       },
       "optimization": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/profile_vision_tower.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/vision_tower.traced.tracy.csv"
+        ],
+        "notes": "Traced tracy on the composite assembly (golden grid 1x4x4=16 patches, reduced 2-layer trunk standing in per-layer for full 42). Total device kernel 1084.8us. Top hotspot MatmulDeviceOperation 64.2% (696.5us/14 ops: QKV+proj+MLP fc1/fc2/fc3 + merger fc1/fc2) -- all inside already-optimized leaves (vision_attention -23.8%, vision_mlp -13.8%, merger matmuls 96c at-ceiling). LayerNorm 15.4% all single-core: post_trunk_norm is a TtVisionRMSNorm instance and inherits that leaf's at-ceiling verdict (K_t=48 doesn't divide 32/64 cores; width-sharded variants overflow static L1 CBs). Reshape 6.4% + Binary 5.4% + Transpose 2.1% are leaf-internal (RoPE/head ops + vision_block residual adds already L1-pinned). The vision_tower.py assembly layer itself adds NO inter-block reshard/transpose and NO DRAM hotspot: block->block boundary lands L1 (residual adds), and post_trunk_norm->merger handoff is already L1. The 72.2% DRAM share is entirely leaf-owned matmul output (intentional: merger fused-bias DRAM path proven net-best in the patch_merger tick; L1-pinning leaf matmuls was net-neutral). No composite-boundary lever available -- at-ceiling, inherits leaf wins. PCC 0.9999818 unchanged.",
+        "before_us": 1084.778,
+        "after_us": 1084.778,
+        "pcc": 0.9999817857363288,
+        "tracy_artifact": "models/demos/rednote_hilab_dots.ocr/tt/vision_tower.traced.tracy.csv",
+        "top_hotspot": {
+          "op": "MatmulDeviceOperation",
+          "share": 0.642
+        }
       },
       "real_weights": {
         "status": "pending",
@@ -929,6 +942,12 @@
       "tick": 26,
       "ts": "2026-05-29T02:32:56Z",
       "action": "device[vision_patch_merger]",
+      "result": "ok"
+    },
+    {
+      "tick": 27,
+      "ts": "2026-05-29T02:40:41Z",
+      "action": "device[vision_tower]",
       "result": "ok"
     }
   ],
