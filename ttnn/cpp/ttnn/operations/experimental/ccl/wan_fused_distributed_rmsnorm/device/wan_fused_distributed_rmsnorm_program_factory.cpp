@@ -547,9 +547,16 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         intermediate_tile_size,
         intermediate_cb_tiles,
         intermediate_format);
-    // output_cb is double-buffered so the writer can drain block N while compute
-    // produces block N+1.
-    create_cb(output_cb_id, program, worker_core_set, output_tile_size, block_size * 2, output_format);
+    // output_cb sized to 2 full padded rows so the writer can deep-drain a
+    // whole row under ONE noc_async_writes_flushed() (instead of flushing every
+    // block_size=2 tiles) while compute produces the next row. The shallow
+    // 4-tile CB capped write concurrency at block_size, leaving the output
+    // drain at ~22% of POST as back-pressure (P_ADD's 5.9× core-to-core spread
+    // = shared DRAM-write contention). A row-deep CB lets writes pipeline at
+    // DRAM depth, mirroring the deep-read reader change. The MUX writer drains
+    // per-block (overlap preserved) but flushes+pops once per row.
+    const uint32_t output_cb_tiles = 2u * intermediate_cb_tiles;
+    create_cb(output_cb_id, program, worker_core_set, output_tile_size, output_cb_tiles, output_format);
 
     // Packet header CB — needed by the legacy writer's TP>1 fabric forwarder
     // (it reserves 2 header slots from this CB). MUX path uses PacketHeaderPool
