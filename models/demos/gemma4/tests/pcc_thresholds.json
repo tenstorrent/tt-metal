@@ -55,7 +55,17 @@
     "1x4": {
       "test_attention_prefill[blackhole-seq1024-global-1x4]": 0.97,
       "test_attention_prefill[blackhole-seq4096-global-1x4]": 0.97,
-      "test_full_model[blackhole-1x4]": 0.97
+      "test_full_model[blackhole-1x4]": 0.97,
+      "test_prefill_trace_eager_hf_parity[blackhole-prefill_128-batch1-1x4]": 0.99,
+      "test_prefill_trace_eager_hf_parity[blackhole-prefill_128-batch4-1x4]": 0.99,
+      "test_prefill_trace_eager_hf_parity[blackhole-prefill_128-batch32-1x4]": 0.99,
+      "test_prefill_trace_eager_hf_parity[blackhole-prefill_1024-batch1-1x4]": 0.99,
+      "test_prefill_trace_eager_hf_parity[blackhole-prefill_1024-batch4-1x4]": 0.99,
+      "test_prefill_trace_eager_hf_parity[blackhole-prefill_1024-batch32-1x4]": 0.99,
+      "test_prefill_trace_eager_hf_parity[blackhole-prefill_2048-batch16-1x4]": 0.99,
+      "test_prefill_trace_eager_hf_parity[blackhole-prefill_4096-batch16-1x4]": 0.99,
+      "test_prefill_trace_eager_hf_parity[blackhole-prefill_2048-batch32-1x4]": 0.99,
+      "test_prefill_trace_eager_hf_parity[blackhole-prefill_4096-batch32-1x4]": 0.99
     },
     "1x8": {
       "test_attention_prefill[wormhole_b0-seq1024-global-1x8]": 0.98,
