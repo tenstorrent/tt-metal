@@ -1208,6 +1208,69 @@ def ace_step_init_cond_sdpa_compute_kernel_config(device: Any):
     return ace_step_init_lofi_linear_compute_kernel_config(device)
 
 
+def ace_step_init_cond_sdpa_program_config(device: Any, *, seq_len: int, num_heads: int, batch_size: int = 1):
+    """Explicit SDPA program config for the short fixed-length caption-encoder attention.
+
+    SDPA parallelizes over ``batch * heads * num_q_chunks``. For the encoder (B=1, S=256,
+    H≈16) the default heuristic leaves cores idle once it picks a large q-chunk, so we size
+    ``q_chunk_size`` so ``B*H*(S/q_chunk)`` covers the worker grid — small q-chunks (down to
+    one tile) keep all cores busy on this short sequence. ``k_chunk_size`` stays the full seq
+    (one flash pass, no inter-chunk rescale). Env overrides:
+    ``ACE_STEP_SDPA_Q_CHUNK`` / ``ACE_STEP_SDPA_K_CHUNK``; ``ACE_STEP_SDPA_PROGRAM_CONFIG=0``
+    disables (fall back to the heuristic). Returns ``None`` when unsupported/disabled.
+    """
+    import ttnn
+
+    if os.environ.get("ACE_STEP_SDPA_PROGRAM_CONFIG", "1").lower() in ("0", "false", "no"):
+        return None
+    sdpa_pc_cls = getattr(ttnn, "SDPAProgramConfig", None)
+    if sdpa_pc_cls is None or not hasattr(device, "compute_with_storage_grid_size"):
+        return None
+
+    tile = int(getattr(ttnn, "TILE_SIZE", 32))
+    s = max(tile, int(seq_len))
+    grid = device.compute_with_storage_grid_size()
+    num_cores = int(grid.x) * int(grid.y)
+    work = max(1, int(batch_size)) * max(1, int(num_heads))
+
+    # Smallest tile-multiple q-chunk that divides S and yields >= num_cores work units
+    # (capped at S). More q-chunks → more parallel work; 1 tile is the finest.
+    q_chunk = s
+    for q_tiles in range(1, s // tile + 1):
+        cand = q_tiles * tile
+        if s % cand != 0:
+            continue
+        if work * (s // cand) >= num_cores:
+            q_chunk = cand
+            break
+    else:
+        q_chunk = tile  # finest available if none reaches num_cores
+
+    def _env_chunk(name: str, default: int) -> int:
+        v = os.environ.get(name)
+        if not v:
+            return default
+        try:
+            iv = int(v)
+        except ValueError:
+            return default
+        if iv <= 0 or iv % tile != 0 or s % iv != 0:
+            return default
+        return iv
+
+    q_chunk = _env_chunk("ACE_STEP_SDPA_Q_CHUNK", q_chunk)
+    k_chunk = _env_chunk("ACE_STEP_SDPA_K_CHUNK", s)
+    try:
+        return sdpa_pc_cls(
+            compute_with_storage_grid_size=grid,
+            q_chunk_size=int(q_chunk),
+            k_chunk_size=int(k_chunk),
+            exp_approx_mode=False,
+        )
+    except Exception:
+        return None
+
+
 def ace_step_qwen3_optimizations(model_args: Any):
     """``tt_transformers`` decoder config for ACE Qwen3 caption encoder: LoFi + ``bfloat8_b`` weights.
 
