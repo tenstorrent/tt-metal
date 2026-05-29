@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** p150 (blackhole)
 **Started:** 2026-05-29T00:11:46Z
-**Updated:** 2026-05-29T02:01:02Z
+**Updated:** 2026-05-29T02:07:56Z
 
 ## Block Status
 
@@ -23,7 +23,7 @@
 | vision_attention | reference | done | 1.000000 | 0 | reference vs HF (eager) module, PCC=1.0; golden saved |
 | vision_attention | ttnn | done | 0.999988 | 0 | manual SDPA chain (qkv linear -> nlp_create_qkv_heads -> 2D RoPE -> matmul+softmax+matmul w/ block-diagonal additive mask -> nlp_concat_heads -> proj). HiFi4+fp32_dest_acc, bf16. PCC=0.999988 vs golden. Guard ok. |
 | vision_attention | debug | n/a | — | 0 |  |
-| vision_attention | optimization | pending | — | 0 |  |
+| vision_attention | optimization | done | — | 1 | Tracy captured under --traced (metal trace replay session) at production shapes seq=256 cu_seqlens=[0,96,256]. Top hotspot ReshapeViewDeviceOperation 33.1%. Fix: L1-pinned the head-split (qkv->[seq,3,nh,hd]) and head-merge (->[seq,nh*hd]) reshape outputs via memory_config=L1_MEMORY_CONFIG. Block kernel time 970.84->739.34us (-23.8%). The reshape op itself unchanged (~253us) but pinning its output to L1 cut the downstream slice/RoPE/transpose chain reading from DRAM (Slice 90.7->24.0us, Binary 180->130.7us, Transpose 80.6->52.7us). PCC 0.99998858 held. |
 | vision_attention | real_weights | pending | — | 0 |  |
 | vision_mlp | reference | done | 1.000000 | 0 | reference vs HF (eager) module, PCC=1.0; golden saved |
 | vision_mlp | ttnn | done | 0.999986 | 0 | fused gate(fc1)/up(fc3) ttnn.linear -> ttnn.silu(gate)*up -> down(fc2) ttnn.linear. No bias. HiFi4+fp32_dest_acc bf16 DRAM TILE. PCC=0.9999855 vs golden. Guard ok. |
@@ -94,7 +94,6 @@
 
 ## Recent Ticks
 
-- tick 13 (2026-05-29T01:17:43Z): device[rmsnorm] — ok
 - tick 14 (2026-05-29T01:21:18Z): device[rope] — ok
 - tick 15 (2026-05-29T01:27:01Z): device[attention] — ok
 - tick 16 (2026-05-29T01:31:57Z): device[mlp] — ok
@@ -104,6 +103,7 @@
 - tick 20 (2026-05-29T01:51:14Z): skip[vision_patch_embed:ttnn] — host_resident: DotsPatchEmbed is a single Conv2d(3,1536,k=14,s=14) over patchified pixels followed by RMSNorm; Conv2d patchify is a one-shot host-side im2col+matmul in the Qwen-VL TTNN demos (qwen25_vl runs patch embed on host then moves tokens to device). Cheap relative to the 42-layer trunk and runs once per image.
 - tick 21 (2026-05-29T01:54:57Z): device[vision_tower] — ok
 - tick 22 (2026-05-29T02:01:02Z): device[vision_rmsnorm] — ok
+- tick 23 (2026-05-29T02:07:56Z): device[vision_attention] — ok
 
 ## Host-Resident Exceptions
 

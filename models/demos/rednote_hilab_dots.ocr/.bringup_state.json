@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-29T00:11:46Z",
-  "updated_at": "2026-05-29T02:01:02Z",
+  "updated_at": "2026-05-29T02:07:56Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -131,8 +131,16 @@
         "attempts": 0
       },
       "optimization": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/profile_vision_attention.py",
+          "generated/profiler/reports/2026_05_29_02_06_49/ops_perf_results_2026_05_29_02_06_49.csv",
+          "models/demos/rednote_hilab_dots.ocr/tt/vision_attention.py"
+        ],
+        "notes": "Tracy captured under --traced (metal trace replay session) at production shapes seq=256 cu_seqlens=[0,96,256]. Top hotspot ReshapeViewDeviceOperation 33.1%. Fix: L1-pinned the head-split (qkv->[seq,3,nh,hd]) and head-merge (->[seq,nh*hd]) reshape outputs via memory_config=L1_MEMORY_CONFIG. Block kernel time 970.84->739.34us (-23.8%). The reshape op itself unchanged (~253us) but pinning its output to L1 cut the downstream slice/RoPE/transpose chain reading from DRAM (Slice 90.7->24.0us, Binary 180->130.7us, Transpose 80.6->52.7us). PCC 0.99998858 held.",
+        "before_us": 970.84,
+        "after_us": 739.34
       },
       "real_weights": {
         "status": "pending",
@@ -874,6 +882,12 @@
       "tick": 22,
       "ts": "2026-05-29T02:01:02Z",
       "action": "device[vision_rmsnorm]",
+      "result": "ok"
+    },
+    {
+      "tick": 23,
+      "ts": "2026-05-29T02:07:56Z",
+      "action": "device[vision_attention]",
       "result": "ok"
     }
   ],

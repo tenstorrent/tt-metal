@@ -203,7 +203,10 @@ class TtVisionAttention(LightweightModule):
         # Split into q, k, v each [seq, nh*hd]. The reference reshapes
         # qkv -> [seq, 3, nh, hd]; contiguous QKV ordering means the first
         # nh*hd columns are q, next k, next v.
-        qkv = ttnn.reshape(qkv, (seq, 3, nh, hd))
+        # This head-split reshape is the block's dominant op (~33% of kernel
+        # time when left DRAM-interleaved); pin the output to L1 so the
+        # downstream slice/RoPE chain reads from L1 instead of DRAM.
+        qkv = ttnn.reshape(qkv, (seq, 3, nh, hd), memory_config=ttnn.L1_MEMORY_CONFIG)
         q = qkv[:, 0, :, :]  # [seq, nh, hd]
         k = qkv[:, 1, :, :]
         v = qkv[:, 2, :, :]
@@ -238,9 +241,10 @@ class TtVisionAttention(LightweightModule):
             dtype=ttnn.bfloat16,
         )  # [1, nh, seq, hd]
 
-        # -> [seq, nh*hd]
+        # -> [seq, nh*hd]. Head-merge reshape; pin to L1 so the output proj
+        # reads from L1 instead of a DRAM-interleaved coalesce.
         attn = ttnn.permute(attn, (0, 2, 1, 3))  # [1, seq, nh, hd]
-        attn = ttnn.reshape(attn, (seq, nh * hd))
+        attn = ttnn.reshape(attn, (seq, nh * hd), memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # Output projection: [seq, dim] @ [dim, dim] -> [seq, dim].
         out = ttnn.linear(
