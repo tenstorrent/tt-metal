@@ -115,8 +115,8 @@ void run_single_core_copy_block_matmul_partials(
     experimental::metal2_host_api::KernelSpec reader_spec{
         .unique_id = READER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_n_2_0.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_n_2_0.cpp",
         .num_threads = 1,
         .dfb_bindings = {{
             .dfb_spec_name = SRC0_DFB,
@@ -139,8 +139,8 @@ void run_single_core_copy_block_matmul_partials(
     experimental::metal2_host_api::KernelSpec writer_spec{
         .unique_id = WRITER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_pop_n.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_pop_n.cpp",
         .num_threads = 1,
         .dfb_bindings = {{
             .dfb_spec_name = DST_DFB,
@@ -168,8 +168,8 @@ void run_single_core_copy_block_matmul_partials(
     experimental::metal2_host_api::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_block_matmul_partials.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_block_matmul_partials.cpp",
         .num_threads = 1,
         .compiler_options = {.defines = compute_defines},
         .dfb_bindings =

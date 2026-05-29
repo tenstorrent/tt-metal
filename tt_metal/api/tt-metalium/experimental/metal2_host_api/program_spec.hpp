@@ -19,15 +19,9 @@
 namespace tt::tt_metal::experimental::metal2_host_api {
 
 // A name identifying a ProgramSpec within a MeshWorkload.
-//
-// CONVENTION: define names as `constexpr const char*` constants, e.g.:
-//   constexpr const char* MATMUL_PROGRAM = "matmul";
-//   ProgramSpec{.program_id = MATMUL_PROGRAM, ...};
-// Reusing a single constant helps catch typos and errors at compile time.
 using ProgramSpecName = std::string;
 
 // A name identifying a WorkUnitSpec within a ProgramSpec.
-// CONVENTION: define names as `constexpr const char*` constants (see above).
 using WorkUnitSpecName = std::string;
 
 //------------------------------------------------
@@ -46,7 +40,7 @@ struct WorkUnitSpec {
     std::vector<KernelSpecName> kernels;
 
     // The set of nodes configured by this WorkUnitSpec.
-    std::variant<NodeCoord, NodeRange, NodeRangeSet> target_nodes;
+    Nodes target_nodes;
 };
 
 // A ProgramSpec describes the immutable properties of a Program:
