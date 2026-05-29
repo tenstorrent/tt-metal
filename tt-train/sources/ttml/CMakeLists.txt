@@ -138,6 +138,10 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/subtract_at_target/subtract_at_target.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/subtract_at_target/device/subtract_at_target_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/subtract_at_target/device/subtract_at_target_program_factory.cpp
+    # Gram Polynomial (bG + cG^2)
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/gram_polynomial/gram_polynomial.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/gram_polynomial/device/gram_polynomial_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/gram_polynomial/device/gram_polynomial_program_factory.cpp
     # CrossEntropy Backward
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_bw/cross_entropy_bw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_bw/device/cross_entropy_bw_device_operation.cpp

@@ -28,4 +28,15 @@ enum class AttentionMaskType {
  */
 enum class StochasticRounding : bool { Disabled = false, Enabled = true };
 
+/**
+ * Specifies whether a symmetric output is written fully or only as the upper triangle.
+ *
+ * - UpperTriangle: Write G[i,j] for i<=j (lower triangle left untouched)
+ * - Full: Write upper triangle and also the transposed mirror to the lower triangle positions
+ */
+enum class OutputMode : uint32_t {
+    UpperTriangle = 0,
+    Full = 1,
+};
+
 }  // namespace ttml::metal

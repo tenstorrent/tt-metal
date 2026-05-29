@@ -38,6 +38,7 @@ set(SOURCES
     optimizers/muon_composite_test.cpp
     ops/newton_schulz_op_test.cpp
     ops/frobenius_normalize_test.cpp
+    ops/gram_polynomial_op_test.cpp
     optimizers/adamw_full_precision_test.cpp
     optimizers/no_op_test.cpp
     modules/distributed/linear_test.cpp
@@ -176,6 +177,7 @@ if(TARGET benchmark::benchmark)
         benchmark/adamw_benchmark.cpp
         benchmark/frobenius_normalize_benchmark.cpp
         benchmark/polynorm_fusion_benchmark.cpp
+        benchmark/gram_polynomial_benchmark.cpp
     )
 
     foreach(BENCH_SRC ${BENCHMARK_SOURCES})
