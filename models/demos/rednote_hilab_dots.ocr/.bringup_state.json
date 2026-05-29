@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-29T00:11:46Z",
-  "updated_at": "2026-05-29T02:52:35Z",
+  "updated_at": "2026-05-29T02:58:59Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -500,8 +500,15 @@
         "attempts": 0
       },
       "optimization": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/rope.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/profile_rope.py",
+          "generated/profiler/reports/2026_05_29_02_58_11/ops_perf_results_2026_05_29_02_58_11.csv"
+        ],
+        "notes": "Tracy traced: 4 ops (multiply 64->70%, cos/sin Unary 25->22%, concat 10->7%). All output was 100% DRAM-interleaved; pinned the whole chain to L1 (memory_config=L1 on multiply/concat/cos/sin). Layout flipped 100% DRAM->100% L1; total kernel 27686->25366 ns (-8.4%); concat -36%, cos/sin -18%. PCC cos=1.0 sin=1.0 (min 0.9999999999999976) unchanged.",
+        "pcc": 0.9999999999999976
       },
       "real_weights": {
         "status": "pending",
@@ -972,6 +979,12 @@
       "tick": 29,
       "ts": "2026-05-29T02:52:35Z",
       "action": "device[rmsnorm]",
+      "result": "ok"
+    },
+    {
+      "tick": 30,
+      "ts": "2026-05-29T02:58:59Z",
+      "action": "device[rope]",
       "result": "ok"
     }
   ],

@@ -91,16 +91,22 @@ class TtRoPE(LightweightModule):
         """
         # Outer product positions x inv_freq via broadcast multiply -> [b, 1, seq, head_dim/2].
         # fp32 inputs keep the product in fp32 to match the reference float-then-cast path.
-        freqs = ttnn.multiply(position_ids, self.inv_freq, dtype=ttnn.float32)
+        # The whole table-generation chain is pinned to L1: tracy showed every op
+        # (multiply, concat, cos, sin) coalescing its output back to DRAM-interleaved by
+        # default, so each downstream op re-reads the freqs from DRAM. The tables are a few
+        # hundred KB at fp32 and split cleanly across the core grid, so keeping them L1
+        # resident lets the cos/sin reads stay on-chip. PCC is unaffected (same math).
+        l1 = ttnn.L1_MEMORY_CONFIG
+        freqs = ttnn.multiply(position_ids, self.inv_freq, dtype=ttnn.float32, memory_config=l1)
 
         # emb = cat(freqs, freqs) duplicates the half-rotation across the head dim.
-        emb = ttnn.concat([freqs, freqs], dim=-1)
+        emb = ttnn.concat([freqs, freqs], dim=-1, memory_config=l1)
 
-        cos = ttnn.cos(emb)
-        sin = ttnn.sin(emb)
+        cos = ttnn.cos(emb, memory_config=l1)
+        sin = ttnn.sin(emb, memory_config=l1)
 
         if self.attention_scaling != 1.0:
-            cos = ttnn.multiply(cos, self.attention_scaling)
-            sin = ttnn.multiply(sin, self.attention_scaling)
+            cos = ttnn.multiply(cos, self.attention_scaling, memory_config=l1)
+            sin = ttnn.multiply(sin, self.attention_scaling, memory_config=l1)
 
         return cos, sin
