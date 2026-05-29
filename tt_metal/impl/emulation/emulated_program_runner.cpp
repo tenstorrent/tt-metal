@@ -544,7 +544,10 @@ static Metal2BindingsSnapshot build_metal2_snapshot(const tt::tt_metal::Kernel& 
     kernel.process_semaphore_local_accessor_handles(
         [&s](const std::string& name, uint16_t id) { s.sem_accessors[name] = id; });
     kernel.process_tensor_binding_handles(
-        [&s](const std::string& name, uint32_t cta_off, uint32_t addr_crta_off) {
+        // Match the genfiles.cpp pattern: drop num_runtime_field_crta_words. Emule
+        // doesn't yet support dynamic-shape Metal 2.0 bindings — static-shape
+        // kernels (the existing test corpus) pass 0 here and behave unchanged.
+        [&s](const std::string& name, uint32_t cta_off, uint32_t addr_crta_off, uint32_t /*num_rt_words*/) {
             s.ta_accessors.push_back({name, cta_off, addr_crta_off});
         });
     return s;
