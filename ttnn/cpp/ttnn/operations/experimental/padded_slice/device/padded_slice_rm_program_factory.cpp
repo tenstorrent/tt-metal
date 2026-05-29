@@ -36,7 +36,7 @@ ProgramDescriptor PaddedSliceRMProgramFactory::create_descriptor(
     const auto& output_tensor_start = operation_attributes.padded_slice_start;
     const auto& output_tensor_end = operation_attributes.padded_slice_end;
 
-    const ttnn::Shape output_shape = output.logical_shape();
+    const auto& output_shape = output.logical_shape();
     ttnn::Shape actual_output_shape = output_tensor_end;
     for (int i = 0; i < output_shape.rank(); i++) {
         actual_output_shape[i] = output_tensor_end[i] - output_tensor_start[i];
