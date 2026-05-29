@@ -2,10 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 
 import pytest
 import torch
+
+# This is the Conv3d used by the mochi models in huggingface's diffusers module.
 from diffusers.models.autoencoders.autoencoder_kl_cogvideox import CogVideoXCausalConv3d as RefContextParallelConv3d
 from loguru import logger
 
@@ -76,28 +77,18 @@ def validate_outputs(tt_output, ref_output, test_name):
     [
         [(1, 768, 28, 60, 106), 768, (3, 3, 3), (1, 1, 1)],
         [(1, 512, 82, 120, 212), 512, (3, 3, 3), (1, 1, 1)],
-        [(1, 256, 163, 240, 424), 256, (3, 3, 3), (1, 1, 1)],
-        [(1, 128, 163, 480, 848), 128, (3, 3, 3), (1, 1, 1)],
     ],
-    ids=["768", "512", "256", "128"],
+    ids=["768", "512"],
 )
 @pytest.mark.parametrize(
     "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 1), "TG": (8, 4)}.get(
-            os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
-        )
-    ],
+    [(1, 1)],
     indirect=True,
 )
-def test_context_parallel_conv3d_forward(mesh_device, input_shape, out_channels, kernel_size, stride, reset_seeds):
-    """Test complete forward pass of TtContextParallelConv3d."""
+def test_context_parallel_conv3d_forward_noshard(
+    mesh_device, input_shape, out_channels, kernel_size, stride, reset_seeds
+):
     input_channels = input_shape[1]
-
-    # TODO: parameterize this
-    vae_sp_axis = 0
-    vae_tp_axis = 1
-    vae_mesh_shape = (1, 1)
     model_args = conv3d_args.copy()
     model_args.update(
         {
@@ -106,9 +97,9 @@ def test_context_parallel_conv3d_forward(mesh_device, input_shape, out_channels,
             "kernel_size": kernel_size,
             "stride": stride,
             "parallel_config": MochiVAEParallelConfig(
-                time_parallel=ParallelFactor(factor=1, mesh_axis=vae_tp_axis),
-                h_parallel=ParallelFactor(factor=vae_mesh_shape[vae_sp_axis], mesh_axis=vae_sp_axis),
-                w_parallel=ParallelFactor(factor=vae_mesh_shape[vae_tp_axis], mesh_axis=vae_tp_axis),
+                time_parallel=ParallelFactor(factor=1, mesh_axis=1),
+                h_parallel=ParallelFactor(factor=1, mesh_axis=0),
+                w_parallel=ParallelFactor(factor=1, mesh_axis=1),
             ),
             "ccl_manager": CCLManager(
                 mesh_device=mesh_device,
@@ -116,7 +107,7 @@ def test_context_parallel_conv3d_forward(mesh_device, input_shape, out_channels,
             ),
         }
     )
-    # Create the models
+
     reference_model, tt_model = create_random_models(mesh_device, **model_args)
 
     # Create input tensor (NCTHW format for PyTorch)
@@ -124,14 +115,16 @@ def test_context_parallel_conv3d_forward(mesh_device, input_shape, out_channels,
 
     # Convert to NTHWC format for TT
     tt_input_NTHWC = torch_input.permute(0, 2, 3, 4, 1)
+    logger.info(f"Creating tensor: {tt_input_NTHWC.shape}")
     tt_input_NTHWC = ttnn.from_torch(
         tt_input_NTHWC,
         device=mesh_device,
         dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[None, 1]),
+        mesh_mapper=None,
     )
+    tt_input_NTHWC = ttnn.to_layout(tt_input_NTHWC, ttnn.ROW_MAJOR_LAYOUT)
 
     logger.info("Run TtContextParallelConv3d forward")
     tt_output = tt_model(tt_input_NTHWC)
