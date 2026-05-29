@@ -10,7 +10,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterator, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 
 _THIS_DIR = Path(__file__).resolve().parent
@@ -296,15 +296,53 @@ def _hot_cold_path(model_id: str) -> Path:
 def load_hot_cold(model_id: str) -> Dict[str, str]:
     """Return ``{comp_name: "HOT" | "COLD" | "UNRESOLVED"}`` for the model.
 
-    Populated by the ``classify-hot-cold`` CLI command which runs the
-    workload's forward pass with hooks. Read by the auto-iterate loop
-    so COLD components (never invoked in this workload) don't get
-    targeted by the picker -- they're correctly on CPU fallback and
-    don't need standalone PCC verification.
+    Backwards-compat shim: if the on-disk file uses the enriched
+    evidence schema (per-component dict with ``kind`` + measurements),
+    extract just the ``kind`` for callers that only care about the
+    label. For callers needing the full evidence record use
+    :func:`load_hot_cold_evidence`.
+
+    Populated by the ``classify-hot-cold`` or ``profile-cold`` CLI
+    commands. Read by the auto-iterate loop so COLD components (never
+    invoked / no perf value) don't get targeted by the picker.
 
     Empty dict if no file exists yet -- never raises so a malformed
     file can't crash the auto-iterate path. In that case the loop
     treats every NEW component as HOT (conservative)."""
+    raw = _load_hot_cold_raw(model_id)
+    out: Dict[str, str] = {}
+    for name, val in raw.items():
+        if isinstance(val, str):
+            out[name] = val
+        elif isinstance(val, dict):
+            out[name] = str(val.get("kind", "UNRESOLVED")).upper()
+        else:
+            out[name] = "UNRESOLVED"
+    return out
+
+
+def load_hot_cold_evidence(model_id: str) -> Dict[str, dict]:
+    """Return the full evidence record per component (kind + frequency +
+    cpu_latency_ms + cpu_latency_pct + ops_count + io_bytes +
+    compute_density + evidence reasons).
+
+    Populated by the ``profile-cold`` CLI command. Returns an empty dict
+    if no probe has been run. Legacy entries (just the string kind) are
+    normalized into a minimal dict with ``{"kind": <str>}`` so callers
+    have a single shape to handle."""
+    raw = _load_hot_cold_raw(model_id)
+    out: Dict[str, dict] = {}
+    for name, val in raw.items():
+        if isinstance(val, dict):
+            out[name] = val
+        elif isinstance(val, str):
+            out[name] = {"kind": val.upper()}
+        else:
+            out[name] = {"kind": "UNRESOLVED"}
+    return out
+
+
+def _load_hot_cold_raw(model_id: str) -> dict:
     p = _hot_cold_path(model_id)
     if not p.is_file():
         return {}
@@ -314,9 +352,11 @@ def load_hot_cold(model_id: str) -> Dict[str, str]:
         return {}
 
 
-def persist_hot_cold(model_id: str, classification: Dict[str, str]) -> None:
-    """Write the classification map. Overwrites any prior file -- the
-    classifier is the source of truth, not an accumulator."""
+def persist_hot_cold(model_id: str, classification: Dict[str, Any]) -> None:
+    """Write the classification map. Accepts either the simple
+    ``{comp: kind}`` shape (legacy) or the enriched ``{comp: evidence_dict}``
+    shape (current). Overwrites any prior file -- the classifier is
+    the source of truth, not an accumulator."""
     p = _hot_cold_path(model_id)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(classification, indent=2, sort_keys=True))

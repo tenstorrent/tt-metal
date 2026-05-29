@@ -9205,6 +9205,33 @@ def main(argv: Optional[List[str]] = None) -> int:
     pct.add_argument("--dry-run", action="store_true", help="Show what would be staged without committing")
     pct.set_defaults(func=cmd_commit_tool)
 
+    from .commands.profile_cold import cmd_profile_cold
+
+    ppc = sub.add_parser(
+        "profile-cold",
+        help=(
+            "Run evidence-based COLD/HOT classification: measure firing "
+            "frequency, CPU latency contribution, and compute density per "
+            "component, then persist the verdict to hot_cold.json. The "
+            "categorizer uses this to place components on device only when "
+            "evidence shows it adds value."
+        ),
+    )
+    ppc.add_argument("model_id", help="HuggingFace model id")
+    ppc.add_argument(
+        "--n-passes",
+        type=int,
+        default=3,
+        help="Number of forward passes to measure firing frequency (default: 3)",
+    )
+    ppc.add_argument(
+        "--n-iters",
+        type=int,
+        default=5,
+        help="Number of CPU-latency timing iterations (default: 5)",
+    )
+    ppc.set_defaults(func=cmd_profile_cold)
+
     from .commands.decompose import cmd_decompose
 
     pdec = sub.add_parser(

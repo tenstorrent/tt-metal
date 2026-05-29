@@ -139,6 +139,123 @@ def test_strip_markdown_fences_keeps_top_level_imports():
     assert "import torch" in out
 
 
+# ---------------------------------------------------------------------------
+# Closed-loop iteration: _try_run_driver and _match_fired_components
+# ---------------------------------------------------------------------------
+
+
+def test_try_run_driver_returns_clean_on_noop_driver():
+    """A no-op driver runs without raising; fired_paths is empty."""
+    import torch
+
+    ao = _import_module()
+
+    class _M(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear = torch.nn.Linear(4, 4)
+
+        def forward(self, x):
+            return self.linear(x)
+
+    model = _M()
+    src = "def driver(model, pixel_values):\n    return None"
+    ran, err, fired = ao._try_run_driver(src, model, target_component_names=["linear"], pixel_values=torch.zeros(1, 4))
+    assert ran is True
+    assert err == ""
+    assert fired == set()  # driver didn't invoke forward, so no fire
+
+
+def test_try_run_driver_captures_runtime_exception():
+    """A driver that raises is caught; returns (False, error message)."""
+    import torch
+
+    ao = _import_module()
+
+    class _M(torch.nn.Module):
+        pass
+
+    model = _M()
+    src = "def driver(model, pixel_values):\n    raise RuntimeError('intentional')"
+    ran, err, fired = ao._try_run_driver(src, model, target_component_names=[], pixel_values=None)
+    assert ran is False
+    assert "RuntimeError" in err
+    assert "intentional" in err
+
+
+def test_try_run_driver_detects_target_component_fires():
+    """When the driver runs forward, hooks fire on visited submodules.
+    The returned fired_paths set must include those submodule paths."""
+    import torch
+
+    ao = _import_module()
+
+    class _M(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.encoder = torch.nn.Linear(4, 4)
+            self.decoder = torch.nn.Linear(4, 4)
+
+        def forward(self, x):
+            return self.decoder(self.encoder(x))
+
+    model = _M()
+    src = "def driver(model, pixel_values):\n    model(pixel_values)"
+    ran, err, fired = ao._try_run_driver(
+        src, model, target_component_names=["encoder", "decoder"], pixel_values=torch.zeros(1, 4)
+    )
+    assert ran is True
+    assert "encoder" in fired
+    assert "decoder" in fired
+
+
+def test_match_fired_components_path_prefix_mode():
+    """When components_by_path is provided, matching uses path prefix:
+    target `name` with `submodule_path='X'` is matched if any fired
+    path equals X, descends from X.something, or X[index]."""
+    ao = _import_module()
+    fired_paths = {"vision_encoder", "vision_encoder.layers.0.attn"}
+    by_path = {"vision_enc_comp": "vision_encoder", "attn_comp": "vision_encoder.layers"}
+    matched = ao._match_fired_components(["vision_enc_comp", "attn_comp"], fired_paths, components_by_path=by_path)
+    assert "vision_enc_comp" in matched  # exact match on "vision_encoder"
+    assert "attn_comp" in matched  # "vision_encoder.layers" is prefix of "vision_encoder.layers.0.attn"
+
+
+def test_match_fired_components_path_indexed_descendant():
+    """Bracket-indexed descendants are matched (ModuleList children)."""
+    ao = _import_module()
+    fired_paths = {"encoder.layers[0].mlp"}
+    by_path = {"layers": "encoder.layers"}
+    matched = ao._match_fired_components(["layers"], fired_paths, components_by_path=by_path)
+    assert matched == {"layers"}
+
+
+def test_match_fired_components_substring_fallback():
+    """Without components_by_path, fallback to substring matching on
+    fired paths (used when caller doesn't have resolved paths)."""
+    ao = _import_module()
+    fired_paths = {"encoder.layers.0.attn", "encoder.layers.0.mlp"}
+    matched = ao._match_fired_components(["attn", "mlp"], fired_paths, components_by_path=None)
+    assert matched == {"attn", "mlp"}
+
+
+def test_match_fired_components_no_match():
+    """No fired paths → no targets matched."""
+    ao = _import_module()
+    matched = ao._match_fired_components(["foo"], set(), components_by_path=None)
+    assert matched == set()
+
+
+def test_match_fired_components_path_no_partial_word():
+    """Path prefix matching must respect word boundaries:
+    `vision_encoder` should NOT match a fired path `vision_encoder_2`."""
+    ao = _import_module()
+    fired_paths = {"vision_encoder_2.neck"}
+    by_path = {"ve": "vision_encoder"}
+    matched = ao._match_fired_components(["ve"], fired_paths, components_by_path=by_path)
+    assert matched == set()  # vision_encoder_2 is not under vision_encoder
+
+
 def test_validate_driver_accepts_correct_signature():
     ao = _import_module()
     source = "def driver(model, pixel_values):\n    return None"

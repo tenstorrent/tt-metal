@@ -95,16 +95,32 @@ def _probe_model(model: Any, model_id: str) -> dict:
         except (TypeError, ValueError):
             pass
 
-    method_names: List[str] = []
+    # Methods of interest: prioritize verbs that look like model entry-points
+    # (init_*, run_*, generate*, get_*, *_inference, *_segmentation, *_forward).
+    # Keep the list short to avoid blowing up the LLM context window — large
+    # prompts cause LLM timeouts that look like "no response" in the closed-
+    # loop iteration.
+    _ENTRY_PREFIXES = ("init_", "run_", "get_", "create_", "build_", "make_")
+    _ENTRY_SUFFIXES = ("_inference", "_session", "_state", "_forward", "_step")
+    entry_methods: List[str] = []
+    other_methods: List[str] = []
     for m in dir(model):
         if m.startswith("_"):
             continue
         attr = getattr(model, m, None)
-        if callable(attr):
-            method_names.append(m)
-    method_names = method_names[:40]
+        if not callable(attr):
+            continue
+        if any(m.startswith(p) for p in _ENTRY_PREFIXES) or any(m.endswith(s) for s in _ENTRY_SUFFIXES):
+            entry_methods.append(m)
+        else:
+            other_methods.append(m)
+    method_names = entry_methods[:20] + other_methods[:10]
 
+    # Module classes: prefer Session/Cache/Processor/Output classes (the LLM
+    # needs these to bridge unusual forward signatures). Trim hard.
+    _IMPORTANT_CLASS_TAILS = ("Session", "Cache", "Processor", "Output", "Config")
     module_classes: List[str] = []
+    important_classes: List[str] = []
     module_name = getattr(cls, "__module__", "")
     if module_name:
         mod = sys.modules.get(module_name)
@@ -113,9 +129,13 @@ def _probe_model(model: Any, model_id: str) -> dict:
                 if name.startswith("_"):
                     continue
                 attr = getattr(mod, name, None)
-                if inspect.isclass(attr):
+                if not inspect.isclass(attr):
+                    continue
+                if any(name.endswith(t) for t in _IMPORTANT_CLASS_TAILS):
+                    important_classes.append(name)
+                else:
                     module_classes.append(name)
-    module_classes = module_classes[:30]
+    module_classes = important_classes[:15] + module_classes[:10]
 
     return {
         "model_class": cls.__name__,
@@ -238,33 +258,142 @@ def _persist_driver(model_class_name: str, source: str) -> Path:
     return target
 
 
+def _try_run_driver(
+    source: str,
+    model: Any,
+    target_component_names: List[str],
+    pixel_values: Any,
+) -> Tuple[bool, str, set]:
+    """Execute the drafted driver against `model` with forward hooks on
+    every nn.Module. Returns ``(ran_cleanly, error_message, fired_paths)``.
+
+    Closed-loop validation: AST-pass alone isn't enough. A driver can
+    pass syntax/signature checks and still raise on
+    ``model.init_video_inference(...)``, silently no-op (driver body is
+    ``pass``), or fire no target components. This try-run catches all
+    three so the next iteration can prompt the LLM with concrete
+    feedback.
+
+    Hooks are installed on EVERY named module so we don't need a
+    pre-computed name->module mapping. The returned ``fired_paths`` set
+    is the named-module paths where forward fired during the driver
+    invocation. Caller maps these back to target component names via
+    its own resolution table.
+    """
+    fired_paths: set = set()
+    handles: List = []
+    try:
+        for path, module in model.named_modules():
+            if not path:
+                continue
+
+            def _hook(_mod, _args, _output, _path=path):
+                fired_paths.add(_path)
+
+            try:
+                handles.append(module.register_forward_hook(_hook))
+            except Exception:
+                continue
+
+        ns: dict = {}
+        try:
+            exec(source, ns)
+        except Exception as exc:
+            return False, f"exec failed: {type(exc).__name__}: {exc}", fired_paths
+
+        drv = ns.get("driver")
+        if not callable(drv):
+            return False, "compiled source has no `driver` callable", fired_paths
+
+        try:
+            drv(model, pixel_values)
+        except Exception as exc:
+            return False, f"driver invocation raised: {type(exc).__name__}: {exc}", fired_paths
+    finally:
+        for h in handles:
+            try:
+                h.remove()
+            except Exception:
+                pass
+
+    return True, "", fired_paths
+
+
+def _match_fired_components(
+    target_names: List[str],
+    fired_paths: set,
+    components_by_path: Optional[dict] = None,
+) -> set:
+    """Map fired submodule paths back to target component names.
+
+    If ``components_by_path`` is provided (mapping ``name -> submodule_path``
+    string in the parent model's named_modules), match by path prefix:
+    a target named ``X`` fired iff any fired path equals X's submodule
+    path or descends from it (``X.something``).
+
+    Otherwise fall back to a substring/safe-id heuristic — useful when
+    the caller doesn't have the resolved paths handy.
+    """
+    fired_targets: set = set()
+    if components_by_path:
+        for name, comp_path in components_by_path.items():
+            if not comp_path:
+                continue
+            for fired in fired_paths:
+                if fired == comp_path or fired.startswith(comp_path + ".") or fired.startswith(comp_path + "["):
+                    fired_targets.add(name)
+                    break
+        return fired_targets
+    for name in target_names:
+        safe = name.replace("-", "_")
+        for fired in fired_paths:
+            tail = fired.rsplit(".", 1)[-1]
+            if name == tail or safe == tail or name in fired or safe in fired:
+                fired_targets.add(name)
+                break
+    return fired_targets
+
+
 def auto_onboard_capture_driver(
     model: Any,
     model_id: str,
     uncaptured_components: List[str],
     framework_attempts: List[str],
     *,
+    components_by_path: Optional[dict] = None,
+    pixel_values: Any = None,
     agent_bin: str = "claude",
     llm_model: str = "sonnet",
-    timeout_s: int = 180,
+    timeout_s: int = 360,  # bumped from 180 — sonnet can take 3-5min for complex prompts (e.g. SAM2 video)
+    max_iters: int = 3,
 ) -> Tuple[bool, Optional[Path], str]:
-    """Draft + validate + persist a capture driver for `model`.
+    """Draft + validate + try-run + persist a capture driver for `model`.
 
-    Returns ``(ok, persisted_path, message)``. On failure, ``persisted_path`` is
-    None and ``message`` describes which validation step rejected the LLM's
-    output. Idempotent: re-running with the same model overwrites the persisted
-    driver with the new draft.
+    Closed-loop iteration up to ``max_iters`` total attempts. Each
+    iteration:
+      1. LLM drafts a `def driver(model, pixel_values)` from the probe.
+      2. AST validates signature.
+      3. Try-runs the driver against ``model`` with hooks installed.
+      4. If exec raised OR fired_paths doesn't cover the target
+         components, the next iteration's prompt includes the concrete
+         failure (exception type+msg or "fired X but missed Y, Z") so
+         the LLM can self-correct.
+      5. Only persists when the draft AST-validates AND runs without
+         raising AND fires at least one of the target components.
 
-    Reuses ``llm_synth.invoke_llm_cli_one_shot`` -- the same one-shot LLM helper
-    that ``auto_onboard.py`` uses to draft FamilyBackend entries -- so this
-    module adds zero duplication of the LLM-invocation plumbing.
+    Returns ``(ok, persisted_path, message)``. On failure,
+    ``persisted_path`` is None and ``message`` summarizes the attempts.
+    All rejected drafts are saved to learned_drivers/_rejected/ for
+    operator inspection.
+
+    Reuses ``llm_synth.invoke_llm_cli_one_shot`` -- the same one-shot LLM
+    helper that ``auto_onboard.py`` uses -- so this module adds zero
+    duplication of LLM-invocation plumbing.
     """
     from .llm_synth import invoke_llm_cli_one_shot
 
     probe = _probe_model(model, model_id)
-    prompt = _build_prompt(probe, uncaptured_components, framework_attempts)
-
-    attempts: List[Tuple[str, str]] = []  # list of (raw_response_first_200_chars, error_message)
+    base_prompt = _build_prompt(probe, uncaptured_components, framework_attempts)
 
     def _one_attempt(active_prompt: str) -> Tuple[bool, str, str, str]:
         try:
@@ -276,10 +405,6 @@ def auto_onboard_capture_driver(
         return ok, resp, src, err
 
     def _persist_debug_log(reason: str, raw_responses: List[Tuple[int, str]]) -> None:
-        """Save the rejected LLM responses to a per-model debug log so
-        the operator can SEE what the LLM produced. Without this, the
-        only artifact of a failed onboarding is a one-line error msg
-        and the raw text is lost."""
         try:
             debug_dir = _LEARNED_DRIVERS_DIR / "_rejected"
             debug_dir.mkdir(parents=True, exist_ok=True)
@@ -288,42 +413,119 @@ def auto_onboard_capture_driver(
             with log_path.open("w") as f:
                 f.write(f"# Rejected LLM draft(s) for {probe['model_class']} ({model_id})\n")
                 f.write(f"# Reason: {reason}\n")
-                f.write(f"# Uncaptured components: {uncaptured_components}\n")
-                f.write("\n")
-                for attempt_idx, raw in raw_responses:
-                    f.write(f"\n===== ATTEMPT {attempt_idx} (raw response) =====\n")
+                f.write(f"# Uncaptured components: {uncaptured_components}\n\n")
+                for idx, raw in raw_responses:
+                    f.write(f"\n===== ATTEMPT {idx} (raw response) =====\n")
                     f.write(raw)
                     f.write("\n===== END ATTEMPT =====\n")
         except Exception:
-            pass  # debug log failure must never block the main flow
+            pass  # debug-log failure never blocks main flow
 
-    ok, raw, source, err = _one_attempt(prompt)
-    raw_responses: List[Tuple[int, str]] = [(1, raw)]
-    if not ok:
-        attempts.append((raw[:200].replace("\n", " ") if raw else "(empty)", err))
-        # One retry with explicit error feedback so the LLM can self-correct.
-        retry_prompt = (
-            prompt
-            + "\n\nIMPORTANT: A previous draft was REJECTED. Error was:\n    "
-            + err
-            + "\n\nProduce ONLY the bare `def driver(model, pixel_values):` Python source. "
-            + "No markdown fences, no prose, no preamble. Start the response with `def driver`."
-        )
-        ok, raw, source, err = _one_attempt(retry_prompt)
-        raw_responses.append((2, raw))
+    raw_responses: List[Tuple[int, str]] = []
+    last_err = ""
+    active_prompt = base_prompt
+    can_try_run = pixel_values is not None
+
+    for attempt_idx in range(1, max_iters + 1):
+        ok, raw, source, err = _one_attempt(active_prompt)
+        raw_responses.append((attempt_idx, raw or ""))
+
         if not ok:
-            attempts.append((raw[:200].replace("\n", " ") if raw else "(empty)", err))
-            _persist_debug_log(f"validation failed after retry: {err}", raw_responses)
+            last_err = f"AST validation: {err}"
+            active_prompt = (
+                base_prompt
+                + f"\n\nIMPORTANT: Attempt {attempt_idx} was REJECTED. Error:\n    {err}"
+                + "\n\nProduce ONLY the bare `def driver(model, pixel_values):` Python source. "
+                + "No markdown, no prose. Start the response with `def driver`."
+            )
+            continue
+
+        # AST passed. If we have a try-run input, exercise the driver
+        # against the model. Otherwise persist as-is (caller will detect
+        # missing artifacts post-capture).
+        if not can_try_run:
+            persisted = _persist_driver(probe["model_class"], source)
+            return (
+                True,
+                persisted,
+                f"driver synthesized + persisted to {persisted.name} (no try-run; pixel_values unavailable)",
+            )
+
+        ran_clean, run_err, fired_paths = _try_run_driver(source, model, uncaptured_components, pixel_values)
+        if not ran_clean:
+            last_err = f"runtime error: {run_err}"
+            active_prompt = (
+                base_prompt
+                + f"\n\nIMPORTANT: Attempt {attempt_idx} parsed correctly but RAISED at runtime. Error:\n    {run_err}"
+                + "\n\nLikely cause: the driver tried to invoke `model` in a way that the model's actual "
+                + "API doesn't support. Look at the model's `forward` signature and `module_classes` list "
+                + "in the context above — if `forward` takes a `Session`/`Cache`/`InferenceSession` "
+                + "argument, you MUST construct one before invoking forward. Use the module classes "
+                + "(e.g. *Processor, *Session) as documented in the prompt."
+                + "\n\nProduce ONLY the bare `def driver(model, pixel_values):` Python source."
+            )
+            continue
+
+        # Driver ran cleanly. Check whether any target components fired.
+        fired_targets = _match_fired_components(uncaptured_components, fired_paths, components_by_path)
+        still_missing = [c for c in uncaptured_components if c not in fired_targets]
+
+        if not still_missing:
+            persisted = _persist_driver(probe["model_class"], source)
+            return (
+                True,
+                persisted,
+                f"driver synthesized + persisted to {persisted.name} (fired all {len(uncaptured_components)} target components)",
+            )
+
+        # Partial fire or full miss — persist anyway since SOME components fired,
+        # but loop again with feedback if attempts remain. (We persist on the
+        # final iteration even with partial coverage; rejected fallback if zero
+        # fired and we've exhausted attempts.)
+        last_err = (
+            f"runtime ok but fired {len(fired_targets)}/{len(uncaptured_components)} target(s); "
+            f"missed: {still_missing}"
+        )
+        if attempt_idx == max_iters:
+            if fired_targets:
+                # Partial success — persist and let downstream proceed.
+                persisted = _persist_driver(probe["model_class"], source)
+                return (
+                    True,
+                    persisted,
+                    f"driver persisted with PARTIAL coverage: fired {sorted(fired_targets)} of "
+                    f"{uncaptured_components}; still missing {still_missing}",
+                )
+            # Zero fired across max_iters — give up.
+            _persist_debug_log(
+                f"runtime ok but zero target components fired across {max_iters} attempts", raw_responses
+            )
             return (
                 False,
                 None,
-                f"validation failed after retry. attempt 1: {attempts[0][1]} (resp={attempts[0][0]!r}); "
-                f"attempt 2: {attempts[1][1]} (resp={attempts[1][0]!r}). "
-                f"Raw drafts saved to learned_drivers/_rejected/.",
+                f"closed-loop iteration exhausted after {max_iters} attempts: {last_err}. "
+                f"Drafts saved to learned_drivers/_rejected/.",
             )
 
-    persisted = _persist_driver(probe["model_class"], source)
-    return True, persisted, f"driver synthesized + persisted to {persisted.name}"
+        active_prompt = (
+            base_prompt
+            + f"\n\nIMPORTANT: Attempt {attempt_idx} ran cleanly but did NOT fire the target "
+            + f"components. Fired: {sorted(fired_targets) or '(none)'}. Still missing: {still_missing}."
+            + "\n\nRevise the driver so its execution path EXERCISES every component in the "
+            + "'Components the standard framework could not capture' list. Trace the model's "
+            + "forward path: which submodules does it traverse? Make sure your driver invokes "
+            + "a forward path that visits each of the missing components."
+            + "\n\nProduce ONLY the bare `def driver(model, pixel_values):` Python source."
+        )
+
+    # Loop exited via continue paths exhausting max_iters with AST or runtime errors
+    _persist_debug_log(f"all {max_iters} attempts failed: {last_err}", raw_responses)
+    return (
+        False,
+        None,
+        f"closed-loop iteration exhausted after {max_iters} attempts: {last_err}. "
+        f"Drafts saved to learned_drivers/_rejected/.",
+    )
 
 
 def load_learned_drivers() -> List[str]:

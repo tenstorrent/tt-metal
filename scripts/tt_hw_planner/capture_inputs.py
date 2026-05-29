@@ -558,11 +558,14 @@ def capture_real_inputs(
                     file=sys.stderr,
                 )
             try:
+                _components_by_path = {comp_name: _path for (comp_name, _sub, _path) in resolved}
                 ok, path, msg = _auto_onboard_drv(
                     model=model,
                     model_id=model_id,
                     uncaptured_components=_still_uncaptured,
                     framework_attempts=_generic_attempts_for_onboard,
+                    components_by_path=_components_by_path,
+                    pixel_values=pixel_values,
                 )
                 if verbose:
                     print(f"  [capture] auto-onboard: {msg}", file=sys.stderr)

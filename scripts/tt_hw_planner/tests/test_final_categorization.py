@@ -403,6 +403,70 @@ def test_persist_skip_specific_upgradeable_to_kernel_missing(tmp_path, monkeypat
     assert om.load_persistent_skips("test/m")["c1"]["category"] == "KERNEL_MISSING"
 
 
+def test_cold_bucket_means_workload_uninvoked_only(tmp_path, monkeypatch) -> None:
+    """COLD bucket is reserved for workload-uninvoked components ONLY.
+    A HOT-by-workload component with category=TOOL_BUG/HF_ERROR/
+    ITERATION_BUDGET/AGENT_STUCK MUST NOT land in COLD — it belongs to
+    kernel_missing so the operator sees it's stuck-but-needed."""
+    fc = _fc()
+    om = _om()
+    monkeypatch.setattr(om, "_OVERLAYS_DIR", tmp_path / "overlays")
+    demo = tmp_path / "demo"
+    _make_demo_with_components(demo, ["hot_tool_bug", "hot_hf_error", "hot_iter_budget", "hot_agent_stuck"])
+    for c, cat in [
+        ("hot_tool_bug", "TOOL_BUG"),
+        ("hot_hf_error", "HF_ERROR"),
+        ("hot_iter_budget", "ITERATION_BUDGET"),
+        ("hot_agent_stuck", "AGENT_STUCK"),
+    ]:
+        om.persist_skip("test/m", c, reason=f"stuck via {cat}", category=cat)
+    # Workload probe: all four are HOT
+    om.persist_hot_cold(
+        "test/m", {c: "HOT" for c in ("hot_tool_bug", "hot_hf_error", "hot_iter_budget", "hot_agent_stuck")}
+    )
+
+    report = fc.build_final_categorization(model_id="test/m", demo_dir=demo)
+    for c in ("hot_tool_bug", "hot_hf_error", "hot_iter_budget", "hot_agent_stuck"):
+        assert c not in report.cold, f"{c} is HOT-by-workload — must NOT be in COLD bucket"
+        assert c in report.kernel_missing, f"{c} is HOT-by-workload + stuck — must be in kernel_missing"
+
+
+def test_cold_workload_routes_to_cold_regardless_of_skip_category(tmp_path, monkeypatch) -> None:
+    """If the workload probe says COLD, the component is genuinely
+    not invoked — it belongs in COLD bucket no matter what the
+    skip-list category says (TOOL_BUG would have been irrelevant
+    anyway since the workload didn't try to invoke it)."""
+    fc = _fc()
+    om = _om()
+    monkeypatch.setattr(om, "_OVERLAYS_DIR", tmp_path / "overlays")
+    demo = tmp_path / "demo"
+    _make_demo_with_components(demo, ["uninvoked"])
+    om.persist_skip("test/m", "uninvoked", reason="harness issue", category="TOOL_BUG")
+    om.persist_hot_cold("test/m", {"uninvoked": "COLD"})
+
+    report = fc.build_final_categorization(model_id="test/m", demo_dir=demo)
+    assert "uninvoked" in report.cold
+    assert "uninvoked" not in report.kernel_missing
+
+
+def test_no_workload_signal_falls_back_to_skip_category(tmp_path, monkeypatch) -> None:
+    """When hot_cold.json doesn't classify a component (probe didn't
+    run or didn't reach it), fall back to the skip-list category.
+    TTNN-gap categories go to kernel_missing; everything else COLD."""
+    fc = _fc()
+    om = _om()
+    monkeypatch.setattr(om, "_OVERLAYS_DIR", tmp_path / "overlays")
+    demo = tmp_path / "demo"
+    _make_demo_with_components(demo, ["no_signal_kmiss", "no_signal_tool"])
+    om.persist_skip("test/m", "no_signal_kmiss", reason="ttnn.foo missing", category="KERNEL_MISSING")
+    om.persist_skip("test/m", "no_signal_tool", reason="harness issue", category="TOOL_BUG")
+    # NO hot_cold persist — leave the probe unspoken
+
+    report = fc.build_final_categorization(model_id="test/m", demo_dir=demo)
+    assert "no_signal_kmiss" in report.kernel_missing
+    assert "no_signal_tool" in report.cold  # safe-default for unknown
+
+
 def test_categorizer_routes_constraint_mismatch_to_kernel_missing_bucket(tmp_path, monkeypatch) -> None:
     """CONSTRAINT_MISMATCH (op exists but dtype/layout/shape failed) is
     a TTNN gap from the user's perspective — must surface in the

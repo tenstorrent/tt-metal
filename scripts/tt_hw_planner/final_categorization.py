@@ -90,7 +90,12 @@ def build_final_categorization(
       5. on skip-list with no/other category → COLD (default safe choice
          until classify-hot-cold OR kernel-missing verification refines it)
     """
-    from .overlay_manager import load_hot_cold, load_no_emit_tests, load_persistent_skips
+    from .overlay_manager import (
+        load_hot_cold,
+        load_hot_cold_evidence,
+        load_no_emit_tests,
+        load_persistent_skips,
+    )
 
     status_path = demo_dir / "bringup_status.json"
     if not status_path.is_file():
@@ -106,7 +111,8 @@ def build_final_categorization(
 
     no_emit = set(load_no_emit_tests(model_id).keys())
     skipped = load_persistent_skips(model_id)  # dict {comp: {category, reason, ...}}
-    hot_cold_map = load_hot_cold(model_id)  # dict {comp: "HOT" | "COLD"}
+    hot_cold_map = load_hot_cold(model_id)  # dict {comp: "HOT" | "COLD" | "UNRESOLVED"}
+    hot_cold_evidence = load_hot_cold_evidence(model_id)  # dict {comp: full evidence record}
     graduated_set = set(graduated_set or _infer_graduated_from_disk(demo_dir, new_components))
     # A skip-listed component CANNOT be PCC-graduated.
     graduated_set -= set(skipped.keys())
@@ -122,26 +128,32 @@ def build_final_categorization(
             continue
         if comp in skipped:
             cat = skipped[comp].get("category", "").upper()
-            # Cross-check: the workload probe might have classified this
-            # as HOT after the skip-list entry was written. If hot_cold
-            # says HOT and skip-list says COLD, the workload signal wins
-            # (more reliable). Promote to KERNEL_MISSING since a HOT
-            # component on CPU means TTNN dev work or tool budget issue.
+            # WORKLOAD probe (hot_cold.json) is the AUTHORITATIVE signal
+            # for COLD placement. COLD bucket means ONLY "workload doesn't
+            # invoke this component — CPU is correct; putting it on device
+            # adds no perf value and may slow things down via host<->device
+            # transfers."
+            #
+            # Anything HOT-by-workload but not graduated lands in
+            # kernel_missing bucket, regardless of why it's stuck
+            # (KERNEL_MISSING / CONSTRAINT_MISMATCH / TOOL_BUG / HF_ERROR /
+            # ITERATION_BUDGET / AGENT_STUCK). The skip-list category
+            # field drives the gap report's sub-sectioning so the operator
+            # knows WHY and what to do.
             hc_kind = hot_cold_map.get(comp, "").upper()
-            # KERNEL_MISSING and CONSTRAINT_MISMATCH both map to the
-            # KERNEL_MISSING placement bucket: in both cases the TTNN
-            # stack needs work (a new op, or new dtype/layout support
-            # on an existing op) before the component can move off CPU.
-            # TOOL_BUG / HF_ERROR / ITERATION_BUDGET / AGENT_STUCK map
-            # to COLD placement (they may or may not be permanent;
-            # next-run retry is governed by the detailed category in
-            # the skip-list, not the 3-bucket placement model).
-            if cat in (_KERNEL_MISSING, "CONSTRAINT_MISMATCH"):
+            if hc_kind == _HOT:
                 report.kernel_missing.append(comp)
-            elif cat == _COLD and hc_kind == _HOT:
-                report.kernel_missing.append(comp)
-            else:
+            elif hc_kind == _COLD:
                 report.cold.append(comp)
+            else:
+                # No workload signal at all. Fall back to skip-list
+                # category: TTNN-gap categories go to kernel_missing
+                # (workload-independent verdict); everything else lands
+                # in COLD as the safe default.
+                if cat in (_KERNEL_MISSING, "CONSTRAINT_MISMATCH"):
+                    report.kernel_missing.append(comp)
+                else:
+                    report.cold.append(comp)
             continue
         # Not graduated, not on any list.
         # Consult hot_cold.json (workload probe result):
