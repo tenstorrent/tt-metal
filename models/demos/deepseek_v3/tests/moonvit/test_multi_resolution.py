@@ -58,15 +58,13 @@ def _make_synthetic_image(height: int, width: int, seed: int) -> Image.Image:
 )
 def test_moonvit_at_resolution(mesh_device, model_args, image_h, image_w, expected_grid):
     """PCC + cache integration at the given resolution."""
-    # Inputs here are uniform random-noise images (a high-frequency stress
-    # input). The TT tower's HiFi-bf16 matmuls accumulate more error on noise
-    # than a clean torch bf16 run, so TT-vs-fp32 PCC sits at ~0.947–0.971
-    # across all resolutions (vs >0.99 on natural images — see
-    # test_real_image_e2e). 0.94 stays above that spread's floor while a real
-    # regression would drop PCC well below 0.9. The HF reference itself in
-    # bf16 matches fp32 at ~0.9997 here, so this margin is the on-device
-    # compute precision on noise, not a correctness issue.
-    pcc_threshold = 0.94
+    # Uniform random-noise images (a high-frequency stress input). With the
+    # accurate MLP GELU (see mlp.py — a per-op bisection found the fast-approx
+    # GELU was the dominant bf16 error), TT-vs-fp32 PCC is ~0.977–0.990 across
+    # these resolutions; natural images (test_real_image_e2e) sit even higher.
+    # 0.95 keeps margin above that floor while a real regression drops PCC
+    # well below 0.9.
+    pcc_threshold = 0.95
 
     # 1. Synthesize image, run HF processor.
     img = _make_synthetic_image(image_h, image_w, seed=image_h * 31 + image_w)

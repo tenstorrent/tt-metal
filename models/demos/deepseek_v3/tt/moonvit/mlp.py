@@ -6,9 +6,13 @@ MoonViT MLP.
 
 Linear(1152 -> 4304) -> GELU(tanh) -> Linear(4304 -> 1152).
 
-The activation is `PytorchGELUTanh()` in the reference, which is the
-tanh-approximation flavor of GELU. We match it with
-`ttnn.gelu(..., fast_and_approximate_mode=True)`.
+The activation is `PytorchGELUTanh()` in the reference (the tanh-flavor of
+GELU). We use `ttnn.gelu(..., fast_and_approximate_mode=False)`: a per-op
+bisection showed the *fast-approximate* device GELU is the dominant source
+of the full-tower bf16 error — swapping these 27 MLP GELUs to an accurate
+GELU recovers ~0.02 PCC (≈0.97 → ≈0.99), far more than the SDPA kernel
+(~0.001). The accurate GELU is slightly slower on the SFPU but the MLP is
+not the pipeline bottleneck (attention is), so the trade favors accuracy.
 
 The intermediate dim 4304 is NOT tile-aligned (4304 % 32 = 16); ttnn's
 `as_tensor` auto-pads to 4320 internally and `ttnn.linear` honors the
@@ -152,7 +156,7 @@ class MoonVisionMLP(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         # GELU with tanh approximation
-        hidden = ttnn.gelu(hidden, fast_and_approximate_mode=True)
+        hidden = ttnn.gelu(hidden, fast_and_approximate_mode=False)
         # fc1: linear down
         out = ttnn.linear(
             hidden,
