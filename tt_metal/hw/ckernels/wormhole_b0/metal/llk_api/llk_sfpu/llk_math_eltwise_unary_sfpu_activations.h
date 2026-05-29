@@ -16,13 +16,13 @@ namespace ckernel {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_hardsigmoid_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::hardsigmoid>(ckernel::sfpu::_init_hardsigmoid_<APPROXIMATE>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::hardsigmoid>(ckernel::sfpu::hardsigmoid_init<APPROXIMATE>);
 }
 
 template <bool APPROXIMATE, ckernel::ActivationType ACTIVATION, int ITERATIONS = 8>
 inline void llk_math_eltwise_unary_sfpu_hardsigmoid(uint dst_index, VectorMode vector_mode = VectorMode::RC) {
     _llk_math_eltwise_unary_sfpu_params_(
-        static_cast<void (*)()>(ckernel::sfpu::_calculate_activation_<APPROXIMATE, ACTIVATION, ITERATIONS>),
+        static_cast<void (*)()>(ckernel::sfpu::calculate_activation<APPROXIMATE, ACTIVATION, ITERATIONS>),
         dst_index,
         vector_mode);
 }

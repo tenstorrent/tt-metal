@@ -89,7 +89,7 @@ void call_unary_sfpu_operation_init()
     }
     else if constexpr (OPERATION == SfpuType::gelu)
     {
-        llk_math_eltwise_unary_sfpu_init<OPERATION>(gelu_init<APPROX_MODE>);
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(gelu_init<APPROX_MODE, is_fp32_dest_acc_en>);
     }
     else if constexpr (OPERATION == SfpuType::hardsigmoid)
     {
@@ -216,7 +216,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_exponential,
-            (APPROX_MODE, false /* scale_en */, 8, CLAMP_NEGATIVE),
+            (APPROX_MODE, is_fp32_dest_acc_en, false /* scale_en */, 8, CLAMP_NEGATIVE),
             RC,
             dst_index,
             p_sfpu::kCONST_1_FP16B /* exp_base_scale_factor */);
@@ -228,7 +228,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_exponential,
-            (APPROX_MODE, false /* scale_en */, ITERATIONS, CLAMP_NEGATIVE, DST_ACCUM_MODE),
+            (APPROX_MODE, is_fp32_dest_acc_en, false /* scale_en */, ITERATIONS, CLAMP_NEGATIVE),
             dst_index,
             vector_mode,
             p_sfpu::kCONST_1_FP16B /* exp_base_scale_factor */);
@@ -275,7 +275,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::gelu)
     {
-        SFPU_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_gelu, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
+        SFPU_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_gelu, (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::hardsigmoid)
     {
