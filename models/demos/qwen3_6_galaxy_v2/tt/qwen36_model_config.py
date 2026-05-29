@@ -912,6 +912,15 @@ class TtQwen36ModelArgs(TtModelArgs):
         self.model_config["PREFILL_MLP_W2_PRG_CONFIG"] = w2_prg_config
 
         def _prefill_minimal(seq_len, _hk=8, _wk=8):
+            # ``subblock_h * subblock_w`` must be <= the matmul's max_dest_volume.
+            # Match llama3_70b_galaxy/tt/model_config.py, which keeps the product
+            # at <= 8 for EVERY FF minimal-matmul bucket (it never uses 16, even
+            # for FF1/FF3 which run under fp32-dest-off). qwen36 previously used
+            # (4,4)=16 for FF1/FF3 at seq_len>4096: it does not assert (lofi cap
+            # is 16) but produces incorrect results -> garbage output at T=8192.
+            # Both ranges below give a product of 8:
+            #   seq_len <= 4096: subblock_h=4, subblock_w=2  -> 8
+            #   seq_len >  4096: subblock_h=2, subblock_w=4  -> 8
             return ttnn.MinimalMatmulConfig(
                 M_block_size=8,
                 K_block_size=8,
@@ -921,8 +930,11 @@ class TtQwen36ModelArgs(TtModelArgs):
                 compute_with_storage_grid_size=ttnn.CoreCoord(7, 8 if seq_len <= 4096 else 9),
             )
 
-        self.model_config["PREFILL_FF1_FF3_MINIMAL_MATMUL_CONFIG"] = lambda seq_len: _prefill_minimal(seq_len, 4, 4)
-        self.model_config["PREFILL_FF2_MINIMAL_MATMUL_CONFIG"] = lambda seq_len: _prefill_minimal(seq_len, 4, 4)
+        # subblock_h: 4 for seq_len<=4096 (with subblock_w=2 -> 8), 2 for
+        # seq_len>4096 (with subblock_w=4 -> 8). Same for FF1/FF3 and FF2 so
+        # both stay within the fp32-dest budget, mirroring llama70b.
+        self.model_config["PREFILL_FF1_FF3_MINIMAL_MATMUL_CONFIG"] = lambda seq_len: _prefill_minimal(seq_len, 4, 2)
+        self.model_config["PREFILL_FF2_MINIMAL_MATMUL_CONFIG"] = lambda seq_len: _prefill_minimal(seq_len, 4, 2)
 
         # Prefill XQKV / WO — qwen3.6 prefill XQKV writes QKVG per-col padded width.
         self.model_config["XQKV_PREFILL_PROGCFG"] = (
