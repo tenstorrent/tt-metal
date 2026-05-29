@@ -330,8 +330,8 @@ void run_single_core_unary_broadcast_quasar(
             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
-        .runtime_arguments_schema =
-            {.named_runtime_args = {"src_addr", "src_dram_bank_id", "num_tiles", "ublock_size_tiles", "reader_only"}},
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"src_addr", "src_dram_bank_id", "num_tiles", "ublock_size_tiles", "reader_only"}},
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen1_data_movement_config =
@@ -353,7 +353,7 @@ void run_single_core_unary_broadcast_quasar(
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
         .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}},
-        .runtime_arguments_schema = {.named_runtime_args = {"num_tiles"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen1_data_movement_config =
@@ -385,7 +385,7 @@ void run_single_core_unary_broadcast_quasar(
                  .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
-        .compile_time_arg_bindings = {{"per_core_block_cnt", num_blocks}, {"per_core_block_dim", block_size}},
+        .compile_time_args = {{"per_core_block_cnt", num_blocks}, {"per_core_block_dim", block_size}},
         .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
     };
 
@@ -407,11 +407,11 @@ void run_single_core_unary_broadcast_quasar(
 
     const uint32_t src_dram_addr = static_cast<uint32_t>(in_tensor.mesh_buffer().get_reference_buffer()->address());
 
-    experimental::metal2_host_api::ProgramRunParams params;
-    params.kernel_run_params = {
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+    experimental::metal2_host_api::ProgramRunArgs params;
+    params.kernel_run_args = {
+        experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = READER,
-            .named_runtime_args =
+            .runtime_arg_values =
                 {{.node = node,
                   .args =
                       {{"src_addr", src_dram_addr},
@@ -420,13 +420,13 @@ void run_single_core_unary_broadcast_quasar(
                        {"ublock_size_tiles", 1u},
                        {"reader_only", 0u}}}},
         },
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+        experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = WRITER,
-            .named_runtime_args = {{.node = node, .args = {{"num_tiles", num_tiles}}}},
+            .runtime_arg_values = {{.node = node, .args = {{"num_tiles", num_tiles}}}},
         },
     };
     params.tensor_args = {{.tensor_parameter_name = OUT_TENSOR, .tensor = out_tensor}};
-    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+    experimental::metal2_host_api::SetProgramRunArgs(program, params);
 
     std::vector<uint32_t> packed_tilized_input;
     std::vector<uint32_t> golden_packed_tilized_output;

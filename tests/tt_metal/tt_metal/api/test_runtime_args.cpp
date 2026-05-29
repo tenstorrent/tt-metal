@@ -999,16 +999,16 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCRTASharedL1Address) {
         unit_tests::runtime_args::kQuasarNumUserDms);
     auto& program = workload.get_programs().at(device_range);
 
-    experimental::metal2_host_api::ProgramRunParams params;
-    params.kernel_run_params = {{
+    experimental::metal2_host_api::ProgramRunArgs params;
+    params.kernel_run_args = {{
         .kernel_spec_name = kernel_names[0],
         .advanced_options =
-            experimental::metal2_host_api::AdvancedKernelRunParams{
+            experimental::metal2_host_api::AdvancedKernelRunArgs{
                 .runtime_varargs = {{core, std::vector<uint32_t>(common_rtas.size(), 0)}},
                 .common_runtime_varargs = common_rtas,
             },
     }};
-    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+    experimental::metal2_host_api::SetProgramRunArgs(program, params);
 
     distributed::EnqueueMeshWorkload(cq, workload, true);
     // Verify all 6 user DMs (DM2..DM7) share the same CRTA L1 address
@@ -1037,21 +1037,21 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCRTAUniqueL1Addresses) {
         mesh_device, core_range_set, base_crtas.size(), true, num_kernels, /*dm_processors_per_kernel*/ 1);
     auto& program = workload.get_programs().at(device_range);
 
-    experimental::metal2_host_api::ProgramRunParams params;
+    experimental::metal2_host_api::ProgramRunArgs params;
     std::vector<std::vector<uint32_t>> all_crtas(num_kernels);
     for (uint32_t i = 0; i < num_kernels; i++) {
         std::vector<uint32_t> kernel_crtas = {base_crtas[0] + i, base_crtas[1] + i, base_crtas[2] + i};
         all_crtas[i] = kernel_crtas;
-        params.kernel_run_params.push_back({
+        params.kernel_run_args.push_back({
             .kernel_spec_name = kernel_names[i],
             .advanced_options =
-                experimental::metal2_host_api::AdvancedKernelRunParams{
+                experimental::metal2_host_api::AdvancedKernelRunArgs{
                     .runtime_varargs = {{core, std::vector<uint32_t>(base_crtas.size(), 0)}},
                     .common_runtime_varargs = kernel_crtas,
                 },
         });
     }
-    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+    experimental::metal2_host_api::SetProgramRunArgs(program, params);
 
     distributed::EnqueueMeshWorkload(cq, workload, true);
     // Verify each user DM (DM2..DM7) has a unique CRTA L1 address

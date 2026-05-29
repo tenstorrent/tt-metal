@@ -618,13 +618,13 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 it->second,
                 kind);
         };
-        for (const auto& name : kernel.runtime_arguments_schema.named_runtime_args) {
+        for (const auto& name : kernel.runtime_arg_schema.runtime_arg_names) {
             check_name(name, "named RTA");
         }
-        for (const auto& name : kernel.runtime_arguments_schema.named_common_runtime_args) {
+        for (const auto& name : kernel.runtime_arg_schema.common_runtime_arg_names) {
             check_name(name, "named CRTA");
         }
-        for (const auto& [name, value] : kernel.compile_time_arg_bindings) {
+        for (const auto& [name, value] : kernel.compile_time_args) {
             (void)value;
             check_name(name, "named CTA");
         }
@@ -962,7 +962,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     }
 
     // Validate per-DFB sizing: entry_size and num_entries must be set to non-zero values.
-    // (Sizes may still be overridden at runtime via ProgramRunParams, but a ProgramSpec value is required.)
+    // (Sizes may still be overridden at runtime via ProgramRunArgs, but a ProgramSpec value is required.)
     for (const auto& dfb : spec.dataflow_buffers) {
         TT_FATAL(
             dfb.entry_size > 0,
@@ -1146,7 +1146,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     // Validate borrowed-memory DFBs.
     //
     // A borrowed-memory DFB names a TensorParameter via DataflowBufferSpec::borrowed_from. The
-    // backing MeshTensor flows through ProgramRunParams::tensor_args at execution time.
+    // backing MeshTensor flows through ProgramRunArgs::tensor_args at execution time.
     // We enforce only the safety-relevant checks:
     //  - the named parameter exists
     //  - the TensorSpec places storage in L1,
@@ -1174,7 +1174,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             tp_name);
         // Coarse spec-time sizing check against the TensorSpec's full packed size. No Buffer is
         // available at spec time, so we can't query the per-bank allocation; the precise per-bank
-        // check fires at attach time in AttachBorrowedDFBBuffers (program_run_params.cpp), where
+        // check fires at attach time in AttachBorrowedDFBBuffers (program_run_args.cpp), where
         // a Buffer is in hand. For sharded L1 tensors the two checks differ — a DFB can pass
         // here against the full-tensor size and still fail per-bank later. By design.
         const size_t dfb_bytes = static_cast<size_t>(dfb.entry_size) * static_cast<size_t>(dfb.num_entries);
@@ -1790,7 +1790,7 @@ struct ResolvedTensorParameter {
 //    per-dim shard_shape_in_pages, and packed bank coordinates (two per uint32)
 //
 // The tensor base address always lives in CRTAs (filled in per-enqueue from the
-// corresponding TensorArg). When dynamic_tensor_shape is set on a sharded tensor,
+// corresponding TensorArgument). When dynamic_tensor_shape is set on a sharded tensor,
 // the runtime tensor's shape is also written into CRTAs at enqueue time, in
 // `extra_crta_words` slots immediately after the address slot.
 // (See also ResolveTensorBindingsForKernel below.)
@@ -1919,7 +1919,7 @@ struct TensorBindingsForKernel {
 //  4. Record the resulting CRTA buffer layout (the three section sizes) on the output, so
 //     the headergen and runtime can consult it directly instead of re-summing the bindings.
 //
-// (SetProgramRunParameters will fill the address slots and runtime field slots at enqueue
+// (SetProgramRunArgs will fill the address slots and runtime field slots at enqueue
 // time, extracting info from the TensorArgs.)
 TensorBindingsForKernel ResolveTensorBindingsForKernel(
     const KernelSpec& kernel,
@@ -2133,7 +2133,7 @@ KernelSource MakeKernelSource(const KernelSpec& kernel_spec) {
 // For now, just convert to the map types that the core runtime expects.
 // TODO: Fix this inefficiency eventually.
 std::unordered_map<std::string, uint32_t> to_named_compile_args_map(
-    const KernelSpec::CompileTimeArgBindings& bindings) {
+    const KernelSpec::CompileTimeArgs& bindings) {
     return std::unordered_map<std::string, uint32_t>(bindings.begin(), bindings.end());
 }
 std::map<std::string, std::string> to_defines_map(const KernelSpec::CompilerOptions::Defines& defines) {
@@ -2151,7 +2151,7 @@ DataMovementConfig MakeGen1DataMovementConfig(const KernelSpec& kernel_spec) {
         .noc_mode = gen1.noc_mode,
         .compile_args = {},  // only named_compile_args is used
         .defines = to_defines_map(kernel_spec.compiler_options.defines),
-        .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_arg_bindings),
+        .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_args),
         .opt_level = kernel_spec.compiler_options.opt_level,
         .compiler_include_paths = kernel_spec.compiler_options.include_paths,
     };
@@ -2217,7 +2217,7 @@ ComputeConfig MakeGen1ComputeConfig(const KernelSpec& kernel_spec, const DFBName
         .math_approx_mode = compute_config.math_approx_mode,
         .compile_args = {},  // only named_compile_args is used
         .defines = to_defines_map(kernel_spec.compiler_options.defines),
-        .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_arg_bindings),
+        .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_args),
         .opt_level = kernel_spec.compiler_options.opt_level,
         .compiler_include_paths = kernel_spec.compiler_options.include_paths,
     };
@@ -2234,7 +2234,7 @@ experimental::quasar::QuasarDataMovementConfig MakeQuasarDataMovementConfig(cons
         .num_threads_per_cluster = kernel_spec.num_threads,
         .compile_args = {},  // only named_compile_args is used
         .defines = to_defines_map(kernel_spec.compiler_options.defines),
-        .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_arg_bindings),
+        .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_args),
         .is_legacy_kernel = false,
         .opt_level = kernel_spec.compiler_options.opt_level,
         .compiler_include_paths = kernel_spec.compiler_options.include_paths,
@@ -2263,7 +2263,7 @@ experimental::quasar::QuasarComputeConfig MakeQuasarComputeConfig(
         .math_approx_mode = compute_config.math_approx_mode,
         .compile_args = {},  // Compile args are passed via named_compile_args
         .defines = to_defines_map(kernel_spec.compiler_options.defines),
-        .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_arg_bindings),
+        .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_args),
         .opt_level = kernel_spec.compiler_options.opt_level,
         .compiler_include_paths = kernel_spec.compiler_options.include_paths,
     };
@@ -2410,8 +2410,8 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
     //   - Static layout (rank, shape, bank coords, ...) flows through the kernel's positional
     //     CTA buffer. (Empty in Metal 2.0 today; the binding payload is its first user.)
     //   - Per-enqueue base address flows through a reserved-prefix named CRTA, appended to
-    //     the kernel's user-named CRTAs and filled by SetProgramRunParameters from the
-    //     corresponding TensorArg entry. TensorParameters that opt into a dynamic accessor
+    //     the kernel's user-named CRTAs and filled by SetProgramRunArgs from the
+    //     corresponding TensorArgument entry. TensorParameters that opt into a dynamic accessor
     //     field (currently: dynamic_tensor_shape, sharded only) carry additional CRTA words
     //     immediately after the address slot, also filled at enqueue time.
     std::unordered_map<TensorParameterName, ResolvedTensorParameter> resolved_tensor_parameters;
@@ -2424,7 +2424,7 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
     // Step 3: Build the Program
     auto program_impl = std::make_shared<detail::ProgramImpl>();
 
-    // Register TensorParameters with the program for ValidateProgramRunParams to consult at enqueue.
+    // Register TensorParameters with the program for ValidateProgramRunArgs to consult at enqueue.
     for (const auto& tensor_parameter : spec.tensor_parameters) {
         const bool dyn_shape = tensor_parameter.advanced_options.dynamic_tensor_shape;
         const bool match_padded_only = tensor_parameter.advanced_options.match_padded_shape_only;
@@ -2451,7 +2451,7 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
         dfb_name_to_id[dfb_name] = dfb_id;
 
         // Borrowed-memory DFB: record the dfb_id ↔ TensorParameterName binding so that
-        // SetProgramRunParameters / UpdateTensorArgs can resolve and attach the actual L1 Buffer
+        // SetProgramRunArgs / UpdateTensorArgs can resolve and attach the actual L1 Buffer
         // at runtime (analog of dynamic CB's UpdateDynamicCircularBufferAddress).
         if (dfb_spec.borrowed_from.has_value()) {
             program_impl->register_dfb_borrowed_binding(dfb_id, *dfb_spec.borrowed_from);
@@ -2511,7 +2511,7 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
         // Resolve TensorBindings for this kernel:
         //  - pack each binding's pre-resolved CTA payload into the kernel's positional CTA buffer
         //  - assign each binding a slot in the kernel's CRTA buffer (TensorBinding address section)
-        const auto& user_named_crtas = kernel_spec.runtime_arguments_schema.named_common_runtime_args;
+        const auto& user_named_crtas = kernel_spec.runtime_arg_schema.common_runtime_arg_names;
         TensorBindingsForKernel ta_bindings = ResolveTensorBindingsForKernel(
             kernel_spec, resolved_tensor_parameters, /*base_named_crta_count=*/user_named_crtas.size());
 
@@ -2522,7 +2522,7 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
         // emit kernel_args_generated.h and factor into the kernel cache key. The TensorBinding
         // address section is tracked separately (via tensor_binding_handles), so we pass the user
         // CRTA list through unchanged.
-        const auto& named_rtas = kernel_spec.runtime_arguments_schema.named_runtime_args;
+        const auto& named_rtas = kernel_spec.runtime_arg_schema.runtime_arg_names;
 
         // Create the kernel object
         std::shared_ptr<Kernel> kernel;
@@ -2602,7 +2602,7 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
         program_impl->register_kernel_spec_name(kernel_spec.unique_id, handle);
 
         // Register the RTA+CRTA schema (named lists + vararg counts) with the ProgramImpl.
-        // Used by ValidateProgramRunParams and SetProgramRunParameters to validate and serialize
+        // Used by ValidateProgramRunArgs and SetProgramRunArgs to validate and serialize
         // the user-provided values at dispatch time.
         //
         // User-facing vararg RTA specification (see kernel_spec.hpp):
@@ -2614,15 +2614,15 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
         // An explicit override of 0 erases the scalar-default entry so run-params treats
         // that node as having no varargs (rather than requiring an "empty" value list).
         // Overlapping override entries (two entries covering the same node) are an error.
-        const auto& user_schema = kernel_spec.runtime_arguments_schema;
+        const auto& user_schema = kernel_spec.runtime_arg_schema;
         detail::ProgramImpl::KernelRTASchema runtime_schema;
-        runtime_schema.named_runtime_args = user_schema.named_runtime_args;
+        runtime_schema.runtime_arg_names = user_schema.runtime_arg_names;
 
         // Pass the user CRTA list through.
         // NOTE: The TensorBinding address section is tracked separately on the Kernel
         // (via tensor_binding_handles) and its slot offsets are baked into each binding handle's
-        // addr_crta_offset; SetProgramRunParameters uses BOTH to assemble the per-enqueue CRTA buffer.
-        runtime_schema.named_common_runtime_args = user_named_crtas;
+        // addr_crta_offset; SetProgramRunArgs uses BOTH to assemble the per-enqueue CRTA buffer.
+        runtime_schema.common_runtime_arg_names = user_named_crtas;
 
         // Varargs schema now lives on KernelAdvancedOptions.
         const uint32_t num_runtime_varargs = kernel_spec.advanced_options.num_runtime_varargs;

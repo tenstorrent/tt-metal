@@ -330,8 +330,8 @@ bool single_core_binary(
                  .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
-        .runtime_arguments_schema =
-            {.named_runtime_args =
+        .runtime_arg_schema =
+            {.runtime_arg_names =
                  {"src0_addr", "src0_bank_id", "src1_addr", "src1_bank_id", "num_tiles", "src2_addr", "src2_bank_id"}},
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
@@ -355,7 +355,7 @@ bool single_core_binary(
             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
-        .runtime_arguments_schema = {.named_runtime_args = {"dst_addr", "bank_id", "num_tiles"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen1_data_movement_config =
@@ -398,7 +398,7 @@ bool single_core_binary(
                  .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
-        .runtime_arguments_schema = {.named_runtime_args = {"per_core_block_cnt", "per_core_block_size", "acc_to_dst"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"per_core_block_cnt", "per_core_block_size", "acc_to_dst"}},
         .config_spec =
             experimental::metal2_host_api::ComputeConfiguration{
                 .math_fidelity = test_config.math_fidelity,
@@ -421,11 +421,11 @@ bool single_core_binary(
     Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
 
     const uint32_t num_tiles_u = static_cast<uint32_t>(test_config.num_tiles);
-    experimental::metal2_host_api::ProgramRunParams params;
-    params.kernel_run_params = {
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+    experimental::metal2_host_api::ProgramRunArgs params;
+    params.kernel_run_args = {
+        experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = READER,
-            .named_runtime_args =
+            .runtime_arg_values =
                 {{.node = node,
                   .args =
                       {{"src0_addr", input0_dram_buffer->address()},
@@ -436,20 +436,20 @@ bool single_core_binary(
                        {"src2_addr", input2_dram_buffer->address()},
                        {"src2_bank_id", 0u}}}},
         },
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+        experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = WRITER,
-            .named_runtime_args =
+            .runtime_arg_values =
                 {{.node = node,
                   .args = {{"dst_addr", output_dram_buffer->address()}, {"bank_id", 0u}, {"num_tiles", num_tiles_u}}}},
         },
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+        experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = COMPUTE,
-            .named_runtime_args =
+            .runtime_arg_values =
                 {{.node = node,
                   .args = {{"per_core_block_cnt", num_tiles_u}, {"per_core_block_size", 1u}, {"acc_to_dst", 0u}}}},
         },
     };
-    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+    experimental::metal2_host_api::SetProgramRunArgs(program, params);
 
     auto* dev = mesh_device->get_devices()[0];
     tt_metal::detail::LaunchProgram(dev, program, /*wait_until_cores_done=*/true);

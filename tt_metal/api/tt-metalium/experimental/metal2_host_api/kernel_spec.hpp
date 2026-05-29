@@ -130,30 +130,30 @@ struct KernelSpec {
     //////////////////////////////////////////////////////////////////////////////
 
     //----------------------------------------------------------------------------
-    // Compile time argument bindings
+    // Compile time arguments
     // (Bound argument values cannot be changed between Program executions)
-    using CompileTimeArgBindings = std::vector<std::pair<std::string, uint32_t>>;
-    CompileTimeArgBindings compile_time_arg_bindings;
+    using CompileTimeArgs = std::vector<std::pair<std::string, uint32_t>>;
+    CompileTimeArgs compile_time_args;
     // TODO -- extend to support arbitrary POD types, including user-defined structs.
 
     //----------------------------------------------------------------------------
     // Runtime argument schema (declaration)
 
-    // Schema for runtime arguments (RTA) and common runtime arguments (CRTA)
-    // (The VALUES of these arguments are set as ProgramRunParams.)
+    // Schema for the named runtime arguments declared by this kernel.
+    // (The VALUES of these arguments are set as ProgramRunArgs.)
     //
-    // Named RTAs/CRTAs: referenced by name in kernel code via `args::<name>`.
+    // Named runtime args: referenced by name in kernel code via `args::<name>`.
     // (Currently, only uint32_t type is supported.)
     //
-    // For vararg-style positional RTAs/CRTAs, see KernelAdvancedOptions.
+    // For vararg-style positional arguments, see KernelAdvancedOptions.
     struct RuntimeArgSchema {
         // Runtime argument names (must be unique, valid C++ identifiers.)
-        std::vector<std::string> named_runtime_args;
+        std::vector<std::string> runtime_arg_names;
 
         // Common runtime argument names (must be unique, valid C++ identifiers.)
-        std::vector<std::string> named_common_runtime_args;
+        std::vector<std::string> common_runtime_arg_names;
     };
-    RuntimeArgSchema runtime_arguments_schema{};
+    RuntimeArgSchema runtime_arg_schema{};
 
     //////////////////////////////////////////////////////////////////////////////
     // Kernel-controlled hardware resource configuration

@@ -76,11 +76,11 @@ protected:
         // (Gen1) — see riscv_atomics.cpp.
         std::vector<experimental::metal2_host_api::KernelSpec> kernel_specs;
         std::vector<experimental::metal2_host_api::KernelSpecName> kernel_names;
-        std::vector<experimental::metal2_host_api::ProgramRunParams::KernelRunParams> kernel_run_params;
+        std::vector<experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs> kernel_run_args;
         const auto make_run_params = [&](const std::string& name) {
-            return experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+            return experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{
                 .kernel_spec_name = name,
-                .named_runtime_args =
+                .runtime_arg_values =
                     {{.node = core,
                       .args = {{"l1_counter_addr", l1_unreserved_base}, {"increment_times", iterations}}}},
             };
@@ -93,14 +93,14 @@ protected:
                 .source = kernel_path,
                 .num_threads = num_dms_,
                 .compiler_options = {.defines = defines_vec},
-                .runtime_arguments_schema = {.named_runtime_args = {"l1_counter_addr", "increment_times"}},
+                .runtime_arg_schema = {.runtime_arg_names = {"l1_counter_addr", "increment_times"}},
                 .config_spec =
                     experimental::metal2_host_api::DataMovementConfiguration{
                         .gen2_data_movement_config =
                             experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
             });
             kernel_names.push_back(DM_KERNEL);
-            kernel_run_params.push_back(make_run_params(DM_KERNEL));
+            kernel_run_args.push_back(make_run_params(DM_KERNEL));
         } else {
             for (uint32_t dm_id = 0; dm_id < num_dms_; dm_id++) {
                 const std::string name = "dm_kernel_" + std::to_string(dm_id);
@@ -109,7 +109,7 @@ protected:
                     .source = kernel_path,
                     .num_threads = 1,
                     .compiler_options = {.defines = defines_vec},
-                    .runtime_arguments_schema = {.named_runtime_args = {"l1_counter_addr", "increment_times"}},
+                    .runtime_arg_schema = {.runtime_arg_names = {"l1_counter_addr", "increment_times"}},
                     .config_spec =
                         experimental::metal2_host_api::DataMovementConfiguration{
                             .gen1_data_movement_config =
@@ -119,7 +119,7 @@ protected:
                                 }},
                 });
                 kernel_names.push_back(name);
-                kernel_run_params.push_back(make_run_params(name));
+                kernel_run_args.push_back(make_run_params(name));
             }
         }
 
@@ -135,9 +135,9 @@ protected:
         };
         program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device_, spec);
 
-        experimental::metal2_host_api::ProgramRunParams params;
-        params.kernel_run_params = std::move(kernel_run_params);
-        experimental::metal2_host_api::SetProgramRunParameters(program, params);
+        experimental::metal2_host_api::ProgramRunArgs params;
+        params.kernel_run_args = std::move(kernel_run_args);
+        experimental::metal2_host_api::SetProgramRunArgs(program, params);
 
         workload.add_program(device_range, std::move(program));
         RunProgram(mesh_device_, workload);

@@ -268,8 +268,8 @@ static void matmul_tile_block(
                  .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
-        .runtime_arguments_schema =
-            {.named_runtime_args =
+        .runtime_arg_schema =
+            {.runtime_arg_names =
                  {"src0_addr",
                   "src0_dram_bank_id",
                   "src1_addr",
@@ -301,7 +301,7 @@ static void matmul_tile_block(
             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
-        .runtime_arguments_schema = {.named_runtime_args = {"dst_addr", "bank_id", "num_tiles"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen1_data_movement_config =
@@ -319,7 +319,7 @@ static void matmul_tile_block(
         cfg.compute_kernel_args.size() == 7,
         "matmul_block expects 7 compile-time args but got {}",
         cfg.compute_kernel_args.size());
-    experimental::metal2_host_api::KernelSpec::CompileTimeArgBindings compute_cta_bindings{
+    experimental::metal2_host_api::KernelSpec::CompileTimeArgs compute_cta_bindings{
         {"block_tile_dim", cfg.compute_kernel_args[0]},
         {"dst_tile_rows", cfg.compute_kernel_args[1]},
         {"dst_tile_cols", cfg.compute_kernel_args[2]},
@@ -361,7 +361,7 @@ static void matmul_tile_block(
                  .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
-        .compile_time_arg_bindings = compute_cta_bindings,
+        .compile_time_args = compute_cta_bindings,
         .config_spec =
             experimental::metal2_host_api::ComputeConfiguration{
                 .math_fidelity = cfg.math_fidelity,
@@ -401,11 +401,11 @@ static void matmul_tile_block(
     const uint32_t in0_block_size_bytes = static_cast<uint32_t>(ctx.M * ctx.single_tile_size_bfp16b);
     const uint32_t in1_block_size_bytes = static_cast<uint32_t>(ctx.N * ctx.single_tile_size_bfp16b);
 
-    experimental::metal2_host_api::ProgramRunParams params;
-    params.kernel_run_params = {
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+    experimental::metal2_host_api::ProgramRunArgs params;
+    params.kernel_run_args = {
+        experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = READER,
-            .named_runtime_args =
+            .runtime_arg_values =
                 {{.node = node,
                   .args =
                       {{"src0_addr", ctx.src0_dram_buffer->address()},
@@ -418,18 +418,18 @@ static void matmul_tile_block(
                        {"in0_block_size_bytes", in0_block_size_bytes},
                        {"in1_block_size_bytes", in1_block_size_bytes}}}},
         },
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+        experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = WRITER,
-            .named_runtime_args =
+            .runtime_arg_values =
                 {{.node = node,
                   .args =
                       {{"dst_addr", ctx.dst_dram_buffer->address()}, {"bank_id", 0u}, {"num_tiles", ctx.num_tiles}}}},
         },
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+        experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = COMPUTE,
         },
     };
-    experimental::metal2_host_api::SetProgramRunParameters(program_run, params);
+    experimental::metal2_host_api::SetProgramRunArgs(program_run, params);
 
     fixture->RunProgram(mesh_device, workload);
 

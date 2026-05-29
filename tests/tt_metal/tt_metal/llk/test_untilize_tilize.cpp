@@ -254,10 +254,10 @@ void run_single_core_tilize_program(
 
     experimental::metal2_host_api::KernelSpec::RuntimeArgSchema reader_schema;
     if (is_unpack_a_tilize) {
-        reader_schema.named_runtime_args = {
+        reader_schema.runtime_arg_names = {
             "src_addr", "src_dram_bank_id", "num_tiles", "ublock_size_tiles", "reader_only"};
     } else {
-        reader_schema.named_runtime_args = {"src_addr", "bank_id", "num_tiles"};
+        reader_schema.runtime_arg_names = {"src_addr", "bank_id", "num_tiles"};
     }
 
     experimental::metal2_host_api::KernelSpec reader_spec{
@@ -270,7 +270,7 @@ void run_single_core_tilize_program(
             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
-        .runtime_arguments_schema = reader_schema,
+        .runtime_arg_schema = reader_schema,
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen1_data_movement_config =
@@ -292,7 +292,7 @@ void run_single_core_tilize_program(
             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
-        .runtime_arguments_schema = {.named_runtime_args = {"dst_addr", "bank_id", "num_tiles"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen1_data_movement_config =
@@ -303,7 +303,7 @@ void run_single_core_tilize_program(
     };
 
     std::string compute_kernel;
-    experimental::metal2_host_api::KernelSpec::CompileTimeArgBindings compute_cta_bindings = {
+    experimental::metal2_host_api::KernelSpec::CompileTimeArgs compute_cta_bindings = {
         {"per_core_block_cnt", test_config.num_tiles_r},
         {"per_core_block_tile_cnt", test_config.num_tiles_c},
     };
@@ -350,7 +350,7 @@ void run_single_core_tilize_program(
                  .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
-        .compile_time_arg_bindings = compute_cta_bindings,
+        .compile_time_args = compute_cta_bindings,
         .config_spec =
             experimental::metal2_host_api::ComputeConfiguration{
                 .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
@@ -384,11 +384,11 @@ void run_single_core_tilize_program(
                                          : test_config.src0_data;
     tt_metal::detail::WriteToBuffer(src0_dram_buffer, src0_vec);
 
-    experimental::metal2_host_api::ProgramRunParams params;
+    experimental::metal2_host_api::ProgramRunArgs params;
     if (is_unpack_a_tilize) {
-        params.kernel_run_params.push_back(experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+        params.kernel_run_args.push_back(experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = READER,
-            .named_runtime_args =
+            .runtime_arg_values =
                 {{.node = node,
                   .args =
                       {{"src_addr", dram_buffer_src0_addr},
@@ -398,22 +398,22 @@ void run_single_core_tilize_program(
                        {"reader_only", 0u}}}},
         });
     } else {
-        params.kernel_run_params.push_back(experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+        params.kernel_run_args.push_back(experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = READER,
-            .named_runtime_args =
+            .runtime_arg_values =
                 {{.node = node,
                   .args = {{"src_addr", dram_buffer_src0_addr}, {"bank_id", 0u}, {"num_tiles", num_tiles}}}},
         });
     }
-    params.kernel_run_params.push_back(experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+    params.kernel_run_args.push_back(experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{
         .kernel_spec_name = WRITER,
-        .named_runtime_args =
+        .runtime_arg_values =
             {{.node = node, .args = {{"dst_addr", dram_buffer_dst_addr}, {"bank_id", 0u}, {"num_tiles", num_tiles}}}},
     });
-    params.kernel_run_params.push_back(experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+    params.kernel_run_args.push_back(experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{
         .kernel_spec_name = COMPUTE,
     });
-    experimental::metal2_host_api::SetProgramRunParameters(program_, params);
+    experimental::metal2_host_api::SetProgramRunArgs(program_, params);
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
     distributed::Finish(cq);
@@ -793,8 +793,8 @@ static void run_quasar_tilize_untilize_test(
             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
-        .runtime_arguments_schema =
-            {.named_runtime_args = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
@@ -813,8 +813,8 @@ static void run_quasar_tilize_untilize_test(
             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
-        .runtime_arguments_schema =
-            {.named_runtime_args = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
@@ -822,7 +822,7 @@ static void run_quasar_tilize_untilize_test(
     };
 
     std::string compute_kernel;
-    experimental::metal2_host_api::KernelSpec::CompileTimeArgBindings compute_cta_bindings;
+    experimental::metal2_host_api::KernelSpec::CompileTimeArgs compute_cta_bindings;
     switch (mode) {
         case QuasarTestMode::TILIZE:
             compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/tilize.cpp";
@@ -869,7 +869,7 @@ static void run_quasar_tilize_untilize_test(
                  .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
-        .compile_time_arg_bindings = compute_cta_bindings,
+        .compile_time_args = compute_cta_bindings,
         .config_spec =
             experimental::metal2_host_api::ComputeConfiguration{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -924,11 +924,11 @@ static void run_quasar_tilize_untilize_test(
     const uint32_t src_tile_stride_bytes = src_dram_buffer_size / num_tiles;
     const uint32_t dst_tile_stride_bytes = dst_dram_buffer_size / num_tiles;
 
-    experimental::metal2_host_api::ProgramRunParams params;
-    params.kernel_run_params = {
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+    experimental::metal2_host_api::ProgramRunArgs params;
+    params.kernel_run_args = {
+        experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = READER,
-            .named_runtime_args =
+            .runtime_arg_values =
                 {{.node = node,
                   .args =
                       {{"src_addr", dram_buffer_src_addr},
@@ -936,9 +936,9 @@ static void run_quasar_tilize_untilize_test(
                        {"num_tiles", num_tiles},
                        {"dram_page_stride", src_tile_stride_bytes}}}},
         },
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+        experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = WRITER,
-            .named_runtime_args =
+            .runtime_arg_values =
                 {{.node = node,
                   .args =
                       {{"dst_addr", dram_buffer_dst_addr},
@@ -946,11 +946,11 @@ static void run_quasar_tilize_untilize_test(
                        {"num_tiles", num_tiles},
                        {"dram_page_stride", dst_tile_stride_bytes}}}},
         },
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+        experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = COMPUTE,
         },
     };
-    experimental::metal2_host_api::SetProgramRunParameters(program_run, params);
+    experimental::metal2_host_api::SetProgramRunArgs(program_run, params);
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
     distributed::Finish(cq);

@@ -343,7 +343,7 @@ void run_single_core_reduce_program(
 
     // Build reader spec depending on reduce dim
     std::string reader_kernel_path;
-    experimental::metal2_host_api::KernelSpec::CompileTimeArgBindings reader_cta_bindings;
+    experimental::metal2_host_api::KernelSpec::CompileTimeArgs reader_cta_bindings;
     experimental::metal2_host_api::KernelSpec::CompilerOptions::Defines reader_defines;
     std::vector<std::string> reader_named_runtime_args;
     if (test_config.reduce_dim == ReduceDim::H) {
@@ -379,8 +379,8 @@ void run_single_core_reduce_program(
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
         .tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}},
-        .compile_time_arg_bindings = reader_cta_bindings,
-        .runtime_arguments_schema = {.named_runtime_args = reader_named_runtime_args},
+        .compile_time_args = reader_cta_bindings,
+        .runtime_arg_schema = {.named_runtime_args = reader_named_runtime_args},
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen1_data_movement_config =
@@ -404,7 +404,7 @@ void run_single_core_reduce_program(
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
         .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}},
-        .runtime_arguments_schema = {.named_runtime_args = {"num_tiles"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen1_data_movement_config =
@@ -439,7 +439,7 @@ void run_single_core_reduce_program(
                  .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
-        .compile_time_arg_bindings = {{"Ht", dims.Ht}, {"Wt", dims.Wt}, {"NC", dims.NC}},
+        .compile_time_args = {{"Ht", dims.Ht}, {"Wt", dims.Wt}, {"NC", dims.NC}},
         .config_spec =
             experimental::metal2_host_api::ComputeConfiguration{
                 .math_fidelity = test_config.math_fidelity,
@@ -486,17 +486,17 @@ void run_single_core_reduce_program(
                                                                   : (dims.num_tensor_tiles / (dims.Wt * dims.Ht));
     }
 
-    experimental::metal2_host_api::ProgramRunParams params;
-    params.kernel_run_params = {
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+    experimental::metal2_host_api::ProgramRunArgs params;
+    params.kernel_run_args = {
+        experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = READER,
-            .named_runtime_args = {{.node = node, .args = reader_named_rtas}},
+            .runtime_arg_values = {{.node = node, .args = reader_named_rtas}},
         },
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+        experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = WRITER,
-            .named_runtime_args = {{.node = node, .args = {{"num_tiles", writer_num_tiles}}}},
+            .runtime_arg_values = {{.node = node, .args = {{"num_tiles", writer_num_tiles}}}},
         },
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+        experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = COMPUTE,
         },
     };
@@ -504,7 +504,7 @@ void run_single_core_reduce_program(
         {.tensor_parameter_name = IN_TENSOR, .tensor = in_tensor},
         {.tensor_parameter_name = OUT_TENSOR, .tensor = out_tensor},
     };
-    experimental::metal2_host_api::SetProgramRunParameters(program_run, params);
+    experimental::metal2_host_api::SetProgramRunArgs(program_run, params);
 
     vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
         dims.dram_buffer_size, test_config.data_gen_rand_max, test_config.data_gen_seed, test_config.data_gen_offset);

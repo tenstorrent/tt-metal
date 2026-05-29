@@ -446,8 +446,8 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
              dfb_binding(INP3_DFB, DFBEndpoint::PRODUCER),
              dfb_binding(INP4_DFB, DFBEndpoint::PRODUCER),
              dfb_binding(INP5_DFB, DFBEndpoint::PRODUCER)},
-        .runtime_arguments_schema =
-            {.named_runtime_args =
+        .runtime_arg_schema =
+            {.runtime_arg_names =
                  {"src0_addr",
                   "src0_bank_id",
                   "src1_addr",
@@ -478,7 +478,7 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
             .endpoint_type = DFBEndpoint::CONSUMER,
             .access_pattern = DFBAccess::STRIDED,
         }},
-        .runtime_arguments_schema = {.named_runtime_args = {"dst_addr", "bank_id", "num_tiles"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
@@ -604,11 +604,11 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
     }
     auto packed_golden = pack_vector<uint32_t, bfloat16>(golden);
 
-    experimental::metal2_host_api::ProgramRunParams params;
-    params.kernel_run_params = {
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+    experimental::metal2_host_api::ProgramRunArgs params;
+    params.kernel_run_args = {
+        experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = READER,
-            .named_runtime_args =
+            .runtime_arg_values =
                 {{.node = node,
                   .args =
                       {{"src0_addr", static_cast<uint32_t>(inp0_dram->address())},
@@ -625,20 +625,20 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
                        {"src5_bank_id", 0u},
                        {"num_tiles", 1u}}}},
         },
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+        experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = WRITER,
-            .named_runtime_args =
+            .runtime_arg_values =
                 {{.node = node,
                   .args =
                       {{"dst_addr", static_cast<uint32_t>(out_dram->address())},
                        {"bank_id", 0u},
                        {"num_tiles", kNumOps}}}},
         },
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+        experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = COMPUTE,
         },
     };
-    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+    experimental::metal2_host_api::SetProgramRunArgs(program, params);
 
     auto* dev = mesh_device->get_devices()[0];
     tt_metal::detail::LaunchProgram(dev, program, /*wait_until_cores_done=*/true);

@@ -54,10 +54,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
 
                 "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints_2_0.cpp",
             .num_threads = num_threads,
-            .compile_time_arg_bindings = {{"l1_address", l1_addr}},
-            .runtime_arguments_schema =
+            .compile_time_args = {{"l1_address", l1_addr}},
+            .runtime_arg_schema =
                 {
-                    .named_runtime_args = {"a", "b"},
+                    .runtime_arg_names = {"a", "b"},
                 },
             .config_spec =
                 experimental::metal2_host_api::DataMovementConfiguration{
@@ -89,24 +89,24 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
     };
     Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
 
-    experimental::metal2_host_api::ProgramRunParams params;
-    params.kernel_run_params = {
+    experimental::metal2_host_api::ProgramRunArgs params;
+    params.kernel_run_args = {
         {.kernel_spec_name = KERNEL_0,
-         .named_runtime_args =
+         .runtime_arg_values =
              {{.node = experimental::metal2_host_api::NodeCoord{0, 0}, .args = {{"a", 1}, {"b", 2}}},
               {.node = experimental::metal2_host_api::NodeCoord{1, 0}, .args = {{"a", 1}, {"b", 2}}}}},
         {.kernel_spec_name = KERNEL_1,
-         .named_runtime_args =
+         .runtime_arg_values =
              {{.node = experimental::metal2_host_api::NodeCoord{0, 0}, .args = {{"a", 3}, {"b", 4}}},
               {.node = experimental::metal2_host_api::NodeCoord{1, 0}, .args = {{"a", 3}, {"b", 4}}}}},
         {.kernel_spec_name = KERNEL_2,
-         .named_runtime_args =
+         .runtime_arg_values =
              {{.node = experimental::metal2_host_api::NodeCoord{0, 0}, .args = {{"a", 5}, {"b", 6}}}}},
         {.kernel_spec_name = KERNEL_3,
-         .named_runtime_args =
+         .runtime_arg_values =
              {{.node = experimental::metal2_host_api::NodeCoord{1, 0}, .args = {{"a", 7}, {"b", 8}}}}},
     };
-    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+    experimental::metal2_host_api::SetProgramRunArgs(program, params);
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);

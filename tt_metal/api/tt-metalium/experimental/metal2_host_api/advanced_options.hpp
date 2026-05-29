@@ -77,11 +77,11 @@ struct KernelAdvancedOptions {
     // Runtime varargs
     //--------------------------------
     // Number of runtime varargs for the kernel.
-    // Set the vararg values (per node) via ProgramRunParams.
+    // Set the vararg values (per node) via ProgramRunArgs.
     uint32_t num_runtime_varargs = 0;
 
     // Number of common runtime varargs for the kernel.
-    // Set the vararg values via ProgramRunParams.
+    // Set the vararg values via ProgramRunArgs.
     // (The same argument values are broadcast to every node the kernel runs on.)
     uint32_t num_common_runtime_varargs = 0;
 
@@ -148,7 +148,7 @@ struct DFBAdvancedOptions {
     std::vector<DFBSpecName> alias_with;
 };
 
-struct AdvancedKernelRunParams {
+struct AdvancedKernelRunArgs {
     ////////////////////////////////////////////////////////////////////////////////
     // Varargs
     ////////////////////////////////////////////////////////////////////////////////

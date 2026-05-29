@@ -73,11 +73,11 @@ concept ProgramDescriptorFactoryConcept = (requires { &T::create_descriptor; } |
                                           !ProgramFactoryConcept<T> && !MeshWorkloadFactoryConcept<T>;
 
 // Metal 2.0 factory concept: factories that return ProgramArtifacts (a ProgramSpec +
-// ProgramRunParams) from create_program_spec. The framework adapter stamps a Program
+// ProgramRunArgs) from create_program_spec. The framework adapter stamps a Program
 // from the spec onto each mesh coordinate range on cache miss, and patches TensorArgs
 // via metal2_host_api::UpdateTensorArgs on cache hit.
 //
-// NOTE: Each TensorArg.tensor in ProgramRunParams MUST reference a MeshTensor reachable
+// NOTE: Each TensorArgument.tensor in ProgramRunArgs MUST reference a MeshTensor reachable
 // from the factory's `tensor_args` / `tensor_return_value` parameters — the adapter
 // matches by pointer identity. Constructing or copying a MeshTensor and referencing the
 // copy will TT_FATAL at runtime.

@@ -89,7 +89,7 @@ void RunTest(
             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
-        .compile_time_arg_bindings = {{"num_entries", NUM_ENTRIES_PER_PRODUCER}},
+        .compile_time_args = {{"num_entries", NUM_ENTRIES_PER_PRODUCER}},
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
@@ -110,7 +110,7 @@ void RunTest(
             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
             .access_pattern = cap,
         }},
-        .compile_time_arg_bindings =
+        .compile_time_args =
             {{"num_entries", entries_per_consumer},
              {"num_consumers_to_run", NUM_CONSUMERS_TO_RUN},
              {"sync_flag_addr", tensix_sync_addr}},

@@ -262,8 +262,8 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
-        .runtime_arguments_schema =
-            {.named_runtime_args = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
         .config_spec = reader_dm_cfg,
     };
 
@@ -279,8 +279,8 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
-        .runtime_arguments_schema =
-            {.named_runtime_args = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
         .config_spec = writer_dm_cfg,
     };
 
@@ -299,11 +299,11 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
 
     Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
 
-    experimental::metal2_host_api::ProgramRunParams params;
-    params.kernel_run_params = {
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+    experimental::metal2_host_api::ProgramRunArgs params;
+    params.kernel_run_args = {
+        experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = READER,
-            .named_runtime_args =
+            .runtime_arg_values =
                 {{.node = test_config.node,
                   .args =
                       {{"src_addr", input_dram_byte_address},
@@ -311,9 +311,9 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
                        {"num_tiles", num_tiles_per_thread},
                        {"dram_page_stride", per_tile_stride}}}},
         },
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+        experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = WRITER,
-            .named_runtime_args =
+            .runtime_arg_values =
                 {{.node = test_config.node,
                   .args =
                       {{"dst_addr", output_dram_byte_address},
@@ -322,7 +322,7 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
                        {"dram_page_stride", per_tile_stride}}}},
         },
     };
-    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+    experimental::metal2_host_api::SetProgramRunArgs(program, params);
 
     tt_metal::detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
 
@@ -458,8 +458,8 @@ bool reader_datacopy_writer(
             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
-        .runtime_arguments_schema =
-            {.named_runtime_args = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
         .config_spec = reader_dm_cfg,
     };
 
@@ -475,8 +475,8 @@ bool reader_datacopy_writer(
             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
-        .runtime_arguments_schema =
-            {.named_runtime_args = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
         .config_spec = writer_dm_cfg,
     };
 
@@ -499,7 +499,7 @@ bool reader_datacopy_writer(
                  .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
-        .compile_time_arg_bindings = {{"per_core_tile_cnt", per_core_tile_cnt}},
+        .compile_time_args = {{"per_core_tile_cnt", per_core_tile_cnt}},
         .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
     };
 
@@ -520,11 +520,11 @@ bool reader_datacopy_writer(
 
     log_info(tt::LogTest, "Num tiles per thread: {}", num_tiles_per_thread);
 
-    experimental::metal2_host_api::ProgramRunParams params;
-    params.kernel_run_params = {
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+    experimental::metal2_host_api::ProgramRunArgs params;
+    params.kernel_run_args = {
+        experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = READER,
-            .named_runtime_args =
+            .runtime_arg_values =
                 {{.node = test_config.node,
                   .args =
                       {{"src_addr", ctx.input_dram_byte_address},
@@ -532,9 +532,9 @@ bool reader_datacopy_writer(
                        {"num_tiles", num_tiles_per_thread},
                        {"dram_page_stride", ctx.per_tile_stride}}}},
         },
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+        experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = WRITER,
-            .named_runtime_args =
+            .runtime_arg_values =
                 {{.node = test_config.node,
                   .args =
                       {{"dst_addr", ctx.output_dram_byte_address},
@@ -542,11 +542,11 @@ bool reader_datacopy_writer(
                        {"num_tiles", num_tiles_per_thread},
                        {"dram_page_stride", ctx.per_tile_stride}}}},
         },
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+        experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = COMPUTE,
         },
     };
-    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+    experimental::metal2_host_api::SetProgramRunArgs(program, params);
 
     tt_metal::detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
 

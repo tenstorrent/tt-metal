@@ -55,9 +55,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelMultipleThreads) {
 
             OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/compute/risc_math.cpp",
         .num_threads = 4,
-        .runtime_arguments_schema =
+        .runtime_arg_schema =
             {
-                .named_runtime_args = {"l1_address"},
+                .runtime_arg_names = {"l1_address"},
             },
         .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
     };
@@ -75,12 +75,12 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelMultipleThreads) {
     };
     Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
 
-    experimental::metal2_host_api::ProgramRunParams params;
-    params.kernel_run_params = {{
+    experimental::metal2_host_api::ProgramRunArgs params;
+    params.kernel_run_args = {{
         .kernel_spec_name = COMPUTE_KERNEL,
-        .named_runtime_args = {{.node = node, .args = {{"l1_address", l1_address}}}},
+        .runtime_arg_values = {{.node = node, .args = {{"l1_address", l1_address}}}},
     }};
-    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+    experimental::metal2_host_api::SetProgramRunArgs(program, params);
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
@@ -131,9 +131,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelSingleThread) {
 
             OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/compute/risc_math.cpp",
         .num_threads = 1,
-        .runtime_arguments_schema =
+        .runtime_arg_schema =
             {
-                .named_runtime_args = {"l1_address"},
+                .runtime_arg_names = {"l1_address"},
             },
         .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
     };
@@ -151,12 +151,12 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelSingleThread) {
     };
     Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
 
-    experimental::metal2_host_api::ProgramRunParams params;
-    params.kernel_run_params = {{
+    experimental::metal2_host_api::ProgramRunArgs params;
+    params.kernel_run_args = {{
         .kernel_spec_name = COMPUTE_KERNEL,
-        .named_runtime_args = {{.node = node, .args = {{"l1_address", l1_address}}}},
+        .runtime_arg_values = {{.node = node, .args = {{"l1_address", l1_address}}}},
     }};
-    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+    experimental::metal2_host_api::SetProgramRunArgs(program, params);
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);

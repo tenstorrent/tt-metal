@@ -84,7 +84,7 @@ static void RunTest(
             experimental::metal2_host_api::KernelSpec assert_kernel_spec{
                 .unique_id = ASSERT_KERNEL_NAME,
                 .source = kernel,
-                .runtime_arguments_schema = {.named_runtime_args = {"a", "b", "assert_type", "hw_assert_cause"}},
+                .runtime_arg_schema = {.runtime_arg_names = {"a", "b", "assert_type", "hw_assert_cause"}},
             };
             switch (processor.processor_class) {
                 case HalProcessorClassType::DM: {
@@ -104,7 +104,7 @@ static void RunTest(
                         constexpr uint32_t kFirstUserDm = 2;
                         uint32_t target_thread_id = static_cast<uint32_t>(processor.processor_type) - kFirstUserDm;
                         assert_kernel_spec.num_threads = 6;
-                        assert_kernel_spec.compile_time_arg_bindings = {{"target_thread_id", target_thread_id}};
+                        assert_kernel_spec.compile_time_args = {{"target_thread_id", target_thread_id}};
                     } else {
                         assert_kernel_spec.num_threads = 1;
                     }
@@ -127,7 +127,7 @@ static void RunTest(
                         .defines = {{fmt::format("TRISC{}", trisc_id), "1"}}};
                     // Bind trisc_id so the kernel can early-return on TRISCs that aren't the target
                     // of a Quasar compute HW-fault test.
-                    assert_kernel_spec.compile_time_arg_bindings = {{"trisc_id", trisc_id}};
+                    assert_kernel_spec.compile_time_args = {{"trisc_id", trisc_id}};
                     assert_kernel_spec.config_spec = experimental::metal2_host_api::ComputeConfiguration{};
                     break;
                 }
@@ -188,15 +188,15 @@ static void RunTest(
         if (use_legacy_api) {
             SetRuntimeArgs(prog, assert_kernel, logical_core, args);
         } else {
-            experimental::metal2_host_api::ProgramRunParams params;
-            params.kernel_run_params = {{
+            experimental::metal2_host_api::ProgramRunArgs params;
+            params.kernel_run_args = {{
                 .kernel_spec_name = ASSERT_KERNEL_NAME,
-                .named_runtime_args =
+                .runtime_arg_values =
                     {{.node = experimental::metal2_host_api::NodeCoord{logical_core},
                       .args =
                           {{"a", args[0]}, {"b", args[1]}, {"assert_type", args[2]}, {"hw_assert_cause", args[3]}}}},
             }};
-            experimental::metal2_host_api::SetProgramRunParameters(prog, params);
+            experimental::metal2_host_api::SetProgramRunArgs(prog, params);
         }
     };
 

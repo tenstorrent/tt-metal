@@ -124,8 +124,8 @@ void run_single_core_copy_block_matmul_partials(
             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
-        .runtime_arguments_schema =
-            {.named_runtime_args = {"src_addr", "src_dram_bank_id", "num_tiles", "ublock_size_tiles", "reader_only"}},
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"src_addr", "src_dram_bank_id", "num_tiles", "ublock_size_tiles", "reader_only"}},
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen1_data_movement_config =
@@ -148,8 +148,8 @@ void run_single_core_copy_block_matmul_partials(
             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
-        .runtime_arguments_schema =
-            {.named_runtime_args = {"dst_addr", "dst_dram_bank_id", "num_tiles", "ublock_size_tiles", "writer_only"}},
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"dst_addr", "dst_dram_bank_id", "num_tiles", "ublock_size_tiles", "writer_only"}},
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen1_data_movement_config =
@@ -185,7 +185,7 @@ void run_single_core_copy_block_matmul_partials(
                  .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
-        .compile_time_arg_bindings = {{"num_tiles", num_tiles}, {"num_single_transfer", test_config.compute_ublock}},
+        .compile_time_args = {{"num_tiles", num_tiles}, {"num_single_transfer", test_config.compute_ublock}},
         .config_spec =
             experimental::metal2_host_api::ComputeConfiguration{
                 .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
@@ -224,11 +224,11 @@ void run_single_core_copy_block_matmul_partials(
     std::vector<uint32_t> src_vec = generate_copy_block_stimulus(dram_buffer_size, test_config);
     distributed::WriteShard(cq, src_dram_buffer, src_vec, zero_coord);
 
-    experimental::metal2_host_api::ProgramRunParams params;
-    params.kernel_run_params = {
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+    experimental::metal2_host_api::ProgramRunArgs params;
+    params.kernel_run_args = {
+        experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = READER,
-            .named_runtime_args =
+            .runtime_arg_values =
                 {{.node = node,
                   .args =
                       {{"src_addr", src_dram_buffer->address()},
@@ -237,9 +237,9 @@ void run_single_core_copy_block_matmul_partials(
                        {"ublock_size_tiles", test_config.reader_ublock},
                        {"reader_only", 0u}}}},
         },
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+        experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = WRITER,
-            .named_runtime_args =
+            .runtime_arg_values =
                 {{.node = node,
                   .args =
                       {{"dst_addr", dst_dram_buffer->address()},
@@ -248,11 +248,11 @@ void run_single_core_copy_block_matmul_partials(
                        {"ublock_size_tiles", test_config.writer_ublock},
                        {"writer_only", 0u}}}},
         },
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+        experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = COMPUTE,
         },
     };
-    experimental::metal2_host_api::SetProgramRunParameters(program_run, params);
+    experimental::metal2_host_api::SetProgramRunArgs(program_run, params);
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
     distributed::Finish(cq);

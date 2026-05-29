@@ -68,9 +68,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
             OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1_pipeline.cpp",
         .num_threads = 1,
         .semaphore_bindings = {{.semaphore_spec_name = "sem0", .accessor_name = "sem"}},
-        .runtime_arguments_schema =
+        .runtime_arg_schema =
             {
-                .named_runtime_args = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
+                .runtime_arg_names = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
             },
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
@@ -90,7 +90,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
                 {.semaphore_spec_name = "sem0", .accessor_name = "sem_in"},
                 {.semaphore_spec_name = "sem1", .accessor_name = "sem_out"},
             },
-        .compile_time_arg_bindings =
+        .compile_time_args =
             {
                 {"num_elements", num_elements},
                 {"buf_a", buf_a_addr},
@@ -109,9 +109,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
             OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/l1_to_dram_pipeline.cpp",
         .num_threads = 1,
         .semaphore_bindings = {{.semaphore_spec_name = "sem1", .accessor_name = "sem"}},
-        .runtime_arguments_schema =
+        .runtime_arg_schema =
             {
-                .named_runtime_args = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
+                .runtime_arg_names = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
             },
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
@@ -133,10 +133,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
     };
     Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
 
-    experimental::metal2_host_api::ProgramRunParams params;
-    params.kernel_run_params = {
+    experimental::metal2_host_api::ProgramRunArgs params;
+    params.kernel_run_args = {
         {.kernel_spec_name = DM_READER,
-         .named_runtime_args =
+         .runtime_arg_values =
              {{.node = node,
                .args =
                    {{"dram_addr", dram_src_addr},
@@ -145,7 +145,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
                     {"dram_bank_id", 0u}}}}},
         {.kernel_spec_name = DM_TRANSFORM},
         {.kernel_spec_name = DM_WRITER,
-         .named_runtime_args =
+         .runtime_arg_values =
              {{.node = node,
                .args =
                    {{"dram_addr", dram_dst_addr},
@@ -153,7 +153,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
                     {"num_elements", num_elements},
                     {"dram_bank_id", 0u}}}}},
     };
-    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+    experimental::metal2_host_api::SetProgramRunArgs(program, params);
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
@@ -230,7 +230,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
         .num_threads = 1,
         .compiler_options = {.defines = {{"OUTGOING_SEM", "1"}}},
         .semaphore_bindings = {{.semaphore_spec_name = "sem_core_0", .accessor_name = "sem_out"}},
-        .compile_time_arg_bindings =
+        .compile_time_args =
             {
                 {"num_elements", num_elements},
                 {"buf_a", buf_a_addr},
@@ -254,9 +254,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
                 {.semaphore_spec_name = "sem_core_0", .accessor_name = "sem"},
                 {.semaphore_spec_name = "sem_cross", .accessor_name = "remote_sem"},
             },
-        .runtime_arguments_schema =
+        .runtime_arg_schema =
             {
-                .named_runtime_args =
+                .runtime_arg_names =
                     {"dram_addr", "l1_addr", "num_elements", "dram_bank_id", "remote_noc_x", "remote_noc_y"},
             },
         .config_spec =
@@ -277,9 +277,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
                 {.semaphore_spec_name = "sem0_core_1", .accessor_name = "sem"},
                 {.semaphore_spec_name = "sem_cross", .accessor_name = "remote_sem"},
             },
-        .runtime_arguments_schema =
+        .runtime_arg_schema =
             {
-                .named_runtime_args = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
+                .runtime_arg_names = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
             },
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
@@ -299,7 +299,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
                 {.semaphore_spec_name = "sem0_core_1", .accessor_name = "sem_in"},
                 {.semaphore_spec_name = "sem1_core_1", .accessor_name = "sem_out"},
             },
-        .compile_time_arg_bindings =
+        .compile_time_args =
             {
                 {"num_elements", num_elements},
                 {"buf_a", buf_a_addr},
@@ -318,9 +318,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
             OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/l1_to_dram_pipeline.cpp",
         .num_threads = 1,
         .semaphore_bindings = {{.semaphore_spec_name = "sem1_core_1", .accessor_name = "sem"}},
-        .runtime_arguments_schema =
+        .runtime_arg_schema =
             {
-                .named_runtime_args = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
+                .runtime_arg_names = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
             },
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
@@ -347,12 +347,12 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
     };
     Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
 
-    experimental::metal2_host_api::ProgramRunParams params;
-    params.kernel_run_params = {
+    experimental::metal2_host_api::ProgramRunArgs params;
+    params.kernel_run_args = {
         {.kernel_spec_name = DM_TRANSFORM_0},
         {.kernel_spec_name = DM_TRANSFORM_1},
         {.kernel_spec_name = DM_WRITER_0,
-         .named_runtime_args =
+         .runtime_arg_values =
              {{.node = node_0,
                .args =
                    {{"dram_addr", dram_mid_addr},
@@ -362,7 +362,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
                     {"remote_noc_x", static_cast<uint32_t>(core_1_virtual.x)},
                     {"remote_noc_y", static_cast<uint32_t>(core_1_virtual.y)}}}}},
         {.kernel_spec_name = DM_READER_1,
-         .named_runtime_args =
+         .runtime_arg_values =
              {{.node = node_1,
                .args =
                    {{"dram_addr", dram_mid_addr},
@@ -370,7 +370,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
                     {"num_elements", num_elements},
                     {"dram_bank_id", 0u}}}}},
         {.kernel_spec_name = DM_WRITER_1,
-         .named_runtime_args =
+         .runtime_arg_values =
              {{.node = node_1,
                .args =
                    {{"dram_addr", dram_dst_addr},
@@ -378,7 +378,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
                     {"num_elements", num_elements},
                     {"dram_bank_id", 0u}}}}},
     };
-    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+    experimental::metal2_host_api::SetProgramRunArgs(program, params);
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);

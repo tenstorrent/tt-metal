@@ -979,16 +979,16 @@ TEST_F(ProgramSpecTestQuasar, SemaphoreNonZeroInitialValueFailsOnQuasar) {
 
 TEST_F(ProgramSpecTestQuasar, NamedRuntimeArgsSucceeds) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
-    spec.kernels[0].runtime_arguments_schema.named_runtime_args = {"input_ptr", "output_ptr"};
-    spec.kernels[0].runtime_arguments_schema.named_common_runtime_args = {"tile_count"};
-    spec.kernels[0].compile_time_arg_bindings = {{"block_size", 64}};
+    spec.kernels[0].runtime_arg_schema.runtime_arg_names = {"input_ptr", "output_ptr"};
+    spec.kernels[0].runtime_arg_schema.common_runtime_arg_names = {"tile_count"};
+    spec.kernels[0].compile_time_args = {{"block_size", 64}};
 
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, InvalidNamedRtaIdentifierFails) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
-    spec.kernels[0].runtime_arguments_schema.named_runtime_args = {"int"};  // C++ keyword
+    spec.kernels[0].runtime_arg_schema.runtime_arg_names = {"int"};  // C++ keyword
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
@@ -998,7 +998,7 @@ TEST_F(ProgramSpecTestQuasar, InvalidNamedRtaIdentifierFails) {
 
 TEST_F(ProgramSpecTestQuasar, InvalidNamedCrtaIdentifierFails) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
-    spec.kernels[0].runtime_arguments_schema.named_common_runtime_args = {"has-dash"};
+    spec.kernels[0].runtime_arg_schema.common_runtime_arg_names = {"has-dash"};
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
@@ -1009,8 +1009,8 @@ TEST_F(ProgramSpecTestQuasar, InvalidNamedCrtaIdentifierFails) {
 TEST_F(ProgramSpecTestQuasar, NamedRtaCrtaCollisionFails) {
     // A single name cannot be both a named RTA and a named CRTA (they share the user namespace).
     ProgramSpec spec = MakeMinimalValidProgramSpec();
-    spec.kernels[0].runtime_arguments_schema.named_runtime_args = {"count"};
-    spec.kernels[0].runtime_arguments_schema.named_common_runtime_args = {"count"};
+    spec.kernels[0].runtime_arg_schema.runtime_arg_names = {"count"};
+    spec.kernels[0].runtime_arg_schema.common_runtime_arg_names = {"count"};
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
@@ -1020,8 +1020,8 @@ TEST_F(ProgramSpecTestQuasar, NamedRtaCrtaCollisionFails) {
 
 TEST_F(ProgramSpecTestQuasar, NamedRtaCtaCollisionFails) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
-    spec.kernels[0].runtime_arguments_schema.named_runtime_args = {"block_size"};
-    spec.kernels[0].compile_time_arg_bindings = {{"block_size", 64}};  // same name as CTA
+    spec.kernels[0].runtime_arg_schema.runtime_arg_names = {"block_size"};
+    spec.kernels[0].compile_time_args = {{"block_size", 64}};  // same name as CTA
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
@@ -1032,8 +1032,8 @@ TEST_F(ProgramSpecTestQuasar, NamedRtaCtaCollisionFails) {
 TEST_F(ProgramSpecTestQuasar, DifferentKernelsMayReuseArgNames) {
     // Collision rule is per-kernel. Two different kernels may have identically-named args.
     ProgramSpec spec = MakeMinimalValidProgramSpec();
-    spec.kernels[0].runtime_arguments_schema.named_runtime_args = {"shared_name"};
-    spec.kernels[1].runtime_arguments_schema.named_runtime_args = {"shared_name"};
+    spec.kernels[0].runtime_arg_schema.runtime_arg_names = {"shared_name"};
+    spec.kernels[1].runtime_arg_schema.runtime_arg_names = {"shared_name"};
 
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
@@ -1876,7 +1876,7 @@ TEST_F(ProgramSpecTestQuasar, CompileTimeArgBindingsSucceeds) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
     // Add compile-time arg bindings
-    spec.kernels[0].compile_time_arg_bindings = {{"arg1", 100}, {"arg2", 200}};
+    spec.kernels[0].compile_time_args = {{"arg1", 100}, {"arg2", 200}};
 
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
@@ -2355,12 +2355,12 @@ TEST(AggregateSpecTypes, RuntimeArgSchemaDesignatedInitializers) {
     // Named RTAs + CRTAs via designated initializers; vararg counts now live on
     // KernelAdvancedOptions (see VarargCountsOnAdvancedOptions below).
     KernelSpec::RuntimeArgSchema schema{
-        .named_runtime_args = {"input_ptr", "output_ptr"},
-        .named_common_runtime_args = {"tile_count"},
+        .runtime_arg_names = {"input_ptr", "output_ptr"},
+        .common_runtime_arg_names = {"tile_count"},
     };
 
-    EXPECT_EQ(schema.named_runtime_args.size(), 2u);
-    EXPECT_EQ(schema.named_common_runtime_args.size(), 1u);
+    EXPECT_EQ(schema.runtime_arg_names.size(), 2u);
+    EXPECT_EQ(schema.common_runtime_arg_names.size(), 1u);
 }
 
 TEST(AggregateSpecTypes, VarargCountsOnAdvancedOptions) {
@@ -2390,16 +2390,16 @@ TEST(AggregateSpecTypes, KernelSpecNamedRuntimeArgsDesignatedInitializers) {
     KernelSpec k{
         .unique_id = "k",
         .source = KernelSpec::SourceCode{"void kernel_main() {}"},
-        .runtime_arguments_schema =
+        .runtime_arg_schema =
             KernelSpec::RuntimeArgSchema{
-                .named_runtime_args = {"input_ptr"},
+                .runtime_arg_names = {"input_ptr"},
             },
         .config_spec =
             DataMovementConfiguration{
                 .gen2_data_movement_config = DataMovementConfiguration::Gen2DataMovementConfig{},
             },
     };
-    EXPECT_EQ(k.runtime_arguments_schema.named_runtime_args.size(), 1u);
+    EXPECT_EQ(k.runtime_arg_schema.runtime_arg_names.size(), 1u);
 }
 
 TEST(AggregateSpecTypes, SemaphoreSpecDesignatedInitializers) {
@@ -2774,7 +2774,7 @@ TEST_F(ProgramSpecTestGen1, DuplicateKernelNameFails) {
 // ============================================================================
 // Spec-level validation for the Metal 2.0 TensorAccessor binding feature. These tests exercise
 // CollectSpecData paths only — they do not need a MeshTensor at enqueue (those run-params paths
-// are covered in test_program_run_params.cpp). Hardware-agnostic; using the Gen1 fixture for
+// are covered in test_program_run_args.cpp). Hardware-agnostic; using the Gen1 fixture for
 // lower-likelihood-of-unrelated-mock-issues per Audrey's guidance.
 
 // (BindTensorParameterToKernel and MakeMinimalTensorParameter using-declarations hoisted to top-of-file.)
@@ -2982,7 +2982,7 @@ TEST_F(ProgramSpecTestGen1, IdenticalTensorSpecProducesIdenticalKernelHash) {
 // ============================================================================
 //
 // dynamic_tensor_shape on a TensorParameter loosens the runtime spec match (covered in
-// test_program_run_params.cpp) and, for sharded TensorParameters, also moves the
+// test_program_run_args.cpp) and, for sharded TensorParameters, also moves the
 // tensor_shape_in_pages words out of the kernel's CTAs and into per-binding CRTA slots.
 // The tests below pin both halves:
 //   - CTA stability: same kernel hash across different shapes when the flag is set.
@@ -3103,7 +3103,7 @@ TEST_F(ProgramSpecTestGen1, KernelCrtaLayout_AllThreeSectionsConsistent) {
     // The Kernel's stored KernelCrtaLayout must equal what a fresh walk of (named CRTAs +
     // binding handles) would compute. This test exercises a Program in which ALL THREE
     // sections of the CRTA buffer are non-empty:
-    //   - section 1: named CRTAs           (declared in runtime_arguments_schema)
+    //   - section 1: named CRTAs           (declared in runtime_arg_schema)
     //   - section 2: TensorBinding section (variable-size: a plain interleaved binding +
     //                                       a sharded-with-dynamic_tensor_shape binding)
     //   - section 3: varargs               (declared via num_common_runtime_varargs)
@@ -3117,7 +3117,7 @@ TEST_F(ProgramSpecTestGen1, KernelCrtaLayout_AllThreeSectionsConsistent) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
 
     // Section 1: named CRTAs on the DM kernel.
-    spec.kernels[0].runtime_arguments_schema.named_common_runtime_args = {"foo", "bar"};
+    spec.kernels[0].runtime_arg_schema.common_runtime_arg_names = {"foo", "bar"};
     // Section 3: vararg CRTAs on the DM kernel.
     spec.kernels[0].advanced_options.num_common_runtime_varargs = 3;
 

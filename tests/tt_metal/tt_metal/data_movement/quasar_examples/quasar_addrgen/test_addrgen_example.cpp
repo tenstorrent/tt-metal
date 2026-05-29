@@ -39,7 +39,7 @@ bool run_addrgen_test(
         .unique_id = DM_KERNEL,
         .source = kernel_path,
         .num_threads = 1,
-        .compile_time_arg_bindings =
+        .compile_time_args =
             {{"src_stride_en", src_stride_en},
              {"dst_stride_en", dst_stride_en},
              {"num_of_addresses", num_of_addresses}},
@@ -62,11 +62,11 @@ bool run_addrgen_test(
     };
     Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
 
-    experimental::metal2_host_api::ProgramRunParams params;
-    params.kernel_run_params = {{
+    experimental::metal2_host_api::ProgramRunArgs params;
+    params.kernel_run_args = {{
         .kernel_spec_name = DM_KERNEL,
     }};
-    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+    experimental::metal2_host_api::SetProgramRunArgs(program, params);
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range(mesh_device->shape());

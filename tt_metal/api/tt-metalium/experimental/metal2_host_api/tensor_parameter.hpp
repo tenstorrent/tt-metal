@@ -16,7 +16,7 @@ using TensorParameterName = std::string;
 
 // A TensorParameter is used to declare that a Program operates on a MeshTensor
 // with a particular (single-device) tensor layout.
-// The actual MeshTensor is supplied at execution time, via ProgramRunParams.
+// The actual MeshTensor is supplied at execution time, via ProgramRunArgs.
 struct TensorParameter {
     // Tensor identifier: used to reference this Tensor within the ProgramSpec
     TensorParameterName unique_id;

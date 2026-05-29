@@ -73,10 +73,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GlobalsAndTLS) {
 
                 OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_tls_check.cpp",
             .num_threads = num_threads,
-            .compile_time_arg_bindings = {{"kernel_id", kernel_id}},
-            .runtime_arguments_schema =
+            .compile_time_args = {{"kernel_id", kernel_id}},
+            .runtime_arg_schema =
                 {
-                    .named_runtime_args = {"signal_address", "dram_dst_address", "dram_dst_bank_id", "l1_result_addr"},
+                    .runtime_arg_names = {"signal_address", "dram_dst_address", "dram_dst_bank_id", "l1_result_addr"},
                 },
             .config_spec =
                 experimental::metal2_host_api::DataMovementConfiguration{
@@ -106,9 +106,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GlobalsAndTLS) {
     Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
 
     auto make_kernel_run_params = [&](const char* name) {
-        return experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+        return experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = name,
-            .named_runtime_args =
+            .runtime_arg_values =
                 {{.node = node,
                   .args =
                       {{"signal_address", signal_address},
@@ -118,13 +118,13 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GlobalsAndTLS) {
         };
     };
 
-    experimental::metal2_host_api::ProgramRunParams params;
-    params.kernel_run_params = {
+    experimental::metal2_host_api::ProgramRunArgs params;
+    params.kernel_run_args = {
         make_kernel_run_params(DM_KERNEL_1),
         make_kernel_run_params(DM_KERNEL_2),
         make_kernel_run_params(DM_KERNEL_3),
     };
-    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+    experimental::metal2_host_api::SetProgramRunArgs(program, params);
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
@@ -311,9 +311,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelTLS) {
 
             OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/compute/simple_tls_check.cpp",
         .num_threads = QUASAR_NUM_TENSIX_ENGINES_PER_CLUSTER,
-        .runtime_arguments_schema =
+        .runtime_arg_schema =
             {
-                .named_runtime_args = {"l1_result_addr"},
+                .runtime_arg_names = {"l1_result_addr"},
             },
         .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
     };
@@ -331,12 +331,12 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelTLS) {
     };
     Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
 
-    experimental::metal2_host_api::ProgramRunParams params;
-    params.kernel_run_params = {{
+    experimental::metal2_host_api::ProgramRunArgs params;
+    params.kernel_run_args = {{
         .kernel_spec_name = COMPUTE_KERNEL,
-        .named_runtime_args = {{.node = node, .args = {{"l1_result_addr", l1_result_addr}}}},
+        .runtime_arg_values = {{.node = node, .args = {{"l1_result_addr", l1_result_addr}}}},
     }};
-    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+    experimental::metal2_host_api::SetProgramRunArgs(program, params);
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);

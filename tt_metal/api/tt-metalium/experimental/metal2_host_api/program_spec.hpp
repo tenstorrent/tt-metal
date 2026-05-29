@@ -46,7 +46,7 @@ struct WorkUnitSpec {
 // A ProgramSpec describes the immutable properties of a Program:
 // its kernels, DFBs, semaphores, and where they all run.
 // Analogous to a function's signature and body — declared once, executed many times.
-// (Each time with a new ProgramRunParams configuring the mutable execution parameters.)
+// (Each time with a new ProgramRunArgs configuring the mutable execution parameters.)
 struct ProgramSpec {
     // Program identifier (identifies a Program within a MeshWorkload)
     ProgramSpecName program_id;
@@ -59,7 +59,7 @@ struct ProgramSpec {
 
     // Tensor parameter declarations
     // Provides ids and layout specs for tensors the Program's kernels will operate on
-    // (The actual MeshTensors are supplied via ProgramRunParams.)
+    // (The actual MeshTensors are supplied via ProgramRunArgs.)
     std::vector<TensorParameter> tensor_parameters;
 
     // WorkUnit specifications:

@@ -78,7 +78,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     // gen1 requires one KernelSpec per processor, so BRISC and NCRISC are split.
     std::vector<experimental::metal2_host_api::KernelSpec> kernel_specs;
     std::vector<experimental::metal2_host_api::KernelSpecName> kernel_names;
-    std::vector<experimental::metal2_host_api::ProgramRunParams::KernelRunParams> kernel_run_params;
+    std::vector<experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs> kernel_run_args;
     auto add_dm_kernel =
         [&](const char* name, uint32_t num_threads, std::optional<tt::tt_metal::DataMovementProcessor> gen1_processor) {
             // Always provide both gen1 and gen2 configs; the runtime picks the one matching the
@@ -98,13 +98,13 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
                 .unique_id = name,
                 .source = path_metal2,
                 .num_threads = num_threads,
-                .runtime_arguments_schema = {.named_common_runtime_args = {"wait_cycles"}},
+                .runtime_arg_schema = {.common_runtime_arg_names = {"wait_cycles"}},
                 .config_spec = dm_cfg,
             });
             kernel_names.emplace_back(name);
-            kernel_run_params.push_back({
+            kernel_run_args.push_back({
                 .kernel_spec_name = name,
-                .named_common_runtime_args = {{"wait_cycles", delay_cycles}},
+                .common_runtime_arg_values = {{"wait_cycles", delay_cycles}},
             });
         };
 
@@ -122,13 +122,13 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
             .unique_id = COMPUTE_KERNEL_NAME,
             .source = path_metal2,
             .num_threads = 1,
-            .runtime_arguments_schema = {.named_common_runtime_args = {"wait_cycles"}},
+            .runtime_arg_schema = {.common_runtime_arg_names = {"wait_cycles"}},
             .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
         });
         kernel_names.emplace_back(COMPUTE_KERNEL_NAME);
-        kernel_run_params.push_back({
+        kernel_run_args.push_back({
             .kernel_spec_name = COMPUTE_KERNEL_NAME,
-            .named_common_runtime_args = {{"wait_cycles", delay_cycles}},
+            .common_runtime_arg_values = {{"wait_cycles", delay_cycles}},
         });
     }
 
@@ -144,9 +144,9 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     };
     Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
 
-    experimental::metal2_host_api::ProgramRunParams params;
-    params.kernel_run_params = std::move(kernel_run_params);
-    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+    experimental::metal2_host_api::ProgramRunArgs params;
+    params.kernel_run_args = std::move(kernel_run_args);
+    experimental::metal2_host_api::SetProgramRunArgs(program, params);
 
     // ETH cores: invoke the original (legacy) kernel via the legacy host API.
     if (!is_quasar) {

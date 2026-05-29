@@ -142,9 +142,9 @@ experimental::metal2_host_api::ProgramSpec build_bmm_program_spec(
              {.tensor_parameter_name = SRC1_T, .accessor_name = "src1"}},
         // Only batch_start varies per node; everything else is identical across nodes and
         // lives in CRTAs for better dispatch efficiency.
-        .runtime_arguments_schema =
-            {.named_runtime_args = {"batch_start"},
-             .named_common_runtime_args = {"Mt", "Kt", "Nt", "MtKt", "KtNt", "batch", "do_bcast"}},
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"batch_start"},
+             .common_runtime_arg_names = {"Mt", "Kt", "Nt", "MtKt", "KtNt", "batch", "do_bcast"}},
         .config_spec = reader_config,
     };
 
@@ -160,8 +160,8 @@ experimental::metal2_host_api::ProgramSpec build_bmm_program_spec(
               .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
               .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED}},
         .tensor_bindings = {{.tensor_parameter_name = DST_T, .accessor_name = "dst"}},
-        .runtime_arguments_schema =
-            {.named_runtime_args = {"batch_start"}, .named_common_runtime_args = {"Mt", "Nt", "batch"}},
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"batch_start"}, .common_runtime_arg_names = {"Mt", "Nt", "batch"}},
         .config_spec = writer_config,
     };
 
@@ -184,7 +184,7 @@ experimental::metal2_host_api::ProgramSpec build_bmm_program_spec(
               .local_accessor_name = "dst",
               .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
               .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED}},
-        .compile_time_arg_bindings = {{"batch", p.B_per_core}, {"Mt", p.Mt}, {"Kt", p.Kt}, {"Nt", p.Nt}},
+        .compile_time_args = {{"batch", p.B_per_core}, {"Mt", p.Mt}, {"Kt", p.Kt}, {"Nt", p.Nt}},
         .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
     };
 
@@ -256,12 +256,12 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
     auto program = experimental::metal2_host_api::MakeProgramFromSpec(mesh_device, spec);
 
     constexpr uint32_t do_bcast = 0;
-    experimental::metal2_host_api::ProgramRunParams params;
-    params.kernel_run_params = {
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+    experimental::metal2_host_api::ProgramRunArgs params;
+    params.kernel_run_args = {
+        experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = READER,
-            .named_runtime_args = {{.node = node, .args = {{"batch_start", 0u}}}},
-            .named_common_runtime_args =
+            .runtime_arg_values = {{.node = node, .args = {{"batch_start", 0u}}}},
+            .common_runtime_arg_values =
                 {{"Mt", p.Mt},
                  {"Kt", p.Kt},
                  {"Nt", p.Nt},
@@ -270,19 +270,19 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
                  {"batch", p.B_per_core},
                  {"do_bcast", do_bcast}},
         },
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+        experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = WRITER,
-            .named_runtime_args = {{.node = node, .args = {{"batch_start", 0u}}}},
-            .named_common_runtime_args = {{"Mt", p.Mt}, {"Nt", p.Nt}, {"batch", p.B_per_core}},
+            .runtime_arg_values = {{.node = node, .args = {{"batch_start", 0u}}}},
+            .common_runtime_arg_values = {{"Mt", p.Mt}, {"Nt", p.Nt}, {"batch", p.B_per_core}},
         },
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{.kernel_spec_name = COMPUTE},
+        experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{.kernel_spec_name = COMPUTE},
     };
     params.tensor_args = {
         {.tensor_parameter_name = SRC0_T, .tensor = tensors.src0},
         {.tensor_parameter_name = SRC1_T, .tensor = tensors.src1},
         {.tensor_parameter_name = DST_T, .tensor = tensors.dst},
     };
-    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+    experimental::metal2_host_api::SetProgramRunArgs(program, params);
 
     auto src0_vec = create_random_vector_of_bfloat16(bytesA, 1.0f, 0x1234);
     auto src1_vec = create_random_vector_of_bfloat16(bytesB, 1.0f, 0x1234, -0.45f);
@@ -327,13 +327,13 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, BmmMultinode) {
 
     constexpr uint32_t do_bcast = 0;
     // node0 handles batch 0, node1 handles batch 1 (batch_start = node index)
-    experimental::metal2_host_api::ProgramRunParams params;
-    params.kernel_run_params = {
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+    experimental::metal2_host_api::ProgramRunArgs params;
+    params.kernel_run_args = {
+        experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = READER,
-            .named_runtime_args =
+            .runtime_arg_values =
                 {{.node = node0, .args = {{"batch_start", 0u}}}, {.node = node1, .args = {{"batch_start", 1u}}}},
-            .named_common_runtime_args =
+            .common_runtime_arg_values =
                 {{"Mt", p.Mt},
                  {"Kt", p.Kt},
                  {"Nt", p.Nt},
@@ -342,20 +342,20 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, BmmMultinode) {
                  {"batch", p.B_per_core},
                  {"do_bcast", do_bcast}},
         },
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+        experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = WRITER,
-            .named_runtime_args =
+            .runtime_arg_values =
                 {{.node = node0, .args = {{"batch_start", 0u}}}, {.node = node1, .args = {{"batch_start", 1u}}}},
-            .named_common_runtime_args = {{"Mt", p.Mt}, {"Nt", p.Nt}, {"batch", p.B_per_core}},
+            .common_runtime_arg_values = {{"Mt", p.Mt}, {"Nt", p.Nt}, {"batch", p.B_per_core}},
         },
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{.kernel_spec_name = COMPUTE},
+        experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{.kernel_spec_name = COMPUTE},
     };
     params.tensor_args = {
         {.tensor_parameter_name = SRC0_T, .tensor = tensors.src0},
         {.tensor_parameter_name = SRC1_T, .tensor = tensors.src1},
         {.tensor_parameter_name = DST_T, .tensor = tensors.dst},
     };
-    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+    experimental::metal2_host_api::SetProgramRunArgs(program, params);
 
     auto src0_vec = create_random_vector_of_bfloat16(bytesA, 1.0f, 0x1234);
     auto src1_vec = create_random_vector_of_bfloat16(bytesB, 1.0f, 0x1234, -0.45f);

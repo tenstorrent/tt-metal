@@ -16,7 +16,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_params.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 #include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
@@ -111,12 +111,12 @@ void run_borrowed_memory_dfb_program(
         ? MakeMinimalDMKernel("producer", static_cast<uint8_t>(cfg.num_producers))
         : MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
     producer_spec.source = DFB_PRODUCER_KERNEL;
-    producer_spec.compile_time_arg_bindings = {
+    producer_spec.compile_time_args = {
         {"num_entries_per_producer", entries_per_producer},
         {"implicit_sync",            implicit_sync},
         {"num_producers",            cfg.num_producers},
     };
-    producer_spec.runtime_arguments_schema.named_runtime_args = {"chunk_offset", "entries_per_core"};
+    producer_spec.runtime_arg_schema.runtime_arg_names = {"chunk_offset", "entries_per_core"};
     producer_spec.tensor_bindings = {
         {.tensor_parameter_name = "src_tensor",      .accessor_name = "src_tensor"},
         // dfb_ring_tensor backs the borrowed DFB; the kernel does not access it directly,
@@ -134,7 +134,7 @@ void run_borrowed_memory_dfb_program(
             ? MakeMinimalComputeKernel("consumer", static_cast<uint8_t>(cfg.num_consumers))
             : MakeMinimalComputeKernel("consumer");
         consumer_spec.source = DFB_TENSIX_CONSUMER_KERNEL;
-        consumer_spec.compile_time_arg_bindings = {
+        consumer_spec.compile_time_args = {
             {"num_entries_per_consumer", entries_per_consumer},
         };
     } else {
@@ -143,13 +143,13 @@ void run_borrowed_memory_dfb_program(
             ? MakeMinimalDMKernel("consumer", static_cast<uint8_t>(cfg.num_consumers))
             : MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
         consumer_spec.source = DFB_DM_CONSUMER_KERNEL;
-        consumer_spec.compile_time_arg_bindings = {
+        consumer_spec.compile_time_args = {
             {"num_entries_per_consumer", entries_per_consumer},
             {"blocked_consumer",         static_cast<uint32_t>(is_all ? 1u : 0u)},
             {"implicit_sync",            implicit_sync},
             {"num_consumers",            cfg.num_consumers},
         };
-        consumer_spec.runtime_arguments_schema.named_runtime_args = {"chunk_offset", "entries_per_core"};
+        consumer_spec.runtime_arg_schema.runtime_arg_names = {"chunk_offset", "entries_per_core"};
         consumer_spec.tensor_bindings = {{
             .tensor_parameter_name = "dst_tensor",
             .accessor_name         = "dst_tensor",
@@ -211,20 +211,20 @@ void run_borrowed_memory_dfb_program(
     // -----------------------------------------------------------------------
     // Build and apply run params
     // -----------------------------------------------------------------------
-    using NodeNamedRTAs = ProgramRunParams::KernelRunParams::NodeNamedRTAs;
-    const NodeNamedRTAs dm_rtas{node, {{"chunk_offset", 0u}, {"entries_per_core", entries_per_core}}};
+    using NodeRuntimeArgs = ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs;
+    const NodeRuntimeArgs dm_rtas{node, {{"chunk_offset", 0u}, {"entries_per_core", entries_per_core}}};
 
-    ProgramRunParams params;
-    params.kernel_run_params.push_back({
+    ProgramRunArgs params;
+    params.kernel_run_args.push_back({
         .kernel_spec_name  = "producer",
-        .named_runtime_args = {dm_rtas},
+        .runtime_arg_values = {dm_rtas},
     });
     if (cfg.tensix_consumer) {
-        params.kernel_run_params.push_back({.kernel_spec_name = "consumer"});
+        params.kernel_run_args.push_back({.kernel_spec_name = "consumer"});
     } else {
-        params.kernel_run_params.push_back({
+        params.kernel_run_args.push_back({
             .kernel_spec_name   = "consumer",
-            .named_runtime_args = {dm_rtas},
+            .runtime_arg_values = {dm_rtas},
         });
     }
     params.tensor_args.push_back({.tensor_parameter_name = "src_tensor", .tensor = std::cref(src_tensor)});
@@ -232,7 +232,7 @@ void run_borrowed_memory_dfb_program(
         params.tensor_args.push_back({.tensor_parameter_name = "dst_tensor", .tensor = std::cref(*dst_tensor)});
     }
     params.tensor_args.push_back({.tensor_parameter_name = "dfb_ring_tensor", .tensor = std::cref(ring_tensor)});
-    SetProgramRunParameters(program, params);
+    SetProgramRunArgs(program, params);
 
     // -----------------------------------------------------------------------
     // Write input, launch, verify
@@ -278,12 +278,12 @@ void run_update_address_test(
         ? MakeMinimalDMKernel("producer")
         : MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
     producer_spec.source = DFB_PRODUCER_KERNEL;
-    producer_spec.compile_time_arg_bindings = {
+    producer_spec.compile_time_args = {
         {"num_entries_per_producer", num_entries},
         {"implicit_sync",            implicit_sync},
         {"num_producers",            1u},
     };
-    producer_spec.runtime_arguments_schema.named_runtime_args = {"chunk_offset", "entries_per_core"};
+    producer_spec.runtime_arg_schema.runtime_arg_names = {"chunk_offset", "entries_per_core"};
     producer_spec.tensor_bindings = {
         {.tensor_parameter_name = "src_tensor",      .accessor_name = "src_tensor"},
         {.tensor_parameter_name = "dfb_ring_tensor", .accessor_name = "dfb_ring"},
@@ -294,13 +294,13 @@ void run_update_address_test(
         ? MakeMinimalDMKernel("consumer")
         : MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
     consumer_spec.source = DFB_DM_CONSUMER_KERNEL;
-    consumer_spec.compile_time_arg_bindings = {
+    consumer_spec.compile_time_args = {
         {"num_entries_per_consumer", num_entries},
         {"blocked_consumer",         0u},
         {"implicit_sync",            implicit_sync},
         {"num_consumers",            1u},
     };
-    consumer_spec.runtime_arguments_schema.named_runtime_args = {"chunk_offset", "entries_per_core"};
+    consumer_spec.runtime_arg_schema.runtime_arg_names = {"chunk_offset", "entries_per_core"};
     consumer_spec.tensor_bindings = {{
         .tensor_parameter_name = "dst_tensor",
         .accessor_name         = "dst_tensor",
@@ -348,25 +348,25 @@ void run_update_address_test(
     ASSERT_NE(ring_tensor_a.address(), ring_tensor_b.address())
         << "Test pre-condition: two separate L1 allocations must have distinct addresses";
 
-    using NodeNamedRTAs = ProgramRunParams::KernelRunParams::NodeNamedRTAs;
-    const NodeNamedRTAs dm_rtas{node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}};
+    using NodeRuntimeArgs = ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs;
+    const NodeRuntimeArgs dm_rtas{node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}};
 
     // --- Run 1: ring at ring_tensor_a ---
     std::vector<uint32_t> input_a(total_words);
     std::iota(input_a.begin(), input_a.end(), 0u);
     detail::WriteToBuffer(*src_tensor.mesh_buffer().get_reference_buffer(), input_a);
 
-    ProgramRunParams params1;
-    params1.kernel_run_params = {
-        {.kernel_spec_name = "producer", .named_runtime_args = {dm_rtas}},
-        {.kernel_spec_name = "consumer", .named_runtime_args = {dm_rtas}},
+    ProgramRunArgs params1;
+    params1.kernel_run_args = {
+        {.kernel_spec_name = "producer", .runtime_arg_values = {dm_rtas}},
+        {.kernel_spec_name = "consumer", .runtime_arg_values = {dm_rtas}},
     };
     params1.tensor_args = {
         {.tensor_parameter_name = "src_tensor",      .tensor = std::cref(src_tensor)},
         {.tensor_parameter_name = "dst_tensor",      .tensor = std::cref(dst_tensor)},
         {.tensor_parameter_name = "dfb_ring_tensor", .tensor = std::cref(ring_tensor_a)},
     };
-    SetProgramRunParameters(program, params1);
+    SetProgramRunArgs(program, params1);
     detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
 
     EXPECT_EQ(
@@ -383,7 +383,7 @@ void run_update_address_test(
     std::iota(input_b.begin(), input_b.end(), total_words);  // distinct from run 1
     detail::WriteToBuffer(*src_tensor.mesh_buffer().get_reference_buffer(), input_b);
 
-    UpdateTensorArgs(program, std::vector<ProgramRunParams::TensorArg>{
+    UpdateTensorArgs(program, std::vector<ProgramRunArgs::TensorArgument>{
         {.tensor_parameter_name = "src_tensor",      .tensor = std::cref(src_tensor)},
         {.tensor_parameter_name = "dst_tensor",      .tensor = std::cref(dst_tensor)},
         {.tensor_parameter_name = "dfb_ring_tensor", .tensor = std::cref(ring_tensor_b)},

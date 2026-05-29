@@ -199,7 +199,7 @@ void RunTestOnCore(
         // TENSIX kernel is launched via Metal 2.0 on both gen1 (WH/BH) and gen2 (Quasar).
         // On Quasar, user DMs (DM2..DM7) run the kernel; multi_dm_race syncs them to race, else only dm_id executes.
         // On WH/BH, BRISC or NCRISC (selected by use_ncrisc) runs the kernel.
-        experimental::metal2_host_api::KernelSpec::CompileTimeArgBindings cta_bindings;
+        experimental::metal2_host_api::KernelSpec::CompileTimeArgs cta_bindings;
         experimental::metal2_host_api::KernelSpec::CompilerOptions::Defines defines;
         if (is_quasar && multi_dm_race) {
             constexpr uint32_t num_dms = 6;
@@ -245,9 +245,9 @@ void RunTestOnCore(
             .source = kernel_metal2,
             .num_threads = num_threads,
             .compiler_options = {.defines = defines},
-            .compile_time_arg_bindings = cta_bindings,
-            .runtime_arguments_schema =
-                {.named_runtime_args =
+            .compile_time_args = cta_bindings,
+            .runtime_arg_schema =
+                {.runtime_arg_names =
                      {"local_buffer_addr",
                       "buffer_src_addr",
                       "src_noc_x",
@@ -382,10 +382,10 @@ void RunTestOnCore(
         // ETH cores still go through the legacy API.
         tt_metal::SetRuntimeArgs(program, dram_copy_kernel, core, rta_values);
     } else {
-        experimental::metal2_host_api::ProgramRunParams params;
-        params.kernel_run_params = {{
+        experimental::metal2_host_api::ProgramRunArgs params;
+        params.kernel_run_args = {{
             .kernel_spec_name = DRAM_COPY_KERNEL_NAME,
-            .named_runtime_args =
+            .runtime_arg_values =
                 {{.node = experimental::metal2_host_api::NodeCoord{core},
                   .args =
                       {{"local_buffer_addr", buffer_addr},
@@ -405,7 +405,7 @@ void RunTestOnCore(
                        {"mcast_dst_end_x", mcast_dst_end_x},
                        {"mcast_dst_end_y", mcast_dst_end_y}}}},
         }};
-        experimental::metal2_host_api::SetProgramRunParameters(program, params);
+        experimental::metal2_host_api::SetProgramRunArgs(program, params);
     }
     workload.add_program(device_range, std::move(program));
 

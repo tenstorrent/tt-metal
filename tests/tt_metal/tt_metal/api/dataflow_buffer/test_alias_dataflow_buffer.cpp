@@ -23,7 +23,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_params.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 #include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
@@ -160,14 +160,14 @@ AliasDFBProgramComponents make_alias_dfb_program_spec(
                 {.tensor_parameter_name = "in_tensor_a", .accessor_name = "src_a"},
                 {.tensor_parameter_name = "in_tensor_b", .accessor_name = "src_b"},
             },
-        .compile_time_arg_bindings =
+        .compile_time_args =
             {
                 {"num_entries_per_producer_a", epp_a},
                 {"num_entries_per_producer_b", epp_b},
                 {"num_producers", static_cast<uint32_t>(num_producers)},
             },
-        .runtime_arguments_schema =
-            {.named_runtime_args = {"chunk_offset_a", "chunk_offset_b", "entries_per_core_a", "entries_per_core_b"}},
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"chunk_offset_a", "chunk_offset_b", "entries_per_core_a", "entries_per_core_b"}},
         .config_spec = producer_cfg,
     };
 
@@ -191,14 +191,14 @@ AliasDFBProgramComponents make_alias_dfb_program_spec(
                 {.tensor_parameter_name = "out_tensor_a", .accessor_name = "dst_a"},
                 {.tensor_parameter_name = "out_tensor_b", .accessor_name = "dst_b"},
             },
-        .compile_time_arg_bindings =
+        .compile_time_args =
             {
                 {"num_entries_per_consumer_a", epc_a},
                 {"num_entries_per_consumer_b", epc_b},
                 {"num_consumers", static_cast<uint32_t>(num_consumers)},
             },
-        .runtime_arguments_schema =
-            {.named_runtime_args = {"chunk_offset_a", "chunk_offset_b", "entries_per_core_a", "entries_per_core_b"}},
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"chunk_offset_a", "chunk_offset_b", "entries_per_core_a", "entries_per_core_b"}},
         .config_spec = consumer_cfg,
     };
 
@@ -240,9 +240,9 @@ void run_alias_dfb_program(
 
     Program program = MakeProgramFromSpec(*mesh_device, spec);
 
-    using NodeNamedRTAs = ProgramRunParams::KernelRunParams::NodeNamedRTAs;
+    using NodeRuntimeArgs = ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs;
     auto rtas = [&](uint32_t epc_a, uint32_t epc_b) {
-        return std::vector<NodeNamedRTAs>{NodeNamedRTAs{
+        return std::vector<NodeRuntimeArgs>{NodeRuntimeArgs{
             node,
             {{"chunk_offset_a",     0u},
              {"chunk_offset_b",     0u},
@@ -250,14 +250,14 @@ void run_alias_dfb_program(
              {"entries_per_core_b", epc_b}}}};
     };
 
-    ProgramRunParams run_params;
-    run_params.kernel_run_params = {
-        ProgramRunParams::KernelRunParams{
+    ProgramRunArgs run_params;
+    run_params.kernel_run_args = {
+        ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = "producer",
-            .named_runtime_args = rtas(num_entries_a, num_entries_b)},
-        ProgramRunParams::KernelRunParams{
+            .runtime_arg_values = rtas(num_entries_a, num_entries_b)},
+        ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = "consumer",
-            .named_runtime_args = rtas(num_entries_a, num_entries_b)},
+            .runtime_arg_values = rtas(num_entries_a, num_entries_b)},
     };
     run_params.tensor_args = {
         {.tensor_parameter_name = "in_tensor_a",  .tensor = std::cref(in_a)},
@@ -265,7 +265,7 @@ void run_alias_dfb_program(
         {.tensor_parameter_name = "out_tensor_a", .tensor = std::cref(out_a)},
         {.tensor_parameter_name = "out_tensor_b", .tensor = std::cref(out_b)},
     };
-    SetProgramRunParameters(program, run_params);
+    SetProgramRunArgs(program, run_params);
 
     // Generate random inputs.
     const uint32_t words_a = num_entries_a * entry_size_a / sizeof(uint32_t);
@@ -379,14 +379,14 @@ AliasBorrowedDFBComponents make_alias_borrowed_dfb_program_spec(
                 // kernel doesn't access it directly (required by TensorParameter rules).
                 {.tensor_parameter_name = "ring_tensor", .accessor_name = "ring"},
             },
-        .compile_time_arg_bindings =
+        .compile_time_args =
             {
                 {"num_entries_per_producer_a", epp},
                 {"num_entries_per_producer_b", epp},
                 {"num_producers", 1u},
             },
-        .runtime_arguments_schema =
-            {.named_runtime_args = {"chunk_offset_a", "chunk_offset_b", "entries_per_core_a", "entries_per_core_b"}},
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"chunk_offset_a", "chunk_offset_b", "entries_per_core_a", "entries_per_core_b"}},
         .config_spec = producer_cfg,
     };
 
@@ -410,14 +410,14 @@ AliasBorrowedDFBComponents make_alias_borrowed_dfb_program_spec(
                 {.tensor_parameter_name = "out_tensor_a", .accessor_name = "dst_a"},
                 {.tensor_parameter_name = "out_tensor_b", .accessor_name = "dst_b"},
             },
-        .compile_time_arg_bindings =
+        .compile_time_args =
             {
                 {"num_entries_per_consumer_a", epc},
                 {"num_entries_per_consumer_b", epc},
                 {"num_consumers", 1u},
             },
-        .runtime_arguments_schema =
-            {.named_runtime_args = {"chunk_offset_a", "chunk_offset_b", "entries_per_core_a", "entries_per_core_b"}},
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"chunk_offset_a", "chunk_offset_b", "entries_per_core_a", "entries_per_core_b"}},
         .config_spec = consumer_cfg,
     };
 
@@ -575,19 +575,19 @@ TEST_F(MeshDeviceFixture, AliasDFBBorrowedMemoryAddressEquality) {
     program.impl().finalize_dataflow_buffer_configs();
     program.impl().allocate_dataflow_buffers(device);
 
-    using NodeNamedRTAs = ProgramRunParams::KernelRunParams::NodeNamedRTAs;
+    using NodeRuntimeArgs = ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs;
     auto rtas = [&]() {
-        return std::vector<NodeNamedRTAs>{NodeNamedRTAs{
+        return std::vector<NodeRuntimeArgs>{NodeRuntimeArgs{
             node,
             {{"chunk_offset_a",     0u},
              {"chunk_offset_b",     0u},
              {"entries_per_core_a", kNumEntries},
              {"entries_per_core_b", kNumEntries}}}};
     };
-    ProgramRunParams run_params;
-    run_params.kernel_run_params = {
-        ProgramRunParams::KernelRunParams{.kernel_spec_name = "producer", .named_runtime_args = rtas()},
-        ProgramRunParams::KernelRunParams{.kernel_spec_name = "consumer", .named_runtime_args = rtas()},
+    ProgramRunArgs run_params;
+    run_params.kernel_run_args = {
+        ProgramRunArgs::KernelRunArgs{.kernel_spec_name = "producer", .runtime_arg_values = rtas()},
+        ProgramRunArgs::KernelRunArgs{.kernel_spec_name = "consumer", .runtime_arg_values = rtas()},
     };
     run_params.tensor_args = {
         {.tensor_parameter_name = "in_tensor_a",  .tensor = std::cref(in_a)},
@@ -596,7 +596,7 @@ TEST_F(MeshDeviceFixture, AliasDFBBorrowedMemoryAddressEquality) {
         {.tensor_parameter_name = "out_tensor_b", .tensor = std::cref(out_b)},
         {.tensor_parameter_name = "ring_tensor",  .tensor = std::cref(ring)},
     };
-    SetProgramRunParameters(program, run_params);
+    SetProgramRunArgs(program, run_params);
 
     const uint32_t id_borrowed = program.impl().get_dfb_handle("dfb_borrowed");
     const uint32_t id_alias    = program.impl().get_dfb_handle("dfb_alias");
@@ -627,19 +627,19 @@ TEST_F(MeshDeviceFixture, AliasDFBBorrowedMemoryDataFlow1Sx1S) {
 
     Program program = MakeProgramFromSpec(*devices_.at(0), spec);
 
-    using NodeNamedRTAs = ProgramRunParams::KernelRunParams::NodeNamedRTAs;
+    using NodeRuntimeArgs = ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs;
     auto rtas = [&]() {
-        return std::vector<NodeNamedRTAs>{NodeNamedRTAs{
+        return std::vector<NodeRuntimeArgs>{NodeRuntimeArgs{
             node,
             {{"chunk_offset_a",     0u},
              {"chunk_offset_b",     0u},
              {"entries_per_core_a", kNumEntries},
              {"entries_per_core_b", kNumEntries}}}};
     };
-    ProgramRunParams run_params;
-    run_params.kernel_run_params = {
-        ProgramRunParams::KernelRunParams{.kernel_spec_name = "producer", .named_runtime_args = rtas()},
-        ProgramRunParams::KernelRunParams{.kernel_spec_name = "consumer", .named_runtime_args = rtas()},
+    ProgramRunArgs run_params;
+    run_params.kernel_run_args = {
+        ProgramRunArgs::KernelRunArgs{.kernel_spec_name = "producer", .runtime_arg_values = rtas()},
+        ProgramRunArgs::KernelRunArgs{.kernel_spec_name = "consumer", .runtime_arg_values = rtas()},
     };
     run_params.tensor_args = {
         {.tensor_parameter_name = "in_tensor_a",  .tensor = std::cref(in_a)},
@@ -648,7 +648,7 @@ TEST_F(MeshDeviceFixture, AliasDFBBorrowedMemoryDataFlow1Sx1S) {
         {.tensor_parameter_name = "out_tensor_b", .tensor = std::cref(out_b)},
         {.tensor_parameter_name = "ring_tensor",  .tensor = std::cref(ring)},
     };
-    SetProgramRunParameters(program, run_params);
+    SetProgramRunArgs(program, run_params);
 
     const uint32_t words = kNumEntries * kEntrySize / sizeof(uint32_t);
     auto input_a = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, words);

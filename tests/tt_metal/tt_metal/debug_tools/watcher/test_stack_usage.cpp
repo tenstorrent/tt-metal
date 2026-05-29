@@ -88,7 +88,7 @@ void RunOneTest(
                 .unique_id = name,
                 .source = path_metal2,
                 .num_threads = dms_per_kernel,
-                .compile_time_arg_bindings = {{"usage", free}},
+                .compile_time_args = {{"usage", free}},
                 .config_spec =
                     experimental::metal2_host_api::DataMovementConfiguration{
                         .gen2_data_movement_config =
@@ -103,7 +103,7 @@ void RunOneTest(
             // One thread per Neo (Quasar Tensix has 4) so the compute kernel fans out across
             // all Neos; each Neo internally runs the kernel on its 4 TRISCs.
             .num_threads = 4,
-            .compile_time_arg_bindings = {{"usage", free}},
+            .compile_time_args = {{"usage", free}},
             .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
         });
         kernel_names.push_back(COMPUTE_NAME);
@@ -119,7 +119,7 @@ void RunOneTest(
                 .unique_id = name,
                 .source = path_metal2,
                 .num_threads = 1,
-                .compile_time_arg_bindings = {{"usage", free}},
+                .compile_time_args = {{"usage", free}},
                 .config_spec =
                     experimental::metal2_host_api::DataMovementConfiguration{
                         .gen1_data_movement_config =
@@ -133,7 +133,7 @@ void RunOneTest(
             .unique_id = COMPUTE_NAME,
             .source = path_metal2,
             .num_threads = 1,
-            .compile_time_arg_bindings = {{"usage", free}},
+            .compile_time_args = {{"usage", free}},
             .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
         });
         kernel_names.push_back(COMPUTE_NAME);

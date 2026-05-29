@@ -58,7 +58,7 @@ struct DataflowBufferSpec {
     // Backing memory
     uint32_t entry_size = 0;  // in bytes
     uint32_t num_entries = 0;
-    // Note: It is possible to override these per-Program execution (via ProgramRunParams).
+    // Note: It is possible to override these per-Program execution (via ProgramRunArgs).
 
     ////////////////////////////////////
     // Entry format metadata
@@ -82,7 +82,7 @@ struct DataflowBufferSpec {
     //
     // The user-managed device memory object is declared at ProgramSpec scope and bound here.
     // (Currently, only TensorParameter is supported.) The actual memory address is supplied
-    // at runtime via ProgramRunParams.
+    // at runtime via ProgramRunArgs.
     //
     // The bound memory object must have L1-based storage and be large enough to hold the DFB's
     // total size (entry_size * num_entries).

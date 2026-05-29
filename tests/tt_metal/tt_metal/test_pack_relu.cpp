@@ -91,8 +91,8 @@ static void run_pack_relu_test(
             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
-        .runtime_arguments_schema =
-            {.named_runtime_args = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
@@ -111,8 +111,8 @@ static void run_pack_relu_test(
             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
-        .runtime_arguments_schema =
-            {.named_runtime_args = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
@@ -139,8 +139,8 @@ static void run_pack_relu_test(
                  .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
-        .compile_time_arg_bindings = {{"per_core_tile_cnt", num_tiles}},
-        .runtime_arguments_schema = {.named_runtime_args = {"relu_config"}},
+        .compile_time_args = {{"per_core_tile_cnt", num_tiles}},
+        .runtime_arg_schema = {.runtime_arg_names = {"relu_config"}},
         .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
     };
 
@@ -166,11 +166,11 @@ static void run_pack_relu_test(
     const uint32_t src_aligned_page_size = static_cast<uint32_t>(src_dram_buffer->aligned_page_size());
     const uint32_t dst_aligned_page_size = static_cast<uint32_t>(dst_dram_buffer->aligned_page_size());
 
-    experimental::metal2_host_api::ProgramRunParams params;
-    params.kernel_run_params = {
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+    experimental::metal2_host_api::ProgramRunArgs params;
+    params.kernel_run_args = {
+        experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = READER,
-            .named_runtime_args =
+            .runtime_arg_values =
                 {{.node = node,
                   .args =
                       {{"src_addr", dram_buffer_src_addr},
@@ -178,9 +178,9 @@ static void run_pack_relu_test(
                        {"num_tiles", num_tiles},
                        {"dram_page_stride", src_aligned_page_size}}}},
         },
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+        experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = WRITER,
-            .named_runtime_args =
+            .runtime_arg_values =
                 {{.node = node,
                   .args =
                       {{"dst_addr", dram_buffer_dst_addr},
@@ -188,12 +188,12 @@ static void run_pack_relu_test(
                        {"num_tiles", num_tiles},
                        {"dram_page_stride", dst_aligned_page_size}}}},
         },
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+        experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = COMPUTE,
-            .named_runtime_args = {{.node = node, .args = {{"relu_config", relu_config}}}},
+            .runtime_arg_values = {{.node = node, .args = {{"relu_config", relu_config}}}},
         },
     };
-    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+    experimental::metal2_host_api::SetProgramRunArgs(program, params);
 
     detail::LaunchProgram(dev, program, true);
 

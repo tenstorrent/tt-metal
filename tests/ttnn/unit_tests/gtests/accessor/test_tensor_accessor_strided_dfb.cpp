@@ -24,7 +24,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_params.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
 #include "tests/tt_metal/tt_metal/common/device_fixture.hpp"
 #include "tests/tt_metal/tt_metal/api/metal2_host_api/test_helpers.hpp"
@@ -57,7 +57,7 @@ constexpr const char* kWriterKernelPath =
 // Returns the comma-separated CTA value string for the KERNEL_COMPILE_TIME_ARGS define.
 // This enables device kernels that use TensorAccessorArgs<0, 0>() (positional CTA access)
 // to compile correctly under the Metal 2.0 API, which does not pass positional CTAs through
-// compile_time_arg_bindings.
+// compile_time_args.
 std::string build_cta_define(const TensorAccessorArgs& accessor_args) {
     const auto ctas = accessor_args.get_compile_time_args();
     std::ostringstream ss;
@@ -180,24 +180,24 @@ void run_strided_dfb_copy_test(
     // -----------------------------------------------------------------------
     Program program = MakeProgramFromSpec(*mesh_device, spec);
 
-    ProgramRunParams run_params;
-    run_params.kernel_run_params = {
-        ProgramRunParams::KernelRunParams{
+    ProgramRunArgs run_params;
+    run_params.kernel_run_args = {
+        ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = "reader",
             .advanced_options =
-                AdvancedKernelRunParams{
+                AdvancedKernelRunArgs{
                     .runtime_varargs = {{node, {input_buffer->address(), total_pages}}},
                 },
         },
-        ProgramRunParams::KernelRunParams{
+        ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = "writer",
             .advanced_options =
-                AdvancedKernelRunParams{
+                AdvancedKernelRunArgs{
                     .runtime_varargs = {{node, {output_buffer->address(), total_pages}}},
                 },
         },
     };
-    SetProgramRunParameters(program, run_params);
+    SetProgramRunArgs(program, run_params);
 
     // -----------------------------------------------------------------------
     // Dispatch and verify
