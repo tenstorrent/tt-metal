@@ -304,7 +304,7 @@ def test_matmul_reuse_config_sharded_fd_column(
 @pytest.mark.parametrize("m", [256])
 @pytest.mark.parametrize("k", [256])
 @pytest.mark.parametrize("n", [256])
-@pytest.mark.parametrize("tile_h", [16, 32])
+@pytest.mark.parametrize("tile_h", [4, 8, 16, 32])
 @pytest.mark.parametrize("tile_w", [16, 32])
 @pytest.mark.parametrize("in0_sharded", [True, False])
 @pytest.mark.parametrize("in1_sharded", [True, False])

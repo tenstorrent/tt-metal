@@ -4,7 +4,6 @@
 
 #include <stdint.h>
 #include "internal/risc_attribs.h"
-#include "api/core_local_mem.h"
 #include "api/debug/dprint.h"
 // TODO FIXME: this build system is ridiculously stupid
 #ifdef COMPILE_FOR_TRISC
@@ -14,26 +13,18 @@
 #endif
 
 void kernel_main() {
-    CoreLocalMem<uint32_t> results(RESULTS_ADDR);
+    volatile uint32_t tt_l1_ptr* results = (volatile uint32_t tt_l1_ptr*)RESULTS_ADDR;
     constexpr uint32_t kCommonRTASeparation = 1024;
-    uint64_t hartid = 0;
-#ifdef COMPILE_FOR_DM
-    // Quasar DM only: Get DM processor ID
-    // TODO: Replace with get_thread_idx() kernel API when available
-    asm volatile("csrr %0, mhartid" : "=r"(hartid));
-    // Quasar DM only: write the actual L1 base addresses at the end of CRTA payload from all DMs
-    results[kCommonRTASeparation + MAX_DMS * NUM_RUNTIME_ARGS + hartid] = static_cast<uint32_t>(get_common_arg_addr(0));
-#endif
     for (uint32_t i = 0; i < NUM_RUNTIME_ARGS; i++) {
 #ifdef COMMON_RUNTIME_ARGS
-        results[i + kCommonRTASeparation + hartid * NUM_RUNTIME_ARGS] = get_common_arg_val<uint32_t>(i);
+        results[i + kCommonRTASeparation] = get_common_arg_val<uint32_t>(i);
 #endif
         results[i] = get_arg_val<uint32_t>(i);
     }
 
 #ifdef COORDS_ADDR
 #ifdef DATA_MOVEMENT
-    CoreLocalMem<uint32_t> coords(COORDS_ADDR);
+    volatile uint32_t tt_l1_ptr* coords = (volatile uint32_t tt_l1_ptr*)COORDS_ADDR;
     coords[0] = my_x[noc_index];
     coords[1] = my_y[noc_index];
     coords[2] = get_absolute_logical_x();

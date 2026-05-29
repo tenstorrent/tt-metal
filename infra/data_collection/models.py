@@ -14,6 +14,8 @@ class InfraErrorV1(enum.Enum):
     JOB_HANG = enum.auto()
     TT_TRIAGE_JOB_HANG = enum.auto()
     DOCKER_REGISTRY_FAILURE = enum.auto()
+    ARTIFACT_UPLOAD_FAILURE = enum.auto()
+    CHECKOUT_FAILURE = enum.auto()
 
 
 class TestErrorV1(enum.Enum):

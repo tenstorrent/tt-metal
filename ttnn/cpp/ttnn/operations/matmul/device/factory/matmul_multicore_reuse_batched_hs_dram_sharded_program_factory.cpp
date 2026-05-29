@@ -493,6 +493,10 @@ static ProgramDescriptor create_program_batch_sharded_descriptor(
             {"cb_in1_intermediate", tt::CBIndex::c_9},
             {"cb_in0_transposed", tt::CBIndex::c_10},
             {"bias_ntiles", per_core_N},
+            // This factory does not pad per_core_N_compute beyond per_core_N_in1_sender, so the
+            // last subblock is always fully valid. Pass out_subblock_w so the compute kernel takes
+            // its original full-width path (last_subblock_padded == false).
+            {"last_subblock_w_valid", out_subblock_w},
         };
         if (fused_activation.has_value() && fused_activation.value().op_type != UnaryOpType::RELU) {
             using ttnn::operations::matmul::utilities::get_activation_params;

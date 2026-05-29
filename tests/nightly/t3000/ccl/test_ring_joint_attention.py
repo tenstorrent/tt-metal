@@ -187,9 +187,9 @@ def test_ring_joint_sdpa(
 @pytest.mark.parametrize(
     "dtype, pcc_threshold",
     [
-        (ttnn.bfloat16, 0.994),
-        (ttnn.bfloat8_b, 0.944),
-        (ttnn.bfloat4_b, 0.8),
+        pytest.param(ttnn.bfloat16, 0.994, marks=pytest.mark.skip(reason="Disabled by issue #45107")),
+        pytest.param(ttnn.bfloat8_b, 0.944, marks=pytest.mark.skip(reason="Disabled by issue #45107")),
+        pytest.param(ttnn.bfloat4_b, 0.8, marks=pytest.mark.skip(reason="Disabled by issue #45107")),
     ],
     ids=["bf16", "bf8_b", "bf4_b"],
 )

@@ -159,7 +159,7 @@ DispatchMemMap::DispatchMemMap(
 
     TT_FATAL(
         dispatch_s_buffer_end_ + dispatch_s_device_print_l1_cache_size_ <= l1_size,
-        "DEVICE_PRINT dispatch L1 region (l1_cache {} bytes after dispatch_s end {}) exceeds L1 size {}.",
+        "DPRINT dispatch L1 region (l1_cache {} bytes after dispatch_s end {}) exceeds L1 size {}.",
         dispatch_s_device_print_l1_cache_size_,
         dispatch_s_buffer_end_,
         l1_size);

@@ -373,6 +373,146 @@ def test_paged_update_cache_shared_buffer_both_views_disjoint_blocks(device):
     assert eq, f"shared-buffer interleaved writes diverged: {msg}"
 
 
+def test_paged_update_cache_asymmetric_num_heads_per_block_match(device):
+    """Cache allocated with one ``num_kv_heads``, decode updates with a different
+    ``num_kv_heads`` — the canonical Gemma4-26B-A4B / 31B HMA cross-group case on
+    the decode path. Buffer holds sliding's spec (kv=8, bs=64, hd=256), the call
+    writes via full's view (kv=2, bs=128, hd=512) using both the
+    ``block_size`` and ``num_kv_heads`` kwargs. Round-trips through
+    ``_permute_view_general`` to verify writes land where the full view will
+    later read them. Guards the relaxation in the validator and the program
+    factory: per-block element-count equality is the real invariant, not strict
+    ``num_heads`` equality.
+    """
+    torch.manual_seed(6)
+    num_users = 2
+    # Sliding spec (alloc): kv=8, bs=64, hd=256 → 131072 elems/block.
+    cache_kv = 8
+    alloc_block_size = 64
+    alloc_head_dim = 256
+    # Full spec (call view): kv=2, bs=128, hd=512 → also 131072 elems/block.
+    view_kv = 2
+    view_block_size = 128
+    view_head_dim = 512
+    assert cache_kv * alloc_block_size * alloc_head_dim == view_kv * view_block_size * view_head_dim
+
+    max_seq_len_view = 256
+    max_num_blocks_per_seq = max_seq_len_view // view_block_size
+    max_num_blocks = num_users * max_num_blocks_per_seq
+
+    cache_tt, cache_ref_alloc = _make_paged_cache(max_num_blocks, cache_kv, alloc_block_size, alloc_head_dim, device)
+
+    page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(num_users, max_num_blocks_per_seq)
+    page_table_tt = ttnn.Tensor(page_table, ttnn.int32).to(device)
+
+    # cache_idxs are in view coordinates (seq-len under full's block_size).
+    cache_idxs = [10 + u * 17 for u in range(num_users)]
+    cache_idxs_tt = ttnn.Tensor(torch.tensor(cache_idxs), ttnn.int32).to(device)
+
+    # Input under full's view: (1, B, view_kv, view_hd). Pad kv axis to 32 for the
+    # shard's tile alignment; the kernel reads view_kv rows per shard (via the
+    # num_kv_heads override), the rest are padding.
+    x = torch.randn([1, num_users, view_kv, view_head_dim]).bfloat16().float()
+    x_padded = torch.nn.functional.pad(x, (0, 0, 0, 32 - view_kv), "constant", 0)
+    xt = _sharded_input(device, x_padded)
+
+    ttnn.experimental.paged_update_cache(
+        cache_tt,
+        xt,
+        update_idxs_tensor=cache_idxs_tt,
+        page_table=page_table_tt,
+        block_size=view_block_size,
+        num_kv_heads=view_kv,
+    )
+
+    got_alloc = _read_paged_cache(cache_tt)
+    assert got_alloc.shape == (max_num_blocks, cache_kv, alloc_block_size, alloc_head_dim)
+    got_view = _permute_view_general(got_alloc, view_kv, view_block_size, view_head_dim)
+
+    cache_ref_view = _permute_view_general(cache_ref_alloc, view_kv, view_block_size, view_head_dim).clone()
+    for u in range(num_users):
+        pos = cache_idxs[u]
+        physical_block = page_table[u, pos // view_block_size].item()
+        cache_ref_view[physical_block, 0:view_kv, pos % view_block_size : pos % view_block_size + 1, :] = x[
+            0, u
+        ].unsqueeze(1)
+
+    eq, msg = comp_equal(cache_ref_view, got_view)
+    assert eq, f"asymmetric num_heads update_cache round trip mismatch: {msg}"
+
+
+def test_paged_update_cache_negative_asymmetric_num_heads_byte_count_mismatch(device):
+    """Different ``num_kv_heads`` between cache and ``num_kv_heads`` kwarg *without*
+    the per-block element count being preserved must still be rejected. Guards
+    against the relaxation accidentally allowing arbitrary mismatched-byte
+    writes on the decode path.
+    """
+    torch.manual_seed(7)
+    num_users = 2
+    # Cache: 8 * 64 * 256 = 131072 elems/block.
+    cache_kv = 8
+    alloc_block_size = 64
+    alloc_head_dim = 256
+    # Override view: 4 * 128 * 512 = 262144 elems/block — twice the cache, mismatched.
+    view_kv = 4
+    view_block_size = 128
+    view_head_dim = 512
+    assert cache_kv * alloc_block_size * alloc_head_dim != view_kv * view_block_size * view_head_dim
+
+    max_num_blocks = num_users
+
+    cache_tt, _ = _make_paged_cache(max_num_blocks, cache_kv, alloc_block_size, alloc_head_dim, device)
+
+    page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(num_users, 1)
+    page_table_tt = ttnn.Tensor(page_table, ttnn.int32).to(device)
+
+    cache_idxs_tt = ttnn.Tensor(torch.zeros(num_users, dtype=torch.int32), ttnn.int32).to(device)
+
+    x = torch.randn([1, num_users, view_kv, view_head_dim]).bfloat16().float()
+    x_padded = torch.nn.functional.pad(x, (0, 0, 0, 32 - view_kv), "constant", 0)
+    xt = _sharded_input(device, x_padded)
+
+    with pytest.raises(RuntimeError, match="geometry mismatch"):
+        ttnn.experimental.paged_update_cache(
+            cache_tt,
+            xt,
+            update_idxs_tensor=cache_idxs_tt,
+            page_table=page_table_tt,
+            block_size=view_block_size,
+            num_kv_heads=view_kv,
+        )
+
+
+def test_paged_update_cache_negative_num_kv_heads_override_without_page_table(device):
+    """``num_kv_heads`` override is paged-mode only; validator must reject it
+    without a page_table (analogous to the ``block_size`` gate)."""
+    torch.manual_seed(8)
+    num_users = 4
+    num_kv_heads = 1
+    max_seq_len = 256
+    head_dim = 256
+
+    cache_shape = [num_users, num_kv_heads, max_seq_len, head_dim]
+    cache_torch = torch.randn(cache_shape).bfloat16().float()
+    cache_tt = ttnn.Tensor(cache_torch, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+
+    cache_idxs = [0 + i for i in range(num_users)]
+    cache_idxs_tt = ttnn.Tensor(torch.tensor(cache_idxs), ttnn.int32).to(device)
+
+    x = torch.randn([1, num_users, num_kv_heads, head_dim]).bfloat16().float()
+    x_padded = torch.nn.functional.pad(x, (0, 0, 0, 32 - num_kv_heads), "constant", 0)
+    xt = _sharded_input(device, x_padded)
+
+    with pytest.raises(RuntimeError, match="num_kv_heads_override is only supported in paged mode"):
+        ttnn.experimental.paged_update_cache(
+            cache_tt,
+            xt,
+            update_idxs_tensor=cache_idxs_tt,
+            # No page_table.
+            num_kv_heads=num_kv_heads,
+        )
+
+
 def test_paged_update_cache_negative_byte_count_mismatch(device):
     """Override that breaks the per-block byte invariant must be rejected at validation."""
     torch.manual_seed(4)
@@ -431,6 +571,61 @@ def test_paged_update_cache_negative_override_without_page_table(device):
             update_idxs_tensor=cache_idxs_tt,
             # No page_table.
             block_size=64,
+        )
+
+
+def _sharded_input_with_num_cores(device, x_padded, num_cores):
+    """Like ``_sharded_input`` but builds a height-sharded tensor whose grid has
+    ``num_cores`` cores instead of ``num_users``. Used to force the bad case the
+    program factory can't handle (issue #44923)."""
+    xt = ttnn.Tensor(x_padded, ttnn.bfloat16).to(ttnn.TILE_LAYOUT)
+    total_height = xt.volume() // xt.padded_shape[-1]
+    assert (
+        total_height % num_cores == 0
+    ), f"unsharded test setup: total height {total_height} not divisible by num_cores {num_cores}"
+    compute_grid_size = device.compute_with_storage_grid_size()
+    shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, True)
+    input_shard_spec = ttnn.ShardSpec(
+        shard_grid,
+        [total_height // num_cores, xt.padded_shape[-1]],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec)
+    return xt.to(device, input_mem_config)
+
+
+@pytest.mark.parametrize(
+    "num_users, bad_num_cores",
+    [
+        # Fewer cores than users (two users per core) — the kernel would treat the second user's
+        # data as the first user's overflow, corrupting the cache.
+        (4, 2),
+    ],
+)
+def test_paged_update_cache_negative_input_shard_grid_num_cores_mismatch(num_users, bad_num_cores, device):
+    """Validator must reject input shard grids whose num_cores != num_users; the program
+    factory iterates one user per core and silently miscomputes otherwise (issue #44923)."""
+    torch.manual_seed(9)
+    num_kv_heads = 1
+    max_seq_len = 256
+    head_dim = 256
+
+    cache_shape = [num_users, num_kv_heads, max_seq_len, head_dim]
+    cache_torch = torch.randn(cache_shape).bfloat16().float()
+    cache_tt = ttnn.Tensor(cache_torch, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+
+    cache_idxs = [i for i in range(num_users)]
+    cache_idxs_tt = ttnn.Tensor(torch.tensor(cache_idxs), ttnn.int32).to(device)
+
+    x = torch.randn([1, num_users, num_kv_heads, head_dim]).bfloat16().float()
+    x_padded = torch.nn.functional.pad(x, (0, 0, 0, 32 - num_kv_heads), "constant", 0)
+    xt = _sharded_input_with_num_cores(device, x_padded, bad_num_cores)
+
+    with pytest.raises(RuntimeError, match="num_cores"):
+        ttnn.experimental.paged_update_cache(
+            cache_tt,
+            xt,
+            update_idxs_tensor=cache_idxs_tt,
         )
 
 

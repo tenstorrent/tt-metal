@@ -81,7 +81,21 @@ class MoeSem:
     REDUCE_SYNC = 16
     REDUCE_AGG_SYNC = 17
     REDUCE_PERSISTENT_FABRIC_SIGNAL = 18
-    NUM_SEMAPHORES = 19
+    # Dedicated semaphores for SRAM gate/up gather. Cannot reuse AG_GATHER/
+    # BG_GATHER even though SRAM gather runs sequentially with shared gather:
+    # without atomic barriers between rounds, BRISC of fast a_cores can inc
+    # the shared sem before NCRISC has reset it after the SRAM round (or
+    # vice versa), causing lost increments.
+    SRAM_AG_GATHER = 19
+    SRAM_BG_GATHER = 20
+    # Dedicated SRAM down mcast receiver sem (can't reuse DOWN_PROJ_MCAST_RECEIVER:
+    # both mcasts target overlapping receivers and run back-to-back, racey otherwise).
+    SRAM_DOWN_MCAST_RECEIVER = 21
+    # Per-core sync sem used by sync_riscs_enter/exit inside scan_n_sram_active
+    # (sender_scan + receiver_scan share it — sequential within an iter, sync
+    # primitives leave the sem at (0,0) after each call).
+    SCAN_SYNC = 22
+    NUM_SEMAPHORES = 23
 
 
 @dataclass
@@ -208,6 +222,7 @@ class _MoeRoutedExpertContext:
     mul_params: dict
     down_proj_gather_params: dict
     down_proj_mcast_params: dict
+    sram_down_mcast_params: dict
     down_proj_params: dict
     add_params: dict
 
@@ -256,6 +271,8 @@ class _MoeRoutedExpertContext:
     # Routing semaphore IDs
     expert_scale_mcast_sender_semaphore_addr: int = 0
     expert_scale_mcast_receiver_semaphore_addr: int = 0
+    # Per-core sync sem for scan_n_sram_active (sender_scan + receiver_scan).
+    scan_sync_sem_addr: int = 0
 
     # Routing setup result dicts
     gate_mm_params: dict = None
@@ -301,6 +318,78 @@ class _MoeRoutedExpertContext:
     bcast_pkt_cb: int = 0
     bcast_pkt_cb_descriptor: Any = None
     bcast_params: dict = None
+
+    # SRAM routed gate_proj (separate-pipeline plan; see SRAM_SEPARATE_PIPELINE.md)
+    # CB IDs always allocated so the kernel's setup_sharded_buffer + Op call have
+    # valid IDs even when no SRAM experts are placed (T=0). Activation is gated
+    # purely by sram_gate_proj_params being non-empty (= num_sram_experts>0).
+    sram_gate_proj_cb_in1: int = 0
+    sram_gate_proj_out_cb: int = 0
+    sram_gate_proj_params: dict = None
+    # CB descriptors built only when SRAM weights are provided.
+    # cb_in1 uses CompressedTensor.cb_descriptor_from_compressed_tensor() which
+    # returns a LIST of per-core descriptors (per_core_allocation=True). Stored
+    # per device since each mesh coord has its own L1 layout.
+    # cb_out_descriptor is built in _overlap_cbs_with_sdpa_buffer (kv_buf-overlaid).
+    sram_gate_proj_cb_in1_descriptors_per_device: Any = None  # dict[MeshCoordinate -> list of CBDescriptors]
+    sram_gate_proj_cb_out_descriptor: Any = None
+
+    # SRAM routed up_proj — mirror of sram_gate_proj_*; runs on shared up cores.
+    sram_up_proj_cb_in1: int = 0
+    sram_up_proj_out_cb: int = 0
+    sram_up_proj_params: dict = None
+    sram_up_proj_cb_in1_descriptors_per_device: Any = None
+    sram_up_proj_cb_out_descriptor: Any = None
+
+    # SRAM routed down_proj — runs on the 112 shared mcast receiver cores.
+    # accum_experts=True so the kernel sums across SRAM-flagged TopK winners.
+    # Reads from sram_down_mcast_dst_cb (compact n_sram_active layout).
+    sram_down_proj_cb_in1: int = 0
+    sram_down_proj_out_cb: int = 0
+    sram_down_proj_params: dict = None
+    sram_down_proj_cb_in1_descriptors_per_device: Any = None
+    sram_down_proj_cb_out_descriptor: Any = None
+
+    # Merged down output CB — receives either eltwise_add(sram_down, shared_down)
+    # when n_sram_active > 0, or a copy of shared_down_matmul_out when n_sram_active = 0.
+    # Replaces shared_down_matmul_out_cb as residual_add's in0.
+    merged_down_out_cb: int = 0
+    merged_down_out_cb_descriptor: Any = None
+
+    # SRAM routed gate/up gather (step 3 of separate-pipeline plan).
+    # Each of the 64 a_cores (gate) / b_cores (up) sends num_active_experts
+    # tiles to the sender core. Dst CB is on sender, sized 8 experts × 64 tiles
+    # = 512 tiles. Layout: expert-major × N-major × K-within-N, so GatedReduce
+    # can read tiles_per_k=8 contiguous K-partials per N-tile.
+    sram_group1_cb: int = 0
+    sram_group2_cb: int = 0
+    # gather dst CB descriptors (kv_buf-overlaid in _overlap_cbs_with_sdpa_buffer).
+    sram_group1_cb_descriptor: Any = None
+    sram_group2_cb_descriptor: Any = None
+    # SRAM extended GatedReduce CBs (sender_core only).
+    sram_intermed_cb: int = 0
+    sram_mcast_src_cb: int = 0
+    sram_gr_scalar_cb: int = 0
+    sram_down_mcast_dst_cb: int = 0
+    sram_intermed_cb_descriptor: Any = None
+    sram_mcast_src_cb_descriptor: Any = None
+    sram_gr_scalar_cb_descriptor: Any = None
+    sram_down_mcast_dst_cb_descriptor: Any = None
+    # Face-tile descriptor + size (= [16, 16] face) — shared by all SRAM
+    # gather-output and gated-reduce CBs so they all use face_view.
+    face_tile_desc: Any = None
+    face_tile_size: int = 0
+    sram_ag_receiver_data_addr: int = 0
+    sram_bg_receiver_data_addr: int = 0
+    sram_ag_sender_idx_core_values: list = None  # [(core, sender_idx), ...] for a_cores
+    sram_bg_sender_idx_core_values: list = None  # [(core, sender_idx), ...] for b_cores
+    sram_gather_data_size_bytes: int = 0  # per-tile bytes (1x32 bf16 = 64)
+    sram_gather_expert_dst_stride: int = 0  # 64 tiles × 64 bytes = 4096
+    sram_gather_total_tiles: int = 0  # 8 experts × 64 cores = 512
+    # Reuse AG_GATHER/BG_GATHER semaphores: SRAM gather runs sequentially
+    # before shared expert gather, each gather resets its sem to 0 at end.
+    sram_ag_receiver_semaphore_addr: int = 0
+    sram_bg_receiver_semaphore_addr: int = 0
 
 
 @dataclass
@@ -638,6 +727,143 @@ class MoeRoutedExpertOp:
         }
 
     @staticmethod
+    def setup_matmul_expert_sram(
+        mesh_device,
+        sram_cts_list,
+        core_grid,
+        num_tiles_k,
+        per_core_n,
+        Kt,
+        num_active_experts=8,
+        accum_experts=False,
+    ):
+        """Set up MatmulExpertCompressedSRAM infrastructure for one projection.
+
+        Mirrors ``_build_sram_fmt_data`` from the canonical
+        ``test_matmul_expert.py`` (per_core_allocation). The caller is
+        responsible for allocating ``sram_cts_list`` as L1-sharded
+        CompressedTensors on ``core_grid`` — see
+        ``_build_sram_cts_standard`` / ``_build_sram_cts_slice_k`` in the
+        canonical test for reference layouts.
+
+        Args:
+            mesh_device: TP8 mesh device.
+            sram_cts_list: list[CompressedTensor] of length T (hot experts).
+                Already L1-allocated on ``core_grid``.
+            core_grid: CoreRangeSet hosting the SRAM matmul (e.g. 64 shared
+                gate cores).
+            num_tiles_k: K tiles per core per expert (this core's K-slice
+                length when K-sliced; full K otherwise).
+            per_core_n: N tiles per core per expert.
+            Kt: total K tiles per expert (full K). When ``num_tiles_k < Kt``,
+                K-slicing is active and per-core ``sram_k_offset`` values are
+                computed.
+            num_active_experts: TopK count threaded into kernel CT args.
+            accum_experts: False for gate/up (per-expert outputs), True for
+                down (cross-expert accumulation).
+
+        Returns:
+            dict with kernel CT-arg-ready fields:
+              - ``num_sram_experts`` (= len(sram_cts_list))
+              - ``num_tiles_k``, ``out_w``, ``in0_page_size``,
+                ``meta_words_per_expert``, ``accum_experts``
+              - ``sram_fmt_tensors`` / ``sram_base_addr_tensors`` (kept-alive
+                tensor dicts: {coord: {core_idx: tensor}})
+              - ``sram_fmt_l1_addr_per_device`` /
+                ``sram_base_addrs_l1_addr_per_device`` (per-device per-core
+                L1 byte addresses, ready for upload_per_core_uint32_tensor)
+              - ``sram_k_offsets`` (per-core K-slice offset values, None when
+                no K-slicing)
+              - ``cb_in1_size_bytes`` (per-core SRAM weight region size)
+              - ``cb_data_format``, ``cb_page_size`` (bfp4_b)
+              - ``num_active_experts``
+              - ``_sram_cts_list`` (kept alive)
+        """
+        from models.demos.deepseek_v3_b1.micro_ops.matmul_expert.op import (
+            _meta_words_for_tiles,
+            create_expert_fmt_tensors,
+        )
+
+        num_sram_experts = len(sram_cts_list)
+        if num_sram_experts == 0:
+            return {
+                "num_sram_experts": 0,
+                "num_tiles_k": num_tiles_k,
+                "out_w": per_core_n,
+                "num_active_experts": num_active_experts,
+                "accum_experts": 1 if accum_experts else 0,
+            }
+
+        # Build fmt + base_addrs tables per device per core. Mirrors
+        # _build_sram_fmt_data in test_matmul_expert.py.
+        sram_fmt_tensors, sram_base_addr_tensors = create_expert_fmt_tensors(
+            sram_cts_list, mesh_device, core_grid, num_tiles_k, per_core_n
+        )
+
+        cores = ttnn.corerange_to_cores(core_grid)
+
+        # Per-core K-offset values for K-sliced layouts. None when full K per
+        # core (no K-slice). Layout matches HEIGHT_SHARDED K-slicing where
+        # consecutive cores own consecutive K-slices in row-major (K-major)
+        # order with n_parallel = total_cores * num_tiles_k / Kt.
+        sram_k_offsets = None
+        if num_tiles_k < Kt:
+            n_parallel = len(cores) * num_tiles_k // Kt
+            sram_k_offsets = [(cores[i], (i // n_parallel) * num_tiles_k) for i in range(len(cores))]
+        sram_fmt_l1_addr_per_device = {}
+        sram_base_addrs_l1_addr_per_device = {}
+        for coord in sram_fmt_tensors:
+            sram_fmt_l1_addr_per_device[coord] = [
+                (cores[i], sram_fmt_tensors[coord][i].experimental_per_core_buffer_address(cores[i]))
+                for i in range(len(cores))
+            ]
+            sram_base_addrs_l1_addr_per_device[coord] = [
+                (cores[i], sram_base_addr_tensors[coord][i].experimental_per_core_buffer_address(cores[i]))
+                for i in range(len(cores))
+            ]
+
+        # Per-tile fmt metadata word count. Matches DRAM path's
+        # _meta_words_for_tiles convention used by the canonical fmt encoder.
+        meta_words_per_expert = _meta_words_for_tiles(num_tiles_k * per_core_n)
+
+        # cb_in1 holds T expert slabs back-to-back. Each slab is
+        # K_per_core × N_per_core × bfp4_b tile size.
+        ct0 = sram_cts_list[0]
+        data0 = ct0.get_data_tensors()[0]
+        weights_tile = data0.get_tile()
+        from models.demos.deepseek_v3_b1.micro_ops.dram_streaming_matmul_compressed.op import _TILE_SIZES
+
+        bfp4_tile_size = _TILE_SIZES[1]  # bfp4_b 32×32 = 576 B
+        cb_in1_size_bytes = num_sram_experts * num_tiles_k * per_core_n * bfp4_tile_size
+
+        # Activation page size: MoE uses 1×32 bf16 face tile, NOT the weight
+        # tile. Mirrors setup_matmul_expert_dram's convention (op.py:644-645).
+        in0_tile_h, in0_tile_w = 1, 32
+        in0_page_size = in0_tile_h * in0_tile_w * 2  # bf16
+
+        return {
+            "num_sram_experts": num_sram_experts,
+            "num_tiles_k": num_tiles_k,
+            "out_w": per_core_n,
+            "in0_page_size": in0_page_size,
+            "meta_words_per_expert": meta_words_per_expert,
+            "accum_experts": 1 if accum_experts else 0,
+            "num_active_experts": num_active_experts,
+            "sram_fmt_tensors": sram_fmt_tensors,
+            "sram_base_addr_tensors": sram_base_addr_tensors,
+            "sram_fmt_l1_addr_per_device": sram_fmt_l1_addr_per_device,
+            "sram_base_addrs_l1_addr_per_device": sram_base_addrs_l1_addr_per_device,
+            "sram_k_offsets": sram_k_offsets,
+            "cb_in1_size_bytes": cb_in1_size_bytes,
+            "cb_data_format": ttnn.bfloat4_b,
+            "cb_page_size": bfp4_tile_size,
+            "weights_tile": weights_tile,
+            "weights_dtype": data0.dtype,
+            "_sram_cts_list": sram_cts_list,
+            "core_grid": core_grid,
+        }
+
+    @staticmethod
     def setup_eltwise_mul(
         cb_in0_index,
         cb_in1_index,
@@ -929,6 +1155,23 @@ class MoeRoutedExpertOp:
         cb_id_context=None,
         # Optional worker-core grid override (used to avoid overlap with external micro-ops).
         worker_core_grid=None,
+        # SRAM routed gate_proj weights (list of L1-resident CompressedTensors,
+        # one per slot, in slot order matching create_gate_indices_tensor's
+        # sram_expert_ids encoding). None or empty = no SRAM experts placed;
+        # the kernel's SRAM Op call will be a no-op via sram_gate_proj_active=0.
+        # Mirrors gate_proj_weights_tensor's DRAM contract — caller passes the
+        # CTs, _setup_dimensions calls setup_matmul_expert_sram internally.
+        sram_gate_proj_weights_tensor=None,
+        # SRAM routed up_proj weights — same contract as gate_proj. Runs on the
+        # shared up compute cores (mirror of shared gate cores). None = no SRAM
+        # up_proj; kernel skips via sram_up_proj_active=0.
+        sram_up_proj_weights_tensor=None,
+        # SRAM routed down_proj weights — runs on the 112 shared mcast receiver
+        # cores (= shared_down_proj's matmul cores). Per-expert weight layout
+        # mirrors shared_down: per-device shape (K_per_dev=256, N_full=7168)
+        # width-sharded on 112 cores → (256, 64) per core. accum_experts=True so
+        # the kernel sums across SRAM-flagged TopK winners. None = skipped.
+        sram_down_proj_weights_tensor=None,
     ):
         """Compute all dimensions, grids, setup params, CB descriptors, and per-core values.
 
@@ -963,6 +1206,8 @@ class MoeRoutedExpertOp:
         expert_scale_mcast_receiver_semaphore_addr = sem_addrs[MoeSem.EXPERT_SCALE_MCAST_RECEIVER]
         index_mcast_receiver_semaphore_addr = sem_addrs[MoeSem.INDEX_MCAST_RECEIVER]
         down_proj_mcast_receiver_semaphore_addr = sem_addrs[MoeSem.DOWN_PROJ_MCAST_RECEIVER]
+        sram_down_mcast_receiver_semaphore_addr = sem_addrs[MoeSem.SRAM_DOWN_MCAST_RECEIVER]
+        scan_sync_sem_addr = sem_addrs[MoeSem.SCAN_SYNC]
 
         # ==================================================================
         # Derive config from shared_residual_mcast_src_tensor (the actual input activation)
@@ -1066,9 +1311,69 @@ class MoeRoutedExpertOp:
         TD_8x32 = ttnn.TileDescriptor(ttnn.Tile((8, 32)))
         gate_proj_cb_out_silu = cb_id_context.get_cb_id(data_format, TD_8x32)
 
+        # SRAM routed gate_proj CBs — always allocated. cb_in1 holds T expert
+        # slabs (bfp4_b 32×32 tile); cb_out is per-expert per-N-tile output
+        # (bf16 1×32 face tile, mirrors gate_proj_cb_out). Default unused
+        # (T=0 → kernel treats them as a no-op via sram_gate_proj_active=0).
+        TD_32x32_bfp4 = ttnn.TileDescriptor(ttnn.Tile((32, 32)))
+        sram_gate_proj_cb_in1 = cb_id_context.get_cb_id(ttnn.bfloat4_b, TD_32x32_bfp4)
+        # sram_gate_proj_out_cb is assigned later (after gate_mm_output_cb is
+        # set in the routing block) so it can join ID-B's 3-grid disjoint set
+        # {gate_mm, sender, a_cores}. The a_cores ⊃ streamer overlap rules out
+        # aliasing with gate_proj_cb_out directly.
+        # SRAM up_proj weight CB shares an ID with sram_gate_proj_cb_in1
+        # (a_cores ⊥ b_cores; same bfp4 32×32 format). Saves 1 slot in (bfp4, 32×32).
+        sram_up_proj_cb_in1 = sram_gate_proj_cb_in1
+        # SRAM up_proj output CB shares with up_proj_cb_mm_out (DRAM up output).
+        # b_cores ⊥ streamer (streamer ⊂ a_cores). Saves 1 slot in (bf16, 1×32).
+        sram_up_proj_out_cb = up_proj_cb_mm_out
+        # SRAM gather destination CBs (sender core only). Sized for the gather
+        # output: num_active_experts × 64 cores = 512 tiles per device.
+        # Allocate with face-tile descriptor (16x16) so the dummy CB descriptor
+        # built for reconfig=true matches the runtime tile shape used by GR.
+        # The L1 layout is the same either way; this only affects the tile-shape
+        # the kernel compiles against (mirrors shared_group1/2 — see line 4015).
+        # 8×32 tile (bf16, 512 B) — same byte count as a 16×16 face but matches
+        # the 8-K-slice × 32-element gather layout exactly (each gather row =
+        # one K-partial's 32 elements). Lets these CBs auto-reuse attention's
+        # 8×32 IDs (SDPA outputs) via cross-context manager reuse, avoiding the
+        # otherwise sender-only-bound 16×16 bucket.
+        sram_group1_cb = cb_id_context.get_cb_id(data_format, TD_8x32)
+        sram_group2_cb = cb_id_context.get_cb_id(data_format, TD_8x32)
+        # SRAM extended GatedReduce intermediate + output CBs (sender core only).
+        # 8×32 tile (= 8 K-partials × 32 N-elements; same 512 B as a face).
+        sram_intermed_cb = cb_id_context.get_cb_id(data_format, TD_8x32)
+        sram_mcast_src_cb = cb_id_context.get_cb_id(data_format, TD_8x32)
+        # SRAM extended GatedReduce scalar CB (sender_core only). 8×32 tile
+        # for shape consistency with intermed/out CBs (FPU mul-bcast-scalar).
+        # BRISC writes scalar at [0,0]; TRISC reads via mul_tiles_bcast_scalar
+        # (BroadcastType::SCALAR uses [0,0] only — rest of tile unused).
+        sram_gr_scalar_cb = cb_id_context.get_cb_id(data_format, TD_8x32)
+        # Dedicated SRAM down mcast destination CB on the 112 shared mcast
+        # receiver cores (kv_buf-overlaid like the DRAM dst CB). Separate from
+        # down_proj_mcast_dst_cb to avoid layout collisions — DRAM mcast keeps
+        # using its own CB at base, SRAM mcast lands here at base.
+        sram_down_mcast_dst_cb = cb_id_context.get_cb_id(data_format, TD_1x32)
+        # SRAM routed down_proj CBs — runs on the 112 shared mcast receiver cores.
+        # cb_in1: T expert weight slabs (bfp4_b 32×32 tile), per-core L1.
+        # cb_out: 1×32 bf16, per_core_n=2 tiles per core (mirrors shared_down_matmul_out).
+        sram_down_proj_cb_in1 = cb_id_context.get_cb_id(ttnn.bfloat4_b, TD_32x32_bfp4)
+        sram_down_proj_out_cb = cb_id_context.get_cb_id(data_format, TD_1x32)
+        # Merged down output CB — feeds residual_add, holds either
+        #   shared_down + sram_down  (n_sram_active > 0)  or
+        #   shared_down              (n_sram_active == 0, copy path)
+        # Replaces shared_down_matmul_out_cb as residual_add's in0.
+        merged_down_out_cb = cb_id_context.get_cb_id(data_format, TD_1x32)
+
         # Routing-only CB indices (0 when routing disabled)
         if enable_routing:
-            gate_mm_output_cb = cb_id_context.get_cb_id(data_format, TD_1x32)
+            # ID-B: 3-grid disjoint alias chain on
+            #   {sender, gate_mm cores (col 12 rows 0-7), a_cores}
+            # — sender ⊥ gate_mm ⊥ a_cores (gate_mm at col 12; a_cores at cols
+            # 0-3,7-9; sender at (12,9)). Each kernel uses ID-X with its core's
+            # L1 layout via separate cb_descriptors. Saves 2 slots in (bf16, 1×32).
+            gate_mm_output_cb = down_proj_gather_dst_cb
+            sram_gate_proj_out_cb = gate_mm_output_cb
             gate_input_cb = cb_id_context.get_cb_id(data_format, TD_16x16)
             gate_proj_cb_index = cb_id_context.get_cb_id(data_format, TD_1x16)
             mul_cb_scalar_src = cb_id_context.get_cb_id(data_format, TD_1x16)
@@ -1081,11 +1386,16 @@ class MoeRoutedExpertOp:
             gate_indices_cb = cb_id_context.get_cb_id(
                 gate_indices_tensor.dtype, ttnn.TileDescriptor(gate_indices_tensor.get_tile())
             )
-            gate_mm_weights_cb = cb_id_context.get_cb_id(
-                gate_mm_weights_tensor.dtype, ttnn.TileDescriptor(gate_mm_weights_tensor.get_tile())
-            )
+            # gate_mm_weights_cb (gate_mm cores at col 12, rows 0-7) shares CB
+            # ID with add_cb_in0 (eltwise_add cores = gate_proj DRAM-bank
+            # primaries at cols 0,1,7,8). Strict-disjoint cores; per-core
+            # descriptors carry their own (addr, dtype, tile) layouts. Saves 1
+            # in (bf16, 32×32). Assumes gate_mm_weights_tensor is bf16 32×32.
+            gate_mm_weights_cb = add_cb_in0
         else:
             gate_mm_output_cb = 0
+            # No routing → no gate_mm anchor available; allocate sram_gate_out's own ID.
+            sram_gate_proj_out_cb = cb_id_context.get_cb_id(data_format, TD_1x32)
             gate_input_cb = 0
             gate_proj_cb_index = 0
             mul_cb_scalar_src = 0
@@ -1120,10 +1430,17 @@ class MoeRoutedExpertOp:
         rmsnorm_cb_page_size = rmsnorm_interpreted_tile.get_tile_size(data_format)
         rmsnorm_num_tiles = K // (rmsnorm_interpreted_tile.tile_shape[0] * rmsnorm_interpreted_tile.tile_shape[1])
 
-        # Tensor-backed CBs with reinterpreted rmsnorm tile
-        residual_mcast_src_cb = cb_id_context.get_cb_id(data_format, rmsnorm_tile_descriptor)
+        # Tensor-backed CBs with reinterpreted rmsnorm tile.
+        # rmsnorm_output_cb and residual_mcast_src_cb both live on sender core only,
+        # which is strictly disjoint from add_cb_in0/add_cb_out's eltwise_add cores
+        # (gate_proj_core_ranges = DRAM bank workers) AND from gate_mm cores (col 12,
+        # rows 0-7). Overlay descriptors cb0_desc / cb24_desc are restricted to sender
+        # in _overlap_cbs_with_sdpa_buffer to enforce the disjoint-cores invariant.
+        # rmsnorm_gamma_cb stays its own id: gamma reads from a DRAM-overlapped tensor
+        # on streamer cores, which == gate_proj_core_ranges (NOT disjoint from add).
+        residual_mcast_src_cb = add_cb_out
         rmsnorm_gamma_cb = cb_id_context.get_cb_id(data_format, rmsnorm_tile_descriptor)
-        rmsnorm_output_cb = cb_id_context.get_cb_id(data_format, rmsnorm_tile_descriptor)
+        rmsnorm_output_cb = add_cb_in0
 
         # ==================================================================
         # Residual Mcast (raw input from sender → residual CB on mcast grid)
@@ -1285,6 +1602,26 @@ class MoeRoutedExpertOp:
         # cb_index or index_l1_addr — every device runs the same [0..N-1] sequence
         # against its own TP-sliced weights.
         gate_up_num_active_experts = 8 if enable_routing else len(gate_proj_weights_tensor)
+        # SRAM matmul kernels iterate `num_active_experts` slots.
+        #   Routing: 8 (TopK count, matches DRAM; kernel filters via is_sram_expert).
+        #   Dense:   len(sram_*_weights_tensor) — kernel synthesizes raw_idx for each
+        #            slot (enable_indexing=0). 0 when no SRAM weights are provided.
+        if enable_routing:
+            sram_num_active_experts = gate_up_num_active_experts
+        elif sram_gate_proj_weights_tensor:
+            sram_num_active_experts = len(sram_gate_proj_weights_tensor)
+        else:
+            sram_num_active_experts = 0
+        # Dense-MLP workaround for the low-num_active DRAM kernel bug: when SRAM
+        # is placed in dense mode, the DRAM weights list stays at full length
+        # (8 chunks). The kernel iterates all 8 slots and OR's EXPERT_SRAM_FLAG
+        # onto slots >= ``num_dram_experts_pre_selected`` so the existing
+        # is_sram_expert filter skips them — same well-tested code path as MoE
+        # 1dram-7sram. Only read by the kernel's synthesized-index path
+        # (``enable_indexing=0``); routing reads real indices from L1, so the
+        # value is dead for MoE.
+        num_dram_experts_pre_selected = gate_up_num_active_experts - sram_num_active_experts
+
         # K-split: 2 cores per bank split K; primary (= K-reducer at k_slice_idx=1)
         # holds the full K matmul output; sender (= k_slice_idx=0) NOC-writes its
         # partial to primary's cb_out and primary PACKs with l1_acc to sum. Shares
@@ -1300,6 +1637,70 @@ class MoeRoutedExpertOp:
             num_active_experts=gate_up_num_active_experts,
             primary_worker_cores=gate_proj_worker_cores,
         )
+        gate_proj_params["num_dram_experts_pre_selected"] = num_dram_experts_pre_selected
+
+        # SRAM routed gate_proj setup (mirrors DRAM helper above). Caller
+        # passes pre-built L1 CompressedTensors; we derive K/N tiling from
+        # the CT shard shape and pass Kt = full K (= num_tiles_k).
+        sram_gate_proj_params = None
+        sram_gate_proj_cb_in1_descriptors_per_device = None  # dict[coord -> list of per-core CBDescriptors]
+        if sram_gate_proj_weights_tensor:
+            _ct0 = sram_gate_proj_weights_tensor[0]
+            # Derive num_cores from the per-core allocation map (one entry per
+            # core in the grid). get_data_tensors()[0] returns ONE core's tensor
+            # in per_core_allocation mode, so its shard_spec.grid is single-core.
+            _first_coord = next(iter(_ct0._multi_device_data_per_core))
+            _num_cores = len(_ct0._multi_device_data_per_core[_first_coord])
+            # HEIGHT_SHARDED layout: per_device_tiles_h = num_cores × per_core_K_tiles;
+            # per_device_tiles_w = per_core_N (width not sharded).
+            _sram_num_tiles_k = _ct0._per_device_tiles_h // _num_cores
+            _sram_per_core_n = _ct0._per_device_tiles_w
+            # Grid for setup helper: take from the FIRST per-core tensor's bounding box.
+            # Actually simpler: rebuild from all per-core single-core ranges.
+            _per_core_tensors = list(_ct0._multi_device_data_per_core[_first_coord].values())
+            _grid_cores = [t.memory_config().shard_spec.grid.bounding_box().start for t in _per_core_tensors]
+            _grid = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in _grid_cores])
+            sram_gate_proj_params = MoeRoutedExpertOp.setup_matmul_expert_sram(
+                mesh_device=mesh_device_for_matmul_expert,
+                sram_cts_list=sram_gate_proj_weights_tensor,
+                core_grid=_grid,
+                num_tiles_k=_sram_num_tiles_k,
+                per_core_n=_sram_per_core_n,
+                Kt=num_tiles_k,
+                num_active_experts=sram_num_active_experts,
+                accum_experts=False,
+            )
+            # cb_in1 descriptor: built via CompressedTensor.cb_descriptor_from_compressed_tensor,
+            # which returns ONE descriptor per core (since per_core_allocation=True).
+            # Each core's descriptor points to that core's individual L1 buffer.
+            # Mirrors the canonical pattern in micro_ops/matmul_expert/op.py:372.
+            # Per-device: each mesh coord has its own per-core L1 layout.
+            sram_gate_proj_cb_in1_descriptors_per_device = {}
+            # cb_descriptor_from_compressed_tensor declares cb_in1 as a single
+            # bfloat8_b "page" = whole per-core shard — works for the
+            # compressed_custom_mm path (meta-driven strides) but breaks the
+            # plain custom_mm path (which reads fifo_page_size as the per-tile
+            # stride and walks core_size bytes per tile → garbage). Replace
+            # format_descriptor with the actual per-tile shape (576B bfloat4_b)
+            # so plain custom_mm strides correctly; compressed path ignores these.
+            from models.demos.deepseek_v3_b1.micro_ops.dram_streaming_matmul_compressed.op import _TILE_SIZES
+
+            _bfp4_tile_size = _TILE_SIZES[1]  # bfp4_b 32x32 = 576 B
+            _tile_32x32 = ttnn.Tile([32, 32])
+            for coord in sram_gate_proj_params["sram_fmt_l1_addr_per_device"]:
+                _descs = _ct0.cb_descriptor_from_compressed_tensor(sram_gate_proj_cb_in1, device_coord=coord)
+                for _desc in _descs:
+                    _desc.format_descriptors = [
+                        ttnn.CBFormatDescriptor(
+                            buffer_index=sram_gate_proj_cb_in1,
+                            data_format=ttnn.bfloat4_b,
+                            page_size=_bfp4_tile_size,
+                            tile=ttnn.TileDescriptor(_tile_32x32),
+                        )
+                    ]
+                sram_gate_proj_cb_in1_descriptors_per_device[coord] = _descs
+            # cb_out descriptor is built in _overlap_cbs_with_sdpa_buffer
+            # (kv_buf-overlaid, mirrors gate_proj_cb_out at cb11).
 
         # ==================================================================
         # MatmulExpertCompressedDRAM: up_proj
@@ -1316,6 +1717,146 @@ class MoeRoutedExpertOp:
             num_active_experts=gate_up_num_active_experts,
             primary_worker_cores=gate_proj_worker_cores,
         )
+        up_proj_params["num_dram_experts_pre_selected"] = num_dram_experts_pre_selected
+
+        # SRAM routed up_proj setup — mirror of SRAM gate_proj. Caller passes
+        # pre-built L1 CompressedTensors; we derive K/N tiling and call
+        # setup_matmul_expert_sram. cb_in1 descriptors are per-device.
+        sram_up_proj_params = None
+        sram_up_proj_cb_in1_descriptors_per_device = None
+        if sram_up_proj_weights_tensor:
+            _ct0_up = sram_up_proj_weights_tensor[0]
+            _first_coord_up = next(iter(_ct0_up._multi_device_data_per_core))
+            _num_cores_up = len(_ct0_up._multi_device_data_per_core[_first_coord_up])
+            _sram_num_tiles_k_up = _ct0_up._per_device_tiles_h // _num_cores_up
+            _sram_per_core_n_up = _ct0_up._per_device_tiles_w
+            _per_core_tensors_up = list(_ct0_up._multi_device_data_per_core[_first_coord_up].values())
+            _grid_cores_up = [t.memory_config().shard_spec.grid.bounding_box().start for t in _per_core_tensors_up]
+            _grid_up = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in _grid_cores_up])
+            sram_up_proj_params = MoeRoutedExpertOp.setup_matmul_expert_sram(
+                mesh_device=mesh_device_for_matmul_expert,
+                sram_cts_list=sram_up_proj_weights_tensor,
+                core_grid=_grid_up,
+                num_tiles_k=_sram_num_tiles_k_up,
+                per_core_n=_sram_per_core_n_up,
+                Kt=num_tiles_k,
+                num_active_experts=sram_num_active_experts,
+                accum_experts=False,
+            )
+            sram_up_proj_cb_in1_descriptors_per_device = {}
+            # See note on sram_gate_proj_cb_in1 above — replace format_descriptor
+            # with the actual per-tile shape (576B bfloat4_b) for plain custom_mm.
+            from models.demos.deepseek_v3_b1.micro_ops.dram_streaming_matmul_compressed.op import _TILE_SIZES
+
+            _bfp4_tile_size = _TILE_SIZES[1]
+            _tile_32x32 = ttnn.Tile([32, 32])
+            for coord in sram_up_proj_params["sram_fmt_l1_addr_per_device"]:
+                _descs_up = _ct0_up.cb_descriptor_from_compressed_tensor(sram_up_proj_cb_in1, device_coord=coord)
+                for _desc in _descs_up:
+                    _desc.format_descriptors = [
+                        ttnn.CBFormatDescriptor(
+                            buffer_index=sram_up_proj_cb_in1,
+                            data_format=ttnn.bfloat4_b,
+                            page_size=_bfp4_tile_size,
+                            tile=ttnn.TileDescriptor(_tile_32x32),
+                        )
+                    ]
+                sram_up_proj_cb_in1_descriptors_per_device[coord] = _descs_up
+            # cb_out descriptor is built in _overlap_cbs_with_sdpa_buffer.
+
+        # SRAM routed down_proj setup. Per-expert weight layout mirrors shared_down:
+        # per-device (K_per_dev=256, N_full=7168) width-sharded on the 112 shared
+        # mcast receiver cores, giving (256, 64) per core (8 K-tiles × 2 N-tiles).
+        # No K-slicing per core (Kt = num_tiles_k = sram_k_per_core = 8).
+        sram_down_proj_params = None
+        sram_down_proj_cb_in1_descriptors_per_device = None
+        if sram_down_proj_weights_tensor:
+            _ct0_dn = sram_down_proj_weights_tensor[0]
+            _first_coord_dn = next(iter(_ct0_dn._multi_device_data_per_core))
+            _num_cores_dn = len(_ct0_dn._multi_device_data_per_core[_first_coord_dn])
+            # SRAM down is WIDTH_SHARDED (K replicated across cores, N split). The
+            # per-device logical shape is (K, N_full) so per_device_tiles_h IS the
+            # K tile count (replicated, NOT divided by num_cores), and the per-core
+            # N tile count is per_device_tiles_w // num_cores. Gate/up are
+            # HEIGHT_SHARDED and use the opposite idiom (see _ct0 above).
+            _dn_layout = _ct0_dn._memory_config.memory_layout
+            if _dn_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+                _sram_num_tiles_k_dn = _ct0_dn._per_device_tiles_h
+                _sram_per_core_n_dn = _ct0_dn._per_device_tiles_w // _num_cores_dn
+            else:
+                _sram_num_tiles_k_dn = _ct0_dn._per_device_tiles_h // _num_cores_dn
+                _sram_per_core_n_dn = _ct0_dn._per_device_tiles_w
+            _per_core_tensors_dn = list(_ct0_dn._multi_device_data_per_core[_first_coord_dn].values())
+            _grid_cores_dn = [t.memory_config().shard_spec.grid.bounding_box().start for t in _per_core_tensors_dn]
+            _grid_dn = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in _grid_cores_dn])
+            sram_down_proj_params = MoeRoutedExpertOp.setup_matmul_expert_sram(
+                mesh_device=mesh_device_for_matmul_expert,
+                sram_cts_list=sram_down_proj_weights_tensor,
+                core_grid=_grid_dn,
+                num_tiles_k=_sram_num_tiles_k_dn,
+                per_core_n=_sram_per_core_n_dn,
+                Kt=_sram_num_tiles_k_dn,  # no K-slicing per core
+                num_active_experts=sram_num_active_experts,
+                accum_experts=True,
+            )
+            sram_down_proj_cb_in1_descriptors_per_device = {}
+            # See note on sram_gate_proj_cb_in1 above — replace format_descriptor
+            # with the actual per-tile shape (576B bfloat4_b) for plain custom_mm.
+            from models.demos.deepseek_v3_b1.micro_ops.dram_streaming_matmul_compressed.op import _TILE_SIZES
+
+            _bfp4_tile_size = _TILE_SIZES[1]
+            _tile_32x32 = ttnn.Tile([32, 32])
+            for coord in sram_down_proj_params["sram_fmt_l1_addr_per_device"]:
+                _descs_dn = _ct0_dn.cb_descriptor_from_compressed_tensor(sram_down_proj_cb_in1, device_coord=coord)
+                for _desc in _descs_dn:
+                    _desc.format_descriptors = [
+                        ttnn.CBFormatDescriptor(
+                            buffer_index=sram_down_proj_cb_in1,
+                            data_format=ttnn.bfloat4_b,
+                            page_size=_bfp4_tile_size,
+                            tile=ttnn.TileDescriptor(_tile_32x32),
+                        )
+                    ]
+                sram_down_proj_cb_in1_descriptors_per_device[coord] = _descs_dn
+            # cb_out descriptor is built in _overlap_cbs_with_sdpa_buffer.
+
+        # ==================================================================
+        # SRAM gate/up gather to sender (step 3 of separate-pipeline plan).
+        # Layout: expert-major × N-major × K-within-N (matches GatedReduce's
+        # tiles_per_k=8 contiguous-K-partials read pattern). The gather dst
+        # CBs (sram_group1/group2_cb), GR output (sram_mcast_src_cb), and GR
+        # scratch CBs (sram_intermed_cb, sram_gr_scalar_cb) are all sender-only
+        # and kv_buf-overlaid in _overlap_cbs_with_sdpa_buffer; their L1
+        # addresses are written to routed_ctx.sram_*_receiver_data_addr there.
+        # ==================================================================
+        sram_ag_sender_idx_core_values = None
+        sram_bg_sender_idx_core_values = None
+        sram_gather_data_size_bytes = 0
+        sram_gather_expert_dst_stride = 0
+        sram_gather_total_tiles = 0
+        if sram_gate_proj_weights_tensor:
+            sram_gather_data_size_bytes = tile_1x32_size  # 1 tile = 64 bytes
+            _sram_total_cores = 64  # a_cores = b_cores = 64
+            sram_gather_expert_dst_stride = _sram_total_cores * tile_1x32_size
+            # Dense+SRAM: len(sram_*_weights_tensor); routing: TopK count (= 8). Both
+            # flow through sram_num_active_experts.
+            sram_gather_total_tiles = sram_num_active_experts * _sram_total_cores
+
+            # Per-core sender_idx: offset within one expert's 64-tile slab.
+            # SRAM gate/up cores arranged as 8 K-slices × 8 N-slices row-major
+            # (lid // 8 = k_idx, lid % 8 = n_idx). Face-view GatedReduce
+            # expects K-major × N-within-K so each face packs one K-slice's
+            # 8 N-tiles → sender_idx = k_idx * 8 + n_idx = lid.
+            from models.demos.deepseek_v3_b1.fused_ops.shared_expert.op import SharedExpertOp as _SEO
+
+            _a_cores_for_gather, _b_cores_for_gather = _SEO.build_ab_grids()
+            sram_ag_sender_idx_core_values = [(core, lid) for lid, core in enumerate(_a_cores_for_gather)]
+            sram_bg_sender_idx_core_values = [(core, lid) for lid, core in enumerate(_b_cores_for_gather)]
+
+        # Face-tile descriptor shared by all SRAM gather/GR CBs (16x16 bf16).
+        face_tile = ttnn.Tile([FACE_HEIGHT, FACE_WIDTH])
+        face_tile_desc = ttnn.TileDescriptor(FACE_HEIGHT, FACE_WIDTH, False)
+        face_tile_size = face_tile.get_tile_size(data_format)  # 256 * 2 = 512 bytes for bf16
 
         # ==================================================================
         # Eltwise Mul: silu(gate_proj) * up_proj [* expert_scale if routing]
@@ -1382,6 +1923,41 @@ class MoeRoutedExpertOp:
         )
 
         # ==================================================================
+        # SRAM down Mcast — sender_core's GatedReduce output → all 128 mcast
+        # cores (DRAM streamers + shared mcast receivers). dst CB shared with
+        # DRAM down_proj input (down_proj_mcast_dst_cb, kv_buf-overlaid on the
+        # full mcast grid). data_size_bytes / src_num_pages are CT worst-case
+        # (n_active_experts faces); kernel overrides to n_sram_active × face
+        # size at runtime.
+        # ==================================================================
+        # Dense+SRAM uses len(sram_*_weights_tensor) for the worst-case mcast
+        # tile count; routing mode uses TopK count. Both flow through
+        # sram_num_active_experts.
+        sram_down_mcast_num_tiles = sram_num_active_experts if sram_gate_proj_weights_tensor is not None else 0
+        sram_down_mcast_data_size_bytes = sram_down_mcast_num_tiles * face_tile_size
+        sram_down_mcast_params = MoeOp.setup_mcast(
+            device=device,
+            sender_core=sender_core,
+            mcast_grid=mcast_grid,
+            src_cb=sram_mcast_src_cb,
+            src_tensor=None,
+            dst_cb=sram_down_mcast_dst_cb,
+            dst_tensor=None,
+            sender_semaphore_addr=mcast_data_sender_semaphore_addr,
+            receiver_semaphore_addr=sram_down_mcast_receiver_semaphore_addr,
+            data_size_bytes=sram_down_mcast_data_size_bytes,
+            src_num_pages=sram_down_mcast_num_tiles,
+        )
+        # Receiver-side dst_num_pages is in dst CB page units (1×32 tile = 64 B),
+        # not face-tile units (512 B). setup_mcast defaults dst_num_pages to
+        # src_num_pages (face count) which is wrong for cross-tile-size mcasts.
+        # Fix: total dst pages = num_active × face_size / dst_page_size = 8 × 8 = 64.
+        # GR pads its mcast_src_cb pushes to num_active each iter so this constant
+        # full-size push keeps the receiver's rd/wr ptrs aligned across iters.
+        if sram_down_mcast_num_tiles:
+            sram_down_mcast_params["dst_num_pages"] = sram_down_mcast_data_size_bytes // tile_1x32_size
+
+        # ==================================================================
         # MatmulExpertCompressedDRAM: down_proj
         # ==================================================================
         # See gate/up note above: derive num_active_experts so dense MLP (one CT,
@@ -1402,6 +1978,7 @@ class MoeRoutedExpertOp:
             accum_experts=1,
             primary_worker_cores=gate_proj_worker_cores,
         )
+        down_proj_params["num_dram_experts_pre_selected"] = num_dram_experts_pre_selected
 
         # Wire index_l1_addr for MatmulExpertCompressedDRAM. The routing output
         # indices L1 buffer address is the same across mesh devices when allocations
@@ -1415,6 +1992,15 @@ class MoeRoutedExpertOp:
             for p in (gate_proj_params, up_proj_params, down_proj_params):
                 if "expert_offsets_l1_addr_per_device" in p:
                     p["index_l1_addr"] = index_l1_addr
+                    # sender_index_l1_addr: same pre-overlay address, NOT overwritten by
+                    # _overlap_cbs_with_sdpa_buffer. Used by the SRAM gather n_sram scan
+                    # on sender_core (which reads gate_output_indices's L1, not the
+                    # mcast-destination cb_index L1 used on receivers).
+                    p["sender_index_l1_addr"] = index_l1_addr
+            # Top-K scores L1 base — sender_core's source for the per-expert
+            # scale; SRAM GatedReduce BRISC reads scalar[k] from here.
+            if gate_output_scores_tensor is not None:
+                gate_proj_params["scores_l1_addr"] = _fused_base_addr(gate_output_scores_tensor)
 
         # cb_fmt descriptors are now created inside _overlap_cbs_with_sdpa_buffer
         # (overlaid on kv_buf so the CB allocator sees the L1 region and won't stomp
@@ -1695,6 +2281,7 @@ class MoeRoutedExpertOp:
             mul_params=mul_params,
             down_proj_gather_params=down_proj_gather_params,
             down_proj_mcast_params=down_proj_mcast_params,
+            sram_down_mcast_params=sram_down_mcast_params,
             down_proj_params=down_proj_params,
             add_params=add_params,
             # Derived
@@ -1735,6 +2322,7 @@ class MoeRoutedExpertOp:
             # Routing semaphore IDs
             expert_scale_mcast_sender_semaphore_addr=expert_scale_mcast_sender_semaphore_addr,
             expert_scale_mcast_receiver_semaphore_addr=expert_scale_mcast_receiver_semaphore_addr,
+            scan_sync_sem_addr=scan_sync_sem_addr,
             # Routing setup result dicts
             gate_mm_params=gate_mm_params,
             gate_mm_gather_params=gate_mm_gather_params,
@@ -1768,6 +2356,43 @@ class MoeRoutedExpertOp:
             bcast_pkt_cb=bcast_pkt_cb if enable_bcast else None,
             bcast_pkt_cb_descriptor=bcast_pkt_cb_descriptor if enable_bcast else None,
             bcast_params=bcast_params,
+            # SRAM routed gate_proj (always-allocated CBs; params=None = no-op).
+            # cb_out_descriptor is built in _overlap_cbs_with_sdpa_buffer.
+            sram_gate_proj_cb_in1=sram_gate_proj_cb_in1,
+            sram_gate_proj_out_cb=sram_gate_proj_out_cb,
+            sram_gate_proj_params=sram_gate_proj_params,
+            sram_gate_proj_cb_in1_descriptors_per_device=sram_gate_proj_cb_in1_descriptors_per_device,
+            # SRAM routed up_proj (always-allocated CBs; params=None = no-op)
+            sram_up_proj_cb_in1=sram_up_proj_cb_in1,
+            sram_up_proj_out_cb=sram_up_proj_out_cb,
+            sram_up_proj_params=sram_up_proj_params,
+            sram_up_proj_cb_in1_descriptors_per_device=sram_up_proj_cb_in1_descriptors_per_device,
+            # SRAM routed down_proj (always-allocated CBs; params=None = no-op)
+            sram_down_proj_cb_in1=sram_down_proj_cb_in1,
+            sram_down_proj_out_cb=sram_down_proj_out_cb,
+            sram_down_proj_params=sram_down_proj_params,
+            sram_down_proj_cb_in1_descriptors_per_device=sram_down_proj_cb_in1_descriptors_per_device,
+            # Merged down output CB (eltwise_add or copy → residual_add input).
+            merged_down_out_cb=merged_down_out_cb,
+            # SRAM gate/up gather (always-allocated CB IDs; data only when SRAM enabled).
+            # cb descriptors + receiver_data_addrs are set in
+            # _overlap_cbs_with_sdpa_buffer (kv_buf-overlaid, sender-only region).
+            sram_group1_cb=sram_group1_cb,
+            sram_group2_cb=sram_group2_cb,
+            # SRAM extended GatedReduce CBs.
+            sram_intermed_cb=sram_intermed_cb,
+            sram_mcast_src_cb=sram_mcast_src_cb,
+            sram_gr_scalar_cb=sram_gr_scalar_cb,
+            sram_down_mcast_dst_cb=sram_down_mcast_dst_cb,
+            face_tile_desc=face_tile_desc,
+            face_tile_size=face_tile_size,
+            sram_ag_sender_idx_core_values=sram_ag_sender_idx_core_values,
+            sram_bg_sender_idx_core_values=sram_bg_sender_idx_core_values,
+            sram_gather_data_size_bytes=sram_gather_data_size_bytes,
+            sram_gather_expert_dst_stride=sram_gather_expert_dst_stride,
+            sram_gather_total_tiles=sram_gather_total_tiles,
+            sram_ag_receiver_semaphore_addr=sem_addrs[MoeSem.SRAM_AG_GATHER],
+            sram_bg_receiver_semaphore_addr=sem_addrs[MoeSem.SRAM_BG_GATHER],
         )
 
     @staticmethod
@@ -1813,6 +2438,9 @@ class MoeRoutedExpertOp:
             ("gate_bias_cb", ctx.gate_params["bias_cb"] if ctx.enable_routing else 0),
             ("gate_input_indices_cb", ctx.gate_params["indices_cb"] if ctx.enable_routing else 0),
             ("gate_proj_cb_index", ctx.gate_proj_cb_index),
+            # NCRISC needs gate_output_indices_cb for the SRAM gather n_sram
+            # scan on sender_core (cb_wait_front on the gate's output CB).
+            ("gate_output_indices_cb", ctx.gate_params["output_indices_cb"] if ctx.enable_routing else 0),
             # Mul reader (setup mul_in1 buffer)
             ("mul_cb_in1", ctx.mul_cb_in1),
             ("mul_num_tiles", ctx.mul_num_tiles),
@@ -1850,6 +2478,7 @@ class MoeRoutedExpertOp:
             ("gate_proj_partial_sem_addr", ctx.gate_proj_params["partial_sem_addr"]),
             ("gate_proj_cores_per_bank", ctx.gate_proj_params["cores_per_bank"]),
             ("gate_proj_num_active_experts", ctx.gate_proj_params["num_active_experts"]),
+            ("gate_proj_num_dram_experts_pre_selected", ctx.gate_proj_params["num_dram_experts_pre_selected"]),
             ("gate_proj_index_l1_addr", ctx.gate_proj_params["index_l1_addr"]),
             ("gate_proj_cb_fmt", ctx.gate_proj_cb_fmt),
             ("gate_proj_fmt_dram_addr", ctx.gate_proj_params["fmt_dram_addr"]),
@@ -1889,6 +2518,7 @@ class MoeRoutedExpertOp:
             ("up_proj_partial_sem_addr", ctx.up_proj_params["partial_sem_addr"]),
             ("up_proj_cores_per_bank", ctx.up_proj_params["cores_per_bank"]),
             ("up_proj_num_active_experts", ctx.up_proj_params["num_active_experts"]),
+            ("up_proj_num_dram_experts_pre_selected", ctx.up_proj_params["num_dram_experts_pre_selected"]),
             ("up_proj_index_l1_addr", ctx.up_proj_params["index_l1_addr"]),
             ("up_proj_cb_fmt", ctx.up_proj_cb_fmt),
             ("up_proj_fmt_dram_addr", ctx.up_proj_params["fmt_dram_addr"]),
@@ -1922,6 +2552,7 @@ class MoeRoutedExpertOp:
             ("down_proj_partial_sem_addr", ctx.down_proj_params["partial_sem_addr"]),
             ("down_proj_cores_per_bank", ctx.down_proj_params["cores_per_bank"]),
             ("down_proj_num_active_experts", ctx.down_proj_params["num_active_experts"]),
+            ("down_proj_num_dram_experts_pre_selected", ctx.down_proj_params["num_dram_experts_pre_selected"]),
             ("down_proj_index_l1_addr", ctx.down_proj_params["index_l1_addr"]),
             ("down_proj_cb_fmt", ctx.down_proj_cb_fmt),
             ("down_proj_fmt_dram_addr", ctx.down_proj_params["fmt_dram_addr"]),
@@ -2004,6 +2635,10 @@ class MoeRoutedExpertOp:
             # Required for MatmulExpertCompressedDRAM ResetCBIn1 template param (referenced in moe_kernel.cpp outer scope)
             ("gate_proj_in1_buf_addr", ctx.gate_proj_params["in1_buf_addr"]),
             ("down_proj_in1_buf_addr", ctx.down_proj_params["in1_buf_addr"]),
+            # Read by moe_kernel.cpp's dense-mode n_dram_active derivation —
+            # BRISC needs it to gate the mcast helpers consistently with TRISC/NCRISC.
+            ("gate_proj_num_active_experts", ctx.gate_proj_params["num_active_experts"]),
+            ("gate_proj_num_dram_experts_pre_selected", ctx.gate_proj_params["num_dram_experts_pre_selected"]),
             # Expert scale mcast sender (routing only)
             ("expert_scale_mcast_sender_semaphore_addr", ctx.expert_scale_mcast_sender_semaphore_addr),
             ("expert_scale_mcast_receiver_semaphore_addr", ctx.expert_scale_mcast_receiver_semaphore_addr),
@@ -2045,6 +2680,39 @@ class MoeRoutedExpertOp:
             ("down_proj_mcast_src_num_pages", ctx.down_proj_mcast_params["src_num_pages"]),
             # down_proj mcast receiver
             ("down_proj_mcast_dst_num_pages", ctx.down_proj_mcast_params["dst_num_pages"]),
+            # Per-expert byte/page counts for the [SRAM | DRAM] concat layout.
+            # SRAM face byte size = DRAM per-expert byte size, so the same value
+            # is used to size the SRAM mcast and to offset the DRAM mcast past
+            # the SRAM portion at runtime.
+            (
+                "down_proj_mcast_per_expert_bytes",
+                ctx.down_proj_mcast_params["data_size_bytes"] // ctx.down_proj_params["num_active_experts"],
+            ),
+            (
+                "down_proj_mcast_per_expert_pages",
+                ctx.down_proj_mcast_params["src_num_pages"] // ctx.down_proj_params["num_active_experts"],
+            ),
+            ("down_proj_num_active_experts", ctx.down_proj_params["num_active_experts"]),
+            ("down_proj_num_dram_experts_pre_selected", ctx.down_proj_params["num_dram_experts_pre_selected"]),
+            # SRAM down mcast (sender + receiver). data_size_bytes / num_pages
+            # are CT worst-case (n_active faces); kernel overrides at runtime to
+            # n_sram_active × face_tile_size.
+            (
+                "sram_down_mcast_sender_semaphore_addr",
+                ctx.sram_down_mcast_params.get("sender_semaphore_addr", 0),
+            ),
+            (
+                "sram_down_mcast_receiver_semaphore_addr",
+                ctx.sram_down_mcast_params.get("receiver_semaphore_addr", 0),
+            ),
+            (
+                "sram_down_mcast_data_size_bytes",
+                ctx.sram_down_mcast_params.get("data_size_bytes", 0),
+            ),
+            ("sram_down_mcast_src_cb", ctx.sram_down_mcast_params.get("src_cb", 0)),
+            ("sram_down_mcast_dst_cb", ctx.sram_down_mcast_params.get("dst_cb", 0)),
+            ("sram_down_mcast_src_num_pages", ctx.sram_down_mcast_params.get("src_num_pages", 0)),
+            ("sram_down_mcast_dst_num_pages", ctx.sram_down_mcast_params.get("dst_num_pages", 0)),
             # Eltwise add CB (needed by output mcast sender for get_write_ptr)
             ("add_cb_in1", ctx.add_cb_in1),
             # Routing flag
@@ -2099,6 +2767,7 @@ class MoeRoutedExpertOp:
             ("gate_proj_num_subblocks_k", ctx.gate_proj_params["num_subblocks_k"]),
             ("gate_proj_per_core_n", ctx.gate_proj_params["per_core_n"]),
             ("gate_proj_num_active_experts", ctx.gate_proj_params["num_active_experts"]),
+            ("gate_proj_num_dram_experts_pre_selected", ctx.gate_proj_params["num_dram_experts_pre_selected"]),
             ("gate_proj_index_l1_addr", ctx.gate_proj_params["index_l1_addr"]),
             ("gate_proj_cb_fmt", ctx.gate_proj_cb_fmt),
             ("gate_proj_dram_meta_words_per_block", ctx.gate_proj_params["dram_meta_words_per_block"]),
@@ -2132,6 +2801,7 @@ class MoeRoutedExpertOp:
             ("up_proj_num_subblocks_k", ctx.up_proj_params["num_subblocks_k"]),
             ("up_proj_per_core_n", ctx.up_proj_params["per_core_n"]),
             ("up_proj_num_active_experts", ctx.up_proj_params["num_active_experts"]),
+            ("up_proj_num_dram_experts_pre_selected", ctx.up_proj_params["num_dram_experts_pre_selected"]),
             ("up_proj_index_l1_addr", ctx.up_proj_params["index_l1_addr"]),
             ("up_proj_cb_fmt", ctx.up_proj_cb_fmt),
             ("up_proj_dram_meta_words_per_block", ctx.up_proj_params["dram_meta_words_per_block"]),
@@ -2174,6 +2844,7 @@ class MoeRoutedExpertOp:
             ("down_proj_num_subblocks_k", ctx.down_proj_params["num_subblocks_k"]),
             ("down_proj_per_core_n", ctx.down_proj_params["per_core_n"]),
             ("down_proj_num_active_experts", ctx.down_proj_params["num_active_experts"]),
+            ("down_proj_num_dram_experts_pre_selected", ctx.down_proj_params["num_dram_experts_pre_selected"]),
             ("down_proj_index_l1_addr", ctx.down_proj_params["index_l1_addr"]),
             ("down_proj_cb_fmt", ctx.down_proj_cb_fmt),
             ("down_proj_dram_meta_words_per_block", ctx.down_proj_params["dram_meta_words_per_block"]),
@@ -2215,6 +2886,215 @@ class MoeRoutedExpertOp:
             ("reduce_output_cb", ctx.reduce_output_cb),
             ("reduce_scratch_cb", ctx.reduce_scratch_cb),
         ]
+
+        # ---- SRAM routed gate_proj CT args (always emitted; gated at runtime) ----
+        # Default values are placeholders; the kernel's Op call is `if constexpr false`
+        # no-op when sram_gate_proj_active=0. Real values come in when the caller
+        # builds SRAM weights via build_sram_expert_weights + setup_matmul_expert_sram.
+        # Per-core values (fmt_l1_addr, base_addrs_l1_addr, k_offset) emitted via
+        # _build_core_descriptors with default 0 → all-cores 0 by default.
+        sgp = ctx.sram_gate_proj_params or {}
+        sram_uniform_args = [
+            # cb_in0 = rmsnorm-mcasted activation (already on shared gate cores).
+            ("sram_gate_proj_cb_in0", ctx.gate_mm_input_cb),
+            ("sram_gate_proj_cb_in1", ctx.sram_gate_proj_cb_in1),
+            ("sram_gate_proj_cb_out", ctx.sram_gate_proj_out_cb),
+            # Reuse the existing gate_proj index CB when routing is on; 0 otherwise.
+            ("sram_gate_proj_cb_index", ctx.gate_proj_cb_index if ctx.enable_routing else 0),
+            ("sram_gate_proj_num_tiles_k", sgp.get("num_tiles_k", 0)),
+            ("sram_gate_proj_out_w", sgp.get("out_w", 0)),
+            ("sram_gate_proj_cb_in0_num_pages", sgp.get("num_tiles_k", 0)),
+            ("sram_gate_proj_num_active_experts", sgp.get("num_active_experts", 0)),
+            # SRAM kernel reads indices from this L1 address directly (same
+            # location as DRAM expert path — index_mcast lands here on all
+            # receivers, including shared gate cores after we extended the
+            # mcast set).
+            (
+                "sram_gate_proj_index_l1_addr",
+                ctx.gate_proj_params.get("index_l1_addr", 0) if ctx.enable_routing else 0,
+            ),
+            ("sram_gate_proj_k_per_core", sgp.get("num_tiles_k", 0)),
+            ("sram_gate_proj_meta_words_per_expert", sgp.get("meta_words_per_expert", 0)),
+            ("sram_gate_proj_in0_page_size", sgp.get("in0_page_size", 0)),
+            ("sram_gate_proj_accum_experts", sgp.get("accum_experts", 0)),
+            ("sram_gate_proj_cb_out_sram", 0),
+        ]
+        ncrisc_named_compile_time_args += sram_uniform_args
+        trisc_named_compile_time_args += sram_uniform_args
+
+        # ---- SRAM gather (gate=A, up=B) CT args ----
+        # NCRISC receiver: noc0_num_senders, semaphore (reuses AG_GATHER/BG_GATHER —
+        #   SRAM gather runs sequentially before shared expert gather, semaphore resets at end),
+        #   dst_cb, dst_num_pages.
+        # BRISC sender:    dest_noc, data_size_bytes, semaphore, src_cb, src_num_pages,
+        #   receiver_data_addr, num_experts, src_page_size, expert_dst_stride.
+        # Per-core sender_idx is emitted via _build_core_descriptors below.
+        _sram_total_cores = 64
+        # NOTE: num_experts (sender) and dst_num_pages (receiver) are NOT CT args.
+        # They're set at runtime from n_sram_active (computed in moe_kernel.cpp
+        # right after index_mcast). The struct fields init to 0 and the gather
+        # call site overwrites them via apply_n_sram_to_gather_args().
+        sram_ag_ncrisc_args = [
+            ("sram_ag_noc0_num_senders", _sram_total_cores if ctx.sram_gather_total_tiles else 0),
+            ("sram_ag_noc0_receiver_semaphore_addr", ctx.sram_ag_receiver_semaphore_addr),
+            ("sram_ag_dst_cb", ctx.sram_group1_cb),
+        ]
+        sram_bg_ncrisc_args = [
+            ("sram_bg_noc0_num_senders", _sram_total_cores if ctx.sram_gather_total_tiles else 0),
+            ("sram_bg_noc0_receiver_semaphore_addr", ctx.sram_bg_receiver_semaphore_addr),
+            ("sram_bg_dst_cb", ctx.sram_group2_cb),
+        ]
+        # NOC physical coord of sender_core (gather destination). BRISC's
+        # get_noc_addr expects physical, not logical, coords.
+        _sender_noc = ctx.device.worker_core_from_logical_core(ctx.sender_core)
+        sram_ag_brisc_args = [
+            ("sram_ag_dest_noc_x", _sender_noc.x),
+            ("sram_ag_dest_noc_y", _sender_noc.y),
+            ("sram_ag_data_size_bytes", ctx.sram_gather_data_size_bytes),
+            ("sram_ag_receiver_semaphore_addr", ctx.sram_ag_receiver_semaphore_addr),
+            ("sram_ag_src_cb", ctx.sram_gate_proj_out_cb),
+            (
+                "sram_ag_src_num_pages",
+                ctx.sram_gather_total_tiles // _sram_total_cores if ctx.sram_gather_total_tiles else 0,
+            ),  # 8 pages per core (CB drain count)
+            ("sram_ag_receiver_data_addr", ctx.sram_ag_receiver_data_addr),
+            ("sram_ag_src_page_size", ctx.sram_gather_data_size_bytes),  # 64 bytes (1 tile)
+            ("sram_ag_expert_dst_stride", ctx.sram_gather_expert_dst_stride),  # 4096 bytes
+        ]
+        sram_bg_brisc_args = [
+            ("sram_bg_dest_noc_x", _sender_noc.x),
+            ("sram_bg_dest_noc_y", _sender_noc.y),
+            ("sram_bg_data_size_bytes", ctx.sram_gather_data_size_bytes),
+            ("sram_bg_receiver_semaphore_addr", ctx.sram_bg_receiver_semaphore_addr),
+            ("sram_bg_src_cb", ctx.sram_up_proj_out_cb),
+            (
+                "sram_bg_src_num_pages",
+                ctx.sram_gather_total_tiles // _sram_total_cores if ctx.sram_gather_total_tiles else 0,
+            ),
+            ("sram_bg_receiver_data_addr", ctx.sram_bg_receiver_data_addr),
+            ("sram_bg_src_page_size", ctx.sram_gather_data_size_bytes),
+            ("sram_bg_expert_dst_stride", ctx.sram_gather_expert_dst_stride),
+        ]
+        ncrisc_named_compile_time_args += sram_ag_ncrisc_args + sram_bg_ncrisc_args
+        brisc_named_compile_time_args += sram_ag_brisc_args + sram_bg_brisc_args
+
+        # Runtime n_sram scan: each RISC reads cb_index post-index_mcast,
+        # counts SRAM-flagged entries, uses that to drive gather num_experts /
+        # dst_num_pages. All RISCs need access to index_l1_addr + active count.
+        sgp_for_scan = ctx.sram_gate_proj_params or {}
+        # Sender-core scan uses gate_output_indices_tensor's L1 address (the
+        # gate kernel's output, computed in _setup_dimensions and stored on
+        # ctx). Receivers scan kv_buf-overlaid gate_proj_cb_index populated
+        # by mcast_index.
+        sram_gather_common = [
+            (
+                "sram_gather_index_l1_addr",
+                ctx.gate_proj_params.get("index_l1_addr", 0) if ctx.enable_routing else 0,
+            ),
+            (
+                "sram_gather_sender_index_l1_addr",
+                ctx.gate_proj_params.get("sender_index_l1_addr", 0) if ctx.enable_routing else 0,
+            ),
+            (
+                "sram_gather_num_active_experts",
+                sgp_for_scan.get("num_active_experts", 0),
+            ),
+            (
+                "sram_gather_cb_index",
+                ctx.gate_proj_cb_index if ctx.enable_routing else 0,
+            ),
+            # Face pages per active expert: num_senders / n_parallel = 64 / 8 = 8.
+            # 8 sender writes (1×32 tiles) → 1 face (16×16). Used by gather call
+            # to compute total_dst_pages = n_sram_active * sram_gather_pages_per_expert.
+            ("sram_gather_pages_per_expert", 8),
+            # Per-core sync sem for scan_n_sram_active (sender_scan + receiver_scan).
+            # Used by sync_riscs_enter/exit so only BRISC waits on the index CB and
+            # the other 4 RISCs sync via this sem.
+            ("scan_sync_sem_addr", ctx.scan_sync_sem_addr),
+        ]
+        ncrisc_named_compile_time_args += sram_gather_common
+        brisc_named_compile_time_args += sram_gather_common
+        trisc_named_compile_time_args += sram_gather_common
+
+        # SRAM extended GatedReduce CT args (TRISC compute on sender_core).
+        sram_gated_reduce_args = [
+            ("sram_gated_reduce_tiles_per_k", 8),  # 8 K-partial faces per output face
+            ("sram_gated_reduce_group1_cb", ctx.sram_group1_cb),
+            ("sram_gated_reduce_group2_cb", ctx.sram_group2_cb),
+            ("sram_gated_reduce_intermed_cb", ctx.sram_intermed_cb),
+            ("sram_gated_reduce_out_cb", ctx.sram_mcast_src_cb),
+            ("sram_gated_reduce_scalar_cb", ctx.sram_gr_scalar_cb),
+        ]
+        trisc_named_compile_time_args += sram_gated_reduce_args
+
+        # SRAM scalar copy on sender_core BRISC: reads top-K scores from
+        # gate_output_scores_tensor's L1, writes one scalar per active expert
+        # to sram_gr_scalar_cb (at byte 0 of each face tile). Disabled (cb=0)
+        # in dense mode — TRISC's enable_scalar also goes off, taking the
+        # silu(g1)*g2 path with no scale.
+        sram_gr_scalar_brisc_args = [
+            ("sram_gr_scalar_cb", ctx.sram_gr_scalar_cb if ctx.enable_routing else 0),
+            (
+                "sram_gr_scalar_src_l1_addr",
+                ctx.gate_proj_params.get("scores_l1_addr", 0) if ctx.enable_routing else 0,
+            ),
+        ]
+        brisc_named_compile_time_args += sram_gr_scalar_brisc_args
+
+        # ---- SRAM routed up_proj CT args (mirror of gate_proj) ----
+        sup = ctx.sram_up_proj_params or {}
+        sram_up_uniform_args = [
+            ("sram_up_proj_cb_in0", ctx.gate_mm_input_cb),
+            ("sram_up_proj_cb_in1", ctx.sram_up_proj_cb_in1),
+            ("sram_up_proj_cb_out", ctx.sram_up_proj_out_cb),
+            ("sram_up_proj_cb_index", ctx.gate_proj_cb_index if ctx.enable_routing else 0),
+            ("sram_up_proj_num_tiles_k", sup.get("num_tiles_k", 0)),
+            ("sram_up_proj_out_w", sup.get("out_w", 0)),
+            ("sram_up_proj_cb_in0_num_pages", sup.get("num_tiles_k", 0)),
+            ("sram_up_proj_num_active_experts", sup.get("num_active_experts", 0)),
+            (
+                "sram_up_proj_index_l1_addr",
+                ctx.gate_proj_params.get("index_l1_addr", 0) if ctx.enable_routing else 0,
+            ),
+            ("sram_up_proj_k_per_core", sup.get("num_tiles_k", 0)),
+            ("sram_up_proj_meta_words_per_expert", sup.get("meta_words_per_expert", 0)),
+            ("sram_up_proj_in0_page_size", sup.get("in0_page_size", 0)),
+            ("sram_up_proj_accum_experts", sup.get("accum_experts", 0)),
+            ("sram_up_proj_cb_out_sram", 0),
+        ]
+        ncrisc_named_compile_time_args += sram_up_uniform_args
+        trisc_named_compile_time_args += sram_up_uniform_args
+
+        # ---- SRAM routed down_proj CT args (accum_experts=1 + compact_in0=1) ----
+        # Reads from sram_down_mcast_dst_cb (compact n_sram_active layout, indexed
+        # by the running sram_idx — set compact_in0=1 so the kernel uses sram_idx
+        # instead of exp_i for cb_in0 offsets).
+        sdp = ctx.sram_down_proj_params or {}
+        sram_down_uniform_args = [
+            # cb_in0 = SRAM down mcast destination (already populated by sram_down_mcast).
+            ("sram_down_proj_cb_in0", ctx.sram_down_mcast_dst_cb),
+            ("sram_down_proj_cb_in1", ctx.sram_down_proj_cb_in1),
+            ("sram_down_proj_cb_out", ctx.sram_down_proj_out_cb),
+            ("sram_down_proj_cb_index", ctx.gate_proj_cb_index if ctx.enable_routing else 0),
+            ("sram_down_proj_num_tiles_k", sdp.get("num_tiles_k", 0)),
+            ("sram_down_proj_out_w", sdp.get("out_w", 0)),
+            # cb_in0_num_pages here is just the per-expert K-tile count (kernel
+            # multiplies by n_sram_active at runtime via compact_in0 path).
+            ("sram_down_proj_cb_in0_num_pages", sdp.get("num_tiles_k", 0)),
+            ("sram_down_proj_num_active_experts", sdp.get("num_active_experts", 0)),
+            (
+                "sram_down_proj_index_l1_addr",
+                ctx.gate_proj_params.get("index_l1_addr", 0) if ctx.enable_routing else 0,
+            ),
+            ("sram_down_proj_k_per_core", sdp.get("num_tiles_k", 0)),
+            ("sram_down_proj_meta_words_per_expert", sdp.get("meta_words_per_expert", 0)),
+            ("sram_down_proj_in0_page_size", sdp.get("in0_page_size", 0)),
+            ("sram_down_proj_accum_experts", sdp.get("accum_experts", 0)),
+            ("sram_down_proj_cb_out_sram", 0),
+            ("sram_down_proj_compact_in0", 1 if sdp.get("accum_experts", 0) else 0),
+        ]
+        ncrisc_named_compile_time_args += sram_down_uniform_args
+        trisc_named_compile_time_args += sram_down_uniform_args
         return ncrisc_named_compile_time_args, brisc_named_compile_time_args, trisc_named_compile_time_args
 
     @staticmethod
@@ -2240,6 +3120,38 @@ class MoeRoutedExpertOp:
         descriptors += [
             ctx.gate_proj_params["cb_in1_descriptor"],  # Shared by gate_proj and up_proj
         ]
+
+        # SRAM routed gate_proj cb_out descriptor — same on all devices.
+        # cb_in1 descriptors are per-device (each coord has its own L1 layout)
+        # and are appended in _setup_per_device_args.
+        if ctx.sram_gate_proj_cb_out_descriptor is not None:
+            descriptors.append(ctx.sram_gate_proj_cb_out_descriptor)
+        if ctx.sram_up_proj_cb_out_descriptor is not None:
+            descriptors.append(ctx.sram_up_proj_cb_out_descriptor)
+        if ctx.sram_down_proj_cb_out_descriptor is not None:
+            descriptors.append(ctx.sram_down_proj_cb_out_descriptor)
+        # SRAM gather dst CBs (sender-only). Built in _overlap_cbs_with_sdpa_buffer
+        # with face_tile (16x16) so GatedReduce reads each K-slice's 8 N-tiles as
+        # one face (face_view: 8x faster than per-tile reduce on [1,32]).
+        if ctx.sram_group1_cb_descriptor is not None:
+            descriptors.append(ctx.sram_group1_cb_descriptor)
+        if ctx.sram_group2_cb_descriptor is not None:
+            descriptors.append(ctx.sram_group2_cb_descriptor)
+        # SRAM extended GatedReduce intermediate CB (2 face tiles, sender_core).
+        if ctx.sram_intermed_cb_descriptor is not None:
+            descriptors.append(ctx.sram_intermed_cb_descriptor)
+        # SRAM extended GatedReduce output CB (sender_core, n_active face tiles).
+        if ctx.sram_mcast_src_cb_descriptor is not None:
+            descriptors.append(ctx.sram_mcast_src_cb_descriptor)
+        # SRAM GatedReduce scalar CB (sender_core, n_active face tiles).
+        if ctx.sram_gr_scalar_cb_descriptor is not None:
+            descriptors.append(ctx.sram_gr_scalar_cb_descriptor)
+        # SRAM down mcast dst CB (kv_buf-overlaid on the 112 mcast receiver cores).
+        if ctx.sram_down_mcast_dst_cb_descriptor is not None:
+            descriptors.append(ctx.sram_down_mcast_dst_cb_descriptor)
+        # Merged down output CB (kv_buf-overlaid on the 112 mcast receiver cores).
+        if ctx.merged_down_out_cb_descriptor is not None:
+            descriptors.append(ctx.merged_down_out_cb_descriptor)
 
         if ctx.enable_routing:
             descriptors.append(ctx.gate_proj_cb_index_descriptor)
@@ -2447,6 +3359,124 @@ class MoeRoutedExpertOp:
                         other_value=0,
                     ),
                 ]
+
+        # ---- SRAM gate_proj per-core CT args (always emitted; default 0) ----
+        # Per-core values for fmt_l1_addr, base_addrs_l1_addr, k_offset are
+        # populated when sram_gate_proj_params is non-empty. Otherwise empty
+        # core_values list with other_value=0 → all cores see 0 → kernel's
+        # `if constexpr (sram_gate_proj_active==1)` skips the path entirely.
+        sgp = getattr(ctx, "sram_gate_proj_params", None) or {}
+        # Per-device dicts (when present) provide the first-coord defaults here;
+        # _setup_per_device_args overrides per coord.
+        first_coord_fmt = []
+        first_coord_base = []
+        if sgp.get("num_sram_experts", 0) > 0:
+            fmt_per_dev = sgp.get("sram_fmt_l1_addr_per_device", {}) or {}
+            base_per_dev = sgp.get("sram_base_addrs_l1_addr_per_device", {}) or {}
+            if fmt_per_dev:
+                first_coord_fmt = fmt_per_dev[next(iter(fmt_per_dev))]
+            if base_per_dev:
+                first_coord_base = base_per_dev[next(iter(base_per_dev))]
+        sram_k_offsets = sgp.get("sram_k_offsets") or []
+
+        per_core_compile_time_descriptors += [
+            PerCoreCompileTimeDescriptor(
+                named_compile_time_arg="sram_gate_proj_fmt_l1_addr",
+                core_values=first_coord_fmt,
+                other_value=0,
+            ),
+            PerCoreCompileTimeDescriptor(
+                named_compile_time_arg="sram_gate_proj_base_addrs_l1_addr",
+                core_values=first_coord_base,
+                other_value=0,
+            ),
+            PerCoreCompileTimeDescriptor(
+                named_compile_time_arg="sram_gate_proj_k_offset",
+                core_values=sram_k_offsets,
+                other_value=0,
+            ),
+        ]
+
+        # ---- SRAM up_proj per-core CT args (mirror of gate_proj) ----
+        sup = getattr(ctx, "sram_up_proj_params", None) or {}
+        first_coord_fmt_up = []
+        first_coord_base_up = []
+        if sup.get("num_sram_experts", 0) > 0:
+            fmt_per_dev_up = sup.get("sram_fmt_l1_addr_per_device", {}) or {}
+            base_per_dev_up = sup.get("sram_base_addrs_l1_addr_per_device", {}) or {}
+            if fmt_per_dev_up:
+                first_coord_fmt_up = fmt_per_dev_up[next(iter(fmt_per_dev_up))]
+            if base_per_dev_up:
+                first_coord_base_up = base_per_dev_up[next(iter(base_per_dev_up))]
+        sram_k_offsets_up = sup.get("sram_k_offsets") or []
+
+        per_core_compile_time_descriptors += [
+            PerCoreCompileTimeDescriptor(
+                named_compile_time_arg="sram_up_proj_fmt_l1_addr",
+                core_values=first_coord_fmt_up,
+                other_value=0,
+            ),
+            PerCoreCompileTimeDescriptor(
+                named_compile_time_arg="sram_up_proj_base_addrs_l1_addr",
+                core_values=first_coord_base_up,
+                other_value=0,
+            ),
+            PerCoreCompileTimeDescriptor(
+                named_compile_time_arg="sram_up_proj_k_offset",
+                core_values=sram_k_offsets_up,
+                other_value=0,
+            ),
+        ]
+
+        # ---- SRAM down_proj per-core CT args (mirror of gate_proj) ----
+        sdp_pc = getattr(ctx, "sram_down_proj_params", None) or {}
+        first_coord_fmt_dn = []
+        first_coord_base_dn = []
+        if sdp_pc.get("num_sram_experts", 0) > 0:
+            fmt_per_dev_dn = sdp_pc.get("sram_fmt_l1_addr_per_device", {}) or {}
+            base_per_dev_dn = sdp_pc.get("sram_base_addrs_l1_addr_per_device", {}) or {}
+            if fmt_per_dev_dn:
+                first_coord_fmt_dn = fmt_per_dev_dn[next(iter(fmt_per_dev_dn))]
+            if base_per_dev_dn:
+                first_coord_base_dn = base_per_dev_dn[next(iter(base_per_dev_dn))]
+        sram_k_offsets_dn = sdp_pc.get("sram_k_offsets") or []
+
+        per_core_compile_time_descriptors += [
+            PerCoreCompileTimeDescriptor(
+                named_compile_time_arg="sram_down_proj_fmt_l1_addr",
+                core_values=first_coord_fmt_dn,
+                other_value=0,
+            ),
+            PerCoreCompileTimeDescriptor(
+                named_compile_time_arg="sram_down_proj_base_addrs_l1_addr",
+                core_values=first_coord_base_dn,
+                other_value=0,
+            ),
+            PerCoreCompileTimeDescriptor(
+                named_compile_time_arg="sram_down_proj_k_offset",
+                core_values=sram_k_offsets_dn,
+                other_value=0,
+            ),
+        ]
+
+        # ---- SRAM gather per-core sender_idx (gate=A, up=B) ----
+        # Each of the 64 a_cores (b_cores) has a sender_idx telling MoeGather
+        # where to place its tile within an expert's 64-tile slab on the
+        # sender. Layout matches GatedReduce's contiguous-K-partials read.
+        sram_ag_idx = ctx.sram_ag_sender_idx_core_values or []
+        sram_bg_idx = ctx.sram_bg_sender_idx_core_values or []
+        per_core_compile_time_descriptors += [
+            PerCoreCompileTimeDescriptor(
+                named_compile_time_arg="sram_ag_sender_idx",
+                core_values=sram_ag_idx,
+                other_value=0,
+            ),
+            PerCoreCompileTimeDescriptor(
+                named_compile_time_arg="sram_bg_sender_idx",
+                core_values=sram_bg_idx,
+                other_value=0,
+            ),
+        ]
         return unified_compile_time_core_descriptors, per_core_compile_time_descriptors
 
 
@@ -2789,19 +3819,31 @@ class MoeSharedExpertOp:
         assert cb_id_context is not None, "cb_id_context must be provided"
         TD_1x32 = ttnn.TileDescriptor(ttnn.Tile((1, 32)))
         TD_16x16 = ttnn.TileDescriptor(ttnn.Tile((FACE_HEIGHT, FACE_WIDTH)))
+        # 8x32 tile descriptor: byte-equivalent to 16x16 face (256 elements; 512 B for bf16).
+        # Used for shared GR CBs to enable cross-context auto-reuse with attention's 8x32
+        # SDPA output IDs (same trick as SRAM GR; see line 1474).
+        TD_8x32 = ttnn.TileDescriptor(ttnn.Tile((8, 32)))
 
         # 1x32, bfloat16
-        shared_gu_out_cb = cb_id_context.get_cb_id(data_format, TD_1x32)
         shared_down_mcast_dst_cb = cb_id_context.get_cb_id(data_format, TD_1x32)
         shared_down_matmul_out_cb = cb_id_context.get_cb_id(data_format, TD_1x32)
         shared_residual_add_out_cb = cb_id_context.get_cb_id(data_format, TD_1x32)
         shared_output_gather_dst_cb = cb_id_context.get_cb_id(data_format, TD_1x32)
+        # shared_gu_out_cb (a/b shared compute, 128 cores) shares CB ID with
+        # shared_output_gather_dst_cb (sender, 1 core). Strict-disjoint: sender
+        # is excluded from a/b cores by build. Saves 1 in (bf16, 1×32).
+        shared_gu_out_cb = shared_output_gather_dst_cb
 
-        # 16x16, bfloat16
-        shared_group1_cb = cb_id_context.get_cb_id(data_format, TD_16x16)
+        # 8x32, bfloat16 (reinterpreted from 16x16 face for cross-context reuse).
+        # Pages are 256 elements / 512 B either way; the GR kernel does element-wise
+        # add_tiles, which is shape-agnostic. Allocating with TD_8x32 lets these auto-reuse
+        # attention's 8x32 SDPA output IDs, dropping out of the (otherwise sender-bound)
+        # 16x16 bucket. Runtime cb_descriptor still uses face_tile_desc (16x16) — that
+        # only governs page_size at reconfig time (matches anyway), not the build tile.
+        shared_group1_cb = cb_id_context.get_cb_id(data_format, TD_8x32)
         shared_group2_cb = shared_group1_cb
-        shared_intermed_cb = cb_id_context.get_cb_id(data_format, TD_16x16)
-        shared_mcast_src_cb = cb_id_context.get_cb_id(data_format, TD_16x16)
+        shared_intermed_cb = cb_id_context.get_cb_id(data_format, TD_8x32)
+        shared_mcast_src_cb = cb_id_context.get_cb_id(data_format, TD_8x32)
 
         # Shared residual reuses the routed expert's residual_mcast_dst CB when provided,
         # otherwise allocates its own.
@@ -3042,7 +4084,7 @@ class MoeSharedExpertOp:
         )
 
     @staticmethod
-    def _build_compile_time_args(shared_ctx, rmsnorm_mcast_dst_cb, rmsnorm_mcast_params):
+    def _build_compile_time_args(shared_ctx, rmsnorm_mcast_dst_cb, rmsnorm_mcast_params, routed_ctx):
         """
         Build shared expert compile-time args to append to routed expert args.
 
@@ -3050,6 +4092,7 @@ class MoeSharedExpertOp:
             shared_ctx: _MoeSharedExpertContext
             rmsnorm_mcast_dst_cb: The CB index for the rmsnorm mcast destination (shared with routed)
             rmsnorm_mcast_params: RMSNorm mcast params (reuse NOC coords for residual mcast)
+            routed_ctx: _MoeRoutedExpertContext (for SRAM down merge wiring)
 
         Returns:
             (ncrisc_args, brisc_args, trisc_args) - lists of named compile-time arg tuples
@@ -3150,12 +4193,21 @@ class MoeSharedExpertOp:
             ("shared_down_matmul_k_num_tiles", shared_ctx.down_matmul_params["k_num_tiles"]),
             ("shared_down_matmul_out_w_per_core", shared_ctx.down_matmul_params["out_w"]),
             ("shared_down_matmul_weights_cb_addr", shared_ctx.down_matmul_params["weights_cb_addr"]),
-            # Residual add
-            ("shared_residual_add_in0", shared_ctx.down_matmul_params["out_cb"]),  # matmul output
+            # Residual add — reads from merged_down_out_cb (= shared_down + sram_down
+            # when n_sram_active>0, or copy of shared_down when n_sram_active=0).
+            # The shared+sram merge or copy happens between shared_down_matmul and
+            # residual_add in the kernel order (see moe_kernel.cpp SRAM_DOWN_MERGE).
+            ("shared_residual_add_in0", routed_ctx.merged_down_out_cb),
             ("shared_residual_add_in1", shared_ctx.residual_cb),  # residual (pre-loaded bias)
             ("shared_residual_add_out", shared_ctx.residual_add_params["out_cb"]),
             ("shared_residual_add_out_w", shared_ctx.down_matmul_params["out_w"]),
             ("shared_residual_add_total_in1_tiles", shared_ctx.residual_add_params["total_in1_tiles"]),
+            # Sram down merge (eltwise_add when n_sram_active>0, copy when 0).
+            # Both paths read from shared_down_matmul_out + maybe sram_down → merged_down_out.
+            ("sram_down_merge_in0", routed_ctx.sram_down_proj_out_cb),  # SRAM down output
+            ("sram_down_merge_in1", shared_ctx.down_matmul_params["out_cb"]),  # shared down output
+            ("sram_down_merge_out", routed_ctx.merged_down_out_cb),  # merged → residual_add
+            ("sram_down_merge_num_tiles", shared_ctx.down_matmul_params["out_w"]),  # 2 tiles per core
         ]
         return ncrisc_args, brisc_args, trisc_args
 
@@ -3780,6 +4832,11 @@ class MoeOp:
             tile=ttnn.TileDescriptor(ttnn.Tile([32, 32])),
         )
         cb0_desc.format_descriptors = [cb0_fmt]
+        # Restrict to sender; aliased with add_cb_in0 (eltwise_add cores) and
+        # gate_mm_weights_cb (gate_mm cores at col 12). All three core sets are
+        # strictly disjoint: sender at (12,9) ⊥ gate_proj DRAM-bank workers ⊥
+        # gate_mm col-12 rows 0-7.
+        cb0_desc.core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(routed_ctx.sender_core, routed_ctx.sender_core)])
         routed_ctx.rmsnorm_output_cb_descriptor = cb0_desc
         kv_offset += cb0_total_size
 
@@ -3820,6 +4877,9 @@ class MoeOp:
                 tile=ttnn.TileDescriptor(ttnn.Tile([1, 32])),
             )
             cb3_desc.format_descriptors = [cb3_fmt]
+            # Restrict to gate_mm cores; aliased with down_proj_gather_dst_cb
+            # (sender). Disjoint: gate_mm is in col 0 rows 0-7; sender is (12,9).
+            cb3_desc.core_ranges = routed_ctx.gate_mm_params["core_grid"]
             routed_ctx.gate_mm_params["output_cb_descriptor"] = cb3_desc
             kv_offset += cb3_total_size
 
@@ -3885,7 +4945,35 @@ class MoeOp:
             tile=ttnn.TileDescriptor(ttnn.Tile([1, 32])),
         )
         cb11_desc.format_descriptors = [cb11_fmt]
+        # Restrict to streamer compute cores so the aliased SRAM gate cb_out
+        # (same ID, on a_cores) has unambiguous per-core cb_metadata.
+        cb11_desc.core_ranges = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(c, c) for c in routed_ctx.gate_proj_params["compute_cores_list"]]
+        )
         routed_ctx.gate_proj_params["cb_out_descriptor"] = cb11_desc
+
+        # SRAM gate_proj cb_out shares CB ID with gate_proj_cb_out (a_cores ⊥
+        # streamer; per-core descriptors split the L1 layout between grids).
+        sram_gate_params = routed_ctx.sram_gate_proj_params
+        if sram_gate_params and sram_gate_params.get("num_sram_experts", 0) > 0:
+            sram_gate_out_total = sram_gate_params["out_w"] * sram_gate_params["num_active_experts"] * 64
+            sram_gate_out_desc = ttnn.cb_descriptor_from_sharded_tensor(
+                routed_ctx.sram_gate_proj_out_cb,
+                kv_buf,
+                address_offset=kv_offset,
+                total_size=sram_gate_out_total,
+            )
+            sram_gate_out_desc.format_descriptors = [
+                ttnn.CBFormatDescriptor(
+                    buffer_index=routed_ctx.sram_gate_proj_out_cb,
+                    data_format=ttnn.bfloat16,
+                    page_size=64,
+                    tile=ttnn.TileDescriptor(ttnn.Tile([1, 32])),
+                )
+            ]
+            sram_gate_out_desc.core_ranges = sram_gate_params["core_grid"]
+            routed_ctx.sram_gate_proj_cb_out_descriptor = sram_gate_out_desc
+            kv_offset += sram_gate_out_total
 
         # cb_out_silu: aliases CB 11's L1 region (same offset, same total_size) but
         # with a fat [silu_tile_h, tile_w] tile shape so the kernel's silu fast-path
@@ -3909,6 +4997,12 @@ class MoeOp:
                 tile=ttnn.TileDescriptor(silu_tile_desc),
             )
         ]
+        # cb_out_silu shares L1 with cb11 on streamer cores by design (silu
+        # fast-path). Restrict core_ranges so it doesn't overlap on a_cores
+        # where SRAM gate cb_out (aliased to cb11's CB ID) lives.
+        cb_out_silu_desc.core_ranges = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(c, c) for c in routed_ctx.gate_proj_params["compute_cores_list"]]
+        )
         routed_ctx.gate_proj_params["cb_out_silu_descriptor"] = cb_out_silu_desc
         kv_offset += cb11_total_size
 
@@ -3929,8 +5023,34 @@ class MoeOp:
             tile=ttnn.TileDescriptor(ttnn.Tile([1, 32])),
         )
         cb12_desc.format_descriptors = [cb12_fmt]
+        # Restrict to streamer compute cores; aliased SRAM up cb_out lives on b_cores.
+        cb12_desc.core_ranges = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(c, c) for c in routed_ctx.up_proj_params["compute_cores_list"]]
+        )
         routed_ctx.up_proj_params["cb_out_descriptor"] = cb12_desc
         kv_offset += cb12_total_size
+
+        # SRAM up_proj cb_out shares CB ID with up_proj_cb_mm_out (b_cores ⊥ streamer).
+        sram_up_params = routed_ctx.sram_up_proj_params
+        if sram_up_params and sram_up_params.get("num_sram_experts", 0) > 0:
+            sram_up_out_total = sram_up_params["out_w"] * sram_up_params["num_active_experts"] * 64
+            sram_up_out_desc = ttnn.cb_descriptor_from_sharded_tensor(
+                routed_ctx.sram_up_proj_out_cb,
+                kv_buf,
+                address_offset=kv_offset,
+                total_size=sram_up_out_total,
+            )
+            sram_up_out_desc.format_descriptors = [
+                ttnn.CBFormatDescriptor(
+                    buffer_index=routed_ctx.sram_up_proj_out_cb,
+                    data_format=ttnn.bfloat16,
+                    page_size=64,
+                    tile=ttnn.TileDescriptor(ttnn.Tile([1, 32])),
+                )
+            ]
+            sram_up_out_desc.core_ranges = sram_up_params["core_grid"]
+            routed_ctx.sram_up_proj_cb_out_descriptor = sram_up_out_desc
+            kv_offset += sram_up_out_total
 
         # CB 15: mul_out (fused output) — hardcoded descriptor
         cb15_cb_id = routed_ctx.mul_cb_out
@@ -3968,6 +5088,8 @@ class MoeOp:
             tile=ttnn.TileDescriptor(ttnn.Tile([1, 32])),
         )
         cb16_desc.format_descriptors = [cb16_fmt]
+        # Restrict to sender_core; aliased with gate_mm_output_cb (gate_mm cores).
+        cb16_desc.core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(routed_ctx.sender_core, routed_ctx.sender_core)])
         routed_ctx.down_proj_gather_params["dst_cb_descriptor"] = cb16_desc
         kv_offset += cb16_total_size
         routed_ctx.down_proj_gather_params["receiver_data_addr"] = kv_addr + cb16_offset
@@ -4010,6 +5132,29 @@ class MoeOp:
         cb19_desc.format_descriptors = [cb19_fmt]
         routed_ctx.down_proj_params["cb_out_descriptor"] = cb19_desc
         kv_offset += cb19_total_size
+
+        # SRAM down_proj cb_out (112 mcast receiver cores). accum_experts=True so
+        # the kernel pushes per_core_n tiles ONCE per call (cross-expert sum
+        # already accumulated). Per-core size = out_w × tile_1x32 (= 2 × 64 = 128 B).
+        sram_down_params = routed_ctx.sram_down_proj_params
+        if sram_down_params and sram_down_params.get("num_sram_experts", 0) > 0:
+            sram_down_out_total = sram_down_params["out_w"] * 64
+            sram_down_out_desc = ttnn.cb_descriptor_from_sharded_tensor(
+                routed_ctx.sram_down_proj_out_cb,
+                kv_buf,
+                address_offset=kv_offset,
+                total_size=sram_down_out_total,
+            )
+            sram_down_out_desc.format_descriptors = [
+                ttnn.CBFormatDescriptor(
+                    buffer_index=routed_ctx.sram_down_proj_out_cb,
+                    data_format=ttnn.bfloat16,
+                    page_size=64,
+                    tile=ttnn.TileDescriptor(ttnn.Tile([1, 32])),
+                )
+            ]
+            routed_ctx.sram_down_proj_cb_out_descriptor = sram_down_out_desc
+            kv_offset += sram_down_out_total
 
         # cb_internal_acc shares cb_out's CB ID (down_proj_cb_internal_acc ==
         # down_proj_cb_out), so we don't build a separate descriptor — cb19_desc above
@@ -4190,6 +5335,8 @@ class MoeOp:
             tile=ttnn.TileDescriptor(ttnn.Tile([1, 32])),
         )
         cb29_desc.format_descriptors = [cb29_fmt]
+        # Restrict to a/b shared compute cores; aliased with shared_output_gather_dst_cb (sender).
+        cb29_desc.core_ranges = shared_ctx.compute_core_grid
         shared_ctx.gu_matmul_params["cb_out_descriptor"] = cb29_desc
         kv_offset += cb29_total_size
 
@@ -4271,6 +5418,27 @@ class MoeOp:
         shared_ctx.down_matmul_params["output_cb_descriptor"] = cb36_desc
         kv_offset += cb36_total_size
 
+        # CB merged_down_out: feeds residual_add (replaces shared_down_matmul_out_cb).
+        # Holds shared_down + sram_down (or just shared_down when n_sram=0). Same
+        # layout/size as cb36 — 2 1×32 tiles per core on the 112 mcast receivers.
+        merged_cb_id = routed_ctx.merged_down_out_cb
+        merged_total_size = 128
+        merged_desc = ttnn.cb_descriptor_from_sharded_tensor(
+            merged_cb_id,
+            kv_buf,
+            address_offset=kv_offset,
+            total_size=merged_total_size,
+        )
+        merged_fmt = ttnn.CBFormatDescriptor(
+            buffer_index=merged_cb_id,
+            data_format=ttnn.bfloat16,
+            page_size=64,
+            tile=ttnn.TileDescriptor(ttnn.Tile([1, 32])),
+        )
+        merged_desc.format_descriptors = [merged_fmt]
+        routed_ctx.merged_down_out_cb_descriptor = merged_desc
+        kv_offset += merged_total_size
+
         # CB 37: shared_residual_add_out (total_size=128, page_size=64, tile=1x32, bfloat16)
         cb37_cb_id = shared_ctx.residual_add_params["out_cb"]
         cb37_total_size = 128
@@ -4291,6 +5459,76 @@ class MoeOp:
         shared_ctx.residual_add_params["cb_out_descriptor"] = cb37_desc
         kv_offset += cb37_total_size
 
+        # ── Sender-only routed SRAM CBs → overlaid onto cb_in1 (cb9/18) region ──
+        # All five CBs live exclusively on sender_core. cb_in1 lives on the
+        # gate/down DRAM streamer cores (disjoint from sender) and is not a
+        # mcast destination, so overlaying sender-only CBs at cb9_offset is
+        # safe per the overlap rules (cores disjoint AND neither is mcast dst).
+        # cb_in1 region is shared_in1_size bytes (~96 KB); we use ~70 KB.
+        if sram_gate_params and sram_gate_params.get("num_sram_experts", 0) > 0:
+            # SRAM gather/GR CBs use 8×32 tiles (256 elements = 512 B, same byte
+            # count as 16×16 face but matches the 8-K-slice × 32-element gather
+            # layout). 8×32 IDs auto-reuse attention's SDPA 8×32 IDs via
+            # cross-context manager reuse, freeing 5 slots in the 16×16 bucket.
+            sram_gr_tile = ttnn.Tile([8, 32])
+            sram_gr_tile_desc = ttnn.TileDescriptor(sram_gr_tile)
+            sram_gr_tile_size = sram_gr_tile.get_tile_size(routed_ctx.data_format)
+            num_active_local = sram_gate_params["num_active_experts"]
+
+            def _make_face_cb_desc(cb_id, total_size, offset):
+                desc = ttnn.cb_descriptor_from_sharded_tensor(
+                    cb_id, kv_buf, address_offset=offset, total_size=total_size
+                )
+                desc.format_descriptors[0].tile = sram_gr_tile_desc
+                desc.format_descriptors[0].page_size = sram_gr_tile_size
+                return desc
+
+            sram_offset = cb9_offset  # local cursor inside the cb_in1 region
+
+            # sram_group1_cb / sram_group2_cb: gather destinations. Each
+            # (expert, n_idx) slot is one 8×32 tile (8 K-partials × 32 N
+            # elements = 512 B). Total = num_active × 8 N-tiles × 512 B.
+            sram_group1_total = num_active_local * 8 * sram_gr_tile_size  # 32768 B
+            routed_ctx.sram_group1_cb_descriptor = _make_face_cb_desc(
+                routed_ctx.sram_group1_cb, sram_group1_total, sram_offset
+            )
+            routed_ctx.sram_ag_receiver_data_addr = kv_addr + sram_offset
+            sram_offset += sram_group1_total
+
+            sram_group2_total = sram_group1_total
+            routed_ctx.sram_group2_cb_descriptor = _make_face_cb_desc(
+                routed_ctx.sram_group2_cb, sram_group2_total, sram_offset
+            )
+            routed_ctx.sram_bg_receiver_data_addr = kv_addr + sram_offset
+            sram_offset += sram_group2_total
+
+            # sram_mcast_src_cb: extended GR output, n_active 8×32 tiles.
+            sram_mcast_src_total = num_active_local * sram_gr_tile_size
+            routed_ctx.sram_mcast_src_cb_descriptor = _make_face_cb_desc(
+                routed_ctx.sram_mcast_src_cb, sram_mcast_src_total, sram_offset
+            )
+            sram_offset += sram_mcast_src_total
+
+            # sram_intermed_cb: GR scratch (cap=2 8×32 tiles).
+            sram_intermed_total = 2 * sram_gr_tile_size
+            routed_ctx.sram_intermed_cb_descriptor = _make_face_cb_desc(
+                routed_ctx.sram_intermed_cb, sram_intermed_total, sram_offset
+            )
+            sram_offset += sram_intermed_total
+
+            # sram_gr_scalar_cb: GR scalar broadcast slot (cap=2 8×32 tiles).
+            sram_gr_scalar_total = 2 * sram_gr_tile_size
+            routed_ctx.sram_gr_scalar_cb_descriptor = _make_face_cb_desc(
+                routed_ctx.sram_gr_scalar_cb, sram_gr_scalar_total, sram_offset
+            )
+            sram_offset += sram_gr_scalar_total
+
+            assert sram_offset - cb9_offset <= shared_in1_size, (
+                f"SRAM sender-only CBs ({sram_offset - cb9_offset} B) overflow "
+                f"cb_in1 region ({shared_in1_size} B); need a larger overlay or "
+                f"separate L1 region."
+            )
+
         # ── Aliased CBs (share offset with source) → sdpa_kv_cache_buffer ──
 
         # CB 22: add_cb_in0 → same memory as CB 19 (total_size=1792, page_size=1792, tile=32x32, bfloat16)
@@ -4309,6 +5547,9 @@ class MoeOp:
             tile=ttnn.TileDescriptor(ttnn.Tile([32, 32])),
         )
         cb22_desc.format_descriptors = [cb22_fmt]
+        # Restrict to eltwise_add cores; aliased with gate_mm_weights_cb (gate_mm cores).
+        # gate_mm and gate_proj_core_ranges are strictly disjoint (col 12 vs col 0,7).
+        cb22_desc.core_ranges = routed_ctx.gate_proj_core_ranges
         routed_ctx.add_params["cb_in0_descriptor"] = cb22_desc
 
         # ── CBs → sdpa_out_interm_buffer ──
@@ -4331,6 +5572,28 @@ class MoeOp:
         cb26_desc.format_descriptors = [cb26_fmt]
         routed_ctx.residual_mcast_params["dst_cb_descriptor"] = cb26_desc
         out_offset += cb26_total_size
+
+        # SRAM down mcast dst CB on the 112 shared mcast receiver cores. Lives in
+        # out_buf since kv_buf is full — and the 112-core grid is a superset of
+        # cb26's grid (residual_mcast_dst is on the same shared receivers), so
+        # out_buf has the right per-core L1 backing here.
+        sram_dst_cb_id = routed_ctx.sram_down_mcast_dst_cb
+        sram_dst_total_size = 4096
+        sram_dst_desc = ttnn.cb_descriptor_from_sharded_tensor(
+            sram_dst_cb_id,
+            out_buf,
+            address_offset=out_offset,
+            total_size=sram_dst_total_size,
+        )
+        sram_dst_fmt = ttnn.CBFormatDescriptor(
+            buffer_index=sram_dst_cb_id,
+            data_format=ttnn.bfloat16,
+            page_size=64,
+            tile=ttnn.TileDescriptor(ttnn.Tile([1, 32])),
+        )
+        sram_dst_desc.format_descriptors = [sram_dst_fmt]
+        routed_ctx.sram_down_mcast_dst_cb_descriptor = sram_dst_desc
+        out_offset += sram_dst_total_size
 
         # Sender-core-only region starts here (CB 30, 31, 38 are only on sender core).
         # Reduce scratch CBs (43-45) can reuse these offsets since they live on
@@ -4378,6 +5641,8 @@ class MoeOp:
             tile=ttnn.TileDescriptor(ttnn.Tile([1, 32])),
         )
         cb38_desc.format_descriptors = [cb38_fmt]
+        # Restrict to sender; aliased with shared_gu_out_cb (a/b shared compute).
+        cb38_desc.core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(routed_ctx.sender_core, routed_ctx.sender_core)])
         shared_ctx.output_gather_params["dst_cb_descriptor"] = cb38_desc
         shared_ctx.output_gather_params["receiver_data_addr"] = out_addr + cb38_offset
         out_offset += cb38_total_size
@@ -4401,6 +5666,10 @@ class MoeOp:
                 tile=ttnn.TileDescriptor(ttnn.Tile([32, 32])),
             )
             cb24_desc.format_descriptors = [cb24_fmt]
+            # Restrict to reduce/add cores; aliased with residual_mcast_src_cb (sender).
+            # reduce_all_cores_set covers eltwise_add + reduce workers; sender at (12,9)
+            # is disjoint from those.
+            cb24_desc.core_ranges = reduce_all_cores_set
             routed_ctx.add_params["cb_out_descriptor"] = cb24_desc
             out_offset += cb24_total_size
 
@@ -4972,6 +6241,9 @@ class MoeOp:
         termination_semaphore=None,
         forward_metadata_size_bytes=0,
         metadata_l1_addr=0,
+        sram_gate_proj_weights_tensor=None,
+        sram_up_proj_weights_tensor=None,
+        sram_down_proj_weights_tensor=None,
     ):
         """Setup both routed and shared expert contexts, then overlap CBs with SDPA buffers."""
         self.noc_mode = noc_mode
@@ -5025,6 +6297,9 @@ class MoeOp:
             semaphores=semaphores,
             cb_id_context=cb_id_context,
             worker_core_grid=worker_core_grid,
+            sram_gate_proj_weights_tensor=sram_gate_proj_weights_tensor,
+            sram_up_proj_weights_tensor=sram_up_proj_weights_tensor,
+            sram_down_proj_weights_tensor=sram_down_proj_weights_tensor,
         )
 
         device_tensor = ttnn.get_device_tensors(shared_residual_mcast_src_tensor)[0]
@@ -5145,7 +6420,23 @@ class MoeOp:
         cb_descriptors += MoeRoutedExpertOp._build_cb_descriptors(self.ctx.routed_ctx)
         cb_descriptors += MoeSharedExpertOp._build_cb_descriptors(self.ctx.shared_ctx)
         if self.ctx.reconfig_moe_cbs:
-            self.cb_metadata = record_cb_metadata(cb_descriptors)
+            # Include per-device SRAM weight CB descriptors in the metadata so
+            # the reconfig mask covers them too. Without this, NCRISC's
+            # reset_stream_regs skips these CBs and setup_sharded_buffer's iter-2
+            # cb_reserve_back blocks because iter-1's push (received=1, acked=0,
+            # cap=1) was never reset.
+            sram_metadata_descs = []
+            rctx = self.ctx.routed_ctx
+            for per_dev_attr in (
+                "sram_gate_proj_cb_in1_descriptors_per_device",
+                "sram_up_proj_cb_in1_descriptors_per_device",
+                "sram_down_proj_cb_in1_descriptors_per_device",
+            ):
+                per_dev = getattr(rctx, per_dev_attr, None) or {}
+                for descs in per_dev.values():
+                    if descs:
+                        sram_metadata_descs.extend(descs)
+            self.cb_metadata = record_cb_metadata(cb_descriptors + sram_metadata_descs)
         return cb_descriptors
 
     def _build_dummy_cb_descs(self):
@@ -5195,7 +6486,10 @@ class MoeOp:
 
         rmsnorm_mcast_dst_cb = self.ctx.routed_ctx.rmsnorm_mcast_params["dst_cb"]
         shared_ncrisc, shared_brisc, shared_trisc = MoeSharedExpertOp._build_compile_time_args(
-            self.ctx.shared_ctx, rmsnorm_mcast_dst_cb, self.ctx.routed_ctx.rmsnorm_mcast_params
+            self.ctx.shared_ctx,
+            rmsnorm_mcast_dst_cb,
+            self.ctx.routed_ctx.rmsnorm_mcast_params,
+            self.ctx.routed_ctx,
         )
         ncrisc_args += shared_ncrisc
         brisc_args += shared_brisc
@@ -5374,6 +6668,71 @@ class MoeOp:
                         other_value=0,
                     )
 
+        # SRAM routed gate_proj per-device per-core overrides. Each device has
+        # its own SRAM weight + fmt + base_addrs L1 allocations (independent
+        # per-device addresses), so per-coord override is required for TP8.
+        sgp = routed_ctx.sram_gate_proj_params
+        if sgp and sgp.get("num_sram_experts", 0) > 0:
+            sram_overrides = {
+                "sram_gate_proj_fmt_l1_addr": sgp["sram_fmt_l1_addr_per_device"][coord],
+                "sram_gate_proj_base_addrs_l1_addr": sgp["sram_base_addrs_l1_addr_per_device"][coord],
+            }
+            for i, desc in enumerate(self.device_per_core_descs):
+                name = desc.named_compile_time_arg
+                if name in sram_overrides:
+                    self.device_per_core_descs[i] = PerCoreCompileTimeDescriptor(
+                        named_compile_time_arg=name,
+                        core_values=sram_overrides[name],
+                        other_value=0,
+                    )
+
+            # Append per-device cb_in1 CB descriptors (one per core, per_core_allocation=True).
+            # Each device has its own L1 layout, so per-coord descriptors are added here
+            # rather than in the shared _build_cb_descriptors.
+            cb_in1_descs = routed_ctx.sram_gate_proj_cb_in1_descriptors_per_device.get(coord)
+            if cb_in1_descs:
+                self.device_cb_descs.extend(cb_in1_descs)
+
+        # SRAM up_proj per-device per-core overrides — mirror of gate_proj.
+        sup = routed_ctx.sram_up_proj_params
+        if sup and sup.get("num_sram_experts", 0) > 0:
+            sram_up_overrides = {
+                "sram_up_proj_fmt_l1_addr": sup["sram_fmt_l1_addr_per_device"][coord],
+                "sram_up_proj_base_addrs_l1_addr": sup["sram_base_addrs_l1_addr_per_device"][coord],
+            }
+            for i, desc in enumerate(self.device_per_core_descs):
+                name = desc.named_compile_time_arg
+                if name in sram_up_overrides:
+                    self.device_per_core_descs[i] = PerCoreCompileTimeDescriptor(
+                        named_compile_time_arg=name,
+                        core_values=sram_up_overrides[name],
+                        other_value=0,
+                    )
+
+            cb_in1_descs_up = routed_ctx.sram_up_proj_cb_in1_descriptors_per_device.get(coord)
+            if cb_in1_descs_up:
+                self.device_cb_descs.extend(cb_in1_descs_up)
+
+        # SRAM down_proj per-device per-core overrides — mirror of gate_proj.
+        sdp_pd = routed_ctx.sram_down_proj_params
+        if sdp_pd and sdp_pd.get("num_sram_experts", 0) > 0:
+            sram_down_overrides = {
+                "sram_down_proj_fmt_l1_addr": sdp_pd["sram_fmt_l1_addr_per_device"][coord],
+                "sram_down_proj_base_addrs_l1_addr": sdp_pd["sram_base_addrs_l1_addr_per_device"][coord],
+            }
+            for i, desc in enumerate(self.device_per_core_descs):
+                name = desc.named_compile_time_arg
+                if name in sram_down_overrides:
+                    self.device_per_core_descs[i] = PerCoreCompileTimeDescriptor(
+                        named_compile_time_arg=name,
+                        core_values=sram_down_overrides[name],
+                        other_value=0,
+                    )
+
+            cb_in1_descs_dn = routed_ctx.sram_down_proj_cb_in1_descriptors_per_device.get(coord)
+            if cb_in1_descs_dn:
+                self.device_cb_descs.extend(cb_in1_descs_dn)
+
         # Apply reduce-to-one modifications (no-op when reduce disabled)
         self._build_reduce_per_device(reduce_root_coord, coord, row, col, chip_id)
 
@@ -5436,6 +6795,15 @@ class MoeOp:
         # Per-worker downstream sockets for reduce workers to send reduced output
         downstream_sockets=None,
         cb_id_context=None,
+        # SRAM routed gate_proj weights — list of L1-resident CompressedTensors,
+        # one per slot, in slot order matching the sram_expert_ids encoding in
+        # create_gate_indices_tensor. None or empty = DRAM-only.
+        sram_gate_proj_weights_tensor=None,
+        # SRAM routed up_proj weights — same contract as gate_proj.
+        sram_up_proj_weights_tensor=None,
+        # SRAM routed down_proj weights — runs on the 112 shared mcast receiver
+        # cores. None = no SRAM down_proj; kernel skips uniformly.
+        sram_down_proj_weights_tensor=None,
     ):
         """
         Execute the full fused MoE operation (routed + shared expert).
@@ -5511,6 +6879,9 @@ class MoeOp:
             persistent_next_iter_semaphore=persistent_next_iter_semaphore,
             persistent_mode=persistent_mode,
             termination_semaphore=termination_semaphore,
+            sram_gate_proj_weights_tensor=sram_gate_proj_weights_tensor,
+            sram_up_proj_weights_tensor=sram_up_proj_weights_tensor,
+            sram_down_proj_weights_tensor=sram_down_proj_weights_tensor,
         )
 
         # ==================================================================

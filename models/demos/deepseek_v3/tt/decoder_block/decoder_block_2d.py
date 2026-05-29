@@ -37,6 +37,7 @@ class DecoderBlock2D(DecoderBlock2DBase):
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
         fabric_config: ttnn.FabricConfig,
+        batch_size_per_row: int,
     ) -> ModelPrefillConfig:
         return NonExpert.prefill_model_config(hf_config, mesh_device, fabric_config)
 
@@ -69,6 +70,7 @@ class DecoderBlock2D(DecoderBlock2DBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
+        fabric_config: ttnn.FabricConfig,
     ) -> ModelState:
         return {}
 

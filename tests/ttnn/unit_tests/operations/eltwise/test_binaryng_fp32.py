@@ -6,7 +6,7 @@ import torch
 import ttnn
 
 import pytest
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp, assert_allclose
+from tests.ttnn.utils_for_testing import assert_with_ulp, assert_allclose
 
 pytestmark = pytest.mark.use_module_device
 
@@ -280,10 +280,8 @@ def test_squared_difference_fp32(device):
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     z_tt_out = ttnn.squared_difference(x_tt, y_tt)
-    tt_out = ttnn.to_torch(z_tt_out)
 
-    status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.999
-    assert status
+    assert_with_ulp(z_torch, z_tt_out, ulp_threshold=2)
 
 
 @pytest.mark.parametrize(
@@ -304,8 +302,7 @@ def test_logical_fp32(device, ttnn_function):
     z_tt_out = ttnn_function(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_out)
 
-    status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.999
-    assert status
+    assert torch.equal(z_torch.to(tt_out.dtype), tt_out)
 
 
 @pytest.mark.parametrize(
@@ -329,8 +326,7 @@ def test_relational_fp32(device, ttnn_function):
     z_tt_out = ttnn_function(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_out)
 
-    status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.999
-    assert status
+    assert torch.equal(z_torch.to(tt_out.dtype), tt_out)
 
 
 @pytest.mark.parametrize(
@@ -351,8 +347,7 @@ def test_bitwise(device, ttnn_function):
     z_tt_out = ttnn_function(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_out)
 
-    status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.9999
-    assert status
+    assert torch.equal(z_torch, tt_out)
 
 
 def test_bitwise_left_shift(device):
@@ -365,8 +360,7 @@ def test_bitwise_left_shift(device):
     z_tt_out = ttnn.bitwise_left_shift(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_out)
 
-    status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.999
-    assert status
+    assert torch.equal(z_torch, tt_out)
 
 
 def test_bitwise_right_shift(device):
@@ -379,8 +373,7 @@ def test_bitwise_right_shift(device):
     z_tt_out = ttnn.bitwise_right_shift(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_out)
 
-    status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.999
-    assert status
+    assert torch.equal(z_torch, tt_out)
 
 
 @pytest.mark.parametrize(
@@ -416,8 +409,7 @@ def test_addalpha_fp32(alpha, device):
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     z_tt_out = ttnn.addalpha(x_tt, y_tt, alpha)
-    assert_with_ulp(z_tt_out, z_torch)
-    assert_with_pcc(ttnn.to_torch(z_tt_out), z_torch)
+    assert_with_ulp(z_torch, z_tt_out, ulp_threshold=1)
 
 
 @pytest.mark.parametrize("alpha", [-100.0, -20.0, 0.0, 2.0, 5.0, 10.0, 50.0])
@@ -429,8 +421,7 @@ def test_subalpha_fp32(alpha, device):
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     z_tt_out = ttnn.subalpha(x_tt, y_tt, alpha)
-    assert_with_ulp(z_tt_out, z_torch)
-    assert_with_pcc(ttnn.to_torch(z_tt_out), z_torch)
+    assert_with_ulp(z_torch, z_tt_out, ulp_threshold=1)
 
 
 @pytest.mark.parametrize(

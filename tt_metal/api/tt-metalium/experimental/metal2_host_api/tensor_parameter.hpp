@@ -6,16 +6,12 @@
 
 #include <string>
 
+#include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 
 namespace tt::tt_metal::experimental::metal2_host_api {
 
 // A name identifying a TensorParameter within a ProgramSpec.
-//
-// CONVENTION: define names as `constexpr const char*` constants, e.g.:
-//   constexpr const char* INPUT_TENSOR = "input_tensor";
-//   TensorParameter{.unique_id = INPUT_TENSOR, ...};
-// Reusing a single constant helps catch typos and errors at compile time.
 using TensorParameterName = std::string;
 
 // A TensorParameter is used to declare that a Program operates on a MeshTensor
@@ -27,6 +23,11 @@ struct TensorParameter {
 
     // Single-device tensor layout
     tt::tt_metal::TensorSpec spec;
+
+    //////////////////////////////
+    // Advanced options (see advanced_options.hpp)
+    //////////////////////////////
+    TensorParameterAdvancedOptions advanced_options;
 };
 
 }  // namespace tt::tt_metal::experimental::metal2_host_api

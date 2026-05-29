@@ -236,6 +236,7 @@ jobs:
     if: ${{
         github.ref_name == 'main' ||
         needs.find-changed-files.outputs.cmake-changed == 'true' ||
+        needs.find-changed-files.outputs.tt-metalium-changed == 'true' ||
         needs.find-changed-files.outputs.tt-nn-changed == 'true'
       }}
     strategy:
@@ -406,6 +407,18 @@ jobs:
         # Without this, fixes.yml paths don't match the PR diff and comments are silently dropped.
         repo_path_prefix: /__w
 
+  # Full clang-tidy scan (same checks enforced at merge gate).
+  code-analysis:
+    needs: [build-docker-images]
+    if: (github.event_name == 'pull_request' && !github.event.pull_request.draft) || github.event_name == 'merge_group'
+    uses: ./.github/workflows/code-analysis.yaml
+    secrets: inherit
+    with:
+      platform: "Ubuntu 22.04"
+      ci-build-docker-image: ${{ needs.build-docker-images.outputs.ci-build-tag }}
+      dev-docker-image: ${{ needs.build-docker-images.outputs.dev-tag }}
+      force-scan: true
+
   # LLK PR Labeling — auto-apply labels based on which LLK directories changed
   llk-label-pr:
     needs: find-changed-files
@@ -527,7 +540,6 @@ jobs:
          needs.find-changed-files.outputs.llk-quasar-changed == 'true' ||
          needs.find-changed-files.outputs.llk-common-changed == 'true' ||
          needs.find-changed-files.outputs.llk-sfpi-changed == 'true' ||
-         needs.find-changed-files.outputs.llk-tests-changed == 'true' ||
          needs.find-changed-files.outputs.llk-ci-changed == 'true')
       }}
     uses: ./.github/workflows/llk-build-quasar.yaml
@@ -557,6 +569,7 @@ jobs:
       - ttnn-smoke-tests
       - metalium-examples
       - clang-tidy-light
+      - code-analysis
       - model-charts-sync
       - build-docs
       - llk-test-wormhole
@@ -569,6 +582,7 @@ jobs:
         with:
           required-jobs: "asan-build"
           optional-jobs: >-
+            code-analysis,
             clang-tidy-light,
             metalium-smoke-tests, ttnn-smoke-tests, metalium-examples,
             model-charts-sync, build-docs,

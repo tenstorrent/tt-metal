@@ -379,7 +379,14 @@ def main():
 
         optimizer.zero_grad()
         logits = model(tt_x, None)
-        loss = ttml.ops.loss.cross_entropy_loss(logits, tt_y, ttml.ops.ReduceType.MEAN)
+        # When TP is enabled the LoRA-wrapped Llama LM head returns vocab-sharded
+        # logits ([B,1,S,padded_V/tp_size] per device).
+        if use_tp:
+            loss = ttml.ops.distributed.vocab_parallel_cross_entropy_loss(
+                logits, tt_y, cluster_axis=mesh.axis_index("tp")
+            )
+        else:
+            loss = ttml.ops.loss.cross_entropy_loss(logits, tt_y, ttml.ops.ReduceType.MEAN)
 
         if use_ddp:
             loss_val = float(get_loss_over_devices(loss))

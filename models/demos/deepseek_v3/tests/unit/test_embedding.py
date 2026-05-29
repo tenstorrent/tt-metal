@@ -19,7 +19,7 @@ VOCAB_SIZE = 2048
 
 @pytest.mark.requires_device(["N150", "N300", "T3K", "TG", "DUAL", "QUAD"])
 @pytest.mark.parametrize(
-    "device_params", [{"fabric_config": get_fabric_config(), "trace_region_size": 90112}], indirect=True
+    "device_params", [{"fabric_config": get_fabric_config(), "trace_region_size": 0}], indirect=True
 )
 @pytest.mark.parametrize("shape_pair", DEEPSEEK_SHAPE_PAIRS)
 @pytest.mark.parametrize("input_dtype", [ttnn.uint32])

@@ -61,6 +61,17 @@ void PinnedMemoryCache::erase_entry(std::list<CacheEntry>::iterator it) {
             break;
         }
     }
+    for (ChipId mmio_id : it->mmio_device_ids) {
+        auto current_size_it = current_size_bytes_by_mmio_id_.find(mmio_id);
+        if (current_size_it == current_size_bytes_by_mmio_id_.end()) {
+            continue;
+        }
+        current_size_it->second =
+            entry_size_bytes <= current_size_it->second ? current_size_it->second - entry_size_bytes : size_t{0};
+        if (current_size_it->second == 0) {
+            current_size_bytes_by_mmio_id_.erase(current_size_it);
+        }
+    }
     current_size_bytes_ =
         entry_size_bytes <= current_size_bytes_ ? current_size_bytes_ - entry_size_bytes : static_cast<size_t>(0);
     lru_entries_.erase(it);
@@ -74,17 +85,6 @@ void PinnedMemoryCache::release_locked(const void* host_address) {
         erase_entry(list_it);
         map_it = next_map_it;
     }
-}
-
-bool PinnedMemoryCache::evict_oldest_entry() {
-    for (auto it = lru_entries_.begin(); it != lru_entries_.end(); ++it) {
-        if (it->pinned_memory.use_count() > 1) {
-            continue;
-        }
-        erase_entry(it);
-        return true;
-    }
-    return false;
 }
 
 bool PinnedMemoryCache::evict_oldest_entry_for_mmio_ids(const std::set<ChipId>& target_mmio_ids) {
@@ -102,15 +102,42 @@ bool PinnedMemoryCache::evict_oldest_entry_for_mmio_ids(const std::set<ChipId>& 
     return false;
 }
 
-bool PinnedMemoryCache::evict_oldest_until_within_limit(size_t incoming_size_bytes) {
-    const size_t cache_limit_bytes = MetalContext::instance().rtoptions().get_pinned_memory_cache_limit_bytes();
-    if (incoming_size_bytes > cache_limit_bytes) {
+bool PinnedMemoryCache::evict_oldest_entry() {
+    for (auto it = lru_entries_.begin(); it != lru_entries_.end(); ++it) {
+        if (it->pinned_memory.use_count() > 1) {
+            continue;
+        }
+        erase_entry(it);
+        return true;
+    }
+    return false;
+}
+
+bool PinnedMemoryCache::evict_oldest_until_within_limit(
+    size_t incoming_size_bytes,
+    size_t global_limit_bytes,
+    size_t per_mmio_limit_bytes,
+    const std::set<ChipId>& target_mmio_ids) {
+    if (incoming_size_bytes > global_limit_bytes || incoming_size_bytes > per_mmio_limit_bytes) {
         return false;
     }
 
-    while (current_size_bytes_ > cache_limit_bytes - incoming_size_bytes) {
+    while (current_size_bytes_ > global_limit_bytes - incoming_size_bytes) {
         if (!evict_oldest_entry()) {
             return false;
+        }
+    }
+
+    for (ChipId mmio_id : target_mmio_ids) {
+        auto current_size_bytes = [&]() {
+            auto current_size_it = current_size_bytes_by_mmio_id_.find(mmio_id);
+            return current_size_it == current_size_bytes_by_mmio_id_.end() ? size_t{0} : current_size_it->second;
+        };
+        const std::set<ChipId> single_mmio_id{mmio_id};
+        while (current_size_bytes() > per_mmio_limit_bytes - incoming_size_bytes) {
+            if (!evict_oldest_entry_for_mmio_ids(single_mmio_id)) {
+                return false;
+            }
         }
     }
     return true;
@@ -152,6 +179,8 @@ std::shared_ptr<PinnedMemory> PinnedMemoryCache::try_pin(
     }
     const void* host_addr = static_cast<const void*>(buffer_bytes.data());
     const size_t buffer_size = buffer_bytes.size();
+    const size_t global_cache_limit = MetalContext::instance().rtoptions().get_pinned_memory_cache_limit_bytes();
+    const size_t per_mmio_pin_limit = params.max_total_pin_size;
     std::set<ChipId> target_device_ids = compute_device_ids(mesh_device, coordinate_range_set);
     if (target_device_ids.empty()) {
         return nullptr;
@@ -216,7 +245,7 @@ std::shared_ptr<PinnedMemory> PinnedMemoryCache::try_pin(
         }
     }
 
-    if (!evict_oldest_until_within_limit(buffer_size)) {
+    if (!evict_oldest_until_within_limit(buffer_size, global_cache_limit, per_mmio_pin_limit, target_mmio_ids)) {
         return nullptr;
     }
 
@@ -234,6 +263,9 @@ std::shared_ptr<PinnedMemory> PinnedMemoryCache::try_pin(
             CacheEntry entry{pinned, host_addr, target_device_ids, target_mmio_ids, map_to_noc};
             lru_entries_.push_back(std::move(entry));
             address_map_.emplace(host_addr, std::prev(lru_entries_.end()));
+            for (ChipId mmio_id : target_mmio_ids) {
+                current_size_bytes_by_mmio_id_[mmio_id] += pinned->get_buffer_size();
+            }
             current_size_bytes_ += pinned->get_buffer_size();
             return pinned;
         } catch (...) {

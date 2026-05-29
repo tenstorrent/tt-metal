@@ -72,7 +72,7 @@ def test_reduce_sum_single_device(device, shape):
 )
 @pytest.mark.parametrize("enable_trace", [False, True])
 @pytest.mark.parametrize(
-    "device_params", [{"trace_region_size": 10000, "fabric_config": get_fabric_config()}], indirect=True
+    "device_params", [{"trace_region_size": 0, "fabric_config": get_fabric_config()}], indirect=True
 )
 def test_reduce_sum_mesh_device(mesh_device, shape, enable_trace, device_params):
     """

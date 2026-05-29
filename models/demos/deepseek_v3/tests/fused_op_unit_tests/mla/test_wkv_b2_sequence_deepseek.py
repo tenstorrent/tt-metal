@@ -125,7 +125,7 @@ def run_wkv_b2_sequence_with_trace(
     "device_params",
     [
         {
-            "trace_region_size": 5502496,
+            "trace_region_size": 0,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
         }
     ],

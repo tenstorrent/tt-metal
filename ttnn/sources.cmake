@@ -62,7 +62,6 @@ set(TTNNCPP_SRCS
     cpp/ttnn/operations/generic/device/generic_op_program_factory.cpp
     cpp/ttnn/operations/generic/device/generic_op_device_operation.cpp
     cpp/ttnn/operations/experimental/fusion/device/fusion_dispatch_op_device_operation.cpp
-    cpp/ttnn/operations/experimental/fusion/device/fusion_dispatch_op_program_factory.cpp
     cpp/ttnn/operations/data_movement/reshape_view/reshape_common.cpp
     cpp/ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_device_operation.cpp
     cpp/ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_program_factory.cpp
@@ -166,6 +165,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/experimental/deepseek_moe_post_combine_tilize/deepseek_moe_post_combine_tilize_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/post_combine_reduce/post_combine_reduce_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek/moe/moe_gate_mm/moe_gate_mm_nanobind.cpp
+    cpp/ttnn/operations/experimental/deepseek/moe/deepseek_moe_gate/deepseek_moe_gate_nanobind.cpp
     cpp/ttnn/operations/experimental/topk_router_gpt/topk_router_gpt_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo/matmul_wo_nanobind.cpp
     cpp/ttnn/operations/experimental/ccl/moe_gpt/moe_gpt_nanobind.cpp

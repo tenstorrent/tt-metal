@@ -113,14 +113,19 @@ void bind_moe_compute(nb::module_& mod) {
         nb::arg("output_height_shard_dim"),
         nb::arg("intermediate_size"),
         nb::arg("has_bias") = false,
-        nb::arg("cluster_axis"),
+        // cluster_axis is required when compute_only=False; pass None for compute_only=True paths.
+        // (Two breaking changes vs prior versions: (1) intermediate_size is now required positional
+        // from PR #43932; (2) cluster_axis became optional, new compute_only/bh_ring_size knobs.)
+        nb::arg("cluster_axis") = nb::none(),
         nb::arg("topology") = nb::none(),
         nb::arg("num_links") = nb::none(),
         nb::arg("mux_core_range_set") = nb::none(),
         nb::arg("output_memory_config") = nb::none(),
         nb::arg("optional_output_tensor") = nb::none(),
         nb::arg("optional_cross_device_semaphore") = nb::none(),
-        nb::arg("activation_type") = nb::none());
+        nb::arg("activation_type") = nb::none(),
+        nb::arg("compute_only") = false,
+        nb::arg("bh_ring_size") = nb::none());
 }
 
 void bind_get_moe_combine_cores(nb::module_& mod) {

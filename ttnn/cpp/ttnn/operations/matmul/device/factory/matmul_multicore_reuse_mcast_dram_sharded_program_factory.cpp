@@ -162,6 +162,15 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
         per_core_N_compute = out_subblock_w * num_subblock_w_per_core_N;
     }
 
+    // Number of in1 columns in the last subblock that are actually backed by reader-pushed tiles.
+    // When the subblock-width optimization above pads per_core_N_compute beyond per_core_N_in1_sender,
+    // the last subblock has out_subblock_w lanes total but only this many lanes correspond to in1
+    // tiles the reader pushed into cb_in1; the rest are padded columns that the output writer drops.
+    // The compute kernel uses this to narrow the matmul_block call for the last subblock so it never
+    // reads cb_in1 tile indices that were not produced for the current block.
+    // When no padding occurs (per_core_N_compute == per_core_N_in1_sender) this equals out_subblock_w.
+    uint32_t last_subblock_w_valid = out_subblock_w - (per_core_N_compute - per_core_N_in1_sender);
+
     uint32_t num_blocks = K / in0_block_w;
     bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
 
@@ -458,6 +467,7 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
             {"cb_in1_intermediate", tt::CBIndex::c_9},
             {"cb_in0_transposed", tt::CBIndex::c_10},
             {"bias_ntiles", per_core_N_compute},
+            {"last_subblock_w_valid", last_subblock_w_valid},
         };
         if (fused_activation.has_value() && fused_activation.value().op_type != UnaryOpType::RELU) {
             using ttnn::operations::matmul::utilities::get_activation_params;

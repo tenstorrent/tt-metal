@@ -16,7 +16,7 @@ inline void _llk_math_eltwise_ternary_sfpu_params_(
     std::uint32_t dst_index_in1,
     std::uint32_t dst_index_in2,
     std::uint32_t dst_index_out,
-    int vector_mode = static_cast<int>(VectorMode::RC),
+    VectorMode vector_mode = VectorMode::RC,
     Args&&... args)
 {
     _llk_math_eltwise_sfpu_assert_dst_index_<DST_SYNC_MODE, DST_ACCUM_MODE>(dst_index_in0, "dst_index_in0 exceeds max dest tiles");

@@ -4,6 +4,7 @@
 
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 #include <tt-metalium/experimental/tensor/impl/tensor_impl.hpp>
+#include <tt-metalium/mesh_device.hpp>
 
 #include "mesh_tensor_impl.hpp"
 
@@ -34,9 +35,9 @@ std::shared_ptr<distributed::MeshBuffer> MeshTensor::mesh_buffer_invariant_break
     return impl().raw_mesh_buffer();
 }
 
-const distributed::MeshDevice& MeshTensor::device() const { return device_mut(); }
+const distributed::MeshDevice& MeshTensor::device() const { return mutable_device(); }
 
-distributed::MeshDevice& MeshTensor::device_mut() const { return *mesh_buffer().device(); }
+distributed::MeshDevice& MeshTensor::mutable_device() const { return *mesh_buffer().device(); }
 
 const TensorSpec& MeshTensor::tensor_spec() const { return impl().spec(); }
 
@@ -73,6 +74,7 @@ std::size_t MeshTensor::element_size() const {
         case DataType::INT32: return sizeof(int32_t);
         case DataType::UINT32: return sizeof(uint32_t);
         case DataType::UINT16: return sizeof(uint16_t);
+        case DataType::FP8_E4M3: return sizeof(float8_e4m3);
         case DataType::UINT8: return sizeof(uint8_t);
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B: return sizeof(std::byte);
