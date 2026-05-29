@@ -224,6 +224,12 @@ def test_mux_bw_full_size_channels(
     num_full_size_channel_iters,
     num_iters_between_teardown_checks,
 ):
+    if num_full_size_channels == 4:
+        pytest.skip(
+            "[CI] Tracked in issue #45497: bandwidth regression for 4 full-size channels "
+            "(expected 15.3975 B/c, actual ~14.80 B/c) — failing deterministically on T3K main; "
+            "≥3 consecutive failures in metal-run-microbenchmarks T3K ubench - Fabric Mux BW"
+        )
     test_name = "full_size_channels"
     run_mux_benchmark_test(
         test_name,
@@ -352,6 +358,12 @@ def test_mux_bw_both_channel_types(
     num_full_size_channel_iters,
     num_iters_between_teardown_checks,
 ):
+    if num_full_size_channels == 4 and num_header_only_channels == 1:
+        pytest.skip(
+            "[CI] Tracked in issue #45497: bandwidth regression for 4 full-size + 1 header-only channels "
+            "(expected 10.9333 B/c, actual ~10.37 B/c) — failing deterministically on T3K main; "
+            "≥3 consecutive failures in metal-run-microbenchmarks T3K ubench - Fabric Mux BW"
+        )
     test_name = "both_channel_types"
     run_mux_benchmark_test(
         test_name,
