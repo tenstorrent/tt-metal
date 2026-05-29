@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -14,8 +14,8 @@ void kernel_main() {
 
     constexpr auto cb_id_dst = tt::CBIndex::c_2;
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_dst(cb_id_dst);
+    Noc noc;
+    CircularBuffer cb_dst(cb_id_dst);
 
 #if DST_SHARDED
     cb_dst.wait_front(num_pages);

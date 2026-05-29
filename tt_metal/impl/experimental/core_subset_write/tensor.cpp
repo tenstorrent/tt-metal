@@ -6,6 +6,8 @@
 #include <tt-metalium/experimental/core_subset_write/tensor.hpp>
 #include <tt-metalium/experimental/tensor/tensor_apis.hpp>
 
+#include "tt_metal/impl/tensor/mesh_tensor_impl.hpp"
+
 namespace tt::tt_metal::experimental::core_subset_write {
 
 void enqueue_write_tensor(
@@ -24,7 +26,8 @@ void enqueue_write_tensor(
 
     // Pure data write into the device tensor's existing buffer; spec/topology of the device tensor
     // are intentionally not modified by a partial host->device copy.
-    enqueue_write(cq, device_tensor.mesh_buffer(), host_tensor.buffer(), /*blocking=*/false, logical_core_filter);
+    enqueue_write(
+        cq, *device_tensor.impl().raw_mesh_buffer(), host_tensor.buffer(), /*blocking=*/false, logical_core_filter);
 }
 
 }  // namespace tt::tt_metal::experimental::core_subset_write

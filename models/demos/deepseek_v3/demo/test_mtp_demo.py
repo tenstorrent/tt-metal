@@ -120,7 +120,7 @@ def test_mtp_demp_compare_outputs(
         sampling_top_p=1.0,
     )
 
-    baseline = run_demo(enable_mtp=False, **common_kwargs)
+    baseline = run_demo(enable_mtp=False, sample_on_device=False, **common_kwargs)
     mtp = run_demo(enable_mtp=True, sample_on_device=False, **common_kwargs)
 
     _assert_demo_outputs_match(baseline, mtp)

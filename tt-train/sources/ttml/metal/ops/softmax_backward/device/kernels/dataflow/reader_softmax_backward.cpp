@@ -6,8 +6,6 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
-#include "ttnn/kernel/dataflow/generate_mm_scaler.hpp"
-#include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
 
 void kernel_main() {
     // Compile time args
@@ -37,8 +35,8 @@ void kernel_main() {
     const auto softmax_output_accessor = TensorAccessor(softmax_output_args, softmax_output_addr);
     const auto upstream_grad_accessor = TensorAccessor(upstream_grad_args, upstream_grad_addr);
 
-    // Generate a column vector of ones for matmul-based reduction (BF16 only)
-    generate_mm_scaler(ones_cb_id, BF16_ONE_PACKED);
+    // Column of ones for matmul row reduction; format matches ones_cb (BF16 or FP32).
+    generate_matmul_row_reduce_tile(ones_cb_id);
 
     // When full row fits in L1 (num_tiles_per_row == tiles_per_block), read once; else stream and read twice
     constexpr bool full_row_in_l1 = (num_tiles_per_row == tiles_per_block);
@@ -76,18 +74,13 @@ void kernel_main() {
                     const uint32_t global_last_tile_idx = block_start + current_block_size - 1;
                     if (global_last_tile_idx == num_tiles_per_row - 1) {
                         const uint32_t last_tile_idx_in_block = current_block_size - 1;
-                        const uint32_t l1_write_addr_src0 = get_write_ptr(src0_cb_id);
-                        const uint32_t l1_write_addr_src1 = get_write_ptr(src1_cb_id);
-                        fill_pad_tile<uint16_t, mask_w, 32>(
-                            l1_write_addr_src0 + last_tile_idx_in_block * src0_tile_size,
-                            static_cast<uint16_t>(BF16_ZERO_BITS));
-                        fill_pad_tile<uint16_t, mask_w, 32>(
-                            l1_write_addr_src1 + last_tile_idx_in_block * src1_tile_size,
-                            static_cast<uint16_t>(BF16_ZERO_BITS));
+                        pad_last_tile_with_zeroes<mask_w>(src0_cb_id, last_tile_idx_in_block);
+                        pad_last_tile_with_zeroes<mask_w>(src1_cb_id, last_tile_idx_in_block);
                     }
                 }
 
-                // Zero-fill tail padding so compute always sees tiles_per_block tiles (no padding logic in compute).
+                // read_tiles_by_row only DMAs current_block_size tiles; reserved tail slots are uninitialized.
+                // Compute runs mul+reduce on all tiles_per_block slots with no mask, so y*grad must be 0 there.
                 if (current_block_size < tiles_per_block) {
                     const uint32_t pad_slots = tiles_per_block - current_block_size;
                     fill_reserved_tiles_with_zero(src0_cb_id, current_block_size, pad_slots, src0_tile_size);

@@ -34,8 +34,11 @@ void kernel_main() {
 
     const uint32_t St = get_compile_time_arg_val(16);
     uint32_t semaphore_addr = get_semaphore(get_compile_time_arg_val(17));  // semaphore for receiver
+    // 0 = legacy unbounded behavior; nonzero = wrap update_idx mod this value before
+    // page_table lookup (bounded sliding-window cache support).
+    constexpr uint32_t cache_position_modulo = get_compile_time_arg_val(18);
 
-    constexpr auto s0_args = TensorAccessorArgs<18>();
+    constexpr auto s0_args = TensorAccessorArgs<19>();
     constexpr auto index_tensor_args = TensorAccessorArgs<s0_args.next_compile_time_args_offset()>();
     constexpr auto page_table_args = TensorAccessorArgs<index_tensor_args.next_compile_time_args_offset()>();
 
@@ -68,11 +71,16 @@ void kernel_main() {
         cb_push_back(cb_index_id, 1);
         volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_wr_ptr);
 
-        const uint32_t update_idx = index_ptr[my_batch_idx];
-        if (update_idx == (uint32_t)-1) {
+        const uint32_t raw_update_idx = index_ptr[my_batch_idx];
+        if (raw_update_idx == (uint32_t)-1) {
             // Passing update_idx = -1 tells us to skip update for this user
             skip_update = true;
         } else {
+            // Wrap into the bounded sliding-window cache when enabled, so positions past
+            // the physical capacity are addressed correctly (cache_position_modulo is a
+            // multiple of block_size, so this preserves the intra-block offset).
+            const uint32_t update_idx =
+                cache_position_modulo > 0 ? raw_update_idx % cache_position_modulo : raw_update_idx;
             if constexpr (is_paged_cache) {
                 const auto page_table_gen = TensorAccessor(page_table_args, page_table_tensor_addr);
                 cb_reserve_back(page_table_cb_id, 1);

@@ -7,15 +7,34 @@
 #include <optional>
 #include <variant>
 
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
 #include "layernorm_device_operation_types.hpp"
-#include "layernorm_op_multi_core.hpp"
-#include "layernorm_op_multi_core_sharded.hpp"
 #include "layernorm_types.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 
 namespace ttnn::prim {
+
+struct LayerNormMultiCoreProgramFactory {
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const LayerNormParams& operation_attributes,
+        const LayerNormInputs& tensor_args,
+        Tensor& tensor_return_value,
+        const std::optional<CoreRangeSet>& core_range_set = std::nullopt);
+
+    // Returns the default core range for non-sharded LayerNorm if a
+    // core range override is not provided
+    static CoreRangeSet default_core_range(tt::tt_metal::IDevice* device);
+};
+
+struct LayerNormShardedProgramFactory {
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const LayerNormParams& operation_attributes,
+        const LayerNormInputs& tensor_args,
+        Tensor& tensor_return_value,
+        const std::optional<CoreRangeSet>& core_range_set = std::nullopt);
+};
 
 struct LayerNormDeviceOperation {
     using operation_attributes_t = LayerNormParams;

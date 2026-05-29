@@ -64,8 +64,22 @@ class Gemma4DecoderLayer:
         mesh_config,
         max_seq_len,
         max_local_batch_size,
+        shared_mlp_dtype=None,
+        attention_dtype=None,
+        experts_dtype=None,
+        router_dtype=None,
         transformation_mats=None,  # Legacy — ignored (HF-style RoPE needs no transformation mats)
     ):
+        # Per-module dtype overrides default to the model-wide ``dtype`` so
+        # callers that don't care about precision config see no change.
+        if shared_mlp_dtype is None:
+            shared_mlp_dtype = dtype
+        if attention_dtype is None:
+            attention_dtype = dtype
+        if experts_dtype is None:
+            experts_dtype = dtype
+        if router_dtype is None:
+            router_dtype = dtype
         self.mesh_device = mesh_device
         self.layer_idx = layer_idx
         self.hidden_size = hf_config.hidden_size
@@ -121,6 +135,7 @@ class Gemma4DecoderLayer:
             program_config=attn_program_config,
             layer_idx=layer_idx,
             tensor_cache_path=f"{tensor_cache_path}/layer_{layer_idx}/self_attn" if tensor_cache_path else None,
+            weight_dtype=attention_dtype,
         )
 
         # Shared/dense MLP (HF key: "mlp")
@@ -130,11 +145,11 @@ class Gemma4DecoderLayer:
             state_dict=substate(layer_state, "mlp") if layer_state else {},
             mesh_config=mesh_config,
             ccl_manager=ccl_manager,
-            dtype=dtype,
+            dtype=shared_mlp_dtype,
             tensor_cache_path=f"{tensor_cache_path}/layer_{layer_idx}/mlp" if tensor_cache_path else None,
         )
 
-        # MoE block (router + routed experts)
+        # MoE block (router + routed experts) — split dtypes between the two
         if self.enable_moe_block:
             self.moe = MoEBlock(
                 mesh_device=mesh_device,
@@ -142,7 +157,8 @@ class Gemma4DecoderLayer:
                 state_dict=layer_state,  # MoE expects "router.*" and "experts.*" keys
                 ccl_manager=ccl_manager,
                 mesh_config=mesh_config,
-                dtype=dtype,
+                dtype=experts_dtype,
+                router_dtype=router_dtype,
                 tensor_cache_path=f"{tensor_cache_path}/layer_{layer_idx}/moe" if tensor_cache_path else None,
             )
 

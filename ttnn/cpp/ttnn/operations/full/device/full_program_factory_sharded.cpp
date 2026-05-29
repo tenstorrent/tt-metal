@@ -5,29 +5,24 @@
 #include <cstdint>
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/buffer_distribution_spec.hpp>
-#include "full_program_factory_sharded.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "full_program_factory_common.hpp"
+#include "full_program_factory_sharded.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
 namespace ttnn::operations::full {
 
 using namespace tt;
 using namespace tt::constants;
-using namespace tt::tt_metal::detail;
+using namespace tt::tt_metal;
 
-FullShardedProgramFactory::cached_program_t FullShardedProgramFactory::create(
+ProgramDescriptor FullShardedProgramFactory::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& /*tensor_args*/,
     tensor_return_value_t& output) {
     auto fill_value = operation_attributes.fill_value;
     DataType dtype{operation_attributes.dtype};
-
-    Program program{};
 
     auto data_format = datatype_to_dataformat_converter(dtype);
 
@@ -41,10 +36,19 @@ FullShardedProgramFactory::cached_program_t FullShardedProgramFactory::create(
 
     constexpr CBIndex cb_fill_value_id = CBIndex::c_24;
 
-    auto cb_value_config = tt::tt_metal::CircularBufferConfig(page_size, {{cb_fill_value_id, data_format}})
-                               .set_page_size(cb_fill_value_id, page_size);
-    CreateCircularBuffer(program, compute_core_range, cb_value_config);
-    auto writer_defines = get_writer_defines(dtype);
+    ProgramDescriptor desc;
+
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = page_size,
+        .core_ranges = compute_core_range,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(cb_fill_value_id),
+            .data_format = data_format,
+            .page_size = page_size,
+        }}},
+    });
+
+    auto writer_defines = defines_from_map(get_writer_defines(dtype));
     auto u = encode_fill_value(fill_value, dtype);
 
     uint32_t elems_per_page = page_size / datum_size(data_format);
@@ -52,11 +56,13 @@ FullShardedProgramFactory::cached_program_t FullShardedProgramFactory::create(
         (uint32_t)cb_fill_value_id, elems_per_page, page_size, aligned_page_size, tensor_width_in_pages};
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
-    auto writer_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/full/device/kernels/writer_full_sharded.cpp",
-        compute_core_range,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_defines));
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source = "ttnn/cpp/ttnn/operations/full/device/kernels/writer_full_sharded.cpp";
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = compute_core_range;
+    writer_desc.compile_time_args = std::move(writer_compile_time_args);
+    writer_desc.defines = std::move(writer_defines);
+    writer_desc.config = WriterConfigDescriptor{};
 
     uint32_t shard_height_in_pages = output.buffer()->shard_spec().shape_in_pages()[0];
     uint32_t shard_width_in_pages = output.buffer()->shard_spec().shape_in_pages()[1];
@@ -80,30 +86,13 @@ FullShardedProgramFactory::cached_program_t FullShardedProgramFactory::create(
         uint32_t valid_pages_height = (shard_row_idx == num_shards_across_height - 1)
                                           ? (tensor_height_in_pages - (shard_row_idx * shard_height_in_pages))
                                           : shard_height_in_pages;
-        SetRuntimeArgs(
-            program,
-            writer_id,
-            core,
-            {output.buffer()->address(), u.u32, first_page_id, valid_pages_width, valid_pages_height});
+        writer_desc.emplace_runtime_args(
+            core, {output.buffer(), u.u32, first_page_id, valid_pages_width, valid_pages_height});
     }
 
-    return {std::move(program), {writer_id, runtime_cores}};
-}
+    desc.kernels.push_back(std::move(writer_desc));
 
-void FullShardedProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& /*tensor_args*/,
-    tensor_return_value_t& output) {
-    auto& program = cached_program.program;
-    auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
-    auto& cores_with_runtime_args = cached_program.shared_variables.cores_with_runtime_args;
-
-    auto output_buffer_address = output.buffer()->address();
-    for (const auto& core : cores_with_runtime_args) {
-        auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-        runtime_args[0] = output_buffer_address;
-    }
+    return desc;
 }
 
 }  // namespace ttnn::operations::full

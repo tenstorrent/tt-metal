@@ -137,10 +137,11 @@ def test_fused_tilize_sfpu_pack(config):
 
     # Use single tile: 32x32 input dimensions (standard tile size)
     input_dimensions = [32, 32]
-    src_A, _, tile_cnt = generate_stimuli(
-        formats.input_format,
-        formats.input_format,
-        input_dimensions=input_dimensions,
+    src_A, tile_cnt, _, _ = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
     )
     # We only use src_A for this simplified test
 

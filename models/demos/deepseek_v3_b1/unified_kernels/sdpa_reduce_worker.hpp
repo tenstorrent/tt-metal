@@ -5,6 +5,7 @@
 
 #include "kernel_op_api.hpp"
 #include "kernel_utils.hpp"
+#include "dataflow_utils.hpp"
 
 // =============================================================================
 // Per-RISC includes
@@ -226,7 +227,7 @@ template <
     uint32_t block_size,
     uint32_t scale_fp32,
     uint32_t num_l_chunks,
-    int vector_mode = (int)VectorMode::C>
+    VectorMode vector_mode = VectorMode::C>
 ALWI void sdpa_tail_streaming(
     uint32_t cb_worker_max_sum,
     uint32_t cb_prev_max_sum,
@@ -284,7 +285,8 @@ ALWI void sdpa_forward_data(
     uint32_t block_size) {
     copy_tile_init(cb_prev_max_sum);
     // Reconfigure from pack_block_contiguous mop configuration back to regular tile packing
-    PACK((llk_pack_mop_config<false, false>(cb_cur_max_sum)));
+    PACK((llk_pack_init<ckernel::PackMode::Default, false /* zero_output */, true /* skip_addrmod_config */>(
+        cb_cur_max_sum)));
     cb_wait_front(cb_prev_max_sum, 1);
     cb_reserve_back(cb_cur_max_sum, 1);
 
@@ -322,7 +324,7 @@ template <
     uint32_t block_size,
     uint32_t scale_fp32,
     uint32_t num_l_chunks,
-    int vector_mode = (int)VectorMode::C>
+    VectorMode vector_mode = VectorMode::C>
 ALWI void sdpa_tail_streaming_conditional(
     uint32_t cb_worker_max_sum,
     uint32_t cb_prev_max_sum,
@@ -753,24 +755,50 @@ struct SdpaReduceWorker {
                     scatter_dest_noc_y[i] = scatter_dest_coords[i * 2 + 1];
                 }
 
-                cb_wait_front(CTArgs::cb_l_out, CTArgs::scatter_num_tiles);
+                constexpr uint32_t scatter_payload_bytes = CTArgs::scatter_num_tiles * CTArgs::scatter_dst_tile_size;
+                static_assert(scatter_payload_bytes <= NOC_MAX_BURST_SIZE);
+                constexpr bool posted = CTArgs::scatter_arrival_enabled;
                 uint32_t src_addr = get_read_ptr(CTArgs::cb_l_out);
 
-                constexpr uint32_t scatter_payload_bytes = CTArgs::scatter_num_tiles * CTArgs::scatter_dst_tile_size;
+                uint64_t dest_noc_addr =
+                    get_noc_addr(scatter_dest_noc_x[0], scatter_dest_noc_y[0], args.scatter_dest_l1_addr);
+                unified_kernels::unicast_write_set_state<posted, true, true, true, false, write_cmd_buf>(
+                    src_addr, dest_noc_addr, scatter_payload_bytes);
 
-                for (uint32_t row = 0; row < CTArgs::scatter_num_rows; row++) {
+                if constexpr (CTArgs::scatter_arrival_enabled) {
+                    uint64_t sem_addr =
+                        get_noc_addr(scatter_dest_noc_x[0], scatter_dest_noc_y[0], args.scatter_arrival_sem_addr);
+                    unified_kernels::unicast_atomic_inc_set_state<false, true, true, false, write_at_cmd_buf>(
+                        sem_addr, 1);
+                }
+
+                cb_wait_front(CTArgs::cb_l_out, CTArgs::scatter_num_tiles);
+                unified_kernels::unicast_write_increment_counters<posted>(CTArgs::scatter_num_rows);
+                unified_kernels::noc_async_write_issue_txn<posted, false>();
+                if constexpr (CTArgs::scatter_arrival_enabled) {
+                    unified_kernels::unicast_atomic_inc_increment_counters<false>(CTArgs::scatter_num_rows);
+                    unified_kernels::noc_async_atomic_inc_issue_txn<false, false>();
+                }
+                src_addr += scatter_payload_bytes;
+
+                for (uint32_t row = 1; row < CTArgs::scatter_num_rows; row++) {
                     uint64_t dest_noc_addr =
                         get_noc_addr(scatter_dest_noc_x[row], scatter_dest_noc_y[row], args.scatter_dest_l1_addr);
-                    noc_async_write(src_addr, dest_noc_addr, scatter_payload_bytes);
-                    src_addr += scatter_payload_bytes;
+                    unified_kernels::unicast_write_set_state<posted, true, true, false, false, write_cmd_buf>(
+                        src_addr, dest_noc_addr, scatter_payload_bytes);
+
+                    unified_kernels::noc_async_write_issue_txn<posted, false>();
 
                     // Signal scatter arrival on destination core (used by fused ops
                     // to synchronize downstream stages like matmul1)
                     if constexpr (CTArgs::scatter_arrival_enabled) {
                         uint64_t sem_addr = get_noc_addr(
                             scatter_dest_noc_x[row], scatter_dest_noc_y[row], args.scatter_arrival_sem_addr);
-                        noc_semaphore_inc(sem_addr, 1);
+                        unified_kernels::unicast_atomic_inc_set_state<false, true, false, false, write_at_cmd_buf>(
+                            sem_addr, 1);
+                        unified_kernels::noc_async_atomic_inc_issue_txn<false, false>();
                     }
+                    src_addr += scatter_payload_bytes;
                 }
                 if constexpr (CTArgs::scatter_arrival_enabled) {
                     noc_async_atomic_barrier();
@@ -787,7 +815,7 @@ struct SdpaReduceWorker {
         // TRISC (Compute) - streaming SDPA tail reduction
         // ==================================================================
         void compute_impl([[maybe_unused]] const ComputeArgs& args) {
-            constexpr int vector_mode = VectorMode::RC_custom;
+            constexpr VectorMode vector_mode = VectorMode::RC_custom;
 
             reconfig_data_format<false, true>(CTArgs::cb_local_l, CTArgs::cb_local_l);
             pack_reconfig_data_format<true>(CTArgs::cb_l_out);

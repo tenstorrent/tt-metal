@@ -17,6 +17,7 @@
 #include <maybe_remote.hpp>
 #include <tt_metal.hpp>
 #include <tt-metalium/experimental/inspector.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -28,6 +29,7 @@
 #include <utility>
 
 #include "impl/allocator/allocator.hpp"
+#include "pinned_memory_cache.hpp"
 #include <tt_stl/assert.hpp>
 #include "buffer.hpp"
 #include "device/device_impl.hpp"
@@ -45,6 +47,8 @@
 #include <experimental/fabric/control_plane.hpp>
 #include <experimental/fabric/fabric_types.hpp>
 #include "distributed/fd_mesh_command_queue.hpp"
+#include "distributed/realtime_profiler_manager.hpp"
+#include "impl/buffers/drisc_l1_arena.hpp"
 #include "distributed/sd_mesh_command_queue.hpp"
 #include "tracy/Tracy.hpp"
 #include "tools/profiler/tt_metal_tracy.hpp"
@@ -54,6 +58,8 @@
 #include "debug/inspector/inspector.hpp"
 #include "sub_device/sub_device_manager.hpp"
 #include "sub_device/sub_device_manager_tracker.hpp"
+#include <set>
+#include "llrt/metal_soc_descriptor.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include "context/metal_context.hpp"
 #include <experimental/context/metal_env.hpp>
@@ -421,6 +427,9 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
 
     ctx.device_manager()->initialize_profiler();
     ctx.device_manager()->initialize_fabric_and_dispatch_fw();
+
+    mesh_device->pimpl_->init_realtime_profiler_socket(mesh_device);
+
     return mesh_device;
 }
 
@@ -529,6 +538,11 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_unit_meshes(
 
     ctx.device_manager()->initialize_profiler();
     ctx.device_manager()->initialize_fabric_and_dispatch_fw();
+
+    for (auto& [device_id, submesh] : result) {
+        submesh->pimpl_->init_realtime_profiler_socket(submesh);
+    }
+
     return result;
 }
 
@@ -850,6 +864,9 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
     ZoneScoped;
 
     log_trace(tt::LogMetal, "Closing mesh device {}", this->id());
+
+    // Shut down the CQ first so dispatch_s sends TERMINATE to the profiler core with the
+    // final buffer; the push kernel, receiver thread, and callbacks must still be alive.
     if (is_initialized()) {
         if (MetalContext::instance(this->get_context_id()).get_cluster().get_target_device_type() !=
             tt::TargetDevice::Mock) {
@@ -898,6 +915,21 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
         }
 
         mesh_command_queues_.clear();
+    }
+
+    // Tear down RT profiler after the CQ has shut down (so dispatch_s has already issued
+    // the final TERMINATE) but before the rest of the device teardown.
+    if (realtime_profiler_) {
+        realtime_profiler_->shutdown();
+        realtime_profiler_.reset();
+    }
+
+    // DRISC L1 arena is torn down here so any GCB-owned allocation handles have
+    // already been released (GCBs are user-owned and the user's invariant is to
+    // destroy them before close).
+    drisc_l1_arena_.reset();
+
+    if (is_initialized()) {
         sub_device_manager_tracker_.reset();
         scoped_devices_.reset();
         parent_mesh_.reset();
@@ -1353,8 +1385,68 @@ bool MeshDeviceImpl::initialize_impl(
         }
     }
     Inspector::mesh_device_initialized(this);
+
+    // DRISC L1 arena: always constructed up-front when the HAL exposes programmable DRAM
+    // cores so users don't observe a lazy side-effect on first DRAM-sender GCB creation.
+    if (MetalContext::instance(context_id_).hal().has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
+        drisc_l1_arena_ = std::make_shared<::tt::tt_metal::DriscL1Arena>(context_id_);
+    }
+
     is_internal_state_initialized = true;
     return true;
+}
+
+void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDevice>& mesh_device) {
+    if (realtime_profiler_) {
+        return;
+    }
+    realtime_profiler_ = std::make_unique<RealtimeProfilerManager>(mesh_device);
+}
+
+void MeshDeviceImpl::trigger_realtime_profiler_sync_check() {
+    if (realtime_profiler_) {
+        realtime_profiler_->trigger_sync_check();
+    }
+}
+
+D2HSocket* MeshDeviceImpl::get_realtime_profiler_socket() const {
+    return realtime_profiler_ ? realtime_profiler_->get_socket() : nullptr;
+}
+
+::tt::tt_metal::DriscL1Arena& MeshDeviceImpl::drisc_l1_arena() {
+    TT_FATAL(
+        drisc_l1_arena_ != nullptr,
+        "DriscL1Arena not constructed; set TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1 before "
+        "initializing the MeshDevice");
+    return *drisc_l1_arena_;
+}
+
+CoreCoord MeshDeviceImpl::pick_unused_dram_logical_core(uint32_t bank_id) const {
+    const auto& soc_desc = MetalContext::instance(context_id_).get_cluster().get_soc_desc(reference_device()->id());
+    const uint32_t num_banks = soc_desc.get_num_dram_views();
+    TT_FATAL(bank_id < num_banks, "bank_id={} out of range (num_banks={})", bank_id, num_banks);
+
+    std::set<std::pair<size_t, size_t>> reserved;
+    for (const auto& c : soc_desc.dram_view_worker_cores.at(bank_id)) {
+        reserved.emplace(c.x, c.y);
+    }
+    for (const auto& c : soc_desc.dram_view_eth_cores.at(bank_id)) {
+        reserved.emplace(c.x, c.y);
+    }
+
+    const uint32_t num_subchannels = soc_desc.get_grid_size(tt::CoreType::DRAM).y;
+    const size_t channel = soc_desc.get_channel_for_dram_view(static_cast<int>(bank_id));
+    for (uint32_t sub = 0; sub < num_subchannels; ++sub) {
+        tt::umd::CoreCoord coord = soc_desc.get_dram_core_for_channel(
+            static_cast<int>(channel), static_cast<int>(sub), tt::CoordSystem::TRANSLATED);
+        if (!reserved.contains({coord.x, coord.y})) {
+            return soc_desc.get_logical_dram_core_for_subchannel(static_cast<int>(bank_id), static_cast<int>(sub));
+        }
+    }
+    TT_THROW(
+        "No unused DRAM subchannel found for bank_id={}; all {} subchannels are reserved as worker/eth endpoints",
+        bank_id,
+        num_subchannels);
 }
 
 program_cache::detail::ProgramCache& MeshDeviceImpl::get_program_cache() { return *program_cache_; }
@@ -1491,6 +1583,7 @@ MeshDevice::MeshDevice(MetalEnv& /*metal_env*/) {}
 
 MeshDevice::~MeshDevice() {
     Inspector::mesh_device_destroyed(this->pimpl_.get());
+    experimental::PinnedMemoryCache::instance().release_for_device(*this);
     pimpl_->close_impl(this);
 }
 

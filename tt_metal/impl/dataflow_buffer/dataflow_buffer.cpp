@@ -2,8 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/ranges.h>
 #include <tt_stl/fmt.hpp>
-#include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
+#include "impl/dataflow_buffer/dataflow_buffer.hpp"
 
 #include <algorithm>
 
@@ -49,8 +50,8 @@ void BindDataflowBufferToProducerConsumerKernels(Program& program, uint32_t dfb_
             dfb->config.num_producers >= 1 && dfb->config.num_producers <= 4,
             "Tensix producer count must be between 1 and 4, got {}",
             dfb->config.num_producers);
-        dfb->config.producer_risc_mask = static_cast<uint16_t>(((1u << dfb->config.num_producers) - 1u) << ::dfb::TENSIX_RISC_OFFSET);
-        dfb->tensix_trisc_mask |= (1u << 2);  // Tensix producer uses trisc2
+        dfb->config.producer_risc_mask =
+            static_cast<uint16_t>(((1u << dfb->config.num_producers) - 1u) << ::dfb::TENSIX_RISC_OFFSET);
     } else if (auto dm_producer = std::dynamic_pointer_cast<experimental::quasar::QuasarDataMovementKernel>(producer_kernel)) {
         TT_FATAL(
             dfb->config.num_producers >= 1 && dfb->config.num_producers <= 8,
@@ -77,8 +78,8 @@ void BindDataflowBufferToProducerConsumerKernels(Program& program, uint32_t dfb_
             dfb->config.num_consumers >= 1 && dfb->config.num_consumers <= 4,
             "Tensix consumer count must be between 1 and 4, got {}",
             dfb->config.num_consumers);
-        dfb->config.consumer_risc_mask = static_cast<uint16_t>(((1u << dfb->config.num_consumers) - 1u) << ::dfb::TENSIX_RISC_OFFSET);
-        dfb->tensix_trisc_mask |= (1u << 0);  // Default: Tensix consumer uses trisc0; use (1u << 3) for trisc3
+        dfb->config.consumer_risc_mask =
+            static_cast<uint16_t>(((1u << dfb->config.num_consumers) - 1u) << ::dfb::TENSIX_RISC_OFFSET);
     } else if (auto dm_consumer = std::dynamic_pointer_cast<experimental::quasar::QuasarDataMovementKernel>(consumer_kernel)) {
         TT_FATAL(
             dfb->config.num_consumers >= 1 && dfb->config.num_consumers <= 8,
@@ -182,35 +183,47 @@ uint8_t ClientTypeAllocator::allocate_for_consumer(uint8_t producer_client_type,
 
 // Computes dfb_txn_id_descriptor_t for either the producer or consumer side of a DFB.
 static dfb_txn_id_descriptor_t compute_txn_descriptor(
-    uint16_t capacity,
+    uint16_t num_entries,
     uint8_t num_producers,
     uint8_t num_consumers,
     bool is_producer,
     const std::vector<uint8_t>& txn_ids,
-    uint8_t num_tcs_per_risc) {
+    uint8_t num_tcs_per_risc,
+    ::dfb::AccessPattern access_pattern) {
     uint8_t num_prods_or_cons = is_producer ? num_producers : num_consumers;
     uint8_t num_txn_ids = static_cast<uint8_t>(txn_ids.size());
+
+    // Each ALL consumer needs to issue the transaction before the ISR can fire
+    const bool consumes_all = !is_producer && (access_pattern == ::dfb::AccessPattern::ALL);
+    const uint32_t required_divisor =
+        consumes_all ? (num_txn_ids * num_tcs_per_risc)
+                            : (num_txn_ids * num_prods_or_cons * num_tcs_per_risc);
+    TT_FATAL(
+        num_entries % required_divisor == 0,
+        "DFB num_entries {} must be divisible by {} to ensure equal credits per TC per ISR cycle",
+        num_entries,
+        required_divisor);
 
     // threshold is the number of transactions that each txn ID needs to process before posting/acking
     // for reads the transaction needs to be committed to dst, for writes the transaction needs to be sent out
     uint8_t threshold;
-    if (num_producers == 1 && num_consumers == 1) {
-        TT_FATAL(
-            capacity % num_txn_ids == 0,
-            "DFB capacity {} must be divisible by num_txn_ids {} for implicit sync",
-            capacity,
-            num_txn_ids);
-        threshold = static_cast<uint8_t>(capacity / num_txn_ids);
+    uint8_t per_txn;
+    if (consumes_all) {
+        // wr_sent is a global counter shared across all DMs. Each of the num_consumers DMs writes
+        // per_txn entries per txn_id, so the ISR must not fire until all consumers have finished
+        // their batch: threshold = num_consumers × per_txn.
+        per_txn = static_cast<uint8_t>(num_entries / num_txn_ids);
+        threshold = static_cast<uint8_t>(num_prods_or_cons * per_txn);
     } else {
-        threshold = num_prods_or_cons * num_tcs_per_risc;
+        threshold = static_cast<uint8_t>(num_entries / num_txn_ids);
+        // Defensive assertion — guaranteed by the upfront check above.
+        TT_FATAL(
+            threshold % num_prods_or_cons == 0,
+            "num_entries_to_process_threshold {} must be divisible by num_prods_or_cons {}",
+            threshold,
+            num_prods_or_cons);
+        per_txn = threshold / num_prods_or_cons;
     }
-
-    TT_FATAL(
-        threshold % num_prods_or_cons == 0,
-        "num_entries_to_process_threshold {} must be divisible by num_prods_or_cons {}",
-        threshold,
-        num_prods_or_cons);
-    uint8_t per_txn = threshold / num_prods_or_cons;
 
     TT_FATAL(
         per_txn % num_tcs_per_risc == 0,
@@ -228,6 +241,29 @@ static dfb_txn_id_descriptor_t compute_txn_descriptor(
         desc.txn_ids[i] = txn_ids[i];
     }
     return desc;
+}
+
+// Returns the smallest n in (1, NUM_TXN_IDS] satisfying the divisibility constraint that
+// compute_txn_descriptor() enforces:
+//   ALL consumer:  num_entries % (n * num_tcs_per_risc) == 0
+//   all other cases:   num_entries % (n * num_prods_or_cons * num_tcs_per_risc) == 0
+// Falls back to 1 if no n > 1 satisfies the constraint.
+// If even n=1 does not satisfy the constraint the configuration is invalid
+// and compute_txn_descriptor() will catch it with a TT_FATAL.
+static uint8_t compute_optimal_txn_id_count(
+    uint16_t num_entries,
+    uint8_t num_prods_or_cons,
+    uint8_t num_tcs_per_risc,
+    bool consumes_all) {
+    for (uint8_t n = 2; n <= ::dfb::NUM_TXN_IDS; n++) {
+        uint32_t divisor = consumes_all
+            ? static_cast<uint32_t>(n) * num_tcs_per_risc
+            : static_cast<uint32_t>(n) * num_prods_or_cons * num_tcs_per_risc;
+        if (num_entries % divisor == 0) {
+            return n;
+        }
+    }
+    return 1;
 }
 
 bool has_dm_risc(uint16_t risc_mask) { return (risc_mask & 0xFF) != 0; }
@@ -324,6 +360,10 @@ std::vector<uint8_t> DataflowBufferImpl::serialize_for_core(const CoreCoord& cor
         TT_FATAL(
             it != this->core_lookup_.end(), "DFB {} has no config for core ({}, {})", this->id, core.x, core.y);
         const uint32_t alloc_addr = it->second.second;
+        TT_FATAL(
+            !this->borrows_memory() || alloc_addr != 0,
+            "DFB {} uses borrowed memory but set_borrowed_memory_base_addr() was not called before serialization",
+            this->id);
 
         std::vector<uint8_t> data;
         data.reserve(4 * sizeof(uint32_t));
@@ -341,6 +381,10 @@ std::vector<uint8_t> DataflowBufferImpl::serialize_for_core(const CoreCoord& cor
     auto it = this->core_lookup_.find(core);
     TT_FATAL(it != this->core_lookup_.end(), "DFB {} has no config for core ({}, {})", this->id, core.x, core.y);
     const auto& [group_idx, alloc_addr] = it->second;
+    TT_FATAL(
+        !this->borrows_memory() || alloc_addr != 0,
+        "DFB {} uses borrowed memory but set_borrowed_memory_base_addr() was not called before serialization",
+        this->id);
     const DfbGroup* core_group = &this->groups[group_idx];
 
     const auto& hw_risc_configs = core_group->hw_risc_configs;
@@ -359,6 +403,7 @@ std::vector<uint8_t> DataflowBufferImpl::serialize_for_core(const CoreCoord& cor
     init.num_producers = this->config.num_producers;
     init.producer_txn_descriptor = this->producer_txn_descriptor;
     init.consumer_txn_descriptor = this->consumer_txn_descriptor;
+    init.implicit_sync_configured = 0;
 
     log_debug(
         tt::LogMetal,
@@ -589,7 +634,7 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
             config.pap == dfb::AccessPattern::STRIDED && config.cap == dfb::AccessPattern::STRIDED,
             "Intra-tensix DFBs require STRIDED access for both producer (packer) and consumer (unpacker)");
         TT_FATAL(
-            !config.enable_implicit_sync,
+            !config.enable_producer_implicit_sync && !config.enable_consumer_implicit_sync,
             "Intra-tensix DFBs do not support implicit sync (ISR-based credits)");
     }
 
@@ -815,6 +860,16 @@ void ProgramImpl::finalize_single_dfb_config(
 
     TT_FATAL(config.producer_risc_mask != 0, "producer_risc_mask must be set before program launch. Either set it in DataflowBufferConfig or call BindDataflowBufferToProducerConsumerKernels after creating kernels");
     TT_FATAL(config.consumer_risc_mask != 0, "consumer_risc_mask must be set before program launch. Either set it in DataflowBufferConfig or call BindDataflowBufferToProducerConsumerKernels after creating kernels");
+
+    // Quasar-only:
+    // Derive tensix_trisc_mask from the (now-final) risc masks.
+    // has_tensix_risc checks bits 8-11 (zero on Gen1 masks).
+    //  - producer compute -> set trisc2 (bit 2)
+    //  - consumer compute -> set trisc0 (bit 0)
+    // TODO: if/when consumer-compute can target trisc3 instead of trisc0, that
+    // selection would need a dedicated DataflowBufferConfig field.
+    dfb->tensix_trisc_mask = (has_tensix_risc(config.producer_risc_mask) ? (1u << 2) : 0u) |
+                             (has_tensix_risc(config.consumer_risc_mask) ? (1u << 0) : 0u);
 
     const bool is_intra_tensix =
         config.tensix_scope.has_value() && *config.tensix_scope == TensixScope::INTRA;
@@ -1222,47 +1277,52 @@ void ProgramImpl::finalize_single_dfb_config(
     }
 
     // Allocate transaction IDs and compute ISR descriptor fields when implicit sync is enabled.
-    // Only done on the first core processed for this DFB because txn IDs are core-invariant
-    // Two txn IDs per side for double buffering.
-    if (config.enable_implicit_sync && dfb->groups.empty()) {
-        constexpr uint8_t TXN_IDS_PER_SIDE = 2;
-
-        if (!producer_is_tensix_only) {
-            auto producer_txn_ids = txn_id_allocator_.allocate(TXN_IDS_PER_SIDE);
+    // Only done on the first core processed for this DFB because txn IDs are core-invariant.
+    // Producer and consumer sides are checked independently — the underlying hardware mechanism
+    // is per-side (separate IE_1/IE_2 masks driving separate ISR handlers).
+    if (dfb->groups.empty()) {
+        if (config.enable_producer_implicit_sync && !producer_is_tensix_only) {
+            uint8_t num_prod_txn_ids = compute_optimal_txn_id_count(
+                config.num_entries, config.num_producers, num_producer_tcs,
+                /*consumes_all=*/false);
+            auto producer_txn_ids = txn_id_allocator_.allocate(num_prod_txn_ids);
             dfb->producer_txn_descriptor = compute_txn_descriptor(
-                dfb->capacity,
+                config.num_entries,
                 config.num_producers,
                 config.num_consumers,
                 /*is_producer=*/true,
                 producer_txn_ids,
-                num_producer_tcs);
-            log_debug(
+                num_producer_tcs,
+                config.pap);
+            log_info(
                 tt::LogMetal,
-                "DFB {} implicit sync: producer txn_ids=[{},{}] threshold={} per_txn={} per_tc={}",
+                "DFB {} implicit sync: producer txn_ids=[{}] threshold={} per_txn={} per_tc={}",
                 dfb->id,
-                dfb->producer_txn_descriptor.txn_ids[0],
-                dfb->producer_txn_descriptor.txn_ids[1],
+                fmt::join(producer_txn_ids, ","),
                 dfb->producer_txn_descriptor.num_entries_to_process_threshold,
                 dfb->producer_txn_descriptor.num_entries_per_txn_id,
                 dfb->producer_txn_descriptor.num_entries_per_txn_id_per_tc);
         }
 
-        if (!consumer_is_tensix_only) {
-            auto consumer_txn_ids = txn_id_allocator_.allocate(TXN_IDS_PER_SIDE);
+        if (config.enable_consumer_implicit_sync && !consumer_is_tensix_only) {
+            const bool consumes_all = (config.cap == ::dfb::AccessPattern::ALL);
+            uint8_t num_cons_txn_ids = compute_optimal_txn_id_count(
+                config.num_entries, config.num_consumers, num_consumer_tcs,
+                /*consumes_all=*/consumes_all);
+            auto consumer_txn_ids = txn_id_allocator_.allocate(num_cons_txn_ids);
             dfb->consumer_txn_descriptor = compute_txn_descriptor(
-                dfb->capacity,
+                config.num_entries,
                 config.num_producers,
                 config.num_consumers,
                 /*is_producer=*/false,
                 consumer_txn_ids,
-                num_consumer_tcs);
-            log_debug(
+                num_consumer_tcs,
+                config.cap);
+            log_info(
                 tt::LogMetal,
-                "DFB {} implicit sync: "
-                "consumer txn_ids=[{},{}] threshold={} per_txn={} per_tc={}",
+                "DFB {} implicit sync: consumer txn_ids=[{}] threshold={} per_txn={} per_tc={}",
                 dfb->id,
-                dfb->consumer_txn_descriptor.txn_ids[0],
-                dfb->consumer_txn_descriptor.txn_ids[1],
+                fmt::join(consumer_txn_ids, ","),
                 dfb->consumer_txn_descriptor.num_entries_to_process_threshold,
                 dfb->consumer_txn_descriptor.num_entries_per_txn_id,
                 dfb->consumer_txn_descriptor.num_entries_per_txn_id_per_tc);
@@ -1294,38 +1354,63 @@ void ProgramImpl::allocate_dataflow_buffers(const IDevice* device) {
 
     uint64_t base_dfb_address = device->allocator()->get_base_allocator_addr(HalMemType::L1);
     for (auto& dfb : this->dataflow_buffers_) {
-        uint64_t computed_addr = base_dfb_address;
-        for (const CoreRange& core_range : dfb->core_ranges.ranges()) {
-            // Need the max available address across all cores dataflow buffer is placed on
-            for (const CircularBufferAllocator& dfb_allocator : this->dfb_allocators_) {
-                if (dfb_allocator.core_range == core_range) {
-                    computed_addr = std::max(computed_addr, dfb_allocator.get_cb_region_end());
-                    break;
-                }
-            }
+        // Alias secondaries share the primary's L1 address; skip allocation here
+        // and propagate the address inline after the primary is processed below.
+        if (dfb->alias_primary_id.has_value()) {
+            continue;
         }
-        computed_addr = align(computed_addr, device->allocator()->get_alignment(BufferType::DRAM));
-        for (const CoreRange& core_range : dfb->core_ranges.ranges()) {
-            for (CircularBufferAllocator& dfb_allocator : this->dfb_allocators_) {
-                if (dfb_allocator.core_range.intersects(core_range)) {
-                    if (dfb_allocator.core_range != core_range and computed_addr < dfb_allocator.get_cb_region_end()) {
-                        // Intersecting core range has already been marked to have allocation at this address. This
-                        // could have been marked by a dataflow buffer on a core range disjoint from current
-                        // `core_range` but also intersecting `dfb_allocator.core_range`
-                        continue;
+
+        uint32_t alloc_addr;
+        if (dfb->borrows_memory()) {
+            // Use the address latched by set_borrowed_memory_base_addr()
+            alloc_addr = dfb->borrowed_addr_;
+        } else {
+            uint64_t computed_addr = base_dfb_address;
+            for (const CoreRange& core_range : dfb->core_ranges.ranges()) {
+                // Need the max available address across all cores dataflow buffer is placed on
+                for (const CircularBufferAllocator& dfb_allocator : this->dfb_allocators_) {
+                    if (dfb_allocator.core_range == core_range) {
+                        computed_addr = std::max(computed_addr, dfb_allocator.get_cb_region_end());
+                        break;
                     }
-                    dfb_allocator.mark_address(computed_addr, dfb->total_size(), base_dfb_address);
                 }
             }
+            computed_addr = align(computed_addr, device->allocator()->get_alignment(BufferType::DRAM));
+            for (const CoreRange& core_range : dfb->core_ranges.ranges()) {
+                for (CircularBufferAllocator& dfb_allocator : this->dfb_allocators_) {
+                    if (dfb_allocator.core_range.intersects(core_range)) {
+                        if (dfb_allocator.core_range != core_range and computed_addr < dfb_allocator.get_cb_region_end()) {
+                            // Intersecting core range has already been marked to have allocation at this address. This
+                            // could have been marked by a dataflow buffer on a core range disjoint from current
+                            // `core_range` but also intersecting `dfb_allocator.core_range`
+                            continue;
+                        }
+                        dfb_allocator.mark_address(computed_addr, dfb->total_size(), base_dfb_address);
+                    }
+                }
+            }
+            alloc_addr = static_cast<uint32_t>(computed_addr);
         }
-        // Fill alloc_addr per core in each group.  All cores of a DFB get the same computed_addr so the L1 buffer is at a uniform
+        // Fill alloc_addr per core in each group.  All cores of a DFB get the same alloc_addr so the L1 buffer is at a uniform
         // absolute address on every physical core.
-        uint32_t alloc_addr = static_cast<uint32_t>(computed_addr);
         dfb->core_lookup_.clear();
         for (size_t gi = 0; gi < dfb->groups.size(); gi++) {
             for (auto& [core, addr] : dfb->groups[gi].l1_by_core) {
                 addr = alloc_addr;
                 dfb->core_lookup_.emplace(core, std::make_pair(gi, alloc_addr));
+            }
+        }
+
+        // Propagate this primary's address to all alias secondaries immediately,
+        // so they share the same L1 region without an additional allocator call.
+        for (uint32_t sec_id : dfb->alias_secondary_ids) {
+            auto& sec = this->dataflow_buffers_[sec_id];
+            sec->core_lookup_.clear();
+            for (size_t gi = 0; gi < sec->groups.size(); gi++) {
+                for (auto& [core, addr] : sec->groups[gi].l1_by_core) {
+                    addr = alloc_addr;
+                    sec->core_lookup_.emplace(core, std::make_pair(gi, alloc_addr));
+                }
             }
         }
     }

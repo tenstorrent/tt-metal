@@ -18,7 +18,7 @@ constexpr uint32_t weight_size_w = get_compile_time_arg_val(6);
 // Only a part of the total channel depth (width) is used in one block.
 template <int window_height, int window_width>
 FORCE_INLINE void read_channels(
-    experimental::Noc noc,
+    Noc noc,
     uint32_t& l1_write_addr_act,
     const uint32_t act_l1_read_addr,
     const uint32_t reader_channel_idx,
@@ -54,8 +54,8 @@ void kernel_main() {
     constexpr uint32_t num_input_cores = get_compile_time_arg_val(9);
     constexpr uint32_t act_num_blocks_h = get_compile_time_arg_val(10);
     constexpr uint32_t act_num_blocks_w = get_compile_time_arg_val(11);
-    experimental::Semaphore<> act_mcast_sender_sem(get_compile_time_arg_val(12));
-    experimental::Semaphore<> act_mcast_receiver_sem(get_compile_time_arg_val(13));
+    Semaphore<> act_mcast_sender_sem(get_compile_time_arg_val(12));
+    Semaphore<> act_mcast_receiver_sem(get_compile_time_arg_val(13));
     constexpr McastRect mcast_rect = {
         get_compile_time_arg_val(14),
         get_compile_time_arg_val(15),
@@ -103,7 +103,7 @@ void kernel_main() {
     experimental::CB act_cb(cb_id_act);
     experimental::CB tilized_in0_cb(tilized_in0_cb_id);
     experimental::CB sharded_act_cb(cb_id_sharded_act);
-    experimental::Noc noc;
+    Noc noc;
 
     load_config_tensor_if_in_dram<27, 28, 29, cb_reader_indices>(noc, reader_indices_cb, 0);
 
@@ -111,7 +111,7 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reader_indices_cb.get_write_ptr());
 
     // Experimental API multicast endpoint
-    experimental::MulticastEndpoint mcast_ep;
+    MulticastEndpoint mcast_ep;
     // Pre-built mcast destination; .addr is updated per mcast call
     McastDst mcast_dst = {
         .noc_x_start = mcast_rect.noc_x_start,
@@ -220,11 +220,11 @@ void kernel_main() {
 
                     // Now we have the block in the CB address, we can mcast to dests!
                     auto tilized_src =
-                        experimental::use<experimental::CircularBuffer::AddrSelector::READ_PTR>(tilized_in0_cb);
+                        use<CircularBuffer::AddrSelector::READ_PTR>(tilized_in0_cb);
 
                     // Multicast tilized activations to all reader cores (including self)
                     mcast_dst.addr = act_cb.get_write_ptr();
-                    noc.async_write_multicast<experimental::Noc::McastMode::INCLUDE_SRC>(
+                    noc.async_write_multicast<Noc::McastMode::INCLUDE_SRC>(
                         tilized_src,
                         mcast_ep,
                         act_mcast_sender_size_bytes,
@@ -243,7 +243,7 @@ void kernel_main() {
                     // API uses the semaphore itself as both source and destination, so we can't
                     // clear the local value and wait for loopback — use write barrier instead.
                     act_mcast_receiver_sem.set(VALID);
-                    act_mcast_receiver_sem.set_multicast<experimental::Noc::McastMode::INCLUDE_SRC>(
+                    act_mcast_receiver_sem.set_multicast<Noc::McastMode::INCLUDE_SRC>(
                         noc,
                         mcast_rect.noc_x_start,
                         mcast_rect.noc_y_start,

@@ -27,14 +27,15 @@ constexpr uint32_t kWriterOutputBufferIdx = 0U;
 constexpr auto kInputPass1CbIndex = tt::CBIndex::c_0;
 constexpr auto kInputPass2CbIndex = tt::CBIndex::c_1;
 constexpr auto kScalerCbIndex = tt::CBIndex::c_2;
-constexpr auto kEpsCbIndex = tt::CBIndex::c_3;
-constexpr auto kW0CbIndex = tt::CBIndex::c_4;
-constexpr auto kW1CbIndex = tt::CBIndex::c_5;
-constexpr auto kW2CbIndex = tt::CBIndex::c_6;
-constexpr auto kBiasCbIndex = tt::CBIndex::c_7;
+constexpr auto kW0CbIndex = tt::CBIndex::c_3;
+constexpr auto kW1CbIndex = tt::CBIndex::c_4;
+constexpr auto kW2CbIndex = tt::CBIndex::c_5;
+constexpr auto kBiasCbIndex = tt::CBIndex::c_6;
 // CBs with intermediate computations
-constexpr auto kSumPowsCbIndex = tt::CBIndex::c_8;
-constexpr auto kInvRmsCbIndex = tt::CBIndex::c_9;
+constexpr auto kSumPowsCbIndex = tt::CBIndex::c_7;
+constexpr auto kInvRmsCbIndex = tt::CBIndex::c_8;
+// Preweighted inv_rms coefficients: [w2*inv_rms(x), w1*inv_rms(x^2), w0*inv_rms(x^3)]
+constexpr auto kWeightedCoeffCbIndex = tt::CBIndex::c_9;
 // CBs with output data
 constexpr auto kOutputCbIndex = tt::CBIndex::c_10;
 
@@ -86,10 +87,12 @@ void assign_per_core_runtime_args(
                 num_rows_per_core,
                 num_rows_written,
                 scaler_fp32_bits,
-                eps_fp32_bits,
             });
 
         SetRuntimeArgs(program, kernels.writer, core, {output_buffer->address(), num_rows_per_core, num_rows_written});
+
+        auto compute_kernel = core_group_1.contains(core) ? kernels.compute_group_1 : kernels.compute_group_2;
+        SetRuntimeArgs(program, compute_kernel, core, {eps_fp32_bits});
         num_rows_written += num_rows_per_core;
     }
 }
@@ -100,7 +103,7 @@ namespace ttml::metal::ops::polynorm3_fw::device {
 
 // Build and cache the full PolyNorm forward program (reader/compute/writer kernels + CB layout).
 PolyNorm3ForwardProgramFactory::cached_program_t PolyNorm3ForwardProgramFactory::create(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
+    const PolyNorm3FWAttributes& args, const PolyNorm3FWTensorArgs& tensor_args, PolyNorm3FWTensorReturn& output) {
     const auto& input = tensor_args.input;
     const auto& weight = tensor_args.weight;
     const auto& bias = tensor_args.bias;
@@ -132,8 +135,6 @@ PolyNorm3ForwardProgramFactory::cached_program_t PolyNorm3ForwardProgramFactory:
         create_circular_buffer(program, all_cores, kInputPass2CbIndex, data_format, bfloat16_tile_size, block_size);
     [[maybe_unused]] auto cb_scaler = create_circular_buffer(
         program, all_cores, kScalerCbIndex, tt::DataFormat::Float32, float32_tile_size, kNumOneTile);
-    [[maybe_unused]] auto cb_eps = create_circular_buffer(
-        program, all_cores, kEpsCbIndex, tt::DataFormat::Float32, float32_tile_size, kNumOneTile);
     [[maybe_unused]] auto cb_w0 =
         create_circular_buffer(program, all_cores, kW0CbIndex, data_format, bfloat16_tile_size, kNumOneTile);
     [[maybe_unused]] auto cb_w1 =
@@ -146,6 +147,8 @@ PolyNorm3ForwardProgramFactory::cached_program_t PolyNorm3ForwardProgramFactory:
         program, all_cores, kSumPowsCbIndex, tt::DataFormat::Float32, float32_tile_size, /*num_tiles=*/3U);
     [[maybe_unused]] auto cb_inv_rms =
         create_circular_buffer(program, all_cores, kInvRmsCbIndex, data_format, bfloat16_tile_size, /*num_tiles=*/3U);
+    [[maybe_unused]] auto cb_weighted_coeffs = create_circular_buffer(
+        program, all_cores, kWeightedCoeffCbIndex, data_format, bfloat16_tile_size, /*num_tiles=*/3U);
     [[maybe_unused]] auto cb_output =
         create_circular_buffer(program, all_cores, kOutputCbIndex, data_format, bfloat16_tile_size, block_size);
     auto* input_buffer = input.buffer();
@@ -230,9 +233,9 @@ PolyNorm3ForwardProgramFactory::cached_program_t PolyNorm3ForwardProgramFactory:
 // Update runtime addresses/scalars when operation attributes or buffers change.
 void PolyNorm3ForwardProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const PolyNorm3FWAttributes& operation_attributes,
+    const PolyNorm3FWTensorArgs& tensor_args,
+    PolyNorm3FWTensorReturn& tensor_return_value) {
     auto& shared = cached_program.shared_variables;
     auto& program = cached_program.program;
 
@@ -256,10 +259,14 @@ void PolyNorm3ForwardProgramFactory::override_runtime_arguments(
         rr[1] = weight_buffer->address();
         rr[2] = bias_buffer->address();
         rr[5] = scaler_fp32_bits;
-        rr[6] = eps_fp32_bits;
 
         auto& wr = writer_runtime_args[core.x][core.y];
         wr[kWriterOutputBufferIdx] = output_buffer->address();
+
+        auto compute_kernel =
+            shared.core_group_1.contains(core) ? shared.compute_kernel_group_1_id : shared.compute_kernel_group_2_id;
+        auto& cr = GetRuntimeArgs(program, compute_kernel);
+        cr[core.x][core.y][0] = eps_fp32_bits;
     }
 }
 

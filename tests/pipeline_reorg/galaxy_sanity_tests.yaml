@@ -4,7 +4,6 @@
 #   name: The display name for the job in GitHub Actions.
 #   cmd: The exact command to run (env vars must be inlined).
 #   skus: A mapping of SKU names to their configuration (each SKU has timeout in minutes).
-#   use_mlperf_mount: If true, mount /mnt/MLPerf read-only; otherwise use a dummy mount (no MLPerf).
 #   owner_id: The Slack user ID to notify on failure.
 #   team: The team that owns the test.
 #   arch: Architecture string (wormhole_b0) for downstream tooling.
@@ -12,7 +11,6 @@
 # For max allowed timeout refer to .github/time_budget.yaml
 
 - name: Fabric CCL tests
-  use_mlperf_mount: false
   cmd: |
     ./build/tools/scaleout/run_cluster_validation --cabling-descriptor-path tt_metal/fabric/cabling_descriptors/wh_galaxy_xy_torus.textproto --hard-fail --send-traffic
 
@@ -48,7 +46,6 @@
   arch: wormhole_b0
 
 - name: Deepseek V3 tests
-  use_mlperf_mount: true
   cmd: |
     export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked
     export DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI

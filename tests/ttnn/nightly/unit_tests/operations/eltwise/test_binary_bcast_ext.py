@@ -61,7 +61,7 @@ def test_binary_scalar_ops_invalid_bcast(a_shape, b_shape, ttnn_fn, device):
 
     with pytest.raises(RuntimeError) as e:
         cq_id = 0
-        _ = ttnn_op(a_tt, b_tt, queue_id=cq_id, use_legacy=None)
+        _ = ttnn_op(a_tt, b_tt, queue_id=cq_id)
         assert "Broadcasting rule violation" in str(e.value)
 
 
@@ -89,7 +89,7 @@ def test_binary_opt_output_invalid_bcast(a_shape, b_shape, out_shape, ttnn_fn, d
         RuntimeError, match=r"Shape of Output tensor.+ provided does not match the broadcasted output shape .+"
     ):
         cq_id = 0
-        ttnn_op(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt, use_legacy=None)
+        ttnn_op(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt)
 
 
 activation_fns = {
@@ -215,7 +215,6 @@ def test_binary_scalar_ops(a_shape, b_shape, ttnn_fn, activations, device):
             input_tensor_a_activations=lhs,
             input_tensor_b_activations=rhs,
             activations=post,
-            use_legacy=None,
         )
         for golden_activation in golden_lhs:
             a_pt = golden_activation(a_pt).bfloat16()
@@ -285,7 +284,7 @@ def test_binary_scalar_ops_with_unary_param(a_shape, b_shape, ttnn_fn, post_acti
     a_pt, a_tt = rand_bf16_gen(a_shape, device)
     b_pt, b_tt = rand_bf16_gen(b_shape, device, min=min, max=max)
 
-    out_tt = ttnn_op(a_tt, b_tt, activations=post, use_legacy=None)
+    out_tt = ttnn_op(a_tt, b_tt, activations=post)
 
     golden_fn = ttnn.get_golden_function(ttnn_op)
     out_pt = golden_fn(a_pt, b_pt).bfloat16()
@@ -355,7 +354,7 @@ def test_binary_sfpu_ops(input_shapes, dtype, ttnn_fn, device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     cq_id = 0
-    out_tt = ttnn_fn(a_tt, b_tt, queue_id=cq_id, use_legacy=None)
+    out_tt = ttnn_fn(a_tt, b_tt, queue_id=cq_id)
     tt_out = ttnn.to_torch(out_tt)
 
     golden_fn = ttnn.get_golden_function(ttnn_fn)
@@ -431,7 +430,7 @@ def test_binary_sfpu_opt_out(input_shapes, dtype, ttnn_fn, device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     cq_id = 0
-    ttnn_fn(a_tt, b_tt, queue_id=cq_id, output_tensor=out_tt, use_legacy=None)
+    ttnn_fn(a_tt, b_tt, queue_id=cq_id, output_tensor=out_tt)
     tt_out = ttnn.to_torch(out_tt)
 
     golden_fn = ttnn.get_golden_function(ttnn_fn)
@@ -485,7 +484,7 @@ def test_binary_sfpu_bitwise_ops(input_shapes, dtype, ttnn_fn, device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     cq_id = 0
-    out_tt = ttnn_fn(a_tt, b_tt, queue_id=cq_id, use_legacy=None)
+    out_tt = ttnn_fn(a_tt, b_tt, queue_id=cq_id)
     tt_out = ttnn.to_torch(out_tt)
 
     golden_fn = ttnn.get_golden_function(ttnn_fn)
@@ -548,7 +547,7 @@ def test_bitwise_opt_output(input_shapes, dtype, ttnn_fn, device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     cq_id = 0
-    ttnn_fn(a_tt, b_tt, queue_id=cq_id, output_tensor=out_tt, use_legacy=None)
+    ttnn_fn(a_tt, b_tt, queue_id=cq_id, output_tensor=out_tt)
     tt_out = ttnn.to_torch(out_tt)
 
     golden_fn = ttnn.get_golden_function(ttnn_fn)
@@ -653,7 +652,6 @@ def test_inplace_binary_ops_with_tensor(a_shape, b_shape, ttnn_fn, activations, 
         input_tensor_a_activations=lhs,
         input_tensor_b_activations=rhs,
         activations=post,
-        use_legacy=None,
     )
     output_tensor = ttnn.to_torch(input_tensor_a)
     assert output_tensor.shape == torch_output_tensor.shape
@@ -717,7 +715,7 @@ def test_inplace_binary_ops_fp32(input_shapes, ttnn_fn, device):
     )
 
     cq_id = 0
-    ttnn_op(input_tensor_a, input_tensor_b, queue_id=cq_id, use_legacy=None)
+    ttnn_op(input_tensor_a, input_tensor_b, queue_id=cq_id)
     output_tensor = ttnn.to_torch(input_tensor_a)
 
     golden_fn = ttnn.get_golden_function(ttnn_op)
@@ -771,7 +769,7 @@ def test_inplace_binary_with_scalar(a_shape, scalar, ttnn_fn, device):
     golden_function = ttnn.get_golden_function(ttnn_op)
     torch_output_tensor = golden_function(torch_input_tensor_a, scalar)
 
-    ttnn_op(input_tensor_a, scalar, use_legacy=None)
+    ttnn_op(input_tensor_a, scalar)
     output_tensor = ttnn.to_torch(input_tensor_a)
     assert output_tensor.shape == torch_output_tensor.shape
     assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99
@@ -806,15 +804,8 @@ profile_a_b_shape_pairs = [
     "memory_config_input",
     [ttnn.DRAM_MEMORY_CONFIG],
 )
-@pytest.mark.parametrize(
-    "use_legacy",
-    [
-        # True,
-        False,
-    ],
-)
 @pytest.mark.parametrize("a_and_b_shape", profile_a_b_shape_pairs)
-def test_binary_bcast_profile(device, dtype_pt, dtype_tt, a_and_b_shape, memory_config_input, use_legacy):
+def test_binary_bcast_profile(device, dtype_pt, dtype_tt, a_and_b_shape, memory_config_input):
     torch.manual_seed(0)
     a_shape, b_shape = a_and_b_shape
 
@@ -834,7 +825,7 @@ def test_binary_bcast_profile(device, dtype_pt, dtype_tt, a_and_b_shape, memory_
         torch_input_tensor_b, dtype=dtype_tt, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config_input
     )
     for _ in range(1):
-        output = ttnn.add(input_tensor_a, input_tensor_b, memory_config=memory_config_input, use_legacy=use_legacy)
+        output = ttnn.add(input_tensor_a, input_tensor_b, memory_config=memory_config_input)
         output = ttnn.to_torch(output)
 
         assert (
@@ -926,7 +917,7 @@ def test_binary_sharded_decoder_program_cache(dtype_pt, dtype_tt, device):
                 )
 
                 out_pt = torch.add(a_pt, b_pt)
-                ttnn.add(a_tt, b_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG, output_tensor=a_tt, use_legacy=False)
+                ttnn.add(a_tt, b_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG, output_tensor=a_tt)
                 out_tt_interleaved = ttnn.to_torch(a_tt)
 
                 pcc = ttnn.pearson_correlation_coefficient(out_tt_interleaved, out_pt)
@@ -1086,7 +1077,7 @@ def test_binary_sharded_bcast_no_profile(a_shape, b_shape, a_config, b_config, o
     )
 
     out_pt = torch.add(a_pt, b_pt)
-    out_tt = ttnn.add(a_tt, b_tt, memory_config=out_config, use_legacy=None)
+    out_tt = ttnn.add(a_tt, b_tt, memory_config=out_config)
     assert_with_pcc(ttnn.to_torch(out_tt), out_pt)
 
 

@@ -116,12 +116,12 @@ struct KNSlicedMatmul {
             pack_block_contiguous_init(args.out_cb);
 
             // Wait for all activation tiles and weight tiles
-            cb_wait_front(args.act_cb, args.act_total_tiles);
             if (args.weights_address_override > 0) {
                 UNPACK(({ unified_kernels::override_cb_rd_ptr(args.weights_cb, args.weights_address_override); }));
             } else {
                 cb_wait_front(args.weights_cb, args.k_per_core);
             }
+            cb_wait_front(args.act_cb, args.act_total_tiles);
 
             // Reserve output tile
             cb_reserve_back(args.out_cb, out_w);
@@ -132,6 +132,7 @@ struct KNSlicedMatmul {
 
             tile_regs_wait();
             pack_block_contiguous(0, args.out_cb, out_w);
+            cb_push_back(args.out_cb, out_w);
             tile_regs_release();
 
             custom_mm_block_uninit<dense_packing>();
@@ -143,8 +144,6 @@ struct KNSlicedMatmul {
             if constexpr (pop_weights) {
                 cb_pop_front(args.weights_cb, args.k_per_core);
             }
-
-            cb_push_back(args.out_cb, out_w);
 #endif
         }
     };  // class Op

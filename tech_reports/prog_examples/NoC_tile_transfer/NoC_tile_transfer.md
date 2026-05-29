@@ -83,8 +83,8 @@ We initialize the input with the value `14`:
 
 ```cpp
 const uint16_t input_data = 14;
-std::vector<uint16_t> src_vec(1, input_data);
-distributed::EnqueueWriteMeshBuffer(cq, src_dram_buffer, src_vec.data(), false);
+std::vector<uint16_t> src_vec(buffer_config.size / sizeof(uint16_t), input_data);
+distributed::EnqueueWriteMeshBuffer(cq, src_dram_buffer, src_vec, false);
 ```
 
 ---

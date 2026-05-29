@@ -110,14 +110,11 @@ inline void _calculate_rsqrt_compat_(const int iterations)
             out = -out;
         }
         v_endif;
-        if constexpr (fp32_dest_acc_en || APPROXIMATION_MODE)
+        if constexpr (!(fp32_dest_acc_en || APPROXIMATION_MODE))
         {
-            sfpi::dst_reg[0] = out;
+            out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::NearestEven);
         }
-        else
-        {
-            sfpi::dst_reg[0] = sfpi::float_to_fp16b(out, sfpi::RoundMode::NearestEven);
-        }
+        sfpi::dst_reg[0] = out;
         sfpi::dst_reg++;
     }
 }
@@ -146,14 +143,11 @@ inline void _calculate_reciprocal_compat_(const int iterations)
             out = -out;
         }
         v_endif;
-        if constexpr (fp32_dest_acc_en || APPROXIMATION_MODE)
+        if constexpr (!(fp32_dest_acc_en || APPROXIMATION_MODE))
         {
-            sfpi::dst_reg[0] = out;
+            out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::NearestEven);
         }
-        else
-        {
-            sfpi::dst_reg[0] = sfpi::float_to_fp16b(out, sfpi::RoundMode::NearestEven);
-        }
+        sfpi::dst_reg[0] = out;
         sfpi::dst_reg++;
     }
 }

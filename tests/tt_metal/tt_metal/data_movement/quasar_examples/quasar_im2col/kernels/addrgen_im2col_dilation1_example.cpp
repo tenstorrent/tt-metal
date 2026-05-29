@@ -25,14 +25,15 @@
 // Total addresses = matrix_size * kH * kW = 180
 //
 // Compile-time args:
-//   0: (unused)
-//   1: (unused)
-//   2: num_of_addresses — must equal matrix_size * kH * kW
+//   num_of_addresses — must equal matrix_size * kH * kW
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
+#include "experimental/kernel_args.h"
 #include "internal/tt-2xx/quasar/overlay/addrgen_api.hpp"
 #include <cstdint>
+
+using namespace overlay;
 
 constexpr uint32_t H = 4;
 constexpr uint32_t W = 5;
@@ -59,7 +60,7 @@ constexpr uint32_t matrix_size = H * W;                      // 20
 constexpr uint32_t total_addresses = matrix_size * kH * kW;  // 180
 
 void kernel_main() {
-    constexpr uint32_t num_of_addresses = get_compile_time_arg_val(2);
+    constexpr uint32_t num_of_addresses = get_arg(args::num_of_addresses);
 
     reset_addrgen_0();
 
@@ -81,8 +82,7 @@ void kernel_main() {
             uint64_t dest_addr = peek_dest_addrgen_0();
             pop_src_addrgen_0();
             pop_dest_addrgen_0();
-            DPRINT << "  Source address: " << HEX() << (uint64_t)src_addr << " Destination address: " << HEX()
-                   << (uint64_t)dest_addr << ENDL();
+            DPRINT("  Source address: {:#X} Destination address: {:#X}\n", src_addr, dest_addr);
         }
     }
 }

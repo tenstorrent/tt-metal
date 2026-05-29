@@ -100,7 +100,7 @@ std::shared_ptr<distributed::MeshBuffer> src_dram_buffer =
 std::shared_ptr<distributed::MeshBuffer> dst_dram_buffer =
     distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
 
-distributed::EnqueueWriteMeshBuffer(cq, src_dram_buffer, src_vec.data(), false);
+distributed::EnqueueWriteMeshBuffer(cq, src_dram_buffer, src_vec, false);
 ```
 
 ---

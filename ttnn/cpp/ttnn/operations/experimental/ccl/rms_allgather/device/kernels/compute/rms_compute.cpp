@@ -194,7 +194,7 @@ void kernel_main() {
                 PoolType::AVG,
                 ReduceDim::REDUCE_ROW,
                 compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
-                compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
+                compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
                 cb_stats,
                 post_cb_scaler_global,
                 cb_var,

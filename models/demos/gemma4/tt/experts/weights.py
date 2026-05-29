@@ -94,6 +94,11 @@ def load_expert_weights(
     # TP sharding: column-parallel for gate/up, row-parallel for down
     is_mesh = hasattr(mesh_device, "shape")
     tp_suffix = f"_tp{tp}" if tp > 1 else ""
+    # Suffix expert cache filenames with the dtype so an ``experts`` override
+    # in precision_overrides.json doesn't reuse a stale cache.
+    from models.demos.gemma4.tt.precision import dtype_to_str
+
+    dtype_suffix = f"_{dtype_to_str(weight_dtype)}"
 
     if tp > 1 and mesh_config is not None:
         col_mapper = mesh_config.column_parallel(mesh_device)
@@ -108,7 +113,7 @@ def load_expert_weights(
         dtype=weight_dtype,
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=col_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, f"gate_proj{tp_suffix}"),
+        cache_file_name=get_cache_file_name(tensor_cache_path, f"gate_proj{tp_suffix}{dtype_suffix}"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     up_proj_tt = ttnn.as_tensor(
@@ -117,7 +122,7 @@ def load_expert_weights(
         dtype=weight_dtype,
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=col_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, f"up_proj{tp_suffix}"),
+        cache_file_name=get_cache_file_name(tensor_cache_path, f"up_proj{tp_suffix}{dtype_suffix}"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     down_proj_tt = ttnn.as_tensor(
@@ -126,7 +131,7 @@ def load_expert_weights(
         dtype=weight_dtype,
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=row_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, f"down_proj{tp_suffix}"),
+        cache_file_name=get_cache_file_name(tensor_cache_path, f"down_proj{tp_suffix}{dtype_suffix}"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 

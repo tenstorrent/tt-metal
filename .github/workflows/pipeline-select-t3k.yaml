@@ -26,7 +26,6 @@ on:
           - t3k_ttmetal_tests
           - t3k_ttnn_tests
           - falcon7b
-          - falcon40b
           - llama3-small
           - llama3.2-11b
           - llama3.2-11b-vision
@@ -48,7 +47,6 @@ on:
           - disabled
           - all
           - falcon7b
-          - falcon40b
           - llama3
           - llama3_vision
           - llama3_90b_vision
@@ -75,7 +73,6 @@ on:
           - disabled
           - all
           - falcon7b
-          - falcon40b
           - resnet50
           - sentence_bert
           - stable_diffusion_35_large
@@ -94,7 +91,6 @@ on:
           - tteager
           - ethernet
           - trace stress
-          - falcon40b
           # - llama3.2-vision #Tier 3 models
           # - n300 mesh llama3.2-vision #Tier 3 models
           # - llama3.2-90b-vision #Tier 3 model
@@ -257,11 +253,8 @@ jobs:
     if: ${{ needs.determine-tests.outputs.run-profiler == 'true' }}
     needs: [build-artifact, determine-tests]
     secrets: inherit
-    uses: ./.github/workflows/profiler-tests-impl.yaml
+    uses: ./.github/workflows/t3000-profiler-tests-impl.yaml
     with:
-      extra-tag: ${{ inputs.extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      topology: config-t3000
-      test-script: ./tests/scripts/t3000/run_t3000_profiler_tests.sh

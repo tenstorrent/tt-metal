@@ -14,11 +14,9 @@
 #define ENABLE_DISPATCH_DEBUG 0
 
 #if ENABLE_DISPATCH_DEBUG
-#define DPRINT_DISPATCH DPRINT
+#define DPRINT_DISPATCH(...) DPRINT(__VA_ARGS__)
 #else
-#define DPRINT_DISPATCH \
-    if (0)              \
-    DebugPrinter()
+#define DPRINT_DISPATCH(...)
 #endif
 
 constexpr uint32_t ROUTE_INFO_SENTINEL = 0xFFFFFFFF;
@@ -29,6 +27,7 @@ constexpr uint32_t ROUTE_INFO_SENTINEL = 0xFFFFFFFF;
 //   2: cb_in_id        - CB for untilize input tile data (c_0)
 //   3: hidden_size     - hidden dimension (e.g., 7168)
 //   4: read_batch_size - number of rows per untilize batch (32)
+
 void kernel_main() {
     constexpr uint32_t cb_signal_id = get_compile_time_arg_val(0);
     constexpr uint32_t cb_untilize_id = get_compile_time_arg_val(1);

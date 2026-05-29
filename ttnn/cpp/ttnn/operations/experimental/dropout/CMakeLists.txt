@@ -1,3 +1,5 @@
+include(sources.cmake)
+
 add_library(ttnn_op_experimental_dropout ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::Dropout ALIAS ttnn_op_experimental_dropout)
 
@@ -19,15 +21,13 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES dropout.hpp
+        FILES ${TTNN_OP_EXPERIMENTAL_DROPOUT_API_HEADERS}
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        device/dropout_device_operation.cpp
-        device/dropout_program_factory.cpp
-        dropout.cpp
+        ${TTNN_OP_EXPERIMENTAL_DROPOUT_SRCS}
 )
 
 target_include_directories(ttnn_op_experimental_dropout PRIVATE ${FixmeOpIncDirs})

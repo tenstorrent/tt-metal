@@ -20,6 +20,8 @@ BH adaptation: uses init_device_compute_kernel_config instead of WormholeCompute
 """
 import os
 import math
+from unittest import mock
+
 import torch
 from dataclasses import dataclass, field
 from itertools import product
@@ -244,7 +246,6 @@ DEFAULT_RMSE_THRESHOLD = 0.05
 from tests.nightly.sdpa_perf_utils import (
     post_process_ops_log,
     compute_sdpa_flops,
-    compute_cores_used as compute_ring_joint_cores_used,
     compute_math_utilization as compute_ring_joint_utilization,
     create_balanced_chunk_order,
     reorder_tensor_chunks,
@@ -790,6 +791,345 @@ def run_ring_joint_sdpa(
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
+# ============================================================================
+# CHUNKED-PREFILL VALIDATION
+# ============================================================================
+CHUNKED_PREFILL_TOTAL_SEQ = 25 * 1024
+CHUNKED_PREFILL_CHUNK_SIZE = 5 * 1024
+CHUNKED_PREFILL_PCC_THRESHOLD = 0.99
+CHUNKED_PREFILL_SEED = 1234
+
+
+def run_ring_joint_sdpa_chunked(
+    mesh_config,
+    model: ModelConfig,
+    chunk_size: int = CHUNKED_PREFILL_CHUNK_SIZE,
+    total_seq: int = CHUNKED_PREFILL_TOTAL_SEQ,
+    pcc_threshold: float = CHUNKED_PREFILL_PCC_THRESHOLD,
+    q_chunk_size: int = None,
+    k_chunk_size: int = None,
+):
+    """
+    Validate ring joint SDPA chunked-prefill against a full-sequence torch oracle.
+
+    SUT: n_chunks calls; each call passes a short Q chunk at absolute positions
+    [i*c, (i+1)*c) against a K/V cache holding the first (i+1)*c rows.
+    """
+    torch.manual_seed(CHUNKED_PREFILL_SEED)
+
+    sp_size = mesh_config.sp_size
+    if sp_size < 2:
+        pytest.skip(f"Ring joint chunked prefill requires at least 2 devices in ring, got SP={sp_size}")
+
+    assert total_seq % sp_size == 0, f"total_seq {total_seq} must divide sp_size {sp_size}"
+    assert chunk_size % sp_size == 0, f"chunk_size {chunk_size} must divide sp_size {sp_size}"
+    assert total_seq % chunk_size == 0, f"total_seq {total_seq} must be a multiple of chunk_size {chunk_size}"
+
+    n_chunks = total_seq // chunk_size
+
+    if q_chunk_size is None:
+        q_chunk_size = model.q_chunk_sizes[0]
+    if k_chunk_size is None:
+        k_chunk_size = model.k_chunk_sizes[0]
+    nhq, nhk, nhv = model.nhq, model.nhk, model.nhv
+    d_q, d_k, d_v = model.d_q, model.d_k, model.d_v
+    q_dtype, kv_dtype = model.q_dtype, model.kv_dtype
+    is_balanced = False
+
+    b = BATCH_SIZE
+
+    use_ring = sp_size > 2
+    fabric_config = ttnn.FabricConfig.FABRIC_1D_RING if use_ring else ttnn.FabricConfig.FABRIC_1D
+    topology = Topology.Ring if use_ring else Topology.Linear
+
+    ttnn.set_fabric_config(
+        fabric_config,
+        ttnn.FabricReliabilityMode.STRICT_INIT,
+        None,
+        ttnn.FabricTensixConfig.DISABLED,
+        ttnn.FabricUDMMode.DISABLED,
+        ttnn.FabricManagerMode.DEFAULT,
+    )
+
+    sp_axis = 1
+    tp_axis = 0
+    joint_seq_len = 0
+    num_links = 2
+
+    mesh_shape = ttnn.MeshShape(mesh_config.tp_size, sp_size)
+    mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape)
+
+    try:
+        sdpa_compute_grid = (mesh_config.sdpa_cols, mesh_config.grid_rows)
+        ccl_column = mesh_config.ccl_column
+        full_compute_grid = mesh_device.compute_with_storage_grid_size()
+
+        ccl_sub_device_crs = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(full_compute_grid.x - 1, full_compute_grid.y - 1))}
+        )
+        worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
+        worker_sub_device_id = ttnn.SubDeviceId(0)
+        sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
+        mesh_device.load_sub_device_manager(sub_device_manager)
+        mesh_device.set_sub_device_stall_group([worker_sub_device_id])
+
+        ccl_semaphore_handles = create_global_semaphores(mesh_device, ccl_sub_device_crs, 0)
+
+        joint_Q = torch.zeros((b, nhq, joint_seq_len, d_q), dtype=torch.bfloat16)
+        joint_K = torch.zeros((b, nhk, joint_seq_len, d_k), dtype=torch.bfloat16)
+        joint_V = torch.zeros((b, nhv, joint_seq_len, d_v), dtype=torch.bfloat16)
+
+        torch.manual_seed(CHUNKED_PREFILL_SEED)
+        Q_full = fa_rand(b, nhq, total_seq, d_q)
+        K_full = fa_rand(b, nhk, total_seq, d_k)
+        V_full = fa_rand(b, nhv, total_seq, d_v)
+        ref_full, _ = torch_joint_sdpa_reference(Q_full, K_full, V_full, joint_Q, joint_K, joint_V, is_causal=True)
+
+        sdpa_input_shard_dims = [None, None]
+        sdpa_input_shard_dims[sp_axis] = 2
+        if mesh_config.tp_size > 1:
+            sdpa_input_shard_dims[tp_axis] = 1
+
+        sdpa_k_shard_dims = [None, None]
+        sdpa_k_shard_dims[sp_axis] = 2
+        if mesh_config.tp_size > 1 and nhk != 1:
+            sdpa_k_shard_dims[tp_axis] = 1
+
+        sdpa_joint_shard_dims = [None, None]
+        if mesh_config.tp_size > 1:
+            sdpa_joint_shard_dims[tp_axis] = 1
+
+        sdpa_joint_k_shard_dims = [None, None]
+        if mesh_config.tp_size > 1 and nhk != 1:
+            sdpa_joint_k_shard_dims[tp_axis] = 1
+
+        persistent_k_shard_dims = [None, None]
+        if mesh_config.tp_size > 1 and nhk != 1:
+            persistent_k_shard_dims[tp_axis] = 1
+
+        kv_persistent_shard_dims = [None, None]
+        if mesh_config.tp_size > 1:
+            kv_persistent_shard_dims[tp_axis] = 1
+
+        program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=sdpa_compute_grid,
+            q_chunk_size=q_chunk_size,
+            k_chunk_size=k_chunk_size,
+            exp_approx_mode=False,
+        )
+
+        compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
+
+        main_row_dim = sdpa_input_shard_dims[0] if sdpa_input_shard_dims[0] is not None else -1
+        main_col_dim = sdpa_input_shard_dims[1] if sdpa_input_shard_dims[1] is not None else -1
+
+        def upload_q(q_host):
+            return ttnn.from_torch(
+                q_host,
+                dtype=q_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_input_shard_dims
+                ),
+            )
+
+        def upload_k(k_host):
+            return ttnn.from_torch(
+                k_host,
+                dtype=kv_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_k_shard_dims
+                ),
+            )
+
+        def upload_v(v_host):
+            return ttnn.from_torch(
+                v_host,
+                dtype=kv_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_input_shard_dims
+                ),
+            )
+
+        tt_joint_Q = ttnn.from_torch(
+            joint_Q,
+            dtype=q_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_joint_shard_dims
+            ),
+        )
+        tt_joint_K = ttnn.from_torch(
+            joint_K,
+            dtype=kv_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_joint_k_shard_dims
+            ),
+        )
+        tt_joint_V = ttnn.from_torch(
+            joint_V,
+            dtype=kv_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_joint_shard_dims
+            ),
+        )
+
+        def call_sdpa(tt_Q, tt_K, tt_V, logical_n, is_causal, p_buf_k, p_buf_v):
+            tt_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+                tt_Q,
+                tt_K,
+                tt_V,
+                tt_joint_Q,
+                tt_joint_K,
+                tt_joint_V,
+                persistent_output_buffer_k=p_buf_k,
+                persistent_output_buffer_v=p_buf_v,
+                joint_strategy="rear",
+                logical_n=logical_n,
+                is_causal=is_causal,
+                is_balanced=is_balanced,
+                program_config=program_config,
+                compute_kernel_config=compute_kernel_config,
+                dim=2,
+                multi_device_global_semaphore=ccl_semaphore_handles,
+                num_links=num_links,
+                cluster_axis=sp_axis,
+                mesh_device=mesh_device,
+                topology=topology,
+                subdevice_id=worker_sub_device_id,
+                ccl_core_grid_offset=(ccl_column, 0),
+                use_column_major_ccl=True,
+            )
+            return tt_out
+
+        def to_host(tt_out, expected_q_len):
+            out = ttnn.to_torch(
+                tt_out,
+                mesh_composer=ttnn.create_mesh_composer(
+                    mesh_device, ttnn.MeshComposerConfig(main_row_dim, main_col_dim)
+                ),
+            )
+            return out[:, :, :expected_q_len, :]
+
+        logger.info(
+            f"Chunked prefill: model={model.name}, total_seq={total_seq}, "
+            f"sp_size={sp_size}, per-device Q seq_len={total_seq // sp_size}, "
+            f"q_chunk={q_chunk_size}, k_chunk={k_chunk_size}"
+        )
+
+        # Balanced K/V layout: device d's local slab c holds global rows
+        # [c*chunk_size + d*slab_rows, c*chunk_size + (d+1)*slab_rows). Cache grows one
+        # chunk per call → program cache forks one entry per chunk.
+        slab_rows = chunk_size // sp_size
+        assert chunk_size % sp_size == 0, f"chunk_size {chunk_size} not divisible by sp_size {sp_size}"
+        assert slab_rows % 32 == 0, f"slab_rows {slab_rows} not tile-aligned (TILE_HEIGHT=32)"
+
+        def to_balanced_growing(src_full, last_uploaded_chunk):
+            """Permute src_full into balanced per-device layout for the populated prefix
+            [0..last_uploaded_chunk]; returns length (last_uploaded_chunk + 1) * chunk_size.
+            """
+            n_populated = last_uploaded_chunk + 1
+            K_local_curr = n_populated * slab_rows
+            populated_len = n_populated * chunk_size
+            b_, nh_, _, d_ = src_full.shape
+            perm = torch.zeros(b_, nh_, populated_len, d_, dtype=src_full.dtype, device=src_full.device)
+            for dev in range(sp_size):
+                for c in range(n_populated):
+                    local_start = dev * K_local_curr + c * slab_rows
+                    global_start = c * chunk_size + dev * slab_rows
+                    perm[:, :, local_start : local_start + slab_rows, :] = src_full[
+                        :, :, global_start : global_start + slab_rows, :
+                    ]
+            return perm
+
+        # SUT: per-chunk calls with growing K/V cache + growing logical_n.
+        per_chunk_results = []
+        for i in range(n_chunks):
+            s, e = i * chunk_size, (i + 1) * chunk_size
+
+            K_balanced = to_balanced_growing(K_full, i)
+            V_balanced = to_balanced_growing(V_full, i)
+            Q_chunk = Q_full[:, :, s:e, :].contiguous()
+
+            tt_Q = upload_q(Q_chunk)
+            tt_K = upload_k(K_balanced)
+            tt_V = upload_v(V_balanced)
+
+            # AllGather output buffer sized to post-gather K/V: N_global == (i+1) * chunk_size.
+            persistent_output_buffer_k = ttnn.from_torch(
+                torch.zeros(b, nhk, e, d_k),
+                dtype=kv_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    mesh_device, mesh_shape=tuple(mesh_device.shape), dims=persistent_k_shard_dims
+                ),
+            )
+            persistent_output_buffer_v = ttnn.from_torch(
+                torch.zeros(b, nhv, e, d_v),
+                dtype=kv_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    mesh_device, mesh_shape=tuple(mesh_device.shape), dims=kv_persistent_shard_dims
+                ),
+            )
+
+            try:
+                tt_out = call_sdpa(
+                    tt_Q,
+                    tt_K,
+                    tt_V,
+                    e,
+                    is_causal=True,
+                    p_buf_k=persistent_output_buffer_k,
+                    p_buf_v=persistent_output_buffer_v,
+                )
+            except Exception as exc:
+                pytest.fail(
+                    f"Chunked prefill SDPA call raised on chunk {i} "
+                    f"(Q rows [{s}, {e}), logical_n={e}): {type(exc).__name__}: {exc}"
+                )
+
+            out_i = to_host(tt_out, chunk_size)
+            expected_i = ref_full[:, :, s:e, :]
+
+            passed, pcc = comp_pcc(expected_i, out_i, pcc_threshold)
+            rmse = torch.sqrt(((expected_i - out_i) ** 2).mean()).item()
+            logger.info(
+                f"Chunk {i:2d} [{s:6d}, {e:6d}) logical_n={e}: PCC={pcc} RMSE={rmse:.6f} "
+                f"-> {'PASS' if passed else 'FAIL'}"
+            )
+            per_chunk_results.append((i, e, passed, pcc, rmse))
+
+        failures = [(i, e, pcc, rmse) for i, e, passed, pcc, rmse in per_chunk_results if not passed]
+        if failures:
+            details = "; ".join(
+                f"chunk {i} (logical_n={e}): PCC={pcc}, RMSE={rmse:.6f}" for i, e, pcc, rmse in failures
+            )
+            pytest.fail(f"Chunked prefill PCC failures (threshold={pcc_threshold}): {details}")
+
+    finally:
+        ttnn.close_mesh_device(mesh_device)
+        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+
+
 # Generate test parameters dynamically based on detected hardware for different models (WAN, MLA, VideGen...)
 TEST_CONFIGS, TEST_CONFIG_IDS = generate_test_configs(MESH_CONFIG, MODEL_CONFIGS)
 TEST_CONFIG_MODELS = list(MODEL_CONFIGS.keys())
@@ -987,7 +1327,6 @@ def test_ring_joint_attention_create_perf_table(model_name):
     total_cores = mesh_config.total_cores
 
     ccl_cores = full_grid_rows  # Full column height for CCL
-    ccl_overhead_pct = (ccl_cores * 100.0) / total_cores
 
     subdir = "ttnn_ring_joint_sdpa_performance"
     perf_results = []
@@ -1025,13 +1364,16 @@ def test_ring_joint_attention_create_perf_table(model_name):
         s = sq  # sq is already global sequence length
         local_seq_len = sq // ring_size
         local_nhq = nhq // mesh_config.tp_size
-        local_nhk = nhk // mesh_config.tp_size if nhk != 1 else 1  # MLA case: nhk=1 (not sharded)
-        local_nhv = nhv // mesh_config.tp_size
 
         try:
             run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
             r = post_process_ops_log(
-                subdir, float_columns=float_cols, columns=cols, op_name="", sum_vals=False, has_signposts=False
+                subdir,
+                float_columns=float_cols,
+                columns=cols,
+                op_name="RingJointSDPADeviceOperation",
+                sum_vals=False,
+                has_signposts=False,
             )
 
             measured_core_count = int(r["CORE COUNT"][0]) if len(r["CORE COUNT"]) > 0 else 0
@@ -1043,54 +1385,46 @@ def test_ring_joint_attention_create_perf_table(model_name):
             fpu_util_max = float(fpu_util_col.max()) if len(fpu_util_col) > 0 else 0.0
 
             B = b
-            batch_parallel = min(B, total_compute_cores)
-            nh_parallel = min(total_compute_cores // batch_parallel, local_nhq)
-            max_q_parallel = total_compute_cores // (batch_parallel * nh_parallel)
-
-            cores_used = compute_ring_joint_cores_used(s, q_chunk_size, total_compute_cores, local_nhq, ring_size, b)
-            cores_idle = total_compute_cores - cores_used
-            compute_util_pct = (cores_used * 100.0) / total_compute_cores
-
-            k_num_chunks = math.ceil(s / k_chunk_size)
             local_q_num_chunks = math.ceil(local_seq_len / q_chunk_size)
-            q_per_core = math.ceil(local_q_num_chunks / max_q_parallel) if max_q_parallel > 0 else local_q_num_chunks
+            local_k_num_chunks = math.ceil(local_seq_len / k_chunk_size)
+            # Each ring step iterates over the device's local K shard (padded up to k_chunk_size),
+            # so total K chunks traversed is ring_size * local_k_num_chunks — not ceil(s / k_chunk_size),
+            # which would amortize per-device padding globally.
+            k_num_chunks = ring_size * local_k_num_chunks
+
+            total_work_items = B * local_nhq * local_q_num_chunks
+            q_per_core = (
+                math.ceil(total_work_items / total_compute_cores) if total_compute_cores > 0 else total_work_items
+            )
             iters_per_core = q_per_core * k_num_chunks
 
             # Padding waste
             local_q_padded = local_q_num_chunks * q_chunk_size
             global_q_padded = local_q_padded * ring_size
-            local_k_num_chunks = math.ceil(local_seq_len / k_chunk_size)
             local_k_padded = local_k_num_chunks * k_chunk_size
             global_k_padded = local_k_padded * ring_size
             actual_work = s * s
             padded_work = global_q_padded * global_k_padded
             total_waste_pct = ((padded_work - actual_work) / padded_work) * 100 if padded_work > 0 else 0
 
-            # Slot waste
-            total_q_slots = max_q_parallel * q_per_core if max_q_parallel > 0 else local_q_num_chunks
-            wasted_q_slots = max(0, total_q_slots - local_q_num_chunks)
+            # Slot waste: leftover capacity after distributing (b, h, q) work items flatly across all cores.
+            total_q_slots = q_per_core * total_compute_cores
+            wasted_q_slots = max(0, total_q_slots - total_work_items)
             slot_waste_pct = (wasted_q_slots / total_q_slots) * 100 if total_q_slots > 0 else 0
 
-            # Math utilization
-            effective_cores = measured_core_count - measured_core_count % 10
+            # Math utilization — tracy reports SDPA + CCL cores together; strip the CCL contribution
+            # by rounding down to the nearest multiple of grid_rows (CCL adds < grid_rows cores).
+            effective_cores = (measured_core_count // mesh_config.grid_rows) * mesh_config.grid_rows
             heads_per_device = local_nhq
             utilization = compute_ring_joint_utilization(
                 local_seq_len, s, d_q, d_v, heads_per_device, duration_ns, effective_cores, is_causal
             )
 
-            ring_efficiency = (cores_used * 100.0) / total_cores
-
             perf_results.append(
                 {
                     "q_chunk_size": q_chunk_size,
                     "k_chunk_size": k_chunk_size,
-                    "measured_core_count": measured_core_count,
-                    "cores_used": cores_used,
-                    "cores_idle": cores_idle,
-                    "compute_util_pct": compute_util_pct,
-                    "ccl_cores": ccl_cores,
-                    "ccl_overhead_pct": ccl_overhead_pct,
-                    "ring_efficiency": ring_efficiency,
+                    "cores_used": effective_cores,
                     "iters_per_core": iters_per_core,
                     "total_waste_pct": total_waste_pct,
                     "slot_waste_pct": slot_waste_pct,
@@ -1103,7 +1437,7 @@ def test_ring_joint_attention_create_perf_table(model_name):
             )
             logger.info(
                 f"q={q_chunk_size}, k={k_chunk_size}: {duration_ns/1e6:.3f} ms, "
-                f"util={utilization:.1f}%, cores={cores_used}/{total_compute_cores} ({compute_util_pct:.0f}%), "
+                f"util={utilization:.1f}%, cores={effective_cores}/{total_compute_cores}, "
                 f"iters/core={iters_per_core}"
             )
 
@@ -1128,7 +1462,7 @@ def test_ring_joint_attention_create_perf_table(model_name):
     mm_flops = compute_sdpa_flops(s, s, d_q, d_v, nhq, is_causal)
 
     # Print summary table
-    print(f"\n{'='*190}")
+    print(f"\n{'='*150}")
     print(
         f"Ring Joint Attention Performance Sweep ({model_name.upper()}): b={b}, nh={nhq} (global), s={s}, d_q={d_q}, d_v={d_v}, causal={is_causal}"
     )
@@ -1136,9 +1470,9 @@ def test_ring_joint_attention_create_perf_table(model_name):
     print(f"Total MM FLOPs (all devices): {mm_flops:,} ({mm_flops/1e9:.2f} GFLOPs)")
     print(f"Per-device workload: Q={s // ring_size} tokens, K/V={s} tokens (via ring), {local_nhq} heads")
     print(f"Core Allocation: {total_compute_cores} compute + {ccl_cores} CCL = {total_cores} total cores")
-    print(f"{'='*190}")
-    header = "| Rank | q_chunk | k_chunk | Duration (ms) | Compute Used | Compute Idle | Compute Util | CCL Cores | Ring Eff | Iters/Core | Pad Waste | Slot Waste | FPU Util (%)  | Math Util |"
-    sep = "|------|---------|---------|---------------|--------------|--------------|--------------|-----------|----------|------------|-----------|------------|---------------|-----------|"
+    print(f"{'='*150}")
+    header = "| Rank | q_chunk | k_chunk | Duration (ms) | Cores Used | Iters/Core | Pad Waste | Slot Waste | FPU Util (%)  | Math Util |"
+    sep = "|------|---------|---------|---------------|------------|------------|-----------|------------|---------------|-----------|"
     print(header)
     print(sep)
 
@@ -1146,8 +1480,7 @@ def test_ring_joint_attention_create_perf_table(model_name):
         fpu_range = f"{result['fpu_util_min']:.1f}-{result['fpu_util_max']:.1f}"
         print(
             f"| {rank:4d} | {result['q_chunk_size']:7d} | {result['k_chunk_size']:7d} | {result['duration_ms']:13.3f} | "
-            f"{result['cores_used']:12d} | {result['cores_idle']:12d} | {result['compute_util_pct']:11.0f}% | "
-            f"{result['ccl_cores']:9d} | {result['ring_efficiency']:7.0f}% | {result['iters_per_core']:10d} | "
+            f"{result['cores_used']:10d} | {result['iters_per_core']:10d} | "
             f"{result['total_waste_pct']:8.1f}% | {result['slot_waste_pct']:9.1f}% | {fpu_range:>13} | {result['utilization']:8.1f}% |"
         )
 
@@ -1163,15 +1496,136 @@ def test_ring_joint_attention_create_perf_table(model_name):
             f"\nBest configuration: q_chunk_size={best['q_chunk_size']}, "
             f"k_chunk_size={best['k_chunk_size']} "
             f"({best['duration_ms']:.3f} ms, {best['utilization']:.1f}% math util, "
-            f"{best['cores_used']}/{total_compute_cores} compute cores, {best['ccl_cores']} CCL cores, "
-            f"{best['ring_efficiency']:.1f}% ring eff, {best['iters_per_core']} iters/core, "
+            f"{best['cores_used']}/{total_compute_cores} compute cores, {best['iters_per_core']} iters/core, "
             f"{best['total_waste_pct']:.1f}% pad waste, {best['slot_waste_pct']:.1f}% slot waste)"
         )
 
-        print(f"\nRing Joint Attention Analysis:")
-        print(f"  Ring size: {ring_size} devices")
-        print(f"  CCL overhead: {best['ccl_cores']} cores ({best['ccl_overhead_pct']:.1f}% of total)")
-        print(f"  Per-device sequence: {s // ring_size} tokens")
-        print(f"  Total coordination: {ring_size} devices x {best['ccl_cores']} CCL cores each")
+    print(f"{'='*150}\n")
 
-    print(f"{'='*190}\n")
+
+# === TEST 5: PERFORMANCE CHECK (CI-gated by SDPA_PERF_CHECKS=1) ===
+# Symmetric +/- band — catches both regressions and unexpected speedups.
+RING_JOINT_PERF_MARGIN = 0.005
+
+RING_JOINT_PERF_CHECK_CONFIGS = [
+    # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util)
+    # 4-device ring (QuietBox)
+    ("wan2_2_1xGLX", 288, 512, 4, 68.9),
+    ("mla_100k", 160, 320, 4, 63.2),
+]
+
+
+@pytest.mark.skipif(
+    os.environ.get("SDPA_PERF_CHECKS") != "1",
+    reason="Set SDPA_PERF_CHECKS=1 to run (CI: sdpa perf tests job)",
+)
+@pytest.mark.timeout(600)
+@pytest.mark.parametrize(
+    "model_name, q_chunk_size, k_chunk_size, ring_size_expected, expected_util",
+    RING_JOINT_PERF_CHECK_CONFIGS,
+    ids=[f"{cfg[0]}-q{cfg[1]}-k{cfg[2]}-ring{cfg[3]}" for cfg in RING_JOINT_PERF_CHECK_CONFIGS],
+)
+def test_ring_joint_attention_perf_check(model_name, q_chunk_size, k_chunk_size, ring_size_expected, expected_util):
+    """Measure ring joint SDPA math utilization via tracy and assert within +/- RING_JOINT_PERF_MARGIN."""
+    from tracy.process_model_log import run_device_profiler
+
+    if MESH_CONFIG.sp_size != ring_size_expected:
+        pytest.skip(f"Expected ring size {ring_size_expected}, current topology has ring size {MESH_CONFIG.sp_size}")
+
+    if model_name not in MODEL_CONFIGS:
+        pytest.skip(f"Model {model_name} not available for current mesh config")
+
+    model = MODEL_CONFIGS[model_name]
+    config_id = get_test_case_id(model, q_chunk_size, k_chunk_size)
+
+    sq = model.seq_len * MESH_CONFIG.sp_size
+    local_seq_len = model.seq_len
+    local_nhq = model.nhq
+
+    subdir = "ttnn_ring_joint_sdpa_perf_check"
+    command = (
+        f"pytest tests/nightly/blackhole/sdpa/"
+        f"test_ring_joint_sdpa.py::test_ring_joint_attention_sdpa_sweep_perf_impl"
+        f"[{config_id}]"
+    )
+
+    float_cols = ["CORE COUNT", "DEVICE KERNEL DURATION [ns]"]
+    cols = ["ATTRIBUTES"]
+
+    with mock.patch.dict(os.environ, {"CI": "false"}):
+        run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
+    r = post_process_ops_log(
+        subdir, float_columns=float_cols, columns=cols, op_name="", sum_vals=False, has_signposts=False
+    )
+
+    assert (
+        len(r["CORE COUNT"]) > 0 and len(r["DEVICE KERNEL DURATION [ns]"]) > 0
+    ), "profiler returned no SDPA ops — inner test was skipped or did not produce a kernel run"
+
+    measured_core_count = int(r["CORE COUNT"][0])
+    duration_ns = int(r["DEVICE KERNEL DURATION [ns]"].max())
+
+    # Match perf-table effective_cores rounding (ignore non-multiple-of-10 strays)
+    effective_cores = measured_core_count - measured_core_count % 10
+    assert (
+        effective_cores > 0
+    ), f"effective_cores=0 (measured_core_count={measured_core_count}) — profiler output incomplete"
+
+    utilization = compute_ring_joint_utilization(
+        local_seq_len, sq, model.d_q, model.d_v, local_nhq, duration_ns, effective_cores, model.is_causal
+    )
+
+    lower = expected_util * (1 - RING_JOINT_PERF_MARGIN)
+    upper = expected_util * (1 + RING_JOINT_PERF_MARGIN)
+
+    logger.info(
+        f"Ring joint SDPA perf check {config_id}: "
+        f"duration={duration_ns/1e6:.3f} ms, math_util={utilization:.2f}% "
+        f"(expected {expected_util:.2f}%, band [{lower:.2f}, {upper:.2f}])"
+    )
+
+    assert lower <= utilization <= upper, (
+        f"Math utilization {utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "
+        f"(expected {expected_util:.2f}%, margin +/- {RING_JOINT_PERF_MARGIN*100:.1f}%)"
+    )
+
+
+# === TEST 6: CHUNKED-PREFILL ACCURACY ===
+CHUNKED_PREFILL_MODELS = [m for m in ("mla_100k",) if m in MODEL_CONFIGS]
+
+
+def _generate_chunked_configs():
+    configs = []
+    ids = []
+    for model_name in CHUNKED_PREFILL_MODELS:
+        model = MODEL_CONFIGS[model_name]
+        for q, k in product(model.q_chunk_sizes, model.k_chunk_sizes):
+            configs.append((model_name, q, k))
+            ids.append(f"{model_name}-q{q}-k{k}")
+    return configs, ids
+
+
+CHUNKED_CONFIGS, CHUNKED_CONFIG_IDS = _generate_chunked_configs()
+
+
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize("chunk_size", [CHUNKED_PREFILL_CHUNK_SIZE], ids=[f"chunk{CHUNKED_PREFILL_CHUNK_SIZE}"])
+@pytest.mark.parametrize(
+    "model_name,q_chunk_size,k_chunk_size",
+    CHUNKED_CONFIGS,
+    ids=CHUNKED_CONFIG_IDS,
+)
+def test_ring_joint_attention_sdpa_chunked_accuracy(model_name, q_chunk_size, k_chunk_size, chunk_size):
+    """Validate ring joint SDPA chunked prefill against a full-sequence oracle."""
+    mesh_config = MESH_CONFIG
+
+    if model_name not in MODEL_CONFIGS:
+        pytest.skip(f"Model {model_name} not available for current mesh config")
+
+    run_ring_joint_sdpa_chunked(
+        mesh_config,
+        MODEL_CONFIGS[model_name],
+        chunk_size=chunk_size,
+        q_chunk_size=q_chunk_size,
+        k_chunk_size=k_chunk_size,
+    )

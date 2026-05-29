@@ -5,10 +5,10 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/core_local_mem.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 using namespace tt::data_movement::common;
 
@@ -49,9 +49,9 @@ void kernel_main() {
     const auto s = TensorAccessor(src_args, src_addr);
     const auto d = TensorAccessor(dst_args, dst_addr);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb0(cb_id_in0);
-    experimental::CircularBuffer cb1(cb_id_in1);
+    Noc noc;
+    CircularBuffer cb0(cb_id_in0);
+    CircularBuffer cb1(cb_id_in1);
 
     // alignments pre-calculations
     constexpr uint64_t r_mask_to_use = src_args.is_dram ? MASK_64 : MASK_16;
@@ -85,10 +85,10 @@ void kernel_main() {
                 src_noc_addr = s.get_noc_addr(read_offset, 0);
                 data_location = input_buffer + (src_noc_addr & r_offset_to_use);  // Guaranteed aligned to src_noc_addr
 
-                experimental::CoreLocalMem<uint32_t> dst_mem(data_location);
+                CoreLocalMem<uint32_t> dst_mem(data_location);
                 // Use TensorAccessor directly to avoid address truncation
                 // Template parameter preserves one-packet fast path for page-sized transfers
-                noc.async_read<experimental::Noc::TxnIdMode::DISABLED, original_page_size_bytes>(
+                noc.async_read<Noc::TxnIdMode::DISABLED, original_page_size_bytes>(
                     s,
                     dst_mem,
                     original_page_size_bytes,
@@ -114,12 +114,12 @@ void kernel_main() {
                     }
                     // Now we are ensured the data is at write_buffer and it is aligned for the write
                     // Orchestrate the write
-                    experimental::CoreLocalMem<uint32_t> src_mem(data_location);
+                    CoreLocalMem<uint32_t> src_mem(data_location);
                     // Use TensorAccessor directly to avoid address truncation
                     // Template parameter preserves one-packet fast path for page-sized transfers
                     noc.async_write<
-                        experimental::Noc::TxnIdMode::DISABLED,
-                        experimental::Noc::ResponseMode::NON_POSTED,
+                        Noc::TxnIdMode::DISABLED,
+                        Noc::ResponseMode::NON_POSTED,
                         original_page_size_bytes>(
                         src_mem,
                         d,

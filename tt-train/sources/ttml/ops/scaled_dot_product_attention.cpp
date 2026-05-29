@@ -150,7 +150,7 @@ autograd::TensorPtr scaled_dot_product_attention_composite(
     const float scale = 1.0F / std::sqrt(static_cast<float>(embedding_dim));
     constexpr auto none = ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam>{};
     auto q_scaled =
-        ttnn::multiply(query->get_value(), scale, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
+        ttnn::multiply(query->get_value(), scale, std::nullopt, std::nullopt, std::nullopt, none, none, none);
     auto key_tensor = key->get_value();
 
     // σQ @ K
@@ -160,24 +160,22 @@ autograd::TensorPtr scaled_dot_product_attention_composite(
         auto mask_tensor = mask.value()->get_value();
         // ttnn::where when mask is not of the same shape as qk_scaled
         qk_scaled = ttnn::add(
-            ttnn::multiply(mask_tensor, qk_scaled, std::nullopt, std::nullopt, std::nullopt, none, none, none, false),
+            ttnn::multiply(mask_tensor, qk_scaled, std::nullopt, std::nullopt, std::nullopt, none, none, none),
             ttnn::multiply(
-                ttnn::subtract(mask_tensor, 1.F, std::nullopt, std::nullopt, std::nullopt, none, none, none, false),
+                ttnn::subtract(mask_tensor, 1.F, std::nullopt, std::nullopt, std::nullopt, none, none, none),
                 1e9F,
                 std::nullopt,
                 std::nullopt,
                 std::nullopt,
                 none,
                 none,
-                none,
-                false),
+                none),
             std::nullopt,
             std::nullopt,
             std::nullopt,
             none,
             none,
-            none,
-            false);
+            none);
     }
     // (B, H, S, S)
     auto attention_weights = ttml::metal::softmax(qk_scaled, /* axis */ 3);
@@ -208,7 +206,7 @@ autograd::TensorPtr scaled_dot_product_attention_composite(
             dL_dattention_weights.deallocate();
 
             dL_dscaled_dot = ttnn::multiply(
-                dL_dscaled_dot, scale, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);  // [B,H,S,S]
+                dL_dscaled_dot, scale, std::nullopt, std::nullopt, std::nullopt, none, none, none);  // [B,H,S,S]
 
             // dL_dQ = dL_dscaled_dot @ key
             ttnn::Tensor dL_dQ =

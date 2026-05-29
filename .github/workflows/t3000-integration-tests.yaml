@@ -12,7 +12,6 @@ on:
           - all
           - tteager
           - trace stress
-          - falcon40b
           # - llama3.2-vision # Tier 3 models
           # - n300 mesh llama3.2-vision # Tier 3 models
           - llama3.2-90b-vision # Tier 2 model

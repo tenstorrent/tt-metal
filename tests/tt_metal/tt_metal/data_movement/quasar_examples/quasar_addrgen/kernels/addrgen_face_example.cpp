@@ -17,14 +17,17 @@
 // by face_size. This is useful for processing multiple tiles laid out contiguously.
 //
 // Compile-time args:
-//   0: src_stride_en    - 1 = src uses face+2D striding, 0 = src fixed at base
-//   1: dst_stride_en    - 1 = dst uses face+2D striding, 0 = dst fixed at base
-//   2: num_of_addresses - total addresses to generate; should be num_faces * outer_count * inner_count
+//   src_stride_en    - 1 = src uses face+2D striding, 0 = src fixed at base
+//   dst_stride_en    - 1 = dst uses face+2D striding, 0 = dst fixed at base
+//   num_of_addresses - total addresses to generate; should be num_faces * outer_count * inner_count
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
+#include "experimental/kernel_args.h"
 #include "internal/tt-2xx/quasar/overlay/addrgen_api.hpp"
 #include <cstdint>
+
+using namespace overlay;
 
 // 2 faces, each face: 4 cols x 4 rows
 constexpr uint32_t src_base = 0x10000;
@@ -38,9 +41,9 @@ constexpr LoopConfig dst_outer_cfg = {.stride = 1024, .end_addr = 4 * 1024};
 constexpr uint64_t dst_face_size = dst_outer_cfg.end_addr;
 
 void kernel_main() {
-    constexpr uint32_t src_stride_en = get_compile_time_arg_val(0);
-    constexpr uint32_t dst_stride_en = get_compile_time_arg_val(1);
-    constexpr uint32_t num_of_addresses = get_compile_time_arg_val(2);
+    constexpr uint32_t src_stride_en = get_arg(args::src_stride_en);
+    constexpr uint32_t dst_stride_en = get_arg(args::dst_stride_en);
+    constexpr uint32_t num_of_addresses = get_arg(args::num_of_addresses);
 
     reset_addrgen_0();
 
@@ -68,8 +71,7 @@ void kernel_main() {
         uint64_t dest_addr = peek_dest_addrgen_0();
         pop_src_addrgen_0();
         pop_dest_addrgen_0();
-        DPRINT << "  Source address: " << HEX() << (uint32_t)src_addr << " Destination address: " << HEX()
-               << (uint32_t)dest_addr << ENDL();
+        DPRINT("  Source address: {:#X} Destination address: {:#X}\n", src_addr, dest_addr);
     }
 }
 // /* Real loop with noc */

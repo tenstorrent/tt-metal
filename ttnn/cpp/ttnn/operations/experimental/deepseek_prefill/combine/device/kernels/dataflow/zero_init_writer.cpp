@@ -31,8 +31,14 @@ void kernel_main() {
     constexpr auto output_args = TensorAccessorArgs<3>();
 
     // ===== Runtime args =====
+    // output_addr is always needed (the all-local send-loop path writes directly to output DRAM).
+    // The zero-init phase consumes additional runtime args (page range, zi-done sem, sender NOC
+    // coords), but they are only present when INIT_ZEROS=1 — the program factory omits them
+    // when init_zeros=False so the kernel can still run for TILE_LAYOUT's send-loop role.
     uint32_t rt_args_idx = 0;
     uint32_t output_addr = get_arg_val<uint32_t>(rt_args_idx++);
+
+#if INIT_ZEROS
     uint32_t page_start = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t page_end = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t zi_done_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
@@ -48,9 +54,11 @@ void kernel_main() {
         uint32_t noc_y = get_arg_val<uint32_t>(rt_args_idx++);
         sender_sem_noc_addrs[c] = get_noc_addr(noc_x, noc_y, zi_done_sem_l1_offset);
     }
+#endif
 
     const auto output_addr_gen = TensorAccessor(output_args, output_addr);
 
+#if INIT_ZEROS
     fill_zero_buffer(cb_zero_buffer_id);
     uint32_t zero_buffer_addr = get_write_ptr(cb_zero_buffer_id);
 
@@ -62,6 +70,7 @@ void kernel_main() {
     }
 
     noc_async_atomic_barrier();
+#endif
 
 #if IS_TILE_LAYOUT
     // ===== Untilized-data send path (moved from reader_untilize.cpp steps 3-7) =====
@@ -137,6 +146,7 @@ void kernel_main() {
     uint64_t sender_c9_slot_noc_addr =
         get_noc_addr(sender_noc_x, sender_noc_y, sender_idle_c9_scratch_l1_offset + core_id * sizeof(uint32_t));
     noc_inline_dw_write(sender_c9_slot_noc_addr, my_c9_l1_offset);
+    noc_async_write_barrier();  // ensure c_9 offset has landed before atomic inc wakes sender
     noc_semaphore_inc(sender_data_ready_noc_addr, 1);
     noc_async_atomic_barrier();
 
@@ -203,5 +213,6 @@ void kernel_main() {
         // 7. Release untilize CB
         cb_pop_front(cb_untilize_id, read_batch_size);
     }
+    noc_semaphore_set(counter_ready_sem_ptr, 0);
 #endif
 }

@@ -4,97 +4,15 @@
 
 #pragma once
 #include <cstdint>
+#include <type_traits>
+#include <utility>
 
-#include "cmath_common.h"
-#include "llk_defs.h"
-using namespace ckernel::math;
+#include "llk_math_eltwise_sfpu_common.h"
 
-/**
- * @brief Programs SFPU addrmods
- */
-inline void _eltwise_unary_sfpu_configure_addrmod_()
-{
-    // TODO (RT): Ask if addrmods are still shared between fpu and sfpu?
-    // NOTE: this kernel is typically used in conjunction with
-    // A2D, which is using ADDR_MOD_0 and ADDR_MOD_1, so use one
-    // that doesn't conflict!
-
-    addr_mod_t {
-        .srca = {.incr = 0},
-        .srcb = {.incr = 0},
-        .dest = {.incr = 0},
-    }
-        .set(ADDR_MOD_7, csr_read<CSR::TRISC_ID>());
-}
-
-/**
- * @brief Sets up starting index of SFPU, Stalls till all FPU operations are done
- * @param tile_index: Use to index to a tile in Destination register
- */
-inline void _llk_math_eltwise_unary_sfpu_start_(const std::uint32_t tile_index)
-{
-    _set_dst_write_addr_<DstTileShape::Tile32x32>(tile_index);
-    TTI_STALLWAIT(p_stall::STALL_SFPU, 0, 0, p_stall::MATH);
-}
-
-/**
- * @brief Resets dest counter to 0
- */
-inline void _llk_math_eltwise_unary_sfpu_done_()
-{
-    _reset_counters_<p_setrwc::SET_D>();
-}
-
-/**
- * @brief Clear SrcS valids
- * @tparam SRCS_RD_DONE: Whether the source reg S read is done
- * @tparam SRCS_WR_DONE: Whether the source reg S write is done
- */
-template <bool SRCS_RD_DONE, bool SRCS_WR_DONE>
-inline void _llk_math_eltwise_unary_sfpu_srcs_clear_vlds_()
-{
-    TTI_SFPNOP(SRCS_WR_DONE, SRCS_RD_DONE, 0);
-}
-
-/**
- * @brief Increments dest counter by a face (16x16 default)
- */
-inline void _llk_math_eltwise_unary_sfpu_inc_dst_face_addr_()
-{
-    _inc_dst_addr_<16>();
-}
-
-/**
- * @brief Initialization for SFPU operations
- */
-inline void _llk_math_eltwise_unary_sfpu_init_()
-{
-    _init_sfpu_config_reg_();
-    _eltwise_unary_sfpu_configure_addrmod_();
-    _reset_counters_<p_setrwc::SET_ABD_F>();
-}
-
-/**
- * @brief Runs SFPU operation for a tile (default 32x32)
- * @param: sfpu_func: function pointer to the sfpu functions to run, can look at list of functions here: common/inc/sfpu/cmath_sfpu*
- * @param: dst_tile_index: Starting tile index in the destination register, values = 0 - 15
- * @param: args: variable number of args can be passed into this function, that will be passed
- * to the SFPU function pointer
- */
 template <class F, class... ARGS>
 inline void _llk_math_eltwise_unary_sfpu_params_(F&& sfpu_func, std::uint32_t dst_tile_index, ARGS&&... args)
 {
-    _llk_math_eltwise_unary_sfpu_start_(dst_tile_index);
-
-    for (std::uint32_t face = 0; face < NUM_FACES; face++)
-    {
-        sfpu_func(static_cast<ARGS&&>(args)...);
-
-        // Move to the next face
-        _llk_math_eltwise_unary_sfpu_inc_dst_face_addr_();
-    }
-
-    _llk_math_eltwise_unary_sfpu_done_();
+    _llk_math_eltwise_sfpu_params_(std::forward<F>(sfpu_func), dst_tile_index, std::forward<ARGS>(args)...);
 }
 
 /**

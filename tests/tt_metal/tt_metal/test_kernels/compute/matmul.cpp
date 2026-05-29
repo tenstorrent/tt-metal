@@ -6,7 +6,7 @@
 
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/matmul.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     uint32_t block_tile_dim = get_compile_time_arg_val(0);
@@ -17,9 +17,9 @@ void kernel_main() {
     uint32_t in1_block_tile_cnt = get_compile_time_arg_val(5);
     uint32_t out_block_tile_cnt = get_compile_time_arg_val(6);
 
-    experimental::CircularBuffer cb0(tt::CBIndex::c_0);
-    experimental::CircularBuffer cb1(tt::CBIndex::c_1);
-    experimental::CircularBuffer cb16(tt::CBIndex::c_16);
+    CircularBuffer cb0(tt::CBIndex::c_0);
+    CircularBuffer cb1(tt::CBIndex::c_1);
+    CircularBuffer cb16(tt::CBIndex::c_16);
 
     mm_init(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
 

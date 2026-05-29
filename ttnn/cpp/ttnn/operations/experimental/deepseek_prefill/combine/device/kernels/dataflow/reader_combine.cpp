@@ -12,11 +12,9 @@
 
 #define ENABLE_COMBINE_DEBUG 0
 #if ENABLE_COMBINE_DEBUG
-#define DPRINT_COMBINE DPRINT
+#define DPRINT_COMBINE(...) DPRINT(__VA_ARGS__)
 #else
-#define DPRINT_COMBINE \
-    if (0)             \
-    DebugPrinter()
+#define DPRINT_COMBINE(...)
 #endif
 
 // Signal last element to writer to break out of loop
@@ -129,8 +127,11 @@ void kernel_main() {
     uint32_t zero_init_semaphore_address = get_semaphore(zero_init_semaphore_id);
     uint32_t zero_init_barrier_address = get_semaphore(zero_init_barrier_semaphore_id);
 
-    DPRINT_COMBINE << "Combine Reader: experts=[" << expert_start_idx << "," << expert_end_idx << ")"
-                   << " linearized_mesh_coord=" << linearized_mesh_coord << ENDL();
+    DPRINT_COMBINE(
+        "Combine Reader: experts=[{}, {}) linearized_mesh_coord={}\n",
+        expert_start_idx,
+        expert_end_idx,
+        linearized_mesh_coord);
 
     const auto output_addr_gen = TensorAccessor(output_args, output_addr);
 
@@ -183,6 +184,7 @@ void kernel_main() {
     }
 #endif
 
+#if INIT_ZEROS
     // Signal writer that zero-init is complete
     volatile tt_l1_ptr uint32_t* zero_init_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zero_init_semaphore_address);
@@ -195,6 +197,7 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zero_init_barrier_address);
     noc_semaphore_wait(barrier_sem_ptr, num_cores);
     noc_semaphore_set(barrier_sem_ptr, 0);
+#endif
 
     // Read expert token counts
     const auto experts_tok_counter_addr_gen = TensorAccessor(experts_tok_counter_args, experts_tok_counter_addr);
@@ -311,7 +314,7 @@ void kernel_main() {
         uint32_t end_page = start_page + expert_tokens;
         uint32_t num_batches = (expert_tokens + read_batch_size - 1) / read_batch_size;
 
-        DPRINT_COMBINE << "Expert=" << local_expert << " tokens=" << expert_tokens << ENDL();
+        DPRINT_COMBINE("Expert={} tokens={}\n", local_expert, expert_tokens);
 
 #if IS_TILE_LAYOUT
 #else
@@ -373,6 +376,7 @@ void kernel_main() {
                 noc_async_write_barrier();
                 noc_inline_dw_write(idle_metadata_noc_addrs[current_idle_core], batch_count);
             }
+            noc_async_write_barrier();
 
             // Signal the idle core that the metadata batch is ready in its c_9.
             noc_semaphore_inc(idle_start_noc_addrs[current_idle_core], 1);

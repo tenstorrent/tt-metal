@@ -9,7 +9,7 @@ import ttnn
 from models.common.sampling.generator import SamplingGenerator
 from models.common.utility_functions import nearest_32
 from models.demos.gpt_oss.config import MeshConfig, Mode, ModeConfig
-from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
+from models.demos.gpt_oss.utils.general_utils import get_cache_file_name, get_default_num_links
 from models.demos.gpt_oss.utils.substate import substate
 from models.tt_transformers.tt.common import copy_host_to_device, rope_scaling_model_factory
 from models.tt_transformers.tt.rope import RotarySetup
@@ -293,7 +293,7 @@ class Model:
         # Create a dummy CCL manager for GPT-OSS
         from models.demos.gpt_oss.tt.ccl import CCLManager
 
-        ccl_manager = CCLManager(mesh_device, num_links=4 if mesh_device.shape[0] > 1 else 1)
+        ccl_manager = CCLManager(mesh_device, num_links=get_default_num_links(mesh_device))
 
         # Create instance using direct initialization
         instance = cls.__new__(cls)
@@ -337,6 +337,7 @@ class Model:
         sampling_on_device=False,
         batch_size=1,
         skip_lm_head=False,
+        page_tables_per_layer=None,
     ):
         """
         Shared forward pass through decoder layers and final projection.
@@ -345,8 +346,16 @@ class Model:
             hidden_states: Input tensor
             rope_mats: RoPE rotation matrices [cos, sin]
             current_pos: Current position (for decode) or None (for prefill)
-            page_table: Page table for paged attention
-            kv_cache: KV cache list per layer
+            page_table: Single page table; used for every layer when
+                ``page_tables_per_layer`` is None (legacy / uniform attention).
+            kv_cache: KV cache list per layer.
+            page_tables_per_layer: Optional list of per-layer page tables, one
+                entry per decoder layer. When set, each layer's attention
+                receives ``page_tables_per_layer[i]`` instead of ``page_table``.
+                vLLM's hybrid kv cache manager produces this list so
+                sliding-window layers can index a smaller paged pool than
+                full-attention layers (KV cache groups). When None, behavior is
+                byte-equivalent to the pre-hybrid path.
 
         Returns:
             logits: Output logits
@@ -354,14 +363,21 @@ class Model:
         # Determine mode based on current_pos presence
         mode = Mode.DECODE if current_pos is not None else Mode.PREFILL
 
+        if page_tables_per_layer is not None and len(page_tables_per_layer) != len(self.layers):
+            raise ValueError(
+                f"page_tables_per_layer has {len(page_tables_per_layer)} entries "
+                f"but model has {len(self.layers)} layers"
+            )
+
         # Process through decoder layers
         for i, decoder_layer in enumerate(self.layers):
             layer_kv_cache = kv_cache[i] if kv_cache is not None else None
+            layer_page_table = page_tables_per_layer[i] if page_tables_per_layer is not None else page_table
             hidden_states = decoder_layer(
                 hidden_states,
                 position_embeddings=rope_mats,
                 position_idx=current_pos,
-                page_table=page_table,
+                page_table=layer_page_table,
                 kv_cache=layer_kv_cache,
                 is_decode=is_decode,
                 user_id=user_id,
@@ -406,6 +422,75 @@ class Model:
 
         return logits
 
+    def _page_table_mesh_mapper(self, B):
+        """Mesh mapper for per-layer page tables, matching the layout that
+        :meth:`prepare_decode_inputs_host` uses for the legacy single
+        ``page_table`` kwarg: shard the batch dim across mesh axis 0 when
+        ``users_row_sharded`` (and ``B>1``), replicate otherwise. The
+        hybrid bridge chunks the global page table per-DP before
+        reaching this submesh, so ``B`` is the per-DP batch — same as
+        what the legacy path sees on entry to
+        ``prepare_decode_inputs_host``.
+        """
+        if self.users_row_sharded and B > 1:
+            return ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, None), mesh_shape=self.mesh_device.shape)
+        return ttnn.ReplicateTensorToMesh(self.mesh_device)
+
+    def _page_tables_to_ttnn(self, page_tables_per_layer):
+        """Resolve a per-layer torch list to *persistent* ttnn device
+        tensors (allocate-only) — see
+        :meth:`Transformer._page_tables_to_ttnn` for the trace-capture
+        rationale. Same pattern: lazy alloc on first call, updates happen
+        from outside the traced forward via
+        :meth:`update_persistent_per_layer_page_tables`.
+        """
+        if page_tables_per_layer is None:
+            return None
+        persistent = getattr(self, "_persistent_per_layer_page_tables", None)
+        n = len(page_tables_per_layer)
+        if persistent is None or len(persistent) != n:
+            persistent = []
+            for pt in page_tables_per_layer:
+                if pt is None:
+                    persistent.append(None)
+                    continue
+                if isinstance(pt, ttnn.Tensor):
+                    persistent.append(pt)
+                    continue
+                persistent.append(
+                    ttnn.from_torch(
+                        pt,
+                        device=self.mesh_device,
+                        dtype=ttnn.int32,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        mesh_mapper=self._page_table_mesh_mapper(pt.shape[0]),
+                    )
+                )
+            self._persistent_per_layer_page_tables = persistent
+        return persistent
+
+    def update_persistent_per_layer_page_tables(self, page_tables_per_layer):
+        """Update content of persistent per-layer page_table device
+        tensors in place — see
+        :meth:`Transformer.update_persistent_per_layer_page_tables`.
+        """
+        if page_tables_per_layer is None:
+            return
+        persistent = getattr(self, "_persistent_per_layer_page_tables", None)
+        if persistent is None or len(persistent) != len(page_tables_per_layer):
+            return
+        for i, pt in enumerate(page_tables_per_layer):
+            if pt is None or persistent[i] is None or isinstance(pt, ttnn.Tensor):
+                continue
+            host_pt = ttnn.from_torch(
+                pt,
+                device=None,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=self._page_table_mesh_mapper(pt.shape[0]),
+            )
+            ttnn.copy_host_to_device_tensor(host_pt, persistent[i])
+
     def ttnn_decode_forward(
         self,
         tokens,
@@ -415,7 +500,15 @@ class Model:
         kv_cache=None,
         sampling_on_device=False,
         capture_sampling_trace=False,
+        page_tables_per_layer=None,
     ):
+        if page_tables_per_layer is None:
+            # vLLM hybrid path: the bridge stashes the per-layer list on the
+            # model object before calling Generator.decode_forward, since the
+            # generator's many internal ttnn_decode_forward sites can't all
+            # plumb the new kwarg cleanly. Pick it up here when present.
+            page_tables_per_layer = getattr(self, "_active_page_tables_per_layer", None)
+        page_tables_per_layer = self._page_tables_to_ttnn(page_tables_per_layer)
         """
         Decode forward pass - processes single tokens.
         Matches tt-transformers interface where rot_mat_idxs are used for on-device RoPE lookup.
@@ -442,6 +535,7 @@ class Model:
             kv_cache=kv_cache,
             is_decode=True,
             sampling_on_device=sampling_on_device,
+            page_tables_per_layer=page_tables_per_layer,
         )
 
         if sampling_on_device and self.sampling is not None:
@@ -470,7 +564,14 @@ class Model:
         kv_cache=None,
         batch_size=1,
         skip_lm_head=False,
+        page_tables_per_layer=None,
     ):
+        if page_tables_per_layer is None:
+            # See ttnn_decode_forward: the bridge stashes per-layer page tables
+            # on the model when in vLLM hybrid mode, since Generator's prefill
+            # path doesn't thread the kwarg.
+            page_tables_per_layer = getattr(self, "_active_page_tables_per_layer", None)
+        page_tables_per_layer = self._page_tables_to_ttnn(page_tables_per_layer)
         """Prefill forward pass - processes full sequences"""
         # Use provided rotation matrices or slice from rope_setup (matches tt-transformers)
         seq_len = x.shape[-2]
@@ -495,6 +596,7 @@ class Model:
             user_id=user_id,
             batch_size=batch_size,
             skip_lm_head=skip_lm_head,
+            page_tables_per_layer=page_tables_per_layer,
         )
 
         return logits
@@ -859,14 +961,20 @@ class Model:
         )
         return host_inputs
 
-    def transform_and_embed_prefill_inputs_device(self, tokens, tt_page_table, tt_chunk_page_table):
+    def transform_and_embed_prefill_inputs_device(
+        self,
+        tokens,
+        tt_page_table,
+        tt_chunk_page_table,
+        tt_chunk_start_idx=None,
+    ):
         """Transform and embed tokens on device"""
         tokens_embd = ttnn.embedding(tokens, self.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
         # Keep `tokens` allocated: trace replay updates this same device buffer via copy_host_to_device.
         # Deallocating it here breaks prefill trace replay with "Buffer must be allocated on device".
         if len(tokens_embd.shape) == 3:
             tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
-        return tokens_embd, tt_page_table, tt_chunk_page_table
+        return tokens_embd, tt_page_table, tt_chunk_page_table, tt_chunk_start_idx
 
     def prepare_inputs_prefill(
         self,
@@ -880,6 +988,8 @@ class Model:
         batch_size=1,
         user_id=0,
         batched_prefill=False,
+        chunk_start_idx=None,
+        **kwargs,
     ):
         """Prepare inputs for prefill mode
 
@@ -977,12 +1087,23 @@ class Model:
                 chunk_page_table, device=device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
             )
 
+        if chunk_start_idx is not None:
+            tt_chunk_start_idx = ttnn.from_torch(
+                torch.tensor([chunk_start_idx], dtype=torch.int32),
+                device=device,
+                dtype=ttnn.int32,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        else:
+            tt_chunk_start_idx = None
+
         return (
             tokens if trace_enabled else tokens_embd,
             rot_mats_global,
             rot_mats_local,
             tt_page_table,
             tt_chunk_page_table,
+            tt_chunk_start_idx,
         )
 
     def process_output_decode(self, tt_out, B, S=1, is_tokens=False, is_log_probs=False):

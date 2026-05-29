@@ -19,8 +19,10 @@ set(UNIT_TESTS_API_SOURCES
     core_coord/test_CoreRangeSet_contains.cpp
     core_coord/test_CoreRangeSet_intersects.cpp
     core_coord/test_CoreRangeSet_merge.cpp
+    dataflow_buffer/test_alias_dataflow_buffer.cpp
     dataflow_buffer/test_dataflow_buffer.cpp
     dataflow_buffer/test_dataflow_buffer_configs.cpp
+    dataflow_buffer/test_borrowed_memory_dataflow_buffer.cpp
     distribution_spec/test_buffer_distribution_spec.cpp
     metal2_host_api/test_program_spec.cpp
     metal2_host_api/test_program_spec_hw.cpp
@@ -29,14 +31,19 @@ set(UNIT_TESTS_API_SOURCES
     tensor/test_tensor_sharding.cpp
     tensor/test_host_tensor.cpp
     tensor/test_mesh_tensor.cpp
+    tensor/test_tensor_types.cpp
     test_banked.cpp
     test_bit_utils.cpp
     test_filesystem_utils.cpp
+    test_graph_tracking.cpp
     test_buffer_region.cpp
     test_compile_time_args.cpp
     test_compile_defines.cpp
+    test_compiler_include_paths.cpp
     test_direct.cpp
     test_dram_kernels.cpp
+    test_dram_sender_global_cb.cpp
+    test_dram_subchannel_helper.cpp
     test_dram_to_l1_multicast.cpp
     test_dram.cpp
     test_global_circular_buffers.cpp

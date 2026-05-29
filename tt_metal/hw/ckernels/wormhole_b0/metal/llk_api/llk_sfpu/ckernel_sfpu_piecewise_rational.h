@@ -51,7 +51,7 @@ inline void piecewise_exp_reduce(sfpi::vFloat x, sfpi::vFloat& s, sfpi::vInt& k_
 }
 
 inline sfpi::vFloat piecewise_exp_expand(sfpi::vFloat poly_result, sfpi::vInt k_int) {
-    return sfpi::setexp(poly_result, sfpi::exexp_nodebias(poly_result) + k_int);
+    return sfpi::setexp(poly_result, sfpi::exexp(poly_result, sfpi::ExponentMode::NoDebias) + k_int);
 }
 #endif
 

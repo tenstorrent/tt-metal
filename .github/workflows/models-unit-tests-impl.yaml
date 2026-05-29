@@ -28,6 +28,10 @@ on:
         required: true
         type: string
         description: "Model tier to filter tests (1, 2, or 3)"
+    outputs:
+      matrix:
+        description: "Filtered matrix of legs that ran (consumed by ai_summary/run for INFRA_FAILURE reconciliation)."
+        value: ${{ jobs.load-test-matrix.outputs.matrix }}
 
 jobs:
   load-test-matrix:
@@ -38,7 +42,7 @@ jobs:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/models_unit_tests.yaml
     steps:
       - name: Checkout the repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           sparse-checkout: |
             .github
@@ -99,10 +103,18 @@ jobs:
         HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
         LOGURU_LEVEL: INFO
         GTEST_OUTPUT: xml:/work/generated/test_reports/
+        MLPERF_READ_ONLY: ${{ inputs.mlperf-read-only }} # used by GPT-OSS 120B to toggle --skip-model-load
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf${{ inputs.mlperf-read-only && ':ro' || ':rw' }}
+        # bh_p150 / bh_loudbox / bh_galaxy[_perf] and the WH SKUs run on machines
+        # that host the canonical HF / tt_cache layout under /mnt/MLPerf, so the
+        # standard mount works as-is. bh_quietbox_2 is a local-disk BH runner
+        # whose equivalent layout lives at /localdev/blackhole_demos/huggingface_data
+        # — map that host path onto /mnt/MLPerf/huggingface inside the container
+        # so a single test cmd referencing /mnt/MLPerf/... resolves on both
+        # cache modes.
+        - ${{ matrix.test-group.sku == 'bh_quietbox_2' && format('/localdev/blackhole_demos/huggingface_data:/mnt/MLPerf/huggingface{0}', inputs.mlperf-read-only && ':ro' || ':rw') || format('/mnt/MLPerf:/mnt/MLPerf{0}', inputs.mlperf-read-only && ':ro' || ':rw') }}
       options: "--device /dev/tenstorrent --privileged -v /sys:/sys"
     defaults:
       run:
@@ -110,7 +122,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job
@@ -123,8 +135,19 @@ jobs:
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
-          mkdir -p generated/test_reports
-          ${{ matrix.test-group.cmd }}
+          mkdir -p generated/test_reports generated/test_logs
+
+          # Mirror the matrix command's combined stdout+stderr to a per-leg
+          # log file so ai-summary can read it later. The brace group lets
+          # the cmd be multiple statements; PIPESTATUS forwards the real
+          # exit code that piping through tee would otherwise mask.
+          SAFE_NAME=$(echo "${{ matrix.test-group.name }}" | tr ' /' '__')
+          LOG_FILE="generated/test_logs/${SAFE_NAME}_${{ job.check_run_id }}.log"
+
+          {
+            ${{ matrix.test-group.cmd }}
+          } 2>&1 | tee "$LOG_FILE"
+          exit "${PIPESTATUS[0]}"
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
@@ -133,5 +156,20 @@ jobs:
       - name: Generate gtest annotations on failure
         uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
         if: ${{ failure() }}
+      - name: 🤖 AI job summary
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/job@main
+        with:
+          config: |
+            {
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
+              "workspace": "$GITHUB_WORKSPACE/docker-job",
+              "input_dirs": ["generated/test_logs"],
+              "output_dir": "generated/ai_summaries"
+            }
+          api-key: ${{ secrets.TT_CHAT_API_KEY }}
+          api-url: ${{ secrets.TT_CHAT_URL }}
+          job-name: ${{ matrix.test-group.name }}
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

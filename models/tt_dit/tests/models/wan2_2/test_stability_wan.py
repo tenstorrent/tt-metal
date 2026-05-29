@@ -76,8 +76,8 @@ def test_stability(
         dynamic_load=dynamic_load,
         topology=topology,
         is_fsdp=is_fsdp,
-        target_height=height,
-        target_width=width,
+        height=height,
+        width=width,
         num_frames=num_frames,
     )
 
@@ -127,9 +127,12 @@ def test_stability(
                 "wan_outputs",
                 f"wan_stability_prompt_{prompt_idx}_iter{iteration}.mp4",
             )
-            from models.tt_dit.utils.video import export_to_video
+            try:
+                from models.tt_dit.utils.video import export_to_video
 
-            export_to_video(frames_to_save, out_path, fps=16)
-            print(f"✓ Saved video to: {out_path}")
+                export_to_video(frames_to_save, out_path, fps=16)
+                print(f"✓ Saved video to: {out_path}")
+            except ImportError:
+                print("Could not export video - imageio_ffmpeg not available")
 
             iteration += 1

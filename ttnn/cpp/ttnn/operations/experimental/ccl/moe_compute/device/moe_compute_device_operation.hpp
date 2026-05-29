@@ -46,6 +46,7 @@ std::vector<Tensor> moe_compute(
     const ttnn::Tensor& matmul_w2_tensor,
     uint32_t layer_id,
     uint32_t output_height_shard_dim,
+    uint32_t intermediate_size,
     bool has_bias,
     const std::optional<uint32_t>& cluster_axis,
     const std::optional<tt::tt_fabric::Topology>& topology,
@@ -54,7 +55,9 @@ std::vector<Tensor> moe_compute(
     const std::optional<ttnn::MemoryConfig>& output_memory_config,
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     const std::optional<GlobalSemaphore>& optional_cross_device_semaphore,
-    const std::optional<ttnn::experimental::prim::detail::MoEActivationFunction>& activation_type = std::nullopt);
+    const std::optional<ttnn::experimental::prim::detail::MoEActivationFunction>& activation_type = std::nullopt,
+    bool compute_only = false,
+    const std::optional<uint32_t>& bh_ring_size = std::nullopt);
 
 using ttnn::experimental::prim::get_moe_combine_cores;
 

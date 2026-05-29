@@ -2609,22 +2609,151 @@ class TestStoreCapturedGraph:
 class TestBeginGraphCaptureClearing:
     """Tests for begin_graph_capture clearing behavior."""
 
-    def test_clears_python_io_when_not_active(self):
-        import ttnn.graph as g
+    @pytest.fixture(autouse=True)
+    def isolate_outer_graph_capture(self):
+        """Root conftest may start capture before these tests; reset for outermost begin behavior."""
+        with ttnn.manage_config("enable_graph_report", False):
+            while ttnn.graph.is_graph_capture_active():
+                ttnn.graph.end_graph_capture()
+            yield
 
-        g._python_io_data = [{"name": "stale"}]
-        g.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
-        assert g._python_io_data == []
+    @pytest.fixture(autouse=True)
+    def restore_python_stack_trace_state(self):
+        was_enabled = ttnn.graph.is_python_stack_trace_enabled()
+        yield
+        if was_enabled:
+            ttnn.graph.enable_python_stack_traces()
+        else:
+            ttnn.graph.disable_python_stack_traces()
+
+    def test_clears_python_io_when_not_active(self):
+        ttnn.graph._python_io_data = [{"name": "stale"}]
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        assert ttnn.graph._python_io_data == []
         ttnn.graph.end_graph_capture()
 
-    def test_preserves_python_io_when_active(self):
-        import ttnn.graph as g
+    def test_load_config_dictionary_enables_python_stack_traces_on_begin_graph_capture(self):
+        """TTNN_CONFIG_OVERRIDES loads via load_config_from_dictionary (same code path)."""
+        if not hasattr(ttnn.CONFIG, "enable_graph_python_stack_traces"):
+            pytest.skip("CONFIG lacks enable_graph_python_stack_traces (rebuild and install _ttnn)")
 
-        g.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
-        g._python_io_data = [{"name": "keep_me"}]
-        g.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
-        assert len(g._python_io_data) == 1
-        assert g._python_io_data[0]["name"] == "keep_me"
+        original = ttnn.CONFIG.enable_graph_python_stack_traces
+        try:
+            ttnn.graph.disable_python_stack_traces()
+            assert not ttnn.graph.is_python_stack_trace_enabled()
+            ttnn.load_config_from_dictionary({"enable_graph_python_stack_traces": True}, from_file=False)
+            assert ttnn.CONFIG.enable_graph_python_stack_traces is True
+
+            ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+            try:
+                ttnn.graph.record_python_operation("ttnn.relu", (), {})
+                entry = ttnn.graph._python_io_data[0]
+                assert "python_stack_trace" in entry
+                assert len(entry["python_stack_trace"]) > 0
+            finally:
+                ttnn.graph.end_graph_capture()
+
+            assert not ttnn.graph.is_python_stack_trace_enabled()
+        finally:
+            ttnn.CONFIG.enable_graph_python_stack_traces = original
+
+    def test_begin_graph_capture_auto_enables_python_stack_traces_when_config_true(self):
+        with ttnn.manage_config("enable_graph_python_stack_traces", True):
+            ttnn.graph.disable_python_stack_traces()
+            assert not ttnn.graph.is_python_stack_trace_enabled()
+
+            ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+            try:
+                ttnn.graph.record_python_operation("ttnn.relu", (), {})
+                assert len(ttnn.graph._python_io_data) == 1
+                entry = ttnn.graph._python_io_data[0]
+                assert "python_stack_trace" in entry
+                assert len(entry["python_stack_trace"]) > 0
+            finally:
+                ttnn.graph.end_graph_capture()
+
+            assert not ttnn.graph.is_python_stack_trace_enabled()
+
+    def test_end_graph_capture_to_file_auto_disables_python_stack_traces_when_config_true(self, tmp_path):
+        """end_graph_capture_to_file mirrors end_graph_capture auto-disable for stack traces."""
+        report_path = tmp_path / "report.json"
+        with ttnn.manage_config("enable_graph_python_stack_traces", True):
+            ttnn.graph.disable_python_stack_traces()
+            assert not ttnn.graph.is_python_stack_trace_enabled()
+
+            ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+            ttnn.graph.record_python_operation("ttnn.relu", (), {})
+            ttnn.graph.end_graph_capture_to_file(str(report_path))
+
+            assert not ttnn.graph.is_python_stack_trace_enabled()
+
+        sidecar_path = report_path.with_suffix(".python_io.json")
+        assert sidecar_path.exists()
+        python_io = json.loads(sidecar_path.read_text())
+        assert len(python_io) == 1
+        assert "python_stack_trace" in python_io[0]
+        assert len(python_io[0]["python_stack_trace"]) > 0
+
+    def test_begin_graph_capture_default_no_python_stack_traces(self):
+        with ttnn.manage_config("enable_graph_python_stack_traces", False):
+            ttnn.graph.disable_python_stack_traces()
+            assert not ttnn.graph.is_python_stack_trace_enabled()
+
+            ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+            try:
+                ttnn.graph.record_python_operation("ttnn.relu", (), {})
+                assert len(ttnn.graph._python_io_data) == 1
+                entry = ttnn.graph._python_io_data[0]
+                assert "python_stack_trace" not in entry
+            finally:
+                ttnn.graph.end_graph_capture()
+
+            assert not ttnn.graph.is_python_stack_trace_enabled()
+
+    def test_begin_graph_capture_respects_disable_graph_python_stack_traces_config(self):
+        with ttnn.manage_config("enable_graph_python_stack_traces", False):
+            ttnn.graph.disable_python_stack_traces()
+            assert not ttnn.graph.is_python_stack_trace_enabled()
+
+            ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+            try:
+                ttnn.graph.record_python_operation("ttnn.relu", (), {})
+                assert len(ttnn.graph._python_io_data) == 1
+                entry = ttnn.graph._python_io_data[0]
+                assert "python_stack_trace" not in entry
+            finally:
+                ttnn.graph.end_graph_capture()
+
+            assert not ttnn.graph.is_python_stack_trace_enabled()
+
+    def test_begin_graph_capture_keeps_pre_enabled_python_stack_traces_when_config_false(self):
+        """Stacks enabled before begin are not overridden when config auto-enable is off."""
+        with ttnn.manage_config("enable_graph_python_stack_traces", False):
+            ttnn.graph.disable_python_stack_traces()
+            ttnn.graph.enable_python_stack_traces()
+            ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+            try:
+                ttnn.graph.record_python_operation("ttnn.relu", (), {})
+                entry = ttnn.graph._python_io_data[0]
+                assert "python_stack_trace" in entry
+                assert len(entry["python_stack_trace"]) > 0
+            finally:
+                ttnn.graph.end_graph_capture()
+
+    def test_configure_stack_traces_defaults_false_when_config_attr_missing(self):
+        import types
+
+        ttnn.graph.disable_python_stack_traces()
+        fake_ttnn = types.SimpleNamespace(CONFIG=types.SimpleNamespace())
+        ttnn.graph._configure_python_stack_traces_for_outer_graph_capture(fake_ttnn)
+        assert not ttnn.graph.is_python_stack_trace_enabled()
+
+    def test_preserves_python_io_when_active(self):
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        ttnn.graph._python_io_data = [{"name": "keep_me"}]
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        assert len(ttnn.graph._python_io_data) == 1
+        assert ttnn.graph._python_io_data[0]["name"] == "keep_me"
         ttnn.graph.end_graph_capture()
         ttnn.graph.end_graph_capture()
 
@@ -3517,4 +3646,274 @@ class TestPythonStackTraceImport:
         c.execute("SELECT stack_trace FROM stack_traces WHERE operation_id = 1")
         row = c.fetchone()
         assert row is None, "No stack trace should be stored when Python trace is absent"
+        conn.close()
+
+    def test_operation_source_file_stored_from_python_trace(self, tmp_path):
+        source_file = tmp_path / "model.py"
+        source_file.write_text("def run():\n    return 1\n", encoding="utf-8")
+
+        graph = [
+            {
+                "counter": 0,
+                "node_type": "capture_start",
+                "params": {},
+                "connections": [1],
+                "arguments": [],
+                "input_tensors": [],
+                "stacking_level": 0,
+            },
+            {
+                "counter": 1,
+                "node_type": "function_start",
+                "params": {"name": "ttnn::add", "inputs": 2},
+                "connections": [],
+                "arguments": [],
+                "input_tensors": [],
+                "stacking_level": 0,
+            },
+            {
+                "counter": 2,
+                "node_type": "function_end",
+                "params": {"name": "ttnn::add"},
+                "connections": [],
+                "arguments": [],
+                "input_tensors": [],
+                "stacking_level": 0,
+            },
+            {
+                "counter": 3,
+                "node_type": "capture_end",
+                "params": {},
+                "connections": [],
+                "arguments": [],
+                "input_tensors": [],
+                "stacking_level": 0,
+            },
+        ]
+        python_io = [
+            {
+                "name": "ttnn::add",
+                "arguments": {},
+                "input_tensor_ids": [],
+                "python_stack_trace": [f'  File "{source_file}", line 2, in run\n    return 1'],
+            }
+        ]
+        report = _make_report(graph, python_io=python_io)
+        conn, c = _import_to_db(report, tmp_path)
+
+        c.execute(
+            """
+            SELECT st.operation_id, sf.path
+            FROM stack_traces st
+            JOIN source_files sf ON st.source_file_id = sf.id
+            """
+        )
+        assert c.fetchall() == [(1, str(source_file.resolve()))]
+
+        c.execute("SELECT path, contents FROM source_files")
+        source_rows = c.fetchall()
+        assert source_rows == [(str(source_file.resolve()), "def run():\n    return 1\n")]
+        conn.close()
+
+    def test_stack_traces_share_source_file_id_when_same_path(self, tmp_path):
+        source_file = tmp_path / "shared_source.py"
+        source_file.write_text("x = 1\n", encoding="utf-8")
+
+        graph = [
+            {
+                "counter": 0,
+                "node_type": "capture_start",
+                "params": {},
+                "connections": [1, 3],
+                "arguments": [],
+                "input_tensors": [],
+                "stacking_level": 0,
+            },
+            {
+                "counter": 1,
+                "node_type": "function_start",
+                "params": {"name": "ttnn::add", "inputs": 2},
+                "connections": [],
+                "arguments": [],
+                "input_tensors": [],
+                "stacking_level": 0,
+            },
+            {
+                "counter": 2,
+                "node_type": "function_end",
+                "params": {"name": "ttnn::add"},
+                "connections": [],
+                "arguments": [],
+                "input_tensors": [],
+                "stacking_level": 0,
+            },
+            {
+                "counter": 3,
+                "node_type": "function_start",
+                "params": {"name": "ttnn::mul", "inputs": 2},
+                "connections": [],
+                "arguments": [],
+                "input_tensors": [],
+                "stacking_level": 0,
+            },
+            {
+                "counter": 4,
+                "node_type": "function_end",
+                "params": {"name": "ttnn::mul"},
+                "connections": [],
+                "arguments": [],
+                "input_tensors": [],
+                "stacking_level": 0,
+            },
+            {
+                "counter": 5,
+                "node_type": "capture_end",
+                "params": {},
+                "connections": [],
+                "arguments": [],
+                "input_tensors": [],
+                "stacking_level": 0,
+            },
+        ]
+        python_io = [
+            {
+                "name": "ttnn::add",
+                "arguments": {},
+                "input_tensor_ids": [],
+                "python_stack_trace": [f'  File "{source_file}", line 1, in run\n    x = 1'],
+            },
+            {
+                "name": "ttnn::mul",
+                "arguments": {},
+                "input_tensor_ids": [],
+                "python_stack_trace": [f'  File "{source_file}", line 1, in run\n    x = 1'],
+            },
+        ]
+        report = _make_report(graph, python_io=python_io)
+        conn, c = _import_to_db(report, tmp_path)
+
+        c.execute("SELECT COUNT(*) FROM source_files")
+        assert c.fetchone()[0] == 1
+
+        c.execute("SELECT operation_id, source_file_id FROM stack_traces ORDER BY operation_id")
+        op_rows = c.fetchall()
+        assert op_rows[0][0] == 1 and op_rows[1][0] == 2
+        assert op_rows[0][1] == op_rows[1][1]
+        c.execute("SELECT path FROM source_files WHERE id = ?", (op_rows[0][1],))
+        assert c.fetchone()[0] == str(source_file.resolve())
+        conn.close()
+
+    def test_missing_source_file_is_skipped(self, tmp_path):
+        missing_file = tmp_path / "does_not_exist.py"
+        graph = [
+            {
+                "counter": 0,
+                "node_type": "capture_start",
+                "params": {},
+                "connections": [1],
+                "arguments": [],
+                "input_tensors": [],
+                "stacking_level": 0,
+            },
+            {
+                "counter": 1,
+                "node_type": "function_start",
+                "params": {"name": "ttnn::add", "inputs": 2},
+                "connections": [],
+                "arguments": [],
+                "input_tensors": [],
+                "stacking_level": 0,
+            },
+            {
+                "counter": 2,
+                "node_type": "function_end",
+                "params": {"name": "ttnn::add"},
+                "connections": [],
+                "arguments": [],
+                "input_tensors": [],
+                "stacking_level": 0,
+            },
+            {
+                "counter": 3,
+                "node_type": "capture_end",
+                "params": {},
+                "connections": [],
+                "arguments": [],
+                "input_tensors": [],
+                "stacking_level": 0,
+            },
+        ]
+        python_io = [
+            {
+                "name": "ttnn::add",
+                "arguments": {},
+                "input_tensor_ids": [],
+                "python_stack_trace": [f'  File "{missing_file}", line 10, in run\n    ttnn.add(a, b)'],
+            }
+        ]
+        report = _make_report(graph, python_io=python_io)
+        conn, c = _import_to_db(report, tmp_path)
+
+        c.execute("SELECT COUNT(*) FROM source_files")
+        assert c.fetchone()[0] == 0
+        c.execute("SELECT source_file_id FROM stack_traces")
+        assert c.fetchone()[0] is None
+        conn.close()
+
+    def test_path_colon_line_trace_is_supported(self, tmp_path):
+        source_file = tmp_path / "colon_format.py"
+        source_file.write_text("value = 42\n", encoding="utf-8")
+
+        graph = [
+            {
+                "counter": 0,
+                "node_type": "capture_start",
+                "params": {},
+                "connections": [1],
+                "arguments": [],
+                "input_tensors": [],
+                "stacking_level": 0,
+            },
+            {
+                "counter": 1,
+                "node_type": "function_start",
+                "params": {"name": "ttnn::add", "inputs": 2},
+                "connections": [],
+                "arguments": [],
+                "input_tensors": [],
+                "stacking_level": 0,
+            },
+            {
+                "counter": 2,
+                "node_type": "function_end",
+                "params": {"name": "ttnn::add"},
+                "connections": [],
+                "arguments": [],
+                "input_tensors": [],
+                "stacking_level": 0,
+            },
+            {
+                "counter": 3,
+                "node_type": "capture_end",
+                "params": {},
+                "connections": [],
+                "arguments": [],
+                "input_tensors": [],
+                "stacking_level": 0,
+            },
+        ]
+        python_io = [
+            {"name": "ttnn::add", "arguments": {}, "input_tensor_ids": [], "python_stack_trace": [f"{source_file}:12"]}
+        ]
+        report = _make_report(graph, python_io=python_io)
+        conn, c = _import_to_db(report, tmp_path)
+
+        c.execute(
+            """
+            SELECT st.operation_id, sf.path
+            FROM stack_traces st
+            JOIN source_files sf ON st.source_file_id = sf.id
+            """
+        )
+        assert c.fetchall() == [(1, str(source_file.resolve()))]
         conn.close()

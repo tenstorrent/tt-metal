@@ -65,6 +65,7 @@ class Gemma4Attention:
         create_kv_cache=False,
         max_batch_size=1,
         max_seq_len=131072,
+        weight_dtype=ttnn.bfloat16,
         # Legacy parameter — ignored (no longer needed with HF-style RoPE)
         transformation_mats=None,
     ):
@@ -80,6 +81,7 @@ class Gemma4Attention:
             state_dict=state_dict,
             mesh_config=mesh_config,
             tensor_cache_path=tensor_cache_path,
+            weight_dtype=weight_dtype,
         )
 
         if create_kv_cache:

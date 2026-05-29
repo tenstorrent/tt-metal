@@ -54,16 +54,19 @@ ProgramRunParams::KernelRunParams make_run_params(
     const KernelSpecName& kernel_name, const NodeCoord& node, const ScratchLayout& layout, uint32_t rounds, uint32_t skew_iters) {
     return ProgramRunParams::KernelRunParams{
         .kernel_spec_name = kernel_name,
-        .runtime_varargs =
-            {{node,
-              {
-                  layout.arrivals_addr,
-                  layout.observed_addr,
-                  layout.post_addr,
-                  rounds,
-                  skew_iters,
-                  layout.total_words,
-              }}},
+        .advanced_options =
+            AdvancedKernelRunParams{
+                .runtime_varargs =
+                    {{node,
+                      {
+                          layout.arrivals_addr,
+                          layout.observed_addr,
+                          layout.post_addr,
+                          rounds,
+                          skew_iters,
+                          layout.total_words,
+                      }}},
+            },
     };
 }
 
@@ -91,16 +94,16 @@ TEST_F(KernelThreadSyncTest, BarrierSynchronizesThreads) {
     std::vector<std::string> work_unit_kernel_names;
 
     if (is_quasar) {
-        auto spec = MakeMinimalDMKernel("dm_barrier_kernel", static_cast<uint8_t>(expected_num_threads));
-        spec.source = KernelSpec::SourceFilePath{kKernelPath};
-        spec.runtime_arguments_schema.num_runtime_varargs_per_node = {{node, kKernelArgsCount}};
+        auto spec = MakeMinimalDMKernel("dm_barrier_kernel", expected_num_threads);
+        spec.source = kKernelPath;
+        spec.advanced_options.num_runtime_varargs_per_node = {{node, kKernelArgsCount}};
         kernel_configs.push_back({"dm_barrier_kernel", spec, make_layout(l1_base, kRounds)});
         work_unit_kernel_names = {"dm_barrier_kernel"};
     } else {
         auto make_gen1 = [&](const std::string& name, tt::tt_metal::DataMovementProcessor proc, uint32_t layout_base) {
             auto spec = MakeMinimalGen1DMKernel(name, proc);
-            spec.source = KernelSpec::SourceFilePath{kKernelPath};
-            spec.runtime_arguments_schema.num_runtime_varargs_per_node = {{node, kKernelArgsCount}};
+            spec.source = kKernelPath;
+            spec.advanced_options.num_runtime_varargs_per_node = {{node, kKernelArgsCount}};
             return KernelConfig{name, spec, make_layout(layout_base, kRounds)};
         };
         kernel_configs.push_back(make_gen1("brisc_barrier_kernel", tt::tt_metal::DataMovementProcessor::RISCV_0, l1_base));
@@ -114,7 +117,7 @@ TEST_F(KernelThreadSyncTest, BarrierSynchronizesThreads) {
     for (const auto& cfg : kernel_configs) { spec.kernels.push_back(cfg.spec); }
     spec.work_units = {MakeMinimalWorkUnit("work_unit_0", node, work_unit_kernel_names)};
 
-    Program program = MakeProgramFromSpec(spec);
+    Program program = MakeProgramFromSpec(*mesh_device, spec);
 
     uint32_t total_zeros = 0;
     for (const auto& cfg : kernel_configs) { total_zeros += cfg.layout.total_words; }

@@ -19,6 +19,7 @@ from models.demos.deepseek_v3_b1.demo.stage import (
     ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES,
     DEFAULT_ACTIVATION_FIFO_PAGES,
     PIPELINE_CORE_COORD,
+    TOKEN_FIFO_NUM_PAGES,
     StageContext,
     StageKind,
     activation_fifo_size_bytes,
@@ -26,7 +27,7 @@ from models.demos.deepseek_v3_b1.demo.stage import (
 from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock
 from models.demos.deepseek_v3_b1.fused_ops.decoder_block.op import DecoderBlock
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
-from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata, create_metadata_tensor
+from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata, append_metadata_tail
 from models.demos.deepseek_v3_b1.micro_ops.dram_zero_fill.op import DRAMZeroFill
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
@@ -37,9 +38,11 @@ from models.demos.deepseek_v3_b1.model_dimensions import RoutedExpert, SharedExp
 from models.demos.deepseek_v3_b1.utils import (
     deinterleave_kv_cache,
     get_pinned_optimal_dram_bank_to_logical_worker_assignment,
+    interleave_kv_cache,
 )
 from models.demos.deepseek_v3_b1.weights.prepare import (
     DeepSeekV3DenseLayerWeights,
+    DeepSeekV3EmbeddingLayerWeights,
     DeepSeekV3MoELayerWeights,
     create_gate_indices_tensor,
 )
@@ -61,7 +64,7 @@ def create_decoder_block_tensors(
     is_moe: bool = True,
     validate_debug_tensors: bool = False,
     torch_input=None,
-    forward_metadata=False,
+    sram_expert_ids: list[int] = (),
 ):
     """Create all tensors required by DecoderBlock.op().
 
@@ -221,7 +224,16 @@ def create_decoder_block_tensors(
         input_core = ttnn.CoreCoord(device_grid_size.x - 1, RoutedExpert.INPUT_CORE_Y)
         input_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(input_core, input_core)])
 
-        ttnn_gate_indices = create_gate_indices_tensor(submesh, input_core_grid, mesh_mapper=mesh_mapper)
+        # sram_expert_ids must match the slot ordering of weights.sram_{gate,up,down}_proj
+        # so the encoded bit-15 indices the kernel reads point at the correct SRAM slabs.
+        # Without this the gate indices stay as (eid, no bit-15) → DRAM kernel processes
+        # everything → SRAM chain runs n_sram_active=0 → SRAM path effectively skipped.
+        ttnn_gate_indices = create_gate_indices_tensor(
+            submesh,
+            input_core_grid,
+            sram_expert_ids=list(sram_expert_ids),
+            mesh_mapper=mesh_mapper,
+        )
 
         tile_1x16 = ttnn.Tile((1, 16))
         gate_output_shard_spec = ttnn.ShardSpec(input_core_grid, (1, 16), ttnn.ShardOrientation.ROW_MAJOR)
@@ -268,13 +280,9 @@ def create_decoder_block_tensors(
                 mesh_mapper=mesh_mapper,
             )
 
-    if forward_metadata:
-        padding = DeepseekMetadata.aligned_size_bytes() // dtype_size(ttnn.bfloat16)
-        padded_shape = (1, K + padding)
-        padded_input = torch.nn.functional.pad(torch_input, (0, padding), value=0)
-    else:
-        padded_shape = shape
-        padded_input = torch_input
+    padding = DeepseekMetadata.aligned_size_bytes() // dtype_size(ttnn.bfloat16)
+    padded_shape = (1, K + padding)
+    padded_input = append_metadata_tail(torch_input, metadata)
     # Attention input/intermediate/output mesh tensors
     sender_coord = ttnn.MeshCoordinate(sender_row, sender_col)
     shard_spec = ttnn.ShardSpec(
@@ -282,13 +290,14 @@ def create_decoder_block_tensors(
     )
     mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
 
+    zero_input = torch.zeros_like(padded_input)
     device_tensors = []
     for row in range(mesh_rows):
         for col in range(mesh_cols):
             if row == sender_row and col == sender_col:
                 device_tensors.append(padded_input)
             else:
-                device_tensors.append(torch.zeros_like(padded_input))
+                device_tensors.append(zero_input)
 
     input_tensor_mesh = ttnn.from_torch(
         torch.cat(device_tensors, dim=0),
@@ -364,12 +373,6 @@ def create_decoder_block_tensors(
         tile=trans_tile,
         mesh_mapper=mesh_mapper,
     )
-
-    # Metadata / position IDs
-    metadata_core_grid = ttnn.CoreRangeSet(
-        [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
-    )
-    ttnn_metadata_tensor = create_metadata_tensor(submesh, metadata_core_grid, metadata)
 
     # KV cache (ND sharded DRAM)
     program_config = FlashMLADecode.ProgramConfig(k_chunk_size=128, exp_approx_mode=False)
@@ -614,10 +617,11 @@ def create_decoder_block_tensors(
     sender_core_from_residual = attn_output.memory_config().shard_spec.grid.bounding_box().end
     mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core_from_residual)])
 
-    # Routed weight tensors differ between MoE (list) and dense (single tensor)
-    routed_gate = weights.routed_gate_proj[0] if is_moe else weights.routed_gate_proj
-    routed_up = weights.routed_up_proj[0] if is_moe else weights.routed_up_proj
-    routed_down = weights.routed_down_proj[0] if is_moe else weights.routed_down_proj
+    # Dense and MoE routed weights are TP8 CompressedTensor lists feeding
+    # MoeRoutedExpertOp's setup_matmul_expert_dram path.
+    routed_gate = weights.routed_gate_proj
+    routed_up = weights.routed_up_proj
+    routed_down = weights.routed_down_proj
 
     result = {
         # Attention weights (from prepare_*_layer_weights)
@@ -640,7 +644,6 @@ def create_decoder_block_tensors(
         "ttnn_krope_sin": ttnn_krope_sin,
         "ttnn_kv_cache": ttnn_kv_cache,
         "ttnn_kv_cache_attn_ref": ttnn_kv_cache_attn_ref,
-        "ttnn_metadata_tensor": ttnn_metadata_tensor,
         "scale": scale,
         "sdpa_kv_cache_buffer": sdpa_kv_cache_buffer,
         "sdpa_out_interm_buffer": sdpa_out_interm_buffer,
@@ -659,6 +662,12 @@ def create_decoder_block_tensors(
         "gate_proj_weights": routed_gate,
         "up_proj_weights": routed_up,
         "down_proj_weights": routed_down,
+        # Optional SRAM-resident routed weights — populated by the weight loader when
+        # SRAM placement is configured. Empty list when not configured; the kernel's
+        # SRAM chain skips uniformly via sram_*_active=0.
+        "sram_gate_proj_weights": weights.sram_gate_proj,
+        "sram_up_proj_weights": weights.sram_up_proj,
+        "sram_down_proj_weights": weights.sram_down_proj,
         "final_output_mem_config": final_output_mem_config,
         "final_output_total_width": final_output_total_width,
         # Shared expert weights
@@ -674,7 +683,6 @@ def create_decoder_block_tensors(
         "num_gate_proj_cores": num_gate_proj_cores,
         "per_core_down_proj_N": per_core_down_proj_N,
         "mcast_grid": mcast_grid,
-        "forward_metadata": forward_metadata,
         # Intermediate CPU tensors (for golden-reference builders)
         "torch_input": torch_input,
         "torch_kv_cache": torch_kv_cache,
@@ -719,7 +727,6 @@ class DecoderStage(StageKind):
         num_routed_experts: int,
         use_hardcoded_expert_index: bool,
         enable_routing: bool,
-        forward_metadata: bool = True,
         upstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
         downstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
         host_loopback: bool = False,
@@ -744,7 +751,6 @@ class DecoderStage(StageKind):
         self._num_routed_experts = num_routed_experts
         self._use_hardcoded_expert_index = use_hardcoded_expert_index
         self._enable_routing = enable_routing
-        self._forward_metadata = forward_metadata
         self._upstream_fifo_pages = upstream_fifo_pages
         self._downstream_fifo_pages = downstream_fifo_pages
         self._host_loopback = host_loopback
@@ -772,10 +778,8 @@ class DecoderStage(StageKind):
 
         exit_upstream_page_size = ACTIVATION_PAGE_SIZE_BYTES // len(shard_cores_list)
 
-        if self._forward_metadata:
-            page_size = ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES
-        else:
-            page_size = ACTIVATION_PAGE_SIZE_BYTES
+        # The decoder always forwards activation + metadata as a single payload.
+        page_size = ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES
         upstream_fifo_size = activation_fifo_size_bytes(page_size, self._upstream_fifo_pages)
         downstream_fifo_size = activation_fifo_size_bytes(page_size, self._downstream_fifo_pages)
 
@@ -789,7 +793,7 @@ class DecoderStage(StageKind):
             entry_node_downstream=ttnn.MeshCoreCoord(stage_entry_device, self.MOE_SENDER_CORE),
             exit_node_upstream=exit_upstream_cores,
             exit_upstream_page_size=exit_upstream_page_size,
-            forward_metadata=self._forward_metadata,
+            forward_metadata=True,
             my_stage_idx=my_stage_idx,
             stages_metadata=ctx.stages_metadata,
             pipeline_config=pipeline_config,
@@ -833,7 +837,6 @@ class DecoderStage(StageKind):
             d["dkv_matmul_weights_overlapped"],
             d["dkv_rmsnorm_gamma_overlapped"],
             d["ttnn_kv_cache"],
-            d["ttnn_metadata_tensor"],
             d["scale"],
             d["sdpa_kv_cache_buffer"],
             d["sdpa_out_interm_buffer"],
@@ -857,6 +860,9 @@ class DecoderStage(StageKind):
             gate_proj_weights_tensor=d["gate_proj_weights"],
             up_proj_weights_tensor=d["up_proj_weights"],
             down_proj_weights_tensor=d["down_proj_weights"],
+            sram_gate_proj_weights_tensor=d.get("sram_gate_proj_weights"),
+            sram_up_proj_weights_tensor=d.get("sram_up_proj_weights"),
+            sram_down_proj_weights_tensor=d.get("sram_down_proj_weights"),
             moe_final_output_tensor=None,
             rmsnorm_gamma_tensor=d["ffn_norm_overlapped"],
             shared_gate_weights_overlapped=d["shared_gate_weights_overlapped"],
@@ -882,7 +888,6 @@ class DecoderStage(StageKind):
             persistent_mode=self._persistent_mode,
             termination_semaphore=self._state.get("termination_semaphore"),
             is_torus=self._is_torus,
-            forward_metadata=self._forward_metadata,
         )
 
     def setup(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
@@ -905,7 +910,20 @@ class DecoderStage(StageKind):
         reduce_semaphores = [ttnn.create_global_semaphore(mesh_device, available_cores, 0) for _ in range(4)]
         self._persistent_loop = PersistentLoop(mesh_device, available_cores, self._persistent_mode)
 
+        # Derive sram_expert_ids from the prepared weights so the bit-15 encoding
+        # in create_gate_indices_tensor flags exactly the experts whose SRAM
+        # weights were allocated. Without this, sram_*_proj is in L1 but no
+        # gate index has bit-15 set, so the SRAM kernel filter sees zero
+        # SRAM-flagged experts every iter and the SRAM path never fires.
         if self._is_moe:
+            # MoE: prepare_moe_layer_weights populates sram_slots.slot_experts with
+            # the L1-fit-truncated subset of sram_hot_experts. None when SRAM
+            # disabled (no --enable_sram_hot_experts).
+            sram_expert_ids = (
+                list(self._weights.sram_slots.slot_experts)
+                if getattr(self._weights, "sram_slots", None) is not None
+                else []
+            )
             d = create_decoder_block_tensors(
                 mesh_device,
                 mesh_device.shape[0],
@@ -918,9 +936,14 @@ class DecoderStage(StageKind):
                 weights=self._weights,
                 metadata=self._metadata,
                 num_slots=self._num_slots,
-                forward_metadata=self._forward_metadata,
+                sram_expert_ids=sram_expert_ids,
             )
         else:
+            # Dense: every chunk is hot; resolve_sram_expert_ids(is_moe=False)
+            # defaulted to range(8). Use the allocated count as ground truth in
+            # case a future path returns fewer (e.g., L1-fit truncation inside
+            # _build_dense_sram_routed_weights).
+            sram_expert_ids = list(range(len(self._weights.sram_gate_proj)))
             d = create_decoder_block_tensors(
                 mesh_device,
                 mesh_device.shape[0],
@@ -934,7 +957,7 @@ class DecoderStage(StageKind):
                 metadata=self._metadata,
                 num_slots=self._num_slots,
                 is_moe=False,
-                forward_metadata=self._forward_metadata,
+                sram_expert_ids=sram_expert_ids,
             )
         ttnn.synchronize_device(mesh_device)
 
@@ -949,6 +972,11 @@ class DecoderStage(StageKind):
             "reduce_root_coord": reduce_root_coord,
             "recv_socket": recv_socket,
             "downstream_sockets": downstream_sockets,
+            # Captured for get_kv_cache_host: ConcatMesh2dToTensor needs the mesh handle,
+            # interleave_kv_cache needs (device_chunk_size, num_sp).
+            "mesh_device": mesh_device,
+            "dcs": d["device_chunk_size"],
+            "num_sp": mesh_device.shape[0],
         }
 
         if self._persistent_mode:
@@ -964,6 +992,198 @@ class DecoderStage(StageKind):
 
     def terminate(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
         self._persistent_loop.terminate()
+
+    def get_kv_cache_host(self) -> torch.Tensor | None:
+        """Pull this stage's on-device KV cache to host as a single torch tensor.
+
+        Caller must invoke this under a fast-dispatch context (e.g.
+        ``with ttnn.device.setup_fast_dispatch(mesh_device): ...``) since slow-dispatch
+        does not support arbitrary on-device reads. Persisting the result to disk
+        (filename, layout, suffixing, etc.) is the caller's responsibility — this
+        method only composes the sharded on-device KV cache into a host tensor
+        and returns it.
+
+        Returns:
+            The composed host KV-cache tensor of shape
+            ``(num_slots, 1, max_seq_len, kvpe_dim)``, or ``None`` if invoked
+            before ``setup`` (no KV cache to compose). Dtype is whatever
+            ``ttnn.to_torch`` produces for the underlying ``ttnn.bfloat8_b`` device tensor;
+            in practice the host tensor lands as ``torch.float32``.
+        """
+        if not self._state or "d" not in self._state:
+            logger.warning("get_kv_cache_host called before setup; returning None")
+            return None
+        ttnn_kv_cache = self._state["d"]["ttnn_kv_cache"]
+        mesh_device = self._state["mesh_device"]
+        dcs = self._state["dcs"]
+        num_sp = self._state["num_sp"]
+        mesh_rows, mesh_cols = mesh_device.shape
+
+        ttnn.synchronize_device(mesh_device)
+
+        # KV cache mapper is ShardTensor2dMesh(dims=(2, None)): sharded along seq (dim 2)
+        # over rows, replicated over cols. ConcatMesh2dToTensor(dims=(2, 0)) concats seq
+        # along rows and stacks the replicated col copies along dim 0; slice to dedupe.
+        composed = ttnn.to_torch(
+            ttnn_kv_cache,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=(mesh_rows, mesh_cols), dims=(2, 0)),
+        )
+
+        # TP-axis (cols) is replicated, so each `num_slots` block along dim 0 should be
+        # byte-identical. Mismatches mean a write landed on one TP replica but not all.
+        for col_idx in range(1, mesh_cols):
+            col0 = composed[: self._num_slots]
+            col_n = composed[col_idx * self._num_slots : (col_idx + 1) * self._num_slots]
+            if not torch.equal(col0, col_n):
+                n_diff = (col0 != col_n).any(dim=tuple(range(1, col0.dim()))).sum().item()
+                logger.warning(f"TP col mismatch: col 0 vs col {col_idx} differ on {n_diff}/{self._num_slots} slots")
+
+        composed = composed[: self._num_slots]
+        kv_cache_torch = interleave_kv_cache(composed, dcs, num_sp)
+        logger.info(f"composed KV cache shape={tuple(kv_cache_torch.shape)} dtype={kv_cache_torch.dtype}")
+        return kv_cache_torch
+
+
+class HostIoDecoderStage(DecoderStage):
+    """Decoder stage that runs as a single-stage pipeline talking directly to host I/O.
+
+    Compute layout is identical to :class:`DecoderStage` (broadcast → fused decoder
+    block → reduce-to-one), but the entry/exit D2D sockets are replaced by host I/O:
+
+      - H2D socket on the stage's entry node feeds ``MOE_SENDER_CORE`` via the fused
+        H2D + embedding kernel: each token id is looked up in the DRAM-resident
+        embedding table, and the ``embedding row + DeepseekMetadata`` payload is
+        pushed into the local socket pair that the decoder broadcast consumes.
+      - Multi-upstream D2H socket on the stage's exit node: ``len(gate_proj_cores)``
+        upstream feeders (one per allreduce shard) deliver one ``ACTIVATION_PAGE //
+        N`` slice each, the last shard appends the metadata tail, and the BRISC D2H
+        sender kernel assembles a single ``ACTIVATION_W_TOKEN_META`` page back to
+        host over PCIe.
+
+    Selecting ``LoopbackConfig.no_loopback(...)`` with this stage as the only stage
+    in the pipeline (``num_procs == 1``) trips ``PipelineBlock``'s combined H2D+D2H
+    branch (``_init_combined_h2d_d2h_stage``); no D2D socket interfaces are
+    constructed.
+    """
+
+    def __init__(
+        self,
+        *,
+        weights: DeepSeekV3MoELayerWeights | DeepSeekV3DenseLayerWeights,
+        embedding_weights: DeepSeekV3EmbeddingLayerWeights | None = None,
+        layer_idx: int,
+        metadata: DeepseekMetadata,
+        max_seq_len: int,
+        num_slots: int,
+        persistent_mode: bool,
+        is_torus: bool,
+        is_moe: bool,
+        num_routed_experts: int,
+        use_hardcoded_expert_index: bool,
+        enable_routing: bool,
+        inject_hidden_states: bool = False,
+    ) -> None:
+        # Two mutually-exclusive H2D modes:
+        #   - default (embedding lookup): host pushes a 256-byte token page; the fused
+        #     H2D+embedding kernel resolves token_id -> embedding row from DRAM.
+        #   - inject_hidden_states: host pushes a full
+        #     `activation (HIDDEN_SIZE bf16) || DeepseekMetadata` page; the simple
+        #     h2d_receiver kernel forwards verbatim. Used by tests that drive the
+        #     decoder with reference hidden-state traces.
+        if inject_hidden_states:
+            assert embedding_weights is None, (
+                "embedding_weights cannot be set when inject_hidden_states=True (the embedding "
+                "lookup is bypassed in this mode)"
+            )
+        else:
+            assert embedding_weights is not None, "embedding_weights is required unless inject_hidden_states=True"
+        super().__init__(
+            weights=weights,
+            layer_idx=layer_idx,
+            metadata=metadata,
+            max_seq_len=max_seq_len,
+            num_slots=num_slots,
+            persistent_mode=persistent_mode,
+            is_torus=is_torus,
+            is_moe=is_moe,
+            num_routed_experts=num_routed_experts,
+            use_hardcoded_expert_index=use_hardcoded_expert_index,
+            enable_routing=enable_routing,
+            host_loopback=False,
+        )
+        self._embedding_weights = embedding_weights
+        self._inject_hidden_states = inject_hidden_states
+
+    def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
+        mesh_device = ctx.mesh_device
+        pipeline_config = ctx.pipeline_config
+        my_stage_idx = ctx.my_stage_idx
+
+        # Multi-upstream feeders: same dram-bank-pinned worker cores DecoderStage uses for
+        # the gate_proj allreduce shards. They live on the stage's exit node alongside the
+        # D2H sender kernel.
+        gate_proj_worker_cores = get_pinned_optimal_dram_bank_to_logical_worker_assignment(mesh_device, ttnn.NOC.NOC_0)
+        gate_proj_core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in gate_proj_worker_cores])
+        shard_cores_list = ttnn.corerange_to_cores(gate_proj_core_ranges, row_wise=True)
+
+        stage_entry_device = pipeline_config[my_stage_idx].entry_node_coord
+        reduce_root_coord = pipeline_config[my_stage_idx].exit_node_coord
+
+        exit_upstream_cores = [ttnn.MeshCoreCoord(reduce_root_coord, c) for c in shard_cores_list]
+        assert (
+            ACTIVATION_PAGE_SIZE_BYTES % len(shard_cores_list) == 0
+        ), "ACTIVATION_PAGE_SIZE_BYTES must be divisible by len(shard_cores_list)"
+        exit_upstream_page_size = ACTIVATION_PAGE_SIZE_BYTES // len(shard_cores_list)
+
+        # Combined D2H page = activation + DeepseekMetadata; matches the assertion in
+        # PipelineBlock._init_combined_h2d_d2h_stage:
+        #   d2h_page_size == N * exit_upstream_page_size + DeepseekMetadata.aligned_size_bytes()
+        page_size = ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES
+
+        # Two H2D modes:
+        #   - default: 256-byte token page + DRAM embedding lookup (production).
+        #   - inject_hidden_states: full `activation || metadata` page direct from host;
+        #     embedding kernel bypassed. Smaller H2D FIFO depth since pages are 57x larger.
+        if self._inject_hidden_states:
+            h2d_socket_page_size = page_size
+            h2d_socket_fifo_size = h2d_socket_page_size * DEFAULT_ACTIVATION_FIFO_PAGES
+            embedding_tensor = None
+        else:
+            h2d_socket_page_size = DeepseekMetadata.aligned_size_bytes()
+            # H2D socket depth matches every other stage that pulls tokens from host
+            # (see EmbeddingStage / TOKEN_META_FIFO_SIZE).
+            h2d_socket_fifo_size = h2d_socket_page_size * TOKEN_FIFO_NUM_PAGES
+            embedding_tensor = self._embedding_weights.embedding
+
+        d2h_socket_page_size = page_size
+        d2h_socket_fifo_size = d2h_socket_page_size * DEFAULT_ACTIVATION_FIFO_PAGES
+        # Local socket pair between the H2D core and MOE_SENDER_CORE on the entry node.
+        h2d_to_compute_fifo_size = activation_fifo_size_bytes(page_size, DEFAULT_ACTIVATION_FIFO_PAGES)
+
+        return PipelineBlock(
+            mesh_device,
+            PIPELINE_CORE_COORD,
+            # The upstream/downstream D2D socket sizes are unused by the combined H2D+D2H
+            # branch but PipelineBlock's __init__ asserts FIFO >= page on them. Reuse the
+            # H2D-to-compute FIFO size + page size so the asserts pass with sensible values.
+            upstream_d2d_socket_fifo_size=h2d_to_compute_fifo_size,
+            downstream_d2d_socket_fifo_size=h2d_to_compute_fifo_size,
+            upstream_d2d_socket_page_size=page_size,
+            downstream_d2d_socket_page_size=page_size,
+            h2d_socket_fifo_size=h2d_socket_fifo_size,
+            h2d_socket_page_size=h2d_socket_page_size,
+            d2h_socket_fifo_size=d2h_socket_fifo_size,
+            d2h_socket_page_size=d2h_socket_page_size,
+            embedding_tensor=embedding_tensor,
+            entry_node_downstream=ttnn.MeshCoreCoord(stage_entry_device, self.MOE_SENDER_CORE),
+            exit_node_upstream=exit_upstream_cores,
+            exit_upstream_page_size=exit_upstream_page_size,
+            forward_metadata=True,
+            my_stage_idx=my_stage_idx,
+            stages_metadata=ctx.stages_metadata,
+            pipeline_config=pipeline_config,
+            loopback=LoopbackConfig.no_loopback(HostIoPlacement.default(PIPELINE_CORE_COORD)),
+        )
 
 
 class MoEDecoderStage(DecoderStage):
@@ -986,7 +1206,6 @@ class MoEDecoderStage(DecoderStage):
         use_hardcoded_expert_index: bool = False,
         enable_routing: bool = True,
         is_torus: bool = True,
-        forward_metadata: bool = False,
         upstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
         downstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
         host_loopback: bool = False,
@@ -1003,7 +1222,6 @@ class MoEDecoderStage(DecoderStage):
             num_routed_experts=num_routed_experts,
             use_hardcoded_expert_index=use_hardcoded_expert_index,
             enable_routing=enable_routing,
-            forward_metadata=forward_metadata,
             upstream_fifo_pages=upstream_fifo_pages,
             downstream_fifo_pages=downstream_fifo_pages,
             host_loopback=host_loopback,
@@ -1027,7 +1245,6 @@ class DenseDecoderStage(DecoderStage):
         num_slots: int = 64,
         persistent_mode: bool = True,
         is_torus: bool = True,
-        forward_metadata: bool = False,
         upstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
         downstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
         host_loopback: bool = False,
@@ -1044,7 +1261,6 @@ class DenseDecoderStage(DecoderStage):
             num_routed_experts=0,
             use_hardcoded_expert_index=False,
             enable_routing=False,
-            forward_metadata=forward_metadata,
             upstream_fifo_pages=upstream_fifo_pages,
             downstream_fifo_pages=downstream_fifo_pages,
             host_loopback=host_loopback,

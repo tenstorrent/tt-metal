@@ -23,14 +23,20 @@ constexpr int get_math_num_fidelity_phases(const MathFidelity math_fidelity)
     return ckernel::to_underlying(math_fidelity);
 }
 
+inline void matmul_validate_no_mop_contract(
+    const std::uint32_t in0_tile_r_dim = TILE_R_DIM,
+    const std::uint32_t in0_tile_c_dim = TILE_C_DIM,
+    const std::uint32_t in1_tile_r_dim = TILE_R_DIM,
+    const std::uint32_t in1_tile_c_dim = TILE_C_DIM,
+    const bool partial_face            = false)
+{
+    LLK_ASSERT(
+        in0_tile_r_dim == TILE_R_DIM && in0_tile_c_dim == TILE_C_DIM && in1_tile_r_dim == TILE_R_DIM && in1_tile_c_dim == TILE_C_DIM && !partial_face,
+        "Blackhole custom no-mop matmul currently supports only full 32x32 tiles with partial_face disabled");
+}
+
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL>
-inline void matmul_configure_addrmod_no_mop(
-    const bool transpose,
-    [[maybe_unused]] const std::uint32_t in0_tile_r_dim = TILE_R_DIM,
-    [[maybe_unused]] const std::uint32_t in0_tile_c_dim = TILE_C_DIM,
-    [[maybe_unused]] const std::uint32_t in1_tile_r_dim = TILE_R_DIM,
-    [[maybe_unused]] const std::uint32_t in1_tile_c_dim = TILE_C_DIM,
-    [[maybe_unused]] const bool partial_face            = false)
+inline void matmul_configure_addrmod_no_mop(const bool transpose)
 {
     static_assert(THROTTLE_LEVEL >= 0 && THROTTLE_LEVEL <= 5, "THROTTLE_LEVEL must be in range [0, 5]");
     constexpr bool high_fidelity     = math_fidelity != MathFidelity::LoFi;
@@ -130,14 +136,7 @@ inline void matmul_configure_addrmod_reinit(const bool transpose = false)
 }
 
 template <MathFidelity math_fidelity>
-inline void matmul_configure_mop_custom(
-    const std::uint32_t ct_dim,
-    const std::uint32_t rt_dim,
-    [[maybe_unused]] const std::uint32_t in0_tile_r_dim = TILE_R_DIM,
-    [[maybe_unused]] const std::uint32_t in0_tile_c_dim = TILE_C_DIM,
-    [[maybe_unused]] const std::uint32_t in1_tile_r_dim = TILE_R_DIM,
-    [[maybe_unused]] const std::uint32_t in1_tile_c_dim = TILE_C_DIM,
-    [[maybe_unused]] const bool partial_face            = false)
+inline void matmul_configure_mop_custom(const std::uint32_t ct_dim, const std::uint32_t rt_dim)
 {
     // in0 - loaded to SrcB
     // in1 - loaded to SrcA
@@ -147,11 +146,9 @@ inline void matmul_configure_mop_custom(
     // Col major layout in dest only impacts destination address increment
     // if col major layout faces are ordered as f0,f2,f1,f3
 
-    [[maybe_unused]] constexpr int num_fidelity_phases = get_math_num_fidelity_phases(math_fidelity);
     constexpr bool high_fidelity                       = math_fidelity != MathFidelity::LoFi;
 
-    const bool reuse_a                         = ct_dim >= rt_dim;
-    [[maybe_unused]] const std::uint32_t t_dim = reuse_a ? rt_dim : ct_dim;
+    const bool reuse_a = ct_dim >= rt_dim;
 
     const std::uint32_t replay_buf_len = 16;
 
@@ -297,15 +294,8 @@ void run_throttled_sequence_no_mop<5>()
  * Level 4: throttle to 40% of max
  * Level 5: throttle to 33% of max
  */
-template <MathFidelity math_fidelity, int THROTTLE_LEVEL>
-inline void matmul_configure_mop_throttled_no_mop(
-    const std::uint32_t ct_dim,
-    const std::uint32_t rt_dim,
-    const std::uint32_t in0_tile_r_dim = TILE_R_DIM,
-    const std::uint32_t in0_tile_c_dim = TILE_C_DIM,
-    const std::uint32_t in1_tile_r_dim = TILE_R_DIM,
-    const std::uint32_t in1_tile_c_dim = TILE_C_DIM,
-    const bool partial_face            = false)
+template <int THROTTLE_LEVEL>
+inline void matmul_configure_mop_throttled_no_mop()
 {
     // in0 - loaded to SrcB
     // in1 - loaded to SrcA
@@ -315,14 +305,7 @@ inline void matmul_configure_mop_throttled_no_mop(
     // Col major layout in dest only impacts destination address increment
     // if col major layout faces are ordered as f0,f2,f1,f3
 
-    constexpr int num_fidelity_phases = get_math_num_fidelity_phases(math_fidelity);
-    constexpr bool high_fidelity      = math_fidelity != MathFidelity::LoFi;
     static_assert((THROTTLE_LEVEL > 0) && (THROTTLE_LEVEL <= 5), "MM throttling only enabled for THROTTLE_LEVEL={1,2,3,4,5}");
-    LLK_ASSERT(
-        (in0_tile_r_dim == TILE_R_DIM) && (in0_tile_c_dim == TILE_C_DIM) && (in1_tile_r_dim == TILE_R_DIM) && (in1_tile_c_dim == TILE_C_DIM) && !partial_face,
-        "MM throttling only enabled for full 32x32 tile size");
-
-    const bool reuse_a = ct_dim >= rt_dim;
 
     constexpr std::uint32_t replay_buf_len = (THROTTLE_LEVEL > 3) ? (1 + THROTTLE_LEVEL * 2) : ((THROTTLE_LEVEL > 1) ? (3 + THROTTLE_LEVEL * 4) : 10);
 
@@ -346,15 +329,15 @@ inline void _llk_math_matmul_init_no_mop_(
     const std::uint32_t ct_dim         = 1,
     const std::uint32_t rt_dim         = 1)
 {
-    matmul_configure_addrmod_no_mop<math_fidelity, THROTTLE_LEVEL>(transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+    matmul_validate_no_mop_contract(in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+    matmul_configure_addrmod_no_mop<math_fidelity, THROTTLE_LEVEL>(transpose);
     if constexpr (THROTTLE_LEVEL > 0)
     {
-        matmul_configure_mop_throttled_no_mop<math_fidelity, THROTTLE_LEVEL>(
-            ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+        matmul_configure_mop_throttled_no_mop<THROTTLE_LEVEL>();
     }
     else
     {
-        matmul_configure_mop_custom<math_fidelity>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+        matmul_configure_mop_custom<math_fidelity>(ct_dim, rt_dim);
     }
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
@@ -365,15 +348,7 @@ inline void _llk_math_matmul_uninit_no_mop_()
 }
 
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0>
-inline void _llk_math_matmul_no_mop_(
-    std::uint32_t dst_index,
-    const std::uint32_t ct_dim                          = 1,
-    const std::uint32_t rt_dim                          = 1,
-    [[maybe_unused]] const std::uint32_t in0_tile_r_dim = TILE_R_DIM,
-    [[maybe_unused]] const std::uint32_t in0_tile_c_dim = TILE_C_DIM,
-    [[maybe_unused]] const std::uint32_t in1_tile_r_dim = TILE_R_DIM,
-    [[maybe_unused]] const std::uint32_t in1_tile_c_dim = TILE_C_DIM,
-    [[maybe_unused]] const bool partial_face            = false)
+inline void _llk_math_matmul_no_mop_(std::uint32_t dst_index, const std::uint32_t ct_dim = 1, const std::uint32_t rt_dim = 1)
 {
     const bool reuse_a                = ct_dim >= rt_dim;
     const std::uint32_t t_dim         = reuse_a ? rt_dim : ct_dim;

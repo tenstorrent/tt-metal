@@ -22,6 +22,7 @@ format_dict = {
     DataFormat.UInt8: torch.uint8,
     DataFormat.MxFp8R: torch.bfloat16,
     DataFormat.MxFp8P: torch.bfloat16,
+    DataFormat.MxFp4: torch.bfloat16,
     DataFormat.Fp8_e4m3: torch.bfloat16,
 }
 
@@ -31,6 +32,7 @@ class MathOpType(Enum):
 
     SFPU_UNARY = auto()
     SFPU_BINARY = auto()
+    SFPU_BINARY_INT = auto()
     SFPU_TERNARY = auto()
 
     FPU_BINARY = auto()
@@ -86,6 +88,14 @@ class MathOperation(Enum):
     Silu = OpSpec("silu", MathOpType.SFPU_UNARY)
     Sqrt = OpSpec("sqrt", MathOpType.SFPU_UNARY)
     Square = OpSpec("square", MathOpType.SFPU_UNARY)
+    # Swiglu is technically a binary SFPU op (gate+up → out), but because
+    # Quasar lacks the llk_math_eltwise_binary_sfpu_* dispatcher, its test
+    # harness runs through the unary SFPU path. We therefore register it as
+    # SFPU_UNARY for the test-dispatch constant (SfpuType::swiglu). The
+    # actual binary semantics are implemented by the C++ test source which
+    # unpacks two input tiles into Dest and calls _calculate_swiglu_ with
+    # three offsets directly.
+    SfpuSwiGLU = OpSpec("swiglu", MathOpType.SFPU_UNARY)
     Tanh = OpSpec("tanh", MathOpType.SFPU_UNARY)
     Threshold = OpSpec("threshold", MathOpType.SFPU_UNARY)
     ReluMax = OpSpec(
@@ -109,6 +119,11 @@ class MathOperation(Enum):
     SfpuElwdiv = OpSpec("DIV", MathOpType.SFPU_BINARY)
     SfpuElwrsub = OpSpec("RSUB", MathOpType.SFPU_BINARY)
     SfpuElwpow = OpSpec("POW", MathOpType.SFPU_BINARY)
+    SfpuElwmulInt = OpSpec("MUL", MathOpType.SFPU_BINARY_INT)
+    SfpuGtInt = OpSpec("GT_INT", MathOpType.SFPU_BINARY_INT)
+    SfpuLtInt = OpSpec("LT_INT", MathOpType.SFPU_BINARY_INT)
+    SfpuLeInt = OpSpec("LE_INT", MathOpType.SFPU_BINARY_INT)
+    SfpuGeInt = OpSpec("GE_INT", MathOpType.SFPU_BINARY_INT)
 
     # =============================================================================
     # SFPU TERNARY OPERATIONS
@@ -203,6 +218,10 @@ class L1Accumulation(Enum):
     Yes = 1
     No = 0
 
+    @property
+    def cpp_enum_value(self):
+        return str(self.value)
+
 
 class StochasticRounding(Enum):
     No = "StochRndType::None"
@@ -216,28 +235,36 @@ class PackerReluType(Enum):
     Relu activation function types for packer operations.
     """
 
-    NoRelu = 0
-    ZeroRelu = 1
-    MinThresholdRelu = 2
-    MaxThresholdRelu = 3
+    NoRelu = "NO_RELU"
+    ZeroRelu = "ZERO_RELU"
+    MinThresholdRelu = "MIN_THRESHOLD_RELU"
+    MaxThresholdRelu = "MAX_THRESHOLD_RELU"
 
-    def __str__(self):
-        match self:
-            case PackerReluType.NoRelu:
-                return "NO_RELU"
-            case PackerReluType.ZeroRelu:
-                return "ZERO_RELU"
-            case PackerReluType.MinThresholdRelu:
-                return "MIN_THRESHOLD_RELU"
-            case PackerReluType.MaxThresholdRelu:
-                return "MAX_THRESHOLD_RELU"
-            case _:
-                raise ValueError(f"Unsupported PackerReluType: {self!r}")
+    @property
+    def cpp_enum_value(self):
+        return f"ReluType::{self.value}"
+
+    @property
+    def bits(self) -> int:
+        return _PACKER_RELU_BITS[self.value]
+
+    @classmethod
+    def from_bits(cls, bits: int) -> "PackerReluType":
+        return cls(_PACKER_RELU_BITS_INV[bits])
+
+
+_PACKER_RELU_BITS = {
+    "NO_RELU": 0,
+    "ZERO_RELU": 1,
+    "MIN_THRESHOLD_RELU": 2,
+    "MAX_THRESHOLD_RELU": 3,
+}
+_PACKER_RELU_BITS_INV = {v: k for k, v in _PACKER_RELU_BITS.items()}
 
 
 def pack_relu_config(mode: "PackerReluType", threshold_bits: int) -> int:
     """Pack ReLU mode (2 bits) and threshold (16 bits) into a 32-bit config word."""
-    return (mode.value & 0x3) | ((threshold_bits & 0xFFFF) << 16)
+    return (mode.bits & 0x3) | ((threshold_bits & 0xFFFF) << 16)
 
 
 class Haloize(Enum):
@@ -349,6 +376,10 @@ class Tilize(Enum):
     def cpp_enum_value(self):
         return str(self.value).lower()
 
+    @property
+    def pack_mode_value(self) -> str:
+        return "PackMode::Tilize" if self == Tilize.Yes else "PackMode::Default"
+
 
 class FastMode(Enum):
     Yes = True
@@ -428,6 +459,9 @@ format_tile_sizes = {
     # 1024 elements = 32 blocks × (1 scale + 32 elements) = 1056 bytes
     DataFormat.MxFp8R: 1056,
     DataFormat.MxFp8P: 1056,
+    # MXFp4 half byte per element + 1 scale (8 bits) per 32 elements
+    # 1024 elements = 32 blocks × (1 scale + 16 bytes of FP4 data) = 544 bytes
+    DataFormat.MxFp4: 544,
     DataFormat.Fp8_e4m3: 1024,  # 1 byte per element, no exponent section
 }
 
@@ -513,6 +547,28 @@ class ReluConfig(Enum):
 class TopKSortDirection(Enum):
     Descending = 0
     Ascending = 1
+
+
+class VectorMode(Enum):
+    """Mirrors ckernel::VectorMode in tt_llk_quasar/llk_lib/llk_defs.h.
+
+    Selects which faces an SFPU dispatch processes:
+      * ``None_``: invoke the SFPU kernel once with no face advances (covers face 0 only).
+      * ``R``: faces 0 and 1 (top face-row of the tile).
+      * ``C``: faces 0 and 2 (left face-column of the tile).
+      * ``RC``: all four faces — the default.
+    """
+
+    None_ = 0
+    R = 1
+    C = 2
+    RC = 4
+
+    @property
+    def cpp_enum_value(self):
+        return (
+            f"ckernel::VectorMode::{'None' if self == VectorMode.None_ else self.name}"
+        )
 
 
 class GoldenType(Enum):

@@ -63,7 +63,6 @@ class GroupedQueryAttention(AbstractModuleBase):
                 embedding_size,
                 embedding_size,
                 has_bias=bias_linears,
-                weight_init=ttml.init.normal(0.0, 0.02),
                 bias_init=ttml.init.zeros(),
                 gather_output=False,
                 axis_name="tp",
@@ -72,7 +71,6 @@ class GroupedQueryAttention(AbstractModuleBase):
                 embedding_size,
                 concat_kv_dim,
                 has_bias=bias_linears,
-                weight_init=ttml.init.normal(0.0, 0.02),
                 bias_init=ttml.init.zeros(),
                 gather_output=False,
                 axis_name="tp",
@@ -81,7 +79,6 @@ class GroupedQueryAttention(AbstractModuleBase):
                 embedding_size,
                 embedding_size,
                 has_bias=bias_linears,
-                weight_init=ttml.init.normal(0.0, 0.02),
                 bias_init=ttml.init.zeros(),
                 input_is_parallel=True,
                 axis_name="tp",
@@ -91,21 +88,18 @@ class GroupedQueryAttention(AbstractModuleBase):
                 embedding_size,
                 embedding_size,
                 bias_linears,
-                weight_init=ttml.init.normal(0.0, 0.02),
                 bias_init=ttml.init.zeros(),
             )
             self.kv_linear = LinearLayer(
                 embedding_size,
                 concat_kv_dim,
                 bias_linears,
-                weight_init=ttml.init.normal(0.0, 0.02),
                 bias_init=ttml.init.zeros(),
             )
             self.out_linear = LinearLayer(
                 embedding_size,
                 embedding_size,
                 bias_linears,
-                weight_init=ttml.init.normal(0.0, 0.02),
                 bias_init=ttml.init.zeros(),
             )
 

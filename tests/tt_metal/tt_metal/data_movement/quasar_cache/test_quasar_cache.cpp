@@ -9,7 +9,7 @@
 #include "device_fixture.hpp"
 #include "dm_common.hpp"
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/experimental/host_api.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 
 namespace tt::tt_metal {
 
@@ -42,6 +42,7 @@ bool run_l2_flush_test(
 
     IDevice* device = mesh_device->get_devices()[0];
     constexpr CoreCoord core = {0, 0};
+    const experimental::metal2_host_api::NodeCoord node{0, 0};
 
     // For invalidate tests, pre-populate with known "old" values
     // that should persist after invalidation (since invalidate doesn't write back)
@@ -49,20 +50,47 @@ bool run_l2_flush_test(
     std::vector<uint32_t> init_data(config.num_words, config.expect_new_values ? 0 : old_value);
     tt_metal::detail::WriteToDeviceL1(device, core, config.base_addr, init_data);
 
-    // Create program with Quasar DM kernel
-    Program program = CreateProgram();
+    constexpr const char* DM_KERNEL = "l2_flush";
 
-    KernelHandle kernel = experimental::quasar::CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/data_movement/quasar_cache/kernels/l2_flush_test.cpp",
-        core,
-        experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1});
+    experimental::metal2_host_api::KernelSpec dm_kernel_spec{
+        .unique_id = DM_KERNEL,
+        .source =
 
-    // Set runtime args
-    SetRuntimeArgs(program, kernel, core, {config.base_addr, config.test_mode});
-    SetCommonRuntimeArgs(program, kernel, {config.value, config.num_words});
+            "tests/tt_metal/tt_metal/data_movement/quasar_cache/kernels/l2_flush_test.cpp",
+        .num_threads = 1,
+        .runtime_arguments_schema =
+            {
+                .named_runtime_args = {"base_addr", "test_mode"},
+                .named_common_runtime_args = {"value", "num_words"},
+            },
+        .config_spec =
+            experimental::metal2_host_api::DataMovementConfiguration{
+                .gen2_data_movement_config =
+                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+    };
 
-    // Execute
+    experimental::metal2_host_api::WorkUnitSpec main_wu{
+        .unique_id = "main",
+        .kernels = {DM_KERNEL},
+        .target_nodes = node,
+    };
+
+    experimental::metal2_host_api::ProgramSpec spec{
+        .program_id = "l2_flush",
+        .kernels = {dm_kernel_spec},
+        .work_units = {main_wu},
+    };
+    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+
+    experimental::metal2_host_api::ProgramRunParams params;
+    params.kernel_run_params = {{
+        .kernel_spec_name = DM_KERNEL,
+        .named_runtime_args =
+            {{.node = node, .args = {{"base_addr", config.base_addr}, {"test_mode", config.test_mode}}}},
+        .named_common_runtime_args = {{"value", config.value}, {"num_words", config.num_words}},
+    }};
+    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range(mesh_device->shape());
     workload.add_program(device_range, std::move(program));
@@ -106,6 +134,7 @@ bool run_l1_dcache_test(
 
     IDevice* device = mesh_device->get_devices()[0];
     constexpr CoreCoord core = {0, 0};
+    const experimental::metal2_host_api::NodeCoord node{0, 0};
 
     // For invalidate tests, we need to pre-populate with known "old" values
     // that should persist after invalidation (since invalidate doesn't write back)
@@ -113,20 +142,47 @@ bool run_l1_dcache_test(
     std::vector<uint32_t> init_data(config.num_words, old_value);
     tt_metal::detail::WriteToDeviceL1(device, core, config.base_addr, init_data);
 
-    // Create program with Quasar DM kernel
-    Program program = CreateProgram();
+    constexpr const char* DM_KERNEL = "l1_dcache";
 
-    KernelHandle kernel = experimental::quasar::CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/data_movement/quasar_cache/kernels/l1_dcache_test.cpp",
-        core,
-        experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1});
+    experimental::metal2_host_api::KernelSpec dm_kernel_spec{
+        .unique_id = DM_KERNEL,
+        .source =
 
-    // Set runtime args
-    SetRuntimeArgs(program, kernel, core, {config.base_addr, config.test_mode});
-    SetCommonRuntimeArgs(program, kernel, {config.value, config.num_words});
+            "tests/tt_metal/tt_metal/data_movement/quasar_cache/kernels/l1_dcache_test.cpp",
+        .num_threads = 1,
+        .runtime_arguments_schema =
+            {
+                .named_runtime_args = {"base_addr", "test_mode"},
+                .named_common_runtime_args = {"value", "num_words"},
+            },
+        .config_spec =
+            experimental::metal2_host_api::DataMovementConfiguration{
+                .gen2_data_movement_config =
+                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+    };
 
-    // Execute
+    experimental::metal2_host_api::WorkUnitSpec main_wu{
+        .unique_id = "main",
+        .kernels = {DM_KERNEL},
+        .target_nodes = node,
+    };
+
+    experimental::metal2_host_api::ProgramSpec spec{
+        .program_id = "l1_dcache",
+        .kernels = {dm_kernel_spec},
+        .work_units = {main_wu},
+    };
+    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+
+    experimental::metal2_host_api::ProgramRunParams params;
+    params.kernel_run_params = {{
+        .kernel_spec_name = DM_KERNEL,
+        .named_runtime_args =
+            {{.node = node, .args = {{"base_addr", config.base_addr}, {"test_mode", config.test_mode}}}},
+        .named_common_runtime_args = {{"value", config.value}, {"num_words", config.num_words}},
+    }};
+    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range(mesh_device->shape());
     workload.add_program(device_range, std::move(program));

@@ -120,6 +120,43 @@ TEST_F(UnaryOpsTest, LogSoftmax) {
     }
 }
 
+TEST_F(UnaryOpsTest, Exp) {
+    auto* device = &autograd::ctx().get_device();
+    // e^0 = 1, e^1 ≈ 2.71828, e^-1 ≈ 0.36788
+    xt::xarray<float> data = {{{{0.F, 1.F, -1.F, 0.5F}}}};
+    auto tensor_ptr = autograd::create_tensor(core::from_xtensor(data, device), /* requires_grad */ true);
+
+    auto result = exp(tensor_ptr);
+    auto result_xt = core::to_xtensor(result->get_value());
+
+    xt::xarray<float> expected = {{{{1.F, 2.71828F, 0.36788F, 1.64872F}}}};
+    EXPECT_TRUE(xt::allclose(result_xt, expected, 1e-2F, 1e-2F));
+
+    result->backward();
+    auto grad = core::to_xtensor(tensor_ptr->get_grad());
+    // d(e^x)/dx = e^x, upstream grad is 1
+    EXPECT_TRUE(xt::allclose(grad, expected, 1e-2F, 1e-2F));
+}
+
+TEST_F(UnaryOpsTest, Clip) {
+    auto* device = &autograd::ctx().get_device();
+    //                 below lo   in range   at hi   above hi
+    xt::xarray<float> data = {{{{-5.F, 2.F, 3.F, 10.F}}}};
+    auto tensor_ptr = autograd::create_tensor(core::from_xtensor(data, device), /* requires_grad */ true);
+
+    auto result = clip(tensor_ptr, 1.F, 3.F);
+    auto result_xt = core::to_xtensor(result->get_value());
+
+    xt::xarray<float> expected = {{{{1.F, 2.F, 3.F, 3.F}}}};
+    EXPECT_TRUE(xt::allclose(result_xt, expected));
+
+    result->backward();
+    auto grad = core::to_xtensor(tensor_ptr->get_grad());
+    // grad passes through where lo <= x <= hi, zero otherwise
+    xt::xarray<float> expected_grad = {{{{0.F, 1.F, 1.F, 0.F}}}};
+    EXPECT_TRUE(xt::allclose(grad, expected_grad));
+}
+
 TEST_F(UnaryOpsTest, Silu) {
     auto N = 4;
     auto C = 1;

@@ -1595,6 +1595,9 @@ void DeviceProfiler::readRiscProfilerResults(
                         deviceTraceCounterRead = (data_buffer.at(index) >> 11) & 0xFFFF;
                     }
                     runHostCounterRead = data_buffer.at(index + 1);
+                    if (runHostCounterRead != 0) {
+                        runHostCounterRead = detail::EncodePerDeviceProgramID(runHostCounterRead, device_id);
+                    }
 
                     const uint32_t base_program_id =
                         detail::DecodePerDeviceProgramID(runHostCounterRead).base_program_id;

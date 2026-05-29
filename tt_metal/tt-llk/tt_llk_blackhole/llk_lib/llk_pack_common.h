@@ -10,9 +10,7 @@
 #include "ckernel_defs.h"
 #include "ckernel_ops.h"
 #include "cpack_common.h"
-#include "llk_assert.h"
 #include "llk_defs.h"
-#include "llk_memory_checks.h"
 
 using namespace ckernel;
 using namespace ckernel::packer;
@@ -59,11 +57,8 @@ inline void _llk_pack_dest_section_done_()
 }
 
 template <DstSync Dst>
-inline void _llk_init_packer_dest_offset_registers_(
-    [[maybe_unused]] const std::uint32_t face_r_dim = FACE_R_DIM, [[maybe_unused]] const bool narrow_tile = false)
+inline void _llk_init_packer_dest_offset_registers_()
 {
-    LLK_ASSERT(face_r_dim == FACE_R_DIM, "face_r_dim: this parameter is unused");
-    LLK_ASSERT(!narrow_tile, "narrow_tile: this parameter is unused");
     TTI_STALLWAIT(p_stall::STALL_TDMA | p_stall::STALL_THCON, p_stall::PACK); // wait for pack to finish
 
     // RowMajor order
@@ -75,50 +70,18 @@ inline void _llk_init_packer_dest_offset_registers_(
 }
 
 template <DstSync Dst, bool is_fp32_dest_acc_en>
-inline void _llk_pack_dest_init_(const std::uint32_t face_r_dim = FACE_R_DIM, const bool narrow_tile = false)
+inline void _llk_pack_dest_init_()
 {
     tensix_sync();
     reset_dest_offset_id();
-    _llk_init_packer_dest_offset_registers_<Dst>(face_r_dim, narrow_tile);
+    _llk_init_packer_dest_offset_registers_<Dst>();
     packer_addr_counter_init();
     pack_sync_tile_dst_ptr = 0;
-}
-
-template <bool mail2math = true, bool mail2pack = true>
-inline void _llk_pack_get_tile_(std::uint32_t tile_index, std::uint32_t *p_tile)
-{
-    if constexpr (mail2pack)
-    {
-        *p_tile = mailbox_read(ThreadId::UnpackThreadId);
-    }
-    else
-    {
-        *p_tile = 0x0;
-    }
-}
-
-template <bool mail2math = true, bool mail2pack = true>
-inline void _llk_pack_release_tile_()
-{
-    if constexpr (mail2pack)
-    {
-        semaphore_get(semaphore::UNPACK_OPERAND_SYNC);
-    }
 }
 
 inline void set_dst_write_addr(const std::uint32_t tile_index)
 {
     TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, tile_index);
-}
-
-inline void _llk_pack_debug_dump_(std::uint8_t *data, std::uint32_t byte_size)
-{
-    debug_dump(data, byte_size);
-}
-
-inline void _llk_pack_debug_dump_seek_(std::uint8_t offset)
-{
-    debug_dump_seek(offset);
 }
 
 TT_ALWAYS_INLINE void _llk_pack_relu_config_(const std::uint32_t config)
@@ -138,7 +101,7 @@ inline void _llk_pack_reconfig_l1_acc_(const std::uint32_t enable)
     reconfigure_packer_l1_acc(enable);
 }
 
-template <bool untilize = false, ReduceDim dim>
+template <ReduceDim dim, PackMode pack_mode = PackMode::Default>
 inline void _llk_pack_reduce_mask_config_()
 {
     ckernel::packer::pck_edge_offset_u pack_edge_offset = {.val = 0};
@@ -159,7 +122,7 @@ inline void _llk_pack_reduce_mask_config_()
 
         // PCK_EDGE_OFFSET_SEC1 mask will clear out all the datums in the row except the first one
         edge_offset_sec1_mask = 0x0001;
-        if constexpr (untilize)
+        if constexpr (pack_mode == PackMode::Untilize)
         {
             row_set_mapping_1 = 0x11111111; // each packer packs 1x32 row
         }
@@ -179,7 +142,7 @@ inline void _llk_pack_reduce_mask_config_()
         pack_edge_offset.f.tile_row_set_select_pack0 = 1;
         pack_edge_offset.f.tile_row_set_select_pack1 = 1;
 
-        if constexpr (untilize)
+        if constexpr (pack_mode == PackMode::Untilize)
         {
             row_set_mapping_1 = 0x00000005; // each packer packs 1x32 row
         }

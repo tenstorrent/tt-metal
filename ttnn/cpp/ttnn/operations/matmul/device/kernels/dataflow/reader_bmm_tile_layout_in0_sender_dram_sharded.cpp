@@ -7,11 +7,11 @@
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/noc_semaphore.h"
-#include "experimental/endpoints.h"
-#include "experimental/core_local_mem.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 
 void kernel_main() {
     // COMPILE TIME ARGS
@@ -55,11 +55,11 @@ void kernel_main() {
     constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(cb_id_in0);
     constexpr DataFormat in0_data_format = get_dataformat(cb_id_in0);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_in0(cb_id_in0);
-    experimental::CircularBuffer cb_in2(cb_id_in2);
-    experimental::Semaphore<> sender_sem(get_compile_time_arg_val(4));
-    experimental::Semaphore<> receiver_sem(get_compile_time_arg_val(5));
+    Noc noc;
+    CircularBuffer cb_in0(cb_id_in0);
+    CircularBuffer cb_in2(cb_id_in2);
+    Semaphore<> sender_sem(get_compile_time_arg_val(4));
+    Semaphore<> receiver_sem(get_compile_time_arg_val(5));
 
     uint32_t l1_write_addr_in0;
 
@@ -111,9 +111,9 @@ void kernel_main() {
 
 #ifndef SKIP_MCAST
             // num_dests must not include source, since we are NOT really doing a local copy!
-            experimental::MulticastEndpoint mcast_dst;
+            MulticastEndpoint mcast_dst;
             noc.async_write_multicast(
-                experimental::CoreLocalMem<uint32_t>(local_read_addr),
+                CoreLocalMem<uint32_t>(local_read_addr),
                 mcast_dst,
                 in0_block_size_bytes,
                 in0_mcast_num_cores - 1,
@@ -174,9 +174,9 @@ void kernel_main() {
                     }
                 }
 #ifndef SKIP_MCAST
-                experimental::MulticastEndpoint mcast_dst;
-                noc.async_write_multicast<experimental::Noc::McastMode::INCLUDE_SRC>(
-                    experimental::CoreLocalMem<uint32_t>(local_read_addr),
+                MulticastEndpoint mcast_dst;
+                noc.async_write_multicast<Noc::McastMode::INCLUDE_SRC>(
+                    CoreLocalMem<uint32_t>(local_read_addr),
                     mcast_dst,
                     in0_block_size_bytes,
                     in0_mcast_num_cores,
@@ -191,7 +191,7 @@ void kernel_main() {
                 // Set local semaphore to VALID. For single-core configurations, this is all we need.
                 receiver_sem.set(VALID);
                 if constexpr (in0_mcast_num_cores > 1) {
-                    receiver_sem.set_multicast<experimental::Noc::McastMode::INCLUDE_SRC>(
+                    receiver_sem.set_multicast<Noc::McastMode::INCLUDE_SRC>(
                         noc,
                         in0_mcast_dest_noc_start_x,
                         in0_mcast_dest_noc_start_y,

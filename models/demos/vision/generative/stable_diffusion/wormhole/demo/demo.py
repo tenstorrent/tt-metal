@@ -386,7 +386,7 @@ def run_demo_inference_diffusiondb(
         num_inference_steps >= 4
     ), f"PNDMScheduler only supports num_inference_steps >= 4. Found num_inference_steps={num_inference_steps}"
     # 0. Load a sample prompt from the dataset
-    dataset = load_dataset("poloclub/diffusiondb", "2m_random_1k")
+    dataset = load_dataset("poloclub/diffusiondb", "2m_random_1k", trust_remote_code=True)
     data_1k = dataset["train"]
 
     height, width = image_size

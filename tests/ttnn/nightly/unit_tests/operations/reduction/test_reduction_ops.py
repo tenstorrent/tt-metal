@@ -968,9 +968,9 @@ def test_accumulation(device, tensor_shape, dim, dtype, layout, op):
     ), f"Preallocated {op} result: {prealloc_result} does not match non-preallocated: {ttnn_result_in_torch}"
 
 
-# (2, 2, 32, 64) shape hangs the test. Issue #39795
-# @pytest.mark.parametrize("tensor_shape", [(), (1, 1, 32, 64), (2, 2, 32, 64), (1, 1, 0, 64)])
-@pytest.mark.parametrize("tensor_shape", [(), (1, 1, 32, 64), (1, 1, 0, 64), (1, 1, 15, 23)])
+@pytest.mark.parametrize(
+    "tensor_shape", [(), (1, 1, 32, 64), (1, 1, 0, 64), (1, 1, 15, 23), (2, 2, 32, 64), (1, 1, 0, 64)]
+)
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 def test_moe(device, tensor_shape, dtype, layout):
@@ -1004,13 +1004,13 @@ def test_moe(device, tensor_shape, dtype, layout):
         # Height is 1 so the mask broadcasts across all H rows.
         # Columns [E:] are -inf; adding this to the input ensures softmax
         # drives inactive expert probabilities to zero.
-        expert_mask = torch.zeros([N, C, 1, W], dtype=dtype)
+        expert_mask = torch.zeros([1, 1, 1, W], dtype=dtype)
         expert_mask[:, :, :, E:] = float("-inf")
         torch_input = torch_input + expert_mask
         # topE_mask has width k (matching topk output width) and keeps only the
         # first e entries; positions [e:] are -inf so softmax zeroes them out,
         # implementing top-e expert selection after topk.
-        topE_mask = torch.zeros([N, C, 1, k], dtype=dtype)
+        topE_mask = torch.zeros([1, 1, 1, k], dtype=dtype)
         topE_mask[:, :, :, e:] = float("-inf")
 
     # Run on both ttnn and torch and flag exceptions
@@ -1068,7 +1068,10 @@ def test_moe(device, tensor_shape, dtype, layout):
 
         return
 
-    atol = rtol = 0.01
+    if tensor_shape == (2, 2, 32, 64):
+        atol = rtol = 0.02
+    else:
+        atol = rtol = 0.01
     # Looser PCC tolerance than typical single-op tests because MOE chains
     # topk -> softmax -> multiply -> sum, and each step accumulates
     # bfloat16 rounding error.

@@ -877,7 +877,10 @@ inline void send_init_semaphore_to_configured_targets(
     volatile PACKET_HEADER_TYPE* packet_header,
     const uint8_t dest_chip_ids[NumDevices],
     const uint8_t dest_mesh_ids[NumDevices],
-    uint64_t init_noc_semaphore_addr) {
+    uint64_t init_noc_semaphore_addr,
+    bool flush = false) {
+    // `flush` is forwarded as the flush bit of NocUnicastAtomicIncCommandHeader; see callers
+    // for the per-call-site rationale on when receive-side ordering is required.
     uint32_t device_begin_idx = 0;
     uint32_t device_end_idx = NumDevices;
     uint32_t device_stride = 1;
@@ -904,12 +907,12 @@ inline void send_init_semaphore_to_configured_targets(
                     LinearizedSrcMeshCoord,
                     Topology,
                     MeshRows,
-                    MeshCols>(fabric_connections, packet_header, device_idx, init_noc_semaphore_addr, 1, false);
+                    MeshCols>(fabric_connections, packet_header, device_idx, init_noc_semaphore_addr, 1, flush);
             } else {
                 const auto& dest_chip_id = dest_chip_ids[device_idx];
                 const auto& dest_mesh_id = dest_mesh_ids[device_idx];
                 fabric_send_chip_unicast_noc_unicast_semaphore_only<SrcChipId, MeshRows, MeshCols>(
-                    fabric_connections, packet_header, dest_chip_id, dest_mesh_id, init_noc_semaphore_addr, 1, false);
+                    fabric_connections, packet_header, dest_chip_id, dest_mesh_id, init_noc_semaphore_addr, 1, flush);
             }
         }
     }

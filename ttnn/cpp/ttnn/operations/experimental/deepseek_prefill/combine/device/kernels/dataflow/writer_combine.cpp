@@ -12,11 +12,9 @@
 
 #define ENABLE_COMBINE_DEBUG 0
 #if ENABLE_COMBINE_DEBUG
-#define DPRINT_COMBINE DPRINT
+#define DPRINT_COMBINE(...) DPRINT(__VA_ARGS__)
 #else
-#define DPRINT_COMBINE \
-    if (0)             \
-    DebugPrinter()
+#define DPRINT_COMBINE(...)
 #endif
 
 constexpr uint32_t ROUTE_INFO_SENTINEL = 0xFFFFFFFF;
@@ -104,6 +102,9 @@ void kernel_main() {
     uint32_t output_addr = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t zero_init_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t init_semaphore_address = get_arg_val<uint32_t>(rt_args_idx++);
+    // Separate semaphore for the exit handshake. Reusing init_semaphore_address
+    // for both phases is racy
+    uint32_t exit_semaphore_address = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t zero_init_barrier_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t num_cores = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t expert_start_idx = get_arg_val<uint32_t>(rt_args_idx++);
@@ -131,14 +132,19 @@ void kernel_main() {
     constexpr uint32_t combine_devices = num_chips;
 #endif
 
-    DPRINT_COMBINE << "Combine Writer: experts=[" << expert_start_idx << "," << expert_end_idx << ")"
-                   << " linearized_mesh_coord=" << linearized_mesh_coord << ENDL();
+    DPRINT_COMBINE(
+        "Combine Writer: experts=[{}, {}) linearized_mesh_coord={}\n",
+        expert_start_idx,
+        expert_end_idx,
+        linearized_mesh_coord);
 
+#if ZERO_INIT
     // Wait for reader to complete zero-init
     volatile tt_l1_ptr uint32_t* zero_init_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zero_init_semaphore_address);
     noc_semaphore_wait(zero_init_sem_ptr, 1);
     noc_semaphore_set(zero_init_sem_ptr, 0);
+#endif
 
 #ifdef DEST_CHIP_ID
     constexpr uint32_t total_mesh_devices = mesh_rows * mesh_cols;
@@ -172,23 +178,26 @@ void kernel_main() {
     noc_semaphore_wait(init_sem_ptr, combine_devices - 1);
     noc_semaphore_set(init_sem_ptr, 0);
 
-    DPRINT_COMBINE << "Fabric setup complete" << ENDL();
+    DPRINT_COMBINE("Fabric setup complete\n");
 #endif
 
+#if INIT_ZEROS
     // Signal ALL readers that global init exchange is done.
     // Each writer increments every reader's barrier sem so each reader
     // collects num_cores signals before proceeding.
     for (uint32_t c = 0; c < num_cores; c++) {
         noc_semaphore_inc(all_core_barrier_noc_addrs[c], 1);
     }
-    noc_async_write_barrier();
+    noc_async_atomic_barrier();
+#endif
 
     const auto output_addr_gen = TensorAccessor(output_args, output_addr);
 
     // Sentinel-terminated fabric send loop
     while (true) {
         cb_wait_front(cb_route_info_id, 1);
-        volatile uint32_t* route_info = (volatile uint32_t*)(get_read_ptr(cb_route_info_id));
+        volatile tt_l1_ptr uint32_t* route_info =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_route_info_id));
 
         uint32_t route = route_info[0];
         if (route == ROUTE_INFO_SENTINEL) {
@@ -202,8 +211,7 @@ void kernel_main() {
         cb_wait_front(cb_output_for_writer_id, 1);
         uint32_t output_data_addr = get_read_ptr(cb_output_for_writer_id);
 
-        DPRINT_COMBINE << "Fabric send: route=" << route << " distance=" << distance << " page_idx=" << output_page_idx
-                       << ENDL();
+        DPRINT_COMBINE("Fabric send: route={} distance={} page_idx={}\n", route, distance, output_page_idx);
 
 #ifdef DEST_CHIP_ID
         fabric_set_unicast_route<false>((volatile tt_l1_ptr LowLatencyPacketHeader*)unicast_packet_header, distance);
@@ -222,11 +230,19 @@ void kernel_main() {
     }
 
 #ifdef DEST_CHIP_ID
+    // Defensive: drain pending local NOC writes before fabric atomic-inc traffic,
+    // so the exit-sem signal cannot reach peers ahead of the last data writes.
     noc_async_write_barrier();
 
-    // Exit semaphore exchange
+    // Exit semaphore exchange - uses a dedicated semaphore (exit_semaphore_address) and
+    // the dedicated sem_packet_header. flush=true (vs the init handshake which uses the
+    // default flush=false): the EDM on the receiver holds this atomic-inc until our prior
+    // fabric writes to that chip have committed there. Without it the small atomic-inc
+    // packet can overtake the larger data writes on B's local NOC and the peer would
+    // observe sem-reached-threshold before the data has landed in DRAM. At init there are
+    // no prior writes to order against, so flush=false saves one EDM round-trip check.
     {
-        const uint64_t exit_noc_semaphore_addr = get_noc_addr(init_semaphore_address);
+        const uint64_t exit_noc_semaphore_addr = get_noc_addr(exit_semaphore_address);
         send_init_semaphore_to_configured_targets<
             linearized_mesh_coord,
             topology,
@@ -235,13 +251,28 @@ void kernel_main() {
             mesh_cols,
             axis,
             total_mesh_devices>(
-            fabric_connections, unicast_packet_header, dest_chip_ids, dest_mesh_ids, exit_noc_semaphore_addr);
+            fabric_connections,
+            sem_packet_header,
+            dest_chip_ids,
+            dest_mesh_ids,
+            exit_noc_semaphore_addr,
+            /*flush=*/true);
 
         volatile tt_l1_ptr uint32_t* exit_sem_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(init_semaphore_address);
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(exit_semaphore_address);
         noc_semaphore_wait(exit_sem_ptr, combine_devices - 1);
         noc_semaphore_set(exit_sem_ptr, 0);
     }
+
+    // send_init_semaphore_to_configured_targets calls fabric_send_chip_unicast_noc_unicast_semaphore_only[_1d]
+    // which calls send_payload_flush_blocking_from_address -> send_payload_from_address_impl<FLUSH_BLOCKING>,
+    // which only calls noc_async_writes_flushed on the packet-header write. It confirms the the write departed
+    // worker's NIU but does not mean the write landed in EDM's L1 inbox.
+    // If we exit the kernel and close_direction_connections runs while the write is still mid-flight toward EDM's L1,
+    // EDM might process its slot bookkeeping before the actual packet bytes have landed.
+    // A full barrier ensures all writes have completed, as well as atomics which is purely defensive here and
+    // future-proof.
+    noc_async_full_barrier();
 
     close_direction_connections(directions, fabric_connections);
 #endif

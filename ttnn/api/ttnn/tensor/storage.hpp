@@ -24,24 +24,8 @@ namespace tt::tt_metal {
 
 class HostStorage {
 public:
-    // Creates HostStorage distributed over a mesh that matches `buffer` shape.
-    [[deprecated("Use HostStorage(HostTensor tensor) instead")]]
-    explicit HostStorage(DistributedHostBuffer buffer);
-
-    // Creates HostStorage distributed over 1x1 mesh.
-    [[deprecated("Use HostStorage(HostTensor tensor) instead")]]
-    explicit HostStorage(HostBuffer buffer);
-
     // Creates HostStorage from a HostTensor.
     explicit HostStorage(HostTensor tensor);
-
-    // Transitional constructors: accept a pre-transition HostStorage (constructed
-    // without TensorSpec and TensorTopology) and assign them during construction.
-    // Overrides any existing spec/topology in the HostStorage.
-    //
-    // TODO(#40348): Remove these.
-    HostStorage(const HostStorage& other, TensorSpec spec, TensorTopology topology);
-    HostStorage(HostStorage&& other, TensorSpec spec, TensorTopology topology);
 
     // Returns the distributed host buffer.
     const DistributedHostBuffer& buffer() const;
@@ -95,9 +79,12 @@ struct DeviceStorage {
 
     // Creates a copy of the DeviceStorage that shares the underlying device memory
     DeviceStorage(const DeviceStorage&) = default;
-    DeviceStorage(DeviceStorage&&) noexcept = default;
     DeviceStorage& operator=(const DeviceStorage&) = default;
-    DeviceStorage& operator=(DeviceStorage&&) noexcept = default;
+
+    // Moves the ownership of the underlying device memory to the new DeviceStorage.
+    // The moved-from DeviceStorage is in a deallocated state.
+    DeviceStorage(DeviceStorage&&) noexcept;
+    DeviceStorage& operator=(DeviceStorage&&) noexcept;
 
     // Creates a copy of the DeviceStorage that shares the underlying device memory,
     // but with a different set of coords.
@@ -221,6 +208,7 @@ private:
         std::vector<distributed::MeshCoordinate> coords,
         std::shared_ptr<MeshTensorHolder> root_mesh_tensor_holder);
 
+    // Invariant: should never be nullptr.
     std::shared_ptr<MeshTensorHolder> mesh_tensor_holder_;
     std::vector<distributed::MeshCoordinate> coords_;
 

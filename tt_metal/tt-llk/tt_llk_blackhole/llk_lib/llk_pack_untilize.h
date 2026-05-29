@@ -12,7 +12,6 @@
 #include "ckernel_template.h"
 #include "llk_assert.h"
 #include "llk_defs.h"
-#include "llk_memory_checks.h"
 #include "llk_pack_common.h"
 
 using namespace ckernel;
@@ -20,10 +19,22 @@ using namespace ckernel::packer;
 
 inline void _llk_pack_untilize_configure_addrmod_()
 {
+    // In DST_STRIDED_MODE, y_src tracks the row within each Dest face and W tracks
+    // the tile within Dest.
+    // ADDR_MOD_0: used by every inner-loop PACR. y_src stays on the current row;
+    // W advances via INCADCZW between tiles.
     addr_mod_pack_t {
         .y_src = {.incr = 0, .clr = 0},
     }
         .set(ADDR_MOD_0);
+
+    // ADDR_MOD_1: used by the row-closing PACR (set_last_inner_loop_instr).
+    // y_src.incr=1 advances to the next Dest face-row after packing, folding the
+    // explicit INCADCXY end_op into the PACR itself.
+    addr_mod_pack_t {
+        .y_src = {.incr = 1, .clr = 0},
+    }
+        .set(ADDR_MOD_1);
 }
 
 /*
@@ -91,32 +102,34 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
     */
     tmp.set_start_op(TT_OP_ADDRCRZW(p_setadc::PAC, 0, 0, 0, 0, 0b0010 /*CH0_W*/)); // W = W_Cr (restore W to start of block)
 
-    const std::uint32_t replay_buf_len = 4;
+    const std::uint32_t replay_buf_len = 2;
     load_replay_buf(
         ckernel::packer::replay_buf_offset,
         replay_buf_len,
         []
         {
-            // Update L1 address
-            TTI_ADDDMAREG(0, p_gpr_pack::OUTPUT_ADDR, p_gpr_pack::OUTPUT_ADDR, p_gpr_pack::OUTPUT_ADDR_OFFSET);
-            TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
-            TTI_WRCFG(p_gpr_pack::OUTPUT_ADDR, 0, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
+            // THCON_SEC0_REG1_L1_Dest_addr_ADDR32 += SCRATCH_SEC[CurrentThread].val
+            // Scratch slot loaded in _llk_pack_untilize_init_ holds the per-row L1 stride.
+            // Replaces ADDDMAREG + STALLWAIT + WRCFG + NOP — saves ~3 cyc + 1 STALLWAIT per row.
+            // Mirrors llk_unpack_tilize.h:285 precedent.
+            TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
             TTI_NOP;
         });
 
-    // After the inner loop finishes, move to the next row in the block, and update L1 address.
-    tmp.set_end_ops(TT_OP_INCADCXY(p_setadc::PAC, 0, 0, 1, 0), lltt::replay_insn(ckernel::packer::replay_buf_offset, replay_buf_len));
+    // After the inner loop finishes, update L1 address. The "advance Dst face-row" is folded
+    // into the row-closing PACR's AddrMod (ADDR_MOD_1, set below), so no INCADCXY end_op is needed.
+    tmp.set_end_op(lltt::replay_insn(ckernel::packer::replay_buf_offset, replay_buf_len));
 
     /*
     Close the row in the block by setting the Last bit to 1 in the last inner loop instruction.
-    This will allow the L1 address to be updated for the next row.
+    Use ADDR_MOD_1 so the packer auto-advances y_src by 1 (next row in face) post-PACR.
     Revisit after #22820 to convert last_loop_op to constexpr.
     */
     std::uint32_t last_loop_op = TT_OP_PACR(
         p_pacr::CFG_CTXT_0,
         p_pacr::NO_ROW_PAD_ZERO,
         p_pacr::DST_ACCESS_STRIDED_MODE,
-        ADDR_MOD_0,
+        ADDR_MOD_1,
         p_pacr::ADDR_CNT_CTXT_0,
         0,
         PACK_INTF_SEL,
@@ -177,8 +190,15 @@ inline void _llk_pack_untilize_init_(
         output_addr_offset = SCALE_DATUM_SIZE(pack_dst_format, full_ct_dim * ((num_faces == 1) ? 1 : 2) * FACE_C_DIM);
     }
 
-    // Store 16B aligned row offset address
+    // Store 16B aligned row offset into a scratch cfg slot so the MOP replay buf can use
+    // CFGSHIFTMASK to do `THCON_SEC0_REG1_L1_Dest_addr += SCRATCH` per row.
+    // ScratchIndex=0b11 in the CFGSHIFTMASK selects SCRATCH_SEC[CurrentThread]; pack thread
+    // is TRISC2, so this slot is SCRATCH_SEC2.
     TT_SETDMAREG(0, LOWER_HALFWORD(output_addr_offset / 16), 0, LO_16(p_gpr_pack::OUTPUT_ADDR_OFFSET));
+    TT_SETDMAREG(0, UPPER_HALFWORD(output_addr_offset / 16), 0, HI_16(p_gpr_pack::OUTPUT_ADDR_OFFSET));
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+    TTI_WRCFG(p_gpr_pack::OUTPUT_ADDR_OFFSET, 0, SCRATCH_SEC2_val_ADDR32);
+    TTI_NOP;
 
     // Always include setup calls for safety (as recommended by maintainer)
     // Program packer to pack out the correct number of datums per row
@@ -198,12 +218,7 @@ template <
     bool narrow_row                  = false,
     std::uint32_t tile_dst_ct_offset = 0,
     bool dense                       = false>
-inline void _llk_pack_untilize_(
-    const std::uint32_t address,
-    [[maybe_unused]] const std::uint32_t pack_dst_format,
-    [[maybe_unused]] const std::uint32_t face_r_dim = FACE_R_DIM,
-    const std::uint32_t num_faces                   = 4,
-    const std::uint32_t tile_dst_rt_offset          = 0)
+inline void _llk_pack_untilize_(const std::uint32_t address, const std::uint32_t num_faces = 4, const std::uint32_t tile_dst_rt_offset = 0)
 {
     static_assert(block_ct_dim <= (dense ? 16 : 8), "block_ct_dim must be <= 8 when not dense, <= 16 when dense");
     static_assert(!dense || (block_ct_dim % 2 == 0), "block_ct_dim must be even when dense");

@@ -5,8 +5,6 @@
 #include "ttnn/operations/reduction/topk/device/topk_device_operation.hpp"
 
 #include "ttnn/operations/reduction/topk/device/topk_device_operation_types.hpp"
-#include "ttnn/operations/reduction/topk/device/topk_single_core_program_factory.hpp"
-#include "ttnn/operations/reduction/topk/device/topk_multi_core_program_factory.hpp"
 #include "ttnn/operations/reduction/topk/device/topk_constants.hpp"
 #include "ttnn/operations/reduction/topk/device/topk_utils.hpp"
 
@@ -15,6 +13,7 @@
 #include <tt_stl/assert.hpp>
 #include "tt-metalium/allocator.hpp"
 #include "ttnn/operations/math.hpp"
+#include "ttnn/operations/reduction/reduce_op_validation.hpp"
 
 #include <optional>
 #include <tuple>
@@ -134,6 +133,18 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(args.k != 0, "K must be non-zero");
 
+    {
+        const int8_t logical_rank = static_cast<int8_t>(input_tensor.logical_shape().rank());
+        const int8_t last_dim = logical_rank - 1;
+        TT_FATAL(
+            args.dim == -1 || args.dim == last_dim,
+            "TopK device operation expects reduction on the last dimension (dim=-1 or dim={} for logical rank "
+            "{}), got {})",
+            last_dim,
+            logical_rank,
+            args.dim);
+    }
+
     // Memory configuration validation
     TT_FATAL(args.output_memory_config.is_sharded() == false, "Sharded implementation not supported yet");
 
@@ -175,6 +186,17 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
             input_tensor_dtype);
     }
 
+    ReduceOpDeviceGridValidationOptions topk_grid_opts;
+    topk_grid_opts.sub_grid_contained_in_device_grid = &args.sub_core_grids;
+    topk_grid_opts.sub_grid_label = "sub_core_grids";
+    validate_reduce_op_tensor(input_tensor, "TopK", "input", &topk_grid_opts);
+    if (indices_tensor.has_value()) {
+        validate_reduce_op_tensor(indices_tensor.value(), "TopK", "indices");
+    }
+    if (preallocated_outputs.has_value()) {
+        validate_reduce_op_tensor(std::get<0>(preallocated_outputs.value()), "TopK", "preallocated_values");
+        validate_reduce_op_tensor(std::get<1>(preallocated_outputs.value()), "TopK", "preallocated_indices");
+    }
     // Execution feasibility validation
     // Verify that the operation can be executed with available hardware resources
     bool can_run = false;

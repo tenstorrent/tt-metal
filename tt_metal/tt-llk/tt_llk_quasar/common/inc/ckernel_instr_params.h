@@ -368,6 +368,17 @@ struct p_sfpu
         constexpr static std::uint32_t CLR_CC_EN = 0x0;
     };
 
+    struct sfp_sfpcast_mod
+    {
+        constexpr static std::uint32_t SM32_TO_2SC  = 0x3; // sign+magnitude int32 -> 2's complement
+        constexpr static std::uint32_t TWO_SC_TO_SM = 0x2; // 2's complement -> sign+magnitude int32
+    };
+
+    struct sfp_binary_mod
+    {
+        constexpr static std::uint32_t SFPIADD_DISABLE_CC = 0b0100;
+    };
+
     struct sfp_stochrnd_mod
     {
         constexpr static std::uint32_t FP32_TO_FP16A  = 0x0;
@@ -386,6 +397,10 @@ struct p_sfpu
         constexpr static std::uint32_t Stochastic = 0x1;
         constexpr static std::uint32_t RoundZero  = 0x2;
     };
+
+    // TO DO: Clean up if needed #44713
+    // Needed for exp_tile() to be architecture agnostic
+    constexpr static std::uint32_t kCONST_1_FP16B = 0x3F80;
 };
 
 struct p_cleardvalid

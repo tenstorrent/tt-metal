@@ -245,7 +245,7 @@ void Logger::log_mesh_device_created(const MeshDeviceData& mesh_device_data) noe
                 if (i > 0) {
                     mesh_devices_ostream << ", ";
                 }
-                mesh_devices_ostream << shape.get_stride(i);
+                mesh_devices_ostream << shape[i];
             }
             mesh_devices_ostream << "]\n";
         }

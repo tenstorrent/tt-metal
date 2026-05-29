@@ -1,3 +1,5 @@
+include(sources.cmake)
+
 add_library(ttnn_op_experimental_bcast_to ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::BcastTo ALIAS ttnn_op_experimental_bcast_to)
 
@@ -18,25 +20,16 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES
+        FILES ${TTNN_OP_EXPERIMENTAL_BCAST_TO_API_HEADERS}
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        bcast_to.cpp
-        device/bcast_to_device_operation.cpp
-        device/bcast_to_program_factory.cpp
-        device/bcast_to_utils.cpp
+        ${TTNN_OP_EXPERIMENTAL_BCAST_TO_SRCS}
 )
 
-target_include_directories(ttnn_op_experimental_bcast_to PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(
-    ttnn_op_experimental_bcast_to
-    PRIVATE
-        TT::Metalium
-        TTNN::Core
-)
+target_link_libraries(ttnn_op_experimental_bcast_to PRIVATE TT::Metalium PUBLIC TTNN::Core)
 
 install(
     TARGETS
@@ -47,4 +40,4 @@ install(
         COMPONENT ttnn-runtime
 )
 
-install(TARGETS ttnn_op_experimental_bcast_to LIBRARY COMPONENT tar)
+install(TARGETS ttnn_op_experimental_bcast_to FILE_SET api COMPONENT ttnn-dev LIBRARY COMPONENT tar)

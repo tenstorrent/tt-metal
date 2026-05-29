@@ -3,7 +3,7 @@
 # Structure:
 #   <group>:            Binary name under build/test/tt_metal/
 #     - filter: <glob>  GTest filter pattern
-#       config: <NxM>   Simulator grid config (maps to emu-quasar-<config>). Supports 1x3 and 2x3.
+#       config: <config>   Simulator grid config (maps to emu-quasar-<config>). Supports 1x3 and 2x3 and 2x3_DISPATCH
 #       env:            (optional) Extra environment variables as key: value pairs
 #
 # Example test entry
@@ -16,18 +16,71 @@
 
 unit_tests_legacy:
   - filter: "*SingleDmL1Write*"
-    config: 1x3
+    config: 1x3, 2x3, 2x3_DISPATCH
 
   - filter: "*DmLoopback*"
     config: 1x3
 
+  - filter: "*QuasarComputeKernelSingleThread*"
+    config: 1x3
+
+  - filter: "*QuasarComputeKernelMultipleThread*"
+    config: 1x3
+
+  - filter: "*QuasarCreateMultipleComputeKernelsSingleCluster*"
+    config: 1x3
+
   - filter: "*MultiDmAddTwoInts*"
-    config: 2x3
+    config: 2x3, 2x3_DISPATCH
 
   - filter: "*Bmm"
     config: 1x3
     env:
       TT_METAL_LOGGER_LEVEL: warning
+
+  - filter: "*LegacyVsNonLegacyTest.GlobalsAndTLS/Threaded"
+    config: 1x3
+
+unit_tests_debug_tools:
+  - filter: "*WatcherAssertTests*Brisc"
+    config: 1x3
+
+  - filter: "*WatcherAssertTests*DM7"
+    config: 1x3
+
+  - filter: "*WatcherNonDefaultAssertTests*HWFault7"
+    config: 1x3
+
+  - filter: "*TensixTestWatcherSanitizeNOCAlignmentL1Write*"
+    config: 1x3
+
+  - filter: "*QuasarTestWatcherSanitizeMultiDMRace*"
+    config: 1x3
+
+  - filter: "*WatcherStackUsageTests*StackUsage0_QuasarMultiKernel"
+    config: 1x3
+
+  - filter: "*WatcherStackUsageTests*StackUsage16_QuasarMultiKernel"
+    config: 1x3
+
+  - filter: "*TestWatcherWaypoints"
+    config: 1x3
+
+  - filter: "*TestWatcherTileCounterLogRemapper*"
+    config: 1x3
+
+  - filter: "*TestWatcherTileCounterLogBypass*"
+    config: 1x3
+
+  - filter: "*QuasarMultiDMOutOfBoundsArgDetection*"
+    config: 1x3
+
+unit_tests_api:
+  - filter: "*QuasarCRTASharedL1Address*"
+    config: 1x3
+
+  - filter: "*QuasarCRTAUniqueL1Addresses*"
+    config: 1x3
 
 unit_tests_llk:
   - filter: "*Datacopy"

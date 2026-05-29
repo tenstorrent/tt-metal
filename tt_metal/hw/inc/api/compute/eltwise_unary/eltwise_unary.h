@@ -24,15 +24,19 @@ ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb, uint32_t call_line = 
         false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb)));
 
     PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(ocb)));
-    PACK((llk_pack_init<false>(ocb)));
-    PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
+    PACK((llk_pack_init(ocb)));
+    PACK((llk_pack_dest_init<DST_ACCUM_MODE, PackMode::Default>()));
 
     MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb, icb)));
 #else
     UNPACK((llk_unpack_hw_configure(icb)));
-    UNPACK((llk_unpack_A_init<false /*transpose*/, DST_ACCUM_MODE>(icb)));
+    UNPACK((llk_unpack_A_init<
+            BroadcastType::NONE,
+            false /*acc_to_dest*/,
+            EltwiseBinaryReuseDestType::NONE,
+            false /*unpack_to_dest*/>(false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb)));
 
     PACK((llk_pack_hw_configure(ocb)));
     PACK((llk_pack_init(ocb)));
@@ -44,9 +48,7 @@ ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb, uint32_t call_line = 
 }
 
 ALWI void init_sfpu(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
-#ifndef ARCH_QUASAR
     unary_op_init_common(icb, ocb, call_line);
-#endif  // TODO: AM; add Quasar implementation
 }
 
 }  // namespace ckernel

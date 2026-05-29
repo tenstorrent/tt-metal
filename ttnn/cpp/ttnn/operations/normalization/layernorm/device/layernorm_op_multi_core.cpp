@@ -4,7 +4,7 @@
 
 #include <string>
 
-#include "ttnn/operations/normalization/layernorm/device/layernorm_op_multi_core.hpp"
+#include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation.hpp"
 #include <tt-metalium/circular_buffer_config.hpp>
 #include "ttnn/operations/normalization/layernorm/device/layernorm_common.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation_types.hpp"
@@ -71,30 +71,6 @@ bool CB_can_fit_in_L1(
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
-
-LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFactory::create(
-    const LayerNormParams& operation_attributes, const LayerNormInputs& tensor_args, Tensor& tensor_return_value) {
-    ProgramDescriptor program_descriptor = create_descriptor(operation_attributes, tensor_args, tensor_return_value);
-    auto* device = tensor_args.input.device();
-    auto grid_size = device->compute_with_storage_grid_size();
-    auto num_cores = program_descriptor.kernels[0].runtime_args.size();
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Create Program from Descriptor
-    ////////////////////////////////////////////////////////////////////////////
-    Program program{program_descriptor};
-
-    // Kernel handles are assigned sequentially: reader=0, writer=1, compute=2
-    constexpr KernelHandle reader_kernels_id = 0;
-    constexpr KernelHandle writer_kernels_id = 1;
-
-    return cached_program_t{
-        std::move(program),
-        shared_variables_t{
-            .reader_kernel_id = reader_kernels_id,
-            .writer_kernel_id = writer_kernels_id,
-            .num_cores = num_cores,
-            .grid_size = grid_size}};
-}
 
 tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descriptor(
     const LayerNormParams& operation_attributes,
@@ -625,7 +601,8 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     compute_kernel_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
-        .unpack_to_dest_mode = unpack_to_dest_mode,
+        .dst_full_sync_en = dst_full_sync_en,
+        .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
         .math_approx_mode = math_approx_mode};
     program_descriptor.kernels.push_back(std::move(compute_kernel_desc));
 
@@ -758,48 +735,6 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         program_descriptor.cbs.push_back(std::move(recip_cb_desc));
     }
     return program_descriptor;
-}
-
-void LayerNormMultiCoreProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const LayerNormParams& /*operation_attributes*/,
-    const LayerNormInputs& tensor_args,
-    Tensor& tensor_return_value) {
-    auto* const src_a_dram_buffer = tensor_args.input.buffer();
-    const auto& src_b_tensor = tensor_args.residual_input_tensor;
-    const auto& gamma_tensor = tensor_args.weight;
-    const auto& beta_tensor = tensor_args.bias;
-    auto* const dst_dram_buffer = tensor_return_value.buffer();
-
-    auto* src_b_dram_buffer = src_b_tensor.has_value() ? src_b_tensor.value().buffer() : nullptr;
-    auto* gamma_dram_buffer = gamma_tensor.has_value() ? gamma_tensor.value().buffer() : nullptr;
-    auto* beta_dram_buffer = beta_tensor.has_value() ? beta_tensor.value().buffer() : nullptr;
-
-    const auto& shared_vars = cached_program.shared_variables;
-    auto& program = cached_program.program;
-
-    for (uint32_t i = 0; i < shared_vars.num_cores; ++i) {
-        CoreCoord core = {i % shared_vars.grid_size.x, i / shared_vars.grid_size.x};
-
-        {
-            auto& runtime_args = GetRuntimeArgs(program, shared_vars.reader_kernel_id, core);
-            runtime_args[0] = src_a_dram_buffer->address();
-            if (src_b_dram_buffer != nullptr) {
-                runtime_args[8] = src_b_dram_buffer->address();
-            }
-            if (gamma_dram_buffer != nullptr) {
-                runtime_args[6] = gamma_dram_buffer->address();
-            }
-            if (beta_dram_buffer != nullptr) {
-                runtime_args[7] = beta_dram_buffer->address();
-            }
-        }
-
-        {
-            auto& runtime_args = GetRuntimeArgs(program, shared_vars.writer_kernel_id, core);
-            runtime_args[0] = dst_dram_buffer->address();
-        }
-    }
 }
 
 CoreRangeSet LayerNormMultiCoreProgramFactory::default_core_range(IDevice* device) {

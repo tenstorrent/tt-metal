@@ -118,7 +118,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_pack_sync_init_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
-        _llk_math_eltwise_unary_sfpu_init_<SFPU_UNARY_OPERATION>();
+        test_utils::call_unary_sfpu_operation_init<SFPU_UNARY_OPERATION, APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS, FAST_MODE, STABLE_SORT>();
         PROFILER_SYNC();
     }
     {
@@ -207,10 +207,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                 block_tile, formats.math, formats.math);
                         }
 
-                        _llk_math_eltwise_unary_sfpu_start_<DST_SYNC_MODE>(/* dst_index */ block_tile);
-                        test_utils::call_sfpu_operation<APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS, FAST_MODE, STABLE_SORT>(
-                            SFPU_UNARY_OPERATION, formats.math);
-                        _llk_math_eltwise_unary_sfpu_done_();
+                        test_utils::call_unary_sfpu_operation<
+                            DST_SYNC_MODE,
+                            is_fp32_dest_acc_en,
+                            SFPU_UNARY_OPERATION,
+                            APPROX_MODE,
+                            is_fp32_dest_acc_en,
+                            ITERATIONS,
+                            FAST_MODE,
+                            STABLE_SORT>(block_tile, formats.math);
                     }
                 }
             }
@@ -236,10 +241,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             block_tile, formats.math, formats.math);
 
                         // Start SFPU operation
-                        _llk_math_eltwise_unary_sfpu_start_<DST_SYNC_MODE>(/* dst_index */ block_tile);
-                        test_utils::call_sfpu_operation<APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS, FAST_MODE, STABLE_SORT>(
-                            SFPU_UNARY_OPERATION, formats.math);
-                        _llk_math_eltwise_unary_sfpu_done_();
+                        test_utils::call_unary_sfpu_operation<
+                            DST_SYNC_MODE,
+                            is_fp32_dest_acc_en,
+                            SFPU_UNARY_OPERATION,
+                            APPROX_MODE,
+                            is_fp32_dest_acc_en,
+                            ITERATIONS,
+                            FAST_MODE,
+                            STABLE_SORT>(block_tile, formats.math);
                     }
 
                     _llk_math_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
@@ -254,7 +264,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
-#include "llk_pack.h"
+#include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -272,13 +282,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ZONE_SCOPED("INIT")
 
         // Configure packer hardware
-        _llk_pack_hw_configure_<is_fp32_dest_acc_en>(formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * num_faces);
+        _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * num_faces);
 
-#ifdef ARCH_BLACKHOLE
-        _llk_pack_init_<false, false>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, num_faces);
-#else
-        _llk_pack_init_<false, false>(formats.pack_dst, FACE_R_DIM, num_faces);
-#endif
+        _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, num_faces);
         // Initialize destination for packing
         _llk_pack_dest_init_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
 
@@ -300,7 +306,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         LLK_ASSERT(
                             (block_tile < get_dest_max_tiles<DST_SYNC_MODE, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                             "block_tile exceeds max dest tiles");
-                        _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, /* untilize */ false>(block_tile, PERF_ADDRESS(PERF_OUTPUT, block_start + block_tile));
+                        _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, ckernel::PackMode::Default>(
+                            block_tile, PERF_ADDRESS(PERF_OUTPUT, block_start + block_tile));
                     }
                 }
             }
@@ -319,7 +326,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         LLK_ASSERT(
                             (block_tile < get_dest_max_tiles<DST_SYNC_MODE, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                             "block_tile exceeds max dest tiles");
-                        _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, /* untilize */ false>(block_tile, PERF_ADDRESS(PERF_OUTPUT, block_start + block_tile));
+                        _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, ckernel::PackMode::Default>(
+                            block_tile, PERF_ADDRESS(PERF_OUTPUT, block_start + block_tile));
                     }
                     _llk_pack_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
                 }

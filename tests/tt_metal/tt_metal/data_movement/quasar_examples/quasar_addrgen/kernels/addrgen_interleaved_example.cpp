@@ -14,17 +14,20 @@
 //   }
 //
 // Compile-time args:
-//   0: (unused) reserved for harness compatibility
-//   1: (unused) reserved for harness compatibility
-//   2: num_of_addresses - total addresses to generate; must equal num_banks * num_inner_steps
+//   src_stride_en    - unused by this kernel; declared for harness compatibility with the other addrgen kernels
+//   dst_stride_en    - unused by this kernel; declared for harness compatibility with the other addrgen kernels
+//   num_of_addresses - total addresses to generate; must equal num_banks * num_inner_steps
 // Banking LOOP can be moved to be inside inner loop, this way we would reade all addresses for one bank first, then
 // move to next bank. This can be configured by changing bank_order in BankingConfig to BANK_MIDDLE or BANK_OUTER and
 //  adjusting the loop structure in the comment above accordingly.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
+#include "experimental/kernel_args.h"
 #include "internal/tt-2xx/quasar/overlay/addrgen_api.hpp"
 #include <cstdint>
+
+using namespace overlay;
 
 constexpr uint32_t num_banks = 4;
 constexpr uint32_t first_bank = 20;   // use banks 20–23
@@ -35,7 +38,10 @@ constexpr uint32_t src_base = 0x10000;
 constexpr uint32_t dst_base = 0x200000;
 
 void kernel_main() {
-    constexpr uint32_t num_of_addresses = get_compile_time_arg_val(2);
+    // src_stride_en and dst_stride_en are bound by the harness but unused here.
+    (void)get_arg(args::src_stride_en);
+    (void)get_arg(args::dst_stride_en);
+    constexpr uint32_t num_of_addresses = get_arg(args::num_of_addresses);
     constexpr uint32_t num_inner_steps = num_of_addresses / num_banks;
 
     reset_addrgen_0();
@@ -66,7 +72,6 @@ void kernel_main() {
         uint64_t dest_addr = peek_dest_addrgen_0();
         pop_src_addrgen_0();
         pop_dest_addrgen_0();
-        DPRINT << "  Source address: " << HEX() << (uint64_t)src_addr << " Destination address: " << HEX()
-               << (uint64_t)dest_addr << ENDL();
+        DPRINT("  Source address: {:#X} Destination address: {:#X}\n", src_addr, dest_addr);
     }
 }

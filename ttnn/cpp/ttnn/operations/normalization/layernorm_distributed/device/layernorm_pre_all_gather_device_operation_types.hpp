@@ -21,6 +21,7 @@ struct LayerNormPreAllGatherParams {
 
 struct LayerNormPreAllGatherInputs {
     Tensor input;
+    std::optional<Tensor> residual_input_tensor;
     std::optional<Tensor> recip_tensor;
 };
 

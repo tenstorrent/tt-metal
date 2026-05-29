@@ -34,6 +34,7 @@ pytest==9.0.3
 pytest-cov==6.1.1
 pytest-forked==1.6.0
 pytest-github-actions-annotate-failures==0.4.0
+pytest-progress==1.4.0
 pytest-random-order==1.2.0
 pytest-repeat==0.9.4
 pytest-split==0.11.0

@@ -149,7 +149,7 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
             alias_cb_prev_max,
             /* if it first reduction in a row*/ h > 0);
 
-        apply_exp_inplace_and_find_exp_sum(cb_attention_weights, alias_cb_cur_max, alias_cb_cur_sum_exp, scaler_bits);
+        apply_exp_inplace_and_find_exp_sum<scaler_bits>(cb_attention_weights, alias_cb_cur_max, alias_cb_cur_sum_exp);
 
         matmul_qk_by_v(vWt, block_size, cb_attention_weights, cb_value, alias_cb_cur_mm_out);
         cb_pop_front(cb_attention_weights, onetile);
@@ -161,7 +161,7 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
          * we need to update previous matmul output with exp_max_diff and add it to current matmul output
          */
         if (h > 0) {
-            update_exp_max_diff(alias_cb_prev_max, alias_cb_cur_max, cb_exp_max_diff, scaler_bits);
+            update_exp_max_diff<scaler_bits>(alias_cb_prev_max, alias_cb_cur_max, cb_exp_max_diff);
             cb_pop_front(alias_cb_prev_max, onetile);
 
             update_cur_exp_sum_inplace(alias_cb_prev_sum_exp, alias_cb_cur_sum_exp, cb_exp_max_diff);
@@ -275,11 +275,8 @@ void kernel_main() {
         const uint32_t light_global_row = seq_idx * Ht + light_row_in_seq;
         const uint32_t heavy_global_row = seq_idx * Ht + heavy_row_in_seq;
 
-        // Process light row first (less work)
-        process_single_row(light_global_row);
-
-        // Process heavy row second (more work)
         process_single_row(heavy_global_row);
+        process_single_row(light_global_row);
     }
 #else
     // Standard mode: process rows sequentially

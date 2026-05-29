@@ -41,12 +41,12 @@ ALWI bool fill_with_val(uint32_t begin_addr, uint32_t n, uint16_t val, bool unco
 }
 
 template <uint32_t cb_id, uint32_t clear_value_cb_id>
-ALWI void clear_out_tiles(experimental::Noc noc, experimental::CB cb, experimental::CB clear_cb) {
+ALWI void clear_out_tiles(Noc noc, experimental::CB cb, experimental::CB clear_cb) {
     constexpr uint32_t tile_size = get_tile_size(cb_id);
     const uint32_t num_pages = get_local_cb_interface(cb_id).fifo_num_pages;
     const uint32_t num_tiles = get_local_cb_interface(cb_id).fifo_page_size / tile_size;
 
-    experimental::UnicastEndpoint self_ep;
+    UnicastEndpoint self_ep;
     const auto src = experimental::local_addr(clear_cb.get_read_ptr(), noc.get_noc_id());
 
     for (uint32_t i = 0; i < num_tiles * num_pages; ++i) {
@@ -57,10 +57,10 @@ ALWI void clear_out_tiles(experimental::Noc noc, experimental::CB cb, experiment
 
 template <uint32_t clear_value_cb_id>
 ALWI void clear_out_tiles(
-    experimental::Noc noc, experimental::CB dst_cb, experimental::CB clear_value_cb, uint32_t num_tiles) {
+    Noc noc, experimental::CB dst_cb, experimental::CB clear_value_cb, uint32_t num_tiles) {
     constexpr uint32_t tile_size = get_tile_size(clear_value_cb_id);
 
-    experimental::UnicastEndpoint self_ep;
+    UnicastEndpoint self_ep;
     const auto src = experimental::local_addr(clear_value_cb.get_read_ptr(), noc.get_noc_id());
 
     for (uint32_t i = 0; i < num_tiles; ++i) {
@@ -71,7 +71,7 @@ ALWI void clear_out_tiles(
 
 // Zero out all tiles for a given circular buffer.
 template <uint32_t cb_id>
-ALWI void zero_out_tiles(experimental::Noc noc, experimental::CB cb) {
+ALWI void zero_out_tiles(Noc noc, experimental::CB cb) {
     constexpr uint32_t tile_size = get_tile_size(cb_id);
     const uint32_t num_tiles = get_local_cb_interface(cb_id).fifo_num_pages;
     const uint32_t num_zeros_reads = (tile_size / MEM_ZEROS_SIZE) * num_tiles;
@@ -87,7 +87,7 @@ ALWI void zero_out_tiles(experimental::Noc noc, experimental::CB cb) {
 }
 
 template <uint32_t config_dram_addr, uint32_t config_page_size, uint32_t tensor_args_index, uint32_t cb_reader_index>
-ALWI void load_config_tensor_if_in_dram(experimental::Noc noc, experimental::CB reader_cb, uint32_t core_index) {
+ALWI void load_config_tensor_if_in_dram(Noc noc, experimental::CB reader_cb, uint32_t core_index) {
     constexpr auto config_tensor_args = TensorAccessorArgs<tensor_args_index>();
     const auto config_accessor = TensorAccessor(config_tensor_args, config_dram_addr);
 
@@ -133,7 +133,7 @@ ALWI void fill_scalar(
     scalar_cb.push_back(1);
 }
 
-ALWI void zero_out_page(experimental::Noc noc, experimental::CB cb) {
+ALWI void zero_out_page(Noc noc, experimental::CB cb) {
     const uint32_t page_size = get_local_cb_interface(cb.get_cb_id()).fifo_page_size;
     const uint32_t num_zeros_reads = page_size / MEM_ZEROS_SIZE;
     const uint32_t remainder_bytes = page_size % MEM_ZEROS_SIZE;
@@ -144,7 +144,7 @@ ALWI void zero_out_page(experimental::Noc noc, experimental::CB cb) {
         experimental::read_with_state(noc, cb, MEM_ZEROS_BASE, {.offset_bytes = i * packet_size});
     }
     if (remainder_bytes > 0) {
-        experimental::UnicastEndpoint self_ep;
+        UnicastEndpoint self_ep;
         noc.async_read(
             self_ep,
             cb,

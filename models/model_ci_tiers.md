@@ -62,6 +62,10 @@ The initial release of the 3-tier model CI includes models owned by the models-t
 | Mixtral 8x7B | WH LoudBox |
 | Gemma-3-4B | N150 |
 | Gemma-3-27B | WH LoudBox |
+| Gemma-4-E2B | N150 |
+| Gemma-4-E4B | N150 |
+| Gemma-4-26B-A4B | WH LoudBox |
+| Gemma-4-31B | WH LoudBox |
 ## Tier 3 Models
 | Model | Systems |
 |-------|---------|

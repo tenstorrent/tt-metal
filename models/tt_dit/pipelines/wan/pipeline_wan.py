@@ -43,8 +43,6 @@ from ...utils.tensor import (
     typed_tensor_2dshard,
 )
 
-_UNSET = object()  # sentinel for "use config default" in create_pipeline
-
 EXAMPLE_DOC_STRING = """
     Examples:
         ```python
@@ -167,9 +165,9 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         vae_dtype: ttnn.DataType = ttnn.bfloat16,
         vae_t_chunk_size: int | None = 1,
         sdpa_t_fracture_w_only: bool = False,
-        target_height: int = 0,
-        target_width: int = 0,
-        t_chunk_size: int = 0,
+        height: int = 0,
+        width: int = 0,
+        num_frames: int = 81,
         run_warmup: bool = True,
     ):
         super().__init__()
@@ -285,10 +283,10 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             parallel_config=self.vae_parallel_config,
             dtype=vae_dtype,
             sdpa_t_fracture_w_only=sdpa_t_fracture_w_only,
-            target_height=target_height,
-            target_width=target_width,
-            t_chunk_size=t_chunk_size,
-            cached=(vae_t_chunk_size is not None),
+            height=height,
+            width=width,
+            t_chunk_size=(num_frames - 1) // 4 + 1 if vae_t_chunk_size is None else vae_t_chunk_size,
+            cached=vae_t_chunk_size is not None,
         )
 
         self.transformer_states = [
@@ -340,7 +338,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
         # TODO: Reset buffers for change in resolution. Also reinitialize trace
         if run_warmup:
-            self.warmup_buffers(height=target_height, width=target_width)
+            self.warmup_buffers(height=height, width=width)
 
     def prepare_text_conditioning(self, tt_model, prompt_embeds, buffer, traced=False):
         prompt_1BLP = tt_model.prepare_text_conditioning(prompt_embeds)
@@ -373,11 +371,12 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         topology=None,
         is_fsdp=None,
         pipeline_class=None,
-        vae_t_chunk_size=_UNSET,
         sdpa_t_fracture_w_only=None,
-        target_height: int = 0,
-        target_width: int = 0,
+        height: int = 0,
+        width: int = 0,
         num_frames: int = 81,
+        boundary_ratio: Optional[float] = 0.875,
+        **extra_kwargs,
     ):
         device_configs = {}
         if ttnn.device.is_blackhole():
@@ -388,6 +387,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 "dynamic_load": False,
                 "topology": ttnn.Topology.Linear,
                 "is_fsdp": True,
+                "vae_t_chunk_size": 1,
             }
             device_configs[(2, 2)] = device_configs[(1, 4)]
             device_configs[(2, 4)] = {
@@ -406,7 +406,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 "dynamic_load": False,
                 "topology": ttnn.Topology.Ring,
                 "is_fsdp": False,
-                "vae_t_chunk_size": None,  # full-T
+                "vae_t_chunk_size": None,  # full-T single pass
             }
             device_configs[(4, 32)] = {
                 "sp_axis": 1,
@@ -415,7 +415,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 "dynamic_load": False,
                 "topology": ttnn.Topology.Ring,
                 "is_fsdp": False,
-                "vae_t_chunk_size": None,
+                "vae_t_chunk_size": None,  # full-T single pass
                 "sdpa_t_fracture_w_only": True,
             }
             config = device_configs[tuple(mesh_device.shape)]
@@ -427,6 +427,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 "dynamic_load": True,
                 "topology": ttnn.Topology.Linear,
                 "is_fsdp": True,
+                "vae_t_chunk_size": 1,
             }
             device_configs[(4, 8)] = {
                 "sp_axis": 1,
@@ -435,16 +436,14 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 "dynamic_load": False,
                 "topology": ttnn.Topology.Ring,
                 "is_fsdp": True,
+                "vae_t_chunk_size": 1,
             }
 
             config = device_configs[tuple(mesh_device.shape)]
 
         sp_axis = config["sp_axis"] if sp_axis is None else sp_axis
         tp_axis = config["tp_axis"] if tp_axis is None else tp_axis
-        if vae_t_chunk_size is _UNSET:
-            vae_t_chunk_size = config.get("vae_t_chunk_size", 1)
-        full_latent_T = (num_frames - 1) // 4 + 1
-        decoder_t_chunk_size = full_latent_T if vae_t_chunk_size is None else vae_t_chunk_size
+        vae_t_chunk_size = config["vae_t_chunk_size"]
 
         h_factor = tuple(mesh_device.shape)[tp_axis]
         w_factor = tuple(mesh_device.shape)[sp_axis]
@@ -474,7 +473,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             vae_parallel_config=vae_parallel_config,
             encoder_parallel_config=encoder_parallel_config,
             num_links=num_links or config["num_links"],
-            boundary_ratio=0.875,
+            boundary_ratio=boundary_ratio,
             scheduler=scheduler,
             dynamic_load=dynamic_load if dynamic_load is not None else config["dynamic_load"],
             topology=topology or config["topology"],
@@ -484,9 +483,10 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             sdpa_t_fracture_w_only=sdpa_t_fracture_w_only
             if sdpa_t_fracture_w_only is not None
             else config.get("sdpa_t_fracture_w_only", False),
-            target_height=target_height,
-            target_width=target_width,
-            t_chunk_size=decoder_t_chunk_size,
+            height=height,
+            width=width,
+            num_frames=num_frames,
+            **extra_kwargs,
         )
 
     def _prepare_text_encoder(self):
@@ -1027,11 +1027,17 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             profiler.end("denoising", profiler_iteration)
             profiler.start("vae", profiler_iteration)
 
+        include_last_latent = output_type == "pt_with_last_latent"
+        output_type = "pt" if include_last_latent else output_type
+
+        # Captured before applying the VAE std-rescale to `latents`.
+        last_latent_out = latents.detach().clone() if include_last_latent else None
+
         if not output_type == "latent":
             latents = latents.to(self.vae.dtype)
             latents = latents * self._vae_latents_std + self._vae_latents_mean
 
-            tt_latents_BTHWC, logical_h = self.tt_vae.prepare_input(latents)
+            tt_latents_BTHWC, logical_h, logical_w = self.tt_vae.prepare_input(latents)
 
             tt_latents_BTHWC = typed_tensor_2dshard(
                 tt_latents_BTHWC,
@@ -1044,7 +1050,12 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 dtype=self.tt_vae.dtype,
             )
             self._prepare_vae()
-            tt_video_BCTHW, new_logical_h = self.tt_vae(tt_latents_BTHWC, logical_h, t_chunk_size=self.vae_t_chunk_size)
+            tt_video_BCTHW, new_logical_h, new_logical_w = self.tt_vae(
+                tt_latents_BTHWC,
+                logical_h,
+                t_chunk_size=self.vae_t_chunk_size,
+                logical_w=logical_w,
+            )
 
             concat_dims = [None, None]
             concat_dims[self.vae_parallel_config.height_parallel.mesh_axis] = 3
@@ -1068,11 +1079,11 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             )
 
             if d2h_permute is not None:
-                # Output is (B, T, H, W, C) — trim height in dim 2.
-                video_torch = video_torch[:, :, :new_logical_h, :, :]
+                # Output is (B, T, H, W, C) — trim height and width.
+                video_torch = video_torch[:, :, :new_logical_h, :new_logical_w, :]
             else:
-                # Output is (B, C, T, H, W) — trim height in dim 3.
-                video_torch = video_torch[:, :, :, :new_logical_h, :]
+                # Output is (B, C, T, H, W) — trim height and width.
+                video_torch = video_torch[:, :, :, :new_logical_h, :new_logical_w]
 
             if output_type == "uint8":
                 video = video_torch.numpy()
@@ -1087,9 +1098,12 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             profiler.end("vae", profiler_iteration)
 
         if not return_dict:
-            return (video,)
+            return (video, last_latent_out) if include_last_latent else (video,)
 
-        return WanPipelineOutput(frames=video)
+        output = WanPipelineOutput(frames=video)
+        if include_last_latent:
+            output.last_latent = last_latent_out
+        return output
 
     def run_single_prompt(self, *args, **kwargs):
         return self.__call__(*args, **kwargs).frames

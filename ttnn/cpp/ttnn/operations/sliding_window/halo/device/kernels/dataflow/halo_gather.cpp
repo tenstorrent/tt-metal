@@ -27,7 +27,7 @@ FORCE_INLINE void fill_with_val(uint32_t begin_addr) {
 
 template <uint32_t StickNBytes, uint32_t MaxChunkSize>
 FORCE_INLINE void copy_padding_small_sticks(
-    experimental::Noc noc, uint32_t padding_l1_addr, uint32_t dst_addr, uint16_t nsticks) {
+    Noc noc, uint32_t padding_l1_addr, uint32_t dst_addr, uint16_t nsticks) {
     static_assert(MaxChunkSize >= StickNBytes, "This function assumes max chunk size > stick size");
 
     constexpr uint32_t sticks_per_batch = MaxChunkSize / StickNBytes;
@@ -65,7 +65,7 @@ FORCE_INLINE void copy_padding_small_sticks(
 
 template <uint32_t StickNBytes, uint32_t MaxChunkSize>
 FORCE_INLINE void copy_padding_large_sticks(
-    experimental::Noc noc, uint32_t padding_l1_addr, uint32_t dst_addr, uint16_t nsticks) {
+    Noc noc, uint32_t padding_l1_addr, uint32_t dst_addr, uint16_t nsticks) {
     constexpr uint32_t num_full_chunks = StickNBytes / MaxChunkSize;
     constexpr uint32_t remainder_bytes = StickNBytes % MaxChunkSize;
     constexpr uint32_t remainder_offset = num_full_chunks * MaxChunkSize;
@@ -101,7 +101,7 @@ FORCE_INLINE void copy_padding_large_sticks(
 
 template <uint32_t PaddingConfigCBId, uint32_t OutCBId, uint32_t StickNBytes, uint32_t MaxChunkSize>
 FORCE_INLINE void copy_padding(
-    experimental::Noc noc, experimental::CB padding_config_cb, experimental::CB out_cb, uint32_t padding_l1_addr) {
+    Noc noc, experimental::CB padding_config_cb, experimental::CB out_cb, uint32_t padding_l1_addr) {
     const uint32_t padding_config_l1_addr = padding_config_cb.get_read_ptr();
     volatile tt_l1_ptr uint16_t* config_data = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(padding_config_l1_addr);
 
@@ -145,7 +145,7 @@ static inline void resolve_destination_coords(
 
 template <uint32_t StickSizeBytes, bool EnableBlocking, uint32_t BlockHeightSticks, typename Src>
 static inline void write_stick_async(
-    experimental::Noc noc,
+    Noc noc,
     const Src& in_src,
     uint32_t out_base_l1_addr,
     uint16_t dst_noc_x,
@@ -165,7 +165,7 @@ static inline void write_stick_async(
 
     noc.async_write(
         in_src,
-        experimental::UnicastEndpoint{},
+        UnicastEndpoint{},
         size,
         {.offset_bytes = src_offset},
         {.noc_x = dst_noc_x, .noc_y = dst_noc_y, .addr = dst_addr});
@@ -184,7 +184,7 @@ template <
     bool IsWidthSharded,
     bool IsColumnMajor>
 static inline void run_halo_gather(
-    experimental::Noc noc,
+    Noc noc,
     experimental::CB in_cb,
     experimental::CB out_cb,
     const tt_l1_ptr uint16_t* config,
@@ -203,7 +203,7 @@ static inline void run_halo_gather(
     }
 
     const uint32_t out_base_l1_addr = out_cb.get_write_ptr();
-    auto in_src = experimental::use<experimental::CB::AddrSelector::READ_PTR>(in_cb);
+    auto in_src = use<experimental::CB::AddrSelector::READ_PTR>(in_cb);
 
     // Assume input is already ready when !EnableBlocking (like when using RM)
     if constexpr (EnableBlocking) {
@@ -279,7 +279,7 @@ void kernel_main() {
     constexpr uint32_t elem_nbytes = sizeof(uint16_t);
     constexpr bool enable_blocking = !skip_untilize;
 
-    experimental::Noc noc;
+    Noc noc;
     experimental::CB padding_config_cb(padding_config_cb_id);
     experimental::CB gather_config_cb(gather_config_cb_id);
     experimental::CB src_cb(src_cb_id);

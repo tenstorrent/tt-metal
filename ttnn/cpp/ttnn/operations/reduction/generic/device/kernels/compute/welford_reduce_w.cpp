@@ -10,7 +10,7 @@
 #include "api/compute/eltwise_unary/sqrt.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     // Runtime args:
@@ -56,11 +56,11 @@ void kernel_main() {
     // it expects data in a CB. Thus, this CB is used to hold the scaled input tile.
     constexpr auto cb_scaled = tt::CBIndex::c_20;
 
-    experimental::CircularBuffer cb_in_obj(cb_in);
-    experimental::CircularBuffer cb_scalar_obj(cb_scalar);
-    experimental::CircularBuffer cb_out_obj(cb_out);
-    experimental::CircularBuffer cb_var_obj(cb_var);
-    experimental::CircularBuffer cb_scaled_obj(cb_scaled);
+    CircularBuffer cb_in_obj(cb_in);
+    CircularBuffer cb_scalar_obj(cb_scalar);
+    CircularBuffer cb_out_obj(cb_out);
+    CircularBuffer cb_var_obj(cb_var);
+    CircularBuffer cb_scaled_obj(cb_scaled);
 
     // Destination register indices inside the Tensix DST register file.
     // Welford's LLK uses three adjacent dst registers:
@@ -107,6 +107,10 @@ void kernel_main() {
         // unpack operation) can read it back.
         // Without scaling, transpose and welford (both SFPU-compatible)
         // can share a single DST window for the entire loop.
+        // On the do_scale path, transpose_wh_init_short(cb_scaled) runs before each
+        // welford_update; it re-inits UNPACK and MATH via llk_math_eltwise_unary_datacopy_init
+        // (same MATH-side effect as welford_reinit), so a separate welford_reinit after the mul
+        // is not required here.
         if constexpr (!do_scale) {
             // Explicit srca reconfig is required because the output packing
             // phase (below) calls reconfig_data_format_srca(cb_var) which

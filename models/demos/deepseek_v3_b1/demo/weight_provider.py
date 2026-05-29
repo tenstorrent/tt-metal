@@ -17,8 +17,9 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
+from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensorAssigner
 from models.demos.deepseek_v3_b1.model_dimensions import LogicalModelDimensions
-from models.demos.deepseek_v3_b1.weights.cache import CacheConfig, CacheContext, TensorCache
+from models.demos.deepseek_v3_b1.weights.cache import BspmVariant, CacheConfig, CacheContext, TensorCache
 from models.demos.deepseek_v3_b1.weights.prepare import (
     _MTP_LAYER_IDX,
     NUM_ROUTED_EXPERTS,
@@ -35,7 +36,33 @@ from models.demos.deepseek_v3_b1.weights.prepare import (
     prepare_mtp_weights,
     prepare_spec_weights,
 )
+from models.demos.deepseek_v3_b1.weights.transforms.sram_experts import SramExpertCoreGrids, SramHotExpertConfig
 from models.demos.deepseek_v3_b1.weights.upload import Uploadable, two_phase_upload
+
+_DENSE_NUM_CHUNKS = 8  # Dense MLP is split into 8 routed-equivalent chunks
+
+
+def resolve_sram_expert_ids(
+    layer_id: int,
+    override: list[int] | None,
+    *,
+    is_moe: bool,
+) -> list[int]:
+    """Initial sram_expert_ids list passed into ``prepare_*_layer_weights``.
+
+    Precedence:
+      * ``override`` (explicit per-call list, e.g. test scenarios) — wins.
+      * Dense — every chunk is equally hot (no routing); default to all 8 chunks.
+        L1-fit truncation happens inside ``_build_dense_sram_routed_weights``.
+      * MoE without override — return empty. ``prepare_moe_layer_weights``
+        builds ``sram_slots`` from ``sram_hot_experts`` (passed separately) and
+        derives the final list from ``sram_slots.slot_experts`` post L1-fit.
+    """
+    if override is not None:
+        return list(override)
+    if not is_moe:
+        return list(range(_DENSE_NUM_CHUNKS))
+    return []
 
 
 class WeightProvider(Protocol):
@@ -47,10 +74,22 @@ class WeightProvider(Protocol):
     def load_lm_head(self, device: ttnn.MeshDevice) -> DeepSeekV3LMHeadWeights:
         ...
 
-    def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
+    def load_moe_layer(
+        self,
+        layer_id: int,
+        device: ttnn.MeshDevice,
+        *,
+        sram_expert_ids_override: list[int] | None = None,
+    ) -> DeepSeekV3MoELayerWeights:
         ...
 
-    def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
+    def load_dense_layer(
+        self,
+        layer_id: int,
+        device: ttnn.MeshDevice,
+        *,
+        sram_expert_ids_override: list[int] | None = None,
+    ) -> DeepSeekV3DenseLayerWeights:
         ...
 
     def load_mtp(self, device: ttnn.MeshDevice) -> DeepSeekV3MTPWeights:
@@ -71,24 +110,25 @@ def _build_synthetic_moe_state_dict(
     num_routed_experts: int = NUM_ROUTED_EXPERTS,
 ) -> dict[str, torch.Tensor]:
     """Build a synthetic MoE layer state dict with HF tensor shapes (randn for weights, ones for norms)."""
+    g = torch.Generator().manual_seed(layer_id)
     state_dict: dict[str, torch.Tensor] = {}
     dtype = torch.bfloat16
 
     # Attention weights (HF shapes)
     state_dict[_layer_key(layer_id, "self_attn.q_a_proj.weight")] = torch.randn(
-        LogicalModelDimensions.Q_A_DIM, LogicalModelDimensions.HIDDEN_SIZE, dtype=dtype
+        LogicalModelDimensions.Q_A_DIM, LogicalModelDimensions.HIDDEN_SIZE, generator=g, dtype=dtype
     )
     state_dict[_layer_key(layer_id, "self_attn.q_b_proj.weight")] = torch.randn(
-        LogicalModelDimensions.Q_B_OUT, LogicalModelDimensions.Q_A_DIM, dtype=dtype
+        LogicalModelDimensions.Q_B_OUT, LogicalModelDimensions.Q_A_DIM, generator=g, dtype=dtype
     )
     state_dict[_layer_key(layer_id, "self_attn.kv_a_proj_with_mqa.weight")] = torch.randn(
-        LogicalModelDimensions.KV_A_DIM, LogicalModelDimensions.HIDDEN_SIZE, dtype=dtype
+        LogicalModelDimensions.KV_A_DIM, LogicalModelDimensions.HIDDEN_SIZE, generator=g, dtype=dtype
     )
     state_dict[_layer_key(layer_id, "self_attn.kv_b_proj.weight")] = torch.randn(
-        LogicalModelDimensions.KV_B_PROJ_OUT, LogicalModelDimensions.KV_B_LORA_RANK, dtype=dtype
+        LogicalModelDimensions.KV_B_PROJ_OUT, LogicalModelDimensions.KV_B_LORA_RANK, generator=g, dtype=dtype
     )
     state_dict[_layer_key(layer_id, "self_attn.o_proj.weight")] = torch.randn(
-        LogicalModelDimensions.HIDDEN_SIZE, LogicalModelDimensions.O_PROJ_OUT, dtype=dtype
+        LogicalModelDimensions.HIDDEN_SIZE, LogicalModelDimensions.O_PROJ_OUT, generator=g, dtype=dtype
     )
 
     # Norms (ones per plan)
@@ -107,33 +147,33 @@ def _build_synthetic_moe_state_dict(
 
     # MoE gate
     state_dict[_layer_key(layer_id, "mlp.gate.weight")] = torch.randn(
-        LogicalModelDimensions.GATE_NUM_INDICES, LogicalModelDimensions.HIDDEN_SIZE, dtype=dtype
+        LogicalModelDimensions.GATE_NUM_INDICES, LogicalModelDimensions.HIDDEN_SIZE, generator=g, dtype=dtype
     )
     state_dict[_layer_key(layer_id, "mlp.gate.e_score_correction_bias")] = torch.randn(
-        LogicalModelDimensions.GATE_NUM_INDICES, dtype=dtype
+        LogicalModelDimensions.GATE_NUM_INDICES, generator=g, dtype=dtype
     )
 
     # Shared experts
     state_dict[_layer_key(layer_id, "mlp.shared_experts.gate_proj.weight")] = torch.randn(
-        LogicalModelDimensions.MOE_INTERMEDIATE_SIZE, LogicalModelDimensions.HIDDEN_SIZE, dtype=dtype
+        LogicalModelDimensions.MOE_INTERMEDIATE_SIZE, LogicalModelDimensions.HIDDEN_SIZE, generator=g, dtype=dtype
     )
     state_dict[_layer_key(layer_id, "mlp.shared_experts.up_proj.weight")] = torch.randn(
-        LogicalModelDimensions.MOE_INTERMEDIATE_SIZE, LogicalModelDimensions.HIDDEN_SIZE, dtype=dtype
+        LogicalModelDimensions.MOE_INTERMEDIATE_SIZE, LogicalModelDimensions.HIDDEN_SIZE, generator=g, dtype=dtype
     )
     state_dict[_layer_key(layer_id, "mlp.shared_experts.down_proj.weight")] = torch.randn(
-        LogicalModelDimensions.HIDDEN_SIZE, LogicalModelDimensions.MOE_INTERMEDIATE_SIZE, dtype=dtype
+        LogicalModelDimensions.HIDDEN_SIZE, LogicalModelDimensions.MOE_INTERMEDIATE_SIZE, generator=g, dtype=dtype
     )
 
     # Routed experts
     for e in range(num_routed_experts):
         state_dict[_layer_key(layer_id, f"mlp.experts.{e}.gate_proj.weight")] = torch.randn(
-            LogicalModelDimensions.MOE_INTERMEDIATE_SIZE, LogicalModelDimensions.HIDDEN_SIZE, dtype=dtype
+            LogicalModelDimensions.MOE_INTERMEDIATE_SIZE, LogicalModelDimensions.HIDDEN_SIZE, generator=g, dtype=dtype
         )
         state_dict[_layer_key(layer_id, f"mlp.experts.{e}.up_proj.weight")] = torch.randn(
-            LogicalModelDimensions.MOE_INTERMEDIATE_SIZE, LogicalModelDimensions.HIDDEN_SIZE, dtype=dtype
+            LogicalModelDimensions.MOE_INTERMEDIATE_SIZE, LogicalModelDimensions.HIDDEN_SIZE, generator=g, dtype=dtype
         )
         state_dict[_layer_key(layer_id, f"mlp.experts.{e}.down_proj.weight")] = torch.randn(
-            LogicalModelDimensions.HIDDEN_SIZE, LogicalModelDimensions.MOE_INTERMEDIATE_SIZE, dtype=dtype
+            LogicalModelDimensions.HIDDEN_SIZE, LogicalModelDimensions.MOE_INTERMEDIATE_SIZE, generator=g, dtype=dtype
         )
 
     return state_dict
@@ -141,24 +181,25 @@ def _build_synthetic_moe_state_dict(
 
 def _build_synthetic_dense_state_dict(layer_id: int) -> dict[str, torch.Tensor]:
     """Build a synthetic dense layer state dict with HF tensor shapes (randn for weights, ones for norms)."""
+    g = torch.Generator().manual_seed(layer_id)
     state_dict: dict[str, torch.Tensor] = {}
     dtype = torch.bfloat16
 
     # Attention weights (HF shapes)
     state_dict[_layer_key(layer_id, "self_attn.q_a_proj.weight")] = torch.randn(
-        LogicalModelDimensions.Q_A_DIM, LogicalModelDimensions.HIDDEN_SIZE, dtype=dtype
+        LogicalModelDimensions.Q_A_DIM, LogicalModelDimensions.HIDDEN_SIZE, generator=g, dtype=dtype
     )
     state_dict[_layer_key(layer_id, "self_attn.q_b_proj.weight")] = torch.randn(
-        LogicalModelDimensions.Q_B_OUT, LogicalModelDimensions.Q_A_DIM, dtype=dtype
+        LogicalModelDimensions.Q_B_OUT, LogicalModelDimensions.Q_A_DIM, generator=g, dtype=dtype
     )
     state_dict[_layer_key(layer_id, "self_attn.kv_a_proj_with_mqa.weight")] = torch.randn(
-        LogicalModelDimensions.KV_A_DIM, LogicalModelDimensions.HIDDEN_SIZE, dtype=dtype
+        LogicalModelDimensions.KV_A_DIM, LogicalModelDimensions.HIDDEN_SIZE, generator=g, dtype=dtype
     )
     state_dict[_layer_key(layer_id, "self_attn.kv_b_proj.weight")] = torch.randn(
-        LogicalModelDimensions.KV_B_PROJ_OUT, LogicalModelDimensions.KV_B_LORA_RANK, dtype=dtype
+        LogicalModelDimensions.KV_B_PROJ_OUT, LogicalModelDimensions.KV_B_LORA_RANK, generator=g, dtype=dtype
     )
     state_dict[_layer_key(layer_id, "self_attn.o_proj.weight")] = torch.randn(
-        LogicalModelDimensions.HIDDEN_SIZE, LogicalModelDimensions.O_PROJ_OUT, dtype=dtype
+        LogicalModelDimensions.HIDDEN_SIZE, LogicalModelDimensions.O_PROJ_OUT, generator=g, dtype=dtype
     )
 
     # Norms (ones per plan)
@@ -177,30 +218,33 @@ def _build_synthetic_dense_state_dict(layer_id: int) -> dict[str, torch.Tensor]:
 
     # Single MLP (used for both shared and routed in dense)
     state_dict[_layer_key(layer_id, "mlp.gate_proj.weight")] = torch.randn(
-        LogicalModelDimensions.INTERMEDIATE_SIZE, LogicalModelDimensions.HIDDEN_SIZE, dtype=dtype
+        LogicalModelDimensions.INTERMEDIATE_SIZE, LogicalModelDimensions.HIDDEN_SIZE, generator=g, dtype=dtype
     )
     state_dict[_layer_key(layer_id, "mlp.up_proj.weight")] = torch.randn(
-        LogicalModelDimensions.INTERMEDIATE_SIZE, LogicalModelDimensions.HIDDEN_SIZE, dtype=dtype
+        LogicalModelDimensions.INTERMEDIATE_SIZE, LogicalModelDimensions.HIDDEN_SIZE, generator=g, dtype=dtype
     )
     state_dict[_layer_key(layer_id, "mlp.down_proj.weight")] = torch.randn(
-        LogicalModelDimensions.HIDDEN_SIZE, LogicalModelDimensions.INTERMEDIATE_SIZE, dtype=dtype
+        LogicalModelDimensions.HIDDEN_SIZE, LogicalModelDimensions.INTERMEDIATE_SIZE, generator=g, dtype=dtype
     )
 
     return state_dict
 
 
 def _build_synthetic_mtp_state_dict(mtp_layer_idx: int = _MTP_LAYER_IDX) -> dict[str, torch.Tensor]:
-    """Build a synthetic MTP state dict with only the lightweight MTP projection/norm tensors."""
+    """Build a synthetic MTP state dict with the lightweight MTP projection/norm tensors and lm_head."""
+    g = torch.Generator().manual_seed(mtp_layer_idx)
     dtype = torch.bfloat16
     H = LogicalModelDimensions.HIDDEN_SIZE
+    V = LogicalModelDimensions.VOCAB_SIZE
+
+    lm_w = torch.randn(V, H, generator=g, dtype=dtype)
 
     return {
-        _layer_key(mtp_layer_idx, "hnorm.weight"): torch.ones(H, dtype=dtype),
-        _layer_key(mtp_layer_idx, "enorm.weight"): torch.ones(H, dtype=dtype),
-        _layer_key(mtp_layer_idx, "eh_proj.weight"): torch.randn(
-            H, 2 * H, dtype=dtype, generator=torch.Generator().manual_seed(300)
-        ),
-        _layer_key(mtp_layer_idx, "shared_head.norm.weight"): torch.ones(H, dtype=dtype),
+        _layer_key(mtp_layer_idx, "hnorm.weight"): torch.randn(H, generator=g, dtype=dtype).abs() + 0.1,
+        _layer_key(mtp_layer_idx, "enorm.weight"): torch.randn(H, generator=g, dtype=dtype).abs() + 0.1,
+        _layer_key(mtp_layer_idx, "eh_proj.weight"): torch.randn(H, 2 * H, generator=g, dtype=dtype),
+        _layer_key(mtp_layer_idx, "shared_head.norm.weight"): torch.randn(H, generator=g, dtype=dtype).abs() + 0.1,
+        "lm_head.weight": lm_w,
     }
 
 
@@ -218,6 +262,13 @@ class CacheWeightProvider:
         hf_model_id: str | None = None,
         hf_revision: str = "local",
         schema_version: int = 1,
+        sram_hot_experts: SramHotExpertConfig | None = None,
+        sram_core_grids: SramExpertCoreGrids | None = None,
+        sram_assigner: CompressedTensorAssigner | None = None,
+        worker_l1_size: int | None = None,
+        bspm_dir: Path | None = None,
+        bspm_variant: BspmVariant | str = BspmVariant.B,
+        bspm_budget: float = 3.5,
     ) -> None:
         cache_path = Path(cache_path)
         model_path = Path(model_path)
@@ -228,6 +279,13 @@ class CacheWeightProvider:
         self._schema_version = schema_version
         self._hf_model_id = hf_model_id or model_path.name
         self._hf_revision = hf_revision
+        self._sram_hot_experts = sram_hot_experts
+        self._sram_core_grids = sram_core_grids
+        self._sram_assigner = sram_assigner
+        self._worker_l1_size = worker_l1_size
+        self._bspm_dir = Path(bspm_dir) if bspm_dir is not None else None
+        self._bspm_variant = BspmVariant(bspm_variant)
+        self._bspm_budget = bspm_budget
 
     def _cache_config(self, device: ttnn.MeshDevice) -> CacheConfig:
         context = CacheContext(
@@ -239,10 +297,16 @@ class CacheWeightProvider:
         return CacheConfig(cache=self._cache, context=context)
 
     def _upload_prepared_weights(self, device: ttnn.MeshDevice, host_weights: Uploadable):
+        """Two-phase upload: FD-batched H2D for the FD grid, SD writes for the rest.
+
+        Used by ``load_moe_layer`` / ``load_dense_layer`` after host-staging
+        weights via ``prepare_*_weights(move_to_device=False)``. Tensors
+        already on device (e.g. attn L1 lockstep tensors uploaded eagerly
+        to seed the SRAM hot-expert trim) are passed through unchanged.
+        """
         return two_phase_upload(device, host_weights)
 
     def load_embedding(self, device: ttnn.MeshDevice) -> DeepSeekV3EmbeddingLayerWeights:
-        # TODO: Re-enable two-phase upload here after fast-dispatch lifecycle is managed globally.
         return prepare_embedding_weights(
             self._state_dict,
             device,
@@ -251,32 +315,68 @@ class CacheWeightProvider:
         )
 
     def load_lm_head(self, device: ttnn.MeshDevice) -> DeepSeekV3LMHeadWeights:
-        # TODO: Re-enable two-phase upload here after fast-dispatch lifecycle is managed globally.
         return prepare_lm_head_weights(
             self._state_dict,
             device,
-            move_to_device=True,
             cache_config=self._cache_config(device),
+            move_to_device=True,
         )
 
-    def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
+    def load_moe_layer(
+        self,
+        layer_id: int,
+        device: ttnn.MeshDevice,
+        *,
+        sram_expert_ids_override: list[int] | None = None,
+    ) -> DeepSeekV3MoELayerWeights:
+        # Iteration 1 (correctness baseline): inline upload (move_to_device=True).
+        # Two-phase upload for routed-DRAM CTs is currently disabled here while
+        # we restore correctness; iteration 2 will re-enable it via deferred
+        # ``ttnn.from_torch(... device=mesh, mesh_mapper=...)`` inside the lockstep
+        # multi-device path (avoids the cache-rewrite Hazards A/B and the
+        # ``allocate + copy_host_to_device_tensor`` byte-equivalence risk).
         host_weights = prepare_moe_layer_weights(
             device,
             self._state_dict,
             layer_id,
             num_routed_experts=NUM_ROUTED_EXPERTS,
-            move_to_device=False,
+            move_to_device=True,
             cache_config=self._cache_config(device),
+            sram_hot_experts=self._sram_hot_experts,
+            sram_core_grids=self._sram_core_grids,
+            sram_assigner=self._sram_assigner,
+            worker_l1_size=self._worker_l1_size,
+            bspm_dir=self._bspm_dir,
+            bspm_variant=self._bspm_variant,
+            bspm_budget=self._bspm_budget,
+            compressed_tp8=True,
+            sram_expert_ids=resolve_sram_expert_ids(
+                layer_id,
+                sram_expert_ids_override,
+                is_moe=True,
+            ),
         )
         return self._upload_prepared_weights(device, host_weights)
 
-    def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
+    def load_dense_layer(
+        self,
+        layer_id: int,
+        device: ttnn.MeshDevice,
+        *,
+        sram_expert_ids_override: list[int] | None = None,
+    ) -> DeepSeekV3DenseLayerWeights:
+        # See load_moe_layer for iteration-1 rationale.
         host_weights = prepare_dense_layer_weights(
             device,
             self._state_dict,
             layer_id,
-            move_to_device=False,
+            move_to_device=True,
             cache_config=self._cache_config(device),
+            sram_expert_ids=resolve_sram_expert_ids(
+                layer_id,
+                sram_expert_ids_override,
+                is_moe=False,
+            ),
         )
         return self._upload_prepared_weights(device, host_weights)
 
@@ -302,44 +402,96 @@ class CacheWeightProvider:
 class SyntheticWeightProvider:
     """Create deterministic synthetic embedding and LM head weights in place (no cache)."""
 
+    def __init__(
+        self,
+        *,
+        sram_hot_experts: SramHotExpertConfig | None = None,
+        sram_core_grids: SramExpertCoreGrids | None = None,
+        sram_assigner: CompressedTensorAssigner | None = None,
+        worker_l1_size: int | None = None,
+        bspm_dir: Path | None = None,
+        bspm_variant: BspmVariant | str = BspmVariant.B,
+        bspm_budget: float = 3.5,
+    ) -> None:
+        self._sram_hot_experts = sram_hot_experts
+        self._sram_core_grids = sram_core_grids
+        self._sram_assigner = sram_assigner
+        self._worker_l1_size = worker_l1_size
+        self._bspm_dir = Path(bspm_dir) if bspm_dir is not None else None
+        self._bspm_variant = BspmVariant(bspm_variant)
+        self._bspm_budget = bspm_budget
+
     def load_embedding(self, device: ttnn.MeshDevice) -> DeepSeekV3EmbeddingLayerWeights:
-        emb_w = torch.zeros(
-            (LogicalModelDimensions.VOCAB_SIZE, LogicalModelDimensions.HIDDEN_SIZE), dtype=torch.bfloat16
+        g = torch.Generator().manual_seed(42)
+        emb_w = torch.randn(
+            LogicalModelDimensions.VOCAB_SIZE, LogicalModelDimensions.HIDDEN_SIZE, generator=g, dtype=torch.bfloat16
         )
-        emb_w[
-            torch.arange(LogicalModelDimensions.VOCAB_SIZE),
-            torch.arange(LogicalModelDimensions.VOCAB_SIZE, dtype=torch.int64) % LogicalModelDimensions.HIDDEN_SIZE,
-        ] = 1
         return prepare_embedding_weights({"model.embed_tokens.weight": emb_w}, device, move_to_device=True)
 
     def load_lm_head(self, device: ttnn.MeshDevice) -> DeepSeekV3LMHeadWeights:
-        # Stride for synthetic one-hot pattern: 101 matmul cores × 160 per core (matches LM head sampling op layout).
-        _lm_head_n_synthetic = 101 * 160
-        lm_w = torch.full(
-            (LogicalModelDimensions.VOCAB_SIZE, LogicalModelDimensions.HIDDEN_SIZE), -1.0, dtype=torch.bfloat16
+        g = torch.Generator().manual_seed(42)
+        hidden = LogicalModelDimensions.HIDDEN_SIZE
+        lm_w = torch.randn(LogicalModelDimensions.VOCAB_SIZE, hidden, generator=g, dtype=torch.bfloat16) / (
+            hidden**0.5
         )
-        lm_w[
-            torch.arange(LogicalModelDimensions.HIDDEN_SIZE, dtype=torch.int64) % _lm_head_n_synthetic,
-            torch.arange(LogicalModelDimensions.HIDDEN_SIZE),
-        ] = 1
+        norm_w = torch.ones(hidden, dtype=torch.bfloat16) / (hidden**0.5)
         return prepare_lm_head_weights(
             {
                 "lm_head.weight": lm_w,
-                "model.norm.weight": torch.ones(LogicalModelDimensions.HIDDEN_SIZE, dtype=torch.bfloat16),
+                "model.norm.weight": norm_w,
             },
             device,
             move_to_device=True,
         )
 
-    def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
+    def load_moe_layer(
+        self,
+        layer_id: int,
+        device: ttnn.MeshDevice,
+        *,
+        sram_expert_ids_override: list[int] | None = None,
+    ) -> DeepSeekV3MoELayerWeights:
         sd = _build_synthetic_moe_state_dict(layer_id, num_routed_experts=NUM_ROUTED_EXPERTS)
         return prepare_moe_layer_weights(
-            device, sd, layer_id, num_routed_experts=NUM_ROUTED_EXPERTS, move_to_device=True
+            device,
+            sd,
+            layer_id,
+            num_routed_experts=NUM_ROUTED_EXPERTS,
+            move_to_device=True,
+            sram_hot_experts=self._sram_hot_experts,
+            sram_core_grids=self._sram_core_grids,
+            sram_assigner=self._sram_assigner,
+            worker_l1_size=self._worker_l1_size,
+            bspm_dir=self._bspm_dir,
+            bspm_variant=self._bspm_variant,
+            bspm_budget=self._bspm_budget,
+            compressed_tp8=True,
+            sram_expert_ids=resolve_sram_expert_ids(
+                layer_id,
+                sram_expert_ids_override,
+                is_moe=True,
+            ),
         )
 
-    def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
+    def load_dense_layer(
+        self,
+        layer_id: int,
+        device: ttnn.MeshDevice,
+        *,
+        sram_expert_ids_override: list[int] | None = None,
+    ) -> DeepSeekV3DenseLayerWeights:
         sd = _build_synthetic_dense_state_dict(layer_id)
-        return prepare_dense_layer_weights(device, sd, layer_id, move_to_device=True)
+        return prepare_dense_layer_weights(
+            device,
+            sd,
+            layer_id,
+            move_to_device=True,
+            sram_expert_ids=resolve_sram_expert_ids(
+                layer_id,
+                sram_expert_ids_override,
+                is_moe=False,
+            ),
+        )
 
     def load_mtp(self, device: ttnn.MeshDevice) -> DeepSeekV3MTPWeights:
         sd = _build_synthetic_mtp_state_dict()
@@ -353,32 +505,97 @@ class SyntheticWeightProvider:
 class StateDictWeightProvider:
     """Load real HF safetensors via LazyStateDict and prepare weights at runtime (no tensorbin cache)."""
 
-    def __init__(self, model_path: Path) -> None:
+    def __init__(
+        self,
+        model_path: Path,
+        *,
+        sram_hot_experts: SramHotExpertConfig | None = None,
+        sram_core_grids: SramExpertCoreGrids | None = None,
+        sram_assigner: CompressedTensorAssigner | None = None,
+        worker_l1_size: int | None = None,
+        bspm_dir: Path | None = None,
+        bspm_variant: BspmVariant | str = BspmVariant.B,
+        bspm_budget: float = 3.5,
+    ) -> None:
         model_path = Path(model_path)
         assert model_path.exists(), f"Model path does not exist: {model_path}"
         assert model_path.is_dir(), f"Model path is not a directory: {model_path}"
         self._state_dict = LazyStateDict(model_path)
+        self._sram_hot_experts = sram_hot_experts
+        self._sram_core_grids = sram_core_grids
+        self._sram_assigner = sram_assigner
+        self._worker_l1_size = worker_l1_size
+        self._bspm_dir = Path(bspm_dir) if bspm_dir is not None else None
+        self._bspm_variant = BspmVariant(bspm_variant)
+        self._bspm_budget = bspm_budget
 
     def load_embedding(self, device: ttnn.MeshDevice) -> DeepSeekV3EmbeddingLayerWeights:
         return prepare_embedding_weights(self._state_dict, device, move_to_device=True)
 
     def load_lm_head(self, device: ttnn.MeshDevice) -> DeepSeekV3LMHeadWeights:
-        return prepare_lm_head_weights(self._state_dict, device, move_to_device=True)
+        return prepare_lm_head_weights(
+            self._state_dict,
+            device,
+            move_to_device=True,
+        )
 
-    def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
+    def load_moe_layer(
+        self,
+        layer_id: int,
+        device: ttnn.MeshDevice,
+        *,
+        sram_expert_ids_override: list[int] | None = None,
+    ) -> DeepSeekV3MoELayerWeights:
         return prepare_moe_layer_weights(
             device,
             self._state_dict,
             layer_id,
             num_routed_experts=NUM_ROUTED_EXPERTS,
             move_to_device=True,
+            sram_hot_experts=self._sram_hot_experts,
+            sram_core_grids=self._sram_core_grids,
+            sram_assigner=self._sram_assigner,
+            worker_l1_size=self._worker_l1_size,
+            bspm_dir=self._bspm_dir,
+            bspm_variant=self._bspm_variant,
+            bspm_budget=self._bspm_budget,
+            compressed_tp8=True,
+            sram_expert_ids=resolve_sram_expert_ids(
+                layer_id,
+                sram_expert_ids_override,
+                is_moe=True,
+            ),
         )
 
-    def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
-        return prepare_dense_layer_weights(device, self._state_dict, layer_id, move_to_device=True)
+    def load_dense_layer(
+        self,
+        layer_id: int,
+        device: ttnn.MeshDevice,
+        *,
+        sram_expert_ids_override: list[int] | None = None,
+    ) -> DeepSeekV3DenseLayerWeights:
+        return prepare_dense_layer_weights(
+            device,
+            self._state_dict,
+            layer_id,
+            move_to_device=True,
+            sram_expert_ids=resolve_sram_expert_ids(
+                layer_id,
+                sram_expert_ids_override,
+                is_moe=False,
+            ),
+        )
 
     def load_mtp(self, device: ttnn.MeshDevice) -> DeepSeekV3MTPWeights:
-        return prepare_mtp_weights(self._state_dict, device, move_to_device=True)
+        return prepare_mtp_weights(
+            self._state_dict,
+            device,
+            move_to_device=True,
+        )
 
     def load_spec(self, device: ttnn.MeshDevice) -> DeepSeekV3SpecWeights:
-        return prepare_spec_weights(self._state_dict, device, move_to_device=True)
+        return prepare_spec_weights(
+            self._state_dict,
+            device,
+            move_to_device=True,
+        )

@@ -5,9 +5,9 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -32,7 +32,7 @@ void kernel_main() {
     constexpr auto mask_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t cb_id_attn = 4;
-    experimental::CircularBuffer cb_id_attn_obj(cb_id_attn);
+    CircularBuffer cb_id_attn_obj(cb_id_attn);
     uint32_t mask_tile_bytes = get_tile_size(cb_id_attn);
 
     const auto addr_mask = TensorAccessor(mask_args, mask_addr);
@@ -56,8 +56,8 @@ void kernel_main() {
 
     const auto src_a = TensorAccessor(src0_args, src_addr);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_id_in0_obj(cb_id_in0);
+    Noc noc;
+    CircularBuffer cb_id_in0_obj(cb_id_in0);
 
     {
         constexpr uint32_t cb_max_scaler = tt::CBIndex::c_2;

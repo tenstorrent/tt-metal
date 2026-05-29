@@ -4,6 +4,10 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 /**
  * add a cb full of indices for the tile
  * each row is identical in the index tensor, so we just need to add an offset based on which row tile it is
@@ -12,9 +16,9 @@
  */
 FORCE_INLINE void generate_index_tile(const uint32_t cb_id, const uint32_t wt) {
     // TODO: investigate moving to compile time (binary size is at risk)
-    cb_reserve_back(cb_id, 1);
-    uint32_t write_addr = get_write_ptr(cb_id);
-    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
+    CircularBuffer cb(cb_id);
+    cb.reserve_back(1);
+    CoreLocalMem<volatile uint32_t> ptr(cb.get_write_ptr());
     uint16_t wt_offset = wt << 5;
 
     uint32_t count = 0;
@@ -29,7 +33,7 @@ FORCE_INLINE void generate_index_tile(const uint32_t cb_id, const uint32_t wt) {
             }
         }
     }
-    cb_push_back(cb_id, 1);
+    cb.push_back(1);
 }
 
 void kernel_main() {
@@ -56,29 +60,30 @@ void kernel_main() {
 
     const auto s1 = TensorAccessor(s1_args, indices_addr);
 
+    Noc noc;
+    CircularBuffer input_values_cb(input_values_cb_index);
+    CircularBuffer input_indices_cb(input_indices_cb_index);
+
     uint32_t tile_id_input_values = 0;
     uint32_t tile_id_input_indices = 0;
     for (uint32_t i = 0; i < Ht; ++i) {
         // input values TILE
         for (uint32_t j = 0; j < Wt; ++j) {
-            cb_reserve_back(input_values_cb_index, onetile);
-            uint32_t l1_write_addr_values = get_write_ptr(input_values_cb_index);
-            noc_async_read_tile(tile_id_input_values, s0, l1_write_addr_values);
-            l1_write_addr_values += tile_bytes_input_values;
+            input_values_cb.reserve_back(onetile);
+            noc.async_read(
+                s0, input_values_cb, tile_bytes_input_values, {.page_id = tile_id_input_values}, {.offset_bytes = 0});
             tile_id_input_values++;
             generate_index_tile(cb_intermed_index, j);
-            noc_async_read_barrier();
-            cb_push_back(input_values_cb_index, onetile);
+            noc.async_read_barrier();
+            input_values_cb.push_back(onetile);
         }
     }
 
     // input indices RM
     for (uint32_t j = 0; j < Ht * tile_height; ++j) {
-        cb_reserve_back(input_indices_cb_index, onetile);
-        uint32_t l1_write_addr_indices = get_write_ptr(input_indices_cb_index);
-        uint64_t input_noc_addr = get_noc_addr(j, s1);
-        noc_async_read(input_noc_addr, l1_write_addr_indices, input_indices_page_size);
-        noc_async_read_barrier();
-        cb_push_back(input_indices_cb_index, onetile);
+        input_indices_cb.reserve_back(onetile);
+        noc.async_read(s1, input_indices_cb, input_indices_page_size, {.page_id = j}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+        input_indices_cb.push_back(onetile);
     }
 }

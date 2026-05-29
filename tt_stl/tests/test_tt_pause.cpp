@@ -21,9 +21,9 @@ TEST(TTPauseTest, PauseDoesNotCrash) {
 
 TEST(TTNiceSpinUntilTest, ImmediateReturnWhenPredicateTrue) {
     // Predicate is immediately true, should return without spinning
-    auto start = std::chrono::high_resolution_clock::now();
+    auto start = std::chrono::steady_clock::now();
     nice_spin_until([] { return true; });
-    auto end = std::chrono::high_resolution_clock::now();
+    auto end = std::chrono::steady_clock::now();
 
     auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
     // Should complete almost instantly (less than 1ms)
@@ -33,17 +33,21 @@ TEST(TTNiceSpinUntilTest, ImmediateReturnWhenPredicateTrue) {
 TEST(TTNiceSpinUntilTest, WaitsUntilPredicateBecomesTrueWithAtomicFlag) {
     std::atomic<bool> flag{false};
 
+    // Record start BEFORE thread construction so the setter's sleep is always
+    // fully captured in the measured interval.
+    auto start = std::chrono::steady_clock::now();
+
     std::thread setter([&flag] {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
         flag.store(true);
     });
 
-    auto start = std::chrono::high_resolution_clock::now();
     nice_spin_until([&flag] { return flag.load(); });
-    auto end = std::chrono::high_resolution_clock::now();
+    auto end = std::chrono::steady_clock::now();
 
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-    // Should have waited at least ~10ms for the flag
+    // Should have waited at least ~10ms for the flag. With start recorded before
+    // thread construction the measured interval is deterministic (>= setter sleep).
     EXPECT_GE(duration.count(), 9);
 
     setter.join();
@@ -137,14 +141,15 @@ TEST(TTNiceSpinUntilTest, ExponentialBackoffBehavior) {
     // doesn't consume excessive CPU time when waiting for a longer duration
     std::atomic<bool> flag{false};
 
+    auto start = std::chrono::steady_clock::now();
+
     std::thread setter([&flag] {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         flag.store(true);
     });
 
-    auto start = std::chrono::high_resolution_clock::now();
     nice_spin_until([&flag] { return flag.load(); });
-    auto end = std::chrono::high_resolution_clock::now();
+    auto end = std::chrono::steady_clock::now();
 
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
     // Should have waited approximately 100ms

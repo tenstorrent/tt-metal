@@ -188,7 +188,7 @@ def run_combine_op(
         cluster_axis=sp_axis,
         num_links=1,
         topology=ttnn.Topology.Linear,
-        init_zeros=True,
+        init_zeros=False,
         use_l1_small_for_semaphores=use_l1_small,
     )
     ttnn.synchronize_device(mesh_device)

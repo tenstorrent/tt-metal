@@ -1,3 +1,5 @@
+include(sources.cmake)
+
 add_library(ttnn_op_examples ${LIB_TYPE})
 add_library(TTNN::Ops::Examples ALIAS ttnn_op_examples)
 
@@ -29,13 +31,7 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        example/example.cpp
-        example/device/example_device_operation.cpp
-        example/device/multi_core_program_factory.cpp
-        example/device/single_core_program_factory.cpp
-        example_multiple_return/device/example_multiple_return_device_operation.cpp
-        example_multiple_return/device/single_core_program_factory.cpp
-        example_multiple_return/example_multiple_return.cpp
+        ${TTNN_OP_EXAMPLES_SRCS}
 )
 
 target_include_directories(ttnn_op_examples PRIVATE ${FixmeOpIncDirs})

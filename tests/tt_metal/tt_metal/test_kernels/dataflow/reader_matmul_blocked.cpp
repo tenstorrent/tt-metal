@@ -4,8 +4,8 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/endpoints.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
 
 void kernel_main() {
     uint32_t src0_addr  = get_arg_val<uint32_t>(0);
@@ -21,21 +21,21 @@ void kernel_main() {
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;
 
-    experimental::CircularBuffer cb_in0(cb_id_in0);
-    experimental::CircularBuffer cb_in1(cb_id_in1);
-    experimental::Noc noc;
+    CircularBuffer cb_in0(cb_id_in0);
+    CircularBuffer cb_in1(cb_id_in1);
+    Noc noc;
 
     for(uint32_t i = 0; i < num_blocks; i++) {
         cb_in0.reserve_back(in0_block_tile_cnt);
         cb_in1.reserve_back(in1_block_tile_cnt);
         noc.async_read(
-            experimental::AllocatorBank<experimental::AllocatorBankType::DRAM>{},
+            AllocatorBank<AllocatorBankType::DRAM>{},
             cb_in0,
             in0_block_size_bytes,
             {.bank_id = src0_bank_id, .addr = src0_addr},
             {});
         noc.async_read(
-            experimental::AllocatorBank<experimental::AllocatorBankType::DRAM>{},
+            AllocatorBank<AllocatorBankType::DRAM>{},
             cb_in1,
             in1_block_size_bytes,
             {.bank_id = src1_bank_id, .addr = src1_addr},

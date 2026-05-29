@@ -6,7 +6,7 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "tensix_types.h"
-#include "experimental/endpoints.h"
+#include "api/dataflow/endpoints.h"
 
 // DRAM to L1 read
 void kernel_main() {
@@ -19,9 +19,9 @@ void kernel_main() {
     constexpr uint32_t page_size_bytes = get_compile_time_arg_val(3);
     constexpr uint32_t test_id = get_compile_time_arg_val(4);
 
-    experimental::Noc noc(noc_index);
-    experimental::UnicastEndpoint unicast_endpoint;
-    experimental::AllocatorBank<experimental::AllocatorBankType::DRAM> dram_bank;
+    Noc noc(noc_index);
+    UnicastEndpoint unicast_endpoint;
+    AllocatorBank<AllocatorBankType::DRAM> dram_bank;
 
     DeviceTimestampedData("Number of transactions", num_of_transactions);
     DeviceTimestampedData("Transaction size in bytes", num_banks * pages_per_bank * page_size_bytes);

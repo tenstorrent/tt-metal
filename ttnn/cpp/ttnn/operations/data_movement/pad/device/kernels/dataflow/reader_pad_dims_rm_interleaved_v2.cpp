@@ -5,11 +5,11 @@
 #include <stdint.h>
 #include <cstring>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 inline __attribute__((always_inline)) void fill_pad_cb_with_val(
     const uint32_t cb_id, const uint32_t num_bytes, const uint32_t val) {
-    experimental::CircularBuffer cb(cb_id);
+    CircularBuffer cb(cb_id);
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.get_write_ptr());
 
     for (uint32_t i = 0; i < num_bytes / 2; ++i) {
@@ -88,9 +88,9 @@ void kernel_main() {
     constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
     constexpr uint32_t cb_pad = tt::CBIndex::c_1;
     constexpr uint32_t cb_pad_align = tt::CBIndex::c_2;
-    experimental::CircularBuffer cb_in0_exp(cb_in0);
-    experimental::CircularBuffer cb_pad_exp(cb_pad);
-    experimental::CircularBuffer cb_pad_align_exp(cb_pad_align);
+    CircularBuffer cb_in0_exp(cb_in0);
+    CircularBuffer cb_pad_exp(cb_pad);
+    CircularBuffer cb_pad_align_exp(cb_pad_align);
 
     const auto s = TensorAccessor(src_args, src_addr);
 

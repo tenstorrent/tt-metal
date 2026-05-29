@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc, divup, assert_equal
+from tests.ttnn.utils_for_testing import assert_equal
 
 
 @pytest.mark.parametrize(
