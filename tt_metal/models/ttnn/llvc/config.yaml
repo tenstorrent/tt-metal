@@ -1,0 +1,150 @@
+# LLVC (Low-Latency Low-Resource Voice Conversion) Configuration
+# ==============================================================================
+# This YAML file defines all parameters for model training, inference, data
+# processing, and TTNN hardware mapping. It MUST be validated against the
+# associated JSON schema (llvc_config_schema.json) before use. The schema
+# enforces types, value ranges, and cross‑field constraints.
+#
+# All placeholder paths (e.g., /path/to/...) must be replaced with actual
+# filesystem locations. Do not commit sensitive paths or credentials.
+# Use environment variable substitution where applicable (e.g., ${DATA_PATH}).
+#
+# PRODUCTION NOTES:
+#   - Ensure `input_dim` equals `data.audio.n_mels` (enforced by schema).
+#   - `batch_size` must be divisible by `gradient_accumulation_steps`.
+#   - For TTNN: prefer `TILE` layout + `L1` buffer for throughput.
+#   - Runtime checks should verify device grid product ≤ available cores.
+# ------------------------------------------------------------------------------
+
+# ------------------------------------------------------------------------------
+# Versioning and metadata
+# ------------------------------------------------------------------------------
+config_version: "2.0.0"
+model_version: "1.1.0"
+
+# ------------------------------------------------------------------------------
+# Model architecture
+# ------------------------------------------------------------------------------
+model:
+  name: &model_name "llvc"
+  # Must equal model_version string – not anchored to name
+  version: &model_ver "1.1.0"
+  architecture:
+    type: "autoencoder"
+    input_dim: &n_mels 80
+    hidden_dim: 256
+    output_dim: *n_mels
+    num_encoder_layers: 4
+    num_decoder_layers: 4
+    num_speakers: 10
+    speaker_embedding_dim: 64
+    use_residual_connections: true
+    normalization: "layer_norm"
+    activation: "relu"
+
+  # TTNN‑specific tensor options
+  ttnn:
+    dtype: "bfloat16"
+    layout: &ttnn_layout "ROW_MAJOR"
+    memory_config:
+      type: "DRAM"
+      buffer_type: "L1"
+    # Set layout to "TILE", buffer_type to "L1" for speed
+
+# ------------------------------------------------------------------------------
+# Device configuration
+# ------------------------------------------------------------------------------
+device:
+  type: "ttnn"
+  device_id: 0
+  grid:
+    rows: 8
+    columns: 8
+  l1_size: 1_048_576
+  dram_size: 1_073_741_824
+  precision: "bfloat16"
+  use_fp32_accumulation: false
+
+# ------------------------------------------------------------------------------
+# Training parameters
+# ------------------------------------------------------------------------------
+training:
+  enabled: true
+  seed: 42
+  epochs: 50
+  batch_size: &batch_size 32
+  gradient_accumulation_steps: &acc_steps 4
+  learning_rate: 0.001
+  lr_scheduler:
+    type: "cosine_annealing"
+    T_max: 50
+    eta_min: 1e-6
+  optimizer:
+    type: "adamw"
+    betas: [0.9, 0.999]
+    weight_decay: 0.01
+  loss_function: "l1"
+  validation_split: 0.1
+  checkpoint_interval: 5
+  log_interval: 10
+  gradient_clip_norm: 1.0
+
+# ------------------------------------------------------------------------------
+# Inference parameters
+# ------------------------------------------------------------------------------
+inference:
+  enabled: true
+  batch_size: 1
+  max_output_length: 200
+  use_tta: false
+  output_format: "mel_spectrogram"
+  speaker_id: 0
+
+# ------------------------------------------------------------------------------
+# Data processing parameters
+# ------------------------------------------------------------------------------
+data:
+  audio:
+    sample_rate: &sample_rate 16000
+    window_length_seconds: 0.025
+    hop_length_seconds: 0.010
+    n_mels: *n_mels
+    n_fft: 1024
+    f_min: 0
+    f_max: 8000
+    normalize: true
+  dataset:
+    path: "/path/to/voice_conversion_dataset"  # 🔴 REPLACE with actual path or ${DATA_ROOT}
+    train_split: 0.9
+    test_split: 0.1
+  preprocessing:
+    max_duration_seconds: 10.0
+    silence_removal: true
+    pitch_shift_augmentation:
+      enabled: false
+      range_semitones: [-2, 2]
+
+# ------------------------------------------------------------------------------
+# Logging and monitoring
+# ------------------------------------------------------------------------------
+logging:
+  level: "info"
+  tensorboard: true
+  tensorboard_dir: "./runs"
+  wandb:
+    enabled: false
+    project: "llvc-ttnn"
+    entity: "your_entity"          # 🔴 Replace with actual W&B entity
+  log_file: "./logs/llvc.log"
+  log_file_level: "debug"
+
+# ------------------------------------------------------------------------------
+# Runtime integrity constraints (aliases for cross‑field references)
+# ------------------------------------------------------------------------------
+# These aliases are used within the schema to enforce field relationships.
+# They are not user‑configurable.
+_constraints:
+  n_mels_alias: *n_mels
+  batch_alias: *batch_size
+  acc_steps_alias: *acc_steps
+  sample_rate_alias: *sample_rate
