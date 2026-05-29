@@ -6,9 +6,11 @@
 
 #include <gtest/gtest.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <xtensor-blas/xlinalg.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
@@ -73,38 +75,32 @@ ReferenceOutputs reference_assemble(
     const ttml::autograd::TensorPtr& kv_up,
     const ttml::autograd::TensorPtr& k_pe,
     const AssembleShape& shape) {
-    const auto q_pre_bf = ttml::core::to_xtensor(q_pre->get_value());
-    const auto kv_up_bf = ttml::core::to_xtensor(kv_up->get_value());
-    const auto k_pe_bf = ttml::core::to_xtensor(k_pe->get_value());
+    const std::size_t B = shape.batch;
+    const std::size_t S = shape.seq_len;
+    const std::size_t H = shape.n_heads;
+    const std::size_t nope = shape.qk_nope_dim;
+    const std::size_t kv_w = shape.qk_nope_dim + shape.v_dim;
 
-    const uint32_t B = shape.batch;
-    const uint32_t S = shape.seq_len;
-    const uint32_t H = shape.n_heads;
-    const uint32_t qk_head = shape.qk_nope_dim + shape.qk_rope_dim;
-    const uint32_t kv_w = shape.qk_nope_dim + shape.v_dim;
+    // split_heads: [B, 1, S, H*W] -> [B, S, H, W] -> [B, H, S, W].
+    xt::xarray<float> q_pre_bf = ttml::core::to_xtensor(q_pre->get_value());
+    q_pre_bf.reshape({B, S, H, static_cast<std::size_t>(shape.qk_nope_dim + shape.qk_rope_dim)});
+    xt::xarray<float> kv_up_bf = ttml::core::to_xtensor(kv_up->get_value());
+    kv_up_bf.reshape({B, S, H, kv_w});
+
+    const xt::xarray<float> q = xt::transpose(q_pre_bf, {0, 2, 1, 3});
+    const xt::xarray<float> kv = xt::transpose(kv_up_bf, {0, 2, 1, 3});
+
+    const xt::xarray<float> k_nope = xt::view(kv, xt::all(), xt::all(), xt::all(), xt::range(std::size_t{0}, nope));
+    const xt::xarray<float> v = xt::view(kv, xt::all(), xt::all(), xt::all(), xt::range(nope, kv_w));
+
+    // Broadcast the shared k_pe [B, 1, S, qk_rope] across heads -> [B, H, S, qk_rope].
+    const xt::xarray<float> k_pe_b = xt::broadcast(
+        ttml::core::to_xtensor(k_pe->get_value()), {B, H, S, static_cast<std::size_t>(shape.qk_rope_dim)});
 
     ReferenceOutputs ref;
-    ref.q = xt::xarray<float>::from_shape({B, H, S, qk_head});
-    ref.k = xt::xarray<float>::from_shape({B, H, S, qk_head});
-    ref.v = xt::xarray<float>::from_shape({B, H, S, shape.v_dim});
-
-    for (uint32_t b = 0; b < B; ++b) {
-        for (uint32_t h = 0; h < H; ++h) {
-            for (uint32_t s = 0; s < S; ++s) {
-                for (uint32_t d = 0; d < qk_head; ++d) {
-                    ref.q(b, h, s, d) = q_pre_bf(b, 0, s, h * qk_head + d);
-                    if (d < shape.qk_nope_dim) {
-                        ref.k(b, h, s, d) = kv_up_bf(b, 0, s, h * kv_w + d);
-                    } else {
-                        ref.k(b, h, s, d) = k_pe_bf(b, 0, s, d - shape.qk_nope_dim);
-                    }
-                }
-                for (uint32_t d = 0; d < shape.v_dim; ++d) {
-                    ref.v(b, h, s, d) = kv_up_bf(b, 0, s, h * kv_w + shape.qk_nope_dim + d);
-                }
-            }
-        }
-    }
+    ref.q = q;
+    ref.k = xt::concatenate(xt::xtuple(k_nope, k_pe_b), 3);
+    ref.v = v;
     return ref;
 }
 
