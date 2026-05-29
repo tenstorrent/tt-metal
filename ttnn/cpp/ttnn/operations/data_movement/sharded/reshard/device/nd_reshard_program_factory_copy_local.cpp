@@ -111,17 +111,9 @@ ProgramDescriptor NdReshardCopyLocalShardFactory<local_is_input>::create_descrip
     ncrisc_desc.compile_time_args = std::move(compile_time_args);
 
     // Common runtime args: [input_addr, output_addr, num_shards, shard_id_stride]
-    // arg 0 / arg 1 are the buffer base addresses (binding via Buffer*).
-    brisc_desc.emplace_common_runtime_args(
-        {input.mesh_buffer().get_reference_buffer(),
-         output.mesh_buffer().get_reference_buffer(),
-         num_shards,
-         shard_id_stride});
-    ncrisc_desc.emplace_common_runtime_args(
-        {input.mesh_buffer().get_reference_buffer(),
-         output.mesh_buffer().get_reference_buffer(),
-         num_shards,
-         shard_id_stride});
+    // arg 0 / arg 1 are the buffer base addresses (binding via MeshTensor).
+    brisc_desc.emplace_common_runtime_args({input, output, num_shards, shard_id_stride});
+    ncrisc_desc.emplace_common_runtime_args({input, output, num_shards, shard_id_stride});
 
     // Per-core unique runtime args: [start_shard_id]
     // brisc copies shards [0, num_data_cores*2, num_data_cores*4, num_data_cores*6, ...]
