@@ -6,7 +6,7 @@ from typing import List, Tuple
 
 import torch
 from fuser.block_data import BlockData
-from fuser.compute_node import ComputeNode
+from fuser.fpu_node import FpuNode
 from fuser.fused_loop import FusedLoop, LoopTileByTile
 from fuser.fused_operation import FusedOperation
 from fuser.fused_unpacker import Unpacker
@@ -35,7 +35,7 @@ class UnpackerAB(Unpacker):
         tensor_b: torch.Tensor,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         t_matrix = get_golden_generator(TransposeGolden)
         if compute_unit.broadcast_type != BroadcastType.None_:
@@ -83,7 +83,7 @@ class UnpackerAB(Unpacker):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         num_faces = compute_unit.src_a.tile_shape.total_num_faces()
@@ -106,7 +106,7 @@ class UnpackerAB(Unpacker):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         num_faces = compute_unit.src_a.tile_shape.total_num_faces()
@@ -129,7 +129,7 @@ class UnpackerAB(Unpacker):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
@@ -158,7 +158,7 @@ class UnpackerAB(Unpacker):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         buffer_a = compute_unit.src_a.cpp_name
@@ -170,7 +170,7 @@ class UnpackerAB(Unpacker):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         shape_var = f"tensor_shape_stage_{operation.stage_id}"

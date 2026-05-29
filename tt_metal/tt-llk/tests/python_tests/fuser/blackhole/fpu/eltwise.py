@@ -6,9 +6,9 @@ from typing import List, Tuple
 
 import torch
 from fuser.block_data import BlockData
+from fuser.fpu_node import FpuNode
 from fuser.fused_fpu import Fpu
 from fuser.fused_loop import FusedLoop, LoopTileByTile
-from fuser.fused_math import ComputeNode
 from fuser.fused_operation import FusedOperation
 from fuser.fuser_config import GlobalConfig
 from helpers.golden_generators import EltwiseBinaryGolden, get_golden_generator
@@ -38,7 +38,7 @@ class EltwiseFpu(Fpu):
         tensor_dst: torch.Tensor,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         output_format = config.sentinel.golden_math_format
         math_fidelity = compute_unit.math_fidelity
@@ -65,7 +65,7 @@ class EltwiseFpu(Fpu):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         stage = operation.stage_id
@@ -89,7 +89,7 @@ class EltwiseFpu(Fpu):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         dest_sync = operation.dest_sync.cpp_enum_value
@@ -115,7 +115,7 @@ class EltwiseFpu(Fpu):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         return "_llk_math_eltwise_binary_uninit_();\n"

@@ -6,8 +6,8 @@ from typing import List, Tuple
 
 import torch
 from fuser.block_data import BlockData
+from fuser.fpu_node import FpuNode
 from fuser.fused_loop import FusedLoop, LoopBlockRow
-from fuser.fused_math import ComputeNode
 from fuser.fused_operation import FusedOperation
 from fuser.fused_unpacker import Unpacker
 from fuser.fuser_config import GlobalConfig
@@ -22,7 +22,7 @@ class ReduceBlockMaxUnpacker(Unpacker):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: "ComputeNode",
+        compute_unit: "FpuNode",
         block: "BlockData",
     ) -> str:
         ct_dim = block.block_tiles_x
@@ -33,7 +33,7 @@ class ReduceBlockMaxUnpacker(Unpacker):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: "ComputeNode",
+        compute_unit: "FpuNode",
         block: "BlockData",
     ) -> str:
         buffer_a = compute_unit.src_a.cpp_name
@@ -44,7 +44,7 @@ class ReduceBlockMaxUnpacker(Unpacker):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: "ComputeNode",
+        compute_unit: "FpuNode",
         block: "BlockData",
     ) -> str:
         face_r_dim = compute_unit.src_a.tile_shape.face_r_dim
@@ -54,7 +54,7 @@ class ReduceBlockMaxUnpacker(Unpacker):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: "ComputeNode",
+        compute_unit: "FpuNode",
         block: "BlockData",
     ) -> str:
         ct_dim = block.block_tiles_x
@@ -67,7 +67,7 @@ class ReduceBlockMaxUnpacker(Unpacker):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: "ComputeNode",
+        compute_unit: "FpuNode",
         block: "BlockData",
     ) -> str:
         ct_dim = block.block_tiles_x
@@ -85,6 +85,6 @@ class ReduceBlockMaxUnpacker(Unpacker):
         tensor_b: torch.Tensor,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode = None,
+        compute_unit: FpuNode = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         return tensor_a, tensor_b

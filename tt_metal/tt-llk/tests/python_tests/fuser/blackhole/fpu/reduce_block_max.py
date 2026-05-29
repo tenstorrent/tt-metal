@@ -6,7 +6,7 @@ from typing import List, Tuple
 
 import torch
 from fuser.block_data import BlockData
-from fuser.compute_node import ComputeNode
+from fuser.fpu_node import FpuNode
 from fuser.fused_fpu import Fpu
 from fuser.fused_loop import FusedLoop, LoopTileByTile
 from fuser.fused_operation import FusedOperation
@@ -25,7 +25,7 @@ class ReduceBlockMaxFpu(Fpu):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         ct_dim = block.block_tiles_x
@@ -36,7 +36,7 @@ class ReduceBlockMaxFpu(Fpu):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         ct_dim = block.block_tiles_x
@@ -54,7 +54,7 @@ class ReduceBlockMaxFpu(Fpu):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         return "_llk_math_reduce_block_max_row_uninit_();\n"
@@ -66,7 +66,7 @@ class ReduceBlockMaxFpu(Fpu):
         tensor_dst: torch.Tensor,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         output_format = config.sentinel.golden_math_format
 

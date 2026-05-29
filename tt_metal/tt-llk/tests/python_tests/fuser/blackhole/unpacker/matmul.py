@@ -6,7 +6,7 @@ from typing import List, Tuple
 
 import torch
 from fuser.block_data import BlockData
-from fuser.compute_node import ComputeNode
+from fuser.fpu_node import FpuNode
 from fuser.fused_loop import FusedLoop, LoopBlock
 from fuser.fused_operation import FusedOperation
 from fuser.fused_unpacker import Unpacker
@@ -29,7 +29,7 @@ class MatmulUnpacker(Unpacker):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         num_cols = compute_unit.src_a.tile_shape.total_col_dim()
@@ -42,7 +42,7 @@ class MatmulUnpacker(Unpacker):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         num_cols = compute_unit.src_a.tile_shape.total_col_dim()
@@ -57,7 +57,7 @@ class MatmulUnpacker(Unpacker):
         tensor_b: torch.Tensor,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         t_matrix = get_golden_generator(TransposeGolden)
 
@@ -85,7 +85,7 @@ class MatmulUnpacker(Unpacker):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         face_r_dim = compute_unit.src_a.tile_shape.face_r_dim
@@ -101,7 +101,7 @@ class MatmulUnpacker(Unpacker):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         rt_dim = block.block_tiles_y
@@ -139,7 +139,7 @@ class MatmulUnpacker(Unpacker):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         face_r_dim_a = compute_unit.src_a.tile_shape.face_r_dim

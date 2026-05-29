@@ -16,10 +16,11 @@ construction. The dicts are:
 
 from typing import Annotated, ClassVar, List, Literal, Optional, Tuple
 
-from fuser.compute_node import ComputeNode
+from fuser.fpu_node import FpuNode
 from fuser.fused_math import ComputePipeline
 from fuser.fused_operation import FusedOperation
 from fuser.pack_node import PackNode
+from fuser.sfpu_node import SfpuNode
 from helpers.llk_params import (
     AccToDest,
     ApproximationMode,
@@ -80,7 +81,7 @@ class UnarySfpuMathSchema(BaseModel):
             raise ValueError(f"{v.name} is not a supported unary SFPU operation")
         return v
 
-    def to_compute_node(self, operands):
+    def to_node(self, operands):
         sfpu = type(self)._sfpu_cls(
             self.operation,
             self.approximation_mode,
@@ -88,7 +89,7 @@ class UnarySfpuMathSchema(BaseModel):
             self.dst_dest_tile_index,
             self.fill_const_value,
         )
-        return ComputeNode(unpacker=None, fpu=None, sfpu=sfpu)
+        return SfpuNode(sfpu=sfpu)
 
     def get_output_dimensions(self, operands) -> Optional[Tuple[int, int]]:
         return None
@@ -128,7 +129,7 @@ class BinarySfpuMathSchema(BaseModel):
             raise ValueError(f"{v.name} is not a supported binary SFPU operation")
         return v
 
-    def to_compute_node(self, operands):
+    def to_node(self, operands):
         sfpu = type(self)._sfpu_cls(
             self.operation,
             self.approximation_mode,
@@ -137,7 +138,7 @@ class BinarySfpuMathSchema(BaseModel):
             self.src2_dest_tile_index,
             self.dst_dest_tile_index,
         )
-        return ComputeNode(unpacker=None, fpu=None, sfpu=sfpu)
+        return SfpuNode(sfpu=sfpu)
 
     def get_output_dimensions(self, operands) -> Optional[Tuple[int, int]]:
         return None
@@ -198,7 +199,7 @@ class FpuMathSchemaBase(BaseModel):
                 pass
         return v
 
-    def to_compute_node(self, operands):
+    def to_node(self, operands):
         src_a = operands.get(self.src_a)
         src_b = operands.get(self.src_b)
 
@@ -240,7 +241,7 @@ class FpuMathSchemaBase(BaseModel):
             unpacker_factory, _ = type(self)._unpacker_map[self.unpacker]
             kwargs["unpacker"] = unpacker_factory(self)
 
-        return ComputeNode(fpu=fpu, src_a=src_a, src_b=src_b, sfpu=None, **kwargs)
+        return FpuNode(fpu=fpu, src_a=src_a, src_b=src_b, **kwargs)
 
     def get_output_dimensions(self, operands) -> Optional[Tuple[int, int]]:
         fn = type(self)._output_dims.get(self.operation)
@@ -334,13 +335,13 @@ class OperationSchemaBase(BaseModel):
                 )
             )
 
-        math_ops = [m.to_compute_node(operands) for m in self.math]
+        math_ops = [m.to_node(operands) for m in self.math]
 
         max_out_dims = self._calculate_max_output_dimensions(operands)
 
         reduce_dim = None
         for node in math_ops:
-            if node.fpu is not None and hasattr(node.fpu, "reduce_dim"):
+            if isinstance(node, FpuNode) and hasattr(node.fpu, "reduce_dim"):
                 reduce_dim = node.fpu.reduce_dim
                 break
 

@@ -9,7 +9,7 @@ import torch
 if TYPE_CHECKING:
     from .fused_operation import FusedOperation
     from .fuser_config import GlobalConfig
-    from .compute_node import ComputeNode
+    from .fpu_node import FpuNode
     from .block_data import BlockData
 
 
@@ -48,7 +48,7 @@ class Fpu:
         self,
         operation: "FusedOperation",
         config: "GlobalConfig",
-        compute_unit: "ComputeNode",
+        compute_unit: "FpuNode",
         block: "BlockData",
     ) -> str:
         """Return C++ code that initializes the math engine before the tile loop.
@@ -64,7 +64,7 @@ class Fpu:
         self,
         operation: "FusedOperation",
         config: "GlobalConfig",
-        compute_unit: "ComputeNode",
+        compute_unit: "FpuNode",
         block: "BlockData",
     ) -> str:
         """Return C++ code that performs the math operation on a single tile.
@@ -79,7 +79,7 @@ class Fpu:
         self,
         operation: "FusedOperation",
         config: "GlobalConfig",
-        compute_unit: "ComputeNode",
+        compute_unit: "FpuNode",
         block: "BlockData",
     ) -> str:
         """Return C++ code that tears down the math engine after the tile loop.
@@ -98,7 +98,7 @@ class Fpu:
         tensor_dst: torch.Tensor,
         operation: "FusedOperation",
         config: "GlobalConfig",
-        compute_unit: "ComputeNode",
+        compute_unit: "FpuNode",
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Compute the golden math result in Python.
 
@@ -106,7 +106,7 @@ class Fpu:
         output after the math operation. tensor_a and tensor_b are passed through
         (possibly modified) for downstream stages.
 
-        Called by ComputeNode.golden() after the unpack golden. The input tensors
+        Called by FpuNode.golden() after the unpack golden. The input tensors
         are the outputs of the unpacker's golden().
         """
         return (tensor_a, tensor_b, tensor_dst)

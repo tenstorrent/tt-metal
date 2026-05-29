@@ -6,10 +6,10 @@ from typing import List
 
 import torch
 from fuser.block_data import BlockData
-from fuser.fused_math import ComputeNode
 from fuser.fused_operation import FusedOperation
 from fuser.fused_sfpu import Sfpu
 from fuser.fuser_config import GlobalConfig
+from fuser.sfpu_node import SfpuNode
 from helpers.golden_generators import (
     BinarySFPUGolden,
     get_golden_generator,
@@ -56,7 +56,7 @@ class BinarySfpu(Sfpu):
         tensor: torch.Tensor,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: SfpuNode,
         batch_dims: tuple,
         batch_tile_cnt: int,
     ) -> torch.Tensor:
@@ -86,7 +86,7 @@ class BinarySfpu(Sfpu):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: SfpuNode,
         block: BlockData,
     ) -> str:
         stage = operation.stage_id
@@ -104,7 +104,7 @@ class BinarySfpu(Sfpu):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: SfpuNode,
         block: BlockData,
     ) -> str:
         dest_sync = operation.dest_sync.cpp_enum_value

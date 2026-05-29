@@ -21,7 +21,7 @@ from .fused_packer import Packer
 class PackNode:
     """Wraps a packer with its output operand and pack settings.
 
-    Analogous to ComputeNode on the math side. Each PackNode represents
+    Analogous to FpuNode on the math side. Each PackNode represents
     one pack destination within an operation. Multiple PackNodes allow a
     single math result to be packed to different output buffers with
     independent relu or L1 accumulation configs.

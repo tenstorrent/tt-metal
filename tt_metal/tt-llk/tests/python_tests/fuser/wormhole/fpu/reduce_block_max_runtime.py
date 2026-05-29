@@ -5,8 +5,8 @@
 from typing import List
 
 from fuser.block_data import BlockData
+from fuser.fpu_node import FpuNode
 from fuser.fused_loop import FusedLoop, LoopBlockRow
-from fuser.fused_math import ComputeNode
 from fuser.fused_operation import FusedOperation
 from fuser.fuser_config import GlobalConfig
 
@@ -26,7 +26,7 @@ class ReduceBlockMaxRuntimeFpu(ReduceBlockMaxFpu):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         ct_dim = block.block_tiles_x
@@ -37,7 +37,7 @@ class ReduceBlockMaxRuntimeFpu(ReduceBlockMaxFpu):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         dest_acc = config.dest_acc.cpp_enum_value
@@ -47,7 +47,7 @@ class ReduceBlockMaxRuntimeFpu(ReduceBlockMaxFpu):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         dest_acc = config.dest_acc.cpp_enum_value

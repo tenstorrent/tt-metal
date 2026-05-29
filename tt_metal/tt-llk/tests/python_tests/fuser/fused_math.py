@@ -13,18 +13,21 @@ if TYPE_CHECKING:
 from helpers.llk_params import GoldenType
 
 from .block_data import BlockData
-from .compute_node import ComputeNode
+from .fpu_node import FpuNode
 from .fused_fpu import Fpu
 from .fused_sfpu import Sfpu
 from .fused_unpacker import Unpacker
 from .pack_node import PackNode
+from .sfpu_node import SfpuNode
 
 
 class ComputePipeline:
-    operations: List[ComputeNode]
+    operations: List[Union[FpuNode, SfpuNode]]
     pack_nodes: List[PackNode]
 
-    def __init__(self, operations: List[ComputeNode], pack_nodes: List[PackNode]):
+    def __init__(
+        self, operations: List[Union[FpuNode, SfpuNode]], pack_nodes: List[PackNode]
+    ):
         self.operations = operations
         self.pack_nodes = pack_nodes
 
@@ -32,7 +35,7 @@ class ComputePipeline:
         unpackers: List["Unpacker"] = []
 
         for operation in self.operations:
-            if operation.unpacker is not None:
+            if isinstance(operation, FpuNode) and operation.unpacker is not None:
                 unpackers.append(operation.unpacker)
 
         return unpackers
@@ -41,26 +44,22 @@ class ComputePipeline:
         math_units = []
 
         for operation in self.operations:
-            if operation.fpu is not None:
+            if isinstance(operation, FpuNode):
                 math_units.append(operation.fpu)
-
-            if operation.sfpu is not None:
+            elif isinstance(operation, SfpuNode):
                 math_units.append(operation.sfpu)
 
         return math_units
 
-    def _all_same_operand_formats(self, ops: List[ComputeNode]) -> bool:
+    def _all_same_operand_formats(self, ops: List[FpuNode]) -> bool:
         if len(ops) <= 1:
             return True
         first = ops[0]
         for cu in ops[1:]:
-            if (cu.src_a is not None) != (first.src_a is not None):
+            if cu.src_a.data_format != first.src_a.data_format:
                 return False
             if (cu.src_b is not None) != (first.src_b is not None):
                 return False
-            if cu.src_a is not None and first.src_a is not None:
-                if cu.src_a.data_format != first.src_a.data_format:
-                    return False
             if cu.src_b is not None and first.src_b is not None:
                 if cu.src_b.data_format != first.src_b.data_format:
                     return False
@@ -200,7 +199,11 @@ class ComputePipeline:
         return ""
 
     def unpack_body(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
-        unpack_ops = [cu for cu in self.operations if cu.unpacker is not None]
+        unpack_ops = [
+            cu
+            for cu in self.operations
+            if isinstance(cu, FpuNode) and cu.unpacker is not None
+        ]
         hoist = len(unpack_ops) == 1
         hoist_reconfig = hoist or self._all_same_operand_formats(unpack_ops)
 
@@ -224,6 +227,8 @@ class ComputePipeline:
         def batch_body(block: BlockData):
             body = ""
             for cu in self.operations:
+                if not isinstance(cu, FpuNode):
+                    continue
                 if not hoist_reconfig and cu.unpacker is not None:
                     body += cu.unpack_reconfig(operation, config)
                 if not hoist:
@@ -277,7 +282,7 @@ class ComputePipeline:
 
     def math_body(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
         code = self._math_constants(operation, config)
-        fpu_ops = [cu for cu in self.operations if cu.fpu is not None]
+        fpu_ops = [cu for cu in self.operations if isinstance(cu, FpuNode)]
         hoist = len(fpu_ops) == 1
         hoist_reconfig = hoist or self._all_same_operand_formats(fpu_ops)
 
@@ -298,12 +303,17 @@ class ComputePipeline:
         def batch_body(block: BlockData):
             body = self._math_wait_for_dest(operation, config)
             for cu in self.operations:
-                if not hoist_reconfig and cu.fpu is not None:
-                    body += cu.math_reconfig(operation, config)
-                if not hoist or cu.fpu is None:
+                if isinstance(cu, FpuNode):
+                    if not hoist_reconfig:
+                        body += cu.math_reconfig(operation, config)
+                    if not hoist:
+                        body += cu.math_init(operation, config, block)
+                    body += cu.math_run(operation, config, block)
+                    if not hoist:
+                        body += cu.math_uninit(operation, config, block)
+                elif isinstance(cu, SfpuNode):
                     body += cu.math_init(operation, config, block)
-                body += cu.math_run(operation, config, block)
-                if not hoist or cu.fpu is None:
+                    body += cu.math_run(operation, config, block)
                     body += cu.math_uninit(operation, config, block)
             body += self._math_dest_section_done(operation, config)
             return body
@@ -426,7 +436,9 @@ class ComputePipeline:
         config: "GlobalConfig",
         golden_type: GoldenType,
     ) -> torch.Tensor:
-        first_fpu = next((op for op in self.operations if op.src_a is not None), None)
+        first_fpu = next(
+            (op for op in self.operations if isinstance(op, FpuNode)), None
+        )
         if first_fpu is not None:
             tensor_a = torch.zeros(first_fpu.src_a.dimensions)
             tensor_b = torch.zeros(first_fpu.src_b.dimensions)
@@ -436,21 +448,23 @@ class ComputePipeline:
         tensor_dst = torch.zeros(operation.max_output_dimensions)
         for op in self.operations:
             config.sentinel.configure_golden(config, operation, op)
-            if op.src_a is not None:
+            if isinstance(op, FpuNode):
                 input_tensor_a = (
                     op.src_a.raw_data
                     if golden_type == GoldenType.L1_GOLDEN
                     else op.src_a.master_golden
                 )
-            else:
-                input_tensor_a = None
-            if op.src_b is not None:
                 input_tensor_b = (
-                    op.src_b.raw_data
-                    if golden_type == GoldenType.L1_GOLDEN
-                    else op.src_b.master_golden
+                    (
+                        op.src_b.raw_data
+                        if golden_type == GoldenType.L1_GOLDEN
+                        else op.src_b.master_golden
+                    )
+                    if op.src_b is not None
+                    else None
                 )
             else:
+                input_tensor_a = None
                 input_tensor_b = None
             tensor_a, tensor_b, tensor_dst = op.golden(
                 input_tensor_a,
