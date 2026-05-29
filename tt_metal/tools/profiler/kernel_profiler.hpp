@@ -751,7 +751,7 @@ __attribute__((noinline)) void trace_only_init() {
 
 #define DeviceTraceOnlyProfilerInit()
 
-#define DeviceZoneSetCounter(counter) (void(counter))
+#define DeviceZoneSetCounter(counter) (void(sizeof(counter)))
 
 #define DeviceTimestampedData(data_id, data) (void(sizeof(data_id) + sizeof(data)))
 
