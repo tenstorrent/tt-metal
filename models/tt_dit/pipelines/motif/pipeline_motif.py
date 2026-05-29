@@ -223,7 +223,8 @@ class MotifPipeline(PipelineAPIMixin):
         linear_quadratic_emulating_steps: int = 100,
         negative_strategy_switch_time: float = 0.85,
         traced: bool = False,
-        vae_traced: bool | None = None,
+        # currently defaults to off due to ttnn.synchronize_device inside vae_all_gather
+        vae_traced: bool | None = False,
         encoder_traced: bool | None = None,
         on_event: PipelineEventCallback | None = None,
     ) -> list[Image.Image]:

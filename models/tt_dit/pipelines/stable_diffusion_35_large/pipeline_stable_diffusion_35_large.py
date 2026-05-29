@@ -243,7 +243,8 @@ class StableDiffusion3Pipeline(PipelineAPIMixin):
         num_images_per_prompt: int = 1,
         guidance_scale: float = 3.5,
         traced: bool = False,
-        vae_traced: bool | None = None,
+        # currently defaults to off due to ttnn.synchronize_device inside vae_all_gather
+        vae_traced: bool | None = False,
         encoder_traced: bool | None = None,
         clip_skip: int | None = None,
         on_event: PipelineEventCallback | None = None,
