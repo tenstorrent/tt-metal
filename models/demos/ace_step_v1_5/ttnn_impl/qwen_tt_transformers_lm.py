@@ -64,9 +64,12 @@ consumers (sampling, repetition-penalty, CFG combine) keep working unchanged.
 
 **Memory (P1)**
 
-- ``ACE_STEP_LM_PREFILL_L1=1``: prefill activations in L1 (default **off** for PCC; Tracy harness sets ``1``).
+- ``ACE_STEP_LM_PREFILL_L1=1``: prefill activations in L1 (default **off**; Tracy sets ``1`` — can L1-clash on P150).
 - ``ACE_STEP_LM_UNIFIED_DECODE_SHARD=1`` (default): decode matmul outputs share
   ``get_residual_mem_config(DECODE)`` (see :mod:`qwen_decode_shard`).
+- ``ACE_STEP_LM_DECODE_QK_NORM_SHARDED=1`` (default): sharded Q/K head norms (see :mod:`qwen_decode_qk_norm`).
+- ``ACE_STEP_LM_SDPA_GATHER_UNIFIED=1`` (default): post-SDPA gather WIDTH = residual grid (see :mod:`qwen_decode_sdpa_layout`).
+- ``ACE_STEP_LM_NARROW_AUDIO_VOCAB=1`` (default): narrow ``LMHead`` column band in codes phase (see :mod:`ace_step_lm_head_narrow`).
 
 **Caveats**
 
@@ -101,13 +104,19 @@ from typing import Any, Optional
 import torch
 
 import ttnn
+from models.demos.ace_step_v1_5.ttnn_impl.ace_step_lm_head_narrow import ace_step_patch_lm_head_narrow_forward
 from models.demos.ace_step_v1_5.ttnn_impl.lm_logits_debug import ace_step_debug_lm_logits_enabled
 from models.demos.ace_step_v1_5.ttnn_impl.math_perf_env import (
     ace_step_five_hz_lm_bfloat8_weights_enabled,
     ace_step_five_hz_lm_optimizations,
+    ace_step_lm_decode_qk_norm_sharded_enabled,
+    ace_step_lm_narrow_audio_vocab_enabled,
     ace_step_lm_prefill_l1_enabled,
+    ace_step_lm_sdpa_concat_width_enabled,
     ace_step_lm_unified_decode_shard_enabled,
 )
+from models.demos.ace_step_v1_5.ttnn_impl.qwen_decode_qk_norm import ace_step_apply_qwen_decode_qk_norm
+from models.demos.ace_step_v1_5.ttnn_impl.qwen_decode_sdpa_layout import ace_step_patch_model_args_sdpa_gather_unified
 from models.demos.ace_step_v1_5.ttnn_impl.qwen_decode_shard import ace_step_patch_model_args_decode_unified_shard
 from models.demos.ace_step_v1_5.ttnn_impl.qwen_prefill_l1 import (
     ace_step_apply_qwen_prefill_l1,
@@ -242,6 +251,14 @@ class QwenModelTtTransformers:
             ace_step_apply_qwen_prefill_l1(self.tt_model, self.model_args)
         if ace_step_lm_unified_decode_shard_enabled():
             ace_step_patch_model_args_decode_unified_shard(self.model_args)
+        if ace_step_lm_sdpa_concat_width_enabled():
+            ace_step_patch_model_args_sdpa_gather_unified(self.model_args)
+        if ace_step_lm_decode_qk_norm_sharded_enabled():
+            ace_step_apply_qwen_decode_qk_norm(self.tt_model, self.model_args)
+        if ace_step_lm_narrow_audio_vocab_enabled() and hasattr(self.tt_model, "lm_head"):
+            ace_step_patch_lm_head_narrow_forward(self.tt_model.lm_head)
+
+        self._narrow_vocab_indices: torch.Tensor | None = None
 
         # HF-compatible config view for the LM bridge (`AceStepFiveHzExperimentalTtnnCausalLM`
         # reads ``self.config.vocab_size``).
@@ -320,6 +337,14 @@ class QwenModelTtTransformers:
                 except Exception:
                     pass
         self._prefill_traces.clear()
+
+    def set_narrow_audio_vocab_indices(self, indices: torch.Tensor | None) -> None:
+        """Optional audio-code column band for ``LMHead`` (``ACE_STEP_LM_NARROW_AUDIO_VOCAB=1``)."""
+        self._narrow_vocab_indices = indices
+        lm_head = getattr(self.tt_model, "lm_head", None)
+        if lm_head is None:
+            return
+        lm_head._ace_narrow_vocab_indices = indices  # type: ignore[attr-defined]
 
     # ------------------------------------------------------------------
     # Forward entry point

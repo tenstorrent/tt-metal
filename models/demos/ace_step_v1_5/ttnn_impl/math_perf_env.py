@@ -1325,7 +1325,8 @@ def ace_step_five_hz_lm_bfloat8_weights_enabled() -> bool:
 def ace_step_lm_prefill_l1_enabled() -> bool:
     """Keep 5 Hz LM prefill activations in L1 (``ace_step_apply_qwen_prefill_l1``).
 
-    Default **off** — opt in via ``ACE_STEP_LM_PREFILL_L1=1`` (Tracy harness sets this).
+    Default **off** — ``ACE_STEP_LM_PREFILL_L1=1`` can L1 circular-buffer clash on P150/BH
+    during prefill matmul (see ``qwen_prefill_l1``). Tracy harness sets ``1`` explicitly.
     """
     return os.environ.get("ACE_STEP_LM_PREFILL_L1", "0").lower() in ("1", "true", "yes", "on")
 
@@ -1333,6 +1334,28 @@ def ace_step_lm_prefill_l1_enabled() -> bool:
 def ace_step_lm_unified_decode_shard_enabled() -> bool:
     """Unify decode WIDTH_SHARDED specs to residual grid (fewer ``ReshardDeviceOperation``). Default on."""
     return os.environ.get("ACE_STEP_LM_UNIFIED_DECODE_SHARD", "1").lower() not in ("0", "false", "no", "off")
+
+
+def ace_step_lm_decode_qk_norm_sharded_enabled() -> bool:
+    """Sharded Q/K head RMSNorm on decode (no L1 interleaved ping-pong). Default on."""
+    return os.environ.get("ACE_STEP_LM_DECODE_QK_NORM_SHARDED", "1").lower() not in ("0", "false", "no", "off")
+
+
+def ace_step_lm_sdpa_gather_unified_enabled() -> bool:
+    """Align post-SDPA ``gather_users`` WIDTH with residual grid. Default on."""
+    return os.environ.get("ACE_STEP_LM_SDPA_GATHER_UNIFIED", "1").lower() not in ("0", "false", "no", "off")
+
+
+def ace_step_lm_sdpa_concat_width_enabled() -> bool:
+    """Deprecated alias for :func:`ace_step_lm_sdpa_gather_unified_enabled`."""
+    if os.environ.get("ACE_STEP_LM_SDPA_CONCAT_WIDTH") is not None:
+        return os.environ.get("ACE_STEP_LM_SDPA_CONCAT_WIDTH", "1").lower() not in ("0", "false", "no", "off")
+    return ace_step_lm_sdpa_gather_unified_enabled()
+
+
+def ace_step_lm_narrow_audio_vocab_enabled() -> bool:
+    """Narrow ``LMHead`` matmul band during audio-code generation. Default on."""
+    return os.environ.get("ACE_STEP_LM_NARROW_AUDIO_VOCAB", "1").lower() not in ("0", "false", "no", "off")
 
 
 def ace_step_five_hz_lm_optimizations(model_args: Any):

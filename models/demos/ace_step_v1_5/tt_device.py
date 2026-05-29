@@ -119,13 +119,11 @@ def ace_step_resolve_vae_tiling(
 
 
 def ace_step_mesh_perf_log_default(*, mesh_sku: str | None) -> bool:
-    """Enable wall-clock perf logging by default on multi-device mesh runs."""
-    env = os.environ.get("ACE_STEP_DEMO_PERF_LOG", os.environ.get("ACE_STEP_PERF_LOG", "")).lower()
-    if env in ("0", "false", "no", "off"):
-        return False
-    if env in ("1", "true", "yes", "on"):
-        return True
-    return mesh_sku is not None and ace_step_needs_split_device(mesh_sku)
+    """Wall-clock perf logging default (same as :func:`ace_step_perf_logging_enabled`)."""
+    del mesh_sku  # kept for call-site compatibility
+    from models.demos.ace_step_v1_5.ace_step_perf_log import ace_step_perf_logging_enabled
+
+    return ace_step_perf_logging_enabled()
 
 
 def ace_step_mesh_use_adg(*, mesh_sku: str | None, variant: str, cli_use_adg: bool | None) -> bool:
