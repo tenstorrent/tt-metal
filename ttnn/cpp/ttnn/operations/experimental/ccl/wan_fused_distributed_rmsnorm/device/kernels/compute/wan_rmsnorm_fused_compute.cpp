@@ -259,28 +259,32 @@ void kernel_main() {
                             rsqrt_tile_init<use_legacy_rsqrt>();
                             rsqrt_tile<use_legacy_rsqrt>(dst_idx);
                         };
-                        if constexpr (per_head_norm != 0) {
-                            compute_kernel_lib::reduce<PoolType::AVG, ReduceDim::REDUCE_ROW>(
-                                stats_gathered_cb,
-                                reduce_scalar_avg_cb,
-                                reduce_result_cb,
-                                compute_kernel_lib::ReduceInputBlockShape::single(),
-                                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-                                compute_kernel_lib::NoAccumulation{},
-                                eps_rsqrt);
-                        } else {
-                            compute_kernel_lib::reduce<PoolType::AVG, ReduceDim::REDUCE_ROW>(
-                                stats_gathered_cb,
-                                reduce_scalar_avg_cb,
-                                reduce_result_cb,
-                                compute_kernel_lib::ReduceInputBlockShape::row(stats_tiles_cols),
-                                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-                                compute_kernel_lib::NoAccumulation{},
-                                eps_rsqrt);
-                        }
+                        {
+                            DeviceZoneScopedN("P_NRED");
+                            if constexpr (per_head_norm != 0) {
+                                compute_kernel_lib::reduce<PoolType::AVG, ReduceDim::REDUCE_ROW>(
+                                    stats_gathered_cb,
+                                    reduce_scalar_avg_cb,
+                                    reduce_result_cb,
+                                    compute_kernel_lib::ReduceInputBlockShape::single(),
+                                    compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                                    compute_kernel_lib::NoAccumulation{},
+                                    eps_rsqrt);
+                            } else {
+                                compute_kernel_lib::reduce<PoolType::AVG, ReduceDim::REDUCE_ROW>(
+                                    stats_gathered_cb,
+                                    reduce_scalar_avg_cb,
+                                    reduce_result_cb,
+                                    compute_kernel_lib::ReduceInputBlockShape::row(stats_tiles_cols),
+                                    compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                                    compute_kernel_lib::NoAccumulation{},
+                                    eps_rsqrt);
+                            }
 
-                        cb_wait_front(reduce_result_cb, 1);
+                            cb_wait_front(reduce_result_cb, 1);
+                        }  // P_NRED
 
+                        DeviceZoneScopedN("P_NMUL");
                         // ----- Sub-phase 1: x * (1/rms) → mul_rms_result_cb -----
                         reconfig_data_format(input_cb, reduce_result_cb);
                         pack_reconfig_data_format(mul_rms_result_cb);

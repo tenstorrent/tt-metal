@@ -548,3 +548,63 @@ half-sync math/pack overlap + minimal-reconfig single-pass loops beat both
 fusion and bigger blocks. The remaining large bucket (P_NORM's reduce→rsqrt
 serialization) and the no-RoPE DRAM-utilization gap are the open levers; the
 intra-pass micro-structure is tapped out.
+
+## P_NORM split (2026-05-29) — the dominant bucket is the bcast_cols mul, not the reduce
+
+Split `P_NORM` into two sub-zones to see whether the dominant cost is the
+reduce→eps→rsqrt chain or the ×(1/rms) multiply:
+  - `P_NRED` — `reduce<AVG,REDUCE_ROW>` + fused eps+rsqrt + `cb_wait_front(reduce_result_cb)`
+  - `P_NMUL` — sub-phase-1 `mul_tiles_bcast_cols(input, 1/rms)` over all 40 col-tiles
+
+Measured (N12400, TP=4 LINE, RoPE, non-traced, 64 workers, per-core totals
+averaged across cores):
+
+| sub-zone | us | what it is |
+|---|---|---|
+| P_NRED | ~75 | reduce + eps + rsqrt + the serial reduce_result wait |
+| P_NMUL | ~128 | the ×(1/rms) **COL-broadcast** multiply (40 col-tiles) |
+
+**Key finding: P_NMUL (~128us) is the larger half of P_NORM, and it is
+~2.8× the structurally-identical `P_WEIGHT` (~46us)** — which does the same
+40-col multiply but with **ROW** broadcast (`mul_tiles_bcast_rows`). The
+prior log framed P_NORM as "reduce→rsqrt serialization"; the split shows the
+multiply dominates, and the multiply is expensive *only because it is a COL
+broadcast*.
+
+**Root cause (arch-confirmed, BH `tt_llk_blackhole/llk_lib/llk_math_eltwise_binary.h`):**
+`_llk_math_eltwise_binary_standard_` cannot fold the 4 tile-faces into one
+MOP run for `BroadcastType::COL` — it issues one MOP run per face-row plus a
+serializing `SETRWC(CLR_B)` each (4 dispatches/tile). ROW broadcast and full
+`mul_tiles` fold all 4 faces into a single MOP run (1 dispatch/tile). So
+bcast_cols does ~4× the MOP dispatches of the equivalent bcast_rows/mul_tiles
+— the measured ~2.8× wall cost. This is the one concrete, fidelity-neutral
+compute lever the earlier "intra-pass micro-structure is tapped out" claim
+missed: it predates this P_NRED/P_NMUL split.
+
+### Why REDUCE_ROW forces COL broadcast
+`reduce<REDUCE_ROW>` reduces the feature/W dim → produces a **column vector**
+(per-token 1/rms down col 0 of the tile). Applying it to all features needs
+COL broadcast. This is the canonical in-tree pattern (rmsnorm/layernorm all
+use `bcast_cols`), so the cost is structural to the layout, not a bug.
+
+### DEAD END (lever C): naive per-row `unary_bcast<COL>` splat + `mul_tiles`
+The canonical *fast* alternative (layernorm_large_tensor.cpp:242-320) splats
+the 1/rms column to a full tile once via `unary_bcast<COL>`, then uses cheap
+full `mul_tiles` (1 MOP/tile) across all cols. Converting MOP dispatches
+40×4=160 → 1×4(splat)+40×1=44 should be a ~3.6× reduction in multiply work.
+Tried it (per-row): **regressed** — P_NMUL 128→141us, P_NRED 75→84us,
+RMS_POST 505→527us. Correctness preserved (PCC ≥ 99.999%), but slower.
+
+**Root cause of the regression (now understood):** two fixed costs the naive
+per-row version pays that the layernorm reference hides:
+  1. `unary_bcast_init<COL>` is a **full hw_configure** (heavy), paid once
+     per row. The reference pays it per row too but amortizes it.
+  2. The splat round-trip (MATH→DST→PACK→L1→UNPACK→DST) is **exposed**: in
+     RMSNorm the 40 muls depend directly on the splatted tile, so the
+     round-trip is on the critical path. The layernorm reference hides this
+     latency behind its mandatory `x − E[x]` subtraction/copy pass (the
+     `cb_xmm` round-trip at layernorm_large_tensor.cpp:264-312) — a bubble
+     RMSNorm simply does not have (no mean-subtraction).
+
+Reverted to `mul_bcast_cols_init_short` + `mul_tiles_bcast_cols`. The
+P_NRED/P_NMUL diagnostic zones are kept (zero-cost when profiler off).
