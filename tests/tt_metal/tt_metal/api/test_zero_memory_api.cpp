@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// End-to-end smoke test for Noc::write_zeros that exercises both overloads in one
+// End-to-end smoke test for Noc::async_write_zeros that exercises both overloads in one
 // dispatch using a shared DFB:
 //
 //   - Host stamps an L1 status-flag word with the sentinel 0xBAADF00D.
@@ -10,12 +10,12 @@
 //   - Dispatch the program (one producer + one consumer sharing dfb::scratch).
 //       Producer (zero_memory_api_l1_producer.cpp):
 //         tests overload (1) on the DFB — CPU-stamps 0xFF, verifies stamp,
-//         calls noc.write_zeros(dfb, ...), verifies the result is zero, reports
+//         calls noc.async_write_zeros(dfb, ...), verifies the result is zero, reports
 //         pass/fail via the L1 flag word, push_back's the (now zero-filled)
 //         DFB entry.
 //       Consumer (zero_memory_api_dram_consumer.cpp):
 //         wait_front on the DFB (gets the L1-zeroed entry), loops
-//         noc.write_zeros(accessor, page_size, {.page_id = p}, dfb) over
+//         noc.async_write_zeros(accessor, page_size, {.page_id = p}, dfb) over
 //         the DRAM tensor's pages, dram_barrier, pop_front.
 //   - Host reads the L1 flag word; expects kStatusOk (kernel-level verify pass).
 //   - Host reads the DRAM tensor; expects all zeros (overload-2 result).

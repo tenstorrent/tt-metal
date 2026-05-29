@@ -5,16 +5,16 @@
 #pragma once
 
 template <typename DSpecT, typename Scratch>
-inline void Noc::write_zeros(
+inline void Noc::async_write_zeros(
     const ::TensorAccessor<DSpecT>& accessor,
     uint32_t size_bytes,
     const dst_args_t<::TensorAccessor<DSpecT>>& args,
     const Scratch& scratch) const {
     static_assert(
-        DSpecT::is_dram, "noc.write_zeros<TensorAccessor, Scratch> requires a DRAM-backed accessor.");
+        DSpecT::is_dram, "noc.async_write_zeros<TensorAccessor, Scratch> requires a DRAM-backed accessor.");
     static_assert(
         std::is_same_v<Scratch, CircularBuffer> || std::is_same_v<Scratch, DataflowBuffer>,
-        "noc.write_zeros scratch must be a CircularBuffer or DataflowBuffer.");
+        "noc.async_write_zeros scratch must be a CircularBuffer or DataflowBuffer.");
     // Largest single noc_async_write the loop below will issue from scratch.
     // Caller's pre-zeroed prefix must cover at least this many bytes.
     const uint32_t max_chunk =

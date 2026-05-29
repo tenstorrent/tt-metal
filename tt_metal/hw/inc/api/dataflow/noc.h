@@ -682,7 +682,7 @@ public:
      * @tparam Dst Must be CircularBuffer or DataflowBuffer
      */
     template <typename Dst>
-    void write_zeros(const Dst& dst, uint32_t size_bytes, const dst_args_t<Dst>& args = {}) const;
+    void async_write_zeros(const Dst& dst, uint32_t size_bytes, const dst_args_t<Dst>& args = {}) const;
 
     /**
      * @brief Zeroes pages of a DRAM tensor using a caller-pre-zeroed scratch buffer (overload 2).
@@ -703,30 +703,30 @@ public:
      * @tparam Scratch Must be CircularBuffer or DataflowBuffer
      *
      * @code
-     *   noc.write_zeros(scratch, scratch_bytes);
+     *   noc.async_write_zeros(scratch, scratch_bytes);
      *   noc.write_zeros_l1_barrier();
-     *   for (p) noc.write_zeros(addr_gen, page_size, {.page_id = p}, scratch);
+     *   for (p) noc.async_write_zeros(addr_gen, page_size, {.page_id = p}, scratch);
      *   noc.write_zeros_dram_barrier();
      * @endcode
      */
     template <typename DSpecT, typename Scratch>
-    void write_zeros(
+    void async_write_zeros(
         const ::TensorAccessor<DSpecT>& accessor,
         uint32_t size_bytes,
         const dst_args_t<::TensorAccessor<DSpecT>>& args,
         const Scratch& scratch) const;
 
     /**
-     * @brief Barrier for L1 destinations zeroed via write_zeros overload (1).
+     * @brief Barrier for L1 destinations zeroed via async_write_zeros overload (1).
      *
-     * @see write_zeros (overload 1).
+     * @see async_write_zeros (overload 1).
      */
     void write_zeros_l1_barrier() const;
 
     /**
-     * @brief Barrier for DRAM destinations zeroed via write_zeros overload (2).
+     * @brief Barrier for DRAM destinations zeroed via async_write_zeros overload (2).
      *
-     * @see write_zeros (overload 2).
+     * @see async_write_zeros (overload 2).
      */
     void write_zeros_dram_barrier() const;
 

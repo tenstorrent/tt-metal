@@ -10,10 +10,10 @@
 #include "api/dataflow/endpoints.h"
 
 template <typename Dst>
-inline void Noc::write_zeros(const Dst& dst, uint32_t size_bytes, const dst_args_t<Dst>& args) const {
+inline void Noc::async_write_zeros(const Dst& dst, uint32_t size_bytes, const dst_args_t<Dst>& args) const {
     static_assert(
         std::is_same_v<Dst, CircularBuffer> || std::is_same_v<Dst, DataflowBuffer>,
-        "noc.write_zeros local-L1 overload accepts CircularBuffer or DataflowBuffer only. "
+        "noc.async_write_zeros local-L1 overload accepts CircularBuffer or DataflowBuffer only. "
         "Use the TensorAccessor overload for DRAM.");
 
     UnicastEndpoint zeros_ep;

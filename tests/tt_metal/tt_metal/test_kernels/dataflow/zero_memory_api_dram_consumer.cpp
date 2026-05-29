@@ -20,7 +20,7 @@ void kernel_main() {
     Noc noc;
 
     for (uint32_t p = page_start; p < page_end; ++p) {
-        noc.write_zeros(out, page_size, {.page_id = p}, dfb);
+        noc.async_write_zeros(out, page_size, {.page_id = p}, dfb);
     }
     noc.write_zeros_dram_barrier();
 

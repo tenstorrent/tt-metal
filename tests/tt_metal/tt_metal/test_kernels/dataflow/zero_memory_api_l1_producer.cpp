@@ -6,7 +6,7 @@
 //   1. Reserve 1 entry on dfb::scratch.
 //   2. Stamp every byte with 0xFF; verify it landed (catches infra bugs that
 //      would otherwise let a no-op kernel look like a pass).
-//   3. noc.write_zeros(dfb, total_bytes) + write_zeros_l1_barrier().
+//   3. noc.async_write_zeros(dfb, total_bytes) + write_zeros_l1_barrier().
 //   4. Verify every byte is now 0x00.
 //   5. Write pass/fail status to flag_addr, then push_back the (now zero-filled)
 //      DFB entry for the consumer to use as DRAM scratch.
@@ -58,7 +58,7 @@ void kernel_main() {
     }
 
     Noc noc;
-    noc.write_zeros(dfb, total_bytes);
+    noc.async_write_zeros(dfb, total_bytes);
     noc.write_zeros_l1_barrier();
 
     // Verify every byte is now 0.
