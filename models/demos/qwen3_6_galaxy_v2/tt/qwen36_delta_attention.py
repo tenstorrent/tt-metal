@@ -45,7 +45,10 @@ from models.common.lightweightmodule import LightweightModule
 # one, which produces Inf on one Galaxy mesh row at T=4096 (bf16 rounding over
 # the 4096-token decay cumsum violates the g<=0 invariant -> exp overflow).
 # See the module docstring of qwen35_chunk_delta_rule_ops for details.
-from models.demos.qwen3_6_galaxy_v2.tt.qwen35_chunk_delta_rule_ops import chunk_gated_delta_rule_ttnn
+from models.demos.qwen3_6_galaxy_v2.tt.qwen35_chunk_delta_rule_ops import (
+    chunk_gated_delta_rule_ttnn,
+    create_chunk_masks,
+)
 from models.demos.qwen3_6_galaxy_v2.tt.ttnn_delta_rule_ops_fp32 import (
     _fp32_compute_cfg_hifi4,
     recurrent_gated_delta_rule_ttnn_fp32,
@@ -239,6 +242,19 @@ class TtQwen36DeltaAttention(LightweightModule):
         self.conv_kernel = args.linear_conv_kernel  # 4
         self.eps = args.norm_eps
         self.max_batch_size = args.max_batch_size
+
+        # Prefill chunk-rule config. Match qwen35-27b/P150 (gdn_chunk_size=64):
+        # chunk_size=64 halves the number of sequential chunk iterations vs 32
+        # at a given ISL (4k -> 64 steps instead of 128). Build the triu/tril/
+        # eye masks ONCE here and reuse them every layer/call (the P150 path
+        # passes cached_masks; rebuilding them per call host-uploads 5 tensors
+        # on every one of the 48 linear layers, every prefill).
+        # NOTE: chunk_size=64 (P150's value) measured SLOWER here (warm prefill
+        # 4k 27.3s -> 31s) — the larger intra-chunk matmuls outweigh the halved
+        # iteration count on the Galaxy shapes. Keep 32 (faster + coherence-
+        # validated); cached_masks below is still a free win.
+        self.prefill_chunk_size = int(os.environ.get("QWEN36_GDN_CHUNK_SIZE", "32"))
+        self._chunk_masks = create_chunk_masks(self.prefill_chunk_size, mesh_device)
 
         # --- Per-row head counts ---
         assert (
@@ -524,6 +540,44 @@ class TtQwen36DeltaAttention(LightweightModule):
         out_proj_w_T = out_proj_w.T.contiguous()
         row_shard_out0 = ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, 1), mesh_shape=self.cluster_shape)
         self.w_out = self._to_device(out_proj_w_T, row_shard_out0)  # per-chip [768, 1280]
+
+        # ------------------------------------------------------------------
+        # Fused-prefill kernel constants (QWEN36_GDN_FUSED_PREFILL=1).
+        # Port of the P150 gdn_prefill_fused path: one ttnn.generic_op launch
+        # for the whole-sequence recurrence (vs the op-heavy chunk reference).
+        # Galaxy 8-row head sharding => half of P150's per-chip head counts.
+        # ------------------------------------------------------------------
+        self._use_fused_prefill = os.environ.get("QWEN36_GDN_FUSED_PREFILL", "0") == "1"
+        if self._use_fused_prefill:
+            import math as _math
+
+            from models.demos.qwen3_6_galaxy_v2.tt.gdn_kernel.gdn_kernel_op import gdn_prefill_fused as _gpf
+
+            self._gdn_prefill_fused = _gpf
+            self._fused_Nv_TP = self.n_v_per_row  # 6
+            self._fused_Nk_TP = self.n_k_per_row  # 2
+            self._fused_repeat = self.n_v_per_row // self.n_k_per_row  # 3
+            self._fused_key_dim_tp = self.n_k_per_row * self.head_dim  # 256
+            self._fused_qkv_dim_tp = 2 * self.q_per_row + self.v_per_row  # 256+256+768 = 1280
+            # -exp(A_log), built in bf16, same [1,1,6] row sharding as A_log.
+            self.neg_exp_A = ttnn.neg(ttnn.exp(ttnn.typecast(self.A_log, ttnn.bfloat16)))
+
+            def _scalar_tile(val):
+                return ttnn.from_torch(
+                    torch.full((1, 1, 1), float(val), dtype=torch.bfloat16),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.mesh_device,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                )
+
+            self._fused_scale_tt = _scalar_tile(self.head_dim**-0.5)
+            self._fused_rms_scale_tt = _scalar_tile(_math.sqrt(self.head_dim))
+            self._fused_rms_eps_tt = _scalar_tile(self.head_dim * self.eps)
+            # Post-kernel ttnn.rms_norm weight: [1, 1, Dv=head_dim] bf16 (replicated).
+            self._fused_norm_w = self._to_device(
+                norm_w.reshape(1, 1, self.head_dim), replicate, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            )
 
     # ------------------------------------------------------------------
     # Persistent buffer constructors
@@ -2281,6 +2335,99 @@ class TtQwen36DeltaAttention(LightweightModule):
         else:
             return self.forward_decode(x, current_pos, rot_mats, kv_cache=kv_cache, page_table=page_table)
 
+    def _forward_prefill_fused(self, q_conv, k_conv, v_conv, z, a, b, B, T):
+        """Fused whole-sequence DeltaNet recurrence via the P150 gdn_prefill_fused
+        kernel (one ttnn.generic_op launch), replacing the op-heavy chunk path.
+
+        Inputs are post-conv (q/k/v) + raw gate inputs (a, b) + z gate; the kernel
+        computes beta=sigmoid(b), g=neg_exp_A*softplus(a+dt_bias) and the
+        recurrence internally. Post-kernel: per-head rms_norm + silu(z) gate +
+        output projection (+ row all-reduce), matching ``_apply_norm_gated`` /
+        ``_output_proj_and_reduce``.
+        """
+        mem = ttnn.DRAM_MEMORY_CONFIG
+        hd = self.head_dim
+        Nv = self._fused_Nv_TP  # 6
+        num_pairs = B * Nv  # B=1 -> 6
+
+        # conv_out: concat(q|k|v) post-conv+silu -> [1, T, qkv_dim_tp=1280]
+        conv_out = ttnn.concat([q_conv, k_conv, v_conv], dim=-1, memory_config=mem)
+        if len(conv_out.shape) == 4:
+            conv_out = ttnn.reshape(conv_out, [B, T, self._fused_qkv_dim_tp])
+
+        # a, b -> [1, T, Nv]
+        if len(a.shape) == 4:
+            a = ttnn.reshape(a, [B, T, Nv])
+            b = ttnn.reshape(b, [B, T, Nv])
+
+        # recurrence state [num_pairs, Dk, Dv] bf16 (fresh: prefill from zero state)
+        rec_states = ttnn.from_torch(
+            torch.zeros(num_pairs, hd, hd, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            memory_config=mem,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        # output [num_pairs * T, 1, Dv] bf16
+        prefill_output = ttnn.from_torch(
+            torch.zeros(num_pairs * T, 1, hd, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            memory_config=mem,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+        self._gdn_prefill_fused(
+            conv_out,
+            a,
+            b,
+            self.neg_exp_A,
+            self.dt_bias,
+            self._fused_norm_w,
+            self._fused_scale_tt,
+            self._fused_rms_scale_tt,
+            self._fused_rms_eps_tt,
+            rec_states,
+            prefill_output,
+            num_pairs=num_pairs,
+            num_tokens=T,
+            num_cores=num_pairs,
+            Nv_TP=Nv,
+            Nk_TP=self._fused_Nk_TP,
+            repeat_factor=self._fused_repeat,
+            key_dim_tp=self._fused_key_dim_tp,
+        )
+        conv_out.deallocate(True)
+
+        # per-head rms_norm, then reshape/permute to [1, T, v_per_row]
+        out_n = ttnn.rms_norm(prefill_output, weight=self._fused_norm_w, epsilon=self.eps)
+        prefill_output.deallocate(True)
+        out_4d = ttnn.reshape(out_n, [1, num_pairs, T, hd])
+        out_n.deallocate(True)
+        out_4d = ttnn.permute(out_4d, (0, 2, 1, 3))  # [1, T, num_pairs, Dv]
+        out_f = ttnn.reshape(out_4d, [B, T, self.v_per_row])
+        out_4d.deallocate(True)
+
+        # silu(z) gate
+        z3 = ttnn.reshape(z, [B, T, self.v_per_row]) if len(z.shape) == 4 else z
+        z_silu = ttnn.silu(z3, memory_config=mem)
+        gated = ttnn.multiply(out_f, z_silu, memory_config=mem)
+        out_f.deallocate(True)
+        z_silu.deallocate(True)
+
+        # write final recurrence state into the persistent fp32 buffer for decode
+        rec_fp32 = ttnn.typecast(rec_states, ttnn.float32, memory_config=mem)
+        rec_states.deallocate(True)
+        rec_resh = ttnn.reshape(rec_fp32, [B, Nv, hd, hd])
+        ttnn.copy(rec_resh, self.dn_state_buffer)
+        rec_fp32.deallocate(True)
+
+        output = self._output_proj_and_reduce(gated, B, T)
+        gated.deallocate(True)
+        return output
+
     def forward_prefill(
         self,
         x,
@@ -2311,6 +2458,20 @@ class TtQwen36DeltaAttention(LightweightModule):
         k.deallocate(True)
         v.deallocate(True)
 
+        # --- Fast path: fused gdn_prefill kernel (one launch for the whole
+        # sequence recurrence), mirroring the P150 gdn_prefill_fused flow. ---
+        if getattr(self, "_use_fused_prefill", False):
+            output = self._forward_prefill_fused(q_conv, k_conv, v_conv, z, a, b, B, T)
+            q_conv.deallocate(True)
+            k_conv.deallocate(True)
+            v_conv.deallocate(True)
+            z.deallocate(True)
+            a.deallocate(True)
+            b.deallocate(True)
+            ttnn.copy(new_conv_state, self.conv_state_buffer)
+            new_conv_state.deallocate(True)
+            return output
+
         # 3. Reshape to per-head layout
         q_h = ttnn.reshape(q_conv, [B, T, self.n_k_per_row, self.head_dim])
         k_h = ttnn.reshape(k_conv, [B, T, self.n_k_per_row, self.head_dim])
@@ -2337,9 +2498,10 @@ class TtQwen36DeltaAttention(LightweightModule):
             v=v_h,
             beta=beta,
             g=g,
-            chunk_size=32,
+            chunk_size=self.prefill_chunk_size,
             initial_state=None,
             device=self.mesh_device,
+            cached_masks=self._chunk_masks,
         )
         q_exp.deallocate(True)
         k_exp.deallocate(True)
