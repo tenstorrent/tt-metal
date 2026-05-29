@@ -472,11 +472,22 @@ void fsm_advance_impl(ThreadOutputContext& context, FsmState& current, [[maybe_u
             context.current);
 
         fsm_assert(
-            current != FsmState::INITIALIZED || next == FsmState::EXECUTED,
-            CTSTR("Expected INITIALIZED -> EXECUTED"),
+            current != FsmState::INITIALIZED || !operation.expect_uninit || next == FsmState::EXECUTED,
+            CTSTR("Operation UNINIT required, expected INITIALIZED -> EXECUTED"),
             current,
             next,
             CTSTR("EXECUTED"),
+            context.fsm,
+            context.current);
+
+        // fixme: this should be downgraded to a warning. Reconfig after init (without an intervening execute)
+        // is tolerated for operations that don't require uninit, but it is still likely indicative of a bug.
+        fsm_assert(
+            current != FsmState::INITIALIZED || operation.expect_uninit || next == FsmState::EXECUTED || next == FsmState::RECONFIGURED,
+            CTSTR("Operation UNINIT not required, expected INITIALIZED -> [EXECUTED, RECONFIGURED]"),
+            current,
+            next,
+            CTSTR("EXECUTED, RECONFIGURED"),
             context.fsm,
             context.current);
 
