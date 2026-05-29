@@ -17,16 +17,38 @@ Pipeline (matching the eager reference exactly):
 embed_dim 1536, num_heads 12, head_dim 128. is_causal = False; the attention is
 bidirectional but block-diagonal over the cu_seqlens-defined image blocks.
 
+Attention is computed with memory-efficient flash attention
+(``ttnn.transformer.windowed_scaled_dot_product_attention``) -- the SDPA variant
+the cited reference (qwen25_vl vision, ``forward_prefill``) uses -- instead of a
+materialized [1, nh, seq, seq] score matrix. This is the same softmax(QK^T/√d)V
+math the eager reference computes, but the flash-2 kernel never allocates the
+O(seq^2) score buffer or a dense mask: it takes ``cu_seqlens`` and builds the
+block-diagonal attention pattern internally, streaming scores in O(seq) memory.
+
+The windowed variant (not the plain ``scaled_dot_product_attention``) is required
+here for two reasons: (1) the real vision sequence is NOT tile-aligned -- a
+document page grid like [1, 92, 122] gives seq = 11224, which TILE_LAYOUT pads up
+to 11232; the cu_seqlens window [0, 11224] makes the kernel mask those padding
+rows out, whereas plain SDPA with no mask lets the garbage tail rows pollute every
+query's softmax (verified: PCC collapses to ~0.95 at unaligned seq). (2) Plain
+SDPA only accepts a full [1, 1, seq, seq] additive mask (a [1,1,1,seq] key-only
+broadcast is rejected: ``mask_shape[2] == q_shape[2]``), which at seq 11224 is a
+~250 MB dense buffer that OOMs the single p150 -- exactly the failure this rewrite
+removes. windowed SDPA needs no dense mask at all. For a single image
+cu_seqlens=[0, seq] it is full bidirectional over the valid rows; for multiple
+image blocks it reproduces the reference's exact block-diagonal cross-block
+masking. HF dots.ocr vision likewise uses flash attention, so this is faithful.
+
 Vision RoPE:
     freqs [seq, head_dim//2] -> cos/sin -> repeat last dim x2 -> [seq, head_dim]
     out = x * cos + rotate_half(x) * sin
     rotate_half(x) = cat(-x[..., d/2:], x[..., :d/2])
 
-The cos/sin tables and the additive block-diagonal mask are derived from the
-static inputs (rotary_pos_emb freqs and cu_seqlens) and are precomputed on host
-at construction time, then uploaded to device — analogous to loading the
-RMSNorm gamma weight. The forward() runs entirely with ttnn ops (no host
-matmul / softmax / numpy / torch.nn.functional).
+The cos/sin tables are derived from the static inputs (rotary_pos_emb freqs) and
+are precomputed on host at construction time, then uploaded to device --
+analogous to loading the RMSNorm gamma weight. ``cu_seqlens`` is uploaded as a
+small uint32 ROW_MAJOR tensor (window boundaries). The forward() runs entirely
+with ttnn ops (no host matmul / softmax / numpy / torch.nn.functional).
 
 Reference TTNN impl this follows: models/demos/qwen25_vl/tt/vision_attention.py
 """
@@ -54,21 +76,6 @@ def _build_rope_tables(rotary_pos_emb: torch.Tensor, head_dim: int):
     sin = torch.cat([sin, sin], dim=-1)  # [seq, head_dim]
     assert cos.shape[-1] == head_dim, (cos.shape, head_dim)
     return cos, sin
-
-
-def _build_block_diag_mask(cu_seqlens: torch.Tensor, seq_length: int) -> torch.Tensor:
-    """Additive block-diagonal attention mask [1, 1, seq, seq].
-
-    0.0 inside a block (token i and j in the same cu_seqlens segment),
-    a large negative value across blocks. Bidirectional within each block.
-    """
-    neg = torch.finfo(torch.float32).min
-    mask = torch.full([1, 1, seq_length, seq_length], neg, dtype=torch.float32)
-    cu = cu_seqlens.tolist()
-    for i in range(1, len(cu)):
-        a, b = cu[i - 1], cu[i]
-        mask[..., a:b, a:b] = 0.0
-    return mask
 
 
 class TtVisionAttention(LightweightModule):
@@ -151,16 +158,42 @@ class TtVisionAttention(LightweightModule):
             mesh_mapper=mesh_mapper,
         )
 
-        # Additive block-diagonal mask [1, num_heads, seq, seq].
-        mask = _build_block_diag_mask(cu_seqlens, seq_length)  # [1,1,seq,seq]
-        mask = mask.expand(1, num_heads, seq_length, seq_length).contiguous()
-        self.attn_mask = ttnn.as_tensor(
-            mask,
+        # Block-diagonal attention boundaries for the windowed flash-SDPA kernel.
+        # cu_seqlens is the cumulative window-seqlens vector (e.g. [0, 96, 256]
+        # for two blocks, or [0, seq] for a single image -> full bidirectional).
+        # Uploaded as a small uint32 ROW_MAJOR tensor; the SDPA kernel builds the
+        # block-diagonal mask internally (no O(seq^2) dense mask materialized) and
+        # uses the [0, seq] window to mask the TILE_LAYOUT padding tail when seq
+        # is not tile-aligned (the real document grids are not).
+        cu = cu_seqlens.to(torch.int64).tolist()
+        if cu[0] != 0:
+            cu = [0] + cu
+        if cu[-1] != seq_length:
+            cu = cu + [seq_length]
+        self._cu_seqlens_list = cu
+        self.cu_seqlens_tt = ttnn.from_torch(
+            torch.tensor(cu, dtype=torch.int32),
             device=device,
-            dtype=dtype,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=weight_memory_config,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=mesh_mapper,
+        )
+
+        # Flash-SDPA chunk sizes: cap the chunk to a tile-aligned size that fits
+        # the sequence (small grids use a smaller chunk; large pages use 128).
+        def _chunk(seq):
+            c = 128
+            while c > 32 and c >= seq:
+                c //= 2
+            return max(c, 32)
+
+        qk_chunk = _chunk(seq_length)
+        grid = device.compute_with_storage_grid_size()
+        self.sdpa_program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(grid.x, grid.y),
+            exp_approx_mode=False,
+            q_chunk_size=qk_chunk,
+            k_chunk_size=qk_chunk,
         )
 
         # fp32 compute to match the reference float path.
@@ -192,21 +225,28 @@ class TtVisionAttention(LightweightModule):
         nh = self.num_heads
         hd = self.head_dim
 
+        # At small grids the head-split / head-merge reshapes are pinned to L1
+        # (the dominant op at validation grids ~256). But at the model's real
+        # document resolution (seq in the thousands) an L1-interleaved
+        # [seq, 3, nh, hd] buffer is hundreds of MB and overflows L1 -- so above
+        # a tile-friendly threshold these intermediates live in DRAM. Flash SDPA
+        # already removed the O(seq^2) score buffer; this keeps the surrounding
+        # reshapes bounded too, letting full-resolution pages run.
+        reshape_mem = ttnn.L1_MEMORY_CONFIG if seq <= 1024 else ttnn.DRAM_MEMORY_CONFIG
+
         # Fused QKV projection: [seq, dim] @ [dim, 3*dim] -> [seq, 3*dim].
         qkv = ttnn.linear(
             x,
             self.qkv_weight,
             compute_kernel_config=self.compute_kernel_config,
             dtype=ttnn.bfloat16,
+            memory_config=reshape_mem,
         )
 
         # Split into q, k, v each [seq, nh*hd]. The reference reshapes
         # qkv -> [seq, 3, nh, hd]; contiguous QKV ordering means the first
         # nh*hd columns are q, next k, next v.
-        # This head-split reshape is the block's dominant op (~33% of kernel
-        # time when left DRAM-interleaved); pin the output to L1 so the
-        # downstream slice/RoPE chain reads from L1 instead of DRAM.
-        qkv = ttnn.reshape(qkv, (seq, 3, nh, hd), memory_config=ttnn.L1_MEMORY_CONFIG)
+        qkv = ttnn.reshape(qkv, (seq, 3, nh, hd), memory_config=reshape_mem)
         q = qkv[:, 0, :, :]  # [seq, nh, hd]
         k = qkv[:, 1, :, :]
         v = qkv[:, 2, :, :]
@@ -218,33 +258,35 @@ class TtVisionAttention(LightweightModule):
         k = self._apply_rope(k)
 
         # -> [1, nh, seq, hd] (transpose seq<->heads) for batched attention.
-        q = ttnn.permute(q, (0, 2, 1, 3))
-        k = ttnn.permute(k, (0, 2, 1, 3))
+        # Flash SDPA requires its operands in DRAM.
+        q = ttnn.permute(q, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        k = ttnn.permute(k, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
         v = ttnn.reshape(v, (1, seq, nh, hd))
-        v = ttnn.permute(v, (0, 2, 1, 3))
+        v = ttnn.permute(v, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        # attn = softmax(q k^T * scale + mask) @ v.  k^T -> [1, nh, hd, seq]
-        k_t = ttnn.permute(k, (0, 1, 3, 2))
-        scores = ttnn.matmul(
+        # Memory-efficient flash attention with block-diagonal windowing over
+        # cu_seqlens. Same softmax(q k^T * scale + block_diag_mask) @ v math as
+        # the reference, but the kernel never materializes the [1, nh, seq, seq]
+        # score matrix or a dense mask -- it builds the block-diagonal pattern
+        # internally (and masks the TILE_LAYOUT padding tail via the [0, seq]
+        # window) and streams in O(seq) memory (flash-2 chunked). This is the SDPA
+        # variant qwen25_vl vision uses; plain scaled_dot_product_attention is not
+        # usable here (no mask -> garbage tail rows pollute softmax at unaligned
+        # seq; dense [1,1,seq,seq] mask -> ~250 MB OOM at seq 11224).
+        attn = ttnn.transformer.windowed_scaled_dot_product_attention(
             q,
-            k_t,
-            compute_kernel_config=self.compute_kernel_config,
-            dtype=ttnn.bfloat16,
-        )
-        scores = ttnn.mul(scores, self.scale)
-        scores = ttnn.add(scores, self.attn_mask)
-        probs = ttnn.softmax(scores, dim=-1, compute_kernel_config=self.compute_kernel_config)
-        attn = ttnn.matmul(
-            probs,
+            k,
             v,
+            self.cu_seqlens_tt,
+            scale=self.scale,
             compute_kernel_config=self.compute_kernel_config,
-            dtype=ttnn.bfloat16,
+            program_config=self.sdpa_program_config,
         )  # [1, nh, seq, hd]
 
         # -> [seq, nh*hd]. Head-merge reshape; pin to L1 so the output proj
         # reads from L1 instead of a DRAM-interleaved coalesce.
         attn = ttnn.permute(attn, (0, 2, 1, 3))  # [1, seq, nh, hd]
-        attn = ttnn.reshape(attn, (seq, nh * hd), memory_config=ttnn.L1_MEMORY_CONFIG)
+        attn = ttnn.reshape(attn, (seq, nh * hd), memory_config=reshape_mem)
 
         # Output projection: [seq, dim] @ [dim, dim] -> [seq, dim].
         out = ttnn.linear(
@@ -252,5 +294,6 @@ class TtVisionAttention(LightweightModule):
             self.proj_weight,
             compute_kernel_config=self.compute_kernel_config,
             dtype=ttnn.bfloat16,
+            memory_config=reshape_mem,
         )
         return out

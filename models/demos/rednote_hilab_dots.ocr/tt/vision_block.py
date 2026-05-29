@@ -150,9 +150,13 @@ class TtVisionBlock(LightweightModule):
         here keeps the whole block resident in L1 between the attn/mlp output and
         the residual.
         """
+        # L1-resident residuals at validation grids; DRAM at the real document
+        # resolution where the [seq, dim] residual overflows L1.
+        mem = ttnn.L1_MEMORY_CONFIG if x.shape[0] <= 1024 else ttnn.DRAM_MEMORY_CONFIG
+
         attn_out = self.attn(self.norm1(x))
-        x = ttnn.add(x, attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
+        x = ttnn.add(x, attn_out, memory_config=mem)
 
         mlp_out = self.mlp(self.norm2(x))
-        x = ttnn.add(x, mlp_out, memory_config=ttnn.L1_MEMORY_CONFIG)
+        x = ttnn.add(x, mlp_out, memory_config=mem)
         return x

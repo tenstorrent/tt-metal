@@ -70,19 +70,14 @@ IMAGE_TOKEN_ID = 151665  # <|imgpad|>
 DEMO_IMAGE_URL = "https://raw.githubusercontent.com/rednote-hilab/dots.ocr/master/demo/demo_image1.jpg"
 DEMO_IMAGE_PATH = os.path.join(_DEMO_DIR, "demo_image1.jpg")
 CROP_TOP_FRACTION = 0.575  # crop to 57.5% height from the top, like the reference
-# The full-res cropped demo page is ~2.2 MP -> grid 92x122 = 11224 patches (seq_len
-# 2820). The 42-layer vision attention here is a vanilla full-attention (q@k^T ->
-# softmax over the full seq, NOT flash/chunked), so its score buffer is O(seq^2):
-# at seq=2820 the DRAM buffer is ~6 GB and at seq=630 the softmax circular buffer
-# already clashes with L1 on the single p150 (3.97 GB/bank, 1.4 MB L1/core). The
-# vision block was validated at small grids; large document pages exceed it. We
-# therefore cap the image processor's max_pixels so the page is downscaled to a
-# patch count the vision attention can hold (200k px -> grid ~26x36, seq_len ~248,
-# which runs end-to-end and produces real OCR text). This is the documented
-# "reduce minimally if vision OOMs" path -- model DEPTH stays FULL 28 LM / 42
-# vision; only the input image RESOLUTION is reduced. Override via
-# DOTS_OCR_MAX_PIXELS (higher values OOM / hit the L1 softmax-CB clash today).
-VISION_MAX_PIXELS = int(os.environ.get("DOTS_OCR_MAX_PIXELS", str(200_000)))
+# NO resolution cap. The image processor runs at the model's default
+# preprocessor_config (max_pixels=11,289,600), so the demo page's grid_thw /
+# seq_len is determined entirely by the model -- exactly the real inference
+# workload. The vision attention now uses memory-efficient flash attention
+# (ttnn.transformer.windowed_scaled_dot_product_attention): block-diagonal over
+# cu_seqlens, O(seq) memory, never materializes the [1, nh, seq, seq] score
+# matrix. This is what lets the full-resolution document page run on the single
+# p150 without OOM. Model DEPTH is FULL 28 LM / 42 vision.
 VISION_PROMPT = "Describe this image."
 TEXT_PROMPT = "What is the capital of France? Answer in one word."
 
@@ -109,6 +104,43 @@ def _get_demo_image():
     w, h = img.size
     img = img.crop((0, 0, w, int(h * CROP_TOP_FRACTION)))  # top 57.5%
     return img
+
+
+def _dots_vision_preprocess(img, prompt):
+    """Build the prompt with the MODEL'S OWN chat template, not hand-rolled ChatML.
+
+    dots.ocr was trained with the structure
+    ``<|user|>...<|img|><|imgpad|><|endofimg|>...<|endofuser|>`` (see
+    chat_template.json), NOT the Qwen2.5 ChatML tokens
+    ``<|im_start|>/<|vision_start|>``. The chat template emits a SINGLE
+    ``<|imgpad|>`` placeholder which we expand to the real number of vision
+    tokens (t*h*w // merge**2). Returns (input_ids [1,S], pixel_values, grid_thw).
+    """
+    import json
+
+    from transformers import AutoImageProcessor, AutoTokenizer
+
+    img_proc = AutoImageProcessor.from_pretrained(CHECKPOINT_PATH, use_fast=True)
+    tokenizer = AutoTokenizer.from_pretrained(CHECKPOINT_PATH, trust_remote_code=True)
+    with open(os.path.join(CHECKPOINT_PATH, "chat_template.json")) as fh:
+        chat_template = json.load(fh)["chat_template"]
+
+    enc_img = img_proc(images=[img], return_tensors="pt")
+    pixel_values = enc_img["pixel_values"].to(torch.float32)
+    grid_thw = enc_img["image_grid_thw"]
+    t, h, w = grid_thw[0].tolist()
+    n_img_tokens = (t * h * w) // 4
+
+    messages = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": prompt}]}]
+    text_prompt = tokenizer.apply_chat_template(
+        messages, tokenize=False, add_generation_prompt=True, chat_template=chat_template
+    )
+    # The template emits one <|imgpad|>; expand it to the real vision-token count.
+    assert text_prompt.count("<|imgpad|>") == 1, text_prompt
+    text_prompt = text_prompt.replace("<|imgpad|>", "<|imgpad|>" * n_img_tokens)
+    input_ids = tokenizer(text_prompt, return_tensors="pt")["input_ids"]
+    assert int((input_ids == IMAGE_TOKEN_ID).sum()) == n_img_tokens
+    return input_ids, pixel_values, grid_thw, tokenizer
 
 
 def _build_model(device, lm_layers, vision_layers, grid_thw):
@@ -214,6 +246,140 @@ def _generate_traced(model, device, lm, cache, inputs_embeds, prompt_len, max_ne
     return gen_tokens, timings
 
 
+def _generate_fully_traced(model, device, lm, cache, patch_tokens, ids, prompt_len, max_new_tokens):
+    """Capture+replay metal traces for VISION + PREFILL + DECODE, then time them.
+
+    Implements the precondition for the active-trace allocation rule: every
+    persistent host-facing buffer (vision input, prefill input, decode embed, the
+    KV cache + per-layer RoPE decode buffers) is allocated BEFORE any trace is
+    armed; the three traces are then captured back-to-back so no fresh persistent
+    allocation happens once a trace exists. Per-image / per-step we only stream
+    new data into the persistent buffers and call ``execute_trace``.
+
+    ``patch_tokens`` is the host fp32 [num_patches, embed_dim] post-patch_embed
+    tensor; ``ids`` the prompt token id list. Returns (gen_tokens, timings) where
+    timings carries untraced/traced vision + prefill numbers.
+    """
+    timings = {}
+
+    # ---- Pre-allocate ALL persistent buffers (before any capture). ----
+    vision_in = ttnn.from_torch(
+        patch_tokens.to(torch.float32),
+        device=device,
+        dtype=model.dtype,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    prefill_in = ttnn.from_torch(
+        torch.zeros(prompt_len, model.hidden_size, dtype=torch.float32),
+        device=device,
+        dtype=model.dtype,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    persistent_embed = _make_persistent_embed(model, device)
+    write_embed = _embed_writer(model, persistent_embed)
+
+    def write_prefill_in(embeds):
+        host = ttnn.from_torch(embeds.to(torch.float32), dtype=model.dtype, layout=ttnn.TILE_LAYOUT)
+        ttnn.copy_host_to_device_tensor(host, prefill_in)
+
+    # ---- WARMUP (compile) every path once, untraced. ----
+    _ = model.vision_tower(vision_in)
+    ttnn.synchronize_device(device)
+    vis_out_tt = model.vision_tower(vision_in)
+    vision_embeds = ttnn.to_torch(vis_out_tt).to(torch.float32).reshape(-1, model.hidden_size)
+    inputs_embeds = model.build_inputs_embeds(torch.tensor(ids, dtype=torch.int64), vision_embeds)
+    write_prefill_in(inputs_embeds)
+
+    cache.reset()
+    pf = lm.prefill_from_embeds(prefill_in, cache)
+    ttnn.synchronize_device(device)
+    first_id = int(torch.argmax(ttnn.to_torch(pf).to(torch.float32).reshape(prompt_len, -1)[-1]).item())
+
+    warm_pos = prompt_len
+    write_embed(first_id)
+    lm.write_decode_pos(warm_pos, cache)
+    _ = lm.decode_step_traced(persistent_embed, cache)
+    ttnn.synchronize_device(device)
+
+    # untraced p50 for vision + prefill (the baseline numbers).
+    def time_n(fn, n=5):
+        xs = []
+        for _ in range(n):
+            t0 = time.perf_counter()
+            fn()
+            ttnn.synchronize_device(device)
+            xs.append((time.perf_counter() - t0) * 1000.0)
+        return statistics.median(xs)
+
+    timings["vision_untraced_ms"] = time_n(lambda: model.vision_tower(vision_in))
+
+    def prefill_untraced_once():
+        cache.reset()
+        lm.prefill_from_embeds(prefill_in, cache)
+
+    timings["prefill_untraced_ms"] = time_n(prefill_untraced_once)
+
+    # ---- CAPTURE three traces back-to-back (no fresh persistent alloc). ----
+    vis_tid = ttnn.begin_trace_capture(device, cq_id=0)
+    vision_out = model.vision_tower(vision_in)
+    ttnn.end_trace_capture(device, vis_tid, cq_id=0)
+    ttnn.synchronize_device(device)
+
+    cache.reset()
+    prefill_tid = ttnn.begin_trace_capture(device, cq_id=0)
+    prefill_logits = lm.prefill_from_embeds(prefill_in, cache)
+    ttnn.end_trace_capture(device, prefill_tid, cq_id=0)
+    ttnn.synchronize_device(device)
+
+    write_embed(first_id)
+    lm.write_decode_pos(warm_pos, cache)
+    decode_tid = ttnn.begin_trace_capture(device, cq_id=0)
+    decode_logits = lm.decode_step_traced(persistent_embed, cache)
+    ttnn.end_trace_capture(device, decode_tid, cq_id=0)
+    ttnn.synchronize_device(device)
+
+    timings["vision_traced_ms"] = time_n(lambda: ttnn.execute_trace(device, vis_tid, cq_id=0, blocking=False))
+
+    def prefill_traced_once():
+        cache.reset()
+        ttnn.execute_trace(device, prefill_tid, cq_id=0, blocking=False)
+
+    timings["prefill_traced_ms"] = time_n(prefill_traced_once)
+
+    # ---- TIMED fully-traced generation. ----
+    cache.reset()
+    ttnn.execute_trace(device, vis_tid, cq_id=0, blocking=False)
+    ttnn.synchronize_device(device)
+    vision_embeds = ttnn.to_torch(vision_out).to(torch.float32).reshape(-1, model.hidden_size)
+    inputs_embeds = model.build_inputs_embeds(torch.tensor(ids, dtype=torch.int64), vision_embeds)
+    write_prefill_in(inputs_embeds)
+
+    ttnn.execute_trace(device, prefill_tid, cq_id=0, blocking=False)
+    ttnn.synchronize_device(device)
+    next_id = int(torch.argmax(ttnn.to_torch(prefill_logits).to(torch.float32).reshape(prompt_len, -1)[-1]).item())
+
+    gen_tokens = [next_id]
+    replay_only_ms = []
+    cur_id = next_id
+    for step in range(1, max_new_tokens):
+        pos = prompt_len + step - 1
+        write_embed(cur_id)
+        lm.write_decode_pos(pos, cache)
+        t0 = time.perf_counter()
+        ttnn.execute_trace(device, decode_tid, cq_id=0, blocking=False)
+        ttnn.synchronize_device(device)
+        replay_only_ms.append((time.perf_counter() - t0) * 1000.0)
+        cur_id = int(torch.argmax(ttnn.to_torch(decode_logits).to(torch.float32).reshape(-1)).item())
+        gen_tokens.append(cur_id)
+        if cur_id in EOS:
+            break
+
+    timings["decode_replay_p50_ms"] = statistics.median(replay_only_ms) if replay_only_ms else float("nan")
+    return gen_tokens, timings
+
+
 def _print_perf(title, n_tokens, timings, prompt_len, text):
     host_pe = timings.get("host_patch_embed_ms", 0.0)
     vision = timings.get("vision_ms", 0.0)
@@ -251,20 +417,11 @@ def test_dots_ocr_vision_inference():
 
     img = _get_demo_image()
 
-    # Host DotsVL preprocessing (image patchify + chat prompt with <|imgpad|>).
-    from transformers import AutoImageProcessor, AutoTokenizer
-
-    img_proc = AutoImageProcessor.from_pretrained(CHECKPOINT_PATH, use_fast=True, max_pixels=VISION_MAX_PIXELS)
-    tokenizer = AutoTokenizer.from_pretrained(CHECKPOINT_PATH)
-    enc = img_proc(images=[img], return_tensors="pt")
-    pixel_values = enc["pixel_values"].to(torch.float32)
-    grid_thw = enc["image_grid_thw"]
-    t, h, w = grid_thw[0].tolist()
-    n_img_tokens = (t * h * w) // 4
-    img_block = "<|vision_start|>" + "<|imgpad|>" * n_img_tokens + "<|vision_end|>"
-    full_prompt = f"<|im_start|>user\n{img_block}{VISION_PROMPT}<|im_end|>\n<|im_start|>assistant\n"
-    input_ids = tokenizer(full_prompt, return_tensors="pt")["input_ids"]
-    assert int((input_ids == IMAGE_TOKEN_ID).sum()) == n_img_tokens
+    # Host preprocessing using the MODEL'S OWN chat template (dots.ocr structure:
+    # <|user|>...<|img|><|imgpad|>...<|endofimg|>...<|endofuser|>), NOT the
+    # Qwen2.5 ChatML tokens (<|im_start|>/<|vision_start|>) the model was not
+    # trained on.
+    input_ids, pixel_values, grid_thw, tokenizer = _dots_vision_preprocess(img, VISION_PROMPT)
 
     print(
         f"[vision] real demo image cropped to {img.size} | grid_thw={grid_thw.tolist()} | seq_len={input_ids.shape[1]}"
@@ -319,6 +476,76 @@ def test_dots_ocr_vision_inference():
     # greedy decode is long-form; we honestly print what it produced.)
     assert len(gen_tokens) > 0, "vision OCR produced no tokens"
     assert len(text.strip()) > 0, "vision OCR produced empty text"
+
+
+def test_dots_ocr_fully_traced_inference():
+    """REAL demo image with VISION + PREFILL + DECODE all metal-traced; print perf.
+
+    Same pipeline / image / capped grid as ``test_dots_ocr_vision_inference`` but
+    additionally captures and replays metal traces for the 42-layer vision tower
+    and the 28-layer LM prefill (decode was already traced). Prints the
+    untraced-vs-traced table and the new fully-traced end-to-end time, and asserts
+    the OCR output is non-empty (correctness is gated against HF in test_e2e_ocr).
+    """
+    kvc = _load_by_path("dots_ft_kv_cache", "kv_cache.py", _TT_DIR)
+
+    img = _get_demo_image()
+    input_ids, pixel_values, grid_thw, tokenizer = _dots_vision_preprocess(img, VISION_PROMPT)
+
+    print(f"[fully_traced] demo image {img.size} | grid_thw={grid_thw.tolist()} | seq_len={input_ids.shape[1]}")
+
+    device = ttnn.open_device(device_id=0, l1_small_size=32768, trace_region_size=TRACE_REGION_SIZE)
+    try:
+        model = _build_model(device, LM_LAYERS, VISION_LAYERS, grid_thw)
+        ids = input_ids.reshape(-1).to(torch.int64).tolist()
+        prompt_len = len(ids)
+        max_seq_len = prompt_len + MAX_NEW_TOKENS + 1
+        lm = model._lm_for_seq(prompt_len, max_seq_len=max_seq_len)
+        cache = kvc.SelfAttentionKVCache(
+            device=device,
+            num_layers=LM_LAYERS,
+            batch=1,
+            num_kv_heads=model.num_kv_heads,
+            max_seq_len=max_seq_len,
+            head_dim=model.head_dim,
+            dtype=model.dtype,
+        )
+        t0 = time.perf_counter()
+        patch_tokens = model.vision_tower.patch_embed(pixel_values)
+        host_pe_ms = (time.perf_counter() - t0) * 1000.0
+
+        gen_tokens, timings = _generate_fully_traced(
+            model, device, lm, cache, patch_tokens, ids, prompt_len, MAX_NEW_TOKENS
+        )
+    finally:
+        ttnn.close_device(device)
+
+    text = tokenizer.decode(gen_tokens, skip_special_tokens=True)
+    vu = timings["vision_untraced_ms"]
+    vt = timings["vision_traced_ms"]
+    pu = timings["prefill_untraced_ms"]
+    pt = timings["prefill_traced_ms"]
+    dt = timings["decode_replay_p50_ms"]
+    n = len(gen_tokens)
+    baseline_e2e = host_pe_ms + vu + pu + dt * max(n - 1, 0)
+    traced_e2e = host_pe_ms + vt + pt + dt * max(n - 1, 0)
+    print("=" * 78)
+    print(f"[fully_traced] FULL DEPTH lm={LM_LAYERS} vision={VISION_LAYERS} prompt_len={prompt_len} tokens={n}")
+    print("-" * 78)
+    print(f"{'stage':<14}{'untraced ms':>14}{'traced ms':>14}{'speedup':>12}")
+    print(f"{'vision (42L)':<14}{vu:>14.2f}{vt:>14.2f}{vu/vt:>11.2f}x")
+    print(f"{'prefill (28L)':<14}{pu:>14.2f}{pt:>14.2f}{pu/pt:>11.2f}x")
+    print(f"{'decode/tok':<14}{'n/a':>14}{dt:>14.2f}{'~2.4':>11}x")
+    print("-" * 78)
+    print(f"[fully_traced] host patch_embed: {host_pe_ms:.2f} ms")
+    print(f"[fully_traced] e2e baseline (vision+prefill untraced, decode traced): {baseline_e2e:.2f} ms")
+    print(f"[fully_traced] e2e fully traced                                    : {traced_e2e:.2f} ms")
+    print(f"[fully_traced] e2e speedup: {baseline_e2e/traced_e2e:.2f}x")
+    print(f"[fully_traced] decoded text:\n{text!r}")
+    print("=" * 78)
+
+    assert len(gen_tokens) > 0, "fully-traced OCR produced no tokens"
+    assert len(text.strip()) > 0, "fully-traced OCR produced empty text"
 
 
 def test_dots_ocr_text_inference():

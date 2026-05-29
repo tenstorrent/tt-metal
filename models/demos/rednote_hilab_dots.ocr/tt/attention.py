@@ -144,17 +144,24 @@ class TtAttention(LightweightModule):
             mesh_mapper=mesh_mapper,
         )
 
-        # Additive causal mask [1, num_heads, seq, seq].
-        mask = attention_mask.reshape(1, 1, seq_len, seq_len)
-        mask = mask.expand(1, num_heads, seq_len, seq_len).contiguous()
-        self.attn_mask = ttnn.as_tensor(
-            mask,
-            device=device,
-            dtype=dtype,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=weight_memory_config,
-            mesh_mapper=mesh_mapper,
-        )
+        # Additive causal mask [1, num_heads, seq, seq] -- only the short-prompt
+        # prefill path materializes a dense score matrix and needs this mask. At
+        # large seq_len the prefill uses causal flash SDPA (is_causal=True, no
+        # dense mask), and a [1, nh, seq, seq] mask would itself be O(seq^2) and
+        # OOM at construction, so it is skipped above the threshold.
+        if seq_len <= 1024:
+            mask = attention_mask.reshape(1, 1, seq_len, seq_len)
+            mask = mask.expand(1, num_heads, seq_len, seq_len).contiguous()
+            self.attn_mask = ttnn.as_tensor(
+                mask,
+                device=device,
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=weight_memory_config,
+                mesh_mapper=mesh_mapper,
+            )
+        else:
+            self.attn_mask = None
 
         # fp32 compute to match the reference float path.
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
@@ -386,15 +393,55 @@ class TtAttention(LightweightModule):
         # GQA expansion 2 -> 12 for the prefill attention output.
         kq = self._repeat_kv(k)
         vq = self._repeat_kv(v)
-        k_t = ttnn.permute(kq, (0, 1, 3, 2))
-        scores = ttnn.matmul(q, k_t, compute_kernel_config=self.compute_kernel_config, dtype=ttnn.float32)
-        scores = ttnn.mul(scores, self.scale)
-        scores = ttnn.add(scores, self.attn_mask)
-        probs = ttnn.softmax(scores, dim=-1, compute_kernel_config=self.compute_kernel_config)
-        attn = ttnn.matmul(probs, vq, compute_kernel_config=self.compute_kernel_config, dtype=ttnn.bfloat16)
+
+        if seq <= 1024:
+            # Short prompt: materialized fp32-score causal softmax (verified PCC
+            # path; fp32 scores matter because real-weight K reaches ±320).
+            k_t = ttnn.permute(kq, (0, 1, 3, 2))
+            scores = ttnn.matmul(q, k_t, compute_kernel_config=self.compute_kernel_config, dtype=ttnn.float32)
+            scores = ttnn.mul(scores, self.scale)
+            scores = ttnn.add(scores, self.attn_mask)
+            probs = ttnn.softmax(scores, dim=-1, compute_kernel_config=self.compute_kernel_config)
+            attn = ttnn.matmul(probs, vq, compute_kernel_config=self.compute_kernel_config, dtype=ttnn.bfloat16)
+            mem = ttnn.L1_MEMORY_CONFIG
+        else:
+            # Long prompt (e.g. a full-document vision prefill, seq in the
+            # thousands): memory-efficient causal flash attention. Same
+            # softmax(q k^T * scale + causal_mask) @ v math as the short path,
+            # but the kernel never materializes the [1, nh, seq, seq] score
+            # matrix -- it streams in O(seq) memory (flash-2 chunked), which is
+            # what lets the full-resolution document prompt prefill without OOM.
+            q_d = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
+            kq_d = ttnn.to_memory_config(kq, ttnn.DRAM_MEMORY_CONFIG)
+            vq_d = ttnn.to_memory_config(vq, ttnn.DRAM_MEMORY_CONFIG)
+            attn = ttnn.transformer.scaled_dot_product_attention(
+                q_d,
+                kq_d,
+                vq_d,
+                is_causal=True,
+                scale=self.scale,
+                compute_kernel_config=self.compute_kernel_config,
+                program_config=ttnn.SDPAProgramConfig(
+                    compute_with_storage_grid_size=(
+                        self.device.compute_with_storage_grid_size().x,
+                        self.device.compute_with_storage_grid_size().y,
+                    ),
+                    exp_approx_mode=False,
+                    q_chunk_size=128,
+                    k_chunk_size=128,
+                ),
+            )
+            mem = ttnn.DRAM_MEMORY_CONFIG
+
         attn = ttnn.permute(attn, (0, 2, 1, 3))
-        attn = ttnn.reshape(attn, (seq, nh * hd), memory_config=ttnn.L1_MEMORY_CONFIG)
-        return ttnn.linear(attn, self.o_weight, compute_kernel_config=self.compute_kernel_config, dtype=ttnn.bfloat16)
+        attn = ttnn.reshape(attn, (seq, nh * hd), memory_config=mem)
+        return ttnn.linear(
+            attn,
+            self.o_weight,
+            compute_kernel_config=self.compute_kernel_config,
+            dtype=ttnn.bfloat16,
+            memory_config=mem,
+        )
 
     def _decode_rope_tiles(self, pos: int):
         """Upload the single-position cos/sin row as [1, 1, 1, head_dim] tiles."""

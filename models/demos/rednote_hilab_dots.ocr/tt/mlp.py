@@ -89,37 +89,39 @@ class TtMLP(LightweightModule):
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """x: [seq, dim] (TILE layout) -> [seq, dim]."""
+        # Pin the gate/up split + SwiGLU elementwise chain to L1 for decode and
+        # short prefills (the [seq, 8960] bf16 intermediate fits L1). At a large
+        # prefill (e.g. a full-document vision prompt, seq in the thousands) that
+        # intermediate is tens of MB and overflows L1, so fall back to DRAM above
+        # a tile-friendly threshold. Decode (seq=1) keeps the L1 fast path.
+        mem = ttnn.L1_MEMORY_CONFIG if x.shape[0] <= 1024 else ttnn.DRAM_MEMORY_CONFIG
+
         # Fused gate/up projection: [seq, dim] @ [dim, 2*intermediate].
         gate_up = ttnn.linear(
             x,
             self.gate_up_weight,
             compute_kernel_config=self.compute_kernel_config,
             dtype=ttnn.bfloat16,
+            memory_config=mem,
         )
-        # Pin the gate/up split + SwiGLU elementwise chain to L1. Without an
-        # explicit memory_config these slice/silu/mul ops land DRAM-interleaved
-        # (the tracy default), so each step re-reads its [seq, intermediate]
-        # operand from DRAM. The [128, 8960] bf16 intermediate fits L1, so
-        # pinning the split outputs and the silu*up product to L1 removes those
-        # DRAM round-trips on the activation chain feeding the down matmul.
         gate = ttnn.slice(
             gate_up,
             [0, 0],
             [gate_up.shape[0], self.intermediate],
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=mem,
         )  # gate_proj
         up = ttnn.slice(
             gate_up,
             [0, self.intermediate],
             [gate_up.shape[0], 2 * self.intermediate],
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=mem,
         )  # up_proj
 
-        # SwiGLU: silu(gate) * up, kept in L1.
+        # SwiGLU: silu(gate) * up.
         h = ttnn.mul(
-            ttnn.silu(gate, memory_config=ttnn.L1_MEMORY_CONFIG),
+            ttnn.silu(gate, memory_config=mem),
             up,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=mem,
         )
 
         # Down projection: [seq, intermediate] @ [intermediate, dim].
@@ -128,5 +130,6 @@ class TtMLP(LightweightModule):
             self.down_weight,
             compute_kernel_config=self.compute_kernel_config,
             dtype=ttnn.bfloat16,
+            memory_config=mem,
         )
         return out

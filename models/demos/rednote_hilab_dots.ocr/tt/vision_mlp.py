@@ -89,37 +89,39 @@ class TtVisionMLP(LightweightModule):
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """x: [seq, dim] (TILE layout) -> [seq, dim]."""
+        # Pin the gate/up split + SwiGLU elementwise chain to L1 at validation
+        # grids (the [256, 4224] bf16 intermediate fits L1). At the model's real
+        # document resolution (seq in the thousands) the [seq, intermediate]
+        # buffer overflows L1, so fall back to DRAM above a tile-friendly
+        # threshold.
+        mem = ttnn.L1_MEMORY_CONFIG if x.shape[0] <= 1024 else ttnn.DRAM_MEMORY_CONFIG
+
         # Fused gate/up projection: [seq, dim] @ [dim, 2*intermediate].
         gate_up = ttnn.linear(
             x,
             self.gate_up_weight,
             compute_kernel_config=self.compute_kernel_config,
             dtype=ttnn.bfloat16,
+            memory_config=mem,
         )
-        # Pin the gate/up split + SwiGLU elementwise chain to L1. Without an
-        # explicit memory_config these slice/silu/mul ops land DRAM-interleaved
-        # (the tracy default), so each step re-reads its [seq, intermediate]
-        # operand from DRAM. The [256, 4224] bf16 intermediate fits L1, so
-        # pinning the split outputs and the silu*up product to L1 removes those
-        # DRAM round-trips on the activation chain feeding the down matmul.
         gate = ttnn.slice(
             gate_up,
             [0, 0],
             [gate_up.shape[0], self.intermediate],
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=mem,
         )  # fc1
         up = ttnn.slice(
             gate_up,
             [0, self.intermediate],
             [gate_up.shape[0], 2 * self.intermediate],
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=mem,
         )  # fc3
 
-        # SwiGLU: silu(gate) * up, kept in L1.
+        # SwiGLU: silu(gate) * up.
         h = ttnn.mul(
-            ttnn.silu(gate, memory_config=ttnn.L1_MEMORY_CONFIG),
+            ttnn.silu(gate, memory_config=mem),
             up,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=mem,
         )
 
         # Down projection: [seq, intermediate] @ [intermediate, dim].
@@ -128,5 +130,6 @@ class TtVisionMLP(LightweightModule):
             self.fc2_weight,
             compute_kernel_config=self.compute_kernel_config,
             dtype=ttnn.bfloat16,
+            memory_config=mem,
         )
         return out
