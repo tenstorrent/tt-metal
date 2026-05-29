@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import math
+import os
 from typing import ClassVar
 
 import torch
@@ -12,6 +13,11 @@ import torch
 import ttnn
 
 from .module import Module, Parameter
+
+# Env-var switch to use the fused wan_fused_distributed_rmsnorm device op
+# instead of the composite (pre_allgather + AG + post_allgather) chain.
+# Set WAN_USE_FUSED_RMSNORM=1 to enable.
+_USE_FUSED_RMSNORM = os.getenv("WAN_USE_FUSED_RMSNORM") == "1"
 
 
 class RMSNorm(Module):
@@ -193,6 +199,21 @@ class DistributedRMSNorm(Module):
         if "weight" in state:
             state["weight"] = state["weight"].reshape(1, self.embedding_dim)
 
+    def _ensure_fused_stats_buffer(self, x: ttnn.Tensor, num_heads_per_device: int):
+        """Lazy-allocate the persistent stats buffer for the fused device op."""
+        key = (tuple(x.shape), num_heads_per_device)
+        cache = getattr(self, "_fused_stats_buffer_cache", None)
+        if cache is None:
+            cache = {}
+            self._fused_stats_buffer_cache = cache
+        buf = cache.get(key)
+        if buf is None:
+            buf = ttnn.experimental.wan_fused_distributed_rmsnorm_create_stats_buffer(
+                x, self.mesh_axis, self.mesh_device, num_heads_per_device=num_heads_per_device
+            )
+            cache[key] = buf
+        return buf
+
     def forward(
         self,
         x: ttnn.Tensor,
@@ -210,6 +231,26 @@ class DistributedRMSNorm(Module):
                 f"embedding_dim / mesh_width = {expected_dim}"
             )
             raise ValueError(msg)
+
+        if _USE_FUSED_RMSNORM:
+            persistent_output_buffer = self._ensure_fused_stats_buffer(x, num_heads_per_device)
+            return ttnn.experimental.wan_fused_distributed_rmsnorm(
+                x,
+                self.mesh_axis,
+                self.mesh_device,
+                self.ccl_manager.get_ag_ping_pong_semaphore(self.mesh_axis),
+                topology=self.ccl_manager.topology,
+                persistent_output_buffer=persistent_output_buffer,
+                epsilon=self.norm_eps,
+                num_heads_per_device=num_heads_per_device,
+                weight=self.weight.data if self.weight is not None else None,
+                compute_kernel_config=compute_kernel_config or self.compute_kernel_config,
+                transformation_mat=trans_mat,
+                rope_cos=rope_cos,
+                rope_sin=rope_sin,
+                dtype=dtype,
+                use_device_op=True,
+            )
 
         stats = ttnn.experimental.wan_fused_rmsnorm_pre_allgather(
             x, dtype=ttnn.float32, compute_kernel_config=compute_kernel_config or self.compute_kernel_config
