@@ -688,9 +688,9 @@ Types: CFG, SYNC, THCON, MOVE (T0), FPU/MATH (T1), UNPACK (T0), PACK (T2), XSEAR
 
 ### Write Port Analysis
 
-**21. SrcA/SrcB Actual Write Efficiency**
+**21. SrcA Write Actual Efficiency**
 
-Fraction of writes that succeeded at the DMA port.
+Fraction of srcA write attempts that succeeded at the DMA port.
 
 | | |
 |---|---|
@@ -698,15 +698,36 @@ Fraction of writes that succeeded at the DMA port.
 | **Counter group** | TDMA_UNPACK |
 
 ```
-SrcA Actual Eff = SRCA_WRITE / SRCA_WRITE_AVAILABLE * 100
-SrcB Actual Eff = SRCB_WRITE / SRCB_WRITE_AVAILABLE * 100
+SrcA Write Actual Efficiency = SRCA_WRITE / SRCA_WRITE_AVAILABLE * 100
 ```
 
-**Use case:** Effective write throughput per source register.
+- **High (100%)**: Every srcA write succeeds — no write-port blocking.
+- **Low (<80%)**: A significant fraction of srcA writes are blocked.
+
+**Use case:** Measures effective srcA write throughput; low values indicate port contention.
 
 ---
 
-**22. Unpacker N Write Efficiency**
+**22. SrcB Write Actual Efficiency**
+
+Fraction of srcB write attempts that succeeded at the DMA port.
+
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | TDMA_UNPACK |
+
+```
+SrcB Write Actual Efficiency = SRCB_WRITE / SRCB_WRITE_AVAILABLE * 100
+```
+
+Mirrors metric 21 for srcB; both archs expose this independently.
+
+**Use case:** Effective srcB write throughput. Compare with srcA for asymmetric blocking.
+
+---
+
+**23. Unpacker N Write Efficiency**
 
 Fraction of unpacker-busy cycles that actually completed a write.
 
@@ -726,7 +747,7 @@ Unpacker1 Write Eff = SRCB_WRITE / UNPACK1_BUSY_THREAD0 * 100
 
 ### L1 Memory and NoC
 
-**23. L1 Port / NoC Ring Utilisation**
+**24. L1 Port / NoC Ring Utilisation**
 
 Per-port and per-NoC-channel utilisation.
 
@@ -744,7 +765,7 @@ NoC Ring Util = avg(NOC_RINGN_CHANNEL_0, NOC_RINGN_CHANNEL_1) / L1_OUT_L * 100
 
 ---
 
-**24. L1 Backpressure**
+**25. L1 Backpressure**
 
 Fraction of requested cycles where L1 did not grant.
 
@@ -765,7 +786,7 @@ Computed per port and per NoC channel.
 
 ### Composite
 
-**25. Stall Cause Overlap Factor per Thread**
+**26. Stall Cause Overlap Factor per Thread**
 
 Ratio of summed per-thread stall reasons to total thread stalls.
 
@@ -785,7 +806,7 @@ Stall Overlap TN = sum(all WAITING_FOR_*_N) / THREAD_STALLS_N
 
 ---
 
-**26. Compute-to-Unpack Ratio**
+**27. Compute-to-Unpack Ratio**
 
 Whether the zone is compute-bound or memory-bound.
 
@@ -807,7 +828,7 @@ Compute-to-Unpack = FPU_OR_SFPU_INSTRN / (UNPACK0_BUSY_THREAD0 + UNPACK1_BUSY_TH
 
 ### Fidelity
 
-**27. Fidelity Stall Rate**
+**28. Fidelity Stall Rate**
 
 Fraction of math-valid cycles spent in a fidelity phase (multi-HF-cycle math instruction).
 
@@ -829,7 +850,7 @@ Fidelity Stall Rate = MATH_FIDELITY_STALL / MATH_INSTRN_AVAILABLE * 100
 
 ---
 
-**28. HiFi Fraction**
+**29. HiFi Fraction**
 
 Fraction of issued math instructions that took more than 1 HF cycle.
 
@@ -847,7 +868,7 @@ HiFi Fraction = (MATH_INSTRN_HF_2_CYCLE + MATH_INSTRN_HF_4_CYCLE) /
 
 ---
 
-**29. Avg HF Cycles Per Instrn**
+**30. Avg HF Cycles Per Instrn**
 
 Weighted average of HF cycles per issued math instruction (1 for LoFi, 2 for HiFi2, 4 for HiFi4).
 
@@ -866,7 +887,7 @@ Avg HF Cycles = (HF_1 + 2*HF_2 + 4*HF_4) / (HF_1 + HF_2 + HF_4)
 
 ### TDMA / Math Stall (cont.)
 
-**30. Math Dest Write Port Stall Rate**
+**31. Math Dest Write Port Stall Rate**
 
 Fraction of math cycles stalled by destination register write port contention.
 
@@ -891,7 +912,7 @@ The metric is skipped when `MATH_NOT_STALLED_DEST_WR_PORT` reads 0 across the wh
 
 ### Additional Idle Waits
 
-**31. MMIO / SFPU / THCON / MOVE Idle Wait**
+**32. MMIO / SFPU / THCON / MOVE Idle Wait**
 
 Fraction of total cycles each thread spent waiting for specific hardware units.
 
@@ -916,7 +937,7 @@ MOVE Idle Wait T0  = WAITING_FOR_MOVE_IDLE_0  / INSTRN_OUT_L * 100
 
 ### L1 Memory and NoC (cont.)
 
-**32. L1 TDMA Bundle Util**
+**33. L1 TDMA Bundle Util**
 
 Average utilisation of the two TDMA/RISC L1 ports.
 
@@ -933,7 +954,7 @@ L1 TDMA Bundle Util = avg(L1_0_TDMA_BUNDLE_0_RISC, L1_0_TDMA_BUNDLE_1_TRISC) / L
 
 ---
 
-**33. NoC Ring 0/1 Outgoing/Incoming Util**
+**34. NoC Ring 0/1 Outgoing/Incoming Util**
 
 Average utilisation of NoC channels per ring direction.
 
@@ -951,7 +972,7 @@ NoC Ring 0 Incoming Util = avg(L1_0_NOC_RING0_INCOMING_0, L1_0_NOC_RING0_INCOMIN
 
 ---
 
-**34. RISC Core L1 Util**
+**35. RISC Core L1 Util**
 
 RISC core L1 memory access utilisation.
 
@@ -973,7 +994,7 @@ RISC Core L1 Util = L1_1_RISC_CORE / L1_OUT_L * 100
 
 ### L1 Backpressure
 
-**35. NoC Ring 0/1 Outgoing/Incoming Backpressure**
+**36. NoC Ring 0/1 Outgoing/Incoming Backpressure**
 
 Fraction of NoC transaction cycles where L1 was not ready.
 
@@ -993,7 +1014,7 @@ NoC Ring 0 Outgoing BP = (req0 + req1 - grant0 - grant1) / (req0 + req1) * 100
 
 ---
 
-**36. L1 Unpacker / Packer Port Backpressure**
+**37. L1 Unpacker / Packer Port Backpressure**
 
 L1 port contention for unpacker and packer.
 
@@ -1018,7 +1039,7 @@ L1 Packer Port BP = (L1_0_PORT1     - L1_0_PORT1_GRANT)      / L1_0_PORT1 * 100
 
 ### L1 Composite
 
-**37. L1 Total Bandwidth Util**
+**38. L1 Total Bandwidth Util**
 
 Overall L1 bandwidth saturation across all 8 mux-0 ports.
 
@@ -1039,7 +1060,7 @@ L1 Total BW Util = sum(all 8 port req counts) / (8 * L1_OUT_L) * 100
 
 ---
 
-**38. L1 Read vs Write Ratio**
+**39. L1 Read vs Write Ratio**
 
 Balance between read and write traffic on L1.
 
@@ -1062,7 +1083,7 @@ Read ports: unpacker, NoC outgoing. Write ports: packer, NoC incoming.
 
 ---
 
-**39. NoC Ring Asymmetry**
+**40. NoC Ring Asymmetry**
 
 Balance between outgoing and incoming NoC traffic.
 
@@ -1083,7 +1104,7 @@ NoC Asymmetry = NoC_Outgoing / (NoC_Outgoing + NoC_Incoming) * 100
 
 ---
 
-**40. L1 Contention Index**
+**41. L1 Contention Index**
 
 Average backpressure across active L1 ports.
 
@@ -1104,7 +1125,7 @@ L1 Contention Index = avg(BP of Unpacker, NoC Out 0, NoC Out 1, NoC In 0, NoC In
 
 ---
 
-**41. Unpacker L1 Efficiency**
+**42. Unpacker L1 Efficiency**
 
 When the unpacker is busy, how often does L1 actually serve it.
 
@@ -1124,7 +1145,7 @@ Unpacker L1 Efficiency = L1_0_UNPACKER_0_GRANT / UNPACK0_BUSY_THREAD0 * 100
 
 ---
 
-**42. Packer L1 Efficiency**
+**43. Packer L1 Efficiency**
 
 When the packer is busy, how often does L1 serve it.
 
@@ -1144,7 +1165,7 @@ Packer L1 Efficiency = L1_0_PORT1_GRANT / PACKER_BUSY * 100
 
 ---
 
-**43. NoC vs Compute Balance**
+**44. NoC vs Compute Balance**
 
 Whether the operation is NoC-bound or compute-bound.
 
@@ -1165,7 +1186,7 @@ NoC vs Compute = (NoC_Out + NoC_In) / (FPU_COUNTER + NoC_Out + NoC_In) * 100
 
 ---
 
-**44. TDMA vs NoC L1 Share**
+**45. TDMA vs NoC L1 Share**
 
 Fraction of L1 bandwidth used by RISC/TDMA versus NoC.
 
@@ -1187,7 +1208,7 @@ TDMA vs NoC = (TDMA_Bundle_0 + TDMA_Bundle_1) / (TDMA + NoC_Out + NoC_In) * 100
 
 ### Wormhole-only (per-engine packer)
 
-**45. Packer Load Imbalance**
+**46. Packer Load Imbalance**
 
 Spread between the most and least utilised packer engines.
 
@@ -1207,7 +1228,7 @@ Packer Load Imbalance = (max(BUSY_0..3) - min(BUSY_0..3)) / max(BUSY_0..3) * 100
 
 ---
 
-**46. Packer Engine N Util**
+**47. Packer Engine N Util**
 
 Per-engine packer utilisation.
 
