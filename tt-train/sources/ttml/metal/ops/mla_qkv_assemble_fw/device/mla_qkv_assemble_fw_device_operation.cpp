@@ -46,6 +46,12 @@ void MLAQKVAssembleFwDeviceOperation::validate_on_program_cache_miss(
     check_tensor(kv_up, "kv_up");
     check_tensor(k_pe, "k_pe");
 
+    // The program launches on kv_up.device() and feeds raw buffer addresses from all three inputs into
+    // the TensorAccessors, so mixed-device inputs must fail here rather than dispatch invalid addresses.
+    TT_FATAL(
+        q_pre.device() == kv_up.device() && kv_up.device() == k_pe.device(),
+        "MLAQKVAssembleFw: q_pre, kv_up, and k_pe must be on the same device.");
+
     const auto q_pre_shape = q_pre.padded_shape();
     const auto kv_up_shape = kv_up.padded_shape();
     const auto k_pe_shape = k_pe.padded_shape();
