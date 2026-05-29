@@ -2,7 +2,7 @@
 
 > **Source of truth.** This file is the canonical record of automation-tracked PRs. Wiping it resets the automation to fresh-state view; stale GitHub PRs not listed here are intentionally invisible.
 
-Last updated: **2026-05-29T04:00 UTC** — Session: Examining lane (2 PRs classified as verified-pass): PR #45498 (run 26614829843 failure → verified-pass; disabled tests skipped, 30 passed, 1 pre-existing error [8-8-8-8] also on main), PR #45500 (run 26614947278 failure → verified-pass; target [WH-T3K] sampling-tests PASSED; BH-QB-GE infra fault, WH-GLX Galaxy out-of-scope). Focus lane: 0 new PRs — all checked uncovered workflows (single-card model perf, T3K perf tests) have timeout/hang failures only, not deterministic test failures eligible for disable. PR #45507 run 26615944303 still in progress.
+Last updated: **2026-05-29T05:30 UTC** — Session: Examining lane (2 PRs): PR #45484 rebased onto `5cbb6896e10a` (new head `a4ca2eb5a9f7`); evidence unchanged (`llk-sd-unit-tests` SKIPPED in recent runs, test still failing in run 26595275788). PR #45507 run 26615944303 classified as `verification-inconclusive` (job timed out at 90min — Metal context timeout at 04:12:04 UTC + action timeout; test may or may not have been reached; timeout is out-of-scope per policy); branch rebased to `5cbb6896e10a` (new head `79d3ef392dd9`). Focus lane (1 new PR): [#45511](https://github.com/tenstorrent/tt-metal/pull/45511) (`sanity-tests.yaml` `profiler-tests / Perf op report [wh_n300_civ2]` — `TestPerfCountersSingleOp::test_performance_counter_columns[Matmul_perf_counters]` — 4+ consecutive failures with identical subprocess.CalledProcessError exit 4 signature; verification [run 26619643533](https://github.com/tenstorrent/tt-metal/actions/runs/26619643533) dispatched fresh-build, N300-only). Note: PR comments via `gh pr comment` returned 403 (token lacks addComment permission); comments posted via MCP tool instead.
 
 ---
 
@@ -29,7 +29,8 @@ Last updated: **2026-05-29T04:00 UTC** — Session: Examining lane (2 PRs classi
 | [#45494](https://github.com/tenstorrent/tt-metal/pull/45494) | Blackhole e2e tests (`blackhole-e2e-tests.yaml`) — `ccl nightly tests` | `verified-pass` | [run 26612913914](https://github.com/tenstorrent/tt-metal/actions/runs/26612913914) — failure (target job passed; other SKU failures pre-existing) | Yes — pending review | Disables `test_all_to_all_combine_no_trace` on `bh_llmbox`. |
 | [#45498](https://github.com/tenstorrent/tt-metal/pull/45498) | metal-run-microbenchmarks (`metal-run-microbenchmarks.yaml`) — `T3K ubench - Fabric Mux BW` | `verified-pass` | [run 26614829843](https://github.com/tenstorrent/tt-metal/actions/runs/26614829843) — failure (disabled tests skipped; 30 passed; 1 pre-existing [8-8-8-8] geomean error also on main) | Yes — pending review | Disables 2 bandwidth regression test parametrizations (num_full_size_channels=4). |
 | [#45500](https://github.com/tenstorrent/tt-metal/pull/45500) | vllm-nightly-tests (`vllm-nightly-tests.yaml`) — `[WH-T3K] Llama-3.1-8B-Instruct with sampling-tests` | `verified-pass` | [run 26614947278](https://github.com/tenstorrent/tt-metal/actions/runs/26614947278) — failure (target [WH-T3K] sampling-tests PASSED; BH-QB-GE infra fault; WH-GLX Galaxy out-of-scope) | Yes — pending review | Disables 15 sampling/seeding determinism tests via `sampling-test-filter`. |
-|| [#45507](https://github.com/tenstorrent/tt-metal/pull/45507) | T3000 e2e tests (`t3000-e2e-tests.yaml`) — `t3k_ccl_tests [wh_llmbox]` | `verifying` | [run 26615944303](https://github.com/tenstorrent/tt-metal/actions/runs/26615944303) — in progress (started 2026-05-29T03:21 UTC) | No | New PR. Disables test_all_gather_matmul_async / test_all_broadcast_sharded_2x4 / test_ring_joint_sdpa_program_cache. Fresh-build. |
+|| [#45507](https://github.com/tenstorrent/tt-metal/pull/45507) | T3000 e2e tests (`t3000-e2e-tests.yaml`) — `t3k_ccl_tests [wh_llmbox]` | `verification-inconclusive` | [run 26615944303](https://github.com/tenstorrent/tt-metal/actions/runs/26615944303) — **verification-inconclusive** (job timed out 90min; Metal context timeout at 04:12 UTC; budget NOT consumed) | No — re-dispatch needed | Disables test_all_gather_matmul_async / test_all_broadcast_sharded_2x4 / test_ring_joint_sdpa_program_cache. Rebased to `5cbb6896e10a`. |
+|| [#45511](https://github.com/tenstorrent/tt-metal/pull/45511) | Sanity tests (`sanity-tests.yaml`) — `profiler-tests / Perf op report [wh_n300_civ2]` | `verifying` | [run 26619643533](https://github.com/tenstorrent/tt-metal/actions/runs/26619643533) — in progress (dispatched 2026-05-29T05:20 UTC) | No | New PR. Disables `TestPerfCountersSingleOp::test_performance_counter_columns[Matmul_perf_counters]`. Fresh-build, N300-only. |
 
 ---
 
@@ -37,7 +38,7 @@ Last updated: **2026-05-29T04:00 UTC** — Session: Examining lane (2 PRs classi
 
 | Run | Pipeline | Branch | Started | Status | Notes |
 |-----|----------|--------|---------|--------|-------|
-| [26615944303](https://github.com/tenstorrent/tt-metal/actions/runs/26615944303) | T3000 e2e tests (`t3000-e2e-tests.yaml`) | `ci-disable/verify-t3000-e2e-tests-t3k-ccl-20260529` (verification temp branch for PR #45507) | 2026-05-29T03:21:22 UTC | in progress | Verification dispatch for PR #45507. Fresh-build (all recent `t3000-e2e-tests` main runs failed). Pruned to `t3k_ccl_tests [wh_llmbox]` only. Next session MUST log-analyze and classify. |
+| [26619643533](https://github.com/tenstorrent/tt-metal/actions/runs/26619643533) | (Single-card) Profiler tests (`single-card-profiler-tests.yaml`) | `ci-disable/verify-sanity-tests-perf-counters-20260529` (verification temp branch for PR #45511) | 2026-05-29T05:20:43 UTC | in progress | Verification dispatch for PR #45511. Fresh-build (no SHA-matching successful `single-card-profiler-tests` run on `5cbb6896e10a`). N300-only (`run-n300-profiler: true`, others `false`). Next session MUST log-analyze and classify. |
 
 **Policy:** Concurrent runs across PRs are allowed; each automation session may dispatch at most three new runs.
 
@@ -47,6 +48,7 @@ Last updated: **2026-05-29T04:00 UTC** — Session: Examining lane (2 PRs classi
 
 | Run | Pipeline | Branch | Started | Ended | Result | Notes |
 |-----|----------|--------|---------|-------|--------|-------|
+| [26615944303](https://github.com/tenstorrent/tt-metal/actions/runs/26615944303) | T3000 e2e tests (`t3000-e2e-tests.yaml`) | `ci-disable/verify-t3000-e2e-tests-t3k-ccl-20260529` | 2026-05-29T03:21:22 UTC | 2026-05-29T05:08 UTC | **verification-inconclusive** | PR #45507 → `verification-inconclusive`. Job `t3k_ccl_tests [wh_llmbox]` timed out after 90 minutes. Metal context timeout at 04:12 UTC. Timeout is out-of-scope per policy; budget NOT consumed; re-dispatch eligible. |
 | [26614829843](https://github.com/tenstorrent/tt-metal/actions/runs/26614829843) | metal-run-microbenchmarks (`metal-run-microbenchmarks.yaml`) | `ci-disable/verify-metal-run-microbenchmarks-fabric-mux-bw-20260529` | 2026-05-29T02:44:22 UTC | 2026-05-29T03:06 UTC | **verified-pass** | PR #45498 → `verified-pass`. Disabled tests skipped; 30 passed; [8-8-8-8] geomean error pre-existing on main. |
 | [26614947278](https://github.com/tenstorrent/tt-metal/actions/runs/26614947278) | vllm-nightly-tests (`vllm-nightly-tests.yaml`) | `ci-disable/verify-vllm-nightly-t3k-llama-sampling-20260529` | 2026-05-29T02:48:12 UTC | 2026-05-29T03:34 UTC | **verified-pass** | PR #45500 → `verified-pass`. Target [WH-T3K] sampling-tests PASSED. BH-QB-GE: infra fault (EngineCore failed to start). WH-GLX: Galaxy, out-of-scope. |
 | [26614671489](https://github.com/tenstorrent/tt-metal/actions/runs/26614671489) | Blackhole demo tests (`blackhole-demo-tests.yaml`) | `ci-disable/verify-blackhole-demo-tests-whisper-perf-20260529` | 2026-05-29T02:39:08 UTC | 2026-05-29T∰03 UTC | **verified-pass** | PR #45487 → `verified-pass`. Target `whisper performance [bh_p150_perf]` passed. |
@@ -64,11 +66,11 @@ Last updated: **2026-05-29T04:00 UTC** — Session: Examining lane (2 PRs classi
 | PR | [#45484](https://github.com/tenstorrent/tt-metal/pull/45484) — `[skip ci] Disable MeshDeviceFixture.Top32RmDevPipelineCompletes in tt-metal-l2-nightly llk-sd-unit-tests` (draft, open) |
 | Disable issue | [#45483](https://github.com/tenstorrent/tt-metal/issues/45483) — `[CI] Track disable: MeshDeviceFixture.Top32RmDevPipelineCompletes in tt-metal-l2-nightly llk-sd-unit-tests` (open) |
 | Timeout issue | none |
-| Branch | `ci-disable/tt-metal-l2-nightly-mesh-device-top32-20260528` (head SHA `1fc7f56ced4018bf87ae92251711f408f5153e61` — rebased to `e5d8677f6723e295c57f1ea36c29d85449fdbc76`) |
+| Branch | `ci-disable/tt-metal-l2-nightly-mesh-device-top32-20260528` (head SHA `a4ca2eb5a9f729293212d0042dcd48999d159e70` — rebased to `5cbb6896e10a844495016f3294cc56786487d772`) |
 | Workflow file | `.github/workflows/tt-metal-l2-nightly.yaml` |
 | Lifecycle stage | `verified-pass` |
-| Last rebase | 2026-05-29T01:07 UTC — rebased from `577298dde0ac8bfb943e44997162ee14e9b0069b` → `e5d8677f6723e295c57f1ea36c29d85449fdbc76` (new head `1fc7f56ced4018bf87ae92251711f408f5153e61`), no conflicts |
-| Last revalidation | 2026-05-29T01:07 UTC — `MeshDeviceFixture.Top32RmDevPipelineCompletes` confirmed still failing on `main`; most recent `llk-sd-unit-tests` run with tests actually executing: run 26595275788 (2026-05-28 18:49 UTC) |
+| Last rebase | 2026-05-29T05:10 UTC — rebased from `e5d8677f6723e295c57f1ea36c29d85449fdbc76` → `5cbb6896e10a844495016f3294cc56786487d772` (new head `a4ca2eb5a9f729293212d0042dcd48999d159e70`), no conflicts |
+| Last revalidation | 2026-05-29T05:10 UTC — `MeshDeviceFixture.Top32RmDevPipelineCompletes` confirmed still failing on `main`; most recent run where `llk-sd-unit-tests` actually executed: run 26595275788 (2026-05-28 18:49 UTC). Runs 26605109542 and 26588506741 had `llk-sd-unit-tests` SKIPPED — evidence unchanged |
 | Verification run | [26609412851](https://github.com/tenstorrent/tt-metal/actions/runs/26609412851) — **verified-pass** (completed 2026-05-29T00:31 UTC, conclusion `success`; all 4 llk-sd-unit-tests jobs passed) |
 | Last touched by automation | 2026-05-29T01:07 UTC |
 | Readiness | **Yes — verified-pass, ready for merge review** |
@@ -260,14 +262,14 @@ Main-run evidence: see PR description.
 | PR | [#45507](https://github.com/tenstorrent/tt-metal/pull/45507) — `[skip ci] Disable t3k_ccl_tests test_all_gather_matmul_async / test_all_broadcast_sharded_2x4 / test_ring_joint_sdpa_program_cache in t3000-e2e-tests` (draft, open) |
 | Disable issue | [#45506](https://github.com/tenstorrent/tt-metal/issues/45506) — `[CI] Track disable: t3k_ccl_tests test_all_gather_matmul_async / test_all_broadcast_sharded_2x4 / test_ring_joint_sdpa_program_cache in t3000-e2e-tests` (open) |
 | Timeout issue | none |
-| Branch | `ci-disable/t3000-e2e-tests-t3k-ccl-20260529` (head SHA `8f2beebb86261530d293c685b22d2fbb0b95d27f`) |
+| Branch | `ci-disable/t3000-e2e-tests-t3k-ccl-20260529` (head SHA `79d3ef392dd96a238ee6333ee261a37c9952f5f6` — rebased to `5cbb6896e10a844495016f3294cc56786487d772`) |
 | Workflow file | `.github/workflows/t3000-e2e-tests.yaml` |
-| Lifecycle stage | `verifying` |
-| Last rebase | 2026-05-29T03:21 UTC — created onto `origin/main` HEAD `9727d4445a8d52c844223ba59618e0e5452b9445` |
+| Lifecycle stage | `verification-inconclusive` |
+| Last rebase | 2026-05-29T05:15 UTC — rebased from `9727d4445a8d52c844223ba59618e0e5452b9445` → `5cbb6896e10a844495016f3294cc56786487d772` (new head `79d3ef392dd96a238ee6333ee261a37c9952f5f6`), no conflicts |
 | Last revalidation | 2026-05-29T03:21 UTC — confirmed 3+ consecutive failures in `t3k_ccl_tests [wh_llmbox]` (runs 26561397299, 26497844654, 26438570812); AI summaries from runs 26561397299 and 26497844654 confirm same 3 test names failing; `test_decode_perf` and `test_all_to_all_combine_no_trace_submesh` already disabled in current main code (skip decorator present) |
-| Verification run | [26615944303](https://github.com/tenstorrent/tt-metal/actions/runs/26615944303) — in progress (dispatched 2026-05-29T03:21 UTC, fresh-build, pruned to `t3k_ccl_tests [wh_llmbox]` only) |
-| Last touched by automation | 2026-05-29T03:21 UTC |
-| Readiness | No — verification in progress |
+| Verification run | [26615944303](https://github.com/tenstorrent/tt-metal/actions/runs/26615944303) — **verification-inconclusive** (conclusion `failure`; job timed out after 90 minutes — Metal context timeout at 2026-05-29T04:12 UTC, action timeout at 05:08 UTC; timeout is out-of-scope per policy; budget NOT consumed; re-dispatch eligible) |
+| Last touched by automation | 2026-05-29T05:15 UTC |
+| Readiness | No — verification-inconclusive; re-dispatch needed |
 
 ### Disables (with main evidence)
 
@@ -279,6 +281,32 @@ Main-run evidence: see PR description.
 
 Main-run evidence: see PR description.
 
+## PR #45511 — Sanity tests (TestPerfCountersSingleOp.test_performance_counter_columns[Matmul_perf_counters])
+
+| Field | Value |
+|-------|-------|
+| PR | [#45511](https://github.com/tenstorrent/tt-metal/pull/45511) — `[skip ci] Disable TestPerfCountersSingleOp.test_performance_counter_columns in sanity-tests profiler-tests` (draft, open) |
+| Disable issue | [#45510](https://github.com/tenstorrent/tt-metal/issues/45510) — `[CI] Track disable: TestPerfCountersSingleOp.test_performance_counter_columns in sanity-tests profiler-tests/Perf op report [wh_n300_civ2]` (open) |
+| Timeout issue | none |
+| Branch | `ci-disable/sanity-tests-perf-counters-matmul-20260529` (head SHA `cac9d270e1c74b8c6324484b14789575986214cf`) |
+| Workflow file | `.github/workflows/sanity-tests.yaml` (calls `single-card-profiler-tests-impl.yaml` for profiler job) |
+| Lifecycle stage | `verifying` |
+| Last rebase | 2026-05-29T05:17 UTC — created onto `origin/main` HEAD `5cbb6896e10a844495016f3294cc56786487d772` |
+| Last revalidation | 2026-05-29T05:17 UTC — `TestPerfCountersSingleOp::test_performance_counter_columns[Matmul_perf_counters]` confirmed failing in 4+ consecutive `sanity-tests` main runs (26616624249, 26615707248, 26613293147, 26612419920); same `subprocess.CalledProcessError: ... returned non-zero exit status 4` signature across all runs |
+| Verification run | [26619643533](https://github.com/tenstorrent/tt-metal/actions/runs/26619643533) — in progress (dispatched 2026-05-29T05:20 UTC via `single-card-profiler-tests.yaml` with `run-n300-profiler: true`, others `false`; fresh-build) |
+| Last touched by automation | 2026-05-29T05:20 UTC |
+| Readiness | No — verification in progress |
+
+### Disables (with main evidence)
+
+| Disabled test | Most recent failing main run (job link) | Run completed at |
+|---|---|---|
+| `tests/ttnn/tracy/test_perf_op_report.py::TestPerfCountersSingleOp::test_performance_counter_columns[Matmul_perf_counters]` [wh_n300_civ2] | https://github.com/tenstorrent/tt-metal/actions/runs/26616624249/job/78439009497 | 2026-05-29 04:57 UTC |
+
+Main-run evidence: see PR description.
+
+---
+
 ## Blockers
 
 | Blocker | Status | Notes |
@@ -288,6 +316,8 @@ Main-run evidence: see PR description.
 ---
 
 ## Recent Activity
+
+- **2026-05-29T05:00 UTC session.** Examining lane (2 PRs): PR #45484 rebased from `e5d8677f6723e295c57f1ea36c29d85449fdbc76` → `5cbb6896e10a844495016f3294cc56786487d772` (new head `a4ca2eb5a9f729293212d0042dcd48999d159e70`); revalidation: `MeshDeviceFixture.Top32RmDevPipelineCompletes` still failing — `llk-sd-unit-tests` SKIPPED in runs 26605109542 and 26588506741, most recent run with actual execution: 26595275788 (evidence unchanged). PR #45507 run [26615944303](https://github.com/tenstorrent/tt-metal/actions/runs/26615944303) classified as `verification-inconclusive` — job timed out after 90min (Metal context timeout at 04:12 UTC, action timeout at 05:08 UTC); timeout is out-of-scope per policy; budget NOT consumed; re-dispatch eligible. Branch rebased to `5cbb6896e10a` (new head `79d3ef392dd9`). Workflow survey: checked `blackhole-post-commit`, `single-card-demo-tests`, `runtime-integration-tests`, `models-t1-unit-tests` / `models-t1-e2e-tests` (all Galaxy-only failures), `fast-dispatch-full-regressions-and-models`, `t3000-integration-tests`, `t3000-demo-tests`, `models-t2/t3-unit/e2e-tests`, `perf-models` (hang/timeout — OOS), `perf-device-models`, `runtime-perf-tests`, `merge-gate`, `single-card-profiler-tests`, `t3000-profiler-tests`, `sanity-tests-debug`, `runtime-sanity-tests`. Focus lane (1 new PR): [#45511](https://github.com/tenstorrent/tt-metal/pull/45511) (`sanity-tests.yaml` `profiler-tests / Perf op report [wh_n300_civ2]` — `TestPerfCountersSingleOp::test_performance_counter_columns[Matmul_perf_counters]` — 4 consecutive failures, identical `subprocess.CalledProcessError exit 4` signature; initial disable batch committed; issue [#45510](https://github.com/tenstorrent/tt-metal/issues/45510) created; verification [run 26619643533](https://github.com/tenstorrent/tt-metal/actions/runs/26619643533) dispatched fresh-build on `single-card-profiler-tests.yaml` N300-only, temp branch `ci-disable/verify-sanity-tests-perf-counters-20260529`). 1/3 dispatch slots used (PR #45507 re-dispatch also eligible as priority-3 but session cap met by sanity-tests new PR). Focus slots filled: 1/3 (only 1 eligible uncovered workflow with deterministic failures; PR #45507 is priority-3 verification-inconclusive but counts as 0 new dispatches this session since 1-dispatch session target met with new PR). Note: `gh pr comment` and `gh pr create` returned HTTP 403 — token lacks write permissions for PR operations; PR created and comments posted via MCP GitHub tool instead.
 
 - **2026-05-29T04:00 UTC session.** Examining lane (2 PRs classified as `verified-pass`): PR #45498 (run [26614829843](https://github.com/tenstorrent/tt-metal/actions/runs/26614829843) completed `failure` → **verified-pass**; disabled tests `test_mux_bw_full_size_channels[...-0-8-0-4]` and `test_mux_bw_both_channel_types[...-8-8-1-4]` confirmed **SKIPPED** as expected; 30 passed; 1 pre-existing `[8-8-8-8]` geomean error also present in main run 26587701074 — not a regression; revalidation: both disabled tests still failing in latest main run 26612909413 job 78423388911). PR #45500 (run [26614947278](https://github.com/tenstorrent/tt-metal/actions/runs/26614947278) completed `failure` → **verified-pass**; target `[WH-T3K] Llama-3.1-8B-Instruct with sampling-tests` **PASSED**; BH-QB-GE failure = infra fault, EngineCore failed to start — not a code regression; WH-GLX failure = Galaxy, out of scope; revalidation: sampling tests still failing in main run 26611126930 job 78418064065). PR #45494 per-PR section fixed (lifecycle was incorrectly `verifying` in per-PR section; Quick Index was already correct at `verified-pass` from previous session). PR #45507 run 26615944303 still in progress — left as `verifying`, will classify next session. Focus lane: 0 new PRs — checked uncovered workflows: `(Single-card) Model perf tests` failure = timeout/hang (`Setting cpu` loop then `Cleaning up orphan processes` with no test output) — out of scope; `(T3K) T3000 perf tests` failure = same timeout/hang pattern in all 3 failing jobs — out of scope. No other eligible uncovered non-Galaxy workflows found with ≥3 consecutive deterministic test failures. Focus slots filled: 0/3 (no eligible uncovered workflows). State log corrected and pushed.
 
