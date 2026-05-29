@@ -8,28 +8,12 @@ import argparse
 from pathlib import Path
 
 import torch
-from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, FineGrainedFP8Config
-from transformers.integrations.finegrained_fp8 import Fp8Dequantize
+from transformers import AutoTokenizer
 
-
-_ORIGINAL_DEQUANTIZE_ONE = Fp8Dequantize._dequantize_one
-
-
-def _dequantize_one_compat(self, quantized: torch.Tensor, scales: torch.Tensor) -> torch.Tensor:
-    """Handle scalar FP8 scales on dense linears (some checkpoints use shape [])."""
-    if scales.ndim == 0:
-        fp4_dtype = getattr(torch, "float4_e2m1fn_x2", None)
-        if quantized.dtype == torch.int8 or (fp4_dtype is not None and quantized.dtype == fp4_dtype):
-            quantized_fp32 = self._unpack_fp4(quantized)
-        else:
-            quantized_fp32 = quantized.to(torch.float32)
-        out_dtype = scales.dtype if scales.dtype.is_floating_point and scales.element_size() >= 2 else torch.bfloat16
-        scale = scales.to(torch.float32)
-        return (quantized_fp32 * scale).to(out_dtype)
-    return _ORIGINAL_DEQUANTIZE_ONE(self, quantized, scales)
-
-
-Fp8Dequantize._dequantize_one = _dequantize_one_compat
+from models.experimental.devstral2_123B_instruct.reference.hf_reference_loader import (
+    DEVSTRAL2_MODEL_ID,
+    load_devstral2_causal_lm,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -56,35 +40,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_parser().parse_args()
 
-    model_name = "mistralai/Devstral-2-123B-Instruct-2512"
+    print(f"Loading tokenizer for {DEVSTRAL2_MODEL_ID}...")
+    tokenizer = AutoTokenizer.from_pretrained(DEVSTRAL2_MODEL_ID, trust_remote_code=True)
 
-    print(f"Loading tokenizer for {model_name}...")
-    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-
-    print(f"Loading model for {model_name}...")
-    offload_folder = Path(args.offload_folder)
-    offload_folder.mkdir(parents=True, exist_ok=True)
-
-    config = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
-    model_quant_cfg = getattr(config, "quantization_config", {}) or {}
-    quantization_config = FineGrainedFP8Config(
-        activation_scheme=model_quant_cfg.get("activation_scheme", "static"),
-        weight_block_size=model_quant_cfg.get("weight_block_size", None),
-        dequantize=False,
-        modules_to_not_convert=model_quant_cfg.get("modules_to_not_convert", None),
-    )
-
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        dtype=torch.bfloat16,
-        device_map="auto",
-        offload_folder=str(offload_folder),
-        offload_state_dict=True,
-        quantization_config=quantization_config,
-        trust_remote_code=True,
-    )
-    model.eval()
-
+    print(f"Loading model for {DEVSTRAL2_MODEL_ID}...")
+    model = load_devstral2_causal_lm(offload_folder=Path(args.offload_folder))
     device = next(model.parameters()).device
 
     messages = [{"role": "user", "content": args.prompt}]
