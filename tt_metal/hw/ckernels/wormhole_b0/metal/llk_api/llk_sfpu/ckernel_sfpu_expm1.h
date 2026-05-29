@@ -55,11 +55,8 @@ namespace ckernel::sfpu {
  *
  * This approach avoids underflow for tiny values, and overflow for huge
  * values.
- *
- * When half is true, leave the result scaled by 1/2 for callers that
- * immediately need expm1(a) / 2.
  */
-template <bool is_fp32_dest_acc_en, bool half = false>
+template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _sfpu_expm1_(sfpi::vFloat a) {
     sfpi::vFloat log2e = sfpi::vConstFloatPrgm0;
     sfpi::vFloat rounding_bias = 12582912.f;
@@ -90,13 +87,10 @@ sfpi_inline sfpi::vFloat _sfpu_expm1_(sfpi::vFloat a) {
 
         r = r * s + f;
 
-        v_block {
-            if constexpr (!half) {
-                // For j == 0.0, r is already expm1(a). Avoid half-scaled
-                // reconstruction as subnormals flush to zero, so
-                // (0.5 * r) * 2 can lose tiny normal results.
-                v_and(j != 0.0f);
-            }
+        // For j == 0.0, r is already expm1(a). Avoid half-scaled
+        // reconstruction as subnormals flush to zero, so
+        // (0.5 * r) * 2 can lose tiny normal results.
+        v_if (j != 0.0f) {
             sfpi::vFloat jm2 = j + -2.0f;
             // Keep reconstruction half-scaled: scale is 0.5 * 2**i. Avoids
             // materialising 2**i directly near overflow boundary.
@@ -115,11 +109,9 @@ sfpi_inline sfpi::vFloat _sfpu_expm1_(sfpi::vFloat a) {
                 v_endif;
             }
             v_endif;
-            if constexpr (!half) {
-                r *= 2.0f;
-            }
+            r *= 2.0f;
         }
-        v_endblock;
+        v_endif;
     } else {
         sfpi::vFloat s, t, u, x, y;
 
@@ -148,10 +140,7 @@ sfpi_inline sfpi::vFloat _sfpu_expm1_(sfpi::vFloat a) {
         v_endif;
         r = r * s + u;
 
-        v_block {
-            if constexpr (!half) {
-                v_and(j != 0.0f);
-            }
+        v_if (j != 0.0f) {
             v_if(jm1 != 0.0f) {
                 t = sfpi::reinterpret<sfpi::vFloat>((i << 23) + sfpi::reinterpret<sfpi::vInt>(w));
                 y = t - w;
@@ -178,11 +167,9 @@ sfpi_inline sfpi::vFloat _sfpu_expm1_(sfpi::vFloat a) {
                 v_endif;
             }
             v_endif;
-            if constexpr (!half) {
-                r *= 2.0f;
-            }
+            r *= 2.0f;
         }
-        v_endblock;
+        v_endif;
     }
 
     return r;
