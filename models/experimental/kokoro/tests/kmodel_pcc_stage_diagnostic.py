@@ -57,12 +57,6 @@ from models.experimental.kokoro.tests.kmodel_decode_stack_diagnostic import (
     _run_ref_decode_stack,
     _run_tt_decode_stack,
 )
-from models.experimental.kokoro.tests.sinegen_stage_diagnostic import (
-    _STAGE_OPS as _SINEGEN_STAGE_OPS,
-    _classify as _classify_pcc,
-    _run_ref_sinegen_stages,
-    _run_tt_sinegen_stages,
-)
 
 _DEFAULT_TEXT = os.getenv("KOKORO_PCC_DEBUG_TEXT", "Hello from Tenstorrent.")
 _VOICE = "af_heart"
