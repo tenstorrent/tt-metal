@@ -37,4 +37,3 @@ set(X86_64_ONLY_TESTS
     dispatch/test_dispatcher.cpp
     3_pcie_transfer/test_pull_from_pcie.cpp
 )
-
