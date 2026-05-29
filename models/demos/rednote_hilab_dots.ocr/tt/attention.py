@@ -273,25 +273,22 @@ class TtAttention(LightweightModule):
             dtype=ttnn.bfloat16,
         )  # [seq, (nh + 2*nkv)*hd]
 
-        # GQA head split. The fused weight is cat([Wq, Wk, Wv]) so the columns
-        # are contiguous: first nh*hd are Q, next nkv*hd are K, last nkv*hd V.
-        # Mirror the reference's view(bsz, q_len, heads, hd).transpose(1, 2).
-        q = qkv[:, : nh * hd]
-        k = qkv[:, nh * hd : (nh + nkv) * hd]
-        v = qkv[:, (nh + nkv) * hd :]
-
-        # -> [1, seq, heads, hd] for rope (cos/sin broadcast over heads).
-        # The head-split reshapes are the block's top hotspot (tracy: 38% of
-        # kernel time when left DRAM-interleaved); pin their outputs to L1 so
-        # the downstream permute/RoPE/repeat_kv chain reads from L1 not DRAM.
-        q = ttnn.reshape(q, (1, seq, nh, hd), memory_config=ttnn.L1_MEMORY_CONFIG)
-        k = ttnn.reshape(k, (1, seq, nkv, hd), memory_config=ttnn.L1_MEMORY_CONFIG)
-        v = ttnn.reshape(v, (1, seq, nkv, hd), memory_config=ttnn.L1_MEMORY_CONFIG)
-
-        # -> [1, heads, seq, hd] (transpose seq<->heads) for batched attention.
-        q = ttnn.permute(q, (0, 2, 1, 3))
-        k = ttnn.permute(k, (0, 2, 1, 3))
-        v = ttnn.permute(v, (0, 2, 1, 3))
+        # GQA head split via the fused nlp_create_qkv_heads -- reshape + slice +
+        # transpose in ONE op, returning q [1,nh,seq,hd] and k/v [1,nkv,seq,hd]
+        # (the layout attention wants). Replaces a manual
+        # slice->reshape->permute chain that was the block's top hotspot
+        # (tracy: ~38% of kernel time, DRAM round-trips); the earlier
+        # L1-pin only made that bad reshape faster instead of removing it. The
+        # fused weight is cat([Wq,Wk,Wv]) -> contiguous q|k|v columns, exactly
+        # what the op expects. head_dim 128 is tile-aligned (no sub-tile case).
+        qkv = ttnn.reshape(qkv, (1, 1, seq, (nh + 2 * nkv) * hd))
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            qkv,
+            num_heads=nh,
+            num_kv_heads=nkv,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # q [1,nh,seq,hd]; k,v [1,nkv,seq,hd]
 
         # 1D RoPE on q and k (cos/sin broadcast over heads).
         q = self._apply_rope(q)
@@ -324,10 +321,9 @@ class TtAttention(LightweightModule):
             dtype=ttnn.bfloat16,
         )  # [1, nh, seq, hd]
 
-        # Concat heads: [1, nh, seq, hd] -> [1, seq, nh, hd] -> [seq, hidden].
-        # Pin the head-merge reshape output to L1 so the o_proj matmul reads
-        # its input from L1 rather than DRAM-interleaved.
-        attn = ttnn.permute(attn, (0, 2, 1, 3))
+        # Fused head-merge: nlp_concat_heads ([1,nh,seq,hd] -> [1,1,seq,nh*hd])
+        # in one op instead of permute + reshape.
+        attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         attn = ttnn.reshape(attn, (seq, nh * hd), memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # Output projection (no bias): [seq, hidden] @ [hidden, hidden].
@@ -357,12 +353,19 @@ class TtAttention(LightweightModule):
             compute_kernel_config=self.compute_kernel_config,
             dtype=ttnn.bfloat16,
         )
-        q = qkv[:, : nh * hd]
-        k = qkv[:, nh * hd : (nh + nkv) * hd]
-        v = qkv[:, (nh + nkv) * hd :]
-        q = ttnn.permute(ttnn.reshape(q, (1, n_tok, nh, hd)), (0, 2, 1, 3))
-        k = ttnn.permute(ttnn.reshape(k, (1, n_tok, nkv, hd)), (0, 2, 1, 3))
-        v = ttnn.permute(ttnn.reshape(v, (1, n_tok, nkv, hd)), (0, 2, 1, 3))
+        # Fused GQA head split (reshape+slice+transpose in ONE op) -> q
+        # [1,nh,n_tok,hd], k/v [1,nkv,n_tok,hd]. Replaces a manual
+        # slice->reshape->permute chain that round-tripped the QKV through DRAM
+        # (the prefill hotspot at long prompt_len). Used by prefill_kv (n_tok=
+        # prompt_len) and the decode paths (n_tok=1). head_dim 128 is tile-aligned.
+        qkv = ttnn.reshape(qkv, (1, 1, n_tok, (nh + 2 * nkv) * hd))
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            qkv,
+            num_heads=nh,
+            num_kv_heads=nkv,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
         return q, k, v
 
     def _rope_with(self, x: ttnn.Tensor, cos_tt: ttnn.Tensor, sin_tt: ttnn.Tensor) -> ttnn.Tensor:
@@ -433,7 +436,8 @@ class TtAttention(LightweightModule):
             )
             mem = ttnn.DRAM_MEMORY_CONFIG
 
-        attn = ttnn.permute(attn, (0, 2, 1, 3))
+        # Fused head-merge: nlp_concat_heads ([1,nh,seq,hd] -> [1,1,seq,nh*hd]).
+        attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         attn = ttnn.reshape(attn, (seq, nh * hd), memory_config=mem)
         return ttnn.linear(
             attn,
