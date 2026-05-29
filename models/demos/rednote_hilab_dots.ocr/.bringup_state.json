@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-29T00:11:46Z",
-  "updated_at": "2026-05-29T04:28:14Z",
+  "updated_at": "2026-05-29T04:36:25Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -629,8 +629,16 @@
         "after_us": 348.43
       },
       "real_weights": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "tt/weight_loader.py",
+          "tests/test_real_hf_weights.py",
+          "tt/attention.py"
+        ],
+        "notes": "Loaded real layer-0 Qwen2 self-attn q/k/v_proj weight+BIAS + o_proj weight (no bias) via load_lm_attention_weights. GQA 12/2 head_dim 128, 1D RoPE theta 1e6, causal. Real K reaches +/-320 (large k_proj bias) so QK^T scores stored bf16 was dominant PCC loss; switched scores matmul output to fp32 (fp32_dest_acc already accumulates fp32). Real-weights PCC 0.9966 (synthetic regression held 0.99999).",
+        "pcc": 0.9966279746503546,
+        "params_loaded": 5507072
       }
     },
     {
@@ -1178,6 +1186,12 @@
       "tick": 44,
       "ts": "2026-05-29T04:28:14Z",
       "action": "device[rope]",
+      "result": "ok"
+    },
+    {
+      "tick": 45,
+      "ts": "2026-05-29T04:36:25Z",
+      "action": "device[attention]",
       "result": "ok"
     }
   ],

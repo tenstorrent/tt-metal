@@ -325,6 +325,51 @@ def load_lm_rope_config(checkpoint_path: str) -> Dict[str, float]:
     }
 
 
+def load_lm_attention_weights(checkpoint_path: str, layer_idx: int = 0) -> Dict[str, torch.Tensor]:
+    """Load a real LM decoder-layer self-attention's weights + QKV biases.
+
+    The dots.ocr language model is a Qwen2 trunk, so each decoder layer's
+    self-attention (Qwen2Attention) is GQA with 12 query / 2 KV heads, head_dim
+    128, and -- DISTINCT from the bias-free vision attention -- carries a BIAS on
+    each of q/k/v_proj (Qwen2 has QKV bias); o_proj has NO bias. HF keys
+    (layer ``i``):
+        model.layers.{i}.self_attn.q_proj.weight  [1536, 1536]   (12 heads x 128)
+        model.layers.{i}.self_attn.q_proj.bias    [1536]
+        model.layers.{i}.self_attn.k_proj.weight  [256, 1536]    (2 KV heads x 128)
+        model.layers.{i}.self_attn.k_proj.bias    [256]
+        model.layers.{i}.self_attn.v_proj.weight  [256, 1536]
+        model.layers.{i}.self_attn.v_proj.bias    [256]
+        model.layers.{i}.self_attn.o_proj.weight  [1536, 1536]   (no bias)
+
+    Returns the flat state_dict (fp32) keyed exactly as the eager reference
+    :func:`reference.functional.attention_forward` expects (and the per-proj
+    weights/biases :class:`tt.attention.TtAttention` consumes via its fused
+    cat([Wq,Wk,Wv]) build):
+        {"q_proj.weight", "q_proj.bias", "k_proj.weight", "k_proj.bias",
+         "v_proj.weight", "v_proj.bias", "o_proj.weight"}.
+    """
+    prefix = f"model.layers.{layer_idx}.self_attn"
+    keys = [
+        f"{prefix}.q_proj.weight",
+        f"{prefix}.q_proj.bias",
+        f"{prefix}.k_proj.weight",
+        f"{prefix}.k_proj.bias",
+        f"{prefix}.v_proj.weight",
+        f"{prefix}.v_proj.bias",
+        f"{prefix}.o_proj.weight",
+    ]
+    tensors = load_hf_tensors(checkpoint_path, keys)
+    return {
+        "q_proj.weight": tensors[f"{prefix}.q_proj.weight"],
+        "q_proj.bias": tensors[f"{prefix}.q_proj.bias"],
+        "k_proj.weight": tensors[f"{prefix}.k_proj.weight"],
+        "k_proj.bias": tensors[f"{prefix}.k_proj.bias"],
+        "v_proj.weight": tensors[f"{prefix}.v_proj.weight"],
+        "v_proj.bias": tensors[f"{prefix}.v_proj.bias"],
+        "o_proj.weight": tensors[f"{prefix}.o_proj.weight"],
+    }
+
+
 def load_vision_tower_weights(checkpoint_path: str, num_layers: int) -> Dict[str, torch.Tensor]:
     """Load the full DotsVisionTransformer (vision tower) real weights.
 

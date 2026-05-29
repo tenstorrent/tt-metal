@@ -238,12 +238,17 @@ class TtAttention(LightweightModule):
         v = self._repeat_kv(v)
 
         # attn = softmax(q k^T * scale + causal_mask) @ v.  k^T -> [1, nh, hd, seq]
+        # Keep the QK^T scores in fp32: real-weight K reaches ±320 (large k_proj
+        # bias), so the pre-softmax scores have a wide dynamic range and bf16
+        # rounding of the scores is the dominant PCC loss (drops ~0.984 -> 0.998
+        # when fp32). fp32_dest_acc already accumulates the dot product in fp32;
+        # storing the matmul output fp32 preserves it through scale/mask/softmax.
         k_t = ttnn.permute(k, (0, 1, 3, 2))
         scores = ttnn.matmul(
             q,
             k_t,
             compute_kernel_config=self.compute_kernel_config,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.float32,
         )
         scores = ttnn.mul(scores, self.scale)
         scores = ttnn.add(scores, self.attn_mask)

@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** p150 (blackhole)
 **Started:** 2026-05-29T00:11:46Z
-**Updated:** 2026-05-29T04:28:14Z
+**Updated:** 2026-05-29T04:36:25Z
 
 ## Block Status
 
@@ -64,7 +64,7 @@
 | attention | ttnn | done | 0.999989 | 0 | GQA 12/2 head_dim 128, QKV bias, o_proj no bias, 1D RoPE theta 1e6, causal additive mask. Manual head split (fused cat[Wq,Wk,Wv]), repeat_kv n_rep=6, HiFi4+fp32_dest_acc. |
 | attention | debug | n/a | — | 0 |  |
 | attention | optimization | done | 0.999989 | 0 | Tracy captured under --traced (metal trace replay session) at production shapes seq=128 GQA 12/2 head_dim=128 causal. Top hotspot ReshapeViewDeviceOperation 45.5%. Fix: L1-pinned the head-split (qkv slices -> reshape [1,seq,nh/nkv,hd]) and head-merge (-> [seq,nh*hd]) reshape outputs via memory_config=L1_MEMORY_CONFIG. Block kernel time 445.68->348.43us (-21.8%); 60.2% of output now L1 vs 100% DRAM before. Downstream chain shrank: Matmul 148.08->92.90us, Transpose 37.58->22.64us, Binary 29.00->25.33us. PCC 0.999989322840819 held. |
-| attention | real_weights | pending | — | 0 |  |
+| attention | real_weights | done | 0.996628 | 0 | Loaded real layer-0 Qwen2 self-attn q/k/v_proj weight+BIAS + o_proj weight (no bias) via load_lm_attention_weights. GQA 12/2 head_dim 128, 1D RoPE theta 1e6, causal. Real K reaches +/-320 (large k_proj bias) so QK^T scores stored bf16 was dominant PCC loss; switched scores matmul output to fp32 (fp32_dest_acc already accumulates fp32). Real-weights PCC 0.9966 (synthetic regression held 0.99999). |
 | mlp | reference | done | 1.000000 | 0 | Qwen2MLP SwiGLU SiLU (gate/up/down 1536<->8960, no bias). PCC=1.0 vs HF. |
 | mlp | ttnn | done | 0.999985 | 0 | Qwen2 SwiGLU MLP 1536<->8960 no bias; fused gate/up linear, on-device silu+mul; HiFi4+fp32_dest_acc. Guard ok. |
 | mlp | debug | n/a | — | 0 |  |
@@ -94,7 +94,6 @@
 
 ## Recent Ticks
 
-- tick 35 (2026-05-29T03:35:03Z): device[language_model] — ok
 - tick 36 (2026-05-29T03:41:01Z): device[vision_rmsnorm] — ok
 - tick 37 (2026-05-29T03:47:35Z): device[vision_attention] — ok
 - tick 38 (2026-05-29T03:53:12Z): device[vision_mlp] — ok
@@ -104,6 +103,7 @@
 - tick 42 (2026-05-29T04:16:28Z): device[embedding] — ok
 - tick 43 (2026-05-29T04:22:04Z): device[rmsnorm] — ok
 - tick 44 (2026-05-29T04:28:14Z): device[rope] — ok
+- tick 45 (2026-05-29T04:36:25Z): device[attention] — ok
 
 ## Host-Resident Exceptions
 
