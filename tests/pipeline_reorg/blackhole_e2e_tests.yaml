@@ -342,3 +342,84 @@
       timeout: 30
   owner_id: U094PKWHNJ0 # Petar Milojevic
   team: models
+
+- id: bh-p150-deepseek-prefill-op-tests
+  name: bh_p150_DeepSeek_PREFILL_OP_TESTS
+  model-name: deepseek_prefill
+  # Sweeps the entire op_unit_tests/ folder for single-chip configs.
+  # The `requires_mesh_topology` mark in models/demos/deepseek_v3_d_p/tests/
+  # conftest.py and the mesh_device fixture both skip configs whose
+  # devices_needed != num_devices on Blackhole, so on bh_p150b_civ2 (1xP150)
+  # only the (1,1) "single" parametrize variants run; all multi-chip variants
+  # skip cleanly at collection / fixture time.
+  cmd: |
+    exit_code=0
+    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/ -vvv --tb=short || exit_code=$?
+    exit $exit_code
+  skus:
+    bh_p150b_civ2:
+      timeout: 15
+  owner_id: U094PKWHNJ0 # Petar Milojevic
+  team: models
+
+- id: bh-p300-deepseek-prefill-op-tests
+  name: bh_p300_DeepSeek_PREFILL_OP_TESTS
+  model-name: deepseek_prefill
+  # Sweeps the entire op_unit_tests/ folder for the 2-chip P300 card.
+  # The `requires_mesh_topology` mark in models/demos/deepseek_v3_d_p/tests/
+  # conftest.py and the mesh_device fixture both skip configs whose
+  # devices_needed != num_devices on Blackhole, so on bh_p300 (1xP300 = 2 chips)
+  # only the 2-chip parametrize variants run; 1/4/8-chip and galaxy variants
+  # skip cleanly at collection / fixture time.
+  cmd: |
+    exit_code=0
+    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/ -vvv --tb=short || exit_code=$?
+    exit $exit_code
+  skus:
+    bh_p300:
+      timeout: 25
+  owner_id: U094PKWHNJ0 # Petar Milojevic
+  team: models
+
+- id: bh-db-deepseek-prefill-op-tests
+  name: bh_db_DeepSeek_PREFILL_OP_TESTS
+  model-name: deepseek_prefill
+  # Sweeps the entire op_unit_tests/ folder for the 2-chip DeskBox (2xP150).
+  # The `requires_mesh_topology` mark in models/demos/deepseek_v3_d_p/tests/
+  # conftest.py and the mesh_device fixture both skip configs whose
+  # devices_needed != num_devices on Blackhole, so on bh_deskbox (2xP150 = 2
+  # chips) only the 2-chip parametrize variants run; 1/4/8-chip and galaxy
+  # variants skip cleanly at collection / fixture time.
+  cmd: |
+    exit_code=0
+    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/ -vvv --tb=short || exit_code=$?
+    exit $exit_code
+  skus:
+    bh_deskbox:
+      timeout: 25
+  owner_id: U094PKWHNJ0 # Petar Milojevic
+  team: models
+
+- id: bh-qb2-deepseek-prefill-op-tests
+  name: bh_qb2_DeepSeek_PREFILL_OP_TESTS
+  model-name: deepseek_prefill
+  # Sweeps the entire op_unit_tests/ folder for the 4-chip QuietBox 2 (2xP300).
+  # The `requires_mesh_topology` mark in models/demos/deepseek_v3_d_p/tests/
+  # conftest.py and the mesh_device fixture both skip configs whose
+  # devices_needed != num_devices on Blackhole, so on bh_quietbox_2 (2xP300 = 4
+  # chips) only the 4-chip parametrize variants run; 1/2/8-chip and galaxy
+  # variants skip cleanly at collection / fixture time.
+  #
+  # Per-file -k override (mirrors bh-qb behavior for the 4-chip config):
+  #   test_ring_joint_mla -> only `2x2 and pcc_check` variants (the only
+  #   4-chip-compatible parametrize, restricted to the pcc_check axis to keep
+  #   runtime in budget).
+  cmd: |
+    exit_code=0
+    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/ -vvv --tb=short -k "not test_ring_joint_mla or (2x2 and pcc_check)" || exit_code=$?
+    exit $exit_code
+  skus:
+    bh_quietbox_2:
+      timeout: 30
+  owner_id: U094PKWHNJ0 # Petar Milojevic
+  team: models
