@@ -4,17 +4,37 @@
 """
 Prefill + decode smoke test for Mistral-Small-4 text model.
 
-Runs a short prefill then steps through N decode iterations.
-Checks: finite logits, correct shape at every step.
+Runs prefill_next_token then N decode_next_token steps (on-device argmax).
+Every token id is read back from device; no logits ever cross the PCIe bus.
 
 Run manually::
 
     export MISTRAL4_DECODE_SMOKE=1
     export MISTRAL4_DECODE_N_LAYERS=2        # optional; default 2
     export MISTRAL4_DECODE_PREFILL_LEN=4     # optional; default 4
-    export MISTRAL4_DECODE_N_STEPS=5         # optional; default 5
+    export MISTRAL4_DECODE_N_STEPS=3         # optional; default 3
     export MESH_DEVICE=P150x8                # optional
     pytest models/experimental/mistral_small_4_119b/tests/test_text_decode_smoke.py -v -s --timeout=0
+
+Device-perf profiling (per-op timing for one decode step)::
+
+    TT_METAL_PROFILER_MID_RUN_DUMP=1 python -m tracy -r -m -p -v \
+        --op-support-count 10000 pytest \
+        models/experimental/mistral_small_4_119b/tests/test_text_decode_smoke.py -v -s --timeout=0
+
+A tracy signpost ("Performance pass") is emitted right before the last decode
+iteration; tracy's per-op CSV is filtered to ops after the last signpost, so
+the report contains exactly one measured decode step.
+
+The device profiler DRAM buffer is sized to hold a fixed number of programs;
+the default (1000, see DEFAULT_PROFILER_PROGRAM_SUPPORT_COUNT in
+tt_metal/impl/profiler/profiler_state_manager.cpp) is too small for a full
+36-layer prefill + decode run and you get "Profiler DRAM buffers were full,
+markers were dropped" followed by the post-run AssertionError
+"Op N not present in cpp_device_perf_report.csv". Bump it with
+--op-support-count 10000 (or higher if it still overflows). MID_RUN_DUMP=1
+just makes tracy write the host-side CSV more often; it does NOT drain the
+device buffer faster.
 """
 
 from __future__ import annotations
@@ -44,9 +64,7 @@ pytest.importorskip("transformers.models.mistral4.modeling_mistral4", reason="Mi
 
 _N_LAYERS = int(os.environ.get("MISTRAL4_DECODE_N_LAYERS", "2"))
 _PREFILL_LEN = int(os.environ.get("MISTRAL4_DECODE_PREFILL_LEN", "4"))
-_N_STEPS = int(os.environ.get("MISTRAL4_DECODE_N_STEPS", "5"))
-_PROFILE_STEPS = max(1, int(os.environ.get("MISTRAL4_DECODE_PROFILE_STEPS", "1")))
-_ON_DEVICE_ARGMAX = os.environ.get("MISTRAL4_DECODE_ON_DEVICE_ARGMAX", "0") == "1"
+_N_STEPS = int(os.environ.get("MISTRAL4_DECODE_N_STEPS", "3"))
 _MAX_SEQ_LEN = _PREFILL_LEN + _N_STEPS + 64  # small cache for smoke
 
 
@@ -61,7 +79,7 @@ def _state_dict_prefixes(n_layers: int) -> tuple:
 
 def _mesh_params():
     shape = mesh_device_request_param()
-    base = {"trace_region_size": 128 * 1024 * 1024, "num_command_queues": 1}  # 36-layer decode trace ~66 MB
+    base = {"num_command_queues": 1}
     fabric = ttnn.FabricConfig.DISABLED if shape == (1, 1) else ttnn.FabricConfig.FABRIC_1D
     return [pytest.param(shape, {**base, "fabric_config": fabric}, id=f"mesh{shape[0]}x{shape[1]}")]
 
@@ -74,7 +92,7 @@ def _mesh_params():
 )
 @pytest.mark.parametrize("mesh_device, device_params", _mesh_params(), indirect=True)
 def test_mistral_small_4_text_decode_smoke(reset_seeds, mesh_device):
-    """Prefill N tokens, greedily decode M steps, check shapes and finiteness."""
+    """Prefill N tokens, greedily decode M steps on-device, check token ids are valid."""
     from transformers import AutoConfig
     from transformers.models.mistral4.modeling_mistral4 import Mistral4RotaryEmbedding
 
@@ -98,20 +116,15 @@ def test_mistral_small_4_text_decode_smoke(reset_seeds, mesh_device):
 
     rotary = Mistral4RotaryEmbedding(text).eval().to(torch.bfloat16)
 
-    # ── Build model ──────────────────────────────────────────────────────
     logger.info(f"Building TtMistral4TextModel ({_N_LAYERS} layers, max_seq={_MAX_SEQ_LEN})...")
-    try:
-        model = TtMistral4TextModel(
-            mesh_device=mesh_device,
-            state_dict=state_dict,
-            text_config=text,
-            num_decoder_layers=_N_LAYERS,
-            max_seq_len=_MAX_SEQ_LEN,
-        )
-    except Exception as exc:
-        pytest.fail(f"TtMistral4TextModel init failed: {exc}")
+    model = TtMistral4TextModel(
+        mesh_device=mesh_device,
+        state_dict=state_dict,
+        text_config=text,
+        num_decoder_layers=_N_LAYERS,
+        max_seq_len=_MAX_SEQ_LEN,
+    )
 
-    # ── Prefill ──────────────────────────────────────────────────────────
     torch.manual_seed(42)
     input_ids = torch.randint(0, vocab, (1, _PREFILL_LEN), dtype=torch.long)
 
@@ -122,71 +135,40 @@ def test_mistral_small_4_text_decode_smoke(reset_seeds, mesh_device):
     model.cache_rope_tables(cos_full, sin_full)
 
     logger.info(f"Running prefill (seq_len={_PREFILL_LEN})...")
-    prefill_logits = model.prefill(input_ids)
+    next_token = model.prefill_next_token(input_ids)
+    assert (
+        isinstance(next_token, int) and 0 <= next_token < vocab
+    ), f"prefill_next_token returned invalid token id: {next_token}"
+    logger.info(f"Prefill OK. First decode token (on-device argmax): {next_token}")
 
-    assert prefill_logits.shape == (
-        1,
-        _PREFILL_LEN,
-        vocab,
-    ), f"Prefill logits shape {tuple(prefill_logits.shape)} != (1, {_PREFILL_LEN}, {vocab})"
-    assert torch.isfinite(prefill_logits.to(torch.float32)).all(), "Non-finite values in prefill logits"
-    logger.info(f"Prefill OK: shape={tuple(prefill_logits.shape)}")
-
-    # ── Greedy decode loop ───────────────────────────────────────────────
-    next_token = prefill_logits[0, -1, :].argmax().item()
-    logger.info(f"First decode token (greedy from prefill): {next_token}")
-    logger.info(f"On-device decode argmax mode: {_ON_DEVICE_ARGMAX}")
-
-    # Step 0 is the JIT-compile pass (slow).
-    # Step 1 captures the decode trace so steps 2+ replay it (fast path).
-    # Steps after the Tracy signpost are the perf-measured iterations.
-    _CAPTURE_TRACE = _ON_DEVICE_ARGMAX  # trace only wired for on-device-argmax path
     decode_times = []
-    profile_start_step = max(1, _N_STEPS - _PROFILE_STEPS)
     for step in range(_N_STEPS):
-        if step == 1 and _CAPTURE_TRACE:
-            # After one JIT-compile step, capture the trace so all subsequent
-            # steps replay it.  Capture happens here (not at step 0) because
-            # step 0 triggers kernel compilation; step 1 runs with compiled kernels.
-            ttnn.synchronize_device(mesh_device)
-            logger.info("Capturing decode trace…")
-            model.capture_decode_trace()
-            logger.info("Decode trace captured.")
-
-        if step == profile_start_step:
+        # Emit a tracy signpost right before the LAST decode step so the
+        # per-op CSV is filtered to a single measured iteration. Earlier
+        # steps act as warmup (step 0 is the JIT-compile pass).
+        if step == _N_STEPS - 1:
             ttnn.synchronize_device(mesh_device)
             signpost("Performance pass")
+
         current_pos = _PREFILL_LEN + step
         tok_tensor = torch.tensor([[next_token]], dtype=torch.long)
 
         t0 = time.perf_counter()
-        if _ON_DEVICE_ARGMAX:
-            next_token = model.decode_next_token(tok_tensor, current_pos)
-            decode_logits = None
-        else:
-            decode_logits = model.decode(tok_tensor, current_pos)
+        next_token = model.decode_next_token(tok_tensor, current_pos)
         ttnn.synchronize_device(mesh_device)
         dt = time.perf_counter() - t0
-        if step >= profile_start_step:
-            decode_times.append(dt)
+        decode_times.append(dt)
 
-        if decode_logits is not None:
-            assert decode_logits.shape == (
-                1,
-                1,
-                vocab,
-            ), f"Step {step}: decode logits shape {tuple(decode_logits.shape)} != (1, 1, {vocab})"
-            assert torch.isfinite(
-                decode_logits.to(torch.float32)
-            ).all(), f"Step {step}: non-finite values in decode logits"
-            next_token = decode_logits[0, 0, :].argmax().item()
+        assert (
+            isinstance(next_token, int) and 0 <= next_token < vocab
+        ), f"Step {step}: decode_next_token returned invalid token id: {next_token}"
         logger.info(f"Decode step {step} (pos={current_pos}): {dt*1e3:.2f} ms, next token={next_token}")
 
-    if decode_times:
-        ts = sorted(decode_times)
-        med = ts[len(ts) // 2] * 1e3
-        logger.info(
-            f"Steady-state decode wall-clock: median={med:.2f} ms"
-            f" (min={ts[0]*1e3:.2f}, max={ts[-1]*1e3:.2f}, n={len(decode_times)})"
-        )
+    # Step 0 is the JIT-compile pass, exclude from steady-state stats.
+    steady = sorted(decode_times[1:]) if len(decode_times) > 1 else sorted(decode_times)
+    med = steady[len(steady) // 2] * 1e3
+    logger.info(
+        f"Steady-state decode wall-clock: median={med:.2f} ms"
+        f" (min={steady[0]*1e3:.2f}, max={steady[-1]*1e3:.2f}, n={len(steady)})"
+    )
     logger.info(f"{_N_LAYERS}-layer prefill({_PREFILL_LEN})+decode({_N_STEPS}) smoke: PASSED")
