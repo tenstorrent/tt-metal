@@ -473,6 +473,13 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     // Writer compute sync: when used from MoE, use matmul's data-ready semaphore; else create local (standalone).
     const uint32_t writer_compute_sync_semaphore_id = compute_sync_semaphore_id;
 
+    // Each link's termination master is incremented by every other worker on that link, so the
+    // local-termination wait count must be (workers per link - 1). Using num_data_parallel_cores - 1
+    // here is only correct when num_workers_per_link == num_data_parallel_cores (e.g. WH layouts);
+    // on layouts where a link spans multiple token-parallel groups (e.g. BH num_links=2) the
+    // semaphore overshoots that smaller target and an exact-match wait deadlocks.
+    const uint32_t num_workers_per_link = num_worker_cores / num_links;
+
     std::unordered_map<std::string, uint32_t> writer_named_ct_args = {
         {"dense_token_maps_cb_id", dense_token_maps_cb_id},
         {"data_cb_id", data_cb_id},
@@ -482,6 +489,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
         {"packet_header_cb_id", client_interface_cb_id},
         {"num_token_parallel_cores", num_token_parallel_cores},
         {"num_data_parallel_cores", num_data_parallel_cores},
+        {"num_workers_per_link", num_workers_per_link},
         {"use_init_semaphore", use_init_semaphore},
         {"noc_x_start", start_coord.x},
         {"noc_y_start", start_coord.y},
@@ -538,7 +546,6 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
         writer_config);
 
     const auto termination_master_semaphore_id = CreateSemaphore(program, {needed_worker_core_range_set}, 0);
-    const uint32_t num_workers_per_link = num_worker_cores / num_links;
 
     const auto idx = std::views::iota(std::size_t{0}, sender_cores.size());
     auto termination_master_cores = idx |
