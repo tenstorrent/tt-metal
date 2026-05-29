@@ -16,13 +16,14 @@
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>  // tt::DataFormat
 
-namespace tt::tt_metal::experimental::metal2_host_api {
-
-// A name identifying a DataflowBufferSpec within a ProgramSpec.
-using DFBSpecName = std::string;
-
-// A DataflowBufferSpec is a descriptor for a Dataflow Buffer (DFB):
-// A software FIFO for sharing data between a producer kernel and a consumer kernel.
+// ============================================================================
+// DataflowBufferSpec — descriptor for a Dataflow Buffer (DFB)
+// ============================================================================
+//
+// A DataflowBufferSpec (DFB) is a software FIFO for sharing data between a
+// producer kernel and a consumer kernel. "DFB" is used freely throughout the
+// Metal 2.0 API as the canonical abbreviation for DataflowBuffer once
+// introduced here.
 //
 // A DFB has the following properties:
 //  - Entry size
@@ -30,21 +31,33 @@ using DFBSpecName = std::string;
 //  - (Optional) entry format metadata (data format, tile format)
 //  - (Additional advanced options)
 //
-// A DFB's endpoint configuration is specified at the DFB binding site in KernelSpec, not here.
-// (producer/consumer kernel identity, threads, and access patterns)
+// A DFB's endpoint configuration is specified at the DFB binding site in
+// KernelSpec, not here. (Producer/consumer kernel identity, threads, and
+// access patterns.)
 //
-// Invariant: A local DFB has exactly one producer kernel and one consumer kernel.
-// Both must share identical WorkUnitSpec membership.
+// Invariant: A local DFB has exactly one producer kernel and one consumer
+// kernel. Both must share identical WorkUnitSpec membership.
 // (For cross-node communication, use RemoteDataflowBufferSpec.)
 //
-// Instancing: Like KernelSpec, a DataflowBufferSpec is a *per-node template*. One
-// independent DFB instance is allocated per node where its endpoint kernels run, in
-// that node's local SRAM. That instance serves the same-node producer and consumer
-// kernel instances.
+// Instancing: Like KernelSpec, a DataflowBufferSpec is a *per-node template*.
+// One independent DFB instance is allocated per node where its endpoint
+// kernels run, in that node's local SRAM. That instance serves the same-node
+// producer and consumer kernel instances.
 //
 // Placement: Derived — the DFB's effective node set is the union of its bound
 // kernels' WorkUnitSpec target_nodes.
 //
+// Gen2 note: On Gen2 architectures, DFB hardware resource consumption depends
+// on its bindings (access pattern, endpoint roles), not purely on this spec.
+// The DataflowBufferSpec alone does not determine resource footprint;
+// resource sufficiency is validated at solver time (currently at Program
+// enqueue), not at Spec construction. (Slated to move earlier.)
+
+namespace tt::tt_metal::experimental::metal2_host_api {
+
+// A name identifying a DataflowBufferSpec within a ProgramSpec.
+using DFBSpecName = std::string;
+
 struct DataflowBufferSpec {
     // DFB identifier: used to reference this DFB within the ProgramSpec
     DFBSpecName unique_id;
