@@ -118,8 +118,19 @@ state, then fall through to the normal tick. See `tick.md` §Step 2
 Otherwise: read `skills/orchestrator/tick.md` and invoke it via
 `Agent(subagent_type="general-purpose", prompt=tick_md_contents + "\n\n## Args:\n" + model_path)`.
 The tick subagent handles phase selection, worker dispatch, state
-mutation, commit, and `ScheduleWakeup`. When it returns, exit — the
-next tick fires from the scheduled wakeup, not from here.
+mutation, and commit. It does NOT schedule the next tick — subagents
+have no `ScheduleWakeup`, and a subagent `CronCreate` would leak a
+duplicate timer. Instead the tick reports its next-tick intent on its
+last line as `NEXT_TICK: {"phase": ..., "block": ..., "worker": ...}`.
+
+When the tick returns, YOU (the parent) own the wakeup:
+- Parse the `NEXT_TICK:` line.
+- If `phase == "done"` or `phase == "deadlock"`: do not reschedule;
+  print the completion/deadlock summary and exit.
+- Otherwise: `ScheduleWakeup(delaySeconds=<tick_interval_sec>,
+  prompt="/bringup --resume <model_path>", reason="next: <phase>/<block>")`.
+  (If invoked under `/loop`, follow the /loop skill's dynamic-mode
+  wakeup contract instead — same effect, the loop owns the cadence.)
 
 ## Branch 3: Redo (`--redo <slug>:<block>:<phase>`)
 

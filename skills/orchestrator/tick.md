@@ -379,30 +379,59 @@ Pre-commit hooks may reformat files. If commit fails, re-stage the
 reformatted files and create a NEW commit. Never `--amend` and never
 `--no-verify`.
 
-## Step 7: Schedule next tick (or exit)
+## Step 7: Report next-tick intent (parent owns the wakeup)
 
 Re-check eligibility AFTER mutations: `phase =
-eligible_blocks(state)["phase"]`. If `phase == "done"`, print a
-completion summary and do NOT call `ScheduleWakeup` — this is the
-final tick. If `phase == "deadlock"`, already handled in Step 3.
-Otherwise:
+eligible_blocks(state)["phase"]`.
 
-```python
-ScheduleWakeup(
-    delaySeconds=state["config"]["tick_interval_sec"],
-    prompt="/bringup --resume <model_path>",
-    reason=f"tick {tick_id} done; next: {phase}",
-)
+**You do NOT schedule the next tick yourself.** `ScheduleWakeup` is not
+available inside a dispatched subagent's tool context, and `CronCreate`
+is the wrong instrument (the parent /loop already owns pacing; a
+subagent cron leaks a duplicate timer the parent has to find and cancel
+every tick). Instead, the LAST LINE of your response — in addition to
+the per-block/use_case result JSON written to state — must report the
+next-tick intent so the parent /loop can schedule it:
+
+```
+NEXT_TICK: {"phase": "<device|reference|architecture|done|deadlock>", "block": "<name or null>", "worker": "<name or null>"}
 ```
 
-Then exit. The harness rewakes at the configured interval.
+- If `phase == "done"`: emit `NEXT_TICK: {"phase": "done"}` and print a
+  completion summary. The parent will NOT reschedule — pipeline complete.
+- If `phase == "deadlock"`: already handled in Step 3; emit
+  `NEXT_TICK: {"phase": "deadlock", ...}` with the blocking set.
+- Otherwise: emit the eligible block/worker so the parent knows what the
+  next tick will dispatch.
+
+Then exit. The parent /loop reads `NEXT_TICK`, and IT calls
+`ScheduleWakeup(delaySeconds=state["config"]["tick_interval_sec"],
+prompt="/bringup --resume <model_path>", reason=...)` — or omits it when
+`phase == "done"`. Do not call `ScheduleWakeup` or `CronCreate` yourself.
 
 ## Failure handling
+
+**A tick MUST complete synchronously and atomically.** Never background
+work, never wait on an external event (no Monitor, no "I'll resume when
+the tracy run finishes"), never return a partial result. Run every
+worker dispatch to completion in this invocation. On ANY blocker —
+worker error, tracy hang, tool failure, ambiguous result — you still
+finish the tick: write `status="fail"` (or `"blocked"`) with the cause
+in `last_error`, release the device lock, render, commit (Step 6), and
+report `NEXT_TICK` (Step 7). A tick that returns without having
+committed leaves the device lock held and the orchestrator wedged until
+an operator releases it manually. The only non-committing exit is the
+`SchemaError` halt below.
 
 - **Subagent crash** (hard error, not a status=fail JSON): treat as
   `status="fail"` with `last_error="subagent crash: <stderr>"`. Apply
   standard fail handling, release device lock, continue to Step 6 —
   the tick MUST still commit.
+- **Worker backgrounds or waits instead of finishing**: if a dispatched
+  worker returns without a terminal result JSON (e.g. "waiting for the
+  tracy event"), treat it as `status="fail"`,
+  `last_error="worker did not complete synchronously"`, release the
+  lock, commit, and report `NEXT_TICK` so the block is retried next
+  tick. Do NOT adopt the worker's wait — the tick still completes now.
 - **`git commit` fails** (pre-commit reformat): re-`git add` and create
   a NEW commit. Never `--amend`, never `--no-verify`.
 - **Malformed state file** (`SchemaError` in Step 1): emit
