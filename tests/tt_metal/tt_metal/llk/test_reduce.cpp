@@ -380,7 +380,7 @@ void run_single_core_reduce_program(
              }},
         .tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}},
         .compile_time_args = reader_cta_bindings,
-        .runtime_arg_schema = {.named_runtime_args = reader_named_runtime_args},
+        .runtime_arg_schema = {.runtime_arg_names = reader_named_runtime_args},
         .config =
             experimental::metal2_host_api::KernelDMConfig{
                 .gen1_config =

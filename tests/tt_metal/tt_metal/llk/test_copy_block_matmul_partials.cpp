@@ -196,8 +196,8 @@ void run_single_core_copy_block_matmul_partials(
                 .unpack_to_dest_mode =
                     test_config.fp32_dest_acc_en
                         ? std::vector<experimental::metal2_host_api::KernelComputeConfig::
-                                          KernelComputeConfig::DFBUnpackToDestMode>{{SRC0_DFB, tt::tt_metal::UnpackToDestMode::Default}}
-                        : std::vector<experimental::metal2_host_api::KernelComputeConfig::KernelComputeConfig::DFBUnpackToDestMode>{},
+                                          DFBUnpackToDestMode>{{SRC0_DFB, tt::tt_metal::UnpackToDestMode::Default}}
+                        : std::vector<experimental::metal2_host_api::KernelComputeConfig::DFBUnpackToDestMode>{},
             },
     };
 
