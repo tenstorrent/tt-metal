@@ -25,6 +25,17 @@ def pytest_addoption(parser):
             "long-context kernels."
         ),
     )
+    parser.addoption(
+        "--page-block-size",
+        action="store",
+        type=int,
+        default=None,
+        help=(
+            "Override the paged-attention block size (page_block_size) used by "
+            "the demo. Used by the paged KV-cache block-size sweep. When unset, "
+            "the demo's default block size is used."
+        ),
+    )
 
 
 @pytest.fixture(scope="session")

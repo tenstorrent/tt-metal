@@ -731,11 +731,14 @@ def test_demo(mesh_device, model_path, prefill_len, request):
     # floor so short-bucket runs still allocate a usable cache.
     max_new_tokens = 200
     max_seq_len = max(prefill_len + max_new_tokens, 4096)
-    page_block_size = 64
+    # --page-block-size overrides the default for the paged KV-cache block-size
+    # sweep; otherwise fall back to the demo default of 64.
+    page_block_size = request.config.getoption("--page-block-size") or 64
     page_params = {
         "page_block_size": page_block_size,
         "page_max_num_blocks": max_seq_len // page_block_size,
     }
+    logger.info(f"Using page_block_size={page_block_size}")
 
     results = run_generation(
         mesh_device=mesh_device,
