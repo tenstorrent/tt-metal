@@ -140,7 +140,8 @@ GridSampleNearestProgramFactory::cached_program_t GridSampleNearestProgramFactor
         grid_nsticks_per_core,                       // ct_arg[13]: grid_nsticks_per_core
         is_sharded ? 1U : 0U,                        // ct_arg[14]: is_sharded
         fill_cb_index,                               // ct_arg[15]: fill_cb_index
-        input_shape[0]                               // ct_arg[16]: batch_size
+        input_shape[0],                              // ct_arg[16]: batch_size
+        output_tensor.is_sharded() ? 1U : 0U        // ct_arg[17]: output_is_sharded
     };
 
     // Add tensor accessor args for input tensor (17 compile time args offset)

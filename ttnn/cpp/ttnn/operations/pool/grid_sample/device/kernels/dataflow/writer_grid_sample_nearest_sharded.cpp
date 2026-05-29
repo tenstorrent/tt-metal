@@ -157,6 +157,11 @@ void kernel_main() {
     constexpr uint32_t is_sharded = get_compile_time_arg_val(14);
     constexpr uint32_t fill_cb_index = get_compile_time_arg_val(15);
     constexpr uint32_t batch_size = get_compile_time_arg_val(16);
+    // output_is_sharded decouples output offset logic from grid sharding.
+    // When is_sharded=false (DRAM grid) but output is HEIGHT_SHARDED L1,
+    // the output CB write pointer already points to this core's L1 shard start.
+    // Using a global output_base would overflow L1. Use 0 instead.
+    constexpr uint32_t output_is_sharded = get_compile_time_arg_val(17);
 
     uint32_t input_addr = 0;
     uint32_t global_grid_stick_start = 0;
@@ -176,7 +181,7 @@ void kernel_main() {
     }
 
     // Input tensor accessor for remote NOC reads - same as sharded reader
-    constexpr auto input_tensor_args = TensorAccessorArgs<17>();
+    constexpr auto input_tensor_args = TensorAccessorArgs<18>();
     const auto input_tensor_accessor = TensorAccessor(input_tensor_args, input_addr);
 
     constexpr auto grid_tensor_args = TensorAccessorArgs<input_tensor_args.next_compile_time_args_offset()>();
@@ -230,8 +235,15 @@ void kernel_main() {
                 grid_tensor_accessor, grid_cb, grid_stick_nbytes, {.page_id = grid_stick_idx + start_page_id}, {});
             noc.async_read_barrier();
         }
+        // For sharded output, the CB write pointer already starts at this core's
+        // shard region (offset 0 is correct). For non-sharded output, add a
+        // per-core spatial offset so each core writes to a distinct region.
+        // output_is_sharded is set based on the OUTPUT tensor's sharding, not
+        // the grid's, so DRAM grid + HEIGHT_SHARDED L1 output works correctly.
+        const uint32_t output_base =
+            output_is_sharded ? 0 : global_grid_stick_start * grid_batching_factor * input_stick_nbytes;
         uint32_t output_write_offset =
-            grid_stick_idx * grid_batching_factor * input_stick_nbytes + in_grid_row_idx * input_stick_nbytes;
+            output_base + grid_stick_idx * grid_batching_factor * input_stick_nbytes + in_grid_row_idx * input_stick_nbytes;
 
         if (curr_batch < batch_size) {
             // Process nearest neighbor sampling and write directly to output
