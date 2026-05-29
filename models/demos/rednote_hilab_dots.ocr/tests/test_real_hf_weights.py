@@ -53,6 +53,7 @@ _tt_embedding = _load_by_path("dots_tt_embedding_rw", "embedding.py", _TT_DIR)
 _tt_rmsnorm_lm = _load_by_path("dots_tt_rmsnorm_rw", "rmsnorm.py", _TT_DIR)
 _tt_rope = _load_by_path("dots_tt_rope_rw", "rope.py", _TT_DIR)
 _tt_attention = _load_by_path("dots_tt_attention_rw", "attention.py", _TT_DIR)
+_tt_mlp = _load_by_path("dots_tt_mlp_rw", "mlp.py", _TT_DIR)
 _loader = _load_by_path("dots_weight_loader", "weight_loader.py", _TT_DIR)
 _functional = _load_by_path("dots_reference_functional_rw", "functional.py", _REF_DIR)
 
@@ -66,8 +67,10 @@ TtVisionTower = _tt_vision_tower.TtVisionTower
 TtEmbedding = _tt_embedding.TtEmbedding
 TtRoPE = _tt_rope.TtRoPE
 TtAttention = _tt_attention.TtAttention
+TtMLP = _tt_mlp.TtMLP
 load_lm_rope_config = _loader.load_lm_rope_config
 load_lm_attention_weights = _loader.load_lm_attention_weights
+load_lm_mlp_weights = _loader.load_lm_mlp_weights
 load_vision_rmsnorm_weight = _loader.load_vision_rmsnorm_weight
 load_embedding_weight = _loader.load_embedding_weight
 load_vision_attention_weights = _loader.load_vision_attention_weights
@@ -85,6 +88,7 @@ vision_patch_merger_forward = _functional.vision_patch_merger_forward
 vision_tower_forward = _functional.vision_tower_forward
 embedding_forward = _functional.embedding_forward
 attention_forward = _functional.attention_forward
+mlp_forward = _functional.mlp_forward
 rope_forward = _functional.rope_forward
 
 # Vision attention config (modeling_dots_vision): 12 heads, head_dim 128,
@@ -849,6 +853,67 @@ def test_real_hf_weights_attention(device):
     assert params_loaded > 0
 
 
+# LM MLP (Qwen2MLP): SwiGLU down_proj(silu(gate_proj(x)) * up_proj(x)), no bias.
+# hidden_size 1536, intermediate_size 8960.
+LM_HIDDEN = 1536
+LM_INTERMEDIATE = 8960
+
+
+def _run_lm_mlp_pcc(device):
+    """Load the real LM MLP gate/up/down, run TTNN TtMLP, compare to HF reference.
+
+    Returns (pcc, params_loaded).
+    """
+    state_dict = load_lm_mlp_weights(CHECKPOINT_PATH, layer_idx=0)
+    gate_weight = state_dict["gate_proj.weight"].to(torch.float32)  # [inter, dim]
+    up_weight = state_dict["up_proj.weight"].to(torch.float32)  # [inter, dim]
+    down_weight = state_dict["down_proj.weight"].to(torch.float32)  # [dim, inter]
+    params_loaded = int(gate_weight.numel() + up_weight.numel() + down_weight.numel())
+    assert gate_weight.shape == (LM_INTERMEDIATE, LM_HIDDEN), tuple(gate_weight.shape)
+    assert up_weight.shape == (LM_INTERMEDIATE, LM_HIDDEN), tuple(up_weight.shape)
+    assert down_weight.shape == (LM_HIDDEN, LM_INTERMEDIATE), tuple(down_weight.shape)
+
+    torch.manual_seed(0)
+    n_tokens = 128
+    torch_input = torch.randn(n_tokens, LM_HIDDEN, dtype=torch.float32)
+
+    # HF reference (mirrors Qwen2MLP exactly) with the REAL weights.
+    ref_output = mlp_forward(
+        torch_input,
+        {"gate_proj.weight": gate_weight, "up_proj.weight": up_weight, "down_proj.weight": down_weight},
+    )
+
+    tt_mlp = TtMLP(
+        device=device,
+        gate_weight=gate_weight,
+        up_weight=up_weight,
+        down_weight=down_weight,
+    )
+    tt_input = ttnn.from_torch(
+        torch_input,
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_output = tt_mlp(tt_input)
+    tt_output_torch = ttnn.to_torch(tt_output).to(torch.float32).reshape(ref_output.shape)
+
+    passing, pcc_message = comp_pcc(ref_output, tt_output_torch, 0.99)
+    print(comp_allclose(ref_output, tt_output_torch))
+    print(f"comp_pcc(lm_mlp, real weights): passing={passing}, message={pcc_message}")
+    msg = str(pcc_message)
+    pcc = float(msg.split("PCC:")[-1].strip()) if "PCC:" in msg else float(pcc_message)
+    print(f"real-weights lm_mlp PCC = {pcc} | params_loaded = {params_loaded}")
+    assert passing, f"lm_mlp real-weights PCC below 0.99: {pcc_message}"
+    return pcc, params_loaded
+
+
+def test_real_hf_weights_mlp(device):
+    pcc, params_loaded = _run_lm_mlp_pcc(device)
+    assert params_loaded > 0
+
+
 if __name__ == "__main__":
     dev = ttnn.open_device(device_id=0, l1_small_size=32768)
     try:
@@ -862,5 +927,6 @@ if __name__ == "__main__":
         _run_lm_rmsnorm_pcc(dev)
         _run_rope_pcc(dev)
         _run_lm_attention_pcc(dev)
+        _run_lm_mlp_pcc(dev)
     finally:
         ttnn.close_device(dev)

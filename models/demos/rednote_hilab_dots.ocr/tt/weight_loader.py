@@ -370,6 +370,37 @@ def load_lm_attention_weights(checkpoint_path: str, layer_idx: int = 0) -> Dict[
     }
 
 
+def load_lm_mlp_weights(checkpoint_path: str, layer_idx: int = 0) -> Dict[str, torch.Tensor]:
+    """Load a real LM decoder-layer MLP's SwiGLU weights (no bias).
+
+    The dots.ocr language model is a Qwen2 trunk, so each decoder layer's MLP
+    (Qwen2MLP) is an unbiased SwiGLU FFN: ``down_proj(silu(gate_proj(x)) *
+    up_proj(x))`` (config.mlp_bias is absent for Qwen2, so all three Linears are
+    bias-free, UNLIKE the layer's self-attention which carries QKV bias). HF keys
+    (layer ``i``), hidden_size 1536, intermediate_size 8960:
+        model.layers.{i}.mlp.gate_proj.weight  [8960, 1536]  (gate)
+        model.layers.{i}.mlp.up_proj.weight    [8960, 1536]  (up)
+        model.layers.{i}.mlp.down_proj.weight  [1536, 8960]  (down)
+
+    Returns the flat state_dict (fp32) keyed exactly as the eager reference
+    :func:`reference.functional.mlp_forward` expects (and that the per-proj
+    weights :class:`tt.mlp.TtMLP` consumes via its fused cat([gate, up]) build):
+        {"gate_proj.weight", "up_proj.weight", "down_proj.weight"}.
+    """
+    prefix = f"model.layers.{layer_idx}.mlp"
+    keys = [
+        f"{prefix}.gate_proj.weight",
+        f"{prefix}.up_proj.weight",
+        f"{prefix}.down_proj.weight",
+    ]
+    tensors = load_hf_tensors(checkpoint_path, keys)
+    return {
+        "gate_proj.weight": tensors[f"{prefix}.gate_proj.weight"],
+        "up_proj.weight": tensors[f"{prefix}.up_proj.weight"],
+        "down_proj.weight": tensors[f"{prefix}.down_proj.weight"],
+    }
+
+
 def load_vision_tower_weights(checkpoint_path: str, num_layers: int) -> Dict[str, torch.Tensor]:
     """Load the full DotsVisionTransformer (vision tower) real weights.
 

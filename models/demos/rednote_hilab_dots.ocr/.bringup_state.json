@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-29T00:11:46Z",
-  "updated_at": "2026-05-29T04:36:25Z",
+  "updated_at": "2026-05-29T04:42:31Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -689,8 +689,16 @@
         "pcc": 0.9999850146145711
       },
       "real_weights": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/weight_loader.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_real_hf_weights.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/mlp.py"
+        ],
+        "notes": "Loaded real HF LM layer-0 MLP (Qwen2 SwiGLU, no bias): gate/up [8960,1536], down [1536,8960] via load_lm_mlp_weights. TtMLP real-weights PCC 0.99999 vs HF Qwen2MLP at seq=128 dim=1536 inter=8960. lint clean.",
+        "pcc": 0.9999902871604002,
+        "params_loaded": 41287680
       }
     },
     {
@@ -1192,6 +1200,12 @@
       "tick": 45,
       "ts": "2026-05-29T04:36:25Z",
       "action": "device[attention]",
+      "result": "ok"
+    },
+    {
+      "tick": 46,
+      "ts": "2026-05-29T04:42:31Z",
+      "action": "device[mlp]",
       "result": "ok"
     }
   ],
