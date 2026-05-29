@@ -215,3 +215,7 @@
 #if SFPU_OP_BINARY_MUL_INT_INCLUDE
 #include "api/compute/mul_int_sfpu.h"
 #endif
+
+#if SFPU_OP_BINARY_GT_INT_INCLUDE
+#include "api/compute/binary_comp.h"
+#endif
