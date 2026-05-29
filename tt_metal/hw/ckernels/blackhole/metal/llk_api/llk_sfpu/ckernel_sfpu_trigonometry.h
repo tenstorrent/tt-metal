@@ -555,14 +555,14 @@ sfpi_inline sfpi::vFloat _sfpu_sinh_(sfpi::vFloat x) {
 
     sfpi::vFloat r = _sfpu_reciprocal_ge1_<is_fp32_dest_acc_en>(e);
 
-    // e < 2^-25: 0.5(t+t/1) = t = x
+    // q < 2^-25: sinh(x) rounds to x.
     sfpi::vFloat y = x;
-    sfpi::vInt t_exp = sfpi::exexp(q);
-    v_if(t_exp >= -25) {
-        // e ≥ 2^25: 0.5(t+1) = 0.5t
+    sfpi::vInt q_exp = sfpi::exexp(q);
+    v_if(q_exp >= -25) {
+        // q ≥ 2^25: correction term rounds away, so sinh(abs(x)) = expm1(abs(x)) / 2 = 2q.
         y = q + q;
-        v_if(t_exp < 25) {
-            // else: 0.5t + 0.5t/(t+1)
+        v_if(q_exp < 25) {
+            // Middle range: sinh(abs(x)) = 0.5t + 0.5t/(t+1), with t = 4q.
             y = y * r + y;
         }
         v_endif;
