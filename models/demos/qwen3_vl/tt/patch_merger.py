@@ -130,20 +130,51 @@ class PatchMerger(LightweightModule):
         self.b2 = as_bias_tensor("linear_fc2", dtype)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        # Apply RMSNorm
-
         if self.postshuffle_norm:
-            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-            x = ttnn.reshape(x, (x.shape[0], x.shape[1], -1, self.mlp_size // self.tp))
-            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-        x_norm = self.norm(x)
+            # For postshuffle_norm the LayerNorm acts on the post-shuffle mlp_size
+            # dimension. We must all-gather the fractured hidden BEFORE reshaping.
+            #
+            # Why: reshape on a per-device column-fractured tensor followed by gather
+            # produces a different element ordering than gather followed by reshape:
+            #   reshape-then-gather row i: [4i_dev0_cols, 4i+1_dev0_cols, ..., 4i_dev1_cols, ...]
+            #   reference (gather-then-reshape) row i: [4i_all_cols, 4i+1_all_cols, ...]
+            # These are transposes of each other, so LayerNorm(mlp_size) sees scrambled
+            # data -> PCC ~0.17.
+            if self.norm.is_multichip:
+                x_full = ttnn.experimental.all_gather_async(
+                    x,
+                    persistent_output_buffer=None,
+                    dim=3,
+                    multi_device_global_semaphore=self.norm.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+                    num_links=self.norm.tt_ccl.get_num_links(1),
+                    topology=self.norm.ccl_topology,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    barrier_semaphore=self.norm.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+                    chunks_per_sync=10,
+                    num_workers_per_link=2,
+                    num_buffers_per_channel=2,
+                )
+            else:
+                x_full = x
+            x_full = ttnn.to_layout(x_full, ttnn.ROW_MAJOR_LAYOUT)
+            x_full = ttnn.reshape(x_full, (x_full.shape[0], x_full.shape[1], -1, self.mlp_size))
+            x_full = ttnn.to_layout(x_full, ttnn.TILE_LAYOUT)
+            # Data is already gathered; call the inner LayerNorm directly to avoid
+            # a second (incorrect) all-gather inside DistributedLayerNorm.
+            x_norm = self.norm.norm(x_full)
+            if x_norm is not x_full:
+                ttnn.deallocate(x_full)
+        else:
+            # Normal PatchMerger path: DistributedLayerNorm gathers fractured hidden
+            # -> LayerNorm(hidden) -> replicated [B,1,S,hidden].
+            x_norm = self.norm(x)
 
-        # Merge spatial_merge_size^2 consecutive rows into one row of mlp_size.
-        # The reshape workaround through ROW_MAJOR matches the replicated PatchMerger
-        # (see tt-metal#29932 for the underlying tilized reshape hang).
-        x_norm = ttnn.to_layout(x_norm, ttnn.ROW_MAJOR_LAYOUT)
-        x_norm = ttnn.reshape(x_norm, (x_norm.shape[0], x_norm.shape[1], -1, self.mlp_size))
-        x_norm = ttnn.to_layout(x_norm, ttnn.TILE_LAYOUT)
+            # Merge spatial_merge_size^2 consecutive rows into one row of mlp_size.
+            # The reshape workaround through ROW_MAJOR matches the replicated PatchMerger
+            # (see tt-metal#29932 for the underlying tilized reshape hang).
+            x_norm = ttnn.to_layout(x_norm, ttnn.ROW_MAJOR_LAYOUT)
+            x_norm = ttnn.reshape(x_norm, (x_norm.shape[0], x_norm.shape[1], -1, self.mlp_size))
+            x_norm = ttnn.to_layout(x_norm, ttnn.TILE_LAYOUT)
 
         # fc1 column-sharded: replicated in -> fractured-along-dim=3 out
         # (each device owns mlp_size/TP of the GELU activations).
