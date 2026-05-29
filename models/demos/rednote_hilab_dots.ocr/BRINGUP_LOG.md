@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** p150 (blackhole)
 **Started:** 2026-05-29T00:11:46Z
-**Updated:** 2026-05-29T00:21:12Z
+**Updated:** 2026-05-29T00:30:23Z
 
 ## Block Status
 
@@ -30,22 +30,22 @@
 | vision_mlp | debug | n/a | — | 0 |  |
 | vision_mlp | optimization | pending | — | 0 |  |
 | vision_mlp | real_weights | pending | — | 0 |  |
-| vision_block | reference | pending | — | 0 |  |
+| vision_block | reference | done | 1.000000 | 0 | DotsVisionBlock: pre-norm RMSNorm -> fused-QKV 2D-RoPE bidirectional attn -> residual -> RMSNorm -> SwiGLU -> residual. PCC=1.0 vs HF eager. |
 | vision_block | ttnn | pending | — | 0 |  |
 | vision_block | debug | n/a | — | 0 |  |
 | vision_block | optimization | pending | — | 0 |  |
 | vision_block | real_weights | pending | — | 0 |  |
-| vision_patch_merger | reference | pending | — | 0 |  |
+| vision_patch_merger | reference | done | 1.000000 | 0 | PatchMerger: LayerNorm(eps=1e-6,bias) -> view(merge**2) -> Linear -> GELU -> Linear (all biased). PCC=1.0 vs HF. |
 | vision_patch_merger | ttnn | pending | — | 0 |  |
 | vision_patch_merger | debug | n/a | — | 0 |  |
 | vision_patch_merger | optimization | pending | — | 0 |  |
 | vision_patch_merger | real_weights | pending | — | 0 |  |
-| vision_tower | reference | pending | — | 0 |  |
+| vision_tower | reference | done | 1.000000 | 0 | Full DotsVisionTransformer tested at REDUCED 2 layers (full=42, grid 1x4x4=16 patches, bf16=False fp32 path). PCC=1.0 vs HF. Full-depth check deferred to real_weights. |
 | vision_tower | ttnn | pending | — | 0 |  |
 | vision_tower | debug | n/a | — | 0 |  |
 | vision_tower | optimization | pending | — | 0 |  |
 | vision_tower | real_weights | pending | — | 0 |  |
-| embedding | reference | pending | — | 0 |  |
+| embedding | reference | done | 1.000000 | 0 | Qwen2 token embedding (vocab 151936, hidden 1536) lookup. PCC=1.0 vs nn.Embedding. |
 | embedding | ttnn | pending | — | 0 |  |
 | embedding | debug | n/a | — | 0 |  |
 | embedding | optimization | pending | — | 0 |  |
@@ -96,6 +96,7 @@
 
 - tick 1 (2026-05-29T00:15:04Z): architecture[all] — ok
 - tick 2 (2026-05-29T00:21:12Z): reference[vision_patch_embed,vision_rmsnorm,vision_attention,vision_mlp] — ok
+- tick 3 (2026-05-29T00:30:23Z): reference[vision_block,vision_patch_merger,vision_tower,embedding] — ok
 
 ## Host-Resident Exceptions
 

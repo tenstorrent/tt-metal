@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-29T00:11:46Z",
-  "updated_at": "2026-05-29T00:21:12Z",
+  "updated_at": "2026-05-29T00:30:23Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -172,8 +172,13 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "reference/golden/vision_block.pt"
+        ],
+        "notes": "DotsVisionBlock: pre-norm RMSNorm -> fused-QKV 2D-RoPE bidirectional attn -> residual -> RMSNorm -> SwiGLU -> residual. PCC=1.0 vs HF eager.",
+        "pcc": 1.0
       },
       "ttnn": {
         "status": "pending",
@@ -205,8 +210,13 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "reference/golden/vision_patch_merger.pt"
+        ],
+        "notes": "PatchMerger: LayerNorm(eps=1e-6,bias) -> view(merge**2) -> Linear -> GELU -> Linear (all biased). PCC=1.0 vs HF.",
+        "pcc": 1.0
       },
       "ttnn": {
         "status": "pending",
@@ -241,8 +251,13 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "reference/golden/vision_tower.pt"
+        ],
+        "notes": "Full DotsVisionTransformer tested at REDUCED 2 layers (full=42, grid 1x4x4=16 patches, bf16=False fp32 path). PCC=1.0 vs HF. Full-depth check deferred to real_weights.",
+        "pcc": 1.0
       },
       "ttnn": {
         "status": "pending",
@@ -272,8 +287,13 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "reference/golden/embedding.pt"
+        ],
+        "notes": "Qwen2 token embedding (vocab 151936, hidden 1536) lookup. PCC=1.0 vs nn.Embedding.",
+        "pcc": 1.0
       },
       "ttnn": {
         "status": "pending",
@@ -584,6 +604,12 @@
       "tick": 2,
       "ts": "2026-05-29T00:21:12Z",
       "action": "reference[vision_patch_embed,vision_rmsnorm,vision_attention,vision_mlp]",
+      "result": "ok"
+    },
+    {
+      "tick": 3,
+      "ts": "2026-05-29T00:30:23Z",
+      "action": "reference[vision_block,vision_patch_merger,vision_tower,embedding]",
       "result": "ok"
     }
   ],
