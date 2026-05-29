@@ -21,11 +21,8 @@ from loguru import logger
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.qwen35_27b.tt.chunk_delta_rule_ops import create_chunk_masks
-from models.demos.qwen35_27b.tt.gdn_kernel.gdn_kernel_op import (
-    gdn_full_fused_inplace,
-    gdn_prefill_fused,
-    gdn_recurrence_fused_inplace,
-)
+from models.demos.qwen35_27b.tt.gdn_chunk_ops_seq import chunk_gated_delta_rule_seq
+from models.demos.qwen35_27b.tt.gdn_kernel.gdn_kernel_op import gdn_full_fused_inplace, gdn_recurrence_fused_inplace
 from models.demos.qwen35_27b.tt.model_config import create_prefill_matmul_program_config
 from models.tt_transformers.tt.ccl import tt_all_reduce
 
@@ -68,6 +65,14 @@ def _l2_norm_dev(x):
     normed = ttnn.multiply(x, inv)
     ttnn.deallocate(inv)
     return normed
+
+
+def _flat_to_bht(t_flat, T, BH, D):
+    """[T*BH, D] in TILE → [BH, T, D] in TILE via ROW_MAJOR reshape + permute."""
+    rm = ttnn.to_layout(t_flat, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    rm = ttnn.reshape(rm, [T, BH, D])
+    rm = ttnn.permute(rm, (1, 0, 2))  # [BH, T, D]
+    return ttnn.to_layout(rm, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
 class TtGatedDeltaNet(LightweightModule):
@@ -967,107 +972,135 @@ class TtGatedDeltaNet(LightweightModule):
                 ttnn.deallocate(qkv_t)
         ttnn.deallocate(qkv_last_k)
 
-        # ---- On-device recurrence via prefill kernel ----
-        # Single kernel dispatch processes all seq_len tokens per head.
-        # State stays in L1 across tokens — eliminates CPU recurrence entirely.
+        # ---- Chunkwise-parallel recurrence via gated_delta_attn_seq kernel ----
+        # Replaces the per-token sequential prefill loop with the chunkwise-parallel
+        # gated delta rule: parallel matmuls within each chunk + a cheap sequential
+        # state scan across chunks (ttnn.transformer.gated_delta_attn_seq).
         mesh = self.mesh_device
-        num_devices = mesh.get_num_devices()
-        num_pairs = B_pf * Nv_TP
+        num_pairs = B_pf * Nv_TP  # = Nv_TP for B_pf=1
         repeat_factor = Nv_TP // Nk_TP
 
-        # Reshape inputs: [1, 1, seq_len, dim] → [1, seq_len, dim]
-        # Note: reshape may return a view — don't deallocate originals until after kernel
-        conv_out_3d = ttnn.reshape(conv_out_all, (1, seq_len, qkv_dim_tp))
-        conv_out_3d = _unshard(conv_out_3d)
-        a_3d = ttnn.reshape(a_all, (1, seq_len, Nv_TP))
-        a_3d = _unshard(a_3d)
-        b_3d = ttnn.reshape(b_all, (1, seq_len, Nv_TP))
-        b_3d = _unshard(b_3d)
+        # Split [1,1,T,qkv_dim_tp] → Q/K [1,1,T,key_dim_tp] and V [1,1,T,value_dim_tp]
+        q_raw = ttnn.slice(conv_out_all, (0, 0, 0, 0), (1, 1, seq_len, key_dim_tp))
+        k_raw = ttnn.slice(conv_out_all, (0, 0, 0, key_dim_tp), (1, 1, seq_len, 2 * key_dim_tp))
+        v_raw = ttnn.slice(conv_out_all, (0, 0, 0, 2 * key_dim_tp), (1, 1, seq_len, qkv_dim_tp))
+        ttnn.deallocate(conv_out_all)
 
-        # ---- Allocate output buffer ----
-        # Layout depends on which kernel variant we use:
-        #   - Legacy (gdn_prefill_fused):     [num_pairs * N, 1, Dv]
-        #   - Seq-major (gdn_prefill_fused_seq_major):
-        #                                     [1, 1, N, num_pairs * Dv]
-        #     (RMSNorm + permute fused into the kernel)
-        use_seq_major = bool(_os.environ.get("GDN_PREFILL_SEQ_MAJOR", ""))
+        # Q/K: [1,1,T,Nk_TP*Dk] → [T*Nk_TP, Dk] → L2 norm → repeat → [T*Nv_TP, Dk] → [Nv_TP, T, Dk]
+        rm = ttnn.to_layout(q_raw, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(q_raw)
+        rm = ttnn.reshape(rm, [seq_len * Nk_TP, Dk])
+        q_flat = ttnn.to_layout(rm, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        if use_seq_major:
-            from models.demos.qwen35_27b.tt.gdn_kernel.gdn_kernel_op import gdn_prefill_fused_seq_major
+        rm = ttnn.to_layout(k_raw, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(k_raw)
+        rm = ttnn.reshape(rm, [seq_len * Nk_TP, Dk])
+        k_flat = ttnn.to_layout(rm, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-            prefill_output = ttnn.from_torch(
-                torch.zeros(1, 1, seq_len, num_pairs * Dv, dtype=torch.bfloat16),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=mesh,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
-            )
+        q_n = _l2_norm_dev(q_flat)
+        ttnn.deallocate(q_flat)
+        k_n = _l2_norm_dev(k_flat)
+        ttnn.deallocate(k_flat)
 
-            gdn_prefill_fused_seq_major(
-                conv_out_3d,
-                a_3d,
-                b_3d,
-                self.neg_exp_A,
-                tw["dt_bias"],
-                tw["norm_w"],
-                self.scale_tt,
-                self.rms_scale_tt,
-                self.rms_eps_tt,
-                self._prefill_rec_states,
-                prefill_output,
-                num_pairs=num_pairs,
-                num_tokens=seq_len,
-                Nv_TP=Nv_TP,
-                Nk_TP=Nk_TP,
-                repeat_factor=repeat_factor,
-                key_dim_tp=key_dim_tp,
-            )
-            ttnn.deallocate(conv_out_all)
-            ttnn.deallocate(a_all)
-            ttnn.deallocate(b_all)
-
-            # RMSNorm + reshape + permute + reshape are all folded into the kernel.
-            out_f = prefill_output
+        if repeat_factor > 1:
+            q_exp = ttnn.repeat_interleave(q_n, repeat_factor, dim=0)
+            ttnn.deallocate(q_n)
+            k_exp = ttnn.repeat_interleave(k_n, repeat_factor, dim=0)
+            ttnn.deallocate(k_n)
         else:
-            prefill_output = ttnn.from_torch(
-                torch.zeros(num_pairs * seq_len, 1, Dv, dtype=torch.bfloat16),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=mesh,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
-            )
+            q_exp = q_n
+            k_exp = k_n
 
-            gdn_prefill_fused(
-                conv_out_3d,
-                a_3d,
-                b_3d,
-                self.neg_exp_A,
-                tw["dt_bias"],
-                tw["norm_w"],
-                self.scale_tt,
-                self.rms_scale_tt,
-                self.rms_eps_tt,
-                self._prefill_rec_states,
-                prefill_output,
-                num_pairs=num_pairs,
-                num_tokens=seq_len,
-                Nv_TP=Nv_TP,
-                Nk_TP=Nk_TP,
-                repeat_factor=repeat_factor,
-                key_dim_tp=key_dim_tp,
-            )
-            ttnn.deallocate(conv_out_all)
-            ttnn.deallocate(a_all)
-            ttnn.deallocate(b_all)
+        q_bht = _flat_to_bht(q_exp, seq_len, Nv_TP, Dk)
+        ttnn.deallocate(q_exp)
+        k_bht = _flat_to_bht(k_exp, seq_len, Nv_TP, Dk)
+        ttnn.deallocate(k_exp)
+        q_f32 = ttnn.typecast(q_bht, ttnn.float32)
+        ttnn.deallocate(q_bht)
+        k_f32 = ttnn.typecast(k_bht, ttnn.float32)
+        ttnn.deallocate(k_bht)
 
-            # Legacy post-kernel chain: rms_norm + reshape + permute + reshape
-            out_n = ttnn.rms_norm(prefill_output, weight=tw["norm_w"], epsilon=1e-6)
-            ttnn.deallocate(prefill_output)
-            out_4d = ttnn.reshape(out_n, (1, num_pairs, seq_len, Dv))
-            ttnn.deallocate(out_n)
-            out_4d = ttnn.permute(out_4d, (0, 2, 1, 3))  # [1, seq_len, num_pairs, Dv]
-            out_f = ttnn.reshape(out_4d, (1, 1, seq_len, self.value_dim_tp))
-            ttnn.deallocate(out_4d)
+        # V: [1,1,T,Nv_TP*Dv] → [T*Nv_TP, Dv] → [Nv_TP, T, Dv] float32
+        rm = ttnn.to_layout(v_raw, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(v_raw)
+        rm = ttnn.reshape(rm, [seq_len * Nv_TP, Dv])
+        v_flat = ttnn.to_layout(rm, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        v_bht = _flat_to_bht(v_flat, seq_len, Nv_TP, Dv)
+        ttnn.deallocate(v_flat)
+        v_f32 = ttnn.typecast(v_bht, ttnn.float32)
+        ttnn.deallocate(v_bht)
+
+        # beta = sigmoid(b_all): [1,1,T,Nv_TP] → [Nv_TP, T, 1] float32
+        b_3d = ttnn.reshape(b_all, (1, seq_len, Nv_TP))
+        beta_3d = ttnn.sigmoid(b_3d)
+        ttnn.deallocate(b_all)
+        rm = ttnn.to_layout(beta_3d, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(beta_3d)
+        rm = ttnn.reshape(rm, [seq_len * Nv_TP, 1])
+        beta_flat = ttnn.to_layout(rm, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        beta_bht = _flat_to_bht(beta_flat, seq_len, Nv_TP, 1)
+        ttnn.deallocate(beta_flat)
+        beta_f32 = ttnn.typecast(beta_bht, ttnn.float32)
+        ttnn.deallocate(beta_bht)
+
+        # g = neg_exp_A * softplus(a + dt_bias): [1,1,T,Nv_TP] → [Nv_TP, T] float32
+        a_3d = ttnn.reshape(a_all, (1, seq_len, Nv_TP))
+        a_plus_dt = ttnn.add(a_3d, tw["dt_bias"])  # [1,T,Nv_TP] + [1,1,Nv_TP] broadcast
+        ttnn.deallocate(a_all)
+        sp = ttnn.softplus(a_plus_dt)
+        ttnn.deallocate(a_plus_dt)
+        g_3d = ttnn.multiply(self.neg_exp_A, sp)  # [1,1,Nv_TP] * [1,T,Nv_TP] broadcast
+        ttnn.deallocate(sp)
+        rm = ttnn.to_layout(g_3d, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(g_3d)
+        rm = ttnn.reshape(rm, [seq_len, Nv_TP])
+        rm = ttnn.permute(rm, (1, 0))  # [Nv_TP, T]
+        g_2d = ttnn.to_layout(rm, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        g_f32 = ttnn.typecast(g_2d, ttnn.float32)
+        ttnn.deallocate(g_2d)
+
+        # ---- Chunkwise parallel DeltaNet via gated_delta_attn_seq ----
+        # initial_state carries the recurrence state from the previous model-level
+        # prefill chunk; final_state is written back below for the next chunk.
+        chunk_out, final_state = chunk_gated_delta_rule_seq(
+            q_f32,
+            k_f32,
+            v_f32,
+            beta_f32,
+            g_f32,
+            chunk_size=self.chunk_size,
+            scale=None,  # function applies Dk**-0.5 internally
+            initial_state=self._prefill_rec_states,
+            mesh_device=mesh,
+            cached_masks=self._chunk_masks,
+        )
+        ttnn.deallocate(q_f32)
+        ttnn.deallocate(k_f32)
+        ttnn.deallocate(v_f32)
+        ttnn.deallocate(beta_f32)
+        ttnn.deallocate(g_f32)
+
+        # Write the final recurrence state back in-place so the next model-level
+        # prefill chunk continues from it. TARGET does not trace-capture prefill,
+        # so an inline ttnn.copy is allowed (same pattern as the conv-state save).
+        fs_bf16 = ttnn.typecast(final_state, ttnn.bfloat16)
+        ttnn.deallocate(final_state)
+        ttnn.copy(fs_bf16, self._prefill_rec_states)
+        ttnn.deallocate(fs_bf16)
+
+        # ---- Post-processing: RMS norm (Python) + reshape to seq-major ----
+        # chunk_out: [Nv_TP, T, Dv] float32
+        out_bf16 = ttnn.typecast(chunk_out, ttnn.bfloat16)
+        ttnn.deallocate(chunk_out)
+        out_n = ttnn.rms_norm(out_bf16, weight=tw["norm_w"], epsilon=1e-6)
+        ttnn.deallocate(out_bf16)
+
+        # [Nv_TP, T, Dv] → [T, Nv_TP, Dv] → [1, 1, T, value_dim_tp]
+        rm = ttnn.to_layout(out_n, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(out_n)
+        rm = ttnn.permute(rm, (1, 0, 2))  # [T, Nv_TP, Dv]
+        rm = ttnn.reshape(rm, [1, 1, seq_len, self.value_dim_tp])
+        out_f = ttnn.to_layout(rm, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         z_act = ttnn.silu(z_all)
         ttnn.deallocate(z_all)
         out_f = _unshard(out_f)
