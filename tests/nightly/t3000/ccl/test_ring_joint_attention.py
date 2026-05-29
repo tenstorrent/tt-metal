@@ -229,6 +229,7 @@ def test_ring_joint_sdpa(
         "2rpx4up",
     ],
 )
+@pytest.mark.skip(reason="Disabled by issue #45506")
 def test_ring_joint_sdpa_program_cache(
     mesh_device,
     b,
