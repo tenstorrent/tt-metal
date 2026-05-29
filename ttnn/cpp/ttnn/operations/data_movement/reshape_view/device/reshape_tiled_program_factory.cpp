@@ -463,8 +463,7 @@ tt::tt_metal::WorkloadDescriptor ReshapeViewTiledProgramFactory::create_workload
     // Note: operation_attributes.recreate_mapping_tensor is intentionally
     // ignored here — it's excluded from the program hash, so on a cache
     // hit the cached mapping_tensor (which depends only on hashed inputs)
-    // is always valid.  The legacy override_runtime_arguments path that
-    // re-uploaded the mapping is no longer needed under Contract-2.
+    // is always valid.
 
     // Single-device op: build the per-coord ProgramDescriptor ONCE and
     // copy it into each coord-range entry to avoid redundant work on

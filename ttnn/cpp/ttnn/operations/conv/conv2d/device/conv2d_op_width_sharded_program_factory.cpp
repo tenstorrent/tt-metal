@@ -50,11 +50,9 @@ std::pair<std::vector<uint32_t>, std::vector<uint32_t>> compute_opt_conv_activat
 
 namespace {
 
-// Per-coord ProgramDescriptor build (originally lived in the legacy
-// Conv2dWidthShardedProgramFactory::create body).  The intermediate
-// conv_reader_indices tensor is allocated once by create_workload_descriptor and
-// parked on the WorkloadDescriptor; we receive the raw Buffer* here and wire it
-// into the READER_INDICES CB and reader CT args.
+// The intermediate conv_reader_indices tensor is allocated once by
+// create_workload_descriptor and parked on the WorkloadDescriptor; we receive
+// the raw Buffer* here and wire it into the READER_INDICES CB and reader CT args.
 tt::tt_metal::ProgramDescriptor build_program_descriptor(
     const Conv2dParams& operation_attributes,
     const Conv2dInputs& tensor_args,

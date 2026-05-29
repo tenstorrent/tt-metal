@@ -17,8 +17,7 @@ struct ReshapeViewTiledProgramFactory {
     // input-to-output page-mapping tensor onto the device and parks the
     // owning Tensor on the WorkloadDescriptor so its backing buffer
     // outlives the cached programs.  The mapping is fully determined by
-    // the hashed input/output shapes; the legacy `recreate_mapping_tensor`
-    // override-path is no longer needed in Contract-2.
+    // the hashed input/output shapes.
     static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const ReshapeViewParams& operation_attributes,
         const ReshapeViewInputs& tensor_args,
