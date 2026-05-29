@@ -217,9 +217,12 @@ class TtAttention(LightweightModule):
         v = qkv[:, (nh + nkv) * hd :]
 
         # -> [1, seq, heads, hd] for rope (cos/sin broadcast over heads).
-        q = ttnn.reshape(q, (1, seq, nh, hd))
-        k = ttnn.reshape(k, (1, seq, nkv, hd))
-        v = ttnn.reshape(v, (1, seq, nkv, hd))
+        # The head-split reshapes are the block's top hotspot (tracy: 38% of
+        # kernel time when left DRAM-interleaved); pin their outputs to L1 so
+        # the downstream permute/RoPE/repeat_kv chain reads from L1 not DRAM.
+        q = ttnn.reshape(q, (1, seq, nh, hd), memory_config=ttnn.L1_MEMORY_CONFIG)
+        k = ttnn.reshape(k, (1, seq, nkv, hd), memory_config=ttnn.L1_MEMORY_CONFIG)
+        v = ttnn.reshape(v, (1, seq, nkv, hd), memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # -> [1, heads, seq, hd] (transpose seq<->heads) for batched attention.
         q = ttnn.permute(q, (0, 2, 1, 3))
@@ -253,8 +256,10 @@ class TtAttention(LightweightModule):
         )  # [1, nh, seq, hd]
 
         # Concat heads: [1, nh, seq, hd] -> [1, seq, nh, hd] -> [seq, hidden].
+        # Pin the head-merge reshape output to L1 so the o_proj matmul reads
+        # its input from L1 rather than DRAM-interleaved.
         attn = ttnn.permute(attn, (0, 2, 1, 3))
-        attn = ttnn.reshape(attn, (seq, nh * hd))
+        attn = ttnn.reshape(attn, (seq, nh * hd), memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # Output projection (no bias): [seq, hidden] @ [hidden, hidden].
         out = ttnn.linear(
