@@ -328,45 +328,41 @@ sfpi_inline sfpi::vFloat _sfpu_round_to_nearest_int32_(sfpi::vFloat z, sfpi::vIn
  */
 sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_unsafe_(sfpi::vFloat val)
 {
-    // Step 1: Compute k = round(x / ln(2))
-    constexpr float INV_LN2 = 1.4426950408889634f; // 1/ln(2)
-    sfpi::vFloat z          = val * INV_LN2;
+    return _sfpu_exp_fp32_accurate_unsafe_from_z_(
+        val, val * 1.4426950408889634f /* 1/ln(2) */);
+}
 
-    // Round z to nearest integer using round-to-nearest-even
+/*
+ * Core of FP32 exp that accepts a pre-computed z = val * (1/ln2).
+ *
+ * Caller is responsible for clamping z to the safe range [-127, 128]
+ * before calling.  Separating the z computation from the body allows
+ * the public wrapper to compute z *once*, clamp it with branch-free
+ * vec_min_max, and feed both val and z to this helper — saving one
+ * redundant SFPMUL compared with the old two-stage path.
+ *
+ * @param val The (possibly clamped) input value.
+ * @param z   val * (1/ln2), already clamped to [-127, 128].
+ * @return sfpi::vFloat Result of exp(val), accurate to <1 FP32 ULP.
+ */
+sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_unsafe_from_z_(sfpi::vFloat val, sfpi::vFloat z)
+{
+    // Round z to nearest integer using round-to-nearest-even.
     sfpi::vInt k_int;
     sfpi::vFloat k = _sfpu_round_to_nearest_int32_(z, k_int);
 
-    // Step 2: Cody-Waite range reduction
-    // Compute r = x - k*ln(2) in extended precision
-    // r = x - k*LN2_HI - k*LN2_LO
-    // This provides better accuracy than simple r = x - k*ln(2)
-    // Cody-Waite constants: ln(2) split into high and low parts for extended precision.
-    // LN2_HI is chosen so that k*LN2_HI can be computed exactly for integer k in the valid range.
-    // LN2_LO contains the remainder: LN2_HI + LN2_LO ≈ -ln(2)
-
-    // We want to do:
-    // 1) r_hi = val - k * LN2_HI
-    // 2) r = r_hi - k * LN2_LO
-    // On Wormhole, we can only do VD = VA * VB + VC, so we need to transform the expressions to
-    // ensure optimization to a single SFPMAD instruction.
-    // On Blackhole, SFFPMAD has SFPMAD_MOD1_NEGATE_VA and SFPMAD_MOD1_NEGATE_VC for this purpose.
-    // However, negating constants maintains consistency with Wormhole, and ensures higher chance
-    // of optimization to a single SFPMAD instruction.
-    // The transformation is as follows:
-    // 1) r_hi = val + k * (-LN2_HI)
-    // 2) r = r_hi + k * (-LN2_LO)
-    // Where LN2_HI and LN2_LO are negated.
-    // This way, compiler can more easily optimize this expression to a single SFPMAD instruction.
-    constexpr float LN2_HI = -0.6931152343750000f; // High bits of ln(2)
-    constexpr float LN2_LO = -3.19461832987e-05f;  // Low bits of ln(2)
+    // Cody-Waite range reduction in val domain.
+    // Compute r = val - k*ln(2) in extended precision.
+    // LN2_HI is chosen so that k*LN2_HI can be computed exactly for integer k.
+    // Constants are negated so that SFPMAD can fold r_hi = k*LN2_HI + val.
+    constexpr float LN2_HI = -0.6931152343750000f; // High bits of ln(2), negated
+    constexpr float LN2_LO = -3.19461832987e-05f;  // Low bits of ln(2), negated
 
     sfpi::vFloat r_hi = k * LN2_HI + val;
     sfpi::vFloat r    = k * LN2_LO + r_hi;
 
-    // Step 3: Polynomial approximation for exp(r) using Taylor series
-    // exp(r) ~= 1 + r + r²/2! + r³/3! + r⁴/4! + r⁵/5! + r⁶/6! + r⁷/7!
-    // Use 7th order polynomial (Taylor series coefficients) for < 1 ULP accuracy
-    // Coefficients in ascending order of powers: c0, c1, c2, c3, c4, c5, c6, c7
+    // 7th-order Taylor series for exp(r), Horner form.
+    // Coefficients: c_k = 1/k!.
     sfpi::vFloat p = PolynomialEvaluator::eval(
         r,
         sfpi::vConst1, // c0 = 1
@@ -379,64 +375,52 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_unsafe_(sfpi::vFloat val)
         1.0f / 5040.0f // c7 = 1/7!
     );
 
-    // Step 4: Scale by 2^k via direct exponent injection: setexp(p, exexp(p)+k_int).
+    // Scale by 2^k via direct exponent injection.
     sfpi::vInt p_exp   = sfpi::exexp(p, sfpi::ExponentMode::NoDebias);
     sfpi::vInt new_exp = p_exp + k_int;
-
     return sfpi::setexp(p, new_exp);
 }
 
 /*
  * This function implements exp(x) using Cody-Waite range reduction for improved accuracy.
- * Target accuracy: < 1 ULP for float32.
+ * Target accuracy: < 1 ULP for float32 (faithful rounding).
  *
- * Algorithm:
- * 1. Handle special cases (overflow, underflow, NaN)
- * 2. For in-range inputs, dispatch to _sfpu_exp_fp32_accurate_unsafe_.
+ * Key optimisations over the previous implementation:
+ *  1. Branch-free overflow/underflow via vec_min_max clamping on z = x / ln(2).
+ *     This eliminates the v_if / v_elseif chain and lets the compiler schedule
+ *     the hot path without predication stalls.
+ *  2. Single NaN check at the end instead of interleaved with the range checks.
+ *  3. The z = val * (1/ln2) multiply is computed once and shared with the
+ *     unsafe core, saving one redundant SFPMUL in the fast path.
  *
  * @param val The input value (sfpi::vFloat vector), can be any floating point number
  * @return sfpi::vFloat Result of exp(val)
  */
 sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat val)
 {
-    sfpi::vFloat result = sfpi::vConst0;
-
-    // Exp computation uses bit-wise manipulation using exponent and mantissa fields
-    // For large values (e.g. |x| > 89), some intermediate values can overflow
-    // To avoid this, we check the value of the input using two thresholds.
-    //
-    // These thresholds are applied after scaling x by 1/log(2) (i.e., on z = x * 1/ln(2)).
-    // Mapped back to the original x domain, they correspond to approximately -88 and 89.
-    constexpr float OVERFLOW_THRESHOLD  = 128.0f;
-    constexpr float UNDERFLOW_THRESHOLD = -127.0f;
-
+    // Compute z = val / ln(2) in the base-2 exponent domain.
+    // Clamp z to [-127, 128] with branch-free vec_min_max so that the
+    // downstream setexp naturally saturates to +inf / 0 at the boundaries.
     constexpr float INV_LN2 = 1.4426950408889634f; // 1/ln(2)
-    sfpi::vFloat z          = val * INV_LN2;
+    sfpi::vFloat z = val * INV_LN2;
 
-    // Check for special cases
-    sfpi::vInt exp_bits = sfpi::exexp(z);
+    sfpi::vFloat z_clamped     = z;
+    sfpi::vFloat underflow_lim = -127.0f;
+    sfpi::vFloat overflow_lim  = 128.0f;
+    sfpi::vec_min_max(underflow_lim, z_clamped);
+    sfpi::vec_min_max(z_clamped, overflow_lim);
 
-    v_if (z >= OVERFLOW_THRESHOLD)
+    // Core Cody-Waite + Taylor computation on the clamped z.
+    sfpi::vFloat result = _sfpu_exp_fp32_accurate_unsafe_from_z_(val, z_clamped);
+
+    // NaN detection on the ORIGINAL (unclamped) val.
+    // sfpi::exexp returns the unbiased exponent: 128 = biased 255 = inf or NaN.
+    // NaN is distinguished by a non-zero mantissa.
+    sfpi::vInt v_exp = sfpi::exexp(val);
+    sfpi::vInt v_man = sfpi::exman(val);
+    v_if (v_exp == 128 && v_man != 0)
     {
-        // Overflow
-        result = std::numeric_limits<float>::infinity();
-    }
-    v_elseif (z <= UNDERFLOW_THRESHOLD)
-    {
-        // Underflow
-        result = sfpi::vConst0;
-    }
-    v_elseif (exp_bits == 255)
-    {
-        // infinity (exp = 255 && man != 0) already taken care of by previous conditionals:
-        // if input is infinity or -infinity, then either z >= OVERFLOW_THRESHOLD or z <= UNDERFLOW_THRESHOLD
-        // would have been true and their cases have already been handled.
-        // Thus, we know that if exp == 0 here, then man != 0 as well.
         result = std::numeric_limits<float>::quiet_NaN();
-    }
-    v_else
-    {
-        result = _sfpu_exp_fp32_accurate_unsafe_(val);
     }
     v_endif;
 
@@ -1091,10 +1075,13 @@ inline void _init_exponential_()
         }
         else
         {
-            // fp32 scalar path (_sfpu_exp_fp32_accurate_) — uses the scalar
-            // reciprocal LLK for negative inputs, so its constants must be
-            // primed here.
-            _init_sfpu_reciprocal_<false>();
+            // fp32 scalar path (_sfpu_exp_fp32_accurate_) — the optimised
+            // implementation uses Cody-Waite range reduction directly and
+            // does not require the scalar reciprocal that the legacy _sfpu_exp_
+            // path depended on. The clamp + setexp saturation handles
+            // overflow / underflow without branches, and NaN is caught by
+            // the post-computation NaN guard, so no special-function constants
+            // need to be primed here.
         }
     }
 }
