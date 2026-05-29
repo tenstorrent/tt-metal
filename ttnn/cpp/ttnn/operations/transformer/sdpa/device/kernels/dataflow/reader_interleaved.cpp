@@ -41,7 +41,7 @@ FORCE_INLINE void read_chunk_for_forwarding(
             fill_zeros_async(noc, cb_id, tile_bytes, tile_idx * tile_bytes);
         }
     }
-    // NOC reads and write_zeros use the same completion path on WH/BH but different
+    // NOC reads and async_write_zeros use the same completion path on WH/BH but different
     // paths on Quasar (NOC channels vs iDMA). Issue both — second is a no-op on WH/BH.
     noc_async_read_barrier();
     noc.write_zeros_l1_barrier();

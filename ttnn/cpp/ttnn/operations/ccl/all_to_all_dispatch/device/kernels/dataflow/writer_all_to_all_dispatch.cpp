@@ -34,7 +34,7 @@ inline void dispatch_metadata_local_device(
 void zero_buffer_async(uint32_t cb_id, uint32_t bytes) {
     Noc noc;
     CircularBuffer cb(cb_id);
-    noc.write_zeros(cb, bytes);
+    noc.async_write_zeros(cb, bytes);
 }
 
 void zero_buffer_barrier() {

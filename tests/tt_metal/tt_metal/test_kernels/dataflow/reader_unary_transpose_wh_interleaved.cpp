@@ -29,7 +29,7 @@ void kernel_main() {
     dfb1.reserve_back(1);
     constexpr uint32_t scaler = get_arg(args::scaler);
 
-    noc.write_zeros(dfb1, 2048);
+    noc.async_write_zeros(dfb1, 2048);
     noc.write_zeros_l1_barrier();
 
     // On Quasar, dfb.get_write_ptr() returns a cacheable-alias L1 address; the noncacheable

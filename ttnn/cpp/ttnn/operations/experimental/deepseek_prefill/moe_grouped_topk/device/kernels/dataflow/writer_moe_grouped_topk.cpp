@@ -114,7 +114,8 @@ FORCE_INLINE void generate_reduce_scalar(
         write_ptr[i] = 0;
         if (i == rows_per_face) {
             // Zero the second face's first line (offset face_size_bytes into the tile).
-            noc.write_zeros(reduce_cb, score_tile::face_line_bytes, {.offset_bytes = score_tile::face_size_bytes});
+            noc.async_write_zeros(
+                reduce_cb, score_tile::face_line_bytes, {.offset_bytes = score_tile::face_size_bytes});
         }
     }
     uint32_t face_3_write_addr = write_addr + 2 * score_tile::face_size_bytes;

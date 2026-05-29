@@ -20,7 +20,7 @@ constexpr uint32_t get_barrier_read_threshold() {
 
 inline void fill_zeros_async(const Noc& noc, uint32_t cb_id, uint32_t tile_bytes, uint32_t offset_bytes = 0) {
     CircularBuffer cb(cb_id);
-    noc.write_zeros(cb, tile_bytes, {.offset_bytes = offset_bytes});
+    noc.async_write_zeros(cb, tile_bytes, {.offset_bytes = offset_bytes});
 }
 
 template <uint32_t tile_bytes, bool wait_for_barrier = true>
@@ -175,7 +175,7 @@ uint32_t read_chunk_with_padding(
             fill_tile_zeros<tile_bytes, false>(noc, cb_id, tile_id);
         }
     }
-    // NOC reads and write_zeros use the same completion path on WH/BH but different
+    // NOC reads and async_write_zeros use the same completion path on WH/BH but different
     // paths on Quasar (NOC channels vs iDMA). Issue both — second is a no-op on WH/BH.
     noc_async_read_barrier();
     noc.write_zeros_l1_barrier();
@@ -233,7 +233,7 @@ FORCE_INLINE void read_q_subblock(
         }
     }
 
-    // NOC reads and write_zeros use the same completion path on WH/BH but different
+    // NOC reads and async_write_zeros use the same completion path on WH/BH but different
     // paths on Quasar (NOC channels vs iDMA). Issue both — second is a no-op on WH/BH.
     noc_async_read_barrier();
     noc.write_zeros_l1_barrier();
@@ -294,7 +294,7 @@ void read_paged_chunk_with_padding(
             fill_zeros_async(noc, cb_id, tile_bytes, tile_id * tile_bytes);
         }
     }
-    // NOC reads and write_zeros use the same completion path on WH/BH but different
+    // NOC reads and async_write_zeros use the same completion path on WH/BH but different
     // paths on Quasar (NOC channels vs iDMA). Issue both — second is a no-op on WH/BH.
     noc_async_read_barrier();
     noc.write_zeros_l1_barrier();
@@ -1425,8 +1425,8 @@ __attribute__((noinline)) void fetch_block(
 
     cat_addr_generator.issue_reads(
         src_slice, end_seq_tile, dst_cb_id, dst_addr, outer_ptr_stride, inner_ptr_stride, barrier_threshold);
-    // issue_reads internally emits noc_async_read (NOC) AND zero_fill_block → write_zeros
-    // (iDMA on Quasar). NOC reads and write_zeros use the same completion path on WH/BH
+    // issue_reads internally emits noc_async_read (NOC) AND zero_fill_block → async_write_zeros
+    // (iDMA on Quasar). NOC reads and async_write_zeros use the same completion path on WH/BH
     // but different paths on Quasar. Issue both — second is a no-op on WH/BH.
     Noc noc;
     noc_async_read_barrier();

@@ -23,7 +23,7 @@ template <uint32_t stick_size_bytes>
 inline void zeroPad(uint32_t cb_output_id) {
     Noc noc;
     CircularBuffer cb(cb_output_id);
-    noc.write_zeros(cb, stick_size_bytes);
+    noc.async_write_zeros(cb, stick_size_bytes);
 }
 
 void kernel_main() {

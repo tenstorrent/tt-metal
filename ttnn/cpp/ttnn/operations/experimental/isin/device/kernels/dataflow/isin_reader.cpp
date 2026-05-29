@@ -45,7 +45,7 @@ FORCE_INLINE void isin_subchunks(
 void zero_buffer(uint32_t cb_id, uint32_t bytes) {
     Noc noc;
     CircularBuffer cb(cb_id);
-    noc.write_zeros(cb, bytes);
+    noc.async_write_zeros(cb, bytes);
     noc.write_zeros_l1_barrier();
 }
 

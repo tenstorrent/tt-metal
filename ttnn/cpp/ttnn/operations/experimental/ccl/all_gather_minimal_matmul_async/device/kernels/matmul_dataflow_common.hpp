@@ -283,7 +283,7 @@ bool is_backward_k_block_iter(uint32_t k_block_iter, uint32_t k_blocks_per_devic
 inline void fill_zeros_async(uint32_t cb_id, uint32_t bytes, uint32_t offset_bytes = 0) {
     Noc noc;
     CircularBuffer cb(cb_id);
-    noc.write_zeros(cb, bytes, {.offset_bytes = offset_bytes});
+    noc.async_write_zeros(cb, bytes, {.offset_bytes = offset_bytes});
 }
 
 struct TensorShape2D {

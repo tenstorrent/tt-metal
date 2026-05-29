@@ -58,7 +58,7 @@ void kernel_main() {
         const uint32_t fp32_tile_bytes = get_tile_size(cb_recv);
         Noc noc;
         CircularBuffer recv_cb(cb_recv);
-        noc.write_zeros(recv_cb, fp32_tile_bytes);
+        noc.async_write_zeros(recv_cb, fp32_tile_bytes);
         noc.write_zeros_l1_barrier();
     }
 #endif

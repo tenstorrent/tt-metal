@@ -22,7 +22,7 @@ void fill_tile(uint32_t cb_id, uint32_t tile_id, uint32_t val) {
     if (val == 0) {
         Noc noc;
         CircularBuffer cb(cb_id);
-        noc.write_zeros(cb, tile_bytes, {.offset_bytes = tile_id * tile_bytes});
+        noc.async_write_zeros(cb, tile_bytes, {.offset_bytes = tile_id * tile_bytes});
         noc.write_zeros_l1_barrier();
     } else {
         // Fill 2 uint16 datums in each writes to optimize for performance

@@ -12,7 +12,7 @@
 #include "api/dataflow/circular_buffer.h"
 
 // Zero-fills the entire L1 region backing a local circular buffer via
-// Noc::write_zeros.
+// Noc::async_write_zeros.
 //
 // Used by e.g. reader_mcast_sender_unary_gn.cpp (the non-welford mcast
 // reader) for cb_ex_external.
@@ -37,6 +37,6 @@
 inline void zero_whole_cb(uint32_t cb_id, const Noc& noc) {
     auto& iface = get_local_cb_interface(cb_id);
     CircularBuffer cb(cb_id);
-    noc.write_zeros(cb, iface.fifo_size);
+    noc.async_write_zeros(cb, iface.fifo_size);
     noc.write_zeros_l1_barrier();
 }
