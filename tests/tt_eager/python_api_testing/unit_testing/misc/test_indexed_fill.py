@@ -39,6 +39,8 @@ from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype
     ],
 )
 def test_indexed_slice(seed, B, b, D, tt_dtype, device):
+    if tt_dtype == ttnn.bfloat16 and D == 4 and B == 32 and b == 6 and seed == 0:
+        pytest.skip("Disabled by issue #45513: deterministic TT_THROW in system_memory_manager.cpp:738")
     torch.manual_seed(seed)
 
     dtype = tt_dtype_to_torch_dtype[tt_dtype]
