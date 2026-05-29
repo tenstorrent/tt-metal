@@ -301,6 +301,8 @@ class PipelineBlock:
                 embedding_tensor,
                 forward_metadata,
                 host_io_placement=loopback.host_io_placement,
+                exit_node_upstream=exit_node_upstream,
+                entry_node_downstream=entry_node_downstream,
             )
         elif self.is_last_stage and not self.initialize_loopback:
             self._init_last_stage_with_d2h(
@@ -366,18 +368,28 @@ class PipelineBlock:
         embedding_tensor,
         forward_metadata,
         host_io_placement=None,
+        exit_node_upstream=None,
+        entry_node_downstream=None,
     ):
         assert h2d_socket_fifo_size is not None, "H2D Socket FIFO Size must be provided to first pipeline stage"
-        assert embedding_tensor is not None, "Embedding Tensor must be provided to first pipeline stage"
         assert host_io_placement is not None, "host_io_placement must be provided to first pipeline stage"
 
         h2d_device_coord = pipeline_config[self.my_stage_idx].entry_node_coord
-        embedding_size_bytes = embedding_tensor.shape[-1] * dtype_size(embedding_tensor.dtype)
 
-        if forward_metadata:
-            assert downstream_d2d_socket_page_size == embedding_size_bytes + DeepseekMetadata.aligned_size_bytes()
+        if embedding_tensor is not None:
+            embedding_size_bytes = embedding_tensor.shape[-1] * dtype_size(embedding_tensor.dtype)
+            if forward_metadata:
+                assert downstream_d2d_socket_page_size == embedding_size_bytes + DeepseekMetadata.aligned_size_bytes()
+            else:
+                assert downstream_d2d_socket_page_size == embedding_size_bytes
         else:
-            assert downstream_d2d_socket_page_size == embedding_size_bytes
+            # Blaze owns the embedding stage: H2D forwards raw tokens to the lookup core
+            # (entry_node_downstream), Blaze writes activations into a fresh upstream pair,
+            # and exit_socket_interface drains that pair to fabric.
+            assert exit_node_upstream is not None, (
+                "exit_node_upstream must be provided when embedding_tensor is None " "(Blaze-owned embedding stage)"
+            )
+            embedding_size_bytes = 0
 
         if self.initialize_loopback:
             assert d2h_socket_fifo_size is not None, "D2H Socket FIFO Size must be provided to first pipeline stage"
@@ -409,8 +421,21 @@ class PipelineBlock:
             token_size_bytes,
             d2h_socket_page_size,
             core_to_core_socket_buffer_size=downstream_d2d_socket_fifo_size,
-            h2d_downstream_core=ttnn.MeshCoreCoord(
-                pipeline_config[self.my_stage_idx].exit_node_coord, host_io_placement.fwd_d2d_core
+            # In the integrated-embedding path the fused H2D+embedding kernel reads
+            # at ``fwd_d2d_core`` and the exit d2d_exchange kernel also runs there
+            # (different chips, no collision). In the Blaze-owned path the blaze
+            # graph runs its receiver/embedding/sender kernels on the EXIT chip,
+            # all on the BRISC of the H2D landing core, and the exit_socket_interface
+            # d2d_exchange ALSO runs on the BRISC of ``fwd_d2d_core`` on that same
+            # exit chip — two BRISC kernels on one core would collide. ``EmbeddingStage``
+            # routes blaze to a separate core (e.g. (12, 9)) and passes
+            # ``entry_node_downstream`` here so H2D delivers to that same core.
+            h2d_downstream_core=(
+                entry_node_downstream
+                if (embedding_tensor is None and entry_node_downstream is not None)
+                else ttnn.MeshCoreCoord(
+                    pipeline_config[self.my_stage_idx].exit_node_coord, host_io_placement.fwd_d2d_core
+                )
             ),
             d2h_upstream_core=(
                 ttnn.MeshCoreCoord(pipeline_config[self.num_procs].entry_node_coord, host_io_placement.lb_d2d_core)
@@ -418,21 +443,49 @@ class PipelineBlock:
                 else None
             ),
             embedding_tensor=embedding_tensor,
-            metadata_size_bytes=downstream_d2d_socket_page_size - embedding_size_bytes,
+            # The H2D kernel forwards (embedding + metadata) downstream ONLY when
+            # the integrated-embedding path is active (embedding_tensor != None).
+            # In the Blaze-owned case the H2D kernel just forwards the raw token
+            # page (h2d_socket_page_size bytes) to the lookup core, and Blaze's
+            # embedding op produces the activation that the separate
+            # exit_socket_interface forwards. Conflating the two payload sizes
+            # made the H2D kernel compute fabric packet sizes from
+            # ``h2d_page_size + (downstream activation + metadata)`` and try to
+            # send 14464 B per page after reading only 64 B from PCIe, hanging
+            # the pipeline at the first H2D push.
+            metadata_size_bytes=(
+                (downstream_d2d_socket_page_size - embedding_size_bytes) if embedding_tensor is not None else 0
+            ),
         )
 
         next_stage = self.my_stage_idx + 1
         ns = self._stages[next_stage]
-        self.exit_socket_interface = SocketInterface(
-            downstream_d2d_socket_page_size,
-            downstream_d2d_socket_fifo_size,
-            downstream_d2d_socket_page_size,
-            ttnn.MeshCoreCoord(pipeline_config[self.my_stage_idx].exit_node_coord, host_io_placement.fwd_d2d_core),
-            ttnn.MeshCoreCoord(pipeline_config[next_stage].entry_node_coord, pipeline_core_coord),
-            upstream_socket=self.host_io.get_downstream_socket(),
-            sender_mesh=MeshWrapper(mesh_device),
-            receiver_mesh=MeshWrapper(rank=ns.rank, mesh_id=ns.mesh_id),
-        )
+        if embedding_tensor is not None:
+            # Fused H2D-embedding kernel produces activations directly into the H2D-forwarded
+            # socket; exit_socket_interface forwards those across fabric to the next stage.
+            self.exit_socket_interface = SocketInterface(
+                downstream_d2d_socket_page_size,
+                downstream_d2d_socket_fifo_size,
+                downstream_d2d_socket_page_size,
+                ttnn.MeshCoreCoord(pipeline_config[self.my_stage_idx].exit_node_coord, host_io_placement.fwd_d2d_core),
+                ttnn.MeshCoreCoord(pipeline_config[next_stage].entry_node_coord, pipeline_core_coord),
+                upstream_socket=self.host_io.get_downstream_socket(),
+                sender_mesh=MeshWrapper(mesh_device),
+                receiver_mesh=MeshWrapper(rank=ns.rank, mesh_id=ns.mesh_id),
+            )
+        else:
+            # Blaze owns the embedding stage: read from the fresh upstream pair Blaze writes into,
+            # rather than the host_io downstream socket.
+            self.exit_socket_interface = SocketInterface(
+                downstream_d2d_socket_page_size,
+                downstream_d2d_socket_fifo_size,
+                downstream_d2d_socket_page_size,
+                ttnn.MeshCoreCoord(pipeline_config[self.my_stage_idx].exit_node_coord, host_io_placement.fwd_d2d_core),
+                ttnn.MeshCoreCoord(pipeline_config[next_stage].entry_node_coord, pipeline_core_coord),
+                upstream_core_coord=exit_node_upstream,
+                sender_mesh=MeshWrapper(mesh_device),
+                receiver_mesh=MeshWrapper(rank=ns.rank, mesh_id=ns.mesh_id),
+            )
 
         last_stage = self.num_procs - 1
         ls = self._stages[last_stage]
