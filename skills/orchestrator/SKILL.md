@@ -1,6 +1,6 @@
 ---
 name: bringup
-description: Automate the full TTNN model bring-up pipeline (architecture → reference → ttnn → debug → optimization) for any HuggingFace model on any supported Tenstorrent device. State persists across sessions; resumable after crash.
+description: Automate the full TTNN model bring-up pipeline (architecture → reference → ttnn → debug → optimization → real_weights → generation → perf) for any HuggingFace model on any supported Tenstorrent device — from HF id to working end-to-end demos with characterized perf. State persists across sessions; resumable after crash.
 ---
 
 <!--
