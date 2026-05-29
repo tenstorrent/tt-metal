@@ -117,7 +117,7 @@ enum class StochRndType : std::uint8_t
 };
 
 // This is populated per Wormhole ISA for SFPLOAD/SFPSTORE instructions.
-enum InstrModLoadStore
+enum class InstrModLoadStore
 {
     DEFAULT       = 0,
     FP16A         = 1,
@@ -132,6 +132,21 @@ enum InstrModLoadStore
     LO16_ONLY     = 14,
     HI16_ONLY     = 15
 };
+
+/**
+ * @brief Left-shifts the numeric value of an InstrModLoadStore instruction mode.
+ *
+ * Provides an integer left-shift for the scoped InstrModLoadStore enum so its value can be packed
+ * directly into SFPLOAD/SFPSTORE instruction words (e.g. the `(instr_mod0) << 16` field encoding).
+ *
+ * @param mod   The instruction mode whose underlying value is shifted.
+ * @param shift The number of bit positions to shift left.
+ * @return The underlying value of @p mod shifted left by @p shift, as a std::uint32_t.
+ */
+constexpr std::uint32_t operator<<(InstrModLoadStore mod, int shift)
+{
+    return static_cast<std::uint32_t>(mod) << shift;
+}
 
 template <DataFormat format>
 constexpr InstrModLoadStore GetSfpLoadStoreInstrMod()
