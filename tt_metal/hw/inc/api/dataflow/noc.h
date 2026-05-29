@@ -691,8 +691,7 @@ public:
      * the caller's pre-zeroed prefix must cover at least min(@p size_bytes, NOC_MAX_BURST_SIZE)
      * bytes. If the scratch is shorter, the impl will read garbage past the zero region and
      * write it to DRAM. Caller MUST zero the scratch first via overload (1) +
-     * write_zeros_l1_barrier() before the first call. For Scratch = DataflowBuffer the impl
-     * asserts scratch.get_entry_size() is large enough (under WATCHER_ENABLED).
+     * write_zeros_l1_barrier() before the first call.
      *
      * @see write_zeros_dram_barrier.
      *

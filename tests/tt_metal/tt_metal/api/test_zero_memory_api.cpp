@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// End-to-end smoke test for Noc::write_zeros — the device-side zero-memory API
-// added by tt-metal #11214. Single TEST_F that exercises both overloads in one
+// End-to-end smoke test for Noc::write_zeros that exercises both overloads in one
 // dispatch using a shared DFB:
 //
 //   - Host stamps an L1 status-flag word with the sentinel 0xBAADF00D.
@@ -22,8 +21,7 @@
 //   - Host reads the DRAM tensor; expects all zeros (overload-2 result).
 //
 // The L1 zero is dual-purpose: it's the test target for overload (1) AND the
-// scratch fill for overload (2). This eliminates the separate scratch_zeroer
-// kernel — the L1 zero IS the scratch fill.
+// scratch fill for overload (2).
 
 #include "device_fixture.hpp"
 
@@ -78,14 +76,10 @@ experimental::metal2_host_api::DataMovementConfiguration make_dm_config(DataMove
 
 namespace tt::tt_metal {
 
-TEST_F(MeshDeviceSingleCardFixture, ZeroMemoryApiEndToEnd) {
+TEST_F(MeshDeviceSingleCardFixture, ZeroMemoryApi) {
     auto& mesh_device = *devices_[0];
     IDevice* dev = mesh_device.get_devices()[0];
 
-    // Sized so one DFB entry serves both purposes: the L1 zero target for
-    // overload (1) AND the pre-zeroed DRAM scratch for overload (2). 8 KB is
-    // ≥ page_size_bytes (4 KB) AND ≥ min(page_size, NOC_MAX_BURST_SIZE) on every
-    // arch, so overload (2)'s per-call DFB::get_entry_size() assert clears.
     constexpr uint32_t scratch_bytes = 8 * 1024;
     constexpr uint32_t num_pages = 4;
     constexpr uint32_t page_size_bytes = 4 * 1024;
@@ -117,8 +111,6 @@ TEST_F(MeshDeviceSingleCardFixture, ZeroMemoryApiEndToEnd) {
         .unique_id = SCRATCH_DFB,
         .entry_size = scratch_bytes,
         .num_entries = 1,
-        // Float16_b is the only data format both WH/BH and Quasar accept here; the DFB is
-        // just used as a raw L1 scratch region so the choice doesn't affect correctness.
         .data_format_metadata = tt::DataFormat::Float16_b,
     };
 

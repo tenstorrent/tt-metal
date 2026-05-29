@@ -6,13 +6,13 @@
 
 // Single iDMA zero-device transaction with the full cmdbuf sequence
 // spelled out, plus the matching write_zeros_l1_barrier (iDMA ack spin) and
-// (DM only) the L1 D$ + L2 invalidate-after-write for cache coherence with
+// (DM only) the L2 invalidate-after-write for cache coherence with
 // program-cache-hit dirty lines from prior dispatches.
 
 #include "internal/tt-2xx/quasar/overlay/cmdbuff_api.hpp"
 
 #if defined(COMPILE_FOR_DM)
-#include "risc_common.h"  // invalidate_l1_dcache, invalidate_l2_cache_line, L2_CACHE_LINE_SIZE
+#include "risc_common.h"  // invalidate_l2_cache_line, L2_CACHE_LINE_SIZE
 #endif
 
 template <typename Dst>
@@ -54,25 +54,14 @@ inline void Noc::write_zeros(const Dst& dst, uint32_t size_bytes, const dst_args
 
 #if defined(COMPILE_FOR_DM)
     // The iDMA zero device writes directly to TL1 (node memory), bypassing this DM
-    // core's L1 D$ and L2. If the caller had previously CPU-written the same region
-    // (e.g. the all_to_all_dispatch dedup-bitmap re-init on program-cache hits), those
-    // dirty cache entries would shadow the zeros on subsequent reads. Discard cached
-    // lines covering the destination range. Use `cdiscard` (no writeback) — `cflush`
-    // would write the dirty pre-zero data back to TL1 and clobber the iDMA's zeros.
-    // The discard pairs with the iDMA spin in write_zeros_l1_barrier() to give the
-    // same "results visible to subsequent reads" guarantee that noc_async_read_barrier
-    // provides on WH/BH.
-    //
-    // Robust to arbitrary `local_addr` alignment and arbitrary `size_bytes`: `lo`
-    // rounds down to the cache line containing the start; the loop steps by full
-    // lines until `a` passes the actual end. Over-invalidation of partial leading/
-    // trailing lines is fine — the next access just refetches from TL1.
+    // core's L1 D$ and L2. If the caller had previously CPU-written the same region,
+    // those dirty cache entries would shadow the zeros on subsequent reads. Discard
+    // L2 lines covering the destination range; L1 D$ and L2 are coherent on hardware.
     constexpr uintptr_t kLineMask = static_cast<uintptr_t>(L2_CACHE_LINE_SIZE) - 1;
     const uintptr_t lo = static_cast<uintptr_t>(local_addr) & ~kLineMask;
     const uintptr_t hi = static_cast<uintptr_t>(local_addr) + size_bytes;
     for (uintptr_t a = lo; a < hi; a += L2_CACHE_LINE_SIZE) {
         invalidate_l2_cache_line(a);
-        invalidate_l1_dcache(a);
     }
 #endif  // COMPILE_FOR_DM
 }
