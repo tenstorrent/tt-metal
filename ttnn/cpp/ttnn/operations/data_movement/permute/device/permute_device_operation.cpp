@@ -41,6 +41,10 @@ void PermuteDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         attributes.dims.size() == tensor_args.input_tensor.logical_shape().rank(),
         "Permute dimensions must match input tensor rank");
+    TT_FATAL(
+        !tensor_args.input_tensor.is_sharded(),
+        "PermuteDeviceOperation (prim::permute) does not support sharded input tensors. "
+        "Use ttnn::permute which handles sharded tensors via transpose decomposition for supported permutation patterns.");
 }
 
 void PermuteDeviceOperation::validate_on_program_cache_hit(

@@ -62,7 +62,22 @@ ttnn::Tensor permute_impl(
 
     // Keep limited sharding support with recursive calls
     if (a.is_sharded()) {
-        if (N == 0 && C == 1 && H == 2 && W == 3) {
+        // WH-involving permutations require the shard to cover the full logical width
+        // (HEIGHT_SHARDED-equivalent: shard_spec.shape[1] == logical_shape[-1]).
+        // For BLOCK_SHARDED inputs, shard_spec.shape[1] < logical_shape[-1], so the
+        // transpose_wh kernel's use_sharded_wh condition is false and the non-sharded
+        // program factory runs on sharded memory, producing corrupted output.
+        // Route these cases through prim_permute so validate_on_program_cache_miss
+        // rejects the sharded input and the op model can exclude this config.
+        bool involves_wh = (N == 0 && C == 1 && H == 3 && W == 2) ||
+                           (N == 0 && C == 2 && H == 3 && W == 1) ||
+                           (N == 0 && C == 3 && H == 1 && W == 2) ||
+                           (N == 0 && C == 3 && H == 2 && W == 1);
+        bool full_width_shard = a.shard_spec().has_value() &&
+                                a.shard_spec()->shape[1] == static_cast<uint32_t>(a.logical_shape()[-1]);
+        if (involves_wh && !full_width_shard) {
+            output = prim_permute(formatted_input_tensor);
+        } else if (N == 0 && C == 1 && H == 2 && W == 3) {
             output = formatted_input_tensor;
         } else if (N == 0 && C == 1 && H == 3 && W == 2) {
             output = transpose_wh(formatted_input_tensor, output_mem_config);

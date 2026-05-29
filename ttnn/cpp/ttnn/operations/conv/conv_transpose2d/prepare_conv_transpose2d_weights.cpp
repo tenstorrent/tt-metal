@@ -186,6 +186,11 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
     // Use weights_dtype from config if set, otherwise use weight tensor's dtype
     DataType weight_dtype = conv_config.weights_dtype.value_or(weight_tensor.dtype());
+    // Ensure weights_dtype is set on conv_config before it is used in slice determination
+    // (get_cb_info requires conv_config.weights_dtype to be set).
+    if (!conv_config.weights_dtype.has_value()) {
+        conv_config.weights_dtype = weight_dtype;
+    }
     DeviceComputeKernelConfig compute_config =
         compute_config_.value_or(get_conv_default_compute_kernel_config(device, input_dtype, weight_dtype));
     TT_ASSERT(
