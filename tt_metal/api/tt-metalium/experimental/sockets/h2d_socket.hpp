@@ -161,6 +161,15 @@ private:
     // pre-allocated DRISC-L1 offsets for the config and data buffers, plus the
     // DRAM-L1 NOC offset that host writes need to add on top.
     struct DramRecvCtorTag {};
+
+    // Programmable-core type of the receiver core. Recorded explicitly at
+    // construction rather than inferred at use sites: logical coordinates
+    // overlap across core types (DRAM logical (x,y) is a different physical
+    // core than Tensix logical (x,y)), and keying off the DRAM-L1 NOC offset
+    // conflates "needs an L1 offset" with "is a DRAM core". The DRAM-recv ctor
+    // sets Dram; every other path (owner worker ctor, connect()) is Tensix.
+    enum class RecvCoreType { Tensix, Dram };
+
     H2DSocket(
         DramRecvCtorTag,
         const std::shared_ptr<MeshDevice>& mesh_device,
@@ -242,6 +251,9 @@ private:
     // into the pcie_writer lambda in init_receiver_tlb so write() can keep
     // passing local addresses.
     uint64_t dram_l1_noc_offset_ = 0;
+    // Receiver core type, set at construction. The authoritative signal for
+    // CoreType resolution and the DRAM-recv write path in init_receiver_tlb.
+    RecvCoreType recv_core_type_ = RecvCoreType::Tensix;
 };
 
 }  // namespace tt::tt_metal::distributed

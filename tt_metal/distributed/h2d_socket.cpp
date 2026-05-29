@@ -23,17 +23,6 @@
 
 namespace tt::tt_metal::distributed {
 
-namespace {
-
-// True if the logical recv core resolves to a DRAM programmable core on this mesh
-// (e.g. a Blackhole DRAM-DRISC core), rather than a Tensix worker core.
-bool recv_core_is_dram(const std::shared_ptr<MeshDevice>& mesh_device, const CoreCoord& logical_core) {
-    auto dram_cores = mesh_device->worker_cores(HalProgrammableCoreType::DRAM, SubDeviceId{0});
-    return dram_cores.contains(logical_core);
-}
-
-}  // namespace
-
 H2DSocket::PinnedBufferInfo H2DSocket::init_bytes_acked_buffer(
     const std::shared_ptr<MeshDevice>& mesh_device,
     const MeshCoordinateRangeSet& device_range,
@@ -191,13 +180,12 @@ void H2DSocket::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device
 
     const auto& cluster = MetalContext::instance().get_cluster();
 
-    // dram_l1_noc_offset_ is non-zero exactly when this socket was built via
-    // H2DSocketDramRecvAccess for a DRAM-core recv; that's our authoritative
-    // signal that we should resolve via CoreType::DRAM. (The SubDeviceManager
-    // worker_cores(DRAM,…) query doesn't always cover the cores returned by
-    // pick_unused_dram_logical_core, so a coord-based check was unreliable.)
-    const bool is_dram_recv =
-        dram_l1_noc_offset_ != 0 || (mesh_device && recv_core_is_dram(mesh_device, recv_core_.core_coord));
+    // Receiver core type is recorded explicitly at construction (the DRAM-recv
+    // ctor sets Dram, every other path is Tensix). Don't infer it here from
+    // coordinates — logical coords overlap across core types so a
+    // worker_cores(DRAM,…) containment check is unreliable — nor from the
+    // DRAM-L1 NOC offset, which only says "this write needs an L1 offset".
+    const bool is_dram_recv = (recv_core_type_ == RecvCoreType::Dram);
     const CoreType recv_umd_core_type = is_dram_recv ? CoreType::DRAM : CoreType::TENSIX;
 
     if (mesh_device) {
@@ -222,7 +210,7 @@ void H2DSocket::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device
     // Captured into the lambdas below so write() can keep passing local addresses.
     const uint64_t l1_offset = dram_l1_noc_offset_;
     auto arch = MetalContext::instance().hal().get_arch();
-    if (arch == tt::ARCH::BLACKHOLE && mesh_device && l1_offset == 0) {
+    if (arch == tt::ARCH::BLACKHOLE && mesh_device && !is_dram_recv) {
         // This process owns a mesh_device and hence has statically initialized TLBs.
         // Entire device address space for Blackhole is statically mapped.
         // Safe to use static TLBs without requiring the driver to do a reconfig.
@@ -318,7 +306,8 @@ H2DSocket::H2DSocket(
     pinned_memory_(nullptr),
     h2d_mode_(H2DMode::HOST_PUSH),
     mesh_device_(mesh_device.get()),
-    dram_l1_noc_offset_(dram_l1_noc_offset) {
+    dram_l1_noc_offset_(dram_l1_noc_offset),
+    recv_core_type_(RecvCoreType::Dram) {
     MeshCoordinateRangeSet recv_device_range_set;
     recv_device_range_set.merge(MeshCoordinateRange(recv_core_.device_coord));
 
