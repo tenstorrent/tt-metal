@@ -6,7 +6,6 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::data_movement::transpose {
 
@@ -169,35 +168,6 @@ ShardSpec generate_transpose_shard_spec(
     }
     log_debug(tt::LogOp, "Transpose: generated shard spec over full compute grid ({} cores)", num_cores);
     return ShardSpec(all_cores, shard_shape, ShardOrientation::ROW_MAJOR);
-}
-
-// Skip refresh when the buffer carries no common runtime args (interleaved case).
-// Only sharded buffers populate RuntimeTensorShape; the strict size check below
-// applies to them.
-void copy_transpose_common_runtime_args(const Buffer& buffer, std::span<std::uint32_t> dst) {
-    const auto src =
-        TensorAccessorArgs(buffer, tensor_accessor::ArgConfig::RuntimeTensorShape).get_common_runtime_args();
-    if (src.empty()) {
-        return;
-    }
-    TT_FATAL(
-        dst.size() == src.size(),
-        "copy_transpose_common_runtime_args: destination span ({} elems) must match common args ({} elems).",
-        dst.size(),
-        src.size());
-    std::copy(src.begin(), src.end(), dst.begin());
-}
-
-void refresh_transpose_common_runtime_args(
-    Program& program,
-    KernelHandle reader_kernel_id,
-    KernelHandle writer_kernel_id,
-    const Buffer& input_buffer,
-    const Buffer& output_buffer) {
-    auto& reader_args = GetCommonRuntimeArgs(program, reader_kernel_id);
-    auto& writer_args = GetCommonRuntimeArgs(program, writer_kernel_id);
-    copy_transpose_common_runtime_args(input_buffer, std::span<std::uint32_t>(reader_args.data(), reader_args.size()));
-    copy_transpose_common_runtime_args(output_buffer, std::span<std::uint32_t>(writer_args.data(), writer_args.size()));
 }
 
 }  // namespace ttnn::operations::data_movement::transpose
