@@ -132,8 +132,12 @@ def _pick_out_subblocks_2d(per_core_m: int, per_core_n: int) -> tuple[int, int]:
 
 
 def _pick_out_subblocks_1d(per_core_n: int) -> tuple[int, int]:
-    """1D mcast + width-sharded output: out_subblock_w == per_core_N or out_subblock_h == 1."""
-    return 1, per_core_n
+    """1D mcast + width-sharded output: out_subblock_h==1 always; out_subblock_w
+    must divide per_core_N and fit DST register cap (≤8 tiles when fp32_dest_acc_en=False)."""
+    for w in (8, 4, 2, 1):
+        if per_core_n % w == 0:
+            return 1, w
+    return 1, 1
 
 
 def create_program_config(cfg: dict):
