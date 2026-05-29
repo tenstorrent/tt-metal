@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -800,6 +800,7 @@ def test_llama_demo(
     start_pos,
     optimizations,
     mesh_device,
+    device_params,
     is_ci_env,
     reset_seeds,
     request,

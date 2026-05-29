@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -15,12 +15,15 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
-from models.demos.deepseek_v3_d_p.reference.moe.dispatch import TorchDispatchModule
+from models.common.utility_functions import is_wormhole_b0
+from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatchModule
+from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import ALL_MESH_CONFIGS
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
+    ExpertMapping,
     compute_constants,
-    create_expert_dispatch_table,
-    create_fabric_router_config,
     extract_mesh_config,
+    get_dispatch_input_mesh_mapper,
+    get_ep_mesh_composer,
     get_gate_outputs,
     initialize_predictable_test_inputs,
     initialize_test_inputs,
@@ -29,6 +32,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     assert_output_shape,
     validate_dispatch_buffer,
+    validate_dispatch_buffer_pcc,
     validate_dispatch_metadata,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert_dispatch_table, log_validation_results
@@ -84,128 +88,91 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
 # LogicalCoord is coordinate in withing a2a dispatch group
 
 
+# dispatch_buffer_capacity_factor below is ceil(N/2) of the most conservative
+# integer N such that dgs*seq*N >= theoretical worst-case dispatch buffer.
+# Real traffic never approaches the worst case, so half-capacity is sufficient.
 @pytest.mark.parametrize(
-    "seq_len_per_chip, hidden_dim, num_routed_experts, num_experts_per_tok, capacity_factor",
+    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
     [
-        (32, 7168, 16, 4, 2),
+        pytest.param(32, 7168, 16, 4, 4, True, id="pcc"),
+        pytest.param(3200, 7168, 64, 2, 8, False, id="perf_no_pcc"),
     ],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
-    [
-        pytest.param(
-            (2, 1),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
-            },
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 1), topology="linear"),
-            id="linear-2",
-        ),
-        pytest.param(
-            (4, 1),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
-            },
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="linear"),
-            id="linear-4",
-        ),
-        pytest.param(
-            (4, 1),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
-            },
-            1,
-            ttnn.Topology.Ring,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="ring"),
-            id="ring-4",
-        ),
-        pytest.param(
-            (8, 1),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
-            },
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
-            id="linear-8",
-        ),
-        pytest.param(
-            (8, 1),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
-            },
-            1,
-            ttnn.Topology.Ring,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
-            id="ring-8",
-        ),
-        pytest.param(
-            (4, 2),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
-            },
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
-            id="mesh-4x2",
-        ),
-        pytest.param(
-            (2, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
-            },
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-4x2"),
-            id="mesh-2x4",
-        ),
-    ],
+    ALL_MESH_CONFIGS,
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
+@pytest.mark.parametrize(
+    "input_layout",
+    [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+    ids=["tile", "row_major"],
+)
+@pytest.mark.parametrize("use_fp8_output", [False, True], ids=["bf16_out", "fp8_out"])
 @pytest.mark.parametrize("verbose", [False])
 def test_ttnn_dispatch(
     mesh_device,
     seq_len_per_chip,
-    hidden_dim,
+    emb_dim,
     num_routed_experts,
     num_experts_per_tok,
-    capacity_factor,
+    dispatch_buffer_capacity_factor,
     num_links,
     topology,
     use_predictable_data,
+    input_layout,
+    use_fp8_output,
     verbose,
+    run_pcc_check,
 ):
     """Test TTNN dispatch operation against PyTorch reference."""
     num_devices = mesh_device.get_num_devices()
+    if num_devices >= 8 and not run_pcc_check and use_predictable_data:
+        pytest.skip("8-chip perf only runs with random data")
+
+    # Predictable inputs are torch.arange(...), which produces values up to ~1.8M and
+    # overflows fp8_e4m3fn's ±448 range — overflow encodes as NaN, breaking PCC.
+    # Only exercise the fp8 path with random (N(0,1)) data that fits in range.
+    if use_fp8_output and use_predictable_data:
+        pytest.skip("predictable inputs overflow fp8_e4m3fn range; run fp8 with random data")
+
+    if use_fp8_output and is_wormhole_b0():
+        pytest.skip("fp8 output not supported on Wormhole hardware")
+
+    if use_fp8_output and input_layout == ttnn.ROW_MAJOR_LAYOUT:
+        pytest.skip("fp8 output not supported with row_major input layout")
+
+    torch.manual_seed(42)
 
     mesh_config = extract_mesh_config(mesh_device)
     sp_axis = mesh_config.sp_axis
     dispatch_group_size = mesh_config.dispatch_group_size
     num_dispatch_groups = mesh_config.num_dispatch_groups
 
-    logger.info(f"Testing with {mesh_device.shape=}, {num_devices=} {dispatch_group_size=} {num_dispatch_groups=}")
+    logger.debug(f"Testing with {mesh_device.shape=}, {num_devices=} {dispatch_group_size=} {num_dispatch_groups=}")
     ttnn.visualize_mesh_device(mesh_device)
 
     signpost(
-        f"Dispatch {mesh_device=} {num_devices=} {dispatch_group_size=} {num_dispatch_groups=} {seq_len_per_chip=} {hidden_dim=} {num_routed_experts=} {num_experts_per_tok=} {capacity_factor=} {use_predictable_data=} {num_links=} {topology=}"
+        f"Dispatch {mesh_device=} {num_devices=} {dispatch_group_size=} {num_dispatch_groups=} {seq_len_per_chip=} {emb_dim=} {num_routed_experts=} {num_experts_per_tok=} {use_predictable_data=} {num_links=} {topology=}"
     )
 
-    experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
-        seq_len_per_chip, num_routed_experts, num_experts_per_tok, num_devices, capacity_factor
+    (
+        experts_per_chip,
+        metadata_len,
+        max_dispatch_buffer_token_size,
+        max_dispatched_tokens_per_expert,
+    ) = compute_constants(
+        seq_len_per_chip,
+        num_routed_experts,
+        num_experts_per_tok,
+        num_devices,
+        dispatch_group_size,
+        dispatch_buffer_capacity_factor,
     )
-    logger.info(f"{experts_per_chip=}, {metadata_len=}, {max_dispatched_tokens_per_expert=}")
+    logger.debug(
+        f"{experts_per_chip=}, {metadata_len=}, {max_dispatch_buffer_token_size=}, {max_dispatched_tokens_per_expert=}"
+    )
 
     # Initialize inputs using helper function
     # For 2D mesh, generate different weights per EP rank
@@ -213,37 +180,39 @@ def test_ttnn_dispatch(
         x, weights, indices = initialize_predictable_test_inputs(
             dispatch_group_size=dispatch_group_size,
             seq_len_per_chip=seq_len_per_chip,
-            hidden_dim=hidden_dim,
+            emb_dim=emb_dim,
             num_routed_experts=num_routed_experts,
             num_experts_per_tok=num_experts_per_tok,
             max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
             num_dispatch_groups=num_dispatch_groups,
         )
-        logger.info("Using PREDICTABLE test data for debugging")
+        logger.debug("Using PREDICTABLE test data for debugging")
     else:
         x, weights, indices = initialize_test_inputs(
             dispatch_group_size=dispatch_group_size,
             seq_len_per_chip=seq_len_per_chip,
-            hidden_dim=hidden_dim,
+            emb_dim=emb_dim,
             num_routed_experts=num_routed_experts,
             num_experts_per_tok=num_experts_per_tok,
             max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
-            seed=42,
             num_dispatch_groups=num_dispatch_groups,
         )
-        logger.info("Using RANDOM test data")
+        logger.debug("Using RANDOM test data")
+
+    # Clamp inputs to fp8_e4m3fn's finite range so any future scale/seed change can't push
+    # values into the overflow→NaN region. randn(0,1) is already well inside ±448, so this
+    # is a no-op for the current data and a guardrail for later.
+    if use_fp8_output:
+        fp8_info = torch.finfo(torch.float8_e4m3fn)
+        x = x.clamp(min=fp8_info.min, max=fp8_info.max)
 
     logger.debug(f"Input shapes: {x.shape=}, {weights.shape=}, {indices.shape=}")
 
-    # x and indices: replicated across EP ranks
-    mesh_mapper_replicated = ttnn.ShardTensor2dMesh(
-        mesh_device,
-        mesh_shape=mesh_device.shape,
-        dims=(sp_axis, None),
-    )
+    # x and indices: sharded across SP axis, replicated across EP ranks
+    mesh_mapper_replicated = get_dispatch_input_mesh_mapper(mesh_device, sp_axis)
 
     tt_x = ttnn.from_torch(
-        x, mesh_mapper=mesh_mapper_replicated, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, dtype=ttnn.bfloat16
+        x, mesh_mapper=mesh_mapper_replicated, layout=input_layout, device=mesh_device, dtype=ttnn.bfloat16
     )
 
     tt_weights = ttnn.from_torch(
@@ -259,7 +228,7 @@ def test_ttnn_dispatch(
     )
 
     # Create expert dispatch table
-    expert_dispatch_table = create_expert_dispatch_table(
+    expert_dispatch_table = ExpertMapping.create_dispatch_table(
         num_routed_experts=num_routed_experts,
         dispatch_group_size=dispatch_group_size,
         num_dispatch_groups=num_dispatch_groups,
@@ -279,8 +248,9 @@ def test_ttnn_dispatch(
         num_experts_per_tok=num_experts_per_tok,
         metadata_len=metadata_len,
         max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
+        max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
         seq_len_per_chip=seq_len_per_chip,
-        hidden_dim=hidden_dim,
+        emb_dim=emb_dim,
         num_dispatch_groups=num_dispatch_groups,
         expert_dispatch_table=expert_dispatch_table,
     )
@@ -292,22 +262,24 @@ def test_ttnn_dispatch(
         num_routed_experts=num_routed_experts,
         num_experts_per_tok=num_experts_per_tok,
         metadata_len=metadata_len,
-        max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
+        max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
         seq_len_per_chip=seq_len_per_chip,
-        hidden_dim=hidden_dim,
+        emb_dim=emb_dim,
         cluster_axis=sp_axis,
         num_links=num_links,
         topology=topology,
+        fp8_output=use_fp8_output,
     )
 
     # Compute gate outputs (offsets and token counts) before dispatch
-    expert_offsets, expert_token_counts, cum_sum = get_gate_outputs(
+    expert_offsets, expert_token_counts, expert_region_offsets, _ = get_gate_outputs(
         indices,
         dispatch_group_size,
         num_routed_experts,
         experts_per_chip,
         seq_len_per_chip,
         num_experts_per_tok,
+        expert_dispatch_table=expert_dispatch_table,
     )
 
     # Forward pass through TTNN dispatch
@@ -318,17 +290,23 @@ def test_ttnn_dispatch(
         tt_x, tt_weights, tt_indices, tt_expert_offsets, tt_expert_dispatch_table
     )
 
+    if not run_pcc_check:
+        ttnn.synchronize_device(mesh_device)
+        logger.debug("Skipping PCC validation (run_pcc_check=False)")
+        return
+
     # Run torch reference for all EP ranks at once
     torch_dispatched, torch_metadata = torch_dispatch_module(x, weights, indices, expert_offsets)
 
     # Convert TTNN outputs to torch for comparison
-    mesh_composer = ttnn.create_mesh_composer(
-        mesh_device,
-        ttnn.MeshComposerConfig(
-            dims=[1, 0],  # Axis 0: shard on tensor dim 0; Axis 1: replicated
-        ),
-    )
-    tt_out_dispatched = ttnn.to_torch(tt_dispatched, mesh_composer=mesh_composer, dtype=torch.float32)
+    mesh_composer = get_ep_mesh_composer(mesh_device)
+    if use_fp8_output:
+        # Device returned uint8 bytes that decode as float8_e4m3fn — widen to fp32 for PCC.
+        tt_out_dispatched = ttnn.to_torch(tt_dispatched, mesh_composer=mesh_composer)
+        assert tt_out_dispatched.dtype == torch.uint8, f"expected uint8 fp8 output, got {tt_out_dispatched.dtype}"
+        tt_out_dispatched = tt_out_dispatched.view(torch.float8_e4m3fn).to(torch.float32)
+    else:
+        tt_out_dispatched = ttnn.to_torch(tt_dispatched, mesh_composer=mesh_composer, dtype=torch.float32)
     tt_out_metadata = ttnn.to_torch(tt_metadata, mesh_composer=mesh_composer)
 
     assert_output_shape(tt_out_dispatched, num_dispatch_groups, dispatch_group_size, "dispatched buffer")
@@ -341,23 +319,38 @@ def test_ttnn_dispatch(
         logger.debug(f"{torch_metadata[0][0][0][0][0:4]=} | {torch_metadata[0][1][0][0][0:4]=}")
         logger.debug(f"{expert_token_counts.shape=}, {expert_token_counts=}")
         logger.debug(f"{expert_offsets.shape=}, {expert_offsets=}")
-        logger.debug(f"{cum_sum.shape=}, {cum_sum=}")
 
-    # Verify dispatched data matches reference (each EP rank against its torch reference)
-    buffer_result = validate_dispatch_buffer(
-        torch_dispatched,
-        tt_out_dispatched,
-        expert_token_counts,
-        expert_dispatch_table,
-        num_dispatch_groups,
-        dispatch_group_size,
-        experts_per_chip,
-        verbose=verbose,
-    )
+    # Verify dispatched data matches reference (each EP rank against its torch reference).
+    # FP8 path quantizes the buffer (~3-bit mantissa), so allclose is too tight — use PCC.
+    if use_fp8_output:
+        buffer_result = validate_dispatch_buffer_pcc(
+            torch_dispatched,
+            tt_out_dispatched,
+            expert_region_offsets,
+            expert_token_counts,
+            expert_dispatch_table,
+            num_dispatch_groups,
+            dispatch_group_size,
+            experts_per_chip,
+            verbose=verbose,
+        )
+    else:
+        buffer_result = validate_dispatch_buffer(
+            torch_dispatched,
+            tt_out_dispatched,
+            expert_region_offsets,
+            expert_token_counts,
+            expert_dispatch_table,
+            num_dispatch_groups,
+            dispatch_group_size,
+            experts_per_chip,
+            verbose=verbose,
+        )
 
     metadata_result = validate_dispatch_metadata(
         torch_metadata,
         tt_out_metadata,
+        expert_region_offsets,
         expert_token_counts,
         expert_dispatch_table,
         num_dispatch_groups,
@@ -377,4 +370,4 @@ def test_ttnn_dispatch(
     assert (
         buffer_result.passed and metadata_result.passed
     ), f"Some slots did not match! buffer={buffer_result.passed} metadata={metadata_result.passed} Check logs for details."
-    logger.info("✅ TTNN dispatch operation matches torch reference!")
+    logger.debug("✅ TTNN dispatch operation matches torch reference!")

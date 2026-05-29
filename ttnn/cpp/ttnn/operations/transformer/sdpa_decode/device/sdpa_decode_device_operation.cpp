@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,10 +6,14 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 
-#include <cmath>
+#include <cstdint>
+
+#include <tt-metalium/constants.hpp>
 
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
+
+#include <tt_stl/reflection.hpp>
 
 using namespace tt::tt_metal;
 
@@ -147,6 +151,40 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(not tensor_args.attn_mask.has_value(), "Must not have attn_mask tensor for non-causal attention");
     }
 
+    if (operation_attributes.num_kv_heads_override.has_value()) {
+        TT_FATAL(
+            tensor_args.page_table_tensor.has_value(),
+            "num_kv_heads_override is only supported in paged mode (when page_table is provided)");
+        TT_FATAL(operation_attributes.num_kv_heads_override.value() > 0, "num_kv_heads_override must be > 0");
+    }
+
+    if (operation_attributes.cache_position_modulo.has_value()) {
+        TT_FATAL(
+            tensor_args.page_table_tensor.has_value(),
+            "cache_position_modulo is only supported in paged mode (when page_table is provided)");
+        const uint32_t modulo = operation_attributes.cache_position_modulo.value();
+        TT_FATAL(modulo > 0, "cache_position_modulo must be > 0 when provided");
+        // Wrap must align with block boundaries (otherwise a wrapped position would split
+        // across two physical blocks and the kernel can't address it). Pull
+        // effective_block_size from the same fallback the program factory uses.
+        const uint32_t effective_block_size = operation_attributes.block_size_override.value_or(k_shape[2]);
+        TT_FATAL(
+            modulo % effective_block_size == 0,
+            "cache_position_modulo ({}) must be a multiple of effective block_size ({})",
+            modulo,
+            effective_block_size);
+        if (operation_attributes.sliding_window_size.has_value() &&
+            operation_attributes.sliding_window_size.value() > 0) {
+            TT_FATAL(
+                modulo >= operation_attributes.sliding_window_size.value(),
+                "cache_position_modulo ({}) must be >= sliding_window_size ({}); a tighter "
+                "capacity would let the SDPA attention range wrap multiple times and "
+                "double-count positions.",
+                modulo,
+                operation_attributes.sliding_window_size.value());
+        }
+    }
+
     if (operation_attributes.paged_attention) {
         // Paged attention verification
         TT_FATAL(
@@ -208,6 +246,11 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
 
         TT_FATAL(k_shape[2] == v_shape[2], "K and V must have same block size");
 
+        // block_size_override + MLA not yet exercised; reject until needed.
+        if (operation_attributes.block_size_override.has_value()) {
+            TT_FATAL(!use_mla, "block_size_override is not supported with multi-latent attention");
+        }
+
         if (use_mla) {
             TT_FATAL(
                 k_shape[3] == q_shape[3], "Q and K must have same hidden size, got {} and {}", k_shape[3], q_shape[3]);
@@ -218,6 +261,59 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
                     v_shape[3],
                     operation_attributes.head_dim_v.value());
             }
+        } else if (
+            operation_attributes.block_size_override.has_value() || operation_attributes.num_kv_heads_override.has_value()) {
+            // Shared-buffer path: the K/V cache was allocated for a different layer's
+            // (block_size, head_dim) shape, and this call reads through its own view.
+            // Q's last dim drives head_dim; block_size_override drives block_size.
+            // K and V caches still share their per-layer allocation pair, and the
+            // per-block element count (num_kv_heads * block_size * head_dim) must equal
+            // what the cache was allocated for.
+            TT_FATAL(
+                k_shape[3] == v_shape[3],
+                "K and V cache must have same hidden size with geometry overrides, got {} and {}",
+                k_shape[3],
+                v_shape[3]);
+            const uint32_t cache_num_kv_heads = k_shape[1];
+            const uint32_t cache_block_size = k_shape[2];
+            const uint32_t cache_head_dim = k_shape[3];
+            const uint32_t q_head_dim = q_shape[3];
+            const uint32_t effective_block_size = operation_attributes.block_size_override.value_or(cache_block_size);
+            // num_kv_heads on the call-view side may differ from the cache when the
+            // caller is reading an HMA cross-group buffer (e.g. Gemma4-26B-A4B sliding
+            // kv=8 cache read by a full layer with kv=2). Earlier versions of this
+            // check used cache_num_kv_heads on both sides, so the kv factor cancelled
+            // and the per-kv-heads dimension was unchecked — masking real mismatches
+            // when num_kv_heads_override was set, and rejecting legitimate asymmetric
+            // calls when it wasn't. Use the override (or default to cache when unset).
+            const uint32_t view_num_kv_heads = operation_attributes.num_kv_heads_override.value_or(cache_num_kv_heads);
+            const uint64_t cache_elems_per_block =
+                static_cast<uint64_t>(cache_num_kv_heads) * cache_block_size * cache_head_dim;
+            const uint64_t view_elems_per_block =
+                static_cast<uint64_t>(view_num_kv_heads) * effective_block_size * q_head_dim;
+            TT_FATAL(
+                view_elems_per_block == cache_elems_per_block,
+                "paged_scaled_dot_product_attention_decode geometry mismatch: cache has {} elems/block "
+                "(kv_heads={}, block_size={}, head_dim={}) but call view is {} "
+                "(kv_heads={}, block_size={}, head_dim={} from Q.padded_shape[-1]).",
+                cache_elems_per_block,
+                cache_num_kv_heads,
+                cache_block_size,
+                cache_head_dim,
+                view_elems_per_block,
+                view_num_kv_heads,
+                effective_block_size,
+                q_head_dim);
+            TT_FATAL(
+                effective_block_size % tt::constants::TILE_HEIGHT == 0,
+                "effective block_size ({}) must be a multiple of TILE_HEIGHT ({})",
+                effective_block_size,
+                tt::constants::TILE_HEIGHT);
+            TT_FATAL(
+                q_head_dim % tt::constants::TILE_WIDTH == 0,
+                "Q last dim ({}) must be a multiple of TILE_WIDTH ({})",
+                q_head_dim,
+                tt::constants::TILE_WIDTH);
         } else {
             TT_FATAL(k_shape[3] == v_shape[3] && k_shape[3] == q_shape[3], "Q, K, V must have same hidden size");
         }
@@ -403,8 +499,30 @@ Tensor SdpaDecodeDeviceOperation::create_output_tensors(
 
 ttsl::hash::hash_t SdpaDecodeDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    bool has_cur_pos = tensor_args.cur_pos_tensor.has_value();
-    bool has_attn_mask = tensor_args.attn_mask.has_value();
+    // TensorSpec hashing uses logical_shape + tensor_layout only, not cached_padded_shape_
+    const ttsl::hash::hash_t qkv_logical_padded_shape_key = [&] {
+        ttsl::hash::hash_t h = ttsl::hash::hash_objects_with_default_seed(
+            tensor_args.q.logical_shape(),
+            tensor_args.q.padded_shape(),
+            tensor_args.k.logical_shape(),
+            tensor_args.k.padded_shape());
+        if (tensor_args.v.has_value()) {
+            h = ttsl::hash::hash_objects(h, tensor_args.v->logical_shape(), tensor_args.v->padded_shape());
+        }
+        return h;
+    }();
+
+    // Hash the full optional Tensor for layout/memory/placement; hash logical_shape separately
+    // so rank and extents always contribute to the program-cache key
+    const ttsl::hash::hash_t cur_pos_tensor_logical_shape_key =
+        tensor_args.cur_pos_tensor.has_value()
+            ? ttsl::hash::hash_objects_with_default_seed(true, tensor_args.cur_pos_tensor->logical_shape())
+            : ttsl::hash::hash_objects_with_default_seed(false);
+
+    // Encode optional share_cache as 0 = unset, 1 = false, 2 = true so all three differ in the program hash.
+    const uint8_t share_cache_hash_tag = operation_attributes.share_cache.has_value()
+                                             ? (operation_attributes.share_cache.value() ? uint8_t{2} : uint8_t{1})
+                                             : uint8_t{0};
 
     return operation::hash_operation<SdpaDecodeDeviceOperation>(
         operation_attributes.scale,
@@ -414,17 +532,26 @@ ttsl::hash::hash_t SdpaDecodeDeviceOperation::compute_program_hash(
         operation_attributes.k_chunk_size,
         operation_attributes.paged_attention,
         operation_attributes.is_causal,
+        share_cache_hash_tag,
+        operation_attributes.cur_pos,
         operation_attributes.use_mla,
         operation_attributes.head_dim_v,
         operation_attributes.sliding_window_size,
-        has_attn_mask,
-        has_cur_pos,
+        // Enters compile-time args (page_block_size_t, DHt, St).
+        operation_attributes.block_size_override,
+        // Enters compile-time args via num_kv_heads (parallelization grid + strides).
+        operation_attributes.num_kv_heads_override,
+        // Enters compile-time args via capacity_t (per-tile page_table wrap).
+        operation_attributes.cache_position_modulo,
         tensor_args.q,
         tensor_args.k,
         tensor_args.v,
-        // Hash on page_table_tensor to properly size page table CB
+        qkv_logical_padded_shape_key,
         tensor_args.page_table_tensor,
-        tensor_args.attention_sink);
+        tensor_args.attention_sink,
+        tensor_args.attn_mask,
+        tensor_args.cur_pos_tensor,
+        cur_pos_tensor_logical_shape_key);
 }
 
 Tensor sdpa_decode(
@@ -446,7 +573,10 @@ Tensor sdpa_decode(
     uint32_t k_chunk_size,
     std::optional<bool> share_cache,
     std::optional<bool> use_mla,
-    std::optional<uint32_t> head_dim_v) {
+    std::optional<uint32_t> head_dim_v,
+    std::optional<uint32_t> block_size_override,
+    std::optional<uint32_t> num_kv_heads_override,
+    std::optional<uint32_t> cache_position_modulo) {
     using OperationType = SdpaDecodeDeviceOperation;
     auto operation_attributes = OperationType::operation_attributes_t{
         .is_causal = is_causal,
@@ -461,6 +591,9 @@ Tensor sdpa_decode(
         .share_cache = share_cache,
         .use_mla = use_mla,
         .head_dim_v = head_dim_v,
+        .block_size_override = block_size_override,
+        .num_kv_heads_override = num_kv_heads_override,
+        .cache_position_modulo = cache_position_modulo,
     };
 
     auto tensor_args = OperationType::tensor_args_t{

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -54,11 +54,28 @@ constexpr static std::uint32_t get_dram_profiler_size(
 #endif
 }
 
-constexpr static std::uint32_t get_dram_unreserved_base(std::uint32_t dram_profiler_size) {
+// dispatch_s aggregates device_print buffers from all cores into this DRAM region:
+// [DRAM_ALIGNMENT bytes for {dram_write_ptr, dram_read_ptr}][1 MiB ring buffer payload].
+constexpr static std::uint32_t DRAM_DEVICE_PRINT_DISPATCH_PAYLOAD_SIZE = 1 << 20;  // 1 MiB
+constexpr static std::uint32_t DRAM_DEVICE_PRINT_DISPATCH_SIZE =
+    DRAM_ALIGNMENT + DRAM_DEVICE_PRINT_DISPATCH_PAYLOAD_SIZE;
+constexpr static std::uint32_t get_dram_device_print_dispatch_base(std::uint32_t dram_profiler_size) {
     return DRAM_PROFILER_BASE + dram_profiler_size;
 }
-constexpr static std::uint32_t get_dram_unreserved_size(std::uint32_t dram_profiler_size) {
-    return MEM_DRAM_SIZE - get_dram_unreserved_base(dram_profiler_size);
+
+constexpr static std::uint32_t get_dram_backed_command_queues_base(std::uint32_t dram_profiler_size) {
+    return get_dram_device_print_dispatch_base(dram_profiler_size) + DRAM_DEVICE_PRINT_DISPATCH_SIZE;
+}
+constexpr static std::uint32_t get_dram_backed_command_queues_size(bool enable_dram_backed_cq) {
+    return enable_dram_backed_cq ? (1 << 28)  // 256 MB
+                                 : 0;
+}
+constexpr static std::uint32_t get_dram_unreserved_base(std::uint32_t dram_profiler_size, bool enable_dram_backed_cq) {
+    return get_dram_backed_command_queues_base(dram_profiler_size) +
+           get_dram_backed_command_queues_size(enable_dram_backed_cq);
+}
+constexpr static std::uint32_t get_dram_unreserved_size(std::uint32_t dram_profiler_size, bool enable_dram_backed_cq) {
+    return MEM_DRAM_SIZE - get_dram_unreserved_base(dram_profiler_size, enable_dram_backed_cq);
 }
 
 static constexpr float EPS_WHB0 = 1.19209e-7f;
@@ -108,8 +125,8 @@ public:
         includes.push_back("tt_metal/hw/inc/internal/tt-1xx/wormhole");
         includes.push_back("tt_metal/hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines");
         includes.push_back("tt_metal/hw/inc/internal/tt-1xx/wormhole/noc");
-        includes.push_back("tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc");
-        includes.push_back("tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib");
+        includes.push_back("tt_metal/tt-llk/tt_llk_wormhole_b0/common/inc");
+        includes.push_back("tt_metal/tt-llk/tt_llk_wormhole_b0/llk_lib");
 
         switch (params.core_type) {
             case HalProgrammableCoreType::TENSIX:
@@ -173,6 +190,12 @@ public:
             params.core_type == HalProgrammableCoreType::IDLE_ETH) {
             cflags += "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
         }
+        // We need to disable -mtt-fix-whbhebreak for asserts using ebreak.
+        // After asserts, we don't want to continue code execution, so we don't need 8 nops after ebreak (as it will
+        // unnecessarily grow code size).
+        if (params.rtoptions.get_lightweight_kernel_asserts() || params.rtoptions.get_llk_asserts()) {
+            cflags += "-mno-tt-fix-whbhebreak ";
+        }
         return cflags;
     }
 
@@ -212,7 +235,8 @@ public:
     bool firmware_is_kernel_object(const Params&) const override { return false; }
 };
 
-void Hal::initialize_wh(bool is_base_routing_fw_enabled, std::uint32_t profiler_dram_bank_size_per_risc_bytes) {
+void Hal::initialize_wh(
+    bool is_base_routing_fw_enabled, std::uint32_t profiler_dram_bank_size_per_risc_bytes, bool enable_dram_backed_cq) {
     using namespace wormhole;
     static_assert(static_cast<int>(HalProgrammableCoreType::TENSIX) == static_cast<int>(ProgrammableCoreType::TENSIX));
     static_assert(
@@ -236,10 +260,18 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled, std::uint32_t profiler_
     this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::PROFILER)] = DRAM_PROFILER_BASE;
     const std::uint32_t dram_profiler_size = get_dram_profiler_size(profiler_dram_bank_size_per_risc_bytes);
     this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::PROFILER)] = dram_profiler_size;
+    this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::DEVICE_PRINT_DISPATCH)] =
+        get_dram_device_print_dispatch_base(dram_profiler_size);
+    this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::DEVICE_PRINT_DISPATCH)] =
+        DRAM_DEVICE_PRINT_DISPATCH_SIZE;
+    this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::DRAM_BACKED_COMMAND_QUEUES)] =
+        get_dram_backed_command_queues_base(dram_profiler_size);
+    this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::DRAM_BACKED_COMMAND_QUEUES)] =
+        get_dram_backed_command_queues_size(enable_dram_backed_cq);
     this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::UNRESERVED)] =
-        get_dram_unreserved_base(dram_profiler_size);
+        get_dram_unreserved_base(dram_profiler_size, enable_dram_backed_cq);
     this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::UNRESERVED)] =
-        get_dram_unreserved_size(dram_profiler_size);
+        get_dram_unreserved_size(dram_profiler_size, enable_dram_backed_cq);
 
     this->mem_alignments_.resize(static_cast<std::size_t>(HalMemType::COUNT));
     this->mem_alignments_[static_cast<std::size_t>(HalMemType::L1)] = L1_ALIGNMENT;
@@ -343,6 +375,8 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled, std::uint32_t profiler_
     this->eth_fw_is_cooperative_ = true;
     this->virtualized_core_types_ = {dev_msgs::AddressableCoreType::TENSIX, dev_msgs::AddressableCoreType::ETH};
     this->tensix_harvest_axis_ = static_cast<HalTensixHarvestAxis>(tensix_harvest_axis);
+    this->has_tile_counter_registers_ = false;
+    this->supports_implicit_dfb_sync_ = false;
 
     this->eps_ = EPS_WHB0;
     this->nan_ = NAN_WHB0;
@@ -380,9 +414,10 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled, std::uint32_t profiler_
         }
     };
 
+    constexpr size_t kWormholePinnedMemoryBudgetBytes =
+        (2ULL * 1024ULL * 1024ULL * 1024ULL) - (512ULL * 1024ULL * 1024ULL);
     this->max_pinned_memory_count_ = 12;
-    this->total_pinned_memory_size_ =
-        4ULL * 1024ULL * 1024ULL * 1024ULL - static_cast<uint64_t>(tt::tt_metal::DispatchSettings::MAX_HUGEPAGE_SIZE);
+    this->total_pinned_memory_size_ = kWormholePinnedMemoryBudgetBytes;
 }
 
 }  // namespace tt::tt_metal

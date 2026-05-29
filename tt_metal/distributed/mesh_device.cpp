@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,6 +16,8 @@
 #include <system_mesh.hpp>
 #include <maybe_remote.hpp>
 #include <tt_metal.hpp>
+#include <tt-metalium/experimental/inspector.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -27,6 +29,7 @@
 #include <utility>
 
 #include "impl/allocator/allocator.hpp"
+#include "pinned_memory_cache.hpp"
 #include <tt_stl/assert.hpp>
 #include "buffer.hpp"
 #include "device/device_impl.hpp"
@@ -39,11 +42,13 @@
 #include "shape_base.hpp"
 #include <tt_stl/span.hpp>
 #include <tt_stl/strong_type.hpp>
-#include "common/thread_pool.hpp"
+#include "impl/threading/thread_pool.hpp"
 #include "device/device_manager.hpp"
 #include <experimental/fabric/control_plane.hpp>
 #include <experimental/fabric/fabric_types.hpp>
 #include "distributed/fd_mesh_command_queue.hpp"
+#include "distributed/realtime_profiler_manager.hpp"
+#include "impl/buffers/drisc_l1_arena.hpp"
 #include "distributed/sd_mesh_command_queue.hpp"
 #include "tracy/Tracy.hpp"
 #include "tools/profiler/tt_metal_tracy.hpp"
@@ -53,6 +58,8 @@
 #include "debug/inspector/inspector.hpp"
 #include "sub_device/sub_device_manager.hpp"
 #include "sub_device/sub_device_manager_tracker.hpp"
+#include <set>
+#include "llrt/metal_soc_descriptor.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include "context/metal_context.hpp"
 #include <experimental/context/metal_env.hpp>
@@ -237,6 +244,14 @@ bool MeshDeviceImpl::is_initialized() const {
         this->get_devices(), [](const auto* device) { return device->is_initialized(); });
 }
 
+bool MeshDeviceImpl::is_remote_only() const {
+    // A MeshDevice is remote-only if it has been initialized but has no local devices.
+    // This happens when the mesh contains only devices on remote hosts in a multi-host setup.
+    // view_ is guaranteed non-null after construction (all ctors require a MeshDeviceView).
+    TT_FATAL(view_ != nullptr, "MeshDeviceImpl::is_remote_only() called before view_ is initialized");
+    return is_internal_state_initialized && view_->get_devices().empty();
+}
+
 uint32_t MeshDeviceImpl::l1_size_per_core() const {
     return validate_and_get_reference_value(
         this->get_devices(), [](const auto* device) { return device->l1_size_per_core(); });
@@ -394,7 +409,14 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
         std::shared_ptr<MeshDevice>(),
         context_id);
 
-    mesh_device->initialize(num_command_queues, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap);
+    mesh_device->pimpl_->initialize_impl(
+        mesh_device.get(),
+        num_command_queues,
+        l1_small_size,
+        trace_region_size,
+        worker_l1_size,
+        l1_bank_remap,
+        /*minimal=*/false);
 
     // TODO #20966: Remove these calls
     for (auto* device : extract_locals(root_devices)) {
@@ -405,6 +427,9 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
 
     ctx.device_manager()->initialize_profiler();
     ctx.device_manager()->initialize_fabric_and_dispatch_fw();
+
+    mesh_device->pimpl_->init_realtime_profiler_socket(mesh_device);
+
     return mesh_device;
 }
 
@@ -513,6 +538,11 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_unit_meshes(
 
     ctx.device_manager()->initialize_profiler();
     ctx.device_manager()->initialize_fabric_and_dispatch_fw();
+
+    for (auto& [device_id, submesh] : result) {
+        submesh->pimpl_->init_realtime_profiler_socket(submesh);
+    }
+
     return result;
 }
 
@@ -834,6 +864,9 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
     ZoneScoped;
 
     log_trace(tt::LogMetal, "Closing mesh device {}", this->id());
+
+    // Shut down the CQ first so dispatch_s sends TERMINATE to the profiler core with the
+    // final buffer; the push kernel, receiver thread, and callbacks must still be alive.
     if (is_initialized()) {
         if (MetalContext::instance(this->get_context_id()).get_cluster().get_target_device_type() !=
             tt::TargetDevice::Mock) {
@@ -882,6 +915,21 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
         }
 
         mesh_command_queues_.clear();
+    }
+
+    // Tear down RT profiler after the CQ has shut down (so dispatch_s has already issued
+    // the final TERMINATE) but before the rest of the device teardown.
+    if (realtime_profiler_) {
+        realtime_profiler_->shutdown();
+        realtime_profiler_.reset();
+    }
+
+    // DRISC L1 arena is torn down here so any GCB-owned allocation handles have
+    // already been released (GCBs are user-owned and the user's invariant is to
+    // destroy them before close).
+    drisc_l1_arena_.reset();
+
+    if (is_initialized()) {
         sub_device_manager_tracker_.reset();
         scoped_devices_.reset();
         parent_mesh_.reset();
@@ -975,26 +1023,43 @@ void MeshDeviceImpl::disable_and_clear_program_cache() {
 
 size_t MeshDeviceImpl::num_program_cache_entries() { return program_cache_->num_entries(); }
 
+void MeshDeviceImpl::validate_sub_device_manager_tracker() const {
+    if (!sub_device_manager_tracker_) {
+        TT_THROW(
+            "SubDeviceManagerTracker is not initialized on MeshDevice {}. "
+            "This MeshDevice contains only remote devices (no local devices on this host). "
+            "Operations requiring local device access cannot be performed on remote-only MeshDevices. "
+            "Use is_remote_only() to check before calling this method.",
+            id());
+    }
+}
+
 SubDeviceManagerId MeshDeviceImpl::create_sub_device_manager(
     std::initializer_list<SubDevice> sub_devices, DeviceAddr local_l1_size) {
     auto lock = lock_api();
+    validate_sub_device_manager_tracker();
     return sub_device_manager_tracker_->create_sub_device_manager(sub_devices, local_l1_size);
 }
 
 SubDeviceManagerId MeshDeviceImpl::create_sub_device_manager(
     tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
     auto lock = lock_api();
+    validate_sub_device_manager_tracker();
     return sub_device_manager_tracker_->create_sub_device_manager(sub_devices, local_l1_size);
 }
 void MeshDeviceImpl::remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id) {
     auto lock = lock_api();
+    validate_sub_device_manager_tracker();
     sub_device_manager_tracker_->remove_sub_device_manager(sub_device_manager_id);
 }
 void MeshDeviceImpl::load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) {
     auto lock = lock_api();
+    validate_sub_device_manager_tracker();
     sub_device_manager_tracker_->load_sub_device_manager(sub_device_manager_id);
 }
 void MeshDeviceImpl::clear_loaded_sub_device_manager() {
+    auto lock = lock_api();
+    validate_sub_device_manager_tracker();
     sub_device_manager_tracker_->clear_loaded_sub_device_manager();
 }
 
@@ -1086,10 +1151,12 @@ uint32_t MeshDeviceImpl::num_virtual_eth_cores(SubDeviceId sub_device_id) {
 
 // Core and worker management methods (These are OK)
 CoreRangeSet MeshDeviceImpl::worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const {
+    validate_sub_device_manager_tracker();
     return sub_device_manager_tracker_->get_active_sub_device_manager()->sub_device(sub_device_id).cores(core_type);
 }
 
 uint32_t MeshDeviceImpl::num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const {
+    validate_sub_device_manager_tracker();
     return sub_device_manager_tracker_->get_active_sub_device_manager()
         ->sub_device(sub_device_id)
         .impl()
@@ -1147,7 +1214,10 @@ SystemMemoryManager& MeshDeviceImpl::sysmem_manager() {
 void MeshDeviceImpl::release_mesh_trace(const MeshTraceId& trace_id) {
     TracyTTMetalReleaseMeshTrace(this->get_device_ids(), *trace_id);
 
+    validate_sub_device_manager_tracker();
     sub_device_manager_tracker_->get_active_sub_device_manager()->release_trace(trace_id);
+
+    tt::tt_metal::experimental::inspector::ReleaseTraceDebugEntries(trace_id);
 
     // Only enable allocations once all captured traces are released
     if (this->trace_buffers_size_ == 0) {
@@ -1156,6 +1226,7 @@ void MeshDeviceImpl::release_mesh_trace(const MeshTraceId& trace_id) {
 }
 
 std::shared_ptr<MeshTraceBuffer> MeshDeviceImpl::get_mesh_trace(const MeshTraceId& trace_id) {
+    validate_sub_device_manager_tracker();
     return sub_device_manager_tracker_->get_active_sub_device_manager()->get_trace(trace_id);
 }
 
@@ -1314,8 +1385,68 @@ bool MeshDeviceImpl::initialize_impl(
         }
     }
     Inspector::mesh_device_initialized(this);
+
+    // DRISC L1 arena: always constructed up-front when the HAL exposes programmable DRAM
+    // cores so users don't observe a lazy side-effect on first DRAM-sender GCB creation.
+    if (MetalContext::instance(context_id_).hal().has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
+        drisc_l1_arena_ = std::make_shared<::tt::tt_metal::DriscL1Arena>(context_id_);
+    }
+
     is_internal_state_initialized = true;
     return true;
+}
+
+void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDevice>& mesh_device) {
+    if (realtime_profiler_) {
+        return;
+    }
+    realtime_profiler_ = std::make_unique<RealtimeProfilerManager>(mesh_device);
+}
+
+void MeshDeviceImpl::trigger_realtime_profiler_sync_check() {
+    if (realtime_profiler_) {
+        realtime_profiler_->trigger_sync_check();
+    }
+}
+
+D2HSocket* MeshDeviceImpl::get_realtime_profiler_socket() const {
+    return realtime_profiler_ ? realtime_profiler_->get_socket() : nullptr;
+}
+
+::tt::tt_metal::DriscL1Arena& MeshDeviceImpl::drisc_l1_arena() {
+    TT_FATAL(
+        drisc_l1_arena_ != nullptr,
+        "DriscL1Arena not constructed; set TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1 before "
+        "initializing the MeshDevice");
+    return *drisc_l1_arena_;
+}
+
+CoreCoord MeshDeviceImpl::pick_unused_dram_logical_core(uint32_t bank_id) const {
+    const auto& soc_desc = MetalContext::instance(context_id_).get_cluster().get_soc_desc(reference_device()->id());
+    const uint32_t num_banks = soc_desc.get_num_dram_views();
+    TT_FATAL(bank_id < num_banks, "bank_id={} out of range (num_banks={})", bank_id, num_banks);
+
+    std::set<std::pair<size_t, size_t>> reserved;
+    for (const auto& c : soc_desc.dram_view_worker_cores.at(bank_id)) {
+        reserved.emplace(c.x, c.y);
+    }
+    for (const auto& c : soc_desc.dram_view_eth_cores.at(bank_id)) {
+        reserved.emplace(c.x, c.y);
+    }
+
+    const uint32_t num_subchannels = soc_desc.get_grid_size(tt::CoreType::DRAM).y;
+    const size_t channel = soc_desc.get_channel_for_dram_view(static_cast<int>(bank_id));
+    for (uint32_t sub = 0; sub < num_subchannels; ++sub) {
+        tt::umd::CoreCoord coord = soc_desc.get_dram_core_for_channel(
+            static_cast<int>(channel), static_cast<int>(sub), tt::CoordSystem::TRANSLATED);
+        if (!reserved.contains({coord.x, coord.y})) {
+            return soc_desc.get_logical_dram_core_for_subchannel(static_cast<int>(bank_id), static_cast<int>(sub));
+        }
+    }
+    TT_THROW(
+        "No unused DRAM subchannel found for bank_id={}; all {} subchannels are reserved as worker/eth endpoints",
+        bank_id,
+        num_subchannels);
 }
 
 program_cache::detail::ProgramCache& MeshDeviceImpl::get_program_cache() { return *program_cache_; }
@@ -1329,12 +1460,15 @@ HalMemType MeshDeviceImpl::get_mem_type_of_core(CoreCoord virtual_core) const {
 
 // Methods for SubDevice Management
 bool MeshDeviceImpl::has_noc_mcast_txns(SubDeviceId sub_device_id) const {
+    validate_sub_device_manager_tracker();
     return sub_device_manager_tracker_->get_active_sub_device_manager()->has_noc_mcast_txns(sub_device_id);
 }
 uint8_t MeshDeviceImpl::num_noc_unicast_txns(SubDeviceId sub_device_id) const {
+    validate_sub_device_manager_tracker();
     return sub_device_manager_tracker_->get_active_sub_device_manager()->num_noc_unicast_txns(sub_device_id);
 }
 uint8_t MeshDeviceImpl::noc_data_start_index(SubDeviceId sub_device_id, bool unicast_data) const {
+    validate_sub_device_manager_tracker();
     if (unicast_data) {
         return sub_device_manager_tracker_->get_active_sub_device_manager()->noc_unicast_data_start_index(
             sub_device_id);
@@ -1342,9 +1476,11 @@ uint8_t MeshDeviceImpl::noc_data_start_index(SubDeviceId sub_device_id, bool uni
     return 0;
 }
 SubDeviceManagerId MeshDeviceImpl::get_active_sub_device_manager_id() const {
+    validate_sub_device_manager_tracker();
     return sub_device_manager_tracker_->get_active_sub_device_manager()->id();
 }
 SubDeviceManagerId MeshDeviceImpl::get_default_sub_device_manager_id() const {
+    validate_sub_device_manager_tracker();
     return sub_device_manager_tracker_->get_default_sub_device_manager()->id();
 }
 CoreCoord MeshDeviceImpl::virtual_program_dispatch_core(uint8_t cq_id) const {
@@ -1352,19 +1488,24 @@ CoreCoord MeshDeviceImpl::virtual_program_dispatch_core(uint8_t cq_id) const {
         this->get_devices(), [cq_id](const auto* device) { return device->virtual_program_dispatch_core(cq_id); });
 }
 const std::vector<SubDeviceId>& MeshDeviceImpl::get_sub_device_ids() const {
+    validate_sub_device_manager_tracker();
     return sub_device_manager_tracker_->get_active_sub_device_manager()->get_sub_device_ids();
 }
 const std::vector<SubDeviceId>& MeshDeviceImpl::get_sub_device_stall_group() const {
+    validate_sub_device_manager_tracker();
     return sub_device_manager_tracker_->get_active_sub_device_manager()->get_sub_device_stall_group();
 }
 void MeshDeviceImpl::set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    validate_sub_device_manager_tracker();
     sub_device_manager_tracker_->get_active_sub_device_manager()->set_sub_device_stall_group(sub_device_ids);
 }
 void MeshDeviceImpl::reset_sub_device_stall_group() {
+    validate_sub_device_manager_tracker();
     sub_device_manager_tracker_->get_active_sub_device_manager()->reset_sub_device_stall_group();
 }
 
 uint32_t MeshDeviceImpl::num_sub_devices() const {
+    validate_sub_device_manager_tracker();
     return sub_device_manager_tracker_->get_active_sub_device_manager()->num_sub_devices();
 }
 
@@ -1406,21 +1547,25 @@ void MeshDeviceImpl::quiesce_devices() {
 
 // Allocator methods
 std::optional<DeviceAddr> MeshDeviceImpl::lowest_occupied_compute_l1_address() const {
+    validate_sub_device_manager_tracker();
     return sub_device_manager_tracker_->lowest_occupied_compute_l1_address();
 }
 
 std::optional<DeviceAddr> MeshDeviceImpl::lowest_occupied_compute_l1_address(
     tt::stl::Span<const SubDeviceId> sub_device_ids) const {
+    validate_sub_device_manager_tracker();
     return sub_device_manager_tracker_->lowest_occupied_compute_l1_address(sub_device_ids);
 }
 
 const std::unique_ptr<AllocatorImpl>& MeshDeviceImpl::allocator_impl() const {
+    validate_sub_device_manager_tracker();
     return sub_device_manager_tracker_->get_default_sub_device_manager()->allocator(SubDeviceId{0});
 }
 
 const std::unique_ptr<Allocator>& MeshDeviceImpl::allocator() const { return this->allocator_impl()->view(); }
 
 const std::unique_ptr<AllocatorImpl>& MeshDeviceImpl::allocator_impl(SubDeviceId sub_device_id) const {
+    validate_sub_device_manager_tracker();
     return sub_device_manager_tracker_->get_active_sub_device_manager()->allocator(sub_device_id);
 }
 
@@ -1438,6 +1583,7 @@ MeshDevice::MeshDevice(MetalEnv& /*metal_env*/) {}
 
 MeshDevice::~MeshDevice() {
     Inspector::mesh_device_destroyed(this->pimpl_.get());
+    experimental::PinnedMemoryCache::instance().release_for_device(*this);
     pimpl_->close_impl(this);
 }
 
@@ -1447,6 +1593,7 @@ int MeshDevice::id() const { return pimpl_->id(); }
 ChipId MeshDevice::build_id() const { return pimpl_->build_id(); }
 uint8_t MeshDevice::num_hw_cqs() const { return pimpl_->num_hw_cqs(); }
 bool MeshDevice::is_initialized() const { return pimpl_->is_initialized(); }
+bool MeshDevice::is_remote_only() const { return pimpl_->is_remote_only(); }
 int MeshDevice::num_dram_channels() const { return pimpl_->num_dram_channels(); }
 uint32_t MeshDevice::l1_size_per_core() const { return pimpl_->l1_size_per_core(); }
 uint32_t MeshDevice::dram_size_per_channel() const { return pimpl_->dram_size_per_channel(); }

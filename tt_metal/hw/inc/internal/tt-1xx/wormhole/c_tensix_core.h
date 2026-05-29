@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -276,6 +276,7 @@ inline void c_tensix_core::initialize_tensix_semaphores(vptr_uint instrn_buf) {
     ex_sem_init(ckernel::semaphore::MATH_PACK, 1, 0, instrn_buf);
     ex_sem_init(ckernel::semaphore::UNPACK_TO_DEST, 1, 0, instrn_buf);
     ex_sem_init(ckernel::semaphore::MATH_DONE, 1, 0, instrn_buf);
+    ex_sem_init(ckernel::semaphore::PACK_DONE, 1, 0, instrn_buf);
 }
 
 // NOC API

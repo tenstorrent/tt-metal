@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -45,25 +45,26 @@ void print_tile_rows(
     uint16_t end_row = 32,
     uint8_t start_col = 0,
     uint8_t end_col = 32) {
-    DPRINT << "cb_idx: " << cb_idx << " tile_idx: " << tile_idx << ENDL();
-    DPRINT << "======" << ENDL();
+    DPRINT("cb_idx: {} tile_idx: {}\n", cb_idx, tile_idx);
+    DPRINT("======\n");
     for (uint16_t r = start_row; r < end_row; ++r) {
-        DPRINT << (uint)r << " : "
-               << TileSlice(
-                      cb_idx,
-                      tile_idx,
-                      SliceRange{
-                          .h0 = (uint8_t)r,
-                          .h1 = (uint8_t)(r + 1),
-                          .hs = (uint8_t)1,
-                          .w0 = (uint8_t)start_col,
-                          .w1 = (uint8_t)end_col,
-                          .ws = (uint8_t)1},
-                      true,
-                      untilize)
-               << ENDL();
+        DPRINT(
+            "{} : {}\n",
+            r,
+            TileSlice(
+                cb_idx,
+                tile_idx,
+                SliceRange{
+                    .h0 = (uint8_t)r,
+                    .h1 = (uint8_t)(r + 1),
+                    .hs = (uint8_t)1,
+                    .w0 = (uint8_t)start_col,
+                    .w1 = (uint8_t)end_col,
+                    .ws = (uint8_t)1},
+                true,
+                untilize));
     }
-    DPRINT << "++++++" << ENDL();
+    DPRINT("++++++\n");
 }
 
 template <

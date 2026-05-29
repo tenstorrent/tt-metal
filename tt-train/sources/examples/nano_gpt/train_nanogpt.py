@@ -1,20 +1,21 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Full-featured NanoGPT training example.
+"""NanoGPT training example with optional DP / TP / DP+TP.
 
-This example provides a comprehensive Python implementation that mirrors the C++ nano_gpt example,
-including:
-- Full model training with GPT2/NanoGPT and Llama architectures
-- Gradient accumulation
-- Learning rate scheduling (identity, warmup_linear)
-- Optimizers (via create_optimizer from config)
-- Model checkpointing and resuming
-- Loss tracking and averaging
-- Configurable training parameters
-- Character tokenizer (via ttml.common.data.CharTokenizer)
-- Proper tensor shapes
+Reads ``device_config`` from YAML (``mesh_shape``, ``enable_ddp``, ``enable_tp``),
+opens a named device mesh, and runs the standard forward / backward / step
+loop with a dp-axis all-reduce on gradients when DDP is on. A 1x1 mesh is
+the degenerate single-device case; a 2D mesh with both DDP and TP enabled
+uses axis 0 for "dp" and axis 1 for "tp".
+
+Supported ``model_type``:
+
+- ``llama``    — any combination of DDP and TP (uses the ``"tp"`` mesh axis).
+- ``gpt2``     — DDP only; TP is rejected.
+- ``deepseek`` — single-device only.
+- ``qwen3``    — DDP only; TP is rejected.
 """
 
 import argparse
@@ -22,7 +23,7 @@ import math
 import os
 import random
 from dataclasses import dataclass, field
-from typing import Optional, Tuple, Literal, Union
+from typing import Optional, Tuple, Literal, Union, Callable
 import time
 import pickle
 
@@ -31,6 +32,9 @@ import ml_dtypes
 
 import ttnn
 import ttml
+import ttml.common.muon_optimizer
+
+ttml.common.muon_optimizer.register()
 from ttml.models.nanogpt import (
     NanoGPT,
     NanoGPTConfig,
@@ -42,16 +46,68 @@ from ttml.models.llama import (
     LlamaConfig,
     LlamaRopeScalingConfig,
 )
-from ttml.modules import Parameter
-from ttml.common.utils import round_up_to_tile, get_tt_metal_home, create_optimizer
-from ttml.common.config import load_config, TrainingConfig as BaseTrainingConfig
+from ttml.models.deepseek import (
+    DeepSeek,
+    DeepSeekConfig,
+)
+from ttml.models.qwen3 import (
+    Qwen3,
+    Qwen3Config,
+    Qwen3RopeScalingConfig,
+)
+from ttml.common.utils import (
+    round_up_to_tile,
+    get_tt_metal_runtime_root,
+    create_optimizer,
+    get_available_device_memory_in_bytes,
+    get_loss_over_devices,
+    summary,
+)
+from ttml.common.config import load_config, TrainingConfig as BaseTrainingConfig, DeviceConfig
 from ttml.common.data import CharTokenizer, build_causal_mask
+from ttml.common.profiler_utils import profiler_marker
+
+import moe_activation_logger
 
 # Union type for models that share the same forward(input, mask) interface
-Model = Union[NanoGPT, Llama]
+Model = Union[NanoGPT, Llama, DeepSeek, Qwen3]
+
+# Registry mapping model_type -> calculate_flops_per_token callable
+from ttml.models.deepseek.flops import calculate_flops_per_token as _deepseek_flops
+from ttml.models.nanogpt.flops import calculate_flops_per_token as _gpt2_flops
+from ttml.models.llama.flops import calculate_flops_per_token as _llama_flops
+from ttml.models.qwen3.flops import calculate_flops_per_token as _qwen3_flops
+
+FLOPS_REGISTRY: dict[str, Callable] = {
+    "deepseek": _deepseek_flops,
+    "gpt2": _gpt2_flops,
+    "llama": _llama_flops,
+    "qwen3": _qwen3_flops,
+}
 
 # Memory tracking utilities
 MemoryUsageTracker = ttml.core.utils.MemoryUsageTracker
+
+
+def get_device_peak_tflops_bf16() -> float:
+    """Get theoretical peak BF16 TFLOPS for the current TT device.
+
+    Wormhole: 1.0 TFLOPS/core, Blackhole: 1.35 TFLOPS/core.
+    Returns total peak TFLOPS across all compute cores.
+    """
+    from ttnn.device import is_blackhole, is_wormhole_b0
+
+    device = ttml.autograd.AutoContext.get_instance().get_device()
+    grid_size = device.compute_with_storage_grid_size()
+    num_cores = grid_size.x * grid_size.y
+
+    if is_wormhole_b0(device):
+        tflops_per_core = 1.0
+    elif is_blackhole(device):
+        tflops_per_core = 1.35
+    else:
+        raise ValueError(f"Unknown device: {device.arch()}")
+    return num_cores * tflops_per_core
 
 
 class TrainingConfig(BaseTrainingConfig):
@@ -104,9 +160,9 @@ class ModelConfig:
     Conversion to model-specific config (e.g. LlamaConfig) happens at model creation time.
     """
 
-    model_type: str = "gpt2"  # "gpt2" or "llama"
+    model_type: str = "gpt2"  # "gpt2", "llama", "deepseek", or "qwen3"
     model_path: str = ""
-    vocab_size: int = 256
+    vocab_size: int = 0  # 0 = auto-detect from data (char tokenization); >0 = use this value (pre-tokenized data)
     embedding_dim: int = 384
     num_blocks: int = 6
     num_heads: int = 6
@@ -126,6 +182,25 @@ class ModelConfig:
     high_freq_factor: float = 4.0
     low_freq_factor: float = 1.0
     original_context_length: int = 0  # 0 means no scaling
+    # DeepSeek-specific fields
+    inter_dim: Optional[int] = None
+    moe_inter_dim: int = 256
+    n_dense_layers: int = 2
+    n_routed_experts: int = 8
+    n_shared_experts: int = 1
+    n_activated_experts: int = 2
+    n_expert_groups: int = 2
+    n_limited_groups: int = 1
+    score_func: str = "sigmoid"
+    route_scale: float = 2.5
+    q_lora_rank: int = 256
+    kv_lora_rank: int = 128
+    qk_nope_head_dim: int = 64
+    qk_rope_head_dim: int = 32
+    v_head_dim: int = 64
+    # Qwen3-specific fields
+    head_dim: Optional[int] = None  # Explicit head_dim (can differ from embedding_dim / num_heads)
+    attention_bias: bool = False
 
 
 class LossAverageMeter:
@@ -203,6 +278,53 @@ def read_file_to_str(file_path: str) -> str:
         return f.read()
 
 
+def build_mesh(device_config: DeviceConfig) -> ttml.Mesh:
+    """Build a named device mesh from DeviceConfig.
+
+    Mirrors the C++ axis-assignment rule in autograd/auto_context.cpp:140-195
+    so that ttml.sync_gradients and mesh.axis_mapper("dp"|"tp", ...) bind to
+    the same physical axes the C++ trainer would.
+
+    Line topology (at most one mesh dim > 1): exactly one of enable_ddp /
+    enable_tp must be true; that name is assigned to the active (non-trivial)
+    axis.
+
+    2D mesh (both dims > 1): the number of enabled parallelisms must equal
+    the number of mesh dims, and assignment order is DP -> TP. CP/PP are
+    out of scope here.
+    """
+    shape = tuple(int(s) for s in device_config.mesh_shape)
+    n = len(shape)
+    nontrivial = [i for i, s in enumerate(shape) if s > 1]
+    is_line = len(nontrivial) <= 1
+    enabled = (
+        ("dp" if device_config.enable_ddp else None),
+        ("tp" if device_config.enable_tp else None),
+    )
+    enabled_names = tuple(name for name in enabled if name is not None)
+
+    axis_names = [f"_{i}" for i in range(n)]
+    if not enabled_names:
+        return ttml.Mesh(shape, tuple(axis_names))
+
+    if is_line:
+        if len(enabled_names) != 1:
+            raise ValueError(
+                f"Line mesh {shape} requires exactly one of enable_ddp / enable_tp; got enabled={enabled_names}"
+            )
+        active = nontrivial[0] if nontrivial else 0
+        axis_names[active] = enabled_names[0]
+    else:
+        if len(enabled_names) != n:
+            raise ValueError(f"2D mesh {shape} requires both axes assigned (DP and TP). Got enabled={enabled_names}")
+        # enabled_names is ordered ("dp", "tp") by construction above, matching
+        # the C++ assignment order in auto_context.cpp.
+        for i, name in enumerate(enabled_names):
+            axis_names[i] = name
+
+    return ttml.Mesh(shape, tuple(axis_names))
+
+
 def create_warmup_linear_scheduler(optimizer, total_steps: int):
     """Create warmup + linear decay scheduler."""
     warmup_factor = 0.1
@@ -270,9 +392,14 @@ def create_dataset_from_text(
 def collate_fn(samples: list, sequence_length: int) -> Tuple[ttml.autograd.Tensor, ttml.autograd.Tensor]:
     """Collate function.
 
+    When the active mesh has a "dp" axis with size > 1, inputs and targets
+    are sharded along the batch dim across that axis (matches main.cpp:551-609
+    Shard{BATCH_DIM}). Otherwise the tensors replicate across whatever mesh
+    is open, which is the right behavior for TP-only and 1x1 cases.
+
     Args:
-        samples: List of (sequence, target) tuples
-        sequence_length: Sequence length
+        samples: List of (sequence, target) tuples.
+        sequence_length: Sequence length.
     """
     actual_batch_size = len(samples)
     data = []
@@ -284,11 +411,13 @@ def collate_fn(samples: list, sequence_length: int) -> Tuple[ttml.autograd.Tenso
     data_np = np.array(data, dtype=np.uint32).reshape(actual_batch_size, 1, 1, sequence_length)
     targets_np = np.array(targets, dtype=np.uint32).reshape(actual_batch_size, sequence_length)
 
-    # Create tensors directly from NumPy with correct shape (single host-to-device transfer)
-    data_tensor = ttml.autograd.Tensor.from_numpy(data_np, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32)
-    targets_tensor = ttml.autograd.Tensor.from_numpy(
-        targets_np, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
-    )
+    mesh = ttml.mesh()
+    mapper = None
+    if mesh.has_axis("dp") and mesh.axis_size("dp") > 1:
+        mapper = mesh.axis_mapper("dp", tdim=0)
+
+    data_tensor = ttml.autograd.Tensor.from_numpy(data_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, mapper)
+    targets_tensor = ttml.autograd.Tensor.from_numpy(targets_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, mapper)
 
     return data_tensor, targets_tensor
 
@@ -345,13 +474,34 @@ def train_step(
     # When mask is None, SDPA kernel uses native causal masking (AttentionMaskType::Causal)
     logits = model(input_tokens, mask)
 
-    # Compute loss
-    loss = ttml.ops.loss.cross_entropy_loss(logits, target_tokens, reduce=ttml.ops.ReduceType.MEAN)
+    # Compute loss.  When TP is enabled the LM head returns vocab-sharded
+    # logits ([B,1,S,V/tp_size] per device), so route through
+    # vocab_parallel_cross_entropy_loss.
+    mesh = ttml.mesh()
+    if mesh.has_axis("tp") and mesh.axis_size("tp") > 1:
+        loss = ttml.ops.distributed.vocab_parallel_cross_entropy_loss(
+            logits, target_tokens, cluster_axis=mesh.axis_index("tp")
+        )
+    else:
+        loss = ttml.ops.loss.cross_entropy_loss(logits, target_tokens, reduce=ttml.ops.ReduceType.MEAN)
 
     # Scale loss for gradient accumulation
     loss = gradient_accumulator.scale(loss)
 
-    loss_float = get_loss_value(loss)
+    # Any multi-device mesh — DDP, TP, or DP+TP — produces a loss tensor
+    # with one host buffer per device (per-rank values under DDP; TP-reduced
+    # replicas under TP). Tensor.item() asserts buffers.size()==1, so we
+    # must compose across the mesh before reading to host.
+    # get_loss_over_devices builds a concat_mesh_to_tensor composer and
+    # takes the mean, mirroring the C++ trainer's IdentityComposer-then-
+    # average path in main.cpp::get_loss_value (works for replicas too,
+    # since mean of N identical values equals any one).
+    if mesh.num_devices() > 1:
+        loss_float = float(get_loss_over_devices(loss))
+    else:
+        loss_float = get_loss_value(loss)
+
+    profiler_marker(None, "forward_pass_done")
 
     # Memory snapshot after forward pass
     if memory_snapshot_fn:
@@ -359,6 +509,8 @@ def train_step(
 
     # Backward pass
     loss.backward(False)
+
+    profiler_marker(None, "backward_pass_done")
 
     # Memory snapshot after backward pass
     if memory_snapshot_fn:
@@ -378,8 +530,17 @@ def train_step(
     should_step = gradient_accumulator.should_step()
 
     if should_step:
-        # Gradient clipping
+        # All-reduce gradients across the "dp" axis (no-op when there is no
+        # mesh, no "dp" axis, or dp size == 1). Mirrors main.cpp:817-823.
+        ttml.sync_gradients(model.parameters())
+
+        # Gradient clipping. clip_grad_norm is incorrect under TP because
+        # parameters are sharded across the "tp" axis and the per-rank norm
+        # is not the global norm; mirror main.cpp:826-828 with a hard error.
         if use_clip_grad_norm:
+            mesh = ttml.mesh()
+            if mesh.has_axis("tp") and mesh.axis_size("tp") > 1:
+                raise ValueError("Clip grad norm is not supported with TP")
             # Use ttml.core.clip_grad_norm which works with model parameters directly
             ttml.core.clip_grad_norm(
                 model.parameters(),
@@ -388,8 +549,12 @@ def train_step(
                 False,  # error_if_nonfinite - set False to avoid errors on NaN
             )
 
+        profiler_marker(None, "gradient_sync_done")
+
         # Optimizer step
         optimizer.step()
+
+        profiler_marker(None, "optimizer_step_done")
 
         # Apply learning rate scheduler if provided)
         if compute_lr is not None:
@@ -441,6 +606,36 @@ def parse_model_config(yaml_config: dict) -> ModelConfig:
         config.intermediate_dim = transformer_config.get("intermediate_dim", config.intermediate_dim)
 
         # RoPE NTK-aware scaling parameters (nested under rope_scaling in YAML)
+        if "rope_scaling" in transformer_config:
+            rope_scaling = transformer_config["rope_scaling"]
+            config.scaling_factor = rope_scaling.get("scaling_factor", config.scaling_factor)
+            config.high_freq_factor = rope_scaling.get("high_freq_factor", config.high_freq_factor)
+            config.low_freq_factor = rope_scaling.get("low_freq_factor", config.low_freq_factor)
+            config.original_context_length = rope_scaling.get("original_context_length", config.original_context_length)
+    elif config.model_type == "deepseek":
+        config.theta = transformer_config.get("theta", 10000.0)
+        config.inter_dim = transformer_config.get("inter_dim", config.inter_dim)
+        config.moe_inter_dim = transformer_config.get("moe_inter_dim", config.moe_inter_dim)
+        config.n_dense_layers = transformer_config.get("n_dense_layers", config.n_dense_layers)
+        config.n_routed_experts = transformer_config.get("n_routed_experts", config.n_routed_experts)
+        config.n_shared_experts = transformer_config.get("n_shared_experts", config.n_shared_experts)
+        config.n_activated_experts = transformer_config.get("n_activated_experts", config.n_activated_experts)
+        config.n_expert_groups = transformer_config.get("n_expert_groups", config.n_expert_groups)
+        config.n_limited_groups = transformer_config.get("n_limited_groups", config.n_limited_groups)
+        config.score_func = transformer_config.get("score_func", config.score_func)
+        config.route_scale = transformer_config.get("route_scale", config.route_scale)
+        config.q_lora_rank = transformer_config.get("q_lora_rank", config.q_lora_rank)
+        config.kv_lora_rank = transformer_config.get("kv_lora_rank", config.kv_lora_rank)
+        config.qk_nope_head_dim = transformer_config.get("qk_nope_head_dim", config.qk_nope_head_dim)
+        config.qk_rope_head_dim = transformer_config.get("qk_rope_head_dim", config.qk_rope_head_dim)
+        config.v_head_dim = transformer_config.get("v_head_dim", config.v_head_dim)
+    elif config.model_type == "qwen3":
+        config.num_groups = transformer_config.get("num_groups", config.num_groups)
+        config.theta = transformer_config.get("theta", 1000000.0)
+        config.intermediate_dim = transformer_config.get("intermediate_dim", config.intermediate_dim)
+        config.head_dim = transformer_config.get("head_dim", config.head_dim)
+        config.attention_bias = transformer_config.get("attention_bias", config.attention_bias)
+
         if "rope_scaling" in transformer_config:
             rope_scaling = transformer_config["rope_scaling"]
             config.scaling_factor = rope_scaling.get("scaling_factor", config.scaling_factor)
@@ -708,18 +903,27 @@ def sample_greedy(
     return generated_text
 
 
-def create_model_from_config(model_config: ModelConfig) -> Model:
+def create_model_from_config(model_config: ModelConfig, use_tp: bool = False) -> Model:
     """Create a model from ModelConfig, dispatching on model_type.
 
     Converts universal ModelConfig field names to model-specific config fields.
+    When ``use_tp`` is True the named device mesh must already expose a "tp"
+    axis (set up by ``build_mesh`` from ``DeviceConfig.enable_tp``).
+
+    Only the Python Llama integrates with the named-mesh TP path; gpt2,
+    deepseek, and qwen3 hard-error on TP since they have no use_tp implementation here.
 
     Args:
-        model_config: Universal model configuration
+        model_config: Universal model configuration.
+        use_tp: Whether the active mesh has a "tp" axis the model should
+            shard across. Forwarded to ``LlamaConfig.use_tp``.
 
     Returns:
-        A NanoGPT or Llama model instance
+        A NanoGPT, Llama, DeepSeek, or Qwen3 model instance.
     """
     if model_config.model_type == "gpt2":
+        if use_tp:
+            raise ValueError("model_type=gpt2 has no TP path on the named-mesh API; use model_type=llama for DP+TP.")
         nanogpt_exp_config = NanoGPTExperimentalConfig(
             use_composite_layernorm=model_config.experimental.use_composite_layernorm,
         )
@@ -762,8 +966,75 @@ def create_model_from_config(model_config: ModelConfig) -> Model:
             runner_type=model_config.runner_type,
             weight_tying=model_config.weight_tying,
             rope_scaling=rope_scaling_config,
+            use_tp=use_tp,
         )
         return Llama(llama_config)
+    elif model_config.model_type == "deepseek":
+        if use_tp:
+            raise ValueError(
+                "model_type=deepseek has no TP path on the named-mesh API; use model_type=llama for DP+TP."
+            )
+        inter_dim = model_config.inter_dim
+        if inter_dim is None:
+            inter_dim = ((4 * model_config.embedding_dim * 2) // 3 + 255) // 256 * 256
+        deepseek_config = DeepSeekConfig(
+            vocab_size=model_config.vocab_size,
+            dim=model_config.embedding_dim,
+            inter_dim=inter_dim,
+            moe_inter_dim=model_config.moe_inter_dim,
+            n_layers=model_config.num_blocks,
+            n_dense_layers=model_config.n_dense_layers,
+            n_heads=model_config.num_heads,
+            n_routed_experts=model_config.n_routed_experts,
+            n_shared_experts=model_config.n_shared_experts,
+            n_activated_experts=model_config.n_activated_experts,
+            n_expert_groups=model_config.n_expert_groups,
+            n_limited_groups=model_config.n_limited_groups,
+            score_func=model_config.score_func,
+            route_scale=model_config.route_scale,
+            q_lora_rank=model_config.q_lora_rank,
+            kv_lora_rank=model_config.kv_lora_rank,
+            qk_nope_head_dim=model_config.qk_nope_head_dim,
+            qk_rope_head_dim=model_config.qk_rope_head_dim,
+            v_head_dim=model_config.v_head_dim,
+            max_seq_len=model_config.max_sequence_length,
+            rope_theta=model_config.theta,
+            runner_type=model_config.runner_type,
+        )
+        return DeepSeek(deepseek_config)
+    elif model_config.model_type == "qwen3":
+        if use_tp:
+            raise ValueError("model_type=qwen3 has no TP path on the named-mesh API; use model_type=llama for DP+TP.")
+        head_dim = model_config.head_dim
+        if head_dim is None:
+            head_dim = model_config.embedding_dim // model_config.num_heads
+        intermediate_size = model_config.intermediate_dim
+        if intermediate_size is None:
+            intermediate_size = ((4 * model_config.embedding_dim * 2) // 3 + 255) // 256 * 256
+        rope_scaling_config = Qwen3RopeScalingConfig(
+            scaling_factor=model_config.scaling_factor,
+            high_freq_factor=model_config.high_freq_factor,
+            low_freq_factor=model_config.low_freq_factor,
+            original_context_length=model_config.original_context_length,
+        )
+        qwen3_config = Qwen3Config(
+            hidden_size=model_config.embedding_dim,
+            intermediate_size=intermediate_size,
+            num_hidden_layers=model_config.num_blocks,
+            num_attention_heads=model_config.num_heads,
+            num_key_value_heads=model_config.num_groups,
+            head_dim=head_dim,
+            vocab_size=model_config.vocab_size,
+            max_position_embeddings=model_config.max_sequence_length,
+            rms_norm_eps=1e-6,
+            attention_bias=model_config.attention_bias,
+            attention_dropout=model_config.dropout_prob,
+            rope_theta=model_config.theta,
+            runner_type=model_config.runner_type,
+            weight_tying=model_config.weight_tying,
+            rope_scaling=rope_scaling_config,
+        )
+        return Qwen3(qwen3_config)
     else:
         raise ValueError(f"Unsupported model type: {model_config.model_type}")
 
@@ -935,7 +1206,7 @@ def main():
     parser = argparse.ArgumentParser(description="NanoGPT Example")
 
     # Default config path (relative to configs root)
-    default_config_path = "training_shakespeare_nanogpt.yaml"
+    default_config_path = "training_shakespeare_nanogpt_char.yaml"
 
     parser.add_argument(
         "-c",
@@ -1032,6 +1303,21 @@ def main():
         action="store_true",
         help="Enable memory usage tracking (prints memory stats after first iteration)",
     )
+    parser.add_argument(
+        "--print_summary",
+        action="store_true",
+        help="Print model layer-by-layer summary after creation",
+    )
+    parser.add_argument(
+        "--log-expert-activations",
+        type=str,
+        default=None,
+        help=(
+            "If set, append per-step per-expert activation probabilities to this "
+            "CSV file (DeepSeek-only). Sparse schedule: steps 1..10 and every 100th "
+            "step thereafter. Columns: step,layer,expert,prob."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -1040,36 +1326,14 @@ def main():
     print("=" * 70)
     print()
 
-    # Set TT_METAL_RUNTIME_ROOT if not set and a valid runtime root is available
-    # This is needed for the runtime to find kernel files like moreh_mean
-    if "TT_METAL_RUNTIME_ROOT" not in os.environ:
-        tt_metal_root = get_tt_metal_runtime_root()
-        if tt_metal_root and os.path.exists(tt_metal_root):
-            os.environ["TT_METAL_RUNTIME_ROOT"] = tt_metal_root
-            print(f"Set TT_METAL_RUNTIME_ROOT={tt_metal_root} (from get_tt_metal_runtime_root)")
-        else:
-            # Try to auto-detect from current directory
-            current_dir = os.getcwd()
-            # Check if we're in the repo root (has tt_metal/ subdirectory)
-            if os.path.exists(os.path.join(current_dir, "tt_metal")):
-                os.environ["TT_METAL_RUNTIME_ROOT"] = current_dir
-                print(f"Set TT_METAL_RUNTIME_ROOT={current_dir} (auto-detected from current directory)")
-            else:
-                # Try parent directories
-                parent_dir = os.path.dirname(current_dir)
-                if os.path.exists(os.path.join(parent_dir, "tt_metal")):
-                    os.environ["TT_METAL_RUNTIME_ROOT"] = parent_dir
-                    print(f"Set TT_METAL_RUNTIME_ROOT={parent_dir} (auto-detected from parent directory)")
-                else:
-                    print("Warning: TT_METAL_RUNTIME_ROOT not set and could not be auto-detected.")
-                    print("  Kernel files may not be found. Set TT_METAL_RUNTIME_ROOT environment variable")
-                    print("  to point to the tt-metal repository root directory.")
-    else:
-        print(f"Using TT_METAL_RUNTIME_ROOT={os.environ.get('TT_METAL_RUNTIME_ROOT')}")
+    # Require TT_METAL_RUNTIME_ROOT to be explicitly set.
+    # This is needed for the runtime to find kernel files like moreh_mean.
+    tt_metal_root = get_tt_metal_runtime_root()
+    print(f"Using TT_METAL_RUNTIME_ROOT={tt_metal_root}")
     print()
 
     # Load configs using ttml.common.config utilities
-    tt_train_root = f"{get_tt_metal_runtime_root()}/tt-train"
+    tt_train_root = f"{tt_metal_root}/tt-train"
     configs_root = f"{tt_train_root}/configs"
     try:
         print(f"Loading training config from: {args.config}")
@@ -1087,10 +1351,9 @@ def main():
             print("Using default model config")
             model_config = ModelConfig()
     except FileNotFoundError as e:
-        print(f"Warning: Config file not found: {e}")
-        print("Using default configs")
-        training_config = TrainingConfig()
-        model_config = ModelConfig()
+        print(f"Error: Config file not found: {e}")
+        ttml.autograd.AutoContext.get_instance().close_device()
+        raise
 
     # Override with command line args (only if provided)
     if args.data_path:
@@ -1117,8 +1380,27 @@ def main():
     # Check if we're in inference-only mode (prompt + explicit model_path).
     inference_only = args.prompt and args.model_path
 
-    # Initialize device early (needed for both training and inference)
-    ttml.autograd.AutoContext.get_instance().open_device()
+    # Parse device config from YAML (mesh_shape, enable_ddp, enable_tp).
+    device_config = DeviceConfig(yaml_config)
+
+    # Mirrors main.cpp:447-451 and lora_llama: TP-sharded parameters cannot be
+    # round-tripped through the script's pickle checkpoint format, so refuse
+    # any save/resume request up front rather than failing partway through.
+    if device_config.enable_tp:
+        if args.model_save_path:
+            raise ValueError(
+                "--model_save_path is not supported with tensor parallelism (device_config.enable_tp=true)."
+            )
+        if args.resume:
+            raise ValueError("--resume is not supported with tensor parallelism (device_config.enable_tp=true).")
+
+    # Build a named mesh whose axis names match the C++ assignment order
+    # (auto_context.cpp:140-195) so ttml.sync_gradients and axis_mapper("dp"|"tp", ...)
+    # bind to the same physical axes the C++ trainer would.
+    mesh = build_mesh(device_config)
+    if device_config.enable_ddp or device_config.enable_tp:
+        print(f"Mesh: shape={mesh.shape}, axis_names={mesh.axis_names}")
+    ttml.open_device_mesh(mesh, tuple(device_config.device_ids) if device_config.device_ids else None)
     ttml.autograd.AutoContext.get_instance().get_device()
 
     # Start memory tracking if enabled
@@ -1188,13 +1470,43 @@ def main():
         print("1. Loading and preparing data...")
         print(f"   - Data path: {training_config.data_path}")
 
-        # Load data
-        text = read_file_to_str(training_config.data_path)
         seq_len = model_config.max_sequence_length
+        is_pretokenized = training_config.data_path.endswith((".yaml", ".yml"))
 
-        # Create dataset
-        dataset, tokenizer = create_dataset_from_text(text, seq_len)
-        model_config.vocab_size = tokenizer.vocab_size
+        if is_pretokenized:
+            import yaml
+
+            if model_config.vocab_size == 0:
+                raise ValueError(
+                    f"Pre-tokenized data ({training_config.data_path}) requires vocab_size to be "
+                    f"set in the model config. Omitting vocab_size is only valid for plain text data."
+                )
+            with open(training_config.data_path, "r") as f:
+                token_data = yaml.safe_load(f)
+            tokens = np.array(token_data["tokens"], dtype=np.uint32)
+            data_vocab_size = int(token_data["tokenizer_vocab_size"])
+            max_token_id = int(tokens.max())
+            if max_token_id >= model_config.vocab_size:
+                raise ValueError(
+                    f"Tokenized data contains token ID {max_token_id} but model vocab_size is "
+                    f"{model_config.vocab_size}. Use a tokenized dataset that matches the model's "
+                    f"vocabulary (data file reports tokenizer_vocab_size={data_vocab_size})."
+                )
+            dataset = InMemoryTokenDataset(tokens, seq_len)
+            tokenizer = None
+            print(f"   - Pre-tokenized data: {len(tokens):,} tokens (vocab {data_vocab_size:,})")
+        else:
+            if model_config.vocab_size > 0:
+                raise ValueError(
+                    f"Plain text data ({training_config.data_path}) uses character tokenization, "
+                    f"which auto-detects vocab_size from the text. Remove vocab_size from the model "
+                    f"config (or set it to 0). Got vocab_size={model_config.vocab_size}.\n"
+                    f"For pre-tokenized data with a fixed vocab, use a .yaml data file instead."
+                )
+            text = read_file_to_str(training_config.data_path)
+            dataset, tokenizer = create_dataset_from_text(text, seq_len)
+            model_config.vocab_size = tokenizer.vocab_size
+            print(f"   - Character tokenization: {tokenizer.vocab_size} unique characters")
 
         print(f"   - Vocabulary size: {model_config.vocab_size}")
         print(f"   - Dataset size: {len(dataset)} samples")
@@ -1232,6 +1544,8 @@ def main():
                 print(
                     f"   - Model: {model_config.num_blocks} layers, {model_config.embedding_dim} embd, {model_config.num_heads} heads"
                 )
+                total_params = sum(math.prod(p.shape()) for p in model.parameters().values())
+                print(f"   - Total parameters: {total_params:,}")
             except Exception as e:
                 print(f"Error loading checkpoint: {e}")
                 print("Starting fresh training instead...")
@@ -1252,8 +1566,12 @@ def main():
             print(f"    Runner type: {runner_type_str}")
             print(f"    Weight tying: {weight_tying_str}")
 
-            # Create model
-            model = create_model_from_config(model_config)
+            # Create model. Pass use_tp so Llama configures ColumnParallelLinear
+            # against the "tp" axis of the active mesh (no-op for non-Llama and
+            # an error for non-Llama with TP).
+            model = create_model_from_config(model_config, use_tp=device_config.enable_tp)
+            if args.print_summary:
+                summary(model)
 
             # Count parameters
             total_params = sum(math.prod(p.shape()) for p in model.parameters().values())
@@ -1261,6 +1579,15 @@ def main():
                 f"   - Model: {model_config.num_blocks} layers, {model_config.embedding_dim} embd, {model_config.num_heads} heads"
             )
             print(f"   - Total parameters: {total_params:,}")
+
+        # Compute FLOPs per token for throughput reporting (all model types)
+        flops_per_token = 0
+        flops_fn = FLOPS_REGISTRY.get(model_config.model_type)
+        if flops_fn is not None:
+            flops_per_token = flops_fn(model.config, model_config.max_sequence_length)
+
+        if flops_per_token > 0:
+            print(f"   - FLOPs per token: {flops_per_token:,} ({flops_per_token/1e9:.2f}G)")
 
         # Memory snapshot after model creation
         if args.track_memory:
@@ -1327,6 +1654,19 @@ def main():
         gradient_accumulator = GradientAccumulator(training_config.gradient_accumulation_steps)
         global_step = start_step
 
+        # Compute peak mesh TFLOPS for MFU calculation. tps and flops_per_token
+        # are both global (whole-mesh) quantities, so peak must be scaled by the
+        # total device count to keep MFU = achieved/peak meaningful under DP/TP.
+        peak_tflops = 0.0
+        if flops_per_token > 0:
+            num_devices = ttml.mesh().num_devices()
+            peak_tflops = get_device_peak_tflops_bf16() * num_devices
+            print(f"  - Mesh peak: {peak_tflops:.1f} TFLOPS (bf16, {num_devices} devices)")
+
+        # Get the available device DRAM
+        available_dram = get_available_device_memory_in_bytes()
+        print(f"  - Available Device Memory: {available_dram/(1024*1024):,.2f} MB")
+
         # Training loop
         start_time = time.time()
         # Cache values used in hot path
@@ -1355,7 +1695,12 @@ def main():
                 batch_samples = [dataset[i] for i in indices[batch_start:batch_end]]
                 input_tokens, target_tokens = collate_fn(batch_samples, seq_len)
                 actual_batch_size = batch_end - batch_start
+                profiler_marker(None, "dataloader_step_done")
 
+                # Composite SDPA (used by DeepSeek) has no built-in causal masking,
+                # so we must pass an explicit mask. Fused SDPA (GPT-2/Llama) uses
+                # its native causal mode when mask is None.
+                attn_mask = mask if model_config.model_type == "deepseek" else None
                 loss_float, step_time, should_step = train_step(
                     model,
                     optimizer,
@@ -1363,7 +1708,7 @@ def main():
                     global_step,
                     input_tokens,
                     target_tokens,
-                    None,
+                    attn_mask,
                     gradient_accumulator,
                     training_config.use_clip_grad_norm,
                     training_config.clip_grad_norm_max_norm,
@@ -1375,9 +1720,27 @@ def main():
                     global_step += 1
                     avg_loss = gradient_accumulator.average_loss()
                     loss_meter.update(avg_loss)
-                    print(f"Step: {global_step}, Loss: {avg_loss:.6f}, Time: {step_time:.2f} ms")
 
-                    if args.model_save_path and global_step % training_config.model_save_interval == 0:
+                    # Throughput metrics
+                    tps = (actual_batch_size * seq_len) / (step_time / 1000.0)
+                    if flops_per_token > 0 and step_time > 0:
+                        achieved_tflops = tps * flops_per_token / 1e12
+                        mfu_str = ""
+                        if peak_tflops > 0:
+                            mfu = achieved_tflops / peak_tflops * 100.0
+                            mfu_str = f", MFU: {mfu:.1f}%"
+                        print(
+                            f"Step: {global_step}, Loss: {avg_loss:.6f}, Time: {step_time:.2f} ms, "
+                            f"TPS: {tps:.0f}, TFLOPS: {achieved_tflops:.2f}{mfu_str}"
+                        )
+                    else:
+                        print(f"Step: {global_step}, Loss: {avg_loss:.6f}, Time: {step_time:.2f} ms, TPS: {tps:.0f}")
+
+                    if (
+                        args.model_save_path
+                        and training_config.model_save_interval > 0
+                        and global_step % training_config.model_save_interval == 0
+                    ):
                         save_checkpoint(
                             f"{args.model_save_path}_step_{global_step}.pkl",
                             global_step,
@@ -1389,6 +1752,18 @@ def main():
 
                     gradient_accumulator.reset()
 
+                    # Update MoE expert bias for load balancing (DeepSeek only)
+                    if model_config.model_type == "deepseek" and hasattr(model, "get_moe_layers"):
+                        moe_layers = model.get_moe_layers()
+                        # Read activation probabilities BEFORE update_expert_bias
+                        # (which resets the underlying _token_counts buffer).
+                        if args.log_expert_activations and moe_activation_logger.should_log_step(global_step):
+                            moe_activation_logger.log_step_expert_balance(
+                                args.log_expert_activations, global_step, moe_layers
+                            )
+                        for moe_layer in moe_layers:
+                            moe_layer.update_expert_bias()
+
                     # Print memory usage after first iteration
                     if args.track_memory and not is_everything_compiled:
                         is_everything_compiled = True
@@ -1397,6 +1772,10 @@ def main():
                         MemoryUsageTracker.clear()
                         if memory_guard:
                             memory_guard.release()
+
+                    profiler_marker(None, f"iteration_{global_step}", dump_results=True)
+                    if global_step == start_step + 1:
+                        profiler_marker(None, "compilation_finished")
 
                     if global_step >= max_steps:
                         break

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -52,6 +52,6 @@ ALWI void clamp_tile_int32(uint32_t idst, uint32_t param0, uint32_t param1) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void clamp_tile_init() { MATH((llk_math_eltwise_unary_sfpu_clamp_init<APPROX>())); }
+ALWI void clamp_tile_init() { MATH((llk_math_eltwise_unary_sfpu_clamp_init())); }
 
 }  // namespace ckernel

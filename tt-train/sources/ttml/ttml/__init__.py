@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """TTML Python package.
@@ -27,6 +27,7 @@ from ._ttml import NamedParameters
 
 # --- Python subpackages ---
 from . import autograd
+from . import init
 from . import models
 from . import modules
 
@@ -42,3 +43,5 @@ sys.modules[f"{__name__}.core"] = core
 
 optimizers = _ttml.optimizers
 sys.modules[f"{__name__}.optimizers"] = optimizers
+
+from ._mesh import Mesh, open_device_mesh, maybe_mesh, mesh, sync_gradients

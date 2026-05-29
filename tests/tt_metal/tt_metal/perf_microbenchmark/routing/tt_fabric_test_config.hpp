@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -243,6 +243,7 @@ inline TrafficPatternType merge_patterns(const TrafficPatternType& base, const T
     merged.num_packets = specific.num_packets.has_value() ? specific.num_packets : base.num_packets;
     merged.atomic_inc_val = specific.atomic_inc_val.has_value() ? specific.atomic_inc_val : base.atomic_inc_val;
     merged.mcast_start_hops = specific.mcast_start_hops.has_value() ? specific.mcast_start_hops : base.mcast_start_hops;
+    merged.vc_id = specific.vc_id.has_value() ? specific.vc_id : base.vc_id;
 
     // Special handling for nested destination
     if (specific.destination.has_value()) {
@@ -331,10 +332,18 @@ public:
     bool has_help_option();
     void print_help();
 
+    // Display options
+    bool show_workers();
+
     // Progress monitoring options
     bool show_progress();
+    bool show_progress_detail();
     uint32_t get_progress_interval();
     uint32_t get_hung_threshold();
+    uint32_t get_hung_confirmation_rounds();
+    bool wait_on_hang();
+    std::string get_validation_summary_file();
+    std::string get_validation_detail_file();
 
 private:
     const std::vector<std::string>& input_args_;

@@ -1,5 +1,5 @@
 
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,17 +12,17 @@
 #include "tt_eth_ss_regs.h"
 #include "internal/ethernet/tt_eth_api.h"
 inline void RISC_POST_STATUS(uint32_t status) {
-    volatile uint32_t* ptr = (volatile uint32_t*)(NOC_CFG(ROUTER_CFG_2));
+    volatile uint32_t* ptr = (volatile uint32_t*)(uintptr_t)(NOC_CFG(ROUTER_CFG_2));
     ptr[0] = status;
 }
 
 static volatile uint32_t* const fabric_postcode_ptr =
-    reinterpret_cast<volatile uint32_t*>(eth_l1_mem::address_map::AERISC_FABRIC_POSTCODES_BASE);
+    reinterpret_cast<volatile uint32_t*>(static_cast<uintptr_t>(eth_l1_mem::address_map::AERISC_FABRIC_POSTCODES_BASE));
 
 #define POSTCODE(status) (*fabric_postcode_ptr = static_cast<uint32_t>(status))
 
 static volatile uint32_t* const fabric_scratch_ptr =
-    reinterpret_cast<volatile uint32_t*>(eth_l1_mem::address_map::AERISC_FABRIC_SCRATCH_BASE);
+    reinterpret_cast<volatile uint32_t*>(static_cast<uintptr_t>(eth_l1_mem::address_map::AERISC_FABRIC_SCRATCH_BASE));
 
 #define ROUTER_SCRATCH_WRITE(id, val) (fabric_scratch_ptr[id]) = val;
 
@@ -55,11 +55,12 @@ struct erisc_info_t {
         channels[eth_l1_mem::address_map::MAX_NUM_CONCURRENT_TRANSACTIONS];  // user_buffer_bytes_sent
 };
 
-erisc_info_t* erisc_info = (erisc_info_t*)(eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
-routing_info_t* routing_info = (routing_info_t*)(eth_l1_mem::address_map::ERISC_APP_ROUTING_INFO_BASE);
+erisc_info_t* erisc_info = (erisc_info_t*)(uintptr_t)(eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
+routing_info_t* routing_info = (routing_info_t*)(uintptr_t)(eth_l1_mem::address_map::ERISC_APP_ROUTING_INFO_BASE);
 
 // Context Switch Config
-tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE);
+tt_l1_ptr mailboxes_t* const mailboxes =
+    (tt_l1_ptr mailboxes_t*)(uintptr_t)(eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE);
 
 extern uint32_t __erisc_jump_table;
 volatile uint32_t* RtosTable =

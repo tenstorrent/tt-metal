@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -83,12 +83,19 @@ int main(int argc, char** argv) {
     TestContext test_context;
     test_context.init(fixture, allocation_policies, use_dynamic_policies);
 
+    test_context.set_show_workers(cmdline_parser.show_workers());
+
     // Configure progress monitoring from cmdline flags
     if (cmdline_parser.show_progress()) {
         ProgressMonitorConfig progress_config;
         progress_config.enabled = true;
+        progress_config.granular = cmdline_parser.show_progress_detail();
         progress_config.poll_interval_seconds = cmdline_parser.get_progress_interval();
         progress_config.hung_threshold_seconds = cmdline_parser.get_hung_threshold();
+        progress_config.hung_confirmation_rounds = cmdline_parser.get_hung_confirmation_rounds();
+        progress_config.wait_on_hang = cmdline_parser.wait_on_hang();
+        progress_config.summary_file = cmdline_parser.get_validation_summary_file();
+        progress_config.detail_file = cmdline_parser.get_validation_detail_file();
 
         test_context.enable_progress_monitoring(progress_config);
     }
@@ -172,6 +179,10 @@ int main(int argc, char** argv) {
         const auto& fabric_tensix_config = test_config.fabric_setup.fabric_tensix_config.value();
         if (test_config.performance_test_mode != PerformanceTestMode::NONE) {
             tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_bw_telemetry(true);
+        }
+
+        if (test_config.fabric_setup.use_vc2) {
+            tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_vc2(true);
         }
 
         log_info(
@@ -261,6 +272,17 @@ int main(int argc, char** argv) {
 
                 log_info(tt::LogTest, "Waiting for programs");
                 test_context.wait_for_programs_with_progress();
+
+                if (test_context.did_last_test_hang()) {
+                    log_error(
+                        tt::LogTest,
+                        "Test {} HUNG - aborting test suite. System may be in a bad state.",
+                        built_test.parametrized_name);
+                    test_context.record_hung_test(built_test.parametrized_name);
+                    test_context.reset_devices();
+                    break;
+                }
+
                 log_info(tt::LogTest, "Test {} Finished.", built_test.parametrized_name);
 
                 test_context.process_telemetry_data(built_test);
@@ -291,6 +313,12 @@ int main(int argc, char** argv) {
                 fixture->barrier();
                 test_context.reset_devices();
             }
+            if (test_context.did_last_test_hang()) {
+                break;
+            }
+        }
+        if (test_context.did_last_test_hang()) {
+            break;
         }
     }
 

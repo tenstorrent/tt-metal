@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -26,8 +26,7 @@ void kernel_main() {
     constexpr auto src_args = TensorAccessorArgs<1>();
     constexpr uint32_t onetile = 1;
 
-    const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
-    const auto src = TensorAccessor(src_args, src_addr, src_tile_bytes);
+    const auto src = TensorAccessor(src_args, src_addr);
 
     uint32_t HtWt = Ht * Wt;
 

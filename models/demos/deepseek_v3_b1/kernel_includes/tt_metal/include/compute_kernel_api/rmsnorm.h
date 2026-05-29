@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,7 +15,7 @@
 
 namespace ckernel {
 
-template <EltwiseBinaryType eltwise_binary_type = ELWADD, uint32_t num_tiles>
+template <EltwiseBinaryType eltwise_binary_type = EltwiseBinaryType::ELWADD, uint32_t num_tiles>
 ALWI void rmsnorm_bcast_scalar_reuse_tiles_init(uint32_t icb0) {
     UNPACK((llk_unpack_A_rmsnorm_init<num_tiles, BroadcastType::SCALAR, true, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
         false, false, icb0)));
@@ -23,7 +23,10 @@ ALWI void rmsnorm_bcast_scalar_reuse_tiles_init(uint32_t icb0) {
         icb0, icb0, false)));
 }
 
-template <EltwiseBinaryType eltwise_binary_type = ELWADD, uint32_t num_tiles, bool clear_dest = false>
+template <
+    EltwiseBinaryType eltwise_binary_type = EltwiseBinaryType::ELWADD,
+    uint32_t num_tiles,
+    bool clear_dest = false>
 ALWI void rmsnorm_bcast_scalar_reuse_tiles(
     uint32_t in_cb_id, uint32_t in_tile_index, uint32_t src_tile_index, uint32_t dst_tile_index) {
     UNPACK(
@@ -38,13 +41,13 @@ ALWI void rmsnorm_bcast_scalar_reuse_tiles(
 
 template <uint32_t num_tiles>
 ALWI void rmsnorm_mul_bcast_scalar_reuse_tiles_init(uint32_t icb0) {
-    rmsnorm_bcast_scalar_reuse_tiles_init<ELWMUL, num_tiles>(icb0);
+    rmsnorm_bcast_scalar_reuse_tiles_init<EltwiseBinaryType::ELWMUL, num_tiles>(icb0);
 }
 
 template <uint32_t num_tiles, bool clear_dest = false>
 ALWI void rmsnorm_mul_bcast_scalar_reuse_tiles(
     uint32_t in_cb_id, uint32_t in_tile_index, uint32_t src_tile_index, uint32_t dst_tile_index) {
-    rmsnorm_bcast_scalar_reuse_tiles<ELWMUL, num_tiles, clear_dest>(
+    rmsnorm_bcast_scalar_reuse_tiles<EltwiseBinaryType::ELWMUL, num_tiles, clear_dest>(
         in_cb_id, in_tile_index, src_tile_index, dst_tile_index);
 }
 }  // namespace ckernel

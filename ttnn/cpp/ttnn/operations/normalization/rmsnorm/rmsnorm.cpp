@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,7 +16,7 @@ namespace ttnn {
 DeviceComputeKernelConfig rmsnorm_default_compute_config(tt::ARCH arch) {
     bool approx_mode = true;
     bool fp32_acc = false;
-    return init_device_compute_kernel_config(arch, std::nullopt, MathFidelity::HiFi4, approx_mode, fp32_acc);
+    return init_device_compute_kernel_config(arch, std::nullopt, tt::tt_metal::MathFidelity::HiFi4, approx_mode, fp32_acc);
 }
 
 Tensor rms_norm(
@@ -43,13 +43,16 @@ Tensor rms_norm(
     // For 0D tensors
     if (rank == 0) [[unlikely]] {
         auto result = ttnn::divide(
-            input_tensor, ttnn::abs(input_tensor, output_memory_config), /*alpha=*/std::nullopt, output_memory_config);
+            input_tensor,
+            ttnn::abs(input_tensor, output_memory_config),
+            /*output_dtype=*/std::nullopt,
+            output_memory_config);
 
         if (weight.has_value()) {
-            result = ttnn::multiply(result, weight.value(), /*alpha=*/std::nullopt, output_memory_config);
+            result = ttnn::multiply(result, weight.value(), /*output_dtype=*/std::nullopt, output_memory_config);
         }
         if (bias.has_value()) {
-            result = ttnn::add(result, bias.value(), /*alpha=*/std::nullopt, output_memory_config);
+            result = ttnn::add(result, bias.value(), /*output_dtype=*/std::nullopt, output_memory_config);
         }
         return result;
     }

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #include "transpose_hc_sharded_program_factory.hpp"
@@ -6,6 +6,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-logger/tt-logger.hpp>
 
 #include <map>
@@ -281,14 +282,14 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
 
 }  // namespace
 
-TransposeHCShardedProgramFactory::cached_program_t TransposeHCShardedProgramFactory::create(
+tt::tt_metal::ProgramDescriptor TransposeHCShardedProgramFactory::create_descriptor(
     const TransposeParams& /*operation_attributes*/, const TransposeInputs& tensor_args, Tensor& output_tensor) {
     const auto& input_tensor = tensor_args.input;
 
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_hc needs to be on device!");
     TT_ASSERT(input_tensor.buffer() != nullptr, "Operand to transpose_hc needs to be allocated in a buffer on device!");
 
-    Program program = CreateProgram();
+    ProgramDescriptor desc;
 
     tt::DataFormat src0_cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
     tt::DataFormat dst_cb_data_format = datatype_to_dataformat_converter(output_tensor.dtype());
@@ -320,18 +321,30 @@ TransposeHCShardedProgramFactory::cached_program_t TransposeHCShardedProgramFact
     uint32_t num_cores_y = grid_size.y;
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
-    CircularBufferConfig cb_src0_config =
-        CircularBufferConfig(shard_height * stick_size_bytes, {{src0_cb_index, src0_cb_data_format}})
-            .set_page_size(src0_cb_index, stick_size_bytes)
-            .set_globally_allocated_address(*input_tensor.buffer());
-    auto cb_src0 = CreateCircularBuffer(program, all_cores, cb_src0_config);
+    // Sharded CBs bound to the input/output buffers: the framework re-applies
+    // UpdateDynamicCircularBufferAddress on cache hit via the .buffer member.
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = shard_height * stick_size_bytes,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(src0_cb_index),
+            .data_format = src0_cb_data_format,
+            .page_size = stick_size_bytes,
+        }}},
+        .buffer = input_tensor.buffer(),
+    });
 
     uint32_t output_cb_index = tt::CBIndex::c_16;
-    CircularBufferConfig cb_output_config =
-        CircularBufferConfig(shard_height * stick_size_bytes, {{output_cb_index, dst_cb_data_format}})
-            .set_page_size(output_cb_index, stick_size_bytes)
-            .set_globally_allocated_address(*output_tensor.buffer());
-    auto cb_output = CreateCircularBuffer(program, all_cores, cb_output_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = shard_height * stick_size_bytes,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(output_cb_index),
+            .data_format = dst_cb_data_format,
+            .page_size = stick_size_bytes,
+        }}},
+        .buffer = output_tensor.buffer(),
+    });
 
     std::vector<uint32_t> reader_compile_time_args;
     if (is_special_case) {
@@ -349,30 +362,24 @@ TransposeHCShardedProgramFactory::cached_program_t TransposeHCShardedProgramFact
             num_cores_y};
     }
 
-    std::map<std::string, std::string> reader_defines;
+    KernelDescriptor::Defines reader_defines;
     if (is_special_case) {
-        reader_defines["USE_SPECIAL_CASE"] = "1";
+        reader_defines.emplace_back("USE_SPECIAL_CASE", "1");
     }
 
-    KernelHandle reader_kernel_id = CreateKernel(
-        program,
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
-        "reader_unary_transpose_hc_sharded_rm.cpp",
-        all_cores,
-        ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
+        "reader_unary_transpose_hc_sharded_rm.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = all_cores;
+    reader_desc.compile_time_args = std::move(reader_compile_time_args);
+    reader_desc.defines = std::move(reader_defines);
+    reader_desc.config = ReaderConfigDescriptor{};
 
-    KernelHandle writer_kernel_id{};
-    if (is_special_case) {
-        std::vector<uint32_t> writer_compile_time_args = {src0_cb_index, output_cb_index, stick_size_bytes};
-
-        writer_kernel_id = CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
-            "writer_unary_transpose_hc_sharded_rm.cpp",
-            all_cores,
-            WriterDataMovementConfig(writer_compile_time_args));
-    }
-
+    // Writer kernel only exists in the special case path; the generic path puts
+    // everything through the reader (writer args returned by the generic helper
+    // are empty, matching the legacy `KernelHandle writer_kernel_id{}` behavior).
     std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> all_runtime_args;
     if (is_special_case) {
         all_runtime_args =
@@ -381,6 +388,7 @@ TransposeHCShardedProgramFactory::cached_program_t TransposeHCShardedProgramFact
         all_runtime_args = get_runtime_args_hc_rm_sharded(input_tensor, num_cores, num_cores_x, num_cores_y);
     }
 
+    reader_desc.runtime_args.reserve(num_cores);
     for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core;
         if (row_major_orientation) {
@@ -388,34 +396,34 @@ TransposeHCShardedProgramFactory::cached_program_t TransposeHCShardedProgramFact
         } else {
             core = {i / num_cores_y, i % num_cores_y};
         }
-
-        SetRuntimeArgs(program, reader_kernel_id, core, all_runtime_args[i].first);
-        SetRuntimeArgs(program, writer_kernel_id, core, all_runtime_args[i].second);
+        reader_desc.runtime_args.emplace_back(core, all_runtime_args[i].first);
     }
 
-    return {
-        std::move(program),
-        {.reader_kernel_id = reader_kernel_id,
-         .writer_kernel_id = writer_kernel_id,
-         .cb_src0 = cb_src0,
-         .cb_output = cb_output,
-         .num_cores_x = num_cores_x,
-         .num_cores_y = num_cores_y}};
-}
+    desc.kernels.push_back(std::move(reader_desc));
 
-void TransposeHCShardedProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const TransposeParams& /*operation_attributes*/,
-    const TransposeInputs& tensor_args,
-    Tensor& output_tensor) {
-    auto& program = cached_program.program;
-    auto& shared_variables = cached_program.shared_variables;
+    if (is_special_case) {
+        KernelDescriptor writer_desc;
+        writer_desc.kernel_source =
+            "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
+            "writer_unary_transpose_hc_sharded_rm.cpp";
+        writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        writer_desc.core_ranges = all_cores;
+        writer_desc.compile_time_args = {src0_cb_index, output_cb_index, stick_size_bytes};
+        writer_desc.config = WriterConfigDescriptor{};
+        writer_desc.runtime_args.reserve(num_cores);
+        for (uint32_t i = 0; i < num_cores; i++) {
+            CoreCoord core;
+            if (row_major_orientation) {
+                core = {i % num_cores_x, i / num_cores_x};
+            } else {
+                core = {i / num_cores_y, i % num_cores_y};
+            }
+            writer_desc.runtime_args.emplace_back(core, all_runtime_args[i].second);
+        }
+        desc.kernels.push_back(std::move(writer_desc));
+    }
 
-    auto* const src_buffer = tensor_args.input.buffer();
-    auto* const dst_buffer = output_tensor.buffer();
-
-    UpdateDynamicCircularBufferAddress(program, shared_variables.cb_src0, *src_buffer);
-    UpdateDynamicCircularBufferAddress(program, shared_variables.cb_output, *dst_buffer);
+    return desc;
 }
 
 }  // namespace ttnn::prim

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,6 +16,10 @@ struct PadRmReaderWriterMultiCoreSharedVariables {
     int ncores_w{};
     tt::tt_metal::KernelHandle reader_kernel_id{};
     tt::tt_metal::KernelHandle writer_kernel_id{};
+    // Owns the on-device pad-value constant. Without this the local Tensor in create()
+    // drops its DRAM buffer at the end of the function and a subsequent cache hit reads
+    // the pad value from a slot the allocator may have re-handed out (see #44565).
+    Tensor pad_value_const_tensor;
 };
 
 struct PadRmReaderWriterMultiCoreProgramFactory {

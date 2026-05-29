@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -83,7 +83,7 @@ class RopeSingleCore:
         cos_tensor,
         sin_tensor,
         trans_mat_tensor,
-        position_ids_tensor,
+        metadata_tensor,
         output_tensor,
         fp32_dest_acc_en=False,
     ):
@@ -131,7 +131,6 @@ class RopeSingleCore:
         trans_mat_cb = 3  # c_3
         output_cb = 16  # c_16 (output operands start at 16)
         rotated_input_interm_cb = 24  # c_24
-        cos_sin_interm_cb = 25  # c_25
 
         # Create tile descriptor
         tile_descriptor = ttnn.TileDescriptor(tile)
@@ -174,18 +173,6 @@ class RopeSingleCore:
             format_descriptors=[rotated_interm_format],
         )
 
-        cos_sin_interm_format = ttnn.CBFormatDescriptor(
-            buffer_index=cos_sin_interm_cb,
-            data_format=data_format,
-            page_size=tile_size,
-            tile=tile_descriptor,
-        )
-        cos_sin_interm_cb_descriptor = ttnn.CBDescriptor(
-            total_size=2 * num_interm_tiles * tile_size,
-            core_ranges=core_grid,
-            format_descriptors=[cos_sin_interm_format],
-        )
-
         # ========================================================================
         # Unified Kernel Descriptor (handles NCRISC, BRISC, TRISC)
         # ========================================================================
@@ -198,7 +185,6 @@ class RopeSingleCore:
             ("in_cb", input_cb),
             ("cos_tensor_address", cos_tensor.buffer_address()),
             ("sin_tensor_address", sin_tensor.buffer_address()),
-            ("position_ids_tensor_address", position_ids_tensor.buffer_address()),
             ("cos_sin_cb", cos_sin_cb),
             ("trans_mat_cb", trans_mat_cb),
             ("cos_sin_page_size", tile_size),
@@ -220,7 +206,6 @@ class RopeSingleCore:
             ("cos_sin_cb", cos_sin_cb),
             ("trans_mat_cb", trans_mat_cb),
             ("rotated_in_interm_cb", rotated_input_interm_cb),
-            ("cos_sin_interm_cb", cos_sin_interm_cb),
             ("out_cb", output_cb),
             ("Wt", head_dim_per_core_t),
             ("Ht", 1),
@@ -231,6 +216,9 @@ class RopeSingleCore:
             kernel_source="models/demos/deepseek_v3_b1/micro_ops/rope/kernels/rope_kernel.cpp",
             core_ranges=core_grid,
             ncrisc_named_compile_time_args=ncrisc_named_compile_time_args,
+            ncrisc_common_runtime_args=[
+                metadata_tensor.buffer_address(),
+            ],
             brisc_named_compile_time_args=brisc_named_compile_time_args,
             trisc_named_compile_time_args=trisc_named_compile_time_args,
             trisc_compute_config=ttnn.ComputeConfigDescriptor(
@@ -267,7 +255,6 @@ class RopeSingleCore:
                 trans_mat_cb_descriptor,
                 output_cb_descriptor,
                 rotated_interm_cb_descriptor,
-                cos_sin_interm_cb_descriptor,
             ],
         )
 

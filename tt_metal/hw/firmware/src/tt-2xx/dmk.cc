@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -32,8 +32,8 @@ extern "C" [[gnu::section(".start")]]
 uint32_t _start() {
     // Enable GPREL optimizations.
     // asm("0: .reloc 0b, R_RISCV_NONE, __global_pointer$");
-    mark_stack_usage();
 #if defined(DEBUG_NULL_KERNELS) && !defined(DISPATCH_KERNEL)
+    mark_stack_usage();
     wait_for_go_message();
 #ifdef KERNEL_RUN_TIME
     uint64_t end_time = c_tensix_core::read_wall_clock() + KERNEL_RUN_TIME;
@@ -50,7 +50,15 @@ uint32_t _start() {
     uint32_t thread_0_hartid = hartid;
     if (launch_msg->kernel_config.enables & (1u << hartid)) {
         for (uint32_t j = 0; j < MaxDMProcessorsPerCoreType; j++) {
-            if (launch_msg->kernel_config.kernel_text_offset[j] == my_kt) {
+            // DM0 and DM1 are reserved, so their kernel_text_offset[] slots are
+            // left zero-initialized. Skip reserved slots here, otherwise if the
+            // user binary happens to land at offset 0 (e.g. no RTAs/CRTAs/sems/CBs/DFBs
+            // precede it in the kernel-config ring buffer), the search would falsely
+            // match slot 0 and set thread_0_hartid = 0. DM0 never sets
+            // shared_globals_ready[0] = GO, so the user DMs hang forever in the
+            // wait loop below.
+            if ((launch_msg->kernel_config.enables & (1u << j)) &&
+                launch_msg->kernel_config.kernel_text_offset[j] == my_kt) {
                 thread_0_hartid = j;
                 break;
             }
@@ -73,9 +81,7 @@ uint32_t _start() {
     }
 
     if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
-#if defined(NOC_API_V2)
-        noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
-#endif
+        overlay_cmd_buff_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     }
 #ifdef ALIGN_LOCAL_CBS_TO_REMOTE_CBS
     ALIGN_LOCAL_CBS_TO_REMOTE_CBS
@@ -83,11 +89,15 @@ uint32_t _start() {
     wait_for_go_message();
     {
         DeviceZoneScopedMainChildN("BRISC-KERNEL");
-        EARLY_RETURN_FOR_DEBUG
 
         // Setup after the go signal so the previous kernel has completed.
         num_sw_threads = launch_msg->kernel_config.num_sw_threads[hartid];
         my_thread_id = launch_msg->kernel_config.kernel_thread_id[hartid];
+
+        // Paint stack after all thread_local writes and CRT init are done.
+        mark_stack_usage();
+
+        EARLY_RETURN_FOR_DEBUG
 
         WAYPOINT("K");
         kernel_main();

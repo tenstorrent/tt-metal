@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,7 +21,6 @@
 #endif
 
 #ifdef TRISC_PACK
-#include "llk_pack_api.h"
 #define PACK(x) x
 #define MAIN pack_main()
 #else

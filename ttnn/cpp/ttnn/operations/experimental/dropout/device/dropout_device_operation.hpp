@@ -1,19 +1,18 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include <functional>
 #include <optional>
+#include <variant>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "dropout_program_factory.hpp"
 
-#include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
-
 #include "dropout_device_operation_types.hpp"
+#include <tt-metalium/program_descriptors.hpp>
+#include "ttnn/distributed/types.hpp"
 
 namespace ttnn::experimental::prim {
 
@@ -23,7 +22,6 @@ struct DropoutDeviceOperation {
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<DropoutProgramFactory, DropoutMeshWorkloadFactory>;
-    using shared_variables_t = DropoutProgramFactory::shared_variables_t;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -31,7 +29,7 @@ struct DropoutDeviceOperation {
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
-    static tensor_return_value_t create_output_tensors(const operation_attributes_t& args, const tensor_args_t&);
+    static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,8 +17,14 @@ constexpr uint8_t NUM_LOCAL_SYNC_CORES = get_compile_time_arg_val(5);
 constexpr uint32_t KERNEL_CONFIG_BUFFER_SIZE = get_compile_time_arg_val(6);
 constexpr bool HAS_MUX_CONNECTIONS = get_compile_time_arg_val(7);
 constexpr uint8_t NUM_MUXES_TO_TERMINATE = get_compile_time_arg_val(8);
+constexpr uint8_t VC_ID = get_compile_time_arg_val(9);
 
-using SenderKernelConfigType = SenderKernelConfig<NUM_TRAFFIC_CONFIGS, IS_2D_FABRIC, LINE_SYNC, NUM_LOCAL_SYNC_CORES>;
+// Select the EDM sender adapter type based on VC_ID:
+// VC0/VC1 use WorkerToFabricEdmSender (stream ID 22), VC2 uses WorkerToFabricEdmSenderVC2 (stream ID 30)
+using EdmSenderType = std::conditional_t<VC_ID == 2, WorkerToFabricEdmSenderVC2, WorkerToFabricEdmSender>;
+
+using SenderKernelConfigType =
+    SenderKernelConfig<NUM_TRAFFIC_CONFIGS, IS_2D_FABRIC, LINE_SYNC, NUM_LOCAL_SYNC_CORES, EdmSenderType>;
 
 // Static assertion to ensure this config fits within the allocated kernel config region
 static_assert(
@@ -64,7 +70,7 @@ void kernel_main() {
 
     auto send_packets_stateful = [&](){
         auto* traffic_config = sender_config->traffic_config_ptrs[0];
-        auto* conn = static_cast<WorkerToFabricEdmSender*>(traffic_config->connection_ptr_);
+        auto* conn = static_cast<EdmSenderType*>(traffic_config->connection_ptr_);
         const uint32_t num_packets = traffic_config->metadata.num_packets;
         const uint32_t num_warmup = conn->num_buffers_per_channel;
 
@@ -112,10 +118,12 @@ void kernel_main() {
             // Periodically write progress updates (skip in BENCHMARK_MODE for performance)
             if constexpr (!BENCHMARK_MODE) {
                 if (loop_count % PROGRESS_UPDATE_INTERVAL == 0) {
-                    // Calculate total packets sent across all traffic configs
+                    auto* per_config_results = get_per_config_results(sender_config->get_result_buffer_address());
                     uint64_t progress_packets_sent = 0;
                     for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
-                        progress_packets_sent += sender_config->traffic_config_ptrs[i]->num_packets_processed;
+                        uint64_t config_packets = sender_config->traffic_config_ptrs[i]->num_packets_processed;
+                        progress_packets_sent += config_packets;
+                        write_per_config_result(&per_config_results[i], config_packets);
                     }
                     write_test_packets(sender_config->get_result_buffer_address(), progress_packets_sent);
                 }
@@ -137,10 +145,19 @@ void kernel_main() {
     // Terminate muxes and wait for completion
     mux_termination_manager.terminate_muxes();
 
-    // Collect results from all traffic configs
+    // Aggregate the per-config send counts for the final test_packets write.
+    // The per-config flush itself is skipped in BENCHMARK_MODE to avoid extra
+    // L1 writes on the exit path (per-config progress monitoring is disabled
+    // in benchmark mode anyway).
     for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
-        auto* traffic_config = sender_config->traffic_config_ptrs[i];
-        total_packets_sent += traffic_config->num_packets_processed;
+        total_packets_sent += sender_config->traffic_config_ptrs[i]->num_packets_processed;
+    }
+    if constexpr (!BENCHMARK_MODE) {
+        auto* per_config_results = get_per_config_results(sender_config->get_result_buffer_address());
+        for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
+            uint64_t config_packets = sender_config->traffic_config_ptrs[i]->num_packets_processed;
+            write_per_config_result(&per_config_results[i], config_packets);
+        }
     }
 
     // Write test results

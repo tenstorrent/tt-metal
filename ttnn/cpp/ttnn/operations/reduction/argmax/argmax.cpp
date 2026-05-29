@@ -1,11 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #include "device/argmax_device_operation.hpp"
 #include "device/argmax_utils.hpp"
 #include "ttnn/operations/reduction/argmax/argmax.hpp"
 #include "ttnn/operations/creation/creation.hpp"
-#include "ttnn/decorators.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 
 #include <utility>
@@ -67,7 +66,7 @@ Tensor argmax(
         return zero_volume_argmax(input_tensor, dim, keepdim, output_memory_config, optional_output_tensor);
     }
 
-    auto input_shape = input_tensor.logical_shape();
+    const auto& input_shape = input_tensor.logical_shape();
     auto rank = input_shape.size();
     if (rank == 0) [[unlikely]] {
         if (!optional_output_tensor.has_value()) {

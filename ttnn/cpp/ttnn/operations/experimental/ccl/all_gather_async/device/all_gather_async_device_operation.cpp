@@ -1,20 +1,45 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "all_gather_async_device_operation.hpp"
 #include "all_gather_async_device_operation_types.hpp"
 
+#include "ttnn/device_operation.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"  // for roofline calculation
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 
+#include <algorithm>
+
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/math.hpp>
 
 namespace ttnn::experimental::prim {
+
+namespace {
+
+bool via_broadcast_has_contiguous_output_slice(const Tensor& input_tensor, int32_t gather_dim) {
+    const auto& padded_shape = input_tensor.padded_shape();
+    std::vector<uint32_t> page_extents(padded_shape.begin(), padded_shape.end());
+    if (input_tensor.layout() == ttnn::TILE_LAYOUT) {
+        TT_FATAL(page_extents.size() >= 2, "Broadcast all-gather requires rank >= 2 for tile layout");
+        page_extents[page_extents.size() - 2] =
+            tt::div_up(page_extents[page_extents.size() - 2], tt::constants::TILE_HEIGHT);
+        page_extents[page_extents.size() - 1] =
+            tt::div_up(page_extents[page_extents.size() - 1], tt::constants::TILE_WIDTH);
+    }
+
+    return std::all_of(
+        page_extents.begin(), page_extents.begin() + gather_dim, [](const auto& extent) { return extent == 1; });
+}
+
+}  // namespace
 
 AllGatherAsyncVersion select_version(const AllGatherAsyncParams& operation_attributes) {
     // Check for minimal sharded case
@@ -167,6 +192,16 @@ void AllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
     } else {
         TT_FATAL(input_tensor.logical_shape().rank() == 4, "Llama specific all_gather requires tensor of rank 4");
     }
+
+    if (version == AllGatherAsyncVersion::VIA_BROADCAST) {
+        TT_FATAL(
+            via_broadcast_has_contiguous_output_slice(input_tensor, args.dim),
+            "Broadcast all-gather currently only supports gather dims whose preceding page-ordered dimensions are "
+            "singleton. Got dim {} with padded shape {} and layout {}",
+            args.dim,
+            input_tensor.padded_shape(),
+            input_tensor.layout());
+    }
 }
 
 AllGatherAsyncDeviceOperation::spec_return_value_t AllGatherAsyncDeviceOperation::compute_output_specs(
@@ -223,7 +258,7 @@ ttsl::hash::hash_t AllGatherAsyncDeviceOperation::compute_program_hash(
         program_factory.index());
 }
 
-std::tuple<AllGatherAsyncParams, AllGatherAsyncInputs> AllGatherAsyncDeviceOperation::invoke(
+std::tuple<AllGatherAsyncParams, AllGatherAsyncInputs> all_gather_async_build_operation_args(
     const Tensor& input_tensor,
     const std::optional<ttnn::Tensor>& persistent_output_buffer,
     int32_t dim,
@@ -303,4 +338,160 @@ std::tuple<AllGatherAsyncParams, AllGatherAsyncInputs> AllGatherAsyncDeviceOpera
         AllGatherAsyncInputs{.input_tensor = input_tensor, .persistent_output_buffer = persistent_output_buffer}};
 }
 
+tt::tt_metal::operation::OpPerformanceModelGeneral<AllGatherAsyncDeviceOperation::tensor_return_value_t>
+AllGatherAsyncDeviceOperation::create_op_performance_model(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor) {
+    // =========================================================================
+    // AllGather Roofline Performance Model (First-Principles)
+    //
+    // AllGather is pure data movement — no compute. The roofline is the
+    // hardware ceiling: the minimum time given the physical topology and
+    // memory bandwidth, independent of any particular algorithm.
+    //
+    // Performance is bounded by:
+    //   ideal_cycles = max(DRAM_bw_cycles, fabric_bw_cycles) + pipeline_latency
+    //
+    // --- Fabric term (bottleneck link analysis) ---
+    //
+    // For any topology the roofline is set by the most-loaded link.
+    // N devices, each contributing S bytes. Every device must receive
+    // the other (N-1) chunks.
+    //
+    // LINE topology:
+    //   The edge device has a single link to the rest of the network.
+    //   All (N-1) chunks must pass through that one link — no topology
+    //   can avoid this.
+    //   bottleneck_bytes = (N-1) * S.  Max hops = N-1.
+    //
+    // RING topology:
+    //   A bisection cut crosses 2 links. Data from N/2 devices on one
+    //   side must reach N/2 devices on the other, and vice-versa. Each
+    //   direction carries at most half the total load.
+    //   bottleneck_bytes = ceil((N-1) * S / 2).  Max hops = ceil((N-1)/2).
+    //
+    // --- DRAM term (memory bandwidth ceiling) ---
+    //
+    // Each device reads S bytes and writes N*S bytes. The roofline
+    // assumes all compute cores can drive DRAM concurrently (hardware
+    // maximum parallelism), so DRAM time = bytes / peak_aggregate_BW.
+    // =========================================================================
+
+    const auto& input_tensor = tensor_args.input_tensor;
+
+    // Architecture and clock detection
+    tt::ARCH arch = tt::ARCH::WORMHOLE_B0;
+    float clock_rate_ghz = 1.0f;
+    if (input_tensor.storage_type() == StorageType::DEVICE) {
+        arch = input_tensor.device()->arch();
+        clock_rate_ghz = input_tensor.device()->get_clock_rate_mhz() / 1000.0f;
+    }
+
+    // Data size: bytes each device contributes
+    const uint64_t input_size_bytes = input_tensor.physical_volume() * input_tensor.element_size();
+
+    const uint32_t N = args.ring_size;
+    const uint32_t num_links = args.num_links;
+    double fabric_time_ns = 0.0f;
+    if (N <= 1) {
+        // Single device: no fabric communication
+        fabric_time_ns = 0.0f;
+    } else if (tt::tt_fabric::is_ring_or_torus(args.topology)) {
+        // Ring topology: bisection cuts 2 links, so each direction carries
+        // at most half the total data. Bottleneck per direction = ceil((N-1)*S/2).
+        const uint64_t bottleneck_bytes = tt::div_up((N - 1) * input_size_bytes, 2);
+        fabric_time_ns =
+            ttnn::ccl::estimate_fabric_transfer_ns(arch, bottleneck_bytes, num_links, tt::div_up(N - 1, 2u));
+    } else {
+        // Line/Linear/Mesh topology: edge device has one link and must
+        // receive all (N-1) slices through it.
+        const uint64_t bottleneck_bytes = (N - 1) * input_size_bytes;
+        fabric_time_ns = ttnn::ccl::estimate_fabric_transfer_ns(arch, bottleneck_bytes, num_links, N - 1);
+    }
+
+    // Convert fabric time (ns) to device clock cycles.
+    // clock_rate_ghz cycles/ns * ns = cycles
+    const int fabric_cycles = static_cast<int>(std::ceil(fabric_time_ns * clock_rate_ghz));
+
+    // --- Local DRAM bandwidth ceiling (first-principles) ---
+    // Read: device reads S bytes from DRAM.  Write: device writes N*S bytes.
+    // Roofline assumes all device compute cores drive DRAM concurrently
+    // (hardware max parallelism). BW competes with fabric (max); latencies
+    // are additive (pipeline fill/drain).
+    const bool input_is_dram = input_tensor.buffer()->buffer_type() == BufferType::DRAM;
+    const bool output_is_dram = output_tensor.buffer()->buffer_type() == BufferType::DRAM;
+    const uint32_t read_page_size = input_tensor.buffer()->page_size();
+    const uint32_t write_page_size = output_tensor.buffer()->page_size();
+
+    // Hardware ceiling: total compute cores available to drive DRAM
+    const uint32_t device_rows = input_tensor.device()->compute_with_storage_grid_size().x;
+    const uint32_t device_cols = input_tensor.device()->compute_with_storage_grid_size().y;
+    const uint32_t num_cores = device_rows * device_cols;
+
+    const int64_t output_size_bytes = N * input_size_bytes;
+    const uint32_t read_pages = tt::div_up(input_size_bytes, read_page_size);
+    const uint32_t write_pages = tt::div_up(output_size_bytes, write_page_size);
+    const uint32_t read_pages_per_core = tt::div_up(read_pages, num_cores);
+    const uint32_t write_pages_per_core = tt::div_up(write_pages, num_cores);
+
+    auto [read_bw_cycles, read_latency_cycles] = ttnn::operations::data_movement::get_cycles_for_transaction_size(
+        read_page_size, input_is_dram, /*is_local=*/false, read_pages_per_core, arch, /*is_read=*/true);
+    auto [write_bw_cycles, write_latency_cycles] = ttnn::operations::data_movement::get_cycles_for_transaction_size(
+        write_page_size, output_is_dram, /*is_local=*/false, write_pages_per_core, arch, /*is_read=*/false);
+
+    const int local_bw_cycles = static_cast<int>(std::max(read_bw_cycles, write_bw_cycles));
+    const int pipeline_latency_cycles = static_cast<int>(read_latency_cycles + write_latency_cycles);
+    const int ideal_dev_clock_cycles = std::max(local_bw_cycles, fabric_cycles) + pipeline_latency_cycles;
+
+    tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
+        {input_tensor}, {output_tensor}, ideal_dev_clock_cycles);
+    return result;
+}
+
 }  // namespace ttnn::experimental::prim
+
+namespace ttnn::prim {
+
+Tensor all_gather_async(
+    const Tensor& input_tensor,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer,
+    int32_t dim,
+    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+    uint32_t num_links,
+    const std::optional<MemoryConfig>& memory_config,
+    ttnn::ccl::Topology topology,
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
+    const std::optional<uint32_t>& cluster_axis,
+    bool use_optimal_ccl_for_llama,
+    bool use_all_gather_async_llama_sharded,
+    bool use_all_gather_async_via_broadcast,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    const std::optional<uint32_t>& chunks_per_sync,
+    const std::optional<uint32_t>& num_workers_per_link,
+    const std::optional<uint32_t>& num_buffers_per_channel,
+    bool reverse_order,
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    const MeshDevice* optional_mesh_device) {
+    auto [params, inputs] = experimental::prim::all_gather_async_build_operation_args(
+        input_tensor,
+        persistent_output_buffer,
+        dim,
+        multi_device_global_semaphore,
+        num_links,
+        memory_config,
+        topology,
+        sub_device_id,
+        cluster_axis,
+        use_optimal_ccl_for_llama,
+        use_all_gather_async_llama_sharded,
+        use_all_gather_async_via_broadcast,
+        barrier_semaphore,
+        chunks_per_sync,
+        num_workers_per_link,
+        num_buffers_per_channel,
+        reverse_order,
+        sub_core_grid,
+        optional_mesh_device);
+    return ttnn::device_operation::launch<experimental::prim::AllGatherAsyncDeviceOperation>(params, inputs);
+}
+
+}  // namespace ttnn::prim

@@ -1,2 +1,2 @@
 gunicorn==21.2.0
-streamlit==1.40.1
+streamlit==1.54.0

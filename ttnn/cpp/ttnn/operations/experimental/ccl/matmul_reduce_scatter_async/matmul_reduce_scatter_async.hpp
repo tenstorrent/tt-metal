@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -29,7 +29,7 @@ std::vector<ttnn::Tensor> matmul_reduce_scatter_async(
     tt::tt_metal::CoreCoord reduce_scatter_core_grid_offset,
     const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt,
     const std::optional<const Tensor>& bias = std::nullopt,
-    uint32_t num_links = 1,
+    std::optional<uint32_t> num_links = std::nullopt,
     const std::optional<ttnn::MemoryConfig>& memory_config_rs = std::nullopt,
     const std::optional<ttnn::MemoryConfig>& intermediate_memory_config_rs = std::nullopt,
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -20,6 +20,9 @@ private:
     std::map<ChipId, std::shared_ptr<distributed::MeshDevice>> id_to_device_;
 
 protected:
+    static void SetUpTestSuite() {}
+    static void TearDownTestSuite() {}
+
     void SetUp() override {
         // Save time. Don't do any setup if invalid dispatch mode
         if (!this->validate_dispatch_mode()) {
@@ -94,6 +97,9 @@ public:
 
 class MeshDeviceSingleCardFixture : public MeshDispatchFixture {
 protected:
+    static void SetUpTestSuite() {}
+    static void TearDownTestSuite() {}
+
     void SetUp() override {
         if (!this->validate_dispatch_mode()) {
             GTEST_SKIP();
@@ -154,6 +160,21 @@ protected:
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         if (this->arch_ != tt::ARCH::BLACKHOLE) {
             GTEST_SKIP();
+        }
+        this->create_devices();
+        init_max_cbs();
+    }
+};
+
+class QuasarMeshDeviceSingleCardFixture : public MeshDeviceSingleCardFixture {
+protected:
+    void SetUp() override {
+        if (!this->validate_dispatch_mode()) {
+            GTEST_SKIP();
+        }
+        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        if (this->arch_ != tt::ARCH::QUASAR) {
+            GTEST_SKIP() << "Not a Quasar device";
         }
         this->create_devices();
         init_max_cbs();

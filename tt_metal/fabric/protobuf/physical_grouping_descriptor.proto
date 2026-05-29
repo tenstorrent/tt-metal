@@ -7,9 +7,12 @@ package tt.tt_fabric.proto;
 // in a declarative way without requiring explicit ASIC IDs.
 //
 // KEY DESIGN DECISIONS:
-// - ASIC locations (1-8) are predefined constants in the schema (enum values)
-// - Groupings can only reference ASIC locations OR other groupings
-// - ASIC locations are defined as an enum with values 1-8
+// - ASIC locations 0-8 are predefined enum constants (AsicLocation)
+// - Each grouping is either a leaf (every instance uses asic_location) or composite (every instance uses
+//   grouping_ref). A single grouping must not mix ASIC locations and grouping references in different
+//   instances (enforced by runtime validation in PhysicalGroupingDescriptor).
+// - Different groupings in the same descriptor may use different styles (e.g. one MESH leaf with ASIC
+//   locations, another MESH that only references trays).
 //
 // VALIDATION RULES - ALL ENCODED IN SCHEMA STRUCTURE:
 //
@@ -28,11 +31,12 @@ package tt.tt_fabric.proto;
 //   - All groupings: at least 1 instance required
 //   - ENFORCED BY: repeated Instance instances (must be non-empty)
 //
-// RULE 5: GROUPING STRUCTURE (ENFORCED BY SCHEMA STRUCTURE - repeated Instance)
-//   - Each Grouping contains a list of instances
-//   - Each instance must have a unique id and can be either an ASIC location OR a grouping reference (enforced by oneof)
-//   - ENFORCED BY: repeated Instance instances, where Instance has oneof { asic_location | grouping_ref }
-//   - Can mix ASIC locations and grouping references in the same grouping
+// RULE 5: GROUPING STRUCTURE (schema + runtime validation)
+//   - Each Grouping contains a list of instances with unique ids
+//   - Each Instance uses oneof { asic_location | grouping_ref } (exactly one per instance)
+//   - RUNTIME: Within one Grouping, all instances must use the same branch of that oneof — either every
+//     instance is an ASIC location (leaf grouping) or every instance is a grouping_ref (composite).
+//     Mixing ASIC locations and grouping references across instances in the same Grouping is invalid.
 //
 // Example textproto:
 //   # Using predefined keywords (preset_type)
@@ -40,8 +44,8 @@ package tt.tt_fabric.proto;
 //     name: "tray_1_cluster_0"
 //     preset_type: TRAY_1
 //     instances: [
-//       { id: 0 asic_location: ASIC_LOCATION_1 },
-//       { id: 1 asic_location: ASIC_LOCATION_2 },
+//       { id: 0 asic_location: ASIC_LOCATION_0 },
+//       { id: 1 asic_location: ASIC_LOCATION_1 },
 //       # ... through ASIC_LOCATION_8
 //     ]
 //   }
@@ -105,13 +109,11 @@ package tt.tt_fabric.proto;
     //     }
     //   }
 
-// ASIC Location - predefined constants for ASIC positions 1-8 within a tray
+// ASIC Location - predefined constants for ASIC positions 0-8 within a tray
 // These enum values are always available for use in grouping definitions
 enum AsicLocation {
-    // Reserved value - protobuf requires enum to start at 0
-    ASIC_LOCATION_UNSPECIFIED = 0;
-
-    // ASIC locations 1-8 (predefined constants)
+    // ASIC locations 0-8 (predefined constants)
+    ASIC_LOCATION_0 = 0;
     ASIC_LOCATION_1 = 1;
     ASIC_LOCATION_2 = 2;
     ASIC_LOCATION_3 = 3;
@@ -120,6 +122,11 @@ enum AsicLocation {
     ASIC_LOCATION_6 = 6;
     ASIC_LOCATION_7 = 7;
     ASIC_LOCATION_8 = 8;
+
+    // Unspecified location - means "any ASIC ID" (no constraint during solving)
+    // When used, the solver will not add an ASIC location constraint, allowing
+    // the ASIC to be assigned to any available ASIC ID
+    ASIC_LOCATION_UNSPECIFIED = 256;
 }
 
 // Predefined grouping keywords - special reserved names for preset groups

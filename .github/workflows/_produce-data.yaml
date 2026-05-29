@@ -34,6 +34,8 @@ on:
         type: boolean
   workflow_run:
     workflows:
+      # WARNING: workflows added here must not have square brackets in the name!
+      # See: https://github.com/tenstorrent/tt-metal/pull/42798
       - "Sanity tests"
       - "PR - Sanity tests"
       - "Sanity tests nightly debug run"
@@ -48,11 +50,16 @@ on:
       - "(T3K) T3000 integration tests"
       - "(T3K) T3000 perf tests"
       - "(T3K) T3000 e2e tests"
-      - "(T3K) T3000 perplexity tests"
       - "(T3K) T3000 profiler tests"
       - "(T3K) T3000 unit tests"
       - "(T3K) T3000 fast tests"
       - "(T3K) Choose your pipeline"
+      - "(Tier 1) Models End-To-End Tests"
+      - "(Tier 1) Models Unit Tests"
+      - "(Tier 2) Models End-To-End Tests"
+      - "(Tier 2) Models Unit Tests"
+      - "(Tier 3) Models End-To-End Tests"
+      - "(Tier 3) Models Unit Tests"
       - "(Galaxy) Choose your pipeline"
       - "ttnn - Run sweeps"
       - "ttnn stress tests"
@@ -75,10 +82,10 @@ on:
       - "(Galaxy) profiler tests"
       - "(Galaxy) Stress"
       - "(Galaxy) unit tests"
-      - "(Galaxy) Quick"
-      - "(Galaxy) Fast tests"
+      - "(Galaxy) Sanity"
+      - "(Galaxy) Health"
       - "(Galaxy) DeepSeek tests"
-      - "(TG) TG op perf tests"
+      - "DeepSeek V3 Multi-Host Tests"
       - "(TM-DM) Data Movement Test Suite"
       - "(TM-Fabric) Fabric Tests"
       - "Profiler CI"
@@ -91,17 +98,20 @@ on:
 jobs:
   produce-cicd-data:
     # Check if triggered by `workflow_run` with specific conclusion states,
-    # or if it's triggered by `workflow_call` or `workflow_dispatch`
+    # or if it's triggered by `workflow_call` or `workflow_dispatch`.
+    # Skip on forks — secrets (SFTP, Slack) are unavailable there and would
+    # cause failures that spam fork owners with email notifications.
     if: >-
-      ${{ (github.event_name == 'workflow_run' &&
-           (github.event.workflow_run.conclusion == 'success' ||
-            github.event.workflow_run.conclusion == 'failure' ||
-            github.event.workflow_run.conclusion == 'cancelled')) ||
-          github.event_name == 'workflow_call' ||
-          github.event_name == 'workflow_dispatch' }}
+      ${{ github.repository == 'tenstorrent/tt-metal' &&
+          ((github.event_name == 'workflow_run' &&
+            (github.event.workflow_run.conclusion == 'success' ||
+             github.event.workflow_run.conclusion == 'failure' ||
+             github.event.workflow_run.conclusion == 'cancelled')) ||
+           github.event_name == 'workflow_call' ||
+           github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           sparse-checkout: |
             .github
@@ -143,7 +153,7 @@ jobs:
           echo "run-id=$run_id" >> "$GITHUB_OUTPUT"
           echo "attempt-number=$attempt_number" >> "$GITHUB_OUTPUT"
 
-          echo "::notice title=target-workflow-link::The workflow being analyzed is available at https://github.com/tenstorrent/tt-metal/actions/runs/$run_id/attempts/$attempt_number"
+          echo "::notice title=target-workflow-link::The workflow being analyzed is available at https://github.com/tenstorrent/tt-metal/actions/runs/${run_id}/attempts/${attempt_number}"
       - name: Get API rate limit status
         env:
           GH_TOKEN: ${{ github.token }}
@@ -188,7 +198,7 @@ jobs:
           hostname: ${{ secrets.SFTP_CICD_WRITER_HOSTNAME }}
       - name: Upload workflow run data, even on failure
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         timeout-minutes: 10
         with:
           name: workflow-run-data
@@ -205,17 +215,20 @@ jobs:
           owner: U0883RN6CRE # William Ly
   test-produce-complete-benchmark-with-environment:
     # Check if triggered by `workflow_run` with specific conclusion states,
-    # or if it's triggered by `workflow_call` or `workflow_dispatch`
+    # or if it's triggered by `workflow_call` or `workflow_dispatch`.
+    # Skip on forks — secrets (SFTP, Slack) are unavailable there and would
+    # cause failures that spam fork owners with email notifications.
     if: >-
-      ${{ (github.event_name == 'workflow_run' &&
-           (github.event.workflow_run.conclusion == 'success' ||
-            github.event.workflow_run.conclusion == 'failure' ||
-            github.event.workflow_run.conclusion == 'cancelled')) ||
-          github.event_name == 'workflow_call' ||
-          github.event_name == 'workflow_dispatch' }}
+      ${{ github.repository == 'tenstorrent/tt-metal' &&
+          ((github.event_name == 'workflow_run' &&
+            (github.event.workflow_run.conclusion == 'success' ||
+             github.event.workflow_run.conclusion == 'failure' ||
+             github.event.workflow_run.conclusion == 'cancelled')) ||
+           github.event_name == 'workflow_call' ||
+           github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           sparse-checkout: |
             .github

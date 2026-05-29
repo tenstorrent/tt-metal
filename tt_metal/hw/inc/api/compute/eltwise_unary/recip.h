@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,7 +11,6 @@
 #endif
 
 namespace ckernel {
-
 /**
  * Please refer to documentation for any_init.
  */
@@ -30,13 +29,12 @@ ALWI void recip_tile_init() { MATH(SFPU_THREE_TEMPLATE_PARAM_INIT(reciprocal, sf
  * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
  * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | vector_mode | Specifies the vector mode for computation (e.g., Row, Column). (default: VectorMode::RC) | int      | Subject to specific hardware/kernel limits          | False    |
+ * | vector_mode | Specifies the vector mode for computation (e.g., Row, Column). (default: VectorMode::RC) | VectorMode | Subject to specific hardware/kernel limits          | False    |
  */
 // clang-format on
 template <bool legacy_compat = true>
-ALWI void recip_tile(uint32_t idst, int vector_mode = (int)VectorMode::RC) {
+ALWI void recip_tile(uint32_t idst, VectorMode vector_mode = VectorMode::RC) {
     MATH(SFPU_FOUR_PARAM_KERNEL_FP32_FIRST_FN(
         calculate_reciprocal, APPROX, DST_ACCUM_MODE, 8, legacy_compat, idst, vector_mode));
 }
-
 }  // namespace ckernel

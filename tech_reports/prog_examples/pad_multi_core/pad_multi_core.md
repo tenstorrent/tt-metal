@@ -324,11 +324,11 @@ Once the reader kernel is finished padding the tensor and storing the new data i
 # Dispatch program to device for execution
 
 ``` cpp
-distributed::EnqueueWriteMeshBuffer(cq, src_buffer, src_vec.data(), false);
-distributed::EnqueueWriteMeshBuffer(cq, pad_buffer, pad_vec.data(), false);
+distributed::EnqueueWriteMeshBuffer(cq, src_buffer, src_vec, false);
+distributed::EnqueueWriteMeshBuffer(cq, pad_buffer, pad_vec, false);
 workload.add_program(device_range, std::move(program));
 distributed::EnqueueMeshWorkload(cq, workload, false);
-distributed::EnqueueReadMeshBuffer(cq, dst_buffer, dst_vec.data(), false);
+distributed::EnqueueReadMeshBuffer(cq, dst_buffer, dst_vec.data(), true);
 distributed::Finish(cq);
 /* ... */
 mesh_device->close();

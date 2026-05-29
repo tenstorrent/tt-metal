@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,6 +7,8 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
+#include "sfpu/ckernel_sfpu_binary.h"
+#include "sfpu/ckernel_sfpu_recip.h"
 
 using namespace sfpi;
 
@@ -79,7 +81,7 @@ inline void calculate_sfpu_binary_div(const uint dst_index_in0, const uint dst_i
             v_if(in0 == 0) { result = std::numeric_limits<float>::quiet_NaN(); }
             v_else {
                 result = std::numeric_limits<float>::infinity();
-                result = sfpi::setsgn(result, in0);
+                result = sfpi::copysgn(result, in0);
             }
             v_endif;
         }

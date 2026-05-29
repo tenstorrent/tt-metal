@@ -1,16 +1,17 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <cmath>
 #include <tuple>
 
 #include "autograd/auto_context.hpp"
-#include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/ops/layernorm_bw/layernorm_bw.hpp"
+#include "test_utils/random_data.hpp"
 
 // Reference implementation using xtensor
 struct LayerNormCache {
@@ -114,26 +115,22 @@ static void CompareKernelVsXArray(
         uint32_t total_elements = batch_size * seq_len * heads * features;
         uint32_t combined_batch = batch_size * seq_len * heads;
 
-        xt::xarray<float> x_data = xt::empty<float>({total_elements});
-        auto rng = autograd::ctx().get_generator();
+        auto& rng = autograd::ctx().get_generator();
         uint32_t seed1 = rng();
-        core::parallel_generate<float>(
-            x_data, []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); }, seed1);
+        xt::xarray<float> x_data =
+            test_utils::make_uniform_xarray<float>(std::array<std::size_t, 1>{total_elements}, -1.0F, 1.0F, seed1);
 
-        xt::xarray<float> gamma_data = xt::empty<float>({features});
         uint32_t seed2 = rng();
-        core::parallel_generate<float>(
-            gamma_data, []() { return std::uniform_real_distribution<float>(0.0F, 1.0F); }, seed2);
+        xt::xarray<float> gamma_data =
+            test_utils::make_uniform_xarray<float>(std::array<std::size_t, 1>{features}, 0.0F, 1.0F, seed2);
 
-        xt::xarray<float> beta_data = xt::empty<float>({features});
         uint32_t seed3 = rng();
-        core::parallel_generate<float>(
-            beta_data, []() { return std::uniform_real_distribution<float>(0.0F, 1.0F); }, seed3);
+        xt::xarray<float> beta_data =
+            test_utils::make_uniform_xarray<float>(std::array<std::size_t, 1>{features}, 0.0F, 1.0F, seed3);
 
-        xt::xarray<float> dy_data = xt::empty<float>({total_elements});
         uint32_t seed4 = rng();
-        core::parallel_generate<float>(
-            dy_data, []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); }, seed4);
+        xt::xarray<float> dy_data =
+            test_utils::make_uniform_xarray<float>(std::array<std::size_t, 1>{total_elements}, -1.0F, 1.0F, seed4);
 
         // Compute reference results
         auto [y_ref, cache] =

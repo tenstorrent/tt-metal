@@ -1,8 +1,9 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+from models.tt_transformers.tt.ccl import get_num_links
 
 
 class CCL:
@@ -42,6 +43,10 @@ class CCL:
                 )
                 self.barrier_sems[-1].append(ttnn.create_global_semaphore(self.mesh_device, self.core_range_set, 0))
 
+        # NOTE: these do not have to be double buffered, due to the synchronization between all_to_all_dispatch_metadata and selective_reduce_combine inside the MoE block
+        self.all_to_all_dispatch_metadata_sem = ttnn.create_global_semaphore(self.mesh_device, self.core_range_set, 0)
+        self.selective_reduce_combine_sem = ttnn.create_global_semaphore(self.mesh_device, self.core_range_set, 0)
+
         # Synchronize the device to ensure that the semaphores are created
         ttnn.synchronize_device(self.mesh_device)
 
@@ -53,9 +58,8 @@ class CCL:
     def get_max_links(self, axis):
         """
         Get the maximum number of links for the given axis.
-        Legacy TG used to have fewer links on axis 1, 6U has no such limitation
         """
-        return 4
+        return get_num_links(self.mesh_device, cluster_axis=axis)
 
     def _get_sem_and_update_counter(self, sem_list, counter_list, axis):
         """
@@ -177,6 +181,38 @@ class CCL:
 
         # Get runtime CCL parameters for reduce_scatter
         ccl_params = self.get_ccl_params_for_reduce_scatter(cluster_axis)
+
+        # Merge static config with runtime CCL parameters
+        return {**ccl_config, **ccl_params}
+
+    def populate_all_to_all_dispatch_metadata_args(self, ccl_config: dict) -> dict:
+        """Populate all_to_all_dispatch runtime arguments (semaphore) into the config.
+        Args:
+            ccl_config: Static CCL configuration dict
+        Returns:
+            Complete configuration dict with both static and runtime parameters
+        Example:
+            ttnn.experimental.all_to_all_dispatch_metadata(x, **ccl.populate_all_to_all_dispatch_metadata_args(cfg["all_to_all_dispatch_metadata"]))
+        """
+
+        # Get runtime CCL parameters for all_to_all_dispatch_metadata
+        ccl_params = {"cross_device_semaphore": self.all_to_all_dispatch_metadata_sem}
+
+        # Merge static config with runtime CCL parameters
+        return {**ccl_config, **ccl_params}
+
+    def populate_selective_reduce_combine_args(self, ccl_config: dict) -> dict:
+        """Populate selective_reduce_combine runtime arguments (semaphore) into the config.
+        Args:
+            ccl_config: Static CCL configuration dict
+        Returns:
+            Complete configuration dict with both static and runtime parameters
+        Example:
+            ttnn.experimental.selective_reduce_combine(x, **ccl.populate_selective_reduce_combine_args(cfg["selective_reduce_combine"]))
+        """
+
+        # Get runtime CCL parameters for selective_reduce_combine
+        ccl_params = {"optional_cross_device_semaphore": self.selective_reduce_combine_sem}
 
         # Merge static config with runtime CCL parameters
         return {**ccl_config, **ccl_params}

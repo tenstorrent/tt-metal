@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -107,6 +107,7 @@ class Conv2d(Module):
         in_mesh_axis: int | None = None,
         out_mesh_axis: int | None = None,
         ccl_manager: CCLManager | None = None,
+        use_barrier: bool = True,
     ) -> None:
         """
         Initialize the Conv2d layer. Set mesh_axis to None to disable mesh parallelism. Only TP is supported currently.
@@ -176,6 +177,7 @@ class Conv2d(Module):
         self.in_mesh_axis_size = in_mesh_axis_size
         self.out_mesh_axis_size = out_mesh_axis_size
         self.ccl_manager = ccl_manager
+        self.use_barrier = use_barrier
 
     @classmethod
     def from_torch(
@@ -247,7 +249,7 @@ class Conv2d(Module):
             and self.out_mesh_axis_size != 1
             and c == self.in_channels // self.out_mesh_axis_size
         ):
-            x = vae_all_gather(self.ccl_manager, x, cluster_axis=self.out_mesh_axis)
+            x = vae_all_gather(self.ccl_manager, x, cluster_axis=self.out_mesh_axis, use_barrier=self.use_barrier)
         else:
             expected_c = self.in_channels // self.in_mesh_axis_size
             if c != expected_c:

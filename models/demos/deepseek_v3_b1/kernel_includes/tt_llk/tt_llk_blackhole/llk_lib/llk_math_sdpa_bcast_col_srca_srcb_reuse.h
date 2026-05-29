@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -32,17 +32,17 @@ inline void sdpa_bcast_col_srca_srcb_reuse_configure_mop(
     });
 
     uint d2a_instr = lltt::replay_insn(ckernel::math::replay_buf_offset, 2);
-    if constexpr (eltwise_binary_type == ELWADD) {
+    if constexpr (eltwise_binary_type == EltwiseBinaryType::ELWADD) {
         ckernel_template tmp(
             1, num_faces, d2a_instr, TT_OP_ELWADD(p_setrwc::CLR_NONE, acc_to_dest, broadcast_type, ADDR_MOD_0, 0));
         tmp.set_last_outer_loop_instr(TT_OP_ELWADD(p_setrwc::CLR_NONE, acc_to_dest, broadcast_type, ADDR_MOD_2, 0));
         tmp.program();
-    } else if constexpr (eltwise_binary_type == ELWSUB) {
+    } else if constexpr (eltwise_binary_type == EltwiseBinaryType::ELWSUB) {
         ckernel_template tmp(
             1, num_faces, d2a_instr, TT_OP_ELWSUB(p_setrwc::CLR_NONE, acc_to_dest, broadcast_type, ADDR_MOD_0, 0));
         tmp.set_last_outer_loop_instr(TT_OP_ELWSUB(p_setrwc::CLR_NONE, acc_to_dest, broadcast_type, ADDR_MOD_2, 0));
         tmp.program();
-    } else if constexpr (eltwise_binary_type == ELWMUL) {
+    } else if constexpr (eltwise_binary_type == EltwiseBinaryType::ELWMUL) {
         if constexpr (high_fidelity) {
             ckernel_template tmp(
                 num_faces,
@@ -121,7 +121,8 @@ inline void sdpa_bcast_col_srca_srcb_reuse_configure_addrmod(const std::uint32_t
     constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
     // Use srcA for data movement
     if constexpr (
-        (eltwise_binary_type == ELWADD) || (eltwise_binary_type == ELWSUB) || (eltwise_binary_type == ELWMUL)) {
+        (eltwise_binary_type == EltwiseBinaryType::ELWADD) || (eltwise_binary_type == EltwiseBinaryType::ELWSUB) ||
+        (eltwise_binary_type == EltwiseBinaryType::ELWMUL)) {
         addr_mod_t{
             .srca = {.incr = 0},
             .srcb = {.incr = 0},
@@ -129,7 +130,7 @@ inline void sdpa_bcast_col_srca_srcb_reuse_configure_addrmod(const std::uint32_t
         }
             .set(ADDR_MOD_1);
 
-        if constexpr (eltwise_binary_type == ELWMUL && high_fidelity) {
+        if constexpr (eltwise_binary_type == EltwiseBinaryType::ELWMUL && high_fidelity) {
             addr_mod_t{
                 .srca = {.incr = 0},
                 .srcb = {.incr = 0},
@@ -176,7 +177,8 @@ inline void _llk_math_sdpa_bcast_col_srca_srcb_reuse_init_(
         num_faces);
 
     if constexpr (
-        (eltwise_binary_type == ELWADD) || (eltwise_binary_type == ELWSUB) || (eltwise_binary_type == ELWMUL)) {
+        (eltwise_binary_type == EltwiseBinaryType::ELWADD) || (eltwise_binary_type == EltwiseBinaryType::ELWSUB) ||
+        (eltwise_binary_type == EltwiseBinaryType::ELWMUL)) {
         sdpa_bcast_col_srca_srcb_reuse_configure_mop<eltwise_binary_type, num_tiles, math_fidelity>(
             num_faces, acc_to_dest);
     }

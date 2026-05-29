@@ -1,8 +1,8 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "binary_composite_op.hpp"
+#include <type_traits>
 #include <utility>
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/binary_ng_device_operation.hpp"
@@ -20,11 +20,14 @@
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/device.hpp"
 #include <variant>
+#include <tt-metalium/sub_device_types.hpp>
 
-namespace ttnn::operations::binary {
+namespace ttnn {
+
+using namespace operations;
 
 // nextafter
-Tensor _nextafter(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor nextafter(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     const float eps = tt::tt_metal::hal::get_eps();
     Tensor result(input_a);
     {
@@ -43,30 +46,7 @@ Tensor _nextafter(const Tensor& input_a, const Tensor& input_b, const std::optio
     return result;
 }
 
-// ∣input−other∣≤ atol+rtol×∣other∣
-Tensor _isclose(
-    const Tensor& input_a,
-    const Tensor& input_b,
-    float rtol,
-    float atol,
-    bool equal_nan,
-    const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor value1 = input_a;
-    Tensor value2 = input_b;
-    if (!equal_nan) {
-        value1 = ttnn::where(ttnn::isnan(value1, output_mem_config), 1.0f, value1);
-        value2 = ttnn::where(ttnn::isnan(value2, output_mem_config), 0.0f, value2);
-    }
-    Tensor is_close_lhs = ttnn::abs(ttnn::subtract(value1, value2, std::nullopt, output_mem_config), output_mem_config);
-    Tensor is_close_rhs = input_b;
-    Tensor mul_result = ttnn::multiply(ttnn::abs(value2, output_mem_config), rtol, std::nullopt, output_mem_config);
-    is_close_rhs = ttnn::add(mul_result, atol, std::nullopt, output_mem_config);
-    mul_result.deallocate();
-    Tensor result = ttnn::where(ttnn::le(is_close_lhs, is_close_rhs, std::nullopt, output_mem_config), 1.f, 0.f);
-    return result;
-}
-
-Tensor ExecuteMinimum::invoke(
+Tensor minimum(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const std::optional<const DataType>& /*output_dtype*/,
@@ -74,21 +54,20 @@ Tensor ExecuteMinimum::invoke(
     const std::optional<Tensor>& optional_output_tensor,
     ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
-    std::optional<bool> use_legacy) {
-    return BinaryOperationSfpu<operations::binary::BinaryOpType::MINIMUM>::invoke(
+    ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations) {
+    return ttnn::detail::invoke_binary_ng(
         input_tensor_a,
         input_tensor_b,
+        binary::BinaryOpType::MINIMUM,
         std::nullopt,
         memory_config,
         optional_output_tensor,
         post_activations,
         lhs_activations,
-        rhs_activations,
-        use_legacy);
+        rhs_activations);
 }
 
-Tensor ExecuteMinimum::invoke(
+Tensor minimum(
     const Tensor& input_a,
     unary::ScalarVariant value,
     const std::optional<const DataType>& /*output_dtype*/,
@@ -96,17 +75,19 @@ Tensor ExecuteMinimum::invoke(
     const std::optional<Tensor>& optional_output_tensor,
     ttsl::Span<const unary::EltwiseUnaryWithParam> /*post_activations*/,
     ttsl::Span<const unary::EltwiseUnaryWithParam> /*lhs_activations*/,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> /*rhs_activations*/,
-    std::optional<bool> /*use_legacy*/) {
+    ttsl::Span<const unary::EltwiseUnaryWithParam> /*rhs_activations*/) {
     return std::visit(
         [&](auto input_b) {
-            return ttnn::operations::unary::ExecuteUnaryTSVariant<ttnn::operations::unary::UnaryOpType::MINIMUM>::
-                invoke(input_a, input_b, memory_config, optional_output_tensor);
+            return ttnn::operations::unary::detail::unary_impl(
+                input_a,
+                {unary::EltwiseUnaryWithParam{unary::UnaryOpType::MINIMUM, (input_b)}},
+                memory_config,
+                optional_output_tensor);
         },
         value);
 }
 
-Tensor ExecuteMaximum::invoke(
+Tensor maximum(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const std::optional<const DataType>& /*output_dtype*/,
@@ -114,21 +95,20 @@ Tensor ExecuteMaximum::invoke(
     const std::optional<Tensor>& optional_output_tensor,
     ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
-    std::optional<bool> use_legacy) {
-    return BinaryOperationSfpu<operations::binary::BinaryOpType::MAXIMUM>::invoke(
+    ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations) {
+    return ttnn::detail::invoke_binary_ng(
         input_tensor_a,
         input_tensor_b,
+        binary::BinaryOpType::MAXIMUM,
         std::nullopt,
         memory_config,
         optional_output_tensor,
         post_activations,
         lhs_activations,
-        rhs_activations,
-        use_legacy);
+        rhs_activations);
 }
 
-Tensor ExecuteMaximum::invoke(
+Tensor maximum(
     const Tensor& input_a,
     unary::ScalarVariant value,
     const std::optional<const DataType>& /*output_dtype*/,
@@ -136,187 +116,156 @@ Tensor ExecuteMaximum::invoke(
     const std::optional<Tensor>& optional_output_tensor,
     ttsl::Span<const unary::EltwiseUnaryWithParam> /*post_activations*/,
     ttsl::Span<const unary::EltwiseUnaryWithParam> /*lhs_activations*/,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> /*rhs_activations*/,
-    std::optional<bool> /*use_legacy*/) {
+    ttsl::Span<const unary::EltwiseUnaryWithParam> /*rhs_activations*/) {
     return std::visit(
         [&](auto input_b) {
-            return ttnn::operations::unary::ExecuteUnaryTSVariant<ttnn::operations::unary::UnaryOpType::MAXIMUM>::
-                invoke(input_a, input_b, memory_config, optional_output_tensor);
+            return ttnn::operations::unary::detail::unary_impl(
+                input_a,
+                {unary::EltwiseUnaryWithParam{unary::UnaryOpType::MAXIMUM, (input_b)}},
+                memory_config,
+                optional_output_tensor);
         },
         value);
 }
 
-Tensor _atan2(const Tensor& input_b, const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {
-    log_info(tt::LogOp, "Input arguments for the atan2 function are in the format (y, x)");
-    Tensor result(input_a);
-    {
-        Tensor atan_input =
-            ttnn::multiply(input_b, ttnn::reciprocal(input_a, output_mem_config), std::nullopt, output_mem_config);
-        result = ttnn::atan(atan_input, output_mem_config);
-    }
-    Tensor res(result);
-    {
-        Tensor ia_gtz = ttnn::gtz(input_a, output_mem_config);
-        Tensor ia_ltz = ttnn::ltz(input_a, output_mem_config);
-        Tensor ib_ltz = ttnn::ltz(input_b, output_mem_config);
-
-        Tensor altz_bgte = ttnn::logical_and(ia_ltz, ttnn::ge(input_b, 0.0), std::nullopt, output_mem_config);
-        Tensor altz_bltz = ttnn::logical_and(ia_ltz, ib_ltz, std::nullopt, output_mem_config);
-
-        Tensor a_eqz = ttnn::eqz(input_a, output_mem_config);
-        Tensor b_gtz = ttnn::gtz(input_b, output_mem_config);
-        Tensor b_eqz = ttnn::eqz(input_b, output_mem_config);
-
-        Tensor az_bltz = ttnn::logical_and(a_eqz, ib_ltz, std::nullopt, output_mem_config);
-        Tensor az_bgtz = ttnn::logical_and(a_eqz, b_gtz, std::nullopt, output_mem_config);
-        Tensor az_bz = ttnn::logical_and(a_eqz, b_eqz, std::nullopt, output_mem_config);
-        float pi_2 = M_PI_2;
-        res = ttnn::where(
-            ia_gtz,
-            result,
-            ttnn::where(
-                altz_bgte,
-                ttnn::add(result, M_PI, std::nullopt, output_mem_config),
-                ttnn::where(
-                    altz_bltz,
-                    ttnn::subtract(result, M_PI, std::nullopt, output_mem_config),
-                    ttnn::where(az_bltz, -pi_2, ttnn::where(az_bgtz, pi_2, 0.f, output_mem_config), output_mem_config),
-                    output_mem_config),
-                output_mem_config),
-            output_mem_config);
-    }
-    return res;
+Tensor atan2(const Tensor& input_b, const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {
+    return ttnn::detail::invoke_binary_ng(
+        input_b,
+        input_a,
+        binary::BinaryOpType::ATAN2,
+        std::nullopt,
+        output_mem_config,
+        std::nullopt,
+        {},
+        {},
+        {},
+        std::nullopt);
 }
 
-Tensor ExecuteDiv::invoke(
+Tensor div(
     const Tensor& input,
     float value,
     bool fast_and_approximate_mode,
     const std::optional<std::string>& rounding_mode,
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> output_tensor,
-    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations,
-    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
-    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
-    const std::optional<bool>& use_legacy,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
-    const auto has_legacy_only_args = rounding_mode.has_value();
+    const std::optional<Tensor>& output_tensor,
+    ttsl::Span<const ttnn::unary::EltwiseUnaryWithParam> post_activations,
+    ttsl::Span<const ttnn::unary::EltwiseUnaryWithParam> lhs_activations,
+    ttsl::Span<const ttnn::unary::EltwiseUnaryWithParam> rhs_activations,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     const bool is_int32 = input.dtype() == DataType::INT32;
 
     if (is_int32) {
         TT_FATAL(
-            (!use_legacy.value_or(false) && !fast_and_approximate_mode),
-            "Integer Division does not support use_legacy=true {} or fast_and_approximate_mode=true {}",
-            use_legacy,
+            !fast_and_approximate_mode,
+            "Integer Division does not support fast_and_approximate_mode=true {}",
             fast_and_approximate_mode);
         // fast_and_approximate_mode is not supported for integer division yet.
 
         if (rounding_mode == "floor") {
-            return BinaryOperation<BinaryOpType::DIV_FLOOR>::invoke(
+            return ttnn::detail::invoke_binary_ng(
                 input,
                 value,
+                binary::BinaryOpType::DIV_FLOOR,
                 std::nullopt,
                 output_mem_config,
                 output_tensor,
                 post_activations,
                 lhs_activations,
                 rhs_activations,
-                std::nullopt,
-                sub_core_grids);
+                /*fast_and_approximate_mode=*/std::nullopt,
+                sub_core_grids,
+                sub_device_id);
         }
         if (rounding_mode == "trunc") {
-            return BinaryOperation<BinaryOpType::DIV_TRUNC>::invoke(
+            return ttnn::detail::invoke_binary_ng(
                 input,
                 value,
+                binary::BinaryOpType::DIV_TRUNC,
                 std::nullopt,
                 output_mem_config,
                 output_tensor,
                 post_activations,
                 lhs_activations,
                 rhs_activations,
-                std::nullopt,
-                sub_core_grids);
+                /*fast_and_approximate_mode=*/std::nullopt,
+                sub_core_grids,
+                sub_device_id);
         }
         // rounding_mode = None
         TT_FATAL(
             (!output_dtype.has_value() || output_dtype == DataType::FLOAT32),
             "Incorrect output_dtype value for Integer Division(rounding_mode=None) ; valid input values are None or "
             "ttnn.float32");
-        return BinaryOperationWithFastApprox<BinaryOpType::DIV>::invoke(
+        return ttnn::detail::invoke_binary_ng(
             input,
             value,
+            binary::BinaryOpType::DIV,
             std::nullopt,
             output_mem_config,
             output_tensor,
             post_activations,
             lhs_activations,
             rhs_activations,
-            std::nullopt,  // use_legacy
             std::nullopt,  // fast_and_approximate_mode
-            sub_core_grids);
+            sub_core_grids,
+            sub_device_id);
     }
 
-    if (!(use_legacy ? *use_legacy
-                     : (has_legacy_only_args ||
-                        binary::is_legacy_only(
-                            input, value, output_mem_config, output_tensor, lhs_activations, rhs_activations)))) {
-        TT_FATAL(!has_legacy_only_args, "rounding_mode is not valid when use_legacy parameter is false");
-
-        return BinaryOperationWithFastApprox<BinaryOpType::DIV>::invoke(
+    // Non-int32 inputs: with rounding_mode=None, use DIV directly; with "trunc"/"floor",
+    // compute the float divide then apply trunc/floor rounding.
+    if (!rounding_mode.has_value()) {
+        return ttnn::detail::invoke_binary_ng(
             input,
             value,
+            binary::BinaryOpType::DIV,
             std::nullopt,
             output_mem_config,
             output_tensor,
             post_activations,
             lhs_activations,
             rhs_activations,
-            use_legacy,
             fast_and_approximate_mode,
-            sub_core_grids);
+            sub_core_grids,
+            sub_device_id);
     }
 
     TT_FATAL(
-        (rounding_mode == std::nullopt || rounding_mode == "trunc" || rounding_mode == "floor"),
+        (rounding_mode == "trunc" || rounding_mode == "floor"),
         "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
-    if (output_tensor.has_value()) {
-        ttnn::divide(
-            input,
-            value,
-            std::nullopt,
-            output_mem_config,
-            output_tensor,
-            post_activations,
-            lhs_activations,
-            rhs_activations,
-            std::nullopt,
-            fast_and_approximate_mode,
-            sub_core_grids);
-    } else {
-        output_tensor = ttnn::divide(
-            input,
-            value,
-            std::nullopt,
-            output_mem_config,
-            output_tensor,
-            post_activations,
-            lhs_activations,
-            rhs_activations,
-            std::nullopt,
-            fast_and_approximate_mode,
-            sub_core_grids);
-    }
+
+    // Workaround for a known bfloat16 fast_and_approximate divide bug (issue #43209):
+    // 0/0 returns 0 instead of NaN, and sign-of-zero is lost. The pre-legacy-removal
+    // path used a float32 typecast as a safety guard; we restore the same invariant by
+    // suppressing fast_and_approximate on bfloat16 inside the rounding-mode branch.
+    // The rounding_mode=None case is documented via the existing test skip in
+    // tests/ttnn/unit_tests/operations/eltwise/test_binary_fp32.py. Remove this
+    // workaround when #43209 is fixed.
+    const bool suppress_fap = fast_and_approximate_mode && input.dtype() == DataType::BFLOAT16;
+    const bool effective_fap = suppress_fap ? false : fast_and_approximate_mode;
+
+    std::optional<Tensor> divided = ttnn::divide(
+        input,
+        value,
+        std::nullopt,
+        output_mem_config,
+        output_tensor,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        effective_fap,
+        sub_core_grids,
+        sub_device_id);
 
     if (rounding_mode == "trunc") {
-        ttnn::trunc(output_tensor.value(), output_mem_config, output_tensor, sub_core_grids);
-    } else if (rounding_mode == "floor") {
-        ttnn::floor(output_tensor.value(), output_mem_config, output_tensor, sub_core_grids);
+        return ttnn::trunc(divided.value(), output_mem_config, output_tensor, sub_core_grids);
     }
-    return output_tensor.value();
+    return ttnn::floor(divided.value(), output_mem_config, output_tensor, sub_core_grids);
 }
 
-Tensor ExecuteDiv::invoke(
+Tensor div(
     const Tensor& input_a,
     const Tensor& input_b,
     bool fast_and_approximate_mode,
@@ -324,148 +273,130 @@ Tensor ExecuteDiv::invoke(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<Tensor>& output_tensor,
-    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations,
-    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
-    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
-    const std::optional<bool>& use_legacy,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    ttsl::Span<const ttnn::unary::EltwiseUnaryWithParam> post_activations,
+    ttsl::Span<const ttnn::unary::EltwiseUnaryWithParam> lhs_activations,
+    ttsl::Span<const ttnn::unary::EltwiseUnaryWithParam> rhs_activations,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     DataType input_dtype = input_a.dtype();
-    const bool is_fp32 = input_dtype == DataType::FLOAT32 && input_b.dtype() == DataType::FLOAT32;
     const bool is_int32 = input_dtype == DataType::INT32 && input_b.dtype() == DataType::INT32;
-    // Only force legacy mode if rounding_mode is set and inputs are not of INT32 dtype
-    const auto has_legacy_only_args = (rounding_mode.has_value() && !is_int32);
 
     if (is_int32) {
         TT_FATAL(
-            (!use_legacy.value_or(false) && !fast_and_approximate_mode),
-            "Integer Division does not support use_legacy=true {} or fast_and_approximate_mode=true {}",
-            use_legacy,
+            !fast_and_approximate_mode,
+            "Integer Division does not support fast_and_approximate_mode=true {}",
             fast_and_approximate_mode);
         // fast_and_approximate_mode is not supported for integer division yet.
 
         if (rounding_mode == "floor") {
-            return BinaryOperation<BinaryOpType::DIV_FLOOR>::invoke(
+            return ttnn::detail::invoke_binary_ng(
                 input_a,
                 input_b,
+                binary::BinaryOpType::DIV_FLOOR,
                 std::nullopt,
                 output_mem_config,
                 output_tensor,
                 post_activations,
                 lhs_activations,
                 rhs_activations,
-                std::nullopt,
-                sub_core_grids);
+                /*fast_and_approximate_mode=*/std::nullopt,
+                sub_core_grids,
+                sub_device_id);
         }
         if (rounding_mode == "trunc") {
-            return BinaryOperation<BinaryOpType::DIV_TRUNC>::invoke(
+            return ttnn::detail::invoke_binary_ng(
                 input_a,
                 input_b,
+                binary::BinaryOpType::DIV_TRUNC,
                 std::nullopt,
                 output_mem_config,
                 output_tensor,
                 post_activations,
                 lhs_activations,
                 rhs_activations,
-                std::nullopt,
-                sub_core_grids);
+                /*fast_and_approximate_mode=*/std::nullopt,
+                sub_core_grids,
+                sub_device_id);
         }
         // rounding_mode = None
         TT_FATAL(
             (!output_dtype.has_value() || output_dtype == DataType::FLOAT32),
             "Incorrect output_dtype value for Integer Division(rounding_mode=None) ; valid input values are None or "
             "ttnn.float32");
-        return BinaryOperationWithFastApprox<BinaryOpType::DIV>::invoke(
+        return ttnn::detail::invoke_binary_ng(
             input_a,
             input_b,
+            binary::BinaryOpType::DIV,
             std::nullopt,
             output_mem_config,
             output_tensor,
             post_activations,
             lhs_activations,
             rhs_activations,
-            std::nullopt,  // use_legacy
             std::nullopt,  // fast_and_approximate_mode
-            sub_core_grids);
+            sub_core_grids,
+            sub_device_id);
     }
 
-    if (!(use_legacy ? *use_legacy
-                     : (has_legacy_only_args ||
-                        binary::is_legacy_only(
-                            input_a, input_b, output_mem_config, output_tensor, lhs_activations, rhs_activations)))) {
-        TT_FATAL(!has_legacy_only_args, "rounding_mode is not valid when use_legacy parameter is false");
-
-        return BinaryOperationWithFastApprox<BinaryOpType::DIV>::invoke(
+    // Non-int32 inputs: with rounding_mode=None, use DIV directly; with "trunc"/"floor",
+    // compute the float divide then apply trunc/floor rounding.
+    if (!rounding_mode.has_value()) {
+        return ttnn::detail::invoke_binary_ng(
             input_a,
             input_b,
+            binary::BinaryOpType::DIV,
             std::nullopt,
             output_mem_config,
             output_tensor,
             post_activations,
             lhs_activations,
             rhs_activations,
-            use_legacy,
             fast_and_approximate_mode,
-            sub_core_grids);
+            sub_core_grids,
+            sub_device_id);
     }
 
     TT_FATAL(
-        (rounding_mode == std::nullopt || rounding_mode == "trunc" || rounding_mode == "floor"),
+        (rounding_mode == "trunc" || rounding_mode == "floor"),
         "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
 
-    Tensor result;
-    // When use_legacy is true, the division operation is performed with fp32 precision and final result is typecasted
-    // back.
-    if (is_fp32) {
-        result = ttnn::divide(
-            input_a,
-            input_b,
-            std::nullopt,
-            output_mem_config,
-            output_tensor,
-            post_activations,
-            lhs_activations,
-            rhs_activations,
-            std::nullopt,
-            fast_and_approximate_mode,
-            sub_core_grids);
-    } else {
-        Tensor a = typecast(input_a, DataType::FLOAT32, std::nullopt, std::nullopt, sub_core_grids);
-        Tensor b = typecast(input_b, DataType::FLOAT32, std::nullopt, std::nullopt, sub_core_grids);
-        result = ttnn::divide(
-            a,
-            b,
-            std::nullopt,
-            output_mem_config,
-            output_tensor,
-            post_activations,
-            lhs_activations,
-            rhs_activations,
-            std::nullopt,
-            fast_and_approximate_mode,
-            sub_core_grids);
-    }
+    // Workaround for a known bfloat16 fast_and_approximate divide bug (issue #43209):
+    // 0/0 returns 0 instead of NaN, and sign-of-zero is lost. The pre-legacy-removal
+    // path used a float32 typecast as a safety guard; we restore the same invariant by
+    // suppressing fast_and_approximate on bfloat16 inside the rounding-mode branch.
+    // The rounding_mode=None case is documented via the existing test skip in
+    // tests/ttnn/unit_tests/operations/eltwise/test_binary_fp32.py. Remove this
+    // workaround when #43209 is fixed.
+    const bool suppress_fap = fast_and_approximate_mode && input_dtype == DataType::BFLOAT16;
+    const bool effective_fap = suppress_fap ? false : fast_and_approximate_mode;
+
+    std::optional<Tensor> divided = ttnn::divide(
+        input_a,
+        input_b,
+        std::nullopt,
+        output_mem_config,
+        output_tensor,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        effective_fap,
+        sub_core_grids,
+        sub_device_id);
 
     if (rounding_mode == "trunc") {
-        result = ttnn::trunc(result, output_mem_config, output_tensor, sub_core_grids);
-    } else if (rounding_mode == "floor") {
-        result = ttnn::floor(result, output_mem_config, output_tensor, sub_core_grids);
+        return ttnn::trunc(divided.value(), output_mem_config, output_tensor, sub_core_grids);
     }
-
-    if (is_fp32) {
-        return result;
-    }
-    return typecast(result, input_dtype, output_mem_config, output_tensor, sub_core_grids);
+    return ttnn::floor(divided.value(), output_mem_config, output_tensor, sub_core_grids);
 }
 
-Tensor _div_no_nan_overload(
-    const Tensor& input_a, float value, const std::optional<MemoryConfig>& /*output_mem_config*/) {
+Tensor div_no_nan(const Tensor& input_a, float value, const std::optional<MemoryConfig>& /*output_mem_config*/) {
     if (value == 0) {
         return ttnn::zeros_like(input_a);
     }
     return ttnn::multiply(input_a, (1.0f / value));
 }
 
-Tensor _div_no_nan(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor div_no_nan(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     if (input_a.dtype() == DataType::FLOAT32 && input_b.dtype() == DataType::FLOAT32) {
         // Not using SFPU div op here since inf/nan handling is not required
         Tensor div_result = ttnn::multiply(input_a, ttnn::reciprocal(input_b), std::nullopt, output_mem_config);
@@ -475,19 +406,17 @@ Tensor _div_no_nan(const Tensor& input_a, const Tensor& input_b, const std::opti
     return ttnn::where(ttnn::eqz(input_b, output_mem_config), 0.0f, div_result);
 }
 
-Tensor ExecutePrelu::invoke(
-    const Tensor& input, float weight, const std::optional<MemoryConfig>& /*output_mem_config*/) {
+Tensor prelu(const Tensor& input, float weight, const std::optional<MemoryConfig>& /*output_mem_config*/) {
     return ttnn::prelu_sfpu(input, weight);
 }
 
-Tensor ExecutePrelu::invoke(
+Tensor prelu(
     const Tensor& input, const std::array<float, 1>& weight, const std::optional<MemoryConfig>& /*output_mem_config*/) {
     float scalar_weight = weight[0];
     return ttnn::prelu_sfpu(input, scalar_weight);
 }
 
-Tensor ExecutePrelu::invoke(
-    const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor prelu(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     const auto& s_a = input_a.logical_shape();
     const auto volume = input_b.logical_volume();
     TT_FATAL(
@@ -506,161 +435,79 @@ Tensor ExecutePrelu::invoke(
     return result;
 }
 
-Tensor run_remainder(
+// REMAINDER result = input − (other * floor(input/other))
+Tensor remainder(
     const Tensor& input_a,
     const Tensor& input_b,
+    const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& output_mem_config,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
-    using FusedActivations = ttsl::Span<const unary::EltwiseUnaryWithParam>;
-    // explicitly using binary_ng to avoid fallback to legacy because of row broadcast
-    Tensor result = ttnn::subtract(
+    const std::optional<Tensor>& output_tensor,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    return ttnn::detail::invoke_binary_ng(
         input_a,
-        ttnn::multiply(
-            input_b,
-            ttnn::div(
-                input_a,
-                input_b,
-                false,
-                "floor",
-                std::nullopt,
-                output_mem_config,
-                std::nullopt,
-                FusedActivations{},
-                FusedActivations{},
-                FusedActivations{},
-                std::nullopt,
-                sub_core_grids),
-            std::nullopt,
-            output_mem_config,
-            std::nullopt,
-            FusedActivations{},
-            FusedActivations{},
-            FusedActivations{},
-            false,
-            std::nullopt,
-            sub_core_grids),
-        std::nullopt,
+        input_b,
+        binary::BinaryOpType::REMAINDER,
+        output_dtype,
         output_mem_config,
+        output_tensor,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
         std::nullopt,
-        FusedActivations{},
-        FusedActivations{},
-        FusedActivations{},
-        false,
-        sub_core_grids);
-
-    result = ttnn::where(
-        ttnn::ge(
-            result,
-            input_b,
-            std::nullopt,
-            output_mem_config,
-            std::nullopt,
-            FusedActivations{},
-            FusedActivations{},
-            FusedActivations{},
-            false,
-            sub_core_grids),
-        ttnn::subtract(
-            result,
-            input_b,
-            std::nullopt,
-            output_mem_config,
-            std::nullopt,
-            FusedActivations{},
-            FusedActivations{},
-            FusedActivations{},
-            false,
-            sub_core_grids),
-        result,
-        output_mem_config,
-        std::nullopt,
-        sub_core_grids);
-
-    result = ttnn::where(
-        ttnn::ltz(input_b, output_mem_config, std::nullopt, sub_core_grids),
-        ttnn::add(
-            result,
-            input_b,
-            std::nullopt,
-            output_mem_config,
-            std::nullopt,
-            FusedActivations{},
-            FusedActivations{},
-            FusedActivations{},
-            false,
-            sub_core_grids),
-        result,
-        output_mem_config,
-        std::nullopt,
-        sub_core_grids);
-
-    return result;
-}
-// Binary remainder will be overloaded by unary remainder in another PR
-Tensor ExecuteBinaryRemainder::invoke(
-    const Tensor& input_a,
-    const Tensor& input_b,
-    const std::optional<MemoryConfig>& output_mem_config,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
-    DataType input_dtype = input_a.dtype();
-
-    // INT32 inputs are handled by the kernel directly via binary_ng, skip composite path
-    const bool is_int32 = input_dtype == DataType::INT32 && input_b.dtype() == DataType::INT32;
-    if (is_int32) {
-        return ttnn::prim::binary_ng(
-            input_a, input_b, BinaryOpType::REMAINDER, std::nullopt, output_mem_config, std::nullopt);
-    }
-
-    // No typecast for FP32 input
-    const auto do_typecast = input_dtype != DataType::FLOAT32 or input_b.dtype() != DataType::FLOAT32;
-    const auto& a =
-        do_typecast ? typecast(input_a, DataType::FLOAT32, std::nullopt, std::nullopt, sub_core_grids) : input_a;
-    const auto& b =
-        do_typecast ? typecast(input_b, DataType::FLOAT32, std::nullopt, std::nullopt, sub_core_grids) : input_b;
-
-    // Perform the remainder operation
-    Tensor result = run_remainder(a, b, output_mem_config, sub_core_grids);
-
-    // Return the result, typecasted if necessary
-    return do_typecast ? typecast(result, input_dtype, std::nullopt, std::nullopt, sub_core_grids) : result;
+        sub_core_grids,
+        sub_device_id);
 }
 
-Tensor ExecuteBinaryRemainder::invoke(
+Tensor remainder(
     const Tensor& input,
     float scalar,
+    const std::optional<const DataType>& /*output_dtype*/,
     const std::optional<MemoryConfig>& output_mem_config,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
-    return ttnn::unary_remainder(input, scalar, output_mem_config, std::nullopt, sub_core_grids);
+    const std::optional<Tensor>& output_tensor,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> /*post_activations*/,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> /*lhs_activations*/,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> /*rhs_activations*/,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& /*sub_device_id*/) {
+    return ttnn::unary_remainder(input, scalar, output_mem_config, output_tensor, sub_core_grids);
 }
 
 // FMOD result = input − (other * trunc(input/other))
-Tensor ExecuteBinaryFmod::invoke(
+Tensor fmod(
     const Tensor& input_a,
     const Tensor& input_b,
     const std::optional<MemoryConfig>& output_mem_config,
-    const std::optional<CoreRangeSet>& /*sub_core_grids*/) {
-    return BinaryOperationSfpu<BinaryOpType::FMOD>::invoke(
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    return ttnn::detail::invoke_binary_ng(
         input_a,
         input_b,
-        std::nullopt,  // output_dtype
+        binary::BinaryOpType::FMOD,
+        std::nullopt,
         output_mem_config,
-        std::nullopt,   // optional_output_tensor
-        {},             // post_activations
-        {},             // lhs_activations
-        {},             // rhs_activations
-        std::nullopt);  // use_legacy
+        std::nullopt,
+        {},
+        {},
+        {},
+        std::nullopt,
+        sub_core_grids,
+        sub_device_id);
 }
 
-Tensor ExecuteBinaryFmod::invoke(
+Tensor fmod(
     const Tensor& input,
     float scalar,
     const std::optional<MemoryConfig>& output_mem_config,
-    const std::optional<CoreRangeSet>& /*sub_core_grids*/) {
-    return ttnn::operations::unary::ExecuteUnaryWithFloatParameter<ttnn::operations::unary::UnaryOpType::FMOD>::invoke(
-        input, scalar, output_mem_config);
+    const std::optional<CoreRangeSet>& /*sub_core_grids*/,
+    const std::optional<tt::tt_metal::SubDeviceId>& /*sub_device_id*/) {
+    return ttnn::unary_fmod(input, scalar, output_mem_config);
 }
 
-Tensor _floor_div_overload(const Tensor& input_a, float value, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor floor_div(const Tensor& input_a, float value, const std::optional<MemoryConfig>& output_mem_config) {
     if (value == 0) {
         float t_inf = std::numeric_limits<float>::infinity();
         float t_nan = std::nanf("");
@@ -673,7 +520,7 @@ Tensor _floor_div_overload(const Tensor& input_a, float value, const std::option
     return ttnn::floor(temp);
 }
 
-Tensor _floor_div(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor floor_div(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     Tensor temp = ttnn::div(input_a, input_b, false, std::nullopt, std::nullopt, output_mem_config);
     Tensor result = ttnn::div(input_a, input_b, false, "floor", std::nullopt, output_mem_config);
     // floor(nan, inf, -inf) = nan, inf, -inf
@@ -693,7 +540,7 @@ Tensor _floor_div(const Tensor& input_a, const Tensor& input_b, const std::optio
  * - implementation supports any 1D "squeezable tensor" at input operands
  *   by running reshape.
  */
-Tensor _outer(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& /*output_mem_config*/) {
+Tensor outer(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& /*output_mem_config*/) {
     const ttnn::Shape& s_a = input_a.logical_shape();
     const ttnn::Shape& s_b = input_b.logical_shape();
     auto num_ones = [](const ttnn::Shape& s) -> uint32_t {
@@ -738,7 +585,7 @@ Tensor _outer(const Tensor& input_a, const Tensor& input_b, const std::optional<
     return ttnn::matmul(a_slim, b_slim);
 }
 
-Tensor _polyval(
+Tensor polyval(
     const Tensor& input_a, const std::vector<float>& coeffs, const std::optional<MemoryConfig>& output_mem_config) {
     TT_ASSERT(!coeffs.empty() && "coeffs should be 1 or more coefficients");
     if (coeffs.size() == 1) {
@@ -753,7 +600,7 @@ Tensor _polyval(
     return final_tensor;
 }
 
-Tensor ExecuteGCD::invoke(
+Tensor gcd(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const std::optional<const DataType>& /*output_dtype*/,
@@ -761,21 +608,20 @@ Tensor ExecuteGCD::invoke(
     const std::optional<Tensor>& optional_output_tensor,
     ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
-    std::optional<bool> use_legacy) {
-    return BinaryOperationSfpu<operations::binary::BinaryOpType::GCD>::invoke(
+    ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations) {
+    return ttnn::detail::invoke_binary_ng(
         input_tensor_a,
         input_tensor_b,
+        binary::BinaryOpType::GCD,
         std::nullopt,
         memory_config,
         optional_output_tensor,
         post_activations,
         lhs_activations,
-        rhs_activations,
-        use_legacy);
+        rhs_activations);
 }
 
-Tensor ExecuteLCM::invoke(
+Tensor lcm(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const std::optional<const DataType>& /*output_dtype*/,
@@ -783,22 +629,21 @@ Tensor ExecuteLCM::invoke(
     const std::optional<Tensor>& optional_output_tensor,
     ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
-    std::optional<bool> use_legacy) {
-    return BinaryOperationSfpu<operations::binary::BinaryOpType::LCM>::invoke(
+    ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations) {
+    return ttnn::detail::invoke_binary_ng(
         input_tensor_a,
         input_tensor_b,
+        binary::BinaryOpType::LCM,
         std::nullopt,
         memory_config,
         optional_output_tensor,
         post_activations,
         lhs_activations,
-        rhs_activations,
-        use_legacy);
+        rhs_activations);
 }
 
 // power - floating point exponent
-Tensor ExecutePower::invoke(
+Tensor pow(
     const Tensor& input_a,
     float exponent,
     const std::optional<MemoryConfig>& output_mem_config,
@@ -806,13 +651,13 @@ Tensor ExecutePower::invoke(
     float exponent_floor = std::floor(exponent);
     if (static_cast<int32_t>(exponent_floor) == exponent) {
         int32_t exp = exponent;
-        return ExecutePower::invoke(input_a, exp, output_mem_config, output_tensor);
+        return pow(input_a, exp, output_mem_config, output_tensor);
     }
     return ttnn::power(input_a, exponent, output_mem_config, output_tensor);
 }
 
 // power - integer exponent
-Tensor ExecutePower::invoke(
+Tensor pow(
     const Tensor& input,
     int32_t exponent,
     const std::optional<MemoryConfig>& output_mem_config,
@@ -822,11 +667,11 @@ Tensor ExecutePower::invoke(
         uint32_t exp = exponent;
         return ttnn::power_iterative(input, exp, output_mem_config, output_tensor);
     }
-    return ttnn::power(input, exponent, output_mem_config, output_tensor);
+    return ttnn::power(input, unary::ScalarVariant(exponent), output_mem_config, output_tensor);
 }
 
 // power - tensor exponent
-Tensor ExecutePower::invoke(
+Tensor pow(
     const Tensor& input,
     const Tensor& exponent,
     const std::optional<const DataType>& /*dtype*/,
@@ -834,22 +679,21 @@ Tensor ExecutePower::invoke(
     const std::optional<Tensor>& optional_output_tensor,
     ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
-    std::optional<bool> use_legacy) {
-    return BinaryOperationSfpu<operations::binary::BinaryOpType::POWER>::invoke(
+    ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations) {
+    return ttnn::detail::invoke_binary_ng(
         input,
         exponent,
+        binary::BinaryOpType::POWER,
         std::nullopt,
         memory_config,
         optional_output_tensor,
         post_activations,
         lhs_activations,
-        rhs_activations,
-        use_legacy);
+        rhs_activations);
 }
 
 // power - scalar input, tensor exponent
-Tensor ExecutePower::invoke(
+Tensor pow(
     float input_a,
     const Tensor& exponent,
     const std::optional<const DataType>& /*dtype*/,
@@ -857,13 +701,12 @@ Tensor ExecutePower::invoke(
     const std::optional<Tensor>& optional_output_tensor,
     ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
-    std::optional<bool> use_legacy) {
+    ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations) {
     // As per binary infra, first input is always a tensor but this support needed for pytorch2 tracing
     // https://github.com/tenstorrent/pytorch2.0_ttnn/blob/main/docs/operations/aten.pow.Scalar.md
 
     Tensor input = ttnn::full_like(exponent, input_a);
-    return ExecutePower::invoke(
+    return pow(
         input,
         exponent,
         std::nullopt,
@@ -871,11 +714,10 @@ Tensor ExecutePower::invoke(
         optional_output_tensor,
         post_activations,
         lhs_activations,
-        rhs_activations,
-        use_legacy);
+        rhs_activations);
 }
 
-Tensor ExecuteRsub::invoke(
+Tensor rsub(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const std::optional<const DataType>& output_dtype,
@@ -883,21 +725,20 @@ Tensor ExecuteRsub::invoke(
     const std::optional<Tensor>& optional_output_tensor,
     ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
-    std::optional<bool> use_legacy) {
-    return BinaryOperation<operations::binary::BinaryOpType::RSUB>::invoke(
+    ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations) {
+    return ttnn::detail::invoke_binary_ng(
         input_tensor_a,
         input_tensor_b,
+        binary::BinaryOpType::RSUB,
         output_dtype,
         memory_config,
         optional_output_tensor,
         post_activations,
         lhs_activations,
-        rhs_activations,
-        use_legacy);
+        rhs_activations);
 }
 
-Tensor ExecuteRsub::invoke(
+Tensor rsub(
     const Tensor& input_tensor_a,
     const float input_b,
     const std::optional<const DataType>& output_dtype,
@@ -905,367 +746,79 @@ Tensor ExecuteRsub::invoke(
     const std::optional<Tensor>& optional_output_tensor,
     ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
-    std::optional<bool> use_legacy) {
-    if (not(use_legacy ? *use_legacy
-                       : binary::is_legacy_only(
-                             input_tensor_a,
-                             input_b,
-                             memory_config,
-                             optional_output_tensor,
-                             lhs_activations,
-                             rhs_activations))) {
-        return BinaryOperation<operations::binary::BinaryOpType::RSUB>::invoke(
-            input_tensor_a,
-            input_b,
-            output_dtype,
-            memory_config,
-            optional_output_tensor,
-            post_activations,
-            lhs_activations,
-            rhs_activations,
-            use_legacy);
-    }
-
-    return ttnn::rsub_sfpu(input_tensor_a, input_b, memory_config, optional_output_tensor);
+    ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations) {
+    return ttnn::detail::invoke_binary_ng(
+        input_tensor_a,
+        input_b,
+        binary::BinaryOpType::RSUB,
+        output_dtype,
+        memory_config,
+        optional_output_tensor,
+        post_activations,
+        lhs_activations,
+        rhs_activations);
 }
 
-// Bitwise AND
-Tensor ExecuteBitwiseAnd::invoke(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
+Tensor bias_gelu(
+    const Tensor& input_tensor_a_arg,
+    const Tensor& input_tensor_b_arg,
+    const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
-    std::optional<bool> use_legacy) {
-    if (not(use_legacy ? *use_legacy
-                       : binary::is_legacy_only(
-                             input_tensor_a,
-                             input_tensor_b,
-                             memory_config,
-                             optional_output_tensor,
-                             lhs_activations,
-                             rhs_activations))) {
-        return BinaryOperation<operations::binary::BinaryOpType::BITWISE_AND>::invoke(
-            input_tensor_a,
-            input_tensor_b,
-            std::nullopt,
-            memory_config,
-            optional_output_tensor,
-            post_activations,
-            lhs_activations,
-            rhs_activations,
-            use_legacy);
-    }
-
-    return BinaryOperationSfpu<operations::binary::BinaryOpType::BITWISE_AND>::invoke(
-        input_tensor_a,
-        input_tensor_b,
-        std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    return ttnn::detail::invoke_binary_ng(
+        input_tensor_a_arg,
+        input_tensor_b_arg,
+        binary::BinaryOpType::BIAS_GELU,
+        output_dtype,
         memory_config,
         optional_output_tensor,
         post_activations,
         lhs_activations,
         rhs_activations,
-        use_legacy);
+        /*fast_and_approximate_mode=*/std::nullopt,
+        sub_core_grids,
+        sub_device_id);
 }
 
-Tensor ExecuteBitwiseAnd::invoke(
+Tensor bias_gelu(
     const Tensor& input_tensor_a,
-    const int32_t input_b,
-    const std::optional<MemoryConfig>& memory_config,
+    const float bias,
+    const std::optional<const DataType>& /*dtype*/,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
-    std::optional<bool> use_legacy) {
-    if (not(use_legacy ? *use_legacy
-                       : binary::is_legacy_only(
-                             input_tensor_a,
-                             input_b,
-                             memory_config,
-                             optional_output_tensor,
-                             lhs_activations,
-                             rhs_activations))) {
-        return BinaryOperation<operations::binary::BinaryOpType::BITWISE_AND>::invoke(
+    ttsl::Span<const unary::EltwiseUnaryWithParam> /*post_activations*/,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> /*lhs_activations*/,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> /*rhs_activations*/,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    // Resolve sub_device_id to sub_core_grids so both add and gelu use the same core restriction
+    auto resolved_sub_core_grids = sub_core_grids;
+    if (sub_device_id.has_value()) {
+        TT_FATAL(!sub_core_grids.has_value(), "Cannot specify both sub_core_grids and sub_device_id");
+        auto* device = input_tensor_a.device();
+        resolved_sub_core_grids =
+            device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value());
+    }
+    return ttnn::gelu(
+        ttnn::add(
             input_tensor_a,
-            input_b,
+            bias,
             std::nullopt,
             memory_config,
             optional_output_tensor,
-            post_activations,
-            lhs_activations,
-            rhs_activations,
-            use_legacy);
-    }
-
-    return ttnn::bitwise_and(input_tensor_a, input_b, memory_config, optional_output_tensor);
+            {},
+            {},
+            {},
+            resolved_sub_core_grids),
+        true,
+        memory_config,
+        optional_output_tensor,
+        resolved_sub_core_grids);
 }
 
-// Bitwise OR
-Tensor ExecuteBitwiseOr::invoke(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
-    std::optional<bool> use_legacy) {
-    if (not(use_legacy ? *use_legacy
-                       : binary::is_legacy_only(
-                             input_tensor_a,
-                             input_tensor_b,
-                             memory_config,
-                             optional_output_tensor,
-                             lhs_activations,
-                             rhs_activations))) {
-        return BinaryOperation<operations::binary::BinaryOpType::BITWISE_OR>::invoke(
-            input_tensor_a,
-            input_tensor_b,
-            std::nullopt,
-            memory_config,
-            optional_output_tensor,
-            post_activations,
-            lhs_activations,
-            rhs_activations,
-            use_legacy);
-    }
-
-    return BinaryOperationSfpu<operations::binary::BinaryOpType::BITWISE_OR>::invoke(
-        input_tensor_a, input_tensor_b, std::nullopt, memory_config, optional_output_tensor);
-}
-
-Tensor ExecuteBitwiseOr::invoke(
-    const Tensor& input_tensor_a,
-    const int32_t input_b,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
-    std::optional<bool> use_legacy) {
-    if (not(use_legacy ? *use_legacy
-                       : binary::is_legacy_only(
-                             input_tensor_a,
-                             input_b,
-                             memory_config,
-                             optional_output_tensor,
-                             lhs_activations,
-                             rhs_activations))) {
-        return BinaryOperation<operations::binary::BinaryOpType::BITWISE_OR>::invoke(
-            input_tensor_a,
-            input_b,
-            std::nullopt,
-            memory_config,
-            optional_output_tensor,
-            post_activations,
-            lhs_activations,
-            rhs_activations,
-            use_legacy);
-    }
-
-    return ttnn::bitwise_or(input_tensor_a, input_b, memory_config, optional_output_tensor);
-}
-
-// Bitwise XOR
-Tensor ExecuteBitwiseXor::invoke(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
-    std::optional<bool> use_legacy) {
-    if (not(use_legacy ? *use_legacy
-                       : binary::is_legacy_only(
-                             input_tensor_a,
-                             input_tensor_b,
-                             memory_config,
-                             optional_output_tensor,
-                             lhs_activations,
-                             rhs_activations))) {
-        return BinaryOperation<operations::binary::BinaryOpType::BITWISE_XOR>::invoke(
-            input_tensor_a,
-            input_tensor_b,
-            std::nullopt,
-            memory_config,
-            optional_output_tensor,
-            post_activations,
-            lhs_activations,
-            rhs_activations,
-            use_legacy);
-    }
-
-    return BinaryOperationSfpu<operations::binary::BinaryOpType::BITWISE_XOR>::invoke(
-        input_tensor_a, input_tensor_b, std::nullopt, memory_config, optional_output_tensor);
-}
-
-Tensor ExecuteBitwiseXor::invoke(
-    const Tensor& input_tensor_a,
-    const int32_t input_b,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
-    std::optional<bool> use_legacy) {
-    if (not(use_legacy ? *use_legacy
-                       : binary::is_legacy_only(
-                             input_tensor_a,
-                             input_b,
-                             memory_config,
-                             optional_output_tensor,
-                             lhs_activations,
-                             rhs_activations))) {
-        return BinaryOperation<operations::binary::BinaryOpType::BITWISE_XOR>::invoke(
-            input_tensor_a,
-            input_b,
-            std::nullopt,
-            memory_config,
-            optional_output_tensor,
-            post_activations,
-            lhs_activations,
-            rhs_activations,
-            use_legacy);
-    }
-
-    return ttnn::bitwise_xor(input_tensor_a, input_b, memory_config, optional_output_tensor);
-}
-
-// Bitwise Left Shift
-Tensor ExecuteBitwiseLeftShift::invoke(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
-    std::optional<bool> use_legacy) {
-    if (not(use_legacy ? *use_legacy
-                       : binary::is_legacy_only(
-                             input_tensor_a,
-                             input_tensor_b,
-                             memory_config,
-                             optional_output_tensor,
-                             lhs_activations,
-                             rhs_activations))) {
-        return BinaryOperation<operations::binary::BinaryOpType::LEFT_SHIFT>::invoke(
-            input_tensor_a,
-            input_tensor_b,
-            std::nullopt,
-            memory_config,
-            optional_output_tensor,
-            post_activations,
-            lhs_activations,
-            rhs_activations,
-            use_legacy);
-    }
-
-    return BinaryOperationSfpu<operations::binary::BinaryOpType::LEFT_SHIFT>::invoke(
-        input_tensor_a, input_tensor_b, std::nullopt, memory_config, optional_output_tensor);
-}
-
-Tensor ExecuteBitwiseLeftShift::invoke(
-    const Tensor& input_tensor_a,
-    const int32_t input_b,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
-    std::optional<bool> use_legacy) {
-    if (not(use_legacy ? *use_legacy
-                       : binary::is_legacy_only(
-                             input_tensor_a,
-                             input_b,
-                             memory_config,
-                             optional_output_tensor,
-                             lhs_activations,
-                             rhs_activations))) {
-        return BinaryOperation<operations::binary::BinaryOpType::LEFT_SHIFT>::invoke(
-            input_tensor_a,
-            input_b,
-            std::nullopt,
-            memory_config,
-            optional_output_tensor,
-            post_activations,
-            lhs_activations,
-            rhs_activations,
-            use_legacy);
-    }
-
-    return ttnn::bitwise_left_shift(input_tensor_a, input_b, memory_config, optional_output_tensor);
-}
-
-// Bitwise Right Shift
-Tensor ExecuteBitwiseRightShift::invoke(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
-    std::optional<bool> use_legacy) {
-    if (not(use_legacy ? *use_legacy
-                       : binary::is_legacy_only(
-                             input_tensor_a,
-                             input_tensor_b,
-                             memory_config,
-                             optional_output_tensor,
-                             lhs_activations,
-                             rhs_activations))) {
-        return BinaryOperation<operations::binary::BinaryOpType::RIGHT_SHIFT>::invoke(
-            input_tensor_a,
-            input_tensor_b,
-            std::nullopt,
-            memory_config,
-            optional_output_tensor,
-            post_activations,
-            lhs_activations,
-            rhs_activations,
-            use_legacy);
-    }
-
-    return BinaryOperationSfpu<operations::binary::BinaryOpType::RIGHT_SHIFT>::invoke(
-        input_tensor_a, input_tensor_b, std::nullopt, memory_config, optional_output_tensor);
-}
-
-Tensor ExecuteBitwiseRightShift::invoke(
-    const Tensor& input_tensor_a,
-    const int32_t input_b,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
-    std::optional<bool> use_legacy) {
-    if (not(use_legacy ? *use_legacy
-                       : binary::is_legacy_only(
-                             input_tensor_a,
-                             input_b,
-                             memory_config,
-                             optional_output_tensor,
-                             lhs_activations,
-                             rhs_activations))) {
-        return BinaryOperation<operations::binary::BinaryOpType::RIGHT_SHIFT>::invoke(
-            input_tensor_a,
-            input_b,
-            std::nullopt,
-            memory_config,
-            optional_output_tensor,
-            post_activations,
-            lhs_activations,
-            rhs_activations,
-            use_legacy);
-    }
-
-    return ttnn::bitwise_right_shift(input_tensor_a, input_b, memory_config, optional_output_tensor);
-}
-
-}  // namespace ttnn::operations::binary
+}  // namespace ttnn

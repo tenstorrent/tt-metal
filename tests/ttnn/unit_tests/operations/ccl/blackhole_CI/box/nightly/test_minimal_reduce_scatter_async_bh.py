@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -255,6 +255,11 @@ def run_reduce_scatter_impl(
         (4, [1, 1, 1, 8], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         (4, [1, 1, 1, 16], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
         (4, [1, 1, 32, 32], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
+        # BFLOAT8_B + TILE input that IS tile-aligned but whose per-device output along the scatter
+        # dim is sub-tile (64 / 4 = 16 < TILE_WIDTH=32). Exercises the BFLOAT8_B guard in
+        # composite_reduce_scatter when the input-side alignment check is insufficient and only the
+        # dispatch-side (per-device output) check fires.
+        (4, [1, 1, 32, 64], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
     ],
     ids=[
         "padded_dim_2_test_one",
@@ -268,6 +273,7 @@ def run_reduce_scatter_impl(
         "composite_rs_test_one",
         "composite_rs_test_two",
         "composite_rs_test_three",
+        "composite_rs_test_four",
     ],
 )
 @pytest.mark.parametrize(
@@ -365,6 +371,11 @@ def test_reduce_scatter_async_4dev_ring(
         (4, [1, 1, 1, 8], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),
         (4, [1, 1, 1, 16], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, True),
         # (4, [1, 1, 32, 32], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, True), #Issue 27619
+        # BFLOAT8_B + TILE input that IS tile-aligned but whose per-device output along the scatter
+        # dim is sub-tile (64 / 4 = 16 < TILE_WIDTH=32). Exercises the BFLOAT8_B guard in
+        # composite_reduce_scatter when the input-side alignment check is insufficient and only the
+        # dispatch-side (per-device output) check fires.
+        (4, [1, 1, 32, 64], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, True),
     ],
     ids=[
         "padded_dim_2_test_one",
@@ -378,6 +389,7 @@ def test_reduce_scatter_async_4dev_ring(
         "composite_rs_test_one",
         "composite_rs_test_two",
         # "composite_rs_test_three",
+        "composite_rs_test_four",
     ],
 )
 @pytest.mark.parametrize(

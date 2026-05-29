@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -41,8 +41,6 @@ constexpr uint32_t cb_rstd_bcast_idx = tt::CBIndex::c_12;     // broadcasted rst
 constexpr uint32_t cb_scaled_dy_gamma_sum_idx = tt::CBIndex::c_13;  // (1/N) * sum(dy * gamma) - pre-scaled
 constexpr uint32_t cb_scaled_dy_gamma_xnorm_sum_idx =
     tt::CBIndex::c_14;  // (1/N) * sum(dy * gamma * x_normalized) - pre-scaled
-
-constexpr uint32_t onetile = 1;
 
 #ifdef DO_MASK_W
 constexpr bool do_mask_w = true;

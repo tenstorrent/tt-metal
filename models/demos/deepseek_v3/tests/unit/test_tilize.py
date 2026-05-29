@@ -1,14 +1,17 @@
-#  SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 #
 #  SPDX-License-Identifier: Apache-2.0
 
 import pytest
 
 import ttnn
+from models.common.utility_functions import skip_with_llk_assert
 from models.demos.deepseek_v3.tests.unit.utils import random_torch_tensor, run_test
+from models.demos.deepseek_v3.utils.config_helpers import get_fabric_config
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41024")
 @pytest.mark.parametrize("mesh_device", [(8, 8)], indirect=True)
 @pytest.mark.parametrize(
     "shape, dtype, mem_config",
@@ -23,7 +26,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("enable_trace", [False, True])
 @pytest.mark.parametrize(
-    "device_params", [{"trace_region_size": 10000, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True
+    "device_params", [{"trace_region_size": 0, "fabric_config": get_fabric_config()}], indirect=True
 )
 def test_tilize(mesh_device, shape, dtype, mem_config, layout, enable_trace):
     torch_input = random_torch_tensor(dtype, shape)
@@ -47,6 +50,7 @@ def test_tilize(mesh_device, shape, dtype, mem_config, layout, enable_trace):
     run_test(mesh_device, run_op, check_op, enable_trace)
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41024")
 @pytest.mark.parametrize("mesh_device", [(8, 8)], indirect=True)
 @pytest.mark.parametrize(
     "in_shape, out_shape, pad_val, dtype, mem_config",
@@ -58,7 +62,7 @@ def test_tilize(mesh_device, shape, dtype, mem_config, layout, enable_trace):
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("enable_trace", [False, True])
 @pytest.mark.parametrize(
-    "device_params", [{"trace_region_size": 10000, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True
+    "device_params", [{"trace_region_size": 0, "fabric_config": get_fabric_config()}], indirect=True
 )
 def test_tilize_with_val_padding(mesh_device, in_shape, out_shape, pad_val, dtype, mem_config, layout, enable_trace):
     torch_input = random_torch_tensor(dtype, in_shape)

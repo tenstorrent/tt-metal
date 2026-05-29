@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -37,6 +37,7 @@ void bind_reduce_scatter(nb::module_& mod) {
             chunks_per_sync (int, optional): Hyperparameter.
             num_workers_per_link (int, optional): Hyperparameter.
             num_buffers_per_channel (int, optional): Hyperparameter.
+            use_l1_small_for_semaphores (bool, optional): If True, allocate internal global semaphores in L1_SMALL instead of L1 to reduce L1 fragmentation. Defaults to `False`.
 
         Returns:
             ttnn.Tensor: The reduced and scattered tensor, with output_shape = input_shape for all the unspecified dimensions, and output_shape[dim] = input_shape[dim] / num_devices, where num_devices is the number of devices along the `cluster_axis` if specified, else the total number of devices along the mesh.
@@ -52,22 +53,22 @@ void bind_reduce_scatter(nb::module_& mod) {
     ttnn::bind_function<"reduce_scatter">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::reduce_scatter,
-            nb::arg("input_tensor").noconvert(),
-            nb::arg("dim"),
-            nb::kw_only(),
-            nb::arg("cluster_axis") = nb::none(),
-            nb::arg("subdevice_id") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("intermediate_memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none(),
-            nb::arg("num_links") = nb::none(),
-            nb::arg("topology").noconvert() = nb::none(),
-            nb::arg("chunks_per_sync") = nb::none(),
-            nb::arg("num_workers_per_link") = nb::none(),
-            nb::arg("num_buffers_per_channel") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()));
+        &ttnn::reduce_scatter,
+        nb::arg("input_tensor").noconvert(),
+        nb::arg("dim"),
+        nb::kw_only(),
+        nb::arg("cluster_axis") = nb::none(),
+        nb::arg("subdevice_id") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("intermediate_memory_config") = nb::none(),
+        nb::arg("output_tensor") = nb::none(),
+        nb::arg("num_links") = nb::none(),
+        nb::arg("topology").noconvert() = nb::none(),
+        nb::arg("chunks_per_sync") = nb::none(),
+        nb::arg("num_workers_per_link") = nb::none(),
+        nb::arg("num_buffers_per_channel") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("use_l1_small_for_semaphores") = false);
 }
 
 }  // namespace ttnn::operations::ccl

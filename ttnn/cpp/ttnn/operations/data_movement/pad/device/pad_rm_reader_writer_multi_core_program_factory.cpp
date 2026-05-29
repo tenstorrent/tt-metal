@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -363,7 +363,9 @@ PadRmReaderWriterMultiCoreProgramFactory::cached_program_t PadRmReaderWriterMult
         }  // for ncores_h
     }
 
-    return cached_program_t{std::move(program), {ncores_h, ncores_w, reader_kernel_id, writer_kernel_id}};
+    return cached_program_t{
+        std::move(program),
+        {ncores_h, ncores_w, reader_kernel_id, writer_kernel_id, /*pad_value_const_tensor=*/pad_value_const_tensor}};
 }
 
 void PadRmReaderWriterMultiCoreProgramFactory::override_runtime_arguments(
@@ -373,6 +375,10 @@ void PadRmReaderWriterMultiCoreProgramFactory::override_runtime_arguments(
     Tensor& output) {
     auto* src_buffer = tensor_args.input.buffer();
     auto* dst_buffer = output.buffer();
+    // See create() / shared_variables: pad_value_const_tensor is owned to survive cache hits.
+    // Forward its current address so the kernel never reads from a freed/reused DRAM slot.
+    const uint32_t pad_value_const_tensor_addr =
+        cached_program.shared_variables.pad_value_const_tensor.buffer()->address();
 
     for (uint32_t j = 0; j < cached_program.shared_variables.ncores_h; ++j) {
         for (uint32_t i = 0; i < cached_program.shared_variables.ncores_w; ++i) {
@@ -382,12 +388,14 @@ void PadRmReaderWriterMultiCoreProgramFactory::override_runtime_arguments(
                     cached_program.program, cached_program.shared_variables.reader_kernel_id, core);
                 runtime_args[0] = src_buffer->address();
                 runtime_args[1] = dst_buffer->address();
+                runtime_args[13] = pad_value_const_tensor_addr;
             }
             {
                 auto& runtime_args = tt::tt_metal::GetRuntimeArgs(
                     cached_program.program, cached_program.shared_variables.writer_kernel_id, core);
                 runtime_args[0] = src_buffer->address();
                 runtime_args[1] = dst_buffer->address();
+                runtime_args[13] = pad_value_const_tensor_addr;
             }
         }
     }

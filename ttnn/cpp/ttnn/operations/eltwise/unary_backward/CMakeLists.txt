@@ -1,8 +1,20 @@
+include(sources.cmake)
+
 add_library(ttnn_op_eltwise_unary_backward ${LIB_TYPE})
 add_library(TTNN::Ops::Eltwise::Unary::Backward ALIAS ttnn_op_eltwise_unary_backward)
 
 tt_reuse_precompile_headers(ttnn_op_eltwise_unary_backward TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_eltwise_unary_backward)
+set_target_properties(
+    ttnn_op_eltwise_unary_backward
+    PROPERTIES
+        INTERFACE_HEADER_SETS_TO_VERIFY
+            api
+)
+
+file(GLOB_RECURSE tanh_bw_kernels tanh_bw/device/kernels/*)
+
+file(GLOB_RECURSE kernels gelu_bw/device/kernels/*)
 
 target_sources(
     ttnn_op_eltwise_unary_backward
@@ -10,9 +22,13 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES unary_backward.hpp
+        FILES ${TTNN_OP_ELTWISE_UNARY_BACKWARD_API_HEADERS}
+        FILE_SET kernels
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES ${tanh_bw_kernels} ${kernels}
     PRIVATE
-        unary_backward.cpp
+        ${TTNN_OP_ELTWISE_UNARY_BACKWARD_SRCS}
 )
 
 target_include_directories(ttnn_op_eltwise_unary_backward PRIVATE ${FixmeOpIncDirs})

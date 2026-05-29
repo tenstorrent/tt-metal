@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,7 +19,6 @@ void kernel_main() {
     // Get the tile size used in the circular buffers. We assume the
     // circular buffers are created with the same tile size as the DRAM
     // buffers (which is most often the case).
-    constexpr uint32_t tile_size_bytes = get_tile_size(cb_in0);
 
     // Create address generators for the input buffers. Address generators can determine
     // physical address based on the provided data layout and base address.
@@ -31,13 +30,13 @@ void kernel_main() {
     // Then, construct the address generator for the input buffer.
     // Observe that here we are just constructing the address generator object, but not using it yet.
     // It will be used in the loop below to determine the address to read the tiles from.
-    const auto in0_addr_gen = TensorAccessor(in0_layout_args, in0_base_addr, tile_size_bytes);
+    const auto in0_addr_gen = TensorAccessor(in0_layout_args, in0_base_addr);
     // Repeat for the second input buffer. next_compile_time_args_offset() is a clean way to
     // determine the index of the next compile-time argument (after TensorAccessorArgs read
     // the number of arguments it required above) without having to hard-code the index.
     constexpr auto in1_layout_args = TensorAccessorArgs<in0_layout_args.next_compile_time_args_offset()>();
     // Finally, construct the address generator for the second input buffer.
-    const auto in1_addr_gen = TensorAccessor(in1_layout_args, in1_base_addr, tile_size_bytes);
+    const auto in1_addr_gen = TensorAccessor(in1_layout_args, in1_base_addr);
 
     // Loop over all the tiles and read them into the circular buffers.
     for (uint32_t i = 0; i < n_tiles; i++) {

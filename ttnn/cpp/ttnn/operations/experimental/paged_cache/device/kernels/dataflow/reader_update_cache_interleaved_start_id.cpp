@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -34,8 +34,11 @@ void kernel_main() {
 
     const uint32_t St = get_compile_time_arg_val(16);
     uint32_t semaphore_addr = get_semaphore(get_compile_time_arg_val(17));  // semaphore for receiver
+    // 0 = legacy unbounded behavior; nonzero = wrap update_idx mod this value before
+    // page_table lookup (bounded sliding-window cache support).
+    constexpr uint32_t cache_position_modulo = get_compile_time_arg_val(18);
 
-    constexpr auto s0_args = TensorAccessorArgs<18>();
+    constexpr auto s0_args = TensorAccessorArgs<19>();
     constexpr auto index_tensor_args = TensorAccessorArgs<s0_args.next_compile_time_args_offset()>();
     constexpr auto page_table_args = TensorAccessorArgs<index_tensor_args.next_compile_time_args_offset()>();
 
@@ -52,12 +55,12 @@ void kernel_main() {
 
     uint32_t cache_id = cache_start_id;
 
-    const auto s0 = TensorAccessor(s0_args, cache_addr, cache_tile_bytes);
+    const auto s0 = TensorAccessor(s0_args, cache_addr);
 
     bool skip_update = false;
 
     if constexpr (use_index_tensor) {
-        const auto addrg = TensorAccessor(index_tensor_args, index_tensor_addr, index_stick_size_B);
+        const auto addrg = TensorAccessor(index_tensor_args, index_tensor_addr);
 
         cb_reserve_back(cb_index_id, 1);
         uint32_t index_cb_wr_ptr = get_write_ptr(cb_index_id);
@@ -68,14 +71,18 @@ void kernel_main() {
         cb_push_back(cb_index_id, 1);
         volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_wr_ptr);
 
-        const uint32_t update_idx = index_ptr[my_batch_idx];
-        if (update_idx == (uint32_t)-1) {
+        const uint32_t raw_update_idx = index_ptr[my_batch_idx];
+        if (raw_update_idx == (uint32_t)-1) {
             // Passing update_idx = -1 tells us to skip update for this user
             skip_update = true;
         } else {
+            // Wrap into the bounded sliding-window cache when enabled, so positions past
+            // the physical capacity are addressed correctly (cache_position_modulo is a
+            // multiple of block_size, so this preserves the intra-block offset).
+            const uint32_t update_idx =
+                cache_position_modulo > 0 ? raw_update_idx % cache_position_modulo : raw_update_idx;
             if constexpr (is_paged_cache) {
-                const auto page_table_gen =
-                    TensorAccessor(page_table_args, page_table_tensor_addr, page_table_stick_size);
+                const auto page_table_gen = TensorAccessor(page_table_args, page_table_tensor_addr);
                 cb_reserve_back(page_table_cb_id, 1);
                 uint32_t page_table_cb_wr_ptr = get_write_ptr(page_table_cb_id);
                 uint64_t page_table_noc_addr = page_table_gen.get_noc_addr(my_batch_idx);

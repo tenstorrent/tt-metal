@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -36,31 +36,31 @@ constexpr uint16_t NUM_ROWS_PER_FACE = 16;
 constexpr uint16_t NUM_ROWS_PER_TILE = NUM_FACES_PER_TILE * NUM_ROWS_PER_FACE;
 
 // Helper function to print array
-inline void dprint_array_with_data_type(uint32_t data_format, uint32_t* data, uint32_t count) {
-    DPRINT << TYPED_U32_ARRAY(TypedU32_ARRAY_Format_Tensix_Config_Register_Data_Format_Type, data_format, data, count)
-           << ENDL();
+template <uint32_t count>
+inline void dprint_array_with_data_type(uint32_t data_format, uint32_t* data) {
+    DPRINT("{}\n", dp_typed_array_t<count>(data_format, data));
 }
 
 // Dprints data format as string given an uint
 inline void dprint_data_format(uint8_t data_format) {
     switch (data_format) {
-        case (uint8_t)DataFormat::Float32: DPRINT << "Float32"; break;
-        case (uint8_t)DataFormat::Float16: DPRINT << "Float16"; break;
-        case (uint8_t)DataFormat::Bfp8: DPRINT << "Bfp8"; break;
-        case (uint8_t)DataFormat::Bfp4: DPRINT << "Bfp4"; break;
-        case (uint8_t)DataFormat::Bfp2: DPRINT << "Bfp2"; break;
-        case (uint8_t)DataFormat::Float16_b: DPRINT << "Float16_b"; break;
-        case (uint8_t)DataFormat::Bfp8_b: DPRINT << "Bfp8_b"; break;
-        case (uint8_t)DataFormat::Bfp4_b: DPRINT << "Bfp4_b"; break;
-        case (uint8_t)DataFormat::Bfp2_b: DPRINT << "Bfp2_b"; break;
-        case (uint8_t)DataFormat::Lf8: DPRINT << "Lf8"; break;
-        case (uint8_t)DataFormat::Int8: DPRINT << "Int8"; break;
-        case (uint8_t)DataFormat::UInt8: DPRINT << "UInt8"; break;
-        case (uint8_t)DataFormat::UInt16: DPRINT << "UInt16"; break;
-        case (uint8_t)DataFormat::Int32: DPRINT << "Int32"; break;
-        case (uint8_t)DataFormat::UInt32: DPRINT << "UInt32"; break;
-        case (uint8_t)DataFormat::Tf32: DPRINT << "Tf32"; break;
-        default: DPRINT << "INVALID DATA FORMAT"; break;
+        case (uint8_t)DataFormat::Float32: DPRINT("Float32"); break;
+        case (uint8_t)DataFormat::Float16: DPRINT("Float16"); break;
+        case (uint8_t)DataFormat::Bfp8: DPRINT("Bfp8"); break;
+        case (uint8_t)DataFormat::Bfp4: DPRINT("Bfp4"); break;
+        case (uint8_t)DataFormat::Bfp2: DPRINT("Bfp2"); break;
+        case (uint8_t)DataFormat::Float16_b: DPRINT("Float16_b"); break;
+        case (uint8_t)DataFormat::Bfp8_b: DPRINT("Bfp8_b"); break;
+        case (uint8_t)DataFormat::Bfp4_b: DPRINT("Bfp4_b"); break;
+        case (uint8_t)DataFormat::Bfp2_b: DPRINT("Bfp2_b"); break;
+        case (uint8_t)DataFormat::Lf8: DPRINT("Lf8"); break;
+        case (uint8_t)DataFormat::Int8: DPRINT("Int8"); break;
+        case (uint8_t)DataFormat::UInt8: DPRINT("UInt8"); break;
+        case (uint8_t)DataFormat::UInt16: DPRINT("UInt16"); break;
+        case (uint8_t)DataFormat::Int32: DPRINT("Int32"); break;
+        case (uint8_t)DataFormat::UInt32: DPRINT("UInt32"); break;
+        case (uint8_t)DataFormat::Tf32: DPRINT("Tf32"); break;
+        default: DPRINT("INVALID DATA FORMAT"); break;
     }
 }
 
@@ -161,7 +161,7 @@ inline void dprint_tensix_dest_reg_row_float32(uint16_t row) {
     }
 #endif
 
-    dprint_array_with_data_type((uint32_t)DataFormat::Float32, rd_data, ARRAY_LEN);
+    dprint_array_with_data_type<ARRAY_LEN>((uint32_t)DataFormat::Float32, rd_data);
 }
 
 // Helper function that prints one row from dest when dest is configured for storing float16 values.
@@ -171,7 +171,7 @@ inline void dprint_tensix_dest_reg_row_float16(uint32_t data_format, uint16_t ro
     uint32_t rd_data[ARRAY_LEN + 1];  // data + array type
     row = get_dest_row_id(row, false);
     dbg_read_dest_acc_row(row, rd_data);
-    dprint_array_with_data_type(data_format, rd_data, 8);
+    dprint_array_with_data_type<ARRAY_LEN>(data_format, rd_data);
 }
 
 inline void dprint_tensix_dest_reg_row_int32(uint16_t row) {
@@ -182,9 +182,9 @@ inline void dprint_tensix_dest_reg_row_int32(uint16_t row) {
     for (int i = 0; i < ARRAY_LEN; ++i) {
         rd_data[i] = addr[i + (row << 4)];
     }
-    dprint_array_with_data_type((uint32_t)DataFormat::Int32, rd_data, ARRAY_LEN);
+    dprint_array_with_data_type<ARRAY_LEN>((uint32_t)DataFormat::Int32, rd_data);
 #else
-    DPRINT << "Int32 format not supported on this architecture" << ENDL();
+    DPRINT("Int32 format not supported on this architecture\n");
 #endif
 }
 
@@ -195,7 +195,25 @@ inline void dprint_tensix_dest_reg_row_uint16(uint32_t data_format, uint16_t row
     uint32_t rd_data[ARRAY_LEN + 1];  // data + array type
     row = get_dest_row_id(row, false);
     dbg_read_dest_acc_row(row, rd_data);
-    dprint_array_with_data_type(data_format, rd_data, 8);
+    dprint_array_with_data_type<ARRAY_LEN>(data_format, rd_data);
+}
+
+// Helper function that prints one row from dest when dest is configured for storing uint8 values.
+// This function should be used only from dprint_tensix_dest_reg.
+inline void dprint_tensix_dest_reg_row_uint8(uint32_t data_format, uint16_t row) {
+    constexpr int ARRAY_LEN = 8;
+    uint32_t rd_data[ARRAY_LEN + 1];  // data + array type
+    row = get_dest_row_id(row, false);
+    dbg_read_dest_acc_row(row, rd_data);
+    dprint_array_with_data_type<ARRAY_LEN>(data_format, rd_data);
+}
+
+inline void dprint_tensix_dest_reg_row_int8(uint32_t data_format, uint16_t row) {
+    constexpr int ARRAY_LEN = 8;
+    uint32_t rd_data[ARRAY_LEN + 1];  // data + array type
+    row = get_dest_row_id(row, false);
+    dbg_read_dest_acc_row(row, rd_data);
+    dprint_array_with_data_type<ARRAY_LEN>(data_format, rd_data);
 }
 
 // Print the contents of tile with index tile_id within the destination register
@@ -209,14 +227,12 @@ void dprint_tensix_dest_reg(int tile_id = 0) {
         if (READ_HW_CFG_0_REG_FIELD(ALU_ACC_CTRL_Fp32_enabled)) {
             data_format_reg_field_value = (uint32_t)DataFormat::Float32;
 #if defined(ARCH_WORMHOLE)
-            DPRINT << "WARNING: Float32 on Wormhole displays limited precision - lower 16 mantissa bits are not shown"
-                   << ENDL();
+            DPRINT("WARNING: Float32 on Wormhole displays limited precision - lower 16 mantissa bits are not shown\n");
 #endif
         }
 
         // Print the contents
-        DPRINT << FIXED() << SETW(WIDTH) << SETPRECISION(PRECISION);
-        DPRINT << "Tile ID = " << tile_id << ENDL();
+        DPRINT("Tile ID = {}\n", tile_id);
 
         uint32_t row = tile_id * NUM_ROWS_PER_TILE;
         for (int face_id = 0; face_id < NUM_FACES_PER_TILE; ++face_id) {
@@ -230,12 +246,18 @@ void dprint_tensix_dest_reg(int tile_id = 0) {
                     case (uint32_t)DataFormat::Float16_b:
                         dprint_tensix_dest_reg_row_float16(data_format_reg_field_value, row);
                         break;
-                    default: DPRINT << "Unsupported data format: " << data_format_reg_field_value << ENDL(); break;
+                    case (uint32_t)DataFormat::UInt8:
+                        dprint_tensix_dest_reg_row_uint8(data_format_reg_field_value, row);
+                        break;
+                    case (uint32_t)DataFormat::Int8:
+                        dprint_tensix_dest_reg_row_int8(data_format_reg_field_value, row);
+                        break;
+                    default: DPRINT("Unsupported data format: {}\n", data_format_reg_field_value); break;
                 }
                 row++;
             }
             if constexpr (print_by_face) {
-                DPRINT << ENDL();
+                DPRINT("\n");
             }
         }
     })
@@ -248,7 +270,7 @@ void dprint_tensix_dest_reg(int tile_id = 0) {
 #define dprint_cfg_reg_field(bank, reg_field_name)                                          \
     {                                                                                       \
         uint32_t field_val = READ_CFG_REG_FIELD(ckernel::dbg_cfgreg::bank, reg_field_name); \
-        DPRINT << #reg_field_name << " = " << field_val << ENDL();                          \
+        DPRINT(#reg_field_name " = {}\n", field_val);                                       \
     }
 
 // Print the contents of the whole configuration register. The register is specified by
@@ -258,29 +280,25 @@ void dprint_tensix_dest_reg(int tile_id = 0) {
 #define dprint_cfg_reg(bank, reg_field_name)                                                    \
     {                                                                                           \
         uint32_t reg_val = dbg_read_cfgreg(ckernel::dbg_cfgreg::bank, reg_field_name##_ADDR32); \
-        DPRINT << #reg_field_name << " = " << HEX() << reg_val << ENDL();                       \
+        DPRINT(#reg_field_name " = 0x{:x}\n", reg_val);                                         \
     }
 
 // Print the content of the register field given the value in the register.
 #define DPRINT_TENSIX_CONFIG_FIELD(reg_val, reg_field_name, name, printDec)                 \
     {                                                                                       \
         uint32_t field_value = (reg_val & reg_field_name##_MASK) >> reg_field_name##_SHAMT; \
-        DPRINT << name << " = ";                                                            \
         if (printDec) {                                                                     \
-            DPRINT << DEC();                                                                \
+            DPRINT(name " = {}; ", field_value);                                            \
         } else {                                                                            \
-            DPRINT << "0x" << HEX();                                                        \
+            DPRINT(name " = 0x{:x}; ", field_value);                                        \
         }                                                                                   \
-        DPRINT << field_value << "; ";                                                      \
     }
 
-inline void dprint_tensix_struct_field(
-    uint32_t word, uint32_t mask, uint8_t shamt, const char* name, bool printDec = false) {
-    DPRINT << name << ": ";
-    if (printDec) {
-        DPRINT << DEC();
-    } else {
-        DPRINT << "0x" << HEX();
+#define dprint_tensix_struct_field(word, mask, shamt, name, printDec) \
+    {                                                                 \
+        if (printDec) {                                               \
+            DPRINT(name ": {}\n", ((word) & (mask)) >> (shamt));      \
+        } else {                                                      \
+            DPRINT(name ": 0x{:x}\n", ((word) & (mask)) >> (shamt));  \
+        }                                                             \
     }
-    DPRINT << ((word & mask) >> shamt) << ENDL();
-}

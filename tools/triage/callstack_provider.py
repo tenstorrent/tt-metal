@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -61,6 +61,15 @@ class KernelCallstackWithMessage:
     message: str | None
 
 
+def _pc_not_in_range_message(dispatcher_core_data: DispatcherCoreData) -> str:
+    msg = "PC was not in range of any provided ELF files."
+    if dispatcher_core_data.block_type == "active_eth":
+        msg += " Probably context switch occurred and PC is contained in base ERISC firmware."
+    if dispatcher_core_data.kernel_lookup_warning:
+        msg += "\n" + dispatcher_core_data.kernel_lookup_warning
+    return msg
+
+
 def get_callstack(
     location: OnChipCoordinate,
     risc_name: str,
@@ -84,9 +93,7 @@ def get_callstack(
                 cs = top_callstack(pc, elfs, offsets, context)
                 error_message = None
                 if len(cs) == 0:
-                    error_message = "PC was not in range of any provided ELF files."
-                    if location in location._device.active_eth_block_locations:
-                        error_message += " Probably context switch occurred and PC is contained in base ERISC firmware."
+                    error_message = _pc_not_in_range_message(dispatcher_core_data)
                 return KernelCallstackWithMessage(callstack=cs, message=error_message)
             except TimeoutDeviceRegisterError:
                 raise
@@ -97,9 +104,7 @@ def get_callstack(
                 cs = callstack(location, elfs, offsets, risc_name)
                 error_message = None
                 if len(cs) == 0:
-                    error_message = "PC was not in range of any provided ELF files."
-                    if location in location._device.active_eth_block_locations:
-                        error_message += " Probably context switch occurred and PC is contained in base ERISC firmware."
+                    error_message = _pc_not_in_range_message(dispatcher_core_data)
                 return KernelCallstackWithMessage(callstack=cs, message=error_message)
             except TimeoutDeviceRegisterError:
                 raise
@@ -112,12 +117,7 @@ def get_callstack(
                     error_message = str(e) + " - defaulting to top callstack"
                     cs = top_callstack(pc, elfs, offsets, context)
                     if len(cs) == 0:
-                        additional_message = "PC was not in range of any provided ELF files."
-                        if location in location._device.active_eth_block_locations:
-                            additional_message += (
-                                " Probably context switch occurred and PC is contained in base ERISC firmware."
-                            )
-                        error_message = "\n".join([error_message, additional_message])
+                        error_message = "\n".join([error_message, _pc_not_in_range_message(dispatcher_core_data)])
                     return KernelCallstackWithMessage(callstack=cs, message=error_message)
                 except TimeoutDeviceRegisterError:
                     raise
@@ -273,7 +273,7 @@ class CallstackProvider:
                 kernel_callstack_with_message=KernelCallstackWithMessage(callstack=[], message="Core is in reset"),
             )
 
-        if location in location._device.active_eth_block_locations and not self.force_active_eth:
+        if dispatcher_core_data.block_type == "active_eth" and not self.force_active_eth:
             callstack_with_message = get_callstack(
                 location,
                 risc_name,

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -25,7 +25,12 @@ class Hal;
 class DispatchSettings {
 public:
     explicit DispatchSettings(
-        uint32_t num_hw_cqs, const CoreType& core_type, bool is_galaxy_cluster, uint32_t l1_alignment);
+        uint32_t num_hw_cqs,
+        const CoreType& core_type,
+        bool is_galaxy_cluster,
+        bool are_cqs_dram_backed,
+        uint32_t l1_alignment,
+        uint32_t prefetch_q_entry_size_bytes);
 
     bool operator==(const DispatchSettings& other) const;
 
@@ -72,10 +77,6 @@ public:
     //
     // Non Configurable Settings
     //
-
-    // Prefetch Queue entry type
-    // Same as the one in cq_prefetch.cpp
-    using prefetch_q_entry_type = uint16_t;
 
     // Prefetch Queue pointer type
     // Same as the one in cq_prefetch.cpp
@@ -139,6 +140,7 @@ public:
     uint32_t other_ptrs_size{};               // configured with alignment
 
     // cq_prefetch
+    uint32_t prefetch_q_entry_size_bytes_{};  // 2 for WH ETH, 4 otherwise
     uint32_t prefetch_q_entries_{0};
     uint32_t prefetch_q_size_{};
     uint32_t prefetch_max_cmd_size_{};
@@ -157,7 +159,8 @@ public:
     CoreType core_type_{0};  // Which core this settings is for
 
 private:
-    void init_worker_defaults(uint32_t num_hw_cqs, bool is_galaxy_cluster, uint32_t l1_alignment);
+    void init_worker_defaults(
+        uint32_t num_hw_cqs, bool is_galaxy_cluster, bool are_cqs_dram_backed, uint32_t l1_alignment);
     void init_eth_defaults(uint32_t num_hw_cqs, uint32_t l1_alignment);
 };
 

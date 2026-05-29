@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -164,6 +164,7 @@ struct CBSizeParams {
     bool use_two_stage_reduce = false;
     bool use_welford = false;
     bool skip_write_back = false;
+    bool rms_norm = false;
 
     // Computes all CB sizes and returns them in a struct
     struct Sizes {
@@ -295,8 +296,9 @@ struct KernelConfig {
     tt::tt_metal::NOC writer_noc = tt::tt_metal::NOC::NOC_0;
 
     // Compute config
-    MathFidelity math_fidelity = MathFidelity::HiFi4;
+    tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
     bool fp32_dest_acc_en = false;
+    bool dst_full_sync_en = false;
     bool math_approx_mode = false;
 };
 

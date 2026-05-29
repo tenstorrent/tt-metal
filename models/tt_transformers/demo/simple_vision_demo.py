@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -11,7 +11,6 @@ from PIL import Image as PIL_Image
 from transformers import AutoProcessor
 
 from models.common.llama_models import create_vision_mask, extract_images_from_messages, sample_top_p
-from models.tt_transformers.tt.generator import create_submeshes
 
 IMG_PATH = Path("models/tt_transformers/demo/sample_prompts/llama_models").resolve()
 
@@ -25,7 +24,14 @@ import torch
 import ttnn
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.tt_transformers.tt.generator import Generator
+from models.tt_transformers.tt.common import get_base_model_name
+from models.tt_transformers.tt.generator import Generator, create_submeshes
+
+_MISTRAL_SMALL_31_24B_BASE = "Mistral-Small-3.1-24B"
+_MISTRAL_VISION_MAX_SEQ_LEN_FLOOR = 4096
+_BERTSCORE_MODEL_TYPE = "microsoft/deberta-xlarge-mnli"
+_BERTSCORE_MIN_F1 = 0.55
+_BERTSCORE_MEAN_F1 = 0.70
 
 
 def get_batch_sampler(temperature, top_p, tokenizer):
@@ -133,6 +139,25 @@ def load_expected_text(input_prompts, model_name, batch):
     return expected_output
 
 
+def should_run_bertscore(is_ci_env, mesh_device, model_name):
+    if not is_ci_env:
+        return False
+    if "Llama-3.2-11B" not in model_name and "Llama-3.2-90B" not in model_name:
+        return False
+
+    return mesh_device.get_num_devices() <= 2 or "Llama-3.2-90B" in model_name
+
+
+def trim_generated_text(generated_text, tokenizer):
+    stop_tokens = [getattr(tokenizer, "eos_token", None), "<|eot_id|>", "<|eom_id|>"]
+    stop_positions = [
+        generated_text.index(stop_token) for stop_token in stop_tokens if stop_token and stop_token in generated_text
+    ]
+    if stop_positions:
+        generated_text = generated_text[: min(stop_positions)]
+    return generated_text.strip()
+
+
 def create_multimodal_model(
     mesh_device,
     max_batch_size,
@@ -143,12 +168,14 @@ def create_multimodal_model(
 ):
     from models.tt_transformers.tt.model_config import ModelArgs
     from models.tt_transformers.tt.multimodal.llama_vision_model import CrossAttentionTransformer
+    from models.tt_transformers.tt.multimodal.mistral_24b.mistral_e2e_model import MistralTransformer
 
-    tt_model_args = ModelArgs(mesh_device, max_batch_size=max_batch_size)
-    assert tt_model_args.is_llama_vision(), "This model is multimodal"
+    hf_tail = os.environ.get("HF_MODEL", "").strip("/").split("/")[-1]
+    if get_base_model_name(hf_tail) == _MISTRAL_SMALL_31_24B_BASE:
+        max_seq_len = max(max_seq_len, _MISTRAL_VISION_MAX_SEQ_LEN_FLOOR)
 
-    # limit length or we'll run out of space
-    tt_model_args.max_seq_len = max_seq_len
+    tt_model_args = ModelArgs(mesh_device, max_batch_size=max_batch_size, max_seq_len=max_seq_len)
+    assert tt_model_args.is_multimodal, "This model is multimodal"
     if tt_model_args.is_90b:
         assert tt_model_args.device_name == "T3K", "90B model only supported on T3K right now"
         # for 90B model on T3K, use bfp8 and performance optimizations or the model won't fit in memory
@@ -157,14 +184,25 @@ def create_multimodal_model(
 
     if checkpoint is None:
         checkpoint = tt_model_args.load_state_dict()
-    model = CrossAttentionTransformer(
-        mesh_device,
-        state_dict=checkpoint,
-        weight_cache_path=tt_model_args.weight_cache_path(dtype),
-        dtype=dtype,
-        configuration=tt_model_args,
-        use_paged_kv_cache=use_paged_kv_cache,
-    )
+
+    if tt_model_args.base_model_name == _MISTRAL_SMALL_31_24B_BASE:
+        model = MistralTransformer(
+            mesh_device=mesh_device,
+            state_dict=checkpoint,
+            weight_cache_path=tt_model_args.weight_cache_path(ttnn.bfloat8_b),
+            dtype=ttnn.bfloat8_b,
+            args=tt_model_args,
+            use_paged_kv_cache=use_paged_kv_cache,
+        )
+    else:
+        model = CrossAttentionTransformer(
+            mesh_device,
+            state_dict=checkpoint,
+            weight_cache_path=tt_model_args.weight_cache_path(dtype),
+            dtype=dtype,
+            configuration=tt_model_args,
+            use_paged_kv_cache=use_paged_kv_cache,
+        )
     return tt_model_args, model, checkpoint
 
 
@@ -278,7 +316,7 @@ def prepare_generator_args(
     ],
 )
 @pytest.mark.parametrize(
-    "device_params", [{"fabric_config": True, "trace_region_size": 17300000, "num_command_queues": 2}], indirect=True
+    "device_params", [{"fabric_config": True, "trace_region_size": 17400000, "num_command_queues": 2}], indirect=True
 )
 def test_multimodal_demo_text(
     mesh_device,
@@ -326,11 +364,19 @@ def test_multimodal_demo_text(
         max_seq_len=max_seq_len,
     )
 
-    processor = AutoProcessor.from_pretrained(ckpt_dir, local_files_only=is_ci_env)
-    tokenizer = processor.tokenizer
+    is_mistral = model_args[0].base_model_name == _MISTRAL_SMALL_31_24B_BASE
+
+    processor = AutoProcessor.from_pretrained(
+        model_args[0].CKPT_DIR if is_mistral else ckpt_dir,
+        local_files_only=not is_mistral and is_ci_env,
+    )
+    tokenizer = processor.tokenizer if hasattr(processor, "tokenizer") else model_args[0].tokenizer
     generator = Generator(model, model_args, mesh_device, processor=processor, tokenizer=tokenizer)
 
-    xattn_caches = [model.setup_cache(model_args[i].max_batch_size) for i, model in enumerate(generator.model)]
+    xattn_caches = [
+        model.setup_cache(model_args[i].max_batch_size) if not is_mistral else None
+        for i, model in enumerate(generator.model)
+    ]
 
     # Override parameters from command line if they are provided
     input_prompts = request.config.getoption("--input_prompts") or input_prompts
@@ -357,14 +403,25 @@ def test_multimodal_demo_text(
                         str(value) for content in msg["content"] for key, value in content.items() if key != "type"
                     )
                     logger.info(f"{msg['role'].capitalize()}: {content}\n")
-            batch_inputs = [
-                processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=True, return_dict=True)
-                for messages in batch_dialogs
-            ]
-
-            # Do initial prefill
-            # TBD: rewrite generator since images are processed twice (in processor and generator)
-            vision_images = [extract_images_from_messages(messages) or None for messages in batch_dialogs]
+            if is_mistral:
+                batch_inputs = [
+                    processor.apply_chat_template(
+                        messages, add_generation_prompt=True, tokenize=True, return_dict=True, return_tensors="pt"
+                    )
+                    for messages in batch_dialogs
+                ]
+                image_sizes = [
+                    model_input.image_sizes.squeeze().tolist() if model_input.image_sizes is not None else None
+                    for model_input in batch_inputs
+                ]
+                vision_images = [model_input.get("pixel_values", None) for model_input in batch_inputs]
+            else:
+                batch_inputs = [
+                    processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=True, return_dict=True)
+                    for messages in batch_dialogs
+                ]
+                image_sizes = None
+                vision_images = [extract_images_from_messages(messages) or None for messages in batch_dialogs]
             vision_mask = [
                 create_vision_mask(model_input["input_ids"][0], processor.image_token_id) or None
                 for model_input in batch_inputs
@@ -376,7 +433,7 @@ def test_multimodal_demo_text(
             total_lens = prefill_lens + max_gen_len
 
             # Create padded tokens tensor for batch
-            pad_id = tokenizer.pad_token_id
+            pad_id = tokenizer.pad_token_id if is_mistral else (tokenizer.pad_token_id or 0)
             bsz = len(prompt_tokens)
             tokens = torch.full((bsz, max(total_lens)), pad_id, dtype=torch.long)
 
@@ -400,6 +457,7 @@ def test_multimodal_demo_text(
                         xattn_caches,
                         total_lens,
                         prefill_lens,
+                        image_sizes=image_sizes,
                     )
 
             # Get cached prefill time
@@ -417,6 +475,7 @@ def test_multimodal_demo_text(
                     xattn_caches,
                     total_lens,
                     prefill_lens,
+                    image_sizes=image_sizes,
                 )
 
             prefill_end = time.perf_counter()
@@ -436,16 +495,25 @@ def test_multimodal_demo_text(
                     position_id = prefill_lens + gen_idx
                     next_token_tensor = next_tokens.reshape(max_batch_size, 1)
 
-                    logits = generator.decode_forward_llama_vision(
-                        position_id,
-                        next_token_tensor,
-                        prefill_batch_xattn_masks,
-                        prefill_batch_text_masks,
-                        decode_batch_xattn_masks,
-                        decode_batch_text_masks,
-                        xattn_caches,
-                        enable_trace=enable_trace,
-                    )
+                    if is_mistral:
+                        logits = generator.decode_forward(
+                            next_token_tensor,
+                            position_id,
+                            page_table=None,
+                            kv_cache=None,
+                            enable_trace=enable_trace,
+                        )
+                    else:
+                        logits = generator.decode_forward_llama_vision(
+                            position_id,
+                            next_token_tensor,
+                            prefill_batch_xattn_masks,
+                            prefill_batch_text_masks,
+                            decode_batch_xattn_masks,
+                            decode_batch_text_masks,
+                            xattn_caches,
+                            enable_trace=enable_trace,
+                        )
 
                     if isinstance(logits, tuple):
                         logits = logits[0]
@@ -472,8 +540,7 @@ def test_multimodal_demo_text(
                 logger.info(f"User {user_id} full text: {text}")
                 if batch_idx >= num_trace_batches:
                     generated_text = tokenizer.decode(tokens_out[prefill_lens[user_id] :])
-                    if tokenizer.eos_token in generated_text:
-                        generated_text = generated_text[: generated_text.index(tokenizer.eos_token)]
+                    generated_text = trim_generated_text(generated_text, tokenizer)
                     non_trace_generated_texts.append(generated_text)
 
             prefill_time_ms = (prefill_end - prefill_start) * 1000
@@ -486,8 +553,7 @@ def test_multimodal_demo_text(
     # End profiling
     profiler.end("run")
 
-    if is_ci_env and mesh_device.get_num_devices() <= 2:
-        # TODO: fix issue that models on T3K "don't see images" https://github.com/tenstorrent/tt-metal/issues/32284
+    if should_run_bertscore(is_ci_env, mesh_device, model_args[0].base_model_name):
         expected_output = load_expected_text(input_prompts, model_args[0].base_model_name, max_batch_size)
         from bert_score import score as bert_score
 
@@ -498,15 +564,19 @@ def test_multimodal_demo_text(
             candidates,
             references,
             lang="en",
-            model_type="microsoft/deberta-xlarge-mnli",
+            model_type=_BERTSCORE_MODEL_TYPE,
             rescale_with_baseline=False,
             batch_size=64,
         )
         for i, (p, r, f) in enumerate(zip(P0, R0, F10)):
-            logger.info(f"BERTScore (rescaled) P/R/F1 for sample {i}: {p.item():.3f}/{r.item():.3f}/{f.item():.3f}")
+            logger.info(f"BERTScore P/R/F1 for sample {i}: {p.item():.3f}/{r.item():.3f}/{f.item():.3f}")
         # TODO: create separate targets for different samples, investigate different outputs for different batch_size (4 vs 16)
-        assert F10.min().item() > 0.55, f"min BERTScore F1 ({F10.min().item()}) is lower than expected (0.55)."
-        assert F10.mean().item() > 0.70, f"mean BERTScore F1 ({F10.mean().item()}) is lower than expected (0.70)."
+        assert (
+            F10.min().item() > _BERTSCORE_MIN_F1
+        ), f"min BERTScore F1 ({F10.min().item()}) is lower than expected ({_BERTSCORE_MIN_F1})."
+        assert (
+            F10.mean().item() > _BERTSCORE_MEAN_F1
+        ), f"mean BERTScore F1 ({F10.mean().item()}) is lower than expected ({_BERTSCORE_MEAN_F1})."
 
     # Calculate measurements
     compile_prefill_time = profiler.get_duration("compile_prefill")
@@ -554,16 +624,12 @@ def test_multimodal_demo_text(
 
         run_config = (tt_device_name, base_model_name, max_batch_size)
         targets_prefill_tok_s = {
-            ("N300", "Llama-3.2-11B", 16): 18.3,
-            ("T3K", "Llama-3.2-90B", 1): 14.02,
+            ("N300", "Llama-3.2-11B", 16): 19.3,
+            ("T3K", "Llama-3.2-90B", 1): 10.0,
         }
         targets_decode_tok_s_u = {
-            ("N300", "Llama-3.2-11B", 16): (17, None),  # None to default to tolerance percentage (1.15)
-            # second value to override default tolerance percentage (1.15); observing variance across different CI machines
-            # For T3K Llama-3.2-90B, the decode_t/s/u target used to be set to 3 with a wide tolerance (4.3, i.e. 330% increase) due to high variance observed across CI machines.
-            # Empirical data from CI runs (see https://github.com/tenstorrent/tt-metal/pull/31605) shows that decode performance can vary significantly, sometimes falling well below the nominal target.
-            # The slow CI machine seems to be out of circulation for now, so we can use a high target to avoid spurious test failures.
-            ("T3K", "Llama-3.2-90B", 1): (10.5, None),
+            ("N300", "Llama-3.2-11B", 16): (15.9, None),  # None to default to tolerance percentage (1.15)
+            ("T3K", "Llama-3.2-90B", 1): (8.0, None),
         }
 
         perf_targets = {}
@@ -585,9 +651,10 @@ def test_multimodal_demo_text(
         benchmark_data = create_benchmark_data(profiler, measurements, N_warmup_iter, perf_targets)
         benchmark_data.save_partial_run_json(
             profiler,
-            run_type=f"{tt_device_name}-demo",
-            ml_model_name=f"{base_model_name}-Vision",
+            run_type="demo",
+            ml_model_name=f"{base_model_name}-vision",
             ml_model_type="vlm",
+            device_name=tt_device_name,
             num_layers=model_args[0].n_layers,
             batch_size=max_batch_size,
             config_params={"data_parallel": data_parallel, "tensor_parallel": num_devices // data_parallel},

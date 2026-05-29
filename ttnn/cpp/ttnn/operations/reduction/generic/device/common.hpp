@@ -1,15 +1,17 @@
 
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
+#include <string_view>
+
 #include "ttnn/tensor/tensor.hpp"
 
 namespace tt::tt_metal {
 
-enum class ReduceOpMath { SUM, MAX, MIN };
+enum class ReduceOpMath { SUM, AVG, MAX, MIN, STD, VAR };
 
 enum class ReduceOpDim { H, W, HW };
 
@@ -21,5 +23,47 @@ namespace ttnn::prim {
 
 tt::tt_metal::ReduceOpParallelizationStrategy get_parallelization_strategy(
     const tt::tt_metal::Tensor& input_tensors, tt::tt_metal::ReduceOpDim reduce_dim);
+
+// Returns true if the fused-negate H reduce path's CBs fit in available L1.
+// The reduce_h_neg compute kernel pushes ntiles tiles per inner-loop iteration;
+// to make the FIFO write pointer wrap cleanly across all push sizes, c_4 (acc)
+// and c_5 (ineg) are each sized at Ht * lcm(Wt_per_core_g1, Wt_per_core_g2)
+// tiles.  For wide reductions this can exceed L1, in which case callers must
+// fall back to external negation around a non-fused (regular) reduce.
+bool h_reduce_negate_fits_in_l1(
+    const tt::tt_metal::Tensor& input_tensor, const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids);
+
+// Builds a tilized TensorSpec for a reduction-style op output, given the
+// already shape-adjusted output shape and the dimension that was reduced.
+//
+// Handles all currently supported output memory layouts:
+//   - INTERLEAVED: returns the basic spec.
+//   - WIDTH/HEIGHT/BLOCK_SHARDED: delegates to the corresponding TensorSpec
+//     builder using the grid/orientation taken from `output_mem_config` if
+//     available, otherwise falling back to `input_mem_config`.
+//   - ND_SHARDED: copies the ND shard spec (from `output_mem_config` or, as a
+//     fallback, `input_mem_config`) and sets the shard shape entries for the
+//     reduced dim(s) to 1.
+//
+// `input_mem_config` is the memory config of the reduction's input tensor and
+// is only consulted as a fallback when the output config omits a shard spec.
+tt::tt_metal::TensorSpec build_reduce_output_tensor_spec(
+    const tt::tt_metal::Shape& output_shape,
+    tt::tt_metal::DataType output_dtype,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const tt::tt_metal::MemoryConfig& input_mem_config,
+    tt::tt_metal::ReduceOpDim reduce_dim);
+
+// Enforces the documented contract that, for reduction-style ops, any sharded
+// participant (input or output) must live in L1.  Sharded layouts and DRAM
+// buffers use disjoint coordinate spaces (worker cores vs DRAM bank cores), so
+// silently borrowing a grid across buffer types — as the shard-spec fallback
+// in `build_reduce_output_tensor_spec` would otherwise allow — produces an
+// invalid spec.  Pass an `op_name` (e.g. "reduce", "Std/Var reduction") for a
+// readable error message.
+void validate_reduce_sharded_buffer_types(
+    const tt::tt_metal::MemoryConfig& input_mem_config,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    std::string_view op_name);
 
 }  // namespace ttnn::prim

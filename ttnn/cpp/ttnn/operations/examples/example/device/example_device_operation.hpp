@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,18 +11,18 @@
 #include "ttnn/core.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/decorators.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::operations::examples {
 
 struct ExampleDeviceOperation {
-    // Define the operation attributes. This is it to store all variables needed by operations that aren't tensors
+    // Define the operation attributes. This is used to store all variables needed by operations that aren't tensors.
     struct operation_attributes_t {
         bool attribute;
         int some_other_attribute;
     };
 
-    // Define the tensor arguments. This is it to store all tensors passed in and/or out of the operation
+    // Define the tensor arguments. This is used to store all tensors passed in and/or out of the operation.
     // Tensor arguments don't need to be just input tensors, they can be output tensors, input/output tensors, optional
     // tensors, etc.
     struct tensor_args_t {
@@ -40,66 +40,42 @@ struct ExampleDeviceOperation {
         // An example of a vector of tensors
         // std::vector<Tensor> vector_of_tensors;
 
-        // An example of a tuple of tensors
-        // std::tuple<Tensor, ...> tuple_of_tensors;
-
         // An example of a vector of optional tensors
         // std::vector<std::optional<Tensor>> vector_of_optional_tensors;
-
-        // An example of a tuple of tensors
-        // std::tuple<std::vector<std::optional<Tensor>>, std::optional<Tensor>> some_crazy_tuple_of_tensors;
     };
 
-    // Define the return types for the spec(s) of the operation
+    // Define the return types for the spec(s) of the operation.
     // Can be a single ttnn::TensorSpec, std::optional<ttnn::TensorSpec>, std::vector<ttnn::TensorSpec>,
-    // std::tuple<ttnn::TensorSpec> etc.
+    // std::tuple<ttnn::TensorSpec, ...> etc.
     using spec_return_value_t = ttnn::TensorSpec;
 
-    // Define the return types for the tensor(s) of the operation
-    // Can be a single Tensor, std::optional<Tensor, ...>, std::vector<Tensor>, std::tuple<Tensor, ...> etc.
+    // Define the return types for the tensor(s) of the operation.
+    // Can be a single Tensor, std::optional<Tensor>, std::vector<Tensor>, std::tuple<Tensor, ...> etc.
     using tensor_return_value_t = Tensor;
 
-    // Note spec_return_value_t and tensor_return_value_t should follow the same pattern
+    // Note: spec_return_value_t and tensor_return_value_t should follow the same pattern.
     // i.e. if spec_return_value_t is a std::vector<std::optional<ttnn::TensorSpec>> then tensor_return_value_t should
     // be std::vector<std::optional<Tensor>>
 
+    // -------------------------------------------------------------------------
+    // Descriptor-based program factories
+    //
+    // Each factory returns a ProgramDescriptor. The framework handles program
+    // construction, caching, and runtime argument patching automatically --
+    // no shared_variables_t or override_runtime_arguments needed.
+    // -------------------------------------------------------------------------
+
+    // Single-core: pins work to core {0,0}
     struct SingleCore {
-        // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle unary_reader_kernel_id;
-            tt::tt_metal::KernelHandle unary_writer_kernel_id;
-        };
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
     };
 
+    // Multi-core: distributes tiles across all available cores
     struct MultiCore {
-        // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle unary_reader_kernel_id;
-            tt::tt_metal::KernelHandle unary_writer_kernel_id;
-            std::size_t num_cores;
-            std::size_t num_cores_y;
-        };
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
@@ -107,8 +83,6 @@ struct ExampleDeviceOperation {
 
     using program_factory_t = std::variant<SingleCore, MultiCore>;
 
-    // Required only when program_factory_t has more than one variant.
-    // For single-variant program_factory_t, the framework auto-selects it.
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
     // Validate the operation when it creates a program. Also called on cache hit by default.
@@ -118,10 +92,10 @@ struct ExampleDeviceOperation {
     // If not provided, the framework calls validate_on_program_cache_miss.
     // static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
 
-    // Compute the output specs based on the operation attributes and tensor args
+    // Compute the output specs based on the operation attributes and tensor args.
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
-    // Create the output tensors based on the operation attributes and tensor args
+    // Create the output tensors based on the operation attributes and tensor args.
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 };
 

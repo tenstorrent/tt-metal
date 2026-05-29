@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -256,39 +256,6 @@ def torch_to_tt_tensor(py_tensor, device):
     return tt_tensor
 
 
-### Padding / Unpadding ###
-def pad_by_zero(
-    x: torch.Tensor,
-    device=None,
-    tt_memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED),
-    tt_dtype=ttnn.bfloat16,
-):
-    initial_shape = x.shape
-    pad_shape = list(x.shape)
-    while len(pad_shape) < 4:
-        pad_shape.insert(0, 1)
-    if pad_shape[-1] % 32 != 0 or pad_shape[-2] % 32 != 0:
-        # Pad in torch before creating TT tensor.
-        # Certain datatypes like BFP8_B requires inputs to already be a specific size when creating the tensor, so we need to pad first
-        x = torch.nn.functional.pad(
-            x.reshape(pad_shape),
-            (
-                0,
-                _nearest_32(pad_shape[-1]) - pad_shape[-1],
-                0,
-                _nearest_32(pad_shape[-2]) - pad_shape[-2],
-            ),
-        )
-        x = ttnn.Tensor(x, tt_dtype)
-        x = x.to(ttnn.TILE_LAYOUT)
-        if device is not None:
-            x = x.to(device, tt_memory_config)
-
-    else:
-        x = torch2tt_tensor(x, device, tt_memory_config=tt_memory_config, tt_dtype=tt_dtype)
-    return x, initial_shape
-
-
 def unpad_from_zero(x, desired_shape):
     if x.padded_shape[-1] == desired_shape[-1] and x.padded_shape[-2] == desired_shape[-2]:
         x = tt2torch_tensor(x)
@@ -539,20 +506,22 @@ def comp_pcc(golden, calculated, pcc=0.99):
         return False, 0.0
 
     # For now, mask all infs and nans so that we check the rest... TODO
-    golden = golden.clone()
-    golden[
-        torch.logical_or(
-            torch.isnan(golden),
-            torch.logical_or(torch.isinf(golden), torch.isneginf(golden)),
-        )
-    ] = 0
-    calculated = calculated.clone()
-    calculated[
-        torch.logical_or(
-            torch.isnan(calculated),
-            torch.logical_or(torch.isinf(calculated), torch.isneginf(calculated)),
-        )
-    ] = 0
+    # Skip this for integer types which don't have NaN/Inf values
+    if golden.dtype.is_floating_point:
+        golden = golden.clone()
+        golden[
+            torch.logical_or(
+                torch.isnan(golden),
+                torch.logical_or(torch.isinf(golden), torch.isneginf(golden)),
+            )
+        ] = 0
+        calculated = calculated.clone()
+        calculated[
+            torch.logical_or(
+                torch.isnan(calculated),
+                torch.logical_or(torch.isinf(calculated), torch.isneginf(calculated)),
+            )
+        ] = 0
 
     if torch.equal(golden, calculated):
         return True, 1.0
@@ -766,6 +735,11 @@ def comp_allclose_and_pcc(golden, calculated, rtol=1e-05, atol=1e-08, pcc=0.99):
 def comp_equal(golden, calculated):
     if golden.dtype != calculated.dtype:
         calculated = calculated.type(golden.dtype)
+
+    # If either tensor is zero-volume, broadcasting can still yield an empty delta and
+    # crash torch.max(); defer entirely to torch.equal (False on shape mismatch).
+    if golden.numel() == 0 or calculated.numel() == 0:
+        return torch.equal(golden, calculated), f"{golden} != {calculated}"
 
     atol_delta = torch.max(torch.abs(golden - calculated)).item()
     rtol_delta = torch.max(torch.abs(golden - calculated) / torch.abs(calculated)).item()
@@ -1087,6 +1061,10 @@ def run_for_blackhole(reason_str="only runs for Blackhole"):
 
 def run_for_wormhole_b0(reason_str="only runs for Wormhole B0"):
     return ti_skip(not is_wormhole_b0(), reason=reason_str)
+
+
+def run_for_wormhole_b0_or_blackhole(reason_str="only runs for Wormhole B0 or Blackhole"):
+    return ti_skip(not (is_wormhole_b0() or is_blackhole()), reason=reason_str)
 
 
 def run_for_n_dev(n, reason_str="Test is not meant for this number of devices"):

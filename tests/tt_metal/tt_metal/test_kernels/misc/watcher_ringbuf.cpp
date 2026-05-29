@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,7 +9,7 @@
  * A test for the watcher waypointing feature.
 */
 #if !defined(COMPILE_FOR_BRISC) && !defined(COMPILE_FOR_NCRISC) && !defined(COMPILE_FOR_ERISC) && \
-    !defined(COMPILE_FOR_IDLE_ERISC)
+    !defined(COMPILE_FOR_IDLE_ERISC) && !defined(COMPILE_FOR_DRISC)
 #include "api/compute/common.h"
 #endif
 
@@ -18,7 +18,8 @@ void kernel_main() {
 #if (defined(UCK_CHLKC_UNPACK) and defined(TRISC0)) or \
     (defined(UCK_CHLKC_MATH) and defined(TRISC1)) or \
     (defined(UCK_CHLKC_PACK) and defined(TRISC2)) or \
-    (defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC))
+    (defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || \
+     defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_DRISC))
     for (uint32_t idx = 0; idx < 40; idx++) {
         WATCHER_RING_BUFFER_PUSH((idx + 1) + (idx << 16));
     }

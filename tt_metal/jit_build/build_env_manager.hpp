@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "build.hpp"
+#include "impl/context/context_types.hpp"
 #include <umd/device/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_metal {
@@ -45,11 +46,31 @@ public:
     BuildEnvManager& operator=(const BuildEnvManager&) = delete;
     BuildEnvManager(BuildEnvManager&&) = delete;
     BuildEnvManager& operator=(BuildEnvManager&&) = delete;
+
+    // Returns the process-wide singleton, seeding its HAL on first call from the supplied
+    // ContextId's MetalContext. Subsequent calls return the same singleton regardless of
+    // which ContextId is passed -- the parameter is therefore advisory after first seeding.
+    // It exists to make the BuildEnvManager-to-MetalContext dependency explicit at the API
+    // surface so a future per-ContextId BuildEnvManager refactor (#38445 follow-up) has the
+    // right shape already.
+    static BuildEnvManager& get_instance(ContextId context_id);
+
+    // Legacy no-arg accessor for callers that only have a build_id / device pointer in scope.
+    // Asserts that the singleton has already been seeded (driven by MetalContext::create_*),
+    // which is true for every reader that runs after a MetalEnv has been constructed.
     static BuildEnvManager& get_instance();
+
+    // Internal seeding entry: seeds the singleton with the supplied HAL on first call,
+    // no-op thereafter. Takes a HAL by reference so callers that already hold
+    // g_instance_mutex (e.g. MetalContext::create_*) can seed without re-entering
+    // MetalContext::instance(ContextId). Idempotent and thread-safe.
+    static void seed_if_unseeded_with_hal(const Hal& hal);
 
     // Add a new build environment for the corresponding device id and num_hw_cqs. Also generates the build key and
     // build states.  This requires a live device to be available at device_id.
-    void add_build_env(ChipId device_id, uint8_t num_hw_cqs);
+    // `context_id` selects which MetalContext owns the device; required so the right context's runtime state and
+    // hardware query layer is consulted instead of implicitly initializing the silicon default.
+    void add_build_env(ChipId device_id, uint8_t num_hw_cqs, ContextId context_id);
 
     // Add a new build environment for the corresponding device id and device configuration. Also generates the build
     // key and build states.
@@ -70,6 +91,15 @@ public:
     // Get the path to a firmware binary for loading/linking. Uses pre-compiled path if available.
     std::string get_firmware_binary_path(
         ChipId device_id, uint32_t programmable_core, uint32_t processor_class, int processor_id);
+
+    // Get the path to a kernel binary for loading/linking from the provided binary root.
+    std::string get_kernel_binary_path(
+        ChipId device_id,
+        uint32_t programmable_core,
+        uint32_t processor_class,
+        int processor_id,
+        const std::string& binary_root,
+        const std::string& kernel_full_name);
 
     // Helper function to get the unique build id and number of states for a given programmable_core and
     // processor_class.

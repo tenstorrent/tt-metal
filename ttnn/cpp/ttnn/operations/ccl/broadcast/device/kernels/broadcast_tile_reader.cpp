@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -51,7 +51,7 @@ void kernel_main() {
             .bank_base_address = tensor_address0, .shard_array = mapping_table};
 #else
         constexpr auto tensor0_args = TensorAccessorArgs<4>();
-        auto tensor0_addrgen = TensorAccessor(tensor0_args, tensor_address0, tensor0_page_size);
+        auto tensor0_addrgen = TensorAccessor(tensor0_args, tensor_address0);
 #endif
 
         uint32_t tile_id = tile_id_start;

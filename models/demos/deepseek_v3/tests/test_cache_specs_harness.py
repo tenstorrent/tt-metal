@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -20,6 +20,8 @@ import torch
 import ttnn
 from models.demos.deepseek_v3.utils import config_helpers
 from models.demos.deepseek_v3.utils.config_helpers import get_fabric_config
+
+pytestmark = pytest.mark.t3k_compat
 
 SPECS_JSONL_ENV_VAR = "DEEPSEEK_V3_CACHE_SPECS_JSONL"
 LEGACY_SPECS_JSONL_ENV_VAR = "DEEPSEEK_V3_DUMP_CACHE_SPECS"

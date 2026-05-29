@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -22,7 +22,7 @@ inline void calculate_bitwise_xor(const uint value) {
         vInt res = input ^ v;
         v_if(res > INT_MIN && res < 0) {
             res = 0 - res;
-            res = setsgn(res, v);
+            res = copysgn(res, v);
         }
         v_endif dst_reg[0] = res;
         dst_reg++;

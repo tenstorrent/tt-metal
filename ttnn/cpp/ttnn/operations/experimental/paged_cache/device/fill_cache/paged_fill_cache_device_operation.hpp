@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,9 +9,6 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "paged_fill_cache_program_factory.hpp"
-
-#include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
 
 #include "paged_fill_cache_device_operation_types.hpp"
 
@@ -47,6 +44,8 @@ Tensor paged_fill_cache(
     const Tensor& page_table,
     const std::optional<Tensor>& batch_idx_tensor,
     uint32_t batch_idx_fallback,
-    const std::optional<std::set<ttnn::MeshCoordinate>>& mesh_coords = std::nullopt);
+    const std::optional<std::set<ttnn::MeshCoordinate>>& mesh_coords = std::nullopt,
+    std::optional<uint32_t> block_size_override = std::nullopt,
+    std::optional<uint32_t> cache_position_modulo = std::nullopt);
 
 }  // namespace ttnn::prim

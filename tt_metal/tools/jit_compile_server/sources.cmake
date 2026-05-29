@@ -1,0 +1,1 @@
+set(JIT_COMPILE_SERVER_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/jit_compile_server.cpp)

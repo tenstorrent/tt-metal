@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 from abc import abstractmethod
@@ -92,12 +92,13 @@ class DecoderBlock2DBase(DecoderBlockBase):
         cfg: RunPrefillConfig,
         rope_tensors: dict,
         page_table: ttnn.Tensor,
+        chunk_start_idx: int = 0,
     ) -> ttnn.Tensor:
         # MLA norm
         mla_norm_out = DistributedRMSNorm.forward_prefill(x, cfg["mla_norm"])
 
         # MLA
-        mla_out = MLA2D.forward_prefill(mla_norm_out, user_id, cfg["mla"], rope_tensors, page_table)
+        mla_out = MLA2D.forward_prefill(mla_norm_out, user_id, cfg["mla"], rope_tensors, page_table, chunk_start_idx)
         ttnn.deallocate(mla_norm_out)
 
         # MLA Residual
@@ -133,11 +134,7 @@ class DecoderBlock2DBase(DecoderBlockBase):
             ttnn.deallocate(mla_norm_in)
 
         # MLA
-        mla_reshard_memory_config = ttnn.create_sharded_memory_config(
-            mla_norm_out.shape,
-            **cfg["mla_reshard"],
-        )
-        mla_norm_out = ttnn.to_memory_config(mla_norm_out, memory_config=mla_reshard_memory_config)
+        mla_norm_out = ttnn.to_memory_config(mla_norm_out, **cfg["mla_reshard"])
         mla_out = MLA2D.forward_decode(mla_norm_out, position_idxs, cfg["mla"], rope_tensors, page_table)
         ttnn.deallocate(mla_norm_out)
 
@@ -168,8 +165,9 @@ class DecoderBlock2DBase(DecoderBlockBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
+        batch_size_per_row: int,
     ) -> ModelPrefillConfig:
-        return MLA2D.prefill_model_config(hf_config, mesh_device)
+        return MLA2D.prefill_model_config(hf_config, mesh_device, batch_size_per_row=batch_size_per_row)
 
     @classmethod
     @abstractmethod
@@ -177,12 +175,13 @@ class DecoderBlock2DBase(DecoderBlockBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
+        batch_size_per_row: int,
     ) -> ModelDecodeConfig:
         """
         Decode configuration for the MLA component of the decoder layer.
         This method should be implemented by subclasses to handle specific MLA configurations.
         """
-        return MLA2D.decode_model_config(hf_config, mesh_device)
+        return MLA2D.decode_model_config(hf_config, mesh_device, batch_size_per_row=batch_size_per_row)
 
     @classmethod
     @abstractmethod

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,7 @@ namespace ttnn::experimental::prim {
 struct HcSumReduceParams {
     const tt::tt_metal::MemoryConfig memory_config;
     const tt::tt_metal::DataType dtype;
-    const MathFidelity math_fidelity;
+    const tt::tt_metal::MathFidelity math_fidelity;
 };
 
 struct HcSumReduceInputs {

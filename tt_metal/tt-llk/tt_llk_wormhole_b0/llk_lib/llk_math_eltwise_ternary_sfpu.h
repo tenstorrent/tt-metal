@@ -1,0 +1,47 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+#include <cstdint>
+#include <type_traits>
+
+#include "ckernel_globals.h"
+#include "ckernel_include.h"
+#include "ckernel_ops.h"
+#include "ckernel_sfpu.h"
+#include "ckernel_template.h"
+#include "cmath_common.h"
+#include "llk_math_common.h"
+#include "llk_math_eltwise_sfpu_common.h"
+#include "llk_sfpu_types.h"
+
+// local function declarations
+template <SfpuType sfpu_op>
+inline void eltwise_ternary_sfpu_configure_addrmod()
+{
+    addr_mod_t {
+        .srca = {.incr = 0},
+        .srcb = {.incr = 0},
+        .dest = {.incr = 0},
+    }
+        .set(ADDR_MOD_7);
+
+    if (sfpu_op == SfpuType::where)
+    {
+        addr_mod_t {
+            .srca = {.incr = 0},
+            .srcb = {.incr = 0},
+            .dest = {.incr = 2},
+        }
+            .set(ADDR_MOD_6);
+    }
+}
+
+template <SfpuType sfpu_op>
+inline void _llk_math_eltwise_ternary_sfpu_init_()
+{
+    sfpu::_init_sfpu_config_reg();
+    eltwise_ternary_sfpu_configure_addrmod<sfpu_op>();
+    math::reset_counters(p_setrwc::SET_ABD_F);
+}

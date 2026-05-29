@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -106,6 +106,9 @@ tt_metal::HalProgrammableCoreType get_core_type(tt::ChipId chip_id, const CoreCo
     if (is_inactive_eth_core) {
         return tt_metal::HalProgrammableCoreType::IDLE_ETH;
     }
+    if (tt::tt_metal::MetalContext::instance().get_cluster().is_dram_core(virtual_core, chip_id)) {
+        return tt_metal::HalProgrammableCoreType::DRAM;
+    }
     return tt_metal::HalProgrammableCoreType::TENSIX;
 }
 
@@ -113,14 +116,14 @@ void send_reset_go_signal(tt::ChipId chip, const CoreCoord& virtual_core) {
     tt_metal::HalProgrammableCoreType dispatch_core_type = get_core_type(chip, virtual_core);
     const auto& hal = tt_metal::MetalContext::instance().hal();
     const auto& cluster = tt_metal::MetalContext::instance().get_cluster();
-    uint64_t go_signal_adrr = hal.get_dev_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG);
+    uint64_t go_signal_addr = hal.get_dev_noc_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG);
     auto reset_msg = hal.get_dev_msgs_factory(dispatch_core_type).create<tt_metal::dev_msgs::go_msg_t>();
 
     reset_msg.view().signal() = tt_metal::dev_msgs::RUN_MSG_RESET_READ_PTR_FROM_HOST;
     cluster.write_core_immediate(
-        reset_msg.data(), reset_msg.size(), {static_cast<size_t>(chip), virtual_core}, go_signal_adrr);
+        reset_msg.data(), reset_msg.size(), {static_cast<size_t>(chip), virtual_core}, go_signal_addr);
     cluster.l1_barrier(chip);
-    uint32_t go_message_index_addr = hal.get_dev_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG_INDEX);
+    uint64_t go_message_index_addr = hal.get_dev_noc_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG_INDEX);
     uint32_t zero = 0;
     cluster.write_core_immediate(
         &zero, sizeof(uint32_t), {static_cast<size_t>(chip), virtual_core}, go_message_index_addr);
@@ -138,8 +141,8 @@ void write_launch_msg_to_core(
 
     msg.kernel_config().mode() = tt_metal::dev_msgs::DISPATCH_MODE_HOST;
 
-    uint64_t launch_addr = hal.get_dev_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::LAUNCH);
-    uint64_t go_addr = hal.get_dev_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG);
+    uint64_t launch_addr = hal.get_dev_noc_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::LAUNCH);
+    uint64_t go_addr = hal.get_dev_noc_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG);
 
     cluster.write_core_immediate(msg.data(), msg.size(), {static_cast<size_t>(chip), core}, launch_addr);
     tt_driver_atomics::sfence();
@@ -168,12 +171,13 @@ bool test_load_write_read_risc_binary(
     uint32_t processor_type_idx) {
     TT_ASSERT(
         tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(core, chip_id) or
-        tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(core, chip_id));
+        tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(core, chip_id) or
+        static_cast<tt_metal::HalProgrammableCoreType>(core_type_idx) == tt_metal::HalProgrammableCoreType::DRAM);
 
-    uint64_t local_init_addr = tt::tt_metal::MetalContext::instance()
-                                   .hal()
-                                   .get_jit_build_config(core_type_idx, processor_class_idx, processor_type_idx)
-                                   .local_init_addr;
+    const auto& jit_build_config = tt::tt_metal::MetalContext::instance().hal().get_jit_build_config(
+        core_type_idx, processor_class_idx, processor_type_idx);
+    uint64_t local_init_addr = jit_build_config.local_init_addr;
+    uint64_t l1_noc_offset = jit_build_config.l1_noc_offset;
 
     auto core_type = get_core_type(chip_id, core);
     // Depending on the arch, active ethernet may be shared local memory with the base firmware
@@ -184,6 +188,7 @@ bool test_load_write_read_risc_binary(
     mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len_words) {
         uint64_t relo_addr =
             tt::tt_metal::MetalContext::instance().hal().relocate_dev_addr(addr, local_init_addr, local_mem_offset);
+        relo_addr += l1_noc_offset;
 
         tt::tt_metal::MetalContext::instance().get_cluster().write_core(
             &*mem_ptr, len_words * sizeof(uint32_t), tt_cxy_pair(chip_id, core), relo_addr);
@@ -253,7 +258,7 @@ bool check_if_riscs_on_specified_core_done(tt::ChipId chip_id, const CoreCoord& 
     const auto& hal = tt_metal::MetalContext::instance().hal();
     auto dev_msgs_factory = hal.get_dev_msgs_factory(dispatch_core_type);
 
-    uint64_t go_msg_addr = hal.get_dev_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG);
+    uint64_t go_msg_addr = hal.get_dev_noc_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG);
 
     auto get_mailbox_is_done = [&](uint64_t go_msg_addr) {
         auto core_status = dev_msgs_factory.create<tt_metal::dev_msgs::go_msg_t>();
@@ -283,26 +288,58 @@ void print_aerisc_training_status(tt::ChipId device_id, const CoreCoord& virtual
     if (!hal.get_dispatch_feature_enabled(tt::tt_metal::DispatchFeature::ETH_MAILBOX_API)) {
         return;
     }
-    if (get_core_type(device_id, virtual_core) != tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH) {
+    if (!hal.get_supports_eth_debug_regs() ||
+        get_core_type(device_id, virtual_core) != tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH) {
         return;
     }
-    const auto port_status_addr = hal.get_eth_fw_mailbox_val(tt::tt_metal::FWMailboxMsg::PORT_STATUS);
-    const auto retrain_count_addr = hal.get_eth_fw_mailbox_val(tt::tt_metal::FWMailboxMsg::RETRAIN_COUNT);
-    const auto rx_link_up_addr = hal.get_eth_fw_mailbox_val(tt::tt_metal::FWMailboxMsg::RX_LINK_UP);
-    uint32_t port_status = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-        device_id, virtual_core, port_status_addr, sizeof(uint32_t))[0];
-    uint32_t retrain_count = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-        device_id, virtual_core, retrain_count_addr, sizeof(uint32_t))[0];
-    uint32_t rx_link_up = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-        device_id, virtual_core, rx_link_up_addr, sizeof(uint32_t))[0];
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const tt_cxy_pair target(device_id, virtual_core);
+    auto read_u32 = [&](uint32_t addr) {
+        uint32_t v = 0;
+        cluster.read_reg(&v, target, addr);
+        return v;
+    };
+
+    // Bracket all reads with heartbeat samples to detect whether base FW is alive during the dump
+    const auto heartbeat_addr = hal.get_eth_fw_mailbox_val(tt::tt_metal::FWMailboxMsg::HEARTBEAT);
+    const uint32_t heartbeat_start = read_u32(heartbeat_addr);
+
+    const uint32_t port_status = read_u32(hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::PORT_STATUS));
+    const uint32_t retrain_count = read_u32(hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::RETRAIN_COUNT));
+    const uint32_t rx_link_up = read_u32(hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::RX_LINK_UP));
+    const uint32_t train_status = read_u32(hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::TRAIN_STATUS));
+    const uint32_t serdes_reset_status =
+        read_u32(hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::SERDES_RESET_STATUS));
+    const uint32_t postcode = read_u32(hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::POSTCODE));
+    const uint32_t pcs_status = read_u32(hal.get_eth_debug_reg_addr(tt_metal::EthDebugReg::PCS_STATUS));
+    const uint32_t aerisc_reset_pc = read_u32(hal.get_eth_debug_reg_addr(tt_metal::EthDebugReg::ERISC0_RESET_PC));
+    const uint32_t subordinate_aerisc_reset_pc =
+        read_u32(hal.get_eth_debug_reg_addr(tt_metal::EthDebugReg::ERISC1_RESET_PC));
+    const uint32_t risc_soft_reset = read_u32(hal.get_eth_debug_reg_addr(tt_metal::EthDebugReg::RISC_SOFT_RESET));
+
+    const uint32_t heartbeat_end = read_u32(heartbeat_addr);
+
     log_critical(
         tt::LogMetal,
-        "Device {}: Virtual core {}, Port status: {:#x}, Retrain count: {:#x}, Rx link up: {:#x}",
+        "Device {}: Virtual core {}, Port status: {:#x}, Retrain count: {:#x}, Rx link up: {:#x}, "
+        "Train status: {:#x}, PCS status: {:#x}, SerDes reset status: {:#x}, Postcode: {:#x}, "
+        "ERISC0 reset PC: {:#x}, ERISC1 reset PC: {:#x}, RISC soft reset: {:#x}, "
+        "Heartbeat start: {:#x}, Heartbeat end: {:#x}, Heartbeat changed: {}",
         device_id,
         virtual_core.str(),
         port_status,
         retrain_count,
-        rx_link_up);
+        rx_link_up,
+        train_status,
+        pcs_status,
+        serdes_reset_status,
+        postcode,
+        aerisc_reset_pc,
+        subordinate_aerisc_reset_pc,
+        risc_soft_reset,
+        heartbeat_start,
+        heartbeat_end,
+        heartbeat_start != heartbeat_end);
 }
 
 }  // namespace
@@ -417,14 +454,15 @@ void send_msg_to_eth_mailbox(
     const auto done_message = hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::ETH_MSG_DONE);
 
     // Check mailbox is empty/ready
-    uint32_t msg_status = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-                              device_id, virtual_core, mailbox_addr, sizeof(uint32_t))[0] &
-                          status_mask;
+    tt_cxy_pair target(device_id, virtual_core);
+    uint32_t initial_mailbox_val = 0;
+    tt::tt_metal::MetalContext::instance().get_cluster().read_reg(&initial_mailbox_val, target, mailbox_addr);
+    uint32_t msg_status = initial_mailbox_val & status_mask;
     {
         const auto start_time = std::chrono::steady_clock::now();
         while (msg_status != done_message && msg_status != 0) {
-            uint32_t mailbox_val = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-                device_id, virtual_core, mailbox_addr, sizeof(uint32_t))[0];
+            uint32_t mailbox_val = 0;
+            tt::tt_metal::MetalContext::instance().get_cluster().read_reg(&mailbox_val, target, mailbox_addr);
             msg_status = mailbox_val & status_mask;
             const auto timenow = std::chrono::steady_clock::now();
             const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(timenow - start_time).count();
@@ -466,7 +504,6 @@ void send_msg_to_eth_mailbox(
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_id);
 
     // Wait for ack
-    tt_cxy_pair target{static_cast<size_t>(device_id), virtual_core};
     if (wait_for_ack) {
         const auto start_time = std::chrono::steady_clock::now();
         do {

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -20,12 +20,10 @@ from models.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
 # For basic SDXL demo, L1 small size of 23000 is enough,
 # but for inpainting/img2img, we need larger L1 small due
 # to having an extra VAE encode call, which increases it.
-# For simplicity, increase both to 30800 as there's enough
+# For simplicity, increase both to 32000 as there's enough
 # space left in base variant as well.
-SDXL_L1_SMALL_SIZE = 30800
+SDXL_L1_SMALL_SIZE = 32000
 SDXL_L1_SMALL_SIZE_BH = 38000
-SDXL_TRACE_REGION_SIZE = 34000000
-SDXL_BASE_REFINER_TRACE_REGION_SIZE = 51429376
 SDXL_CI_WEIGHTS_PATH = "/mnt/MLPerf/tt_dnn-models/hf_home"
 SDXL_FABRIC_CONFIG = ttnn.FabricConfig.FABRIC_1D
 MAX_SEQUENCE_LENGTH = 77

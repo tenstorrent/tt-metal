@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -25,9 +25,9 @@
 // Slices/samples elements of a tile 'itile' from cb using a given numpy style slice object SliceRange.
 // Sampling happens relative to the current CB read or write pointer.
 // This means that for printing a tile read from the front of the CB,
-// the DPRINT << TSLICE(...) call has to occur after cb_wait_front and before cb_pop_front
+// the DPRINT("{}", TSLICE(...)); call has to occur after cb_wait_front and before cb_pop_front
 // For the case of printing a tile from the back of the CB
-// the DPRINT << TSLICE(...) call has to occur after cb_reserve_back and before cb_push_back.
+// the DPRINT("{}", TSLICE(...)); call has to occur after cb_reserve_back and before cb_push_back.
 //
 // MAXCOUNT is the size of reserved space in the print buffer
 // if the total element data_count produced by the slice spec exceeds MAXCOUNT, it will be truncated
@@ -358,14 +358,3 @@ struct TileSlice : TileSliceHostDev<MAX_BYTES> {
 } ATTR_PACK;
 
 using TSLICE = TileSlice<64>;
-
-template <>
-uint8_t DebugPrintTypeToId<TileSlice<64>>() {
-    return DPrintTILESLICE;
-}  // TODO(AP): can we use SFINAE here?
-template <>
-uint8_t DebugPrintTypeToId<TileSlice<128>>() {
-    return DPrintTILESLICE;
-}  // TODO(AP): can we use SFINAE here?
-
-template DebugPrinter operator<< <TSLICE>(DebugPrinter, TSLICE val);

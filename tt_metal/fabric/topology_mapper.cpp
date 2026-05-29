@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -468,13 +468,11 @@ void TopologyMapper::build_mapping(const Cluster& cluster) {
             }
         }
 
-        // Build ASIC positions map (required if pinnings are used)
-        if (!config.pinnings.empty()) {
-            const auto& asic_descriptors = physical_system_descriptor_.get_asic_descriptors();
-            for (const auto& [asic_id, _] : asic_descriptors) {
-                auto tray_id = physical_system_descriptor_.get_tray_id(asic_id);
-                auto asic_location = physical_system_descriptor_.get_asic_location(asic_id);
-                config.asic_positions[asic_id] = std::make_pair(tray_id, asic_location);
+        // Extract pinnings from MGD and add to config (only if mesh graph descriptor is available)
+        if (mesh_graph_.get_mesh_graph_descriptor_path().has_value()) {
+            const auto& pinnings = mesh_graph_.get_mesh_graph_descriptor().get_pinnings();
+            for (const auto& [pos, fabric_node] : pinnings) {
+                config.pinnings.emplace_back(pos, fabric_node);
             }
         }
 
@@ -497,9 +495,10 @@ void TopologyMapper::build_mapping(const Cluster& cluster) {
         // Disable rank bindings if we're generating mapping locally (single host, single mesh)
         config.disable_rank_bindings = generate_mapping_locally_;
 
-        // Provide hostname_to_asics for host consistency constraint
+        // Hostname grouping and discovery ASIC positions (pinnings + logical-mesh-0 anchor preferences).
         for (const auto& [asic_id, desc] : physical_system_descriptor_.get_asic_descriptors()) {
             config.hostname_to_asics[desc.host_name].insert(asic_id);
+            config.asic_positions[asic_id] = std::make_pair(desc.tray_id, desc.asic_location);
         }
 
         // Use multi-mesh topology solver to map all meshes at once
@@ -574,11 +573,7 @@ std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> TopologyMapper::build_f
     for (const auto& mesh_id : mesh_graph_.get_all_mesh_ids()) {
         for (const auto& [_, chip_id] : mesh_graph_.get_chip_ids(mesh_id)) {
             auto host_rank = mesh_graph_.get_host_rank_for_chip(mesh_id, chip_id);
-            TT_FATAL(
-                host_rank.has_value(),
-                "Fabric node id mesh_id={}, chip_id={} not found",
-                *mesh_id,
-                chip_id);
+            TT_FATAL(host_rank.has_value(), "Fabric node id mesh_id={}, chip_id={} not found", *mesh_id, chip_id);
             mapping[mesh_id][FabricNodeId(mesh_id, chip_id)] = host_rank.value();
         }
     }
@@ -1802,7 +1797,7 @@ void TopologyMapper::verify_topology_mapping(const Cluster& cluster) const {
                 info.fabric_node_id,
                 info.hostname,
                 e.what());
-            }
+        }
 
         // Check 3: For local chips, verify physical chip ID maps correctly to ASIC ID via cluster API
         if (is_local_chip) {

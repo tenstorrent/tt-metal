@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -180,6 +180,9 @@ TEST_F(MeshDeviceSingleCardFixture, UntilizeEltwiseBinary) {
                 .compile_args = reader_compile_time_args});
 
         std::vector<uint32_t> writer_compile_time_args;
+        if (multibank) {
+            writer_compile_time_args.emplace_back(ouput_cb_index);
+        }
         tt::tt_metal::TensorAccessorArgs(dst_dram_buffer).append_to(writer_compile_time_args);
         auto unary_writer_kernel = tt_metal::CreateKernel(
             program,
@@ -198,7 +201,9 @@ TEST_F(MeshDeviceSingleCardFixture, UntilizeEltwiseBinary) {
             "tests/tt_metal/tt_metal/test_kernels/compute/untilA_elwbin_3m.cpp",
             core,
             tt_metal::ComputeConfig{
-                .compile_args = compute_kernel_args, .defines = {{"ELTWISE_OP", op_id_to_op_define[eltwise_op]}}});
+                .math_fidelity = MathFidelity::LoFi,
+                .compile_args = compute_kernel_args,
+                .defines = {{"ELTWISE_OP", op_id_to_op_define[eltwise_op]}}});
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application

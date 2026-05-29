@@ -25,6 +25,25 @@ if(NOT HWLOC_LIBRARY)
 endif()
 
 ############################################################################################################################
+# BLAKE3 : https://github.com/BLAKE3-team/BLAKE3
+############################################################################################################################
+
+CPMAddPackage(
+    NAME blake3
+    GITHUB_REPOSITORY BLAKE3-team/BLAKE3
+    GIT_TAG 1.8.4
+    SOURCE_SUBDIR c
+    PATCHES
+        blake3_install_dir.patch
+    OPTIONS
+        "BUILD_SHARED_LIBS OFF"
+        "BLAKE3_USE_TBB OFF"
+        "BLAKE3_FETCH_TBB OFF"
+        "BUILD_TESTING OFF"
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+)
+
+############################################################################################################################
 # Boost
 ############################################################################################################################
 
@@ -128,7 +147,7 @@ CPMAddPackage(
 ############################################################################################################################
 
 CPMAddPackage(
-    NAME googletest
+    NAME GTest
     GITHUB_REPOSITORY google/googletest
     GIT_TAG v1.13.0
     VERSION 1.13.0
@@ -136,6 +155,7 @@ CPMAddPackage(
         "INSTALL_GTEST OFF"
         "BUILD_SHARED_LIBS OFF"
 )
+CPMRegisterPackage("googletest" "1.13.0")
 
 ############################################################################################################################
 # boost-ext reflect : https://github.com/boost-ext/reflect
@@ -262,6 +282,22 @@ CPMAddPackage(
     CUSTOM_CACHE_KEY "0_22_0_patched"
 )
 
+# Mark xtensor stack headers as SYSTEM so clang-tidy and the compiler suppress
+# warnings from vendored headers when they are included in project TUs.
+foreach(_xtensor_target xtl xtensor xtensor-blas)
+    if(TARGET ${_xtensor_target})
+        get_target_property(_incs ${_xtensor_target} INTERFACE_INCLUDE_DIRECTORIES)
+        if(_incs)
+            set_target_properties(
+                ${_xtensor_target}
+                PROPERTIES
+                    INTERFACE_SYSTEM_INCLUDE_DIRECTORIES
+                        "${_incs}"
+            )
+        endif()
+    endif()
+endforeach()
+
 ############################################################################################################################
 # benchmark : https://github.com/google/benchmark
 ############################################################################################################################
@@ -364,6 +400,61 @@ CPMAddPackage(
 )
 
 ####################################################################################################################
+# libdwarf : https://github.com/davea42/libdwarf-code
+# Portable DWARF debug info parser (no libelf dependency, built-in ELF reader)
+####################################################################################################################
+CPMAddPackage(
+    NAME libdwarf
+    GITHUB_REPOSITORY davea42/libdwarf-code
+    GIT_TAG v0.12.0
+    OPTIONS
+        "BUILD_DWARFDUMP OFF"
+        "BUILD_DWARFEXAMPLE OFF"
+        "BUILD_SHARED_LIBS OFF"
+        "PIC_ALWAYS ON"
+        "BUILD_TESTING OFF"
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+)
+
+####################################################################################################################
+# CaDiCaL : https://github.com/arminbiere/cadical
+# Upstream has no CMakeLists.txt; after CPM download we build STATIC from the same sources as makefile.in
+# (src/*.cpp minus cadical/mobical, plus src/*.c). NBUILD avoids generated build.hpp; patch fixes vivify.hpp.
+####################################################################################################################
+CPMAddPackage(
+    NAME cadical
+    GITHUB_REPOSITORY arminbiere/cadical
+    GIT_TAG rel-2.2.1
+    DOWNLOAD_ONLY YES
+    PATCHES
+        cadical_vivify_include_tuple.patch
+)
+
+file(GLOB CADICAL_CXX CONFIGURE_DEPENDS "${cadical_SOURCE_DIR}/src/*.cpp")
+list(FILTER CADICAL_CXX EXCLUDE REGEX ".*/(cadical|mobical)\\.cpp$")
+file(GLOB CADICAL_C CONFIGURE_DEPENDS "${cadical_SOURCE_DIR}/src/*.c")
+add_library(
+    cadical
+    STATIC
+    ${CADICAL_CXX}
+    ${CADICAL_C}
+)
+add_library(cadical::cadical ALIAS cadical)
+target_include_directories(cadical SYSTEM PUBLIC "${cadical_SOURCE_DIR}/src")
+target_compile_definitions(
+    cadical
+    PRIVATE
+        NBUILD
+        $<$<NOT:$<CONFIG:Debug>>:NDEBUG>
+)
+set_target_properties(
+    cadical
+    PROPERTIES
+        POSITION_INDEPENDENT_CODE
+            ON
+)
+
+####################################################################################################################
 # Cap'n Proto : https://github.com/capnproto/capnproto
 ####################################################################################################################
 CPMAddPackage(
@@ -380,3 +471,15 @@ CPMAddPackage(
         capnproto_capture_this.patch
         capnproto_pthread.patch
 )
+
+############################################################################################################################
+# tt-emule (software emulation, header-only consumption)
+############################################################################################################################
+if(TT_METAL_USE_EMULE)
+    CPMAddPackage(
+        NAME tt_emule
+        GITHUB_REPOSITORY tenstorrent/tt-emule
+        GIT_TAG 67266c752b51e97d1c73a2abc5910a37901af4eb
+        EXCLUDE_FROM_ALL YES
+    )
+endif()

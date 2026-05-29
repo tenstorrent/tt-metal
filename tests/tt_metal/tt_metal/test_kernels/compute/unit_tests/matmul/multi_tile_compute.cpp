@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,7 @@
 
 #include "api/compute/matmul.h"
 #include "api/compute/compute_kernel_api.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     const uint32_t in0_cb = get_compile_time_arg_val(0);
@@ -19,9 +19,9 @@ void kernel_main() {
     const uint32_t out_c = get_compile_time_arg_val(7);
     const uint32_t in0_k = get_compile_time_arg_val(8);
 
-    experimental::CircularBuffer cb0(in0_cb);
-    experimental::CircularBuffer cb1(in1_cb);
-    experimental::CircularBuffer cb_out(out_cb);
+    CircularBuffer cb0(in0_cb);
+    CircularBuffer cb1(in1_cb);
+    CircularBuffer cb_out(out_cb);
 
     // we are looking at block
     // out = in0[r x k]*in1[k x c]
@@ -39,7 +39,7 @@ void kernel_main() {
                 int in0_tile_index = in0_index_r_offset + k;
                 int in1_tile_index = in1_index_c_offset + c;
                 matmul_tiles(in0_cb, in1_cb, in0_tile_index, in1_tile_index, out_tile_index);
-                in1_index_c_offset += k;
+                in1_index_c_offset += out_c;
             }
             out_tile_index++;
         }

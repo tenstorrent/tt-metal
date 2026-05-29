@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,6 +8,7 @@
 
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
@@ -19,11 +20,8 @@ void kernel_main() {
     constexpr auto cb_inp0 = cb_in0;
     constexpr auto cb_inp1 = cb_in1;
     constexpr auto cb_out0 = tt::CBIndex::c_16;
-
     constexpr auto cb_in2 = tt::CBIndex::c_2;
-
     binary_op_init_common(cb_inp0, cb_inp1, cb_out0);
-
 #if not defined ELTWISE_DEST_REUSE_TYPE
 #ifdef FULL_INIT
     binary_tiles_init<true, ELTWISE_OP_TYPE>(cb_in0, cb_in1);
@@ -40,10 +38,9 @@ void kernel_main() {
         cb_wait_front(cb_inp0, per_core_block_size);
         cb_wait_front(cb_inp1, per_core_block_size);
         cb_reserve_back(cb_out0, per_core_block_size);
-
         tile_regs_acquire();
 
-#if defined(DST_ACCUM_MODE) || defined(ELTWISE_DEST_REUSE_TYPE)
+#if defined(DST_ACCUM_MODE) || defined(ACC_TO_DEST) || defined(ELTWISE_DEST_REUSE_TYPE)
         cb_wait_front(cb_in2, per_core_block_size);
         copy_tile_to_dst_init_short(cb_in2);
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
@@ -52,9 +49,9 @@ void kernel_main() {
         cb_pop_front(cb_in2, per_core_block_size);
 #endif
 
-#ifdef DST_ACCUM_MODE
-// The following define is needed if mul_tiles/_init is used
-#ifdef MUL_TILES_WITH_DST_ACCUM
+#if defined(DST_ACCUM_MODE) || defined(ACC_TO_DEST)
+// The following define is needed for WH/BH if mul_tiles/_init is used
+#if defined(MUL_TILES_WITH_DST_ACCUM)
         ELTWISE_OP_INIT(cb_inp0, cb_inp1);
 #else
         ELTWISE_OP_INIT(cb_inp0, cb_inp1, true);

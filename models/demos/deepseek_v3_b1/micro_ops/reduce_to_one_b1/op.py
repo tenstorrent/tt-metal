@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -107,16 +107,20 @@ class ReduceToOneB1:
         semaphores: list,
         root_coord: ttnn.MeshCoordinate,
         exit_coord: Optional[ttnn.MeshCoordinate] = None,
-        downstream_socket=None,
+        downstream_sockets=None,
         agg_output_size_bytes: int = 0,
         num_iterations: int = 1,
         is_torus: bool = False,
+        forward_metadata_size_bytes: int = 0,
+        metadata_l1_addr: int = 0,
+        worker_fabric_ready_semaphore=None,
     ) -> ttnn.Tensor:
         """
         Execute reduce-to-one operation using generic_op.
 
-        When downstream_socket is provided, ROOT1's first worker core (shard_idx==0)
-        aggregates all shards and streams the result to the downstream socket.
+        When downstream_sockets is provided, each ROOT1 worker core directly sends
+        its shard through its own dedicated sender socket to the downstream
+        d2d_exchange pipeline core.
 
         Args:
             input_tensor_mesh: Input tensor mesh (each device has its own data)
@@ -126,10 +130,13 @@ class ReduceToOneB1:
             semaphores: List of 4 global semaphores for synchronization
             root_coord: MeshCoordinate of the root device (must be row 1 or 2)
             exit_coord: Optional MeshCoordinate for exit signaling (defaults to root_coord)
-            downstream_socket: Optional sender socket for aggregated reduce output
+            downstream_sockets: Optional list of sender sockets for each ROOT1 worker core
             agg_output_size_bytes: Total useful output bytes (unpadded) for socket aggregation
             num_iterations: Number of iterations to run inside the kernel
             is_torus: Whether to use torus topology
+            worker_fabric_ready_semaphore: Optional shared worker->fabric ready semaphore.
+                                         When provided, this avoids allocating the semaphore
+                                         inside the op, which is required for trace capture.
 
         Returns:
             Output tensor
@@ -192,7 +199,7 @@ class ReduceToOneB1:
             compute_tile_height * compute_tile_width
         )
 
-        packet_header_size_bytes = 96
+        packet_header_size_bytes = ttnn.get_tt_fabric_packet_header_size_bytes()
         slot_size_bytes = packet_header_size_bytes + payload_size_bytes
 
         # CB indices (matching C++ implementation)
@@ -216,26 +223,25 @@ class ReduceToOneB1:
         shard_grid = input_sample.memory_config().shard_spec.grid
         shard_cores = ttnn.corerange_to_cores(shard_grid, row_wise=True)
 
-        # Create global semaphores for worker→fabric signaling
-        # Compute num_workers_per_column from input shard grid (same for all devices)
-        sample_cores = ttnn.corerange_to_cores(shard_grid, row_wise=True)
-        sample_columns = {}
-        for c in sample_cores:
-            sample_columns.setdefault(c.x, []).append(c)
-        num_worker_fabric_sems = len(sample_columns[sorted(sample_columns.keys())[0]])
+        # Create a single global ready semaphore for worker->fabric signaling.
+        # Each FC sees its own local semaphore instance at the same L1 address.
         device_grid_size = mesh_device.compute_with_storage_grid_size()
         worker_fabric_sem_cores = ttnn.CoreRangeSet(
             [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
         )
-        worker_fabric_global_sems = [
-            ttnn.create_global_semaphore(mesh_device, worker_fabric_sem_cores, 0) for _ in range(num_worker_fabric_sems)
-        ]
-        worker_fabric_sem_addrs = [ttnn.get_global_semaphore_address(s) for s in worker_fabric_global_sems]
+        if isinstance(worker_fabric_ready_semaphore, (list, tuple)):
+            raise ValueError(
+                "Expected a single worker_fabric_ready_semaphore; "
+                "reduce_to_one standalone now uses one shared ready-mask semaphore"
+            )
+        if worker_fabric_ready_semaphore is None:
+            worker_fabric_ready_semaphore = ttnn.create_global_semaphore(mesh_device, worker_fabric_sem_cores, 0)
+        worker_fabric_ready_sem_addr = ttnn.get_global_semaphore_address(worker_fabric_ready_semaphore)
 
-        # Aggregation setup for downstream socket (integrated in reduce_to_one worker)
+        # Persistent-signal sync setup for downstream sockets
         agg_sem_addr = 0
-        total_num_workers_count = len(shard_cores) if downstream_socket is not None else 0
-        if downstream_socket is not None:
+        total_num_workers_count = len(shard_cores) if downstream_sockets is not None else 0
+        if downstream_sockets is not None:
             agg_sem = ttnn.create_global_semaphore(mesh_device, worker_fabric_sem_cores, 0)
             agg_sem_addr = ttnn.get_global_semaphore_address(agg_sem)
 
@@ -366,9 +372,12 @@ class ReduceToOneB1:
 
                 # Writer (BRISC) compile-time args
                 device_total_num_workers = (
-                    total_num_workers_count if (is_root1 and downstream_socket is not None) else 0
+                    total_num_workers_count if (is_root1 and downstream_sockets is not None) else 0
                 )
-                device_agg_output_size = agg_output_size_bytes if (is_root1 and downstream_socket is not None) else 0
+                device_agg_output_size = agg_output_size_bytes if (is_root1 and downstream_sockets is not None) else 0
+                device_forward_metadata_size = (
+                    forward_metadata_size_bytes if (is_root1 and downstream_sockets is not None) else 0
+                )
                 writer_ct_args = [
                     ("device_role", role),
                     ("num_tiles", num_compute_tiles),
@@ -382,9 +391,9 @@ class ReduceToOneB1:
                     ("output_core_noc_x", output_core_phys.x),
                     ("output_core_noc_y", output_core_phys.y),
                     ("num_workers", num_workers_per_column),
-                    ("slot_size_bytes", slot_size_bytes),
                     ("total_num_workers", device_total_num_workers),
                     ("agg_output_size_bytes", device_agg_output_size),
+                    ("forward_metadata_size_bytes", device_forward_metadata_size),
                     ("num_loop_iters", num_iterations),
                 ]
 
@@ -408,13 +417,17 @@ class ReduceToOneB1:
                 ]
 
                 # === Per-Core Runtime Args ===
-                # Aggregator core setup for ROOT1 with downstream socket
-                agg_core_noc_x = 0
-                agg_core_noc_y = 0
-                if is_root1 and downstream_socket is not None:
-                    agg_core_phys = device.worker_core_from_logical_core(input_cores_list[0])
-                    agg_core_noc_x = agg_core_phys.x
-                    agg_core_noc_y = agg_core_phys.y
+                # Persistent-signal core setup for ROOT1 with downstream sockets
+                # First worker core is the designated persistent-signal coordinator
+                persistent_core_noc_x = 0
+                persistent_core_noc_y = 0
+                if is_root1 and downstream_sockets is not None:
+                    persistent_core_phys = device.worker_core_from_logical_core(input_cores_list[0])
+                    persistent_core_noc_x = persistent_core_phys.x
+                    persistent_core_noc_y = persistent_core_phys.y
+
+                # Resolve metadata L1 address for ROOT1 last-worker forwarding
+                device_metadata_l1_addr = metadata_l1_addr if (is_root1 and forward_metadata_size_bytes > 0) else 0
 
                 # Build per-core BRISC args for worker cores
                 brisc_per_core_args = []
@@ -425,28 +438,29 @@ class ReduceToOneB1:
                     shard_idx = core_to_shard_idx[(core.x, core.y)]
 
                     socket_config_addr = 0
-                    if is_root1 and downstream_socket is not None and shard_idx == 0:
-                        socket_config_addr = downstream_socket.get_config_buffer_address()
+                    if is_root1 and downstream_sockets is not None:
+                        socket_config_addr = downstream_sockets[shard_idx].get_config_buffer_address()
 
                     worker_args = [
                         fabric_core_phys.x,
                         fabric_core_phys.y,
                         slot_idx,
-                        worker_fabric_sem_addrs[slot_idx],
+                        worker_fabric_ready_sem_addr,
                         dst_l1_addr,
                         dst_sem_addr,
                         output_tensor_device.buffer_address(),
                         shard_idx,
                         socket_config_addr,
+                        device_metadata_l1_addr,
                     ]
-                    if is_root1 and downstream_socket is not None:
-                        worker_args.extend([agg_sem_addr, agg_core_noc_x, agg_core_noc_y])
+                    if is_root1 and downstream_sockets is not None:
+                        worker_args.extend([agg_sem_addr, persistent_core_noc_x, persistent_core_noc_y])
 
                     brisc_per_core_args.append((core, worker_args))
 
-                # Fabric cores BRISC args: worker semaphore addresses (fabric args appended later)
+                # Fabric cores BRISC args: shared ready semaphore address (fabric args appended later)
                 for fc in fabric_cores:
-                    brisc_per_core_args.append((fc, list(worker_fabric_sem_addrs)))
+                    brisc_per_core_args.append((fc, [worker_fabric_ready_sem_addr]))
 
                 # === CB Descriptors ===
                 compute_tile_desc = ttnn.TileDescriptor(compute_tile_height, compute_tile_width)
@@ -546,6 +560,7 @@ class ReduceToOneB1:
                     per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
                         brisc_args=brisc_per_core_args,
                     ),
+                    noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
                 )
 
                 kernel_result = unified_kernel.get_kernel_descriptors()

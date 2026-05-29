@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -237,8 +237,14 @@ AdamWProgramFactory::cached_program_t AdamWProgramFactory::create(
 
     const uint32_t twice_block_size = 2U * block_size;
 
-    const uint32_t num_input_tiles = twice_block_size;
-    const uint32_t num_output_tiles = twice_block_size;
+    const uint32_t intermediate_num_tiles = twice_block_size;
+
+    // Use 1× block_size pipeline depth: benchmarks at tt-train/tests/benchmark/adamw_benchmark.cpp proved it to be the
+    // best for BW utilization
+    uint32_t pipeline_depth = block_size;
+
+    const uint32_t num_input_tiles = pipeline_depth;
+    const uint32_t num_output_tiles = pipeline_depth;
 
     // param CB - uses param_data_format (bf16 or fp32 depending on mode)
     [[maybe_unused]] auto cb_param = create_circular_buffer(
@@ -289,7 +295,7 @@ AdamWProgramFactory::cached_program_t AdamWProgramFactory::create(
             kMaxExpAvgSqCbIndex,
             intermediate_data_format,
             float32_single_tile_size_bytes,
-            num_output_tiles);
+            intermediate_num_tiles);
     }
 
     // Intermediate CBs are always fp32
@@ -299,7 +305,7 @@ AdamWProgramFactory::cached_program_t AdamWProgramFactory::create(
         kMomentumCbIndex,
         intermediate_data_format,
         float32_single_tile_size_bytes,
-        num_output_tiles);
+        intermediate_num_tiles);
 
     [[maybe_unused]] auto cb_variance = create_circular_buffer(
         program,
@@ -307,7 +313,7 @@ AdamWProgramFactory::cached_program_t AdamWProgramFactory::create(
         kVarianceCbIndex,
         intermediate_data_format,
         float32_single_tile_size_bytes,
-        num_output_tiles);
+        intermediate_num_tiles);
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
@@ -346,7 +352,8 @@ AdamWProgramFactory::cached_program_t AdamWProgramFactory::create(
     // -------------------------------------------------------------------------
 
     // FPU is not used at all in the operation
-    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::UnpackToDestFp32);
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
 
     // Group 1 compile-time arguments
     std::vector<uint32_t> compute_group_1_args = {
@@ -354,7 +361,7 @@ AdamWProgramFactory::cached_program_t AdamWProgramFactory::create(
         block_size};                 // per_core_block_size
 
     tt::tt_metal::ComputeConfig compute_config{
-        .math_fidelity = MathFidelity::HiFi4,
+        .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
         .fp32_dest_acc_en = true,
         .unpack_to_dest_mode = unpack_to_dest_mode,
         .math_approx_mode = false,

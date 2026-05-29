@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,6 +8,7 @@
 #include "tt_align.hpp"
 #include "hostdev/dev_msgs.h"
 #include "hostdev/fabric_telemetry_msgs.h"
+#include "hostdev/realtime_profiler_msgs.h"
 using namespace tt::tt_metal::blackhole::active_eth;
 
 #include <cstdint>
@@ -18,6 +19,7 @@ using namespace tt::tt_metal::blackhole::active_eth;
 #include "eth_l1_address_map.h"
 #include "eth_fw_api.h"
 #include "hal_types.hpp"
+#include "tensix.h"
 #include "llrt/hal.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include "noc/noc_parameters.h"
@@ -33,6 +35,10 @@ namespace active_eth_dev_msgs {
 
 namespace active_eth_fabric_telemetry {
 #include "hal/generated/fabric_telemetry_impl.hpp"
+}
+
+namespace active_eth_realtime_profiler_msgs {
+#include "hal/generated/realtime_profiler_msgs_impl.hpp"
 }
 
 std::vector<std::vector<HalJitBuildConfig>> configure_for_1erisc() {
@@ -116,7 +122,7 @@ HalCoreInfoType create_active_eth_mem_map(bool enable_2_erisc_mode) {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::MAILBOX)] = MEM_ERISC_MAILBOX_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH)] = sizeof(launch_msg_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::WATCHER)] = sizeof(watcher_msg_t);
-    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::DPRINT_BUFFERS)] = sizeof(dprint_buf_msg_t);
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::DPRINT_BUFFERS)] = sizeof(DevicePrintMemoryLayout);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::PROFILER)] = sizeof(profiler_msg_t);
     // TODO: this is wrong, need eth specific value. For now use same value as idle
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)] = MEM_ERISC_KERNEL_CONFIG_SIZE;
@@ -158,6 +164,19 @@ HalCoreInfoType create_active_eth_mem_map(bool enable_2_erisc_mode) {
         (uint64_t)&((eth_live_status_t*)MEM_SYSENG_ETH_LIVE_STATUS)->rx_link_up;
     fw_mailbox_addr[ttsl::as_underlying_type<FWMailboxMsg>(FWMailboxMsg::PORT_STATUS)] =
         (uint64_t)&((eth_status_t*)MEM_SYSENG_ETH_STATUS)->port_status;
+    fw_mailbox_addr[ttsl::as_underlying_type<FWMailboxMsg>(FWMailboxMsg::POSTCODE)] =
+        (uint64_t)&((eth_status_t*)MEM_SYSENG_ETH_STATUS)->postcode;
+    fw_mailbox_addr[ttsl::as_underlying_type<FWMailboxMsg>(FWMailboxMsg::TRAIN_STATUS)] =
+        (uint64_t)&((eth_status_t*)MEM_SYSENG_ETH_STATUS)->train_status;
+    fw_mailbox_addr[ttsl::as_underlying_type<FWMailboxMsg>(FWMailboxMsg::SERDES_RESET_STATUS)] =
+        (uint64_t)&((boot_results_t*)MEM_SYSENG_BOOT_RESULTS_BASE)->serdes_results.serdes_reset_status;
+
+    std::vector<uint32_t> eth_debug_regs(static_cast<std::size_t>(EthDebugReg::COUNT), 0);
+    eth_debug_regs[ttsl::as_underlying_type<EthDebugReg>(EthDebugReg::PCS_STATUS)] =
+        ETH_CORE_A_ETH_CTRL_A_PCS_STATUS_REG_ADDR;
+    eth_debug_regs[ttsl::as_underlying_type<EthDebugReg>(EthDebugReg::ERISC0_RESET_PC)] = AERISC_RESET_PC;
+    eth_debug_regs[ttsl::as_underlying_type<EthDebugReg>(EthDebugReg::ERISC1_RESET_PC)] = SUBORDINATE_AERISC_RESET_PC;
+    eth_debug_regs[ttsl::as_underlying_type<EthDebugReg>(EthDebugReg::RISC_SOFT_RESET)] = RISCV_DEBUG_REG_SOFT_RESET_0;
 
     std::vector<std::vector<HalJitBuildConfig>> processor_classes;
     std::vector<std::vector<std::pair<std::string, std::string>>> processor_classes_names;
@@ -186,7 +205,9 @@ HalCoreInfoType create_active_eth_mem_map(bool enable_2_erisc_mode) {
         false /*supports_dfbs*/,
         false /*supports_receiving_multicast_cmds*/,
         active_eth_dev_msgs::create_factory(),
-        active_eth_fabric_telemetry::create_factory()};
+        active_eth_fabric_telemetry::create_factory(),
+        active_eth_realtime_profiler_msgs::create_factory(),
+        std::move(eth_debug_regs)};
 }
 
 }  // namespace tt::tt_metal::blackhole

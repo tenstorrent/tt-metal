@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -10,6 +10,7 @@ from models.experimental.ops.descriptors.op_descriptor import OpDescriptor
 from models.experimental.ops.descriptors.normalization._utils import _create_layernorm_op_descriptor
 
 
+@OpDescriptor.create(name="rms_norm")
 def rms_norm(
     input_tensor: "ttnn.Tensor",
     core_range_set: Optional["ttnn.CoreRangeSet"] = None,
@@ -21,28 +22,19 @@ def rms_norm(
     memory_config: Optional["ttnn.MemoryConfig"] = None,
     program_config: Optional["ttnn.LayerNormProgramConfig"] = None,
 ) -> OpDescriptor:
-    """
-    Create an OpDescriptor for an RMS norm operation.
+    """Create an OpDescriptor for an RMS norm operation.
 
-    Args:
-        input_tensor: The input tensor (must be on device).
-        core_range_set: The set of cores to run the operation on. Required for non-sharded inputs.
-        epsilon: Small constant for numerical stability (default: 1e-12).
-        weight: Optional weight (gamma) tensor for scaling.
-        bias: Optional bias (beta) tensor for shifting.
-        residual_input_tensor: Optional residual tensor to add before normalization.
-        compute_kernel_config: Optional compute kernel configuration.
-        memory_config: Optional output memory configuration. Defaults to input's memory config.
-        program_config: Optional program configuration. If not provided, one will be auto-generated.
+    ``input_tensor`` may be omitted for **persistent mode** — call
+    :meth:`~OpDescriptor.update` with the activation before the first ``run()``.
 
-    Returns:
-        OpDescriptor containing the program descriptor, input tensors, and output tensors.
+    Example::
 
-    Example:
-        >>> rms_desc_1 = models.experimental.ops.descriptors.normalization.rms_norm(input1, weight=w1, cores=cores1)
-        >>> rms_desc_2 = models.experimental.ops.descriptors.normalization.rms_norm(input2, weight=w2, cores=cores2)
-        >>> rms_desc_1.launch()
-        >>> rms_desc_2.launch()
+        # Inline:
+        desc = rms_norm(tt_q, weight=qw, compute_kernel_config=cc, ...)
+
+        # Persistent:
+        desc = rms_norm(weight=qw, compute_kernel_config=cc, ...)
+        desc.update(tt_q)
     """
     device = input_tensor.device()
     arch = device.arch()
@@ -50,7 +42,6 @@ def rms_norm(
     if program_config is not None and program_config.use_welford:
         raise ValueError("Welford's algorithm is not supported for RMS norm")
 
-    # Initialize compute kernel config if not provided
     if compute_kernel_config is None:
         compute_kernel_config = ttnn.rmsnorm_default_compute_config(arch)
 

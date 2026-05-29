@@ -1,30 +1,24 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
 import contextlib
-import pytest
-import torch
-import random
+import json
 import os
-import numpy as np
+import random
+import subprocess
+from datetime import datetime
 from functools import partial
 from operator import contains, eq, getitem
 from pathlib import Path
-import json
-import multiprocess
-from queue import Empty
-import signal
-import time
-import psutil
-import subprocess
-from datetime import datetime
 
+import numpy as np
+import pytest
+import torch
 from loguru import logger
 
 from models.tt_transformers.demo.trace_region_config import get_supported_trace_region_size
-from tests.scripts.common import run_process_and_get_result
-from tests.scripts.common import get_updated_device_params
+from tests.scripts.common import get_updated_device_params, run_process_and_get_result
 
 # Constants for device configurations
 SIX_U_NUM_PCIE_DEVICES = 32
@@ -73,10 +67,11 @@ def galaxy_type():
 def is_galaxy():
     import ttnn
 
-    return (
-        ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.GALAXY
-        or ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.TG
-    )
+    return ttnn.cluster.get_cluster_type() in [
+        ttnn.cluster.ClusterType.GALAXY,
+        ttnn.cluster.ClusterType.TG,
+        ttnn.cluster.ClusterType.BLACKHOLE_GALAXY,
+    ]
 
 
 # TODO: Remove this when TG clusters are deprecated.
@@ -783,6 +778,13 @@ def check_requires_grid_size(request):
     )
 
 
+requires_hybrid_allocator = pytest.mark.skipif(
+    os.environ.get("TT_METAL_ALLOCATOR_MODE_HYBRID") != "1",
+    reason="Test requires TT_METAL_ALLOCATOR_MODE_HYBRID=1 for per-core L1 allocation; "
+    "the env var must be exported before pytest starts so ttnn.open_device() sees it.",
+)
+
+
 @pytest.fixture()
 def ensure_devices_tg():
     import ttnn
@@ -904,21 +906,6 @@ def pytest_addoption(parser):
         default=None,
         help="Size of chip grid for the test to run on. Grid size is defined by number of cores in row x number of cores in column, e.g., 8x8",
     )
-    parser.addoption(
-        "--trace-params",
-        action="store_true",
-        default=False,
-        help="Enable tracing of operation parameters (serializes all ttnn operation inputs to files). By default, only tensor metadata is saved. To include tensor values, call ttnn.operation_tracer.enable_tensor_value_serialization(True). See tech_reports/ttnn/operation-tracing.md for details.",
-    )
-
-
-def pytest_configure(config):
-    """Set a flag in ttnn.operation_tracer when --trace-params is enabled."""
-    if config.getoption("--trace-params", default=False):
-        # Set a module-level flag that can be checked by operation_tracer
-        import ttnn.operation_tracer
-
-        ttnn.operation_tracer._ENABLE_TRACE = True
 
 
 @pytest.fixture
@@ -1143,6 +1130,67 @@ def reset_tensix(tt_open_devices=None):
         )
     else:
         logger.info("tt-smi reset completed successfully")
+
+
+@pytest.fixture(autouse=True)
+def ttnn_graph_report(request):
+    """
+    Automatically generate graph reports when config enables it.
+
+    Only activates when enable_logging, enable_graph_report, and report_path
+    are all set. Skipped when a graph capture is already active (e.g. a test
+    that manages its own capture).
+    """
+    import ttnn
+
+    if not getattr(ttnn.CONFIG, "enable_logging", False):
+        yield
+        return
+    if not getattr(ttnn.CONFIG, "enable_graph_report", False):
+        yield
+        return
+    report_path = getattr(ttnn.CONFIG, "report_path", None)
+    report_name = getattr(ttnn.CONFIG, "report_name", None)
+    if report_path is None or not report_name or str(report_name).strip() == "":
+        yield
+        return
+    if ttnn.graph.is_graph_capture_active():
+        yield
+        return
+
+    # Ensure we are torn down before device fixtures: request whichever device
+    # the test uses so pytest tears us down first, then the device.
+    if "mesh_device" in request.fixturenames:
+        request.getfixturevalue("mesh_device")
+    if "device" in request.fixturenames:
+        request.getfixturevalue("device")
+
+    report_path = Path(report_path)
+    enable_detailed_buffer_report = getattr(ttnn.CONFIG, "enable_detailed_buffer_report", False)
+
+    if enable_detailed_buffer_report:
+        ttnn.graph.enable_detailed_buffer_tracing()
+
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+    try:
+        yield
+    finally:
+        if not ttnn.graph.is_graph_capture_active():
+            logger.warning("Graph capture was already stopped (device may have been closed); skipping report.")
+        else:
+            report_path.mkdir(parents=True, exist_ok=True)
+            json_path = report_path / "graph_capture.json"
+            ttnn.graph.end_graph_capture_to_file(str(json_path))
+            if json_path.exists():
+                from ttnn.graph_report import import_report
+
+                import_report(json_path, report_path)
+
+            config_path = report_path / "config.json"
+            ttnn.save_config_to_json_file(config_path)
+
+        if enable_detailed_buffer_report:
+            ttnn.graph.disable_detailed_buffer_tracing()
 
 
 @pytest.fixture(scope="function", autouse=True)

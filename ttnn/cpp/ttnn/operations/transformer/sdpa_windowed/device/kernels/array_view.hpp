@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -99,17 +99,17 @@ struct ArrayView {
     void print() const {
         auto ptr = _ptr;
         for (uint32_t i = 0; i < _size; ++i) {
-            DPRINT << DEC() << ptr[i] << " ";
+            DPRINT("{} ", ptr[i]);
         }
-        DPRINT << ENDL();
+        DPRINT("\n");
     }
 
     void print_hex() const {
         auto ptr = _ptr;
         for (uint32_t i = 0; i < _size; ++i) {
-            DPRINT << HEX() << ptr[i] << " ";
+            DPRINT("{:X} ", ptr[i]);
         }
-        DPRINT << ENDL();
+        DPRINT("\n");
     }
 #endif
 

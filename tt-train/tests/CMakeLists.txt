@@ -35,6 +35,10 @@ set(SOURCES
     optimizers/adamw_composite_test.cpp
     optimizers/sgd_test.cpp
     optimizers/adamw_test.cpp
+    optimizers/muon_composite_test.cpp
+    ops/newton_schulz_op_test.cpp
+    ops/frobenius_normalize_test.cpp
+    ops/k_split_gram_matmul_op_test.cpp
     optimizers/adamw_full_precision_test.cpp
     optimizers/no_op_test.cpp
     modules/distributed/linear_test.cpp
@@ -42,17 +46,22 @@ set(SOURCES
     serialization/flatbuffer_serializer_test.cpp
     serialization/tensor_serializer_test.cpp
     serialization/safetensors_test.cpp
+    serialization/get_value_type_test.cpp
     ops/cross_entropy_fw_op_test.cpp
+    ops/select_target_logit_op_test.cpp
+    ops/subtract_at_target_op_test.cpp
     ops/positional_embedding_test.cpp
-    ops/layer_norm_composite_test.cpp
+    ops/layernorm_composite_test.cpp
     ops/distributed/comm_ops_test.cpp
     ops/distributed/ring_shift_test.cpp
     ops/distributed/ring_sdpa_test.cpp
+    ops/distributed/vocab_parallel_cross_entropy_loss_test.cpp
     ops/linear_op_test.cpp
     ops/profiler_no_op_test.cpp
     ops/cross_entropy_bw_op_test.cpp
     ops/rope_test.cpp
     ops/rmsnorm_op_test.cpp
+    ops/polynorm_op_test.cpp
     ops/unary_ops_test.cpp
     ops/embedding_op_test.cpp
     ops/softmax_test.cpp
@@ -63,6 +72,9 @@ set(SOURCES
     ops/layernorm_bw_fused_op_test.cpp
     ops/layernorm_fw_fused_op_test.cpp
     ops/swiglu_op_test.cpp
+    ops/moe_ffn_swiglu_op_test.cpp
+    ops/binary_ops_fw_test.cpp
+    ops/binary_ops_bw_test.cpp
     utils/memory_utils_test.cpp
 )
 
@@ -84,6 +96,17 @@ set_target_properties(
 )
 target_compile_options(ttml_tests PRIVATE -fPIC)
 target_precompile_headers(ttml_tests REUSE_FROM ttml_pch)
+
+# Suppress false-positive -Wnonnull from xtensor internals on GCC < 13.
+# At -O3, GCC over-inlines xbroadcast::has_linear_assign and wrongly flags std::equal as null.
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS "13")
+    set_source_files_properties(
+        ops/binary_ops_bw_test.cpp
+        PROPERTIES
+            COMPILE_OPTIONS
+                "-Wno-nonnull"
+    )
+endif()
 
 add_definitions(-DTEST_DATA_DIR="${CMAKE_SOURCE_DIR}/data")
 
@@ -127,6 +150,21 @@ endif()
 include(GoogleTest)
 gtest_discover_tests(ttml_tests)
 
+add_executable(swiglu_fusion_benchmark benchmark/swiglu_fusion_benchmark.cpp)
+target_link_libraries(
+    swiglu_fusion_benchmark
+    PUBLIC
+        ttml
+        TTNN::TTNN
+)
+
+add_executable(moe_ffn_swiglu_benchmark benchmark/moe_ffn_swiglu_benchmark.cpp)
+target_link_libraries(
+    moe_ffn_swiglu_benchmark
+    PUBLIC
+        ttml
+        TTNN::TTNN
+)
 ############################################################################################################################
 # Benchmark tests (using Google Benchmark)
 # Only available when building via tt-metal (Build from tt-train would require adding new dependency)
@@ -136,6 +174,10 @@ if(TARGET benchmark::benchmark)
     set(BENCHMARK_SOURCES
         benchmark/matmuls_benchmark.cpp
         benchmark/from_vector_benchmark.cpp
+        benchmark/adamw_benchmark.cpp
+        benchmark/frobenius_normalize_benchmark.cpp
+        benchmark/polynorm_fusion_benchmark.cpp
+        benchmark/gram_matmul_benchmark.cpp
     )
 
     foreach(BENCH_SRC ${BENCHMARK_SOURCES})

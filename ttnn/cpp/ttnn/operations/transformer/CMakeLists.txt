@@ -1,3 +1,5 @@
+include(sources.cmake)
+
 add_library(ttnn_op_transformer ${LIB_TYPE})
 add_library(TTNN::Ops::Transformer ALIAS ttnn_op_transformer)
 
@@ -25,43 +27,23 @@ target_sources(
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
         FILES
+            sdpa_config.hpp
+            attention_softmax/attention_softmax.hpp
+            concatenate_heads/concatenate_heads.hpp
+            sdpa/sdpa.hpp
+            sdpa_decode/sdpa_decode.hpp
+            sdpa_windowed/sdpa_windowed.hpp
+            split_query_key_value_and_split_heads/split_query_key_value_and_split_heads.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        attention_softmax/attention_softmax.cpp
-        concatenate_heads/concatenate_heads.cpp
-        sdpa/device/ring_fusion.cpp
-        sdpa/device/joint_sdpa_device_operation.cpp
-        sdpa/device/joint_sdpa_program_factory.cpp
-        sdpa/device/ring_joint_sdpa_device_operation.cpp
-        sdpa/device/ring_joint_sdpa_program_factory.cpp
-        sdpa/device/ring_distributed_sdpa_device_operation.cpp
-        sdpa/device/ring_distributed_sdpa_program_factory.cpp
-        sdpa/device/sdpa_device_operation.cpp
-        sdpa/device/sdpa_perf_model.cpp
-        sdpa/device/sdpa_program_factory.cpp
-        sdpa/sdpa.cpp
-        sdpa_decode/device/sdpa_decode_device_operation.cpp
-        sdpa_decode/device/sdpa_decode_program_factory.cpp
-        sdpa_decode/sdpa_decode.cpp
-        sdpa_windowed/device/sdpa_windowed_device_operation.cpp
-        sdpa_windowed/device/sdpa_windowed_program_factory.cpp
-        sdpa_windowed/sdpa_windowed.cpp
-        split_query_key_value_and_split_heads/split_query_key_value_and_split_heads.cpp
-        gated_delta_attn/device/gated_delta_attn_device_operation.cpp
-        gated_delta_attn/device/gated_delta_attn_program_factory.cpp
-        gated_delta_attn/gated_delta_attn.cpp
+        ${TTNN_OP_TRANSFORMER_SRCS}
 )
 
 target_include_directories(ttnn_op_transformer PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(
-    ttnn_op_transformer
-    PRIVATE
-        TT::Metalium
-        TTNN::Core
-)
+target_link_libraries(ttnn_op_transformer PRIVATE TT::Metalium PUBLIC TTNN::Core)
 
 install(
     TARGETS
@@ -73,3 +55,4 @@ install(
 )
 
 install(TARGETS ttnn_op_transformer LIBRARY COMPONENT tar)
+install(TARGETS ttnn_op_transformer FILE_SET api COMPONENT ttnn-dev LIBRARY COMPONENT tar)

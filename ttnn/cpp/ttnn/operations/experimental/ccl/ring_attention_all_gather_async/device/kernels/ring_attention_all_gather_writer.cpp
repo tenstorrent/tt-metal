@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -66,7 +66,7 @@ void kernel_main() {
         input_tile_id_end[input_idx] = get_arg_val<uint32_t>(arg_idx++);
     }
 
-    auto outputs_tuple = make_tensor_accessor_tuple(outputs_args, arg_idx, page_size_base_idx);
+    auto outputs_tuple = make_tensor_accessor_tuple(outputs_args, arg_idx);
     arg_idx += num_inputs;
     auto output_addrgens = make_abstract_tensor_accessor_wrappers(outputs_tuple);
     size_t arg_for_fab = arg_idx;

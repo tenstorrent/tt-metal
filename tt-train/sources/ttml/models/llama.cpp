@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -264,12 +264,11 @@ LlamaConfig read_config(const YAML::Node& config) {
     }
     llama_config.dropout_prob = config["dropout_prob"].as<float>(0.0F);
     llama_config.num_blocks = config["num_blocks"].as<uint32_t>(6U);
-    llama_config.vocab_size = config["vocab_size"].as<uint32_t>(96U);
+    llama_config.vocab_size = config["vocab_size"].as<uint32_t>(0U);
     llama_config.max_sequence_length = config["max_sequence_length"].as<uint32_t>(256U);
     llama_config.theta = config["theta"].as<float>(500000.0F);
     llama_config.runner_type = common::transformer::read_runner_type(config);
     llama_config.weight_tying = common::transformer::read_weight_tying_type(config);
-
     // Read RoPE NTK-aware scaling parameters if they exist
     if (config["rope_scaling"]) {
         const auto& rope_scaling = config["rope_scaling"];
@@ -302,7 +301,6 @@ YAML::Node write_config(const LlamaConfig& llama_config) {
     config["vocab_size"] = llama_config.vocab_size;
     config["max_sequence_length"] = llama_config.max_sequence_length;
     config["theta"] = llama_config.theta;
-
     // Add RoPE scaling parameters if they are set
     if (llama_config.scaling_factor != 0.0F && llama_config.original_context_length != 0U) {
         YAML::Node rope_scaling;

@@ -1,13 +1,12 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "reduce_scatter_minimal_async_op_device_operation.hpp"
-#include "ttnn/operations/experimental/ccl/composite_common.hpp"
 #include "ttnn/operations/functions.hpp"
-#include "ttnn/operations/math.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"  // for roofline calculation
 
 using namespace tt::tt_metal;
 
@@ -36,7 +35,7 @@ void ReduceScatterMinimalAsyncDeviceOperation::validate_on_program_cache_miss(
     const auto& input_tensor = tensor_args.input_tensor;
 
     // Common validation
-    reduce_scatter_common_validates(
+    ttnn::experimental::ccl::reduce_scatter_common_validates(
         input_tensor,
         operation_attributes.topology,
         operation_attributes.dim,
@@ -45,31 +44,12 @@ void ReduceScatterMinimalAsyncDeviceOperation::validate_on_program_cache_miss(
         operation_attributes.output_mem_config,
         tensor_args.optional_output_tensor);
 
-    const auto layout = input_tensor.layout();
-    const auto dtype = input_tensor.dtype();
-
     // Validate intermediate tensor if provided
     if (tensor_args.optional_intermediate_tensor.has_value()) {
-        const auto& intermediate_tensor = tensor_args.optional_intermediate_tensor.value();
-
-        TT_FATAL(intermediate_tensor.storage_type() == StorageType::DEVICE, "Intermediate tensor must be on device");
-        TT_FATAL(intermediate_tensor.layout() == layout, "Intermediate tensor layout must match input tensor layout");
-        TT_FATAL(intermediate_tensor.dtype() == dtype, "Intermediate tensor dtype must match input tensor dtype");
-        TT_FATAL(
-            intermediate_tensor.tensor_spec().page_config() == input_tensor.tensor_spec().page_config(),
-            "Intermediate tensor page config must match input tensor page config");
-
-        if (operation_attributes.optional_intermediate_mem_config.has_value()) {
-            TT_FATAL(
-                intermediate_tensor.memory_config() == operation_attributes.optional_intermediate_mem_config.value(),
-                "Intermediate tensor memory config must match provided intermediate_mem_config");
-        }
-
-        if (intermediate_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-            TT_FATAL(
-                intermediate_tensor.memory_config().buffer_type() == BufferType::L1,
-                "DRAM block sharding not supported for intermediate tensor");
-        }
+        ttnn::experimental::ccl::validate_intermediate_tensor(
+            input_tensor,
+            tensor_args.optional_intermediate_tensor.value(),
+            operation_attributes.optional_intermediate_mem_config);
     }
 
     // Validate semaphore count
@@ -169,101 +149,170 @@ ttsl::hash::hash_t ReduceScatterMinimalAsyncDeviceOperation::compute_program_has
         program_factory.index());
 }
 
-// Common validation function implementation
-void reduce_scatter_common_validates(
-    const ttnn::Tensor& input_tensor,
-    ttnn::ccl::Topology topology,
-    uint32_t dim,
-    uint32_t num_links,
-    uint32_t ring_size,
-    const ttnn::MemoryConfig& memory_config,
-    const std::optional<ttnn::Tensor>& optional_output_tensor) {
-    const auto page_size = input_tensor.buffer()->page_size();
-    TT_FATAL(
-        topology == ttnn::ccl::Topology::Ring || topology == ttnn::ccl::Topology::Linear,
-        "Topology must be either Ring or Linear");
-    TT_FATAL(
-        page_size % input_tensor.buffer()->alignment() == 0,
-        "reduce_scatter_minimal_async currently requires aligned pages");
+tt::tt_metal::operation::OpPerformanceModelGeneral<ReduceScatterMinimalAsyncDeviceOperation::tensor_return_value_t>
+ReduceScatterMinimalAsyncDeviceOperation::create_op_performance_model(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensors) {
+    // =========================================================================
+    // ReduceScatter Roofline Performance Model
+    //
+    // ReduceScatter: N devices, each has S bytes of input. Each device's
+    // output is the element-wise reduction (sum) of its slice across all
+    // devices: output size = S/N bytes per device.
+    //
+    // Unlike AllGather where data is forwarded unmodified (each link carries
+    // full S-byte slices), ReduceScatter REDUCES data at each hop — each
+    // link only carries S/N-byte slices. This makes ReduceScatter N× more
+    // communication-efficient per link than AllGather.
+    //
+    // The model uses bottleneck analysis over total resource utilization.
+    // All resources operate in parallel for the pipeline duration T.
+    // T must be long enough for every resource to finish its total work:
+    //
+    //   T >= work_i / BW_i   for each resource i
+    //   T  = max(all lower bounds)
+    //
+    // Different resources have different total data volumes (the N-dependence
+    // varies per resource), so you cannot factor out N. The max() over
+    // total work/BW correctly identifies the binding constraint.
+    //
+    // Double buffering: while a device processes the current slice
+    // (read + reduce + send), it receives the next slice in parallel.
+    // This overlap is captured by the max() — the receive and process
+    // sides compete only for shared bandwidth (e.g. DRAM).
+    // =========================================================================
 
-    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor must be allocated in buffers on device");
-    TT_FATAL(num_links > 0, "num_links must be greater than 0");
+    const auto& input_tensor = tensor_args.input_tensor;
 
-    const auto& rank = input_tensor.logical_shape().rank();
-    TT_FATAL(rank > 1, "reduce_scatter currently supports rank 2 tensors at minimum");
-    TT_FATAL(dim < rank, "Invalid scatter dim {} for rank {} tensor", dim, rank);
+    // --- Architecture and clock ---
+    tt::ARCH arch = tt::ARCH::WORMHOLE_B0;
+    float clock_rate_ghz = 1.0f;
+    if (input_tensor.storage_type() == StorageType::DEVICE) {
+        arch = input_tensor.device()->arch();
+        clock_rate_ghz = input_tensor.device()->get_clock_rate_mhz() / 1000.0f;
+    }
 
-    const uint32_t normalized_dim = std::get<0>(composite_common::normalize_dim_4d(dim, rank));
-    const auto& input_shape = input_tensor.padded_shape();
+    // --- Data sizes ---
+    const uint64_t input_size_bytes =
+        static_cast<uint64_t>(input_tensor.physical_volume()) * input_tensor.element_size();
+    const uint32_t N = args.ring_size;
+    const uint32_t num_links = args.num_links;
+    const uint64_t slice_size = input_size_bytes / N;  // S/N bytes per device output
 
-    if (normalized_dim == 2 || normalized_dim == 3) {
-        uint32_t tile_size = normalized_dim == 2 ? tt::constants::TILE_HEIGHT : tt::constants::TILE_WIDTH;
-        TT_FATAL(
-            (input_shape[dim] / tile_size) % ring_size == 0,
-            "Number of tiles at dimension {} must be divisible by ring_size",
-            dim);
+    // =========================================================================
+    // 1. FABRIC TRANSFER (algorithm-agnostic lower bound)
+    //
+    // RING topology — bisection argument:
+    //   Cut the ring into two halves of N/2 devices. Each device's output
+    //   chunk needs contributions from devices on both sides of the cut.
+    //   With optimal intermediate reduction, each direction carries
+    //   (N-1)×S/(2N) bytes through the bottleneck link.
+    //   Latency: N/2 hops (ring diameter — graph-theoretic minimum).
+    //
+    // LINE topology — endpoint bottleneck:
+    //   The edge device (D0 or DN-1) has one link and must receive all
+    //   (N-1) partial results through it: (N-1) × S/N bytes.
+    //   Latency: N-1 hops (linear diameter).
+    // =========================================================================
+    double fabric_time_ns = 0.0;
+    if (N <= 1) {
+        fabric_time_ns = 0.0;
+    } else if (args.topology == ttnn::ccl::Topology::Ring) {
+        // Bisection lower bound: (N-1) * slice_size / 2 per direction
+        const uint64_t bottleneck_bytes = tt::div_up((N - 1) * slice_size, 2);
+        const uint32_t num_hops = N / 2;
+        fabric_time_ns = ttnn::ccl::estimate_fabric_transfer_ns(arch, bottleneck_bytes, num_links, num_hops);
     } else {
-        TT_FATAL(input_shape[dim] % ring_size == 0, "Dimension {} must be divisible by ring_size", dim);
+        // Line/Linear topology
+        const uint64_t bottleneck_bytes = (N - 1) * slice_size;
+        const uint32_t num_hops = N - 1;
+        fabric_time_ns = ttnn::ccl::estimate_fabric_transfer_ns(arch, bottleneck_bytes, num_links, num_hops);
     }
+    const int fabric_cycles = static_cast<int>(std::ceil(fabric_time_ns * clock_rate_ghz));
 
-    TT_FATAL(
-        input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED ||
-            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
-            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
-            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
-        "Unsupported input tensor memory layout");
+    // =========================================================================
+    // 2. LOCAL DATA MOVEMENT — first-principles minimum (algorithm-agnostic)
+    //
+    // DRAM reads:  S bytes — each byte of the input tensor is read exactly
+    //   once (to contribute to a reduction or to be sent to a neighbor).
+    // DRAM writes: S/N bytes — only the final reduced output chunk.
+    //   Intermediate partial results flow network → L1 → reduce → network
+    //   without touching DRAM in the optimal case.
+    //
+    // Hardware ceiling: all device compute cores can drive DRAM concurrently.
+    // DRAM read and write can overlap (different NOC channels), so we
+    // take max(read_bw, write_bw) rather than summing them.
+    // =========================================================================
+    const auto& output_tensor = output_tensors[1];  // [0] is intermediate, [1] is output
+    const bool input_is_dram = input_tensor.buffer()->buffer_type() == BufferType::DRAM;
+    const bool output_is_dram = output_tensor.buffer()->buffer_type() == BufferType::DRAM;
+    const uint32_t read_page_size = input_tensor.buffer()->page_size();
+    const uint32_t write_page_size = output_tensor.buffer()->page_size();
+    const uint32_t device_rows = input_tensor.device()->compute_with_storage_grid_size().x;
+    const uint32_t device_cols = input_tensor.device()->compute_with_storage_grid_size().y;
+    const uint32_t num_cores = device_rows * device_cols;
 
-    if (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-        TT_FATAL(
-            input_tensor.memory_config().buffer_type() == BufferType::L1,
-            "DRAM block sharding not supported for input");
-    }
+    const uint64_t total_read_bytes = input_size_bytes;  // S
+    const uint32_t read_pages_per_core = tt::div_up(tt::div_up(total_read_bytes, read_page_size), num_cores);
 
-    if (optional_output_tensor.has_value()) {
-        const auto& output_tensor = optional_output_tensor.value();
+    const uint64_t total_write_bytes = slice_size;  // S/N
+    const uint32_t write_pages_per_core = tt::div_up(tt::div_up(total_write_bytes, write_page_size), num_cores);
 
-        TT_FATAL(
-            output_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED ||
-                output_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
-                output_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
-                output_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
-            "Unsupported output tensor memory layout");
+    auto [read_bw_cycles, read_latency_cycles] = ttnn::operations::data_movement::get_cycles_for_transaction_size(
+        read_page_size, input_is_dram, /*is_local=*/false, read_pages_per_core, arch, /*is_read=*/true);
+    auto [write_bw_cycles, write_latency_cycles] = ttnn::operations::data_movement::get_cycles_for_transaction_size(
+        write_page_size, output_is_dram, /*is_local=*/false, write_pages_per_core, arch, /*is_read=*/false);
 
-        TT_FATAL(output_tensor.storage_type() == StorageType::DEVICE, "Output tensor must be on device");
-        TT_FATAL(
-            output_tensor.layout() == input_tensor.layout(), "Output tensor layout must match input tensor layout");
-        TT_FATAL(output_tensor.dtype() == input_tensor.dtype(), "Output tensor dtype must match input tensor dtype");
-        TT_FATAL(
-            output_tensor.tensor_spec().page_config() == input_tensor.tensor_spec().page_config(),
-            "Output tensor page config must match input tensor page config");
-        TT_FATAL(
-            output_tensor.memory_config() == memory_config,
-            "Output tensor memory config must match provided memory_config");
+    // =========================================================================
+    // 3. COMPUTE (element-wise reduction) — algorithm-agnostic
+    //
+    // Each device performs (N-1) element-wise reductions (add_tiles),
+    // regardless of reduction order (sequential, tree, etc.).
+    // Each reduction takes two S/N-byte inputs and produces one S/N-byte output.
+    //
+    // The bottleneck is the unpacker that feeds tiles from L1 circular
+    // buffers to the math engine. Each Tensix core has two unpackers
+    // (one for SrcA, one for SrcB) sharing L1 access ports. Each can
+    // run at up to x4 speed (64 B/cycle), but their joint maximum is
+    // five 128-bit reads per cycle = 80 B/cycle. This limit applies
+    // to all architectures (Grayskull, Wormhole B0, Blackhole).
+    //
+    // The math engine itself is faster — 128 datums/cycle for element-wise
+    // add (8×16 FPU at LoFi) — so the unpacker is the binding constraint.
+    //
+    // Per reduction: unpack 2 inputs = 2 × S/N bytes through the unpacker.
+    // Total: 2 × (N-1) × S/N bytes across all reductions.
+    //
+    // Bottleneck is the unpacker (80 B/cycle joint SrcA+SrcB limit).
+    // Distributed across num_cores (hardware ceiling).
+    // =========================================================================
+    constexpr uint32_t UNPACKER_BW_BYTES_PER_CYCLE = 80;
+    const uint64_t total_unpack_bytes = 2ULL * (N - 1) * slice_size;
+    const int compute_cycles =
+        tt::div_up(total_unpack_bytes, static_cast<uint64_t>(num_cores) * UNPACKER_BW_BYTES_PER_CYCLE);
 
-        // Check output tensor size
-        auto output_shape = output_tensor.padded_shape();
-        TT_FATAL(
-            output_shape.size() == input_shape.size(),
-            "Output tensor must have same number of dimensions as input tensor");
+    // =========================================================================
+    // 4. PIPELINED MODEL
+    //
+    // All resources operate in parallel throughout the pipeline.
+    // BW terms compete — the slowest resource determines the throughput:
+    //   max(fabric, dram_read_bw, dram_write_bw, compute)
+    //
+    // Latencies are additive — pipeline fill and drain stages that
+    // cannot overlap with steady-state:
+    //   fill:  read_latency (first DRAM read before pipeline starts)
+    //   drain: compute_latency (last chunk's reduction after all data arrived)
+    //        + write_latency (last DRAM write after last reduction completes)
+    // =========================================================================
+    const int local_bw_cycles = std::max(read_bw_cycles, write_bw_cycles);
+    const int compute_latency_cycles =
+        static_cast<int>(2ULL * slice_size / (static_cast<uint64_t>(num_cores) * UNPACKER_BW_BYTES_PER_CYCLE));
+    const int pipeline_latency_cycles = read_latency_cycles + compute_latency_cycles + write_latency_cycles;
+    const int ideal_dev_clock_cycles =
+        std::max({local_bw_cycles, fabric_cycles, compute_cycles}) + pipeline_latency_cycles;
 
-        for (size_t i = 0; i < input_shape.size(); ++i) {
-            if (i == dim) {
-                TT_FATAL(
-                    output_shape[i] == input_shape[i] / ring_size,
-                    "Output tensor dimension {} must be input dimension / ring_size",
-                    i);
-            } else {
-                TT_FATAL(output_shape[i] == input_shape[i], "Output tensor dimension {} must match input dimension", i);
-            }
-        }
-
-        if (output_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-            TT_FATAL(
-                output_tensor.memory_config().buffer_type() == BufferType::L1,
-                "DRAM block sharding not supported for output");
-        }
-    }
+    tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
+        {input_tensor}, output_tensors, ideal_dev_clock_cycles);
+    return result;
 }
 
 }  // namespace ttnn::experimental::prim

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,7 +13,11 @@
 #include "device/ternary_device_operation.hpp"
 #include "device/ternary_op_utils.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
+#include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
 #include "ternary_composite_op.hpp"
+
+using namespace ttnn::operations::ternary;
 
 namespace ttnn::operations::ternary {
 
@@ -27,7 +31,7 @@ Tensor where_impl(
     const auto& value_false,
     const MemoryConfig& memory_config,
     const std::optional<Tensor>& output) {
-    log_debug(tt::LogOp, "Where Legacy");
+    log_debug(tt::LogOp, "Where Composite");
     using FusedActivations = ttsl::Span<const unary::EltwiseUnaryWithParam>;
     constexpr auto dtype = std::nullopt;
     const auto get_multiplied = [&](const Tensor& condition, const auto& value) -> Tensor {
@@ -39,8 +43,7 @@ Tensor where_impl(
             /* output */ std::nullopt,
             /* post_activations */ FusedActivations{},
             /* lhs_activations */ FusedActivations{},
-            /* rhs_activations */ FusedActivations{},
-            /* use_legacy */ false);
+            /* rhs_activations */ FusedActivations{});
     };
 
     return ttnn::add(
@@ -51,8 +54,7 @@ Tensor where_impl(
         output,
         /* post_activations */ FusedActivations{},
         /* lhs_activations */ FusedActivations{},
-        /* rhs_activations */ FusedActivations{},
-        /* use_legacy */ false);
+        /* rhs_activations */ FusedActivations{});
 }
 
 inline bool have_same_shape(const Tensor& a, const Tensor& b) { return (a.logical_shape() == b.logical_shape()); }
@@ -117,7 +119,7 @@ Tensor invoke_impl(
         condition.logical_shape(), t_true.logical_shape(), t_false.logical_shape());
     bool typecast_needed = ternary_utils::typecast_predicate(predicate, t_true, t_false);
     if (typecast_needed) {
-        condition = ttnn::typecast(predicate, t_true.dtype());
+        condition = ttnn::typecast(predicate, t_true.dtype(), std::nullopt, std::nullopt, sub_core_grids);
     }
 
     if (is_invalid_bcast(broadcast_type)) {
@@ -146,10 +148,10 @@ Tensor invoke_impl(
     Tensor condition = predicate;
     bool typecast_needed = ternary_utils::typecast_predicate(predicate, t_true);
     if (typecast_needed) {
-        condition = ttnn::typecast(predicate, t_true.dtype());
+        condition = ttnn::typecast(predicate, t_true.dtype(), std::nullopt, std::nullopt, sub_core_grids);
     }
 
-    return binary::WhereOperationWithScalar<binary::BinaryOpType::WHERE_TTS>::invoke(
+    return operations::binary::where_operation_with_scalar<operations::binary::BinaryOpType::WHERE_TTS>(
         condition,
         t_true,
         scalar_false,
@@ -169,10 +171,10 @@ Tensor invoke_impl(
     Tensor condition = predicate;
     bool typecast_needed = ternary_utils::typecast_predicate(predicate, t_false);
     if (typecast_needed) {
-        condition = ttnn::typecast(predicate, t_false.dtype());
+        condition = ttnn::typecast(predicate, t_false.dtype(), std::nullopt, std::nullopt, sub_core_grids);
     }
 
-    return binary::WhereOperationWithScalar<binary::BinaryOpType::WHERE_TST>::invoke(
+    return operations::binary::where_operation_with_scalar<operations::binary::BinaryOpType::WHERE_TST>(
         condition,
         t_false,
         scalar_true,
@@ -190,16 +192,16 @@ Tensor invoke_impl(
     const std::optional<Tensor>& output,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     log_debug(tt::LogOp, "Where LLK - TSS");
-    //  TODO: add sub_core_grids functionality to Unary Infra
-    if (sub_core_grids.has_value()) {
-        TT_THROW("Subcore grids are not supported for WhereOperation TSS variant");
-    }
-    return ttnn::where_tss(condition, t_true, t_false, memory_config, output);
+    return ttnn::where_tss(condition, t_true, t_false, memory_config, output, sub_core_grids);
 }
 
 }  // namespace
 
-Tensor WhereOperation::invoke(
+}  // namespace ttnn::operations::ternary
+
+namespace ttnn {
+
+Tensor where(
     const Tensor& predicate,
     const TensorScalarVariant& value_true,
     const TensorScalarVariant& value_false,
@@ -216,27 +218,24 @@ Tensor WhereOperation::invoke(
 
 template <typename T>
     requires std::same_as<T, int32_t> || std::same_as<T, uint32_t>
-Tensor WhereOperation::invoke(
+Tensor where(
     const Tensor& predicate,
     const T& value_true,
     const T& value_false,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    if (sub_core_grids.has_value()) {
-        TT_THROW("Subcore grids are not supported for WhereOperation TSS variant");
-    }
-    return ttnn::where_tss(predicate, value_true, value_false, memory_config, output);
+    return ttnn::where_tss(predicate, value_true, value_false, memory_config, output, sub_core_grids);
 }
 
-template Tensor WhereOperation::invoke<int32_t>(
+template Tensor where<int32_t>(
     const Tensor&,
     const int32_t&,
     const int32_t&,
     const std::optional<MemoryConfig>&,
     const std::optional<Tensor>&,
     const std::optional<CoreRangeSet>&);
-template Tensor WhereOperation::invoke<uint32_t>(
+template Tensor where<uint32_t>(
     const Tensor&,
     const uint32_t&,
     const uint32_t&,
@@ -244,26 +243,32 @@ template Tensor WhereOperation::invoke<uint32_t>(
     const std::optional<Tensor>&,
     const std::optional<CoreRangeSet>&);
 
-Tensor AddcmulOperation::invoke(
+Tensor addcmul(
     const Tensor& input_a,
     const Tensor& input_b,
     const Tensor& input_c,
-    ScalarVariant value,
+    operations::ternary::ScalarVariant value,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
     log_debug(tt::LogOp, "Addcmul LLK - TTT");
 
     bool is_supported_dtype =
         (input_a.dtype() == DataType::BFLOAT16 || input_a.dtype() == DataType::FLOAT32 ||
-         input_a.dtype() == DataType::INT32 || input_a.dtype() == DataType::BFLOAT8_B);  // TODO(#38972): UINT32 support
+         input_a.dtype() == DataType::INT32 || input_a.dtype() == DataType::BFLOAT8_B ||
+         input_a.dtype() == DataType::UINT32);
     TT_FATAL(
         is_supported_dtype,
-        "Addcmul supports only BFLOAT16, BFLOAT8_B, FLOAT32, and INT32 dtypes. Got {}",
+        "Addcmul supports only BFLOAT16, BFLOAT8_B, FLOAT32, INT32, and UINT32 dtypes. Got {}",
         input_a.dtype());
+    TT_FATAL(
+        input_b.dtype() == input_a.dtype() && input_c.dtype() == input_a.dtype(),
+        "Addcmul TTT requires all input tensors to have the same dtype. Got input_a={}, input_b={}, input_c={}",
+        input_a.dtype(),
+        input_b.dtype(),
+        input_c.dtype());
 
     // Only TTT variant is supported for addcmul
-    auto broadcast_type = ttnn::operations::ternary::get_broadcast_type(
-        input_a.logical_shape(), input_b.logical_shape(), input_c.logical_shape());
+    auto broadcast_type = get_broadcast_type(input_a.logical_shape(), input_b.logical_shape(), input_c.logical_shape());
 
     bool is_any_input_block_format =
         is_block_float(input_a.dtype()) || is_block_float(input_b.dtype()) || is_block_float(input_c.dtype());
@@ -274,7 +279,6 @@ Tensor AddcmulOperation::invoke(
     if (is_invalid_bcast(broadcast_type) || (is_any_input_block_format && is_subtile_bcast)) {
         log_debug(tt::LogOp, "Addcmul Fallback - TTT");
         // Fall back to composite implementation for unsupported cases
-        // For block-format ROW bcast of ttnn.mul, legacy binary bcast implementation is used.
         float value_f = std::visit([](auto&& v) { return static_cast<float>(v); }, value);
         return _addcmul(input_a, input_b, input_c, value_f, memory_config);
     }
@@ -293,7 +297,7 @@ Tensor AddcmulOperation::invoke(
         std::nullopt);
 }
 
-Tensor AddcdivOperation::invoke(
+Tensor addcdiv(
     const Tensor& input_a,
     const Tensor& input_b,
     const Tensor& input_c,
@@ -303,8 +307,7 @@ Tensor AddcdivOperation::invoke(
     log_debug(tt::LogOp, "Addcdiv LLK - TTT");
 
     // Only TTT variant is supported for addcdiv
-    auto broadcast_type = ttnn::operations::ternary::get_broadcast_type(
-        input_a.logical_shape(), input_b.logical_shape(), input_c.logical_shape());
+    auto broadcast_type = get_broadcast_type(input_a.logical_shape(), input_b.logical_shape(), input_c.logical_shape());
 
     bool is_any_input_block_format =
         is_block_float(input_a.dtype()) || is_block_float(input_b.dtype()) || is_block_float(input_c.dtype());
@@ -333,13 +336,13 @@ Tensor AddcdivOperation::invoke(
         std::nullopt);
 }
 
-Tensor LerpOperation::invoke(
+Tensor lerp(
     const Tensor& input,
     const Tensor& end,
     float weight,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
-    auto broadcast_type = ttnn::operations::ternary::get_broadcast_type(input.logical_shape(), end.logical_shape());
+    auto broadcast_type = get_broadcast_type(input.logical_shape(), end.logical_shape());
 
     bool is_any_input_block_format = is_block_float(input.dtype()) || is_block_float(end.dtype());
     bool is_subtile_bcast = (broadcast_type == TernaryBroadcastType::ROW_BCAST) ||
@@ -364,14 +367,13 @@ Tensor LerpOperation::invoke(
         std::nullopt);
 }
 
-Tensor LerpOperation::invoke(
+Tensor lerp(
     const Tensor& input,
     const Tensor& end,
     const Tensor& weight,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
-    auto broadcast_type = ttnn::operations::ternary::get_broadcast_type(
-        input.logical_shape(), end.logical_shape(), weight.logical_shape());
+    auto broadcast_type = get_broadcast_type(input.logical_shape(), end.logical_shape(), weight.logical_shape());
 
     bool is_any_input_block_format =
         is_block_float(input.dtype()) || is_block_float(end.dtype()) || is_block_float(weight.dtype());
@@ -398,4 +400,22 @@ Tensor LerpOperation::invoke(
         std::nullopt);
 }
 
-}  // namespace ttnn::operations::ternary
+Tensor snake_beta(
+    const Tensor& input_tensor,
+    const Tensor& alpha,
+    const Tensor& beta,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    auto lift_to_rank2 = [](const Tensor& t) { return t.logical_shape().rank() < 2 ? ttnn::unsqueeze(t, 0) : t; };
+    return ttnn::prim::ternary(
+        TernaryOpType::SNAKE_BETA,
+        input_tensor,
+        lift_to_rank2(alpha),
+        lift_to_rank2(beta),
+        ternary_utils::determine_output_dtype(optional_output_tensor, input_tensor.dtype()),
+        ternary_utils::determine_memory_config(memory_config, input_tensor.memory_config()),
+        optional_output_tensor,
+        std::nullopt);
+}
+
+}  // namespace ttnn

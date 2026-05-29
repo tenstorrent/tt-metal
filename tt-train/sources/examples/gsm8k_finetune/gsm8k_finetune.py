@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -32,7 +32,7 @@ from ttml.common.utils import (
     initialize_device,
     build_logits_mask,
     no_grad,
-    get_tt_metal_home,
+    get_tt_metal_runtime_root,
 )
 from ttml.common.data import build_causal_mask
 from ttml.datasets import Batch, InMemoryDataloader
@@ -377,8 +377,8 @@ def train():
 
     # Load dataset
     print("Loading GSM8K dataset...")
-    training_data = datasets.load_dataset("gsm8k", "main", split="train", ignore_verifications=True)
-    testing_data = datasets.load_dataset("gsm8k", "main", split="test", ignore_verifications=True)
+    training_data = datasets.load_dataset("gsm8k", "main", split="train", verification_mode="no_checks")
+    testing_data = datasets.load_dataset("gsm8k", "main", split="test", verification_mode="no_checks")
 
     training_data = tokenize_dataset(training_data, tokenizer)
     testing_data = tokenize_dataset(testing_data, tokenizer)
@@ -425,6 +425,9 @@ def train():
 
     sched = SpeedrunScheduler(scheduler_config)
 
+    mask_np = build_causal_mask(max_sequence_length)
+    causal_mask = ttml.autograd.Tensor.from_numpy(mask_np, layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16)
+
     trainer = SFTTrainer(
         model=tt_model,
         train_dataloader=train_loader,
@@ -432,6 +435,7 @@ def train():
         config=sft_config,
         optimizer=optimizer_cfg,
         lr_schedule=sched.lr_at,  # SpeedrunScheduler uses 0-based step index
+        attention_mask=causal_mask,
     )
 
     print(f"Starting training for max {training_config.steps} steps...")

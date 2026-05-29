@@ -1,30 +1,32 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
 # Adapted from https://github.com/huggingface/diffusers/blob/main/src/diffusers/pipelines/wan/pipeline_wan.py
 
+import os
 from typing import List, NamedTuple, Optional, Union
 
-import PIL
 import torch
 from diffusers.schedulers import UniPCMultistepScheduler
+from PIL import Image
 
 import ttnn
 
 from ...models.vae.vae_wan2_1 import WanEncoder
-from ...utils.conv3d import conv_pad_height, conv_pad_in_channels
-from ...utils.tensor import bf16_tensor_2dshard
+from ...utils import cache
+from ...utils.conv3d import conv_pad_height, conv_pad_in_channels, conv_pad_width
+from ...utils.tensor import bf16_tensor_2dshard, fast_device_to_host, unflatten
 from .pipeline_wan import WanPipeline
 
 
 class ImagePrompt(NamedTuple):
-    image: PIL.Image.Image
+    image: Image.Image
     frame_pos: int
 
 
 class WanPipelineI2V(WanPipeline):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, height: int = 0, width: int = 0, **kwargs):
         # Update I2V specific defaults
         if "checkpoint_name" not in kwargs:
             kwargs["checkpoint_name"] = "Wan-AI/Wan2.2-I2V-A14B-Diffusers"
@@ -33,9 +35,10 @@ class WanPipelineI2V(WanPipeline):
                 kwargs["checkpoint_name"], subfolder="scheduler", trust_remote_code=True
             )
 
-        super().__init__(*args, model_type="i2v", **kwargs)
+        # initialize without warmup; pass height/width so the decoder also gets production blocking dims
+        super().__init__(*args, model_type="i2v", run_warmup=False, height=height, width=width, **kwargs)
 
-        self.tt_encoder = WanEncoder(
+        self.tt_vae_encoder = WanEncoder(
             base_dim=self.vae.config.base_dim,
             in_channels=self.vae.config.in_channels,
             z_dim=self.vae.config.z_dim,
@@ -49,37 +52,42 @@ class WanPipelineI2V(WanPipeline):
             parallel_config=self.vae_parallel_config,
         )
 
-        self.tt_encoder.load_state_dict(self.vae.state_dict())
+        cache.load_model(
+            self.tt_vae_encoder,
+            model_name=os.path.basename(self.checkpoint_name),
+            subfolder="vae_encoder",
+            parallel_config=self.vae_parallel_config,
+            mesh_shape=tuple(self.mesh_device.shape),
+            get_torch_state_dict=lambda: self.vae.state_dict(),
+        )
+
+        # warmup buffers
+        self.warmup_buffers(height=height, width=width, image_prompt=Image.new("RGB", (width, height)))
 
     @staticmethod
     def create_pipeline(*args, **kwargs):
         # Update I2V specific defaults
         if "checkpoint_name" not in kwargs:
             kwargs["checkpoint_name"] = "Wan-AI/Wan2.2-I2V-A14B-Diffusers"
-        if "scheduler" not in kwargs:
-            kwargs["scheduler"] = UniPCMultistepScheduler.from_pretrained(
-                kwargs["checkpoint_name"], subfolder="scheduler", trust_remote_code=True
-            )
         return WanPipeline.create_pipeline(*args, pipeline_class=WanPipelineI2V, **kwargs)
 
     def get_model_input(self, latents, cond_latents):
         """
         Adapter function to enable I2V. For base T2V, just return the latents.
         """
-        # Reshape to make the channel last
-        U, B, NPad, T_size = latents.shape
-        # break out the channels for processing
-        latents = latents.reshape(U, B, NPad, T_size // self.vae.config.z_dim, -1)
-        cond_latents = cond_latents.reshape(U, B, NPad, T_size // self.vae.config.z_dim, -1)
-
-        # concatenate the latents and cond_latents
-        model_input = torch.cat([latents, cond_latents], dim=-1).reshape(U, B, NPad, -1)
-        return model_input
+        latents = super().get_model_input(latents, None)
+        z_dim = self.vae.config.z_dim
+        t_size = latents.shape[-1]
+        model_input = ttnn.concat(
+            [unflatten(latents, -1, (t_size // z_dim, -1)), unflatten(cond_latents, -1, (t_size // z_dim, -1))],
+            dim=-1,
+        )
+        return ttnn.reshape(model_input, (*tuple(latents.shape)[:-1], -1))
 
     def prepare_latents(
         self,
         batch_size: int,
-        image_prompt: Union[ImagePrompt, PIL.Image.Image, List[ImagePrompt]],
+        image_prompt: Union[ImagePrompt, Image.Image, List[ImagePrompt]],
         num_channels_latents: int = 16,
         height: int = 480,
         width: int = 832,
@@ -92,7 +100,7 @@ class WanPipelineI2V(WanPipeline):
 
         if isinstance(image_prompt, ImagePrompt):
             image_prompt = [image_prompt]
-        elif isinstance(image_prompt, PIL.Image.Image):
+        elif isinstance(image_prompt, Image.Image):
             image_prompt = [ImagePrompt(image=image_prompt, frame_pos=0)]
 
         latents, _ = super().prepare_latents(
@@ -137,6 +145,9 @@ class WanPipelineI2V(WanPipeline):
         tt_video_condition_BTHWC, logical_h = conv_pad_height(
             tt_video_condition_BTHWC, self.vae_parallel_config.height_parallel.factor * self.vae_scale_factor_spatial
         )
+        tt_video_condition_BTHWC, logical_w = conv_pad_width(
+            tt_video_condition_BTHWC, self.vae_parallel_config.width_parallel.factor * self.vae_scale_factor_spatial
+        )
         tt_video_condition_BTHWC = bf16_tensor_2dshard(
             tt_video_condition_BTHWC,
             self.mesh_device,
@@ -147,19 +158,21 @@ class WanPipelineI2V(WanPipeline):
             },
         )
 
-        encoded_video_BCTHW, new_logical_h = self.tt_encoder(tt_video_condition_BTHWC, logical_h)
+        encoded_video_BCTHW, new_logical_h, new_logical_w = self.tt_vae_encoder(
+            tt_video_condition_BTHWC, logical_h, logical_w=logical_w
+        )
 
         # convert to torch
         concat_dims = [None, None]
         concat_dims[self.vae_parallel_config.height_parallel.mesh_axis] = 3
         concat_dims[self.vae_parallel_config.width_parallel.mesh_axis] = 4
-        encoded_video_torch = ttnn.to_torch(
+        encoded_video_torch = fast_device_to_host(
             encoded_video_BCTHW,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(
-                self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=concat_dims
-            ),
+            self.mesh_device,
+            concat_dims,
+            ccl_manager=self.vae_ccl_manager,
         )
-        encoded_video_torch = encoded_video_torch[:, :, :, :new_logical_h, :]
+        encoded_video_torch = encoded_video_torch[:, :, :, :new_logical_h, :new_logical_w]
         encoded_video_torch = encoded_video_torch.to(dtype=dtype)
 
         latents_mean = (

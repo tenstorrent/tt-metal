@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 """
@@ -36,11 +36,24 @@ def bytes_to_mb(bytes_val: float) -> float:
 def extract_number_of_parameters(content: str, start_pos: int) -> Optional[int]:
     """Extract number of parameters from logs before the memory summary"""
     # Search forward from a reasonable position before start
-    search_start = max(0, start_pos - 500)
+    search_start = max(0, start_pos - 1000)
     text_before = content[search_start:start_pos]
-    match = re.search(r"Number of parameters:\s*(\d+)", text_before)
+    text_before = text_before.replace(",", "")
+    match = re.search(r"Total parameters:\s*(\d+)", text_before)
     if match:
         return int(match.group(1))
+    return None
+
+
+def extract_available_device_memory_mb(content: str, start_pos: int) -> Optional[int]:
+    """Extract the available device memory from logs before the memory summary"""
+    # Search forward from a reasonable position before start
+    search_start = max(0, start_pos - 1000)
+    text_before = content[search_start:start_pos]
+    text_before = text_before.replace(",", "")
+    match = re.search(r"Available Device Memory:\s+([\d.]+)\s*MB", text_before)
+    if match:
+        return float(match.group(1))
     return None
 
 
@@ -75,7 +88,7 @@ def parse_memory_section(section: str) -> Dict[str, Dict[str, float]]:
 
 def find_memory_summaries(
     content: str,
-) -> List[Tuple[str, Dict[str, Dict[str, float]], Optional[int]]]:
+) -> List[Tuple[str, Dict[str, Dict[str, float]], Optional[int], Optional[float]]]:
     """Find all memory usage summary sections in the log file"""
     summaries = []
 
@@ -90,8 +103,11 @@ def find_memory_summaries(
         # Try to extract number of parameters
         num_params = extract_number_of_parameters(content, match.start())
 
+        # Try to extract the available device memory
+        device_memory_mb = extract_available_device_memory_mb(content, match.start())
+
         # Try to find a section name (e.g., "tinyllama (memory_efficient)")
-        name_search_start = max(0, match.start() - 500)
+        name_search_start = max(0, match.start() - 1000)
         text_before = content[name_search_start : match.start()]
 
         # Look for the last non-empty line that's not all #'s
@@ -99,11 +115,11 @@ def find_memory_summaries(
         section_name = "Unknown"
         for line in reversed(lines):
             line = line.strip()
-            if line and not line.startswith("#") and "Number of parameters" not in line:
+            if line and not line.startswith("#") and "Total parameters" not in line:
                 section_name = line
                 break
 
-        summaries.append((section_name, metrics, num_params))
+        summaries.append((section_name, metrics, num_params, device_memory_mb))
 
     return summaries
 
@@ -159,9 +175,7 @@ def create_peak_memory_visualization(
     # Calculate common y-axis limit (max of all peaks and device memory)
     max_y = 0
     for name, breakdown in summaries_data:
-        max_y = max(
-            max_y, breakdown.get("total", 0.0), breakdown.get("device_memory", 0.0)
-        )
+        max_y = max(max_y, breakdown.get("total", 0.0), breakdown.get("device_memory", 0.0))
     common_y_limit = max_y * 1.1
 
     for idx, (name, breakdown) in enumerate(summaries_data):
@@ -351,9 +365,7 @@ def analyze_memory_summary(
         if gradients_size_bytes is not None:
             gradients_expected_mb = bytes_to_mb(gradients_size_bytes)
             print(f"  Expected (input):     {gradients_expected_mb:,.2f} MB")
-            diff_pct = calculate_percentage_diff(
-                gradients_actual_mb, gradients_expected_mb
-            )
+            diff_pct = calculate_percentage_diff(gradients_actual_mb, gradients_expected_mb)
             print(f"  Difference:           {diff_pct:+.2f}%")
 
     # Peak DRAM usage
@@ -372,18 +384,14 @@ def analyze_memory_summary(
         if use_actual_sizes:
             # Use actual measured values from logs
             model_mb = metrics.get("MODEL_CREATION", {}).get("segment_change", 0.0)
-            optimizer_mb = metrics.get("OPTIMIZER_CREATION", {}).get(
-                "segment_change", 0.0
-            )
+            optimizer_mb = metrics.get("OPTIMIZER_CREATION", {}).get("segment_change", 0.0)
         else:
             # Use theoretical values
             model_mb = bytes_to_mb(model_size_bytes) if model_size_bytes else 0.0
             optimizer_mb = bytes_to_mb(optimizer_size_bytes)
 
         activations_mb = metrics.get("FORWARD_PASS", {}).get("segment_change", 0.0)
-        gradients_overhead_mb = metrics.get("BACKWARD_PASS", {}).get(
-            "segment_peak", 0.0
-        )
+        gradients_overhead_mb = metrics.get("BACKWARD_PASS", {}).get("segment_peak", 0.0)
 
         # Calculate "other" as the difference
         accounted_mb = model_mb + optimizer_mb + activations_mb + gradients_overhead_mb
@@ -402,7 +410,7 @@ def analyze_memory_summary(
     return peak_breakdown
 
 
-def main():
+def main(raw_args=None):
     parser = argparse.ArgumentParser(
         description="Analyze memory usage from tt-train logs",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -417,8 +425,7 @@ def main():
     parser.add_argument(
         "--device_memory",
         type=float,
-        default=12 * 1024 * 1024 * 1024,  # 12 GB default
-        help="Available device memory in bytes (default: 12GB)",
+        help="Available device memory in bytes (can be extracted from logs if not provided)",
     )
 
     parser.add_argument(
@@ -451,9 +458,7 @@ def main():
         help="Use actual measured values from logs for model/optimizer sizes in visualization instead of theoretical values",
     )
 
-    parser.add_argument(
-        "--title", type=str, help="Optional title for the visualization"
-    )
+    parser.add_argument("--title", type=str, help="Optional title for the visualization")
 
     parser.add_argument(
         "--output",
@@ -462,7 +467,7 @@ def main():
         help="Output filename for visualization (default: memory_peak_visualization.png)",
     )
 
-    args = parser.parse_args()
+    args = parser.parse_args(raw_args)
 
     # Read log file
     with open(args.logs, "r") as f:
@@ -482,7 +487,7 @@ def main():
     # If model size not provided, try to extract from logs
     if model_size_bytes is None:
         # Try to get from first summary with parameters
-        for name, metrics, num_params in summaries:
+        for name, metrics, num_params, device_memory in summaries:
             if num_params:
                 # Assume 2 bytes per parameter (bf16)
                 model_size_bytes = num_params * 2
@@ -492,25 +497,33 @@ def main():
                 break
 
     if model_size_bytes is None:
-        raise ValueError(
-            "Error: Model size not provided and could not be extracted from logs"
-        )
+        raise ValueError("Error: Model size not provided and could not be extracted from logs")
+
+    # Determine available device DRAM
+    device_memory_bytes = args.device_memory
+
+    # If device memory not provided, try to extract from logs
+    if device_memory_bytes is None:
+        # Try to get from first summary with device memory
+        for name, metrics, num_params, device_memory in summaries:
+            if device_memory is not None:
+                # device_memory arg is in bytes, so match that
+                device_memory_bytes = device_memory * (1024 * 1024)
+                print(f"Available device memory, calculated from logs: {device_memory:.2f} MB")
+                break
+
+    if device_memory_bytes is None:
+        raise ValueError("Error: Device memory not provided and could not be extracted from logs")
 
     # Determine optimizer size (default: 2 * model_size, bf16)
-    optimizer_size_bytes = (
-        args.optimizer_size
-        if args.optimizer_size is not None
-        else (2 * model_size_bytes)
-    )
+    optimizer_size_bytes = args.optimizer_size if args.optimizer_size is not None else (2 * model_size_bytes)
 
     # Gradients size (default: same as model_size for bf16, will be compared with logs)
-    gradients_size_bytes = (
-        args.gradients_size if args.gradients_size is not None else model_size_bytes
-    )
+    gradients_size_bytes = args.gradients_size if args.gradients_size is not None else model_size_bytes
 
     # Analyze each summary
     visualization_data = []
-    for name, metrics, num_params in summaries:
+    for name, metrics, num_params, device_memory in summaries:
         breakdown = analyze_memory_summary(
             name,
             metrics,
@@ -518,7 +531,7 @@ def main():
             model_size_bytes,
             optimizer_size_bytes,
             gradients_size_bytes,
-            args.device_memory,
+            device_memory_bytes,
             args.use_actual_sizes,
         )
         if breakdown:
@@ -536,9 +549,9 @@ def main():
                 file=sys.stderr,
             )
         elif visualization_data:
-            create_peak_memory_visualization(
-                visualization_data, title=args.title, output_file=args.output
-            )
+            create_peak_memory_visualization(visualization_data, title=args.title, output_file=args.output)
+
+    return breakdown if breakdown else None
 
 
 if __name__ == "__main__":

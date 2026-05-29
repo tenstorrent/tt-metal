@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -102,7 +102,8 @@ void kernel_main() {
     constexpr uint32_t sync_cb = get_compile_time_arg_val(12);
     constexpr uint32_t sync_cb2 = get_compile_time_arg_val(13);
     constexpr uint32_t remote_cb_id = get_compile_time_arg_val(14);
-    constexpr auto src_args = TensorAccessorArgs<15>();
+
+    constexpr auto src_args = TensorAccessorArgs<16>();
 
     const uint32_t in1_block_num_tiles = in1_block_height_in_tiles * in1_block_width_in_tiles;
 
@@ -110,7 +111,7 @@ void kernel_main() {
     constexpr const uint32_t in1_tile_hw = get_tile_hw(cb_id_in1);
     constexpr uint32_t in1_single_tile_size_bytes = get_tile_size(cb_id_in1);
     constexpr DataFormat in1_data_format = get_dataformat(cb_id_in1);
-    const auto s1 = TensorAccessor(src_args, in1_tensor_addr, in1_single_tile_size_bytes);
+    const auto s1 = TensorAccessor(src_args, in1_tensor_addr);
 
     uint32_t in1_shard_width_offset_bytes = 0;
     uint32_t in1_dram_shard_block_size_bytes = 0;

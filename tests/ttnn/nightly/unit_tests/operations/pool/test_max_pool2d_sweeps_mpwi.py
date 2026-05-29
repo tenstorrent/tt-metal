@@ -1,8 +1,8 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
-from tests.sweep_framework.sweep_utils.max_pool2d_with_indices_common import run_max_pool2d_with_indices
+from tests.sweep_framework.sweep_utils.pool2d_common import run_max_pool2d_with_indices
 
 import pytest
 import ttnn

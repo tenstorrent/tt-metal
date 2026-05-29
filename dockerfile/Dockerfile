@@ -92,7 +92,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     uuid-runtime \
     wget \
     zstd \
-    libgtest-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Install yq (YAML processor) for CI workflows
@@ -124,7 +123,7 @@ RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
 
 # Numpy needed for tt-train to build
 # bundle uv with the venv for portable usage
-RUN umask 000 && uv pip install --no-cache-dir uv build numpy setuptools==80
+RUN umask 000 && uv pip install --no-cache-dir uv build numpy setuptools==80.10.2
 
 RUN git config --global --add safe.directory '*'
 
@@ -170,7 +169,8 @@ RUN umask 000 && \
     uv pip install --no-cache --index-url https://download.pytorch.org/whl/cpu torch && \
     uv pip install --index-strategy unsafe-best-match --no-cache --no-build-isolation -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt && \
     uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt && \
-    uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tools/triage/requirements.txt
+    uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tools/triage/requirements.txt && \
+    uv pip check
 
 #############################################################
 
@@ -185,6 +185,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     acl \
     emacs \
     gdb \
+    gh \
     less \
     libmpfr-dev \
     nano \

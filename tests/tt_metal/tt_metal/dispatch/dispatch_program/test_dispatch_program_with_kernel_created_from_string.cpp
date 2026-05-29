@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -25,8 +25,8 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, TensixDataMovementKernel) {
 
     void kernel_main() {
 
-        DPRINT_DATA0(DPRINT << "Hello, I am running a void data movement kernel on NOC 0." << ENDL());
-        DPRINT_DATA1(DPRINT << "Hello, I am running a void data movement kernel on NOC 1." << ENDL());
+        DPRINT_DATA0("Hello, I am running a void data movement kernel on NOC 0.\n");
+        DPRINT_DATA1("Hello, I am running a void data movement kernel on NOC 1.\n");
 
     }
     )";
@@ -55,7 +55,7 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, TensixComputeKernel) {
 
     void kernel_main() {
 
-        DPRINT_MATH(DPRINT << "Hello, I am running a void compute kernel." << ENDL());
+        DPRINT_MATH("Hello, I am running a void compute kernel.\n");
 
     }
 
@@ -88,7 +88,7 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, ActiveEthEthernetKernel) {
 
     void kernel_main() {
 
-        DPRINT << "Hello, I am running a void ethernet kernel." << ENDL();
+        DPRINT("Hello, I am running a void ethernet kernel.\n");
 
     }
     )";

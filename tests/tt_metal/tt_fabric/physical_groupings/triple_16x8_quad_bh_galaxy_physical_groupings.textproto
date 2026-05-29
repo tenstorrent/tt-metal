@@ -9,6 +9,44 @@ groupings {
   name: "tray_1"
   preset_type: TRAY_1
   instances: [
+    { id: 0 asic_location: ASIC_LOCATION_1 },
+    { id: 1 asic_location: ASIC_LOCATION_2 },
+    { id: 2 asic_location: ASIC_LOCATION_3 },
+    { id: 3 asic_location: ASIC_LOCATION_4 },
+    { id: 4 asic_location: ASIC_LOCATION_5 },
+    { id: 5 asic_location: ASIC_LOCATION_6 },
+    { id: 6 asic_location: ASIC_LOCATION_7 },
+    { id: 7 asic_location: ASIC_LOCATION_8 }
+  ]
+  row_major_mesh {
+    dims: [2, 4]
+  }
+}
+
+# TRAY_2: Bottom left corner is ASIC_LOCATION_1
+groupings {
+  name: "tray_2"
+  preset_type: TRAY_2
+  instances: [
+    { id: 0 asic_location: ASIC_LOCATION_4 },
+    { id: 1 asic_location: ASIC_LOCATION_3 },
+    { id: 2 asic_location: ASIC_LOCATION_2 },
+    { id: 3 asic_location: ASIC_LOCATION_1 },
+    { id: 4 asic_location: ASIC_LOCATION_8 },
+    { id: 5 asic_location: ASIC_LOCATION_7 },
+    { id: 6 asic_location: ASIC_LOCATION_6 },
+    { id: 7 asic_location: ASIC_LOCATION_5 }
+  ]
+  row_major_mesh {
+    dims: [2, 4]
+  }
+}
+
+# TRAY_3: Top right corner is ASIC_LOCATION_1
+groupings {
+  name: "tray_3"
+  preset_type: TRAY_3
+  instances: [
     { id: 0 asic_location: ASIC_LOCATION_5 },
     { id: 1 asic_location: ASIC_LOCATION_6 },
     { id: 2 asic_location: ASIC_LOCATION_7 },
@@ -23,7 +61,8 @@ groupings {
   }
 }
 
-# TRAY_2: Bottom left corner is ASIC_LOCATION_1
+
+# TRAY_4: Bottom right corner is ASIC_LOCATION_1
 groupings {
   name: "tray_2"
   preset_type: TRAY_2
@@ -61,6 +100,24 @@ groupings {
   }
 }
 
+# TRAY_3: Bottom left corner is ASIC_LOCATION_1
+groupings {
+  name: "tray_3"
+  preset_type: TRAY_3
+  instances: [
+    { id: 0 asic_location: ASIC_LOCATION_4 },
+    { id: 1 asic_location: ASIC_LOCATION_3 },
+    { id: 2 asic_location: ASIC_LOCATION_2 },
+    { id: 3 asic_location: ASIC_LOCATION_1 },
+    { id: 4 asic_location: ASIC_LOCATION_8 },
+    { id: 5 asic_location: ASIC_LOCATION_7 },
+    { id: 6 asic_location: ASIC_LOCATION_6 },
+    { id: 7 asic_location: ASIC_LOCATION_5 }
+  ]
+  row_major_mesh {
+    dims: [2, 4]
+  }
+}
 
 # TRAY_4: Bottom right corner is ASIC_LOCATION_1
 groupings {
@@ -134,26 +191,34 @@ groupings {
   }
 }
 
-# MESH preset groupings for different mesh sizes to cover all MGD cases
-
-groupings {
-  name: "2x4_Mesh_2tray"
-  preset_type: MESH
-  instances: [
-    { id: 0 grouping_ref { custom_type: "halftray" } },
-    { id: 1 grouping_ref { custom_type: "halftray" } }
-  ]
-  row_major_mesh {
-    dims: [2, 1]
-  }
-}
-
 # MESH: 1 tray (8 ASICs)
 groupings {
   name: "2x4_Mesh"
   preset_type: MESH
   instances: [
     { id: 0 grouping_ref { preset_type: TRAY_1 } }
+  ]
+}
+groupings {
+  name: "2x4_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 grouping_ref { preset_type: TRAY_2 } }
+  ]
+}
+groupings {
+  name: "2x4_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 grouping_ref { preset_type: TRAY_3 } }
+  ]
+}
+# MESH: 1 tray (8 ASICs)
+groupings {
+  name: "2x4_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 grouping_ref { preset_type: TRAY_4 } }
   ]
 }
 
@@ -219,6 +284,18 @@ groupings {
   }
 }
 
+groupings {
+  name: "2x8_Mesh BH"
+  preset_type: MESH
+  instances: [
+    { id: 0 grouping_ref { preset_type: TRAY_1 } },
+    { id: 1 grouping_ref { preset_type: TRAY_2 } }
+  ]
+  row_major_mesh {
+    dims: [1, 2]
+  }
+}
+
 # MESH: 1 host (32 ASICs) - for single galaxy (8x4)
 # Note: Single instance grouping, no row_major_mesh needed (only applies to multi-instance groupings)
 groupings {
@@ -241,5 +318,20 @@ groupings {
   ]
   row_major_mesh {
     dims: [2, 2]
+  }
+}
+
+# MESH: 4 hosts (128 ASICs) arranged in 2x2 grid - for 16x8 quad BH galaxy
+groupings {
+  name: "4x32_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 grouping_ref { preset_type: HOSTS } },
+    { id: 1 grouping_ref { preset_type: HOSTS } },
+    { id: 2 grouping_ref { preset_type: HOSTS } },
+    { id: 3 grouping_ref { preset_type: HOSTS } }
+  ]
+  row_major_mesh {
+    dims: [1, 4]
   }
 }

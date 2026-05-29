@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,5 +9,5 @@ void kernel_main() {
     // Nothing to compute. Print respond message.
     // Make sure to export TT_METAL_DPRINT_CORES=0,0 before runtime.
 
-    DPRINT_MATH(DPRINT << "Hello, World! I'm running a void compute kernel." << ENDL());
+    DPRINT_MATH("Hello, World! I'm running a void compute kernel.\n");
 }

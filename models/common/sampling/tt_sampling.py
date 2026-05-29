@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -158,12 +158,19 @@ class TTSampling(LightweightModule):
 
         # Force argmax sampling
         if hasattr(args, "model_config") and "SAMPLING_AG_CONFIG" in args.model_config:
-            self._allow_force_argmax_sampling = args.model_config["SAMPLING_AG_CONFIG"]["allow_force_argmax"]
-            self.num_argmax_gather_links = args.model_config["SAMPLING_AG_CONFIG"]["num_links"]
-            self.ag_topology = args.model_config["SAMPLING_AG_CONFIG"]["topology"]
+            # The model config may describe the fastest full-size Galaxy path, but
+            # the actual CCL shape is resolved from the runtime mesh below.
+            sampling_ag_config = args.model_config["SAMPLING_AG_CONFIG"]
+            self._allow_force_argmax_sampling = sampling_ag_config["allow_force_argmax"]
+            self.num_argmax_gather_links = sampling_ag_config["num_links"]
+            self.argmax_chunks_per_sync = sampling_ag_config.get("chunks_per_sync", 10)
+            self.argmax_num_workers_per_link = 1
+            self.ag_topology = sampling_ag_config["topology"]
         else:
             self._allow_force_argmax_sampling = False
             self.num_argmax_gather_links = self.num_gather_links
+            self.argmax_chunks_per_sync = 10
+            self.argmax_num_workers_per_link = 1
             self.ag_topology = ttnn.Topology.Linear
 
         # Set defaults for sampling parameters if not provided
@@ -208,7 +215,11 @@ class TTSampling(LightweightModule):
         # Log-probs tensor to store the log-probs for the batch
         self.tt_log_probs = None
         self.log_probs_calculator = LogProbsCalculator(
-            self.mesh_device, self.sub_core_grids, self.tt_ccl, batch_size=self.max_batch_size
+            self.mesh_device,
+            self.sub_core_grids,
+            self.tt_ccl,
+            batch_size=self.max_batch_size,
+            use_topk_logprobs=getattr(args, "use_topk_logprobs", False),
         )
 
         # Seeds tensor: one RNG slot per user across all rows.
@@ -323,8 +334,39 @@ class TTSampling(LightweightModule):
             topology=ttnn.Topology.Linear,
         )
 
-    def reset_params(self, k, p, temp, enable_log_probs: bool | list[bool] = None):
-        """Update sampling parameters (k, p, temperature) dynamically."""
+    def _get_sampling_cluster_axis(self):
+        if self.mesh_device.get_num_devices() <= 1:
+            return None
+        # 1D submeshes should use the default CCL axis; forcing axis 1 can make
+        # smaller Galaxy DP groups request routes outside the submesh.
+        if 1 in self.cluster_shape:
+            return None
+        return self.sampling_all_gather_axis
+
+    def _get_force_argmax_all_gather_config(self, cluster_axis):
+        num_links = self.num_argmax_gather_links
+        if hasattr(self.tt_ccl, "get_num_links"):
+            # Clamp the tuned config to the links available on the actual submesh.
+            num_links = min(num_links, self.tt_ccl.get_num_links(cluster_axis))
+
+        topology = self.ag_topology
+        # Ring is available for T3K-like 8-device groups; smaller DP groups need
+        # linear routing to avoid wraparound routes such as D0 -> D12.
+        if self.mesh_device.get_num_devices() < 8:
+            topology = ttnn.Topology.Linear
+
+        return max(1, num_links), topology
+
+    def reset_params(
+        self,
+        k,
+        p,
+        temp,
+        enable_log_probs: bool | list[bool] = None,
+        num_logprobs: int | list[int] = None,
+        empty_slots: list[int] | None = None,
+    ):
+        """Update sampling parameters (k, p, temperature, logprobs) dynamically."""
         self._force_argmax_sampling = self._is_force_argmax_sampling(k, p, temp)
         if not self._force_argmax_sampling:
             # When _sampling_dp > 1, create multi-device host tensors so
@@ -360,7 +402,9 @@ class TTSampling(LightweightModule):
             ttnn.copy_host_to_device_tensor(self.p_tensor_new, self.p_tensor)
             ttnn.copy_host_to_device_tensor(self.temp_tensor_new, self.temp_tensor)
 
-        self.log_probs_calculator.set_log_probs_mode(enable_log_probs)
+        self.log_probs_calculator.set_log_probs_mode(
+            enable_log_probs, num_logprobs=num_logprobs, empty_slots=empty_slots
+        )
 
     def forward(
         self,
@@ -386,19 +430,24 @@ class TTSampling(LightweightModule):
             # Gather the output across all devices and untilize the tensor (for argmax)
             num_devices = self.mesh_device.get_num_devices()
             if num_devices > 1:
-                cluster_axis = 1
+                cluster_axis = self._get_sampling_cluster_axis()
+                num_links, topology = self._get_force_argmax_all_gather_config(cluster_axis)
+                logger.debug(
+                    f"Force argmax sampling all-gather: cluster_axis={cluster_axis}, "
+                    f"num_links={num_links}, topology={topology}"
+                )
                 x = ttnn.experimental.all_gather_async(
                     x,
                     persistent_output_buffer=None,
                     dim=3,
                     multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
-                    num_links=self.num_argmax_gather_links,
+                    num_links=num_links,
                     memory_config=x.memory_config(),
                     cluster_axis=cluster_axis,
-                    topology=self.ag_topology,
+                    topology=topology,
                     barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
-                    chunks_per_sync=10,
-                    num_workers_per_link=1,
+                    chunks_per_sync=self.argmax_chunks_per_sync,
+                    num_workers_per_link=self.argmax_num_workers_per_link,
                     num_buffers_per_channel=2,
                 )
             x_untilized = ttnn.untilize(x, use_multicore=True)
@@ -409,9 +458,9 @@ class TTSampling(LightweightModule):
                 keepdim=False,
                 use_multicore=True,
             )
-            # Return dummy log-probs tensor with same shape as regular log-probs would be
-            # to satisfy the return type and for later post-processing
-            self.tt_log_probs = self.log_probs_calculator.calculate_log_probs(x, tt_out_tok)
+            # Argmax path: logprobs not supported (force-argmax is disabled
+            # when logprobs are enabled via format_sampling_params guard).
+            self.tt_log_probs = None
             return tt_out_tok, self.tt_log_probs
 
         # Convert to bfloat16 for top-k operations (typecast is no-op if already bfloat16)
@@ -466,7 +515,7 @@ class TTSampling(LightweightModule):
             )
 
             # For 1D meshes use `cluster_axis=None`. For 2D meshes, use the configured gather axis.
-            sampling_cluster_axis = None if 1 in self.cluster_shape else self.sampling_all_gather_axis
+            sampling_cluster_axis = self._get_sampling_cluster_axis()
 
             # Gather top-k values across all devices
             topk_values_gathered = self._perform_all_gather(
@@ -524,7 +573,7 @@ class TTSampling(LightweightModule):
         topk_global_indices = ttnn.add(
             self.tt_indices_device_offsets,
             topk_indices_gathered_int32_sharded,
-            dtype=ttnn.int32,
+            dtype=ttnn.uint32,
             memory_config=self.sampling_memory_config,
         )
 
@@ -536,7 +585,6 @@ class TTSampling(LightweightModule):
         topk_global_indices_interleaved_untilised = ttnn.untilize(
             topk_global_indices_interleaved, use_multicore=True, sub_core_grids=self.sub_core_grids
         )
-        ttnn.deallocate(topk_global_indices_interleaved)
         ttnn.manual_seed(
             seeds=self.seeds_tt_tensor,
             user_ids=self.user_ids_tt_tensor,
@@ -557,11 +605,23 @@ class TTSampling(LightweightModule):
             output_tensor=tt_out_tok,
         )
 
-        ttnn.deallocate(topk_values_gathered_bf16_interleaved)
-        ttnn.deallocate(topk_global_indices_interleaved_untilised)
+        # Compute logprobs if enabled
+        if self.log_probs_calculator.enable_log_probs and self.log_probs_calculator._use_topk_logprobs:
+            # New path: top-K logprobs for gpt-oss-120b
+            self.tt_log_probs = self.log_probs_calculator.calculate_topk_log_probs(
+                logits_tensor=x,
+                topk_values=topk_values_gathered_bf16_interleaved,
+                topk_global_indices=topk_global_indices_interleaved,
+                sub_core_grid_topk=self.sub_core_grid_topk,
+            )
+        elif self.log_probs_calculator.enable_log_probs:
+            # Old path: single sampled-token logprob
+            self.tt_log_probs = self.log_probs_calculator.calculate_log_probs(x, tt_out_tok)
+        else:
+            self.tt_log_probs = None
 
-        # Return dummy log-probs tensor with same shape as regular log-probs would be
-        # to satisfy the return type and for later post-processing
-        self.tt_log_probs = self.log_probs_calculator.calculate_log_probs(x, tt_out_tok)
+        ttnn.deallocate(topk_values_gathered_bf16_interleaved)
+        ttnn.deallocate(topk_global_indices_interleaved)
+        ttnn.deallocate(topk_global_indices_interleaved_untilised)
 
         return tt_out_tok, self.tt_log_probs

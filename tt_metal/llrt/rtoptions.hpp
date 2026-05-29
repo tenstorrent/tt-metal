@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,6 +12,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <map>
@@ -115,7 +116,8 @@ struct InspectorSettings {
     uint16_t rpc_server_port = 50051;
     bool rpc_server_enabled = true;
     bool serialize_on_dispatch_timeout = true;
-    std::string rpc_server_address() const { return rpc_server_host + ":" + std::to_string(rpc_server_port); }
+    bool capture_tensor_specs = true;
+    bool log_runtime_entries = false;
 };
 
 template <typename T>
@@ -205,6 +207,8 @@ class RunTimeOptions {
     std::optional<uint32_t> profiler_program_support_count = std::nullopt;
     bool experimental_noc_debug_dump_enabled = false;
 
+    bool checkpoint_enabled = false;
+
     bool null_kernels = false;
     // Kernels should return early, skipping the rest of the kernel. Kernels
     // should remain the same size as normal, unlike with null_kernels.
@@ -212,6 +216,8 @@ class RunTimeOptions {
 
     bool clear_l1 = false;
     bool clear_dram = false;
+
+    size_t pinned_memory_cache_limit_bytes = 4ULL * 1024 * 1024 * 1024;
 
     bool skip_loading_fw = false;
 
@@ -270,11 +276,18 @@ class RunTimeOptions {
     // feature flag to enable 2-erisc mode on Blackhole (general, not fabric-specific)
     bool enable_2_erisc_mode = true;
 
+    // Feature flag to register Blackhole DRAM programmable cores in the HAL on silicon.
+    bool enable_blackhole_dram_programmable_cores = false;
+
     // Log kernels compilation commands
     bool log_kernels_compilation_commands = false;
 
     // Enable fabric performance telemetry
     bool enable_fabric_bw_telemetry = false;
+
+    /// When true, topology mapping prefers the SAT backend (same rule as TT_TOPOLOGY_SOLVER_ENGINE / Auto in
+    /// solve_topology_mapping). Set from env at RunTimeOptions construction.
+    bool topology_mapping_use_sat_engine_ = false;
 
     // Enable channel trimming resource usage capture
     bool enable_channel_trimming_capture = false;
@@ -284,6 +297,9 @@ class RunTimeOptions {
 
     // Path to channel trimming global override YAML
     std::string fabric_trimming_override_path;
+
+    // Enable fabric VC2 (neighbour exchange, single-hop)
+    bool enable_fabric_vc2 = false;
 
     // Enable fabric telemetry
     bool enable_fabric_telemetry = false;
@@ -310,6 +326,9 @@ class RunTimeOptions {
     // Force JIT compile even if dependencies are up to date
     bool force_jit_compile = false;
 
+    // Store command queues in device DRAM
+    bool dram_backed_cq = false;
+
     // To be used for NUMA node based thread binding
     bool numa_based_affinity = false;
 
@@ -330,8 +349,22 @@ class RunTimeOptions {
     // Disable use of pre-compiled firmware and fall back to JIT compilation.
     bool disable_precompiled_fw = false;
 
-    // Use new DEVICE_PRINT system instead of legacy DPRINT
-    bool use_device_print = false;
+    // Time (in microseconds) between DEVICE_PRINT dispatch stall-detection passes
+    // and full-dispatch passes on dispatch_s.
+    uint32_t device_print_dispatch_stall_us = 50;
+    uint32_t device_print_dispatch_full_us = 100000;  // 100 ms
+
+    // Override for the dispatch_s DEVICE_PRINT dispatch L1 cache buffer size, in bytes.
+    // 0 means "use the per-arch default" (DispatchMemMap::dispatch_s_device_print_l1_cache_size()).
+    // Bump this if dispatch_s logs that it self-disabled because the buffer was too small.
+    uint32_t device_print_dispatch_l1_cache_bytes = 0;
+
+    // Enable hybrid lockstep + per-core L1 allocator mode
+    bool allocator_mode_hybrid = false;
+
+    // Disable shared memory tracking for tt-smi
+    bool shm_tracking_disabled = false;
+    bool shm_verbose = false;
 
 public:
     RunTimeOptions();
@@ -416,6 +449,11 @@ public:
 
     bool get_disable_sfploadmacro() const { return disable_sfploadmacro; }
 
+    bool get_allocator_mode_hybrid() const { return allocator_mode_hybrid; }
+
+    bool get_shm_tracking_disabled() const { return shm_tracking_disabled; }
+    bool get_shm_verbose() const { return shm_verbose; }
+
     // Info from inspector environment variables, setters included so that user
     // can override with a SW call.
     const std::filesystem::path& get_inspector_log_path() const { return inspector_settings.log_path; }
@@ -427,10 +465,11 @@ public:
     }
     bool get_inspector_warn_on_write_exceptions() const { return inspector_settings.warn_on_write_exceptions; }
     void set_inspector_warn_on_write_exceptions(bool warn) { inspector_settings.warn_on_write_exceptions = warn; }
-    std::string get_inspector_rpc_server_address() const {
-        return inspector_settings.rpc_server_host + ":" + std::to_string(inspector_settings.rpc_server_port);
-    }
     void set_inspector_rpc_server_enabled(bool enabled) { inspector_settings.rpc_server_enabled = enabled; }
+    bool get_inspector_capture_tensor_specs() const { return inspector_settings.capture_tensor_specs; }
+    void set_inspector_capture_tensor_specs(bool enabled) { inspector_settings.capture_tensor_specs = enabled; }
+    bool get_inspector_log_runtime_entries() const { return inspector_settings.log_runtime_entries; }
+    void set_inspector_log_runtime_entries(bool enabled) { inspector_settings.log_runtime_entries = enabled; }
     // Info from DPrint environment variables, setters included so that user can
     // override with a SW call.
     bool get_feature_enabled(RunTimeDebugFeatures feature) const { return feature_targets[feature].enabled; }
@@ -524,13 +563,12 @@ public:
     }
     std::string get_compile_hash_string() const {
         std::string compile_hash_str = fmt::format(
-            "{}_{}_{}_{}_{}_{}",
+            "{}_{}_{}_{}_{}",
             get_watcher_hash(),
             get_kernels_early_return(),
             get_erisc_iram_enabled(),
             get_enable_2_erisc_mode(),
-            get_disable_fabric_2_erisc_mode(),
-            get_use_device_print());
+            get_disable_fabric_2_erisc_mode());
         for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
             compile_hash_str += "_";
             compile_hash_str += get_feature_hash_string((llrt::RunTimeDebugFeatures)i);
@@ -567,6 +605,9 @@ public:
     void set_experimental_noc_debug_dump_enabled(bool enabled);
     bool get_experimental_noc_debug_dump_enabled() const { return experimental_noc_debug_dump_enabled; }
 
+    void set_checkpoint_enabled(bool v) { checkpoint_enabled = v; }
+    bool get_checkpoint_enabled() const { return checkpoint_enabled; }
+
     void set_kernels_nullified(bool v) { null_kernels = v; }
     bool get_kernels_nullified() const { return null_kernels; }
 
@@ -578,6 +619,9 @@ public:
 
     bool get_clear_dram() const { return clear_dram; }
     void set_clear_dram(bool clear) { clear_dram = clear; }
+
+    size_t get_pinned_memory_cache_limit_bytes() const { return pinned_memory_cache_limit_bytes; }
+    void set_pinned_memory_cache_limit_bytes(size_t limit_bytes) { pinned_memory_cache_limit_bytes = limit_bytes; }
 
     std::string get_visible_devices() const { return visible_devices; }
     std::string get_arch_name() const { return arch_name; }
@@ -609,11 +653,14 @@ public:
     tt_metal::DispatchCoreConfig get_dispatch_core_config() const;
 
     bool get_simulator_enabled() const { return runtime_target_device_ == TargetDevice::Simulator; }
+    bool is_simulator_or_emulated() const {
+        return runtime_target_device_ == TargetDevice::Simulator || runtime_target_device_ == TargetDevice::Emule;
+    }
     const std::filesystem::path& get_simulator_path() const { return simulator_path; }
 
     bool get_erisc_iram_enabled() const {
         // Disabled when debug tools are enabled due to IRAM size
-        return !get_watcher_enabled() && !get_feature_enabled(RunTimeDebugFeatureDprint);
+        return !get_watcher_enabled() && !get_feature_enabled(RunTimeDebugFeatureDprint) && !profiler_enabled;
     }
     bool get_fast_dispatch() const { return fast_dispatch; }
 
@@ -637,6 +684,8 @@ public:
 
     void set_enable_2_erisc_mode(bool enable) { enable_2_erisc_mode = enable; }
 
+    bool get_enable_blackhole_dram_programmable_cores() const { return enable_blackhole_dram_programmable_cores; }
+
     bool is_custom_fabric_mesh_graph_desc_path_specified() const { return is_custom_fabric_mesh_graph_desc_path_set; }
     std::string get_custom_fabric_mesh_graph_desc_path() const { return custom_fabric_mesh_graph_desc_path; }
 
@@ -648,6 +697,8 @@ public:
     //
     // NOTE: Enabling this option will lead to a 0-2% performance degradation for fabric traffic.
     bool get_enable_fabric_bw_telemetry() const { return enable_fabric_bw_telemetry; }
+
+    bool get_topology_mapping_use_sat_engine() const { return topology_mapping_use_sat_engine_; }
     void set_enable_fabric_bw_telemetry(bool enable) { enable_fabric_bw_telemetry = enable; }
 
     bool get_enable_fabric_telemetry() const { return enable_fabric_telemetry; }
@@ -679,32 +730,42 @@ public:
     const std::string& get_fabric_trimming_override_path() const { return fabric_trimming_override_path; }
     void set_fabric_trimming_override_path(const std::string& path) { fabric_trimming_override_path = path; }
 
+    // Fabric VC2 enable
+    bool get_enable_fabric_vc2() const { return enable_fabric_vc2; }
+    void set_enable_fabric_vc2(bool enable) { enable_fabric_vc2 = enable; }
+
     // Reliability mode override accessor
     std::optional<tt::tt_fabric::FabricReliabilityMode> get_reliability_mode() const { return reliability_mode; }
 
     // Mock cluster accessors
     bool get_mock_enabled() const { return !mock_cluster_desc_path.empty(); }
     const std::string& get_mock_cluster_desc_path() const { return mock_cluster_desc_path; }
-    // Set mock cluster descriptor from filename (prepends base path automatically)
+    // Set mock cluster descriptor from a filename.
+    // Searches the tt-metal custom mock cluster descriptors directory first
+    // (these take precedence when the same filename exists in both locations),
+    // then falls back to the UMD cluster_descriptor_examples directory.
     // NOTE: Must be called before Cluster is created (e.g., in MetalContext constructor).
-    // Path depends on UMD's cluster_descriptor_examples directory structure.
     void set_mock_cluster_desc(const std::string& filename) {
         if (filename.empty()) {
             return;
         }
-        mock_cluster_desc_path =
-            get_root_dir() + "/tt_metal/third_party/umd/tests/cluster_descriptor_examples/" + filename;
-        // Set target device to Mock if simulator is not enabled
-        if (simulator_path.empty()) {
-            runtime_target_device_ = tt::TargetDevice::Mock;
-        }
+        auto custom_path = std::filesystem::path(get_root_dir()) /
+                           "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors" / filename;
+        std::error_code ec;
+        mock_cluster_desc_path = std::filesystem::exists(custom_path, ec) && !ec
+                                     ? custom_path.string()
+                                     : (std::filesystem::path(get_root_dir()) /
+                                        "tt_metal/third_party/umd/tests/cluster_descriptor_examples" / filename)
+                                           .string();
+        // Mock mode always overrides the simulator: configure_mock_mode() is an explicit
+        // request for a fully mocked environment, so libttsim must not be used even if
+        // TT_METAL_SIMULATOR is set in the environment.
+        runtime_target_device_ = tt::TargetDevice::Mock;
     }
     void clear_mock_cluster_desc() {
         mock_cluster_desc_path.clear();
-        // Only reset to Silicon if simulator is not enabled
-        if (simulator_path.empty()) {
-            runtime_target_device_ = tt::TargetDevice::Silicon;
-        }
+        // Restore to Simulator if TT_METAL_SIMULATOR was set, otherwise Silicon.
+        runtime_target_device_ = simulator_path.empty() ? tt::TargetDevice::Silicon : tt::TargetDevice::Simulator;
     }
 
     // Target device accessor
@@ -721,6 +782,8 @@ public:
 
     bool get_numa_based_affinity() const { return numa_based_affinity; }
 
+    bool get_dram_backed_cq() const { return dram_backed_cq; }
+
     std::optional<uint32_t> get_fabric_router_sync_timeout_ms() const { return fabric_router_sync_timeout_ms; }
 
     std::optional<tt_metal::KernelBuildOptLevel> get_fabric_kernel_opt_level() const { return fabric_kernel_opt_level; }
@@ -735,8 +798,14 @@ public:
     bool get_disable_precompiled_fw() const { return disable_precompiled_fw; }
     void set_disable_precompiled_fw(bool disable) { disable_precompiled_fw = disable; }
 
-    bool get_use_device_print() const { return use_device_print; }
-    void set_use_device_print(bool use) { use_device_print = use; }
+    uint32_t get_device_print_dispatch_stall_us() const { return device_print_dispatch_stall_us; }
+    void set_device_print_dispatch_stall_us(uint32_t v) { device_print_dispatch_stall_us = v; }
+
+    uint32_t get_device_print_dispatch_full_us() const { return device_print_dispatch_full_us; }
+    void set_device_print_dispatch_full_us(uint32_t v) { device_print_dispatch_full_us = v; }
+
+    uint32_t get_device_print_dispatch_l1_cache_bytes() const { return device_print_dispatch_l1_cache_bytes; }
+    void set_device_print_dispatch_l1_cache_bytes(uint32_t v) { device_print_dispatch_l1_cache_bytes = v; }
 
     // Parse all feature-specific environment variables, after hal is initialized.
     // (Needed because syntax of some env vars is arch-dependent.)

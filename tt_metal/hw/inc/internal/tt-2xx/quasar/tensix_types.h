@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,7 +15,7 @@
 //  tensix_types.h
 //  This file contains tensix structures used by RISCV firmware and test-bench/tests
 //
-//  Copyright © 2018 Tenstorrent. All rights reserved.
+//  Copyright © 2018 Tenstorrent USA, Inc. All rights reserved.
 //
 
 /////////////
@@ -255,7 +255,8 @@ enum class DataFormat : std::uint8_t {
     Int32 = 8,
     Int8 = 14,
     Int16 = 9,
-    UInt8 = 17,  // Unsigned INT with 8-bit magnitude
+    UInt8 = 17,    // Unsigned INT with 8-bit magnitude
+    UInt16 = 130,  // Unsigned INT with 16-bit magnitude
     Int4 = 23,
     UInt4 = 25,
     // Special-case encodings used only for int 2x-packed Src Reg Storage :

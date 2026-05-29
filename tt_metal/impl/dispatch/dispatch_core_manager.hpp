@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -153,6 +153,14 @@ public:
 
     std::vector<CoreCoord> get_all_logical_dispatch_cores(ChipId device_id);
 
+    /// @brief Returns the tensix reserved at construction time for the real-time profiler.
+    /// Taken from the back of the WORKER dispatch pool (dispatch consumes from the front), so
+    /// this core is never assigned to dispatch / prefetch / dispatch_s / fabric-mux kernels.
+    /// Returns nullopt for ETH dispatch or when no spare slot was available.
+    /// @param device_id ID of the device
+    /// @return tt_cxy_pair logical location of the reserved tensix, or empty if no reservation exists
+    std::optional<tt_cxy_pair> get_reserved_realtime_profiler_core(ChipId device_id);
+
 private:
     /// @brief reset_dispatch_core_manager initializes vector of cores per device for dispatch kernels
     /// @param dispatch_core_config specifies the core type for dispatch kernels
@@ -194,6 +202,9 @@ private:
     std::unordered_map<ChipId, std::unordered_map<uint16_t, std::unordered_map<uint8_t, dispatch_core_placement_t>>>
         dispatch_core_assignments;
     std::unordered_map<ChipId, std::list<CoreCoord>> available_dispatch_cores_by_device;
+    // Tensix reserved at construction time for the real-time profiler kernel.
+    // Removed from available_dispatch_cores_by_device so dispatch cannot reach it.
+    std::unordered_map<ChipId, tt_cxy_pair> reserved_realtime_profiler_core_by_device_;
     DispatchCoreConfig dispatch_core_config_;
     uint8_t num_hw_cqs{};
     MetalEnvImpl& env_;

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,6 +8,7 @@
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
+#include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
 
 #include <tt-metalium/work_split.hpp>
 
@@ -247,8 +248,7 @@ SparseMatmulDeviceOperation::tensor_return_value_t SparseMatmulDeviceOperation::
 // static ttsl::hash::hash_t SparseMatmulDeviceOperation::compute_program_hash(
 //     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
-std::tuple<SparseMatmulDeviceOperation::operation_attributes_t, SparseMatmulDeviceOperation::tensor_args_t>
-SparseMatmulDeviceOperation::invoke(
+std::tuple<SparseMatmulParams, SparseMatmulInputs> sparse_matmul_build_operation_args(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const Tensor& sparsity,
@@ -283,6 +283,41 @@ SparseMatmulDeviceOperation::invoke(
     return {parameters, SparseMatmulInputs{{input_tensor_a, input_tensor_b, sparsity}, {}, {optional_output_tensor}}};
 }
 
+SparseMatmulDeviceOperation::tensor_return_value_t sparse_matmul(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const Tensor& sparsity,
+    const std::optional<Tensor>& optional_output_tensor,
+    std::optional<uint32_t> nnz,
+    bool is_input_a_sparse,
+    bool is_input_b_sparse,
+    const std::optional<const MemoryConfig>& memory_config,
+    std::optional<const DataType> dtype,
+    const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<const CoreCoord>& user_core_coord,
+    const std::optional<const tt::tt_metal::Tile>& output_tile,
+    const std::optional<const GlobalCircularBuffer>& global_cb,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    auto [params, inputs] = sparse_matmul_build_operation_args(
+        input_tensor_a,
+        input_tensor_b,
+        sparsity,
+        optional_output_tensor,
+        nnz,
+        is_input_a_sparse,
+        is_input_b_sparse,
+        memory_config,
+        std::move(dtype),
+        program_config,
+        std::move(compute_kernel_config),
+        user_core_coord,
+        output_tile,
+        global_cb,
+        sub_device_id);
+    return ttnn::device_operation::launch<SparseMatmulDeviceOperation>(params, inputs);
+}
+
 SparseMatmulParams create_sparse_matmul_attributes(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -307,6 +342,10 @@ SparseMatmulParams create_sparse_matmul_attributes(
 
     auto matmul_struct =
         create_matmul_attributes(input_tensor_a, input_tensor_b, matmul_attributes, {optional_output_tensors.at(0)});
+    if (matmul_struct.program_config.has_value()) {
+        auto device_grid = input_tensor_a.device()->compute_with_storage_grid_size();
+        operations::matmul::normalize_program_config(matmul_struct.program_config.value(), device_grid);
+    }
     return SparseMatmulParams{
         parameters.nnz,
         parameters.is_input_a_sparse,

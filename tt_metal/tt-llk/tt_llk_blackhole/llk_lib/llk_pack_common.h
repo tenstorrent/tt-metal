@@ -1,0 +1,210 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <cstdint>
+
+#include "ckernel.h"
+#include "ckernel_defs.h"
+#include "ckernel_ops.h"
+#include "cpack_common.h"
+#include "llk_defs.h"
+
+using namespace ckernel;
+using namespace ckernel::packer;
+
+// wait until math is done and has produced something to pack
+inline void _llk_packer_wait_for_math_done_()
+{
+    TTI_SEMWAIT(p_stall::STALL_TDMA, semaphore::t6_sem(semaphore::MATH_PACK), p_stall::STALL_ON_ZERO);
+}
+
+// Tell math that it can write again
+template <std::uint32_t WaitRes = p_stall::NONE>
+inline void _llk_packer_set_math_semaphore_()
+{
+    t6_semaphore_get<WaitRes>(semaphore::MATH_PACK); // Indicate that packer is done and header is written into L1
+}
+
+// Wait for all writes to complete in L1 (header + data)
+// Tell math it can write again
+// Clear dest
+template <DstSync Dst, bool is_fp32_dest_acc_en>
+inline void _llk_pack_dest_section_done_()
+{
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::PACK); // wait for pack to finish
+
+    if constexpr (Dst == DstSync::SyncFull)
+    {
+        TTI_ZEROACC(p_zeroacc::CLR_ALL, is_fp32_dest_acc_en, 0, ADDR_MOD_1, 0);
+    }
+    else
+    {
+        static_assert(Dst == DstSync::SyncHalf);
+        TT_ZEROACC(p_zeroacc::CLR_HALF, is_fp32_dest_acc_en, 0, ADDR_MOD_1, dest_offset_id % 2);
+    }
+
+    // Tell math that it can write again
+    _llk_packer_set_math_semaphore_<p_stall::NONE>();
+
+    if constexpr (Dst == DstSync::SyncHalf)
+    {
+        flip_packer_dest_offset_id();
+        select_packer_dest_registers<Dst>();
+    }
+}
+
+template <DstSync Dst>
+inline void _llk_init_packer_dest_offset_registers_()
+{
+    TTI_STALLWAIT(p_stall::STALL_TDMA | p_stall::STALL_THCON, p_stall::PACK); // wait for pack to finish
+
+    // RowMajor order
+    TTI_SETDMAREG(0, 0x00, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 0));
+    TTI_SETDMAREG(0, DEST_REGISTER_HALF_SIZE + 0x00, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 0));
+
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+    select_packer_dest_registers<Dst>();
+}
+
+template <DstSync Dst, bool is_fp32_dest_acc_en>
+inline void _llk_pack_dest_init_()
+{
+    tensix_sync();
+    reset_dest_offset_id();
+    _llk_init_packer_dest_offset_registers_<Dst>();
+    packer_addr_counter_init();
+    pack_sync_tile_dst_ptr = 0;
+}
+
+inline void set_dst_write_addr(const std::uint32_t tile_index)
+{
+    TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, tile_index);
+}
+
+TT_ALWAYS_INLINE void _llk_pack_relu_config_(const std::uint32_t config)
+{
+    ReluType mode     = (config & 0xf) == 0 ? ReluType::NO_RELU : ((config & 0xf) == 3 ? ReluType::MAX_THRESHOLD_RELU : ReluType::MIN_THRESHOLD_RELU);
+    std::uint32_t val = ((config >> 16) << STACC_RELU_ReluThreshold_SHAMT) | ((static_cast<std::uint32_t>(mode)) << STACC_RELU_ApplyRelu_SHAMT);
+    TTI_SETDMAREG(0, val & 0xffff, 0, LO_16(p_gpr_pack::TMP0));
+    TTI_SETDMAREG(0, val >> 16, 0, HI_16(p_gpr_pack::TMP0));
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK | p_stall::THCON);
+    TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, STACC_RELU_ApplyRelu_ADDR32);
+    TTI_NOP;
+    TTI_NOP;
+}
+
+inline void _llk_pack_reconfig_l1_acc_(const std::uint32_t enable)
+{
+    reconfigure_packer_l1_acc(enable);
+}
+
+template <ReduceDim dim, PackMode pack_mode = PackMode::Default>
+inline void _llk_pack_reduce_mask_config_()
+{
+    ckernel::packer::pck_edge_offset_u pack_edge_offset = {.val = 0};
+
+    // We initialize PCK_EDGE_OFFSET_SEC0 mask to clear out all the datums in the row
+    pack_edge_offset.f.mask             = 0x0;
+    std::uint32_t row_set_mapping_1     = 0;
+    std::uint32_t edge_offset_sec1_mask = 0;
+
+    if constexpr (dim == ReduceDim::REDUCE_ROW)
+    {
+        // All packers use TILE_ROW_SET_MAPPING_1 to support both narrow tiles (packers 0,1)
+        // and wide tiles (packers 0,2)
+        pack_edge_offset.f.tile_row_set_select_pack0 = 1;
+        pack_edge_offset.f.tile_row_set_select_pack1 = 1;
+        pack_edge_offset.f.tile_row_set_select_pack2 = 1;
+        pack_edge_offset.f.tile_row_set_select_pack3 = 1;
+
+        // PCK_EDGE_OFFSET_SEC1 mask will clear out all the datums in the row except the first one
+        edge_offset_sec1_mask = 0x0001;
+        if constexpr (pack_mode == PackMode::Untilize)
+        {
+            row_set_mapping_1 = 0x11111111; // each packer packs 1x32 row
+        }
+        else
+        {
+            // TILE_ROW_SET_MAPPING_1 configuration sets all rows to use PCK_EDGE_OFFSET_SEC1 mask
+            row_set_mapping_1 = 0x55555555; // each packer packs 1x16 row
+        }
+    }
+    else if constexpr (dim == ReduceDim::REDUCE_COL)
+    {
+        // PCK_EDGE_OFFSET_SEC1 mask will pass through all the datums in the row as they are
+        edge_offset_sec1_mask = 0xffff;
+
+        // Packer 0 and 1 will use TILE_ROW_SET_MAPPING_1, while packer 2 and 3 will keep using
+        // TILE_ROW_SET_MAPPING_0 configuration which is the default one
+        pack_edge_offset.f.tile_row_set_select_pack0 = 1;
+        pack_edge_offset.f.tile_row_set_select_pack1 = 1;
+
+        if constexpr (pack_mode == PackMode::Untilize)
+        {
+            row_set_mapping_1 = 0x00000005; // each packer packs 1x32 row
+        }
+        else
+        {
+            // TILE_ROW_SET_MAPPING_1 configuration sets only first row to use PCK_EDGE_OFFSET_SEC1 mask
+            row_set_mapping_1 = 0x00000001; // each packer packs 1x16 row
+        }
+    }
+    else if constexpr (dim == ReduceDim::REDUCE_SCALAR)
+    {
+        // PCK_EDGE_OFFSET_SEC1 mask will clear out all the datums in the row except the first one
+        edge_offset_sec1_mask = 0x0001;
+        // Packer 0  will use TILE_ROW_SET_MAPPING_1, while packers 1,2 and 3 will keep using
+        // TILE_ROW_SET_MAPPING_0 configuration which is the default one
+        pack_edge_offset.f.tile_row_set_select_pack0 = 1;
+
+        // TILE_ROW_SET_MAPPING_1 configuration sets only first row to use PCK_EDGE_OFFSET_SEC1 mask
+        row_set_mapping_1 = 0x00000001;
+    }
+
+    // Initialize TMP registers with values we need to write in CFG registers
+    TTI_SETDMAREG(0, LOWER_HALFWORD(pack_edge_offset.val), 0, LO_16(p_gpr_pack::TMP0));
+    TTI_SETDMAREG(0, UPPER_HALFWORD(pack_edge_offset.val), 0, HI_16(p_gpr_pack::TMP0));
+    TTI_SETDMAREG(0, LOWER_HALFWORD(edge_offset_sec1_mask), 0, LO_16(p_gpr_pack::TMP_LO));
+    TTI_SETDMAREG(0, LOWER_HALFWORD(row_set_mapping_1), 0, LO_16(p_gpr_pack::TMP1));
+    TTI_SETDMAREG(0, UPPER_HALFWORD(row_set_mapping_1), 0, HI_16(p_gpr_pack::TMP1));
+
+    // Wait for packer to finish to avoid breaking its current configuration
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
+
+    // Configure packer
+    TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PCK_EDGE_OFFSET_SEC0_mask_ADDR32);
+    TTI_WRCFG(p_gpr_pack::TMP_LO, p_cfg::WRCFG_32b, PCK_EDGE_OFFSET_SEC1_mask_ADDR32);
+    TTI_WRCFG(p_gpr_pack::TMP1, p_cfg::WRCFG_32b, TILE_ROW_SET_MAPPING_1_row_set_mapping_0_ADDR32);
+
+    TTI_NOP;
+    TTI_NOP;
+}
+
+inline void _llk_pack_reduce_mask_clear_()
+{
+    // By default, all packers are set to use TILE_ROW_SET_MAPPING_0 and
+    // mask is configured to pass through all the datums
+    pck_edge_offset_u pack_edge_offset = {.val = 0};
+    pack_edge_offset.f.mask            = 0xffff;
+
+    // Initialize TMP registers with values we need to write in CFG registers
+    TTI_SETDMAREG(0, LOWER_HALFWORD(pack_edge_offset.val), 0, LO_16(p_gpr_pack::TMP0));
+    TTI_SETDMAREG(0, UPPER_HALFWORD(pack_edge_offset.val), 0, HI_16(p_gpr_pack::TMP0));
+
+    // Wait for packer to finish to avoid breaking its current configuration
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
+
+    // Clear out packer configuration for reduce
+    TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PCK_EDGE_OFFSET_SEC0_mask_ADDR32);
+    TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PCK_EDGE_OFFSET_SEC1_mask_ADDR32);
+
+    // All mappings point to PCK_EDGE_OFFSET_SEC0_mask_ADDR32
+    TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32);
+    TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, TILE_ROW_SET_MAPPING_1_row_set_mapping_0_ADDR32);
+
+    TTI_NOP;
+    TTI_NOP;
+}

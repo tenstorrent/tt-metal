@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -665,7 +665,7 @@ __attribute__((noinline)) void trace_only_init() {
 // Dispatch and enabled
 #elif (defined(DISPATCH_KERNEL) && (PROFILE_KERNEL & PROFILER_OPT_DO_DISPATCH_CORES))
 
-#define DeviceZoneScopedN(name)                                                         \
+#define DeviceZoneScopedN(name)                                                          \
     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                                         \
     auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name));           \
     kernel_profiler::profileScope<hash, kernel_profiler::DoingDispatch::DISPATCH> zone = \

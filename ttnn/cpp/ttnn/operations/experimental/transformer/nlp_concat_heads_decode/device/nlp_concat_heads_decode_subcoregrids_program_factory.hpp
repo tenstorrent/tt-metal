@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,6 +19,7 @@ struct NLPConcatHeadsDecodeSubcoregridsSharedVariables {
     tt::tt_metal::CBHandle cb_q_output{};
     uint32_t face_h{};
     uint32_t tile_w{};
+    uint32_t head_size{};
 };
 
 struct NLPConcatHeadsDecodeSubcoregridsProgramFactory {

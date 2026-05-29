@@ -1,10 +1,11 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
-#include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "api/debug/assert.h"
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "dataflow_common.hpp"
@@ -43,6 +44,26 @@ void kernel_main() {
     constexpr bool has_block_padding = original_block_size > 0 && original_block_size < 32;
 
     constexpr auto out_args = TensorAccessorArgs<28>();
+
+    constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
+    constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
+    constexpr uint32_t cb_m_in = tt::CBIndex::c_6;
+    constexpr uint32_t cb_l_in = tt::CBIndex::c_7;
+    // #44366: c_8 is the writer-only cur_pos CB after the split.
+    // Compute reads from c_15 (see sdpa_flash_decode.cpp), so the writer
+    // owns c_8 alone and can always pop it.
+    constexpr uint32_t cb_cur_pos = tt::CBIndex::c_8;
+    constexpr uint32_t cb_col_identity = tt::CBIndex::c_11;
+    constexpr uint32_t cb_zero_in = tt::CBIndex::c_12;
+    constexpr uint32_t cb_sliding_window_mask_in = tt::CBIndex::c_13;  // Separate buffer for sliding window mask
+    constexpr uint32_t cb_block_pad_mask = tt::CBIndex::c_14;          // Block padding mask (block_size < TILE_HEIGHT)
+    constexpr uint32_t cb_out_o = tt::CBIndex::c_16;
+    constexpr uint32_t cb_out_worker = tt::CBIndex::c_16;
+    constexpr uint32_t cb_out_m = tt::CBIndex::c_17;
+    constexpr uint32_t cb_out_l = tt::CBIndex::c_18;
+    constexpr uint32_t cb_intermed_out =
+        tt::CBIndex::c_19;  // this cb holds the output intermediates from other worker cores
+    constexpr uint32_t cb_out = tt::CBIndex::c_20;
 
     uint32_t arg_idx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -97,11 +118,11 @@ void kernel_main() {
         if (cur_pos_arg != UINT32_MAX) {
             cur_pos = cur_pos_arg;
         } else {
-            constexpr uint32_t cb_index_id = tt::CBIndex::c_8;
-            cb_wait_front(cb_index_id, 1);
-            uint32_t index_cb_ptr = get_read_ptr(cb_index_id);
+            cb_wait_front(cb_cur_pos, 1);
+            uint32_t index_cb_ptr = get_read_ptr(cb_cur_pos);
             volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_ptr);
             cur_pos = index_ptr[(uint32_t)(cur_batch / q_heads_parallel_factor)];
+            cb_pop_front(cb_cur_pos, 1);
         }
 
         if (cur_pos == UINT32_MAX) {
@@ -180,28 +201,15 @@ void kernel_main() {
     }
     uint32_t num_tiles_to_wait = (out_chunk_tiles + 2 * PNHt) * num_cores_to_wait;
 
-    constexpr uint32_t cb_out = tt::CBIndex::c_20;
-    constexpr uint32_t cb_intermed_out =
-        tt::CBIndex::c_19;  // this cb holds the output intermediates from other worker cores
-    constexpr uint32_t cb_out_o = tt::CBIndex::c_16;
-    constexpr uint32_t cb_m_in = tt::CBIndex::c_6;
-    constexpr uint32_t cb_l_in = tt::CBIndex::c_7;
-
-    constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
-    constexpr uint32_t cb_sliding_window_mask_in = tt::CBIndex::c_13;  // Separate buffer for sliding window mask
-    constexpr uint32_t cb_block_pad_mask = tt::CBIndex::c_14;          // Block padding mask (block_size < TILE_HEIGHT)
-    constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
-    constexpr uint32_t cb_col_identity = tt::CBIndex::c_11;
-    constexpr uint32_t cb_zero_in = tt::CBIndex::c_12;
-
-    constexpr uint32_t cb_out_worker = tt::CBIndex::c_16;
-    constexpr uint32_t cb_out_m = tt::CBIndex::c_17;
-    constexpr uint32_t cb_out_l = tt::CBIndex::c_18;
-
     // generate and send scaler to compute
-    constexpr bool is_half_tile = (get_tile_size(cb_identity_scale_in) < 2 * tt::constants::TILE_HW);
-    generate_reduce_scaler<is_half_tile>(cb_identity_scale_in, identity_scalar_packed);
-    generate_reduce_scaler<is_half_tile>(cb_zero_in, zero_scalar_packed);
+    // These helper functions respect tile size of CBs (ie. no need for special handling of tiny tiles)
+    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+        cb_identity_scale_in,
+        ckernel::PoolType::MAX,
+        ckernel::ReduceDim::REDUCE_ROW,
+        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR,
+        /*compute_uses_reduce_tile=*/true>();
+    dataflow_kernel_lib::prepare_zero_tile<cb_zero_in>();
     generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
 
     // Generate sliding window mask only if we have local data and need it
@@ -233,7 +241,7 @@ void kernel_main() {
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
     constexpr uint32_t tile_bytes_intermed = get_tile_size(cb_intermed_out);
 
-    const auto out_writer = TensorAccessor(out_args, out_addr, tile_bytes);
+    const auto out_writer = TensorAccessor(out_args, out_addr);
 
     volatile tt_l1_ptr uint32_t* in0_receiver_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reducer_semaphore_addr);

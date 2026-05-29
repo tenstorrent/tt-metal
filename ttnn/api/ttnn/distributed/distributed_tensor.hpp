@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -43,6 +43,8 @@ public:
         const tt::tt_metal::MemoryPin& buffer_pin,
         const tt::tt_metal::TensorLayout& layout,
         T pad_value = 0) const;
+
+    const MeshMapperConfig& config() const;
 
 private:
     class Impl;

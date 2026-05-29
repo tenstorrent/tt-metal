@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,7 +8,6 @@
 
 // UMD: EthCoord is a UMD type alias used in the private method
 // get_physical_chip_id_from_eth_coord(). No tt-metalium equivalent exists yet.
-#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -18,13 +17,20 @@
 #include <tt-metalium/distributed_context.hpp>
 
 #include <map>
-#include <unordered_map>
 #include <memory>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace tt {
 
 class Cluster;
+struct EthCoord;
+
+namespace umd {
+    class Cluster;
+    class ClusterDescriptor;
+}
 
 namespace llrt {
 class RunTimeOptions;
@@ -40,12 +46,6 @@ class PhysicalSystemDescriptor;
 
 }  // namespace tt::tt_metal
 
-namespace tt::umd {
-
-class Cluster;
-
-}  // namespace tt::umd
-
 namespace tt::tt_fabric {
 
 class TopologyMapper;
@@ -56,8 +56,8 @@ struct UbbId {
     std::uint32_t asic_id;
 };
 
-uint16_t get_bus_id(tt::umd::Cluster& cluster, ChipId chip_id);
-UbbId get_ubb_id(tt::umd::Cluster& cluster, ChipId chip_id);
+uint16_t get_bus_id(tt::umd::ClusterDescriptor& cluster_desc, ChipId chip_id);
+UbbId get_ubb_id(tt::umd::ClusterDescriptor& cluster_desc, ChipId chip_id);
 
 class FabricContext;
 
@@ -222,6 +222,11 @@ public:
     std::set<std::pair<chan_id_t, eth_chan_directions>> get_active_fabric_eth_channels(
         FabricNodeId fabric_node_id) const;
 
+    // Peer fabric node (and its Ethernet channel) connected to `fabric_node_id` on `chan_id` via one physical hop
+    // (intra-mesh or inter-mesh).
+    std::pair<FabricNodeId, chan_id_t> get_connected_mesh_chip_chan_ids(
+        FabricNodeId fabric_node_id, chan_id_t chan_id) const;
+
     eth_chan_directions get_eth_chan_direction(FabricNodeId fabric_node_id, int chan) const;
     // TODO: remove this converter, we should consolidate the directions here
     eth_chan_directions routing_direction_to_eth_direction(RoutingDirection direction) const;
@@ -257,6 +262,12 @@ public:
     // Collect router port directions map from all hosts via MPI and merge into local map
     void collect_and_merge_router_port_directions_from_all_hosts();
 
+    // Merge inter-mesh exit FabricNodeId sets from all hosts so local queries see every mesh pair.
+    void collect_and_merge_intermesh_exit_fabric_node_ids_from_all_hosts();
+
+    // Merge inter-mesh exit/peer FabricNodeId pair lists from all hosts (each host only fills edges from its mesh).
+    void collect_and_merge_intermesh_exit_peer_fabric_node_id_pairs_from_all_hosts();
+
     // Get the mesh graph from the control plane
     const MeshGraph& get_mesh_graph() const;
 
@@ -276,6 +287,21 @@ public:
     std::vector<ChipId> get_switch_mesh_device_ids() const;
 
     tt::tt_metal::AsicID get_asic_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const;
+    const tt::tt_metal::PhysicalSystemDescriptor& get_physical_system_descriptor() const;
+
+    /// Topology mapper for fabric node ↔ physical ASIC / host bindings (used by routing and pipeline layout).
+    const TopologyMapper& get_topology_mapper() const;
+
+    // Exit fabric nodes on `src_mesh_id` with inter-mesh connectivity to `dst_mesh_id` (as assigned during intermesh
+    // setup). Inter-mesh connectivity is merged across hosts during setup, so multi-host runs can query any mesh pair
+    // with connectivity (empty when there is no inter-mesh link for that pair).
+    std::vector<FabricNodeId> get_exit_fabric_node_ids_between_meshes(MeshId src_mesh_id, MeshId dst_mesh_id) const;
+
+    // For each inter-mesh link from `src_mesh_id` to `dst_mesh_id`, the exit `FabricNodeId` on the source mesh and
+    // the peer `FabricNodeId` on the destination mesh (cabled pair). Vectors are sorted by `pair.first` so link
+    // indices align with `get_exit_fabric_node_ids_between_meshes(src_mesh_id, dst_mesh_id)`.
+    std::vector<std::pair<FabricNodeId, FabricNodeId>> get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(
+        MeshId src_mesh_id, MeshId dst_mesh_id) const;
 
     // Getters
     FabricConfig get_fabric_config() const { return fabric_config_; }
@@ -344,9 +370,23 @@ private:
     // Store the logical direction assigned to each exit node (an exit node is fully specified by
     // a FabricNodeId and logical channel id)
     std::map<FabricNodeId, std::unordered_map<chan_id_t, RoutingDirection>> exit_node_directions_;
-    // For each FabricNode, store a mapping of the logical port (direction and logical channel id)
-    // to the physical channel id
-    std::map<FabricNodeId, std::unordered_map<port_id_t, chan_id_t>> logical_port_to_eth_chan_;
+    // Unique exit FabricNodeIds on src mesh for each dst mesh (inter-mesh edges)
+    std::unordered_map<MeshId, std::unordered_map<MeshId, std::unordered_set<FabricNodeId>>>
+        intermesh_exit_fabric_node_ids_;
+    // Directed inter-mesh links: exit node on src mesh paired with peer node on dst mesh (same cable / logical port).
+    std::unordered_map<MeshId, std::unordered_map<MeshId, std::vector<std::pair<FabricNodeId, FabricNodeId>>>>
+        intermesh_exit_peer_fabric_node_id_pairs_;
+
+    // Per-channel inter-mesh peer map: my (FabricNode, physical_chan) -> (peer FabricNode, peer physical_chan).
+    //
+    // This is the AUTHORITATIVE per-cable answer to "what is at the other end of this
+    // inter-mesh ethernet channel?" populated directly from PSD physical cable info during
+    // port assignment. get_connected_mesh_chip_chan_ids consults this map first for inter-mesh
+    // queries instead of relying on the chip-level inter_mesh_connectivity_ structure, which
+    // collapses multiple distinct peer chips for the same (src_chip, dst_mesh) pair into a
+    // single edge and only retains the first peer chip — silently corrupting per-channel
+    // routing whenever a single src chip is cabled to more than one chip in a given dst mesh.
+    std::map<FabricNodeId, std::unordered_map<chan_id_t, std::pair<FabricNodeId, chan_id_t>>> intermesh_chan_to_peer_;
     // Mapping from MeshId, MeshHostRankId to MPI rank
     std::unordered_map<MeshId, std::unordered_map<MeshHostRankId, tt_metal::distributed::multihost::Rank>> mpi_ranks_;
     std::unordered_map<tt_metal::distributed::multihost::Rank, std::pair<MeshId, MeshHostRankId>>
@@ -376,9 +416,6 @@ private:
 
     void validate_mesh_connections(MeshId mesh_id) const;
     void validate_mesh_connections() const;
-
-    std::pair<FabricNodeId, chan_id_t> get_connected_mesh_chip_chan_ids(
-        FabricNodeId fabric_node_id, chan_id_t chan_id) const;
 
     // Takes RoutingTableGenerator table and converts to routing tables for each ethernet port
     void convert_fabric_routing_table_to_chip_routing_table();
@@ -427,9 +464,8 @@ private:
     // and Routing Table Generator.
     void generate_intermesh_connectivity();
 
-    // Multi-Host Intermesh Connectivity Helper Function:
-    // Assign a logical direction and channel id to each local exit node.
-    std::vector<PortDescriptor> assign_logical_ports_to_exit_nodes(
+    // Propose PortDescriptors per neighbor cable; final maps written after rank-0 pairing.
+    std::vector<PortDescriptor> propose_port_descriptors_for_exit_nodes(
         const std::string& my_host,
         const std::string& neighbor_host,
         bool strict_binding,
@@ -466,7 +502,7 @@ private:
     // Multi-Host Intermesh Connectivity Helper Function:
     // Runs on all hosts: Given the local port descriptors, this function will return the full list of intermesh
     // connections.
-    AnnotatedIntermeshConnections convert_port_desciptors_to_intermesh_connections(
+    AnnotatedIntermeshConnections convert_port_descriptors_to_intermesh_connections(
         PortDescriptorTable& port_descriptors);
 
     // Single-Host Intermesh Connectivity Helper Function:

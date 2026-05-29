@@ -126,6 +126,8 @@ This architecture ensures that all host processes agree on the *what* (the globa
 
 **Single-Rank Debugging:** A significant advantage of the proposed design is that because the user's application code interacts primarily with the global view objects (`MeshDevice`, `MeshBuffer`, `MeshWorkload`) and this view is identical across all ranks/processes up to the `MeshCommandQueue` submission point, much of the application logic can often be debugged effectively by running with a single rank/process (`mpirun -np 1 ...`). This drastically simplifies the debugging process, especially for systems with a large number of hosts.
 
+**Process launch:** For TT-Metal / TTNN multi-rank jobs, production workflows typically use **`tt-run`** (wrapper around MPI) with either **auto allocation** (`--mesh-graph-descriptor` and `--hosts` or `--mock-cluster-rank-binding`) or **legacy** `--rank-binding`; see [`ttnn/ttnn/distributed/README_ttrun.md`](../../ttnn/ttnn/distributed/README_ttrun.md).
+
 In essence, the user defines *what* computation should happen on the *entire mesh* (global view), and the runtime handles *how* to distribute and execute that computation on the *local devices* managed by each host process.
 
 ## **Proposed Design:** Multi-Host, Multi-Device (SPMD / Multiple Lockstep Controllers)

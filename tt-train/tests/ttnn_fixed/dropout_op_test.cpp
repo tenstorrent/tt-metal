@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,8 +8,8 @@
 
 #include "autograd/auto_context.hpp"
 #include "core/device.hpp"
-#include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "test_utils/random_data.hpp"
 #include "ttnn/operations/experimental/dropout/dropout.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
@@ -35,13 +35,9 @@ TEST_F(DropoutTest, TestSeed) {
     auto shapes = {std::vector<int>{64, 1, 256, 384}, std::vector<int>{1, 1, 32, 32}};
     for (auto& shape : shapes) {
         fmt::println("Testing shape: {}", shape);
-        xt::xarray<float> xtensor_a = xt::empty<float>(shape);
         auto& rng = ttml::autograd::ctx().get_generator();
         uint32_t seed = rng();
-        ttml::core::parallel_generate(
-            std::span{xtensor_a.data(), xtensor_a.size()},
-            []() { return std::uniform_real_distribution<float>(-0.5f, 0.5f); },
-            seed);
+        xt::xarray<float> xtensor_a = ttml::test_utils::make_uniform_xarray<float>(shape, -0.5F, 0.5F, seed);
 
         auto xtensor_a_tensor = ttml::core::from_xtensor(xtensor_a, device);
         auto num_cache_before = device->num_program_cache_entries();

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -6,13 +6,9 @@ import pytest
 from loguru import logger
 import ttnn
 from models.common.utility_functions import is_wormhole_b0, is_blackhole
-from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero, roundup32
 import torch
 import itertools
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_equal,
-    comp_pcc,
-)
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 import random
 import math
 from tracy import signpost
@@ -363,13 +359,48 @@ def run_multi_core_matmul_1d(
     pt_out = in0 @ in1
 
     if activation:
-        act_fnc = torch.nn.functional.silu if activation == ttnn.UnaryOpType.SILU else torch.nn.functional.relu
-        pt_out = act_fnc(pt_out)
+        # Map ttnn activation types to PyTorch functions
+        if activation == ttnn.UnaryOpType.SILU:
+            pt_out = torch.nn.functional.silu(pt_out)
+        elif activation == ttnn.UnaryOpType.RELU:
+            pt_out = torch.nn.functional.relu(pt_out)
+        elif activation == ttnn.UnaryOpType.GELU:
+            pt_out = torch.nn.functional.gelu(pt_out)
+        elif activation == ttnn.UnaryOpType.TANH:
+            pt_out = torch.tanh(pt_out)
+        else:
+            raise ValueError(f"Unsupported activation type: {activation}")
 
-    passing, output = comp_pcc(pt_out, tt_out, pcc_threshold)
-    logger.info(output)
+    if in0_dtype == ttnn.bfloat4_b or in1_dtype == ttnn.bfloat4_b or output_dtype == ttnn.bfloat4_b:
+        if activation == ttnn.UnaryOpType.TANH and packer_l1_acc and fp32_acc_mode:
+            # See issue #42856
+            pcc_threshold = 0.913
+        else:
+            pcc_threshold = 0.99
 
-    assert passing
+        assert_numeric_metrics(
+            pt_out,
+            tt_out,
+            atol=0.049 * K,
+            rtol=39.159 * K,
+            frobenius_threshold=0.002 * K,
+            pcc_threshold=pcc_threshold,
+            check_ulp=False,
+        )
+    elif in0_dtype == ttnn.bfloat8_b or in1_dtype == ttnn.bfloat8_b or output_dtype == ttnn.bfloat8_b:
+        assert_numeric_metrics(
+            pt_out,
+            tt_out,
+            atol=0.013 * K,
+            rtol=9.439 * K,
+            frobenius_threshold=0.001 * K,
+            pcc_threshold=0.99,
+            check_ulp=False,
+        )
+    else:
+        assert_numeric_metrics(
+            pt_out, tt_out, check_allclose=False, check_frobenius=False, pcc_threshold=0.99, check_ulp=False
+        )
 
     # Check program cache
     assert device.cache_entries_counter.total == 1  # Only 1 op
@@ -431,6 +462,7 @@ def test_multi_core_matmul_1d_in1_dram_wh(
     num_iters,
     function_level_defaults,
 ):
+    torch.manual_seed(0)
     run_multi_core_matmul_1d(
         device,
         in0_dtype,
@@ -504,6 +536,7 @@ def test_multi_core_matmul_1d_pad_wh(
     num_iters,
     function_level_defaults,
 ):
+    torch.manual_seed(0)
     run_multi_core_matmul_1d(
         device,
         in0_dtype,
@@ -571,6 +604,8 @@ def test_multi_core_matmul_1d_pad_wh(
         None,
         ttnn.UnaryOpType.SILU,
         ttnn.UnaryOpType.RELU,
+        ttnn.UnaryOpType.GELU,
+        ttnn.UnaryOpType.TANH,
     ],
 )
 @pytest.mark.parametrize(
@@ -599,6 +634,7 @@ def test_multi_core_matmul_1d_wh(
     num_iters,
     function_level_defaults,
 ):
+    torch.manual_seed(0)
     run_multi_core_matmul_1d(
         device,
         in0_dtype,
@@ -645,6 +681,8 @@ def test_multi_core_matmul_1d_wh(
         None,
         ttnn.UnaryOpType.SILU,
         ttnn.UnaryOpType.RELU,
+        ttnn.UnaryOpType.GELU,
+        ttnn.UnaryOpType.TANH,
     ],
 )
 @pytest.mark.parametrize(
@@ -674,6 +712,7 @@ def test_multi_core_matmul_1d_ring_hop_wh(
     num_iters,
     function_level_defaults,
 ):
+    torch.manual_seed(0)
     run_multi_core_matmul_1d(
         device,
         in0_dtype,
@@ -726,6 +765,8 @@ def test_multi_core_matmul_1d_ring_hop_wh(
         None,
         ttnn.UnaryOpType.SILU,
         ttnn.UnaryOpType.RELU,
+        ttnn.UnaryOpType.GELU,
+        ttnn.UnaryOpType.TANH,
     ],
 )
 @pytest.mark.parametrize(
@@ -754,6 +795,7 @@ def test_multi_core_matmul_1d_gs(
     num_iters,
     function_level_defaults,
 ):
+    torch.manual_seed(0)
     run_multi_core_matmul_1d(
         device,
         in0_dtype,
@@ -906,6 +948,7 @@ def test_matmul_1d_ring_llama_perf(
     num_iters,
     function_level_defaults,
 ):
+    torch.manual_seed(0)
     # Only run these tests on unharvested TG
     device_grid = (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y)
     if device_grid != (7, 10):
@@ -1074,6 +1117,7 @@ def test_matmul_1d_ring_qwen_perf(
     num_iters,
     function_level_defaults,
 ):
+    torch.manual_seed(0)
     # Only run these tests on unharvested TG
     device_grid = (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y)
     if device_grid != (7, 10):
@@ -1162,6 +1206,7 @@ def test_matmul_1d_ring_llama_lm_head(
     num_iters,
     function_level_defaults,
 ):
+    torch.manual_seed(0)
     # Only run these tests on unharvested TG
     device_grid = (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y)
     if device_grid != (7, 10):

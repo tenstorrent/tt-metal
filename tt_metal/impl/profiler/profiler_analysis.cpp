@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,7 +16,9 @@
 
 #include "context/metal_env_accessor.hpp"
 #include "core_coord.hpp"
+#include "common/filesystem_utils.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/device/device_manager.hpp"
 #include "profiler_analysis.hpp"
 #include "profiler_state_manager.hpp"
 #include <impl/dispatch/dispatch_core_manager.hpp>
@@ -579,11 +581,11 @@ void writeProgramsPerfResultsToCSV(
         }
     }
 
-    TT_ASSERT(std::filesystem::exists(report_path.parent_path()));
+    TT_ASSERT(tt::filesystem::safe_exists(report_path.parent_path()).value_or(false));
     TT_ASSERT(report_path.extension() == ".csv");
 
     std::ofstream log_file_ofs;
-    if (std::filesystem::exists(report_path)) {
+    if (tt::filesystem::safe_exists(report_path).value_or(false)) {
         log_file_ofs.open(report_path, std::ios_base::app);
     } else {
         log_file_ofs.open(report_path);
@@ -699,8 +701,11 @@ void writeProgramsPerfResultsToCSV(
         }
     };
 
-    for (const auto& [device_id, samples] : kernel_durations_ns_by_device) {
-        print_summary(device_id, samples);
+    const auto& dev_mgr = tt::tt_metal::MetalContext::instance().device_manager();
+    if (dev_mgr && dev_mgr->get_all_active_device_ids().size() == 1) {
+        for (const auto& [device_id, samples] : kernel_durations_ns_by_device) {
+            print_summary(device_id, samples);
+        }
     }
 }
 
@@ -767,7 +772,7 @@ void from_json(const nlohmann::json& j, AnalysisConfig& config) {
 }
 
 std::vector<AnalysisConfig> loadAnalysisConfigsFromJSON(const std::filesystem::path& json_path) {
-    TT_ASSERT(std::filesystem::exists(json_path));
+    TT_ASSERT(tt::filesystem::safe_exists(json_path).value_or(false));
     std::ifstream json_ifs(json_path);
     const nlohmann::json configs_json = nlohmann::json::parse(json_ifs);
 

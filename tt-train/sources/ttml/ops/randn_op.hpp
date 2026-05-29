@@ -1,0 +1,24 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <cstdint>
+#include <optional>
+#include <ttnn/distributed/distributed_configs.hpp>
+
+#include "autograd/tensor.hpp"
+
+namespace ttml::ops {
+
+autograd::TensorPtr randn(
+    const ttnn::Shape& shape,
+    float mean = 0.0f,
+    float stddev = 1.0f,
+    std::optional<uint32_t> seed = std::nullopt,
+    tt::tt_metal::DataType dtype = tt::tt_metal::DataType::BFLOAT16,
+    tt::tt_metal::Layout layout = tt::tt_metal::Layout::TILE,
+    const std::optional<tt::tt_metal::distributed::MeshMapperConfig>& mesh_mapper = std::nullopt);
+
+}  // namespace ttml::ops

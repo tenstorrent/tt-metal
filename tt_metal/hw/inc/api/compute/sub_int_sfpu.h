@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -68,8 +68,8 @@ ALWI void rsub_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void sub_int_tile_init() { MATH((llk_math_eltwise_binary_sfpu_sub_int_init<APPROX>())); }
+ALWI void sub_int_tile_init() { MATH((llk_math_eltwise_binary_sfpu_sub_int_init())); }
 
-ALWI void rsub_int_tile_init() { MATH((llk_math_eltwise_binary_sfpu_rsub_int_init<APPROX>())); }
+ALWI void rsub_int_tile_init() { MATH((llk_math_eltwise_binary_sfpu_rsub_int_init())); }
 
 }  // namespace ckernel

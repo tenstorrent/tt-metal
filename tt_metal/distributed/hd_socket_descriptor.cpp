@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -65,7 +65,8 @@ void HDSocketDescriptor::write_to_file(const std::string& path) const {
         virtual_core_x,
         virtual_core_y,
         pcie_alignment,
-        bytes_acked_device_offset);
+        bytes_acked_device_offset,
+        connector_state_offset);
     builder.Finish(fb_desc);
 
     std::string tmp_path = path + ".tmp";
@@ -115,6 +116,7 @@ HDSocketDescriptor HDSocketDescriptor::read_from_file(const std::string& path) {
     desc.virtual_core_y = fb->virtual_core_y();
     desc.pcie_alignment = fb->pcie_alignment();
     desc.bytes_acked_device_offset = fb->bytes_acked_device_offset();
+    desc.connector_state_offset = fb->connector_state_offset();
 
     return desc;
 }

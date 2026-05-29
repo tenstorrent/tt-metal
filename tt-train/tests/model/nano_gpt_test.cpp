@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,7 @@
 #include <gtest/gtest.h>
 
 #include <fstream>
+#include <tt-metalium/distributed.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/distributed/distributed.hpp"
@@ -15,11 +16,13 @@
 #include "datasets/utils.hpp"
 #include "models/distributed/llama.hpp"
 #include "models/llama.hpp"
+#include "ops/distributed/losses.hpp"
 #include "ops/losses.hpp"
 #include "optimizers/adamw.hpp"
 #include "tokenizers/char_tokenizer.hpp"
 #include "tt-metalium/host_api.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
+#include "utils/memory_utils.hpp"
 namespace {
 /*
 Nightly tests could be enabled by setting the environment variable ENABLE_NIGHTLY_TT_TRAIN_TESTS=1
@@ -267,7 +270,9 @@ void train_test(bool use_tensor_parallel = false, bool use_ddp = false) {
         auto start_timer = std::chrono::high_resolution_clock::now();
         optimizer->zero_grad();
         auto output = (*model)(features, masks);
-        auto loss = ttml::ops::cross_entropy_loss(output, target);
+        auto loss = use_tensor_parallel
+                        ? ttml::ops::distributed::vocab_parallel_cross_entropy_loss(output, target, /*cluster_axis*/ 1U)
+                        : ttml::ops::cross_entropy_loss(output, target);
         auto loss_float = get_loss_value(loss);
         loss->backward();
 

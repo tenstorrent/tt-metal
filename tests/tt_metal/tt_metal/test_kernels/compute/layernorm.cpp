@@ -1,11 +1,8 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-
-#define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_ROW
 
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
@@ -73,11 +70,11 @@ void kernel_main() {
         add_tiles_init(cb_in, cb_inb);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             ACQ();
-            // UNPACK(( { DPRINT  << "Waiting on cb_x" << ENDL(); } ));
+            // DPRINT_UNPACK("Waiting on cb_x\n");
             cb_wait_front(cb_in, blk);
-            // UNPACK(( { DPRINT  << "Waiting on cb_inb" << ENDL(); } ));
+            // DPRINT_UNPACK("Waiting on cb_inb\n");
             cb_wait_front(cb_inb, blk);
-            // UNPACK(( { DPRINT  << "Done Waiting on cb_inb" << ENDL(); } ));
+            // DPRINT_UNPACK("Done Waiting on cb_inb\n");
             cb_reserve_back(cb_x, blk);
             for (uint32_t j = 0; j < blk; j++) {
                 add_tiles(cb_in, cb_inb, j, j, j);
@@ -97,11 +94,11 @@ void kernel_main() {
          */
         ACQ();
         cb_reserve_back(cb_ex, 1 * onetile);
-        reduce_init(cb_x, cb_scaler, cb_ex);
+        reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_x, cb_scaler, cb_ex);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             cb_wait_front(cb_x, wt + blk);
             for (uint32_t j = 0; j < blk; j++) {
-                reduce_tile(cb_x, cb_scaler, wt + j, scaler0, dst0);
+                reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_x, cb_scaler, wt + j, scaler0, dst0);
             }
             // we don't pop cb_x until we compute Ex
         }
@@ -153,14 +150,14 @@ void kernel_main() {
          * TODO(AP): can save space here by reusing CB
          */
         cb_reserve_back(cb_ex2, 1);
-        reduce_init(cb_xmm2, cb_scaler, cb_ex2);
+        reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_xmm2, cb_scaler, cb_ex2);
         ACQ();
         cb_wait_front(cb_xmm2, Wt);
         // cb_wait_front(cb_xmm, Wt);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             // reduce
             for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                reduce_tile(cb_xmm2, cb_scaler, wt + wtr, scaler0, dst0);
+                reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_xmm2, cb_scaler, wt + wtr, scaler0, dst0);
             }
             // reduce_tile(cb_xmm, cb_scaler, wt+wtr, scaler0, dst0);
         }
@@ -194,8 +191,7 @@ void kernel_main() {
          */
         cb_wait_front(cb_ex2pe, 1);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            // if (ht == 1) UNPACK(( DPRINT << "wt_2=" << wt << " " ));
-            // if (ht == 1) UNPACK(( DPRINT << "rem_2=" << rem << ENDL() ));
+            // if (ht == 1) DPRINT_UNPACK("wt_2={} rem_2={}\n", wt, rem);
             cb_reserve_back(cb_im_or_out, blk);
 
             ACQ();

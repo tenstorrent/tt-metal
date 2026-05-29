@@ -1,13 +1,13 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 
 void kernel_main() {
@@ -43,17 +43,17 @@ void kernel_main() {
     constexpr auto src_b_args =
         TensorAccessorArgs<src_args.next_compile_time_args_offset(), src_args.next_common_runtime_args_offset()>();
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_pred(predicate_cb);
-    experimental::CircularBuffer cb_b(src_b_cb);
+    Noc noc;
+    CircularBuffer cb_pred(predicate_cb);
+    CircularBuffer cb_b(src_b_cb);
 
     // #if !SRC_SHARDED_A
     const uint32_t src_tile_bytes = get_tile_size(predicate_cb);
-    const auto src = TensorAccessor(src_args, src0_addr, src_tile_bytes);
+    const auto src = TensorAccessor(src_args, src0_addr);
     // #endif
     // #if !SRC_SHARDED_B
     const uint32_t src_tile_bytes_b = get_tile_size(src_b_cb);
-    const auto src_b = TensorAccessor(src_b_args, src1_addr, src_tile_bytes_b);
+    const auto src_b = TensorAccessor(src_b_args, src1_addr);
     // #endif
 
     constexpr uint32_t onetile = 1;

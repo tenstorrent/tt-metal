@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -73,13 +73,12 @@ void bind_binary_backward_ops(
     ttnn::bind_function<Name>(
         mod,
         doc.c_str(),
-        ttnn::overload_t(
-            func,
-            nb::arg("grad_tensor"),
-            nb::arg("input_tensor_a"),
-            nb::arg("input_tensor_b"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none()));
+        func,
+        nb::arg("grad_tensor"),
+        nb::arg("input_tensor_a"),
+        nb::arg("input_tensor_b"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none());
 }
 
 template <ttnn::unique_string Name>
@@ -137,17 +136,16 @@ void bind_binary_backward_concat(
     ttnn::bind_function<Name>(
         mod,
         doc.c_str(),
-        ttnn::overload_t(
-            &ttnn::concat_bw,
-            nb::arg("grad_tensor"),
-            nb::arg("input_tensor_a"),
-            nb::arg("input_tensor_b"),
-            nb::arg(parameter_name.c_str()) = parameter_value,
-            nb::kw_only(),
-            nb::arg("are_required_outputs") = std::vector<bool>{true, true},
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("input_a_grad") = nb::none(),
-            nb::arg("input_b_grad") = nb::none()));
+        &ttnn::concat_bw,
+        nb::arg("grad_tensor"),
+        nb::arg("input_tensor_a"),
+        nb::arg("input_tensor_b"),
+        nb::arg(parameter_name.c_str()) = parameter_value,
+        nb::kw_only(),
+        nb::arg("are_required_outputs") = std::vector<bool>{true, true},
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("input_a_grad") = nb::none(),
+        nb::arg("input_b_grad") = nb::none());
 }
 
 template <ttnn::unique_string Name>
@@ -207,17 +205,16 @@ void bind_binary_backward_addalpha(
     ttnn::bind_function<Name>(
         mod,
         doc.c_str(),
-        ttnn::overload_t(
-            &ttnn::addalpha_bw,
-            nb::arg("grad_tensor"),
-            nb::arg("input_tensor_a"),
-            nb::arg("input_tensor_b"),
-            nb::arg(parameter_name.c_str()) = parameter_value,
-            nb::kw_only(),
-            nb::arg("are_required_outputs") = std::vector<bool>{true, true},
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("input_a_grad") = nb::none(),
-            nb::arg("input_b_grad") = nb::none()));
+        &ttnn::addalpha_bw,
+        nb::arg("grad_tensor"),
+        nb::arg("input_tensor_a"),
+        nb::arg("input_tensor_b"),
+        nb::arg(parameter_name.c_str()) = parameter_value,
+        nb::kw_only(),
+        nb::arg("are_required_outputs") = std::vector<bool>{true, true},
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("input_a_grad") = nb::none(),
+        nb::arg("input_b_grad") = nb::none());
 }
 
 template <ttnn::unique_string Name>
@@ -354,17 +351,16 @@ void bind_binary_backward_sub_alpha(
     ttnn::bind_function<Name>(
         mod,
         doc.c_str(),
-        ttnn::overload_t(
-            &ttnn::subalpha_bw,
-            nb::arg("grad_tensor"),
-            nb::arg("input_tensor_a"),
-            nb::arg("input_tensor_b"),
-            nb::arg(parameter_name.c_str()) = parameter_value,
-            nb::kw_only(),
-            nb::arg("are_required_outputs") = std::vector<bool>{true, true},
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("input_grad") = nb::none(),
-            nb::arg("other_grad") = nb::none()));
+        &ttnn::subalpha_bw,
+        nb::arg("grad_tensor"),
+        nb::arg("input_tensor_a"),
+        nb::arg("input_tensor_b"),
+        nb::arg(parameter_name.c_str()) = parameter_value,
+        nb::kw_only(),
+        nb::arg("are_required_outputs") = std::vector<bool>{true, true},
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("input_grad") = nb::none(),
+        nb::arg("other_grad") = nb::none());
 }
 
 template <ttnn::unique_string Name>
@@ -407,16 +403,15 @@ void bind_binary_backward_rsub(
     ttnn::bind_function<Name>(
         mod,
         doc.c_str(),
-        ttnn::overload_t(
-            &ttnn::rsub_bw,
-            nb::arg("grad_tensor"),
-            nb::arg("input_tensor_a"),
-            nb::arg("input_tensor_b"),
-            nb::kw_only(),
-            nb::arg("are_required_outputs") = std::vector<bool>{true, true},
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("input_grad") = nb::none(),
-            nb::arg("other_grad") = nb::none()));
+        &ttnn::rsub_bw,
+        nb::arg("grad_tensor"),
+        nb::arg("input_tensor_a"),
+        nb::arg("input_tensor_b"),
+        nb::kw_only(),
+        nb::arg("are_required_outputs") = std::vector<bool>{true, true},
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("input_grad") = nb::none(),
+        nb::arg("other_grad") = nb::none());
 }
 
 template <ttnn::unique_string Name>
@@ -789,7 +784,7 @@ void bind_binary_backward_assign(nb::module_& mod) {
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("input_grad") = nb::none()),
+            nb::arg("input_a_grad") = nb::none()),
         ttnn::overload_t(
             nb::overload_cast<
                 const Tensor&,
@@ -800,13 +795,13 @@ void bind_binary_backward_assign(nb::module_& mod) {
                 std::optional<Tensor>,
                 std::optional<Tensor>>(&ttnn::assign_bw),
             nb::arg("grad_tensor"),
-            nb::arg("input_tensor"),
-            nb::arg("other_tensor"),
+            nb::arg("input_tensor_a"),
+            nb::arg("input_tensor_b"),
             nb::kw_only(),
             nb::arg("are_required_outputs") = std::vector<bool>{true, true},
             nb::arg("memory_config") = nb::none(),
-            nb::arg("input_grad") = nb::none(),
-            nb::arg("other_grad") = nb::none()));
+            nb::arg("input_a_grad") = nb::none(),
+            nb::arg("input_b_grad") = nb::none()));
 }
 
 }  // namespace
@@ -833,21 +828,96 @@ void py_module(nb::module_& module) {
         R"doc(Performs backward operations for divide on :attr:`input_tensor`, :attr:`alpha` or :attr:`input_tensor_a`, :attr:`input_tensor_b`, :attr:`rounding_mode`,  with given :attr:`grad_tensor`.)doc",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
 
-    bind_binary_backward_ops<"remainder_bw">(
+    ttnn::bind_function<"remainder_bw">(
         module,
-        nb::overload_cast<const Tensor&, const Tensor&, const Tensor&, const std::optional<MemoryConfig>&>(
-            &ttnn::remainder_bw),
-        R"doc(Performs backward operations for remainder of :attr:`input_tensor_a`, :attr:`scalar` or :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
-        R"doc(BFLOAT16)doc",
-        R"doc(Supported only in WHB0. For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
+        R"doc(
+        Performs backward operations for remainder of :attr:`input_tensor_a`, :attr:`scalar` or :attr:`input_tensor_b` with given :attr:`grad_tensor`.
 
-    bind_binary_backward_ops<"fmod_bw">(
+        Args:
+            grad_tensor (ttnn.Tensor): the input gradient tensor.
+            input_tensor_a (ttnn.Tensor): the input tensor.
+            input_tensor_b (ttnn.Tensor or Number): the input tensor or scalar.
+
+        Keyword args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+
+        Returns:
+            List of ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16
+                 - TILE, ROW_MAJOR
+
+            bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
+        )doc",
+        ttnn::overload_t(
+            nb::overload_cast<const Tensor&, const Tensor&, const Tensor&, const std::optional<MemoryConfig>&>(
+                &ttnn::remainder_bw),
+            nb::arg("grad_tensor"),
+            nb::arg("input_tensor_a"),
+            nb::arg("input_tensor_b"),
+            nb::kw_only(),
+            nb::arg("memory_config") = nb::none()),
+        ttnn::overload_t(
+            nb::overload_cast<const Tensor&, const Tensor&, float, const std::optional<MemoryConfig>&>(
+                &ttnn::remainder_bw),
+            nb::arg("grad_tensor"),
+            nb::arg("input_tensor_a"),
+            nb::arg("scalar"),
+            nb::kw_only(),
+            nb::arg("memory_config") = nb::none()));
+
+    ttnn::bind_function<"fmod_bw">(
         module,
-        nb::overload_cast<const Tensor&, const Tensor&, const Tensor&, const std::optional<MemoryConfig>&>(
-            &ttnn::fmod_bw),
-        R"doc(Performs backward operations for fmod of :attr:`input_tensor_a`, :attr:`scalar` or :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
-        R"doc(BFLOAT16)doc",
-        R"doc(For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
+        R"doc(
+        Performs backward operations for fmod of :attr:`input_tensor_a`, :attr:`scalar` or :attr:`input_tensor_b` with given :attr:`grad_tensor`.
+
+        Args:
+            grad_tensor (ttnn.Tensor): the input gradient tensor.
+            input_tensor_a (ttnn.Tensor): the input tensor.
+            input_tensor_b (ttnn.Tensor or Number): the input tensor or scalar.
+
+        Keyword args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+
+        Returns:
+            List of ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16
+                 - TILE, ROW_MAJOR
+
+            bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
+        )doc",
+        ttnn::overload_t(
+            nb::overload_cast<const Tensor&, const Tensor&, const Tensor&, const std::optional<MemoryConfig>&>(
+                &ttnn::fmod_bw),
+            nb::arg("grad_tensor"),
+            nb::arg("input_tensor_a"),
+            nb::arg("input_tensor_b"),
+            nb::kw_only(),
+            nb::arg("memory_config") = nb::none()),
+        ttnn::overload_t(
+            nb::overload_cast<const Tensor&, const Tensor&, float, const std::optional<MemoryConfig>&>(&ttnn::fmod_bw),
+            nb::arg("grad_tensor"),
+            nb::arg("input_tensor_a"),
+            nb::arg("scalar"),
+            nb::kw_only(),
+            nb::arg("memory_config") = nb::none()));
 
     bind_binary_backward_assign(module);
 

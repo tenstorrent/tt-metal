@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,7 +9,9 @@
 #include <tt-metalium/tt_backend_api_types.hpp>     // for DataFormat
 #include <umd/device/types/arch.hpp>                // for ARCH
 
+namespace tt::tt_metal {
 enum class UnpackToDestMode : std::uint8_t;
+}  // namespace tt::tt_metal
 
 namespace tt {
 
@@ -29,7 +31,7 @@ std::vector<DataFormat> get_unpack_dst_formats(
     std::span<const DataFormat> buf_formats,
     DataFormat unpack_conditional_dst_format,
     bool fp32_dest_acc_en,
-    std::vector<UnpackToDestMode> unpack_to_dest_mode,
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode,
     bool int_fpu_en = false);
 std::vector<DataFormat> get_pack_src_formats(
     std::span<const DataFormat> data_formats,

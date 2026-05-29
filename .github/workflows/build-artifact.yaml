@@ -84,6 +84,11 @@ on:
         type: string
         default: ""
         description: 'Commit SHA to test (default: HEAD)'
+      wheel-ref:
+        required: false
+        type: string
+        default: ""
+        description: "Git ref used only for wheel checkout/versioning"
       use-artifacts-from-run:
         required: false
         type: string
@@ -223,6 +228,16 @@ on:
         description: >-
           Git fetch depth for the checkout step. Must be large enough to
           include all tags and history needed for `git describe`.
+      wheel-ref:
+        required: false
+        type: string
+        default: ""
+        description: "Git ref used only for wheel checkout/versioning"
+      publish-artifact:
+        required: false
+        type: boolean
+        default: true
+        description: "Make resulting artifact available in the workflow"
 
 jobs:
   # =============================================================================
@@ -246,7 +261,7 @@ jobs:
       toolchain: ${{ steps.parse.outputs.toolchain }}
       enable-lto: ${{ steps.parse.outputs.enable-lto }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           sparse-checkout: .github/actions
           sparse-checkout-cone-mode: true
@@ -289,7 +304,7 @@ jobs:
       packages-artifact-name: ${{ steps.download.outputs.packages-artifact-name }}
     steps:
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           sparse-checkout: .github/actions
           sparse-checkout-cone-mode: true
@@ -305,7 +320,7 @@ jobs:
           tracy: ${{ inputs.tracy }}
 
       - name: Upload build artifact for downstream jobs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: ${{ steps.download.outputs.build-artifact-name }}
           path: ${{ github.workspace }}/artifacts/ttm_any.tar.zst
@@ -314,7 +329,7 @@ jobs:
 
       - name: Upload wheel artifact
         if: ${{ steps.download.outputs.wheel-artifact-name != '' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: ${{ steps.download.outputs.wheel-artifact-name }}
           path: ${{ github.workspace }}/artifacts/*.whl
@@ -323,7 +338,7 @@ jobs:
 
       - name: Upload packages artifact
         if: ${{ steps.download.outputs.packages-artifact-name != '' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: ${{ steps.download.outputs.packages-artifact-name }}
           path: ${{ github.workspace }}/artifacts/*.deb
@@ -432,7 +447,7 @@ jobs:
           echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> "$GITHUB_ENV"
 
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           ref: ${{ inputs.ref || github.sha }}
@@ -457,12 +472,16 @@ jobs:
           git config --global --add safe.directory /work
 
       - name: 📦 Restore CPM source cache
-        uses: actions/cache@v4
+        id: cpm-cache
+        uses: actions/cache/restore@v4
         with:
-          path: .cpmcache
-          key: cpm-${{ hashFiles('third_party/CMakeLists.txt', 'tt_metal/third_party/umd/third_party/CMakeLists.txt', 'tt-train/cmake/dependencies.cmake') }}
-          restore-keys: |
-            cpm-
+          path: .cpmcache.tar.zst
+          key: cpm-z22-${{ hashFiles('third_party/CMakeLists.txt', 'tt_metal/third_party/umd/third_party/CMakeLists.txt', 'tt-train/cmake/dependencies.cmake') }}
+          restore-keys: cpm-z22-
+
+      - name: 📦 Unpack CPM cache
+        run: |
+          [ -f .cpmcache.tar.zst ] && tar -I 'zstd -T0' -xf .cpmcache.tar.zst || true
 
       - name: 🔧 CMake configure
         run: |
@@ -505,6 +524,18 @@ jobs:
           echo "build-artifact.yaml running: ${build_args[*]}"
           "${build_args[@]}"
 
+      - name: 📦 Pack CPM cache
+        if: steps.cpm-cache.outputs.cache-hit != 'true'
+        run: |
+          [ -d .cpmcache ] && tar -I 'zstd -T0 --ultra -22' -cf .cpmcache.tar.zst .cpmcache || true
+
+      - name: 📦 Save CPM source cache
+        if: steps.cpm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .cpmcache.tar.zst
+          key: ${{ steps.cpm-cache.outputs.cache-primary-key }}
+
       - name: 🛠️ Compile
         timeout-minutes: 90
         run: |
@@ -538,7 +569,7 @@ jobs:
 
       - name: ☁️ Upload packages
         if: ${{ inputs.publish-package }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         timeout-minutes: 10
         with:
           name: ${{ env.ARTIFACT_NAME }}
@@ -567,6 +598,7 @@ jobs:
           SANITIZED_REF=$(echo "$RAW_REF" | sed 's/[\/:"<>|*?\r\n\\]/-/g')
           TRACY_SUFFIX="${{ (inputs.tracy && '_profiler') || '' }}"
           DIST_SUFFIX="${{ (inputs.distributed == false && '_no_distributed') || '' }}"
+          BUILD_TYPE="${{ inputs.build-type || 'Release' }}"
           VERSION="${{ env.VERSION }}"
           ARCH="${{ inputs.architecture }}"
           RUN_ID="${{ github.run_id }}"
@@ -574,7 +606,7 @@ jobs:
             "TTMetal_build_any"
             "${VERSION}"
             "${ARCH}"
-            "${TOOLCHAIN_CLEANED}${TRACY_SUFFIX}${DIST_SUFFIX}"
+            "${TOOLCHAIN_CLEANED}${TRACY_SUFFIX}${DIST_SUFFIX}_${BUILD_TYPE}"
             "${SANITIZED_REF}"
             "${RUN_ID}"
           )
@@ -584,7 +616,7 @@ jobs:
 
       - name: ☁️ Upload tarball
         if: ${{ inputs.publish-artifact }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         timeout-minutes: 10
         with:
           name: ${{ env.build_artifact_name }}
@@ -628,6 +660,7 @@ jobs:
         ${{ inputs.manylinux-docker-image ||
             needs.build-docker-image.outputs.manylinux-tag ||
             'docker-image-unresolved!' }}
-      ref: ${{ inputs.ref || '' }}
+      ref: ${{ inputs.wheel-ref || inputs.ref || '' }}
       tracy: ${{ inputs.tracy }}
       enable-lto: ${{ inputs.enable-lto || false }}
+      build-type: ${{ inputs.build-type || 'Release' }}

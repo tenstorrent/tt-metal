@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -14,7 +14,6 @@ import json
 import os
 import sys
 import ttnn
-import logging
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,6 +26,7 @@ if _repo_root not in sys.path:
     sys.path.insert(0, _repo_root)
 
 from tests.sweep_framework.framework.constants import LEAD_MODELS
+from tests.sweep_framework.framework.sweeps_logger import sweeps_logger as logger
 
 
 # Inline lead_models_filter state (avoids dependency on untracked/separate module)
@@ -42,10 +42,6 @@ class lead_models_filter:
     def get_lead_models_filter(cls) -> bool:
         return cls._lead_models_only
 
-
-# Set up logger
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
 
 # Get the base directory dynamically - import from model_tracer
 try:
@@ -101,6 +97,8 @@ except ImportError:
 
 
 BASE_DIR = get_base_dir()
+
+TTNN_OPERATIONS_MASTER_JSON = os.path.join(BASE_DIR, "model_tracer", "traced_operations", "ttnn_operations_master.json")
 
 
 @dataclass
@@ -274,9 +272,13 @@ def _parse_string_repr_program_config(type_name: str, value_str: str):
     if "LayerNormShardedMultiCoreProgramConfig" in value_str:
         grid_m = re.search(r"compute_with_storage_grid_size=\(x=(\d+),\s*y=(\d+)\)", value_str)
         sub_w = re.search(r"subblock_w=(\d+)", value_str)
-        blk_h = re.search(r"block_h=(\d+)", value_str)
-        blk_w = re.search(r"block_w=(\d+)", value_str)
+        # Use negative lookbehind to avoid matching subblock_h/subblock_w
+        blk_h = re.search(r"(?<![a-z_])block_h=(\d+)", value_str)
+        blk_w = re.search(r"(?<![a-z_])block_w=(\d+)", value_str)
         inplace = re.search(r"inplace=(\d+)", value_str)
+        legacy_reduction = re.search(r"legacy_reduction=(\d+)", value_str)
+        legacy_rsqrt = re.search(r"legacy_rsqrt=(\d+)", value_str)
+        use_welford = re.search(r"use_welford=(\d+)", value_str)
         if not grid_m or not sub_w or not blk_h or not blk_w:
             return None
         return ttnn.LayerNormShardedMultiCoreProgramConfig(
@@ -285,6 +287,9 @@ def _parse_string_repr_program_config(type_name: str, value_str: str):
             block_h=int(blk_h.group(1)),
             block_w=int(blk_w.group(1)),
             inplace=bool(int(inplace.group(1))) if inplace else False,
+            legacy_reduction=bool(int(legacy_reduction.group(1))) if legacy_reduction else False,
+            legacy_rsqrt=bool(int(legacy_rsqrt.group(1))) if legacy_rsqrt else False,
+            use_welford=bool(int(use_welford.group(1))) if use_welford else False,
         )
 
     if "LayerNormDefaultProgramConfig" in value_str:
@@ -293,8 +298,9 @@ def _parse_string_repr_program_config(type_name: str, value_str: str):
     if "SoftmaxShardedMultiCoreProgramConfig" in value_str:
         grid_m = re.search(r"compute_with_storage_grid_size=\(x=(\d+),\s*y=(\d+)\)", value_str)
         sub_w = re.search(r"subblock_w=(\d+)", value_str)
-        blk_h = re.search(r"block_h=(\d+)", value_str)
-        blk_w = re.search(r"block_w=(\d+)", value_str)
+        # Use negative lookbehind to avoid matching subblock_h/subblock_w
+        blk_h = re.search(r"(?<![a-z_])block_h=(\d+)", value_str)
+        blk_w = re.search(r"(?<![a-z_])block_w=(\d+)", value_str)
         if not grid_m or not sub_w or not blk_h or not blk_w:
             return None
         return ttnn.SoftmaxShardedMultiCoreProgramConfig(
@@ -315,6 +321,12 @@ def _build_program_config_by_type(type_name: str, cfg: dict):
     fused_activation = cfg.get("fused_activation")
     if fused_activation is None or fused_activation == "None" or str(fused_activation) == "std::nullopt":
         fused_activation = None
+    elif isinstance(fused_activation, dict) and "op_type" in fused_activation:
+        # Convert dict {"op_type": 2, "param": [1.0]} to UnaryWithParam
+        op_type = int(fused_activation["op_type"])
+        param = fused_activation.get("param", [])
+        param_val = float(param[0]) if isinstance(param, list) and param else 0.0
+        fused_activation = ttnn.UnaryWithParam(ttnn.UnaryOpType(op_type), param_val)
 
     grid = cfg.get("compute_with_storage_grid_size")
     core_coord = None
@@ -332,6 +344,10 @@ def _build_program_config_by_type(type_name: str, cfg: dict):
                 per_core_N=int(cfg["per_core_N"]),
                 transpose_mcast=bool(cfg.get("transpose_mcast", False)),
                 fused_activation=fused_activation,
+                # Master-traced fuse_batch (default-False). Without this, the C++
+                # constructor defaults to True and the kernel asserts on the
+                # batch-shape requirement for any non-singleton-batch input_b.
+                fuse_batch=bool(cfg.get("fuse_batch", False)),
             )
             if cfg.get("out_block_h") is not None:
                 kwargs["out_block_h"] = int(cfg["out_block_h"])
@@ -442,6 +458,12 @@ def _build_program_config_heuristic(cfg, input_b_memory_config=None, input_a_mem
     fused_activation = cfg.get("fused_activation")
     if fused_activation is None or fused_activation == "None" or str(fused_activation) == "std::nullopt":
         fused_activation = None
+    elif isinstance(fused_activation, dict) and "op_type" in fused_activation:
+        # Convert dict {"op_type": 2, "param": [1.0]} to UnaryWithParam
+        op_type = int(fused_activation["op_type"])
+        param = fused_activation.get("param", [])
+        param_val = float(param[0]) if isinstance(param, list) and param else 0.0
+        fused_activation = ttnn.UnaryWithParam(ttnn.UnaryOpType(op_type), param_val)
 
     grid = cfg.get("compute_with_storage_grid_size")
 
@@ -581,18 +603,24 @@ def dict_to_memory_config(mem_cfg):
     if not grid_list or not shard_shape:
         return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, buffer_type_ttnn)
 
-    core_ranges = set()
+    # Preserve insertion order so the kernel sees the same storage-core
+    # ordering master recorded (DRAM-sharded matmul asserts on it).
+    core_ranges = []
     for range_dict in grid_list:
         start = range_dict.get("start", {})
         end = range_dict.get("end", {})
         if "x" in start and "y" in start and "x" in end and "y" in end:
-            core_ranges.add(ttnn.CoreRange(ttnn.CoreCoord(start["x"], start["y"]), ttnn.CoreCoord(end["x"], end["y"])))
+            core_ranges.append(
+                ttnn.CoreRange(ttnn.CoreCoord(start["x"], start["y"]), ttnn.CoreCoord(end["x"], end["y"]))
+            )
 
     if not core_ranges:
         return ttnn.MemoryConfig(layout, buffer_type_ttnn)
 
     shard_grid = ttnn.CoreRangeSet(core_ranges)
-    orientation = ttnn.ShardOrientation.COL_MAJOR if orientation_str == "COL_MAJOR" else ttnn.ShardOrientation.ROW_MAJOR
+    orientation = (
+        ttnn.ShardOrientation.COL_MAJOR if orientation_str in ("COL_MAJOR", "1") else ttnn.ShardOrientation.ROW_MAJOR
+    )
     shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, orientation)
 
     return ttnn.MemoryConfig(layout, buffer_type_ttnn, shard_spec)
@@ -821,8 +849,8 @@ class MasterConfigLoader:
         Args:
             master_file_path: Explicit path to JSON file. If None, resolves in order:
                 1. Class-level override set via set_master_file_path()
-                2. ttnn_operations_master_v2_reconstructed.json (DB-reconstructed)
-                3. ttnn_operations_master_UF_EV_B9_GWH01_deepseek.json (fresh trace)
+                2. TTNN_MASTER_JSON_PATH env var (optional explicit path)
+                3. TTNN_OPERATIONS_MASTER_JSON (canonical: ttnn_operations_master.json)
                 4. None (degraded mode — empty configs)
         """
         if master_file_path is None and MasterConfigLoader._master_file_override is not None:
@@ -836,18 +864,13 @@ class MasterConfigLoader:
                 MasterConfigLoader._master_file_override = None
 
         if master_file_path is None and MasterConfigLoader._master_file_override is None:
-            traced_dir = os.path.join(BASE_DIR, "model_tracer", "traced_operations")
-            reconstructed_v2_path = os.path.join(traced_dir, "ttnn_operations_master_v2_reconstructed.json")
-            default_trace_path = os.path.join(traced_dir, "ttnn_operations_master_UF_EV_B9_GWH01_deepseek.json")
-
-            if os.path.exists(reconstructed_v2_path):
-                logger.info(f"✅ Using V2 reconstructed JSON from database: {reconstructed_v2_path}")
-                master_file_path = reconstructed_v2_path
-            elif os.path.exists(default_trace_path):
-                logger.info(f"✅ Using fresh trace JSON: {default_trace_path}")
-                master_file_path = default_trace_path
-            else:
-                master_file_path = None
+            env_path = os.environ.get("TTNN_MASTER_JSON_PATH")
+            if env_path and os.path.exists(env_path):
+                logger.info(f"✅ Using master JSON from TTNN_MASTER_JSON_PATH: {env_path}")
+                master_file_path = env_path
+            elif os.path.exists(TTNN_OPERATIONS_MASTER_JSON):
+                logger.info(f"✅ Using canonical master JSON: {TTNN_OPERATIONS_MASTER_JSON}")
+                master_file_path = TTNN_OPERATIONS_MASTER_JSON
 
         self.master_file_path = master_file_path
         self.master_data = None
@@ -952,7 +975,7 @@ class MasterConfigLoader:
                     configs = self.master_data["operations"][transformer_base].get("configurations", [])
                     return self._normalize_configs(configs)
 
-        logger.warning(f"⚠️ No configurations found for operation: {operation_name}")
+        logger.warning(f"⚠️ Master trace lookup failed for operation '{operation_name}'. ")
         return []
 
     def _normalize_configs(self, configs: List) -> List[Tuple[List[Dict], str, Any, str]]:
@@ -1039,14 +1062,18 @@ class MasterConfigLoader:
             "DataType::INT32": ttnn.int32,
             "DataType::UINT32": ttnn.uint32,
             "DataType::BFLOAT8_B": ttnn.bfloat8_b,
+            "DataType::BFLOAT4_B": ttnn.bfloat4_b,
             "DataType::UINT16": ttnn.uint16,
+            "DataType::UINT8": ttnn.uint8,
             # V2 tracer format (dot-style)
             "DataType.BFLOAT16": ttnn.bfloat16,
             "DataType.FLOAT32": ttnn.float32,
             "DataType.INT32": ttnn.int32,
             "DataType.UINT32": ttnn.uint32,
             "DataType.BFLOAT8_B": ttnn.bfloat8_b,
+            "DataType.BFLOAT4_B": ttnn.bfloat4_b,
             "DataType.UINT16": ttnn.uint16,
+            "DataType.UINT8": ttnn.uint8,
         }
         return dtype_mapping.get(dtype_str, ttnn.bfloat16)
 
@@ -1126,6 +1153,10 @@ class MasterConfigLoader:
         if not memory_config or not isinstance(memory_config, dict):
             return ttnn.DRAM_MEMORY_CONFIG
 
+        # Unwrap {"type": "...", "data": {...}} wrapper produced by some vector generators
+        if "data" in memory_config and isinstance(memory_config["data"], dict) and "buffer_type" not in memory_config:
+            memory_config = memory_config["data"]
+
         buffer_type = memory_config.get("buffer_type")
         memory_layout = memory_config.get("memory_layout")
 
@@ -1169,45 +1200,57 @@ class MasterConfigLoader:
             # Extract grid, shape, and orientation from shard_spec
             grid_list = shard_spec_dict.get("grid")
             shard_shape = shard_spec_dict.get("shape")
-            orientation_str = shard_spec_dict.get("orientation")
+            orientation_raw = shard_spec_dict.get("orientation")
 
-            # Validate required shard_spec fields
-            if not grid_list:
-                raise ValueError(f"Missing 'grid' in shard_spec: {shard_spec_dict}")
-            if not shard_shape:
-                raise ValueError(f"Missing 'shape' in shard_spec: {shard_spec_dict}")
-            if not orientation_str:
-                raise ValueError(f"Missing 'orientation' in shard_spec: {shard_spec_dict}")
+            # Validate required shard_spec fields — fall back to base sharded
+            # config (no shard_spec) when any field is missing.  This is common for
+            # Galaxy mesh-sharded tensors where grid metadata may not serialise
+            # cleanly.  The sweep run will use device-default sharding.
+            if not grid_list or not shard_shape or orientation_raw is None:
+                logger.debug(
+                    f"Incomplete shard_spec (grid={bool(grid_list)}, shape={bool(shard_shape)}, "
+                    f"orientation={orientation_raw is not None}), falling back to base sharded config"
+                )
+                return ttnn.MemoryConfig(memory_layout_ttnn, buffer_type_ttnn)
+            orientation_str = str(orientation_raw)
 
-            # Create CoreRangeSet from grid
-            # grid is a list of ranges like [{"start": {"x": 0, "y": 0}, "end": {"x": 7, "y": 7}}]
-            core_ranges = set()
-            for range_dict in grid_list:
-                start = range_dict.get("start")
-                end = range_dict.get("end")
+            # Try to build full shard_spec; fall back to base sharded config
+            # if any field is malformed (Galaxy mesh configs may have unusual grid data).
+            try:
+                # Create CoreRangeSet from grid
+                # grid is a list of ranges like [{"start": {"x": 0, "y": 0}, "end": {"x": 7, "y": 7}}]
+                core_ranges = set()
+                for range_dict in grid_list:
+                    start = range_dict.get("start")
+                    end = range_dict.get("end")
 
-                if not start or not end:
-                    raise ValueError(f"Invalid grid range (missing start/end): {range_dict}")
-                if "x" not in start or "y" not in start:
-                    raise ValueError(f"Invalid grid start (missing x/y): {start}")
-                if "x" not in end or "y" not in end:
-                    raise ValueError(f"Invalid grid end (missing x/y): {end}")
+                    if not start or not end:
+                        raise ValueError(f"Invalid grid range (missing start/end): {range_dict}")
+                    if "x" not in start or "y" not in start:
+                        raise ValueError(f"Invalid grid start (missing x/y): {start}")
+                    if "x" not in end or "y" not in end:
+                        raise ValueError(f"Invalid grid end (missing x/y): {end}")
 
-                core_range = ttnn.CoreRange(ttnn.CoreCoord(start["x"], start["y"]), ttnn.CoreCoord(end["x"], end["y"]))
-                core_ranges.add(core_range)
+                    core_range = ttnn.CoreRange(
+                        ttnn.CoreCoord(start["x"], start["y"]), ttnn.CoreCoord(end["x"], end["y"])
+                    )
+                    core_ranges.add(core_range)
 
-            shard_grid = ttnn.CoreRangeSet(core_ranges)
+                shard_grid = ttnn.CoreRangeSet(core_ranges)
 
-            # Map orientation
-            if orientation_str == "COL_MAJOR":
-                orientation = ttnn.ShardOrientation.COL_MAJOR
-            elif orientation_str == "ROW_MAJOR":
-                orientation = ttnn.ShardOrientation.ROW_MAJOR
-            else:
-                raise ValueError(f"Unknown orientation: {orientation_str}")
+                # Map orientation (supports both string names and integer enum values)
+                if orientation_str in ("COL_MAJOR", "1"):
+                    orientation = ttnn.ShardOrientation.COL_MAJOR
+                elif orientation_str in ("ROW_MAJOR", "0"):
+                    orientation = ttnn.ShardOrientation.ROW_MAJOR
+                else:
+                    raise ValueError(f"Unknown orientation: {orientation_str}")
 
-            # Create ShardSpec
-            shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, orientation)
+                # Create ShardSpec
+                shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, orientation)
+            except (ValueError, KeyError, TypeError) as shard_err:
+                logger.debug(f"Could not build shard_spec ({shard_err}), using base sharded config")
+                return ttnn.MemoryConfig(memory_layout_ttnn, buffer_type_ttnn)
 
             return ttnn.MemoryConfig(memory_layout_ttnn, buffer_type_ttnn, shard_spec)
 
@@ -1335,12 +1378,11 @@ class MasterConfigLoader:
                         parsed_layout = self.parse_layout(tensor_config.layout)
                         parsed_mem_config = self.parse_memory_config(tensor_config.memory_config, tensor_config.shape)
 
-                        # Skip this config if memory_config parsing returned None
-                        # (happens with mesh-sharded tensors missing grid info)
+                        # Fall back to DRAM for unparseable memory configs instead
+                        # of skipping the entire config — ensures Galaxy mesh configs
+                        # still produce sweep vectors.
                         if parsed_mem_config is None:
-                            raise ValueError(
-                                f"Memory config parsing returned None (likely mesh-sharded tensor without grid)"
-                            )
+                            parsed_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
                         positional_tensors.append(
                             {
@@ -1349,6 +1391,7 @@ class MasterConfigLoader:
                                 "layout": parsed_layout,
                                 "memory_config": parsed_mem_config,
                                 "tensor_placement": tensor_config.tensor_placement,
+                                "storage_type": tensor_config.storage_type,
                             }
                         )
                     else:
@@ -1366,8 +1409,8 @@ class MasterConfigLoader:
                         parsed_mem_config = self.parse_memory_config(tensor_config.memory_config, tensor_config.shape)
 
                         if parsed_mem_config is None:
-                            logger.warning(f"⚠️ Skipping named tensor kwarg '{key}' due to unparseable memory_config")
-                            continue
+                            logger.debug(f"Named tensor kwarg '{key}' has unparseable memory_config, using DRAM")
+                            parsed_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
                         config_dict[f"{key}_shape"] = tuple(tensor_config.shape)
                         config_dict[f"{key}_dtype"] = parsed_dtype
@@ -1403,6 +1446,9 @@ class MasterConfigLoader:
                     config_dict[f"input_{suffix}_layout"] = tensor["layout"]
                     config_dict[f"input_{suffix}_memory_config"] = tensor["memory_config"]
                     config_dict[f"input_{suffix}_tensor_placement"] = tensor.get("tensor_placement")
+                    storage = tensor.get("storage_type", "StorageType.DEVICE")
+                    if storage and "HOST" in str(storage):
+                        config_dict[f"input_{suffix}_storage_type"] = storage
 
                 if "output_memory_config" not in config_dict:
                     if "memory_config" in config_dict:
@@ -1479,7 +1525,12 @@ class MasterConfigLoader:
             configs = self.get_operation_configs(operation_name)
 
             if not configs:
-                logger.warning(f"⚠️ No traced configurations found for {operation_name}")
+                logger.warning(
+                    f"⚠️ No usable configurations are available for '{operation_name}'. "
+                    f"Possible causes: the operation entry has no "
+                    f"configurations, or all configurations were filtered out "
+                    f"(TTNN_LEAD_MODELS_ONLY={os.environ.get('TTNN_LEAD_MODELS_ONLY', 'unset')})."
+                )
                 # Return empty lists - sweep tests will handle defaults
                 return {
                     "input_shape": [[1, 32, 32]],
@@ -1699,7 +1750,6 @@ def get_global_loader(instance: MasterConfigLoader = None) -> MasterConfigLoader
 
 if __name__ == "__main__":
     # Example usage
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     loader = MasterConfigLoader()
 
     # Test with add operation

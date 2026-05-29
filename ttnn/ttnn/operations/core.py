@@ -1,11 +1,11 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
 import math
 import os
 import pathlib
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Callable, Dict, List, Optional, Tuple, Union
 
 import ttnn.decorators
 from loguru import logger
@@ -253,7 +253,7 @@ def from_torch(
     cq_id: Optional[int] = None,
     preserve_nan_values: bool = False,
     col_tilize: bool = False,
-    fast_approx: bool = False,
+    enable_bfloat_opt: bool = False,
 ) -> Optional[ttnn.Tensor]:
     """
     Converts the `torch.Tensor` tensor into a `ttnn.Tensor`. If `tensor` is `None`, the function returns `None`.
@@ -284,7 +284,7 @@ def from_torch(
             host data and is unrelated to Tile-level transpose flags (transpose_within_face /
             transpose_of_faces).  Requires dtype bfloat8_b or bfloat4_b, tensor.ndim >= 2, spec=None.
             Defaults to `False`.
-        fast_approx (bool, optional): If True, use a fast dtype conversion on the device, but with precision loss due to hw rounding rules. Defaults to `False`.
+        enable_bfloat_opt (bool, optional): If True, use a fast bf4/8 dtype conversion on the device, but with precision loss due to hw rounding rules. Defaults to `False`.
 
     Returns:
         ttnn.Tensor | None: A `ttnn.Tensor` created from the input `torch.Tensor`, or `None` if `tensor` is `None`.
@@ -337,6 +337,18 @@ def from_torch(
         # float32 as an intermediate type is not used due to limited amount of L1 memory.
         tensor = torch.from_numpy(tensor)
 
+    # FP8_E4M3 host-side construction is narrowed to float32 input only. The FLOAT32 -> FP8_E4M3
+    # path is wired up in transform_buffers via static_cast<float8_e4m3>; other source dtypes
+    # either fail at the dlpack importer (torch.float8_e4m3fn, code 10 not yet handled) or hit
+    # "FP8_E4M3 cross-type conversion is only supported to/from FLOAT32" deeper in to_dtype.
+    # The float32 path is supported for unit tests.
+    fp8_target = dtype == ttnn.DataType.FP8_E4M3 or (spec is not None and spec.dtype == ttnn.DataType.FP8_E4M3)
+    if fp8_target and tensor.dtype != torch.float32:
+        raise RuntimeError(
+            f"ttnn.from_torch: source dtype {tensor.dtype} is not supported when target is "
+            "ttnn.fp8_e4m3; only float32 input is supported. Cast to torch.float32 first."
+        )
+
     return ttnn.Tensor(
         tensor=tensor,
         data_type=dtype,
@@ -349,7 +361,7 @@ def from_torch(
         mesh_mapper=mesh_mapper.unwrap() if isinstance(mesh_mapper, ttnn.ReplicateTensorToMeshWrapper) else mesh_mapper,
         preserve_nan_values=preserve_nan_values,
         col_tilize=col_tilize,
-        fast_approx=fast_approx,
+        enable_bfloat_opt=enable_bfloat_opt,
     )
 
 
@@ -393,6 +405,17 @@ def to_torch(
         torch.Tensor: The converted `torch` tensor.
     """
     import torch
+
+    if tensor.dtype == ttnn.DataType.FP8_E4M3:
+        # Torch ≤ 2.7's dlpack importer rejects code 10 (Float8_E4M3FN) and fails deep inside
+        # torch with "RuntimeError: Unsupported code 10". Preflight the version so users see a
+        # clear actionable message instead.
+        torch_major, torch_minor = (int(p) for p in torch.__version__.split("+", 1)[0].split(".")[:2])
+        if (torch_major, torch_minor) < (2, 8):
+            raise RuntimeError(
+                f"ttnn.to_torch: converting an FP8_E4M3 tensor requires torch >= 2.8 (dlpack code 10 support); "
+                f"got torch {torch.__version__}. Update torch in your environment."
+            )
 
     if ttnn.is_tensor_storage_on_device(tensor):
         tensor = ttnn.from_device(tensor, queue_id=cq_id)
@@ -465,6 +488,9 @@ ttnn.register_python_operation(
 ttnn.register_python_operation(
     name="ttnn.copy_host_to_device_tensor",
 )(ttnn._ttnn.operations.core.copy_host_to_device_tensor)
+ttnn.register_python_operation(
+    name="ttnn.copy_host_to_device_tensor_partial",
+)(ttnn._ttnn.operations.core.copy_host_to_device_tensor_partial)
 ttnn.register_python_operation(
     name="ttnn.copy_device_to_host_tensor",
 )(ttnn._ttnn.operations.core.copy_device_to_host_tensor)
@@ -546,7 +572,12 @@ def load_tensor(file_name: Union[str, pathlib.Path], *, device: ttnn.MeshDevice 
 
 
 @ttnn.register_python_operation(name="ttnn.dump_tensor")
-def dump_tensor(file_name: Union[str, pathlib.Path], tensor: ttnn.Tensor) -> None:
+def dump_tensor(
+    file_name: Union[str, pathlib.Path],
+    tensor: ttnn.Tensor,
+    *,
+    mode: ttnn.DumpTensorMode = ttnn.DumpTensorMode.DISTRIBUTED_GATHER,
+) -> None:
     """
     Dump tensor to a file.
 
@@ -554,12 +585,21 @@ def dump_tensor(file_name: Union[str, pathlib.Path], tensor: ttnn.Tensor) -> Non
         file_name (str | pathlib.Path): The file name.
         tensor (ttnn.Tensor): the tensor to be dumped.
 
+    Keyword Args:
+        mode (ttnn.DumpTensorMode, optional): How host-side distributed tensors are written. Defaults to
+            ``DISTRIBUTED_GATHER``.
+
+            * ``DISTRIBUTED_GATHER``: perform a host all-gather, write the full tensor from global rank 0 only,
+              and synchronize with barriers. Use this for a single canonical file from a distributed tensor.
+            * ``LOCAL``: skip collectives and write the caller's local shard only. In multi-host runs, each process
+              must use a distinct ``file_name`` (for example a per-host cache path).
+
     Returns:
         `None`: tensor saved to a specified file.
     """
     file_name = pathlib.Path(file_name)
     _validate_file_extension(file_name)
-    ttnn._ttnn.tensor.dump_tensor_flatbuffer(str(file_name), tensor)
+    ttnn._ttnn.tensor.dump_tensor_flatbuffer(str(file_name), tensor, mode)
 
 
 @ttnn.register_python_operation(name="ttnn.as_tensor")

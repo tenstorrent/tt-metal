@@ -61,10 +61,10 @@ file(GLOB_RECURSE COMPUTE_KERNEL_API include/*)
 file(GLOB_RECURSE FABRIC_HW_INC fabric/hw/inc/*)
 file(
     GLOB_RECURSE TT_LLK_HEADERS
-    third_party/tt_llk/common/*.h
-    third_party/tt_llk/tt_llk_wormhole_b0/**/*.h
-    third_party/tt_llk/tt_llk_blackhole/**/*.h
-    third_party/tt_llk/tt_llk_quasar/**/*.h
+    tt-llk/common/*.h
+    tt-llk/tt_llk_wormhole_b0/**/*.h
+    tt-llk/tt_llk_blackhole/**/*.h
+    tt-llk/tt_llk_quasar/**/*.h
 )
 
 target_sources(
@@ -91,7 +91,7 @@ endif()
 target_link_libraries(
     tt_metal
     PUBLIC
-        umd::device
+        umd::tt-umd
         enchantum::enchantum
         fmt::fmt-header-only
         TracyClient
@@ -109,6 +109,7 @@ target_link_libraries(
         detail
         distributed
         fabric
+        tt_metal_noc_estimator
         FlatBuffers::FlatBuffers
         TT::Metalium::Logging
         TT::ScaleoutTools
@@ -126,6 +127,14 @@ target_include_directories(
         api/tt-metalium # FIXME: Re-home the tests and remove this
 )
 target_compile_options(tt_metal PUBLIC -Wno-int-to-pointer-cast)
+
+if(TT_METAL_USE_EMULE)
+    target_compile_definitions(tt_metal PRIVATE TT_METAL_USE_EMULE=1)
+    # PRIVATE: only libtt_metal.so itself needs -rdynamic (to export TLS symbols
+    # for dlopen'd JIT kernels). No need to propagate to all consumers.
+    target_link_options(tt_metal PRIVATE -rdynamic)
+endif()
+
 add_dependencies(tt_metal hw_toolchain)
 
 set_target_properties(
@@ -161,6 +170,7 @@ add_subdirectory(detail)
 add_subdirectory(distributed)
 add_subdirectory(fabric)
 add_subdirectory(impl/experimental/udm)
+add_subdirectory(impl/experimental/noc_estimator)
 if(TT_METAL_BUILD_TESTS)
     add_subdirectory(test)
 endif()

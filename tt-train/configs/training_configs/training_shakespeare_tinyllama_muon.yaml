@@ -1,0 +1,35 @@
+training_config:
+  project_name: "tt_train_tinyllama_muon"
+  seed: 5489
+  model_save_interval: 500
+  batch_size: 1
+  num_epochs: 1
+  max_steps: 5000
+  use_clip_grad_norm: false
+  clip_grad_norm_max_norm: 1.0
+  model_config: "configs/model_configs/tinyllama.yaml"
+  optimizer:
+    type: MuonWithAdamW
+    # Module names whose weights use AdamW instead of Muon.
+    # Embeddings (tok_emb) and LM head (fc) don't benefit from orthogonalization.
+    # Fused KV linear (kv_linear) concatenates K and V which need separate
+    # orthogonalization — excluded until per-head splitting is supported.
+    adamw_modules: [tok_emb, fc, kv_linear]
+    muon:
+      lr: 0.001
+      momentum: 0.95
+      ns_steps: 5
+    adamw:
+      lr: 0.00003
+      weight_decay: 0.01
+      stochastic_rounding: true
+
+device_config:
+  enable_ddp: false
+  mesh_shape: [1,1]
+
+eval_config:
+  repetition_penalty: 1.0
+  temperature: 0.7
+  top_k: 50
+  top_p: 1.0

@@ -1,11 +1,11 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
 #include "api/compute/transpose_wh.h"
 #include "api/compute/ema.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 #include "../../../device/kernels/accumulation_common.hpp"
 
 /*
@@ -58,7 +58,7 @@ inline void ema_sfpi_tile(
     float alpha,
     float beta,
     bool first_sample) {
-    MATH(_llk_math_eltwise_binary_sfpu_params_<false>(
+    MATH(_llk_math_eltwise_binary_sfpu_params_(
         ema_sfpi_face, inp_dst_index, prv_dst_index, out_dst_index,
         VectorMode::RC, alpha, beta, first_sample));
 }
@@ -79,9 +79,9 @@ void kernel_main() {
     constexpr auto dst_cb_idx = tt::CBIndex::c_1;
     constexpr auto trp_cb_idx = tt::CBIndex::c_2;
 
-    experimental::CircularBuffer cb_src(src_cb_idx);
-    experimental::CircularBuffer cb_dst(dst_cb_idx);
-    experimental::CircularBuffer cb_trp(trp_cb_idx);
+    CircularBuffer cb_src(src_cb_idx);
+    CircularBuffer cb_dst(dst_cb_idx);
+    CircularBuffer cb_trp(trp_cb_idx);
 
     // DST indices
     // -----------

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -75,8 +75,10 @@ void core_agnostic_main() {
     }
 
     if (*get_cb_tiles_received_ptr(CB_ID) != CHURN_TARGET) {
-        DPRINT << "Not stopping at churn target as expected! Got: " << HEX() << *get_cb_tiles_received_ptr(CB_ID)
-               << ". Expected: " << (std::uint32_t)CHURN_TARGET << ". Exiting" << ENDL();
+        DPRINT(
+            "Not stopping at churn target as expected! Got: 0x{:x}, Expected: 0x{:x}. Exiting\n",
+            *get_cb_tiles_received_ptr(CB_ID),
+            (std::uint32_t)CHURN_TARGET);
         return;
     }
 
@@ -97,8 +99,7 @@ void core_agnostic_main() {
     // Acked counter should stay at CHURN_TARGET.
     auto expected_acked = CHURN_TARGET;
     if (*get_cb_tiles_acked_ptr(CB_ID) != expected_acked) {
-        DPRINT << "Got: Acked: " << HEX() << *get_cb_tiles_acked_ptr(CB_ID)
-               << ". Expected: " << (std::uint32_t)expected_acked << ENDL();
+        DPRINT("Got: Acked: 0x{:x}, Expected: 0x{:x}\n", *get_cb_tiles_acked_ptr(CB_ID), (std::uint32_t)expected_acked);
         return;
     }
 

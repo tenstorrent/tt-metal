@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,11 +6,15 @@
 
 #include "api/compute/eltwise_binary.h"
 #ifdef TRISC_MATH
+#include "sfpu/ckernel_sfpu_fill.h"  // _calculate_fill_ used by mul_reduce_scalar_tile
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #include "experimental/llk_math_mul_reduce_scalar_api.h"
 #endif
 #ifdef TRISC_UNPACK
 #include "experimental/llk_unpack_mul_reduce_scalar_api.h"
+#endif
+#ifdef TRISC_PACK
+#include "llk_pack_reduce_api.h"
 #endif
 
 namespace ckernel {
@@ -86,7 +90,7 @@ ALWI void mul_reduce_scalar_tile(uint32_t icb0, uint32_t icb1, uint32_t num_tile
         _calculate_fill_, RC_custom, APPROX, 2 /*ITERATIONS*/, 0 /*dst_index*/, 0.0f));
 
     // Step 5: Configure packer for scalar reduction
-    PACK((llk_pack_reduce_mask_config<false /*untilize*/, ReduceDim::REDUCE_SCALAR>()));
+    PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_SCALAR, PackMode::Default>()));
 
     // Step 6: Perform column reduction for each tile, accumulating into dest[0]
     // First iteration (i=0) - no move needed

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import json
@@ -19,7 +19,7 @@ from models.demos.deepseek_v3.tests.fused_op_unit_tests.test_utils import (
     measure_perf_us,
 )
 from models.demos.deepseek_v3.tt.embedding.embedding1d import Embedding1D
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, even_int_div
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, even_int_div, get_fabric_config
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     get_model_config,
@@ -358,8 +358,8 @@ def _build_all_gather_embedding_inputs(
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "trace_region_size": 2967552,
+            "fabric_config": get_fabric_config(),
+            "trace_region_size": 0,
         }
     ],
     indirect=True,
@@ -451,9 +451,8 @@ def test_ds_all_gather_embedding_device_perf(mode, seq_len):
     step_name = f"ds_all_gather_embedding_device_perf_{mode}_seq{seq_len}"
     test_path = "models/demos/deepseek_v3/tests/fused_op_unit_tests/embedding/test_ds_all_gather_embedding.py"
     trace_filter = "trace" if mode == "decode" else "eager"
-    # Use substring matching in-k filter to select the right test variant
-    # This matches test IDs like: test_name[prefill-128-...-program_cache-eager]
-    command = f'pytest {test_path}::test_ds_all_gather_embedding -k "{mode}-{seq_len}"'
+    expr = f"program_cache and not no_program_cache and {trace_filter} and {mode} and {seq_len}"
+    command = f'pytest {test_path}::test_ds_all_gather_embedding -k "{expr}"'
 
     perf_profiler.start("run")
     perf_profiler.start(step_name)

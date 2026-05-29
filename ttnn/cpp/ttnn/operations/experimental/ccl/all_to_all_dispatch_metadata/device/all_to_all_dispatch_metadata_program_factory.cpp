@@ -1,10 +1,12 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "all_to_all_dispatch_metadata_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <vector>
+#include <ranges>
+#include <algorithm>
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -108,14 +110,15 @@ uint32_t get_num_rows(const ttnn::Tensor& tensor) {
 
 std::pair<std::array<uint32_t, 7>, std::array<uint32_t, 7>> get_cb_sizes(
     const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& indices_tensor,
-    const ttnn::Tensor& scores_tensor,
+    const ttnn::Tensor& metadata_tensor,
+    const ttnn::Tensor& scores_out_tensor,
     const ttnn::Tensor& mapping_tensor,
     uint32_t num_links,
     [[maybe_unused]] std::optional<uint32_t> axis) {
     auto aligned_input_page_size = get_aligned_page_size(input_tensor);
-    auto aligned_indices_page_size = get_aligned_page_size(indices_tensor);
-    auto aligned_scores_page_size = get_aligned_page_size(scores_tensor);
+    // use the output metadata and scores tensor to account for the possible addition of shared experts
+    auto aligned_indices_page_size = get_aligned_page_size(metadata_tensor);
+    auto aligned_scores_page_size = get_aligned_page_size(scores_out_tensor);
     auto aligned_mapping_page_size = get_aligned_page_size(mapping_tensor);
     uint32_t tokens_per_device = get_num_rows(input_tensor);
     uint32_t tokens_per_core = tt::div_up(tokens_per_device, num_links);
@@ -225,10 +228,10 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
     bool skip_init_semaphore) {
     tt::tt_metal::Program program{};
 
-    auto input_tensor = tensor_args.input_tensor;
-    auto indices_tensor = tensor_args.expert_indices_tensor;
-    auto mapping_tensor = tensor_args.expert_mapping_tensor;
-    auto scores_tensor = tensor_args.expert_scores_tensor;
+    const auto& input_tensor = tensor_args.input_tensor;
+    const auto& indices_tensor = tensor_args.expert_indices_tensor;
+    const auto& mapping_tensor = tensor_args.expert_mapping_tensor;
+    const auto& scores_tensor = tensor_args.expert_scores_tensor;
     const auto& output_tensor = tensor_return_value.at(0);
     const auto& metadata_tensor = tensor_return_value.at(1);    // output indices tensor
     const auto& scores_out_tensor = tensor_return_value.at(2);  // output scores tensor
@@ -295,6 +298,7 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
     auto mapping_page_size = detail::get_page_size(mapping_tensor);
     auto output_page_size = detail::get_page_size(output_tensor);
     auto metadata_page_size = detail::get_page_size(metadata_tensor);
+    const auto output_scores_page_size = detail::get_page_size(scores_out_tensor);
 
     auto input_pages = detail::get_num_pages(input_tensor);
     auto indices_pages = detail::get_num_pages(indices_tensor);
@@ -349,6 +353,7 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
         scores_pages,
         scores_page_size,
         aligned_scores_page_size);
+    const auto aligned_output_scores_page_size = detail::get_aligned_page_size(scores_out_tensor);
 
     uint32_t aligned_mapping_page_size = detail::get_aligned_page_size(mapping_tensor);
     log_debug(
@@ -378,7 +383,7 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
         aligned_metadata_page_size);
 
     auto [cb_sizes, cb_page_sizes] = detail::get_cb_sizes(
-        input_tensor, indices_tensor, scores_tensor, mapping_tensor, num_links, operation_attributes.axis);
+        input_tensor, metadata_tensor, scores_out_tensor, mapping_tensor, num_links, operation_attributes.axis);
 
     tt::tt_metal::CircularBufferConfig cb_input_tensor_config =
         tt::tt_metal::CircularBufferConfig(cb_sizes[0], {{input_tensor_cb_id, input_data_format}})
@@ -495,60 +500,66 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
     // Each page is one device's view. Kernels only need to read 1 page (source device's mapping row).
     constexpr uint32_t mapping_pages_for_kernel = 1;
 
+    const auto shared_expert_ids = operation_attributes.shared_expert_ids;
+    const auto num_shared_experts = shared_expert_ids.has_value() ? shared_expert_ids->size() : 0;
+
     std::vector<uint32_t> reader_compile_time_args = {
-        input_tensor_cb_id,
-        indices_tensor_cb_id,
-        mapping_tensor_cb_id,
-        packet_header_cb_id,
-        send_preparation_buffer_id,
+        input_tensor_cb_id,          // 0
+        indices_tensor_cb_id,        // 1
+        mapping_tensor_cb_id,        // 2
+        packet_header_cb_id,         // 3
+        send_preparation_buffer_id,  // 4
 
-        input_pages,
-        indices_pages,
-        mapping_pages_for_kernel,  // Only 1 page - source device's mapping row
-        output_pages,
-        metadata_pages,
+        input_pages,               // 5
+        indices_pages,             // 6
+        mapping_pages_for_kernel,  // 7. Only 1 page - source device's mapping row
+        output_pages,              // 8
+        metadata_pages,            // 9
 
-        input_page_size,
-        indices_page_size,
-        mapping_page_size,
-        output_page_size,
-        metadata_page_size,
+        input_page_size,     // 10
+        indices_page_size,   // 11
+        mapping_page_size,   // 12
+        output_page_size,    // 13
+        metadata_page_size,  // 14
 
-        num_devices,
-        hidden_size,
-        batch_size,
-        selected_experts_k,
-        experts,
-        tokens_per_device,
+        num_devices,         // 15
+        hidden_size,         // 16
+        batch_size,          // 17
+        selected_experts_k,  // 18
+        experts,             // 19
+        num_shared_experts,  // 20
+        tokens_per_device,   // 21
 
-        num_links,
-        (uint32_t)topology,
+        num_links,           // 22
+        (uint32_t)topology,  // 23
 
-        src_mesh_id,
-        (uint32_t)src_chip_id,
-        mesh_view.num_rows(),
-        mesh_view.num_cols(),
+        src_mesh_id,            // 24
+        (uint32_t)src_chip_id,  // 25
+        mesh_view.num_rows(),   // 26
+        mesh_view.num_cols(),   // 27
 
-        aligned_input_page_size,
-        aligned_indices_page_size,
-        aligned_mapping_page_size,
-        aligned_output_page_size,
-        aligned_metadata_page_size,
+        aligned_input_page_size,     // 28
+        aligned_indices_page_size,   // 29
+        aligned_mapping_page_size,   // 30
+        aligned_output_page_size,    // 31
+        aligned_metadata_page_size,  // 32
 
-        (uint32_t)fabric_max_packet_size,
+        (uint32_t)fabric_max_packet_size,  // 33
 
-        l1_alignment,
-        metadata_buffer_id,
-        0,
-        linearized_mesh_coord,
+        l1_alignment,           // 34
+        metadata_buffer_id,     // 35
+        0,                      // 36
+        linearized_mesh_coord,  // 37
 
-        dispatch_devices,
+        dispatch_devices,  // 38
 
         // scores tensor args
-        scores_tensor_cb_id,
-        scores_pages,
-        scores_page_size,
-        aligned_scores_page_size,
+        scores_tensor_cb_id,             // 39
+        scores_pages,                    // 40
+        scores_page_size,                // 41
+        aligned_scores_page_size,        // 42
+        output_scores_page_size,         // 43
+        aligned_output_scores_page_size  // 44
     };
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(indices_tensor.buffer()).append_to(reader_compile_time_args);
@@ -806,6 +817,28 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
             writer_runtime_args.push_back(0);                // payload_offset
             writer_runtime_args.push_back(input_page_size);  // payload_size
             writer_runtime_args.push_back(1);                // is_primary (all workers in non-split mode)
+        }
+
+        // add shared expert IDs to reader args
+        // Output tensor is uint16_t, pack expert IDs as uint16_t values into uint32_t
+        // Ordering is preserved: expert_ids[i] -> lower 16 bits, expert_ids[i+1] -> upper 16 bits
+        if (shared_expert_ids.has_value()) {
+            const auto& expert_ids = *shared_expert_ids;
+            // Transform pairs into packed uint32_t values
+            auto packed_values = std::views::iota(size_t{0}, expert_ids.size()) |
+                                 std::views::filter([](size_t i) { return i % 2 == 0; }) |
+                                 std::views::transform([&expert_ids](size_t i) {
+                                     uint16_t low = static_cast<uint16_t>(expert_ids[i]);
+                                     uint16_t high =
+                                         (i + 1 < expert_ids.size()) ? static_cast<uint16_t>(expert_ids[i + 1]) : 0;
+
+                                     return (static_cast<uint32_t>(high) << 16) | static_cast<uint32_t>(low);
+                                 });
+
+            std::ranges::copy(packed_values, std::back_inserter(reader_runtime_args));
+        } else {
+            // avoid OoB rt arg
+            reader_runtime_args.push_back(0);
         }
 
         if (use_mux) {

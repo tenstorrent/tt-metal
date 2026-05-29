@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,7 @@
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
+#include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
 
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "tt-metalium/work_split.hpp"
@@ -47,6 +48,8 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         /*transpose_b=*/false,
         /*bias_single_tile_size=*/0,
         matmul_attributes);
+    operations::matmul::normalize_program_config(
+        chosen_program_config, tensor_args.input_tensors.at(0).device()->compute_with_storage_grid_size());
 
     const auto& a = tensor_args.input_tensors.at(0);
     const auto& b = tensor_args.input_tensors.at(1);
@@ -54,7 +57,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     const auto& output_tensor = tensor_return_value.at(0);
     auto program_config =
         std::get<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(chosen_program_config);
-    auto compute_with_storage_grid_size = program_config.compute_with_storage_grid_size;
+    auto compute_with_storage_grid_size = program_config.allowed_worker_cores.value().bounding_box().grid_size();
     auto in0_block_w = program_config.in0_block_w;
     auto out_subblock_h = program_config.out_subblock_h;
     auto out_subblock_w = program_config.out_subblock_w;
@@ -141,7 +144,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     // Only support mcast_in0 for now
     TT_FATAL(mcast_in0, "Only mcast_in0 is supported for sparse matmul");
 
-    using tt::tt_metal::num_cores_to_corerangeset;
+    using tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids;
 
     uint32_t num_blocks = Kt / in0_block_w;
     // Only enable packer l1 accumulation when there are spills, otherwise
@@ -184,6 +187,15 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
 
     CoreCoord start_core = {0, 0};
 
+    // The matmul region is the rectangle of size `compute_with_storage_grid_size`
+    // anchored at `start_core`. The sparse 1D matmul path does not yet anchor at a sub-device
+    // start, but keeping the rectangle expression here keeps the API uniform with the dense 1D
+    // path and is safe (matmul_core_rect == full compute grid when start_core == (0, 0)).
+    CoreRangeSet matmul_core_rect(CoreRange(
+        start_core,
+        CoreCoord(
+            start_core.x + compute_with_storage_grid_size.x - 1, start_core.y + compute_with_storage_grid_size.y - 1)));
+
     uint32_t num_cores_with_work = num_blocks_total;
 
     uint32_t in0_sender_num_cores = 1;
@@ -191,13 +203,13 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
 
     constexpr bool row_major = true;
     CoreRangeSet all_cores =
-        num_cores_to_corerangeset(start_core, num_cores, compute_with_storage_grid_size, row_major);
+        num_cores_to_corerangeset_in_subcoregrids(start_core, num_cores, matmul_core_rect, row_major);
 
     CoreRangeSet in0_mcast_sender_cores =
-        num_cores_to_corerangeset(in0_sender_num_cores, compute_with_storage_grid_size, row_major);
+        num_cores_to_corerangeset_in_subcoregrids(start_core, in0_sender_num_cores, matmul_core_rect, row_major);
 
     CoreRangeSet all_cores_with_work =
-        num_cores_to_corerangeset(num_cores_with_work, compute_with_storage_grid_size, row_major);
+        num_cores_to_corerangeset_in_subcoregrids(start_core, num_cores_with_work, matmul_core_rect, row_major);
     CoreRange in0_mcast_receiver_cores_bounding_box = all_cores_with_work.bounding_box();
     uint32_t in0_mcast_receiver_num_cores = in0_mcast_receiver_cores_bounding_box.size();  // always mcast to full grid
 
@@ -223,11 +235,12 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
 
     in0_mcast_cores_with_work_and_in_receiver_grid = CoreRangeSet({CoreRange(start_core, start_core)});
     if (in0_mcast_receiver_num_cores > 1) {
-        auto receiver_start_core = start_core.x != (compute_with_storage_grid_size.x - 1)
-                                       ? CoreCoord{start_core.x + 1, start_core.y}
-                                       : CoreCoord{start_core.x, start_core.y + 1};
+        // Check against the actual rectangle width (instead of bare grid_size.x-1) so that
+        // sub-devices anchored away from (0, 0) would wrap correctly.
+        auto receiver_start_core = compute_with_storage_grid_size.x > 1 ? CoreCoord{start_core.x + 1, start_core.y}
+                                                                        : CoreCoord{start_core.x, start_core.y + 1};
         in0_mcast_receivers =
-            num_cores_to_corerangeset(receiver_start_core, num_cores - 1, compute_with_storage_grid_size, row_major);
+            num_cores_to_corerangeset_in_subcoregrids(receiver_start_core, num_cores - 1, matmul_core_rect, row_major);
     }
 
     // Mcast args
@@ -289,6 +302,8 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         // batch args
         (std::uint32_t)Mt * Kt,  // MtKt
         (std::uint32_t)batchA,   // batchA
+        (std::uint32_t)batchA,   // batchA
+        (std::uint32_t)false,    // reuse_in0_in_CB
         // sparsity args
         (std::uint32_t)batchB,                                  // batchB
         (std::uint32_t)sparsity.buffer()->aligned_page_size(),  // sparsity_pagesize
@@ -384,7 +399,11 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
 
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
         device->arch(), num_cores, mm_kernel_defines);
-    ttnn::operations::compute_throttle_utils::throttle_mm_perf(device->arch(), num_cores, mm_kernel_defines);
+    ttnn::operations::compute_throttle_utils::throttle_mm_perf(
+        device->arch(),
+        num_cores,
+        mm_kernel_defines,
+        ttnn::get_throttle_level(operation_attributes.compute_kernel_config));
 
     mm_kernel_in1_sender_writer_defines["SKIP_MCAST"] = "1";
 
@@ -521,6 +540,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
+            .dst_full_sync_en = dst_full_sync_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_kernel_args,
             .defines = mm_kernel_defines,

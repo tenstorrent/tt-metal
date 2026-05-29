@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,6 +7,7 @@
 #include <optional>
 #include <utility>
 
+#include "ttnn/core.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/ring_attention_all_gather_async_device_operation_types.hpp"
@@ -90,6 +91,10 @@ struct RingJointSDPAInputs {
     Tensor joint_v;
     Tensor gathered_k;
     Tensor gathered_v;
+
+    // Chunked-prefill is signalled implicitly by Q being shorter than the per-device K shard:
+    // Q is the latest slab, K is the populated prefix from chunk 0 through the current chunk.
+    bool is_chunked() const { return input_q.logical_shape()[2] < input_k.logical_shape()[2]; }
 };
 
 // Index constants for RingJointSDPAResult vector

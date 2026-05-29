@@ -1,29 +1,23 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 #include "llk_unpack_tilize.h"
-#include "llk_unpack_AB.h"
 #include "llk_unpack_common_api.h"
 
 /*************************************************************************
  * LLK UNPACK TILIZE
  *************************************************************************/
 
-inline void llk_unpack_tilize_mop_config(const std::uint32_t operand) {
-    std::uint32_t operand_id = get_operand_id(operand);
-    const bool narrow_tile = get_operand_narrow_tile(operand_id);
-    _llk_unpack_tilize_mop_config_(narrow_tile);
-}
-
 inline void llk_unpack_tilize_init(const std::uint32_t operand, const std::uint32_t ct_dim) {
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
     const bool narrow_tile = get_operand_narrow_tile(operand_id);
+    const std::uint32_t num_faces = get_operand_num_faces(operand_id);
 
     _llk_unpack_tilize_init_(
-        unpack_src_format[operand_id], unpack_dst_format[operand_id], ct_dim, face_r_dim, narrow_tile);
+        unpack_src_format[operand_id], unpack_dst_format[operand_id], ct_dim, face_r_dim, narrow_tile, num_faces);
 }
 
 inline void llk_unpack_tilize_uninit(const std::uint32_t operand, const std::uint32_t face_r_dim = FACE_R_DIM) {
@@ -73,8 +67,8 @@ template <
     std::uint32_t reload_srcB = false,
     bool zero_srcA = false,
     bool zero_srcA_reduce = false>
-inline void llk_unpack_tilizeA_B_mop_config(const bool narrow_tile = false, const std::uint32_t num_faces = 4) {
-    _llk_unpack_tilizeA_B_mop_config_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(narrow_tile, num_faces);
+inline void llk_unpack_tilizeA_B_mop_config(const std::uint32_t num_faces = 4) {
+    _llk_unpack_tilizeA_B_mop_config_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(num_faces);
 }
 
 template <
@@ -94,17 +88,15 @@ inline void llk_unpack_tilizeA_B_init(
     // const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
     const bool narrow_tile = get_operand_narrow_tile(operandA_id);
 
-    LLK_ASSERT(
-        (are_unpacker_AB_configured_correctly<UnpackerProgramType::ProgramByFace>(
-            unpack_src_format[operandA_id],
-            unpack_dst_format[operandA_id],
-            unpack_src_format[get_operand_id(operandB)],
-            unpack_dst_format[get_operand_id(operandB)],
-            unpA_face_r_dim,
-            unpB_face_r_dim,
-            num_faces,
-            get_operand_num_faces(get_operand_id(operandB)))),
-        "");
+    LLK_ASSERT_BLOCK(are_unpackers_AB_configured_correctly<UnpackerProgramType::ProgramByFace>(
+        unpack_src_format[operandA_id],
+        unpack_dst_format[operandA_id],
+        unpack_src_format[get_operand_id(operandB)],
+        unpack_dst_format[get_operand_id(operandB)],
+        unpA_face_r_dim,
+        unpB_face_r_dim,
+        num_faces,
+        get_operand_num_faces(get_operand_id(operandB))));
 
     _llk_unpack_tilizeA_B_init_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(
         unpack_src_format[operandA_id],
@@ -139,17 +131,15 @@ inline void llk_unpack_tilizeA_B(
     std::uint32_t offset_address_b = tile_index_b * get_local_cb_interface(operandB_id).fifo_page_size;
     std::uint32_t address_b = base_address_b + offset_address_b;
 
-    LLK_ASSERT(
-        (are_unpacker_AB_configured_correctly<UnpackerProgramType::ProgramByFace>(
-            unpack_src_format[operandA_id],
-            unpack_dst_format[operandA_id],
-            unpack_src_format[operandB_id],
-            unpack_dst_format[operandB_id],
-            face_r_dim,
-            get_operand_face_r_dim(operandB_id),
-            num_faces,
-            get_operand_num_faces(operandB_id))),
-        "");
+    LLK_ASSERT_BLOCK(are_unpackers_AB_configured_correctly<UnpackerProgramType::ProgramByFace>(
+        unpack_src_format[operandA_id],
+        unpack_dst_format[operandA_id],
+        unpack_src_format[operandB_id],
+        unpack_dst_format[operandB_id],
+        face_r_dim,
+        get_operand_face_r_dim(operandB_id),
+        num_faces,
+        get_operand_num_faces(operandB_id)));
 
     WAYPOINT("UPTW");
     _llk_unpack_tilizeA_B_<zero_srcA>(
@@ -159,10 +149,8 @@ inline void llk_unpack_tilizeA_B(
         base_address_a,
         address_b,
         tile_index_a,
-        tile_index_b,
         block_ct_dim,
-        num_faces
-    );
+        num_faces);
     WAYPOINT("UPTD");
 }
 

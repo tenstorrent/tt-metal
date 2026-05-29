@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -9,16 +9,16 @@ Tests that a fused kernel (produced by Sequential) can push data through
 a GlobalCircularBuffer to receiver cores running a separate consumer kernel.
 
 Architecture:
-    Sender core:  Sequential(identity_op, globalcb_sender_op).build()
+    Sender core:  Sequential(identity_op, globalcb_sender_op)
     Receiver core: consumer op (waits on GlobalCB, writes to DRAM)
-    Both run in a single program via fused.launch()
+    Both run in one program via Parallel(sender_chain, consumer).run()
 """
 
 import pytest
 import torch
 import ttnn
 
-from models.common.utility_functions import comp_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from models.experimental.ops.descriptors.op_descriptor import OpDescriptor
 from models.experimental.ops.descriptors.fusion import Sequential, Parallel
 
@@ -99,16 +99,16 @@ void kernel_main() {
 # Writer (riscv_1): Push tiles from local CB to remote CB via GlobalCB
 GLOBALCB_SENDER_WRITER_SOURCE = """\
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 #include "api/remote_circular_buffer.h"
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
     constexpr uint32_t local_cb_id = get_named_compile_time_arg_val("cb_out");
     constexpr uint32_t remote_cb_id = get_named_compile_time_arg_val("cb_remote");
     constexpr uint32_t page_size = get_named_compile_time_arg_val("page_size");
-    experimental::CircularBuffer local_cb{local_cb_id};
+    CircularBuffer local_cb{local_cb_id};
     experimental::RemoteCircularBuffer remote_cb{remote_cb_id};
-    experimental::Noc noc;
+    Noc noc;
     remote_cb.set_receiver_page_size(noc, page_size);
     for (uint32_t i = 0; i < num_tiles; i++) {
         local_cb.wait_front(1);
@@ -117,22 +117,23 @@ void kernel_main() {
         local_cb.pop_front(1);
     }
     remote_cb.commit();
+    noc_async_atomic_barrier();
 }
 """
 
 # Reader (riscv_0): Wait on GlobalCB, align local CB, push for writer
 GLOBALCB_RECEIVER_READER_SOURCE = """\
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 #include "api/remote_circular_buffer.h"
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
     constexpr uint32_t remote_cb_id = get_named_compile_time_arg_val("cb_remote");
     constexpr uint32_t local_cb_id = get_named_compile_time_arg_val("cb_in");
     constexpr uint32_t page_size = get_named_compile_time_arg_val("page_size");
-    experimental::CircularBuffer local_cb{local_cb_id};
+    CircularBuffer local_cb{local_cb_id};
     experimental::RemoteCircularBuffer remote_cb{remote_cb_id};
-    experimental::Noc noc;
+    Noc noc;
     experimental::update_remote_cb_config_in_l1(remote_cb_id);
     remote_cb.set_sender_page_size(noc, page_size);
     experimental::align_local_cbs_to_remote_cb<1>(remote_cb_id, {local_cb_id});
@@ -143,6 +144,7 @@ void kernel_main() {
         remote_cb.pop_front(noc, 1);
     }
     remote_cb.commit();
+    noc_async_atomic_barrier();
 }
 """
 
@@ -461,21 +463,21 @@ class TestFusedGlobalCB:
         sender = build_direct_sender_op(tt_input, sender_range, gcb, num_tiles)
         consumer = build_globalcb_consumer_op(tt_output, receiver_range, gcb, num_tiles)
 
-        fused = Parallel(sender, consumer).build(device)
-        fused.launch()
+        Parallel(sender, consumer).run()
 
         result = ttnn.to_torch(tt_output)
-        passing, pcc = comp_pcc(torch_input, result, pcc=0.999)
-        assert passing, f"PCC mismatch: {pcc}"
+        assert_numeric_metrics(
+            torch_input, result, pcc_threshold=0.999, rtol=0.015, atol=0.015, frobenius_threshold=0.015
+        )
 
     @pytest.mark.parametrize("num_tiles", [1, 8])
     def test_fused_identity_globalcb(self, device, num_tiles):
         """Fused identity(OpA) + GlobalCB sender(OpB) → receiver consumer.
 
         Tests the full pipeline:
-        1. Sequential(identity, globalcb_sender).build() fuses two phases
+        1. Sequential(identity, globalcb_sender) fuses two phases in the sender branch
         2. Consumer on receiver cores reads from GlobalCB
-        3. Both run in one program via fused.launch()
+        3. Parallel(sender_chain, consumer).run() dispatches one fused program
         4. Verify receiver output == original input
         """
         torch.manual_seed(42)
@@ -523,13 +525,13 @@ class TestFusedGlobalCB:
         consumer = build_globalcb_consumer_op(tt_output, receiver_range, gcb, num_tiles)
 
         # Fuse sender chain + consumer into one program
-        fused = Parallel(Sequential(op_a, op_b), consumer).build(device)
-        fused.launch()
+        Parallel(Sequential(op_a, op_b), consumer).run()
 
         # Verify: receiver output should match original input
         result = ttnn.to_torch(tt_output)
-        passing, pcc = comp_pcc(torch_input, result, pcc=0.999)
-        assert passing, f"PCC mismatch: {pcc}"
+        assert_numeric_metrics(
+            torch_input, result, pcc_threshold=0.999, rtol=0.015, atol=0.015, frobenius_threshold=0.015
+        )
 
     @pytest.mark.parametrize("num_tiles", [1, 8])
     def test_fused_mid_kernel_globalcb(self, device, num_tiles):
@@ -598,15 +600,16 @@ class TestFusedGlobalCB:
         consumer = build_globalcb_consumer_op(tt_output_recv, receiver_range, gcb, num_tiles)
 
         # Fuse everything: Sequential(sender→identity) || consumer
-        fused = Parallel(Sequential(op_a, op_b), consumer).build(device)
-        fused.launch()
+        Parallel(Sequential(op_a, op_b), consumer).run()
 
         # Receiver got input_a via GlobalCB from Phase 0
         result_recv = ttnn.to_torch(tt_output_recv)
-        passing_recv, pcc_recv = comp_pcc(torch_input_a, result_recv, pcc=0.999)
-        assert passing_recv, f"Receiver PCC mismatch: {pcc_recv}"
+        assert_numeric_metrics(
+            torch_input_a, result_recv, pcc_threshold=0.999, rtol=0.015, atol=0.015, frobenius_threshold=0.015
+        )
 
         # Phase 1 identity output matches input_b
         result_b = ttnn.to_torch(tt_output_b)
-        passing_b, pcc_b = comp_pcc(torch_input_b, result_b, pcc=0.999)
-        assert passing_b, f"Phase 1 PCC mismatch: {pcc_b}"
+        assert_numeric_metrics(
+            torch_input_b, result_b, pcc_threshold=0.999, rtol=0.015, atol=0.015, frobenius_threshold=0.015
+        )

@@ -1,10 +1,15 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "squeeze_nanobind.hpp"
 
+#include <optional>
+#include <variant>
+
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/optional.h>
+#include <nanobind/stl/variant.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn-nanobind/small_vector_caster.hpp"
@@ -13,18 +18,15 @@
 namespace ttnn::operations::data_movement {
 
 namespace {
-ttnn::Tensor squeeze_wrapper(const ttnn::Tensor& input_tensor, const nb::object& dim) {
-    if (dim.is_none()) {  // None
+// nanobind variant/optional casters perform the Python -> C++ conversion at
+// the wrapper boundary (GIL held), so the body runs with the GIL released
+// (call_guard applied by bind_function).
+ttnn::Tensor squeeze_wrapper(
+    const ttnn::Tensor& input_tensor, std::optional<std::variant<int, ttnn::SmallVector<int>>> dim) {
+    if (!dim.has_value()) {  // None
         return ttnn::squeeze(input_tensor);
     }
-    if (nb::isinstance<nb::int_>(dim)) {  // int
-        return ttnn::squeeze(input_tensor, nb::cast<int>(dim));
-    }
-    if (nb::isinstance<nb::list>(dim)) {  // List[int]
-        auto dims = nb::cast<ttnn::SmallVector<int>>(dim);
-        return ttnn::squeeze(input_tensor, dims);
-    }
-    throw std::invalid_argument("dim must be an int, a list of ints, or None");
+    return std::visit([&](const auto& d) { return ttnn::squeeze(input_tensor, d); }, *dim);
 }
 }  // namespace
 
@@ -47,11 +49,10 @@ void bind_squeeze(nb::module_& mod) {
             * :attr:`input_tensor`: Input Tensor.
             * :attr:`dim`: Dim where we want to squeeze
         )doc",
-        ttnn::overload_t(
-            &squeeze_wrapper,
-            nb::arg("input_tensor"),
-            nb::arg("dim") = nb::none()  // Default value is None
-            ));
+        &squeeze_wrapper,
+        nb::arg("input_tensor"),
+        nb::arg("dim") = nb::none()  // Default value is None
+    );
 }
 
 }  // namespace ttnn::operations::data_movement

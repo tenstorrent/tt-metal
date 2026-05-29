@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,6 +11,24 @@
 #include "tt_fabric_test_common_types.hpp"  // For SenderCreditInfo
 
 namespace tt::tt_fabric::fabric_tests {
+
+using FlowUid = uint32_t;
+
+struct FlowDescriptor {
+    FabricNodeId src_node_id;
+    CoreCoord src_logical_core;
+
+    std::vector<FabricNodeId> dst_node_ids;
+    CoreCoord dst_logical_core;
+
+    uint32_t link_id = 0;
+    uint8_t vc_id = 0;
+
+    ChipSendType chip_send_type;
+    NocSendType noc_send_type;
+    uint32_t num_packets = 0;
+    uint32_t payload_size_bytes = 0;
+};
 
 struct SenderMetadataFields {
     SenderMetadataFields(uint32_t num_packets, uint32_t seed, uint32_t payload_buffer_size) :
@@ -258,6 +276,8 @@ struct TestTrafficConfig {
     std::optional<uint32_t> atomic_inc_address;
     uint32_t link_id = 0;  // Link ID for multi-link tests
     std::optional<tt::tt_metal::NOC> noc_id;
+    uint8_t vc_id = 0;  // VC selection: 0=VC0 (default), 2=VC2
+    bool use_vc2() const { return vc_id == 2; }
 
     // Credit info (copied from pattern if populated by allocator)
     std::optional<SenderCreditInfo> sender_credit_info;
@@ -293,9 +313,13 @@ struct TestTrafficSenderConfig {
     uint32_t payload_buffer_size;  // Add payload buffer size field
     uint32_t link_id = 0;          // Link ID for multi-link tests
     std::optional<tt::tt_metal::NOC> noc_id;
+    uint8_t vc_id = 0;  // VC selection: 0=VC0 (default), 2=VC2
+    bool use_vc2() const { return vc_id == 2; }
 
     // Credit flow info (when enable_flow_control is true)
     std::optional<SenderCreditInfo> sender_credit_info;
+
+    FlowUid flow_uid = 0;  // Host-only: index into TestContext::flow_descriptors_
 
     std::vector<uint32_t> get_args(bool is_sync_config = false) const;
 };
@@ -315,6 +339,8 @@ struct TestTrafficReceiverConfig {
 
     // Credit flow info (when enable_flow_control is true)
     std::optional<ReceiverCreditInfo> receiver_credit_info;
+
+    FlowUid flow_uid = 0;  // Host-only: index into TestContext::flow_descriptors_
 
     std::vector<uint32_t> get_args() const;
 };
