@@ -315,7 +315,7 @@ class ComputePipeline:
         relu_config = PackGolden.generate_relu_config(
             operation.pack_relu, operation.relu_threshold, pack_src_format
         )
-        return f"_llk_pack_relu_config_({relu_config});\n"
+        return f"_llk_pack_relu_config_(ReluConfig::from_packed({relu_config}));\n"
 
     @staticmethod
     def _pack_l1_accumulation_config(
