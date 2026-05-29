@@ -401,6 +401,59 @@ def load_lm_mlp_weights(checkpoint_path: str, layer_idx: int = 0) -> Dict[str, t
     }
 
 
+def load_lm_decoder_layer_weights(checkpoint_path: str, layer_idx: int = 0) -> Dict[str, torch.Tensor]:
+    """Load one full LM decoder layer's real weights (the LM composite block).
+
+    The dots.ocr language model is a Qwen2 trunk; each Qwen2DecoderLayer is a
+    pre-norm residual layer: ``h = h + self_attn(input_layernorm(h)); h = h +
+    mlp(post_attention_layernorm(h))``. This COMPOSES the already-verified
+    per-leaf loaders -- the two Qwen2RMSNorm gammas (input_layernorm /
+    post_attention_layernorm, eps 1e-6), the GQA self-attention (q/k/v weight +
+    bias, o weight, NO o bias) and the unbiased SwiGLU MLP (gate/up/down) -- into
+    a single flat state_dict keyed exactly as the eager reference
+    :func:`reference.functional.decoder_layer_forward` and :class:`tt.decoder_layer.TtDecoderLayer`
+    expect. HF keys (layer ``i``), hidden_size 1536, intermediate_size 8960:
+        model.layers.{i}.input_layernorm.weight            [1536]
+        model.layers.{i}.self_attn.q_proj.weight           [1536, 1536]   (+ .bias [1536])
+        model.layers.{i}.self_attn.k_proj.weight           [256, 1536]    (+ .bias [256])
+        model.layers.{i}.self_attn.v_proj.weight           [256, 1536]    (+ .bias [256])
+        model.layers.{i}.self_attn.o_proj.weight           [1536, 1536]   (no bias)
+        model.layers.{i}.post_attention_layernorm.weight   [1536]
+        model.layers.{i}.mlp.gate_proj.weight              [8960, 1536]
+        model.layers.{i}.mlp.up_proj.weight                [8960, 1536]
+        model.layers.{i}.mlp.down_proj.weight              [1536, 8960]
+
+    Returns the flat decoder-layer state_dict (fp32) with the prefixed keys the
+    reference's ``state_dict`` arg uses:
+        {"input_layernorm.weight",
+         "self_attn.q_proj.weight", "self_attn.q_proj.bias",
+         "self_attn.k_proj.weight", "self_attn.k_proj.bias",
+         "self_attn.v_proj.weight", "self_attn.v_proj.bias",
+         "self_attn.o_proj.weight",
+         "post_attention_layernorm.weight",
+         "mlp.gate_proj.weight", "mlp.up_proj.weight", "mlp.down_proj.weight"}.
+    """
+    prefix = f"model.layers.{layer_idx}"
+    input_ln = load_lm_rmsnorm_weight(checkpoint_path, f"{prefix}.input_layernorm.weight")
+    post_attn_ln = load_lm_rmsnorm_weight(checkpoint_path, f"{prefix}.post_attention_layernorm.weight")
+    attn = load_lm_attention_weights(checkpoint_path, layer_idx=layer_idx)
+    mlp = load_lm_mlp_weights(checkpoint_path, layer_idx=layer_idx)
+    return {
+        "input_layernorm.weight": input_ln,
+        "self_attn.q_proj.weight": attn["q_proj.weight"],
+        "self_attn.q_proj.bias": attn["q_proj.bias"],
+        "self_attn.k_proj.weight": attn["k_proj.weight"],
+        "self_attn.k_proj.bias": attn["k_proj.bias"],
+        "self_attn.v_proj.weight": attn["v_proj.weight"],
+        "self_attn.v_proj.bias": attn["v_proj.bias"],
+        "self_attn.o_proj.weight": attn["o_proj.weight"],
+        "post_attention_layernorm.weight": post_attn_ln,
+        "mlp.gate_proj.weight": mlp["gate_proj.weight"],
+        "mlp.up_proj.weight": mlp["up_proj.weight"],
+        "mlp.down_proj.weight": mlp["down_proj.weight"],
+    }
+
+
 def load_vision_tower_weights(checkpoint_path: str, num_layers: int) -> Dict[str, torch.Tensor]:
     """Load the full DotsVisionTransformer (vision tower) real weights.
 

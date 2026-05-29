@@ -54,6 +54,7 @@ _tt_rmsnorm_lm = _load_by_path("dots_tt_rmsnorm_rw", "rmsnorm.py", _TT_DIR)
 _tt_rope = _load_by_path("dots_tt_rope_rw", "rope.py", _TT_DIR)
 _tt_attention = _load_by_path("dots_tt_attention_rw", "attention.py", _TT_DIR)
 _tt_mlp = _load_by_path("dots_tt_mlp_rw", "mlp.py", _TT_DIR)
+_tt_decoder_layer = _load_by_path("dots_tt_decoder_layer_rw", "decoder_layer.py", _TT_DIR)
 _loader = _load_by_path("dots_weight_loader", "weight_loader.py", _TT_DIR)
 _functional = _load_by_path("dots_reference_functional_rw", "functional.py", _REF_DIR)
 
@@ -68,7 +69,9 @@ TtEmbedding = _tt_embedding.TtEmbedding
 TtRoPE = _tt_rope.TtRoPE
 TtAttention = _tt_attention.TtAttention
 TtMLP = _tt_mlp.TtMLP
+TtDecoderLayer = _tt_decoder_layer.TtDecoderLayer
 load_lm_rope_config = _loader.load_lm_rope_config
+load_lm_decoder_layer_weights = _loader.load_lm_decoder_layer_weights
 load_lm_attention_weights = _loader.load_lm_attention_weights
 load_lm_mlp_weights = _loader.load_lm_mlp_weights
 load_vision_rmsnorm_weight = _loader.load_vision_rmsnorm_weight
@@ -90,6 +93,7 @@ embedding_forward = _functional.embedding_forward
 attention_forward = _functional.attention_forward
 mlp_forward = _functional.mlp_forward
 rope_forward = _functional.rope_forward
+decoder_layer_forward = _functional.decoder_layer_forward
 
 # Vision attention config (modeling_dots_vision): 12 heads, head_dim 128,
 # fused QKV no-bias, 2D RoPE theta 1e4, block-diagonal bidirectional attention.
@@ -914,6 +918,129 @@ def test_real_hf_weights_mlp(device):
     assert params_loaded > 0
 
 
+# LM decoder layer (Qwen2DecoderLayer): the LM composite block. Pre-norm
+# residual layer composing two Qwen2RMSNorm (eps 1e-6), GQA self-attention (12
+# query / 2 KV heads, head_dim 128, QKV bias, o no bias, 1D RoPE theta 1e6,
+# causal) and an unbiased SwiGLU MLP (hidden 1536, intermediate 8960). Real
+# layer-0 weights are composed via load_lm_decoder_layer_weights; cos/sin +
+# causal mask are rebuilt at the production config exactly as the per-leaf
+# attention test / HF Qwen2RotaryEmbedding do.
+def _run_lm_decoder_layer_pcc(device):
+    """Load real layer-0 decoder-layer weights into TtDecoderLayer, run on
+    device, and compare against the HF eager reference (decoder_layer_forward)
+    computed with the SAME real weights (pre-norm residual, causal, 1D RoPE
+    theta 1e6, GQA 12/2, eps 1e-6).
+
+    Returns (pcc, params_loaded).
+    """
+    state_dict = load_lm_decoder_layer_weights(CHECKPOINT_PATH, layer_idx=0)
+    state_dict = {k: v.to(torch.float32) for k, v in state_dict.items()}
+    params_loaded = int(sum(v.numel() for v in state_dict.values()))
+
+    hidden = EMBED_DIM
+    kv_dim = LM_NUM_KV_HEADS * LM_HEAD_DIM  # 256
+    assert state_dict["input_layernorm.weight"].shape == (hidden,), tuple(state_dict["input_layernorm.weight"].shape)
+    assert state_dict["post_attention_layernorm.weight"].shape == (hidden,), tuple(
+        state_dict["post_attention_layernorm.weight"].shape
+    )
+    assert state_dict["self_attn.q_proj.weight"].shape == (hidden, hidden), tuple(
+        state_dict["self_attn.q_proj.weight"].shape
+    )
+    assert state_dict["self_attn.q_proj.bias"].shape == (hidden,), tuple(state_dict["self_attn.q_proj.bias"].shape)
+    assert state_dict["self_attn.k_proj.weight"].shape == (kv_dim, hidden), tuple(
+        state_dict["self_attn.k_proj.weight"].shape
+    )
+    assert state_dict["self_attn.k_proj.bias"].shape == (kv_dim,), tuple(state_dict["self_attn.k_proj.bias"].shape)
+    assert state_dict["self_attn.v_proj.weight"].shape == (kv_dim, hidden), tuple(
+        state_dict["self_attn.v_proj.weight"].shape
+    )
+    assert state_dict["self_attn.v_proj.bias"].shape == (kv_dim,), tuple(state_dict["self_attn.v_proj.bias"].shape)
+    assert state_dict["self_attn.o_proj.weight"].shape == (hidden, hidden), tuple(
+        state_dict["self_attn.o_proj.weight"].shape
+    )
+    assert state_dict["mlp.gate_proj.weight"].shape == (LM_INTERMEDIATE, LM_HIDDEN), tuple(
+        state_dict["mlp.gate_proj.weight"].shape
+    )
+    assert state_dict["mlp.up_proj.weight"].shape == (LM_INTERMEDIATE, LM_HIDDEN), tuple(
+        state_dict["mlp.up_proj.weight"].shape
+    )
+    assert state_dict["mlp.down_proj.weight"].shape == (LM_HIDDEN, LM_INTERMEDIATE), tuple(
+        state_dict["mlp.down_proj.weight"].shape
+    )
+
+    torch.manual_seed(0)
+    batch, seq_len = 1, 128
+    torch_input = torch.randn(batch, seq_len, hidden, dtype=torch.float32)
+
+    # Production-config 1D RoPE cos/sin (theta 1e6, head_dim 128) + causal mask,
+    # rebuilt exactly as HF Qwen2RotaryEmbedding / the eager reference do.
+    position_ids = torch.arange(seq_len, dtype=torch.int64).reshape(batch, seq_len)
+    cos, sin = rope_forward(position_ids, head_dim=LM_HEAD_DIM, rope_theta=LM_ROPE_THETA)  # [1, seq, hd]
+    causal = torch.full((seq_len, seq_len), torch.finfo(torch.float32).min, dtype=torch.float32)
+    causal = torch.triu(causal, diagonal=1)
+    attention_mask = causal[None, None, :, :]  # [1, 1, seq, seq]
+
+    # HF reference (eager Qwen2DecoderLayer) with the REAL layer-0 weights.
+    ref_output = decoder_layer_forward(
+        torch_input,
+        state_dict,
+        (cos, sin),
+        attention_mask=attention_mask,
+        num_heads=LM_NUM_HEADS,
+        num_kv_heads=LM_NUM_KV_HEADS,
+        head_dim=LM_HEAD_DIM,
+        eps=LM_RMS_NORM_EPS,
+        bias=True,
+    )
+
+    tt_layer = TtDecoderLayer(
+        device=device,
+        input_layernorm_weight=state_dict["input_layernorm.weight"],
+        q_weight=state_dict["self_attn.q_proj.weight"],
+        k_weight=state_dict["self_attn.k_proj.weight"],
+        v_weight=state_dict["self_attn.v_proj.weight"],
+        q_bias=state_dict["self_attn.q_proj.bias"],
+        k_bias=state_dict["self_attn.k_proj.bias"],
+        v_bias=state_dict["self_attn.v_proj.bias"],
+        o_weight=state_dict["self_attn.o_proj.weight"],
+        post_attention_layernorm_weight=state_dict["post_attention_layernorm.weight"],
+        gate_weight=state_dict["mlp.gate_proj.weight"],
+        up_weight=state_dict["mlp.up_proj.weight"],
+        down_weight=state_dict["mlp.down_proj.weight"],
+        cos=cos.reshape(seq_len, LM_HEAD_DIM),
+        sin=sin.reshape(seq_len, LM_HEAD_DIM),
+        attention_mask=attention_mask.reshape(seq_len, seq_len),
+        seq_len=seq_len,
+        num_heads=LM_NUM_HEADS,
+        num_kv_heads=LM_NUM_KV_HEADS,
+        head_dim=LM_HEAD_DIM,
+        eps=LM_RMS_NORM_EPS,
+    )
+    tt_input = ttnn.from_torch(
+        torch_input.reshape(seq_len, hidden),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_output = tt_layer(tt_input)
+    tt_output_torch = ttnn.to_torch(tt_output).to(torch.float32).reshape(ref_output.shape)
+
+    passing, pcc_message = comp_pcc(ref_output, tt_output_torch, 0.99)
+    print(comp_allclose(ref_output, tt_output_torch))
+    print(f"comp_pcc(decoder_layer, real weights): passing={passing}, message={pcc_message}")
+    msg = str(pcc_message)
+    pcc = float(msg.split("PCC:")[-1].strip()) if "PCC:" in msg else float(pcc_message)
+    print(f"real-weights decoder_layer PCC = {pcc} | params_loaded = {params_loaded}")
+    assert passing, f"decoder_layer real-weights PCC below 0.99: {pcc_message}"
+    return pcc, params_loaded
+
+
+def test_real_hf_weights_decoder_layer(device):
+    pcc, params_loaded = _run_lm_decoder_layer_pcc(device)
+    assert params_loaded > 0
+
+
 if __name__ == "__main__":
     dev = ttnn.open_device(device_id=0, l1_small_size=32768)
     try:
@@ -928,5 +1055,6 @@ if __name__ == "__main__":
         _run_rope_pcc(dev)
         _run_lm_attention_pcc(dev)
         _run_lm_mlp_pcc(dev)
+        _run_lm_decoder_layer_pcc(dev)
     finally:
         ttnn.close_device(dev)

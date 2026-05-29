@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-29T00:11:46Z",
-  "updated_at": "2026-05-29T04:42:31Z",
+  "updated_at": "2026-05-29T04:48:41Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -754,8 +754,15 @@
         "pcc": 0.999995591985762
       },
       "real_weights": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/weight_loader.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_real_hf_weights.py"
+        ],
+        "notes": "composed load_lm_decoder_layer_weights from leaf loaders + 2 layernorm keys; PCC 0.99998 vs HF Qwen2DecoderLayer",
+        "pcc": 0.9999758991770783,
+        "params_loaded": 46797824
       }
     },
     {
@@ -1206,6 +1213,12 @@
       "tick": 46,
       "ts": "2026-05-29T04:42:31Z",
       "action": "device[mlp]",
+      "result": "ok"
+    },
+    {
+      "tick": 47,
+      "ts": "2026-05-29T04:48:41Z",
+      "action": "device[decoder_layer]",
       "result": "ok"
     }
   ],
