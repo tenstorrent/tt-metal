@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
 import sys
 from pathlib import Path
 
@@ -6,20 +9,14 @@ import torch
 
 import ttnn
 
-# ---------------------------------------------------------------------------
-# Path Setup (matches your project structure)
-# ---------------------------------------------------------------------------
-# Add an extra .parent to reach the root 'rt_detr' folder
 rt_detr_root = Path(__file__).parent.parent.parent
 
-# Now build the paths from the true root
 repo_path = rt_detr_root / "RT-DETR" / "rtdetr_pytorch"
 sys.path.insert(0, str(repo_path))
 sys.path.insert(0, str(rt_detr_root))
 
 cfg_path = repo_path / "configs/rtdetr/rtdetr_r50vd_6x_coco.yml"
 
-# Assuming your weights folder is also at the root of 'rt_detr'
 ckpt_path = rt_detr_root / "weights/rtdetr_r50vd.pth"
 
 from src.core import YAMLConfig
@@ -28,22 +25,13 @@ from tt.weight_utils import get_encoder_parameters
 
 from models.common.utility_functions import comp_pcc
 
-# ---------------------------------------------------------------------------
-# Globals
-# ---------------------------------------------------------------------------
-# cfg_path  = repo_path / "configs/rtdetr/rtdetr_r50vd_6x_coco.yml"
-# ckpt_path = Path(__file__).parent.parent / "weights/rtdetr_r50vd.pth"
-
-pcc_threshold = 0.90  # Encoder usually maintains high fidelity
+pcc_threshold = 0.90  
 
 _device = None
 _pt_p3, _pt_p4, _pt_p5 = None, None, None
 _tt_p3, _tt_p4, _tt_p5 = None, None, None
 
 
-# ---------------------------------------------------------------------------
-# Helper Functions
-# ---------------------------------------------------------------------------
 def _to_tt_flat(tensor_nchw, device):
     """Converts PyTorch (N, C, H, W) to TTNN (N, 1, H*W, C) for the encoder."""
     n, c, h, w = tensor_nchw.shape
@@ -71,9 +59,6 @@ def _pull_and_reshape(tt_tensor, device, h, w):
     return pt_flat.squeeze(1).reshape(1, h, w, -1).permute(0, 3, 1, 2)
 
 
-# ---------------------------------------------------------------------------
-# Setup Execution (Runs once per session)
-# ---------------------------------------------------------------------------
 def _setup_encoder_pipeline():
     global _device
     global _pt_p3, _pt_p4, _pt_p5
@@ -97,7 +82,6 @@ def _setup_encoder_pipeline():
     tt_params = get_encoder_parameters(torch_model, _device)
 
     # 3. Create dummy inputs representing backbone features (ResNet50 dims)
-    # Using random normal distribution to stress-test numerical fidelity
     s3_pt = torch.randn(1, 512, 80, 80)
     s4_pt = torch.randn(1, 1024, 40, 40)
     s5_pt = torch.randn(1, 2048, 20, 20)
@@ -138,9 +122,6 @@ def force_pipeline_setup():
         _device = None
 
 
-# ---------------------------------------------------------------------------
-# Test Cases
-# ---------------------------------------------------------------------------
 def test_hybrid_encoder_p3_pcc():
     pcc, msg = comp_pcc(_pt_p3, _tt_p3, pcc_threshold)
     print(f"\nEncoder P3 (80x80) PCC: {msg}")
@@ -160,7 +141,6 @@ def test_hybrid_encoder_p5_pcc():
 
 
 if __name__ == "__main__":
-    # Allows running script directly via `python test_hybrid_encoder_pcc.py`
     _setup_encoder_pipeline()
 
     test_hybrid_encoder_p3_pcc()
