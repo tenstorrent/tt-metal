@@ -893,7 +893,8 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "div_binary"),
         std::make_tuple(1, "add_int"),
         std::make_tuple(1, "mul_int"),
-        std::make_tuple(1, "gt_int"))[](const testing::TestParamInfo<std::tuple<size_t, std::string>>& info) {
+        std::make_tuple(1, "gt_int")),
+    [](const testing::TestParamInfo<std::tuple<size_t, std::string>>& info) {
         return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles";
     });
 
