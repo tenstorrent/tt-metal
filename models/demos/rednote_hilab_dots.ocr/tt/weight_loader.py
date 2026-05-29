@@ -131,3 +131,40 @@ def load_vision_mlp_weights(checkpoint_path: str, block_idx: int = 0) -> Dict[st
         "fc2.weight": tensors[fc2_key],
         "fc3.weight": tensors[fc3_key],
     }
+
+
+def load_vision_block_weights(checkpoint_path: str, block_idx: int = 0) -> Dict[str, torch.Tensor]:
+    """Load one full vision-tower block's real weights (the first composite).
+
+    A dots vision block (modeling_dots_vision.DotsVisionBlock) is a pre-norm
+    residual layer: ``h = h + attn(norm1(h)); h = h + mlp(norm2(h))``. This
+    COMPOSES the already-verified per-leaf loaders -- the two RMSNorm gammas,
+    the fused-QKV + output-proj attention weights, and the SwiGLU fc1/fc2/fc3
+    -- into a single flat state_dict keyed exactly as the eager reference
+    :func:`reference.functional.vision_block_forward` and :class:`TtVisionBlock`
+    expect. HF keys (block ``i``, all unbiased; config.use_bias = False):
+        vision_tower.blocks.{i}.norm1.weight     [embed_dim]
+        vision_tower.blocks.{i}.attn.qkv.weight  [3*embed_dim, embed_dim]
+        vision_tower.blocks.{i}.attn.proj.weight [embed_dim, embed_dim]
+        vision_tower.blocks.{i}.norm2.weight     [embed_dim]
+        vision_tower.blocks.{i}.mlp.fc1.weight   [intermediate, embed_dim]  (gate)
+        vision_tower.blocks.{i}.mlp.fc3.weight   [intermediate, embed_dim]  (up)
+        vision_tower.blocks.{i}.mlp.fc2.weight   [embed_dim, intermediate]  (down)
+
+    Returns the flat block state_dict (fp32):
+        {"norm1.weight", "attn.qkv.weight", "attn.proj.weight", "norm2.weight",
+         "mlp.fc1.weight", "mlp.fc2.weight", "mlp.fc3.weight"}.
+    """
+    norm1 = load_vision_rmsnorm_weight(checkpoint_path, f"vision_tower.blocks.{block_idx}.norm1.weight")
+    norm2 = load_vision_rmsnorm_weight(checkpoint_path, f"vision_tower.blocks.{block_idx}.norm2.weight")
+    attn = load_vision_attention_weights(checkpoint_path, block_idx=block_idx)
+    mlp = load_vision_mlp_weights(checkpoint_path, block_idx=block_idx)
+    return {
+        "norm1.weight": norm1,
+        "attn.qkv.weight": attn["qkv.weight"],
+        "attn.proj.weight": attn["proj.weight"],
+        "norm2.weight": norm2,
+        "mlp.fc1.weight": mlp["fc1.weight"],
+        "mlp.fc2.weight": mlp["fc2.weight"],
+        "mlp.fc3.weight": mlp["fc3.weight"],
+    }

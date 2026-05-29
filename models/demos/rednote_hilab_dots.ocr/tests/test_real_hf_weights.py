@@ -46,18 +46,22 @@ def _load_by_path(name, filename, directory):
 _tt_rmsnorm = _load_by_path("dots_tt_vision_rmsnorm_rw", "vision_rmsnorm.py", _TT_DIR)
 _tt_vision_attention = _load_by_path("dots_tt_vision_attention_rw", "vision_attention.py", _TT_DIR)
 _tt_vision_mlp = _load_by_path("dots_tt_vision_mlp_rw", "vision_mlp.py", _TT_DIR)
+_tt_vision_block = _load_by_path("dots_tt_vision_block_rw", "vision_block.py", _TT_DIR)
 _loader = _load_by_path("dots_weight_loader", "weight_loader.py", _TT_DIR)
 _functional = _load_by_path("dots_reference_functional_rw", "functional.py", _REF_DIR)
 
 TtVisionRMSNorm = _tt_rmsnorm.TtVisionRMSNorm
 TtVisionAttention = _tt_vision_attention.TtVisionAttention
 TtVisionMLP = _tt_vision_mlp.TtVisionMLP
+TtVisionBlock = _tt_vision_block.TtVisionBlock
 load_vision_rmsnorm_weight = _loader.load_vision_rmsnorm_weight
 load_vision_attention_weights = _loader.load_vision_attention_weights
 load_vision_mlp_weights = _loader.load_vision_mlp_weights
+load_vision_block_weights = _loader.load_vision_block_weights
 vision_rmsnorm_forward = _functional.vision_rmsnorm_forward
 vision_attention_forward = _functional.vision_attention_forward
 vision_mlp_forward = _functional.vision_mlp_forward
+vision_block_forward = _functional.vision_block_forward
 
 # Vision attention config (modeling_dots_vision): 12 heads, head_dim 128,
 # fused QKV no-bias, 2D RoPE theta 1e4, block-diagonal bidirectional attention.
@@ -240,11 +244,105 @@ def test_real_hf_weights_vision_mlp(device):
     assert params_loaded > 0
 
 
+# Vision block (DotsVisionBlock): pre-norm residual composite of the three
+# leaves. Reuse the bring-up golden's static rope freqs + cu_seqlens (same image
+# grid); only the per-block weights swap to the real block-0 checkpoint.
+VISION_BLOCK_GOLDEN_PATH = os.path.join(_REF_DIR, "golden", "vision_block.pt")
+
+
+def _run_vision_block_pcc(device):
+    """Load real block-0 weights into TtVisionBlock, run TTNN, compare to HF ref.
+
+    Composes the per-leaf real-weight loaders via load_vision_block_weights and
+    validates the full pre-norm residual layer end to end.
+
+    Returns (pcc, params_loaded).
+    """
+    state_dict = load_vision_block_weights(CHECKPOINT_PATH, block_idx=0)
+    state_dict = {k: v.to(torch.float32) for k, v in state_dict.items()}
+    params_loaded = int(sum(v.numel() for v in state_dict.values()))
+
+    assert state_dict["norm1.weight"].shape == (EMBED_DIM,), tuple(state_dict["norm1.weight"].shape)
+    assert state_dict["norm2.weight"].shape == (EMBED_DIM,), tuple(state_dict["norm2.weight"].shape)
+    assert state_dict["attn.qkv.weight"].shape == (3 * EMBED_DIM, EMBED_DIM), tuple(state_dict["attn.qkv.weight"].shape)
+    assert state_dict["attn.proj.weight"].shape == (EMBED_DIM, EMBED_DIM), tuple(state_dict["attn.proj.weight"].shape)
+    assert state_dict["mlp.fc1.weight"].shape == (VISION_INTERMEDIATE, EMBED_DIM), tuple(
+        state_dict["mlp.fc1.weight"].shape
+    )
+    assert state_dict["mlp.fc3.weight"].shape == (VISION_INTERMEDIATE, EMBED_DIM), tuple(
+        state_dict["mlp.fc3.weight"].shape
+    )
+    assert state_dict["mlp.fc2.weight"].shape == (EMBED_DIM, VISION_INTERMEDIATE), tuple(
+        state_dict["mlp.fc2.weight"].shape
+    )
+
+    # Static rope freqs + cu_seqlens from the bring-up golden (same image grid).
+    golden = torch.load(VISION_BLOCK_GOLDEN_PATH, map_location="cpu")
+    cu_seqlens = golden["cu_seqlens"]
+    rotary_pos_emb = golden["rotary_pos_emb"].to(torch.float32)  # [seq, head_dim//2]
+    seq_length = int(rotary_pos_emb.shape[0])
+
+    torch.manual_seed(0)
+    torch_input = torch.randn(seq_length, EMBED_DIM, dtype=torch.float32)
+
+    # HF reference (eager pre-norm residual block) with the REAL block-0 weights.
+    ref_output = vision_block_forward(
+        torch_input,
+        state_dict,
+        cu_seqlens,
+        rotary_pos_emb,
+        num_heads=VISION_NUM_HEADS,
+        eps=VISION_RMS_NORM_EPS,
+        bias=False,
+    )
+
+    tt_block = TtVisionBlock(
+        device=device,
+        norm1_weight=state_dict["norm1.weight"],
+        qkv_weight=state_dict["attn.qkv.weight"],
+        proj_weight=state_dict["attn.proj.weight"],
+        norm2_weight=state_dict["norm2.weight"],
+        fc1_weight=state_dict["mlp.fc1.weight"],
+        fc3_weight=state_dict["mlp.fc3.weight"],
+        fc2_weight=state_dict["mlp.fc2.weight"],
+        rotary_pos_emb=rotary_pos_emb,
+        cu_seqlens=cu_seqlens,
+        seq_length=seq_length,
+        num_heads=VISION_NUM_HEADS,
+        head_dim=VISION_HEAD_DIM,
+        eps=VISION_RMS_NORM_EPS,
+    )
+    tt_input = ttnn.from_torch(
+        torch_input,
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_output = tt_block(tt_input)
+    tt_output_torch = ttnn.to_torch(tt_output).to(torch.float32).reshape(ref_output.shape)
+
+    passing, pcc_message = comp_pcc(ref_output, tt_output_torch, 0.99)
+    print(comp_allclose(ref_output, tt_output_torch))
+    print(f"comp_pcc(vision_block, real weights): passing={passing}, message={pcc_message}")
+    msg = str(pcc_message)
+    pcc = float(msg.split("PCC:")[-1].strip()) if "PCC:" in msg else float(pcc_message)
+    print(f"real-weights vision_block PCC = {pcc} | params_loaded = {params_loaded}")
+    assert passing, f"vision_block real-weights PCC below 0.99: {pcc_message}"
+    return pcc, params_loaded
+
+
+def test_real_hf_weights_vision_block(device):
+    pcc, params_loaded = _run_vision_block_pcc(device)
+    assert params_loaded > 0
+
+
 if __name__ == "__main__":
     dev = ttnn.open_device(device_id=0, l1_small_size=32768)
     try:
         _run_vision_rmsnorm_pcc(dev)
         _run_vision_attention_pcc(dev)
         _run_vision_mlp_pcc(dev)
+        _run_vision_block_pcc(dev)
     finally:
         ttnn.close_device(dev)
