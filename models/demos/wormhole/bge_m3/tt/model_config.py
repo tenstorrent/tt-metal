@@ -370,6 +370,7 @@ def determine_device_name(mesh_device):
             2: "P300",
             4: "P150x4",
             8: "P150x8",
+            32: "P150x32",  # Blackhole Galaxy
         }
     elif ttnn_is_wormhole_b0(mesh_device):
         dict_device_names = {
