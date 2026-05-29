@@ -570,6 +570,7 @@ jobs:
               python3 model_tracer/generic_ops_tracer.py \
                 tests/sweep_framework/test_model_traced_pytest.py \
                 -o "$TRACE_OUT" \
+                --include-failed \
                 -- \
                 --timeout=30 \
                 --module-name "$filtered_modules" \
