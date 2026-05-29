@@ -241,20 +241,16 @@ class MoonViTModelArgs:
     def hf_processor(self):
         if self._hf_processor is None:
             if self.is_k26:
-                raise NotImplementedError(
-                    "K2.6 processor loading is not wired up yet. The K2.6 image "
-                    "processor (kimi_k25_processor / kimi_k25_vision_processing) "
-                    "emits `image_grid_thws` (T,H,W) and can't go through "
-                    "AutoProcessor due to the repo-name `.` bug. The processor-"
-                    "based E2E tests (dropin / real_image / multimodal_prefill) "
-                    "need a separate K2.6 processor adapter. The synthetic-grid "
-                    "PCC tests do not need this."
-                )
-            from transformers import AutoProcessor
+                from models.demos.deepseek_v3.tt.moonvit._k26_loader import load_k26_image_processor
 
-            self._hf_processor = AutoProcessor.from_pretrained(
-                self.hf_model_id, trust_remote_code=self.trust_remote_code
-            )
+                snapshot_dir = getattr(self.hf_config, "_snapshot_dir", None)
+                self._hf_processor = load_k26_image_processor(snapshot_dir=snapshot_dir)
+            else:
+                from transformers import AutoProcessor
+
+                self._hf_processor = AutoProcessor.from_pretrained(
+                    self.hf_model_id, trust_remote_code=self.trust_remote_code
+                )
         return self._hf_processor
 
     @property

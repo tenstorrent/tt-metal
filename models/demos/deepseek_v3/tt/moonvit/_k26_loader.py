@@ -242,3 +242,84 @@ def load_k26_vision_reference(
     for p in projector.parameters():
         p.requires_grad_(False)
     return vision_tower, projector
+
+
+# Supporting .py files the K2.6 image processor needs at import time, in
+# addition to the modeling files staged by `_stage_modeling_package`.
+_PROCESSOR_FILES = (
+    "kimi_k25_vision_processing.py",
+    "kimi_k25_processor.py",
+    "media_utils.py",
+)
+
+
+class _K26ImageProcessorAdapter:
+    """Present K2.6's `KimiK25VisionProcessor` via the A3B image-processor API.
+
+    A3B tests call `image_processor(images=[pil, ...], return_tensors="pt")`
+    and read `pixel_values` + `image_grid_hws` (N,2) [h,w]. K2.6's processor
+    instead takes a list of MediaInput dicts and returns `grid_thws` (N,3)
+    [t,h,w]. This adapter bridges both: it wraps PIL images as
+    `{"type": "image", "image": img}` and maps `grid_thws` -> `image_grid_hws`
+    by dropping the temporal column (always 1 for a still image). The raw
+    `grid_thws` is kept too for any K2.6-native caller.
+    """
+
+    def __init__(self, vision_processor):
+        self._proc = vision_processor
+
+    def __call__(self, images, return_tensors="pt"):
+        if not isinstance(images, (list, tuple)):
+            images = [images]
+        medias = [{"type": "image", "image": img} for img in images]
+        out = self._proc.preprocess(medias, return_tensors=return_tensors)
+        grid_thws = out["grid_thws"]  # (N,3) [t,h,w]
+        return {
+            "pixel_values": out["pixel_values"],  # (L, 3, patch, patch)
+            "image_grid_hws": grid_thws[:, 1:],  # (N,2) [h,w]
+            "grid_thws": grid_thws,
+        }
+
+
+class _K26Processor:
+    """Stand-in for HF `KimiK25Processor` exposing just `.image_processor`."""
+
+    def __init__(self, image_processor):
+        self.image_processor = image_processor
+
+
+def load_k26_image_processor(
+    snapshot_dir: Optional[str] = None,
+    staging_dir: str = DEFAULT_STAGING_DIR,
+):
+    """Build the K2.6 image processor without HF's AutoProcessor.
+
+    AutoProcessor can't load K2.6 (the `.` in the repo name breaks the
+    dynamic-module importer), so we instantiate `KimiK25VisionProcessor`
+    directly from the staged package, fed the `media_proc_cfg` block out of
+    `preprocessor_config.json`.
+
+    Returns a `_K26Processor` whose `.image_processor(images=..., return_tensors=...)`
+    matches the A3B call convention the MoonViT tests use.
+    """
+    snapshot_dir = snapshot_dir or _find_snapshot_dir()
+    _stage_modeling_package(snapshot_dir, staging_dir)
+    # Stage the processor .py files (some overlap with modeling staging).
+    os.makedirs(staging_dir, exist_ok=True)
+    for fn in _PROCESSOR_FILES:
+        src = os.path.join(snapshot_dir, fn)
+        dst = os.path.join(staging_dir, fn)
+        if os.path.exists(src) and not os.path.exists(dst):
+            shutil.copy2(src, dst)
+    _ensure_pkg_on_path(staging_dir)
+
+    pkg_name = os.path.basename(staging_dir.rstrip("/"))
+    vp_mod = __import__(f"{pkg_name}.kimi_k25_vision_processing", fromlist=["*"])
+    KimiK25VisionProcessor = vp_mod.KimiK25VisionProcessor
+
+    with open(os.path.join(snapshot_dir, "preprocessor_config.json")) as f:
+        proc_cfg = json.load(f)
+    media_proc_cfg = proc_cfg["media_proc_cfg"]
+
+    vision_processor = KimiK25VisionProcessor(media_proc_cfg=media_proc_cfg)
+    return _K26Processor(image_processor=_K26ImageProcessorAdapter(vision_processor))
