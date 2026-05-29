@@ -17,7 +17,7 @@ Description:
       1. An `OperationRuntimeMap` — Inspector runtime_id → OperationInfo
          (name, parameters, trace_id). The mailbox holds the raw runtime_id
          for both fast and slow dispatch (see tt_metal/impl/program/dispatch.cpp
-         and tt_metal/tt_metal.cpp).
+         and tt_metal/impl/host_api/tt_metal.cpp).
       2. A per-`host_assigned_id` aggregation: scans every dispatcher core,
          filters DONE/idle cores (unless --include-done), looks each running
          host_assigned_id up in the runtime map, and accumulates per-op

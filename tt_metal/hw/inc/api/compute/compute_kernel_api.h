@@ -24,9 +24,9 @@
 #include "llk_math_matmul_api.h"
 #include "llk_math_unary_datacopy_api.h"
 #include "llk_math_unary_sfpu_api.h"
+#include "llk_math_binary_sfpu_api.h"
 #ifndef ARCH_QUASAR
 #include "llk_math_binary_api.h"
-#include "llk_math_binary_sfpu_api.h"
 #include "llk_math_reduce_api.h"
 #endif
 #define MATH(x) x
