@@ -49,7 +49,7 @@ class SubBcastColCustomFpu(EltwiseFpu):
         block: BlockData,
     ) -> str:
         ct_dim = block.block_tiles_x
-        return f"_llk_math_sub_bcast_cols_reuse_custom_({ct_dim});\n"
+        return f"_llk_math_sub_bcast_cols_reuse_custom_({ct_dim}, {block.tile_id_block});\n"
 
     def uninit(
         self,

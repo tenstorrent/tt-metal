@@ -60,6 +60,15 @@ inline void _llk_math_eltwise_binary_init_custom_(const std::uint32_t num_faces)
 
     eltwise_binary_configure_addrmod_custom<src_b_bcast_type>();
 
+    constexpr auto bcast               = (src_b_bcast_type == BroadcastType::COL) ? p_elwise::SRCB_BCAST_COL : p_elwise::SRCB_NO_BCAST;
+    const std::uint32_t num_face_pairs = num_faces / 2;
+
+    ckernel_template tmp(num_face_pairs, 2, TT_OP_ELWSUB(p_setrwc::CLR_NONE, 0, bcast, ADDR_MOD_0, 0));
+    tmp.set_loop_op1(TT_OP_ELWSUB(p_setrwc::CLR_NONE, 0, bcast, ADDR_MOD_1, 0));
+    tmp.set_last_inner_loop_instr(TT_OP_ELWSUB(p_setrwc::CLR_NONE, 0, bcast, ADDR_MOD_2, 0));
+    tmp.set_last_outer_loop_instr(TT_OP_ELWSUB(p_setrwc::CLR_A, 0, bcast, ADDR_MOD_2, 0));
+    tmp.program();
+
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
@@ -69,41 +78,18 @@ inline void _llk_math_eltwise_binary_uninit_custom_()
     // No state to restore - all states are transient or default
 }
 
-// This helper is intentionally specialized even though the init surface is
-// generic. The current in-tree caller is blocked sub+bcast(col), so the
-// instruction sequence is hard-wired to ELWSUB with SrcB column broadcast and
-// SrcB reuse across ct_dim.
-inline void _llk_math_sub_bcast_cols_reuse_custom_(const std::uint32_t ct_dim = 1)
+inline void _llk_math_sub_bcast_cols_reuse_custom_(const std::uint32_t ct_dim, const std::uint32_t dst_index)
 {
-    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_AB);
-
-    for (std::uint32_t tile = 0; tile < ct_dim; tile++)
+    if (dst_index == 0)
     {
-        // F0 - F0
-        TTI_ELWSUB(p_setrwc::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_0, 0);
-        // F0 - F1, restore SrcB to the start of the broadcast tile.
-        TTI_ELWSUB(p_setrwc::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_1, 0);
-
-        // F1 - F0
-        TTI_ELWSUB(p_setrwc::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_0, 0);
-        // F1 - F2
-        TTI_ELWSUB(p_setrwc::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_2, 0);
-
-        // F2 - F2
-        TTI_ELWSUB(p_setrwc::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_0, 0);
-        // F2 - F3, restore SrcB to the third face of the broadcast tile.
-        TTI_ELWSUB(p_setrwc::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_1, 0);
-
-        // F3 - F2
-        TTI_ELWSUB(p_setrwc::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_0, 0);
-        // F3 - next tile
-        TTI_ELWSUB(p_setrwc::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_2, 0);
-
-        // Move to the next SrcA tile while keeping the broadcasted SrcB tile
-        // available for reuse on the next outer iteration.
-        TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_AB);
+        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     }
 
-    // Release the reused SrcB tile once the whole ct_dim block is consumed.
+#pragma GCC unroll 0
+    for (std::uint32_t tile = 0; tile < ct_dim; tile++)
+    {
+        ckernel_template::run();
+    }
+
     TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_AB);
 }
