@@ -1,6 +1,0 @@
-# Large raw verifier inputs/outputs (>500 KB, exceed repo's check-large-files
-# pre-commit hook). Regenerate locally per the README; the committed
-# `golden_results.txt` carries the loud-category entries the refinement
-# loop actually consumes.
-junit.xml
-test_results.json
