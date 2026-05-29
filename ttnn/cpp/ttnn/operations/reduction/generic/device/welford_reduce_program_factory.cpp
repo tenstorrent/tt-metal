@@ -252,8 +252,8 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
         });
     }
 
-    tt_metal::Buffer* input_buffer = tensor_arg.buffer();
-    tt_metal::Buffer* output_buffer = tensor_return_value.buffer();
+    const auto& input = tensor_arg.mesh_tensor();
+    const auto& output = tensor_return_value.mesh_tensor();
 
     std::map<std::string, std::string> reduce_defines =
         reduce_op_utils::get_defines(operation_attributes.math_op, operation_attributes.reduce_dim);
@@ -274,7 +274,7 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
         // mean/M2 state), so the reader must deliver tiles in strict column-major
         // order: all Ht tiles of column 0, then all Ht tiles of column 1, etc.
         std::vector<uint32_t> reader_compile_time_args = {Ht, Wt, HtWt, scaler_bits, /*use_welford=*/1};
-        TensorAccessorArgs(*input_buffer).append_to(reader_compile_time_args);
+        TensorAccessorArgs(input).append_to(reader_compile_time_args);
         reader_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
             "reader_unary_transpose_wh_universal_input_cols_partitioned.cpp";
@@ -282,7 +282,7 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     } else {
         // W-reduce: sequential reader reads tiles row by row.
         std::vector<uint32_t> reader_compile_time_args = {scaler_bits};
-        TensorAccessorArgs(*input_buffer).append_to(reader_compile_time_args);
+        TensorAccessorArgs(input).append_to(reader_compile_time_args);
         reader_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
             "reader_unary_reduce_universal_start_id.cpp";
@@ -308,7 +308,7 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
         // HW-reduce: custom writer that combines partial stats and constructs output tile.
         std::vector<uint32_t> writer_compile_time_args = {
             Wt, W, tile_width, H, static_cast<uint32_t>(operation_attributes.correction), reduce_batch_size};
-        TensorAccessorArgs(*output_buffer).append_to(writer_compile_time_args);
+        TensorAccessorArgs(output).append_to(writer_compile_time_args);
         writer_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
             "writer_welford_hw.cpp";
@@ -317,7 +317,7 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     } else {
         // W-reduce and H-reduce: generic tile writer.
         std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(output_cb_index)};
-        TensorAccessorArgs(*output_buffer).append_to(writer_compile_time_args);
+        TensorAccessorArgs(output).append_to(writer_compile_time_args);
         writer_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
         writer_desc.compile_time_args = writer_compile_time_args;
@@ -420,11 +420,10 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
             }
             uint32_t num_input_tiles_per_core = num_work_units_per_core * Wt;
             uint32_t num_output_tiles_per_core = num_work_units_per_core;
-            reader_desc.emplace_runtime_args(core, {tensor_arg.buffer(), num_input_tiles_per_core, input_tiles_offset});
+            reader_desc.emplace_runtime_args(core, {input, num_input_tiles_per_core, input_tiles_offset});
             (in_g1 ? compute_desc_g1 : *compute_desc_g2)
                 .runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{num_work_units_per_core});
-            writer_desc.emplace_runtime_args(
-                core, {tensor_return_value.buffer(), num_output_tiles_per_core, output_tiles_offset});
+            writer_desc.emplace_runtime_args(core, {output, num_output_tiles_per_core, output_tiles_offset});
             input_tiles_offset += num_input_tiles_per_core;
             output_tiles_offset += num_output_tiles_per_core;
         }
@@ -457,7 +456,7 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
             uint32_t col_start_tile_id = nc_slice_offset * HtWt;
             reader_desc.emplace_runtime_args(
                 core,
-                {tensor_arg.buffer(),
+                {input,
                  col_start_tile_id,
                  /*curr_col_in_batch=*/0u,
                  num_cols});
@@ -467,7 +466,7 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
             // Writer: runtime args are {dst_addr, NC_per_core, output_tile_start_id}.
             // NC_per_core is total NC slices; the writer uses reduce_batch_size
             // (compile-time) to determine how many to group per output.
-            writer_desc.emplace_runtime_args(core, {tensor_return_value.buffer(), nc_slices_per_core, output_offset});
+            writer_desc.emplace_runtime_args(core, {output, nc_slices_per_core, output_offset});
             nc_slice_offset += nc_slices_per_core;
             output_offset += num_outputs_per_core;
         }
@@ -489,13 +488,10 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
             }
             reader_desc.emplace_runtime_args(
                 core,
-                {tensor_arg.buffer(),
-                 (num_cols_read / Wt * HtWt) + (num_cols_read % Wt),
-                 num_cols_read % Wt,
-                 num_cols_per_core});
+                {input, (num_cols_read / Wt * HtWt) + (num_cols_read % Wt), num_cols_read % Wt, num_cols_per_core});
             (in_g1 ? compute_desc_g1 : *compute_desc_g2)
                 .runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{num_cols_per_core});
-            writer_desc.emplace_runtime_args(core, {tensor_return_value.buffer(), num_cols_per_core, num_cols_read});
+            writer_desc.emplace_runtime_args(core, {output, num_cols_per_core, num_cols_read});
             num_cols_read += num_cols_per_core;
         }
     }
