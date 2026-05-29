@@ -931,6 +931,7 @@ def _m4t_encoder_self_attn_ffn_layers(
     dram_width_sharded_weights: bool = False,
     prefill_token_rows: int = 32,
     tp: int = 1,
+    use_gather_in0: bool = False,
 ) -> list:
     """Layer parameter dicts shared by text encoder and text-to-unit encoder stacks.
 
@@ -954,13 +955,24 @@ def _m4t_encoder_self_attn_ffn_layers(
     out_proj/fc2 are row-parallel, fc1 is column-parallel (Megatron-LM convention).
     """
     if tp > 1:
-        # TP sharding is incompatible with DRAM-sharded per-device weights.
-        # Use regular TILE layout with ShardTensorToMesh.
+        # TP sharding is incompatible with the original DRAM-sharded per-device weight path
+        # (``MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig`` is gated to tp == 1).
+        # ``use_gather_in0=True`` opts into the gather_in0 variant: per-device weight slices
+        # stored DRAM-width-sharded, paired with L1-width-sharded activations and the
+        # ``MatmulMultiCoreReuseMultiCast1DProgramConfig(gather_in0=True)`` matmul kernel.
+        # The forward path on the model side must dispatch to the matching matmul wrapper
+        # (``TTSeamlessM4Tv2Encoder._linear_gather_in0``) when this flag is set.
+        if use_gather_in0:
+            tp_fused_qkv = _tp_fused_qkv_col_parallel_gather_in0
+            tp_linear = _tp_linear_pair_gather_in0
+        else:
+            tp_fused_qkv = _tp_fused_qkv_col_parallel
+            tp_linear = _tp_linear_pair
         layers = []
         for layer in encoder.layers:
             if fuse_qkv:
                 self_attn = {
-                    "qkv": _tp_fused_qkv_col_parallel(
+                    "qkv": tp_fused_qkv(
                         layer.self_attn.q_proj,
                         layer.self_attn.k_proj,
                         layer.self_attn.v_proj,
@@ -968,7 +980,7 @@ def _m4t_encoder_self_attn_ffn_layers(
                         tp=tp,
                         weight_dtype=attn_weight_dtype,
                     ),
-                    "out_proj": _tp_linear_pair(
+                    "out_proj": tp_linear(
                         layer.self_attn.out_proj,
                         device=device,
                         tp=tp,
@@ -978,28 +990,28 @@ def _m4t_encoder_self_attn_ffn_layers(
                 }
             else:
                 self_attn = {
-                    "q_proj": _tp_linear_pair(
+                    "q_proj": tp_linear(
                         layer.self_attn.q_proj,
                         device=device,
                         tp=tp,
                         parallel="col",
                         weight_dtype=attn_weight_dtype,
                     ),
-                    "k_proj": _tp_linear_pair(
+                    "k_proj": tp_linear(
                         layer.self_attn.k_proj,
                         device=device,
                         tp=tp,
                         parallel="col",
                         weight_dtype=attn_weight_dtype,
                     ),
-                    "v_proj": _tp_linear_pair(
+                    "v_proj": tp_linear(
                         layer.self_attn.v_proj,
                         device=device,
                         tp=tp,
                         parallel="col",
                         weight_dtype=attn_weight_dtype,
                     ),
-                    "out_proj": _tp_linear_pair(
+                    "out_proj": tp_linear(
                         layer.self_attn.out_proj,
                         device=device,
                         tp=tp,
@@ -1018,10 +1030,10 @@ def _m4t_encoder_self_attn_ffn_layers(
                     "bias": _ln_to_device(layer.ffn_layer_norm.bias, device=device),
                 },
                 "ffn": {
-                    "fc1": _tp_linear_pair(
+                    "fc1": tp_linear(
                         layer.ffn.fc1, device=device, tp=tp, parallel="col", weight_dtype=ffn_weight_dtype
                     ),
-                    "fc2": _tp_linear_pair(
+                    "fc2": tp_linear(
                         layer.ffn.fc2, device=device, tp=tp, parallel="row", weight_dtype=ffn_weight_dtype
                     ),
                 },
@@ -1091,6 +1103,7 @@ def create_text_encoder_parameters(
     device: ttnn.Device,
     prefill_token_rows: int = 32,
     tp: Optional[int] = None,
+    use_gather_in0: bool = False,
 ) -> dict:
     """
     Convert [`SeamlessM4Tv2Encoder`] weights to TTNN tensors on ``device``.
@@ -1099,6 +1112,9 @@ def create_text_encoder_parameters(
     When ``tp == 1``: linear weights use L1 width-sharded activations + DRAM width-sharded
     BFP8 weights for ``MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig``.
     When ``tp > 1``: TP column/row-parallel sharding via ``ShardTensorToMesh``.
+    When ``tp > 1`` AND ``use_gather_in0=True``: per-device weight slices stored
+    DRAM-width-sharded, ready for the ``gather_in0`` matmul kernel (the model-side
+    forward must dispatch to ``TTSeamlessM4Tv2Encoder._linear_gather_in0`` accordingly).
     """
     tp = _resolve_tp(device, tp)
     cfg = encoder.config
@@ -1133,9 +1149,10 @@ def create_text_encoder_parameters(
         ffn_weight_dtype=ttnn.bfloat8_b,
         attn_weight_dtype=ttnn.bfloat8_b,
         fuse_qkv=True,
-        dram_width_sharded_weights=(tp == 1),
+        dram_width_sharded_weights=(tp == 1) and not use_gather_in0,
         prefill_token_rows=prefill_token_rows,
         tp=tp,
+        use_gather_in0=use_gather_in0,
     )
 
     out = {
