@@ -35,7 +35,7 @@ namespace ckernel {
 // clang-format on
 template <DataFormat data_format>
 ALWI void mul_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-#if defined(SFPU_MUL_INT_SIGN_MAG_DEST) && defined(ARCH_QUASAR)
+#if defined(ARCH_QUASAR)
     // Int8 copy_tile + fp32_dest_acc FPU writes sign-magnitude Int32 into dest.
     // Native Int32 tiles use 2's-comp dest and keep SIGN_MAGNITUDE_FORMAT=false.
     MATH((llk_math_eltwise_binary_sfpu_mul_int<APPROX, data_format, 8 /*ITERATIONS*/, true /*SIGN_MAGNITUDE_FORMAT*/>(

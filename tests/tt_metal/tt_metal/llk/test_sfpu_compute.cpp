@@ -517,11 +517,7 @@ bool run_sfpu_binary_two_input_buffer(
     if (is_int8_op) {
         // HW interprets each Int8 datum as sign-mag on the wire (bit7=sign, bits[6:0]=mag),
         // promotes to sign-mag Int32 in dest via copy_tile + fp32_dest_acc, then SFPU int op
-<<<<<<< HEAD
         // (sign-mag on Quasar via ARCH_QUASAR) writes sign-mag Int32 to DRAM.
-=======
-        // writes sign-mag Int32 to DRAM.
->>>>>>> e7a4a69e1bc (added doc strings, helper functions for clarity)
         packed_golden = sfpu_util::compute_packed_int8_binary_golden(packed_lhs, packed_rhs, test_config.sfpu_op);
     } else {
         auto lhs = unpack_vector<bfloat16, uint32_t>(packed_lhs);
