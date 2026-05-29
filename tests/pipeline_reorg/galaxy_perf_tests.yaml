@@ -120,7 +120,7 @@
 
 # TT-Train Blackhole Galaxy model perf tests
 - name: Galaxy TinyLlama 1.1B DDP=32 train perf tests
-  cmd: python tt-train/scripts/run_models.py --filter-filenames "tinyllama_1_1b_ddp32_shakespeare"
+  cmd: python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames "tinyllama_1_1b_ddp32_shakespeare"
   model: tinyllama_1_1b_ddp32_shakespeare
   skus:
     bh_galaxy_perf:
@@ -131,7 +131,7 @@
   save-perf-data: false
 
 - name: Galaxy Llama 8B TP=8 DDP=4 train perf tests
-  cmd: python tt-train/scripts/run_models.py --filter-filenames "llama_8b_tp8_ddp4_shakespeare"
+  cmd: python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames "llama_8b_tp8_ddp4_shakespeare"
   model: llama_8b_tp8_ddp4_shakespeare
   skus:
     bh_galaxy_perf:
@@ -142,7 +142,7 @@
   save-perf-data: false
 
 - name: Galaxy Llama 8B TP=4 DDP=8 train perf tests
-  cmd: python tt-train/scripts/run_models.py --filter-filenames "llama_8b_tp4_ddp8_shakespeare"
+  cmd: python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames "llama_8b_tp4_ddp8_shakespeare"
   model: llama_8b_tp4_ddp8_shakespeare
   skus:
     bh_galaxy_perf:
