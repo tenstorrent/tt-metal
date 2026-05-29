@@ -1357,3 +1357,49 @@ iter=2 now matches iter=1 bit-for-bit at the bank-0 PCC. Alternation eliminated.
 **State.** Committed. Anchor (pristine RMW + hash diagnostic dropped from tree); workaround active.
 
 ---
+
+## Attempts 33-35 — Root-cause hunt against the deterministic MLP-PCC anchor
+
+After committing Attempt 32 (workaround as fix), pushed back: workaround papers over, not root-cause. The HW shouldn't inherently care about bank 0 vs bank 1 — there must be a kernel-level cause. Three surgical experiments to find it, all against the deterministic anchor (pristine iter=1=0.9914568554511025, iter=2=0.9916859209677518, Δ=2.29e-4).
+
+### Attempt 33 — ZEROACC the bank at `flash_mla` entry
+
+**What.** Inserted `MATH((TT_ZEROACC(p_zeroacc::CLR_HALF, 0, 0, ADDR_MOD_1, dest_offset_id % 2)));` immediately after `tile_regs_acquire()` in `flash_mla.hpp`. Hypothesis: MM2 (`sdpa_custom_mm_reuse_dest_srcb`) does `dest += a*b` without explicit clear-on-first-chunk, so iter-1 was accumulating onto bank-1 residue.
+
+**Result.** PCCs **bit-identical to pristine**: 0.9914568554511025 / 0.9916859209677518. **ZEROACC did nothing.** Bank residue is NOT the cause; the bank is already clean when MATH enters flash_mla.
+
+### Attempt 34 — MATH-side reset only at iter top
+
+**What.** Re-enabled `MATH((llk_math_pack_sync_init<false>()));` at decoder_block_kernel.cpp:3059, kept `llk_pack_dest_init` commented. This resets MATH.dest_offset_id and MATH_PACK semaphore but NOT PACK.dest_offset_id.
+
+**Result.** iter=1 PCC = 0.9914568554511025 (OK), iter=2 **FAILED**: `Device 0 (SP=0) KV Cache before and after op mismatch`. MATH-side reset alone causes a MATH/PACK desync that corrupts the KV cache write. **Not a viable surgical fix.**
+
+### Attempt 35 — PACK-side reset only at iter top
+
+**What.** Inverse of 34: only `PACK((llk_pack_dest_init<false, false>(0)));`. Resets PACK.dest_offset_id, packer ADC, DEST_OFFSET GPRs, but not MATH.
+
+**Result.** Same failure as 34: iter=1 PCC = 0.9914568554511025, iter=2 **FAILED** with identical KV cache mismatch. **Not a viable surgical fix either.**
+
+### Conclusion (root cause status)
+
+The bug is **not** bank residue (33) and **cannot** be fixed by resetting only one thread's state (34, 35). The two halves of Austin's workaround are **load-bearing together** — they coordinate the MATH+PACK `dest_offset_id` reset, and the kernel relies on this coordination for half-DEST correctness.
+
+What's NOT the cause:
+- DEST bank residue (33 rules out)
+- MATH `dest_offset_id` alone (34's success at iter=1 + iter=2 crash → it gets MATH right but desyncs)
+- PACK `dest_offset_id` alone (35 same story)
+- LLK stale state pack_reads_per_xy_plane (Attempt 27 ruled out against MLP PCC)
+
+What remains: the comment at decoder_block_kernel.cpp:3050-3055 stands. "Bank 1 produces numerically different output from bank 0 even when all known DEST-addressing registers (TRISC1.MATH_Offset, TRISC2.MATH_Offset via SDPA helpers, PACK_SEC0..3) point at the correct bank." This points to either:
+
+1. A piece of stateful hardware (CFG register, ADC counter, SFPU LREG, replay buffer, mop_cfg) that is implicitly bank-conditional and not yet identified.
+2. A piece of kernel state (e.g., the SDPA SFPU replay buffer initialization, or a SETC16 sequence in compute_sdpa_chunk) that is conditioned on `dest_offset_id == 0` and produces different output when conditioned on `== 1`.
+3. A genuine HW asymmetry on Blackhole — bank 1 of half-DEST has subtly different numerical behavior than bank 0 (e.g., timing-conditional pipeline forwarding).
+
+To distinguish (1)/(2)/(3): would need either tt-exalens state-snapshot at the moment MATH issues its first MVMUL on bank 1 (compare to the bank-0 case), or a microbenchmark that pins down exactly which op shifts numerically when run on bank 1 vs bank 0 with identical DEST contents.
+
+**Engineering decision.** Ship Austin's workaround as the deterministic fix. Open a follow-up to characterize the bank-1 asymmetry with tt-exalens or via a minimal SFPU/FPU microbenchmark.
+
+**State.** Workaround committed (this commit). Anchor parametrize kept at `position_id=511`, `num_internal_iterations ∈ {1, 2}` as the multi-chunk regression test.
+
+---

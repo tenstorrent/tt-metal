@@ -3054,11 +3054,17 @@ void kernel_main() {
         // bank. Root cause still open; iter-top re-init papers over it by forcing
         // every iter to run in bank 0.
 #if defined(COMPILE_FOR_TRISC)
-        // Workaround re-enabled for #43563. Resets MATH<->PACK sync state at
-        // iter top, forcing every iteration to start in DEST bank 0. Root
-        // cause (bank-1 producing numerically different output) is still open,
-        // but this papers it over deterministically: iter=1 and iter=2 PCCs
-        // become bit-identical at the bank-0 value. See debug_log.md.
+        // Workaround for #43563. Resets MATH<->PACK dest_offset_id and
+        // MATH_PACK semaphore at iter top, forcing every iteration to enter
+        // flash_mla with dest_offset_id == 0 (DEST bank 0). With pristine
+        // state (iter-1+ runs flash_mla on bank 1), chunk-loop compute
+        // produces numerically different output despite all addressing
+        // registers being correct. Bisection (see debug_log.md Attempts
+        // 33-35) confirmed: ZEROACC of the bank at flash_mla entry does
+        // NOT fix the alternation, and EITHER half of the workaround alone
+        // crashes the kernel (KV cache mismatch from MATH/PACK desync).
+        // The two halves are load-bearing together. Root cause of the
+        // bank-1-vs-bank-0 numerical asymmetry remains open.
         MATH((llk_math_pack_sync_init<false>()));
         PACK((llk_pack_dest_init<false, false>(0)));
 #endif
