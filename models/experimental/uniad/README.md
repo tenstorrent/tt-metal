@@ -2,10 +2,9 @@
 
 ## Prerequisite
 
-### Python Package dependencies
-    - MMCV : Use `pip install mmcv` command to install
-    - Casadi: Use `pip install casadi` command to install
-    - mmcv-full: Use `pip install mmcv-full` command to install
+UniAD relies on the standard tt-metal Python environment (`./create_venv.sh`).
+The host-side DCNv2 reference is implemented via `torchvision.ops.deform_conv2d`,
+so no additional MMCV / Casadi install is required.
 
 Note: UniAD model tests run successfully only on Python 3.10.12.
 
