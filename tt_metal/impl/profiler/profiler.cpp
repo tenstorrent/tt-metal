@@ -590,14 +590,22 @@ auto coalesceFabricEvents(
     for (auto& [program_execution_uid, markers] : timestamped_datapoints_by_op) {
         // temporary queue to store events on fabric muxes
         std::unordered_map<CoreCoord, std::queue<tracy::TTDeviceMarker>> fabric_mux_markers;
+        // Suppress repeated "missing routing fields" warnings: print once, then count silently.
+        uint64_t coalesce_warn_count = 0;
 
         for (size_t i = 0; i < markers.size(); /* manual increment */) {
             // If it is a zone, simply copy existing event as-is
             auto current_event = EMD(markers[i].data).getContents();
-            TT_FATAL(
-                EMD::isValidEventType(EMD(markers[i].data).data.raw_event.noc_xfer_type),
-                "Invalid NoC transfer type on device: {}.",
-                device_id);
+            if (!EMD::isValidEventType(EMD(markers[i].data).data.raw_event.noc_xfer_type)) {
+                log_warning(
+                    tt::LogMetal,
+                    "[profiler noc tracing] Unknown NoC transfer type {} on device {}; skipping event (likely "
+                    "from ERISC dispatch core firmware not yet known to this profiler build).",
+                    static_cast<uint32_t>(EMD(markers[i].data).data.raw_event.noc_xfer_type),
+                    device_id);
+                i++;
+                continue;
+            }
             if (std::holds_alternative<EMD::FabricNoCScatterEvent>(current_event) ||
                 std::holds_alternative<EMD::FabricNoCEvent>(current_event)) {
                 FabricEventMarkers fabric_event_markers;
@@ -629,11 +637,15 @@ auto coalesceFabricEvents(
                     !std::holds_alternative<EMD::LocalNocEvent>(EMD(markers[i + 2].data).getContents()) ||
                     std::get<EMD::LocalNocEvent>(EMD(markers[i + 2].data).getContents()).noc_xfer_type !=
                         EMD::NocEventType::WRITE_) {
-                    log_warning(
-                        tt::LogMetal,
-                        "[profiler noc tracing] Failed to coalesce fabric noc trace events in op '{}': "
-                        "missing routing fields event and/or local write.",
-                        markers[i].op_name);
+                    coalesce_warn_count++;
+                    if (coalesce_warn_count == 1) {
+                        log_warning(
+                            tt::LogMetal,
+                            "[profiler noc tracing] Failed to coalesce fabric noc trace events in op '{}': "
+                            "missing routing fields event and/or local write. "
+                            "Further occurrences suppressed; total will be reported at end of op.",
+                            markers[i].op_name);
+                    }
                     i += 1;
                     continue;
                 }
@@ -700,6 +712,14 @@ auto coalesceFabricEvents(
                 coalesced_events_by_op[program_execution_uid].push_back(markers[i]);
                 i += 1;
             }
+        }
+
+        if (coalesce_warn_count > 1) {
+            log_warning(
+                tt::LogMetal,
+                "[profiler noc tracing] {} total 'missing routing fields' events were skipped for this op "
+                "(suppressed after first warning).",
+                coalesce_warn_count);
         }
 
         // remove fabric mux events since they are now part of the coalesced fabric events
