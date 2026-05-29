@@ -90,7 +90,7 @@ sfpi_inline sfpi::vFloat _sfpu_expm1_(sfpi::vFloat a) {
         // For j == 0.0, r is already expm1(a). Avoid half-scaled
         // reconstruction as subnormals flush to zero, so
         // (0.5 * r) * 2 can lose tiny normal results.
-        v_if (j != 0.0f) {
+        v_if(j != 0.0f) {
             sfpi::vFloat jm2 = j + -2.0f;
             // Keep reconstruction half-scaled: scale is 0.5 * 2**i. Avoids
             // materialising 2**i directly near overflow boundary.
@@ -140,7 +140,7 @@ sfpi_inline sfpi::vFloat _sfpu_expm1_(sfpi::vFloat a) {
         v_endif;
         r = r * s + u;
 
-        v_if (j != 0.0f) {
+        v_if(j != 0.0f) {
             v_if(jm1 != 0.0f) {
                 t = sfpi::reinterpret<sfpi::vFloat>((i << 23) + sfpi::reinterpret<sfpi::vInt>(w));
                 y = t - w;
