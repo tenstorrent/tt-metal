@@ -212,7 +212,6 @@ set(JITAPI_FILES
     fabric/impl/kernels/tt_fabric_mux.cpp
     kernels/compute/blank.cpp
     kernels/compute/eltwise_binary.cpp
-    kernels/compute/eltwise_binary_sfpu.cpp
     kernels/compute/eltwise_sfpu.cpp
     kernels/dataflow/blank.cpp
     kernels/dataflow/reader_binary_diff_lengths.cpp

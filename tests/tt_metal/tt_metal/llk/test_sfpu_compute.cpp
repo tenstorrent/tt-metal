@@ -613,7 +613,7 @@ bool run_sfpu_binary_two_input_buffer(
         .unique_id = COMPUTE,
         .source =
 
-            "tt_metal/kernels/compute/eltwise_binary_sfpu.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_binary_sfpu.cpp",
         .num_threads = 1,
         .compiler_options = {.defines = std::move(compute_defines)},
         .dfb_bindings =
