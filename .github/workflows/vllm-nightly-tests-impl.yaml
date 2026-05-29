@@ -216,6 +216,7 @@ jobs:
               "server-timeout": 35,
               "benchmark-timeout": 10,
               "runner-label": "topology-6u",
+              "runner-label-exclude": "pipeline-perf-uf",
               "arch": "arch-wormhole_b0",
               "mesh-device": "TG",
               "tt-llama-text-ver": "llama3_70b_galaxy",
@@ -233,6 +234,7 @@ jobs:
               "server-timeout": 35,
               "benchmark-timeout": 10,
               "runner-label": "topology-6u",
+              "runner-label-exclude": "pipeline-perf-uf",
               "arch": "arch-wormhole_b0",
               "mesh-device": "TG",
               "tt-qwen3-text-ver": "qwen3_32b_galaxy",
@@ -309,6 +311,15 @@ jobs:
             matrix=$(echo "$all_tests" | jq -c "[.[] | select(.model == \"${{ inputs.model }}\")]")
           fi
 
+          # GitHub runner labels are positive-match only. The in-release label
+          # keeps affected Galaxy jobs off Unsung Fields runners tagged pipeline-perf-uf.
+          matrix=$(echo "$matrix" | jq -c 'map(. + {"runs_on": ([
+            .["runner-label"],
+            .arch,
+            "in-service",
+            (if (.["runner-label"] == "BH-QB-GE" or .["runner-label"] == "topology-6u") then "pipeline-perf" else "pipeline-functional" end)
+          ] + (if .["runner-label-exclude"] == "pipeline-perf-uf" then ["in-release"] else [] end))})')
+
           echo "matrix=$(echo "$matrix" | jq -c .)" >> $GITHUB_OUTPUT
 
   vllm-tests:
@@ -318,12 +329,8 @@ jobs:
       matrix:
         test-group: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
     name: ${{ matrix.test-group.name }}
-    runs-on:
-      - ${{ matrix.test-group.runner-label }}
-      - ${{ matrix.test-group.arch }}
-      - in-service
-      # topology-6u tag is used for WH galaxies. Currently pipeline-perf machines have mlperf access and pipeline-functional machines do not.
-      - ${{ ((matrix.test-group.runner-label == 'BH-QB-GE' || matrix.test-group.runner-label == 'topology-6u') && 'pipeline-perf') || 'pipeline-functional' }}
+    # topology-6u tag is used for WH galaxies. Currently pipeline-perf machines have mlperf access and pipeline-functional machines do not.
+    runs-on: ${{ matrix.test-group.runs_on }}
     container:
       image: ${{ inputs.docker-image }}
       env:
