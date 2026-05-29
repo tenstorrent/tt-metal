@@ -83,12 +83,7 @@ void RunTest(
         .source = kernel_path,
         .num_threads = NUM_PRODUCERS,
         .compiler_options = {.defines = {{"DFB_PRODUCER", "1"}}},
-        .dfb_bindings = {{
-            .dfb_spec_name = TILE_COUNTER_DFB,
-            .accessor_name = "tile_counter_dfb",
-            .endpoint_type = experimental::metal2_host_api::DFBEndpointType::PRODUCER,
-            .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
-        }},
+        .dfb_bindings = {experimental::metal2_host_api::ProducerOf(TILE_COUNTER_DFB, "tile_counter_dfb")},
         .compile_time_args = {{"num_entries", NUM_ENTRIES_PER_PRODUCER}},
         .config =
             experimental::metal2_host_api::KernelDMConfig{

@@ -256,14 +256,8 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
 
             "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary_2_0.cpp",
         .num_threads = num_threads,
-        .dfb_bindings = {{
-            .dfb_spec_name = L1_DFB,
-            .accessor_name = "out",
-            .endpoint_type = experimental::metal2_host_api::DFBEndpointType::PRODUCER,
-            .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
-        }},
-        .runtime_arg_schema =
-            {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
+        .dfb_bindings = {experimental::metal2_host_api::ProducerOf(L1_DFB, "out")},
+        .runtime_arg_schema = {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
         .config = reader_dm_cfg,
     };
 
@@ -273,14 +267,8 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
 
             "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary_2_0.cpp",
         .num_threads = num_threads,
-        .dfb_bindings = {{
-            .dfb_spec_name = L1_DFB,
-            .accessor_name = "in",
-            .endpoint_type = experimental::metal2_host_api::DFBEndpointType::CONSUMER,
-            .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
-        }},
-        .runtime_arg_schema =
-            {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
+        .dfb_bindings = {experimental::metal2_host_api::ConsumerOf(L1_DFB, "in")},
+        .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
         .config = writer_dm_cfg,
     };
 
@@ -452,14 +440,8 @@ bool reader_datacopy_writer(
 
             "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary_2_0.cpp",
         .num_threads = num_threads,
-        .dfb_bindings = {{
-            .dfb_spec_name = INPUT_DFB,
-            .accessor_name = "out",
-            .endpoint_type = experimental::metal2_host_api::DFBEndpointType::PRODUCER,
-            .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
-        }},
-        .runtime_arg_schema =
-            {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
+        .dfb_bindings = {experimental::metal2_host_api::ProducerOf(INPUT_DFB, "out")},
+        .runtime_arg_schema = {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
         .config = reader_dm_cfg,
     };
 
@@ -469,14 +451,8 @@ bool reader_datacopy_writer(
 
             "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary_2_0.cpp",
         .num_threads = num_threads,
-        .dfb_bindings = {{
-            .dfb_spec_name = OUTPUT_DFB,
-            .accessor_name = "in",
-            .endpoint_type = experimental::metal2_host_api::DFBEndpointType::CONSUMER,
-            .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
-        }},
-        .runtime_arg_schema =
-            {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
+        .dfb_bindings = {experimental::metal2_host_api::ConsumerOf(OUTPUT_DFB, "in")},
+        .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
         .config = writer_dm_cfg,
     };
 

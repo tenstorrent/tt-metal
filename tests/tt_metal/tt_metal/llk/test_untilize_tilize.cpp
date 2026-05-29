@@ -264,20 +264,14 @@ void run_single_core_tilize_program(
         .unique_id = READER,
         .source = reader_kernel_path,
         .num_threads = 1,
-        .dfb_bindings = {{
-            .dfb_spec_name = INPUT_DFB,
-            .accessor_name = "out",
-            .endpoint_type = experimental::metal2_host_api::DFBEndpointType::PRODUCER,
-            .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
-        }},
+        .dfb_bindings = {experimental::metal2_host_api::ProducerOf(INPUT_DFB, "out")},
         .runtime_arg_schema = reader_schema,
         .config =
             experimental::metal2_host_api::KernelDMConfig{
                 .gen1_config =
                     experimental::metal2_host_api::KernelDMConfig::Gen1Config{
                         .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
-                .gen2_config =
-                    experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
+                .gen2_config = experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
     };
 
     experimental::metal2_host_api::KernelSpec writer_spec{
@@ -286,20 +280,14 @@ void run_single_core_tilize_program(
 
             "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_2_0.cpp",
         .num_threads = 1,
-        .dfb_bindings = {{
-            .dfb_spec_name = OUTPUT_DFB,
-            .accessor_name = "in",
-            .endpoint_type = experimental::metal2_host_api::DFBEndpointType::CONSUMER,
-            .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
-        }},
+        .dfb_bindings = {experimental::metal2_host_api::ConsumerOf(OUTPUT_DFB, "in")},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
         .config =
             experimental::metal2_host_api::KernelDMConfig{
                 .gen1_config =
                     experimental::metal2_host_api::KernelDMConfig::Gen1Config{
                         .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
-                .gen2_config =
-                    experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
+                .gen2_config = experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
     };
 
     std::string compute_kernel;
@@ -787,18 +775,11 @@ static void run_quasar_tilize_untilize_test(
 
             "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary_2_0.cpp",
         .num_threads = 1,
-        .dfb_bindings = {{
-            .dfb_spec_name = INPUT_DFB,
-            .accessor_name = "out",
-            .endpoint_type = experimental::metal2_host_api::DFBEndpointType::PRODUCER,
-            .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
-        }},
-        .runtime_arg_schema =
-            {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
+        .dfb_bindings = {experimental::metal2_host_api::ProducerOf(INPUT_DFB, "out")},
+        .runtime_arg_schema = {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
         .config =
             experimental::metal2_host_api::KernelDMConfig{
-                .gen2_config =
-                    experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
+                .gen2_config = experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
     };
 
     experimental::metal2_host_api::KernelSpec writer_spec{
@@ -807,18 +788,11 @@ static void run_quasar_tilize_untilize_test(
 
             "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary_2_0.cpp",
         .num_threads = 1,
-        .dfb_bindings = {{
-            .dfb_spec_name = OUTPUT_DFB,
-            .accessor_name = "in",
-            .endpoint_type = experimental::metal2_host_api::DFBEndpointType::CONSUMER,
-            .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
-        }},
-        .runtime_arg_schema =
-            {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
+        .dfb_bindings = {experimental::metal2_host_api::ConsumerOf(OUTPUT_DFB, "in")},
+        .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
         .config =
             experimental::metal2_host_api::KernelDMConfig{
-                .gen2_config =
-                    experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
+                .gen2_config = experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
     };
 
     std::string compute_kernel;

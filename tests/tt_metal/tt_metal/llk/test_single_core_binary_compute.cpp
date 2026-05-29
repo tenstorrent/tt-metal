@@ -349,12 +349,7 @@ bool single_core_binary(
 
             "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_2_0.cpp",
         .num_threads = 1,
-        .dfb_bindings = {{
-            .dfb_spec_name = OUT_DFB,
-            .accessor_name = "in",
-            .endpoint_type = experimental::metal2_host_api::DFBEndpointType::CONSUMER,
-            .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
-        }},
+        .dfb_bindings = {experimental::metal2_host_api::ConsumerOf(OUT_DFB, "in")},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
         .config =
             experimental::metal2_host_api::KernelDMConfig{
@@ -362,8 +357,7 @@ bool single_core_binary(
                     experimental::metal2_host_api::KernelDMConfig::Gen1Config{
                         .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
                 .gen2_config =
-                    experimental::metal2_host_api::KernelDMConfig::Gen2Config{
-                        .disable_implicit_sync_for = {OUT_DFB}}},
+                    experimental::metal2_host_api::KernelDMConfig::Gen2Config{.disable_implicit_sync_for = {OUT_DFB}}},
     };
 
     experimental::metal2_host_api::KernelSpec compute_spec{
