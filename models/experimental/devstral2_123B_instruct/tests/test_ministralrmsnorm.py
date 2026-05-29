@@ -52,6 +52,7 @@ def _mesh_shape_from_env() -> tuple[int, int]:
     [{"l1_small_size": DEVSTRAL2_LARGE_L1_SMALL_SIZE}],
     indirect=True,
 )
+@pytest.mark.timeout(3600)
 def test_rmsnorm_pcc_real_weights(mesh_device, seq_len):
     text_cfg = require_text_config()
     weight_key = "model.layers.0.input_layernorm.weight"

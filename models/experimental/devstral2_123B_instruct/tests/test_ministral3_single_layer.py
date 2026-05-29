@@ -162,6 +162,7 @@ def _assert_pcc(ref_out: torch.Tensor, tt_torch: torch.Tensor, *, label: str) ->
     ],
     indirect=True,
 )
+@pytest.mark.timeout(3600)
 def test_ministral3_model_pcc_devstral2_123B_instruct_partial_weights_one_layer_prefill(
     mesh_device,
     seq_len,

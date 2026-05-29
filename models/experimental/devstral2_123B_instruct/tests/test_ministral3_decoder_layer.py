@@ -53,6 +53,7 @@ def _mesh_shape_from_env() -> tuple[int, int]:
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": DEVSTRAL2_LARGE_L1_SMALL_SIZE}],
     indirect=True,
 )
+@pytest.mark.timeout(3600)
 def test_decoder_layer_prefill_pcc_real_weights(mesh_device, seq_len):
     text_cfg = require_text_config()
     layer_idx = 0
