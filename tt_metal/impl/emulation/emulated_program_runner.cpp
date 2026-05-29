@@ -231,16 +231,18 @@ extern "C" uint8_t* __emule_resolve_noc_addr(uint64_t noc_addr) {
     auto it = __emule_core_map->find(key);
     if (it == __emule_core_map->end()) return nullptr;
 
-    // Worker L1 mmaps are 2 MB slots; DRAM core mmaps are 2 GB. If the kernel
-    // passed a NOC address whose local portion is a TRUNCATED HOST POINTER
-    // (the L1Pool model — get_write_ptr() returns a truncated uint32) the
-    // bottom 21 bits ARE the within-slot offset; the upper bits are slot
-    // base. Mask only when the offset exceeds the slot. For DRAM cores
-    // (l1_size >= 2 MB), don't mask — those offsets are legitimately large.
+    // Worker L1 mmaps are 2 MB slots; DRAM core mmaps are 2 GB. Kernels that
+    // pass NOC addresses derived from truncated host pointers (`get_write_ptr()`
+    // returns a 32-bit truncated host pointer in the L1Pool model — the upper
+    // bits encode the slot base, the lower 21 bits are within-slot) need the
+    // within-slot mask applied. For DRAM cores the slot mask shouldn't fire
+    // — DRAM mmaps are 2 GB and offsets are legitimately large — so gate the
+    // mask on the core role. We use `l1_size() <= L1_SLOT_SIZE` as the proxy
+    // for "worker slot" (1.5 MB ≤ 2 MB).
     auto* core = it->second;
-    const size_t core_l1_size = core->l1_size();
-    if (l1_offset >= core_l1_size) {
-        constexpr uint32_t L1_SLOT_MASK = (2u * 1024 * 1024) - 1;
+    constexpr uint32_t L1_SLOT_SIZE = 2u * 1024 * 1024;
+    constexpr uint32_t L1_SLOT_MASK = L1_SLOT_SIZE - 1;
+    if (core->l1_size() <= L1_SLOT_SIZE) {
         l1_offset &= L1_SLOT_MASK;
     }
     return core->l1_ptr(static_cast<uint32_t>(l1_offset));
@@ -957,6 +959,16 @@ static std::string get_extra_include_flags() {
     // header is host-only API surface; emule doesn't simulate fabric routing
     // but the kernel parse must succeed.
     extra_inc += " -I\"" + project_src + "/tt_metal/api\"";
+    // SDPA + paged-attention kernels do `#include "cpp/ttnn/..."`; project_src
+    // already gives `ttnn/cpp/...`, but the SDPA chain uses the bare-cpp form.
+    extra_inc += " -I\"" + project_src + "/ttnn\"";
+    // SFPU LLK headers (ckernel_sfpu_softplus.h etc) live in arch-specific
+    // tree; pulled in by api/compute/eltwise_unary/softplus.h via the
+    // arch-specific llk_sfpu directory.
+    extra_inc += " -I\"" + project_src + "/tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu\"";
+    // SFPU primitive headers (ckernel_sfpu_converter.h etc) live one level
+    // deeper in tt-llk.
+    extra_inc += " -I\"" + project_src + "/tt_metal/tt-llk/tt_llk_wormhole_b0/common/inc\"";
     return extra_inc;
 #else
     return {};
