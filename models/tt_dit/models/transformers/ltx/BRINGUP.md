@@ -10,6 +10,9 @@ Engineering history for the LTX-2.3 TT-DiT port. For user-facing run instruction
 | Host-side per-head gate (fp32 logits) | Exact gate logits; tiny matmul negligible vs SDPA | On-device gate Linear in bf16 (compounds over 48L×N steps) |
 | Manual elementwise split RoPE | No fused split-rope kernel in TTNN | Fused split rope kernel |
 | HiFi4 for attention matmuls | Removes TF32 truncation; no PCC regression vs HiFi2 | HiFi2 |
+| SDPA + attention MM to Wan parity (HiFi2), **except** A↔V cross-attn SDPA stays HiFi4 via `high_fidelity_sdpa=True` | Wan throughput everywhere; keep HiFi4 only where it mattered — the ~5% per-block error was localized to A↔V cross-attn (`audio_to_video_attn`/`video_to_audio_attn`) long video/audio K/V. Self-attn, text cross-attn, and all MM run HiFi2 | (a) all-HiFi4 everywhere (slower); (b) all-HiFi2 incl. A↔V (re-introduces the regression) |
+| `proj_out`/`audio_proj_out` HiFi4 `packer_l1_acc=True` | Match WanTransformer hifi4 config (was `False`, inherited from norm) | `packer_l1_acc=False` |
+| RoPE stays a separate `rotary_embedding_llama` op (not folded into RMSNorm) | LTX RoPE is **per-head** `[1, H, seq, head_dim]` (freqs span full inner_dim, sliced head-wise); fused norm kernel asserts head-uniform `[1, 1, seq, head_dim]`. Interleaved-vs-split is irrelevant — per-head is the blocker. Head-split fusion into norm IS used. | Fold RoPE into `wan_fused_rmsnorm_post_allgather` like Wan (fails `TT_FATAL` on per-head rope) |
 | Reference `encode_prompts` (CPU Gemma) | Produces video (4096-dim) and audio (2048-dim) context correctly; TTNN Gemma explodes after layer 1 | On-device Gemma encoding |
 | Combined MP4 via `ltx_pipelines.utils.media_io.encode_video` | Official mux of video + audio | Separate video/audio files |
 | Cross PE: temporal-only dim=2048, separate Q/K rope | Reference uses `positions[:, 0:1, :]`; Q SP-sharded, K full-seq | Single shared rope for cross-attn |
@@ -85,6 +88,42 @@ Gate values (checkpoint `ltx-2.3-22b-dev`): attn1 range [0.04, 1.98], attn2 [0.0
 
 Largest delta contributors per block: self-attention (~0.28 video, ~0.33 audio) and feedforward (~0.23 video, ~6.59 audio). A↔V cross-attention delta is negligible (~0.001 video). Audio FF delta is larger because audio std grows ~4× through the block. Error is accumulated bf16 SDPA/matmul precision, not input quantization.
 
+## CCL Fusion (TP all-gather → matmul)
+
+On Ring topology, `ColParallelLinear` can fold the TP all-gather of its input into the
+matmul via `all_gather_minimal_matmul_async` (input sharded on contraction dim K is
+gathered across the TP axis during the matmul). On Linear topology that op is unavailable,
+so an explicit AG + plain matmul is used. WanAttention/transformer already do this; the LTX
+port was carrying redundant standalone all-gathers and has been brought in line:
+
+| Site | Before | After (Ring) |
+|------|--------|--------------|
+| `attn._to_out_fused_addcmul` | explicit AG + `dit_minimal_matmul_addcmul_fused` | `all_gather_minimal_matmul_async` (AG + matmul + bias + addcmul fused) |
+| transformer FFN (video-only, AV video, AV audio) | unconditional AG + `forward_fused_addcmul` (no `parallel_config`) | `forward_fused_addcmul(parallel_config=...)` — AG folds into `ff1` |
+| A↔V cross-attn KV (`audio_kv_a2v`, `video_kv_v2a`) | explicit TP AG in transformer before cross-attn | AG folds into cross-attn `to_kv` (`kv_parallel_config` on Ring); padding mask still applied before `to_kv` |
+
+Linear topology and TP=1 behavior are unchanged (explicit AG / plain matmul fallbacks).
+
+### `proj_out` stays explicit-AG (matches Wan) — deliberately *not* fused
+
+`proj_out`/`audio_proj_out` are replicated `Linear` (full weight on every TP device),
+preceded by an explicit `dim=3` TP all-gather. This matches Wan's `transformer_wan.py`
+final projection and the pipeline's `device_to_host(tp_already_gathered=True)` contract
+(output is replicated-by-identical-compute across TP).
+
+An AG-fused variant (call `all_gather_minimal_matmul_async` with the replicated weight →
+output stays replicated) was prototyped and **reverted**. It is *correct* — the op computes
+`K = K_local·ring_size` and only requires `K == weight_K`, which holds for a replicated
+weight — but:
+- it is a once-per-step cold path (not the 48-block hot loop), so ROI is negligible;
+- it keeps the **redundant full-`[M,4096]@[4096,128]` matmul on every TP device** (TP× the
+  FLOPs), same as the explicit-AG path — fusing only overlaps the gather, not the compute.
+
+The compute-optimal fix is **RowParallel** `proj_out` (weight sharded on K): no input gather
+and 1/TP the matmul FLOPs, then a cheap reduce of the 128-wide output. That changes output
+sharding (N-fractured, needs the `device_to_host`/`tp_already_gathered` contract updated) and
+is tracked under Performance below.
+
 ## Open Work
 
 ### Correctness
@@ -102,6 +141,7 @@ Largest delta contributors per block: self-attention (~0.28 video, ~0.33 audio) 
 6. Conv3D blocking sweep for LTX VAE (128ch latent)
 7. On-device Gemma encoding
 8. Caption projection on device (19B distilled)
+9. RowParallel `proj_out`/`audio_proj_out` (eliminate input AG + redundant full matmul; needs `device_to_host` contract update)
 
 See [`HOST_OPS.md`](HOST_OPS.md) for operations that must move on-device to unlock the above.
 

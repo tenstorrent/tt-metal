@@ -64,6 +64,7 @@ class LTXAttention(Module):
         query_input_dim: int | None = None,
         output_dim: int | None = None,
         apply_gated_attention: bool = False,
+        high_fidelity_sdpa: bool = False,
     ) -> None:
         super().__init__()
 
@@ -166,19 +167,25 @@ class LTXAttention(Module):
             exp_approx_mode=False,
         )
 
-        # SDPA at HiFi4 (was HiFi2). HiFi2 on long video K/V with concentrated late-block
-        # cross-attn weights compounds into ~5% per-block error in A↔V cross-attn (a2v_out,
-        # v2a_out) that doesn't show in single-step pre_av/post_av but pollutes the video
-        # residual stream by block ~30 and degrades v2a_kv (modulated video) at late blocks
-        # (44+ → 0.92). Bumping to HiFi4 (matches mm and rope kernel configs) trades ~20%
-        # SDPA throughput for stable AV cross-attn quality across 48 blocks × 8 steps.
-        self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
+        # SDPA defaults to Wan parity (HiFi2, no fp32 dest acc) for throughput. The A↔V
+        # cross-attn instances pass high_fidelity_sdpa=True: HiFi2 on their long video/audio
+        # K/V compounds ~5% per-block error (a2v_out/v2a_out), polluting the video residual by
+        # block ~30 and degrading v2a_kv at late blocks (44+ → 0.92). HiFi4 there fixes it.
+        if high_fidelity_sdpa:
+            self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+                self.mesh_device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
+        else:
+            self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+                self.mesh_device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+            )
 
         self.rope_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
@@ -193,8 +200,8 @@ class LTXAttention(Module):
 
         self.mm_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
@@ -276,8 +283,13 @@ class LTXAttention(Module):
         addcmul_residual: ttnn.Tensor,
         addcmul_gate: ttnn.Tensor,
         compute_kernel_config=None,
+        parallel_config: DiTParallelConfig | None = None,
     ) -> ttnn.Tensor:
-        """Fused to_out projection + addcmul: output = residual + (matmul(x, W) + bias) * gate."""
+        """Fused to_out projection + addcmul: output = residual + (matmul(x, W) + bias) * gate.
+
+        On Ring topology (parallel_config set, TP>1) the TP all-gather of x is fused into
+        the matmul; on Linear topology pass parallel_config=None (forward() pre-gathers x).
+        """
         to_out = self.to_out
 
         if to_out.fsdp_mesh_axis is not None and to_out.mesh_device.shape[to_out.fsdp_mesh_axis] > 1:
@@ -289,20 +301,52 @@ class LTXAttention(Module):
         else:
             weight = to_out.weight.data
 
-        M, K, N_out = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
-        core_grid = self.mesh_device.compute_with_storage_grid_size()
-        matmul_config = get_matmul_config(M, K, N_out, core_grid)
+        if parallel_config is not None and parallel_config.tensor_parallel.factor > 1:
+            M, K, N_out = x.padded_shape[-2], weight.padded_shape[-2], weight.padded_shape[-1]
+            full_grid = self.mesh_device.compute_with_storage_grid_size()
+            core_grid = ttnn.CoreCoord(full_grid.x, full_grid.y - 1)
+            matmul_config = get_matmul_config(M, K, N_out, core_grid)
 
-        output = ttnn.experimental.dit_minimal_matmul_addcmul_fused(
-            x,
-            weight,
-            1.0,
-            addcmul_residual,
-            addcmul_gate,
-            bias_tensor=to_out.bias.data if to_out.bias is not None else None,
-            config=matmul_config,
-            compute_kernel_config=compute_kernel_config or to_out.compute_config,
-        )
+            ag_persistent_buffer = self.ccl_manager.get_ag_ping_pong_buffer(
+                x.shape, 3, parallel_config.tensor_parallel.mesh_axis, dtype=x.get_dtype()
+            )
+            ag_global_semaphores = self.ccl_manager.get_ag_ping_pong_semaphore(
+                parallel_config.tensor_parallel.mesh_axis
+            )
+            output = ttnn.experimental.all_gather_minimal_matmul_async(
+                input_tensor=x,
+                weight_tensor=weight,
+                bias_tensor=to_out.bias.data if to_out.bias is not None else None,
+                config=matmul_config,
+                compute_kernel_config=compute_kernel_config or to_out.compute_config,
+                persistent_output_buffer=ag_persistent_buffer,
+                multi_device_global_semaphore=ag_global_semaphores,
+                num_links=self.ccl_manager.num_links,
+                topology=self.ccl_manager.topology,
+                cluster_axis=parallel_config.tensor_parallel.mesh_axis,
+                barrier_semaphore=None,
+                force_transpose=True,
+                num_workers_per_link=full_grid.x // self.ccl_manager.num_links,
+                num_buffers_per_channel=48 if not is_blackhole() else 24,
+                scalar=1.0,
+                addcmul_input_tensor1=addcmul_residual,
+                addcmul_input_tensor2=addcmul_gate,
+            )[0]
+        else:
+            M, K, N_out = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
+            core_grid = self.mesh_device.compute_with_storage_grid_size()
+            matmul_config = get_matmul_config(M, K, N_out, core_grid)
+
+            output = ttnn.experimental.dit_minimal_matmul_addcmul_fused(
+                x,
+                weight,
+                1.0,
+                addcmul_residual,
+                addcmul_gate,
+                bias_tensor=to_out.bias.data if to_out.bias is not None else None,
+                config=matmul_config,
+                compute_kernel_config=compute_kernel_config or to_out.compute_config,
+            )
         return output
 
     def _compute_gate(
@@ -421,19 +465,30 @@ class LTXAttention(Module):
             )
         else:
             kv_input = prompt_1BLP if prompt_1BLP is not None else spatial_1BND
-            # Cross K/V: ColParallel to_kv needs TP-replicated context; gather only if still sharded.
+            # Cross K/V: gather TP-sharded context for to_kv. Ring folds the AG into the
+            # to_kv matmul; Linear gathers explicitly. Replicated context (text prompt) is
+            # already full and needs neither.
+            kv_parallel_config = None
             if prompt_1BLP is not None and self.parallel_config.tensor_parallel.factor > 1:
                 local_k = kv_input.shape[-1]
-                if local_k * self.parallel_config.tensor_parallel.factor == self.kv_input_dim:
-                    kv_input = self.ccl_manager.all_gather_persistent_buffer(
-                        kv_input, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
-                    )
+                kv_is_tp_sharded = local_k * self.parallel_config.tensor_parallel.factor == self.kv_input_dim
+                if kv_is_tp_sharded:
+                    if needs_explicit_ag:
+                        kv_input = self.ccl_manager.all_gather_persistent_buffer(
+                            kv_input, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
+                        )
+                    else:
+                        kv_parallel_config = self.parallel_config
             q_1BNF = self.to_q(
                 spatial_1BND,
                 compute_kernel_config=self.mm_compute_kernel_config,
                 parallel_config=qkv_parallel_config,
             )
-            k_1BNF, v_1BNF = self.to_kv(kv_input, compute_kernel_config=self.mm_compute_kernel_config)
+            k_1BNF, v_1BNF = self.to_kv(
+                kv_input,
+                compute_kernel_config=self.mm_compute_kernel_config,
+                parallel_config=kv_parallel_config,
+            )
 
         # RMSNorm on Q/K, fused with head split — `wan_fused_rmsnorm_post_allgather`
         # accepts `num_heads_per_device` and emits the BHNE layout directly. Saves the
@@ -559,11 +614,9 @@ class LTXAttention(Module):
         spatial_1BND = ttnn.transformer.concatenate_heads(spatial_BHNE)
         spatial_1BND = ttnn.unsqueeze(spatial_1BND, 0)
 
-        # Same use_nonfused_agmm pattern as input QKV. The fused-addcmul path keeps
-        # the explicit AG because `_to_out_fused_addcmul` doesn't yet expose a Ring
-        # fused-AG variant.
+        # Ring fuses the TP all-gather into the to_out matmul; only Linear needs explicit AG.
         addcmul_fused = addcmul_residual is not None and addcmul_gate is not None
-        to_out_explicit_ag = self.parallel_config.tensor_parallel.factor > 1 and (use_nonfused_agmm or addcmul_fused)
+        to_out_explicit_ag = self.parallel_config.tensor_parallel.factor > 1 and use_nonfused_agmm
         if to_out_explicit_ag:
             spatial_1BND = self.ccl_manager.all_gather_persistent_buffer(
                 spatial_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
@@ -571,7 +624,11 @@ class LTXAttention(Module):
 
         if addcmul_fused:
             spatial_1BND = self._to_out_fused_addcmul(
-                spatial_1BND, addcmul_residual, addcmul_gate, compute_kernel_config=self.mm_compute_kernel_config
+                spatial_1BND,
+                addcmul_residual,
+                addcmul_gate,
+                compute_kernel_config=self.mm_compute_kernel_config,
+                parallel_config=None if use_nonfused_agmm else self.parallel_config,
             )
         else:
             spatial_1BND = self.to_out(

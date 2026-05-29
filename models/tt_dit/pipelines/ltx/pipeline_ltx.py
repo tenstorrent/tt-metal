@@ -16,7 +16,6 @@ Reference: LTX-2/packages/ltx-pipelines/ + Wan pipeline_wan.py
 
 from __future__ import annotations
 
-import gc
 import glob
 import hashlib
 import json
@@ -42,6 +41,7 @@ from ...encoders.gemma.encoder_pair import GemmaTokenizerEncoderPair
 from ...encoders.gemma.model_gemma import GemmaConfig, GemmaEncoder
 from ...models.transformers.ltx.rope_ltx import LTXRopeType, precompute_freqs_cis
 from ...models.transformers.ltx.transformer_ltx import LTXTransformerModel
+from ...models.upsampler.latent_upsampler_ltx import LTXLatentUpsampler
 from ...models.vae.vae_ltx import LTXVideoDecoder, LTXVideoDecoderTorch
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VaeHWParallelConfig
 from ...parallel.manager import CCLManager
@@ -259,6 +259,7 @@ class LTXPipeline:
         self.transformer: LTXTransformerModel | None = None
         self.transformer_states: list[TransformerState] = []
         self.vae_decoder = None
+        self.upsampler: LTXLatentUpsampler | None = None
 
         if self.checkpoint_name is not None:
             self._load_config_from_checkpoint()
@@ -469,6 +470,28 @@ class LTXPipeline:
             cross_attention_adaln=self._cross_attention_adaln,
         )
 
+    def _new_upsampler(self) -> LTXLatentUpsampler:
+        """Spatial-2x latent upsampler at stage-1 shape: input H/W = full // 64,
+        latent_frames = (num_frames - 1) // 8 + 1. Config read from checkpoint header."""
+        with safe_open(self._upsampler_path, framework="pt") as f:
+            cfg = json.loads(f.metadata()["config"])
+        latent_frames = (self._init_num_frames - 1) // 8 + 1
+        input_hw = (self._init_height // 64, self._init_width // 64)
+        return LTXLatentUpsampler(
+            input_hw=input_hw,
+            in_channels=cfg["in_channels"],
+            mid_channels=cfg["mid_channels"],
+            num_blocks_per_stage=cfg["num_blocks_per_stage"],
+            spatial_upsample=cfg["spatial_upsample"],
+            temporal_upsample=cfg["temporal_upsample"],
+            spatial_scale=cfg["spatial_scale"],
+            rational_resampler=cfg["rational_resampler"],
+            mesh_device=self.mesh_device,
+            parallel_config=self.vae_parallel_config,
+            ccl_manager=self.vae_ccl_manager,
+            num_frames=latent_frames,
+        )
+
     def _instantiate_modules(self, extra_variants: list[tuple[str, list[LoraSpec]]]) -> None:
         """Build every TT Module the pipeline will use. No DRAM weights yet —
         ``_prime_caches`` (next) attaches them."""
@@ -507,9 +530,10 @@ class LTXPipeline:
 
         if self.HAS_UPSAMPLER:
             assert (
-                self._init_height > 0 and self._init_width > 0
-            ), f"{type(self).__name__} requires height/width at create_pipeline."
+                self._init_height > 0 and self._init_width > 0 and self._init_num_frames > 0
+            ), f"{type(self).__name__} requires num_frames/height/width at create_pipeline."
             self._upsampler_path = LTXPipeline._resolve_checkpoint_file(LTX_UPSAMPLER_HF_REF)
+            self.upsampler = self._new_upsampler()
 
     def _register_coresident_exclusions(self) -> None:
         """All transformer variants exclude each other AND the VAE. LTX-22B +
@@ -528,6 +552,12 @@ class LTXPipeline:
                 m.register_coresident_exclusions(self.vae_decoder)
             self.vae_decoder.register_coresident_exclusions(*models)
 
+        # Upsampler is tiny (~120 MB/chip) and stays resident alongside the transformer.
+        # Only the full-res VAE decode activations need it evicted.
+        if self.upsampler is not None and self.vae_decoder is not None:
+            self.vae_decoder.register_coresident_exclusions(self.upsampler)
+            self.upsampler.register_coresident_exclusions(self.vae_decoder)
+
     def _prime_caches(self) -> None:
         """Load every module in reverse use order so variant 0 is resident in
         DRAM after ``__init__`` (matches Wan's reverse-use-order priming)."""
@@ -535,6 +565,8 @@ class LTXPipeline:
             self._prepare_transformer(idx)
         if self.vae_decoder is not None:
             self._prepare_vae()
+        if self.upsampler is not None:
+            self._prepare_upsampler()
         self._prepare_transformer(0)
 
     def _prepare_transformer(self, idx: int = 0) -> None:
@@ -1063,24 +1095,56 @@ class LTXPipeline:
         else:
             return self.vae_decoder.decode(latent_spatial)
 
-    def _upsample_latent_reference(self, video_latent: torch.Tensor, upsampler_path: str) -> torch.Tensor:
-        """Host-torch reference upsampler. ``VideoUpsampler`` performs
-        un_normalize → upsample → re_normalize using its own checkpoint."""
-        sys.path.insert(0, "LTX-2/packages/ltx-core/src")
-        sys.path.insert(0, "LTX-2/packages/ltx-pipelines/src")
-        from ltx_pipelines.utils.blocks import VideoUpsampler
+    def _vae_per_channel_stats(self) -> tuple[torch.Tensor, torch.Tensor]:
+        """Cached ``(mean-of-means, std-of-means)`` reshaped for ``(B, C, F, H, W)``
+        broadcast — the un_normalize/normalize bookends matching ``ltx_core.upsample_video``."""
+        if getattr(self, "_pcs_cache", None) is None:
+            with safe_open(self.checkpoint_name, framework="pt") as f:
+                mean = f.get_tensor("vae.per_channel_statistics.mean-of-means").float()
+                std = f.get_tensor("vae.per_channel_statistics.std-of-means").float()
+            self._pcs_cache = (mean.view(1, -1, 1, 1, 1), std.view(1, -1, 1, 1, 1))
+        return self._pcs_cache
 
-        upsampler_block = VideoUpsampler(
-            checkpoint_path=self.checkpoint_name,
-            upsampler_path=upsampler_path,
-            dtype=torch.bfloat16,
-            device=torch.device("cpu"),
+    def _prepare_upsampler(self) -> None:
+        """Push upsampler weights onto the mesh via the disk cache. Blocking-hash
+        subfolder invalidates the cache when conv3d ``C_in_block`` changes."""
+        if self.upsampler is None or self.upsampler.is_loaded():
+            return
+
+        def _upsampler_state_provider() -> dict[str, torch.Tensor]:
+            logger.info(f"Upsampler cache miss — loading safetensors: {self._upsampler_path}")
+            return load_file(self._upsampler_path)
+
+        blocking_key = conv3d_blocking_hash(self.upsampler)
+        subfolder = f"upsampler_{blocking_key}" if blocking_key else "upsampler"
+        cache_module.load_model(
+            self.upsampler,
+            model_name=os.path.basename(self._upsampler_path).removesuffix(".safetensors"),
+            subfolder=subfolder,
+            parallel_config=self.parallel_config,
+            mesh_shape=tuple(self.mesh_device.shape),
+            get_torch_state_dict=_upsampler_state_provider,
         )
-        with torch.no_grad():
-            upsampled = upsampler_block(video_latent.bfloat16())
-        del upsampler_block
-        gc.collect()
-        return upsampled.float()
+        logger.info("Loaded TTNN latent upsampler")
+
+    def _upsample_latent(self, video_latent: torch.Tensor) -> torch.Tensor:
+        """Spatial-2x latent upsample. Mirrors ``ltx_core.upsample_video``: un_normalize
+        → bare upsampler → re_normalize. ``(B, C, F, H, W)`` host in/out."""
+        assert self.upsampler is not None, "upsampler not constructed (HAS_UPSAMPLER=False?)"
+        self._prepare_upsampler()
+        mean, std = self._vae_per_channel_stats()
+        x = video_latent.float() * std + mean
+        x = self.upsampler(x)
+        return (x.float() - mean) / std
+
+    def _warmup_upsample(self, num_frames: int, height: int, width: int) -> None:
+        """JIT-compile the upsampler at the stage-1 half-res shape."""
+        if self.upsampler is None:
+            return
+        latent_frames = (num_frames - 1) // 8 + 1
+        s1_lh, s1_lw = height // 64, width // 64
+        dummy = torch.zeros(1, self.in_channels, latent_frames, s1_lh, s1_lw)
+        self._upsample_latent(dummy)
 
     def _warmup_decode(self, num_frames: int, height: int, width: int) -> None:
         """Load VAE + JIT-compile decode kernels with a zero dummy latent at
@@ -1972,7 +2036,10 @@ class LTXPipeline:
 
         # Convert to (F, H, W, C) uint8
         frames = (((video_pixels[0] + 1.0) / 2.0).clamp(0.0, 1.0) * 255.0).to(torch.uint8)
-        frames = frames.permute(1, 2, 3, 0).cpu().numpy()  # (F, H, W, C)
+        # .contiguous() forces a single bulk (F,H,W,C) copy here, so each per-frame
+        # slice below is already contiguous and VideoFrame.from_ndarray just wraps it
+        # — otherwise the permuted view makes from_ndarray do a strided copy per frame.
+        frames = frames.permute(1, 2, 3, 0).contiguous().cpu().numpy()  # (F, H, W, C)
 
         _, height, width, _ = frames.shape
 
@@ -1981,6 +2048,10 @@ class LTXPipeline:
         stream.width = width
         stream.height = height
         stream.pix_fmt = "yuv420p"
+        # "veryfast" preset + multi-threaded encode is ~5-8x faster than libx264's
+        # default "medium" single-threaded path, while crf 23 keeps the quality higher.
+        stream.options = {"preset": "veryfast", "crf": "23"}
+        stream.thread_type = "AUTO"
 
         # Prepare audio stream if provided
         audio_stream = None

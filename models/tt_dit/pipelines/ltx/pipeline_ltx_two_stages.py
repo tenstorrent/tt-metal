@@ -123,6 +123,10 @@ class LTXAVTwoStagesPipeline(LTXAVPipeline):
             logger.info(f"warmup (s1-only) done in {time.time() - t0:.1f}s")
             return
 
+        # Upsample runs between stage 1 and stage 2; compile its kernels here.
+        logger.info(f"warmup upsample: {s1_h}x{s1_w} → {height}x{width}")
+        self._warmup_upsample(num_frames, height, width)
+
         self._prepare_transformer(1)
 
         s2_sigmas = list(STAGE_2_DISTILLED_SIGMA_VALUES)[:num_inference_steps] + [0.0]
@@ -284,7 +288,7 @@ class LTXAVTwoStagesPipeline(LTXAVPipeline):
         s1_lh, s1_lw = s1_h // 32, s1_w // 32
         s1_spatial = s1_video.reshape(1, latent_frames, s1_lh, s1_lw, 128).permute(0, 4, 1, 2, 3)
         t0 = time.time()
-        upsampled = self._upsample_latent_reference(s1_spatial, self._upsampler_path)
+        upsampled = self._upsample_latent(s1_spatial)
         logger.info(f"Upsample: {time.time() - t0:.1f}s")
         upsampled_flat = upsampled.permute(0, 2, 3, 4, 1).reshape(
             1, latent_frames * (height // 32) * (width // 32), 128

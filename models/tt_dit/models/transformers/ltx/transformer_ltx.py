@@ -176,6 +176,7 @@ class LTXTransformerBlock(Module):
                 context_dim=audio_dim,
                 query_input_dim=video_dim,
                 output_dim=video_dim,
+                high_fidelity_sdpa=True,
                 **attn_kwargs,
             )
             self.video_to_audio_attn = LTXAttention(
@@ -183,6 +184,7 @@ class LTXTransformerBlock(Module):
                 num_heads=audio_num_heads,
                 is_self=False,
                 context_dim=video_dim,
+                high_fidelity_sdpa=True,
                 **attn_kwargs,
             )
             self.scale_shift_table_a2v_ca_audio = Parameter(
@@ -316,12 +318,8 @@ class LTXTransformerBlock(Module):
             # === VIDEO-ONLY FEEDFORWARD ===
             video_normed = self.norm3(video_1BND)
             video_normed = ttnn.addcmul(v_shift_ff, video_normed, v_scale_ff_p1)
-            if self.parallel_config.tensor_parallel.factor > 1:
-                video_normed = self.ccl_manager.all_gather_persistent_buffer(
-                    video_normed, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
-                )
-            # Ring: fused ff1 + ff2 + RS + addcmul (`MinimalMatmulStridedReduceScatterAsync`).
-            # Linear: that op asserts Ring-only, so fall back to plain ffn() + addcmul.
+            # Ring: fused ff1(AG) + ff2 + RS + addcmul; the TP all-gather folds into ff1.
+            # Linear: forward_fused_addcmul asserts Ring-only, so explicit AG + plain ffn().
             if self.ccl_manager.topology == ttnn.Topology.Ring:
                 video_1BND = self.ffn.forward_fused_addcmul(
                     video_normed,
@@ -329,8 +327,13 @@ class LTXTransformerBlock(Module):
                     v_gate_ff,
                     scalar=1.0,
                     compute_kernel_config=self.ff_compute_kernel_config,
+                    parallel_config=self.parallel_config,
                 )
             else:
+                if self.parallel_config.tensor_parallel.factor > 1:
+                    video_normed = self.ccl_manager.all_gather_persistent_buffer(
+                        video_normed, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
+                    )
                 video_ff = self.ffn(video_normed, compute_kernel_config=self.ff_compute_kernel_config)
                 video_1BND = ttnn.addcmul(video_1BND, video_ff, v_gate_ff)
             return video_1BND
@@ -406,13 +409,10 @@ class LTXTransformerBlock(Module):
                     audio_kv_a2v, dim=2, mesh_axis=self.parallel_config.sequence_parallel.mesh_axis
                 )
             # Zero out padded audio tokens so they contribute nothing to A→V cross-attention.
+            # Masking stays before to_kv; the TP all-gather folds into to_kv inside the attn module.
             pad_mask_a2v = audio_padding_mask_full if audio_padding_mask_full is not None else audio_padding_mask
             if pad_mask_a2v is not None:
                 audio_kv_a2v = ttnn.multiply(audio_kv_a2v, pad_mask_a2v)
-            if self.parallel_config.tensor_parallel.factor > 1:
-                audio_kv_a2v = self.ccl_manager.all_gather_persistent_buffer(
-                    audio_kv_a2v, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
-                )
             a2v_output = self.audio_to_video_attn(
                 spatial_1BND=video_q_a2v,
                 N=video_N,
@@ -434,10 +434,6 @@ class LTXTransformerBlock(Module):
             # module's post-projection SP AllGather propagates these zeros to other chips.
             if video_padding_mask is not None:
                 video_kv_v2a = ttnn.multiply(video_kv_v2a, video_padding_mask)
-            if self.parallel_config.tensor_parallel.factor > 1:
-                video_kv_v2a = self.ccl_manager.all_gather_persistent_buffer(
-                    video_kv_v2a, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
-                )
             v2a_output = self.video_to_audio_attn(
                 spatial_1BND=audio_q_v2a,
                 N=audio_N,
@@ -453,10 +449,6 @@ class LTXTransformerBlock(Module):
         # === VIDEO FEEDFORWARD ===
         video_normed = self.norm3(video_1BND)
         video_normed = ttnn.addcmul(v_shift_ff, video_normed, v_scale_ff_p1)
-        if self.parallel_config.tensor_parallel.factor > 1:
-            video_normed = self.ccl_manager.all_gather_persistent_buffer(
-                video_normed, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
-            )
         if self.ccl_manager.topology == ttnn.Topology.Ring:
             video_1BND = self.ffn.forward_fused_addcmul(
                 video_normed,
@@ -464,18 +456,19 @@ class LTXTransformerBlock(Module):
                 v_gate_ff,
                 scalar=1.0,
                 compute_kernel_config=self.ff_compute_kernel_config,
+                parallel_config=self.parallel_config,
             )
         else:
+            if self.parallel_config.tensor_parallel.factor > 1:
+                video_normed = self.ccl_manager.all_gather_persistent_buffer(
+                    video_normed, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
+                )
             video_ff = self.ffn(video_normed, compute_kernel_config=self.ff_compute_kernel_config)
             video_1BND = ttnn.addcmul(video_1BND, video_ff, v_gate_ff)
 
         # === AUDIO FEEDFORWARD ===
         audio_normed = self.audio_norm3(audio_1BND)
         audio_normed = ttnn.addcmul(a_shift_ff, audio_normed, a_scale_ff_p1)
-        if self.parallel_config.tensor_parallel.factor > 1:
-            audio_normed = self.ccl_manager.all_gather_persistent_buffer(
-                audio_normed, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
-            )
         if self.ccl_manager.topology == ttnn.Topology.Ring:
             audio_1BND = self.audio_ff.forward_fused_addcmul(
                 audio_normed,
@@ -483,8 +476,13 @@ class LTXTransformerBlock(Module):
                 a_gate_ff,
                 scalar=1.0,
                 compute_kernel_config=self.ff_compute_kernel_config,
+                parallel_config=self.parallel_config,
             )
         else:
+            if self.parallel_config.tensor_parallel.factor > 1:
+                audio_normed = self.ccl_manager.all_gather_persistent_buffer(
+                    audio_normed, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
+                )
             audio_ff = self.audio_ff(audio_normed, compute_kernel_config=self.ff_compute_kernel_config)
             audio_1BND = ttnn.addcmul(audio_1BND, audio_ff, a_gate_ff)
 
@@ -681,12 +679,13 @@ class LTXTransformerModel(Module):
                 )
             )
 
+        # Output-proj config matches WanTransformer's hifi4 config (packer_l1_acc=True).
         self.hifi4_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
-            packer_l1_acc=False,
+            packer_l1_acc=True,
         )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
