@@ -25,7 +25,72 @@ from loguru import logger
 import ttnn
 
 from ..layers.module import Module, Parameter
+from ..parallel.config import ParallelFactor
+from ..parallel.manager import CCLManager
 from ..utils.conv3d import _ntuple, aligned_channels, get_conv3d_config
+
+
+def _t_neighbor_pad(
+    x_BTC: ttnn.Tensor,
+    *,
+    pad_left: int,
+    pad_right: int,
+    parallel_config: ParallelFactor,
+    ccl_manager: CCLManager,
+    padding_mode: str = "zeros",
+) -> ttnn.Tensor:
+    """Halo exchange on the T axis (dim 1 in BTC layout).
+
+    Mirrors `LTXCausalConv3d`'s H/W halo using `ccl_manager.neighbor_pad_persistent_buffer`.
+    Pad sizes are in samples; boundary chips of the mesh get zero/replicate pad,
+    interior chips exchange with neighbors via the configured mesh axis.
+
+    Args:
+        x_BTC: (B, T_per_device, C) ROW_MAJOR ttnn tensor, sharded along T on
+            ``parallel_config.mesh_axis``.
+        pad_left, pad_right: halo widths in T samples.
+        parallel_config: ``ParallelFactor(factor, mesh_axis)`` describing the
+            T-axis sharding.
+        ccl_manager: CCLManager for semaphore + persistent-buffer reuse.
+        padding_mode: "zeros" or "replicate".
+
+    Returns:
+        (B, T_per_device + pad_left + pad_right, C) ROW_MAJOR ttnn tensor.
+    """
+    if pad_left == 0 and pad_right == 0:
+        return x_BTC
+    if parallel_config is None or parallel_config.factor <= 1:
+        # Local zero-pad fallback for the unsharded path (kept for symmetry).
+        B, T, C = x_BTC.shape
+        if pad_left > 0:
+            zl = ttnn.zeros(
+                (B, pad_left, C), dtype=x_BTC.get_dtype(), layout=ttnn.ROW_MAJOR_LAYOUT, device=x_BTC.device()
+            )
+            x_BTC = ttnn.concat([zl, x_BTC], dim=1)
+        if pad_right > 0:
+            zr = ttnn.zeros(
+                (B, pad_right, C), dtype=x_BTC.get_dtype(), layout=ttnn.ROW_MAJOR_LAYOUT, device=x_BTC.device()
+            )
+            x_BTC = ttnn.concat([x_BTC, zr], dim=1)
+        return x_BTC
+
+    sem = ccl_manager.get_np_ping_pong_semaphore(parallel_config.mesh_axis)
+    # `neighbor_pad_async` requires `num_links <= product_of_outer_dims_before_sharded_dim`.
+    # For (B, T, C) sharded on T (dim=1), outer dim is just B — usually 1.
+    outer_dims = 1
+    for i in range(1):  # iterate over dims [0..dim-1] = [0]
+        outer_dims *= x_BTC.shape[i]
+    num_links = max(1, min(outer_dims, ccl_manager.num_links))
+    return ccl_manager.neighbor_pad_persistent_buffer(
+        x_BTC,
+        dims=[1],
+        pad_left=[pad_left],
+        pad_right=[pad_right],
+        padding_mode=padding_mode,
+        axes=[parallel_config.mesh_axis],
+        neighbor_sems=[sem],
+        num_links=[num_links],
+    )
 
 
 class Conv2dViaConv3d(Module):
@@ -197,6 +262,12 @@ class Conv1dViaConv3d(Module):
     Padding modes:
     - ``"zeros"`` — internal symmetric zero pad (handles ``padding="same"``).
     - ``"causal"`` — external front-only zero pad by ``k-1`` along T.
+
+    T-axis sharding: pass ``parallel_config=ParallelFactor(factor, mesh_axis)``
+    and a ``ccl_manager`` to fracture inputs/outputs along T across the mesh.
+    The conv padding gets moved from internal to external halo exchange via
+    ``ccl_manager.neighbor_pad_persistent_buffer`` (same trick LTXCausalConv3d
+    uses for H/W in vae_ltx).
     """
 
     def __init__(
@@ -211,6 +282,8 @@ class Conv1dViaConv3d(Module):
         bias: bool = True,
         mesh_device: ttnn.MeshDevice,
         dtype: ttnn.DataType = ttnn.float32,
+        parallel_config: ParallelFactor | None = None,
+        ccl_manager: CCLManager | None = None,
     ) -> None:
         super().__init__()
 
@@ -219,6 +292,10 @@ class Conv1dViaConv3d(Module):
         if dilation != 1:
             # We model "padding=same with dilation" by treating effective_kernel = (k-1)*d+1.
             pass
+
+        sharded = parallel_config is not None and parallel_config.factor > 1
+        if sharded:
+            assert ccl_manager is not None, "T-sharding requires ccl_manager"
 
         self.unpadded_in_channels = in_channels
         self.unpadded_out_channels = out_channels
@@ -235,17 +312,33 @@ class Conv1dViaConv3d(Module):
         self.bias_enabled = bias
         self.mesh_device = mesh_device
         self.dtype = dtype
+        self.parallel_config = parallel_config
+        self.ccl_manager = ccl_manager
 
         # effective kernel extent for "same" padding with dilation
         eff_k = (kernel_size - 1) * dilation + 1
 
-        if padding_mode == "zeros":
+        if sharded:
+            # Sharded: zero internal T padding, do halo exchange in forward().
+            self.internal_padding = (0, 0, 0)
+            self.external_pad_front = 0  # subsumed by halo
+            if padding_mode == "zeros":
+                self.halo_pad_left = eff_k // 2
+                self.halo_pad_right = eff_k // 2
+            else:  # causal
+                self.halo_pad_left = eff_k - 1
+                self.halo_pad_right = 0
+        elif padding_mode == "zeros":
             # Symmetric pad on T inside the kernel.
             self.internal_padding = (eff_k // 2, 0, 0)
             self.external_pad_front = 0
+            self.halo_pad_left = 0
+            self.halo_pad_right = 0
         else:  # causal — pad k-1 at front externally
             self.internal_padding = (0, 0, 0)
             self.external_pad_front = eff_k - 1
+            self.halo_pad_left = 0
+            self.halo_pad_right = 0
 
         self.conv_config = get_conv3d_config(
             self.in_channels,
@@ -301,11 +394,26 @@ class Conv1dViaConv3d(Module):
             state["bias"] = state["bias"].reshape(1, -1)
 
     def forward(self, x_BTC: ttnn.Tensor) -> ttnn.Tensor:
-        """``x_BTC``: ``(B, T, C)`` ROW_MAJOR. Returns ``(B, T_out, C_out)``."""
-        assert x_BTC.layout == ttnn.ROW_MAJOR_LAYOUT
-        B, T, C = x_BTC.shape
+        """``x_BTC``: ``(B, T, C)`` ROW_MAJOR. Returns ``(B, T_out, C_out)``.
 
-        if self.external_pad_front > 0:
+        When ``parallel_config.factor > 1``, ``T`` is the *per-device* time
+        extent (fractured on ``parallel_config.mesh_axis``); the halo exchange
+        adds boundary context from neighbor chips before the conv.
+        """
+        assert x_BTC.layout == ttnn.ROW_MAJOR_LAYOUT
+
+        if self.parallel_config is not None and self.parallel_config.factor > 1:
+            # Halo exchange replaces the local external_pad_front for sharded inputs.
+            x_BTC = _t_neighbor_pad(
+                x_BTC,
+                pad_left=self.halo_pad_left,
+                pad_right=self.halo_pad_right,
+                parallel_config=self.parallel_config,
+                ccl_manager=self.ccl_manager,
+                padding_mode="zeros",
+            )
+        elif self.external_pad_front > 0:
+            B, T, C = x_BTC.shape
             zero_pad = ttnn.zeros(
                 (B, self.external_pad_front, C),
                 dtype=x_BTC.get_dtype(),
