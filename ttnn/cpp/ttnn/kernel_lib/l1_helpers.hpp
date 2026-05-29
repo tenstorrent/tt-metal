@@ -72,9 +72,11 @@ FORCE_INLINE void zero_tile(uint32_t write_addr) {
  */
 template <uint32_t dfb_id>
 FORCE_INLINE void prepare_zero_tile() {
+    Noc noc;
     ::DataflowBuffer dfb(dfb_id);
     dfb.reserve_back(1);
-    zero_tile<dfb_id>(dfb.get_write_ptr());
+    noc.async_write_zeros(dfb, get_tile_size(dfb_id));
+    noc.write_zeros_l1_barrier();
     dfb.push_back(1);
 }
 
