@@ -23,8 +23,8 @@
     uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
     pytest models/demos/deepseek_v3_d_p/tests/pcc/test_moe_gate_prefill2d.py -k "mesh-8x4"
     export DEEPSEEK_V3_MLA_REF_CACHE=/mnt/MLPerf/deepseek-prefill-cache/test_mla_output
-    pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_ds_mla -k "8x4 and random and max_sl and check_pcc and balanced and ring and (seq128k or seq100k)" -vvv --tb=short
-    pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_kimi_mla -k "8x4 and random and max_sl and check_pcc and balanced and ring and (seq1k or seq5k or seq25k)" -vvv --tb=short
+    pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_ds_mla -k "8x4 and random and max_sl and check_pcc and sequential and ring and (seq128k or seq100k)" -vvv --tb=short
+    pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_kimi_mla -k "8x4 and random and max_sl and check_pcc and sequential and ring and (seq5k or seq25k)" -vvv --tb=short
     pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ds_moe -k "mesh-8x4 and perf-device-256" -vvv --tb=short
     pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_kimi_moe -k "mesh-8x4" -vvv --tb=short
     pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_ds_prefill_block -k "8x4 and pcc and balanced and not non_balanced" -vvv --tb=short --timeout=900

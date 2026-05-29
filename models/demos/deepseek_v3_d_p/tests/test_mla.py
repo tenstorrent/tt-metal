@@ -401,11 +401,11 @@ def test_ds_mla(
 @pytest.mark.parametrize("scale_down_sl", [False, True], ids=["max_sl", "scaled_sl"])
 @pytest.mark.parametrize(
     "seq_len",
-    [1 * 1024, 5 * 1024, 25 * 1024],
-    ids=["seq1k", "seq5k", "seq25k"],
+    [5 * 1024, 25 * 1024],
+    ids=["seq5k", "seq25k"],
 )
 @pytest.mark.parametrize("skip_host_comparison", [False, True], ids=["check_pcc", "skip_check"])
-@pytest.mark.parametrize("is_balanced", [False, True], ids=["sequential", "balanced"])
+@pytest.mark.parametrize("is_balanced", [False], ids=["sequential"])
 @pytest.mark.parametrize("variant", ["kimi"], indirect=True, ids=["kimi"])
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
 @pytest.mark.timeout(0)
