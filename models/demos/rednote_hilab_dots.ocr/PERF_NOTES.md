@@ -14,10 +14,26 @@ prefill**. Per-stage wall (warm, p50 over 3 replays), real weights, 28 LM /
 
 | stage | traced | notes |
 |-------|--------|-------|
-| vision (42 L) | 3201 ms | now ~80% of e2e — next target |
-| LM prefill (28 L) | **262 ms** (was 1426 ms) | **5.4× — see prefill opts below** |
-| decode / step | ~17 ms | — |
-| **e2e** | **4042 ms** (was 4695 ms) | OCR exact vs HF (16/16 tokens) |
+| vision (42 L) | **1693 ms** (was 3201 ms) | **1.9× — see vision opts below** |
+| LM prefill (28 L) | **272 ms** (was 1426 ms) | **5.2× — see prefill opts below** |
+| decode / step | ~19 ms | — |
+| **e2e** | **2559 ms** (was 4695 ms) | **1.8×**; OCR exact vs HF (16/16 tokens) |
+
+### Vision optimizations (3201 → 1693 ms, PCC tower 0.99998)
+
+dots.ocr vision is full bidirectional attention over all ~19.5k patches in every
+one of the 42 layers (no window/causal — config has no `window_size`), so the
+O(seq²) is architectural; the wins are kernel-level on the windowed SDPA:
+
+| change | vision ms | gate |
+|--------|-----------|------|
+| baseline (q/k_chunk 128) | 3201 | — |
+| SDPA q_chunk 256 / k_chunk 512 | 2371 | precision-neutral |
+| + fused RoPE + bf8 Q/K/V + HiFi2 SDPA | **1693** | tower PCC 0.99998 |
+
+bf8 Q/K/V + HiFi2 SDPA is the qwen2.5-VL vision pattern (matmuls/RoPE stay
+HiFi4/bf16): SDPA 46 → 15 ms/layer at seq=19520. Generalized to
+[[skills/optimization]] "VLM vision attention".
 
 Real-world demo output (full document, full depth, chat-template prompt),
 **exact token match vs HF DotsOCRForCausalLM (16/16 = 1.0000)**:

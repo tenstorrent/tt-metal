@@ -135,11 +135,28 @@ transliterating the HF reference op-by-op. Cross-check against
   internally. **Drop the manual `_repeat_kv`** (reshape+`repeat`+`reshape`, often
   +tilize = ~4 ops/layer). Pass the nkv-headed K/V straight in.
 - **SDPA chunk size**: the prefill `SDPAProgramConfig` `q_chunk_size`/`k_chunk_size`
-  default low (128). For seq ≥ ~2048, **256/256 is ~2× faster** and still fits L1
-  (1024 overflows the CB → TT_THROW). Mirror tt_transformers'
+  default low (128). For seq ≥ ~2048, **q256/k512 is ~2× faster** and still fits L1
+  (512/512 overflows the CB → TT_THROW). Mirror tt_transformers'
   `get_attn_sdpa_prefill_program_config` (256 if seq≥2048 else 64). Keep the
   device's real grid (`compute_with_storage_grid_size()`), NOT a hardcoded (8,8)
-  — that constant is n150-specific; Blackhole/p150 is (13,10).
+  — that constant is n150-specific; Blackhole/p150 is (13,10). This applies to
+  the VLM **vision** windowed SDPA too (measured dots.ocr vision: 46→25 ms/layer
+  at q256/k512, seq=19520).
+
+### VLM vision attention — bf8 Q/K/V + HiFi2 SDPA (the qwen2.5-VL pattern)
+
+A ViT/VLM vision encoder runs **full bidirectional attention over all patches in
+every layer** (no causal mask, often no window unless the config has
+`window_size`/`fullatt_block_indexes` — dots.ocr has neither, so all 42 layers are
+full O(seq²) over ~19.5k patches). You can't shrink the attention scope without
+changing the architecture, so attack the SDPA kernel precision: **typecast Q/K/V to
+`bfloat8_b` and run the SDPA with a HiFi2 / `fp32_dest_acc_en=False` compute config**
+(separate from the HiFi4 config used for the matmuls/RoPE). Vision attention
+tolerates this — measured dots.ocr vision SDPA **46 → 15 ms/layer (3.1×)** at
+seq=19520, and the **full-tower PCC stayed 0.99998** (attention block 0.99975).
+qwen2.5-VL vision (`models/demos/qwen25_vl/tt/vision_attention.py`) does exactly
+this. ALWAYS gate on the full-tower PCC test (error accumulates across 42 layers)
++ e2e token-match, not just a single-block PCC. The matmuls/RoPE stay HiFi4/bf16.
 
 ## Memory hierarchy + sharding (the biggest lever)
 
