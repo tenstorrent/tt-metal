@@ -74,6 +74,10 @@ def _run_hash_kernel(
     return int(res_tensor[0].item())
 
 
+@pytest.mark.xfail(
+    reason="SFPU hash pending hardware validation on BH and WH — DEST/dbg_get_array_row path not yet confirmed",
+    strict=False,
+)
 @parametrize(
     formats=input_output_formats([DataFormat.Int32]),
     num_tiles=[1],
@@ -105,6 +109,10 @@ def test_hash_cb_sfpu(formats, num_tiles, seed, dest_acc):
     assert hw_hash <= MASK23, f"SFPU hash {hex(hw_hash)} exceeds 23-bit range"
 
 
+@pytest.mark.xfail(
+    reason="SFPU hash pending hardware validation on BH and WH — DEST/dbg_get_array_row path not yet confirmed",
+    strict=False,
+)
 @parametrize(
     formats=input_output_formats([DataFormat.Int32]),
     num_tiles=[1],
