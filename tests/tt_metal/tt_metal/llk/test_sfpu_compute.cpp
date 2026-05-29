@@ -87,7 +87,7 @@ const map<std::string, std::map<std::string, std::string>> sfpu_op_to_op_name = 
 const map<std::string, std::map<std::string, std::string>> sfpu_binary_op_to_op_name = {
     {"div_binary", {{"SFPU_OP_INIT_0", "div_binary_tile_init();"}, {"SFPU_OP_CHAIN_0", "div_binary_tile(0, 1, 0);"}}},
     // add_int: Int8 L1 inputs are promoted to sign-magnitude Int32 in DEST via copy_tile + fp32_dest_acc;
-    // add_int_tile<Int32> with SFPU_ADD_INT_SIGN_MAG_DEST then adds in sign-mag space. Result in DST[0].
+    // add_int_tile<Int32> (sign-mag on Quasar via ARCH_QUASAR) then adds in sign-mag space. Result in DST[0].
     {"add_int",
      {{"SFPU_OP_INIT_0", "add_int_tile_init();"}, {"SFPU_OP_CHAIN_0", "add_int_tile<DataFormat::Int32>(0, 1, 0);"}}},
 };
@@ -486,7 +486,7 @@ bool run_sfpu_binary_two_input_buffer(
     if (is_int_op) {
         // HW interprets each Int8 datum as sign-mag on the wire (bit7=sign, bits[6:0]=mag),
         // promotes to sign-mag Int32 in dest via copy_tile + fp32_dest_acc, then SFPU add
-        // (SFPU_ADD_INT_SIGN_MAG_DEST) writes sign-mag Int32 to DRAM.
+        // (sign-mag on Quasar via ARCH_QUASAR) writes sign-mag Int32 to DRAM.
         TT_FATAL(packed_lhs.size() == packed_rhs.size(), "lhs/rhs packed size mismatch");
         const size_t num_words = packed_lhs.size() * 4;
         packed_golden.resize(num_words);
@@ -512,8 +512,6 @@ bool run_sfpu_binary_two_input_buffer(
     sfpu_defines["SFPU_BINARY_OP"] = "1";
     if (is_int_op) {
         sfpu_defines["SFPU_OP_BINARY_ADD_INT_INCLUDE"] = "1";
-        // Int8 copy_tile + fp32_dest_acc promotes to sign-mag Int32 in dest.
-        sfpu_defines["SFPU_ADD_INT_SIGN_MAG_DEST"] = "1";
     } else {
         sfpu_defines["SFPU_OP_BINARY_DIV_INCLUDE"] = "1";
     }
@@ -809,64 +807,56 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(4, "sign"),
         std::make_tuple(4, "rsqrt")));
 
-// Binary SFPU parameterized test fixture.
+// Binary SFPU parameterized test fixture (mirrors the unary fixture above).
 //
 // Each test instance is identified by (num_tiles, op_name). The op_name picks
 // up macro substitutions from sfpu_binary_op_to_op_name and a host-side
-// reference from sfpu_binary_function. The SFPU-binary branch of the compute
-// kernel uses a fresh tile_regs_acquire/release per pair (only DST[0]/DST[1]),
-// so num_tiles is not bounded by DST capacity.
-// div_binary and add_int are split into separate fixtures (below) so each op can be run
-// standalone from the command line via its own --gtest_filter, while still sharing the
-// single MeshDevice that LLKMeshDeviceFixture opens once per suite (no per-test device).
+// reference from sfpu_binary_function. The name generator suffixes each instance
+// with its op name (e.g. div_binary_1tiles) so a single op can be run standalone
+// via --gtest_filter='*div_binary*' / '*add_int*', while still sharing the single
+// MeshDevice that LLKMeshDeviceFixture opens once per suite (no per-test device).
 class SingleCoreSingleMeshDeviceSfpuBinaryParameterizedFixture
     : public LLKMeshDeviceFixture,
-      public testing::WithParamInterface<std::tuple<size_t, std::string>> {
-protected:
-    void run_binary_sfpu_case() {
-        size_t num_tiles = std::get<0>(GetParam());
-        std::string sfpu_op = std::get<1>(GetParam());
+      public testing::WithParamInterface<std::tuple<size_t, std::string>> {};
 
-        if (MetalContext::instance().get_cluster().arch() == ARCH::WORMHOLE_B0 ||
-            MetalContext::instance().get_cluster().arch() == ARCH::BLACKHOLE) {
-            GTEST_SKIP() << "Binary SFPU op test (div_binary / add_int) not fixed for WH/BH";
-        }
+TEST_P(SingleCoreSingleMeshDeviceSfpuBinaryParameterizedFixture, TensixSfpuBinaryCompute) {
+    size_t num_tiles = std::get<0>(GetParam());
+    std::string sfpu_op = std::get<1>(GetParam());
 
-        // add_int: Int8 L1 inputs promoted to sign-mag Int32 output. div_binary stays bfloat16.
-        const bool is_int_op = (sfpu_op == "add_int");
-        const tt::DataFormat data_format_input = is_int_op ? tt::DataFormat::Int8 : tt::DataFormat::Float16_b;
-        const tt::DataFormat data_format_output = is_int_op ? tt::DataFormat::Int32 : tt::DataFormat::Float16_b;
-        const size_t tile_byte_size = is_int_op ? tt::tile_size(tt::DataFormat::Int8) : 2 * 32 * 32;
-
-        CoreRange core_range({0, 0}, {0, 0});
-        CoreRangeSet core_range_set({core_range});
-        unit_tests::compute::sfpu::SfpuConfig test_config = {
-            .num_tiles = num_tiles,
-            .tile_byte_size = tile_byte_size,
-            .l1_input_data_format = data_format_input,
-            .l1_output_data_format = data_format_output,
-            .cores = core_range_set,
-            .sfpu_op = sfpu_op,
-            .approx_mode = false};
-        log_info(tt::LogTest, "Testing binary SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
-        for (unsigned int id = 0; id < num_devices_; id++) {
-            EXPECT_TRUE(unit_tests::compute::sfpu::run_sfpu_binary_two_input_buffer(devices_.at(id), test_config));
-        }
+    if (MetalContext::instance().get_cluster().arch() == ARCH::WORMHOLE_B0 ||
+        MetalContext::instance().get_cluster().arch() == ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "Binary SFPU op test (div_binary / add_int) not fixed for WH/BH";
     }
-};
 
-// Separate fixtures per op so `--gtest_filter='*SfpuBinaryDiv*'` /
-// `--gtest_filter='*SfpuBinaryAddInt*'` each run a single op standalone.
-class SingleCoreSfpuBinaryDivFixture : public SingleCoreSingleMeshDeviceSfpuBinaryParameterizedFixture {};
-class SingleCoreSfpuBinaryAddIntFixture : public SingleCoreSingleMeshDeviceSfpuBinaryParameterizedFixture {};
+    // add_int: Int8 L1 inputs promoted to sign-mag Int32 output. div_binary stays bfloat16.
+    const bool is_int_op = (sfpu_op == "add_int");
+    const tt::DataFormat data_format_input = is_int_op ? tt::DataFormat::Int8 : tt::DataFormat::Float16_b;
+    const tt::DataFormat data_format_output = is_int_op ? tt::DataFormat::Int32 : tt::DataFormat::Float16_b;
+    const size_t tile_byte_size = is_int_op ? tt::tile_size(tt::DataFormat::Int8) : 2 * 32 * 32;
 
-TEST_P(SingleCoreSfpuBinaryDivFixture, TensixSfpuBinaryCompute) { run_binary_sfpu_case(); }
-TEST_P(SingleCoreSfpuBinaryAddIntFixture, TensixSfpuBinaryCompute) { run_binary_sfpu_case(); }
+    CoreRange core_range({0, 0}, {0, 0});
+    CoreRangeSet core_range_set({core_range});
+    unit_tests::compute::sfpu::SfpuConfig test_config = {
+        .num_tiles = num_tiles,
+        .tile_byte_size = tile_byte_size,
+        .l1_input_data_format = data_format_input,
+        .l1_output_data_format = data_format_output,
+        .cores = core_range_set,
+        .sfpu_op = sfpu_op,
+        .approx_mode = false};
+    log_info(tt::LogTest, "Testing binary SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        EXPECT_TRUE(unit_tests::compute::sfpu::run_sfpu_binary_two_input_buffer(devices_.at(id), test_config));
+    }
+}
 
 // TODO: BinarySFPU ops here can only do 1 tile due to the hardcoding in the macros to indicies (0,1,2)
 INSTANTIATE_TEST_SUITE_P(
-    SingleCoreSfpuBinaryCompute, SingleCoreSfpuBinaryDivFixture, ::testing::Values(std::make_tuple(1, "div_binary")));
-INSTANTIATE_TEST_SUITE_P(
-    SingleCoreSfpuBinaryCompute, SingleCoreSfpuBinaryAddIntFixture, ::testing::Values(std::make_tuple(1, "add_int")));
+    SingleCoreSfpuBinaryCompute,
+    SingleCoreSingleMeshDeviceSfpuBinaryParameterizedFixture,
+    ::testing::Values(std::make_tuple(1, "div_binary"), std::make_tuple(1, "add_int")),
+    [](const testing::TestParamInfo<std::tuple<size_t, std::string>>& info) {
+        return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles";
+    });
 
 }  // namespace tt::tt_metal
