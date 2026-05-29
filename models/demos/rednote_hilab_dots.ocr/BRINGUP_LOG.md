@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** p150 (blackhole)
 **Started:** 2026-05-29T00:11:46Z
-**Updated:** 2026-05-29T00:38:13Z
+**Updated:** 2026-05-29T00:45:55Z
 
 ## Block Status
 
@@ -16,7 +16,7 @@
 | vision_patch_embed | optimization | pending | — | 0 |  |
 | vision_patch_embed | real_weights | pending | — | 0 |  |
 | vision_rmsnorm | reference | done | 1.000000 | 0 | reference vs HF (eager) module, PCC=1.0; golden saved |
-| vision_rmsnorm | ttnn | pending | — | 0 |  |
+| vision_rmsnorm | ttnn | done | 0.999995 | 0 | ttnn.rms_norm eps=1e-5 HiFi4+fp32_dest_acc bf16 DRAM TILE; PCC 0.99999 vs seed-0 golden on p150 |
 | vision_rmsnorm | debug | n/a | — | 0 |  |
 | vision_rmsnorm | optimization | pending | — | 0 |  |
 | vision_rmsnorm | real_weights | pending | — | 0 |  |
@@ -99,6 +99,7 @@
 - tick 3 (2026-05-29T00:30:23Z): reference[vision_block,vision_patch_merger,vision_tower,embedding] — ok
 - tick 4 (2026-05-29T00:34:04Z): reference[rmsnorm,rope,attention,mlp] — ok
 - tick 5 (2026-05-29T00:38:13Z): reference[decoder_layer,lm_head,language_model] — ok
+- tick 6 (2026-05-29T00:45:55Z): device[vision_rmsnorm] — ok
 
 ## Host-Resident Exceptions
 

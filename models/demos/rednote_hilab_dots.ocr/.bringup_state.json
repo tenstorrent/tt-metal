@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-29T00:11:46Z",
-  "updated_at": "2026-05-29T00:38:13Z",
+  "updated_at": "2026-05-29T00:45:55Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -65,8 +65,15 @@
         "pcc": 1.0
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/vision_rmsnorm.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_tt_vision_rmsnorm.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/vision_rmsnorm.traced_ops.json"
+        ],
+        "notes": "ttnn.rms_norm eps=1e-5 HiFi4+fp32_dest_acc bf16 DRAM TILE; PCC 0.99999 vs seed-0 golden on p150",
+        "pcc": 0.9999954353866637
       },
       "debug": {
         "status": "n/a",
@@ -657,6 +664,12 @@
       "tick": 5,
       "ts": "2026-05-29T00:38:13Z",
       "action": "reference[decoder_layer,lm_head,language_model]",
+      "result": "ok"
+    },
+    {
+      "tick": 6,
+      "ts": "2026-05-29T00:45:55Z",
+      "action": "device[vision_rmsnorm]",
       "result": "ok"
     }
   ],
