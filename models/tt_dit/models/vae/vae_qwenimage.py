@@ -50,8 +50,9 @@ class QwenImageVaeDecoder:
         # TODO: Remove when WanDecoder is migrated to tt-dit Modules framework.
         self._is_loaded = False
 
-    def forward(self, x: ttnn.Tensor, logical_h: int) -> ttnn.Tensor:
-        return self.wan_decoder(x, logical_h=logical_h)
+    def forward(self, x: ttnn.Tensor, logical_h: int) -> tuple[ttnn.Tensor, int]:
+        output, new_logical_h, _new_logical_w = self.wan_decoder(x, logical_h=logical_h)
+        return output, new_logical_h
 
     def load_torch_state_dict(self, state_dict: dict[str, torch.Tensor]) -> None:
         if self.wan_decoder is None:
@@ -99,5 +100,6 @@ class QwenImageVaeDecoder:
             ),
         ).squeeze(
             2
-        )  # remove the temporal dimension
+        )  # remove the temporal dimension — output is (B, C, H, W)
+        decoded_output = decoded_output[:, :, :logical_h, :]
         return decoded_output

@@ -33,8 +33,12 @@ void kernel_main() {
     constexpr uint32_t grid_dtype = get_compile_time_arg_val(9);
     constexpr uint32_t output_hw_size = get_compile_time_arg_val(10);
     constexpr bool use_precomputed_grid = get_compile_time_arg_val(11);
+    constexpr bool align_corners = get_compile_time_arg_val(12);
+    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(13);
+    constexpr uint32_t input_chunk_nbytes = get_compile_time_arg_val(14);
+    constexpr bool last_chunk_partial = get_compile_time_arg_val(15);
 
-    constexpr auto src_args = TensorAccessorArgs<12>();
+    constexpr auto src_args = TensorAccessorArgs<16>();
     constexpr auto grid_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
 
     const auto grid_tensor_accessor = TensorAccessor(grid_args, grid_addr);
@@ -79,9 +83,13 @@ void kernel_main() {
             process_grid_point<
                 grid_dtype,
                 use_precomputed_grid,
+                align_corners,
                 input_height,
                 input_width,
                 input_stick_nbytes,
+                in_nblocks_c,
+                input_chunk_nbytes,
+                last_chunk_partial,
                 input_cb_index,
                 scalar_cb_index>(noc, input_cb, scalar_cb, grid_ptr, grid_idx, input_tensor_accessor, batch_offset);
         }
