@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <algorithm>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
 #include <tt-metalium/constants.hpp>
 #include "api/debug/assert.h"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/q_chunk_remapping.hpp"
@@ -17,30 +18,26 @@ constexpr uint32_t get_barrier_read_threshold() {
     return ((512 / num_readers) * (1024 + 128)) / tile_bytes;
 }
 
-void fill_zeros_async(uint32_t write_addr, uint32_t tile_bytes) {
-    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
-    // Fill tile with zeros
-    uint32_t bytes_left = tile_bytes;
-    for (;;) {
-        uint32_t read_size = bytes_left > MEM_ZEROS_SIZE ? MEM_ZEROS_SIZE : bytes_left;
-        noc_async_read(zeros_noc_addr, write_addr, read_size);
-        write_addr += read_size;
-        bytes_left -= read_size;
-        if (bytes_left == 0) {
-            break;
-        }
-    }
+inline void fill_zeros_async(const Noc& noc, uint32_t cb_id, uint32_t tile_bytes, uint32_t offset_bytes = 0) {
+    CircularBuffer cb(cb_id);
+    noc.write_zeros(cb, tile_bytes, {.offset_bytes = offset_bytes});
 }
 
 template <uint32_t tile_bytes, bool wait_for_barrier = true>
-void fill_tile_zeros(uint32_t cb_id, uint32_t tile_id) {
+void fill_tile_zeros(const Noc& noc, uint32_t cb_id, uint32_t tile_id) {
     static_assert(tile_bytes % 4 == 0, "tile_bytes must be a multiple of 4");
 
-    uint32_t write_addr = get_write_ptr(cb_id) + tile_id * tile_bytes;
-    fill_zeros_async(write_addr, tile_bytes);
+    fill_zeros_async(noc, cb_id, tile_bytes, tile_id * tile_bytes);
     if (wait_for_barrier) {
-        noc_async_read_barrier();
+        noc.write_zeros_l1_barrier();
     }
+}
+
+// Convenience overload for callers that don't already have a Noc instance in scope.
+template <uint32_t tile_bytes, bool wait_for_barrier = true>
+void fill_tile_zeros(uint32_t cb_id, uint32_t tile_id) {
+    Noc noc;
+    fill_tile_zeros<tile_bytes, wait_for_barrier>(noc, cb_id, tile_id);
 }
 
 // capacity_t = 0 means "no wrap" (legacy / unbounded cache).  Nonzero means the cache
@@ -151,6 +148,7 @@ uint32_t read_chunk_with_padding(
     uint32_t outer_ptr_stride = transpose ? tile_bytes : dst_cols * tile_bytes;
     uint32_t inner_ptr_stride = transpose ? tile_bytes * dst_rows : tile_bytes;
 
+    Noc noc;
     uint32_t barrier_count = 0;
     for (uint32_t row = 0; row < src_rows; ++row) {
         uint32_t write_ptr = base_write_ptr + row * outer_ptr_stride;
@@ -174,10 +172,13 @@ uint32_t read_chunk_with_padding(
                 continue;
             }
             uint32_t tile_id = transpose ? col * dst_rows + row : row * dst_cols + col;
-            fill_tile_zeros<tile_bytes, false>(cb_id, tile_id);
+            fill_tile_zeros<tile_bytes, false>(noc, cb_id, tile_id);
         }
     }
+    // NOC reads and write_zeros use the same completion path on WH/BH but different
+    // paths on Quasar (NOC channels vs iDMA). Issue both — second is a no-op on WH/BH.
     noc_async_read_barrier();
+    noc.write_zeros_l1_barrier();
 
     if constexpr (push_num_tiles) {
         cb_push_back(cb_id, num_tiles);
@@ -205,6 +206,7 @@ FORCE_INLINE void read_q_subblock(
     cb_reserve_back(cb_id, sb_tiles);
     const uint32_t base_write_ptr = get_write_ptr(cb_id);
 
+    Noc noc;
     uint32_t barrier_count = 0;
     for (uint32_t row = sb_start_row; row < sb_start_row + subblock_h; ++row) {
         const uint32_t local_row = row - sb_start_row;
@@ -221,17 +223,20 @@ FORCE_INLINE void read_q_subblock(
             }
             // Zero-pad extra columns (src_cols < dst_cols case)
             for (uint32_t col = src_cols; col < dst_cols; ++col) {
-                fill_tile_zeros<tile_bytes, false>(cb_id, local_row * dst_cols + col);
+                fill_tile_zeros<tile_bytes, false>(noc, cb_id, local_row * dst_cols + col);
             }
         } else {
             // Entire row is padding
             for (uint32_t col = 0; col < dst_cols; ++col) {
-                fill_tile_zeros<tile_bytes, false>(cb_id, local_row * dst_cols + col);
+                fill_tile_zeros<tile_bytes, false>(noc, cb_id, local_row * dst_cols + col);
             }
         }
     }
 
+    // NOC reads and write_zeros use the same completion path on WH/BH but different
+    // paths on Quasar (NOC channels vs iDMA). Issue both — second is a no-op on WH/BH.
     noc_async_read_barrier();
+    noc.write_zeros_l1_barrier();
     cb_push_back(cb_id, sb_tiles);
 }
 
@@ -279,16 +284,20 @@ void read_paged_chunk_with_padding(
     }
 
     // Zero out the padding
+    Noc noc;
     for (uint32_t row = 0; row < dst_rows; ++row) {
         for (uint32_t col = 0; col < dst_cols; ++col) {
             if (row < src_rows && col < src_cols) {
                 continue;
             }
             uint32_t tile_id = transpose ? col * dst_rows + row : row * dst_cols + col;
-            fill_zeros_async(base_write_ptr + tile_id * tile_bytes, tile_bytes);
+            fill_zeros_async(noc, cb_id, tile_bytes, tile_id * tile_bytes);
         }
     }
+    // NOC reads and write_zeros use the same completion path on WH/BH but different
+    // paths on Quasar (NOC channels vs iDMA). Issue both — second is a no-op on WH/BH.
     noc_async_read_barrier();
+    noc.write_zeros_l1_barrier();
     cb_push_back(cb_id, num_tiles);
 }
 
@@ -1076,17 +1085,17 @@ inline void zero_fill_block(
     uint32_t num_rows,
     uint32_t cols,
     uint32_t dst_row_origin,
+    uint32_t dst_cb_id,
     uint32_t dst_addr,
     uint32_t outer_stride,
     uint32_t inner_stride) {
+    const uint32_t page_size =
+        has_get_aligned_page_size_v<ReaderType> ? reader.get_aligned_page_size() : reader.page_size;
+    Noc noc;
     for (uint32_t r = 0; r < num_rows; ++r) {
         uint32_t dst = dst_addr + (dst_row_origin + r) * outer_stride;
         for (uint32_t col = 0; col < cols; ++col) {
-            if constexpr (has_get_aligned_page_size_v<ReaderType>) {
-                fill_zeros_async(dst, reader.get_aligned_page_size());
-            } else {
-                fill_zeros_async(dst, reader.page_size);
-            }
+            fill_zeros_async(noc, dst_cb_id, page_size, dst - dst_addr);
             dst += inner_stride;
         }
     }
@@ -1166,6 +1175,7 @@ struct CatAddrGenerator {
     void issue_reads(
         const Slice& slice,
         uint32_t /*end_seq_tile*/,
+        uint32_t dst_cb_id,
         uint32_t dst_addr,
         uint32_t outer_stride,
         uint32_t inner_stride,
@@ -1199,7 +1209,14 @@ struct CatAddrGenerator {
         const uint32_t s1_end = std::min(d2_end, gap_end);
         if (s1_start < s1_end) {
             zero_fill_block(
-                first_reader, s1_end - s1_start, cols, s1_start - d2_start, dst_addr, outer_stride, inner_stride);
+                first_reader,
+                s1_end - s1_start,
+                cols,
+                s1_start - d2_start,
+                dst_cb_id,
+                dst_addr,
+                outer_stride,
+                inner_stride);
         }
         // Segment 2: second tensor (d2 shifted by first_seq_padded).
         const uint32_t s2_start = std::max(d2_start, gap_end);
@@ -1222,7 +1239,14 @@ struct CatAddrGenerator {
         const uint32_t s3_start = std::max(d2_start, second_end);
         if (s3_start < d2_end) {
             zero_fill_block(
-                first_reader, d2_end - s3_start, cols, s3_start - d2_start, dst_addr, outer_stride, inner_stride);
+                first_reader,
+                d2_end - s3_start,
+                cols,
+                s3_start - d2_start,
+                dst_cb_id,
+                dst_addr,
+                outer_stride,
+                inner_stride);
         }
     }
 
@@ -1290,6 +1314,7 @@ struct PaddedAddrGenerator {
     void issue_reads(
         const Slice& slice,
         uint32_t end_seq_tile,
+        uint32_t dst_cb_id,
         uint32_t dst_addr,
         uint32_t outer_stride,
         uint32_t inner_stride,
@@ -1321,6 +1346,7 @@ struct PaddedAddrGenerator {
             rows - valid_rows,
             cols,
             /*dst_row_origin=*/valid_rows,
+            dst_cb_id,
             dst_addr,
             outer_stride,
             inner_stride);
@@ -1387,6 +1413,7 @@ __attribute__((noinline)) void fetch_block(
     const CatAddrGeneratorType& cat_addr_generator,
     const Slice& src_slice,
     const uint32_t end_seq_tile,
+    const uint32_t dst_cb_id,
     const uint32_t dst_addr,
     const uint32_t tile_bytes,
     const bool transpose,
@@ -1397,8 +1424,13 @@ __attribute__((noinline)) void fetch_block(
     const uint32_t inner_ptr_stride = transpose ? tile_bytes * src_rows : tile_bytes;
 
     cat_addr_generator.issue_reads(
-        src_slice, end_seq_tile, dst_addr, outer_ptr_stride, inner_ptr_stride, barrier_threshold);
+        src_slice, end_seq_tile, dst_cb_id, dst_addr, outer_ptr_stride, inner_ptr_stride, barrier_threshold);
+    // issue_reads internally emits noc_async_read (NOC) AND zero_fill_block → write_zeros
+    // (iDMA on Quasar). NOC reads and write_zeros use the same completion path on WH/BH
+    // but different paths on Quasar. Issue both — second is a no-op on WH/BH.
+    Noc noc;
     noc_async_read_barrier();
+    noc.write_zeros_l1_barrier();
 }
 
 template <typename CatAddrGeneratorType>
@@ -1413,7 +1445,14 @@ void read_block(
     const uint32_t num_tiles = src_slice.get_d2_size() * src_slice.get_d3_size();
     cb_reserve_back(cb_id, num_tiles);
     fetch_block(
-        cat_addr_generator, src_slice, end_seq_tile, get_write_ptr(cb_id), tile_bytes, transpose, barrier_threshold);
+        cat_addr_generator,
+        src_slice,
+        end_seq_tile,
+        cb_id,
+        get_write_ptr(cb_id),
+        tile_bytes,
+        transpose,
+        barrier_threshold);
     cb_push_back(cb_id, num_tiles);
 }
 

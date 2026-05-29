@@ -56,7 +56,7 @@ void kernel_main() {
         // Zero-initialize so out-of-shard targets produce 0.0.
         cb_reserve_back(cb_output_idx, onetile);
         uint32_t l1_output_write_addr = get_write_ptr(cb_output_idx);
-        fill_zeros_async(l1_output_write_addr, get_tile_size(cb_output_idx));
+        fill_zeros_async(cb_output_idx, get_tile_size(cb_output_idx));
         noc_async_read_barrier();
 
         auto target_indexes_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t *>(get_read_ptr(cb_target_idx));

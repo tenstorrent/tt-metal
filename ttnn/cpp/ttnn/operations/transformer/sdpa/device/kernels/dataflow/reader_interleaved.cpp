@@ -11,6 +11,7 @@
 template <uint32_t tile_bytes, bool transpose, typename ReaderType>
 FORCE_INLINE void read_chunk_for_forwarding(
     const ReaderType& reader,
+    const uint32_t cb_id,
     const uint32_t dst_addr,
     uint32_t start_tile_id,
     const uint32_t src_rows,
@@ -30,16 +31,20 @@ FORCE_INLINE void read_chunk_for_forwarding(
         }
         tile_id += skip_src_cols;
     }
+    Noc noc;
     for (uint32_t row = 0; row < dst_rows; ++row) {
         for (uint32_t col = 0; col < dst_cols; ++col) {
             if (row < src_rows && col < src_cols) {
                 continue;
             }
             uint32_t tile_idx = transpose ? col * dst_rows + row : row * dst_cols + col;
-            fill_zeros_async(dst_addr + tile_idx * tile_bytes, tile_bytes);
+            fill_zeros_async(noc, cb_id, tile_bytes, tile_idx * tile_bytes);
         }
     }
+    // NOC reads and write_zeros use the same completion path on WH/BH but different
+    // paths on Quasar (NOC channels vs iDMA). Issue both — second is a no-op on WH/BH.
     noc_async_read_barrier();
+    noc.write_zeros_l1_barrier();
 }
 
 void kernel_main() {
@@ -439,7 +444,14 @@ void kernel_main() {
                             cb_reserve_back(cb_k_in, k_chunk_tiles);
                             cb_k_start_address = get_write_ptr(cb_k_in);
                             read_chunk_for_forwarding<k_tile_bytes, true>(
-                                k_reader, cb_k_start_address, k_start_tile_id, kv_row_tile_count, DHt, Sk_chunk_t, DHt);
+                                k_reader,
+                                cb_k_in,
+                                cb_k_start_address,
+                                k_start_tile_id,
+                                kv_row_tile_count,
+                                DHt,
+                                Sk_chunk_t,
+                                DHt);
                         } else {
                             read_chunk_with_padding<k_tile_bytes>(
                                 k_reader,
@@ -595,6 +607,7 @@ void kernel_main() {
                             cb_v_start_address = get_write_ptr(cb_v_in);
                             read_chunk_for_forwarding<v_tile_bytes, false>(
                                 v_reader,
+                                cb_v_in,
                                 cb_v_start_address,
                                 v_start_tile_id,
                                 kv_row_tile_count,

@@ -5,6 +5,7 @@
 #include "isin_common.hpp"
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
 
 #include <algorithm>
 #include <numeric>
@@ -41,15 +42,11 @@ FORCE_INLINE void isin_subchunks(
     }
 }
 
-void zero_buffer(uint32_t write_addr, int bytes) {
-    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
-    while (bytes > 0) {
-        uint32_t curr_bytes = std::min(bytes, MEM_ZEROS_SIZE);
-        noc_async_read(zeros_noc_addr, write_addr, curr_bytes);
-        write_addr += curr_bytes;
-        bytes -= curr_bytes;
-    }
-    noc_async_read_barrier();
+void zero_buffer(uint32_t cb_id, uint32_t bytes) {
+    Noc noc;
+    CircularBuffer cb(cb_id);
+    noc.write_zeros(cb, bytes);
+    noc.write_zeros_l1_barrier();
 }
 
 /*
@@ -60,25 +57,16 @@ void zero_buffer(uint32_t write_addr, int bytes) {
     then retuened to DRAM
 */
 template <typename elements_number_type>
-FORCE_INLINE void prefill_output(uint32_t output_l1_write_addr, uint32_t output_subchunk_size, bool invert) {
+FORCE_INLINE void prefill_output(uint32_t output_cb_id, uint32_t output_subchunk_size, bool invert) {
     if (invert) {
+        const uint32_t output_l1_write_addr = get_write_ptr(output_cb_id);
         volatile tt_l1_ptr elements_number_type* output_chunk_begin_ptr =
             reinterpret_cast<volatile tt_l1_ptr elements_number_type*>(output_l1_write_addr);
         for (uint32_t i = 0; i < output_subchunk_size; ++i) {
             output_chunk_begin_ptr[i] = 0xFFFFFFFF;
         }
     } else {
-        zero_buffer(output_l1_write_addr, output_subchunk_size * sizeof(uint32_t));
-        //         void zero_buffer(uint32_t write_addr, int bytes) {
-        //     uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
-        //     while (bytes > 0) {
-        //         uint32_t curr_bytes = std::min(bytes, MEM_ZEROS_SIZE);
-        //         noc_async_read(zeros_noc_addr, write_addr, curr_bytes);
-        //         write_addr += curr_bytes;
-        //         bytes -= curr_bytes;
-        //     }
-        //     noc_async_read_barrier();
-        // }
+        zero_buffer(output_cb_id, output_subchunk_size * sizeof(uint32_t));
     }
 }
 
@@ -134,7 +122,7 @@ void kernel_main() {
         cb_reserve_back(ctas.output_cb, ONE_PAGE);
         const uint32_t elements_l1_read_addr = get_read_ptr(ctas.elements_cb);
         const uint32_t output_l1_write_addr = get_write_ptr(ctas.output_cb);
-        prefill_output<elements_number_type>(output_l1_write_addr, elements_subchunk_size, ctas.invert);
+        prefill_output<elements_number_type>(ctas.output_cb, elements_subchunk_size, ctas.invert);
 
         // for every subchunk of the test_elements stick
         for (uint32_t test_elements_subchunk_id = 0, test_elements_offset = 0;

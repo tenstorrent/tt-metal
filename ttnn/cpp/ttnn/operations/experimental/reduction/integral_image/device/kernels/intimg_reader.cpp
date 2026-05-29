@@ -3,28 +3,24 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
 
 #include "common_dataflow.hpp"
 
 namespace {
 
-FORCE_INLINE void zero_buffer(uint32_t write_addr, int bytes) {
-    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
-    while (bytes > 0) {
-        uint32_t curr_bytes = std::min(bytes, MEM_ZEROS_SIZE);
-        noc_async_read(zeros_noc_addr, write_addr, curr_bytes);
-        write_addr += curr_bytes;
-        bytes -= curr_bytes;
-    }
-    noc_async_read_barrier();
+FORCE_INLINE void zero_buffer(uint32_t cb_id, uint32_t bytes) {
+    Noc noc;
+    CircularBuffer cb(cb_id);
+    noc.write_zeros(cb, bytes);
+    noc.write_zeros_l1_barrier();
 }
 
 template <typename input_number_t>
 FORCE_INLINE void prepare_start_tile_for_cumsum_axis_2(uint32_t cb_start, uint32_t tile_size) {
     WriteCBGuard start_cb_guard{cb_start, ONE_TILE};
 
-    uint32_t start_addr = get_write_ptr(cb_start);
-    zero_buffer(start_addr, tile_size * sizeof(input_number_t));
+    zero_buffer(cb_start, tile_size * sizeof(input_number_t));
 }
 
 template <typename input_addr_gen_t>
