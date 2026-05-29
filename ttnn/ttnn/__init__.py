@@ -17,6 +17,27 @@ from loguru import logger
 import ttnn._ttnn
 
 
+# Quiet ttnn's Python (loguru) logging by default.
+#
+# ttnn previously inherited loguru's out-of-the-box stderr sink, whose default
+# level is DEBUG. As a result, merely importing ttnn printed a large volume of
+# DEBUG output (e.g. the full "Initial ttnn.CONFIG" dump and per-op chatter) on
+# every process launch. For automated / agent-driven workflows that read this
+# output back into context on every command, that noise is a first-order cost.
+#
+# Default to a quiet level (INFO) and let users restore verbosity with a single
+# env var. Precedence (first one set wins) keeps the existing repo conventions:
+#   TTNN_LOGGER_LEVEL  -> ttnn-specific override
+#   TT_LOGGER_LEVEL    -> shared tt-metal logger level
+#   LOGURU_LEVEL       -> loguru's own env var
+# e.g. `TTNN_LOGGER_LEVEL=DEBUG` brings back the previous behavior.
+_TTNN_DEFAULT_LOG_LEVEL = (
+    os.environ.get("TTNN_LOGGER_LEVEL") or os.environ.get("TT_LOGGER_LEVEL") or os.environ.get("LOGURU_LEVEL") or "INFO"
+).upper()
+logger.remove()
+logger.add(sys.stderr, level=_TTNN_DEFAULT_LOG_LEVEL)
+
+
 Config = ttnn._ttnn.core.Config
 CONFIG = ttnn._ttnn.CONFIG
 CONFIG_PATH = None
