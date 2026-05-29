@@ -59,6 +59,25 @@ def test_build_output_paths_defaults_under_output_dir(tmp_path):
     assert report_path == tmp_path / "validation_report.json"
 
 
+def test_summarize_run_details_prefers_sampling_window_for_diffusion_tps(tmp_path):
+    output = tmp_path / "out.wav"
+    torchaudio.save(str(output), torch.zeros(2, 16000), 16000)
+    summary = validate_mod._summarize_run_details(
+        output,
+        elapsed_seconds=20.0,
+        details={
+            "conditioning_tokens": 10,
+            "t_latent": 216,
+            "steps": 2,
+            "timings": {"sampling_seconds": 4.0},
+        },
+    )
+    assert summary["sampling_seconds"] == 4.0
+    assert summary["diffusion_tokens_per_second"] == pytest.approx(108.0)
+    assert summary["meets_stage1_diffusion_tps_ge_20"] is True
+    assert summary["meets_stage1_generation_time_lt_30s"] is True
+
+
 def test_parse_args_requires_at_least_one_conditioner_input():
     with pytest.raises(SystemExit) as exc:
         validate_mod._parse_args(["--checkpoint", "/tmp/fake.safetensors"])

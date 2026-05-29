@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 
 import ttnn
 
@@ -31,12 +32,15 @@ class TtDiffusionTransformer:
         num_heads: int,
         io_channels: int = 64,
         embed_dim: int = 1536,
+        lazy_layers: bool | None = None,
     ):
         sd = state_dict
         self.mesh_device = mesh_device
         self.io_channels = io_channels
         self.embed_dim = embed_dim
         dim_heads = embed_dim // num_heads
+        if lazy_layers is None:
+            lazy_layers = os.getenv("AUDIOX_TT_LAZY_LAYERS", "0") == "1"
 
         # FourierFeatures stores weight as [fourier_dim/2, 1]; forward does x @ weight.T,
         # so transpose once at construction and use ttnn.linear directly.
@@ -62,8 +66,23 @@ class TtDiffusionTransformer:
             cross_attend=True,
             dim_in=io_channels,
             dim_out=io_channels,
-            lazy_layers=True,
+            lazy_layers=lazy_layers,
         )
+
+    def deallocate(self) -> None:
+        for tensor in (
+            self.fourier_w,
+            self.te0_w,
+            self.te0_b,
+            self.te2_w,
+            self.te2_b,
+            self.tc0_w,
+            self.tc2_w,
+            self.pre_w,
+            self.post_w,
+        ):
+            ttnn.deallocate(tensor, force=True)
+        self.transformer.deallocate()
 
     def __call__(self, x: ttnn.Tensor, t: ttnn.Tensor, cross_attn_cond: ttnn.Tensor) -> ttnn.Tensor:
         # x:    [B, C, T] (NCT, matching upstream)

@@ -19,6 +19,7 @@ Run from the tt-metal root with a connected device:
 import argparse
 import os
 import sys
+import time
 from pathlib import Path
 
 import torch
@@ -50,6 +51,29 @@ from models.experimental.audiox.utils.loader import (
 )
 
 
+def _build_tt_dit(cpu_state_dict: dict, device):
+    try:
+        return TtDiffusionTransformer(
+            mesh_device=device,
+            state_dict=cpu_state_dict,
+            depth=_HF_CONFIG["depth"],
+            num_heads=_HF_CONFIG["num_heads"],
+            io_channels=_HF_CONFIG["io_channels"],
+            embed_dim=_HF_CONFIG["embed_dim"],
+            lazy_layers=False,
+        )
+    except RuntimeError:
+        return TtDiffusionTransformer(
+            mesh_device=device,
+            state_dict=cpu_state_dict,
+            depth=_HF_CONFIG["depth"],
+            num_heads=_HF_CONFIG["num_heads"],
+            io_channels=_HF_CONFIG["io_channels"],
+            embed_dim=_HF_CONFIG["embed_dim"],
+            lazy_layers=True,
+        )
+
+
 def _should_use_local_mesh() -> bool:
     try:
         return ttnn.get_num_devices() > ttnn.get_num_pcie_devices()
@@ -74,6 +98,12 @@ def open_tt_device(device_id: int):
 
 def _to_tt(t: torch.Tensor, device, layout=ttnn.TILE_LAYOUT) -> ttnn.Tensor:
     return ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=layout, device=device)
+
+
+def _deallocate_tt(*tensors) -> None:
+    for tensor in tensors:
+        if tensor is not None:
+            ttnn.deallocate(tensor, force=True)
 
 
 def _nct_to_nhwc(x_nct: ttnn.Tensor) -> ttnn.Tensor:
@@ -106,12 +136,16 @@ def run_tt_demo(
         raise ValueError("pass either an audio path or audio_prompt_tensor, not both")
 
     # 1. Load checkpoint and split per module.
+    timings = {}
+    started_at = time.perf_counter()
     raw_sd = load_audiox_checkpoint(checkpoint)
     dit_sd = remap_dit_state_dict(raw_sd)
     encoder_sd = remap_oobleck_encoder_state_dict(raw_sd, n_blocks=len(_HF_CONFIG["decoder_c_mults"]))
     decoder_sd = remap_oobleck_decoder_state_dict(raw_sd, n_blocks=len(_HF_CONFIG["decoder_c_mults"]))
+    timings["checkpoint_seconds"] = time.perf_counter() - started_at
 
     # 2. Conditioners on CPU. Build CPU reference modules and load weights.
+    started_at = time.perf_counter()
     audio_prompt = _resolve_audio_prompt(audio_path, audio_prompt_tensor)
     audio_pretransform = _build_audio_pretransform() if audio_prompt is not None else None
     if audio_pretransform is not None:
@@ -128,19 +162,14 @@ def run_tt_demo(
         "cpu",
     )
     cross_attn_cond_torch = _make_cross_attn_cond(cond_out)
+    timings["conditioning_seconds"] = time.perf_counter() - started_at
 
     # 3. Build TT modules. We seed them from CPU reference state_dicts so the
     # TT modules pick up pretrained weights directly.
+    started_at = time.perf_counter()
     cpu_dit = _build_dit().eval()
     load_into(cpu_dit, dit_sd, label="dit")
-    tt_dit = TtDiffusionTransformer(
-        mesh_device=device,
-        state_dict=cpu_dit.state_dict(),
-        depth=_HF_CONFIG["depth"],
-        num_heads=_HF_CONFIG["num_heads"],
-        io_channels=_HF_CONFIG["io_channels"],
-        embed_dim=_HF_CONFIG["embed_dim"],
-    )
+    tt_dit = _build_tt_dit(cpu_dit.state_dict(), device)
 
     cpu_decoder = _build_decoder().eval()
     load_into(cpu_decoder, decoder_sd, label="decoder")
@@ -153,27 +182,39 @@ def run_tt_demo(
         c_mults=_HF_CONFIG["decoder_c_mults"],
         strides=_HF_CONFIG["decoder_strides"],
     )
+    timings["tt_module_build_seconds"] = time.perf_counter() - started_at
 
     # 4. Set up noise + cond on device.
+    started_at = time.perf_counter()
     samples = _HF_CONFIG["sample_rate"] * _HF_CONFIG["duration_seconds"]
     t_latent = -(-samples // _HF_CONFIG["downsample"])
     noise = torch.randn(1, _HF_CONFIG["io_channels"], t_latent)
 
     tt_noise = _to_tt(noise, device)
     tt_cond = _to_tt(cross_attn_cond_torch, device)
+    timings["tt_input_setup_seconds"] = time.perf_counter() - started_at
 
     # 5. Sample on device. The sampler calls tt_dit each step with the current
     # latent + a [batch] timestep tensor.
     def model_fn(x, t, **kwargs):
         return tt_dit(x, t, cross_attn_cond=tt_cond)
 
+    started_at = time.perf_counter()
     tt_latent = tt_sample_rf(model_fn, tt_noise, mesh_device=device, steps=steps)
     tt_latent_torch = ttnn.to_torch(tt_latent).detach().cpu()
+    _deallocate_tt(tt_noise, tt_cond)
+    if hasattr(tt_dit, "deallocate"):
+        tt_dit.deallocate()
+        tt_dit = None
+    timings["sampling_seconds"] = time.perf_counter() - started_at
 
     # 6. Decode on device. tt_decoder expects [B, T, 1, C].
+    started_at = time.perf_counter()
     tt_audio_nhwc = tt_decoder(_nct_to_nhwc(tt_latent))
+    timings["decode_seconds"] = time.perf_counter() - started_at
 
     # 7. Pull audio back to CPU, drop the H=1 dim, transpose [B, T, 1, C] -> [B, C, T].
+    started_at = time.perf_counter()
     audio = ttnn.to_torch(tt_audio_nhwc).squeeze(2).transpose(1, 2).clamp(-1.0, 1.0).detach().float().cpu()
     audio = resample_output_audio(
         audio,
@@ -182,6 +223,7 @@ def run_tt_demo(
     )
     output.parent.mkdir(parents=True, exist_ok=True)
     torchaudio.save(str(output), audio[0], _HF_CONFIG["output_sample_rate"])
+    timings["save_seconds"] = time.perf_counter() - started_at
     if return_details:
         return {
             "output_path": output,
@@ -189,6 +231,7 @@ def run_tt_demo(
             "cross_attn_cond": cross_attn_cond_torch.detach().cpu(),
             "conditioning_tokens": int(cross_attn_cond_torch.shape[1]),
             "t_latent": int(t_latent),
+            "timings": timings,
         }
     return output
 
