@@ -66,10 +66,10 @@ std::vector<uint32_t> pack_as_mx_tiles_impl(
     TT_ASSERT(data.size() % tile_HW == 0, "Input size must be a multiple of tile size");
     TT_ASSERT(params.block_size % 4 == 0, "MX block size must be a multiple of 4");
     TT_ASSERT(
-        (params.block_size * static_cast<uint32_t>(params.elem_width_storage_bits)) % 32 == 0,
+        (params.block_size * params.elem_width_storage_bits) % 32 == 0,
         "MX block must pack into a whole number of 32-bit words");
     TT_ASSERT(
-        params.elem_width_storage_bits > 0 && 32 % static_cast<uint32_t>(params.elem_width_storage_bits) == 0,
+        params.elem_width_storage_bits > 0 && 32u % params.elem_width_storage_bits == 0,
         "MX elem storage width must divide 32 bits evenly");
 
     auto word_counts = compute_tile_word_counts(tile_HW, params);
@@ -79,10 +79,10 @@ std::vector<uint32_t> pack_as_mx_tiles_impl(
     uint32_t tile_size_words = exp_words + elem_words;
 
     const uint32_t block_size = params.block_size;
-    const uint32_t elem_storage_bits = static_cast<uint32_t>(params.elem_width_storage_bits);
+    const uint32_t elem_storage_bits = params.elem_width_storage_bits;
     const uint32_t elements_per_word = 32u / elem_storage_bits;
     const uint32_t elem_words_per_block = (block_size * elem_storage_bits) / 32u;
-    const uint32_t elem_shift = elem_storage_bits - static_cast<uint32_t>(params.elem_width_bits);
+    const uint32_t elem_shift = elem_storage_bits - params.elem_width_bits;
     const uint32_t elem_mask = (params.elem_width_bits >= 32) ? 0xFFFFFFFFu : ((1u << params.elem_width_bits) - 1u);
 
     uint32_t num_tiles = data.size() / tile_HW;
@@ -189,10 +189,10 @@ inline std::vector<float> unpack_mx_tiles_into_float_vec_impl(
     TT_ASSERT(tile_HW % params.block_size == 0, "MX tile must be a multiple of {} elements", params.block_size);
     TT_ASSERT(params.block_size % 4 == 0, "MX block size must be a multiple of 4");
     TT_ASSERT(
-        (params.block_size * static_cast<uint32_t>(params.elem_width_storage_bits)) % 32 == 0,
+        (params.block_size * params.elem_width_storage_bits) % 32 == 0,
         "MX block must pack into a whole number of 32-bit words");
     TT_ASSERT(
-        params.elem_width_storage_bits > 0 && 32 % static_cast<uint32_t>(params.elem_width_storage_bits) == 0,
+        params.elem_width_storage_bits > 0 && 32u % params.elem_width_storage_bits == 0,
         "MX elem storage width must divide 32 bits evenly");
 
     auto word_counts = compute_tile_word_counts(tile_HW, params);
@@ -204,10 +204,10 @@ inline std::vector<float> unpack_mx_tiles_into_float_vec_impl(
     uint32_t num_tiles = mx_tiles.size() / tile_size_words;
 
     const uint32_t block_size = params.block_size;
-    const uint32_t elem_storage_bits = static_cast<uint32_t>(params.elem_width_storage_bits);
+    const uint32_t elem_storage_bits = params.elem_width_storage_bits;
     const uint32_t elements_per_word = 32u / elem_storage_bits;
     const uint32_t elem_words_per_block = (block_size * elem_storage_bits) / 32u;
-    const uint32_t elem_shift = elem_storage_bits - static_cast<uint32_t>(params.elem_width_bits);
+    const uint32_t elem_shift = elem_storage_bits - params.elem_width_bits;
     const uint32_t elem_unit_mask = (elem_storage_bits >= 32) ? 0xFFFFFFFFu : ((1u << elem_storage_bits) - 1u);
     const uint32_t elem_mask = (params.elem_width_bits >= 32) ? 0xFFFFFFFFu : ((1u << params.elem_width_bits) - 1u);
 

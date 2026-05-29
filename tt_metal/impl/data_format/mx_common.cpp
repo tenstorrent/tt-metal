@@ -24,7 +24,7 @@ uint32_t compute_exp_bytes(uint32_t exp_count, uint32_t l1_alignment) { return t
 
 uint32_t compute_elem_words(uint32_t elem_count, const FormatParams& params) {
     TT_ASSERT(params.elem_width_storage_bits > 0, "MX element storage width must be > 0");
-    uint32_t bits = elem_count * static_cast<uint32_t>(params.elem_width_storage_bits);
+    uint32_t bits = elem_count * params.elem_width_storage_bits;
     return (bits + 31) / 32;
 }
 

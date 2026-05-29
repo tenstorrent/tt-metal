@@ -24,15 +24,15 @@ enum class InfNanRepresentation : uint8_t {
 struct FormatParams {
     uint32_t block_size = 32;
     int scale_bias = 0x7F;
-    int elem_exp_bits = 0;
-    int elem_man_bits = 0;
+    uint32_t elem_exp_bits = 0;
+    uint32_t elem_man_bits = 0;
     int elem_exp_bias = 0;
     int elem_exp_max_unbiased = 0;
     int elem_exp_min_unbiased = 0;
     int elem_exp_subnorm_encoding = 0;
     uint32_t elem_man_max = 0;
-    int elem_width_bits = 0;
-    int elem_width_storage_bits = 0;
+    uint32_t elem_width_bits = 0;
+    uint32_t elem_width_storage_bits = 0;
     bool sat_supported = false;
     uint32_t elem_sat_pos_bits = 0;
     uint32_t elem_sat_neg_bits = 0;
@@ -195,7 +195,7 @@ inline uint32_t convert_to_mx_elem_bits(float datum, const FormatParams& params)
         int elem_exp_unbiased = static_cast<int>(fp32_exp_biased) - 127;
         TT_ASSERT(elem_exp_unbiased <= params.elem_exp_max_unbiased, "MX element exponent out of range after scaling");
 
-        int mant_width = params.elem_man_bits;
+        int mant_width = static_cast<int>(params.elem_man_bits);
         auto [mant_round, exp_inc] = round_ties_even(fp32_mant, mant_width, 23);
         uint32_t elem_mant_shifted = mant_round;
         int elem_exp_unbiased_adj = elem_exp_unbiased + static_cast<int>(exp_inc);
