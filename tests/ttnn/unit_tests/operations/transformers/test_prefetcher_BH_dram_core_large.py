@@ -50,6 +50,7 @@ from loguru import logger
 
 from models.common.utility_functions import run_for_blackhole
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
+from tests.ttnn.unit_tests.operations.prefetcher_common import round_up as _round_up, bytes_per_tile as _bytes_per_tile
 
 
 # DRAM bank count is queried at runtime via `device.dram_grid_size().x`:
@@ -67,14 +68,6 @@ pytestmark = [
         reason="TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES not set",
     ),
 ]
-
-
-def _round_up(n, m):
-    return ((n + m - 1) // m) * m
-
-
-def _bytes_per_tile(dtype) -> int:
-    return {ttnn.bfloat16: 2048, ttnn.bfloat8_b: 1088}[dtype]
 
 
 def _bank_receivers_row_major(bank_idx: int, recv_per_bank: int, ring_cols: int):

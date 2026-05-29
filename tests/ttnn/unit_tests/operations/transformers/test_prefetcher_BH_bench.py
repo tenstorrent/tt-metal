@@ -50,6 +50,7 @@ from loguru import logger
 
 from models.common.utility_functions import run_for_blackhole
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
+from tests.ttnn.unit_tests.operations.prefetcher_common import round_up as _round_up
 
 
 pytestmark = [
@@ -59,10 +60,6 @@ pytestmark = [
         reason="TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES not set",
     ),
 ]
-
-
-def _round_up(n, m):
-    return ((n + m - 1) // m) * m
 
 
 def _select_num_dram_banks(available_banks: int) -> int:

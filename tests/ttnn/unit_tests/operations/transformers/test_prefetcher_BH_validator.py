@@ -20,6 +20,7 @@ import ttnn
 from loguru import logger
 
 from models.common.utility_functions import run_for_blackhole
+from tests.ttnn.unit_tests.operations.prefetcher_common import round_up as _round_up
 
 
 pytestmark = [
@@ -36,10 +37,6 @@ _GCB_DEPTH_PAGES = 4  # small ring so the validator stresses reserve_back/wait_f
 
 _TILE_BYTES_BF16 = 2048  # 32*32*2
 _TILE_BYTES_BF8 = 1088  # 32*32 (data) + 64 (exponent header)
-
-
-def _round_up(n, m):
-    return ((n + m - 1) // m) * m
 
 
 def _bank_receivers_row_major(bank_idx: int, recv_per_bank: int, ring_cols: int, row_offset: int = 0):

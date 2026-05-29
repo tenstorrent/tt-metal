@@ -49,6 +49,7 @@ import ttnn
 from loguru import logger
 
 from models.common.utility_functions import run_for_blackhole
+from tests.ttnn.unit_tests.operations.prefetcher_common import round_up as _round_up
 
 
 pytestmark = [
@@ -106,10 +107,6 @@ LLAMA_SHAPES = [
 
 def _bench_trace_repeats() -> int:
     return int(os.environ.get("BENCH_TRACE_REPEATS", "100"))
-
-
-def _round_up(n, m):
-    return ((n + m - 1) // m) * m
 
 
 def _apply_shape(shape: dict) -> None:
