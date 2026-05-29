@@ -26,6 +26,7 @@ import torch
 import ttnn
 from models.demos.blackhole.qwen3_5_9b.tt.gdn_kernel.gdn_kernel_op import gdn_prefill_fused
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import create_chunk_masks
+from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_seq import create_chunk_masks_seq
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet import (
     gated_deltanet_forward_ttnn,
     rms_norm_gated_ttnn,
@@ -204,6 +205,24 @@ class Qwen35GatedDeltaNet:
         # writes here instead of allocating fresh — required for trace replay.
         self._trace_prefill_output = None
 
+        # Decode recurrence kernel: opt-in fused on-device kernel for T=1 decode,
+        # replacing the slower ttnn-ops recurrence. Off by default (falls back to
+        # the ttnn-ops path). Toggle with QWEN9B_GDN_DECODE_KERNEL=1.
+        self._use_decode_kernel = bool(os.environ.get("QWEN9B_GDN_DECODE_KERNEL", ""))
+        # Persistent [num_pairs, 1, Dv] output buffer for the decode kernel
+        # (trace-safe); lazily allocated on the first T=1 decode call.
+        self._decode_kernel_output = None
+
+        # Chunk-parallel prefill via the C++ gated_delta_attn_seq kernel (float32),
+        # opt-in via QWEN9B_GDN_CHUNK_SEQ=1. Replaces the per-token prefill kernel.
+        # The kernel hardcodes Ct=4 diagonal blocks, so it ONLY supports
+        # chunk_size=128 (= long_prefill_chunk_size). Precompute its float32 masks
+        # (incl. eye_32) once; other chunk sizes fall back to the per-token kernel.
+        self._use_chunk_seq_prefill = bool(os.environ.get("QWEN9B_GDN_CHUNK_SEQ", ""))
+        self._chunk_seq_masks_long = None
+        if self._use_chunk_seq_prefill:
+            self._chunk_seq_masks_long = create_chunk_masks_seq(self.long_prefill_chunk_size, device)
+
     def _precompute_weight_taps(self, conv_weight):
         """Pre-slice conv weight [D, 1, K] into K device tensors [1, 1, D] for FIR decode."""
 
@@ -302,9 +321,15 @@ class Qwen35GatedDeltaNet:
             batch_size = shape[0] if len(shape) == 3 else 1
             self._init_recurrent_state(batch_size)
 
-        # Use kernel-based prefill when available (replaces chunked delta rule)
+        # Use kernel-based prefill when available (replaces chunked delta rule).
+        # The chunk-seq path (opt-in) takes precedence over the per-token kernel,
+        # but ONLY at chunk_size=128 (the kernel hardcodes Ct=4). Other chunk
+        # sizes keep using the per-token kernel.
         T = x.shape[1]
-        if mode == "chunk" and T > 1 and self._use_prefill_kernel:
+        use_chunk_seq = (
+            mode == "chunk" and T > 1 and self._use_chunk_seq_prefill and chunk_size == self.long_prefill_chunk_size
+        )
+        if mode == "chunk" and T > 1 and self._use_prefill_kernel and not use_chunk_seq:
             return self.forward_prefill_kernel(x, prefill_output=self._trace_prefill_output)
 
         # After prefill, fuse separate conv states into one for efficient decode
@@ -320,6 +345,24 @@ class Qwen35GatedDeltaNet:
             masks = self.cached_masks_long
         else:
             masks = None
+
+        # Chunk-parallel prefill (C++ gated_delta_attn_seq kernel) — opt-in, float32.
+        # use_chunk_seq was computed above (only true at chunk_size=128).
+        seq_masks = self._chunk_seq_masks_long if use_chunk_seq else None
+
+        # Fused on-device recurrence kernel for single-token decode (opt-in).
+        # Lazily allocate the persistent [num_pairs, 1, Dv] output buffer once so
+        # its address is stable across traced decode steps.
+        use_decode_kernel = mode == "recurrent" and T == 1 and self._use_decode_kernel
+        if use_decode_kernel and self._decode_kernel_output is None:
+            num_pairs = self.recurrent_state.shape[0] * self.num_v_heads
+            self._decode_kernel_output = ttnn.zeros(
+                [num_pairs, 1, self.head_v_dim],
+                device=self.device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
 
         output, new_state, new_conv_q, new_conv_k, new_conv_v, new_fused_conv = gated_deltanet_forward_ttnn(
             hidden_states=x,
@@ -378,6 +421,10 @@ class Qwen35GatedDeltaNet:
             mega_g_dim=self.mega_g_dim,
             cached_masks=masks,
             use_inplace_state=self.use_inplace_state,
+            use_decode_kernel=use_decode_kernel,
+            decode_kernel_output=self._decode_kernel_output,
+            use_chunk_seq=use_chunk_seq,
+            chunk_seq_masks=seq_masks,
         )
 
         self.recurrent_state = new_state

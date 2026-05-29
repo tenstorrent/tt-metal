@@ -21,6 +21,10 @@ Recurrence math (per token):
 """
 
 
+import os
+
+from loguru import logger
+
 import ttnn
 
 # Kernel file paths (relative to TT_METAL_HOME)
@@ -29,11 +33,24 @@ READER_PREFILL_PATH = f"{_KERNEL_DIR}/dataflow/reader_gdn_prefill.cpp"
 WRITER_PREFILL_PATH = f"{_KERNEL_DIR}/dataflow/writer_gdn_prefill.cpp"
 COMPUTE_PREFILL_PATH = f"{_KERNEL_DIR}/compute/gdn_prefill.cpp"
 
+# Decode (recurrence) kernel paths — imported from the Qwen3.5-27B branch.
+# Single-token recurrence kernel that replaces the slow ttnn-ops decode path.
+# TensorAccessor reader/writer (no IAF variant on this branch).
+READER_RECURRENCE_PATH = f"{_KERNEL_DIR}/dataflow/reader_gdn.cpp"
+WRITER_RECURRENCE_PATH = f"{_KERNEL_DIR}/dataflow/writer_gdn.cpp"
+COMPUTE_RECURRENCE_PATH = f"{_KERNEL_DIR}/compute/gdn_recurrence.cpp"
+
 # Tile constants (Dk=128, Dv=128 → 128/32 = 4 tiles each)
 Kt = 4
 Vt = 4
 STATE_TILES = Kt * Vt  # 16
 BF16_TILE_BYTES = 32 * 32 * 2  # 2048
+
+# Inner safety net: if the fused recurrence kernel raises at dispatch time, fall
+# back to standard ttnn ops (on the same kernel-layout tensors). Independent of
+# the module-level QWEN9B_GDN_DECODE_KERNEL flag, which decides whether the
+# kernel path is taken at all.
+_recurrence_fused_available = not os.environ.get("GDN_DISABLE_FUSED", "")
 
 
 def _make_cb(cb_index, num_tiles, core_range_set, data_format=ttnn.bfloat16):
@@ -322,3 +339,223 @@ def gdn_prefill_fused(
         v_split=v_split,
     )
     ttnn.generic_op(all_tensors, program)
+
+
+# ===========================================================================
+# Decode (single-token) recurrence kernel — imported from Qwen3.5-27B.
+#
+# Replaces the slow ttnn-ops decode recurrence with a single fused dispatch.
+# State stays per-pair in L1 CBs (ping-pong) during the dispatch and is written
+# back in place. Math per pair:
+#   1. state *= exp(g)              -- decay
+#   2. kv_mem = k_row @ state       -- [1,K] x [K,V] -> [1,V]
+#   3. delta  = beta * (v - kv_mem) -- element-wise
+#   4. state += outer(k_col, delta) -- [K,1] x [1,V] -> [K,V]
+#   5. output = q @ state           -- [1,K] x [K,V] -> [1,V]
+# q must be pre-scaled and L2-normed; k L2-normed; g pre-exp; beta post-sigmoid.
+# ===========================================================================
+
+
+def _build_recurrence_device_program(
+    q_dev,
+    k_row_dev,
+    k_col_dev,
+    v_dev,
+    g_dev,
+    beta_dev,
+    state_dev,
+    output_dev,
+    state_out_dev,
+    num_pairs_total,
+    num_cores,
+    grid,
+):
+    """Build a single-device ProgramDescriptor for the GDN recurrence kernel.
+
+    Each core processes a contiguous run of pairs. Tensors must be bfloat16,
+    TILE_LAYOUT, interleaved DRAM (TensorAccessor reader/writer).
+
+    Args:
+        q_dev, k_row_dev: [num_pairs, 1, Dk] (Kt tiles each)
+        k_col_dev: [num_pairs, Dk, 1] (Kt tiles)
+        v_dev: [num_pairs, 1, Dv] (Vt tiles)
+        g_dev, beta_dev: [num_pairs, 1, 1] (1 tile each)
+        state_dev: [num_pairs, Dk, Dv] (Kt*Vt tiles) — recurrence state in
+        output_dev: [num_pairs, 1, Dv] (Vt tiles)
+        state_out_dev: same buffer as state_dev for in-place update
+    """
+    max_cores = grid.x * grid.y
+    num_cores = min(num_cores, num_pairs_total, max_cores)
+    pairs_per_core = num_pairs_total // num_cores
+    remainder = num_pairs_total % num_cores
+
+    core_coords = [ttnn.CoreCoord(i % grid.x, i // grid.x) for i in range(num_cores)]
+    core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in core_coords])
+
+    reader_rt_args = ttnn.RuntimeArgs()
+    writer_rt_args = ttnn.RuntimeArgs()
+    pair_offset = 0
+    core_pair_counts = []
+    for i, cc in enumerate(core_coords):
+        n = pairs_per_core + (1 if i < remainder else 0)
+        core_pair_counts.append(n)
+        reader_rt_args[cc.x][cc.y] = [
+            q_dev.buffer_address(),
+            k_row_dev.buffer_address(),
+            k_col_dev.buffer_address(),
+            v_dev.buffer_address(),
+            g_dev.buffer_address(),
+            beta_dev.buffer_address(),
+            state_dev.buffer_address(),
+            pair_offset,
+            n,
+        ]
+        writer_rt_args[cc.x][cc.y] = [
+            output_dev.buffer_address(),
+            state_out_dev.buffer_address(),
+            pair_offset,
+            n,
+        ]
+        pair_offset += n
+
+    cb_descriptors = [
+        _make_cb(0, Kt, core_ranges),  # cb_q
+        _make_cb(1, Kt, core_ranges),  # cb_k_row
+        _make_cb(2, Kt, core_ranges),  # cb_k_col
+        _make_cb(3, Vt, core_ranges),  # cb_v
+        _make_cb(4, 1, core_ranges),  # cb_g
+        _make_cb(5, 1, core_ranges),  # cb_beta
+        _make_cb(6, STATE_TILES, core_ranges),  # cb_state_in (reader fills)
+        _make_cb(7, STATE_TILES, core_ranges),  # cb_state_b (decayed state)
+        _make_cb(8, STATE_TILES, core_ranges),  # cb_state_out (writer reads)
+        _make_cb(16, Vt, core_ranges),  # cb_out
+        _make_cb(24, 1, core_ranges),  # cb_exp_g
+        _make_cb(25, Vt, core_ranges),  # cb_kv_mem
+        _make_cb(26, Vt, core_ranges),  # cb_delta (v - kv_mem)
+        _make_cb(27, Vt, core_ranges),  # cb_delta_s (beta * delta)
+    ]
+
+    # Group cores by pair count so the compute kernel gets the right per-core
+    # pair count as a compile-time arg.
+    groups = {}
+    for i, cc in enumerate(core_coords):
+        groups.setdefault(core_pair_counts[i], []).append(cc)
+
+    all_kernels = []
+    for n_pairs, cores in groups.items():
+        if n_pairs == 0:
+            continue
+        group_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
+
+        group_reader_rt = ttnn.RuntimeArgs()
+        group_writer_rt = ttnn.RuntimeArgs()
+        for c in cores:
+            group_reader_rt[c.x][c.y] = list(reader_rt_args[c.x][c.y])
+            group_writer_rt[c.x][c.y] = list(writer_rt_args[c.x][c.y])
+
+        reader_ct = [Kt, Vt, BF16_TILE_BYTES]
+        for t in [q_dev, k_row_dev, k_col_dev, v_dev, g_dev, beta_dev, state_dev]:
+            reader_ct.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
+
+        writer_ct = [Kt, Vt, BF16_TILE_BYTES]
+        writer_ct.extend(ttnn.TensorAccessorArgs(output_dev).get_compile_time_args())
+        writer_ct.extend(ttnn.TensorAccessorArgs(state_out_dev).get_compile_time_args())
+
+        reader_kd = ttnn.KernelDescriptor(
+            kernel_source=READER_RECURRENCE_PATH,
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=group_ranges,
+            compile_time_args=reader_ct,
+            runtime_args=group_reader_rt,
+            config=ttnn.ReaderConfigDescriptor(),
+        )
+        writer_kd = ttnn.KernelDescriptor(
+            kernel_source=WRITER_RECURRENCE_PATH,
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=group_ranges,
+            compile_time_args=writer_ct,
+            runtime_args=group_writer_rt,
+            config=ttnn.WriterConfigDescriptor(),
+        )
+        compute_kd = ttnn.KernelDescriptor(
+            kernel_source=COMPUTE_RECURRENCE_PATH,
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=group_ranges,
+            compile_time_args=[Kt, Vt, n_pairs],
+            runtime_args=[],
+            config=ttnn.ComputeConfigDescriptor(
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                dst_full_sync_en=False,
+            ),
+        )
+        all_kernels.extend([reader_kd, writer_kd, compute_kd])
+
+    return ttnn.ProgramDescriptor(kernels=all_kernels, cbs=cb_descriptors)
+
+
+def _gdn_recurrence_fused(q, k_row, k_col, v, g, beta, state, output, state_out, num_cores=32):
+    """Dispatch the fused GDN recurrence kernel (single device)."""
+    num_pairs_total = q.shape[0]
+    all_tensors = [q, k_row, k_col, v, g, beta, state, output, state_out]
+    devs = [ttnn.get_device_tensors(t)[0] for t in all_tensors]
+    grid = devs[0].device().compute_with_storage_grid_size()
+    program = _build_recurrence_device_program(*devs, num_pairs_total, num_cores, grid)
+    return ttnn.generic_op(all_tensors, program)
+
+
+def _gdn_recurrence_ttnn(q, k_row, k_col, v, g, beta, state):
+    """GDN recurrence step using standard ttnn ops (fallback for the fused kernel).
+
+    Operates on the same kernel-layout tensors: q/k_row [P,1,K], k_col [P,K,1],
+    v [P,1,V], g/beta [P,1,1], state [P,K,V]. Updates state in place.
+    """
+    g_exp = ttnn.exp(g)
+    state_b = ttnn.multiply(state, g_exp)
+    ttnn.deallocate(g_exp)
+
+    kv_mem = ttnn.matmul(k_row, state_b)
+    diff = ttnn.subtract(v, kv_mem)
+    ttnn.deallocate(kv_mem)
+    delta = ttnn.multiply(beta, diff)
+    ttnn.deallocate(diff)
+
+    outer = ttnn.matmul(k_col, delta)
+    ttnn.deallocate(delta)
+    new_state = ttnn.add(state_b, outer)
+    ttnn.deallocate(state_b)
+    ttnn.deallocate(outer)
+
+    output = ttnn.matmul(q, new_state)
+
+    ttnn.copy(new_state, state)
+    ttnn.deallocate(new_state)
+    return output
+
+
+def gdn_recurrence_fused_inplace(q, k_row, k_col, v, g, beta, state, output, num_cores=32):
+    """Compute the GDN recurrence and write the result into `output` (in place).
+
+    State is updated in place (the kernel writer writes back to the `state`
+    buffer address). Tries the fused kernel first; falls back to ttnn ops if
+    the kernel is disabled or raises.
+    """
+    global _recurrence_fused_available
+
+    if _recurrence_fused_available:
+        try:
+            # Prime DRAM: touch an input via standard ttnn so writes from prior
+            # ops are visible to the custom kernel's NOC reads. Workaround for
+            # Blackhole DRAM coherence with noc_async_read_page.
+            tmp = ttnn.add(q, 0.0)
+            ttnn.deallocate(tmp)
+            _gdn_recurrence_fused(q, k_row, k_col, v, g, beta, state, output, state, num_cores)
+            return
+        except Exception as e:
+            logger.warning(f"Fused GDN recurrence kernel failed, falling back to ttnn ops: {e}")
+            _recurrence_fused_available = False
+
+    result = _gdn_recurrence_ttnn(q, k_row, k_col, v, g, beta, state)
+    ttnn.copy(result, output)
+    ttnn.deallocate(result)
