@@ -8,7 +8,7 @@
 #include "internal/risc_attribs.h"
 #include "api/debug/assert.h"
 
-#include "tt_metal/impl/dispatch/dispatch_telemetry_types.hpp"
+#include "hostdevcommon/dispatch_telemetry_types.hpp"
 
 #include <cstddef>
 #include <cstdint>

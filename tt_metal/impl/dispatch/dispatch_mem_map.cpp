@@ -12,7 +12,7 @@
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
 #include "llrt/rtoptions.hpp"
-#include "dispatch_telemetry_types.hpp"
+#include <hostdevcommon/dispatch_telemetry_types.hpp>
 #include <tt_stl/enum.hpp>
 
 namespace tt::tt_metal {

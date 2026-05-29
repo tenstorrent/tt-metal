@@ -17,7 +17,7 @@
 #include "impl/dispatch/dispatch_core_manager.hpp"
 #include "impl/dispatch/dispatch_mem_map.hpp"
 #include "impl/dispatch/dispatch_telemetry.hpp"
-#include "impl/dispatch/dispatch_telemetry_types.hpp"
+#include <hostdevcommon/dispatch_telemetry_types.hpp>
 #include "llrt/tt_cluster.hpp"
 #include "umd/device/types/core_coordinates.hpp"
 
@@ -40,106 +40,32 @@ std::optional<T> read_telemetry_impl(ChipId chip, const CoreCoord& virtual_core,
     cluster.read_core(&telemetry, sizeof(telemetry), tt_cxy_pair(chip, virtual_core), addr);
 
     if (telemetry.signature != signature) {
+        // Copy to avoid taking a reference to a packed struct's member variable, which could be unaligned.
+        uint32_t telemetry_signature = telemetry.signature;
         log_warning(
             tt::LogMetal,
             "Signature mismatch on chip {} core ({},{}): got 0x{:x}, expected 0x{:x}",
             chip,
             virtual_core.x,
             virtual_core.y,
-            telemetry.signature,
+            telemetry_signature,
             signature);
         return std::nullopt;
     }
     if (telemetry.version != version) {
+        // Copy to avoid taking a reference to a packed struct's member variable, which could be unaligned.
+        uint32_t telemetry_version = telemetry.version;
         log_warning(
             tt::LogMetal,
             "Version mismatch on chip {} core ({},{}): got {}, expected {}",
             chip,
             virtual_core.x,
             virtual_core.y,
-            telemetry.version,
+            telemetry_version,
             version);
         return std::nullopt;
     }
     return telemetry;
-}
-
-enum class CoreRole : uint8_t {
-    INVALID = 0,
-    PREFETCH,
-    PREFETCH_D,
-    DISPATCH,
-    DISPATCH_D,
-    DISPATCH_S,
-};
-
-struct CoreEntry {
-    CoreRole role = CoreRole::INVALID;
-    CoreCoord virtual_core;  // read_core needs a virtual (noc-addressable) coord
-    uint8_t cq_id;
-};
-
-std::vector<std::vector<CoreEntry>> collect_telemetry_cores(const IDevice& device) {
-    std::vector<std::vector<CoreEntry>> entries;
-
-    auto& dcm = MetalContext::instance().get_dispatch_core_manager();
-    const auto& cluster = MetalContext::instance().get_cluster();
-    const ChipId chip = device.id();
-    const uint16_t channel = cluster.get_assigned_channel_for_device(chip);
-    const uint8_t num_cqs = device.num_hw_cqs();
-    const CoreType core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
-
-    for (uint8_t cq = 0; cq < num_cqs; ++cq) {
-        std::vector<CoreEntry> cq_entries;
-        if (dcm.is_prefetcher_core_allocated(chip, channel, cq)) {
-            CoreEntry entry{};
-            entry.role = CoreRole::PREFETCH;
-            tt_cxy_pair logical_cxy = dcm.prefetcher_core(chip, channel, cq);
-            entry.virtual_core =
-                device.virtual_core_from_logical_core(CoreCoord{logical_cxy.x, logical_cxy.y}, core_type);
-            entry.cq_id = cq;
-            cq_entries.push_back(entry);
-        }
-        if (dcm.is_prefetcher_d_core_allocated(chip, channel, cq)) {
-            CoreEntry entry{};
-            entry.role = CoreRole::PREFETCH_D;
-            tt_cxy_pair logical_cxy = dcm.prefetcher_d_core(chip, channel, cq);
-            entry.virtual_core =
-                device.virtual_core_from_logical_core(CoreCoord{logical_cxy.x, logical_cxy.y}, core_type);
-            entry.cq_id = cq;
-            cq_entries.push_back(entry);
-        }
-        if (dcm.is_dispatcher_core_allocated(chip, channel, cq)) {
-            CoreEntry entry{};
-            entry.role = CoreRole::DISPATCH;
-            tt_cxy_pair logical_cxy = dcm.dispatcher_core(chip, channel, cq);
-            entry.virtual_core =
-                device.virtual_core_from_logical_core(CoreCoord{logical_cxy.x, logical_cxy.y}, core_type);
-            entry.cq_id = cq;
-            cq_entries.push_back(entry);
-        }
-        if (dcm.is_dispatcher_d_core_allocated(chip, channel, cq)) {
-            CoreEntry entry{};
-            entry.role = CoreRole::DISPATCH_D;
-            tt_cxy_pair logical_cxy = dcm.dispatcher_d_core(chip, channel, cq);
-            entry.virtual_core =
-                device.virtual_core_from_logical_core(CoreCoord{logical_cxy.x, logical_cxy.y}, core_type);
-            entry.cq_id = cq;
-            cq_entries.push_back(entry);
-        }
-        if (dcm.is_dispatcher_s_core_allocated(chip, channel, cq)) {
-            CoreEntry entry{};
-            entry.role = CoreRole::DISPATCH_S;
-            tt_cxy_pair logical_cxy = dcm.dispatcher_s_core(chip, channel, cq);
-            entry.virtual_core =
-                device.virtual_core_from_logical_core(CoreCoord{logical_cxy.x, logical_cxy.y}, core_type);
-            entry.cq_id = cq;
-            cq_entries.push_back(entry);
-        }
-        entries.push_back(cq_entries);
-    }
-
-    return entries;
 }
 
 // Takes into consideration rollover
@@ -163,6 +89,85 @@ std::optional<PrefetchCoreTelemetry> read_prefetch_core_telemetry(ChipId chip, c
 }
 
 class DispatchTelemetry::Impl {
+private:
+    enum class CoreRole : uint8_t {
+        INVALID = 0,
+        PREFETCH,
+        PREFETCH_D,
+        DISPATCH,
+        DISPATCH_D,
+        DISPATCH_S,
+    };
+
+    struct CoreEntry {
+        CoreRole role = CoreRole::INVALID;
+        CoreCoord virtual_core;  // read_core needs a virtual (noc-addressable) coord
+        uint8_t cq_id;
+    };
+
+    std::vector<std::vector<CoreEntry>> collect_telemetry_cores(const IDevice& device) {
+        std::vector<std::vector<CoreEntry>> entries;
+
+        auto& dcm = MetalContext::instance().get_dispatch_core_manager();
+        const auto& cluster = MetalContext::instance().get_cluster();
+        const ChipId chip = device.id();
+        const uint16_t channel = cluster.get_assigned_channel_for_device(chip);
+        const uint8_t num_cqs = device.num_hw_cqs();
+        const CoreType core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
+
+        for (uint8_t cq = 0; cq < num_cqs; ++cq) {
+            std::vector<CoreEntry> cq_entries;
+            if (dcm.is_prefetcher_core_allocated(chip, channel, cq)) {
+                CoreEntry entry{};
+                entry.role = CoreRole::PREFETCH;
+                tt_cxy_pair logical_cxy = dcm.prefetcher_core(chip, channel, cq);
+                entry.virtual_core =
+                    device.virtual_core_from_logical_core(CoreCoord{logical_cxy.x, logical_cxy.y}, core_type);
+                entry.cq_id = cq;
+                cq_entries.push_back(entry);
+            }
+            if (dcm.is_prefetcher_d_core_allocated(chip, channel, cq)) {
+                CoreEntry entry{};
+                entry.role = CoreRole::PREFETCH_D;
+                tt_cxy_pair logical_cxy = dcm.prefetcher_d_core(chip, channel, cq);
+                entry.virtual_core =
+                    device.virtual_core_from_logical_core(CoreCoord{logical_cxy.x, logical_cxy.y}, core_type);
+                entry.cq_id = cq;
+                cq_entries.push_back(entry);
+            }
+            if (dcm.is_dispatcher_core_allocated(chip, channel, cq)) {
+                CoreEntry entry{};
+                entry.role = CoreRole::DISPATCH;
+                tt_cxy_pair logical_cxy = dcm.dispatcher_core(chip, channel, cq);
+                entry.virtual_core =
+                    device.virtual_core_from_logical_core(CoreCoord{logical_cxy.x, logical_cxy.y}, core_type);
+                entry.cq_id = cq;
+                cq_entries.push_back(entry);
+            }
+            if (dcm.is_dispatcher_d_core_allocated(chip, channel, cq)) {
+                CoreEntry entry{};
+                entry.role = CoreRole::DISPATCH_D;
+                tt_cxy_pair logical_cxy = dcm.dispatcher_d_core(chip, channel, cq);
+                entry.virtual_core =
+                    device.virtual_core_from_logical_core(CoreCoord{logical_cxy.x, logical_cxy.y}, core_type);
+                entry.cq_id = cq;
+                cq_entries.push_back(entry);
+            }
+            if (dcm.is_dispatcher_s_core_allocated(chip, channel, cq)) {
+                CoreEntry entry{};
+                entry.role = CoreRole::DISPATCH_S;
+                tt_cxy_pair logical_cxy = dcm.dispatcher_s_core(chip, channel, cq);
+                entry.virtual_core =
+                    device.virtual_core_from_logical_core(CoreCoord{logical_cxy.x, logical_cxy.y}, core_type);
+                entry.cq_id = cq;
+                cq_entries.push_back(entry);
+            }
+            entries.push_back(cq_entries);
+        }
+
+        return entries;
+    }
+
 public:
     Impl(const IDevice& device) :
         chip_(device.id()),

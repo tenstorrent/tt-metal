@@ -9,7 +9,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device_types.hpp>
 
-#include "dispatch_telemetry_types.hpp"
+#include <hostdevcommon/dispatch_telemetry_types.hpp>
 
 namespace tt::tt_metal {
 

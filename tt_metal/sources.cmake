@@ -186,7 +186,6 @@ set(JITAPI_FILES
     fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto
     fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.textproto
     fabric/fabric_edm_packet_header.hpp
-    impl/dispatch/dispatch_telemetry_types.hpp
     impl/dispatch/kernels/cq_commands.hpp
     impl/dispatch/kernels/cq_common.hpp
     impl/dispatch/kernels/cq_prefetch.hpp
