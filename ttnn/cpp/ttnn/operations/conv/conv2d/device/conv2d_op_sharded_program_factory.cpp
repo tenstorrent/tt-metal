@@ -1336,8 +1336,7 @@ WorkloadDescriptor Conv2dShardedProgramFactory::create_workload_descriptor(
                         reader_remaining_tiles_to_push = act_block_h_nsubblocks_split;
                     }
                 }
-                std::vector<uint32_t> reader_rt_args{core_index, reader_remaining_tiles_to_push};
-                reader_kernel_desc.runtime_args.emplace_back(core, std::move(reader_rt_args));
+                reader_kernel_desc.emplace_runtime_args(core, {core_index, reader_remaining_tiles_to_push});
                 core_index++;
             }
         }
@@ -1356,13 +1355,25 @@ WorkloadDescriptor Conv2dShardedProgramFactory::create_workload_descriptor(
     for (const CoreRange& core_range : mcast_sender_cores.ranges()) {
         for (const CoreCoord& core : core_range) {
             if (populate_skipped_work_cores && !output_cores.contains(core)) {
-                std::vector<uint32_t> args = std::vector<uint32_t>(14, 0);
-                args[10] = weights_mcast_sender_semaphore_id;
-                args[11] = weights_mcast_receiver_semaphore_id;
-                args[12] =
-                    static_cast<uint32_t>(true);  // is_sender_core, is always true for cores that belong to input_cores
-                args[13] = static_cast<uint32_t>(true);  //  skip work
-                writer_mcast_sender_desc.runtime_args.emplace_back(core, std::move(args));
+                writer_mcast_sender_desc.emplace_runtime_args(
+                    core,
+                    {
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        weights_mcast_sender_semaphore_id,
+                        weights_mcast_receiver_semaphore_id,
+                        static_cast<uint32_t>(
+                            true),  // is_sender_core, is always true for cores that belong to input_cores
+                        static_cast<uint32_t>(true)  //  skip work
+                    });
                 continue;
             }
             // Calculate weight slice indices
@@ -1514,8 +1525,7 @@ WorkloadDescriptor Conv2dShardedProgramFactory::create_workload_descriptor(
         for (const CoreRange range : all_cores.ranges()) {
             for (const CoreCoord core : range) {
                 bool skip_compute = transpose_mcast ? core.y > end_coord_y : core.x > end_coord_x;
-                compute_kernel_desc.runtime_args.emplace_back(
-                    core, std::vector<uint32_t>{static_cast<uint32_t>(skip_compute)});
+                compute_kernel_desc.emplace_runtime_args(core, {static_cast<uint32_t>(skip_compute)});
             }
         }
     }
