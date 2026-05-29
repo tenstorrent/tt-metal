@@ -945,13 +945,13 @@ While the comparison is kept as equal as possible, FP8 matmuls have constraints 
 
 We will briefly discuss each of these settings and the impact they have on FP8 performance.
 
-**`fp32_dest_acc_en=True`**
+**`fp32_dest_acc_en=True:`**
 FP8 requires FP32 accumulation, which halves the number of tiles that fit in
 the dest register. This caps `out_subblock_h × out_subblock_w` at 4 instead of
 8. Smaller sub-blocks mean more pack/unpack iterations per unit of output,
 directly reducing kernel throughput.
 
-**`packer_l1_acc=False`**
+**`packer_l1_acc=False:`**
 Packer L1 accumulation allows the packer to do a read-modify-write on each output
 tile in L1 after each in0-block pass, accumulating the K-loop partial sums
 there. That lets dest be flushed more often, reducing dest pressure.
@@ -959,14 +959,14 @@ FP8 does not support this, so the K-loop running sum must stay in dest (already 
 by the first setting) for the full reduction, further constraining sub-block
 geometry.
 
-**Output dtype: 16 vs 8 Bits **
+**`Output dtype: 16 vs 8 Bits:`**
 FP8's dest must be FP16, FP32, or INT32. This has two consequences. First, it doubles
 the output write bandwidth vs `bfloat8_b` (2 B/element vs 1 B/element),
 penalising DRAM-output shapes at large N. Second, output CBs/buffers are allocated at
 bf16 width (2048 B/tile) instead of bf8 width (1088 B/tile), consuming an
 extra ~1 KB/tile of L1.
 
-**Memory impact summary.** The three constraints together (`fp32_dest_acc_en`,
+**Memory impact summary:** The three constraints together (`fp32_dest_acc_en`,
 `packer_l1_acc`, bf16 output) roughly double the per-core L1 footprint vs BF8:
 
 | CB / buffer | BF8 (per tile) | FP8 (per tile) |
@@ -982,7 +982,7 @@ Even with this per-shape tuning, the largest benchmark shape (20480 × 22528 × 
 
 Reported columns:
 
-- `inf [ns]` — host-measured per-iteration time
+- `inf [ns]` — host-measured inference per-iteration time
 - `TFLOPs` — `2*M*K*N / inf_time`
 - `dev_util[%]` — device-based utilization vs the full 11×10 grid (`ideal_cycle / TRISC1_kernel_duration`)
 - `FP8/BF8 TFLOPs` — ratio of the two TFLOP/s columns; >1.0 means better FP8 perf
@@ -1052,10 +1052,8 @@ Reported columns:
 | 2560 | 2816 | 2816 | 114536.29 | 169706.34 | 354.48 | 239.24 | 0.67 | 80.41 | 56.75 | 0.71 |
 | 2560 | 2816 | 4224 | 160360.34 | 237894.06 | 379.78 | 256.00 | 0.67 | 82.43 | 59.30 | 0.72 |
 
-**OOB FP8 cuts off at shape 8 (2560 × 2816 × 4224).** The 9th OOB shape
-(2560 × 4224 × 4224) OOMs L1 because the FP8 path's interm0 (Float32, 4096
-B/tile) plus the bf16 output CB push the FP8 footprint past BH's usable L1
-once `per_core_M * per_core_N` gets large enough. The tuned path can
-absorb the same shape via explicit sub-block splitting; the OOB helper
-can't pick big enough `num_out_blocks_*` without losing too much per-core
-work.
+**OOB Memory Limitations:**
+Note that FP8 cuts off at shape 8 (2560 × 2816 × 4224).
+The 9th OOB shape (2560 × 4224 × 4224) OOMs L1 due to its increased memory requirements, as previously discussed.
+The tuned path can absorb the same shape via explicit sub-block splitting; the OOB helper
+can't pick big enough `num_out_blocks_*` without losing too much per-core work.
