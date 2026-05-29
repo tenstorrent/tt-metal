@@ -61,31 +61,42 @@ inline __attribute__((always_inline)) constexpr uint8_t get_counter_id(PackedTil
     DFB config region layout (Quasar / tt-2xx):
 
     [dfb_config_base]:
-      dfb_global_header_t (4B)  — stores per_dfb_layout_offset
-      DM0 global blob           — contiguous across all DFBs:
-        [DFB0: dfb_dm0_blob_header_t + rmp_slots + txn_entries]
-        [DFB1: dfb_dm0_blob_header_t + rmp_slots + txn_entries]
+      dfb_global_header_t (12B) — stores offsets to DM1 remapper blob, DM0 ISR blob, shared layout
+
+    [dfb_config_base + dm1_remapper_blob_offset]:
+      DM1 remapper blob — contiguous across all DFBs, read by DM1:
+        [DFB0: dfb_dm1_remapper_entry_header_t(4B) + dfb_dm0_remapper_slot_t × n]
+        [DFB1: ...]
         ...
+
+    [dfb_config_base + dm0_isr_blob_offset]:
+      DM0 ISR blob — contiguous across all DFBs, read by DM0:
+        [DFB0: dfb_dm0_isr_entry_header_t(4B) + dfb_dm0_txn_entry_t × (num_prod + num_cons)]
+        [DFB1: ...]
+        ...
+
     [dfb_config_base + per_dfb_layout_offset]:
       DFB 0: [dfb_initializer_t (32B)] [dfb_initializer_per_risc_t (64B) × N]
       DFB 1: [dfb_initializer_t (32B)] [dfb_initializer_per_risc_t (64B) × N]
       ...
 
-    DM0 reads linearly from dfb_config_base + sizeof(dfb_global_header_t) — no
-    dfb_initializer_t fetches, no per-RISC cache pollution, hardware prefetcher-friendly.
-    Other RISCs read from dfb_config_base + per_dfb_layout_offset — tighter stride,
-    no dm0_blob_size field to skip.
+    DM1 reads linearly through only remapper slot data (cache-efficient, no txn/init pollution).
+    DM0 reads linearly through only ISR txn data (cache-efficient, no remapper/init pollution).
+    DM1 and DM0 run their respective blob loops in parallel.
+    Other DMs/TRISCs read from per_dfb_layout_offset (no DM blob pollution).
 
     Base cost (1Sx1S, 2 riscs, 1 txn blob):
-      4 + 20 + (32 + 64*2) * 1 = 184 bytes
+      12 + 4 + 20 + (32 + 64*2) * 1 = 196 bytes
     Worst case (4Sx4A, 5 riscs, 4 rmp slots, 1 txn), 8 DFBs:
-      4 + 84*8 + (32 + 64*5)*8 = 4 + 672 + 2816 = 3492 bytes
+      12 + (4+4*16)*8 + (4+20)*8 + (32 + 64*5)*8 = 12 + 544 + 192 + 2816 = 3564 bytes
 */
 
-// Single 4-byte header at the start of the DFB config region.
-// Tells all RISCs (and DM0) where the shared per-DFB layout begins.
+// 12-byte header at the start of the DFB config region.
+// Carries byte offsets from dfb_config_base to each sub-region.
 struct dfb_global_header_t {
-    uint32_t per_dfb_layout_offset;  // byte offset from dfb_config_base to first dfb_initializer_t
+    uint32_t dm1_remapper_blob_offset;  // → DM1 remapper blob (dfb_dm1_remapper_entry_header_t + slots per DFB)
+    uint32_t dm0_isr_blob_offset;       // → DM0 ISR blob (dfb_dm0_isr_entry_header_t + txn entries per DFB)
+    uint32_t per_dfb_layout_offset;     // → shared per-DFB layout (dfb_initializer_t + per_risc entries)
 } __attribute__((packed));
 struct dfb_txn_id_descriptor_t {
     uint8_t txn_ids[dfb::NUM_TXN_IDS];
@@ -149,15 +160,19 @@ struct dfb_initializer_intra_tensix_t {  // 24 bytes
     uint8_t tensix_mask;
 } __attribute__((packed));
 
-// Host-pre-computed blob appended after the per-risc entries for each DFB.
-// DM0 reads this directly in subpassB, eliminating the risc-scan loop and bit-manipulation overhead.
-// Variable-length: only the needed entries are serialized. The count is stored in dfb_dm0_blob_header_t.
-
-struct dfb_dm0_blob_header_t {  // 4 bytes
+// Per-DFB header for the DM1 remapper blob.
+// DM1 reads linearly through this region, processing only remapper slot data.
+struct dfb_dm1_remapper_entry_header_t {  // 4 bytes
     uint8_t num_remapper_slots;
+    uint8_t _pad[3];
+} __attribute__((packed));
+
+// Per-DFB header for the DM0 ISR blob.
+// DM0 reads linearly through this region, processing only CMDBUF threshold / ISR data.
+struct dfb_dm0_isr_entry_header_t {  // 4 bytes
     uint8_t num_producer_txns;
     uint8_t num_consumer_txns;
-    uint8_t _pad;
+    uint8_t _pad[2];
 } __attribute__((packed));
 
 // One entry per producer RISC that uses the remapper.
@@ -201,7 +216,9 @@ struct dfb_dm0_txn_entry_t {
 } __attribute__((packed));
 static_assert(sizeof(dfb_dm0_txn_entry_t) == 16, "dfb_dm0_txn_entry_t must be 16 bytes");
 
-static_assert(sizeof(dfb_global_header_t) == 4, "dfb_global_header_t must be 4 bytes");
+static_assert(sizeof(dfb_global_header_t) == 12, "dfb_global_header_t must be 12 bytes");
+static_assert(sizeof(dfb_dm1_remapper_entry_header_t) == 4, "dfb_dm1_remapper_entry_header_t must be 4 bytes");
+static_assert(sizeof(dfb_dm0_isr_entry_header_t) == 4, "dfb_dm0_isr_entry_header_t must be 4 bytes");
 static_assert(sizeof(TCAddressEntry) == 8, "TCAddressEntry size is incorrect");
 static_assert(sizeof(dfb_initializer_t) == 32, "dfb_initializer_t size is incorrect");
 static_assert(sizeof(dfb_initializer_per_risc_t) == 64, "dfb_initializer_per_risc_t size is incorrect");
