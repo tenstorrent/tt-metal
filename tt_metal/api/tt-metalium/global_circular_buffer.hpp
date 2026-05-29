@@ -95,22 +95,23 @@ private:
     // header. Accessed only through the friend struct in
     // tt-metalium/experimental/global_circular_buffer.hpp.
     uint8_t sender_core_type_value_ = 0;
+    // Base of the per-receiver pages_sent/pages_acked counters in DRISC L1. Carved
+    // from the front of the combined sender-state allocation below.
     DeviceAddr pages_sent_drisc_l1_base_ = 0;
     DeviceAddr pages_sent_worker_l1_base_ = 0;
     // DRISC L1 base of the per-GCB "sender state block" (RemoteSenderCBInterface
-    // bytes + prefetcher mutable state + sender config block + receiver NOC XY
-    // table). Pre-initialized at GCB construction; the DRAM-core prefetcher
-    // kernel memcpys this block into its static cb_interface[] slot on each
-    // request that targets this GCB, runs the chunk loop, and writes the mutable
-    // fields back so state survives multi-GCB request switching. Layout in
+    // bytes + sender config block + receiver NOC XY table). Pre-initialized at GCB
+    // construction; on each request that targets this GCB the DRAM-core prefetcher
+    // kernel loads the RemoteSenderCBInterface region into its static cb_interface[]
+    // slot, runs the chunk loop, and writes fifo_wr_ptr back so the ring offset
+    // survives multi-GCB request switching. Layout in
     // tt_metal/impl/buffers/dram_sender_state_block.hpp.
     DeviceAddr sender_state_drisc_l1_base_ = 0;
     std::vector<std::vector<CoreCoord>> receiver_coords_per_sender_;
-    // RAII handle for the DRAM-sender's pages_sent allocation in the per-mesh DriscL1Arena.
-    // Held via shared_ptr so copies of the GCB share the same backing range; released
-    // when the last GCB copy goes out of scope. Empty for worker-sender GCBs.
-    std::shared_ptr<::tt::tt_metal::DriscL1Allocation> drisc_pages_sent_alloc_;
-    // RAII handle for the sender state block allocation; same lifetime model.
+    // RAII handle for the combined pages_sent + sender-state-block allocation in the
+    // per-mesh DriscL1Arena. Held via shared_ptr so copies of the GCB share the same
+    // backing range; released when the last GCB copy goes out of scope. Empty for
+    // worker-sender GCBs.
     std::shared_ptr<::tt::tt_metal::DriscL1Allocation> drisc_sender_state_alloc_;
 
     friend struct global_circular_buffer_dram_sender::GlobalCircularBufferDramSenderInternals;

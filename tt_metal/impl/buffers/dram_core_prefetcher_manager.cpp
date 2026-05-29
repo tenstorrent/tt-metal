@@ -9,7 +9,6 @@
 #include "impl/buffers/h2d_socket_internal.hpp"
 
 #include <cstdint>
-#include <cstring>
 #include <utility>
 
 #include <tt-metalium/constants.hpp>
@@ -59,22 +58,11 @@ std::pair<uint32_t, uint32_t> pick_page_size(uint32_t max_page_size, uint32_t nu
     return {page, static_cast<uint32_t>(total / page)};
 }
 
-// Per-tensor geometry for the DRAM-core prefetcher kernel. See
-// tt_metal/impl/buffers/prefetcher_matmul_design.md §6.
-struct TensorGeom {
-    uint32_t bank_local_base = 0;
-    uint32_t num_sub = 0;
-    uint32_t M = 0;
-    uint32_t rows_per_sub = 0;
-    uint32_t coalesced_page_size = 0;
-    uint32_t coalesced_num_pages = 0;
-    uint32_t sub_chunk_bytes = 0;
-    uint32_t sub_stride_bytes = 0;
-    uint32_t block_stride_bytes = 0;
-    uint32_t page_bytes_per_recv = 0;
-};
-
-TensorGeom compute_tensor_geom(
+// Per-tensor geometry for the DRAM-core prefetcher kernel — see
+// DramCorePrefetcherTensorGeom in impl/buffers/dram_core_prefetcher_request.hpp for
+// the field-by-field documentation, and tt_metal/impl/buffers/prefetcher_matmul_design.md
+// §6 for the fit ladder.
+DramCorePrefetcherTensorGeom compute_tensor_geom(
     const MeshTensor& t, uint32_t bank_local_base, uint32_t block_count, uint32_t num_receivers, uint32_t ring_half) {
     const auto* ref_buffer = t.mesh_buffer().get_reference_buffer();
     const auto shard_shape = ref_buffer->shard_spec().shape();
@@ -148,7 +136,7 @@ TensorGeom compute_tensor_geom(
     TT_FATAL(
         sub_chunk_bytes <= ring_half, "Internal: chunk size {} B exceeds ring_half {} B", sub_chunk_bytes, ring_half);
 
-    TensorGeom g;
+    DramCorePrefetcherTensorGeom g;
     g.bank_local_base = bank_local_base;
     g.num_sub = num_sub;
     g.M = M;
@@ -159,6 +147,7 @@ TensorGeom compute_tensor_geom(
     g.sub_stride_bytes = rows_per_sub * row_bytes;
     g.block_stride_bytes = k_block_w_tiles * row_bytes;
     g.page_bytes_per_recv = k_block_w_tiles * coalesced_num_pages * coalesced_page_size;
+    g.block_count = block_count;
     return g;
 }
 
@@ -359,40 +348,30 @@ std::vector<uint8_t> DramCorePrefetcherManager::serialize_request_page(
     const uint32_t gcb_num_receivers = gcb.sender_receiver_core_mapping().front().second.num_cores();
     const uint32_t gcb_state_addr = static_cast<uint32_t>(experimental::sender_state_drisc_l1_base(gcb));
 
-    std::vector<uint32_t> words(kRequestPageHeaderWords + kMaxTensorsPerRequest * kRequestPageTensorWords, 0);
-    words[0] = num_tensors;
-    words[1] = num_layers;
-    words[2] = gcb_state_addr;
+    // Pad to the socket page size; the header + geom structs occupy the first
+    // kRequestPageBytes, the rest stays zero.
+    const uint32_t pcie_alignment =
+        MetalContext::instance(mesh_device_->impl().get_context_id()).hal().get_alignment(HalMemType::HOST);
+    const uint32_t page_bytes = align_up(kRequestPageBytes, pcie_alignment);
+    std::vector<uint8_t> bytes(page_bytes, 0);
 
+    auto* header = reinterpret_cast<DramCorePrefetcherRequestHeader*>(bytes.data());
+    header->num_tensors = num_tensors;
+    header->num_layers = num_layers;
+    header->gcb_state_addr = gcb_state_addr;
+
+    auto* geoms =
+        reinterpret_cast<DramCorePrefetcherTensorGeom*>(bytes.data() + sizeof(DramCorePrefetcherRequestHeader));
     for (uint32_t t = 0; t < num_tensors; ++t) {
         const experimental::DramCorePrefetcherInput& input = data_tensors[t];
         TT_FATAL(input.tensor != nullptr, "QueueDramCorePrefetcherRequest: input tensor {} is null", t);
         // block_count is per-tensor: it sets how many K-blocks the kernel pushes
         // (and how K is divided in compute_tensor_geom), replacing the GCB ring size.
         const uint32_t bank_local_base = static_cast<uint32_t>(input.tensor->mesh_buffer().address());
-        const TensorGeom g =
+        geoms[t] =
             compute_tensor_geom(*input.tensor, bank_local_base, input.block_count, gcb_num_receivers, ring_half_);
-        uint32_t* slot = words.data() + kRequestPageHeaderWords + t * kRequestPageTensorWords;
-        slot[0] = g.bank_local_base;
-        slot[1] = g.num_sub;
-        slot[2] = g.M;
-        slot[3] = g.rows_per_sub;
-        slot[4] = g.coalesced_page_size;
-        slot[5] = g.coalesced_num_pages;
-        slot[6] = g.sub_chunk_bytes;
-        slot[7] = g.sub_stride_bytes;
-        slot[8] = g.block_stride_bytes;
-        slot[9] = g.page_bytes_per_recv;
-        slot[10] = input.block_count;
     }
 
-    std::vector<uint8_t> bytes(words.size() * sizeof(uint32_t), 0);
-    std::memcpy(bytes.data(), words.data(), bytes.size());
-    // Pad to the socket page size.
-    const uint32_t pcie_alignment =
-        MetalContext::instance(mesh_device_->impl().get_context_id()).hal().get_alignment(HalMemType::HOST);
-    const uint32_t page_bytes = align_up(kRequestPageBytes, pcie_alignment);
-    bytes.resize(page_bytes, 0);
     return bytes;
 }
 

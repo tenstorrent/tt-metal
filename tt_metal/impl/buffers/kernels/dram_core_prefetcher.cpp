@@ -3,27 +3,18 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Queueable DRISC prefetcher kernel — successor to dram_core_prefetcher.cpp.
-// Sits in a request loop on a per-(device, sender-core) H2D socket; each
-// request payload identifies the target GlobalCircularBuffer (by its DRISC L1
+// Sits in a request loop on a per-(device, sender-core) H2D socket; each request
+// payload identifies the target GlobalCircularBuffer (by its DRISC L1
 // sender-state-block base, written by the GCB ctor) and carries the per-tensor
-// geometry. The kernel memcpys the sender state block into cb_interface[],
-// runs the existing chunk-loop logic, writes the mutable fifo_wr_ptr back to
-// L1 so the next request to the same GCB resumes from the right ring offset,
-// and acks the socket page.
+// geometry. The kernel loads the sender state block's RemoteSenderCBInterface
+// region into cb_interface[], runs the chunk-loop logic, writes the mutable
+// fifo_wr_ptr back to L1 so the next request to the same GCB resumes from the right
+// ring offset, and acks the socket page.
 //
-// Stop sentinel = a request page whose first word (num_tensors) is zero.
-//
-// Per-request payload layout (one socket page, fixed max size):
-//   [0]  num_tensors        (0 = stop)
-//   [1]  num_layers
-//   [2]  gcb_state_addr     (DRISC L1 base of this GCB's sender state block)
-//   [3 + 11*t + 0..10]      TensorGeom block per tensor t:
-//                             bank_local_base, num_sub, M, rows_per_sub,
-//                             coalesced_page_size, coalesced_num_pages,
-//                             sub_chunk_bytes, sub_stride_bytes,
-//                             block_stride_bytes, page_bytes_per_recv,
-//                             block_count (K-blocks for this tensor; was the
-//                             shared num_blocks/ring size)
+// Request page wire format (one socket page): a DramCorePrefetcherRequestHeader
+// followed by per-tensor DramCorePrefetcherTensorGeom entries. See
+// tt_metal/impl/buffers/dram_core_prefetcher_request.hpp. A header with
+// num_tensors == 0 is the stop sentinel.
 //
 // Per-GCB sender state block layout: see
 // tt_metal/impl/buffers/dram_sender_state_block.hpp.
@@ -36,24 +27,16 @@
 #include "experimental/drisc_mode.h"
 #include "experimental/gddr_dma.h"
 #include "tt_metal/impl/buffers/dram_sender_state_block.hpp"
+#include "tt_metal/impl/buffers/dram_core_prefetcher_request.hpp"
+
+using tt::tt_metal::DramCorePrefetcherRequestHeader;
+using tt::tt_metal::DramCorePrefetcherTensorGeom;
+using tt::tt_metal::DramSenderStateBlock;
 
 // DRISC firmware doesn't define cb_interface (no CB infra on DRAM cores).
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 
 namespace {
-
-// Short aliases for the host-side layout constants — single source of truth in
-// tt_metal/impl/buffers/dram_sender_state_block.hpp. The fields beyond byte
-// 0x20 are persistent prefetcher state; only fifo_wr_ptr (inside the 32 B
-// iface region) needs to round-trip on each request.
-constexpr uint32_t kStateConfigPtr = tt::tt_metal::kDramSenderStateBlockConfigPtrOffset;
-constexpr uint32_t kStateFifoStartAddr = tt::tt_metal::kDramSenderStateBlockFifoStartAddrOffset;
-constexpr uint32_t kStateFifoLimit = tt::tt_metal::kDramSenderStateBlockFifoLimitOffset;
-constexpr uint32_t kStateFifoPageSize = tt::tt_metal::kDramSenderStateBlockFifoPageSizeOffset;
-constexpr uint32_t kStateFifoWrPtr = tt::tt_metal::kDramSenderStateBlockFifoWrPtrOffset;
-constexpr uint32_t kStateReceiverNocXyPtr = tt::tt_metal::kDramSenderStateBlockReceiverNocXyPtrOffset;
-constexpr uint32_t kStateAlignedPagesSentPtr = tt::tt_metal::kDramSenderStateBlockAlignedPagesSentPtrOffset;
-constexpr uint32_t kStateNumRecvAndRemotePtr = tt::tt_metal::kDramSenderStateBlockNumRecvAndRemotePtrOffset;
 
 template <bool single_row, bool single_page>
 FORCE_INLINE void prefetcher_write_chunk(
@@ -142,38 +125,34 @@ FORCE_INLINE void prefetcher_finalize_block(
     iface.fifo_wr_ptr = next_wr_ptr;
 }
 
-// Loads the per-GCB sender state block (first 32 B, byte-compatible with
-// RemoteSenderCBInterface) from L1 into the static cb_interface[] slot for
-// this request.
-FORCE_INLINE void load_sender_state(uint32_t state_addr, RemoteSenderCBInterface& iface) {
-    volatile tt_l1_ptr uint32_t* sb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(state_addr);
-    iface.config_ptr = sb[0];
-    iface.fifo_start_addr = sb[1];
-    iface.fifo_limit_page_aligned = sb[2];
-    iface.fifo_page_size = sb[3];
-    iface.fifo_wr_ptr = sb[4];
-    iface.receiver_noc_xy_ptr = sb[5];
-    iface.aligned_pages_sent_ptr = sb[6];
-    iface.num_receivers_and_remote_pages_sent_ptr = sb[7];
+// Loads the per-GCB sender state block's RemoteSenderCBInterface-compatible region
+// from L1 into the static cb_interface[] slot for this request.
+FORCE_INLINE void load_sender_state(volatile tt_l1_ptr DramSenderStateBlock* sb, RemoteSenderCBInterface& iface) {
+    iface.config_ptr = sb->config_ptr;
+    iface.fifo_start_addr = sb->fifo_start_addr;
+    iface.fifo_limit_page_aligned = sb->fifo_limit_page_aligned;
+    iface.fifo_page_size = sb->fifo_page_size;
+    iface.fifo_wr_ptr = sb->fifo_wr_ptr;
+    iface.receiver_noc_xy_ptr = sb->receiver_noc_xy_ptr;
+    iface.aligned_pages_sent_ptr = sb->aligned_pages_sent_ptr;
+    iface.num_receivers_and_remote_pages_sent_ptr = sb->num_receivers_and_remote_pages_sent_ptr;
 }
 
-// Writes back only the field that needs to persist across requests targeting
-// this GCB. Per-tensor fields (fifo_limit / fifo_page_size) are overwritten by
-// resize_remote_sender_cb_interface on every new request, so we don't need to
-// round-trip them.
-FORCE_INLINE void store_sender_state(uint32_t state_addr, const RemoteSenderCBInterface& iface) {
-    volatile tt_l1_ptr uint32_t* sb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(state_addr);
-    sb[4] = iface.fifo_wr_ptr;
+// Writes back only the field that needs to persist across requests targeting this
+// GCB. Per-tensor fields (fifo_limit / fifo_page_size) are overwritten by
+// resize_remote_sender_cb_interface on every new request, so we don't round-trip them.
+FORCE_INLINE void store_sender_state(
+    volatile tt_l1_ptr DramSenderStateBlock* sb, const RemoteSenderCBInterface& iface) {
+    sb->fifo_wr_ptr = iface.fifo_wr_ptr;
 }
 
 }  // namespace
 
 void kernel_main() {
     // ---- Compile-time args ----
-    // num_receivers used to live here, but it's now per-GCB: each request's
-    // state block carries its own num_receivers (see GCB ctor's
-    // DramSenderStateBlockHeader::num_receivers at offset 0x34). Different
-    // GCBs queued against the same prefetcher can have different receiver
+    // num_receivers used to live here, but it's now per-GCB: each request's state
+    // block carries its own num_receivers (DramSenderStateBlock::num_receivers).
+    // Different GCBs queued against the same prefetcher can have different receiver
     // counts.
     constexpr uint32_t stage_ring_base = get_compile_time_arg_val(0);
     constexpr uint32_t stage_ring_size = get_compile_time_arg_val(1);
@@ -200,55 +179,74 @@ void kernel_main() {
     while (true) {
         socket_wait_for_pages(socket, 1);
 
-        volatile tt_l1_ptr uint32_t* payload = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(socket.read_ptr);
-        const uint32_t req_num_tensors = payload[0];
+        volatile tt_l1_ptr DramCorePrefetcherRequestHeader* req =
+            reinterpret_cast<volatile tt_l1_ptr DramCorePrefetcherRequestHeader*>(socket.read_ptr);
+        const uint32_t req_num_tensors = req->num_tensors;
         if (req_num_tensors == 0) {
             // Stop sentinel.
             socket_pop_pages(socket, 1);
             socket_notify_sender(socket);
             break;
         }
-        const uint32_t req_num_layers = payload[1];
-        const uint32_t gcb_state_addr = payload[2];
+        const uint32_t req_num_layers = req->num_layers;
+        const uint32_t gcb_state_addr = req->gcb_state_addr;
+        volatile tt_l1_ptr DramSenderStateBlock* state =
+            reinterpret_cast<volatile tt_l1_ptr DramSenderStateBlock*>(gcb_state_addr);
 
-        load_sender_state(gcb_state_addr, iface);
-        // num_receivers lives inside the GCB's state block at the sender-side
-        // config block offset (see DramSenderStateBlockHeader::num_receivers).
-        // Reading it per request lets a single prefetcher serve GCBs with
-        // different receiver counts.
-        const uint32_t num_receivers = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(gcb_state_addr + 0x30)[1];
+        load_sender_state(state, iface);
+        // num_receivers lives inside the GCB's state block (set by the GCB ctor).
+        // Reading it per request lets a single prefetcher serve GCBs with different
+        // receiver counts.
+        const uint32_t num_receivers = state->num_receivers;
+
+        // The per-tensor geometry blocks follow the header in the same socket page.
+        volatile tt_l1_ptr DramCorePrefetcherTensorGeom* geoms =
+            reinterpret_cast<volatile tt_l1_ptr DramCorePrefetcherTensorGeom*>(
+                socket.read_ptr + sizeof(DramCorePrefetcherRequestHeader));
 
         for (uint32_t layer = 0; layer < req_num_layers; ++layer) {
             for (uint32_t t = 0; t < req_num_tensors; ++t) {
-                volatile tt_l1_ptr uint32_t* g = payload + 3 + 11 * t;
-                const uint32_t tensor_base = g[0];
-                const uint32_t t_num_sub = g[1];
-                const uint32_t t_M = g[2];
-                const uint32_t t_rows_per_sub = g[3];
-                const uint32_t t_coal_page_size = g[4];
-                const uint32_t t_coal_num_pages = g[5];
-                const uint32_t t_chunk_bytes = g[6];
-                const uint32_t t_sub_stride = g[7];
-                const uint32_t t_block_stride = g[8];
-                const uint32_t t_page_bytes_per_recv = g[9];
-                const uint32_t t_block_count = g[10];
+                volatile tt_l1_ptr DramCorePrefetcherTensorGeom* g = &geoms[t];
+                const uint32_t tensor_base = g->bank_local_base;
+                const uint32_t t_num_sub = g->num_sub;
+                const uint32_t t_M = g->M;
+                const uint32_t t_rows_per_sub = g->rows_per_sub;
+                const uint32_t t_coal_page_size = g->coalesced_page_size;
+                const uint32_t t_coal_num_pages = g->coalesced_num_pages;
+                const uint32_t t_chunk_bytes = g->sub_chunk_bytes;
+                const uint32_t t_sub_stride = g->sub_stride_bytes;
+                const uint32_t t_block_stride = g->block_stride_bytes;
+                const uint32_t t_page_bytes_per_recv = g->page_bytes_per_recv;
+                const uint32_t t_block_count = g->block_count;
                 const uint32_t t_recv_per_chunk = num_receivers / t_M;
                 const uint32_t t_sub_band_per_block = t_num_sub * t_M;
 
+                // Set the sender fifo page size to one full per-receiver page so
+                // remote_cb_reserve_back reserves exactly one page per receiver.
                 experimental::resize_remote_sender_cb_interface</*update_remote_over_noc=*/false>(
                     remote_cb_id, t_page_bytes_per_recv, noc_index);
 
                 const uint32_t total_chunks = t_block_count * t_sub_band_per_block;
 
+                // Prologue: issue first DMA (chunk 0) into stage_slot_a. The body's
+                // "issue next" lookahead populates subsequent slots.
                 experimental::dma_async_read(/*stream=*/0, tensor_base, stage_slot_a, t_chunk_bytes);
 
                 uint32_t fifo_snapshot = 0;
                 uint32_t cum_offset_in_page = 0;
-                uint32_t blk = 0;
-                uint32_t sb = 0;
-                uint32_t ch = 0;
+
+                // The flat chunk index `c` decomposes into three nested counters,
+                // advanced by compare-and-increment (ch fastest, then sb, then blk):
+                uint32_t blk = 0;  // K-block index within the layer, in [0, t_block_count)
+                uint32_t sb = 0;   // sub-band index within the block, in [0, t_num_sub)
+                uint32_t ch = 0;   // chunk index within the sub-band, in [0, t_M)
+                // stage_slot ping-pongs between stage_slot_a and stage_slot_b; toggle via
+                // `(a + b) - slot`.
                 constexpr uint32_t stage_slot_sum = stage_slot_a + stage_slot_b;
                 uint32_t stage_slot = stage_slot_a;
+                // True for every chunk except the very last; flipped once the successor
+                // counters cross t_block_count, so the hot path reads a flag instead of
+                // recomputing the bound each iteration.
                 bool has_next = (total_chunks > 1);
 
                 for (uint32_t c = 0; c < total_chunks; ++c) {
@@ -258,6 +256,7 @@ void kernel_main() {
                         cum_offset_in_page = 0;
                     }
 
+                    // Compute the successor (blk, sb, ch) by incrementing the nested counters.
                     uint32_t next_ch = ch + 1;
                     uint32_t next_sb = sb;
                     uint32_t next_blk = blk;
@@ -274,6 +273,7 @@ void kernel_main() {
                     }
                     const uint32_t next_slot = stage_slot_sum - stage_slot;
 
+                    // Issue the next DMA before waiting on this one (ping-pong, depth 2).
                     if (has_next) {
                         const uint32_t next_src =
                             tensor_base + next_blk * t_block_stride + next_sb * t_sub_stride + next_ch * t_chunk_bytes;
@@ -284,6 +284,9 @@ void kernel_main() {
                     volatile tt_l1_ptr uint32_t* chunk_recv_xy =
                         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.receiver_noc_xy_ptr) +
                         ch * t_recv_per_chunk * 2;
+                    // Per-tensor-stable predicate; branches are 100% predictable across the
+                    // chunk loop. Compiler folds the fast-path bodies via `if constexpr` in
+                    // `prefetcher_write_chunk`.
                     if (t_rows_per_sub == 1) {
                         if (t_coal_num_pages == 1) {
                             prefetcher_write_chunk</*single_row=*/true, /*single_page=*/true>(
@@ -344,6 +347,7 @@ void kernel_main() {
                         noc_async_posted_writes_flushed();
                     }
 
+                    // Advance counters to next chunk.
                     blk = next_blk;
                     sb = next_sb;
                     ch = next_ch;
@@ -358,7 +362,7 @@ void kernel_main() {
 
         // Persist mutable state (fifo_wr_ptr) so the next request to this GCB
         // resumes at the right ring offset.
-        store_sender_state(gcb_state_addr, iface);
+        store_sender_state(state, iface);
 
         socket_pop_pages(socket, 1);
         socket_notify_sender(socket);

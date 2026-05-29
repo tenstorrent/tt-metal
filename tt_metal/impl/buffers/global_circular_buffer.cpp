@@ -6,6 +6,7 @@
 #include <buffer.hpp>
 #include <buffer_types.hpp>
 #include <circular_buffer_constants.h>
+#include <tt-metalium/remote_circular_buffer_packing.h>
 #include <core_coord.hpp>
 #include <device.hpp>
 #include <global_circular_buffer.hpp>
@@ -143,18 +144,26 @@ GlobalCircularBuffer::GlobalCircularBuffer(
         receiver_coords_per_sender_.push_back(std::move(phys));
     }
 
-    // Reserve this GCB's per-receiver pages_sent / pages_acked counter region in the
-    // per-mesh DRISC L1 arena. The arena returns a single uniform offset used by every
-    // sender bank — the kernel reads a single compile-time pages_sent_addr per sender set.
+    // Reserve a single per-GCB block in the per-mesh DRISC L1 arena holding both this
+    // GCB's per-receiver pages_sent/pages_acked counters and its sender state block
+    // (RemoteSenderCBInterface bytes + sender config + receiver NOC XY table). One
+    // allocation, one RAII handle (drisc_sender_state_alloc_), released when the last
+    // GCB copy goes out of scope. The arena returns a single uniform offset used by
+    // every sender bank.
     //
-    // On the DRISC side the slots are packed at uint32 stride (2 * 4 B = 8 B per
-    // receiver) — NoC atomic inc only needs 4-byte alignment, and the kernel walks
-    // these via REMOTE_CB_LOCAL_PAGES_STRIDE under #ifdef COMPILE_FOR_DRISC. The
-    // receiver-side layout in worker L1 stays at the standard 2 * L1_ALIGNMENT stride.
-    constexpr uint32_t kDriscSlotBytes = sizeof(uint32_t);
-    const uint32_t pages_sent_bytes = 2 * kDriscSlotBytes * max_num_receivers_per_sender;
-    drisc_pages_sent_alloc_ = mesh_device->impl().drisc_l1_arena().allocate(pages_sent_bytes, kDriscSlotBytes);
-    pages_sent_drisc_l1_base_ = drisc_pages_sent_alloc_->addr();
+    // Layout: [pages_sent region | sender state block]. pages_sent goes first so its
+    // base equals the allocation base. On the DRISC side the pages_sent slots are
+    // packed at uint32 stride (2 * 4 B per receiver) — NoC atomic inc only needs
+    // 4-byte alignment, and the kernel walks them via REMOTE_CB_LOCAL_PAGES_STRIDE.
+    // The receiver-side layout in worker L1 stays at the standard 2 * L1_ALIGNMENT.
+    const uint32_t l1_alignment = MetalContext::instance(context_id).hal().get_alignment(HalMemType::L1);
+    const uint32_t pages_sent_bytes = 2 * sizeof(uint32_t) * max_num_receivers_per_sender;
+    const uint32_t pages_sent_region = tt::align(pages_sent_bytes, l1_alignment);
+    const uint32_t state_block_size = dram_sender_state_block_size(max_num_receivers_per_sender);
+    drisc_sender_state_alloc_ =
+        mesh_device->impl().drisc_l1_arena().allocate(pages_sent_region + state_block_size, l1_alignment);
+    pages_sent_drisc_l1_base_ = drisc_sender_state_alloc_->addr();
+    sender_state_drisc_l1_base_ = pages_sent_drisc_l1_base_ + pages_sent_region;
 
     this->setup_cb_buffers(buffer_type, max_num_receivers_per_sender);
     this->initialize_dram_sender_state_block(mesh_device, max_num_receivers_per_sender);
@@ -163,27 +172,24 @@ GlobalCircularBuffer::GlobalCircularBuffer(
 void GlobalCircularBuffer::initialize_dram_sender_state_block(
     distributed::MeshDevice* mesh_device, uint32_t max_num_receivers_per_sender) {
     const auto context_id = mesh_device->impl().get_context_id();
-    const uint32_t l1_alignment = MetalContext::instance(context_id).hal().get_alignment(HalMemType::L1);
+    // The block was already allocated by the DRAM-sender ctor (combined with the
+    // pages_sent region); here we just compose its bytes and write them to L1.
     const uint32_t state_block_size = dram_sender_state_block_size(max_num_receivers_per_sender);
 
-    // Single uniform offset across every DRAM sender core on every mesh device,
-    // mirroring the pages_sent allocation above.
-    drisc_sender_state_alloc_ = mesh_device->impl().drisc_l1_arena().allocate(state_block_size, l1_alignment);
-    sender_state_drisc_l1_base_ = drisc_sender_state_alloc_->addr();
-
-    const auto noc_xy_table_addr =
-        static_cast<uint32_t>(sender_state_drisc_l1_base_) + kDramSenderStateBlockReceiverNocXyTableOffset;
+    // The receiver NOC XY table follows the fixed struct; config_ptr points at the
+    // sender config block embedded inside the struct.
+    const auto noc_xy_table_addr = static_cast<uint32_t>(sender_state_drisc_l1_base_) + sizeof(DramSenderStateBlock);
     const auto config_block_addr =
-        static_cast<uint32_t>(sender_state_drisc_l1_base_) + kDramSenderStateBlockConfigBlockOffset;
+        static_cast<uint32_t>(sender_state_drisc_l1_base_) + offsetof(DramSenderStateBlock, is_sender);
     const auto buffer_address = static_cast<uint32_t>(cb_buffer().address());
 
     const uint32_t packed_num_recv_and_remote =
         remote_cb_pack(max_num_receivers_per_sender, static_cast<uint32_t>(pages_sent_worker_l1_base_));
 
-    // Block header is identical across (device, sender) pairs; only the receiver
-    // NOC XY table varies per sender. Compose once, swap in the table per sender.
+    // Block is identical across (device, sender) pairs; only the receiver NOC XY
+    // table varies per sender. Compose once, swap in the table per sender.
     std::vector<uint8_t> block_bytes(state_block_size, 0);
-    auto* hdr = reinterpret_cast<DramSenderStateBlockHeader*>(block_bytes.data());
+    auto* hdr = reinterpret_cast<DramSenderStateBlock*>(block_bytes.data());
     hdr->config_ptr = config_block_addr;
     hdr->fifo_start_addr = buffer_address;
     hdr->fifo_limit_page_aligned = 0;  // set per-tensor at request time by the kernel
@@ -192,17 +198,12 @@ void GlobalCircularBuffer::initialize_dram_sender_state_block(
     hdr->receiver_noc_xy_ptr = noc_xy_table_addr;
     hdr->aligned_pages_sent_ptr = static_cast<uint32_t>(pages_sent_drisc_l1_base_);
     hdr->num_receivers_and_remote_pages_sent_ptr = packed_num_recv_and_remote;
-    hdr->stage_slot = 0;
-    hdr->has_next = 0;
-    hdr->pages_sent = 0;
-    hdr->reserved0 = 0;
     hdr->is_sender = 1;
     hdr->num_receivers = max_num_receivers_per_sender;
     hdr->buffer_address = buffer_address;
     hdr->fifo_size_per_receiver = size_;
 
-    auto* noc_xy_words =
-        reinterpret_cast<uint32_t*>(block_bytes.data() + kDramSenderStateBlockReceiverNocXyTableOffset);
+    auto* noc_xy_words = reinterpret_cast<uint32_t*>(block_bytes.data() + sizeof(DramSenderStateBlock));
 
     // Host writes to a DRAM core's L1 go over NOC and need the DRAM-L1 NOC offset
     // added on top of the local L1 address. (Worker L1 has local==NOC space so the

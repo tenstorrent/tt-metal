@@ -21,6 +21,8 @@
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 
+#include "impl/buffers/dram_core_prefetcher_request.hpp"
+
 namespace tt::tt_metal {
 
 class IDevice;
@@ -77,14 +79,13 @@ public:
 
 private:
     // ---- Constants shared with the kernel side ----
-    // Max tensors per request. Matches the kernel's per-tensor stride in the
-    // socket payload (11 uint32 fields per tensor). 16 is enough for Llama
-    // production shapes (typical is 5–10 tensors per matmul layer).
+    // Max tensors per request. 16 is enough for Llama production shapes (typical is
+    // 5–10 tensors per matmul layer). The request page wire format is a
+    // DramCorePrefetcherRequestHeader followed by kMaxTensorsPerRequest geom entries
+    // (see impl/buffers/dram_core_prefetcher_request.hpp).
     static constexpr uint32_t kMaxTensorsPerRequest = 16;
-    static constexpr uint32_t kRequestPageHeaderWords = 3;   // num_tensors, num_layers, gcb_state_addr
-    static constexpr uint32_t kRequestPageTensorWords = 11;  // see kernel doc (slot[10] = block_count)
     static constexpr uint32_t kRequestPageBytes =
-        sizeof(uint32_t) * (kRequestPageHeaderWords + kMaxTensorsPerRequest * kRequestPageTensorWords);
+        sizeof(DramCorePrefetcherRequestHeader) + kMaxTensorsPerRequest * sizeof(DramCorePrefetcherTensorGeom);
 
     // FIFO depth — how many in-flight requests a single socket can hold before
     // back-pressuring. 16 pages × ~656 B per page ≈ 11 KB per socket.
