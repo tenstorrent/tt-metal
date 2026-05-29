@@ -62,7 +62,7 @@ class MLP(LightweightModule):
             pad_hidden_dim(torch_bias(name[:]), dim=-1) if pad else torch_bias(name[:]),
             dtype=ttnn.bfloat16,
             device=self.mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device, dims=(None, -1), mesh_shape=self.cluster_shape),
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, -1), mesh_shape=self.cluster_shape),
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=cache_name(name),

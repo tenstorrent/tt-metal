@@ -441,17 +441,7 @@ class DropInVisionTransformer(torch.nn.Module):
             _, pcc = comp_pcc(reference_output, final_output)
             logger.info(f"DropInVisionTransformer: PCC to reference model: {pcc}")
 
-        # Convert the output to the desired tensor sharding format
-        final_output_sharded = ttnn.mesh_partition(final_output, 1)
-        ttnn.deallocate(final_output)
-
-        deepstack_visual_embeds_sharded = [
-            ttnn.mesh_partition(deepstack_visual_embeds_output[i], 1)
-            for i in range(len(deepstack_visual_embeds_output))
-        ]
-        [ttnn.deallocate(deepstack_visual_embeds_output[i]) for i in range(len(deepstack_visual_embeds_output))]
-
-        return final_output_sharded, deepstack_visual_embeds_sharded
+        return final_output, deepstack_visual_embeds_output
 
 
 class Transformer(TTTransformer):

@@ -51,9 +51,6 @@ class PatchMerger(LightweightModule):
         # replicated `PatchMerger` path. Leaving it unsupported here lets us
         # keep the I/O contract simple (input always fractured along the raw
         # hidden dim, not the post-shuffle mlp_size dim).
-        assert (
-            not postshuffle_norm
-        ), "PatchMergerTP currently only supports postshuffle_norm=False (use replicated PatchMerger instead)."
 
         self.state_dict = state_dict
         self.mesh_device = mesh_device
@@ -70,6 +67,7 @@ class PatchMerger(LightweightModule):
         self.mlp_size = args.hf_config.vision_config.hidden_size * (
             args.hf_config.vision_config.spatial_merge_size**2
         )
+        self.out_hidden_size = args.hf_config.vision_config.out_hidden_size
 
         assert (
             self.mlp_size % self.tp == 0
@@ -112,7 +110,7 @@ class PatchMerger(LightweightModule):
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, dim), mesh_shape=self.cluster_shape),
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=cache_name(f"{name}.weight"),
+            cache_file_name=cache_name(f"{name}.sharded.weight"),
         )
         as_bias_tensor = lambda name, type: ttnn.as_tensor(
             torch_bias(name),
@@ -125,9 +123,9 @@ class PatchMerger(LightweightModule):
         )
 
         # First layer: hidden_size -> hidden_size
-        self.w1 = as_weight_tensor("linear_fc1", dtype, self.mlp_size, -1)
+        self.w1 = as_weight_tensor("linear_fc1", dtype, -1)
         # Second layer: hidden_size -> out_dim
-        self.w2 = as_weight_tensor("linear_fc2", dtype, self.mlp_size, -2)
+        self.w2 = as_weight_tensor("linear_fc2", dtype, -2)
         self.b1 = as_bias_tensor("linear_fc1", dtype)
         self.b2 = as_bias_tensor("linear_fc2", dtype)
 
@@ -138,13 +136,13 @@ class PatchMerger(LightweightModule):
             x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
             x = ttnn.reshape(x, (x.shape[0], x.shape[1], -1, self.mlp_size // self.tp))
             x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-        x = self.norm(x)
+        x_norm = self.norm(x)
 
         # Merge spatial_merge_size^2 consecutive rows into one row of mlp_size.
         # The reshape workaround through ROW_MAJOR matches the replicated PatchMerger
         # (see tt-metal#29932 for the underlying tilized reshape hang).
         x_norm = ttnn.to_layout(x_norm, ttnn.ROW_MAJOR_LAYOUT)
-        x_norm = ttnn.reshape(x_norm, (x_norm.shape[0], x_norm.shape[1], -1, self.mlp_size // self.tp))
+        x_norm = ttnn.reshape(x_norm, (x_norm.shape[0], x_norm.shape[1], -1, self.mlp_size))
         x_norm = ttnn.to_layout(x_norm, ttnn.TILE_LAYOUT)
 
         # fc1 column-sharded: replicated in -> fractured-along-dim=3 out

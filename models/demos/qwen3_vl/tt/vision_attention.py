@@ -75,6 +75,8 @@ class VisionAttention(LightweightModule):
         self.cluster_shape = configuration.cluster_shape
         # We TP across cluster axis 1 (e.g. all 8 devices on T3K).
         self.tp = self.cluster_shape[1]
+        self.num_devices_per_group = self.tp
+        print(self.num_devices_per_group)
         # `tt_all_reduce` for T3K (1, 8) ignores the supplied cluster_axis and
         # reduce_scatters across the non-1 axis; keep this at 0 to avoid the
         # cluster_axis==1 short-circuit.
@@ -251,6 +253,7 @@ class VisionAttention(LightweightModule):
             qkv_list.append(qkv)
 
         qkv_cat = torch.cat(qkv_list, dim=-1).unsqueeze(0).unsqueeze(0)
+        print("torch shape", qkv_cat.shape)
         # qkv_cat.shape = [1, 1, 1280, 4608])
 
         self.wqkv = ttnn.as_tensor(
@@ -260,8 +263,10 @@ class VisionAttention(LightweightModule):
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, -1), mesh_shape=self.cluster_shape),
-            cache_file_name=cache_name("wqkv"),
+            cache_file_name=cache_name("wqkv_col"),
         )
+        print(cache_name("wqkv_col"))
+        print("important point", self.wqkv.shape)
 
         def norm_reshard(x, norm, mode):
             """Hack until RMSNorm supports height-sharded output config"""
@@ -319,13 +324,14 @@ class VisionAttention(LightweightModule):
             # note that torch weights are already transposed to have input in last dim
             pt_wo_t = self.state_dict[f"{wo_str}.weight"]
             # pt_wo_t.shape = [1280, 1280]
-            heads = pt_wo_t.reshape(-1, self.n_local_heads, self.head_dim)
+            heads = pt_wo_t.reshape(-1, self.n_heads, self.head_dim)
             # heads.shape = [-1, 8, 80]
             heads = torch.nn.functional.pad(
                 heads, (0, self.padded_head_dim - self.head_dim)
             )  # tail-pad last dim with 0
-            pt_wo = heads.reshape(1, 1, -1, self.n_local_heads * self.padded_head_dim).transpose(-1, -2)
+            pt_wo = heads.reshape(1, 1, -1, self.n_heads * self.padded_head_dim).transpose(-1, -2)
             # pt_wo.shape = [1, 1, 768, 2560]
+            print("output shape", pt_wo.shape)
 
         else:
             pt_wo = self.state_dict[f"{wo_str}.weight"].transpose(-1, -2).unsqueeze(0).unsqueeze(0)
@@ -341,7 +347,7 @@ class VisionAttention(LightweightModule):
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, -2), mesh_shape=self.cluster_shape),
-            cache_file_name=cache_name("wo"),
+            cache_file_name=cache_name("wo_row"),
         )
         # self.wo.shape = [1, 1, 384, 2560] each device of N300 sharded on dim=2
 
