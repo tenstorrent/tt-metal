@@ -669,12 +669,10 @@ ConnectionKey TestDevice::register_fabric_connection(
         candidate_eth_chans.size());
     const chan_id_t eth_chan = candidate_eth_chans[link_idx];
 
-    // For Z, ask the control plane for the actual peer chip on the other end of this eth
-    // chan (multiple Z chans may go to different neighbor meshes / chips). For NESW, every
-    // chan in the direction lands at the same per-direction neighbor.
-    const FabricNodeId next_hop_dst = (outgoing_direction == RoutingDirection::Z)
-                                          ? cp.get_connected_mesh_chip_chan_ids(fabric_node_id_, eth_chan).first
-                                          : route_manager_->get_neighbor_node_id(fabric_node_id_, outgoing_direction);
+    // Resolve the peer per eth_chan: this handles multi-Z (chans in one direction may land on
+    // different neighbor meshes / chips) and NESW uniformly (where it returns the single
+    // per-direction neighbor).
+    const FabricNodeId next_hop_dst = cp.get_connected_mesh_chip_chan_ids(fabric_node_id_, eth_chan).first;
 
     ConnectionKey connection_key{outgoing_direction, link_idx, vc_id, eth_chan};
     auto registered_keys = connection_mgr.get_connection_keys_for_core(logical_core, worker_type);
