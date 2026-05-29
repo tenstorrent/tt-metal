@@ -845,13 +845,14 @@ def test_wan_fused_distributed_rmsnorm_tp4_composite_vs_fused_bisect(
                     f"diff={float((c_invrms_per_row[check_row] - f_invrms_per_row[check_row]).abs()):.2e}"
                 )
 
-        # Direct value comparison for first 8 cols of row 0 and row 96:
+        # Direct value comparison for first 8 cols of row 0 and (when present) row 96:
         logger.info(f"INPUT row 0 cols 0..7: {x_chip0[0, :8].tolist()}")
-        logger.info(f"INPUT row 96 cols 0..7: {x_chip0[96, :8].tolist()}")
         logger.info(f"COMPOSITE OUT row 0 cols 0..7: {c_out_flat[0, :8].tolist()}")
-        logger.info(f"COMPOSITE OUT row 96 cols 0..7: {c_out_flat[96, :8].tolist()}")
         logger.info(f"FUSED OUT row 0 cols 0..7: {f_out_flat[0, :8].tolist()}")
-        logger.info(f"FUSED OUT row 96 cols 0..7: {f_out_flat[96, :8].tolist()}")
+        if N > 96:
+            logger.info(f"INPUT row 96 cols 0..7: {x_chip0[96, :8].tolist()}")
+            logger.info(f"COMPOSITE OUT row 96 cols 0..7: {c_out_flat[96, :8].tolist()}")
+            logger.info(f"FUSED OUT row 96 cols 0..7: {f_out_flat[96, :8].tolist()}")
 
     diff_full = (c_t_full - f_t_full).abs()
     # Per-row max diff (collapse heads + head_dim):
@@ -866,12 +867,19 @@ def test_wan_fused_distributed_rmsnorm_tp4_composite_vs_fused_bisect(
     chunk0_pos = tile_grouped[::chunk_size_rows]  # tile rows at chunk position 0
     chunk1_pos = tile_grouped[1::chunk_size_rows]  # chunk position 1
     chunk2_pos = tile_grouped[2::chunk_size_rows]  # chunk position 2
+
+    def _mean_max(t):  # empty slices occur when N spans < chunk_size_rows tiles
+        return (float(t.mean()), float(t.max())) if t.numel() else (float("nan"), float("nan"))
+
+    c0_mean, c0_max = _mean_max(chunk0_pos)
+    c1_mean, c1_max = _mean_max(chunk1_pos)
+    c2_mean, c2_max = _mean_max(chunk2_pos)
     logger.info(
         f"BISECT N={N} per-tile-row max diff: "
         f"first_18={[f'{x:.3f}' for x in tile_grouped[:18].tolist()]} "
-        f"chunk_pos0 mean={float(chunk0_pos.mean()):.4f} max={float(chunk0_pos.max()):.4f} "
-        f"chunk_pos1 mean={float(chunk1_pos.mean()):.4f} max={float(chunk1_pos.max()):.4f} "
-        f"chunk_pos2 mean={float(chunk2_pos.mean()):.4f} max={float(chunk2_pos.max()):.4f}"
+        f"chunk_pos0 mean={c0_mean:.4f} max={c0_max:.4f} "
+        f"chunk_pos1 mean={c1_mean:.4f} max={c1_max:.4f} "
+        f"chunk_pos2 mean={c2_mean:.4f} max={c2_max:.4f}"
     )
     c_t = c_t_full.flatten()
     f_t = f_t_full.flatten()
@@ -893,7 +901,9 @@ def test_wan_fused_distributed_rmsnorm_tp4_composite_vs_fused_bisect(
     # Pre+AG bit-exactness check at THIS N: compare composite's gathered stats
     # tensor (col 0 = sum-of-squares) against fused's persistent_output_buffer
     # (packed-page format: 32 fp32 col-0 values per device per chunk).
-    if not use_weight and not use_rope:
+    # Only meaningful when the fused op used the multi-worker MUX path (which
+    # populates the persistent buffer); single-worker shapes leave it None.
+    if not use_weight and not use_rope and persistent_output_buffer is not None:
         composite_stats = ttnn.experimental.wan_fused_rmsnorm_pre_allgather(tt_x, dtype=ttnn.float32)
         ring_size = 4
         composite_stats_gathered = ccl_manager.all_gather_persistent_buffer(
@@ -926,43 +936,46 @@ def test_wan_fused_distributed_rmsnorm_tp4_composite_vs_fused_bisect(
         # packed_local layout: chunk_size_rows × 128 bytes (32 fp32 col-0).
         chunk_size_rows = 3
         packed_local_chip0 = fused_per_device[0]  # device 0 = chip 0's own data
-        # Reshape to [num_chunks, chunk_size_rows, 32]
+        # This packed_local debug dump assumes the legacy chunk_size_rows=3
+        # packing with at least 3 chunks; skip it when the shape doesn't fit.
         num_chunks_per_dev = packed_local_chip0.numel() // (chunk_size_rows * 32)
-        packed_reshape = packed_local_chip0.reshape(num_chunks_per_dev, chunk_size_rows, 32)
-        # For each chunk, row 0's first 4 fp32 values are stats for first 4 input rows in tile
-        logger.info(f"PACKED_LOCAL chip0 chunk 0 r=0 first 4 stats: {packed_reshape[0, 0, :4].tolist()}")
-        logger.info(f"PACKED_LOCAL chip0 chunk 1 r=0 first 4 stats: {packed_reshape[1, 0, :4].tolist()}")
-        logger.info(f"PACKED_LOCAL chip0 chunk 2 r=0 first 4 stats: {packed_reshape[2, 0, :4].tolist()}")
-        # Diff between chunk 0 r=0 and chunk 1 r=0
-        diff_packed = (packed_reshape[0, 0] - packed_reshape[1, 0]).abs()
-        logger.info(
-            f"PACKED_LOCAL chunk 0 vs chunk 1 r=0 diff: "
-            f"max={float(diff_packed.max()):.3e} mean={float(diff_packed.mean()):.3e} "
-            f"identical_count={int((diff_packed == 0).sum())}/32"
-        )
-
-        # ALL devices' packed_local. Note: chip 0's OWN page is now OVERWRITTEN
-        # by [DEBUG2]'s dump of stats_gathered_cb's first 3 tiles col-0 values.
-        # Remote devices' pages still have their original packed_local from fabric.
-        all_packed = pob_flat.reshape(ring, num_chunks_per_dev, chunk_size_rows, 32)
-
-        # [DEBUG2 interpretation]: own slot (d=0) for each chunk now holds
-        # stats_gathered_cb tiles 0,1,2 col-0 (first row stat per dev 0,1,2).
-        # That means own_slot[chunk_idx][0..2] = stats_gathered[d=0,1,2] r=0 row 0.
-        for chunk_idx in [0, 1, 2]:
-            gathered_d0 = all_packed[0, chunk_idx, 0, 0]  # stats_gathered_cb tile 0 = dev 0 stat
-            gathered_d1 = all_packed[0, chunk_idx, 1, 0]  # stats_gathered_cb tile 1 = dev 1 stat
-            gathered_d2 = all_packed[0, chunk_idx, 2, 0]  # stats_gathered_cb tile 2 = dev 2 stat
-            # Remote chip 1's packed_local (still fabric-correct, since chip 1's debug write
-            # was to ITS own slot in ITS own pob, which is page 130+chunk_idx; chip 0 reads it via fabric)
-            remote_d1 = all_packed[1, chunk_idx, 0, 0]
-            remote_d2 = all_packed[2, chunk_idx, 0, 0]
-            remote_d3 = all_packed[3, chunk_idx, 0, 0]
+        if packed_local_chip0.numel() % (chunk_size_rows * 32) == 0 and num_chunks_per_dev >= 3:
+            # Reshape to [num_chunks, chunk_size_rows, 32]
+            packed_reshape = packed_local_chip0.reshape(num_chunks_per_dev, chunk_size_rows, 32)
+            # For each chunk, row 0's first 4 fp32 values are stats for first 4 input rows in tile
+            logger.info(f"PACKED_LOCAL chip0 chunk 0 r=0 first 4 stats: {packed_reshape[0, 0, :4].tolist()}")
+            logger.info(f"PACKED_LOCAL chip0 chunk 1 r=0 first 4 stats: {packed_reshape[1, 0, :4].tolist()}")
+            logger.info(f"PACKED_LOCAL chip0 chunk 2 r=0 first 4 stats: {packed_reshape[2, 0, :4].tolist()}")
+            # Diff between chunk 0 r=0 and chunk 1 r=0
+            diff_packed = (packed_reshape[0, 0] - packed_reshape[1, 0]).abs()
             logger.info(
-                f"PER-CHUNK chunk_idx={chunk_idx} r=0: "
-                f"stats_gathered[d0,d1,d2]={[gathered_d0.item(), gathered_d1.item(), gathered_d2.item()]} "
-                f"packed_remote[d1,d2,d3]={[remote_d1.item(), remote_d2.item(), remote_d3.item()]}"
+                f"PACKED_LOCAL chunk 0 vs chunk 1 r=0 diff: "
+                f"max={float(diff_packed.max()):.3e} mean={float(diff_packed.mean()):.3e} "
+                f"identical_count={int((diff_packed == 0).sum())}/32"
             )
+
+            # ALL devices' packed_local. Note: chip 0's OWN page is now OVERWRITTEN
+            # by [DEBUG2]'s dump of stats_gathered_cb's first 3 tiles col-0 values.
+            # Remote devices' pages still have their original packed_local from fabric.
+            all_packed = pob_flat.reshape(ring, num_chunks_per_dev, chunk_size_rows, 32)
+
+            # [DEBUG2 interpretation]: own slot (d=0) for each chunk now holds
+            # stats_gathered_cb tiles 0,1,2 col-0 (first row stat per dev 0,1,2).
+            # That means own_slot[chunk_idx][0..2] = stats_gathered[d=0,1,2] r=0 row 0.
+            for chunk_idx in [0, 1, 2]:
+                gathered_d0 = all_packed[0, chunk_idx, 0, 0]  # stats_gathered_cb tile 0 = dev 0 stat
+                gathered_d1 = all_packed[0, chunk_idx, 1, 0]  # stats_gathered_cb tile 1 = dev 1 stat
+                gathered_d2 = all_packed[0, chunk_idx, 2, 0]  # stats_gathered_cb tile 2 = dev 2 stat
+                # Remote chip 1's packed_local (still fabric-correct, since chip 1's debug write
+                # was to ITS own slot in ITS own pob, which is page 130+chunk_idx; chip 0 reads it via fabric)
+                remote_d1 = all_packed[1, chunk_idx, 0, 0]
+                remote_d2 = all_packed[2, chunk_idx, 0, 0]
+                remote_d3 = all_packed[3, chunk_idx, 0, 0]
+                logger.info(
+                    f"PER-CHUNK chunk_idx={chunk_idx} r=0: "
+                    f"stats_gathered[d0,d1,d2]={[gathered_d0.item(), gathered_d1.item(), gathered_d2.item()]} "
+                    f"packed_remote[d1,d2,d3]={[remote_d1.item(), remote_d2.item(), remote_d3.item()]}"
+                )
         # Composite is [N, ring], fused_per_device is [ring, rows_per_dev]. Transpose.
         fused_per_row = fused_per_device[:, :n_compare].transpose(0, 1)  # [n_compare, ring]
         diff_preag = (composite_col0[:n_compare] - fused_per_row).abs()
@@ -1155,6 +1168,10 @@ def test_wan_fused_distributed_rmsnorm_device_op_tp8_ring_native(
         f"Running fused TP=8 op on native 1x8 ring mesh, N={N}, H_per_device={H_per_device}, "
         f"H_full={H_FULL}, has_weight={has_weight}"
     )
+    # Required for multi-worker shapes (returns None when a single worker is used).
+    persistent_output_buffer = ttnn.experimental.wan_fused_distributed_rmsnorm_create_stats_buffer(
+        tt_x, cluster_axis, submesh, num_heads_per_device=NUM_HEADS_PER_DEVICE
+    )
     out = ttnn.experimental.wan_fused_distributed_rmsnorm(
         tt_x,
         cluster_axis,
@@ -1164,6 +1181,7 @@ def test_wan_fused_distributed_rmsnorm_device_op_tp8_ring_native(
         epsilon=EPS,
         num_heads_per_device=NUM_HEADS_PER_DEVICE,
         weight=tt_weight,
+        persistent_output_buffer=persistent_output_buffer,
         use_device_op=True,
     )
 
