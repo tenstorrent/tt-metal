@@ -313,8 +313,8 @@ std::set<MeshId> compute_preferred_physical_meshes_for_logical_mesh(
     const PhysicalMultiMeshGraph& physical_graph,
     const PortTypeLinkMap& port_type_links,
     const std::set<MeshId>& bound_physical_mesh_ids) {
-    const auto unbound = unbound_physical_meshes(physical_graph, bound_physical_mesh_ids);
-    const auto logical_neighbors = mesh_logical_level_graph.get_neighbors(logical_mesh);
+    auto unbound = unbound_physical_meshes(physical_graph, bound_physical_mesh_ids);
+    const auto& logical_neighbors = mesh_logical_level_graph.get_neighbors(logical_mesh);
     if (logical_neighbors.empty()) {
         return unbound;
     }
