@@ -67,6 +67,8 @@ void kernel_main() {
     constexpr uint32_t mesh_cols = get_compile_time_arg_val(26);
     constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(27);
 
+    //
+    // optimal schedule
     constexpr uint32_t chip_0[] = {6, 3, 7, 1, 5, 4, 2};
     constexpr uint32_t chip_1[] = {2, 5, 7, 3, 6, 0, 4};
     constexpr uint32_t chip_2[] = {1, 5, 6, 0, 4, 3, 7};
@@ -75,6 +77,18 @@ void kernel_main() {
     constexpr uint32_t chip_5[] = {2, 1, 7, 3, 6, 0, 4};
     constexpr uint32_t chip_6[] = {0, 4, 2, 5, 1, 3, 7};
     constexpr uint32_t chip_7[] = {1, 5, 3, 0, 4, 2, 6};
+    /*/
+    // per device schedule
+    constexpr uint32_t chip_0[] = {1, 2, 3, 4, 5, 6, 7};
+    constexpr uint32_t chip_1[] = {0, 2, 3, 4, 5, 6, 7};
+    constexpr uint32_t chip_2[] = {0, 1, 3, 4, 5, 6, 7};
+    constexpr uint32_t chip_3[] = {0, 1, 2, 4, 5, 6, 7};
+    constexpr uint32_t chip_4[] = {0, 1, 2, 3, 5, 6, 7};
+    constexpr uint32_t chip_5[] = {0, 1, 2, 3, 4, 6, 7};
+    constexpr uint32_t chip_6[] = {0, 1, 2, 3, 4, 5, 7};
+    constexpr uint32_t chip_7[] = {0, 1, 2, 3, 4, 5, 6};
+    //*/
+    const uint32_t writer_override_batch_size = 1;
     const uint32_t* schedule =
         linearized_mesh_coord == 0
             ? chip_0
@@ -234,7 +248,7 @@ void kernel_main() {
                     break;
                 }
             }
-            dst_chip = schedule[global_token_cnt++ % 7];
+            dst_chip = schedule[(global_token_cnt++ / writer_override_batch_size) % 7];
             uint32_t meta1 = route_info[1];
             uint32_t meta2 = route_info[2];
             uint32_t output_page_idx = meta1 * num_experts_per_tok + meta2;
