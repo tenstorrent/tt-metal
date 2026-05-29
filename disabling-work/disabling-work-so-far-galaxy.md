@@ -2,7 +2,7 @@
 
 > **Source of truth.** This file is the canonical record of automation-tracked PRs. Wiping it resets the automation to fresh-state view; stale GitHub PRs not listed here are intentionally invisible.
 
-Last updated: _(none yet — initial skeleton)_
+Last updated: 2026-05-29T02:00:41Z
 
 > **Scope: GALAXY PIPELINES ONLY.** Companion file to `disabling-work/ci-disable-targeted-verification-galaxy.md`. The non-Galaxy state log is `disabling-work/disabling-work-so-far.md`; do not confuse the two.
 
@@ -50,10 +50,11 @@ Last updated: _(none yet — initial skeleton)_
 
 | Blocker | Status | Notes |
 |---------|--------|-------|
-| _(none)_ |  |  |
+| All Galaxy workflow failures are infrastructure/environmental | Active | TLB allocation failures, model loading/access failures, hugepage/NUMA issues, runner cancellations, and Python segfaults during test collection are the predominant failure modes across galaxy-integration-tests, galaxy-e2e-tests, galaxy-demo-tests. No deterministic test failures with specific test IDs meeting the 3-consecutive-runs criterion were found. |
 
 ---
 
 ## Recent Activity
 
-- _(none yet)_
+- 2026-05-29T02:00:41Z — Session analysis complete (triggered by hourly cron). Examined all Galaxy workflows. No examining PRs (state log is empty). No focus PRs created. Root cause: all Galaxy CI failures are infrastructure/environmental — TLB allocation errors (RuntimeError: Failed to allocate TLB window, error code -12 for TLB size 1048576) in Qwen-Image tests; model loading/access failures (OSError: Can't load config, stabilityai/...) in Mochi/SD3.5/Motif demo tests; hugepage/NUMA issues (UMD: NOC address of a hugepage does not match the expected address) in e2e and integration test runners; runner cancellation (setup runner step cancelled) in unit test `wh_galaxy_perf_uf` jobs; Python segfault during test collection in CCL tests. None qualify as deterministic test failures per policy. Galaxy unit tests show intermittent failures (runs 1524, 1506, 1494, 1493, 1492 failed; runs 1495, 1491, 1490 passed) driven entirely by infrastructure faults, not reproducible test code failures. Galaxy integration tests (183 total runs, all failures) and e2e tests (126 total runs, ~1 pass, rest failures) similarly driven by infrastructure. Paralysis check: FAILED — zero examining PRs and zero focus PRs, no eligible deterministic test failures identified in any Galaxy workflow to justify disable PR creation. This is not a bug in the automation logic but reflects a genuine absence of in-scope deterministic test failures; Galaxy pipelines are failing exclusively due to infrastructure/environment issues.
+- _(none yet — older entries will appear here)_
