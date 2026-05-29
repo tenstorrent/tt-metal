@@ -43,6 +43,7 @@ from .math_perf_env import (
     ace_step_init_cond_linear_compute_kernel_config,
     ace_step_init_cond_rmsnorm_compute_kernel_config,
     ace_step_init_cond_sdpa_compute_kernel_config,
+    ace_step_init_cond_sdpa_program_config,
     ace_step_linear_l1_memory_config,
     ace_step_linear_weight_dtype,
     ace_step_nlp_concat_heads,
@@ -490,12 +491,18 @@ class _TtQwen3EncoderLayer:
 
         self.input_ln_w = as_t("input_layernorm.weight")
         self.post_ln_w = as_t("post_attention_layernorm.weight")
-        self.wq = as_t("self_attn.q_proj.weight", qo=True)
+        # Fused QKV: concat [q, k, v] projection weights into one [q_dim+2*kv_dim, hidden]
+        # tensor. One matmul (instead of separate q + kv) feeds the single-input
+        # ``nlp_create_qkv_heads`` kernel — replaces two ShardedToInterleaved + the slower
+        # two-tensor head-split with one of each (mirrors tt_transformers Attention prefill).
+        wq_host = weights_np[f"{prefix}.self_attn.q_proj.weight"]
         wk_host = weights_np[f"{prefix}.self_attn.k_proj.weight"]
         wv_host = weights_np[f"{prefix}.self_attn.v_proj.weight"]
-        wkv_host = np.concatenate([wk_host, wv_host], axis=0)
-        self.wkv = ttnn.as_tensor(
-            wkv_host,
+        self._q_dim_o = int(wq_host.shape[0])
+        self._kv_dim_o = int(wk_host.shape[0])
+        wqkv_host = np.concatenate([wq_host, wk_host, wv_host], axis=0)
+        self.wqkv = ttnn.as_tensor(
+            wqkv_host,
             device=device,
             dtype=self._attn_qo_dtype,
             layout=ttnn.TILE_LAYOUT,
@@ -615,47 +622,40 @@ class _TtQwen3EncoderLayer:
 
         x = self._l1_activation(x)
         hsz = self.hidden_size
-        q_dim_o = int(H * Dh)
-        kv_dim_o = int(kv_h * Dh)
-        lin_q = self._attn_linear_kwargs(batch_size=b, seq_len=s, in_dim=hsz, out_dim=q_dim_o)
-        lin_kv = self._attn_linear_kwargs(batch_size=b, seq_len=s, in_dim=hsz, out_dim=2 * kv_dim_o)
-        # Block-shard in0 once for q and wkv (same [B,1,M,K=1024]); avoids extra InterleavedToSharded on wkv.
-        x_attn = self._maybe_shard_attn_in0(x, batch_size=b, seq_len=s, in_dim=hsz, out_dim=q_dim_o)
-        q = ttnn.linear(x_attn, self.wq, bias=None, transpose_b=True, dtype=_bf8, **lin_q)
-        kv = ttnn.linear(x_attn, self.wkv, bias=None, transpose_b=True, dtype=_bf8, **lin_kv)
+        q_dim_o = self._q_dim_o
+        kv_dim_o = self._kv_dim_o
+        qkv_dim_o = q_dim_o + 2 * kv_dim_o
+        # Single fused QKV matmul: one [B,1,S,q+2kv] output instead of separate q / kv.
+        lin_qkv = self._attn_linear_kwargs(batch_size=b, seq_len=s, in_dim=hsz, out_dim=qkv_dim_o)
+        x_attn = self._maybe_shard_attn_in0(x, batch_size=b, seq_len=s, in_dim=hsz, out_dim=qkv_dim_o)
+        qkv = ttnn.linear(x_attn, self.wqkv, bias=None, transpose_b=True, dtype=_bf8, **lin_qkv)
         ace_step_safe_deallocate(ttnn, x_attn if x_attn is not x else None)
         ace_step_safe_deallocate(ttnn, x)
 
-        # BFP8 1D-mcast matmul can spill Q/KV to DRAM despite memory_config=L1; head-split
-        # inherits that placement. Force L1 interleaved before nlp_create_qkv_heads.
-        # (Block-sharded output from 2D-mcast is also converted here; nlp_create_qkv_heads
-        # does not yet support block-sharded input for the separate Q/KV case.)
+        # BFP8 1D-mcast matmul can spill to DRAM despite memory_config=L1; force L1 interleaved
+        # before nlp_create_qkv_heads (which does not accept the width-sharded matmul output).
         if _l1_mc is not None:
-            q = ace_step_ensure_l1_activation(ttnn, q, _l1_mc)
-            kv = ace_step_ensure_l1_activation(ttnn, kv, _l1_mc)
+            qkv = ace_step_ensure_l1_activation(ttnn, qkv, _l1_mc)
 
         heads = ace_step_try_nlp_qkv_heads_split(
             ttnn,
-            q_b1sd=q,
-            kv_b1sd=kv,
+            q_b1sd=qkv,
             num_heads=H,
             num_kv_heads=kv_h,
             memory_config=_l1_mc,
         )
         if heads is not None:
             q, k, v = heads
-            ace_step_safe_deallocate(ttnn, kv)
+            ace_step_safe_deallocate(ttnn, qkv)
         else:
-            # Manual slice/reshape/permute path — these ops require interleaved L1.
-            # nlp_create_qkv_heads was unavailable or rejected the sharded layout; de-shard first.
-            if _l1_mc is not None:
-                q = ace_step_ensure_l1_activation(ttnn, q, _l1_mc)
-                kv = ace_step_ensure_l1_activation(ttnn, kv, _l1_mc)
+            # Manual fused-QKV split fallback (nlp_create_qkv_heads unavailable): slice the
+            # single [B,1,S,q+2kv] output into q/k/v, then reshape + permute to [B,h,S,Dh].
             _sr = ace_step_reshape_kwargs(ttnn)
             _pk = ace_step_permute_kwargs(ttnn)
-            k = ttnn.slice(kv, (0, 0, 0, 0), (b, 1, s, kv_dim_o))
-            v = ttnn.slice(kv, (0, 0, 0, kv_dim_o), (b, 1, s, 2 * kv_dim_o))
-            ace_step_safe_deallocate(ttnn, kv)
+            q = ttnn.slice(qkv, (0, 0, 0, 0), (b, 1, s, q_dim_o))
+            k = ttnn.slice(qkv, (0, 0, 0, q_dim_o), (b, 1, s, q_dim_o + kv_dim_o))
+            v = ttnn.slice(qkv, (0, 0, 0, q_dim_o + kv_dim_o), (b, 1, s, qkv_dim_o))
+            ace_step_safe_deallocate(ttnn, qkv)
             q = ttnn.reshape(q, (b, s, H, Dh), **_sr)
             k = ttnn.reshape(k, (b, s, kv_h, Dh), **_sr)
             v = ttnn.reshape(v, (b, s, kv_h, Dh), **_sr)
@@ -781,6 +781,12 @@ class TtQwen3EmbeddingEncoder:
         linear_compute_kernel_config = ace_step_init_cond_linear_compute_kernel_config(device)
         l1_mc = ace_step_linear_l1_memory_config(ttnn)
         sdpa_compute_kernel_config = ace_step_init_cond_sdpa_compute_kernel_config(device)
+        sdpa_program_config = ace_step_init_cond_sdpa_program_config(
+            device,
+            seq_len=int(self.cfg.max_seq_len),
+            num_heads=int(self.cfg.num_attention_heads),
+            batch_size=1,
+        )
 
         self.embed_weight = ttnn.as_tensor(
             weights_np["embed_tokens.weight"],
@@ -796,7 +802,7 @@ class TtQwen3EmbeddingEncoder:
             activation_l1_memory_config=l1_mc,
             linear_output_l1_memory_config=l1_mc,
             sdpa_compute_kernel_config=sdpa_compute_kernel_config,
-            sdpa_program_config=None,
+            sdpa_program_config=sdpa_program_config,
         )
         self.layers = [
             _TtQwen3EncoderLayer(
