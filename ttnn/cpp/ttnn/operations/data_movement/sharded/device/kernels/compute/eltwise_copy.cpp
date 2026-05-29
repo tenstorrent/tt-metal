@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "api/dataflow/circular_buffer.h"
 
@@ -12,7 +13,7 @@ void kernel_main() {
     constexpr auto cb_in = tt::CBIndex::c_0;
     constexpr auto cb_out = tt::CBIndex::c_16;
 
-    binary_op_init_common(cb_in, cb_in, cb_out);
+    unary_op_init_common(cb_in, cb_out);
 
     // Per-tile copy cb_in -> cb_out. Original used unary_op_init_common +
     // copy_tile_init at boot, then plain copy_tile / pack_tile per iter —

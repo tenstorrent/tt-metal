@@ -12,10 +12,13 @@ Live ledger of every TTNN compute kernel and its relationship to
    finds every file still emitting raw `pack_tile` / `pack_tile_with_dt`.
 3. Per-kernel `grep -E '^[[:space:]]*pack_tile(_with_dt)?\('` &mdash; counts
    the real raw packs (excluding comments) to distinguish FULL from PARTIAL.
-4. Per-kernel `grep` for OOS-tagging primitives (`matmul_tiles`,
+4. Per-kernel `grep` for blocker primitives (`matmul_tiles`,
    `transpose_wh_tile`, `reduce_tile`, `welford_*`, `reshuffle_rows_tile`,
    `rand_tile`) &mdash; classifies WHY a PARTIAL or UNTOUCHED kernel can't
-   migrate cleanly.
+   migrate cleanly. Note: `welford_*` is **not OOS** &mdash; the welford
+   running mean/M2 live in SFPU LREG4/LREG5 (outside DEST), so each LLK
+   primitive is wrappable as a chain element struct. Tagged as &sect;5
+   helper gap, not OOS &sect;4.
 
 A companion artifact `docs/eltwise_chain_migration_candidates.html` has a
 per-kernel chain-shape proposal for the unmigrated queue; this file is the
@@ -25,9 +28,11 @@ state ledger.
 
 | Category | Count | Definition |
 |---|---:|---|
-| FULL | 48 | File includes the chain header AND has zero remaining raw `pack_tile`. |
-| PARTIAL | 24 | File includes the chain header AND still has at least one raw `pack_tile` &mdash; each row below names the specific stage(s) left raw with the root-cause #. |
+| FULL | 51 | File includes the chain header AND has zero remaining raw `pack_tile`. (+3 since 2026-05-26: batch_norm_sfpu, running_statistics_sfpu, running_statistics_kernel FPU). |
+| PARTIAL | 23 | File includes the chain header AND still has at least one raw `pack_tile` &mdash; each row below names the specific stage(s) left raw with the root-cause #. (-1 since 2026-05-26: running_statistics_kernel FPU promoted to FULL). |
 | UNTOUCHED | 137 | File still has raw `pack_tile` and does NOT include the chain header. Classified into MIGRATE NOW / blocked-by-helper-gap / OOS below. |
+
+**2026-05-28 update:** `running_statistics_kernel` (FPU) promoted PARTIAL &rarr; FULL (commit `7fd2eedd157`); section 3 entries below for `moreh_int_sum_*`, `moreh_sum_nc`, the CCL accumulator cluster, and `moreh_nll_loss_step2` were re-audited &mdash; their classification has been corrected (see &sect;3a-corrections below).
 
 ## Reconfig audit policy
 
@@ -68,6 +73,9 @@ did. See
 | Kernel | First chain commit | Notes |
 |---|---|---|
 | `batch_norm/.../batch_norm_kernel.cpp` | `17056fe08cb` + `6dd9dbcdece` | 1-tile BinaryFpu+Rsqrt prologue + fused Stage 2-4 via DestReuseBinary + 4-branch chain collapsed via OptionalChainElement. |
+| `batch_norm/.../batch_norm_sfpu_kernel.cpp` | `c0507770694` + `50d82ae55a9` | Held-tile wait/pop absorbed into chain (Bulk+Scalar). |
+| `batch_norm/.../running_statistics_kernel.cpp` (FPU) | `dd4d2b0bfdc` + `7fd2eedd157` | Stages 1-3 via `fpu_binary_to_cb_chain` wrapper; stage 4 = explicit chain `BinaryFpu<Add> + 2x PackTile` (primary Streaming to `cb_updated_running_*`, mirror OutCallerManaged to `cb_out0`). Constexpr-if `mean_packs_to_out0` for the conditional mirror pack. |
+| `batch_norm/.../running_statistics_sfpu_kernel.cpp` | `b95524db659` | Fused 4-stage chain via `CopyTile + SubBinary/MulBinary/AddBinary`, 3 DEST slots, OptionalChainElement collapse. |
 | `layernorm_distributed/.../layernorm_pre_allgather.cpp` | `189ef03f223` | Squaring chain over `EltwiseShape::of(Wt/blk, blk)`. |
 | `rmsnorm_distributed/.../rmsnorm_pre_allgather.cpp` | `c41aca20b88` | Same squaring chain. |
 | `rmsnorm_distributed/.../rmsnorm_post_allgather.cpp` | `72388c98689` | 4-stage chain (add+rsqrt + x*recip + [*gamma] + [+beta]). |
@@ -88,7 +96,7 @@ did. See
 | `eltwise/unary_backward/tanh_bw/.../eltwise_bw_tanh_deriv.cpp` | `ef60346171a` | grad * sech²(x). |
 | `experimental/unary_backward/gelu_backward/.../eltwise_bw_gelu_poly.cpp` | `ef60346171a` | Sibling of the gelu_bw kernel (separate copy). |
 | `data_movement/clone/.../compute_kernel.cpp` | `96c844c6817` | Single CopyTile+PackTile. |
-| `data_movement/bcast/.../bcast_{h,w,hw}.cpp` | `65b34f7740f` | Per-tile BinaryFpu<CHAIN_BCAST_OP, dim> + PackTile. Driven by `bcast_op_utils::get_defines`. |
+| `data_movement/bcast/.../bcast_{h,w,hw}.cpp` | `65b34f7740f` &rarr; 2D upgrade `48fa98659a9` &rarr; reverted to 1D + init_bcast `9dcb85feb59` | Per-tile BinaryFpu<CHAIN_BCAST_OP, dim> + PackTile. Driven by `bcast_op_utils::get_defines`. Original `init_bcast<BCAST_LLKOP, BCAST_DIM>` retained as the kernel-level big init (chain's BinaryFpu uses `CHAIN_BCAST_OP` / `CHAIN_BCAST_DIM` helper-lib types emitted alongside the LLK enum macros). `bcast_h` / `bcast_hw` are flat 1D chains over `B*Ht*Wt` total tiles (Streaming + Scalar). `bcast_w` keeps a flat outer `for (row 0..B*Ht)` with per-row HeldStream cb_rhs + explicit `cb_rhs_obj.pop_front(1)` at chain end (1 scalar tile/row). The 2D `EltwiseShape::of` upgrade was reverted &mdash; bcast is tile-by-tile, no benefit from a 2D shape. |
 | `data_movement/sharded/.../eltwise_copy.cpp` | `3dfd9bb6b07` | Per-tile copy, runtime tile count. |
 | `ttnn/cpp/ttnn/kernel/compute/eltwise_copy.cpp` | `3dfd9bb6b07` | Shared compile-time variant. |
 | `experimental/bcast_to/.../compute_interleaved_{col,row,scalar}_bcast_to.cpp` | `a1fd70d3e88` | UnaryBcast<{Col,Row,Scalar}> + PackTile. |
@@ -122,12 +130,12 @@ helper gap in &sect;5.
 |---|---:|---|---|
 | `groupnorm/groupnorm.cpp` | 7 | `3e5f209fa06` + `dcc18175bef` | Multi-stage block-strided normalization (x prep + (x-Ex)*rsqrt + gamma + beta) where output CB equals input CB on optional gamma/beta. **Helper gap:** chain reserves output BEFORE popping input, so same-CB in-place inside chain isn't safe. |
 | `groupnorm/groupnorm_sharded_v2.cpp` | 9 | `abe68ea4c28` + `06b2806c554` | Same as groupnorm.cpp + `pack_reconfig_l1_acc(1)` for the `(x-E[x])^2` block. **OOS #6** L1 packer acc + same-CB-in-place gap. |
-| `groupnorm/welford_groupnorm.cpp` | 4 | `92a19132dd7` + `20ce6da381c` + `a4115dfc276` | Welford accumulator inner loop. **OOS #1** + same-CB-in-place gap. |
-| `groupnorm/welford_groupnorm_sharded_v2.cpp` | 3 | `66907980ee9` + `20ce6da381c` | Welford accumulator + sharded variant. **OOS #1.** |
+| `groupnorm/welford_groupnorm.cpp` | 4 | `92a19132dd7` + `20ce6da381c` + `a4115dfc276` | Welford accumulator inner loop. **GAP welford structs (§5)** + same-CB-in-place gap. |
+| `groupnorm/welford_groupnorm_sharded_v2.cpp` | 3 | `66907980ee9` + `20ce6da381c` | Welford accumulator + sharded variant. **GAP welford structs (§5).** |
 | `layernorm/layernorm.cpp` | 3 | `5d0e13a7f96` + `7fa2452a677` | Macro-injected SFPU activation (`SFPU_OP_INIT_ACTIVATION` / `SFPU_OP_CHAIN_0`) inside DEST window. **OOS #4** &mdash; resolvable by adding a kernel-local `ActivationMacro : UnaryOp` struct guarded by `#ifdef`. |
-| `layernorm/layernorm_welford.cpp` | 4 (+4 blocking) | `547aa2f1ec3` + `f53bc329ce1` | Welford accumulator across blocks + `transpose_wh_tile` interleaved with `welford_update` / `welford_finalize_to_row`. **OOS #1 + #2.** |
+| `layernorm/layernorm_welford.cpp` | 4 (+4 blocking) | `547aa2f1ec3` + `f53bc329ce1` | Welford accumulator across blocks + `transpose_wh_tile` interleaved with `welford_update` / `welford_finalize_to_row`. **GAP welford structs (§5) + #2.** |
 | `layernorm/layernorm_large_tensor.cpp` | 7 | `66c0ea6590b` + `0b0ca49146e` | Block A (pass-1 variance with interleaved sub_bcast + binary_dest_reuse + square + reduce_init + reduce_tile + scalar mul in one DEST window) + blocks D/E/F SFPU activation macro. **OOS #3 + #4.** |
-| `layernorm/layernorm_large_tensor_welford.cpp` | 13 (+5 blocking) | `decf009afc0` + `3016a1d484f` | Welford + transpose + FUSE_PRE_ADD + pass-2 sub_bcast + gamma/beta. **OOS #1, #2, #3.** |
+| `layernorm/layernorm_large_tensor_welford.cpp` | 13 (+5 blocking) | `decf009afc0` + `3016a1d484f` | Welford + transpose + FUSE_PRE_ADD + pass-2 sub_bcast + gamma/beta. **GAP welford structs (§5), #2, #3.** |
 | `layernorm_distributed/layernorm_post_allgather.cpp` | 2 | `6277004b227` | `chain_llk` DSL graph (normed_output / gamma_optional / beta_optional nodes). **OOS #5** &mdash; would need re-implementing the chain_llk graph layer. |
 | `experimental/transformer/dit_layernorm_post_all_gather/.../layernorm_post_allgather_welford.cpp` | 2 | `638248c12f7` + `0d52a5ae5a0` | mul-by-recip_sqrt_var and mul-by-gamma blocks. **Same-CB-in-place gap** (output CB equals input CB when gamma\|\|beta is enabled). |
 | `experimental/fused_distributed_rmsnorm/rmsnorm_post_allgather.cpp` | 6 (+1 blocking) | `da3f90e6f22` | reduce_tile inside DEST + chain_llk-like pattern. **OOS #3 + #5.** |
@@ -168,29 +176,31 @@ chain shape proposal.
 `mul_binary_tile` on two fresh DEST slots &mdash; chain `AddBinary<D0,D1,D0>`
 in `eltwise_binary_sfpu.hpp` already expresses this; **no helper gap**):
 
-- `normalization/batch_norm/.../batch_norm_sfpu_kernel.cpp`
-- `normalization/batch_norm/.../running_statistics_sfpu_kernel.cpp`
-- `normalization/batch_norm/.../running_statistics_kernel.cpp`
 - `eltwise/binary/.../eltwise_binary_sfpu_kernel.cpp` (audit for macro-injected op first)
-- `moreh/moreh_sum/.../moreh_int_sum_h.cpp`
-- `moreh/moreh_sum/.../moreh_int_sum_w.cpp`
-- `moreh/moreh_sum/.../moreh_int_sum_nc.cpp`
+- ~~`normalization/batch_norm/.../batch_norm_sfpu_kernel.cpp`~~ &mdash; **MIGRATED** (`c0507770694` + `50d82ae55a9`).
+- ~~`normalization/batch_norm/.../running_statistics_sfpu_kernel.cpp`~~ &mdash; **MIGRATED** (`b95524db659`).
+- ~~`normalization/batch_norm/.../running_statistics_kernel.cpp`~~ &mdash; **MIGRATED FULL** (`dd4d2b0bfdc` PARTIAL &rarr; `7fd2eedd157` FULL). FPU + DestReuseBinary path, not the SFPU-binary shape.
+- ~~`moreh/moreh_sum/.../moreh_int_sum_{h,w,nc}.cpp`~~ &mdash; **MOVED to &sect;3c-int** (audit 2026-05-28): these use `sfpu_add_int`, `sfpu_sum_int_col/row`, `mask_tile(Int32)` &mdash; int-specific SFPU primitives NOT in the helper library. Original classification was incorrect; these need int-typed chain helpers before migration.
 
 **Moreh recip + mul cluster** (CopyTile + Recip + Pack, BinaryFpu + Mul-by-bcast-scalar):
 
-- `moreh/moreh_nll_loss/.../moreh_nll_loss_step2_kernel.cpp`
 - `moreh/moreh_nll_loss_backward/.../moreh_nll_loss_backward_kernel.cpp`
-- `moreh/moreh_linear_backward/.../moreh_bias_backward_single_core_hw.cpp`
-- `moreh/moreh_linear_backward/.../moreh_bias_backward_multi_core_h.cpp`
-- `moreh/moreh_clip_grad_norm_step3/.../moreh_clip_grad_norm_step3_kernel.cpp`
+- `moreh/moreh_linear_backward/.../moreh_bias_backward_single_core_hw.cpp` &mdash; clean migratable, but the `do_mask_h/do_mask_w && last_row/col` Mask block is RUNTIME-conditional; needs either runtime chain dispatch or 4-way constexpr split keyed on `do_mask_*`.
+- `moreh/moreh_linear_backward/.../moreh_bias_backward_multi_core_h.cpp` &mdash; same as single_core_hw.
+- ~~`moreh/moreh_clip_grad_norm_step3/.../moreh_clip_grad_norm_step3_kernel.cpp`~~ &mdash; **MIGRATED** (`98c5ebb783b` + `7ec7613c5d0`).
 - `moreh/moreh_abs_pow/.../moreh_abs_pow_kernel.cpp` &mdash; abs+mask prologue
   (`Mask` op struct in `eltwise_misc.hpp`) + power composite (precedent:
-  `moreh_norm_h_kernel.cpp` FULL).
-- `moreh/moreh_sum/.../moreh_sum_nc.cpp` (single-stage accumulator)
+  `moreh_norm_h_kernel.cpp` FULL). Has runtime-conditional mask block (same shape gotcha as bias_backward).
+- ~~`moreh/moreh_sum/.../moreh_sum_nc.cpp`~~ &mdash; **MOVED to &sect;3c** (audit 2026-05-28): uses `add_tiles_init(cb_in0, cb_in1, acc_to_dest=true)`. DEST-accumulating BinaryFpu is the same helper gap that already blocks `layernorm_pre_allgather_2d` (&sect;5).
+- `moreh/moreh_nll_loss/.../moreh_nll_loss_step2_kernel.cpp` &mdash; **ATTEMPTED twice, reverted both times**. The current investigation (2026-05-28) also fails on the chain-to-raw state-leak issue documented in `docs/migration_log_panels/moreh_nll_step2.html`. Test baseline already has 13 unrelated failures, masking the migration signal. Needs a dedicated debug session OR full migration of every stage (no chain-to-raw boundary).
 
-**CCL / reduction accumulator cluster** (single BinaryFpu&lt;Add&gt; + PackTile;
-shape matches `prod_nc.cpp` FULL):
+**CCL / reduction accumulator cluster** &mdash; **MOVED to &sect;3c** (audit 2026-05-28):
+Most kernels in this group use `add_tiles_init(..., acc_to_dest=true)` to fold N
+device tiles into the same DEST slot. Same DEST-accumulating-BinaryFpu gap as
+&sect;5. Confirmed on `llama_reduce_scatter_create_heads/.../reduction.cpp` (line 22:
+`add_tiles_init(fabric_receiver_cb_id, fabric_receiver_cb_id, true)`).
 
+Kernels to re-audit if the helper gap closes:
 - `experimental/ccl/reduce_scatter_minimal_async/.../{dim_zero_line_reduction, dim_zero_ring_reduction, line_reduction, ring_reduction}.cpp`
 - `experimental/ccl/{all_reduce_async, deepseek_moe_reduce_scatter, llama_reduce_scatter, llama_reduce_scatter_create_heads, moe_compute, moe_gpt}/.../*.cpp`
 - `experimental/reduction/{fast_reduce_nc, deepseek_moe_fast_reduce_nc}/.../*.cpp`
@@ -221,15 +231,15 @@ These have a clean migratable stage co-existing with an OOS-tagged stage in the 
 - `reduction/accumulation/.../accumulation_compute.cpp` (3 packs) &mdash; seed pack + per-iter `DestReuseBinary<Add, DEST_TO_SRCA>` accumulator migrate; if `pack_reconfig_l1_acc` is used in the fp32 path that part stays raw (**OOS #6**).
 - `reduction/generic/.../reduce_{h,w,hw}_neg.cpp` (3 packs each) &mdash; pre-reduce `CopyTile + Negative + PackTile` and post-reduce `CopyTile + Negative + (optional MulScalar) + PackTile` migrate; the central `reduce_init + reduce_tile` stays raw (**OOS #3** &mdash; use `reduce_helpers` for that stage).
 - `moreh/moreh_layer_norm/.../moreh_layer_norm_{small,large}_kernel.cpp` (13 / 15 packs) &mdash; 5+ chains migrate (Var+eps&rarr;rsqrt, x-E[x] sub_bcast, *recip, gamma, beta); reduce-interleaved stages stay raw (**OOS #3**).
-- `moreh/moreh_layer_norm_backward/.../moreh_layer_norm_backward_{input_grad_large,input_grad_small,gamma_beta_grad}_kernel.cpp` (19 / 15 / 10 packs) &mdash; rsqrt seed, dy*gamma bcast mul, sub_bcast, gradient accumulators migrate; welford / reduce-interleaved stages stay raw (**OOS #1, #3**).
+- `moreh/moreh_layer_norm_backward/.../moreh_layer_norm_backward_{input_grad_large,input_grad_small,gamma_beta_grad}_kernel.cpp` (19 / 15 / 10 packs) &mdash; rsqrt seed, dy*gamma bcast mul, sub_bcast, gradient accumulators migrate; welford / reduce-interleaved stages stay raw (**GAP welford structs (§5), #3**).
 - `normalization/layernorm/.../layernorm_sharded.cpp` (9 packs) &mdash; same shape as `layernorm.cpp` PARTIAL; macro-injected SFPU activation stays raw (**OOS #4**).
 - `normalization/layernorm/.../layernorm_sharded_post_allgather.cpp` (10 packs) &mdash; mirrors `layernorm_post_allgather.cpp` PARTIAL; chain_llk gamma/beta wiring stays raw (**OOS #5**).
 - `normalization/layernorm/.../layernorm_sharded_pre_allgather.cpp` (4 packs) &mdash; squaring chain migrates; reduce tail stays raw (**OOS #3**).
-- `normalization/layernorm/.../layernorm_sharded_welford.cpp` (8 packs) &mdash; same shape as `layernorm_welford.cpp` PARTIAL; welford + transpose stay raw (**OOS #1, #2**).
-- `normalization/layernorm_distributed/.../layernorm_pre_allgather_welford.cpp` (11 packs) &mdash; squaring + accumulator stages migrate; welford finalize + transpose stay raw (**OOS #1, #2**).
-- `experimental/transformer/dit_layernorm_pre_all_gather/.../layernorm_pre_allgather_welford.cpp` (4 packs) &mdash; squaring stage migrates; welford accumulator stays raw (**OOS #1**).
+- `normalization/layernorm/.../layernorm_sharded_welford.cpp` (8 packs) &mdash; same shape as `layernorm_welford.cpp` PARTIAL; welford + transpose stay raw (**GAP welford structs (§5), #2**).
+- `normalization/layernorm_distributed/.../layernorm_pre_allgather_welford.cpp` (11 packs) &mdash; squaring + accumulator stages migrate; welford finalize + transpose stay raw (**GAP welford structs (§5), #2**).
+- `experimental/transformer/dit_layernorm_pre_all_gather/.../layernorm_pre_allgather_welford.cpp` (4 packs) &mdash; squaring stage migrates; welford accumulator stays raw (**GAP welford structs (§5)**).
 - `normalization/softmax/.../attention/compute/softmax_large_tensor.cpp` (6 packs) &mdash; plain `else` branch (`CopyTile + Exp + PackTile`) migrates; NUMERIC_STABLE / FUSED_SCALE_MASK stay raw (**OOS #9** + **OOS #7**).
-- `normalization/kernel_util/compute/combine_welford.h` (2 packs) &mdash; welford finalize semantics (**OOS #1**).
+- `normalization/kernel_util/compute/combine_welford.h` (2 packs) &mdash; welford finalize semantics (**GAP welford structs (§5)**).
 
 ### 3c. BLOCKED on a small helper extension
 
@@ -242,6 +252,22 @@ Each needs a specific helper struct / mode to be added before migration is clean
 | `normalization/layernorm_distributed/.../chain_llk.hpp` | OOS #5 (`chain_llk` DSL graph) | Substantial: re-implement chain_llk on top of eltwise_chain |
 | `normalization/kernel_util/compute/numeric.h` | Header used by chain_llk &rarr; OOS #5 | Same |
 | `eltwise/binary/.../eltwise_binary_kernel.cpp` | Audit needed: if macro-injected activation present &rarr; **OOS #4**, otherwise migrate-now | Verify before touching |
+| `moreh/moreh_sum/.../moreh_sum_nc.cpp` | DEST-accumulating BinaryFpu (`acc_to_dest=true`) | Same as layernorm 2d above (re-audit 2026-05-28). |
+| CCL accumulator cluster (~10 kernels listed in &sect;3a-corrected) | DEST-accumulating BinaryFpu (`acc_to_dest=true`) | Same. |
+
+### 3c-int. BLOCKED on int-typed SFPU chain helpers
+
+These three kernels use int-specific SFPU primitives (`sfpu_add_int`,
+`sfpu_sum_int_col/row`, `mask_tile(DataFormat::Int32)`) that are NOT in the
+current chain helper library. Originally listed in &sect;3a as "SFPU-binary
+cluster" but the audit (2026-05-28) showed the underlying LLK ops are int
+variants, not the generic `add_binary_tile` family.
+
+| Kernel | Missing primitives | Unlock |
+|---|---|---|
+| `moreh/moreh_sum/.../moreh_int_sum_h.cpp` | `sfpu_add_int`, `sfpu_sum_int_col`, `mask_tile(Int32)` | Add `AddIntBinary` / `SumIntCol` / `MaskInt` op structs OR extend existing structs to dispatch on a `DataFormat` template param. |
+| `moreh/moreh_sum/.../moreh_int_sum_w.cpp` | `sfpu_add_int`, `sfpu_sum_int_row`, `mask_tile(Int32)` | Same. |
+| `moreh/moreh_sum/.../moreh_int_sum_nc.cpp` | `sfpu_add_int` | Smallest gap of the three &mdash; only needs the int binary. |
 
 ### 3d. BLOCKED on macro-injected SFPU / activation (**OOS #4**)
 
@@ -328,7 +354,7 @@ These are blocked by patterns chain is structurally not designed to express.
 
 | # | Pattern | Why chain can't express it |
 |---|---|---|
-| 1 | Welford accumulator (in-DEST persistent + `transpose_wh_tile` interleaved with `welford_update` / `welford_finalize_to_row` dual-pack) | Chain assumes per-call DEST acquire/release; no welford wrappers. |
+| 1 | ~~Welford accumulator~~ &mdash; **reclassified 2026-05-28 to &sect;5 helper gap.** Welford's running mean/M2 live in SFPU LREG4/LREG5, **outside DEST** &mdash; chain's per-call DEST acquire/release does not conflict with welford state. Each LLK primitive (`welford_init`, `welford_clear`, `welford_update<lut_size>`, `welford_save_state`, `welford_restore_state`, `welford_finalize_to_row`, `welford_finalize_to_face`, `welford_reinit`) is a discrete SFPU op wrappable as a chain element struct, same shape as `Recip` / `Cumsum` / `Dropout` (see &sect;5 row). The reason older audits called this OOS was conflating the welford ops with the `transpose_wh_tile` that some welford kernels interleave (which IS a separate gap &mdash; OOS #2 below, also reclassifiable as a helper gap if/when transpose structs are added). |
 | 2 | `transpose_wh_tile` | No chain primitive. Used in welford finalize, ema, rotary single-tile rotate_half. |
 | 3 | Fused FPU + SFPU + reduce in one DEST acquire window | Chain stages cannot interleave with `reduce_tile` inside the same DEST acquire. |
 | 4 | Macro-injected SFPU activation (`SFPU_OP_INIT_ACTIVATION` / `BINARY_OP` / `PROCESS_POST_ACTIVATIONS` / `BINARY_SFPU_OP` / `TERNARY_SFPU_OP`) | No element wraps a user-defined preprocessor macro that expands to arbitrary SFPU calls. Resolvable per-kernel via an `ActivationMacro : UnaryOp` shim, OR per-family via `get_defines` refactor to emit chain identifiers (precedent: `bcast_op_utils` in `65b34f7740f`). |
@@ -338,7 +364,7 @@ These are blocked by patterns chain is structurally not designed to express.
 | 8 | `matmul_tiles` / `matmul_block` | Eltwise-chain scope excludes matmul. Tile matmul is also an anti-pattern (only block matmul helpers should be used). |
 | 9 | Cumulative wait + tile-indexed access with conditional last-tile branch | Expressible with `Bulk + Block + TileBaseRuntime` but conditional mask-on-last-tile requires chain split with careful TileBase math; low ROI vs the test surface. |
 | 10 | `reshuffle_rows_tile` | No chain primitive. |
-| 11 | `rand_tile` with runtime seed | `RandTile<Seed>` Seed is NTTP; need init-out-of-band pattern (replicate Dropout). |
+| 11 | ~~`rand_tile` with runtime seed~~ &mdash; **RESOLVED 2026-05-29.** `RandTile<Slot>` (eltwise_rand.hpp) now takes `from` / `scale` at construction; the Seed NTTP was dropped and `init()` is a no-op. Caller invokes `rand_tile_init(seed)` out-of-band with the runtime seed (same pattern as `Dropout`). First user: `rand/device/kernels/compute_uniform.cpp`. |
 | 12 | Same-CB-in-place inside one chain (output CB == input CB) | Chain reserves output BEFORE popping input; in-place inside a single chain is unsafe. Affects groupnorm gamma/beta path, dit_layernorm post_allgather_welford mul-by-recip / mul-by-gamma, rms_allgather. |
 
 ## 5. Helper gaps (would unlock specific kernels)
@@ -353,6 +379,7 @@ These are blocked by patterns chain is structurally not designed to express.
 | Runtime-templated CB id chain element | rotary_embedding_llama_fused_qk q/k branch | OOS #7. May still exceed TRISC2 size. |
 | `ActivationMacro : UnaryOp` (per-kernel) | layernorm.cpp, layernorm_sharded.cpp | Small. Alternative to family-level `get_defines` refactor. |
 | `get_defines` refactor for binary_ng family | ~22 kernels in &sect;3d | One refactor unlocks the family (precedent: bcast). |
+| **Welford chain structs** (`WelfordInit`, `WelfordClear`, `WelfordUpdate<DstSlot, LutSize>{lut, start_idx}`, `WelfordSaveState<MeanDstSlot>`, `WelfordRestoreState<MeanDstSlot>`, `WelfordFinalize<MeanDstSlot, VarDstSlot>{mean_src_idx, total_count_recip}`, `WelfordReinit<Cb>`) | Pure-welford kernels (no `transpose_wh_tile` interleaving): `reduction/generic/welford_reduce_h.cpp`, `welford_reduce_hw.cpp`. Plus the welford-accumulator stages in 8+ welford-tagged kernels that currently sit in &sect;3b (the non-transpose stages would migrate, transpose stages stay raw until the transpose gap also closes). | Mirror the `Cumsum` / `Recip` pattern in `eltwise_math.hpp` &mdash; one struct per LLK primitive, `init()` + `exec_impl()`. SFPU state lives in LREG4/LREG5 (outside DEST) so the chain's per-call DEST acquire/release does NOT conflict. |
 
 ## 6. Helper-library changes this branch
 

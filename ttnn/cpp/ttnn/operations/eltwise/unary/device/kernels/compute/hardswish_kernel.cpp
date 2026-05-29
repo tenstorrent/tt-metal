@@ -40,6 +40,16 @@ void kernel_main() {
     //          srca = DEST = hardsigmoid(x), srcb = cb_input,
     //          result = hardsigmoid(x) * cb_input.
     //
+    // Why the 2nd CopyTile (cb_input -> D1) is FLOAT32-only:
+    //   SFPU MulBinary is pure DEST-to-DEST (mul_binary_tile(dst_in0, dst_in1,
+    //   dst_out)) — it cannot read from a CB directly. To compute x *
+    //   hardsigmoid(x) on the SFPU we need x present in a DEST slot, so we
+    //   load cb_input -> D1 a second time. The FLOAT path avoids this load by
+    //   using DestReuseBinary, which is an FPU op (binary_dest_reuse_tiles)
+    //   that DOES read a CB on the non-DEST side. Both forms are correct;
+    //   the SFPU form is preferred under FP32_DEST_ACC because the FPU's
+    //   binary_dest_reuse path loses precision on FP32 DEST inputs.
+    //
     // Both paths share the CopyTile(D0 HeldStream) + Hardsigmoid + PackTile
     // outer shape. OptionalChainElement collapses the inactive branch to a
     // no-op tag (no wait, no pop, no compute emitted), so the chain "selects"

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_scalar.hpp"  // Dropout
 #include "api/compute/eltwise_unary/dropout.h"          // dropout_kernel_init
@@ -18,7 +19,7 @@ void kernel_main() {
     constexpr auto cb_input = tt::CBIndex::c_0;
     constexpr auto cb_output = tt::CBIndex::c_2;
 
-    binary_op_init_common(cb_input, cb_input, cb_output);
+    init_sfpu(cb_input, cb_output);
     dropout_kernel_init(seed);
 
     // Original: per-tile copy_tile + dropout_tile + pack_tile. Chain compresses

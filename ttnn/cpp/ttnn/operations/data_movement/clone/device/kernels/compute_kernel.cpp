@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "api/dataflow/circular_buffer.h"
 
@@ -10,7 +11,7 @@ void kernel_main() {
     constexpr uint32_t dst_cb_id = get_compile_time_arg_val(1);
     constexpr uint32_t num_tiles = get_compile_time_arg_val(2);
 
-    binary_op_init_common(src_cb_id, src_cb_id, dst_cb_id);
+    unary_op_init_common(src_cb_id, dst_cb_id);
 
     // Per-tile copy from src_cb -> dst_cb. Chain does wait/pop on src,
     // reserve/push on dst. Original used unary_op_init_common + copy_tile +

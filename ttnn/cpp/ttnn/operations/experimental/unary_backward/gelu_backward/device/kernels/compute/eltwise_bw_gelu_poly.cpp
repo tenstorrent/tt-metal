@@ -13,7 +13,7 @@
 #include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
-    uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
+    uint32_t per_core_tile_cnt = get_arg_val<uint32_t>(0);
     uint32_t per_core_block_size = get_arg_val<uint32_t>(1);
 
     constexpr auto cb_grad_out = tt::CBIndex::c_0;
@@ -24,16 +24,17 @@ void kernel_main() {
 
     // GELU backward: grad_in = grad_out * GELU'(input).
     //
-    // 2D shape: outer = per_core_block_cnt rows, inner = per_core_block_size tiles per row.
-    // Single chain call replaces the outer for-loop + per-call chain. Per-element inits
-    // (gelu_derivative_tile_init, mul_binary_tile_init, copy_tile_to_dst_init_short) are
-    // hoisted once before the outer walk by the chain's hoist machinery — previously each
-    // outer iteration's eltwise_chain() call paid those inits per chain.
+    // 1D shape with explicit block size: EltwiseShape::tiles(n, block_size) emits
+    // a chain that walks n tiles in chunks of block_size each. Per-element inits
+    // (gelu_derivative_tile_init, mul_binary_tile_init, copy_tile_to_dst_init_short)
+    // are hoisted once at chain entry; per-chunk Chunked lifecycle waits / pops
+    // block_size tiles at a time. PF picks per_core_block_size as the largest
+    // power-of-2 divisor of per_core_tile_cnt (<= 8).
     //
     // Lifecycles:
     //   cb_grad_out / cb_input  Chunked + Block (per-chunk wait+pop of per_core_block_size tiles)
     //   cb_grad_in              OutChunked + Block (per-chunk reserve+push)
-    const auto shape = compute_kernel_lib::EltwiseShape::of(per_core_block_cnt, per_core_block_size);
+    const auto shape = compute_kernel_lib::EltwiseShape::tiles(per_core_tile_cnt, per_core_block_size);
 
     compute_kernel_lib::eltwise_chain(
         shape,

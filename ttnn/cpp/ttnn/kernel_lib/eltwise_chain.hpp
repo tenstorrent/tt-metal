@@ -1048,7 +1048,7 @@ template <DataFormat DF, Dst DstSlot>
 struct FillInt;
 template <Dst DstSlot = Dst::D0>
 struct FillBitcast;
-template <Dst DstSlot = Dst::D0, uint32_t Seed = 0>
+template <Dst DstSlot = Dst::D0>
 struct RandTile;
 
 // =============================================================================

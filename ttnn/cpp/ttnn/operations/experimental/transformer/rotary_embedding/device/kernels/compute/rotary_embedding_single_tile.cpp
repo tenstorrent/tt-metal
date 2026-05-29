@@ -47,6 +47,7 @@ ALWI void TILIZE_ONE_TILE(uint32_t sync_cb) {
 }
 
 void kernel_main() {
+    using namespace compute_kernel_lib;
     constexpr uint32_t onetile = 1;
 
     constexpr uint32_t in_cb = get_compile_time_arg_val(0);
@@ -58,9 +59,6 @@ void kernel_main() {
     constexpr uint32_t sin_interm_cb = get_compile_time_arg_val(6);
     constexpr uint32_t out_cb = get_compile_time_arg_val(7);
     constexpr uint32_t num_rows = get_compile_time_arg_val(8);
-
-    uint32_t updated_cos_cb = cos_cb;
-    uint32_t updated_sin_cb = sin_cb;
 
 #ifdef DECODE_MODE
     constexpr uint32_t untilized_cos_cb = get_compile_time_arg_val(9);
@@ -77,16 +75,21 @@ void kernel_main() {
     pack_reconfig_data_format(untilized_cos_cb, retilized_sin_cb);
     TILIZE_ONE_TILE<untilized_sin_cb, retilized_sin_cb>(untilized_sin_sync_cb);
     TILIZE_ONE_TILE<untilized_cos_cb, retilized_cos_cb>(untilized_cos_sync_cb);
-    updated_cos_cb = retilized_cos_cb;
-    updated_sin_cb = retilized_sin_cb;
+    constexpr uint32_t updated_cos_cb = retilized_cos_cb;
+    constexpr uint32_t updated_sin_cb = retilized_sin_cb;
+    // DECODE: sin/cos held across all iters, bcast across rows.
+    constexpr auto trig_bcast = BroadcastDim::Row;
+    constexpr auto trig_lifecycle = HeldStream;
+#else
+    constexpr uint32_t updated_cos_cb = cos_cb;
+    constexpr uint32_t updated_sin_cb = sin_cb;
+    // Non-DECODE: sin/cos streamed per-iter, full-tile mul.
+    constexpr auto trig_bcast = BroadcastDim::None;
+    constexpr auto trig_lifecycle = Streaming;
 #endif
 
     cb_wait_front(trans_mat_cb, onetile);
     mm_init(in_cb, trans_mat_cb, rotated_in_interm_cb);
-    // Binary ops (mul, add) below need their own init path; without this the
-    // math-thread register routing stays in matmul mode and mixed-precision
-    // binaries (e.g. bf16 x bfp8) produce incorrect results.
-    binary_op_init_common(rotated_in_interm_cb, updated_sin_cb, sin_interm_cb);
 
     for (uint32_t i = 0; i < num_rows; ++i) {
         // rotated = in @ trans_mat  (HF rotate_half on a single 32x32 tile)
@@ -102,116 +105,55 @@ void kernel_main() {
         cb_push_back(rotated_in_interm_cb, onetile);
 
         // sin_interim = rotated * sin
-        // DECODE_MODE: bcast_rows; sin tile held (never popped — re-used across the row).
-        // Non-DECODE: plain mul; sin tile popped per iter.
-        // Reconfig audit: explicit reconfig_data_format + mul_tiles_init/mul_bcast_rows_init_short
-        //   -> Input. Explicit pack_reconfig -> Output.
-#ifdef DECODE_MODE
-        compute_kernel_lib::eltwise_chain(
+        // DECODE_MODE / non-DECODE collapse via constexpr selectors above —
+        // the chain's per-element init programs the eltwise-binary math state
+        // out of the matmul mode set by mm_init / mm_init_short above, so no
+        // explicit binary_op_init_common is needed here.
+        eltwise_chain(
             onetile,
-            compute_kernel_lib::BinaryFpu<
+            BinaryFpu<
                 rotated_in_interm_cb,
-                retilized_sin_cb,
-                compute_kernel_lib::BinaryFpuOp::Mul,
-                compute_kernel_lib::BroadcastDim::Row,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::Streaming,
-                compute_kernel_lib::HeldStream,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OperandKind::Scalar>{},
-            compute_kernel_lib::PackTile<
-                sin_interm_cb,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutStreaming,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::PackTileReconfig::Output>{});
-#else
-        compute_kernel_lib::eltwise_chain(
-            onetile,
-            compute_kernel_lib::BinaryFpu<
-                rotated_in_interm_cb,
-                sin_cb,
-                compute_kernel_lib::BinaryFpuOp::Mul,
-                compute_kernel_lib::BroadcastDim::None,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::Streaming,
-                compute_kernel_lib::Streaming,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OperandKind::Scalar>{},
-            compute_kernel_lib::PackTile<
-                sin_interm_cb,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutStreaming,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::PackTileReconfig::Output>{});
-#endif
+                updated_sin_cb,
+                BinaryFpuOp::Mul,
+                trig_bcast,
+                BinaryDataFormatReconfig::Input,
+                Streaming,
+                trig_lifecycle,
+                OperandKind::Scalar,
+                Dst::D0,
+                OperandKind::Scalar>{},
+            PackTile<sin_interm_cb, Dst::D0, OutStreaming, OperandKind::Scalar, PackTileReconfig::Output>{});
 
-        // cos_interim = in * cos  (same pattern as sin_interim).
-#ifdef DECODE_MODE
-        compute_kernel_lib::eltwise_chain(
+        // cos_interim = in * cos
+        eltwise_chain(
             onetile,
-            compute_kernel_lib::BinaryFpu<
+            BinaryFpu<
                 in_cb,
-                retilized_cos_cb,
-                compute_kernel_lib::BinaryFpuOp::Mul,
-                compute_kernel_lib::BroadcastDim::Row,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::Streaming,
-                compute_kernel_lib::HeldStream,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OperandKind::Scalar>{},
-            compute_kernel_lib::PackTile<
-                cos_interm_cb,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutStreaming,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::PackTileReconfig::Output>{});
-#else
-        compute_kernel_lib::eltwise_chain(
-            onetile,
-            compute_kernel_lib::BinaryFpu<
-                in_cb,
-                cos_cb,
-                compute_kernel_lib::BinaryFpuOp::Mul,
-                compute_kernel_lib::BroadcastDim::None,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::Streaming,
-                compute_kernel_lib::Streaming,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OperandKind::Scalar>{},
-            compute_kernel_lib::PackTile<
-                cos_interm_cb,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutStreaming,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::PackTileReconfig::Output>{});
-#endif
+                updated_cos_cb,
+                BinaryFpuOp::Mul,
+                trig_bcast,
+                BinaryDataFormatReconfig::Input,
+                Streaming,
+                trig_lifecycle,
+                OperandKind::Scalar,
+                Dst::D0,
+                OperandKind::Scalar>{},
+            PackTile<cos_interm_cb, Dst::D0, OutStreaming, OperandKind::Scalar, PackTileReconfig::Output>{});
 
         // out = cos_interim + sin_interim
-        // Reconfig audit: explicit reconfig_data_format + add_tiles_init -> Input.
-        // Explicit pack_reconfig -> Output. All three CBs Streaming/OutStreaming.
-        compute_kernel_lib::eltwise_chain(
+        eltwise_chain(
             onetile,
-            compute_kernel_lib::BinaryFpu<
+            BinaryFpu<
                 cos_interm_cb,
                 sin_interm_cb,
-                compute_kernel_lib::BinaryFpuOp::Add,
-                compute_kernel_lib::BroadcastDim::None,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::Streaming,
-                compute_kernel_lib::Streaming,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OperandKind::Scalar>{},
-            compute_kernel_lib::PackTile<
-                out_cb,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutStreaming,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::PackTileReconfig::Output>{});
+                BinaryFpuOp::Add,
+                BroadcastDim::None,
+                BinaryDataFormatReconfig::Input,
+                Streaming,
+                Streaming,
+                OperandKind::Scalar,
+                Dst::D0,
+                OperandKind::Scalar>{},
+            PackTile<out_cb, Dst::D0, OutStreaming, OperandKind::Scalar, PackTileReconfig::Output>{});
     }
 }

@@ -299,36 +299,52 @@ def test_case_d_singleside(device, num_tiles, fp32_dest_acc_en):
 
 
 # =============================================================================
-# Case E — Pack-side _with_dt: structural validation only
+# Case E — Pack-side _with_dt: multi-pack heterogeneous output chain
 # =============================================================================
-# The pack-side 2-arg _with_dt overload (`pack_reconfig_data_format(prev_p, curr_p)`) fires only
-# when a chain contains ≥2 PackTile elements with prev_p set. However, eltwise_chain hoists ALL
-# pack reconfigs to boot (`pack_init_for_each` in eltwise_chain.inl:1804, comment "F-PERF-4: hoisted
-# to boot, not per-tile"). With ≥2 PackTile elements, the LAST hoisted reconfig wins — pack format
-# stays set to the final element's CB format for the entire main loop, so the first PackTile's
-# pack_tile(slot, c_X, idx) writes wrong-format bytes to c_X. This is a chain library constraint
-# orthogonal to the proposal change; real chain consumers all use exactly 1 PackTile per chain call.
-#
-# A diagnostic chain_pack_to_bfp8.cpp kernel ships under tests/chain_reconfig/ as documentation
-# of the desired pattern, but is NOT runtime-validated here — the 2-arg pack _with_dt emission is
-# verified by:
-#   1. Build success of chain_pack_to_bfp8.cpp (the fold compiles for this layout).
-#   2. The §5.2 op-pytest smoke (test_eltwise_typecast.py, test_where.py, test_binary_ng_typecast.py
-#      etc.) which exercises pack-side reconfig in real op kernels with their single-PackTile chains
-#      and passes all dtype combos including bfp8 outputs.
-#   3. Code review of emit_pre_element_transitions (eltwise_chain.inl:1712) — the fold's `if constexpr`
-#      branches verifiably emit pack_reconfig_data_format(prev_p, curr_p) when prev_p != NO_PREV_CB.
-#
-# If a future consumer or chain library change supports multi-PackTile chains with per-iter pack
-# reconfig, this test should be reinstated.
-@pytest.mark.skip(
-    reason=(
-        "Pack-side _with_dt requires multi-PackTile-per-chain, which the chain library hoists to boot "
-        "(last reconfig wins). Validated structurally via build + §5.2 op pytests. See comment above."
+# Chain: CopyTile(CbA, D0) -> PackTile(CbOut1, D0) -> PackTile(CbOut2, D0).
+# Both PackTiles read D0 (the CopyTile result = CbA) and pack to their respective output CBs with
+# different dtypes (CbOut1=bf16, CbOut2=bfp8). Heterogeneous pack CBs trigger the per-stage emission
+# path from pack_reconfig_hoisting_proposal.html §4.2: boot programs only the first opt-in pack
+# site; subsequent sites emit the 2-arg `pack_reconfig_data_format(prev_p, curr_p)` form before
+# their per-iter pack work, with wraparound for site 0 to handle iter-to-iter cycling.
+@pytest.mark.parametrize("num_tiles", [1, 8, 64])
+@pytest.mark.parametrize("fp32_dest_acc_en", [False, True])
+def test_case_e_pack_to_bfp8(device, num_tiles, fp32_dest_acc_en):
+    shape = [1, 1, 32, 32 * num_tiles]
+    dt_a, dt_out1, dt_out2 = ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat8_b
+
+    torch_a, tt_a = _make_input(shape, dt_a, device, seed=81)
+
+    tt_out1 = ttnn.allocate_tensor_on_device(
+        ttnn.Shape(shape), dt_out1, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
     )
-)
-def test_case_e_pack_to_bfp8(device):
-    pass
+    tt_out2 = ttnn.allocate_tensor_on_device(
+        ttnn.Shape(shape), dt_out2, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+    )
+    core_grid = _single_core_grid()
+    cbs = [
+        _cb_descriptor(0, dt_a, 2, core_grid),
+        _cb_descriptor(16, dt_out1, 2, core_grid),
+        _cb_descriptor(17, dt_out2, 2, core_grid),
+    ]
+
+    reader = _build_reader_kernel(f"{KERNEL_DIR}/reader_1_input.cpp", [tt_a], num_tiles, core_grid)
+    writer = _build_writer_2out_kernel([tt_out1, tt_out2], num_tiles, core_grid)
+    compute = _build_compute_kernel("chain_pack_to_bfp8.cpp", num_tiles, fp32_dest_acc_en, core_grid)
+
+    program = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs)
+    ttnn.generic_op([tt_a, tt_out1, tt_out2], program)
+    out1 = ttnn.to_torch(tt_out1).to(torch.float32)
+    out2 = ttnn.to_torch(tt_out2).to(torch.float32)
+
+    golden = torch_a.to(torch.float32)
+    pcc_ok1, pcc_msg1 = comp_pcc(golden, out1, _pcc_threshold([dt_a, dt_out1]))
+    pcc_ok2, pcc_msg2 = comp_pcc(golden, out2, _pcc_threshold([dt_a, dt_out2]))
+    logger.info(
+        f"case E | num_tiles={num_tiles} | fp32_dest_acc_en={fp32_dest_acc_en} | out1={pcc_msg1} | out2={pcc_msg2}"
+    )
+    assert pcc_ok1, f"out1 (bf16): {pcc_msg1}"
+    assert pcc_ok2, f"out2 (bfp8): {pcc_msg2}"
 
 
 # =============================================================================

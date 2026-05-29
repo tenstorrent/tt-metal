@@ -24,6 +24,8 @@ constexpr bool kIsFloat32 = false;
 constexpr bool kIsFloat = !kIsFloat32;
 
 void kernel_main() {
+    using namespace compute_kernel_lib;
+
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
     const uint32_t approx_arg = get_arg_val<uint32_t>(1);
     const bool use_approx = (approx_arg != 0u);
@@ -35,98 +37,56 @@ void kernel_main() {
 
     // Mish: x * tanh(softplus(x)) = x * tanh(log1p(exp(x))).
     //
-    // Common prefix: D0 = tanh(log1p(exp(cb_input))).
-    //   FLOAT32 tail: D1 = cb_input (NoWaitPop) + MulBinary<D0, D1, D0>.
-    //   FLOAT   tail: DestReuseBinary<cb_input, Mul, DEST_TO_SRCA>
-    //                 (srca = cb_input from CB, srcb = DEST = tanh(softplus(x))).
-    //
-    // OptionalChainElement<kIsFloat32 / kIsFloat, ...> collapses the inactive
-    // branch to a no-op tag — no wait, no pop, no compute emitted.
+    // Shared chain prefix / suffix (held vs streamed lifecycle, tanh of the
+    // softplus result, mul-by-x tail) are identical across the use_approx
+    // fork. Only Exp + Log1p differ in their Approx template arg. Define the
+    // common elements once as type aliases + value instances so the two chain
+    // bodies stay readable and the type system enforces they're identical
+    // across branches.
+    constexpr CopyTile<cb_input, Dst::D0, HeldStream, OperandKind::Scalar, CopyTileReconfig::None> load_x_held{};
+    constexpr Tanh<Dst::D0> tanh_d0{};
+    // FLOAT32 tail: load x again to D1 then SFPU MulBinary.
+    constexpr OptionalChainElement<
+        kIsFloat32,
+        CopyTile<cb_input, Dst::D1, NoWaitPop, OperandKind::Scalar, CopyTileReconfig::None>>
+        load_x_d1_for_sfpu{};
+    constexpr OptionalChainElement<kIsFloat32, MulBinary<Dst::D0, Dst::D1, Dst::D0>> sfpu_mul_d0_d1{};
+    // FLOAT tail: DestReuseBinary reads cb_input on srcb, DEST on srca.
+    constexpr OptionalChainElement<
+        kIsFloat,
+        DestReuseBinary<
+            cb_input,
+            BinaryFpuOp::Mul,
+            DestReuseType::DEST_TO_SRCA,
+            Dst::D0,
+            Dst::D0,
+            DestReuseReconfig::Input,
+            Streaming,
+            OperandKind::Scalar>>
+        fpu_mul_dest_x{};
+    constexpr PackTile<cb_output, Dst::D0, OutStreaming, OperandKind::Scalar, PackTileReconfig::None> pack_y{};
+
     if (use_approx) {
-        compute_kernel_lib::eltwise_chain(
+        eltwise_chain(
             num_tiles,
-            compute_kernel_lib::CopyTile<
-                cb_input,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::HeldStream,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::CopyTileReconfig::None>{},
-            compute_kernel_lib::
-                Exp<compute_kernel_lib::Approx::Fast, compute_kernel_lib::Approx::Fast, compute_kernel_lib::Dst::D0>{},
-            compute_kernel_lib::Log1p<compute_kernel_lib::Approx::Fast, compute_kernel_lib::Dst::D0>{},
-            compute_kernel_lib::Tanh<compute_kernel_lib::Dst::D0>{},
-            compute_kernel_lib::OptionalChainElement<
-                kIsFloat32,
-                compute_kernel_lib::CopyTile<
-                    cb_input,
-                    compute_kernel_lib::Dst::D1,
-                    compute_kernel_lib::NoWaitPop,
-                    compute_kernel_lib::OperandKind::Scalar,
-                    compute_kernel_lib::CopyTileReconfig::None>>{},
-            compute_kernel_lib::OptionalChainElement<
-                kIsFloat32,
-                compute_kernel_lib::
-                    MulBinary<compute_kernel_lib::Dst::D0, compute_kernel_lib::Dst::D1, compute_kernel_lib::Dst::D0>>{},
-            compute_kernel_lib::OptionalChainElement<
-                kIsFloat,
-                compute_kernel_lib::DestReuseBinary<
-                    cb_input,
-                    compute_kernel_lib::BinaryFpuOp::Mul,
-                    compute_kernel_lib::DestReuseType::DEST_TO_SRCA,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::DestReuseReconfig::Input,
-                    compute_kernel_lib::Streaming,
-                    compute_kernel_lib::OperandKind::Scalar>>{},
-            compute_kernel_lib::PackTile<
-                cb_output,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutStreaming,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::PackTileReconfig::None>{});
+            load_x_held,
+            Exp<Approx::Fast, Approx::Fast, Dst::D0>{},
+            Log1p<Approx::Fast, Dst::D0>{},
+            tanh_d0,
+            load_x_d1_for_sfpu,
+            sfpu_mul_d0_d1,
+            fpu_mul_dest_x,
+            pack_y);
     } else {
-        compute_kernel_lib::eltwise_chain(
+        eltwise_chain(
             num_tiles,
-            compute_kernel_lib::CopyTile<
-                cb_input,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::HeldStream,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::CopyTileReconfig::None>{},
-            compute_kernel_lib::Exp<
-                compute_kernel_lib::Approx::Exact,
-                compute_kernel_lib::Approx::Exact,
-                compute_kernel_lib::Dst::D0>{},
-            compute_kernel_lib::Log1p<compute_kernel_lib::Approx::Exact, compute_kernel_lib::Dst::D0>{},
-            compute_kernel_lib::Tanh<compute_kernel_lib::Dst::D0>{},
-            compute_kernel_lib::OptionalChainElement<
-                kIsFloat32,
-                compute_kernel_lib::CopyTile<
-                    cb_input,
-                    compute_kernel_lib::Dst::D1,
-                    compute_kernel_lib::NoWaitPop,
-                    compute_kernel_lib::OperandKind::Scalar,
-                    compute_kernel_lib::CopyTileReconfig::None>>{},
-            compute_kernel_lib::OptionalChainElement<
-                kIsFloat32,
-                compute_kernel_lib::
-                    MulBinary<compute_kernel_lib::Dst::D0, compute_kernel_lib::Dst::D1, compute_kernel_lib::Dst::D0>>{},
-            compute_kernel_lib::OptionalChainElement<
-                kIsFloat,
-                compute_kernel_lib::DestReuseBinary<
-                    cb_input,
-                    compute_kernel_lib::BinaryFpuOp::Mul,
-                    compute_kernel_lib::DestReuseType::DEST_TO_SRCA,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::DestReuseReconfig::Input,
-                    compute_kernel_lib::Streaming,
-                    compute_kernel_lib::OperandKind::Scalar>>{},
-            compute_kernel_lib::PackTile<
-                cb_output,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutStreaming,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::PackTileReconfig::None>{});
+            load_x_held,
+            Exp<Approx::Exact, Approx::Exact, Dst::D0>{},
+            Log1p<Approx::Exact, Dst::D0>{},
+            tanh_d0,
+            load_x_d1_for_sfpu,
+            sfpu_mul_d0_d1,
+            fpu_mul_dest_x,
+            pack_y);
     }
 }

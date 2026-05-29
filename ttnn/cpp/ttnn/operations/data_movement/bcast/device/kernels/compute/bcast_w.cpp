@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include "api/compute/bcast.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 
 void kernel_main() {
@@ -16,35 +17,36 @@ void kernel_main() {
     constexpr auto cb_out = tt::CBIndex::c_16;
     CircularBuffer cb_rhs_obj(cb_rhs);
 
-    compute_kernel_hw_startup(cb_lhs, cb_rhs, cb_out);
+    // Bcast-W: original `init_bcast<BCAST_LLKOP, BCAST_DIM>` preserved as the
+    // big init. Chain's BinaryFpu uses CHAIN_BCAST_OP / CHAIN_BCAST_DIM
+    // (helper-lib types emitted by bcast_op_utils).
+    init_bcast<BCAST_LLKOP, BCAST_DIM>(cb_lhs, cb_rhs, cb_out);
 
-    // Bcast-W: per-row of Wt tiles, cb_rhs is held across the inner loop
-    // and popped at the end (1 scaler/row). cb_lhs is streamed (1 tile per
-    // inner iter). HeldStream on cb_rhs gives chain-emitted cb_wait_front(1)
-    // per iter without popping; explicit pop_front after the chain matches
-    // the original's `cb_pop_front(cb_rhs, 1)` at end of h iter.
-    for (uint32_t b = 0; b < B; b++) {
-        for (uint32_t h = 0; h < Ht; h++) {
-            compute_kernel_lib::eltwise_chain(
-                Wt,
-                compute_kernel_lib::BinaryFpu<
-                    cb_lhs,
-                    cb_rhs,
-                    CHAIN_BCAST_OP,
-                    CHAIN_BCAST_DIM,
-                    compute_kernel_lib::BinaryDataFormatReconfig::None,
-                    compute_kernel_lib::Streaming,
-                    compute_kernel_lib::HeldStream,
-                    compute_kernel_lib::OperandKind::Scalar,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OperandKind::Scalar>{},
-                compute_kernel_lib::PackTile<
-                    cb_out,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutStreaming,
-                    compute_kernel_lib::OperandKind::Scalar,
-                    compute_kernel_lib::PackTileReconfig::None>{});
-            cb_rhs_obj.pop_front(onetile);
-        }
+    // bcast_w: 1 cb_rhs scalar per row, broadcast across Wt cb_lhs tiles.
+    // cb_rhs is held across the inner Wt loop and popped once at end-of-row.
+    // Outer B*Ht loop flattened. HeldStream gives chain-emitted per-iter
+    // cb_wait_front(1) without popping; explicit pop_front after the chain
+    // matches the original's cb_pop_front(cb_rhs, 1) at end of h iter.
+    for (uint32_t row = 0; row < B * Ht; ++row) {
+        compute_kernel_lib::eltwise_chain(
+            Wt,
+            compute_kernel_lib::BinaryFpu<
+                cb_lhs,
+                cb_rhs,
+                CHAIN_BCAST_OP,
+                CHAIN_BCAST_DIM,
+                compute_kernel_lib::BinaryDataFormatReconfig::None,
+                compute_kernel_lib::Streaming,
+                compute_kernel_lib::HeldStream,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar>{},
+            compute_kernel_lib::PackTile<
+                cb_out,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutStreaming,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::PackTileReconfig::None>{});
+        cb_rhs_obj.pop_front(onetile);
     }
 }

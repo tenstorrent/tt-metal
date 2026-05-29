@@ -2,28 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Case E — pack-side _with_dt. Pack-side rotates output CB across different pack dtypes.
+// Case E — pack-side _with_dt across heterogeneous output CBs.
 //
 // Chain shape: CopyTile(CbA, D0) -> PackTile(CbOut1, D0) -> PackTile(CbOut2, D0).
-// Both PackTiles read D0 (the CopyTile result = CbA) and pack to their respective output CBs.
-// At PackTile #2: prev_p=CbOut1 (set by PackTile #1), curr_p=CbOut2 with different dtype →
-// pack_reconfig_data_format(prev_p, curr_p) fires. CbOut1=bf16, CbOut2=bfp8 → pack-side rotates
-// IEEE -> block-float, exercising the pack engine's shared-exponent programming on the new with_dt
-// pack overload.
+// Both PackTiles read D0 (the CopyTile result = CbA) and pack to their own output CBs with
+// distinct dtypes (CbOut1=bf16, CbOut2=bfp8). Per `docs/pack_reconfig_hoisting_proposal.html`
+// §4.2, the chain detects heterogeneous opt-in pack CBs, hoists only the first site's reconfig
+// to boot, and emits 2-arg `pack_reconfig_data_format(prev_p, curr_p)` at per-stage for later
+// sites. PackTile #2 sees prev_p=CbOut1, curr_p=CbOut2 → bf16 -> bfp8 reprogram fires; PackTile
+// #1 sees wraparound prev_p=CbOut2, curr_p=CbOut1 → bfp8 -> bf16 reprogram on iter ≥ 1.
 //
-// STRUCTURAL DOCUMENTATION ONLY — not currently runtime-validated.
-// -----------------------------------------------------------------
-// eltwise_chain hoists ALL pack reconfigs to boot via `pack_init_for_each` (eltwise_chain.inl:1804,
-// comment "F-PERF-4: hoisted to boot, not per-tile"). With 2 PackTile elements, the LAST hoisted
-// reconfig wins — pack format stays set to PackTile #2's CB format (bfp8) for the entire main loop,
-// so PackTile #1's pack_tile(D0, CbOut1, idx) writes bfp8-format bytes into CbOut1 (which expects
-// bf16) → CbOut1 reads as garbage downstream. Real chain consumers all use exactly 1 PackTile per
-// chain call, so this is an unhit code path in production. The 2-arg pack _with_dt emission itself
-// IS correct (verified by code review of emit_pre_element_transitions and by build success of this
-// file); only the *runtime distinguishability* via a single-chain test is structurally blocked.
-//
-// The pytest test_case_e_pack_to_bfp8 is therefore @pytest.mark.skip with reason; see
-// tests/ttnn/unit_tests/kernel_lib/test_chain_reconfig.py for the full explanation.
+// Runtime-validated by tests/ttnn/unit_tests/kernel_lib/test_chain_reconfig.py::test_case_e_pack_to_bfp8.
 
 #include <cstdint>
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
