@@ -25,7 +25,6 @@ Owner:
 
 from triage import triage_singleton, ScriptConfig, TTTriageError, log_warning, run_script
 from parse_inspector_logs import get_data as get_logs_data, get_log_directory
-from mpi4py import MPI
 import asyncio
 import capnp
 import os
@@ -170,19 +169,14 @@ def run(args, context) -> InspectorData:
     rank: int | None = None
 
     if not args["--inspector-disable-rank"]:
-        # If MPI is available, add rank to the RPC host and port
-        try:
-            size = MPI.COMM_WORLD.Get_size()
-            if size > 1:
-                rank = MPI.COMM_WORLD.Get_rank()
-            else:
-                rank_env = os.environ.get("TT_RUN_RANK")
-                if rank_env is not None:
-                    rank = int(rank_env)
-        except Exception as e:
-            # If MPI is not available or fails, fall back to rank-less mode without aborting.
-            log_warning(f"Warning: MPI is not available or failed to initialize, running in rank-less mode. Error: {e}")
-            pass
+        # If we're running in multi-instance, we should have
+        # TT_RUN_RANK environment variable set by the wrapper script.
+        rank_env = os.environ.get("TT_RUN_RANK")
+        if rank_env is not None:
+            try:
+                rank = int(rank_env)
+            except ValueError:
+                log_warning(f"Ignoring non-integer TT_RUN_RANK={rank_env!r}; running in rank-less mode.")
 
     # First try to connect to Inspector RPC
     try:
