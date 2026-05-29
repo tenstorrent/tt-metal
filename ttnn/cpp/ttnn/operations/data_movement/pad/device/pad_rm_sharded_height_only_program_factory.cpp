@@ -46,10 +46,9 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     const ttnn::Shape& input_tensor_start,
     uint32_t num_cores_padded,
     bool row_major,
-    uint32_t num_cores_x_padded,
-    uint32_t num_cores_y_padded,
     uint32_t shard_height_padded,
     uint32_t shard_height_unpadded,
+    const CoreCoord& unpadded_grid_start,
     uint32_t num_cores_x_unpadded,
     uint32_t num_cores_y_unpadded) {
     tt::tt_metal::IDevice* device = input_tensor.device();
@@ -69,12 +68,6 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     const auto& front_pad = input_tensor_start;
     uint32_t curr_c = 0, curr_h = 0, curr_n = 0;
     for (uint32_t i = 0, curr_sticks_read = 0; i < num_cores_padded; i++) {
-        CoreCoord core;
-        if (row_major) {
-            core = {i % num_cores_x_padded, i / num_cores_x_padded};
-        } else {
-            core = {i / num_cores_y_padded, i % num_cores_y_padded};
-        }
         uint32_t num_sticks_per_core_unpadded = shard_height_unpadded;
         uint32_t num_sticks_per_core_padded = shard_height_padded;
 
@@ -121,7 +114,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 
         // figure out the stick id in a shard, and the core id for the stick.
         std::map<std::pair<uint32_t, uint32_t>, std::vector<uint32_t>> core_stick_map;
-        auto first_core = device->worker_core_from_logical_core(CoreCoord{0, 0});
+        auto first_core = device->worker_core_from_logical_core(unpadded_grid_start);
         std::pair<uint32_t, uint32_t> prev_xy_pair = std::make_pair(first_core.x, first_core.y);
         for (uint32_t j = 0; j < num_sticks_per_core_padded; ++j) {
             int stick_id = stick_ids_per_core[j];
@@ -137,10 +130,15 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
                 uint32_t shard_grid_outer_dim_id = shard_id / shard_grid_inner_dim;
                 uint32_t shard_grid_inner_dim_id = shard_id - (shard_grid_outer_dim_id * shard_grid_inner_dim);
 
-                uint32_t worker_y_logical = row_major ? shard_grid_outer_dim_id : shard_grid_inner_dim_id;
-                uint32_t worker_x_logical = row_major ? shard_grid_inner_dim_id : shard_grid_outer_dim_id;
+                uint32_t worker_y_logical =
+                    unpadded_grid_start.y + (row_major ? shard_grid_outer_dim_id : shard_grid_inner_dim_id);
+                uint32_t worker_x_logical =
+                    unpadded_grid_start.x + (row_major ? shard_grid_inner_dim_id : shard_grid_outer_dim_id);
 
-                if (worker_x_logical < num_cores_x_unpadded and worker_y_logical < num_cores_y_unpadded) {
+                // worker_*_logical are absolute logical coordinates. Compare against absolute unpadded-grid bounds.
+                uint32_t unpadded_grid_end_x = unpadded_grid_start.x + num_cores_x_unpadded;
+                uint32_t unpadded_grid_end_y = unpadded_grid_start.y + num_cores_y_unpadded;
+                if (worker_x_logical < unpadded_grid_end_x and worker_y_logical < unpadded_grid_end_y) {
                     auto core_physical =
                         device->worker_core_from_logical_core(CoreCoord{worker_x_logical, worker_y_logical});
                     // save stick id in a shard, and core coord into a map
@@ -237,7 +235,9 @@ ProgramDescriptor PadRmShardedHeightOnlyProgramFactory::create_descriptor(
     [[maybe_unused]] auto& all_cores_unpadded = shard_spec_unpadded.grid;
     [[maybe_unused]] uint32_t num_cores_unpadded = shard_spec_unpadded.num_cores();
     auto bbox_unpadded = shard_spec_unpadded.grid.bounding_box();
-    CoreCoord grid_size_unpadded = {bbox_unpadded.end_coord.x + 1, bbox_unpadded.end_coord.y + 1};
+    CoreCoord grid_size_unpadded = {
+        bbox_unpadded.end_coord.x - bbox_unpadded.start_coord.x + 1,
+        bbox_unpadded.end_coord.y - bbox_unpadded.start_coord.y + 1};
     uint32_t num_cores_x_unpadded = grid_size_unpadded.x;
     uint32_t num_cores_y_unpadded = grid_size_unpadded.y;
 
@@ -253,7 +253,9 @@ ProgramDescriptor PadRmShardedHeightOnlyProgramFactory::create_descriptor(
     auto& all_cores_padded = shard_spec_padded.grid;
     uint32_t num_cores_padded = shard_spec_padded.num_cores();
     auto bbox_padded = shard_spec_padded.grid.bounding_box();
-    CoreCoord grid_size_padded = {bbox_padded.end_coord.x + 1, bbox_padded.end_coord.y + 1};
+    CoreCoord grid_size_padded = {
+        bbox_padded.end_coord.x - bbox_padded.start_coord.x + 1,
+        bbox_padded.end_coord.y - bbox_padded.start_coord.y + 1};
     uint32_t num_cores_x_padded = grid_size_padded.x;
     uint32_t num_cores_y_padded = grid_size_padded.y;
 
@@ -364,10 +366,9 @@ ProgramDescriptor PadRmShardedHeightOnlyProgramFactory::create_descriptor(
         input_tensor_start,
         num_cores_padded,
         row_major,
-        num_cores_x_padded,
-        num_cores_y_padded,
         shard_height_padded,
         shard_height_unpadded,
+        bbox_unpadded.start_coord,
         num_cores_x_unpadded,
         num_cores_y_unpadded);
 
@@ -377,9 +378,11 @@ ProgramDescriptor PadRmShardedHeightOnlyProgramFactory::create_descriptor(
     for (uint32_t i = 0; i < num_cores_padded; i++) {
         CoreCoord core;
         if (row_major) {
-            core = {i % num_cores_x_padded, i / num_cores_x_padded};
+            core = {
+                bbox_padded.start_coord.x + i % num_cores_x_padded, bbox_padded.start_coord.y + i / num_cores_x_padded};
         } else {
-            core = {i / num_cores_y_padded, i % num_cores_y_padded};
+            core = {
+                bbox_padded.start_coord.x + i / num_cores_y_padded, bbox_padded.start_coord.y + i % num_cores_y_padded};
         }
         KernelDescriptor::RTArgList reader_rt_args;
         reader_rt_args.reserve(all_runtime_args[i].first.size());
