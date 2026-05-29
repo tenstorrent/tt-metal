@@ -290,8 +290,7 @@ std::unique_ptr<Program> build_program(
             *program, kKernelPath, sender_logical, DramConfig{.noc = NOC::NOC_0, .compile_args = compile_args});
 
         // RT args: bank_id, then per-tensor blocks (length num_tensors each), then [recv_xy].
-        // Order must match the kernel's read order at the top of kernel_main; see
-        // tt_metal/impl/buffers/prefetcher_matmul_design.md §6 "Runtime args".
+        // Order must match the kernel's read order at the top of kernel_main.
         std::vector<uint32_t> rt_args;
         rt_args.reserve(1 + 10 * num_tensors + 2 * num_receivers);
         rt_args.push_back(/*bank_id=*/sender_logical.x);
@@ -397,18 +396,16 @@ void DramCorePrefetcherManager::stop() {
 namespace tt::tt_metal::experimental {
 
 void StartDramCorePrefetcher(
-    distributed::MeshDevice* mesh_device,
+    distributed::MeshDevice& mesh_device,
     const std::vector<const MeshTensor*>& input_tensors,
     const GlobalCircularBuffer& gcb,
     const DramCorePrefetcherConfig& config) {
-    TT_FATAL(mesh_device != nullptr, "StartDramCorePrefetcher requires a non-null MeshDevice");
-    auto& manager = mesh_device->impl().dram_core_prefetcher(mesh_device);
+    auto& manager = mesh_device.impl().dram_core_prefetcher(&mesh_device);
     manager.start(input_tensors, gcb, config);
 }
 
-void StopDramCorePrefetcher(distributed::MeshDevice* mesh_device) {
-    TT_FATAL(mesh_device != nullptr, "StopDramCorePrefetcher requires a non-null MeshDevice");
-    auto& manager = mesh_device->impl().dram_core_prefetcher(mesh_device);
+void StopDramCorePrefetcher(distributed::MeshDevice& mesh_device) {
+    auto& manager = mesh_device.impl().dram_core_prefetcher(&mesh_device);
     manager.stop();
 }
 

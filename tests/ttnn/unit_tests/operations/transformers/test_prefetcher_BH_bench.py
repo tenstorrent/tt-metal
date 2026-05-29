@@ -188,10 +188,8 @@ def _gcb_size_capped(block_size_bytes: int, k: int, ring_size: int, max_buffered
     # Matmul receiver needs ~block_size_bytes of L1 for in1_CB (the per-receiver weight slice
     # fully buffered for gather_in0). To fit GCB + in1_CB + other matmul CBs in ~1.4 MB L1,
     # the GCB itself can't exceed ~(1.4 MB - block_size_bytes - matmul overhead).
-    # CRITICAL: gcb_size MUST be an exact multiple of the matmul's receiver fifo_page_size
-    # (= in1_block_size_bytes). If not, remote_cb_wait_front's wrap-adjustment math fires at
-    # the layer boundary and inflates the wait count by (fifo_size % page_size), causing the
-    # receiver to wait forever for pages the sender will never push.
+    # gcb_size is snapped (below) to a multiple of the matmul's receiver fifo_page_size
+    # (= in1_block_size_bytes) so the per-receiver fifo holds a whole number of pages.
     in1_block_size = _matmul_in1_block_size_bytes(k, ring_size)
     upper_l1 = max(block_size_bytes, 1_400_000 - block_size_bytes - _L1_BANK_HEADROOM_BYTES)
     upper_cb_pages_bytes = 65000 * 16  # 16 B page * <65535 pages = ~1 MB
@@ -453,9 +451,11 @@ def test_bench_dram_core_repeats(device, op_name, shape):
     # Capture a trace of `trace_repeats` cached single-matmul dispatches and replay it once.
     # The prefetcher feeds one layer per matmul, so num_prefetch_layers = 1 + trace_repeats.
     bench_trace = ttnn.begin_trace_capture(device, cq_id=0)
+    bench_output = None
     for _ in range(trace_repeats):
         bench_output = single_linear()  # Keep a named reference so the output buffer stays alive.
     ttnn.end_trace_capture(device, bench_trace, cq_id=0)
+    assert bench_output is not None  # trace_repeats > 0, so the loop ran at least once.
 
     t0 = time.perf_counter()
     ttnn.execute_trace(device, bench_trace, cq_id=0, blocking=False)
@@ -658,9 +658,11 @@ def test_bench_workercore_repeats(device, op_name, shape):
 
     # Capture a trace of `trace_repeats` cached single-matmul dispatches and replay it once.
     bench_trace = ttnn.begin_trace_capture(device, cq_id=0)
+    bench_output = None
     for _ in range(trace_repeats):
         bench_output = single_linear()  # Keep named so the output buffer stays alive.
     ttnn.end_trace_capture(device, bench_trace, cq_id=0)
+    assert bench_output is not None  # trace_repeats > 0, so the loop ran at least once.
 
     t0 = time.perf_counter()
     ttnn.execute_trace(device, bench_trace, cq_id=0, blocking=False)

@@ -60,7 +60,6 @@ pytestmark = [
 ]
 
 
-_M = 32
 _NUM_DRAM_BANKS = 8
 
 # Mutable shape globals populated by _apply_shape() at the top of each test.
@@ -71,7 +70,6 @@ _N_ORIG = 1024
 _NUM_RECV_PER_BANK = 1
 _RING_SIZE = _NUM_DRAM_BANKS * _NUM_RECV_PER_BANK
 _RING_COLS = 8
-_RING_ROWS = 1
 _DTYPE_NAME = "bfloat8_b"
 _DTYPE = ttnn.bfloat8_b
 _DTYPE_BYTES = 1088 / 1024.0  # bfloat8_b per-element bytes including per-tile header
@@ -115,14 +113,13 @@ def _round_up(n, m):
 
 
 def _apply_shape(shape: dict) -> None:
-    global _K, _K_ORIG, _N, _N_ORIG, _NUM_RECV_PER_BANK, _RING_SIZE, _RING_ROWS
+    global _K, _K_ORIG, _N, _N_ORIG, _NUM_RECV_PER_BANK, _RING_SIZE
     global _DTYPE_NAME, _DTYPE, _DTYPE_BYTES
     _K_ORIG = int(os.environ.get("BENCH_K", shape["K"]))
     _N_ORIG = int(os.environ.get("BENCH_N", shape["N"]))
     _NUM_RECV_PER_BANK = int(os.environ.get("BENCH_RECV_PER_BANK", shape["recv_per_bank"]))
     _RING_SIZE = _NUM_DRAM_BANKS * _NUM_RECV_PER_BANK
     assert _RING_SIZE % _RING_COLS == 0, f"ring_size {_RING_SIZE} not a clean rect on {_RING_COLS}-col grid"
-    _RING_ROWS = _RING_SIZE // _RING_COLS
     _K = _round_up(_K_ORIG, _RING_SIZE * ttnn.TILE_SIZE)
     _N = _round_up(_N_ORIG, _RING_SIZE * ttnn.TILE_SIZE)
     _DTYPE_NAME = os.environ.get("BENCH_DTYPE", shape["dtype"])

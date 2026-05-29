@@ -26,8 +26,7 @@ void start_dram_core_prefetcher(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     const std::vector<ttnn::Tensor>& tensors,
     uint32_t num_layers,
-    const GlobalCircularBuffer& global_cb,
-    bool enable_performance_mode = false);
+    const tt::tt_metal::experimental::GlobalCircularBuffer& global_cb);
 
 void stop_dram_core_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device);
 

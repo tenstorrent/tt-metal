@@ -27,7 +27,6 @@ class GlobalCircularBuffer;
 
 struct DramCorePrefetcherConfig {
     uint32_t num_layers = 1;
-    bool enable_performance_mode = false;
 };
 
 // Launch the DRAM-core prefetcher on `mesh_device`. The prefetcher streams
@@ -63,7 +62,7 @@ struct DramCorePrefetcherConfig {
 //     (single-prefetcher-at-a-time invariant).
 //   - All MeshTensors live on `mesh_device` and outlive the Stop call.
 void StartDramCorePrefetcher(
-    distributed::MeshDevice* mesh_device,
+    distributed::MeshDevice& mesh_device,
     const std::vector<const MeshTensor*>& input_tensors,
     const GlobalCircularBuffer& gcb,
     const DramCorePrefetcherConfig& config);
@@ -74,7 +73,7 @@ void StartDramCorePrefetcher(
 //
 // Callers invoke Stop after enqueuing all the consuming matmuls — Stop is
 // what drains the pipeline.
-void StopDramCorePrefetcher(distributed::MeshDevice* mesh_device);
+void StopDramCorePrefetcher(distributed::MeshDevice& mesh_device);
 
 }  // namespace experimental
 }  // namespace tt::tt_metal

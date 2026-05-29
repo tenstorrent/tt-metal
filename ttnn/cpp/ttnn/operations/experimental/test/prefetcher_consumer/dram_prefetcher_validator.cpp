@@ -77,14 +77,14 @@ tt::stl::hash::hash_t DramPrefetcherValidatorDeviceOperation::compute_program_ha
 
 ttnn::device_operation::CachedProgram<DramPrefetcherValidatorDeviceOperation::ProgramFactory::shared_variables_t>
 DramPrefetcherValidatorDeviceOperation::ProgramFactory::create_at(
-    const operation_attributes_t& attrs,
+    const operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinate& /*mesh_coordinate*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& /*tensor_return_value*/) {
     using namespace tt::tt_metal;
 
     const auto& source_tensor = tensor_args.source_tensor;
-    const auto& global_cb = attrs.global_cb.value();
+    const auto& global_cb = operation_attributes.global_cb.value();
 
     // Derive ring topology from the GCB (matches both worker-sender and DRAM-sender paths).
     const auto& sr_mapping = global_cb.sender_receiver_core_mapping();
@@ -142,10 +142,10 @@ DramPrefetcherValidatorDeviceOperation::ProgramFactory::create_at(
     std::vector<uint32_t> compile_args = {
         kValidatorRemoteCBId,
         kValidatorScratchCBId,
-        attrs.num_layers,
+        operation_attributes.num_layers,
         num_blocks,
         num_senders,
-        attrs.print_stride,
+        operation_attributes.print_stride,
     };
     TensorAccessorArgs(*tensor_buffer).append_to(compile_args);
 

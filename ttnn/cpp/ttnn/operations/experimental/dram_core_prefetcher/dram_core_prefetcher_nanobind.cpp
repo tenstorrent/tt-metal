@@ -33,7 +33,6 @@ void bind_dram_core_prefetcher(nb::module_& mod) {
                 num_layers (int): number of prefetch iterations the kernel will run.
                 global_cb (GlobalCircularBuffer): must be a DRAM-sender GCB
                     (created via ttnn.experimental.create_global_circular_buffer_with_dram_senders).
-                enable_performance_mode (bool, optional): kept for API parity; currently a no-op.
 
             Returns:
                 None
@@ -42,9 +41,7 @@ void bind_dram_core_prefetcher(nb::module_& mod) {
         nb::arg("mesh_device"),
         nb::arg("tensors"),
         nb::arg("num_layers"),
-        nb::arg("global_cb"),
-        nb::kw_only(),
-        nb::arg("enable_performance_mode") = false);
+        nb::arg("global_cb"));
 
     ttnn::bind_function<"stop_dram_core_prefetcher", "ttnn.experimental.">(
         mod,

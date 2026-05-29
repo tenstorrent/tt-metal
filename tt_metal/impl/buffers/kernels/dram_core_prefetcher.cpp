@@ -5,7 +5,7 @@
 // DRISC prefetcher kernel for the DRAM-core mode of ttnn.dram_prefetcher.
 // See tt_metal/impl/buffers/prefetcher_matmul_design.md for the architecture
 // and contract; in particular §3 (what a "block" is), §6 (DRAM-core path: fit
-// ladder, L1 layout, helpers, main loop), and §8 (cross-component invariants).
+// ladder, L1 layout, helpers), and §8 (cross-component invariants).
 //
 // Pipeline summary:
 //   For each (layer, tensor, block), reserve one fifo page on every receiver,
@@ -16,8 +16,7 @@
 //   and advances iface.fifo_wr_ptr by page_bytes_per_recv[t].
 //
 //   When (rows_per_sub, M) == (k_block_w_tiles, 1) the inner loop reduces to
-//   a single chunk + finalize per block (the fast path, byte-for-byte
-//   identical to the pre-refactor single-shot push).
+//   a single chunk + finalize per block (the fast path).
 
 #include <stdint.h>
 
@@ -149,7 +148,7 @@ FORCE_INLINE void prefetcher_write_chunk(
 // With skip_ptr_update=true the NoC semaphore increments are posted; the caller
 // drains them once at end of stream via update_remote_cb_config_in_l1 +
 // noc_async_atomic_barrier (the same pattern remote_cb_push_back_and_write_pages
-// uses when its template flag is true). enable_performance_mode threads through.
+// uses when its template flag is true).
 template <bool skip_ptr_update>
 FORCE_INLINE void prefetcher_finalize_block(
     RemoteSenderCBInterface& iface, uint32_t page_bytes_per_recv, uint32_t num_receivers, uint8_t noc) {
@@ -183,7 +182,7 @@ FORCE_INLINE void prefetcher_finalize_block(
 }  // namespace
 
 void kernel_main() {
-    // ---- Compile-time args (13). See tt_metal/impl/buffers/prefetcher_matmul_design.md §6. ----
+    // ---- Compile-time args (13) ----
     constexpr uint32_t num_layers = get_compile_time_arg_val(0);
     constexpr uint32_t num_tensors = get_compile_time_arg_val(1);
     constexpr uint32_t num_blocks = get_compile_time_arg_val(2);
@@ -234,7 +233,7 @@ void kernel_main() {
     const uint32_t page_bytes_per_recv_idx = rt_idx;
     rt_idx += num_tensors;
 
-    // ---- One-time L1 setup (mirrors the pre-refactor kernel) ----
+    // ---- One-time L1 setup ----
     volatile tt_l1_ptr uint32_t* noc_xy_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(noc_xy_l1_addr);
     for (uint32_t i = 0; i < num_receivers; ++i) {
         noc_xy_ptr[2 * i] = get_arg_val<uint32_t>(rt_idx++);
@@ -313,19 +312,18 @@ void kernel_main() {
             uint32_t fifo_snapshot = 0;
             uint32_t cum_offset_in_page = 0;
 
-            // Track (blk, sb, ch) via incremental successor logic instead of
-            // c / t_sub_band_per_block / (sb_ch / t_M) etc. — those generated `divu`/`remu`
-            // (6+ cyc each on BabyRISCV); we now just compare & increment counters.
-            uint32_t blk = 0;
-            uint32_t sb = 0;
-            uint32_t ch = 0;
-            // Maintain stage_slot directly; toggle via `(a + b) - slot`. Saves the
-            // per-iter conditional select that `parity == 0 ? slot_a : slot_b` compiled to.
+            // The flat chunk index `c` decomposes into three nested counters,
+            // advanced by compare-and-increment (ch fastest, then sb, then blk):
+            uint32_t blk = 0;  // K-block index within the layer, in [0, num_blocks)
+            uint32_t sb = 0;   // sub-band index within the block, in [0, t_num_sub)
+            uint32_t ch = 0;   // chunk index within the sub-band, in [0, t_M)
+            // stage_slot ping-pongs between stage_slot_a and stage_slot_b; toggle via
+            // `(a + b) - slot`.
             constexpr uint32_t stage_slot_sum = stage_slot_a + stage_slot_b;
             uint32_t stage_slot = stage_slot_a;
-            // has_next is true for every chunk except the very last; track as a flag and
-            // only flip when the successor crosses num_blocks. Avoids the per-iter
-            // `(next_blk < num_blocks)` sltu+branch in the hot path.
+            // True for every chunk except the very last; flipped once the successor
+            // counters cross num_blocks, so the hot path reads a flag instead of
+            // recomputing the bound each iteration.
             bool has_next = (total_chunks > 1);
 
             for (uint32_t c = 0; c < total_chunks; ++c) {
@@ -338,7 +336,7 @@ void kernel_main() {
                     PROFILE_ACCUM(prof_reserve);
                 }
 
-                // Successor: next (blk, sb, ch). Cheap branches replace 4 div/mods.
+                // Compute the successor (blk, sb, ch) by incrementing the nested counters.
                 uint32_t next_ch = ch + 1;
                 uint32_t next_sb = sb;
                 uint32_t next_blk = blk;

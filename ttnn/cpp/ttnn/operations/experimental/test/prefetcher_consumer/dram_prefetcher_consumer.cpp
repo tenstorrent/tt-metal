@@ -56,24 +56,26 @@ tt::stl::hash::hash_t DramPrefetcherConsumerDeviceOperation::compute_program_has
 
 ttnn::device_operation::CachedProgram<DramPrefetcherConsumerDeviceOperation::ProgramFactory::shared_variables_t>
 DramPrefetcherConsumerDeviceOperation::ProgramFactory::create_at(
-    const operation_attributes_t& attrs,
+    const operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinate& /*mesh_coordinate*/,
     const tensor_args_t& /*tensor_args*/,
     tensor_return_value_t& /*tensor_return_value*/) {
     using namespace tt::tt_metal;
 
     Program program = CreateProgram();
-    const auto& global_cb = attrs.global_cb.value();
+    const auto& global_cb = operation_attributes.global_cb.value();
     const CoreRangeSet receiver_cores = global_cb.receiver_cores();
 
     // Configure the receiver-side CB. set_page_size matches what the sender resizes the CB to
     // (in_block_w_tiles * n_tiles_per_recv * tile_bytes); receiver wait_front/pop_front operate
     // in units of this page size.
-    CircularBufferConfig cb_config(attrs.page_size_bytes);
-    cb_config.remote_index(kRemoteCBId).set_page_size(attrs.page_size_bytes).set_data_format(tt::DataFormat::Float16_b);
+    CircularBufferConfig cb_config(operation_attributes.page_size_bytes);
+    cb_config.remote_index(kRemoteCBId)
+        .set_page_size(operation_attributes.page_size_bytes)
+        .set_data_format(tt::DataFormat::Float16_b);
     tt::tt_metal::experimental::CreateCircularBuffer(program, receiver_cores, cb_config, global_cb);
 
-    const std::vector<uint32_t> compile_args = {kRemoteCBId, attrs.num_iters};
+    const std::vector<uint32_t> compile_args = {kRemoteCBId, operation_attributes.num_iters};
     CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/gcb_bench_discard_receiver.cpp",

@@ -63,7 +63,6 @@ def _setup_weight_and_gcb_dram_sender(device, K, N, dtype, recv_per_bank, num_la
     num_dram_banks = device.dram_grid_size().x
     ring_size = num_dram_banks * recv_per_bank
     ring_cols = max(c for c in range(min(num_dram_banks, ring_size), 0, -1) if ring_size % c == 0)
-    ring_rows = ring_size // ring_cols
 
     K_padded = _round_up(K, ring_size * ttnn.TILE_SIZE)
     k_tiles = K_padded // ttnn.TILE_SIZE
