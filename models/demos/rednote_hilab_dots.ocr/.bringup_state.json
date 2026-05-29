@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-29T00:11:46Z",
-  "updated_at": "2026-05-29T03:19:23Z",
+  "updated_at": "2026-05-29T03:27:29Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -716,8 +716,17 @@
         "attempts": 0
       },
       "optimization": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tests/profiler_artifacts/lm_head_traced_ops_perf.csv",
+          "models/demos/rednote_hilab_dots.ocr/tt/profile_lm_head.py"
+        ],
+        "notes": "bf8_b weight: wide 1536->151936 matmul DRAM-bw-bound on weight read; bf8 halves weight footprint. Traced 1463.05->950.57 us (-35%), 129 cores, PCC 0.99997 (vs 0.99996 bf16). top_hotspot MatmulDeviceOperation 100%.",
+        "pcc": 0.9999727046903093,
+        "before_us": 1463.05,
+        "after_us": 950.57,
+        "speedup": 1.539
       },
       "real_weights": {
         "status": "pending",
@@ -1028,6 +1037,12 @@
       "tick": 33,
       "ts": "2026-05-29T03:19:23Z",
       "action": "device[decoder_layer]",
+      "result": "ok"
+    },
+    {
+      "tick": 34,
+      "ts": "2026-05-29T03:27:29Z",
+      "action": "device[lm_head]",
       "result": "ok"
     }
   ],
