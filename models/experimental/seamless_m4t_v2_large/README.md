@@ -175,77 +175,46 @@ The demo opens a mesh via `open_seamless_mesh_device()` — `MeshShape(1, 1)` on
 
 ---
 
-## Performance (Blackhole, 2CQ)
+## Performance (Blackhole BH QB, 2CQ)
 
-End-to-end pipeline throughput from `tests/perf/test_e2e_perf_2cq.py`. Each test logs **FPS** as `batch_size / inference_time_avg`, where `batch_size = batch_size_per_device × num_devices` on the opened mesh.
+End-to-end `generate()` throughput from the demo (`demo/demo.py`). The demo exercises the realistic long-audio path used in production — task 2 (T2ST) produces ~22 s of Hindi speech that tasks 3–5 consume, so the speech encoder runs at ~1100 mel frames (above `_LONG_AUDIO_RES_DRAM_THRESHOLD = 1024` in [`tt/tt_speech_encoder.py`](tt/tt_speech_encoder.py)). All five tasks run through `TTSeamlessM4Tv2Model.generate(...)` with 2CQ + per-step KV-decode trace.
 
-### P150 — `MeshShape(1, 1)`, batch size 1
+### BH QB — `MeshShape(1, 4)`, replicated batch-1
 
-Measured on a single Blackhole P150 (`1x1` pytest parametrization, 2026-05-24). Each cell is **FPS** logged by the test (`batch_size / inference_time_avg`).
+Measured on a four-chip Blackhole QB host (`1x4` mesh, `FABRIC_1D`). Inputs are **replicated** on all four devices, not data-parallel batched — each device runs the same single-sample forward. Numbers are the median of two demo runs (2026-05-29).
 
-| Task | `forward()` non-traced | `forward()` traced | `generate()` non-traced |
-|------|------------------------:|-------------------:|------------------------:|
-| T2TT | 11.05 | 86.40 | 0.60 |
-| S2TT |  6.27 | 44.13 | 1.21 |
-| T2ST | 12.20 | 40.83 | 0.41 |
-| S2ST |  6.51 | 28.28 | 0.61 |
-| ASR  |  5.74 | 44.21 | 1.26 |
+| Task | Output unit | Throughput | Per-unit time |
+|------|-------------|-----------:|--------------:|
+| T2TT | text tokens | 60.6 tok/s | 16.5 ms/tok |
+| T2ST | audio samples | 32.5 k smp/s | 30.7 μs/smp |
+| S2TT | text tokens | 3.03 tok/s | 330 ms/tok |
+| S2ST | audio samples | 13.3 k smp/s | 75.2 μs/smp |
+| ASR  | text tokens | 9.99 tok/s | 100 ms/tok |
 
-### BH QB — `MeshShape(1, 4)`, replicated batch-1 (`batch_size` metric = 4)
+Tasks ranked by output type / bottleneck dominance:
+- **T2TT** — text encoder + text decoder. Decoder-loop dominated.
+- **T2ST** — text path + T2U + vocoder. Vocoder dominates the wall-clock; per-sample throughput is highest because vocoder generates ~500 k samples per request.
+- **S2TT** — speech encoder + text decoder. **Speech-encoder dominated**; ms/tok is highest because the encoder prefill is amortized over only ~60–70 output tokens.
+- **S2ST** — speech encoder + text decoder + T2U + vocoder. Vocoder samples/s metric dominates.
+- **ASR** — speech encoder + text decoder. Like S2TT, but generally generates more tokens, so the prefill cost is amortized across more decode steps.
 
-Measured on a four-chip Blackhole QB system (`1x4` parametrization). Inputs are **replicated** on all four devices (same single-batch forward as P150, not batch-4 data parallel). Logged FPS therefore uses `batch_size=4`; divide by four for a rough per-device throughput comparison to P150.
-
-| Task | `forward()` non-traced | `forward()` traced | `generate()` non-traced |
-|------|------------------------:|-------------------:|------------------------:|
-| T2TT | 97.76 | 265.53 | 5.27 |
-| S2TT | 56.84 | 154.59 | 10.78 |
-| T2ST | 98.78 | 131.57 | 3.64 |
-| S2ST | 56.62 | 97.68 | 5.54 |
-| ASR | 56.56 | 154.24 | 10.67 |
-
-BH QB run (all `1x4` cases):
+### Reproducing
 
 ```bash
-pytest models/experimental/seamless_m4t_v2_large/tests/perf/test_e2e_perf_2cq.py -k 1x4 -v -m models_performance_bare_metal
+python models/experimental/seamless_m4t_v2_large/demo/demo.py
 ```
 
-### Device-kernel throughput
+The synthetic perf test (`tests/perf/test_e2e_perf_2cq.py::test_seamless_m4t_v2_generate_perf`) uses a 1-second audio fixture (`_make_speech_inputs` at [test_e2e_perf_2cq.py:160](tests/perf/test_e2e_perf_2cq.py#L160)) and therefore does **not** exercise the long-audio path. Use it for regression CI, but use the demo's chained long-audio numbers above as the canonical real-world figure.
 
-Raw kernel-only execution time per task, measured by the device profiler in `tests/perf/test_seamless_device_perf.py`. Each parametrization wraps the matching PCC `forward()` under `models.perf.device_perf_utils.run_device_perf` and reports `AVG DEVICE KERNEL SAMPLES/S` plus average kernel duration (`batch_size=1` in the test). The inner subprocess runs the PCC case that matches the host (`1x1` on P150, `1x4` on BH QB).
+### Recent optimizations (speech encoder)
 
-```bash
-pytest models/experimental/seamless_m4t_v2_large/tests/perf/test_seamless_device_perf.py \
-    -v -m models_device_performance_bare_metal
-```
+- **BFP8 activations on the Conformer FFN expand projection** ([`tt/tt_speech_encoder.py::_conformer_ffn`](tt/tt_speech_encoder.py)): the `intermediate_dense` matmul previously ran bf8 weights × bf16 activations; casting the input to `ttnn.bfloat8_b` makes it bf8×bf8, halving activation L1 footprint on the K=1024 → N=local_ff_dim hot path. Post-LN input is well-conditioned for bf8 quantization.
+- **Fused add + final_layer_norm per Conformer layer** via `residual_input_tensor` ([`tt/tt_speech_encoder.py::_conformer_encoder_layer`](tt/tt_speech_encoder.py)): saves one DRAM `add` dispatch per encoder layer in the long-audio path (24× per encoder forward). Short-audio path falls back to explicit add+LN so semantics stay identical.
+- Net impact (S2TT, demo, long-audio): **~1.18×** (~389 → ~330 ms/tok). Other tasks flat within run-to-run variance (T2TT/T2ST don't use the speech encoder; ASR is text-decoder-loop dominated; S2ST is vocoder-dominated). PCC ≥ 0.99 holds at `mel_seq=3000` (measured 0.9957).
 
-#### P150 — `MeshShape(1, 1)`
+### Why PCC is measured on `forward()` (single prefill)
 
-| Task | Device kernel samples/s | Avg kernel duration (ms) |
-|------|------------------------:|-------------------------:|
-| T2TT | 97.76 | 10.23 |
-| S2TT | 46.75 | 21.39 |
-| T2ST | 43.81 | 22.83 |
-| S2ST | 29.42 | 33.99 |
-| ASR  | 46.72 | 21.40 |
-
-#### BH QB — `MeshShape(1, 4)`, replicated batch-1
-
-Measured on a four-chip Blackhole QB system. The profiler aggregates kernel time across the replicated four-device forward, so samples/s is lower and kernel duration is higher than P150 even though logical batch size is still 1.
-
-| Task | Device kernel samples/s | Avg kernel duration (ms) |
-|------|------------------------:|-------------------------:|
-| T2TT | 23.62 | 42.34 |
-| S2TT | 11.66 | 85.77 |
-| T2ST | 10.79 | 92.68 |
-| S2ST | 7.35 | 136.12 |
-| ASR  | 11.66 | 85.77 |
-
-These are pure kernel execution (no host dispatch, no transfer overlap), so they are always higher than the E2E `forward()` numbers above. No FPS lower bound is hard-coded in the test (`expected_results={}` in `test_perf_device_bare_metal_seamless`); the test logs the measured number so regressions can be tracked across runs.
-
-### Why `forward()` (not `generate()`) for both PCC and perf
-
-- **PCC:** Autoregressive `generate()` cascades bf16 round-off through (text decoder × N) → T2U → vocoder. The final waveform PCC sits well below 0.99 even with the fp32 duration-predictor path in `tt_text_to_unit._duration_predictor`, so a strict PCC bar against HF is not meaningful end-to-end. A single deterministic `forward()` step produces the same logits as HF to within fp32-accumulator precision, so **PCC ≥ 0.99** is the right bar (`tests/pcc/test_seamless_m4t_v2_model.py`).
-- **Perf:** `forward()` is the canonical per-prefill latency unit and the only apples-to-apples figure that the 2CQ overlapped pipeline can keep the device busy on. `generate()`'s greedy loop serialises around per-step host scalar readbacks for the EOS check, plus a host T2U → vocoder remap for `t2st` / `s2st`; the resulting FPS is full E2E generation FPS, not per-prefill FPS, and is many times lower than `forward()` even with 2CQ (`tests/perf/test_e2e_perf_2cq.py:794-808`).
+Autoregressive `generate()` cascades bf16 round-off through (text decoder × N) → T2U → vocoder. The final waveform PCC sits well below 0.99 even with the fp32 duration-predictor path in `tt_text_to_unit._duration_predictor`, so a strict PCC bar against HF is not meaningful end-to-end. A single deterministic `forward()` step produces the same logits as HF to within fp32-accumulator precision, so **PCC ≥ 0.99** is the right bar (`tests/pcc/test_seamless_m4t_v2_model.py`). The perf tables above use `generate()` because that is the user-visible throughput; `tests/perf/test_e2e_perf_2cq.py` also exposes per-prefill `forward()` benchmarks for regression CI on the kernel-bound floor.
 
 ### Why traced `generate()` is not provided
 
