@@ -430,7 +430,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     // cb_x = c_23 there holds the post-add result, which already lost precision through the
     // FPU add (SrcA Tf32), so an fp32-preserving unpack on the welford side would not recover
     // any real information, but would require the SFPU replay buffer recovery
-    // (welford_init<false>()) after every transpose_wh_tile.
+    // (welford_init<WelfordInitMode::PreserveStats>()) after every transpose_wh_tile.
     const bool welford_fp32_alias = use_welford_and_not_rms_norm && in_data_format == tt::DataFormat::Float32 &&
                                     !(fuse_pre_add && large_tensor_needed);
 

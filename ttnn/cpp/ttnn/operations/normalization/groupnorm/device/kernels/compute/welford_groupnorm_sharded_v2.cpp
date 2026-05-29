@@ -222,13 +222,13 @@ void kernel_main() {
                 // takes the unpack-to-DEST fp32 path, transpose_wh_tile calls
                 // llk_math_transpose_dest, whose math-side init records slots [16, 32) of
                 // the math-thread replay buffer, clobbering welford's LREG2 / LREG3 portions.
-                // Without welford_init<false>(), welford_update_rows would replay stale
+                // Without welford_init<WelfordInitMode::PreserveStats>(), welford_update_rows would replay stale
                 // transpose-dest ops.
                 // When the unpack-to-DEST fp32 path is inactive, transpose_wh_tile routes
                 // through SrcA without touching the math-thread replay buffer, so re-init is
                 // not needed.
                 if constexpr (welford_fp32_alias) {
-                    welford_init<false>();
+                    welford_init<WelfordInitMode::PreserveStats>();
                 }
 
                 uint32_t group_offset = 0;

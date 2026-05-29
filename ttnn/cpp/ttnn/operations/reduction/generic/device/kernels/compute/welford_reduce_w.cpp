@@ -193,15 +193,15 @@ void kernel_main() {
 
             // For fp32 input, transpose_wh_tile takes the UnpackToDest path whose math-side init
             // overwrites the upper half of the SFPU replay buffer (slots [16, 32)), clobbering
-            // welford's recurrence. welford_init<false>() re-records all 32 slots without clearing
-            // LREG4/5 (which would lose the running mean/M2 accumulator). UNPACK A is left in
-            // transpose=1 by transpose_wh_tile; welford_update is pure SFPU and does not consume
-            // that state, and the next iteration's transpose_wh_init[_short] reprograms it.
+            // welford's recurrence. welford_init<WelfordInitMode::PreserveStats>() re-records all 32 slots without
+            // clearing LREG4/5 (which would lose the running mean/M2 accumulator). UNPACK A is left in transpose=1 by
+            // transpose_wh_tile; welford_update is pure SFPU and does not consume that state, and the next iteration's
+            // transpose_wh_init[_short] reprograms it.
             //
             // For bf16 input the unpack-to-DEST fp32 path is inactive: transpose_wh_tile routes
             // through SrcA without touching the SFPU replay buffer, so the recovery is gated out.
             if constexpr (welford_fp32_input) {
-                welford_init<false>();
+                welford_init<WelfordInitMode::PreserveStats>();
             }
 
             if (wt < (Wt - 1)) {

@@ -58,12 +58,12 @@ void kernel_main() {
         // Its math-side init (called from transpose_wh_init_short) records slots [16, 32) of the math-thread
         // replay buffer, clobbering the LREG2 / LREG3 portions of welford's recurrence (welford
         // records slots [0, 32), which is 4 LREG variants of 8 instructions each, fully unrolled).
-        // welford_init<false>() after each transpose_wh_tile re-records all 32 slots with the
-        // welford recurrence so welford_update replays welford ops, not stale transpose-dest
-        // ops. The <false> tag preserves the running mean / M2 accumulator in LREG4/5, which
-        // survive transpose_dest anyway because it only uses FPU MOVs. UNPACK A is left in
-        // transpose=1 by transpose_wh_tile; welford_update is pure SFPU and does not consume
-        // that state, and the next iteration's transpose_wh_init_short reprograms it.
+        // welford_init<WelfordInitMode::PreserveStats>() after each transpose_wh_tile re-records
+        // all 32 slots with the welford recurrence so welford_update replays welford ops, not
+        // stale transpose-dest ops. PreserveStats keeps the running mean / M2 accumulator in
+        // LREG4/5, which survive transpose_dest anyway because it only uses FPU MOVs. UNPACK A
+        // is left in transpose=1 by transpose_wh_tile; welford_update is pure SFPU and does not
+        // consume that state, and the next iteration's transpose_wh_init_short reprograms it.
         // For bf16 input the unpack-to-DEST fp32 path is inactive: transpose_wh_tile routes
         // through SrcA without touching the math-thread replay buffer, so the recovery is
         // gated out.
@@ -76,7 +76,7 @@ void kernel_main() {
                 }
                 transpose_wh_tile(cb_inp, r, dst0);
                 if constexpr (welford_unpack_fp32_active) {
-                    welford_init<false>();
+                    welford_init<WelfordInitMode::PreserveStats>();
                 }
                 welford_update<W>(dst0, start_N, *p_reciprocals);
                 start_N += 32;
@@ -88,7 +88,7 @@ void kernel_main() {
                 }
                 transpose_wh_tile(cb_inp, r, dst0);
                 if constexpr (welford_unpack_fp32_active) {
-                    welford_init<false>();
+                    welford_init<WelfordInitMode::PreserveStats>();
                 }
                 welford_update_rows<W>(dst0, start_N, 0, last_tile_rows, *p_reciprocals);
             }
