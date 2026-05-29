@@ -43,7 +43,8 @@ class TtMoEGateConfig:
         default_factory=lambda: {
             # Keyed by (sp_dim, per_device_emb_dim); forward() looks up the tuple.
             # Missing key → TTNN auto-picks program config.
-            (4096, DeepSeekV3Config.EMB_SIZE // 4): ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            # 7168 // 4 = 1792 (per-device shard width). New entry needed if a variant's hidden_size differs.
+            (4096, 1792): ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                 compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
                 in0_block_w=56,
                 out_subblock_h=2,
@@ -64,6 +65,7 @@ class TtMoEGateConfig:
         }
     )
 
+    # DSv3 defaults. For other variants use `TtMoEGateConfig.from_model_cfg(variant.model_config)`.
     dim: int = DeepSeekV3Config.EMB_SIZE
     sp_dim: int = 4096  # ISL per chip
     n_routed_experts: int = DeepSeekV3Config.NUM_ROUTED_EXPERTS
@@ -86,6 +88,20 @@ class TtMoEGateConfig:
     @property
     def num_cores(self):
         return self.core_grid.num_cores()
+
+    @classmethod
+    def from_model_cfg(cls, model_cfg: type, **overrides) -> "TtMoEGateConfig":
+        """Build from a TestVariant.model_config class. Extra kwargs override per-instance."""
+        return cls(
+            dim=model_cfg.EMB_SIZE,
+            n_routed_experts=model_cfg.NUM_ROUTED_EXPERTS,
+            n_shared_experts=model_cfg.NUM_SHARED_EXPERTS,
+            n_activated_experts=model_cfg.NUM_EXPERTS_PER_TOKEN,
+            n_expert_groups=model_cfg.NUM_EXPERT_GROUPS,
+            n_limited_groups=model_cfg.NUM_LIMITED_GROUPS,
+            route_scale=model_cfg.ROUTE_SCALE,
+            **overrides,
+        )
 
 
 class TtMoEGatePrefill(LightweightModule):

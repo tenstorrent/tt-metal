@@ -114,6 +114,11 @@ def download_model_config_only(variant: TestVariant, cache_dir: Path) -> Path:
         "*.safetensors.index.json",
         "generation_config.json",
         "tokenizer*",
+        "vocab*",
+        "merges*",
+        "special_tokens_map.json",
+        "*.model",
+        "*.tiktoken",
         "*.py",
     ]
 
@@ -158,16 +163,13 @@ def download_model_weights(variant: TestVariant, cache_dir: Path, layer_idx: int
             "*.safetensors.index.json",
             "generation_config.json",
             "tokenizer*",
+            "vocab*",
+            "merges*",
+            "special_tokens_map.json",
+            "*.model",
+            "*.tiktoken",
+            "*.py",  # custom model code for trust_remote_code=True
         ]
-
-        # Add custom model code files (needed for trust_remote_code=True)
-        allow_patterns.extend(
-            [
-                "configuration_deepseek.py",
-                "modeling_deepseek.py",
-                "*.py",  # Include all Python files for custom model code
-            ]
-        )
 
         # First download just the index to figure out which shards we need
         index_dir = snapshot_download(

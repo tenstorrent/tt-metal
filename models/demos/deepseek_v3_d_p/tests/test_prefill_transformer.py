@@ -172,9 +172,6 @@ def run_model(
         f"weights={weight_type}"
     )
 
-    monkeypatch = request.getfixturevalue("monkeypatch")
-    monkeypatch.setattr(DeepSeekV3Config, "NUM_ROUTED_EXPERTS", n_routed_experts)
-
     padding_side = tokenizer.padding_side
 
     # --- Cache-aware loading strategy ---
@@ -355,6 +352,7 @@ def run_model(
     transformer = TtPrefillTransformer(
         mesh_device=mesh_device,
         config=config,
+        model_cfg=variant.model_config,
         state_dict=state_dict,
         num_layers=num_layers,
         seq_len=isl_total,
@@ -706,7 +704,9 @@ _DS_PT_MESH_PARAMS = [
         (2, 4),
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
+            "fabric_router_config": create_fabric_router_config(
+                max_payload_size=DeepSeekV3Config.EMB_SIZE
+            ),  # = 7168 (DSv3 / Kimi share hidden_size),
         },
         1,
         ttnn.Topology.Linear,
@@ -717,7 +717,9 @@ _DS_PT_MESH_PARAMS = [
         (8, 4),
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
+            "fabric_router_config": create_fabric_router_config(
+                max_payload_size=DeepSeekV3Config.EMB_SIZE
+            ),  # = 7168 (DSv3 / Kimi share hidden_size),
         },
         2,
         ttnn.Topology.Linear,
@@ -732,7 +734,9 @@ _KIMI_PT_MESH_PARAMS = [
         (8, 4),
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
+            "fabric_router_config": create_fabric_router_config(
+                max_payload_size=DeepSeekV3Config.EMB_SIZE
+            ),  # = 7168 (DSv3 / Kimi share hidden_size),
         },
         2,
         ttnn.Topology.Linear,

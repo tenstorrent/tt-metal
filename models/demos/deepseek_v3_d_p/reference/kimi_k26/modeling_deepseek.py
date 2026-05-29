@@ -720,7 +720,15 @@ class DeepseekV3Attention(nn.Module):
         key_states[:, :, :, self.qk_nope_head_dim :] = k_pe
         if past_key_value is not None:
             cache_kwargs = {"sin": sin, "cos": cos}  # Specific to RoPE models
-            key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
+            # Cache the latent (kv_lora + k_pe) so the shape matches TT-side KVPE; the
+            # per-head `key_states`/`value_states` stay in-scope for the attention math.
+            # Prefill-only: decode would read the latent and break the math.
+            key_latent = k_pe.new_empty(bsz, 1, q_len, self.kv_lora_rank + self.qk_rope_head_dim)
+            key_latent[:, :, :, : self.kv_lora_rank] = self.kv_a_layernorm(compressed_kv).view(
+                bsz, 1, q_len, self.kv_lora_rank
+            )
+            key_latent[:, :, :, self.kv_lora_rank :] = k_pe.view(bsz, 1, q_len, self.qk_rope_head_dim)
+            past_key_value.update(key_latent, torch.empty((*key_latent.shape[:-1], 0)), self.layer_idx, cache_kwargs)
 
         attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) * self.softmax_scale
 

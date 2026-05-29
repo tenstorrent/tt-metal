@@ -19,6 +19,8 @@ from typing import Optional
 
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3Model as DSv3RefModel
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MoE as DSv3RefMoE
+from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k26.kimi_k26_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k26.modeling_deepseek import DeepseekV3Attention as KimiRefAttention
 from models.demos.deepseek_v3_d_p.reference.kimi_k26.modeling_deepseek import DeepseekV3Model as KimiRefModel
 from models.demos.deepseek_v3_d_p.reference.kimi_k26.modeling_deepseek import DeepseekV3MoE as KimiRefMoE
@@ -34,6 +36,7 @@ class TestVariant:
         name: str,
         env_var: str,
         hf_repo_id: str,
+        model_config: type,
         default_local_path: Optional[Path] = None,
         shared_path: Optional[Path] = None,
         num_layers_to_download: int = 24,
@@ -50,6 +53,7 @@ class TestVariant:
         self.name = name
         self.env_var = env_var
         self.hf_repo_id = hf_repo_id
+        self.model_config = model_config
         self.default_local_path = default_local_path
         self.shared_path = shared_path
         self.num_layers_to_download = num_layers_to_download
@@ -68,6 +72,7 @@ DSV3 = TestVariant(
     name="dsv3",
     env_var="DEEPSEEK_V3_HF_MODEL",
     hf_repo_id="deepseek-ai/DeepSeek-R1-0528",
+    model_config=DeepSeekV3Config,
     default_local_path=Path("models/demos/deepseek_v3/reference"),
     shared_path=Path("/proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528"),
     num_layers_to_download=24,
@@ -87,6 +92,7 @@ KIMI = TestVariant(
     name="kimi",
     env_var="KIMI_K26_HF_MODEL",
     hf_repo_id="moonshotai/Kimi-K2.6",
+    model_config=KimiK26Config,
     default_local_path=Path("models/demos/deepseek_v3_d_p/reference/kimi_k26"),
     shared_path=None,
     num_layers_to_download=24,

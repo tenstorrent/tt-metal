@@ -24,7 +24,6 @@ from tracy import signpost
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, get_ep_mesh_mapper
 from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
@@ -89,10 +88,11 @@ class TtMoe(LightweightModule):
         if gate_weights:
             from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import TtMoEGateConfig, TtMoEGatePrefill
 
-            # Create minimal config for caching
-            gate_config = TtMoEGateConfig()
-            gate_config.dim = emb_dim
-            gate_config.n_routed_experts = gate_weights["weight"].shape[0]
+            # Minimal config for caching (gate cache only needs dim + n_routed_experts).
+            gate_config = TtMoEGateConfig(
+                dim=emb_dim,
+                n_routed_experts=gate_weights["weight"].shape[0],
+            )
 
             TtMoEGatePrefill.build_ttnn_cache(
                 torch_weight=gate_weights["weight"],
@@ -139,8 +139,11 @@ class TtMoe(LightweightModule):
         max_dispatch_buffer_token_size: int,
         seq_len_per_chip: int,
         gate_weights: dict,
-        emb_dim: int = DeepSeekV3Config.EMB_SIZE,
-        hidden_dim: int = DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,
+        emb_dim: int,
+        hidden_dim: int,
+        n_expert_groups: int,
+        n_limited_groups: int,
+        route_scale: float,
         num_links: Union[int, tuple[int, int]] = 1,
         topology: Union[ttnn.Topology, tuple[ttnn.Topology, ttnn.Topology]] = ttnn.Topology.Linear,
         routed_expert_weights: list[dict] = None,
@@ -153,9 +156,6 @@ class TtMoe(LightweightModule):
         weight_cache_path: Optional[Path] = None,
         layer_idx: int = 0,
         overlap_shared_expert_with_dispatch: bool = True,
-        n_expert_groups: int = DeepSeekV3Config.NUM_EXPERT_GROUPS,
-        n_limited_groups: int = DeepSeekV3Config.NUM_LIMITED_GROUPS,
-        route_scale: float = DeepSeekV3Config.ROUTE_SCALE,
     ):
         """
         Initialize TtMoe module.
@@ -222,14 +222,16 @@ class TtMoe(LightweightModule):
         )
 
         # Build gate internally
-        gate_config = TtMoEGateConfig()
-        gate_config.dim = emb_dim
-        gate_config.sp_dim = seq_len_per_chip
-        gate_config.n_routed_experts = num_routed_experts
-        gate_config.n_activated_experts = num_experts_per_tok
-        gate_config.n_expert_groups = n_expert_groups
-        gate_config.n_limited_groups = n_limited_groups
-        gate_config.route_scale = route_scale
+        gate_config = TtMoEGateConfig(
+            dim=emb_dim,
+            sp_dim=seq_len_per_chip,
+            n_routed_experts=num_routed_experts,
+            n_shared_experts=0,  # gate ignores shared experts; safe to leave unset
+            n_activated_experts=num_experts_per_tok,
+            n_expert_groups=n_expert_groups,
+            n_limited_groups=n_limited_groups,
+            route_scale=route_scale,
+        )
         gate_config.ccl_config["NUM_LINKS"] = self.col_num_links if isinstance(num_links, tuple) else num_links
 
         # Handle cache-only case (gate_weights=None)

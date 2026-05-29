@@ -98,6 +98,7 @@ class TtPrefillTransformer(LightweightModule):
         self,
         mesh_device: ttnn.MeshDevice,
         config: PretrainedConfig,
+        model_cfg: type,
         state_dict: dict,
         num_layers: int,
         seq_len: int,
@@ -158,6 +159,7 @@ class TtPrefillTransformer(LightweightModule):
             layer = TtPrefillBlock(
                 mesh_device=mesh_device,
                 config=config,
+                model_cfg=model_cfg,
                 state_dict=layer_state,
                 layer_idx=i,
                 seq_len=seq_len,

@@ -584,6 +584,7 @@ def load_and_compute_layer_by_layer(
                 cache_path=weight_cache_path,
                 mesh_device=mesh_device,
                 config=config,
+                model_cfg=variant.model_config,
                 seq_len=seq_len,
                 num_links=num_links,
                 topology=topology,

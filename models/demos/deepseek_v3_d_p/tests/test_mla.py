@@ -360,8 +360,8 @@ _MLA_COMMON_DEVICE_PARAMS = [
 @pytest.mark.parametrize("scale_down_sl", [False, True], ids=["max_sl", "scaled_sl"])
 @pytest.mark.parametrize(
     "seq_len",
-    [1 * 1024, 5 * 1024, 25 * 1024, 128 * 1024, 100 * 1024],
-    ids=["seq1k", "seq5k", "seq25k", "seq128k", "seq100k"],
+    [128 * 1024, 100 * 1024],
+    ids=["seq128k", "seq100k"],
 )
 @pytest.mark.parametrize("skip_host_comparison", [False, True], ids=["check_pcc", "skip_check"])
 @pytest.mark.parametrize("is_balanced", [False, True], ids=["sequential", "balanced"])

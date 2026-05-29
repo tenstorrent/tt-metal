@@ -139,16 +139,19 @@ class TorchMoe(nn.Module):
             from types import SimpleNamespace
 
             from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate as ReferenceMoEGate
-            from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+
+            assert route_scale is not None, "TorchMoe requires route_scale"
+            assert n_expert_groups is not None, "TorchMoe requires n_expert_groups"
+            assert n_limited_groups is not None, "TorchMoe requires n_limited_groups"
 
             ref_config = SimpleNamespace(
                 num_experts_per_tok=num_experts_per_tok,
                 n_routed_experts=num_routed_experts,
-                routed_scaling_factor=route_scale if route_scale is not None else DeepSeekV3Config.ROUTE_SCALE,
+                routed_scaling_factor=route_scale,
                 scoring_func="sigmoid",
                 topk_method="noaux_tc",
-                n_group=n_expert_groups if n_expert_groups is not None else DeepSeekV3Config.NUM_EXPERT_GROUPS,
-                topk_group=n_limited_groups if n_limited_groups is not None else DeepSeekV3Config.NUM_LIMITED_GROUPS,
+                n_group=n_expert_groups,
+                topk_group=n_limited_groups,
                 norm_topk_prob=True,
                 hidden_size=emb_dim,
             )

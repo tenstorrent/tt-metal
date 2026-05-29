@@ -189,6 +189,7 @@ def run_model(
             cache_path=cache_dir,
             mesh_device=mesh_device,
             config=config,
+            model_cfg=variant.model_config,
             seq_len=isl_total,
             num_links=num_links,
             topology=topology,
@@ -202,6 +203,7 @@ def run_model(
     block_kwargs = dict(
         mesh_device=mesh_device,
         config=config,
+        model_cfg=variant.model_config,
         state_dict=state_dict,
         layer_idx=layer_idx,
         seq_len=isl_total,
