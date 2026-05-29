@@ -22,6 +22,7 @@ Parametrized over:
 import gc
 import json
 import os
+import time
 
 import pytest
 import torch
@@ -510,6 +511,7 @@ def test_prefill_transformer(
     do_return_kv = pcc_validation and return_kv_cache
     for i in range(num_iterations):
         logger.info(f"Starting iteration: {i}")
+        start_time = time.time()
         first_token_id, first_token_prob, tt_intermediates = transformer(
             tt_tokens,
             tt_kvpe_cache,
@@ -520,6 +522,8 @@ def test_prefill_transformer(
         )
         logger.info(f"Starting completion sync on iteration: {i}")
         ttnn.synchronize_device(mesh_device)
+        end_time = time.time()
+        logger.info(f"Iteration {i}: {end_time - start_time} seconds")
     profiler.end("tt_forward")
     logger.info(f"Forward pass completed. First token: ID={first_token_id}, prob={first_token_prob:.4f}")
 
