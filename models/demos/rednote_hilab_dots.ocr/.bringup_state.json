@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-29T00:11:46Z",
-  "updated_at": "2026-05-29T00:15:04Z",
+  "updated_at": "2026-05-29T00:21:12Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -18,8 +18,14 @@
         "reference_link": "models/demos/qwen25_vl/tt/model.py"
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/reference/functional.py",
+          "models/demos/rednote_hilab_dots.ocr/reference/golden/vision_patch_embed.pt"
+        ],
+        "notes": "reference vs HF (eager) module, PCC=1.0; golden saved",
+        "pcc": 1.0
       },
       "ttnn": {
         "status": "pending",
@@ -49,8 +55,14 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/reference/functional.py",
+          "models/demos/rednote_hilab_dots.ocr/reference/golden/vision_rmsnorm.pt"
+        ],
+        "notes": "reference vs HF (eager) module, PCC=1.0; golden saved",
+        "pcc": 1.0
       },
       "ttnn": {
         "status": "pending",
@@ -82,8 +94,14 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/reference/functional.py",
+          "models/demos/rednote_hilab_dots.ocr/reference/golden/vision_attention.pt"
+        ],
+        "notes": "reference vs HF (eager) module, PCC=1.0; golden saved",
+        "pcc": 1.0
       },
       "ttnn": {
         "status": "pending",
@@ -113,8 +131,14 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/reference/functional.py",
+          "models/demos/rednote_hilab_dots.ocr/reference/golden/vision_mlp.pt"
+        ],
+        "notes": "reference vs HF (eager) module, PCC=1.0; golden saved",
+        "pcc": 1.0
       },
       "ttnn": {
         "status": "pending",
@@ -554,6 +578,12 @@
       "tick": 1,
       "ts": "2026-05-29T00:15:04Z",
       "action": "architecture[all]",
+      "result": "ok"
+    },
+    {
+      "tick": 2,
+      "ts": "2026-05-29T00:21:12Z",
+      "action": "reference[vision_patch_embed,vision_rmsnorm,vision_attention,vision_mlp]",
       "result": "ok"
     }
   ],

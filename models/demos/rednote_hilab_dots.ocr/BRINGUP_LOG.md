@@ -4,28 +4,28 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** p150 (blackhole)
 **Started:** 2026-05-29T00:11:46Z
-**Updated:** 2026-05-29T00:15:04Z
+**Updated:** 2026-05-29T00:21:12Z
 
 ## Block Status
 
 | Block | Phase | Status | PCC | Attempts | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| vision_patch_embed | reference | pending | — | 0 |  |
+| vision_patch_embed | reference | done | 1.000000 | 0 | reference vs HF (eager) module, PCC=1.0; golden saved |
 | vision_patch_embed | ttnn | pending | — | 0 |  |
 | vision_patch_embed | debug | n/a | — | 0 |  |
 | vision_patch_embed | optimization | pending | — | 0 |  |
 | vision_patch_embed | real_weights | pending | — | 0 |  |
-| vision_rmsnorm | reference | pending | — | 0 |  |
+| vision_rmsnorm | reference | done | 1.000000 | 0 | reference vs HF (eager) module, PCC=1.0; golden saved |
 | vision_rmsnorm | ttnn | pending | — | 0 |  |
 | vision_rmsnorm | debug | n/a | — | 0 |  |
 | vision_rmsnorm | optimization | pending | — | 0 |  |
 | vision_rmsnorm | real_weights | pending | — | 0 |  |
-| vision_attention | reference | pending | — | 0 |  |
+| vision_attention | reference | done | 1.000000 | 0 | reference vs HF (eager) module, PCC=1.0; golden saved |
 | vision_attention | ttnn | pending | — | 0 |  |
 | vision_attention | debug | n/a | — | 0 |  |
 | vision_attention | optimization | pending | — | 0 |  |
 | vision_attention | real_weights | pending | — | 0 |  |
-| vision_mlp | reference | pending | — | 0 |  |
+| vision_mlp | reference | done | 1.000000 | 0 | reference vs HF (eager) module, PCC=1.0; golden saved |
 | vision_mlp | ttnn | pending | — | 0 |  |
 | vision_mlp | debug | n/a | — | 0 |  |
 | vision_mlp | optimization | pending | — | 0 |  |
@@ -95,6 +95,7 @@
 ## Recent Ticks
 
 - tick 1 (2026-05-29T00:15:04Z): architecture[all] — ok
+- tick 2 (2026-05-29T00:21:12Z): reference[vision_patch_embed,vision_rmsnorm,vision_attention,vision_mlp] — ok
 
 ## Host-Resident Exceptions
 
