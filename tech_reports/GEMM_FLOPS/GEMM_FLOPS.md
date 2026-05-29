@@ -923,12 +923,62 @@ _All configurations: 156 configurations with manually tuned parameters across di
 
 ## 8-bit Comparison: BF8 vs FP8 (P150, 11×10 grid, LoFi)
 
-Note that FP8 requires the following program config settings, that differ from BF8:
+This section evaluates the performance currently obtainable with FP8 on a P150 and compares it against the obtainable BF8 performance.
+The following settings match those used to obtain the best BF8 performance above, and were used for all BF8/FP8 results:
 
-|  | BF8 | FP8  |
+| Setting | Value |
+| --- | --- |
+| `math_fidelity` | `LoFi` |
+| `math_approx_mode` | `True` |
+| `dst_full_sync_en` | `False` (half dest sync) |
+| `throttle_level` | `NO_THROTTLE` |
+| Compute grid | 11 × 10 |
+| Tile size | 32 × 32 |
+
+While the comparison is kept as equal as possible, FP8 matmuls have constraints that force its configs to differ signficantly from the optimised BF8 settings:
+
+|  | BF8 Setting | FP8 Constraint |
 | --- | --- | --- |
 | `fp32_dest_acc_en` | `False` | `True` |
 | `packer_l1_acc` | `True` | `False` |
+| Output dtype | `bfloat8_b` | `bfloat16` |
+
+We will briefly discuss each of these settings and the impact they have on FP8 performance.
+
+**`fp32_dest_acc_en=True`**
+FP8 requires FP32 accumulation, which halves the number of tiles that fit in
+the dest register. This caps `out_subblock_h × out_subblock_w` at 4 instead of
+8. Smaller sub-blocks mean more pack/unpack iterations per unit of output,
+directly reducing kernel throughput.
+
+**`packer_l1_acc=False`**
+Packer L1 accumulation allows the packer to do a read-modify-write on each output
+tile in L1 after each in0-block pass, accumulating the K-loop partial sums
+there. That lets dest be flushed more often, reducing dest pressure.
+FP8 does not support this, so the K-loop running sum must stay in dest (already half-sized
+by the first setting) for the full reduction, further constraining sub-block
+geometry.
+
+**Output dtype: 16 vs 8 Bits **
+FP8's dest must be FP16, FP32, or INT32. This has two consequences. First, it doubles
+the output write bandwidth vs `bfloat8_b` (2 B/element vs 1 B/element),
+penalising DRAM-output shapes at large N. Second, output CBs/buffers are allocated at
+bf16 width (2048 B/tile) instead of bf8 width (1088 B/tile), consuming an
+extra ~1 KB/tile of L1.
+
+**Memory impact summary.** The three constraints together (`fp32_dest_acc_en`,
+`packer_l1_acc`, bf16 output) roughly double the per-core L1 footprint vs BF8:
+
+| CB / buffer | BF8 (per tile) | FP8 (per tile) |
+| --- | --- | --- |
+| `interm0` (accumulator) | 2048 B (Float16_b) | 4096 B (Float32) |
+| Output CB / L1 buffer | 1088 B (BFloat8_b) | 2048 B (BFloat16) |
+
+On Blackhole's ~1.4 MB usable L1 per core this cuts the maximum affordable
+per-core output block roughly in half vs BF8.
+
+As a result of these constraints most FP8 shapes require a tuned program config to fit in L1, which differs from the performance optimised configs used for BF8.
+Even with this per-shape tuning, the largest benchmark shape (20480 × 22528 × 22528) cannot fit and is omitted here, though it runs cleanly on BF8.
 
 Reported columns:
 
