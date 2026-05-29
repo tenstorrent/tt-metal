@@ -98,10 +98,12 @@ tt::tt_metal::ProgramDescriptor UntilizeMultiCoreProgramFactory::create_descript
         has_uneven_sharding = (height_remainder != 0) || (width_remainder != 0);
     }
 
+    const bool input_is_dram_sharded = input_is_sharded && src0_buffer->buffer_type() == BufferType::DRAM;
+
     // Block reader: unbacked double-buffer CB, reads from L1 shard block-by-block.
     // Required for uneven sharding where CB backing has a size mismatch.
     // Even sharding uses zero-copy backed CB (fast production path).
-    bool use_block_reader = input_is_sharded && has_uneven_sharding;
+    bool use_block_reader = input_is_sharded && (has_uneven_sharding || input_is_dram_sharded);
 
     // Input CB
     uint32_t input_cb_num_tiles;
@@ -152,6 +154,7 @@ tt::tt_metal::ProgramDescriptor UntilizeMultiCoreProgramFactory::create_descript
     reader_desc.core_ranges = compute_core_range;
     if (use_block_reader) {
         // Block reader: copies from L1 shard into double-buffered CB one block at a time
+        // or reads from DRAM shards via TensorAccessor.
         reader_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
             "reader_unary_sharded_blocks.cpp";
@@ -159,6 +162,7 @@ tt::tt_metal::ProgramDescriptor UntilizeMultiCoreProgramFactory::create_descript
             (uint32_t)src0_cb_index,
             (uint32_t)num_tiles_per_input_block,
         };
+        TensorAccessorArgs(*src0_buffer).append_to(reader_desc.compile_time_args);
         reader_desc.config = ReaderConfigDescriptor{};
     } else if (input_is_sharded) {
         // Even sharding with pack_untilize: CB is backed by the sharded buffer, reader just pushes
@@ -327,7 +331,13 @@ tt::tt_metal::ProgramDescriptor UntilizeMultiCoreProgramFactory::create_descript
         // Reader run-time args
         uint32_t num_tiles_to_read = num_tiles_per_input_block * num_input_blocks_to_process;
         if (use_block_reader) {
-            reader_ref.emplace_runtime_args(core, {src0_buffer, num_input_blocks_to_process});
+            reader_ref.emplace_runtime_args(
+                core,
+                {
+                    src0_buffer,
+                    i,
+                    num_input_blocks_to_process,
+                });
         } else if (input_is_sharded) {
             reader_ref.emplace_runtime_args(core, {num_tiles_to_read});
         } else {
