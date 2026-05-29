@@ -1,13 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Prefill trace audit: traced ``prefill_forward_text`` matches eager on last-token logits.
+"""Prefill trace audit: eager and traced ``prefill_forward_text`` match HF last-token logits.
 
-Primary check is TT traced vs TT eager (must be tight). HF is a secondary sanity
-check: eager and traced should drift from HF by the same amount (e.g. both ~0.94),
-not that either matches HF at 0.99. Closes the gap left by ``test_vllm_parity``
-(which prefills via ``ttnn_prefill_forward`` without trace) and ``test_full_model``
-(which does not exercise traced ``prefill_forward_text``).
+Both TT prefill paths (eager and traced) must PCC-match HF at 0.99. Traced must
+also match eager. Closes the gap left by ``test_vllm_parity`` (no trace) and
+``test_full_model`` (does not exercise traced ``prefill_forward_text``).
 """
 
 import os
@@ -17,7 +15,6 @@ import torch
 from loguru import logger
 from transformers import AutoModelForCausalLM
 
-from models.common.utility_functions import comp_pcc
 from models.demos.gemma4.demo.text_demo import _batch_prefill_hits_ceiling, _maybe_xfail_batch_prefill_dram
 from models.demos.gemma4.tt.generator import Gemma4Generator
 from models.demos.gemma4.tt.generator_trace import GEMMA4_TRACE_PREFILL_SEQ_LENS
@@ -38,10 +35,7 @@ from ..test_factory import (
 _PREFILL_TRACE_BUCKETS = list(GEMMA4_TRACE_PREFILL_SEQ_LENS)
 _PREFILL_TRACE_BATCH_SIZES = list(SUPPORTED_PREFILL_BATCH_SIZES)
 
-# Traced and eager should agree with HF to within this margin of each other.
-_HF_PCC_DRIFT_TOLERANCE = 0.02
-
-_TRACE_EAGER_DEFAULT_PCC = 0.99
+_DEFAULT_PCC = 0.99
 
 
 @pytest.fixture(scope="module")
@@ -110,11 +104,6 @@ def _build_tokens(batch_size, prefill_len, vocab_size, *, seed=0):
     return tokens, prompt_lens, kernel_len
 
 
-def _pcc_value(reference, candidate):
-    _, pcc = comp_pcc(reference, candidate, pcc=0.0)
-    return pcc
-
-
 def _run_prefill_logits(generator, kv_cache, tokens, page_table, prompt_lens, *, enable_trace):
     """Warm up once for the given trace mode, then return measured last-token logits."""
     generator.already_warmed_up_prefill = False
@@ -139,28 +128,11 @@ def _run_prefill_logits(generator, kv_cache, tokens, page_table, prompt_lens, *,
     return out.float()
 
 
-def _assert_trace_eager_parity(out_eager, out_trace, request):
-    threshold = get_pcc_threshold(request, default=_TRACE_EAGER_DEFAULT_PCC)
-    passing, pcc = compare_tensors(out_trace, out_eager, pcc_threshold=threshold)
-    assert passing, f"traced vs eager: {pcc} (threshold={threshold})"
+def _assert_parity(name, reference, candidate, request):
+    threshold = get_pcc_threshold(request, default=_DEFAULT_PCC)
+    passing, pcc = compare_tensors(candidate, reference, pcc_threshold=threshold)
+    assert passing, f"{name}: {pcc} (threshold={threshold})"
     return pcc
-
-
-def _assert_hf_drift_consistent(out_eager, out_trace, hf_last):
-    pcc_eager_hf = _pcc_value(hf_last, out_eager)
-    pcc_trace_hf = _pcc_value(hf_last, out_trace)
-    drift = abs(pcc_eager_hf - pcc_trace_hf)
-    logger.info(
-        "HF sanity: eager_pcc={:.4f} traced_pcc={:.4f} drift={:.4f} (max={})",
-        pcc_eager_hf,
-        pcc_trace_hf,
-        drift,
-        _HF_PCC_DRIFT_TOLERANCE,
-    )
-    assert drift <= _HF_PCC_DRIFT_TOLERANCE, (
-        f"HF drift inconsistent: eager_pcc={pcc_eager_hf:.4f} traced_pcc={pcc_trace_hf:.4f} "
-        f"(drift={drift:.4f} > {_HF_PCC_DRIFT_TOLERANCE})"
-    )
 
 
 @pytest.mark.timeout(1800)
@@ -168,7 +140,7 @@ def _assert_hf_drift_consistent(out_eager, out_trace, hf_last):
 @pytest.mark.parametrize("prefill_len", _PREFILL_TRACE_BUCKETS, ids=lambda n: f"prefill_{n}")
 @pytest.mark.parametrize("batch_size", _PREFILL_TRACE_BATCH_SIZES, ids=lambda b: f"batch{b}")
 def test_prefill_trace_eager_hf_parity(batch_size, prefill_len, mesh_device, reset_seeds, request, hf_causal_lm):
-    """Traced prefill last-token logits must match eager; HF drift must match between paths.
+    """Eager and traced prefill last-token logits must match HF (and each other).
 
     Full trace matrix: ISL buckets {128,512,1024,2048,4096} × batch {1..32}.
     On QB2 (31B 1×4), prefill 2048 is expected through batch 16; batch-32×2048/4096
@@ -238,5 +210,6 @@ def test_prefill_trace_eager_hf_parity(batch_size, prefill_len, mesh_device, res
     out_eager = _run_prefill_logits(generator, kv_eager, tokens, page_table, prompt_lens, enable_trace=False)
     out_trace = _run_prefill_logits(generator, kv_trace, tokens, page_table, prompt_lens, enable_trace=True)
 
-    _assert_trace_eager_parity(out_eager, out_trace, request)
-    _assert_hf_drift_consistent(out_eager, out_trace, hf_last)
+    _assert_parity("eager vs HF", hf_last, out_eager, request)
+    _assert_parity("traced vs HF", hf_last, out_trace, request)
+    _assert_parity("traced vs eager", out_eager, out_trace, request)
