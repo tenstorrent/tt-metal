@@ -357,3 +357,45 @@ cost barely moves them. Composite numbers reproduced near-exactly (663.4 vs
 **Still short of targets** (small 1.5×, large 3×). N2368-RoPE (0.87×) is the
 worst — its time is RoPE/drain-bound, addressed by the next opts (pass
 fusion of the weight/RoPE muls; output-drain mitigation).
+
+## Opt 2 (NEGATIVE RESULT): fuse RoPE P_COS + P_ADD via dest-reuse (2026-05-29)
+
+Following Opt 1's recommendation to "chain the two RoPE muls", tried
+collapsing the four trailing RoPE passes (P_MM, P_COS, P_SIN, P_ADD) into
+three: reorder P_SIN ahead of cos so `rotated` already holds `rotated*sin`,
+then in one tile_regs cycle compute `x_w*cos` into DST (HiFi4 `mul_tiles`)
+and fold `+ rotated*sin` via
+`binary_dest_reuse_tiles<ELWADD, DEST_TO_SRCB>` straight to `output_cb`.
+This removes P_COS's pack-to-intermediate round-trip and P_ADD's separate
+intermediate load — a full 40-col pass eliminated.
+
+**Correctness:** preserved. 19/19 RoPE + COMPOSITE_VS_FUSED bisect tests
+PASS at PCC ≥ 99.999% (the ELWADD dest-reuse is single-pass/fidelity-neutral;
+the cos mul stays HiFi4, same per-element op order).
+
+**Perf (TP=4 LINE, BH 2x4), fused_us before → after:**
+
+| config | fused before | fused after | speedup |
+|---|---|---|---|
+| self_sp4_N18944 (RoPE) | 413.2 | 408.7 | 1.62× (was 1.61×) |
+| self_sp8_N9472  (RoPE) | 271.7 | 274.5 | 1.22× (was 1.23×) |
+| self_sp32_N2368 (RoPE) | 124.5 | 124.1 | 0.87× (unchanged) |
+
+**Flat — within run-to-run noise.** Why it can't help: the POST
+decomposition already showed P_ADD's 22% is almost entirely **output_cb
+drain back-pressure** (DRAM write bandwidth), not the add math, and the
+worker sweep showed POST is gated by shared DRAM-write bandwidth, not
+per-core compute. Removing a compute pass frees TRISC math cycles that
+were already hidden behind the writer drain — the writer still gates
+wall-clock identically. Compute-pass fusion in the tail is a dead lever
+at the current DRAM-traffic ceiling.
+
+**Decision:** reverted (kept the simpler proven 4-pass kernel). The change
+is preserved in git stash (message "RoPE P_COS+P_ADD dest-reuse fusion ...")
+if a future change ever lifts the drain bottleneck and makes tail compute
+the binding constraint. Same conclusion holds for the analogous
+×(1/rms)+×weight fusion (both are broadcasts → blocked by
+`binary_dest_reuse`'s BroadcastType::NONE limitation anyway). **The
+remaining levers are algorithmic (reduce DRAM traffic, e.g. cross-op
+fusion keeping output L1-resident for the consumer), not intra-kernel
+pass fusion.**
