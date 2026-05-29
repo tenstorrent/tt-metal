@@ -6,7 +6,8 @@
 Synthetic tensor tests require Pearson ≥ 0.99. Experimental causal LM tests compare
 :class:`~models.demos.ace_step_v1_5.ttnn_impl.five_hz_causal_lm_experimental.AceStepFiveHzExperimentalTtnnCausalLM`
 to HuggingFace ``AutoModelForCausalLM``; prefill checks last-position logits only.
-Default floor: ``ACE_STEP_EXPERIMENTAL_LM_PCC`` (default ``0.98``). Optional staged
+Default floor: ``0.98`` (BF16 production). When ``ACE_STEP_LM_BFLOAT8_WEIGHTS=1``, floor is ``0.89``.
+Override via ``ACE_STEP_EXPERIMENTAL_LM_PCC`` / ``ACE_STEP_EXPERIMENTAL_LM_PCC_BFP8``.
 debug via ``ACE_STEP_DEBUG_LM_LOGITS`` (and ``_HF`` / ``_LAYER_PCC``).
 """
 
@@ -40,9 +41,21 @@ from models.demos.ace_step_v1_5.ttnn_impl.lm_postprocess_tt_transformers import 
     apply_penalty_filter_sample,
     repetition_penalty_apply,
 )
+from models.demos.ace_step_v1_5.ttnn_impl.math_perf_env import ace_step_five_hz_lm_bfloat8_weights_enabled
 
 _PCC = 0.99
-_PCC_EXPERIMENTAL_LM = float(os.environ.get("ACE_STEP_EXPERIMENTAL_LM_PCC", "0.98"))
+_PCC_EXPERIMENTAL_LM_BF16 = float(os.environ.get("ACE_STEP_EXPERIMENTAL_LM_PCC", "0.98"))
+_PCC_EXPERIMENTAL_LM_BFP8 = float(os.environ.get("ACE_STEP_EXPERIMENTAL_LM_PCC_BFP8", "0.89"))
+
+
+def _experimental_lm_pcc_min() -> float:
+    """HF logits floor: BF16/HiFi4 path ~0.98; production ``bfloat8_b`` weights ~0.90."""
+    if os.environ.get("ACE_STEP_EXPERIMENTAL_LM_PCC") is not None:
+        return _PCC_EXPERIMENTAL_LM_BF16
+    if ace_step_five_hz_lm_bfloat8_weights_enabled():
+        return _PCC_EXPERIMENTAL_LM_BFP8
+    return _PCC_EXPERIMENTAL_LM_BF16
+
 
 _FIVE_HZ_LM_DIR_NAMES = ("acestep-5Hz-lm-1.7B", "acestep-5Hz-lm-0.6B")
 
@@ -241,7 +254,8 @@ def test_llm_handler_logits_keep_allowed_pcc(device, torch_seed):
 
 @pytest.mark.skipif(_resolve_five_hz_lm_dir() is None, reason=_LM_SKIP)
 def test_llm_handler_experimental_causal_lm_prefill_decode_pcc_vs_torch(device, torch_seed):
-    """PCC (``comp_pcc``) for experimental TTNN causal LM vs HF. Floor: ``ACE_STEP_EXPERIMENTAL_LM_PCC`` (default 0.99)."""
+    """PCC (``comp_pcc``) for experimental TTNN causal LM vs HF."""
+    pcc_min = _experimental_lm_pcc_min()
     lm_dir = _resolve_five_hz_lm_dir()
     assert lm_dir is not None
     print(f"[llm_handler_logits_pcc] experimental_causal_lm: LM dir={lm_dir}", flush=True)
@@ -324,30 +338,30 @@ def test_llm_handler_experimental_causal_lm_prefill_decode_pcc_vs_torch(device, 
     gp_last = gp[:, -1:, :].contiguous()
     r_pre_last = _pearson(rp_last.numpy(), gp_last.numpy())
     if ace_step_debug_lm_logits_enabled():
-        log_lm_pcc("test.prefill_last_pos", rp_last, gp_last, min_pcc=_PCC_EXPERIMENTAL_LM)
-    ok_pre, pcc_pre = comp_pcc(rp_last, gp_last, pcc=_PCC_EXPERIMENTAL_LM)
+        log_lm_pcc("test.prefill_last_pos", rp_last, gp_last, min_pcc=pcc_min)
+    ok_pre, pcc_pre = comp_pcc(rp_last, gp_last, pcc=pcc_min)
     r_pre_full_diag = _pearson(rp.numpy(), gp.numpy())
     print(
         f"[llm_handler_logits_pcc] experimental_causal_lm_prefill_last_pos "
-        f"comp_pcc={float(pcc_pre):.8f} (min={_PCC_EXPERIMENTAL_LM}) "
+        f"comp_pcc={float(pcc_pre):.8f} (min={pcc_min}) "
         f"Pearson last-pos={r_pre_last:.8f}  "
         f"(diagnostic full-seq Pearson={r_pre_full_diag:.6f} — expected low; per-position "
         f"prefill logits are not exposed by tt_transformers' sharded LMHead path)",
         flush=True,
     )
-    assert ok_pre, f"prefill last-pos comp_pcc {float(pcc_pre):.6f} < {_PCC_EXPERIMENTAL_LM}"
+    assert ok_pre, f"prefill last-pos comp_pcc {float(pcc_pre):.6f} < {pcc_min}"
 
     rd, gd = _align_logits_last_dims(ref_dec, tt_dec)
     r_dec = _pearson(rd.numpy(), gd.numpy())
     if ace_step_debug_lm_logits_enabled():
-        log_lm_pcc("test.decode_last_pos", rd, gd, min_pcc=_PCC_EXPERIMENTAL_LM)
-    ok_dec, pcc_dec = comp_pcc(rd, gd, pcc=_PCC_EXPERIMENTAL_LM)
+        log_lm_pcc("test.decode_last_pos", rd, gd, min_pcc=pcc_min)
+    ok_dec, pcc_dec = comp_pcc(rd, gd, pcc=pcc_min)
     print(
         f"[llm_handler_logits_pcc] experimental_causal_lm_decode_step comp_pcc={float(pcc_dec):.8f} "
-        f"(min={_PCC_EXPERIMENTAL_LM}) Pearson={r_dec:.8f}",
+        f"(min={pcc_min}) Pearson={r_dec:.8f}",
         flush=True,
     )
-    assert ok_dec, f"decode comp_pcc {float(pcc_dec):.6f} < {_PCC_EXPERIMENTAL_LM}"
+    assert ok_dec, f"decode comp_pcc {float(pcc_dec):.6f} < {pcc_min}"
 
 
 @pytest.mark.skipif(_resolve_five_hz_lm_dir() is None, reason=_LM_SKIP)
@@ -386,15 +400,12 @@ def test_prefill_trace_last_token_matches_eager_varying_seq_len(device, torch_se
             with torch.inference_mode():
                 traced = exp.forward(input_ids=ids.clone(), past_key_values=None, use_cache=True)
             re, ge = _align_logits_last_dims(eager.logits.float().cpu(), traced.logits.float().cpu())
-            ok, pcc = comp_pcc(re[:, -1:, :], ge[:, -1:, :], pcc=_PCC_EXPERIMENTAL_LM)
+            ok, pcc = comp_pcc(re[:, -1:, :], ge[:, -1:, :], pcc=_PCC)
             print(
                 f"[llm_handler_logits_pcc] prefill_trace_vs_eager seq_len={seq_len} " f"comp_pcc={float(pcc):.8f}",
                 flush=True,
             )
-            assert ok, (
-                f"prefill trace vs eager last-pos comp_pcc {float(pcc):.6f} < {_PCC_EXPERIMENTAL_LM} "
-                f"for seq_len={seq_len}"
-            )
+            assert ok, f"prefill trace vs eager last-pos comp_pcc {float(pcc):.6f} < {_PCC} " f"for seq_len={seq_len}"
     finally:
         if hasattr(exp, "release_trace"):
             exp.release_trace()

@@ -62,6 +62,12 @@ consumers (sampling, repetition-penalty, CFG combine) keep working unchanged.
 - With ``use_decode_trace=True``, decode uses ``_decode_traced`` (per-token ``execute_trace``).
 - ``use_trace=True`` enables both (legacy convenience).
 
+**Memory (P1)**
+
+- ``ACE_STEP_LM_PREFILL_L1=1``: prefill activations in L1 (default **off** for PCC; Tracy harness sets ``1``).
+- ``ACE_STEP_LM_UNIFIED_DECODE_SHARD=1`` (default): decode matmul outputs share
+  ``get_residual_mem_config(DECODE)`` (see :mod:`qwen_decode_shard`).
+
 **Caveats**
 
 - This wrapper assumes the ACE-Step 5 Hz LM checkpoint is loadable via
@@ -75,16 +81,18 @@ consumers (sampling, repetition-penalty, CFG combine) keep working unchanged.
 
 **PCC / accuracy**
 
-By default (:func:`~math_perf_env.ace_step_five_hz_lm_optimizations`), decoder weights use
-``bfloat8_b`` with **HiFi2** compute (``LMHead`` / RMSNorm stay on stock tt_transformers HiFi2).
-Set ``ACE_STEP_LM_BFLOAT8_WEIGHTS=0`` to restore ``accuracy_decoder_config.json`` (HiFi4 +
-**BF16** weights; prefill last-token PCC typically **~0.984** on P150). BFP8 weights trade some
-logits PCC for lower DRAM bandwidth and faster matmuls. Embedding / ``lm_head`` weights follow
-``dtype=ttnn.bfloat8_b`` from :func:`create_tt_model`.
+Default path uses ``accuracy_decoder_config.json`` (**BF16** weights + HiFi4) when
+:func:`~math_perf_env.ace_step_five_hz_lm_bfloat8_weights_enabled` is false — prefill last-token
+PCC typically **~0.984** vs HuggingFace on P150.
+
+Set ``ACE_STEP_LM_BFLOAT8_WEIGHTS=1`` for HiFi2 + ``bfloat8_b`` decoder weights (lower DRAM BW,
+faster matmuls; HF logits PCC ~**0.90**). Embedding / ``lm_head`` dtype follows
+``create_tt_model`` (``bfloat16`` by default, ``bfloat8_b`` when the BFP8 env is set).
 """
 
 from __future__ import annotations
 
+import contextlib
 import os
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -97,6 +105,13 @@ from models.demos.ace_step_v1_5.ttnn_impl.lm_logits_debug import ace_step_debug_
 from models.demos.ace_step_v1_5.ttnn_impl.math_perf_env import (
     ace_step_five_hz_lm_bfloat8_weights_enabled,
     ace_step_five_hz_lm_optimizations,
+    ace_step_lm_prefill_l1_enabled,
+    ace_step_lm_unified_decode_shard_enabled,
+)
+from models.demos.ace_step_v1_5.ttnn_impl.qwen_decode_shard import ace_step_patch_model_args_decode_unified_shard
+from models.demos.ace_step_v1_5.ttnn_impl.qwen_prefill_l1 import (
+    ace_step_apply_qwen_prefill_l1,
+    ace_step_qwen_prefill_l1_op_context,
 )
 from models.tt_transformers.tt.common import (
     PagedAttentionConfig,
@@ -198,7 +213,12 @@ class QwenModelTtTransformers:
         # finds the right config / weights. Revert immediately after construction so other
         # ACE-Step components that read ``HF_MODEL`` aren't affected.
         with _hf_model_env(model_name):
-            tt_dtype = dtype if dtype is not None else ttnn.bfloat8_b
+            if dtype is not None:
+                tt_dtype = dtype
+            elif ace_step_five_hz_lm_bfloat8_weights_enabled():
+                tt_dtype = ttnn.bfloat8_b
+            else:
+                tt_dtype = ttnn.bfloat16
             lm_optimizations = (
                 ace_step_five_hz_lm_optimizations if ace_step_five_hz_lm_bfloat8_weights_enabled() else None
             )
@@ -217,6 +237,11 @@ class QwenModelTtTransformers:
                 dtype=tt_dtype,
                 use_hf_rope=bool(use_hf_rope),
             )
+
+        if ace_step_lm_prefill_l1_enabled():
+            ace_step_apply_qwen_prefill_l1(self.tt_model, self.model_args)
+        if ace_step_lm_unified_decode_shard_enabled():
+            ace_step_patch_model_args_decode_unified_shard(self.model_args)
 
         # HF-compatible config view for the LM bridge (`AceStepFiveHzExperimentalTtnnCausalLM`
         # reads ``self.config.vocab_size``).
@@ -244,6 +269,14 @@ class QwenModelTtTransformers:
         # Keyed by (padded_prefill_len, real_seq_len): ``get_last_token`` is baked into the
         # captured graph and must match ``seq_len``, not just the padded length bucket.
         self._prefill_traces: dict[tuple[int, int], _PrefillTraceState] = {}
+
+    @contextlib.contextmanager
+    def _prefill_l1_op_context(self):
+        if ace_step_lm_prefill_l1_enabled():
+            with ace_step_qwen_prefill_l1_op_context():
+                yield
+        else:
+            yield
 
     # ------------------------------------------------------------------
     # KV cache lifecycle
@@ -395,18 +428,19 @@ class QwenModelTtTransformers:
                 flush=True,
             )
 
-        logits_tt = self.tt_model.ttnn_prefill_forward(
-            prefill_input,
-            rot_mats_global=rot_mats_global,
-            rot_mats_local=rot_mats_local,
-            user_id=0,
-            page_table=page_table_tt,
-            chunk_page_table=None,
-            chunk_start_idx=None,
-            get_last_token=get_last_token,
-            kv_cache=self.tt_kv_cache,
-            batch_size=1,
-        )
+        with self._prefill_l1_op_context():
+            logits_tt = self.tt_model.ttnn_prefill_forward(
+                prefill_input,
+                rot_mats_global=rot_mats_global,
+                rot_mats_local=rot_mats_local,
+                user_id=0,
+                page_table=page_table_tt,
+                chunk_page_table=None,
+                chunk_start_idx=None,
+                get_last_token=get_last_token,
+                kv_cache=self.tt_kv_cache,
+                batch_size=1,
+            )
         # Tell the bridge which row of the returned tile corresponds to the real last token
         # (other rows in [get_last_token, get_last_token+32) are unused / pad-token logits).
         self._prefill_last_token_offset_in_tile = int(last_token_idx % 32)
@@ -449,15 +483,16 @@ class QwenModelTtTransformers:
 
             device_inputs = copy_host_to_device(host_tuple, mesh_device=self.device)
             x_embd, tt_page_table, _chunk_pt = self.tt_model.transform_and_embed_prefill_inputs_device(*device_inputs)
-            warm = self.tt_model.ttnn_prefill_forward(
-                x_embd,
-                rot_mats_global=tt_rot_global,
-                rot_mats_local=tt_rot_local,
-                page_table=tt_page_table,
-                chunk_page_table=None,
-                kv_cache=self.tt_kv_cache,
-                get_last_token=get_last_token,
-            )
+            with self._prefill_l1_op_context():
+                warm = self.tt_model.ttnn_prefill_forward(
+                    x_embd,
+                    rot_mats_global=tt_rot_global,
+                    rot_mats_local=tt_rot_local,
+                    page_table=tt_page_table,
+                    chunk_page_table=None,
+                    kv_cache=self.tt_kv_cache,
+                    get_last_token=get_last_token,
+                )
             ttnn.synchronize_device(self.device)
             try:
                 ttnn.deallocate(warm)
@@ -467,15 +502,16 @@ class QwenModelTtTransformers:
             device_inputs = copy_host_to_device(host_tuple, mesh_device=self.device)
             trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
             x_embd, tt_page_table, _chunk_pt = self.tt_model.transform_and_embed_prefill_inputs_device(*device_inputs)
-            _ = self.tt_model.ttnn_prefill_forward(
-                x_embd,
-                rot_mats_global=tt_rot_global,
-                rot_mats_local=tt_rot_local,
-                page_table=tt_page_table,
-                chunk_page_table=None,
-                kv_cache=self.tt_kv_cache,
-                get_last_token=get_last_token,
-            )
+            with self._prefill_l1_op_context():
+                _ = self.tt_model.ttnn_prefill_forward(
+                    x_embd,
+                    rot_mats_global=tt_rot_global,
+                    rot_mats_local=tt_rot_local,
+                    page_table=tt_page_table,
+                    chunk_page_table=None,
+                    kv_cache=self.tt_kv_cache,
+                    get_last_token=get_last_token,
+                )
             ttnn.end_trace_capture(self.device, trace_id, cq_id=0)
             ttnn.synchronize_device(self.device)
             st = _PrefillTraceState(

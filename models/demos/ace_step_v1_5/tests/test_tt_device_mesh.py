@@ -222,7 +222,13 @@ def test_emit_session_summary_rollup(monkeypatch):
     emit_session_summary(state, params={"duration_sec": 60.0, "infer_steps": 50, "llm_debug": True})
 
 
-def test_five_hz_lm_bfloat8_optimizations_default():
+def test_five_hz_lm_bfloat8_weights_default_off():
+    from models.demos.ace_step_v1_5.ttnn_impl.math_perf_env import ace_step_five_hz_lm_bfloat8_weights_enabled
+
+    assert not ace_step_five_hz_lm_bfloat8_weights_enabled()
+
+
+def test_five_hz_lm_bfloat8_optimizations_when_opt_in(monkeypatch):
     import ttnn
     from models.demos.ace_step_v1_5.ttnn_impl.math_perf_env import (
         ace_step_five_hz_lm_bfloat8_weights_enabled,
@@ -234,6 +240,7 @@ def test_five_hz_lm_bfloat8_optimizations_default():
         n_layers = 28
         model_name = "acestep-5Hz-lm-1.7B"
 
+    monkeypatch.setenv("ACE_STEP_LM_BFLOAT8_WEIGHTS", "1")
     assert ace_step_five_hz_lm_bfloat8_weights_enabled()
     dec = ace_step_five_hz_lm_optimizations(_FakeModelArgs())
     bf8 = getattr(ttnn, "bfloat8_b", None)
