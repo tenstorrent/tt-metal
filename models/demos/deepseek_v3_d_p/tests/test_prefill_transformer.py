@@ -31,6 +31,7 @@ import ttnn
 from conftest import is_galaxy
 from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.tests.conftest import FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     create_balanced_chunk_order,
     reorder_tensor_chunks,
@@ -176,6 +177,9 @@ def _compare_intermediate_pcc(reference_items, tt_intermediates, number_of_non_p
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="mesh-8x4",
         ),
+        # FABRIC_2D variants — shared list defined in conftest.py (also used by
+        # test_prefill_block_loop.py). Covers (4,2) BH LoudBox, (2,4) asymmetric, (8,4) BH Galaxy.
+        *FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS,
     ],
     indirect=["mesh_device", "device_params"],
 )

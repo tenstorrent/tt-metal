@@ -28,7 +28,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     reorder_tensor_chunks,
     reverse_reorder_tensor_chunks,
 )
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
@@ -72,24 +72,61 @@ PCC_THRESHOLD_KVPE = 0.999
         pytest.param(
             (2, 4),
             {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
             },
             1,
             ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-            id="mesh-2x4",
+            id="fabric2d-mesh-2x4",
+        ),
+        pytest.param(
+            (8, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            },
+            2,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="fabric2d-mesh-8x4",
+        ),
+        # FABRIC_1D fallback variants kept for local 1D-vs-2D comparison; CI selects fabric2d-*
+        # via positive `-k` filter (see galaxy_deepseek_prefill_tests.yaml).
+        pytest.param(
+            (2, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+            },
+            1,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="1d-mesh-2x4",
         ),
         pytest.param(
             (8, 4),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             2,
             ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
+            id="1d-mesh-8x4-line",
+        ),
+        pytest.param(
+            (8, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+            },
+            2,
+            ttnn.Topology.Ring,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="1d-mesh-8x4-ring",
         ),
     ],
     indirect=["mesh_device", "device_params"],
