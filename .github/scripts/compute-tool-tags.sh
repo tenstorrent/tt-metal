@@ -21,7 +21,7 @@ REPO="${1:-${GITHUB_REPOSITORY:?GITHUB_REPOSITORY or repository argument require
 CCACHE_VERSION=$(grep -E "^ARG CCACHE_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
 MOLD_VERSION=$(grep -E "^ARG MOLD_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
 DOXYGEN_VERSION=$(grep -E "^ARG DOXYGEN_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
-CBA_VERSION=$(grep -E "^ARG CBA_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
+CLANGBUILDANALYZER_VERSION=$(grep -E "^ARG CLANGBUILDANALYZER_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
 GDB_VERSION=$(grep -E "^ARG GDB_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
 CMAKE_VERSION=$(grep -E "^ARG CMAKE_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
 YQ_VERSION=$(grep -E "^ARG YQ_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
@@ -30,11 +30,9 @@ OMPI_VERSION=$(grep -E "^ARG OMPI_VERSION=" dockerfile/Dockerfile.tools | head -
 SFPI_VERSION=$(grep -E "^sfpi_version=" tt_metal/sfpi-version | cut -d"'" -f2)
 
 # Compute hashes for each tool (version + install script)
-for tool in ccache mold doxygen cba gdb cmake yq zstd; do
-    script_name="install-${tool}.sh"
-    [[ "$tool" == "cba" ]] && script_name="install-clangbuildanalyzer.sh"
+for tool in ccache mold doxygen clangbuildanalyzer gdb cmake yq zstd; do
     hash_var="${tool^^}_HASH"
-    declare "$hash_var=$(cat "dockerfile/scripts/${script_name}" | sha1sum | cut -d' ' -f1 | head -c 12)"
+    declare "$hash_var=$(cat "dockerfile/scripts/install-${tool}.sh" | sha1sum | cut -d' ' -f1 | head -c 12)"
 done
 
 # Handle special cases (sfpi and openmpi) separately
@@ -48,7 +46,7 @@ jq -n \
   --arg ccache "${BASE}/ccache:${CCACHE_VERSION}-${CCACHE_HASH}" \
   --arg mold "${BASE}/mold:${MOLD_VERSION}-${MOLD_HASH}" \
   --arg doxygen "${BASE}/doxygen:${DOXYGEN_VERSION}-${DOXYGEN_HASH}" \
-  --arg cba "${BASE}/cba:${CBA_VERSION}-${CBA_HASH}" \
+  --arg clangbuildanalyzer "${BASE}/clangbuildanalyzer:${CLANGBUILDANALYZER_VERSION}-${CLANGBUILDANALYZER_HASH}" \
   --arg gdb "${BASE}/gdb:${GDB_VERSION}-${GDB_HASH}" \
   --arg cmake "${BASE}/cmake:${CMAKE_VERSION}-${CMAKE_HASH}" \
   --arg yq "${BASE}/yq:${YQ_VERSION}-${YQ_HASH}" \
@@ -59,7 +57,7 @@ jq -n \
     "ccache-tag": $ccache,
     "mold-tag": $mold,
     "doxygen-tag": $doxygen,
-    "cba-tag": $cba,
+    "clangbuildanalyzer-tag": $clangbuildanalyzer,
     "gdb-tag": $gdb,
     "cmake-tag": $cmake,
     "yq-tag": $yq,

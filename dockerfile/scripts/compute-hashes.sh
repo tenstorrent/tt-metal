@@ -47,11 +47,11 @@ echo "DOXYGEN_SHA256=$($SHA_CMD "$TMPDIR/doxygen.tar.gz" | cut -d' ' -f1)"
 echo ""
 
 # ClangBuildAnalyzer
-CBA_VERSION="${CBA_VERSION:-1.6.0}"
-echo "Downloading ClangBuildAnalyzer ${CBA_VERSION}..."
-curl -fsSL -o "$TMPDIR/cba.tar.gz" \
-    "https://github.com/aras-p/ClangBuildAnalyzer/archive/refs/tags/v${CBA_VERSION}.tar.gz"
-echo "CBA_SHA256=$($SHA_CMD "$TMPDIR/cba.tar.gz" | cut -d' ' -f1)"
+CLANGBUILDANALYZER_VERSION="${CLANGBUILDANALYZER_VERSION:-1.6.0}"
+echo "Downloading ClangBuildAnalyzer ${CLANGBUILDANALYZER_VERSION}..."
+curl -fsSL -o "$TMPDIR/clangbuildanalyzer.tar.gz" \
+    "https://github.com/aras-p/ClangBuildAnalyzer/archive/refs/tags/v${CLANGBUILDANALYZER_VERSION}.tar.gz"
+echo "CLANGBUILDANALYZER_SHA256=$($SHA_CMD "$TMPDIR/clangbuildanalyzer.tar.gz" | cut -d' ' -f1)"
 echo ""
 
 # GDB

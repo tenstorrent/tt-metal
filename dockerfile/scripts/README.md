@@ -25,7 +25,7 @@ The Docker build system uses **pre-built tool images** stored in GHCR (GitHub Co
    | ccache | Compiler cache for faster rebuilds |
    | mold | Fast linker |
    | doxygen | Documentation generator |
-   | cba | ClangBuildAnalyzer for build profiling |
+   | clangbuildanalyzer | ClangBuildAnalyzer for build profiling |
    | gdb | GNU Debugger |
    | cmake | Build system generator |
    | yq | YAML processor |
@@ -123,7 +123,7 @@ CCACHE_VERSION=4.11.0 ./dockerfile/scripts/compute-hashes.sh
 | cmake | Official CMake download page checksums |
 | mold | GitHub release page |
 | doxygen | SourceForge release page |
-| cba | GitHub release (compute from download) |
+| clangbuildanalyzer | GitHub release (compute from download) |
 | gdb | GNU announcement mailing list or FTP .sig files |
 | iwyu | GitHub release (compute from download) |
 | yq | GitHub release checksums file |

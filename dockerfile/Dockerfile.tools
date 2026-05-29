@@ -24,8 +24,8 @@ ARG MOLD_SHA256=4c999e19ffa31afa5aa429c679b665d5e2ca5a6b6832ad4b79668e8dcf3d8ec1
 ARG DOXYGEN_VERSION=1.16.1
 ARG DOXYGEN_SHA256=a56f885d37e3aae08a99f638d17bbb381224c03a878d9e2dda4f9fa4baf1d8bd
 
-ARG CBA_VERSION=1.6.0
-ARG CBA_SHA256=868a8d34ecb9b65da4e5874342062a12c081ce4385c7ddd6ce7d557a0c5c292d
+ARG CLANGBUILDANALYZER_VERSION=1.6.0
+ARG CLANGBUILDANALYZER_SHA256=868a8d34ecb9b65da4e5874342062a12c081ce4385c7ddd6ce7d557a0c5c292d
 
 ARG GDB_VERSION=14.2
 ARG GDB_SHA256=2d4dd8061d8ded12b6c63f55e45344881e8226105f4d2a9b234040efa5ce7772
@@ -146,9 +146,9 @@ COPY --from=doxygen-builder /install/ /install/
 # Outputs: /install/bin/ClangBuildAnalyzer
 #############################################################
 
-FROM ubuntu:22.04 AS cba-builder
-ARG CBA_VERSION
-ARG CBA_SHA256
+FROM ubuntu:22.04 AS clangbuildanalyzer-builder
+ARG CLANGBUILDANALYZER_VERSION
+ARG CLANGBUILDANALYZER_SHA256
 
 ENV DEBIAN_FRONTEND=noninteractive
 # Enforce strict error handling: exit on error, unset vars, pipe failures
@@ -158,18 +158,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY dockerfile/scripts/install-clangbuildanalyzer.sh /tmp/install-clangbuildanalyzer.sh
-RUN CBA_VERSION=${CBA_VERSION} \
-    CBA_SHA256=${CBA_SHA256} \
+RUN CLANGBUILDANALYZER_VERSION=${CLANGBUILDANALYZER_VERSION} \
+    CLANGBUILDANALYZER_SHA256=${CLANGBUILDANALYZER_SHA256} \
     INSTALL_PREFIX=/install \
     /bin/bash /tmp/install-clangbuildanalyzer.sh
 
-FROM scratch AS cba
-ARG CBA_VERSION
+FROM scratch AS clangbuildanalyzer
+ARG CLANGBUILDANALYZER_VERSION
 LABEL org.opencontainers.image.source="https://github.com/aras-p/ClangBuildAnalyzer"
 LABEL org.opencontainers.image.description="ClangBuildAnalyzer - Clang build time analysis tool"
 LABEL org.opencontainers.image.licenses="Unlicense"
-LABEL org.opencontainers.image.version="${CBA_VERSION}"
-COPY --from=cba-builder /install/ /install/
+LABEL org.opencontainers.image.version="${CLANGBUILDANALYZER_VERSION}"
+COPY --from=clangbuildanalyzer-builder /install/ /install/
 
 #############################################################
 # GDB - requires configure/make to build

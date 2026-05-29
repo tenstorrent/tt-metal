@@ -103,11 +103,11 @@ target "doxygen" {
   tags       = ["tool-doxygen:local"]
 }
 
-target "cba" {
+target "clangbuildanalyzer" {
   context    = "."
   dockerfile = "dockerfile/Dockerfile.tools"
-  target     = "cba"
-  tags       = ["tool-cba:local"]
+  target     = "clangbuildanalyzer"
+  tags       = ["tool-clangbuildanalyzer:local"]
 }
 
 target "gdb" {
@@ -153,7 +153,7 @@ target "openmpi" {
 }
 
 group "tools" {
-  targets = ["ccache", "mold", "doxygen", "cba", "gdb", "cmake", "yq", "zstd", "sfpi", "openmpi"]
+  targets = ["ccache", "clangbuildanalyzer", "cmake", "doxygen", "gdb", "mold", "openmpi", "sfpi", "yq", "zstd"]
 }
 
 # =============================================================================
@@ -214,7 +214,7 @@ target "_main-common" {
     ccache-layer         = "target:ccache"
     mold-layer           = "target:mold"
     doxygen-layer        = "target:doxygen"
-    cba-layer            = "target:cba"
+    clangbuildanalyzer-layer = "target:clangbuildanalyzer"
     gdb-layer            = "target:gdb"
     cmake-layer          = "target:cmake"
     yq-layer             = "target:yq"

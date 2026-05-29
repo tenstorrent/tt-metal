@@ -9,10 +9,10 @@
 #   Extracts group target names directly.
 #
 # Examples:
-#   get-target-tools.sh ubuntu        # => ccache mold doxygen cba gdb cmake yq zstd sfpi openmpi
+#   get-target-tools.sh ubuntu        # => ccache mold doxygen clangbuildanalyzer gdb cmake yq zstd sfpi openmpi
 #   get-target-tools.sh basic-dev     # => ccache cmake openmpi sfpi
 #   get-target-tools.sh manylinux     # => ccache mold openmpi sfpi zstd
-#   get-target-tools.sh tools         # => ccache cba cmake doxygen gdb mold openmpi sfpi yq zstd
+#   get-target-tools.sh tools         # => ccache clangbuildanalyzer cmake doxygen gdb mold openmpi sfpi yq zstd
 set -euo pipefail
 
 TARGET="${1:?Usage: $0 <bake-target-or-group>}"

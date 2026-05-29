@@ -9,7 +9,7 @@ This directory contains the Docker build system for TT-Metalium, including multi
 ```mermaid
 flowchart TB
     subgraph GHCR [GHCR Container Registry]
-        ToolImages[Tool Images<br/>ccache, mold, doxygen, cba,<br/>gdb, cmake, yq, zstd, sfpi, openmpi]
+        ToolImages[Tool Images<br/>ccache, mold, doxygen, clangbuildanalyzer,<br/>gdb, cmake, yq, zstd, sfpi, openmpi]
         VenvImages[Python Venv Images<br/>ci-build-venv, ci-test-venv]
         MainImages[Main Images<br/>ci-build, ci-test, dev]
         BasicImages[Basic Images<br/>basic-dev, basic-ttnn-runtime]
@@ -145,7 +145,7 @@ Tool image tags are passed between workflows as a single JSON bundle instead of 
   "ccache-tag": "ghcr.io/.../tools/ccache:4.10.2-<hash>",
   "mold-tag": "ghcr.io/.../tools/mold:2.40.4-<hash>",
   "doxygen-tag": "ghcr.io/.../tools/doxygen:1.16.1-<hash>",
-  "cba-tag": "ghcr.io/.../tools/cba:1.6.0-<hash>",
+  "clangbuildanalyzer-tag": "ghcr.io/.../tools/clangbuildanalyzer:1.6.0-<hash>",
   "gdb-tag": "ghcr.io/.../tools/gdb:14.2-<hash>",
   "cmake-tag": "ghcr.io/.../tools/cmake:4.2.3-<hash>",
   "yq-tag": "ghcr.io/.../tools/yq:v4.44.6-<hash>",
@@ -207,7 +207,7 @@ docker buildx bake -f dockerfile/docker-bake.hcl --no-cache dev
 | `Dockerfile.evaluation` | Evaluation builds | evaluation |
 | `Dockerfile.manylinux` | ManyLinux wheel builds | manylinux |
 | `Dockerfile.python` | Python venv images | ci-build-venv, ci-test-venv |
-| `Dockerfile.tools` | Tool images | ccache, mold, doxygen, cba, gdb, cmake, yq, zstd, sfpi, openmpi |
+| `Dockerfile.tools` | Tool images | ccache, mold, doxygen, clangbuildanalyzer, gdb, cmake, yq, zstd, sfpi, openmpi |
 
 ## Key Files
 

@@ -48,7 +48,7 @@ ARG UV_IMAGE=ghcr.io/astral-sh/uv@sha256:9a23023be68b2ed09750ae636228e903a54a05e
 FROM scratch AS ccache-layer
 FROM scratch AS mold-layer
 FROM scratch AS doxygen-layer
-FROM scratch AS cba-layer
+FROM scratch AS clangbuildanalyzer-layer
 FROM scratch AS gdb-layer
 FROM scratch AS cmake-layer
 FROM scratch AS yq-layer
@@ -149,7 +149,7 @@ ENV CCACHE_TEMPDIR=/tmp/ccache
 # These images are built by Dockerfile.tools and pushed by build-docker-artifact.yaml
 COPY --from=ccache-layer /install/bin/ccache /usr/local/bin/
 COPY --from=doxygen-layer /install/ /usr/local/
-COPY --from=cba-layer /install/ /usr/local/
+COPY --from=clangbuildanalyzer-layer /install/ /usr/local/
 COPY --from=yq-layer /install/bin/yq /usr/local/bin/
 COPY --from=mold-layer /install/ /usr/local/
 RUN test -x /usr/local/bin/ccache || { echo "ERROR: ccache not found in ccache-layer" >&2; exit 1; } && \

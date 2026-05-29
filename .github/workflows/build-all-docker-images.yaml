@@ -282,7 +282,7 @@ jobs:
           harbor-prefix: ${{ needs.preflight.outputs.harbor-prefix }}
           images: ${{ needs.build-tools.outputs.tool-tags }}
           title: "tool images"
-          json-keys: "ccache-tag mold-tag doxygen-tag cba-tag gdb-tag cmake-tag yq-tag zstd-tag sfpi-tag openmpi-tag"
+          json-keys: "ccache-tag mold-tag doxygen-tag clangbuildanalyzer-tag gdb-tag cmake-tag yq-tag zstd-tag sfpi-tag openmpi-tag"
 
       - name: Build Ubuntu 22.04 image list
         id: images-2204
