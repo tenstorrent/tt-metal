@@ -472,10 +472,12 @@ inline void calculate_acos() {
     calculate_asin_acos_impl<APPROXIMATION_MODE, is_fp32_dest_acc_en, true, ITERATIONS>();
 }
 
+// reciprocal(x) for 1 ≤ x < 2^126
 template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _sfpu_reciprocal_ge1_(sfpi::vFloat x) {
+    // initial estimate y = -reciprocal(x)
     sfpi::vFloat y = sfpi::reinterpret<sfpi::vFloat>(0xfef392e0 - sfpi::reinterpret<sfpi::vInt>(x));
-    sfpi::vFloat e = x * y + 1.0f;
+    sfpi::vFloat e = x * neg_y + 1.0f;
 
     if constexpr (is_fp32_dest_acc_en) {
         y = y * e + y;
@@ -529,37 +531,29 @@ sfpi_inline sfpi::vFloat _sfpu_quarter_abs_expm1_(sfpi::vFloat x) {
     sfpi::vInt i = float_to_uint8(j, sfpi::RoundMode::NearestEven);
     j = int32_to_float(i, sfpi::RoundMode::NearestEven);
 
-    sfpi::vFloat r, s, f, w, scale, bias;
+    sfpi::vFloat r, s, f, w, scale, bias, c0;
 
     if constexpr (!is_fp32_dest_acc_en) {
-        sfpi::vFloat c0, c2;
-
         f = j * sfpi::vConstFloatPrgm1 + a;  // f = a - j * ln(2)
 
-        c2 = 4.177856445e-02f;
         r = 8.361816406e-03f;
-        r = r * f + c2;
+        r = r * f + 4.177856445e-02f;
         s = f * f;
         r = r * f + sfpi::vConstFloatPrgm2;
         c0 = 0.5f;
         r = __builtin_rvtt_sfpmad(r.get(), f.get(), c0.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
 
     } else {
-        sfpi::vFloat c0, c4;
-
         f = j * sfpi::vConstFloatPrgm1 + a;  // f = a - j * ln(2)_hi
         f = j * -1.42860677e-6f + f;         // f = f - j * ln(2)_lo
 
-        c4 = 1.393107930e-3f;
-        s = f * f;
         r = 1.974105835e-04f;
-        r = r * f + c4;
+        r = r * f + 1.393107930e-3f;
         r = r * f + 8.333439939e-3f;
         r = r * f + 4.166680202e-2f;
-        c0 = 0.5f;
+        s = f * f;
         r = r * f + sfpi::vConstFloatPrgm2;
-        c0 = sfpi::reinterpret<sfpi::vFloat>(sfpi::reinterpret<sfpi::vInt>(c0) + -1);  // c0 = 0x3effffff
-        r = r * f + c0;
+        r = r * f + 4.999999702e-1f;
     }
 
     w = 0.25f;
@@ -582,24 +576,21 @@ sfpi_inline sfpi::vFloat _sfpu_quarter_abs_expm1_(sfpi::vFloat x) {
 // a = abs(x); t = expm1(a); sinh(a) = 0.5 * (t + t / (t + 1))
 template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _sfpu_sinh_(sfpi::vFloat x) {
-    sfpi::vFloat t = _sfpu_quarter_abs_expm1_<is_fp32_dest_acc_en>(x);
-    sfpi::vFloat e = 4.0f * t + 1.0f;
+    sfpi::vFloat q = _sfpu_quarter_abs_expm1_<is_fp32_dest_acc_en>(x);
+    sfpi::vFloat e = 4.0f * q + 1.0f;
 
-    // e<2^-25: 0.5(t+t/1) = t
-    // e>2^25:  0.5(t+1) = 0.5t
-    // else:    0.5t + 0.5t/(t+1)
-
-    // if e is larger than 2^25 then t/(t+1) is 1.0 and result is (t+1)/2=t/2; if e is less than 2^-25 then
-    // t/(t+1) is just t and result is (t+t)/2 = t equivalently i think half_t * r + half_t works with r=0
-    // (because t+1==t?; else r=1 and result is half_t+half_t
     sfpi::vFloat r = _sfpu_reciprocal_ge1_<is_fp32_dest_acc_en>(e);
 
-    // this is here because large values e.g. e>2^25 are clearly t/2.
+    // e < 2^-25: 0.5(t+t/1) = t = x
     sfpi::vFloat y = x;
     sfpi::vInt t_exp = sfpi::exexp(t);
     v_if(t_exp >= -25) {
-        y = t + t;
-        v_if(t_exp < 25) { y = y * r + y; }
+        // e ≥ 2^25: 0.5(t+1) = 0.5t
+        y = q + q;
+        v_if(t_exp < 25) {
+            // else: 0.5t + 0.5t/(t+1)
+            y = y * r + y;
+        }
         v_endif;
     }
     v_endif;
