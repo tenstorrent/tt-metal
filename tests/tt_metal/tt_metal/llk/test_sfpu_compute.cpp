@@ -93,9 +93,14 @@ const map<std::string, std::map<std::string, std::string>> sfpu_binary_op_to_op_
     {"mul_int",
      {{"SFPU_OP_INIT_0", "mul_int_tile_init<DataFormat::Int32>();"},
       {"SFPU_OP_CHAIN_0", "mul_int_tile<DataFormat::Int32>(0, 1, 0);"}}},
+    {"gt_int",
+     {{"SFPU_OP_INIT_0", "gt_int_tile_init<DataFormat::Int32>();"},
+      {"SFPU_OP_CHAIN_0", "gt_int_tile<DataFormat::Int32>(0, 1, 0);"}}},
 };
 
-bool is_int8_binary_sfpu_op(const std::string& op_name) { return (op_name == "add_int") or (op_name == "mul_int"); }
+bool is_int8_binary_sfpu_op(const std::string& op_name) {
+    return (op_name == "add_int") or (op_name == "mul_int") or (op_name == "gt_int");
+}
 
 bfloat16 sfpu_function(const std::string& op_name, const bfloat16& input) {
     if (op_name == "relu") {
@@ -159,6 +164,9 @@ int32_t get_binary_int_operation_result(const std::string& op_name, int lhs, int
     }
     if (op_name == "mul_int") {
         return static_cast<int32_t>(lhs * rhs);
+    }
+    if (op_name == "gt_int") {
+        return (lhs > rhs) ? 1 : 0;
     }
     TT_THROW("Unsupported int8 binary op_name in test");
 }
@@ -536,6 +544,8 @@ bool run_sfpu_binary_two_input_buffer(
             sfpu_defines["SFPU_OP_BINARY_ADD_INT_INCLUDE"] = "1";
         } else if (test_config.sfpu_op == "mul_int") {
             sfpu_defines["SFPU_OP_BINARY_MUL_INT_INCLUDE"] = "1";
+        } else if (test_config.sfpu_op == "gt_int") {
+            sfpu_defines["SFPU_OP_BINARY_GT_INT_INCLUDE"] = "1";
         }
     } else {
         sfpu_defines["SFPU_OP_BINARY_DIV_INCLUDE"] = "1";
@@ -850,7 +860,7 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuBinaryParameterizedFixture, TensixSfpuBinar
 
     if (MetalContext::instance().get_cluster().arch() == ARCH::WORMHOLE_B0 ||
         MetalContext::instance().get_cluster().arch() == ARCH::BLACKHOLE) {
-        GTEST_SKIP() << "Binary SFPU op test (div_binary / add_int / mul_int) not fixed for WH/BH";
+        GTEST_SKIP() << "Binary SFPU op test (div_binary / add_int / mul_int / gt_int) not fixed for WH/BH";
     }
 
     // add_int/mul_int: Int8 L1 inputs promoted to sign-mag Int32 output. div_binary stays bfloat16.
@@ -880,7 +890,10 @@ INSTANTIATE_TEST_SUITE_P(
     SingleCoreSfpuBinaryCompute,
     SingleCoreSingleMeshDeviceSfpuBinaryParameterizedFixture,
     ::testing::Values(
-        std::make_tuple(1, "div_binary"), std::make_tuple(1, "add_int"), std::make_tuple(1, "mul_int")),
+        std::make_tuple(1, "div_binary"),
+        std::make_tuple(1, "add_int"),
+        std::make_tuple(1, "mul_int"),
+        std::make_tuple(1, "gt_int")),
     [](const testing::TestParamInfo<std::tuple<size_t, std::string>>& info) {
         return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles";
     });
