@@ -38,7 +38,7 @@ Other expected DRAM in DiT/VAE traces:
 
 - ``proj_in`` uses **L1 TILE linear** patch embed (not ``conv1d``) to avoid ``Tilize`` / ``Copy`` / im2col DRAM matmul.
 - Denoise feeds **TILE BF16 L1** ``xt``/``ctx`` (not ROW_MAJOR DRAM) so Tracy drops front ``Tilize``/``CopyDevice``.
-- 5 Hz LM decoder **matmuls**: HiFi2 + ``bfloat8_b`` weights (via :func:`ace_step_five_hz_lm_optimizations`); DiT decoder **matmuls**: LoFi + ``bfloat8_b`` weights + L1 activations; **rms_norm**: LoFi + L1 (not default HiFi4).
+- 5 Hz LM decoder **matmuls**: default **BF16** weights + ``accuracy_decoder_config.json`` (HiFi4) for HF logits PCC; opt-in ``ACE_STEP_LM_BFLOAT8_WEIGHTS=1`` for HiFi2 + ``bfloat8_b`` (via :func:`ace_step_five_hz_lm_optimizations`). DiT decoder **matmuls**: LoFi + ``bfloat8_b`` weights + L1 activations; **rms_norm**: LoFi + L1 (not default HiFi4).
 - **SDPA attn masks**: DRAM-only (TTNN requirement).
 - **RoPE / norm / linear weights**: DRAM storage; matmul reads weights from DRAM while ``in0`` activations are L1.
 - Residual **BinaryNg (in0:dram)** (~0.3%): usually scalar-broadcast or slice outputs — call sites use :func:`ace_step_ensure_l1_activation` after ``ace_step_add_one``.
@@ -1250,12 +1250,26 @@ def ace_step_qwen3_optimizations(model_args: Any):
 
 
 def ace_step_five_hz_lm_bfloat8_weights_enabled() -> bool:
-    """Use ``bfloat8_b`` for all 5 Hz causal-LM decoder weights (default on).
+    """Use ``bfloat8_b`` for all 5 Hz causal-LM decoder weights (opt-in for perf).
 
-    Set ``ACE_STEP_LM_BFLOAT8_WEIGHTS=0`` to fall back to ``accuracy_decoder_config.json``
-    (BF16 weights + HiFi4) via ``optimizations=None`` in :mod:`qwen_tt_transformers_lm`.
+    Default **off** — production uses ``accuracy_decoder_config.json`` (BF16 weights + HiFi4)
+    via ``optimizations=None`` in :mod:`qwen_tt_transformers_lm` for HF logits PCC (~0.98).
+    Set ``ACE_STEP_LM_BFLOAT8_WEIGHTS=1`` for HiFi2 + ``bfloat8_b`` (~0.90 HF PCC).
     """
-    return os.environ.get("ACE_STEP_LM_BFLOAT8_WEIGHTS", "1").lower() not in ("0", "false", "no", "off")
+    return os.environ.get("ACE_STEP_LM_BFLOAT8_WEIGHTS", "0").lower() in ("1", "true", "yes", "on")
+
+
+def ace_step_lm_prefill_l1_enabled() -> bool:
+    """Keep 5 Hz LM prefill activations in L1 (``ace_step_apply_qwen_prefill_l1``).
+
+    Default **off** — opt in via ``ACE_STEP_LM_PREFILL_L1=1`` (Tracy harness sets this).
+    """
+    return os.environ.get("ACE_STEP_LM_PREFILL_L1", "0").lower() in ("1", "true", "yes", "on")
+
+
+def ace_step_lm_unified_decode_shard_enabled() -> bool:
+    """Unify decode WIDTH_SHARDED specs to residual grid (fewer ``ReshardDeviceOperation``). Default on."""
+    return os.environ.get("ACE_STEP_LM_UNIFIED_DECODE_SHARD", "1").lower() not in ("0", "false", "no", "off")
 
 
 def ace_step_five_hz_lm_optimizations(model_args: Any):
