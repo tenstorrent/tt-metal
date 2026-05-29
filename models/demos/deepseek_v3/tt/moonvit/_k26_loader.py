@@ -127,18 +127,55 @@ def load_vision_config(snapshot_dir: Optional[str] = None) -> SimpleNamespace:
         cfg = json.load(f)
     vc = dict(cfg["vision_config"])
     # K2.6's default `_attn_implementation` is `flash_attention_2`, which
-    # requires the `flash_attn` package. Override to `eager` so the
-    # reference runs without an extra dependency. For a single-image
-    # input the eager mask shift is invariant under softmax, so eager
-    # produces identical output to sdpa/flash here.
-    vc.setdefault("_attn_implementation", "eager")
+    # requires the `flash_attn` package. We register and use `sdpa` instead
+    # (see `_register_sdpa_attention`): it needs no extra dependency and,
+    # unlike K2.6's bundled `eager`, applies a correct block-diagonal mask
+    # so multi-image packing matches our on-device attention. For a single
+    # image all three variants are numerically identical.
+    vc.setdefault("_attn_implementation", "sdpa")
     if vc["_attn_implementation"] == "flash_attention_2":
-        vc["_attn_implementation"] = "eager"
+        vc["_attn_implementation"] = "sdpa"
     return SimpleNamespace(**vc)
 
 
 def _strip_prefix(d: dict, prefix: str) -> dict:
     return {k[len(prefix) :]: v for k, v in d.items() if k.startswith(prefix)}
+
+
+def _register_sdpa_attention(mdl_mod) -> None:
+    """Register a correct block-diagonal `sdpa` attention in the K2.6 module.
+
+    K2.6 ships only `flash_attention_2` (needs the `flash_attn` package)
+    and `eager`. Its `eager` variant builds a boolean block mask and does
+    `attn_weight += mask` — adding +1.0 *inside* each image block and 0
+    outside. For a single image that's a uniform shift (invariant under
+    softmax), but for packed multi-image inputs it fails to mask
+    cross-image attention, so it diverges from our on-device attention
+    which masks correctly via cu_seqlens.
+
+    This `sdpa` implementation reproduces the q/k/v layout of K2.6's
+    `multihead_attention`/`eager_attention` (input `(seqlen, nheads,
+    headdim)`, output `(seqlen, nheads*headdim)`) but masks correctly:
+    each image attends only within its own cu_seqlens block.
+    """
+    import torch.nn.functional as F
+
+    def sdpa_attention(q, k, v, q_cu_seqlens=None, k_cu_seqlens=None, **kwargs):
+        seqlen = q.shape[0]
+        # Block-diagonal boolean mask: True == attend.
+        attn_mask = torch.zeros(1, seqlen, seqlen, dtype=torch.bool, device=q.device)
+        cu = q_cu_seqlens
+        for i in range(1, len(cu)):
+            a, b = int(cu[i - 1]), int(cu[i])
+            attn_mask[..., a:b, a:b] = True
+        q = q.transpose(0, 1)  # (nheads, seqlen, headdim)
+        k = k.transpose(0, 1)
+        v = v.transpose(0, 1)
+        out = F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask)
+        return out.transpose(0, 1).reshape(seqlen, -1)
+
+    funcs = mdl_mod.VL_VISION_ATTENTION_FUNCTIONS
+    funcs.setdefault("sdpa", sdpa_attention)
 
 
 def load_k26_vision_reference(
@@ -169,6 +206,9 @@ def load_k26_vision_reference(
     PatchMergerMLP = mdl_mod.PatchMergerMLP
     VisionTowerConfig = mdl_mod.VisionTowerConfig
     ProjectorConfig = mdl_mod.ProjectorConfig
+
+    # Make the correct `sdpa` attention available before constructing blocks.
+    _register_sdpa_attention(mdl_mod)
 
     from safetensors.torch import load_file
     from transformers.modeling_utils import no_init_weights

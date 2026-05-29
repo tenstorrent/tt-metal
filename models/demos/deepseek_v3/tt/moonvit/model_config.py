@@ -29,7 +29,16 @@ from typing import Any
 import torch
 
 # Default HF model id; override via DEEPSEEK_MOONVIT_HF_MODEL env var or constructor kwarg.
-DEFAULT_HF_MODEL_ID = "moonshotai/Kimi-VL-A3B-Instruct"
+#
+# K2.6 is the production target. Its MoonViT is the 3D (video-capable)
+# variant, but for image inputs (T=1) it degenerates exactly to the 2D
+# MoonViT this module implements. The full K2.6 checkpoint is ~600 GB;
+# we load only the vision tower + projector from shards 63/64 via
+# `_k26_loader.load_k26_vision_reference` (never materializing the LLM).
+#
+# The legacy A3B id ("moonshotai/Kimi-VL-A3B-Instruct") still works for
+# anyone with that checkpoint cached — set DEEPSEEK_MOONVIT_HF_MODEL.
+DEFAULT_HF_MODEL_ID = "moonshotai/Kimi-K2.6"
 
 
 @dataclass
@@ -84,6 +93,18 @@ class MoonViTModelArgs:
     # Derived properties
 
     @property
+    def is_k26(self) -> bool:
+        """True when loading a Kimi-K2.x checkpoint (3D MoonViT, vision-only load).
+
+        K2.x can't go through HF's Auto* loaders: the `.` in the repo name
+        breaks the trust_remote_code dynamic-module importer, and loading
+        the full model would materialize the ~595 GB LLM. We route these
+        through `_k26_loader` instead.
+        """
+        mid = self.hf_model_id.lower()
+        return "k2.6" in mid or "k2.5" in mid or "kimi-k2" in mid
+
+    @property
     def head_dim(self) -> int:
         return self.hidden_size // self.num_attention_heads
 
@@ -114,11 +135,51 @@ class MoonViTModelArgs:
     @property
     def hf_config(self):
         if self._hf_config is None:
-            from transformers import AutoConfig
+            if self.is_k26:
+                self._hf_config = self._build_k26_config()
+            else:
+                from transformers import AutoConfig
 
-            self._hf_config = AutoConfig.from_pretrained(self.hf_model_id, trust_remote_code=self.trust_remote_code)
+                self._hf_config = AutoConfig.from_pretrained(self.hf_model_id, trust_remote_code=self.trust_remote_code)
             self._assert_hf_matches_plan()
         return self._hf_config
+
+    def _build_k26_config(self):
+        """Build a config view from K2.6's config.json (AutoConfig is unusable).
+
+        K2.6's vision_config uses flat `vt_*` keys; we normalize them to the
+        plan field names (hidden_size, num_hidden_layers, ...) so the rest of
+        this class and the assert below are source-agnostic. The raw block is
+        preserved under `vision_config._raw` for anything K2.6-specific.
+        """
+        import json
+        from types import SimpleNamespace
+
+        from models.demos.deepseek_v3.tt.moonvit._k26_loader import _find_snapshot_dir
+
+        snapshot_dir = _find_snapshot_dir()
+        with open(os.path.join(snapshot_dir, "config.json")) as f:
+            cfg = json.load(f)
+        raw = cfg["vision_config"]
+        vision_config = SimpleNamespace(
+            hidden_size=raw["vt_hidden_size"],
+            num_hidden_layers=raw["vt_num_hidden_layers"],
+            num_attention_heads=raw["vt_num_attention_heads"],
+            intermediate_size=raw["vt_intermediate_size"],
+            patch_size=raw["patch_size"],
+            init_pos_emb_height=raw["init_pos_emb_height"],
+            init_pos_emb_width=raw["init_pos_emb_width"],
+            merge_kernel_size=tuple(raw["merge_kernel_size"]),
+            mm_hidden_size=raw["mm_hidden_size"],
+            _raw=raw,
+        )
+        text_config = SimpleNamespace(hidden_size=cfg["text_config"]["hidden_size"])
+        return SimpleNamespace(
+            vision_config=vision_config,
+            text_config=text_config,
+            media_placeholder_token_id=cfg["media_placeholder_token_id"],
+            _snapshot_dir=snapshot_dir,
+        )
 
     def _assert_hf_matches_plan(self) -> None:
         """Cross-check the HF config against the values we hard-coded.
@@ -151,21 +212,44 @@ class MoonViTModelArgs:
 
     @property
     def hf_model(self):
-        """Lazily load the full HF model (vision tower + projector + LLM)."""
-        if self._hf_model is None:
-            from transformers import AutoModel
+        """Lazily load the HF model exposing `.vision_tower` and the projector.
 
-            self._hf_model = AutoModel.from_pretrained(
-                self.hf_model_id,
-                trust_remote_code=self.trust_remote_code,
-                torch_dtype=torch.bfloat16,
-            )
-            self._hf_model.eval()
+        For K2.6 we build a vision-only stand-in (no LLM) from shards 63/64
+        via `_k26_loader`; its `.mm_projector` attribute holds the projector.
+        For A3B we load the full HF model via AutoModel (`.multi_modal_projector`).
+        """
+        if self._hf_model is None:
+            if self.is_k26:
+                from models.demos.deepseek_v3.tt.moonvit._k26_loader import load_k26_vision_reference
+
+                # Ensure the config (and thus snapshot dir) is resolved first.
+                snapshot_dir = getattr(self.hf_config, "_snapshot_dir", None)
+                vision_tower, projector = load_k26_vision_reference(snapshot_dir=snapshot_dir)
+                self._hf_model = _K26VisionModel(vision_tower=vision_tower, mm_projector=projector)
+            else:
+                from transformers import AutoModel
+
+                self._hf_model = AutoModel.from_pretrained(
+                    self.hf_model_id,
+                    trust_remote_code=self.trust_remote_code,
+                    torch_dtype=torch.bfloat16,
+                )
+                self._hf_model.eval()
         return self._hf_model
 
     @property
     def hf_processor(self):
         if self._hf_processor is None:
+            if self.is_k26:
+                raise NotImplementedError(
+                    "K2.6 processor loading is not wired up yet. The K2.6 image "
+                    "processor (kimi_k25_processor / kimi_k25_vision_processing) "
+                    "emits `image_grid_thws` (T,H,W) and can't go through "
+                    "AutoProcessor due to the repo-name `.` bug. The processor-"
+                    "based E2E tests (dropin / real_image / multimodal_prefill) "
+                    "need a separate K2.6 processor adapter. The synthetic-grid "
+                    "PCC tests do not need this."
+                )
             from transformers import AutoProcessor
 
             self._hf_processor = AutoProcessor.from_pretrained(
@@ -176,6 +260,12 @@ class MoonViTModelArgs:
     @property
     def hf_tokenizer(self):
         if self._hf_tokenizer is None:
+            if self.is_k26:
+                raise NotImplementedError(
+                    "K2.6 tokenizer loading is not wired up yet (repo-name `.` "
+                    "breaks AutoTokenizer's dynamic-module import). Not needed by "
+                    "the synthetic-grid PCC tests."
+                )
             from transformers import AutoTokenizer
 
             self._hf_tokenizer = AutoTokenizer.from_pretrained(
@@ -254,3 +344,21 @@ class MoonViTModelArgs:
         from models.demos.deepseek_v3.tt.moonvit._references import reference_final_layernorm
 
         return reference_final_layernorm(self)
+
+
+class _K26VisionModel:
+    """Vision-only stand-in for HF `KimiK25ForConditionalGeneration`.
+
+    Exposes just the attributes the reference extractors need
+    (`.vision_tower`, `.mm_projector`) so `_references.py` can pull
+    submodules without the 595 GB LLM ever being constructed.
+    """
+
+    def __init__(self, vision_tower, mm_projector):
+        self.vision_tower = vision_tower
+        self.mm_projector = mm_projector
+
+    def eval(self):
+        self.vision_tower.eval()
+        self.mm_projector.eval()
+        return self

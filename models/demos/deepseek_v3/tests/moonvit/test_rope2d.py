@@ -132,7 +132,8 @@ def test_rope2d_apply_matches_hf(model_args, grid_hws):
 
     apply_rope = None
     for name, mod in sys.modules.items():
-        if name.endswith("modeling_kimi_vl") and hasattr(mod, "apply_rope"):
+        # A3B: modeling_kimi_vl. K2.6: modeling_kimi_k25. Both expose apply_rope.
+        if (name.endswith("modeling_kimi_vl") or name.endswith("modeling_kimi_k25")) and hasattr(mod, "apply_rope"):
             apply_rope = mod.apply_rope
             break
     if apply_rope is None:
