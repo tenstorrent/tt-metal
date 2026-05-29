@@ -32,7 +32,7 @@ class HardwareController:
         # surfaces tt-smi's own diagnostics in the logs instead of failing
         # blind. run_shell_command raises on a non-zero exit, folding both
         # stdout and stderr into the message.
-        result = run_shell_command("tt-smi -r", capture_stdout=True)
+        result = run_shell_command("tt-smi -r")
         output = (result.stdout or "").strip()
         if output:
             logger.info("'tt-smi -r' output:\n{}", output)
