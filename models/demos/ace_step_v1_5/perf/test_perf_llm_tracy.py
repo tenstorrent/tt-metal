@@ -44,8 +44,11 @@ Optional environment variables:
 - ``ACE_STEP_TRACY_EACH_DECODE_STEP``: set to ``1`` for one signpost per decode token (``prefill_decode``).
 - ``ACE_STEP_PROFILER_FLUSH_EVERY``: flush device profiler every N perf iterations (default ``1``).
 - ``ACE_STEP_PERF_MAX_SECONDS``: optional wall-time budget on the timed perf pass.
-- ``ACE_STEP_LM_PREFILL_L1``: prefill L1 activations (Tracy harness defaults to ``1``; PCC tests leave off).
+- ``ACE_STEP_LM_PREFILL_L1``: prefill L1 activations (default ``0``; Tracy sets ``1``).
 - ``ACE_STEP_LM_UNIFIED_DECODE_SHARD``: unified decode WIDTH_SHARDED specs (default ``1``).
+- ``ACE_STEP_LM_DECODE_QK_NORM_SHARDED``: sharded Q/K head norms (default ``1``).
+- ``ACE_STEP_LM_SDPA_GATHER_UNIFIED``: post-SDPA gather WIDTH = residual grid (default ``1``).
+- ``ACE_STEP_LM_NARROW_AUDIO_VOCAB``: narrow ``LMHead`` column band in codes phase (default ``1``).
 
 If Tracy merge reports ``Device data missing``, run without ``-p`` or post-process with
 ``python tools/tracy/process_ops_logs.py --date``.
@@ -152,6 +155,9 @@ def _ace_step_enable_llm_tracy_perf_env() -> None:
     """Opt-in perf knobs for Tracy (PCC-safe defaults elsewhere)."""
     os.environ.setdefault("ACE_STEP_LM_PREFILL_L1", "1")
     os.environ.setdefault("ACE_STEP_LM_UNIFIED_DECODE_SHARD", "1")
+    os.environ.setdefault("ACE_STEP_LM_DECODE_QK_NORM_SHARDED", "1")
+    os.environ.setdefault("ACE_STEP_LM_SDPA_GATHER_UNIFIED", "1")
+    os.environ.setdefault("ACE_STEP_LM_NARROW_AUDIO_VOCAB", "1")
 
 
 def _run_llm_tracy_harness(device: ttnn.Device, *, lm_dir: Path, variant_label: str) -> None:

@@ -144,8 +144,16 @@ def test_resolve_vae_tiling_mesh_long_clip():
 
 def test_mesh_perf_log_default():
     assert ace_step_mesh_perf_log_default(mesh_sku="BH_QB")
+    assert ace_step_mesh_perf_log_default(mesh_sku="P150")
+    assert ace_step_mesh_perf_log_default(mesh_sku=None)
+
+
+def test_mesh_perf_log_opt_out(monkeypatch):
+    from models.demos.ace_step_v1_5.ace_step_perf_log import ace_step_perf_logging_enabled
+
+    monkeypatch.setenv("ACE_STEP_DEMO_PERF_LOG", "0")
     assert not ace_step_mesh_perf_log_default(mesh_sku="P150")
-    assert not ace_step_mesh_perf_log_default(mesh_sku=None)
+    assert not ace_step_perf_logging_enabled()
 
 
 def test_cached_preprocess_reuse():
