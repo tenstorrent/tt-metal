@@ -46,7 +46,9 @@ from models.experimental.seamless_m4t_v2_large.tt.common import (
 from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import get_tp, mesh_cluster_axis
 
 # Chunk ``H @ enc`` along upsampled rows (same row count as speech-encoder long mel matmuls).
-_HARD_UPSAMPLE_MATMUL_CHUNK_ROWS = TILE
+# 4 × TILE (128 rows) — fewer dispatches than the original 1×TILE (32) without exceeding the
+# matmul's L1 budget. Demo's ~1639 unit rows go from ~51 dispatches → ~13.
+_HARD_UPSAMPLE_MATMUL_CHUNK_ROWS = 4 * TILE
 
 # TP long-seq self-attn: fused SDPA L1 scratch scales with full ``S`` on 1×4 meshes (decoder @ 4096).
 # Use DRAM chunked Q@K^T like speech-encoder relative scores (``scores_mc = DRAM`` when ``tp>1, S>=128``).
