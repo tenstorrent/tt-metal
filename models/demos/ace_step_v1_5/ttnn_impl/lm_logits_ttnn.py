@@ -12,6 +12,8 @@ from typing import Iterator, Optional
 
 import torch
 
+from models.demos.ace_step_v1_5.ttnn_impl.lm_postprocess_tt_transformers import _device_key
+
 
 @contextlib.contextmanager
 def _strict_ttnn_no_fallback() -> Iterator[None]:
@@ -45,8 +47,7 @@ _CFG_TRACE_CACHE: dict[tuple[int, int, int], _CfgLogitsTraceState] = {}
 
 
 def _cfg_trace_key(device, k: int, cfg_scale: float) -> tuple[int, int, int]:
-    dev_id = int(getattr(device, "id", id(device)))
-    return (dev_id, int(k), int(round(float(cfg_scale) * 1000)))
+    return (_device_key(device), int(k), int(round(float(cfg_scale) * 1000)))
 
 
 def cfg_linear_combination_bf16(
@@ -70,7 +71,12 @@ def cfg_linear_combination_bf16(
     c = cond.detach().to(dtype=torch.bfloat16, device="cpu").contiguous()
     u = uncond.detach().to(dtype=torch.bfloat16, device="cpu").contiguous()
 
-    if not use_trace or not hasattr(ttnn, "begin_trace_capture") or not hasattr(ttnn, "clone"):
+    if (
+        not use_trace
+        or not hasattr(ttnn, "begin_trace_capture")
+        or not hasattr(ttnn, "execute_trace")
+        or not hasattr(ttnn, "clone")
+    ):
         with _strict_ttnn_no_fallback():
             tt_c = ttnn.from_torch(
                 c, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=mem
@@ -129,6 +135,7 @@ def cfg_linear_combination_bf16(
             st.out_buf = ttnn.add(st.uncond_buf, scaled, memory_config=mem)
             ttnn.end_trace_capture(device, tid, cq_id=0)
             st.trace_id = tid
+            ttnn.execute_trace(device, st.trace_id, cq_id=0, blocking=True)
             st.op_event = ttnn.record_event(device, 0)
             ttnn.synchronize_device(device)
             return ttnn.to_torch(st.out_buf, dtype=torch.float32).contiguous()

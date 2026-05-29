@@ -75,11 +75,12 @@ consumers (sampling, repetition-penalty, CFG combine) keep working unchanged.
 
 **PCC / accuracy**
 
-``ModelArgs`` loads ``models/tt_transformers/model_params/<HF_MODEL_BASENAME>/accuracy_decoder_config.json``
-when present (see ``acestep-5Hz-lm-1.7B/accuracy_decoder_config.json``). Without it, the generic
-accuracy fallback omits BF16 activations and 28-layer logits PCC vs HF lands near **0.91** on P150.
-With the Qwen2.5-derived config (HiFi4 attention + **BF16 MLP weights** + BF16 activations), prefill
-last-token PCC is typically **~0.984** on the same silicon.
+By default (:func:`~math_perf_env.ace_step_five_hz_lm_optimizations`), decoder weights use
+``bfloat8_b`` with **HiFi2** compute (``LMHead`` / RMSNorm stay on stock tt_transformers HiFi2).
+Set ``ACE_STEP_LM_BFLOAT8_WEIGHTS=0`` to restore ``accuracy_decoder_config.json`` (HiFi4 +
+**BF16** weights; prefill last-token PCC typically **~0.984** on P150). BFP8 weights trade some
+logits PCC for lower DRAM bandwidth and faster matmuls. Embedding / ``lm_head`` weights follow
+``dtype=ttnn.bfloat8_b`` from :func:`create_tt_model`.
 """
 
 from __future__ import annotations
@@ -93,6 +94,10 @@ import torch
 
 import ttnn
 from models.demos.ace_step_v1_5.ttnn_impl.lm_logits_debug import ace_step_debug_lm_logits_enabled
+from models.demos.ace_step_v1_5.ttnn_impl.math_perf_env import (
+    ace_step_five_hz_lm_bfloat8_weights_enabled,
+    ace_step_five_hz_lm_optimizations,
+)
 from models.tt_transformers.tt.common import (
     PagedAttentionConfig,
     copy_host_to_device,
@@ -194,6 +199,9 @@ class QwenModelTtTransformers:
         # ACE-Step components that read ``HF_MODEL`` aren't affected.
         with _hf_model_env(model_name):
             tt_dtype = dtype if dtype is not None else ttnn.bfloat8_b
+            lm_optimizations = (
+                ace_step_five_hz_lm_optimizations if ace_step_five_hz_lm_bfloat8_weights_enabled() else None
+            )
             (
                 self.model_args,
                 self.tt_model,
@@ -203,15 +211,12 @@ class QwenModelTtTransformers:
                 mesh_device=device,
                 instruct=True,  # ACE-Step LM uses chat-style prompts
                 max_batch_size=1,
-                optimizations=None,  # loads accuracy_decoder_config.json when present
+                optimizations=lm_optimizations,
                 max_seq_len=self.max_seq_len,
                 paged_attention_config=self._paged_cfg,
                 dtype=tt_dtype,
                 use_hf_rope=bool(use_hf_rope),
             )
-            # LMHead matmul defaults to HiFi2; nudge to HiFi4 for a small logits PCC gain on Blackhole.
-            if hasattr(self.tt_model, "lm_head") and hasattr(self.model_args, "compute_kernel_config_hifi4"):
-                self.tt_model.lm_head.compute_kernel_config = self.model_args.compute_kernel_config_hifi4
 
         # HF-compatible config view for the LM bridge (`AceStepFiveHzExperimentalTtnnCausalLM`
         # reads ``self.config.vocab_size``).
