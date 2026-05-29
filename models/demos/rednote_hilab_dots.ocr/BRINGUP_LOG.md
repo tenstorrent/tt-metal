@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** p150 (blackhole)
 **Started:** 2026-05-29T00:11:46Z
-**Updated:** 2026-05-29T00:58:10Z
+**Updated:** 2026-05-29T01:03:33Z
 
 ## Block Status
 
@@ -31,7 +31,7 @@
 | vision_mlp | optimization | pending | — | 0 |  |
 | vision_mlp | real_weights | pending | — | 0 |  |
 | vision_block | reference | done | 1.000000 | 0 | DotsVisionBlock: pre-norm RMSNorm -> fused-QKV 2D-RoPE bidirectional attn -> residual -> RMSNorm -> SwiGLU -> residual. PCC=1.0 vs HF eager. |
-| vision_block | ttnn | pending | — | 0 |  |
+| vision_block | ttnn | done | 0.999996 | 0 | Composite: imports TtVisionRMSNorm x2 + TtVisionAttention + TtVisionMLP; pre-norm residual. HiFi4+fp32_dest_acc bf16. Guard ok. |
 | vision_block | debug | n/a | — | 0 |  |
 | vision_block | optimization | pending | — | 0 |  |
 | vision_block | real_weights | pending | — | 0 |  |
@@ -94,7 +94,6 @@
 
 ## Recent Ticks
 
-- tick 1 (2026-05-29T00:15:04Z): architecture[all] — ok
 - tick 2 (2026-05-29T00:21:12Z): reference[vision_patch_embed,vision_rmsnorm,vision_attention,vision_mlp] — ok
 - tick 3 (2026-05-29T00:30:23Z): reference[vision_block,vision_patch_merger,vision_tower,embedding] — ok
 - tick 4 (2026-05-29T00:34:04Z): reference[rmsnorm,rope,attention,mlp] — ok
@@ -104,6 +103,7 @@
 - tick 8 (2026-05-29T00:52:15Z): device[vision_attention] — ok
 - tick 9 (2026-05-29T00:57:01Z): device[vision_mlp] — ok
 - tick 9 (2026-05-29T00:58:10Z): device[vision_mlp] — ok
+- tick 10 (2026-05-29T01:03:33Z): device[vision_block] — ok
 
 ## Host-Resident Exceptions
 

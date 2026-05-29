@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-29T00:11:46Z",
-  "updated_at": "2026-05-29T00:58:10Z",
+  "updated_at": "2026-05-29T01:03:33Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -202,8 +202,15 @@
         "pcc": 1.0
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "tt/vision_block.py",
+          "tests/test_tt_vision_block.py",
+          "tt/vision_block.traced_ops.json"
+        ],
+        "notes": "Composite: imports TtVisionRMSNorm x2 + TtVisionAttention + TtVisionMLP; pre-norm residual. HiFi4+fp32_dest_acc bf16. Guard ok.",
+        "pcc": 0.9999956292416614
       },
       "debug": {
         "status": "n/a",
@@ -708,6 +715,12 @@
       "tick": 9,
       "ts": "2026-05-29T00:58:10Z",
       "action": "device[vision_mlp]",
+      "result": "ok"
+    },
+    {
+      "tick": 10,
+      "ts": "2026-05-29T01:03:33Z",
+      "action": "device[vision_block]",
       "result": "ok"
     }
   ],

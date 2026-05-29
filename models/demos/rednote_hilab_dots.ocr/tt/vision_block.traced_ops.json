@@ -1,0 +1,13 @@
+[
+  "ttnn.rms_norm",
+  "ttnn.linear",
+  "ttnn.reshape",
+  "ttnn.neg",
+  "ttnn.concat",
+  "ttnn.mul",
+  "ttnn.add",
+  "ttnn.permute",
+  "ttnn.matmul",
+  "ttnn.softmax",
+  "ttnn.silu"
+]
