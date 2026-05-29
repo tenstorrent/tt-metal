@@ -28,6 +28,7 @@ struct RecvAsyncH2DParams {
     auto attributes() const {
         using ttsl::reflection::Attribute;
         std::vector<std::tuple<std::string, Attribute>> attrs;
+        TT_FATAL(h2d_socket != nullptr, "recv_async_h2d: H2DSocket pointer is null");
         attrs.emplace_back("h2d_config_buffer_address", h2d_socket->get_config_buffer_address());
         attrs.emplace_back("h2d_mode", static_cast<uint8_t>(h2d_socket->get_h2d_mode()));
         return attrs;

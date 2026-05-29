@@ -373,6 +373,26 @@ void py_module_types(nb::module_& mod) {
                     timeout_ms (int, optional): Timeout in milliseconds. Throws if not met within timeout.
             )doc")
         .def(
+            "discard_pending_pages",
+            &tt::tt_metal::distributed::D2HSocket::discard_pending_pages,
+            R"doc(
+                Discards any currently-available pages WITHOUT reading the data region.
+
+                Rebases the host's ``bytes_acked`` counter to the current ``bytes_sent``
+                value (and notifies the device), which is the correct operation when
+                the host wants to ignore any pending bytes -- e.g. before initiating a
+                sync handshake.
+
+                Unlike a sequence of ``read()`` calls, this does NOT touch the data
+                region (which on Wormhole/Blackhole is mapped through PCIe and may
+                contain undefined values from a prior device run or stale shmem
+                counters).
+
+                Returns:
+                    int: The number of pages that were discarded (0 if there was
+                    nothing pending).
+            )doc")
+        .def(
             "get_active_cores",
             &tt::tt_metal::distributed::D2HSocket::get_active_cores,
             R"doc(

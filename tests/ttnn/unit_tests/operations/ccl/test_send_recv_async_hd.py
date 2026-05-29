@@ -22,6 +22,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import skip_for_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -100,6 +101,7 @@ def _run_recv_async_h2d(
         )
 
 
+@skip_for_wormhole_b0("This test is for blackhole")
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.parametrize(
     "h2d_mode",
@@ -220,6 +222,7 @@ def _run_send_async_d2h(
         )
 
 
+@skip_for_wormhole_b0("This test is for blackhole")
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.parametrize(
     "page_size_bytes, num_pages, fifo_size_bytes, num_iterations",
@@ -352,6 +355,7 @@ def _run_recv_matmul_send_async(
         assert_with_pcc(torch_expected, result, pcc=0.99)
 
 
+@skip_for_wormhole_b0("This test is for blackhole")
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.parametrize(
     "h2d_mode",

@@ -6,7 +6,7 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <set>
+#include <unordered_map>
 #include <vector>
 
 #include <tt-metalium/buffer.hpp>
@@ -55,8 +55,7 @@ RecvAsyncH2DMeshWorkloadFactory::cached_mesh_workload_t RecvAsyncH2DMeshWorkload
 
     auto cached_program = create_at(operation_attributes, socket_device_coord, tensor_args, tensor_return_value);
     workload.add_program(ttnn::MeshCoordinateRange(socket_device_coord), std::move(cached_program.program));
-    shared_variables.emplace(
-        ttnn::MeshCoordinateRange(socket_device_coord), std::move(cached_program.shared_variables));
+    shared_variables.emplace(ttnn::MeshCoordinateRange(socket_device_coord), cached_program.shared_variables);
 
     return cached_mesh_workload_t{std::move(workload), std::move(shared_variables)};
 }
