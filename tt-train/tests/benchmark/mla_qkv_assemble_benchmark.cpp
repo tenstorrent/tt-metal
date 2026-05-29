@@ -11,33 +11,23 @@
 //   fused     — the single ttml::metal::mla_qkv_assemble_fw data-movement op
 //
 // This op is forward-only (backward lands in a follow-up), so only the forward
-// assemble is timed. Timed regions enqueue multiple steps and synchronize once
-// at the end to amortize dispatch latency.
-//
-// Environment variables:
-//   TTML_MLA_ASSEMBLE_BENCH_WARMUP   — warmup iterations  (default 5)
-//   TTML_MLA_ASSEMBLE_BENCH_MEASURE  — measured iterations (default 20)
-//   TTML_MLA_ASSEMBLE_BENCH_BATCHES  — comma-separated batch sizes (default 16,32)
-//   TTML_MLA_ASSEMBLE_BENCH_SEQS     — comma-separated sequence lengths (default 128,256,512)
-//   TTML_MLA_ASSEMBLE_BENCH_MODELS   — comma-separated model names to include
+// assemble is timed. Each measured sample enqueues several assembles and
+// synchronizes once at the end to amortize dispatch latency.
 // ============================================================================
 
 #include <benchmark/benchmark.h>
 #include <fmt/format.h>
 
-#include <algorithm>
 #include <chrono>
 #include <cstdint>
-#include <cstdlib>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <tt-metalium/distributed.hpp>
 #include <tuple>
-#include <utility>
 #include <vector>
 
 #include "autograd/auto_context.hpp"
+#include "benchmark_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
 #include "test_utils/random_data.hpp"
@@ -52,7 +42,6 @@ struct SweepConfig {
     std::vector<uint32_t> sequence_lengths = {128, 256, 512};
     uint32_t num_warmup = 5;
     uint32_t num_measure = 20;
-    std::vector<std::string> model_filter;
 };
 
 // MLA per-head geometry. All channel dims are multiples of TILE_WIDTH (32).
@@ -80,91 +69,8 @@ const std::vector<ModelShape>& all_models() {
     return models;
 }
 
-double reduction_pct(double baseline, double fused) {
-    if (baseline == 0.0) {
-        return 0.0;
-    }
-    return (baseline - fused) / baseline * 100.0;
-}
-
-double speedup_x(double baseline, double fused) {
-    if (fused == 0.0) {
-        return 0.0;
-    }
-    return baseline / fused;
-}
-
-std::string join_u32_csv(const std::vector<uint32_t>& values) {
-    std::string out;
-    for (size_t i = 0; i < values.size(); ++i) {
-        if (i > 0) {
-            out += ",";
-        }
-        out += std::to_string(values[i]);
-    }
-    return out;
-}
-
-std::vector<uint32_t> parse_u32_csv(const std::string& csv) {
-    std::vector<uint32_t> out;
-    std::stringstream ss(csv);
-    std::string token;
-    while (std::getline(ss, token, ',')) {
-        if (token.empty()) {
-            continue;
-        }
-        out.push_back(static_cast<uint32_t>(std::stoul(token)));
-    }
-    return out;
-}
-
-std::vector<std::string> parse_string_csv(const std::string& csv) {
-    std::vector<std::string> out;
-    std::stringstream ss(csv);
-    std::string token;
-    while (std::getline(ss, token, ',')) {
-        if (token.empty()) {
-            continue;
-        }
-        out.push_back(token);
-    }
-    return out;
-}
-
-bool model_is_enabled(const SweepConfig& cfg, const std::string& name) {
-    if (cfg.model_filter.empty()) {
-        return true;
-    }
-    return std::find(cfg.model_filter.begin(), cfg.model_filter.end(), name) != cfg.model_filter.end();
-}
-
-SweepConfig load_sweep_config_from_env() {
-    SweepConfig sweep_cfg{};
-    if (const char* env_warmup = std::getenv("TTML_MLA_ASSEMBLE_BENCH_WARMUP")) {
-        sweep_cfg.num_warmup = static_cast<uint32_t>(std::stoul(env_warmup));
-    }
-    if (const char* env_measure = std::getenv("TTML_MLA_ASSEMBLE_BENCH_MEASURE")) {
-        sweep_cfg.num_measure = static_cast<uint32_t>(std::stoul(env_measure));
-    }
-    if (const char* env_batches = std::getenv("TTML_MLA_ASSEMBLE_BENCH_BATCHES")) {
-        auto parsed = parse_u32_csv(env_batches);
-        if (!parsed.empty()) {
-            sweep_cfg.batch_sizes = std::move(parsed);
-        }
-    }
-    if (const char* env_seqs = std::getenv("TTML_MLA_ASSEMBLE_BENCH_SEQS")) {
-        auto parsed = parse_u32_csv(env_seqs);
-        if (!parsed.empty()) {
-            sweep_cfg.sequence_lengths = std::move(parsed);
-        }
-    }
-    if (const char* env_models = std::getenv("TTML_MLA_ASSEMBLE_BENCH_MODELS")) {
-        sweep_cfg.model_filter = parse_string_csv(env_models);
-    }
-    if (sweep_cfg.num_measure == 0U) {
-        throw std::invalid_argument("TTML_MLA_ASSEMBLE_BENCH_MEASURE must be greater than zero.");
-    }
-    return sweep_cfg;
+SweepConfig load_sweep_config() {
+    return SweepConfig{};
 }
 
 std::vector<BenchmarkCase> make_benchmark_cases(const SweepConfig& cfg) {
@@ -172,9 +78,6 @@ std::vector<BenchmarkCase> make_benchmark_cases(const SweepConfig& cfg) {
     const auto& models = all_models();
     cases.reserve(models.size() * cfg.batch_sizes.size() * cfg.sequence_lengths.size());
     for (uint32_t model_index = 0; model_index < models.size(); ++model_index) {
-        if (!model_is_enabled(cfg, models[model_index].name)) {
-            continue;
-        }
         for (const auto batch_size : cfg.batch_sizes) {
             for (const auto sequence_length : cfg.sequence_lengths) {
                 cases.push_back(BenchmarkCase{
@@ -290,8 +193,8 @@ void print_table(const std::vector<RowSummary>& rows) {
             row.composite_ms,
             row.fused_ms,
             saved_ms,
-            speedup_x(row.composite_ms, row.fused_ms),
-            reduction_pct(row.composite_ms, row.fused_ms));
+            ttml::benchmark_utils::speedup_x(row.composite_ms, row.fused_ms),
+            ttml::benchmark_utils::reduction_pct(row.composite_ms, row.fused_ms));
     }
 }
 
@@ -335,20 +238,15 @@ int main(int argc, char** argv) {
             return 1;
         }
 
-        g_sweep_cfg = load_sweep_config_from_env();
+        g_sweep_cfg = load_sweep_config();
         g_cases = make_benchmark_cases(g_sweep_cfg);
-        if (g_cases.empty()) {
-            throw std::invalid_argument("No MLA QKV assemble benchmark cases selected.");
-        }
 
         const tt::tt_metal::distributed::MeshShape mesh(1, 1);
         ttml::autograd::ctx().open_device(mesh);
 
         fmt::print("MLA QKV assemble op-level benchmark (composite vs fused, forward only)\n");
         fmt::print(
-            "preset models=deepseek-mla,nano-mla batches={} seq_lens={} warmup={} measure={}\n",
-            join_u32_csv(g_sweep_cfg.batch_sizes),
-            join_u32_csv(g_sweep_cfg.sequence_lengths),
+            "preset models=deepseek-mla,nano-mla batches=16,32 seq_lens=128,256,512 warmup={} measure={}\n",
             g_sweep_cfg.num_warmup,
             g_sweep_cfg.num_measure);
         fmt::print(
