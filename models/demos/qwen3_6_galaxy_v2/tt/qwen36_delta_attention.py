@@ -39,6 +39,13 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+
+# Prefill chunk kernel: use the qwen35-27b vendored kernel (clip-before-exp +
+# decay-offset normalization + HiFi2/fp32) instead of the shared experimental
+# one, which produces Inf on one Galaxy mesh row at T=4096 (bf16 rounding over
+# the 4096-token decay cumsum violates the g<=0 invariant -> exp overflow).
+# See the module docstring of qwen35_chunk_delta_rule_ops for details.
+from models.demos.qwen3_6_galaxy_v2.tt.qwen35_chunk_delta_rule_ops import chunk_gated_delta_rule_ttnn
 from models.demos.qwen3_6_galaxy_v2.tt.ttnn_delta_rule_ops_fp32 import (
     _fp32_compute_cfg_hifi4,
     recurrent_gated_delta_rule_ttnn_fp32,
@@ -48,7 +55,6 @@ from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops i
 )
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import (
     _recurrent_read_query_program_config,
-    chunk_gated_delta_rule_ttnn,
     l2_norm_ttnn,
 )
 
