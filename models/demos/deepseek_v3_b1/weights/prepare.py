@@ -369,15 +369,13 @@ _LM_HEAD_B_TILE = ttnn.Tile([32, 32])
 _LM_HEAD_A_TILE = ttnn.Tile([1, 32])
 _LM_HEAD_N_PER_CORE = 160
 _LM_HEAD_MCAST_CORE = ttnn.CoreCoord(10, 9)
+_LM_HEAD_MCAST_CORE_GRID = ttnn.CoreRangeSet([ttnn.CoreRange(_LM_HEAD_MCAST_CORE, _LM_HEAD_MCAST_CORE)])
 
-
-def _norm_mem_config(mcast_core: ttnn.CoreCoord = _LM_HEAD_MCAST_CORE) -> ttnn.MemoryConfig:
-    mcast_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(mcast_core, mcast_core)])
-    return ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(mcast_core_grid, (1, _LM_HEAD_K), ttnn.ShardOrientation.ROW_MAJOR),
-    )
+_NORM_MEM_CONFIG = ttnn.MemoryConfig(
+    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+    ttnn.BufferType.L1,
+    ttnn.ShardSpec(_LM_HEAD_MCAST_CORE_GRID, (1, _LM_HEAD_K), ttnn.ShardOrientation.ROW_MAJOR),
+)
 
 
 def _gate_bias_target(layer_idx: int) -> TensorTarget:
@@ -425,24 +423,22 @@ _LM_HEAD_TARGET = _lm_head_target("lm_head")
 _LM_HEAD_FOLDED_NORM_TARGET = _lm_head_target("lm_head_folded_norm")
 _LM_HEAD_FOLDED_SPEC_NORM_TARGET = _lm_head_target("lm_head_folded_shared_head_norm")
 
-
-def _final_norm_target(mcast_core: ttnn.CoreCoord = _LM_HEAD_MCAST_CORE) -> TensorTarget:
-    return TensorTarget(
-        name="final_norm",
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=_norm_mem_config(mcast_core),
-        tile_shape=(1, 32),
-        transform_version=3,
-    )
+_FINAL_NORM_TARGET = TensorTarget(
+    name="final_norm",
+    dtype=ttnn.bfloat16,
+    layout=ttnn.TILE_LAYOUT,
+    memory_config=_NORM_MEM_CONFIG,
+    tile_shape=(1, 32),
+    transform_version=3,
+)
 
 
-def _mtp_norm_target(name: str, mcast_core: ttnn.CoreCoord = _LM_HEAD_MCAST_CORE) -> TensorTarget:
+def _mtp_norm_target(name: str) -> TensorTarget:
     return TensorTarget(
         name=name,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        memory_config=_norm_mem_config(mcast_core),
+        memory_config=_NORM_MEM_CONFIG,
         tile_shape=(1, 32),
         transform_version=3,
     )
@@ -1750,7 +1746,6 @@ def prepare_lm_head_weights(
     state_dict: dict[str, torch.Tensor],
     device,
     *,
-    mcast_core: ttnn.CoreCoord = _LM_HEAD_MCAST_CORE,
     move_to_device: bool = False,
     cache_config: CacheConfig | None = None,
 ) -> DeepSeekV3LMHeadWeights:
@@ -1759,13 +1754,7 @@ def prepare_lm_head_weights(
     device must be the mesh device (e.g. 4x2 submesh). The LM head weight matrix is sharded
     along the vocabulary dimension (TP = mesh size). Per-device layout matches the LM head
     sampling op: WIDTH_SHARDED in L1 across 101 matmul cores with shard shape (7168, N_per_core).
-
-    ``mcast_core`` is accepted for API compatibility with callers that previously controlled the
-    final-norm shard placement. On this revision the final norm is folded into the lm_head matrix
-    here, so the parameter has no direct effect on the returned tensor; pass it through anyway so
-    that any downstream MTP/spec preparation paths inherit the same value.
     """
-    del mcast_core  # currently no-op on main; preserved for caller compatibility
     if cache_config is None:
         cache_config = CacheConfig.ephemeral(move_to_device=move_to_device)
     logger.info("Preparing LM head weights...")
