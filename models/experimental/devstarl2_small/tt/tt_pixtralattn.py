@@ -116,6 +116,17 @@ class TtMistralImageAttention(LightweightModule):
 
         self.compute_kernel_config_hifi2 = configuration.compute_kernel_config_hifi2
         self.compute_kernel_config_sdpa = configuration.compute_kernel_config_sdpa
+
+        # Optimised fused-QKV matmul kernel config (recommendation B). HiFi2 matches the
+        # BF16 activation precision; fp32_dest_acc_en=False keeps the full 8-tile DST so the
+        # output subblock can be maximised; packer_l1_acc accumulates the K-blocks in L1.
+        self.qkv_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+            dst_full_sync_en=False,
+        )
         self.configuration = configuration
 
         self.model_config = configuration.get_model_config()
@@ -162,14 +173,15 @@ class TtMistralImageAttention(LightweightModule):
                 ).transpose(-1, -2)
             return packed.transpose(0, 1).reshape(self.hidden_size, -1)
 
-        wqkv_cache = None if weight_cache_path is None else weight_cache_path / f"{state_dict_prefix}wqkv.weight"
+        # ".bfp8" tag keeps the BFP8 cache distinct from any pre-existing BF16 wqkv cache (avoids a stale reload).
+        wqkv_cache = None if weight_cache_path is None else weight_cache_path / f"{state_dict_prefix}wqkv.weight.bfp8"
         wo_cache = None if weight_cache_path is None else weight_cache_path / f"{state_dict_prefix}wo.weight"
 
         self.wqkv = ttnn.as_tensor(
             pack_qkv_for_sharding(wq_padded, wk_padded, wv_padded),
             device=self.mesh_device,
             mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
-            dtype=self.dtype,
+            dtype=ttnn.bfloat8_b,  # recommendation C: BFP8 weights halve the DRAM-bound QKV weight stream
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
             cache_file_name=wqkv_cache,
@@ -217,6 +229,47 @@ class TtMistralImageAttention(LightweightModule):
         ttnn.deallocate(attn_output_1QSD)
         return out
 
+    @staticmethod
+    def _best_out_subblock(per_core_M: int, per_core_N: int, max_tiles: int = 8) -> tuple[int, int]:
+        """Largest (h, w) dividing the per-core block with h*w <= DST half (8 tiles, fp32_acc off)."""
+        best_h, best_w = 1, 1
+        for h in range(1, per_core_M + 1):
+            if per_core_M % h:
+                continue
+            for w in range(1, per_core_N + 1):
+                if per_core_N % w:
+                    continue
+                if h * w <= max_tiles and h * w > best_h * best_w:
+                    best_h, best_w = h, w
+        return best_h, best_w
+
+    def _qkv_program_config(
+        self, seq_len: int, max_seq: int, n: int
+    ) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
+        m = min(seq_len, max_seq)
+        m_tiles = (m + 31) // 32
+        n_tiles = (n + 31) // 32
+        k_tiles = self.hidden_size // 32
+        dev_x, dev_y = int(self.grid_size.x), int(self.grid_size.y)
+        # Pick the largest grid dim that evenly divides the tile count (no wasted/padded cores).
+        grid_x = max(d for d in range(1, min(n_tiles, dev_x) + 1) if n_tiles % d == 0)
+        grid_y = max(d for d in range(1, min(m_tiles, dev_y) + 1) if m_tiles % d == 0)
+        per_core_M = m_tiles // grid_y
+        per_core_N = n_tiles // grid_x
+        in0_block_w = next(d for d in (8, 4, 2, 1) if k_tiles % d == 0)
+        out_subblock_h, out_subblock_w = self._best_out_subblock(per_core_M, per_core_N)
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(grid_x, grid_y),
+            in0_block_w=in0_block_w,
+            out_subblock_h=out_subblock_h,
+            out_subblock_w=out_subblock_w,
+            per_core_M=per_core_M,
+            per_core_N=per_core_N,
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=seq_len <= max_seq,
+        )
+
     def _linear_qkv_seq_chunked(self, x_11SH, seq_len: int, max_mm_seq_len: int) -> ttnn.Tensor:
         """Fused QKV ``ttnn.linear`` over the sequence axis; chunk so matmul ``m`` fits L1 CB budget."""
         x_11SH, seq_len, original_seq_len = pad_seq_to_chunk_multiple(x_11SH, seq_len, max_mm_seq_len)
@@ -228,8 +281,8 @@ class TtMistralImageAttention(LightweightModule):
                 self.wqkv,
                 dtype=ttnn.bfloat16,
                 memory_config=qkv_mem_cfg,
-                compute_kernel_config=self.compute_kernel_config_hifi2,
-                program_config=self.model_config["IMAGE_ATTN_QKV_PROGCFG"](seq_len, seq_len),
+                compute_kernel_config=self.qkv_compute_kernel_config,
+                program_config=self._qkv_program_config(seq_len, seq_len, qkv_width),
             )
             return trim_seq_dim2(out, original_seq_len)
 
@@ -239,8 +292,8 @@ class TtMistralImageAttention(LightweightModule):
             self.wqkv,
             dtype=ttnn.bfloat16,
             memory_config=qkv_mem_cfg,
-            compute_kernel_config=self.compute_kernel_config_hifi2,
-            program_config=self.model_config["IMAGE_ATTN_QKV_PROGCFG"](seq_len, max_mm_seq_len),
+            compute_kernel_config=self.qkv_compute_kernel_config,
+            program_config=self._qkv_program_config(seq_len, max_mm_seq_len, qkv_width),
         )
         out = ttnn.reshape(out, [1, 1, seq_len, -1])
         return trim_seq_dim2(out, original_seq_len)
