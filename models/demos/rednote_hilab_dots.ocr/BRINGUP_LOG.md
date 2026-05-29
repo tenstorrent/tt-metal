@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** p150 (blackhole)
 **Started:** 2026-05-29T00:11:46Z
-**Updated:** 2026-05-29T02:07:56Z
+**Updated:** 2026-05-29T02:14:00Z
 
 ## Block Status
 
@@ -28,7 +28,7 @@
 | vision_mlp | reference | done | 1.000000 | 0 | reference vs HF (eager) module, PCC=1.0; golden saved |
 | vision_mlp | ttnn | done | 0.999986 | 0 | fused gate(fc1)/up(fc3) ttnn.linear -> ttnn.silu(gate)*up -> down(fc2) ttnn.linear. No bias. HiFi4+fp32_dest_acc bf16 DRAM TILE. PCC=0.9999855 vs golden. Guard ok. |
 | vision_mlp | debug | n/a | — | 0 |  |
-| vision_mlp | optimization | pending | — | 0 |  |
+| vision_mlp | optimization | done | 0.999986 | 0 | Tracy captured under --traced (metal trace replay session) at production shapes seq=256 dim=1536 intermediate=4224. Top hotspot MatmulDeviceOperation 74.5% (two linears, matmul-bound, at ceiling). Optimization budget was the gate/up split + SwiGLU elementwise chain (Slice+silu+mul=25.5%) landing DRAM-interleaved. Fix: replaced python-getitem split with ttnn.slice+L1_MEMORY_CONFIG and pinned silu/mul outputs to L1. Block kernel time 293.81->253.26us (-13.8%). Slice 30.82->18.32, silu 18.68->10.03, mul 25.52->8.04us; activation chain 75.0->36.4us (-51%), now INTERLEAVED/L1. Matmuls unchanged ~217us (real floor). PCC 0.9999855 held. |
 | vision_mlp | real_weights | pending | — | 0 |  |
 | vision_block | reference | done | 1.000000 | 0 | DotsVisionBlock: pre-norm RMSNorm -> fused-QKV 2D-RoPE bidirectional attn -> residual -> RMSNorm -> SwiGLU -> residual. PCC=1.0 vs HF eager. |
 | vision_block | ttnn | done | 0.999996 | 0 | First composite: pre-norm residual h=h+attn(norm1(h)); h=h+mlp(norm2(h)). Reuses TtVisionRMSNorm/Attention/MLP leaves by file-path import. HiFi4+fp32_dest_acc, bf16. Guard ok. |
@@ -94,7 +94,6 @@
 
 ## Recent Ticks
 
-- tick 14 (2026-05-29T01:21:18Z): device[rope] — ok
 - tick 15 (2026-05-29T01:27:01Z): device[attention] — ok
 - tick 16 (2026-05-29T01:31:57Z): device[mlp] — ok
 - tick 17 (2026-05-29T01:37:32Z): device[decoder_layer] — ok
@@ -104,6 +103,7 @@
 - tick 21 (2026-05-29T01:54:57Z): device[vision_tower] — ok
 - tick 22 (2026-05-29T02:01:02Z): device[vision_rmsnorm] — ok
 - tick 23 (2026-05-29T02:07:56Z): device[vision_attention] — ok
+- tick 24 (2026-05-29T02:14:00Z): device[vision_mlp] — ok
 
 ## Host-Resident Exceptions
 
