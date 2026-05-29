@@ -29,8 +29,11 @@ _TEST_PATH = "models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py"
 @pytest.mark.parametrize(
     "command, expected_device_perf_ns_per_iteration, subdir, model_name, num_iterations, batch_size, margin, comments",
     [
+        # FABRIC_1D baselines — tightened with `and not fabric2d-` to exclude the new
+        # 2D parametrize ids in test_prefill_block_loop.py (substring `mesh-8x4`/`mesh-2x4`
+        # would otherwise match both 1D and 2D variants).
         (
-            f"pytest {_TEST_PATH} -k 'mesh-8x4 and layer0 and gate_device and no_ref and isl_25k'",
+            f"pytest {_TEST_PATH} -k 'mesh-8x4 and layer0 and gate_device and no_ref and isl_25k and not fabric2d-'",
             20_680_586,
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_8x4_layer0_dense",
@@ -40,7 +43,7 @@ _TEST_PATH = "models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py"
             "glx_8x4_layer0_dense_real_weights",
         ),
         (
-            f"pytest {_TEST_PATH} -k 'mesh-8x4 and layer3 and gate_device and no_ref and isl_25k'",
+            f"pytest {_TEST_PATH} -k 'mesh-8x4 and layer3 and gate_device and no_ref and isl_25k and not fabric2d-'",
             130_873_080,
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_8x4_layer3_moe",
@@ -59,11 +62,48 @@ _TEST_PATH = "models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py"
             0.03,
             "2x4_layer3_moe_real_weights_2link",
         ),
+        # FABRIC_2D variants — paired with the 1D entries above for direct comparison.
+        # Initial expected_device_perf_ns_per_iteration is set to the 1D baseline with a
+        # wide 0.5 margin so the first run won't fail; the goal is to read the measured
+        # kernel duration from the run output and tighten margins after calibration.
+        (
+            f"pytest {_TEST_PATH} -k 'fabric2d-mesh-8x4 and layer0 and gate_device and no_ref and isl_25k'",
+            20_680_586,
+            "deepseek_v3_prefill_block",
+            "deepseek_v3_prefill_block_8x4_layer0_dense_fabric2d",
+            1,
+            1,
+            0.5,
+            "glx_8x4_layer0_dense_real_weights_fabric2d",
+        ),
+        (
+            f"pytest {_TEST_PATH} -k 'fabric2d-mesh-8x4 and layer3 and gate_device and no_ref and isl_25k'",
+            130_873_080,
+            "deepseek_v3_prefill_block",
+            "deepseek_v3_prefill_block_8x4_layer3_moe_fabric2d",
+            1,
+            1,
+            0.5,
+            "glx_8x4_layer3_moe_real_weights_fabric2d",
+        ),
+        (
+            f"pytest {_TEST_PATH} -k 'fabric2d-mesh-2x4 and layer3 and gate_device and no_ref and isl_6k4'",
+            107_554_551,
+            "deepseek_v3_prefill_block",
+            "deepseek_v3_prefill_block_2x4_layer3_moe_fabric2d",
+            1,
+            1,
+            0.5,
+            "2x4_layer3_moe_real_weights_fabric2d",
+        ),
     ],
     ids=[
         "block_8x4_layer0_dense",
         "block_8x4_layer3_moe",
         "block_2x4_layer3_moe",
+        "block_8x4_layer0_dense_fabric2d",
+        "block_8x4_layer3_moe_fabric2d",
+        "block_2x4_layer3_moe_fabric2d",
     ],
 )
 @pytest.mark.timeout(0)

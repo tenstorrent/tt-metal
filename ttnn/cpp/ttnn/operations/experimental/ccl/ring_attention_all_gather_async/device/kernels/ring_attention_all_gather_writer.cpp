@@ -6,6 +6,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
+#include "tt_metal/fabric/hw/inc/fabric_routing_mode.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
@@ -14,6 +15,23 @@
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include <cstdint>
 #include <utility>
+
+// FABRIC_2D vs 1D switch:
+// Under FABRIC_2D the kernel-injected ROUTING_MODE define contains ROUTING_MODE_2D
+// (see `tt_metal/fabric/fabric_context.cpp:compute_routing_mode`, fed in via
+// `CreateKernel`'s defines map in `tt_metal/impl/host_api/tt_metal.cpp`).
+// The 1D `fabric_set_unicast_route<false>(hdr, 1)` form means "1 hop" via the
+// LowLatencyPacketHeader overload (template `<target_as_dev=false>` selects the by-hops
+// decoder). Under 2D the same call resolves to the HybridMeshPacketHeader overload, which
+// interprets `1` as literal dst_dev_id with dst_mesh_id defaulting to MAX_NUM_MESHES — wrong.
+// Use the 3-arg form with explicit dst_chip_id + dst_mesh_id (passed in as runtime args
+// from the program factory) under 2D. Same pattern as writer_dispatch.cpp / writer_combine.cpp;
+// macro name is per-translation-unit.
+#if defined(ROUTING_MODE) && ((ROUTING_MODE & ROUTING_MODE_2D) != 0)
+#define RING_AG_FABRIC_2D 1
+#else
+#define RING_AG_FABRIC_2D 0
+#endif
 
 using address_t = uint32_t;
 using ttnn::ccl::Topology;
@@ -76,6 +94,11 @@ void kernel_main() {
     auto output_addrgens = make_abstract_tensor_accessor_wrappers(outputs_tuple);
     size_t arg_for_fab = arg_idx;
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
+    // FABRIC_2D: destination chip+mesh for this writer's fabric direction. Pushed by
+    // the program factory unconditionally (both under 1D and 2D) — under 1D the kernel
+    // ignores these. See program_factory writer_{forward,backward}_extra_args.
+    const uint16_t fabric_dst_chip_id = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_for_fab++));
+    const uint16_t fabric_dst_mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_for_fab++));
     /* Args for overlapped all gather */
     OpSignaler op_signaler_sender;
 
@@ -110,8 +133,7 @@ void kernel_main() {
         fabric_connection.is_logically_connected() ? (direction == 1 ? &fabric_connection.get_backward_connection()
                                                                      : &fabric_connection.get_forward_connection())
                                                    : nullptr;
-    constexpr uint32_t num_targets_in_direction =
-        direction == 1 ? num_targets_backward_direction : num_targets_forward_direction;
+    // num_targets_in_direction was declared above (next to the pkt_hdr pre-population guard).
 
     uint32_t slice_writes = 0;
 

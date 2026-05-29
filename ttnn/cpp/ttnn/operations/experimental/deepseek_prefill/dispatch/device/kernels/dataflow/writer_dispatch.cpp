@@ -6,9 +6,22 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
 #include "api/debug/assert.h"
+#include "tt_metal/fabric/hw/inc/fabric_routing_mode.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
+
+// FABRIC_2D: under 2D fabric the 1-arg fabric_set_unicast_route<false>(hdr, distance) form
+// resolves to a HybridMeshPacketHeader overload that interprets `distance` as a literal
+// dst_dev_id and uses an invalid dst_mesh_id default. Switch to the 3-arg form with explicit
+// dest_chip_ids[expert_chip] / dest_mesh_ids[expert_chip] (populated by the program factory
+// via the DEST_CHIP_ID / DEST_MESH_ID kernel defines). Same pattern as the ring AG fix
+// in ring_attention_all_gather_writer.cpp.
+#if defined(ROUTING_MODE) && ((ROUTING_MODE & ROUTING_MODE_2D) != 0)
+#define DISPATCH_FABRIC_2D 1
+#else
+#define DISPATCH_FABRIC_2D 0
+#endif
 
 #define ENABLE_DISPATCH_DEBUG 0
 
@@ -181,6 +194,11 @@ void kernel_main() {
         }
         uint32_t distance = route_info[1];
         uint32_t page_idx = route_info[2];
+#if DISPATCH_FABRIC_2D
+        // FABRIC_2D: reader stashes expert_chip here so we can index dest_chip_ids/dest_mesh_ids.
+        // Read before cb_pop_front since route_info becomes invalid afterward.
+        uint32_t dst_chip_device_id = route_info[3];
+#endif
         cb_pop_front(cb_route_info_id, 1);
 
         cb_wait_front(cb_payload_for_writer_id, 1);
@@ -191,11 +209,27 @@ void kernel_main() {
         DPRINT_DISPATCH("Fabric send: route={} distance={} page_idx={}\n", route, distance, page_idx);
 
 #ifdef DEST_CHIP_ID
+        // FABRIC_2D: recompute the EDM direction from the destination (mirrors
+        // moe_utils.hpp:fabric_send_chip_unicast_noc_unicast_semaphore_only). The
+        // reader's 1D-style route_info[0] doesn't necessarily match the 2D physical
+        // EDM index, and using it sends the packet down the wrong ETH connection.
+#if DISPATCH_FABRIC_2D
+        const uint32_t fabric_route = static_cast<uint32_t>(
+            get_next_hop_router_direction(dest_mesh_ids[dst_chip_device_id], dest_chip_ids[dst_chip_device_id]));
+#else
+        const uint32_t fabric_route = route;
+#endif
+
         // Send payload
+#if DISPATCH_FABRIC_2D
+        fabric_set_unicast_route<false>(
+            unicast_packet_header, dest_chip_ids[dst_chip_device_id], dest_mesh_ids[dst_chip_device_id]);
+#else
         fabric_set_unicast_route<false>((volatile tt_l1_ptr LowLatencyPacketHeader*)unicast_packet_header, distance);
+#endif
         fabric_send_noc_unicast<fabric_max_packet_size>(
             output_addr_gen,
-            fabric_connections[route],
+            fabric_connections[fabric_route],
             unicast_packet_header,
             payload_addr,
             page_idx,
@@ -203,10 +237,15 @@ void kernel_main() {
             l1_alignment);
 
         // Send metadata
+#if DISPATCH_FABRIC_2D
+        fabric_set_unicast_route<false>(
+            unicast_packet_header, dest_chip_ids[dst_chip_device_id], dest_mesh_ids[dst_chip_device_id]);
+#else
         fabric_set_unicast_route<false>((volatile tt_l1_ptr LowLatencyPacketHeader*)unicast_packet_header, distance);
+#endif
         fabric_send_noc_unicast<fabric_max_packet_size>(
             metadata_addr_gen,
-            fabric_connections[route],
+            fabric_connections[fabric_route],
             unicast_packet_header,
             metadata_addr,
             page_idx,

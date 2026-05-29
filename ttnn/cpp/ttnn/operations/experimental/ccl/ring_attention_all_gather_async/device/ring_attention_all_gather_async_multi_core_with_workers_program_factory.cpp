@@ -504,9 +504,18 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         // Fabric/signaler helpers expect std::vector<uint32_t>&; collect their args separately,
         // then merge so any BufferBinding entries above are preserved.
         std::vector<uint32_t> writer_forward_extra_args;
+        // FABRIC_2D: under 2D fabric, the writer kernel needs the destination chip's
+        // (chip_id, mesh_id) to set the route on its semaphore-inc packet (the 1D 2-arg
+        // `fabric_set_unicast_route(hdr, 1)` form means "1 hop" under 1D but "dst_dev_id=1"
+        // under 2D — wrong). The forward writer uses the backward EDM; its destination
+        // is the backward neighbor.
+        uint32_t fabric_dst_chip_id = 0;
+        uint32_t fabric_dst_mesh_id = 0;
         if (backward_device_coord.has_value()) {
             const auto target_fabric_node_id = mesh_device->get_fabric_node_id(target_device_coord);
             const auto backward_fabric_node_id = mesh_device->get_fabric_node_id(backward_device_coord.value());
+            fabric_dst_chip_id = backward_fabric_node_id.chip_id;
+            fabric_dst_mesh_id = backward_fabric_node_id.mesh_id.get();
             tt::tt_fabric::append_fabric_connection_rt_args(
                 target_fabric_node_id,
                 backward_fabric_node_id,
@@ -515,6 +524,9 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
                 sender_worker_cores[(link * 2) + 1],
                 writer_forward_extra_args);
         }
+        // Always push the 2D-fabric destination args; kernel ignores them under 1D.
+        writer_forward_extra_args.push_back(fabric_dst_chip_id);
+        writer_forward_extra_args.push_back(fabric_dst_mesh_id);
         if (fuse_op) {
             fused_op_signaler_sender_workers->push_all_gather_fused_op_rt_args(
                 writer_forward_extra_args, num_links, link, 1);
@@ -537,9 +549,15 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         }
         writer_backward_rt_args.push_back(static_cast<uint32_t>(forward_device_coord.has_value()));
         std::vector<uint32_t> writer_backward_extra_args;
+        // FABRIC_2D: backward writer uses the forward EDM, so its destination is the
+        // forward neighbor. See note in the forward-writer block above.
+        uint32_t fabric_dst_chip_id_bw = 0;
+        uint32_t fabric_dst_mesh_id_bw = 0;
         if (forward_device_coord.has_value()) {
             const auto target_fabric_node_id = mesh_device->get_fabric_node_id(target_device_coord);
             const auto forward_fabric_node_id = mesh_device->get_fabric_node_id(forward_device_coord.value());
+            fabric_dst_chip_id_bw = forward_fabric_node_id.chip_id;
+            fabric_dst_mesh_id_bw = forward_fabric_node_id.mesh_id.get();
             tt::tt_fabric::append_fabric_connection_rt_args(
                 target_fabric_node_id,
                 forward_fabric_node_id,
@@ -550,6 +568,13 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         }
         writer_backward_rt_args.append(writer_backward_extra_args);
         writer_backward_rt_args.push_back(0u);
+        // FABRIC_2D destination args must come AFTER both fabric_connection flags so
+        // FabricConnectionManager::build_from_args reads forward_flag, forward_args,
+        // backward_flag, backward_args in the right order. Pushing before backward_flag
+        // (the 0u above) caused the kernel to read fabric_dst_chip_id as backward_flag,
+        // breaking the fabric_connection on all interior chips.
+        writer_backward_rt_args.push_back(fabric_dst_chip_id_bw);
+        writer_backward_rt_args.push_back(fabric_dst_mesh_id_bw);
         if (fuse_op) {
             std::vector<uint32_t> writer_backward_signaler_args;
             fused_op_signaler_sender_workers->push_all_gather_fused_op_rt_args(writer_backward_signaler_args, 1, 0, 0);
