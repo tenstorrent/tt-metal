@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** p150 (blackhole)
 **Started:** 2026-05-29T00:11:46Z
-**Updated:** 2026-05-29T00:45:55Z
+**Updated:** 2026-05-29T00:52:15Z
 
 ## Block Status
 
@@ -21,7 +21,7 @@
 | vision_rmsnorm | optimization | pending | — | 0 |  |
 | vision_rmsnorm | real_weights | pending | — | 0 |  |
 | vision_attention | reference | done | 1.000000 | 0 | reference vs HF (eager) module, PCC=1.0; golden saved |
-| vision_attention | ttnn | pending | — | 0 |  |
+| vision_attention | ttnn | done | 0.999988 | 0 | manual SDPA chain (qkv linear -> nlp_create_qkv_heads -> 2D RoPE -> matmul+softmax+matmul w/ block-diagonal additive mask -> nlp_concat_heads -> proj). HiFi4+fp32_dest_acc, bf16. PCC=0.999988 vs golden. Guard ok. |
 | vision_attention | debug | n/a | — | 0 |  |
 | vision_attention | optimization | pending | — | 0 |  |
 | vision_attention | real_weights | pending | — | 0 |  |
@@ -100,6 +100,8 @@
 - tick 4 (2026-05-29T00:34:04Z): reference[rmsnorm,rope,attention,mlp] — ok
 - tick 5 (2026-05-29T00:38:13Z): reference[decoder_layer,lm_head,language_model] — ok
 - tick 6 (2026-05-29T00:45:55Z): device[vision_rmsnorm] — ok
+- tick 7 (2026-05-29T00:52:05Z): device[vision_attention] — ok
+- tick 8 (2026-05-29T00:52:15Z): device[vision_attention] — ok
 
 ## Host-Resident Exceptions
 

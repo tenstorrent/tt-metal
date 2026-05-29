@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-29T00:11:46Z",
-  "updated_at": "2026-05-29T00:45:55Z",
+  "updated_at": "2026-05-29T00:52:15Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -111,8 +111,15 @@
         "pcc": 1.0
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/vision_attention.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_tt_vision_attention.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/vision_attention.traced_ops.json"
+        ],
+        "notes": "manual SDPA chain (qkv linear -> nlp_create_qkv_heads -> 2D RoPE -> matmul+softmax+matmul w/ block-diagonal additive mask -> nlp_concat_heads -> proj). HiFi4+fp32_dest_acc, bf16. PCC=0.999988 vs golden. Guard ok.",
+        "pcc": 0.999988498926913
       },
       "debug": {
         "status": "n/a",
@@ -670,6 +677,18 @@
       "tick": 6,
       "ts": "2026-05-29T00:45:55Z",
       "action": "device[vision_rmsnorm]",
+      "result": "ok"
+    },
+    {
+      "tick": 7,
+      "ts": "2026-05-29T00:52:05Z",
+      "action": "device[vision_attention]",
+      "result": "ok"
+    },
+    {
+      "tick": 8,
+      "ts": "2026-05-29T00:52:15Z",
+      "action": "device[vision_attention]",
       "result": "ok"
     }
   ],
