@@ -116,12 +116,21 @@ blackhole:
   - tests/ttnn/unit_tests/operations/pool/test_global_avg_pool2d.py
   - tests/ttnn/unit_tests/operations/reduce/test_reduction_min.py
   - tests/ttnn/unit_tests/operations/sdpa/test_sdpa_prefill.py
+  - tests/ttnn/unit_tests/operations/sdpa/test_bounded_sliding_kv_cache.py
   - tests/ttnn/unit_tests/operations/transformers/test_paged_cache_flexible_geometry.py
   - tests/ttnn/unit_tests/operations/transformers/test_paged_fused_update_cache.py
 
   # ZEROACC failures
   # https://github.com/tenstorrent/ttsim-private/issues/326
   - tests/ttnn/unit_tests/operations/eltwise/test_broadcast_to.py
+
+  # BH fast-untilize strided rows program packer channel-1 output-address
+  # registers (cfg14/cfg17). Mainline ttsim does not support that BH packer
+  # behavior yet, so these tests fail with:
+  #   UnimplementedFunctionality: tensix_cfg_wr32: reg=14
+  # Tracking: https://github.com/tenstorrent/ttsim-private/pull/379
+  - tests/ttnn/unit_tests/base_functionality/test_untilize_bfloat8_b.py
+  - tests/ttnn/unit_tests/operations/data_movement/test_untilize.py::test_untilize_single_core_interleaved_to_interleaved
 
   # Numeric mismatches, likely caused by issue #41163
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_uint16.py

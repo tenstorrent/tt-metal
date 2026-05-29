@@ -871,30 +871,31 @@ static tt::tt_metal::ProgramDescriptor pool2d_multi_core_sharded_with_halo_v2_im
         pre_tilize_cb_id,               // 13
         is_output_tiled,                // 14
         is_output_block_format,         // 15
+        0,                              // 16: force_max_tiles_per_reduction_4 (off for pool2d)
         // MPWI-only args start here (for compute_mpwi.cpp, not used by compute_pool_2d.cpp)
-        in_idx_cb_id,                           // 16
-        pack_tmp_cb_id,                         // 17
-        pack_idx_tmp_cb_id,                     // 18
-        right_inc_cb_id,                        // 19
-        down_left_wrap_inc_cb_id,               // 20
-        up_left_wrap_inc_cb_id,                 // 21
-        out_idx_cb_id,                          // 22
-        stride_h,                               // 23
-        stride_w,                               // 24
-        in_h_padded,                            // 25
-        in_w_padded,                            // 26
-        eff_kernel_h,                           // 27
-        eff_kernel_w,                           // 28
-        pad_l,                                  // 29
-        intra_kernel_right_inc_cb_id,           // 30
-        intra_kernel_down_left_wrap_inc_cb_id,  // 31
-        compute_tmp_idx_cb_id,                  // 32
-        clear_value_cb_id,                      // 33
-        kernel_h,                               // 34
-        kernel_w,                               // 35
-        static_cast<uint32_t>(indexes_32_bit),  // 36
+        in_idx_cb_id,                           // 17
+        pack_tmp_cb_id,                         // 18
+        pack_idx_tmp_cb_id,                     // 19
+        right_inc_cb_id,                        // 20
+        down_left_wrap_inc_cb_id,               // 21
+        up_left_wrap_inc_cb_id,                 // 22
+        out_idx_cb_id,                          // 23
+        stride_h,                               // 24
+        stride_w,                               // 25
+        in_h_padded,                            // 26
+        in_w_padded,                            // 27
+        eff_kernel_h,                           // 28
+        eff_kernel_w,                           // 29
+        pad_l,                                  // 30
+        intra_kernel_right_inc_cb_id,           // 31
+        intra_kernel_down_left_wrap_inc_cb_id,  // 32
+        compute_tmp_idx_cb_id,                  // 33
+        clear_value_cb_id,                      // 34
+        kernel_h,                               // 35
+        kernel_w,                               // 36
+        static_cast<uint32_t>(indexes_32_bit),  // 37
         // compute_pool_2d.cpp-only arg (ignored by compute_mpwi.cpp)
-        fast_tilize_cb_id  // 37 - consumer-view alias of pre_tilize_cb_id (full-tile face_geometry)
+        fast_tilize_cb_id  // 38 - consumer-view alias of pre_tilize_cb_id (full-tile face_geometry)
     };
 
     // Get device arch for compute kernel config initialization

@@ -572,11 +572,13 @@ std::vector<KernelSpecName> ProgramImpl::get_registered_kernel_names() const {
     return names;
 }
 
-void ProgramImpl::register_tensor_parameter(const std::string& name, const TensorSpec& spec) {
+void ProgramImpl::register_tensor_parameter(
+    const std::string& name, const TensorSpec& spec, bool dynamic_tensor_shape, bool match_padded_shape_only) {
     if (!metal2_registry_) {
         metal2_registry_ = Metal2NameRegistry{};
     }
-    auto [it, inserted] = metal2_registry_->tensor_parameter_layouts.try_emplace(name, spec);
+    auto [it, inserted] = metal2_registry_->tensor_parameter_layouts.try_emplace(
+        name, Metal2NameRegistry::RegisteredTensorParameter{spec, dynamic_tensor_shape, match_padded_shape_only});
     TT_FATAL(inserted, "Duplicate tensor parameter name: {}", name);
 }
 
@@ -588,14 +590,36 @@ const TensorSpec* ProgramImpl::get_tensor_parameter_layout(const std::string& na
     if (it == metal2_registry_->tensor_parameter_layouts.end()) {
         return nullptr;
     }
-    return &it->second;
+    return &it->second.spec;
+}
+
+bool ProgramImpl::get_tensor_parameter_dynamic_tensor_shape(const std::string& name) const {
+    if (!metal2_registry_) {
+        return false;
+    }
+    auto it = metal2_registry_->tensor_parameter_layouts.find(name);
+    if (it == metal2_registry_->tensor_parameter_layouts.end()) {
+        return false;
+    }
+    return it->second.dynamic_tensor_shape;
+}
+
+bool ProgramImpl::get_tensor_parameter_match_padded_shape_only(const std::string& name) const {
+    if (!metal2_registry_) {
+        return false;
+    }
+    auto it = metal2_registry_->tensor_parameter_layouts.find(name);
+    if (it == metal2_registry_->tensor_parameter_layouts.end()) {
+        return false;
+    }
+    return it->second.match_padded_shape_only;
 }
 
 std::vector<std::string> ProgramImpl::get_registered_tensor_parameter_names() const {
     std::vector<std::string> names;
     if (metal2_registry_) {
         names.reserve(metal2_registry_->tensor_parameter_layouts.size());
-        for (const auto& [name, spec] : metal2_registry_->tensor_parameter_layouts) {
+        for (const auto& [name, entry] : metal2_registry_->tensor_parameter_layouts) {
             names.push_back(name);
         }
     }
@@ -2019,6 +2043,25 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         }
         this->set_cb_data_fmt_and_tile(kernel->logical_coreranges(), build_options);
         this->set_dfb_data_fmt_and_tile(kernel->logical_coreranges(), build_options);
+
+        // Blackhole-only: Fp8_e4m3 / Lf8 dataformats require fp32_dest_acc_en=true in the associated compute
+        // kernel. This is due to FP8/LF8 being considered "A" exp width formats, instead of "B" exp width
+        // formats that are supported mostly in tt-metal. This conservative check fires whenever a compute
+        // kernel shares a core with any FP8 CB — the old Program API has no way to know which CB
+        // a given kernel actually reads, so we err on the side of catching the misconfiguration.
+        if (build_options.build_env.get_arch() == tt::ARCH::BLACKHOLE &&
+            kernel->get_kernel_processor_class() == HalProcessorClassType::COMPUTE &&
+            std::any_of(
+                build_options.hlk_desc.buf_dataformat_arr.begin(),
+                build_options.hlk_desc.buf_dataformat_arr.end(),
+                is_fp8_format)) {
+            TT_FATAL(
+                build_options.fp32_dest_acc_en,
+                "Blackhole: Fp8_e4m3 / Lf8 require fp32_dest_acc_en=true in ComputeConfig. The DEST "
+                "register must be in 32-bit (family-agnostic) mode when any CB on the same core uses "
+                "an 8-bit float format. Kernel: {}",
+                kernel->name());
+        }
 
         auto kernel_hash = KernelCompileHash(kernel, build_options, build_env.build_key());
 

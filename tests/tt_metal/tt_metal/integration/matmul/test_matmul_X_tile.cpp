@@ -237,26 +237,23 @@ static void matmul_tile_block(
         .entry_size = ctx.single_tile_size_bfp16b,
         .num_entries = ctx.num_input_tiles,
         .data_format_metadata = tt::DataFormat::Float16_b,
-        .disable_implicit_sync = true,
     };
     experimental::metal2_host_api::DataflowBufferSpec src1_dfb_spec{
         .unique_id = SRC1_DFB,
         .entry_size = ctx.single_tile_size_bfp16b,
         .num_entries = ctx.num_input_tiles,
         .data_format_metadata = tt::DataFormat::Float16_b,
-        .disable_implicit_sync = true,
     };
     experimental::metal2_host_api::DataflowBufferSpec dst_dfb_spec{
         .unique_id = DST_DFB,
         .entry_size = ctx.single_tile_size_out0,
         .num_entries = ctx.num_tiles,
         .data_format_metadata = cfg.fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b,
-        .disable_implicit_sync = true,
     };
 
     experimental::metal2_host_api::KernelSpec reader_spec{
         .unique_id = READER,
-        .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{cfg.reader_kernel},
+        .source = cfg.reader_kernel,
         .num_threads = 1,
         .dfb_bindings =
             {{
@@ -288,14 +285,15 @@ static void matmul_tile_block(
                     experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
                         .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
                 .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{
+                        .disable_implicit_sync_for = {SRC0_DFB, SRC1_DFB}}},
     };
 
     experimental::metal2_host_api::KernelSpec writer_spec{
         .unique_id = WRITER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_2_0.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_2_0.cpp",
         .num_threads = 1,
         .dfb_bindings = {{
             .dfb_spec_name = DST_DFB,
@@ -310,7 +308,8 @@ static void matmul_tile_block(
                     experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
                         .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
                 .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{
+                        .disable_implicit_sync_for = {DST_DFB}}},
     };
 
     // matmul_block.cpp uses named CTAs. Map cfg.compute_kernel_args (positional) to the
@@ -340,7 +339,7 @@ static void matmul_tile_block(
 
     experimental::metal2_host_api::KernelSpec compute_spec{
         .unique_id = COMPUTE,
-        .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{cfg.compute_kernel},
+        .source = cfg.compute_kernel,
         .num_threads = 1,
         .compiler_options = {.defines = compute_defines},
         .dfb_bindings =

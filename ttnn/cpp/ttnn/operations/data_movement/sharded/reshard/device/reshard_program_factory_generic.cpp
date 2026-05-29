@@ -6,12 +6,38 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
 namespace ttnn::prim {
+
+namespace {
+
+// Anonymous-namespace helper unique to reshard generic to avoid unity-build collisions.
+void push_reshard_generic_cb_pair(
+    ProgramDescriptor& desc,
+    uint32_t cb_index,
+    tt::DataFormat data_format,
+    uint32_t total_size,
+    uint32_t page_size,
+    const CoreRangeSet& core_ranges,
+    Buffer* bound_buffer) {
+    CBDescriptor cb;
+    cb.total_size = total_size;
+    cb.core_ranges = core_ranges;
+    cb.format_descriptors.push_back(CBFormatDescriptor{
+        .buffer_index = static_cast<uint8_t>(cb_index),
+        .data_format = data_format,
+        .page_size = page_size,
+    });
+    cb.buffer = bound_buffer;
+    desc.cbs.push_back(std::move(cb));
+}
+
+}  // namespace
 
 namespace detail {
 // start is inclusive, end is exclusive
@@ -623,66 +649,77 @@ std::vector<uint32_t> get_runtime_args_for_given_ranges(
 
 }  // namespace detail
 
-ReshardGenericFactory::cached_program_t ReshardGenericFactory::create(
+ProgramDescriptor ReshardGenericFactory::create_descriptor(
     const ReshardParams& /*operation_attributes*/, const ReshardInputs& tensor_args, Tensor& output_tensor) {
     const auto& input = tensor_args.input;
     auto& output = output_tensor;
 
     auto* device = input.device();
+    auto* input_buffer = input.buffer();
+    auto* output_buffer = output.buffer();
 
-    tt::tt_metal::Program program{};
-
-    auto input_shard_spec = input.shard_spec().value();
-    auto output_shard_spec = output.shard_spec().value();
-    auto grid = input.buffer()->buffer_type() == BufferType::DRAM ? device->dram_grid_size()
-                                                                  : device->compute_with_storage_grid_size();
-    auto input_core_type = input.buffer()->core_type();
+    auto grid = input_buffer->buffer_type() == BufferType::DRAM ? device->dram_grid_size()
+                                                                : device->compute_with_storage_grid_size();
+    auto input_core_type = input_buffer->core_type();
     uint32_t dst_cb_index = 16;
     auto cores = get_optimal_worker_cores_for_sharded_tensor(output);
     auto all_cores = CoreRangeSet(ttsl::Span<const CoreCoord>(cores));
 
-    uint32_t total_size, page_size, unit_size;
-    auto output_shard_shape = output_shard_spec.shape;
+    uint32_t total_size = 0;
+    uint32_t page_size = 0;
+    uint32_t unit_size = 0;
+    auto output_shard_shape = output.shard_spec().value().shape;
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
 
     if (input.layout() == Layout::TILE) {
         page_size = tt::tile_size(data_format);
         unit_size = page_size;
-        total_size = output_shard_spec.numel() / TILE_HW * unit_size;
+        total_size = static_cast<uint32_t>(output.shard_spec().value().numel() / TILE_HW) * unit_size;
     } else {
         // For ROW_MAJOR, use base page size from GCD calculation
-        uint32_t input_page_size = input.buffer()->page_size();
-        uint32_t output_page_size = output.buffer()->page_size();
+        uint32_t input_page_size = input_buffer->page_size();
+        uint32_t output_page_size = output_buffer->page_size();
         uint32_t base_page_size = std::gcd(input_page_size, output_page_size);
 
         unit_size = base_page_size;
         page_size = base_page_size;
-        total_size = output_shard_shape[0] * output_shard_shape[1] * output.element_size();
+        total_size = static_cast<uint32_t>(output_shard_shape[0] * output_shard_shape[1] * output.element_size());
     }
 
-    tt::tt_metal::KernelHandle kernel_id_0 = tt::tt_metal::CreateKernel(
-        program,
-        input.buffer()->page_size() != output.buffer()->page_size()
-            ? "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_reader_diff_width.cpp"
-            : "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_reader.cpp",
-        all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(
-            {dst_cb_index, (uint32_t)grid.x, (uint32_t)grid.y, page_size, unit_size}));
+    ProgramDescriptor desc;
 
-    tt::tt_metal::KernelHandle kernel_id_1 = tt::tt_metal::CreateKernel(
-        program,
-        input.buffer()->page_size() != output.buffer()->page_size()
-            ? "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_reader_diff_width.cpp"
-            : "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_reader.cpp",
+    // Output sharded CB. Bind to output buffer for dynamic-CB rebinding on cache hits via cb.buffer.
+    push_reshard_generic_cb_pair(
+        desc,
+        dst_cb_index,
+        data_format,
+        total_size,
+        output_buffer->page_size(),
         all_cores,
-        tt::tt_metal::WriterDataMovementConfig(
-            {dst_cb_index, (uint32_t)grid.x, (uint32_t)grid.y, page_size, unit_size}));
+        /*bound_buffer=*/output_buffer);
 
-    tt::tt_metal::CircularBufferConfig cb_dst_config =
-        tt::tt_metal::CircularBufferConfig(total_size, {{dst_cb_index, data_format}})
-            .set_page_size(dst_cb_index, output.buffer()->page_size())
-            .set_globally_allocated_address(*output.buffer());
-    auto cb_dst0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_dst_config);
+    const std::string kernel_source = input_buffer->page_size() != output_buffer->page_size()
+                                          ? "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
+                                            "reshard_reader_diff_width.cpp"
+                                          : "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
+                                            "reshard_reader.cpp";
+
+    std::vector<uint32_t> compile_args = {
+        dst_cb_index, static_cast<uint32_t>(grid.x), static_cast<uint32_t>(grid.y), page_size, unit_size};
+
+    KernelDescriptor kernel_desc_0;
+    kernel_desc_0.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    kernel_desc_0.kernel_source = kernel_source;
+    kernel_desc_0.core_ranges = all_cores;
+    kernel_desc_0.config = ReaderConfigDescriptor{};
+    kernel_desc_0.compile_time_args = compile_args;
+
+    KernelDescriptor kernel_desc_1;
+    kernel_desc_1.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    kernel_desc_1.kernel_source = kernel_source;
+    kernel_desc_1.core_ranges = all_cores;
+    kernel_desc_1.config = WriterConfigDescriptor{};
+    kernel_desc_1.compile_time_args = std::move(compile_args);
 
     std::vector<uint32_t> physical_core_coords;
     physical_core_coords.reserve(grid.x * grid.y);
@@ -698,35 +735,35 @@ ReshardGenericFactory::cached_program_t ReshardGenericFactory::create(
     for (const auto& core : cores) {
         std::vector<uint32_t> runtime_args_0;
         std::vector<uint32_t> runtime_args_1;
-        if (input.buffer()->page_size() != output.buffer()->page_size()) {
+        if (input_buffer->page_size() != output_buffer->page_size()) {
             auto output_core_to_page_range_pair =
-                detail::get_core_page_ranges_diff_width(input.buffer(), output.buffer(), input);
+                detail::get_core_page_ranges_diff_width(input_buffer, output_buffer, input);
             const auto& page_stride_vector = output_core_to_page_range_pair.at(core);
             runtime_args_0 = detail::get_runtime_args_for_given_ranges_diff_width(
                 physical_core_coords,
                 page_stride_vector,
                 0,
-                input.buffer()->address(),
+                input_buffer->address(),
                 0,
-                tt::div_up(page_stride_vector.size(), 2));
+                tt::div_up(static_cast<uint32_t>(page_stride_vector.size()), 2u));
             auto output_page_offset = runtime_args_0[physical_core_coords.size() + 1];
             runtime_args_1 = detail::get_runtime_args_for_given_ranges_diff_width(
                 physical_core_coords,
                 page_stride_vector,
                 output_page_offset,
-                input.buffer()->address(),
-                tt::div_up(page_stride_vector.size(), 2),
+                input_buffer->address(),
+                tt::div_up(static_cast<uint32_t>(page_stride_vector.size()), 2u),
                 page_stride_vector.size());
         } else {
-            auto output_core_to_page_range_pair = detail::get_core_page_ranges(input.buffer(), output.buffer());
+            auto output_core_to_page_range_pair = detail::get_core_page_ranges(input_buffer, output_buffer);
             const auto& page_stride_vector = output_core_to_page_range_pair.at(core);
             runtime_args_0 = detail::get_runtime_args_for_given_ranges(
                 physical_core_coords,
                 page_stride_vector,
                 0,
-                input.buffer()->address(),
+                input_buffer->address(),
                 0,
-                tt::div_up(page_stride_vector.size(), 2));
+                tt::div_up(static_cast<uint32_t>(page_stride_vector.size()), 2u));
             auto output_page_offset =
                 runtime_args_0[physical_core_coords.size() + 1];  // offset is equivalent to number of pages output in
                                                                   // previous risc core
@@ -734,39 +771,40 @@ ReshardGenericFactory::cached_program_t ReshardGenericFactory::create(
                 physical_core_coords,
                 page_stride_vector,
                 output_page_offset,
-                input.buffer()->address(),
-                tt::div_up(page_stride_vector.size(), 2),
+                input_buffer->address(),
+                tt::div_up(static_cast<uint32_t>(page_stride_vector.size()), 2u),
                 page_stride_vector.size());
-        };
+        }
 
-        tt::tt_metal::SetRuntimeArgs(program, kernel_id_0, core, runtime_args_0);
-        tt::tt_metal::SetRuntimeArgs(program, kernel_id_1, core, runtime_args_1);
+        // Patch arg index (grid.x + grid.y) to bind the input-buffer base address.
+        // The detail helpers already pre-compute physical_core_coords (size grid.x+grid.y) followed by input addr.
+        KernelDescriptor::RTArgList rt_args_0;
+        rt_args_0.reserve(runtime_args_0.size());
+        for (size_t i = 0; i < runtime_args_0.size(); ++i) {
+            if (i == grid.x + grid.y) {
+                rt_args_0.push_back(input_buffer);
+            } else {
+                rt_args_0.push_back(runtime_args_0[i]);
+            }
+        }
+        KernelDescriptor::RTArgList rt_args_1;
+        rt_args_1.reserve(runtime_args_1.size());
+        for (size_t i = 0; i < runtime_args_1.size(); ++i) {
+            if (i == grid.x + grid.y) {
+                rt_args_1.push_back(input_buffer);
+            } else {
+                rt_args_1.push_back(runtime_args_1[i]);
+            }
+        }
+
+        kernel_desc_0.emplace_runtime_args(core, rt_args_0);
+        kernel_desc_1.emplace_runtime_args(core, rt_args_1);
     }
 
-    return cached_program_t{
-        std::move(program),
-        {.kernel_id_0 = kernel_id_0, .kernel_id_1 = kernel_id_1, .cb_dst0 = cb_dst0, .grid = grid, .cores = cores}};
-}
+    desc.kernels.push_back(std::move(kernel_desc_0));
+    desc.kernels.push_back(std::move(kernel_desc_1));
 
-void ReshardGenericFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const ReshardParams& /*operation_attributes*/,
-    const ReshardInputs& tensor_args,
-    Tensor& output_tensor) {
-    const auto& input = tensor_args.input;
-    const auto& output = output_tensor;
-    uint32_t input_addr = input.buffer()->address();
-    auto& runtime_args_0_by_core = GetRuntimeArgs(cached_program.program, cached_program.shared_variables.kernel_id_0);
-    auto& runtime_args_1_by_core = GetRuntimeArgs(cached_program.program, cached_program.shared_variables.kernel_id_1);
-    auto& grid = cached_program.shared_variables.grid;
-    for (auto core : cached_program.shared_variables.cores) {
-        auto& runtime_args_0 = runtime_args_0_by_core[core.x][core.y];
-        auto& runtime_args_1 = runtime_args_1_by_core[core.x][core.y];
-        runtime_args_0[grid.x + grid.y] = input_addr;
-        runtime_args_1[grid.x + grid.y] = input_addr;
-    }
-    UpdateDynamicCircularBufferAddress(
-        cached_program.program, cached_program.shared_variables.cb_dst0, *output.buffer());
+    return desc;
 }
 
 }  // namespace ttnn::prim

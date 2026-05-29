@@ -54,7 +54,7 @@ void kernel_main() {
     // fast_tilize_cb_id is a consumer-view alias of pre_tilize_cb_id (same L1 region,
     // full-tile face_geometry = {face_r_dim=16, num_faces=4}). Used as the input operand
     // to fast_tilize so the unpacker/math read the correct face count from CB metadata.
-    constexpr uint32_t fast_tilize_cb_id = get_compile_time_arg_val(37);
+    constexpr uint32_t fast_tilize_cb_id = get_compile_time_arg_val(38);
 
     constexpr bool use_split_reader = split_reader;
 
@@ -75,9 +75,13 @@ void kernel_main() {
 
     constexpr bool is_avg_pool = REDUCE_OP == PoolType::AVG;
     // average pool with large kernels requires fp32 accumulation so we can only reduce 4 tiles at a time,
-    // otherwise we can reduce 8 tiles at a time.
+    // otherwise we can reduce 8 tiles at a time. Callers (e.g. grid_sample under fp32_dest_acc_en) can
+    // also force the 4-tile limit via ct_arg[16] so each chunk fits in half-sync DEST (= 4 fp32 tiles)
+    // without forcing dst_full_sync_en.
     constexpr bool is_large_kernel = window_size_hw > max_sticks_for_reduction;
-    constexpr uint32_t MAX_TILES_PER_REDUCTION = (is_avg_pool && is_large_kernel) ? 4 : 8;
+    constexpr bool force_max_tiles_per_reduction_4 = get_compile_time_arg_val(16);
+    constexpr uint32_t MAX_TILES_PER_REDUCTION =
+        (force_max_tiles_per_reduction_4 || (is_avg_pool && is_large_kernel)) ? 4 : 8;
     constexpr uint32_t max_tiles_per_iter =
         in_ntiles_c < MAX_TILES_PER_REDUCTION ? in_ntiles_c : MAX_TILES_PER_REDUCTION;
     constexpr uint32_t partial_iter_output_tiles =

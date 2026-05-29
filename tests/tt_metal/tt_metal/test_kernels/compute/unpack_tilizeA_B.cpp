@@ -13,7 +13,8 @@
 inline void tilizeA_B_binary_init(uint32_t icb0, uint32_t icb1, uint32_t block) {
     UNPACK((llk_unpack_tilizeA_B_init<true, true>(icb0, icb1, block)));
 
-    MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWADD, BroadcastType::NONE, MathFidelity::LoFi>(0 /*acc_to_dest*/)));
+    MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWADD, BroadcastType::NONE, MathFidelity::LoFi>(
+        icb0, icb1, 0 /*acc_to_dest*/)));
 }
 
 inline void add_tiles_math(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {

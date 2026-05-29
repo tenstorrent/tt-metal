@@ -11,6 +11,7 @@
 #include <variant>
 #include <vector>
 
+#include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/tile.hpp>
@@ -19,11 +20,6 @@
 namespace tt::tt_metal::experimental::metal2_host_api {
 
 // A name identifying a DataflowBufferSpec within a ProgramSpec.
-//
-// CONVENTION: define names as `constexpr const char*` constants, e.g.:
-//   constexpr const char* INPUT_DFB = "input_dfb";
-//   DataflowBufferSpec{.unique_id = INPUT_DFB, ...};
-// Reusing a single constant helps catch typos and errors at compile time.
 using DFBSpecName = std::string;
 
 // DataflowBuffer endpoint access patterns:
@@ -79,7 +75,7 @@ struct DataflowBufferSpec {
     std::optional<std::pair<uint32_t, uint32_t>> unpack_face_geometry_metadata = std::nullopt;
 
     //////////////////////////////
-    // Advanced options
+    // Backing memory
     //////////////////////////////
 
     // Build DFB on borrowed memory.
@@ -98,22 +94,10 @@ struct DataflowBufferSpec {
     // (TODO: this should become std::variant<TensorParameterName, BufferParameterName>.)
     std::optional<TensorParameterName> borrowed_from = std::nullopt;
 
-    // Alias two or more DFBs
-    // Aliased DFBs are logically distinct, but physically share the same backing memory.
-    // Aliased DFBs offer NO guarantees against data clobbering; kernel logic must ensure safety.
-    //
-    // Rules for aliased DFBs:
-    //   - Every DFB in the alias group must list every other member as an alias
-    //   - Aliased DFBs must have the same total size (num_entries * entry_size).
-    //   - All members must target the same node set
-    //     (derived from their bound kernels' WorkUnitSpecs).
-    using DFBIdentifiers = std::vector<DFBSpecName>;
-    DFBIdentifiers alias_with;  // empty vector means no aliasing
-
-    // Disable implicit sync
-    // Implicit sync is handled via ISR (available on Gen2 only)
-    // Disabling may be useful in niche cases for fine tuning performance or performance debug.
-    bool disable_implicit_sync = false;
+    //////////////////////////////
+    // Advanced options (see advanced_options.hpp)
+    //////////////////////////////
+    DFBAdvancedOptions advanced_options;
 };
 
 // NOTE: Remote DataflowBuffer is not yet supported!

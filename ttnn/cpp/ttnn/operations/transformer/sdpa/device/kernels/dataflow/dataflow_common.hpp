@@ -42,7 +42,13 @@ void fill_tile_zeros(uint32_t cb_id, uint32_t tile_id) {
     }
 }
 
-template <typename PageT, uint32_t num_heads, uint32_t block_size_t, uint32_t Wt>
+// capacity_t = 0 means "no wrap" (legacy / unbounded cache).  Nonzero means the cache
+// holds capacity_t tile-rows in a circular buffer; the kernel wraps seq_tile_idx
+// modulo capacity_t before resolving the page_table entry, so callers can pass
+// absolute (un-wrapped) positions even with bounded sliding-window allocations.
+// capacity_t must be a multiple of block_size_t (validated on the caller side); that
+// guarantees the wrap preserves intra-block offsets.
+template <typename PageT, uint32_t num_heads, uint32_t block_size_t, uint32_t Wt, uint32_t capacity_t = 0>
 uint32_t virtual_seq_tile_id_to_physical_tile_id(
     uint32_t seq_tile_idx, uint32_t cur_head, const volatile tt_l1_ptr PageT* const page_table_ptr) {
     // Given some index in the sequence tiles in range [0, max_seq_len_t]
@@ -50,6 +56,9 @@ uint32_t virtual_seq_tile_id_to_physical_tile_id(
     constexpr uint32_t block_stride = num_heads * block_size_t * Wt;
     const uint32_t head_offset = cur_head * block_size_t * Wt;
 
+    if constexpr (capacity_t > 0) {
+        seq_tile_idx %= capacity_t;
+    }
     const uint32_t virtual_block = seq_tile_idx / block_size_t;
     const uint32_t physical_block = static_cast<uint32_t>(page_table_ptr[virtual_block]);
     const uint32_t block_row_offset = seq_tile_idx % block_size_t;
@@ -96,6 +105,23 @@ public:
     uint32_t id_of(uint32_t i0, uint32_t i1, uint32_t i2, uint32_t i3) const {
         return i0 * strides[0] + i1 * strides[1] + i2 * strides[2] + i3 * strides[3];
     }
+
+    uint32_t d2() const { return shape[2]; }
+    uint32_t stride2() const { return strides[2]; }
+};
+
+template <uint32_t D0, uint32_t D1, uint32_t D2, uint32_t D3>
+class StaticTensorTileShape {
+public:
+    constexpr StaticTensorTileShape() = default;
+    constexpr StaticTensorTileShape(uint32_t, uint32_t, uint32_t, uint32_t) {}
+
+    uint32_t id_of(uint32_t i0, uint32_t i1, uint32_t i2, uint32_t i3) const {
+        return i0 * D1 * D2 * D3 + i1 * D2 * D3 + i2 * D3 + i3;
+    }
+
+    static constexpr uint32_t d2() { return D2; }
+    static constexpr uint32_t stride2() { return D3; }
 };
 
 template <uint32_t tile_bytes, typename ReaderType, bool push_num_tiles = true>
@@ -1137,12 +1163,12 @@ struct CatAddrGenerator {
     }
 };
 
-template <typename ReaderType>
+template <typename ReaderType, typename TensorShapeType = TensorTileShape>
 struct PaddedAddrGenerator {
     ReaderType reader;
-    TensorTileShape tensor_shape;
+    TensorShapeType tensor_shape;
 
-    PaddedAddrGenerator(const ReaderType& reader, TensorTileShape tensor_shape) :
+    PaddedAddrGenerator(const ReaderType& reader, TensorShapeType tensor_shape) :
         reader(reader), tensor_shape(tensor_shape) {}
 
     // Issue async NoC reads for a slice to L1. No barrier — caller must
@@ -1158,7 +1184,7 @@ struct PaddedAddrGenerator {
         const uint32_t d2_start = slice.d2_start;
         const uint32_t rows = slice.get_d2_size();
         const uint32_t cols = slice.get_d3_size();
-        const uint32_t shape_d2 = tensor_shape.shape[2];
+        const uint32_t shape_d2 = tensor_shape.d2();
         const uint32_t bound = shape_d2 < end_seq_tile ? shape_d2 : end_seq_tile;
         const uint32_t valid_rows = (d2_start >= bound) ? 0 : std::min(rows, bound - d2_start);
         uint32_t barrier_count = 0;
@@ -1167,7 +1193,7 @@ struct PaddedAddrGenerator {
         issue_block_reads(
             reader,
             tensor_shape.id_of(slice.d0, slice.d1, d2_start, slice.d3_start),
-            tensor_shape.strides[2],
+            tensor_shape.stride2(),
             valid_rows,
             cols,
             /*dst_row_origin=*/0,
@@ -1198,7 +1224,7 @@ struct PaddedAddrGenerator {
         const uint32_t d2_start = slice.d2_start;
         const uint32_t rows = slice.get_d2_size();
         const uint32_t cols = slice.get_d3_size();
-        const uint32_t shape_d2 = tensor_shape.shape[2];
+        const uint32_t shape_d2 = tensor_shape.d2();
         const uint32_t bound = shape_d2 < end_seq_tile ? shape_d2 : end_seq_tile;
         const uint32_t valid_rows = (d2_start >= bound) ? 0 : std::min(rows, bound - d2_start);
 
@@ -1206,7 +1232,7 @@ struct PaddedAddrGenerator {
         issue_block_writes(
             reader,
             tensor_shape.id_of(slice.d0, slice.d1, d2_start, slice.d3_start),
-            tensor_shape.strides[2],
+            tensor_shape.stride2(),
             valid_rows,
             cols,
             /*src_row_origin=*/0,
@@ -1214,7 +1240,24 @@ struct PaddedAddrGenerator {
             outer_stride,
             inner_stride);
     }
+
+    void issue_writes_no_padding(
+        const Slice& slice, uint32_t src_addr, uint32_t outer_stride, uint32_t inner_stride) const {
+        issue_block_writes(
+            reader,
+            tensor_shape.id_of(slice.d0, slice.d1, slice.d2_start, slice.d3_start),
+            tensor_shape.stride2(),
+            slice.get_d2_size(),
+            slice.get_d3_size(),
+            /*src_row_origin=*/0,
+            src_addr,
+            outer_stride,
+            inner_stride);
+    }
 };
+
+template <typename ReaderType, typename TensorShapeType>
+PaddedAddrGenerator(const ReaderType&, TensorShapeType) -> PaddedAddrGenerator<ReaderType, TensorShapeType>;
 
 // Fetch tiles via NOC reads into a given L1 address. No CB lifecycle — caller manages
 // cb_reserve_back / cb_push_back. Used by forwarding paths that mcast before pushing.
@@ -1374,7 +1417,7 @@ void write_block_row_grouped(
 // with via noc_async_write_set_trid (0 = default); per-group flush uses
 // noc_async_write_flushed_with_trid(flush_trid) so it waits exactly for THIS drain's writes
 // to be source-L1-acked. Caller handles any final DRAM-arrival NoC barrier.
-template <typename CatAddrGeneratorType>
+template <bool all_rows_valid = false, typename CatAddrGeneratorType>
 void write_block_row_grouped_trid(
     const CatAddrGeneratorType& cat_addr_generator,
     const Slice& dst_slice,
@@ -1402,7 +1445,11 @@ void write_block_row_grouped_trid(
             dst_slice.d2_start + rg * sbh + rows_this_group,
             dst_slice.d3_start,
             dst_slice.d3_end);
-        cat_addr_generator.issue_writes(group_slice, end_seq_tile, get_read_ptr(cb_out), outer_stride, tile_bytes);
+        if constexpr (all_rows_valid) {
+            cat_addr_generator.issue_writes_no_padding(group_slice, get_read_ptr(cb_out), outer_stride, tile_bytes);
+        } else {
+            cat_addr_generator.issue_writes(group_slice, end_seq_tile, get_read_ptr(cb_out), outer_stride, tile_bytes);
+        }
         noc_async_write_flushed_with_trid(flush_trid);
         cb_pop_front(cb_out, tiles_this_group);
     }

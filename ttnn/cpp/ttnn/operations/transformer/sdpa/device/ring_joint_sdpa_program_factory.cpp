@@ -375,13 +375,8 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
     const uint32_t out_in0_block_w = Sk_chunk_t;
     const uint32_t out_num_blocks = Sk_chunk_t / out_in0_block_w;
 
-    // Streaming compute v2: eliminates row buffers via cb_push_back_hold_wr_ptr.
-    // Streaming v2 requires q_num_subblocks > 1 (Sq_chunk_t > subblock_h) because the Phase 2
-    // pipeline assumes at least one q_subblock iteration for correct softmax drain + SALAD overlap.
-    // The `Sk_chunk_t % qk_out_subblock_w == 0` clause is tautological — the selector already
-    // guarantees it — but kept explicit for clarity of the subblock-tiling requirement.
-    const bool use_streaming_compute =
-        !fp32_dest_acc_en && qk_out_subblock_h <= 2 && Sk_chunk_t % qk_out_subblock_w == 0 && qk_in0_num_subblocks > 1;
+    // Ring-joint streaming supports single-Q-subblock shapes; only fp32 dest acc stays on the legacy path.
+    const bool use_streaming_compute = !fp32_dest_acc_en;
     log_debug(
         tt::LogOp,
         "use_streaming_compute: {} (is_causal={}, Sq_chunk_t={}, Sk_chunk_t={}, sbh={}, sbw={})",
@@ -601,11 +596,11 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
         args.all_gather_operation_attributes.ring_size,
         global_n_partial_col,
         joint_l_partial_col,
-        (std::uint32_t)use_streaming_compute,
+        static_cast<std::uint32_t>(use_streaming_compute),
         kernel_is_causal,
         args.is_balanced,
         static_cast<uint32_t>(enable_zigzag_balancing),
-        (std::uint32_t)out_out_subblock_h,
+        static_cast<std::uint32_t>(out_out_subblock_h),
         static_cast<uint32_t>(tensor_args.is_chunked()),
         chunk_size_t,
     };
@@ -613,17 +608,6 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
     TensorAccessorArgs(joint_output_tensor.buffer()).append_to(writer_compile_time_args);
     TensorAccessorArgs(stats_output_tensor.buffer()).append_to(writer_compile_time_args);
-
-    // Early format check: when all data formats are identical, reconfig calls can be skipped.
-    const tt::DataFormat q_df_early = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype());
-    const tt::DataFormat k_df_early = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_k.dtype());
-    const tt::DataFormat v_df_early = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_v.dtype());
-    const tt::DataFormat out_df_early = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
-    const tt::DataFormat im_df_early = tt::DataFormat::Float16_b;
-    const tt::DataFormat mask_df_early = tt::DataFormat::Float16_b;
-    const bool uniform_dataformat =
-        (q_df_early == k_df_early && q_df_early == v_df_early && q_df_early == out_df_early &&
-         q_df_early == mask_df_early && q_df_early == im_df_early);
 
     std::vector<uint32_t> compute_compile_time_args = {
         B,
@@ -659,10 +643,9 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
         out_in1_num_subblocks,
         out_num_blocks,
         scale_packed,
-        (std::uint32_t)use_streaming_compute,
+        static_cast<std::uint32_t>(use_streaming_compute),
         global_n_partial_col,
         joint_l_partial_col,
-        (std::uint32_t)uniform_dataformat,
         kernel_is_causal,
         args.is_balanced,
         static_cast<uint32_t>(enable_zigzag_balancing),

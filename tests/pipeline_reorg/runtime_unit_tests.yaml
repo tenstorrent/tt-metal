@@ -60,11 +60,11 @@
   team: runtime
 
 # --- Context, Device, Misc, JIT Build ---
-# NOTE: unit_tests_noc dropped, mock-coexistence tests filtered (#39849).
+# NOTE: unit_tests_noc dropped.
 - name: runtime_core
   # MetalContextIntegrationTest.Legacy disabled by #44767.
   cmd: |
-    ./build/test/tt_metal/unit_tests_context --gtest_filter='-MetalContextIntegrationTest.MockDeviceOnly:MetalContextIntegrationTest.Coexisting*:MetalContextIntegrationTest.ForkMockAndRealDevice:MetalContextIntegrationTest.Legacy'
+    ./build/test/tt_metal/unit_tests_context --gtest_filter='-MetalContextIntegrationTest.Legacy'
     ./build/test/tt_metal/unit_tests_device
     ./build/test/tt_metal/unit_tests_misc
     ./build/test/tt_metal/unit_tests_jit_build
@@ -194,7 +194,7 @@
       TT_METAL_SLOW_DISPATCH_MODE=1 \
         TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1 \
         ./build/test/tt_metal/unit_tests_api \
-        --gtest_filter='*.DramKernel*'
+        --gtest_filter='*.DramKernel*:DramSenderGCBFixture.*:DramSubchannelHelperFixture.*'
     fi
   skus:
     wh_n150_civ2:

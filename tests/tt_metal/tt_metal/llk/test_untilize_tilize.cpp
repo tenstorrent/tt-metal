@@ -107,8 +107,13 @@ static void validate_result(
     const std::vector<uint32_t>& src0_vec,
     const std::vector<uint32_t>& src1_vec,
     const std::vector<uint32_t>& result_vec) {
-    bool is_8bit_int =
-        test_config.output_fmt == tt::DataFormat::Int8 || test_config.output_fmt == tt::DataFormat::UInt8;
+    // For 8-bit integers (Int8/UInt8) hardware keeps integers as-is in dest/CB even with fp32_dest_acc_en.
+    // For 8-bit floats (Fp8_e4m3, Lf8) the L1 CB stays at 8-bit — the packer gasket converts
+    // Float32 DEST → 8-bit at output. Converting the golden to Float32 in either case would mismatch
+    // actual hardware behavior.
+    bool is_8bit_format =
+        test_config.output_fmt == tt::DataFormat::Int8 || test_config.output_fmt == tt::DataFormat::UInt8 ||
+        test_config.output_fmt == tt::DataFormat::Fp8_e4m3 || test_config.output_fmt == tt::DataFormat::Lf8;
 
     vector<uint32_t> golden;
     ::unit_tests::compute::GoldenConfig config = {
@@ -141,10 +146,7 @@ static void validate_result(
         },
         test_config.golden_function);
 
-    // Golden model: skip Float32 conversion for integer formats.
-    // When fp32_dest_acc_en is true with integer formats, hardware keeps integers as-is in dest/CB.
-    // Converting integers to Float32 in golden model would cause mismatches with actual hardware behavior.
-    if (test_config.fp32_dest_acc_en && !is_8bit_int) {
+    if (test_config.fp32_dest_acc_en && !is_8bit_format) {
         vector<bfloat16> golden_unpacked = unpack_vector<bfloat16, uint32_t>(golden);
         // Increasing the size since from BFP16 two times, since storing is in FP32
         golden.resize(golden.size() * 2);
@@ -211,12 +213,15 @@ void run_single_core_tilize_program(
     const uint32_t dram_buffer_src0_addr = src0_dram_buffer->address();
     const uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
-    // For 8bit integer formats, output CB format must remain as-is even with fp32_dest_acc_en.
+    // For 8-bit integer and 8-bit float formats, output CB format must remain as-is even with fp32_dest_acc_en.
     // Integer data packed from dest to L1 CB should not be reinterpreted as Float32, otherwise we get garbage.
-    const bool is_8bit_int =
-        test_config.output_fmt == tt::DataFormat::Int8 || test_config.output_fmt == tt::DataFormat::UInt8;
+    // For Fp8_e4m3/Lf8 the packer gasket converts Float32 DEST → Fp8 L1 internally; the CB must be sized and
+    // typed as Fp8, not Float32, so the gasket path is preserved.
+    const bool is_8bit_format =
+        test_config.output_fmt == tt::DataFormat::Int8 || test_config.output_fmt == tt::DataFormat::UInt8 ||
+        test_config.output_fmt == tt::DataFormat::Fp8_e4m3 || test_config.output_fmt == tt::DataFormat::Lf8;
     const tt::DataFormat output_buf_format =
-        (test_config.fp32_dest_acc_en && !is_8bit_int) ? tt::DataFormat::Float32 : test_config.output_fmt;
+        (test_config.fp32_dest_acc_en && !is_8bit_format) ? tt::DataFormat::Float32 : test_config.output_fmt;
 
     constexpr const char* INPUT_DFB = "input_dfb";
     constexpr const char* OUTPUT_DFB = "output_dfb";
@@ -262,7 +267,7 @@ void run_single_core_tilize_program(
 
     experimental::metal2_host_api::KernelSpec reader_spec{
         .unique_id = READER,
-        .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{reader_kernel_path},
+        .source = reader_kernel_path,
         .num_threads = 1,
         .dfb_bindings = {{
             .dfb_spec_name = INPUT_DFB,
@@ -283,8 +288,8 @@ void run_single_core_tilize_program(
     experimental::metal2_host_api::KernelSpec writer_spec{
         .unique_id = WRITER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_2_0.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_2_0.cpp",
         .num_threads = 1,
         .dfb_bindings = {{
             .dfb_spec_name = OUTPUT_DFB,
@@ -330,7 +335,7 @@ void run_single_core_tilize_program(
 
     experimental::metal2_host_api::KernelSpec compute_spec{
         .unique_id = COMPUTE,
-        .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{compute_kernel},
+        .source = compute_kernel,
         .num_threads = 1,
         .compiler_options = {.defines = compute_defines},
         .dfb_bindings =
@@ -575,7 +580,7 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixComputeUnpackTilizeFp8e4m3) {
                 tt::tile_size(tt::DataFormat::Fp8_e4m3) * num_tiles_total, /*rand_max_float=*/20, /*seed=*/42);
             unit_tests::compute::tilize::TestConfig test_config = {
                 .dst_full_sync_en = dst_full_sync_en,
-                .fp32_dest_acc_en = false,
+                .fp32_dest_acc_en = true,  // BH: Fp8 requires fp32_dest_acc_en=true (JIT-enforced)
                 .input_single_tile_size = tt::tile_size(tt::DataFormat::Fp8_e4m3),
                 .output_single_tile_size = tt::tile_size(tt::DataFormat::Fp8_e4m3),
                 .num_tiles_r = num_tile[0],
@@ -780,8 +785,8 @@ static void run_quasar_tilize_untilize_test(
     experimental::metal2_host_api::KernelSpec reader_spec{
         .unique_id = READER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary_2_0.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary_2_0.cpp",
         .num_threads = 1,
         .dfb_bindings = {{
             .dfb_spec_name = INPUT_DFB,
@@ -800,8 +805,8 @@ static void run_quasar_tilize_untilize_test(
     experimental::metal2_host_api::KernelSpec writer_spec{
         .unique_id = WRITER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary_2_0.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary_2_0.cpp",
         .num_threads = 1,
         .dfb_bindings = {{
             .dfb_spec_name = OUTPUT_DFB,
@@ -846,7 +851,7 @@ static void run_quasar_tilize_untilize_test(
 
     experimental::metal2_host_api::KernelSpec compute_spec{
         .unique_id = COMPUTE,
-        .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{compute_kernel},
+        .source = compute_kernel,
         .num_threads = 1,
         .dfb_bindings =
             {{
@@ -1156,7 +1161,7 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixComputePackUntilizeFp8e4m3) {
                 tt::tile_size(tt::DataFormat::Fp8_e4m3) * num_t, /*rand_max_float=*/20, /*seed=*/42);
             unit_tests::compute::tilize::TestConfig test_config = {
                 .dst_full_sync_en = dst_full_sync_en,
-                .fp32_dest_acc_en = false,
+                .fp32_dest_acc_en = true,  // BH: Fp8 requires fp32_dest_acc_en=true (JIT-enforced)
                 .input_single_tile_size = tt::tile_size(tt::DataFormat::Fp8_e4m3),
                 .output_single_tile_size = tt::tile_size(tt::DataFormat::Fp8_e4m3),
                 .num_tiles_r = num_tile[0],

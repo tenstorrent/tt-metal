@@ -22,7 +22,6 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/experimental/host_api.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_params.hpp>
@@ -31,7 +30,7 @@
 #include "device_fixture.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
-#include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
+#include "impl/dataflow_buffer/dataflow_buffer.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel.hpp"
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
@@ -145,7 +144,8 @@ void run_single_dfb_program(
         // Implicit sync (Noc::TxnIdMode::ENABLED) is declared only under #ifdef ARCH_QUASAR
         // in api/dataflow/noc.h. Force it off so the device-side kernel's
         // `if constexpr (implicit_sync)` branch is dead code on WH/BH.
-        dfb_config.enable_implicit_sync = false;
+        dfb_config.enable_producer_implicit_sync = false;
+        dfb_config.enable_consumer_implicit_sync = false;
     }
 
     const uint32_t num_cores = core_range_set.num_cores();
@@ -212,14 +212,14 @@ void run_single_dfb_program(
     const auto consumer_pattern = is_all ? experimental::metal2_host_api::DFBAccessPattern::ALL
                                          : experimental::metal2_host_api::DFBAccessPattern::STRIDED;
 
-    // enable_implicit_sync: true  -> default disable_implicit_sync = false (implicit sync ON)
-    // enable_implicit_sync: false -> disable_implicit_sync = true
+    // Per-DM-kernel disable_implicit_sync_for entries below mirror the boolean derived from
+    // dfb_config.enable_producer_implicit_sync (the lower-level legacy config still drives the value;
+    // each DM endpoint votes per-DFB on the spec side).
     experimental::metal2_host_api::DataflowBufferSpec dfb_spec{
         .unique_id = DFB_NAME,
         .entry_size = entry_size,
         .num_entries = dfb_config.num_entries,
         .data_format_metadata = dfb_config.data_format,
-        .disable_implicit_sync = !dfb_config.enable_implicit_sync,
     };
 
     // DM kernel configs supply both Gen1 (BRISC for producer / NCRISC for consumer) and
@@ -242,9 +242,9 @@ void run_single_dfb_program(
         producer_spec = experimental::metal2_host_api::KernelSpec{
             .unique_id = PRODUCER,
             .source =
-                experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                    "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer.cpp"},
-            .num_threads = static_cast<uint8_t>(dfb_config.num_producers),
+
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer.cpp",
+            .num_threads = dfb_config.num_producers,
             .dfb_bindings = {{
                 .dfb_spec_name = DFB_NAME,
                 .local_accessor_name = "out",
@@ -258,7 +258,7 @@ void run_single_dfb_program(
             .compile_time_arg_bindings =
                 {
                     {"num_entries_per_producer", num_entries_per_producer},
-                    {"implicit_sync", static_cast<uint32_t>(dfb_config.enable_implicit_sync ? 1u : 0u)},
+                    {"implicit_sync", static_cast<uint32_t>(dfb_config.enable_producer_implicit_sync ? 1u : 0u)},
                     {"num_producers", dfb_config.num_producers},
                 },
             .runtime_arguments_schema = {.named_runtime_args = {"chunk_offset", "entries_per_core"}},
@@ -268,9 +268,9 @@ void run_single_dfb_program(
         producer_spec = experimental::metal2_host_api::KernelSpec{
             .unique_id = PRODUCER,
             .source =
-                experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                    "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_producer.cpp"},
-            .num_threads = static_cast<uint8_t>(dfb_config.num_producers),
+
+                "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_producer.cpp",
+            .num_threads = dfb_config.num_producers,
             .dfb_bindings = {{
                 .dfb_spec_name = DFB_NAME,
                 .local_accessor_name = "out",
@@ -287,9 +287,9 @@ void run_single_dfb_program(
         consumer_spec = experimental::metal2_host_api::KernelSpec{
             .unique_id = CONSUMER,
             .source =
-                experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                    "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer.cpp"},
-            .num_threads = static_cast<uint8_t>(dfb_config.num_consumers),
+
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer.cpp",
+            .num_threads = dfb_config.num_consumers,
             .dfb_bindings = {{
                 .dfb_spec_name = DFB_NAME,
                 .local_accessor_name = "in",
@@ -304,7 +304,7 @@ void run_single_dfb_program(
                 {
                     {"num_entries_per_consumer", num_entries_per_consumer},
                     {"blocked_consumer", static_cast<uint32_t>(is_all ? 1u : 0u)},
-                    {"implicit_sync", static_cast<uint32_t>(dfb_config.enable_implicit_sync ? 1u : 0u)},
+                    {"implicit_sync", static_cast<uint32_t>(dfb_config.enable_producer_implicit_sync ? 1u : 0u)},
                     {"num_consumers", dfb_config.num_consumers},
                 },
             .runtime_arguments_schema = {.named_runtime_args = {"chunk_offset", "entries_per_core"}},
@@ -314,9 +314,9 @@ void run_single_dfb_program(
         consumer_spec = experimental::metal2_host_api::KernelSpec{
             .unique_id = CONSUMER,
             .source =
-                experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                    "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_consumer.cpp"},
-            .num_threads = static_cast<uint8_t>(dfb_config.num_consumers),
+
+                "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_consumer.cpp",
+            .num_threads = dfb_config.num_consumers,
             .dfb_bindings = {{
                 .dfb_spec_name = DFB_NAME,
                 .local_accessor_name = "in",
@@ -326,6 +326,17 @@ void run_single_dfb_program(
             .compile_time_arg_bindings = {{"num_entries_per_consumer", num_entries_per_consumer}},
             .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
         };
+    }
+
+    // Each DM endpoint votes per-DFB on opting out of implicit sync.
+    const bool disable_isync = !dfb_config.enable_producer_implicit_sync;
+    if (producer_type == DFBPorCType::DM && disable_isync) {
+        std::get<experimental::metal2_host_api::DataMovementConfiguration>(producer_spec.config_spec)
+            .gen2_data_movement_config->disable_implicit_sync_for.push_back(DFB_NAME);
+    }
+    if (consumer_type == DFBPorCType::DM && disable_isync) {
+        std::get<experimental::metal2_host_api::DataMovementConfiguration>(consumer_spec.config_spec)
+            .gen2_data_movement_config->disable_implicit_sync_for.push_back(DFB_NAME);
     }
 
     experimental::metal2_host_api::WorkUnitSpec wu{
@@ -639,14 +650,15 @@ void run_concurrent_dfbs_program(
             .entry_size = entry_size,
             .num_entries = entries_per_dfb,
             .data_format_metadata = dfb_config.data_format,
-            .disable_implicit_sync = !dfb_config.enable_implicit_sync,
         });
+
+        const bool disable_isync = !dfb_config.enable_producer_implicit_sync;
 
         kernel_specs.push_back(experimental::metal2_host_api::KernelSpec{
             .unique_id = producer_name,
             .source =
-                experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                    "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_multi_producer.cpp"},
+
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_multi_producer.cpp",
             .num_threads = 1,
             .dfb_bindings = {{
                 .dfb_spec_name = dfb_name,
@@ -661,7 +673,7 @@ void run_concurrent_dfbs_program(
             .compile_time_arg_bindings =
                 {
                     {"num_entries_per_producer", entries_per_dfb},
-                    {"implicit_sync", static_cast<uint32_t>(dfb_config.enable_implicit_sync ? 1u : 0u)},
+                    {"implicit_sync", static_cast<uint32_t>(dfb_config.enable_producer_implicit_sync ? 1u : 0u)},
                     {"chunk_offset", chunk_offset},
                 },
             .config_spec =
@@ -669,13 +681,17 @@ void run_concurrent_dfbs_program(
                     .gen2_data_movement_config =
                         experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
         });
+        if (disable_isync) {
+            std::get<experimental::metal2_host_api::DataMovementConfiguration>(kernel_specs.back().config_spec)
+                .gen2_data_movement_config->disable_implicit_sync_for.push_back(dfb_name);
+        }
         kernel_names.push_back(producer_name);
 
         kernel_specs.push_back(experimental::metal2_host_api::KernelSpec{
             .unique_id = consumer_name,
             .source =
-                experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                    "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_multi_consumer.cpp"},
+
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_multi_consumer.cpp",
             .num_threads = 1,
             .dfb_bindings = {{
                 .dfb_spec_name = dfb_name,
@@ -690,7 +706,7 @@ void run_concurrent_dfbs_program(
             .compile_time_arg_bindings =
                 {
                     {"num_entries_per_consumer", entries_per_dfb},
-                    {"implicit_sync", static_cast<uint32_t>(dfb_config.enable_implicit_sync ? 1u : 0u)},
+                    {"implicit_sync", static_cast<uint32_t>(dfb_config.enable_producer_implicit_sync ? 1u : 0u)},
                     {"chunk_offset", chunk_offset},
                 },
             .config_spec =
@@ -698,6 +714,10 @@ void run_concurrent_dfbs_program(
                     .gen2_data_movement_config =
                         experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
         });
+        if (disable_isync) {
+            std::get<experimental::metal2_host_api::DataMovementConfiguration>(kernel_specs.back().config_spec)
+                .gen2_data_movement_config->disable_implicit_sync_for.push_back(dfb_name);
+        }
         kernel_names.push_back(consumer_name);
     }
 
@@ -794,8 +814,8 @@ void run_concurrent_tensix_dm_dfbs_program(
     experimental::metal2_host_api::KernelSpec producer_spec{
         .unique_id = PRODUCER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_seq_producer.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_seq_producer.cpp",
         .num_threads = 1,
         .compiler_options = {.defines = {{"TEST_NUM_DFBS", std::to_string(num_dfbs)}}},
         .compile_time_arg_bindings = {{"num_entries_per_producer", entries_per_dfb}},
@@ -835,7 +855,6 @@ void run_concurrent_tensix_dm_dfbs_program(
             .entry_size = entry_size,
             .num_entries = entries_per_dfb,
             .data_format_metadata = dfb_config.data_format,
-            .disable_implicit_sync = !dfb_config.enable_implicit_sync,
         });
 
         tensor_parameters.push_back(experimental::metal2_host_api::TensorParameter{
@@ -846,8 +865,8 @@ void run_concurrent_tensix_dm_dfbs_program(
         kernel_specs.push_back(experimental::metal2_host_api::KernelSpec{
             .unique_id = consumer_name,
             .source =
-                experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                    "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_multi_consumer_sep.cpp"},
+
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_multi_consumer_sep.cpp",
             .num_threads = 1,
             .dfb_bindings = {{
                 .dfb_spec_name = dfb_name,
@@ -862,13 +881,17 @@ void run_concurrent_tensix_dm_dfbs_program(
             .compile_time_arg_bindings =
                 {
                     {"num_entries_per_consumer", num_entries_per_consumer},
-                    {"implicit_sync", static_cast<uint32_t>(dfb_config.enable_implicit_sync ? 1u : 0u)},
+                    {"implicit_sync", static_cast<uint32_t>(dfb_config.enable_producer_implicit_sync ? 1u : 0u)},
                 },
             .config_spec =
                 experimental::metal2_host_api::DataMovementConfiguration{
                     .gen2_data_movement_config =
                         experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
         });
+        if (!dfb_config.enable_producer_implicit_sync) {
+            std::get<experimental::metal2_host_api::DataMovementConfiguration>(kernel_specs.back().config_spec)
+                .gen2_data_movement_config->disable_implicit_sync_for.push_back(dfb_name);
+        }
         kernel_names.push_back(consumer_name);
     }
 
@@ -1016,14 +1039,14 @@ void run_sequential_dfbs_program(
     experimental::metal2_host_api::KernelSpec producer_spec{
         .unique_id = PRODUCER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_seq_producer.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_seq_producer.cpp",
         .num_threads = num_producers,
         .compiler_options = {.defines = {{"TEST_NUM_DFBS", std::to_string(num_dfbs)}}},
         .compile_time_arg_bindings =
             {
                 {"num_entries_per_producer", num_entries_per_producer},
-                {"implicit_sync", static_cast<uint32_t>(configs[0].enable_implicit_sync ? 1u : 0u)},
+                {"implicit_sync", static_cast<uint32_t>(configs[0].enable_producer_implicit_sync ? 1u : 0u)},
                 {"num_producers", num_producers},
             },
         .config_spec =
@@ -1037,13 +1060,13 @@ void run_sequential_dfbs_program(
     experimental::metal2_host_api::KernelSpec consumer_spec{
         .unique_id = CONSUMER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_seq_consumer.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_seq_consumer.cpp",
         .num_threads = num_consumers,
         .compiler_options = {.defines = {{"TEST_NUM_DFBS", std::to_string(num_dfbs)}}},
         .compile_time_arg_bindings =
             {
-                {"implicit_sync", static_cast<uint32_t>(configs[0].enable_implicit_sync ? 1u : 0u)},
+                {"implicit_sync", static_cast<uint32_t>(configs[0].enable_producer_implicit_sync ? 1u : 0u)},
                 {"num_consumers", num_consumers},
             },
         .config_spec =
@@ -1072,8 +1095,14 @@ void run_sequential_dfbs_program(
             .entry_size = entry_size,
             .num_entries = num_entries,
             .data_format_metadata = configs[i].data_format,
-            .disable_implicit_sync = !configs[i].enable_implicit_sync,
         });
+        const bool disable_isync = !configs[i].enable_producer_implicit_sync;
+        if (disable_isync) {
+            std::get<experimental::metal2_host_api::DataMovementConfiguration>(producer_spec.config_spec)
+                .gen2_data_movement_config->disable_implicit_sync_for.push_back(dfb_name);
+            std::get<experimental::metal2_host_api::DataMovementConfiguration>(consumer_spec.config_spec)
+                .gen2_data_movement_config->disable_implicit_sync_for.push_back(dfb_name);
+        }
         tensor_parameters.push_back(experimental::metal2_host_api::TensorParameter{
             .unique_id = in_tensor_name,
             .spec = in_tensors[i].tensor_spec(),
@@ -1206,22 +1235,20 @@ void run_in_dfb_out_dfb_program(
         .entry_size = entry_size,
         .num_entries = num_entries,
         .data_format_metadata = dm2tensix_config.data_format,
-        .disable_implicit_sync = !dm2tensix_config.enable_implicit_sync,
     };
     experimental::metal2_host_api::DataflowBufferSpec out_dfb_spec{
         .unique_id = OUT_DFB,
         .entry_size = entry_size,
         .num_entries = num_entries,
         .data_format_metadata = tensix2dm_config.data_format,
-        .disable_implicit_sync = !tensix2dm_config.enable_implicit_sync,
     };
 
     experimental::metal2_host_api::KernelSpec producer_spec{
         .unique_id = PRODUCER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer.cpp"},
-        .num_threads = static_cast<uint8_t>(dm2tensix_config.num_producers),
+
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer.cpp",
+        .num_threads = dm2tensix_config.num_producers,
         .dfb_bindings = {{
             .dfb_spec_name = IN_DFB,
             .local_accessor_name = "out",
@@ -1235,7 +1262,7 @@ void run_in_dfb_out_dfb_program(
         .compile_time_arg_bindings =
             {
                 {"num_entries_per_producer", num_entries_per_producer},
-                {"implicit_sync", static_cast<uint32_t>(dm2tensix_config.enable_implicit_sync ? 1u : 0u)},
+                {"implicit_sync", static_cast<uint32_t>(dm2tensix_config.enable_producer_implicit_sync ? 1u : 0u)},
                 {"num_producers", dm2tensix_config.num_producers},
             },
         .runtime_arguments_schema = {.named_runtime_args = {"chunk_offset", "entries_per_core"}},
@@ -1244,12 +1271,16 @@ void run_in_dfb_out_dfb_program(
                 .gen2_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
     };
+    if (!dm2tensix_config.enable_producer_implicit_sync) {
+        std::get<experimental::metal2_host_api::DataMovementConfiguration>(producer_spec.config_spec)
+            .gen2_data_movement_config->disable_implicit_sync_for.push_back(IN_DFB);
+    }
 
     experimental::metal2_host_api::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6.cpp",
         .num_threads = 1,
         .dfb_bindings =
             {
@@ -1274,9 +1305,9 @@ void run_in_dfb_out_dfb_program(
     experimental::metal2_host_api::KernelSpec consumer_spec{
         .unique_id = CONSUMER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer.cpp"},
-        .num_threads = static_cast<uint8_t>(tensix2dm_config.num_consumers),
+
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer.cpp",
+        .num_threads = tensix2dm_config.num_consumers,
         .dfb_bindings = {{
             .dfb_spec_name = OUT_DFB,
             .local_accessor_name = "in",
@@ -1292,7 +1323,7 @@ void run_in_dfb_out_dfb_program(
             {
                 {"num_entries_per_consumer", num_entries_per_consumer},
                 {"blocked_consumer", static_cast<uint32_t>(out_is_all ? 1u : 0u)},
-                {"implicit_sync", static_cast<uint32_t>(tensix2dm_config.enable_implicit_sync ? 1u : 0u)},
+                {"implicit_sync", static_cast<uint32_t>(tensix2dm_config.enable_producer_implicit_sync ? 1u : 0u)},
                 {"num_consumers", tensix2dm_config.num_consumers},
             },
         .runtime_arguments_schema = {.named_runtime_args = {"chunk_offset", "entries_per_core"}},
@@ -1301,6 +1332,10 @@ void run_in_dfb_out_dfb_program(
                 .gen2_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
     };
+    if (!tensix2dm_config.enable_producer_implicit_sync) {
+        std::get<experimental::metal2_host_api::DataMovementConfiguration>(consumer_spec.config_spec)
+            .gen2_data_movement_config->disable_implicit_sync_for.push_back(OUT_DFB);
+    }
 
     experimental::metal2_host_api::WorkUnitSpec wu{
         .unique_id = "main",
@@ -1392,27 +1427,29 @@ constexpr uint32_t dfb_default_num_entries(uint32_t num_p, uint32_t num_c) {
             .pap = dfb::AccessPattern::pap_kind,                                                        \
             .num_consumers = (num_c),                                                                   \
             .cap = dfb::AccessPattern::cap_kind,                                                        \
-            .enable_implicit_sync = GetParam()};                                                        \
-        run_single_dfb_program(                                                                         \
-            this->devices_.at(0), config, DFBPorCType::p_kind, DFBPorCType::c_kind);                    \
+            .enable_producer_implicit_sync = GetParam(),                                                \
+            .enable_consumer_implicit_sync = GetParam()};                                               \
+        run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::p_kind, DFBPorCType::c_kind); \
     }
 
 // Variant for DM->DM tests that pass an explicit num_entries_in_buffer (forces wraparound
 // when the requested total exceeds the ring size).
-#define DFB_TEST_BUF(prefix, suffix, p_kind, c_kind, num_p, pap_kind, num_c, cap_kind, extra_skip, n_buf) \
-    TEST_P(DFBImplicitSyncParamFixture, prefix##Test1xDFB##suffix) {                                    \
-        DFB_SKIP_IF_UNSUPPORTED((num_p), (num_c));                                                      \
-        extra_skip;                                                                                     \
-        experimental::dfb::DataflowBufferConfig config{                                                 \
-            .entry_size = 1024,                                                                         \
-            .num_entries = dfb_default_num_entries((num_p), (num_c)),                                   \
-            .num_producers = (num_p), .pap = dfb::AccessPattern::pap_kind,                              \
-            .num_consumers = (num_c), .cap = dfb::AccessPattern::cap_kind,                              \
-            .enable_implicit_sync = GetParam()};                                                        \
-        CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));                       \
-        run_single_dfb_program(                                                                         \
-            this->devices_.at(0), config, DFBPorCType::p_kind, DFBPorCType::c_kind,                     \
-            core_range_set, (n_buf));                                                                   \
+#define DFB_TEST_BUF(prefix, suffix, p_kind, c_kind, num_p, pap_kind, num_c, cap_kind, extra_skip, n_buf)     \
+    TEST_P(DFBImplicitSyncParamFixture, prefix##Test1xDFB##suffix) {                                          \
+        DFB_SKIP_IF_UNSUPPORTED((num_p), (num_c));                                                            \
+        extra_skip;                                                                                           \
+        experimental::dfb::DataflowBufferConfig config{                                                       \
+            .entry_size = 1024,                                                                               \
+            .num_entries = dfb_default_num_entries((num_p), (num_c)),                                         \
+            .num_producers = (num_p),                                                                         \
+            .pap = dfb::AccessPattern::pap_kind,                                                              \
+            .num_consumers = (num_c),                                                                         \
+            .cap = dfb::AccessPattern::cap_kind,                                                              \
+            .enable_producer_implicit_sync = GetParam(),                                                      \
+            .enable_consumer_implicit_sync = GetParam()};                                                     \
+        CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));                             \
+        run_single_dfb_program(                                                                               \
+            this->devices_.at(0), config, DFBPorCType::p_kind, DFBPorCType::c_kind, core_range_set, (n_buf)); \
     }
 
 // =====================================================================================
@@ -1435,7 +1472,8 @@ DFB_TEST    (TensixDM, 1Sx1S, TENSIX, DM,     1, STRIDED, 1, STRIDED, DFB_NO_EXT
 //         .pap = dfb::AccessPattern::STRIDED,
 //         .num_consumers = 1,
 //         .cap = dfb::AccessPattern::STRIDED,
-//         .enable_implicit_sync = false};
+//         .enable_producer_implicit_sync = false,
+//         .enable_consumer_implicit_sync = false};
 
 //     experimental::dfb::DataflowBufferConfig tensix2dm_config{
 //         .entry_size = 1024,
@@ -1444,7 +1482,8 @@ DFB_TEST    (TensixDM, 1Sx1S, TENSIX, DM,     1, STRIDED, 1, STRIDED, DFB_NO_EXT
 //         .pap = dfb::AccessPattern::STRIDED,
 //         .num_consumers = 1,
 //             .cap = dfb::AccessPattern::STRIDED,
-//         .enable_implicit_sync = false};
+//         .enable_producer_implicit_sync = false,
+//         .enable_consumer_implicit_sync = false};
 
 //     run_in_dfb_out_dfb_program(this->devices_.at(0), dm2tensix_config, tensix2dm_config);
 // }
@@ -1460,7 +1499,8 @@ DFB_TEST    (TensixDM, 1Sx1S, TENSIX, DM,     1, STRIDED, 1, STRIDED, DFB_NO_EXT
 //         .pap = dfb::AccessPattern::STRIDED,
 //         .num_consumers = 1,
 //         .cap = dfb::AccessPattern::STRIDED,
-//         .enable_implicit_sync = false};
+//         .enable_producer_implicit_sync = false,
+//         .enable_consumer_implicit_sync = false};
 
 //     experimental::dfb::DataflowBufferConfig tensix2dm_config{
 //         .entry_size = 1024,
@@ -1469,7 +1509,8 @@ DFB_TEST    (TensixDM, 1Sx1S, TENSIX, DM,     1, STRIDED, 1, STRIDED, DFB_NO_EXT
 //         .pap = dfb::AccessPattern::STRIDED,
 //         .num_consumers = 2,
 //         .cap = dfb::AccessPattern::STRIDED,
-//         .enable_implicit_sync = false};
+//         .enable_producer_implicit_sync = false,
+//         .enable_consumer_implicit_sync = false};
 
 //     run_in_dfb_out_dfb_program(this->devices_.at(0), dm2tensix_config, tensix2dm_config);
 // }
@@ -1485,7 +1526,8 @@ DFB_TEST    (TensixDM, 1Sx1S, TENSIX, DM,     1, STRIDED, 1, STRIDED, DFB_NO_EXT
 //         .pap = dfb::AccessPattern::STRIDED,
 //         .num_consumers = 1,
 //         .cap = dfb::AccessPattern::STRIDED,
-//         .enable_implicit_sync = false};
+//         .enable_producer_implicit_sync = false,
+//         .enable_consumer_implicit_sync = false};
 
 //     experimental::dfb::DataflowBufferConfig tensix2dm_config{
 //         .entry_size = 1024,
@@ -1494,7 +1536,8 @@ DFB_TEST    (TensixDM, 1Sx1S, TENSIX, DM,     1, STRIDED, 1, STRIDED, DFB_NO_EXT
 //         .pap = dfb::AccessPattern::STRIDED,
 //         .num_consumers = 4,
 //         .cap = dfb::AccessPattern::STRIDED,
-//         .enable_implicit_sync = false};
+//         .enable_producer_implicit_sync = false,
+//         .enable_consumer_implicit_sync = false};
 
 //     run_in_dfb_out_dfb_program(this->devices_.at(0), dm2tensix_config, tensix2dm_config);
 // }
@@ -1624,7 +1667,8 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB_RingPressure_1Sx1S) {
         .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 1,
         .cap = dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = GetParam()};
+        .enable_producer_implicit_sync = GetParam(),
+        .enable_consumer_implicit_sync = GetParam()};
     run_single_dfb_program(
         this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM,
         CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0))), /*num_entries_in_buffer=*/64);
@@ -1644,7 +1688,8 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB_RingPressure_3Sx3S) {
         .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 3,
         .cap = dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = GetParam()};
+        .enable_producer_implicit_sync = GetParam(),
+        .enable_consumer_implicit_sync = GetParam()};
     run_single_dfb_program(
         this->devices_.at(0),
         config,
@@ -1669,7 +1714,8 @@ TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB_RingPressure_4Sx4A) {
         .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 4,
         .cap = dfb::AccessPattern::ALL,
-        .enable_implicit_sync = GetParam()};
+        .enable_producer_implicit_sync = GetParam(),
+        .enable_consumer_implicit_sync = GetParam()};
     run_single_dfb_program(
         this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::TENSIX,
         CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0))), /*num_entries_in_buffer=*/64);
@@ -1690,7 +1736,8 @@ TEST_P(DFBImplicitSyncParamFixture, TensixDMTest1xDFB_RingPressure_2Sx4S) {
         .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 4,
         .cap = dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = GetParam()};
+        .enable_producer_implicit_sync = GetParam(),
+        .enable_consumer_implicit_sync = GetParam()};
     run_single_dfb_program(
         this->devices_.at(0), config, DFBPorCType::TENSIX, DFBPorCType::DM,
         CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0))), /*num_entries_in_buffer=*/64);
@@ -1707,7 +1754,8 @@ TEST_P(DFBImplicitSyncParamFixture, MultiCoreDMTest2Core_1Sx1S) {
         .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 1,
         .cap = dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = GetParam()};
+        .enable_producer_implicit_sync = GetParam(),
+        .enable_consumer_implicit_sync = GetParam()};
 
     CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(1, 0)));
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM, core_range_set);
@@ -1724,7 +1772,8 @@ TEST_P(DFBImplicitSyncParamFixture, MultiCoreDMTest2Core_2Sx2S) {
         .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 2,
         .cap = dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = GetParam()};
+        .enable_producer_implicit_sync = GetParam(),
+        .enable_consumer_implicit_sync = GetParam()};
 
     CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(1, 0)));
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM, core_range_set);
@@ -1744,7 +1793,8 @@ TEST_P(DFBImplicitSyncParamFixture, MultiCoreDMTest2Core_1Sx4A) {
         .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 4,
         .cap = dfb::AccessPattern::ALL,
-        .enable_implicit_sync = GetParam()};
+        .enable_producer_implicit_sync = GetParam(),
+        .enable_consumer_implicit_sync = GetParam()};
 
     CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(1, 0)));
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM, core_range_set);
@@ -1777,13 +1827,14 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest3xDFB_1Sx1S) {
         GTEST_SKIP() << "Skipping: concurrent DFB test requires Quasar multi-threaded DM";
     }
     experimental::dfb::DataflowBufferConfig config{
-        .entry_size    = 1024,
-        .num_entries   = 16,
+        .entry_size = 1024,
+        .num_entries = 16,
         .num_producers = 1,
-        .pap           = dfb::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 1,
-        .cap           = dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = GetParam()};
+        .cap = dfb::AccessPattern::STRIDED,
+        .enable_producer_implicit_sync = GetParam(),
+        .enable_consumer_implicit_sync = GetParam()};
     run_concurrent_dfbs_program(this->devices_.at(0), /*num_dfbs=*/3, config);
 }
 
@@ -1795,13 +1846,14 @@ TEST_P(DFBImplicitSyncParamFixture, TensixDMTest4xDFB_1Sx1S) {
         GTEST_SKIP() << "Skipping: Tensix concurrent DFB test requires Quasar";
     }
     experimental::dfb::DataflowBufferConfig config{
-        .entry_size    = 1024,
-        .num_entries   = 16,
+        .entry_size = 1024,
+        .num_entries = 16,
         .num_producers = 1,
-        .pap           = dfb::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 1,
-        .cap           = dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = GetParam()};
+        .cap = dfb::AccessPattern::STRIDED,
+        .enable_producer_implicit_sync = GetParam(),
+        .enable_consumer_implicit_sync = GetParam()};
     run_concurrent_tensix_dm_dfbs_program(this->devices_.at(0), /*num_dfbs=*/4, config);
 }
 
@@ -1820,7 +1872,8 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest4xDFB_3Sx3S) {
         .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 3,
         .cap = dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = GetParam()};
+        .enable_producer_implicit_sync = GetParam(),
+        .enable_consumer_implicit_sync = GetParam()};
     run_sequential_dfbs_program(this->devices_.at(0), {config, config, config, config});
 }
 
@@ -1842,7 +1895,8 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest4xDFB_Mixed) {
         .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 3,
         .cap = dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = GetParam()};
+        .enable_producer_implicit_sync = GetParam(),
+        .enable_consumer_implicit_sync = GetParam()};
     experimental::dfb::DataflowBufferConfig all_cfg{
         .entry_size = 1024,
         .num_entries = 18,
@@ -1850,7 +1904,8 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest4xDFB_Mixed) {
         .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 3,
         .cap = dfb::AccessPattern::ALL,
-        .enable_implicit_sync = GetParam()};
+        .enable_producer_implicit_sync = GetParam(),
+        .enable_consumer_implicit_sync = GetParam()};
     run_sequential_dfbs_program(
         this->devices_.at(0), {strided_cfg, strided_cfg, all_cfg, all_cfg});
 }
@@ -1876,7 +1931,8 @@ static void run_intra_tensix_dfb_program(
         .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = num_threads,
         .cap = dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = false,
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false,
         .tensix_scope = experimental::dfb::TensixScope::INTRA};
 
     CoreCoord logical_core = CoreCoord(0, 0);
@@ -1898,7 +1954,6 @@ static void run_intra_tensix_dfb_program(
         .entry_size = entry_size,
         .num_entries = num_entries,
         .data_format_metadata = dfb_config.data_format,
-        .disable_implicit_sync = !dfb_config.enable_implicit_sync,
     };
 
     // Self-looped: register both PRODUCER and CONSUMER bindings on the same kernel.
@@ -1906,9 +1961,9 @@ static void run_intra_tensix_dfb_program(
     experimental::metal2_host_api::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_intra.cpp"},
-        .num_threads = static_cast<uint8_t>(num_threads),
+
+            "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_intra.cpp",
+        .num_threads = num_threads,
         .dfb_bindings =
             {
                 {
@@ -2005,24 +2060,26 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4A) {
 
     // dfb(0): DM->Tensix, 1Sx4A with remapper, implicit sync enabled.
     experimental::dfb::DataflowBufferConfig remapper_dfb_config{
-        .entry_size           = entry_size,
-        .num_entries          = num_entries,
-        .num_producers        = 1,
-        .pap                  = dfb::AccessPattern::STRIDED,
-        .num_consumers        = num_neos,
-        .cap                  = dfb::AccessPattern::ALL,
-        .enable_implicit_sync = true};
+        .entry_size = entry_size,
+        .num_entries = num_entries,
+        .num_producers = 1,
+        .pap = dfb::AccessPattern::STRIDED,
+        .num_consumers = num_neos,
+        .cap = dfb::AccessPattern::ALL,
+        .enable_producer_implicit_sync = true,
+        .enable_consumer_implicit_sync = true};
 
     // dfb(1): intra-tensix, 4 packer->unpacker pairs, hidden TCs.
     experimental::dfb::DataflowBufferConfig intra_dfb_config{
-        .entry_size           = entry_size,
-        .num_entries          = num_entries,
-        .num_producers        = num_neos,
-        .pap                  = dfb::AccessPattern::STRIDED,
-        .num_consumers        = num_neos,
-        .cap                  = dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = false,
-        .tensix_scope         = experimental::dfb::TensixScope::INTRA};
+        .entry_size = entry_size,
+        .num_entries = num_entries,
+        .num_producers = num_neos,
+        .pap = dfb::AccessPattern::STRIDED,
+        .num_consumers = num_neos,
+        .cap = dfb::AccessPattern::STRIDED,
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false,
+        .tensix_scope = experimental::dfb::TensixScope::INTRA};
 
     auto in_tensor = MeshTensor::allocate_on_device(
         *this->devices_.at(0), make_flat_dram_tensor_spec(entry_size, num_entries), TensorTopology{});
@@ -2038,21 +2095,19 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4A) {
         .entry_size = entry_size,
         .num_entries = num_entries,
         .data_format_metadata = remapper_dfb_config.data_format,
-        .disable_implicit_sync = !remapper_dfb_config.enable_implicit_sync,
     };
     experimental::metal2_host_api::DataflowBufferSpec intra_dfb_spec{
         .unique_id = INTRA_DFB,
         .entry_size = entry_size,
         .num_entries = num_entries,
         .data_format_metadata = intra_dfb_config.data_format,
-        .disable_implicit_sync = !intra_dfb_config.enable_implicit_sync,
     };
 
     experimental::metal2_host_api::KernelSpec dm_producer_spec{
         .unique_id = DM_PRODUCER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer.cpp",
         .num_threads = 1,
         .dfb_bindings = {{
             .dfb_spec_name = REMAPPER_DFB,
@@ -2076,6 +2131,10 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4A) {
                 .gen2_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
     };
+    if (!remapper_dfb_config.enable_producer_implicit_sync) {
+        std::get<experimental::metal2_host_api::DataMovementConfiguration>(dm_producer_spec.config_spec)
+            .gen2_data_movement_config->disable_implicit_sync_for.push_back(REMAPPER_DFB);
+    }
 
     // Combined compute kernel: BLOCKED consumer of remapper DFB ("remapper_in"),
     // self-looped on intra DFB (PRODUCER "intra_out" + CONSUMER "intra_in"; the
@@ -2083,9 +2142,9 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4A) {
     experimental::metal2_host_api::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/compute/dfb_intra_and_consume_all.cpp"},
-        .num_threads = static_cast<uint8_t>(num_neos),
+
+            "tests/tt_metal/tt_metal/test_kernels/compute/dfb_intra_and_consume_all.cpp",
+        .num_threads = num_neos,
         .dfb_bindings =
             {
                 {

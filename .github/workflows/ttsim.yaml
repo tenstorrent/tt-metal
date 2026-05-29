@@ -21,7 +21,7 @@ on:
       ttsim-version:
         required: false
         type: string
-        default: "v1.6.4"
+        default: "v1.7.0"
       job-timeout:
         required: false
         type: number
@@ -382,7 +382,7 @@ jobs:
           else
             ./build/test/tt_metal/unit_tests_api --gtest_filter="MeshDeviceFixture.IdleEthTestNocStreamRegs"
             ./build/test/tt_metal/unit_tests_api --gtest_filter="MeshDispatchFixture.IdleEthDRAMLoopbackSingleCore"
-            ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="DPrintMeshFixture.IdleEthTestPrint"
+            ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="DevicePrintFixture.IdleEthTestPrint"
             # WH works (very long test, by default for erisc runs at least 0x5f5e1000U cycles)
             # ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TensixTestWatcherPause"
             ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TestWatcherRingBufferIErisc"
