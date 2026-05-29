@@ -427,7 +427,7 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
     auto dfb_binding = [](const std::string& name, DFBEndpoint endpoint) {
         return experimental::metal2_host_api::KernelSpec::DFBBinding{
             .dfb_spec_name = name,
-            .local_accessor_name = name,
+            .accessor_name = name,
             .endpoint_type = endpoint,
             .access_pattern = DFBAccess::STRIDED,
         };
@@ -474,7 +474,7 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
         .num_threads = 1,
         .dfb_bindings = {{
             .dfb_spec_name = OUT_DFB,
-            .local_accessor_name = "in",
+            .accessor_name = "in",
             .endpoint_type = DFBEndpoint::CONSUMER,
             .access_pattern = DFBAccess::STRIDED,
         }},

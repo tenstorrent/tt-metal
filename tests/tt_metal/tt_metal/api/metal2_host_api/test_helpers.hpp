@@ -145,7 +145,7 @@ inline void BindDFBToKernel(
     DFBAccessPattern access_pattern = DFBAccessPattern::STRIDED) {
     kernel.dfb_bindings.push_back(KernelSpec::DFBBinding{
         .dfb_spec_name = dfb_name,
-        .local_accessor_name = accessor_name,
+        .accessor_name = accessor_name,
         .endpoint_type = endpoint_type,
         .access_pattern = access_pattern,
     });

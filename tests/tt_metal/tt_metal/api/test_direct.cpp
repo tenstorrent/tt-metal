@@ -258,7 +258,7 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
         .num_threads = num_threads,
         .dfb_bindings = {{
             .dfb_spec_name = L1_DFB,
-            .local_accessor_name = "out",
+            .accessor_name = "out",
             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
@@ -275,7 +275,7 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
         .num_threads = num_threads,
         .dfb_bindings = {{
             .dfb_spec_name = L1_DFB,
-            .local_accessor_name = "in",
+            .accessor_name = "in",
             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
@@ -454,7 +454,7 @@ bool reader_datacopy_writer(
         .num_threads = num_threads,
         .dfb_bindings = {{
             .dfb_spec_name = INPUT_DFB,
-            .local_accessor_name = "out",
+            .accessor_name = "out",
             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
@@ -471,7 +471,7 @@ bool reader_datacopy_writer(
         .num_threads = num_threads,
         .dfb_bindings = {{
             .dfb_spec_name = OUTPUT_DFB,
-            .local_accessor_name = "in",
+            .accessor_name = "in",
             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
@@ -489,13 +489,13 @@ bool reader_datacopy_writer(
         .dfb_bindings =
             {{
                  .dfb_spec_name = INPUT_DFB,
-                 .local_accessor_name = "in",
+                 .accessor_name = "in",
                  .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = OUTPUT_DFB,
-                 .local_accessor_name = "out",
+                 .accessor_name = "out",
                  .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},

@@ -157,7 +157,7 @@ TEST_F(ProgramSpecTestQuasar, SharedLocalAccessorNameForDifferentDFBsFails) {
     auto dfb0 = MakeMinimalDFB("dfb_0");
     auto dfb1 = MakeMinimalDFB("dfb_1");
 
-    // Bind two *different* DFBs with the same local_accessor_name — illegal
+    // Bind two *different* DFBs with the same accessor_name — illegal
     // (self-loop sharing requires the same DFB on both bindings).
     BindDFBToKernel(kernel, "dfb_0", "same_accessor", KernelSpec::DFBEndpointType::PRODUCER);
     BindDFBToKernel(kernel, "dfb_1", "same_accessor", KernelSpec::DFBEndpointType::CONSUMER);
@@ -169,7 +169,7 @@ TEST_F(ProgramSpecTestQuasar, SharedLocalAccessorNameForDifferentDFBsFails) {
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("Kernel 'kernel' uses local_accessor_name 'same_accessor' for two different DFBs")));
+            ::testing::HasSubstr("Kernel 'kernel' uses accessor_name 'same_accessor' for two different DFBs")));
 }
 
 TEST_F(ProgramSpecTestQuasar, DuplicateProducerBindingForSameLocalAccessorNameFails) {
@@ -182,7 +182,7 @@ TEST_F(ProgramSpecTestQuasar, DuplicateProducerBindingForSameLocalAccessorNameFa
     auto consumer_kernel = MakeMinimalDMKernel("consumer");
     auto dfb = MakeMinimalDFB("dfb");
 
-    // Two PRODUCER bindings on the same kernel sharing a local_accessor_name —
+    // Two PRODUCER bindings on the same kernel sharing a accessor_name —
     // illegal: the self-loop relaxation requires opposite endpoint types.
     BindDFBToKernel(producer_kernel, "dfb", "shared", KernelSpec::DFBEndpointType::PRODUCER);
     BindDFBToKernel(producer_kernel, "dfb", "shared", KernelSpec::DFBEndpointType::PRODUCER);
@@ -195,7 +195,7 @@ TEST_F(ProgramSpecTestQuasar, DuplicateProducerBindingForSameLocalAccessorNameFa
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("duplicate PRODUCER binding for local_accessor_name 'shared'")));
+            ::testing::HasSubstr("duplicate PRODUCER binding for accessor_name 'shared'")));
 }
 
 TEST_F(ProgramSpecTestQuasar, SelfLoopWithSharedLocalAccessorNameSucceeds) {
@@ -205,7 +205,7 @@ TEST_F(ProgramSpecTestQuasar, SelfLoopWithSharedLocalAccessorNameSucceeds) {
     spec.name = "test_program";
 
     // A kernel that both produces and consumes the same DFB may share a single
-    // local_accessor_name across the PRODUCER and CONSUMER bindings.
+    // accessor_name across the PRODUCER and CONSUMER bindings.
     auto kernel = MakeMinimalDMKernel("kernel");
     auto dfb = MakeMinimalDFB("dfb");
     BindDFBToKernel(kernel, "dfb", "acc", KernelSpec::DFBEndpointType::PRODUCER);
@@ -251,7 +251,7 @@ TEST_F(ProgramSpecTestQuasar, InvalidLocalAccessorNameFails) {
         EXPECT_THAT(
             [&] { MakeProgramFromSpec(*mesh_device_, spec); },
             ::testing::ThrowsMessage<std::runtime_error>(
-                ::testing::HasSubstr("DFB local_accessor_name '" + bad_name + "' must be a valid C++ identifier")))
+                ::testing::HasSubstr("DFB accessor_name '" + bad_name + "' must be a valid C++ identifier")))
             << "Expected rejection for name: '" << bad_name << "'";
     }
 }
@@ -2405,7 +2405,7 @@ TEST(AggregateSpecTypes, ProgramSpecDesignatedInitializers) {
                         {
                             KernelSpec::DFBBinding{
                                 .dfb_spec_name = "dfb",
-                                .local_accessor_name = "out",
+                                .accessor_name = "out",
                                 .endpoint_type = KernelSpec::DFBEndpointType::PRODUCER,
                                 .access_pattern = DFBAccessPattern::STRIDED,
                             },
@@ -2422,7 +2422,7 @@ TEST(AggregateSpecTypes, ProgramSpecDesignatedInitializers) {
                         {
                             KernelSpec::DFBBinding{
                                 .dfb_spec_name = "dfb",
-                                .local_accessor_name = "in",
+                                .accessor_name = "in",
                                 .endpoint_type = KernelSpec::DFBEndpointType::CONSUMER,
                                 .access_pattern = DFBAccessPattern::STRIDED,
                             },
@@ -2459,7 +2459,7 @@ TEST(AggregateSpecTypes, NestedStructsDesignatedInitializers) {
     // Demonstrates constructing nested configuration structs with designated initializers
     KernelSpec::DFBBinding binding{
         .dfb_spec_name = "my_dfb",
-        .local_accessor_name = "accessor",
+        .accessor_name = "accessor",
         .endpoint_type = KernelSpec::DFBEndpointType::PRODUCER,
         .access_pattern = DFBAccessPattern::ALL,
     };

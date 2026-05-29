@@ -28,8 +28,8 @@
 // Opaque handle for a DataflowBuffer binding (declared in kernel_bindings_generated.h).
 // The user will never directly interact with this type.
 //
-// The user's host code declares a local_accessor_name when binding a DFB endpoint to a kernel.
-// The user then uses that local_accessor_name to construct a DataflowBuffer in the kernel code.
+// The user's host code declares a accessor_name when binding a DFB endpoint to a kernel.
+// The user then uses that accessor_name to construct a DataflowBuffer in the kernel code.
 //
 // Usage example:
 //   // (Host code declares "my_dfb_name" as the DFB local accessor name for this kernel.)

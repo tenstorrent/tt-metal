@@ -94,11 +94,11 @@ struct KernelSpec {
 
     // DFB bindings
     // Declares that this kernel requires a DFB resource (declared at the ProgramSpec level)
-    // The kernel constructs the accessor via DataflowBufferAccessor(dfb::<local_accessor_name>)
+    // The kernel constructs the accessor via DataflowBufferAccessor(dfb::<accessor_name>)
     enum class DFBEndpointType { PRODUCER, CONSUMER };
     struct DFBBinding {
         DFBSpecName dfb_spec_name;        // identify the DFB within the ProgramSpec
-        std::string local_accessor_name;  // DFB accessor name (used in the kernel source code)
+        std::string accessor_name;  // DFB accessor name (used in the kernel source code)
         DFBEndpointType endpoint_type;    // producer or consumer
         DFBAccessPattern access_pattern = DFBAccessPattern::STRIDED;  // strided, all, or blocked
     };
@@ -106,7 +106,7 @@ struct KernelSpec {
 
     // Semaphore bindings
     // Declares that this kernel accesses a semaphore resource (declared at the ProgramSpec level)
-    // The kernel constructs the accessor via SemaphoreAccessor(sem::<local_accessor_name>)
+    // The kernel constructs the accessor via SemaphoreAccessor(sem::<accessor_name>)
     struct SemaphoreBinding {
         SemaphoreSpecName semaphore_spec_name;  // identify the semaphore within the ProgramSpec
         std::string accessor_name;              // semaphore accessor name (used in the kernel source code)

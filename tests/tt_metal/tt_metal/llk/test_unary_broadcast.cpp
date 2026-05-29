@@ -326,7 +326,7 @@ void run_single_core_unary_broadcast_quasar(
         .num_threads = 1,
         .dfb_bindings = {{
             .dfb_spec_name = SRC_DFB,
-            .local_accessor_name = "out",
+            .accessor_name = "out",
             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
@@ -348,7 +348,7 @@ void run_single_core_unary_broadcast_quasar(
         .num_threads = 1,
         .dfb_bindings = {{
             .dfb_spec_name = DST_DFB,
-            .local_accessor_name = "in",
+            .accessor_name = "in",
             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
@@ -375,13 +375,13 @@ void run_single_core_unary_broadcast_quasar(
         .dfb_bindings =
             {{
                  .dfb_spec_name = SRC_DFB,
-                 .local_accessor_name = "src",
+                 .accessor_name = "src",
                  .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = DST_DFB,
-                 .local_accessor_name = "dst",
+                 .accessor_name = "dst",
                  .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},

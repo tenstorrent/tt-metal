@@ -283,7 +283,7 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
     // Build DFB endpoint info from kernel bindings
     for (const auto& kernel : spec.kernels) {
         // Track per-accessor-name signatures within this kernel. Reusing a single
-        // local_accessor_name across two DFBBindings is permitted as a "self-loop pair":
+        // accessor_name across two DFBBindings is permitted as a "self-loop pair":
         // both bindings target the same DFB with opposite endpoint types (one PRODUCER,
         // one CONSUMER). This lets a kernel that both produces and consumes the same DFB
         // use a single device-side accessor name instead of two aliasing wrappers.
@@ -295,21 +295,21 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
         std::unordered_map<std::string, AccessorBindingInfo> accessor_bindings;
         for (const auto& dfb_binding : kernel.dfb_bindings) {
             auto [it, inserted] = accessor_bindings.try_emplace(
-                dfb_binding.local_accessor_name, AccessorBindingInfo{dfb_binding.dfb_spec_name});
+                dfb_binding.accessor_name, AccessorBindingInfo{dfb_binding.dfb_spec_name});
             AccessorBindingInfo& info = it->second;
             if (inserted) {
                 TT_FATAL(
-                    IsValidCppIdentifier(dfb_binding.local_accessor_name),
-                    "Kernel '{}' DFB local_accessor_name '{}' must be a valid C++ identifier",
+                    IsValidCppIdentifier(dfb_binding.accessor_name),
+                    "Kernel '{}' DFB accessor_name '{}' must be a valid C++ identifier",
                     kernel.unique_id,
-                    dfb_binding.local_accessor_name);
+                    dfb_binding.accessor_name);
             } else {
                 TT_FATAL(
                     info.dfb_spec_name == dfb_binding.dfb_spec_name,
-                    "Kernel '{}' uses local_accessor_name '{}' for two different DFBs ('{}' and '{}'). "
+                    "Kernel '{}' uses accessor_name '{}' for two different DFBs ('{}' and '{}'). "
                     "Reusing a name is only permitted when both bindings target the same DFB (self-loop pair).",
                     kernel.unique_id,
-                    dfb_binding.local_accessor_name,
+                    dfb_binding.accessor_name,
                     info.dfb_spec_name,
                     dfb_binding.dfb_spec_name);
             }
@@ -317,10 +317,10 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
             bool& seen_this_type = is_producer ? info.has_producer : info.has_consumer;
             TT_FATAL(
                 !seen_this_type,
-                "Kernel '{}' has duplicate {} binding for local_accessor_name '{}'",
+                "Kernel '{}' has duplicate {} binding for accessor_name '{}'",
                 kernel.unique_id,
                 is_producer ? "PRODUCER" : "CONSUMER",
-                dfb_binding.local_accessor_name);
+                dfb_binding.accessor_name);
             seen_this_type = true;
 
             // Referential integrity: the DFB must exist
@@ -1963,7 +1963,7 @@ tt::tt_metal::DataflowBufferLocalAccessorHandleMap MakeDataflowBufferLocalAccess
             kernel_spec.unique_id,
             dfb_binding.dfb_spec_name,
             id);
-        out.emplace(dfb_binding.local_accessor_name, static_cast<uint16_t>(id));
+        out.emplace(dfb_binding.accessor_name, static_cast<uint16_t>(id));
     }
     return out;
 }
