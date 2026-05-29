@@ -612,6 +612,12 @@ def _run_auto_iterate_loop(
         stub back to the best known floor and record the skip so the loop
         won't target it again.
 
+        BUG/LAYER-7: If the agent's failure trace matches a kernel-missing
+        signal, ALSO persist to missing_kernels.json so the final
+        categorization can put this component in KERNEL_MISSING (allowed
+        past the gate) instead of HOT_STUCK (blocks demo emission). This
+        distinguishes "TTNN dev work needed" from "tool effort gap".
+
         Restoration priority (highest to lowest):
         1. `.py.last_good_native` — captured at the most recent
            successful graduation (PCC test passed). Strongest possible
@@ -632,6 +638,51 @@ def _run_auto_iterate_loop(
             return
         permanently_skipped.append(comp)
         verified_fail.discard(comp)
+        # Kernel-missing detection: scan the reason + recent failure
+        # signature for a TTNN-op-not-supported signal. The skip-list
+        # entry's category field carries the COLD vs KERNEL_MISSING
+        # distinction. We default to COLD; only upgrade to KERNEL_MISSING
+        # if BOTH (a) a kernel-missing pattern matches AND (b) the op
+        # is VERIFIED missing from ttnn. Verification avoids
+        # false-positive labels (agent fails for a non-kernel reason
+        # but the failure text happened to match a pattern).
+        skip_category = "COLD"
+        skip_reason = reason
+        try:
+            from ..kernel_missing import detect_kernel_missing, verify_ttnn_op_exists
+
+            scan_text = (reason or "") + "\n" + (last_failures or "") + "\n" + (last_failure_details or "")
+            missing_op = detect_kernel_missing(scan_text)
+            if missing_op:
+                op_exists = verify_ttnn_op_exists(missing_op)
+                if op_exists is False:
+                    skip_category = "KERNEL_MISSING"
+                    skip_reason = f"{reason} — TTNN op verified missing: {missing_op}"
+                    print(
+                        f"  [kernel-missing] `{comp}` flagged with category=KERNEL_MISSING "
+                        f"(verified-missing op: {missing_op})."
+                    )
+                else:
+                    # op_exists is True (op is there) or None (couldn't
+                    # verify). Don't claim kernel-missing; keep COLD
+                    # default so the gap doesn't get falsely attributed
+                    # to TTNN.
+                    print(
+                        f"  [kernel-missing] `{comp}` pattern matched `{missing_op}` "
+                        f"but verify_ttnn_op_exists={op_exists}; keeping category=COLD "
+                        f"to avoid false-positive TTNN flag."
+                    )
+        except Exception:
+            pass
+        # Re-persist with the chosen category (overwrites the default
+        # COLD persist that happened earlier in this function via
+        # the unverified_native path).
+        try:
+            from ..overlay_manager import persist_skip as _persist_skip_cat
+
+            _persist_skip_cat(MODEL, comp, reason=skip_reason, category=skip_category)
+        except Exception:
+            pass
         safe = _safe_id(comp)
         stub_path = demo_dir / "_stubs" / f"{safe}.py"
         last_good_path = stub_path.with_suffix(".py.last_good_native")
@@ -3145,15 +3196,11 @@ def _run_auto_iterate_loop(
                     f"        --auto-max-iters 12 --auto-agent-timeout 1500\n"
                 )
 
-            demo_ok, _ = _emit_and_verify_runnable_demo(MODEL, sep=sep)
-            if demo_ok:
-                _demo_dir = find_demo_dir(MODEL)
-                if _demo_dir is not None:
-                    _rel_demo = safe_relative_to_root(Path(_demo_dir)) / "demo.py"
-                    print()
-                    print(
-                        f"  To run the model end-to-end on {BOX} at any time:\n" f"    pytest {_rel_demo}::test_demo -v"
-                    )
+            # NOTE: end-to-end demo emission has moved OUT of the
+            # auto-iterate convergence path. It now happens in cmd_up
+            # AFTER Phase 2 stage + final categorization gate, so the
+            # demo only emits when every HOT component is graduated.
+            # The convergence banner here just announces "Phase 1 done".
             return 0
         if (
             strict_native

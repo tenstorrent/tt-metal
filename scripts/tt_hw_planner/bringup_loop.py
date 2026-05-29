@@ -1844,7 +1844,12 @@ def emit_runnable_demo(
     if not candidate_paths:
         candidate_paths = ["<UNKNOWN>"]
 
-    pytest_path = str(safe_relative_to_root(demo_dir / "demo.py")) + "::test_demo"
+    # Align to tt-metal repo standard: demos live at <demo_dir>/demo/demo.py
+    # (matches qwen3_vl/demo/demo.py, bert/demo/demo.py, etc.).
+    # The `demo/` subdirectory is created on first emit if missing.
+    demo_subdir = demo_dir / "demo"
+    demo_subdir.mkdir(parents=True, exist_ok=True)
+    pytest_path = str(safe_relative_to_root(demo_subdir / "demo.py")) + "::test_demo"
 
     body = _DEMO_TEMPLATE.format(
         model_id=model_id,
@@ -1854,7 +1859,7 @@ def emit_runnable_demo(
         candidate_paths=candidate_paths,
         pytest_path=pytest_path,
     )
-    destination = demo_dir / "demo.py"
+    destination = demo_subdir / "demo.py"
     if destination.exists() and not overwrite:
         return destination, "exists"
 

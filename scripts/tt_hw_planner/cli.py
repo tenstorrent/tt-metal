@@ -6455,7 +6455,7 @@ def _capture_worktree_deltas_as_overlay(worktree_path, model_id):
             demo_dir = None
         if demo_dir is not None and demo_dir.is_dir():
             scan_paths: List[Path] = []
-            for sub in ("_stubs", "tests/pcc"):
+            for sub in ("_stubs", "tests/pcc", "demo"):
                 sub_dir = demo_dir / sub
                 if sub_dir.is_dir():
                     scan_paths.extend(sub_dir.glob("*.py"))
@@ -7732,6 +7732,51 @@ def _cmd_up_core(args) -> int:
                     f"  [phase2] dropped {len(_p2_dropped)} ModuleList component(s); changes will persist via overlay capture"
                 )
             print(f"  [phase2] stage rc={_p2_rc}")
+
+        # ──────────────────────────────────────────────────────────────
+        # FINAL CATEGORIZATION + AUTHORITATIVE GATE
+        #
+        # The end-to-end demo is only emitted when every HOT component
+        # (invoked in the workload) is graduated. COLD components are
+        # OK on CPU fallback (perf-irrelevant — never invoked). DROPPED
+        # (ModuleList) components are OK (tested via parent's PCC). The
+        # gate ensures the demo's mixed TT-device + CPU-fallback profile
+        # is INTENTIONAL, not silently degraded.
+        # ──────────────────────────────────────────────────────────────
+        from .final_categorization import (
+            build_final_categorization,
+            format_categorization_summary,
+            format_kernel_gap_report,
+        )
+
+        _categorization = build_final_categorization(
+            model_id=MODEL,
+            demo_dir=demo_dir,
+        )
+
+        print()
+        print(sep)
+        print(f"  PLACEMENT CATEGORIZATION for {MODEL}")
+        print(sep)
+        print(format_categorization_summary(_categorization))
+        # Surface the TTNN op-gap list. KERNEL_MISSING components stay on
+        # CPU fallback at runtime and need TTNN dev work to move on device.
+        _gap_report = format_kernel_gap_report(MODEL, _categorization)
+        if _gap_report:
+            print(_gap_report)
+
+        # ──────────────────────────────────────────────────────────────
+        # DEMO EMISSION
+        # 4-bucket categorization always allows demo emission. The demo
+        # mixes native ttnn (graduated) + CPU fallback (COLD + DROPPED +
+        # KERNEL_MISSING). KERNEL_MISSING components are CPU-fallback
+        # in the demo until TTNN lands the missing ops; the user gets a
+        # working end-to-end demo + a clear list of TTNN dev work.
+        # ──────────────────────────────────────────────────────────────
+        if _rc_loop == 0:
+            _demo_ok, _demo_msg = _emit_and_verify_runnable_demo(MODEL, sep=sep)
+            if not _demo_ok:
+                print(f"  [demo-emit] note: {_demo_msg}")
 
         if _rc_loop == 0:
             _register_bringup_success(

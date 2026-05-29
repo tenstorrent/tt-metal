@@ -129,21 +129,52 @@ def load_persistent_skips(model_id: str) -> Dict[str, dict]:
         return {}
 
 
-def persist_skip(model_id: str, comp_name: str, reason: str = "") -> None:
-    """Add `comp_name` to the persistent skip-list for `model_id`. Idempotent.
+def persist_skip(model_id: str, comp_name: str, reason: str = "", *, category: str = "COLD") -> None:
+    """Add `comp_name` to the persistent skip-list for `model_id`.
 
-    Called from the auto-iterate loop when a component is added to
-    `unverified_native_this_run` -- harness-incompatibility detected and not
-    fixable by more LLM iteration. Persisting it means the next `up` run
-    won't waste agent budget re-attempting it.
+    Behavior on duplicate (entry already exists):
+      - captured_ts: preserved from the FIRST persist (audit-trail; we
+        want to know when the component was originally flagged)
+      - reason: updated to the new value (the latest reason is most
+        informative)
+      - category: UPGRADED if the new category is "more specific" than
+        the existing one. Specifically: COLD → KERNEL_MISSING is allowed
+        (a later run can confirm a TTNN gap). KERNEL_MISSING → COLD is
+        NOT allowed (don't downgrade a verified gap). Same-category
+        re-persist is a no-op.
+
+    Without this update logic, the seed-phase persist (default COLD)
+    would block a later _skip_component_to_fallback from labeling the
+    same component as KERNEL_MISSING — silently mis-categorizing it.
+
+    `category` is one of:
+      - "COLD"           : not invoked in workload (CPU correct, perf-irrelevant)
+      - "KERNEL_MISSING" : invoked but TTNN op verified missing (TTNN dev work)
     """
+    new_category = category.upper()
     skips = load_persistent_skips(model_id)
     if comp_name in skips:
-        return
-    skips[comp_name] = {
-        "reason": reason or "harness-incompatible (auto-detected)",
-        "captured_ts": time.time(),
-    }
+        existing = skips[comp_name]
+        existing_category = (existing.get("category") or "").upper()
+        # Upgrade rule: COLD → KERNEL_MISSING allowed; reverse not allowed.
+        category_changed = False
+        if existing_category != "KERNEL_MISSING" and new_category == "KERNEL_MISSING":
+            existing["category"] = "KERNEL_MISSING"
+            category_changed = True
+        # Update reason if a richer one is provided
+        reason_changed = False
+        if reason and reason != existing.get("reason"):
+            existing["reason"] = reason
+            reason_changed = True
+        if not (category_changed or reason_changed):
+            return
+        skips[comp_name] = existing
+    else:
+        skips[comp_name] = {
+            "reason": reason or "harness-incompatible (auto-detected)",
+            "category": new_category,
+            "captured_ts": time.time(),
+        }
     p = _skipped_components_path(model_id)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(skips, indent=2, sort_keys=True))
@@ -273,6 +304,74 @@ def is_cold_component(model_id: str, comp_name: str) -> bool:
     is treated as if HOT -- conservative -- so we never silently skip a
     component we lack signal on)."""
     return load_hot_cold(model_id).get(comp_name) == "COLD"
+
+
+def _missing_kernels_path(model_id: str) -> Path:
+    return _model_dir(model_id) / "missing_kernels.json"
+
+
+def load_missing_kernels(model_id: str) -> Dict[str, dict]:
+    """Return the persistent ``{comp_name: {missing_op, detected_ts}}`` dict
+    for components whose iteration was halted because TTNN lacks the
+    operation they need.
+
+    The tool's job is NOT to write missing TTNN kernels -- that's a
+    separate engineering workstream. The tool's job is to FLAG the
+    missing operation explicitly so:
+
+      1. The end-to-end demo can still emit (KERNEL_MISSING is allowed)
+      2. The user gets a clear list of "ttnn dev work needed: op X for
+         component Y" rather than a vague "stuck" status
+      3. Future runs skip the component until a TTNN release adds the op
+
+    Empty dict if no file exists yet."""
+    p = _missing_kernels_path(model_id)
+    if not p.is_file():
+        return {}
+    try:
+        return json.loads(p.read_text())
+    except Exception:
+        return {}
+
+
+def persist_missing_kernel(model_id: str, comp_name: str, *, missing_op: str = "") -> None:
+    """Add ``comp_name`` to the persistent missing-kernels list.
+
+    Idempotent: re-adding preserves the original detected_ts. ``missing_op``
+    can be the agent's reported error string, or a short summary like
+    'ttnn.permute on sparse_coo'."""
+    listing = load_missing_kernels(model_id)
+    if comp_name in listing:
+        return
+    listing[comp_name] = {
+        "missing_op": missing_op or "(unspecified — agent failure trace matched kernel-missing pattern)",
+        "detected_ts": time.time(),
+    }
+    p = _missing_kernels_path(model_id)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(listing, indent=2, sort_keys=True))
+
+
+def remove_missing_kernel(model_id: str, comp_name: str) -> bool:
+    """Drop a single entry (e.g., after a TTNN release adds the op).
+    Returns True if entry was present and removed."""
+    listing = load_missing_kernels(model_id)
+    if comp_name not in listing:
+        return False
+    del listing[comp_name]
+    p = _missing_kernels_path(model_id)
+    if listing:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(listing, indent=2, sort_keys=True))
+    elif p.is_file():
+        p.unlink()
+    return True
+
+
+def is_missing_kernel(model_id: str, comp_name: str) -> bool:
+    """Fast lookup for the auto-iterate loop to short-circuit components
+    we've already flagged as needing a TTNN kernel addition."""
+    return comp_name in load_missing_kernels(model_id)
 
 
 def remove_persistent_skip(model_id: str, comp_name: str) -> bool:

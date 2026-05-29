@@ -166,10 +166,17 @@ def _render_skeleton_demo_folder(
         backend_demo_path=backend.demo_path,
         marker=marker,
     )
+    # Align to tt-metal repo standard: demo.py lives under <model>/demo/demo.py
+    # (matches qwen3_vl/demo/demo.py, bert/demo/demo.py, etc.).
     creates: List[Tuple[Path, bytes, Path]] = [
         (
-            new_dir_rel / "demo.py",
+            new_dir_rel / "demo" / "demo.py",
             body.encode("utf-8"),
+            Path("(skeleton — no sibling source)"),
+        ),
+        (
+            new_dir_rel / "demo" / "__init__.py",
+            b"# SPDX-FileCopyrightText: (c) 2026 Tenstorrent USA, Inc.\n" b"# SPDX-License-Identifier: Apache-2.0\n",
             Path("(skeleton — no sibling source)"),
         ),
         (
@@ -300,8 +307,15 @@ def collect_demo_folder_changes(
     skipped: List[str] = []
     warnings: List[str] = []
 
-    if (target_dir / "demo.py").is_file():
-        skipped.append(f"{new_dir_rel.as_posix()}/demo.py already present — leaving untouched")
+    # Skip if a demo.py already exists at EITHER the legacy path
+    # (<model>/demo.py) OR the new standard (<model>/demo/demo.py).
+    legacy_demo = target_dir / "demo.py"
+    standard_demo = target_dir / "demo" / "demo.py"
+    if legacy_demo.is_file():
+        skipped.append(f"{new_dir_rel.as_posix()}/demo.py already present (legacy path) — leaving untouched")
+        return ([], skipped, warnings)
+    if standard_demo.is_file():
+        skipped.append(f"{new_dir_rel.as_posix()}/demo/demo.py already present — leaving untouched")
         return ([], skipped, warnings)
 
     if not sibling_slug:

@@ -1990,7 +1990,11 @@ def _install_demo_response(
             status="syntax-error",
             note="demo response did not parse as Python — inspect + fix + retry.",
         )
-    destination = demo_dir / "demo.py"
+    # Align to tt-metal repo standard: demos live at <demo_dir>/demo/demo.py
+    # (matches qwen3_vl/demo/demo.py, bert/demo/demo.py, etc.).
+    demo_subdir = demo_dir / "demo"
+    demo_subdir.mkdir(parents=True, exist_ok=True)
+    destination = demo_subdir / "demo.py"
     backup_rel: Optional[str] = None
     if destination.exists():
         backup = destination.with_suffix(".py.bak")
