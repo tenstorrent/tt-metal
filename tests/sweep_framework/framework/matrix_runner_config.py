@@ -186,7 +186,7 @@ LEAD_MODELS_BATCH_POLICY = {
 # Controls how many parallel CI jobs each test group gets for model-traced runs.
 # Absent entries use the caller-provided fixed ``batch_size``.
 MODEL_TRACED_BATCH_POLICY = {
-    "wormhole-t3k-sweeps": {"parallel_jobs": 5},
+    "wormhole-t3k-sweeps": {"parallel_jobs": 5, "batch_size": 5},
 }
 
 

@@ -30,6 +30,7 @@ from constants import (
 )
 from matrix_runner_config import (
     GENERATION_MANIFEST_FILENAME,
+    MODEL_TRACED_BATCH_POLICY,
     get_lead_models_test_group_name_for_hardware_group,
     get_runner_config,
     get_test_group_name_for_hardware_group,
@@ -218,11 +219,12 @@ def compute_validation_matrix(
         else:
             test_group_name = get_test_group_name_for_hardware_group(hardware_group)
         runner_config = get_runner_config(test_group_name)
+        group_batch_size = MODEL_TRACED_BATCH_POLICY.get(test_group_name, {}).get("batch_size", batch_size)
 
         if needs_mesh_split:
             for mesh_str, mesh_modules in sorted(mesh_to_modules.items()):
                 sorted_modules = sorted(mesh_modules)
-                runner_batches = chunk_modules(sorted_modules, batch_size)
+                runner_batches = chunk_modules(sorted_modules, group_batch_size)
                 total_batches = len(runner_batches)
                 mesh_label = f".{mesh_str}" if mesh_str else ""
 
@@ -244,7 +246,7 @@ def compute_validation_matrix(
                     include.append(entry)
         else:
             single_mesh = next(iter(mesh_to_modules), "")
-            runner_batches = chunk_modules(base_modules, batch_size)
+            runner_batches = chunk_modules(base_modules, group_batch_size)
             total_batches = len(runner_batches)
             for index, batch in enumerate(runner_batches, start=1):
                 include.append(
