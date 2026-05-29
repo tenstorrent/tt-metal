@@ -19,7 +19,8 @@ E2E Tracy ``BinaryNgDeviceOperation (in0:dram_interleaved)`` (~24% device time) 
 Production defaults (PCC + perf + E2E — no env toggle):
 
 - **LoFi** matmul / RMSNorm / SDPA via :func:`ace_step_init_dit_linear_compute_kernel_config`,
-  :func:`ace_step_init_cond_linear_compute_kernel_config`, :func:`ace_step_qwen3_optimizations`
+  :func:`ace_step_init_cond_linear_compute_kernel_config`, :func:`ace_step_qwen3_optimizations`,
+  :func:`ace_step_five_hz_lm_optimizations`
 - **``bfloat8_b``** linear projection weights via :func:`ace_step_linear_weight_dtype`
   (attn ``q_proj`` / ``o_proj`` use ``bfloat4_b`` when available — :func:`ace_step_attn_qo_weight_dtype`)
   (embedding tables / norm scales / conv kernels stay BF16 unless noted)
@@ -37,7 +38,7 @@ Other expected DRAM in DiT/VAE traces:
 
 - ``proj_in`` uses **L1 TILE linear** patch embed (not ``conv1d``) to avoid ``Tilize`` / ``Copy`` / im2col DRAM matmul.
 - Denoise feeds **TILE BF16 L1** ``xt``/``ctx`` (not ROW_MAJOR DRAM) so Tracy drops front ``Tilize``/``CopyDevice``.
-- Decoder **matmuls**: LoFi + ``bfloat8_b`` weights + L1 activations; **rms_norm**: LoFi + L1 (not default HiFi4).
+- 5 Hz LM decoder **matmuls**: HiFi2 + ``bfloat8_b`` weights (via :func:`ace_step_five_hz_lm_optimizations`); DiT decoder **matmuls**: LoFi + ``bfloat8_b`` weights + L1 activations; **rms_norm**: LoFi + L1 (not default HiFi4).
 - **SDPA attn masks**: DRAM-only (TTNN requirement).
 - **RoPE / norm / linear weights**: DRAM storage; matmul reads weights from DRAM while ``in0`` activations are L1.
 - Residual **BinaryNg (in0:dram)** (~0.3%): usually scalar-broadcast or slice outputs — call sites use :func:`ace_step_ensure_l1_activation` after ``ace_step_add_one``.
@@ -1242,6 +1243,56 @@ def ace_step_qwen3_optimizations(model_args: Any):
                 OpGroup.SDPA_PREFILL: MathFidelitySetting.LOFI,
                 OpGroup.LI_O_DECODE: MathFidelitySetting.LOFI,
                 OpGroup.LI_O_PREFILL: MathFidelitySetting.LOFI,
+            },
+        }
+    )
+    return DecodersPrecision(model_args.n_layers, model_args.model_name, decoder_conf=conf)
+
+
+def ace_step_five_hz_lm_bfloat8_weights_enabled() -> bool:
+    """Use ``bfloat8_b`` for all 5 Hz causal-LM decoder weights (default on).
+
+    Set ``ACE_STEP_LM_BFLOAT8_WEIGHTS=0`` to fall back to ``accuracy_decoder_config.json``
+    (BF16 weights + HiFi4) via ``optimizations=None`` in :mod:`qwen_tt_transformers_lm`.
+    """
+    return os.environ.get("ACE_STEP_LM_BFLOAT8_WEIGHTS", "1").lower() not in ("0", "false", "no", "off")
+
+
+def ace_step_five_hz_lm_optimizations(model_args: Any):
+    """``tt_transformers`` decoder config for ACE 5 Hz causal LM: HiFi2 + ``bfloat8_b`` on all weights.
+
+    Replaces the default ``accuracy_decoder_config.json`` path (BF16 weights) when
+    :func:`ace_step_five_hz_lm_bfloat8_weights_enabled` is true. Embedding / ``lm_head`` use
+    ``dtype=ttnn.bfloat8_b`` from :func:`create_tt_model`; ``LMHead`` keeps the stock HiFi2
+    compute kernel (see :mod:`qwen_tt_transformers_lm`).
+    """
+    from models.tt_transformers.tt.model_config import (
+        DecodersPrecision,
+        MathFidelitySetting,
+        ModelOptimizations,
+        OpGroup,
+        PrecisionSetting,
+        TensorGroup,
+    )
+
+    conf = ModelOptimizations(
+        {
+            "TensorPrecision": {
+                TensorGroup.FF1_FF3: PrecisionSetting.BFP8,
+                TensorGroup.FF2: PrecisionSetting.BFP8,
+                TensorGroup.WQKV: PrecisionSetting.BFP8,
+                TensorGroup.WO: PrecisionSetting.BFP8,
+                TensorGroup.KV_CACHE: PrecisionSetting.BFP8,
+            },
+            "OpFidelity": {
+                OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2,
+                OpGroup.LI_FF2: MathFidelitySetting.HIFI2,
+                OpGroup.LI_QKV_DECODE: MathFidelitySetting.HIFI2,
+                OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI2,
+                OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI2,
+                OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI2,
+                OpGroup.LI_O_DECODE: MathFidelitySetting.HIFI2,
+                OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI2,
             },
         }
     )
