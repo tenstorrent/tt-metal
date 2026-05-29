@@ -5,6 +5,7 @@
 #include "wan_fused_distributed_rmsnorm_program_factory.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <vector>
 
@@ -91,15 +92,33 @@ constexpr uint32_t kMuxRowsThreshold = 4u;
 // N18944=592) regress with one-per-row (more fabric packets), so they keep
 // the rows/2 packing. See PERF_LOG.md.
 constexpr uint32_t kSmallShapeRowsLimit = 16u;
+// Diagnostic override: WAN_RMSNORM_WORKER_CAP lets a perf sweep dial the
+// per-chip worker cap without rebuilding. Read once. Defaults to
+// kMaxMuxWorkersPerChip. Read inside the single-source-of-truth sizing path so
+// the op and create_stats_buffer agree on num_workers/buffer geometry.
+uint32_t mux_worker_cap() {
+    static const uint32_t cap = [] {
+        const char* env = std::getenv("WAN_RMSNORM_WORKER_CAP");
+        if (env != nullptr) {
+            const long v = std::strtol(env, nullptr, 10);
+            if (v > 0) {
+                return static_cast<uint32_t>(v);
+            }
+        }
+        return kMaxMuxWorkersPerChip;
+    }();
+    return cap;
+}
 uint32_t pick_num_workers_tp_gt_1(uint32_t num_tile_rows) {
+    const uint32_t cap = mux_worker_cap();
     if (num_tile_rows < kMuxRowsThreshold) {
         return 1u;
     }
     if (num_tile_rows <= kSmallShapeRowsLimit) {
-        return std::min<uint32_t>(kMaxMuxWorkersPerChip, num_tile_rows);
+        return std::min<uint32_t>(cap, num_tile_rows);
     }
     const uint32_t target = std::max(1u, num_tile_rows / 2u);
-    return std::min<uint32_t>(target, kMaxMuxWorkersPerChip);
+    return std::min<uint32_t>(target, cap);
 }
 
 // Sizing derivation used in both spec computation (to size the stats scratch
