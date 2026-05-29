@@ -56,7 +56,7 @@
 
 - name: Galaxy Wan2.2 demo tests
   cmd: |
-    export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE NO_PROMPT=1 VBENCH_CACHE_DIR=/mnt/MLPerf/vbench
+    export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE NO_PROMPT=1 VBENCH_CACHE_DIR=/mnt/MLPerf/vbench TORCH_HOME=/mnt/MLPerf/vbench/torch_hub
     sudo apt-get update -qq && sudo apt-get install -y -qq unzip > /dev/null
     uv pip install --no-deps decord==0.6.0 easydict openai-clip==1.0.1 pyiqa lvis pycocoevalcap fvcore fairscale omegaconf antlr4-python3-runtime==4.9.3 imageio_ffmpeg==0.6.0 vbench==0.1.5
     pytest models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "wh_4x8sp1tp0 and resolution_720p" --timeout 1500

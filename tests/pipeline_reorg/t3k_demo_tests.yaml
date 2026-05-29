@@ -65,7 +65,7 @@
 
 - name: t3k_wan2.2_tests
   cmd: |
-    export VBENCH_CACHE_DIR=/mnt/MLPerf/vbench
+    export VBENCH_CACHE_DIR=/mnt/MLPerf/vbench TORCH_HOME=/mnt/MLPerf/vbench/torch_hub
     sudo apt-get update -qq && sudo apt-get install -y -qq unzip > /dev/null
     uv pip install --no-deps decord==0.6.0 easydict openai-clip==1.0.1 pyiqa lvis pycocoevalcap fvcore fairscale omegaconf antlr4-python3-runtime==4.9.3 imageio_ffmpeg==0.6.0 vbench==0.1.5
     run_t3000_wan22_tests
