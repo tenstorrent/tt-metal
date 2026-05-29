@@ -273,6 +273,18 @@ TEST_F(DevicePrintOutputFixture, PrintReorder) {
     TestOutput("tests/tt_metal/tt_metal/test_kernels/device_print/print_reorder.cpp", messages);
 }
 
+// Verify the DPRINT(format, ...) alias defined in dprint.h produces output identical to
+// DEVICE_PRINT(format, ...).
+TEST_F(DevicePrintOutputFixture, DprintAliasMatchesDevicePrint) {
+    std::vector<std::string> messages = {
+        "no args",
+        "one arg: 42",
+        "three args: 1 2 3",
+    };
+
+    TestOutput("tests/tt_metal/tt_metal/test_kernels/device_print/print_dprint_alias.cpp", messages);
+}
+
 TEST_F(DevicePrintOutputFixture, PrintInlineFunction) {
     std::vector<std::string> messages = {
         "BEFORE!!!",

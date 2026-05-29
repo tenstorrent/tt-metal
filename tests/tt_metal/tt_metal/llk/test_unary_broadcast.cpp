@@ -44,8 +44,6 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <umd/device/types/arch.hpp>
 #include "tt_metal/test_utils/bfloat_utils.hpp"
-#include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
-#include <tt-metalium/experimental/host_api.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -324,9 +322,7 @@ void run_single_core_unary_broadcast_quasar(
 
     experimental::metal2_host_api::KernelSpec reader_spec{
         .unique_id = READER,
-        .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_n_2_0.cpp"},
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_n_2_0.cpp",
         .num_threads = 1,
         .dfb_bindings = {{
             .dfb_spec_name = SRC_DFB,
@@ -348,9 +344,7 @@ void run_single_core_unary_broadcast_quasar(
 
     experimental::metal2_host_api::KernelSpec writer_spec{
         .unique_id = WRITER,
-        .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank_2_0.cpp"},
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank_2_0.cpp",
         .num_threads = 1,
         .dfb_bindings = {{
             .dfb_spec_name = DST_DFB,
@@ -375,9 +369,7 @@ void run_single_core_unary_broadcast_quasar(
 
     experimental::metal2_host_api::KernelSpec compute_spec{
         .unique_id = COMPUTE,
-        .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/compute/unary_bcast.cpp"},
+        .source = "tests/tt_metal/tt_metal/test_kernels/compute/unary_bcast.cpp",
         .num_threads = 1,
         .compiler_options = {.defines = compute_defines},
         .dfb_bindings =
