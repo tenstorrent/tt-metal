@@ -2,7 +2,7 @@
 
 > **Source of truth.** This file is the canonical record of automation-tracked PRs. Wiping it resets the automation to fresh-state view; stale GitHub PRs not listed here are intentionally invisible.
 
-Last updated: **2026-05-29T03:21 UTC** — Session: Examining lane (4 PRs classified as verified-pass): PR #45487 (run 26614671489 success → verified-pass), PR #45490 (run 26612634163 failure but target job bh_multicard_debug_tools [bh_quietbox] passed → verified-pass; bh_multicard_dispatch flaky/pre-existing), PR #45492 (run 26612761462 success → verified-pass), PR #45494 (run 26612913914 failure but target job ccl nightly tests [bh_llmbox] passed → verified-pass; other SKU load-test-matrix failures pre-existing). Focus lane: 1 new PR [#45507](https://github.com/tenstorrent/tt-metal/pull/45507) (`t3000-e2e-tests` t3k_ccl_tests [wh_llmbox] — test_all_gather_matmul_async / test_all_broadcast_sharded_2x4 / test_ring_joint_sdpa_program_cache — 3+ consecutive failures; verification [run 26615944303](https://github.com/tenstorrent/tt-metal/actions/runs/26615944303) dispatched fresh-build). Runs #45498 (26614829843) and #45500 (26614947278) still in progress.
+Last updated: **2026-05-29T04:00 UTC** — Session: Examining lane (2 PRs classified as verified-pass): PR #45498 (run 26614829843 failure → verified-pass; disabled tests skipped, 30 passed, 1 pre-existing error [8-8-8-8] also on main), PR #45500 (run 26614947278 failure → verified-pass; target [WH-T3K] sampling-tests PASSED; BH-QB-GE infra fault, WH-GLX Galaxy out-of-scope). Focus lane: 0 new PRs — all checked uncovered workflows (single-card model perf, T3K perf tests) have timeout/hang failures only, not deterministic test failures eligible for disable. PR #45507 run 26615944303 still in progress.
 
 ---
 
@@ -27,8 +27,8 @@ Last updated: **2026-05-29T03:21 UTC** — Session: Examining lane (4 PRs classi
 | [#45490](https://github.com/tenstorrent/tt-metal/pull/45490) | Runtime unit tests (`runtime-unit-tests.yaml`) — `bh_multicard_debug_tools` | `verified-pass` | [run 26612634163](https://github.com/tenstorrent/tt-metal/actions/runs/26612634163) — failure (target job passed; bh_multicard_dispatch flaky/pre-existing) | Yes — pending review | Disables `DPrintMeshFixture.ActiveEthTestPrint` on `bh_quietbox`. |
 | [#45492](https://github.com/tenstorrent/tt-metal/pull/45492) | T3000 unit tests (`t3000-unit-tests.yaml`) — `t3k_tt_metal_multiprocess_tests` | `verified-pass` | [run 26612761462](https://github.com/tenstorrent/tt-metal/actions/runs/26612761462) — **success** | Yes — pending review | Disables `IntermeshSplit2x2FabricFixture.MultiMeshEastMulticast_*` (2 tests). |
 | [#45494](https://github.com/tenstorrent/tt-metal/pull/45494) | Blackhole e2e tests (`blackhole-e2e-tests.yaml`) — `ccl nightly tests` | `verified-pass` | [run 26612913914](https://github.com/tenstorrent/tt-metal/actions/runs/26612913914) — failure (target job passed; other SKU failures pre-existing) | Yes — pending review | Disables `test_all_to_all_combine_no_trace` on `bh_llmbox`. |
-| [#45498](https://github.com/tenstorrent/tt-metal/pull/45498) | metal-run-microbenchmarks (`metal-run-microbenchmarks.yaml`) — `T3K ubench - Fabric Mux BW` | `verifying` | [run 26614829843](https://github.com/tenstorrent/tt-metal/actions/runs/26614829843) — in progress (started 2026-05-29T02:44 UTC) | No | New PR. Disables 2 bandwidth regression test parametrizations (num_full_size_channels=4). Fresh-build. |
-| [#45500](https://github.com/tenstorrent/tt-metal/pull/45500) | vllm-nightly-tests (`vllm-nightly-tests.yaml`) — `[WH-T3K] Llama-3.1-8B-Instruct with sampling-tests` | `verifying` | [run 26614947278](https://github.com/tenstorrent/tt-metal/actions/runs/26614947278) — in progress (started 2026-05-29T02:48 UTC) | No | New PR. Disables 15 sampling/seeding determinism tests via `sampling-test-filter`. Fresh-build. |
+| [#45498](https://github.com/tenstorrent/tt-metal/pull/45498) | metal-run-microbenchmarks (`metal-run-microbenchmarks.yaml`) — `T3K ubench - Fabric Mux BW` | `verified-pass` | [run 26614829843](https://github.com/tenstorrent/tt-metal/actions/runs/26614829843) — failure (disabled tests skipped; 30 passed; 1 pre-existing [8-8-8-8] geomean error also on main) | Yes — pending review | Disables 2 bandwidth regression test parametrizations (num_full_size_channels=4). |
+| [#45500](https://github.com/tenstorrent/tt-metal/pull/45500) | vllm-nightly-tests (`vllm-nightly-tests.yaml`) — `[WH-T3K] Llama-3.1-8B-Instruct with sampling-tests` | `verified-pass` | [run 26614947278](https://github.com/tenstorrent/tt-metal/actions/runs/26614947278) — failure (target [WH-T3K] sampling-tests PASSED; BH-QB-GE infra fault; WH-GLX Galaxy out-of-scope) | Yes — pending review | Disables 15 sampling/seeding determinism tests via `sampling-test-filter`. |
 || [#45507](https://github.com/tenstorrent/tt-metal/pull/45507) | T3000 e2e tests (`t3000-e2e-tests.yaml`) — `t3k_ccl_tests [wh_llmbox]` | `verifying` | [run 26615944303](https://github.com/tenstorrent/tt-metal/actions/runs/26615944303) — in progress (started 2026-05-29T03:21 UTC) | No | New PR. Disables test_all_gather_matmul_async / test_all_broadcast_sharded_2x4 / test_ring_joint_sdpa_program_cache. Fresh-build. |
 
 ---
@@ -37,14 +37,7 @@ Last updated: **2026-05-29T03:21 UTC** — Session: Examining lane (4 PRs classi
 
 | Run | Pipeline | Branch | Started | Status | Notes |
 |-----|----------|--------|---------|--------|-------|
-| [26614671489](https://github.com/tenstorrent/tt-metal/actions/runs/26614671489) | Blackhole demo tests (`blackhole-demo-tests.yaml`) | `ci-disable/verify-blackhole-demo-tests-whisper-perf-20260529` (verification temp branch for PR #45487) | 2026-05-29T02:39:08 UTC | in progress | Verification dispatch for PR #45487. Fresh-build (no SHA-matching successful `blackhole-demo-tests` main run for `9727d4445a8d`). Pruned to `model=whisper` only. Next session MUST log-analyze and classify. |
-| [26614829843](https://github.com/tenstorrent/tt-metal/actions/runs/26614829843) | metal-run-microbenchmarks (`metal-run-microbenchmarks.yaml`) | `ci-disable/verify-metal-run-microbenchmarks-fabric-mux-bw-20260529` (verification temp branch for PR #45498) | 2026-05-29T02:44:22 UTC | in progress | Verification dispatch for PR #45498. Fresh-build (all recent `metal-run-microbenchmarks` main runs failed). Pruned to `T3K ubench - Fabric Mux BW` job only. Next session MUST log-analyze and classify. |
-| [26614947278](https://github.com/tenstorrent/tt-metal/actions/runs/26614947278) | vllm-nightly-tests (`vllm-nightly-tests.yaml`) | `ci-disable/verify-vllm-nightly-t3k-llama-sampling-20260529` (verification temp branch for PR #45500) | 2026-05-29T02:48:12 UTC | queued | Verification dispatch for PR #45500. Fresh-build (all recent `vllm-nightly-tests` main runs failed). Pruned to `model=meta-llama/Llama-3.1-8B-Instruct` only. Next session MUST log-analyze and classify. |
-| [26612634163](https://github.com/tenstorrent/tt-metal/actions/runs/26612634163) | Runtime unit tests (`runtime-unit-tests.yaml`) | `ci-disable/verify-runtime-unit-tests-dprint-activeeth-20260529` (verification temp branch for PR #45490) | 2026-05-29T01:33:20 UTC | in progress | Verification dispatch for PR #45490. Fresh-build. Next session MUST log-analyze and classify. |
-| [26612761462](https://github.com/tenstorrent/tt-metal/actions/runs/26612761462) | T3000 unit tests (`t3000-unit-tests.yaml`) | `ci-disable/verify-t3000-unit-tests-intermesh-split2x2-20260529` (verification temp branch for PR #45492) | 2026-05-29T01:37:25 UTC | in progress | Verification dispatch for PR #45492. Fresh-build. Pruned to `t3k_tt_metal_multiprocess_tests` only. **Note:** this run was dispatched BEFORE `RandomizedInterMeshUnicast` was removed from the disable; the filter at dispatch time was `-IntermeshSplit2x2FabricFixture.*`. Next session MUST log-analyze and classify. |
-| [26612913914](https://github.com/tenstorrent/tt-metal/actions/runs/26612913914) | Blackhole e2e tests (`blackhole-e2e-tests.yaml`) | `ci-disable/verify-blackhole-e2e-tests-all-to-all-combine-no-trace-20260529` (verification temp branch for PR #45494) | 2026-05-29T01:42:23 UTC | in progress | Verification dispatch for PR #45494. Fresh-build. Pruned to `ccl nightly tests [bh_llmbox]` only. Next session MUST log-analyze and classify. |
-
-|| [26615944303](https://github.com/tenstorrent/tt-metal/actions/runs/26615944303) | T3000 e2e tests (`t3000-e2e-tests.yaml`) | `ci-disable/verify-t3000-e2e-tests-t3k-ccl-20260529` (verification temp branch for PR #45507) | 2026-05-29T03:21:22 UTC | in progress | Verification dispatch for PR #45507. Fresh-build (all recent `t3000-e2e-tests` main runs failed). Pruned to `t3k_ccl_tests [wh_llmbox]` only. Next session MUST log-analyze and classify. |
+| [26615944303](https://github.com/tenstorrent/tt-metal/actions/runs/26615944303) | T3000 e2e tests (`t3000-e2e-tests.yaml`) | `ci-disable/verify-t3000-e2e-tests-t3k-ccl-20260529` (verification temp branch for PR #45507) | 2026-05-29T03:21:22 UTC | in progress | Verification dispatch for PR #45507. Fresh-build (all recent `t3000-e2e-tests` main runs failed). Pruned to `t3k_ccl_tests [wh_llmbox]` only. Next session MUST log-analyze and classify. |
 
 **Policy:** Concurrent runs across PRs are allowed; each automation session may dispatch at most three new runs.
 
@@ -54,7 +47,9 @@ Last updated: **2026-05-29T03:21 UTC** — Session: Examining lane (4 PRs classi
 
 | Run | Pipeline | Branch | Started | Ended | Result | Notes |
 |-----|----------|--------|---------|-------|--------|-------|
-|| [26614671489](https://github.com/tenstorrent/tt-metal/actions/runs/26614671489) | Blackhole demo tests (`blackhole-demo-tests.yaml`) | `ci-disable/verify-blackhole-demo-tests-whisper-perf-20260529` | 2026-05-29T02:39:08 UTC | 2026-05-29T∰03 UTC | **verified-pass** | PR #45487 → `verified-pass`. Target `whisper performance [bh_p150_perf]` passed. |
+| [26614829843](https://github.com/tenstorrent/tt-metal/actions/runs/26614829843) | metal-run-microbenchmarks (`metal-run-microbenchmarks.yaml`) | `ci-disable/verify-metal-run-microbenchmarks-fabric-mux-bw-20260529` | 2026-05-29T02:44:22 UTC | 2026-05-29T03:06 UTC | **verified-pass** | PR #45498 → `verified-pass`. Disabled tests skipped; 30 passed; [8-8-8-8] geomean error pre-existing on main. |
+| [26614947278](https://github.com/tenstorrent/tt-metal/actions/runs/26614947278) | vllm-nightly-tests (`vllm-nightly-tests.yaml`) | `ci-disable/verify-vllm-nightly-t3k-llama-sampling-20260529` | 2026-05-29T02:48:12 UTC | 2026-05-29T03:34 UTC | **verified-pass** | PR #45500 → `verified-pass`. Target [WH-T3K] sampling-tests PASSED. BH-QB-GE: infra fault (EngineCore failed to start). WH-GLX: Galaxy, out-of-scope. |
+| [26614671489](https://github.com/tenstorrent/tt-metal/actions/runs/26614671489) | Blackhole demo tests (`blackhole-demo-tests.yaml`) | `ci-disable/verify-blackhole-demo-tests-whisper-perf-20260529` | 2026-05-29T02:39:08 UTC | 2026-05-29T∰03 UTC | **verified-pass** | PR #45487 → `verified-pass`. Target `whisper performance [bh_p150_perf]` passed. |
 || [26612634163](https://github.com/tenstorrent/tt-metal/actions/runs/26612634163) | Runtime unit tests (`runtime-unit-tests.yaml`) | `ci-disable/verify-runtime-unit-tests-dprint-activeeth-20260529` | 2026-05-29T01:33:20 UTC | 2026-05-29T∰02 UTC | **verified-pass** | PR #45490 → `verified-pass`. Target `bh_multicard_debug_tools [bh_quietbox]` passed. `bh_multicard_dispatch` flaky/pre-existing. |
 || [26612761462](https://github.com/tenstorrent/tt-metal/actions/runs/26612761462) | T3000 unit tests (`t3000-unit-tests.yaml`) | `ci-disable/verify-t3000-unit-tests-intermesh-split2x2-20260529` | 2026-05-29T01:37:25 UTC | 2026-05-29T∰02 UTC | **verified-pass** | PR #45492 → `verified-pass`. Target `t3k_tt_metal_multiprocess_tests [wh_llmbox]` passed. |
 || [26612913914](https://github.com/tenstorrent/tt-metal/actions/runs/26612913914) | Blackhole e2e tests (`blackhole-e2e-tests.yaml`) | `ci-disable/verify-blackhole-e2e-tests-all-to-all-combine-no-trace-20260529` | 2026-05-29T01:42:23 UTC | 2026-05-29T∰02 UTC | **verified-pass** | PR #45494 → `verified-pass`. Target `ccl nightly tests [bh_llmbox]` passed; other SKU load-test-matrix failures pre-existing. |
@@ -181,12 +176,12 @@ Main-run evidence: see PR description.
 | Timeout issue | none |
 | Branch | `ci-disable/blackhole-e2e-tests-all-to-all-combine-no-trace-20260529` (head SHA `e2a5bed979f129a32d5d5c5e6160353f7ca32206` — rebased to `9727d4445a8d52c844223ba59618e0e5452b9445`) |
 | Workflow file | `.github/workflows/blackhole-e2e-tests.yaml` |
-| Lifecycle stage | `verifying` |
+| Lifecycle stage | `verified-pass` |
 | Last rebase | 2026-05-29T02:02 UTC — rebased from `80094df9c61e` → `9727d4445a8d` (1 commit), no conflicts |
 | Last revalidation | 2026-05-29T02:02 UTC — `test_all_to_all_combine_no_trace` confirmed still failing on `main`; latest completed run 26589993622 job 78379365051 `ccl nightly tests [bh_llmbox]` still fails |
-| Verification run | [26612913914](https://github.com/tenstorrent/tt-metal/actions/runs/26612913914) — in progress (dispatched 2026-05-29T01:42 UTC, fresh-build, pruned to `ccl nightly tests [bh_llmbox]` only) |
-| Last touched by automation | 2026-05-29T02:02 UTC |
-| Readiness | No — verification in progress |
+| Verification run | [26612913914](https://github.com/tenstorrent/tt-metal/actions/runs/26612913914) — **verified-pass** (completed 2026-05-29T∰02 UTC; conclusion `failure`; target `ccl nightly tests [bh_llmbox]` passed; other SKU load-test-matrix failures pre-existing) |
+| Last touched by automation | 2026-05-29T03:21 UTC |
+| Readiness | **Yes — verified-pass, ready for merge review** |
 
 ### Disables (with main evidence)
 
@@ -208,19 +203,19 @@ Main-run evidence: see PR description.
 | Timeout issue | none |
 | Branch | `ci-disable/metal-run-microbenchmarks-fabric-mux-bw-20260529` (head SHA `016bf37ced4e1bd70ae082e734b689823de9205d`) |
 | Workflow file | `.github/workflows/metal-run-microbenchmarks.yaml` |
-| Lifecycle stage | `verifying` |
+| Lifecycle stage | `verified-pass` |
 | Last rebase | 2026-05-29T02:44 UTC — created onto `origin/main` HEAD `9727d4445a8d52c844223ba59618e0e5452b9445` |
-| Last revalidation | 2026-05-29T02:44 UTC — confirmed tests failing in ≥3 consecutive runs (26485689871, 26523803265, 26587701074); `test_mux_bw_full_size_channels[32-1-4096-10000-0-8-0-4]` and `test_mux_bw_both_channel_types[32-1-4096-10000-8-8-1-4]` same failure across all 3 runs |
-| Verification run | [26614829843](https://github.com/tenstorrent/tt-metal/actions/runs/26614829843) — in progress (dispatched 2026-05-29T02:44 UTC, fresh-build, pruned to `T3K ubench - Fabric Mux BW` job only) |
-| Last touched by automation | 2026-05-29T02:44 UTC |
-| Readiness | No — verification in progress |
+| Last revalidation | 2026-05-29T04:00 UTC — both disabled tests still failing in latest main run [26612909413](https://github.com/tenstorrent/tt-metal/actions/runs/26612909413) job [78423388911](https://github.com/tenstorrent/tt-metal/actions/runs/26612909413/job/78423388911) (2026-05-29T02:25 UTC): same bandwidth mismatch signature |
+| Verification run | [26614829843](https://github.com/tenstorrent/tt-metal/actions/runs/26614829843) — **verified-pass** (completed 2026-05-29T03:06 UTC; conclusion `failure`; disabled tests skipped; 30 passed; 1 pre-existing `[8-8-8-8]` geomean error also failing on main run 26587701074 with same signature) |
+| Last touched by automation | 2026-05-29T04:00 UTC |
+| Readiness | **Yes — verified-pass, ready for merge review** |
 
 ### Disables (with main evidence)
 
 | Disabled test | Most recent failing main run (job link) | Run completed at |
 |---|---|---|
-| `tests/tt_metal/microbenchmarks/ethernet/test_fabric_mux_bandwidth.py::test_mux_bw_full_size_channels[32-1-4096-10000-0-8-0-4]` [wh_llmbox T3K] | https://github.com/tenstorrent/tt-metal/actions/runs/26587701074/job/78345243752 | 2026-05-28 18:34 UTC |
-| `tests/tt_metal/microbenchmarks/ethernet/test_fabric_mux_bandwidth.py::test_mux_bw_both_channel_types[32-1-4096-10000-8-8-1-4]` [wh_llmbox T3K] | https://github.com/tenstorrent/tt-metal/actions/runs/26587701074/job/78345243752 | 2026-05-28 18:34 UTC |
+| `tests/tt_metal/microbenchmarks/ethernet/test_fabric_mux_bandwidth.py::test_mux_bw_full_size_channels[32-1-4096-10000-0-8-0-4]` [wh_llmbox T3K] | https://github.com/tenstorrent/tt-metal/actions/runs/26612909413/job/78423388911 | 2026-05-29 02:25 UTC |
+| `tests/tt_metal/microbenchmarks/ethernet/test_fabric_mux_bandwidth.py::test_mux_bw_both_channel_types[32-1-4096-10000-8-8-1-4]` [wh_llmbox T3K] | https://github.com/tenstorrent/tt-metal/actions/runs/26612909413/job/78423388911 | 2026-05-29 02:25 UTC |
 
 Main-run evidence: see PR description.
 
@@ -238,8 +233,8 @@ Main-run evidence: see PR description.
 | Lifecycle stage | `verified-pass` |
 | Last rebase | 2026-05-29T02:48 UTC — created onto `origin/main` HEAD `9727d4445a8d52c844223ba59618e0e5452b9445` |
 | Last revalidation | 2026-05-29T02:48 UTC — confirmed tests failing in ≥3 consecutive runs (26611126930, 26567209010, 26564928459); same FAILED test IDs across runs 26611126930 and 26567209010 confirmed; 26564928459 confirmed same T3K Llama sampling job failed |
-| Verification run | [26612913914](https://github.com/tenstorrent/tt-metal/actions/runs/26612913914) — **verified-pass** (conclusion `failure` but target `ccl nightly tests [bh_llmbox]` passed; other SKU load-test-matrix failures are pre-existing) |
-| Last touched by automation | 2026-05-29T03:21 UTC |
+| Verification run | [26614947278](https://github.com/tenstorrent/tt-metal/actions/runs/26614947278) — **verified-pass** (completed 2026-05-29T03:34 UTC; conclusion `failure`; target `[WH-T3K] Llama-3.1-8B-Instruct with sampling-tests` PASSED; BH-QB-GE: infra fault EngineCore failed to start; WH-GLX: Galaxy out-of-scope) |
+| Last touched by automation | 2026-05-29T04:00 UTC |
 | Readiness | **Yes — verified-pass, ready for merge review** |
 
 ### Disables (with main evidence)
@@ -293,6 +288,8 @@ Main-run evidence: see PR description.
 ---
 
 ## Recent Activity
+
+- **2026-05-29T04:00 UTC session.** Examining lane (2 PRs classified as `verified-pass`): PR #45498 (run [26614829843](https://github.com/tenstorrent/tt-metal/actions/runs/26614829843) completed `failure` → **verified-pass**; disabled tests `test_mux_bw_full_size_channels[...-0-8-0-4]` and `test_mux_bw_both_channel_types[...-8-8-1-4]` confirmed **SKIPPED** as expected; 30 passed; 1 pre-existing `[8-8-8-8]` geomean error also present in main run 26587701074 — not a regression; revalidation: both disabled tests still failing in latest main run 26612909413 job 78423388911). PR #45500 (run [26614947278](https://github.com/tenstorrent/tt-metal/actions/runs/26614947278) completed `failure` → **verified-pass**; target `[WH-T3K] Llama-3.1-8B-Instruct with sampling-tests` **PASSED**; BH-QB-GE failure = infra fault, EngineCore failed to start — not a code regression; WH-GLX failure = Galaxy, out of scope; revalidation: sampling tests still failing in main run 26611126930 job 78418064065). PR #45494 per-PR section fixed (lifecycle was incorrectly `verifying` in per-PR section; Quick Index was already correct at `verified-pass` from previous session). PR #45507 run 26615944303 still in progress — left as `verifying`, will classify next session. Focus lane: 0 new PRs — checked uncovered workflows: `(Single-card) Model perf tests` failure = timeout/hang (`Setting cpu` loop then `Cleaning up orphan processes` with no test output) — out of scope; `(T3K) T3000 perf tests` failure = same timeout/hang pattern in all 3 failing jobs — out of scope. No other eligible uncovered non-Galaxy workflows found with ≥3 consecutive deterministic test failures. Focus slots filled: 0/3 (no eligible uncovered workflows). State log corrected and pushed.
 
 - **2026-05-29T03:02–03:21 UTC session.** Examining lane: 4 PRs classified as `verified-pass`. PR #45487 (run 26614671489 completed `success` → **verified-pass**; target `whisper performance [bh_p150_perf]` passed). PR #45490 (run 26612634163 completed `failure` → **verified-pass**; target `bh_multicard_debug_tools [bh_quietbox]` passed; `bh_multicard_dispatch` failure is pre-existing flaky non-consecutive on main). PR #45492 (run 26612761462 completed `success` → **verified-pass**; target `t3k_tt_metal_multiprocess_tests [wh_llmbox]` passed). PR #45494 (run 26612913914 completed `failure` → **verified-pass**; target `ccl nightly tests [bh_llmbox]` passed; other SKU load-test-matrix failures pre-existing). Focus lane: 1 new PR [#45507](https://github.com/tenstorrent/tt-metal/pull/45507) (`t3000-e2e-tests` `t3k_ccl_tests [wh_llmbox]` — `test_all_gather_matmul_async` + `test_all_broadcast_sharded_2x4` + `test_ring_joint_sdpa_program_cache` — 3+ consecutive failures confirmed across runs 26561397299 and 26497844654 with identical AI summary signatures; verification [run 26615944303](https://github.com/tenstorrent/tt-metal/actions/runs/26615944303) dispatched fresh-build). 1/3 dispatch slots used (no more single-card workflows with deterministic non-Galaxy failures eligible this session). Runs #45498 (26614829843) and #45500 (26614947278) still pending.
 
