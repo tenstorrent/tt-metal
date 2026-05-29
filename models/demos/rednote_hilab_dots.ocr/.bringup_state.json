@@ -663,6 +663,7 @@
   "config": {
     "max_parallel_reference": 4,
     "max_attempts_per_phase": 10,
-    "tick_interval_sec": 60
+    "tick_interval_sec": 60,
+    "hf_checkpoint_path": "/local/ttuser/.cache/huggingface/hub/models--rednote-hilab--dots.ocr/snapshots/c0111ce6bc07803dbc267932ffef0ae3a51dc951"
   }
 }
