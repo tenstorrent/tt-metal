@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-29T00:11:46Z",
-  "updated_at": "2026-05-29T01:21:18Z",
+  "updated_at": "2026-05-29T01:27:01Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -463,8 +463,15 @@
         "pcc": 1.0
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "tt/attention.py",
+          "tests/test_tt_attention.py",
+          "tt/attention.traced_ops.json"
+        ],
+        "notes": "GQA 12/2 head_dim 128, QKV bias, o_proj no bias, 1D RoPE theta 1e6, causal additive mask. Manual head split (fused cat[Wq,Wk,Wv]), repeat_kv n_rep=6, HiFi4+fp32_dest_acc.",
+        "pcc": 0.9999893205016563
       },
       "debug": {
         "status": "n/a",
@@ -779,6 +786,12 @@
       "tick": 14,
       "ts": "2026-05-29T01:21:18Z",
       "action": "device[rope]",
+      "result": "ok"
+    },
+    {
+      "tick": 15,
+      "ts": "2026-05-29T01:27:01Z",
+      "action": "device[attention]",
       "result": "ok"
     }
   ],
