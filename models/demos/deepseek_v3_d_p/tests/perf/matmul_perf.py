@@ -21,8 +21,7 @@ from pathlib import Path
 import ttnn
 
 K, N = 7168, 2048
-# ISL_VALUES = [32, 64, 128, 256, 512, 1024, 2048, 4096, 5120]
-ISL_VALUES = [32]
+ISL_VALUES = [32, 64, 128, 192, 256, 384, 512, 768]
 NUM_ITERS = 10
 SUBDIR = "matmul_perf"
 
@@ -33,48 +32,298 @@ COMPUTE_KERNEL_CONFIG_LOFI = ttnn.WormholeComputeKernelConfig(
     packer_l1_acc=True,
 )
 
-# Placeholder default — replace per-ISL entries below with tuned values.
-DEFAULT_PROGRAM_CONFIG = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-    compute_with_storage_grid_size=ttnn.CoreCoord(8, 7),
-    in0_block_w=1,
-    out_subblock_h=1,
-    out_subblock_w=1,
-    per_core_M=1,
-    per_core_N=1,
-    fuse_batch=False,
-    mcast_in0=False,
-)
-
-PROGRAM_CONFIGS = {
+ProgramConfig1DFirstTwoMatmuls = {
     32: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(8, 4),
-        in0_block_w=8,
+        compute_with_storage_grid_size=(8, 8),
+        in0_block_w=16,
         per_core_M=1,
-        per_core_N=2,
+        per_core_N=1,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        mcast_in0=True,
+        fuse_batch=False,
+        fused_activation=None,
+    ),
+    64: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(8, 8),
+        in0_block_w=14,
+        per_core_M=2,
+        per_core_N=1,
+        out_subblock_h=2,
+        out_subblock_w=1,
+        mcast_in0=True,
+        fuse_batch=False,
+        fused_activation=None,
+    ),
+    128: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(8, 8),
+        in0_block_w=16,
+        per_core_M=4,
+        per_core_N=1,
+        out_subblock_h=4,
+        out_subblock_w=1,
+        mcast_in0=True,
+        fuse_batch=False,
+        fused_activation=None,
+    ),
+    192: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(8, 8),
+        in0_block_w=16,
+        per_core_M=6,
+        per_core_N=1,
+        out_subblock_h=6,
+        out_subblock_w=1,
+        mcast_in0=True,
+        fuse_batch=False,
+        fused_activation=None,
+    ),
+    256: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(8, 8),
+        in0_block_w=16,
+        per_core_M=8,
+        per_core_N=1,
+        out_subblock_h=8,
+        out_subblock_w=1,
+        mcast_in0=True,
+        fuse_batch=False,
+        fused_activation=None,
+    ),
+    384: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(8, 8),
+        in0_block_w=16,
+        per_core_M=12,
+        per_core_N=1,
+        out_subblock_h=6,
+        out_subblock_w=1,
+        mcast_in0=True,
+        fuse_batch=False,
+        fused_activation=None,
+    ),
+    512: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(8, 8),
+        in0_block_w=14,
+        per_core_M=16,
+        per_core_N=1,
+        out_subblock_h=8,
+        out_subblock_w=1,
+        mcast_in0=True,
+        fuse_batch=False,
+        fused_activation=None,
+    ),
+    768: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(8, 8),
+        in0_block_w=16,
+        per_core_M=24,
+        per_core_N=1,
+        out_subblock_h=8,
+        out_subblock_w=1,
+        mcast_in0=True,
+        fuse_batch=False,
+        fused_activation=None,
+    ),
+}
+
+
+ProgramConfig1DThirdMatmul = {
+    32: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(8, 7),
+        in0_block_w=4,
+        per_core_M=1,
+        per_core_N=4,
         out_subblock_h=1,
         out_subblock_w=2,
         mcast_in0=True,
         fuse_batch=False,
         fused_activation=None,
     ),
-    64: DEFAULT_PROGRAM_CONFIG,
-    128: DEFAULT_PROGRAM_CONFIG,
-    256: DEFAULT_PROGRAM_CONFIG,
-    512: DEFAULT_PROGRAM_CONFIG,
-    1024: DEFAULT_PROGRAM_CONFIG,
-    2048: DEFAULT_PROGRAM_CONFIG,
-    4096: DEFAULT_PROGRAM_CONFIG,
-    5120: DEFAULT_PROGRAM_CONFIG,
+    64: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(8, 7),
+        in0_block_w=4,
+        per_core_M=2,
+        per_core_N=4,
+        out_subblock_h=2,
+        out_subblock_w=4,
+        mcast_in0=True,
+        fuse_batch=False,
+        fused_activation=None,
+    ),
+    128: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(8, 7),
+        in0_block_w=8,
+        per_core_M=4,
+        per_core_N=4,
+        out_subblock_h=2,
+        out_subblock_w=4,
+        mcast_in0=True,
+        fuse_batch=False,
+        fused_activation=None,
+    ),
+    192: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(8, 7),
+        in0_block_w=16,
+        per_core_M=6,
+        per_core_N=4,
+        out_subblock_h=2,
+        out_subblock_w=4,
+        mcast_in0=True,
+        fuse_batch=False,
+        fused_activation=None,
+    ),
+    256: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(8, 7),
+        in0_block_w=16,
+        per_core_M=8,
+        per_core_N=4,
+        out_subblock_h=2,
+        out_subblock_w=4,
+        mcast_in0=True,
+        fuse_batch=False,
+        fused_activation=None,
+    ),
+    384: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(8, 7),
+        in0_block_w=16,
+        per_core_M=12,
+        per_core_N=4,
+        out_subblock_h=2,
+        out_subblock_w=4,
+        mcast_in0=True,
+        fuse_batch=False,
+        fused_activation=None,
+    ),
+    512: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(8, 7),
+        in0_block_w=16,
+        per_core_M=16,
+        per_core_N=4,
+        out_subblock_h=2,
+        out_subblock_w=4,
+        mcast_in0=True,
+        fuse_batch=False,
+        fused_activation=None,
+    ),
+    768: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(8, 7),
+        in0_block_w=16,
+        per_core_M=24,
+        per_core_N=4,
+        out_subblock_h=2,
+        out_subblock_w=4,
+        mcast_in0=True,
+        fuse_batch=False,
+        fused_activation=None,
+    ),
 }
 
 
-def run_worker():
+ProgramConfig2DFirstTwoMatmuls = {
+    32: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(8, 8),
+        in0_block_w=16,
+        per_core_M=1,
+        per_core_N=8,
+        out_subblock_h=1,
+        out_subblock_w=8,
+        transpose_mcast=False,
+        fused_activation=None,
+    ),
+    64: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(8, 8),
+        in0_block_w=16,
+        per_core_M=1,
+        per_core_N=8,
+        out_subblock_h=1,
+        out_subblock_w=8,
+        transpose_mcast=False,
+        fused_activation=None,
+    ),
+    128: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(8, 8),
+        in0_block_w=16,
+        per_core_M=1,
+        per_core_N=8,
+        out_subblock_h=1,
+        out_subblock_w=8,
+        transpose_mcast=False,
+        fused_activation=None,
+    ),
+    192: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(8, 8),
+        in0_block_w=16,
+        per_core_M=1,
+        per_core_N=8,
+        out_subblock_h=1,
+        out_subblock_w=8,
+        transpose_mcast=False,
+        fused_activation=None,
+    ),
+    256: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(8, 8),
+        in0_block_w=16,
+        per_core_M=1,
+        per_core_N=8,
+        out_subblock_h=1,
+        out_subblock_w=8,
+        transpose_mcast=False,
+        fused_activation=None,
+    ),
+    384: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(8, 8),
+        in0_block_w=16,
+        per_core_M=2,
+        per_core_N=8,
+        out_subblock_h=1,
+        out_subblock_w=8,
+        transpose_mcast=False,
+        fused_activation=None,
+    ),
+    512: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(8, 8),
+        in0_block_w=16,
+        per_core_M=2,
+        per_core_N=8,
+        out_subblock_h=1,
+        out_subblock_w=8,
+        transpose_mcast=False,
+        fused_activation=None,
+    ),
+    768: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(8, 8),
+        in0_block_w=16,
+        per_core_M=3,
+        per_core_N=8,
+        out_subblock_h=1,
+        out_subblock_w=8,
+        transpose_mcast=False,
+        fused_activation=None,
+    ),
+}
+
+
+ProgramConfig2DThirdMatmul = {
+    32: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(8, 8),
+        in0_block_w=16,
+        per_core_M=1,
+        per_core_N=8,
+        out_subblock_h=1,
+        out_subblock_w=8,
+        transpose_mcast=False,
+        fused_activation=None,
+    ),
+}
+
+
+def run_worker(program_configs):
     """Profiled subprocess: open device, signpost+matmul per ISL."""
     import torch
     from loguru import logger
     from tracy import signpost
 
-    device = ttnn.open_device(device_id=0)
+    # Use a 1x1 mesh — direct ttnn.open_device(device_id=0) fails on this box
+    # because fabric auto-discovery sets up a 2x1 mesh and chip 0 isn't in the
+    # control-plane chip mapping (TT_FATAL @ control_plane.cpp:1264).
+    device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(1, 1))
     try:
         torch.manual_seed(42)
 
@@ -82,10 +331,11 @@ def run_worker():
         tt_w = ttnn.from_torch(w_torch, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat4_b)
 
         for isl in ISL_VALUES:
+            print(f"\n=== ISL={isl} ===")
             x_torch = torch.randn(1, 1, isl, K, dtype=torch.bfloat16)
             tt_x = ttnn.from_torch(x_torch, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
 
-            program_config = PROGRAM_CONFIGS[isl]
+            program_config = program_configs[isl]
 
             # Per-ISL warmup
             _ = ttnn.matmul(tt_x, tt_w, program_config=program_config, compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI)
@@ -99,10 +349,10 @@ def run_worker():
             ttnn.synchronize_device(device)
             logger.info(f"ran {NUM_ITERS}x matmul ISL={isl}")
     finally:
-        ttnn.close_device(device)
+        ttnn.close_mesh_device(device)
 
 
-def run_driver():
+def run_driver(third_matmul: bool = False, dim: str = "1d"):
     """Spawn worker under tracy, parse CSV, plot ISL vs kernel duration."""
     import matplotlib.pyplot as plt
     import pandas as pd
@@ -114,6 +364,10 @@ def run_driver():
     # `python` prefix, no embedded spaces) — runpy will find it as a
     # namespace package.
     cmd = "models.demos.deepseek_v3_d_p.tests.perf.matmul_perf --worker"
+    if third_matmul:
+        cmd += " --third_matmul"
+    if dim != "1d":
+        cmd += f" --dim {dim}"
     run_device_profiler(cmd, SUBDIR, device_analysis_types=["device_kernel_duration"])
 
     csv_path = get_latest_ops_log_filename(SUBDIR)
@@ -168,9 +422,32 @@ def run_driver():
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--worker", action="store_true", help="internal: profiled matmul runner")
+    parser.add_argument(
+        "--third_matmul",
+        action="store_true",
+        help="use (K,N)=(2048, 7168) instead of the default (7168, 2048)",
+    )
+    parser.add_argument(
+        "--dim",
+        choices=["1d", "2d"],
+        default="1d",
+        help="which program-config family to use: 1D mcast (default) or 2D mcast",
+    )
     args = parser.parse_args()
 
-    if args.worker:
-        run_worker()
+    if args.third_matmul:
+        K, N = 2048, 7168
+
+    if args.dim == "1d" and not args.third_matmul:
+        program_configs = ProgramConfig1DFirstTwoMatmuls
+    elif args.dim == "1d" and args.third_matmul:
+        program_configs = ProgramConfig1DThirdMatmul
+    elif args.dim == "2d" and not args.third_matmul:
+        program_configs = ProgramConfig2DFirstTwoMatmuls
     else:
-        run_driver()
+        program_configs = ProgramConfig2DThirdMatmul
+
+    if args.worker:
+        run_worker(program_configs)
+    else:
+        run_driver(third_matmul=args.third_matmul, dim=args.dim)

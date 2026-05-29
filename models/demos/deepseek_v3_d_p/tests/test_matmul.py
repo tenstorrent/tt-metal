@@ -329,24 +329,27 @@ def test_matmul_2d_in0_block_w(device, in0_block_w):
 # I've picked the (1, 6) subblock size, giving us the: 1251439ns duration.
 # Experiment: when pickes the best subblock combo, sweep fidelites and see perf.
 # At this point, matmul is: 1251439ns duration which is >50% util.
-# @pytest.mark.parametrize(
-#     "in0_block_w",
-#     [1, 2, 3, 4, 6, 8, 9, 12],  # ... divisors of 576 [K tiles]
-# )
-# @pytest.mark.parametrize(
-#     "out_subblock_h",
-#     [1, 2, 4, 6, 8],
-# )
-# @pytest.mark.parametrize(
-#     "out_subblock_w",
-#     [1, 2, 4, 6, 8],
-# )
-def test_matmul_subblocks(device, in0_block_w=8, out_subblock_h=1, out_subblock_w=2):
+@pytest.mark.parametrize(
+    "in0_block_w",
+    [1, 2, 3, 4, 6, 8, 9, 12, 14, 16, 18, 20],
+)
+@pytest.mark.parametrize(
+    "out_subblock_h",
+    [1, 2, 4, 6, 8],
+)
+@pytest.mark.parametrize(
+    "out_subblock_w",
+    [1, 2, 4, 6, 8],
+)
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+def test_matmul_subblocks(mesh_device, in0_block_w, out_subblock_h, out_subblock_w):
     if out_subblock_h * out_subblock_w > 8:
         pytest.skip("out_subblock_h * out_subblock_w must be <= 8")
 
-    in0_shape = [1, 1, 64, 7168]
-    in1_shape = [1, 1, 7168, 2048]
+    # in0_shape = [1, 1, 768, 7168]
+    # in1_shape = [1, 1, 7168, 2048]
+    in0_shape = [1, 1, 32, 2048]
+    in1_shape = [1, 1, 2048, 7168]
 
     in0_torch = torch.randn(in0_shape).bfloat16().float()
     in1_torch = torch.randn(in1_shape).bfloat16().float()
@@ -354,7 +357,7 @@ def test_matmul_subblocks(device, in0_block_w=8, out_subblock_h=1, out_subblock_
     in0_tt = ttnn.from_torch(
         in0_torch,
         dtype=ttnn.bfloat8_b,
-        device=device,
+        device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
@@ -362,7 +365,7 @@ def test_matmul_subblocks(device, in0_block_w=8, out_subblock_h=1, out_subblock_
     in1_tt = ttnn.from_torch(
         in1_torch,
         dtype=ttnn.bfloat4_b,
-        device=device,
+        device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
@@ -374,19 +377,34 @@ def test_matmul_subblocks(device, in0_block_w=8, out_subblock_h=1, out_subblock_
         packer_l1_acc=True,
     )
 
-    grid_size = (8, 4)
-    per_core_M = (in0_shape[2] // 32) // 1
-    per_core_N = (in1_shape[3] // 32) // (grid_size[0] * grid_size[1])
+    # grid_size = (8, 7)
+    # per_core_M = (in0_shape[2] // 32) // 1
+    # per_core_N = (in1_shape[3] // 32) // (grid_size[0] * grid_size[1])
+    # print(f"per_core_M: {per_core_M}, per_core_N: {per_core_N}")
+    # program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    #     compute_with_storage_grid_size=grid_size,
+    #     in0_block_w=in0_block_w,
+    #     per_core_M=per_core_M,
+    #     per_core_N=per_core_N,
+    #     out_subblock_h=out_subblock_h,
+    #     out_subblock_w=out_subblock_w,
+    #     mcast_in0=True,
+    #     fuse_batch=False,
+    #     fused_activation=None,
+    # )
+
+    grid_size = (8, 8)
+    per_core_M = (in0_shape[2] // 32 + grid_size[1] - 1) // grid_size[1]
+    per_core_N = (in1_shape[3] // 32 + grid_size[0] - 1) // grid_size[0]
     print(f"per_core_M: {per_core_M}, per_core_N: {per_core_N}")
-    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=grid_size,
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(8, 8),
         in0_block_w=in0_block_w,
         per_core_M=per_core_M,
         per_core_N=per_core_N,
         out_subblock_h=out_subblock_h,
         out_subblock_w=out_subblock_w,
-        mcast_in0=True,
-        fuse_batch=False,
+        transpose_mcast=False,
         fused_activation=None,
     )
 
