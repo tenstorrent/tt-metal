@@ -279,7 +279,7 @@ static void matmul_tile_block(
                   "in1_block_tile_cnt",
                   "in0_block_size_bytes",
                   "in1_block_size_bytes"}},
-        .config_spec =
+        .config =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen1_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
@@ -302,7 +302,7 @@ static void matmul_tile_block(
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
-        .config_spec =
+        .config =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen1_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
@@ -362,7 +362,7 @@ static void matmul_tile_block(
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
         .compile_time_args = compute_cta_bindings,
-        .config_spec =
+        .config =
             experimental::metal2_host_api::ComputeConfiguration{
                 .math_fidelity = cfg.math_fidelity,
                 .fp32_dest_acc_en = cfg.fp32_dest_acc_en,

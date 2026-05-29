@@ -332,7 +332,7 @@ void run_single_core_unary_broadcast_quasar(
         }},
         .runtime_arg_schema =
             {.runtime_arg_names = {"src_addr", "src_dram_bank_id", "num_tiles", "ublock_size_tiles", "reader_only"}},
-        .config_spec =
+        .config =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen1_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
@@ -354,7 +354,7 @@ void run_single_core_unary_broadcast_quasar(
         }},
         .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
-        .config_spec =
+        .config =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen1_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
@@ -386,7 +386,7 @@ void run_single_core_unary_broadcast_quasar(
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
         .compile_time_args = {{"per_core_block_cnt", num_blocks}, {"per_core_block_dim", block_size}},
-        .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
+        .config = experimental::metal2_host_api::ComputeConfiguration{},
     };
 
     experimental::metal2_host_api::WorkUnitSpec wu{

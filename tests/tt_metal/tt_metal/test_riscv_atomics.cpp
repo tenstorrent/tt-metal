@@ -94,7 +94,7 @@ protected:
                 .num_threads = num_dms_,
                 .compiler_options = {.defines = defines_vec},
                 .runtime_arg_schema = {.runtime_arg_names = {"l1_counter_addr", "increment_times"}},
-                .config_spec =
+                .config =
                     experimental::metal2_host_api::DataMovementConfiguration{
                         .gen2_data_movement_config =
                             experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
@@ -110,7 +110,7 @@ protected:
                     .num_threads = 1,
                     .compiler_options = {.defines = defines_vec},
                     .runtime_arg_schema = {.runtime_arg_names = {"l1_counter_addr", "increment_times"}},
-                    .config_spec =
+                    .config =
                         experimental::metal2_host_api::DataMovementConfiguration{
                             .gen1_data_movement_config =
                                 experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{

@@ -43,7 +43,7 @@ bool run_addrgen_test(
             {{"src_stride_en", src_stride_en},
              {"dst_stride_en", dst_stride_en},
              {"num_of_addresses", num_of_addresses}},
-        .config_spec =
+        .config =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},

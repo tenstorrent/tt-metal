@@ -271,7 +271,7 @@ void run_single_core_tilize_program(
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
         .runtime_arg_schema = reader_schema,
-        .config_spec =
+        .config =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen1_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
@@ -293,7 +293,7 @@ void run_single_core_tilize_program(
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
-        .config_spec =
+        .config =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen1_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
@@ -351,7 +351,7 @@ void run_single_core_tilize_program(
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
         .compile_time_args = compute_cta_bindings,
-        .config_spec =
+        .config =
             experimental::metal2_host_api::ComputeConfiguration{
                 .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
                 .dst_full_sync_en = test_config.dst_full_sync_en,
@@ -795,7 +795,7 @@ static void run_quasar_tilize_untilize_test(
         }},
         .runtime_arg_schema =
             {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
-        .config_spec =
+        .config =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
@@ -815,7 +815,7 @@ static void run_quasar_tilize_untilize_test(
         }},
         .runtime_arg_schema =
             {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
-        .config_spec =
+        .config =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
@@ -870,7 +870,7 @@ static void run_quasar_tilize_untilize_test(
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
         .compile_time_args = compute_cta_bindings,
-        .config_spec =
+        .config =
             experimental::metal2_host_api::ComputeConfiguration{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
                 .dst_full_sync_en = dst_full_sync_en,

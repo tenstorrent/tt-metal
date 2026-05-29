@@ -109,7 +109,7 @@ struct StridedDFBTestParams {
 // On Quasar (num_dm_threads DM threads), each thread handles every N-th page.
 //
 // kernel_builder_fn: a callable (KernelSpec& reader, KernelSpec& writer) → void
-//    that sets the arch-specific fields (num_threads, config_spec, DFB bindings).
+//    that sets the arch-specific fields (num_threads, config, DFB bindings).
 template <typename T, typename KernelBuilderFn>
 void run_strided_dfb_copy_test(
     const StridedDFBTestParams& params,

@@ -381,7 +381,7 @@ void run_single_core_reduce_program(
         .tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}},
         .compile_time_args = reader_cta_bindings,
         .runtime_arg_schema = {.named_runtime_args = reader_named_runtime_args},
-        .config_spec =
+        .config =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen1_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
@@ -405,7 +405,7 @@ void run_single_core_reduce_program(
         }},
         .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
-        .config_spec =
+        .config =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen1_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
@@ -440,7 +440,7 @@ void run_single_core_reduce_program(
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
         .compile_time_args = {{"Ht", dims.Ht}, {"Wt", dims.Wt}, {"NC", dims.NC}},
-        .config_spec =
+        .config =
             experimental::metal2_host_api::ComputeConfiguration{
                 .math_fidelity = test_config.math_fidelity,
                 .fp32_dest_acc_en = test_config.fp32_dest_acc_en,

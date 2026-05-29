@@ -40,7 +40,7 @@ static void run_kernel(
         .source = kernel_path,
         .num_threads = 1,
         .compile_time_args = std::move(compile_time_args),
-        .config_spec =
+        .config =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},

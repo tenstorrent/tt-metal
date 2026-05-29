@@ -477,7 +477,7 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
             "tests/tt_metal/tt_metal/test_kernels/dataflow/semaphore_accessor_loopback_producer.cpp",
         .num_threads = 1,
         .semaphore_bindings = {{.semaphore_spec_name = "only_sem", .accessor_name = "signal"}},
-        .config_spec =
+        .config =
             DataMovementConfiguration{
                 .gen1_data_movement_config =
                     DataMovementConfiguration::Gen1DataMovementConfig{
@@ -492,7 +492,7 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
             "tests/tt_metal/tt_metal/test_kernels/dataflow/semaphore_accessor_loopback_consumer.cpp",
         .num_threads = 1,
         .semaphore_bindings = {{.semaphore_spec_name = "only_sem", .accessor_name = "waiter"}},
-        .config_spec =
+        .config =
             DataMovementConfiguration{
                 .gen1_data_movement_config =
                     DataMovementConfiguration::Gen1DataMovementConfig{
@@ -660,7 +660,7 @@ TEST_F(ProgramSpecHWTest, TensorAccessorBindingLoopback) {
 // ============================================================================
 //
 // On Gen1 (WH/BH) the per-kernel risc_mask is a deterministic function of the
-// KernelSpec's config_spec. Multi-binding requires all same-role KernelSpecs to
+// KernelSpec's config. Multi-binding requires all same-role KernelSpecs to
 // share that mask; mismatched processor placement on the producer (or consumer)
 // side is a user error and must be rejected with an actionable message.
 TEST_F(ProgramSpecHWTest, MultiBindingProducerMaskMismatchFails) {

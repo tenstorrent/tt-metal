@@ -126,7 +126,7 @@ void run_single_core_copy_block_matmul_partials(
         }},
         .runtime_arg_schema =
             {.runtime_arg_names = {"src_addr", "src_dram_bank_id", "num_tiles", "ublock_size_tiles", "reader_only"}},
-        .config_spec =
+        .config =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen1_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
@@ -150,7 +150,7 @@ void run_single_core_copy_block_matmul_partials(
         }},
         .runtime_arg_schema =
             {.runtime_arg_names = {"dst_addr", "dst_dram_bank_id", "num_tiles", "ublock_size_tiles", "writer_only"}},
-        .config_spec =
+        .config =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen1_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
@@ -186,7 +186,7 @@ void run_single_core_copy_block_matmul_partials(
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
         .compile_time_args = {{"num_tiles", num_tiles}, {"num_single_transfer", test_config.compute_ublock}},
-        .config_spec =
+        .config =
             experimental::metal2_host_api::ComputeConfiguration{
                 .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
                 .dst_full_sync_en = test_config.dst_full_sync_en,

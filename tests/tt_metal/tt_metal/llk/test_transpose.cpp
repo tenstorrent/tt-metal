@@ -205,7 +205,7 @@ void run_single_core_transpose(
         }},
         .tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}},
         .runtime_arg_schema = {.runtime_arg_names = {"N", "Ht", "Wt", "HtWt"}},
-        .config_spec =
+        .config =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen1_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
@@ -229,7 +229,7 @@ void run_single_core_transpose(
         }},
         .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
-        .config_spec =
+        .config =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen1_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
@@ -267,7 +267,7 @@ void run_single_core_transpose(
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
         .compile_time_args = {{"NHtWt", Ht * Wt * NC}},
-        .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
+        .config = experimental::metal2_host_api::ComputeConfiguration{},
     };
 
     experimental::metal2_host_api::WorkUnitSpec wu{

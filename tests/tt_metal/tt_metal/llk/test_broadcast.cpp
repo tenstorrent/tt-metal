@@ -334,7 +334,7 @@ void run_single_core_broadcast(
              }},
         .runtime_arg_schema =
             {.runtime_arg_names = {"src0_addr", "src0_bank_id", "src1_addr", "src1_bank_id", "num_tiles"}},
-        .config_spec =
+        .config =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen1_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
@@ -357,7 +357,7 @@ void run_single_core_broadcast(
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
-        .config_spec =
+        .config =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen1_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
@@ -393,7 +393,7 @@ void run_single_core_broadcast(
                  .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
-        .config_spec =
+        .config =
             experimental::metal2_host_api::ComputeConfiguration{
                 .math_fidelity = test_config.math_fidelity,
             },

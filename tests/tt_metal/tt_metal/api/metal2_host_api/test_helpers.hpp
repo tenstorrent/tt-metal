@@ -81,7 +81,7 @@ inline KernelSpec MakeMinimalDMKernel(const std::string& name, uint32_t num_thre
         .unique_id = name,
         .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
         .num_threads = num_threads,
-        .config_spec =
+        .config =
             DataMovementConfiguration{
                 .gen2_data_movement_config = DataMovementConfiguration::Gen2DataMovementConfig{},
             },
@@ -96,7 +96,7 @@ inline KernelSpec MakeMinimalGen1DMKernel(
         .unique_id = name,
         .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
         .num_threads = 1,
-        .config_spec =
+        .config =
             DataMovementConfiguration{
                 .gen1_data_movement_config =
                     DataMovementConfiguration::Gen1DataMovementConfig{
@@ -112,7 +112,7 @@ inline KernelSpec MakeMinimalComputeKernel(const std::string& name, uint32_t num
         .unique_id = name,
         .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
         .num_threads = num_threads,
-        .config_spec = ComputeConfiguration{},
+        .config = ComputeConfiguration{},
     };
 }
 

@@ -90,7 +90,7 @@ void RunTest(
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
         .compile_time_args = {{"num_entries", NUM_ENTRIES_PER_PRODUCER}},
-        .config_spec =
+        .config =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{
@@ -114,7 +114,7 @@ void RunTest(
             {{"num_entries", entries_per_consumer},
              {"num_consumers_to_run", NUM_CONSUMERS_TO_RUN},
              {"sync_flag_addr", tensix_sync_addr}},
-        .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
+        .config = experimental::metal2_host_api::ComputeConfiguration{},
     };
 
     experimental::metal2_host_api::WorkUnitSpec wu{

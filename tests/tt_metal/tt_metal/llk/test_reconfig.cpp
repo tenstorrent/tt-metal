@@ -461,7 +461,7 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
                   "src5_addr",
                   "src5_bank_id",
                   "num_tiles"}},
-        .config_spec =
+        .config =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{
@@ -479,7 +479,7 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
             .access_pattern = DFBAccess::STRIDED,
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
-        .config_spec =
+        .config =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{
@@ -500,7 +500,7 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
              dfb_binding(INP4_DFB, DFBEndpoint::CONSUMER),
              dfb_binding(INP5_DFB, DFBEndpoint::CONSUMER),
              dfb_binding(OUT_DFB, DFBEndpoint::PRODUCER)},
-        .config_spec =
+        .config =
             experimental::metal2_host_api::ComputeConfiguration{
                 .math_fidelity = MathFidelity::HiFi4,
                 .fp32_dest_acc_en = true,

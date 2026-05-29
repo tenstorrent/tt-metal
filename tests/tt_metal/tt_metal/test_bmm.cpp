@@ -145,7 +145,7 @@ experimental::metal2_host_api::ProgramSpec build_bmm_program_spec(
         .runtime_arg_schema =
             {.runtime_arg_names = {"batch_start"},
              .common_runtime_arg_names = {"Mt", "Kt", "Nt", "MtKt", "KtNt", "batch", "do_bcast"}},
-        .config_spec = reader_config,
+        .config = reader_config,
     };
 
     experimental::metal2_host_api::KernelSpec writer_spec{
@@ -162,7 +162,7 @@ experimental::metal2_host_api::ProgramSpec build_bmm_program_spec(
         .tensor_bindings = {{.tensor_parameter_name = DST_T, .accessor_name = "dst"}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"batch_start"}, .common_runtime_arg_names = {"Mt", "Nt", "batch"}},
-        .config_spec = writer_config,
+        .config = writer_config,
     };
 
     experimental::metal2_host_api::KernelSpec compute_spec{
@@ -185,7 +185,7 @@ experimental::metal2_host_api::ProgramSpec build_bmm_program_spec(
               .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
               .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED}},
         .compile_time_args = {{"batch", p.B_per_core}, {"Mt", p.Mt}, {"Kt", p.Kt}, {"Nt", p.Nt}},
-        .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
+        .config = experimental::metal2_host_api::ComputeConfiguration{},
     };
 
     return experimental::metal2_host_api::ProgramSpec{

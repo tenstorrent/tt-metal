@@ -93,7 +93,7 @@ static void run_pack_relu_test(
         }},
         .runtime_arg_schema =
             {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
-        .config_spec =
+        .config =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
@@ -113,7 +113,7 @@ static void run_pack_relu_test(
         }},
         .runtime_arg_schema =
             {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
-        .config_spec =
+        .config =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
@@ -141,7 +141,7 @@ static void run_pack_relu_test(
              }},
         .compile_time_args = {{"per_core_tile_cnt", num_tiles}},
         .runtime_arg_schema = {.runtime_arg_names = {"relu_config"}},
-        .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
+        .config = experimental::metal2_host_api::ComputeConfiguration{},
     };
 
     experimental::metal2_host_api::WorkUnitSpec wu{

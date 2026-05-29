@@ -264,7 +264,7 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
         }},
         .runtime_arg_schema =
             {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
-        .config_spec = reader_dm_cfg,
+        .config = reader_dm_cfg,
     };
 
     experimental::metal2_host_api::KernelSpec writer_spec{
@@ -281,7 +281,7 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
         }},
         .runtime_arg_schema =
             {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
-        .config_spec = writer_dm_cfg,
+        .config = writer_dm_cfg,
     };
 
     experimental::metal2_host_api::WorkUnitSpec wu{
@@ -460,7 +460,7 @@ bool reader_datacopy_writer(
         }},
         .runtime_arg_schema =
             {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
-        .config_spec = reader_dm_cfg,
+        .config = reader_dm_cfg,
     };
 
     experimental::metal2_host_api::KernelSpec writer_spec{
@@ -477,7 +477,7 @@ bool reader_datacopy_writer(
         }},
         .runtime_arg_schema =
             {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
-        .config_spec = writer_dm_cfg,
+        .config = writer_dm_cfg,
     };
 
     experimental::metal2_host_api::KernelSpec compute_spec{
@@ -500,7 +500,7 @@ bool reader_datacopy_writer(
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
         .compile_time_args = {{"per_core_tile_cnt", per_core_tile_cnt}},
-        .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
+        .config = experimental::metal2_host_api::ComputeConfiguration{},
     };
 
     experimental::metal2_host_api::WorkUnitSpec wu{

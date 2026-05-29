@@ -70,8 +70,8 @@ struct KernelSpec {
     uint32_t num_threads = 1;
 
     // Kernel type (methods)
-    bool is_dm_kernel() const { return std::holds_alternative<DataMovementConfiguration>(config_spec); }
-    bool is_compute_kernel() const { return std::holds_alternative<ComputeConfiguration>(config_spec); }
+    bool is_dm_kernel() const { return std::holds_alternative<DataMovementConfiguration>(config); }
+    bool is_compute_kernel() const { return std::holds_alternative<ComputeConfiguration>(config); }
 
     ///////////////////////////////////////////////////////////////////
     // Kernel compiler options
@@ -158,8 +158,7 @@ struct KernelSpec {
     //////////////////////////////////////////////////////////////////////////////
     // Kernel-controlled hardware resource configuration
     //////////////////////////////////////////////////////////////////////////////
-    using ConfigSpec = std::variant<DataMovementConfiguration, ComputeConfiguration>;
-    ConfigSpec config_spec;
+    std::variant<DataMovementConfiguration, ComputeConfiguration> config;
 
     //////////////////////////////////////////////////////////////////////////////
     // Advanced options (see advanced_options.hpp)

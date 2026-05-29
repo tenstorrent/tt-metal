@@ -96,7 +96,7 @@ static vector<uint32_t> run_mxfp4_typecast(
         }},
         .runtime_arg_schema =
             {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
-        .config_spec =
+        .config =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
@@ -116,7 +116,7 @@ static vector<uint32_t> run_mxfp4_typecast(
         }},
         .runtime_arg_schema =
             {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
-        .config_spec =
+        .config =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
@@ -142,7 +142,7 @@ static vector<uint32_t> run_mxfp4_typecast(
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
         .compile_time_args = {{"per_core_tile_cnt", num_tiles}},
-        .config_spec =
+        .config =
             experimental::metal2_host_api::ComputeConfiguration{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
             },

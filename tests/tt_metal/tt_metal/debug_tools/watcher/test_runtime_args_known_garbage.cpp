@@ -148,7 +148,7 @@ TEST_F(RTATestFixture, SentinelPatternHandlingAndMissingRTADetection) {
             .source = rta_crta_kernel_path,
             .num_threads = 1,
             .compile_time_args = {{"l1_scratch_addr", l1_unreserved_base}},
-            .config_spec =
+            .config =
                 experimental::metal2_host_api::DataMovementConfiguration{
                     .gen1_data_movement_config =
                         experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
@@ -159,7 +159,7 @@ TEST_F(RTATestFixture, SentinelPatternHandlingAndMissingRTADetection) {
             .source = rta_crta_kernel_path,
             .num_threads = 1,
             .compile_time_args = {{"l1_scratch_addr", compute_scratch_addr}},
-            .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
+            .config = experimental::metal2_host_api::ComputeConfiguration{},
         };
         experimental::metal2_host_api::WorkUnitSpec wu{
             .unique_id = "main",
@@ -274,7 +274,7 @@ TEST_F(RTATestFixture, CorrectArgDispatchAndPayloadValidation) {
         .unique_id = DM_KERNEL_NAME,
         .source = rta_crta_kernel_path,
         .num_threads = is_quasar ? num_dms_ : 1u,
-        .config_spec = dm_cfg,
+        .config = dm_cfg,
         .advanced_options =
             experimental::metal2_host_api::KernelAdvancedOptions{
                 .num_runtime_varargs = default_rtas.size(),
@@ -414,7 +414,7 @@ TEST_P(RTAAssertTest, OutOfBoundsArgAccessDetection) {
             kspec.num_threads = 1;
         }
         // Provide both gen1 and gen2 configs so the same KernelSpec runs on either arch.
-        kspec.config_spec = experimental::metal2_host_api::DataMovementConfiguration{
+        kspec.config = experimental::metal2_host_api::DataMovementConfiguration{
             .gen1_data_movement_config =
                 experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
                     .processor = DataMovementProcessor::RISCV_0},
@@ -423,7 +423,7 @@ TEST_P(RTAAssertTest, OutOfBoundsArgAccessDetection) {
         };
     } else if (params.processor_class == HalProcessorClassType::COMPUTE) {
         kspec.num_threads = 1;  // On Quasar, only 1 NEO Cluster; gen1 has a single compute group.
-        kspec.config_spec = experimental::metal2_host_api::ComputeConfiguration{};
+        kspec.config = experimental::metal2_host_api::ComputeConfiguration{};
     } else {
         TT_THROW("Unsupported processor class");
     }
@@ -480,7 +480,7 @@ TEST_F(RTATestFixture, QuasarMultiDMOutOfBoundsArgDetection) {
         .compiler_options =
             {.defines = {{"MAX_RTA_IDX", std::to_string(default_rtas.size())}, {"TEST_MULTI_DM_RTA", "1"}}},
         .compile_time_args = {{"num_dms", num_dms_}, {"l1_sync_addr", l1_unreserved_base}},
-        .config_spec =
+        .config =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},

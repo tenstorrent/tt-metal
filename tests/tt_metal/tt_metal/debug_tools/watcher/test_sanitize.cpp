@@ -264,7 +264,7 @@ void RunTestOnCore(
                       "use_multicast_semaphore_inc",
                       "mcast_dst_end_x",
                       "mcast_dst_end_y"}},
-            .config_spec = dm_cfg,
+            .config = dm_cfg,
         };
         experimental::metal2_host_api::WorkUnitSpec wu{
             .unique_id = "main",

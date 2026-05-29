@@ -89,7 +89,7 @@ void RunOneTest(
                 .source = path_metal2,
                 .num_threads = dms_per_kernel,
                 .compile_time_args = {{"usage", free}},
-                .config_spec =
+                .config =
                     experimental::metal2_host_api::DataMovementConfiguration{
                         .gen2_data_movement_config =
                             experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
@@ -104,7 +104,7 @@ void RunOneTest(
             // all Neos; each Neo internally runs the kernel on its 4 TRISCs.
             .num_threads = 4,
             .compile_time_args = {{"usage", free}},
-            .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
+            .config = experimental::metal2_host_api::ComputeConfiguration{},
         });
         kernel_names.push_back(COMPUTE_NAME);
     } else {
@@ -120,7 +120,7 @@ void RunOneTest(
                 .source = path_metal2,
                 .num_threads = 1,
                 .compile_time_args = {{"usage", free}},
-                .config_spec =
+                .config =
                     experimental::metal2_host_api::DataMovementConfiguration{
                         .gen1_data_movement_config =
                             experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
@@ -134,7 +134,7 @@ void RunOneTest(
             .source = path_metal2,
             .num_threads = 1,
             .compile_time_args = {{"usage", free}},
-            .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
+            .config = experimental::metal2_host_api::ComputeConfiguration{},
         });
         kernel_names.push_back(COMPUTE_NAME);
     }

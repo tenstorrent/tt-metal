@@ -63,7 +63,7 @@ bool run_l2_flush_test(
                 .runtime_arg_names = {"base_addr", "test_mode"},
                 .common_runtime_arg_names = {"value", "num_words"},
             },
-        .config_spec =
+        .config =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
@@ -155,7 +155,7 @@ bool run_l1_dcache_test(
                 .runtime_arg_names = {"base_addr", "test_mode"},
                 .common_runtime_arg_names = {"value", "num_words"},
             },
-        .config_spec =
+        .config =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
