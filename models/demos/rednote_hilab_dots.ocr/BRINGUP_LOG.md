@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** p150 (blackhole)
 **Started:** 2026-05-29T00:11:46Z
-**Updated:** 2026-05-29T05:03:00Z
+**Updated:** 2026-05-29T05:13:41Z
 
 ## Block Status
 
@@ -90,11 +90,10 @@
 
 | Name | Input | Output | needs_ar | Generation | Perf |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| ocr | image | text | yes | pending | pending |
+| ocr | image | text | yes | done | pending |
 
 ## Recent Ticks
 
-- tick 40 (2026-05-29T04:04:31Z): device[vision_patch_merger] — ok
 - tick 41 (2026-05-29T04:10:59Z): device[vision_tower] — ok
 - tick 42 (2026-05-29T04:16:28Z): device[embedding] — ok
 - tick 43 (2026-05-29T04:22:04Z): device[rmsnorm] — ok
@@ -104,6 +103,7 @@
 - tick 47 (2026-05-29T04:48:41Z): device[decoder_layer] — ok
 - tick 48 (2026-05-29T04:54:46Z): device[lm_head] — ok
 - tick 49 (2026-05-29T05:03:00Z): device[language_model] — ok
+- tick 50 (2026-05-29T05:13:41Z): device[ocr] — ok
 
 ## Host-Resident Exceptions
 
