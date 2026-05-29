@@ -184,7 +184,7 @@ std::pair<vector<uint32_t>, vector<uint32_t>> generate_packed_sfpu_binary_inputs
         auto rhs = generate_div_operand(numel, seed + 1);
         return {lhs, rhs};
     }
-    if (op_name == "add_int") {
+    else if (op_name == "add_int") {
         auto lhs = create_random_vector_of_int8(numel, seed);
         auto rhs = create_random_vector_of_int8(numel, seed + 1);
         return {lhs, rhs};
