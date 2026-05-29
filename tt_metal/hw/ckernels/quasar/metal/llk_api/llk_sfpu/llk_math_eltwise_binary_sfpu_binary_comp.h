@@ -15,8 +15,11 @@ namespace ckernel {
 
 /**
  * @brief Initialize SFPU for elementwise integer greater-than compare
+ *
+ * @tparam APPROXIMATE: Approximation mode (unused for integer compare)
+ * @tparam DATA_FORMAT: Data format of the integer operands
  */
-template <DataFormat DATA_FORMAT>
+template <bool APPROXIMATE, DataFormat DATA_FORMAT>
 inline void llk_math_eltwise_binary_sfpu_gt_int_init() {
     static_assert(DATA_FORMAT == DataFormat::Int32, "Quasar SFPU gt_int currently supports Int32 only");
     _llk_math_eltwise_sfpu_init_();

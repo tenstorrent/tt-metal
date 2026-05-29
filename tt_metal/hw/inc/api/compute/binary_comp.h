@@ -80,7 +80,11 @@ ALWI void lt_int_tile_init() {
 
 template <DataFormat data_format>
 ALWI void gt_int_tile_init() {
+#if defined(ARCH_QUASAR)
+    MATH((llk_math_eltwise_binary_sfpu_gt_int_init<APPROX, data_format>()));
+#else
     MATH((llk_math_eltwise_binary_sfpu_gt_int_init<data_format>()));
+#endif
 }
 
 #ifndef ARCH_QUASAR
