@@ -82,11 +82,12 @@ The PR description, the linked tracking issue, and PR comments serve distinct pu
 
 ### PR description = main-run evidence (one row per disabled test)
 
-The PR description MUST contain, for EACH test (or test parametrization) currently disabled in this PR, a direct link to a specific job-step run on `main` that shows that test failing with the deterministic signature.
+The PR description MUST contain, for EACH test (or test parametrization) currently disabled in this PR, a direct link to a specific job-step run on `main` that shows that test failing with the deterministic signature, AND the head commit SHA of that main run.
 
 - The link MUST be a job URL (e.g. `https://github.com/tenstorrent/tt-metal/actions/runs/<run-id>/job/<job-id>`), NOT just a run URL — devs need to land directly on the failing job's log.
+- The commit SHA MUST be the `headSha` of the run that produced the linked failing job (i.e. the `main` commit that run was built from). It is rendered as a markdown link to the commit page (`https://github.com/tenstorrent/tt-metal/commit/<sha>`). The SHA does NOT need to be the FIRST commit that introduced the failure — this project is not about triaging the regression to a specific commit; just listing the commit the most recent failure ran on is sufficient.
 - The evidence MUST be the most recent failing main run for that test that the automation can find at the time of the PR touch. "Recent" means latest completed main run as of the current session.
-- If multiple tests share the same failing job, you MAY link the same job URL multiple times (once per test). Do NOT collapse tests into a single line — devs want one row per disabled test.
+- If multiple tests share the same failing job, you MAY link the same job URL and the same commit SHA multiple times (once per test). Do NOT collapse tests into a single line — devs want one row per disabled test.
 - The PR description MUST NOT contain links to verification dispatch runs, pruned-workflow runs, or temp-branch runs. Those live in PR comments only.
 - The PR description MUST NOT contain narrative beyond a one-line summary and the evidence table. Keep it dev-readable at a glance.
 
@@ -95,9 +96,9 @@ Required PR description format (use this verbatim):
 ```
 <one-line summary>
 
-| Disabled test | Most recent failing main run (job link) | Run completed at |
-|---|---|---|
-| path/to/test::TestClass::test_name[params] | https://github.com/tenstorrent/tt-metal/actions/runs/<run-id>/job/<job-id> | YYYY-MM-DD HH:MM UTC |
+| Disabled test | Most recent failing main run (job link) | Commit | Run completed at |
+|---|---|---|---|
+| path/to/test::TestClass::test_name[params] | https://github.com/tenstorrent/tt-metal/actions/runs/<run-id>/job/<job-id> | [<short-sha>](https://github.com/tenstorrent/tt-metal/commit/<full-sha>) | YYYY-MM-DD HH:MM UTC |
 ```
 
 ### PR comments = verification, dispatch, and automation status
@@ -126,7 +127,7 @@ Whenever the automation touches a PR — rebase, revalidation pass, Examining-la
 
 1. Look up the latest completed main run for that test's job.
 2. **If the test is STILL failing deterministically on main:**
-   - Update the PR description's evidence row for that test with the new job URL and the run's `Run completed at` timestamp.
+   - Update the PR description's evidence row for that test with the new job URL, the new run's `headSha` (rendered as a commit-link in the `Commit` column), and the run's `Run completed at` timestamp.
    - Regenerate the linked issue body from the updated PR description evidence table.
 3. **If the test is NOT failing on the latest main run (i.e. it has started passing):**
    - Remove the disable for that test from the feature branch.
