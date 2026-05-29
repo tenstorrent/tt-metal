@@ -296,10 +296,10 @@ def _fused_qkv_pair(
     Concatenation is along the output dimension so the fused matmul
     output is laid out as ``[..., 3 * hidden]`` (Q | K | V).
 
-    Stage 8: when ``q_scale != 1.0``, the Q rows of the concatenated weight
-    and bias are pre-multiplied by ``q_scale`` (typically ``1 / sqrt(head_dim)``).
-    This folds the attention scale factor into the weights at preprocessing time,
-    eliminating a runtime ``multiply`` per conformer self-attention layer.
+    When ``q_scale != 1.0``, the Q rows of the concatenated weight and bias are pre-multiplied
+    by ``q_scale`` (typically ``1 / sqrt(head_dim)``). This folds the attention scale factor
+    into the weights at preprocessing time, eliminating a runtime ``multiply`` per conformer
+    self-attention layer.
     """
     q_w = q_proj.weight.detach()
     q_b = q_proj.bias.detach()
@@ -978,8 +978,9 @@ def _conformer_feed_forward_params(
 ) -> dict:
     """Preprocess conformer FFN weights.
 
-    Stage 13a: when ``out_scale != 1.0`` (e.g. 0.5 for Macaron-style half-step residual),
-    the ``output_dense`` weight and bias are pre-multiplied at load time.
+    When ``out_scale != 1.0`` (e.g. 0.5 for Macaron-style half-step residual), the
+    ``output_dense`` weight and bias are pre-multiplied at load time so the per-step
+    residual add doesn't need an explicit multiply.
     When ``tp > 1``: intermediate_dense is column-parallel, output_dense is row-parallel.
     """
     od_w = ffn.output_dense.weight.detach()
