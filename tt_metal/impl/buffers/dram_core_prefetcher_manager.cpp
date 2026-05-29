@@ -5,6 +5,7 @@
 #include "impl/buffers/dram_core_prefetcher_manager.hpp"
 
 #include "distributed/mesh_device_impl.hpp"
+#include "distributed/mesh_command_queue_base.hpp"
 #include "impl/buffers/drisc_l1_arena.hpp"
 #include "impl/buffers/h2d_socket_internal.hpp"
 
@@ -236,6 +237,7 @@ void DramCorePrefetcherManager::build_and_launch_programs(uint32_t stage_ring_ba
                 stage_ring_size,
                 kRemoteCBId,
                 socket_page_size,
+                cq_signal_l1_addr_,
             };
 
             KernelHandle kernel_id = CreateKernel(
@@ -288,7 +290,12 @@ void DramCorePrefetcherManager::start(const experimental::DramCorePrefetcherConf
     const uint32_t socket_config_bytes = align_up(sizeof(receiver_socket_md), pcie_alignment_for_layout);
     const uint32_t socket_data_bytes = socket_fifo_size_for_layout + pcie_alignment_for_layout;
     const uint32_t kernel_region_base = static_cast<uint32_t>(arena.kernel_working_region_base());
-    socket_config_l1_addr_ = align_up(kernel_region_base, pcie_alignment_for_layout);
+    // Per-CQ signal slots at the front of the region: a small uint32 counter per
+    // command queue, written by the dispatcher for WaitForCqOnDramCorePrefetcher
+    // and polled by the kernel's WAIT_CQ handler.
+    const uint32_t cq_signal_bytes = align_up(kNumCqSignalSlots * sizeof(uint32_t), l1_alignment);
+    cq_signal_l1_addr_ = align_up(kernel_region_base, l1_alignment);
+    socket_config_l1_addr_ = align_up(cq_signal_l1_addr_ + cq_signal_bytes, pcie_alignment_for_layout);
     socket_data_l1_addr_ = align_up(socket_config_l1_addr_ + socket_config_bytes, pcie_alignment_for_layout);
     stage_ring_base_ = align_up(socket_data_l1_addr_ + socket_data_bytes, l1_alignment);
     const uint32_t kernel_region_end = kernel_region_base + kernel_region_size;
@@ -379,9 +386,10 @@ std::vector<std::vector<uint8_t>> DramCorePrefetcherManager::serialize_request_p
     };
     auto finalize_page = [&]() {
         auto* header = reinterpret_cast<DramCorePrefetcherRequestHeader*>(page.data());
-        header->num_entries = num_entries;
-        header->num_layouts = num_layouts;
-        header->gcb_state_addr = gcb_state_addr;
+        header->base.cmd_id = DRAM_PREFETCHER_CMD_PREFETCH;
+        header->prefetch.num_entries = static_cast<uint16_t>(num_entries);
+        header->prefetch.num_layouts = num_layouts;
+        header->prefetch.gcb_state_addr = gcb_state_addr;
         pages.push_back(std::move(page));
     };
 
@@ -483,6 +491,88 @@ void DramCorePrefetcherManager::queue(
     queue_cv_.notify_one();
 }
 
+void DramCorePrefetcherManager::enqueue_cq_signal_and_wait(
+    uint8_t cq_id, const std::optional<MeshCoordinateRangeSet>& device_subset) {
+    uint32_t signal_value = 0;
+    std::vector<MeshCoordinate> target_devices;
+    std::vector<DeviceMemoryAddress> targets;
+    {
+        // Hold the API lock only for the manager-state snapshot below, then release it
+        // before the dispatcher write. enqueue_write_dram_core_counter takes this same
+        // (non-recursive) api lock itself, so holding it across that call would
+        // self-deadlock; this mirrors the rest of the codebase, which never holds the
+        // api lock while delegating to a command-queue method that re-locks it. Once the
+        // snapshot is captured (target_devices, targets are self-contained value types),
+        // nothing below reads mutable manager state.
+        auto lock = lock_api_function_();
+        TT_FATAL(active_, "WaitForCqOnDramCorePrefetcher called before StartDramCorePrefetcher");
+        TT_FATAL(
+            cq_id < cq_signal_counter_.size(),
+            "WaitForCqOnDramCorePrefetcher cq_id ({}) out of range [0, {})",
+            cq_id,
+            cq_signal_counter_.size());
+
+        // Monotonic value for this signal; wrap is handled by the kernel's signed compare.
+        signal_value = ++cq_signal_counter_[cq_id];
+
+        // Resolve target device coords (subset if given, else full mesh).
+        MeshCoordinateRangeSet effective_subset = device_subset.has_value() ? *device_subset : full_mesh_subset();
+        for (const auto& range : effective_subset.ranges()) {
+            for (const auto& coord : range) {
+                TT_FATAL(
+                    device_index_by_coord_.find(coord) != device_index_by_coord_.end(),
+                    "WaitForCqOnDramCorePrefetcher target MeshCoordinate {} is not in the mesh this prefetcher was "
+                    "started on",
+                    coord);
+                target_devices.push_back(coord);
+            }
+        }
+
+        // Destination of the dispatcher write: the full device address (the kernel's
+        // local slot base plus the programmable-DRAM-core L1 NOC offset), so the
+        // dispatcher must NOT apply a bank offset.
+        const uint64_t dram_l1_noc_offset = MetalContext::instance(mesh_device_->impl().get_context_id())
+                                                .hal()
+                                                .get_l1_noc_offset(HalProgrammableCoreType::DRAM);
+        const uint64_t slot_addr = static_cast<uint64_t>(cq_signal_l1_addr_) +
+                                   static_cast<uint64_t>(cq_id) * sizeof(uint32_t) + dram_l1_noc_offset;
+
+        targets.reserve(target_devices.size() * num_senders_);
+        for (const auto& coord : target_devices) {
+            IDevice* device = devices_[device_index_by_coord_.at(coord)];
+            for (uint32_t s = 0; s < num_senders_; ++s) {
+                const CoreCoord virtual_core =
+                    device->virtual_core_from_logical_core(sender_logical_cores_[s], CoreType::DRAM);
+                targets.push_back(DeviceMemoryAddress{coord, virtual_core, slot_addr});
+            }
+        }
+    }  // release the api lock before entering the command-queue path (it re-locks it)
+
+    // (a) Dispatcher write: bump every target DRAM core's signal slot for this CQ.
+    mesh_device_->impl().mesh_command_queue_base(cq_id).enqueue_write_dram_core_counter(
+        tt::stl::Span<const DeviceMemoryAddress>(targets), signal_value, /*blocking=*/false);
+
+    // (b) Queue a WAIT_CQ request. It rides the same async worker path as prefetch
+    // requests, so it lands in each socket's FIFO ahead of the next prefetch request;
+    // the kernel blocks on it until it observes signal_value.
+    const uint32_t pcie_alignment =
+        MetalContext::instance(mesh_device_->impl().get_context_id()).hal().get_alignment(HalMemType::HOST);
+    const uint32_t page_bytes = align_up(kRequestPageBytes, pcie_alignment);
+    Request req;
+    req.page.assign(page_bytes, 0);
+    auto* header = reinterpret_cast<DramCorePrefetcherRequestHeader*>(req.page.data());
+    header->base.cmd_id = DRAM_PREFETCHER_CMD_WAIT_CQ;
+    header->wait_cq.cq_index = cq_id;
+    header->wait_cq.cq_wait_value = signal_value;
+    req.target_devices = std::move(target_devices);
+
+    {
+        std::lock_guard<std::mutex> lk(queue_mu_);
+        pending_.push_back(std::move(req));
+    }
+    queue_cv_.notify_one();
+}
+
 void DramCorePrefetcherManager::worker_loop() {
     while (true) {
         Request req;
@@ -544,9 +634,10 @@ void DramCorePrefetcherManager::stop() {
     if (!active_) {
         return;
     }
-    // Stop = a zero-filled page (num_entries == 0) broadcast to every device in
-    // the mesh. The kernel exits its request loop on `num_entries == 0`. The
-    // worker_loop returns once pending is drained and stop_requested_ is set.
+    // Stop = a zero-filled page broadcast to every device in the mesh. The leading
+    // command id byte is 0 == DRAM_PREFETCHER_CMD_STOP, so the kernel exits its
+    // request loop on it. The worker_loop returns once pending is drained and
+    // stop_requested_ is set.
     Request sentinel;
     const uint32_t pcie_alignment =
         MetalContext::instance(mesh_device_->impl().get_context_id()).hal().get_alignment(HalMemType::HOST);
@@ -608,6 +699,14 @@ void QueueDramCorePrefetcherRequest(
     const std::vector<DramCorePrefetcherInput>& input_tensors) {
     auto& manager = mesh_device.impl().dram_core_prefetcher(&mesh_device);
     manager.queue(gcb, device_subset, input_tensors);
+}
+
+void WaitForCqOnDramCorePrefetcher(
+    distributed::MeshDevice& mesh_device,
+    uint8_t cq_id,
+    const std::optional<distributed::MeshCoordinateRangeSet>& device_subset) {
+    auto& manager = mesh_device.impl().dram_core_prefetcher(&mesh_device);
+    manager.enqueue_cq_signal_and_wait(cq_id, device_subset);
 }
 
 void StopDramCorePrefetcher(distributed::MeshDevice& mesh_device) {

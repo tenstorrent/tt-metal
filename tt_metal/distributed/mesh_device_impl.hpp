@@ -428,6 +428,11 @@ public:
     // If cq_id is not provided, the current command queue is returned from the current thread
     MeshCommandQueue& mesh_command_queue(std::optional<uint8_t> cq_id = std::nullopt) const;
 
+    // Same queue as mesh_command_queue() but returned as the internal
+    // MeshCommandQueueBase, exposing dispatch-implementation methods (e.g.
+    // enqueue_write_dram_core_counter) without a downcast.
+    MeshCommandQueueBase& mesh_command_queue_base(std::optional<uint8_t> cq_id = std::nullopt) const;
+
     // Currently expose users to the dispatch thread pool through the MeshDevice
     void enqueue_to_thread_pool(std::function<void()>&& f);
     void wait_for_thread_pool();

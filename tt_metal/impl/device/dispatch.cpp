@@ -137,6 +137,41 @@ void write_to_core(
     }
 }
 
+void write_to_core_unchecked(
+    IDevice* device,
+    const CoreCoord& virtual_core,
+    const void* src,
+    DeviceAddr address,
+    uint32_t size_bytes,
+    uint32_t cq_id,
+    tt::stl::Span<const uint32_t> expected_num_workers_completed,
+    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    // Same command sequence as write_to_core, minus the bounds validation and bank
+    // offset: `address` is taken as the full device destination.
+    while (size_bytes > 0) {
+        const CoreType dispatch_core_type =
+            MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
+        const uint32_t size_bytes_to_write =
+            std::min(size_bytes, calculate_max_prefetch_data_size_bytes(dispatch_core_type, sub_device_ids.size()));
+
+        CoreWriteDispatchParams dispatch_params{
+            {virtual_core,
+             address,
+             size_bytes_to_write,
+             device,
+             cq_id,
+             dispatch_core_type,
+             expected_num_workers_completed,
+             sub_device_ids},
+            src};
+        issue_core_write_command_sequence(dispatch_params);
+
+        size_bytes -= size_bytes_to_write;
+        address += size_bytes_to_write;
+        src = (uint8_t*)src + size_bytes_to_write;
+    }
+}
+
 void issue_core_read_command_sequence(const CoreReadDispatchParams& dispatch_params) {
     const uint32_t num_worker_counters = dispatch_params.sub_device_ids.size();
     DeviceCommandCalculator calculator;

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
@@ -64,7 +65,9 @@ public:
     // `lock_api_function` grabs the owning MeshDevice's api_mutex_ (bound from
     // MeshDeviceImpl::lock_api). start()/queue()/stop() take it for the duration
     // of the call so prefetcher operations serialize against the rest of the
-    // device API, mirroring MeshCommandQueueBase.
+    // device API, mirroring MeshCommandQueueBase. enqueue_cq_signal_and_wait() also
+    // takes it, but only around its manager-state snapshot — it must release the lock
+    // before the dispatcher write, which re-locks the same (non-recursive) api_mutex_.
     DramCorePrefetcherManager(MeshDevice* mesh_device, std::function<std::lock_guard<std::mutex>()> lock_api_function);
     ~DramCorePrefetcherManager();
 
@@ -79,6 +82,15 @@ public:
         const experimental::GlobalCircularBuffer& gcb,
         const std::optional<MeshCoordinateRangeSet>& device_subset,
         const std::vector<experimental::DramCorePrefetcherInput>& tensors);
+
+    // Make the prefetcher wait until all work currently enqueued on command queue
+    // `cq_id` has landed before it reads DRAM. Bumps a host-side per-CQ counter,
+    // has the dispatcher write the new value into every DRAM core's signal slot
+    // (ordered after prior CQ work), and queues a WAIT_CQ request so each kernel
+    // blocks until that value is observed. Must be called synchronously on the
+    // host thread that enqueues the data writes (after them, before the dependent
+    // prefetch request).
+    void enqueue_cq_signal_and_wait(uint8_t cq_id, const std::optional<MeshCoordinateRangeSet>& device_subset);
 
     void stop();
 
@@ -125,6 +137,13 @@ private:
     // over NOC.
     uint32_t socket_config_l1_addr_ = 0;
     uint32_t socket_data_l1_addr_ = 0;
+    // Base (local DRISC L1) of this prefetcher's per-CQ signal slots; uniform
+    // across all sender cores. Carved at the front of the kernel working region.
+    uint32_t cq_signal_l1_addr_ = 0;
+    // Host-side monotonic signal counter per command queue. enqueue_cq_signal_and_wait
+    // pre-increments cq_signal_counter_[cq_id] and uses it for both the dispatcher
+    // write and the WAIT_CQ request value.
+    std::array<uint32_t, 2> cq_signal_counter_{};
 
     // sender_logical_cores_[s] = logical DRAM core for bank s. Picked at start
     // via pick_unused_dram_logical_core(s); GCBs queued must use the same

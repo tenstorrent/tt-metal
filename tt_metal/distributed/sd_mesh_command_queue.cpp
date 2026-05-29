@@ -305,6 +305,36 @@ void SDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent&) {
     wait_for_cores_idle();
 }
 
+void SDMeshCommandQueue::enqueue_write_dram_core_counter(
+    tt::stl::Span<const DeviceMemoryAddress> targets,
+    uint32_t value,
+    bool /*blocking*/,
+    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    if (this->get_target_device_type() == tt::TargetDevice::Mock) {
+        return;
+    }
+    auto lock = lock_api_function_();
+    TT_FATAL(sub_device_ids.empty(), "Sub-device IDs are not supported for slow dispatch");
+
+    // Slow-dispatch analog of the fast-dispatch leading dispatch wait: ensure any
+    // prior program touching this address space (and prior synchronous buffer
+    // writes) is complete before the counter is bumped.
+    wait_for_cores_idle();
+
+    uint32_t v = value;
+    for (const auto& target : targets) {
+        if (!mesh_device_->impl().is_local(target.device_coord)) {
+            continue;
+        }
+        IDevice* device = mesh_device_->impl().get_device(target.device_coord);
+        // target.address is the full device destination (caller pre-applies the
+        // DRAM L1 NOC offset). write_core is synchronous, so `blocking` is moot.
+        tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id())
+            .get_cluster()
+            .write_core(&v, sizeof(v), tt_cxy_pair(device->id(), target.virtual_core_coord), target.address);
+    }
+}
+
 void SDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId>) {
     if (this->get_target_device_type() == tt::TargetDevice::Mock) {
         return;
