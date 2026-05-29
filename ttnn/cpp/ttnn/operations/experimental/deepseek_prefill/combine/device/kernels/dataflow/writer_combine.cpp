@@ -67,6 +67,29 @@ void kernel_main() {
     constexpr uint32_t mesh_cols = get_compile_time_arg_val(26);
     constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(27);
 
+    constexpr uint32_t chip_0[] = {6, 3, 7, 1, 5, 4, 2};
+    constexpr uint32_t chip_1[] = {2, 5, 7, 3, 6, 0, 4};
+    constexpr uint32_t chip_2[] = {1, 5, 6, 0, 4, 3, 7};
+    constexpr uint32_t chip_3[] = {5, 1, 7, 0, 4, 2, 6};
+    constexpr uint32_t chip_4[] = {6, 3, 7, 1, 5, 0, 2};
+    constexpr uint32_t chip_5[] = {2, 1, 7, 3, 6, 0, 4};
+    constexpr uint32_t chip_6[] = {0, 4, 2, 5, 1, 3, 7};
+    constexpr uint32_t chip_7[] = {1, 5, 3, 0, 4, 2, 6};
+    const uint32_t* schedule =
+        linearized_mesh_coord == 0
+            ? chip_0
+            : (linearized_mesh_coord == 1
+                   ? chip_1
+                   : (linearized_mesh_coord == 2
+                          ? chip_2
+                          : (linearized_mesh_coord == 3
+                                 ? chip_3
+                                 : (linearized_mesh_coord == 4
+                                        ? chip_4
+                                        : (linearized_mesh_coord == 5
+                                               ? chip_5
+                                               : (linearized_mesh_coord == 6 ? chip_6 : chip_7))))));
+
     // Fabric configuration (indices 28-31)
     constexpr uint32_t fabric_max_packet_size = get_compile_time_arg_val(28);
     constexpr uint32_t l1_alignment = get_compile_time_arg_val(29);
@@ -194,6 +217,7 @@ void kernel_main() {
 
     {
         DeviceZoneScopedN("combine-ethernet-flow");
+        uint32_t global_token_cnt = 0;
         //  Sentinel-terminated fabric send loop
         uint32_t cnt = 0;
         while (true) {
@@ -210,6 +234,7 @@ void kernel_main() {
                     break;
                 }
             }
+            dst_chip = schedule[global_token_cnt++ % 7];
             uint32_t meta1 = route_info[1];
             uint32_t meta2 = route_info[2];
             uint32_t output_page_idx = meta1 * num_experts_per_tok + meta2;
