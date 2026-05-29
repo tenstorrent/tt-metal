@@ -7,6 +7,7 @@
 # Debug shebang
 #!/usr/bin/env -S python3 -m pdb
 
+import ast
 import os
 import csv
 from pathlib import Path
@@ -175,9 +176,9 @@ def parse_device_csv_meta_data(meta_data_str: Any) -> Optional[Dict[str, Any]]:
         return json.loads(meta_data_str.replace(";", ","))
     except json.JSONDecodeError:
         try:
-            parsed = eval(meta_data_str)
+            parsed = ast.literal_eval(meta_data_str)
             return parsed if isinstance(parsed, dict) else None
-        except (SyntaxError, NameError, TypeError):
+        except (ValueError, SyntaxError):
             return None
 
 

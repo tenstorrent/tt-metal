@@ -4,6 +4,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import ast
 import os
 import sys
 import inspect
@@ -35,9 +36,9 @@ def parse_device_csv_meta_data(meta_data_str):
         return json.loads(meta_data_str.replace(";", ","))
     except json.JSONDecodeError:
         try:
-            parsed = eval(meta_data_str)
+            parsed = ast.literal_eval(meta_data_str)
             return parsed if isinstance(parsed, dict) else None
-        except (SyntaxError, NameError, TypeError):
+        except (ValueError, SyntaxError):
             return None
 
 
