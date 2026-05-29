@@ -203,11 +203,12 @@ def run(
 
     # Run operation
     start_time = start_measuring_time()
+    if batch_offset != 0:
+        op_kwargs["batch_offset"] = batch_offset
     output_tensor = ttnn.update_cache(
         cache_tensor,
         input_tensor,
         cache_idx,
-        batch_offset=batch_offset,
         **op_kwargs,
     )
     mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None

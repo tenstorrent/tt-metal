@@ -41,6 +41,7 @@ IGNORED_KEYS = frozenset(
         "sweep_source_hash",
         "device_ids",
         "mesh_device",
+        "output_tensor",
     }
 )
 
