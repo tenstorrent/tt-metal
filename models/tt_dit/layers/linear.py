@@ -137,6 +137,9 @@ class ColParallelLinear(Module):
         if self.activation_fn == "gelu":
             self.activation_fn = None
             self.fused_activation_fn = (ttnn.UnaryOpType.GELU, False)
+        elif self.activation_fn == "sigmoid":
+            self.activation_fn = None
+            self.fused_activation_fn = (ttnn.UnaryOpType.SIGMOID, False)
         self.mesh_device = mesh_device
         self.mesh_axis = mesh_axis
         self.fsdp_mesh_axis = fsdp_mesh_axis
