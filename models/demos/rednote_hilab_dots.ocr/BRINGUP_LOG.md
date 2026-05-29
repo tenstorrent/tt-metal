@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** p150 (blackhole)
 **Started:** 2026-05-29T00:11:46Z
-**Updated:** 2026-05-29T01:54:57Z
+**Updated:** 2026-05-29T02:01:02Z
 
 ## Block Status
 
@@ -18,7 +18,7 @@
 | vision_rmsnorm | reference | done | 1.000000 | 0 | reference vs HF (eager) module, PCC=1.0; golden saved |
 | vision_rmsnorm | ttnn | done | 0.999995 | 0 | ttnn.rms_norm eps=1e-5 HiFi4+fp32_dest_acc bf16 DRAM TILE; PCC 0.99999 vs seed-0 golden on p150 |
 | vision_rmsnorm | debug | n/a | — | 0 |  |
-| vision_rmsnorm | optimization | pending | — | 0 |  |
+| vision_rmsnorm | optimization | done | 0.999995 | 0 | tracy attached (traced session, 1 op); rms_norm is the entire block (100% of 30.2us block kernel time), already multi-core on 32 cores (1 row-tile/core), HiFi4+fp32_dest_acc+packer_l1_acc, bf16 DRAM TILE. A/B vs width-sharded LayerNormShardedMultiCoreProgramConfig: K_t=48 does not divide 32/64 cores; compiling variants (6-8 cores, block_h=32) overflow static L1 CBs. No op-level optimization warranted - at ceiling. PCC 0.99999 held. |
 | vision_rmsnorm | real_weights | pending | — | 0 |  |
 | vision_attention | reference | done | 1.000000 | 0 | reference vs HF (eager) module, PCC=1.0; golden saved |
 | vision_attention | ttnn | done | 0.999988 | 0 | manual SDPA chain (qkv linear -> nlp_create_qkv_heads -> 2D RoPE -> matmul+softmax+matmul w/ block-diagonal additive mask -> nlp_concat_heads -> proj). HiFi4+fp32_dest_acc, bf16. PCC=0.999988 vs golden. Guard ok. |
@@ -94,7 +94,6 @@
 
 ## Recent Ticks
 
-- tick 12 (2026-05-29T01:13:48Z): device[embedding] — ok
 - tick 13 (2026-05-29T01:17:43Z): device[rmsnorm] — ok
 - tick 14 (2026-05-29T01:21:18Z): device[rope] — ok
 - tick 15 (2026-05-29T01:27:01Z): device[attention] — ok
@@ -104,6 +103,7 @@
 - tick 19 (2026-05-29T01:49:31Z): device[language_model] — ok
 - tick 20 (2026-05-29T01:51:14Z): skip[vision_patch_embed:ttnn] — host_resident: DotsPatchEmbed is a single Conv2d(3,1536,k=14,s=14) over patchified pixels followed by RMSNorm; Conv2d patchify is a one-shot host-side im2col+matmul in the Qwen-VL TTNN demos (qwen25_vl runs patch embed on host then moves tokens to device). Cheap relative to the 42-layer trunk and runs once per image.
 - tick 21 (2026-05-29T01:54:57Z): device[vision_tower] — ok
+- tick 22 (2026-05-29T02:01:02Z): device[vision_rmsnorm] — ok
 
 ## Host-Resident Exceptions
 

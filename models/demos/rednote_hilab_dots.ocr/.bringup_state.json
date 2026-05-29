@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-29T00:11:46Z",
-  "updated_at": "2026-05-29T01:54:57Z",
+  "updated_at": "2026-05-29T02:01:02Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -79,8 +79,14 @@
         "attempts": 0
       },
       "optimization": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "generated/profiler/reports/2026_05_29_01_59_36/ops_perf_results_2026_05_29_01_59_36.csv",
+          "models/demos/rednote_hilab_dots.ocr/tt/profile_vision_rmsnorm.py"
+        ],
+        "notes": "tracy attached (traced session, 1 op); rms_norm is the entire block (100% of 30.2us block kernel time), already multi-core on 32 cores (1 row-tile/core), HiFi4+fp32_dest_acc+packer_l1_acc, bf16 DRAM TILE. A/B vs width-sharded LayerNormShardedMultiCoreProgramConfig: K_t=48 does not divide 32/64 cores; compiling variants (6-8 cores, block_h=32) overflow static L1 CBs. No op-level optimization warranted - at ceiling. PCC 0.99999 held.",
+        "pcc": 0.9999954353866637
       },
       "real_weights": {
         "status": "pending",
@@ -862,6 +868,12 @@
       "tick": 21,
       "ts": "2026-05-29T01:54:57Z",
       "action": "device[vision_tower]",
+      "result": "ok"
+    },
+    {
+      "tick": 22,
+      "ts": "2026-05-29T02:01:02Z",
+      "action": "device[vision_rmsnorm]",
       "result": "ok"
     }
   ],
