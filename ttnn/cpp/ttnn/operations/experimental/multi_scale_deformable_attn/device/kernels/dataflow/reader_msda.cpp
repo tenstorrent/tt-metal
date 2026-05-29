@@ -41,6 +41,10 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 #include "ttnn/cpp/ttnn/operations/experimental/multi_scale_deformable_attn/device/kernels/msda_tile_layout.hpp"
 
 namespace {
@@ -99,16 +103,23 @@ void kernel_main() {
     const auto grid_acc = TensorAccessor(grid_args, grid_addr, grid_stick_nbytes);
     const auto attn_acc = TensorAccessor(attn_args, attn_addr, attn_stick_nbytes);
 
+    Noc noc;
+    CircularBuffer value_scratch_cb(value_scratch_cb_index);
+    CircularBuffer grid_cb(grid_cb_index);
+    CircularBuffer attn_cb(attn_cb_index);
+    CircularBuffer input_tile_cb(input_tile_cb_index);
+    CircularBuffer scalar_tile_cb(scalar_tile_cb_index);
+
     constexpr int32_t h_in_i = static_cast<int32_t>(h_in);
     constexpr int32_t w_in_i = static_cast<int32_t>(w_in);
 
     // Reserve scratch CBs once and treat them as fixed linear L1 arenas.
-    cb_reserve_back(value_scratch_cb_index, TILE_MAX_ROWS);
-    const uint32_t value_scratch_l1 = get_write_ptr(value_scratch_cb_index);
-    cb_reserve_back(grid_cb_index, TILE_MAX_ROWS * P);
-    const uint32_t grid_scratch_l1 = get_write_ptr(grid_cb_index);
-    cb_reserve_back(attn_cb_index, TILE_MAX_ROWS);
-    const uint32_t attn_scratch_l1 = get_write_ptr(attn_cb_index);
+    value_scratch_cb.reserve_back(TILE_MAX_ROWS);
+    const uint32_t value_scratch_l1 = value_scratch_cb.get_write_ptr();
+    grid_cb.reserve_back(TILE_MAX_ROWS * P);
+    const uint32_t grid_scratch_l1 = grid_cb.get_write_ptr();
+    attn_cb.reserve_back(TILE_MAX_ROWS);
+    const uint32_t attn_scratch_l1 = attn_cb.get_write_ptr();
 
     // Per-(p, corner) precompute scratch (one entry per row in the current tile).
     float w_attn_arr[TILE_MAX_ROWS];
@@ -131,16 +142,18 @@ void kernel_main() {
 
         // Stage attn for the v_rows queries (one P-wide stick each).
         for (uint32_t r = 0; r < v_rows; ++r) {
-            noc_async_read_page(n * Q + (q_start + r), attn_acc, attn_scratch_l1 + r * attn_stick_nbytes);
+            CoreLocalMem<uint32_t> dst(attn_scratch_l1 + r * attn_stick_nbytes);
+            noc.async_read(attn_acc, dst, attn_stick_nbytes, {.page_id = n * Q + (q_start + r)}, {.offset_bytes = 0});
         }
         // Stage grid for v_rows * P points (two bf16 each).
         for (uint32_t r = 0; r < v_rows; ++r) {
             const uint32_t base = n * (Q * P) + (q_start + r) * P;
             for (uint32_t p = 0; p < P; ++p) {
-                noc_async_read_page(base + p, grid_acc, grid_scratch_l1 + (r * P + p) * grid_stick_nbytes);
+                CoreLocalMem<uint32_t> dst(grid_scratch_l1 + (r * P + p) * grid_stick_nbytes);
+                noc.async_read(grid_acc, dst, grid_stick_nbytes, {.page_id = base + p}, {.offset_bytes = 0});
             }
         }
-        noc_async_read_barrier();
+        noc.async_read_barrier();
 
         const uint32_t n_off = n * static_cast<uint32_t>(h_in_i * w_in_i);
 
@@ -196,8 +209,8 @@ void kernel_main() {
                 const float* w_corner_arr = (c == 0) ? w_nw_arr : (c == 1) ? w_ne_arr : (c == 2) ? w_sw_arr : w_se_arr;
 
                 // ---- INPUT TILE ----
-                cb_reserve_back(input_tile_cb_index, 1);
-                const uint32_t tile_l1 = get_write_ptr(input_tile_cb_index);
+                input_tile_cb.reserve_back(1);
+                const uint32_t tile_l1 = input_tile_cb.get_write_ptr();
 
                 // Issue NoC reads for all valid rows.
                 for (uint32_t r = 0; r < v_rows; ++r) {
@@ -207,9 +220,10 @@ void kernel_main() {
                     const uint32_t cy = static_cast<uint32_t>(y0_arr[r] + dy_off);
                     const uint32_t cx = static_cast<uint32_t>(x0_arr[r] + dx_off);
                     const uint32_t stick_idx = n_off + cy * w_in_i + cx;
-                    noc_async_read_page(stick_idx, value_acc, value_scratch_l1 + r * value_stick_nbytes);
+                    CoreLocalMem<uint32_t> dst(value_scratch_l1 + r * value_stick_nbytes);
+                    noc.async_read(value_acc, dst, value_stick_nbytes, {.page_id = stick_idx}, {.offset_bytes = 0});
                 }
-                noc_async_read_barrier();
+                noc.async_read_barrier();
 
                 // Scatter sticks into face rows. Invalid corners have stale staging
                 // data but their scalar entry is zero — the multiply contributes 0.
@@ -237,7 +251,7 @@ void kernel_main() {
                 // bytes in input row r contribute 0 to L1 accumulation. Saves a
                 // 16-row × 64-byte memset for tail tiles and skips work on full
                 // tiles entirely.
-                cb_push_back(input_tile_cb_index, 1);
+                input_tile_cb.push_back(1);
 
                 // ---- SCALAR TILE ----
                 // LLK COL bcast reads only col 0 of TL face (rows 0..15) and BL
@@ -246,8 +260,8 @@ void kernel_main() {
                 // cleared on entry and only the col-0 broadcast contributes).
                 // We therefore skip the 2-KiB full zero-fill and only write the
                 // 32 col-0 bf16 lanes — 32× less L1 traffic per iter.
-                cb_reserve_back(scalar_tile_cb_index, 1);
-                const uint32_t s_tile_l1 = get_write_ptr(scalar_tile_cb_index);
+                scalar_tile_cb.reserve_back(1);
+                const uint32_t s_tile_l1 = scalar_tile_cb.get_write_ptr();
 
                 for (uint32_t r = 0; r < TILE_MAX_ROWS; ++r) {
                     uint16_t bf = 0;
@@ -262,7 +276,7 @@ void kernel_main() {
                         s_tile_l1 + msda_tile_layout::tile_col0_offset(r));
                     p16[0] = bf;
                 }
-                cb_push_back(scalar_tile_cb_index, 1);
+                scalar_tile_cb.push_back(1);
             }
         }
     }

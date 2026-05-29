@@ -18,6 +18,10 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 #include "ttnn/cpp/ttnn/operations/experimental/multi_scale_deformable_attn/device/kernels/msda_tile_layout.hpp"
 
 constexpr uint32_t output_tile_cb_index = get_compile_time_arg_val(0);
@@ -35,16 +39,20 @@ void kernel_main() {
 
     const auto output_acc = TensorAccessor(output_args, output_addr, output_stick_nbytes);
 
-    cb_reserve_back(output_scratch_cb_index, 1);
-    const uint32_t scratch_l1 = get_write_ptr(output_scratch_cb_index);
+    Noc noc;
+    CircularBuffer output_tile_cb(output_tile_cb_index);
+    CircularBuffer output_scratch_cb(output_scratch_cb_index);
+
+    output_scratch_cb.reserve_back(1);
+    const uint32_t scratch_l1 = output_scratch_cb.get_write_ptr();
 
     uint32_t arg_idx = 2;
     for (uint32_t t = 0; t < num_output_tiles; ++t) {
         const uint32_t start_id = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t v_rows = get_arg_val<uint32_t>(arg_idx++);
 
-        cb_wait_front(output_tile_cb_index, 1);
-        const uint32_t tile_l1 = get_read_ptr(output_tile_cb_index);
+        output_tile_cb.wait_front(1);
+        const uint32_t tile_l1 = output_tile_cb.get_read_ptr();
 
         for (uint32_t r = 0; r < v_rows; ++r) {
             const auto off = msda_tile_layout::tile_row_offsets(r);
@@ -61,10 +69,11 @@ void kernel_main() {
                 dst[HALF_WORDS + i] = sh[i];
             }
 
-            noc_async_write_page(start_id + r, output_acc, scratch_l1);
-            noc_async_writes_flushed();
+            CoreLocalMem<uint32_t> src(scratch_l1);
+            noc.async_write(src, output_acc, output_stick_nbytes, {.offset_bytes = 0}, {.page_id = start_id + r});
+            noc.async_writes_flushed();
         }
-        noc_async_write_barrier();
-        cb_pop_front(output_tile_cb_index, 1);
+        noc.async_write_barrier();
+        output_tile_cb.pop_front(1);
     }
 }
