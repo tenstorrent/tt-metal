@@ -39,6 +39,7 @@
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
+#include "tools/profiler/kernel_profiler.hpp"
 
 using namespace tt::tt_fabric::linear::experimental;
 
@@ -308,144 +309,148 @@ void kernel_main() {
         const uint32_t chunk_idx_on_device = worker_chunk_base + chunks_processed;
 
         // ---- Phase A: pack window into staging CB, fabric mcast ONE packet ----
-        // Reserve packed_local slot and packed_gathered slot for THIS chip.
-        cb_reserve_back(stats_packed_local_cb, 1);
-        const uint32_t packed_local_addr = get_write_ptr(stats_packed_local_cb);
+        {
+            DeviceZoneScopedN("W_AG");
+            // Reserve packed_local slot and packed_gathered slot for THIS chip.
+            cb_reserve_back(stats_packed_local_cb, 1);
+            const uint32_t packed_local_addr = get_write_ptr(stats_packed_local_cb);
 
-        // Reserve full ring's worth of gathered slots up front; we fill our
-        // own slot in this phase and read remote slots in Phase A.5.
-        cb_reserve_back(stats_packed_gathered_cb, ring_size);
-        const uint32_t packed_gathered_base = get_write_ptr(stats_packed_gathered_cb);
-        const uint32_t my_packed_gathered_addr = packed_gathered_base + my_device_index * page_size_bytes;
+            // Reserve full ring's worth of gathered slots up front; we fill our
+            // own slot in this phase and read remote slots in Phase A.5.
+            cb_reserve_back(stats_packed_gathered_cb, ring_size);
+            const uint32_t packed_gathered_base = get_write_ptr(stats_packed_gathered_cb);
+            const uint32_t my_packed_gathered_addr = packed_gathered_base + my_device_index * page_size_bytes;
 
-        // Cumulative wait: writer can start packing row 0 while compute is
-        // still producing row 1+. Overlaps writer-pack with compute-pre for
-        // chunks with >1 row.
-        const uint32_t stats_local_base = get_read_ptr(stats_local_cb);
-        for (uint32_t r = 0; r < rows_in_chunk; r++) {
-            cb_wait_front(stats_local_cb, r + 1);
-            const volatile tt_l1_ptr uint32_t* tile_src =
-                reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(stats_local_base + r * stats_tile_bytes);
-            uint32_t* packed_dst = reinterpret_cast<uint32_t*>(packed_local_addr + r * kRowBytesPerTile);
-            // Face_00 col 0 (rows 0..15): uint32 indices 0, 16, ..., 240.
-            for (uint32_t i = 0; i < 16; i++) {
-                packed_dst[i] = tile_src[i * 16];
+            // Cumulative wait: writer can start packing row 0 while compute is
+            // still producing row 1+. Overlaps writer-pack with compute-pre for
+            // chunks with >1 row.
+            const uint32_t stats_local_base = get_read_ptr(stats_local_cb);
+            for (uint32_t r = 0; r < rows_in_chunk; r++) {
+                cb_wait_front(stats_local_cb, r + 1);
+                const volatile tt_l1_ptr uint32_t* tile_src =
+                    reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(stats_local_base + r * stats_tile_bytes);
+                uint32_t* packed_dst = reinterpret_cast<uint32_t*>(packed_local_addr + r * kRowBytesPerTile);
+                // Face_00 col 0 (rows 0..15): uint32 indices 0, 16, ..., 240.
+                for (uint32_t i = 0; i < 16; i++) {
+                    packed_dst[i] = tile_src[i * 16];
+                }
+                // Face_10 col 0 (rows 16..31): face_10 starts at byte 2048
+                // (uint32 idx 512), col 0 at indices 512, 528, ..., 752.
+                for (uint32_t i = 0; i < 16; i++) {
+                    packed_dst[16 + i] = tile_src[512 + i * 16];
+                }
             }
-            // Face_10 col 0 (rows 16..31): face_10 starts at byte 2048
-            // (uint32 idx 512), col 0 at indices 512, 528, ..., 752.
-            for (uint32_t i = 0; i < 16; i++) {
-                packed_dst[16 + i] = tile_src[512 + i * 16];
+            cb_pop_front(stats_local_cb, rows_in_chunk);
+
+            // No L1 copy of my own page into stats_packed_gathered_cb. The
+            // scatter step below reads my own slot directly from packed_local
+            // (the source we just packed); other slots come from DRAM reads.
+            // Saves a 128 B NoC self-write per chunk.
+
+            // Fabric mcast: the SAME page index lands at the same DRAM address
+            // on every chip; my_device_index ensures my data goes to my pages.
+            const uint32_t my_dram_page_idx = my_device_index * num_chunks_per_device + chunk_idx_on_device;
+            const uint64_t dram_dest_noc_addr = get_noc_addr(my_dram_page_idx, stats_dram_accessor);
+            if constexpr (num_targets_forward > 0) {
+                if (fwd_mux_args.connection_valid) {
+                    fabric_multicast_noc_fused_unicast_with_atomic_inc(
+                        &fwd_mux_conn,
+                        pkt_hdr_forward,
+                        packed_local_addr,
+                        page_size_bytes,
+                        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
+                            dram_dest_noc_addr, out_ready_sem_noc_addr_in_pkt, 1, false},
+                        /*start_distance=*/1,
+                        static_cast<uint8_t>(num_targets_forward));
+                }
             }
-        }
-        cb_pop_front(stats_local_cb, rows_in_chunk);
-
-        // No L1 copy of my own page into stats_packed_gathered_cb. The
-        // scatter step below reads my own slot directly from packed_local
-        // (the source we just packed); other slots come from DRAM reads.
-        // Saves a 128 B NoC self-write per chunk.
-
-        // Fabric mcast: the SAME page index lands at the same DRAM address
-        // on every chip; my_device_index ensures my data goes to my pages.
-        const uint32_t my_dram_page_idx = my_device_index * num_chunks_per_device + chunk_idx_on_device;
-        const uint64_t dram_dest_noc_addr = get_noc_addr(my_dram_page_idx, stats_dram_accessor);
-        if constexpr (num_targets_forward > 0) {
-            if (fwd_mux_args.connection_valid) {
-                fabric_multicast_noc_fused_unicast_with_atomic_inc(
-                    &fwd_mux_conn,
-                    pkt_hdr_forward,
-                    packed_local_addr,
-                    page_size_bytes,
-                    tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
-                        dram_dest_noc_addr, out_ready_sem_noc_addr_in_pkt, 1, false},
-                    /*start_distance=*/1,
-                    static_cast<uint8_t>(num_targets_forward));
+            if constexpr (num_targets_backward > 0) {
+                if (bwd_mux_args.connection_valid) {
+                    fabric_multicast_noc_fused_unicast_with_atomic_inc(
+                        &bwd_mux_conn,
+                        pkt_hdr_backward,
+                        packed_local_addr,
+                        page_size_bytes,
+                        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
+                            dram_dest_noc_addr, out_ready_sem_noc_addr_in_pkt, 1, false},
+                        /*start_distance=*/1,
+                        static_cast<uint8_t>(num_targets_backward));
+                }
             }
-        }
-        if constexpr (num_targets_backward > 0) {
-            if (bwd_mux_args.connection_valid) {
-                fabric_multicast_noc_fused_unicast_with_atomic_inc(
-                    &bwd_mux_conn,
-                    pkt_hdr_backward,
-                    packed_local_addr,
-                    page_size_bytes,
-                    tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
-                        dram_dest_noc_addr, out_ready_sem_noc_addr_in_pkt, 1, false},
-                    /*start_distance=*/1,
-                    static_cast<uint8_t>(num_targets_backward));
+            // packed_local_cb is double-buffered; release this slot so the next
+            // chunk can use the other.
+            cb_push_back(stats_packed_local_cb, 1);
+            cb_pop_front(stats_packed_local_cb, 1);
+
+            cumulative_expected_incs += (ring_size - 1);
+            if (cumulative_expected_incs > 0) {
+                noc_semaphore_wait_min(out_ready_sem_ptr, cumulative_expected_incs);
             }
-        }
-        // packed_local_cb is double-buffered; release this slot so the next
-        // chunk can use the other.
-        cb_push_back(stats_packed_local_cb, 1);
-        cb_pop_front(stats_packed_local_cb, 1);
+            // Wait for all outstanding NoC operations to complete:
+            //  - noc_async_write_barrier: the local L1 copy (and the fabric
+            //    sender's NoC read from packed_local_addr, since send_chunk_from_address
+            //    is non-blocking and the read is still in flight).
+            //  - noc_async_atomic_barrier: any outstanding atomic transactions
+            //    from this core's perspective (analogous to the pattern in
+            //    all_gather_async/minimal_default_writer.cpp).
+            // Without these, the next chunk's reuse of packed_local_cb slots can
+            // race with the in-flight fabric reads, and small DRAM writes from
+            // the fabric router on the receiver side may not have committed by
+            // the time we issue the next-chunk reads.
+            noc_async_write_barrier();
+            noc_async_atomic_barrier();
 
-        cumulative_expected_incs += (ring_size - 1);
-        if (cumulative_expected_incs > 0) {
-            noc_semaphore_wait_min(out_ready_sem_ptr, cumulative_expected_incs);
-        }
-        // Wait for all outstanding NoC operations to complete:
-        //  - noc_async_write_barrier: the local L1 copy (and the fabric
-        //    sender's NoC read from packed_local_addr, since send_chunk_from_address
-        //    is non-blocking and the read is still in flight).
-        //  - noc_async_atomic_barrier: any outstanding atomic transactions
-        //    from this core's perspective (analogous to the pattern in
-        //    all_gather_async/minimal_default_writer.cpp).
-        // Without these, the next chunk's reuse of packed_local_cb slots can
-        // race with the in-flight fabric reads, and small DRAM writes from
-        // the fabric router on the receiver side may not have committed by
-        // the time we issue the next-chunk reads.
-        noc_async_write_barrier();
-        noc_async_atomic_barrier();
-
-        // ---- Phase A.5: Read remote-device pages (skip own — already L1-copied) ----
-        for (uint32_t d = 0; d < ring_size; d++) {
-            if (d == my_device_index) {
-                continue;
-            }
-            const uint32_t dram_page_idx = d * num_chunks_per_device + chunk_idx_on_device;
-            const uint32_t local_slot_addr = packed_gathered_base + d * page_size_bytes;
-            noc_async_read_page(dram_page_idx, stats_dram_accessor, local_slot_addr);
-        }
-        noc_async_read_barrier();
-
-        // Scatter packed bytes directly into COL 0 of stats_gathered_cb tiles
-        // (32 strided fp32 stores per tile). The compute kernel then runs
-        // reduce<AVG,REDUCE_ROW> directly without any post-transpose — col 0
-        // is the natural "stat tile" position. Saves the compute post
-        // transpose pass entirely.
-        //
-        // Col 0 in tile-storage:
-        //   - Face_00 col 0 (rows 0..15): byte offsets 0, 64, 128, ..., 960
-        //     = uint32_t indices 0, 16, ..., 240.
-        //   - Face_10 col 0 (rows 16..31): face starts at byte 2048 (idx 512),
-        //     col 0 indices 512, 528, ..., 752.
-        cb_reserve_back(stats_gathered_cb, chunk_stats_tiles);
-        const uint32_t stats_gathered_base = get_write_ptr(stats_gathered_cb);
-        for (uint32_t r = 0; r < rows_in_chunk; r++) {
+            // ---- Phase A.5: Read remote-device pages (skip own — already L1-copied) ----
             for (uint32_t d = 0; d < ring_size; d++) {
-                // Own slot reads from packed_local (no L1 copy needed);
-                // remote slots come from packed_gathered (DRAM-read above).
-                const uint32_t packed_src = (d == my_device_index)
-                                                ? (packed_local_addr + r * kRowBytesPerTile)
-                                                : (packed_gathered_base + d * page_size_bytes + r * kRowBytesPerTile);
-                const uint32_t tile_dst = stats_gathered_base + (r * ring_size + d) * stats_tile_bytes;
-                volatile tt_l1_ptr uint32_t* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile_dst);
-                const uint32_t* src = reinterpret_cast<const uint32_t*>(packed_src);
-                // Face_00 col 0 (rows 0..15): 16 strided stores at uint32 stride 16.
-                for (uint32_t i = 0; i < 16; i++) {
-                    dst[i * 16] = src[i];
+                if (d == my_device_index) {
+                    continue;
                 }
-                // Face_10 col 0 (rows 16..31): 16 strided stores starting at idx 512.
-                for (uint32_t i = 0; i < 16; i++) {
-                    dst[512 + i * 16] = src[16 + i];
+                const uint32_t dram_page_idx = d * num_chunks_per_device + chunk_idx_on_device;
+                const uint32_t local_slot_addr = packed_gathered_base + d * page_size_bytes;
+                noc_async_read_page(dram_page_idx, stats_dram_accessor, local_slot_addr);
+            }
+            noc_async_read_barrier();
+
+            // Scatter packed bytes directly into COL 0 of stats_gathered_cb tiles
+            // (32 strided fp32 stores per tile). The compute kernel then runs
+            // reduce<AVG,REDUCE_ROW> directly without any post-transpose — col 0
+            // is the natural "stat tile" position. Saves the compute post
+            // transpose pass entirely.
+            //
+            // Col 0 in tile-storage:
+            //   - Face_00 col 0 (rows 0..15): byte offsets 0, 64, 128, ..., 960
+            //     = uint32_t indices 0, 16, ..., 240.
+            //   - Face_10 col 0 (rows 16..31): face starts at byte 2048 (idx 512),
+            //     col 0 indices 512, 528, ..., 752.
+            cb_reserve_back(stats_gathered_cb, chunk_stats_tiles);
+            const uint32_t stats_gathered_base = get_write_ptr(stats_gathered_cb);
+            for (uint32_t r = 0; r < rows_in_chunk; r++) {
+                for (uint32_t d = 0; d < ring_size; d++) {
+                    // Own slot reads from packed_local (no L1 copy needed);
+                    // remote slots come from packed_gathered (DRAM-read above).
+                    const uint32_t packed_src =
+                        (d == my_device_index) ? (packed_local_addr + r * kRowBytesPerTile)
+                                               : (packed_gathered_base + d * page_size_bytes + r * kRowBytesPerTile);
+                    const uint32_t tile_dst = stats_gathered_base + (r * ring_size + d) * stats_tile_bytes;
+                    volatile tt_l1_ptr uint32_t* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile_dst);
+                    const uint32_t* src = reinterpret_cast<const uint32_t*>(packed_src);
+                    // Face_00 col 0 (rows 0..15): 16 strided stores at uint32 stride 16.
+                    for (uint32_t i = 0; i < 16; i++) {
+                        dst[i * 16] = src[i];
+                    }
+                    // Face_10 col 0 (rows 16..31): 16 strided stores starting at idx 512.
+                    for (uint32_t i = 0; i < 16; i++) {
+                        dst[512 + i * 16] = src[16 + i];
+                    }
                 }
             }
-        }
-        cb_push_back(stats_packed_gathered_cb, ring_size);
-        cb_pop_front(stats_packed_gathered_cb, ring_size);
+            cb_push_back(stats_packed_gathered_cb, ring_size);
+            cb_pop_front(stats_packed_gathered_cb, ring_size);
 
-        cb_push_back(stats_gathered_cb, chunk_stats_tiles);
+            cb_push_back(stats_gathered_cb, chunk_stats_tiles);
+        }  // W_AG
 
+        DeviceZoneScopedN("W_DRAIN");
         // Drain this chunk's output_cb tiles to DRAM. Compute always pushes
         // `block_size` slots per col-block (LLK packer requirement) even when
         // only `tiles_in_block` (clamped) are valid; we pop the full
