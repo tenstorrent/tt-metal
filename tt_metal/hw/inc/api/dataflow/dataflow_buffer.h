@@ -110,7 +110,7 @@ public:
 
 #ifndef COMPILE_FOR_TRISC
     // This should not be used on WH/BH if the read into/write out of the DFB uses transaction ids because the transaction ids are not tracked.
-    // Instead, use noc.async_write_barrier<Noc::BarrierMode::TXN_ID>(trid)
+    // Instead, use noc.async_write_barrier<NocOptions::TXN_ID>({.trid = trid})
     void write_barrier(const Noc &noc) const { write_barrier_impl(noc); }
 #endif
 

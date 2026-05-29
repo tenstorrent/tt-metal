@@ -36,7 +36,7 @@ void kernel_main() {
         const uint32_t page_id = chunk_offset + tile_id;
         if constexpr (implicit_sync) {
 #ifdef ARCH_QUASAR
-            noc.async_write<Noc::TxnIdMode::ENABLED>(
+            noc.async_write<NocOptions::TXN_ID>(
                 dfb, tensor_accessor, {}, {.page_id = page_id});
 #endif
         } else {
