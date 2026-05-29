@@ -1614,7 +1614,11 @@
         "steady_step_ms": 17.27,
         "speedup": 1.21,
         "attempts": 1,
-        "notes": "Phase 9c: paged_update_cache + reusable metal trace. Baseline 20.88 ms -> traced 17.27 ms."
+        "notes": "Final (post block-opt, traced p50). prefill 32.20ms, 9 tokens. AR step -3.0% vs pre-block-opt 17.27.",
+        "metric": {
+          "ar_step_ms": 16.75,
+          "total_ms": 193.35
+        }
       }
     },
     {
@@ -1643,7 +1647,11 @@
         "steady_step_ms": 17.47,
         "speedup": 1.294,
         "attempts": 1,
-        "notes": "Trace path delivers 1.29x end-to-end speedup (1.38x per-step). Tracy: no single hot op >5% \u2014 at-ceiling at pipeline level. WER stayed 0.0 vs HF."
+        "notes": "Final (post block-opt, traced p50). speech-enc prefill 76.26ms, 11 tokens. AR step -4.1% vs pre-block-opt 17.47.",
+        "metric": {
+          "ar_step_ms": 16.76,
+          "total_ms": 270.63
+        }
       }
     },
     {
@@ -1672,7 +1680,11 @@
         "steady_step_ms": 17.47,
         "speedup": 1.294,
         "attempts": 1,
-        "notes": "Shares tt/speech_to_text_model.py with s2tt (ASR is s2tt with src_lang==tgt_lang). Same trace path, same numbers. Verified by test_asr_wer_matches_hf still passing at WER=0.0."
+        "notes": "Final. Shares s2tt speech_to_text_model; measured via s2tt harness.",
+        "metric": {
+          "ar_step_ms": 16.76,
+          "total_ms": 270.63
+        }
       }
     },
     {
@@ -1702,12 +1714,11 @@
       "perf": {
         "status": "done",
         "metric": {
-          "total_ms": 706.48,
-          "speedup": 1.278,
-          "ar_step_ms_baseline": 24.74,
-          "ar_step_ms_traced": 17.94
+          "ar_step_ms": 17.28,
+          "total_ms": 697.4,
+          "rtf": 0.155
         },
-        "notes": "Single-call trace pattern: capture during AR, release before T2U+vocoder, recapture next call. 1.28x e2e speedup (903ms->706ms p50, 3 timed calls, 24-step gen). Recapture cost ~27ms/call amortizes >~4 steps. test_e2e_t2st PASSES char_sim=1.000. T2TT/S2TT cross-call paths verified unaffected.",
+        "notes": "Final (post block-opt, traced p50). enc 22.97 / ar_text 414.63 / t2u 18.28 / vocoder 37.59. 4.5s audio. AR step -3.7% vs 17.94. RTF 0.155 (~6.5x faster than realtime).",
         "artifacts": [
           "models/demos/facebook_seamless_m4t_v2_large/tt/text_generator.py",
           "models/demos/facebook_seamless_m4t_v2_large/tt/text_to_speech_model.py",
@@ -1743,12 +1754,11 @@
       "perf": {
         "status": "done",
         "metric": {
-          "total_ms": 495.52,
-          "speedup": 1.185,
-          "ar_step_ms_baseline": 24.8,
-          "ar_step_ms_traced": 18.44
+          "ar_step_ms": 18.3,
+          "total_ms": 504.13,
+          "rtf": 0.229
         },
-        "notes": "Single-call trace pattern (mirrored from T2ST redo). 1.19x e2e speedup (587ms->496ms p50, 3 timed calls, 13-step gen). ar_step 24.80->18.44 ms. test_e2e_s2st PASSES char_sim=0.920. T2TT/S2TT/ASR cross-call tests still PASS.",
+        "notes": "Final (post block-opt, traced p50). feat 3.01 / speech_enc 45.61 / ar_text 237.94 / t2u 15.22 / vocoder 33.35. 2.2s audio. RTF 0.229 (~4.4x faster than realtime).",
         "artifacts": [
           "models/demos/facebook_seamless_m4t_v2_large/tt/speech_to_speech_model.py",
           "models/demos/facebook_seamless_m4t_v2_large/tt/profile_s2st.py",

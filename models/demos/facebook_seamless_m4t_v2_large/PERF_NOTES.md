@@ -1052,3 +1052,68 @@ position), which is a structural change beyond op-level sub-pass scope.
   safety argument (argmax sink). No other change.
 - `models/demos/facebook_seamless_m4t_v2_large/PERF_NOTES.md`
   — this section.
+
+---
+
+## Final perf — all use cases (post block-optimization, traced p50)
+
+Measured on the final HEAD with all five block-level tracy optimizations
+stacked (ticks 43-47: seamless_mha, conformer_self_attention, seamless_ffn,
+t2u_decoder_layer, code_hifigan_vocoder). Traced mode, p50 of 3 timed runs.
+These supersede the per-use-case numbers recorded during the original perf
+phase, which predated the block optimizations.
+
+| Use case | AR step (ms) | Total wall (ms) | RTF | Output |
+|---|---|---|---|---|
+| T2TT | 16.75 | 193.35 | — | 9 tokens (text) |
+| S2TT | 16.76 | 270.63 | — | 11 tokens (text) |
+| ASR  | 16.76 | 270.63 | — | shares S2TT path/model |
+| T2ST | 17.28 | 697.40 | 0.155 | 4.5 s audio (~6.5x realtime) |
+| S2ST | 18.30 | 504.13 | 0.229 | 2.2 s audio (~4.4x realtime) |
+
+RTF = synthesis_ms / audio_duration_ms (audio_duration = samples / 16000).
+
+### AR-step delta vs pre-block-optimization baseline
+
+| Use case | Was (ms) | Now (ms) | Delta |
+|---|---|---|---|
+| T2TT | 17.27 | 16.75 | -3.0% |
+| S2TT | 17.47 | 16.76 | -4.1% |
+| T2ST | 17.94 | 17.28 | -3.7% |
+| S2ST | 18.44 | 18.30 | -0.8% (within run-to-run noise) |
+
+### Where the block wins landed (honest leverage analysis)
+
+- **AR-path opts** (seamless_mha L1 reshape -15.2%, seamless_ffn bf8 fc2)
+  hit every decode token, so they surface as a clean ~3-4% per-step drop
+  across all text-decode paths. This is the win that compounds.
+- **Conv opts** (t2u_decoder_layer BLOCK_SHARDED -12.2%, vocoder
+  packer_l1_acc -1.4%) are real at the block level but contribute
+  negligibly end-to-end: those stages are <10% of wall time (t2u 15-18 ms,
+  vocoder 33-38 ms vs ~240-415 ms for the AR loop). Block win real;
+  pipeline footprint small because the stage was already small.
+- **Conformer opt** (-16.8%) lands in prefill (runs once per call, not per
+  token) so it nudges total_ms but not ar_step.
+
+### Where wall time goes (audio-out paths)
+
+AR text-decode loop dominates (T2ST: 415 ms of 697; S2ST: 238 ms of 504),
+then the HF host rerun (~150-200 ms, the documented hybrid boundary). The
+conv/vocoder stages are a thin slice. The next structural lever is moving
+argmax + position increment into the trace (Whisper-style on-device argmax)
+to attack the ~12 ms/step host overhead that remains after trace — outside
+the op-level scope.
+
+### Correctness
+
+All 5 e2e tests pass and all touched-block PCC tests pass on this same HEAD
+(verified post-stacking): lowest PCC anywhere is seamless_mha cross-attn at
+0.99711; code_hifigan_vocoder PCC actually improved 0.99972 -> 0.99991 from
+the packer_l1_acc change. No regressions.
+
+### Measurement caveat
+
+For the audio-out harnesses, use p50 not mean: the first timed call JIT-
+compiles the t2u/vocoder one-shot graphs (those stages are NOT traced),
+which skews mean/max (e.g. t2st vocoder mean=8737 ms vs p50=37.59 ms).
+p50/min are the true steady-state.
