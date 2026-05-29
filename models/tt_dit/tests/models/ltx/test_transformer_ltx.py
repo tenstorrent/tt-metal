@@ -2,44 +2,86 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-LTX transformer unit tests. Mesh / fabric / topology rows mirror
-``test_transformer_wan.py`` (Wan2_2) block parametrization: ``line_params`` /
-``ring_params``, ``num_links``, ``Topology.Linear`` vs ``Ring``, and ``is_fsdp``.
+"""LTX-2.3 transformer unit tests.
 
-Omitted vs Wan: ``2x2`` and ``4x32`` submesh cases (LTX coverage uses ``1x1``
-through ``4x8`` only).
+Structure mirrors ``test_transformer_wan.py``:
+  - module-level constants for the 22B distilled config
+  - small ``_make_*`` helpers reused by all tests
+  - three tests: block / model / inner_step
+  - shared mesh × shape × modality × run_pcc parametrize axes
+
+Modality axis (``video`` vs ``av``) selects which forward path runs. The block
+test runs a single ``LTXTransformerBlock``; model/inner_step run the full
+``LTXTransformerModel`` 1-layer slice. Set ``LTX_SKIP_PCC=1`` to skip the
+torch reference and assert only shape + finiteness (useful at production
+seq lengths where the host reference is heavy).
+
+RoPE: the torch reference consumes SPLIT-rotation freqs; the TT runtime fuses
+into ``rotary_embedding_llama`` (INTERLEAVED) with a load-time Q/K channel
+permute, so every TT feed is INTERLEAVED + ``_interleaved_to_bhnd`` and a
+``trans_mat`` is required (the runtime asserts it whenever rope is set).
 """
 
+import os
 import sys
+import time
 
 import pytest
 import torch
 from loguru import logger
+from safetensors.torch import load_file
 
 import ttnn
 from models.tt_dit.models.transformers.ltx.rope_ltx import LTXRopeType, precompute_freqs_cis
-from models.tt_dit.models.transformers.ltx.transformer_ltx import LTXTransformerBlock
+from models.tt_dit.models.transformers.ltx.transformer_ltx import LTXTransformerBlock, LTXTransformerModel
 from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.check import assert_quality
 from models.tt_dit.utils.mochi import get_rot_transformation_mat
 from models.tt_dit.utils.tensor import bf16_tensor, bf16_tensor_2dshard
-
-
-def _interleaved_to_bhnd(t: torch.Tensor, num_heads: int) -> torch.Tensor:
-    B, N, dim = t.shape
-    head_dim = dim // num_heads
-    return t.reshape(B, N, num_heads, head_dim).permute(0, 2, 1, 3).contiguous()
-
-
 from models.tt_dit.utils.test import line_params, ring_params
 
 sys.path.insert(0, "LTX-2/packages/ltx-core/src")
 
-from models.tt_dit.models.transformers.ltx.transformer_ltx import LTXTransformerModel
+# ---------------------------------------------------------------------------
+# LTX-2.3-22B distilled transformer configuration
+# ---------------------------------------------------------------------------
+DIM = 4096
+NUM_HEADS = 32
+HEAD_DIM = DIM // NUM_HEADS  # 128
+IN_CHANNELS = 128
+OUT_CHANNELS = 128
+CTX_DIM = 4096
+AUDIO_DIM = 2048
+AUDIO_HEAD_DIM = AUDIO_DIM // NUM_HEADS  # 64
+AUDIO_IN_CHANNELS = 128
+AUDIO_CTX_DIM = 2048
+EPS = 1e-6
+PROMPT_LEN = 32
 
-# Subset of Wan ``test_wan_transformer_block`` mesh rows + LTX ``1x1``.
+# RoPE
+ROPE_THETA = 10000.0
+VIDEO_ROPE_MAX_POS = [20, 2048, 2048]
+AUDIO_ROPE_MAX_POS = [20]
+CROSS_PE_MAX_POS = [20]
+
+# AV-mode auxiliary
+AUDIO_N = 256  # sp-aligned for sp ∈ {1, 2, 4, 8}
+CHECKPOINT_22B = os.path.expanduser("~/.cache/ltx-checkpoints/ltx-2.3-22b-dev.safetensors")
+
+# Block-test torch reference uses small scaled random weights; default init blows
+# up through `(1+scale)*x` adaln chains in fp32 with no training signal.
+WEIGHT_SEED = 1234
+INPUT_SEED = 42
+TIMESTEP_VAL = 0.01
+
+# Toggle PCC verification via env (mirrors Wan's `dit_unit_test`). Default ON.
+_RUN_PCC_DEFAULT = {"1": False, "0": True}.get(os.environ.get("LTX_SKIP_PCC"), True)
+
+
+# ---------------------------------------------------------------------------
+# Parametrize lists
+# ---------------------------------------------------------------------------
 _LTX_TRANSFORMER_MESH_PARAMS = [
     pytest.param((1, 1), 0, 1, 1, {}, ttnn.Topology.Linear, False, id="1x1sp0tp1"),
     pytest.param((2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp0tp1"),
@@ -49,17 +91,29 @@ _LTX_TRANSFORMER_MESH_PARAMS = [
     pytest.param((4, 8), 1, 0, 2, line_params, ttnn.Topology.Linear, False, id="line_bh_4x8sp1tp0"),
 ]
 
-# 1080p (1088x1920, 145f) fast-pipeline latent volumes. The single-block test
-# shards seq across sp=4 with tile alignment, so F*H*W must be a multiple of
-# `TILE_SIZE * sp_factor = 128` (matches the pipeline's `_video_sp_pad_len`
-# rounding). Production stage_1 pads 9690→9728; stage_2 pads 38760→38784.
-# F=19 (=latent_frames) is kept; H,W repicked to keep seq sp/tile-aligned:
-#   stage_1: 19×16×32 = 9728  — exact match to production padded seq
-#   stage_2: 19×32×64 = 38912 — 128 over production (next sp-aligned chunk)
-_LTX_TRANSFORMER_BLOCK_SHAPE_PARAMS = [
-    pytest.param(19, 16, 32, id="stage_1"),
-    pytest.param(19, 32, 64, id="stage_2"),
+# 1080p fast-pipeline latent volumes, sp/tile-aligned (TILE * sp_factor = 128
+# for sp=4). Production pads stage_1 9690→9728 and stage_2 38760→38784.
+_LTX_TRANSFORMER_SHAPE_PARAMS = [
+    pytest.param(19, 16, 32, id="stage_1"),  # F·H·W = 9728
+    pytest.param(19, 32, 64, id="stage_2"),  # F·H·W = 38912
 ]
+
+_LTX_TRANSFORMER_MODALITY_PARAMS = [
+    pytest.param(False, id="video"),
+    pytest.param(True, id="av"),
+]
+
+_LTX_TRANSFORMER_RUN_PCC_PARAMS = [pytest.param(_RUN_PCC_DEFAULT, id="pcc" if _RUN_PCC_DEFAULT else "nopcc")]
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+def _interleaved_to_bhnd(t: torch.Tensor, num_heads: int) -> torch.Tensor:
+    """(B, N, dim) INTERLEAVED freqs → (B, num_heads, N, head_dim) for rotary_embedding_llama."""
+    B, N, dim = t.shape
+    head_dim = dim // num_heads
+    return t.reshape(B, N, num_heads, head_dim).permute(0, 2, 1, 3).contiguous()
 
 
 def _make_parallel_config(mesh_device, sp_axis, tp_axis):
@@ -70,12 +124,168 @@ def _make_parallel_config(mesh_device, sp_axis, tp_axis):
     )
 
 
+def _make_ccl_manager(mesh_device, num_links, topology):
+    return CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
+
+
+def _video_grid(F, H, W):
+    """Return (grid_t, grid_h, grid_w) flat tensors and stacked 3D positions (1, N, 3)."""
+    t_ids, h_ids, w_ids = torch.arange(F), torch.arange(H), torch.arange(W)
+    gt, gh, gw = torch.meshgrid(t_ids, h_ids, w_ids, indexing="ij")
+    gt_f, gh_f, gw_f = gt.flatten(), gh.flatten(), gw.flatten()
+    positions = torch.stack([gt_f, gh_f, gw_f], dim=-1).float().unsqueeze(0)
+    return gt_f, gh_f, gw_f, positions
+
+
+def _video_rope_freqs(F, H, W, rope_type=LTXRopeType.SPLIT):
+    _, _, _, positions = _video_grid(F, H, W)
+    return precompute_freqs_cis(
+        positions,
+        dim=DIM,
+        out_dtype=torch.float32,
+        theta=ROPE_THETA,
+        max_pos=VIDEO_ROPE_MAX_POS,
+        num_attention_heads=NUM_HEADS,
+        rope_type=rope_type,
+    )
+
+
+def _video_cross_pe_freqs(F, H, W, rope_type=LTXRopeType.SPLIT):
+    """T-only cross-PE for V↔A, dim matches audio (AUDIO_DIM)."""
+    _, _, _, positions = _video_grid(F, H, W)
+    return precompute_freqs_cis(
+        positions[..., 0:1],
+        dim=AUDIO_DIM,
+        out_dtype=torch.float32,
+        theta=ROPE_THETA,
+        max_pos=CROSS_PE_MAX_POS,
+        num_attention_heads=NUM_HEADS,
+        rope_type=rope_type,
+    )
+
+
+def _audio_rope_freqs(audio_N, rope_type=LTXRopeType.SPLIT):
+    a_pos = torch.arange(audio_N).float().unsqueeze(0).unsqueeze(-1)
+    return precompute_freqs_cis(
+        a_pos,
+        dim=AUDIO_DIM,
+        out_dtype=torch.float32,
+        theta=ROPE_THETA,
+        max_pos=AUDIO_ROPE_MAX_POS,
+        num_attention_heads=NUM_HEADS,
+        rope_type=rope_type,
+    )
+
+
+def _audio_cross_pe_freqs(audio_N, rope_type=LTXRopeType.SPLIT):
+    a_pos = torch.arange(audio_N).float().unsqueeze(0).unsqueeze(-1)
+    return precompute_freqs_cis(
+        a_pos,
+        dim=AUDIO_DIM,
+        out_dtype=torch.float32,
+        theta=ROPE_THETA,
+        max_pos=CROSS_PE_MAX_POS,
+        num_attention_heads=NUM_HEADS,
+        rope_type=rope_type,
+    )
+
+
+def _tt_rope(freqs_fn, *args, mesh_device, sp_axis, tp_axis):
+    """Build INTERLEAVED freqs for the TT runtime: precompute → BHND reshape → 2D shard."""
+    cos_i, sin_i = freqs_fn(*args, rope_type=LTXRopeType.INTERLEAVED)
+    cos_i = _interleaved_to_bhnd(cos_i, NUM_HEADS)
+    sin_i = _interleaved_to_bhnd(sin_i, NUM_HEADS)
+    tt_cos = bf16_tensor_2dshard(cos_i, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
+    tt_sin = bf16_tensor_2dshard(sin_i, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
+    return tt_cos, tt_sin
+
+
+def _tt_rope_full(freqs_fn, *args, mesh_device, tp_axis):
+    """INTERLEAVED freqs replicated full-seq (cross-attn K side): BHND reshape, no SP shard."""
+    cos_i, sin_i = freqs_fn(*args, rope_type=LTXRopeType.INTERLEAVED)
+    cos_i = _interleaved_to_bhnd(cos_i, NUM_HEADS)
+    sin_i = _interleaved_to_bhnd(sin_i, NUM_HEADS)
+    tt_cos = bf16_tensor(cos_i, device=mesh_device, mesh_axis=tp_axis, shard_dim=1)
+    tt_sin = bf16_tensor(sin_i, device=mesh_device, mesh_axis=tp_axis, shard_dim=1)
+    return tt_cos, tt_sin
+
+
+def _make_tt_block(*, mesh_device, ccl_manager, parallel_config, is_fsdp, has_audio):
+    return LTXTransformerBlock(
+        video_dim=DIM,
+        video_ffn_dim=DIM * 4,
+        video_num_heads=NUM_HEADS,
+        video_cross_attention_dim=CTX_DIM,
+        audio_dim=AUDIO_DIM,
+        audio_ffn_dim=AUDIO_DIM * 4,
+        audio_num_heads=NUM_HEADS,
+        audio_cross_attention_dim=AUDIO_CTX_DIM,
+        eps=EPS,
+        mesh_device=mesh_device,
+        ccl_manager=ccl_manager,
+        parallel_config=parallel_config,
+        is_fsdp=is_fsdp,
+        has_audio=has_audio,
+        apply_gated_attention=has_audio,
+        cross_attention_adaln=True,
+    )
+
+
+def _make_tt_model(*, mesh_device, ccl_manager, parallel_config, is_fsdp, has_audio, num_layers):
+    return LTXTransformerModel(
+        num_attention_heads=NUM_HEADS,
+        attention_head_dim=HEAD_DIM,
+        in_channels=IN_CHANNELS,
+        out_channels=OUT_CHANNELS,
+        num_layers=num_layers,
+        cross_attention_dim=CTX_DIM,
+        audio_num_attention_heads=NUM_HEADS,
+        audio_attention_head_dim=AUDIO_HEAD_DIM,
+        audio_in_channels=AUDIO_IN_CHANNELS,
+        audio_out_channels=AUDIO_IN_CHANNELS,
+        audio_cross_attention_dim=AUDIO_CTX_DIM,
+        mesh_device=mesh_device,
+        ccl_manager=ccl_manager,
+        parallel_config=parallel_config,
+        is_fsdp=is_fsdp,
+        has_audio=has_audio,
+        apply_gated_attention=has_audio,
+        cross_attention_adaln=True,
+    )
+
+
+def _load_22b_state_dict(num_layers: int) -> dict | None:
+    """Load LTX-2.3-22B distilled weights filtered to the first `num_layers` blocks.
+
+    Returns None when the checkpoint is missing (caller should skip).
+    """
+    if not os.path.exists(CHECKPOINT_22B):
+        return None
+    raw = load_file(CHECKPOINT_22B)
+    prefix = "model.diffusion_model."
+    sd = {k[len(prefix) :]: v for k, v in raw.items() if k.startswith(prefix)}
+    return {k: v for k, v in sd.items() if not k.startswith("transformer_blocks.") or int(k.split(".")[1]) < num_layers}
+
+
+def _scale_init_(module: torch.nn.Module, seed: int = WEIGHT_SEED) -> None:
+    """Deterministic N(0, 0.1²) reinit in-place. See block test comment for why."""
+    torch.manual_seed(seed)
+    with torch.no_grad():
+        for p in module.parameters():
+            p.copy_(torch.randn(p.shape, dtype=p.dtype) * 0.1)
+
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
 @pytest.mark.parametrize(
     ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
     _LTX_TRANSFORMER_MESH_PARAMS,
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize(("F", "H", "W"), _LTX_TRANSFORMER_BLOCK_SHAPE_PARAMS)
+@pytest.mark.parametrize(("F", "H", "W"), _LTX_TRANSFORMER_SHAPE_PARAMS)
+@pytest.mark.parametrize("has_audio", _LTX_TRANSFORMER_MODALITY_PARAMS)
+@pytest.mark.parametrize("run_pcc", _LTX_TRANSFORMER_RUN_PCC_PARAMS)
 def test_ltx_transformer_block(
     mesh_device: ttnn.MeshDevice,
     sp_axis: int,
@@ -86,164 +296,446 @@ def test_ltx_transformer_block(
     F: int,
     H: int,
     W: int,
+    has_audio: bool,
+    run_pcc: bool,
     reset_seeds,
 ) -> None:
-    """
-    Test LTXTransformerBlock: compare TT vs LTX-2 PyTorch BasicAVTransformerBlock.
-    """
-    from ltx_core.model.transformer.rope import LTXRopeType as RefRopeType
-    from ltx_core.model.transformer.transformer import BasicAVTransformerBlock, TransformerConfig
+    """Test LTXTransformerBlock: TT forward, with optional PCC vs ltx_core."""
+    video_N = F * H * W
+    audio_N = AUDIO_N
+    sp_factor = tuple(mesh_device.shape)[sp_axis]
+    assert video_N % (32 * sp_factor) == 0, f"video_N={video_N} not sp/tile-aligned for sp={sp_factor}"
+    assert audio_N % (32 * sp_factor) == 0, f"audio_N={audio_N} not sp/tile-aligned for sp={sp_factor}"
 
-    dim = 4096
-    num_heads = 32
-    head_dim = dim // num_heads
-    context_dim = 4096
-    B = 1
-    seq_len = F * H * W
-    prompt_len = 32
+    # The AV-block torch reference requires LTXModel-level cross_scale_shift_timestep /
+    # cross_gate_timestep / cross-PE plumbing not provided here, so AV mode asserts
+    # shape + finiteness only; video mode runs the full PCC compare.
+    do_pcc = run_pcc and not has_audio
+    torch_block = None
+    torch_out = None
+    if do_pcc:
+        from ltx_core.model.transformer.rope import LTXRopeType as RefRopeType
+        from ltx_core.model.transformer.transformer import BasicAVTransformerBlock, TransformerConfig
 
-    # Create PyTorch reference
-    video_cfg = TransformerConfig(
-        dim=dim, heads=num_heads, d_head=head_dim, context_dim=context_dim, cross_attention_adaln=True
-    )
-    # SPLIT matches production pipeline (rope_type: split in checkpoint)
-    torch_block = BasicAVTransformerBlock(idx=0, video=video_cfg, audio=None, rope_type=RefRopeType.SPLIT)
-    torch_block.eval()
-    # Deterministic, scaled-down random weights (mirrors test_ltx_transformer_model).
-    # Default Kaiming init + raw-randn temb feeding `(1+scale)*x` modulation chains
-    # in fp32 will intermittently overflow to NaN depending on the global RNG state
-    # at construction time, making this test flaky in the full suite (passes in
-    # isolation, fails after sibling parametrizations consume RNG entropy).
-    WEIGHT_SEED = 1234
-    torch.manual_seed(WEIGHT_SEED)
-    with torch.no_grad():
-        for p in torch_block.parameters():
-            p.copy_(torch.randn(p.shape, dtype=p.dtype) * 0.1)
-    # Snapshot with cloned tensors so TT-side _prepare_torch_state views/permutations
-    # cannot share storage with torch_block parameters.
-    torch_state = {k: v.detach().clone() for k, v in torch_block.state_dict().items()}
+        video_cfg = TransformerConfig(
+            dim=DIM, heads=NUM_HEADS, d_head=HEAD_DIM, context_dim=CTX_DIM, cross_attention_adaln=True
+        )
+        torch_block = BasicAVTransformerBlock(idx=0, video=video_cfg, audio=None, rope_type=RefRopeType.SPLIT)
+        torch_block.eval()
+        _scale_init_(torch_block)
 
-    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
+    # TT block
+    ccl_manager = _make_ccl_manager(mesh_device, num_links, topology)
     parallel_config = _make_parallel_config(mesh_device, sp_axis, tp_axis)
-
-    tt_block = LTXTransformerBlock(
-        video_dim=dim,
-        video_ffn_dim=dim * 4,
-        video_num_heads=num_heads,
-        video_cross_attention_dim=context_dim,
-        eps=1e-6,
+    tt_block = _make_tt_block(
         mesh_device=mesh_device,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
         is_fsdp=is_fsdp,
-        has_audio=False,
+        has_audio=has_audio,
     )
-    tt_block.load_torch_state_dict(torch_state)
 
-    # Create inputs
-    torch.manual_seed(42)
-    x = torch.randn(B, seq_len, dim, dtype=torch.float32)
-    context = torch.randn(B, prompt_len, context_dim, dtype=torch.float32)
+    if do_pcc:
+        # Clone so TT-side `_prepare_torch_state` views can't alias torch params.
+        tt_block.load_torch_state_dict({k: v.detach().clone() for k, v in torch_block.state_dict().items()})
+    elif has_audio:
+        sd = _load_22b_state_dict(num_layers=1)
+        if sd is None:
+            pytest.skip(f"22B checkpoint not found at {CHECKPOINT_22B}")
+        block_sd = {
+            k[len("transformer_blocks.0.") :]: v for k, v in sd.items() if k.startswith("transformer_blocks.0.")
+        }
+        tt_block.load_torch_state_dict(block_sd, strict=False)
+    else:
+        # video mode, PCC disabled — harvest a shape-matching state dict from a throwaway block.
+        from ltx_core.model.transformer.rope import LTXRopeType as RefRopeType
+        from ltx_core.model.transformer.transformer import BasicAVTransformerBlock, TransformerConfig
 
-    # Timestep embedding: 9 modulation params (from AdaLayerNormSingle with cross_attention_adaln=True)
-    # Shape (B, 1, 9*dim) — the middle dim is the "time" index
-    temb = torch.randn(B, 1, 9 * dim, dtype=torch.float32)
-    # Prompt modulation: 2 params (shift, scale for prompt cross-attention KV)
-    prompt_temb = torch.randn(B, 1, 2 * dim, dtype=torch.float32)
-
-    # Torch ref consumes SPLIT cos/sin; TT runtime consumes INTERLEAVED + trans_mat
-    # (load-time Q/K permute makes the two paths mathematically equivalent).
-    t_ids = torch.arange(F)
-    h_ids = torch.arange(H)
-    w_ids = torch.arange(W)
-    grid_t, grid_h, grid_w = torch.meshgrid(t_ids, h_ids, w_ids, indexing="ij")
-    indices_grid = torch.stack([grid_t.flatten(), grid_h.flatten(), grid_w.flatten()], dim=-1).float().unsqueeze(0)
-    cos_freq, sin_freq = precompute_freqs_cis(
-        indices_grid,
-        dim=dim,
-        out_dtype=torch.float32,
-        max_pos=[20, 2048, 2048],
-        num_attention_heads=num_heads,
-        rope_type=LTXRopeType.SPLIT,
-    )
-    cos_inter, sin_inter = precompute_freqs_cis(
-        indices_grid,
-        dim=dim,
-        out_dtype=torch.float32,
-        max_pos=[20, 2048, 2048],
-        num_attention_heads=num_heads,
-        rope_type=LTXRopeType.INTERLEAVED,
-    )
-    cos_inter = _interleaved_to_bhnd(cos_inter, num_heads)
-    sin_inter = _interleaved_to_bhnd(sin_inter, num_heads)
-
-    # PyTorch forward
-    from ltx_core.model.transformer.transformer import TransformerArgs
-
-    embedded_timestep = torch.randn(B, dim, dtype=torch.float32)
-    with torch.no_grad():
-        torch_args = TransformerArgs(
-            x=x,
-            context=context,
-            context_mask=None,
-            timesteps=temb,
-            embedded_timestep=embedded_timestep,
-            positional_embeddings=(cos_freq, sin_freq),  # SPLIT: (B, H, N, D_half)
-            cross_positional_embeddings=None,
-            cross_scale_shift_timestep=None,
-            cross_gate_timestep=None,
-            enabled=True,
-            prompt_timestep=prompt_temb,
+        video_cfg = TransformerConfig(
+            dim=DIM, heads=NUM_HEADS, d_head=HEAD_DIM, context_dim=CTX_DIM, cross_attention_adaln=True
         )
-        torch_out_args, _ = torch_block(video=torch_args, audio=None)
-        torch_out = torch_out_args.x
+        dummy = BasicAVTransformerBlock(idx=0, video=video_cfg, audio=None, rope_type=RefRopeType.SPLIT)
+        _scale_init_(dummy)
+        tt_block.load_torch_state_dict({k: v.detach().clone() for k, v in dummy.state_dict().items()})
+        del dummy
 
-    logger.info(f"PyTorch block output shape: {torch_out.shape}")
+    # Inputs
+    torch.manual_seed(INPUT_SEED)
+    x = torch.randn(1, video_N, DIM, dtype=torch.float32)
+    context = torch.randn(1, PROMPT_LEN, CTX_DIM, dtype=torch.float32)
+    temb = torch.randn(1, 1, 9 * DIM, dtype=torch.float32)  # 9 adaln params
+    prompt_temb = torch.randn(1, 1, 2 * DIM, dtype=torch.float32)  # 2 adaln params for prompt
+    embedded_timestep = torch.randn(1, DIM, dtype=torch.float32)
 
-    # Prepare TT tensors
-    spatial = x.unsqueeze(0)  # (1, B, N, D)
+    # Torch forward (video-only branch): reference consumes SPLIT cos/sin.
+    if do_pcc:
+        from ltx_core.model.transformer.transformer import TransformerArgs
+
+        cos_split, sin_split = _video_rope_freqs(F, H, W, rope_type=LTXRopeType.SPLIT)
+        with torch.no_grad():
+            args = TransformerArgs(
+                x=x,
+                context=context,
+                context_mask=None,
+                timesteps=temb,
+                embedded_timestep=embedded_timestep,
+                positional_embeddings=(cos_split, sin_split),
+                cross_positional_embeddings=None,
+                cross_scale_shift_timestep=None,
+                cross_gate_timestep=None,
+                enabled=True,
+                prompt_timestep=prompt_temb,
+            )
+            out_args, _ = torch_block(video=args, audio=None)
+            torch_out = out_args.x
+        logger.info(f"torch block output {tuple(torch_out.shape)}")
+
+    # TT video tensors. Runtime rope is INTERLEAVED + trans_mat.
+    spatial = x.unsqueeze(0)
     tt_spatial = bf16_tensor_2dshard(spatial, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 3})
-
-    prompt = context.unsqueeze(0)  # (1, B, L, D)
-    tt_prompt = bf16_tensor(prompt, device=mesh_device)
-
-    # temb: reshape from (B, 1, 9*dim) to (1, B, 9, dim) for the TT block
-    temb_reshaped = temb.reshape(B, 9, dim).unsqueeze(0)  # (1, B, 9, D)
-    tt_temb = bf16_tensor(temb_reshaped, device=mesh_device, mesh_axis=tp_axis, shard_dim=3)
-
-    # prompt_temb: reshape from (B, 1, 2*dim) to (1, B, 2, dim)
-    prompt_temb_reshaped = prompt_temb.reshape(B, 2, dim).unsqueeze(0)  # (1, B, 2, D)
-    tt_prompt_temb = bf16_tensor(prompt_temb_reshaped, device=mesh_device)
-
-    tt_cos = bf16_tensor_2dshard(cos_inter, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
-    tt_sin = bf16_tensor_2dshard(sin_inter, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
+    tt_prompt = bf16_tensor(context.unsqueeze(0), device=mesh_device)
+    tt_temb = bf16_tensor(temb.reshape(1, 9, DIM).unsqueeze(0), device=mesh_device, mesh_axis=tp_axis, shard_dim=3)
+    tt_prompt_temb = bf16_tensor(prompt_temb.reshape(1, 2, DIM).unsqueeze(0), device=mesh_device)
+    tt_cos, tt_sin = _tt_rope(_video_rope_freqs, F, H, W, mesh_device=mesh_device, sp_axis=sp_axis, tp_axis=tp_axis)
     tt_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=mesh_device)
 
-    tt_out = tt_block(
+    forward_kwargs = dict(
         video_1BND=tt_spatial,
         video_prompt=tt_prompt,
         video_temb=tt_temb,
-        video_N=seq_len,
+        video_N=video_N,
         video_rope_cos=tt_cos,
         video_rope_sin=tt_sin,
         trans_mat=tt_trans_mat,
         video_prompt_temb=tt_prompt_temb,
     )
+    if has_audio:
+        a_x = torch.randn(1, audio_N, AUDIO_DIM, dtype=torch.float32)
+        a_ctx = torch.randn(1, PROMPT_LEN, AUDIO_CTX_DIM, dtype=torch.float32)
+        a_temb = torch.randn(1, 1, 9 * AUDIO_DIM, dtype=torch.float32)
+        a_prompt_temb = torch.randn(1, 1, 2 * AUDIO_DIM, dtype=torch.float32)
+        av_ca_v = torch.randn(1, 1, 5 * DIM, dtype=torch.float32)  # 4 scale-shift + 1 gate
+        av_ca_a = torch.randn(1, 1, 5 * AUDIO_DIM, dtype=torch.float32)
 
-    # Gather and compare
+        a_cos, a_sin = _tt_rope(_audio_rope_freqs, audio_N, mesh_device=mesh_device, sp_axis=sp_axis, tp_axis=tp_axis)
+        vx_cos, vx_sin = _tt_rope(
+            _video_cross_pe_freqs, F, H, W, mesh_device=mesh_device, sp_axis=sp_axis, tp_axis=tp_axis
+        )
+        ax_cos, ax_sin = _tt_rope(
+            _audio_cross_pe_freqs, audio_N, mesh_device=mesh_device, sp_axis=sp_axis, tp_axis=tp_axis
+        )
+        vx_cos_full, vx_sin_full = _tt_rope_full(
+            _video_cross_pe_freqs, F, H, W, mesh_device=mesh_device, tp_axis=tp_axis
+        )
+        ax_cos_full, ax_sin_full = _tt_rope_full(
+            _audio_cross_pe_freqs, audio_N, mesh_device=mesh_device, tp_axis=tp_axis
+        )
+
+        forward_kwargs.update(
+            audio_1BND=bf16_tensor_2dshard(
+                a_x.unsqueeze(0), device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 3}
+            ),
+            audio_prompt=bf16_tensor(a_ctx.unsqueeze(0), device=mesh_device),
+            audio_temb=bf16_tensor(
+                a_temb.reshape(1, 9, AUDIO_DIM).unsqueeze(0), device=mesh_device, mesh_axis=tp_axis, shard_dim=3
+            ),
+            audio_prompt_temb=bf16_tensor(a_prompt_temb.reshape(1, 2, AUDIO_DIM).unsqueeze(0), device=mesh_device),
+            av_ca_temb=bf16_tensor(
+                av_ca_v.reshape(1, 5, DIM).unsqueeze(0), device=mesh_device, mesh_axis=tp_axis, shard_dim=3
+            ),
+            av_ca_audio_temb=bf16_tensor(
+                av_ca_a.reshape(1, 5, AUDIO_DIM).unsqueeze(0), device=mesh_device, mesh_axis=tp_axis, shard_dim=3
+            ),
+            audio_N=audio_N,
+            audio_rope_cos=a_cos,
+            audio_rope_sin=a_sin,
+            video_cross_pe_cos=vx_cos,
+            video_cross_pe_sin=vx_sin,
+            audio_cross_pe_cos=ax_cos,
+            audio_cross_pe_sin=ax_sin,
+            video_cross_pe_cos_full=vx_cos_full,
+            video_cross_pe_sin_full=vx_sin_full,
+            audio_cross_pe_cos_full=ax_cos_full,
+            audio_cross_pe_sin_full=ax_sin_full,
+        )
+
+    tt_out = tt_block(**forward_kwargs)
+    if has_audio:
+        tt_v, tt_a = tt_out
+    else:
+        tt_v = tt_out
+
+    # Gather video output
     concat_dims = [None, None]
     concat_dims[sp_axis] = 2
     concat_dims[tp_axis] = 3
-    tt_out_torch = ttnn.to_torch(
-        tt_out,
+    tt_v_torch = ttnn.to_torch(
+        tt_v,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=concat_dims, mesh_shape=tuple(mesh_device.shape)),
     ).squeeze(0)
 
-    # 4x8 mesh has 8-way SP ring all-gathers that accumulate more BF16 rounding
-    pcc_threshold = 0.988 if mesh_device.get_num_devices() > 8 else 0.999
-    rmse_threshold = 0.10 if mesh_device.get_num_devices() > 8 else 0.032
-    assert_quality(torch_out, tt_out_torch, pcc=pcc_threshold, relative_rmse=rmse_threshold)
-    logger.info("PASSED: LTX transformer block matches PyTorch reference")
+    assert tt_v_torch.shape == (1, video_N, DIM), f"video shape {tt_v_torch.shape}"
+    assert torch.isfinite(tt_v_torch).all(), "video output NaN/Inf"
+
+    if has_audio:
+        tt_a_torch = ttnn.to_torch(
+            tt_a,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=concat_dims, mesh_shape=tuple(mesh_device.shape)),
+        ).squeeze(0)
+        assert tt_a_torch.shape == (1, audio_N, AUDIO_DIM), f"audio shape {tt_a_torch.shape}"
+        assert torch.isfinite(tt_a_torch).all(), "audio output NaN/Inf"
+
+    if do_pcc:
+        # 4x8 mesh has 8-way SP ring all-gathers — looser tolerance.
+        pcc = 0.988 if mesh_device.get_num_devices() > 8 else 0.999
+        rmse = 0.10 if mesh_device.get_num_devices() > 8 else 0.032
+        assert_quality(torch_out, tt_v_torch, pcc=pcc, relative_rmse=rmse)
+        logger.info(f"PASSED block PCC: video {tuple(tt_v_torch.shape)}")
+    else:
+        logger.info(f"PASSED block (no PCC): video {tuple(tt_v_torch.shape)}")
+
+
+def _run_inner_step(
+    *,
+    mesh_device,
+    sp_axis,
+    tp_axis,
+    num_links,
+    topology,
+    is_fsdp,
+    F,
+    H,
+    W,
+    has_audio,
+    run_pcc,
+    use_forward_alias: bool,
+):
+    """Shared body for model and inner_step tests.
+
+    `use_forward_alias=True` invokes ``tt_model(...)`` (which delegates to
+    inner_step); `False` calls ``tt_model.inner_step(...)`` explicitly. Used
+    so the two tests have visibly different call sites.
+    """
+    video_N = F * H * W
+    audio_N = AUDIO_N
+    sp_factor = tuple(mesh_device.shape)[sp_axis]
+    assert video_N % (32 * sp_factor) == 0
+    if has_audio:
+        assert audio_N % (32 * sp_factor) == 0
+
+    # === Reference model ===
+    do_pcc = run_pcc
+    ref_video = None
+    ref_audio = None
+    state_dict = None
+
+    if has_audio:
+        # AV PCC path: 22B with strict=False.
+        state_dict = _load_22b_state_dict(num_layers=1)
+        if state_dict is None:
+            pytest.skip(f"22B checkpoint not found at {CHECKPOINT_22B}")
+    else:
+        # Video PCC path: random scaled weights (1 layer).
+        from ltx_core.model.transformer.model import LTXModel, LTXModelType
+        from ltx_core.model.transformer.rope import LTXRopeType as RefRopeType
+
+        torch_model = LTXModel(
+            model_type=LTXModelType.VideoOnly,
+            num_layers=1,
+            num_attention_heads=NUM_HEADS,
+            attention_head_dim=HEAD_DIM,
+            in_channels=IN_CHANNELS,
+            out_channels=OUT_CHANNELS,
+            cross_attention_dim=CTX_DIM,
+            use_middle_indices_grid=True,
+            cross_attention_adaln=True,
+            rope_type=RefRopeType.SPLIT,
+        )
+        torch_model.eval()
+        _scale_init_(torch_model)
+        state_dict = {k: v.detach().clone() for k, v in torch_model.state_dict().items()}
+
+    # === Inputs ===
+    torch.manual_seed(INPUT_SEED)
+    video_lat = torch.randn(1, video_N, IN_CHANNELS, dtype=torch.float32)
+    video_prompt = torch.randn(1, PROMPT_LEN, CTX_DIM, dtype=torch.float32)
+    sigma_val = TIMESTEP_VAL if not has_audio else 0.5  # AV path uses production sigma=0.5
+    timestep_torch = torch.tensor([sigma_val])
+
+    audio_lat = None
+    audio_prompt = None
+    if has_audio:
+        audio_lat = torch.randn(1, audio_N, AUDIO_IN_CHANNELS, dtype=torch.float32)
+        audio_prompt = torch.randn(1, PROMPT_LEN, AUDIO_CTX_DIM, dtype=torch.float32)
+
+    # === Reference forward (before TT to avoid weight aliasing) ===
+    # The torch LTXModel computes rope internally from `positions` (SPLIT), so the
+    # reference needs no precomputed cos/sin — only the TT side builds INTERLEAVED freqs.
+    if do_pcc and not has_audio:
+        from ltx_core.guidance.perturbations import BatchedPerturbationConfig, PerturbationConfig
+        from ltx_core.model.transformer.model import Modality
+
+        _, _, _, positions_3d = _video_grid(F, H, W)
+        positions_for_ref = torch.stack([positions_3d[0, :, 0], positions_3d[0, :, 1], positions_3d[0, :, 2]], dim=0)
+        positions_for_ref = torch.stack([positions_for_ref, positions_for_ref], dim=-1).unsqueeze(0)
+        video_mod = Modality(
+            latent=video_lat,
+            sigma=torch.tensor([sigma_val]),
+            timesteps=torch.ones(1, video_N) * sigma_val,
+            positions=positions_for_ref,
+            context=video_prompt,
+            enabled=True,
+            context_mask=None,
+            attention_mask=None,
+        )
+        perturbations = BatchedPerturbationConfig(perturbations=[PerturbationConfig(perturbations=None)])
+        with torch.no_grad():
+            ref_video, _ = torch_model(video=video_mod, audio=None, perturbations=perturbations)
+        logger.info(f"ref video {tuple(ref_video.shape)} range=[{ref_video.min():.3f}, {ref_video.max():.3f}]")
+        del torch_model
+
+    if do_pcc and has_audio:
+        from ltx_core.guidance.perturbations import BatchedPerturbationConfig, PerturbationConfig
+        from ltx_core.model.transformer.model import LTXModel, LTXModelType, Modality
+        from ltx_core.model.transformer.rope import LTXRopeType as RefRopeType
+
+        ref_model = LTXModel(
+            model_type=LTXModelType.AudioVideo,
+            num_layers=1,
+            num_attention_heads=NUM_HEADS,
+            attention_head_dim=HEAD_DIM,
+            in_channels=IN_CHANNELS,
+            out_channels=OUT_CHANNELS,
+            cross_attention_dim=CTX_DIM,
+            audio_num_attention_heads=NUM_HEADS,
+            audio_attention_head_dim=AUDIO_HEAD_DIM,
+            audio_in_channels=AUDIO_IN_CHANNELS,
+            audio_out_channels=AUDIO_IN_CHANNELS,
+            audio_cross_attention_dim=AUDIO_CTX_DIM,
+            use_middle_indices_grid=True,
+            apply_gated_attention=True,
+            cross_attention_adaln=True,
+            rope_type=RefRopeType.SPLIT,
+        )
+        ref_model.load_state_dict(state_dict, strict=False)
+        ref_model.eval()
+
+        gt_f, gh_f, gw_f, _ = _video_grid(F, H, W)
+        v_pos_ref = torch.stack([gt_f, gh_f, gw_f], dim=0).float().unsqueeze(-1).repeat(1, 1, 2).unsqueeze(0)
+        a_pos_ref = torch.arange(audio_N).float().unsqueeze(0).unsqueeze(0).unsqueeze(-1).repeat(1, 1, 1, 2)
+        v_modality = Modality(
+            latent=video_lat,
+            sigma=torch.tensor([sigma_val]),
+            timesteps=torch.ones(1, video_N) * sigma_val,
+            positions=v_pos_ref,
+            context=video_prompt,
+            enabled=True,
+        )
+        a_modality = Modality(
+            latent=audio_lat,
+            sigma=torch.tensor([sigma_val]),
+            timesteps=torch.ones(1, audio_N) * sigma_val,
+            positions=a_pos_ref,
+            context=audio_prompt,
+            enabled=True,
+        )
+        perturbations = BatchedPerturbationConfig(perturbations=[PerturbationConfig(perturbations=None)])
+        t0 = time.time()
+        with torch.no_grad():
+            ref_video, ref_audio = ref_model(video=v_modality, audio=a_modality, perturbations=perturbations)
+        logger.info(
+            f"AV ref forward: {time.time() - t0:.1f}s — video {tuple(ref_video.shape)} audio {tuple(ref_audio.shape)}"
+        )
+        del ref_model
+        import gc
+
+        gc.collect()
+
+    # === TT model ===
+    ccl_manager = _make_ccl_manager(mesh_device, num_links, topology)
+    parallel_config = _make_parallel_config(mesh_device, sp_axis, tp_axis)
+    tt_model = _make_tt_model(
+        mesh_device=mesh_device,
+        ccl_manager=ccl_manager,
+        parallel_config=parallel_config,
+        is_fsdp=is_fsdp,
+        has_audio=has_audio,
+        num_layers=1,
+    )
+    t0 = time.time()
+    tt_model.load_torch_state_dict(state_dict, strict=not has_audio)
+    logger.info(f"state-dict load: {time.time() - t0:.1f}s")
+
+    # === Build TT-side RoPE / cross-PE / prompt tensors (INTERLEAVED + trans_mat) ===
+    tt_video_prompt = bf16_tensor(video_prompt.unsqueeze(0), device=mesh_device)
+    tt_vc, tt_vs = _tt_rope(_video_rope_freqs, F, H, W, mesh_device=mesh_device, sp_axis=sp_axis, tp_axis=tp_axis)
+    tt_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=mesh_device)
+
+    call_kwargs = dict(
+        video_1BNI_torch=video_lat.unsqueeze(0),
+        video_prompt_1BLP=tt_video_prompt,
+        video_rope_cos=tt_vc,
+        video_rope_sin=tt_vs,
+        video_N=video_N,
+        trans_mat=tt_trans_mat,
+        timestep_torch=timestep_torch,
+    )
+    if has_audio:
+        a_cos, a_sin = _tt_rope(_audio_rope_freqs, audio_N, mesh_device=mesh_device, sp_axis=sp_axis, tp_axis=tp_axis)
+        vx_cos, vx_sin = _tt_rope(
+            _video_cross_pe_freqs, F, H, W, mesh_device=mesh_device, sp_axis=sp_axis, tp_axis=tp_axis
+        )
+        ax_cos, ax_sin = _tt_rope(
+            _audio_cross_pe_freqs, audio_N, mesh_device=mesh_device, sp_axis=sp_axis, tp_axis=tp_axis
+        )
+        vx_cos_full, vx_sin_full = _tt_rope_full(
+            _video_cross_pe_freqs, F, H, W, mesh_device=mesh_device, tp_axis=tp_axis
+        )
+        ax_cos_full, ax_sin_full = _tt_rope_full(
+            _audio_cross_pe_freqs, audio_N, mesh_device=mesh_device, tp_axis=tp_axis
+        )
+        call_kwargs.update(
+            audio_1BNI_torch=audio_lat.unsqueeze(0),
+            audio_prompt_1BLP=bf16_tensor(audio_prompt.unsqueeze(0), device=mesh_device),
+            audio_rope_cos=a_cos,
+            audio_rope_sin=a_sin,
+            audio_N=audio_N,
+            video_cross_pe_cos=vx_cos,
+            video_cross_pe_sin=vx_sin,
+            audio_cross_pe_cos=ax_cos,
+            audio_cross_pe_sin=ax_sin,
+            video_cross_pe_cos_full=vx_cos_full,
+            video_cross_pe_sin_full=vx_sin_full,
+            audio_cross_pe_cos_full=ax_cos_full,
+            audio_cross_pe_sin_full=ax_sin_full,
+        )
+
+    # === Forward ===
+    t0 = time.time()
+    result = tt_model(**call_kwargs) if use_forward_alias else tt_model.inner_step(**call_kwargs)
+    logger.info(f"TT forward: {time.time() - t0:.1f}s")
+
+    if has_audio:
+        tt_v_dev, tt_a_dev = result
+        tt_video = LTXTransformerModel.device_to_host(tt_v_dev).squeeze(0)
+        tt_audio = LTXTransformerModel.device_to_host(tt_a_dev).squeeze(0)
+        assert tt_video.shape == (1, video_N, OUT_CHANNELS), f"video shape {tt_video.shape}"
+        assert tt_audio.shape == (1, audio_N, AUDIO_IN_CHANNELS), f"audio shape {tt_audio.shape}"
+        assert torch.isfinite(tt_video).all() and torch.isfinite(tt_audio).all(), "NaN/Inf in TT output"
+    else:
+        tt_video = LTXTransformerModel.device_to_host(result).squeeze(0)
+        assert tt_video.shape == (1, video_N, OUT_CHANNELS), f"video shape {tt_video.shape}"
+        assert torch.isfinite(tt_video).all(), "NaN/Inf in TT output"
+
+    del tt_model
+
+    if do_pcc:
+        assert_quality(ref_video, tt_video, pcc=0.992, relative_rmse=0.15)
+        if has_audio:
+            assert_quality(ref_audio, tt_audio, pcc=0.992, relative_rmse=0.15)
+        logger.info("PASSED PCC")
+    else:
+        logger.info("PASSED (no PCC)")
 
 
 @pytest.mark.parametrize(
@@ -251,173 +743,27 @@ def test_ltx_transformer_block(
     _LTX_TRANSFORMER_MESH_PARAMS,
     indirect=["mesh_device", "device_params"],
 )
+@pytest.mark.parametrize(("F", "H", "W"), _LTX_TRANSFORMER_SHAPE_PARAMS)
+@pytest.mark.parametrize("has_audio", _LTX_TRANSFORMER_MODALITY_PARAMS)
+@pytest.mark.parametrize("run_pcc", _LTX_TRANSFORMER_RUN_PCC_PARAMS)
 def test_ltx_transformer_model(
-    mesh_device: ttnn.MeshDevice,
-    sp_axis: int,
-    tp_axis: int,
-    num_links: int,
-    topology: ttnn.Topology,
-    is_fsdp: bool,
-    reset_seeds,
+    mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, F, H, W, has_audio, run_pcc, reset_seeds
 ) -> None:
-    """
-    Test LTXTransformerModel: compare 1-layer TT model vs LTX-2 PyTorch LTXModel.
-    """
-    from ltx_core.guidance.perturbations import BatchedPerturbationConfig, PerturbationConfig
-    from ltx_core.model.transformer.model import LTXModel, LTXModelType, Modality
-    from ltx_core.model.transformer.rope import LTXRopeType as RefRopeType
-
-    dim = 4096
-    num_heads = 32
-    head_dim = dim // num_heads
-    in_channels = 128
-    out_channels = 128
-    cross_attention_dim = 4096
-    num_layers = 1  # Single layer for fast test
-    B = 1
-    F, H, W = 4, 8, 8
-    seq_len = F * H * W  # 256
-    prompt_len = 32
-
-    # Create PyTorch reference (1 layer, video only).
-    # SPLIT rope_type matches the production pipeline and the block test.
-    # LTX-2's default rope_type changed from INTERLEAVED to SPLIT in a vendor
-    # update; pinning explicitly here prevents the same drift from biting again.
-    # Deterministic, scaled-down random weights keep both reference and TT
-    # forwards numerically well-behaved (full default init can explode through
-    # adaln_single + (1+scale)*x chains in fp32 with no real training signal).
-    torch_model = LTXModel(
-        model_type=LTXModelType.VideoOnly,
-        num_layers=num_layers,
-        num_attention_heads=num_heads,
-        attention_head_dim=head_dim,
-        in_channels=in_channels,
-        out_channels=out_channels,
-        cross_attention_dim=cross_attention_dim,
-        use_middle_indices_grid=True,
-        cross_attention_adaln=True,
-        rope_type=RefRopeType.SPLIT,
-    )
-    torch_model.eval()
-    WEIGHT_SEED = 1234
-    torch.manual_seed(WEIGHT_SEED)
-    with torch.no_grad():
-        for p in torch_model.parameters():
-            p.copy_(torch.randn(p.shape, dtype=p.dtype) * 0.1)
-    logger.info(f"PyTorch model: {sum(p.numel() for p in torch_model.parameters()):,} params (overwritten N(0, 0.1²))")
-
-    # Create inputs
-    torch.manual_seed(42)
-    latent = torch.randn(B, seq_len, in_channels, dtype=torch.float32)
-    context = torch.randn(B, prompt_len, cross_attention_dim, dtype=torch.float32)
-
-    # Positions: (B, 3, T, 2) for use_middle_indices_grid=True
-    t_ids = torch.arange(F)
-    h_ids = torch.arange(H)
-    w_ids = torch.arange(W)
-    grid_t, grid_h, grid_w = torch.meshgrid(t_ids, h_ids, w_ids, indexing="ij")
-    indices = torch.stack([grid_t.flatten(), grid_h.flatten(), grid_w.flatten()], dim=0).float()
-    positions = torch.stack([indices, indices], dim=-1).unsqueeze(0)  # (1, 3, T, 2)
-
-    # Timestep — small enough that adaln_single (input timestep * 1000) stays
-    # comfortably in float32 range even with the scaled-down random init.
-    timestep_val = 0.01
-
-    # === PyTorch reference forward (compute BEFORE any TT operations so that
-    # ttnn weight conversions cannot perturb torch_model parameters and push
-    # the random-init model over its narrow stability cliff). ===
-    # Match sigma to timestep_val: TT's inner_step uses a single `timestep_torch`
-    # for BOTH adaln_single (driven by timesteps in torch) AND prompt_adaln_single
-    # (driven by sigma in torch). Production calls inner_step with timestep=sigma,
-    # so we mirror that here. Without this, torch's prompt_adaln sees a different
-    # input than TT's, yielding a systematically diverged cross-attention path
-    # and ~10% PCC loss masquerading as a precision issue.
-    video = Modality(
-        latent=latent,
-        sigma=torch.tensor([timestep_val]),
-        timesteps=torch.ones(B, seq_len) * timestep_val,
-        positions=positions,
-        context=context,
-        enabled=True,
-        context_mask=None,
-        attention_mask=None,
-    )
-    perturbations = BatchedPerturbationConfig(perturbations=[PerturbationConfig(perturbations=None) for _ in range(B)])
-    with torch.no_grad():
-        torch_out, _ = torch_model(video=video, audio=None, perturbations=perturbations)
-    logger.info(f"PyTorch model output shape: {torch_out.shape}, range=[{torch_out.min():.4f}, {torch_out.max():.4f}]")
-
-    # Snapshot state dict with cloned tensors so TT-side _prepare_torch_state
-    # views/permutations cannot share storage with torch_model parameters.
-    torch_state = {k: v.detach().clone() for k, v in torch_model.state_dict().items()}
-    logger.info(f"State dict: {len(torch_state)} keys")
-
-    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
-    parallel_config = _make_parallel_config(mesh_device, sp_axis, tp_axis)
-
-    tt_model = LTXTransformerModel(
-        num_attention_heads=num_heads,
-        attention_head_dim=head_dim,
-        in_channels=in_channels,
-        out_channels=out_channels,
-        num_layers=num_layers,
-        cross_attention_dim=cross_attention_dim,
+    """Full LTXTransformerModel forward (delegates to inner_step)."""
+    _run_inner_step(
         mesh_device=mesh_device,
-        ccl_manager=ccl_manager,
-        parallel_config=parallel_config,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        num_links=num_links,
+        topology=topology,
         is_fsdp=is_fsdp,
+        F=F,
+        H=H,
+        W=W,
+        has_audio=has_audio,
+        run_pcc=run_pcc,
+        use_forward_alias=True,
     )
-    tt_model.load_torch_state_dict(torch_state)
-
-    # === TT forward ===
-    # Prompt
-    prompt = context.unsqueeze(0)  # (1, B, L, D)
-    tt_prompt = bf16_tensor(prompt, device=mesh_device)
-
-    # RoPE: compute from positions, same as what the model does internally
-    from models.tt_dit.models.transformers.ltx.rope_ltx import precompute_freqs_cis
-
-    indices_grid_for_rope = torch.stack([grid_t.flatten(), grid_h.flatten(), grid_w.flatten()], dim=-1).float()
-    # For use_middle_indices_grid=True, average start/end (same here)
-    indices_grid_for_rope = indices_grid_for_rope.unsqueeze(0)  # (1, T, 3)
-
-    # TT runtime uses INTERLEAVED + trans_mat (load-time Q/K permute equivalents SPLIT-on-unpermuted).
-    cos_inter, sin_inter = precompute_freqs_cis(
-        indices_grid_for_rope,
-        dim=dim,
-        out_dtype=torch.float32,
-        theta=10000.0,
-        max_pos=[20, 2048, 2048],
-        num_attention_heads=num_heads,
-        rope_type=LTXRopeType.INTERLEAVED,
-    )
-    cos_inter = _interleaved_to_bhnd(cos_inter, num_heads)
-    sin_inter = _interleaved_to_bhnd(sin_inter, num_heads)
-    tt_cos = bf16_tensor_2dshard(cos_inter, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
-    tt_sin = bf16_tensor_2dshard(sin_inter, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
-    tt_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=mesh_device)
-
-    spatial_torch = latent.unsqueeze(0)  # (1, B, N, in_channels)
-    timestep_torch = torch.tensor([timestep_val])
-
-    tt_out = tt_model.inner_step(
-        video_1BNI_torch=spatial_torch,
-        video_prompt_1BLP=tt_prompt,
-        video_rope_cos=tt_cos,
-        video_rope_sin=tt_sin,
-        trans_mat=tt_trans_mat,
-        video_N=seq_len,
-        timestep_torch=timestep_torch,
-    )
-
-    tt_out_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).squeeze(0)
-
-    logger.info(
-        f"TT model output shape: {tt_out_torch.shape}, range=[{tt_out_torch.min():.4f}, {tt_out_torch.max():.4f}]"
-    )
-    logger.info(f"Ref output shape: {torch_out.shape}, range=[{torch_out.min():.4f}, {torch_out.max():.4f}]")
-    assert_quality(torch_out, tt_out_torch, pcc=0.992, relative_rmse=0.15)
-    logger.info("PASSED: LTX transformer model matches PyTorch reference")
 
 
 @pytest.mark.parametrize(
@@ -425,148 +771,24 @@ def test_ltx_transformer_model(
     _LTX_TRANSFORMER_MESH_PARAMS,
     indirect=["mesh_device", "device_params"],
 )
+@pytest.mark.parametrize(("F", "H", "W"), _LTX_TRANSFORMER_SHAPE_PARAMS)
+@pytest.mark.parametrize("has_audio", _LTX_TRANSFORMER_MODALITY_PARAMS)
+@pytest.mark.parametrize("run_pcc", _LTX_TRANSFORMER_RUN_PCC_PARAMS)
 def test_ltx_transformer_inner_step(
-    mesh_device: ttnn.MeshDevice,
-    sp_axis: int,
-    tp_axis: int,
-    num_links: int,
-    topology: ttnn.Topology,
-    is_fsdp: bool,
-    reset_seeds,
+    mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, F, H, W, has_audio, run_pcc, reset_seeds
 ) -> None:
-    """
-    Test LTXTransformerModel.inner_step: validates the pipeline denoising loop path.
-    Caches prompt/RoPE on device, then calls inner_step with torch spatial input.
-    """
-    from ltx_core.guidance.perturbations import BatchedPerturbationConfig, PerturbationConfig
-    from ltx_core.model.transformer.model import LTXModel, LTXModelType, Modality
-    from ltx_core.model.transformer.rope import LTXRopeType as RefRopeType
-
-    dim = 4096
-    num_heads = 32
-    head_dim = dim // num_heads
-    in_channels = 128
-    out_channels = 128
-    cross_attention_dim = 4096
-    num_layers = 1
-    B = 1
-    F, H, W = 4, 8, 8
-    seq_len = F * H * W
-    prompt_len = 32
-
-    # PyTorch reference. SPLIT rope_type matches production / block test
-    # (see comment in test_ltx_transformer_model for rationale).
-    torch_model = LTXModel(
-        model_type=LTXModelType.VideoOnly,
-        num_layers=num_layers,
-        num_attention_heads=num_heads,
-        attention_head_dim=head_dim,
-        in_channels=in_channels,
-        out_channels=out_channels,
-        cross_attention_dim=cross_attention_dim,
-        use_middle_indices_grid=True,
-        cross_attention_adaln=True,
-        rope_type=RefRopeType.SPLIT,
-    )
-    torch_model.eval()
-    WEIGHT_SEED = 1234
-    torch.manual_seed(WEIGHT_SEED)
-    with torch.no_grad():
-        for p in torch_model.parameters():
-            p.copy_(torch.randn(p.shape, dtype=p.dtype) * 0.1)
-
-    # Inputs
-    torch.manual_seed(42)
-    latent = torch.randn(B, seq_len, in_channels, dtype=torch.float32)
-    context = torch.randn(B, prompt_len, cross_attention_dim, dtype=torch.float32)
-    timestep_val = 0.01
-
-    # Positions
-    t_ids = torch.arange(F)
-    h_ids = torch.arange(H)
-    w_ids = torch.arange(W)
-    grid_t, grid_h, grid_w = torch.meshgrid(t_ids, h_ids, w_ids, indexing="ij")
-    indices = torch.stack([grid_t.flatten(), grid_h.flatten(), grid_w.flatten()], dim=0).float()
-    positions = torch.stack([indices, indices], dim=-1).unsqueeze(0)
-
-    # === PyTorch reference forward (compute BEFORE any TT operations) ===
-    # sigma=timestep_val: TT's inner_step uses a single value for both
-    # adaln_single and prompt_adaln_single (matches production where timestep=sigma).
-    video = Modality(
-        latent=latent,
-        sigma=torch.tensor([timestep_val]),
-        timesteps=torch.ones(B, seq_len) * timestep_val,
-        positions=positions,
-        context=context,
-        enabled=True,
-        context_mask=None,
-        attention_mask=None,
-    )
-    perturbations = BatchedPerturbationConfig(perturbations=[PerturbationConfig(perturbations=None) for _ in range(B)])
-    with torch.no_grad():
-        torch_out, _ = torch_model(video=video, audio=None, perturbations=perturbations)
-    logger.info(f"PyTorch reference output range=[{torch_out.min():.4f}, {torch_out.max():.4f}]")
-
-    # Snapshot state dict with cloned tensors so TT-side _prepare_torch_state
-    # views/permutations cannot share storage with torch_model parameters.
-    torch_state = {k: v.detach().clone() for k, v in torch_model.state_dict().items()}
-
-    # TT model
-    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
-    parallel_config = _make_parallel_config(mesh_device, sp_axis, tp_axis)
-
-    tt_model = LTXTransformerModel(
-        num_attention_heads=num_heads,
-        attention_head_dim=head_dim,
-        in_channels=in_channels,
-        out_channels=out_channels,
-        num_layers=num_layers,
-        cross_attention_dim=cross_attention_dim,
+    """LTXTransformerModel.inner_step — denoising-loop path."""
+    _run_inner_step(
         mesh_device=mesh_device,
-        ccl_manager=ccl_manager,
-        parallel_config=parallel_config,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        num_links=num_links,
+        topology=topology,
         is_fsdp=is_fsdp,
+        F=F,
+        H=H,
+        W=W,
+        has_audio=has_audio,
+        run_pcc=run_pcc,
+        use_forward_alias=False,
     )
-    tt_model.load_torch_state_dict(torch_state)
-
-    # Cache prompt and RoPE on device (step-independent)
-    prompt = context.unsqueeze(0)
-    tt_prompt = bf16_tensor(prompt, device=mesh_device)
-
-    from models.tt_dit.models.transformers.ltx.rope_ltx import precompute_freqs_cis
-
-    # TT runtime uses INTERLEAVED + trans_mat; torch ref keeps SPLIT (load-time permute makes them equivalent).
-    indices_grid = torch.stack([grid_t.flatten(), grid_h.flatten(), grid_w.flatten()], dim=-1).float().unsqueeze(0)
-    cos_inter, sin_inter = precompute_freqs_cis(
-        indices_grid,
-        dim=dim,
-        out_dtype=torch.float32,
-        theta=10000.0,
-        max_pos=[20, 2048, 2048],
-        num_attention_heads=num_heads,
-        rope_type=LTXRopeType.INTERLEAVED,
-    )
-    cos_inter = _interleaved_to_bhnd(cos_inter, num_heads)
-    sin_inter = _interleaved_to_bhnd(sin_inter, num_heads)
-    tt_cos = bf16_tensor_2dshard(cos_inter, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
-    tt_sin = bf16_tensor_2dshard(sin_inter, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
-    tt_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=mesh_device)
-
-    spatial_torch = latent.unsqueeze(0)  # (1, B, N, in_channels)
-    timestep_torch = torch.tensor([timestep_val])
-
-    tt_out = tt_model.inner_step(
-        video_1BNI_torch=spatial_torch,
-        video_prompt_1BLP=tt_prompt,
-        video_rope_cos=tt_cos,
-        video_rope_sin=tt_sin,
-        trans_mat=tt_trans_mat,
-        video_N=seq_len,
-        timestep_torch=timestep_torch,
-    )
-
-    tt_out_torch = LTXTransformerModel.device_to_host(tt_out).squeeze(0)
-    logger.info(f"inner_step output shape: {tt_out_torch.shape}")
-
-    assert_quality(torch_out, tt_out_torch, pcc=0.992, relative_rmse=0.15)
-    logger.info("PASSED: LTX inner_step matches PyTorch reference")
