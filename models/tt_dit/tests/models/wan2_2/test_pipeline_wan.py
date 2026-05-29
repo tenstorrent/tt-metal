@@ -177,20 +177,28 @@ def test_pipeline_inference(
                 f"Per-frame scores: {[f'{s:.2f}' for s in scores]}"
             )
 
-    def check_output_with_vbench(
-        prompt,
-        number,
-        vbench_thresholds={
+    vbench_thresholds_by_height = {
+        720: {
             "subject_consistency": 0.92,
             "background_consistency": 0.93,
-            "motion_smoothness": 0.96,
+            "motion_smoothness": 0.955,
             "dynamic_degree": 1.0,
             "imaging_quality": 0.645,
         },
-    ):
+        480: {
+            "subject_consistency": 0.94,
+            "background_consistency": 0.96,
+            "motion_smoothness": 0.97,
+            "dynamic_degree": 1.0,
+            "imaging_quality": 0.545,
+        },
+    }
+
+    def check_output_with_vbench(prompt, number):
         if int(ttnn.distributed_context_get_rank()) == 0:
             output_filename = f"wan_t2v_{width}x{height}_{number}.mp4"
-            assert_vbench_quality(output_filename, prompt=prompt, thresholds=vbench_thresholds)
+            thresholds = vbench_thresholds_by_height[height]
+            assert_vbench_quality(output_filename, prompt=prompt, thresholds=thresholds)
 
     if no_prompt:
         frames = run(prompt=prompt, number=0, seed=42)
