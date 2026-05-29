@@ -43,7 +43,8 @@ inline void llk_math_eltwise_binary_init(
 
     constexpr auto effective_math_fidelity = get_effective_math_fidelity<eltwise_binary_type, math_fidelity>();
 
-    _configure_default_data_format_state_<false /* IMPLIED_MATH_FORMAT */, DST_ACCUM_MODE>(srcA_format, srcB_format);
+    _configure_default_alu_data_format_state_<false /* IMPLIED_MATH_FORMAT */, DST_ACCUM_MODE>(
+        srcA_format, srcB_format);
     if constexpr (src_b_bcast_type == BroadcastType::NONE) {
         _llk_math_eltwise_binary_init_<eltwise_binary_type, effective_math_fidelity, binary_reuse_dest>(
             tensor_shape_A, acc_to_dest);

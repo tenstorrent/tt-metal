@@ -68,7 +68,7 @@ enum class DataFormatConfigSet : std::uint8_t
 {
     UNCONFIGURED          = 0,
     DEFAULT               = 1,
-    MOV_SRC2DST_32BIT_OPS = 2
+    MOV_OPS_EXPLICIT_FMT  = 2
 };
 
 // /**

@@ -152,26 +152,30 @@ inline bool _is_src_fmt_int32_dest_compatible_(const DataFormat src_reg_fmt)
 template <bool EN_IMPLIED_MATH_FORMAT, bool EN_FP32_DEST_FORMAT, bool EN_INT32_DEST_FORMAT>
 inline void _configure_alu_formats_(DataFormat srcA_format, DataFormat srcB_format)
 {
+    TTI_STALLWAIT(p_stall::STALL_CFG, 0, p_stall::WAIT_SFPU, p_stall::MATH);
+
     cfg[DISABLE_IMPLIED_SRCA_FMT_SEC0_Base_ADDR32 + TRISC_ID] = !EN_IMPLIED_MATH_FORMAT;
     cfg[DISABLE_IMPLIED_SRCB_FMT_SEC0_Base_ADDR32 + TRISC_ID] = !EN_IMPLIED_MATH_FORMAT;
 
-    if constexpr (!EN_IMPLIED_MATH_FORMAT)
+    alu_config_u alu_config         = {0};
+    std::uint8_t SRCA_FORMAT_MASKED = masked_data_format(to_underlying(srcA_format));
+    std::uint8_t SRCB_FORMAT_MASKED = masked_data_format(to_underlying(srcB_format));
+
+    alu_config.f.ALU_FORMAT_SPEC_REG_SrcA_val      = SRCA_FORMAT_MASKED;
+    alu_config.f.ALU_FORMAT_SPEC_REG_SrcA_override = !EN_IMPLIED_MATH_FORMAT;
+    alu_config.f.ALU_FORMAT_SPEC_REG_SrcB_val      = SRCB_FORMAT_MASKED;
+    alu_config.f.ALU_FORMAT_SPEC_REG_SrcB_override = !EN_IMPLIED_MATH_FORMAT;
+    alu_config.f.ALU_FORMAT_SPEC_REG0_SrcA         = SRCA_FORMAT_MASKED;
+    alu_config.f.ALU_FORMAT_SPEC_REG1_SrcB         = SRCB_FORMAT_MASKED;
+
+    alu_config.f.ALU_ACC_CTRL_Fp32_enabled      = EN_FP32_DEST_FORMAT;
+    alu_config.f.ALU_ACC_CTRL_SFPU_Fp32_enabled = EN_FP32_DEST_FORMAT;
+    alu_config.f.ALU_ACC_CTRL_INT8_math_enabled = EN_INT32_DEST_FORMAT;
+
+    for (std::uint32_t i = 0; i < NUM_WORDS_ALU_FORMAT; i++)
     {
-        std::uint8_t SRCA_FORMAT_MASKED = masked_data_format(to_underlying(srcA_format));
-        std::uint8_t SRCB_FORMAT_MASKED = masked_data_format(to_underlying(srcB_format));
-
-        cfg_rmw(ALU_FORMAT_SPEC_REG_SrcA_val_RMW, SRCA_FORMAT_MASKED);
-        cfg_rmw(ALU_FORMAT_SPEC_REG_SrcA_override_RMW, 0x1);
-        cfg_rmw(ALU_FORMAT_SPEC_REG_SrcB_val_RMW, SRCB_FORMAT_MASKED);
-        cfg_rmw(ALU_FORMAT_SPEC_REG_SrcB_override_RMW, 0x1);
-
-        cfg_rmw(ALU_FORMAT_SPEC_REG0_SrcA_RMW, SRCA_FORMAT_MASKED);
-        cfg_rmw(ALU_FORMAT_SPEC_REG1_SrcB_RMW, SRCB_FORMAT_MASKED);
+        cfg[ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32 + i] = alu_config.val[i];
     }
-
-    cfg_rmw(ALU_ACC_CTRL_Fp32_enabled_RMW, EN_FP32_DEST_FORMAT);
-    cfg_rmw(ALU_ACC_CTRL_SFPU_Fp32_enabled_RMW, EN_FP32_DEST_FORMAT);
-    cfg_rmw(ALU_ACC_CTRL_INT8_math_enabled_RMW, EN_INT32_DEST_FORMAT);
 }
 
 /**
@@ -185,14 +189,12 @@ inline void _configure_alu_formats_(DataFormat srcA_format, DataFormat srcB_form
  * values = Dataformat enum, ex: <Float16/Float16_b/Tf32/Int8/Int16/UInt8>
  */
 template <bool EN_IMPLIED_MATH_FORMAT, bool EN_32BIT_DEST>
-inline void _configure_default_data_format_state_(DataFormat srcA_format, DataFormat srcB_format)
+inline void _configure_default_alu_data_format_state_(DataFormat srcA_format, DataFormat srcB_format)
 {
     if (data_format_config_set == DataFormatConfigSet::DEFAULT)
     {
         return;
     }
-
-    TTI_STALLWAIT(p_stall::STALL_CFG, 0, p_stall::WAIT_SFPU, p_stall::MATH);
 
     const bool EN_FP32_DEST_FORMAT  = _is_src_fmt_fp32_dest_compatible_(srcA_format) && _is_src_fmt_fp32_dest_compatible_(srcB_format) && EN_32BIT_DEST;
     const bool EN_INT32_DEST_FORMAT = _is_src_fmt_int32_dest_compatible_(srcA_format) && _is_src_fmt_int32_dest_compatible_(srcB_format) && EN_32BIT_DEST;
@@ -213,26 +215,27 @@ inline void _configure_default_data_format_state_(DataFormat srcA_format, DataFo
 }
 
 /**
- * @brief Sets up MOV SRC2DST 32bit ops ALU data format state
- * Used for transpose dest operations when Int32 or Fp32 dest is used.
- * Implied math format is disabled, and Int32 dest requires opposite settings that what is usually set for Int32 dest.
+ * @brief Sets up MOV OPS EXPLICIT FMT ALU data format state
+ * Used for transpose dest operations, which require implied math format to be disabled.
+ * Int32 dest requires opposite settings that what is usually set for Int32 dest.
  * Float32 and Int32 can be set as the srcA and srcB formats.
  * @param srcA_format: Input srcA format, used to set ALU configs
  * values = Dataformat enum, ex: <Float16/Float16_b/Tf32/Float32/Int8/Int16/UInt8/Int32>
  * @param srcB_format: Input srcB format, used to set ALU configs
  * values = Dataformat enum, ex: <Float16/Float16_b/Tf32/Float32/Int8/Int16/UInt8/Int32>
  */
-inline void _configure_mov_src2dst_32bit_ops_data_format_state_(DataFormat srcA_format, DataFormat srcB_format)
+template <bool EN_32BIT_DEST>
+inline void _configure_mov_ops_explicit_alu_data_format_state_(DataFormat srcA_format, DataFormat srcB_format)
 {
-    if (data_format_config_set == DataFormatConfigSet::MOV_SRC2DST_32BIT_OPS)
+    if (data_format_config_set == DataFormatConfigSet::MOV_OPS_EXPLICIT_FMT)
     {
         return;
     }
-    TTI_STALLWAIT(p_stall::STALL_CFG, 0, p_stall::WAIT_SFPU, p_stall::MATH);
 
-    _configure_alu_formats_<false /* EN_IMPLIED_MATH_FORMAT */, true /* EN_FP32_DEST_FORMAT */, false /* EN_INT32_DEST_FORMAT */>(srcA_format, srcB_format);
+    _configure_alu_formats_<false /* EN_IMPLIED_MATH_FORMAT */, EN_32BIT_DEST /* EN_FP32_DEST_FORMAT */, false /* EN_INT32_DEST_FORMAT */>(
+        srcA_format, srcB_format);
 
-    data_format_config_set = DataFormatConfigSet::MOV_SRC2DST_32BIT_OPS;
+    data_format_config_set = DataFormatConfigSet::MOV_OPS_EXPLICIT_FMT;
 }
 
 /**

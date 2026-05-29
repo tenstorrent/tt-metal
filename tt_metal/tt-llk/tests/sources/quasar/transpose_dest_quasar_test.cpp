@@ -129,7 +129,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     if constexpr (!unpack_to_dest)
     {
         // Perform datacopy if not unpack_to_dest
-        _configure_default_data_format_state_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(math_format, math_format);
+        _configure_default_alu_data_format_state_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(math_format, math_format);
         _llk_math_eltwise_unary_datacopy_init_<DATA_COPY_TYPE, is_fp32_dest_acc_en>(
             params.num_faces * params.TEST_FACE_R_DIM /*num_rows_per_matrix*/, 1 /*num_matrices*/);
         for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
@@ -139,17 +139,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     // Perform transpose dest
-    if (is_fp32_dest_acc_en && (pack_src_format == DataFormat::Float32 || pack_src_format == DataFormat::Int32))
-    {
-        // For Int32 dest, transpose dest requires opposite settings that what is usually set for Int32 dest,
-        // also, Int32 and Fp32 transpose dest sets Int32/Fp32 as srcA/B formats,
-        // this is why a non-default data format state is used for Int32 dest.
-        _configure_mov_src2dst_32bit_ops_data_format_state_(math_format, math_format);
-    }
-    else
-    {
-        _configure_default_data_format_state_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(math_format, math_format);
-    }
+    // For Int32 dest, transpose dest requires opposite settings that what is usually set for Int32 dest,
+    // also, Int32 and Fp32 transpose dest sets Int32/Fp32 as srcA/B formats,
+    // all transpose dest operations disable implied math format,
+    // this is why a non-default ALU data format state is used for transpose dest.
+    _configure_mov_ops_explicit_alu_data_format_state_<is_fp32_dest_acc_en>(math_format, math_format);
     _llk_math_transpose_dest_init_<MATH_TRANSPOSE_FACES, is_fp32_dest_acc_en>();
     for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {

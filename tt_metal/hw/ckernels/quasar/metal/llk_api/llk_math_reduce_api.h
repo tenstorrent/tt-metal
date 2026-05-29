@@ -31,7 +31,7 @@ inline void llk_math_reduce_init(const std::uint32_t operandA, const std::uint32
     const DataFormat srcA_format = static_cast<DataFormat>(unpack_dst_format[operandA_id]);
     const DataFormat srcB_format = static_cast<DataFormat>(unpack_dst_format[operandB_id]);
 
-    _configure_default_data_format_state_<false /* IMPLIED_MATH_FORMAT */, EN_32BIT_DEST>(srcA_format, srcB_format);
+    _configure_default_alu_data_format_state_<false /* IMPLIED_MATH_FORMAT */, EN_32BIT_DEST>(srcA_format, srcB_format);
     _llk_math_reduce_init_<pool_type, reduce_dim, math_fidelity>(tensor_shape);
 }
 

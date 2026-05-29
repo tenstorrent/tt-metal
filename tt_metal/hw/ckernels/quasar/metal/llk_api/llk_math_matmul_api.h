@@ -37,7 +37,8 @@ inline void llk_math_matmul_init(
     const DataFormat srcB_format = static_cast<DataFormat>(get_operand_dst_format(operandA_id));
     const DataFormat srcA_format = static_cast<DataFormat>(get_operand_dst_format(operandB_id));
 
-    _configure_default_data_format_state_<false /* IMPLIED_MATH_FORMAT */, DST_ACCUM_MODE>(srcA_format, srcB_format);
+    _configure_default_alu_data_format_state_<false /* IMPLIED_MATH_FORMAT */, DST_ACCUM_MODE>(
+        srcA_format, srcB_format);
     _llk_math_matmul_init_<math_fidelity>(ct_dim, rt_dim);
 }
 
