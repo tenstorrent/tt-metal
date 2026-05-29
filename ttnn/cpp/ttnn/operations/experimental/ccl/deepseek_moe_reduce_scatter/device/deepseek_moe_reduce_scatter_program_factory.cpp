@@ -94,11 +94,10 @@ std::tuple<uint32_t, CoreRangeSet, std::vector<CoreCoord>> get_cores(
     return {clamped_num_links, worker_core_range_set, worker_cores};
 }
 
-// Build a ProgramDescriptor for one coord.  Mirrors the legacy
-// build_deepseek_moe_reduce_scatter_program_artifacts body but emits a
-// descriptor.  Dynamic CBs (input/intermediate slice buffers) are wired up
-// via CBDescriptor::buffer; per-core runtime args carry intermediate /
-// output Buffer* via the framework's Buffer* binding mechanism.
+// Build a ProgramDescriptor for one coord.  Dynamic CBs (input/intermediate
+// slice buffers) are wired up via CBDescriptor::buffer; per-core runtime args
+// carry intermediate / output Buffer* via the framework's Buffer* binding
+// mechanism.
 ProgramDescriptor build_program_descriptor(
     const std::vector<ttnn::Tensor>& input_tensors,
     const std::vector<ttnn::Tensor>& intermediate_slice_tensors,

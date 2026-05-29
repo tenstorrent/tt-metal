@@ -52,11 +52,10 @@ KernelDescriptor::NamedCompileTimeArgs to_named_args(const std::unordered_map<st
     return out;
 }
 
-// Build a ProgramDescriptor for one coord.  Mirrors the legacy create_at body
-// but emits a descriptor.  Sharded CBs (combine output) are wired up via
-// CBDescriptor::buffer.  Per-core runtime args use Buffer* binding for tensor
-// addresses (w0_w1, w2, output, input/indices/scores/mapping, per-expert
-// metadata tensors).
+// Build a ProgramDescriptor for one coord.  Sharded CBs (combine output) are
+// wired up via CBDescriptor::buffer.  Per-core runtime args use Buffer*
+// binding for tensor addresses (w0_w1, w2, output, input/indices/scores/mapping,
+// per-expert metadata tensors).
 tt::tt_metal::ProgramDescriptor build_program_descriptor(
     const ttnn::operations::experimental::moe_gpt::operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinate& mesh_coordinate,

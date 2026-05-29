@@ -32,11 +32,10 @@ namespace ttnn::experimental::prim {
 
 namespace {
 
-// Build the ProgramDescriptor for one coord.  Mirrors the legacy create_at
-// body verbatim, but emits a descriptor instead of mutating a Program.
+// Build the ProgramDescriptor for one coord.
 //
-// Dynamic addresses (input/output buffers) are wired up via Buffer*
-// runtime args so the framework patches them on every dispatch.  The three
+// Dynamic addresses (input/output buffers) are wired up via Buffer* runtime
+// args so the framework patches them on every dispatch.  The three
 // GlobalSemaphores (h, w, barrier) come from operation_attributes; their
 // identity participates in compute_program_hash, so cache hits imply the
 // same semaphore identity and therefore the same address.
@@ -840,7 +839,6 @@ WorkloadDescriptor NeighborPadAsyncMeshWorkloadFactory::create_workload_descript
 
     // Synchronize all devices before dispatching neighbor_pad programs.
     // This ensures all previous fabric-initiated writes (from prior ops) have completed.
-    // Mirrors the legacy create_mesh_workload behaviour.
     auto* mesh_device = tensor_args.input_tensor.device();
     tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, {});
 

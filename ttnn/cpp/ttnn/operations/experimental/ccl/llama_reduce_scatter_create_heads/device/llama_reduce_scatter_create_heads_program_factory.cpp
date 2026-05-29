@@ -260,11 +260,10 @@ CoreRangeSet get_worker_cores(const CoreRangeSet& available_cores, const uint32_
 
 namespace {
 
-// Build the ProgramDescriptor for one coord.  Mirrors the legacy create_at
-// body but emits a descriptor.  Dynamic CBs that point at the input tensor
-// and intermediate packet buffer are wired up via CBDescriptor::buffer.
-// Q/K/V output base addresses are wired up via Buffer* runtime args so the
-// framework patches them on every dispatch.
+// Build the ProgramDescriptor for one coord.  Dynamic CBs that point at the
+// input tensor and intermediate packet buffer are wired up via
+// CBDescriptor::buffer.  Q/K/V output base addresses are wired up via Buffer*
+// runtime args so the framework patches them on every dispatch.
 tt::tt_metal::ProgramDescriptor build_program_descriptor(
     const LlamaReduceScatterCreateHeadsDeviceOperation::operation_attributes_t& operation_attributes,
     const LlamaReduceScatterCreateHeadsDeviceOperation::tensor_args_t& tensor_args,

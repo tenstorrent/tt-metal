@@ -33,13 +33,13 @@ namespace ttnn::experimental::prim {
 
 namespace {
 
-// Build a ProgramDescriptor for one coord.  Mirrors the legacy create_at body
-// but emits a descriptor.  Globally-allocated CBs (input, residual, stats,
-// output) are wired up via CBDescriptor::buffer so the framework patches their
-// addresses on every dispatch.  Local semaphores (mcast, reduce, stats_filled)
-// are program-scoped, reserved via SemaphoreDescriptor slots.  The fabric
-// GlobalSemaphore lives on operation_attributes; its address is re-emitted as
-// a plain uint32_t runtime arg on each dispatch.
+// Build a ProgramDescriptor for one coord.  Globally-allocated CBs (input,
+// residual, stats, output) are wired up via CBDescriptor::buffer so the
+// framework patches their addresses on every dispatch.  Local semaphores
+// (mcast, reduce, stats_filled) are program-scoped, reserved via
+// SemaphoreDescriptor slots.  The fabric GlobalSemaphore lives on
+// operation_attributes; its address is re-emitted as a plain uint32_t runtime
+// arg on each dispatch.
 tt::tt_metal::ProgramDescriptor build_program_descriptor(
     const RMSAllGatherParams& operation_attributes,
     const ttnn::MeshCoordinate& mesh_coord,
