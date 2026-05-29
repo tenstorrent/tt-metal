@@ -403,6 +403,9 @@ def _run_moe_compute_single_card_test(
     output_shard_cores = ttnn.experimental.get_moe_combine_cores(
         mesh_device, output_height_shard_dim, output_width_shard_dim
     )
+    worker_mcast_bbox = ttnn.experimental.get_moe_worker_mcast_bounding_box(
+        mesh_device, output_height_shard_dim, output_width_shard_dim, hidden_size, bh_ring_size or 12
+    )
 
     base_pcc_threshold = _get_base_pcc_threshold(activation_type, has_bias)
 
@@ -421,6 +424,7 @@ def _run_moe_compute_single_card_test(
         num_devices,
         per_expert_total_tokens_output_tensor,
         expert_token_counts,
+        worker_mcast_bbox,
     )
 
     activation_all_passed = validate_activation(
