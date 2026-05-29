@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-29T00:11:46Z",
-  "updated_at": "2026-05-29T04:48:41Z",
+  "updated_at": "2026-05-29T04:54:46Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -815,8 +815,15 @@
         "speedup": 1.539
       },
       "real_weights": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/weight_loader.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_real_hf_weights.py"
+        ],
+        "notes": "Real lm_head.weight [151936,1536] (untied, tie_word_embeddings=false), no bias; HF key lm_head.weight loaded in native [vocab,hidden] layout (block transposes internally). bf8 weight storage (optimization tick) holds on real weights: PCC 0.9999692 vs HF F.linear (cf seed-0 bf8 0.99997). params_loaded=233,373,696. Guard ok (lint=0).",
+        "pcc": 0.9999692180810094,
+        "params_loaded": 233373696
       }
     },
     {
@@ -1219,6 +1226,12 @@
       "tick": 47,
       "ts": "2026-05-29T04:48:41Z",
       "action": "device[decoder_layer]",
+      "result": "ok"
+    },
+    {
+      "tick": 48,
+      "ts": "2026-05-29T04:54:46Z",
+      "action": "device[lm_head]",
       "result": "ok"
     }
   ],

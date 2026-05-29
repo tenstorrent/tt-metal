@@ -263,6 +263,34 @@ def load_embedding_weight(checkpoint_path: str, hf_key: str = "model.embed_token
     return tensors[hf_key]
 
 
+def load_lm_head_weight(checkpoint_path: str, hf_key: str = "lm_head.weight") -> torch.Tensor:
+    """Load the real LM head projection weight [vocab_size, hidden_size].
+
+    The dots.ocr language model (a Qwen2 trunk) unties its output projection
+    from the input embedding (config.tie_word_embeddings = false), so the LM
+    head is its OWN parameter ``lm_head.weight`` -- shape [151936, 1536]
+    (vocab_size x hidden_size), no bias -- distinct from
+    ``model.embed_tokens.weight``.
+
+    Returned in the native HF layout [vocab_size, hidden_size]: this matches
+    both the eager reference :func:`reference.functional.lm_head_forward`
+    (``F.linear(x, weight)`` expects [out, in]) and :class:`tt.lm_head.TtLMHead`,
+    which transposes to [hidden, vocab] internally for ttnn.linear. The loader
+    does NOT transpose -- doing so here would double-transpose against the
+    block's own transpose (mirrors ``load_embedding_weight``'s native-layout
+    convention).
+
+    Args:
+        checkpoint_path: HF snapshot dir.
+        hf_key: which projection to pull (default the untied LM head).
+
+    Returns:
+        torch.Tensor of shape [vocab_size, hidden_size] (fp32).
+    """
+    tensors = load_hf_tensors(checkpoint_path, [hf_key])
+    return tensors[hf_key]
+
+
 def load_lm_rmsnorm_weight(checkpoint_path: str, hf_key: str = "model.layers.0.input_layernorm.weight") -> torch.Tensor:
     """Load a single real LM RMSNorm gamma weight [hidden_size].
 

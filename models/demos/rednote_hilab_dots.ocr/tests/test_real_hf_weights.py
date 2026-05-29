@@ -55,6 +55,7 @@ _tt_rope = _load_by_path("dots_tt_rope_rw", "rope.py", _TT_DIR)
 _tt_attention = _load_by_path("dots_tt_attention_rw", "attention.py", _TT_DIR)
 _tt_mlp = _load_by_path("dots_tt_mlp_rw", "mlp.py", _TT_DIR)
 _tt_decoder_layer = _load_by_path("dots_tt_decoder_layer_rw", "decoder_layer.py", _TT_DIR)
+_tt_lm_head = _load_by_path("dots_tt_lm_head_rw", "lm_head.py", _TT_DIR)
 _loader = _load_by_path("dots_weight_loader", "weight_loader.py", _TT_DIR)
 _functional = _load_by_path("dots_reference_functional_rw", "functional.py", _REF_DIR)
 
@@ -70,6 +71,8 @@ TtRoPE = _tt_rope.TtRoPE
 TtAttention = _tt_attention.TtAttention
 TtMLP = _tt_mlp.TtMLP
 TtDecoderLayer = _tt_decoder_layer.TtDecoderLayer
+TtLMHead = _tt_lm_head.TtLMHead
+load_lm_head_weight = _loader.load_lm_head_weight
 load_lm_rope_config = _loader.load_lm_rope_config
 load_lm_decoder_layer_weights = _loader.load_lm_decoder_layer_weights
 load_lm_attention_weights = _loader.load_lm_attention_weights
@@ -94,6 +97,7 @@ attention_forward = _functional.attention_forward
 mlp_forward = _functional.mlp_forward
 rope_forward = _functional.rope_forward
 decoder_layer_forward = _functional.decoder_layer_forward
+lm_head_forward = _functional.lm_head_forward
 
 # Vision attention config (modeling_dots_vision): 12 heads, head_dim 128,
 # fused QKV no-bias, 2D RoPE theta 1e4, block-diagonal bidirectional attention.
@@ -1041,6 +1045,62 @@ def test_real_hf_weights_decoder_layer(device):
     assert params_loaded > 0
 
 
+# LM head (untied output projection): the real lm_head.weight
+# [vocab_size 151936, hidden_size 1536], no bias. Untied from the input
+# embedding (config.tie_word_embeddings = false). TtLMHead stores the weight as
+# bfloat8_b (an optimization-phase win: the wide 1536 -> 151936 matmul is
+# DRAM-bandwidth-bound on the weight read, so bf8 halves the read). bf8 on real
+# weights is slightly lossier than bf16 but should still hold PCC > 0.99 (the
+# seed-0 bf8 PCC was 0.99997); the logits feed an argmax downstream where the
+# small numerical change does not flip the top token.
+LM_HEAD_HF_KEY = "lm_head.weight"
+
+
+def _run_lm_head_pcc(device):
+    """Load the real LM head projection, run TtLMHead (bf8 weight) on device,
+    and compare against the HF PyTorch reference (lm_head_forward, F.linear) with
+    the SAME real weight.
+
+    Returns (pcc, params_loaded).
+    """
+    weight = load_lm_head_weight(CHECKPOINT_PATH, LM_HEAD_HF_KEY).to(torch.float32)
+    params_loaded = int(weight.numel())
+    assert weight.shape == (VOCAB_SIZE, EMBED_DIM), tuple(weight.shape)
+
+    torch.manual_seed(0)
+    batch, seq_len = 1, 128
+    torch_input = torch.randn(batch, seq_len, EMBED_DIM, dtype=torch.float32)
+
+    # HF reference (bare Linear, no bias) with the REAL lm_head weight.
+    ref_output = lm_head_forward(torch_input, weight)  # [1, 128, 151936]
+
+    flat_input = torch_input.reshape(-1, EMBED_DIM)  # [seq, hidden]
+    tt_lm_head = TtLMHead(device=device, weight=weight)
+    tt_input = ttnn.from_torch(
+        flat_input,
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_output = tt_lm_head(tt_input)
+    tt_output_torch = ttnn.to_torch(tt_output).to(torch.float32).reshape(ref_output.shape)
+
+    passing, pcc_message = comp_pcc(ref_output, tt_output_torch, 0.99)
+    print(comp_allclose(ref_output, tt_output_torch))
+    print(f"comp_pcc(lm_head, real weights): passing={passing}, message={pcc_message}")
+    msg = str(pcc_message)
+    pcc = float(msg.split("PCC:")[-1].strip()) if "PCC:" in msg else float(pcc_message)
+    print(f"real-weights lm_head PCC = {pcc} | params_loaded = {params_loaded}")
+    assert passing, f"lm_head real-weights PCC below 0.99: {pcc_message}"
+    return pcc, params_loaded
+
+
+def test_real_hf_weights_lm_head(device):
+    pcc, params_loaded = _run_lm_head_pcc(device)
+    assert params_loaded > 0
+
+
 if __name__ == "__main__":
     dev = ttnn.open_device(device_id=0, l1_small_size=32768)
     try:
@@ -1056,5 +1116,6 @@ if __name__ == "__main__":
         _run_lm_attention_pcc(dev)
         _run_lm_mlp_pcc(dev)
         _run_lm_decoder_layer_pcc(dev)
+        _run_lm_head_pcc(dev)
     finally:
         ttnn.close_device(dev)

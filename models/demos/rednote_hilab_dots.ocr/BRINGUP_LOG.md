@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** p150 (blackhole)
 **Started:** 2026-05-29T00:11:46Z
-**Updated:** 2026-05-29T04:48:41Z
+**Updated:** 2026-05-29T04:54:46Z
 
 ## Block Status
 
@@ -79,7 +79,7 @@
 | lm_head | ttnn | done | 0.999996 | 0 | untied Linear hidden 1536 -> vocab 151936, no bias; HF weight [vocab,hidden] transposed on host. ttnn.linear HiFi4+fp32_dest_acc bf16 DRAM weight. Matches lm_head_forward (bare linear, no final norm). PCC=0.9999958 vs golden. Guard ok. |
 | lm_head | debug | n/a | — | 0 |  |
 | lm_head | optimization | done | 0.999973 | 0 | bf8_b weight: wide 1536->151936 matmul DRAM-bw-bound on weight read; bf8 halves weight footprint. Traced 1463.05->950.57 us (-35%), 129 cores, PCC 0.99997 (vs 0.99996 bf16). top_hotspot MatmulDeviceOperation 100%. |
-| lm_head | real_weights | pending | — | 0 |  |
+| lm_head | real_weights | done | 0.999969 | 0 | Real lm_head.weight [151936,1536] (untied, tie_word_embeddings=false), no bias; HF key lm_head.weight loaded in native [vocab,hidden] layout (block transposes internally). bf8 weight storage (optimization tick) holds on real weights: PCC 0.9999692 vs HF F.linear (cf seed-0 bf8 0.99997). params_loaded=233,373,696. Guard ok (lint=0). |
 | language_model | reference | done | 1.000000 | 0 | Full Qwen2ForCausalLM tested at REDUCED 2 layers (full=28), seq 64: embed -> 2x decoder_layer -> final RMSNorm -> lm_head. PCC=1.0 vs HF. Full 28-layer check deferred to real_weights. |
 | language_model | ttnn | done | 0.999911 | 0 | Full Qwen2ForCausalLM assembly at REDUCED 2 layers (full=28), seq 64. Composes verified TtEmbedding -> 2x TtDecoderLayer (GQA 12/2, QKV bias, 1D RoPE theta 1e6, causal) -> final TtRMSNorm (eps 1e-6, applied here before lm_head) -> TtLMHead (untied hidden->vocab no bias) by file-path import. Shared cos/sin + causal mask precomputed on host, threaded through layers. HiFi4+fp32_dest_acc bf16 DRAM TILE. PCC=0.99991 vs golden on p150. Guard ok. |
 | language_model | debug | n/a | — | 0 |  |
@@ -94,7 +94,6 @@
 
 ## Recent Ticks
 
-- tick 38 (2026-05-29T03:53:12Z): device[vision_mlp] — ok
 - tick 39 (2026-05-29T03:58:28Z): device[vision_block] — ok
 - tick 40 (2026-05-29T04:04:31Z): device[vision_patch_merger] — ok
 - tick 41 (2026-05-29T04:10:59Z): device[vision_tower] — ok
@@ -104,6 +103,7 @@
 - tick 45 (2026-05-29T04:36:25Z): device[attention] — ok
 - tick 46 (2026-05-29T04:42:31Z): device[mlp] — ok
 - tick 47 (2026-05-29T04:48:41Z): device[decoder_layer] — ok
+- tick 48 (2026-05-29T04:54:46Z): device[lm_head] — ok
 
 ## Host-Resident Exceptions
 
