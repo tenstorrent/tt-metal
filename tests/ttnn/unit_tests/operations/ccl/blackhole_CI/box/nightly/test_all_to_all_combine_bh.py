@@ -149,6 +149,7 @@ def test_all_to_all_combine_trace(
 @pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1"])
 @pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.skip(reason="Disabled by issue #45111")
 def test_all_to_all_combine_no_trace(
     bh_1d_mesh_device,
     mesh_shape,

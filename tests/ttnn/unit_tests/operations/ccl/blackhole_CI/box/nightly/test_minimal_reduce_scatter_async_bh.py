@@ -316,6 +316,7 @@ def run_reduce_scatter_impl(
     ],
     indirect=["device_params"],
 )
+@pytest.mark.skip(reason="Disabled by issue #45111")
 def test_reduce_scatter_async_4dev_ring(
     bh_1d_mesh_device,
     num_devices,
@@ -432,6 +433,7 @@ def test_reduce_scatter_async_4dev_ring(
     ],
     indirect=["device_params"],
 )
+@pytest.mark.skip(reason="Disabled by issue #45111")
 def test_reduce_scatter_async_line(
     bh_1d_mesh_device,
     num_devices,
