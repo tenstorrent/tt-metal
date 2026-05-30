@@ -17,7 +17,6 @@ from ...layers.linear import ColParallelLinear, Linear, RowParallelLinear, prepa
 from ...layers.module import Module, ModuleList
 from ...layers.normalization import DistributedLayerNorm
 from ...utils.substate import rename_substate
-from ...utils.tracing import traced_function
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -322,7 +321,7 @@ class Flux2Transformer(Module):
     # We do not shard the last dimension of spatial, because its dimension is less than the tile
     # size for a device count of four and more. This requires padding, which is not currently
     # supported by `reduce_scatter_minimal_async`.
-    @traced_function(device=lambda self: self.device, clone_prep_inputs=False)
+    # @traced_function(device=lambda self: self.device, clone_prep_inputs=False)
     def forward(
         self,
         spatial: ttnn.Tensor,
