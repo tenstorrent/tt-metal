@@ -309,6 +309,38 @@ std::vector<std::pair<uint32_t, uint32_t>> get_mgd_instance_torus_edges(
     return compute_torus_wraparound_edges(dims, ring_dims);
 }
 
+void apply_torus_edges_to_adjacency_map(
+    AdjacencyGraph<uint32_t>::AdjacencyMap& adj_map, const std::vector<std::pair<uint32_t, uint32_t>>& torus_edges) {
+    for (const auto& [a, b] : torus_edges) {
+        if (a == b) {
+            continue;
+        }
+        auto& neighbors_a = adj_map[a];
+        if (std::find(neighbors_a.begin(), neighbors_a.end(), b) == neighbors_a.end()) {
+            neighbors_a.push_back(b);
+        }
+        auto& neighbors_b = adj_map[b];
+        if (std::find(neighbors_b.begin(), neighbors_b.end(), a) == neighbors_b.end()) {
+            neighbors_b.push_back(a);
+        }
+    }
+}
+
+// Return a copy of an MGD grouping whose adjacency graph includes torus wrap-around edges. Edge endpoints are already
+// in MGD node ids (same numbering as build_mgd_mesh_instance_adjacency / build_mgd_switch_instance_adjacency).
+GroupingInfo add_torus_edges_to_mgd_grouping(
+    const GroupingInfo& mgd_grouping, const std::vector<std::pair<uint32_t, uint32_t>>& mgd_torus_edges) {
+    GroupingInfo augmented = mgd_grouping;
+    if (mgd_torus_edges.empty()) {
+        return augmented;
+    }
+
+    AdjacencyGraph<uint32_t>::AdjacencyMap adj_map = mgd_grouping.adjacency_graph.get_adjacency_map();
+    apply_torus_edges_to_adjacency_map(adj_map, mgd_torus_edges);
+    augmented.adjacency_graph = AdjacencyGraph<uint32_t>(adj_map);
+    return augmented;
+}
+
 // Return a copy of `grouping` whose adjacency graph has the MGD torus wrap-around edges layered in.
 // `mgd_torus_edges` are expressed in MGD node ids; we re-derive the MGD->PGD embedding (matching the topology
 // solve used during matching) and translate each torus edge into the grouping's node space before adding it.
@@ -329,28 +361,19 @@ GroupingInfo add_torus_edges_to_grouping(
         return augmented;
     }
 
-    AdjacencyGraph<uint32_t>::AdjacencyMap adj_map = grouping.adjacency_graph.get_adjacency_map();
+    std::vector<std::pair<uint32_t, uint32_t>> translated_edges;
+    translated_edges.reserve(mgd_torus_edges.size());
     for (const auto& [mgd_a, mgd_b] : mgd_torus_edges) {
         auto it_a = mapping_result.target_to_global.find(mgd_a);
         auto it_b = mapping_result.target_to_global.find(mgd_b);
         if (it_a == mapping_result.target_to_global.end() || it_b == mapping_result.target_to_global.end()) {
             continue;
         }
-        uint32_t pgd_a = it_a->second;
-        uint32_t pgd_b = it_b->second;
-        if (pgd_a == pgd_b) {
-            continue;
-        }
-        auto& neighbors_a = adj_map[pgd_a];
-        if (std::find(neighbors_a.begin(), neighbors_a.end(), pgd_b) == neighbors_a.end()) {
-            neighbors_a.push_back(pgd_b);
-        }
-        auto& neighbors_b = adj_map[pgd_b];
-        if (std::find(neighbors_b.begin(), neighbors_b.end(), pgd_a) == neighbors_b.end()) {
-            neighbors_b.push_back(pgd_a);
-        }
+        translated_edges.emplace_back(it_a->second, it_b->second);
     }
 
+    AdjacencyGraph<uint32_t>::AdjacencyMap adj_map = grouping.adjacency_graph.get_adjacency_map();
+    apply_torus_edges_to_adjacency_map(adj_map, translated_edges);
     augmented.adjacency_graph = AdjacencyGraph<uint32_t>(adj_map);
     return augmented;
 }
@@ -995,7 +1018,12 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
         if (!committed_pgd_matches) {
             // No PGD grouping both matched MGD and placed on PSD — use the MGD grouping info itself
             log_info(tt::LogFabric, "Using MGD mesh grouping for {} (no PSD-viable PGD match)", mgd_grouping_info.name);
-            result[instance_type][instance_name].push_back(mgd_grouping_info);
+            if (!mgd_torus_edges.empty()) {
+                result[instance_type][instance_name].push_back(
+                    add_torus_edges_to_mgd_grouping(mgd_grouping_info, mgd_torus_edges));
+            } else {
+                result[instance_type][instance_name].push_back(mgd_grouping_info);
+            }
         }
     }
 
@@ -1218,7 +1246,7 @@ MappingResult<uint32_t, AsicID> solve_for_one_grouping_to_psd(
         grouping_info, physical_graph, physical_system_descriptor, constraints);
 
     return solve_topology_mapping(
-        grouping_info.adjacency_graph, physical_graph, constraints, ConnectionValidationMode::RELAXED, true);
+        grouping_info.adjacency_graph, physical_graph, constraints, ConnectionValidationMode::STRICT, true);
 }
 
 bool is_flattened(const GroupingInfo& grouping) {
