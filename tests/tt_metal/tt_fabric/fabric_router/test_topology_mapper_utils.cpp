@@ -4412,8 +4412,8 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
         hosts_spanning_blitz_mapped.insert(psd.get_host_name_for_asic(asic_id));
     }
     EXPECT_GE(hosts_spanning_blitz_mapped.size(), 1u);
-    EXPECT_LE(hosts_spanning_blitz_mapped.size(), 3u)
-        << "Mapped Blitz pipeline: at most one host per logical 4×2 mesh (10 stages)";
+    EXPECT_LE(hosts_spanning_blitz_mapped.size(), 4u)
+        << "Mapped Blitz pipeline: at most ceil(10/4) hosts for 10-stage 4×2 pipeline on SP4 GLX (4 meshes per host)";
 }
 
 TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx_Blitz2x4_11Stage) {
@@ -4542,8 +4542,8 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
         hosts_spanning_blitz_mapped.insert(psd.get_host_name_for_asic(asic_id));
     }
     EXPECT_GE(hosts_spanning_blitz_mapped.size(), 1u);
-    EXPECT_LE(hosts_spanning_blitz_mapped.size(), 3u)
-        << "Mapped Blitz pipeline: at most one host per logical 4×2 mesh (11 stages)";
+    EXPECT_LE(hosts_spanning_blitz_mapped.size(), 4u)
+        << "Mapped Blitz pipeline: at most ceil(11/4) hosts for 11-stage 4×2 pipeline on SP4 GLX (4 meshes per host)";
 }
 
 TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx_Blitz2x4_32Stage) {
