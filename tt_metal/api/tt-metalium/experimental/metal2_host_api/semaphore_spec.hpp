@@ -14,20 +14,28 @@
 
 namespace tt::tt_metal::experimental::metal2_host_api {
 
-// A name identifying a SemaphoreSpec within a ProgramSpec.
-using SemaphoreSpecName = std::string;
-
+// ============================================================================
+//  SemaphoreSpec API
+// ============================================================================
+//
 // A SemaphoreSpec is a descriptor for a Tenstorrent semaphore,
 // which can be used for inter-kernel instance synchronization.
 //
-// Instancing: One SRAM ("L1") cell per node in the set of target_nodes.
+// INSTANCING: One SRAM ("L1") cell per node in the set of target_nodes.
 //
-// Placement: Specified directly via target_nodes. Unlike DFBs, semaphores are remote
-// resources for kernels. Placement cannot be inferred from kernel bindings.
+// PLACEMENT: Specified directly via target_nodes. Unlike DFBs, semaphores are
+//   remote resources for kernels. Placement cannot be inferred from kernel
+//   bindings.
 //
-// Binding scope: Any kernel can bind to any semaphore in the ProgramSpec, regardless of
-// location. Any kernel instance can signal or wait on any semaphore instance.
+// BINDING SCOPE: Any kernel can bind to any semaphore in the ProgramSpec,
+//   regardless of location. Any kernel instance can signal or wait on any
+//   semaphore instance.
 //
+// ============================================================================
+
+// A name identifying a SemaphoreSpec within a ProgramSpec.
+using SemaphoreSpecName = std::string;
+
 struct SemaphoreSpec {
     // Semaphore identifier: used to reference this Semaphore within the ProgramSpec
     SemaphoreSpecName unique_id;

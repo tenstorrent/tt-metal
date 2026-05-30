@@ -21,31 +21,42 @@
 
 namespace tt::tt_metal::experimental::metal2_host_api {
 
-// A name identifying a KernelSpec within a ProgramSpec.
-using KernelSpecName = std::string;
-
-// A KernelSpec is a descriptor for a Tenstorrent kernel:
-// A single computational task compiled into one or more executable files that work
-// collaboratively on a single node.
+// ============================================================================
+//  KernelSpec API
+// ============================================================================
 //
-// The KernelSpec describes the properties of a compute or data movement kernel:
+// A KernelSpec is a descriptor for a Tenstorrent kernel:
+//   A single computational task compiled into one or more executable files that work
+//   collaboratively on a single node.
+//
+// The KernelSpec describes all the properties of a compute or data movement kernel:
 //  - Source code
-//  - Compiler options for generating the kernel binary/binaries
+//  - Compiler options for generating the kernel binary(ies)
 //  - Resource bindings (access to DFBs, semaphores, etc.)
 //  - Kernel argument schema (for arguments specified when the Program is enqueued)
 //  - Kernel argument bindings (for compile-time constant arguments)
 //  - The configuration of any hardware resources controlled by the kernel
 //
-// Specialization: A single kernel source may be represented by multiple KernelSpecs in
-// the same ProgramSpec — for example with different CTA bindings, different DFB endpoint
-// bindings, different semaphore bindings, etc. Each KernelSpec compiles independently
-// and is placed independently via WorkUnitSpec membership.
+// SPECIALIZATION: A single kernel source may be represented by multiple KernelSpecs
+//   in the same ProgramSpec — for example with different CTA bindings, different DFB
+//   endpoint bindings, different semaphore bindings, etc. Each KernelSpec compiles
+//   independently and is placed independently, via its WorkUnitSpec membership.
 //
-// Instancing: A KernelSpec is a *per-node template*. At runtime, one independent
-// instance runs on each node where the kernel is placed, with its own runtime arguments.
+// INSTANCING: At runtime, one independent kernel instance runs on each device node
+//   where the kernel is placed.  Each node's kernel instance is passed its own
+//   instance-specific runtime arguments.
 //
-// Placement: The nodes the kernel runs on is derived from WorkUnitSpec membership.
+// PLACEMENT: The nodes the kernel runs on is derived from WorkUnitSpec membership.
 //
+// ============================================================================
+
+// A name identifying a KernelSpec within a ProgramSpec.
+using KernelSpecName = std::string;
+
+//------------------------------------------------
+// KernelSpec
+//------------------------------------------------
+
 struct KernelSpec {
     ///////////////////////////////////////////////////////////////////
     // Basic kernel info
@@ -129,8 +140,11 @@ struct KernelSpec {
     };
     std::vector<TensorBinding> tensor_bindings;
 
-    // TODO -- GlobalSemaphore bindings
-    // TODO -- GlobalDataflowBuffer bindings
+    // Additional resource binding types:
+    //  - Scratchpad bindings (Program-local memory resource)
+    //  - Buffer bindings (User-managed memory resource)
+    //  - GlobalSemaphore bindings (User-managed resource)
+    //  - GlobalDataflowBuffer bindings (User-managed resource)
 
     //////////////////////////////////////////////////////////////////////////////
     // Kernel arguments
@@ -146,13 +160,10 @@ struct KernelSpec {
     //----------------------------------------------------------------------------
     // Runtime argument schema (declaration)
 
-    // Schema for the named runtime arguments declared by this kernel.
-    // (The VALUES of these arguments are set as ProgramRunArgs.)
-    //
-    // Named runtime args: referenced by name in kernel code via `args::<name>`.
-    // (Currently, only uint32_t type is supported.)
-    //
-    // For vararg-style positional arguments, see KernelAdvancedOptions.
+    // Schema (names) for the runtime arguments declared by this kernel.
+    // (The values of these arguments are set as ProgramRunArgs.)
+    // Currently, only arguments of uint32_t are supported.
+
     struct RuntimeArgSchema {
         // Runtime argument names (must be unique, valid C++ identifiers.)
         std::vector<std::string> runtime_arg_names;
@@ -161,6 +172,8 @@ struct KernelSpec {
         std::vector<std::string> common_runtime_arg_names;
     };
     RuntimeArgSchema runtime_arg_schema{};
+
+    // For vararg-style positional arguments, see KernelAdvancedOptions.
 
     //////////////////////////////////////////////////////////////////////////////
     // Kernel-controlled hardware resource configuration
@@ -173,15 +186,19 @@ struct KernelSpec {
     KernelAdvancedOptions advanced_options;
 };
 
-// Convenience aliases (lift commonly-used nested enums to namespace level)
+//------------------------------------------------
+// Convenience aliases
+//------------------------------------------------
+
+// These aliases lift commonly-used nested enums to the namespace level
 using DFBEndpointType = KernelSpec::DFBBinding::EndpointType;
 using DFBAccessPattern = KernelSpec::DFBBinding::AccessPattern;
 
-//////////////////////////////////////////////////////////////////////////////
+//------------------------------------------------
 // Convenience factories for DFBBinding
-//////////////////////////////////////////////////////////////////////////////
+//------------------------------------------------
 
-// Ergonomic alternatives to writing a designated-init DFBBinding{...}
+// Ergonomic alternatives to writing a designated-initializer DFBBinding{...}
 
 // Creates a DFB producer binding with a STRIDED access pattern
 // (All DFB producers are STRIDED)

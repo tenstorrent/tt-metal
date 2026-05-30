@@ -20,11 +20,26 @@
 
 namespace tt::tt_metal::experimental::metal2_host_api {
 
+// ============================================================================
+//  ProgramRunArgs API
+// ============================================================================
+//
+// A ProgramRunArgs object is a descriptor for the mutable properties of a
+// Metalium Program, which can be specified anew with each Program execution
+// (enqueue).
+//
+// ProgramRunArgs is the partner object to ProgramSpec, which describes the
+// immutable properties of a Program. A ProgramRunArgs object can only be
+// understood in the context of its corresponding ProgramSpec (program_spec.hpp).
+// The ProgramSpec provides the schema for the mutable Program properties; the
+// ProgramRunArgs provides the values.
+//
+// ============================================================================
+
 //------------------------------------------------
 // ProgramRunArgs
 //------------------------------------------------
-// Describes the mutable properties of a Program, specified anew for each Program execution.
-//   (analogous to function arguments)
+
 struct ProgramRunArgs {
     ////////////////////////////////////////////////////////////////////////
     // Kernel runtime arguments
@@ -96,22 +111,20 @@ struct ProgramRunArgs {
 //------------------------------------------------
 // ProgramRunArgsView (for advanced users)
 //------------------------------------------------
+//
+// NOTE: ProgramRunArgsView is not yet supported! It is included here as a sketch only.
+//
 // Non-owning view into a Program's command buffers.
 // Enables in-place modification of mutable Program parameters.
-// (WIP -- this is a sketch only)
 //
-// STATEFULNESS: Program command buffers are stateful. Parameters retain their previous value unless modified.
-// (Q: How does this work for back-to-back enqueues?)
-// (A: TBD. There is definitely foot-shooting potential if you overwrite parameters for a previous enqueue...
-//     This API is "unsafe", intended for advanced users who will synchronize correctly.)
+// STATEFULNESS: Program command buffers are stateful.
+//   Parameters retain their previously specified value unless modified.
 //
 // LIFETIME: This view is valid for the lifetime of the Program.
-// Accessing the view after the Program is destroyed is undefined behavior.
+//   Accessing the view after the Program is destroyed is undefined behavior.
 //
 // THREAD SAFETY: Modifications through this view are not synchronized;
-// the caller must ensure exclusive access when modifying.
-//
-// TODO: This will need rethinking for typed runtime arguments.
+//   the caller must ensure exclusive access when modifying.
 //
 struct ProgramRunArgsView {
     struct KernelRunArgsView {

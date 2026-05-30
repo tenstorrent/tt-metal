@@ -12,13 +12,9 @@
 
 namespace tt::tt_metal::experimental::metal2_host_api {
 
-// Forward-declare *Name typedefs that AdvancedOptions members reference.
-// (Each is also declared in its owning spec header.)
-using DFBSpecName = std::string;
-
-//------------------------------------------------------------
+// ============================================================================
 // Advanced options for Metal 2.0 specs
-//------------------------------------------------------------
+// ============================================================================
 //
 // Each Metal 2.0 Spec (KernelSpec, DataflowBufferSpec, TensorParameter, ...) may
 // carry a *AdvancedOptions field at the end of its struct.
@@ -34,6 +30,12 @@ using DFBSpecName = std::string;
 //
 // Use the advanced options with caution!
 // The header comments for each field describe special considerations for use.
+//
+// ============================================================================
+
+// Forward-declare *Name typedefs that AdvancedOptions members reference.
+// (Each is also declared in its owning spec header.)
+using DFBSpecName = std::string;
 
 struct KernelAdvancedOptions {
     ////////////////////////////////////////////////////////////////////////////////

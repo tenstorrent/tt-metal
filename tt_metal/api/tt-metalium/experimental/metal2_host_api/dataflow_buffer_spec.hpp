@@ -17,13 +17,12 @@
 #include <tt-metalium/tt_backend_api_types.hpp>  // tt::DataFormat
 
 // ============================================================================
-// DataflowBufferSpec — descriptor for a Dataflow Buffer (DFB)
+//  DataflowBufferSpec API
 // ============================================================================
 //
-// A DataflowBufferSpec (DFB) is a software FIFO for sharing data between a
-// producer kernel and a consumer kernel. "DFB" is used freely throughout the
-// Metal 2.0 API as the canonical abbreviation for DataflowBuffer once
-// introduced here.
+// A DataflowBufferSpec is a descriptor for a Dataflow Buffer (DFB).
+// A dataflow buffer is a software FIFO for sharing data between a producer kernel
+// and a consumer kernel. (The "DFB" abbreviation is used throughout the API.)
 //
 // A DFB has the following properties:
 //  - Entry size
@@ -32,31 +31,41 @@
 //  - (Additional advanced options)
 //
 // A DFB's endpoint configuration is specified at the DFB binding site in
-// KernelSpec, not here. (Producer/consumer kernel identity, threads, and
-// access patterns.)
+// KernelSpec, not here. (The endpoint configuration encodes producer/consumer
+// kernel identity, number of kernel threads, and multi-threaded access patterns.)
 //
-// Invariant: A local DFB has exactly one producer kernel and one consumer
-// kernel. Both must share identical WorkUnitSpec membership.
-// (For cross-node communication, use RemoteDataflowBufferSpec.)
+// INVARIANT: At each node, a local DFB has exactly one producer kernel instance
+//   and exactly one consumer kernel instance. Multiple PRODUCER KernelSpecs (and
+//   multiple CONSUMER KernelSpecs) may bind the same DFB, provided they have
+//   non-overlapping node coverage and perfectly matching binding-site parameters
+//   (access_pattern, num_threads).
 //
-// Instancing: Like KernelSpec, a DataflowBufferSpec is a *per-node template*.
-// One independent DFB instance is allocated per node where its endpoint
-// kernels run, in that node's local SRAM. That instance serves the same-node
-// producer and consumer kernel instances.
+// INSTANCING: Like KernelSpec, a DataflowBufferSpec is a *per-node template*.
+//   One independent DFB instance is allocated per node where its endpoint
+//   kernels run, in that node's local SRAM. That instance serves the same-node
+//   producer and consumer kernel instances.
 //
-// Placement: Derived — the DFB's effective node set is the union of its bound
-// kernels' WorkUnitSpec target_nodes.
+// PLACEMENT: Derived — the DFB's effective node set is the union of its bound
+//   kernels' WorkUnitSpec target_nodes.
 //
-// Gen2 note: On Gen2 architectures, DFB hardware resource consumption depends
-// on its bindings (access pattern, endpoint roles), not purely on this spec.
-// The DataflowBufferSpec alone does not determine resource footprint;
-// resource sufficiency is validated at solver time (currently at Program
-// enqueue), not at Spec construction. (Slated to move earlier.)
+// HW RESOURCES: Gen1 architectures (Wormhole and Blackhole) support a fixed
+//   number of DFBs per node. On Gen2, the DFB-per-node-limit depends on the
+//   resident DFBs' endpoint configurations, as the DFB hardware resource footprint
+//   varies with endpoint configuration.
+//   The DFB's backing storage is allocated in SRAM ("L1"). The allocation
+//   lifetime is Program-scope, and is allocated anew with every execution of
+//   the Program.
+//
+// ============================================================================
 
 namespace tt::tt_metal::experimental::metal2_host_api {
 
 // A name identifying a DataflowBufferSpec within a ProgramSpec.
 using DFBSpecName = std::string;
+
+//------------------------------------------------
+// DataflowBufferSpec
+//------------------------------------------------
 
 struct DataflowBufferSpec {
     // DFB identifier: used to reference this DFB within the ProgramSpec
@@ -71,10 +80,13 @@ struct DataflowBufferSpec {
     // Entry format metadata
     ////////////////////////////////////
 
-    // Required for DFBs bound to compute kernels; optional for DM-only DFBs
+    // The fields in this section are used to convey DFB entry format metadata to the LLK APIs.
+    // (They need only be considered for DFBs that are bound to a compute kernel.)
+
+    // The data format is required for any DFB bound to a compute kernel
     std::optional<tt::DataFormat> data_format_metadata = std::nullopt;
 
-    // Optional; used to pass tile type info from host to kernel
+    // Optional; if unspecified, the default tile format (32x32) is assumed
     std::optional<tt::tt_metal::Tile> tile_format_metadata = std::nullopt;
 
     //////////////////////////////
@@ -103,6 +115,10 @@ struct DataflowBufferSpec {
     DFBAdvancedOptions advanced_options;
 };
 
+//------------------------------------------------
+// RemoteDataflowBufferSpec
+//------------------------------------------------
+
 // NOTE: Remote DataflowBuffer is not yet supported!
 //       A sketch is included in the experimental Metal 2.0 APIs for visibility.
 //
@@ -116,17 +132,17 @@ struct DataflowBufferSpec {
 // producer-consumer node mapping.
 //
 // TBD: Much about remote DFBs is still TBD! Everything below this line is expected
-// to change with the implementation.
+//   to change with the implementation.
 //
 // Invariant: Every remote DFB instance has exactly one producer kernel instance and
-// one consumer kernel instance. The instances must not be on the same node.
+//   one consumer kernel instance. The instances must not be on the same node.
 //
 // Instancing: At runtime, one remote DFB instance is allocated per entry in the
-// producer_consumer_map. The runtime infrastructure allocates SRAM ("L1") at both
-// endpoints.
+//   producer_consumer_map. The runtime infrastructure allocates SRAM ("L1") at both
+//   endpoints.
 //
 // Placement: Specified directly via producer_consumer_map (rather than derived as
-// for local DFBs).
+//   for local DFBs).
 //
 struct RemoteDataflowBufferSpec {
     // A remote DFB has all of the same properties as a local DFB

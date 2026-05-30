@@ -18,6 +18,32 @@
 
 namespace tt::tt_metal::experimental::metal2_host_api {
 
+// ============================================================================
+//  ProgramSpec API
+// ============================================================================
+//
+// A ProgramSpec is a descriptor object used to create a Metalium Program object.
+// The ProgramSpec describes all the IMMUTABLE properties of a Program:
+//  - compiled kernels
+//  - program-scope resources
+//      o dataflow buffers
+//      o semaphores
+//  - user-managed resources (parameters)
+//      o tensor parameters
+//
+// It also specifies the device nodes (physical location) where kernels will run,
+// and where device resources will be allocated.
+//
+// The ProgramSpec is analogous to a function's signature and body —
+// it is declared once, but can be executed many times.
+//
+// ProgramRunArgs (program_run_args.hpp) is the partner object to ProgramSpec.
+// This descriptor is analogous to the function invocation's arguments.
+// ProgramRunArgs describes the MUTABLE properties of a Program, which are specified
+// anew with each execution (enqueue) of the Program.
+//
+// ============================================================================
+
 // A name identifying a ProgramSpec within a MeshWorkload.
 using ProgramSpecName = std::string;
 
@@ -25,14 +51,15 @@ using ProgramSpecName = std::string;
 using WorkUnitSpecName = std::string;
 
 //------------------------------------------------
-// ProgramSpec & WorkUnitSpec
+// WorkUnitSpec
 //------------------------------------------------
 
 // A WorkUnitSpec describes a set of kernels that run together on a set of nodes.
 // Each node in the WorkUnitSpec's target_nodes runs an identical set of kernel instances.
 //
 // Placement: The WorkUnitSpec defines the node placement of its kernels.
-// (A kernel may be included in multiple WorkUnitSpecs.)
+//   (A kernel may be included in multiple WorkUnitSpecs.)
+//
 struct WorkUnitSpec {
     // Human-readable name (debug/messaging only; no uniqueness invariant).
     WorkUnitSpecName name;
@@ -44,10 +71,11 @@ struct WorkUnitSpec {
     Nodes target_nodes;
 };
 
-// A ProgramSpec describes the immutable properties of a Program:
-// its kernels, DFBs, semaphores, and where they all run.
-// Analogous to a function's signature and body — declared once, executed many times.
-// (Each time with a new ProgramRunArgs configuring the mutable execution parameters.)
+//------------------------------------------------
+// ProgramSpec
+//------------------------------------------------
+
+// A ProgramSpec describes a complete Program (its immutable properties).
 struct ProgramSpec {
     // Human-readable name (debug/messaging only; no uniqueness invariant).
     ProgramSpecName name;

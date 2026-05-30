@@ -12,14 +12,28 @@
 
 namespace tt::tt_metal::experimental::metal2_host_api {
 
-// KernelDMConfig: Data Movement (DM) resource configuration for DM kernels.
-// "DM" is the canonical Tenstorrent abbreviation for Data Movement, used freely
-// throughout the API surface for type names; method names paired with sibling
-// predicates (e.g., is_data_movement_kernel) use the full form.
+// ============================================================================
+//  KernelDMConfig
+// ============================================================================
 //
-// The DM configuration differs between Gen1 (Wormhole, Blackhole) and Gen2 (Quasar
-// and derivatives), so the struct exposes a Gen1Config and a Gen2Config variant —
-// the kernel author populates the one matching their target architecture.
+// The KernelDMConfig describes the configuration of the hardware resources
+// controlled by a data movement kernel. ("DM" is the abbreviation for Data
+// Movement, used throughout the API).
+//
+// The DM configuration differs between Gen1 architectures (Wormhole, Blackhole)
+// and Gen2 architectures (Quasar and derivatives).
+//
+// The KernelDMConfig struct exposes both a Gen1Config and a Gen2Config variant.
+// The runtime will dynamically select the appropriate variant based on the
+// target architecture. For architecture-agnostic host code, you may specify
+// both variants in the same KernelDMConfig.
+//
+// If the variant for the target architecture is not supplied:
+//  - Gen 1 will trigger an error (config is mandatory for now)
+//  - Gen 2 will use default settings
+//
+// ============================================================================
+
 struct KernelDMConfig {
     struct Gen1Config {
         tt::tt_metal::DataMovementProcessor processor = tt::tt_metal::DataMovementProcessor::RISCV_0;
