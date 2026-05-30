@@ -451,11 +451,12 @@ def test_template_set_submodule_handles_root_attr_replacement() -> None:
     assert m.encoder._tt_port == "NEW"
 
 
-def test_collect_skips_cpu_wins_components(tmp_path: Path, monkeypatch) -> None:
-    """Stage 4 integration: a graduated stub whose bench verdict is
-    CPU_WINS (top-level kind = COLD) MUST be excluded from the wiring
-    pool. Otherwise the demo wires a slower-than-CPU component, which
-    is exactly what Stage 4 is supposed to prevent."""
+def test_collect_includes_all_graduated_regardless_of_bench(tmp_path: Path, monkeypatch) -> None:
+    """Pin: graduation is the contract. A component with a graduated
+    stub (native ttnn + passed PCC) STAYS in the demo wiring pool
+    even if Stage 4 bench shows CPU_WINS. The bench is diagnostic-
+    only — it flags components needing TT-side perf work, not
+    components to silently drop from the demo."""
     from scripts.tt_hw_planner import overlay_manager as om
 
     monkeypatch.setattr(om, "_OVERLAYS_DIR", tmp_path / "overlays")
@@ -469,30 +470,27 @@ def test_collect_skips_cpu_wins_components(tmp_path: Path, monkeypatch) -> None:
         comps,
         graduated={"fast_comp": "fast", "slow_comp": "slow"},
     )
-    # Seed hot_cold.json: fast_comp HOT (bench DEVICE_WINS),
-    # slow_comp COLD (bench CPU_WINS).
+    # Seed hot_cold.json: slow_comp is COLD with bench CPU_WINS evidence.
     md = om._model_dir("test/m")
     md.mkdir(parents=True, exist_ok=True)
     (md / "hot_cold.json").write_text(
         json.dumps(
             {
                 "fast_comp": {"kind": "HOT", "modes": {"default": {"kind": "HOT"}}},
-                "slow_comp": {"kind": "COLD", "modes": {"default": {"kind": "COLD"}}},
+                "slow_comp": {
+                    "kind": "COLD",
+                    "modes": {"default": {"kind": "COLD", "bench_verdict": "CPU_WINS"}},
+                },
             }
         )
     )
 
-    # WITHOUT model_id arg: legacy behavior, both included
-    legacy = collect_graduated_components(demo_dir, comps)
-    legacy_names = {c.name for c in legacy}
-    assert "fast_comp" in legacy_names
-    assert "slow_comp" in legacy_names
-
-    # WITH model_id: slow_comp filtered out per bench-derived COLD verdict
-    filtered = collect_graduated_components(demo_dir, comps, model_id="test/m")
-    filtered_names = {c.name for c in filtered}
-    assert "fast_comp" in filtered_names
-    assert "slow_comp" not in filtered_names
+    # Both graduated components are returned, regardless of the cold-
+    # evidence kind. demo_wiring honors graduation, not bench results.
+    out = collect_graduated_components(demo_dir, comps, model_id="test/m")
+    names = {c.name for c in out}
+    assert "fast_comp" in names
+    assert "slow_comp" in names
 
 
 def test_template_set_submodule_wraps_non_module_ports_in_shim() -> None:

@@ -504,19 +504,26 @@ def _persist_bench_results(
         mode_entry["bench"] = asdict(r)
         mode_entry["bench_verdict"] = r.verdict
 
-        # Update top-level kind based on bench verdict + prior verdicts.
-        if r.verdict == "CPU_WINS":
-            existing["kind"] = "COLD"
-            existing.setdefault("evidence", [])
-            existing["evidence"].append(
-                f"[{workload_mode}] bench: CPU_WINS (speedup {r.speedup:.2f}x; " f"transfer cost dominates)"
-            )
-        elif r.verdict == "DEVICE_WINS":
-            if existing.get("kind") not in ("HOT",):
-                existing["kind"] = "HOT"
-            existing.setdefault("evidence", [])
-            existing["evidence"].append(f"[{workload_mode}] bench: DEVICE_WINS (speedup {r.speedup:.2f}x)")
-        # BREAKEVEN / ERROR don't change the top-level kind.
+        # IMPORTANT: bench results are DIAGNOSTIC only — they DO NOT
+        # change the top-level kind. A graduated component (one with a
+        # working ttnn port that passed PCC) stays on device regardless
+        # of whether bench shows CPU is currently faster. Rationale:
+        #   - Graduation is the contract: passed PCC + native ttnn = on device.
+        #   - A CPU_WINS bench result might reflect TT-port-not-yet-tuned,
+        #     a small benchmark batch, or unfavorable shape — not an
+        #     intrinsic "this should be on CPU forever" verdict.
+        #   - Demoting a graduated component to COLD would also remove
+        #     it from the demo wiring, hiding the work the user already
+        #     completed.
+        #
+        # The bench remains visible via view-evidence / RUN_REPORT.md /
+        # the modes[<mode>].bench record so operators can SEE which
+        # graduated components need TT-side perf work, without auto-
+        # changing placement decisions.
+        bench_evidence_line = f"[{workload_mode}] bench: {r.verdict} (speedup {r.speedup:.2f}x)"
+        existing.setdefault("evidence", [])
+        if bench_evidence_line not in existing["evidence"]:
+            existing["evidence"].append(bench_evidence_line)
 
         raw[r.component] = existing
 

@@ -161,28 +161,17 @@ def test_persist_creates_multi_mode_entry(tmp_path: Path, monkeypatch):
     assert entry["modes"]["default"]["bench"]["speedup"] == 2.86
 
 
-def test_persist_device_wins_promotes_kind_hot(tmp_path: Path, monkeypatch):
-    """A DEVICE_WINS bench result with no prior strong evidence promotes
-    the top-level kind to HOT."""
+def test_persist_bench_is_diagnostic_only_does_not_change_kind(tmp_path: Path, monkeypatch):
+    """Pin: bench results are DIAGNOSTIC ONLY. They record per-mode
+    bench data + an evidence line so the operator can see them, but
+    DO NOT change the top-level kind. A graduated component (HOT)
+    stays HOT even when bench says CPU_WINS — graduation is the
+    contract, demo wiring honors it, bench just flags perf work."""
     from scripts.tt_hw_planner import overlay_manager as om
 
     monkeypatch.setattr(om, "_OVERLAYS_DIR", tmp_path / "overlays")
 
-    results = [BenchResult(component="comp_a", verdict="DEVICE_WINS", speedup=3.0, workload_mode="default")]
-    _persist_bench_results("test/m", results, workload_mode="default")
-    raw = om._load_hot_cold_raw("test/m")
-    assert raw["comp_a"]["kind"] == "HOT"
-
-
-def test_persist_cpu_wins_demotes_to_cold(tmp_path: Path, monkeypatch):
-    """A CPU_WINS bench result demotes the top-level kind to COLD (the
-    bench is the gold-standard, so it overrides earlier signals — the
-    kernel exists but transfer cost dominates → CPU is correct)."""
-    from scripts.tt_hw_planner import overlay_manager as om
-
-    monkeypatch.setattr(om, "_OVERLAYS_DIR", tmp_path / "overlays")
-
-    # Seed with prior HOT verdict (from frequency/latency signals)
+    # Seed: comp_a is HOT (graduated, prior frequency/latency signals).
     md = om._model_dir("test/m")
     md.mkdir(parents=True, exist_ok=True)
     (md / "hot_cold.json").write_text(
@@ -190,25 +179,36 @@ def test_persist_cpu_wins_demotes_to_cold(tmp_path: Path, monkeypatch):
             {
                 "comp_a": {
                     "kind": "HOT",
-                    "modes": {
-                        "default": {
-                            "kind": "HOT",
-                            "frequency": 1.0,
-                            "cpu_latency_pct": 10.0,
-                            "workload_mode": "default",
-                        }
-                    },
+                    "modes": {"default": {"kind": "HOT", "frequency": 1.0, "workload_mode": "default"}},
                 }
             }
         )
     )
+    # Bench says CPU_WINS — top-level kind must NOT change.
     results = [BenchResult(component="comp_a", verdict="CPU_WINS", speedup=0.5, workload_mode="default")]
     _persist_bench_results("test/m", results, workload_mode="default")
 
     raw = om._load_hot_cold_raw("test/m")
-    assert raw["comp_a"]["kind"] == "COLD"
-    # Bench evidence reason recorded
+    assert raw["comp_a"]["kind"] == "HOT", "graduated kind must NOT be demoted by bench"
+    # Bench data + evidence line are still recorded for visibility.
+    assert raw["comp_a"]["modes"]["default"]["bench_verdict"] == "CPU_WINS"
     assert any("CPU_WINS" in e for e in raw["comp_a"].get("evidence", []))
+
+
+def test_persist_bench_records_device_wins_diagnostic(tmp_path: Path, monkeypatch):
+    """A DEVICE_WINS bench result records the verdict + evidence line
+    without changing the top-level kind."""
+    from scripts.tt_hw_planner import overlay_manager as om
+
+    monkeypatch.setattr(om, "_OVERLAYS_DIR", tmp_path / "overlays")
+
+    results = [BenchResult(component="comp_a", verdict="DEVICE_WINS", speedup=3.0, workload_mode="default")]
+    _persist_bench_results("test/m", results, workload_mode="default")
+    raw = om._load_hot_cold_raw("test/m")
+    # With no prior entry, kind stays UNKNOWN (no auto-promotion).
+    assert raw["comp_a"]["kind"] in ("UNKNOWN", "HOT")  # only changes from prior fields
+    assert raw["comp_a"]["modes"]["default"]["bench_verdict"] == "DEVICE_WINS"
+    assert any("DEVICE_WINS" in e for e in raw["comp_a"].get("evidence", []))
 
 
 def test_persist_breakeven_leaves_kind_unchanged(tmp_path: Path, monkeypatch):

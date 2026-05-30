@@ -45,16 +45,18 @@ def collect_graduated_components(
     * has a graduated stub on disk (native ttnn forward, not autofill fallback),
     * has the four capture artifacts (``args.pt``/``kwargs.pt``/``manifest.json``)
       under ``_captured/<safe>/``,
-    * has a non-empty ``submodule_path`` recorded in the capture manifest,
-    * is NOT marked COLD by the cold-evidence record (if ``model_id`` is
-      provided AND a hot_cold.json exists for it). Stage 4 empirical
-      bench can demote a graduated stub to COLD (e.g. CPU_WINS because
-      the kernel exists but transfer cost dominates). Demo wiring
-      should respect that verdict — putting a CPU_WINS component on
-      device makes the demo slower than the pure-CPU reference.
+    * has a non-empty ``submodule_path`` recorded in the capture manifest.
 
     Components missing any of these criteria are silently skipped — they
     cannot be wired into the demo without ambiguity.
+
+    Note on ``model_id``: accepted for API compatibility but NOT used to
+    filter out graduated components. Graduation (passed PCC, native ttnn
+    on disk) is the contract — graduated components stay on device even
+    if Stage 4 bench shows a current CPU_WINS verdict. The bench result
+    is diagnostic-only (visible via view-evidence / RUN_REPORT.md); it
+    flags components that need TT-side perf work, not components to
+    silently drop from the demo.
     """
     from .bringup_loop import (
         _component_op_count,
@@ -62,26 +64,12 @@ def collect_graduated_components(
         _stub_has_graduated_from_autofill,
     )
 
-    # Pre-load cold-evidence (if available) to skip CPU_WINS components.
-    cold_kinds: Dict[str, str] = {}
-    if model_id is not None:
-        try:
-            from .overlay_manager import load_hot_cold
-
-            cold_kinds = load_hot_cold(model_id)
-        except Exception:
-            cold_kinds = {}
-
     out: List[GraduatedComponent] = []
     for comp in components:
         if comp.get("status") != "NEW":
             continue
         name = comp.get("name") or ""
         if not name:
-            continue
-        # Bench-aware filter: if the cold-evidence says this component
-        # is COLD (incl. bench CPU_WINS demotion), don't wire it.
-        if cold_kinds.get(name, "").upper() == "COLD":
             continue
         safe = _safe_id(name)
         stub = demo_dir / "_stubs" / f"{safe}.py"
