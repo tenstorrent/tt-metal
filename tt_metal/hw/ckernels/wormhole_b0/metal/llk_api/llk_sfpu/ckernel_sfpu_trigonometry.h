@@ -529,7 +529,7 @@ sfpi_inline sfpi::vFloat _sfpu_quarter_exp_abs_(sfpi::vFloat x) {
     sfpi::vFloat y = a * std::numeric_limits<float>::infinity();
     r = r * f + 1.0f;
 
-    v_if(i < (125 + 130)) {
+    v_if(i < 255) {
         // Keep reconstruction quarter-scaled: scale is 0.25 * 2**i. Avoids
         // materialising 2**i directly near overflow boundary.
         y = r * sfpi::reinterpret<sfpi::vFloat>(i << 23);
@@ -571,7 +571,7 @@ sfpi_inline sfpi::vFloat _sfpu_quarter_expm1_abs_(sfpi::vFloat x) {
     sfpi::vInt i = float_to_uint8(j, sfpi::RoundMode::NearestEven);
     j = int32_to_float(i, sfpi::RoundMode::NearestEven);
 
-    sfpi::vFloat r, s, f, w, scale, bias, c0;
+    sfpi::vFloat r, s, f, w, y, scale, bias, c0;
 
     if constexpr (!is_fp32_dest_acc_en) {
         f = j * sfpi::vConstFloatPrgm1 + a;  // f = a - j * ln(2)
@@ -603,14 +603,13 @@ sfpi_inline sfpi::vFloat _sfpu_quarter_expm1_abs_(sfpi::vFloat x) {
     // materialising 2**i directly near overflow boundary.
     scale = sfpi::reinterpret<sfpi::vFloat>((i << 23) + sfpi::reinterpret<sfpi::vInt>(w));
     bias = scale - w;
-    sfpi::vFloat infinity = std::numeric_limits<float>::infinity();
-    r = r * scale + bias;
+    // Handle a * log2(e) >= 130, while propagating NaN.
+    y = a * std::numeric_limits<float>::infinity();
 
-    // Handle special case a * log2(e) >= 130, while propagating NaN.
-    v_if(i >= 130) { r = a * infinity; }
+    v_if(i < 130) { y = r * scale + bias; }
     v_endif;
 
-    return r;
+    return y;
 }
 
 // a = abs(x); t = expm1(a); sinh(a) = 0.5 * (t + t / (t + 1))
