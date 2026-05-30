@@ -253,12 +253,12 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_unsafe_(sfpi::vFloat val)
 sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a)
 {
     sfpi::vInt i, e;
-    sfpi::vFloat f, r, j, infinity;
+    sfpi::vFloat f, r, j, y;
     j = 1.442695f * a;
 
     r = 1.37805939e-3f;
     i = sfpi::float_to_int16(j, sfpi::RoundMode::NearestEven);
-    j = sfpi::int32_to_float(sm, sfpi::RoundMode::NearestEven);
+    j = sfpi::int32_to_float(i, sfpi::RoundMode::NearestEven);
 
     f = j * -6.93145752e-1f + a;
     f = j * -1.42860677e-6f + f;
@@ -272,25 +272,22 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a)
     i = sfpi::reinterpret<sfpi::vInt>(sfpi::copysgn(sfpi::reinterpret<sfpi::vFloat>(i), j));
     r = r * f + 1.0f;
 
-    infinity = std::numeric_limits<float>::infinity();
+    y = a * std::numeric_limits<float>::infinity();
 
     e = sfpi::exexp(r, sfpi::ExponentMode::NoDebias);
     e += i;
-    r = sfpi::setexp(r, e);
-
-    v_if (e >= 255)
+    v_if (e < 255)
     {
-        r = a * infinity;
+        y = sfpi::setexp(r, e);
+        v_if (e < 0)
+        {
+            y = 0.0f;
+        }
+        v_endif;
     }
     v_endif;
 
-    v_if (e < 0)
-    {
-        r = 0.0f;
-    }
-    v_endif;
-
-    return r;
+    return y;
 }
 
 /*
