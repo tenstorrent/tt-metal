@@ -10,8 +10,6 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
-// Reciprocal sfpi helper (_sfpu_reciprocal_ / _init_sfpu_reciprocal_) still lives in the
-// tt-llk common layer; only the binary *wrapper* has been inlined into this L4 header.
 #include "sfpu/ckernel_sfpu_recip.h"
 
 namespace ckernel {
