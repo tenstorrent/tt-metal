@@ -112,17 +112,13 @@ AliasDFBProgramComponents make_alias_dfb_program_spec(
         *mesh_device, make_alias_dram_tensor_spec(entry_size_b, num_entries_b), TensorTopology{});
 
     // DM kernel configs (Gen1 + Gen2 variants so the same spec runs everywhere).
-    const KernelDMConfig producer_cfg{
-        .gen1_config =
-            KernelDMConfig::Gen1Config{.processor = DataMovementProcessor::RISCV_0},
-        .gen2_config =
-            KernelDMConfig::Gen2Config{.disable_implicit_sync_for = {"dfb_a", "dfb_b"}},
+    const DataMovementHardwareConfig producer_cfg{
+        .gen1_config = DataMovementHardwareConfig::Gen1Config{.processor = DataMovementProcessor::RISCV_0},
+        .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_implicit_sync_for = {"dfb_a", "dfb_b"}},
     };
-    const KernelDMConfig consumer_cfg{
-        .gen1_config =
-            KernelDMConfig::Gen1Config{.processor = DataMovementProcessor::RISCV_1},
-        .gen2_config =
-            KernelDMConfig::Gen2Config{.disable_implicit_sync_for = {"dfb_a", "dfb_b"}},
+    const DataMovementHardwareConfig consumer_cfg{
+        .gen1_config = DataMovementHardwareConfig::Gen1Config{.processor = DataMovementProcessor::RISCV_1},
+        .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_implicit_sync_for = {"dfb_a", "dfb_b"}},
     };
 
     DataflowBufferSpec dfb_a{
@@ -323,19 +319,15 @@ AliasBorrowedDFBComponents make_alias_borrowed_dfb_program_spec(
     MeshTensor ring  = MeshTensor::allocate_on_device(
         *mesh_device, make_alias_l1_tensor_spec(entry_size, num_entries), TensorTopology{});
 
-    const KernelDMConfig producer_cfg{
-        .gen1_config =
-            KernelDMConfig::Gen1Config{.processor = DataMovementProcessor::RISCV_0},
+    const DataMovementHardwareConfig producer_cfg{
+        .gen1_config = DataMovementHardwareConfig::Gen1Config{.processor = DataMovementProcessor::RISCV_0},
         .gen2_config =
-            KernelDMConfig::Gen2Config{
-                .disable_implicit_sync_for = {"dfb_borrowed", "dfb_alias"}},
+            DataMovementHardwareConfig::Gen2Config{.disable_implicit_sync_for = {"dfb_borrowed", "dfb_alias"}},
     };
-    const KernelDMConfig consumer_cfg{
-        .gen1_config =
-            KernelDMConfig::Gen1Config{.processor = DataMovementProcessor::RISCV_1},
+    const DataMovementHardwareConfig consumer_cfg{
+        .gen1_config = DataMovementHardwareConfig::Gen1Config{.processor = DataMovementProcessor::RISCV_1},
         .gen2_config =
-            KernelDMConfig::Gen2Config{
-                .disable_implicit_sync_for = {"dfb_borrowed", "dfb_alias"}},
+            DataMovementHardwareConfig::Gen2Config{.disable_implicit_sync_for = {"dfb_borrowed", "dfb_alias"}},
     };
 
     // dfb_borrowed: backed by ring_tensor (L1)

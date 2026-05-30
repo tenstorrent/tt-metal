@@ -224,17 +224,17 @@ void run_single_dfb_program(
 
     // DM kernel configs supply both Gen1 (BRISC for producer / NCRISC for consumer) and
     // Gen2 (auto-assigned) variants so the same KernelSpec runs on WH/BH and Quasar.
-    const experimental::metal2_host_api::KernelDMConfig dm_producer_cfg{
+    const experimental::metal2_host_api::DataMovementHardwareConfig dm_producer_cfg{
         .gen1_config =
-            experimental::metal2_host_api::KernelDMConfig::Gen1Config{
+            experimental::metal2_host_api::DataMovementHardwareConfig::Gen1Config{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0},
-        .gen2_config = experimental::metal2_host_api::KernelDMConfig::Gen2Config{},
+        .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{},
     };
-    const experimental::metal2_host_api::KernelDMConfig dm_consumer_cfg{
+    const experimental::metal2_host_api::DataMovementHardwareConfig dm_consumer_cfg{
         .gen1_config =
-            experimental::metal2_host_api::KernelDMConfig::Gen1Config{
+            experimental::metal2_host_api::DataMovementHardwareConfig::Gen1Config{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_1},
-        .gen2_config = experimental::metal2_host_api::KernelDMConfig::Gen2Config{},
+        .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{},
     };
 
     experimental::metal2_host_api::KernelSpec producer_spec;
@@ -268,7 +268,7 @@ void run_single_dfb_program(
             .num_threads = dfb_config.num_producers,
             .dfb_bindings = {experimental::metal2_host_api::ProducerOf(DFB_NAME, "out")},
             .compile_time_args = {{"num_entries_per_producer", num_entries_per_producer}},
-            .hw_config = experimental::metal2_host_api::KernelComputeConfig{},
+            .hw_config = experimental::metal2_host_api::ComputeHardwareConfig{},
         };
     }
 
@@ -314,18 +314,18 @@ void run_single_dfb_program(
                 .access_pattern = consumer_pattern,
             }},
             .compile_time_args = {{"num_entries_per_consumer", num_entries_per_consumer}},
-            .hw_config = experimental::metal2_host_api::KernelComputeConfig{},
+            .hw_config = experimental::metal2_host_api::ComputeHardwareConfig{},
         };
     }
 
     // Each DM endpoint votes per-DFB on opting out of implicit sync.
     const bool disable_isync = !dfb_config.enable_producer_implicit_sync;
     if (producer_type == DFBPorCType::DM && disable_isync) {
-        std::get<experimental::metal2_host_api::KernelDMConfig>(producer_spec.hw_config)
+        std::get<experimental::metal2_host_api::DataMovementHardwareConfig>(producer_spec.hw_config)
             .gen2_config->disable_implicit_sync_for.push_back(DFB_NAME);
     }
     if (consumer_type == DFBPorCType::DM && disable_isync) {
-        std::get<experimental::metal2_host_api::KernelDMConfig>(consumer_spec.hw_config)
+        std::get<experimental::metal2_host_api::DataMovementHardwareConfig>(consumer_spec.hw_config)
             .gen2_config->disable_implicit_sync_for.push_back(DFB_NAME);
     }
 
@@ -662,11 +662,11 @@ void run_concurrent_dfbs_program(
                     {"chunk_offset", chunk_offset},
                 },
             .hw_config =
-                experimental::metal2_host_api::KernelDMConfig{
-                    .gen2_config = experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
+                experimental::metal2_host_api::DataMovementHardwareConfig{
+                    .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{}},
         });
         if (disable_isync) {
-            std::get<experimental::metal2_host_api::KernelDMConfig>(kernel_specs.back().hw_config)
+            std::get<experimental::metal2_host_api::DataMovementHardwareConfig>(kernel_specs.back().hw_config)
                 .gen2_config->disable_implicit_sync_for.push_back(dfb_name);
         }
         kernel_names.push_back(producer_name);
@@ -689,11 +689,11 @@ void run_concurrent_dfbs_program(
                     {"chunk_offset", chunk_offset},
                 },
             .hw_config =
-                experimental::metal2_host_api::KernelDMConfig{
-                    .gen2_config = experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
+                experimental::metal2_host_api::DataMovementHardwareConfig{
+                    .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{}},
         });
         if (disable_isync) {
-            std::get<experimental::metal2_host_api::KernelDMConfig>(kernel_specs.back().hw_config)
+            std::get<experimental::metal2_host_api::DataMovementHardwareConfig>(kernel_specs.back().hw_config)
                 .gen2_config->disable_implicit_sync_for.push_back(dfb_name);
         }
         kernel_names.push_back(consumer_name);
@@ -797,7 +797,7 @@ void run_concurrent_tensix_dm_dfbs_program(
         .num_threads = 1,
         .compiler_options = {.defines = {{"TEST_NUM_DFBS", std::to_string(num_dfbs)}}},
         .compile_time_args = {{"num_entries_per_producer", entries_per_dfb}},
-        .hw_config = experimental::metal2_host_api::KernelComputeConfig{},
+        .hw_config = experimental::metal2_host_api::ComputeHardwareConfig{},
     };
     for (uint32_t i = 0; i < num_dfbs; ++i) {
         producer_spec.dfb_bindings.push_back(experimental::metal2_host_api::KernelSpec::DFBBinding{
@@ -857,11 +857,11 @@ void run_concurrent_tensix_dm_dfbs_program(
                     {"implicit_sync", static_cast<uint32_t>(dfb_config.enable_producer_implicit_sync ? 1u : 0u)},
                 },
             .hw_config =
-                experimental::metal2_host_api::KernelDMConfig{
-                    .gen2_config = experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
+                experimental::metal2_host_api::DataMovementHardwareConfig{
+                    .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{}},
         });
         if (!dfb_config.enable_producer_implicit_sync) {
-            std::get<experimental::metal2_host_api::KernelDMConfig>(kernel_specs.back().hw_config)
+            std::get<experimental::metal2_host_api::DataMovementHardwareConfig>(kernel_specs.back().hw_config)
                 .gen2_config->disable_implicit_sync_for.push_back(dfb_name);
         }
         kernel_names.push_back(consumer_name);
@@ -1022,8 +1022,8 @@ void run_sequential_dfbs_program(
                 {"num_producers", num_producers},
             },
         .hw_config =
-            experimental::metal2_host_api::KernelDMConfig{
-                .gen2_config = experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
+            experimental::metal2_host_api::DataMovementHardwareConfig{
+                .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{}},
     };
 
     // Consumer kernel: same layout, plus per-DFB entries_per_consumer_<i> /
@@ -1041,8 +1041,8 @@ void run_sequential_dfbs_program(
                 {"num_consumers", num_consumers},
             },
         .hw_config =
-            experimental::metal2_host_api::KernelDMConfig{
-                .gen2_config = experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
+            experimental::metal2_host_api::DataMovementHardwareConfig{
+                .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{}},
     };
 
     // Build per-DFB DataflowBufferSpec, TensorParameter, and bindings (dfb_<i> /
@@ -1068,9 +1068,9 @@ void run_sequential_dfbs_program(
         });
         const bool disable_isync = !configs[i].enable_producer_implicit_sync;
         if (disable_isync) {
-            std::get<experimental::metal2_host_api::KernelDMConfig>(producer_spec.hw_config)
+            std::get<experimental::metal2_host_api::DataMovementHardwareConfig>(producer_spec.hw_config)
                 .gen2_config->disable_implicit_sync_for.push_back(dfb_name);
-            std::get<experimental::metal2_host_api::KernelDMConfig>(consumer_spec.hw_config)
+            std::get<experimental::metal2_host_api::DataMovementHardwareConfig>(consumer_spec.hw_config)
                 .gen2_config->disable_implicit_sync_for.push_back(dfb_name);
         }
         tensor_parameters.push_back(experimental::metal2_host_api::TensorParameter{
@@ -1232,11 +1232,11 @@ void run_in_dfb_out_dfb_program(
             },
         .runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}},
         .hw_config =
-            experimental::metal2_host_api::KernelDMConfig{
-                .gen2_config = experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
+            experimental::metal2_host_api::DataMovementHardwareConfig{
+                .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{}},
     };
     if (!dm2tensix_config.enable_producer_implicit_sync) {
-        std::get<experimental::metal2_host_api::KernelDMConfig>(producer_spec.hw_config)
+        std::get<experimental::metal2_host_api::DataMovementHardwareConfig>(producer_spec.hw_config)
             .gen2_config->disable_implicit_sync_for.push_back(IN_DFB);
     }
 
@@ -1263,7 +1263,7 @@ void run_in_dfb_out_dfb_program(
                 },
             },
         .compile_time_args = {{"num_entries", num_entries_per_unpacker}},
-        .hw_config = experimental::metal2_host_api::KernelComputeConfig{},
+        .hw_config = experimental::metal2_host_api::ComputeHardwareConfig{},
     };
 
     experimental::metal2_host_api::KernelSpec consumer_spec{
@@ -1292,11 +1292,11 @@ void run_in_dfb_out_dfb_program(
             },
         .runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}},
         .hw_config =
-            experimental::metal2_host_api::KernelDMConfig{
-                .gen2_config = experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
+            experimental::metal2_host_api::DataMovementHardwareConfig{
+                .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{}},
     };
     if (!tensix2dm_config.enable_producer_implicit_sync) {
-        std::get<experimental::metal2_host_api::KernelDMConfig>(consumer_spec.hw_config)
+        std::get<experimental::metal2_host_api::DataMovementHardwareConfig>(consumer_spec.hw_config)
             .gen2_config->disable_implicit_sync_for.push_back(OUT_DFB);
     }
 
@@ -1947,7 +1947,7 @@ static void run_intra_tensix_dfb_program(
                 {"entries_per_neo", entries_per_neo},
                 {"words_per_entry", words_per_entry},
             },
-        .hw_config = experimental::metal2_host_api::KernelComputeConfig{},
+        .hw_config = experimental::metal2_host_api::ComputeHardwareConfig{},
     };
 
     experimental::metal2_host_api::WorkUnitSpec wu{
@@ -2085,11 +2085,11 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4A) {
             },
         .runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}},
         .hw_config =
-            experimental::metal2_host_api::KernelDMConfig{
-                .gen2_config = experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
+            experimental::metal2_host_api::DataMovementHardwareConfig{
+                .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{}},
     };
     if (!remapper_dfb_config.enable_producer_implicit_sync) {
-        std::get<experimental::metal2_host_api::KernelDMConfig>(dm_producer_spec.hw_config)
+        std::get<experimental::metal2_host_api::DataMovementHardwareConfig>(dm_producer_spec.hw_config)
             .gen2_config->disable_implicit_sync_for.push_back(REMAPPER_DFB);
     }
 
@@ -2129,7 +2129,7 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4A) {
                 {"entries_per_neo", entries_per_neo},
                 {"words_per_entry", words_per_entry},
             },
-        .hw_config = experimental::metal2_host_api::KernelComputeConfig{},
+        .hw_config = experimental::metal2_host_api::ComputeHardwareConfig{},
     };
 
     experimental::metal2_host_api::WorkUnitSpec wu{

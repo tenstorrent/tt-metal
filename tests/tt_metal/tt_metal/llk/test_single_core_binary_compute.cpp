@@ -334,12 +334,12 @@ bool single_core_binary(
             {.runtime_arg_names =
                  {"src0_addr", "src0_bank_id", "src1_addr", "src1_bank_id", "num_tiles", "src2_addr", "src2_bank_id"}},
         .hw_config =
-            experimental::metal2_host_api::KernelDMConfig{
+            experimental::metal2_host_api::DataMovementHardwareConfig{
                 .gen1_config =
-                    experimental::metal2_host_api::KernelDMConfig::Gen1Config{
+                    experimental::metal2_host_api::DataMovementHardwareConfig::Gen1Config{
                         .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
                 .gen2_config =
-                    experimental::metal2_host_api::KernelDMConfig::Gen2Config{
+                    experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{
                         .disable_implicit_sync_for = {INP0_DFB, INP1_DFB, INP2_DFB}}},
     };
 
@@ -352,12 +352,13 @@ bool single_core_binary(
         .dfb_bindings = {experimental::metal2_host_api::ConsumerOf(OUT_DFB, "in")},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
         .hw_config =
-            experimental::metal2_host_api::KernelDMConfig{
+            experimental::metal2_host_api::DataMovementHardwareConfig{
                 .gen1_config =
-                    experimental::metal2_host_api::KernelDMConfig::Gen1Config{
+                    experimental::metal2_host_api::DataMovementHardwareConfig::Gen1Config{
                         .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
                 .gen2_config =
-                    experimental::metal2_host_api::KernelDMConfig::Gen2Config{.disable_implicit_sync_for = {OUT_DFB}}},
+                    experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{
+                        .disable_implicit_sync_for = {OUT_DFB}}},
     };
 
     experimental::metal2_host_api::KernelSpec compute_spec{
@@ -394,7 +395,7 @@ bool single_core_binary(
              }},
         .runtime_arg_schema = {.runtime_arg_names = {"per_core_block_cnt", "per_core_block_size", "acc_to_dst"}},
         .hw_config =
-            experimental::metal2_host_api::KernelComputeConfig{
+            experimental::metal2_host_api::ComputeHardwareConfig{
                 .math_fidelity = test_config.math_fidelity,
             },
     };

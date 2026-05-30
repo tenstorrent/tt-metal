@@ -669,7 +669,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     // Validate DM configs
     for (const auto& kernel : spec.kernels) {
         if (kernel.is_data_movement_kernel()) {
-            const auto& data_movement_config = std::get<KernelDMConfig>(kernel.hw_config);
+            const auto& data_movement_config = std::get<DataMovementHardwareConfig>(kernel.hw_config);
 
             // Both Gen1 and Gen2 configs are optional. But at least one must be specified.
             TT_FATAL(
@@ -699,7 +699,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             if (!kernel.is_data_movement_kernel()) {
                 continue;
             }
-            const auto& dm_config = std::get<KernelDMConfig>(kernel.hw_config);
+            const auto& dm_config = std::get<DataMovementHardwareConfig>(kernel.hw_config);
             const auto& gen1 = dm_config.gen1_config.value();
             const NodeRangeSet& nodes = collected.kernel_node_set.at(kernel.unique_id);
             for (const auto& range : nodes.ranges()) {
@@ -740,7 +740,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         if (!kernel.is_compute_kernel()) {
             continue;
         }
-        const auto& compute_config = std::get<KernelComputeConfig>(kernel.hw_config);
+        const auto& compute_config = std::get<ComputeHardwareConfig>(kernel.hw_config);
 
         // Index the kernel's DFB bindings: which are bound, which are consumed.
         std::unordered_set<DFBSpecName> bound_dfbs;
@@ -856,7 +856,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             if (!kernel.is_data_movement_kernel()) {
                 continue;
             }
-            const auto& dm_config = std::get<KernelDMConfig>(kernel.hw_config);
+            const auto& dm_config = std::get<DataMovementHardwareConfig>(kernel.hw_config);
             if (!dm_config.gen2_config.has_value()) {
                 continue;
             }
@@ -887,7 +887,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                     if (!ep.kernel->is_data_movement_kernel()) {
                         continue;
                     }
-                    const auto& dm_config = std::get<KernelDMConfig>(ep.kernel->hw_config);
+                    const auto& dm_config = std::get<DataMovementHardwareConfig>(ep.kernel->hw_config);
                     if (!dm_config.gen2_config.has_value()) {
                         // Gen1-only DM kernel — can't physically participate in Gen2 implicit sync; abstains.
                         continue;
@@ -1738,7 +1738,7 @@ KernelRiscMaskMap BuildGen1KernelRiscMasks(const ProgramSpec& spec) {
     KernelRiscMaskMap result;
     for (const KernelSpec& kernel : spec.kernels) {
         if (kernel.is_data_movement_kernel()) {
-            const auto& dm_config = std::get<KernelDMConfig>(kernel.hw_config);
+            const auto& dm_config = std::get<DataMovementHardwareConfig>(kernel.hw_config);
             const auto& gen1 = dm_config.gen1_config.value();
             result[&kernel] = static_cast<uint16_t>(1u << static_cast<uint8_t>(gen1.processor));
         } else {
@@ -2064,7 +2064,7 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
                 continue;
             }
             any_dm = true;
-            const auto& dm_config = std::get<KernelDMConfig>(ep.kernel->hw_config);
+            const auto& dm_config = std::get<DataMovementHardwareConfig>(ep.kernel->hw_config);
             if (!dm_config.gen2_config.has_value()) {
                 continue;
             }
@@ -2134,7 +2134,7 @@ std::map<std::string, std::string> to_defines_map(const KernelSpec::CompilerOpti
 
 DataMovementConfig MakeGen1DataMovementConfig(const KernelSpec& kernel_spec) {
     TT_FATAL(kernel_spec.is_data_movement_kernel(), "Expected a DM kernel");
-    const auto& dm_config = std::get<KernelDMConfig>(kernel_spec.hw_config);
+    const auto& dm_config = std::get<DataMovementHardwareConfig>(kernel_spec.hw_config);
     const auto& gen1 = dm_config.gen1_config.value();
 
     return DataMovementConfig{
@@ -2171,7 +2171,7 @@ DataMovementConfig MakeGen1DataMovementConfig(const KernelSpec& kernel_spec) {
 // ----------------------------------------------------------------------------
 
 std::vector<UnpackToDestMode> BuildUnpackToDestModeVector(
-    const std::vector<KernelComputeConfig::DFBUnpackToDestMode>& user_modes, const DFBNameToIdMap& dfb_name_to_id) {
+    const std::vector<ComputeHardwareConfig::DFBUnpackToDestMode>& user_modes, const DFBNameToIdMap& dfb_name_to_id) {
     const uint32_t max_cbs = tt::tt_metal::hal::get_arch_num_circular_buffers();
     std::vector<UnpackToDestMode> unpack_modes(max_cbs, UnpackToDestMode::Default);
     for (const auto& [dfb_name, mode] : user_modes) {
@@ -2195,7 +2195,7 @@ std::vector<UnpackToDestMode> BuildUnpackToDestModeVector(
 
 ComputeConfig MakeGen1ComputeConfig(const KernelSpec& kernel_spec, const DFBNameToIdMap& dfb_name_to_id) {
     TT_FATAL(kernel_spec.is_compute_kernel(), "Expected a compute kernel");
-    const auto& compute_config = std::get<KernelComputeConfig>(kernel_spec.hw_config);
+    const auto& compute_config = std::get<ComputeHardwareConfig>(kernel_spec.hw_config);
 
     std::vector<UnpackToDestMode> unpack_modes =
         BuildUnpackToDestModeVector(compute_config.unpack_to_dest_mode, dfb_name_to_id);
@@ -2240,7 +2240,7 @@ experimental::quasar::QuasarDataMovementConfig MakeQuasarDataMovementConfig(cons
 experimental::quasar::QuasarComputeConfig MakeQuasarComputeConfig(
     const KernelSpec& kernel_spec, const DFBNameToIdMap& dfb_name_to_id) {
     TT_FATAL(kernel_spec.is_compute_kernel(), "Expected a compute kernel");
-    const auto& compute_config = std::get<KernelComputeConfig>(kernel_spec.hw_config);
+    const auto& compute_config = std::get<ComputeHardwareConfig>(kernel_spec.hw_config);
 
     std::vector<UnpackToDestMode> unpack_modes =
         BuildUnpackToDestModeVector(compute_config.unpack_to_dest_mode, dfb_name_to_id);

@@ -88,8 +88,8 @@ static void run_pack_relu_test(
         .dfb_bindings = {experimental::metal2_host_api::ProducerOf(INPUT_DFB, "out")},
         .runtime_arg_schema = {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
         .hw_config =
-            experimental::metal2_host_api::KernelDMConfig{
-                .gen2_config = experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
+            experimental::metal2_host_api::DataMovementHardwareConfig{
+                .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{}},
     };
 
     experimental::metal2_host_api::KernelSpec writer_spec{
@@ -101,8 +101,8 @@ static void run_pack_relu_test(
         .dfb_bindings = {experimental::metal2_host_api::ConsumerOf(OUTPUT_DFB, "in")},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
         .hw_config =
-            experimental::metal2_host_api::KernelDMConfig{
-                .gen2_config = experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
+            experimental::metal2_host_api::DataMovementHardwareConfig{
+                .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{}},
     };
 
     experimental::metal2_host_api::KernelSpec compute_spec{
@@ -127,7 +127,7 @@ static void run_pack_relu_test(
              }},
         .compile_time_args = {{"per_core_tile_cnt", num_tiles}},
         .runtime_arg_schema = {.runtime_arg_names = {"relu_config"}},
-        .hw_config = experimental::metal2_host_api::KernelComputeConfig{},
+        .hw_config = experimental::metal2_host_api::ComputeHardwareConfig{},
     };
 
     experimental::metal2_host_api::WorkUnitSpec wu{

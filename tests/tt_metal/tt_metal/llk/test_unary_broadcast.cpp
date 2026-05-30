@@ -328,12 +328,13 @@ void run_single_core_unary_broadcast_quasar(
         .runtime_arg_schema =
             {.runtime_arg_names = {"src_addr", "src_dram_bank_id", "num_tiles", "ublock_size_tiles", "reader_only"}},
         .hw_config =
-            experimental::metal2_host_api::KernelDMConfig{
+            experimental::metal2_host_api::DataMovementHardwareConfig{
                 .gen1_config =
-                    experimental::metal2_host_api::KernelDMConfig::Gen1Config{
+                    experimental::metal2_host_api::DataMovementHardwareConfig::Gen1Config{
                         .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
                 .gen2_config =
-                    experimental::metal2_host_api::KernelDMConfig::Gen2Config{.disable_implicit_sync_for = {SRC_DFB}}},
+                    experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{
+                        .disable_implicit_sync_for = {SRC_DFB}}},
     };
 
     experimental::metal2_host_api::KernelSpec writer_spec{
@@ -344,12 +345,13 @@ void run_single_core_unary_broadcast_quasar(
         .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
         .hw_config =
-            experimental::metal2_host_api::KernelDMConfig{
+            experimental::metal2_host_api::DataMovementHardwareConfig{
                 .gen1_config =
-                    experimental::metal2_host_api::KernelDMConfig::Gen1Config{
+                    experimental::metal2_host_api::DataMovementHardwareConfig::Gen1Config{
                         .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
                 .gen2_config =
-                    experimental::metal2_host_api::KernelDMConfig::Gen2Config{.disable_implicit_sync_for = {DST_DFB}}},
+                    experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{
+                        .disable_implicit_sync_for = {DST_DFB}}},
     };
 
     experimental::metal2_host_api::KernelSpec::CompilerOptions::Defines compute_defines;
@@ -374,7 +376,7 @@ void run_single_core_unary_broadcast_quasar(
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
         .compile_time_args = {{"per_core_block_cnt", num_blocks}, {"per_core_block_dim", block_size}},
-        .hw_config = experimental::metal2_host_api::KernelComputeConfig{},
+        .hw_config = experimental::metal2_host_api::ComputeHardwareConfig{},
     };
 
     experimental::metal2_host_api::WorkUnitSpec wu{

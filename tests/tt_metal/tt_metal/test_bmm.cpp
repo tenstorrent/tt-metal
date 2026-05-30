@@ -86,18 +86,16 @@ experimental::metal2_host_api::ProgramSpec build_bmm_program_spec(
     // On Quasar we also enable implicit sync on each DFB so the reader/writer kernels can drop
     // explicit reserve_back/wait_front/push_back/pop_front; on WH/BH implicit sync is unsupported
     // and must be disabled to match the explicit-sync kernel branch.
-    experimental::metal2_host_api::KernelDMConfig reader_config{
+    experimental::metal2_host_api::DataMovementHardwareConfig reader_config{
         .gen1_config =
-            experimental::metal2_host_api::KernelDMConfig::Gen1Config{
+            experimental::metal2_host_api::DataMovementHardwareConfig::Gen1Config{
                 .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default},
-        .gen2_config =
-            experimental::metal2_host_api::KernelDMConfig::Gen2Config{}};
-    experimental::metal2_host_api::KernelDMConfig writer_config{
+        .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{}};
+    experimental::metal2_host_api::DataMovementHardwareConfig writer_config{
         .gen1_config =
-            experimental::metal2_host_api::KernelDMConfig::Gen1Config{
+            experimental::metal2_host_api::DataMovementHardwareConfig::Gen1Config{
                 .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default},
-        .gen2_config =
-            experimental::metal2_host_api::KernelDMConfig::Gen2Config{}};
+        .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{}};
     if (!use_implicit_sync) {
         reader_config.gen2_config->disable_implicit_sync_for = {SRC0_DFB, SRC1_DFB};
         writer_config.gen2_config->disable_implicit_sync_for = {DST_DFB};
@@ -184,7 +182,7 @@ experimental::metal2_host_api::ProgramSpec build_bmm_program_spec(
               .endpoint_type = experimental::metal2_host_api::DFBEndpointType::PRODUCER,
               .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED}},
         .compile_time_args = {{"batch", p.B_per_core}, {"Mt", p.Mt}, {"Kt", p.Kt}, {"Nt", p.Nt}},
-        .hw_config = experimental::metal2_host_api::KernelComputeConfig{},
+        .hw_config = experimental::metal2_host_api::ComputeHardwareConfig{},
     };
 
     return experimental::metal2_host_api::ProgramSpec{

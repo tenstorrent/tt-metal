@@ -73,8 +73,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
                 .runtime_arg_names = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
             },
         .hw_config =
-            experimental::metal2_host_api::KernelDMConfig{
-                .gen2_config = experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
+            experimental::metal2_host_api::DataMovementHardwareConfig{
+                .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{}},
     };
 
     experimental::metal2_host_api::KernelSpec dm_transform_spec{
@@ -96,8 +96,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
                 {"buf_b", buf_b_addr},
             },
         .hw_config =
-            experimental::metal2_host_api::KernelDMConfig{
-                .gen2_config = experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
+            experimental::metal2_host_api::DataMovementHardwareConfig{
+                .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{}},
     };
 
     experimental::metal2_host_api::KernelSpec dm_writer_spec{
@@ -112,8 +112,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
                 .runtime_arg_names = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
             },
         .hw_config =
-            experimental::metal2_host_api::KernelDMConfig{
-                .gen2_config = experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
+            experimental::metal2_host_api::DataMovementHardwareConfig{
+                .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{}},
     };
 
     experimental::metal2_host_api::WorkUnitSpec main_wu{
@@ -234,8 +234,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
                 {"buf_b", buf_b_addr},
             },
         .hw_config =
-            experimental::metal2_host_api::KernelDMConfig{
-                .gen2_config = experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
+            experimental::metal2_host_api::DataMovementHardwareConfig{
+                .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{}},
     };
 
     experimental::metal2_host_api::KernelSpec dm_writer_0_spec{
@@ -256,8 +256,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
                     {"dram_addr", "l1_addr", "num_elements", "dram_bank_id", "remote_noc_x", "remote_noc_y"},
             },
         .hw_config =
-            experimental::metal2_host_api::KernelDMConfig{
-                .gen2_config = experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
+            experimental::metal2_host_api::DataMovementHardwareConfig{
+                .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{}},
     };
 
     experimental::metal2_host_api::KernelSpec dm_reader_1_spec{
@@ -277,8 +277,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
                 .runtime_arg_names = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
             },
         .hw_config =
-            experimental::metal2_host_api::KernelDMConfig{
-                .gen2_config = experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
+            experimental::metal2_host_api::DataMovementHardwareConfig{
+                .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{}},
     };
 
     experimental::metal2_host_api::KernelSpec dm_transform_1_spec{
@@ -300,8 +300,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
                 {"buf_b", buf_b_addr},
             },
         .hw_config =
-            experimental::metal2_host_api::KernelDMConfig{
-                .gen2_config = experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
+            experimental::metal2_host_api::DataMovementHardwareConfig{
+                .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{}},
     };
 
     experimental::metal2_host_api::KernelSpec dm_writer_1_spec{
@@ -316,8 +316,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
                 .runtime_arg_names = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
             },
         .hw_config =
-            experimental::metal2_host_api::KernelDMConfig{
-                .gen2_config = experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
+            experimental::metal2_host_api::DataMovementHardwareConfig{
+                .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{}},
     };
 
     experimental::metal2_host_api::WorkUnitSpec wu_core_0{

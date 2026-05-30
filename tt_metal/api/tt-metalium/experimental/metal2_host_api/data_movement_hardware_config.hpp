@@ -13,20 +13,20 @@
 namespace tt::tt_metal::experimental::metal2_host_api {
 
 // ============================================================================
-//  KernelDMConfig
+//  DataMovementHardwareConfig
 // ============================================================================
 //
-// The KernelDMConfig describes the configuration of the hardware resources
+// The DataMovementHardwareConfig describes the configuration of the hardware resources
 // controlled by a data movement kernel. ("DM" is the abbreviation for Data
 // Movement, used throughout the API).
 //
 // The DM configuration differs between Gen1 architectures (Wormhole, Blackhole)
 // and Gen2 architectures (Quasar and derivatives).
 //
-// The KernelDMConfig struct exposes both a Gen1Config and a Gen2Config variant.
+// The DataMovementHardwareConfig struct exposes both a Gen1Config and a Gen2Config variant.
 // The runtime will dynamically select the appropriate variant based on the
 // target architecture. For architecture-agnostic host code, you may specify
-// both variants in the same KernelDMConfig.
+// both variants in the same DataMovementHardwareConfig.
 //
 // If the variant for the target architecture is not supplied:
 //  - Gen 1 will trigger an error (config is mandatory for now)
@@ -34,7 +34,7 @@ namespace tt::tt_metal::experimental::metal2_host_api {
 //
 // ============================================================================
 
-struct KernelDMConfig {
+struct DataMovementHardwareConfig {
     struct Gen1Config {
         tt::tt_metal::DataMovementProcessor processor = tt::tt_metal::DataMovementProcessor::RISCV_0;
         tt::tt_metal::NOC noc = tt::tt_metal::NOC::RISCV_0_default;

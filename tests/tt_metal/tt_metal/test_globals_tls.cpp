@@ -79,8 +79,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GlobalsAndTLS) {
                     .runtime_arg_names = {"signal_address", "dram_dst_address", "dram_dst_bank_id", "l1_result_addr"},
                 },
             .hw_config =
-                experimental::metal2_host_api::KernelDMConfig{
-                    .gen2_config = experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
+                experimental::metal2_host_api::DataMovementHardwareConfig{
+                    .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{}},
         };
     };
 
@@ -314,7 +314,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelTLS) {
             {
                 .runtime_arg_names = {"l1_result_addr"},
             },
-        .hw_config = experimental::metal2_host_api::KernelComputeConfig{},
+        .hw_config = experimental::metal2_host_api::ComputeHardwareConfig{},
     };
 
     experimental::metal2_host_api::WorkUnitSpec main_wu{

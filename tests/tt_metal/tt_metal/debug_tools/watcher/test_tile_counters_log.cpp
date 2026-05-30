@@ -86,9 +86,9 @@ void RunTest(
         .dfb_bindings = {experimental::metal2_host_api::ProducerOf(TILE_COUNTER_DFB, "tile_counter_dfb")},
         .compile_time_args = {{"num_entries", NUM_ENTRIES_PER_PRODUCER}},
         .hw_config =
-            experimental::metal2_host_api::KernelDMConfig{
+            experimental::metal2_host_api::DataMovementHardwareConfig{
                 .gen2_config =
-                    experimental::metal2_host_api::KernelDMConfig::Gen2Config{
+                    experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{
                         .disable_implicit_sync_for = {TILE_COUNTER_DFB}}},
     };
 
@@ -109,7 +109,7 @@ void RunTest(
             {{"num_entries", entries_per_consumer},
              {"num_consumers_to_run", NUM_CONSUMERS_TO_RUN},
              {"sync_flag_addr", tensix_sync_addr}},
-        .hw_config = experimental::metal2_host_api::KernelComputeConfig{},
+        .hw_config = experimental::metal2_host_api::ComputeHardwareConfig{},
     };
 
     experimental::metal2_host_api::WorkUnitSpec wu{

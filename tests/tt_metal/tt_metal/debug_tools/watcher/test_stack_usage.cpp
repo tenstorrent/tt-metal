@@ -90,8 +90,8 @@ void RunOneTest(
                 .num_threads = dms_per_kernel,
                 .compile_time_args = {{"usage", free}},
                 .hw_config =
-                    experimental::metal2_host_api::KernelDMConfig{
-                        .gen2_config = experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
+                    experimental::metal2_host_api::DataMovementHardwareConfig{
+                        .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{}},
             });
             kernel_names.push_back(name);
         }
@@ -103,7 +103,7 @@ void RunOneTest(
             // all Neos; each Neo internally runs the kernel on its 4 TRISCs.
             .num_threads = 4,
             .compile_time_args = {{"usage", free}},
-            .hw_config = experimental::metal2_host_api::KernelComputeConfig{},
+            .hw_config = experimental::metal2_host_api::ComputeHardwareConfig{},
         });
         kernel_names.push_back(COMPUTE_NAME);
     } else {
@@ -120,9 +120,9 @@ void RunOneTest(
                 .num_threads = 1,
                 .compile_time_args = {{"usage", free}},
                 .hw_config =
-                    experimental::metal2_host_api::KernelDMConfig{
+                    experimental::metal2_host_api::DataMovementHardwareConfig{
                         .gen1_config =
-                            experimental::metal2_host_api::KernelDMConfig::Gen1Config{
+                            experimental::metal2_host_api::DataMovementHardwareConfig::Gen1Config{
                                 .processor = processor, .noc = noc}},
             });
             kernel_names.push_back(name);
@@ -133,7 +133,7 @@ void RunOneTest(
             .source = path_metal2,
             .num_threads = 1,
             .compile_time_args = {{"usage", free}},
-            .hw_config = experimental::metal2_host_api::KernelComputeConfig{},
+            .hw_config = experimental::metal2_host_api::ComputeHardwareConfig{},
         });
         kernel_names.push_back(COMPUTE_NAME);
     }

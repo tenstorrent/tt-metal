@@ -149,9 +149,9 @@ TEST_F(RTATestFixture, SentinelPatternHandlingAndMissingRTADetection) {
             .num_threads = 1,
             .compile_time_args = {{"l1_scratch_addr", l1_unreserved_base}},
             .hw_config =
-                experimental::metal2_host_api::KernelDMConfig{
+                experimental::metal2_host_api::DataMovementHardwareConfig{
                     .gen1_config =
-                        experimental::metal2_host_api::KernelDMConfig::Gen1Config{
+                        experimental::metal2_host_api::DataMovementHardwareConfig::Gen1Config{
                             .processor = DataMovementProcessor::RISCV_0}},
         };
         experimental::metal2_host_api::KernelSpec compute_spec{
@@ -159,7 +159,7 @@ TEST_F(RTATestFixture, SentinelPatternHandlingAndMissingRTADetection) {
             .source = rta_crta_kernel_path,
             .num_threads = 1,
             .compile_time_args = {{"l1_scratch_addr", compute_scratch_addr}},
-            .hw_config = experimental::metal2_host_api::KernelComputeConfig{},
+            .hw_config = experimental::metal2_host_api::ComputeHardwareConfig{},
         };
         experimental::metal2_host_api::WorkUnitSpec wu{
             .name = "main",
@@ -263,11 +263,11 @@ TEST_F(RTATestFixture, CorrectArgDispatchAndPayloadValidation) {
 
     // Build a Metal 2.0 KernelSpec that works on both gen1 (single BRISC) and gen2 (all Quasar user DMs).
     // Provide both gen1 and gen2 configs so the runtime selects the one matching the current arch.
-    experimental::metal2_host_api::KernelDMConfig dm_cfg{
+    experimental::metal2_host_api::DataMovementHardwareConfig dm_cfg{
         .gen1_config =
-            experimental::metal2_host_api::KernelDMConfig::Gen1Config{
+            experimental::metal2_host_api::DataMovementHardwareConfig::Gen1Config{
                 .processor = DataMovementProcessor::RISCV_0},
-        .gen2_config = experimental::metal2_host_api::KernelDMConfig::Gen2Config{},
+        .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{},
     };
 
     experimental::metal2_host_api::KernelSpec dm_spec{
@@ -414,14 +414,15 @@ TEST_P(RTAAssertTest, OutOfBoundsArgAccessDetection) {
             kspec.num_threads = 1;
         }
         // Provide both gen1 and gen2 configs so the same KernelSpec runs on either arch.
-        kspec.hw_config = experimental::metal2_host_api::KernelDMConfig{
+        kspec.hw_config = experimental::metal2_host_api::DataMovementHardwareConfig{
             .gen1_config =
-                experimental::metal2_host_api::KernelDMConfig::Gen1Config{.processor = DataMovementProcessor::RISCV_0},
-            .gen2_config = experimental::metal2_host_api::KernelDMConfig::Gen2Config{},
+                experimental::metal2_host_api::DataMovementHardwareConfig::Gen1Config{
+                    .processor = DataMovementProcessor::RISCV_0},
+            .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{},
         };
     } else if (params.processor_class == HalProcessorClassType::COMPUTE) {
         kspec.num_threads = 1;  // On Quasar, only 1 NEO Cluster; gen1 has a single compute group.
-        kspec.hw_config = experimental::metal2_host_api::KernelComputeConfig{};
+        kspec.hw_config = experimental::metal2_host_api::ComputeHardwareConfig{};
     } else {
         TT_THROW("Unsupported processor class");
     }
@@ -479,8 +480,8 @@ TEST_F(RTATestFixture, QuasarMultiDMOutOfBoundsArgDetection) {
             {.defines = {{"MAX_RTA_IDX", std::to_string(default_rtas.size())}, {"TEST_MULTI_DM_RTA", "1"}}},
         .compile_time_args = {{"num_dms", num_dms_}, {"l1_sync_addr", l1_unreserved_base}},
         .hw_config =
-            experimental::metal2_host_api::KernelDMConfig{
-                .gen2_config = experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
+            experimental::metal2_host_api::DataMovementHardwareConfig{
+                .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{}},
         .advanced_options =
             experimental::metal2_host_api::KernelAdvancedOptions{
                 .num_runtime_varargs = default_rtas.size(),

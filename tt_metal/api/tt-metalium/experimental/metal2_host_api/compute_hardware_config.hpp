@@ -13,13 +13,14 @@
 namespace tt::tt_metal::experimental::metal2_host_api {
 
 // ============================================================================
-//  KernelComputeConfig
+//  ComputeHardwareConfig
 // ============================================================================
 //
-// The KernelComputeConfig describes the configuration of the Tensix compute
+// The ComputeHardwareConfig describes the configuration of the Tensix compute
 // accelerator hardware resources controlled by a compute kernel.
 //
-// This configuration is common to all Tenstorrent accelerator families.
+// You must specify a ComputeHardwareConfig for every compute kernel.
+// The configuration is common to all Tenstorrent accelerator families.
 //
 // The Tensix Engine pipeline consists of Unpack, Math, and Pack stages.
 // There are two math engines:
@@ -27,11 +28,11 @@ namespace tt::tt_metal::experimental::metal2_host_api {
 //    writes to the Dest register file (16- or 32-bit, configurable).
 //  - SFPU runs SIMD transcendentals. It can only access Dest.
 //
-// The KernelComputeConfig fields configure this pipeline.
+// The ComputeHardwareConfig fields configure this pipeline.
 //
 // ============================================================================
 
-struct KernelComputeConfig {
+struct ComputeHardwareConfig {
     // Number of multiply passes the FPU runs to use more mantissa bits
     MathFidelity math_fidelity = MathFidelity::HiFi4;
 

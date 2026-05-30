@@ -237,17 +237,17 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
 
     // Both gen1 and gen2 configs are populated; the runtime picks the one
     // matching the active arch.
-    experimental::metal2_host_api::KernelDMConfig reader_dm_cfg{
+    experimental::metal2_host_api::DataMovementHardwareConfig reader_dm_cfg{
         .gen1_config =
-            experimental::metal2_host_api::KernelDMConfig::Gen1Config{
+            experimental::metal2_host_api::DataMovementHardwareConfig::Gen1Config{
                 .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
-        .gen2_config = experimental::metal2_host_api::KernelDMConfig::Gen2Config{},
+        .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{},
     };
-    experimental::metal2_host_api::KernelDMConfig writer_dm_cfg{
+    experimental::metal2_host_api::DataMovementHardwareConfig writer_dm_cfg{
         .gen1_config =
-            experimental::metal2_host_api::KernelDMConfig::Gen1Config{
+            experimental::metal2_host_api::DataMovementHardwareConfig::Gen1Config{
                 .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
-        .gen2_config = experimental::metal2_host_api::KernelDMConfig::Gen2Config{},
+        .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{},
     };
 
     experimental::metal2_host_api::KernelSpec reader_spec{
@@ -421,17 +421,17 @@ bool reader_datacopy_writer(
 
     // Both gen1 and gen2 configs are populated; the runtime picks the one
     // matching the active arch.
-    experimental::metal2_host_api::KernelDMConfig reader_dm_cfg{
+    experimental::metal2_host_api::DataMovementHardwareConfig reader_dm_cfg{
         .gen1_config =
-            experimental::metal2_host_api::KernelDMConfig::Gen1Config{
+            experimental::metal2_host_api::DataMovementHardwareConfig::Gen1Config{
                 .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
-        .gen2_config = experimental::metal2_host_api::KernelDMConfig::Gen2Config{},
+        .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{},
     };
-    experimental::metal2_host_api::KernelDMConfig writer_dm_cfg{
+    experimental::metal2_host_api::DataMovementHardwareConfig writer_dm_cfg{
         .gen1_config =
-            experimental::metal2_host_api::KernelDMConfig::Gen1Config{
+            experimental::metal2_host_api::DataMovementHardwareConfig::Gen1Config{
                 .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
-        .gen2_config = experimental::metal2_host_api::KernelDMConfig::Gen2Config{},
+        .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{},
     };
 
     experimental::metal2_host_api::KernelSpec reader_spec{
@@ -476,7 +476,7 @@ bool reader_datacopy_writer(
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
         .compile_time_args = {{"per_core_tile_cnt", per_core_tile_cnt}},
-        .hw_config = experimental::metal2_host_api::KernelComputeConfig{},
+        .hw_config = experimental::metal2_host_api::ComputeHardwareConfig{},
     };
 
     experimental::metal2_host_api::WorkUnitSpec wu{

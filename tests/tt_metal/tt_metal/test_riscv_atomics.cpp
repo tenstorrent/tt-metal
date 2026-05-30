@@ -95,8 +95,8 @@ protected:
                 .compiler_options = {.defines = defines_vec},
                 .runtime_arg_schema = {.runtime_arg_names = {"l1_counter_addr", "increment_times"}},
                 .hw_config =
-                    experimental::metal2_host_api::KernelDMConfig{
-                        .gen2_config = experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
+                    experimental::metal2_host_api::DataMovementHardwareConfig{
+                        .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{}},
             });
             kernel_names.push_back(DM_KERNEL);
             kernel_run_args.push_back(make_run_params(DM_KERNEL));
@@ -110,9 +110,9 @@ protected:
                     .compiler_options = {.defines = defines_vec},
                     .runtime_arg_schema = {.runtime_arg_names = {"l1_counter_addr", "increment_times"}},
                     .hw_config =
-                        experimental::metal2_host_api::KernelDMConfig{
+                        experimental::metal2_host_api::DataMovementHardwareConfig{
                             .gen1_config =
-                                experimental::metal2_host_api::KernelDMConfig::Gen1Config{
+                                experimental::metal2_host_api::DataMovementHardwareConfig::Gen1Config{
                                     .processor = static_cast<tt_metal::DataMovementProcessor>(dm_id),
                                     .noc = (dm_id == 1 ? NOC::RISCV_1_default : NOC::RISCV_0_default),
                                 }},

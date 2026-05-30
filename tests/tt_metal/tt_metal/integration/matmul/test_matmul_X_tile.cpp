@@ -280,12 +280,12 @@ static void matmul_tile_block(
                   "in0_block_size_bytes",
                   "in1_block_size_bytes"}},
         .hw_config =
-            experimental::metal2_host_api::KernelDMConfig{
+            experimental::metal2_host_api::DataMovementHardwareConfig{
                 .gen1_config =
-                    experimental::metal2_host_api::KernelDMConfig::Gen1Config{
+                    experimental::metal2_host_api::DataMovementHardwareConfig::Gen1Config{
                         .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
                 .gen2_config =
-                    experimental::metal2_host_api::KernelDMConfig::Gen2Config{
+                    experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{
                         .disable_implicit_sync_for = {SRC0_DFB, SRC1_DFB}}},
     };
 
@@ -298,12 +298,13 @@ static void matmul_tile_block(
         .dfb_bindings = {experimental::metal2_host_api::ConsumerOf(DST_DFB, "in")},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
         .hw_config =
-            experimental::metal2_host_api::KernelDMConfig{
+            experimental::metal2_host_api::DataMovementHardwareConfig{
                 .gen1_config =
-                    experimental::metal2_host_api::KernelDMConfig::Gen1Config{
+                    experimental::metal2_host_api::DataMovementHardwareConfig::Gen1Config{
                         .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
                 .gen2_config =
-                    experimental::metal2_host_api::KernelDMConfig::Gen2Config{.disable_implicit_sync_for = {DST_DFB}}},
+                    experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{
+                        .disable_implicit_sync_for = {DST_DFB}}},
     };
 
     // matmul_block.cpp uses named CTAs. Map cfg.compute_kernel_args (positional) to the
@@ -357,7 +358,7 @@ static void matmul_tile_block(
              }},
         .compile_time_args = compute_cta_bindings,
         .hw_config =
-            experimental::metal2_host_api::KernelComputeConfig{
+            experimental::metal2_host_api::ComputeHardwareConfig{
                 .math_fidelity = cfg.math_fidelity,
                 .fp32_dest_acc_en = cfg.fp32_dest_acc_en,
                 .dst_full_sync_en = cfg.dst_full_sync_en,

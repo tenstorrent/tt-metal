@@ -382,12 +382,12 @@ void run_single_core_reduce_program(
         .compile_time_args = reader_cta_bindings,
         .runtime_arg_schema = {.runtime_arg_names = reader_runtime_arg_names},
         .hw_config =
-            experimental::metal2_host_api::KernelDMConfig{
+            experimental::metal2_host_api::DataMovementHardwareConfig{
                 .gen1_config =
-                    experimental::metal2_host_api::KernelDMConfig::Gen1Config{
+                    experimental::metal2_host_api::DataMovementHardwareConfig::Gen1Config{
                         .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
                 .gen2_config =
-                    experimental::metal2_host_api::KernelDMConfig::Gen2Config{
+                    experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{
                         .disable_implicit_sync_for = {SRC0_DFB, SRC1_DFB}}},
     };
 
@@ -401,12 +401,13 @@ void run_single_core_reduce_program(
         .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
         .hw_config =
-            experimental::metal2_host_api::KernelDMConfig{
+            experimental::metal2_host_api::DataMovementHardwareConfig{
                 .gen1_config =
-                    experimental::metal2_host_api::KernelDMConfig::Gen1Config{
+                    experimental::metal2_host_api::DataMovementHardwareConfig::Gen1Config{
                         .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
                 .gen2_config =
-                    experimental::metal2_host_api::KernelDMConfig::Gen2Config{.disable_implicit_sync_for = {DST_DFB}}},
+                    experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{
+                        .disable_implicit_sync_for = {DST_DFB}}},
     };
 
     experimental::metal2_host_api::KernelSpec compute_spec{
@@ -435,7 +436,7 @@ void run_single_core_reduce_program(
              }},
         .compile_time_args = {{"Ht", dims.Ht}, {"Wt", dims.Wt}, {"NC", dims.NC}},
         .hw_config =
-            experimental::metal2_host_api::KernelComputeConfig{
+            experimental::metal2_host_api::ComputeHardwareConfig{
                 .math_fidelity = test_config.math_fidelity,
                 .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
                 .dst_full_sync_en = test_config.dst_full_sync_en,

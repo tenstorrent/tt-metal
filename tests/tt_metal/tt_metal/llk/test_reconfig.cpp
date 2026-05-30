@@ -462,9 +462,9 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
                   "src5_bank_id",
                   "num_tiles"}},
         .hw_config =
-            experimental::metal2_host_api::KernelDMConfig{
+            experimental::metal2_host_api::DataMovementHardwareConfig{
                 .gen2_config =
-                    experimental::metal2_host_api::KernelDMConfig::Gen2Config{
+                    experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{
                         .disable_implicit_sync_for = {INP0_DFB, INP1_DFB, INP2_DFB, INP3_DFB, INP4_DFB, INP5_DFB}}},
     };
 
@@ -480,9 +480,10 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
         .hw_config =
-            experimental::metal2_host_api::KernelDMConfig{
+            experimental::metal2_host_api::DataMovementHardwareConfig{
                 .gen2_config =
-                    experimental::metal2_host_api::KernelDMConfig::Gen2Config{.disable_implicit_sync_for = {OUT_DFB}}},
+                    experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{
+                        .disable_implicit_sync_for = {OUT_DFB}}},
     };
 
     experimental::metal2_host_api::KernelSpec compute_spec{
@@ -500,7 +501,7 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
              dfb_binding(INP5_DFB, DFBEndpoint::CONSUMER),
              dfb_binding(OUT_DFB, DFBEndpoint::PRODUCER)},
         .hw_config =
-            experimental::metal2_host_api::KernelComputeConfig{
+            experimental::metal2_host_api::ComputeHardwareConfig{
                 .math_fidelity = MathFidelity::HiFi4,
                 .fp32_dest_acc_en = true,
                 .unpack_to_dest_mode =
