@@ -652,7 +652,7 @@ static Metal2BindingsSnapshot build_metal2_snapshot(const tt::tt_metal::Kernel& 
     kernel.process_semaphore_local_accessor_handles(
         [&s](const std::string& name, uint16_t id) { s.sem_accessors[name] = id; });
     kernel.process_tensor_binding_handles(
-        [&s](const std::string& name, uint32_t cta_off, uint32_t addr_crta_off) {
+        [&s](const std::string& name, uint32_t cta_off, uint32_t addr_crta_off, uint32_t) {
             s.ta_accessors.push_back({name, cta_off, addr_crta_off});
         });
     return s;
