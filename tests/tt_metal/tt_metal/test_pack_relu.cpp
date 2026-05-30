@@ -100,8 +100,10 @@ static void run_pack_relu_test(IDevice* dev, uint32_t relu_config, const std::fu
             .compile_args = {num_tiles, /*use_dfbs=*/true},
             .defines = {{"PACK_RELU", "1"}}});
 
-    tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(program, l1_input_dfb, reader, compute);
-    tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(program, l1_output_dfb, compute, writer);
+    tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+        program, l1_input_dfb, reader, compute);
+    tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+        program, l1_output_dfb, compute, writer);
 
     // Stimulus: random bfloat16 in [-1, 1]
     std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(dram_buffer_size, 1.0f, 0xCAFE);

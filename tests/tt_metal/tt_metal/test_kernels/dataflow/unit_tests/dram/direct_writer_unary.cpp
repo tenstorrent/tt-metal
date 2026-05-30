@@ -14,8 +14,8 @@
 void kernel_main() {
     const uint32_t cb_id = get_compile_time_arg_val(0);
     constexpr bool use_dfbs = get_compile_time_arg_val(1) == 1;
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);     // global base address
-    uint32_t dst_bank_id = get_arg_val<uint32_t>(1);  // data is in one bank
+    uint32_t dst_addr  = get_arg_val<uint32_t>(0); // global base address
+    uint32_t dst_bank_id = get_arg_val<uint32_t>(1); // data is in one bank
     uint32_t num_tiles = get_arg_val<uint32_t>(2);
     // DRAM page stride: the allocator may round page_size up (e.g. to
     // NOC_DRAM_READ_ALIGNMENT_BYTES = 64 on Quasar), so tiles are spaced
