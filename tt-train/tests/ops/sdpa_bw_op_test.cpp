@@ -818,12 +818,6 @@ TEST_F(SDPABackwardTest, NIGHTLY_NanoGPTConfig) {
 }
 
 TEST_F(SDPABackwardTest, NIGHTLY_LargerSequence) {
-    // Widened FW-output tolerance only (fw_atol/fw_rtol) from 3e-2 to 7e-2: at S=1024
-    // + D=128, multi-tile K chunking + bf16 attention produces rare cancellation outliers
-    // at deep-causal rows with small output magnitudes (observed max_abs ~6e-2 in CI, vs
-    // bf16 noise floor at 1 ULP for the bulk). Gradient checks (dQ/dK/dV) stay on the
-    // default 3e-2 — the FW outliers don't propagate to grads at the same magnitude.
-    // See tt-train/docs/sdpa_accuracy_testing.md for analysis.
     SDPABackwardTestConfig config{
         .batch_size = 4U,
         .sequence_length = 1024U,
@@ -832,8 +826,6 @@ TEST_F(SDPABackwardTest, NIGHTLY_LargerSequence) {
         .num_query_heads = 8U,
         .num_kv_heads = 8U,
         .dropout_prob = 0.0F,
-        .fw_atol = 7e-2F,
-        .fw_rtol = 7e-2F,
         .test_name = "LargerSequence (B=4, S=1024, D=128, H=8)"};
     run_sdpa_backward_test(config);
 }
@@ -938,7 +930,6 @@ TEST_F(SDPABackwardTest, NIGHTLY_CausalMask_NanoGPTConfig) {
 
 TEST_F(SDPABackwardTest, NIGHTLY_CausalMask_LargerSequence) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
-    // Widened FW-output tolerance only (see NIGHTLY_LargerSequence comment).
     SDPABackwardTestConfig config{
         .batch_size = 4U,
         .sequence_length = 1024U,
@@ -947,8 +938,6 @@ TEST_F(SDPABackwardTest, NIGHTLY_CausalMask_LargerSequence) {
         .num_query_heads = 8U,
         .num_kv_heads = 8U,
         .dropout_prob = 0.0F,
-        .fw_atol = 7e-2F,
-        .fw_rtol = 7e-2F,
         .test_name = "CausalMask_LargerSeq (B=4, S=1024, D=128, H=8)",
         .mask_type = ttml::metal::AttentionMaskType::Causal};
     run_sdpa_backward_test(config);

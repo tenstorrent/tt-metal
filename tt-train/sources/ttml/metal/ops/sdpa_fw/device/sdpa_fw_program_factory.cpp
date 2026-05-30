@@ -6,8 +6,6 @@
 
 #include <bit>
 #include <cmath>
-#include <cstdlib>
-#include <string_view>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "metal/common/program_utils.hpp"
@@ -529,24 +527,10 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         defines[kBalancedParallelismDefKey] = "1";
     }
 
-    // Per-arch math fidelity default. Wormhole has HW bug TT #38306: HiFi4 + fp32_dest_acc +
-    // matmul_block corrupts FP32 dest accumulation, so we default to HiFi3 there. Blackhole is
-    // unaffected and gets HiFi4. Env vars override for experiments / CI: SDPA_FW_MATH_FIDELITY
-    // overrides only the forward; SDPA_MATH_FIDELITY controls fw + bw together. FW-specific wins.
-    auto math_fidelity = (device->arch() == tt::ARCH::WORMHOLE_B0) ? tt::tt_metal::MathFidelity::HiFi3
-                                                                   : tt::tt_metal::MathFidelity::HiFi4;
-    const char* fidelity_env = std::getenv("SDPA_FW_MATH_FIDELITY");
-    if (fidelity_env == nullptr) {
-        fidelity_env = std::getenv("SDPA_MATH_FIDELITY");
-    }
-    if (fidelity_env != nullptr) {
-        const std::string_view v{fidelity_env};
-        if (v == "3") {
-            math_fidelity = tt::tt_metal::MathFidelity::HiFi3;
-        } else if (v == "4") {
-            math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
-        }
-    }
+    // Per-arch math fidelity. Wormhole has HW bug TT #38306: HiFi4 + fp32_dest_acc + matmul_block
+    // corrupts FP32 dest accumulation, so we use HiFi3 there. Blackhole is unaffected and uses HiFi4.
+    const auto math_fidelity = (device->arch() == tt::ARCH::WORMHOLE_B0) ? tt::tt_metal::MathFidelity::HiFi3
+                                                                         : tt::tt_metal::MathFidelity::HiFi4;
 
     SDPAForwardKernels kernels;
 

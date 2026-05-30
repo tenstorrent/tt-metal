@@ -798,11 +798,6 @@ TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_SmallBatch_12Heads_6Group) {
 }
 
 TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_Batch_12Heads_6Group) {
-    // Widened atol/rtol from the default 2e-2 to 7e-2: at S=1024 and 6 KV groups,
-    // multi-tile K chunking + bf16 attention produces rare cancellation outliers
-    // at deep-causal rows with small output magnitudes (observed max_abs ~6e-2 in
-    // CI, ~150x better than this on MAE/RMSE). Bulk noise floor is 1 bf16 ULP.
-    // See tt-train/docs/sdpa_accuracy_testing.md for the full analysis.
     SDPATestConfig config{
         .batch_size = 16U,
         .sequence_length = 1024U,
@@ -811,8 +806,6 @@ TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_Batch_12Heads_6Group) {
         .num_query_heads = 12U,
         .num_key_heads = 6U,
         .mask_type = ttml::metal::AttentionMaskType::Arbitrary,
-        .result_atol = 7e-2F,
-        .result_rtol = 7e-2F,
         .test_name = "Batch_16B_12H_6KV_Production"};
     run_sdpa_test(config);
 }
