@@ -51,7 +51,7 @@ void kernel_main() {
         for (uint32_t w = 0; w < Wt; w++) {
             cb_reserve_back(input_tensor_cb_index, one_tile);
             const uint32_t l1_write_addr = get_write_ptr(input_tensor_cb_index);
-            noc_async_read_tile(h * Wt + w, interleaved_accessor0, l1_write_addr);
+            noc_async_read_page(h * Wt + w, interleaved_accessor0, l1_write_addr);
             noc_async_read_barrier();
             cb_push_back(input_tensor_cb_index, one_tile);
         }  // Wt loop
@@ -60,7 +60,7 @@ void kernel_main() {
         for (uint32_t w = 0; w < Wt; w++) {
             cb_wait_front(index_tensor_output_cb_index, one_tile);
             const uint32_t l1_write_addr_index = get_read_ptr(index_tensor_output_cb_index);
-            noc_async_write_tile(h * Wt + w, interleaved_accessor1, l1_write_addr_index);
+            noc_async_write_page(h * Wt + w, interleaved_accessor1, l1_write_addr_index);
             noc_async_write_barrier();
             cb_pop_front(index_tensor_output_cb_index, one_tile);
         }  // Wt loop

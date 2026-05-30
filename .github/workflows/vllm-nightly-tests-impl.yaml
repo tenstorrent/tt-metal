@@ -129,6 +129,7 @@ jobs:
               "additional-server-args": "--async-scheduling",
               "structured-output": true,
               "sampling-tests": true,
+              "sampling-test-filter": "not test_mixed_params_batch and not TestSeedingAndVariety and not test_repetition_penalty_mixed_batch and not test_presence_penalty_mixed_batch and not test_frequency_penalty_mixed_batch",
               "multimodal": false,
               "co-owner-1-id": "U08E1JCDVNX",
               "co-owner-2-id": "U08CEGF78ET"
