@@ -633,6 +633,12 @@ all_gather_minimal_matmul_async_factory_helper(
             ttnn::ccl::get_forward_backward_line_unicast_configuration(
                 sender_device_coord, fsdp_forward_coord, fsdp_backward_coord, device);
 
+        // FSDP uni-ring routing (mirrors the in0 override above): fsdp Dev 0's forward unicast
+        // routes N-1 hops to fsdp Dev N-1 to close the virtual ring.
+        if (fsdp_topology == ttnn::ccl::Topology::Linear && fsdp_ring_index == 0) {
+            fsdp_unicast_forward_args[1] = fsdp_ring_size - 1;  // distance_in_hops = N-1
+        }
+
         std::vector<CoreRange> fsdp_mux_core_ranges;
         for (uint32_t mux_id = 0; mux_id < num_mux_cores; ++mux_id) {
             uint32_t dir = mux_id % 2;

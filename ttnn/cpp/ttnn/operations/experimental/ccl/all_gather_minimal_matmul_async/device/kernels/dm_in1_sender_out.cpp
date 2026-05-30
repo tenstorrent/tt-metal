@@ -250,16 +250,19 @@ void kernel_main() {
     uint64_t fsdp_sem_noc_addr_backward_in_pkt =
         safe_get_noc_addr(injector_virtual_x, injector_virtual_y, fsdp_sem_backward, 0);
 
-    // Packet headers for fabric send. Each fabric sender allocates headers for its single
-    // direction only; non-senders never enter the send path so they allocate nothing.
+    // Packet headers for fabric send, mirroring in0's uni-ring direction mapping:
+    //   - fsdp Dev 0 (no backward neighbor) long-sends via the size-2 core's forward-routing mux
+    //     (handle_backward) using the FORWARD route (N-1 hops) -> needs pkt_hdrs_forward on size-2.
+    //   - fsdp Dev k short-sends via the size-1 core's backward-routing mux (handle_forward) using
+    //     the BACKWARD route (1 hop) -> needs pkt_hdrs_backward on size-1.
     PacketHeaders fsdp_pkt_hdrs_backward{};
     PacketHeaders fsdp_pkt_hdrs_forward{};
     if (in1_core_order_index == fsdp_backward_in1_core_order_index) {
-        fsdp_pkt_hdrs_backward = allocate_and_init_packet_headers(
-            fsdp_num_targets_backward > 0, fsdp_unicast_route_info_backward, in1_reader, 1, in1_tile_size);
-    } else if (in1_core_order_index == fsdp_forward_in1_core_order_index) {
         fsdp_pkt_hdrs_forward = allocate_and_init_packet_headers(
             fsdp_num_targets_forward > 0, fsdp_unicast_route_info_forward, in1_reader, 1, in1_tile_size);
+    } else if (in1_core_order_index == fsdp_forward_in1_core_order_index) {
+        fsdp_pkt_hdrs_backward = allocate_and_init_packet_headers(
+            fsdp_num_targets_backward > 0, fsdp_unicast_route_info_backward, in1_reader, 1, in1_tile_size);
     }
 #endif
 
@@ -343,8 +346,6 @@ void kernel_main() {
                     k_right_tiles = k_block_odd ? (K_block_tiles / 2) : (K_block_tiles - k_left_tiles);
                 }
                 {
-                    uint32_t unused_sem_fwd = 0;
-                    uint32_t unused_sem_bwd = 0;
                     compute_actual_k_block<is_linear>(
                         k_block_iter,
                         K_num_blocks,
@@ -355,11 +356,15 @@ void kernel_main() {
                         num_devices,
                         k_forward,
 #if defined(IS_IN0) || defined(IS_IN1)
-                        /*wait_for_forwarded_data=*/false,  // FSDP wait handled inline below
-                        nullptr,
-                        nullptr,
-                        unused_sem_fwd,
-                        unused_sem_bwd,
+                        // in1 reuses each weight stripe across M, so the gather wait fires on the
+                        // first m-pass (in0's mirror uses n==0). The skewed sharding makes the
+                        // consume order == the uni-ring receive order, so the standard wait gates
+                        // correctly with no offset.
+                        /*wait_for_forwarded_data=*/(m_block_iter == 0),
+                        fsdp_sem_forward_ptr,
+                        fsdp_sem_backward_ptr,
+                        fsdp_sem_target_forward,
+                        fsdp_sem_target_backward,
                         is_injector_core,
                         /*core_order_size=*/1,
 #endif
@@ -375,84 +380,53 @@ void kernel_main() {
                         }
                     }
                 }
-#ifdef FSDP_FUSED
-                // FSDP-local check per half. Used by injector for read source, and by last-two
-                // cores below for the fabric send.
-                bool is_left_fsdp_local = (k_block_left_tile >= fsdp_K_local_start_tile) &&
-                                          (k_block_left_tile + k_left_tiles <= fsdp_K_local_end_tile);
-                bool is_right_fsdp_local = (k_block_right_tile >= fsdp_K_local_start_tile) &&
-                                           (k_block_right_tile + k_right_tiles <= fsdp_K_local_end_tile);
-#endif
                 if constexpr (is_injector_core) {
 #ifdef FSDP_FUSED
-                    // On m_block_iter == 0, this is the first time we visit this (n_block, k_block).
-                    // If a half is FSDP-remote, the corresponding remote injector is busy sending
-                    // their local stripe at the same iteration — wait for that send to land in our PWB.
-                    if (m_block_iter == 0) {
-                        if (!is_left_fsdp_local) {
-                            uint32_t owner_left = k_block_left_tile / (K_blocks_per_fsdp * K_block_tiles);
-                            uint32_t fwd_dist = (owner_left + fsdp_ring_size - fsdp_ring_index) % fsdp_ring_size;
-                            if (fwd_dist <= fsdp_num_targets_forward) {
-                                fsdp_sem_target_forward += 1;
-                                noc_semaphore_wait_min(fsdp_sem_forward_ptr, fsdp_sem_target_forward);
-                            } else {
-                                fsdp_sem_target_backward += 1;
-                                noc_semaphore_wait_min(fsdp_sem_backward_ptr, fsdp_sem_target_backward);
-                            }
-                        }
-                        if (!is_right_fsdp_local) {
-                            uint32_t owner_right = k_block_right_tile / (K_blocks_per_fsdp * K_block_tiles);
-                            uint32_t fwd_dist = (owner_right + fsdp_ring_size - fsdp_ring_index) % fsdp_ring_size;
-                            if (fwd_dist <= fsdp_num_targets_forward) {
-                                fsdp_sem_target_forward += 1;
-                                noc_semaphore_wait_min(fsdp_sem_forward_ptr, fsdp_sem_target_forward);
-                            } else {
-                                fsdp_sem_target_backward += 1;
-                                noc_semaphore_wait_min(fsdp_sem_backward_ptr, fsdp_sem_target_backward);
-                            }
-                        }
-                    }
-
-                    // Read both halves into cb_id_in1 in L1. The L1 layout is K_block_tiles rows ×
-                    // N_block_tiles cols of tiles. Each half is `half_tiles` rows starting at L1 offset
-                    // (half * N_block_tiles * tile_size). For partial last-N-block, pad with zeros.
+                    // Skewed-shard mirror of in0: the K-block's stripe == my_rank is this device's
+                    // local weight slice (device_iter 0) — read from local weight DRAM; any other
+                    // stripe is a gathered remote stripe in PWB. The per-stripe arrival wait already
+                    // happened inside compute_actual_k_block (Linear wait_for_forwarded_data), so the
+                    // PWB data is guaranteed present here. Linear right-half is zero-fill padding
+                    // (k_block_right_tile == K_tiles), filled with zeros.
+                    const uint32_t local_k_start = my_rank * K_tiles_per_device;
+                    const uint32_t local_k_end = local_k_start + K_tiles_per_device;
                     {
                         uint32_t write_ptr = in1_start_address;
-                        // Left half
+                        // Left half (real data: local weight DRAM if this is our stripe, else PWB).
                         for (uint32_t k = 0; k < k_left_tiles; k++) {
                             uint32_t global_k_tile = k_block_left_tile + k;
+                            bool local = (global_k_tile >= local_k_start) && (global_k_tile < local_k_end);
                             for (uint32_t n = n_tile; n < n_tile_end; n++) {
                                 if (n >= N_tiles) {
                                     write_ptr += in1_tile_size;
                                     continue;
                                 }
-                                if (is_left_fsdp_local) {
-                                    uint32_t local_k_tile = global_k_tile - fsdp_K_local_start_tile;
-                                    uint32_t tile_id = local_k_tile * N_tiles + n;
-                                    noc_async_read_tile(tile_id, local_weight_reader, write_ptr);
+                                if (local) {
+                                    noc_async_read_tile(
+                                        (global_k_tile - local_k_start) * N_tiles + n, local_weight_reader, write_ptr);
                                 } else {
-                                    uint32_t tile_id = global_k_tile * pwb_N_Wt + n;
-                                    noc_async_read_tile(tile_id, in1_reader, write_ptr);
+                                    noc_async_read_tile(global_k_tile * pwb_N_Wt + n, in1_reader, write_ptr);
                                 }
                                 write_ptr += in1_tile_size;
                             }
                             write_ptr += (N_block_tiles - (n_tile_end - n_tile)) * in1_tile_size;
                         }
-                        // Right half
+                        // Right half (Linear: zero-fill; Ring: real backward data).
                         for (uint32_t k = 0; k < k_right_tiles; k++) {
                             uint32_t global_k_tile = k_block_right_tile + k;
+                            bool local = (global_k_tile >= local_k_start) && (global_k_tile < local_k_end);
                             for (uint32_t n = n_tile; n < n_tile_end; n++) {
                                 if (n >= N_tiles) {
                                     write_ptr += in1_tile_size;
                                     continue;
                                 }
-                                if (is_right_fsdp_local) {
-                                    uint32_t local_k_tile = global_k_tile - fsdp_K_local_start_tile;
-                                    uint32_t tile_id = local_k_tile * N_tiles + n;
-                                    noc_async_read_tile(tile_id, local_weight_reader, write_ptr);
+                                if (global_k_tile >= K_tiles) {
+                                    fill_zeros_async(write_ptr, in1_tile_size);
+                                } else if (local) {
+                                    noc_async_read_tile(
+                                        (global_k_tile - local_k_start) * N_tiles + n, local_weight_reader, write_ptr);
                                 } else {
-                                    uint32_t tile_id = global_k_tile * pwb_N_Wt + n;
-                                    noc_async_read_tile(tile_id, in1_reader, write_ptr);
+                                    noc_async_read_tile(global_k_tile * pwb_N_Wt + n, in1_reader, write_ptr);
                                 }
                                 write_ptr += in1_tile_size;
                             }
@@ -505,91 +479,62 @@ void kernel_main() {
                     noc_semaphore_set_remote(in1_valid_semaphore_addr, in1_receiver_semaphore_noc_addr);
                 }
 #ifdef FSDP_FUSED
-                // Fabric send: only on m_block_iter == 0 (first time we see this (n, k_half) — in1
-                // data is reused across M, so one send per (n, k_half) is sufficient).
-                // Only the last-two cores in in1 core order do the send: the second-to-last sends
-                // backward, the last sends forward. Per direction, we only send halves that belong
-                // to OUR fsdp-local stripe (those are the ones our neighbors need).
-                if (m_block_iter == 0) {
-                    if (in1_core_order_index >= fsdp_forward_in1_core_order_index) {
-                        // forward sender: send any local half toward the FSDP forward neighbor
-                        if (is_left_fsdp_local && fsdp_num_targets_forward > 0) {
-                            forward_in1_half_block_to_fabric_neighbor(
-                                k_block_left_tile,
-                                n_tile,
-                                k_left_tiles,
-                                k_right_tiles,
-                                current_N_block_tiles,
-                                N_block_tiles,
-                                1,  // num_tiles_to_write_per_packet (start conservative)
-                                in1_send_l1_addr,
-                                pwb_N_Wt,
-                                in1_reader,
-                                fsdp_mux_handle_forward,
-                                fsdp_pkt_hdrs_forward,
-                                in1_tile_size,
-                                fsdp_sem_noc_addr_forward_in_pkt,
-                                /*write_left_half=*/true,
-                                /*do_write=*/true);
-                        }
-                        if (is_right_fsdp_local && fsdp_num_targets_forward > 0) {
-                            forward_in1_half_block_to_fabric_neighbor(
-                                k_block_right_tile - k_left_tiles,
-                                n_tile,
-                                k_left_tiles,
-                                k_right_tiles,
-                                current_N_block_tiles,
-                                N_block_tiles,
-                                1,
-                                in1_send_l1_addr,
-                                pwb_N_Wt,
-                                in1_reader,
-                                fsdp_mux_handle_forward,
-                                fsdp_pkt_hdrs_forward,
-                                in1_tile_size,
-                                fsdp_sem_noc_addr_forward_in_pkt,
-                                /*write_left_half=*/false,
-                                /*do_write=*/true);
-                        }
-                    } else if (in1_core_order_index >= fsdp_backward_in1_core_order_index) {
-                        // backward sender: send any local half toward the FSDP backward neighbor
-                        if (is_left_fsdp_local && fsdp_num_targets_backward > 0) {
-                            forward_in1_half_block_to_fabric_neighbor(
-                                k_block_left_tile,
-                                n_tile,
-                                k_left_tiles,
-                                k_right_tiles,
-                                current_N_block_tiles,
-                                N_block_tiles,
-                                1,
-                                in1_send_l1_addr,
-                                pwb_N_Wt,
-                                in1_reader,
-                                fsdp_mux_handle_backward,
-                                fsdp_pkt_hdrs_backward,
-                                in1_tile_size,
-                                fsdp_sem_noc_addr_backward_in_pkt,
-                                /*write_left_half=*/true,
-                                /*do_write=*/true);
-                        }
-                        if (is_right_fsdp_local && fsdp_num_targets_backward > 0) {
-                            forward_in1_half_block_to_fabric_neighbor(
-                                k_block_right_tile - k_left_tiles,
-                                n_tile,
-                                k_left_tiles,
-                                k_right_tiles,
-                                current_N_block_tiles,
-                                N_block_tiles,
-                                1,
-                                in1_send_l1_addr,
-                                pwb_N_Wt,
-                                in1_reader,
-                                fsdp_mux_handle_backward,
-                                fsdp_pkt_hdrs_backward,
-                                in1_tile_size,
-                                fsdp_sem_noc_addr_backward_in_pkt,
-                                /*write_left_half=*/false,
-                                /*do_write=*/true);
+                // Fabric relay (uni-ring, mirrors in0): on the first m-pass, relay the just-consumed
+                // full K-block to the FSDP predecessor's PWB. Skewed (a+b) sharding makes our consume
+                // order identical to the predecessor's receive order, so relay-what-you-consume needs
+                // no reordering. Dev 0 (fsdp_num_targets_backward == 0) long-sends to Dev N-1 via the
+                // forward-routing mux (fsdp_mux_handle_backward, N-1 hops) + fsdp_pkt_hdrs_forward;
+                // Dev k short-sends to k-1 via the backward-routing mux (fsdp_mux_handle_forward,
+                // 1 hop) + fsdp_pkt_hdrs_backward. Both signal the receiver's forward semaphore. Only
+                // the real (left) half is relayed; Linear-tail padding is re-zero-filled by the
+                // predecessor's own consume.
+                if constexpr (is_linear) {
+                    if (m_block_iter == 0) {
+                        if constexpr (fsdp_num_targets_backward == 0) {
+                            // fsdp Dev 0 (chain head): long send via mux_backward + pkt_hdrs_forward
+                            if constexpr (fsdp_num_targets_forward > 0) {
+                                if (in1_core_order_index >= fsdp_backward_in1_core_order_index &&
+                                    in1_core_order_index < fsdp_forward_in1_core_order_index) {
+                                    forward_in1_half_block_to_fabric_neighbor(
+                                        k_block_left_tile,
+                                        n_tile,
+                                        k_left_tiles,
+                                        k_right_tiles,
+                                        current_N_block_tiles,
+                                        N_block_tiles,
+                                        1,
+                                        in1_send_l1_addr,
+                                        pwb_N_Wt,
+                                        in1_reader,
+                                        fsdp_mux_handle_backward,
+                                        fsdp_pkt_hdrs_forward,
+                                        in1_tile_size,
+                                        fsdp_sem_noc_addr_forward_in_pkt,
+                                        /*write_left_half=*/true,
+                                        /*do_write=*/true);
+                                }
+                            }
+                        } else {
+                            // fsdp Dev k > 0: short send via mux_forward + pkt_hdrs_backward
+                            if (in1_core_order_index >= fsdp_forward_in1_core_order_index) {
+                                forward_in1_half_block_to_fabric_neighbor(
+                                    k_block_left_tile,
+                                    n_tile,
+                                    k_left_tiles,
+                                    k_right_tiles,
+                                    current_N_block_tiles,
+                                    N_block_tiles,
+                                    1,
+                                    in1_send_l1_addr,
+                                    pwb_N_Wt,
+                                    in1_reader,
+                                    fsdp_mux_handle_forward,
+                                    fsdp_pkt_hdrs_backward,
+                                    in1_tile_size,
+                                    fsdp_sem_noc_addr_forward_in_pkt,
+                                    /*write_left_half=*/true,
+                                    /*do_write=*/true);
+                            }
                         }
                     }
                 }
