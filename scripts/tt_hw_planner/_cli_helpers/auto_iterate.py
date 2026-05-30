@@ -135,6 +135,17 @@ def _run_auto_iterate_loop(
 
     best_pcc_per_component: Dict[str, float] = {}
 
+    # Per-component PCC history for the agentic-engine plateau detector
+    # (G8 convergence). Appended on every PCC-fail iter; consumed by
+    # is_stagnant() to decide whether to apply a mechanical action
+    # (G4) before the next LLM call.
+    pcc_history_per_component: Dict[str, List[float]] = {}
+
+    # Per-component set of G4 mechanical actions already tried this
+    # run. We try each action at most once per component to avoid
+    # re-applying the same toggle on repeated plateaus.
+    tried_actions_per_component: Dict[str, set] = {}
+
     hard_total_attempt_cap: int = max(3, max_attempts_per_component * 2)
     permanently_skipped: List[str] = []
     graduated_this_run: List[str] = []
@@ -426,6 +437,12 @@ def _run_auto_iterate_loop(
             consecutive_same_class_attempts[comp] = consecutive_same_class_attempts.get(comp, 0) + 1
         last_failure_class_per_component[comp] = failure_class
         last_pcc_per_component[comp] = pcc_value
+        # G8 plateau-detector feed: record EVERY PCC observation in a
+        # per-component history. mismatch_ratio = 1.0 - pcc, so the
+        # is_stagnant() heuristic interprets a stagnant history as
+        # "no convergence delta over the last window."
+        if pcc_value is not None:
+            pcc_history_per_component.setdefault(comp, []).append(1.0 - float(pcc_value))
 
         return is_progress
 
@@ -941,6 +958,43 @@ def _run_auto_iterate_loop(
             _preflight_new_components = []
     except Exception:
         _preflight_new_components = []
+
+    # G7 (agentic.learnings): before pre-flight, try to short-circuit
+    # any component that already has a learned fix on disk for THIS
+    # HF architecture. apply_fix() git-applies the diff to the stub;
+    # if the diff is stale (e.g. patch context no longer matches), we
+    # silently fall through to the normal LLM iteration. Direct reuse
+    # of the existing engine.
+    try:
+        from ..agentic.executor import _load_hf_config as _load_hf
+        from ..agentic.learnings import apply_fix, compute_arch_signature, lookup_fix
+
+        _arch_sig_preflight = compute_arch_signature(_load_hf(MODEL))
+        if _arch_sig_preflight:
+            for _comp in _preflight_new_components:
+                _stub_p = demo_dir / "_stubs" / f"{_safe_id(_comp)}.py"
+                if _stub_has_graduated_from_autofill(_stub_p):
+                    continue  # already native; nothing to apply
+                _fix = lookup_fix(arch_signature=_arch_sig_preflight, first_diverging_qn=_comp)
+                if _fix is None:
+                    continue
+                _ok, _msg = apply_fix(fix=_fix, workspace_root=BRINGUP_ROOT())
+                if _ok:
+                    print(
+                        f"  [agentic:G7] applied learned fix for `{_comp}` "
+                        f"from prior run (arch_sig={_arch_sig_preflight[:12]}); "
+                        f"will be PCC-validated in pre-flight."
+                    )
+                else:
+                    print(
+                        f"  [agentic:G7] learned fix for `{_comp}` did not " f"apply cleanly: {_msg[:200]}",
+                        file=sys.stderr,
+                    )
+    except Exception as _g7_lookup_exc:
+        print(
+            f"  [agentic:G7] non-fatal during preflight lookup: " f"{type(_g7_lookup_exc).__name__}: {_g7_lookup_exc}",
+            file=sys.stderr,
+        )
 
     _preflight_native_components: List[str] = []
     for comp in _preflight_new_components:
@@ -1985,6 +2039,51 @@ def _run_auto_iterate_loop(
                     file=sys.stderr,
                 )
 
+        # G8 (agentic.convergence) + G4 (agentic.actions): if this
+        # component's PCC history is stagnant (plateau detected), apply
+        # ONE untried mechanical action BEFORE invoking the LLM again.
+        # Each action is a cheap toggle (cache invalidate, env var, etc.);
+        # if none move the needle, we fall through to the LLM iteration.
+        # Direct reuse of the existing engine — no logic duplicated here.
+        if iter_target_component:
+            try:
+                from ..agentic.actions import default_mechanical_actions
+                from ..agentic.convergence import is_stagnant
+
+                _hist = pcc_history_per_component.get(iter_target_component) or []
+                if len(_hist) >= 2 and is_stagnant(_hist):
+                    _tried = tried_actions_per_component.setdefault(iter_target_component, set())
+                    _actions = default_mechanical_actions(
+                        model_id=MODEL,
+                        workspace_root=demo_dir,
+                    )
+                    for _action in _actions:
+                        _name = getattr(_action, "name", "") or _action.__class__.__name__
+                        if _name in _tried:
+                            continue
+                        _tried.add(_name)
+                        try:
+                            _result = _action.apply({})
+                            _applied = bool(getattr(_result, "applied", False))
+                            _notes = "; ".join(getattr(_result, "notes", []) or [])
+                        except Exception as _aexc:
+                            _applied = False
+                            _notes = f"raised {type(_aexc).__name__}: {_aexc}"
+                        print(
+                            f"  [agentic:G4] PCC plateau on `{iter_target_component}` "
+                            f"(history={[round(p, 4) for p in _hist[-3:]]}); "
+                            f"applied mechanical action `{_name}`: "
+                            f"applied={_applied}; {_notes}"
+                        )
+                        # One action per plateau-detection; the next pytest
+                        # run will reveal whether the toggle moved PCC.
+                        break
+            except Exception as _g8_exc:
+                print(
+                    f"  [agentic:G4+G8] non-fatal: " f"{type(_g8_exc).__name__}: {_g8_exc}",
+                    file=sys.stderr,
+                )
+
         prompt = (
             f"{hw_header}"
             f"{task_block}"
@@ -2863,6 +2962,48 @@ def _run_auto_iterate_loop(
                 f"AUTO-ITERATE {it}/{max_iters}: `{iter_target_component}` "
                 f"GRADUATED to native TTNN on {BOX} (snapshot saved, PCC test PASSED)"
             )
+            # G7 (agentic.learnings): persist the graduated stub diff so a
+            # future run on the same HF architecture can apply it
+            # directly. arch_signature is computed from the HF config;
+            # first_diverging_qn = component name; diff = git diff of
+            # the stub file. Direct reuse of the existing engine — no
+            # logic duplicated here.
+            try:
+                from ..agentic.executor import _load_hf_config as _load_hf
+                from ..agentic.learnings import compute_arch_signature, register_fix
+
+                _arch_sig = compute_arch_signature(_load_hf(MODEL))
+                if _arch_sig:
+                    _safe_grad = _safe_id(iter_target_component)
+                    _stub_rel = (demo_dir / "_stubs" / f"{_safe_grad}.py").resolve().relative_to(BRINGUP_ROOT())
+                    _diff_proc = subprocess.run(
+                        ["git", "diff", "--no-color", "HEAD", "--", str(_stub_rel)],
+                        cwd=str(BRINGUP_ROOT()),
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                    )
+                    _diff_text = _diff_proc.stdout or ""
+                    if _diff_text.strip():
+                        _ok = register_fix(
+                            arch_signature=_arch_sig,
+                            first_diverging_qn=iter_target_component,
+                            diff=_diff_text,
+                            diff_files=[str(_stub_rel)],
+                            source_model_id=MODEL,
+                            notes=f"graduated via auto_iterate iter {it}",
+                        )
+                        if _ok:
+                            print(
+                                f"  [agentic:G7] registered learned fix for "
+                                f"`{iter_target_component}` "
+                                f"(arch_sig={_arch_sig[:12]}, diff={len(_diff_text)} bytes)"
+                            )
+            except Exception as _g7_exc:
+                print(
+                    f"  [agentic:G7] non-fatal: " f"{type(_g7_exc).__name__}: {_g7_exc}",
+                    file=sys.stderr,
+                )
         elif target_skipped_due_to_harness:
             unverified_native_this_run.add(iter_target_component)
             verified_fail.discard(iter_target_component)
