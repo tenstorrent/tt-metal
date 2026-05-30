@@ -302,10 +302,13 @@ class TtMistral4SharedMLP(LightweightModule):
         gate = ttnn.slice(gate_up, [0, 0, 0, I], [1, 1, seq_len, 2 * I], memory_config=_mem)
         ttnn.deallocate(gate_up)
 
-        gate_silu = ttnn.silu(gate, memory_config=_mem)
+        hidden = ttnn.multiply(
+            gate,
+            up,
+            input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+            memory_config=_mem,
+        )
         ttnn.deallocate(gate)
-        hidden = ttnn.multiply(gate_silu, up, memory_config=_mem)
-        ttnn.deallocate(gate_silu)
         ttnn.deallocate(up)
 
         out = ttnn.linear(
@@ -334,10 +337,13 @@ class TtMistral4SharedMLP(LightweightModule):
         up = ttnn.slice(gate_up, [0, 0, 0, 0], [1, 1, 1, I], memory_config=_mem)
         gate = ttnn.slice(gate_up, [0, 0, 0, I], [1, 1, 1, 2 * I], memory_config=_mem)
         ttnn.deallocate(gate_up)
-        gate_silu = ttnn.silu(gate, memory_config=_mem)
+        hidden = ttnn.multiply(
+            gate,
+            up,
+            input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+            memory_config=_mem,
+        )
         ttnn.deallocate(gate)
-        hidden = ttnn.multiply(gate_silu, up, memory_config=_mem)
-        ttnn.deallocate(gate_silu)
         ttnn.deallocate(up)
         out = ttnn.matmul(
             hidden,
@@ -726,18 +732,16 @@ class TtMistral4MoELayer(LightweightModule):
         # by (m, k, n) so each unique m_tiles compiles once.
         m_tiles = (seq_len + 31) // 32
         gate_pc = self._expert_1d_mcast_pc(m_tiles, HIDDEN_SIZE // 32, NUM_EXPERTS // 32)
-        gate_logits_tt = ttnn.matmul(
+        # Fused matmul + correction bias (bias=None for variants without one).
+        gate_logits_tt = ttnn.linear(
             x,
             self.gate_weight,
+            bias=self.gate_bias_tt,
             compute_kernel_config=self.compute_kernel_config,
             dtype=ttnn.bfloat8_b if self._prefill_bf8_routing else ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=_mem if self.gate_bias_tt is not None else ttnn.DRAM_MEMORY_CONFIG,
             program_config=gate_pc,
         )
-
-        # 2. Apply correction bias if present (device tensor, broadcast [1,1,1,E] → [1,1,S,E])
-        if self.gate_bias_tt is not None:
-            gate_logits_tt = ttnn.add(gate_logits_tt, self.gate_bias_tt, memory_config=_mem)
 
         # 3. Softmax over all experts on device
         probs_tt = ttnn.softmax(gate_logits_tt, dim=-1, memory_config=_mem)
@@ -789,16 +793,16 @@ class TtMistral4MoELayer(LightweightModule):
             topk_vals_tt: [1, 1, 1, num_active] normalized weights (device, DRAM)
             topk_idx_host: list of num_active global expert indices (Python ints)
         """
-        gate_logits_tt = ttnn.matmul(
+        # Fused matmul + correction bias (bias=None for variants without one).
+        gate_logits_tt = ttnn.linear(
             x,
             self.gate_weight,
+            bias=self.gate_bias_tt,
             compute_kernel_config=self.compute_kernel_config,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=self._gate_pc,
         )
-        if self.gate_bias_tt is not None:
-            gate_logits_tt = ttnn.add(gate_logits_tt, self.gate_bias_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         probs_tt = ttnn.softmax(gate_logits_tt, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(gate_logits_tt)
 
@@ -891,10 +895,13 @@ class TtMistral4MoELayer(LightweightModule):
                 up_i = ttnn.slice(gate_up_i, [0, 0, 0, I], [1, 1, seq_len, 2 * I], memory_config=_mem)
                 ttnn.deallocate(gate_up_i)
 
-                silu_i = ttnn.silu(gate_i, memory_config=_mem)
+                hidden_i = ttnn.multiply(
+                    gate_i,
+                    up_i,
+                    input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+                    memory_config=_mem,
+                )
                 ttnn.deallocate(gate_i)
-                hidden_i = ttnn.multiply(silu_i, up_i, memory_config=_mem)
-                ttnn.deallocate(silu_i)
                 ttnn.deallocate(up_i)
 
                 if use_sharded_weight_staging and self.expert_down_sharded_list is not None:
@@ -981,10 +988,13 @@ class TtMistral4MoELayer(LightweightModule):
                 memory_config=_mem,
             )
             ttnn.deallocate(gate_up_all)
-            gate_silu = ttnn.silu(gate_all, memory_config=_mem)
+            hidden_all = ttnn.multiply(
+                gate_all,
+                up_all,
+                input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+                memory_config=_mem,
+            )
             ttnn.deallocate(gate_all)
-            hidden_all = ttnn.multiply(gate_silu, up_all, memory_config=_mem)
-            ttnn.deallocate(gate_silu)
             ttnn.deallocate(up_all)
             expert_out_all = ttnn.matmul(
                 hidden_all,
@@ -1077,10 +1087,13 @@ class TtMistral4MoELayer(LightweightModule):
             gate = ttnn.slice(gate_up, [0, 0, 0, 0], [1, 1, 1, I], memory_config=_mem)
             up = ttnn.slice(gate_up, [0, 0, 0, I], [1, 1, 1, 2 * I], memory_config=_mem)
             ttnn.deallocate(gate_up)
-            gate_silu = ttnn.silu(gate, memory_config=_mem)
+            hidden = ttnn.multiply(
+                gate,
+                up,
+                input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+                memory_config=_mem,
+            )
             ttnn.deallocate(gate)
-            hidden = ttnn.multiply(gate_silu, up, memory_config=_mem)
-            ttnn.deallocate(gate_silu)
             ttnn.deallocate(up)
 
             if self._is_blackhole:
@@ -1175,10 +1188,13 @@ class TtMistral4MoELayer(LightweightModule):
                 gate_i = ttnn.slice(gate_up_i, [0, 0, 0, 0], [1, 1, 1, I], memory_config=_mem)
                 up_i = ttnn.slice(gate_up_i, [0, 0, 0, I], [1, 1, 1, 2 * I], memory_config=_mem)
                 ttnn.deallocate(gate_up_i)
-                silu_i = ttnn.silu(gate_i, memory_config=_mem)
+                hidden_i = ttnn.multiply(
+                    gate_i,
+                    up_i,
+                    input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+                    memory_config=_mem,
+                )
                 ttnn.deallocate(gate_i)
-                hidden_i = ttnn.multiply(silu_i, up_i, memory_config=_mem)
-                ttnn.deallocate(silu_i)
                 ttnn.deallocate(up_i)
                 out_i = ttnn.matmul(
                     hidden_i,
@@ -1219,10 +1235,13 @@ class TtMistral4MoELayer(LightweightModule):
             gate_all = ttnn.slice(gate_up_all, [0, 0, 0, 0], [self.experts_per_device, 1, 1, I], memory_config=_mem)
             up_all = ttnn.slice(gate_up_all, [0, 0, 0, I], [self.experts_per_device, 1, 1, 2 * I], memory_config=_mem)
             ttnn.deallocate(gate_up_all)
-            gate_silu = ttnn.silu(gate_all, memory_config=_mem)
+            hidden_all = ttnn.multiply(
+                gate_all,
+                up_all,
+                input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+                memory_config=_mem,
+            )
             ttnn.deallocate(gate_all)
-            hidden_all = ttnn.multiply(gate_silu, up_all, memory_config=_mem)
-            ttnn.deallocate(gate_silu)
             ttnn.deallocate(up_all)
             expert_out_all = ttnn.matmul(
                 hidden_all,
