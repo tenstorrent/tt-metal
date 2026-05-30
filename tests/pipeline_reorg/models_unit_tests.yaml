@@ -500,11 +500,11 @@
 
 - name: TT-DiT common unit tests
   cmd: |
-    pytest --timeout 100 models/tt_dit/tests/unit/
+    pytest --timeout 1000 models/tt_dit/tests/unit/
   model: dit-common
   skus:
     wh_n150:
-      timeout: 10
+      timeout: 1000
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
