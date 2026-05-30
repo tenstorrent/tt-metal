@@ -1160,22 +1160,7 @@ if __name__ == "__main__":
         enable_watcher()
 
     if config.measure_device_perf:
-        mesh_env = os.environ.get("MESH_DEVICE_SHAPE", "").strip()
-        test_group = os.environ.get("TEST_GROUP_NAME", "").strip()
-        runner_label = os.environ.get("RUNNER_LABEL", "").strip()
-        is_multi_device = (
-            (mesh_env and mesh_env != "1x1" and "x" in mesh_env)
-            or "galaxy" in test_group
-            or "topology" in runner_label
-        )
-        if is_multi_device:
-            logger.warning(
-                f"Skipping device profiler on multi-device config "
-                f"(mesh={mesh_env or 'unset'}, group={test_group or 'unset'}, runner={runner_label or 'unset'}) — "
-                "profiler init causes run_mailbox errors on Galaxy topologies"
-            )
-        else:
-            enable_profiler()
+        enable_profiler()
 
     # Generate run contents description
     config.run_contents = get_run_contents(config)
