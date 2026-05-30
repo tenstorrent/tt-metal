@@ -2146,7 +2146,41 @@ def _run_auto_iterate_loop(
                     file=sys.stderr,
                 )
 
+        # Investigative-mode preamble: when this component's PCC has
+        # plateaued (G8 is_stagnant + history >= 2), prepend an explicit
+        # OVERRIDE of the default "DO NOT iterate" task_block. Tells the
+        # LLM to use Read/Edit/Bash/Write freely + write probe scripts
+        # + make targeted edits instead of one-shot file rewrites.
+        # Pattern mirrors _build_forced_edit_preamble.
+        investigative_preamble = ""
+        if iter_target_component:
+            try:
+                from ..agentic.convergence import is_stagnant
+                from ..cli import _build_investigative_mode_preamble
+
+                _hist = pcc_history_per_component.get(iter_target_component) or []
+                if len(_hist) >= 2 and is_stagnant(_hist):
+                    # Convert mismatch_ratio history (1-pcc) back to
+                    # PCC values for the preamble's display.
+                    _pcc_seq = [1.0 - m for m in _hist]
+                    investigative_preamble = _build_investigative_mode_preamble(
+                        iter_idx=it,
+                        component=iter_target_component,
+                        pcc_history=_pcc_seq,
+                    )
+                    print(
+                        f"  [investigative-mode] `{iter_target_component}` "
+                        f"plateaued ({_pcc_seq[-3:]}); next iter prompt "
+                        f"includes the INVESTIGATIVE MODE preamble."
+                    )
+            except Exception as _inv_exc:
+                print(
+                    f"  [investigative-mode] non-fatal: " f"{type(_inv_exc).__name__}: {_inv_exc}",
+                    file=sys.stderr,
+                )
+
         prompt = (
+            f"{investigative_preamble}"
             f"{hw_header}"
             f"{task_block}"
             f"{systemic_block}"

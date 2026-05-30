@@ -138,3 +138,55 @@ def test_parallel_extras_bump_attempts_per_component() -> None:
         "parallel-extras spawn must increment attempts_per_component[_extra] "
         "so per-component cap-trigger logic applies"
     )
+
+
+# ---------------------------------------------------------------------------
+# Investigative-mode preamble for PCC plateau
+# ---------------------------------------------------------------------------
+
+
+def test_investigative_mode_preamble_exists_in_cli() -> None:
+    """Pin the cli._build_investigative_mode_preamble helper exists.
+    Mirrors _build_forced_edit_preamble pattern; required for the
+    auto_iterate plateau-prepend logic."""
+    from scripts.tt_hw_planner.cli import _build_investigative_mode_preamble
+
+    out = _build_investigative_mode_preamble(
+        iter_idx=3,
+        component="video_layer_norm",
+        pcc_history=[0.987, 0.987, 0.987],
+    )
+    assert "INVESTIGATIVE MODE" in out
+    assert "video_layer_norm" in out
+    assert "Override any" in out and "DO NOT iterate" in out
+    # Tells LLM about precision knobs
+    assert "fp32_dest_acc_en" in out
+    assert "HiFi4" in out
+    # Tool freedom
+    assert "Read / Edit / Write / Grep / Bash" in out
+
+
+def test_auto_iterate_prepends_investigative_preamble_on_plateau() -> None:
+    """Pin: when a primary target's PCC history is stagnant, the loop
+    prepends the investigative-mode preamble to the prompt — overriding
+    the default 'DO NOT iterate' task_block."""
+    src = _AUTO_ITER_PY
+    assert (
+        "from ..cli import _build_investigative_mode_preamble" in src
+    ), "auto_iterate must import _build_investigative_mode_preamble"
+    assert "investigative_preamble" in src, "auto_iterate must compute and prepend investigative_preamble"
+    # The primary prompt-construction f-string must spell
+    # `{investigative_preamble}` BEFORE every other slot so it overrides
+    # the default "DO NOT iterate" wording in task_block.
+    # Match on the `{task_block}` slot to locate the right f-string body
+    # (the file has another `prompt = (` substring inside a different
+    # variable name).
+    task_block_idx = src.find("{task_block}")
+    assert task_block_idx >= 0, "auto_iterate must have a `{task_block}` slot"
+    # Look back ~400 chars from {task_block} to find the f-string head
+    # and check that {investigative_preamble} appears in the same body.
+    body = src[max(0, task_block_idx - 400) : task_block_idx + 400]
+    assert "{investigative_preamble}" in body, "investigative_preamble must be spliced INTO the prompt f-string"
+    assert body.index("{investigative_preamble}") < body.index(
+        "{task_block}"
+    ), "investigative_preamble must come BEFORE task_block in the prompt body"

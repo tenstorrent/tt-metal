@@ -2021,6 +2021,80 @@ def _build_forced_edit_preamble(iter_idx: int) -> str:
     )
 
 
+def _build_investigative_mode_preamble(iter_idx: int, component: str, pcc_history: List[float]) -> str:
+    """Preamble for PCC PLATEAU cases — overrides the default
+    "DO NOT iterate" instruction in the task_block, telling the LLM to
+    investigate the bug freely with its Read/Edit/Bash/Write tools.
+
+    Triggered when a component has been at near-but-not-converged PCC
+    for multiple iters with byte-identical or near-identical code each
+    time. The default one-shot prompt isn't enough for this class of
+    bug — the LLM needs to TRACE the math op-by-op, optionally write
+    small test scripts, and converge to the precise op that's wrong.
+
+    Pattern mirrors _build_forced_edit_preamble: prepended at the very
+    top of the next iter's prompt so the override is read before any
+    later "DO NOT iterate" language.
+
+    Returns a fully-formed preamble string. Caller decides when to use it.
+    """
+    history_str = " -> ".join(f"{p:.4f}" for p in (pcc_history or [])[-4:])
+    return (
+        f"==============================================================\n"
+        f"  INVESTIGATIVE MODE  (READ THIS FIRST -- iter {iter_idx})\n"
+        f"==============================================================\n"
+        f"  Component `{component}` has PCC-plateaued: {history_str}\n"
+        f"  Code runs end-to-end but ONE math op produces a different\n"
+        f"  value than torch reference. Generic full-file rewrites are\n"
+        f"  NOT working (the LLM keeps producing nearly the same code).\n"
+        f"\n"
+        f"  THIS ITERATION RUNS IN INVESTIGATIVE MODE. Override any\n"
+        f"  later 'DO NOT iterate' / 'write the COMPLETE file' language\n"
+        f"  in this prompt. Instead:\n"
+        f"\n"
+        f"    1. STATE your hypothesis in ONE sentence (which op do you\n"
+        f"       suspect is producing the wrong value? bf16 accumulation?\n"
+        f"       wrong reduction order? layout mismatch?).\n"
+        f"\n"
+        f"    2. INVESTIGATE with your tools:\n"
+        f"       - Read the stub + torch reference + ttnn op source.\n"
+        f"       - Write a small probe script under /tmp that runs JUST\n"
+        f"         the suspect op on a captured input tensor and prints\n"
+        f"         the output. Compare to torch on the same input.\n"
+        f"         Run it with Bash. Repeat for 1-3 candidate ops if\n"
+        f"         budget allows.\n"
+        f"       - Read tt-metal's `tt_metal/` C++ or `ttnn/` Python\n"
+        f"         source for the suspect op to understand its bf16\n"
+        f"         accumulator semantics + tile-alignment requirements.\n"
+        f"\n"
+        f"    3. MAKE TARGETED EDITS:\n"
+        f"       - Use the Edit tool to change ONLY the suspect op (and\n"
+        f"         its supporting setup, e.g. kernel config). Do NOT\n"
+        f"         rewrite the entire stub from scratch.\n"
+        f"       - If multiple edits are needed, make them one at a\n"
+        f"         time and verify each with your probe script.\n"
+        f"\n"
+        f"    4. EXIT when:\n"
+        f"       - Your probe script shows the suspect op now matches\n"
+        f"         torch (within bf16 noise), OR\n"
+        f"       - You have exhausted your investigation budget and want\n"
+        f"         the outer pytest to verify your best hypothesis.\n"
+        f"\n"
+        f"  Common precision knobs to try (when the suspect is a\n"
+        f"  reduction/matmul/norm):\n"
+        f"    - WormholeComputeKernelConfig(fp32_dest_acc_en=True)\n"
+        f"    - MathFidelity.HiFi4 (up from default LoFi)\n"
+        f"    - For sub-tile reductions: replace ttnn.mean / ttnn.var\n"
+        f"      with ttnn.sum + manual divide by REAL (not padded) size\n"
+        f"      (ttnn.mean divides by padded tile size, NOT original).\n"
+        f"\n"
+        f"  Tool freedom: Read / Edit / Write / Grep / Bash all enabled.\n"
+        f"  Treat this iter as a single sustained debugging session;\n"
+        f"  the outer pytest validates the final state when you exit.\n"
+        f"=============================================================="
+    )
+
+
 def _invalidate_tt_weight_cache(model_id: str) -> Optional[str]:
     """Best-effort: delete the TT-native weight cache for ``model_id``
     so the next ``pytest`` re-run rebuilds it from the HF safetensors
