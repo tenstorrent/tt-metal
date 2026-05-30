@@ -5,3 +5,4 @@
 #pragma once
 #include "llk_math_common_api.h"
 #include "llk_math_eltwise_binary_sfpu_binop.h"
+#include "llk_math_eltwise_binary_sfpu_add_int.h"
