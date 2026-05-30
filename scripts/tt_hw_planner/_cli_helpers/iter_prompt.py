@@ -19,6 +19,8 @@ def assemble_iter_prompt(
     cross_component_block: str,
     components_block: str,
     target_header: str = "",
+    constraint_block: str = "",
+    critic_block: str = "",
 ) -> str:
     return (
         target_header
@@ -28,6 +30,8 @@ def assemble_iter_prompt(
         + f"{shape_probe_block}"
         + f"{agentic_block}"
         + f"{budget_clause}"
+        + f"{constraint_block}"
+        + f"{critic_block}"
         + f"{failure_context}"
         + f"STRATEGY DIRECTIVE FOR THIS ITERATION:\n{strategy_directive}\n"
         + f"{escalated_scope_block}"
@@ -35,6 +39,100 @@ def assemble_iter_prompt(
         + f"{cross_component_block}"
         + f"COMPONENTS:\n{components_block}\n"
     )
+
+
+def build_constraint_and_critic_blocks(
+    *,
+    demo_dir: Path,
+    target_component: str,
+    last_pcc: Optional[float] = None,
+    previous_critic_diagnosis: Optional[str] = None,
+) -> Dict[str, str]:
+    """Compute the catalog constraint block + critic diagnosis block for
+    a given target component. Used by BOTH the primary-target prompt
+    path and the parallel-extra-target path so all agents get the same
+    hints. Never raises — both blocks degrade to empty strings on any
+    failure."""
+    from ..constraints import check_component, format_constraint_hints
+
+    constraint_block = ""
+    critic_block = ""
+
+    # ─── Constraint catalog ──────────────────────────────────────────
+    safe = _safe_id_local(target_component)
+    manifest_path = demo_dir / "_captured" / safe / "manifest.json"
+    opplan_path = demo_dir / "_stubs" / f"{safe}.opplan.json"
+
+    hf_class_name = ""
+    try:
+        import json as _json
+
+        manifest = _json.loads(manifest_path.read_text()) if manifest_path.is_file() else {}
+        hf_class_name = manifest.get("hf_class") or ""
+    except Exception:
+        manifest = {}
+    if not hf_class_name:
+        try:
+            import json as _json
+
+            status = _json.loads((demo_dir / "bringup_status.json").read_text())
+            for c in status.get("components", []) or []:
+                if c.get("name") == target_component:
+                    hf_class_name = c.get("hf_class_name") or c.get("hf_reference") or ""
+                    break
+        except Exception:
+            pass
+    try:
+        violations = check_component(
+            component_name=target_component,
+            hf_class_name=hf_class_name or target_component,
+            manifest_path=manifest_path,
+            opplan_path=opplan_path,
+        )
+        constraint_block = format_constraint_hints(violations)
+    except Exception:
+        constraint_block = ""
+
+    # ─── Critic ──────────────────────────────────────────────────────
+    if last_pcc is not None and last_pcc < 0.99:
+        try:
+            from ..agentic.critic import invoke_critic, persist_diagnosis
+
+            stub_path = demo_dir / "_stubs" / f"{safe}.py"
+            code = stub_path.read_text(encoding="utf-8") if stub_path.is_file() else ""
+            input_shape = None
+            input_dtype = None
+            try:
+                items = (manifest.get("args") or {}).get("items") or []
+                if items and isinstance(items[0], dict):
+                    input_shape = items[0].get("shape")
+                    input_dtype = items[0].get("dtype")
+            except Exception:
+                pass
+
+            diag = invoke_critic(
+                component=target_component,
+                code=code,
+                pcc=float(last_pcc),
+                input_shape=input_shape,
+                input_dtype=input_dtype,
+                recipes_applied=[],
+                previous_diagnosis=previous_critic_diagnosis,
+            )
+            persist_diagnosis(diag, demo_dir)
+            critic_block = diag.to_prompt_block()
+        except Exception:
+            critic_block = ""
+
+    return {"constraint_block": constraint_block, "critic_block": critic_block}
+
+
+def _safe_id_local(name: str) -> str:
+    """Local minimal copy of bringup_loop._safe_id to avoid a heavyweight
+    import here. Mirrors the same `re.sub` rule."""
+    import re
+
+    return re.sub(r"[^A-Za-z0-9_]+", "_", (name or "").strip()).strip("_")
 
 
 def build_target_header(

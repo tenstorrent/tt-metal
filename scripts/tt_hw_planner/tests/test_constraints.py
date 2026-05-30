@@ -335,3 +335,70 @@ def test_format_robust_to_missing_template_placeholders() -> None:
     block = format_constraint_hints(violations)
     assert block != ""  # didn't crash
     assert "small_dim" in block.lower() or "Small-dim" in block
+
+
+# ---------------------------------------------------------------------------
+# Regression: parallel-agent prompt MUST include constraint + critic blocks
+# (bug: assemble_iter_prompt previously dropped both, leaving extras blind)
+# ---------------------------------------------------------------------------
+
+
+def test_parallel_prompt_assembler_threads_constraint_block_through() -> None:
+    """Pins the iter_prompt.assemble_iter_prompt signature: it must
+    accept constraint_block + critic_block kwargs and splice them into
+    the final prompt. Without this, parallel-agent extras get no
+    catalog hints — a silent regression we want to catch in CI."""
+    from scripts.tt_hw_planner._cli_helpers.iter_prompt import assemble_iter_prompt
+
+    out = assemble_iter_prompt(
+        hw_header="HW\n",
+        task_block="TASK\n",
+        systemic_block="",
+        shape_probe_block="",
+        agentic_block="",
+        budget_clause="",
+        failure_context="FAILURE\n",
+        strategy_directive="strat",
+        escalated_scope_block="",
+        native_directive="",
+        cross_component_block="",
+        components_block="COMP\n",
+        constraint_block="CONSTRAINT_BLOCK_MARKER\n",
+        critic_block="CRITIC_BLOCK_MARKER\n",
+    )
+    assert "CONSTRAINT_BLOCK_MARKER" in out
+    assert "CRITIC_BLOCK_MARKER" in out
+    # And the blocks appear BEFORE failure_context so the LLM sees the
+    # actionable hint above the (often noisy) raw failure trace.
+    assert out.index("CONSTRAINT_BLOCK_MARKER") < out.index("FAILURE")
+    assert out.index("CRITIC_BLOCK_MARKER") < out.index("FAILURE")
+
+
+def test_build_constraint_and_critic_blocks_returns_both_for_sub_tile_case(tmp_path) -> None:
+    """End-to-end: given a manifest with a sub-tile dim, the shared
+    helper should produce a non-empty constraint_block."""
+    import json
+
+    from scripts.tt_hw_planner._cli_helpers.iter_prompt import build_constraint_and_critic_blocks
+
+    demo = tmp_path
+    (demo / "_captured" / "video_layer_norm").mkdir(parents=True)
+    (demo / "_stubs").mkdir(parents=True)
+    (demo / "_captured" / "video_layer_norm" / "manifest.json").write_text(
+        json.dumps(
+            {
+                "component": "video_layer_norm",
+                "hf_class": "Sam2VideoLayerNorm",
+                "args": {
+                    "kind": "tuple",
+                    "items": [{"kind": "tensor", "shape": [1, 4, 8, 8], "dtype": "torch.float32"}],
+                },
+                "kwargs": {"kind": "dict", "items": {}},
+            }
+        )
+    )
+    out = build_constraint_and_critic_blocks(demo_dir=demo, target_component="video_layer_norm")
+    assert "TTNN CONSTRAINT WARNINGS" in out["constraint_block"]
+    assert "padding-poisoned" in out["constraint_block"]
+    # critic_block is empty because there is no prior PCC value
+    assert out["critic_block"] == ""

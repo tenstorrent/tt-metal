@@ -1974,104 +1974,52 @@ def _run_auto_iterate_loop(
             last_failure_class_per_component=last_failure_class_per_component,
         )
 
-        # Constraint catalog: pre-check captured shapes against the ttnn
-        # quirk catalog and surface matching recipes BEFORE the LLM runs.
-        # Universal — applies to every model bringup, not SAM2-specific.
+        # Constraint catalog + critic blocks — computed via the shared
+        # helper so the primary-target prompt and the parallel-extra
+        # prompts use identical logic (avoids the bug where extras went
+        # without the catalog hint).
         constraint_block = ""
-        try:
-            from ..constraints import check_component, format_constraint_hints
-
-            if iter_target_component:
-                _safe_target = _safe_id(iter_target_component)
-                _hf_class_name = ""
-                try:
-                    _manifest = json.loads((demo_dir / "_captured" / _safe_target / "manifest.json").read_text())
-                    _hf_class_name = _manifest.get("hf_class") or ""
-                except Exception:
-                    pass
-                if not _hf_class_name:
-                    # Fall back to the bringup_status entry for the class name.
-                    try:
-                        _status = json.loads((demo_dir / "bringup_status.json").read_text())
-                        for _c in _status.get("components", []) or []:
-                            if _c.get("name") == iter_target_component:
-                                _hf_class_name = _c.get("hf_class_name") or _c.get("hf_reference") or ""
-                                break
-                    except Exception:
-                        _hf_class_name = ""
-                _violations = check_component(
-                    component_name=iter_target_component,
-                    hf_class_name=_hf_class_name or iter_target_component,
-                    manifest_path=demo_dir / "_captured" / _safe_target / "manifest.json",
-                    opplan_path=demo_dir / "_stubs" / f"{_safe_target}.opplan.json",
-                )
-                constraint_block = format_constraint_hints(_violations)
-        except Exception as _catalog_exc:
-            # Catalog is advisory; never block the loop.
-            print(
-                f"  [constraint-catalog] non-fatal: {type(_catalog_exc).__name__}: {_catalog_exc}",
-                file=sys.stderr,
-            )
-            constraint_block = ""
-
-        # Critic block: if the previous PCC attempt for this component
-        # plateaued (PCC < 0.99 and code unchanged), invoke the critic
-        # sub-agent to produce one targeted change suggestion. Cached by
-        # (component, code_sha1, pcc_rounded) so unchanged code is free.
         critic_block = ""
-        try:
-            if iter_target_component and iter_target_component in last_pcc_per_component:
-                _prev_pcc = last_pcc_per_component[iter_target_component]
-                if _prev_pcc is not None and _prev_pcc < 0.99:
-                    _safe_critic_target = _safe_id(iter_target_component)
-                    _stub_path = demo_dir / "_stubs" / f"{_safe_critic_target}.py"
-                    _stub_code = _stub_path.read_text(encoding="utf-8") if _stub_path.is_file() else ""
-                    # Capture context for the critic (input shape/dtype from the manifest).
-                    _input_shape = None
-                    _input_dtype = None
-                    try:
-                        _mani = json.loads((demo_dir / "_captured" / _safe_critic_target / "manifest.json").read_text())
-                        _first_arg = (_mani.get("args") or {}).get("items") or []
-                        if _first_arg and isinstance(_first_arg[0], dict):
-                            _input_shape = _first_arg[0].get("shape")
-                            _input_dtype = _first_arg[0].get("dtype")
-                    except Exception:
-                        pass
-                    # Pass the previous critic diagnosis (if any) so the
-                    # next critic call avoids re-proposing the same thing.
-                    _prev_diag = critic_diagnoses_per_component.get(iter_target_component)
-                    _prev_text = None
-                    if _prev_diag is not None and getattr(_prev_diag, "is_actionable", False):
-                        _prev_text = (
-                            f"ROOT_CAUSE: {_prev_diag.root_cause}\n" f"SPECIFIC_CHANGE: {_prev_diag.specific_change}\n"
-                        )
-                    from ..agentic.critic import invoke_critic, persist_diagnosis
+        if iter_target_component:
+            _prev_pcc = last_pcc_per_component.get(iter_target_component)
+            _prev_diag = critic_diagnoses_per_component.get(iter_target_component)
+            _prev_diag_text = None
+            if _prev_diag is not None and getattr(_prev_diag, "is_actionable", False):
+                _prev_diag_text = (
+                    f"ROOT_CAUSE: {_prev_diag.root_cause}\n" f"SPECIFIC_CHANGE: {_prev_diag.specific_change}\n"
+                )
+            try:
+                from .iter_prompt import build_constraint_and_critic_blocks
 
-                    _diag = invoke_critic(
-                        component=iter_target_component,
-                        code=_stub_code,
-                        pcc=float(_prev_pcc),
-                        input_shape=_input_shape,
-                        input_dtype=_input_dtype,
-                        recipes_applied=[],  # constraint block lists them; not duplicated here
-                        previous_diagnosis=_prev_text,
-                    )
-                    critic_diagnoses_per_component[iter_target_component] = _diag
-                    persist_diagnosis(_diag, demo_dir)
-                    critic_block = _diag.to_prompt_block()
-                    if _diag.is_actionable:
+                _hint_blocks = build_constraint_and_critic_blocks(
+                    demo_dir=demo_dir,
+                    target_component=iter_target_component,
+                    last_pcc=_prev_pcc,
+                    previous_critic_diagnosis=_prev_diag_text,
+                )
+                constraint_block = _hint_blocks["constraint_block"]
+                critic_block = _hint_blocks["critic_block"]
+            except Exception as _hint_exc:
+                print(
+                    f"  [hint-blocks] non-fatal: {type(_hint_exc).__name__}: {_hint_exc}",
+                    file=sys.stderr,
+                )
+            # Cache critic diagnosis so the NEXT iter passes it back to
+            # invoke_critic and the critic proposes something different.
+            if critic_block:
+                try:
+                    from ..agentic.critic import load_diagnosis
+
+                    _new_diag = load_diagnosis(iter_target_component, demo_dir)
+                    if _new_diag is not None and _new_diag.is_actionable:
+                        critic_diagnoses_per_component[iter_target_component] = _new_diag
                         print(
                             f"  [critic] `{iter_target_component}` PCC={_prev_pcc:.4f} -> "
-                            f"diagnosis (confidence={_diag.confidence}): {_diag.specific_change[:140]}"
+                            f"diagnosis (confidence={_new_diag.confidence}): "
+                            f"{_new_diag.specific_change[:140]}"
                         )
-                    elif _diag.error:
-                        print(f"  [critic] `{iter_target_component}` skipped: {_diag.error}", file=sys.stderr)
-        except Exception as _critic_exc:
-            print(
-                f"  [critic] non-fatal: {type(_critic_exc).__name__}: {_critic_exc}",
-                file=sys.stderr,
-            )
-            critic_block = ""
+                except Exception:
+                    pass
 
         prompt = (
             f"{hw_header}"
@@ -2177,6 +2125,8 @@ def _run_auto_iterate_loop(
                     _snapshot_preiter_native_stub(_extra)
                 if _at_cap_now:
                     print(f"  [parallel] skipping at-cap component(s) from extras: " f"{sorted(_at_cap_now)}")
+                from .iter_prompt import build_constraint_and_critic_blocks
+
                 for _extra in _extra_targets:
                     _extra_attempts = attempts_per_component.get(_extra, 0)
                     _extra_blocks = build_per_target_blocks(
@@ -2194,6 +2144,23 @@ def _run_auto_iterate_loop(
                         prior_failure_class=_extra_blocks["failure_class"],
                     )
                     _extra_components_block = _build_enriched_component_block(_extra)
+                    # Per-target catalog + critic blocks so each parallel
+                    # agent sees its OWN shape/dtype constraints and any
+                    # prior PCC-plateau diagnosis for its target.
+                    _extra_prev_pcc = last_pcc_per_component.get(_extra)
+                    _extra_prev_diag_obj = critic_diagnoses_per_component.get(_extra)
+                    _extra_prev_diag_text = None
+                    if _extra_prev_diag_obj is not None and getattr(_extra_prev_diag_obj, "is_actionable", False):
+                        _extra_prev_diag_text = (
+                            f"ROOT_CAUSE: {_extra_prev_diag_obj.root_cause}\n"
+                            f"SPECIFIC_CHANGE: {_extra_prev_diag_obj.specific_change}\n"
+                        )
+                    _extra_hint_blocks = build_constraint_and_critic_blocks(
+                        demo_dir=demo_dir,
+                        target_component=_extra,
+                        last_pcc=_extra_prev_pcc,
+                        previous_critic_diagnosis=_extra_prev_diag_text,
+                    )
                     _extra_prompt = assemble_iter_prompt(
                         hw_header=hw_header,
                         task_block=task_block,
@@ -2208,6 +2175,8 @@ def _run_auto_iterate_loop(
                         cross_component_block=_extra_blocks["cross_component_block"],
                         components_block=_extra_components_block,
                         target_header=_extra_target_header,
+                        constraint_block=_extra_hint_blocks["constraint_block"],
+                        critic_block=_extra_hint_blocks["critic_block"],
                     )
                     _parallel_extra_jobs.append(
                         AgentJob(
