@@ -38,14 +38,14 @@ class IDevice;
 }  // namespace tt::tt_metal
 
 namespace {
-constexpr size_t ELEMENTS_PER_TILE = 1024;
-constexpr size_t ELEMENTS_PER_TILE_FLOAT16 = 512;
-constexpr size_t ELEMENTS_PER_LINE_FLOAT32 = 16;
-constexpr size_t ELEMENTS_PER_LINE_INT32 = 16;
-constexpr size_t ELEMENTS_PER_LINE_FLOAT16 = 8;
-constexpr uint32_t DEFAULT_INPUT_CB_INDEX = 0;
-constexpr uint32_t DEFAULT_OUTPUT_CB_INDEX = 16;
-}  // namespace
+    constexpr size_t ELEMENTS_PER_TILE = 1024;
+    constexpr size_t ELEMENTS_PER_TILE_FLOAT16 = 512;
+    constexpr size_t ELEMENTS_PER_LINE_FLOAT32 = 16;
+    constexpr size_t ELEMENTS_PER_LINE_INT32 = 16;
+    constexpr size_t ELEMENTS_PER_LINE_FLOAT16 = 8;
+    constexpr uint32_t DEFAULT_INPUT_CB_INDEX = 0;
+    constexpr uint32_t DEFAULT_OUTPUT_CB_INDEX = 16;
+}
 
 namespace tt::test_utils::df {
 class int32 {
@@ -143,15 +143,18 @@ static DataFormatHandler& get_handler(tt::DataFormat data_format) {
     static Float16bHandler float16b_handler;
 
     switch (data_format) {
-        case tt::DataFormat::Float32: return float32_handler;
-        case tt::DataFormat::Int32: return int32_handler;
-        case tt::DataFormat::Float16_b: return float16b_handler;
+        case tt::DataFormat::Float32:
+            return float32_handler;
+        case tt::DataFormat::Int32:
+            return int32_handler;
+        case tt::DataFormat::Float16_b:
+            return float16b_handler;
         default:
             ADD_FAILURE() << "Data format (" << data_format << ") not implemented!";
-            return float32_handler;  // Default case, should not be reached
+            return float32_handler; // Default case, should not be reached
     }
 }
-}  // namespace tt::test_utils::df
+}
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking dprint
@@ -362,7 +365,9 @@ static std::vector<uint32_t> generate_inputs(const DestPrintTestConfig& config) 
         case tt::DataFormat::Int32:
             return tt::test_utils::generate_packed_increment_vector<uint32_t, tt::test_utils::df::int32>(
                 0.0f, config.get_num_elements());
-        default: ADD_FAILURE() << "Data format (" << config.data_format << ") not implemented!"; return {};
+        default:
+            ADD_FAILURE() << "Data format (" << config.data_format << ") not implemented!";
+            return {};
     }
 }
 
@@ -476,8 +481,10 @@ protected:
 
 // Overload the output stream operator for TestParams
 std::ostream& operator<<(std::ostream& os, const TestParams& params) {
-    return os << "DestPrintTest: " << params.test_name << " [DataFormat: " << static_cast<int>(params.data_format)
-              << ", NumTiles: " << params.num_tiles << ", Remap: " << (params.remap ? "true" : "false")
+    return os << "DestPrintTest: " << params.test_name
+              << " [DataFormat: " << static_cast<int>(params.data_format)
+              << ", NumTiles: " << params.num_tiles
+              << ", Remap: " << (params.remap ? "true" : "false")
               << ", Swizzle: " << (params.swizzle ? "true" : "false") << "]";
 }
 
@@ -504,7 +511,8 @@ const std::vector<TestParams> kTestParams = {
     // Additional test cases with different tile counts
     {tt::DataFormat::Float32, 3, true, true, "Float32_MultiTile_RemapSwizzle"},
     {tt::DataFormat::Float16_b, 3, true, true, "Float16b_MultiTile_RemapSwizzle"},
-    {tt::DataFormat::Int32, 3, true, true, "Int32_MultiTile_RemapSwizzle"}};
+    {tt::DataFormat::Int32, 3, true, true, "Int32_MultiTile_RemapSwizzle"}
+};
 
 // Parameterized test
 TEST_P(DestPrintTest, RunTest) {
@@ -518,4 +526,7 @@ INSTANTIATE_TEST_SUITE_P(
     DestPrintTests,
     DestPrintTest,
     ::testing::ValuesIn(kTestParams),
-    [](const ::testing::TestParamInfo<TestParams>& info) { return info.param.test_name; });
+    [](const ::testing::TestParamInfo<TestParams>& info) {
+        return info.param.test_name;
+    }
+);
