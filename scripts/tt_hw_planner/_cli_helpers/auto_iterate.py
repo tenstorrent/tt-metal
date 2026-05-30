@@ -3265,6 +3265,23 @@ def _run_auto_iterate_loop(
                     f"        --auto-max-iters 12 --auto-agent-timeout 1500\n"
                 )
 
+            # Emit RUN_REPORT.md — markdown summary of the run.
+            # Wrapped: write failure must never propagate (the run
+            # itself succeeded; report is a diagnostic artifact).
+            try:
+                from ..run_report import emit_run_report
+
+                report_path = emit_run_report(
+                    MODEL,
+                    demo_dir,
+                    converged=True,
+                    iterations_run=it,
+                )
+                if report_path is not None:
+                    print(f"  run report: {report_path}")
+            except Exception:
+                pass
+
             # NOTE: end-to-end demo emission has moved OUT of the
             # auto-iterate convergence path. It now happens in cmd_up
             # AFTER Phase 2 stage + final categorization gate, so the

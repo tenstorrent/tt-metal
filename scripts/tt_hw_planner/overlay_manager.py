@@ -172,25 +172,51 @@ def persist_skip(model_id: str, comp_name: str, reason: str = "", *, category: s
         "AGENT_STUCK": 2,
         "KERNEL_MISSING": 3,  # sticky: TTNN gap verified
     }
+    # Retryable categories get a retry counter. After N retries on the
+    # same retryable verdict, auto-escalate to COLD so the loop stops
+    # burning budget. Tracks via the `retry_count` field on the entry.
+    _RETRYABLE = {"ITERATION_BUDGET", "AGENT_STUCK"}
+    MAX_RETRIES_BEFORE_ESCALATION = 3
+
     if comp_name in skips:
         existing = skips[comp_name]
         existing_category = (existing.get("category") or "").upper()
+        # Bump retry counter ONLY when the same retryable verdict
+        # re-appears. Once retries cross the threshold, the IF below
+        # auto-escalates the new_category to COLD and flags
+        # `escalated_now` so the specificity guard knows to allow the
+        # otherwise-forbidden 2->1 demotion.
+        escalated_now = False
+        retry_bumped = False
+        if existing_category == new_category and new_category in _RETRYABLE:
+            retry_count = int(existing.get("retry_count") or 0) + 1
+            existing["retry_count"] = retry_count
+            retry_bumped = True
+            if retry_count >= MAX_RETRIES_BEFORE_ESCALATION:
+                new_category = "COLD"
+                escalated_now = True
+                reason = (
+                    f"{reason} — auto-escalated to COLD after {retry_count} "
+                    f"retries on {existing_category} (max reached)"
+                )
         # Specificity guard: never downgrade a more-specific category
-        # with a less-specific one. Same-specificity = newer wins.
+        # to a less-specific one EXCEPT in the just-escalated case.
         category_changed = False
         old_spec = _SPECIFICITY.get(existing_category, 0)
         new_spec = _SPECIFICITY.get(new_category, 0)
-        if new_spec < old_spec:
+        if new_spec < old_spec and not escalated_now:
             pass  # keep existing (more specific)
         elif existing_category != new_category:
             existing["category"] = new_category
             category_changed = True
+            if escalated_now:
+                existing["retry_count"] = 0  # reset after demotion
         # Update reason if a richer one is provided
         reason_changed = False
         if reason and reason != existing.get("reason"):
             existing["reason"] = reason
             reason_changed = True
-        if not (category_changed or reason_changed):
+        if not (category_changed or reason_changed or retry_bumped):
             return
         skips[comp_name] = existing
     else:
@@ -198,23 +224,51 @@ def persist_skip(model_id: str, comp_name: str, reason: str = "", *, category: s
             "reason": reason or "harness-incompatible (auto-detected)",
             "category": new_category,
             "captured_ts": time.time(),
+            "retry_count": 0,
         }
     p = _skipped_components_path(model_id)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(skips, indent=2, sort_keys=True))
 
 
-def clear_persistent_skips(model_id: str) -> int:
-    """Drop the persistent skip-list for `model_id`. Returns the count removed.
+def clear_persistent_skips(model_id: str, *, category: Optional[str] = None) -> int:
+    """Drop skip-list entries for `model_id`. Returns the count removed.
 
-    Used when the test harness is fixed (e.g., new capture driver added) and
-    previously un-testable components should be re-attempted on the next run.
+    Args:
+      category: If provided (e.g. "ITERATION_BUDGET", "TOOL_BUG"),
+                clear only entries matching this category. Useful for
+                granular reset — e.g. clear ITERATION_BUDGET after
+                bumping the iter cap without nuking verified
+                KERNEL_MISSING entries. Case-insensitive. If None
+                (default), clear ALL entries (legacy behavior).
+
+    Used when:
+      - the test harness was fixed → ``--category TOOL_BUG``
+      - the iter cap was bumped → ``--category ITERATION_BUDGET``
+      - TTNN shipped the missing op → ``--category KERNEL_MISSING``
+      - full reset → no ``--category``
     """
     skips = load_persistent_skips(model_id)
+    if not skips:
+        return 0
+    if category is None:
+        p = _skipped_components_path(model_id)
+        if p.is_file():
+            p.unlink()
+        return len(skips)
+    target_cat = category.strip().upper()
+    kept = {name: entry for name, entry in skips.items() if (entry.get("category") or "").upper() != target_cat}
+    removed = len(skips) - len(kept)
+    if removed == 0:
+        return 0
     p = _skipped_components_path(model_id)
-    if p.is_file():
-        p.unlink()
-    return len(skips)
+    if not kept:
+        if p.is_file():
+            p.unlink()
+    else:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(kept, indent=2, sort_keys=True))
+    return removed
 
 
 def _no_emit_tests_path(model_id: str) -> Path:

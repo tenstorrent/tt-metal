@@ -393,6 +393,47 @@ def test_persist_skip_cold_upgraded_to_specific(tmp_path, monkeypatch) -> None:
     assert om.load_persistent_skips("test/m")["c1"]["category"] == "TOOL_BUG"
 
 
+def test_persist_skip_retry_counter_increments_on_same_retryable(tmp_path, monkeypatch) -> None:
+    """Retry counter bumps when the SAME retryable category re-appears.
+    Idempotent on different reasons."""
+    om = _om()
+    monkeypatch.setattr(om, "_OVERLAYS_DIR", tmp_path)
+    om.persist_skip("test/m", "x", reason="iter cap", category="ITERATION_BUDGET")
+    listing = om.load_persistent_skips("test/m")
+    assert listing["x"]["retry_count"] == 0
+
+    om.persist_skip("test/m", "x", reason="iter cap again", category="ITERATION_BUDGET")
+    listing = om.load_persistent_skips("test/m")
+    assert listing["x"]["retry_count"] == 1
+    assert listing["x"]["category"] == "ITERATION_BUDGET"
+
+
+def test_persist_skip_auto_escalates_after_max_retries(tmp_path, monkeypatch) -> None:
+    """After MAX_RETRIES_BEFORE_ESCALATION (3) retries on a retryable
+    category, the entry auto-escalates to COLD so the loop stops
+    burning budget on a chronically-stuck component."""
+    om = _om()
+    monkeypatch.setattr(om, "_OVERLAYS_DIR", tmp_path)
+    # Initial persist (retry_count=0) plus 3 retries (1, 2, 3 = escalated).
+    for i in range(4):
+        om.persist_skip("test/m", "x", reason=f"iter cap #{i}", category="ITERATION_BUDGET")
+    listing = om.load_persistent_skips("test/m")
+    # After escalation the category is COLD and retry_count is reset.
+    assert listing["x"]["category"] == "COLD"
+    assert "auto-escalated to COLD" in listing["x"]["reason"]
+
+
+def test_persist_skip_retry_counter_independent_for_agent_stuck(tmp_path, monkeypatch) -> None:
+    """AGENT_STUCK has its own retry counter, separate from ITERATION_BUDGET.
+    Switching between them does NOT bump the counter."""
+    om = _om()
+    monkeypatch.setattr(om, "_OVERLAYS_DIR", tmp_path)
+    om.persist_skip("test/m", "x", reason="iter", category="ITERATION_BUDGET")
+    om.persist_skip("test/m", "x", reason="agent", category="AGENT_STUCK")
+    # Switching to a different retryable category replaces, doesn't bump.
+    assert om.load_persistent_skips("test/m")["x"]["category"] == "AGENT_STUCK"
+
+
 def test_persist_skip_specific_upgradeable_to_kernel_missing(tmp_path, monkeypatch) -> None:
     """Specificity ladder top: any category can be upgraded to
     KERNEL_MISSING when verification confirms the TTNN gap."""

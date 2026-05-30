@@ -9077,20 +9077,40 @@ def main(argv: Optional[List[str]] = None) -> int:
     def _cmd_overlay_clear_skips(args) -> int:
         from .overlay_manager import clear_persistent_skips
 
-        n = clear_persistent_skips(args.model_id)
+        category = getattr(args, "category", None)
+        n = clear_persistent_skips(args.model_id, category=category)
         if n:
+            scope = f"category={category}" if category else "ALL"
             print(
-                f"cleared {n} persistent skip entrie(s) for `{args.model_id}`. Next run will re-attempt these components."
+                f"cleared {n} persistent skip entrie(s) ({scope}) for `{args.model_id}`. "
+                f"Next run will re-attempt these components."
             )
         else:
-            print(f"no persistent skip entries found for `{args.model_id}`.")
+            if category:
+                print(f"no persistent skip entries matching category={category!r} " f"found for `{args.model_id}`.")
+            else:
+                print(f"no persistent skip entries found for `{args.model_id}`.")
         return 0
 
     pocs = sub.add_parser(
         "overlay-clear-skips",
-        help="Clear the persistent harness-skip list for a model (re-attempts those components on next run).",
+        help=(
+            "Clear the persistent skip-list for a model. By default clears ALL "
+            "entries; use --category X to clear only entries with that category "
+            "(e.g. ITERATION_BUDGET after bumping iter cap, TOOL_BUG after "
+            "fixing the scaffolder)."
+        ),
     )
     pocs.add_argument("model_id")
+    pocs.add_argument(
+        "--category",
+        default=None,
+        help=(
+            "Clear only entries matching this category (case-insensitive). "
+            "Valid values: COLD, KERNEL_MISSING, CONSTRAINT_MISMATCH, TOOL_BUG, "
+            "HF_ERROR, ITERATION_BUDGET, AGENT_STUCK."
+        ),
+    )
     pocs.set_defaults(func=_cmd_overlay_clear_skips)
 
     from .commands.classify_hot_cold import cmd_classify_hot_cold
@@ -9263,6 +9283,31 @@ def main(argv: Optional[List[str]] = None) -> int:
         ),
     )
     pdec.set_defaults(func=cmd_decompose)
+
+    from .commands.view_state import cmd_view_evidence, cmd_view_skips
+
+    pve = sub.add_parser(
+        "view-evidence",
+        help=(
+            "Pretty-print the cold-evidence record for a model. Shows "
+            "kind / frequency / cpu latency / compute density / op-affinity "
+            "score per component, with the classifier's evidence reasons. "
+            "Read from `overlays/<model>/hot_cold.json`."
+        ),
+    )
+    pve.add_argument("model_id", help="HuggingFace model id")
+    pve.set_defaults(func=cmd_view_evidence)
+
+    pvs = sub.add_parser(
+        "view-skips",
+        help=(
+            "Pretty-print the persistent skip-list for a model, grouped "
+            "by category with per-category remedy hints. Read from "
+            "`overlays/<model>/skipped_components.json`. No mutations."
+        ),
+    )
+    pvs.add_argument("model_id", help="HuggingFace model id")
+    pvs.set_defaults(func=cmd_view_skips)
 
     args = parser.parse_args(argv)
     return args.func(args)
