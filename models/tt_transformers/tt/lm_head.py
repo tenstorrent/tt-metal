@@ -217,19 +217,66 @@ class LMHead(LightweightModule):
 
         ttnn.copy(input_a=converted, input_b=dst)
 
-    def _update_output_weights_dram_sharded(self, torch_output_weights) -> None:
+    def _update_output_weights_dram_sharded(self, weight: ttnn.Tensor) -> None:
         """In-place replace every chunk of ``self.output_weights_dram_sharded``.
 
-        Rebuilds the per-chunk replacement tensors with no caching (so we
-        don't poison the on-disk weight cache with whatever the user
-        passed in), then ``ttnn.copy``-s each into the existing buffer.
-        Buffer addresses are preserved across the update.
-        """
-        new_tensors = self._build_dram_sharded_output_weights(torch_output_weights, cache_file_name_fn=None)
-        for new_t, dst in zip(new_tensors, self.output_weights_dram_sharded):
-            self._inplace_copy(new_t, dst, self.dtype)
+        ``weight`` is the HF-format on-device input ``(1, 1, V, H)``,
+        replicated, ``TILE_LAYOUT``, ``bfloat16``, DRAM-interleaved.
 
-    def _update_output_weights_ring_mm(self, torch_output_weights) -> None:
+        Steps mirror the constructor's host-side
+        ``_permute_and_pad_output_weights`` + ``_build_dram_sharded_output_weights``,
+        but on device:
+
+        1. (Optional) ``ttnn.pad`` along axis -2 to extend ``V`` to
+           ``padded_vocab_size``.
+        2. ``ttnn.transpose`` swaps the last two dims, mirroring the
+           constructor's ``.permute(1, 0)``.
+        3. For each chunk ``i``, take a contiguous slice along axis -1.
+           Single-device-only: ``self.split_sizes_dram_sharded[i]``
+           defines the per-device split, so on a 1-device mesh chunk
+           ``i`` is the contiguous range
+           ``[sum(splits[:i]) : sum(splits[:i + 1])]``. For multi-device
+           the constructor gathers per-device offsets and concatenates
+           along axis -1; that variant is not yet implemented here.
+        4. ``_inplace_copy`` reshards the contiguous DRAM-interleaved
+           slice into the destination's DRAM-sharded mem config and
+           ``ttnn.copy``-s it into the existing buffer (preserves
+           addresses).
+
+        Tile alignment caveat: ``ttnn.slice`` on ``TILE_LAYOUT`` requires
+        start/end offsets aligned to ``TILE_SIZE`` (32). With the
+        default Llama configs ``max_columns_per_device`` produces
+        tile-aligned ``split_sizes_dram_sharded``, but assert this here
+        rather than silently producing miscompiled slices.
+        """
+        assert self.num_devices == 1, (
+            "LMHead.update for num_devices > 1 is not yet implemented; "
+            "the multi-device path needs the constructor's per-device "
+            "interleaved gather (see _build_dram_sharded_output_weights)."
+        )
+        tile_size = 32
+        assert all(s % tile_size == 0 for s in self.split_sizes_dram_sharded), (
+            f"LMHead.update requires every split in self.split_sizes_dram_sharded "
+            f"to be a multiple of TILE_SIZE={tile_size}, got "
+            f"{self.split_sizes_dram_sharded}; on-device ttnn.slice cannot produce "
+            "sub-tile-aligned chunks on TILE_LAYOUT."
+        )
+
+        padded = weight
+        if self.vocab_size < self.padded_vocab_size:
+            pad_amount = self.padded_vocab_size - self.vocab_size
+            padded = ttnn.pad(padded, [(0, 0), (0, 0), (0, pad_amount), (0, 0)], value=0.0)
+
+        permuted = ttnn.transpose(padded, -2, -1)
+
+        start = 0
+        for i, split_size in enumerate(self.split_sizes_dram_sharded):
+            end = start + split_size
+            chunk = ttnn.slice(permuted, (0, 0, 0, start), (1, 1, self.args.dim, end))
+            self._inplace_copy(chunk, self.output_weights_dram_sharded[i], self.dtype)
+            start = end
+
+    def _update_output_weights_ring_mm(self, weight: ttnn.Tensor) -> None:
         """In-place replace every chunk of ``self.output_weights_ring_mm``.
 
         The ring-mm path uses a different per-chunk split, a power-of-two
@@ -239,24 +286,33 @@ class LMHead(LightweightModule):
         """
         raise NotImplementedError("LMHead.update for output_weights_ring_mm (prefetcher path) is not yet implemented")
 
-    def update(self, torch_output_weights) -> None:
+    def update(self, *, weight: ttnn.Tensor) -> None:
         """In-place replace the on-device LM-head weights via ``ttnn.copy``.
 
-        Accepts a single non-sharded torch tensor shaped exactly like
-        ``state_dict[f"{state_dict_prefix}output.weight"]`` in
-        ``__init__`` -- i.e. ``(vocab_size, dim)``. This method then does
-        the same permute / pad / split / shard work the constructor does,
-        and copies the resulting per-chunk tensors into the existing
-        device buffers (no reallocation, so any captured trace remains
-        valid).
+        HF-format input contract (see ``HF_LLAMA_FORMAT.md``):
 
-        Updates ``self.output_weights_dram_sharded``. When the prefetcher
-        is enabled the ring-mm mirror also has to be kept in sync; that
-        path is not yet implemented (see ``_update_output_weights_ring_mm``).
+        * key       -- HF ``lm_head.weight`` (passed as kwarg ``weight``).
+        * shape     -- ``(1, 1, vocab_size, hidden_size)`` (HF shape
+                       ``(V, H)`` wrapped in two leading unit dims).
+        * dtype     -- ``ttnn.bfloat16``.
+        * layout    -- ``ttnn.TILE_LAYOUT``.
+        * memcfg    -- ``ttnn.DRAM_MEMORY_CONFIG`` (interleaved).
+        * mesh      -- replicated (``ttnn.ReplicateTensorToMesh``).
+
+        Updates ``self.output_weights_dram_sharded`` on device (no host
+        roundtrip; see ``_update_output_weights_dram_sharded``). When the
+        prefetcher is enabled the ring-mm mirror also has to be kept in
+        sync; that path is not yet implemented (see
+        ``_update_output_weights_ring_mm``).
+
+        Buffer-address preservation: every chunk in
+        ``self.output_weights_dram_sharded`` keeps its device allocation,
+        so any captured trace -- and the DRAM prefetcher's recorded
+        buffer addresses -- remain valid across an update.
         """
-        self._update_output_weights_dram_sharded(torch_output_weights)
+        self._update_output_weights_dram_sharded(weight)
         if len(self.output_weights_ring_mm) > 0:
-            self._update_output_weights_ring_mm(torch_output_weights)
+            self._update_output_weights_ring_mm(weight)
 
     def forward(self, x: ttnn.Tensor, debug_input_torch=None, debug_weight_torch=None):
         outputs = []
