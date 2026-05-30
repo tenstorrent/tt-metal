@@ -349,15 +349,18 @@ class Flux2Transformer(Module):
         time_embed = time_embed.reshape([time_embed.shape[-2], 1, time_embed.shape[-1]])
 
         double_stream_mod_img = self.double_stream_modulation_img(time_embed, skip_act_fn=True)
-        # Pre-cast gate params to BF16 so blocks avoid fp32 × bf16 addcmul broadcasts.
+        # Pre-cast gate params to BF16 so blocks avoid fp32 × bf16 addcmul broadcasts, and
+        # pre-add 1 to the scale params once here. These tuples are shared across all 8 double
+        # blocks, so doing (1 + scale) once avoids each block recomputing it. The double block
+        # consumes scale params with the +1 already applied (see transformer_block_opt).
         # Layout: (shift_attn, scale_attn, gate_attn, shift_ff, scale_ff, gate_ff)
         shift_attn_i, scale_attn_i, gate_attn_i, shift_ff_i, scale_ff_i, gate_ff_i = double_stream_mod_img
         double_stream_mod_img = (
             shift_attn_i,
-            scale_attn_i,
+            scale_attn_i + 1,
             ttnn.typecast(gate_attn_i, ttnn.bfloat16),
             shift_ff_i,
-            scale_ff_i,
+            scale_ff_i + 1,
             ttnn.typecast(gate_ff_i, ttnn.bfloat16),
         )
 
@@ -365,10 +368,10 @@ class Flux2Transformer(Module):
         shift_attn_t, scale_attn_t, gate_attn_t, shift_ff_t, scale_ff_t, gate_ff_t = double_stream_mod_txt
         double_stream_mod_txt = (
             shift_attn_t,
-            scale_attn_t,
+            scale_attn_t + 1,
             ttnn.typecast(gate_attn_t, ttnn.bfloat16),
             shift_ff_t,
-            scale_ff_t,
+            scale_ff_t + 1,
             ttnn.typecast(gate_ff_t, ttnn.bfloat16),
         )
 
@@ -400,8 +403,6 @@ class Flux2Transformer(Module):
 
             if i % 6 == 0:
                 ttnn.ReadDeviceProfiler(spatial.device())
-
-        prompt = ttnn.clone(prompt, dtype=spatial.dtype)
 
         for i, block in enumerate(self.single_transformer_blocks, start=1):
             spatial, prompt = block.forward(
