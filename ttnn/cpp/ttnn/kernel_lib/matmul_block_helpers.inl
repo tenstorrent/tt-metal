@@ -176,32 +176,38 @@ ALWI void matmul_block(
     // Data-format reconfig and init are two independent switches, mirroring the
     // tilize_helpers / reduce_helpers / binary_op_helpers pattern. Each side fires
     // on its own compile-time gate; callers that already issued an external reconfig
-    // (e.g. SDPA wrappers, conv2d's per-K-block tilize PreKBlockFn) pass
-    // reconfig=NONE; callers that already issued an external mm_block_init_short
-    // (e.g. the same wrappers) pass init_mode=None. The pack reconfig targets
-    // interm_cb_id to match the OLD mm_block_init's 3rd-arg behavior — the first
+    // (e.g. SDPA wrappers) pass reconfig=NONE; callers that already issued an external
+    // mm_block_init_short (e.g. the same wrappers) pass init_mode=None. The pack reconfig
+    // targets interm_cb_id to match the OLD mm_block_init's 3rd-arg behavior — the first
     // non-last K-block spills there; the in-loop reconfig at the last block
     // (gated on l1_acc / fp32 DEST) handles the final swap to out_cb_id. The init
     // is always a short init (never a Full / hw_configure-bearing init — those
     // are caller's boot-time responsibility at the very top of kernel_main).
     // ActivationInitHelper::init() is the caller's boot-time responsibility
     // regardless of either switch — the helper does not issue it.
-    if constexpr (
-        reconfig == matmul_config::DataFormatReconfig::INPUT ||
-        reconfig == matmul_config::DataFormatReconfig::INPUT_AND_OUTPUT) {
-        // Matmul convention: srca takes in1, srcb takes in0 (verified against
-        // mm_block_init_short_with_dt at matmul.h:378 and the existing reload-time
-        // call in the K-loop below).
-        reconfig_data_format(in1_cb_id, in0_cb_id);
-    }
-    if constexpr (
-        reconfig == matmul_config::DataFormatReconfig::OUTPUT ||
-        reconfig == matmul_config::DataFormatReconfig::INPUT_AND_OUTPUT) {
-        PACK((pack_reconfig_data_format(interm_cb_id)));
-    }
-    if constexpr (init_mode == matmul_config::InitMode::Short) {
-        mm_block_init_short(
-            in0_cb_id, in1_cb_id, transpose, shape.out_subblock_w, shape.out_subblock_h, shape.in0_block_k);
+    //
+    // init_mode == ShortAfterPreKBlock relocates this entire reconfig+init block to
+    // INSIDE the K-loop, right after pre_k_block() returns (see below), so a
+    // state-dirtying PreKBlockFn (tilize / transpose) no longer has to restore matmul
+    // state itself. This pre-loop block is therefore skipped for that mode.
+    if constexpr (init_mode != matmul_config::InitMode::ShortAfterPreKBlock) {
+        if constexpr (
+            reconfig == matmul_config::DataFormatReconfig::INPUT ||
+            reconfig == matmul_config::DataFormatReconfig::INPUT_AND_OUTPUT) {
+            // Matmul convention: srca takes in1, srcb takes in0 (verified against
+            // mm_block_init_short_with_dt at matmul.h:383 and the existing reload-time
+            // call in the K-loop below).
+            reconfig_data_format(in1_cb_id, in0_cb_id);
+        }
+        if constexpr (
+            reconfig == matmul_config::DataFormatReconfig::OUTPUT ||
+            reconfig == matmul_config::DataFormatReconfig::INPUT_AND_OUTPUT) {
+            PACK((pack_reconfig_data_format(interm_cb_id)));
+        }
+        if constexpr (init_mode == matmul_config::InitMode::Short) {
+            mm_block_init_short(
+                in0_cb_id, in1_cb_id, transpose, shape.out_subblock_w, shape.out_subblock_h, shape.in0_block_k);
+        }
     }
 
     const uint32_t out_num_tiles = shape.out_subblock_h * shape.out_subblock_w;
@@ -267,6 +273,35 @@ ALWI void matmul_block(
             // when the source flips).
             const uint32_t active_in0_cb_id = in0_source_fn(block, in0_cb_id);
             Buf active_in0_buf(active_in0_cb_id);
+
+            // init_mode == ShortAfterPreKBlock: restore matmul srcA/srcB formats + matmul-mode
+            // init HERE, after pre_k_block() has run its (possibly state-dirtying) work — so the
+            // caller's PreKBlockFn only does its own op (tilize / transpose) plus any uninit it
+            // owes, and never the matmul restore. Same gated reconfig + mm_block_init_short the
+            // pre-loop path does, but per K-block and keyed on active_in0_cb_id so an In0SourceFn
+            // that swaps in0 per block restores the operand the matmul will actually read. The
+            // 2-arg reconfig_data_format is the unconditional form (the helper can't know the
+            // formats pre_k_block left, so it can't use the conditional old/new form); it reaches
+            // the same end state as the caller-side mm_block_init_short_with_both_dt it replaces.
+            if constexpr (init_mode == matmul_config::InitMode::ShortAfterPreKBlock) {
+                if constexpr (
+                    reconfig == matmul_config::DataFormatReconfig::INPUT ||
+                    reconfig == matmul_config::DataFormatReconfig::INPUT_AND_OUTPUT) {
+                    reconfig_data_format(in1_cb_id, active_in0_cb_id);
+                }
+                if constexpr (
+                    reconfig == matmul_config::DataFormatReconfig::OUTPUT ||
+                    reconfig == matmul_config::DataFormatReconfig::INPUT_AND_OUTPUT) {
+                    PACK((pack_reconfig_data_format(interm_cb_id)));
+                }
+                mm_block_init_short(
+                    active_in0_cb_id,
+                    in1_cb_id,
+                    transpose,
+                    shape.out_subblock_w,
+                    shape.out_subblock_h,
+                    shape.in0_block_k);
+            }
 
             // Per-K-block in1 starting tile offset. Default no-op returns 0, matching
             // the prior behavior of starting the in1 stride from the front of the
