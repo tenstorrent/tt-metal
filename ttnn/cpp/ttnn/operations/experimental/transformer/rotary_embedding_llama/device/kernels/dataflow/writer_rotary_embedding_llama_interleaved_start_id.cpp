@@ -52,7 +52,7 @@ void kernel_main() {
                 uint32_t l1_read_addr = write_rotary_output ? get_read_ptr(cb_id_out) : get_read_ptr(cb_id_zero);
                 const uint32_t l1_read_stride = write_rotary_output ? tile_bytes : zero_tile_bytes;
                 for (uint32_t j = 0; j < Wt; j++) {
-                    noc_async_write_tile(output_curr_idx, s, l1_read_addr);
+                    noc_async_write_page(output_curr_idx, s, l1_read_addr);
                     l1_read_addr += l1_read_stride;
                     output_curr_idx++;
                 }
