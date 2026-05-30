@@ -57,8 +57,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "cmath_common.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_binary_sfpu.h"
+#include "llk_sfpu/ckernel_sfpu_binary.h"
 #include "params.h"
-#include "sfpu/ckernel_sfpu_binary.h"
 
 using namespace ckernel;
 using namespace ckernel::math;
@@ -74,28 +74,39 @@ void run_kernel(RUNTIME_PARAMETERS params)
     DataFormat src_format = static_cast<DataFormat>(formats.math);
     _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /* EN_INT32_MATH_FORMAT */>(src_format, src_format);
 
-    // The BH-style div helper iterates 1 face's worth of SFP rows per call and
-    // is invoked once per face. SFP_ROWS = 2 on Quasar,
-    // so a face (TEST_FACE_R_DIM = 16 rows) corresponds to 8 SFP iters.
-    const std::uint32_t num_sfpu_iterations = params.TEST_FACE_R_DIM / ckernel::math::SFP_ROWS;
-
+    // The BH-style binary helpers iterate 1 face's worth of SFP rows per call and
+    // are invoked once per face. SFP_ROWS = 2 on Quasar, so a full face
+    // (TEST_FACE_R_DIM = 16 rows) corresponds to SFPU_ITERATIONS = 8 SFP iters
+    // (the iteration count is now a compile-time template arg, matching the L4 API).
     _llk_math_eltwise_sfpu_init_();
 
     // Programmable-constant init for the sfpi reciprocal helper. Sets
     // `sfpi::vConstFloatPrgm0 = 2.0f` (the constant used by the in-helper
-    // Newton-Raphson refinement). No-op when APPROXIMATION_MODE = true.
-    _sfpu_binary_init_<false /*APPROXIMATION_MODE*/, SFPU_BINARY_OPERATION>();
+    // Newton-Raphson refinement). No-op for MUL / when APPROXIMATION_MODE = true.
+    sfpu_binary_init<false /*APPROXIMATION_MODE*/, SFPU_BINARY_OPERATION>();
 
-    // BH-style sfpi vFloat divide: reads operand tiles via
-    // `dst_reg[idx * 32]` (sfpi tile stride) from the current dest base
-    // and writes the result at `dst_reg[dst_idx * 32]`
-    _llk_math_eltwise_sfpu_params_(
-        _calculate_sfpu_binary_<false /*APPROXIMATION_MODE*/, SFPU_BINARY_OPERATION, is_fp32_dest_acc_en>,
-        0 /* DST base tile index */,
-        num_sfpu_iterations,
-        params.SRC0_TILE_IDX,
-        params.SRC1_TILE_IDX,
-        params.DST_TILE_IDX);
+    // BH-style sfpi vFloat binary op: reads operand tiles via `dst_reg[idx * 32]`
+    // (sfpi tile stride) from the current dest base and writes the result at
+    // `dst_reg[dst_idx * 32]`. The op is selected at compile time from
+    // SFPU_BINARY_OPERATION; the L4 helpers are split per-op (mul / div).
+    if constexpr (SFPU_BINARY_OPERATION == BinaryOp::MUL)
+    {
+        _llk_math_eltwise_sfpu_params_(
+            calculate_sfpu_binary_mul<false /*APPROXIMATION_MODE*/, SFPU_BINARY_OPERATION, SFPU_ITERATIONS, is_fp32_dest_acc_en>,
+            0 /* DST base tile index */,
+            params.SRC0_TILE_IDX,
+            params.SRC1_TILE_IDX,
+            params.DST_TILE_IDX);
+    }
+    else
+    {
+        _llk_math_eltwise_sfpu_params_(
+            calculate_sfpu_binary_div<false /*APPROXIMATION_MODE*/, SFPU_BINARY_OPERATION, SFPU_ITERATIONS, is_fp32_dest_acc_en>,
+            0 /* DST base tile index */,
+            params.SRC0_TILE_IDX,
+            params.SRC1_TILE_IDX,
+            params.DST_TILE_IDX);
+    }
 
     _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();
 }

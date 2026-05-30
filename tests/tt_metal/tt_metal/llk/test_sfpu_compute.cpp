@@ -86,6 +86,7 @@ const map<std::string, std::map<std::string, std::string>> sfpu_op_to_op_name = 
 // and (if its valid input range differs from div) add an arm in generate_packed_sfpu_binary_inputs().
 const map<std::string, std::map<std::string, std::string>> sfpu_binary_op_to_op_name = {
     {"div_binary", {{"SFPU_OP_INIT_0", "div_binary_tile_init();"}, {"SFPU_OP_CHAIN_0", "div_binary_tile(0, 1, 0);"}}},
+    {"mul_float", {{"SFPU_OP_INIT_0", "mul_binary_tile_init();"}, {"SFPU_OP_CHAIN_0", "mul_binary_tile(0, 1, 0);"}}},
     // add_int: Int8 L1 inputs are promoted to sign-magnitude Int32 in DEST via copy_tile + fp32_dest_acc;
     // add_int_tile<Int32> (sign-mag on Quasar via ARCH_QUASAR) then adds in sign-mag space. Result in DST[0].
     {"add_int",
@@ -153,6 +154,9 @@ bfloat16 sfpu_function(const std::string& op_name, const bfloat16& input) {
 bfloat16 sfpu_binary_function(const std::string& op_name, const bfloat16& lhs, const bfloat16& rhs) {
     if (op_name == "div_binary") {
         return bfloat16(static_cast<float>(lhs) / static_cast<float>(rhs));
+    }
+    if (op_name == "mul_float") {
+        return bfloat16(static_cast<float>(lhs) * static_cast<float>(rhs));
     }
     TT_THROW("Unsupported binary op_name in test");
 }
@@ -240,7 +244,9 @@ static vector<uint32_t> generate_div_operand(const unsigned int numel, const int
 // their signs and magnitudes vary independently.
 std::pair<vector<uint32_t>, vector<uint32_t>> generate_packed_sfpu_binary_inputs(
     const unsigned int numel, const std::string& op_name, const int seed) {
-    if (op_name == "div_binary") {
+    if (op_name == "div_binary" || op_name == "mul_float") {
+        // Reuse the div operand generator: values in [-4,-0.25] ∪ [0.25,4]. For mul this
+        // is simply well-conditioned, finite bf16 input with independent lhs/rhs signs.
         auto lhs = generate_div_operand(numel, seed);
         auto rhs = generate_div_operand(numel, seed + 1);
         return {lhs, rhs};
@@ -1196,6 +1202,7 @@ INSTANTIATE_TEST_SUITE_P(
     SingleCoreSingleMeshDeviceSfpuBinaryParameterizedFixture,
     ::testing::Values(
         std::make_tuple(1, "div_binary"),
+        std::make_tuple(1, "mul_float"),
         std::make_tuple(1, "add_int"),
         std::make_tuple(1, "mul_int"),
         std::make_tuple(1, "gt_int")),
