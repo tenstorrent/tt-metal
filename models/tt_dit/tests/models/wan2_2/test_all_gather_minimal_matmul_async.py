@@ -763,12 +763,49 @@ def run_test_linear_fsdp(
             torch_output = torch.nn.functional.gelu(torch_output)
         torch_output_chunks = torch.chunk(torch_output, chunks, dim=-1)
 
+    # --- Skewed (a+b) K-sharding ---
+    # To make in0's tp uni-ring and in1's fsdp uni-ring consume K-stripes in the SAME order
+    # (and start local), device (tp=a, fsdp=b) must hold global K-stripe (a+b) mod N for BOTH
+    # operands. We achieve this with a per-block cyclic roll of the K dim, so that a *uniform*
+    # 2D shard of the rolled tensor places stripe (a+b) on device (a,b):
+    #   - x[M,K]: M-block b (fsdp) has its K rolled by -b*K_per_stripe, so tp-pos a -> stripe (a+b).
+    #   - W[K,N]: N-block a (tp)   has its K rolled by -a*K_per_stripe, so fsdp-pos b -> stripe (a+b).
+    # The skew is purely on the contracted K dim, so torch_output (computed above from the
+    # unrolled tensors) is unchanged — the op's output is compared against it directly.
+    assert tp_size == fsdp_size, "skewed sharding requires tp_size == fsdp_size"
+    N_ring = tp_size
+    assert K % N_ring == 0, "K must be divisible by the ring size for skewed sharding"
+    K_per_stripe = K // N_ring
+
+    x_skewed = torch_input.clone()
+    M_per_fsdp = M // fsdp_size
+    for b in range(fsdp_size):
+        rows = slice(b * M_per_fsdp, (b + 1) * M_per_fsdp)
+        x_skewed[rows, :] = torch.roll(torch_input[rows, :], shifts=-(b * K_per_stripe), dims=1)
+
+    weight_skewed = weight_input.clone()
+    N_per_tp = N // tp_size
+    for a in range(tp_size):
+        cols = slice(a * N_per_tp, (a + 1) * N_per_tp)
+        weight_skewed[:, cols] = torch.roll(weight_input[:, cols], shifts=-(a * K_per_stripe), dims=0)
+
+    # Self-consistency: after a uniform shard, device (tp=a, fsdp=b) must hold original K-stripe (a+b).
+    for a in range(tp_size):
+        for b in range(fsdp_size):
+            s = (a + b) % N_ring
+            x_local = x_skewed[b * M_per_fsdp : (b + 1) * M_per_fsdp, a * K_per_stripe : (a + 1) * K_per_stripe]
+            x_ref = torch_input[b * M_per_fsdp : (b + 1) * M_per_fsdp, s * K_per_stripe : (s + 1) * K_per_stripe]
+            assert torch.equal(x_local, x_ref), f"x skew mismatch at (a={a}, b={b})"
+            w_local = weight_skewed[b * K_per_stripe : (b + 1) * K_per_stripe, a * N_per_tp : (a + 1) * N_per_tp]
+            w_ref = weight_input[s * K_per_stripe : (s + 1) * K_per_stripe, a * N_per_tp : (a + 1) * N_per_tp]
+            assert torch.equal(w_local, w_ref), f"W skew mismatch at (a={a}, b={b})"
+
     # x: M (dim 0) sharded on fsdp_axis (= sp_axis), K (dim 1) sharded on tp_axis
     x_shard_dims = [None, None]
     x_shard_dims[fsdp_axis] = 0
     x_shard_dims[tp_axis] = 1
     tt_input = ttnn.from_torch(
-        torch_input,
+        x_skewed,
         dtype=dtype,
         device=device,
         layout=ttnn.TILE_LAYOUT,
@@ -780,7 +817,7 @@ def run_test_linear_fsdp(
     w_shard_dims[fsdp_axis] = 0
     w_shard_dims[tp_axis] = 1
     tt_weight = ttnn.from_torch(
-        weight_input,
+        weight_skewed,
         dtype=dtype,
         device=device,
         layout=ttnn.TILE_LAYOUT,
@@ -953,7 +990,7 @@ def run_test_linear_fsdp(
                 "fabric_router_config": create_fabric_router_config(4096),
                 "trace_region_size": 90112,
             },
-            ttnn.Topology.Ring,
+            ttnn.Topology.Linear,  # in0: forced Linear so it matches the fsdp uni-ring K-block order
             ttnn.Topology.Linear,
             4,
             2,
