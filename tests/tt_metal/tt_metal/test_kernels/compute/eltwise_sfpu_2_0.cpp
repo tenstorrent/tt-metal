@@ -11,46 +11,6 @@
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
-#ifdef SFPU_BINARY_OP
-    uint32_t per_core_block_cnt = get_arg(args::per_core_block_cnt);
-    uint32_t per_core_block_size = get_arg(args::per_core_block_size);
-    DataflowBuffer dfb_in0(dfb::in0);
-    DataflowBuffer dfb_in1(dfb::in1);
-    DataflowBuffer dfb_out(dfb::out);
-    const uint32_t in0_id = dfb_in0.get_id();
-    const uint32_t in1_id = dfb_in1.get_id();
-    const uint32_t out_id = dfb_out.get_id();
-
-    init_sfpu(in0_id, out_id);
-    for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
-        for (uint32_t i = 0; i < per_core_block_size; ++i) {
-            dfb_in0.wait_front(1);
-            dfb_in1.wait_front(1);
-            dfb_out.reserve_back(1);
-
-            tile_regs_acquire();
-
-            copy_tile_to_dst_init_short(in0_id);
-            copy_tile(in0_id, /*tile_index=*/0, /*dst_index=*/0);
-            copy_tile_to_dst_init_short(in1_id);
-            copy_tile(in1_id, /*tile_index=*/0, /*dst_index=*/1);
-
-#ifdef SFPU_OP_CHAIN_0
-            SFPU_OP_CHAIN_0
-#endif
-
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile(/*dst_index=*/2, out_id);
-            tile_regs_release();
-
-            dfb_out.push_back(1);
-            dfb_in0.pop_front(1);
-            dfb_in1.pop_front(1);
-        }
-    }
-#else
     constexpr uint32_t per_core_block_cnt = get_arg(args::per_core_block_cnt);
     constexpr uint32_t per_core_block_dim = get_arg(args::per_core_block_dim);
     DataflowBuffer buff_in(dfb::in);
@@ -73,5 +33,4 @@ void kernel_main() {
         }
         buff_out.push_back(per_core_block_dim);
     }
-#endif
 }

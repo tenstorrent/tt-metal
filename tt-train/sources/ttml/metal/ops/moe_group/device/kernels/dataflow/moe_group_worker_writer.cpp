@@ -59,7 +59,7 @@ void kernel_main() {
     cb_reserve_back(cb_offset, 1U);
     uint32_t scratch_addr = get_write_ptr(cb_offset);
     volatile tt_l1_ptr uint32_t* scratch_buf = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch_addr);
-    noc_async_read(get_noc_addr(0, offsets_addrgen), scratch_addr, (e_local + 1U) * sizeof(uint32_t));
+    noc_async_read(offsets_addrgen.get_noc_addr(0, 0), scratch_addr, (e_local + 1U) * sizeof(uint32_t));
     noc_async_read_barrier();
     uint32_t max_active_tiles = scratch_buf[e_local] / TILE_H;
 
