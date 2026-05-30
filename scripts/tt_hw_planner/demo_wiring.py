@@ -153,10 +153,10 @@ def build_wiring_specs(
     the demo template::
 
       [
-        {"path": "vision_encoder",
-         "import": "models.demos.sam2.demo._stubs.vision_config",
-         "name": "vision_config",
-         "safe": "vision_config"},
+        {"path": "<submodule_path>",
+         "import": "models.demos.<model>.demo._stubs.<safe_id>",
+         "name": "<component_name>",
+         "safe": "<safe_id>"},
         ...
       ]
 
@@ -185,8 +185,8 @@ def format_wiring_literal(specs: List[Dict[str, str]]) -> str:
     Output layout (one tuple per line for readability)::
 
       [
-          ("vision_encoder", "models.demos.sam2.demo._stubs.vision_config", "vision_config"),
-          ("mask_decoder", "models.demos.sam2.demo._stubs.decoder_head", "decoder_head"),
+          ("<submodule_path>", "<stub_import_path>", "<component_name>"),
+          ("<submodule_path>", "<stub_import_path>", "<component_name>"),
       ]
     """
     if not specs:

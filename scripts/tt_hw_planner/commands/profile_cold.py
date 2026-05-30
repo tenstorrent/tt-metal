@@ -1,29 +1,33 @@
 """`tt_hw_planner profile-cold <model>` — evidence-based COLD/HOT
 classification.
 
-Walks the model's components, measures three signals on the natural
+Walks the model's components, measures four signals on the natural
 workload:
 
-  1. Frequency      — fires per pass over N forward passes
-  2. CPU latency    — per-component contribution to total inference time
-  3. Compute density — ops / I/O bytes (bandwidth-bound check)
+  1.  Frequency        — fires per pass over N forward passes
+  1b. Op affinity      — ttnn-op-level device-favorability score
+  2.  CPU latency      — per-component %% of total inference time
+  3.  Compute density  — ops / I/O bytes (bandwidth-bound check)
 
 Persists the enriched evidence record to hot_cold.json. The
-categorizer then makes evidence-based COLD verdicts instead of
-defaulting to COLD when signals are missing.
+categorizer reads it via load_hot_cold_evidence() and makes
+evidence-based COLD verdicts instead of defaulting to COLD when
+signals are missing.
 
-This complements `classify-hot-cold` (which only records the kind
-label, no measurements). Existing tools that read just the kind via
-`load_hot_cold` continue to work — the loader transparently extracts
-the kind from the enriched schema.
+Modality-agnostic: the input factory detects the model's primary
+modality (vision / text / audio / multimodal) from the forward
+signature + model.config and constructs the appropriate primary
+input. The driver framework's introspected fan-out then routes to
+the right invocation path.
 """
 
 from __future__ import annotations
 
+import inspect as _inspect
 import json
 import sys
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Callable, Dict, Tuple
 
 
 def cmd_profile_cold(args) -> int:
@@ -87,18 +91,11 @@ def cmd_profile_cold(args) -> int:
         print(f"error: HF load failed: {exc}", file=sys.stderr)
         return 2
 
-    image_size = _infer_image_size(model)
+    pixel_values_fn, modality = _build_input_factory(model)
     print(
-        f"profile-cold: probing {len(component_paths)} component(s) with "
-        f"image_size={image_size}, n_passes={n_passes}, n_iters={n_iters}"
+        f"profile-cold: probing {len(component_paths)} component(s) — "
+        f"modality={modality}, n_passes={n_passes}, n_iters={n_iters}"
     )
-
-    import torch
-
-    def pixel_values_fn(i: int) -> Any:
-        # Varied seeds so multi-pass actually exercises different inputs.
-        gen = torch.Generator().manual_seed(i)
-        return torch.randn(1, 3, image_size, image_size, generator=gen)
 
     report = build_evidence_report(
         model=model,
@@ -114,16 +111,20 @@ def cmd_profile_cold(args) -> int:
 
     # Print per-component summary.
     print()
-    print(f"  {'component':<35} {'kind':<10} {'freq':>6}  {'cpu_ms':>8} {'pct':>7}  {'density':>10}  {'evidence'}")
-    print(f"  {'-'*35} {'-'*10} {'-'*6}  {'-'*8} {'-'*7}  {'-'*10}  {'-'*40}")
+    print(
+        f"  {'component':<35} {'kind':<10} {'freq':>6}  {'cpu_ms':>8} {'pct':>7}  "
+        f"{'density':>10} {'aff':>5}  {'evidence'}"
+    )
+    print(f"  {'-'*35} {'-'*10} {'-'*6}  {'-'*8} {'-'*7}  {'-'*10} {'-'*5}  {'-'*40}")
     for name in sorted(report.keys()):
         ev = report[name]
         freq = "-" if ev.frequency is None else f"{ev.frequency:.2f}"
         lat_ms = "-" if ev.cpu_latency_ms is None else f"{ev.cpu_latency_ms:.2f}"
         pct = "-" if ev.cpu_latency_pct is None else f"{ev.cpu_latency_pct:.2f}%"
         dens = "-" if (ev.compute_density is None or ev.compute_density == 0) else f"{ev.compute_density:.2e}"
+        aff = "-" if ev.affinity_score is None else f"{ev.affinity_score:+d}"
         why = "; ".join(ev.evidence)[:60]
-        print(f"  {name:<35} {ev.kind:<10} {freq:>6}  {lat_ms:>8} {pct:>7}  {dens:>10}  {why}")
+        print(f"  {name:<35} {ev.kind:<10} {freq:>6}  {lat_ms:>8} {pct:>7}  {dens:>10} {aff:>5}  {why}")
 
     hot_count = sum(1 for e in report.values() if e.kind == "HOT")
     cold_count = sum(1 for e in report.values() if e.kind == "COLD")
@@ -136,7 +137,7 @@ def cmd_profile_cold(args) -> int:
 
 def _infer_image_size(model) -> int:
     """Pull image_size from model.config (HF convention). Falls back to
-    1024 if not present (SAM2's default)."""
+    1024 if not present (vision-default)."""
     cfg = getattr(model, "config", None)
     if cfg is not None:
         # Try common attribute names
@@ -151,3 +152,117 @@ def _infer_image_size(model) -> int:
             if isinstance(val, int):
                 return val
     return 1024
+
+
+def _detect_modality(model) -> str:
+    """Return one of: ``vision`` | ``text`` | ``audio`` | ``multimodal``.
+
+    Heuristic, in order of preference:
+
+      1. Forward signature's first non-self parameter NAME.
+         ``pixel_values``      → vision
+         ``input_ids`` / ``input_tokens``       → text
+         ``input_features`` / ``input_values``  → audio
+      2. model.config.model_type lookup against the curated sets in
+         scripts.tt_hw_planner.probe (VISION_ONLY_MODEL_TYPES,
+         AUDIO_ONLY_MODEL_TYPES).
+      3. Default: ``vision`` (the original tool default; the input
+         factory's vision-shape tensor passes harmlessly to text/audio
+         drivers since they use their own input construction).
+    """
+    cls = type(model)
+    try:
+        sig = _inspect.signature(cls.forward)
+        params = [p for p in sig.parameters.values() if p.name != "self"]
+        first_param = params[0].name if params else ""
+    except (TypeError, ValueError):
+        first_param = ""
+
+    if first_param in ("pixel_values", "image", "images"):
+        return "vision"
+    if first_param in ("input_ids", "input_tokens", "token_ids"):
+        return "text"
+    if first_param in ("input_features", "input_values", "audio_values"):
+        return "audio"
+
+    # Fall back to model_type-based detection
+    try:
+        from ..probe import AUDIO_ONLY_MODEL_TYPES, VISION_ONLY_MODEL_TYPES
+
+        cfg = getattr(model, "config", None)
+        mt = getattr(cfg, "model_type", "") if cfg else ""
+        mt = (mt or "").lower()
+        if mt in VISION_ONLY_MODEL_TYPES:
+            return "vision"
+        if mt in AUDIO_ONLY_MODEL_TYPES:
+            return "audio"
+    except Exception:
+        pass
+
+    # Has vision_config nested in config → likely multimodal/VLM
+    cfg = getattr(model, "config", None)
+    if cfg is not None and getattr(cfg, "vision_config", None) is not None:
+        return "multimodal"
+
+    return "vision"  # safe-default; driver framework adapts
+
+
+def _build_input_factory(model) -> Tuple[Callable[[int], Any], str]:
+    """Construct a (seed → input-tensor) factory appropriate for the
+    model's primary modality.
+
+    Returns ``(factory, modality_label)``. The factory is called by
+    cold_evidence's probe with varied seeds across multi-pass runs.
+
+    Modality-aware so the probe works on any HF model class (vision,
+    text LLM, audio STT, multimodal VLM) — not just vision. For
+    text/audio models the produced tensor flows to the driver framework
+    whose introspected_forward picks the correct entry point (input_ids
+    for text, input_features for audio); the tensor we synthesize is
+    treated as a seed by those drivers.
+    """
+    import torch
+
+    modality = _detect_modality(model)
+    cfg = getattr(model, "config", None)
+
+    if modality == "vision" or modality == "multimodal":
+        image_size = _infer_image_size(model)
+
+        def vision_factory(seed: int) -> Any:
+            gen = torch.Generator().manual_seed(seed)
+            return torch.randn(1, 3, image_size, image_size, generator=gen)
+
+        return vision_factory, ("multimodal" if modality == "multimodal" else f"vision[{image_size}x{image_size}]")
+
+    if modality == "text":
+        vocab = getattr(cfg, "vocab_size", None) or 32000
+        # Cap vocab range to keep tokens within actual model vocab. Cap seq_len
+        # so probe stays fast (we just need to fire the forward).
+        max_pos = getattr(cfg, "max_position_embeddings", None) or 2048
+        seq_len = min(64, max_pos)
+
+        def text_factory(seed: int) -> Any:
+            gen = torch.Generator().manual_seed(seed)
+            return torch.randint(1, min(vocab, 1000), (1, seq_len), dtype=torch.long, generator=gen)
+
+        return text_factory, f"text[seq_len={seq_len}, vocab={vocab}]"
+
+    if modality == "audio":
+        n_mels = getattr(cfg, "num_mel_bins", None) or 80
+        # Cap audio frames to keep probe fast.
+        max_pos = getattr(cfg, "max_source_positions", None) or 1500
+        n_frames = min(max_pos * 2, 3000)
+
+        def audio_factory(seed: int) -> Any:
+            gen = torch.Generator().manual_seed(seed)
+            return torch.randn(1, n_mels, n_frames, generator=gen)
+
+        return audio_factory, f"audio[mels={n_mels}, frames={n_frames}]"
+
+    # Fallback (shouldn't reach here given _detect_modality's safe-default)
+    def fallback_factory(seed: int) -> Any:
+        gen = torch.Generator().manual_seed(seed)
+        return torch.randn(1, 3, 224, 224, generator=gen)
+
+    return fallback_factory, "fallback-vision"

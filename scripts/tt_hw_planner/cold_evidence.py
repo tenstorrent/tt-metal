@@ -57,6 +57,12 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 COLD_FREQUENCY_THRESHOLD = 0.0  # frequency <= this → COLD-eligible by Signal 1
 COLD_LATENCY_PCT_THRESHOLD = 0.5  # latency_pct < this → COLD-eligible by Signal 2
 COLD_DENSITY_THRESHOLD = 1e-7  # density < this → bandwidth-bound, COLD-eligible by Signal 3
+# Signal 1b — op-affinity rule: only NEGATIVE affinity is COLD-evidence
+# (component's ops dominated by bandwidth-bound primitives like permute,
+# reshape, gather; CPU wins because transfer cost > compute savings).
+# A score of 0 is NEUTRAL (could mean "no opplan data" OR "only neutral
+# ops like gelu/relu") and does NOT push toward COLD on its own — other
+# signals decide.
 
 
 @dataclass
@@ -71,6 +77,7 @@ class ComponentEvidence:
     ops_count: Optional[int] = None
     io_bytes: Optional[int] = None
     compute_density: Optional[float] = None
+    affinity_score: Optional[int] = None  # Σ ttnn-op affinities from opplan
     evidence: List[str] = field(default_factory=list)  # reasons for kind
     captured_ts: float = field(default_factory=time.time)
 
@@ -238,6 +245,51 @@ def measure_cpu_latency(
     return out
 
 
+def measure_affinity_score(
+    demo_dir: Path,
+    component_paths: Dict[str, str],
+) -> Dict[str, int]:
+    """Signal 1b — ttnn-op affinity score per component.
+
+    Reads each component's opplan manifest and scores it against the
+    static ttnn-op affinity catalog. Positive score = component's ops
+    are mostly device-favorable (matmul, conv2d, attention); negative =
+    bandwidth-bound (permute, reshape, gather).
+
+    Handles three opplan schema variants:
+      * ``counts: {op_name: count}``   (legacy summarized form)
+      * ``palette: [op_name, ...]``    (legacy palette form)
+      * ``pre_bound: [{ttnn_target: op_name, ...}, ...]`` (op-synth form)
+
+    Returns ``{component_name: score}``. Components without an opplan
+    manifest get score 0 (neutral safe-default)."""
+    from .bringup_loop import _safe_id
+    from .op_affinity import component_affinity_score
+
+    out: Dict[str, int] = {}
+    for name in component_paths:
+        safe = _safe_id(name)
+        manifest = demo_dir / "_stubs" / f"{safe}.opplan.json"
+        score = 0
+        if manifest.is_file():
+            try:
+                data = json.loads(manifest.read_text())
+            except Exception:
+                data = {}
+            # Schema priority: pre_bound (richest — per-instance op
+            # records); counts; palette. Score whichever exists.
+            if isinstance(data.get("pre_bound"), list):
+                ops = [entry.get("ttnn_target") for entry in data["pre_bound"] if isinstance(entry, dict)]
+                ops = [op for op in ops if isinstance(op, str) and op]
+                score = component_affinity_score(ops)
+            elif isinstance(data.get("counts"), dict):
+                score = component_affinity_score(data["counts"])
+            elif isinstance(data.get("palette"), list):
+                score = component_affinity_score(data["palette"])
+        out[name] = score
+    return out
+
+
 def measure_compute_density(
     demo_dir: Path,
     component_paths: Dict[str, str],
@@ -344,20 +396,23 @@ def classify_evidence(
     frequency: Optional[float],
     cpu_latency_pct: Optional[float],
     compute_density: Optional[float],
+    affinity_score: Optional[int] = None,
 ) -> Tuple[str, List[str]]:
-    """Combine the three signals into a HOT/COLD verdict + reasons list.
+    """Combine the available signals into a HOT/COLD verdict + reasons.
 
     Returns ``(kind, evidence)`` where kind is "HOT" | "COLD" | "UNKNOWN"
-    and evidence is a list of human-readable reasons (one per signal
-    that contributed to the verdict).
+    and evidence is a list of human-readable reasons.
 
     Rule (any single qualifying signal triggers COLD):
-      - Signal 1: frequency <= COLD_FREQUENCY_THRESHOLD (default 0.0)
-      - Signal 2: latency_pct < COLD_LATENCY_PCT_THRESHOLD (default 0.5%)
-      - Signal 3: density < COLD_DENSITY_THRESHOLD (bandwidth-bound)
+      Signal 1   — frequency <= COLD_FREQUENCY_THRESHOLD (never fires)
+      Signal 2   — latency_pct < COLD_LATENCY_PCT_THRESHOLD (negligible)
+      Signal 3   — density < COLD_DENSITY_THRESHOLD (bandwidth-bound)
+      Signal 1b  — affinity_score <= COLD_AFFINITY_THRESHOLD (component
+                   lacks device-favorable ops; device adds no value)
 
     HOT iff none of the COLD signals fire AND we have at least one
-    positive HOT signal (freq > 0 OR latency > threshold).
+    positive HOT signal (freq > 0 OR latency >= threshold OR
+    affinity > 0).
 
     UNKNOWN iff we have no signals at all (probe didn't run).
     """
@@ -383,6 +438,12 @@ def classify_evidence(
             is_cold = True
             evidence.append(f"compute_density={compute_density:.2e} (bandwidth-bound)")
 
+    if affinity_score is not None:
+        has_any_signal = True
+        if affinity_score < 0:
+            is_cold = True
+            evidence.append(f"affinity_score={affinity_score} (lacks device-favorable ops)")
+
     if not has_any_signal:
         return "UNKNOWN", ["no probe data — fall back to safe default"]
 
@@ -393,6 +454,8 @@ def classify_evidence(
         evidence.append(f"frequency={frequency:.2f} (on hot path)")
     if cpu_latency_pct is not None and cpu_latency_pct >= COLD_LATENCY_PCT_THRESHOLD:
         evidence.append(f"cpu_latency_pct={cpu_latency_pct:.2f}% (>= threshold)")
+    if affinity_score is not None and affinity_score > 0:
+        evidence.append(f"affinity_score={affinity_score} (has device-favorable ops)")
     return "HOT", evidence
 
 
@@ -416,6 +479,7 @@ def build_evidence_report(
     freq = measure_frequency(model, pixel_values_fn, component_paths, n_passes=n_passes_freq)
     lat = measure_cpu_latency(model, pixel_values_fn, component_paths, n_iters=n_iters_latency)
     density = measure_compute_density(demo_dir, component_paths)
+    affinity = measure_affinity_score(demo_dir, component_paths)
 
     report: Dict[str, ComponentEvidence] = {}
     for name in component_paths:
@@ -427,8 +491,9 @@ def build_evidence_report(
         ops = dens_entry.get("ops_count")
         io_b = dens_entry.get("io_bytes")
         dens = dens_entry.get("density")
+        aff = affinity.get(name)
 
-        kind, ev = classify_evidence(f, lat_pct, dens)
+        kind, ev = classify_evidence(f, lat_pct, dens, aff)
         report[name] = ComponentEvidence(
             kind=kind,
             frequency=f,
@@ -437,6 +502,7 @@ def build_evidence_report(
             ops_count=ops,
             io_bytes=io_b,
             compute_density=dens,
+            affinity_score=aff,
             evidence=ev,
         )
     return report

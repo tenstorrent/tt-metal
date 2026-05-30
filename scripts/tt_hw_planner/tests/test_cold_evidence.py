@@ -258,6 +258,53 @@ def test_read_io_bytes_sums_args_kwargs_output(tmp_path: Path) -> None:
     assert _read_io_bytes(tmp_path, "comp_a") == 20
 
 
+def test_measure_affinity_score_handles_pre_bound_schema(tmp_path: Path) -> None:
+    """The op-synth opplan schema has `pre_bound: [{ttnn_target: ...}]`
+    rather than counts/palette. Affinity scoring must extract from
+    pre_bound too."""
+    from scripts.tt_hw_planner.cold_evidence import measure_affinity_score
+
+    stub_dir = tmp_path / "_stubs"
+    stub_dir.mkdir()
+    (stub_dir / "comp_a.opplan.json").write_text(
+        json.dumps(
+            {
+                "pre_bound": [
+                    {"name": "c1", "ttnn_target": "ttnn.conv2d", "helper": "x"},
+                    {"name": "ln1", "ttnn_target": "ttnn.layer_norm", "helper": "x"},
+                    {"name": "lin1", "ttnn_target": "ttnn.linear", "helper": "x"},
+                    {"name": "g1", "ttnn_target": "ttnn.gelu", "helper": "x"},
+                ]
+            }
+        )
+    )
+    out = measure_affinity_score(tmp_path, {"comp_a": "x.y"})
+    # conv2d (+1) + layer_norm (+1) + linear (+1) + gelu (0) = +3
+    assert out["comp_a"] == 3
+
+
+def test_measure_affinity_score_pre_bound_with_unfavorable(tmp_path: Path) -> None:
+    """A pre_bound list mostly of unfavorable ops scores negative."""
+    from scripts.tt_hw_planner.cold_evidence import measure_affinity_score
+
+    stub_dir = tmp_path / "_stubs"
+    stub_dir.mkdir()
+    (stub_dir / "comp_a.opplan.json").write_text(
+        json.dumps(
+            {
+                "pre_bound": [
+                    {"ttnn_target": "ttnn.permute"},
+                    {"ttnn_target": "ttnn.reshape"},
+                    {"ttnn_target": "ttnn.matmul"},
+                ]
+            }
+        )
+    )
+    out = measure_affinity_score(tmp_path, {"comp_a": "x.y"})
+    # -1 (permute) - 1 (reshape) + 1 (matmul) = -1
+    assert out["comp_a"] == -1
+
+
 def test_measure_compute_density_combines_ops_and_io(tmp_path: Path) -> None:
     """density = ops_count / io_bytes; zero io_bytes → zero density."""
     stub_dir = tmp_path / "_stubs"
