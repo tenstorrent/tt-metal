@@ -9294,6 +9294,43 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     pdec.set_defaults(func=cmd_decompose)
 
+    from .commands.bench_component import cmd_bench_component
+
+    pbc = sub.add_parser(
+        "bench-component",
+        help=(
+            "Stage 4 empirical CPU vs device benchmark. Times graduated "
+            "stub(s) on CPU vs TT device (incl. host<->device transfer "
+            "cost) using captured inputs. Verdict per component: "
+            "DEVICE_WINS / CPU_WINS / BREAKEVEN. Persists to hot_cold.json "
+            "as Signal 4 — the gold-standard 'does device add value' verdict."
+        ),
+    )
+    pbc.add_argument("model_id", help="HuggingFace model id")
+    pbc.add_argument(
+        "--component",
+        default=None,
+        help="Bench only this component (default: every graduated component)",
+    )
+    pbc.add_argument(
+        "--n-iters",
+        type=int,
+        default=5,
+        help="Number of timed iterations per side (default: 5)",
+    )
+    pbc.add_argument(
+        "--n-warmup",
+        type=int,
+        default=2,
+        help="Number of warmup iterations (not counted, default: 2)",
+    )
+    pbc.add_argument(
+        "--workload-mode",
+        default="default",
+        help="Workload-mode label for the bench result (default: 'default')",
+    )
+    pbc.set_defaults(func=cmd_bench_component)
+
     from .commands.view_state import cmd_view_evidence, cmd_view_skips
 
     pve = sub.add_parser(
