@@ -23,7 +23,7 @@ namespace ckernel {
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_ternary_sfpu_where_init() {
     _llk_math_eltwise_ternary_sfpu_init_<SfpuType::where>();
-    sfpu::_init_where_();
+    sfpu::init_where();
 }
 
 /**
@@ -46,7 +46,7 @@ inline void llk_math_eltwise_ternary_sfpu_where(
     uint dst_index0, uint dst_index1, uint dst_index2, uint odst, int vector_mode = (int)VectorMode::RC) {
     LLK_ASSERT(vector_mode == (int)VectorMode::RC, "Quasar currently only supports vector mode RC");
     _llk_math_eltwise_ternary_sfpu_params_(
-        sfpu::_calculate_where_<APPROXIMATE, SFPU_ITERATIONS>, dst_index0, dst_index1, dst_index2, odst);
+        sfpu::calculate_where<APPROXIMATE, SFPU_ITERATIONS>, dst_index0, dst_index1, dst_index2, odst);
 }
 
 }  // namespace ckernel
