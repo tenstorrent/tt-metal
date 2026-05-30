@@ -63,12 +63,11 @@ def _emit_run_report_impl(
     demo_pytest_status: Optional[str],
 ) -> Path:
     from .final_categorization import build_final_categorization
-    from .overlay_manager import load_hot_cold_evidence, load_no_emit_tests, load_persistent_skips
+    from .overlay_manager import load_no_emit_tests, load_persistent_skips
 
     report_path = demo_dir / "RUN_REPORT.md"
 
     cat_report = build_final_categorization(model_id=model_id, demo_dir=demo_dir)
-    evidence = load_hot_cold_evidence(model_id)
     skips = load_persistent_skips(model_id)
     no_emit = load_no_emit_tests(model_id)
 
@@ -93,57 +92,19 @@ def _emit_run_report_impl(
 
     lines.append("## Placement summary")
     lines.append("")
-    lines.append(f"- **HOT** ({len(cat_report.hot)}): on TT device")
-    if cat_report.hot:
-        lines.append(f"  - {', '.join(f'`{c}`' for c in sorted(cat_report.hot))}")
-    lines.append(f"- **COLD** ({len(cat_report.cold)}): on CPU — evidence shows no device value")
-    if cat_report.cold:
-        lines.append(f"  - {', '.join(f'`{c}`' for c in sorted(cat_report.cold))}")
-    lines.append(f"- **KERNEL_MISSING** ({len(cat_report.kernel_missing)}): on CPU — TTNN gap")
+    lines.append(f"- **ON_DEVICE** ({len(cat_report.on_device)}): graduated, native ttnn, PCC verified")
+    if cat_report.on_device:
+        lines.append(f"  - {', '.join(f'`{c}`' for c in sorted(cat_report.on_device))}")
+    lines.append(f"- **KERNEL_MISSING** ({len(cat_report.kernel_missing)}): on CPU temporarily — TTNN op gap")
     if cat_report.kernel_missing:
         lines.append(f"  - {', '.join(f'`{c}`' for c in sorted(cat_report.kernel_missing))}")
+    lines.append(f"- **PENDING** ({len(cat_report.pending)}): retry next run")
+    if cat_report.pending:
+        lines.append(f"  - {', '.join(f'`{c}`' for c in sorted(cat_report.pending))}")
     lines.append(f"- **structural** ({len(cat_report.structural_excluded)}): " "ModuleList — tested via parent")
     if cat_report.structural_excluded:
         lines.append(f"  - {', '.join(f'`{c}`' for c in sorted(cat_report.structural_excluded))}")
     lines.append("")
-
-    if evidence:
-        lines.append("## Per-component evidence")
-        lines.append("")
-        multi_mode = sum(1 for e in evidence.values() if isinstance(e.get("modes"), dict))
-        if multi_mode:
-            lines.append(
-                f"_{multi_mode} component(s) have per-workload-mode evidence; "
-                "the kind shown is the **union** (HOT if HOT in ANY mode)._"
-            )
-            lines.append("")
-        lines.append("| Component | Kind | Freq | CPU ms | CPU % | Density | Affinity | Modes | Reasons |")
-        lines.append("|---|---|---|---|---|---|---|---|---|")
-        for name in sorted(evidence.keys()):
-            e = evidence[name]
-            kind = str(e.get("kind", "?"))
-            freq = e.get("frequency")
-            lat_ms = e.get("cpu_latency_ms")
-            lat_pct = e.get("cpu_latency_pct")
-            dens = e.get("compute_density")
-            aff = e.get("affinity_score")
-            reasons = e.get("evidence", [])
-            freq_s = "—" if freq is None else f"{freq:.2f}"
-            lat_ms_s = "—" if lat_ms is None else f"{lat_ms:.2f}"
-            lat_pct_s = "—" if lat_pct is None else f"{lat_pct:.2f}%"
-            dens_s = "—" if (not dens or dens == 0) else f"{dens:.2e}"
-            aff_s = "—" if aff is None else f"{aff:+d}"
-            modes = e.get("modes")
-            if isinstance(modes, dict) and modes:
-                modes_s = ", ".join(f"{m}: **{(d.get('kind') or '?')}**" for m, d in sorted(modes.items()))
-            else:
-                modes_s = "_(default)_"
-            why = "; ".join(str(r) for r in reasons).replace("|", "\\|")[:120]
-            lines.append(
-                f"| `{name}` | **{kind}** | {freq_s} | {lat_ms_s} | {lat_pct_s} | "
-                f"{dens_s} | {aff_s} | {modes_s} | {why} |"
-            )
-        lines.append("")
 
     if skips:
         # Group by category for clearer reading

@@ -885,9 +885,9 @@ def test_stub_has_graduated_requires_pcc_graduation_snapshot(tmp_path) -> None:
     Why this matters: op-synth scaffolded stubs ship with pre-bound
     `_apply_*` helpers and no torch fallback. Before this fix, they were
     misclassified as graduated, causing final_categorization to bucket
-    them as HOT and hiding the work-remaining signal. Only PCC-validated
-    stubs (which write the `.py.last_good_native` snapshot at graduation
-    time) should be marked graduated."""
+    them as ON_DEVICE and hiding the work-remaining signal. Only
+    PCC-validated stubs (which write the `.py.last_good_native` snapshot
+    at graduation time) should be marked graduated."""
     import importlib
 
     bringup_loop = importlib.import_module("scripts.tt_hw_planner.bringup_loop")
@@ -3419,7 +3419,7 @@ def test_auto_emit_runnable_demo_uses_captured_inputs() -> None:
 
 def test_auto_emit_demo_wires_all_graduated_components() -> None:
     """End-to-end demo must wire EVERY graduated component into the HF
-    reference model, not pick a single primary. Components in COLD or
+    reference model, not pick a single primary. Components in the
     KERNEL_MISSING bucket stay on CPU as HF reference automatically.
     The maximal-antichain selector ensures parents subsume children when
     both graduate (the parent's TT forward already contains the child)."""

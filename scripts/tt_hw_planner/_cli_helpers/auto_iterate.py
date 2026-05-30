@@ -140,7 +140,7 @@ def _run_auto_iterate_loop(
     graduated_this_run: List[str] = []
 
     from .sweep_cache import ValidationSweepCache
-    from ..overlay_manager import load_persistent_skips, load_no_emit_tests, load_hot_cold, persist_skip
+    from ..overlay_manager import load_persistent_skips, load_no_emit_tests, persist_skip
 
     _SWEEP_CACHE = ValidationSweepCache()
 
@@ -164,52 +164,32 @@ def _run_auto_iterate_loop(
 
     _persistent_skips = load_persistent_skips(MODEL)
     if _persistent_skips:
-        # Auto-load only categories that are truly permanent for this
-        # run (workload-cold path, verified missing kernels, constraint
-        # mismatches, scaffolder/HF bugs the next run can't fix on its
-        # own). RETRYABLE categories — ITERATION_BUDGET, AGENT_STUCK —
-        # are deliberately NOT pre-loaded: those failures may resolve
-        # with a bigger budget or an improved agent. They stay on
-        # the skip-list (so the user can see them) but the loop will
-        # re-attempt them.
-        # Explicit retryable set; everything else (including unknown
-        # categories from future tool versions or typos) defaults to
-        # PERMANENT so we never silently re-attempt a verdict we don't
-        # understand. Pre-audit behavior was "everything permanent" —
-        # this preserves that safety while adding explicit retry slots.
-        _PERMANENT_SKIP_CATEGORIES = {
-            "COLD",
-            "KERNEL_MISSING",
-            "CONSTRAINT_MISMATCH",
-            "TOOL_BUG",
-            "HF_ERROR",
+        # Only KERNEL_MISSING entries are persisted now. They stay
+        # permanently excluded until the TTNN op lands (cleared via
+        # `overlay-clear-skips`). Legacy entries with other categories
+        # are treated as retryable — they're tooling-debt verdicts from
+        # an older tool version and should be re-attempted on this run.
+        _permanent_skips = {
+            name: entry
+            for name, entry in _persistent_skips.items()
+            if (entry.get("category") or "").upper() == "KERNEL_MISSING"
         }
-        _RETRYABLE_SKIP_CATEGORIES = {
-            "ITERATION_BUDGET",
-            "AGENT_STUCK",
-        }
-
-        def _is_retryable(entry: dict) -> bool:
-            cat = (entry.get("category") or "COLD").upper()
-            return cat in _RETRYABLE_SKIP_CATEGORIES
-
-        _permanent_skips = {name: entry for name, entry in _persistent_skips.items() if not _is_retryable(entry)}
         _retryable_skips = {name: entry for name, entry in _persistent_skips.items() if name not in _permanent_skips}
         permanently_skipped.extend(sorted(_permanent_skips.keys()))
         print(
-            f"  [persistent-skips] loaded {len(_permanent_skips)} permanent skip(s) from "
-            f"prior runs: {', '.join(sorted(_permanent_skips.keys())) or '(none)'}"
+            f"  [persistent-skips] loaded {len(_permanent_skips)} kernel-missing skip(s) "
+            f"from prior runs: {', '.join(sorted(_permanent_skips.keys())) or '(none)'}"
         )
         if _retryable_skips:
             _retry_desc = ", ".join(
                 f"{name}={(entry.get('category') or '?')}" for name, entry in sorted(_retryable_skips.items())
             )
             print(
-                f"  [persistent-skips] {len(_retryable_skips)} retryable skip(s) from prior "
-                f"runs will be re-attempted this run ({_retry_desc})"
+                f"  [persistent-skips] {len(_retryable_skips)} legacy non-kernel-missing skip(s) "
+                f"will be re-attempted this run ({_retry_desc})"
             )
         print(
-            f"  [persistent-skips] to clear permanent skips and re-attempt them, run: "
+            f"  [persistent-skips] to clear kernel-missing skips and re-attempt them, run: "
             f"`python -m scripts.tt_hw_planner overlay-clear-skips {MODEL}`"
         )
 
@@ -224,21 +204,6 @@ def _run_auto_iterate_loop(
         )
         if _new_no_emit:
             print(f"  [no-emit-tests] excluding {len(_new_no_emit)} of these from the " f"candidate pool for this run")
-
-    _hot_cold = load_hot_cold(MODEL)
-    if _hot_cold:
-        _cold = sorted(c for c, kind in _hot_cold.items() if kind == "COLD")
-        _new_cold = [c for c in _cold if c not in permanently_skipped]
-        permanently_skipped.extend(_new_cold)
-        _hot_count = sum(1 for k in _hot_cold.values() if k == "HOT")
-        _unres_count = sum(1 for k in _hot_cold.values() if k == "UNRESOLVED")
-        print(f"  [hot-cold] loaded HOT={_hot_count} COLD={len(_cold)} UNRESOLVED={_unres_count}")
-        if _new_cold:
-            print(
-                f"  [hot-cold] excluding {len(_new_cold)} COLD component(s) from "
-                f"the candidate pool (never invoked in this workload — CPU "
-                f"fallback is correct): {', '.join(_new_cold)}"
-            )
 
     unverified_native_this_run: set = set()
     verified_fail: set = set()
@@ -698,37 +663,28 @@ def _run_auto_iterate_loop(
             return
         permanently_skipped.append(comp)
         verified_fail.discard(comp)
-        # Full failure-class decision tree (`failure_classifier.py`):
-        #   classify into 1 of 8 classes with confidence + reason, then
-        #   map to the skip-list `category` field. Replaces the previous
-        #   pattern-only path that conflated TOOL_BUG / HF_ERROR /
-        #   ITERATION_BUDGET / CONSTRAINT_MISMATCH under a single COLD
-        #   bucket. Side effect: skip-list now carries fine-grained
-        #   category labels future runs can act on (e.g. retry
-        #   ITERATION_BUDGET with bigger budget, surface TOOL_BUG to
-        #   the user, etc.).
-        skip_category = "COLD"
+        # Classify the failure (`failure_classifier.py`). Only a verified
+        # KERNEL_MISSING verdict writes a persistent skip-list entry; the
+        # rest are diagnostic — the loop logs them and the component
+        # stays in the active queue, retried on the next session.
+        skip_category = "ITERATION_BUDGET"
         skip_reason = reason
         try:
             from ..failure_classifier import classify_failure, skip_category_for_verdict
 
-            hot_cold_kind = (_hot_cold or {}).get(comp, "")
             scan_text = (last_failures or "") + "\n" + (last_failure_details or "")
             verdict = classify_failure(
                 reason=reason,
                 failure_text=scan_text,
-                hot_cold_kind=hot_cold_kind,
             )
             skip_category = skip_category_for_verdict(verdict)
-            # Surface verdict + confidence in the persisted reason so
-            # readers + future runs see the full provenance, not just
-            # the bucket label.
             skip_reason = f"{reason} — {verdict.class_name} ({verdict.confidence} confidence): {verdict.reason}"
             if verdict.missing_op:
                 skip_reason += f" [op={verdict.missing_op}]"
+            persistence_note = "persisted" if skip_category == "KERNEL_MISSING" else "transient, retry next run"
             print(
                 f"  [failure-class] `{comp}` -> {verdict.class_name} "
-                f"({verdict.confidence}); skip category={skip_category}"
+                f"({verdict.confidence}); category={skip_category} ({persistence_note})"
             )
             # CTA: surface decomposition opportunity to the user without
             # loading HF inline (would be expensive in the auto-loop

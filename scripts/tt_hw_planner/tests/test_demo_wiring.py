@@ -451,12 +451,11 @@ def test_template_set_submodule_handles_root_attr_replacement() -> None:
     assert m.encoder._tt_port == "NEW"
 
 
-def test_collect_includes_all_graduated_regardless_of_bench(tmp_path: Path, monkeypatch) -> None:
-    """Pin: graduation is the contract. A component with a graduated
-    stub (native ttnn + passed PCC) STAYS in the demo wiring pool
-    even if Stage 4 bench shows CPU_WINS. The bench is diagnostic-
-    only — it flags components needing TT-side perf work, not
-    components to silently drop from the demo."""
+def test_collect_includes_all_graduated_components(tmp_path: Path, monkeypatch) -> None:
+    """Pin: graduation is the contract. Every component with a graduated
+    stub (native ttnn + passed PCC) lands in the demo wiring pool. No
+    workload / bench / placement signal can demote a graduated stub —
+    the only path off device is a verified missing TTNN kernel."""
     from scripts.tt_hw_planner import overlay_manager as om
 
     monkeypatch.setattr(om, "_OVERLAYS_DIR", tmp_path / "overlays")
@@ -470,23 +469,7 @@ def test_collect_includes_all_graduated_regardless_of_bench(tmp_path: Path, monk
         comps,
         graduated={"fast_comp": "fast", "slow_comp": "slow"},
     )
-    # Seed hot_cold.json: slow_comp is COLD with bench CPU_WINS evidence.
-    md = om._model_dir("test/m")
-    md.mkdir(parents=True, exist_ok=True)
-    (md / "hot_cold.json").write_text(
-        json.dumps(
-            {
-                "fast_comp": {"kind": "HOT", "modes": {"default": {"kind": "HOT"}}},
-                "slow_comp": {
-                    "kind": "COLD",
-                    "modes": {"default": {"kind": "COLD", "bench_verdict": "CPU_WINS"}},
-                },
-            }
-        )
-    )
 
-    # Both graduated components are returned, regardless of the cold-
-    # evidence kind. demo_wiring honors graduation, not bench results.
     out = collect_graduated_components(demo_dir, comps, model_id="test/m")
     names = {c.name for c in out}
     assert "fast_comp" in names

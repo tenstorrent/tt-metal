@@ -201,11 +201,6 @@ def test_should_attempt_for_kernel_verified_missing() -> None:
     assert should_attempt_decomposition(parent_module=enc, failure_class="KERNEL_VERIFIED_MISSING") is True
 
 
-def test_should_not_attempt_for_cold_intended() -> None:
-    enc = _VisionEncoder()
-    assert should_attempt_decomposition(parent_module=enc, failure_class="COLD_INTENDED") is False
-
-
 def test_should_not_attempt_for_tool_bug() -> None:
     enc = _VisionEncoder()
     assert should_attempt_decomposition(parent_module=enc, failure_class="TOOL_BUG") is False
@@ -235,7 +230,7 @@ def test_class_only_warrants_for_eligible_classes() -> None:
 
 
 def test_class_only_does_not_warrant_for_ineligible() -> None:
-    for cls in ("COLD_INTENDED", "TOOL_BUG", "HF_ERROR", "ITERATE_MORE", ""):
+    for cls in ("TOOL_BUG", "HF_ERROR", "ITERATE_MORE", ""):
         assert failure_class_warrants_decomposition(cls) is False, cls
 
 

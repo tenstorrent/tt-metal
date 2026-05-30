@@ -129,102 +129,42 @@ def load_persistent_skips(model_id: str) -> Dict[str, dict]:
         return {}
 
 
-def persist_skip(model_id: str, comp_name: str, reason: str = "", *, category: str = "COLD") -> None:
-    """Add `comp_name` to the persistent skip-list for `model_id`.
+def persist_skip(model_id: str, comp_name: str, reason: str = "", *, category: str = "KERNEL_MISSING") -> None:
+    """Add `comp_name` to the persistent skip-list — ONLY for verified
+    KERNEL_MISSING gaps.
 
-    Behavior on duplicate (entry already exists):
-      - captured_ts: preserved from the FIRST persist (audit-trail; we
-        want to know when the component was originally flagged)
-      - reason: updated to the new value (the latest reason is most
-        informative)
-      - category: KERNEL_MISSING is "sticky" — once a component has a
-        verified-missing TTNN op, later runs CAN'T downgrade it (the
-        gap doesn't go away just because a different failure mode
-        manifests on a re-run). Any other transition is allowed; the
-        newer verdict wins.
+    Design rule: the torch reference runs every submodule on the same
+    device (GPU). The only legitimate reason to keep a component on CPU
+    is that a TTNN kernel it needs does not exist yet. Every other
+    failure mode (TOOL_BUG, ITERATION_BUDGET, AGENT_STUCK,
+    CONSTRAINT_MISMATCH, HF_ERROR) is tooling debt — the component
+    should be retried on the next run, not permanently sidelined.
 
-    Without this update logic, the seed-phase persist (default COLD)
-    would block a later _skip_component_to_fallback from labeling the
-    same component as KERNEL_MISSING — silently mis-categorizing it.
-
-    Valid categories (from `failure_classifier.SKIP_CATEGORY_FOR_CLASS`):
-      - "COLD"               : not invoked in workload (CPU correct, perf-irrelevant)
-      - "KERNEL_MISSING"     : TTNN op verified missing (TTNN dev work)
-      - "CONSTRAINT_MISMATCH": TTNN op present, failure is dtype/layout/shape
-      - "TOOL_BUG"           : scaffolder produced bad inputs (tool fix)
-      - "HF_ERROR"           : HF reference itself errored (not TTNN)
-      - "ITERATION_BUDGET"   : hit attempt cap; retry next run with bigger budget
-      - "AGENT_STUCK"        : NO_OP / empty agent; decomposition didn't help
+    Behavior:
+      - category == "KERNEL_MISSING" → persisted; sticky (newer reason
+        overwrites, but the entry isn't downgraded).
+      - any other category → not persisted. Logs a one-line note for
+        the caller's benefit; the component stays in the active queue
+        and will be re-attempted next session.
     """
-    new_category = category.upper()
+    new_category = (category or "").upper()
+    if new_category != "KERNEL_MISSING":
+        # Non-kernel-missing failures are no longer recorded as
+        # permanent skips. The bringup loop's session-local state
+        # decides when to stop retrying THIS run; nothing here.
+        return
     skips = load_persistent_skips(model_id)
-    # Specificity ladder (lowest -> highest). A more-specific existing
-    # category cannot be downgraded by a less-specific new one. Tied
-    # specificity allows newer-wins (e.g. ITERATION_BUDGET ->
-    # AGENT_STUCK across runs both at "specific" level).
-    _SPECIFICITY = {
-        "": 0,  # missing/legacy
-        "COLD": 1,  # generic fallback
-        "TOOL_BUG": 2,  # specific classifier verdict
-        "HF_ERROR": 2,
-        "CONSTRAINT_MISMATCH": 2,
-        "ITERATION_BUDGET": 2,
-        "AGENT_STUCK": 2,
-        "KERNEL_MISSING": 3,  # sticky: TTNN gap verified
-    }
-    # Retryable categories get a retry counter. After N retries on the
-    # same retryable verdict, auto-escalate to COLD so the loop stops
-    # burning budget. Tracks via the `retry_count` field on the entry.
-    _RETRYABLE = {"ITERATION_BUDGET", "AGENT_STUCK"}
-    MAX_RETRIES_BEFORE_ESCALATION = 3
-
     if comp_name in skips:
         existing = skips[comp_name]
-        existing_category = (existing.get("category") or "").upper()
-        # Bump retry counter ONLY when the same retryable verdict
-        # re-appears. Once retries cross the threshold, the IF below
-        # auto-escalates the new_category to COLD and flags
-        # `escalated_now` so the specificity guard knows to allow the
-        # otherwise-forbidden 2->1 demotion.
-        escalated_now = False
-        retry_bumped = False
-        if existing_category == new_category and new_category in _RETRYABLE:
-            retry_count = int(existing.get("retry_count") or 0) + 1
-            existing["retry_count"] = retry_count
-            retry_bumped = True
-            if retry_count >= MAX_RETRIES_BEFORE_ESCALATION:
-                new_category = "COLD"
-                escalated_now = True
-                reason = (
-                    f"{reason} — auto-escalated to COLD after {retry_count} "
-                    f"retries on {existing_category} (max reached)"
-                )
-        # Specificity guard: never downgrade a more-specific category
-        # to a less-specific one EXCEPT in the just-escalated case.
-        category_changed = False
-        old_spec = _SPECIFICITY.get(existing_category, 0)
-        new_spec = _SPECIFICITY.get(new_category, 0)
-        if new_spec < old_spec and not escalated_now:
-            pass  # keep existing (more specific)
-        elif existing_category != new_category:
-            existing["category"] = new_category
-            category_changed = True
-            if escalated_now:
-                existing["retry_count"] = 0  # reset after demotion
-        # Update reason if a richer one is provided
-        reason_changed = False
         if reason and reason != existing.get("reason"):
             existing["reason"] = reason
-            reason_changed = True
-        if not (category_changed or reason_changed or retry_bumped):
-            return
+        existing["category"] = "KERNEL_MISSING"
         skips[comp_name] = existing
     else:
         skips[comp_name] = {
-            "reason": reason or "harness-incompatible (auto-detected)",
-            "category": new_category,
+            "reason": reason or "TTNN kernel verified missing",
+            "category": "KERNEL_MISSING",
             "captured_ts": time.time(),
-            "retry_count": 0,
         }
     p = _skipped_components_path(model_id)
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -341,87 +281,6 @@ def is_no_emit_test(model_id: str, comp_name: str) -> bool:
     Used as the gate in ``_emit_pcc_template`` so the scaffold can skip
     emission without loading + parsing the full list each time."""
     return comp_name in load_no_emit_tests(model_id)
-
-
-def _hot_cold_path(model_id: str) -> Path:
-    return _model_dir(model_id) / "hot_cold.json"
-
-
-def load_hot_cold(model_id: str) -> Dict[str, str]:
-    """Return ``{comp_name: "HOT" | "COLD" | "UNRESOLVED"}`` for the model.
-
-    Backwards-compat shim: if the on-disk file uses the enriched
-    evidence schema (per-component dict with ``kind`` + measurements),
-    extract just the ``kind`` for callers that only care about the
-    label. For callers needing the full evidence record use
-    :func:`load_hot_cold_evidence`.
-
-    Populated by the ``classify-hot-cold`` or ``profile-cold`` CLI
-    commands. Read by the auto-iterate loop so COLD components (never
-    invoked / no perf value) don't get targeted by the picker.
-
-    Empty dict if no file exists yet -- never raises so a malformed
-    file can't crash the auto-iterate path. In that case the loop
-    treats every NEW component as HOT (conservative)."""
-    raw = _load_hot_cold_raw(model_id)
-    out: Dict[str, str] = {}
-    for name, val in raw.items():
-        if isinstance(val, str):
-            out[name] = val
-        elif isinstance(val, dict):
-            out[name] = str(val.get("kind", "UNRESOLVED")).upper()
-        else:
-            out[name] = "UNRESOLVED"
-    return out
-
-
-def load_hot_cold_evidence(model_id: str) -> Dict[str, dict]:
-    """Return the full evidence record per component (kind + frequency +
-    cpu_latency_ms + cpu_latency_pct + ops_count + io_bytes +
-    compute_density + evidence reasons).
-
-    Populated by the ``profile-cold`` CLI command. Returns an empty dict
-    if no probe has been run. Legacy entries (just the string kind) are
-    normalized into a minimal dict with ``{"kind": <str>}`` so callers
-    have a single shape to handle."""
-    raw = _load_hot_cold_raw(model_id)
-    out: Dict[str, dict] = {}
-    for name, val in raw.items():
-        if isinstance(val, dict):
-            out[name] = val
-        elif isinstance(val, str):
-            out[name] = {"kind": val.upper()}
-        else:
-            out[name] = {"kind": "UNRESOLVED"}
-    return out
-
-
-def _load_hot_cold_raw(model_id: str) -> dict:
-    p = _hot_cold_path(model_id)
-    if not p.is_file():
-        return {}
-    try:
-        return json.loads(p.read_text())
-    except Exception:
-        return {}
-
-
-def persist_hot_cold(model_id: str, classification: Dict[str, Any]) -> None:
-    """Write the classification map. Accepts either the simple
-    ``{comp: kind}`` shape (legacy) or the enriched ``{comp: evidence_dict}``
-    shape (current). Overwrites any prior file -- the classifier is
-    the source of truth, not an accumulator."""
-    p = _hot_cold_path(model_id)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(classification, indent=2, sort_keys=True))
-
-
-def is_cold_component(model_id: str, comp_name: str) -> bool:
-    """Fast lookup used by the auto-iterate loop. Returns True only if
-    we have a positive COLD classification for this component (UNRESOLVED
-    is treated as if HOT -- conservative -- so we never silently skip a
-    component we lack signal on)."""
-    return load_hot_cold(model_id).get(comp_name) == "COLD"
 
 
 def _missing_kernels_path(model_id: str) -> Path:

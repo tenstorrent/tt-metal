@@ -9095,10 +9095,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     pocs = sub.add_parser(
         "overlay-clear-skips",
         help=(
-            "Clear the persistent skip-list for a model. By default clears ALL "
-            "entries; use --category X to clear only entries with that category "
-            "(e.g. ITERATION_BUDGET after bumping iter cap, TOOL_BUG after "
-            "fixing the scaffolder)."
+            "Clear the persistent skip-list for a model. Only KERNEL_MISSING "
+            "entries are persisted now — use this after TTNN ships the "
+            "missing op(s) so the next run re-attempts the affected "
+            "components on device."
         ),
     )
     pocs.add_argument("model_id")
@@ -9107,47 +9107,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         default=None,
         help=(
             "Clear only entries matching this category (case-insensitive). "
-            "Valid values: COLD, KERNEL_MISSING, CONSTRAINT_MISMATCH, TOOL_BUG, "
-            "HF_ERROR, ITERATION_BUDGET, AGENT_STUCK."
+            "Currently only KERNEL_MISSING is persisted; the flag is kept "
+            "for legacy script compatibility."
         ),
     )
     pocs.set_defaults(func=_cmd_overlay_clear_skips)
-
-    from .commands.classify_hot_cold import cmd_classify_hot_cold
-
-    pchc = sub.add_parser(
-        "classify-hot-cold",
-        help=(
-            "Profile the workload to identify which NEW components are "
-            "actually invoked (HOT) vs. never called (COLD). COLD components "
-            "don't need to be on TT device -- CPU fallback is correct for "
-            "them since they're idle in torch too. Persists the result so "
-            "the auto-iterate loop excludes COLD from work. Run after "
-            "scaffold; before `up --auto`."
-        ),
-    )
-    pchc.add_argument("model_id", help="HuggingFace model id")
-    pchc.add_argument(
-        "--image-size",
-        type=int,
-        default=None,
-        help="Override the input image_size (default: read from model.config or 1024).",
-    )
-    pchc.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Print classification without persisting to overlays/.",
-    )
-    pchc.add_argument(
-        "--auto-onboard",
-        action="store_true",
-        help=(
-            "If all components classify as COLD (model's forward isn't "
-            "pixel_values-compatible), draft a custom invoker via LLM and "
-            "re-run. Also enabled by TT_PLANNER_AUTO_ONBOARD_HOT_COLD_INVOKER=1."
-        ),
-    )
-    pchc.set_defaults(func=cmd_classify_hot_cold)
 
     from .commands.tackle_skipped import cmd_tackle_skipped
 
@@ -9225,43 +9189,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     pct.add_argument("--dry-run", action="store_true", help="Show what would be staged without committing")
     pct.set_defaults(func=cmd_commit_tool)
 
-    from .commands.profile_cold import cmd_profile_cold
-
-    ppc = sub.add_parser(
-        "profile-cold",
-        help=(
-            "Run evidence-based COLD/HOT classification: measure firing "
-            "frequency, CPU latency contribution, and compute density per "
-            "component, then persist the verdict to hot_cold.json. The "
-            "categorizer uses this to place components on device only when "
-            "evidence shows it adds value."
-        ),
-    )
-    ppc.add_argument("model_id", help="HuggingFace model id")
-    ppc.add_argument(
-        "--n-passes",
-        type=int,
-        default=3,
-        help="Number of forward passes to measure firing frequency (default: 3)",
-    )
-    ppc.add_argument(
-        "--n-iters",
-        type=int,
-        default=5,
-        help="Number of CPU-latency timing iterations (default: 5)",
-    )
-    ppc.add_argument(
-        "--workload-mode",
-        default=None,
-        help=(
-            "Tag this profile run with a workload-mode label (e.g. 'image', "
-            "'video', 'text'). Multiple modes for the same model are MERGED "
-            "into a union-of-evidence record — a component is HOT iff HOT in "
-            "ANY measured mode. Default: auto-detect from the model's modality."
-        ),
-    )
-    ppc.set_defaults(func=cmd_profile_cold)
-
     from .commands.decompose import cmd_decompose
 
     pdec = sub.add_parser(
@@ -9294,62 +9221,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     pdec.set_defaults(func=cmd_decompose)
 
-    from .commands.bench_component import cmd_bench_component
-
-    pbc = sub.add_parser(
-        "bench-component",
-        help=(
-            "Stage 4 empirical CPU vs device benchmark. Times graduated "
-            "stub(s) on CPU vs TT device (incl. host<->device transfer "
-            "cost) using captured inputs. Verdict per component: "
-            "DEVICE_WINS / CPU_WINS / BREAKEVEN. Persists to hot_cold.json "
-            "as Signal 4 — the gold-standard 'does device add value' verdict."
-        ),
-    )
-    pbc.add_argument("model_id", help="HuggingFace model id")
-    pbc.add_argument(
-        "--component",
-        default=None,
-        help="Bench only this component (default: every graduated component)",
-    )
-    pbc.add_argument(
-        "--n-iters",
-        type=int,
-        default=5,
-        help="Number of timed iterations per side (default: 5)",
-    )
-    pbc.add_argument(
-        "--n-warmup",
-        type=int,
-        default=2,
-        help="Number of warmup iterations (not counted, default: 2)",
-    )
-    pbc.add_argument(
-        "--workload-mode",
-        default="default",
-        help="Workload-mode label for the bench result (default: 'default')",
-    )
-    pbc.set_defaults(func=cmd_bench_component)
-
-    from .commands.view_state import cmd_view_evidence, cmd_view_skips
-
-    pve = sub.add_parser(
-        "view-evidence",
-        help=(
-            "Pretty-print the cold-evidence record for a model. Shows "
-            "kind / frequency / cpu latency / compute density / op-affinity "
-            "score per component, with the classifier's evidence reasons. "
-            "Read from `overlays/<model>/hot_cold.json`."
-        ),
-    )
-    pve.add_argument("model_id", help="HuggingFace model id")
-    pve.set_defaults(func=cmd_view_evidence)
+    from .commands.view_state import cmd_view_skips
 
     pvs = sub.add_parser(
         "view-skips",
         help=(
-            "Pretty-print the persistent skip-list for a model, grouped "
-            "by category with per-category remedy hints. Read from "
+            "Pretty-print the persistent skip-list (verified KERNEL_MISSING "
+            "components blocked by TTNN op gaps). Read from "
             "`overlays/<model>/skipped_components.json`. No mutations."
         ),
     )

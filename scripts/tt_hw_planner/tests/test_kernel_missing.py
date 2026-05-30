@@ -1,18 +1,14 @@
-"""Unit tests for Layer 7 — kernel-missing detection + KERNEL_MISSING category.
+"""Unit tests for kernel-missing detection + KERNEL_MISSING placement.
 
-The principle: HOT components should ALWAYS graduate unless TTNN
-lacks the operation they need. If TTNN doesn't have the op, the tool
-is NOT going to write the kernel — that's a separate engineering
-workstream. The tool's job is to FLAG the missing op clearly and let
-the demo emit with CPU fallback for that component.
+The principle: every component should run on device unless TTNN lacks
+the operation it needs. If TTNN doesn't have the op, the tool flags
+the kernel gap and the demo runs that component on CPU fallback until
+the kernel lands.
 
-Categorization buckets:
-  GRADUATED      — on TT, PCC verified
-  COLD           — not invoked in workload (CPU OK)
-  DROPPED        — ModuleList container (parent covers)
-  KERNEL_MISSING — HOT but TTNN lacks the op (allowed past gate)
-  HOT_STUCK      — HOT, no kernel-missing signal, didn't graduate (blocks gate)
-  UNCLASSIFIED   — no signal at all (conservative — blocks gate)
+Placement buckets:
+  ON_DEVICE      — graduated, native ttnn, PCC verified
+  KERNEL_MISSING — TTNN op gap verified; on CPU until the kernel lands
+  PENDING        — not yet graduated; retry next run (no kernel gap)
 
 These tests pin the bucketing AND the kernel-missing detection patterns."""
 
@@ -232,7 +228,7 @@ def test_kernel_missing_appears_in_categorization(tmp_path, monkeypatch) -> None
         demo_dir=demo,
         graduated_set={"graduated_comp"},
     )
-    assert report.hot == ["graduated_comp"]
+    assert report.on_device == ["graduated_comp"]
     assert report.kernel_missing == ["kernel_gap"]
 
 
@@ -256,31 +252,32 @@ def test_kernel_missing_placement_is_cpu(tmp_path, monkeypatch) -> None:
     assert report.runtime_target("kernel_gap") == "cpu"
 
 
-def test_skip_list_routes_per_category_field(tmp_path, monkeypatch) -> None:
-    """Under the 3-category design, skip-list entries carry an explicit
-    `category` field. KERNEL_MISSING entries land in KERNEL_MISSING bucket;
-    COLD entries (or default) land in COLD."""
+def test_skip_list_only_kernel_missing_persists(tmp_path, monkeypatch) -> None:
+    """Only KERNEL_MISSING entries are persisted to the skip-list. A
+    non-KERNEL_MISSING persist_skip call is a no-op, so the affected
+    component lands in PENDING (retry queue) rather than COLD."""
     fc = _fc()
     om = _om()
     monkeypatch.setattr(om, "_OVERLAYS_DIR", tmp_path / "overlays")
     demo = tmp_path / "demo"
-    _make_demo_with_components(demo, ["grad", "kernel_gap", "not_invoked"])
+    _make_demo_with_components(demo, ["grad", "kernel_gap", "not_yet_attempted"])
     om.persist_skip("test/m", "kernel_gap", reason="ttnn.x missing", category="KERNEL_MISSING")
-    om.persist_skip("test/m", "not_invoked", reason="not invoked in workload", category="COLD")
+    # Non-KERNEL_MISSING is a no-op
+    om.persist_skip("test/m", "not_yet_attempted", reason="cap exhausted", category="ITERATION_BUDGET")
 
     report = fc.build_final_categorization(
         model_id="test/m",
         demo_dir=demo,
         graduated_set={"grad"},
     )
-    assert report.hot == ["grad"]
+    assert report.on_device == ["grad"]
     assert report.kernel_missing == ["kernel_gap"]
-    assert report.cold == ["not_invoked"]
+    assert report.pending == ["not_yet_attempted"]
 
 
 def test_graduated_beats_skip_list_kernel_missing(tmp_path, monkeypatch) -> None:
     """If a TTNN release lands a kernel and the component re-graduates,
-    HOT wins over a stale KERNEL_MISSING skip-list entry."""
+    ON_DEVICE wins over a stale KERNEL_MISSING skip-list entry."""
     fc = _fc()
     om = _om()
     monkeypatch.setattr(om, "_OVERLAYS_DIR", tmp_path / "overlays")
@@ -319,7 +316,7 @@ def test_kernel_gap_report_surfaces_ops(tmp_path, monkeypatch) -> None:
 
 def test_kernel_gap_report_empty_when_none(tmp_path, monkeypatch) -> None:
     fc = _fc()
-    report = fc.CategorizationReport(hot=["a"], cold=[], kernel_missing=[])
+    report = fc.CategorizationReport(on_device=["a"], kernel_missing=[], pending=[])
     msg = fc.format_kernel_gap_report("test/m", report)
     assert msg == ""
 
@@ -328,13 +325,13 @@ def test_kernel_gap_report_empty_when_none(tmp_path, monkeypatch) -> None:
 
 
 def test_auto_iterate_calls_detect_kernel_missing() -> None:
-    """Kernel-missing detection now lives in `failure_classifier`,
-    which is invoked from `_skip_component_to_fallback`. The skip-list
-    entry's `category` field still carries the COLD vs KERNEL_MISSING
-    distinction; the bridge is `skip_category_for_verdict`.
+    """Kernel-missing detection lives in `failure_classifier`, invoked
+    from `_skip_component_to_fallback`. The classifier emits
+    KERNEL_VERIFIED_MISSING which `skip_category_for_verdict` maps to
+    the `KERNEL_MISSING` skip-list category.
 
-    This test pins the indirection: detection itself is in the
-    classifier, the loop just drives it.
+    This test pins the indirection: detection lives in the classifier,
+    the loop drives it.
     """
     ai_src = (_REPO_ROOT / "scripts" / "tt_hw_planner" / "_cli_helpers" / "auto_iterate.py").read_text()
     fc_src = (_REPO_ROOT / "scripts" / "tt_hw_planner" / "failure_classifier.py").read_text()

@@ -1,29 +1,24 @@
-"""Final 3-category placement model.
+"""Final placement model.
 
-Every NEW component lands in exactly ONE of three categories. Each
-category has intrinsic runtime placement:
+The torch reference design says every submodule runs on the same device
+(GPU). The TT port mirrors that intent: every component goes on the TT
+chip, EXCEPT the small residue blocked by a missing TTNN kernel.
 
-  HOT            — invoked in workload, graduated to native ttnn → on TT device
-  COLD           — not invoked in workload                       → on CPU
-  KERNEL_MISSING — invoked, verified TTNN op missing             → on CPU
+Buckets:
 
-No DROPPED bucket: ModuleList containers are STRUCTURAL EXCLUSIONS
-(filtered out before categorization, mentioned in the report as a side
-note, not assigned a category).
+  ON_DEVICE       — graduated to native ttnn, PCC verified           → on TT device
+  KERNEL_MISSING  — skip-list entry with verified missing TTNN op    → on CPU (temporary)
+  PENDING         — not yet graduated, no kernel-missing verdict     → retry next run
+                    (the loop hit a tooling-side stop condition like
+                    iteration budget or agent-stuck — NOT a placement
+                    decision. The component remains on the queue.)
 
-No HOT_STUCK / UNCLASSIFIED: the tool's invariant is "every HOT
-component graduates OR is verified-kernel-missing." A component that
-neither graduates nor verifies kernel-missing means the tool isn't
-finished — surface as run-level TOOL FAILURE, not as a category.
+No HOT/COLD: workload firing no longer gates placement. Components that
+never fire in a given workload are still device-targets — they just
+happen to be inert paths in that workload.
 
-Placement is INTRINSIC to the category:
-  category == HOT             → runtime_target == "device"
-  category == COLD            → runtime_target == "cpu"
-  category == KERNEL_MISSING  → runtime_target == "cpu"
-
-The skip-list entry's `category` field carries the COLD vs
-KERNEL_MISSING distinction. A graduated component is not on the
-skip-list; that absence + its native ttnn stub is the HOT signal.
+Structural exclusions (ModuleList containers etc.) are listed separately
+and not counted toward placement.
 """
 
 from __future__ import annotations
@@ -34,42 +29,42 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set
 
 
-# The three valid categories. No DROPPED, no HOT_STUCK, no UNCLASSIFIED.
-_HOT = "HOT"
-_COLD = "COLD"
+_ON_DEVICE = "ON_DEVICE"
 _KERNEL_MISSING = "KERNEL_MISSING"
+_PENDING = "PENDING"
 
 
 @dataclass
 class CategorizationReport:
-    """Structured output: every NEW non-structural component in exactly one
-    of three categories, plus a separate list of structural exclusions."""
+    """Structured output: every NEW non-structural component in one of
+    three buckets — ON_DEVICE / KERNEL_MISSING / PENDING — plus a
+    separate list of structural exclusions."""
 
-    hot: List[str] = field(default_factory=list)
-    cold: List[str] = field(default_factory=list)
+    on_device: List[str] = field(default_factory=list)
     kernel_missing: List[str] = field(default_factory=list)
-    # Structural exclusions (ModuleList containers etc.). NOT a category.
-    # Listed for the demo header but not part of the placement decision.
+    pending: List[str] = field(default_factory=list)
     structural_excluded: List[str] = field(default_factory=list)
 
     @property
     def total_categorized(self) -> int:
-        return len(self.hot) + len(self.cold) + len(self.kernel_missing)
+        return len(self.on_device) + len(self.kernel_missing) + len(self.pending)
 
     def runtime_target(self, comp: str) -> Optional[str]:
-        """Return the intrinsic placement for ``comp``: 'device' iff HOT,
-        'cpu' iff COLD or KERNEL_MISSING, None if comp isn't categorized."""
-        if comp in self.hot:
+        """Return the runtime placement for ``comp``:
+        ``'device'`` for ON_DEVICE, ``'cpu'`` for KERNEL_MISSING (temporary
+        fallback while the kernel gap is open), ``None`` for PENDING and
+        uncategorized (the loop hasn't decided yet)."""
+        if comp in self.on_device:
             return "device"
-        if comp in self.cold or comp in self.kernel_missing:
+        if comp in self.kernel_missing:
             return "cpu"
         return None
 
     def as_dict(self) -> Dict[str, List[str]]:
         return {
-            _HOT: sorted(self.hot),
-            _COLD: sorted(self.cold),
+            _ON_DEVICE: sorted(self.on_device),
             _KERNEL_MISSING: sorted(self.kernel_missing),
+            _PENDING: sorted(self.pending),
         }
 
 
@@ -79,20 +74,15 @@ def build_final_categorization(
     demo_dir: Path,
     graduated_set: Optional[Set[str]] = None,
 ) -> CategorizationReport:
-    """Walk bringup_status.json + persistent state and assign every
-    NEW non-structural component to exactly one of HOT/COLD/KERNEL_MISSING.
+    """Walk bringup_status.json + persistent state and bucket every NEW
+    non-structural component:
 
-    Routing:
-      1. graduated → HOT (on TT device, PCC verified)
-      2. on no-emit list → structural_excluded (NOT categorized)
-      3. on skip-list with category == "COLD" → COLD
-      4. on skip-list with category == "KERNEL_MISSING" → KERNEL_MISSING
-      5. on skip-list with no/other category → COLD (default safe choice
-         until classify-hot-cold OR kernel-missing verification refines it)
+      1. graduated stub on disk → ON_DEVICE
+      2. on no-emit list → structural_excluded (NOT placement-categorized)
+      3. on skip-list with category == KERNEL_MISSING → KERNEL_MISSING
+      4. anything else → PENDING (retry next run; not a permanent state)
     """
     from .overlay_manager import (
-        load_hot_cold,
-        load_hot_cold_evidence,
         load_no_emit_tests,
         load_persistent_skips,
     )
@@ -110,63 +100,23 @@ def build_final_categorization(
         return CategorizationReport()
 
     no_emit = set(load_no_emit_tests(model_id).keys())
-    skipped = load_persistent_skips(model_id)  # dict {comp: {category, reason, ...}}
-    hot_cold_map = load_hot_cold(model_id)  # dict {comp: "HOT" | "COLD" | "UNRESOLVED"}
-    hot_cold_evidence = load_hot_cold_evidence(model_id)  # dict {comp: full evidence record}
+    skipped = load_persistent_skips(model_id)
     graduated_set = set(graduated_set or _infer_graduated_from_disk(demo_dir, new_components))
-    # A skip-listed component CANNOT be PCC-graduated.
     graduated_set -= set(skipped.keys())
 
     report = CategorizationReport()
     for comp in new_components:
         if comp in no_emit:
-            # Structural exclusion (ModuleList container). NOT a category.
             report.structural_excluded.append(comp)
             continue
         if comp in graduated_set:
-            report.hot.append(comp)
+            report.on_device.append(comp)
             continue
-        if comp in skipped:
-            cat = skipped[comp].get("category", "").upper()
-            # WORKLOAD probe (hot_cold.json) is the AUTHORITATIVE signal
-            # for COLD placement. COLD bucket means ONLY "workload doesn't
-            # invoke this component — CPU is correct; putting it on device
-            # adds no perf value and may slow things down via host<->device
-            # transfers."
-            #
-            # Anything HOT-by-workload but not graduated lands in
-            # kernel_missing bucket, regardless of why it's stuck
-            # (KERNEL_MISSING / CONSTRAINT_MISMATCH / TOOL_BUG / HF_ERROR /
-            # ITERATION_BUDGET / AGENT_STUCK). The skip-list category
-            # field drives the gap report's sub-sectioning so the operator
-            # knows WHY and what to do.
-            hc_kind = hot_cold_map.get(comp, "").upper()
-            if hc_kind == _HOT:
-                report.kernel_missing.append(comp)
-            elif hc_kind == _COLD:
-                report.cold.append(comp)
-            else:
-                # No workload signal at all. Fall back to skip-list
-                # category: TTNN-gap categories go to kernel_missing
-                # (workload-independent verdict); everything else lands
-                # in COLD as the safe default.
-                if cat in (_KERNEL_MISSING, "CONSTRAINT_MISMATCH"):
-                    report.kernel_missing.append(comp)
-                else:
-                    report.cold.append(comp)
-            continue
-        # Not graduated, not on any list.
-        # Consult hot_cold.json (workload probe result):
-        #   - "COLD"  → goes to COLD (CPU is correct)
-        #   - "HOT"   → tool didn't finish processing this HOT comp.
-        #               Route to KERNEL_MISSING with implicit "tool
-        #               didn't reach it" annotation.
-        #   - missing → default COLD (safest CPU placement)
-        hc_kind = hot_cold_map.get(comp, "").upper()
-        if hc_kind == _HOT:
+        if comp in skipped and (skipped[comp].get("category") or "").upper() == _KERNEL_MISSING:
             report.kernel_missing.append(comp)
-        else:
-            report.cold.append(comp)
+            continue
+        # Anything else is in-progress / queue for the next session.
+        report.pending.append(comp)
     return report
 
 
@@ -185,16 +135,19 @@ def _infer_graduated_from_disk(demo_dir: Path, components: List[str]) -> List[st
 
 
 def format_categorization_summary(report: CategorizationReport) -> str:
-    """Compact 3-category summary for the demo header / convergence banner."""
+    """Compact placement summary for the demo header / convergence banner."""
     lines: List[str] = []
     lines.append(
-        f"  HOT            ({len(report.hot):2}) on TT device:       {', '.join(sorted(report.hot)) or '(none)'}"
+        f"  ON_DEVICE      ({len(report.on_device):2}) on TT device:        "
+        f"{', '.join(sorted(report.on_device)) or '(none)'}"
     )
     lines.append(
-        f"  COLD           ({len(report.cold):2}) on CPU (intended):  {', '.join(sorted(report.cold)) or '(none)'}"
+        f"  KERNEL_MISSING ({len(report.kernel_missing):2}) on CPU (TTNN gap):    "
+        f"{', '.join(sorted(report.kernel_missing)) or '(none)'}"
     )
     lines.append(
-        f"  KERNEL_MISSING ({len(report.kernel_missing):2}) on CPU (TTNN gap):  {', '.join(sorted(report.kernel_missing)) or '(none)'}"
+        f"  PENDING        ({len(report.pending):2}) retry next run:       "
+        f"{', '.join(sorted(report.pending)) or '(none)'}"
     )
     if report.structural_excluded:
         lines.append(
@@ -204,63 +157,27 @@ def format_categorization_summary(report: CategorizationReport) -> str:
 
 
 def format_kernel_gap_report(model_id: str, report: CategorizationReport) -> str:
-    """Surface the KERNEL_MISSING placement bucket with per-component
-    annotations so the TTNN dev planner can prioritize work.
+    """Surface the KERNEL_MISSING bucket with per-component annotations
+    so the TTNN dev planner can prioritize kernel work.
 
-    Splits the bucket into two sections based on the underlying detailed
-    skip-list category:
-
-      * Missing-op section   — KERNEL_MISSING entries (TTNN truly lacks
-                                the op). TTNN dev work: implement the op.
-      * Constraint section   — CONSTRAINT_MISMATCH entries (TTNN has the
-                                op but failed for the call's dtype /
-                                layout / shape). TTNN dev work: extend
-                                the existing op's support matrix.
+    Only KERNEL_MISSING entries are persisted in the skip-list now, so
+    every line in this report represents a verified TTNN op gap.
     """
     if not report.kernel_missing:
         return ""
     from .overlay_manager import load_persistent_skips
 
     skips = load_persistent_skips(model_id)
-    missing_op_entries: List[str] = []
-    constraint_entries: List[str] = []
-    other_entries: List[str] = []
+    entries: List[str] = []
     for comp in sorted(report.kernel_missing):
         entry = skips.get(comp, {})
         reason = entry.get("reason", "(no annotation)")
-        cat = (entry.get("category") or "").upper()
-        line = f"    {comp:40} → {reason}"
-        if cat == _KERNEL_MISSING:
-            missing_op_entries.append(line)
-        elif cat == "CONSTRAINT_MISMATCH":
-            constraint_entries.append(line)
-        else:
-            # E.g. hot_cold-HOT-but-skip-COLD promotion (no specific
-            # missing-op or constraint signal). Surface separately.
-            other_entries.append(line)
-
-    lines: List[str] = [""]
-    if missing_op_entries:
-        lines.append(f"  TTNN OPERATIONS NEEDED ({len(missing_op_entries)}):")
-        lines.extend(missing_op_entries)
-        lines.append("")
-        lines.append("  These components stay on CPU until TTNN lands the missing op(s).")
-        lines.append("")
-    if constraint_entries:
-        lines.append(f"  TTNN CONSTRAINT EXTENSIONS NEEDED ({len(constraint_entries)}):")
-        lines.extend(constraint_entries)
-        lines.append("")
-        lines.append(
-            "  These components stay on CPU until TTNN extends the existing op's " "dtype/layout/shape support."
-        )
-        lines.append("")
-    if other_entries:
-        lines.append(f"  HOT-PATH ON CPU — TTNN GAP UNCLASSIFIED ({len(other_entries)}):")
-        lines.extend(other_entries)
-        lines.append("")
-        lines.append(
-            "  Workload-HOT but the tool couldn't pin a specific missing op or "
-            "constraint signal. Investigation needed."
-        )
-        lines.append("")
+        entries.append(f"    {comp:40} → {reason}")
+    if not entries:
+        return ""
+    lines: List[str] = ["", f"  TTNN OPERATIONS NEEDED ({len(entries)}):"]
+    lines.extend(entries)
+    lines.append("")
+    lines.append("  These components stay on CPU until TTNN lands the missing op(s).")
+    lines.append("")
     return "\n".join(lines)

@@ -43,9 +43,6 @@ Categories
   AGENT_STUCK           — repeated NO_OP / byte-identical empty
                           responses. Agent is not engaging. Trigger
                           decomposition before skip.
-  COLD_INTENDED         — workload probe (hot_cold.json) marked COLD;
-                          component is not on the hot path. CPU is
-                          correct placement.
 
 Confidence
 ----------
@@ -74,7 +71,6 @@ KERNEL_VERIFIED_MISSING = "KERNEL_VERIFIED_MISSING"
 CONSTRAINT_MISMATCH = "CONSTRAINT_MISMATCH"
 ITERATION_BUDGET = "ITERATION_BUDGET"
 AGENT_STUCK = "AGENT_STUCK"
-COLD_INTENDED = "COLD_INTENDED"
 
 ALL_CLASSES = (
     ITERATE_MORE,
@@ -84,25 +80,21 @@ ALL_CLASSES = (
     CONSTRAINT_MISMATCH,
     ITERATION_BUDGET,
     AGENT_STUCK,
-    COLD_INTENDED,
 )
 
 
-# Map classifier classes back to the skip-list `category` field schema
-# used by `final_categorization` + `overlay_manager.persist_skip`. Three
-# of the eight classes map to existing skip-list categories; the rest
-# carry their full class name through so future categorization steps
-# can distinguish them (e.g. retry ITERATION_BUDGET next run vs. surface
-# TOOL_BUG to the user).
+# Map classifier classes back to the skip-list `category` field schema.
+# Only KERNEL_VERIFIED_MISSING produces a persistent skip entry; the
+# other classes are diagnostic-only — the loop logs them, but the
+# component stays in the active queue and is retried next session.
 SKIP_CATEGORY_FOR_CLASS = {
     KERNEL_VERIFIED_MISSING: "KERNEL_MISSING",
-    COLD_INTENDED: "COLD",
-    CONSTRAINT_MISMATCH: "CONSTRAINT_MISMATCH",
+    CONSTRAINT_MISMATCH: "CONSTRAINT_MISMATCH",  # retried; not persisted
     TOOL_BUG: "TOOL_BUG",
     HF_ERROR: "HF_ERROR",
     ITERATION_BUDGET: "ITERATION_BUDGET",
     AGENT_STUCK: "AGENT_STUCK",
-    ITERATE_MORE: "COLD",  # safe fallback if loop reaches us here
+    ITERATE_MORE: "ITERATE_MORE",
 }
 
 
@@ -215,29 +207,21 @@ def classify_failure(
                      3 consecutive byte-identical responses").
       failure_text:  the recent failure trace (last_failures +
                      last_failure_details) for pattern scanning.
-      hot_cold_kind: "HOT" | "COLD" | None — workload-probe verdict
-                     for this component. COLD short-circuits to
-                     COLD_INTENDED regardless of failure trace.
+      hot_cold_kind: legacy parameter — ignored. Workload firing
+                     no longer gates placement; the only legitimate
+                     CPU fallback reason is a verified missing TTNN
+                     kernel.
 
-    The decision order encodes the priority laid out in the design
-    doc — workload signal first (COLD components on CPU is the right
-    placement, no matter how they failed), then high-confidence harness
-    bug detection, then HF/kernel/constraint analysis, then loop-state
-    markers, then a default fallback.
+    Decision order: high-confidence harness bug detection first, then
+    HF/kernel/constraint analysis, then loop-state markers, then a
+    default fallback.
     """
+    del hot_cold_kind  # legacy; firing/workload no longer gates placement
     reason = reason or ""
     failure_text = failure_text or ""
     combined = reason + "\n" + failure_text
 
-    # 1. Workload probe: a COLD component genuinely belongs on CPU.
-    if (hot_cold_kind or "").upper() == "COLD":
-        return FailureVerdict(
-            class_name=COLD_INTENDED,
-            confidence="high",
-            reason=f"workload probe marked COLD; CPU is correct placement",
-        )
-
-    # 2. Tool/harness bug: scaffolder produced bad inputs. Very high
+    # 1. Tool/harness bug: scaffolder produced bad inputs. Very high
     # confidence because the patterns are concrete signatures the
     # capture/PCC layer emits.
     if _matches_any(combined, _TOOL_BUG_PATTERNS):
@@ -247,7 +231,7 @@ def classify_failure(
             reason="harness signature/shape mismatch (scaffolder produced bad inputs)",
         )
 
-    # 3. HF reference error: HF model itself failed to load or forward.
+    # 2. HF reference error: HF model itself failed to load or forward.
     # Not a TTNN issue. Surface to user.
     if _matches_any(combined, _HF_ERROR_PATTERNS):
         return FailureVerdict(
@@ -256,7 +240,7 @@ def classify_failure(
             reason="HF reference forward error (not a TTNN issue)",
         )
 
-    # 4. Kernel-missing pattern + op verification: distinguishes
+    # 3. Kernel-missing pattern + op verification: distinguishes
     # KERNEL_VERIFIED_MISSING from CONSTRAINT_MISMATCH.
     missing_op = detect_kernel_missing(combined)
     if missing_op:
@@ -288,7 +272,7 @@ def classify_failure(
         # op_exists is None — couldn't verify. Don't claim
         # KERNEL_MISSING; keep evaluating other signals below.
 
-    # 5. Agent-stuck signal: the loop sees no progress. Caller should
+    # 4. Agent-stuck signal: the loop sees no progress. Caller should
     # attempt decomposition before persisting this verdict.
     if _contains_any(combined, _AGENT_STUCK_MARKERS):
         return FailureVerdict(
@@ -297,7 +281,7 @@ def classify_failure(
             reason="agent persistently produces NO_OP / empty responses",
         )
 
-    # 6. Iteration budget exhausted with no other decisive signal.
+    # 5. Iteration budget exhausted with no other decisive signal.
     if _contains_any(combined, _ITERATION_BUDGET_MARKERS):
         return FailureVerdict(
             class_name=ITERATION_BUDGET,
@@ -305,21 +289,22 @@ def classify_failure(
             reason="hit per-component attempt cap with no decisive failure-class signal",
         )
 
-    # 7. Default: workload-unverified, no clear signal. Use COLD_INTENDED
-    # with LOW confidence so future runs / human readers know this is
-    # the safe-default fallback, not a confident verdict.
+    # 6. Default: no decisive signal — treat as ITERATION_BUDGET (retry
+    # next session). We no longer fall back to a CPU placement; the
+    # only legitimate CPU reason is a verified kernel gap.
     return FailureVerdict(
-        class_name=COLD_INTENDED,
+        class_name=ITERATION_BUDGET,
         confidence="low",
-        reason="no decisive failure-class signal; defaulting to CPU placement",
+        reason="no decisive failure-class signal; retry next run",
     )
 
 
 def skip_category_for_verdict(verdict: FailureVerdict) -> str:
-    """Map a FailureVerdict to the skip-list `category` field.
+    """Map a FailureVerdict to a category label.
 
-    Most classes round-trip 1:1, but KERNEL_VERIFIED_MISSING collapses
-    to "KERNEL_MISSING" and ITERATE_MORE collapses to "COLD" as a safe
-    fallback (the loop shouldn't be skipping a still-iterating component
-    but if it does, CPU is the conservative choice)."""
-    return SKIP_CATEGORY_FOR_CLASS.get(verdict.class_name, "COLD")
+    Only ``KERNEL_VERIFIED_MISSING`` collapses to ``KERNEL_MISSING`` and
+    is persisted by ``overlay_manager.persist_skip``. Every other label
+    is diagnostic — the loop logs it, but the component stays in the
+    active queue and is retried next session.
+    """
+    return SKIP_CATEGORY_FOR_CLASS.get(verdict.class_name, "ITERATION_BUDGET")
