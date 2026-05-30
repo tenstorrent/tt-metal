@@ -56,3 +56,36 @@ def test_tried_actions_per_component_state_exists() -> None:
     """Each component tracks its OWN tried-actions set so the same toggle
     isn't applied repeatedly across iters."""
     assert "tried_actions_per_component" in _AUTO_ITER_PY
+
+
+# ---------------------------------------------------------------------------
+# Auto-decomposition: the loop must AUTO-INVOKE decompose --write-plan
+# in a subprocess (NOT just print a hint) when failure_class warrants it.
+# ---------------------------------------------------------------------------
+
+
+def test_auto_iterate_auto_invokes_decompose_in_subprocess() -> None:
+    """Pin the auto-invocation: the loop must spawn the existing
+    `tt-hw-planner decompose --write-plan` CLI in a subprocess on
+    decomposition-worthy failures, not just print a hint. The
+    `decomposition_consumer` at loop start picks up the plan next iter.
+    """
+    src = _AUTO_ITER_PY
+    # The auto-invocation block must use a subprocess.run on the
+    # decompose CLI command so the HF model load doesn't bloat the
+    # auto-loop process.
+    assert "decompose-auto" in src, "auto_iterate must AUTO-INVOKE decompose, not just print a manual hint"
+    assert (
+        "scripts.tt_hw_planner" in src and '"decompose"' in src
+    ), "auto_iterate must spawn `python -m scripts.tt_hw_planner decompose ...`"
+    assert "--write-plan" in src, "auto-decompose must write the plan file"
+
+
+def test_auto_decompose_is_attempted_once_per_component() -> None:
+    """Pin the dedup: decomposition_auto_attempted set prevents
+    re-running the subprocess on every iter for the same parent."""
+    src = _AUTO_ITER_PY
+    assert "decomposition_auto_attempted" in src, (
+        "auto_iterate must track which components have been auto-decomposed "
+        "this run, to avoid re-running the subprocess on every iter"
+    )

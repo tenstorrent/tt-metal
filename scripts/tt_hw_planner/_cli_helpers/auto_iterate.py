@@ -146,6 +146,12 @@ def _run_auto_iterate_loop(
     # re-applying the same toggle on repeated plateaus.
     tried_actions_per_component: Dict[str, set] = {}
 
+    # Per-component set tracking which components have already had
+    # auto-decompose attempted this run. Prevents re-running the
+    # expensive decompose subprocess on every iter for the same
+    # parent component.
+    decomposition_auto_attempted: set = set()
+
     hard_total_attempt_cap: int = max(3, max_attempts_per_component * 2)
     permanently_skipped: List[str] = []
     graduated_this_run: List[str] = []
@@ -703,18 +709,74 @@ def _run_auto_iterate_loop(
                 f"  [failure-class] `{comp}` -> {verdict.class_name} "
                 f"({verdict.confidence}); category={skip_category} ({persistence_note})"
             )
-            # CTA: surface decomposition opportunity to the user without
-            # loading HF inline (would be expensive in the auto-loop
-            # process). Recoverable verdicts get a one-line suggestion;
-            # the user runs `tt_hw_planner decompose ...` out-of-band.
+            # Auto-invoke decomposition for components whose failure
+            # verdict warrants it. The HF load is expensive — to avoid
+            # bloating the auto-loop process, we spawn the existing
+            # `decompose --write-plan` CLI in a subprocess. The
+            # `consume_decomposition_plan` consumer at loop start
+            # (auto_iterate.py:158-173) picks up the plan on the NEXT
+            # iteration and adds the children as NEW components.
+            #
+            # Tracked in decomposition_auto_attempted so we don't keep
+            # re-running the subprocess on every iter for the same
+            # parent. Empty children (leaf module) is also "attempted."
             from ..component_decomposer import failure_class_warrants_decomposition
 
-            if failure_class_warrants_decomposition(verdict.class_name):
-                print(
-                    f"  [decompose-hint] `{comp}` may benefit from "
-                    f"sub-component decomposition (verdict={verdict.class_name}). "
-                    f"Run: python -m scripts.tt_hw_planner decompose {MODEL} {comp}"
-                )
+            if failure_class_warrants_decomposition(verdict.class_name) and comp not in decomposition_auto_attempted:
+                decomposition_auto_attempted.add(comp)
+                try:
+                    _decomp_proc = subprocess.run(
+                        [
+                            sys.executable,
+                            "-m",
+                            "scripts.tt_hw_planner",
+                            "decompose",
+                            MODEL,
+                            comp,
+                            "--write-plan",
+                        ],
+                        capture_output=True,
+                        text=True,
+                        timeout=180,
+                    )
+                    if _decomp_proc.returncode == 0:
+                        print(
+                            f"  [decompose-auto] `{comp}` decomposed "
+                            f"(verdict={verdict.class_name}); children queued "
+                            f"in decomposition_plan.json — consumer will add "
+                            f"them as NEW components on the next iter."
+                        )
+                    elif _decomp_proc.returncode == 1:
+                        # rc=1 = leaf module, no non-trivial children.
+                        # Decomposition genuinely exhausted; don't print
+                        # the manual hint since auto-attempt confirmed
+                        # nothing to decompose.
+                        print(
+                            f"  [decompose-auto] `{comp}` is primitive — "
+                            f"no non-trivial children to spawn (verdict="
+                            f"{verdict.class_name} stands)"
+                        )
+                    else:
+                        print(
+                            f"  [decompose-auto] `{comp}` subprocess failed "
+                            f"(rc={_decomp_proc.returncode}): "
+                            f"{(_decomp_proc.stderr or '')[:200]}",
+                            file=sys.stderr,
+                        )
+                except subprocess.TimeoutExpired:
+                    print(
+                        f"  [decompose-auto] `{comp}` timed out after 180s "
+                        f"(HF load too slow); falling back to manual hint: "
+                        f"python -m scripts.tt_hw_planner decompose {MODEL} {comp}",
+                        file=sys.stderr,
+                    )
+                except Exception as _decomp_exc:
+                    print(
+                        f"  [decompose-auto] `{comp}` error: "
+                        f"{type(_decomp_exc).__name__}: {_decomp_exc}; "
+                        f"falling back to manual hint",
+                        file=sys.stderr,
+                    )
         except Exception as _classify_exc:
             print(f"  [failure-class] classifier raised on `{comp}`: {_classify_exc}", file=sys.stderr)
         # Persist the verdict to the skip-list. If the classifier raised,
