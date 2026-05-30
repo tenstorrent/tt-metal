@@ -135,6 +135,13 @@ def _run_auto_iterate_loop(
 
     best_pcc_per_component: Dict[str, float] = {}
 
+    # Critic diagnoses keyed by component. Populated after a PCC-fail
+    # iteration; consumed when building the NEXT iter's prompt to inject
+    # a directed precision-debugging hint. The critic sees the previous
+    # diagnosis on each call, so it proposes something different if the
+    # last one didn't help.
+    critic_diagnoses_per_component: Dict[str, "object"] = {}
+
     hard_total_attempt_cap: int = max(3, max_attempts_per_component * 2)
     permanently_skipped: List[str] = []
     graduated_this_run: List[str] = []
@@ -2007,6 +2014,65 @@ def _run_auto_iterate_loop(
             )
             constraint_block = ""
 
+        # Critic block: if the previous PCC attempt for this component
+        # plateaued (PCC < 0.99 and code unchanged), invoke the critic
+        # sub-agent to produce one targeted change suggestion. Cached by
+        # (component, code_sha1, pcc_rounded) so unchanged code is free.
+        critic_block = ""
+        try:
+            if iter_target_component and iter_target_component in last_pcc_per_component:
+                _prev_pcc = last_pcc_per_component[iter_target_component]
+                if _prev_pcc is not None and _prev_pcc < 0.99:
+                    _safe_critic_target = _safe_id(iter_target_component)
+                    _stub_path = demo_dir / "_stubs" / f"{_safe_critic_target}.py"
+                    _stub_code = _stub_path.read_text(encoding="utf-8") if _stub_path.is_file() else ""
+                    # Capture context for the critic (input shape/dtype from the manifest).
+                    _input_shape = None
+                    _input_dtype = None
+                    try:
+                        _mani = json.loads((demo_dir / "_captured" / _safe_critic_target / "manifest.json").read_text())
+                        _first_arg = (_mani.get("args") or {}).get("items") or []
+                        if _first_arg and isinstance(_first_arg[0], dict):
+                            _input_shape = _first_arg[0].get("shape")
+                            _input_dtype = _first_arg[0].get("dtype")
+                    except Exception:
+                        pass
+                    # Pass the previous critic diagnosis (if any) so the
+                    # next critic call avoids re-proposing the same thing.
+                    _prev_diag = critic_diagnoses_per_component.get(iter_target_component)
+                    _prev_text = None
+                    if _prev_diag is not None and getattr(_prev_diag, "is_actionable", False):
+                        _prev_text = (
+                            f"ROOT_CAUSE: {_prev_diag.root_cause}\n" f"SPECIFIC_CHANGE: {_prev_diag.specific_change}\n"
+                        )
+                    from ..agentic.critic import invoke_critic, persist_diagnosis
+
+                    _diag = invoke_critic(
+                        component=iter_target_component,
+                        code=_stub_code,
+                        pcc=float(_prev_pcc),
+                        input_shape=_input_shape,
+                        input_dtype=_input_dtype,
+                        recipes_applied=[],  # constraint block lists them; not duplicated here
+                        previous_diagnosis=_prev_text,
+                    )
+                    critic_diagnoses_per_component[iter_target_component] = _diag
+                    persist_diagnosis(_diag, demo_dir)
+                    critic_block = _diag.to_prompt_block()
+                    if _diag.is_actionable:
+                        print(
+                            f"  [critic] `{iter_target_component}` PCC={_prev_pcc:.4f} -> "
+                            f"diagnosis (confidence={_diag.confidence}): {_diag.specific_change[:140]}"
+                        )
+                    elif _diag.error:
+                        print(f"  [critic] `{iter_target_component}` skipped: {_diag.error}", file=sys.stderr)
+        except Exception as _critic_exc:
+            print(
+                f"  [critic] non-fatal: {type(_critic_exc).__name__}: {_critic_exc}",
+                file=sys.stderr,
+            )
+            critic_block = ""
+
         prompt = (
             f"{hw_header}"
             f"{task_block}"
@@ -2015,6 +2081,7 @@ def _run_auto_iterate_loop(
             f"{agentic_block}"
             f"{budget_clause}"
             f"{constraint_block}"
+            f"{critic_block}"
             f"{failure_context}"
             f"STRATEGY DIRECTIVE FOR THIS ITERATION:\n{strategy_directive}\n"
             f"{escalated_scope_block}"
