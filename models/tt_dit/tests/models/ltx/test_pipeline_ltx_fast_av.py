@@ -29,6 +29,10 @@ def _with_audio_dev_l1(base: dict) -> dict:
 _line_params = _with_audio_dev_l1(line_params)
 _ring_params = _with_audio_dev_l1(ring_params)
 
+# Trace region for LTX_TRACED=1. Both stage traces (s1 + larger-seq s2) stay resident,
+# so this holds ~2× one 48-block trace; 700MB fits both at 1080p.
+ring_trace_params = {**_ring_params, "trace_region_size": 700_000_000}
+
 
 def _default_checkpoint() -> str:
     """Resolve distilled checkpoint: env var > local file > HF repo string default."""
@@ -72,7 +76,7 @@ def _default_gemma() -> str:
         # BH (linear) on 4x8
         [(4, 8), (4, 8), 1, 0, 2, False, _line_params, ttnn.Topology.Linear, False],
         # BH (ring) on 4x8
-        [(4, 8), (4, 8), 1, 0, 2, False, _ring_params, ttnn.Topology.Ring, False],
+        [(4, 8), (4, 8), 1, 0, 2, False, ring_trace_params, ttnn.Topology.Ring, False],
         [(4, 32), (4, 32), 1, 0, 2, False, _ring_params, ttnn.Topology.Ring, False],
     ],
     ids=[
@@ -117,6 +121,7 @@ def test_pipeline_av_fast(
     width = int(os.environ.get("WIDTH", "1920"))
 
     run_warmup = os.environ.get("RUN_WARMUP", "0") in ("1", "true", "True")
+    traced = os.environ.get("LTX_TRACED", "0") in ("1", "true", "True")
 
     pipeline = LTXFastPipeline.create_pipeline(
         mesh_device=mesh_device,
@@ -129,6 +134,7 @@ def test_pipeline_av_fast(
         topology=topology,
         is_fsdp=is_fsdp,
         run_warmup=run_warmup,
+        traced=traced,
         num_frames=num_frames,
         height=height,
         width=width,
@@ -169,7 +175,13 @@ def test_pipeline_av_fast(
         logger.info(f"Saved video to: {output_filename}")
 
     if no_prompt:
-        run(prompt=prompt, number=0, seed=int(os.environ.get("SEED", "10")))
+        seed = int(os.environ.get("SEED", "10"))
+        run(prompt=prompt, number=0, seed=seed)
+        # Traced: gen #0 captures (lazily, on first step of each stage); gen #1 is pure
+        # replay — its Stage 1/2 denoise times are the steady-state measurement.
+        if traced:
+            logger.info("=== traced steady-state pass (gen #1, pure replay) ===")
+            run(prompt=prompt, number=1, seed=seed)
     else:
         for i in itertools.count():
             new_prompt = input("Enter the input prompt, or q to exit: ")
@@ -178,3 +190,6 @@ def test_pipeline_av_fast(
             if prompt[0] == "q":
                 break
             run(prompt=prompt, number=i, seed=i)
+
+    if traced:
+        pipeline.release_traces()

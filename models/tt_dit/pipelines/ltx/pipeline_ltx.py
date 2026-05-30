@@ -58,6 +58,7 @@ from ...utils.ltx import (
 )
 from ...utils.mochi import get_rot_transformation_mat
 from ...utils.tensor import bf16_tensor, bf16_tensor_2dshard
+from ...utils.tracing import Tracer
 
 LTX_UPSAMPLER_HF_REF = "Lightricks/LTX-2.3:ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
 
@@ -208,11 +209,18 @@ class LTXPipeline:
         height: int = 0,
         width: int = 0,
         run_warmup: bool = False,
+        traced: bool = False,
         extra_transformer_variants: list[tuple[str, list[LoraSpec]]] | None = None,
     ):
         self.mesh_device = mesh_device
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
+        # When True, the denoise loop captures the DiT forward as a ttnn trace on the
+        # first step and replays it thereafter (collapses per-op dispatch overhead).
+        self._traced = traced
+        # One Tracer per fixed shape (e.g. "s1"/"s2"); kept resident across generate()
+        # calls and freed by release_traces().
+        self._tracers: dict[str, Tracer] = {}
         if ccl_manager.topology == ttnn.Topology.Linear:
             self.vae_ccl_manager = ccl_manager
         else:
@@ -279,6 +287,27 @@ class LTXPipeline:
             if run_warmup and num_frames > 0 and height > 0 and width > 0:
                 self.warmup_buffers(num_frames=num_frames, height=height, width=width)
 
+    def _traced_step(self, trace_key: str, fn: Callable, *, capture_inputs: dict, replay_inputs: dict):
+        """Capture ``fn`` as a ttnn trace on the first call for ``trace_key``; replay after.
+
+        Capture passes the full input set; replay passes only the inputs that change
+        (per step or per generate). Omitted kwargs reuse the captured device buffers —
+        passing a value-identical constant would re-copy it into the buffer every step.
+        Every value in both dicts must be trace-valid: ttnn.Tensor | int | float | str | bool | None.
+        """
+        tracer = self._tracers.get(trace_key)
+        if tracer is None:
+            tracer = Tracer(fn, device=self.mesh_device, prep_run=False, clone_prep_inputs=False)
+            self._tracers[trace_key] = tracer
+            return tracer(**capture_inputs)
+        return tracer(**replay_inputs)
+
+    def release_traces(self) -> None:
+        """Release captured denoise traces and free their device trace memory."""
+        for tracer in self._tracers.values():
+            tracer.release_trace()
+        self._tracers.clear()
+
     @staticmethod
     def _resolve_checkpoint_file(checkpoint: str, default_filename: str = "ltx-2.3-22b-dev.safetensors") -> str:
         """Resolve a checkpoint reference to a local file path.ß"""
@@ -317,6 +346,7 @@ class LTXPipeline:
         mode: str = "av",
         pipeline_class: type["LTXPipeline"] | None = None,
         run_warmup: bool = False,
+        traced: bool = False,
         num_frames: int = 0,
         height: int = 0,
         width: int = 0,
@@ -411,6 +441,7 @@ class LTXPipeline:
             height=height,
             width=width,
             run_warmup=run_warmup,
+            traced=traced,
             **extra_pipeline_kwargs,
         )
 

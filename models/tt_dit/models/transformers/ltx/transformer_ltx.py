@@ -753,23 +753,82 @@ class LTXTransformerModel(Module):
         video_padding_mask: ttnn.Tensor | None = None,
         video_padding_mask_full: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Run one denoising step on device. Returns video output, or (video, audio) tuple."""
+        """Upload torch latents/timestep to device, then run the traceable forward."""
         from ....utils.tensor import bf16_tensor
 
-        # Push video to device (SP-sharded)
-        video_1BNI = bf16_tensor(
-            video_1BNI_torch,
-            device=self.mesh_device,
-            mesh_axis=self.parallel_config.sequence_parallel.mesh_axis,
-            shard_dim=-2,
-        )
-
+        sp_axis = self.parallel_config.sequence_parallel.mesh_axis
+        video_1BNI = bf16_tensor(video_1BNI_torch, device=self.mesh_device, mesh_axis=sp_axis, shard_dim=-2)
         B_size = video_1BNI_torch.shape[1]
-        timestep = bf16_tensor(
-            timestep_torch.reshape(1, 1, B_size, 1) * 1000.0,
-            device=self.mesh_device,
+        timestep = bf16_tensor(timestep_torch.reshape(1, 1, B_size, 1) * 1000.0, device=self.mesh_device)
+        audio_1BNI = (
+            bf16_tensor(audio_1BNI_torch, device=self.mesh_device, mesh_axis=sp_axis, shard_dim=-2)
+            if self.has_audio
+            else None
+        )
+        return self.inner_step_device(
+            video_1BNI=video_1BNI,
+            timestep=timestep,
+            audio_1BNI=audio_1BNI,
+            video_prompt_1BLP=video_prompt_1BLP,
+            video_rope_cos=video_rope_cos,
+            video_rope_sin=video_rope_sin,
+            video_N=video_N,
+            trans_mat=trans_mat,
+            audio_prompt_1BLP=audio_prompt_1BLP,
+            audio_rope_cos=audio_rope_cos,
+            audio_rope_sin=audio_rope_sin,
+            audio_N=audio_N,
+            video_cross_pe_cos=video_cross_pe_cos,
+            video_cross_pe_sin=video_cross_pe_sin,
+            audio_cross_pe_cos=audio_cross_pe_cos,
+            audio_cross_pe_sin=audio_cross_pe_sin,
+            video_cross_pe_cos_full=video_cross_pe_cos_full,
+            video_cross_pe_sin_full=video_cross_pe_sin_full,
+            audio_cross_pe_cos_full=audio_cross_pe_cos_full,
+            audio_cross_pe_sin_full=audio_cross_pe_sin_full,
+            skip_cross_attn=skip_cross_attn,
+            skip_self_attn_blocks=skip_self_attn_blocks,
+            audio_attn_mask=audio_attn_mask,
+            audio_padding_mask=audio_padding_mask,
+            audio_padding_mask_full=audio_padding_mask_full,
+            video_padding_mask=video_padding_mask,
+            video_padding_mask_full=video_padding_mask_full,
         )
 
+    def inner_step_device(
+        self,
+        *,
+        video_1BNI: ttnn.Tensor,
+        timestep: ttnn.Tensor,
+        audio_1BNI: ttnn.Tensor | None = None,
+        video_prompt_1BLP: ttnn.Tensor = None,
+        video_rope_cos: ttnn.Tensor = None,
+        video_rope_sin: ttnn.Tensor = None,
+        video_N: int = 0,
+        trans_mat: ttnn.Tensor | None = None,
+        audio_prompt_1BLP: ttnn.Tensor | None = None,
+        audio_rope_cos: ttnn.Tensor | None = None,
+        audio_rope_sin: ttnn.Tensor | None = None,
+        audio_N: int = 0,
+        video_cross_pe_cos: ttnn.Tensor | None = None,
+        video_cross_pe_sin: ttnn.Tensor | None = None,
+        audio_cross_pe_cos: ttnn.Tensor | None = None,
+        audio_cross_pe_sin: ttnn.Tensor | None = None,
+        video_cross_pe_cos_full: ttnn.Tensor | None = None,
+        video_cross_pe_sin_full: ttnn.Tensor | None = None,
+        audio_cross_pe_cos_full: ttnn.Tensor | None = None,
+        audio_cross_pe_sin_full: ttnn.Tensor | None = None,
+        skip_cross_attn: bool = False,
+        skip_self_attn_blocks: list[int] | None = None,
+        audio_attn_mask: ttnn.Tensor | None = None,
+        audio_padding_mask: ttnn.Tensor | None = None,
+        audio_padding_mask_full: ttnn.Tensor | None = None,
+        video_padding_mask: ttnn.Tensor | None = None,
+        video_padding_mask_full: ttnn.Tensor | None = None,
+    ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Device-only denoising forward. All tensor args are ttnn (no torch) so this is
+        trace-capturable. ``video_1BNI``/``audio_1BNI``/``timestep`` are the per-step inputs;
+        the rest are constant across a denoise stage."""
         # Video modulation (6 or 9 params depending on cross_attention_adaln)
         adaln_coeff = 9 if self.cross_attention_adaln else 6
         video_modulation, video_emb_ts = self.adaln_single(timestep)
@@ -794,13 +853,6 @@ class LTXTransformerModel(Module):
         audio_emb_ts = None
 
         if self.has_audio:
-            audio_1BNI = bf16_tensor(
-                audio_1BNI_torch,
-                device=self.mesh_device,
-                mesh_axis=self.parallel_config.sequence_parallel.mesh_axis,
-                shard_dim=-2,
-            )
-
             audio_modulation, audio_emb_ts = self.audio_adaln_single(timestep)
             audio_mod_1BCD = ttnn.reshape(audio_modulation, (1, B, adaln_coeff, self.audio_inner_dim))
             if self.parallel_config.tensor_parallel.factor > 1:
