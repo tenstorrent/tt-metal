@@ -506,6 +506,28 @@ def _populate_result_from_response(result, response, config, suite_name, input_h
         result["peak_l1_memory_device"] = None
 
 
+# Signatures of a device-level hang that the child process catches and *returns*
+# as a normal exception (status=False) rather than triggering the Python-side
+# watchdog timeout. Once the mesh hangs in fetch-queue dispatch, every subsequent
+# vector throws the same error, so we must reset the device (and, under
+# skip-on-timeout, abort the rest of the suite) instead of spinning for the
+# entire job and getting the runner cancelled on the wall-clock cap.
+_DEVICE_HANG_SIGNATURES = (
+    "device timeout in fetch queue wait",
+    "potential hang detected",
+    "completion reader queue is not empty",
+    "device hang or timeout occurred",
+)
+
+
+def _is_device_hang_message(message) -> bool:
+    """Return True if a returned exception message indicates a device hang."""
+    if not message:
+        return False
+    msg = str(message).lower()
+    return any(sig in msg for sig in _DEVICE_HANG_SIGNATURES)
+
+
 def _set_crash_hang_defaults(result):
     """Populate result fields for a FAIL_CRASH_HANG outcome."""
     result["status"] = TestStatus.FAIL_CRASH_HANG
@@ -558,6 +580,31 @@ def _execute_vector_with_retry(
                 main_proc_runner,
             )
             _populate_result_from_response(result, response, config, suite_name, input_hash)
+
+            # The child returned a result, but it may carry a device-hang
+            # exception (e.g. "device timeout in fetch queue wait, potential
+            # hang detected"). The Python watchdog never fired because the
+            # child responded within the timeout, yet the mesh is now wedged
+            # and every later vector will throw the same error. Treat this like
+            # a hang: kill/reset the device and (under skip-on-timeout) abort
+            # the suite so we recover instead of spinning for the whole job.
+            if _is_device_hang_message(result.get("message")):
+                logger.error(
+                    f"DEVICE HANG detected for input_hash='{input_hash}': {result.get('message')}. "
+                    f"Resetting devices and aborting suite."
+                )
+                _kill_child(p, timeout_before_rejoin)
+                p = None
+                result["status"] = TestStatus.FAIL_CRASH_HANG
+                result["exception"] = str(result.get("message", "DEVICE HANG"))
+                reset_util.reset()
+                if child_mode:
+                    p = Process(target=run, args=(module_name, input_queue, output_queue, config))
+                    p.start()
+                result["_child_process"] = p
+                result["_abort_suite"] = config.skip_on_timeout
+                return result
+
             result["_child_process"] = p
             result["_abort_suite"] = False
             return result
