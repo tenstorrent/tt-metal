@@ -79,9 +79,7 @@ def get_tools_for_target(target: str) -> list[str]:
     bake = run_bake_print(target)
     contexts = bake["target"][target].get("contexts", {})
     return sorted(
-        key.removesuffix("-layer")
-        for key in contexts
-        if key.endswith("-layer") and not key.startswith("ci-")
+        key.removesuffix("-layer") for key in contexts if key.endswith("-layer") and not key.startswith("ci-")
     )
 
 

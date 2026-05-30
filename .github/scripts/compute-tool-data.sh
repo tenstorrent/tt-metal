@@ -58,9 +58,11 @@ TOOL_TAGS=$(.github/scripts/compute-tool-tags.sh "$REPO")
 TOOLS=$(docker buildx bake -f dockerfile/docker-bake.hcl --print tools 2>/dev/null \
   | jq -r '.group.tools.targets[]' | sort | tr '\n' ' ' | sed 's/ $//')
 
-# Check existence for each tool
+# Check existence for each tool (parallel to avoid serial network latency)
 ANY_MISSING=false
 declare -A EXISTS
+declare -A PIDS
+TMPDIR_EXISTS=$(mktemp -d)
 
 for tool in $TOOLS; do
     tag=$(echo "$TOOL_TAGS" | jq -r ".\"${tool}-tag\"")
@@ -69,16 +71,25 @@ for tool in $TOOLS; do
         EXISTS[$tool]=false
         ANY_MISSING=true
     elif [ "$CHECK_EXISTS" = "true" ]; then
-        if docker manifest inspect "$tag" > /dev/null 2>&1; then
-            EXISTS[$tool]=true
-        else
-            EXISTS[$tool]=false
-            ANY_MISSING=true
-        fi
+        # Fire all manifest inspects in parallel; results written to temp files
+        ( docker manifest inspect "$tag" > /dev/null 2>&1 && echo true || echo false ) \
+            > "${TMPDIR_EXISTS}/${tool}" &
+        PIDS[$tool]=$!
     else
         EXISTS[$tool]=unknown
     fi
 done
+
+# Collect parallel results
+if [ "$CHECK_EXISTS" = "true" ] && [ "$FORCE_REBUILD" = "false" ]; then
+    for tool in $TOOLS; do
+        wait "${PIDS[$tool]}"
+        EXISTS[$tool]=$(cat "${TMPDIR_EXISTS}/${tool}")
+        [ "${EXISTS[$tool]}" = "false" ] && ANY_MISSING=true
+    done
+fi
+
+rm -rf "$TMPDIR_EXISTS"
 
 # Build output JSON dynamically from derived tool list
 # Start with base fields, then add per-tool existence flags
