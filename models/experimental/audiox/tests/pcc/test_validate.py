@@ -69,9 +69,10 @@ def test_summarize_run_details_prefers_sampling_window_for_diffusion_tps(tmp_pat
             "conditioning_tokens": 10,
             "t_latent": 216,
             "steps": 2,
-            "timings": {"sampling_seconds": 4.0},
+            "timings": {"sampling_seconds": 4.0, "generation_seconds": 20.0},
         },
     )
+    assert summary["generation_seconds"] == 20.0
     assert summary["sampling_seconds"] == 4.0
     assert summary["diffusion_tokens_per_second"] == pytest.approx(108.0)
     assert summary["meets_stage1_diffusion_tps_ge_20"] is True
@@ -104,3 +105,19 @@ def test_parse_args_accepts_tt_validation_flags():
     assert args.tt_device_id == 3
     assert args.output_dir == Path("/tmp/audiox-validation")
     assert args.report_json == Path("/tmp/report.json")
+
+
+def test_parse_args_accepts_tt_warm_runs():
+    args = validate_mod._parse_args(
+        [
+            "--checkpoint",
+            "/tmp/fake.safetensors",
+            "--prompt",
+            "wind chimes",
+            "--tt",
+            "--tt-warm-runs",
+            "3",
+        ]
+    )
+    assert args.tt is True
+    assert args.tt_warm_runs == 3

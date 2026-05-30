@@ -139,6 +139,8 @@ def _summarize_run_details(output_path: Path, elapsed_seconds: float, details: d
     summary = _summarize_audio_file(output_path)
     summary["elapsed_seconds"] = elapsed_seconds
     timings = details.get("timings") or {}
+    generation_seconds = timings.get("generation_seconds", elapsed_seconds)
+    summary["generation_seconds"] = generation_seconds
     summary["conditioning_tokens"] = details["conditioning_tokens"]
     summary["latent_tokens"] = details["t_latent"]
     diffusion_token_steps = details["t_latent"] * details.get("steps", 0)
@@ -148,7 +150,7 @@ def _summarize_run_details(output_path: Path, elapsed_seconds: float, details: d
     summary["diffusion_tokens_per_second"] = (
         0.0 if throughput_window_seconds == 0 else diffusion_token_steps / throughput_window_seconds
     )
-    summary["meets_stage1_generation_time_lt_30s"] = elapsed_seconds < 30.0
+    summary["meets_stage1_generation_time_lt_30s"] = generation_seconds < 30.0
     summary["meets_stage1_diffusion_tps_ge_20"] = summary["diffusion_tokens_per_second"] >= 20.0
     if timings:
         summary["timings"] = timings
@@ -179,33 +181,82 @@ def _run_cpu_reference(args: argparse.Namespace, cpu_output: Path, *, synthetic_
 
 
 def _run_tt_reference(args: argparse.Namespace, tt_output: Path, *, synthetic_video_prompt: torch.Tensor | None) -> dict:
-    from models.experimental.audiox.demo.tt_demo import open_tt_device, run_tt_demo
+    from models.experimental.audiox.demo.tt_demo import TtAudioXSession, close_tt_device, open_tt_device, run_tt_demo
+
+    if args.tt_warm_runs <= 1:
+        device = open_tt_device(device_id=args.tt_device_id)
+        try:
+            started_at = time.perf_counter()
+            details = run_tt_demo(
+                checkpoint=args.checkpoint,
+                prompt=args.prompt,
+                output=tt_output,
+                device=device,
+                video_path=args.video,
+                image_path=args.image,
+                audio_path=args.audio,
+                video_prompt_tensor=synthetic_video_prompt,
+                steps=args.steps,
+                seed=args.seed,
+                return_details=True,
+            )
+            elapsed_seconds = time.perf_counter() - started_at
+        finally:
+            close_tt_device(device)
+
+        details["steps"] = args.steps
+        summary = _summarize_run_details(details["output_path"], elapsed_seconds, details)
+        summary["_latent"] = details["latent"]
+        return summary
 
     device = open_tt_device(device_id=args.tt_device_id)
     try:
-        started_at = time.perf_counter()
-        details = run_tt_demo(
-            checkpoint=args.checkpoint,
-            prompt=args.prompt,
-            output=tt_output,
-            device=device,
-            video_path=args.video,
-            image_path=args.image,
-            audio_path=args.audio,
-            video_prompt_tensor=synthetic_video_prompt,
-            steps=args.steps,
-            seed=args.seed,
-            return_details=True,
-        )
-        elapsed_seconds = time.perf_counter() - started_at
+        session = TtAudioXSession(args.checkpoint, device, seed=args.seed)
+        warm_runs = []
+        details = None
+        elapsed_seconds = None
+        for run_index in range(1, args.tt_warm_runs + 1):
+            if run_index > 1:
+                torch.manual_seed(args.seed)
+            output_path = tt_output if run_index == 1 else tt_output.with_name(f"tt_output_run{run_index}.wav")
+            started_at = time.perf_counter()
+            run_details = session.run(
+                prompt=args.prompt,
+                output=output_path,
+                video_path=args.video,
+                image_path=args.image,
+                audio_path=args.audio,
+                video_prompt_tensor=synthetic_video_prompt,
+                steps=args.steps,
+                seed=args.seed,
+                return_details=True,
+            )
+            run_elapsed_seconds = time.perf_counter() - started_at
+            run_details["steps"] = args.steps
+            run_summary = _summarize_run_details(run_details["output_path"], run_elapsed_seconds, run_details)
+            if run_index == 1:
+                details = run_details
+                elapsed_seconds = run_elapsed_seconds
+            else:
+                warm_runs.append(
+                    {
+                        "run_index": run_index,
+                        "elapsed_seconds": run_summary["elapsed_seconds"],
+                        "generation_seconds": run_summary["generation_seconds"],
+                        "sampling_seconds": run_summary["sampling_seconds"],
+                        "diffusion_tokens_per_second": run_summary["diffusion_tokens_per_second"],
+                        "decode_seconds": run_summary.get("timings", {}).get("decode_seconds"),
+                        "save_seconds": run_summary.get("timings", {}).get("save_seconds"),
+                    }
+                )
     finally:
-        import ttnn
-
-        ttnn.close_device(device)
+        close_tt_device(device)
 
     details["steps"] = args.steps
     summary = _summarize_run_details(details["output_path"], elapsed_seconds, details)
     summary["_latent"] = details["latent"]
+    if warm_runs:
+        summary["warm_runs"] = warm_runs
     return summary
 
 
@@ -225,6 +276,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--cpu-device", type=str, default="cpu", choices=("cpu", "cuda"))
     p.add_argument("--tt", action="store_true", help="Also run the TT path and compare with CPU output")
     p.add_argument("--tt-device-id", type=int, default=0)
+    p.add_argument("--tt-warm-runs", type=int, default=1, help="Optional number of additional warm TT runs")
     p.add_argument("--report-json", type=Path, help="Optional explicit report path")
     args = p.parse_args(argv)
     if args.synthetic_video and (args.video is not None or args.image is not None):
@@ -265,6 +317,14 @@ def main(argv: list[str] | None = None) -> int:
         report["comparison"] = _compare_audio_files(cpu_output, tt_output)
         report["latent_comparison"] = _compare_tensors(report["cpu"]["_latent"], report["tt"]["_latent"])
 
+    tt_perf_summary = None
+    if report["tt"] is not None:
+        warm_runs = report["tt"].get("warm_runs") or []
+        if warm_runs:
+            tt_perf_summary = warm_runs[-1]
+        else:
+            tt_perf_summary = report["tt"]
+
     report["stage1_checks"] = {
         "valid_16khz": bool(report["cpu"]["valid_16khz"]) and (
             report["tt"] is None or bool(report["tt"]["valid_16khz"])
@@ -273,11 +333,11 @@ def main(argv: list[str] | None = None) -> int:
         "same_shape": None if report["comparison"] is None else report["comparison"]["same_shape"],
         "same_sample_rate": None if report["comparison"] is None else report["comparison"]["same_sample_rate"],
         "tt_generation_time_lt_30s": None
-        if report["tt"] is None
-        else report["tt"]["meets_stage1_generation_time_lt_30s"],
+        if tt_perf_summary is None
+        else tt_perf_summary["generation_seconds"] < 30.0,
         "tt_diffusion_tps_ge_20": None
-        if report["tt"] is None
-        else report["tt"]["meets_stage1_diffusion_tps_ge_20"],
+        if tt_perf_summary is None
+        else tt_perf_summary["diffusion_tokens_per_second"] >= 20.0,
         "latent_pcc_ge_0p95": None
         if report["latent_comparison"] is None or report["latent_comparison"]["pcc"] is None
         else report["latent_comparison"]["pcc"] >= 0.95,
@@ -296,10 +356,16 @@ def main(argv: list[str] | None = None) -> int:
     if report["tt"] is not None:
         print(f"tt_output: {tt_output}")
         print(f"tt_elapsed_seconds: {report['tt']['elapsed_seconds']:.3f}")
+        print(f"tt_generation_seconds: {report['tt']['generation_seconds']:.3f}")
         print(f"tt_valid_16khz: {report['tt']['valid_16khz']}")
         print(f"tt_same_shape: {report['comparison']['same_shape']}")
         print(f"tt_same_sample_rate: {report['comparison']['same_sample_rate']}")
         print(f"tt_diffusion_tokens_per_second: {report['tt']['diffusion_tokens_per_second']:.3f}")
+        if report["tt"].get("warm_runs"):
+            warm_summary = report["tt"]["warm_runs"][-1]
+            print(f"tt_warm_run_index: {warm_summary['run_index']}")
+            print(f"tt_warm_generation_seconds: {warm_summary['generation_seconds']:.3f}")
+            print(f"tt_warm_diffusion_tokens_per_second: {warm_summary['diffusion_tokens_per_second']:.3f}")
         if report["latent_comparison"] is not None:
             print(f"latent_pcc: {report['latent_comparison']['pcc']}")
     print(f"report_json: {report_path}")

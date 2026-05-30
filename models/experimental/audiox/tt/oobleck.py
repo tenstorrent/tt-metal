@@ -20,8 +20,8 @@ from models.experimental.audiox.tt.common import to_tt
 
 
 _LONG_SEQUENCE_THRESHOLD = int(os.getenv("AUDIOX_TT_LONG_SEQUENCE_THRESHOLD", "131072"))
-_LONG_SEQUENCE_CHUNK = int(os.getenv("AUDIOX_TT_LONG_SEQUENCE_CHUNK", "32768"))
-_CONV1D_DRAM_WIDTH_SLICES = int(os.getenv("AUDIOX_TT_CONV1D_WIDTH_SLICES", "256"))
+_LONG_SEQUENCE_CHUNK = int(os.getenv("AUDIOX_TT_LONG_SEQUENCE_CHUNK", "65536"))
+_CONV1D_DRAM_WIDTH_SLICES = int(os.getenv("AUDIOX_TT_CONV1D_WIDTH_SLICES", "128"))
 _CONV_TRANSPOSE_HEIGHT_SLICES = int(os.getenv("AUDIOX_TT_CONV_TRANSPOSE_HEIGHT_SLICES", "128"))
 
 
@@ -283,11 +283,12 @@ def _conv_transpose1d(
     a no-op (``kW=1``, ``sW=1``, ``pW=0``). Input is RM, output is converted
     back to interleaved TILE for the next pointwise op."""
     out_length = (input_length - 1) * stride - 2 * padding + kernel_size
+    act_block_h = 64 if stride == 4 else 32
     conv_config = ttnn.Conv2dConfig(
         weights_dtype=ttnn.bfloat8_b,
         deallocate_activation=True,
         reallocate_halo_output=True,
-        act_block_h_override=32,
+        act_block_h_override=act_block_h,
     )
     conv_config.config_tensors_in_dram = True
     _debug_decoder(
