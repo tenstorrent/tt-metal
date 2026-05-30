@@ -586,6 +586,8 @@ def build_prompts(
     sibling_example: Optional[str],
     previous_attempt: Optional[str] = None,
     previous_failure: Optional[str] = None,
+    manifest_path: Optional[Path] = None,
+    opplan_path: Optional[Path] = None,
 ) -> Tuple[str, str]:
     system = (
         "You are an expert TTNN engineer porting PyTorch modules from "
@@ -638,6 +640,25 @@ def build_prompts(
         if sibling_example
         else ""
     )
+
+    # Run the ttnn constraint catalog against this component's captured
+    # input metadata + opplan. If any ttnn shape/dtype constraint will
+    # bite, surface the matching recipe so the LLM can apply it upfront
+    # instead of rediscovering the workaround across iterations.
+    constraint_block = ""
+    try:
+        from .constraints import check_component, format_constraint_hints
+
+        violations = check_component(
+            component_name=component_name,
+            hf_class_name=hf_ctx.class_name,
+            manifest_path=manifest_path,
+            opplan_path=opplan_path,
+        )
+        constraint_block = format_constraint_hints(violations)
+    except Exception:
+        # Constraint plumbing is advisory — never block prompt construction.
+        constraint_block = ""
 
     retry_block = ""
     if previous_attempt and previous_failure:
@@ -692,7 +713,7 @@ def build_prompts(
         PROJECT CONVENTIONS (mandatory)
         -------------------------------
         {_PROJECT_CONVENTIONS}
-        {sibling_block}{retry_block}
+        {sibling_block}{constraint_block}{retry_block}
 
         OUTPUT
         ======
@@ -943,6 +964,8 @@ def synthesize_component(
 
     safe = _safe_id(component_name)
     stub_path = demo_dir / "_stubs" / f"{safe}.py"
+    manifest_path = demo_dir / "_captured" / safe / "manifest.json"
+    opplan_path = stub_path.with_suffix(".opplan.json")
     new_shape = comp.get("new_shape") or {}
     sibling_hint = comp.get("sibling_tt_file")
     candidate_paths = COMPONENT_SUBMODULE_HINTS.get(component_name, [])
@@ -984,6 +1007,8 @@ def synthesize_component(
             hf_ctx=hf_ctx,
             new_shape=new_shape,
             sibling_example=sibling_example,
+            manifest_path=manifest_path,
+            opplan_path=opplan_path,
         )
         result.notes.append("dry-run: prompts assembled, no LLM call made")
         audit_path = _write_audit(
@@ -1011,6 +1036,8 @@ def synthesize_component(
             sibling_example=sibling_example,
             previous_attempt=previous_attempt,
             previous_failure=previous_failure,
+            manifest_path=manifest_path,
+            opplan_path=opplan_path,
         )
         response = call_llm(cfg, system=system, user=user)
         body = _strip_fences(response)
@@ -1559,6 +1586,8 @@ def emit_prompts(
             continue
 
         sibling_example = _read_sibling_example(repo_root, sibling_hint)
+        manifest_path = demo_dir / "_captured" / safe / "manifest.json"
+        opplan_path = demo_dir / "_stubs" / f"{safe}.opplan.json"
         system, user = build_prompts(
             component_name=name,
             component_safe=safe,
@@ -1566,6 +1595,8 @@ def emit_prompts(
             hf_ctx=hf_ctx,
             new_shape=new_shape,
             sibling_example=sibling_example,
+            manifest_path=manifest_path,
+            opplan_path=opplan_path,
         )
         stub_rel = safe_relative_to_root(demo_dir / "_stubs" / f"{safe}.py")
         doc = _format_prompt_doc(

@@ -1966,6 +1966,47 @@ def _run_auto_iterate_loop(
             attempts_per_component=attempts_per_component,
             last_failure_class_per_component=last_failure_class_per_component,
         )
+
+        # Constraint catalog: pre-check captured shapes against the ttnn
+        # quirk catalog and surface matching recipes BEFORE the LLM runs.
+        # Universal — applies to every model bringup, not SAM2-specific.
+        constraint_block = ""
+        try:
+            from ..constraints import check_component, format_constraint_hints
+
+            if iter_target_component:
+                _safe_target = _safe_id(iter_target_component)
+                _hf_class_name = ""
+                try:
+                    _manifest = json.loads((demo_dir / "_captured" / _safe_target / "manifest.json").read_text())
+                    _hf_class_name = _manifest.get("hf_class") or ""
+                except Exception:
+                    pass
+                if not _hf_class_name:
+                    # Fall back to the bringup_status entry for the class name.
+                    try:
+                        _status = json.loads((demo_dir / "bringup_status.json").read_text())
+                        for _c in _status.get("components", []) or []:
+                            if _c.get("name") == iter_target_component:
+                                _hf_class_name = _c.get("hf_class_name") or _c.get("hf_reference") or ""
+                                break
+                    except Exception:
+                        _hf_class_name = ""
+                _violations = check_component(
+                    component_name=iter_target_component,
+                    hf_class_name=_hf_class_name or iter_target_component,
+                    manifest_path=demo_dir / "_captured" / _safe_target / "manifest.json",
+                    opplan_path=demo_dir / "_stubs" / f"{_safe_target}.opplan.json",
+                )
+                constraint_block = format_constraint_hints(_violations)
+        except Exception as _catalog_exc:
+            # Catalog is advisory; never block the loop.
+            print(
+                f"  [constraint-catalog] non-fatal: {type(_catalog_exc).__name__}: {_catalog_exc}",
+                file=sys.stderr,
+            )
+            constraint_block = ""
+
         prompt = (
             f"{hw_header}"
             f"{task_block}"
@@ -1973,6 +2014,7 @@ def _run_auto_iterate_loop(
             f"{shape_probe_block}"
             f"{agentic_block}"
             f"{budget_clause}"
+            f"{constraint_block}"
             f"{failure_context}"
             f"STRATEGY DIRECTIVE FOR THIS ITERATION:\n{strategy_directive}\n"
             f"{escalated_scope_block}"
