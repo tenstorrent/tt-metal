@@ -22,8 +22,9 @@ inline void llk_math_eltwise_binary_sfpu_binop_mul(
     uint dst_index0, uint32_t dst_index1, uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
     LLK_ASSERT(vector_mode == VectorMode::RC, "Quasar currently only supports vector mode RC");
     _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_sfpu_binary_mul<APPROXIMATE, BINOP, SFPU_ITERATIONS, is_fp32_dest_acc_en>,
+        ckernel::sfpu::calculate_sfpu_binary<APPROXIMATE, BINOP, is_fp32_dest_acc_en>,
         0 /*dst_tile_index for addressing*/,
+        SFPU_ITERATIONS,
         dst_index0,
         dst_index1,
         odst);
@@ -34,8 +35,9 @@ inline void llk_math_eltwise_binary_sfpu_binop_div(
     uint dst_index0, uint32_t dst_index1, uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
     LLK_ASSERT(vector_mode == VectorMode::RC, "Quasar currently only supports vector mode RC");
     _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_sfpu_binary_div<APPROXIMATE, BINOP, SFPU_ITERATIONS, is_fp32_dest_acc_en>,
+        ckernel::sfpu::calculate_sfpu_binary<APPROXIMATE, BINOP, is_fp32_dest_acc_en>,
         0 /*dst_tile_index for addressing*/,
+        SFPU_ITERATIONS,
         dst_index0,
         dst_index1,
         odst);

@@ -48,81 +48,57 @@ sfpi_inline sfpi::vFloat float32_to_bf16_rne(sfpi::vFloat in) {
 }
 
 /**
- * @brief Vectorized binary multiply (in0 * in1), float16b inputs/output.
+ * @brief LLK caller for binary SFPU operations, currently supports MUL and DIV.
+ * Mirrors the L5 _calculate_sfpu_binary_ signature exactly (runtime iterations)
+ * so sfpi LREG allocation behaves identically to the tested L5 path.
  *
- * Mirrors the Blackhole metal implementation. When the dest is not in fp32
- * accumulation mode the float32 product is converted to bf16 with software RNE
- * (Quasar SFPSTORE truncates by default), and the FPU 0*x = 0 / x*0 = 0
- * semantics are forced explicitly.
- *
- * @tparam APPROXIMATION_MODE: unused, preserved to match the BH metal signature
- * @tparam BINOP: unused for MUL, preserved for API parity
- * @tparam ITERATIONS: number of sfpi row-pairs to process per face
- * @tparam is_fp32_dest_acc_en: enables FP32 DEST accumulation (skips bf16 RNE)
- */
-template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS = 8, bool is_fp32_dest_acc_en = false>
-inline void calculate_sfpu_binary_mul(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
-    // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
-    constexpr uint dst_tile_size_sfpi = 32;
-#pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
-        sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
-
-        sfpi::vFloat result = in0 * in1;
-
-        if constexpr (!is_fp32_dest_acc_en) {
-            // Software RNE conversion to match FPU bf16 rounding (Quasar SFPSTORE truncates).
-            // NB: unlike BH we do not add an explicit 0*x=0 guard — IEEE multiply already
-            // yields 0 for 0*finite, and the extra sfpi v_if regressed results on Quasar.
-            result = float32_to_bf16_rne(result);
-        }
-
-        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
-        sfpi::dst_reg++;
-    }
-}
-
-/**
- * @brief Vectorized binary divide (in0 / in1), float16b inputs/output.
- * Ported from BH (`ckernel_sfpu_binary.h`, `calculate_sfpu_binary_div`).
- *
- * @note Special cases (matching BH semantics):
+ * @note DIV special cases (matching BH semantics):
  *   - 0 / 0 -> NaN
  *   - x / 0 -> ±inf, sign of x
  *   - x / x -> 1.0 (forced exact, regardless of reciprocal rounding)
  *
  * @tparam APPROXIMATION_MODE: unused, preserved to match the BH metal signature
- * @tparam BINOP: unused for DIV, preserved for API parity
- * @tparam ITERATIONS: number of sfpi row-pairs to process per face
- * @tparam is_fp32_dest_acc_en: enables FP32 DEST accumulation (skips bf16 RNE)
+ * @tparam BINOP: selects which binary op to compute (MUL or DIV)
+ * @tparam is_fp32_dest_acc_en: enables FP32 DEST accumulation (skips bf16 RNE for DIV)
+ * @param iterations: number of sfpi rows to process (runtime, one call per face)
  */
-template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS = 8, bool is_fp32_dest_acc_en = false>
-inline void calculate_sfpu_binary_div(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+template <bool APPROXIMATION_MODE, BinaryOp BINOP, bool is_fp32_dest_acc_en = false>
+inline void calculate_sfpu_binary(
+    const int iterations,
+    const std::uint32_t dst_index_in0,
+    const std::uint32_t dst_index_in1,
+    const std::uint32_t dst_index_out) {
+    static_assert(BINOP == BinaryOp::MUL || BINOP == BinaryOp::DIV, "calculate_sfpu_binary only supports MUL and DIV");
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
-    constexpr uint dst_tile_size_sfpi = 32;
+    constexpr std::uint32_t dst_tile_size_sfpi = 32;
 #pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
+    for (int d = 0; d < iterations; d++) {
         sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
+        sfpi::vFloat result = 0.0f;
 
-        constexpr int reciprocal_iterations = 2;  // Two Newton-Raphson iterations
-        sfpi::vFloat result = in0 * _sfpu_reciprocal_<reciprocal_iterations>(in1);
+        if constexpr (BINOP == BinaryOp::MUL) {
+            result = in0 * in1;
+        } else if constexpr (BINOP == BinaryOp::DIV) {
+            constexpr int reciprocal_iterations = 2;  // Two Newton-Raphson iterations
+            result = in0 * _sfpu_reciprocal_<reciprocal_iterations>(in1);
 
-        v_if(in1 == 0) {
-            v_if(in0 == 0) { result = std::numeric_limits<float>::quiet_NaN(); }
-            v_else {
-                result = std::numeric_limits<float>::infinity();
-                result = sfpi::copysgn(result, in0);
+            v_if(in1 == 0) {
+                v_if(in0 == 0) { result = std::numeric_limits<float>::quiet_NaN(); }
+                v_else {
+                    result = std::numeric_limits<float>::infinity();
+                    result = sfpi::copysgn(result, in0);
+                }
+                v_endif;
             }
+            v_elseif(in0 == in1) { result = sfpi::vConst1; }
             v_endif;
-        }
-        v_elseif(in0 == in1) { result = sfpi::vConst1; }
-        v_endif;
 
-        if constexpr (!is_fp32_dest_acc_en) {
-            // Software RNE conversion to match FPU bf16 rounding (Quasar SFPSTORE truncates).
-            result = float32_to_bf16_rne(result);
+            if constexpr (!is_fp32_dest_acc_en) {
+                // Software RNE conversion to match FPU bf16 rounding (Quasar SFPSTORE
+                // truncates by default).
+                result = float32_to_bf16_rne(result);
+            }
         }
 
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
