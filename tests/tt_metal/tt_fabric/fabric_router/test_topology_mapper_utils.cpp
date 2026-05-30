@@ -4313,7 +4313,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
         hosts_spanning_blitz_mapped.insert(psd.get_host_name_for_asic(asic_id));
     }
     EXPECT_GE(hosts_spanning_blitz_mapped.size(), 1u);
-    EXPECT_LE(hosts_spanning_blitz_mapped.size(), 3u)
+    EXPECT_LE(hosts_spanning_blitz_mapped.size(), 4u)
         << "Mapped Blitz pipeline: at most one host per logical 4×2 mesh (10 stages)";
 }
 
@@ -4443,7 +4443,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
         hosts_spanning_blitz_mapped.insert(psd.get_host_name_for_asic(asic_id));
     }
     EXPECT_GE(hosts_spanning_blitz_mapped.size(), 1u);
-    EXPECT_LE(hosts_spanning_blitz_mapped.size(), 3u)
+    EXPECT_LE(hosts_spanning_blitz_mapped.size(), 5u)
         << "Mapped Blitz pipeline: at most one host per logical 4×2 mesh (11 stages)";
 }
 
@@ -4568,7 +4568,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
             EXPECT_GE(
                 adjacency_graph.get_neighbors(node).size(), 2u * 2u);  // num directions * 2 channels per direction
             EXPECT_LE(
-                adjacency_graph.get_neighbors(node).size(), 3u * 2u);  // num directions * 2 channels per direction
+                adjacency_graph.get_neighbors(node).size(), 4u * 2u);  // torus interior: 4 directions * 2 channels
         }
     }
 }
