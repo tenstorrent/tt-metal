@@ -27,6 +27,7 @@ from ...parallel.manager import CCLManager
 from ...utils import cache, tensor
 from ...utils.padding import PaddingConfig
 from ...utils.tensor import fast_device_to_host, float_to_uint8
+from ...utils.tracing import traced_function
 from .prompt_encoder import PromptEncoder
 
 if TYPE_CHECKING:
@@ -66,6 +67,7 @@ class Flux2TransformerState:
         self._tt_prompt_rope_cos = StateTensor()
         self._tt_prompt_rope_sin = StateTensor()
         self._tt_timestep = StateTensor()
+        self._tt_sigma_difference = StateTensor()
 
     def __getattr__(self, name: str) -> ttnn.Tensor | None:
         return object.__getattribute__(self, f"_{name}")._value
@@ -379,9 +381,21 @@ class Flux2Pipeline:
                         traced=traced,
                     )
 
+                    self.ts._tt_sigma_difference.update(
+                        torch.full([1, 1], fill_value=sigma_difference),
+                        device=self._mesh_device,
+                        dtype=ttnn.float32,
+                        traced=traced,
+                    )
+
                     self._step(
-                        ts=self.ts,
-                        sigma_difference=sigma_difference,
+                        spatial=self.ts.tt_latents_step,
+                        prompt=self.ts.tt_prompt_embeds,
+                        timestep=self.ts.tt_timestep,
+                        guidance=self.ts.tt_guidance,
+                        sigma_difference=self.ts.tt_sigma_difference,
+                        spatial_rope=(self.ts.tt_spatial_rope_cos, self.ts.tt_spatial_rope_sin),
+                        prompt_rope=(self.ts.tt_prompt_rope_cos, self.ts.tt_prompt_rope_sin),
                         spatial_sequence_length=spatial_sequence_length,
                         prompt_sequence_length=prompt_sequence_length,
                         traced=traced,
@@ -441,59 +455,33 @@ class Flux2Pipeline:
 
         return output
 
-    def _step_inner(
-        self,
-        *,
-        latent: ttnn.Tensor,
-        prompt: ttnn.Tensor,
-        timestep: ttnn.Tensor,
-        guidance: ttnn.Tensor,
-        spatial_rope_cos: ttnn.Tensor,
-        spatial_rope_sin: ttnn.Tensor,
-        prompt_rope_cos: ttnn.Tensor,
-        prompt_rope_sin: ttnn.Tensor,
-        spatial_sequence_length: int,
-        prompt_sequence_length: int,
-        traced: bool,
-    ) -> ttnn.Tensor:
-        return self.transformer.forward(
-            spatial=latent,
-            prompt=prompt,
-            timestep=timestep,
-            guidance=guidance,
-            spatial_rope=(spatial_rope_cos, spatial_rope_sin),
-            prompt_rope=(prompt_rope_cos, prompt_rope_sin),
-            spatial_sequence_length=spatial_sequence_length,
-            prompt_sequence_length=prompt_sequence_length,
-            traced=traced,
-        )
-
+    @traced_function(device=lambda self: self._mesh_device, clone_prep_inputs=False)
     def _step(
         self,
         *,
-        ts: Flux2TransformerState,
-        sigma_difference: float,
+        spatial: ttnn.Tensor,
+        prompt: ttnn.Tensor,
+        timestep: ttnn.Tensor,
+        guidance: ttnn.Tensor,
+        sigma_difference: ttnn.Tensor,
+        spatial_rope: tuple[ttnn.Tensor, ttnn.Tensor],
+        prompt_rope: tuple[ttnn.Tensor, ttnn.Tensor],
         spatial_sequence_length: int,
         prompt_sequence_length: int,
-        traced: bool,
     ) -> None:
-        noise_pred = self._step_inner(
-            latent=ts.tt_latents_step,
-            prompt=ts.tt_prompt_embeds,
-            timestep=ts.tt_timestep,
-            guidance=ts.tt_guidance,
-            spatial_rope_cos=ts.tt_spatial_rope_cos,
-            spatial_rope_sin=ts.tt_spatial_rope_sin,
-            prompt_rope_cos=ts.tt_prompt_rope_cos,
-            prompt_rope_sin=ts.tt_prompt_rope_sin,
+        noise_pred = self.transformer.forward(
+            spatial=spatial,
+            prompt=prompt,
+            timestep=timestep,
+            guidance=guidance,
+            spatial_rope=spatial_rope,
+            prompt_rope=prompt_rope,
             spatial_sequence_length=spatial_sequence_length,
             prompt_sequence_length=prompt_sequence_length,
-            traced=traced,
         )
 
-        ttnn.synchronize_device(self._mesh_device)  # Helps with accurate time profiling.
         ttnn.multiply_(noise_pred, sigma_difference)
-        ttnn.add_(ts.tt_latents_step, noise_pred)
+        ttnn.add_(spatial, noise_pred)
 
     def _patchify(self, latents: torch.Tensor) -> torch.Tensor:
         # N, H, W, C -> N, (H / P) * (W / P), C * P * P
