@@ -425,6 +425,23 @@ _BLOCKINGS = {
     (2, 4, 1024, 4096, (1, 3, 3), 19, 9, 8): (64, 32, 1, 2, 2),  # ups (kT=1)
     (2, 4, 1024, 1024, (3, 3, 3), 21, 18, 16): (64, 32, 1, 2, 2),  # post-upsample res
     (2, 4, 1024, 128, (3, 3, 3), 21, 18, 16): (64, 32, 1, 2, 2),  # final_conv
+    # ===================================================================
+    # LTX-2.3 22B Video VAE decoder, BH Loud Box 2x4 (h_factor=2, w_factor=4)
+    # 2K production target: 1088x2048. Per-device (T, H, W) from
+    # `bruteforce_conv3d_sweep.py::test_bruteforce_sweep_ltx_h2w4_2k`.
+    # NOTE: the two upsample-projection layers (512->4096 ltx_s1_up and
+    # 1024->4096 ltx_s0_up) are absent: at 2K they do not fit on a 2x4 (8-chip)
+    # mesh, so the sweep could not stage them. They fall back to
+    # _DEFAULT_BLOCKINGS pending a 4x8 (Galaxy) re-sweep.
+    # ===================================================================
+    (2, 4, 128, 1024, (3, 3, 3), 21, 19, 18): (64, 256, 1, 2, 16),  # ltx_s0_conv_in — 1.5 ms
+    (2, 4, 1024, 1024, (3, 3, 3), 21, 19, 18): (128, 64, 5, 2, 16),  # ltx_s0_res — 14.6 ms
+    (2, 4, 512, 512, (3, 3, 3), 39, 36, 34): (64, 256, 1, 2, 16),  # ltx_s1_res — 23.4 ms
+    (2, 4, 512, 512, (3, 3, 3), 75, 70, 66): (64, 256, 1, 4, 8),  # ltx_s2_res — 187.6 ms
+    (2, 4, 256, 256, (3, 3, 3), 147, 70, 66): (64, 256, 1, 4, 8),  # ltx_s3_res — 88.9 ms
+    (2, 4, 256, 512, (3, 3, 3), 147, 70, 66): (64, 256, 1, 4, 8),  # ltx_s3_chg — 179.9 ms
+    (2, 4, 128, 128, (3, 3, 3), 147, 138, 130): (64, 128, 5, 2, 16),  # ltx_s4_res — 90.2 ms
+    (2, 4, 128, 48, (3, 3, 3), 147, 138, 130): (128, 64, 7, 2, 16),  # ltx_s4_out — 48.0 ms
 }
 
 # Fallback table: (C_in, C_out, kernel) -> blocking.

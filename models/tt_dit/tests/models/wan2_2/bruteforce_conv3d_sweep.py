@@ -1083,3 +1083,71 @@ def test_bruteforce_sweep_ltx_h2w4_1080p(
         max_t_block=8,
         hw_product=32,
     )
+
+
+# ---------------------------------------------------------------------------
+# LTX-2.3 22B VAE decoder, BH Loud Box 2x4, 2K (1088x2048), 145 frames
+# ---------------------------------------------------------------------------
+# DCI 2K is 2048x1080; LTX rounds 1080 up to 1088 (H must be %64), so the VAE
+# sees 1088x2048. Same mesh (h_factor=2, w_factor=4) and same height (1088) as
+# the 1080p target above, so T and per-device H are IDENTICAL; only per-device
+# W changes (latent W 64 -> 16/device vs 1920's 60 -> 15/device). Per stage the
+# W_unpad values are 16/32/64/64/128 (vs 15/30/60/60/120), and W_sweep =
+# W_unpad + 2 to match the production H_out/W_out key.
+# ---------------------------------------------------------------------------
+_SWEEP_LAYERS_LTX_H2W4_2K = [
+    # (name,             C_in, C_out, kernel,   stride,   padding,   T,   H,   W, h, w)
+    # --- stage 4 (highest res) ---
+    ("ltx_s4_res", 128, 128, (3, 3, 3), (1, 1, 1), (0, 0, 0), 147, 138, 130, 2, 4),
+    ("ltx_s4_out", 128, 48, (3, 3, 3), (1, 1, 1), (0, 0, 0), 147, 138, 130, 2, 4),
+    # --- stage 3 ---
+    ("ltx_s3_res", 256, 256, (3, 3, 3), (1, 1, 1), (0, 0, 0), 147, 70, 66, 2, 4),
+    ("ltx_s3_chg", 256, 512, (3, 3, 3), (1, 1, 1), (0, 0, 0), 147, 70, 66, 2, 4),
+    # --- stage 2 ---
+    ("ltx_s2_res", 512, 512, (3, 3, 3), (1, 1, 1), (0, 0, 0), 75, 70, 66, 2, 4),
+    # --- stage 1 ---
+    ("ltx_s1_up", 512, 4096, (3, 3, 3), (1, 1, 1), (0, 0, 0), 39, 36, 34, 2, 4),
+    ("ltx_s1_res", 512, 512, (3, 3, 3), (1, 1, 1), (0, 0, 0), 39, 36, 34, 2, 4),
+    # --- stage 0 (deepest, smallest spatial) ---
+    ("ltx_s0_up", 1024, 4096, (3, 3, 3), (1, 1, 1), (0, 0, 0), 21, 19, 18, 2, 4),
+    ("ltx_s0_res", 1024, 1024, (3, 3, 3), (1, 1, 1), (0, 0, 0), 21, 19, 18, 2, 4),
+    ("ltx_s0_conv_in", 128, 1024, (3, 3, 3), (1, 1, 1), (0, 0, 0), 21, 19, 18, 2, 4),
+]
+
+
+@pytest.mark.parametrize(
+    "mesh_device, mesh_shape, device_params",
+    [[(2, 4), (2, 4), line_params]],
+    ids=["bh_2x4_2k"],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    "layer_name, C_in, C_out, kernel, stride, padding, T, H, W, h_factor, w_factor",
+    _SWEEP_LAYERS_LTX_H2W4_2K,
+    ids=[l[0] for l in _SWEEP_LAYERS_LTX_H2W4_2K],
+)
+def test_bruteforce_sweep_ltx_h2w4_2k(
+    mesh_device, mesh_shape, layer_name, C_in, C_out, kernel, stride, padding, T, H, W, h_factor, w_factor
+):
+    parent_mesh = mesh_device
+    device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
+    output = f"sweep_results_ltx_h2w4_2k/{layer_name}_{C_in}x{C_out}.json"
+    run_sweep(
+        device,
+        C_in,
+        C_out,
+        kernel,
+        T,
+        H,
+        W,
+        output,
+        stride=stride,
+        padding=padding,
+        h_factor=h_factor,
+        w_factor=w_factor,
+        # Cap combos hard for a time-boxed sweep; combos are pre-sorted by
+        # L1-OOM-safe priority so the top-N almost always includes the winner.
+        max_combos=80,
+        max_t_block=8,
+        hw_product=32,
+    )

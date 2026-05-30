@@ -253,47 +253,23 @@ def test_ltx_depth_to_space_upsample(mesh_device: ttnn.MeshDevice, in_c: int, st
     logger.info(f"PASSED: DepthToSpaceUpsample stride={stride}")
 
 
-@pytest.mark.parametrize(
-    ("num_frames, height, width"),
-    [
-        (17, 128, 256),  # latent (1, 128, 3, 4, 8) — fast for 2x4 (H=2 W=2 per device)
-    ],
-    ids=["17f_128x256"],
-)
-@pytest.mark.parametrize("mean, std", [(0, 1)])
-@pytest.mark.parametrize(
-    "mesh_device, h_axis, w_axis, num_links",
-    [
-        ((1, 1), 0, 1, 1),
-        ((2, 4), 0, 1, 1),
-        ((2, 4), 1, 0, 1),
-    ],
-    ids=[
-        "1x1_h0_w1",
-        "2x4_h0_w1",
-        "2x4_h1_w0",
-    ],
-    indirect=["mesh_device"],
-)
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_ltx_video_decoder(
+def _run_ltx_decoder_parity(
     mesh_device: ttnn.MeshDevice,
-    num_frames: int,
-    height: int,
-    width: int,
-    mean: float,
-    std: float,
     h_axis: int,
     w_axis: int,
     num_links: int,
+    num_frames: int,
+    height: int,
+    width: int,
+    *,
+    mean: float = 0.0,
+    std: float = 1.0,
+    pcc: float = 0.99,
 ):
-    """
-    Test full LTXVideoDecoder against PyTorch VideoDecoder reference using the
-    production LTX-2.3 22B decoder_blocks. Random weights — checks numerical
-    parity, not absolute output quality.
-
-    For 2x4 this validates the parallel halo-exchange path end-to-end, which
-    is otherwise only covered by the slow pipeline-level test.
+    """Build torch + TT production decoders at ``(num_frames, height, width)`` and
+    assert numerical parity. Shared by the standard multi-resolution decoder test
+    and the 2K decoder test. The TT decoder is given num_frames/height/width so the
+    dim walker fires and ``_BLOCKINGS`` gets an exact-match lookup for every conv3d.
     """
     from ltx_core.model.video_vae.enums import NormLayerType, PaddingModeType
     from ltx_core.model.video_vae.video_vae import VideoDecoder as TorchVideoDecoder
@@ -361,8 +337,102 @@ def test_ltx_video_decoder(
     tt_out = tt_decoder(latent)
 
     logger.info(f"Decoder: {latent.shape} -> torch {torch_out.shape}, tt {tt_out.shape}")
-    assert_quality(torch_out, tt_out, pcc=0.99)
+    assert_quality(torch_out, tt_out, pcc=pcc)
     logger.info("PASSED: LTXVideoDecoder matches PyTorch reference")
+
+
+@pytest.mark.parametrize(
+    ("num_frames, height, width"),
+    [
+        (17, 128, 256),  # latent (1, 128, 3, 4, 8) — fast for 2x4 (H=2 W=2 per device)
+    ],
+    ids=["17f_128x256"],
+)
+@pytest.mark.parametrize("mean, std", [(0, 1)])
+@pytest.mark.parametrize(
+    "mesh_device, h_axis, w_axis, num_links",
+    [
+        ((1, 1), 0, 1, 1),
+        ((2, 4), 0, 1, 1),
+        ((2, 4), 1, 0, 1),
+    ],
+    ids=[
+        "1x1_h0_w1",
+        "2x4_h0_w1",
+        "2x4_h1_w0",
+    ],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+def test_ltx_video_decoder(
+    mesh_device: ttnn.MeshDevice,
+    num_frames: int,
+    height: int,
+    width: int,
+    mean: float,
+    std: float,
+    h_axis: int,
+    w_axis: int,
+    num_links: int,
+):
+    """
+    Test full LTXVideoDecoder against PyTorch VideoDecoder reference using the
+    production LTX-2.3 22B decoder_blocks. Random weights — checks numerical
+    parity, not absolute output quality.
+
+    For 2x4 this validates the parallel halo-exchange path end-to-end, which
+    is otherwise only covered by the slow pipeline-level test.
+    """
+    _run_ltx_decoder_parity(mesh_device, h_axis, w_axis, num_links, num_frames, height, width, mean=mean, std=std)
+
+
+@pytest.mark.parametrize(
+    "num_frames, height, width",
+    # 2K = DCI 2048x1080. LTX requires H/W divisible by 64, so 1080 rounds up to
+    # 1088; the VAE therefore sees 1088x2048 (latent 34x64). Frame count is kept
+    # modest so the torch reference decode stays tractable — this validates 2K
+    # *spatial* sharding/halo/blocking-lookup. Per-layer perf at the full 145-frame
+    # production shape is covered by `test_bruteforce_sweep_ltx_h2w4_2k`.
+    [
+        (9, 1088, 2048),  # latent (1, 128, 2, 34, 64)
+    ],
+    ids=["9f_1088x2048"],
+)
+@pytest.mark.parametrize(
+    "mesh_device, h_axis, w_axis, num_links",
+    # Multi-device only: 2x4 is the production layout (latent 34/2=17, 64/4=16 per
+    # device); 4x8 also exercised. 1x1 is omitted — a single device cannot hold a
+    # full 1088x2048 decode.
+    [
+        ((2, 4), 0, 1, 1),
+        ((2, 4), 1, 0, 1),
+        ((4, 8), 0, 1, 2),
+    ],
+    ids=[
+        "2x4_h0_w1",
+        "2x4_h1_w0",
+        "4x8_h0_w1",
+    ],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+def test_ltx_video_decoder_2k(
+    mesh_device: ttnn.MeshDevice,
+    num_frames: int,
+    height: int,
+    width: int,
+    h_axis: int,
+    w_axis: int,
+    num_links: int,
+):
+    """Full LTXVideoDecoder at the 2K production resolution (2048x1080 -> 1088x2048).
+
+    Multi-device only (2x4 is the production layout; 4x8 also exercised). The two
+    512->4096 / 1024->4096 upsample-projection convs are not in the 2K ``_BLOCKINGS``
+    table (they OOM a 2x4 mesh at full production T), so at 2K they fall back to the
+    generic blockings — correct, but not yet perf-tuned. See conv3d.py.
+    """
+    _run_ltx_decoder_parity(mesh_device, h_axis, w_axis, num_links, num_frames, height, width)
 
 
 def test_ltx_vae_roundtrip():

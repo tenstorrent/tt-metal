@@ -51,8 +51,9 @@ def make_indices_grid(F: int, H: int, W: int) -> torch.Tensor:
     [
         (5, 16, 28),  # Small: 2240 tokens
         (5, 30, 52),  # 480p-ish: 7800 tokens
+        (5, 34, 64),  # 2K spatial grid (1088x2048 latent H×W): 10880 tokens
     ],
-    ids=["small", "480p"],
+    ids=["small", "480p", "2k"],
 )
 def test_ltx_rope_interleaved(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_axis: int, F: int, H: int, W: int):
     """
@@ -162,6 +163,7 @@ def test_pipeline_rope_positions_stay_fp32(mesh_device: ttnn.MeshDevice):
     from unittest.mock import patch
 
     from models.tt_dit.models.transformers.ltx import rope_ltx
+    from models.tt_dit.pipelines.ltx import pipeline_ltx as pipeline_mod
     from models.tt_dit.pipelines.ltx.pipeline_ltx import LTXPipeline
 
     # Bypass __init__ to avoid loading model weights — we only need the attributes the three
@@ -173,8 +175,8 @@ def test_pipeline_rope_positions_stay_fp32(mesh_device: ttnn.MeshDevice):
     pipe.positional_embedding_max_pos = [20, 2048, 2048]
     pipe.num_attention_heads = 32
     pipe.parallel_config = SimpleNamespace(
-        sequence_parallel=SimpleNamespace(mesh_axis=0),
-        tensor_parallel=SimpleNamespace(mesh_axis=1),
+        sequence_parallel=SimpleNamespace(mesh_axis=0, factor=tuple(mesh_device.shape)[0]),
+        tensor_parallel=SimpleNamespace(mesh_axis=1, factor=tuple(mesh_device.shape)[1]),
     )
 
     counts = {"freq_grid": 0, "freqs": 0, "split_cis": 0, "precompute": 0}
@@ -237,10 +239,15 @@ def test_pipeline_rope_positions_stay_fp32(mesh_device: ttnn.MeshDevice):
         ), f"[Step 6 FAIL] precompute_freqs_cis returned sin as {sin.dtype}, expected fp32."
         return cos, sin
 
+    # NOTE: the pipeline binds ``precompute_freqs_cis`` directly (``from ... import
+    # precompute_freqs_cis``), so it must be patched on the pipeline module, not on
+    # ``rope_ltx`` — otherwise the pipeline's calls are never intercepted and the
+    # count assertion below trips. The other three helpers are still resolved via
+    # the ``rope_ltx`` module attribute inside the real ``precompute_freqs_cis``.
     with patch.object(rope_ltx, "generate_freq_grid", checked_grid), patch.object(
         rope_ltx, "generate_freqs", checked_freqs
     ), patch.object(rope_ltx, "split_freqs_cis", checked_split), patch.object(
-        rope_ltx, "precompute_freqs_cis", checked_precompute
+        pipeline_mod, "precompute_freqs_cis", checked_precompute
     ):
         pipe._prepare_rope(5, 16, 28)
         pipe._prepare_audio_rope(64, 32)
