@@ -1108,7 +1108,7 @@ void kernel_main() {
         // we need the global token index to write to the output buffer – each global token that could potentially be
         // sent has a unique output buffer address to ensure that it is not overwritten by another token
         uint32_t global_token = (local_token + (tokens_per_device * dispatch_index));
-        uint64_t output_token_write_addr = get_noc_addr(global_token, output_addr_gen);
+        uint64_t output_token_write_addr = output_addr_gen.get_noc_addr(global_token);
         // All workers read indices (needed for routing decisions)
         // Only primary worker reads scores (only primary sends metadata)
         cb_wait_front(indices_tensor_cb_id, 1);
