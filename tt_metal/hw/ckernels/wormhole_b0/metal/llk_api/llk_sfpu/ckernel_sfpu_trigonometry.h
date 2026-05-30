@@ -472,7 +472,8 @@ inline void calculate_acos() {
     calculate_asin_acos_impl<APPROXIMATION_MODE, is_fp32_dest_acc_en, true, ITERATIONS>();
 }
 
-// reciprocal(x) for 2^-126 ≤ x < 2^126
+// Magic seed locally tuned for this sequence, targeting 0 < x < 2^24.
+// fp32 path: exhaustively validated maxulperr < 0.94 for normal fp32 2^-126 <= x <= 2^103.
 template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _sfpu_reciprocal_gt0_(sfpi::vFloat x) {
     // initial estimate y = -reciprocal(x)
