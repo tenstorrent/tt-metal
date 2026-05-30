@@ -834,13 +834,14 @@ def get_model_traced_mesh_shape() -> Tuple[int, int]:
     chips).  The tracer records 2-D ``tensor_placement`` metadata that is
     only reproduced when the sweep re-executes on a mesh device.
 
-    Returns ``MESH_DEVICE_SHAPE`` from the environment when set, otherwise
-    auto-detects from available hardware so that the sweep device topology
-    matches the trace topology.
+    Priority: MESH_DEVICE_SHAPE env var > master JSON > auto-detect.
     """
-    # Read mesh shape from master JSON matching current hardware.
-    # The master may contain configs from multiple devices (N300 + BH).
-    # Only use mesh shape from configs whose device_series matches this machine.
+    # Env var takes priority — CI sets this per batch to match traced topology.
+    shape = get_mesh_shape()
+    if shape:
+        return shape
+
+    # Fall back to master JSON, filtering by current arch AND card count.
     try:
         _master_path = os.environ.get("TTNN_MASTER_JSON_PATH")
         if not _master_path:
@@ -876,14 +877,19 @@ def get_model_traced_mesh_shape() -> Tuple[int, int]:
                         _execs = _cfg_ms.get("executions", [])
                         if _execs and isinstance(_execs[0], dict):
                             _mi_ms = _execs[0].get("machine_info", {})
-                    # Filter: only use configs matching current arch
+                    # Filter: only use configs matching current arch AND device count.
                     _board = str(_mi_ms.get("board_type", "")).lower()
-                    if _is_bh and "blackhole" not in _board and "wormhole" not in _board:
-                        pass  # no board info, use anyway
-                    elif _is_bh and "wormhole" in _board:
-                        continue  # skip N300/WH configs on BH
+                    if _is_bh and "wormhole" in _board:
+                        continue
                     elif _is_wh and "blackhole" in _board:
-                        continue  # skip BH configs on WH
+                        continue
+
+                    # Filter by device count so N300 (1-2 devices) doesn't
+                    # pick up Galaxy (32) or T3K (8) mesh shapes.
+                    _num_devices = ttnn.get_num_devices()
+                    _cfg_card_count = _mi_ms.get("card_count")
+                    if _cfg_card_count is not None and int(_cfg_card_count) > _num_devices:
+                        continue
 
                     _ms_val = _mi_ms.get("mesh_device_shape")
                     if _ms_val:
@@ -894,12 +900,8 @@ def get_model_traced_mesh_shape() -> Tuple[int, int]:
                         if isinstance(_ms_val, list) and len(_ms_val) == 2:
                             return tuple(_ms_val)
     except Exception:
-        pass  # Intentionally ignored: master config parsing is best-effort, fall through to env var / auto-detect
-    # Env var override (used when master JSON is not available)
-    shape = get_mesh_shape()
-    if shape:
-        return shape
-    # Auto-detect mesh shape from available hardware when env var not set.
+        pass  # Intentionally ignored: master config parsing is best-effort, fall through to auto-detect
+    # Auto-detect mesh shape from available hardware.
     # This ensures model-traced sweeps on Galaxy (32 devices) create a [4, 8]
     # mesh matching the topology used during model tracing.
     try:
