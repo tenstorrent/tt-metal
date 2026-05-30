@@ -453,15 +453,11 @@ class TtMoe(LightweightModule):
             _offsets_host = ttnn.to_torch(_offsets_4d, mesh_composer=_ep_composer).squeeze(2)
             logger.info(f"[TtMoe.forward] expert_region_offsets: {_offsets_host.flatten().tolist()}")
 
-        # Gate outputs uint16 indices; dispatch requires int32.
-        # this should be aligned in the further PR.
-        # Typecast in TILE_LAYOUT to avoid alignment issues, then convert to ROW_MAJOR.
-        if indices.dtype != ttnn.int32:
-            indices = ttnn.to_layout(indices, ttnn.TILE_LAYOUT)
-            indices = ttnn.typecast(indices, ttnn.int32)
-            indices = ttnn.to_layout(indices, ttnn.ROW_MAJOR_LAYOUT)
-        else:
-            indices = ttnn.to_layout(indices, ttnn.ROW_MAJOR_LAYOUT)
+        # The previous chain
+        #   to_layout(TILE) → typecast(int32) → to_layout(ROW_MAJOR)
+        # has been removed because ttnn.typecast(uint16 → int32) was
+        # non-deterministic under the tracy profiler — see #44928
+        indices = ttnn.to_layout(indices, ttnn.ROW_MAJOR_LAYOUT)
         #
         # Ensure ROW_MAJOR layout for dispatch compatibility
         scores = ttnn.to_layout(scores, ttnn.ROW_MAJOR_LAYOUT)
@@ -510,6 +506,7 @@ class TtMoe(LightweightModule):
         # ========================================
         # Dispatch expects full emb_dim on each device (x already has this)
         logger.debug(f"[TtMoe.forward] {x.shape=} {x.memory_config()=}")
+
         dispatched_buffer, metadata = self.dispatch_module(
             x,
             scores,

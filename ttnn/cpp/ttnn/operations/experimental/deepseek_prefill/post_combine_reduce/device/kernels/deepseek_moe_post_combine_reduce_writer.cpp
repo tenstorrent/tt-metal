@@ -96,6 +96,21 @@ void kernel_main() {
                     token_start_idx + i, indices_addrg, indices_write_addr + i * indices_aligned_page_size);
             }
             noc_async_read_barrier();
+            // #44928: source indices are UINT16 (gate emits uint16 and we pass it
+            // straight through). The compute kernel reads cb_indices via
+            // read_tile_value which treats elements as 4-byte uint32, so we
+            // expand uint16→int32 in place right-to-left (so we don't overwrite
+            // source bytes before reading them). After this loop the buffer is
+            // fully int32 and downstream code can treat cb_indices as int32.
+            for (uint32_t i = 0; i < TOKENS_PER_CHUNK; i++) {
+                uint32_t page_addr = indices_write_addr + i * indices_aligned_page_size;
+                volatile tt_l1_ptr uint16_t* src = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(page_addr);
+                volatile tt_l1_ptr int32_t* dst = reinterpret_cast<volatile tt_l1_ptr int32_t*>(page_addr);
+                for (int k = (int)num_experts - 1; k >= 0; k--) {
+                    uint16_t v = src[k];
+                    dst[k] = (int32_t)v;
+                }
+            }
             cb_push_back(cb_indices, TOKENS_PER_CHUNK);
         }
 
@@ -106,6 +121,8 @@ void kernel_main() {
             bool has_local = true;
             if constexpr (use_dispatch_table_skip) {
                 tt_l1_ptr int32_t* dispatch_table = reinterpret_cast<tt_l1_ptr int32_t*>(dispatch_table_write_addr);
+                // After the in-place uint16→int32 expansion above, cb_indices always
+                // holds int32 elements. Read as int32 regardless of source dtype.
                 tt_l1_ptr int32_t* token_indices =
                     reinterpret_cast<tt_l1_ptr int32_t*>(indices_write_addr + token_idx * indices_aligned_page_size);
                 has_local = false;
