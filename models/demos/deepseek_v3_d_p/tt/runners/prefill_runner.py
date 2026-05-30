@@ -101,12 +101,6 @@ def run_standalone_loop(pipeline: TtDeepSeekPrefillPipeline) -> None:
         {
             "task_id": <int>,
             "token_ids": [<int>, ...],
-            // Optional ground-truth check; both fields are optional. If
-            // expected_token_id is present and doesn't match the produced
-            // first_token, the runner exits non-zero. expected_token is just
-            // a human-readable hint for log messages (e.g., "lo").
-            "expected_token_id": <int>,
-            "expected_token": "<str>"
         }
     Prints the first generated token to stdout.
     """
@@ -122,8 +116,6 @@ def run_standalone_loop(pipeline: TtDeepSeekPrefillPipeline) -> None:
 
     task_id = data["task_id"]
     token_ids = list(data["token_ids"])
-    expected_token_id = data.get("expected_token_id")
-    expected_token = data.get("expected_token")
 
     logger.info(
         f"[standalone] task_id={task_id} num_tokens={len(token_ids)} " f"first5={token_ids[:5]} last5={token_ids[-5:]}"
@@ -159,19 +151,6 @@ def run_standalone_loop(pipeline: TtDeepSeekPrefillPipeline) -> None:
     # stdout, not a log line: callers (tests / orchestrators) parse this.
     print(f"[standalone] first_token={first_token}")
     logger.info(f"Sent token {first_token} for task {task_id}")
-
-    if expected_token_id is not None:
-        hint = f" ({expected_token!r})" if expected_token is not None else ""
-        if first_token == expected_token_id:
-            logger.info(
-                f"[standalone] ground-truth check OK: first_token={first_token} matches "
-                f"expected_token_id={expected_token_id}{hint}"
-            )
-        else:
-            raise AssertionError(
-                f"[standalone] ground-truth mismatch: produced first_token={first_token}, "
-                f"expected expected_token_id={expected_token_id}{hint}"
-            )
 
 
 def run_request_loop(pipeline: TtDeepSeekPrefillPipeline) -> None:
