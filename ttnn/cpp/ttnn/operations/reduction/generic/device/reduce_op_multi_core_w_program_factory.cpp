@@ -20,8 +20,8 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
-    const auto& a = tensor_args;
-    auto& output = tensor_return_value;
+    const auto& a = tensor_args.mesh_tensor();
+    const auto& output = tensor_return_value.mesh_tensor();
     const auto& shape = a.padded_shape();
     uint32_t W = shape[3], H = shape[2], NC = shape[1] * shape[0];
     const uint32_t tile_height = a.tensor_spec().tile().get_height();
@@ -31,7 +31,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
     uint32_t Ht = H / tile_height;
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(a.device()->arch(), operation_attributes.compute_kernel_config);
+        get_compute_kernel_config_args(a.device().arch(), operation_attributes.compute_kernel_config);
 
     tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t src0_single_tile_size = tt::tile_size(src0_cb_data_format);
@@ -42,7 +42,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
     tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
 
-    tt_metal::IDevice* device = a.device();
+    tt_metal::IDevice* device = &a.mutable_device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     auto num_rows = NC * Ht;
@@ -102,12 +102,10 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
     const bool use_post_mul = operation_attributes.post_mul_scaler != 1.0f;
     uint32_t post_mul_scaler_bits = std::bit_cast<uint32_t>(operation_attributes.post_mul_scaler);
 
-    tt_metal::Buffer* src_buffer = a.buffer();
     std::vector<uint32_t> reader_compile_time_args = {std::bit_cast<uint32_t>(operation_attributes.scaler)};
-    TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
-    tt_metal::Buffer* dst_buffer = output.buffer();
+    TensorAccessorArgs(a).append_to(reader_compile_time_args);
     std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(output_cb_index)};
-    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    TensorAccessorArgs(output).append_to(writer_compile_time_args);
 
     if (operation_attributes.negate) {
         uint32_t acc_cb_index = tt::CBIndex::c_4;
@@ -235,7 +233,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
         reader_desc.emplace_runtime_args(
             core,
             {
-                a.buffer(),
+                a,
                 num_tensor_tiles_per_core,
                 num_tiles_read  // tile index of row to start reading from
             });
@@ -243,7 +241,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
         writer_desc.emplace_runtime_args(
             core,
             {
-                output.buffer(),
+                output,
                 num_tensor_tiles_per_core / out_dim_divider,  // number of tiles to write
                 num_tiles_read / out_dim_divider              // output tile start index
             });

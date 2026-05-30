@@ -20,7 +20,6 @@ void kernel_main() {
         buff_out.reserve_back(per_core_block_dim);
         for (uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
             tile_regs_acquire();
-            // Pop tile after tile, copy to DST and pack
             buff_in.wait_front(1);
             copy_tile(dfb::in, 0, 0);
 #ifdef SFPU_OP_CHAIN_0

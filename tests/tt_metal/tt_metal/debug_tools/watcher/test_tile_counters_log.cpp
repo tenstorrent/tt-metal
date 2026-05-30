@@ -80,7 +80,7 @@ void RunTest(
 
     experimental::metal2_host_api::KernelSpec producer_spec{
         .unique_id = PRODUCER,
-        .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{kernel_path},
+        .source = kernel_path,
         .num_threads = NUM_PRODUCERS,
         .compiler_options = {.defines = {{"DFB_PRODUCER", "1"}}},
         .dfb_bindings = {{
@@ -102,7 +102,7 @@ void RunTest(
     uint32_t entries_per_consumer = use_remapper ? NUM_ENTRIES_PER_DFB : NUM_ENTRIES_PER_CONSUMER;
     experimental::metal2_host_api::KernelSpec consumer_spec{
         .unique_id = CONSUMER,
-        .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{kernel_path},
+        .source = kernel_path,
         .num_threads = NUM_CONSUMERS,
         .dfb_bindings = {{
             .dfb_spec_name = TILE_COUNTER_DFB,
