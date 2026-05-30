@@ -608,6 +608,13 @@ all_gather_minimal_matmul_async_factory_helper(
 
     const bool fsdp_fused = persistent_weight_buffer.has_value();
 
+    // Skewed rank for compute_actual_k_block's `my_rank` (the consume rooting). With the (a+b)
+    // skewed sharding, device (tp=ring_index, fsdp=fsdp_ring_index) holds local K-stripe
+    // (ring_index + fsdp_ring_index) mod ring_size for BOTH operands, so both in0 (tp uni-ring)
+    // and in1 (fsdp uni-ring) must root their K-walk there. Non-fsdp path: fsdp_ring_index==0 so
+    // this is just ring_index. NOTE: routing/mcast still use the *physical* ring_index, not this.
+    const uint32_t skewed_rank = fsdp_fused ? (ring_index + fsdp_ring_index) % ring_size : ring_index;
+
     // FSDP-axis ring metrics and fabric mux setup. Mirrors the in0 mux block (above) but
     // uses fsdp_ring_size / fsdp_ring_index / fsdp_topology and lives on row full_grid_size.y - 2.
     uint32_t fsdp_num_targets_forward = 0;
@@ -699,7 +706,7 @@ all_gather_minimal_matmul_async_factory_helper(
         in0_is_output_writer,
         true,
         ring_size,
-        ring_index,
+        skewed_rank,  // my_rank (skewed for fsdp; == ring_index otherwise)
         in3_tile_size,
         num_tiles_to_write_per_packet,
         num_targets_forward,
@@ -747,7 +754,7 @@ all_gather_minimal_matmul_async_factory_helper(
         in0_is_output_writer,
         false,  // is_injector_core
         ring_size,
-        ring_index,
+        skewed_rank,  // my_rank (skewed for fsdp; == ring_index otherwise)
         in3_tile_size,
         num_tiles_to_write_per_packet,
         num_targets_forward,
@@ -796,7 +803,7 @@ all_gather_minimal_matmul_async_factory_helper(
         in0_is_output_writer,
         false,  // is_injector_core
         ring_size,
-        ring_index,
+        skewed_rank,  // my_rank (skewed for fsdp; == ring_index otherwise)
         in3_tile_size,
         num_tiles_to_write_per_packet,
         num_targets_forward,
@@ -863,7 +870,7 @@ all_gather_minimal_matmul_async_factory_helper(
             in1_is_output_writer,
             (uint32_t)is_injector,  // is_injector_core
             ring_size,
-            ring_index,
+            skewed_rank,                      // my_rank (skewed for fsdp; == ring_index otherwise)
             N_chunks,                         // N_chunks
             N_tiles_per_chunk,                // N_tiles_per_chunk
             static_cast<uint32_t>(topology),  // topology
