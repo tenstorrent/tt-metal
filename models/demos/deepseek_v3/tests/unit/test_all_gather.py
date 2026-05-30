@@ -72,7 +72,7 @@ SHAPE_DTYPE_BUFFER_TYPE_SHARD_SPEC = [
 
 @pytest.mark.requires_device(["N300", "T3K", "TG", "DUAL", "QUAD"])
 @pytest.mark.parametrize(
-    "device_params", [{"fabric_config": get_fabric_config(), "trace_region_size": 90112}], indirect=True
+    "device_params", [{"fabric_config": get_fabric_config(), "trace_region_size": 0}], indirect=True
 )
 @pytest.mark.parametrize("shape_dtype_buffer_type_shard_spec", SHAPE_DTYPE_BUFFER_TYPE_SHARD_SPEC)
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])

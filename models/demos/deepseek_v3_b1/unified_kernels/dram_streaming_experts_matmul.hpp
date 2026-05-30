@@ -326,13 +326,13 @@ struct DRAMStreamingExpertsMatmul {
 
                         if constexpr (CTArgs::tile_r_dim <= 4) {
                             PACK((llk_math_eltwise_unary_sfpu_silu<false, CTArgs::fp32_dest_acc_en, 2>(
-                                0, (int)VectorMode::R)));
+                                0, VectorMode::R)));
                         } else if constexpr (CTArgs::tile_r_dim == 8) {
                             PACK((llk_math_eltwise_unary_sfpu_silu<false, CTArgs::fp32_dest_acc_en, 4>(
-                                0, (int)VectorMode::R)));
+                                0, VectorMode::R)));
                         } else {
                             PACK((llk_math_eltwise_unary_sfpu_silu<false, CTArgs::fp32_dest_acc_en, 8>(
-                                0, (int)VectorMode::R)));
+                                0, VectorMode::R)));
                         }
 
                         PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));

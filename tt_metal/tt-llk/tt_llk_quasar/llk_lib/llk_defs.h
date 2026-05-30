@@ -10,7 +10,7 @@ namespace ckernel
 {
 
 // Currently unused but kept for backwards compatibility
-enum class VectorMode
+enum class VectorMode : std::uint8_t
 {
     None      = 0,
     R         = 1,

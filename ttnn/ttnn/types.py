@@ -16,16 +16,8 @@ float32 = DataType.FLOAT32
 bfloat16 = DataType.BFLOAT16
 bfloat8_b = DataType.BFLOAT8_B
 bfloat4_b = DataType.BFLOAT4_B
-try:
-    DumpTensorMode = ttnn._ttnn.tensor.DumpTensorMode
-except AttributeError:
-    # Binary predates DumpTensorMode; provide a stub so existing models can load
-    from enum import IntEnum
-
-    class DumpTensorMode(IntEnum):  # type: ignore[no-redef]
-        LOCAL = 0
-        DISTRIBUTED_GATHER = 1
-
+fp8_e4m3 = DataType.FP8_E4M3
+DumpTensorMode = ttnn._ttnn.tensor.DumpTensorMode
 
 BufferType = ttnn._ttnn.tensor.BufferType
 TensorMemoryLayout = ttnn._ttnn.tensor.TensorMemoryLayout

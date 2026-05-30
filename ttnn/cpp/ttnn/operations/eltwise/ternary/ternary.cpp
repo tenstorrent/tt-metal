@@ -13,6 +13,8 @@
 #include "device/ternary_device_operation.hpp"
 #include "device/ternary_op_utils.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
+#include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
 #include "ternary_composite_op.hpp"
 
 using namespace ttnn::operations::ternary;
@@ -395,6 +397,24 @@ Tensor lerp(
         ternary_utils::determine_output_dtype(output, input.dtype()),
         ternary_utils::determine_memory_config(memory_config, input.memory_config()),
         output,
+        std::nullopt);
+}
+
+Tensor snake_beta(
+    const Tensor& input_tensor,
+    const Tensor& alpha,
+    const Tensor& beta,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    auto lift_to_rank2 = [](const Tensor& t) { return t.logical_shape().rank() < 2 ? ttnn::unsqueeze(t, 0) : t; };
+    return ttnn::prim::ternary(
+        TernaryOpType::SNAKE_BETA,
+        input_tensor,
+        lift_to_rank2(alpha),
+        lift_to_rank2(beta),
+        ternary_utils::determine_output_dtype(optional_output_tensor, input_tensor.dtype()),
+        ternary_utils::determine_memory_config(memory_config, input_tensor.memory_config()),
+        optional_output_tensor,
         std::nullopt);
 }
 

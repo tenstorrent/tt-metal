@@ -25,7 +25,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize("index_mem_config", [ttnn.L1_MEMORY_CONFIG])
 @pytest.mark.parametrize("enable_trace", [False, True])
 @pytest.mark.parametrize(
-    "device_params", [{"trace_region_size": 10000, "fabric_config": get_fabric_config()}], indirect=True
+    "device_params", [{"trace_region_size": 0, "fabric_config": get_fabric_config()}], indirect=True
 )
 def test_scatter(
     mesh_device,

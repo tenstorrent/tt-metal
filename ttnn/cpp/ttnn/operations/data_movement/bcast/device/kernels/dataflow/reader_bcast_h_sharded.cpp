@@ -35,7 +35,7 @@ void kernel_main() {
             // but we loop the second list around
             cb_reserve_back(cb_id_in1, onetile);
             l1_write_addr_in1 = get_write_ptr(cb_id_in1);
-            noc_async_read_tile(offset, s1, l1_write_addr_in1);
+            noc_async_read_page(offset, s1, l1_write_addr_in1);
             noc_async_read_barrier();
             cb_push_back(cb_id_in1, onetile);
             offset++;

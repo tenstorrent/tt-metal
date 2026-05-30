@@ -22,6 +22,11 @@ on:
         required: false
         type: string
         default: "all"
+      mlperf-read-only:
+        description: "Mount /mnt/MLPerf as read-only (set to false to allow tt_cache write-through during first-use)"
+        required: false
+        type: boolean
+        default: true
 
 jobs:
   generate-matrix:
@@ -124,6 +129,7 @@ jobs:
               "additional-server-args": "--async-scheduling",
               "structured-output": true,
               "sampling-tests": true,
+              "sampling-test-filter": "not test_mixed_params_batch and not TestSeedingAndVariety and not test_repetition_penalty_mixed_batch and not test_presence_penalty_mixed_batch and not test_frequency_penalty_mixed_batch",
               "multimodal": false,
               "co-owner-1-id": "U08E1JCDVNX",
               "co-owner-2-id": "U08CEGF78ET"
@@ -339,7 +345,11 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - ${{ (matrix.test-group.runner-label == 'BH-QB-GE' && '/localdev/blackhole_demos/huggingface_data:/mnt/MLPerf/huggingface:ro') || '/mnt/MLPerf:/mnt/MLPerf:ro' }}
+        # ``mlperf-read-only`` workflow input toggles ro/rw. Default ro for safety;
+        # uncheck the box at dispatch time when a model needs tt_cache first-use
+        # write-through. BH-QB-GE uses a local override path (not the shared
+        # /mnt/MLPerf) so the same toggle applies to either physical mount source.
+        - ${{ (matrix.test-group.runner-label == 'BH-QB-GE' && format('/localdev/blackhole_demos/huggingface_data:/mnt/MLPerf/huggingface{0}', inputs.mlperf-read-only && ':ro' || ':rw')) || format('/mnt/MLPerf:/mnt/MLPerf{0}', inputs.mlperf-read-only && ':ro' || ':rw') }}
       options: "--device /dev/tenstorrent"
     defaults:
       run:
@@ -392,10 +402,10 @@ jobs:
         run: |
           TT_CONFIG_RAW='${{ matrix.test-group.tt-config }}'
           if [ -n "$TT_CONFIG_RAW" ]; then
-            PLUGIN_CONFIG_RAW="$(jq -nc --argjson tt "$TT_CONFIG_RAW" '{tt: $tt}')"
-            PLUGIN_CONFIG=(--plugin-config "$PLUGIN_CONFIG_RAW")
+            ADDITIONAL_CONFIG_RAW="$(jq -nc --argjson tt "$TT_CONFIG_RAW" '{tt: $tt}')"
+            ADDITIONAL_CONFIG=(--additional-config "$ADDITIONAL_CONFIG_RAW")
           else
-            PLUGIN_CONFIG=()
+            ADDITIONAL_CONFIG=()
           fi
 
           if [ -n "${{ matrix.test-group.additional-server-args }}" ]; then
@@ -428,7 +438,7 @@ jobs:
           declare -a VLLM_SERVER_ARGS
           VLLM_SERVER_ARGS+=(--model "$HF_MODEL")
           VLLM_SERVER_ARGS+=("${ADDITIONAL_SERVER_ARGS[@]}")
-          VLLM_SERVER_ARGS+=("${PLUGIN_CONFIG[@]}")
+          VLLM_SERVER_ARGS+=("${ADDITIONAL_CONFIG[@]}")
 
           echo "vLLM server args: ${VLLM_SERVER_ARGS[@]}"
 

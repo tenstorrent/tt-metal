@@ -37,7 +37,7 @@ static void run_kernel(
 
     experimental::metal2_host_api::KernelSpec dm_kernel_spec{
         .unique_id = DM_KERNEL,
-        .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{kernel_path},
+        .source = kernel_path,
         .num_threads = 1,
         .compile_time_arg_bindings = std::move(compile_time_arg_bindings),
         .config_spec =

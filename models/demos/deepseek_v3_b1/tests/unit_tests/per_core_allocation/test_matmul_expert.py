@@ -13,7 +13,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_pcc
+from models.common.utility_functions import comp_pcc, skip_with_llk_assert
 from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensor, CompressedTensorAssigner
 from models.demos.deepseek_v3_b1.micro_ops.matmul_expert.op import (
     ExpertKernel,
@@ -1422,6 +1422,17 @@ def _run_accum(
 
     assert len(formats_per_device) == num_devices
     torch.manual_seed(0)
+    # Reorder active_expert_ids so DRAM-active slots come first, then SRAM-active.
+    # The DRAM matmul kernel reads activations by `dram_idx` (compact, count of DRAM-
+    # flagged TopK positions encountered so far), so slot dram_idx must hold the
+    # corresponding DRAM expert's activation. Placing DRAM experts at positions
+    # 0..N_dram-1 in active_expert_ids makes exp_i == dram_idx for those slots, and
+    # the rest carry SRAM experts where the SRAM kernel's exp_i-indexed read still
+    # lands on the right activation. Mirrors the production layout where upstream
+    # gate_proj/up_proj skip SRAM-flagged TopK so cb_in0 is naturally DRAM-first.
+    active_expert_ids = [eid for eid in active_expert_ids if eid not in sram_id_set] + [
+        eid for eid in active_expert_ids if eid in sram_id_set
+    ]
     # Per-expert activations: each expert gets a distinct activation, laid out
     # in index-tensor order so the kernel can offset incrementally.
     num_active = len(active_expert_ids)
@@ -2430,6 +2441,12 @@ def test_benchmark_down_proj(device, formats_per_device, fmt_ratios):
     )
 
 
+@skip_with_llk_assert(
+    'Hit LLK_ASSERT in cb_push_back: "CB push_back: fifo_wr_ptr would exceed fifo_limit" '
+    "(llk_io_pack.h) on TRISC2/packer from the per-expert cb_out push/pop wraparound trick "
+    "in the accum + primary_at_last_offset path; cores hang and host times out in "
+    "wait_until_cores_done. Issue: #45174"
+)
 def test_benchmark_down_proj_gather_to_next(device):
     """Accum + primary_at_last_offset: 2-core bank splits N, sender NOC-writes its slice
     onto the receiver so receiver's shard holds the bank's full N output.

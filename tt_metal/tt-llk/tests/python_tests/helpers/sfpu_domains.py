@@ -20,7 +20,7 @@ from typing import Callable, Dict, List, Optional, Tuple, Union
 
 from .format_config import DataFormat
 from .llk_params import MathOperation
-from .stimuli_generator_v2 import DistributionKind, StimuliSpec
+from .stimuli_generator import DistributionKind, StimuliSpec
 
 # ─────────────────────────────────────────────────────────────────────────────
 # OperandSpecs

@@ -141,8 +141,9 @@ void JitBuildEnv::init(
 
     // Flags
     string common_flags =
-        "-std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval "
-        "-flto=auto -ffast-math -fno-exceptions ";
+        "-std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit "
+        "-flto=auto -ffast-math "
+        "-fno-exceptions -fno-rtti -fno-use-cxa-atexit ";
 
     if (rtoptions.get_jit_analytics_enabled()) {
         common_flags += "-fdump-rtl-all -fdump-tree-original ";
@@ -155,8 +156,6 @@ void JitBuildEnv::init(
     this->cflags_ = common_flags;
     this->cflags_ +=
         "-MMD "
-        "-fno-use-cxa-atexit "
-        "-ftt-no-dyninit "
         "-Wall -Werror "
         "-Wno-error=deprecated-declarations "
         "-Wno-error=multistatement-macros -Wno-error=parentheses "
@@ -217,9 +216,6 @@ void JitBuildEnv::init(
 
     if (rtoptions.get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
         this->defines_ += "-DDEBUG_PRINT_ENABLED ";
-        if (rtoptions.get_use_device_print()) {
-            this->defines_ += "-DUSE_DEVICE_PRINT ";
-        }
     }
 
     if (rtoptions.get_checkpoint_enabled()) {

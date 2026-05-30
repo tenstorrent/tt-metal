@@ -116,7 +116,7 @@ public:
      *
      * pre-condition: The device tensor must not be in a default constructed state.
      */
-    distributed::MeshDevice& device_mut() const;
+    distributed::MeshDevice& mutable_device() const;
 
     // Getters:
 

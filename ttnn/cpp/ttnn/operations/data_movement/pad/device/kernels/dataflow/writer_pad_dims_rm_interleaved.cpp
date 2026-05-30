@@ -34,11 +34,10 @@ void kernel_main() {
     for (uint32_t w = 0; w < num_local_W; ++w) {
         for (uint32_t z = 0; z < num_total_Z; ++z) {
             for (uint32_t y = 0; y < num_local_Y; ++y) {
-                // DPRINT << "WR: " << w << ", " << z << ", " << y << ENDL();
-                // DEVICE_PRINT("WR: w={} z={} y={}\n", w, z, y);
+                // DPRINT("WR: w={} z={} y={}\n", w, z, y);
                 cb.wait_front(1);
                 uint32_t l1_addr = cb.get_read_ptr();
-                uint64_t dst_noc_addr = get_noc_addr(dst_stick_id, s1, dst_stick_offset);
+                uint64_t dst_noc_addr = s1.get_noc_addr(dst_stick_id, dst_stick_offset);
                 noc_async_write(l1_addr, dst_noc_addr, padded_X_nbytes);
                 noc_async_write_barrier();
                 ++dst_stick_id;
