@@ -34,10 +34,11 @@ def cmd_profile_cold(args) -> int:
     model_id = args.model_id
     n_passes = int(getattr(args, "n_passes", 3) or 3)
     n_iters = int(getattr(args, "n_iters", 5) or 5)
+    workload_mode = (getattr(args, "workload_mode", None) or "").strip().lower() or None
 
     from ..bringup_loop import _safe_id, find_demo_dir
-    from ..cold_evidence import build_evidence_report, evidence_report_to_hot_cold_dict
-    from ..overlay_manager import persist_hot_cold
+    from ..cold_evidence import build_evidence_report, merge_evidence_into_persisted
+    from ..overlay_manager import _load_hot_cold_raw, persist_hot_cold
 
     demo_dir = find_demo_dir(model_id)
     if demo_dir is None:
@@ -106,7 +107,17 @@ def cmd_profile_cold(args) -> int:
         n_iters_latency=n_iters,
     )
 
-    classification = evidence_report_to_hot_cold_dict(report)
+    # Tag every record with the workload-mode (explicit via --workload-mode
+    # or auto-detected from the input factory's modality label).
+    effective_mode = workload_mode or modality.split("[")[0]
+    for name in report:
+        report[name].workload_mode = effective_mode
+
+    # Merge into existing persisted state (multi-mode union schema). The
+    # categorizer reads the top-level "kind" which is now the union
+    # verdict across all measured modes.
+    existing = _load_hot_cold_raw(model_id)
+    classification = merge_evidence_into_persisted(existing, report, workload_mode=effective_mode)
     persist_hot_cold(model_id, classification)
 
     # Print per-component summary.

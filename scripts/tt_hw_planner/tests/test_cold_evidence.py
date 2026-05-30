@@ -336,3 +336,119 @@ def pytest_approx(expected, tol=1e-9):
             return abs(other - expected) < tol
 
     return _A()
+
+
+# ---------------------------------------------------------------------------
+# Per-workload-mode evidence: union of evidence across modes
+# ---------------------------------------------------------------------------
+
+
+def test_union_hot_if_any_mode_is_hot() -> None:
+    """A component is HOT if it's HOT in ANY measured mode (even if COLD
+    in others). Use-case: a video module that's HOT in video-mode and
+    COLD in image-mode — should graduate so video workload runs fast."""
+    from scripts.tt_hw_planner.cold_evidence import ComponentEvidence, union_evidence_across_modes
+
+    image = ComponentEvidence(kind="COLD", frequency=0.0, cpu_latency_pct=0.0, workload_mode="image")
+    video = ComponentEvidence(kind="HOT", frequency=1.0, cpu_latency_pct=15.0, workload_mode="video")
+
+    union = union_evidence_across_modes({"image": image, "video": video})
+    assert union.kind == "HOT"
+    # Max across modes for each signal
+    assert union.frequency == 1.0
+    assert union.cpu_latency_pct == 15.0
+
+
+def test_union_cold_only_if_cold_in_every_mode() -> None:
+    """A component is COLD only if it's COLD in EVERY measured mode."""
+    from scripts.tt_hw_planner.cold_evidence import ComponentEvidence, union_evidence_across_modes
+
+    image = ComponentEvidence(kind="COLD", frequency=0.0, workload_mode="image")
+    video = ComponentEvidence(kind="COLD", frequency=0.0, workload_mode="video")
+
+    union = union_evidence_across_modes({"image": image, "video": video})
+    assert union.kind == "COLD"
+
+
+def test_union_unknown_when_no_signals() -> None:
+    """A component with UNKNOWN in every mode stays UNKNOWN at the union."""
+    from scripts.tt_hw_planner.cold_evidence import ComponentEvidence, union_evidence_across_modes
+
+    a = ComponentEvidence(kind="UNKNOWN", workload_mode="image")
+    b = ComponentEvidence(kind="UNKNOWN", workload_mode="video")
+
+    union = union_evidence_across_modes({"image": a, "video": b})
+    assert union.kind == "UNKNOWN"
+
+
+def test_union_evidence_includes_per_mode_tag() -> None:
+    """The union's evidence reasons are tagged with the mode they came from
+    so the operator can see which mode contributed which signal."""
+    from scripts.tt_hw_planner.cold_evidence import ComponentEvidence, union_evidence_across_modes
+
+    image = ComponentEvidence(kind="COLD", evidence=["frequency=0 (never-fired)"], workload_mode="image")
+    video = ComponentEvidence(kind="HOT", evidence=["frequency=1 (on hot path)"], workload_mode="video")
+
+    union = union_evidence_across_modes({"image": image, "video": video})
+    assert any("[image]" in e for e in union.evidence)
+    assert any("[video]" in e for e in union.evidence)
+
+
+def test_merge_evidence_into_persisted_creates_multi_mode_entry() -> None:
+    """merge_evidence_into_persisted: new run creates a multi-mode entry
+    with the new run's mode under modes[<mode>]."""
+    from scripts.tt_hw_planner.cold_evidence import ComponentEvidence, merge_evidence_into_persisted
+
+    existing = {}  # no prior evidence
+    new_report = {"comp_a": ComponentEvidence(kind="HOT", frequency=1.0, workload_mode="video")}
+
+    merged = merge_evidence_into_persisted(existing, new_report, workload_mode="video")
+    assert "comp_a" in merged
+    entry = merged["comp_a"]
+    assert "modes" in entry
+    assert "video" in entry["modes"]
+    assert entry["kind"] == "HOT"  # union of single mode = that mode's kind
+
+
+def test_merge_legacy_entry_promotes_to_multi_mode() -> None:
+    """When the existing entry is a flat (single-mode) dict, the merge
+    promotes it to multi-mode and adds the new run alongside."""
+    from scripts.tt_hw_planner.cold_evidence import ComponentEvidence, merge_evidence_into_persisted
+
+    existing = {
+        "comp_a": {
+            "kind": "COLD",
+            "frequency": 0.0,
+            "cpu_latency_pct": 0.0,
+            "workload_mode": "image",
+            "evidence": ["frequency=0 (never-fired)"],
+        }
+    }
+    new_report = {"comp_a": ComponentEvidence(kind="HOT", frequency=1.0, cpu_latency_pct=20.0, workload_mode="video")}
+
+    merged = merge_evidence_into_persisted(existing, new_report, workload_mode="video")
+    entry = merged["comp_a"]
+    assert "image" in entry["modes"]
+    assert "video" in entry["modes"]
+    # Union of COLD + HOT → HOT
+    assert entry["kind"] == "HOT"
+
+
+def test_merge_same_mode_overwrites() -> None:
+    """Re-running profile-cold with the same workload-mode OVERWRITES
+    that mode's record (latest measurement wins per mode)."""
+    from scripts.tt_hw_planner.cold_evidence import ComponentEvidence, merge_evidence_into_persisted
+
+    existing = {
+        "comp_a": {
+            "kind": "HOT",
+            "frequency": 0.5,
+            "modes": {"image": {"kind": "HOT", "frequency": 0.5, "workload_mode": "image"}},
+        }
+    }
+    # Re-run image mode with different freq
+    new_report = {"comp_a": ComponentEvidence(kind="HOT", frequency=1.0, workload_mode="image")}
+
+    merged = merge_evidence_into_persisted(existing, new_report, workload_mode="image")
+    # The newer image-mode record overwrites
+    assert merged["comp_a"]["modes"]["image"]["frequency"] == 1.0

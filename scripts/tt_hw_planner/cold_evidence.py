@@ -68,7 +68,13 @@ COLD_DENSITY_THRESHOLD = 1e-7  # density < this → bandwidth-bound, COLD-eligib
 @dataclass
 class ComponentEvidence:
     """All evidence collected about a single component, persisted to
-    the enriched hot_cold.json."""
+    the enriched hot_cold.json.
+
+    ``workload_mode`` tags WHICH workload was running when this evidence
+    was collected (e.g. ``image`` vs ``video`` for SAM2). The
+    categorizer + union-of-evidence helpers use the tag to merge
+    multiple per-mode records into a single union verdict: HOT iff HOT
+    in ANY mode."""
 
     kind: str = "UNKNOWN"  # "HOT" | "COLD" | "UNKNOWN"
     frequency: Optional[float] = None  # fires per natural-workload pass
@@ -79,7 +85,82 @@ class ComponentEvidence:
     compute_density: Optional[float] = None
     affinity_score: Optional[int] = None  # Σ ttnn-op affinities from opplan
     evidence: List[str] = field(default_factory=list)  # reasons for kind
+    workload_mode: str = "default"  # "image" | "video" | "text" | "audio" | "default"
     captured_ts: float = field(default_factory=time.time)
+
+
+def union_evidence_across_modes(
+    per_mode_records: Dict[str, "ComponentEvidence"],
+) -> "ComponentEvidence":
+    """Combine per-workload-mode evidence records into a single union
+    verdict.
+
+    Rule: a component is HOT iff it's HOT in ANY mode. COLD iff COLD
+    in EVERY measured mode. UNKNOWN iff no mode has signal.
+
+    Aggregation per signal: take MAX across modes (the strongest
+    positive signal wins). The ``evidence`` list is union-deduplicated
+    so the operator sees reasons from all modes.
+
+    Use case: profile-cold is run per-workload-mode (e.g. once for
+    image, once for video). Each run writes its own record under the
+    same hot_cold.json entry. The categorizer reads all modes and
+    unions them so multi-mode models are correctly classified.
+    """
+    if not per_mode_records:
+        return ComponentEvidence()
+
+    union = ComponentEvidence(workload_mode="union")
+    union.kind = "UNKNOWN"
+    union.evidence = []
+    seen_reasons: set = set()
+
+    has_hot = False
+    all_cold = True
+    has_any_signal = False
+
+    for mode, rec in per_mode_records.items():
+        if rec.kind == "HOT":
+            has_hot = True
+            all_cold = False
+            has_any_signal = True
+        elif rec.kind == "COLD":
+            has_any_signal = True
+            # all_cold stays True unless we see HOT or UNKNOWN
+        else:
+            all_cold = False  # UNKNOWN doesn't confirm COLD
+
+        # MAX aggregation across modes
+        for attr in ("frequency", "cpu_latency_ms", "cpu_latency_pct", "compute_density", "affinity_score"):
+            cur = getattr(union, attr)
+            new = getattr(rec, attr)
+            if new is None:
+                continue
+            if cur is None or new > cur:
+                setattr(union, attr, new)
+
+        for attr in ("ops_count", "io_bytes"):
+            cur = getattr(union, attr)
+            new = getattr(rec, attr)
+            if new is None:
+                continue
+            if cur is None or new > cur:
+                setattr(union, attr, new)
+
+        for reason in rec.evidence:
+            tagged = f"[{mode}] {reason}"
+            if tagged not in seen_reasons:
+                union.evidence.append(tagged)
+                seen_reasons.add(tagged)
+
+    if has_hot:
+        union.kind = "HOT"
+    elif has_any_signal and all_cold:
+        union.kind = "COLD"
+    else:
+        union.kind = "UNKNOWN"
+
+    return union
 
 
 def _drive_model_natural(model: Any, pixel_values: Any) -> None:
@@ -516,3 +597,87 @@ def evidence_report_to_hot_cold_dict(report: Dict[str, ComponentEvidence]) -> Di
     for name, ev in report.items():
         out[name] = asdict(ev)
     return out
+
+
+def merge_evidence_into_persisted(
+    existing: Dict[str, dict],
+    new_report: Dict[str, ComponentEvidence],
+    workload_mode: str,
+) -> Dict[str, dict]:
+    """Merge a new per-workload-mode evidence run into the persisted
+    hot_cold.json.
+
+    Schema:
+      Single-mode (legacy): {comp: {evidence-fields...}}
+      Multi-mode (new):     {comp: {"modes": {mode: {evidence-fields...}},
+                                    "kind": <union>, "evidence": [<union>]}}
+
+    On merge:
+      - If the existing entry is single-mode (no "modes" key), promote
+        it to multi-mode with its content under modes["<existing_mode>"]
+        (defaults to "default" if no tag).
+      - Add/overwrite the new run under modes["<workload_mode>"].
+      - Recompute the union-of-evidence verdict at the top level.
+
+    The categorizer always reads the top-level "kind" — which is now
+    the union across modes. Per-mode raw data is preserved for
+    drill-down.
+    """
+    merged: Dict[str, dict] = {}
+    all_names = set(existing.keys()) | set(new_report.keys())
+
+    for name in all_names:
+        old_entry = existing.get(name)
+        modes: Dict[str, ComponentEvidence] = {}
+
+        if old_entry is not None:
+            if isinstance(old_entry, dict) and isinstance(old_entry.get("modes"), dict):
+                # Already multi-mode; load each.
+                for mode_name, mode_data in old_entry["modes"].items():
+                    if not isinstance(mode_data, dict):
+                        continue
+                    modes[mode_name] = _evidence_from_dict(mode_data)
+            elif isinstance(old_entry, dict):
+                # Legacy single-mode entry; promote.
+                old_mode = old_entry.get("workload_mode") or "default"
+                modes[old_mode] = _evidence_from_dict(old_entry)
+
+        if name in new_report:
+            modes[workload_mode] = new_report[name]
+
+        if not modes:
+            continue
+
+        union = union_evidence_across_modes(modes)
+        merged[name] = {
+            "kind": union.kind,
+            "evidence": union.evidence,
+            "modes": {m: asdict(rec) for m, rec in modes.items()},
+            "frequency": union.frequency,
+            "cpu_latency_ms": union.cpu_latency_ms,
+            "cpu_latency_pct": union.cpu_latency_pct,
+            "compute_density": union.compute_density,
+            "ops_count": union.ops_count,
+            "io_bytes": union.io_bytes,
+            "affinity_score": union.affinity_score,
+            "captured_ts": time.time(),
+        }
+    return merged
+
+
+def _evidence_from_dict(d: dict) -> ComponentEvidence:
+    """Construct a ComponentEvidence from a JSON-loaded dict, accepting
+    extra/missing keys gracefully."""
+    return ComponentEvidence(
+        kind=str(d.get("kind", "UNKNOWN")),
+        frequency=d.get("frequency"),
+        cpu_latency_ms=d.get("cpu_latency_ms"),
+        cpu_latency_pct=d.get("cpu_latency_pct"),
+        ops_count=d.get("ops_count"),
+        io_bytes=d.get("io_bytes"),
+        compute_density=d.get("compute_density"),
+        affinity_score=d.get("affinity_score"),
+        evidence=list(d.get("evidence") or []),
+        workload_mode=str(d.get("workload_mode", "default")),
+        captured_ts=float(d.get("captured_ts") or time.time()),
+    )

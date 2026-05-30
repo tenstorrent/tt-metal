@@ -9250,6 +9250,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         default=5,
         help="Number of CPU-latency timing iterations (default: 5)",
     )
+    ppc.add_argument(
+        "--workload-mode",
+        default=None,
+        help=(
+            "Tag this profile run with a workload-mode label (e.g. 'image', "
+            "'video', 'text'). Multiple modes for the same model are MERGED "
+            "into a union-of-evidence record — a component is HOT iff HOT in "
+            "ANY measured mode. Default: auto-detect from the model's modality."
+        ),
+    )
     ppc.set_defaults(func=cmd_profile_cold)
 
     from .commands.decompose import cmd_decompose
