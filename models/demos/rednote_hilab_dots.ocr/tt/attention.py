@@ -491,7 +491,13 @@ class TtAttention(LightweightModule):
             compute_kernel_config=self.compute_kernel_config,
         )  # [1, b, nh, hd]
         attn = ttnn.reshape(attn, (1, nh * hd), memory_config=ttnn.L1_MEMORY_CONFIG)
-        return ttnn.linear(attn, self.o_weight, compute_kernel_config=self.compute_kernel_config, dtype=ttnn.bfloat16)
+        return ttnn.linear(
+            attn,
+            self.o_weight,
+            compute_kernel_config=self.compute_kernel_config,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.L1_MEMORY_CONFIG,  # keep decode intermediate in L1
+        )
 
     def forward_decode_traced(self, x: ttnn.Tensor, kv_cache, layer_idx: int) -> ttnn.Tensor:
         """Trace-capturable single-token decode.
@@ -525,4 +531,10 @@ class TtAttention(LightweightModule):
             compute_kernel_config=self.compute_kernel_config,
         )
         attn = ttnn.reshape(attn, (1, nh * hd), memory_config=ttnn.L1_MEMORY_CONFIG)
-        return ttnn.linear(attn, self.o_weight, compute_kernel_config=self.compute_kernel_config, dtype=ttnn.bfloat16)
+        return ttnn.linear(
+            attn,
+            self.o_weight,
+            compute_kernel_config=self.compute_kernel_config,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.L1_MEMORY_CONFIG,  # keep decode intermediate in L1
+        )
