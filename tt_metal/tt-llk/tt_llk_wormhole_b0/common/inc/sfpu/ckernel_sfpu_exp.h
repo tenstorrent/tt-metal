@@ -252,28 +252,29 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_unsafe_(sfpi::vFloat val)
  */
 sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a)
 {
-    sfpi::vFloat f, r;
-    sfpi::vFloat log2e = 1.442695f;
-    sfpi::vFloat j     = log2e * a;
+    sfpi::vInt i, e;
+    sfpi::vFloat f, r, j, infinity;
+    j = 1.442695f * a;
 
-    r             = 1.37805939e-3f;
-    sfpi::vInt sm = sfpi::float_to_int16(j, sfpi::RoundMode::NearestEven);
-    j             = sfpi::int32_to_float(sm, sfpi::RoundMode::NearestEven);
+    r = 1.37805939e-3f;
+    i = sfpi::float_to_int16(j, sfpi::RoundMode::NearestEven);
+    j = sfpi::int32_to_float(sm, sfpi::RoundMode::NearestEven);
 
     f = j * -6.93145752e-1f + a;
     f = j * -1.42860677e-6f + f;
 
-    r                     = r * f + 8.37312452e-3f; // 0x1.125edcp-7
-    r                     = r * f + 4.16695364e-2f; // 0x1.555b5ap-5
-    r                     = r * f + 1.66664720e-1f; // 0x1.555450p-3
-    r                     = r * f + 4.99999851e-1f; // 0x1.fffff6p-2
-    sfpi::vInt i          = sfpi::abs(sm);
-    r                     = r * f + 1.0f;
-    i                     = sfpi::reinterpret<sfpi::vInt>(sfpi::copysgn(sfpi::reinterpret<sfpi::vFloat>(i), sfpi::reinterpret<sfpi::vFloat>(sm)));
-    r                     = r * f + 1.0f;
-    sfpi::vFloat infinity = std::numeric_limits<float>::infinity();
+    r = r * f + 8.37312452e-3f; // 0x1.125edcp-7
+    r = r * f + 4.16695364e-2f; // 0x1.555b5ap-5
+    r = r * f + 1.66664720e-1f; // 0x1.555450p-3
+    r = r * f + 4.99999851e-1f; // 0x1.fffff6p-2
+    i = sfpi::abs(i);
+    r = r * f + 1.0f;
+    i = sfpi::reinterpret<sfpi::vInt>(sfpi::copysgn(sfpi::reinterpret<sfpi::vFloat>(i), j));
+    r = r * f + 1.0f;
 
-    sfpi::vInt e = sfpi::exexp(r, sfpi::ExponentMode::NoDebias);
+    infinity = std::numeric_limits<float>::infinity();
+
+    e = sfpi::exexp(r, sfpi::ExponentMode::NoDebias);
     e += i;
     r = sfpi::setexp(r, e);
 
