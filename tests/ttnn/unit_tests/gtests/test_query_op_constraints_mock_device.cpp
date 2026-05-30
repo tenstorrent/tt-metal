@@ -26,6 +26,7 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
+#include "ttnn/operations/matmul/graph/capture_matmul_program_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
@@ -353,6 +354,79 @@ TEST_F(QueryOpConstraintsMockDevice, Matmul) {
     EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 0u);
     ASSERT_TRUE(query.output_tensor_specs.has_value());
     EXPECT_EQ(query.output_tensor_specs->size(), 1u);
+}
+
+// ============================================================================
+// PoC: capture the ttnn-auto-selected MatmulProgramConfig from the query
+// ============================================================================
+
+TEST_F(QueryOpConstraintsMockDevice, MatmulProgramConfigCaptured) {
+    const auto spec_a = ttnn::TensorSpec(
+        ttnn::Shape(Array4D{1, 1, 64, 128}),
+        TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
+    const auto spec_b = ttnn::TensorSpec(
+        ttnn::Shape(Array4D{1, 1, 128, 64}),
+        TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
+
+    auto initial_state = experimental::extract_mock_allocator_state(*mock_device_);
+    ASSERT_TRUE(initial_state.is_empty(BufferType::L1));
+
+    // Query the matmul without supplying a program config: ttnn auto-selects one
+    // internally, and our passive listener captures it.
+    auto out = ttnn::graph::query_op_constraints_with_initial_state_capturing_matmul_config(
+        ttnn::matmul,
+        mock_device_.get(),
+        initial_state,
+        spec_a,
+        spec_b,
+        false,  // transpose_a
+        false,  // transpose_b
+        ttnn::L1_MEMORY_CONFIG,
+        DataType::BFLOAT16,
+        std::nullopt,   // program_config
+        std::nullopt,   // activation
+        std::nullopt,   // compute_kernel_config
+        std::nullopt,   // core_grid
+        std::nullopt,   // output_tile
+        std::nullopt,   // optional_output_tensor
+        std::nullopt,   // global_cb
+        std::nullopt);  // sub_device_id
+
+    EXPECT_EQ(out.query.response.status, ttnn::graph::ExecutionStatus::Success)
+        << "Error: " << out.query.response.error_message.value_or("none");
+
+    // We captured the auto-selected config as a typed variant.
+    ASSERT_TRUE(out.program_config.has_value());
+
+    // Cross-check: feeding the captured config back in as an explicit program config
+    // reproduces the op's own kernel footprint — i.e. we captured the config the op
+    // actually ran, not an approximation.
+    auto verify = ttnn::graph::query_op_constraints_with_initial_state(
+        ttnn::matmul,
+        mock_device_.get(),
+        initial_state,
+        spec_a,
+        spec_b,
+        false,
+        false,
+        ttnn::L1_MEMORY_CONFIG,
+        DataType::BFLOAT16,
+        out.program_config,  // explicit config = the captured one
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt);
+
+    EXPECT_EQ(verify.response.status, ttnn::graph::ExecutionStatus::Success)
+        << "Error: " << verify.response.error_message.value_or("none");
+    EXPECT_EQ(
+        verify.response.resource_usage.cb_peak_size_per_core, out.query.response.resource_usage.cb_peak_size_per_core);
+    EXPECT_EQ(
+        verify.response.resource_usage.l1_buffers_peak_per_core,
+        out.query.response.resource_usage.l1_buffers_peak_per_core);
 }
 
 // ============================================================================
