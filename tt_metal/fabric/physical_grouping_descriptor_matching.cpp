@@ -207,6 +207,72 @@ AdjacencyGraph<uint32_t> build_mgd_switch_instance_adjacency(
     return result;
 }
 
+// Compute torus wrap-around edges for a row-major device topology. `ring_dims[d]` indicates whether dimension `d`
+// is a RING (wrap-around) dimension; entries beyond `ring_dims.size()` are treated as LINE (no wrap). Node ids in
+// the returned edges use the same 0..N-1 row-major numbering as the MGD mesh adjacency graph.
+std::vector<std::pair<uint32_t, uint32_t>> compute_torus_wraparound_edges(
+    const std::vector<int32_t>& dims, const std::vector<bool>& ring_dims) {
+    std::vector<std::pair<uint32_t, uint32_t>> edges;
+    if (dims.empty()) {
+        return edges;
+    }
+
+    int64_t total_size = 1;
+    for (int32_t dim : dims) {
+        if (dim <= 0) {
+            return edges;
+        }
+        total_size *= dim;
+    }
+
+    // Row-major helpers: the last dimension varies fastest (matches build_row_major_mesh_graph).
+    auto get_coords = [&](uint32_t idx) -> std::vector<int32_t> {
+        std::vector<int32_t> coords(dims.size());
+        int32_t remaining = static_cast<int32_t>(idx);
+        for (int32_t i = static_cast<int32_t>(dims.size()) - 1; i >= 0; --i) {
+            coords[i] = remaining % dims[i];
+            remaining /= dims[i];
+        }
+        return coords;
+    };
+    auto get_index = [&](const std::vector<int32_t>& coords) -> uint32_t {
+        uint32_t idx = 0;
+        uint32_t multiplier = 1;
+        for (int32_t i = static_cast<int32_t>(dims.size()) - 1; i >= 0; --i) {
+            idx += static_cast<uint32_t>(coords[i]) * multiplier;
+            multiplier *= static_cast<uint32_t>(dims[i]);
+        }
+        return idx;
+    };
+
+    std::set<std::pair<uint32_t, uint32_t>> seen;
+    for (size_t d = 0; d < dims.size(); ++d) {
+        const bool is_ring = d < ring_dims.size() && ring_dims[d];
+        if (!is_ring) {
+            continue;
+        }
+        // For size < 3 the wrap-around edge would duplicate the existing LINE edge between the two endpoints.
+        if (dims[d] < 3) {
+            continue;
+        }
+        for (uint32_t idx = 0; idx < static_cast<uint32_t>(total_size); ++idx) {
+            std::vector<int32_t> coords = get_coords(idx);
+            if (coords[d] != 0) {
+                continue;
+            }
+            std::vector<int32_t> partner_coords = coords;
+            partner_coords[d] = dims[d] - 1;
+            uint32_t partner_idx = get_index(partner_coords);
+            auto edge = std::minmax(idx, partner_idx);
+            if (seen.insert(edge).second) {
+                edges.emplace_back(edge.first, edge.second);
+            }
+        }
+    }
+
+    return edges;
+}
+
 // Helper to read a row-major device topology's torus (wrap-around) edges from an MGD mesh/switch instance.
 // Returns wrap-around edges in the same 0..N-1 row-major node numbering used by build_mgd_mesh_instance_adjacency.
 // Returns empty if the instance is not a mesh/switch or has no RING dimensions.
@@ -240,7 +306,7 @@ std::vector<std::pair<uint32_t, uint32_t>> get_mgd_instance_torus_edges(
     for (int i = 0; i < device_topology->dim_types_size(); ++i) {
         ring_dims.push_back(device_topology->dim_types(i) == proto::TorusTopology::RING);
     }
-    return PhysicalGroupingDescriptor::compute_torus_wraparound_edges(dims, ring_dims);
+    return compute_torus_wraparound_edges(dims, ring_dims);
 }
 
 // Return a copy of `grouping` whose adjacency graph has the MGD torus wrap-around edges layered in.
@@ -571,70 +637,6 @@ PhysicalGroupingDescriptor::build_mgd_to_grouping_info_map(const MeshGraphDescri
 
     return mgd_grouping_infos;
 }
-
-std::vector<std::pair<uint32_t, uint32_t>> PhysicalGroupingDescriptor::compute_torus_wraparound_edges(
-    const std::vector<int32_t>& dims, const std::vector<bool>& ring_dims) {
-    std::vector<std::pair<uint32_t, uint32_t>> edges;
-    if (dims.empty()) {
-        return edges;
-    }
-
-    int64_t total_size = 1;
-    for (int32_t dim : dims) {
-        if (dim <= 0) {
-            return edges;
-        }
-        total_size *= dim;
-    }
-
-    // Row-major helpers: the last dimension varies fastest (matches build_row_major_mesh_graph).
-    auto get_coords = [&](uint32_t idx) -> std::vector<int32_t> {
-        std::vector<int32_t> coords(dims.size());
-        int32_t remaining = static_cast<int32_t>(idx);
-        for (int32_t i = static_cast<int32_t>(dims.size()) - 1; i >= 0; --i) {
-            coords[i] = remaining % dims[i];
-            remaining /= dims[i];
-        }
-        return coords;
-    };
-    auto get_index = [&](const std::vector<int32_t>& coords) -> uint32_t {
-        uint32_t idx = 0;
-        uint32_t multiplier = 1;
-        for (int32_t i = static_cast<int32_t>(dims.size()) - 1; i >= 0; --i) {
-            idx += static_cast<uint32_t>(coords[i]) * multiplier;
-            multiplier *= static_cast<uint32_t>(dims[i]);
-        }
-        return idx;
-    };
-
-    std::set<std::pair<uint32_t, uint32_t>> seen;
-    for (size_t d = 0; d < dims.size(); ++d) {
-        const bool is_ring = d < ring_dims.size() && ring_dims[d];
-        if (!is_ring) {
-            continue;
-        }
-        // For size < 3 the wrap-around edge would duplicate the existing LINE edge between the two endpoints.
-        if (dims[d] < 3) {
-            continue;
-        }
-        for (uint32_t idx = 0; idx < static_cast<uint32_t>(total_size); ++idx) {
-            std::vector<int32_t> coords = get_coords(idx);
-            if (coords[d] != 0) {
-                continue;
-            }
-            std::vector<int32_t> partner_coords = coords;
-            partner_coords[d] = dims[d] - 1;
-            uint32_t partner_idx = get_index(partner_coords);
-            auto edge = std::minmax(idx, partner_idx);
-            if (seen.insert(edge).second) {
-                edges.emplace_back(edge.first, edge.second);
-            }
-        }
-    }
-
-    return edges;
-}
-
 }  // namespace tt::tt_fabric
 
 namespace {
