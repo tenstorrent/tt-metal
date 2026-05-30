@@ -84,6 +84,14 @@ uint32_t Tile::get_tile_size(const DataFormat& format) const {
             uint32_t elem_bytes = tile_hw / 2;
             return exp_bytes + elem_bytes;
         }
+        case DataFormat::MxFp6P:
+        case DataFormat::MxFp6R: {
+            constexpr uint32_t kMxBlockSize = 32;
+            TT_ASSERT(tile_hw % kMxBlockSize == 0, "MXFP6 tile size must be a multiple of 32 elements");
+            uint32_t exp_bytes = tt::round_up(tile_hw / kMxBlockSize, l1_alignment);
+            uint32_t elem_bytes = tile_hw;
+            return exp_bytes + elem_bytes;
+        }
         case DataFormat::Float16:
         case DataFormat::Float16_b: return (tile_hw * 2);
         case DataFormat::Float32: return (tile_hw * 4);
