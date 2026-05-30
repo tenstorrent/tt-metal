@@ -47,8 +47,6 @@ sfpi_inline sfpi::vFloat float32_to_bf16_rne(sfpi::vFloat in) {
 
 /**
  * @brief LLK caller for binary SFPU operations, currently supports MUL and DIV.
- * Mirrors the L5 _calculate_sfpu_binary_ signature exactly (runtime iterations)
- * so sfpi LREG allocation behaves identically to the tested L5 path.
  *
  * @note DIV special cases (matching BH semantics):
  *   - 0 / 0 -> NaN
