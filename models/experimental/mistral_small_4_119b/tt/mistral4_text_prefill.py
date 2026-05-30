@@ -60,6 +60,67 @@ def _rms_norm(
     )
 
 
+# ── Sharded RMSNorm for the decode hot path ────────────────────────────────
+# Default ttnn.rms_norm on an L1-interleaved [1,1,1,HIDDEN_SIZE] tensor lands on
+# a single core (~57 μs). The three full-hidden norms per layer (input,
+# post-attention, final) burn ~171 μs/step on one core total. Width-sharding
+# the input across 32 cores brings each norm to ~5 μs (+ ~1 μs each for the
+# shard/unshard pair). `ttnn.rms_norm` auto-builds the sharded program config
+# from `input.shard_spec()`, but we hand it the matching one explicitly so the
+# program is cached.
+_NORM_TILE = 32
+_NORM_CORE_GRID_X = 8
+_NORM_CORE_GRID_Y = 4  # 8 × 4 = 32 cores
+_NORM_NUM_CORES = _NORM_CORE_GRID_X * _NORM_CORE_GRID_Y
+assert (
+    HIDDEN_SIZE % _NORM_NUM_CORES == 0
+), f"HIDDEN_SIZE ({HIDDEN_SIZE}) must divide num_cores ({_NORM_NUM_CORES}) for width-sharded RMSNorm"
+_NORM_SHARD_WIDTH = HIDDEN_SIZE // _NORM_NUM_CORES  # 128 cols/core
+assert (
+    _NORM_SHARD_WIDTH % _NORM_TILE == 0
+), f"shard width ({_NORM_SHARD_WIDTH}) must be a multiple of tile width ({_NORM_TILE})"
+
+_NORM_DECODE_INPUT_MEMCFG = ttnn.create_sharded_memory_config(
+    shape=(_NORM_TILE, _NORM_SHARD_WIDTH),  # one-tile-tall (M=1 padded), 128 cols
+    core_grid=ttnn.CoreGrid(x=_NORM_CORE_GRID_X, y=_NORM_CORE_GRID_Y),
+    strategy=ttnn.ShardStrategy.WIDTH,
+    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    use_height_and_width_as_shard_shape=True,
+)
+_NORM_DECODE_PROGRAM_CFG = ttnn.LayerNormShardedMultiCoreProgramConfig(
+    compute_with_storage_grid_size=(_NORM_CORE_GRID_X, _NORM_CORE_GRID_Y),
+    subblock_w=_NORM_SHARD_WIDTH // _NORM_TILE,  # 4 tiles
+    block_h=1,
+    block_w=_NORM_SHARD_WIDTH // _NORM_TILE,  # 4 tiles
+    inplace=False,
+)
+
+
+def _rms_norm_sharded_decode(
+    x: ttnn.Tensor,
+    weight: ttnn.Tensor,
+    compute_kernel_config,
+) -> ttnn.Tensor:
+    """Decode-only width-sharded RMSNorm for the full-hidden [..., HIDDEN_SIZE] case.
+
+    Returns L1-interleaved so downstream ops (residual add, attention QKV)
+    don't have to know about the shard layout.
+    """
+    x_sh = ttnn.to_memory_config(x, _NORM_DECODE_INPUT_MEMCFG)
+    normed_sh = ttnn.rms_norm(
+        x_sh,
+        weight=weight,
+        epsilon=NORM_EPS,
+        program_config=_NORM_DECODE_PROGRAM_CFG,
+        memory_config=_NORM_DECODE_INPUT_MEMCFG,
+        compute_kernel_config=compute_kernel_config,
+    )
+    ttnn.deallocate(x_sh)
+    normed = ttnn.to_memory_config(normed_sh, ttnn.L1_MEMORY_CONFIG)
+    ttnn.deallocate(normed_sh)
+    return normed
+
+
 # ── Decoder layer ──────────────────────────────────────────────────────────
 
 
@@ -187,14 +248,14 @@ class TtMistral4DecoderLayer(LightweightModule):
         """Decode one token — all activations in L1; only all_reduce crosses DRAM."""
         _mem = ttnn.L1_MEMORY_CONFIG
         residual = x
-        normed = _rms_norm(x, self.input_norm_w, self.compute_kernel_config, _mem)
+        normed = _rms_norm_sharded_decode(x, self.input_norm_w, self.compute_kernel_config)
         attn_out = self.attn.forward_decode(normed, cos, sin, kv_cache, current_pos, cur_pos_tensor)
         ttnn.deallocate(normed)
         x = ttnn.add(residual, attn_out, memory_config=_mem)
         ttnn.deallocate(attn_out)
 
         residual = x
-        normed = _rms_norm(x, self.post_attn_norm_w, self.compute_kernel_config, _mem)
+        normed = _rms_norm_sharded_decode(x, self.post_attn_norm_w, self.compute_kernel_config)
         moe_out = self.moe.forward_decode(normed)
         ttnn.deallocate(normed)
         x = ttnn.add(residual, moe_out, memory_config=_mem)
