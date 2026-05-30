@@ -97,11 +97,14 @@ class TtVisionMLP(LightweightModule):
         mem = ttnn.L1_MEMORY_CONFIG if x.shape[0] <= 1024 else ttnn.DRAM_MEMORY_CONFIG
 
         # Fused gate/up projection: [seq, dim] @ [dim, 2*intermediate].
+        # bf8 intermediate: widest activation in the block; emitting it bf8 halves
+        # its write + every downstream read (slice/silu/mul/fc2). fc2 output stays
+        # bf16. PCC headroom ample (vision tower ~0.9999).
         gate_up = ttnn.linear(
             x,
             self.gate_up_weight,
             compute_kernel_config=self.compute_kernel_config,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,
             memory_config=mem,
         )
         gate = ttnn.slice(
