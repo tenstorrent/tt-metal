@@ -62,7 +62,10 @@ class TtPixtralMLP:
 
         # Presets depend on the actual sequence length (num_patches), which
         # isn't known until the first forward. Build them lazily and cache.
+        # Gate preset bakes SiLU into the matmul's fused_activation epilogue
+        # (saves the ~8 μs separate Unary op after the gate matmul).
         self.ffn_up_preset = None
+        self.ffn_gate_preset = None
         self.ffn_down_preset = None
         self._preset_m: int | None = None
 
@@ -70,6 +73,7 @@ class TtPixtralMLP:
         if self._preset_m == m:
             return
         self.ffn_up_preset = build_ffn_up_preset(self.mesh_device, m)
+        self.ffn_gate_preset = build_ffn_up_preset(self.mesh_device, m, activation=ttnn.UnaryOpType.SILU)
         self.ffn_down_preset = build_ffn_down_preset(self.mesh_device, m)
         self._preset_m = m
 
@@ -83,12 +87,14 @@ class TtPixtralMLP:
         # gate/up keep their WS output (skip per-matmul WS→DRAM convert); the
         # multiply runs WS×WS→WS and down's vision_linear reshards in0 to its
         # own (smaller) WS grid in one to_memory_config call.
+        # SiLU is baked into ffn_gate_preset's program_config (fused_activation).
+        # Passing activation="silu" here as a kwarg would be ignored because the
+        # PC's fused_activation takes precedence.
         gate = vision_linear(
             x,
             self.gate_proj,
-            self.ffn_up_preset,
+            self.ffn_gate_preset,
             compute_kernel_config=self.compute_kernel_config,
-            activation="silu",
             keep_sharded=True,
         )
         up = vision_linear(
