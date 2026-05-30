@@ -612,7 +612,9 @@ void kernel_main() {
                         compute_kernel_lib::reblock_and_untilize<
                             out_subblock_w,
                             out_block_w,
-                            compute_kernel_lib::reblock_untilize_config::InitUninitMode::Neither>(
+                            compute_kernel_lib::reblock_untilize_config::InitUninitMode::Neither,
+                            compute_kernel_lib::reblock_untilize_config::ReconfigureRegisterDatatypeMode::
+                                NoReconfigure>(
                             in1_num_subblocks, out_subblock_num_tiles, out_subblock_h, cb_matmul_partials, cb_out);
                     }
                     compute_kernel_lib::reblock_and_untilize_uninit(cb_matmul_partials);

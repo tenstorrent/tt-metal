@@ -443,7 +443,8 @@ void kernel_main() {
                         reblock_and_untilize<
                             out_subblock_w,
                             out_block_w,
-                            reblock_untilize_config::InitUninitMode::Neither>(
+                            reblock_untilize_config::InitUninitMode::Neither,
+                            reblock_untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
                             in1_num_subblocks, out_subblock_num_tiles, out_subblock_h, mm_partials_buf, out_buf);
                     }
                     reblock_and_untilize_uninit(mm_partials_buf);
