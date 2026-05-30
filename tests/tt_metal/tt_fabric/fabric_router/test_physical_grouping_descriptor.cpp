@@ -1454,16 +1454,17 @@ TEST(PhysicalGroupingDescriptorSP4Tests, ValidatePreformedGroups_Sp4BhGalaxyQuad
     {
         // Test 4x4_Mesh BH groupings with find_all_in_psd
         auto mesh_groupings = pgd.get_groupings_by_name("4x4_Mesh BH");
-        ASSERT_EQ(mesh_groupings.size(), 1u) << "4x4_Mesh BH grouping not found";
+        // Two variants defined: TRAY_1+TRAY_3 and TRAY_2+TRAY_4 (cross-tray pairs for torus support)
+        ASSERT_EQ(mesh_groupings.size(), 2u) << "4x4_Mesh BH grouping not found";
 
         std::vector<std::string> errors;
 
         auto asic_ids = pgd.find_all_in_psd(mesh_groupings, psd, errors);
 
         // SP4 GLX mock + bh_galaxy_sp4 rank bindings: 4 meshes × 4 hosts = 16 hosts in the merged PSD.
-        // One 4x4_Mesh BH variant maps once per host → 16 placements.
-        EXPECT_EQ(asic_ids.size(), 16u)
-            << "Expected validation to pass: 4x4_Mesh BH grouping should map to mock cluster PSD (16 placements)";
+        // Two 4x4_Mesh BH variants (TRAY_1+TRAY_3 and TRAY_2+TRAY_4) each map once per host → 32 placements.
+        EXPECT_EQ(asic_ids.size(), 32u)
+            << "Expected validation to pass: 4x4_Mesh BH grouping should map to mock cluster PSD (32 placements)";
     }
 }
 
