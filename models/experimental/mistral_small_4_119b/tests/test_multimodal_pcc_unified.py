@@ -2,16 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-End-to-end multimodal PCC test — UNIFIED SINGLE-PHASE LOADING
+End-to-end multimodal PCC test.
 
-Uses TtMistral3ForConditionalGenerationUnified instead of phase-based orchestrator.
-Demonstrates loading both vision + text models simultaneously (unified approach).
+Loads vision tower (bfloat8_b, ~50% memory savings) and text model (bfloat16)
+into device DRAM together, runs ``encode_image`` → ``prefill_multimodal_full_logits``
+on TTNN, and compares the full-sequence logits against an HF Torch reference.
 
-Key differences from phase-based test:
-  - Vision tower uses bfloat8_b (quantized, 50% memory savings)
-  - Text model uses bfloat16 (unchanged, full precision)
-  - Both load together in single phase (no freeing between vision/text)
-  - Expected PCC: ~0.83-0.84 (vs 0.88 for phase-based, due to vision quantization)
+  - Expected PCC: ~0.83-0.84 (vision bf8 quantization is the dominant source of loss)
   - Expected memory: ~99% DRAM utilization (both models fit simultaneously)
 
 Run::
@@ -46,7 +43,7 @@ from models.experimental.mistral_small_4_119b.constants import (
 )
 from models.experimental.mistral_small_4_119b.tests.mesh_param import mesh_device_request_param
 from models.experimental.mistral_small_4_119b.tt.mistral3_for_conditional_generation_unified import (
-    TtMistral3ForConditionalGenerationUnified,  # ← UNIFIED!
+    TtMistral3ForConditionalGenerationUnified,
 )
 from models.tt_transformers.tt.load_checkpoints import load_hf_state_dict_filtered
 
@@ -74,8 +71,8 @@ _IMAGE_PATH = os.environ.get("MISTRAL4_MM_IMAGE", "")
 _PROMPT = os.environ.get("MISTRAL4_MM_PROMPT", "Describe this image.")
 _IMAGE_MAX_SIDE = int(os.environ.get("MISTRAL4_MM_IMAGE_MAX_SIDE", "224"))
 _IMG_PATCHES = int(os.environ.get("MISTRAL4_MM_IMG_PATCHES", "10"))
-# PCC floor adjusted for unified approach (vision quantization reduces accuracy)
-_PCC_FLOOR = 0.80  # ← Lower than phase-based 0.85 due to vision bf8 quantization
+# Vision bf8 quantization dominates the accuracy floor.
+_PCC_FLOOR = 0.80
 
 
 def _state_dict_prefixes(n_text: int, n_vision: int) -> tuple:
@@ -112,7 +109,7 @@ def _hf_param_to_sd_key(name: str) -> str:
 
 
 def _build_hf_mm_ref(full_config, state_dict: dict, n_text: int, n_vision: int):
-    """Build HF reference with activation checkpointing (same as phase-based test)."""
+    """Build HF reference with activation checkpointing enabled for full-size runs."""
     from accelerate import init_empty_weights
     from accelerate.utils import set_module_tensor_to_device
     from transformers.models.mistral3.modeling_mistral3 import Mistral3ForConditionalGeneration
@@ -171,9 +168,9 @@ def _build_hf_mm_ref(full_config, state_dict: dict, n_text: int, n_vision: int):
 @pytest.mark.parametrize("mesh_device, device_params", _mesh_params(), indirect=True)
 def test_mistral_small_4_multimodal_pcc_unified(reset_seeds, mesh_device):
     """
-    UNIFIED SINGLE-PHASE test: Load vision (bf8) + text (bf16) together.
+    End-to-end multimodal PCC: vision (bf8) + text (bf16) co-resident on device.
 
-    Expected PCC: ~0.83-0.84 (1-2% loss from vision quantization vs phase-based 0.88)
+    Expected PCC: ~0.83-0.84 (vision bf8 quantization is the dominant source of loss).
     """
     from transformers import AutoConfig
 
@@ -278,13 +275,9 @@ def test_mistral_small_4_multimodal_pcc_unified(reset_seeds, mesh_device):
     _log_memory_usage("after HF cleanup")
     logger.info(f"HF reference logits: {tuple(ref_logits.shape)}")
 
-    # ── UNIFIED TTNN loading (SINGLE PHASE — both vision + text together) ───
-    logger.info("=" * 80)
-    logger.info("UNIFIED SINGLE-PHASE LOADING (vision bf8 + text bf16)")
-    logger.info("=" * 80)
-    _log_memory_usage("before unified load")
-
-    logger.info("Loading TtMistral3ForConditionalGenerationUnified (both vision + text together)…")
+    # ── TTNN load: vision (bf8) + text (bf16) co-resident on device ───
+    _log_memory_usage("before TTNN model load")
+    logger.info("Building TtMistral3ForConditionalGenerationUnified (vision bf8 + text bf16)…")
     tt_model = TtMistral3ForConditionalGenerationUnified(
         mesh_device=mesh_device,
         state_dict=state_dict,
@@ -293,21 +286,15 @@ def test_mistral_small_4_multimodal_pcc_unified(reset_seeds, mesh_device):
         num_text_layers=_TEXT_LAYERS,
         num_vision_layers=_VISION_LAYERS,
         max_seq_len=seq_len + 16,
-        vision_dtype=ttnn.bfloat8_b,  # ← KEY: Quantized vision for 50% memory savings
+        vision_dtype=ttnn.bfloat8_b,
     )
 
-    logger.info("✅ Unified orchestrator created (lazy loading — models not loaded yet)")
-    logger.info("")
-    logger.info("Calling encode_image() — triggers unified _load_vision_and_text()…")
-    logger.info("  (Both vision tower [bf8] + text model [bf16] load together)")
+    logger.info("Calling encode_image() — first call lazy-loads both vision and text on device…")
     img_embeds_host = tt_model.encode_image(pixel_values)
-    logger.info(f"✅ Image embeddings: {tuple(img_embeds_host.shape)} bf16 on host")
-    _log_memory_usage("after vision loaded (in unified phase)")
+    logger.info(f"Image embeddings: {tuple(img_embeds_host.shape)} bf16 on host")
+    _log_memory_usage("after vision + text loaded")
 
-    logger.info("")
-    logger.info("Calling load_text() — idempotent (already loaded in unified phase)")
-    tt_model.load_text()
-    logger.info("✅ load_text() completed (no reloading, both already in memory)")
+    tt_model.load_text()  # idempotent — text was already loaded by encode_image
 
     # Position embeddings for prefill.
     from transformers.models.mistral4.modeling_mistral4 import Mistral4RotaryEmbedding
@@ -317,9 +304,7 @@ def test_mistral_small_4_multimodal_pcc_unified(reset_seeds, mesh_device):
     pos_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0)
     cos, sin = rotary(dummy, pos_ids)
 
-    logger.info("")
-    logger.info("Running prefill_multimodal_full_logits() with unified models…")
-    logger.info("  (Vision [bf8] + Text [bf16] both in device memory)")
+    logger.info("Running prefill_multimodal_full_logits()…")
     tt_logits = tt_model.prefill_multimodal_full_logits(img_embeds_host, input_ids, (cos, sin))
     tt_logits = tt_logits[0].float()
     _log_memory_usage("after inference")
@@ -350,8 +335,8 @@ def test_mistral_small_4_multimodal_pcc_unified(reset_seeds, mesh_device):
     passing, overall_msg = comp_pcc(ref_logits.flatten(), tt_logits.flatten(), _PCC_FLOOR)
     logger.info(f"Overall flattened logits PCC: {overall_msg}")
     assert passing, (
-        f"Unified end-to-end PCC below floor {_PCC_FLOOR}.\n"
+        f"End-to-end multimodal PCC below floor {_PCC_FLOOR}.\n"
         f"mean per-pos PCC={mean_pcc:.4f}, min per-pos PCC={min_pcc:.4f}, "
         f"greedy match={match}/{seq_len}\n{overall_msg}"
     )
-    logger.info(f"✅ PASSED — end-to-end unified multimodal PCC ≥ {_PCC_FLOOR}")
+    logger.info(f"✅ PASSED — end-to-end multimodal PCC ≥ {_PCC_FLOOR}")
