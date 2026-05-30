@@ -176,6 +176,7 @@ class LTXTransformerBlock(Module):
                 context_dim=audio_dim,
                 query_input_dim=video_dim,
                 output_dim=video_dim,
+                high_fidelity_sdpa=True,
                 **attn_kwargs,
             )
             self.video_to_audio_attn = LTXAttention(
@@ -183,6 +184,7 @@ class LTXTransformerBlock(Module):
                 num_heads=audio_num_heads,
                 is_self=False,
                 context_dim=video_dim,
+                high_fidelity_sdpa=True,
                 **attn_kwargs,
             )
             self.scale_shift_table_a2v_ca_audio = Parameter(

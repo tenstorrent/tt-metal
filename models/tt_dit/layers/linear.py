@@ -36,6 +36,12 @@ class Linear(Module):
         if self.activation_fn == "gelu":
             self.activation_fn = None
             self.fused_activation_fn = (ttnn.UnaryOpType.GELU, False)
+        elif self.activation_fn == "gelu_tanh":
+            # True = approximate mode = tanh-LUT GELU (matches F.gelu(approximate="tanh")). The LUT
+            # is NaN-safe (no pow/log), unlike a hand-rolled x**3 decomposition whose pow(x,3) can
+            # NaN on negative inputs and corrupt the audio decoder ("mesh of 4 voices" artifact).
+            self.activation_fn = None
+            self.fused_activation_fn = (ttnn.UnaryOpType.GELU, True)
         self.mesh_device = mesh_device
 
         """
@@ -87,26 +93,6 @@ def gelu_decomposed(x: ttnn.Tensor) -> ttnn.Tensor:
     return ttnn.multiply(x_times_bracket, 0.5)
 
 
-def gelu_tanh(x: ttnn.Tensor) -> ttnn.Tensor:
-    # GELU tanh approximation: 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
-    #
-    # IMPORTANT: do NOT use ``ttnn.pow(x, 3)`` here. Many backends implement
-    # ``pow`` as ``exp(n * log(x))`` which produces NaN/Inf for x < 0. The
-    # pre-activation tensor that lands in this function has ~half its
-    # elements negative (it's a post-AdaLN-modulated activation feeding a
-    # GeLU), so a NaN-producing pow turns most of the FFN output into NaN,
-    # which downstream addcmuls then mix into ``audio_1BND``. The bf16
-    # representation flushes NaN to zero in some places and propagates in
-    # others, producing structured artefacts in the audio decoder (the
-    # "mesh of 4 voices" symptom). Use explicit cubing — three bf16 muls,
-    # numerically safe for any sign.
-    sqrt_2_over_pi = math.sqrt(2.0 / math.pi)
-    x_cubed = ttnn.multiply(ttnn.multiply(x, x), x)
-    inner = ttnn.add(x, ttnn.multiply(x_cubed, 0.044715))
-    one_plus_tanh = 1.0 + ttnn.tanh(ttnn.multiply(inner, sqrt_2_over_pi))
-    return 0.5 * x * one_plus_tanh
-
-
 class ColParallelLinear(Module):
     """
     Linear layer with column parallel weights
@@ -140,6 +126,12 @@ class ColParallelLinear(Module):
         elif self.activation_fn == "sigmoid":
             self.activation_fn = None
             self.fused_activation_fn = (ttnn.UnaryOpType.SIGMOID, False)
+        elif self.activation_fn == "gelu_tanh":
+            # True = approximate mode = tanh-LUT GELU (matches F.gelu(approximate="tanh")). The LUT
+            # is NaN-safe (no pow/log), unlike a hand-rolled x**3 decomposition whose pow(x,3) can
+            # NaN on negative inputs and corrupt the audio decoder ("mesh of 4 voices" artifact).
+            self.activation_fn = None
+            self.fused_activation_fn = (ttnn.UnaryOpType.GELU, True)
         self.mesh_device = mesh_device
         self.mesh_axis = mesh_axis
         self.fsdp_mesh_axis = fsdp_mesh_axis
@@ -462,8 +454,6 @@ def _apply_activation_fn(t: ttnn.Tensor, activation_fn: str | None) -> ttnn.Tens
         return gelu_decomposed(t)
     if activation_fn == "quick_gelu":
         return t * ttnn.sigmoid(1.702 * t)  # quick approx gelu
-    if activation_fn == "gelu_tanh":
-        return gelu_tanh(t)
     if activation_fn == "swiglu":
         t, gate = ttnn.chunk(t, 2, -1)
         return t * ttnn.silu(gate)

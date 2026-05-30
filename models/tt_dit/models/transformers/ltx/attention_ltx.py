@@ -13,8 +13,6 @@ Reference: LTX-2 attention.py + Wan attention_wan.py
 
 from __future__ import annotations
 
-import os
-
 import torch
 
 import ttnn
@@ -66,6 +64,7 @@ class LTXAttention(Module):
         query_input_dim: int | None = None,
         output_dim: int | None = None,
         apply_gated_attention: bool = False,
+        high_fidelity_sdpa: bool = False,
     ) -> None:
         super().__init__()
 
@@ -168,17 +167,26 @@ class LTXAttention(Module):
             exp_approx_mode=False,
         )
 
-        # SDPA at HiFi4. HiFi2 on long video/audio K/V compounds ~5% per-block error in A↔V
-        # cross-attn (a2v_out/v2a_out) that pollutes the video residual by block ~30 and
-        # degrades v2a_kv at late blocks (44+ → 0.92). HiFi4 trades ~20% SDPA throughput for
-        # stable AV cross-attn quality across 48 blocks × 8 steps.
-        self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
+        # TEMPORARY: HiFi4 everywhere. The high_fidelity_sdpa flag/plumbing is kept so the
+        # Wan-parity HiFi2 default (else branch) can be re-enabled without re-threading it;
+        # A↔V (high_fidelity_sdpa=True) must always stay HiFi4 (HiFi2 there degrades v2a_kv
+        # to ≤0.92 by block 44+).
+        if high_fidelity_sdpa:
+            self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+                self.mesh_device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
+        else:
+            self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+                self.mesh_device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
 
         self.rope_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
@@ -366,7 +374,9 @@ class LTXAttention(Module):
         gate = ttnn.squeeze(gate, 0)
         gate = ttnn.transpose(gate, -2, -1)
         gate = ttnn.unsqueeze(gate, -1)
-        gate = ttnn.typecast(gate, ttnn.bfloat16)
+        # No typecast: to_gate_logits (dtype=None) outputs bf16 and sigmoid/multiply preserve
+        # it, so gate is already bf16. The old cast was an unconditional bf16->bf16 no-op that
+        # still dispatched a TypecastDeviceOperation.
         return gate
 
     def _sdpa_cross(
@@ -378,35 +388,10 @@ class LTXAttention(Module):
         attn_mask: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """Cross-attention SDPA. K/V are full-seq; Q stays SP-sharded so the output is the
-        local query shard directly (matches the "Q SP-sharded, K full-seq" design intent).
-
-        Fix B: the default keeps Q sharded and runs a local SDPA — no Q all-gather, no output
-        partition, and no sp× redundant full-N attention on every device.
-
-        Legacy path (``LTX_CROSS_SDPA_GATHER_Q=1``): gather Q (and mask rows) to full, run the
-        full SDPA on every SP device, then partition the output back. Kept as a kill-switch
-        because BH SDPA was suspected wrong for SP-sharded Q × full K (see audio self-attn
-        NOTE); use it to A/B the new path until BH correctness is validated on device.
+        local query shard directly (matches the "Q SP-sharded, K full-seq" design intent):
+        no Q all-gather, no output partition, no spxL redundant full-N attention per device.
+        Validated e2e on BH — the old gather-Q→full-SDPA→partition workaround was removed.
         """
-        sp_factor = self.parallel_config.sequence_parallel.factor
-        use_gather_q = sp_factor > 1 and os.environ.get("LTX_CROSS_SDPA_GATHER_Q", "0") == "1"
-        if use_gather_q:
-            sp_axis = self.parallel_config.sequence_parallel.mesh_axis
-            q_full = self.ccl_manager.all_gather_persistent_buffer(q_BHNE, dim=2, mesh_axis=sp_axis)
-            mask_full = attn_mask
-            if attn_mask is not None:
-                mask_full = self.ccl_manager.all_gather_persistent_buffer(attn_mask, dim=2, mesh_axis=sp_axis)
-            out_full = ttnn.transformer.scaled_dot_product_attention(
-                q_full,
-                k_BHNE,
-                v_BHNE,
-                attn_mask=mask_full,
-                is_causal=False,
-                program_config=self.sdpa_program_config,
-                compute_kernel_config=self.sdpa_compute_kernel_config,
-            )
-            return ttnn.mesh_partition(out_full, dim=2, cluster_axis=sp_axis)
-
         return ttnn.transformer.scaled_dot_product_attention(
             q_BHNE,
             k_BHNE,
@@ -582,13 +567,14 @@ class LTXAttention(Module):
                 )
             elif sp_factor > 1:
                 # Masked audio self-attn: gather K/V; keep Q sharded (mask rows match local Q).
-                # NOTE: forcing this branch off via LTX_AUDIO_NO_ATTN_MASK=1
-                # (drops the mask, takes the ring-joint SDPA path) moves every
-                # audio spectral metric significantly toward HF on
-                # bh_2x4sp1tp0. The mask/gather+SDPA combination is suspect;
-                # we haven't yet pinpointed whether the bug is in (a) the
-                # gather+SDPA branch itself, (b) the column-only mask shape,
-                # or (c) padded K values bleeding through masked attention.
+                # NOTE: the masked gather+SDPA path is kept for audio (not ring-joint) because this
+                # box is BH-LB (2x4) Linear topology, where ring-joint rotates K/V over a linear
+                # chain with no wraparound. Audio's sequence is tiny (audio_N/sp ≈ 2 tiles), so that
+                # ring overhead is pure loss — gather+local-SDPA is the more performant choice here.
+                # Ring-joint only helps audio on a true Ring mesh (4x8), which this box is not.
+                # A prior experiment (LTX_AUDIO_NO_ATTN_MASK=1, since reverted) suggested dropping
+                # the mask moves audio spectral metrics toward HF; if that reproduces, the fix is to
+                # correct this column mask, not to switch audio to ring-joint.
                 sp_axis = self.parallel_config.sequence_parallel.mesh_axis
                 k_full = self.ccl_manager.all_gather_persistent_buffer(k_BHNE, dim=2, mesh_axis=sp_axis)
                 v_full = self.ccl_manager.all_gather_persistent_buffer(v_BHNE, dim=2, mesh_axis=sp_axis)
