@@ -14,13 +14,16 @@
 #endif
 
 // `MATH_FIDELITY` is emitted by jit_build/genfiles into chlkc_descriptors.h
-// gated on `#if defined(UCK_CHLKC_MATH)`, so it is only visible to the MATH
-// TRISC build. The helpers below take a `MathFidelity math_fidelity =
-// MATH_FIDELITY` template default; that default is parsed by all three TRISC
-// compilations (UNPACK/MATH/PACK), even though the value is only ever read
-// inside `MATH(...)` macros (which expand to nothing in UNPACK/PACK). Provide
-// a stub for the non-MATH builds so the parse succeeds; the value is unused.
-#if !defined(UCK_CHLKC_MATH)
+// gated on `#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_PACK)` (see
+// `emit_compute_descriptors` in `tt_metal/jit_build/genfiles.cpp`), so it is
+// visible to the MATH and PACK TRISC builds but NOT to UNPACK. The helpers
+// below take a `MathFidelity math_fidelity = MATH_FIDELITY` template default;
+// that default is parsed by all three TRISC compilations (UNPACK/MATH/PACK),
+// even though the value is only ever read inside `MATH(...)` macros (which
+// expand to nothing in UNPACK/PACK). Provide a stub for the UNPACK build so
+// the parse succeeds; the value is unused. The stub MUST be excluded for
+// both MATH and PACK to avoid redefining the chlkc_descriptors.h symbol.
+#if !defined(UCK_CHLKC_MATH) && !defined(UCK_CHLKC_PACK)
 [[maybe_unused]] static constexpr ckernel::MathFidelity MATH_FIDELITY = ckernel::MathFidelity::HiFi4;
 #endif
 

@@ -6,6 +6,7 @@
 #include "kernel_op_api.hpp"
 #include "kernel_utils.hpp"
 #include "api/numeric/bfloat16.h"
+#include "../metadata/metadata.hpp"
 
 #if defined(COMPILE_FOR_TRISC)
 #ifndef REDUCE_OP
@@ -16,25 +17,17 @@
 #endif
 #endif
 
-#if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
-#include <type_traits>
-#include "api/debug/dprint.h"
-#include "api/dataflow/dataflow_api.h"
-#include "tt_metal/fabric/hw/inc/packet_header_pool.h"
-#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
-#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
-#include "api/socket_api.h"
-#include "../micro_ops/host_io/kernels/pcie_noc_utils.h"
-#include "ttnn/cpp/ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
-#include "../../../unified_kernels/kernel_op_api.hpp"
-#include "../metadata/metadata.hpp"
-#include "../kernel_includes/tt_metal/dm_utils.hpp"
-
+// ============================================================================
+// Pure C++ bit-cast / bf16 helpers -- visible from every RISC (BR / NC / TR).
+// Must live OUTSIDE the BRISC/NCRISC dataflow include guard because TRISC also
+// calls `float_to_bf16_rne` from `trisc_fused_softmax_top_p_sampling_block`
+// (metadata-direct temperature read) and `float_to_bf16_packed` is referenced
+// from BRISC's metadata path.
+// ============================================================================
 constexpr uint32_t FACE_ELEMS = 256;
 constexpr uint16_t BF16_ONE = 0x3F80;
 constexpr uint32_t ELEMS_PER_FACE_ROW = 16;
 
-// Bit-cast helpers without UB
 static inline uint32_t float_to_bits(float x) {
     uint32_t u;
     std::memcpy(&u, &x, sizeof(u));
@@ -88,13 +81,19 @@ static inline uint32_t bf16_pack_to_uint32(uint16_t bf16_val) {
 // Convenience: convert fp32 -> bf16 (RNE) and pack two copies into a uint32.
 static inline uint32_t float_to_bf16_packed(float x) { return bf16_pack_to_uint32(float_to_bf16_rne(x)); }
 
-// Fill row 0 (face-0 row-0 lanes 0..15 + face-1 row-0 lanes 0..15) of a 32x32
-// bf16 tile with `bf16_val`, repeated. Rows 1..31 are left as-is.
-//
-// Used by the Stage-B fused TRISC pipeline: TRISC's downstream element-wise
-// ops (mul_binary_tile, lt_binary_tile, ...) need the broadcast value at every
-// row-0 column, but only row 0 is read by BRISC, so filling rows 1..31 would
-// be wasted L1 traffic. The fill takes 16 u32 stores (~32 cy on BRISC).
+#if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
+#include <type_traits>
+#include "api/debug/dprint.h"
+#include "api/dataflow/dataflow_api.h"
+#include "tt_metal/fabric/hw/inc/packet_header_pool.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
+#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
+#include "api/socket_api.h"
+#include "../micro_ops/host_io/kernels/pcie_noc_utils.h"
+#include "ttnn/cpp/ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
+#include "../../../unified_kernels/kernel_op_api.hpp"
+#include "../kernel_includes/tt_metal/dm_utils.hpp"
+
 FORCE_INLINE void generate_row0_bcast(const uint32_t cb_id, uint16_t bf16_val) {
     cb_reserve_back(cb_id, 1);
     auto* tile_u32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id));
@@ -114,6 +113,7 @@ FORCE_INLINE void generate_row0_bcast(const uint32_t cb_id, uint16_t bf16_val) {
 #endif
 
 #if defined(COMPILE_FOR_TRISC)
+#include "api/debug/dprint.h"
 #include "api/debug/dprint_tensix.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_binary.h"
@@ -139,57 +139,12 @@ FORCE_INLINE void generate_row0_bcast(const uint32_t cb_id, uint16_t bf16_val) {
 #if defined(TRISC_MATH)
 #include "../kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_math_top32_rm_api.h"
 #include "../kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_deepseek_top32_rm.h"
-
-// Sampling-local single-scalar `recip_tile` for Steps 6 and 18.
-//
-// Pipeline trace establishing why only ONE scalar matters:
-//   Step 1  : sampling_reduce_tile<MAX, REDUCE_ROW>  on in_cb (row-strip;
-//             only row 0 of faces 0/1 holds the real scores). REDUCE_ROW
-//             writes each row's reduction at col 0 of that row, but since
-//             only row 0 had real data, the only meaningful output is at
-//             (face 0, row 0, col 0).
-//   Step 2  : ELWSUB with `unpack_full_transpose=true` -- in_cb's row 0
-//             unpacks into SrcA's column 0, gets `- max` (scalar bcast),
-//             so DST ends as a column-strip (col 0 of faces 0/2 valid).
-//   Step 3-4: exp_tile (full tile) -> pack to exp_cb. exp_cb still has
-//             the column-strip shape in col 0 of faces 0/2.
-//   Step 5  : sampling_reduce_tile<SUM, REDUCE_COL>. Reduces along rows
-//             for each column; only col 0 sums to a meaningful value, and
-//             the result lands at (face 0, row 0, col 0). All other lanes
-//             are 0 / noise (REDUCE_COL writes row 0 of each column; the
-//             other columns reduced zeros from the column-strip input).
-//   Step 6  : THIS RECIP. We only need (face 0, row 0, col 0).
-//   Step 7  : rmsnorm_bcast_scalar_reuse_tiles<ELWMUL,...> consumes the
-//             recip output via `TTI_MOVD2B(0, SRC_ZERO_OFFSET, MOV_1_ROW)`
-//             + ELWMUL with `p_elwise::SRCB_BCAST_ALL` (= 0x3, a true
-//             scalar broadcast). Only DST address 0 of the recip output
-//             is ever observed; every other lane is dead.
-//
-// Steps 17-19 mirror Steps 5-7 (REDUCE_COL on the filtered cumsum -> recip
-// -> scalar-bcast ELWMUL with out_cb), so Step 18 has the identical layout.
-//
-// Implementation: one SFPU vector op on Face 0 only.
-//   * `VectorMode::None` (= 0) hits the `else` branch of
-//     `_llk_math_eltwise_unary_sfpu_params_` in
-//     `tt_llk_blackhole/llk_lib/llk_math_eltwise_unary_sfpu_params.h`,
-//     which calls the body exactly once with no `inc_dst_face_addr` --
-//     so only Face 0 is touched.
-//   * The body does a single `sfpi::dst_reg[0]` recip. On Blackhole that
-//     slot is the 4-row × 8-col band at (rows 0-3, cols 0-7) of Face 0,
-//     which contains lane (0, 0). The other 31 lanes of the vector are
-//     wasted but the alternative is launching a second instruction.
-//
-// Cost: 1 SFPU vector op vs. the stock `recip_tile(0)`'s 32 ops
-// (`VectorMode::RC` × ITERATIONS=8). 32× reduction in SFPU recip cycles
-// at each of the two sites.
+// Sampling-local single-scalar `recip_tile`
 template <bool legacy_compat = true>
 void calculate_sampling_recip_scalar() {
     sfpi::vFloat in = sfpi::dst_reg[0];
     if constexpr (legacy_compat) {
         sfpi::vFloat out = ckernel::sfpu::_reciprocal_compat_<APPROX ? 2 : 3>(in);
-        // Input is always a non-negative softmax denominator / cumsum
-        // total, so the negate-on-sign branch in the stock
-        // `calculate_reciprocal` is unnecessary.
         if constexpr (DST_ACCUM_MODE || APPROX) {
             sfpi::dst_reg[0] = out;
         } else {
@@ -213,6 +168,26 @@ void calculate_sampling_recip_scalar() {
 template <bool legacy_compat = true>
 ALWI void sampling_recip_tile_scalar(uint32_t idst) {
     _llk_math_eltwise_unary_sfpu_params_(calculate_sampling_recip_scalar<legacy_compat>, idst, (int)VectorMode::None);
+}
+
+// Clamp the scalar at DST[idst][0] to at most `param` (passed as an fp32
+// bit-pattern). Used after the top-p MIN reduce to bound `cum_kept` by 1.0:
+// if the cumsum (computed in DST FP32) ever saturates strictly below `p` --
+// which happens for sharp distributions where the tail probs vanish to bf16
+// zero in the pack-reload between softmax and cumsum -- every lane is still
+// "below cutoff" and the MIN-reduce returns ~BIG instead of the true kept
+// mass. Since the kept mass is mathematically <= 1.0, clamping here turns
+// that pathological case into a no-op rescale (1/1.0 = 1.0) and keeps the
+// surviving probs unscaled.
+inline void calculate_sampling_clamp_max_scalar(uint32_t param) {
+    const sfpi::vFloat max_val = ckernel::sfpu::Converter::as_float(param);
+    sfpi::vFloat in = sfpi::dst_reg[0];
+    v_if(in > max_val) { sfpi::dst_reg[0] = max_val; }
+    v_endif;
+}
+
+ALWI void sampling_clamp_max_tile_scalar(uint32_t idst, uint32_t param) {
+    _llk_math_eltwise_unary_sfpu_params_(calculate_sampling_clamp_max_scalar, idst, (int)VectorMode::None, param);
 }
 
 // ----------------------------------------------------------------------------
@@ -254,7 +229,9 @@ ALWI void sampling_recip_tile_scalar(uint32_t idst) {
 template <SfpuType OP>
 inline void calculate_sampling_binary_comp_first_column(
     const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
-    static_assert(OP == SfpuType::le || OP == SfpuType::ge, "sampling_binary_comp_first_column supports le/ge only");
+    static_assert(
+        OP == SfpuType::le || OP == SfpuType::lt || OP == SfpuType::ge,
+        "sampling_binary_comp_first_column supports le/lt/ge only");
     constexpr uint dst_tile_size_sfpi = 32;
     constexpr int ITERATIONS_FIRST_COLUMN = 4;
 
@@ -265,6 +242,9 @@ inline void calculate_sampling_binary_comp_first_column(
 
         if constexpr (OP == SfpuType::le) {
             v_if(in0 <= in1) { result = sfpi::vConst1; }
+            v_endif;
+        } else if constexpr (OP == SfpuType::lt) {
+            v_if(in0 < in1) { result = sfpi::vConst1; }
             v_endif;
         } else {
             v_if(in0 >= in1) { result = sfpi::vConst1; }
@@ -279,6 +259,17 @@ inline void calculate_sampling_binary_comp_first_column(
 ALWI void sampling_le_binary_tile_first_column(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     _llk_math_eltwise_binary_sfpu_params_(
         calculate_sampling_binary_comp_first_column<SfpuType::le>, idst0, idst1, odst, (int)VectorMode::C);
+}
+
+// Strict less-than variant. Used by the top-p cutoff mask so that lanes where
+// `cumsum == p` (which happens in bf16 when the cumsum saturates exactly at
+// `p_bf16`) are treated as ABOVE the cutoff, matching BRISC's `num_kept` rule
+// (`!(cum[i] < p_bf16)`). Without this, every saturated lane gets inflated by
+// BIG and the subsequent MIN-reduce returns ~BIG instead of `cum_kept`, which
+// shrinks every output prob by ~1/BIG.
+ALWI void sampling_lt_binary_tile_first_column(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    _llk_math_eltwise_binary_sfpu_params_(
+        calculate_sampling_binary_comp_first_column<SfpuType::lt>, idst0, idst1, odst, (int)VectorMode::C);
 }
 
 ALWI void sampling_ge_binary_tile_first_column(uint32_t idst0, uint32_t idst1, uint32_t odst) {
@@ -362,23 +353,32 @@ template <
     uint32_t out_cb,
     uint32_t exp_cb,
     uint32_t probs_cb,
-    uint32_t temp_cb,
+    uint32_t probs_out_cb,
     uint32_t scaler_cb,
     uint32_t p_cb,
     uint32_t rand_cb,
     uint32_t rand_bcast_cb,
     uint32_t mask_cb,
-    uint32_t num_tiles>
+    uint32_t num_tiles,
+    bool enable_metadata = false,
+    uint32_t metadata_output_l1_addr = 0,
+    uint32_t inv_temp_bf16_ct = 0>
 void trisc_fused_softmax_top_p_sampling_block() {
     DeviceZoneScopedN("SP-TOPP-TRISC");
 
     generate_rand_tile(rand_cb);
     cb_wait_front(in_cb, num_tiles);
     cb_wait_front(scaler_cb, 1);
-    cb_wait_front(temp_cb, 1);
 
-    const uint16_t temp_bf16 = static_cast<uint16_t>(read_tile_value(temp_cb, 0, 0));
-    cb_pop_front(temp_cb, 1);
+    uint16_t temp_bf16;
+    if constexpr (enable_metadata) {
+        auto* metadata_ptr =
+            reinterpret_cast<volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata*>(metadata_output_l1_addr);
+        const float temperature = std::max(static_cast<float>(metadata_ptr->temperature), 0.0f);
+        temp_bf16 = float_to_bf16_rne(1.0f / temperature);
+    } else {
+        temp_bf16 = static_cast<uint16_t>(inv_temp_bf16_ct);
+    }
     // Step 1: Compute DST[0, 0, 0] = max(x_i, dim=0), x_i = in_cb
     {
         DeviceZoneScopedN("SP-TOPP-TRISC-1");
@@ -407,7 +407,8 @@ void trisc_fused_softmax_top_p_sampling_block() {
             /*clear_dest=*/true>(in_cb, /*in_tile=*/0, /*src=*/0, /*dst=*/0);
     }
     // Step 3: Compute DST[0, 0, 0] = exp(x_i - max(x_i, dim=0)), x_i = in_cb, x_i - max(x_i, dim=0) comes from DST in
-    // Step 2 NOTE: temp_bf16 is the temperature factor for the exp operation, it comes from the temp_cb in Step 1
+    // Step 2 NOTE: temp_bf16 is the temperature factor for the exp operation; sourced above (metadata-direct or
+    // compile-time fallback).
     {
         DeviceZoneScopedN("SP-TOPP-TRISC-3");
         exp_tile_init<false>();
@@ -468,7 +469,7 @@ void trisc_fused_softmax_top_p_sampling_block() {
         pack_reconfig_data_format(probs_cb);
         pack_tile(0, probs_cb);
         cb_push_back(probs_cb, 1);
-        tile_regs_release();  // TRISC 2 stuck here
+        tile_regs_release();
         cb_wait_front(probs_cb, 1);
         cb_wait_front(p_cb, 1);
         tile_regs_acquire();
@@ -489,9 +490,22 @@ void trisc_fused_softmax_top_p_sampling_block() {
     copy_tile(p_cb, 0, 1);
     {
         DeviceZoneScopedN("SP-TOPP-TRISC-9");
-        // Step 12: DST[2] = (cumsum <= p) ? 1.0 : 0.0
-        le_binary_tile_init();
-        MATH((sampling_le_binary_tile_first_column(0, 1, 2)));
+        // Step 12: DST[2] = (cumsum < p) ? 1.0 : 0.0
+        //
+        // Uses strict-less-than (not <=) on purpose. The boundary lane where
+        // `cumsum == p` must be treated as ABOVE the cutoff so it isn't
+        // inflated by Step 13's BIG. This matters in two cases:
+        //   (a) `p = 1.0`: the final cumsum lane is exactly 1.0, and we need
+        //       that lane to survive as the MIN-reduce winner = cum_kept.
+        //   (b) bf16 saturation: when the tail probs are below bf16 ULP near
+        //       1.0, the packed cumsum stops moving and saturates at exactly
+        //       `p_bf16`. With `<=`, every saturated lane is "kept" and
+        //       inflated, so MIN returns ~BIG -> cum_kept ~= 100 -> all
+        //       output probs come out ~100x too small.
+        // This also matches BRISC's `if (!(cum[i] < p_bf16))` num_kept rule
+        // so TRISC's rescale denominator and BRISC's num_kept stay consistent.
+        lt_binary_tile_init();
+        MATH((sampling_lt_binary_tile_first_column(0, 1, 2)));
         // Step 13: DST[2] *= BIG. Below-cutoff lanes blow up to ~BIG so the
         // upcoming Pass 4 MIN-reduce skips them; above-cutoff lanes stay at 0.
         constexpr uint32_t BIG_VAL_FP32_U32 = 0x42C80000u;  // 100.0f
@@ -535,6 +549,18 @@ void trisc_fused_softmax_top_p_sampling_block() {
     }
     {
         DeviceZoneScopedN("SP-TOPP-TRISC-13");
+        // Step 17.5: Clamp cum_kept <= 1.0. The MIN-reduce sentinel trick
+        // (filtered = cumsum + BIG*mask, then MIN) only works when at least one
+        // lane has mask=0 (i.e. cumsum >= p). When the DST FP32 cumsum
+        // saturates strictly below p_bf16 -- which happens for sharp
+        // distributions whose tail probs round to 0 in bf16 when packed to
+        // probs_cb between Steps 8 and 9 -- every lane stays "below cutoff"
+        // and MIN returns ~BIG instead of cum_kept. Clamping to 1.0 here turns
+        // that into a no-op rescale (1/1.0 = 1.0), preserving the surviving
+        // probs unscaled; for the well-conditioned case cum_kept is already
+        // <= 1.0 by construction, so the clamp is a true no-op.
+        constexpr uint32_t SP_ONE_FP32 = 0x3F800000u;  // 1.0f
+        MATH((sampling_clamp_max_tile_scalar(0, SP_ONE_FP32)));
         // Step 18: Compute DST[0] = 1/cum_kept
         recip_tile_init();
         MATH((sampling_recip_tile_scalar(0)));
@@ -553,6 +579,7 @@ void trisc_fused_softmax_top_p_sampling_block() {
             MathFidelity::HiFi4,
             /*clear_dest=*/true>(probs_cb, /*in_tile=*/0, /*src=*/0, /*dst=*/3);
     }
+    cb_pop_front(probs_cb, 1);
     // Step 18.75: Recompute 1/cum_kept into DST[0] for Step 19 to consume.
     {
         DeviceZoneScopedN("SP-TOPP-TRISC-13c");
@@ -560,6 +587,9 @@ void trisc_fused_softmax_top_p_sampling_block() {
         copy_tile(exp_cb, 0, 0);
         sfpu_reduce_init<PoolType::MIN, DataFormat::Float32>();
         sfpu_reduce<PoolType::MIN, DataFormat::Float32, ReduceDim::REDUCE_COL>(0);
+        // Same clamp as Step 17.5: see comment above.
+        constexpr uint32_t SP_ONE_FP32 = 0x3F800000u;  // 1.0f
+        MATH((sampling_clamp_max_tile_scalar(0, SP_ONE_FP32)));
         recip_tile_init();
         MATH((sampling_recip_tile_scalar(0)));
     }
@@ -589,19 +619,18 @@ void trisc_fused_softmax_top_p_sampling_block() {
         MATH((sampling_ge_binary_tile_first_column(6, 1, 2)));
         tile_regs_commit();
     }
-    cb_reserve_back(mask_cb, 1);
     tile_regs_wait();
-    // Step 21.5: Replace the raw bf16 PMF in probs_cb with the rescaled
-    // PMF (DST[3] from Step 18.5)
-    cb_pop_front(probs_cb, 1);
-    cb_reserve_back(probs_cb, 1);
-    pack_reconfig_data_format(probs_cb);
-    pack_tile(3, probs_cb);
-    cb_push_back(probs_cb, 1);
-    pack_reconfig_data_format(mask_cb);
     // Step 22: Pack the mask into mask_cb (dedicated TRISC -> BRISC channel).
+    cb_reserve_back(mask_cb, 1);
+    pack_reconfig_data_format(mask_cb);
     pack_tile(2, mask_cb);
     cb_push_back(mask_cb, 1);
+    // Step 21.5: Hand the rescaled PMF (DST[3] from Step 18.5) off to BRISC.
+    cb_reserve_back(probs_out_cb, 1);
+    pack_reconfig_data_format(probs_out_cb);
+    pack_tile(3, probs_out_cb);
+    cb_push_back(probs_out_cb, 1);
+
     tile_regs_release();
     cb_pop_front(exp_cb, 1);
     cb_pop_front(rand_bcast_cb, 1);
@@ -957,7 +986,7 @@ struct TopKSampling {
         uint32_t CopyProbabilitiesToQ = 0,
         uint32_t PBcastCBId = 0xFFFFFFFF,
         uint32_t RandBcastCBId = 0xFFFFFFFF,
-        uint32_t ProbsCBId = 0xFFFFFFFF,
+        uint32_t ProbsOutCBId = 0xFFFFFFFF,
         uint32_t MaskCBId = 0xFFFFFFFF>
     struct WriterCTArgs {
         static constexpr uint32_t winner_page_bytes = WinnerPageBytes;
@@ -975,9 +1004,7 @@ struct TopKSampling {
         static constexpr bool stage2_receiver = Stage2Receiver == 1;
         static constexpr uint32_t output_addr = OutputAddr;
         static constexpr uint32_t rand_output_addr = RandOutputAddr;
-        static constexpr uint32_t inv_temp_bf16 = InvTempBF16;
         static constexpr uint32_t softmax_in_cb = SoftmaxInCBId;
-        static constexpr uint32_t temp_cb = TempCBId;
         static constexpr bool defer_socket_output = DeferSocketOutput == 1;
         static constexpr bool enable_metadata = EnableMetadata == 1;
         static constexpr bool copy_probabilities = CopyProbabilities == 1;
@@ -985,7 +1012,7 @@ struct TopKSampling {
         static constexpr uint32_t metadata_output_l1_addr = MetadataOutputL1Addr;
         static constexpr uint32_t p_bcast_cb = PBcastCBId;
         static constexpr uint32_t rand_bcast_cb = RandBcastCBId;
-        static constexpr uint32_t probs_cb = ProbsCBId;
+        static constexpr uint32_t probs_out_cb = ProbsOutCBId;
         static constexpr uint32_t mask_cb = MaskCBId;
         static_assert(
             !CopyProbabilities || EnableMetadata,
@@ -1003,7 +1030,7 @@ struct TopKSampling {
         uint32_t MaxCBId,
         uint32_t SumCBId,
         uint32_t ScalerCBId,
-        uint32_t TempCBId,
+        uint32_t ProbsOutCBId,
         uint32_t RandCBId = 0xFFFFFFFF,
         uint32_t Seed = 520,
         uint32_t TopK = 32,
@@ -1022,7 +1049,10 @@ struct TopKSampling {
         uint32_t Stage1NumInputTiles = 0,
         uint32_t Stage2RowElements = 0,
         uint32_t Stage2NumInputTiles = 0,
-        uint32_t MaskCBId = 0xFFFFFFFF>
+        uint32_t MaskCBId = 0xFFFFFFFF,
+        uint32_t EnableMetadata = 0,
+        uint32_t MetadataOutputL1Addr = 0,
+        uint32_t InvTempBF16 = 0>
     struct ComputeCTArgs {
         static constexpr uint32_t softmax_in_cb = SoftmaxInCBId;
         static constexpr uint32_t softmax_out_cb = SoftmaxOutCBId;
@@ -1030,14 +1060,10 @@ struct TopKSampling {
         static constexpr uint32_t softmax_sub_cb = SoftmaxSubCBId;
         static constexpr uint32_t max_cb = MaxCBId;
         static constexpr uint32_t sum_cb = SumCBId;
-        // Stage-B semantic aliases (same physical CBs as softmax_sub_cb / sum_cb,
-        // which the softmax tail never reads). BRISC pushes broadcast `p` to
-        // p_bcast_cb and broadcast `rand` to rand_bcast_cb; TRISC pops them
-        // in the fused post-softmax pipeline.
         static constexpr uint32_t p_bcast_cb = SoftmaxSubCBId;
         static constexpr uint32_t rand_bcast_cb = SumCBId;
         static constexpr uint32_t scaler_cb = ScalerCBId;
-        static constexpr uint32_t temp_cb = TempCBId;
+        static constexpr uint32_t probs_out_cb = ProbsOutCBId;
         static constexpr uint32_t rand_cb = RandCBId;
         static constexpr uint32_t seed = Seed;
         static constexpr uint32_t topk_k = TopK;
@@ -1060,8 +1086,10 @@ struct TopKSampling {
         static constexpr uint32_t stage1_num_input_tiles = Stage1NumInputTiles;
         static constexpr uint32_t stage2_row_elements = Stage2RowElements;
         static constexpr uint32_t stage2_num_input_tiles = Stage2NumInputTiles;
-        // TRISC -> BRISC mask channel. See WriterCTArgs::mask_cb for rationale.
         static constexpr uint32_t mask_cb = MaskCBId;
+        static constexpr bool enable_metadata = EnableMetadata == 1;
+        static constexpr uint32_t metadata_output_l1_addr = MetadataOutputL1Addr;
+        static constexpr uint32_t inv_temp_bf16 = InvTempBF16;
     };
 
     struct ReaderArgs {
@@ -1670,24 +1698,24 @@ struct TopKSampling {
                     // Top-P filtering + random categorical selection.
                     if constexpr (!CTArgs::mesh_mode || CTArgs::stage2_receiver) {
                         uint32_t K = CTArgs::topk_k;
-                        uint32_t inv_temp_bf16 = CTArgs::inv_temp_bf16;
                         float p = CTArgs::p;
-
                         if constexpr (CTArgs::enable_metadata) {
                             auto metadata_ptr = reinterpret_cast<volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata*>(
                                 CTArgs::metadata_output_l1_addr);
-                            float temperature = std::max(static_cast<float>(metadata_ptr->temperature), 0.0f);
-                            inv_temp_bf16 = float_to_bf16_packed(1.0f / temperature);
                             K = std::min(
                                 std::max(static_cast<uint32_t>(metadata_ptr->k), static_cast<uint32_t>(1)),
                                 static_cast<uint32_t>(32));
                             p = std::min(std::max(static_cast<float>(metadata_ptr->p), 0.0f), 1.0f);
+                            float temperature = std::max(static_cast<float>(metadata_ptr->temperature), 0.01f);
+                            if (temperature == 0.0f) {
+                                K = 1;
+                                p = 1.0f;
+                            }
                         }
 
                         {
                             DeviceZoneScopedN("SP-FC-STAGE");
 
-                            generate_bcast_unary_scalar(CTArgs::temp_cb, inv_temp_bf16);
                             generate_bcast_col_scalar(CTArgs::p_bcast_cb, bf16_pack_to_uint32(float_to_bf16_rne(p)));
 
                             cb_reserve_back(CTArgs::softmax_in_cb, 1);
@@ -1715,10 +1743,6 @@ struct TopKSampling {
                             noc_async_read_barrier();
                             cb_push_back(CTArgs::softmax_in_cb, 1);
                         }
-
-                        // rand_cb lands mid-pipeline (after Pass 2 cumsum), giving us
-                        // ~Pass-3-worth of slack to broadcast it back before TRISC's
-                        // Pass 4 needs rand_bcast_cb.
                         uint16_t rand;
                         {
                             DeviceZoneScopedN("SP-FC-RAND-STAGE");
@@ -1742,9 +1766,6 @@ struct TopKSampling {
                         uint32_t selected_index;
                         {
                             DeviceZoneScopedN("SP-FC-LOOKUP");
-                            // K==1 shortcut: the top-K reduction already produced a single
-                            // winner, so argmax = that winner. No softmax / top-p / random
-                            // sampling needed -- TRISC's mask is irrelevant here.
                             if (K == 1) {
                                 selected_index = global_indices[0];
                             } else {
@@ -1782,6 +1803,7 @@ struct TopKSampling {
                             }
                         }
 
+                        cb_wait_front(CTArgs::probs_out_cb, 1);
                         if constexpr (CTArgs::copy_probabilities) {
                             DeviceZoneScopedN("SP-CPROBS");
                             constexpr auto scores_field = CTArgs::copy_probabilities_to_q
@@ -1791,7 +1813,6 @@ struct TopKSampling {
                                                                ? offsetof(deepseek_b1_ops::DeepseekMetadata, q_indices)
                                                                : offsetof(deepseek_b1_ops::DeepseekMetadata, p_indices);
 
-                            cb_wait_front(CTArgs::probs_cb, 1);
                             // Reuse rand_cb's tile slot as a tiny gather scratch -- it's
                             // already popped above and the slot stays reserved for one
                             // more iteration. 32 bf16 lanes = 64 bytes, well under one tile.
@@ -1799,16 +1820,13 @@ struct TopKSampling {
                             auto scratch = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scratch_l1);
 
                             if (K == 1) {
-                                // K==1 shortcut: argmax winner has rescaled PMF = 1.0
-                                // by construction, no need to read TRISC's probs_cb /
-                                // softmax_out_cb. Write [1.0, 0, ..., 0] directly.
                                 scratch[0] = float_to_bf16_rne(1.0f);
                                 for (uint32_t i = 1; i < 2 * ELEMS_PER_FACE_ROW; ++i) {
                                     scratch[i] = 0;
                                 }
                             } else {
                                 const auto probs_l1 =
-                                    reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(CTArgs::probs_cb));
+                                    reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(CTArgs::probs_out_cb));
                                 for (uint32_t i = 0; i < ELEMS_PER_FACE_ROW; ++i) {
                                     scratch[i] = probs_l1[i * ELEMS_PER_FACE_ROW];
                                     scratch[ELEMS_PER_FACE_ROW + i] = probs_l1[2 * FACE_ELEMS + i * ELEMS_PER_FACE_ROW];
@@ -1849,10 +1867,8 @@ struct TopKSampling {
                                 indices_src_l1, get_noc_addr(indices_dst_l1), 32 * sizeof(uint32_t));
 
                             noc_async_write_barrier();
-
-                            cb_pop_front(CTArgs::probs_cb, 1);
                         }
-
+                        cb_pop_front(CTArgs::probs_out_cb, 1);
                         cb_pop_front(CTArgs::softmax_out_cb, 1);
                         cb_pop_front(CTArgs::mask_cb, 1);
                         cb_pop_front(CTArgs::rand_cb, 1);
@@ -1945,13 +1961,16 @@ struct TopKSampling {
                     CTArgs::softmax_out_cb,
                     CTArgs::softmax_exp_cb,
                     CTArgs::max_cb,
-                    CTArgs::temp_cb,
+                    CTArgs::probs_out_cb,
                     CTArgs::scaler_cb,
                     CTArgs::p_bcast_cb,
                     CTArgs::rand_cb,
                     CTArgs::rand_bcast_cb,
                     CTArgs::mask_cb,
-                    1>();
+                    /*num_tiles=*/1,
+                    CTArgs::enable_metadata,
+                    CTArgs::metadata_output_l1_addr,
+                    CTArgs::inv_temp_bf16>();
             }
 #endif
         }

@@ -637,7 +637,7 @@ class LMHeadSampling:
         sampling_max_cb = 28
         sampling_sum_cb = 29
         sampling_scaler_cb = 31
-        sampling_temp_cb = 32
+        sampling_probs_out_cb = 32
         sampling_rand_cb = 33
         sampling_mask_cb = 39
         # Mesh-stage scratch CBs (live on stage-1 / stage-2 receiver = final core):
@@ -716,15 +716,6 @@ class LMHeadSampling:
         if is_mtp_base_stage and not skip_ccl:
             if mtp_bcast_semaphores is None:
                 raise ValueError("mtp_bcast_semaphores required when is_mtp_base_stage=True and skip_ccl=False")
-            logger.debug(
-                "[MTP_BCAST CONFIG] base_stage sender_coord={} mtp_level={} "
-                "broadcast_topology_override={} mesh_shape=({}x{})",
-                argmax_final_mesh_coord,
-                mtp_level,
-                broadcast_topology_override,
-                int(mesh_device.shape[0]),
-                int(mesh_device.shape[1]),
-            )
             mtp_bcast_config = DeepseekMinimalBroadcast.configure(
                 mesh_device=mesh_device,
                 input_tensor_mesh=base_token_buffer,
@@ -839,17 +830,6 @@ class LMHeadSampling:
                     is_exit_device = row == int(argmax_final_mesh_coord[0]) and col == int(argmax_final_mesh_coord[1])
 
                 enable_mtp_on_device = is_mtp_base_stage
-                if device_idx == 0:
-                    logger.debug(
-                        "[OP DEVICES] is_mtp_base={} is_mtp_verify={} mtp_level={} "
-                        "argmax_final_mesh_coord={} mesh=({}x{})",
-                        is_mtp_base_stage,
-                        is_mtp_verify_stage,
-                        mtp_level,
-                        argmax_final_mesh_coord,
-                        mesh_rows,
-                        mesh_cols,
-                    )
 
                 num_devices_in_stage = mesh_rows * mesh_cols
                 is_e_norm_device = enable_mtp_on_device and (device_idx < num_devices_in_stage // 2)
@@ -1258,22 +1238,6 @@ class LMHeadSampling:
                 mtp_argmax_output_l1_addr = (
                     int(output_index_tensor_device.buffer_address()) if enable_mtp_on_device else 0
                 )
-                if is_exit_device and (is_mtp_base_stage or is_mtp_verify_stage):
-                    logger.debug(
-                        "[OP EXIT_DEV is_base={} is_verify={} mtp_level={}] dev=({},{}) "
-                        "argmax_final={} mtp_input_core_noc=({},{}) mtp_token_l1=0x{:x} "
-                        "mtp_argmax_output_l1=0x{:x}",
-                        is_mtp_base_stage,
-                        is_mtp_verify_stage,
-                        mtp_level,
-                        row,
-                        col,
-                        argmax_final_mesh_coord,
-                        mtp_input_core_noc_x,
-                        mtp_input_core_noc_y,
-                        mtp_token_l1_addr,
-                        mtp_argmax_output_l1_addr,
-                    )
 
                 # ================================================================
                 # ReduceToOne per-device setup
@@ -1286,7 +1250,6 @@ class LMHeadSampling:
                 reduce_num_hops = 1
                 if enable_reduce_to_one:
                     reduce_root_row = int(reduce_params["root_coord"][0])
-                    reduce_root_col = int(reduce_params["root_coord"][1])
                     # Always use linear mode. Torus auto-enable was the source of the
                     # corner-root hang: when root_row in {0,3}, the reduce was wiring
                     # ROOT3→ROOT2 across 3 rows expecting fabric wrap, but fabric_2D is
@@ -1395,7 +1358,7 @@ class LMHeadSampling:
                     ("sampling_softmax_out_cb", sampling_softmax_out_cb),
                     ("sampling_softmax_exp_cb", sampling_softmax_exp_cb),
                     ("sampling_scaler_cb", sampling_scaler_cb),
-                    ("sampling_temp_cb", sampling_temp_cb),
+                    ("sampling_probs_out_cb", sampling_probs_out_cb),
                     ("sampling_inv_temp_bf16", sampling_inv_temp_bf16),
                     ("sampling_topk_in_scores_cb", sampling_topk_in_scores_cb),
                     ("sampling_topk_in_indices_cb", sampling_topk_in_indices_cb),
@@ -1555,10 +1518,9 @@ class LMHeadSampling:
                     ("sampling_rand_output_addr", 0),
                     ("sampling_inv_temp_bf16", sampling_inv_temp_bf16),
                     ("sampling_softmax_in_cb", sampling_softmax_in_cb),
-                    ("sampling_temp_cb", sampling_temp_cb),
                     ("sampling_p_bcast_cb", sampling_softmax_sub_cb),
                     ("sampling_rand_bcast_cb", sampling_sum_cb),
-                    ("sampling_max_cb", sampling_max_cb),
+                    ("sampling_probs_out_cb", sampling_probs_out_cb),
                     ("sampling_enable_metadata", sampling_enable_metadata_value),
                     ("sampling_copy_probabilities", sampling_copy_probabilities_value),
                     ("sampling_copy_probabilities_to_q", sampling_copy_probabilities_to_q_value),
@@ -1730,7 +1692,7 @@ class LMHeadSampling:
                     ("sampling_max_cb", sampling_max_cb),
                     ("sampling_sum_cb", sampling_sum_cb),
                     ("sampling_scaler_cb", sampling_scaler_cb),
-                    ("sampling_temp_cb", sampling_temp_cb),
+                    ("sampling_probs_out_cb", sampling_probs_out_cb),
                     ("sampling_rand_cb", sampling_rand_cb),
                     ("sampling_mask_cb", sampling_mask_cb),
                     ("sampling_seed", int(seed) & 0xFFFFFFFF),
@@ -1750,6 +1712,9 @@ class LMHeadSampling:
                     ("sampling_stage1_num_input_tiles", sampling_stage1_mesh_tiles),
                     ("sampling_stage2_row_elements", sampling_stage2_num_slots * sampling_topk_min_alignment),
                     ("sampling_stage2_num_input_tiles", sampling_stage2_mesh_tiles),
+                    ("sampling_enable_metadata", sampling_enable_metadata_value),
+                    ("metadata_output_l1_addr", metadata_output_l1_addr),
+                    ("sampling_inv_temp_bf16", sampling_inv_temp_bf16),
                 ]
 
                 # ================================================================
@@ -2189,7 +2154,7 @@ class LMHeadSampling:
                         sampling_max_cb,
                         sampling_sum_cb,
                         sampling_scaler_cb,
-                        sampling_temp_cb,
+                        sampling_probs_out_cb,
                         sampling_rand_cb,
                         sampling_mask_cb,
                     ):
@@ -2402,9 +2367,6 @@ class LMHeadSampling:
                             ttnn.SemaphoreDescriptor(
                                 id=token_bcast_turn_semaphore_id,
                                 core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(worker_core, worker_core)]),
-                                # Init=1 mirrors fabric_gate_bcast_turn_semaphore: the first iter's
-                                # NCRISC wait passes immediately and the BRISC inc at the end of
-                                # lm_head_sampling() unblocks subsequent iterations.
                                 initial_value=1,
                             ),
                             ttnn.SemaphoreDescriptor(
