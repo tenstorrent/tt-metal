@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt-metalium/experimental/blitz_decode_pipeline.hpp"
+#include "tt-metalium/internal/blitz_decode_pipeline.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -26,7 +26,7 @@
 
 #include "tt_metal/impl/context/metal_context.hpp"
 
-namespace tt::tt_metal::experimental::blitz {
+namespace tt::tt_metal::internal::blitz {
 
 using ::tt::tt_fabric::FabricNodeId;
 using ::tt::tt_fabric::MeshHostRankId;
@@ -893,4 +893,4 @@ std::vector<BlitzDecodePipelineStage> generate_blitz_decode_pipeline(bool initia
     return stages;
 }
 
-}  // namespace tt::tt_metal::experimental::blitz
+}  // namespace tt::tt_metal::internal::blitz

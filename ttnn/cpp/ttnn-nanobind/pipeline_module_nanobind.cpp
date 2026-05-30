@@ -13,17 +13,17 @@
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
 
-#include "tt-metalium/experimental/blitz_decode_pipeline.hpp"
+#include "tt-metalium/internal/blitz_decode_pipeline.hpp"
 #include <tt-metalium/experimental/fabric/pipeline_builder.hpp>
 
 namespace ttnn::pipeline_module {
 
 void bind_blitz_decode_pipeline(nb::module_& mod) {
-    using tt::tt_metal::experimental::blitz::BlitzDecodeEndpointPlacement;
-    using tt::tt_metal::experimental::blitz::BlitzDecodePipelineStage;
-    using tt::tt_metal::experimental::blitz::BlitzDecodeStageHostBinding;
-    using tt::tt_metal::experimental::blitz::ResolvedBlitzDecodePipelineAllocation;
-    using tt::tt_metal::experimental::blitz::ResolvedBlitzDecodeStageAllocation;
+    using tt::tt_metal::internal::blitz::BlitzDecodeEndpointPlacement;
+    using tt::tt_metal::internal::blitz::BlitzDecodePipelineStage;
+    using tt::tt_metal::internal::blitz::BlitzDecodeStageHostBinding;
+    using tt::tt_metal::internal::blitz::ResolvedBlitzDecodePipelineAllocation;
+    using tt::tt_metal::internal::blitz::ResolvedBlitzDecodeStageAllocation;
 
     nb::class_<BlitzDecodePipelineStage>(mod, "BlitzDecodePipelineStage")
         .def_ro("stage_index", &BlitzDecodePipelineStage::stage_index)
@@ -96,7 +96,7 @@ void bind_blitz_decode_pipeline(nb::module_& mod) {
     mod.def(
         "generate_blitz_decode_pipeline",
         [](bool initialize_loopback) {
-            return tt::tt_metal::experimental::blitz::generate_blitz_decode_pipeline(initialize_loopback);
+            return tt::tt_metal::internal::blitz::generate_blitz_decode_pipeline(initialize_loopback);
         },
         nb::arg("initialize_loopback") = true,
         R"doc(
@@ -116,7 +116,7 @@ void bind_blitz_decode_pipeline(nb::module_& mod) {
     mod.def(
         "resolve_blitz_decode_pipeline_allocation",
         [](bool initialize_loopback) {
-            return tt::tt_metal::experimental::blitz::resolve_blitz_decode_pipeline_allocation(initialize_loopback);
+            return tt::tt_metal::internal::blitz::resolve_blitz_decode_pipeline_allocation(initialize_loopback);
         },
         nb::arg("initialize_loopback") = true,
         R"doc(

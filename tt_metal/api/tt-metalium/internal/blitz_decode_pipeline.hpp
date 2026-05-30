@@ -10,7 +10,7 @@
 
 #include <tt-metalium/mesh_coord.hpp>
 
-namespace tt::tt_metal::experimental::blitz {
+namespace tt::tt_metal::internal::blitz {
 
 // Legacy API: one entry per real stage, plus a synthetic loopback stage when
 // initialize_loopback=true.
@@ -68,4 +68,4 @@ std::vector<BlitzDecodePipelineStage> generate_blitz_decode_pipeline(bool initia
 // New API: explicit resolved stage-to-host allocation and endpoint ownership.
 ResolvedBlitzDecodePipelineAllocation resolve_blitz_decode_pipeline_allocation(bool initialize_loopback = true);
 
-}  // namespace tt::tt_metal::experimental::blitz
+}  // namespace tt::tt_metal::internal::blitz
