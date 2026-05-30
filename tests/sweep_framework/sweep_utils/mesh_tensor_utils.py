@@ -919,6 +919,41 @@ def get_model_traced_mesh_shape() -> Tuple[int, int]:
     return (1, 1)
 
 
+def _replicated_single_copy(device_tensors, to_torch_fn):
+    """Return device 0's torch tensor iff every device holds identical data.
+
+    Trace-validation inputs are built with ``replicate_with_topology``, which
+    copies identical data to every chip while stamping a Shard topology. When
+    such a tensor is gathered with ``ConcatMesh*ToTensor`` the N identical
+    per-device copies are concatenated, blowing the host tensor up by the mesh
+    factor (e.g. 8x) before golden tiling and PCC — the dominant cost (and OOM /
+    timeout risk) for large vectors whose "sharded" dim can't actually be split
+    (e.g. a size-1 dim over 8 devices).
+
+    When all devices are identical the shard is effectively a replicate, so a
+    single copy is numerically equivalent for PCC (concatenating/tiling both the
+    actual and golden by the same factor leaves the correlation unchanged).
+    Returns None when the data genuinely differs across devices (real shard) so
+    the caller falls back to the normal concat path.
+    """
+    if not device_tensors or len(device_tensors) <= 1:
+        return None
+    try:
+        ref = to_torch_fn(device_tensors[0])
+    except Exception:
+        return None
+    for t in device_tensors[1:]:
+        try:
+            other = to_torch_fn(t)
+        except Exception:
+            return None
+        identical = ref.shape == other.shape and torch.equal(ref, other)
+        del other
+        if not identical:
+            return None
+    return ref
+
+
 def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None) -> torch.Tensor:
     """Convert a TTNN mesh tensor back to torch, reassembling shards by topology.
 
@@ -926,6 +961,10 @@ def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None) -> t
     according to the tensor's TensorTopology placements. Mixed
     [Replicate, Shard(d)] cases concatenate only the unique row/col of devices
     along the shard dim. A caller-supplied mesh_composer overrides this.
+
+    Tensors whose Shard topology is backed by identical per-device data (the
+    trace-validation replicate path) collapse to a single copy to avoid an
+    N-fold host blow-up during gather.
     """
 
     def _get_torch_dtype(t):
@@ -1015,6 +1054,15 @@ def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None) -> t
             return _to_torch_safe(device_tensors[0])
 
     if len(placements) == 2 and len(dist_dims) == 2 and all(_is_shard(p) for p in placements):
+        # When the Shard topology is backed by identical per-device data (the
+        # replicate_with_topology trace-validation path), concatenating the shards
+        # just duplicates the same buffer mesh-factor times (e.g. a size-1 dim
+        # "sharded" over 8 chips -> 8x host tensor). Collapse to one copy instead;
+        # PCC is unchanged and we avoid the blow-up / OOM / 300s-timeout in CI.
+        single = _replicated_single_copy(device_tensors, _to_torch_safe)
+        if single is not None:
+            return single
+
         try:
             d0 = placements[0].dim
             d1 = placements[1].dim
