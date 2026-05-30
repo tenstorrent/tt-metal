@@ -4,9 +4,9 @@
 """
 Helpers for splicing image embeddings into the text-embedding sequence on device.
 
-Used by ``TtMistral3ForConditionalGeneration`` to fuse vision-projector outputs
-with the text-tokenizer embedding sequence. Pure ttnn slice + concat — no host
-scratch tensors during inference.
+Used by ``TtMistral3ForConditionalGenerationUnified`` to fuse vision-projector
+outputs with the text-tokenizer embedding sequence. Pure ttnn slice + concat —
+no host scratch tensors during inference.
 """
 
 from __future__ import annotations
