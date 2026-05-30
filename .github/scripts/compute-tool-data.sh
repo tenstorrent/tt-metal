@@ -54,9 +54,11 @@ done
 # Compute tool tags using existing script (always produces canonical ghcr.io tags)
 TOOL_TAGS=$(.github/scripts/compute-tool-tags.sh "$REPO")
 
-# Derive tool list from docker-bake.hcl (single source of truth)
-TOOLS=$(docker buildx bake -f dockerfile/docker-bake.hcl --print tools 2>/dev/null \
-  | jq -r '.group.tools.targets[]' | sort | tr '\n' ' ' | sed 's/ $//')
+# Derive tool list by parsing docker-bake.hcl directly — no Docker invocation needed.
+# Avoids 5-15s buildx daemon cold-start on fresh runners.
+TOOLS=$(grep -A 2 'group "tools"' dockerfile/docker-bake.hcl \
+  | grep 'targets' \
+  | sed 's/.*\[//; s/\].*//; s/"//g; s/,/ /g; s/  */ /g; s/^ //; s/ $//')
 
 # Check existence for each tool (parallel to avoid serial network latency)
 ANY_MISSING=false
