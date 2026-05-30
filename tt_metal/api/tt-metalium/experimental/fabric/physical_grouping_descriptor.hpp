@@ -205,6 +205,11 @@ public:
         return out;
     }
 
+    // Compute torus wrap-around edges for a row-major mesh topology.
+    // Returns edges between the first and last element in each RING dimension.
+    static std::vector<std::pair<uint32_t, uint32_t>> compute_torus_wraparound_edges(
+        const std::vector<int32_t>& dims, const std::vector<bool>& ring_dims);
+
 private:
     // Data members
     std::shared_ptr<const proto::PhysicalGroupings> proto_;
