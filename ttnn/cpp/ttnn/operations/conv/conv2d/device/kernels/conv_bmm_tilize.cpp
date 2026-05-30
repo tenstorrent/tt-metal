@@ -231,15 +231,10 @@ struct ConvTilizePreKBlock {
                     tilize_in<in0_block_w_, in0_cb_second_reader_id_, tilized_in0_cb_id_, false, true>(
                         in0_num_subblocks_read_last_);
                 }
-                mm_block_init_short_with_both_dt(
-                    in0_cb_id_,
-                    in1_cb_id_,
-                    in0_pretilize_cb_id_,
-                    in0_pretilize_cb_id_,
-                    false,
-                    out_subblock_w_,
-                    out_subblock_h_,
-                    in0_block_w_);
+                // Matmul-state restore is now the helper's job: matmul_block is invoked with
+                // InitMode::ShortAfterPreKBlock, so it reconfigs srcA/srcB and re-issues
+                // mm_block_init_short itself after this functor returns. This functor only
+                // tilizes (plus the relu / packer-l1_acc config above, which it owns).
             }
         } else {
             // Height-sharded: tilize every K-block.
@@ -283,15 +278,8 @@ struct ConvTilizePreKBlock {
                 }
             }
 
-            mm_block_init_short_with_both_dt(
-                tilized_in0_cb_id_,
-                in1_cb_id_,
-                in0_cb_id_,
-                in0_cb_id_,
-                false,
-                out_subblock_w_,
-                out_subblock_h_,
-                in0_block_w_);
+            // Matmul-state restore is now the helper's job (InitMode::ShortAfterPreKBlock) —
+            // see the block-sharded branch above. This functor only tilizes.
         }
     }
 };
@@ -504,11 +492,14 @@ void kernel_main() {
                 in0_num_blocks_w,
                 /*batch=*/1);
 
-            // init_mode=None: the kernel-entry mm_block_init at the top of kernel_main covers
-            // initial state, and ConvTilizePreKBlock issues mm_block_init_short_with_both_dt
-            // after each per-K-block tilize to refresh srcA/srcB. The downstream bias-add and
-            // untilize phases reconfig data formats but the per-iter ConvTilizePreKBlock
-            // restores them on the next helper call.
+            // init_mode=ShortAfterPreKBlock: the kernel-entry mm_block_init at the top of
+            // kernel_main covers initial state; thereafter the helper itself reconfigs srcA/srcB
+            // and re-issues mm_block_init_short after each per-K-block tilize (ConvTilizePreKBlock),
+            // so the functor no longer carries the matmul-state restore. The downstream bias-add and
+            // untilize phases reconfig data formats, and the helper's per-iter restore re-establishes
+            // matmul state on the next call. reconfig stays at its INPUT_AND_OUTPUT default — the
+            // per-K-block srcA/srcB reconfig matches the old functor restore, and the per-K-block
+            // pack reconfig to interm is the same one the pre-loop path used to issue once.
             //
             // pin_interm_to_captured_base=true: conv2d treats matmul_partials_cb as a pinned
             // scratch buffer across K-blocks. The two partials_cb_uses_output paths feed
@@ -522,7 +513,7 @@ void kernel_main() {
                 packer_l1_acc,
                 last_block_target,
                 compute_kernel_lib::OutputCBLayout::SubblockMajor,
-                compute_kernel_lib::matmul_config::InitMode::None,
+                compute_kernel_lib::matmul_config::InitMode::ShortAfterPreKBlock,
                 compute_kernel_lib::InputPolicy::WaitAndPopPerKBlock,
                 compute_kernel_lib::InputPolicy::WaitAndPopPerKBlock,
                 MatmulPostFn,
@@ -597,26 +588,33 @@ void kernel_main() {
                 if constexpr (pack_relu) {
                     PACK((llk_pack_relu_config(ReluType::NO_RELU)));
                 }
-                if constexpr (!fuse_bias) {
-                    reconfig_data_format_srca(in1_cb_id, matmul_partials_cb);
-                }
-
                 if constexpr (packer_untilize) {
                     // Narrow output block: gather subblock-major matmul output into row-major
-                    // and untilize via pack_untilize_dest. The helper handles init/uninit
-                    // lifecycle on each call; we use Neither inside the inner loop so the
-                    // standalone init/uninit wrappers below cover the chain once.
+                    // and untilize via pack_untilize_dest. reblock_and_untilize_init now owns the
+                    // data-format reconfig (srcA=matmul_partials, pack=out) AND the pack_untilize
+                    // init — so this branch no longer needs an external reconfig. The Neither +
+                    // NoReconfigure loop body does neither, amortizing the reconfig/init across the
+                    // in0_subblock iterations.
                     compute_kernel_lib::reblock_and_untilize_init<out_subblock_w, out_block_w>(
                         cb_matmul_partials, cb_out);
                     for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                         compute_kernel_lib::reblock_and_untilize<
                             out_subblock_w,
                             out_block_w,
-                            compute_kernel_lib::reblock_untilize_config::InitUninitMode::Neither>(
+                            compute_kernel_lib::reblock_untilize_config::InitUninitMode::Neither,
+                            compute_kernel_lib::reblock_untilize_config::ReconfigureRegisterDatatypeMode::
+                                NoReconfigure>(
                             in1_num_subblocks, out_subblock_num_tiles, out_subblock_h, cb_matmul_partials, cb_out);
                     }
                     compute_kernel_lib::reblock_and_untilize_uninit(cb_matmul_partials);
                 } else {
+                    // Wide output: plain untilize. srcA reconfig to matmul_partials is handled
+                    // externally here because untilize is invoked with NoReconfigure (the pack
+                    // format came from the packer_l1_acc reconfig above). The reblock branch no
+                    // longer shares this reconfig — it self-reconfigs via reblock_and_untilize_init.
+                    if constexpr (!fuse_bias) {
+                        reconfig_data_format_srca(in1_cb_id, matmul_partials_cb);
+                    }
                     // Flatten nested loops into single iteration count: in0_num_subblocks * out_subblock_h
                     compute_kernel_lib::untilize<
                         out_block_w,

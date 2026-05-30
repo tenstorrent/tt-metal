@@ -89,6 +89,29 @@ struct NoPostBias {
  *   - BiasBroadcast::Elementwise: bias has multiple M rows matching the output sub-block.
  *                      Required when bias_padded_shape[-2] == tile_height (see PR #42430).
  *
+ * ── RELATIONSHIP TO binary_op (add) / FUTURE MIGRATION ─────────────────────
+ * The bias add is, mathematically, a binary add with broadcast:
+ *   BiasBroadcast::RowBroadcast  ≡  binary_op add<BroadcastDim::ROW>  (bias [1, N], add_tiles_bcast_rows)
+ *   BiasBroadcast::Elementwise   ≡  binary_op add<BroadcastDim::NONE> (bias [M, N], add_tiles)
+ * binary_op (binary_op_helpers.hpp, on the llk_helper_library line) works on a flat
+ * Ht×Wt tile grid with NO subblock structure — so add-bias does NOT inherently need the
+ * matmul's subblock shape. This helper is nonetheless kept (not folded into binary_op)
+ * for three reasons; a future migration MUST preserve all three:
+ *   1. SubblockMajor interm consumption. binary_op reads tiles row-major. When the
+ *      upstream matmul packs interm SubblockMajor (the default), bias must address tiles
+ *      in subblock order — which is exactly why BiasAddShape mirrors the matmul subblock
+ *      dims. Only on the TileRowMajor matmul-output path is interm already in row order,
+ *      and ONLY there could binary_op consume it directly (and bias's blocking decouple
+ *      from the matmul's for extra DST-fill freedom).
+ *   2. Packer-thread fused activation. This helper fuses SFPU activation on the PACKER
+ *      thread (apply_activation_from_pack) at the pack stage — the FUSE_BIAS+activation
+ *      overlap path. binary_op's post-op callback runs on the MATH thread only.
+ *   3. bias_offset walk-base. conv2d pushes the whole per-core bias slice once and walks
+ *      it via bias_offset; binary_op has no equivalent addressing hook.
+ * Migration target: once binary_op and this helper share a branch, route the TileRowMajor
+ * inner add through binary_op<ADD, ROW|NONE> and keep this helper as the thin layer that
+ * owns (2) and (3) and the SubblockMajor gather of (1).
+ *
  * Composes with matmul_block by reading from the same interm_cb that matmul_block
  * packed to (when pack_last_to_interm=true). The `tile_order` template must match
  * the upstream matmul_block's layout so the intermediate CB is consumed in the right
