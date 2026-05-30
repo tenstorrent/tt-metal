@@ -34,6 +34,8 @@ enum class DataFormat : uint8_t {
     Lf8 = 10,
     Fp8_e4m3 = 26,
     MxFp4 = 22,
+    MxFp6P = 21,
+    MxFp6R = 19,
     Int8 = 14,
     Tf32 = 4,
     UInt8 = 30,
@@ -73,6 +75,8 @@ constexpr static uint32_t datum_size(const DataFormat& format) {
         case DataFormat::Bfp8:
         case DataFormat::Bfp8_b: throw std::invalid_argument("datum for bfp2, bfp4, bfp8 is invalid");
         case DataFormat::MxFp4: throw std::invalid_argument("datum for mxfp4 is invalid");
+        case DataFormat::MxFp6P: throw std::invalid_argument("datum for mxfp6p is invalid");
+        case DataFormat::MxFp6R: throw std::invalid_argument("datum for mxfp6r is invalid");
         case DataFormat::Float16:
         case DataFormat::Float16_b: return 2;
         case DataFormat::Float32: return 4;
@@ -111,6 +115,8 @@ constexpr static uint32_t tile_size(const DataFormat& format) {
         case DataFormat::Bfp8:
         case DataFormat::Bfp8_b: return (256 * 4) + (16 * 4);
         case DataFormat::MxFp4: return (1024 / 2) + 32;  // 544 bytes: 32 scales (1 per 32-elem block) + 512 data
+        case DataFormat::MxFp6P: return 1024 + 32;       // 1056 bytes: 32 scales (1 per 32-elem block) + 1024 data
+        case DataFormat::MxFp6R: return 1024 + 32;       // 1056 bytes: 32 scales (1 per 32-elem block) + 1024 data
         case DataFormat::Float16:
         case DataFormat::Float16_b: return (1024 * 2);
         case DataFormat::Float32: return (1024 * 4);
