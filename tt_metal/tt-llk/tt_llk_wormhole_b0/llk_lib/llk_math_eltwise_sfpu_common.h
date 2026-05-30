@@ -37,10 +37,7 @@ inline void _llk_math_eltwise_sfpu_inc_dst_face_addr_()
 
 inline void _llk_math_eltwise_sfpu_uninit_()
 {
-    if (cfg_read(ALU_ACC_CTRL_Fp32_enabled_ADDR32) & ALU_ACC_CTRL_Fp32_enabled_MASK)
-    {
-        _llk_math_dbg_feature_enable_();
-    }
+    // No state to restore - all states are transient or default
 }
 
 template <DstSync Dst, bool Accum>

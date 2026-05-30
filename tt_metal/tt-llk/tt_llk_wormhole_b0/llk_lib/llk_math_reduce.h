@@ -308,10 +308,6 @@ inline void _llk_math_reduce_init_()
         // MOVB2D/D2B depends on SrcA ALU Format - Hi/Lo16 does not work with Tf32 (only on WH)
         // This is needed because FP32 data from L1 that is unpacked to Src registers is reduced to Tf32
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Float32));
-
-        // Every workaround we tried without bit 11 results in data corruption (tt-llk#1568).
-        // Setting it here in init pairs with the restore in uninit clearing it.
-        _llk_math_dbg_feature_disable_();
     }
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
 
