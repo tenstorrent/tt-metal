@@ -103,6 +103,39 @@ floor). The committed `tests/perf_baseline.json` pins each phase to
 whenever `TT_UNIAD_TIMING=1 TT_UNIAD_WARM_ITERS≥1`; the e2e test
 fails on a regression.
 
+### First-run startup cost
+
+UniAD instantiates ~1143 unique ttnn kernels. On the **first run on a
+host with an empty JIT cache** (`~/.cache/tt-metal-cache/<fingerprint>/`
+missing) each kernel needs a fresh g++ compile against the
+`riscv-tt-elf` toolchain, so a fresh start takes around **5–7 minutes
+of wall time** on a 32-CPU box (≈445 s measured on an AMD EPYC 8124P,
+16 phys × 2 SMT). Effective compile parallelism caps at ~5–10
+g++ invocations because ttnn ops are dispatched serially from Python
+and only the 5 RISC core builds × per-RISC srcs are parallelised
+within a single op; ~3 cores end up busy on average regardless of how
+many CPUs the host has.
+
+Subsequent runs on the same host hit a populated JIT cache and start
+in **~9 s** (the first forward pass through the warm-cache cold
+path). Warm iterations after that run at the wall numbers in the
+table above (~1.4 s per `forward_test`).
+
+For production / CI deployments where the 5–7 min first-run cost is
+prohibitive, the standard mitigations are:
+
+- **Process keepalive** — keep the inference process running so the
+  build cache stays warm across requests.
+- **Cache bundling** — ship the populated
+  `~/.cache/tt-metal-cache/9009805869222971872/` (≈2.9 GB) inside the
+  container/release artifact so deployment boots at the 9 s mark.
+- **Programmatic warmup** — call `ttnn_model.warmup(*args, n_iters=2)`
+  on `TtUniAD` before the user-facing inference loop to absorb the 9 s
+  first-call dispatch setup and prime trace replay. The method logs
+  `[warmup] iteration N/N — populating ttnn caches…` so a 9 s pause
+  isn't silent. Used by `test_ttnn_uniad.py::test_uniad` whenever
+  `TT_UNIAD_WARM_ITERS≥1`.
+
 ### Modulated deformable convolution
 
 The ResNet101 backbone runs 26 modulated deformable convs in

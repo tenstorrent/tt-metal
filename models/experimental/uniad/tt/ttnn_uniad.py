@@ -419,6 +419,34 @@ class TtUniAD:
             "prev_angle": 0,
         }
 
+    def warmup(self, *args, n_iters=2, **kwargs):
+        """Pre-populate ttnn op caches, JIT'd kernels, and trace replay buffers
+        by running `n_iters` forward passes. Without warmup, the first
+        forward call on Blackhole p150b takes ~9 s (ttnn op first-call
+        dispatch setup dominates); after warmup, subsequent calls run at
+        the warm-cache target of ~1.4 s.
+
+        Takes the same positional / keyword arguments as `forward_test`.
+        Per-sequence state is reset before each iteration and once at the
+        end, so the caller can fire its real `forward_test` immediately
+        afterwards. Per-iter output is discarded.
+
+        Default `n_iters=2`: iter#1 compiles + warms op caches, iter#2
+        captures the trace boundaries (BEV encoder + DETR encoder). After
+        2 warmup iters, the next forward replays the trace and runs hot.
+        """
+        for i in range(n_iters):
+            print(f"[warmup] iteration {i + 1}/{n_iters} — populating ttnn caches…", flush=True)
+            t0 = time.perf_counter()
+            self.reset_test_state()
+            self.forward_test(*args, **kwargs)
+            print(
+                f"[warmup] iteration {i + 1}/{n_iters} done ({(time.perf_counter() - t0):.2f} s)",
+                flush=True,
+            )
+        self.reset_test_state()
+        print("[warmup] complete — subsequent forward calls will run on warm cache", flush=True)
+
     def __call__(self, return_loss=True, **kwargs):
         return self.forward_test(**kwargs)
 

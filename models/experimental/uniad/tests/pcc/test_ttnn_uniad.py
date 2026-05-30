@@ -583,10 +583,31 @@ def test_uniad(device, reset_seeds, model_location_generator):
 
         reset_timing_stats()
 
-    for _ in range(_warm_iters):
-        ttnn_model.reset_test_state()
-        _forward()
-    ttnn_model.reset_test_state()
+    if _warm_iters > 0:
+        ttnn_model.warmup(
+            return_loss=False,
+            rescale=ttnn_rescale,
+            img_metas=ttnn_img_metas,
+            img=ttnn_img,
+            timestamp=ttnn_timestamp,
+            l2g_r_mat=ttnn_l2g_r_mat,
+            l2g_t=ttnn_l2g_t,
+            gt_lane_labels=ttnn_gt_lane_labels,
+            gt_lane_bboxes=ttnn_gt_lane_bboxes,
+            gt_lane_masks=ttnn_gt_lane_masks,
+            gt_segmentation=ttnn_gt_segmentation,
+            gt_instance=ttnn_gt_instance,
+            gt_centerness=ttnn_gt_centerness,
+            gt_offset=ttnn_gt_offset,
+            gt_flow=ttnn_gt_flow,
+            gt_backward_flow=ttnn_gt_backward_flow,
+            gt_occ_has_invalid_frame=ttnn_gt_occ_has_invalid_frame,
+            gt_occ_img_is_valid=ttnn_gt_occ_img_is_valid,
+            sdc_planning=ttnn_sdc_planning,
+            sdc_planning_mask=ttnn_sdc_planning_mask,
+            command=ttnn_command,
+            n_iters=_warm_iters,
+        )
     ttnn_output = _forward()
 
     logger.info(f"reference_output keys: {list(reference_output[0].keys())}")
