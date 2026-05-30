@@ -13,6 +13,7 @@
 #include "autograd/auto_context.hpp"
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "test_utils/comparison.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
@@ -66,8 +67,8 @@ TEST_F(N300CommOpsTest, TestAllReduceNotFullyTiled) {
         xt::view(xtensor, xt::all(), xt::all(), xt::all(), xt::range(0, size / 2)) +
         xt::view(xtensor, xt::all(), xt::all(), xt::all(), xt::range(size / 2, size));
 
-    EXPECT_TRUE(xt::allclose(all_reduce_expected, all_reduce_xtensor[0], /* rtol */ 1e-3, /* atol */ 1e-3));
-    EXPECT_TRUE(xt::allclose(all_reduce_expected, all_reduce_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-3));
+    ttml::test_utils::expect_allclose(all_reduce_expected, all_reduce_xtensor[0], /* rtol */ 1e-3, /* atol */ 1e-3);
+    ttml::test_utils::expect_allclose(all_reduce_expected, all_reduce_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-3);
 
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
@@ -86,16 +87,16 @@ TEST_F(N300CommOpsTest, TestAllReduceNotFullyTiled) {
 
     auto grad_xtensor = ttml::core::to_xtensor<float>(tensor->get_grad(), ttml::core::IdentityComposer{});
     EXPECT_EQ(grad_xtensor[0].shape(), grad_xtensor[1].shape());
-    EXPECT_TRUE(xt::allclose(
+    ttml::test_utils::expect_allclose(
         grad_data * num_devices_scale,
         grad_xtensor[0],
         /* rtol */ 1e-3,
-        /* atol */ 1e-2));
-    EXPECT_TRUE(xt::allclose(
+        /* atol */ 1e-2);
+    ttml::test_utils::expect_allclose(
         grad_data * num_devices_scale,
         grad_xtensor[1],
         /* rtol */ 1e-3,
-        /* atol */ 1e-2));
+        /* atol */ 1e-2);
 }
 
 TEST_F(N300CommOpsTest, TestAllReduceNanoGPT) {
@@ -125,8 +126,8 @@ TEST_F(N300CommOpsTest, TestAllReduceNanoGPT) {
         xt::view(xtensor, xt::all(), xt::all(), xt::all(), xt::range(0, size / 2)) +
         xt::view(xtensor, xt::all(), xt::all(), xt::all(), xt::range(size / 2, size));
 
-    EXPECT_TRUE(xt::allclose(all_reduce_expected, all_reduce_xtensor[0], /* rtol */ 1e-3, /* atol */ 2e-2));
-    EXPECT_TRUE(xt::allclose(all_reduce_expected, all_reduce_xtensor[1], /* rtol */ 1e-3, /* atol */ 2e-2));
+    ttml::test_utils::expect_allclose(all_reduce_expected, all_reduce_xtensor[0], /* rtol */ 1e-3, /* atol */ 2e-2);
+    ttml::test_utils::expect_allclose(all_reduce_expected, all_reduce_xtensor[1], /* rtol */ 1e-3, /* atol */ 2e-2);
 
     uint32_t seed2 = rng();
     xt::xarray<float> grad_data = ttml::test_utils::make_uniform_xarray<float>(
@@ -143,16 +144,16 @@ TEST_F(N300CommOpsTest, TestAllReduceNanoGPT) {
     auto num_devices_scale = static_cast<float>(ttml::autograd::ctx().get_device().num_devices());
     auto grad_xtensor = ttml::core::to_xtensor<float>(tensor->get_grad(), ttml::core::IdentityComposer{});
     EXPECT_EQ(grad_xtensor[0].shape(), grad_xtensor[1].shape());
-    EXPECT_TRUE(xt::allclose(
+    ttml::test_utils::expect_allclose(
         grad_data * num_devices_scale,
         grad_xtensor[0],
         /* rtol */ 1e-3,
-        /* atol */ 2e-2));
-    EXPECT_TRUE(xt::allclose(
+        /* atol */ 2e-2);
+    ttml::test_utils::expect_allclose(
         grad_data * num_devices_scale,
         grad_xtensor[1],
         /* rtol */ 1e-3,
-        /* atol */ 2e-2));
+        /* atol */ 2e-2);
 }
 
 TEST_F(N300CommOpsTest, TestAllReduceFullyTiled) {
@@ -181,8 +182,8 @@ TEST_F(N300CommOpsTest, TestAllReduceFullyTiled) {
         xt::view(xtensor, xt::all(), xt::all(), xt::all(), xt::range(0, size / 2)) +
         xt::view(xtensor, xt::all(), xt::all(), xt::all(), xt::range(size / 2, size));
 
-    EXPECT_TRUE(xt::allclose(all_reduce_expected, all_reduce_xtensor[0], /* rtol */ 1e-3, /* atol */ 1e-2));
-    EXPECT_TRUE(xt::allclose(all_reduce_expected, all_reduce_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2));
+    ttml::test_utils::expect_allclose(all_reduce_expected, all_reduce_xtensor[0], /* rtol */ 1e-3, /* atol */ 1e-2);
+    ttml::test_utils::expect_allclose(all_reduce_expected, all_reduce_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2);
 
     seed = rng();
     xt::xarray<float> grad_data = ttml::test_utils::make_uniform_xarray<float>(
@@ -199,16 +200,16 @@ TEST_F(N300CommOpsTest, TestAllReduceFullyTiled) {
     auto num_devices_scale = static_cast<float>(ttml::autograd::ctx().get_device().num_devices());
     auto grad_xtensor = ttml::core::to_xtensor<float>(tensor->get_grad(), ttml::core::IdentityComposer{});
     EXPECT_EQ(grad_xtensor[0].shape(), grad_xtensor[1].shape());
-    EXPECT_TRUE(xt::allclose(
+    ttml::test_utils::expect_allclose(
         grad_data * num_devices_scale,
         grad_xtensor[0],
         /* rtol */ 1e-3,
-        /* atol */ 1e-2));
-    EXPECT_TRUE(xt::allclose(
+        /* atol */ 1e-2);
+    ttml::test_utils::expect_allclose(
         grad_data * num_devices_scale,
         grad_xtensor[1],
         /* rtol */ 1e-3,
-        /* atol */ 1e-2));
+        /* atol */ 1e-2);
 }
 
 TEST_F(N300CommOpsTest, TestAllGatherNotFullyTiled) {
@@ -230,8 +231,8 @@ TEST_F(N300CommOpsTest, TestAllGatherNotFullyTiled) {
     auto gathered_tensor = ttml::ops::distributed::all_gather(tensor, 3);
 
     auto gathered_xtensor = ttml::core::to_xtensor<float>(gathered_tensor->get_value(), ttml::core::IdentityComposer{});
-    EXPECT_TRUE(xt::allclose(xtensor, gathered_xtensor[0], /* rtol */ 1e-3, /* atol */ 1e-2));
-    EXPECT_TRUE(xt::allclose(xtensor, gathered_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2));
+    ttml::test_utils::expect_allclose(xtensor, gathered_xtensor[0], /* rtol */ 1e-3, /* atol */ 1e-2);
+    ttml::test_utils::expect_allclose(xtensor, gathered_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2);
 
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
@@ -249,16 +250,16 @@ TEST_F(N300CommOpsTest, TestAllGatherNotFullyTiled) {
     auto num_devices_scale = static_cast<float>(ttml::autograd::ctx().get_device().num_devices());
     auto grad_xtensor = ttml::core::to_xtensor<float>(tensor->get_grad(), ttml::core::IdentityComposer{});
     EXPECT_EQ(grad_xtensor[0].shape(), grad_xtensor[1].shape());
-    EXPECT_TRUE(xt::allclose(
+    ttml::test_utils::expect_allclose(
         xt::view(grad_data, xt::all(), xt::all(), xt::all(), xt::range(0, size / 2)) * num_devices_scale,
         grad_xtensor[0],
         /* rtol */ 1e-3,
-        /* atol */ 1e-2));
-    EXPECT_TRUE(xt::allclose(
+        /* atol */ 1e-2);
+    ttml::test_utils::expect_allclose(
         xt::view(grad_data, xt::all(), xt::all(), xt::all(), xt::range(size / 2, size)) * num_devices_scale,
         grad_xtensor[1],
         /* rtol */ 1e-3,
-        /* atol */ 1e-2));
+        /* atol */ 1e-2);
 }
 
 TEST_F(N300CommOpsTest, TestAllGatherFullyTiled) {
@@ -279,8 +280,8 @@ TEST_F(N300CommOpsTest, TestAllGatherFullyTiled) {
     auto gathered_tensor = ttml::ops::distributed::all_gather(tensor, 3);
 
     auto gathered_xtensor = ttml::core::to_xtensor<float>(gathered_tensor->get_value(), ttml::core::IdentityComposer{});
-    EXPECT_TRUE(xt::allclose(xtensor, gathered_xtensor[0], /* rtol */ 1e-3, /* atol */ 1e-2));
-    EXPECT_TRUE(xt::allclose(xtensor, gathered_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2));
+    ttml::test_utils::expect_allclose(xtensor, gathered_xtensor[0], /* rtol */ 1e-3, /* atol */ 1e-2);
+    ttml::test_utils::expect_allclose(xtensor, gathered_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2);
 
     seed = rng();
     xt::xarray<float> grad_data = ttml::test_utils::make_uniform_xarray<float>(
@@ -297,16 +298,16 @@ TEST_F(N300CommOpsTest, TestAllGatherFullyTiled) {
     auto num_devices_scale = static_cast<float>(ttml::autograd::ctx().get_device().num_devices());
     auto grad_xtensor = ttml::core::to_xtensor<float>(tensor->get_grad(), ttml::core::IdentityComposer{});
     EXPECT_EQ(grad_xtensor[0].shape(), grad_xtensor[1].shape());
-    EXPECT_TRUE(xt::allclose(
+    ttml::test_utils::expect_allclose(
         xt::view(grad_data, xt::all(), xt::all(), xt::all(), xt::range(0, size / 2)) * num_devices_scale,
         grad_xtensor[0],
         /* rtol */ 1e-3,
-        /* atol */ 1e-2));
-    EXPECT_TRUE(xt::allclose(
+        /* atol */ 1e-2);
+    ttml::test_utils::expect_allclose(
         xt::view(grad_data, xt::all(), xt::all(), xt::all(), xt::range(size / 2, size)) * num_devices_scale,
         grad_xtensor[1],
         /* rtol */ 1e-3,
-        /* atol */ 1e-2));
+        /* atol */ 1e-2);
 }
 
 TEST_F(N300CommOpsTest, TestScatterNotFullyTiled) {
@@ -330,12 +331,12 @@ TEST_F(N300CommOpsTest, TestScatterNotFullyTiled) {
     // check forward
     auto xtensors_back = ttml::core::to_xtensor<float>(scattered_tensor->get_value(), ttml::core::IdentityComposer{});
     auto num_devices_scale = static_cast<float>(ttml::autograd::ctx().get_device().num_devices());
-    EXPECT_TRUE(xt::allclose(
+    ttml::test_utils::expect_allclose(
         xt::view(xtensor, xt::all(), xt::all(), xt::all(), xt::range(0, size / 2)) * num_devices_scale,
-        xtensors_back[0]));
-    EXPECT_TRUE(xt::allclose(
+        xtensors_back[0]);
+    ttml::test_utils::expect_allclose(
         xt::view(xtensor, xt::all(), xt::all(), xt::all(), xt::range(size / 2, size)) * num_devices_scale,
-        xtensors_back[1]));
+        xtensors_back[1]);
 
     // check backward
     auto& rng = ttml::autograd::ctx().get_generator();
@@ -356,8 +357,8 @@ TEST_F(N300CommOpsTest, TestScatterNotFullyTiled) {
     EXPECT_TRUE(grad_data.shape() == grad_xtensor[1].shape());
 
     EXPECT_EQ(grad_xtensor[0], grad_xtensor[1]);
-    EXPECT_TRUE(xt::allclose(grad_data, grad_xtensor[0], /* rtol */ 1e-3, /* atol */ 1e-2));
-    EXPECT_TRUE(xt::allclose(grad_data, grad_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2));
+    ttml::test_utils::expect_allclose(grad_data, grad_xtensor[0], /* rtol */ 1e-3, /* atol */ 1e-2);
+    ttml::test_utils::expect_allclose(grad_data, grad_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2);
 }
 
 TEST_F(N300CommOpsTest, TestScatterFullyTiled) {
@@ -377,8 +378,8 @@ TEST_F(N300CommOpsTest, TestScatterFullyTiled) {
         ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(xtensor, device, ttnn::Layout::TILE, mapper.get());
 
     auto xtensor_after_replication = ttml::core::to_xtensor<float>(tt_tensor, ttml::core::IdentityComposer{});
-    EXPECT_TRUE(xt::allclose(xtensor, xtensor_after_replication[0], /* rtol */ 1e-3, /* atol */ 1e-2));
-    EXPECT_TRUE(xt::allclose(xtensor, xtensor_after_replication[1], /* rtol */ 1e-3, /* atol */ 1e-2));
+    ttml::test_utils::expect_allclose(xtensor, xtensor_after_replication[0], /* rtol */ 1e-3, /* atol */ 1e-2);
+    ttml::test_utils::expect_allclose(xtensor, xtensor_after_replication[1], /* rtol */ 1e-3, /* atol */ 1e-2);
 
     auto tensor = ttml::autograd::create_tensor(tt_tensor, /* requires_grad */ true);
     auto scattered_tensor = ttml::ops::distributed::reduce_scatter(tensor, 3);
@@ -386,16 +387,16 @@ TEST_F(N300CommOpsTest, TestScatterFullyTiled) {
     // check forward
     auto xtensors_back = ttml::core::to_xtensor<float>(scattered_tensor->get_value(), ttml::core::IdentityComposer{});
     auto num_devices_scale = static_cast<float>(ttml::autograd::ctx().get_device().num_devices());
-    EXPECT_TRUE(xt::allclose(
+    ttml::test_utils::expect_allclose(
         xt::view(xtensor, xt::all(), xt::all(), xt::all(), xt::range(0, size / 2)) * num_devices_scale,
         xtensors_back[0],
         /* rtol */ 1e-3,
-        /* atol */ 1e-2));
-    EXPECT_TRUE(xt::allclose(
+        /* atol */ 1e-2);
+    ttml::test_utils::expect_allclose(
         xt::view(xtensor, xt::all(), xt::all(), xt::all(), xt::range(size / 2, size)) * num_devices_scale,
         xtensors_back[1],
         /* rtol */ 1e-3,
-        /* atol */ 1e-2));
+        /* atol */ 1e-2);
 
     // check backward
     seed = rng();
@@ -414,6 +415,6 @@ TEST_F(N300CommOpsTest, TestScatterFullyTiled) {
     EXPECT_TRUE(grad_data.shape() == grad_xtensor[1].shape());
 
     EXPECT_EQ(grad_xtensor[0], grad_xtensor[1]);
-    EXPECT_TRUE(xt::allclose(grad_data, grad_xtensor[0], /* rtol */ 1e-3, /* atol */ 1e-2));
-    EXPECT_TRUE(xt::allclose(grad_data, grad_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2));
+    ttml::test_utils::expect_allclose(grad_data, grad_xtensor[0], /* rtol */ 1e-3, /* atol */ 1e-2);
+    ttml::test_utils::expect_allclose(grad_data, grad_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2);
 }

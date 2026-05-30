@@ -12,6 +12,7 @@
 #include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "test_utils/comparison.hpp"
 
 class SelectTargetLogitTest : public ::testing::Test {
 protected:
@@ -62,7 +63,7 @@ TEST_F(SelectTargetLogitTest, SmallFullVocab) {
     auto expected_xt = select_target_logit_reference(logit_t, target_t, 0U, 8U);
 
     ASSERT_EQ(result_xt.shape(), expected_xt.shape());
-    EXPECT_TRUE(xt::allclose(result_xt, expected_xt, /*rtol=*/1e-3F, /*atol=*/1e-3F));
+    ttml::test_utils::expect_allclose(result_xt, expected_xt, /*rtol=*/1e-3F, /*atol=*/1e-3F);
 }
 
 TEST_F(SelectTargetLogitTest, SmallPartialVocab) {
@@ -86,7 +87,7 @@ TEST_F(SelectTargetLogitTest, SmallPartialVocab) {
     auto expected_xt = select_target_logit_reference(logit_t, target_t, 4U, 8U);
 
     ASSERT_EQ(result_xt.shape(), expected_xt.shape());
-    EXPECT_TRUE(xt::allclose(result_xt, expected_xt, /*rtol=*/1e-3F, /*atol=*/1e-3F));
+    ttml::test_utils::expect_allclose(result_xt, expected_xt, /*rtol=*/1e-3F, /*atol=*/1e-3F);
 
     // Explicit checks
     EXPECT_NEAR(result_xt(0, 0, 0, 0), 0.F, 1e-3F);   // out of shard → 0
@@ -124,7 +125,7 @@ TEST_F(SelectTargetLogitTest, BatchedNonAlignedShape) {
     auto expected_xt = select_target_logit_reference(logit_t, target_t, 0U, V);
 
     ASSERT_EQ(result_xt.shape(), expected_xt.shape());
-    EXPECT_TRUE(xt::allclose(result_xt, expected_xt, /*rtol=*/3e-2F, /*atol=*/1e-2F));
+    ttml::test_utils::expect_allclose(result_xt, expected_xt, /*rtol=*/3e-2F, /*atol=*/1e-2F);
 }
 
 TEST_F(SelectTargetLogitTest, BatchedPartialVocabShard) {
@@ -163,7 +164,7 @@ TEST_F(SelectTargetLogitTest, BatchedPartialVocabShard) {
     auto expected_xt = select_target_logit_reference(logit_t, target_t, first_v, last_v);
 
     ASSERT_EQ(result_xt.shape(), expected_xt.shape());
-    EXPECT_TRUE(xt::allclose(result_xt, expected_xt, /*rtol=*/3e-2F, /*atol=*/1e-2F));
+    ttml::test_utils::expect_allclose(result_xt, expected_xt, /*rtol=*/3e-2F, /*atol=*/1e-2F);
 }
 
 TEST_F(SelectTargetLogitTest, LargeVocab) {
@@ -191,7 +192,7 @@ TEST_F(SelectTargetLogitTest, LargeVocab) {
     auto expected_xt = select_target_logit_reference(logit_t, target_t, 0U, V);
 
     ASSERT_EQ(result_xt.shape(), expected_xt.shape());
-    EXPECT_TRUE(xt::allclose(result_xt, expected_xt, /*rtol=*/3e-2F, /*atol=*/1e-2F));
+    ttml::test_utils::expect_allclose(result_xt, expected_xt, /*rtol=*/3e-2F, /*atol=*/1e-2F);
 }
 
 TEST_F(SelectTargetLogitTest, NIGHTLY_LargeBatchLargeVocab) {
@@ -226,5 +227,5 @@ TEST_F(SelectTargetLogitTest, NIGHTLY_LargeBatchLargeVocab) {
     auto expected_xt = select_target_logit_reference(logit_t, target_t, 0U, V);
 
     ASSERT_EQ(result_xt.shape(), expected_xt.shape());
-    EXPECT_TRUE(xt::allclose(result_xt, expected_xt, /*rtol=*/3e-2F, /*atol=*/1e-2F));
+    ttml::test_utils::expect_allclose(result_xt, expected_xt, /*rtol=*/3e-2F, /*atol=*/1e-2F);
 }

@@ -21,6 +21,7 @@
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/losses.hpp"
+#include "test_utils/comparison.hpp"
 
 namespace ttml::ops::tests {
 
@@ -130,12 +131,12 @@ TEST_F(UnaryOpsTest, Exp) {
     auto result_xt = core::to_xtensor(result->get_value());
 
     xt::xarray<float> expected = {{{{1.F, 2.71828F, 0.36788F, 1.64872F}}}};
-    EXPECT_TRUE(xt::allclose(result_xt, expected, 1e-2F, 1e-2F));
+    ttml::test_utils::expect_allclose(result_xt, expected, 1e-2F, 1e-2F);
 
     result->backward();
     auto grad = core::to_xtensor(tensor_ptr->get_grad());
     // d(e^x)/dx = e^x, upstream grad is 1
-    EXPECT_TRUE(xt::allclose(grad, expected, 1e-2F, 1e-2F));
+    ttml::test_utils::expect_allclose(grad, expected, 1e-2F, 1e-2F);
 }
 
 TEST_F(UnaryOpsTest, Clip) {
@@ -148,13 +149,13 @@ TEST_F(UnaryOpsTest, Clip) {
     auto result_xt = core::to_xtensor(result->get_value());
 
     xt::xarray<float> expected = {{{{1.F, 2.F, 3.F, 3.F}}}};
-    EXPECT_TRUE(xt::allclose(result_xt, expected));
+    ttml::test_utils::expect_allclose(result_xt, expected);
 
     result->backward();
     auto grad = core::to_xtensor(tensor_ptr->get_grad());
     // grad passes through where lo <= x <= hi, zero otherwise
     xt::xarray<float> expected_grad = {{{{0.F, 1.F, 1.F, 0.F}}}};
-    EXPECT_TRUE(xt::allclose(grad, expected_grad));
+    ttml::test_utils::expect_allclose(grad, expected_grad);
 }
 
 TEST_F(UnaryOpsTest, Silu) {
@@ -181,7 +182,7 @@ TEST_F(UnaryOpsTest, Silu) {
     // Compare forward results - should be identical since forward is the same
     auto kernel_xtensor = core::to_xtensor(result_kernel->get_value());
     auto composite_xtensor = core::to_xtensor(result_composite->get_value());
-    EXPECT_TRUE(xt::allclose(kernel_xtensor, composite_xtensor, 8e-3F, 4e-2F));
+    ttml::test_utils::expect_allclose(kernel_xtensor, composite_xtensor, 8e-3F, 4e-2F);
 
     // Backward pass - create zero targets for MSE loss
     auto target_kernel = autograd::create_tensor(core::zeros_like(result_kernel->get_value()));
@@ -198,7 +199,7 @@ TEST_F(UnaryOpsTest, Silu) {
     // Compare backward gradients - both implementations should produce same gradients
     auto grad_kernel = core::to_xtensor(a_kernel->get_grad());
     auto grad_composite = core::to_xtensor(a_composite->get_grad());
-    EXPECT_TRUE(xt::allclose(grad_kernel, grad_composite, 8e-3F, 4e-2F));
+    ttml::test_utils::expect_allclose(grad_kernel, grad_composite, 8e-3F, 4e-2F);
 }
 
 }  // namespace ttml::ops::tests

@@ -21,6 +21,7 @@
 #include "core/tt_tensor_utils.hpp"
 #include "ops/distributed/ring_attention_sdpa.hpp"
 #include "ops/scaled_dot_product_attention.hpp"
+#include "test_utils/comparison.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn/distributed/create_socket.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
@@ -359,8 +360,8 @@ static void TestRingAttention(
         }
     }
 
-    EXPECT_TRUE(xt::allclose(ref_result.output, gathered_output, rtol, atol))
-        << "Ring attention output does not match reference SDPA output";
+    ttml::test_utils::expect_allclose(
+        ref_result.output, gathered_output, rtol, atol, "Ring attention output does not match reference SDPA output");
 
     if (test_backward) {
         const auto grad_seed = rng();
@@ -403,17 +404,17 @@ static void TestRingAttention(
             }
         }
 
-        EXPECT_TRUE(xt::allclose(ref_grads.dQ, gathered_dQ, rtol, atol))
-            << "Ring attention dQ gradient does not match reference";
+        ttml::test_utils::expect_allclose(
+            ref_grads.dQ, gathered_dQ, rtol, atol, "Ring attention dQ gradient does not match reference");
         // K is much less accurate than dQ and dV. Relative error is better though.
         // Also take into account the sampling distribution. Most of our tests sample from
         // zero mean distirbution under which sdpa output is very small making all tests pass easily.
         // U[0, 2] is much trickier to pass tests.
         auto katol = 3.5;
-        EXPECT_TRUE(xt::allclose(ref_grads.dK, gathered_dK, rtol, katol))
-            << "Ring attention dK gradient does not match reference";
-        EXPECT_TRUE(xt::allclose(ref_grads.dV, gathered_dV, rtol, atol))
-            << "Ring attention dV gradient does not match reference";
+        ttml::test_utils::expect_allclose(
+            ref_grads.dK, gathered_dK, rtol, katol, "Ring attention dK gradient does not match reference");
+        ttml::test_utils::expect_allclose(
+            ref_grads.dV, gathered_dV, rtol, atol, "Ring attention dV gradient does not match reference");
     }
 }
 

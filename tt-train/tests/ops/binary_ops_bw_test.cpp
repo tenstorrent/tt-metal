@@ -10,6 +10,7 @@
 #include "autograd/tensor.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/binary_ops.hpp"
+#include "test_utils/comparison.hpp"
 
 namespace ttml::ops::tests {
 
@@ -44,8 +45,8 @@ TEST_F(BinaryOpsBackwardTest, AddSameShape) {
     auto b_grad = core::to_xtensor(b->get_grad());
 
     // d(a+b)/da = 1, d(a+b)/db = 1
-    EXPECT_TRUE(xt::allclose(a_grad, xt::ones_like(data_a)));
-    EXPECT_TRUE(xt::allclose(b_grad, xt::ones_like(data_b)));
+    ttml::test_utils::expect_allclose(a_grad, xt::ones_like(data_a));
+    ttml::test_utils::expect_allclose(b_grad, xt::ones_like(data_b));
 }
 
 TEST_F(BinaryOpsBackwardTest, SubSameShape) {
@@ -63,8 +64,8 @@ TEST_F(BinaryOpsBackwardTest, SubSameShape) {
     auto b_grad = core::to_xtensor(b->get_grad());
 
     // d(a-b)/da = 1, d(a-b)/db = -1
-    EXPECT_TRUE(xt::allclose(a_grad, xt::ones_like(data_a)));
-    EXPECT_TRUE(xt::allclose(b_grad, -xt::ones_like(data_b)));
+    ttml::test_utils::expect_allclose(a_grad, xt::ones_like(data_a));
+    ttml::test_utils::expect_allclose(b_grad, -xt::ones_like(data_b));
 }
 
 TEST_F(BinaryOpsBackwardTest, MulSameShape) {
@@ -82,8 +83,8 @@ TEST_F(BinaryOpsBackwardTest, MulSameShape) {
     auto b_grad = core::to_xtensor(b->get_grad());
 
     // d(a*b)/da = b, d(a*b)/db = a
-    EXPECT_TRUE(xt::allclose(a_grad, data_b));
-    EXPECT_TRUE(xt::allclose(b_grad, data_a));
+    ttml::test_utils::expect_allclose(a_grad, data_b);
+    ttml::test_utils::expect_allclose(b_grad, data_a);
 }
 
 TEST_F(BinaryOpsBackwardTest, MulScalar) {
@@ -98,7 +99,7 @@ TEST_F(BinaryOpsBackwardTest, MulScalar) {
     auto a_grad = core::to_xtensor(a->get_grad());
 
     // d(a*c)/da = c
-    EXPECT_TRUE(xt::allclose(a_grad, xt::ones_like(data_a) * 3.0F));
+    ttml::test_utils::expect_allclose(a_grad, xt::ones_like(data_a) * 3.0F);
 }
 
 TEST_F(BinaryOpsBackwardTest, DivSameShape) {
@@ -118,8 +119,8 @@ TEST_F(BinaryOpsBackwardTest, DivSameShape) {
     // d(a/b)/da = 1/b, d(a/b)/db = -a/b^2
     xt::xarray<float> expected_a_grad = 1.0F / data_b;
     xt::xarray<float> expected_b_grad = -data_a / (data_b * data_b);
-    EXPECT_TRUE(xt::allclose(a_grad, expected_a_grad, /* rtol */ 1e-2F, /* atol */ 1e-2F));
-    EXPECT_TRUE(xt::allclose(b_grad, expected_b_grad, /* rtol */ 1e-2F, /* atol */ 1e-2F));
+    ttml::test_utils::expect_allclose(a_grad, expected_a_grad, /* rtol */ 1e-2F, /* atol */ 1e-2F);
+    ttml::test_utils::expect_allclose(b_grad, expected_b_grad, /* rtol */ 1e-2F, /* atol */ 1e-2F);
 }
 
 TEST_F(BinaryOpsBackwardTest, MinSameShape) {
@@ -140,8 +141,8 @@ TEST_F(BinaryOpsBackwardTest, MinSameShape) {
     // grad flows to the winner; ties split 50/50
     xt::xarray<float> expected_a_grad = {{{{1.F, 0.F, 0.5F, 1.F}}}};
     xt::xarray<float> expected_b_grad = {{{{0.F, 1.F, 0.5F, 0.F}}}};
-    EXPECT_TRUE(xt::allclose(a_grad, expected_a_grad, 1e-3F, 1e-3F));
-    EXPECT_TRUE(xt::allclose(b_grad, expected_b_grad, 1e-3F, 1e-3F));
+    ttml::test_utils::expect_allclose(a_grad, expected_a_grad, 1e-3F, 1e-3F);
+    ttml::test_utils::expect_allclose(b_grad, expected_b_grad, 1e-3F, 1e-3F);
 }
 
 TEST_F(BinaryOpsBackwardTest, MaxSameShape) {
@@ -162,8 +163,8 @@ TEST_F(BinaryOpsBackwardTest, MaxSameShape) {
     // grad flows to the winner; ties split 50/50
     xt::xarray<float> expected_a_grad = {{{{0.F, 1.F, 0.5F, 0.F}}}};
     xt::xarray<float> expected_b_grad = {{{{1.F, 0.F, 0.5F, 1.F}}}};
-    EXPECT_TRUE(xt::allclose(a_grad, expected_a_grad, 1e-3F, 1e-3F));
-    EXPECT_TRUE(xt::allclose(b_grad, expected_b_grad, 1e-3F, 1e-3F));
+    ttml::test_utils::expect_allclose(a_grad, expected_a_grad, 1e-3F, 1e-3F);
+    ttml::test_utils::expect_allclose(b_grad, expected_b_grad, 1e-3F, 1e-3F);
 }
 
 // ============================================================================
@@ -205,14 +206,14 @@ TEST_P(AddBroadcastBackwardTest, GradShapeMatchesInput) {
     auto b_grad = core::to_xtensor(b->get_grad());
 
     // d(a+b)/da = 1
-    EXPECT_TRUE(xt::allclose(a_grad, xt::ones_like(data_a)));
+    ttml::test_utils::expect_allclose(a_grad, xt::ones_like(data_a));
 
     // d(a+b)/db = 1, reduced over broadcast dims
     // Each b element accumulates (a_volume / b_volume) copies of 1
     auto a_volume = static_cast<float>(data_a.size());
     auto b_volume = static_cast<float>(data_b.size());
     xt::xarray<float> expected_b_grad = xt::ones_like(data_b) * (a_volume / b_volume);
-    EXPECT_TRUE(xt::allclose(b_grad, expected_b_grad));
+    ttml::test_utils::expect_allclose(b_grad, expected_b_grad);
 }
 
 TEST_P(SubBroadcastBackwardTest, GradShapeMatchesInput) {
@@ -232,13 +233,13 @@ TEST_P(SubBroadcastBackwardTest, GradShapeMatchesInput) {
     auto b_grad = core::to_xtensor(b->get_grad());
 
     // d(a-b)/da = 1
-    EXPECT_TRUE(xt::allclose(a_grad, xt::ones_like(data_a)));
+    ttml::test_utils::expect_allclose(a_grad, xt::ones_like(data_a));
 
     // d(a-b)/db = -1, reduced over broadcast dims
     auto a_volume = static_cast<float>(data_a.size());
     auto b_volume = static_cast<float>(data_b.size());
     xt::xarray<float> expected_b_grad = -xt::ones_like(data_b) * (a_volume / b_volume);
-    EXPECT_TRUE(xt::allclose(b_grad, expected_b_grad));
+    ttml::test_utils::expect_allclose(b_grad, expected_b_grad);
 }
 
 TEST_P(MulBroadcastBackwardTest, GradShapeMatchesInput) {
@@ -260,14 +261,14 @@ TEST_P(MulBroadcastBackwardTest, GradShapeMatchesInput) {
     auto b_grad = core::to_xtensor(b->get_grad());
 
     // d(a*b)/da = b (broadcast) -> each element = 2
-    EXPECT_TRUE(xt::allclose(a_grad, xt::ones_like(data_a) * 2.0F));
+    ttml::test_utils::expect_allclose(a_grad, xt::ones_like(data_a) * 2.0F);
 
     // d(a*b)/db = a, reduced over broadcast dims.
     // Each b element sees (a_volume / b_volume) copies of a=3, so b_grad = 3 * (a_volume / b_volume).
     auto a_volume = static_cast<float>(data_a.size());
     auto b_volume = static_cast<float>(data_b.size());
     xt::xarray<float> expected_b_grad = xt::ones_like(data_b) * 3.0F * (a_volume / b_volume);
-    EXPECT_TRUE(xt::allclose(b_grad, expected_b_grad));
+    ttml::test_utils::expect_allclose(b_grad, expected_b_grad);
 }
 
 // Same-rank broadcast: b has a 1 in exactly one dimension

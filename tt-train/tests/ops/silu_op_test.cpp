@@ -14,6 +14,7 @@
 #include "core/tt_tensor_utils.hpp"
 #include "ops/losses.hpp"
 #include "ops/unary_ops.hpp"
+#include "test_utils/comparison.hpp"
 
 class SiLUOpTest : public ::testing::Test {
 protected:
@@ -107,7 +108,7 @@ void CompareKernelVsReference(const xt::xarray<float>& input_data) {
     // Compare forward results
     // NOTE: This comparison does not much make sense for SiLU, because there is no forward SiLU composite if I am not
     // mistaken, but we still do it for consistency.
-    EXPECT_TRUE(xt::allclose(result_kernel_xtensor, result_reference_xtensor, 1.0e-3F, 3e-2F));
+    ttml::test_utils::expect_allclose(result_kernel_xtensor, result_reference_xtensor, 1.0e-3F, 3e-2F);
 
     // Backward pass - create target and compute gradients
     auto target_kernel = autograd::create_tensor(core::zeros_like(result_kernel->get_value()));
@@ -123,7 +124,7 @@ void CompareKernelVsReference(const xt::xarray<float>& input_data) {
     auto input_grad_kernel = core::to_xtensor(input_kernel->get_grad());
     auto input_grad_reference = core::to_xtensor(input_reference->get_grad());
 
-    EXPECT_TRUE(xt::allclose(input_grad_kernel, input_grad_reference, 1.0e-3F, 3e-2F));
+    ttml::test_utils::expect_allclose(input_grad_kernel, input_grad_reference, 1.0e-3F, 3e-2F);
 }
 
 /**

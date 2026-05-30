@@ -15,6 +15,7 @@
 #include "core/device.hpp"
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "test_utils/comparison.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
@@ -49,9 +50,9 @@ TEST_F(ReduceOpTest, TestMeanDim0) {
     auto mean_ttnn = ttml::core::to_xtensor(ttnn_mean_dim0);
     auto mean_moreh = ttml::core::to_xtensor(moreh_mean_dim0);
 
-    EXPECT_TRUE(xt::allclose(mean_ttnn, mean_moreh, /*rtol=*/7e-2, /*atol=*/1e-3));
-    EXPECT_TRUE(xt::allclose(mean_xtensor, mean_ttnn, /*rtol=*/1e-3, /*atol=*/1e-2));
-    EXPECT_TRUE(xt::allclose(mean_xtensor, mean_moreh, /*rtol=*/1e-3, /*atol=*/1e-2));
+    ttml::test_utils::expect_allclose(mean_ttnn, mean_moreh, /*rtol=*/7e-2, /*atol=*/1e-3);
+    ttml::test_utils::expect_allclose(mean_xtensor, mean_ttnn, /*rtol=*/1e-3, /*atol=*/1e-2);
+    ttml::test_utils::expect_allclose(mean_xtensor, mean_moreh, /*rtol=*/1e-3, /*atol=*/1e-2);
 }
 
 TEST_F(ReduceOpTest, TestSumDim0) {
@@ -72,9 +73,9 @@ TEST_F(ReduceOpTest, TestSumDim0) {
     auto sum_ttnn = ttml::core::to_xtensor(ttnn_sum_dim0);
     auto sum_moreh = ttml::core::to_xtensor(moreh_sum_dim0);
 
-    EXPECT_TRUE(xt::allclose(sum_ttnn, sum_moreh, /*rtol=*/1e-4, /*atol=*/1e-3));
-    EXPECT_TRUE(xt::allclose(sum_xtensor, sum_ttnn, /*rtol=*/1e-2, /*atol=*/1e-2));
-    EXPECT_TRUE(xt::allclose(sum_xtensor, sum_moreh, /*rtol=*/1e-2, /*atol=*/1e-2));
+    ttml::test_utils::expect_allclose(sum_ttnn, sum_moreh, /*rtol=*/1e-4, /*atol=*/1e-3);
+    ttml::test_utils::expect_allclose(sum_xtensor, sum_ttnn, /*rtol=*/1e-2, /*atol=*/1e-2);
+    ttml::test_utils::expect_allclose(sum_xtensor, sum_moreh, /*rtol=*/1e-2, /*atol=*/1e-2);
 }
 
 TEST_F(ReduceOpTest, TestMeanDim3) {
@@ -94,9 +95,9 @@ TEST_F(ReduceOpTest, TestMeanDim3) {
 
     auto mean_ttnn = ttml::core::to_xtensor(ttnn_mean_dim3);
     auto mean_moreh = ttml::core::to_xtensor(moreh_mean_dim3);
-    EXPECT_TRUE(xt::allclose(mean_ttnn, mean_moreh, /*rtol=*/1e-4, /*atol=*/1e-3));
-    EXPECT_TRUE(xt::allclose(mean_xtensor, mean_ttnn, /*rtol=*/1e-3, /*atol=*/1e-2));
-    EXPECT_TRUE(xt::allclose(mean_xtensor, mean_moreh, /*rtol=*/1e-3, /*atol=*/1e-2));
+    ttml::test_utils::expect_allclose(mean_ttnn, mean_moreh, /*rtol=*/1e-4, /*atol=*/1e-3);
+    ttml::test_utils::expect_allclose(mean_xtensor, mean_ttnn, /*rtol=*/1e-3, /*atol=*/1e-2);
+    ttml::test_utils::expect_allclose(mean_xtensor, mean_moreh, /*rtol=*/1e-3, /*atol=*/1e-2);
 }
 
 TEST_F(ReduceOpTest, TestSumDim3) {
@@ -117,9 +118,9 @@ TEST_F(ReduceOpTest, TestSumDim3) {
     auto sum_ttnn = ttml::core::to_xtensor(ttnn_sum_dim3);
     auto sum_moreh = ttml::core::to_xtensor(moreh_sum_dim3);
 
-    EXPECT_TRUE(xt::allclose(sum_ttnn, sum_moreh, /*rtol=*/1e-4, /*atol=*/1e-3));
-    EXPECT_TRUE(xt::allclose(sum_xtensor, sum_ttnn, /*rtol=*/1e-2, /*atol=*/1e-2));
-    EXPECT_TRUE(xt::allclose(sum_xtensor, sum_moreh, /*rtol=*/1e-2, /*atol=*/1e-2));
+    ttml::test_utils::expect_allclose(sum_ttnn, sum_moreh, /*rtol=*/1e-4, /*atol=*/1e-3);
+    ttml::test_utils::expect_allclose(sum_xtensor, sum_ttnn, /*rtol=*/1e-2, /*atol=*/1e-2);
+    ttml::test_utils::expect_allclose(sum_xtensor, sum_moreh, /*rtol=*/1e-2, /*atol=*/1e-2);
 }
 
 TEST_F(ReduceOpTest, TestMeanLargeDim3) {
@@ -140,7 +141,7 @@ TEST_F(ReduceOpTest, TestMeanLargeDim3) {
     auto mean_ttnn = ttml::core::to_xtensor(ttnn_mean_dim3);
     auto mean_moreh = ttml::core::to_xtensor(moreh_mean_dim3);
 
-    EXPECT_TRUE(xt::allclose(mean_ttnn, mean_moreh, /*rtol=*/1e-4, /*atol=*/1e-3));
-    EXPECT_TRUE(xt::allclose(mean_xtensor, mean_ttnn, /*rtol=*/1e-3, /*atol=*/1e-2));
-    EXPECT_TRUE(xt::allclose(mean_xtensor, mean_moreh, /*rtol=*/1e-3, /*atol=*/1e-2));
+    ttml::test_utils::expect_allclose(mean_ttnn, mean_moreh, /*rtol=*/1e-4, /*atol=*/1e-3);
+    ttml::test_utils::expect_allclose(mean_xtensor, mean_ttnn, /*rtol=*/1e-3, /*atol=*/1e-2);
+    ttml::test_utils::expect_allclose(mean_xtensor, mean_moreh, /*rtol=*/1e-3, /*atol=*/1e-2);
 }

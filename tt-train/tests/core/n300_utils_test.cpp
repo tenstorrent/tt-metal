@@ -13,6 +13,7 @@
 #include "core/compute_kernel_config.hpp"
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "test_utils/comparison.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -55,8 +56,8 @@ TEST_F(N300UtilsTest, TestXTensorReplicateInt32) {
         ttml::core::from_xtensor<int32_t, ttnn::DataType::INT32>(xtensor, device, ttnn::Layout::TILE, mapper.get());
     auto xtensors_back = ttml::core::to_xtensor<int32_t>(tensor, ttml::core::IdentityComposer{});
 
-    EXPECT_TRUE(xt::allclose(xtensor, xtensors_back[0]));
-    EXPECT_TRUE(xt::allclose(xtensor, xtensors_back[1]));
+    ttml::test_utils::expect_allclose(xtensor, xtensors_back[0]);
+    ttml::test_utils::expect_allclose(xtensor, xtensors_back[1]);
 }
 
 TEST_F(N300UtilsTest, TestXTensorReplicateUInt32) {
@@ -68,8 +69,8 @@ TEST_F(N300UtilsTest, TestXTensorReplicateUInt32) {
     auto tensor =
         ttml::core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(xtensor, device, ttnn::Layout::TILE, mapper.get());
     auto xtensors_back = ttml::core::to_xtensor<uint32_t>(tensor, ttml::core::IdentityComposer{});
-    EXPECT_TRUE(xt::allclose(xtensor, xtensors_back[0]));
-    EXPECT_TRUE(xt::allclose(xtensor, xtensors_back[1]));
+    ttml::test_utils::expect_allclose(xtensor, xtensors_back[0]);
+    ttml::test_utils::expect_allclose(xtensor, xtensors_back[1]);
 }
 
 TEST_F(N300UtilsTest, TestXTensorReplicate) {
@@ -81,8 +82,8 @@ TEST_F(N300UtilsTest, TestXTensorReplicate) {
     auto tensor = ttml::core::from_xtensor(xtensor, device, ttnn::Layout::TILE, mapper.get());
     auto xtensors_back = ttml::core::to_xtensor(tensor, ttml::core::IdentityComposer{});
 
-    EXPECT_TRUE(xt::allclose(xtensor, xtensors_back[0]));
-    EXPECT_TRUE(xt::allclose(xtensor, xtensors_back[1]));
+    ttml::test_utils::expect_allclose(xtensor, xtensors_back[0]);
+    ttml::test_utils::expect_allclose(xtensor, xtensors_back[1]);
 }
 
 TEST_F(N300UtilsTest, TestXTensorShardAxis3) {
@@ -100,8 +101,8 @@ TEST_F(N300UtilsTest, TestXTensorShardAxis3) {
     xt::xarray<float> chunk0 = xt::view(xtensor, xt::all(), xt::all(), xt::all(), xt::range(0, 2));
     xt::xarray<float> chunk1 = xt::view(xtensor, xt::all(), xt::all(), xt::all(), xt::range(2, 4));
 
-    EXPECT_TRUE(xt::allclose(chunk0, xtensors_back[0]));
-    EXPECT_TRUE(xt::allclose(chunk1, xtensors_back[1]));
+    ttml::test_utils::expect_allclose(chunk0, xtensors_back[0]);
+    ttml::test_utils::expect_allclose(chunk1, xtensors_back[1]);
 }
 
 TEST_F(N300UtilsTest, TestXTensorShardAxis2) {
@@ -119,8 +120,8 @@ TEST_F(N300UtilsTest, TestXTensorShardAxis2) {
     xt::xarray<float> chunk0 = xt::view(xtensor, xt::all(), xt::all(), xt::range(0, 1), xt::all());
     xt::xarray<float> chunk1 = xt::view(xtensor, xt::all(), xt::all(), xt::range(1, 2), xt::all());
 
-    EXPECT_TRUE(xt::allclose(chunk0, xtensors_back[0]));
-    EXPECT_TRUE(xt::allclose(chunk1, xtensors_back[1]));
+    ttml::test_utils::expect_allclose(chunk0, xtensors_back[0]);
+    ttml::test_utils::expect_allclose(chunk1, xtensors_back[1]);
 }
 
 TEST_F(N300UtilsTest, TestXTensorReplicateAllReduce) {
@@ -146,8 +147,8 @@ TEST_F(N300UtilsTest, TestXTensorReplicateAllReduce) {
     std::cout << "xtensors_back[0]: " << xtensors_back[0] << std::endl;
     std::cout << "xtensors_back[1]: " << xtensors_back[1] << std::endl;
     std::cout << "reduced_tensor: " << reduced_tensor << std::endl;
-    EXPECT_TRUE(xt::allclose(reduced_tensor, xtensors_back[0], /*rtol=*/1e-3, /*atol=*/1e-2));
-    EXPECT_TRUE(xt::allclose(reduced_tensor, xtensors_back[1], /*rtol=*/1e-3, /*atol=*/1e-2));
+    ttml::test_utils::expect_allclose(reduced_tensor, xtensors_back[0], /*rtol=*/1e-3, /*atol=*/1e-2);
+    ttml::test_utils::expect_allclose(reduced_tensor, xtensors_back[1], /*rtol=*/1e-3, /*atol=*/1e-2);
 }
 
 TEST_F(N300UtilsTest, TestXTensorReplicateAllReduceBadTiles) {
@@ -170,8 +171,8 @@ TEST_F(N300UtilsTest, TestXTensorReplicateAllReduceBadTiles) {
     auto xtensors_back = ttml::core::to_xtensor(sum_tensor, ttml::core::IdentityComposer{});
     auto reduced_tensor = xtensor + xtensor;
 
-    EXPECT_TRUE(xt::allclose(reduced_tensor, xtensors_back[0], /*rtol=*/1e-3, /*atol=*/1e-2));
-    EXPECT_TRUE(xt::allclose(reduced_tensor, xtensors_back[1], /*rtol=*/1e-3, /*atol=*/1e-2));
+    ttml::test_utils::expect_allclose(reduced_tensor, xtensors_back[0], /*rtol=*/1e-3, /*atol=*/1e-2);
+    ttml::test_utils::expect_allclose(reduced_tensor, xtensors_back[1], /*rtol=*/1e-3, /*atol=*/1e-2);
 }
 
 TEST_F(N300UtilsTest, TestXTensorShardAxis2AddScalar) {
@@ -189,8 +190,8 @@ TEST_F(N300UtilsTest, TestXTensorShardAxis2AddScalar) {
     xt::xarray<float> chunk0 = xt::view(xtensor, xt::all(), xt::all(), xt::range(0, 1), xt::all());
     xt::xarray<float> chunk1 = xt::view(xtensor, xt::all(), xt::all(), xt::range(1, 2), xt::all());
 
-    EXPECT_TRUE(xt::allclose(chunk0 + scalar, xtensors_back[0]));
-    EXPECT_TRUE(xt::allclose(chunk1 + scalar, xtensors_back[1]));
+    ttml::test_utils::expect_allclose(chunk0 + scalar, xtensors_back[0]);
+    ttml::test_utils::expect_allclose(chunk1 + scalar, xtensors_back[1]);
 }
 
 TEST_F(N300UtilsTest, TestXTensorShardAxis3Matmul) {
@@ -229,7 +230,7 @@ TEST_F(N300UtilsTest, TestXTensorShardAxis3Matmul) {
     xt::xarray<float> mul_res = xt::linalg::dot(xtensor_a, xtensor_b);
 
     // (128, 64) X (64, 256) => (128, 256)
-    EXPECT_TRUE(xt::allclose(mul_res, xtensors_back[0], /*rtol=*/1e-3, /*atol=*/1e-2));
+    ttml::test_utils::expect_allclose(mul_res, xtensors_back[0], /*rtol=*/1e-3, /*atol=*/1e-2);
 }
 
 TEST_F(N300UtilsTest, DropoutDifferentSeed) {

@@ -9,6 +9,7 @@
 
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "test_utils/comparison.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
@@ -40,5 +41,5 @@ TEST_F(ConcatOpTest, TestConcatLastDim) {
 
     auto ttnn_concat = ttnn::concat(std::vector<ttnn::Tensor>{tensor_a, tensor_b}, 3);
     auto ttnn_concat_xtensor = ttml::core::to_xtensor(ttnn_concat);
-    EXPECT_TRUE(xt::allclose(ttnn_concat_xtensor, expected, 7e-3F, 1e-6F));
+    ttml::test_utils::expect_allclose(ttnn_concat_xtensor, expected, 7e-3F, 1e-6F);
 }

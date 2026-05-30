@@ -17,6 +17,7 @@
 #include "metal/operations.hpp"
 #include "ops/losses.hpp"
 #include "ops/unary_ops.hpp"
+#include "test_utils/comparison.hpp"
 #include "test_utils/random_data.hpp"
 
 class CrossEntropyBackwardTest : public ::testing::Test {
@@ -82,7 +83,7 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Small_Backward) {
     // Check if the result is close to the expected result
     auto result_xtensor = core::to_xtensor(result);
     assert((result_xtensor.shape() == expected_result.shape()));
-    EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 3e-2F, 1e-2F));
+    ttml::test_utils::expect_allclose(result_xtensor, expected_result, 3e-2F, 1e-2F);
 }
 
 TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Batch) {
@@ -115,7 +116,7 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Batch) {
     // Check if the result is close to the expected result
     auto result_xtensor = core::to_xtensor(result);
     assert((result_xtensor.shape() == expected_result.shape()));
-    EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 3e-2F, 1e-2F));
+    ttml::test_utils::expect_allclose(result_xtensor, expected_result, 3e-2F, 1e-2F);
 }
 
 TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Large_Batch) {
@@ -148,7 +149,7 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Large_Batch) {
     // Check if the result is close to the expected result
     auto result_xtensor = core::to_xtensor(result);
     assert((result_xtensor.shape() == expected_result.shape()));
-    EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 3e-2F, 1e-2F));
+    ttml::test_utils::expect_allclose(result_xtensor, expected_result, 3e-2F, 1e-2F);
 }
 
 TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Large_Backward) {
@@ -181,7 +182,7 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Large_Backward) {
     // Check if the result is close to the expected result
     auto result_xtensor = core::to_xtensor(result);
     assert((result_xtensor.shape() == expected_result.shape()));
-    EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 3e-2F, 1e-2F));
+    ttml::test_utils::expect_allclose(result_xtensor, expected_result, 3e-2F, 1e-2F);
 }
 
 TEST_F(CrossEntropyBackwardTest, NIGHTLY_CrossEntropyBackward_Huge_Backward) {
@@ -214,7 +215,7 @@ TEST_F(CrossEntropyBackwardTest, NIGHTLY_CrossEntropyBackward_Huge_Backward) {
     // Check if the result is close to the expected result
     auto result_xtensor = core::to_xtensor(result);
     assert((result_xtensor.shape() == expected_result.shape()));
-    EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 3e-2F, 1e-2F));
+    ttml::test_utils::expect_allclose(result_xtensor, expected_result, 3e-2F, 1e-2F);
 }
 
 TEST_F(CrossEntropyBackwardTest, CrossEntropyForwardBackward_ReduceMeanVsNone) {
@@ -249,7 +250,7 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyForwardBackward_ReduceMeanVsNone) {
     auto result_mean_xtensor = core::to_xtensor(result_mean->get_value());
 
     assert((result_none_after_mean_xtensor.shape() == result_mean_xtensor.shape()));
-    EXPECT_TRUE(xt::allclose(result_none_after_mean_xtensor, result_mean_xtensor, 3e-2F, 1e-2F));
+    ttml::test_utils::expect_allclose(result_none_after_mean_xtensor, result_mean_xtensor, 3e-2F, 1e-2F);
     assert((result_none_with_mean_after_grad.shape() == result_mean_grad.shape()));
-    EXPECT_TRUE(xt::allclose(result_none_with_mean_after_grad, result_mean_grad, 3e-2F, 1e-2F));
+    ttml::test_utils::expect_allclose(result_none_with_mean_after_grad, result_mean_grad, 3e-2F, 1e-2F);
 }

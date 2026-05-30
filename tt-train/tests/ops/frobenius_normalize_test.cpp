@@ -9,6 +9,7 @@
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "test_utils/comparison.hpp"
 #include "test_utils/random_data.hpp"
 
 namespace {
@@ -54,7 +55,7 @@ TEST_P(FrobeniusNormalizeTest, MatchesCpuReference) {
     const auto result_tensor = metal::frobenius_normalize(input_tensor, kEps);
     const auto result = core::to_xtensor(result_tensor);
 
-    EXPECT_TRUE(xt::allclose(result, expected, /*rtol=*/1e-2f, /*atol=*/1e-2f));
+    ttml::test_utils::expect_allclose(result, expected, /*rtol=*/1e-2f, /*atol=*/1e-2f);
 }
 
 static std::string CaseName(const ::testing::TestParamInfo<FrobeniusCase>& info) {

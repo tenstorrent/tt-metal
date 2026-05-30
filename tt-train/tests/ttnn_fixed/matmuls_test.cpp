@@ -13,6 +13,7 @@
 #include "autograd/auto_context.hpp"
 #include "core/device.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "test_utils/comparison.hpp"
 
 class MatmulsTest : public ::testing::Test {
 protected:
@@ -90,7 +91,7 @@ TEST_F(MatmulsTest, MatMulNoTranspose) {
 
     // Compute the expected result using xtensor goldens.
     xt::xarray<float> expected = xt::linalg::dot(a, b);
-    EXPECT_TRUE(xt::allclose(y, expected));
+    ttml::test_utils::expect_allclose(y, expected);
 }
 
 TEST_F(MatmulsTest, MatMulTransposeA) {
@@ -106,7 +107,7 @@ TEST_F(MatmulsTest, MatMulTransposeA) {
 
     // Expected: (a^T) * b.
     xt::xarray<float> expected = xt::linalg::dot(xt::transpose(a), b);
-    EXPECT_TRUE(xt::allclose(y, expected));
+    ttml::test_utils::expect_allclose(y, expected);
 }
 
 TEST_F(MatmulsTest, MatMulTransposeB) {
@@ -122,7 +123,7 @@ TEST_F(MatmulsTest, MatMulTransposeB) {
 
     // Expected: a * (b^T).
     xt::xarray<float> expected = xt::linalg::dot(a, xt::transpose(b));
-    EXPECT_TRUE(xt::allclose(y, expected));
+    ttml::test_utils::expect_allclose(y, expected);
 }
 
 TEST_F(MatmulsTest, MatMulTransposeBoth) {
@@ -138,7 +139,7 @@ TEST_F(MatmulsTest, MatMulTransposeBoth) {
 
     // Expected: (a^T) * (b^T).
     xt::xarray<float> expected = xt::linalg::dot(xt::transpose(a), xt::transpose(b));
-    EXPECT_TRUE(xt::allclose(y, expected));
+    ttml::test_utils::expect_allclose(y, expected);
 }
 
 TEST_F(MatmulsTest, MatMulBackwardNoTranspose) {
@@ -162,8 +163,8 @@ TEST_F(MatmulsTest, MatMulBackwardNoTranspose) {
     xt::xarray<float> expected_grad_a = xt::linalg::dot(out_grad, xt::transpose(b));
     xt::xarray<float> expected_grad_b = xt::linalg::dot(xt::transpose(a), out_grad);
 
-    EXPECT_TRUE(xt::allclose(grad_a, expected_grad_a));
-    EXPECT_TRUE(xt::allclose(grad_b, expected_grad_b));
+    ttml::test_utils::expect_allclose(grad_a, expected_grad_a);
+    ttml::test_utils::expect_allclose(grad_b, expected_grad_b);
 }
 
 TEST_F(MatmulsTest, MatMulBackwardTransposeA) {
@@ -186,8 +187,8 @@ TEST_F(MatmulsTest, MatMulBackwardTransposeA) {
     xt::xarray<float> expected_grad_a = xt::linalg::dot(b, xt::transpose(out_grad));
     xt::xarray<float> expected_grad_b = xt::linalg::dot(a, out_grad);
 
-    EXPECT_TRUE(xt::allclose(grad_a, expected_grad_a));
-    EXPECT_TRUE(xt::allclose(grad_b, expected_grad_b));
+    ttml::test_utils::expect_allclose(grad_a, expected_grad_a);
+    ttml::test_utils::expect_allclose(grad_b, expected_grad_b);
 }
 
 TEST_F(MatmulsTest, MatMulBackwardTransposeB) {
@@ -210,8 +211,8 @@ TEST_F(MatmulsTest, MatMulBackwardTransposeB) {
     xt::xarray<float> expected_grad_a = xt::linalg::dot(out_grad, b);
     xt::xarray<float> expected_grad_b = xt::linalg::dot(xt::transpose(out_grad), a);
 
-    EXPECT_TRUE(xt::allclose(grad_a, expected_grad_a));
-    EXPECT_TRUE(xt::allclose(grad_b, expected_grad_b));
+    ttml::test_utils::expect_allclose(grad_a, expected_grad_a);
+    ttml::test_utils::expect_allclose(grad_b, expected_grad_b);
 }
 
 TEST_F(MatmulsTest, MatMulBackwardTransposeBoth) {
@@ -234,7 +235,7 @@ TEST_F(MatmulsTest, MatMulBackwardTransposeBoth) {
     xt::xarray<float> expected_grad_a = xt::linalg::dot(xt::transpose(b), xt::transpose(out_grad));
     xt::xarray<float> expected_grad_b = xt::linalg::dot(xt::transpose(out_grad), xt::transpose(a));
 
-    EXPECT_TRUE(xt::allclose(grad_a, expected_grad_a));
-    EXPECT_TRUE(xt::allclose(grad_b, expected_grad_b));
+    ttml::test_utils::expect_allclose(grad_a, expected_grad_a);
+    ttml::test_utils::expect_allclose(grad_b, expected_grad_b);
 }
 }  // namespace ttml::ttnn_fixed::tests

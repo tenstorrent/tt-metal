@@ -14,6 +14,7 @@
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "test_utils/comparison.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
@@ -65,7 +66,7 @@ TEST_F(SoftmaxTest, SoftmaxTest_Batch) {
     // Check if the result is close to the expected result
     auto result_xtensor = core::to_xtensor(result);
     assert((result_xtensor.shape() == expected_result.shape()));
-    EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 3e-2F, 1e-2F));
+    ttml::test_utils::expect_allclose(result_xtensor, expected_result, 3e-2F, 1e-2F);
 }
 
 TEST_F(SoftmaxTest, SoftmaxTest_Big_Batch) {
@@ -89,7 +90,7 @@ TEST_F(SoftmaxTest, SoftmaxTest_Big_Batch) {
     // Check if the result is close to the expected result
     auto result_xtensor = core::to_xtensor(result);
     assert((result_xtensor.shape() == expected_result.shape()));
-    EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 3e-2F, 1e-2F));
+    ttml::test_utils::expect_allclose(result_xtensor, expected_result, 3e-2F, 1e-2F);
 }
 
 TEST_F(SoftmaxTest, NIGHTLY_SoftmaxTest_Huge_Batch) {
@@ -113,7 +114,7 @@ TEST_F(SoftmaxTest, NIGHTLY_SoftmaxTest_Huge_Batch) {
     // Check if the result is close to the expected result
     auto result_xtensor = core::to_xtensor(result);
     assert((result_xtensor.shape() == expected_result.shape()));
-    EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 3e-2F, 1e-2F));
+    ttml::test_utils::expect_allclose(result_xtensor, expected_result, 3e-2F, 1e-2F);
 }
 
 TEST_F(SoftmaxTest, SoftmaxTest_Large_Values) {
@@ -174,5 +175,5 @@ TEST_F(SoftmaxTest, SoftmaxTest_Large_Values) {
     // Check if the result is close to the expected result
     auto result_xtensor = core::to_xtensor(result);
     assert((result_xtensor.shape() == expected_result.shape()));
-    EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 3e-2F, 1e-2F));
+    ttml::test_utils::expect_allclose(result_xtensor, expected_result, 3e-2F, 1e-2F);
 }

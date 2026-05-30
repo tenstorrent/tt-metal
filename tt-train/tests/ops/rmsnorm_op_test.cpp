@@ -14,6 +14,7 @@
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/losses.hpp"
+#include "test_utils/comparison.hpp"
 #include "test_utils/random_data.hpp"
 
 class RMSNormOpTest : public ::testing::Test {
@@ -82,12 +83,12 @@ TEST_F(RMSNormOpTest, RMSNorm_Small_Backward) {
             1.0490e-04F,
             -2.0742e-05F,
             2.0981e-04F}}}});
-    EXPECT_TRUE(xt::allclose(example_tensor_grad, expected_example_tensor_grad, 1.0e-3F, 1e-2F));
+    ttml::test_utils::expect_allclose(example_tensor_grad, expected_example_tensor_grad, 1.0e-3F, 1e-2F);
 
     auto gamma_grad = core::to_xtensor(gamma->get_grad());
     auto expected_gamma_grad =
         xt::xarray<float>({{{{0.0334F, 0.1338F, 0.2988F, 0.5352F, 0.0334F, 0.1338F, 0.2988F, 0.5352F}}}});
-    EXPECT_TRUE(xt::allclose(gamma_grad, expected_gamma_grad, 1.0e-3F, 1e-2F));
+    ttml::test_utils::expect_allclose(gamma_grad, expected_gamma_grad, 1.0e-3F, 1e-2F);
 }
 
 TEST_F(RMSNormOpTest, NIGHTLY_RMSNorm_Forward_Batch) {
@@ -125,7 +126,7 @@ TEST_F(RMSNormOpTest, NIGHTLY_RMSNorm_Forward_Batch) {
           {0.98828F, 0.99609F, 1.00000F, 1.00781F, 1.00781F}, {0.98828F, 0.99609F, 1.00000F, 1.00781F, 1.00781F},
           {0.98828F, 0.99609F, 1.00000F, 1.00781F, 1.00781F}, {0.98828F, 0.99609F, 1.00000F, 1.00781F, 1.00781F}}}};
     assert((expected_result.shape() == result_xtensor.shape()));
-    EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 6e-2F, 1e-8F));
+    ttml::test_utils::expect_allclose(result_xtensor, expected_result, 6e-2F, 1e-8F);
 }
 
 TEST_F(RMSNormOpTest, NIGHTLY_RMSNorm_Backward_Batch) {
@@ -150,7 +151,7 @@ TEST_F(RMSNormOpTest, NIGHTLY_RMSNorm_Backward_Batch) {
 
     auto example_tensor_grad = core::to_xtensor(example_tensor->get_grad());
     xt::xarray<float> expected_example_tensor_grad = xt::zeros_like(a_xarray);
-    EXPECT_TRUE(xt::allclose(example_tensor_grad, expected_example_tensor_grad, 5e-2F, 1e-3F));
+    ttml::test_utils::expect_allclose(example_tensor_grad, expected_example_tensor_grad, 5e-2F, 1e-3F);
 
     auto gamma_grad = core::to_xtensor(gamma->get_grad());
     xt::xarray<float> expected_gamma_grad = {{{{0.36111F, 0.37644F, 0.39589F, 0.41945F, 0.44712F}}}};
@@ -209,12 +210,12 @@ TEST_F(RMSNormOpTest, NIGHTLY_CompositeRMSNorm_Small_Backward) {
             1.0490e-04F,
             -2.0742e-05F,
             2.0981e-04F}}}});
-    EXPECT_TRUE(xt::allclose(example_tensor_grad, expected_example_tensor_grad, 1.0e-3F, 1e-2F));
+    ttml::test_utils::expect_allclose(example_tensor_grad, expected_example_tensor_grad, 1.0e-3F, 1e-2F);
 
     auto gamma_grad = core::to_xtensor(gamma->get_grad());
     auto expected_gamma_grad =
         xt::xarray<float>({{{{0.0334F, 0.1338F, 0.2988F, 0.5352F, 0.0334F, 0.1338F, 0.2988F, 0.5352F}}}});
-    EXPECT_TRUE(xt::allclose(gamma_grad, expected_gamma_grad, 1.0e-3F, 1e-2F));
+    ttml::test_utils::expect_allclose(gamma_grad, expected_gamma_grad, 1.0e-3F, 1e-2F);
 }
 
 TEST_F(RMSNormOpTest, NIGHTLY_CompositeRMSNorm_Forward_Batch) {
@@ -252,7 +253,7 @@ TEST_F(RMSNormOpTest, NIGHTLY_CompositeRMSNorm_Forward_Batch) {
           {0.98828F, 0.99609F, 1.00000F, 1.00781F, 1.00781F}, {0.98828F, 0.99609F, 1.00000F, 1.00781F, 1.00781F},
           {0.98828F, 0.99609F, 1.00000F, 1.00781F, 1.00781F}, {0.98828F, 0.99609F, 1.00000F, 1.00781F, 1.00781F}}}};
     assert((expected_result.shape() == result_xtensor.shape()));
-    EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 6e-2F, 1e-8F));
+    ttml::test_utils::expect_allclose(result_xtensor, expected_result, 6e-2F, 1e-8F);
 }
 
 TEST_F(RMSNormOpTest, NIGHTLY_CompositeRMSNorm_Backward_Batch) {
@@ -277,7 +278,7 @@ TEST_F(RMSNormOpTest, NIGHTLY_CompositeRMSNorm_Backward_Batch) {
 
     auto example_tensor_grad = core::to_xtensor(example_tensor->get_grad());
     xt::xarray<float> expected_example_tensor_grad = xt::zeros_like(a_xarray);
-    EXPECT_TRUE(xt::allclose(example_tensor_grad, expected_example_tensor_grad, 5e-2F, 1e-3F));
+    ttml::test_utils::expect_allclose(example_tensor_grad, expected_example_tensor_grad, 5e-2F, 1e-3F);
 
     auto gamma_grad = core::to_xtensor(gamma->get_grad());
     xt::xarray<float> expected_gamma_grad = {{{{0.36111F, 0.37644F, 0.39589F, 0.41945F, 0.44712F}}}};
@@ -345,7 +346,7 @@ static void CompareKernelVsComposite(const std::vector<uint32_t>& shape) {
     EXPECT_EQ(result_composite_xtensor.shape(), x_data.shape());
 
     // Compare forward results
-    EXPECT_TRUE(xt::allclose(result_kernel_xtensor, result_composite_xtensor, 4e-2F, 3e-2F));
+    ttml::test_utils::expect_allclose(result_kernel_xtensor, result_composite_xtensor, 4e-2F, 3e-2F);
     EXPECT_TRUE(xt::all(xt::isfinite(result_kernel_xtensor)));
     EXPECT_TRUE(xt::all(xt::isfinite(result_composite_xtensor)));
 
@@ -376,8 +377,8 @@ static void CompareKernelVsComposite(const std::vector<uint32_t>& shape) {
     EXPECT_TRUE(xt::all(xt::isfinite(gamma_grad_composite)));
 
     // Compare backward results
-    EXPECT_TRUE(xt::allclose(x_grad_kernel, x_grad_composite, 1.0e-3F, 2e-3F));
-    EXPECT_TRUE(xt::allclose(gamma_grad_kernel, gamma_grad_composite, 1.0e-3F, 2e-3F));
+    ttml::test_utils::expect_allclose(x_grad_kernel, x_grad_composite, 1.0e-3F, 2e-3F);
+    ttml::test_utils::expect_allclose(gamma_grad_kernel, gamma_grad_composite, 1.0e-3F, 2e-3F);
 
     autograd::ctx().reset_graph();
 }

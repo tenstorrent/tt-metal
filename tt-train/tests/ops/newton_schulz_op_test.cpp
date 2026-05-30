@@ -12,6 +12,7 @@
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "test_utils/comparison.hpp"
 #include "test_utils/random_data.hpp"
 
 namespace {
@@ -85,7 +86,7 @@ TEST_F(NewtonSchulzOpTest, MuonCoeff) {
     auto X_tensor = ops::newtonschulz5(G_tensor, 10, 1e-7f);
     auto X_result = core::to_xtensor(X_tensor);
 
-    EXPECT_TRUE(xt::allclose(X_result, G_expected, 5e-2f, 5e-2f));
+    ttml::test_utils::expect_allclose(X_result, G_expected, 5e-2f, 5e-2f);
 }
 
 TEST_F(NewtonSchulzOpTest, OrthogonalityCheck) {
@@ -104,10 +105,10 @@ TEST_F(NewtonSchulzOpTest, OrthogonalityCheck) {
     auto X_tensor = ops::newtonschulz(G_tensor, 10, 1e-7f, a, b, c);
     auto X_result = core::to_xtensor(X_tensor);
 
-    EXPECT_TRUE(xt::allclose(X_result, G_expected, 5e-2f, 5e-2f));
+    ttml::test_utils::expect_allclose(X_result, G_expected, 5e-2f, 5e-2f);
 
     auto X_2d = xt::view(X_result, 0, 0, xt::all(), xt::all());
     auto XXT = xt::linalg::dot(X_2d, xt::transpose(X_2d));
     auto I = xt::eye<float>(32);
-    EXPECT_TRUE(xt::allclose(XXT, I, 5e-2f, 5e-2f));
+    ttml::test_utils::expect_allclose(XXT, I, 5e-2f, 5e-2f);
 }

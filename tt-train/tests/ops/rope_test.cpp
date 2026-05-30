@@ -10,6 +10,7 @@
 #include "modules/positional_embeddings.hpp"
 #include "modules/rotary_embedding.hpp"
 #include "ops/losses.hpp"
+#include "test_utils/comparison.hpp"
 
 namespace ttml::modules::tests {
 
@@ -395,9 +396,11 @@ TEST_F(RoPETest, GeneratedParamsOk) {
         /*sequence_length=*/32,
         /*head_dim=*/32);
 
-    EXPECT_TRUE(xt::allclose(expected_cos, core::to_xtensor(rope_params.cos_cache), /*rtol=*/0.01F, /*atol=*/0.03F));
-    EXPECT_TRUE(xt::allclose(expected_sin, core::to_xtensor(rope_params.sin_cache), /*rtol=*/0.01F, /*atol=*/0.03F));
-    EXPECT_TRUE(xt::allclose(expected_trans_mat, core::to_xtensor(rope_params.trans_mat)));
+    ttml::test_utils::expect_allclose(
+        expected_cos, core::to_xtensor(rope_params.cos_cache), /*rtol=*/0.01F, /*atol=*/0.03F);
+    ttml::test_utils::expect_allclose(
+        expected_sin, core::to_xtensor(rope_params.sin_cache), /*rtol=*/0.01F, /*atol=*/0.03F);
+    ttml::test_utils::expect_allclose(expected_trans_mat, core::to_xtensor(rope_params.trans_mat));
 }
 
 TEST_F(RoPETest, ForwardTest) {
@@ -461,7 +464,7 @@ TEST_F(RoPETest, ForwardTest) {
     auto actual_xq_out_xt = core::to_xtensor(actual_xq_out->get_value());
 
     // Check that outputs match the expected values
-    EXPECT_TRUE(xt::allclose(actual_xq_out_xt, expected_xq_out, 2e-1, 2e-1));
+    ttml::test_utils::expect_allclose(actual_xq_out_xt, expected_xq_out, 2e-1, 2e-1);
 }
 
 TEST_F(RoPETest, BackwardTest) {
@@ -524,7 +527,7 @@ TEST_F(RoPETest, BackwardTest) {
     loss->backward();
 
     auto actual_grad = core::to_xtensor(xq_autograd_tensor->get_grad());
-    EXPECT_TRUE(xt::allclose(actual_grad, expected_grad, 2e-1, 2e-1));
+    ttml::test_utils::expect_allclose(actual_grad, expected_grad, 2e-1, 2e-1);
 }
 
 }  // namespace ttml::modules::tests

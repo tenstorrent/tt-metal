@@ -9,6 +9,7 @@
 #include "autograd/auto_context.hpp"
 #include "core/device.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "test_utils/comparison.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn/operations/experimental/dropout/dropout.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
@@ -52,8 +53,8 @@ TEST_F(DropoutTest, TestSeed) {
         auto result11_vec = ttml::core::to_xtensor(result11);
         auto result12_vec = ttml::core::to_xtensor(result12);
 
-        EXPECT_TRUE(xt::allclose(result01_vec, result11_vec, /*rtol=*/1e-4, /*atol=*/1e-3));
-        EXPECT_TRUE(xt::allclose(result02_vec, result12_vec, /*rtol=*/1e-4, /*atol=*/1e-3));
+        ttml::test_utils::expect_allclose(result01_vec, result11_vec, /*rtol=*/1e-4, /*atol=*/1e-3);
+        ttml::test_utils::expect_allclose(result02_vec, result12_vec, /*rtol=*/1e-4, /*atol=*/1e-3);
         EXPECT_FALSE(xt::allclose(result01_vec, result02_vec, /*rtol=*/1e-4, /*atol=*/1e-3));
         EXPECT_EQ(num_cache_before, num_cache_after - 1);
     }

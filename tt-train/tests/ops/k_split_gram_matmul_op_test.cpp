@@ -11,6 +11,7 @@
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "test_utils/comparison.hpp"
 #include "test_utils/random_data.hpp"
 
 class KSplitGramMatmulTest : public ::testing::Test {
@@ -147,7 +148,7 @@ TEST_F(KSplitGramMatmulTest, VerificationMirror) {
         for (uint32_t j = 0; j < 32; j++) ref_mirror[i * 32 + j] = ref_upper[j * 32 + i];
     auto ref_xt = xt::adapt(ref_mirror, {32u, 32u});
     auto dev_xt = xt::adapt(dev_mirror, {32u, 32u});
-    EXPECT_TRUE(xt::allclose(ref_xt, dev_xt, kRtol, kOffDiagAtol)) << "Mirror exceeded tolerance";
+    ttml::test_utils::expect_allclose(ref_xt, dev_xt, kRtol, kOffDiagAtol, "Mirror exceeded tolerance");
 }
 
 TEST_F(KSplitGramMatmulTest, PreallocatedOutput) {

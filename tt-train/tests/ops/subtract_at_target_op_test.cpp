@@ -12,6 +12,7 @@
 #include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "test_utils/comparison.hpp"
 
 class SubtractAtTargetTest : public ::testing::Test {
 protected:
@@ -80,7 +81,7 @@ TEST_F(SubtractAtTargetTest, SmallFullVocab) {
     auto expected_xt = subtract_at_target_reference(input_t, target_t, 0U, 8U);
 
     ASSERT_EQ(result_xt.shape(), expected_xt.shape());
-    EXPECT_TRUE(xt::allclose(result_xt, expected_xt, /*rtol=*/3e-2F, /*atol=*/1e-2F));
+    ttml::test_utils::expect_allclose(result_xt, expected_xt, /*rtol=*/3e-2F, /*atol=*/1e-2F);
     EXPECT_NEAR(result_xt(0, 0, 0, 3), 0.4F - 1.0F, 1e-2F);
     EXPECT_NEAR(result_xt(0, 0, 0, 0), 0.1F, 1e-2F);
 }
@@ -104,7 +105,7 @@ TEST_F(SubtractAtTargetTest, SmallPartialVocab) {
     auto expected_xt = subtract_at_target_reference(input_t, target_t, 4U, 8U);
 
     ASSERT_EQ(result_xt.shape(), expected_xt.shape());
-    EXPECT_TRUE(xt::allclose(result_xt, expected_xt, /*rtol=*/3e-2F, /*atol=*/1e-2F));
+    ttml::test_utils::expect_allclose(result_xt, expected_xt, /*rtol=*/3e-2F, /*atol=*/1e-2F);
 
     EXPECT_NEAR(result_xt(0, 0, 0, 0), 0.5F, 1e-2F);          // row 0: target out of shard, unchanged
     EXPECT_NEAR(result_xt(0, 0, 1, 1), -0.6F - 1.0F, 1e-2F);  // row 1: local col 1 modified
@@ -129,7 +130,7 @@ TEST_F(SubtractAtTargetTest, BatchedNonAlignedShape) {
     auto expected_xt = subtract_at_target_reference(input_t, target_t, 0U, V);
 
     ASSERT_EQ(result_xt.shape(), expected_xt.shape());
-    EXPECT_TRUE(xt::allclose(result_xt, expected_xt, /*rtol=*/3e-2F, /*atol=*/1e-2F));
+    ttml::test_utils::expect_allclose(result_xt, expected_xt, /*rtol=*/3e-2F, /*atol=*/1e-2F);
 }
 
 TEST_F(SubtractAtTargetTest, BatchedPartialVocabShard) {
@@ -155,7 +156,7 @@ TEST_F(SubtractAtTargetTest, BatchedPartialVocabShard) {
     auto expected_xt = subtract_at_target_reference(input_t, target_t, first_v, last_v);
 
     ASSERT_EQ(result_xt.shape(), expected_xt.shape());
-    EXPECT_TRUE(xt::allclose(result_xt, expected_xt, /*rtol=*/3e-2F, /*atol=*/1e-2F));
+    ttml::test_utils::expect_allclose(result_xt, expected_xt, /*rtol=*/3e-2F, /*atol=*/1e-2F);
 }
 
 TEST_F(SubtractAtTargetTest, CustomSubtractValue) {
@@ -184,7 +185,7 @@ TEST_F(SubtractAtTargetTest, CustomSubtractValue) {
     auto expected_xt = subtract_at_target_reference(input_t, target_t, 0U, V, subtract_value);
 
     ASSERT_EQ(result_xt.shape(), expected_xt.shape());
-    EXPECT_TRUE(xt::allclose(result_xt, expected_xt, /*rtol=*/3e-2F, /*atol=*/1e-2F));
+    ttml::test_utils::expect_allclose(result_xt, expected_xt, /*rtol=*/3e-2F, /*atol=*/1e-2F);
 }
 
 TEST_F(SubtractAtTargetTest, CustomSubtractValuePartialVocab) {
@@ -211,5 +212,5 @@ TEST_F(SubtractAtTargetTest, CustomSubtractValuePartialVocab) {
     auto expected_xt = subtract_at_target_reference(input_t, target_t, first_v, last_v, subtract_value);
 
     ASSERT_EQ(result_xt.shape(), expected_xt.shape());
-    EXPECT_TRUE(xt::allclose(result_xt, expected_xt, /*rtol=*/3e-2F, /*atol=*/1e-2F));
+    ttml::test_utils::expect_allclose(result_xt, expected_xt, /*rtol=*/3e-2F, /*atol=*/1e-2F);
 }

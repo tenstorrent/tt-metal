@@ -8,6 +8,7 @@
 #include "autograd/tensor.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/binary_ops.hpp"
+#include "test_utils/comparison.hpp"
 
 namespace ttml::ops::tests {
 
@@ -35,7 +36,7 @@ TEST_F(BinaryOpsForwardTest, AddSameShape) {
     auto result = core::to_xtensor(out->get_value());
 
     xt::xarray<float> expected = {{{{6.F, 8.F, 10.F, 12.F}}}};
-    EXPECT_TRUE(xt::allclose(result, expected));
+    ttml::test_utils::expect_allclose(result, expected);
 }
 
 TEST_F(BinaryOpsForwardTest, AddBroadcast) {
@@ -53,7 +54,7 @@ TEST_F(BinaryOpsForwardTest, AddBroadcast) {
 
     xt::xarray<float> expected = {11.F, 22.F, 33.F, 44.F, 15.F, 26.F, 37.F, 48.F};
     expected.reshape({2, 1, 1, 4});
-    EXPECT_TRUE(xt::allclose(result, expected));
+    ttml::test_utils::expect_allclose(result, expected);
 }
 
 TEST_F(BinaryOpsForwardTest, SubSameShape) {
@@ -68,7 +69,7 @@ TEST_F(BinaryOpsForwardTest, SubSameShape) {
     auto result = core::to_xtensor(out->get_value());
 
     xt::xarray<float> expected = {{{{4.F, 4.F, 4.F, 4.F}}}};
-    EXPECT_TRUE(xt::allclose(result, expected));
+    ttml::test_utils::expect_allclose(result, expected);
 }
 
 TEST_F(BinaryOpsForwardTest, SubBroadcast) {
@@ -85,7 +86,7 @@ TEST_F(BinaryOpsForwardTest, SubBroadcast) {
 
     xt::xarray<float> expected = {9.F, 18.F, 27.F, 36.F, 49.F, 58.F, 67.F, 76.F};
     expected.reshape({2, 1, 1, 4});
-    EXPECT_TRUE(xt::allclose(result, expected));
+    ttml::test_utils::expect_allclose(result, expected);
 }
 
 TEST_F(BinaryOpsForwardTest, MulSameShape) {
@@ -100,7 +101,7 @@ TEST_F(BinaryOpsForwardTest, MulSameShape) {
     auto result = core::to_xtensor(out->get_value());
 
     xt::xarray<float> expected = {{{{4.F, 6.F, 6.F, 4.F}}}};
-    EXPECT_TRUE(xt::allclose(result, expected));
+    ttml::test_utils::expect_allclose(result, expected);
 }
 
 TEST_F(BinaryOpsForwardTest, MulBroadcast) {
@@ -117,7 +118,7 @@ TEST_F(BinaryOpsForwardTest, MulBroadcast) {
 
     xt::xarray<float> expected = {2.F, 6.F, 12.F, 20.F, 10.F, 18.F, 28.F, 40.F};
     expected.reshape({2, 1, 1, 4});
-    EXPECT_TRUE(xt::allclose(result, expected));
+    ttml::test_utils::expect_allclose(result, expected);
 }
 
 TEST_F(BinaryOpsForwardTest, MulScalar) {
@@ -130,7 +131,7 @@ TEST_F(BinaryOpsForwardTest, MulScalar) {
     auto result = core::to_xtensor(out->get_value());
 
     xt::xarray<float> expected = {{{{3.F, 6.F, 9.F, 12.F}}}};
-    EXPECT_TRUE(xt::allclose(result, expected));
+    ttml::test_utils::expect_allclose(result, expected);
 }
 
 TEST_F(BinaryOpsForwardTest, DivSameShape) {
@@ -145,7 +146,7 @@ TEST_F(BinaryOpsForwardTest, DivSameShape) {
     auto result = core::to_xtensor(out->get_value());
 
     xt::xarray<float> expected = {{{{2.F, 2.F, 2.F, 2.F}}}};
-    EXPECT_TRUE(xt::allclose(result, expected));
+    ttml::test_utils::expect_allclose(result, expected);
 }
 
 TEST_F(BinaryOpsForwardTest, DivBroadcast) {
@@ -162,7 +163,7 @@ TEST_F(BinaryOpsForwardTest, DivBroadcast) {
 
     xt::xarray<float> expected = {2.F, 3.F, 4.F, 5.F, 6.F, 7.F, 8.F, 9.F};
     expected.reshape({2, 1, 1, 4});
-    EXPECT_TRUE(xt::allclose(result, expected));
+    ttml::test_utils::expect_allclose(result, expected);
 }
 
 TEST_F(BinaryOpsForwardTest, MinSameShape) {
@@ -177,7 +178,7 @@ TEST_F(BinaryOpsForwardTest, MinSameShape) {
     auto result = core::to_xtensor(out->get_value());
 
     xt::xarray<float> expected = {{{{1.F, 2.F, 3.F, 6.F}}}};
-    EXPECT_TRUE(xt::allclose(result, expected));
+    ttml::test_utils::expect_allclose(result, expected);
 }
 
 TEST_F(BinaryOpsForwardTest, MaxSameShape) {
@@ -192,7 +193,7 @@ TEST_F(BinaryOpsForwardTest, MaxSameShape) {
     auto result = core::to_xtensor(out->get_value());
 
     xt::xarray<float> expected = {{{{4.F, 5.F, 3.F, 8.F}}}};
-    EXPECT_TRUE(xt::allclose(result, expected));
+    ttml::test_utils::expect_allclose(result, expected);
 }
 
 }  // namespace ttml::ops::tests

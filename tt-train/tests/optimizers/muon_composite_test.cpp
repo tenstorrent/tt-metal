@@ -11,6 +11,7 @@
 
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "test_utils/comparison.hpp"
 #include "test_utils/random_data.hpp"
 
 namespace {
@@ -117,7 +118,7 @@ TEST_P(MuonCorrectnessTest, DeviceMatchesCPU) {
     }
 
     auto w_device = core::to_xtensor(param->get_value());
-    EXPECT_TRUE(xt::allclose(w_device, w_cpu, 1e-2f, 1e-2f));
+    ttml::test_utils::expect_allclose(w_device, w_cpu, 1e-2f, 1e-2f);
 }
 
 static const MuonTestCase kMuonCases[] = {

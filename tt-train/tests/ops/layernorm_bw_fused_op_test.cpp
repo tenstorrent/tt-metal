@@ -11,6 +11,7 @@
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/ops/layernorm_bw/layernorm_bw.hpp"
+#include "test_utils/comparison.hpp"
 #include "test_utils/random_data.hpp"
 
 // Reference implementation using xtensor
@@ -175,9 +176,9 @@ static void CompareKernelVsXArray(
         ASSERT_EQ(dbeta_ref.shape(), metal_dbeta_flat.shape());
 
         // Compare values
-        EXPECT_TRUE(xt::allclose(metal_dx_flat, dx_ref, 1.0e-3F, 5e-1F));
-        EXPECT_TRUE(xt::allclose(metal_dgamma_flat, dgamma_ref, 1.0e-3F, 5e-1F));
-        EXPECT_TRUE(xt::allclose(metal_dbeta_flat, dbeta_ref, 1.0e-3F, 5e-1F));
+        ttml::test_utils::expect_allclose(metal_dx_flat, dx_ref, 1.0e-3F, 5e-1F);
+        ttml::test_utils::expect_allclose(metal_dgamma_flat, dgamma_ref, 1.0e-3F, 5e-1F);
+        ttml::test_utils::expect_allclose(metal_dbeta_flat, dbeta_ref, 1.0e-3F, 5e-1F);
     }
 }
 

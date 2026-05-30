@@ -13,6 +13,7 @@
 #include "core/tt_tensor_utils.hpp"
 #include "ops/distributed/losses.hpp"
 #include "ops/losses.hpp"
+#include "test_utils/comparison.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
 
@@ -244,8 +245,8 @@ TEST_F(ShardedCrossEntropyLossTest, BackwardSmall) {
     auto expected_shard0 = xt::view(expected_grad, xt::all(), xt::all(), xt::all(), xt::range(0, local_V));
     auto expected_shard1 = xt::view(expected_grad, xt::all(), xt::all(), xt::all(), xt::range(local_V, full_V));
 
-    EXPECT_TRUE(xt::allclose(grad_xtensors[0], expected_shard0, 3e-2F, 1e-2F));
-    EXPECT_TRUE(xt::allclose(grad_xtensors[1], expected_shard1, 3e-2F, 1e-2F));
+    ttml::test_utils::expect_allclose(grad_xtensors[0], expected_shard0, 3e-2F, 1e-2F);
+    ttml::test_utils::expect_allclose(grad_xtensors[1], expected_shard1, 3e-2F, 1e-2F);
 }
 
 TEST_F(ShardedCrossEntropyLossTest, BackwardBatch) {
@@ -304,8 +305,8 @@ TEST_F(ShardedCrossEntropyLossTest, BackwardBatch) {
     auto expected_shard0 = xt::view(expected_grad, xt::all(), xt::all(), xt::all(), xt::range(0, local_V));
     auto expected_shard1 = xt::view(expected_grad, xt::all(), xt::all(), xt::all(), xt::range(local_V, full_V));
 
-    EXPECT_TRUE(xt::allclose(grad_xtensors[0], expected_shard0, 3e-2F, 1e-2F));
-    EXPECT_TRUE(xt::allclose(grad_xtensors[1], expected_shard1, 3e-2F, 1e-2F));
+    ttml::test_utils::expect_allclose(grad_xtensors[0], expected_shard0, 3e-2F, 1e-2F);
+    ttml::test_utils::expect_allclose(grad_xtensors[1], expected_shard1, 3e-2F, 1e-2F);
 }
 
 TEST_F(ShardedCrossEntropyLossTest, BackwardTargetOnSecondShard) {
@@ -356,9 +357,9 @@ TEST_F(ShardedCrossEntropyLossTest, BackwardTargetOnSecondShard) {
     auto expected_shard1 = xt::view(expected_grad, xt::all(), xt::all(), xt::all(), xt::range(local_V, full_V));
 
     // Shard 0 should have pure softmax (no one_hot subtraction since target is on shard 1)
-    EXPECT_TRUE(xt::allclose(grad_xtensors[0], expected_shard0, 3e-2F, 1e-2F));
+    ttml::test_utils::expect_allclose(grad_xtensors[0], expected_shard0, 3e-2F, 1e-2F);
     // Shard 1 should have softmax - one_hot at position 5
-    EXPECT_TRUE(xt::allclose(grad_xtensors[1], expected_shard1, 3e-2F, 1e-2F));
+    ttml::test_utils::expect_allclose(grad_xtensors[1], expected_shard1, 3e-2F, 1e-2F);
 }
 
 TEST_F(ShardedCrossEntropyLossTest, NonShardedBackwardMatchesReference) {
@@ -412,7 +413,7 @@ TEST_F(ShardedCrossEntropyLossTest, NonShardedBackwardMatchesReference) {
     auto grad_xtensors = core::to_xtensor<float>(logits_ptr->get_grad(), core::IdentityComposer{});
     auto expected_grad = cross_entropy_grad_reference(logits_xt, targets_xt);
 
-    EXPECT_TRUE(xt::allclose(grad_xtensors[0], expected_grad, 3e-2F, 1e-2F));
+    ttml::test_utils::expect_allclose(grad_xtensors[0], expected_grad, 3e-2F, 1e-2F);
 }
 
 TEST_F(ShardedCrossEntropyLossTest, MatchesNonShardedImplementation) {
@@ -495,8 +496,8 @@ TEST_F(ShardedCrossEntropyLossTest, MatchesNonShardedImplementation) {
     auto ref_shard0 = xt::view(ref_grad_xt[0], xt::all(), xt::all(), xt::all(), xt::range(0, local_V));
     auto ref_shard1 = xt::view(ref_grad_xt[0], xt::all(), xt::all(), xt::all(), xt::range(local_V, full_V));
 
-    EXPECT_TRUE(xt::allclose(sharded_grad_xt[0], ref_shard0, 3e-2F, 1e-2F));
-    EXPECT_TRUE(xt::allclose(sharded_grad_xt[1], ref_shard1, 3e-2F, 1e-2F));
+    ttml::test_utils::expect_allclose(sharded_grad_xt[0], ref_shard0, 3e-2F, 1e-2F);
+    ttml::test_utils::expect_allclose(sharded_grad_xt[1], ref_shard1, 3e-2F, 1e-2F);
 }
 
 // Same correctness check as MatchesNonShardedImplementation, but with an explicit
@@ -594,8 +595,8 @@ TEST_F(ShardedCrossEntropyLossTest, MatchesNonShardedImplementationExplicitClust
     auto ref_shard0 = xt::view(ref_grad_xt[0], xt::all(), xt::all(), xt::all(), xt::range(0, local_V));
     auto ref_shard1 = xt::view(ref_grad_xt[0], xt::all(), xt::all(), xt::all(), xt::range(local_V, full_V));
 
-    EXPECT_TRUE(xt::allclose(sharded_grad_xt[0], ref_shard0, 3e-2F, 1e-2F));
-    EXPECT_TRUE(xt::allclose(sharded_grad_xt[1], ref_shard1, 3e-2F, 1e-2F));
+    ttml::test_utils::expect_allclose(sharded_grad_xt[0], ref_shard0, 3e-2F, 1e-2F);
+    ttml::test_utils::expect_allclose(sharded_grad_xt[1], ref_shard1, 3e-2F, 1e-2F);
 }
 
 // ReduceType::NONE forward: the op should return [B,1,S,1] with the same
@@ -645,8 +646,8 @@ TEST_F(ShardedCrossEntropyLossTest, ForwardNoneReductionMatchesPerPosition) {
     auto loss_xt = core::to_xtensor<float>(loss->get_value(), core::IdentityComposer{});
     auto expected = cross_entropy_loss_reference_per_position(logits_xt, targets_xt);
 
-    EXPECT_TRUE(xt::allclose(loss_xt[0], expected, 3e-2F, 5e-2F));
-    EXPECT_TRUE(xt::allclose(loss_xt[1], expected, 3e-2F, 5e-2F));
+    ttml::test_utils::expect_allclose(loss_xt[0], expected, 3e-2F, 5e-2F);
+    ttml::test_utils::expect_allclose(loss_xt[1], expected, 3e-2F, 5e-2F);
 }
 
 // ReduceType::NONE backward: with a non-uniform per-position upstream grad,
@@ -716,8 +717,8 @@ TEST_F(ShardedCrossEntropyLossTest, BackwardNoneReductionAppliesPerPositionGrad)
     auto expected_shard0 = xt::view(expected_grad, xt::all(), xt::all(), xt::all(), xt::range(0, local_V));
     auto expected_shard1 = xt::view(expected_grad, xt::all(), xt::all(), xt::all(), xt::range(local_V, full_V));
 
-    EXPECT_TRUE(xt::allclose(grad_xtensors[0], expected_shard0, 3e-2F, 1e-2F));
-    EXPECT_TRUE(xt::allclose(grad_xtensors[1], expected_shard1, 3e-2F, 1e-2F));
+    ttml::test_utils::expect_allclose(grad_xtensors[0], expected_shard0, 3e-2F, 1e-2F);
+    ttml::test_utils::expect_allclose(grad_xtensors[1], expected_shard1, 3e-2F, 1e-2F);
 }
 
 // Equivalence sanity-check between the two reductions: explicitly summing the

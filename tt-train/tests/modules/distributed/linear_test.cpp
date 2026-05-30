@@ -15,6 +15,7 @@
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "modules/linear_module.hpp"
+#include "test_utils/comparison.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/operations/creation/creation.hpp"
@@ -85,7 +86,7 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNotInputParallel) {
     auto output = layer(tensor);
 
     auto output_xtensor = ttml::core::to_xtensor<float>(output->get_value(), ttml::core::IdentityComposer{});
-    EXPECT_TRUE(xt::allclose(output_xtensor[0], output_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2));
+    ttml::test_utils::expect_allclose(output_xtensor[0], output_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2);
 
     auto concat_composer = ttnn::distributed::concat_mesh_to_tensor_composer(*device, 3U);
     // (1, 1, out_features, in_features)
@@ -100,8 +101,8 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNotInputParallel) {
         expected_output += bias_xtensor[0];
     }
 
-    EXPECT_TRUE(xt::allclose(expected_output, output_xtensor[0], /* rtol */ 1e-3, /* atol */ 1e-2));
-    EXPECT_TRUE(xt::allclose(expected_output, output_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2));
+    ttml::test_utils::expect_allclose(expected_output, output_xtensor[0], /* rtol */ 1e-3, /* atol */ 1e-2);
+    ttml::test_utils::expect_allclose(expected_output, output_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2);
 };
 
 TEST_F(N300TensorParallelLinearTest, RowParallelLinearNoBiasNotInputParallel) {
@@ -133,7 +134,7 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearNoBiasNotInputParallel) {
     auto output = layer(tensor);
 
     auto output_xtensor = ttml::core::to_xtensor<float>(output->get_value(), ttml::core::IdentityComposer{});
-    EXPECT_TRUE(xt::allclose(output_xtensor[0], output_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2));
+    ttml::test_utils::expect_allclose(output_xtensor[0], output_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2);
 
     auto concat_composer = ttnn::distributed::concat_mesh_to_tensor_composer(*device, 3U);
     // (1, 1, out_features, in_features)
@@ -143,8 +144,8 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearNoBiasNotInputParallel) {
     auto test_data_shape = test_data.shape();
 
     auto expected_output = xt::linalg::dot(test_data, xt::transpose(weight_xtensor, {0, 1, 3, 2}));
-    EXPECT_TRUE(xt::allclose(expected_output, output_xtensor[0], /* rtol */ 1e-3, /* atol */ 1e-2));
-    EXPECT_TRUE(xt::allclose(expected_output, output_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2));
+    ttml::test_utils::expect_allclose(expected_output, output_xtensor[0], /* rtol */ 1e-3, /* atol */ 1e-2);
+    ttml::test_utils::expect_allclose(expected_output, output_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2);
 };
 
 TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasInputParallel) {
@@ -177,7 +178,7 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasInputParallel) {
     auto output = layer(tensor);
 
     auto output_xtensor = ttml::core::to_xtensor<float>(output->get_value(), ttml::core::IdentityComposer{});
-    EXPECT_TRUE(xt::allclose(output_xtensor[0], output_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2));
+    ttml::test_utils::expect_allclose(output_xtensor[0], output_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2);
 
     auto concat_composer = ttnn::distributed::concat_mesh_to_tensor_composer(*device, 3U);
     // (1, 1, out_features, in_features)
@@ -188,8 +189,8 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasInputParallel) {
         expected_output += bias_xtensor[0];
     }
 
-    EXPECT_TRUE(xt::allclose(expected_output, output_xtensor[0], /* rtol */ 1e-3, /* atol */ 1e-2));
-    EXPECT_TRUE(xt::allclose(expected_output, output_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2));
+    ttml::test_utils::expect_allclose(expected_output, output_xtensor[0], /* rtol */ 1e-3, /* atol */ 1e-2);
+    ttml::test_utils::expect_allclose(expected_output, output_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2);
 };
 
 TEST_F(N300TensorParallelLinearTest, RowParallelLinearNoBiasInputParallel) {
@@ -221,15 +222,15 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearNoBiasInputParallel) {
     auto output = layer(tensor);
 
     auto output_xtensor = ttml::core::to_xtensor<float>(output->get_value(), ttml::core::IdentityComposer{});
-    EXPECT_TRUE(xt::allclose(output_xtensor[0], output_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2));
+    ttml::test_utils::expect_allclose(output_xtensor[0], output_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2);
 
     auto concat_composer = ttnn::distributed::concat_mesh_to_tensor_composer(*device, 3U);
     // (1, 1, out_features, in_features)
     auto weight_xtensor = ttml::core::to_xtensor<float>(weight->get_value(), *concat_composer);
     auto expected_output = xt::linalg::dot(test_data, xt::transpose(weight_xtensor, {0, 1, 3, 2}));
 
-    EXPECT_TRUE(xt::allclose(expected_output, output_xtensor[0], /* rtol */ 1e-3, /* atol */ 1e-2));
-    EXPECT_TRUE(xt::allclose(expected_output, output_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2));
+    ttml::test_utils::expect_allclose(expected_output, output_xtensor[0], /* rtol */ 1e-3, /* atol */ 1e-2);
+    ttml::test_utils::expect_allclose(expected_output, output_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2);
 };
 
 TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasAllGather) {
@@ -262,7 +263,7 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasAllGather) {
     auto output = layer(tensor);
 
     auto output_xtensor = ttml::core::to_xtensor<float>(output->get_value(), ttml::core::IdentityComposer{});
-    EXPECT_TRUE(xt::allclose(output_xtensor[0], output_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2));
+    ttml::test_utils::expect_allclose(output_xtensor[0], output_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2);
 
     auto concat_composer_2 = ttnn::distributed::concat_mesh_to_tensor_composer(*device, 2U);
     auto concat_composer_3 = ttnn::distributed::concat_mesh_to_tensor_composer(*device, 3U);
@@ -275,8 +276,8 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasAllGather) {
         expected_output += bias_xtensor;
     }
 
-    EXPECT_TRUE(xt::allclose(expected_output, output_xtensor[0], /* rtol */ 1e-2, /* atol */ 1e-2));
-    EXPECT_TRUE(xt::allclose(expected_output, output_xtensor[1], /* rtol */ 1e-2, /* atol */ 1e-2));
+    ttml::test_utils::expect_allclose(expected_output, output_xtensor[0], /* rtol */ 1e-2, /* atol */ 1e-2);
+    ttml::test_utils::expect_allclose(expected_output, output_xtensor[1], /* rtol */ 1e-2, /* atol */ 1e-2);
 };
 
 TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasAllGather) {
@@ -308,7 +309,7 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasAllGather) {
     auto output = layer(tensor);
 
     auto output_xtensor = ttml::core::to_xtensor<float>(output->get_value(), ttml::core::IdentityComposer{});
-    EXPECT_TRUE(xt::allclose(output_xtensor[0], output_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2));
+    ttml::test_utils::expect_allclose(output_xtensor[0], output_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2);
 
     auto concat_composer_2 = ttnn::distributed::concat_mesh_to_tensor_composer(*device, 2U);
     auto concat_composer_3 = ttnn::distributed::concat_mesh_to_tensor_composer(*device, 3U);
@@ -316,8 +317,8 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasAllGather) {
     auto weight_xtensor = ttml::core::to_xtensor<float>(weight->get_value(), *concat_composer_2);
     auto expected_output = xt::linalg::dot(test_data, xt::transpose(weight_xtensor, {0, 1, 3, 2}));
 
-    EXPECT_TRUE(xt::allclose(expected_output, output_xtensor[0], /* rtol */ 1e-2, /* atol */ 1e-2));
-    EXPECT_TRUE(xt::allclose(expected_output, output_xtensor[1], /* rtol */ 1e-2, /* atol */ 1e-2));
+    ttml::test_utils::expect_allclose(expected_output, output_xtensor[0], /* rtol */ 1e-2, /* atol */ 1e-2);
+    ttml::test_utils::expect_allclose(expected_output, output_xtensor[1], /* rtol */ 1e-2, /* atol */ 1e-2);
 };
 
 TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasNoAllGather) {
@@ -360,16 +361,16 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasNoAllGather) {
         expected_output += bias_xtensor;
     }
 
-    EXPECT_TRUE(xt::allclose(
+    ttml::test_utils::expect_allclose(
         xt::view(expected_output, xt::all(), xt::all(), xt::all(), xt::range(0, out_features / 2)),
         output_xtensor[0],
         /* rtol */ 1e-2,
-        /* atol */ 1e-2));
-    EXPECT_TRUE(xt::allclose(
+        /* atol */ 1e-2);
+    ttml::test_utils::expect_allclose(
         xt::view(expected_output, xt::all(), xt::all(), xt::all(), xt::range(out_features / 2, out_features)),
         output_xtensor[1],
         /* rtol */ 1e-2,
-        /* atol */ 1e-2));
+        /* atol */ 1e-2);
 };
 
 TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasNoAllGather) {
@@ -407,16 +408,16 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasNoAllGather) {
     auto expected_output = xt::linalg::dot(test_data, xt::transpose(weight_xtensor, {0, 1, 3, 2}));
     expected_output = expected_output.reshape({1U, 1U, 1U, out_features});
 
-    EXPECT_TRUE(xt::allclose(
+    ttml::test_utils::expect_allclose(
         xt::view(expected_output, xt::all(), xt::all(), xt::all(), xt::range(0, out_features / 2)),
         output_xtensor[0],
         /* rtol */ 1e-2,
-        /* atol */ 1e-2));
-    EXPECT_TRUE(xt::allclose(
+        /* atol */ 1e-2);
+    ttml::test_utils::expect_allclose(
         xt::view(expected_output, xt::all(), xt::all(), xt::all(), xt::range(out_features / 2, out_features)),
         output_xtensor[1],
         /* rtol */ 1e-2,
-        /* atol */ 1e-2));
+        /* atol */ 1e-2);
 };
 
 TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNanoGPT) {
@@ -488,18 +489,18 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNanoGPT) {
     // LinearLayer weight gradient should be replicated - just take device 0
     auto replicate_layer_weight_gradients = replicate_layer_weight_gradients_vec[0];
 
-    EXPECT_TRUE(
-        xt::allclose(replicate_output_xtensor[0], row_parallel_output_xtensor[0], /* rtol */ 1e-2, /* atol */ 1e-2));
-    EXPECT_TRUE(
-        xt::allclose(replicate_output_xtensor[1], row_parallel_output_xtensor[1], /* rtol */ 1e-2, /* atol */ 1e-2));
+    ttml::test_utils::expect_allclose(
+        replicate_output_xtensor[0], row_parallel_output_xtensor[0], /* rtol */ 1e-2, /* atol */ 1e-2);
+    ttml::test_utils::expect_allclose(
+        replicate_output_xtensor[1], row_parallel_output_xtensor[1], /* rtol */ 1e-2, /* atol */ 1e-2);
 
-    EXPECT_TRUE(xt::allclose(
-        replicate_layer_input_gradients[0], row_parallel_input_gradients[0], /* rtol */ 1e-2, /* atol */ 1e-2));
-    EXPECT_TRUE(xt::allclose(
-        replicate_layer_input_gradients[1], row_parallel_input_gradients[1], /* rtol */ 1e-2, /* atol */ 1e-2));
+    ttml::test_utils::expect_allclose(
+        replicate_layer_input_gradients[0], row_parallel_input_gradients[0], /* rtol */ 1e-2, /* atol */ 1e-2);
+    ttml::test_utils::expect_allclose(
+        replicate_layer_input_gradients[1], row_parallel_input_gradients[1], /* rtol */ 1e-2, /* atol */ 1e-2);
 
-    EXPECT_TRUE(xt::allclose(
-        replicate_layer_weight_gradients, row_parallel_weight_gradients, /* rtol */ 1e-2, /* atol */ 1e-2));
+    ttml::test_utils::expect_allclose(
+        replicate_layer_weight_gradients, row_parallel_weight_gradients, /* rtol */ 1e-2, /* atol */ 1e-2);
 };
 
 TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasNanoGPT) {
@@ -565,32 +566,32 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasNanoGPT) {
     auto replicate_layer_weight_gradients =
         ttml::core::to_xtensor<float>(replicate_layer_weight->get_grad(), ttml::core::IdentityComposer{});
 
-    EXPECT_TRUE(
-        xt::allclose(replicate_output_xtensor[0], column_parallel_output_xtensor[0], /* rtol */ 1e-2, /* atol */ 1e-2));
-    EXPECT_TRUE(
-        xt::allclose(replicate_output_xtensor[1], column_parallel_output_xtensor[1], /* rtol */ 1e-2, /* atol */ 1e-2));
+    ttml::test_utils::expect_allclose(
+        replicate_output_xtensor[0], column_parallel_output_xtensor[0], /* rtol */ 1e-2, /* atol */ 1e-2);
+    ttml::test_utils::expect_allclose(
+        replicate_output_xtensor[1], column_parallel_output_xtensor[1], /* rtol */ 1e-2, /* atol */ 1e-2);
 
-    EXPECT_TRUE(xt::allclose(
+    ttml::test_utils::expect_allclose(
         replicate_layer_input_gradients[0],
         num_devices * column_parallel_input_gradients[0],
         /* rtol */ 1e-2,
-        /* atol */ 5e-2));
-    EXPECT_TRUE(xt::allclose(
+        /* atol */ 5e-2);
+    ttml::test_utils::expect_allclose(
         replicate_layer_input_gradients[1],
         num_devices * column_parallel_input_gradients[1],
         /* rtol */ 1e-2,
-        /* atol */ 5e-2));
+        /* atol */ 5e-2);
 
-    EXPECT_TRUE(xt::allclose(
+    ttml::test_utils::expect_allclose(
         replicate_layer_weight_gradients[0],
         num_devices * column_parallel_weight_gradients,
         /* rtol */ 1e-2,
-        /* atol */ 5e-2));
-    EXPECT_TRUE(xt::allclose(
+        /* atol */ 5e-2);
+    ttml::test_utils::expect_allclose(
         replicate_layer_weight_gradients[1],
         num_devices * column_parallel_weight_gradients,
         /* rtol */ 1e-2,
-        /* atol */ 5e-2));
+        /* atol */ 5e-2);
 };
 
 TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasNanoGPT) {
@@ -657,30 +658,30 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasNanoGPT) {
     auto replicate_layer_weight_gradients =
         ttml::core::to_xtensor<float>(replicate_layer_weight->get_grad(), ttml::core::IdentityComposer{});
 
-    EXPECT_TRUE(
-        xt::allclose(replicate_output_xtensor[0], column_parallel_output_xtensor[0], /* rtol */ 1e-2, /* atol */ 1e-2));
-    EXPECT_TRUE(
-        xt::allclose(replicate_output_xtensor[1], column_parallel_output_xtensor[1], /* rtol */ 1e-2, /* atol */ 1e-2));
+    ttml::test_utils::expect_allclose(
+        replicate_output_xtensor[0], column_parallel_output_xtensor[0], /* rtol */ 1e-2, /* atol */ 1e-2);
+    ttml::test_utils::expect_allclose(
+        replicate_output_xtensor[1], column_parallel_output_xtensor[1], /* rtol */ 1e-2, /* atol */ 1e-2);
 
-    EXPECT_TRUE(xt::allclose(
+    ttml::test_utils::expect_allclose(
         replicate_layer_input_gradients[0],
         num_devices * column_parallel_input_gradients[0],
         /* rtol */ 1e-2,
-        /* atol */ 5e-2));
-    EXPECT_TRUE(xt::allclose(
+        /* atol */ 5e-2);
+    ttml::test_utils::expect_allclose(
         replicate_layer_input_gradients[1],
         num_devices * column_parallel_input_gradients[1],
         /* rtol */ 1e-2,
-        /* atol */ 5e-2));
+        /* atol */ 5e-2);
 
-    EXPECT_TRUE(xt::allclose(
+    ttml::test_utils::expect_allclose(
         replicate_layer_weight_gradients[0],
         num_devices * column_parallel_weight_gradients,
         /* rtol */ 1e-2,
-        /* atol */ 5e-2));
-    EXPECT_TRUE(xt::allclose(
+        /* atol */ 5e-2);
+    ttml::test_utils::expect_allclose(
         replicate_layer_weight_gradients[1],
         num_devices * column_parallel_weight_gradients,
         /* rtol */ 1e-2,
-        /* atol */ 5e-2));
+        /* atol */ 5e-2);
 };

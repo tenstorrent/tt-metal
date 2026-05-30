@@ -7,6 +7,7 @@
 #include <ttnn/tensor/xtensor/xtensor_all_includes.hpp>
 
 #include "core/xtensor_utils.hpp"
+#include "test_utils/comparison.hpp"
 
 TEST(XTensorTest, BasicOperations) {
     // Create an xtensor array
@@ -25,5 +26,5 @@ TEST(XTensorTest, BasicOperations) {
     xt::xarray<double> expected = {3.0, 4.0, 5.0, 6.0};
 
     // Verify the result
-    EXPECT_TRUE(xt::allclose(arr2, expected));
+    ttml::test_utils::expect_allclose(arr2, expected);
 }
