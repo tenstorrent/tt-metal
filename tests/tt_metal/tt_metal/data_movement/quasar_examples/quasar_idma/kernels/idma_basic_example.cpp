@@ -13,16 +13,19 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
+#include "experimental/kernel_args.h"
 #include "internal/tt-2xx/quasar/overlay/cmdbuff_api.hpp"
 #include <cstdint>
+
+using namespace overlay;
 
 constexpr uint32_t num_elements = 16;
 constexpr uint32_t elem_size = 8;
 constexpr uint32_t total_bytes = num_elements * elem_size;  // 128
 
 void kernel_main() {
-    const uint32_t src_addr = get_compile_time_arg_val(0);
-    const uint32_t dst_addr = get_compile_time_arg_val(1);
+    constexpr uint32_t src_addr = get_arg(args::src_addr);
+    constexpr uint32_t dst_addr = get_arg(args::dst_addr);
 
     reset_cmdbuf_0();
 
@@ -40,5 +43,5 @@ void kernel_main() {
     /* wait on IDMA to finish */
     while (!idma_acked_cmdbuf_0());
 
-    DPRINT << "IDMA basic done: " << DEC() << num_elements << " elements (" << total_bytes << " B)" << ENDL();
+    DPRINT("IDMA basic done: {} elements ({} B)\n", num_elements, total_bytes);
 }

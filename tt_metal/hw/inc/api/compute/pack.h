@@ -5,8 +5,33 @@
 #pragma once
 
 #include "common_globals.h"
+#include "sentinel/compute_kernel_sentinel.h"
+#ifdef TRISC_PACK
+#include "llk_pack_tile_api.h"
+#ifndef ARCH_QUASAR
+#include "llk_pack_rows_api.h"
+#endif
+#endif
 
 namespace ckernel {
+
+// clang-format off
+/**
+ * Initializes the packer to pack tiles into the specified output circular buffer.
+ *
+ * Call this function before using `pack_tile` or `pack_tile_block`.
+ *
+ * Return value: None
+ *
+ * | Param Type | Name | Description                                       | Type     | Valid Range | Required |
+ * |------------|------|---------------------------------------------------|----------|-------------|----------|
+ * | Function   | ocb  | The identifier of the output circular buffer (CB) | uint32_t | 0 to 31     | True     |
+ */
+// clang-format on
+ALWI void pack_init(uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+    state_configure<Operand::PACK>(ocb, call_line);
+    PACK((llk_pack_init(ocb)));
+}
 
 // clang-format off
 /**
@@ -60,7 +85,7 @@ namespace ckernel {
 template <bool out_of_order_output = false>
 ALWI void pack_tile(uint32_t ifrom_dst, uint32_t icb, std::uint32_t output_tile_index = 0) {
 #ifndef ARCH_QUASAR
-    PACK((llk_pack<DST_ACCUM_MODE, out_of_order_output, false>(ifrom_dst, icb, output_tile_index)));
+    PACK((llk_pack<DST_ACCUM_MODE, out_of_order_output, PackMode::Default>(ifrom_dst, icb, output_tile_index)));
 #else
     PACK((llk_pack<out_of_order_output>(ifrom_dst, icb, output_tile_index)));
 #endif
@@ -100,77 +125,10 @@ ALWI void pack_tile(uint32_t ifrom_dst, uint32_t icb, std::uint32_t output_tile_
 // clang-format on
 ALWI void pack_tile_block(uint32_t ifrom_dst, uint32_t icb, uint32_t ntiles) {
 #ifndef ARCH_QUASAR
-    PACK((llk_matmul_pack<DST_ACCUM_MODE, false, false>(ifrom_dst, icb, ntiles)));
+    PACK((llk_matmul_pack<DST_ACCUM_MODE, false, PackMode::Default>(ifrom_dst, icb, ntiles)));
 #else
     PACK((llk_pack_block(ifrom_dst, icb, ntiles)));
 #endif
-}
-
-// clang-format off
-/**
- * Reconfigures the packer output data format by specifying the CB ID of the new operand. This function
- * call will always perform the reconfiguration, regardless of the data format of the old operand.
- * If the new CB ID is the same as the current one, reconfiguration will still occur.
- *
- * NOTE: Packer reconfiguration functions are used similarly to the initialization function, in a sense
- * that they are called before the call to the packer function that uses the new configuration. It is
- * recommended to call this function right after other op-specific initialization functions.
- *
- * Return value: None
- *
- * | Param Type | Name                    | Description                   | Type     | Valid Range | Required |
- * |------------|-------------------------|-------------------------------|----------|-------------|----------|
- * | Template   | is_tile_dim_reconfig_en | Toggle tile reconfiguration   | bool     | true/false  | False    |
- * | Function   | new_cb_id               | New data format operand value | uint32_t | Any         | True     |
- */
-// clang-format on
-template <bool is_tile_dim_reconfig_en = false>
-ALWI void pack_reconfig_data_format(const uint32_t new_cb_id) {
-#ifndef ARCH_QUASAR
-    PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(new_cb_id)));
-    if constexpr (is_tile_dim_reconfig_en) {
-        PACK((llk_pack_init<
-              false /* untilize */,
-              false /* zero_output */,
-              false /* tilize */,
-              true /* skip_addrmod_config */>(new_cb_id)));
-    }
-#endif  // TODO: AM; add Quasar implementation
-}
-
-// clang-format off
-/**
- * Reconfigures the packer output data format by specifying the CB IDs of the old and new operands.
- * This function internally calls the reconfiguration function with the new CB ID, but before it does so,
- * it checks if the old and new data formats are different. If they are the same, it does not perform
- * the reconfiguration. This function is useful when you want to ensure that the packer only reconfigures
- * when different data format is wanted, avoiding unnecessary reconfiguration overhead.
- *
- * NOTE: Packer reconfiguration functions are used similarly to the initialization function, in a sense
- * that they are called before the call to the packer function that uses the new configuration. It is
- * recommended to call this function right after other op-specific initialization functions.
- *
- * Return value: None
- *
- * | Param Type | Name                    | Description                        | Type     | Valid Range | Required |
- * |------------|-------------------------|------------------------------------|----------|-------------|----------|
- * | Template   | is_tile_dim_reconfig_en | Toggle tile reconfiguration        | bool     | true/false  | False    |
- * | Function   | old_cb_id               | Previous data format operand value | uint32_t | Any         | True     |
- * | Function   | new_cb_id               | New data format operand value      | uint32_t | Any         | True     |
- */
-// clang-format on
-template <bool is_tile_dim_reconfig_en = false>
-ALWI void pack_reconfig_data_format(const uint32_t old_cb_id, const uint32_t new_cb_id) {
-#ifndef ARCH_QUASAR
-    PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(old_cb_id, new_cb_id)));
-    if constexpr (is_tile_dim_reconfig_en) {
-        PACK((llk_pack_init<
-              false /* untilize */,
-              false /* zero_output */,
-              false /* tilize */,
-              true /* skip_addrmod_config */>(new_cb_id)));
-    }
-#endif  // TODO: AM; add Quasar implementation
 }
 
 // clang-format off
@@ -194,11 +152,7 @@ ALWI void pack_reconfig_data_format(const uint32_t old_cb_id, const uint32_t new
  * | Function   | l1_acc_en | L1 accumulation enable flag        | uint32_t | 0 or 1      | True     |
  */
 // clang-format on
-ALWI void pack_reconfig_l1_acc(const uint32_t l1_acc_en) {
-#ifndef ARCH_QUASAR
-    PACK((llk_pack_reconfig_l1_acc(l1_acc_en)));
-#endif  // TODO: AM; add Quasar implementation
-}
+ALWI void pack_reconfig_l1_acc(const uint32_t l1_acc_en) { PACK((llk_pack_reconfig_l1_acc(l1_acc_en))); }
 
 // clang-format off
 /**
@@ -219,7 +173,7 @@ ALWI void pack_reconfig_l1_acc(const uint32_t l1_acc_en) {
 ALWI void pack_rows_init(uint32_t num_rows) {
 #ifndef ARCH_QUASAR
     PACK((llk_pack_rows_init(num_rows)));
-#endif  // TODO: AM; add Quasar implementation
+#endif
 }
 
 // clang-format off
@@ -248,7 +202,7 @@ ALWI void pack_rows_init(uint32_t num_rows) {
 ALWI void pack_rows(uint32_t idst, uint32_t ocb, uint32_t output_index = 0) {
 #ifndef ARCH_QUASAR
     PACK((llk_pack_rows(idst, ocb, output_index)));
-#endif  // TODO: AM; add Quasar implementation
+#endif
 }
 
 // clang-format off
@@ -267,7 +221,7 @@ ALWI void pack_rows(uint32_t idst, uint32_t ocb, uint32_t output_index = 0) {
 ALWI void pack_rows_uninit() {
 #ifndef ARCH_QUASAR
     PACK((llk_pack_rows_uninit()));
-#endif  // TODO: AM; add Quasar implementation
+#endif
 }
 
 /**

@@ -166,9 +166,9 @@ inline void _llk_math_compressed_custom_mm_(
                 lltt::replay(ckernel::math::replay_buf_offset, 3);
                 TTI_MVMUL(p_setrwc::CLR_A, 0, ADDR_MOD_2, 0);
             } else {
-                TTI_STALLWAIT(ckernel::p_stall::STALL_MATH, ckernel::p_stall::SRCA_VLD | 0);
+                // TTI_STALLWAIT(ckernel::p_stall::STALL_MATH, ckernel::p_stall::SRCA_VLD | 0);
                 TTI_ZEROACC(p_zeroacc::CLR_16, 0, 0, ADDR_MOD_2, 0xff);
-                TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_AB);
+                // TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_AB);
             }
             index++;
             if (index == 10) {
@@ -184,8 +184,8 @@ inline void _llk_math_compressed_custom_mm_(
             lltt::replay(ckernel::math::replay_buf_offset, 3);
             TTI_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_3, 0);
         } else {
-            TTI_STALLWAIT(ckernel::p_stall::STALL_MATH, ckernel::p_stall::SRCA_VLD | ckernel::p_stall::SRCB_VLD);
-            TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD);
+            TTI_STALLWAIT(ckernel::p_stall::STALL_MATH, ckernel::p_stall::SRCB_VLD);
+            TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD);
         }
         index++;
         if (index == 10) {

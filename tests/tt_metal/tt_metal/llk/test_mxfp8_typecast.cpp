@@ -24,6 +24,8 @@
 #include <tt-logger/tt-logger.hpp>
 
 #include "llk_device_fixture.hpp"
+#include "tt_metal/test_utils/comparison.hpp"
+#include "tt_metal/test_utils/float8_utils.hpp"
 
 namespace tt::tt_metal {
 
@@ -82,9 +84,7 @@ static vector<uint32_t> run_mxfp8_typecast(
 
     experimental::metal2_host_api::KernelSpec reader_spec{
         .unique_id = READER,
-        .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary.cpp"},
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary_2_0.cpp",
         .num_threads = 1,
         .dfb_bindings = {{
             .dfb_spec_name = INPUT_DFB,
@@ -92,7 +92,6 @@ static vector<uint32_t> run_mxfp8_typecast(
             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
-        .compile_time_arg_bindings = {{"use_dfbs", 1}},
         .runtime_arguments_schema =
             {.named_runtime_args = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
         .config_spec =
@@ -103,9 +102,7 @@ static vector<uint32_t> run_mxfp8_typecast(
 
     experimental::metal2_host_api::KernelSpec writer_spec{
         .unique_id = WRITER,
-        .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary.cpp"},
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary_2_0.cpp",
         .num_threads = 1,
         .dfb_bindings = {{
             .dfb_spec_name = OUTPUT_DFB,
@@ -113,7 +110,6 @@ static vector<uint32_t> run_mxfp8_typecast(
             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
-        .compile_time_arg_bindings = {{"use_dfbs", 1}},
         .runtime_arguments_schema =
             {.named_runtime_args = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
         .config_spec =
@@ -124,9 +120,7 @@ static vector<uint32_t> run_mxfp8_typecast(
 
     experimental::metal2_host_api::KernelSpec compute_spec{
         .unique_id = COMPUTE,
-        .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp"},
+        .source = "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_2_0.cpp",
         .num_threads = 1,
         .dfb_bindings =
             {{
@@ -141,7 +135,7 @@ static vector<uint32_t> run_mxfp8_typecast(
                  .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
-        .compile_time_arg_bindings = {{"per_core_tile_cnt", num_tiles}, {"use_dfbs", 1}},
+        .compile_time_arg_bindings = {{"per_core_tile_cnt", num_tiles}},
         .config_spec =
             experimental::metal2_host_api::ComputeConfiguration{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -256,74 +250,15 @@ static vector<float> mxfp8_to_floats(tt::DataFormat fmt, const vector<uint32_t>&
     TT_THROW("Unsupported MXFP8 DataFormat: {}", static_cast<int>(fmt));
 }
 
-static vector<float> bf16_to_floats(const vector<uint32_t>& packed) {
-    auto bf16_vec = unpack_uint32_vec_into_bfloat16_vec(packed);
-    vector<float> floats;
-    floats.reserve(bf16_vec.size());
-    for (const auto& v : bf16_vec) {
-        floats.push_back(static_cast<float>(v));
-    }
-    return floats;
-}
+// bf16_to_floats lives in tt_metal/test_utils/float8_utils.hpp; expose it in
+// this namespace so mxfp8_tc::bf16_to_floats call sites resolve.
+using tt::test_utils::bf16_to_floats;
 
 // --- Validation ---
-
-static bool check_floats_close(const vector<float>& a, const vector<float>& b, float rtol, float atol) {
-    if (a.size() != b.size()) {
-        return false;
-    }
-    for (size_t i = 0; i < a.size(); i++) {
-        if (!is_close(a[i], b[i], rtol, atol)) {
-            log_info(tt::LogTest, "check_floats_close: mismatch at index {} - a[i] = {}, b[i] = {}", i, a[i], b[i]);
-            return false;
-        }
-    }
-    return true;
-}
-
-static double compute_pcc(const vector<float>& a, const vector<float>& b) {
-    if (a.size() != b.size() || a.empty()) {
-        return 0.0;
-    }
-    const size_t n = a.size();
-    double sum_a = 0.0, sum_b = 0.0;
-    double sum_a2 = 0.0, sum_b2 = 0.0, sum_ab = 0.0;
-    for (size_t i = 0; i < n; i++) {
-        double ai = a[i], bi = b[i];
-        sum_a += ai;
-        sum_b += bi;
-        sum_a2 += ai * ai;
-        sum_b2 += bi * bi;
-        sum_ab += ai * bi;
-    }
-    double denom_a = (n * sum_a2) - (sum_a * sum_a);
-    double denom_b = (n * sum_b2) - (sum_b * sum_b);
-    if (denom_a == 0.0 && denom_b == 0.0) {
-        // Both vectors are constant. Perfect correlation only if they're the
-        // same constant — a constant device output that doesn't match a
-        // constant input is exactly the failure mode this check guards.
-        return (a[0] == b[0]) ? 1.0 : 0.0;
-    }
-    // Check the product, not the factors: even when both denoms are non-zero,
-    // their product can underflow to 0 and turn the sqrt below into a div-by-0.
-    const double denom_product = denom_a * denom_b;
-    if (denom_product == 0.0) {
-        // One side is constant, the other varies (or both vary but with
-        // miniscule variance) — PCC is undefined; treat as failure so a
-        // stuck/constant device output cannot silently pass.
-        return 0.0;
-    }
-    return (n * sum_ab - sum_a * sum_b) / std::sqrt(denom_product);
-}
-
-static bool check_pcc(const vector<float>& a, const vector<float>& b, double min_pcc) {
-    double pcc = compute_pcc(a, b);
-    if (pcc < min_pcc) {
-        log_info(tt::LogTest, "check_pcc: PCC = {} < min_pcc = {}", pcc, min_pcc);
-        return false;
-    }
-    return true;
-}
+// is_close + is_close_vectors + check_pcc all live in tt_metal/test_utils/comparison.hpp.
+using tt::test_utils::check_pcc;
+using tt::test_utils::is_close;
+using tt::test_utils::is_close_vectors;
 
 // --- Random typecast test driver ---
 //
@@ -369,7 +304,8 @@ static void run_random_typecast_test(
         run_mxfp8_typecast(mesh_device, input_fmt, output_fmt, src_vec, kDefaultNumTiles, fp32_dest_acc_en);
     auto src_floats = unpack_to_floats(input_fmt, src_vec);
     auto dst_floats = unpack_to_floats(output_fmt, result_vec);
-    EXPECT_TRUE(check_floats_close(src_floats, dst_floats, rtol, atol));
+    EXPECT_TRUE(is_close_vectors<float>(
+        src_floats, dst_floats, [rtol, atol](float a, float b) { return is_close(a, b, rtol, atol); }));
     EXPECT_TRUE(check_pcc(src_floats, dst_floats, min_pcc));
 }
 
@@ -737,14 +673,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp8RToBf16SpecialCases) {
         /*scale_default=*/0x7F,
         /*elem_default=*/0,
         {{0, 0xFF}, {1, 0x7F}, {2, 0xFE}, {3, 0x7F}},
-        {{32, 0x7C},
-         {33, 0xFC},
-         {34, 0x7D},
-         {35, 0x7E},
-         {36, 0x7F},
-         {64, 0x7B},
-         {65, 0xFB},
-         {96, 0x3C}});
+        {{32, 0x7C}, {33, 0xFC}, {34, 0x7D}, {35, 0x7E}, {36, 0x7F}, {64, 0x7B}, {65, 0xFB}, {96, 0x3C}});
 
     auto result = mxfp8_tc::run_mxfp8_typecast(
         mesh_device,
@@ -783,13 +712,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp8PToBf16SpecialCases) {
         /*scale_default=*/0x7F,
         /*elem_default=*/0,
         {{0, 0xFF}, {1, 0x7F}, {2, 0xFE}, {3, 0x7F}},
-        {{32, 0x7F},
-         {33, 0x78},
-         {34, 0x7B},
-         {35, 0x7E},
-         {64, 0x7E},
-         {65, 0xFE},
-         {96, 0x38}});
+        {{32, 0x7F}, {33, 0x78}, {34, 0x7B}, {35, 0x7E}, {64, 0x7E}, {65, 0xFE}, {96, 0x38}});
 
     auto result = mxfp8_tc::run_mxfp8_typecast(
         mesh_device,

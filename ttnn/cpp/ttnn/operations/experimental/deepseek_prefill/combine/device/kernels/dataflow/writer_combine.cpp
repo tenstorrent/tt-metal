@@ -12,11 +12,9 @@
 
 #define ENABLE_COMBINE_DEBUG 0
 #if ENABLE_COMBINE_DEBUG
-#define DPRINT_COMBINE DPRINT
+#define DPRINT_COMBINE(...) DPRINT(__VA_ARGS__)
 #else
-#define DPRINT_COMBINE \
-    if (0)             \
-    DebugPrinter()
+#define DPRINT_COMBINE(...)
 #endif
 
 constexpr uint32_t ROUTE_INFO_SENTINEL = 0xFFFFFFFF;
@@ -134,14 +132,19 @@ void kernel_main() {
     constexpr uint32_t combine_devices = num_chips;
 #endif
 
-    DPRINT_COMBINE << "Combine Writer: experts=[" << expert_start_idx << "," << expert_end_idx << ")"
-                   << " linearized_mesh_coord=" << linearized_mesh_coord << ENDL();
+    DPRINT_COMBINE(
+        "Combine Writer: experts=[{}, {}) linearized_mesh_coord={}\n",
+        expert_start_idx,
+        expert_end_idx,
+        linearized_mesh_coord);
 
+#if ZERO_INIT
     // Wait for reader to complete zero-init
     volatile tt_l1_ptr uint32_t* zero_init_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zero_init_semaphore_address);
     noc_semaphore_wait(zero_init_sem_ptr, 1);
     noc_semaphore_set(zero_init_sem_ptr, 0);
+#endif
 
 #ifdef DEST_CHIP_ID
     constexpr uint32_t total_mesh_devices = mesh_rows * mesh_cols;
@@ -175,9 +178,10 @@ void kernel_main() {
     noc_semaphore_wait(init_sem_ptr, combine_devices - 1);
     noc_semaphore_set(init_sem_ptr, 0);
 
-    DPRINT_COMBINE << "Fabric setup complete" << ENDL();
+    DPRINT_COMBINE("Fabric setup complete\n");
 #endif
 
+#if INIT_ZEROS
     // Signal ALL readers that global init exchange is done.
     // Each writer increments every reader's barrier sem so each reader
     // collects num_cores signals before proceeding.
@@ -185,6 +189,7 @@ void kernel_main() {
         noc_semaphore_inc(all_core_barrier_noc_addrs[c], 1);
     }
     noc_async_atomic_barrier();
+#endif
 
     const auto output_addr_gen = TensorAccessor(output_args, output_addr);
 
@@ -206,8 +211,7 @@ void kernel_main() {
         cb_wait_front(cb_output_for_writer_id, 1);
         uint32_t output_data_addr = get_read_ptr(cb_output_for_writer_id);
 
-        DPRINT_COMBINE << "Fabric send: route=" << route << " distance=" << distance << " page_idx=" << output_page_idx
-                       << ENDL();
+        DPRINT_COMBINE("Fabric send: route={} distance={} page_idx={}\n", route, distance, output_page_idx);
 
 #ifdef DEST_CHIP_ID
         fabric_set_unicast_route<false>((volatile tt_l1_ptr LowLatencyPacketHeader*)unicast_packet_header, distance);

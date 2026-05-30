@@ -82,25 +82,23 @@ inline void _calculate_reciprocal_internal_(const int iterations)
     for (int d = 0; d < iterations; d++)
     {
         sfpi::vFloat in = sfpi::dst_reg[0];
+        sfpi::vFloat out;
 
         if constexpr (APPROXIMATION_MODE)
         {
-            sfpi::dst_reg[0] = _sfpu_reciprocal_<0>(in);
+            out = _sfpu_reciprocal_<0>(in);
+        }
+        else if constexpr (is_fp32_dest_acc_en)
+        {
+            out = _sfpu_reciprocal_<2>(in);
         }
         else
         {
-            if constexpr (is_fp32_dest_acc_en)
-            {
-                sfpi::dst_reg[0] = _sfpu_reciprocal_<2>(in);
+            out = _sfpu_reciprocal_<1>(in);
+            out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::NearestEven);
             }
-            else
-            {
-                sfpi::vFloat out = _sfpu_reciprocal_<1>(in);
-                sfpi::dst_reg[0] = sfpi::float_to_fp16b(out, sfpi::RoundMode::NearestEven);
-            }
-        }
-
-        sfpi::dst_reg++;
+            sfpi::dst_reg[0] = out;
+            sfpi::dst_reg++;
     }
 }
 

@@ -23,9 +23,11 @@ using tt::tt_metal::GenericMeshDeviceFixture;
 using tt::tt_metal::Layout;
 using tt::tt_metal::MemoryConfig;
 using tt::tt_metal::MeshDevice1x2Fixture;
+using tt::tt_metal::MeshTensor;
 using tt::tt_metal::Tensor;
 using tt::tt_metal::TensorLayout;
 using tt::tt_metal::TensorSpec;
+using tt::tt_metal::TensorTopology;
 
 // Most ownership tests only need a single device.
 using DeviceStorageOwnershipTest = GenericMeshDeviceFixture;
@@ -48,6 +50,20 @@ TEST_F(DeviceStorageOwnershipTest, DeviceStorage_DefaultConstructedState) {
 
     EXPECT_FALSE(storage.is_allocated());
     EXPECT_TRUE(storage.is_uniform_storage());
+}
+
+TEST_F(DeviceStorageOwnershipTest, DeviceStorage_ThrowsWhenConstructedFromMovedFromMeshTensor) {
+    auto source_mesh_tensor = MeshTensor::allocate_on_device(*mesh_device_, make_test_tensor_spec(), TensorTopology{});
+    MeshTensor moved_mesh_tensor(std::move(source_mesh_tensor));
+
+    EXPECT_TRUE(source_mesh_tensor.is_valueless_after_move());  // NOLINT(bugprone-use-after-move)
+    EXPECT_FALSE(moved_mesh_tensor.is_valueless_after_move());
+
+    auto construct_storage_from_moved_from = [&]() {
+        DeviceStorage storage(std::move(source_mesh_tensor));  // NOLINT(bugprone-use-after-move)
+        (void)storage;
+    };
+    EXPECT_THROW(construct_storage_from_moved_from(), std::exception);
 }
 
 TEST_F(DeviceStorageOwnershipTest, DeviceStorage_SoleOwnerAfterCreation) {

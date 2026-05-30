@@ -9,7 +9,7 @@ import ttnn
 from models.common.sampling.generator import SamplingGenerator
 from models.common.utility_functions import nearest_32
 from models.demos.gpt_oss.config import MeshConfig, Mode, ModeConfig
-from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
+from models.demos.gpt_oss.utils.general_utils import get_cache_file_name, get_default_num_links
 from models.demos.gpt_oss.utils.substate import substate
 from models.tt_transformers.tt.common import copy_host_to_device, rope_scaling_model_factory
 from models.tt_transformers.tt.rope import RotarySetup
@@ -293,7 +293,7 @@ class Model:
         # Create a dummy CCL manager for GPT-OSS
         from models.demos.gpt_oss.tt.ccl import CCLManager
 
-        ccl_manager = CCLManager(mesh_device, num_links=4 if mesh_device.shape[0] > 1 else 1)
+        ccl_manager = CCLManager(mesh_device, num_links=get_default_num_links(mesh_device))
 
         # Create instance using direct initialization
         instance = cls.__new__(cls)
@@ -961,14 +961,20 @@ class Model:
         )
         return host_inputs
 
-    def transform_and_embed_prefill_inputs_device(self, tokens, tt_page_table, tt_chunk_page_table):
+    def transform_and_embed_prefill_inputs_device(
+        self,
+        tokens,
+        tt_page_table,
+        tt_chunk_page_table,
+        tt_chunk_start_idx=None,
+    ):
         """Transform and embed tokens on device"""
         tokens_embd = ttnn.embedding(tokens, self.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
         # Keep `tokens` allocated: trace replay updates this same device buffer via copy_host_to_device.
         # Deallocating it here breaks prefill trace replay with "Buffer must be allocated on device".
         if len(tokens_embd.shape) == 3:
             tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
-        return tokens_embd, tt_page_table, tt_chunk_page_table
+        return tokens_embd, tt_page_table, tt_chunk_page_table, tt_chunk_start_idx
 
     def prepare_inputs_prefill(
         self,
@@ -982,6 +988,8 @@ class Model:
         batch_size=1,
         user_id=0,
         batched_prefill=False,
+        chunk_start_idx=None,
+        **kwargs,
     ):
         """Prepare inputs for prefill mode
 
@@ -1079,12 +1087,23 @@ class Model:
                 chunk_page_table, device=device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
             )
 
+        if chunk_start_idx is not None:
+            tt_chunk_start_idx = ttnn.from_torch(
+                torch.tensor([chunk_start_idx], dtype=torch.int32),
+                device=device,
+                dtype=ttnn.int32,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        else:
+            tt_chunk_start_idx = None
+
         return (
             tokens if trace_enabled else tokens_embd,
             rot_mats_global,
             rot_mats_local,
             tt_page_table,
             tt_chunk_page_table,
+            tt_chunk_start_idx,
         )
 
     def process_output_decode(self, tt_out, B, S=1, is_tokens=False, is_log_probs=False):

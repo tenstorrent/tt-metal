@@ -244,59 +244,14 @@ CoreRangeSet get_cores_with_work(
 
 }  // namespace
 
-UpsampleMultiCoreShardedProgramFactory::Resources UpsampleMultiCoreShardedProgramFactory::prepare_resources(
-    const UpsampleParams& operation_attributes, const Tensor& input_tensor, Tensor& /*output_tensor*/) {
-    const auto& input = input_tensor;
-    TT_FATAL(
-        operations::pool::upsample::is_integer_scale(operation_attributes.scale_factor_h) &&
-            operations::pool::upsample::is_integer_scale(operation_attributes.scale_factor_w),
-        "Sharded upsample factory requires integer scale factors, got scale_h={}, scale_w={}",
-        operation_attributes.scale_factor_h,
-        operation_attributes.scale_factor_w);
-    const uint32_t scale_factor_h = static_cast<uint32_t>(operation_attributes.scale_factor_h);
-
-    distributed::MeshDevice* device = input.device();
-    const auto shard_spec = input.shard_spec().value();
-    const uint32_t in_w = input.padded_shape()[2];
-    const uint32_t input_nsticks_per_core = shard_spec.shape[0];
-    const bool is_height_sharded = input.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
-    const uint32_t total_nhw = input.padded_shape()[0] * input.padded_shape()[1] * in_w;
-
-    const TensorMemoryLayout memory_layout = input.memory_config().memory_layout();
-    TT_FATAL(
-        memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || memory_layout == TensorMemoryLayout::BLOCK_SHARDED,
-        "Unsupported sharding layout");
-
-    const CoreRangeSet cores_with_work = get_cores_with_work(
-        shard_spec.grid, total_nhw, input_nsticks_per_core, is_height_sharded, shard_spec.orientation);
-
-    Tensor config_tensor = create_config_tensor(
-        device, shard_spec, input.padded_shape()[0], input.padded_shape()[1], in_w, scale_factor_h, is_height_sharded);
-
-    const auto shard_shape = std::array<uint32_t, 2>({1, static_cast<uint32_t>(config_tensor.logical_shape()[-1])});
-    const auto config_tensor_shard_orientation =
-        input.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ? ShardOrientation::COL_MAJOR
-                                                                                   : shard_spec.orientation;
-    // Use cores_with_work for config tensor sharding - only cores that have actual work need config data
-    const ShardSpec config_shard_spec(cores_with_work, shard_shape, config_tensor_shard_orientation);
-    const MemoryConfig config_memory_config{
-        TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1_SMALL, config_shard_spec};
-
-    return Resources{.config_tensor_device = config_tensor.to_device(device, config_memory_config)};
-}
-
 namespace {
-const Tensor& require_resources(const std::optional<Tensor>& cfg) {
-    TT_FATAL(cfg.has_value(), "prepare_resources must run before create_descriptor for sharded upsample");
-    return *cfg;
-}
-}  // namespace
-
-ProgramDescriptor UpsampleMultiCoreShardedProgramFactory::create_descriptor(
+ProgramDescriptor build_sharded_upsample_program(
     const UpsampleParams& operation_attributes,
     const Tensor& input_tensor,
     Tensor& output_tensor,
-    Resources& resources) {
+    tt::tt_metal::Buffer* config_buffer,
+    uint32_t config_tensor_width) {
+    TT_FATAL(config_buffer != nullptr, "config buffer must be populated before building the upsample program");
     const auto& input = input_tensor;
     auto& output = output_tensor;
 
@@ -391,10 +346,9 @@ ProgramDescriptor UpsampleMultiCoreShardedProgramFactory::create_descriptor(
         input_nsticks_per_core,
         output_nsticks_per_core);
 
-    // Config tensor lives on resources so its buffer outlives this descriptor
-    // and the cached Program (the config CB references the buffer pointer
-    // directly via UpdateDynamicCircularBufferAddress).
-    Buffer* const config_buffer = require_resources(resources.config_tensor_device).buffer();
+    // The config buffer lives on the WorkloadDescriptor so it outlives
+    // this descriptor and the cached Program (the config CB references the
+    // buffer pointer directly via UpdateDynamicCircularBufferAddress).
     constexpr tt::DataFormat config_df = tt::DataFormat::RawUInt16;
     const uint32_t config_buffer_page_size = config_buffer->page_size();
 
@@ -421,7 +375,7 @@ ProgramDescriptor UpsampleMultiCoreShardedProgramFactory::create_descriptor(
         scale_factor_h,
         scale_factor_w,
         // number of intervals in config tensor per core, 4 is number of bfloat16 elements per entry
-        static_cast<uint32_t>(require_resources(resources.config_tensor_device).logical_shape()[-1] / 4),
+        config_tensor_width / 4,
     };
 
     KernelDescriptor::CompileTimeArgs reader_compile_time_args = writer_compile_time_args;
@@ -448,6 +402,79 @@ ProgramDescriptor UpsampleMultiCoreShardedProgramFactory::create_descriptor(
     desc.kernels.push_back(std::move(reader_desc));
 
     return desc;
+}
+
+}  // namespace
+
+tt::tt_metal::WorkloadDescriptor UpsampleMultiCoreShardedProgramFactory::create_workload_descriptor(
+    const UpsampleParams& operation_attributes,
+    const Tensor& input_tensor,
+    Tensor& output_tensor,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    const auto& input = input_tensor;
+    TT_FATAL(
+        operations::pool::upsample::is_integer_scale(operation_attributes.scale_factor_h) &&
+            operations::pool::upsample::is_integer_scale(operation_attributes.scale_factor_w),
+        "Sharded upsample factory requires integer scale factors, got scale_h={}, scale_w={}",
+        operation_attributes.scale_factor_h,
+        operation_attributes.scale_factor_w);
+    const uint32_t scale_factor_h = static_cast<uint32_t>(operation_attributes.scale_factor_h);
+
+    distributed::MeshDevice* device = input.device();
+    const auto shard_spec = input.shard_spec().value();
+    const uint32_t in_w = input.padded_shape()[2];
+    const uint32_t input_nsticks_per_core = shard_spec.shape[0];
+    const bool is_height_sharded = input.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
+    const uint32_t total_nhw = input.padded_shape()[0] * input.padded_shape()[1] * in_w;
+
+    const TensorMemoryLayout memory_layout = input.memory_config().memory_layout();
+    TT_FATAL(
+        memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || memory_layout == TensorMemoryLayout::BLOCK_SHARDED,
+        "Unsupported sharding layout");
+
+    const CoreRangeSet cores_with_work = get_cores_with_work(
+        shard_spec.grid, total_nhw, input_nsticks_per_core, is_height_sharded, shard_spec.orientation);
+
+    Tensor config_tensor = create_config_tensor(
+        device, shard_spec, input.padded_shape()[0], input.padded_shape()[1], in_w, scale_factor_h, is_height_sharded);
+
+    const auto shard_shape = std::array<uint32_t, 2>({1, static_cast<uint32_t>(config_tensor.logical_shape()[-1])});
+    const auto config_tensor_shard_orientation =
+        input.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ? ShardOrientation::COL_MAJOR
+                                                                                   : shard_spec.orientation;
+    // Use cores_with_work for config tensor sharding - only cores that have actual work need config data
+    const ShardSpec config_shard_spec(cores_with_work, shard_shape, config_tensor_shard_orientation);
+    const MemoryConfig config_memory_config{
+        TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1_SMALL, config_shard_spec};
+
+    Tensor config_tensor_dev = config_tensor.to_device(device, config_memory_config);
+    const uint32_t config_tensor_width = static_cast<uint32_t>(config_tensor_dev.logical_shape()[-1]);
+    // See pool_multi_core_program_factory.cpp for the rationale: holding a
+    // shared_ptr<MeshBuffer> is not enough because ~Tensor force-deallocates
+    // the underlying device memory.  Wrap the source Tensor in a shared_ptr
+    // and stash it in WorkloadBuffer.owner so its destructor is deferred
+    // until the cached workload is evicted.
+    auto config_tensor_owner = std::make_shared<Tensor>(std::move(config_tensor_dev));
+    tt::tt_metal::Buffer* config_buffer = config_tensor_owner->buffer();
+
+    tt::tt_metal::WorkloadDescriptor workload_descriptor;
+    workload_descriptor.buffers.push_back({std::move(config_tensor_owner), config_buffer});
+
+    // Single-device op: the per-coord program is structurally identical for
+    // every coord in `tensor_coords` (upsample doesn't depend on cluster
+    // position). Build the descriptor ONCE and copy it into each coord-range
+    // entry.
+    auto desc = build_sharded_upsample_program(
+        operation_attributes, input_tensor, output_tensor, config_buffer, config_tensor_width);
+    auto ranges = tensor_coords.ranges();
+    workload_descriptor.programs.reserve(ranges.size());
+    for (size_t i = 0; i + 1 < ranges.size(); ++i) {
+        workload_descriptor.programs.push_back({ranges[i], desc});
+    }
+    if (!ranges.empty()) {
+        workload_descriptor.programs.push_back({ranges.back(), std::move(desc)});
+    }
+    return workload_descriptor;
 }
 
 }  // namespace ttnn::prim

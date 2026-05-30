@@ -32,11 +32,14 @@ def _fabric_config_for_num_procs(num_procs: int):
     raise ValueError(f"Unsupported num_procs for fabric config: {num_procs} (expected 4, 16, or 64)")
 
 
-def _needs_extended_worker_l1(num_procs: int) -> bool:
+def _needs_extended_worker_l1(num_procs: int, *, enable_speculative_decode: bool = True) -> bool:
     """Return true when this worker must use the larger L1 budget.
 
     TT_MESH_ID must be provided by launch tooling for 16/64-proc runs.
     """
+    if not enable_speculative_decode:
+        return False
+
     mesh_id = os.environ.get("TT_MESH_ID")
     target_rank = None
     if num_procs == 64:
@@ -55,21 +58,24 @@ def _needs_extended_worker_l1(num_procs: int) -> bool:
         raise RuntimeError(f"Invalid TT_MESH_ID={mesh_id!r}; expected an integer") from exc
 
 
-def _worker_l1_size_for_rank(num_procs: int) -> int:
+def _worker_l1_size_for_rank(num_procs: int, *, enable_speculative_decode: bool = True) -> int:
     """Select worker L1 size for rank-specific LM-head memory requirements."""
-    if _needs_extended_worker_l1(num_procs=num_procs):
+    if _needs_extended_worker_l1(num_procs=num_procs, enable_speculative_decode=enable_speculative_decode):
         return LM_HEAD_WORKER_L1_SIZE
     return DEFAULT_WORKER_L1_SIZE
 
 
 @contextlib.contextmanager
-def open_mesh_device():
+def open_mesh_device(*, enable_speculative_decode: bool = True):
     """Open mesh device for pod demos with shared fabric and worker L1 settings."""
     if not os.environ.get("TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS"):
         os.environ["TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS"] = TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS_DEFAULT
 
     num_procs = int(ttnn.distributed_context_get_size())
-    worker_l1_size = _worker_l1_size_for_rank(num_procs=num_procs)
+    worker_l1_size = _worker_l1_size_for_rank(
+        num_procs=num_procs,
+        enable_speculative_decode=enable_speculative_decode,
+    )
     device_params = {
         "fabric_config": _fabric_config_for_num_procs(num_procs),
         "fabric_router_config": create_fabric_router_config(FABRIC_PACKET_SIZE_BYTES),

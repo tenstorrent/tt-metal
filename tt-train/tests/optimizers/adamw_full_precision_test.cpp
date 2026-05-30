@@ -210,6 +210,11 @@ static void run_steps_and_compare(const AdamWFullPrecisionCase& pc, uint32_t ste
     // Inject optimizer state
     serialization::StateDict state;
     state["steps"] = initial_steps;
+    state["lr"] = pc.lr;
+    state["beta1"] = pc.beta1;
+    state["beta2"] = pc.beta2;
+    state["epsilon"] = pc.epsilon;
+    state["weight_decay"] = pc.weight_decay;
     state["master_weights"] =
         serialization::NamedParameters{{"theta", autograd::create_tensor(to_tt_fp32(w0_fp32), false)}};
     state["exp_avg"] = serialization::NamedParameters{{"theta", autograd::create_tensor(to_tt_fp32(m0), false)}};

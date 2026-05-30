@@ -50,7 +50,7 @@ from ttexalens.context import Context
 from ttexalens.device import Device
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.umd_device import TimeoutDeviceRegisterError
-from ttexalens.hardware.risc_debug import RiscHaltError
+from ttexalens.exceptions import RiscHaltError
 import utils
 from metal_device_id_mapping import run as get_metal_device_id_mapping, MetalDeviceIdMapping
 
@@ -175,50 +175,48 @@ def _make_device_map(devices: list[Device]) -> dict[int, Device]:
     return {device.id: device for device in devices}
 
 
+def _exalens_block_locations(device: Device, block_type: BlockType) -> list[OnChipCoordinate]:
+    if block_type == "active_eth":
+        return device.active_eth_block_locations
+    if block_type == "idle_eth":
+        return device.idle_eth_block_locations
+    if block_type == "dram" and not device.is_blackhole():
+        return []
+    return device.get_block_locations("functional_workers" if block_type == "tensix" else block_type)
+
+
 def get_block_locations(
     devices: list[Device],
     inspector_data: InspectorData | None,
     metal_device_id_mapping: MetalDeviceIdMapping | None,
 ) -> dict[Device, dict[BlockType, list[OnChipCoordinate]]]:
     block_locations: dict[Device, dict[BlockType, list[OnChipCoordinate]]] = defaultdict(dict)
+    covered: set[Device] = set()
 
-    # Without Inspector we can't pre-aggregate active/idle eth core lists per chip,
-    # so fall back to per-device exalens helpers for every block type.
-    if inspector_data is None or metal_device_id_mapping is None:
-        for device in devices:
-            for block_type in BLOCK_TYPES:
-                if block_type == "active_eth":
-                    block_locations[device][block_type] = device.active_eth_block_locations
-                elif block_type == "idle_eth":
-                    block_locations[device][block_type] = device.idle_eth_block_locations
-                elif block_type == "dram" and not device.is_blackhole():
-                    block_locations[device][block_type] = []
-                else:
-                    block_locations[device][block_type] = device.get_block_locations(
-                        "functional_workers" if block_type == "tensix" else block_type
-                    )
-        return block_locations
-
-    device_map = _make_device_map(devices)
-    chip_blocks_list = inspector_data.getBlocksByType().chips
-
-    for i in range(len(chip_blocks_list)):
-        metal_device_id = chip_blocks_list[i].chipId
-        device_id = metal_device_id_mapping.get_device_id(metal_device_id)
-        if device_id in device_map:
-            device = device_map[device_id]
-            for block_type in BLOCK_TYPES:
-                if block_type in INSPECTOR_BLOCK_TYPES:
-                    block_locations[device][block_type] = _convert_to_on_chip_coordinates(
-                        device, getattr(chip_blocks_list[i].blocks, INSPECTOR_BLOCK_TYPES[block_type]), block_type
-                    )
-                else:
-                    if block_type == "dram" and not device.is_blackhole():
-                        block_locations[device][block_type] = []
-                    else:
-                        block_locations[device][block_type] = device.get_block_locations(
-                            "functional_workers" if block_type == "tensix" else block_type
+    if inspector_data is not None and metal_device_id_mapping is not None:
+        device_map = _make_device_map(devices)
+        chip_blocks_list = inspector_data.getBlocksByType().chips
+        for i in range(len(chip_blocks_list)):
+            metal_device_id = chip_blocks_list[i].chipId
+            device_id = metal_device_id_mapping.get_device_id(metal_device_id)
+            if device_id in device_map:
+                device = device_map[device_id]
+                covered.add(device)
+                for block_type in BLOCK_TYPES:
+                    if block_type in INSPECTOR_BLOCK_TYPES:
+                        block_locations[device][block_type] = _convert_to_on_chip_coordinates(
+                            device, getattr(chip_blocks_list[i].blocks, INSPECTOR_BLOCK_TYPES[block_type]), block_type
                         )
+                    else:
+                        block_locations[device][block_type] = _exalens_block_locations(device, block_type)
+
+    # Exalens fallback for any device Inspector didn't cover (no inspector at all, or
+    # Inspector's getBlocksByType is missing this device).
+    for device in devices:
+        if device in covered:
+            continue
+        for block_type in BLOCK_TYPES:
+            block_locations[device][block_type] = _exalens_block_locations(device, block_type)
 
     return block_locations
 

@@ -19,11 +19,8 @@ inline void _cast_fp32_to_fp16a_(const int iterations)
 #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++)
     {
-        // sfpi::vFloat val = sfpi::dst_reg[0];
-        // sfpi::dst_reg[0] = sfpi::float_to_fp16a(val, sfpi::RoundMode::NearestEven);
-        TTI_SFPLOAD(0, 0, ADDR_MOD_7, 0);
-        TTI_SFP_STOCH_RND(0, 0, 0, 0, 0, 8);
-        TTI_SFPSTORE(0, 1, ADDR_MOD_7, 0);
+        sfpi::vFloat x   = sfpi::dst_reg[0];
+        sfpi::dst_reg[0].mode<sfpi::SFPSTORE_MOD0_FMT_FP16A>() = sfpi::convert<sfpi::vFloat16a>(x, sfpi::RoundMode::NearestEven);
         sfpi::dst_reg++;
     }
 }

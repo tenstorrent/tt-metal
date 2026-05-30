@@ -18,7 +18,6 @@ struct RotaryEmbeddingLlamaFusedQKDeviceOperation {
     using spec_return_value_t = RotaryEmbeddingLlamaFusedQkResultSpec;
     using tensor_return_value_t = RotaryEmbeddingLlamaFusedQkResult;
     using program_factory_t = std::variant<RotaryEmbeddingLlamaFusedQKProgramFactory>;
-    using shared_variables_t = RotaryEmbeddingLlamaFusedQKProgramFactory::shared_variables_t;
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 

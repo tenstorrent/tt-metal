@@ -160,6 +160,9 @@ LEAD_MODELS_MESH_TEST_GROUPS = {
     "8x4": "lead-models-galaxy",
     "2x16": "lead-models-galaxy",
     "16x2": "lead-models-galaxy",
+    "4x4": "lead-models-galaxy",
+    "1x32": "lead-models-galaxy",
+    "32x1": "lead-models-galaxy",
 }
 
 LEAD_MODELS_DEFAULT_TEST_GROUP = "lead-models-single-chip"
@@ -167,7 +170,7 @@ LEAD_MODELS_SUITE_NAME = "model_traced"
 
 # Absent entries use the caller-provided fixed ``batch_size``.
 LEAD_MODELS_BATCH_POLICY = {
-    "lead-models-galaxy": {"parallel_jobs": 3},
+    "lead-models-galaxy": {"parallel_jobs": 6},
 }
 
 
@@ -200,6 +203,9 @@ MODEL_TRACED_MESH_TEST_GROUPS = {
     "8x4": "wormhole-galaxy-sweeps",
     "2x16": "wormhole-galaxy-sweeps",
     "16x2": "wormhole-galaxy-sweeps",
+    "4x4": "wormhole-galaxy-sweeps",
+    "1x32": "wormhole-galaxy-sweeps",
+    "32x1": "wormhole-galaxy-sweeps",
 }
 
 

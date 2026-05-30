@@ -13,7 +13,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_pcc
+from models.common.utility_functions import comp_pcc, skip_with_llk_assert
 from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensor, CompressedTensorAssigner
 from models.demos.deepseek_v3_b1.micro_ops.matmul_expert.op import (
     ExpertKernel,
@@ -21,6 +21,7 @@ from models.demos.deepseek_v3_b1.micro_ops.matmul_expert.op import (
     create_dram_expert_tensors_multi_device,
     encode_expert_indices,
 )
+from models.demos.deepseek_v3_b1.utils import get_pinned_optimal_dram_bank_to_logical_worker_assignment
 
 
 def shuffle_tensor_tiles(tensor, tile_size, num_banks, subblock_k=None, subblock_n=None):
@@ -524,6 +525,7 @@ def _validate_dram_output(
     tp_expert=True,
     cores_per_dram_bank=1,
     k_parallel_per_bank=1,
+    primary_at_last_offset=False,
 ):
     """Validate per-expert DRAM output from dram_core_grid output tensor.
 
@@ -567,8 +569,17 @@ def _validate_dram_output(
                 slices = []
                 for bank_idx in range(num_banks):
                     for n_slice_in_bank in range(n_parallel_per_bank):
-                        offset = n_slice_in_bank * k_parallel_per_bank + k_slice_idx
-                        core_flat_idx = bank_idx * cores_per_dram_bank + offset
+                        # offset_in_compute = position in compute_cores_list (post-swap if any)
+                        offset_in_compute = n_slice_in_bank * k_parallel_per_bank + k_slice_idx
+                        # offset_in_dram = position in dram_core_grid (PRE-swap; output tensor
+                        # is sharded on the unswapped grid order). With primary_at_last_offset,
+                        # the swap reverses in-bank x_offset, so compute_cores_list_idx maps to
+                        # dram_core_grid_idx = (cores_per_bank-1) - offset_in_compute.
+                        if primary_at_last_offset:
+                            offset_in_dram = (cores_per_dram_bank - 1) - offset_in_compute
+                        else:
+                            offset_in_dram = offset_in_compute
+                        core_flat_idx = bank_idx * cores_per_dram_bank + offset_in_dram
                         start = core_flat_idx * dram_core_width * per_core_slots + exp_offset * dram_core_width
                         slices.append(output_dev[..., start : start + dram_core_width])
                 expert_output = torch.cat(slices, dim=-1)
@@ -596,16 +607,36 @@ def _validate_dram_output_accum(
     pcc_threshold,
     tile_w,
     tp_expert=True,
+    primary_at_last_offset=False,
+    cores_per_dram_bank=1,
 ):
-    """Validate accumulated DRAM output from dram_core_grid output tensor."""
+    """Validate accumulated DRAM output from dram_core_grid output tensor.
+
+    primary_at_last_offset: each core's shard widens to cores_per_dram_bank * dram_per_core_N
+    tiles. The kernel's receiver = LAST in compute_cores_list bank; the swap
+    inside create_dram_expert_tensors_multi_device places the primary there, so
+    in the unswapped dram_core_grid (used for output sharding) the receiver
+    sits at the FIRST shard of each bank. Read shard 0 of each bank.
+    """
     dram_core_width = dram_per_core_N * tile_w
+
+    if primary_at_last_offset:
+        assert num_dram_cores_active % cores_per_dram_bank == 0
+        num_banks = num_dram_cores_active // cores_per_dram_bank
+        per_core_shard_w = cores_per_dram_bank * dram_core_width
 
     for dev_idx, out_dev in enumerate(ttnn.get_device_tensors(result)):
         output_dev = ttnn.to_torch(out_dev)
         slices = []
-        for ci in range(num_dram_cores_active):
-            start = ci * dram_core_width
-            slices.append(output_dev[..., start : start + dram_core_width])
+        if primary_at_last_offset:
+            for bank_idx in range(num_banks):
+                receiver_core_idx = bank_idx * cores_per_dram_bank
+                start = receiver_core_idx * per_core_shard_w
+                slices.append(output_dev[..., start : start + per_core_shard_w])
+        else:
+            for ci in range(num_dram_cores_active):
+                start = ci * dram_core_width
+                slices.append(output_dev[..., start : start + dram_core_width])
         accum_output = torch.cat(slices, dim=-1)
         # Expert parallel: each device accumulates only its own expert.
         dev_active_dram = active_dram if tp_expert else [active_dram[dev_idx]]
@@ -613,8 +644,9 @@ def _validate_dram_output_accum(
             torch_a_per_expert[eidx].float() @ torch_b_all[eidx][dev_idx].float() for eidx in dev_active_dram
         ).bfloat16()
         passing, msg = comp_pcc(torch_expected, accum_output, pcc_threshold)
-        logger.info(f"Device {dev_idx} accum (DRAM) PCC: {msg}")
-        assert passing, f"Device {dev_idx} accum (DRAM) failed: {msg}"
+        label = "DRAM gather" if primary_at_last_offset else "DRAM"
+        logger.info(f"Device {dev_idx} accum ({label}) PCC: {msg}")
+        assert passing, f"Device {dev_idx} accum ({label}) failed: {msg}"
 
 
 def _validate_sram_output_slice_k(
@@ -669,7 +701,12 @@ def _setup_core_grids(mesh_device, cores_per_dram_bank, num_sram_cores, sram_cor
 
     DRAM cores are always included. SRAM cores are included only when has_sram is True.
     """
-    primary_cores_list = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+    # Use the pinned list so the test's compute_core_grid matches op.py's
+    # create_dram_expert_metadata bank assignment exactly. The device-determined
+    # optimal mapping can vary with harvesting and end up disagreeing with
+    # op.py's pinned primaries — leaves some compute cores with default
+    # core_in_bank_idx=0 / blank expert_offsets, blocking on cb_in1.
+    primary_cores_list = get_pinned_optimal_dram_bank_to_logical_worker_assignment(mesh_device, ttnn.NOC.NOC_0)
     dram_cores_list = []
     for pc in primary_cores_list:
         for offset in range(cores_per_dram_bank):
@@ -748,6 +785,7 @@ def _build_dram_experts(
     Kt,
     tile_w,
     k_parallel_per_bank=1,
+    primary_at_last_offset=False,
 ):
     """Build DRAM CompressedTensors and dram_meta_tensors for the kernel.
 
@@ -808,6 +846,7 @@ def _build_dram_experts(
         is_dram_flags=dram_meta_flags,
         subblock_n=subblock_n,
         k_parallel_per_bank=k_parallel_per_bank,
+        primary_at_last_offset=primary_at_last_offset,
     )
     return dram_cts, dram_meta_tensors
 
@@ -1091,6 +1130,7 @@ def _run_standard(
     fmt_ratios=None,
     k_parallel_per_bank=1,
     num_loop_iters=1,
+    primary_at_last_offset=False,
 ):
     """Standard path: WIDTH_SHARDED SRAM, per-expert output slices on compute_core_grid."""
     cores_per_dram_bank = n_parallel_per_bank * k_parallel_per_bank
@@ -1161,6 +1201,7 @@ def _run_standard(
             Kt,
             tile_w,
             k_parallel_per_bank=k_parallel_per_bank,
+            primary_at_last_offset=primary_at_last_offset,
         )
     else:
         assert len(formats_per_device) == 1, "tp_expert=False: all devices share same formats"
@@ -1312,6 +1353,7 @@ def _run_standard(
             tp_expert=tp_expert,
             cores_per_dram_bank=cores_per_dram_bank,
             k_parallel_per_bank=k_parallel_per_bank,
+            primary_at_last_offset=primary_at_last_offset,
         )
 
 
@@ -1336,10 +1378,20 @@ def _run_accum(
     fmt_distribution="random",
     fmt_ratios=None,
     num_loop_iters=1,
+    primary_at_last_offset=False,
 ):
-    """Accumulation path: WIDTH_SHARDED SRAM, expert outputs summed in-place."""
+    """Accumulation path: WIDTH_SHARDED SRAM, expert outputs summed in-place.
+
+    primary_at_last_offset: when True, each sender (cores 0..cores_per_dram_bank-2) NOC-writes
+    its accum result onto the receiver (last core in bank), so the receiver's shard
+    holds the full bank N output [c0_n_slice | c1_n_slice | ...]. Output tensor's
+    per-core shard width widens to cores_per_dram_bank * dram_per_core_N.
+    """
     cores_per_dram_bank = n_parallel_per_bank
     assert tp_expert, "Expert parallel (tp_expert=False) not supported in accum path"
+    if primary_at_last_offset:
+        assert not sram_expert_ids, "primary_at_last_offset test path: DRAM-only for now"
+        assert cores_per_dram_bank >= 2, "primary_at_last_offset requires cores_per_dram_bank >= 2"
     tile_w = 32
     sram_id_set = set(sram_expert_ids)
     has_sram = bool(sram_expert_ids)
@@ -1370,6 +1422,17 @@ def _run_accum(
 
     assert len(formats_per_device) == num_devices
     torch.manual_seed(0)
+    # Reorder active_expert_ids so DRAM-active slots come first, then SRAM-active.
+    # The DRAM matmul kernel reads activations by `dram_idx` (compact, count of DRAM-
+    # flagged TopK positions encountered so far), so slot dram_idx must hold the
+    # corresponding DRAM expert's activation. Placing DRAM experts at positions
+    # 0..N_dram-1 in active_expert_ids makes exp_i == dram_idx for those slots, and
+    # the rest carry SRAM experts where the SRAM kernel's exp_i-indexed read still
+    # lands on the right activation. Mirrors the production layout where upstream
+    # gate_proj/up_proj skip SRAM-flagged TopK so cb_in0 is naturally DRAM-first.
+    active_expert_ids = [eid for eid in active_expert_ids if eid not in sram_id_set] + [
+        eid for eid in active_expert_ids if eid in sram_id_set
+    ]
     # Per-expert activations: each expert gets a distinct activation, laid out
     # in index-tensor order so the kernel can offset incrementally.
     num_active = len(active_expert_ids)
@@ -1406,6 +1469,7 @@ def _run_accum(
         subblock_n,
         Kt,
         tile_w,
+        primary_at_last_offset=primary_at_last_offset,
     )
     a_tensor = _build_activation_tensor(
         torch_a_all, mesh_device, compute_core_grid, num_cores, M, K * num_active, tile_w
@@ -1451,10 +1515,14 @@ def _run_accum(
         if has_sram
         else None
     )
+    # primary_at_last_offset: each core's shard widens along N to hold cores_per_dram_bank
+    # per_core_n slots — receiver ends up with the bank's full N output, sender's
+    # tail slot is junk. Express as a wider per-core N (not more experts).
+    out_dram_per_core_N = dram_per_core_N * cores_per_dram_bank if primary_at_last_offset else dram_per_core_N
     out_tensor = _build_dram_output(
         mesh_device,
         M,
-        dram_per_core_N,
+        out_dram_per_core_N,
         1,
         num_dram_cores,
         num_devices,
@@ -1491,6 +1559,7 @@ def _run_accum(
         sram_output_tensor=sram_out_tensor,
         tp_expert=tp_expert,
         num_loop_iters=num_loop_iters,
+        primary_at_last_offset=primary_at_last_offset,
     )
     if active_sram:
         _validate_sram_output_accum(
@@ -1514,6 +1583,8 @@ def _run_accum(
             pcc_threshold,
             tile_w,
             tp_expert=tp_expert,
+            primary_at_last_offset=primary_at_last_offset,
+            cores_per_dram_bank=cores_per_dram_bank,
         )
 
 
@@ -1540,6 +1611,7 @@ def _run_slice_k(
     fmt_ratios=None,
     k_parallel_per_bank=1,
     num_loop_iters=1,
+    primary_at_last_offset=False,
 ):
     """K-sliced path: HEIGHT_SHARDED SRAM, separate output grids."""
     cores_per_dram_bank = n_parallel_per_bank * k_parallel_per_bank
@@ -1608,6 +1680,7 @@ def _run_slice_k(
         Kt,
         tile_w,
         k_parallel_per_bank=k_parallel_per_bank,
+        primary_at_last_offset=primary_at_last_offset,
     )
     a_tensor = _build_activation_tensor(torch_a, mesh_device, compute_core_grid, num_cores, M, K, tile_w)
     index_tensor = _build_index_tensor(active_expert_ids, mesh_device, compute_core_grid, num_cores, is_dram_flags)
@@ -1763,6 +1836,7 @@ def _run_hybrid_expert_multi_device(
     fmt_ratios=None,
     k_parallel_per_bank=1,
     num_loop_iters=1,
+    primary_at_last_offset=False,
 ):
     """Dispatcher: delegate to the appropriate variant.
 
@@ -1773,6 +1847,14 @@ def _run_hybrid_expert_multi_device(
     """
     assert dram_expert_ids, "DRAM expert path is always required"
     assert len(dram_expert_ids) <= num_experts, "dram_expert_ids exceeds num_experts"
+    if primary_at_last_offset:
+        # Two valid combinations:
+        #  1) accum_experts: down_proj N-gather (gather receiver = primary).
+        #  2) k_parallel_per_bank > 1: gate/up K-split (K-reducer = primary).
+        assert accum_experts or k_parallel_per_bank > 1, (
+            "primary_at_last_offset requires accum_experts (N-gather) or "
+            "k_parallel_per_bank>1 (K-reduce); the swap is meaningless otherwise"
+        )
     if not tp_expert:
         assert not sram_expert_ids, "Expert parallel (tp_expert=False) only supports DRAM matmul"
         assert (
@@ -1803,6 +1885,7 @@ def _run_hybrid_expert_multi_device(
             fmt_ratios,
             k_parallel_per_bank=k_parallel_per_bank,
             num_loop_iters=num_loop_iters,
+            primary_at_last_offset=primary_at_last_offset,
         )
     elif accum_experts:
         _run_accum(
@@ -1826,6 +1909,7 @@ def _run_hybrid_expert_multi_device(
             fmt_distribution,
             fmt_ratios,
             num_loop_iters=num_loop_iters,
+            primary_at_last_offset=primary_at_last_offset,
         )
     else:
         _run_standard(
@@ -1851,6 +1935,7 @@ def _run_hybrid_expert_multi_device(
             fmt_ratios,
             k_parallel_per_bank=k_parallel_per_bank,
             num_loop_iters=num_loop_iters,
+            primary_at_last_offset=primary_at_last_offset,
         )
 
 
@@ -2303,7 +2388,8 @@ def test_benchmark_gate_proj(device, formats_per_device, fmt_ratios):
     ids=["bfp4_bfp0", "bfp4_bfp2_bfp0"],
 )
 def test_benchmark_up_proj(device, formats_per_device, fmt_ratios):
-    """MoE up-proj shape: 8 experts, 8 selected (1 per device), K=7168, N=256, DRAM-only."""
+    """MoE up-proj shape matching TP8 setup_matmul_expert_dram: K=7168, N=256/device,
+    cores_per_dram_bank=1 (one streamer), num_subblocks_k=8, num_active_experts=8."""
     _run_hybrid_expert_multi_device(
         device,
         M=1,
@@ -2314,10 +2400,10 @@ def test_benchmark_up_proj(device, formats_per_device, fmt_ratios):
         dram_expert_ids=list(range(8)),
         active_expert_ids=[2, 3, 4, 5, 6, 7, 1, 0],
         formats_per_device=[formats_per_device],
-        num_subblocks_k=4,
+        num_subblocks_k=8,
         num_subblocks_n=1,
         n_parallel_per_bank=1,
-        k_parallel_per_bank=2,
+        k_parallel_per_bank=1,
         fmt_distribution="uniform",
         fmt_ratios=fmt_ratios,
         num_loop_iters=100,
@@ -2352,6 +2438,151 @@ def test_benchmark_down_proj(device, formats_per_device, fmt_ratios):
         fmt_distribution="uniform",
         fmt_ratios=fmt_ratios,
         num_loop_iters=100,
+    )
+
+
+@skip_with_llk_assert(
+    'Hit LLK_ASSERT in cb_push_back: "CB push_back: fifo_wr_ptr would exceed fifo_limit" '
+    "(llk_io_pack.h) on TRISC2/packer from the per-expert cb_out push/pop wraparound trick "
+    "in the accum + primary_at_last_offset path; cores hang and host times out in "
+    "wait_until_cores_done. Issue: #45174"
+)
+def test_benchmark_down_proj_gather_to_next(device):
+    """Accum + primary_at_last_offset: 2-core bank splits N, sender NOC-writes its slice
+    onto the receiver so receiver's shard holds the bank's full N output.
+
+    Validates the gather path: mirrors test_benchmark_down_proj's shape (down-proj)
+    but with cores_per_dram_bank=2 and primary_at_last_offset=True.
+    """
+    _run_hybrid_expert_multi_device(
+        device,
+        M=1,
+        K=256,
+        N=7168,
+        num_experts=8,
+        sram_expert_ids=[],
+        dram_expert_ids=list(range(8)),
+        active_expert_ids=[2, 3, 4, 5, 6, 7, 1, 0],
+        formats_per_device=[["bfp4"]],
+        accum_experts=True,
+        primary_at_last_offset=True,
+        num_subblocks_k=1,
+        num_subblocks_n=2,
+        n_parallel_per_bank=2,
+        k_parallel_per_bank=1,
+        fmt_distribution="uniform",
+        num_loop_iters=100,
+    )
+
+
+# ---------------------------------------------------------------------------
+# K-split + primary_at_last_offset benchmarks — gate/up MoE config
+# ---------------------------------------------------------------------------
+# K-reduce path (k_parallel_per_bank>1) where the primary core is also the K-reducer.
+# Mirrors MoE gate/up: the swap inside create_dram_expert_tensors_multi_device places
+# the primary at the LAST in-bank offset so it gets k_slice_idx = k_parallel-1, which
+# is the kernel's reducer derivation. The kernel's sender NOC-writes its partial onto
+# the primary's cb_out, which then PACK-with-l1-acc adds its own partial.
+# Validator at _validate_dram_output walks every k_slice_idx and PCC-checks each core
+# (sender = K-slice partial, reducer = full A@B, optionally silu-fused).
+
+
+@pytest.mark.parametrize(
+    "formats_per_device, fmt_ratios",
+    [
+        (["bfp4", "bfp0"], {"bfp4": 77.8, "bfp0": 22.2}),
+        (["bfp4", "bfp2", "bfp0"], {"bfp4": 74.4, "bfp2": 7.3, "bfp0": 18.3}),
+    ],
+    ids=["bfp4_bfp0", "bfp4_bfp2_bfp0"],
+)
+def test_benchmark_gate_proj_primary_at_last_offset(device, formats_per_device, fmt_ratios):
+    """MoE gate-proj K-split + swap: K=7168, N=256, k_parallel=2, primary_at_last_offset=True.
+
+    Validates the exact config MoE uses for gate_proj K-split. Without the swap the
+    primary would be a K-sender (partial output) and downstream silu/mul would read
+    wrong data; with the swap the primary IS the reducer and holds the full A@B.
+    """
+    _run_hybrid_expert_multi_device(
+        device,
+        M=1,
+        K=7168,
+        N=256,
+        num_experts=8,
+        sram_expert_ids=[],
+        dram_expert_ids=list(range(8)),
+        active_expert_ids=[2, 3, 4, 5, 6, 7, 1, 0],
+        formats_per_device=[formats_per_device],
+        dram_fuse_silu=True,
+        primary_at_last_offset=True,
+        num_subblocks_k=4,
+        num_subblocks_n=1,
+        n_parallel_per_bank=1,
+        k_parallel_per_bank=2,
+        fmt_distribution="uniform",
+        fmt_ratios=fmt_ratios,
+        num_loop_iters=100,
+    )
+
+
+@pytest.mark.parametrize(
+    "formats_per_device, fmt_ratios",
+    [
+        (["bfp4", "bfp0"], {"bfp4": 77.8, "bfp0": 22.2}),
+        (["bfp4", "bfp2", "bfp0"], {"bfp4": 74.4, "bfp2": 7.3, "bfp0": 18.3}),
+    ],
+    ids=["bfp4_bfp0", "bfp4_bfp2_bfp0"],
+)
+def test_benchmark_up_proj_primary_at_last_offset(device, formats_per_device, fmt_ratios):
+    """MoE up-proj K-split + swap: identical to gate, no fuse_silu (up has no silu)."""
+    _run_hybrid_expert_multi_device(
+        device,
+        M=1,
+        K=7168,
+        N=256,
+        num_experts=8,
+        sram_expert_ids=[],
+        dram_expert_ids=list(range(8)),
+        active_expert_ids=[2, 3, 4, 5, 6, 7, 1, 0],
+        formats_per_device=[formats_per_device],
+        primary_at_last_offset=True,
+        num_subblocks_k=4,
+        num_subblocks_n=1,
+        n_parallel_per_bank=1,
+        k_parallel_per_bank=2,
+        fmt_distribution="uniform",
+        fmt_ratios=fmt_ratios,
+        num_loop_iters=100,
+    )
+
+
+@pytest.mark.skip_post_commit
+def test_benchmark_gate_proj_primary_at_last_offset_multi_device(bh_2d_mesh_device):
+    """Multi-device gate-proj K-split + swap: 4x2 mesh, K=7168, N=2048, TP8, primary_at_last_offset=True.
+
+    Mirrors the MoE gate_proj weight/shape exactly: per-device N=256 after TP8 split,
+    K-split 2-way per bank with primary at the last in-bank offset.
+    """
+    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < 8:
+        pytest.skip("Test requires at least 8 devices (4x2 mesh)")
+    mesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape(4, 2))
+    _run_hybrid_expert_multi_device(
+        mesh,
+        M=1,
+        K=7168,
+        N=256,  # per-device N (TP8 split of 2048)
+        num_experts=8,
+        sram_expert_ids=[],
+        dram_expert_ids=list(range(8)),
+        active_expert_ids=[2, 3, 4, 5, 6, 7, 1, 0],
+        formats_per_device=[["bfp4"]] * 8,
+        dram_fuse_silu=True,
+        primary_at_last_offset=True,
+        num_subblocks_k=4,
+        num_subblocks_n=1,
+        n_parallel_per_bank=1,
+        k_parallel_per_bank=2,
+        fmt_distribution="uniform",
+        num_loop_iters=10,
     )
 
 

@@ -117,7 +117,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     };
     vector<TaEntry> ta_entries;
     settings.process_tensor_binding_handles(
-        [&ta_entries](const string& name, uint32_t cta_offset, uint32_t addr_crta_offset) {
+        [&ta_entries](const string& name, uint32_t cta_offset, uint32_t addr_crta_offset, uint32_t /*num_rt_words*/) {
             ta_entries.push_back({name, cta_offset, addr_crta_offset});
         });
 
@@ -204,13 +204,12 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
     const vector<string>& rta_names = settings.get_named_runtime_args();
     const vector<string>& crta_names = settings.get_named_common_runtime_args();
 
-    // TensorBinding addresses occupy a structurally-separate, position-indexed section appended
-    // immediately after the user-named CRTAs in the kernel's CRTA buffer.
-    // We need to know how many there are so the vararg helpers below skip past the binding
-    // section to land at the first user vararg.
-    uint32_t tensor_binding_count = 0;
-    settings.process_tensor_binding_handles(
-        [&tensor_binding_count](const std::string&, uint32_t, uint32_t) { ++tensor_binding_count; });
+    // The kernel's CRTA buffer is laid out as three back-to-back sections:
+    //   [ user-named CRTAs | TensorBinding section | varargs ]
+    // The boundaries are precomputed at spec-resolution time and stored on the kernel,
+    // so we read them directly here. The vararg helpers below need the vararg-section
+    // start offset to skip past sections 1 and 2.
+    const KernelCrtaLayout crta_layout = settings.get_crta_layout();
 
     // Named CTAs come through the legacy unordered_map path (Kernel internal storage).
     // The order in which we emit them DOES matter!
@@ -267,14 +266,13 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
     // indexing: get_vararg(0) is the first vararg, regardless of named-arg count. When
     // there are no named args, the offset is zero and these helpers are just thin wrappers
     // around get_arg_val / get_common_arg_val.
-    // CRTA-side note: the kernel's CRTA buffer holds [user-named CRTAs, TensorBinding
-    // address section, varargs]. The vararg base must skip past the binding section as well.
+    // CRTA-side note: the vararg section starts at crta_layout.vararg_section_offset,
+    // which already accounts for both the user-named CRTAs and the TensorBinding section.
     const uint32_t named_rta_words = static_cast<uint32_t>(rta_names.size());
-    const uint32_t named_crta_words = static_cast<uint32_t>(crta_names.size()) + tensor_binding_count;
     content << "FORCE_INLINE uint32_t get_vararg(uint32_t idx) { return get_arg_val<uint32_t>(" << named_rta_words
             << " + idx); }\n"
             << "FORCE_INLINE uint32_t get_common_vararg(uint32_t idx) { return get_common_arg_val<uint32_t>("
-            << named_crta_words << " + idx); }\n";
+            << crta_layout.vararg_section_offset << " + idx); }\n";
 
     write_file(path, content.str());
 }
@@ -421,15 +419,9 @@ std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack_data_f
     const tt::ARCH arch,
     uint32_t max_cbs) {
     vector<DataFormat> src_formats = tt::get_pack_src_formats(
-        desc.buf_dataformat_arr,
-        unpack_conditional_dst_format,
-        fp32_dest_acc_en,
-        bfp8_pack_precise,
-        false,
-        arch);
+        desc.buf_dataformat_arr, unpack_conditional_dst_format, fp32_dest_acc_en, bfp8_pack_precise, false, arch);
 
-    vector<DataFormat> dst_formats = tt::get_pack_dst_formats(
-        desc.buf_dataformat_arr);
+    vector<DataFormat> dst_formats = tt::get_pack_dst_formats(desc.buf_dataformat_arr);
 
     // Fp8_e4m3 is always unpacked to Float16 (A-family) in source/dest registers.
     // Without fp32_dest_acc, the dest register holds Float16 (A-family) data when
@@ -591,8 +583,8 @@ void emit_unpack_tile_dims(std::ostream& out, const tt_hlk_desc& desc, uint32_t 
     emit_formats_array(out, "constexpr uint8_t", "unpack_tile_c_dim", max_cbs, desc.buf_tile_c_dim_arr);
     emit_formats_array(out, "constexpr uint16_t", "unpack_tile_size", max_cbs, desc.buf_tile_size_arr);
 
-    auto [r_dims, c_dims] = compute_num_faces_rc_dims(
-        desc.buf_tile_r_dim_arr, desc.buf_tile_c_dim_arr, desc.buf_face_r_dim_arr);
+    auto [r_dims, c_dims] =
+        compute_num_faces_rc_dims(desc.buf_tile_r_dim_arr, desc.buf_tile_c_dim_arr, desc.buf_face_r_dim_arr);
     emit_formats_array(out, "constexpr uint8_t", "unpack_num_faces_r_dim", max_cbs, r_dims);
     emit_formats_array(out, "constexpr uint8_t", "unpack_num_faces_c_dim", max_cbs, c_dims);
 }
@@ -606,8 +598,8 @@ void emit_pack_tile_dims(std::ostream& out, const tt_hlk_desc& desc, uint32_t ma
     emit_formats_array(out, "constexpr uint8_t", "pack_tile_c_dim", max_cbs, desc.buf_tile_c_dim_arr);
     emit_formats_array(out, "constexpr uint16_t", "pack_tile_size", max_cbs, desc.buf_tile_size_arr);
 
-    auto [r_dims, c_dims] = compute_num_faces_rc_dims(
-        desc.buf_tile_r_dim_arr, desc.buf_tile_c_dim_arr, desc.buf_face_r_dim_arr);
+    auto [r_dims, c_dims] =
+        compute_num_faces_rc_dims(desc.buf_tile_r_dim_arr, desc.buf_tile_c_dim_arr, desc.buf_face_r_dim_arr);
     emit_formats_array(out, "constexpr uint8_t", "pack_num_faces_r_dim", max_cbs, r_dims);
     emit_formats_array(out, "constexpr uint8_t", "pack_num_faces_c_dim", max_cbs, c_dims);
 }
@@ -664,11 +656,12 @@ void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& opt
     emit_pack_tile_dims(out, desc, max_cbs);
     // For Blackhole tilize workaround, PACK needs access to unpack_src_format to determine
     // if the original input format is 8-bit (Int8, UInt8, Fp8_e4m3, Lf8) since those formats
-    // do not require the tilize workaround. This is needed to determine whether to skip the workaround in llk_pack_init.
+    // do not require the tilize workaround. This is needed to determine whether to skip the workaround in
+    // llk_pack_init.
     out << "#if defined(UCK_CHLKC_PACK)\n";
     emit_formats_array(out, "constexpr std::int32_t", "unpack_src_format", max_cbs, fmts.unpack_src);
-    out << "#endif\n";   // if pack
-    out << "#endif\n\n"; // if not math and not unpack
+    out << "#endif\n";    // if pack
+    out << "#endif\n\n";  // if not math and not unpack
 
     out << "#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_PACK) || defined(UCK_CHLKC_UNPACK) || "
            "defined(UCK_CHLKC_ISOLATE_SFPU)\n";
