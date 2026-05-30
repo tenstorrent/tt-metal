@@ -437,14 +437,10 @@ class TtMistral4TextModel:
         full = ttnn.typecast(full, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
         # Multicore argmax requires ROW_MAJOR input (argmax_device_operation.cpp:153).
         full = ttnn.to_layout(full, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
-        idx_tt = ttnn.argmax(
-            full, dim=-1, use_multicore=True, memory_config=ttnn.L1_MEMORY_CONFIG
-        )  # per device: [1, 1, 1] uint32 ROW_MAJOR
+        # Write directly into the pre-allocated buffer so trace replay can overwrite
+        # the same slot every step — saves one Copy/assign op and the L1 temp.
+        ttnn.argmax(full, dim=-1, use_multicore=True, output_tensor=self._decode_token_out)
         ttnn.deallocate(full)
-        # Copy argmax result into pre-allocated output buffer so trace replay can
-        # overwrite the same slot on every step without re-allocating.
-        ttnn.assign(idx_tt, self._decode_token_out)
-        ttnn.deallocate(idx_tt)
         return self._decode_token_out
 
     def _readback_argmax(self) -> int:
