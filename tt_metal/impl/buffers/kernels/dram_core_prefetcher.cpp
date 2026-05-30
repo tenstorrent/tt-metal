@@ -295,6 +295,7 @@ void kernel_main() {
         PROF_DECL_ACC(prof_set_state);
         PROF_DECL_ACC(prof_writes);
         PROF_DECL_ACC(prof_flush);
+        PROF_DECL_ACC(prof_defer_flush);
         PROF_DECL_ACC(prof_finalize);
 
         load_sender_state(state, iface);
@@ -531,69 +532,70 @@ void kernel_main() {
                             (bytes_per_recv + max_chunk_bytes - 1) / max_chunk_bytes;
                         const uint32_t total_chunks_round = num_receivers * chunks_per_visit;
 
-                        // ---- Prologue: issue first DMA into slot 0 ----
-                        {
-                            const uint32_t first_bytes =
-                                bytes_per_recv < max_chunk_bytes ? bytes_per_recv : max_chunk_bytes;
-                            const uint32_t first_src = tensor_base + pages_sent_global * t_page_bytes_per_recv;
+                        // ---- Depth-2 software pipeline over 3 stage slots ----
+                        // Per chunk gc we: wait gc's DMA, enqueue gc's NoC writes (posted), THEN
+                        // issue chunk gc+2's DMA. Enqueuing the writes before the DMA lets them
+                        // drain on the NoC while the core spins on the DMA read_ready gate and the
+                        // engine reads gc+2 — overlapping the ~190 cyc write drain with the ~320 cyc
+                        // read instead of serializing them.
+                        //
+                        // Slot safety: chunk gc+2's DMA targets slot (gc+2)%3 == (gc-1)%3, last
+                        // NoC-written by chunk gc-1. We drain it with a flush placed BEFORE
+                        // writes(gc) — so the flush waits only on chunks <= gc-1 (already mostly
+                        // drained during this iter's DMA wait) and never on chunk gc's just-issued
+                        // writes, preserving the overlap. The two in-flight DMAs (gc+1, gc+2) and
+                        // the write source (gc) occupy all three distinct slots.
+
+                        // Prologue: prime the pipe with the first up-to-2 chunk DMAs.
+                        for (uint32_t c = 0; c < 2u && c < total_chunks_round; ++c) {
+                            const uint32_t cr = c / chunks_per_visit;
+                            const uint32_t civ = c - cr * chunks_per_visit;
+                            const uint32_t boff = civ * max_chunk_bytes;
+                            const uint32_t rem = bytes_per_recv - boff;
+                            const uint32_t cb = rem < max_chunk_bytes ? rem : max_chunk_bytes;
+                            const uint32_t src =
+                                tensor_base + cr * t_recv_stride + pages_sent_global * t_page_bytes_per_recv + boff;
                             PROF_DECL_TS(t_p0);
                             PROF_DECL_TS(t_p1);
                             PROF_TICK(t_p0);
-                            experimental::dma_async_read(/*stream=*/0, first_src, slot_addrs[0], first_bytes);
+                            experimental::dma_async_read(/*stream=*/0, src, slot_addrs[c % 3u], cb);
                             PROF_TICK(t_p1);
                             PROF_ACC(prof_dma_issue, t_p1, t_p0);
                         }
 
-                        // ---- Single flat loop over (receiver, chunk_in_visit) ----
-                        // gc indexes global chunk in this round.
                         uint32_t cur_r = uint32_t(-1);
                         uint32_t remote_noc_xy = 0;
                         for (uint32_t gc = 0; gc < total_chunks_round; ++gc) {
                             PROF_INC(prof_chunks);
-                            const uint32_t cur_slot_idx = gc % 3u;
-                            const uint32_t next_slot_idx = (gc + 1u) % 3u;
                             const uint32_t r = gc / chunks_per_visit;
                             const uint32_t chunk_in_visit = gc - r * chunks_per_visit;
                             const uint32_t byte_offset = chunk_in_visit * max_chunk_bytes;
                             const uint32_t remaining_visit = bytes_per_recv - byte_offset;
                             const uint32_t chunk_bytes =
                                 remaining_visit < max_chunk_bytes ? remaining_visit : max_chunk_bytes;
+                            const bool keep_one = (gc + 1u) < total_chunks_round;    // gc+1 stays in flight
+                            const bool will_issue = (gc + 2u) < total_chunks_round;  // a gc+2 chunk exists
 
-                            // ---- Issue next DMA + (if reusing slot) flush previous writes from it ----
-                            const bool has_next = (gc + 1u) < total_chunks_round;
-                            PROF_DECL_TS(t_di0);
-                            PROF_DECL_TS(t_di1);
-                            PROF_TICK(t_di0);
-                            if (has_next) {
-                                // Slot next_slot_idx is being overwritten. If it carried writes
-                                // from iter gc-2 (i.e., gc >= 2), drain them first.
-                                if (gc >= 2u) {
-                                    noc_async_posted_writes_flushed();
-                                }
-                                const uint32_t next_gc = gc + 1u;
-                                const uint32_t next_r2 = next_gc / chunks_per_visit;
-                                const uint32_t next_chunk_in_visit = next_gc - next_r2 * chunks_per_visit;
-                                const uint32_t next_byte_offset = next_chunk_in_visit * max_chunk_bytes;
-                                const uint32_t next_remaining = bytes_per_recv - next_byte_offset;
-                                const uint32_t next_bytes =
-                                    next_remaining < max_chunk_bytes ? next_remaining : max_chunk_bytes;
-                                const uint32_t next_src = tensor_base + next_r2 * t_recv_stride +
-                                                          pages_sent_global * t_page_bytes_per_recv +
-                                                          next_byte_offset;
-                                experimental::dma_async_read(
-                                    /*stream=*/0, next_src, slot_addrs[next_slot_idx], next_bytes);
-                            }
-                            PROF_TICK(t_di1);
-                            PROF_ACC(prof_dma_issue, t_di1, t_di0);
-
-                            // ---- Wait for current DMA ----
-                            const uint32_t outstanding_after_wait = has_next ? 1u : 0u;
+                            // ---- Wait for chunk gc's DMA (keep chunk gc+1 in flight). ----
                             PROF_DECL_TS(t_dw0);
                             PROF_DECL_TS(t_dw1);
                             PROF_TICK(t_dw0);
-                            experimental::dma_async_read_wait_n(/*stream=*/0, outstanding_after_wait);
+                            experimental::dma_async_read_wait_n(/*stream=*/0, keep_one ? 1u : 0u);
                             PROF_TICK(t_dw1);
                             PROF_ACC(prof_dma_wait, t_dw1, t_dw0);
+
+                            // ---- Pre-write slot-protect flush: drain chunks <= gc-1 so chunk gc+2's
+                            //      DMA can safely overwrite slot (gc+2)%3 == (gc-1)%3. Cheap (those
+                            //      writes drained during the wait above); does not touch chunk gc's
+                            //      writes (not yet enqueued). Not needed for gc<1 (virgin slot). ----
+                            if (will_issue && gc >= 1u) {
+                                PROF_DECL_TS(t_df0);
+                                PROF_DECL_TS(t_df1);
+                                PROF_TICK(t_df0);
+                                noc_async_posted_writes_flushed();
+                                PROF_TICK(t_df1);
+                                PROF_ACC(prof_defer_flush, t_df1, t_df0);
+                            }
 
                             // ---- set_state on the first chunk of a new receiver ----
                             if (r != cur_r) {
@@ -614,9 +616,10 @@ void kernel_main() {
                                 PROF_ACC(prof_set_state, t_ss1, t_ss0);
                             }
 
-                            // ---- NoC writes: flat packet loop with state amortization ----
+                            // ---- Enqueue chunk gc's NoC writes (posted) from slot gc%3. They drain
+                            //      on the NoC while we issue+read chunk gc+2 below. ----
                             const uint32_t num_packets = chunk_bytes / t_coal_page_size;
-                            uint32_t src_addr = slot_addrs[cur_slot_idx];
+                            uint32_t src_addr = slot_addrs[gc % 3u];
                             uint32_t dest_addr = fifo_snapshot + byte_offset;
                             PROF_DECL_TS(t_w0);
                             PROF_DECL_TS(t_w1);
@@ -629,6 +632,24 @@ void kernel_main() {
                             }
                             PROF_TICK(t_w1);
                             PROF_ACC(prof_writes, t_w1, t_w0);
+
+                            // ---- Issue chunk gc+2's DMA into slot (gc+2)%3 (read overlaps gc's drain). ----
+                            if (will_issue) {
+                                const uint32_t c = gc + 2u;
+                                const uint32_t cr = c / chunks_per_visit;
+                                const uint32_t civ = c - cr * chunks_per_visit;
+                                const uint32_t boff = civ * max_chunk_bytes;
+                                const uint32_t rem = bytes_per_recv - boff;
+                                const uint32_t cb = rem < max_chunk_bytes ? rem : max_chunk_bytes;
+                                const uint32_t src =
+                                    tensor_base + cr * t_recv_stride + pages_sent_global * t_page_bytes_per_recv + boff;
+                                PROF_DECL_TS(t_di0);
+                                PROF_DECL_TS(t_di1);
+                                PROF_TICK(t_di0);
+                                experimental::dma_async_read(/*stream=*/0, src, slot_addrs[c % 3u], cb);
+                                PROF_TICK(t_di1);
+                                PROF_ACC(prof_dma_issue, t_di1, t_di0);
+                            }
                         }
 
                         // ---- Final flush: drain any remaining writes before finalize bumps semaphore.
@@ -668,6 +689,7 @@ void kernel_main() {
         PROF_DUMP(0xA7u, prof_writes);
         PROF_DUMP(0xA8u, prof_flush);
         PROF_DUMP(0xA9u, prof_finalize);
+        PROF_DUMP(0xAAu, prof_defer_flush);
         PROF_DUMP(0xB0u, stage_ring_size);
         PROF_DUMP(0xB1u, stage_third);
 

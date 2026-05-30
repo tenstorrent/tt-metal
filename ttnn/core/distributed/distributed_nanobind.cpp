@@ -336,6 +336,17 @@ void py_module(nb::module_& mod) {
                Arch: The arch of the first device in the device mesh.
        )doc")
         .def(
+            "get_clock_rate_mhz",
+            &MeshDevice::get_clock_rate_mhz,
+            R"doc(
+           Get the current AI clock (AICLK) rate in MHz of the first device in the device mesh.
+           Reads live device telemetry, so it reflects DVFS/throttling at call time.
+
+
+           Returns:
+               int: The current AICLK rate in MHz.
+       )doc")
+        .def(
             "enable_program_cache",
             &MeshDevice::enable_program_cache,
             R"doc(
