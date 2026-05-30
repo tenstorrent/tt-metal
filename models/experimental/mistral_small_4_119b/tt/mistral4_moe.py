@@ -739,9 +739,12 @@ class TtMistral4MoELayer(LightweightModule):
         topk_vals_tt = ttnn.div(topk_vals_tt, topk_sum_tt, memory_config=_mem)
         ttnn.deallocate(topk_sum_tt)
 
-        # 6. Scatter into dense [1, 1, seq, NUM_EXPERTS] on device
+        # 6. Scatter into dense [1, 1, seq, NUM_EXPERTS] on device.
+        # ttnn.scatter is out-of-place (scatter.cpp:329 returns a new output tensor;
+        # pre_scatter_transform also copies via to_layout), so we can pass the cached
+        # zeros directly for the decode case — no per-step clone needed.
         if seq_len == 1 and self._routing_zeros_decode is not None:
-            scatter_target = ttnn.clone(self._routing_zeros_decode, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            scatter_target = self._routing_zeros_decode
         else:
             scatter_target = ttnn.zeros_like(probs_tt)
         dense_routing_tt = ttnn.scatter(
@@ -1008,6 +1011,12 @@ class TtMistral4MoELayer(LightweightModule):
 
         topk_vals_tt, topk_idx_host = self._compute_routing_topk(x)
 
+        # Untile topk_vals once: per-rank ttnn.slice on a TILE [1,1,1,k] tensor would
+        # internally untile→slice→retile each iteration (3 ops). One untile +
+        # per-rank (rm_slice + scalar_tilize) keeps the per-iter device-op count at 2.
+        topk_vals_rm = ttnn.to_layout(topk_vals_tt, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(topk_vals_tt)
+
         partial = None
         for rank, expert_idx in enumerate(topk_idx_host):
             if self._is_blackhole:
@@ -1062,7 +1071,11 @@ class TtMistral4MoELayer(LightweightModule):
             if _own_d_w:
                 ttnn.deallocate(down_w)
 
-            w_i = ttnn.slice(topk_vals_tt, [0, 0, 0, rank], [1, 1, 1, rank + 1], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            w_i_rm = ttnn.slice(
+                topk_vals_rm, [0, 0, 0, rank], [1, 1, 1, rank + 1], memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            w_i = ttnn.to_layout(w_i_rm, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(w_i_rm)
             scaled = ttnn.multiply(out, w_i, memory_config=_mem)
             ttnn.deallocate(out)
             ttnn.deallocate(w_i)
@@ -1075,7 +1088,7 @@ class TtMistral4MoELayer(LightweightModule):
                 ttnn.deallocate(scaled)
                 partial = new_partial
 
-        ttnn.deallocate(topk_vals_tt)
+        ttnn.deallocate(topk_vals_rm)
 
         # all_reduce requires DRAM; for 1 device this is a no-op pass-through.
         partial_dram = ttnn.to_memory_config(partial, ttnn.DRAM_MEMORY_CONFIG)
@@ -1108,6 +1121,13 @@ class TtMistral4MoELayer(LightweightModule):
             gu_pc = self._expert_1d_mcast_pc(1, H // 32, 2 * I // 32)
             d_pc = self._expert_1d_mcast_pc(1, I // 32, H // 32)
 
+            # Untile routing_weights once: per-expert ttnn.slice on the TILE [1,1,1,EPD]
+            # tensor would internally untile→slice→retile every iteration (3 ops each).
+            # Doing one untile + per-expert (rm_slice + scalar_tilize) drops the per-step
+            # UntilizeWithUnpadding count from EPD to 1.
+            routing_weights_rm = ttnn.to_layout(routing_weights, ttnn.ROW_MAJOR_LAYOUT, memory_config=_mem)
+            ttnn.deallocate(routing_weights)
+
             partial = None
             for i in range(self.experts_per_device):
                 gate_up_i = ttnn.matmul(
@@ -1135,7 +1155,9 @@ class TtMistral4MoELayer(LightweightModule):
                     program_config=d_pc,
                 )
                 ttnn.deallocate(hidden_i)
-                w_i = ttnn.slice(routing_weights, [0, 0, 0, i], [1, 1, 1, i + 1], memory_config=_mem)
+                w_i_rm = ttnn.slice(routing_weights_rm, [0, 0, 0, i], [1, 1, 1, i + 1], memory_config=_mem)
+                w_i = ttnn.to_layout(w_i_rm, ttnn.TILE_LAYOUT, memory_config=_mem)
+                ttnn.deallocate(w_i_rm)
                 weighted_i = ttnn.multiply(out_i, w_i, memory_config=_mem)
                 ttnn.deallocate(out_i)
                 ttnn.deallocate(w_i)
@@ -1146,7 +1168,7 @@ class TtMistral4MoELayer(LightweightModule):
                     ttnn.deallocate(partial)
                     ttnn.deallocate(weighted_i)
                     partial = new_partial
-            ttnn.deallocate(routing_weights)
+            ttnn.deallocate(routing_weights_rm)
             partial = ttnn.to_memory_config(partial, ttnn.DRAM_MEMORY_CONFIG)
         else:
             x_exp = ttnn.repeat(x, ttnn.Shape([self.experts_per_device, 1, 1, 1]), memory_config=_mem)

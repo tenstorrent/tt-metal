@@ -40,6 +40,7 @@ from models.experimental.mistral_small_4_119b.tt.mistral4_self_attention import 
 from models.experimental.mistral_small_4_119b.tt.mistral4_text_prefill import (
     TtMistral4DecoderLayer,
     _rms_norm,
+    _rms_norm_sharded_decode,
 )
 
 
@@ -398,7 +399,7 @@ class TtMistral4TextModel:
         Does NOT call ttnn.to_torch — host readback must happen outside the
         trace via ``_readback_argmax()``.
         """
-        x_normed = _rms_norm(x_last, self.final_norm_w, self.compute_kernel_config, ttnn.L1_MEMORY_CONFIG)
+        x_normed = _rms_norm_sharded_decode(x_last, self.final_norm_w, self.compute_kernel_config)
 
         in0_memcfg = ttnn.create_sharded_memory_config(
             (1, 1, 32, 4096),  # M=32 (padded), K=4096
