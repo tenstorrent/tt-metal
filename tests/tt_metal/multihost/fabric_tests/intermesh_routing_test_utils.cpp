@@ -58,7 +58,7 @@ std::shared_ptr<tt_metal::Program> create_receiver_program(
     auto recv_program = std::make_shared<tt_metal::Program>();
     auto recv_kernel = tt_metal::CreateKernel(
         *recv_program,
-        "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_1d_rx.cpp",
+        "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_1d_rx.cpp",
         {logical_core},
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -335,7 +335,7 @@ void run_mcast_sender_step(
     auto mcast_send_program = tt_metal::CreateProgram();
     auto mcast_send_kernel = tt_metal::CreateKernel(
         mcast_send_program,
-        "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_line_mcast_tx.cpp",
+        "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_line_mcast_tx.cpp",
         {sender_logical_core},
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,

@@ -61,10 +61,7 @@ run_t3000_ttfabric_tests() {
   # Instantiate a 1x8 Mesh on a T3K with 2D Fabric
   TT_MESH_GRAPH_DESC_PATH=tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_1x8_mesh_graph_descriptor.textproto ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*Fabric2DFixture.TestUnicast*"
 
-  # DISABLED: Slow dispatch fabric tests require a dedicated runner pool that
-  # supports TT_METAL_SLOW_DISPATCH_MODE=1 without impacting fast-dispatch CI.
-  # Tracked in: https://github.com/tenstorrent/tt-metal/issues/24335
-  # Re-enable once a suitable runner pool is identified and allocated.
+  # TODO (issue: #24335) disabled slow dispatch tests for now, need to re-evaluate if need to add in a different pool
   #TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
 
   # Offline test for Cluster Validation Tool
