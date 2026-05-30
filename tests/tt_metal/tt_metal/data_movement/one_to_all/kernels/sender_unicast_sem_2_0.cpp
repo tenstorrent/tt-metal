@@ -59,6 +59,10 @@ void kernel_main() {
                     {.noc_x = dest_coord_x, .noc_y = dest_coord_y, .addr = sub_base_addr},
                     current_virtual_channel);
 
+                // Flush: async_write uses caller-supplied VC; relay_unicast goes through
+                // noc_semaphore_set_remote which hardcodes NOC_UNICAST_WRITE_VC. Same NoC,
+                // different VC has no ordering guarantee, so the sem could overtake the data.
+                noc.async_writes_flushed();
                 sender_valid_sem.relay_unicast(noc, receiver_sem, dest_coord_x, dest_coord_y);
             }
         }
