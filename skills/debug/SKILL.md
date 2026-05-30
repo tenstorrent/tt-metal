@@ -82,6 +82,37 @@ def debug_layer_by_layer(model, reference_model, x):
 | PCC ~0.5 or random | Wrong weight mapping | Verify weight names match HuggingFace |
 | PCC ~-1 | Sign flip | Check transpose/reshape operations |
 | PCC NaN | Overflow/underflow | Check for Inf values, reduce precision |
+| Decode NaN/gibberish only at large max_seq | SDPA-decode fully-masked trailing k-chunk | Round KV-cache capacity to 512 (not tile=32) |
+
+### Flash-decode NaN on over-allocated KV cache (length-dependent gibberish)
+
+Symptom: cached AR decode is coherent at small `max_seq_len` but produces NaN /
+gibberish **from the first decode token** at large `max_seq_len` — and it scales
+with how much the cache is over-allocated beyond the real generation length (a
+generate-to-EOS run with a big cap triggers it; a short run doesn't).
+
+Root cause: `ttnn.transformer.scaled_dot_product_attention_decode` with auto
+k_chunk (`k_chunk_size=0`) divides by zero in the flash streaming softmax when the
+zeroed cache tail beyond `cur_pos` forms a **fully-masked trailing k-chunk** (all
+positions > cur_pos → all -inf → exp→0 → 0/0). Whether a full masked chunk exists
+depends on the auto-chosen chunk vs the capacity, so it's intermittent across
+capacities: NaN at tile-aligned-but-not-512 lengths (e.g. 4960, 6944), clean at
+512-multiples (5120/5632/6144/6656/7168 verified).
+
+Diagnosis that nailed it (a worked example of the four phases):
+1. Length-dependent, same code → suspect a `max_seq_len`-sized buffer, not logic.
+2. token0 (prefill logits, no cache read) correct, token1 (first decode, reads
+   cache) garbage → isolates the decode KV-cache/SDPA path, not prefill/trace.
+3. Untraced repro identical → not a metal-trace corruption bug.
+4. Isolated `scaled_dot_product_attention_decode` vs cache length → NaN at
+   specific lengths; explicit k_chunk didn't help (32→NaN, ≥64→TT_FATAL).
+
+Fix: round the KV-cache capacity to a **multiple of 512** in the cache allocator
+(`nearest_y(max_seq_len, 512)`), not the tile size. Keeps the auto-chunk clean for
+any over-allocated cache, so generate-to-EOS (unknown length → large cap) decodes
+correctly. NOTE: a coherent-then-repetition-loop tail under pure greedy is a
+SEPARATE, decoding-strategy issue (no repetition penalty in generation_config), not
+this NaN bug — reproduces identically in bf16, so don't blame precision.
 
 ### bfloat8_b Numerical Overflow Diagnosis
 
