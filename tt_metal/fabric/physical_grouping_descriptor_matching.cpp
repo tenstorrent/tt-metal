@@ -8,6 +8,7 @@
 #include <ostream>
 #include <filesystem>
 #include <algorithm>
+#include <chrono>
 #include <unordered_set>
 #include <unordered_map>
 #include <set>
@@ -1073,6 +1074,27 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
     return result;
 }
 
+std::vector<GroupingInfo> PhysicalGroupingDescriptor::get_mgd_mesh_groupings_for_placement(
+    const MeshGraphDescriptor& mesh_graph_descriptor) {
+    const auto mgd_grouping_infos = build_mgd_to_grouping_info_map(mesh_graph_descriptor);
+    const auto mesh_it = mgd_grouping_infos.find("MESH");
+    if (mesh_it == mgd_grouping_infos.end()) {
+        return {};
+    }
+
+    std::vector<GroupingInfo> meshes;
+    meshes.reserve(mesh_it->second.size());
+    for (const auto& [instance_name, mgd_grouping] : mesh_it->second) {
+        const auto torus_edges = get_mgd_instance_torus_edges(mesh_graph_descriptor, instance_name);
+        if (!torus_edges.empty()) {
+            meshes.push_back(add_torus_edges_to_mgd_grouping(mgd_grouping, torus_edges));
+        } else {
+            meshes.push_back(mgd_grouping);
+        }
+    }
+    return meshes;
+}
+
 }  // namespace tt::tt_fabric
 
 namespace {
@@ -1168,12 +1190,15 @@ std::string build_pgd_mapping_failure_message(
         unmapped_count);
 }
 
-// Helper function to solve the topology mapping with pinning constraints from GroupingInfo
-MappingResult<uint32_t, AsicID> solve_for_one_grouping_to_psd(
+// Build the MappingConstraints used by PGD→PSD embedding (trait + host alignment).
+// Returns std::nullopt if a required trait constraint cannot be satisfied (e.g. slot count mismatch);
+// `error_out` is set when that happens.
+std::optional<MappingConstraints<uint32_t, AsicID>> build_pgd_to_psd_constraints(
     const GroupingInfo& grouping_info,
     const AdjacencyGraph<AsicID>& physical_graph,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    MappingConstraints<uint32_t, AsicID> initial_constraints = {}) {
+    MappingConstraints<uint32_t, AsicID> initial_constraints,
+    std::string* error_out = nullptr) {
     MappingConstraints<uint32_t, AsicID> constraints = std::move(initial_constraints);
 
     // Set quiet mode to suppress verbose constraint validation messages during PGD solving
@@ -1226,18 +1251,18 @@ MappingResult<uint32_t, AsicID> solve_for_one_grouping_to_psd(
     // Add trait constraints for tray_id and asic_location
     if (!relax_pgd_slot_traits && !target_tray_traits.empty() && !global_tray_traits.empty()) {
         if (!constraints.add_required_trait_constraint<TrayID>(target_tray_traits, global_tray_traits)) {
-            MappingResult<uint32_t, AsicID> failure;
-            failure.success = false;
-            failure.error_message = "Failed to add required trait constraint for tray_id";
-            return failure;
+            if (error_out) {
+                *error_out = "Failed to add required trait constraint for tray_id";
+            }
+            return std::nullopt;
         }
     }
     if (!relax_pgd_slot_traits && !target_location_traits.empty() && !global_location_traits.empty()) {
         if (!constraints.add_required_trait_constraint<ASICLocation>(target_location_traits, global_location_traits)) {
-            MappingResult<uint32_t, AsicID> failure;
-            failure.success = false;
-            failure.error_message = "Failed to add required trait constraint for asic_location";
-            return failure;
+            if (error_out) {
+                *error_out = "Failed to add required trait constraint for asic_location";
+            }
+            return std::nullopt;
         }
     }
 
@@ -1245,8 +1270,160 @@ MappingResult<uint32_t, AsicID> solve_for_one_grouping_to_psd(
     configure_pgd_psd_host_alignment_constraints(
         grouping_info, physical_graph, physical_system_descriptor, constraints);
 
+    return constraints;
+}
+
+// Helper function to solve the topology mapping with pinning constraints from GroupingInfo
+MappingResult<uint32_t, AsicID> solve_for_one_grouping_to_psd(
+    const GroupingInfo& grouping_info,
+    const AdjacencyGraph<AsicID>& physical_graph,
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    MappingConstraints<uint32_t, AsicID> initial_constraints = {}) {
+    std::string err;
+    auto constraints_opt = build_pgd_to_psd_constraints(
+        grouping_info, physical_graph, physical_system_descriptor, std::move(initial_constraints), &err);
+    if (!constraints_opt) {
+        MappingResult<uint32_t, AsicID> failure;
+        failure.success = false;
+        failure.error_message = std::move(err);
+        return failure;
+    }
     return solve_topology_mapping(
-        grouping_info.adjacency_graph, physical_graph, constraints, ConnectionValidationMode::STRICT, true);
+        grouping_info.adjacency_graph, physical_graph, *constraints_opt, ConnectionValidationMode::STRICT, true);
+}
+
+// Enumerate up to `max_solutions` distinct image-set placements of `grouping_info` on `physical_graph`.
+// Wraps solve_topology_mapping_n with unique_shapes=true so the solver skips permutations that hit the same ASIC set.
+// Returns the (possibly empty) list of successful MappingResults.
+std::vector<MappingResult<uint32_t, AsicID>> enumerate_distinct_placements_for_grouping(
+    const GroupingInfo& grouping_info,
+    const AdjacencyGraph<AsicID>& physical_graph,
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    size_t max_solutions) {
+    auto constraints_opt =
+        build_pgd_to_psd_constraints(grouping_info, physical_graph, physical_system_descriptor, {}, nullptr);
+    if (!constraints_opt) {
+        return {};
+    }
+    return solve_topology_mapping_n<uint32_t, AsicID>(
+        grouping_info.adjacency_graph,
+        physical_graph,
+        *constraints_opt,
+        max_solutions,
+        ConnectionValidationMode::STRICT,
+        /*quiet_mode=*/true,
+        TopologyMappingSolverEngine::Auto,
+        /*unique_shapes=*/true);
+}
+
+// A single candidate placement considered by the set-packing solver.
+struct PackingCandidate {
+    size_t grouping_idx;             // index into the input groupings vector
+    std::vector<size_t> asic_slots;  // dense ASIC indices (0..universe_size-1) used by this placement
+    MappingResult<uint32_t, AsicID> result;
+};
+
+struct PackingResult {
+    std::vector<PackingCandidate> selected;
+    uint64_t total_weight = 0;
+    bool proven_optimal = false;
+};
+
+// Maximum Weight Set Packing via branch-and-bound.
+// Universe is [0, universe_size); each candidate's weight is asic_slots.size().
+// At each DFS node the upper bound is current_weight + min(free_slots, suffix_weight_sum) — loose but cheap.
+// When the wall-clock budget elapses, the best feasible solution found so far is returned with proven_optimal=false.
+PackingResult solve_set_packing(
+    std::vector<PackingCandidate> candidates, size_t universe_size, std::chrono::milliseconds budget) {
+    PackingResult best;
+    if (candidates.empty() || universe_size == 0) {
+        best.proven_optimal = true;
+        return best;
+    }
+
+    // Sort by weight desc; deterministic tiebreak via asic_slots content.
+    std::sort(candidates.begin(), candidates.end(), [](const PackingCandidate& a, const PackingCandidate& b) {
+        if (a.asic_slots.size() != b.asic_slots.size()) {
+            return a.asic_slots.size() > b.asic_slots.size();
+        }
+        return a.asic_slots < b.asic_slots;
+    });
+
+    const size_t n = candidates.size();
+    std::vector<uint64_t> suffix_weight(n + 1, 0);
+    for (size_t i = n; i-- > 0;) {
+        suffix_weight[i] = suffix_weight[i + 1] + candidates[i].asic_slots.size();
+    }
+
+    std::vector<bool> used(universe_size, false);
+    size_t free_slots = universe_size;
+    std::vector<size_t> current_path;  // positional indices into `candidates`
+    std::vector<size_t> best_path;     // best feasible found so far
+    uint64_t current_weight = 0;
+    const auto deadline = std::chrono::steady_clock::now() + budget;
+    bool timed_out = false;
+
+    std::function<void(size_t)> dfs = [&](size_t i) {
+        if (timed_out) {
+            return;
+        }
+        // Any extension adds at most min(free_slots, sum-of-remaining-weights).
+        const uint64_t bound = current_weight + std::min<uint64_t>(free_slots, suffix_weight[i]);
+        if (bound <= best.total_weight) {
+            return;
+        }
+        if (i == n) {
+            if (current_weight > best.total_weight) {
+                best.total_weight = current_weight;
+                best_path = current_path;
+            }
+            return;
+        }
+        // Cheap deadline check: sample steady_clock periodically.
+        if ((i & 0x3FFu) == 0 && std::chrono::steady_clock::now() > deadline) {
+            timed_out = true;
+            return;
+        }
+
+        const auto& c = candidates[i];
+        bool conflict = false;
+        for (size_t a : c.asic_slots) {
+            if (used[a]) {
+                conflict = true;
+                break;
+            }
+        }
+        if (!conflict) {
+            for (size_t a : c.asic_slots) {
+                used[a] = true;
+            }
+            free_slots -= c.asic_slots.size();
+            current_path.push_back(i);
+            current_weight += c.asic_slots.size();
+
+            dfs(i + 1);
+
+            current_weight -= c.asic_slots.size();
+            current_path.pop_back();
+            free_slots += c.asic_slots.size();
+            for (size_t a : c.asic_slots) {
+                used[a] = false;
+            }
+            if (timed_out) {
+                return;
+            }
+        }
+        dfs(i + 1);
+    };
+
+    dfs(0);
+    best.proven_optimal = !timed_out;
+
+    best.selected.reserve(best_path.size());
+    for (size_t pos : best_path) {
+        best.selected.push_back(std::move(candidates[pos]));
+    }
+    return best;
 }
 
 bool is_flattened(const GroupingInfo& grouping) {
@@ -1259,8 +1436,14 @@ namespace tt::tt_fabric {
 
 // Maximum placements to find before stopping (safeguard against infinite loops).
 constexpr size_t kMaxPlacementsPerRun = 10000;
-// TODO: Optimize constraints for maximum usage
-// https://github.com/tenstorrent/tt-metal/issues/40639
+// Maximum distinct image-set placements enumerated per grouping during heterogeneous packing.
+// Set high enough that practical heterogeneous packings (trait-constrained meshes on ~1000 ASICs) are exhausted,
+// while still capping worst-case enumeration cost. A warning is logged if the cap is hit.
+constexpr size_t kMaxPlacementsPerGrouping = 1024;
+// Wall-clock budget for the set-packing branch-and-bound pass. On expiry the best feasible packing found so far
+// is returned; correctness is preserved (≥ greedy) since greedy is a valid feasible packing the solver will match.
+constexpr std::chrono::milliseconds kSetPackingBudget{5000};
+
 std::vector<MappingResult<uint32_t, AsicID>> solve_for_many_groupings_to_psd(
     const GroupingInfo& grouping_info,
     const AdjacencyGraph<AsicID>& physical_graph,
@@ -1304,75 +1487,117 @@ std::vector<MappingResult<uint32_t, AsicID>> solve_for_many_groupings_to_psd(
 
 // Heterogeneous version: pack multiple different grouping types onto the physical graph.
 // Each grouping can have a different topology. ASICs are shared globally - no overlap between any mappings.
-// Returns map from each GroupingInfo to its vector of mapping results.
-// Uses the same constraint pattern as homogeneous: add forbidden constraints after each success.
-// TODO: Look into changing this algoirthm to use simulated annealing
-// https://github.com/tenstorrent/tt-metal/issues/40639
+// Algorithm (enumerate-then-pack):
+//   Phase A — for each grouping, enumerate up to kMaxPlacementsPerGrouping distinct image-set placements
+//             via solve_topology_mapping_n(unique_shapes=true). Identical ASIC sets across groupings are de-duped.
+//   Phase B — Maximum Weight Set Packing via branch-and-bound to pick the disjoint subset that maximizes total
+//             ASIC coverage. Wall-clock-budgeted; falls back to best-feasible on expiry (still ≥ greedy).
+// Returns map from each GroupingInfo* (by address into the input vector) to its vector of selected MappingResults.
 std::unordered_map<const GroupingInfo*, std::vector<MappingResult<uint32_t, AsicID>>>
 solve_for_many_groupings_to_psd_heterogeneous(
     const std::vector<GroupingInfo>& groupings,
     const AdjacencyGraph<AsicID>& physical_graph,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) {
-    std::vector<std::vector<MappingResult<uint32_t, AsicID>>> results(groupings.size());
-    MappingConstraints<uint32_t, AsicID> current_constraints;
-
-    std::set<uint32_t> all_target_nodes_union;
-    for (const auto& grouping : groupings) {
-        for (uint32_t n : grouping.adjacency_graph.get_nodes()) {
-            all_target_nodes_union.insert(n);
-        }
+    // Dense ASIC id → index assignment so the set-packing universe is [0, U).
+    std::unordered_map<AsicID, size_t> asic_to_slot;
+    asic_to_slot.reserve(physical_graph.get_nodes().size());
+    for (const AsicID& asic : physical_graph.get_nodes()) {
+        asic_to_slot.emplace(asic, asic_to_slot.size());
     }
+    const size_t universe_size = asic_to_slot.size();
 
-    while (true) {
-        size_t total_results = 0;
-        for (const auto& r : results) {
-            total_results += r.size();
+    // Phase A: enumerate candidates per grouping, de-duplicating identical ASIC sets across groupings.
+    std::vector<PackingCandidate> candidates;
+    std::unordered_set<std::string> seen_sets;  // key = sorted slot indices serialized as bytes
+    for (size_t gi = 0; gi < groupings.size(); ++gi) {
+        const auto& grouping = groupings[gi];
+        if (grouping.adjacency_graph.get_nodes().empty()) {
+            continue;
         }
-        if (total_results >= kMaxPlacementsPerRun) {
+        auto placements = enumerate_distinct_placements_for_grouping(
+            grouping, physical_graph, physical_system_descriptor, kMaxPlacementsPerGrouping);
+        log_debug(
+            tt::LogFabric,
+            "Heterogeneous solver: grouping '{}' ({} nodes) enumerated {} distinct image-set placements",
+            grouping.name,
+            grouping.adjacency_graph.get_nodes().size(),
+            placements.size());
+        if (placements.size() == kMaxPlacementsPerGrouping) {
             log_warning(
                 tt::LogFabric,
-                "Heterogeneous solver: hit max placements limit ({}) - stopping to prevent infinite loop",
-                kMaxPlacementsPerRun);
-            break;
+                "Heterogeneous solver: per-grouping enumeration cap hit for grouping '{}' (k={}). "
+                "Set-packing remains optimal over the enumerated pool.",
+                grouping.name,
+                kMaxPlacementsPerGrouping);
         }
-        bool found_any = false;
-        bool overconstrained = false;
-        for (size_t i = 0; const auto& grouping : groupings) {
-            const AdjacencyGraph<uint32_t>& flat_mesh = grouping.adjacency_graph;
-
-            if (flat_mesh.get_nodes().empty()) {
-                ++i;
+        for (auto& placement : placements) {
+            if (!placement.success) {
                 continue;
             }
-
-            MappingResult<uint32_t, AsicID> result = solve_for_one_grouping_to_psd(
-                grouping, physical_graph, physical_system_descriptor, current_constraints);
-
-            if (!result.success) {
-                ++i;
+            std::vector<size_t> slots;
+            slots.reserve(placement.target_to_global.size());
+            for (const auto& [_, asic_id] : placement.target_to_global) {
+                auto it = asic_to_slot.find(asic_id);
+                if (it == asic_to_slot.end()) {
+                    // ASIC not in physical_graph — should not happen, but skip defensively.
+                    slots.clear();
+                    break;
+                }
+                slots.push_back(it->second);
+            }
+            if (slots.empty()) {
                 continue;
             }
+            std::sort(slots.begin(), slots.end());
+            slots.erase(std::unique(slots.begin(), slots.end()), slots.end());
 
-            std::set<AsicID> used_asic_ids;
-            for (const auto& [_, asic_id] : result.target_to_global) {
-                used_asic_ids.insert(asic_id);
+            std::string key(reinterpret_cast<const char*>(slots.data()), slots.size() * sizeof(size_t));
+            if (!seen_sets.insert(std::move(key)).second) {
+                continue;
             }
-
-            results[i].push_back(result);
-            found_any = true;
-
-            TT_FATAL(
-                current_constraints.add_forbidden_constraint(all_target_nodes_union, used_asic_ids),
-                "Internal Error: Heterogeneous solver: failed to add forbidden constraints to all groupings");
-        }
-        if (!found_any || overconstrained) {
-            break;
+            candidates.push_back({gi, std::move(slots), std::move(placement)});
         }
     }
 
+    // Pre-seed the result map so every grouping has an entry, even if no placement is selected.
     std::unordered_map<const GroupingInfo*, std::vector<MappingResult<uint32_t, AsicID>>> map_result;
     for (size_t i = 0; i < groupings.size(); ++i) {
-        map_result.emplace(&groupings[i], std::move(results[i]));
+        map_result.emplace(&groupings[i], std::vector<MappingResult<uint32_t, AsicID>>{});
+    }
+    if (candidates.empty()) {
+        return map_result;
+    }
+
+    // Phase B: pick the disjoint subset with maximum total weight.
+    log_debug(
+        tt::LogFabric,
+        "Heterogeneous solver: pool has {} unique candidates over {} ASICs; running set-packing",
+        candidates.size(),
+        universe_size);
+    PackingResult packed = solve_set_packing(std::move(candidates), universe_size, kSetPackingBudget);
+    log_debug(
+        tt::LogFabric,
+        "Heterogeneous solver: set-packing chose {} placements, total weight {} (proven_optimal={})",
+        packed.selected.size(),
+        packed.total_weight,
+        packed.proven_optimal);
+    if (!packed.proven_optimal) {
+        log_warning(
+            tt::LogFabric,
+            "Heterogeneous solver: set-packing wall-clock budget ({}ms) expired; returning best feasible "
+            "({} placements, {} ASICs covered).",
+            kSetPackingBudget.count(),
+            packed.selected.size(),
+            packed.total_weight);
+    }
+    if (packed.selected.size() > kMaxPlacementsPerRun) {
+        log_warning(
+            tt::LogFabric, "Heterogeneous solver: hit max placements limit ({}) - truncating", kMaxPlacementsPerRun);
+        packed.selected.resize(kMaxPlacementsPerRun);
+    }
+
+    for (auto& sel : packed.selected) {
+        map_result[&groupings[sel.grouping_idx]].push_back(std::move(sel.result));
     }
     return map_result;
 }

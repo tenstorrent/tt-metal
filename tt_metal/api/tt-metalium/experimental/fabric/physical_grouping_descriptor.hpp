@@ -118,6 +118,11 @@ public:
         const MeshGraphDescriptor& mesh_graph_descriptor,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const;
 
+    // Build one GroupingInfo per MGD mesh instance for PSD placement fallback when PGD groupings fail to embed.
+    // Includes torus wrap-around edges when the MGD device topology uses RING dimensions.
+    static std::vector<GroupingInfo> get_mgd_mesh_groupings_for_placement(
+        const MeshGraphDescriptor& mesh_graph_descriptor);
+
     // Find any valid mapping of a grouping to a physical system descriptor
     // Returns unordered_set of ASIC IDs that mark out the grouping in the PSD
     // Returns empty set if no valid mapping exists
