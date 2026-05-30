@@ -4,19 +4,11 @@
 """
 Mistral-Small-4-119B multimodal generation demo.
 
-Drives the full vision + projector + language model pipeline end to end:
-
-    1. Build the orchestrator (lightweight — config only).
-    2. ``encode_image``:
-       - default phase-based mode loads/runs/frees vision before text loading.
-       - ``--unified`` mode lazy-loads vision + projector + text together once
-         (for example, 24 vision layers + 36 text layers with full-model args),
-         using bfloat8_b vision weights so both stacks remain resident.
-    3. ``load_text``:
-       - default phase-based mode builds the text language model on device.
-       - ``--unified`` mode is idempotent because text was already loaded by
-         the unified ``encode_image`` path.
-    4. ``prefill_multimodal`` then a decode loop.
+Drives the full vision + projector + language model pipeline end to end with
+unified single-phase loading — vision + projector + text are lazy-loaded
+together on the first ``encode_image`` call (with bfloat8_b vision weights so
+both stacks remain resident), then ``prefill_multimodal`` runs, then a decode
+loop.
 
 The default 2 text + 2 vision layers makes this fast (~minutes total) and is
 intended for plumbing validation — the output will be gibberish. Bump to
@@ -62,9 +54,6 @@ from models.experimental.mistral_small_4_119b.constants import (
     vision_layer_state_dict_prefix,
 )
 from models.experimental.mistral_small_4_119b.tests.mesh_param import mesh_device_request_param
-from models.experimental.mistral_small_4_119b.tt.mistral3_for_conditional_generation import (
-    TtMistral3ForConditionalGeneration,
-)
 from models.experimental.mistral_small_4_119b.tt.mistral3_for_conditional_generation_unified import (
     TtMistral3ForConditionalGenerationUnified,
 )
@@ -108,11 +97,6 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip HF chat template / processor (use raw [image]+[prompt] layout). "
         "Output will likely be EOS-only — useful only for plumbing tests.",
-    )
-    p.add_argument(
-        "--unified",
-        action="store_true",
-        help="Use unified single-phase loading: keep vision + text resident together with bfloat8_b vision weights.",
     )
     p.add_argument(
         "--no-trace",
@@ -313,7 +297,7 @@ def _precompute_rope_table(rotary_cls, text_config, max_seq_len: int):
 
 
 def generate(
-    model: TtMistral3ForConditionalGeneration | TtMistral3ForConditionalGenerationUnified,
+    model: TtMistral3ForConditionalGenerationUnified,
     tokenizer,
     rotary_cls,
     text_config,
@@ -336,14 +320,11 @@ def generate(
     total_positions = seq_len + max_new_tokens
     cos_full, sin_full = _precompute_rope_table(rotary_cls, text_config, total_positions)
 
-    if isinstance(model, TtMistral3ForConditionalGenerationUnified):
-        logger.info(
-            "Unified load — encode_image triggers one-time load of "
-            f"vision_layers={model.num_vision_layers} + text_layers={model.num_text_layers} "
-            "together (vision_dtype=bfloat8_b), then runs vision → host img_embeds…"
-        )
-    else:
-        logger.info("Phase 1 — encode_image loads/runs/frees vision tower + projector → host img_embeds…")
+    logger.info(
+        "Unified load — encode_image triggers one-time load of "
+        f"vision_layers={model.num_vision_layers} + text_layers={model.num_text_layers} "
+        "together (vision_dtype=bfloat8_b), then runs vision → host img_embeds…"
+    )
     t0 = time.perf_counter()
     img_embeds_host = model.encode_image(pixel_values)
     logger.info(
@@ -356,10 +337,7 @@ def generate(
         f"processor agrees with the image dimensions you fed encode_image."
     )
 
-    if isinstance(model, TtMistral3ForConditionalGenerationUnified):
-        logger.info("Unified load_text — idempotent/no reload; text is already resident. Caching RoPE tables…")
-    else:
-        logger.info("Phase 2 — load_text builds text model on device, then caches RoPE tables…")
+    logger.info("Unified load_text — idempotent/no reload; text is already resident. Caching RoPE tables…")
     t0 = time.perf_counter()
     model.load_text()
     model.cache_rope_tables(cos_full, sin_full)
@@ -507,39 +485,24 @@ def main() -> None:
             # KV cache must cover the prefill prompt + every decode token.
             max_seq_len = input_ids.shape[-1] + args.max_new_tokens + 16
 
-            if args.unified:
-                logger.info(
-                    f"Building unified orchestrator (text_layers={args.n_text_layers}, "
-                    f"vision_layers={args.n_vision_layers}, max_seq_len={max_seq_len}, vision_dtype=bfloat8_b)…"
-                )
-                logger.info(
-                    "Unified mode keeps vision + projector + text resident together; "
-                    "the first encode_image() call performs the one-time combined load."
-                )
-                model = TtMistral3ForConditionalGenerationUnified(
-                    mesh_device=mesh_device,
-                    state_dict=state_dict,
-                    text_config=text_cfg,
-                    image_token_id=image_token_id,
-                    num_text_layers=args.n_text_layers,
-                    num_vision_layers=args.n_vision_layers,
-                    max_seq_len=max_seq_len,
-                    vision_dtype=ttnn.bfloat8_b,
-                )
-            else:
-                logger.info(
-                    f"Building phase-based orchestrator (text_layers={args.n_text_layers}, "
-                    f"vision_layers={args.n_vision_layers}, max_seq_len={max_seq_len})…"
-                )
-                model = TtMistral3ForConditionalGeneration(
-                    mesh_device=mesh_device,
-                    state_dict=state_dict,
-                    text_config=text_cfg,
-                    image_token_id=image_token_id,
-                    num_text_layers=args.n_text_layers,
-                    num_vision_layers=args.n_vision_layers,
-                    max_seq_len=max_seq_len,
-                )
+            logger.info(
+                f"Building unified orchestrator (text_layers={args.n_text_layers}, "
+                f"vision_layers={args.n_vision_layers}, max_seq_len={max_seq_len}, vision_dtype=bfloat8_b)…"
+            )
+            logger.info(
+                "Unified mode keeps vision + projector + text resident together; "
+                "the first encode_image() call performs the one-time combined load."
+            )
+            model = TtMistral3ForConditionalGenerationUnified(
+                mesh_device=mesh_device,
+                state_dict=state_dict,
+                text_config=text_cfg,
+                image_token_id=image_token_id,
+                num_text_layers=args.n_text_layers,
+                num_vision_layers=args.n_vision_layers,
+                max_seq_len=max_seq_len,
+                vision_dtype=ttnn.bfloat8_b,
+            )
 
             with torch.no_grad():
                 tt_text = generate(

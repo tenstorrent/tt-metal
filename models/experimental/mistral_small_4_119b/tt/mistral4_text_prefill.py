@@ -60,14 +60,12 @@ def _rms_norm(
     )
 
 
-# ── Sharded RMSNorm for the decode hot path ────────────────────────────────
-# Default ttnn.rms_norm on an L1-interleaved [1,1,1,HIDDEN_SIZE] tensor lands on
-# a single core (~57 μs). The three full-hidden norms per layer (input,
-# post-attention, final) burn ~171 μs/step on one core total. Width-sharding
-# the input across 32 cores brings each norm to ~5 μs (+ ~1 μs each for the
-# shard/unshard pair). `ttnn.rms_norm` auto-builds the sharded program config
-# from `input.shard_spec()`, but we hand it the matching one explicitly so the
-# program is cached.
+# ── Sharded RMSNorm for the full-hidden hot path ───────────────────────────
+# Default ttnn.rms_norm on an L1-interleaved [1,1,seq,HIDDEN_SIZE] tensor lands
+# on a single core (~57 μs for HIDDEN_SIZE=4096). Width-sharding across 32 cores
+# brings each norm to ~5 μs (+ ~1 μs each for the shard/unshard pair).
+# `ttnn.rms_norm` auto-builds the sharded program config from `input.shard_spec()`,
+# but we hand it the matching one explicitly so the program is cached.
 _NORM_TILE = 32
 _NORM_CORE_GRID_X = 8
 _NORM_CORE_GRID_Y = 4  # 8 × 4 = 32 cores
@@ -80,45 +78,74 @@ assert (
     _NORM_SHARD_WIDTH % _NORM_TILE == 0
 ), f"shard width ({_NORM_SHARD_WIDTH}) must be a multiple of tile width ({_NORM_TILE})"
 
-_NORM_DECODE_INPUT_MEMCFG = ttnn.create_sharded_memory_config(
-    shape=(_NORM_TILE, _NORM_SHARD_WIDTH),  # one-tile-tall (M=1 padded), 128 cols
-    core_grid=ttnn.CoreGrid(x=_NORM_CORE_GRID_X, y=_NORM_CORE_GRID_Y),
-    strategy=ttnn.ShardStrategy.WIDTH,
-    orientation=ttnn.ShardOrientation.ROW_MAJOR,
-    use_height_and_width_as_shard_shape=True,
-)
-_NORM_DECODE_PROGRAM_CFG = ttnn.LayerNormShardedMultiCoreProgramConfig(
-    compute_with_storage_grid_size=(_NORM_CORE_GRID_X, _NORM_CORE_GRID_Y),
-    subblock_w=_NORM_SHARD_WIDTH // _NORM_TILE,  # 4 tiles
-    block_h=1,
-    block_w=_NORM_SHARD_WIDTH // _NORM_TILE,  # 4 tiles
-    inplace=False,
-)
+# Configs cached by m_tiles so each unique seq_len build runs once.
+_NORM_CFG_CACHE: dict = {}
 
 
-def _rms_norm_sharded_decode(
+def _norm_sharded_configs(m_tiles: int):
+    """Return (input_memcfg, program_cfg) for a width-sharded RMSNorm at this M.
+
+    m_tiles is the height of the input in tiles (= ceil(seq_len / 32)).
+    """
+    cached = _NORM_CFG_CACHE.get(m_tiles)
+    if cached is not None:
+        return cached
+    input_memcfg = ttnn.create_sharded_memory_config(
+        shape=(m_tiles * _NORM_TILE, _NORM_SHARD_WIDTH),
+        core_grid=ttnn.CoreGrid(x=_NORM_CORE_GRID_X, y=_NORM_CORE_GRID_Y),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    program_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=(_NORM_CORE_GRID_X, _NORM_CORE_GRID_Y),
+        subblock_w=_NORM_SHARD_WIDTH // _NORM_TILE,  # 4 tiles
+        block_h=m_tiles,
+        block_w=_NORM_SHARD_WIDTH // _NORM_TILE,  # 4 tiles
+        inplace=False,
+    )
+    cfg = (input_memcfg, program_cfg)
+    _NORM_CFG_CACHE[m_tiles] = cfg
+    return cfg
+
+
+# Decode (M=1 tile) configs kept as module-level constants for the existing
+# decode call sites — same content as _norm_sharded_configs(1).
+_NORM_DECODE_INPUT_MEMCFG, _NORM_DECODE_PROGRAM_CFG = _norm_sharded_configs(1)
+
+
+def _rms_norm_sharded(
     x: ttnn.Tensor,
     weight: ttnn.Tensor,
     compute_kernel_config,
 ) -> ttnn.Tensor:
-    """Decode-only width-sharded RMSNorm for the full-hidden [..., HIDDEN_SIZE] case.
+    """Width-sharded RMSNorm for the full-hidden [..., HIDDEN_SIZE] case.
 
-    Returns L1-interleaved so downstream ops (residual add, attention QKV)
-    don't have to know about the shard layout.
+    Auto-picks the shard config from x's seq_len (x.shape[-2], rounded up to a
+    tile). Returns L1-interleaved so downstream ops (residual add, attention
+    QKV) don't have to know about the shard layout.
     """
-    x_sh = ttnn.to_memory_config(x, _NORM_DECODE_INPUT_MEMCFG)
+    seq_len = x.shape[-2]
+    m_tiles = (seq_len + _NORM_TILE - 1) // _NORM_TILE
+    input_memcfg, program_cfg = _norm_sharded_configs(m_tiles)
+    x_sh = ttnn.to_memory_config(x, input_memcfg)
     normed_sh = ttnn.rms_norm(
         x_sh,
         weight=weight,
         epsilon=NORM_EPS,
-        program_config=_NORM_DECODE_PROGRAM_CFG,
-        memory_config=_NORM_DECODE_INPUT_MEMCFG,
+        program_config=program_cfg,
+        memory_config=input_memcfg,
         compute_kernel_config=compute_kernel_config,
     )
     ttnn.deallocate(x_sh)
     normed = ttnn.to_memory_config(normed_sh, ttnn.L1_MEMORY_CONFIG)
     ttnn.deallocate(normed_sh)
     return normed
+
+
+# Backward-compat alias. Existing decode call sites pass M=1-tile-shaped inputs;
+# the generalised _rms_norm_sharded handles that case identically.
+_rms_norm_sharded_decode = _rms_norm_sharded
 
 
 # ── Decoder layer ──────────────────────────────────────────────────────────
@@ -222,14 +249,14 @@ class TtMistral4DecoderLayer(LightweightModule):
         """Prefill forward that also fills the attention KV cache in-place."""
         _mem = ttnn.L1_MEMORY_CONFIG
         residual = x
-        normed = _rms_norm(x, self.input_norm_w, self.compute_kernel_config, _mem)
+        normed = _rms_norm_sharded(x, self.input_norm_w, self.compute_kernel_config)
         attn_out = self.attn.forward(normed, cos, sin, kv_cache=kv_cache)
         ttnn.deallocate(normed)
         x = ttnn.add(residual, attn_out, memory_config=_mem)
         ttnn.deallocate(attn_out)
 
         residual = x
-        normed = _rms_norm(x, self.post_attn_norm_w, self.compute_kernel_config, _mem)
+        normed = _rms_norm_sharded(x, self.post_attn_norm_w, self.compute_kernel_config)
         moe_out = self.moe.forward(normed)
         ttnn.deallocate(normed)
         x = ttnn.add(residual, moe_out, memory_config=_mem)

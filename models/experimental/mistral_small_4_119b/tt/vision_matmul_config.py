@@ -136,7 +136,11 @@ def _pick_out_subblocks_1d(per_core_n: int) -> tuple[int, int]:
     return 1, per_core_n
 
 
-def create_program_config(cfg: dict):
+def create_program_config(cfg: dict, fused_activation=None):
+    """Build the matmul program config. ``fused_activation`` bakes a unary epilogue
+    (e.g. ``ttnn.UnaryOpType.SILU``) into the matmul kernel — necessary because the
+    explicit ``activation`` kwarg on ``ttnn.linear`` is ignored when ``program_config``
+    is set (the PC's ``fused_activation`` field takes precedence)."""
     if cfg["family"] == "1D":
         out_subblock_h, out_subblock_w = _pick_out_subblocks_1d(cfg["per_core_N"])
     else:
@@ -150,7 +154,7 @@ def create_program_config(cfg: dict):
             out_subblock_h=out_subblock_h,
             out_subblock_w=out_subblock_w,
             fuse_batch=True,
-            fused_activation=None,
+            fused_activation=fused_activation,
             mcast_in0=True,
         )
 
@@ -162,7 +166,7 @@ def create_program_config(cfg: dict):
         out_subblock_h=out_subblock_h,
         out_subblock_w=out_subblock_w,
         transpose_mcast=False,
-        fused_activation=None,
+        fused_activation=fused_activation,
     )
 
 
@@ -284,13 +288,21 @@ def build_ffn_down_preset(mesh_device: ttnn.MeshDevice, m: int = VISION_MM_SEQ_L
     )
 
 
-def build_ffn_up_preset(mesh_device: ttnn.MeshDevice, m: int = VISION_MM_SEQ_LEN) -> VisionMatmulPreset:
+def build_ffn_up_preset(
+    mesh_device: ttnn.MeshDevice,
+    m: int = VISION_MM_SEQ_LEN,
+    activation=None,
+) -> VisionMatmulPreset:
     """Sweep-tuned FFN gate/up preset: 1D l1/dram/ws on 8×8 grid, in0_block_w=4.
 
     Tuned at M=128. ``per_core_M`` and per_core_N are scaled with the actual
     sequence length so the matmul kernel's core count never exceeds the grid.
     Uses ceil-division on per_core_N to stay safe when the device grid is
     smaller than the 8×8 design point (e.g. P150 with compute grid 8×6).
+
+    ``activation``: optional ``ttnn.UnaryOpType`` (e.g. ``ttnn.UnaryOpType.SILU``)
+    baked into the matmul kernel as a fused epilogue — saves a separate Unary op
+    after the matmul. Used for the gate-proj path of SwiGLU FFNs.
     """
     K, N = FFN_UP_SHAPE[1], FFN_UP_SHAPE[2]
     mt = max(1, _ceil_div(m, TILE))
@@ -310,7 +322,7 @@ def build_ffn_up_preset(mesh_device: ttnn.MeshDevice, m: int = VISION_MM_SEQ_LEN
     in0_mem, in1_mem, out_mem = create_memory_configs(shape, cfg)
     return VisionMatmulPreset(
         shape=shape,
-        program_config=create_program_config(cfg),
+        program_config=create_program_config(cfg, fused_activation=activation),
         in0_memory_config=in0_mem,
         in1_memory_config=in1_mem,
         out_memory_config=out_mem,
@@ -318,11 +330,14 @@ def build_ffn_up_preset(mesh_device: ttnn.MeshDevice, m: int = VISION_MM_SEQ_LEN
 
 
 def build_o_proj_preset(mesh_device: ttnn.MeshDevice, m: int = VISION_MM_SEQ_LEN) -> VisionMatmulPreset:
-    """Sweep-tuned O-projection preset: 1D l1/dram/ws on 8×4 grid.
+    """O-projection preset: 1D l1/dram/ws on 8×4 grid (32 cores).
 
-    Tuned at M=128 with in0_block_w=16 → 11 µs, 24 TFLOPs. For larger M the
-    in0 working set (per_core_M × in0_block_w tiles) would blow L1, so drop
-    in0_block_w to 4 when M exceeds the design point.
+    Tuned at M=128 with in0_block_w=16. NB: tried 8×2 (per_core_N=2, fixes
+    tracy's 1×1 subblock advice and lifts FLOP utilization from 26%→46%) but it
+    regressed wall-clock by ~1 μs — at K=1024 the per-core kernel finishes
+    faster than the parallelism loss costs. The lower-FLOP-but-higher-core-count
+    config wins here. Compare to ffn_down (same per_core layout, K=4096) where
+    16 cores wins because K is 4× longer.
     """
     K, N = O_PROJ_SHAPE[1], O_PROJ_SHAPE[2]
     mt = max(1, _ceil_div(m, TILE))
