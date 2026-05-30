@@ -67,7 +67,21 @@ CROSS_PE_MAX_POS = [20]
 
 # AV-mode auxiliary
 AUDIO_N = 256  # sp-aligned for sp ∈ {1, 2, 4, 8}
-CHECKPOINT_22B = os.path.expanduser("~/.cache/ltx-checkpoints/ltx-2.3-22b-dev.safetensors")
+# 22B checkpoint variants (AV mode only — video mode uses random scaled weights).
+#   "fast" = distilled-1.1, what the production Fast pipeline / stage-2 actually runs.
+#   "dev"  = base 22B, the non-distilled checkpoint.
+# Both share the same architecture/shapes, so the test config is identical; only the
+# weight values differ. LTX_CHECKPOINT overrides whichever variant is selected.
+_CHECKPOINT_22B_VARIANTS = {
+    "fast": os.path.expanduser("~/.cache/ltx-checkpoints/ltx-2.3-22b-distilled-1.1.safetensors"),
+    "dev": os.path.expanduser("~/.cache/ltx-checkpoints/ltx-2.3-22b-dev.safetensors"),
+}
+
+
+def _resolve_checkpoint_22b(variant: str) -> str:
+    """Path for the selected 22B variant; LTX_CHECKPOINT env wins if set."""
+    return os.environ.get("LTX_CHECKPOINT", _CHECKPOINT_22B_VARIANTS[variant])
+
 
 # Block-test torch reference uses small scaled random weights; default init blows
 # up through `(1+scale)*x` adaln chains in fp32 with no training signal.
@@ -84,8 +98,13 @@ _RUN_PCC_DEFAULT = {"1": False, "0": True}.get(os.environ.get("LTX_SKIP_PCC"), T
 # ---------------------------------------------------------------------------
 _LTX_TRANSFORMER_MESH_PARAMS = [
     pytest.param((1, 1), 0, 1, 1, {}, ttnn.Topology.Linear, False, id="1x1sp0tp1"),
+    # 2x4sp0tp1 keeps is_fsdp=True for FSDP-path coverage on a 2D mesh.
     pytest.param((2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp0tp1"),
-    pytest.param((2, 4), 1, 0, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp1tp0"),
+    # 2x4sp1tp0 mirrors the production BH 2x4 config (from_pretrained): sp_axis=1/tp_axis=0,
+    # num_links=2, is_fsdp=False. Production handles weight residency via dynamic_load (whole-model
+    # load/evict), NOT per-layer FSDP weight all-gathers — so is_fsdp must stay False here or the
+    # profile shows phantom weight-gather collectives that the real run never issues.
+    pytest.param((2, 4), 1, 0, 2, line_params, ttnn.Topology.Linear, False, id="2x4sp1tp0"),
     pytest.param((4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring, True, id="wh_4x8sp1tp0"),
     pytest.param((4, 8), 1, 0, 2, ring_params, ttnn.Topology.Ring, False, id="ring_bh_4x8sp1tp0"),
     pytest.param((4, 8), 1, 0, 2, line_params, ttnn.Topology.Linear, False, id="line_bh_4x8sp1tp0"),
@@ -104,6 +123,14 @@ _LTX_TRANSFORMER_MODALITY_PARAMS = [
 ]
 
 _LTX_TRANSFORMER_RUN_PCC_PARAMS = [pytest.param(_RUN_PCC_DEFAULT, id="pcc" if _RUN_PCC_DEFAULT else "nopcc")]
+
+# Checkpoint variant for AV mode. "fast" (distilled) is the production stage-2 path and the
+# default; select "dev" with `-k ckpt_dev` to exercise the base-22B weights. Ignored in video
+# mode (random scaled weights). Override the resolved file with LTX_CHECKPOINT.
+_LTX_TRANSFORMER_CKPT_PARAMS = [
+    pytest.param("fast", id="ckpt_fast"),
+    pytest.param("dev", id="ckpt_dev"),
+]
 
 
 # ---------------------------------------------------------------------------
@@ -254,14 +281,14 @@ def _make_tt_model(*, mesh_device, ccl_manager, parallel_config, is_fsdp, has_au
     )
 
 
-def _load_22b_state_dict(num_layers: int) -> dict | None:
-    """Load LTX-2.3-22B distilled weights filtered to the first `num_layers` blocks.
+def _load_22b_state_dict(num_layers: int, checkpoint_path: str) -> dict | None:
+    """Load LTX-2.3-22B weights (`checkpoint_path`) filtered to the first `num_layers` blocks.
 
     Returns None when the checkpoint is missing (caller should skip).
     """
-    if not os.path.exists(CHECKPOINT_22B):
+    if not os.path.exists(checkpoint_path):
         return None
-    raw = load_file(CHECKPOINT_22B)
+    raw = load_file(checkpoint_path)
     prefix = "model.diffusion_model."
     sd = {k[len(prefix) :]: v for k, v in raw.items() if k.startswith(prefix)}
     return {k: v for k, v in sd.items() if not k.startswith("transformer_blocks.") or int(k.split(".")[1]) < num_layers}
@@ -286,6 +313,7 @@ def _scale_init_(module: torch.nn.Module, seed: int = WEIGHT_SEED) -> None:
 @pytest.mark.parametrize(("F", "H", "W"), _LTX_TRANSFORMER_SHAPE_PARAMS)
 @pytest.mark.parametrize("has_audio", _LTX_TRANSFORMER_MODALITY_PARAMS)
 @pytest.mark.parametrize("run_pcc", _LTX_TRANSFORMER_RUN_PCC_PARAMS)
+@pytest.mark.parametrize("checkpoint_variant", _LTX_TRANSFORMER_CKPT_PARAMS)
 def test_ltx_transformer_block(
     mesh_device: ttnn.MeshDevice,
     sp_axis: int,
@@ -298,9 +326,14 @@ def test_ltx_transformer_block(
     W: int,
     has_audio: bool,
     run_pcc: bool,
+    checkpoint_variant: str,
     reset_seeds,
 ) -> None:
     """Test LTXTransformerBlock: TT forward, with optional PCC vs ltx_core."""
+    # Checkpoint variant only affects AV weight loading; skip the redundant copy in video mode.
+    if not has_audio and checkpoint_variant != "fast":
+        pytest.skip("checkpoint_variant only affects AV mode (video uses random scaled weights)")
+    checkpoint_22b = _resolve_checkpoint_22b(checkpoint_variant)
     video_N = F * H * W
     audio_N = AUDIO_N
     sp_factor = tuple(mesh_device.shape)[sp_axis]
@@ -339,9 +372,9 @@ def test_ltx_transformer_block(
         # Clone so TT-side `_prepare_torch_state` views can't alias torch params.
         tt_block.load_torch_state_dict({k: v.detach().clone() for k, v in torch_block.state_dict().items()})
     elif has_audio:
-        sd = _load_22b_state_dict(num_layers=1)
+        sd = _load_22b_state_dict(num_layers=1, checkpoint_path=checkpoint_22b)
         if sd is None:
-            pytest.skip(f"22B checkpoint not found at {CHECKPOINT_22B}")
+            pytest.skip(f"22B checkpoint not found at {checkpoint_22b}")
         block_sd = {
             k[len("transformer_blocks.0.") :]: v for k, v in sd.items() if k.startswith("transformer_blocks.0.")
         }
@@ -508,6 +541,7 @@ def _run_inner_step(
     W,
     has_audio,
     run_pcc,
+    checkpoint_variant: str,
     use_forward_alias: bool,
 ):
     """Shared body for model and inner_step tests.
@@ -516,6 +550,10 @@ def _run_inner_step(
     inner_step); `False` calls ``tt_model.inner_step(...)`` explicitly. Used
     so the two tests have visibly different call sites.
     """
+    # Checkpoint variant only affects AV weight loading; skip the redundant copy in video mode.
+    if not has_audio and checkpoint_variant != "fast":
+        pytest.skip("checkpoint_variant only affects AV mode (video uses random scaled weights)")
+    checkpoint_22b = _resolve_checkpoint_22b(checkpoint_variant)
     video_N = F * H * W
     audio_N = AUDIO_N
     sp_factor = tuple(mesh_device.shape)[sp_axis]
@@ -531,9 +569,9 @@ def _run_inner_step(
 
     if has_audio:
         # AV PCC path: 22B with strict=False.
-        state_dict = _load_22b_state_dict(num_layers=1)
+        state_dict = _load_22b_state_dict(num_layers=1, checkpoint_path=checkpoint_22b)
         if state_dict is None:
-            pytest.skip(f"22B checkpoint not found at {CHECKPOINT_22B}")
+            pytest.skip(f"22B checkpoint not found at {checkpoint_22b}")
     else:
         # Video PCC path: random scaled weights (1 layer).
         from ltx_core.model.transformer.model import LTXModel, LTXModelType
@@ -746,8 +784,21 @@ def _run_inner_step(
 @pytest.mark.parametrize(("F", "H", "W"), _LTX_TRANSFORMER_SHAPE_PARAMS)
 @pytest.mark.parametrize("has_audio", _LTX_TRANSFORMER_MODALITY_PARAMS)
 @pytest.mark.parametrize("run_pcc", _LTX_TRANSFORMER_RUN_PCC_PARAMS)
+@pytest.mark.parametrize("checkpoint_variant", _LTX_TRANSFORMER_CKPT_PARAMS)
 def test_ltx_transformer_model(
-    mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, F, H, W, has_audio, run_pcc, reset_seeds
+    mesh_device,
+    sp_axis,
+    tp_axis,
+    num_links,
+    topology,
+    is_fsdp,
+    F,
+    H,
+    W,
+    has_audio,
+    run_pcc,
+    checkpoint_variant,
+    reset_seeds,
 ) -> None:
     """Full LTXTransformerModel forward (delegates to inner_step)."""
     _run_inner_step(
@@ -762,6 +813,7 @@ def test_ltx_transformer_model(
         W=W,
         has_audio=has_audio,
         run_pcc=run_pcc,
+        checkpoint_variant=checkpoint_variant,
         use_forward_alias=True,
     )
 
@@ -774,8 +826,21 @@ def test_ltx_transformer_model(
 @pytest.mark.parametrize(("F", "H", "W"), _LTX_TRANSFORMER_SHAPE_PARAMS)
 @pytest.mark.parametrize("has_audio", _LTX_TRANSFORMER_MODALITY_PARAMS)
 @pytest.mark.parametrize("run_pcc", _LTX_TRANSFORMER_RUN_PCC_PARAMS)
+@pytest.mark.parametrize("checkpoint_variant", _LTX_TRANSFORMER_CKPT_PARAMS)
 def test_ltx_transformer_inner_step(
-    mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, F, H, W, has_audio, run_pcc, reset_seeds
+    mesh_device,
+    sp_axis,
+    tp_axis,
+    num_links,
+    topology,
+    is_fsdp,
+    F,
+    H,
+    W,
+    has_audio,
+    run_pcc,
+    checkpoint_variant,
+    reset_seeds,
 ) -> None:
     """LTXTransformerModel.inner_step — denoising-loop path."""
     _run_inner_step(
@@ -790,5 +855,6 @@ def test_ltx_transformer_inner_step(
         W=W,
         has_audio=has_audio,
         run_pcc=run_pcc,
+        checkpoint_variant=checkpoint_variant,
         use_forward_alias=False,
     )
