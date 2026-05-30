@@ -45,6 +45,9 @@ class GemmaConfig:
         head_dim: int = 256,
         rms_norm_eps: float = 1e-6,
         rope_theta: float = 1000000.0,
+        rope_local_base_freq: float = 10000.0,
+        rope_linear_scaling_factor: float = 8.0,
+        sliding_window_pattern: int = 6,
         max_position_embeddings: int = 8192,
         hidden_layer_index: int = -1,
     ):
@@ -56,35 +59,59 @@ class GemmaConfig:
         self.num_key_value_heads = num_key_value_heads
         self.head_dim = head_dim
         self.rms_norm_eps = rms_norm_eps
+        # Gemma-3 uses dual RoPE: global (full-attention) layers use rope_theta with
+        # linear position scaling; local (sliding-window) layers use rope_local_base_freq
+        # with no scaling. A layer is global when (layer_idx + 1) % sliding_window_pattern == 0.
         self.rope_theta = rope_theta
+        self.rope_local_base_freq = rope_local_base_freq
+        self.rope_linear_scaling_factor = rope_linear_scaling_factor
+        self.sliding_window_pattern = sliding_window_pattern
         self.max_position_embeddings = max_position_embeddings
         self.hidden_layer_index = hidden_layer_index
 
 
 class GemmaRMSNorm(RMSNorm):
-    """Gemma RMSNorm — wrapper matching T5RMSNorm pattern."""
+    """Gemma RMSNorm.
 
-    def __init__(self, config: GemmaConfig, mesh_device):
+    Gemma-3 stores RMSNorm weights centered at 0 and scales by ``(1 + weight)``
+    (HF ``Gemma3RMSNorm``). The underlying ``dit_rms_norm_unary_fused`` op applies
+    the raw ``weight`` instead, so we fold the ``+1`` into the weight at load time.
+    """
+
+    def __init__(self, config: GemmaConfig, mesh_device, dim: int | None = None):
         super().__init__(
-            embedding_dim=config.hidden_size,
+            embedding_dim=dim if dim is not None else config.hidden_size,
             norm_eps=config.rms_norm_eps,
             bias=False,
             mesh_device=mesh_device,
         )
 
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        if "weight" in state:
+            # Gemma's (1 + weight) convention. Keep fp32 precision for the offset;
+            # the Parameter is cast to its target dtype on load.
+            state["weight"] = state["weight"].float() + 1.0
+        super()._prepare_torch_state(state)
+
 
 class GemmaRotaryEmbedding(Module):
-    """Precompute RoPE cos/sin tables on host, store on device."""
+    """Precompute RoPE cos/sin tables on host, store on device.
 
-    def __init__(self, config: GemmaConfig, mesh_device):
+    ``base`` is the rope frequency base; ``linear_scaling_factor`` divides inv_freq
+    (HF "linear" rope scaling, used by Gemma-3 global layers). Local layers pass
+    base=rope_local_base_freq with linear_scaling_factor=1.0 (no scaling).
+    """
+
+    def __init__(self, config: GemmaConfig, mesh_device, base: float, linear_scaling_factor: float = 1.0):
         super().__init__()
         self.head_dim = config.head_dim
-        self.rope_theta = config.rope_theta
+        self.base = base
         self.max_seq_len = config.max_position_embeddings
         self.mesh_device = mesh_device
 
         # Precompute frequencies
-        inv_freq = 1.0 / (self.rope_theta ** (torch.arange(0, self.head_dim, 2, dtype=torch.float64) / self.head_dim))
+        inv_freq = 1.0 / (self.base ** (torch.arange(0, self.head_dim, 2, dtype=torch.float64) / self.head_dim))
+        inv_freq = inv_freq / linear_scaling_factor  # HF "linear" rope scaling
         t = torch.arange(min(self.max_seq_len, 8192), dtype=torch.float64)
         freqs = torch.outer(t, inv_freq).float()
         self._cos_cached = freqs.cos().unsqueeze(0).unsqueeze(0)  # (1, 1, seq, D/2)
@@ -128,11 +155,18 @@ class GemmaAttention(Module):
         self.num_local_heads = self.num_heads // tp
         self.num_local_kv_heads = self.num_kv_heads // tp
 
+        # FSDP: shard weights on the sequence-parallel axis (gathered per-op).
+        sp = parallel_config.sequence_parallel
+        fsdp_mesh_axis = sp.mesh_axis if (sp is not None and sp.factor > 1) else None
+
         col_kwargs = {
             "bias": False,
             "mesh_device": mesh_device,
             "mesh_axis": parallel_config.tensor_parallel.mesh_axis,
         }
+        if fsdp_mesh_axis is not None:
+            col_kwargs["fsdp_mesh_axis"] = fsdp_mesh_axis
+            col_kwargs["ccl_manager"] = ccl_manager
 
         self.q_proj = ColParallelLinear(self.hidden_size, self.num_heads * self.head_dim, **col_kwargs)
         self.k_proj = ColParallelLinear(self.hidden_size, self.num_kv_heads * self.head_dim, **col_kwargs)
@@ -143,13 +177,10 @@ class GemmaAttention(Module):
         # Gemma-3: post-attn norm applied to attn output before residual add
         self.post_attention_layernorm = GemmaRMSNorm(config, mesh_device)
 
-        # Gemma-3 QK normalization (RMSNorm per head, shape [head_dim])
-        self.q_norm = RMSNorm(
-            embedding_dim=self.head_dim, norm_eps=config.rms_norm_eps, bias=False, mesh_device=mesh_device
-        )
-        self.k_norm = RMSNorm(
-            embedding_dim=self.head_dim, norm_eps=config.rms_norm_eps, bias=False, mesh_device=mesh_device
-        )
+        # Gemma-3 QK normalization (RMSNorm per head, shape [head_dim]).
+        # Uses the same (1 + weight) convention as the other Gemma norms.
+        self.q_norm = GemmaRMSNorm(config, mesh_device, dim=self.head_dim)
+        self.k_norm = GemmaRMSNorm(config, mesh_device, dim=self.head_dim)
 
         self.sdpa_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=mesh_device.compute_with_storage_grid_size(),
@@ -208,11 +239,13 @@ class GemmaAttention(Module):
         q = self._apply_rope(q, cos, sin)
         k = self._apply_rope(k, cos, sin)
 
-        # GQA: repeat KV heads to match Q heads
+        # GQA: expand KV heads to match Q heads. Must use repeat_interleave (each kv
+        # head duplicated contiguously: [kv0,kv0,kv1,kv1,...]) to match HF repeat_kv —
+        # ttnn.repeat does block-tile ([kv0..kv7,kv0..kv7]) which mispairs q/kv heads.
         if self.num_local_kv_heads < self.num_local_heads:
             repeats = self.num_local_heads // self.num_local_kv_heads
-            k = ttnn.repeat(k, ttnn.Shape([1, repeats, 1, 1]))
-            v = ttnn.repeat(v, ttnn.Shape([1, repeats, 1, 1]))
+            k = ttnn.repeat_interleave(k, repeats, dim=1)
+            v = ttnn.repeat_interleave(v, repeats, dim=1)
 
         # Ensure DRAM interleaved layout for SDPA compatibility
         q = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
@@ -221,12 +254,15 @@ class GemmaAttention(Module):
 
         # SDPA — use is_causal when no mask, or explicit mask when padding present.
         # TTNN SDPA doesn't support both is_causal and attn_mask simultaneously.
+        # Gemma-3 scales by query_pre_attn_scalar**-0.5 = head_dim**-0.5 here; pass it
+        # explicitly rather than relying on the SDPA default.
         attn_output = ttnn.transformer.scaled_dot_product_attention(
             q,
             k,
             v,
             is_causal=(attn_mask is None),
             attn_mask=attn_mask,
+            scale=1.0 / math.sqrt(self.head_dim),
             program_config=self.sdpa_config,
             compute_kernel_config=self.compute_config,
         )
@@ -259,7 +295,9 @@ class GemmaAttention(Module):
 
 
 class GemmaFF(Module):
-    """Gemma SiLU-gated MLP: gate_proj * silu(up_proj) → down_proj."""
+    """Gemma-3 gated MLP: down_proj(gelu_tanh(gate_proj(x)) * up_proj(x)).
+
+    Gemma-3's hidden_activation is gelu_pytorch_tanh (NOT silu)."""
 
     def __init__(
         self,
@@ -269,17 +307,25 @@ class GemmaFF(Module):
         parallel_config: EncoderParallelConfig,
     ):
         super().__init__()
+        self.mesh_device = mesh_device
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
+
+        # FSDP: shard weights on the sequence-parallel axis (gathered per-op).
+        sp = parallel_config.sequence_parallel
+        fsdp_mesh_axis = sp.mesh_axis if (sp is not None and sp.factor > 1) else None
 
         col_kwargs = {
             "bias": False,
             "mesh_device": mesh_device,
             "mesh_axis": parallel_config.tensor_parallel.mesh_axis,
         }
+        if fsdp_mesh_axis is not None:
+            col_kwargs["fsdp_mesh_axis"] = fsdp_mesh_axis
+            col_kwargs["ccl_manager"] = ccl_manager
 
         self.gate_proj = ColParallelLinear(
-            config.hidden_size, config.intermediate_size, activation_fn="silu", **col_kwargs
+            config.hidden_size, config.intermediate_size, activation_fn="gelu_tanh", **col_kwargs
         )
         self.up_proj = ColParallelLinear(config.hidden_size, config.intermediate_size, **col_kwargs)
         self.down_proj = RowParallelLinear(
@@ -288,6 +334,7 @@ class GemmaFF(Module):
             bias=False,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
         )
 
@@ -386,7 +433,14 @@ class GemmaEncoder(Module):
         self.mesh_device = mesh_device
 
         self.embed_tokens = Embedding(config.vocab_size, config.hidden_size, device=mesh_device)
-        self.rotary_emb = GemmaRotaryEmbedding(config, mesh_device)
+        # Gemma-3 dual RoPE: global layers use rope_theta + linear scaling; local
+        # (sliding-window) layers use rope_local_base_freq with no scaling.
+        self.rotary_emb_global = GemmaRotaryEmbedding(
+            config, mesh_device, base=config.rope_theta, linear_scaling_factor=config.rope_linear_scaling_factor
+        )
+        self.rotary_emb_local = GemmaRotaryEmbedding(
+            config, mesh_device, base=config.rope_local_base_freq, linear_scaling_factor=1.0
+        )
 
         self.layers = ModuleList(
             GemmaEncoderLayer(config, mesh_device, ccl_manager, parallel_config)
@@ -434,9 +488,10 @@ class GemmaEncoder(Module):
         # Scale embeddings (Gemma-specific)
         hidden_states = ttnn.multiply(hidden_states, math.sqrt(self.config.hidden_size))
 
-        # Get RoPE cos/sin for this sequence length
+        # Get RoPE cos/sin for this sequence length (global + local variants)
         seq_len = token_ids.shape[-1]
-        cos, sin = self.rotary_emb.get_cos_sin(seq_len, self.mesh_device)
+        cos_g, sin_g = self.rotary_emb_global.get_cos_sin(seq_len, self.mesh_device)
+        cos_l, sin_l = self.rotary_emb_local.get_cos_sin(seq_len, self.mesh_device)
 
         # Create combined causal + padding mask for SDPA.
         # TTNN SDPA doesn't support is_causal + attn_mask simultaneously, so we
@@ -466,9 +521,12 @@ class GemmaEncoder(Module):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-        # Run through all layers
+        # Run through all layers, selecting global vs local RoPE per layer.
+        # Gemma-3: layer is global (full attention) when (idx + 1) % sliding_window_pattern == 0.
         all_hidden_states = [hidden_states]
-        for layer in self.layers:
+        for idx, layer in enumerate(self.layers):
+            is_global = (idx + 1) % self.config.sliding_window_pattern == 0
+            cos, sin = (cos_g, sin_g) if is_global else (cos_l, sin_l)
             hidden_states = layer(hidden_states, cos, sin, attn_mask=tt_attn_mask)
             all_hidden_states.append(hidden_states)
 

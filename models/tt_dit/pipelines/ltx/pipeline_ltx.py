@@ -581,6 +581,21 @@ class LTXPipeline:
                 m.register_coresident_exclusions(self.vae_decoder)
             self.vae_decoder.register_coresident_exclusions(*audio_modules)
 
+    def _register_encoder_exclusions(self, module) -> None:
+        """Register a lazily-built Gemma encoder/connector coresident-excluded with the
+        DiT variants + VAE (bidirectional). Called from load_gemma_encoder /
+        load_embeddings_connectors BEFORE their load, so the encoder's load_torch_state_dict
+        auto-evicts the DiT (and the later DiT/VAE reload auto-evicts the encoder).
+        No-op unless dynamic_load is enabled."""
+        if not self.dynamic_load:
+            return
+        peers = [s.model for s in self.transformer_states]
+        if self.vae_decoder is not None:
+            peers.append(self.vae_decoder)
+        module.register_coresident_exclusions(*peers)
+        for p in peers:
+            p.register_coresident_exclusions(module)
+
     def _prime_caches(self) -> None:
         """Load every module in reverse use order so variant 0 is resident in
         DRAM after ``__init__`` (matches Wan's reverse-use-order priming)."""
@@ -656,14 +671,23 @@ class LTXPipeline:
             max_position_embeddings=sequence_length,
         )
 
-        # Use TP on the same axis as the DiT transformer
+        # Use TP on the same axis as the DiT transformer; FSDP-shard weights on the
+        # sequence-parallel axis (active only when its factor > 1).
         tp_factor = self.parallel_config.tensor_parallel.factor
         tp_axis = self.parallel_config.tensor_parallel.mesh_axis
-        enc_parallel = EncoderParallelConfig(tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis))
+        enc_parallel = EncoderParallelConfig(
+            tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
+            sequence_parallel=self.parallel_config.sequence_parallel,
+        )
 
         enc_ccl = CCLManager(self.mesh_device, topology=ttnn.Topology.Linear)
 
         self.gemma_encoder = GemmaEncoder(config, self.mesh_device, enc_ccl, enc_parallel)
+
+        # dynamic_load: register the encoder coresident-excluded with the DiT variants +
+        # VAE BEFORE loading, so its load_torch_state_dict auto-evicts the DiT (and the
+        # later DiT reload auto-evicts the encoder) — the same mechanism the DiT/VAE use.
+        self._register_encoder_exclusions(self.gemma_encoder)
 
         weight_files = sorted(glob.glob(f"{gemma_path}/model-*.safetensors"))
         if not weight_files:
@@ -693,7 +717,7 @@ class LTXPipeline:
         gemma_hidden_size: int = 3840,
         gemma_num_layers: int = 49,  # embedding layer + 48 decoder layers
         video_num_blocks: int = 8,
-        audio_num_blocks: int = 2,
+        audio_num_blocks: int = 8,
         video_dim: int = 4096,
         audio_dim: int = 2048,
         num_heads: int = 32,
@@ -708,10 +732,13 @@ class LTXPipeline:
         """
         input_dim = gemma_hidden_size * gemma_num_layers
 
-        # Use same TP as DiT transformer
+        # Use same TP as DiT transformer; FSDP-shard on the sequence-parallel axis.
         tp_factor = self.parallel_config.tensor_parallel.factor
         tp_axis = self.parallel_config.tensor_parallel.mesh_axis
-        enc_parallel = EncoderParallelConfig(tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis))
+        enc_parallel = EncoderParallelConfig(
+            tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
+            sequence_parallel=self.parallel_config.sequence_parallel,
+        )
         enc_ccl = CCLManager(self.mesh_device, topology=ttnn.Topology.Linear)
 
         # --- Video connector ---
@@ -739,6 +766,7 @@ class LTXPipeline:
             if k.startswith(conn_prefix):
                 video_sd[k[len(conn_prefix) :]] = v
 
+        self._register_encoder_exclusions(self.video_connector)
         result = self.video_connector.load_torch_state_dict(video_sd, strict=False)
         if result.missing_keys:
             logger.warning(f"Video connector missing keys: {result.missing_keys}")
@@ -775,6 +803,7 @@ class LTXPipeline:
                             continue
                     audio_sd[sub] = v
 
+            self._register_encoder_exclusions(self.audio_connector)
             result = self.audio_connector.load_torch_state_dict(audio_sd, strict=False)
             if result.missing_keys:
                 logger.warning(f"Audio connector missing keys: {result.missing_keys}")
@@ -877,9 +906,12 @@ class LTXPipeline:
             all_hidden_states = self.gemma_encoder(tt_ids, attention_mask=tokens.attention_mask)
 
             if self.video_connector is not None:
-                # Collect 49 hidden states (embedding + 48 layers, skip final norm)
-                # Concat on device to avoid 49 separate D2H transfers
-                hs_list = all_hidden_states[:-1]
+                # Collect the 49 hidden states the reference FeatureExtractorV2 sees. HF
+                # output_hidden_states = [embed, L0_out..L46_out, final_norm(L47)] — i.e. the
+                # LAST entry is post-final-norm, NOT the raw last-layer output. Our encoder
+                # returns [embed, L0_out..L47_out, final_norm], so drop the raw last layer
+                # (index -2) and keep the final-norm state.
+                hs_list = list(all_hidden_states[:-2]) + [all_hidden_states[-1]]
                 tt_stacked = ttnn.concat(hs_list, dim=-1)  # (B, seq, D*L) on device
                 stacked_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_stacked)[0]).float()
                 # Free device memory
@@ -887,12 +919,15 @@ class LTXPipeline:
                     ttnn.deallocate(hs)
                 ttnn.deallocate(tt_stacked)
 
-                # FeatureExtractorV2: per-token RMS norm + flatten
-                # Reshape to [B, T, D, L] for per-token per-layer normalization
+                # FeatureExtractorV2: per-token RMS norm + flatten.
+                # The reference stacks via torch.stack(hidden_states, dim=-1) -> [B,T,D,L]
+                # (dim-major) and flattens to a D-major [B,T,D*L] vector for aggregate_embed.
+                # Our ttnn.concat(hs_list, dim=-1) yields a LAYER-major buffer [B,T,L*D], so we
+                # reshape to [B,T,L,D] then permute to [B,T,D,L] to match the reference ordering.
                 B_enc, T_enc = stacked_torch.shape[0], stacked_torch.shape[1]
                 D_gemma = 3840  # Gemma hidden size
                 L_layers = len(hs_list)  # 49
-                encoded = stacked_torch.reshape(B_enc, T_enc, D_gemma, L_layers)
+                encoded = stacked_torch.reshape(B_enc, T_enc, L_layers, D_gemma).permute(0, 1, 3, 2)
                 variance = torch.mean(encoded**2, dim=2, keepdim=True)
                 normed = encoded * torch.rsqrt(variance + 1e-6)
                 normed = normed.reshape(B_enc, T_enc, D_gemma * L_layers)
@@ -928,12 +963,14 @@ class LTXPipeline:
                             connector.num_learnable_registers,
                         )
 
-                    # Compute 1D RoPE for connector blocks (matching reference Embeddings1DConnector).
-                    # Uses reference precompute_freqs_cis directly since 1D grid format differs from
-                    # our video/audio 4D grid convention.
+                    # Compute 1D RoPE for connector blocks, matching the reference
+                    # Embeddings1DConnector config from the checkpoint: rope_type=SPLIT,
+                    # positional_embedding_max_pos=[4096], frequencies_precision=float64
+                    # (double-precision freq grid). These were previously hardcoded to
+                    # INTERLEAVED/[1]/float32, which silently wrecked the connector output.
                     sys.path.insert(0, "LTX-2/packages/ltx-core/src")
                     from ltx_core.model.transformer.rope import LTXRopeType as RefRopeType
-                    from ltx_core.model.transformer.rope import generate_freq_grid_pytorch
+                    from ltx_core.model.transformer.rope import generate_freq_grid_np
                     from ltx_core.model.transformer.rope import precompute_freqs_cis as ref_precompute
 
                     seq_len = projected.shape[1]
@@ -944,11 +981,11 @@ class LTXPipeline:
                         dim=dim,
                         out_dtype=torch.bfloat16,
                         theta=10000.0,
-                        max_pos=[1],
+                        max_pos=[4096],
                         num_attention_heads=num_heads,
-                        rope_type=RefRopeType.INTERLEAVED,
-                        freq_grid_generator=generate_freq_grid_pytorch,
-                    )  # INTERLEAVED: (1, seq_len, dim) — applied to flat Q/K before head split
+                        rope_type=RefRopeType.SPLIT,
+                        freq_grid_generator=generate_freq_grid_np,
+                    )  # SPLIT: cos/sin (B, H, seq, head_dim/2)
 
                     # Push back to device and run transformer blocks with RoPE
                     tt_x = ttnn.from_torch(

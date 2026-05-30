@@ -357,6 +357,8 @@ class LTXAttention(Module):
         if not self.apply_gated_attention or self.to_gate_logits.weight._data is None:
             return None
 
+        # Apply sigmoid separately (fusing it into the matmul hit a VecMode assertion in
+        # the unary op for the num_heads-wide output). gate = 2 * sigmoid(gate_logits).
         gate_logits = self.to_gate_logits(spatial_1BND, parallel_config=qkv_parallel_config)
         gate = ttnn.multiply(ttnn.sigmoid(gate_logits), 2.0)
 

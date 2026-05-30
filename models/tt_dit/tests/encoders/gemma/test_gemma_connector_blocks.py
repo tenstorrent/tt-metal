@@ -1,0 +1,140 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+Decisive bug-vs-fidelity test for the connector transformer blocks.
+
+Feeds IDENTICAL random features (no gemma, no padding/registers) through the
+device video connector blocks and the reference Embeddings1DConnector, and
+compares. Clean PCC => connector blocks are correct and the end-to-end gap is
+propagated gemma bf16 fidelity; low PCC => a real bug in the device blocks.
+"""
+
+import glob
+import os
+import sys
+from pathlib import Path
+
+sys.path.append(str(Path(__file__).resolve().parents[6]))
+
+import pytest
+import torch
+from loguru import logger
+from safetensors import safe_open
+
+import ttnn
+from models.tt_dit.encoders.gemma.embeddings_connector import _rms_norm
+from models.tt_dit.pipelines.ltx.pipeline_ltx_av import LTXAVPipeline
+
+VIDEO_PREFIX = "model.diffusion_model.video_embeddings_connector."
+AGG_PREFIXES = ("text_embedding_projection.video_aggregate_embed.", "text_embedding_projection.audio_aggregate_embed.")
+
+
+def _gemma_path():
+    c = glob.glob(
+        os.path.expanduser("~/.cache/huggingface/hub/models--google--gemma-3-12b-it-qat-q4_0-unquantized/snapshots/*/")
+    )
+    return c[0].rstrip("/") if c else None
+
+
+def _ltx_ckpt():
+    c = glob.glob(
+        os.path.expanduser(
+            "~/.cache/huggingface/hub/models--Lightricks--LTX-2.3/snapshots/*/ltx-2.3-22b-dev.safetensors"
+        )
+    )
+    return c[0] if c else None
+
+
+def pcc(a, b):
+    a_f, b_f = a.flatten().float(), b.flatten().float()
+    a_m, b_m = a_f - a_f.mean(), b_f - b_f.mean()
+    d = (a_m.pow(2).sum() * b_m.pow(2).sum()).sqrt()
+    return ((a_m * b_m).sum() / d).item() if d > 0 else 0.0
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=["mesh_device"])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=["device_params"])
+def test_connector_blocks_isolated(*, mesh_device):
+    gemma, ckpt = _gemma_path(), _ltx_ckpt()
+    if not gemma or not ckpt:
+        pytest.skip("assets missing")
+
+    sys.path.insert(0, "LTX-2/packages/ltx-core/src")
+    from ltx_core.model.transformer.rope import LTXRopeType, generate_freq_grid_pytorch, precompute_freqs_cis
+    from ltx_core.text_encoders.gemma.embeddings_connector import Embeddings1DConnector
+
+    # --- device connector (load video connector weights) ---
+    pipe = LTXAVPipeline.create_pipeline(mesh_device, checkpoint_name=None, gemma_path=gemma, mode="av")
+    conn_state = {}
+    ref_sd = {}
+    with safe_open(ckpt, "pt") as f:
+        for k in f.keys():
+            if k.startswith(VIDEO_PREFIX):
+                conn_state[k] = f.get_tensor(k)
+                ref_sd[k[len(VIDEO_PREFIX) :]] = f.get_tensor(k)  # keep bf16 (matches reference)
+            elif k.startswith(AGG_PREFIXES):
+                conn_state[k] = f.get_tensor(k)
+    pipe.load_embeddings_connectors(conn_state, audio_num_blocks=8)
+
+    # --- reference connector (CPU) ---
+    ref = (
+        Embeddings1DConnector(
+            attention_head_dim=128,
+            num_attention_heads=32,
+            num_layers=8,
+            positional_embedding_theta=10000.0,
+            positional_embedding_max_pos=[1],
+            rope_type=LTXRopeType.INTERLEAVED,
+            double_precision_rope=False,
+            apply_gated_attention=True,
+            num_learnable_registers=128,
+        )
+        .float()
+        .eval()
+    )
+    missing, unexpected = ref.load_state_dict(ref_sd, strict=False)
+    logger.info(f"ref connector load: missing={list(missing)[:4]} unexpected={list(unexpected)[:4]}")
+
+    # --- identical random input WITH PADDING (left-pad) → register replacement active ---
+    # This mirrors the real encode path: only n_real real tokens, the rest become registers.
+    seq = 256
+    dim = 4096
+    n_real = 17
+    torch.manual_seed(0)
+    x = (torch.randn(1, seq, dim) * 0.5).bfloat16()
+    binary_mask = torch.zeros(1, seq, dtype=torch.long)
+    binary_mask[:, seq - n_real :] = 1  # left-pad: real tokens at the end
+    additive_mask = torch.where(binary_mask[:, None, None, :].bool(), 0.0, -1e9)  # (1,1,1,seq)
+
+    with torch.no_grad():
+        ref_out = ref(x.float().clone(), additive_mask)[0].float()
+
+    # device: replicate _run_connector — register replacement -> rope -> blocks -> final norm
+    registers = ttnn.to_torch(ttnn.get_device_tensors(pipe.video_connector.learnable_registers.data)[0]).float()
+    x_replaced = LTXAVPipeline._replace_padded_with_registers(x.float(), binary_mask, registers, 128).bfloat16()
+
+    rope_cos, rope_sin = precompute_freqs_cis(
+        torch.arange(seq, dtype=torch.float32)[None, None, :],
+        dim=dim,
+        out_dtype=torch.bfloat16,
+        theta=10000.0,
+        max_pos=[1],
+        num_attention_heads=32,
+        rope_type=LTXRopeType.INTERLEAVED,
+        freq_grid_generator=generate_freq_grid_pytorch,
+    )
+    tt_x = ttnn.from_torch(x_replaced, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    for block in pipe.video_connector.transformer_1d_blocks:
+        tt_x = block(tt_x, rope_cos=rope_cos, rope_sin=rope_sin)
+    tt_x = _rms_norm(tt_x)
+    dev_out = ttnn.to_torch(ttnn.get_device_tensors(tt_x)[0]).float()
+
+    logger.info(
+        f"CONNECTOR (with registers)  ref={tuple(ref_out.shape)} dev={tuple(dev_out.shape)}  PCC={pcc(dev_out, ref_out):.4f}"
+    )
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-s", "-v"])

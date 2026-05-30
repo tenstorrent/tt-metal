@@ -347,11 +347,17 @@ class LTXFastPipeline(LTXAVPipeline):
         total_t0 = time.time()
 
         t0 = time.time()
-        results = self.encode_prompts_reference([prompt])
-        logger.info(f"Encoding: {time.time() - t0:.1f}s")
-
-        v_embeds = results[0].video_encoding.float()
-        a_embeds = results[0].audio_encoding.float()
+        if os.environ.get("LTX_DEVICE_ENCODE") == "1":
+            # On-device Gemma encode (FSDP-sharded; coresident auto-evicts the DiT/VAE).
+            self._ensure_device_encoder()
+            enc = self.encode_prompts_device([prompt])
+            v_embeds, a_embeds = enc[0][0].float(), enc[0][1].float()
+            logger.info(f"Encoding (device): {time.time() - t0:.1f}s")
+        else:
+            results = self.encode_prompts_reference([prompt])
+            v_embeds = results[0].video_encoding.float()
+            a_embeds = results[0].audio_encoding.float()
+            logger.info(f"Encoding: {time.time() - t0:.1f}s")
 
         # Both Fast stages share variant 0 (no weight swap between stages).
         t0 = time.time()
