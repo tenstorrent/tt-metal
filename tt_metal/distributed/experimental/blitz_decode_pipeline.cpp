@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt-metalium/internal/blitz_decode_pipeline.hpp"
+#include "tt-metalium/experimental/internal/blitz_decode_pipeline.hpp"
 
 #include <algorithm>
 #include <cstddef>
