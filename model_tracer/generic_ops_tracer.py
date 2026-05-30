@@ -1528,13 +1528,17 @@ Examples (Import existing traces):
 
         if not args.load and not result["trace_files"]:
             if result["success"]:
-                print("❌ Error: Test run completed but produced no operation trace files")
+                print(
+                    "⚠️ Warning: Test run completed but produced no operation trace files.\n"
+                    "   All test vectors may have been invalidated (e.g., unsupported layout or mesh shape)."
+                )
+                return 0
             else:
                 print(
                     f"❌ Error: Test execution failed with exit code {result['exit_code']} "
                     "before any operation trace files were generated"
                 )
-            return 1
+                return result["exit_code"] or 1
 
         if result["trace_files"]:
             # Load valid operations and excluded operations
