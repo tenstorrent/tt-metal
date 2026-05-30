@@ -272,9 +272,13 @@ class TtMistral4SharedMLP(LightweightModule):
             cache_file_name=_cf(prefix + "down_proj.weight"),
         )  # [intermediate_size, HIDDEN_SIZE]
 
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, gu_pc=None, d_pc=None) -> ttnn.Tensor:
         """
         Args:  x: [1, 1, seq, HIDDEN_SIZE]
+               gu_pc / d_pc: optional 1D-mcast program configs for the gate_up and
+                             down matmuls. Without them the default ~12-core path
+                             runs; with them the shared expert hits the same
+                             64-core parallelism as the routed experts.
         Returns:   [1, 1, seq, HIDDEN_SIZE]
         """
         # Matmul outputs stay in DRAM (gate_up is [1,1,seq,2I] — largest tensor).
@@ -287,8 +291,9 @@ class TtMistral4SharedMLP(LightweightModule):
             x,
             self.gate_up_proj,
             compute_kernel_config=self.compute_kernel_config,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=gu_pc,
         )  # [1, 1, seq, 2I] — up in [0:I], gate in [I:2I]
 
         # Split along the last dim (tile-aligned at I=2048); avoids ttnn.swiglu which
@@ -307,8 +312,9 @@ class TtMistral4SharedMLP(LightweightModule):
             hidden,
             self.down_proj,
             compute_kernel_config=self.compute_kernel_config,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=d_pc,
         )
         ttnn.deallocate(hidden)
         return out
@@ -714,13 +720,19 @@ class TtMistral4MoELayer(LightweightModule):
         _mem = ttnn.L1_MEMORY_CONFIG
 
         # 1. Gate logits on device: [1, 1, seq, NUM_EXPERTS]
+        # Always pass a tuned 1D-mcast PC: the previous `seq_len == 1` guard
+        # left every prefill call to the ~4-core default path (~90 μs in the
+        # smoke test even though M pads to 1 tile). _expert_1d_mcast_pc caches
+        # by (m, k, n) so each unique m_tiles compiles once.
+        m_tiles = (seq_len + 31) // 32
+        gate_pc = self._expert_1d_mcast_pc(m_tiles, HIDDEN_SIZE // 32, NUM_EXPERTS // 32)
         gate_logits_tt = ttnn.matmul(
             x,
             self.gate_weight,
             compute_kernel_config=self.compute_kernel_config,
             dtype=ttnn.bfloat8_b if self._prefill_bf8_routing else ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=self._gate_pc if seq_len == 1 else None,
+            program_config=gate_pc,
         )
 
         # 2. Apply correction bias if present (device tensor, broadcast [1,1,1,E] → [1,1,S,E])
@@ -821,6 +833,12 @@ class TtMistral4MoELayer(LightweightModule):
         I = EXPERT_INTERMEDIATE_SIZE
         H = HIDDEN_SIZE
 
+        # Shared-expert PCs default to None for non-BH; set inside the BH branch
+        # below. The shared expert weights are not sharded, so we always use the
+        # 1D-mcast variant regardless of routed-expert weight staging mode.
+        shared_gu_pc = None
+        shared_d_pc = None
+
         if self._is_blackhole:
             _mem = ttnn.L1_MEMORY_CONFIG
             m_tiles = (seq_len + 31) // 32
@@ -833,6 +851,20 @@ class TtMistral4MoELayer(LightweightModule):
             else:
                 gu_pc = self._expert_1d_mcast_pc(m_tiles, H // 32, 2 * I // 32)
                 d_pc = self._expert_1d_mcast_pc(m_tiles, I // 32, H // 32)
+            # SHARED_EXPERT_INTERMEDIATE_SIZE == EXPERT_INTERMEDIATE_SIZE today, so
+            # these PCs are cache-hits for the routed-expert mcast variant — kept
+            # explicit so a future divergence stays correct without re-checking.
+            shared_gu_pc = self._expert_1d_mcast_pc(m_tiles, H // 32, 2 * SHARED_EXPERT_INTERMEDIATE_SIZE // 32)
+            shared_d_pc = self._expert_1d_mcast_pc(m_tiles, SHARED_EXPERT_INTERMEDIATE_SIZE // 32, H // 32)
+
+            # Untile routing_weights once: per-expert ttnn.slice on the TILE
+            # [1,1,seq,EPD] tensor would internally untile→slice→retile each
+            # iteration (3 ops × EPD experts). One untile + per-iter
+            # (rm_slice + retile of a [1,1,seq,1] column) keeps the per-iter
+            # device-op count at 2 and drops the per-step UntilizeWithUnpadding
+            # count from EPD to 1.
+            routing_weights_rm = ttnn.to_layout(routing_weights, ttnn.ROW_MAJOR_LAYOUT, memory_config=_mem)
+            ttnn.deallocate(routing_weights)
 
             partial = None
             for i in range(self.experts_per_device):
@@ -886,12 +918,14 @@ class TtMistral4MoELayer(LightweightModule):
                     ttnn.deallocate(down_weight)
                 ttnn.deallocate(hidden_i)
 
-                w_i = ttnn.slice(
-                    routing_weights,
+                w_i_rm = ttnn.slice(
+                    routing_weights_rm,
                     [0, 0, 0, i],
                     [1, 1, seq_len, i + 1],
                     memory_config=_mem,
                 )
+                w_i = ttnn.to_layout(w_i_rm, ttnn.TILE_LAYOUT, memory_config=_mem)
+                ttnn.deallocate(w_i_rm)
                 weighted_i = ttnn.multiply(out_i, w_i, memory_config=_mem)
                 ttnn.deallocate(out_i)
                 ttnn.deallocate(w_i)
@@ -903,7 +937,7 @@ class TtMistral4MoELayer(LightweightModule):
                     ttnn.deallocate(partial)
                     ttnn.deallocate(weighted_i)
                     partial = new_partial
-            ttnn.deallocate(routing_weights)
+            ttnn.deallocate(routing_weights_rm)
             # all_reduce_sum expects DRAM input.
             partial_dram = ttnn.to_memory_config(partial, ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(partial)
@@ -979,7 +1013,7 @@ class TtMistral4MoELayer(LightweightModule):
             ttnn.deallocate(partial)
 
         # ── Shared expert (always active, replicated) ───────────────────────
-        shared_out = self.shared_expert.forward(x)
+        shared_out = self.shared_expert.forward(x, gu_pc=shared_gu_pc, d_pc=shared_d_pc)
 
         # Final MoE output = routed + shared. L1 output so the caller's residual
         # add can stay in L1 too.

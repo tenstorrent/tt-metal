@@ -121,6 +121,14 @@ class TtPixtralAttention:
         )  # [1, 1, seq, 3 * VISION_HIDDEN_SIZE]
 
         # ── Split into heads: each [1, n_heads, seq, head_dim] ──────────
+        # NOTE: nlp_create_qkv_heads' sharded fast path is decode-only — its
+        # compute_output_specs hardcodes the output shard shape to
+        # {TILE_HEIGHT=32, head_dim} (nlp_create_qkv_heads_device_operation.cpp:189),
+        # so the sharded layout only fits when M=1 tile. For prefill (M>1 tile)
+        # the interleaved kernel work-splits by tile-rows of M
+        # (nlp_create_qkv_heads_program_factory.cpp:71 → num_blocks = M/32),
+        # capping useful cores at 4 for our smoke (M=128). The 30 μs is the
+        # kernel's optimum at this shape — verified V-1 cannot improve.
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             qkv,
             num_heads=self.n_heads,
