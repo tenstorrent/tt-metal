@@ -1018,7 +1018,7 @@ def create_fabric_router_config(max_payload_size):
 @pytest.mark.parametrize(
     "final_mesh_coord, seed, final_core_idx, p, temperature, k, from_metadata, copy_probabilities, iterations",
     [
-        ((1, 1), 2005, 100, 1.0, 10.0, 32, True, True, 10),
+        ((1, 1), 2005, 100, 0.95, 0.6, 32, True, True, 10),
         ((1, 1), 52098, 0, 0.995, 0.4, 32, True, True, 10),
         ((2, 1), 1337, 50, 1.0, 10.0, 32, True, True, 1),
         ((2, 0), 4242, 73, 0.1, 0.6, 32, True, True, 1),

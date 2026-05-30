@@ -35,30 +35,6 @@ def create_fabric_router_config(max_payload_size: int) -> Any:
     return config
 
 
-def log_blitz_decode_pipeline_config(pipeline_config: list) -> None:
-    """Log Blitz entry/exit mesh coordinates per stage (rank 0 only).
-
-    ``pipeline_config`` is the list returned by ``generate_blitz_decode_pipeline``.
-    With fabric loopback, ``len == num_procs + 1`` and the last entry is the loopback hop.
-    """
-    if int(ttnn.distributed_context_get_rank()) != 0:
-        return
-    num_procs = int(ttnn.distributed_context_get_size())
-    loopback = len(pipeline_config) == num_procs + 1
-    for i, stage in enumerate(pipeline_config):
-        entry = tuple(int(stage.entry_node_coord[j]) for j in range(stage.entry_node_coord.dims()))
-        exit_ = tuple(int(stage.exit_node_coord[j]) for j in range(stage.exit_node_coord.dims()))
-        suffix = " (loopback hop)" if loopback and i == num_procs else ""
-        logger.info(
-            "Blitz pipeline_config[{}]{}: stage_index={} entry={} exit={}",
-            i,
-            suffix,
-            stage.stage_index,
-            entry,
-            exit_,
-        )
-
-
 def create_passthrough_pipeline_configuration(
     weight_provider: WeightProvider,
     num_procs: int,
@@ -392,6 +368,7 @@ def create_sp4_pipeline_configuration(
     If moe_layer_id_override is set (e.g. 3), all decoder stages use that layer id.
     """
     fwd_payload = PassthroughPayload.ACTIVATION_W_TOKEN_META if enable_mtp else PassthroughPayload.TOKEN
+    assert 0 <= num_mtp_levels <= 1, f"num_mtp_levels={num_mtp_levels} out of range [0, 1], SP4 only supports MTP-1"
 
     def stage_0(device: ttnn.MeshDevice) -> StageKind:
         return SpecLMHeadWithEmbeddingStage(
@@ -450,7 +427,7 @@ def create_sp4_pipeline_configuration(
     }
     if enable_mtp:
         stage_factories[61] = _decoder_stage(60)
-    if num_mtp_levels > 0:
+    if num_mtp_levels == 1:
         stage_factories[62] = stage_62
         stage_factories[63] = _decoder_stage(61)
     else:
@@ -472,34 +449,9 @@ def create_sp5_pipeline_configuration(
     num_procs: int = 80,
     passthrough_payload: PassthroughPayload = PassthroughPayload.ACTIVATION_W_TOKEN_META,
 ) -> PipelineConfiguration:
-    """Super-pod spec-decode pipeline parameterized by ``num_mtp_levels`` (N).
-
-    Layout for ``N`` MTP levels (active stages = 62 + 2N):
-      P0:                       SpecLMHead+Embed   (terminal verify, mtp_level=N)
-      P1  .. P3:                Dense decoders
-      P4  .. P61:               MoE decoders
-      [BaseLMHead(k) + MTP decoder] × N  at stages (62+2k, 63+2k) for k = 0 .. N-1
-      P_{62+2N} .. P_{num_procs-1}:  Passthrough (loopback fillers)
-
-    Supported: N=2 (66 active), N=3 (68 active), N=4 (70 active). Stage 62 (k=0)
-    uses the real LM-head weights; subsequent base stages reuse the spec
-    weights as LM-head weights. Stage 0 absolutizes positions and produces the
-    final verify token.
-
-    ``num_procs`` is the total pipeline depth (default 80 = 5 pods × 16 procs).
-    Any procs past the last MTP decoder (62 + 2N) are filled with passthrough
-    stages so the same SP5 binary can run any supported ``num_mtp_levels`` on
-    a fixed 80-proc allocation. The passthroughs carry ``passthrough_payload``
-    (default ``ACTIVATION_W_TOKEN_META`` to match the MTP decoder downstream
-    page size, since decoder stages use ``forward_metadata=True``).
-
-    If ``dense_layer_id_override`` is set (e.g. 0), all dense stages use that layer id.
-    If ``moe_layer_id_override`` is set (e.g. 3), all MoE decoder stages use that layer id.
-    """
+    """Super-pod spec-decode pipeline parameterized by ``num_mtp_levels`` (N)."""
     _MTP_DECODER_LAYER_IDX = 61
-    assert (
-        0 <= num_mtp_levels <= 4
-    ), f"SP5 topology supports num_mtp_levels in [2, 4]; got num_mtp_levels={num_mtp_levels}"
+    assert 0 <= num_mtp_levels <= 4, f"SP5 only supports num_mtp_levels in [0..4]; got num_mtp_levels={num_mtp_levels}"
     active_stages = 62 + 2 * num_mtp_levels
     assert num_procs >= active_stages, (
         f"num_procs={num_procs} is smaller than the active SP5 stage count "
@@ -538,7 +490,6 @@ def create_sp5_pipeline_configuration(
             weights=weight_provider.load_dense_layer(layer_id=layer_id, device=d),
             layer_idx=layer_id,
             num_slots=num_slots,
-            forward_metadata=True,
         )
 
     def _decoder_stage(
@@ -551,7 +502,6 @@ def create_sp5_pipeline_configuration(
             weights=weight_provider.load_moe_layer(layer_id=layer_id, device=d),
             layer_idx=layer_id,
             num_slots=num_slots,
-            forward_metadata=True,
             upstream_fifo_pages=upstream_fifo_pages,
             downstream_fifo_pages=downstream_fifo_pages,
         )
@@ -700,9 +650,6 @@ class PipelineConfiguration:
                 entry_t,
                 exit_t,
             )
-        if my_stage_idx == 0:
-            log_blitz_decode_pipeline_config(pipeline_config or [])
-
         return Pipeline(
             mesh_device,
             stage,
@@ -737,7 +684,6 @@ class Pipeline:
             self._pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(
                 not host_loopback
             )
-        log_blitz_decode_pipeline_config(self._pipeline_config)
         self._ctx = StageContext(
             mesh_device=mesh_device,
             pipeline_config=self._pipeline_config,

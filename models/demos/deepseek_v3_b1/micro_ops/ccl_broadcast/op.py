@@ -11,8 +11,6 @@ broadcasts data to all other devices in a mesh using a neighbor-exchange topolog
 
 from dataclasses import dataclass
 
-from loguru import logger
-
 import ttnn
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import PerCoreRuntimeArgsDescriptor, UnifiedKernelDescriptor
@@ -338,22 +336,6 @@ class BroadcastConfig:
                     "input_tensor_device": input_tensor_device,
                     "my_fabric_node_id": self.mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(row, col)),
                 }
-                logger.debug(
-                    "[BCAST cb={} root=({},{}) torus_x={} torus_y={}] dev=({},{}) "
-                    "is_root={} num_neighbors={} dst_coords={} my_noc=({},{})",
-                    self.bcast_cb_id,
-                    self.root_row,
-                    self.root_col,
-                    self._torus_x_enabled,
-                    self._torus_y_enabled,
-                    row,
-                    col,
-                    1 if (row == self.root_row and col == self.root_col) else 0,
-                    len(dst_nodes),
-                    dst_coords,
-                    my_noc_x,
-                    my_noc_y,
-                )
 
     def is_root(self, coord):
         return coord == self.root_coord

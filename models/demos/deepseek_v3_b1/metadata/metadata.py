@@ -57,6 +57,7 @@ class DeepseekMetadata:
         words 112-127 : padding[16]
     """
 
+    FIELD_SIZE_BYTES = 4
     lane_id: int = 0
     slot_id: int = 0
     token_id: int = 0

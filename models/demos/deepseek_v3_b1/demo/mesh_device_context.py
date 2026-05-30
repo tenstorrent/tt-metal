@@ -18,23 +18,17 @@ FABRIC_PACKET_SIZE_BYTES = 15232
 
 # TODO: Store these values inside the stages and fetch based on pipeline config
 DEFAULT_WORKER_L1_SIZE = 1431568
-LM_HEAD_WORKER_L1_SIZE = 1455316
+LM_HEAD_WORKER_L1_SIZE = 1457396
 
 
 def _base_lm_head_ranks(num_procs: int, num_mtp_levels: int) -> list[int]:
-    """Mesh ids that run a Base LM-head stage for this topology.
-
-    Mirrors the placement in `pipeline.py`:
-      - 16 procs (single_pod_spec_decode): base_idx = 16 - 2N + 2k, k in [0, N)
-      - 64 procs (sp4):                    base_idx = [62]
-      - 66/68/70 procs (sp5):              base_idx = 62 + 2k, k in [0, N)
-    """
+    """Mesh ids that run a Base LM-head stage for this topology."""
     if num_procs == 16:
         first = 16 - 2 * num_mtp_levels
         return [first + 2 * k for k in range(num_mtp_levels)]
     if num_procs == 64:
         return [62]
-    if num_procs == 68:
+    if num_procs == 80:
         return [62 + 2 * k for k in range(num_mtp_levels)]
     return []
 
@@ -43,7 +37,7 @@ def _fabric_config_for_num_procs(num_procs: int):
     """Infer fabric config from process count: 4 → FABRIC_2D, 16/64/80 → FABRIC_2D_TORUS_Y."""
     if num_procs == 4:
         return ttnn.FabricConfig.FABRIC_2D
-    if num_procs in (16, 64, 68, 80):
+    if num_procs in (16, 64, 80):
         return ttnn.FabricConfig.FABRIC_2D_TORUS_Y
     raise ValueError(f"Unsupported num_procs for fabric config: {num_procs} (expected 4, 16, 64, or 80)")
 

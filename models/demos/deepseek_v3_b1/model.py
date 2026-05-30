@@ -155,13 +155,16 @@ def to_spec_input(
 
     ``prefill_token_ids`` supplies ground-truth next tokens for each MTP level
     during prefill (up to :data:`MAX_MTP_LEVELS` entries).  Set to ``None`` or
-    pass ``-1`` entries for decode mode.
+    pass ``-1`` entries for decode mode; the kernel uses ``(uint32_t)-1`` as
+    the "no ground truth" sentinel and falls back to the just-sampled argmax.
     """
     page = torch.zeros(1, page_size_datums, dtype=torch.int32)
     page[0, Field.LANE_ID] = lane_id
     page[0, Field.SLOT_ID] = slot_id
     page[0, Field.TOKEN_ID] = token_id
     page[0, Field.POSITION_ID] = position_id
+    for i in range(MAX_MTP_LEVELS):
+        page[0, Field.PREFILL_TOKENS + i] = -1
     if prefill_token_ids:
         for i, ptid in enumerate(prefill_token_ids[:MAX_MTP_LEVELS]):
             page[0, Field.PREFILL_TOKENS + i] = ptid

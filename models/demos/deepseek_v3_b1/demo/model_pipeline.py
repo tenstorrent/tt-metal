@@ -40,12 +40,11 @@ class ModelPipeline:
         moe_layer_id_override: int | None = None,
         io_socket_descriptor_prefix: str | None = None,
         num_slots: int = 64,
-        num_mtp_levels: int = 1,
         relaxed_acceptance_delta: float = 0.6,
         top_k: int = 1,
         top_p: float = 1.0,
         temperature: float = 0.6,
-        enable_speculative_decode: bool = True,
+        num_mtp_levels: int = 1,
         enable_sram_hot_experts: bool = False,
         sram_hot_experts_ceiling: int = 64,
         bspm_dir: Path | None = None,
@@ -58,7 +57,7 @@ class ModelPipeline:
             weights_mode,
             lm_head_fp32_dest_acc_en,
             lm_head_persistent_mode,
-            enable_speculative_decode,
+            num_mtp_levels > 0,
         )
         if not is_slow_dispatch():
             raise RuntimeError(
@@ -74,8 +73,8 @@ class ModelPipeline:
         if num_procs not in (4, 16, 64, 80):
             raise RuntimeError(f"Pod pipeline requires 4, 16, 64, or 80 distributed processes; got {num_procs}")
         ttnn.enable_asynchronous_slow_dispatch(self.mesh_device)
-        self.enable_speculative_decode = enable_speculative_decode
 
+        # Each host loads/creates only the weights for its stage via the provider.
         if weights_mode == "real":
             if cache_path is None:
                 raise ValueError("weights_mode='real' requires cache_path")
@@ -106,7 +105,7 @@ class ModelPipeline:
                     sram_core_grids=SramExpertCoreGrids.shared_expert_mirror(),
                     worker_l1_size=_worker_l1_size_for_rank(
                         num_procs,
-                        enable_speculative_decode=enable_speculative_decode,
+                        num_mtp_levels,
                     ),
                     bspm_dir=bspm_dir,
                     bspm_variant=bspm_variant,
@@ -304,6 +303,9 @@ class ModelPipeline:
         def is_eos(token_id: int) -> bool:
             return eos_token_id is not None and token_id == eos_token_id
 
+        first_emit_time: float | None = None
+        last_emit_time: float | None = None
+
         def emit(token_id: int) -> None:
             nonlocal first_emit_time, last_emit_time
             if on_token is not None:
@@ -344,13 +346,12 @@ class ModelPipeline:
 
             self.model.write_input(
                 next_token,
-                -1,
-                0,
-                next_pos,
-                token_type=TokenType.BASE,
+                slot_id=0,
+                position_id=next_pos,
+                lane_id=0,
                 temperature=self.temperature,
                 top_k=self.top_k,
-                probability_mass_threshold=self.top_p,
+                top_p=self.top_p,
             )
             num_writes += 1
 
@@ -397,7 +398,7 @@ class ModelPipeline:
         Each cycle writes 1+N tokens (base + N specs) and reads 1+N result pages.
         Acceptance walks the chain; the pivot result seeds the next cycle.
         """
-        if not self.enable_speculative_decode:
+        if self._num_mtp_levels == 0:
             return self.run_inference_base_decode(
                 prompt_token_ids=prompt_token_ids,
                 max_new_tokens=max_new_tokens,
@@ -423,7 +424,11 @@ class ModelPipeline:
         def is_eos(token_id: int) -> bool:
             return eos_token_id is not None and token_id == eos_token_id
 
+        first_emit_time: float | None = None
+        last_emit_time: float | None = None
+
         def emit(token_id: int) -> None:
+            nonlocal first_emit_time, last_emit_time
             if on_token is not None:
                 on_token(token_id)
             generated_tokens.append(token_id)
@@ -442,13 +447,14 @@ class ModelPipeline:
         # --- Prefill --------------------------------------------------------
         prefill_start = time.time()
         prefill_results = self.prefill_forward(prompt_token_ids)
+        prefill_end = time.time()
         pending: deque[DecodeResult] = deque(prefill_results)
 
         tokens_per_cycle = 1 + self._num_mtp_levels
         depth_counts = [0] * tokens_per_cycle
         num_writes = 0
         num_reads = 0
-        start_time = time.time()
+        decode_start = time.time()
 
         def read_one() -> DecodeResult:
             nonlocal num_reads
@@ -464,6 +470,7 @@ class ModelPipeline:
         pivot = seed
 
         # --- Speculative decode loop ----------------------------------------
+        cycle_idx = 0
         while not finished():
             num_writes += self._write_spec_tokens(pivot)
 
@@ -477,7 +484,9 @@ class ModelPipeline:
                     break
             depth_counts[depth] += 1
 
+            emitted_this_cycle: list[int] = []
             for i in range(depth):
+                emitted_this_cycle.append(cycle_results[i].base_token)
                 emit(cycle_results[i].base_token)
                 if finished():
                     break
@@ -486,17 +495,39 @@ class ModelPipeline:
 
             pivot = cycle_results[depth]
             emit(pivot.base_token)
+            emitted_this_cycle.append(pivot.base_token)
             prev_chain = self._spec_chain(pivot)
+            cycle_idx += 1
+        decode_end = time.time()
 
         # Drain remaining in-flight results
         while num_reads < num_writes:
             self.model.read_result()
             num_reads += 1
 
-        elapsed = time.time() - start_time
+        n_emitted = len(generated_tokens)
+        decode_elapsed = decode_end - decode_start
+        # TTFT = prefill + time to first emitted decode token.
+        ttft = (first_emit_time - prefill_start) if first_emit_time is not None else float("nan")
+        # Steady-state inter-token throughput excludes the first emission.
+        if first_emit_time is not None and last_emit_time is not None and n_emitted > 1:
+            tpot_elapsed = last_emit_time - first_emit_time
+            tps_steady = (n_emitted - 1) / max(tpot_elapsed, 1e-9)
+        else:
+            tps_steady = float("nan")
+        tps_avg = n_emitted / max(decode_elapsed, 1e-9)
         total_cycles = sum(depth_counts)
-        logger.debug(f"Time taken: {elapsed:.2f}s")
-        logger.debug(f"Tokens per second: {len(generated_tokens) / elapsed:.1f}")
+        prefill_elapsed = prefill_end - prefill_start
+        logger.debug(
+            "Prefill: {:.2f}s ({} tokens, {:.1f} tok/s)",
+            prefill_elapsed,
+            len(prompt_token_ids),
+            len(prompt_token_ids) / max(prefill_elapsed, 1e-9),
+        )
+        logger.debug(f"TTFT (prefill + first decode token): {ttft:.3f}s")
+        logger.debug(f"Decode wall-time (excl. drain): {decode_elapsed:.2f}s")
+        logger.debug(f"Tokens per second (steady-state, inter-token): {tps_steady:.1f}")
+        logger.debug(f"Tokens per second (avg over decode loop): {tps_avg:.1f}")
         logger.debug(
             "Acceptance depth: {} ({} cycles)",
             ", ".join(f"d{i}={c}" for i, c in enumerate(depth_counts)),
