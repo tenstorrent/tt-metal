@@ -157,7 +157,7 @@ cb_reserve_back(cb_id_in0, shard_height);
 uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
 DPRINT_DATA0("Core (0,{}): ", current_core);
 for (uint32_t h = 0; h < shard_height; ++h) {
-    uint64_t src_noc_addr = get_noc_addr(stick_id, s0);
+    uint64_t src_noc_addr = s0.get_noc_addr(stick_id);
     noc_async_read(src_noc_addr, l1_write_addr, stick_size);
     uint32_t* read_ptr = (uint32_t*)l1_write_addr;
     DPRINT_DATA0("{} {} ", (uint16_t)*read_ptr, (uint16_t)(*read_ptr >> 16));

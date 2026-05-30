@@ -99,7 +99,7 @@ FORCE_INLINE void load_to_cb(
     const uint32_t& datum_size) {
     cb_reserve_back(cb, ONE_PAGE);
 
-    const uint64_t source_noc_address = get_noc_addr(FIRST_STICK, addr_gtor);
+    const uint64_t source_noc_address = addr_gtor.get_noc_addr(FIRST_STICK);
     const uint32_t l1_write_address = get_write_ptr(cb);
     const uint32_t subchunk_size_bytes = subchunk_size * datum_size;
     const uint32_t offset_bytes = offset * datum_size;
@@ -119,7 +119,7 @@ FORCE_INLINE void write_to_dram(
     const uint32_t& datum_size) {
     cb_wait_front(cb, ONE_PAGE);
 
-    const uint64_t destination_noc_address = get_noc_addr(FIRST_STICK, addr_gtor);
+    const uint64_t destination_noc_address = addr_gtor.get_noc_addr(FIRST_STICK);
     const uint32_t l1_read_address = get_read_ptr(cb);
     const uint32_t subchunk_size_bytes = subchunk_size * datum_size;
     const uint32_t offset_bytes = offset * datum_size;
