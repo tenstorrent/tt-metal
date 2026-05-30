@@ -135,13 +135,6 @@ def _run_auto_iterate_loop(
 
     best_pcc_per_component: Dict[str, float] = {}
 
-    # Critic diagnoses keyed by component. Populated after a PCC-fail
-    # iteration; consumed when building the NEXT iter's prompt to inject
-    # a directed precision-debugging hint. The critic sees the previous
-    # diagnosis on each call, so it proposes something different if the
-    # last one didn't help.
-    critic_diagnoses_per_component: Dict[str, "object"] = {}
-
     hard_total_attempt_cap: int = max(3, max_attempts_per_component * 2)
     permanently_skipped: List[str] = []
     graduated_this_run: List[str] = []
@@ -1974,52 +1967,23 @@ def _run_auto_iterate_loop(
             last_failure_class_per_component=last_failure_class_per_component,
         )
 
-        # Constraint catalog + critic blocks — computed via the shared
-        # helper so the primary-target prompt and the parallel-extra
-        # prompts use identical logic (avoids the bug where extras went
-        # without the catalog hint).
+        # Constraint catalog block — computed via the shared helper so
+        # the primary-target prompt and the parallel-extras prompts use
+        # identical logic.
         constraint_block = ""
-        critic_block = ""
         if iter_target_component:
-            _prev_pcc = last_pcc_per_component.get(iter_target_component)
-            _prev_diag = critic_diagnoses_per_component.get(iter_target_component)
-            _prev_diag_text = None
-            if _prev_diag is not None and getattr(_prev_diag, "is_actionable", False):
-                _prev_diag_text = (
-                    f"ROOT_CAUSE: {_prev_diag.root_cause}\n" f"SPECIFIC_CHANGE: {_prev_diag.specific_change}\n"
-                )
             try:
-                from .iter_prompt import build_constraint_and_critic_blocks
+                from .iter_prompt import build_constraint_block
 
-                _hint_blocks = build_constraint_and_critic_blocks(
+                constraint_block = build_constraint_block(
                     demo_dir=demo_dir,
                     target_component=iter_target_component,
-                    last_pcc=_prev_pcc,
-                    previous_critic_diagnosis=_prev_diag_text,
                 )
-                constraint_block = _hint_blocks["constraint_block"]
-                critic_block = _hint_blocks["critic_block"]
             except Exception as _hint_exc:
                 print(
-                    f"  [hint-blocks] non-fatal: {type(_hint_exc).__name__}: {_hint_exc}",
+                    f"  [constraint-catalog] non-fatal: " f"{type(_hint_exc).__name__}: {_hint_exc}",
                     file=sys.stderr,
                 )
-            # Cache critic diagnosis so the NEXT iter passes it back to
-            # invoke_critic and the critic proposes something different.
-            if critic_block:
-                try:
-                    from ..agentic.critic import load_diagnosis
-
-                    _new_diag = load_diagnosis(iter_target_component, demo_dir)
-                    if _new_diag is not None and _new_diag.is_actionable:
-                        critic_diagnoses_per_component[iter_target_component] = _new_diag
-                        print(
-                            f"  [critic] `{iter_target_component}` PCC={_prev_pcc:.4f} -> "
-                            f"diagnosis (confidence={_new_diag.confidence}): "
-                            f"{_new_diag.specific_change[:140]}"
-                        )
-                except Exception:
-                    pass
 
         prompt = (
             f"{hw_header}"
@@ -2029,7 +1993,6 @@ def _run_auto_iterate_loop(
             f"{agentic_block}"
             f"{budget_clause}"
             f"{constraint_block}"
-            f"{critic_block}"
             f"{failure_context}"
             f"STRATEGY DIRECTIVE FOR THIS ITERATION:\n{strategy_directive}\n"
             f"{escalated_scope_block}"
@@ -2125,7 +2088,7 @@ def _run_auto_iterate_loop(
                     _snapshot_preiter_native_stub(_extra)
                 if _at_cap_now:
                     print(f"  [parallel] skipping at-cap component(s) from extras: " f"{sorted(_at_cap_now)}")
-                from .iter_prompt import build_constraint_and_critic_blocks
+                from .iter_prompt import build_constraint_block
 
                 for _extra in _extra_targets:
                     _extra_attempts = attempts_per_component.get(_extra, 0)
@@ -2144,22 +2107,11 @@ def _run_auto_iterate_loop(
                         prior_failure_class=_extra_blocks["failure_class"],
                     )
                     _extra_components_block = _build_enriched_component_block(_extra)
-                    # Per-target catalog + critic blocks so each parallel
-                    # agent sees its OWN shape/dtype constraints and any
-                    # prior PCC-plateau diagnosis for its target.
-                    _extra_prev_pcc = last_pcc_per_component.get(_extra)
-                    _extra_prev_diag_obj = critic_diagnoses_per_component.get(_extra)
-                    _extra_prev_diag_text = None
-                    if _extra_prev_diag_obj is not None and getattr(_extra_prev_diag_obj, "is_actionable", False):
-                        _extra_prev_diag_text = (
-                            f"ROOT_CAUSE: {_extra_prev_diag_obj.root_cause}\n"
-                            f"SPECIFIC_CHANGE: {_extra_prev_diag_obj.specific_change}\n"
-                        )
-                    _extra_hint_blocks = build_constraint_and_critic_blocks(
+                    # Per-target catalog block so each parallel agent sees
+                    # its OWN shape/dtype constraint hints.
+                    _extra_constraint_block = build_constraint_block(
                         demo_dir=demo_dir,
                         target_component=_extra,
-                        last_pcc=_extra_prev_pcc,
-                        previous_critic_diagnosis=_extra_prev_diag_text,
                     )
                     _extra_prompt = assemble_iter_prompt(
                         hw_header=hw_header,
@@ -2175,8 +2127,7 @@ def _run_auto_iterate_loop(
                         cross_component_block=_extra_blocks["cross_component_block"],
                         components_block=_extra_components_block,
                         target_header=_extra_target_header,
-                        constraint_block=_extra_hint_blocks["constraint_block"],
-                        critic_block=_extra_hint_blocks["critic_block"],
+                        constraint_block=_extra_constraint_block,
                     )
                     _parallel_extra_jobs.append(
                         AgentJob(

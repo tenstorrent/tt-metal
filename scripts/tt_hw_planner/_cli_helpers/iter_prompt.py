@@ -20,7 +20,6 @@ def assemble_iter_prompt(
     components_block: str,
     target_header: str = "",
     constraint_block: str = "",
-    critic_block: str = "",
 ) -> str:
     return (
         target_header
@@ -31,7 +30,6 @@ def assemble_iter_prompt(
         + f"{agentic_block}"
         + f"{budget_clause}"
         + f"{constraint_block}"
-        + f"{critic_block}"
         + f"{failure_context}"
         + f"STRATEGY DIRECTIVE FOR THIS ITERATION:\n{strategy_directive}\n"
         + f"{escalated_scope_block}"
@@ -41,24 +39,17 @@ def assemble_iter_prompt(
     )
 
 
-def build_constraint_and_critic_blocks(
+def build_constraint_block(
     *,
     demo_dir: Path,
     target_component: str,
-    last_pcc: Optional[float] = None,
-    previous_critic_diagnosis: Optional[str] = None,
-) -> Dict[str, str]:
-    """Compute the catalog constraint block + critic diagnosis block for
-    a given target component. Used by BOTH the primary-target prompt
-    path and the parallel-extra-target path so all agents get the same
-    hints. Never raises — both blocks degrade to empty strings on any
-    failure."""
+) -> str:
+    """Compute the catalog constraint block for a given target component.
+    Used by BOTH the primary-target prompt path and the parallel-extra
+    path so all agents get the same hints. Never raises — degrades to
+    "" on any failure."""
     from ..constraints import check_component, format_constraint_hints
 
-    constraint_block = ""
-    critic_block = ""
-
-    # ─── Constraint catalog ──────────────────────────────────────────
     safe = _safe_id_local(target_component)
     manifest_path = demo_dir / "_captured" / safe / "manifest.json"
     opplan_path = demo_dir / "_stubs" / f"{safe}.opplan.json"
@@ -89,42 +80,9 @@ def build_constraint_and_critic_blocks(
             manifest_path=manifest_path,
             opplan_path=opplan_path,
         )
-        constraint_block = format_constraint_hints(violations)
+        return format_constraint_hints(violations)
     except Exception:
-        constraint_block = ""
-
-    # ─── Critic ──────────────────────────────────────────────────────
-    if last_pcc is not None and last_pcc < 0.99:
-        try:
-            from ..agentic.critic import invoke_critic, persist_diagnosis
-
-            stub_path = demo_dir / "_stubs" / f"{safe}.py"
-            code = stub_path.read_text(encoding="utf-8") if stub_path.is_file() else ""
-            input_shape = None
-            input_dtype = None
-            try:
-                items = (manifest.get("args") or {}).get("items") or []
-                if items and isinstance(items[0], dict):
-                    input_shape = items[0].get("shape")
-                    input_dtype = items[0].get("dtype")
-            except Exception:
-                pass
-
-            diag = invoke_critic(
-                component=target_component,
-                code=code,
-                pcc=float(last_pcc),
-                input_shape=input_shape,
-                input_dtype=input_dtype,
-                recipes_applied=[],
-                previous_diagnosis=previous_critic_diagnosis,
-            )
-            persist_diagnosis(diag, demo_dir)
-            critic_block = diag.to_prompt_block()
-        except Exception:
-            critic_block = ""
-
-    return {"constraint_block": constraint_block, "critic_block": critic_block}
+        return ""
 
 
 def _safe_id_local(name: str) -> str:
