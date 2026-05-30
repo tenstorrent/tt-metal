@@ -682,8 +682,30 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     std::unordered_map<std::string, std::vector<std::vector<std::uint64_t>>> group_bits_by_name;
 
     for (const auto& [mesh_name, groupings] : valid_groupings_map.at("MESH")) {
-        const auto placed_groupings =
+        auto placed_groupings =
             physical_grouping_descriptor.find_all_in_psd(groupings, physical_system_descriptor);
+
+        // Sort placements by hostname (then by min ASIC ID within the same host) for
+        // locality-preserving MeshId assignment. This ensures that consecutive MeshIds
+        // tend to be on the same host, which lets the topology mapper find compact solutions.
+        std::stable_sort(
+            placed_groupings.begin(),
+            placed_groupings.end(),
+            [&physical_system_descriptor](
+                const std::unordered_set<tt::tt_metal::AsicID>& a,
+                const std::unordered_set<tt::tt_metal::AsicID>& b) {
+                if (a.empty() || b.empty()) {
+                    return !a.empty();
+                }
+                const auto min_a = *std::min_element(a.begin(), a.end());
+                const auto min_b = *std::min_element(b.begin(), b.end());
+                const auto& host_a = physical_system_descriptor.get_host_name_for_asic(min_a);
+                const auto& host_b = physical_system_descriptor.get_host_name_for_asic(min_b);
+                if (host_a != host_b) {
+                    return host_a < host_b;
+                }
+                return min_a < min_b;
+            });
 
         mesh_physical_graphs[mesh_name] = build_hierarchical_from_flat_graph(flat_graph, placed_groupings);
 
