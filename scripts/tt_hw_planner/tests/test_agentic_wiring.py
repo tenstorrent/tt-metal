@@ -89,3 +89,52 @@ def test_auto_decompose_is_attempted_once_per_component() -> None:
         "auto_iterate must track which components have been auto-decomposed "
         "this run, to avoid re-running the subprocess on every iter"
     )
+
+
+# ---------------------------------------------------------------------------
+# Loop-exit escalation: when max_iters exhausts with components still pending,
+# each pending component MUST go through the escalation chain (same path that
+# per-component cap exhaustion uses) — not just get its stub rewritten to
+# a stable fallback. Gap surfaced in the SAM2 brain test 2026-05-30.
+# ---------------------------------------------------------------------------
+
+
+def test_loop_exit_routes_still_pending_through_skip_to_fallback() -> None:
+    """Pin: at loop-level max_iters exhaustion, still_pending components
+    must be routed through _skip_component_to_fallback so the existing
+    escalation chain (failure_classifier, decompose-auto, persist_skip,
+    kernel_missing classification) fires for each one. Without this,
+    _rewrite_components_to_stable_fallback runs but no classification
+    or escalation happens.
+    """
+    src = _AUTO_ITER_PY
+    # The still-pending branch must call _skip_component_to_fallback in
+    # a loop over still_pending — BEFORE the stub-rewrite, so escalation
+    # state is captured first.
+    assert "for _pending_comp in still_pending:" in src, (
+        "loop-exit must iterate still_pending and route each through " "_skip_component_to_fallback"
+    )
+    assert (
+        "_skip_component_to_fallback(\n                    _pending_comp," in src
+        or "_skip_component_to_fallback(_pending_comp," in src
+    ), "loop-exit must call _skip_component_to_fallback per pending component"
+    # And the reason string must indicate the trigger is max_iters
+    assert "loop-level max_iters" in src, (
+        "loop-exit escalation reason must distinguish max_iters exhaustion "
+        "from per-component cap exhaustion (so future audits can trace it)"
+    )
+
+
+def test_parallel_extras_bump_attempts_per_component() -> None:
+    """Pin: when a parallel-agent extra is scheduled, its attempt count
+    must be bumped (same as the primary target). Without this, extras
+    accumulate work but their attempts_per_component value stays at
+    whatever they hit as PRIMARY — _is_at_cap() never fires for them
+    and the per-component escalation chain is unreachable.
+    """
+    src = _AUTO_ITER_PY
+    # The extras loop must bump attempts_per_component[_extra].
+    assert "attempts_per_component[_extra] = attempts_per_component.get(_extra, 0) + 1" in src, (
+        "parallel-extras spawn must increment attempts_per_component[_extra] "
+        "so per-component cap-trigger logic applies"
+    )

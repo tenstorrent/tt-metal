@@ -2252,7 +2252,17 @@ def _run_auto_iterate_loop(
                 from .iter_prompt import build_constraint_block
 
                 for _extra in _extra_targets:
-                    _extra_attempts = attempts_per_component.get(_extra, 0)
+                    # Count this scheduled spawn as a real attempt for
+                    # the extra. Mirrors the primary-target bump at
+                    # _run_auto_iterate_loop line ~1676. Without this,
+                    # attempts_per_component[_extra] stays at whatever
+                    # value the extra hit as a PRIMARY target — so
+                    # _is_at_cap() never fires for extras and the
+                    # per-component escalation chain (_skip_component_
+                    # to_fallback → decompose-auto, etc.) never engages
+                    # for them.
+                    attempts_per_component[_extra] = attempts_per_component.get(_extra, 0) + 1
+                    _extra_attempts = attempts_per_component[_extra]
                     _extra_blocks = build_per_target_blocks(
                         demo_dir=demo_dir,
                         target_component=_extra,
@@ -3716,6 +3726,29 @@ def _run_auto_iterate_loop(
             f"still-pending component(s) on CPU fallback so the demo runs end-to-end"
         )
         print(f"  still-pending -> CPU fallback: {', '.join(still_pending)}")
+        # Route each still-pending component through the SAME escalation
+        # chain that per-component cap exhaustion uses. This ensures
+        # failure_classifier fires, persist_skip records any
+        # KERNEL_MISSING verdict, decompose-auto runs for composites,
+        # and learned-fix state is captured. Without this call, the
+        # loop-level max_iters exit would silently bypass every
+        # escalation primitive — gap discovered in the SAM2 brain-test
+        # run on 2026-05-30.
+        for _pending_comp in still_pending:
+            try:
+                _skip_component_to_fallback(
+                    _pending_comp,
+                    f"loop-level max_iters ({max_iters}) exhausted with this " f"component still pending",
+                )
+            except Exception as _exit_esc_exc:
+                print(
+                    f"  [exit-escalation] non-fatal for `{_pending_comp}`: "
+                    f"{type(_exit_esc_exc).__name__}: {_exit_esc_exc}",
+                    file=sys.stderr,
+                )
+        # After escalation classification + side effects (skip-list,
+        # decompose-plan, etc.) are persisted, do the actual stub
+        # stabilization so the demo can still emit end-to-end.
         rewritten = _rewrite_components_to_stable_fallback(demo_dir, still_pending)
         for r in rewritten:
             if r not in permanently_skipped:
