@@ -162,7 +162,16 @@ class Flux2SingleTransformerBlock(Module):
         temb_mod_params: tuple[ttnn.Tensor, ...],
         skip_time_embed_activation_fn: bool = False,
         spatial_sequence_length: int,
-    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        compute_prompt_output: bool = True,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
+        """Run a single-stream block.
+
+        When ``compute_prompt_output`` is False, the prompt's projected output is skipped:
+        the prompt still participates in attention (its K/V are context for the spatial
+        stream), but ``proj_mlp(c)``, the prompt concat, and ``proj_out(c)`` are not computed
+        and ``None`` is returned for the prompt. Used by the final single block, whose prompt
+        output is discarded by the transformer.
+        """
         if not skip_time_embed_activation_fn:
             time_embed = ttnn.silu(time_embed)
 
@@ -175,7 +184,7 @@ class Flux2SingleTransformerBlock(Module):
         c = self._ccl_manager.all_gather_persistent_buffer(c, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
 
         x_mlp = self.proj_mlp(x)
-        c_mlp = self.proj_mlp(c)
+        c_mlp = self.proj_mlp(c) if compute_prompt_output else None
 
         x, c = self.attn.forward(
             spatial=x,
@@ -186,16 +195,23 @@ class Flux2SingleTransformerBlock(Module):
         )
 
         x = ttnn.concat([x, x_mlp], dim=-1)
-        c = ttnn.concat([c, c_mlp], dim=-1)
-        del x_mlp, c_mlp
+        del x_mlp
 
-        if self._ccl_manager.topology == ttnn.Topology.Ring:
-            # Ring: fuse RS + addcmul at the final write step.
-            # Computes: spatial/prompt + proj_out(x/c) * gate_msa
+        is_ring = self._ccl_manager.topology == ttnn.Topology.Ring
+        # Ring: fuse RS + addcmul at the final write step (spatial + proj_out(x) * gate_msa).
+        if is_ring:
             spatial = self.proj_out.forward_fused_addcmul(x, spatial, gate_msa, scalar=1.0)
-            prompt = self.proj_out.forward_fused_addcmul(c, prompt, gate_msa, scalar=1.0)
         else:
             spatial = ttnn.addcmul(spatial, self.proj_out(x), gate_msa)
+
+        if not compute_prompt_output:
+            return spatial, None
+
+        c = ttnn.concat([c, c_mlp], dim=-1)
+        del c_mlp
+        if is_ring:
+            prompt = self.proj_out.forward_fused_addcmul(c, prompt, gate_msa, scalar=1.0)
+        else:
             prompt = ttnn.addcmul(prompt, self.proj_out(c), gate_msa)
 
         return spatial, prompt
@@ -404,7 +420,11 @@ class Flux2Transformer(Module):
             if i % 6 == 0:
                 ttnn.ReadDeviceProfiler(spatial.device())
 
+        num_single_blocks = len(self.single_transformer_blocks)
         for i, block in enumerate(self.single_transformer_blocks, start=1):
+            # The final single block's prompt output is unused (only spatial is projected out
+            # below), so skip its prompt projection. The prompt still feeds that block's
+            # attention as K/V context for the spatial stream.
             spatial, prompt = block.forward(
                 spatial=spatial,
                 prompt=prompt,
@@ -414,6 +434,7 @@ class Flux2Transformer(Module):
                 temb_mod_params=single_stream_mod,
                 spatial_sequence_length=spatial_sequence_length,
                 skip_time_embed_activation_fn=True,
+                compute_prompt_output=(i < num_single_blocks),
             )
 
             if i % 6 == 0:
