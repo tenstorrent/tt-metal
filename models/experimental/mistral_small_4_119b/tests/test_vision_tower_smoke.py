@@ -4,9 +4,10 @@
 """
 TTNN-only smoke test for the Mistral-Small-4 Pixtral vision tower.
 
-Loads the vision tower weights, runs a dummy image through it, and checks the
-output shape. No HF reference, no PCC — use this to iterate on the device
-forward path without the slow CPU reference.
+Loads the vision tower weights, runs ``forward_device`` end-to-end on device,
+and verifies the output tensor shape via device-side metadata. The inference
+path is strictly on device — no torch fallback, no features ever crossing the
+PCIe bus.
 
 Run::
 
@@ -16,15 +17,15 @@ Run::
     export MESH_DEVICE=T3K                   # T3K=1x8, P150x4=1x4, single=1x1
     pytest models/experimental/mistral_small_4_119b/tests/test_vision_tower_smoke.py -v -s --timeout=0
 
-Tracy / tt-perf-report (per-op CSV comes from trace *capture*, not replay)::
+Device-perf profiling (per-op timing of one forward pass)::
 
-    python -m tracy -r -m -p -v pytest \\
+    TT_METAL_PROFILER_MID_RUN_DUMP=1 python -m tracy -r -m -p -v \\
+        --op-support-count 10000 pytest \\
         models/experimental/mistral_small_4_119b/tests/test_vision_tower_smoke.py -v -s --timeout=0
-    tt-perf-report generated/profiler/reports/<timestamp>/ops_perf_results_<timestamp>.csv
 
-``execute_trace`` does not emit per-op profiler rows. The signpost sits immediately
-before ``capture_forward_trace`` so tt-perf-report sees the captured forward's ops.
-Replay after the signpost is only for wall-clock timing.
+A tracy signpost ("Performance pass") is emitted between the compile pass and
+the measured pass; tracy's per-op CSV is filtered to ops after the last
+signpost so the report contains exactly one measured forward.
 """
 
 from __future__ import annotations
@@ -65,7 +66,7 @@ def _state_dict_prefixes(n_layers: int) -> tuple:
 
 def _mesh_params():
     shape = mesh_device_request_param()
-    base = {"trace_region_size": 30_000_000, "num_command_queues": 1}
+    base = {"num_command_queues": 1}
     fabric = ttnn.FabricConfig.DISABLED if shape == (1, 1) else ttnn.FabricConfig.FABRIC_1D
     return [pytest.param(shape, {**base, "fabric_config": fabric}, id=f"mesh{shape[0]}x{shape[1]}")]
 
@@ -78,7 +79,7 @@ def _mesh_params():
 )
 @pytest.mark.parametrize("mesh_device, device_params", _mesh_params(), indirect=True)
 def test_mistral_small_4_vision_smoke(reset_seeds, mesh_device):
-    """Build TtPixtralVisionTower and run one forward — shape check only."""
+    """Build TtPixtralVisionTower and run forward_device end-to-end on device."""
     try:
         state_dict = load_hf_state_dict_filtered(HF_MODEL_ID, _state_dict_prefixes(_N_LAYERS))
     except (FileNotFoundError, OSError) as exc:
@@ -102,49 +103,31 @@ def test_mistral_small_4_vision_smoke(reset_seeds, mesh_device):
         h_patches == _IMG_PATCHES and w_patches == _IMG_PATCHES
     ), f"Patch grid {h_patches}×{w_patches} != expected {_IMG_PATCHES}×{_IMG_PATCHES}"
 
-    # JIT compile pass (outside Tracy signpost).
-    logger.info("Compile pass (forward_device warmup)…")
+    # Compile pass: JIT-compile programs. The next call (under the signpost) is
+    # what tracy will profile.
+    logger.info("Compile pass: forward_device warmup…")
     t_compile = time.perf_counter()
     _ = model.forward_device(image_tt, h_patches, w_patches)
     ttnn.synchronize_device(mesh_device)
     logger.info(f"Compile pass wall-clock: {(time.perf_counter() - t_compile) * 1e3:.2f} ms")
 
-    # Signpost before capture: tt-perf-report filters to ops after the last signpost.
-    # Trace capture runs a real forward (per-op rows in the CSV). execute_trace replay
-    # does not — putting the signpost before replay would yield an empty report.
+    # ── Signposted measured pass — what shows up in the perf report ─────────
+    # Single clean forward_device call. Tracy filters per-op data to ops AFTER
+    # the last signpost, so anything we run after this would pollute the report.
     signpost("Performance pass")
-    logger.info("Capturing vision forward trace (Tracy measured pass)…")
-    t_capture = time.perf_counter()
-    features_tt = model.capture_forward_trace(image_tt, h_patches, w_patches)
+    logger.info("Measured forward pass…")
+    t_measured = time.perf_counter()
+    features_tt, _, _ = model.forward_device(image_tt, h_patches, w_patches)
     ttnn.synchronize_device(mesh_device)
-    logger.info(
-        f"Trace capture wall-clock: {(time.perf_counter() - t_capture) * 1e3:.2f} ms "
-        "(per-op data for tt-perf-report)"
-    )
+    logger.info(f"Measured forward wall-clock: {(time.perf_counter() - t_measured) * 1e3:.2f} ms")
 
-    # Fast replay — no per-op profiler rows; wall-clock only.
-    logger.info("Trace replay pass…")
-    t_replay = time.perf_counter()
-    features_tt = model.execute_forward_trace(blocking=False)
-    ttnn.synchronize_device(mesh_device)
-    logger.info(f"Trace replay wall-clock: {(time.perf_counter() - t_replay) * 1e3:.2f} ms")
-
-    # Pull device-0 slice to host and verify shape + finiteness.
-    features = ttnn.to_torch(
-        features_tt,
-        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
-    )[
-        0
-    ]  # [1, num_patches, 1024]
-
-    assert features.shape == (
-        1,
-        expected_patches,
-        VISION_HIDDEN_SIZE,
-    ), f"Expected ({1}, {expected_patches}, {VISION_HIDDEN_SIZE}), got {tuple(features.shape)}"
-    assert torch.isfinite(features.float()).all(), "Vision features contain NaN or Inf"
+    # Shape check via device-tensor metadata (no data crosses PCIe).
+    expected_shape = (1, 1, expected_patches, VISION_HIDDEN_SIZE)
+    assert (
+        tuple(features_tt.shape) == expected_shape
+    ), f"Expected features shape {expected_shape}, got {tuple(features_tt.shape)}"
 
     logger.info(
-        f"PASSED — vision tower produced features {tuple(features.shape)} "
+        f"PASSED — vision tower produced features {tuple(features_tt.shape)} "
         f"for {_N_LAYERS} layers, {img_size}×{img_size} image"
     )

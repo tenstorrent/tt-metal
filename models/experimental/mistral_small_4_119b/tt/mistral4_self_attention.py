@@ -270,6 +270,10 @@ class TtMistral4Attention(LightweightModule):
         # 1D-mcast program configs for decode matmuls (M=1 tile for all).
         self._decode_pcs = self._build_decode_program_configs(grid)
 
+        # Save grid for the prefill o_proj PC helper; build lazily and cache by m_tiles.
+        self._compute_grid = grid
+        self._o_proj_prefill_pc_cache: dict = {}
+
         # Height-sharded input mem configs required by paged_update_cache (the
         # tensor-indexed, trace-compatible KV-cache write used in decode).
         self._kv_update_k_mem_cfg = self._build_kv_update_mem_cfg(grid, HEAD_DIM)
@@ -480,6 +484,63 @@ class TtMistral4Attention(LightweightModule):
         }
 
     # ------------------------------------------------------------------
+    def _o_proj_prefill_pc(self, m_tiles: int):
+        """1D-mcast program config for the prefill o_proj matmul (K=4096, N=4096).
+
+        Without an explicit PC the default falls to ~12 active cores and ~117 GB/s
+        DRAM (vs ~240 GB/s achievable with a 64-core 1D mcast). Same approach the
+        routed-expert PCs use in mistral4_moe.py; cached by m_tiles so each unique
+        seq_len builds the program once.
+        """
+        cached = self._o_proj_prefill_pc_cache.get(m_tiles)
+        if cached is not None:
+            return cached
+        grid = self._compute_grid
+        gx, gy = grid.x, grid.y
+        K_TILES = (N_HEADS * V_HEAD_DIM) // 32  # 128
+        N_TILES = HIDDEN_SIZE // 32  # 128
+
+        # Find the largest grid (px * py) that exactly divides N_TILES, so every
+        # selected core has a full N-tile share.
+        best_nc, best_x, best_y = 1, 1, 1
+        for py in range(1, gy + 1):
+            for px in range(1, gx + 1):
+                nc = px * py
+                if N_TILES % nc == 0 and nc > best_nc:
+                    best_nc, best_x, best_y = nc, px, py
+        per_core_N = N_TILES // best_nc
+        # in0_block_w: largest divisor of K up to 8.
+        in0_block_w = 1
+        for c in (8, 4, 2):
+            if K_TILES % c == 0:
+                in0_block_w = c
+                break
+        # out_subblock_h * out_subblock_w ≤ 8 (DST capacity, fp32_dest_acc=False).
+        out_subblock_w = 1
+        for c in (4, 2, 1):
+            if per_core_N % c == 0:
+                out_subblock_w = c
+                break
+        out_subblock_h = 1
+        for c in (4, 2, 1):
+            if m_tiles % c == 0 and c * out_subblock_w <= 8:
+                out_subblock_h = c
+                break
+        pc = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(best_x, best_y),
+            in0_block_w=in0_block_w,
+            out_subblock_h=out_subblock_h,
+            out_subblock_w=out_subblock_w,
+            per_core_M=m_tiles,
+            per_core_N=per_core_N,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+        self._o_proj_prefill_pc_cache[m_tiles] = pc
+        return pc
+
+    # ------------------------------------------------------------------
     def _build_kv_update_mem_cfg(self, grid, head_width: int):
         """Height-sharded ``[1, 1, N_HEADS, head_width]`` config for paged_update_cache.
 
@@ -658,6 +719,10 @@ class TtMistral4Attention(LightweightModule):
         # ── Output projection ──────────────────────────────────────────────
         # attn_out is [1, N_HEADS, seq, V_HEAD_DIM]; transpose to [1, seq, N_HEADS, V_HEAD_DIM]
         # before reshaping so head features for the same position are contiguous.
+        # NB: tried ttnn.experimental.nlp_concat_heads here — its multicore path
+        # requires sharded input, and with DRAM-interleaved input from SDPA it
+        # falls to a 1-core kernel at ~52 μs (vs ~10 μs for the multicore
+        # transpose+reshape pair). Keep the pair.
         attn_out_t = ttnn.transpose(attn_out, 1, 2, memory_config=reshape_mem)
         ttnn.deallocate(attn_out)
         attn_flat = ttnn.reshape(
@@ -665,12 +730,14 @@ class TtMistral4Attention(LightweightModule):
         )  # [1, 1, seq, N_HEADS * V_HEAD_DIM = 4096]
         ttnn.deallocate(attn_out_t)
 
+        m_tiles = (seq_len + 31) // 32
         out = ttnn.linear(
             attn_flat,
             self.o_proj,
             compute_kernel_config=self.lofi_compute_kernel_config,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=self._o_proj_prefill_pc(m_tiles),
         )  # [1, 1, seq, HIDDEN_SIZE]
         ttnn.deallocate(attn_flat)
 
