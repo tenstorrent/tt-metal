@@ -67,8 +67,16 @@ class SelfAttentionKVCache:
         self.num_layers = int(num_layers)
         self.batch = int(batch)
         self.num_kv_heads = int(num_kv_heads)
-        # Pad the cache capacity to a tile multiple so SDPA reads are well-formed.
-        self.max_seq_len = int(nearest_y(max_seq_len, ttnn.TILE_SIZE))
+        # Pad the cache capacity to a multiple of 512 (NOT just a tile=32). The
+        # flash decode kernel (scaled_dot_product_attention_decode, auto k_chunk)
+        # produces NaN when the zeroed tail beyond cur_pos forms a fully-masked
+        # trailing k-chunk -- a degenerate softmax (0/0) in the streaming
+        # accumulation. This happens at tile-but-not-512-aligned capacities (e.g.
+        # 4960, 6944) but NOT at 512-multiples (5120, 5632, 6144, 6656, 7168 all
+        # verified NaN-free for cur_pos across the prompt). Rounding to 512 keeps
+        # the auto-chunk clean for any over-allocated cache, which is what lets a
+        # long generate-to-EOS run (large max_seq_len) decode correctly.
+        self.max_seq_len = int(nearest_y(max_seq_len, 512))
         self.head_dim = int(head_dim)
         self.dtype = dtype
 
