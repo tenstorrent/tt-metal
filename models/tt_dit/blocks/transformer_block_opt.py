@@ -244,17 +244,27 @@ class TransformerBlock(Module):
         if not skip_time_embed_activation_fn:
             time_embed = ttnn.silu(time_embed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
+        # Contract: scale params are consumed with +1 already applied (the norm computes
+        # (1 + scale) * x + shift). External callers pre-add 1 once and share the tuple across
+        # blocks; the internal-modulation path below pre-adds it here for parity.
         if self.norm1_linear is not None:
             assert temb_mod_params_img is None
 
             spatial_time = self.norm1_linear(time_embed)
-            temb_mod_params_img = _chunk_time3d(spatial_time, 6)
+            s_shift_a, s_scale_a, s_gate_a, s_shift_f, s_scale_f, s_gate_f = _chunk_time3d(spatial_time, 6)
+            temb_mod_params_img = (s_shift_a, s_scale_a + 1, s_gate_a, s_shift_f, s_scale_f + 1, s_gate_f)
 
         if self.norm1_context_linear is not None:
             assert temb_mod_params_txt is None
 
             prompt_time = self.norm1_context_linear(time_embed)
-            temb_mod_params_txt = _chunk_time3d(prompt_time, 2 if self.context_pre_only else 6)
+            if self.context_pre_only:
+                # layout: (scale_attn, shift_attn)
+                p_scale_a, p_shift_a = _chunk_time3d(prompt_time, 2)
+                temb_mod_params_txt = (p_scale_a + 1, p_shift_a)
+            else:
+                p_shift_a, p_scale_a, p_gate_a, p_shift_f, p_scale_f, p_gate_f = _chunk_time3d(prompt_time, 6)
+                temb_mod_params_txt = (p_shift_a, p_scale_a + 1, p_gate_a, p_shift_f, p_scale_f + 1, p_gate_f)
 
         assert temb_mod_params_img is not None
         assert temb_mod_params_txt is not None
@@ -271,7 +281,7 @@ class TransformerBlock(Module):
         spatial_normed = ttnn.squeeze(
             self.norm1_norm(
                 ttnn.unsqueeze(spatial, 0),
-                dynamic_weight=(1 + spatial_scale_attn),
+                dynamic_weight=spatial_scale_attn,
                 dynamic_bias=spatial_shift_attn,
             ),
             0,
@@ -296,7 +306,7 @@ class TransformerBlock(Module):
         prompt_normed = ttnn.squeeze(
             self.norm1_context_norm(
                 ttnn.unsqueeze(prompt, 0),
-                dynamic_weight=(1 + prompt_scale_attn),
+                dynamic_weight=prompt_scale_attn,
                 dynamic_bias=prompt_shift_attn,
             ),
             0,
@@ -337,7 +347,7 @@ class TransformerBlock(Module):
         spatial_normed = ttnn.squeeze(
             self.norm2(
                 ttnn.unsqueeze(spatial, 0),
-                dynamic_weight=(1 + spatial_scale_ff),
+                dynamic_weight=spatial_scale_ff,
                 dynamic_bias=spatial_shift_ff,
             ),
             0,
@@ -369,7 +379,7 @@ class TransformerBlock(Module):
         prompt_normed = ttnn.squeeze(
             self.norm2_context(
                 ttnn.unsqueeze(prompt, 0),
-                dynamic_weight=(1 + prompt_scale_ff),
+                dynamic_weight=prompt_scale_ff,
                 dynamic_bias=prompt_shift_ff,
             ),
             0,
