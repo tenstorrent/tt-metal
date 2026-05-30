@@ -603,11 +603,11 @@ tt_metal::KernelHandle create_legacy_writer_kernel(tt_metal::Program& program, c
 // returns the raw output tile data. Shared by the binary and ternary Quasar SFPU runners.
 std::vector<uint32_t> sfpu_quasar_run(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-    experimental::metal2_host_api::ProgramSpec spec,
-    experimental::metal2_host_api::ProgramRunParams params,
+    const experimental::metal2_host_api::ProgramSpec& spec,
+    const experimental::metal2_host_api::ProgramRunParams& params,
     const std::vector<std::pair<std::shared_ptr<tt::tt_metal::Buffer>, const std::vector<uint32_t>*>>& inputs,
     const std::shared_ptr<tt::tt_metal::Buffer>& out_buf) {
-    auto device = mesh_device->get_devices()[0];
+    auto *device = mesh_device->get_devices()[0];
     auto program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
     experimental::metal2_host_api::SetProgramRunParameters(program, params);
     for (const auto& [buf, data] : inputs) {
@@ -633,7 +633,7 @@ std::vector<uint32_t> sfpu_quasar_run(
 /// @return
 bool run_sfpu_binary_two_input_buffer(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const SfpuConfig& test_config) {
-    auto device = mesh_device->get_devices()[0];
+    auto *device = mesh_device->get_devices()[0];
     const size_t per_buffer_byte_size_input = test_config.num_tiles * tt::tile_size(test_config.l1_input_data_format);
     const size_t per_buffer_byte_size_output = test_config.num_tiles * tt::tile_size(test_config.l1_output_data_format);
 
@@ -781,8 +781,8 @@ bool run_sfpu_binary_two_input_buffer(
 
     const auto dest = sfpu_quasar_run(
         mesh_device,
-        std::move(spec),
-        std::move(params),
+        spec,
+        params,
         {{input0_dram_buffer, &packed_lhs}, {input1_dram_buffer, &packed_rhs}},
         output_dram_buffer);
     return sfpu_util::is_close_packed_sfpu_output(dest, packed_golden, test_config.sfpu_op);
@@ -800,7 +800,7 @@ bool run_sfpu_binary_two_input_buffer(
 bool run_sfpu_ternary_three_input_buffer(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const SfpuConfig& test_config) {
     const size_t per_buffer_byte_size = test_config.num_tiles * test_config.tile_byte_size;
-    auto device = mesh_device->get_devices()[0];
+    auto *device = mesh_device->get_devices()[0];
 
     tt::tt_metal::InterleavedBufferConfig dram_config{
         .device = device,
@@ -953,8 +953,8 @@ bool run_sfpu_ternary_three_input_buffer(
         };
         dest_buffer_data = sfpu_quasar_run(
             mesh_device,
-            std::move(spec),
-            std::move(params),
+            spec,
+            params,
             {{input0_dram_buffer, &packed_in0}, {input1_dram_buffer, &packed_in1}, {input2_dram_buffer, &packed_in2}},
             output_dram_buffer);
     } else {
