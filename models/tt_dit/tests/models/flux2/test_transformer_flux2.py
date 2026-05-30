@@ -90,11 +90,13 @@ def test_modulation(mesh_device: ttnn.MeshDevice) -> None:
         [(1, 8), 0, 1, ttnn.Topology.Linear, 1, line_params_flux2_transformer],
         [(2, 4), 0, 1, ttnn.Topology.Linear, 1, line_params_flux2_transformer],
         [(4, 8), 0, 1, ttnn.Topology.Ring, 2, ring_params_8k_flux2],
+        [(4, 8), 0, 1, ttnn.Topology.Ring, 4, ring_params_8k_flux2],
     ],
     ids=[
         "1x8_linear",
         "wh_2x4_linear",
         "bh_4x8_ring",
+        "wh_4x8_ring",
     ],
     indirect=["mesh_device", "device_params"],
 )
