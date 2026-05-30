@@ -2971,10 +2971,26 @@ def _run_auto_iterate_loop(
             and iter_target_component not in report_skipped
             and iter_target_component not in report_failed
         )
+        # First-time graduation: target_was_validated (pytest passed) AND
+        # the stub is AST-native (does NOT delegate to torch fallback).
+        # We DO NOT consult `ungraduated` here — that list is derived from
+        # `_stub_has_graduated_from_autofill`, which itself requires the
+        # `.py.last_good_native` snapshot to already exist. That snapshot
+        # is only written by `_snapshot_native_stub` AFTER this very
+        # check passes. So gating on `ungraduated` creates a chicken-
+        # and-egg: snapshot never written for a first-time graduation,
+        # component classified "ungraduated" forever even after pytest
+        # passes on native code. Direct AST check breaks the cycle.
+        target_stub_path = (
+            (demo_dir / "_stubs" / f"{_safe_id(iter_target_component)}.py") if iter_target_component else None
+        )
+        target_is_ast_native = bool(
+            target_stub_path and target_stub_path.is_file() and not _stub_uses_torch_wrapper(target_stub_path)
+        )
         target_newly_graduated = (
             target_was_validated
             and all_passed
-            and iter_target_component not in ungraduated
+            and target_is_ast_native
             and iter_target_component not in smoke_tests
             and iter_target_component not in graduated_this_run
             and iter_target_component not in permanently_skipped

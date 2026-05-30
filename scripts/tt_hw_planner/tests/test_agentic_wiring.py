@@ -190,3 +190,42 @@ def test_auto_iterate_prepends_investigative_preamble_on_plateau() -> None:
     assert body.index("{investigative_preamble}") < body.index(
         "{task_block}"
     ), "investigative_preamble must come BEFORE task_block in the prompt body"
+
+
+# ---------------------------------------------------------------------------
+# Graduation chicken-and-egg fix
+# ---------------------------------------------------------------------------
+
+
+def test_target_newly_graduated_uses_ast_check_not_snapshot_dependency() -> None:
+    """Pin the chicken-and-egg fix: target_newly_graduated must NOT
+    consult `ungraduated` (which is derived from .last_good_native
+    presence — the very file _snapshot_native_stub writes AFTER this
+    check passes). Direct AST check on the stub breaks the cycle so
+    first-time graduations actually graduate.
+
+    Without this fix, a brand-new component whose LLM-generated stub
+    passes PCC will be classified `ungraduated` (no snapshot yet),
+    blocking the snapshot from ever being written. Confirmed in
+    SAM2 brain test 2026-05-30: 5 components stuck despite pytest
+    PASSED on native stubs."""
+    src = _AUTO_ITER_PY
+    # The condition must NOT use `iter_target_component not in ungraduated`
+    # (the chicken-and-egg gate). It MUST use a direct AST-native check.
+    assert "target_is_ast_native" in src, (
+        "target_newly_graduated must use a direct AST-native check "
+        "(via target_is_ast_native), not gate on `ungraduated`"
+    )
+    # The new check must call _stub_uses_torch_wrapper directly on the
+    # target's stub path.
+    assert "_stub_uses_torch_wrapper(target_stub_path)" in src
+    # And the chicken-and-egg gate must be GONE from this condition.
+    # (Look for the assignment block specifically.)
+    cond_idx = src.find("target_newly_graduated = (")
+    assert cond_idx >= 0
+    cond_body = src[cond_idx : cond_idx + 600]
+    assert "iter_target_component not in ungraduated" not in cond_body, (
+        "target_newly_graduated must NOT gate on `ungraduated` — that "
+        "list requires .last_good_native to exist, which is only "
+        "written AFTER this check passes (chicken-and-egg)"
+    )
