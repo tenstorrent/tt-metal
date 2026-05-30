@@ -115,6 +115,43 @@ def _synthesize_for_param(
     if name == "pixel_values":
         return pixel_values
 
+    # Cross-modality dispatch — map the generic `pixel_values` argument
+    # to the model's actual primary input name. Without this, text
+    # models (HF LLMs whose forward expects input_ids) and audio models
+    # (Whisper-style input_features) fail at introspected_forward with
+    # "you have to specify either input_ids or inputs_embeds".
+    if name in ("input_ids", "input_tokens", "token_ids"):
+        try:
+            import torch
+
+            if isinstance(pixel_values, torch.Tensor) and pixel_values.dtype in (torch.long, torch.int32):
+                return pixel_values
+            # Caller passed a non-long tensor (e.g. random floats from
+            # the generic vision-shape default). Synthesize sane ids
+            # from the model's vocab size.
+            cfg = getattr(model, "config", None)
+            vocab = getattr(cfg, "vocab_size", None) or 32000
+            seq_len = 64
+            return torch.randint(1, min(vocab, 1000), (1, seq_len), dtype=torch.long)
+        except ImportError:
+            return _OMIT
+
+    if name in ("input_features", "input_values", "audio_values"):
+        try:
+            import torch
+
+            if (
+                isinstance(pixel_values, torch.Tensor)
+                and pixel_values.dtype == torch.float32
+                and pixel_values.dim() == 3
+            ):
+                return pixel_values
+            cfg = getattr(model, "config", None)
+            n_mels = getattr(cfg, "num_mel_bins", None) or 80
+            return torch.randn(1, n_mels, 3000)
+        except ImportError:
+            return _OMIT
+
     if "session" in name_lower or "state" in name_lower:
         built = _try_build_session_object(model, pixel_values)
         if built is not _OMIT:
@@ -314,8 +351,32 @@ class SessionDriverPattern:
         return True, None
 
 
+_PRIMARY_INPUT_NAMES = frozenset(
+    {
+        "pixel_values",
+        "input_ids",
+        "input_tokens",
+        "token_ids",
+        "input_features",
+        "input_values",
+        "audio_values",
+        "inputs_embeds",
+        "image",
+        "images",
+    }
+)
+
+
 def try_introspected_forward(model: Any, pixel_values: Any) -> Tuple[bool, Optional[str]]:
-    """Layer-1 driver. Pure introspection of model.forward()."""
+    """Layer-1 driver. Pure introspection of model.forward().
+
+    Always synthesizes a value for the PRIMARY input (pixel_values /
+    input_ids / input_features / etc.) even when its default is None.
+    HF models commonly declare `input_ids: Optional[Tensor] = None`
+    because they accept either input_ids OR inputs_embeds — skipping
+    the primary input on the basis of a None default leaves forward
+    with no input and it fails on its own input-required check.
+    """
     try:
         sig = inspect.signature(model.forward)
     except (TypeError, ValueError) as exc:
@@ -323,27 +384,72 @@ def try_introspected_forward(model: Any, pixel_values: Any) -> Tuple[bool, Optio
 
     kwargs: dict = {}
     missing: List[str] = []
+    primary_provided = False
     for name, param in sig.parameters.items():
         if name == "self":
             continue
         if param.kind in (param.VAR_POSITIONAL, param.VAR_KEYWORD):
             continue
-        if param.default is not inspect.Parameter.empty:
+        # Recognize only ENCODER-side primary inputs. Decoder-side
+        # primaries (decoder_input_ids / decoder_inputs_embeds) are
+        # intentionally NOT synthesized — encoder-decoder models like
+        # Whisper handle decoder autoregression internally when those
+        # are None. Filling both causes mutual-exclusion errors.
+        is_primary = name in _PRIMARY_INPUT_NAMES and not name.startswith("decoder_")
+        if param.default is not inspect.Parameter.empty and not is_primary:
             continue
         synth = _synthesize_for_param(name, param, model, pixel_values)
         if synth is _OMIT:
-            missing.append(name)
+            # Primary missing is fine if we'll provide a different primary;
+            # other required missing is fatal.
+            if not is_primary:
+                missing.append(name)
         else:
             kwargs[name] = synth
+            if is_primary:
+                primary_provided = True
 
     if missing:
         return False, f"could not synthesize required args: {missing}"
+
+    # If forward has multiple primary-input slots (input_ids OR inputs_embeds),
+    # synthesize_for_param may have filled both. Keep only one — prefer
+    # the one matching pixel_values' dtype.
+    if primary_provided:
+        kwargs = _disambiguate_primary_inputs(kwargs, pixel_values)
 
     try:
         model(**kwargs)
         return True, None
     except Exception as exc:
         return False, f"forward raised: {type(exc).__name__}: {exc}"
+
+
+def _disambiguate_primary_inputs(kwargs: dict, pixel_values: Any) -> dict:
+    """If kwargs has multiple primary-input slots filled
+    (e.g. ``input_ids`` AND ``inputs_embeds``), keep the one whose
+    dtype matches pixel_values' dtype (or input_ids if both are int)."""
+    primary_keys = [k for k in kwargs if k in _PRIMARY_INPUT_NAMES]
+    if len(primary_keys) <= 1:
+        return kwargs
+    try:
+        import torch
+    except ImportError:
+        return kwargs
+    # Prefer input_ids/_tokens if pixel_values is an int tensor; else
+    # prefer the float-tensor input (pixel_values / input_features /
+    # inputs_embeds).
+    is_int = isinstance(pixel_values, torch.Tensor) and pixel_values.dtype in (torch.long, torch.int32)
+    preferred = "input_ids" if is_int else None
+    if preferred is None:
+        for k in ("pixel_values", "input_features", "inputs_embeds"):
+            if k in kwargs:
+                preferred = k
+                break
+    if preferred is None:
+        preferred = primary_keys[0]
+    out = {k: v for k, v in kwargs.items() if k == preferred or k not in _PRIMARY_INPUT_NAMES}
+    return out
 
 
 def try_capture_drivers(model: Any, pixel_values: Any) -> Tuple[bool, List[str]]:

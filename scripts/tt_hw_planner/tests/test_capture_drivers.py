@@ -221,6 +221,64 @@ def _run_all():
     return passed == len(fns)
 
 
+def test_synthesize_input_ids_dispatches_text_modality():
+    """Regression: text models (gpt2-style) declare
+    ``input_ids: Optional[Tensor] = None``. The introspected_forward
+    USED to skip parameters with defaults — leaving input_ids out and
+    failing with 'You have to specify either input_ids or inputs_embeds'.
+    Fix: input_ids (and similar text-mode names) are PRIMARY inputs
+    and always synthesized."""
+    import inspect
+
+    import torch
+
+    from scripts.tt_hw_planner.capture_drivers import _synthesize_for_param
+
+    class _Model:
+        pass
+
+    # Mock parameter (Optional[LongTensor] = None, like gpt2 input_ids)
+    param = inspect.Parameter("input_ids", inspect.Parameter.POSITIONAL_OR_KEYWORD, default=None)
+    out = _synthesize_for_param("input_ids", param, _Model(), torch.zeros(1, 64, dtype=torch.long))
+    assert isinstance(out, torch.Tensor)
+    assert out.dtype == torch.long
+
+
+def test_synthesize_input_features_dispatches_audio_modality():
+    """Audio models (Whisper-style) declare ``input_features`` —
+    the synth must produce a 3-D float tensor of mel-spectrogram shape."""
+    import inspect
+
+    import torch
+
+    from scripts.tt_hw_planner.capture_drivers import _synthesize_for_param
+
+    class _Cfg:
+        num_mel_bins = 80
+
+    class _Model:
+        config = _Cfg()
+
+    param = inspect.Parameter("input_features", inspect.Parameter.POSITIONAL_OR_KEYWORD, default=None)
+    out = _synthesize_for_param("input_features", param, _Model(), torch.zeros(1, 3, 224, 224))
+    assert isinstance(out, torch.Tensor)
+    assert out.dim() == 3
+    assert out.shape[1] == 80
+
+
+def test_introspected_forward_provides_primary_input_with_default():
+    """The introspected driver must synthesize the PRIMARY input even
+    when its default is None. Without this fix, HF models declaring
+    ``input_ids: Optional[Tensor] = None`` fail with no kwargs."""
+    import torch
+
+    from scripts.tt_hw_planner.capture_drivers import _PRIMARY_INPUT_NAMES
+
+    assert "input_ids" in _PRIMARY_INPUT_NAMES
+    assert "input_features" in _PRIMARY_INPUT_NAMES
+    assert "pixel_values" in _PRIMARY_INPUT_NAMES
+
+
 if __name__ == "__main__":
     import sys
 
