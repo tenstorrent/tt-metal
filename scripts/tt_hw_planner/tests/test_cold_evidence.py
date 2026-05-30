@@ -452,3 +452,63 @@ def test_merge_same_mode_overwrites() -> None:
     merged = merge_evidence_into_persisted(existing, new_report, workload_mode="image")
     # The newer image-mode record overwrites
     assert merged["comp_a"]["modes"]["image"]["frequency"] == 1.0
+
+
+def test_classify_hot_cold_preserves_multi_mode_evidence() -> None:
+    """Regression: classify-hot-cold was overwriting the multi-mode
+    evidence with a flat {name: kind} dict, losing all the per-mode
+    frequency/latency/affinity data from prior profile-cold runs.
+
+    Fix: classify-hot-cold now adds its result as a 'classify-hot-cold'
+    pseudo-mode in the existing multi-mode entry and recomputes the
+    union kind."""
+    from scripts.tt_hw_planner.commands.classify_hot_cold import _merge_classify_with_evidence
+
+    existing = {
+        "comp_a": {
+            "kind": "HOT",
+            "modes": {
+                "image": {
+                    "kind": "HOT",
+                    "frequency": 1.0,
+                    "cpu_latency_pct": 92.5,
+                    "workload_mode": "image",
+                }
+            },
+        }
+    }
+    # classify-hot-cold says COLD for comp_a
+    classification = {"comp_a": "COLD"}
+
+    merged = _merge_classify_with_evidence(existing, classification)
+    # The original "image" mode evidence must still be there
+    assert merged["comp_a"]["modes"]["image"]["frequency"] == 1.0
+    assert merged["comp_a"]["modes"]["image"]["cpu_latency_pct"] == 92.5
+    # New pseudo-mode added
+    assert merged["comp_a"]["modes"]["classify-hot-cold"]["kind"] == "COLD"
+    # Union: HOT in image, COLD in classify-hot-cold → HOT
+    assert merged["comp_a"]["kind"] == "HOT"
+
+
+def test_classify_hot_cold_legacy_dict_preserved() -> None:
+    """When existing is a single-mode dict (no 'modes' key), preserve
+    the non-kind fields (latency etc.) and just update kind."""
+    from scripts.tt_hw_planner.commands.classify_hot_cold import _merge_classify_with_evidence
+
+    existing = {"comp_a": {"kind": "HOT", "frequency": 1.0, "cpu_latency_pct": 50.0}}
+    classification = {"comp_a": "COLD"}
+
+    merged = _merge_classify_with_evidence(existing, classification)
+    # Kind updated, but frequency/latency preserved
+    assert merged["comp_a"]["kind"] == "COLD"
+    assert merged["comp_a"]["frequency"] == 1.0
+    assert merged["comp_a"]["cpu_latency_pct"] == 50.0
+
+
+def test_classify_hot_cold_no_existing_writes_flat() -> None:
+    """When no existing entry, write the simple kind-string (don't
+    schema-lift unnecessarily)."""
+    from scripts.tt_hw_planner.commands.classify_hot_cold import _merge_classify_with_evidence
+
+    merged = _merge_classify_with_evidence({}, {"comp_a": "COLD"})
+    assert merged["comp_a"] == "COLD"

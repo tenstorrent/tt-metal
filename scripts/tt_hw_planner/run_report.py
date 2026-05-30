@@ -110,8 +110,15 @@ def _emit_run_report_impl(
     if evidence:
         lines.append("## Per-component evidence")
         lines.append("")
-        lines.append("| Component | Kind | Freq | CPU ms | CPU % | Density | Affinity | Reasons |")
-        lines.append("|---|---|---|---|---|---|---|---|")
+        multi_mode = sum(1 for e in evidence.values() if isinstance(e.get("modes"), dict))
+        if multi_mode:
+            lines.append(
+                f"_{multi_mode} component(s) have per-workload-mode evidence; "
+                "the kind shown is the **union** (HOT if HOT in ANY mode)._"
+            )
+            lines.append("")
+        lines.append("| Component | Kind | Freq | CPU ms | CPU % | Density | Affinity | Modes | Reasons |")
+        lines.append("|---|---|---|---|---|---|---|---|---|")
         for name in sorted(evidence.keys()):
             e = evidence[name]
             kind = str(e.get("kind", "?"))
@@ -126,9 +133,15 @@ def _emit_run_report_impl(
             lat_pct_s = "—" if lat_pct is None else f"{lat_pct:.2f}%"
             dens_s = "—" if (not dens or dens == 0) else f"{dens:.2e}"
             aff_s = "—" if aff is None else f"{aff:+d}"
+            modes = e.get("modes")
+            if isinstance(modes, dict) and modes:
+                modes_s = ", ".join(f"{m}: **{(d.get('kind') or '?')}**" for m, d in sorted(modes.items()))
+            else:
+                modes_s = "_(default)_"
             why = "; ".join(str(r) for r in reasons).replace("|", "\\|")[:120]
             lines.append(
-                f"| `{name}` | **{kind}** | {freq_s} | {lat_ms_s} | {lat_pct_s} | " f"{dens_s} | {aff_s} | {why} |"
+                f"| `{name}` | **{kind}** | {freq_s} | {lat_ms_s} | {lat_pct_s} | "
+                f"{dens_s} | {aff_s} | {modes_s} | {why} |"
             )
         lines.append("")
 

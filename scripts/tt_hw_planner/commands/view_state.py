@@ -33,11 +33,20 @@ def cmd_view_evidence(args) -> int:
 
     print(f"evidence for {model_id}  ({len(evidence)} components)")
     print()
+
+    multi_mode_count = sum(1 for e in evidence.values() if isinstance(e.get("modes"), dict))
+    if multi_mode_count:
+        print(
+            f"  ({multi_mode_count} components have per-workload-mode evidence; "
+            f"top-level kind is union-of-evidence)"
+        )
+        print()
+
     print(
         f"  {'component':<35} {'kind':<10} {'freq':>5} {'cpu_ms':>8} {'pct':>7}  "
-        f"{'density':>10} {'aff':>5}  evidence"
+        f"{'density':>10} {'aff':>5} {'modes':<25}  evidence"
     )
-    print(f"  {'-'*35} {'-'*10} {'-'*5} {'-'*8} {'-'*7}  {'-'*10} {'-'*5}  {'-'*40}")
+    print(f"  {'-'*35} {'-'*10} {'-'*5} {'-'*8} {'-'*7}  {'-'*10} {'-'*5} {'-'*25}  {'-'*40}")
     hot_count = cold_count = unknown_count = 0
     for name in sorted(evidence.keys()):
         e = evidence[name]
@@ -60,8 +69,20 @@ def cmd_view_evidence(args) -> int:
         lat_pct_s = "-" if lat_pct is None else f"{lat_pct:.2f}%"
         dens_s = "-" if (not dens or dens == 0) else f"{dens:.2e}"
         aff_s = "-" if aff is None else f"{aff:+d}"
+
+        # Multi-mode column: "image:HOT, video:HOT" (or empty if single-mode)
+        modes = e.get("modes")
+        if isinstance(modes, dict) and modes:
+            parts = [f"{m}:{(d.get('kind') or '?')[:4]}" for m, d in sorted(modes.items())]
+            modes_s = ", ".join(parts)[:25]
+        else:
+            modes_s = "(default)"
+
         why = "; ".join(str(r) for r in reasons)[:60]
-        print(f"  {name:<35} {kind:<10} {freq_s:>5} {lat_ms_s:>8} {lat_pct_s:>7}  " f"{dens_s:>10} {aff_s:>5}  {why}")
+        print(
+            f"  {name:<35} {kind:<10} {freq_s:>5} {lat_ms_s:>8} {lat_pct_s:>7}  "
+            f"{dens_s:>10} {aff_s:>5} {modes_s:<25}  {why}"
+        )
     print()
     print(f"  HOT: {hot_count}, COLD: {cold_count}, UNKNOWN: {unknown_count}")
     return 0

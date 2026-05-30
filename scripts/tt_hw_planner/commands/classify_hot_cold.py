@@ -126,7 +126,16 @@ def cmd_classify_hot_cold(args: argparse.Namespace) -> int:
     print(f"  UNRESOLVED ({len(unresolved):2}): {', '.join(unresolved) if unresolved else '(none)'}")
 
     if not getattr(args, "dry_run", False):
-        persist_hot_cold(model_id, classification)
+        # Preserve any multi-mode evidence already on disk (from prior
+        # profile-cold runs) — classify-hot-cold produces only kind
+        # labels, which we promote into a "classify-hot-cold" pseudo-mode
+        # under the multi-mode schema. Without this, the simpler
+        # classify-hot-cold overwrites the richer evidence.
+        from ..overlay_manager import _load_hot_cold_raw
+
+        existing = _load_hot_cold_raw(model_id)
+        merged_classification = _merge_classify_with_evidence(existing, classification)
+        persist_hot_cold(model_id, merged_classification)
         print()
         print(f"persisted to overlays/<model>/hot_cold.json")
         if cold:
@@ -139,3 +148,63 @@ def cmd_classify_hot_cold(args: argparse.Namespace) -> int:
         print(f"DRY RUN: classification not persisted (re-run without --dry-run to apply)")
 
     return 0
+
+
+def _merge_classify_with_evidence(existing: dict, classification: dict) -> dict:
+    """Merge classify-hot-cold's flat ``{name: kind}`` classification
+    into the persisted hot_cold.json without losing any multi-mode
+    evidence already on disk.
+
+    For each component:
+      - If the existing entry already has the multi-mode schema
+        (with ``modes`` dict), add/replace a pseudo-mode named
+        ``classify-hot-cold`` whose kind is the classify result.
+        Recompute the union kind across modes.
+      - If existing has only the flat single-mode (legacy) schema,
+        preserve any non-kind fields (frequency / latency / etc.)
+        the user has accumulated.
+      - If no existing entry, write the flat ``{kind}`` record
+        (no schema lift — keeps classify-hot-cold's output simple).
+    """
+    out: Dict[str, Any] = {}
+    all_names = set(existing.keys()) | set(classification.keys())
+    for name in all_names:
+        new_kind = classification.get(name)
+        old_entry = existing.get(name)
+
+        if isinstance(old_entry, dict) and isinstance(old_entry.get("modes"), dict):
+            # Multi-mode: add/replace the "classify-hot-cold" pseudo-mode.
+            merged = dict(old_entry)
+            merged["modes"] = dict(old_entry["modes"])
+            if new_kind is not None:
+                merged["modes"]["classify-hot-cold"] = {
+                    "kind": new_kind,
+                    "workload_mode": "classify-hot-cold",
+                }
+            # Recompute union kind: HOT if any mode HOT, COLD only if all COLD.
+            mode_kinds = [str((d or {}).get("kind", "")).upper() for d in merged["modes"].values()]
+            if any(k == "HOT" for k in mode_kinds):
+                merged["kind"] = "HOT"
+            elif mode_kinds and all(k == "COLD" for k in mode_kinds):
+                merged["kind"] = "COLD"
+            else:
+                merged["kind"] = merged.get("kind", "UNRESOLVED")
+            out[name] = merged
+        elif isinstance(old_entry, dict):
+            # Single-mode dict entry (legacy from profile-cold) —
+            # preserve non-kind fields, override kind.
+            merged = dict(old_entry)
+            if new_kind is not None:
+                merged["kind"] = new_kind
+            out[name] = merged
+        else:
+            # No prior entry or string-only legacy — write the flat kind.
+            if new_kind is not None:
+                out[name] = new_kind
+            elif old_entry is not None:
+                out[name] = old_entry  # preserve untouched
+    return out
+
+
+# Need Dict in the type hints
+from typing import Any, Dict  # noqa: E402
