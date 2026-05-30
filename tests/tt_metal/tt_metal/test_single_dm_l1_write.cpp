@@ -53,8 +53,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
     experimental::metal2_host_api::KernelSpec dm_kernel_spec{
         .unique_id = DM_KERNEL,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_l1_write.cpp"},
+
+            OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_l1_write.cpp",
         .num_threads = 2,
         .runtime_arguments_schema =
             {

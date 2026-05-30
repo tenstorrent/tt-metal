@@ -192,7 +192,6 @@ enum class EnvVarID {
     TT_METAL_DPRINT_FILE,                           // Debug print output file
     TT_METAL_DPRINT_ONE_FILE_PER_RISC,              // Separate file per RISC-V processor
     TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC,       // Prepend device/core/RISC info
-    TT_METAL_DEVICE_PRINT,                          // Use new DEVICE_PRINT instead of legacy DPRINT
     TT_METAL_DEVICE_PRINT_DISPATCH_STALL_US,        // dispatch_s DevicePrintDispatch stall-detection period (us)
     TT_METAL_DEVICE_PRINT_DISPATCH_FULL_US,         // dispatch_s DevicePrintDispatch full-dispatch period (us)
     TT_METAL_DEVICE_PRINT_DISPATCH_L1_CACHE_BYTES,  // dispatch_s DevicePrintDispatch L1 cache size override (bytes)
@@ -1495,12 +1494,6 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false
         // Usage: export TT_METAL_DISABLE_PRECOMPILED_FW=1
         case EnvVarID::TT_METAL_DISABLE_PRECOMPILED_FW: this->set_disable_precompiled_fw(is_env_enabled(value)); break;
-
-        // TT_METAL_DEVICE_PRINT
-        // Use new DEVICE_PRINT system instead of legacy DPRINT.
-        // Default: false (legacy DPRINT is used)
-        // Usage: export TT_METAL_DEVICE_PRINT=1
-        case EnvVarID::TT_METAL_DEVICE_PRINT: this->use_device_print = is_env_enabled(value); break;
 
         // TT_METAL_DEVICE_PRINT_DISPATCH_STALL_US
         // Period in microseconds between dispatch_s DEVICE_PRINT stall-detection passes.

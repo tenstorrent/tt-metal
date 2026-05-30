@@ -14,7 +14,7 @@ namespace ttnn::prim {
 using namespace tt::tt_metal;
 
 static std::tuple<uint32_t, uint32_t> get_page_sizes_single_core(
-    const Tensor& input, const Tensor& output, bool keepdim, bool reduce_all) {
+    const MeshTensor& input, const MeshTensor& output, bool keepdim, bool reduce_all) {
     const auto& input_shape = input.padded_shape();
     const uint32_t rank = input_shape.size();
 
@@ -44,7 +44,7 @@ static std::tuple<uint32_t, uint32_t> get_page_sizes_single_core(
 }
 
 static std::vector<uint32_t> get_ctime_args_single_core(
-    const Tensor& input,
+    const MeshTensor& input,
     uint32_t src_page_size,
     uint32_t dst_page_size,
     uint32_t src_cb_index,
@@ -108,13 +108,13 @@ static std::vector<uint32_t> get_ctime_args_single_core(
 
 ProgramDescriptor ArgMaxSingleCoreProgramFactory::create_descriptor(
     const ArgmaxParams& operation_attributes, const ArgmaxInputs& tensor_args, Tensor& tensor_return_value) {
-    const auto& input = tensor_args.input;
-    const auto& output = tensor_return_value;
+    const auto& input = tensor_args.input.mesh_tensor();
+    const auto& output = tensor_return_value.mesh_tensor();
     const auto& dim = operation_attributes.dim;
     const bool keepdim = operation_attributes.keepdim;
 
     ProgramDescriptor desc;
-    const tt::tt_metal::IDevice* device = output.device();
+    const tt::tt_metal::IDevice* device = &output.mutable_device();
     const bool reduce_all = not dim.has_value();
 
     // Circular buffers
@@ -160,10 +160,8 @@ ProgramDescriptor ArgMaxSingleCoreProgramFactory::create_descriptor(
     std::vector<uint32_t> ctime_args = get_ctime_args_single_core(
         input, src_page_size, dst_page_size, src_cb_index, dst_cb_index, keepdim, reduce_all);
 
-    auto* const src_buffer = input.buffer();
-    auto* const dst_buffer = output.buffer();
-    tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(ctime_args);
-    tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(ctime_args);
+    tt::tt_metal::TensorAccessorArgs(input).append_to(ctime_args);
+    tt::tt_metal::TensorAccessorArgs(output).append_to(ctime_args);
 
     // Kernel
     std::string kernel_path =
@@ -181,7 +179,7 @@ ProgramDescriptor ArgMaxSingleCoreProgramFactory::create_descriptor(
     // Runtime args
     const auto cores = grid_to_cores(num_cores, grid_size.x, grid_size.y, false);
     for (const auto& core : cores) {
-        reader_desc.emplace_runtime_args(core, {src_buffer, dst_buffer});
+        reader_desc.emplace_runtime_args(core, {input, output});
     }
 
     desc.kernels.push_back(std::move(reader_desc));
