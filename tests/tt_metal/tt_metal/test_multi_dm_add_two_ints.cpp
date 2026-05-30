@@ -59,10 +59,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
                 {
                     .runtime_arg_names = {"a", "b"},
                 },
-            .config =
+            .hw_config =
                 experimental::metal2_host_api::KernelDMConfig{
-                    .gen2_config =
-                        experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
+                    .gen2_config = experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
         };
     };
 

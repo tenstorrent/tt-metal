@@ -333,7 +333,7 @@ bool single_core_binary(
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"src0_addr", "src0_bank_id", "src1_addr", "src1_bank_id", "num_tiles", "src2_addr", "src2_bank_id"}},
-        .config =
+        .hw_config =
             experimental::metal2_host_api::KernelDMConfig{
                 .gen1_config =
                     experimental::metal2_host_api::KernelDMConfig::Gen1Config{
@@ -351,7 +351,7 @@ bool single_core_binary(
         .num_threads = 1,
         .dfb_bindings = {experimental::metal2_host_api::ConsumerOf(OUT_DFB, "in")},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
-        .config =
+        .hw_config =
             experimental::metal2_host_api::KernelDMConfig{
                 .gen1_config =
                     experimental::metal2_host_api::KernelDMConfig::Gen1Config{
@@ -393,7 +393,7 @@ bool single_core_binary(
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
         .runtime_arg_schema = {.runtime_arg_names = {"per_core_block_cnt", "per_core_block_size", "acc_to_dst"}},
-        .config =
+        .hw_config =
             experimental::metal2_host_api::KernelComputeConfig{
                 .math_fidelity = test_config.math_fidelity,
             },

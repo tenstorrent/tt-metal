@@ -43,10 +43,9 @@ bool run_addrgen_test(
             {{"src_stride_en", src_stride_en},
              {"dst_stride_en", dst_stride_en},
              {"num_of_addresses", num_of_addresses}},
-        .config =
+        .hw_config =
             experimental::metal2_host_api::KernelDMConfig{
-                .gen2_config =
-                    experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
+                .gen2_config = experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
     };
 
     experimental::metal2_host_api::WorkUnitSpec main_wu{

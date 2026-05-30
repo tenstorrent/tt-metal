@@ -99,7 +99,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
                 .source = path_metal2,
                 .num_threads = num_threads,
                 .runtime_arg_schema = {.common_runtime_arg_names = {"wait_cycles"}},
-                .config = dm_cfg,
+                .hw_config = dm_cfg,
             });
             kernel_names.emplace_back(name);
             kernel_run_args.push_back({
@@ -123,7 +123,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
             .source = path_metal2,
             .num_threads = 1,
             .runtime_arg_schema = {.common_runtime_arg_names = {"wait_cycles"}},
-            .config = experimental::metal2_host_api::KernelComputeConfig{},
+            .hw_config = experimental::metal2_host_api::KernelComputeConfig{},
         });
         kernel_names.emplace_back(COMPUTE_KERNEL_NAME);
         kernel_run_args.push_back({

@@ -327,7 +327,7 @@ void run_single_core_unary_broadcast_quasar(
         .dfb_bindings = {experimental::metal2_host_api::ProducerOf(SRC_DFB, "out")},
         .runtime_arg_schema =
             {.runtime_arg_names = {"src_addr", "src_dram_bank_id", "num_tiles", "ublock_size_tiles", "reader_only"}},
-        .config =
+        .hw_config =
             experimental::metal2_host_api::KernelDMConfig{
                 .gen1_config =
                     experimental::metal2_host_api::KernelDMConfig::Gen1Config{
@@ -343,7 +343,7 @@ void run_single_core_unary_broadcast_quasar(
         .dfb_bindings = {experimental::metal2_host_api::ConsumerOf(DST_DFB, "in")},
         .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
-        .config =
+        .hw_config =
             experimental::metal2_host_api::KernelDMConfig{
                 .gen1_config =
                     experimental::metal2_host_api::KernelDMConfig::Gen1Config{
@@ -374,7 +374,7 @@ void run_single_core_unary_broadcast_quasar(
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
         .compile_time_args = {{"per_core_block_cnt", num_blocks}, {"per_core_block_dim", block_size}},
-        .config = experimental::metal2_host_api::KernelComputeConfig{},
+        .hw_config = experimental::metal2_host_api::KernelComputeConfig{},
     };
 
     experimental::metal2_host_api::WorkUnitSpec wu{

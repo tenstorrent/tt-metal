@@ -168,7 +168,7 @@ AliasDFBProgramComponents make_alias_dfb_program_spec(
             },
         .runtime_arg_schema =
             {.runtime_arg_names = {"chunk_offset_a", "chunk_offset_b", "entries_per_core_a", "entries_per_core_b"}},
-        .config = producer_cfg,
+        .hw_config = producer_cfg,
     };
 
     KernelSpec consumer{
@@ -199,7 +199,7 @@ AliasDFBProgramComponents make_alias_dfb_program_spec(
             },
         .runtime_arg_schema =
             {.runtime_arg_names = {"chunk_offset_a", "chunk_offset_b", "entries_per_core_a", "entries_per_core_b"}},
-        .config = consumer_cfg,
+        .hw_config = consumer_cfg,
     };
 
     ProgramSpec spec{
@@ -387,7 +387,7 @@ AliasBorrowedDFBComponents make_alias_borrowed_dfb_program_spec(
             },
         .runtime_arg_schema =
             {.runtime_arg_names = {"chunk_offset_a", "chunk_offset_b", "entries_per_core_a", "entries_per_core_b"}},
-        .config = producer_cfg,
+        .hw_config = producer_cfg,
     };
 
     KernelSpec consumer{
@@ -418,7 +418,7 @@ AliasBorrowedDFBComponents make_alias_borrowed_dfb_program_spec(
             },
         .runtime_arg_schema =
             {.runtime_arg_names = {"chunk_offset_a", "chunk_offset_b", "entries_per_core_a", "entries_per_core_b"}},
-        .config = consumer_cfg,
+        .hw_config = consumer_cfg,
     };
 
     ProgramSpec spec{

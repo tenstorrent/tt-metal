@@ -106,7 +106,7 @@ TEST_F(ProgramSpecTestQuasar, DuplicateKernelNameFails) {
     auto duplicate_kernel = MakeMinimalDMKernel("dm_kernel");
     KernelDMConfig dm_config;
     dm_config.gen2_config = KernelDMConfig::Gen2Config{};
-    duplicate_kernel.config = dm_config;
+    duplicate_kernel.hw_config = dm_config;
     spec.kernels.push_back(duplicate_kernel);
 
     EXPECT_THAT(
@@ -696,7 +696,7 @@ TEST_F(ProgramSpecTestQuasar, DMKernelWithoutGen2ConfigSucceeds) {
 
     auto kernel = MakeMinimalDMKernel("kernel");
     // Remove the Gen2 config
-    auto& dm_config = std::get<KernelDMConfig>(kernel.config);
+    auto& dm_config = std::get<KernelDMConfig>(kernel.hw_config);
     dm_config.gen2_config = std::nullopt;
 
     // Add Gen1 config
@@ -720,7 +720,7 @@ TEST_F(ProgramSpecTestQuasar, DMKernelWithNoConfigAtAllFails) {
 
     auto kernel = MakeMinimalDMKernel("kernel");
     // Remove both Gen1 and Gen2 configs
-    auto& dm_config = std::get<KernelDMConfig>(kernel.config);
+    auto& dm_config = std::get<KernelDMConfig>(kernel.hw_config);
     dm_config.gen1_config = std::nullopt;
     dm_config.gen2_config = std::nullopt;
 
@@ -1050,7 +1050,7 @@ TEST_F(ProgramSpecTestQuasar, ComputeConfigUnpackToDestModeReferencesUnboundDFBF
 
     // Set unpack_to_dest_mode referencing a DFB this kernel doesn't bind
     // (in this case, a DFB that doesn't exist in the spec at all).
-    auto& compute_config = std::get<KernelComputeConfig>(consumer.config);
+    auto& compute_config = std::get<KernelComputeConfig>(consumer.hw_config);
     compute_config.unpack_to_dest_mode = {{"nonexistent_dfb", UnpackToDestMode::UnpackToDestFp32}};
 
     auto dfb = MakeMinimalDFB("dfb");
@@ -1081,7 +1081,7 @@ TEST_F(ProgramSpecTestQuasar, NonFP32DFBWithExplicitDefaultUnpackToDestModeSucce
     ProgramSpec spec = MakeMinimalValidProgramSpec();  // dfb_0 is Float16_b
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
-            auto& config = std::get<KernelComputeConfig>(kernel.config);
+            auto& config = std::get<KernelComputeConfig>(kernel.hw_config);
             config.unpack_to_dest_mode = {{"dfb_0", UnpackToDestMode::Default}};
         }
     }
@@ -1093,7 +1093,7 @@ TEST_F(ProgramSpecTestQuasar, NonFP32DFBWithUnpackToDestFp32ModeFails) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();  // dfb_0 is Float16_b
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
-            auto& config = std::get<KernelComputeConfig>(kernel.config);
+            auto& config = std::get<KernelComputeConfig>(kernel.hw_config);
             config.unpack_to_dest_mode = {{"dfb_0", UnpackToDestMode::UnpackToDestFp32}};
         }
     }
@@ -1113,7 +1113,7 @@ TEST_F(ProgramSpecTestQuasar, FP32ConsumerWithFp32DestAccEnAndNoEntryFails) {
     }
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
-            auto& config = std::get<KernelComputeConfig>(kernel.config);
+            auto& config = std::get<KernelComputeConfig>(kernel.hw_config);
             config.fp32_dest_acc_en = true;
         }
     }
@@ -1148,7 +1148,7 @@ TEST_F(ProgramSpecTestQuasar, FP32ProducerOnlyBindingDoesNotRequireEntry) {
     spec.name = "test_program";
 
     auto producer_compute = MakeMinimalComputeKernel("producer_compute");
-    auto& producer_config = std::get<KernelComputeConfig>(producer_compute.config);
+    auto& producer_config = std::get<KernelComputeConfig>(producer_compute.hw_config);
     producer_config.fp32_dest_acc_en = true;
 
     auto consumer_dm = MakeMinimalDMKernel("consumer_dm");
@@ -1175,7 +1175,7 @@ TEST_F(ProgramSpecTestQuasar, UnpackToDestFp32OnProducerBindingFails) {
     spec.name = "test_program";
 
     auto producer_compute = MakeMinimalComputeKernel("producer_compute");
-    auto& producer_config = std::get<KernelComputeConfig>(producer_compute.config);
+    auto& producer_config = std::get<KernelComputeConfig>(producer_compute.hw_config);
     producer_config.fp32_dest_acc_en = true;
     producer_config.unpack_to_dest_mode = {{"dfb_0", UnpackToDestMode::UnpackToDestFp32}};
 
@@ -1208,7 +1208,7 @@ TEST_F(ProgramSpecTestQuasar, UnpackToDestFp32WithoutFp32DestAccEnFails) {
     }
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
-            auto& config = std::get<KernelComputeConfig>(kernel.config);
+            auto& config = std::get<KernelComputeConfig>(kernel.hw_config);
             // fp32_dest_acc_en stays at its default (false).
             config.unpack_to_dest_mode = {{"dfb_0", UnpackToDestMode::UnpackToDestFp32}};
         }
@@ -1224,7 +1224,7 @@ TEST_F(ProgramSpecTestQuasar, DuplicateUnpackToDestModeEntriesFail) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
-            auto& config = std::get<KernelComputeConfig>(kernel.config);
+            auto& config = std::get<KernelComputeConfig>(kernel.hw_config);
             config.unpack_to_dest_mode = {
                 {"dfb_0", UnpackToDestMode::Default},
                 {"dfb_0", UnpackToDestMode::Default},
@@ -1247,7 +1247,7 @@ TEST_F(ProgramSpecTestQuasar, FP32DFBWithDefaultUnpackToDestModeSucceeds) {
     }
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
-            auto& config = std::get<KernelComputeConfig>(kernel.config);
+            auto& config = std::get<KernelComputeConfig>(kernel.hw_config);
             config.fp32_dest_acc_en = true;
             config.unpack_to_dest_mode = {{"dfb_0", UnpackToDestMode::Default}};
         }
@@ -1929,7 +1929,7 @@ TEST_F(ProgramSpecTestQuasar, ComputeConfigMathFidelitySucceeds) {
     // Find the compute kernel and set math fidelity options
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
-            auto& config = std::get<KernelComputeConfig>(kernel.config);
+            auto& config = std::get<KernelComputeConfig>(kernel.hw_config);
             config.math_fidelity = MathFidelity::LoFi;
             config.fp32_dest_acc_en = true;
             config.math_approx_mode = true;
@@ -1951,7 +1951,7 @@ TEST_F(ProgramSpecTestQuasar, ValidUnpackToDestModeSucceeds) {
     }
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
-            auto& config = std::get<KernelComputeConfig>(kernel.config);
+            auto& config = std::get<KernelComputeConfig>(kernel.hw_config);
             config.fp32_dest_acc_en = true;
             config.unpack_to_dest_mode = {{"dfb_0", UnpackToDestMode::UnpackToDestFp32}};
         }
@@ -1985,7 +1985,7 @@ TEST_F(ProgramSpecTestQuasar, UnpackToDestModePlacedAtDfbIdSlot) {
     consumer.dfb_bindings.push_back(ConsumerOf("dfb_0", "in0"));
     consumer.dfb_bindings.push_back(ConsumerOf("dfb_1", "in1"));
 
-    auto& compute_config = std::get<KernelComputeConfig>(consumer.config);
+    auto& compute_config = std::get<KernelComputeConfig>(consumer.hw_config);
     compute_config.fp32_dest_acc_en = true;
     compute_config.unpack_to_dest_mode = {{"dfb_1", UnpackToDestMode::UnpackToDestFp32}};
 
@@ -2262,7 +2262,7 @@ TEST(AggregateSpecTypes, KernelSpecDesignatedInitializers) {
         .unique_id = "my_dm_kernel",
         .source = KernelSpec::SourceCode{"void kernel_main() {}"},
         .num_threads = 2,
-        .config =
+        .hw_config =
             KernelDMConfig{
                 .gen2_config = KernelDMConfig::Gen2Config{},
             },
@@ -2281,7 +2281,7 @@ TEST(AggregateSpecTypes, KernelSpecDesignatedInitializers) {
                 .defines = {{"MY_DEFINE", "42"}},
                 .opt_level = tt::tt_metal::KernelBuildOptLevel::O3,
             },
-        .config =
+        .hw_config =
             KernelComputeConfig{
                 .math_fidelity = MathFidelity::LoFi,
                 .fp32_dest_acc_en = true,
@@ -2371,7 +2371,7 @@ TEST(AggregateSpecTypes, KernelSpecNamedRuntimeArgsDesignatedInitializers) {
             KernelSpec::RuntimeArgSchema{
                 .runtime_arg_names = {"input_ptr"},
             },
-        .config =
+        .hw_config =
             KernelDMConfig{
                 .gen2_config = KernelDMConfig::Gen2Config{},
             },
@@ -2409,7 +2409,7 @@ TEST(AggregateSpecTypes, ProgramSpecDesignatedInitializers) {
                                 .access_pattern = DFBAccessPattern::STRIDED,
                             },
                         },
-                    .config =
+                    .hw_config =
                         KernelDMConfig{
                             .gen2_config = KernelDMConfig::Gen2Config{},
                         },
@@ -2426,7 +2426,7 @@ TEST(AggregateSpecTypes, ProgramSpecDesignatedInitializers) {
                                 .access_pattern = DFBAccessPattern::STRIDED,
                             },
                         },
-                    .config = KernelComputeConfig{},
+                    .hw_config = KernelComputeConfig{},
                 },
             },
         .dataflow_buffers =

@@ -258,7 +258,7 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
         .num_threads = num_threads,
         .dfb_bindings = {experimental::metal2_host_api::ProducerOf(L1_DFB, "out")},
         .runtime_arg_schema = {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
-        .config = reader_dm_cfg,
+        .hw_config = reader_dm_cfg,
     };
 
     experimental::metal2_host_api::KernelSpec writer_spec{
@@ -269,7 +269,7 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
         .num_threads = num_threads,
         .dfb_bindings = {experimental::metal2_host_api::ConsumerOf(L1_DFB, "in")},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
-        .config = writer_dm_cfg,
+        .hw_config = writer_dm_cfg,
     };
 
     experimental::metal2_host_api::WorkUnitSpec wu{
@@ -442,7 +442,7 @@ bool reader_datacopy_writer(
         .num_threads = num_threads,
         .dfb_bindings = {experimental::metal2_host_api::ProducerOf(INPUT_DFB, "out")},
         .runtime_arg_schema = {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
-        .config = reader_dm_cfg,
+        .hw_config = reader_dm_cfg,
     };
 
     experimental::metal2_host_api::KernelSpec writer_spec{
@@ -453,7 +453,7 @@ bool reader_datacopy_writer(
         .num_threads = num_threads,
         .dfb_bindings = {experimental::metal2_host_api::ConsumerOf(OUTPUT_DFB, "in")},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
-        .config = writer_dm_cfg,
+        .hw_config = writer_dm_cfg,
     };
 
     experimental::metal2_host_api::KernelSpec compute_spec{
@@ -476,7 +476,7 @@ bool reader_datacopy_writer(
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
         .compile_time_args = {{"per_core_tile_cnt", per_core_tile_cnt}},
-        .config = experimental::metal2_host_api::KernelComputeConfig{},
+        .hw_config = experimental::metal2_host_api::KernelComputeConfig{},
     };
 
     experimental::metal2_host_api::WorkUnitSpec wu{

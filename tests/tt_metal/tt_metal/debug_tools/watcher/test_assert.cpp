@@ -109,14 +109,13 @@ static void RunTest(
                         assert_kernel_spec.num_threads = 1;
                     }
                     // Provide both gen1 and gen2 configs so the same KernelSpec runs on either arch.
-                    assert_kernel_spec.config = experimental::metal2_host_api::KernelDMConfig{
+                    assert_kernel_spec.hw_config = experimental::metal2_host_api::KernelDMConfig{
                         .gen1_config =
                             experimental::metal2_host_api::KernelDMConfig::Gen1Config{
                                 .processor = gen1_processor,
                                 .noc = gen1_noc,
                             },
-                        .gen2_config =
-                            experimental::metal2_host_api::KernelDMConfig::Gen2Config{},
+                        .gen2_config = experimental::metal2_host_api::KernelDMConfig::Gen2Config{},
                     };
                     break;
                 }
@@ -128,7 +127,7 @@ static void RunTest(
                     // Bind trisc_id so the kernel can early-return on TRISCs that aren't the target
                     // of a Quasar compute HW-fault test.
                     assert_kernel_spec.compile_time_args = {{"trisc_id", trisc_id}};
-                    assert_kernel_spec.config = experimental::metal2_host_api::KernelComputeConfig{};
+                    assert_kernel_spec.hw_config = experimental::metal2_host_api::KernelComputeConfig{};
                     break;
                 }
                 default: TT_THROW("Unsupported processor class type for TENSIX");

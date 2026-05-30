@@ -121,7 +121,7 @@ void run_single_core_copy_block_matmul_partials(
         .dfb_bindings = {experimental::metal2_host_api::ProducerOf(SRC0_DFB, "out")},
         .runtime_arg_schema =
             {.runtime_arg_names = {"src_addr", "src_dram_bank_id", "num_tiles", "ublock_size_tiles", "reader_only"}},
-        .config =
+        .hw_config =
             experimental::metal2_host_api::KernelDMConfig{
                 .gen1_config =
                     experimental::metal2_host_api::KernelDMConfig::Gen1Config{
@@ -139,7 +139,7 @@ void run_single_core_copy_block_matmul_partials(
         .dfb_bindings = {experimental::metal2_host_api::ConsumerOf(DST_DFB, "in")},
         .runtime_arg_schema =
             {.runtime_arg_names = {"dst_addr", "dst_dram_bank_id", "num_tiles", "ublock_size_tiles", "writer_only"}},
-        .config =
+        .hw_config =
             experimental::metal2_host_api::KernelDMConfig{
                 .gen1_config =
                     experimental::metal2_host_api::KernelDMConfig::Gen1Config{
@@ -174,7 +174,7 @@ void run_single_core_copy_block_matmul_partials(
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
         .compile_time_args = {{"num_tiles", num_tiles}, {"num_single_transfer", test_config.compute_ublock}},
-        .config =
+        .hw_config =
             experimental::metal2_host_api::KernelComputeConfig{
                 .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
                 .dst_full_sync_en = test_config.dst_full_sync_en,

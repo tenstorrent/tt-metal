@@ -334,7 +334,7 @@ void run_single_core_broadcast(
              }},
         .runtime_arg_schema =
             {.runtime_arg_names = {"src0_addr", "src0_bank_id", "src1_addr", "src1_bank_id", "num_tiles"}},
-        .config =
+        .hw_config =
             experimental::metal2_host_api::KernelDMConfig{
                 .gen1_config =
                     experimental::metal2_host_api::KernelDMConfig::Gen1Config{
@@ -352,7 +352,7 @@ void run_single_core_broadcast(
         .num_threads = 1,
         .dfb_bindings = {experimental::metal2_host_api::ConsumerOf(OUT_DFB, "in")},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
-        .config =
+        .hw_config =
             experimental::metal2_host_api::KernelDMConfig{
                 .gen1_config =
                     experimental::metal2_host_api::KernelDMConfig::Gen1Config{
@@ -387,7 +387,7 @@ void run_single_core_broadcast(
                  .endpoint_type = experimental::metal2_host_api::DFBEndpointType::PRODUCER,
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
-        .config =
+        .hw_config =
             experimental::metal2_host_api::KernelComputeConfig{
                 .math_fidelity = test_config.math_fidelity,
             },

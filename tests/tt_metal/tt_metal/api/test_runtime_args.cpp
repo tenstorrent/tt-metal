@@ -138,7 +138,7 @@ distributed::MeshWorkload initialize_program_data_movement_rta(
             "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel_2_0.cpp",
         .num_threads = num_threads,
         .compiler_options = {.defines = dm_defines},
-        .config = dm_cfg,
+        .hw_config = dm_cfg,
         .advanced_options =
             experimental::metal2_host_api::KernelAdvancedOptions{
                 .num_runtime_varargs = num_unique_rt_args,
@@ -216,10 +216,9 @@ std::pair<distributed::MeshWorkload, std::vector<std::string>> initialize_progra
                 "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel_2_0.cpp",
             .num_threads = dm_processors_per_kernel,
             .compiler_options = {.defines = defines_vec},
-            .config =
+            .hw_config =
                 experimental::metal2_host_api::KernelDMConfig{
-                    .gen2_config =
-                        experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
+                    .gen2_config = experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
             .advanced_options =
                 experimental::metal2_host_api::KernelAdvancedOptions{
                     .num_runtime_varargs = num_runtime_args,

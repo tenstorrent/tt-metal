@@ -61,10 +61,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
                 .runtime_arg_names = {"address"},
                 .common_runtime_arg_names = {"value"},
             },
-        .config =
+        .hw_config =
             experimental::metal2_host_api::KernelDMConfig{
-                .gen2_config =
-                    experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
+                .gen2_config = experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
     };
 
     experimental::metal2_host_api::WorkUnitSpec main_wu{

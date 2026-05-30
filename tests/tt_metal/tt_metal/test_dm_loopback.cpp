@@ -73,10 +73,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmLoopback) {
                 {
                     .runtime_arg_names = {"dram_addr", "l1_addr", "dram_buffer_size", "dram_bank_id", "signal_value"},
                 },
-            .config =
+            .hw_config =
                 experimental::metal2_host_api::KernelDMConfig{
-                    .gen2_config =
-                        experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
+                    .gen2_config = experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
         };
     };
 
@@ -92,10 +91,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmLoopback) {
                 {
                     .runtime_arg_names = {"dram_addr", "l1_addr", "dram_buffer_size", "dram_bank_id", "signal_value"},
                 },
-            .config =
+            .hw_config =
                 experimental::metal2_host_api::KernelDMConfig{
-                    .gen2_config =
-                        experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
+                    .gen2_config = experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
         };
     };
 

@@ -266,7 +266,7 @@ void run_single_core_tilize_program(
         .num_threads = 1,
         .dfb_bindings = {experimental::metal2_host_api::ProducerOf(INPUT_DFB, "out")},
         .runtime_arg_schema = reader_schema,
-        .config =
+        .hw_config =
             experimental::metal2_host_api::KernelDMConfig{
                 .gen1_config =
                     experimental::metal2_host_api::KernelDMConfig::Gen1Config{
@@ -282,7 +282,7 @@ void run_single_core_tilize_program(
         .num_threads = 1,
         .dfb_bindings = {experimental::metal2_host_api::ConsumerOf(OUTPUT_DFB, "in")},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
-        .config =
+        .hw_config =
             experimental::metal2_host_api::KernelDMConfig{
                 .gen1_config =
                     experimental::metal2_host_api::KernelDMConfig::Gen1Config{
@@ -339,7 +339,7 @@ void run_single_core_tilize_program(
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
         .compile_time_args = compute_cta_bindings,
-        .config =
+        .hw_config =
             experimental::metal2_host_api::KernelComputeConfig{
                 .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
                 .dst_full_sync_en = test_config.dst_full_sync_en,
@@ -777,7 +777,7 @@ static void run_quasar_tilize_untilize_test(
         .num_threads = 1,
         .dfb_bindings = {experimental::metal2_host_api::ProducerOf(INPUT_DFB, "out")},
         .runtime_arg_schema = {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
-        .config =
+        .hw_config =
             experimental::metal2_host_api::KernelDMConfig{
                 .gen2_config = experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
     };
@@ -790,7 +790,7 @@ static void run_quasar_tilize_untilize_test(
         .num_threads = 1,
         .dfb_bindings = {experimental::metal2_host_api::ConsumerOf(OUTPUT_DFB, "in")},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
-        .config =
+        .hw_config =
             experimental::metal2_host_api::KernelDMConfig{
                 .gen2_config = experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
     };
@@ -844,7 +844,7 @@ static void run_quasar_tilize_untilize_test(
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
         .compile_time_args = compute_cta_bindings,
-        .config =
+        .hw_config =
             experimental::metal2_host_api::KernelComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
                 .dst_full_sync_en = dst_full_sync_en,

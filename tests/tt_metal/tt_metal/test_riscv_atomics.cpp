@@ -94,10 +94,9 @@ protected:
                 .num_threads = num_dms_,
                 .compiler_options = {.defines = defines_vec},
                 .runtime_arg_schema = {.runtime_arg_names = {"l1_counter_addr", "increment_times"}},
-                .config =
+                .hw_config =
                     experimental::metal2_host_api::KernelDMConfig{
-                        .gen2_config =
-                            experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
+                        .gen2_config = experimental::metal2_host_api::KernelDMConfig::Gen2Config{}},
             });
             kernel_names.push_back(DM_KERNEL);
             kernel_run_args.push_back(make_run_params(DM_KERNEL));
@@ -110,7 +109,7 @@ protected:
                     .num_threads = 1,
                     .compiler_options = {.defines = defines_vec},
                     .runtime_arg_schema = {.runtime_arg_names = {"l1_counter_addr", "increment_times"}},
-                    .config =
+                    .hw_config =
                         experimental::metal2_host_api::KernelDMConfig{
                             .gen1_config =
                                 experimental::metal2_host_api::KernelDMConfig::Gen1Config{

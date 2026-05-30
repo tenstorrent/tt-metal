@@ -81,7 +81,7 @@ inline KernelSpec MakeMinimalDMKernel(const std::string& name, uint32_t num_thre
         .unique_id = name,
         .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
         .num_threads = num_threads,
-        .config =
+        .hw_config =
             KernelDMConfig{
                 .gen2_config = KernelDMConfig::Gen2Config{},
             },
@@ -96,7 +96,7 @@ inline KernelSpec MakeMinimalGen1DMKernel(
         .unique_id = name,
         .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
         .num_threads = 1,
-        .config =
+        .hw_config =
             KernelDMConfig{
                 .gen1_config =
                     KernelDMConfig::Gen1Config{
@@ -112,7 +112,7 @@ inline KernelSpec MakeMinimalComputeKernel(const std::string& name, uint32_t num
         .unique_id = name,
         .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
         .num_threads = num_threads,
-        .config = KernelComputeConfig{},
+        .hw_config = KernelComputeConfig{},
     };
 }
 

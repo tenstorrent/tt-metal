@@ -476,7 +476,7 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
             "tests/tt_metal/tt_metal/test_kernels/dataflow/semaphore_accessor_loopback_producer.cpp",
         .num_threads = 1,
         .semaphore_bindings = {{.semaphore_spec_name = "only_sem", .accessor_name = "signal"}},
-        .config =
+        .hw_config =
             KernelDMConfig{
                 .gen1_config =
                     KernelDMConfig::Gen1Config{
@@ -491,7 +491,7 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
             "tests/tt_metal/tt_metal/test_kernels/dataflow/semaphore_accessor_loopback_consumer.cpp",
         .num_threads = 1,
         .semaphore_bindings = {{.semaphore_spec_name = "only_sem", .accessor_name = "waiter"}},
-        .config =
+        .hw_config =
             KernelDMConfig{
                 .gen1_config =
                     KernelDMConfig::Gen1Config{
