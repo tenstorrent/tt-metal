@@ -7,10 +7,29 @@
 
 namespace compute_kernel_lib {
 
-template <uint32_t out_subblock_w, uint32_t out_block_w, typename Buf>
+template <
+    uint32_t out_subblock_w,
+    uint32_t out_block_w,
+    reblock_untilize_config::ReconfigureRegisterDatatypeMode reconfig_mode,
+    typename Buf>
 ALWI void reblock_and_untilize_init(Buf& interm_buf, Buf& out_buf) {
-    pack_untilize_dest_init<out_subblock_w, out_block_w>(buf_id(out_buf));
-    copy_tile_to_dst_init_short(buf_id(interm_buf));
+    const uint32_t interm_cb_id = buf_id(interm_buf);
+    const uint32_t out_cb_id = buf_id(out_buf);
+    // Data-format reconfig (gated, independent of the init below): srcA reads interm
+    // via copy_tile; pack targets out. Emitted before the init so the manual-lifecycle
+    // pattern (this _init once, then InitUninitMode::Neither loop calls) reconfigs once.
+    if constexpr (
+        reconfig_mode == reblock_untilize_config::ReconfigureRegisterDatatypeMode::UnpackReconfigure ||
+        reconfig_mode == reblock_untilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure) {
+        reconfig_data_format_srca(interm_cb_id);
+    }
+    if constexpr (
+        reconfig_mode == reblock_untilize_config::ReconfigureRegisterDatatypeMode::PackReconfigure ||
+        reconfig_mode == reblock_untilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure) {
+        pack_reconfig_data_format(out_cb_id);
+    }
+    pack_untilize_dest_init<out_subblock_w, out_block_w>(out_cb_id);
+    copy_tile_to_dst_init_short(interm_cb_id);
 }
 
 template <typename Buf>
@@ -22,6 +41,7 @@ template <
     uint32_t out_subblock_w,
     uint32_t out_block_w,
     reblock_untilize_config::InitUninitMode init_uninit_mode,
+    reblock_untilize_config::ReconfigureRegisterDatatypeMode reconfig_mode,
     OutputCBLayout layout,
     typename Buf>
 inline void reblock_and_untilize(
@@ -38,6 +58,23 @@ inline void reblock_and_untilize(
 
     const uint32_t interm_cb_id = buf_id(interm_buf);
     const uint32_t out_cb_id = buf_id(out_buf);
+
+    // Data-format reconfig — gated on reconfig_mode, INDEPENDENT of init_uninit_mode
+    // (mirrors untilize). srcA reads interm via copy_tile; pack targets out. Emitted
+    // before the init block so the unpacker/packer formats are correct for the
+    // pack_untilize that follows. Without this the helper would untilize using
+    // whatever formats the previous op left — correct only when they coincide with
+    // interm/out.
+    if constexpr (
+        reconfig_mode == reblock_untilize_config::ReconfigureRegisterDatatypeMode::UnpackReconfigure ||
+        reconfig_mode == reblock_untilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure) {
+        reconfig_data_format_srca(interm_cb_id);
+    }
+    if constexpr (
+        reconfig_mode == reblock_untilize_config::ReconfigureRegisterDatatypeMode::PackReconfigure ||
+        reconfig_mode == reblock_untilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure) {
+        pack_reconfig_data_format(out_cb_id);
+    }
 
     if constexpr (
         init_uninit_mode == reblock_untilize_config::InitUninitMode::InitAndUninit ||

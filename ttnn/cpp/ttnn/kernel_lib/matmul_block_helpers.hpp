@@ -119,6 +119,18 @@ namespace matmul_config {
  *        state. Independent of `reconfig` — pass reconfig=NONE separately if the
  *        caller also handles dataformat reconfig externally.
  *
+ * ShortAfterPreKBlock
+ *        Like Short, but the helper issues the reconfig + mm_block_init_short INSIDE
+ *        the K-loop, right after pre_k_block() returns each iteration, instead of once
+ *        before the loop. Use when the PreKBlockFn dirties matmul state every K-block
+ *        (TILIZE / TRANSPOSE) — the helper then OWNS the matmul-state restore, so the
+ *        functor does only its own op plus any uninit it owes (see the PreKBlockFn
+ *        MATMUL-STATE-RESTORE CONTRACT). The `reconfig` param selects which reconfigs
+ *        the per-K-block restore issues, exactly as for Short. Do not combine with a
+ *        non-default In0SourceFn whose alternate CBs differ in dataformat from the
+ *        operand pre_k_block prepared — the restore keys on active_in0_cb_id and
+ *        assumes the per-block in0 carries its declared format.
+ *
  * Callers MUST issue mm_block_init() (or compute_kernel_hw_startup + mm_init for
  * scalar-matmul-first kernels) exactly ONCE at the very top of kernel_main, and
  * leave the helper's Short default to handle every subsequent matmul_block call.
@@ -127,7 +139,7 @@ namespace matmul_config {
  * for the idle-units requirement). Activation init (ActivationInitHelper::init()) is
  * similarly the caller's boot-time responsibility — the helper does not issue it.
  */
-enum class InitMode : uint8_t { Short, None };
+enum class InitMode : uint8_t { Short, None, ShortAfterPreKBlock };
 
 /**
  * Data-format reconfiguration mode for the matmul_block helper.
@@ -249,16 +261,28 @@ struct NoPostCompute {
 // any of those subsystems, the helper's matmul state from the previous K-block
 // is invalid for the matmul calls about to fire this K-block.
 //
-// Contract: any PreKBlockFn that calls llk_*_init / *_reconfig_data_format* /
-// tilize_init / transpose_init / reduce_init MUST restore matmul state BEFORE
-// returning. The canonical restore is mm_block_init_short_with_both_dt(in0_cb,
-// in1_cb, old_in0_cb, old_in1_cb, transpose, ct_dim, rt_dim, kt_dim) — it both
-// reconfigs srca/srcb formats AND re-issues llk_unpack_AB_matmul_init +
-// llk_math_matmul_init. The helper does NOT redo this restore for you; the
-// per-K-block reload path inside the helper covers reload-time state but does
-// not run on every block. See ConvTilizePreKBlock in
-// ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/conv_bmm_tilize.cpp
-// for the canonical pattern.
+// There are two ways to handle the restore; pick via init_mode:
+//
+//   (A) init_mode == ShortAfterPreKBlock (preferred): the HELPER restores matmul
+//       state — it issues the reconfig + mm_block_init_short itself, right after
+//       pre_k_block() returns each K-block. Your PreKBlockFn then does ONLY its own
+//       op (tilize / transpose) plus any uninit it owes for special modes it
+//       engaged; it must NOT issue the matmul restore (doing so would double-init).
+//       This keeps the "helper owns short init + data-format reconfig; caller owns
+//       uninit" paradigm consistent with the reduce / untilize / reblock helpers.
+//
+//   (B) init_mode == None (legacy): the CALLER's PreKBlockFn MUST restore matmul
+//       state before returning. The canonical restore is
+//       mm_block_init_short_with_both_dt(in0_cb, in1_cb, old_in0_cb, old_in1_cb,
+//       transpose, ct_dim, rt_dim, kt_dim) — it both reconfigs srca/srcb formats AND
+//       re-issues llk_unpack_AB_matmul_init + llk_math_matmul_init. The helper does
+//       NOT redo this restore for you in this mode; the per-K-block reload path
+//       inside the helper covers reload-time state but does not run on every block.
+//       Still used by conv3d and the gathered / ring CCL kernels.
+//
+// conv2d (ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/conv_bmm_tilize.cpp,
+// ConvTilizePreKBlock) is the canonical mode-(A) caller; conv3d / gathered are the
+// remaining mode-(B) callers and are candidates to migrate to (A).
 struct NoPreKBlock {
     ALWI void operator()(uint32_t, uint32_t, bool) const {}
 };
@@ -436,12 +460,17 @@ struct NoIn1BaseOffset {
  *                     choice is dictated by the writer's contract, not by subblock counts
  *                     or sizes. Note: TileRowMajor's output CB is still tile-format;
  *                     do not confuse with TT-Metal's ROW_MAJOR_LAYOUT byte layout.
- *   init_mode         matmul_config::InitMode: Short (default) or None. Short fires
- *                     reconfig + mm_block_init_short inside the helper so most callers
- *                     never have to pair the call site with manual init/reconfig.
- *                     None skips both — used by callers (e.g. SDPA wrappers) that hand-pair
- *                     reconfig + init before invoking the helper. `Full` has been removed;
- *                     issue mm_block_init() exactly once at kernel boot instead.
+ *   init_mode         matmul_config::InitMode: Short (default), None, or
+ *                     ShortAfterPreKBlock. Short fires reconfig + mm_block_init_short
+ *                     once before the K-loop so most callers never have to pair the call
+ *                     site with manual init/reconfig. None skips both — used by callers
+ *                     (e.g. SDPA wrappers) that hand-pair reconfig + init before invoking
+ *                     the helper. ShortAfterPreKBlock relocates the reconfig + short init
+ *                     to inside the K-loop, right after pre_k_block() — use it when a
+ *                     state-dirtying PreKBlockFn (tilize / transpose) would otherwise have
+ *                     to restore matmul state itself (see the PreKBlockFn MATMUL-STATE-
+ *                     RESTORE CONTRACT; conv2d is the canonical caller). `Full` has been
+ *                     removed; issue mm_block_init() exactly once at kernel boot instead.
  *   reconfig          matmul_config::DataFormatReconfig: INPUT_AND_OUTPUT (default), INPUT,
  *                     OUTPUT, or NONE. Selects which data-format reconfigs the helper issues.
  *                     Independent of init_mode — pass NONE if the caller already handles
