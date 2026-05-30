@@ -162,11 +162,15 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
             // resulting ELFs export symbols (e.g. __fw_export_text_end) that kernel linker scripts
             // depend on -- without them, JIT-compiling kernels on a mock device fails with
             // "non constant or forward reference address expression". So we run it for mock as
-            // well as real devices, EXCEPT when the mock arch has no firmware sources packaged
-            // (currently Quasar): there cc1plus would fatal on missing source files. Kernel JIT
-            // on Quasar mock is not yet supported and would require a separate sources fix.
-            const bool skip_fw_build =
-                cluster_.is_mock_or_emulated() && !mock_firmware_sources_available_for(cluster_.arch());
+            // well as real devices, with two exceptions:
+            //   1. Mock devices whose arch has no firmware sources packaged (currently Quasar).
+            //      cc1plus would fatal on missing source files; mock kernel JIT on Quasar is not
+            //      yet supported and would require a separate sources fix.
+            //   2. Emule devices on any arch. Emule's kernel JIT uses an x86 toolchain, so the
+            //      riscv firmware ELFs are never linked or consumed.
+            const bool skip_fw_build = cluster_.get_target_device_type() == tt::TargetDevice::Emule ||
+                                       (cluster_.get_target_device_type() == tt::TargetDevice::Mock &&
+                                        !mock_firmware_sources_available_for(cluster_.arch()));
             if (!skip_fw_build) {
                 BuildEnvManager::get_instance().build_firmware(device_id);
             }

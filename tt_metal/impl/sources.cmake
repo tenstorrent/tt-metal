@@ -45,6 +45,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/int8.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/mx_common.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/mxfp4.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/data_format/mxfp6.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/tile.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/tilize_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/uint8.cpp
@@ -85,6 +86,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_core_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/command_queue_common.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_mem_map.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_telemetry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/system_memory_cq_interface.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/system_memory_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/hardware_command_queue.cpp

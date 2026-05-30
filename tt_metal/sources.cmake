@@ -22,6 +22,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/distributed.hpp
     api/tt-metalium/distributed_context.hpp
     api/tt-metalium/distributed_host_buffer.hpp
+    api/tt-metalium/experimental/dispatch_telemetry.hpp
     api/tt-metalium/experimental/context/metal_env.hpp
     api/tt-metalium/experimental/core_subset_write/buffer_write.hpp
     api/tt-metalium/experimental/core_subset_write/mesh_command_queue.hpp
@@ -190,6 +191,7 @@ set(JITAPI_FILES
     impl/dispatch/kernels/cq_prefetch.hpp
     impl/dispatch/kernels/cq_relay.hpp
     impl/dispatch/kernels/cq_helpers.hpp
+    impl/dispatch/kernels/telemetry.hpp
     impl/dispatch/kernels/realtime_profiler.hpp
     impl/dispatch/kernels/realtime_profiler_ring_buffer.hpp
     soc_descriptors/blackhole_140_arch.yaml
