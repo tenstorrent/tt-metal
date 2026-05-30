@@ -451,6 +451,50 @@ def test_template_set_submodule_handles_root_attr_replacement() -> None:
     assert m.encoder._tt_port == "NEW"
 
 
+def test_collect_skips_cpu_wins_components(tmp_path: Path, monkeypatch) -> None:
+    """Stage 4 integration: a graduated stub whose bench verdict is
+    CPU_WINS (top-level kind = COLD) MUST be excluded from the wiring
+    pool. Otherwise the demo wires a slower-than-CPU component, which
+    is exactly what Stage 4 is supposed to prevent."""
+    from scripts.tt_hw_planner import overlay_manager as om
+
+    monkeypatch.setattr(om, "_OVERLAYS_DIR", tmp_path / "overlays")
+
+    comps = [
+        {"name": "fast_comp", "status": "NEW", "submodule_path": "fast"},
+        {"name": "slow_comp", "status": "NEW", "submodule_path": "slow"},
+    ]
+    demo_dir = _make_fake_demo(
+        tmp_path,
+        comps,
+        graduated={"fast_comp": "fast", "slow_comp": "slow"},
+    )
+    # Seed hot_cold.json: fast_comp HOT (bench DEVICE_WINS),
+    # slow_comp COLD (bench CPU_WINS).
+    md = om._model_dir("test/m")
+    md.mkdir(parents=True, exist_ok=True)
+    (md / "hot_cold.json").write_text(
+        json.dumps(
+            {
+                "fast_comp": {"kind": "HOT", "modes": {"default": {"kind": "HOT"}}},
+                "slow_comp": {"kind": "COLD", "modes": {"default": {"kind": "COLD"}}},
+            }
+        )
+    )
+
+    # WITHOUT model_id arg: legacy behavior, both included
+    legacy = collect_graduated_components(demo_dir, comps)
+    legacy_names = {c.name for c in legacy}
+    assert "fast_comp" in legacy_names
+    assert "slow_comp" in legacy_names
+
+    # WITH model_id: slow_comp filtered out per bench-derived COLD verdict
+    filtered = collect_graduated_components(demo_dir, comps, model_id="test/m")
+    filtered_names = {c.name for c in filtered}
+    assert "fast_comp" in filtered_names
+    assert "slow_comp" not in filtered_names
+
+
 def test_template_set_submodule_wraps_non_module_ports_in_shim() -> None:
     """Bug N regression: PyTorch's `nn.Module.__setattr__` rejects non-
     Module values when the attribute is registered as a child module.

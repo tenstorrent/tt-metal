@@ -1903,7 +1903,12 @@ def emit_runnable_demo(
     data = json.loads(status_path.read_text())
     components = data.get("components", []) or []
 
-    specs = build_wiring_specs(demo_dir=demo_dir, components=components, repo_root=repo_root)
+    specs = build_wiring_specs(
+        demo_dir=demo_dir,
+        components=components,
+        repo_root=repo_root,
+        model_id=model_id,
+    )
     if not specs:
         return None, "no-primary"
 

@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 
 @dataclass
@@ -36,6 +36,8 @@ class GraduatedComponent:
 def collect_graduated_components(
     demo_dir: Path,
     components: List[Dict[str, Any]],
+    *,
+    model_id: Optional[str] = None,
 ) -> List[GraduatedComponent]:
     """Walk ``components`` and return every entry that:
 
@@ -43,7 +45,13 @@ def collect_graduated_components(
     * has a graduated stub on disk (native ttnn forward, not autofill fallback),
     * has the four capture artifacts (``args.pt``/``kwargs.pt``/``manifest.json``)
       under ``_captured/<safe>/``,
-    * has a non-empty ``submodule_path`` recorded in the capture manifest.
+    * has a non-empty ``submodule_path`` recorded in the capture manifest,
+    * is NOT marked COLD by the cold-evidence record (if ``model_id`` is
+      provided AND a hot_cold.json exists for it). Stage 4 empirical
+      bench can demote a graduated stub to COLD (e.g. CPU_WINS because
+      the kernel exists but transfer cost dominates). Demo wiring
+      should respect that verdict — putting a CPU_WINS component on
+      device makes the demo slower than the pure-CPU reference.
 
     Components missing any of these criteria are silently skipped — they
     cannot be wired into the demo without ambiguity.
@@ -54,12 +62,26 @@ def collect_graduated_components(
         _stub_has_graduated_from_autofill,
     )
 
+    # Pre-load cold-evidence (if available) to skip CPU_WINS components.
+    cold_kinds: Dict[str, str] = {}
+    if model_id is not None:
+        try:
+            from .overlay_manager import load_hot_cold
+
+            cold_kinds = load_hot_cold(model_id)
+        except Exception:
+            cold_kinds = {}
+
     out: List[GraduatedComponent] = []
     for comp in components:
         if comp.get("status") != "NEW":
             continue
         name = comp.get("name") or ""
         if not name:
+            continue
+        # Bench-aware filter: if the cold-evidence says this component
+        # is COLD (incl. bench CPU_WINS demotion), don't wire it.
+        if cold_kinds.get(name, "").upper() == "COLD":
             continue
         safe = _safe_id(name)
         stub = demo_dir / "_stubs" / f"{safe}.py"
@@ -145,6 +167,7 @@ def build_wiring_specs(
     demo_dir: Path,
     components: List[Dict[str, Any]],
     repo_root: Path,
+    model_id: Optional[str] = None,
 ) -> List[Dict[str, str]]:
     """End-to-end pipeline: collect graduated components, prune via
     antichain selection, resolve each one's stub import path.
@@ -165,7 +188,7 @@ def build_wiring_specs(
     """
     from .bringup_loop import _stub_import_path
 
-    graduated = collect_graduated_components(demo_dir, components)
+    graduated = collect_graduated_components(demo_dir, components, model_id=model_id)
     selected = select_maximal_antichain(graduated)
     return [
         {
