@@ -125,6 +125,19 @@ Install from source if you are a developer who wants to be close to the metal an
 git clone https://github.com/tenstorrent/tt-metal.git --recurse-submodules
 ```
 
+#### Optional: Nix development shell
+
+If you use Nix, you can enter a development shell from the repository root:
+
+```sh
+nix develop
+# or, without flakes:
+nix-shell
+```
+
+The shell exposes the core build toolchain, Python 3.10, and `uv`, and sets
+`TT_METAL_HOME` and `TT_METAL_RUNTIME_ROOT` to the repository root.
+
 #### Step 2. Build the Library:
 
 You have two options for building the library:
