@@ -480,6 +480,16 @@ all_gather_minimal_matmul_async_factory_helper(
         log_debug(tt::LogOp, "ternary_c_cb_id: {}", ternary_c_cb_id);
     }
 
+    // FSDP relay scratch CB (c_7): tiny L1 staging buffer used by the injector core to stream
+    // weight K-blocks PWB->L1->fabric during the uni-ring/ring fsdp gather. A full block is far
+    // too large to stage, so the relay streams packet-sized chunks; 4 tiles (max scatter targets)
+    // is sufficient. Allocated on the whole grid for simplicity (only the injector uses it).
+    if (persistent_weight_buffer.has_value()) {
+        uint32_t fsdp_scratch_cb_id = tt::CBIndex::c_7;
+        tt::tt_metal::create_cb(
+            fsdp_scratch_cb_id, program, core_grid, in1_tile_size, /*num_tiles=*/4, in1_data_format);
+    }
+
     // Mux
     auto [num_targets_forward, num_targets_backward] =
         ttnn::ccl::get_forward_backward_line_mcast_distance(ring_size, ring_index, topology, false);
@@ -625,6 +635,13 @@ all_gather_minimal_matmul_async_factory_helper(
         std::tie(fsdp_unicast_forward_args, fsdp_unicast_backward_args) =
             ttnn::ccl::get_forward_backward_line_unicast_configuration(
                 sender_device_coord, fsdp_forward_coord, fsdp_backward_coord, device);
+
+        // FSDP Linear uni-ring routing: fsdp Dev 0's forward unicast routes (fsdp_ring_size - 1)
+        // hops to fsdp Dev N-1 to close the virtual ring (mirrors the in0 override above, on the
+        // fsdp axis). Other fsdp devices short-send 1 hop to their predecessor.
+        if (fsdp_topology == ttnn::ccl::Topology::Linear && fsdp_ring_index == 0) {
+            fsdp_unicast_forward_args[1] = fsdp_ring_size - 1;  // distance_in_hops = N-1
+        }
 
         std::vector<CoreRange> fsdp_mux_core_ranges;
         for (uint32_t mux_id = 0; mux_id < num_mux_cores; ++mux_id) {

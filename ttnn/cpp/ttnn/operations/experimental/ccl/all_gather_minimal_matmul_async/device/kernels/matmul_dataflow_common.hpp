@@ -361,6 +361,87 @@ FORCE_INLINE void forward_in1_half_block_to_fabric_neighbor(
 
     noc_async_writes_flushed();
 }
+
+// FSDP uni-ring relay: stream one weight K-block [n_rows K-tiles × n_cols N-tiles] from a source
+// accessor (PWB for relayed stripes, or local weight DRAM for this device's own stripe) to the
+// fsdp-neighbor's PWB at the SAME global K rows (every device's PWB has identical [K_full, N_local]
+// layout, so the destination tile-id matches the source's global-K tile-id). Because a full block
+// is far too large to stage in L1, we stream in packet-sized chunks through a small scratch buffer:
+// read chunk (DRAM->L1), barrier, fabric-send chunk (L1->remote DRAM), repeat. One atomic-inc to the
+// receiver's per-stripe-ready semaphore is issued after the whole block lands.
+template <typename SrcAccessorType, typename DstAccessorType, typename ConnectionHandleType>
+FORCE_INLINE void relay_in1_block_to_fabric_neighbor(
+    const SrcAccessorType& src_reader,       // PWB accessor (relay) or local weight accessor (own stripe)
+    uint32_t src_tile_base,                  // first source tile id (row 0, col 0)
+    uint32_t src_row_stride_tiles,           // source N width in tiles
+    const DstAccessorType& dst_pwb_addrgen,  // remote PWB accessor (for dest noc addrs)
+    uint32_t dst_tile_base,                  // first dest PWB tile id (global_k_row * pwb_N_Wt)
+    uint32_t dst_row_stride_tiles,           // dest PWB N width in tiles (pwb_N_Wt)
+    uint32_t n_rows,                         // K-tiles to relay (current_K_block_tiles)
+    uint32_t n_cols,                         // N-tiles per row to relay
+    uint32_t tile_size,
+    uint32_t scratch_l1_addr,  // small staging buffer (>= num_tiles_per_packet tiles)
+    ConnectionHandleType mux_connection_handle,
+    PacketHeaders pkt_hdrs,
+    uint16_t page_size,
+    uint32_t num_tiles_per_packet,
+    uint64_t out_ready_sem_noc_addr_in_pkt,      // predecessor's injector consume-sem
+    uint64_t out_ready_sem_noc_addr_in_pkt_2) {  // predecessor's relay-core receive-sem
+    auto* pkt_scatter_hdr = pkt_hdrs.scatter_hdr;
+    auto* pkt_unicast_hdr = pkt_hdrs.unicast_hdr;
+    auto* pkt_hdr_sem_inc = pkt_hdrs.sem_inc_hdr;
+
+    for (uint32_t r = 0; r < n_rows; r++) {
+        uint32_t src_row = src_tile_base + r * src_row_stride_tiles;
+        uint32_t dst_row = dst_tile_base + r * dst_row_stride_tiles;
+        uint32_t c = 0;
+        while (c < n_cols) {
+            uint32_t chunk = std::min(n_cols - c, num_tiles_per_packet);
+            // Stage chunk DRAM->L1.
+            uint32_t staging_addr = scratch_l1_addr;
+            for (uint32_t i = 0; i < chunk; i++) {
+                noc_async_read_tile(src_row + c + i, src_reader, staging_addr);
+                staging_addr += tile_size;
+            }
+            noc_async_read_barrier();
+            // Fabric-send chunk L1->remote PWB.
+            uint16_t chunk_sizes[3] = {page_size, page_size, page_size};
+            uint64_t noc_addrs[4] = {0, 0, 0, 0};
+            for (uint32_t i = 0; i < chunk; i++) {
+                noc_addrs[i] =
+                    tt::tt_fabric::linear::addrgen_detail::get_noc_address(dst_pwb_addrgen, dst_row + c + i, 0);
+            }
+            if (chunk > 1) {
+                fabric_unicast_noc_scatter_write_with_state<
+                    UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
+                    UnicastScatterWriteUpdateMask::PayloadSize>(
+                    mux_connection_handle,
+                    pkt_scatter_hdr,
+                    scratch_l1_addr,
+                    NocUnicastScatterCommandHeader(noc_addrs, chunk_sizes, chunk),
+                    page_size * chunk);
+            } else {
+                fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
+                    mux_connection_handle, pkt_unicast_hdr, scratch_l1_addr, NocUnicastCommandHeader{noc_addrs[0]});
+            }
+            noc_async_writes_flushed();
+            c += chunk;
+        }
+    }
+
+    // Double atomic-inc: signal both the predecessor's injector (consume gate) and its relay core
+    // (relay receive gate). Both resolve on the predecessor device since the fabric routes there.
+    fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+        mux_connection_handle,
+        pkt_hdr_sem_inc,
+        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
+    noc_async_writes_flushed();
+    fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+        mux_connection_handle,
+        pkt_hdr_sem_inc,
+        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt_2, 0});
+    noc_async_writes_flushed();
+}
 #endif
 
 bool is_backward_k_block_iter(uint32_t k_block_iter, uint32_t k_blocks_per_device) {

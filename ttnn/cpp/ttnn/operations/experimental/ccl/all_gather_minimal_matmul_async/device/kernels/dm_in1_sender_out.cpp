@@ -242,25 +242,27 @@ void kernel_main() {
     uint32_t fsdp_sem_target_forward = 0;
     uint32_t fsdp_sem_target_backward = 0;
 
-    // Target NoC addresses for remote atomic-incs. When this device's fabric sender ships its
-    // local K-half to a neighbor, the fabric also delivers an atomic-inc to that neighbor's
-    // injector-core semaphore (NOT to ours — those addresses are sent inside the fabric packet).
-    uint64_t fsdp_sem_noc_addr_forward_in_pkt =
+    // Double atomic-inc targets, resolved on the *predecessor* device (the fabric routes there).
+    // Each relayed block signals the predecessor's injector (consume gate) AND the predecessor's
+    // relay core (relay receive gate). Predecessor cores sit at the same grid positions as ours,
+    // so we target injector_virtual_* (consume sem) and my_virtual_* (relay-core sem).
+    uint64_t fsdp_sem_inj_forward_in_pkt =
         safe_get_noc_addr(injector_virtual_x, injector_virtual_y, fsdp_sem_forward, 0);
-    uint64_t fsdp_sem_noc_addr_backward_in_pkt =
-        safe_get_noc_addr(injector_virtual_x, injector_virtual_y, fsdp_sem_backward, 0);
+    uint64_t fsdp_sem_relay_forward_in_pkt = safe_get_noc_addr(my_virtual_x, my_virtual_y, fsdp_sem_forward, 0);
 
-    // Packet headers for fabric send. Each fabric sender allocates headers for its single
-    // direction only; non-senders never enter the send path so they allocate nothing.
+    // Packet headers for fabric send. Mirror in0's uni-ring direction mapping: the size-2 core
+    // (fsdp Dev 0's relay core) uses the FORWARD route (long, N-1 hops); the size-1 core (fsdp Dev
+    // k's relay core) uses the BACKWARD route (short, 1 hop to predecessor).
     PacketHeaders fsdp_pkt_hdrs_backward{};
     PacketHeaders fsdp_pkt_hdrs_forward{};
     if (in1_core_order_index == fsdp_backward_in1_core_order_index) {
-        fsdp_pkt_hdrs_backward = allocate_and_init_packet_headers(
-            fsdp_num_targets_backward > 0, fsdp_unicast_route_info_backward, in1_reader, 1, in1_tile_size);
-    } else if (in1_core_order_index == fsdp_forward_in1_core_order_index) {
         fsdp_pkt_hdrs_forward = allocate_and_init_packet_headers(
             fsdp_num_targets_forward > 0, fsdp_unicast_route_info_forward, in1_reader, 1, in1_tile_size);
+    } else if (in1_core_order_index == fsdp_forward_in1_core_order_index) {
+        fsdp_pkt_hdrs_backward = allocate_and_init_packet_headers(
+            fsdp_num_targets_backward > 0, fsdp_unicast_route_info_backward, in1_reader, 1, in1_tile_size);
     }
+    constexpr uint32_t fsdp_scratch_cb_id = tt::CBIndex::c_7;
 #endif
 
     bool k_forward = true;
@@ -284,6 +286,78 @@ void kernel_main() {
             uint32_t current_N_tiles_bytes = current_N_block_tiles * in1_tile_size;
 
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
+#ifdef FSDP_FUSED
+                // --- FSDP uni-ring relay (interleaved) ---
+                // Runs at the TOP of the k-loop so it's independent of the matmul NOC chain: the
+                // injector's consume-wait (below) must not be able to stall the chain that this relay
+                // would otherwise depend on. The relay's only dependency is the fsdp wavefront
+                // (round 0 needs no wait). One relay-block-send per k_block_iter during the first m/n
+                // pass performs the full fsdp_ring_size-round uni-ring gather into neighbors' PWBs.
+                // Mirrors in0: fsdp Dev 0 (no backward neighbor) long-sends via the backward mux +
+                // forward route; fsdp Dev k short-sends via the forward mux + backward route. A single
+                // forward semaphore tracks arrivals (uni-ring). Double atomic-inc signals both the
+                // predecessor's injector (consume gate) and its relay core (relay receive gate).
+                if (m_block_iter == 0 && n_block_iter == 0) {
+                    const bool is_dev0 = (fsdp_num_targets_backward == 0);
+                    const bool i_relay = is_dev0 ? (in1_core_order_index == fsdp_backward_in1_core_order_index)
+                                                 : (in1_core_order_index == fsdp_forward_in1_core_order_index);
+                    if (i_relay) {
+                        uint32_t g = k_block_iter / K_blocks_per_fsdp;  // fsdp round
+                        uint32_t j = k_block_iter % K_blocks_per_fsdp;  // block within stripe
+                        uint32_t relay_stripe = (fsdp_ring_index + g) % fsdp_ring_size;
+                        bool relay_tail = (j == K_blocks_per_fsdp - 1);
+                        uint32_t relay_rows = relay_tail ? K_block_tail_tiles : K_block_tiles;
+                        uint32_t global_k_base = relay_stripe * K_blocks_per_fsdp * K_block_tiles + j * K_block_tiles;
+                        uint32_t dst_tile_base = global_k_base * pwb_N_Wt;
+                        uint32_t scratch_addr = get_write_ptr(fsdp_scratch_cb_id);
+                        if (g > 0) {
+                            // Wait for the stripe-to-relay to have arrived from the fsdp successor.
+                            noc_semaphore_wait_min(fsdp_sem_forward_ptr, (g - 1) * K_blocks_per_fsdp + j + 1);
+                        }
+                        auto* relay_mux = is_dev0 ? fsdp_mux_handle_backward : fsdp_mux_handle_forward;
+                        PacketHeaders relay_pkt = is_dev0 ? fsdp_pkt_hdrs_forward : fsdp_pkt_hdrs_backward;
+                        if (g == 0) {
+                            // Own stripe: source from local weight DRAM ([K_local, N_tiles] layout).
+                            relay_in1_block_to_fabric_neighbor(
+                                local_weight_reader,
+                                (j * K_block_tiles) * N_tiles,
+                                N_tiles,
+                                in1_reader,
+                                dst_tile_base,
+                                pwb_N_Wt,
+                                relay_rows,
+                                N_tiles,
+                                in1_tile_size,
+                                scratch_addr,
+                                relay_mux,
+                                relay_pkt,
+                                in1_tile_size,
+                                4,
+                                fsdp_sem_inj_forward_in_pkt,
+                                fsdp_sem_relay_forward_in_pkt);
+                        } else {
+                            // Relayed stripe: source from this device's PWB (just received).
+                            relay_in1_block_to_fabric_neighbor(
+                                in1_reader,
+                                dst_tile_base,
+                                pwb_N_Wt,
+                                in1_reader,
+                                dst_tile_base,
+                                pwb_N_Wt,
+                                relay_rows,
+                                N_tiles,
+                                in1_tile_size,
+                                scratch_addr,
+                                relay_mux,
+                                relay_pkt,
+                                in1_tile_size,
+                                4,
+                                fsdp_sem_inj_forward_in_pkt,
+                                fsdp_sem_relay_forward_in_pkt);
+                        }
+                    }
+                }
+#endif
                 if (defer_write && k_block_iter == defer_write_k_block) {
                     if constexpr (is_output_writer) {
                         cb_wait_front(cb_id_out, out_block_num_tiles);
@@ -318,10 +392,6 @@ void kernel_main() {
                 cb_reserve_back(cb_id_in1, in1_block_num_tiles);
 
                 uint32_t in1_start_address = get_write_ptr(cb_id_in1);
-#ifdef FSDP_FUSED
-                // Remembered for fabric send (the NOC-chain block below increments in1_start_address).
-                uint32_t in1_send_l1_addr = in1_start_address;
-#endif
                 // Computed for ALL cores: injector uses for reads, last-two cores use for fabric send.
                 uint32_t k_block_left_tile = 0;
                 uint32_t k_block_right_tile = 0;
@@ -385,31 +455,23 @@ void kernel_main() {
 #endif
                 if constexpr (is_injector_core) {
 #ifdef FSDP_FUSED
-                    // On m_block_iter == 0, this is the first time we visit this (n_block, k_block).
-                    // If a half is FSDP-remote, the corresponding remote injector is busy sending
-                    // their local stripe at the same iteration — wait for that send to land in our PWB.
+                    // Per-stripe-ready gate (uni-ring / Linear). A FSDP-remote half lives on some
+                    // fsdp owner stripe; in the uni-ring, stripes arrive in a deterministic order, so
+                    // the owner's stripe is the `arrival_idx`-th arrival. fsdp_sem_forward is a
+                    // monotonic count of arrived blocks, so we wait for the absolute threshold
+                    // arrival_idx * K_blocks_per_fsdp. Only needed on m_block_iter==0 (PWB persists
+                    // across m passes). Linear right-half is pure zero-fill (k_block_right_tile==K_tiles),
+                    // so it never needs a gather wait.
                     if (m_block_iter == 0) {
                         if (!is_left_fsdp_local) {
-                            uint32_t owner_left = k_block_left_tile / (K_blocks_per_fsdp * K_block_tiles);
-                            uint32_t fwd_dist = (owner_left + fsdp_ring_size - fsdp_ring_index) % fsdp_ring_size;
-                            if (fwd_dist <= fsdp_num_targets_forward) {
-                                fsdp_sem_target_forward += 1;
-                                noc_semaphore_wait_min(fsdp_sem_forward_ptr, fsdp_sem_target_forward);
-                            } else {
-                                fsdp_sem_target_backward += 1;
-                                noc_semaphore_wait_min(fsdp_sem_backward_ptr, fsdp_sem_target_backward);
-                            }
+                            uint32_t owner = k_block_left_tile / (K_blocks_per_fsdp * K_block_tiles);
+                            uint32_t arrival_idx = (owner + fsdp_ring_size - fsdp_ring_index) % fsdp_ring_size;
+                            noc_semaphore_wait_min(fsdp_sem_forward_ptr, arrival_idx * K_blocks_per_fsdp);
                         }
-                        if (!is_right_fsdp_local) {
-                            uint32_t owner_right = k_block_right_tile / (K_blocks_per_fsdp * K_block_tiles);
-                            uint32_t fwd_dist = (owner_right + fsdp_ring_size - fsdp_ring_index) % fsdp_ring_size;
-                            if (fwd_dist <= fsdp_num_targets_forward) {
-                                fsdp_sem_target_forward += 1;
-                                noc_semaphore_wait_min(fsdp_sem_forward_ptr, fsdp_sem_target_forward);
-                            } else {
-                                fsdp_sem_target_backward += 1;
-                                noc_semaphore_wait_min(fsdp_sem_backward_ptr, fsdp_sem_target_backward);
-                            }
+                        if (!is_right_fsdp_local && k_block_right_tile < K_tiles) {
+                            uint32_t owner = k_block_right_tile / (K_blocks_per_fsdp * K_block_tiles);
+                            uint32_t arrival_idx = (owner + fsdp_ring_size - fsdp_ring_index) % fsdp_ring_size;
+                            noc_semaphore_wait_min(fsdp_sem_forward_ptr, arrival_idx * K_blocks_per_fsdp);
                         }
                     }
 
@@ -438,7 +500,8 @@ void kernel_main() {
                             }
                             write_ptr += (N_block_tiles - (n_tile_end - n_tile)) * in1_tile_size;
                         }
-                        // Right half
+                        // Right half. For Linear this is zero-fill padding (global_k_tile >= K_tiles);
+                        // for Ring it is the backward-direction real data.
                         for (uint32_t k = 0; k < k_right_tiles; k++) {
                             uint32_t global_k_tile = k_block_right_tile + k;
                             for (uint32_t n = n_tile; n < n_tile_end; n++) {
@@ -446,7 +509,9 @@ void kernel_main() {
                                     write_ptr += in1_tile_size;
                                     continue;
                                 }
-                                if (is_right_fsdp_local) {
+                                if (global_k_tile >= K_tiles) {
+                                    fill_zeros_async(write_ptr, in1_tile_size);
+                                } else if (is_right_fsdp_local) {
                                     uint32_t local_k_tile = global_k_tile - fsdp_K_local_start_tile;
                                     uint32_t tile_id = local_k_tile * N_tiles + n;
                                     noc_async_read_tile(tile_id, local_weight_reader, write_ptr);
@@ -504,96 +569,6 @@ void kernel_main() {
 
                     noc_semaphore_set_remote(in1_valid_semaphore_addr, in1_receiver_semaphore_noc_addr);
                 }
-#ifdef FSDP_FUSED
-                // Fabric send: only on m_block_iter == 0 (first time we see this (n, k_half) — in1
-                // data is reused across M, so one send per (n, k_half) is sufficient).
-                // Only the last-two cores in in1 core order do the send: the second-to-last sends
-                // backward, the last sends forward. Per direction, we only send halves that belong
-                // to OUR fsdp-local stripe (those are the ones our neighbors need).
-                if (m_block_iter == 0) {
-                    if (in1_core_order_index >= fsdp_forward_in1_core_order_index) {
-                        // forward sender: send any local half toward the FSDP forward neighbor
-                        if (is_left_fsdp_local && fsdp_num_targets_forward > 0) {
-                            forward_in1_half_block_to_fabric_neighbor(
-                                k_block_left_tile,
-                                n_tile,
-                                k_left_tiles,
-                                k_right_tiles,
-                                current_N_block_tiles,
-                                N_block_tiles,
-                                1,  // num_tiles_to_write_per_packet (start conservative)
-                                in1_send_l1_addr,
-                                pwb_N_Wt,
-                                in1_reader,
-                                fsdp_mux_handle_forward,
-                                fsdp_pkt_hdrs_forward,
-                                in1_tile_size,
-                                fsdp_sem_noc_addr_forward_in_pkt,
-                                /*write_left_half=*/true,
-                                /*do_write=*/true);
-                        }
-                        if (is_right_fsdp_local && fsdp_num_targets_forward > 0) {
-                            forward_in1_half_block_to_fabric_neighbor(
-                                k_block_right_tile - k_left_tiles,
-                                n_tile,
-                                k_left_tiles,
-                                k_right_tiles,
-                                current_N_block_tiles,
-                                N_block_tiles,
-                                1,
-                                in1_send_l1_addr,
-                                pwb_N_Wt,
-                                in1_reader,
-                                fsdp_mux_handle_forward,
-                                fsdp_pkt_hdrs_forward,
-                                in1_tile_size,
-                                fsdp_sem_noc_addr_forward_in_pkt,
-                                /*write_left_half=*/false,
-                                /*do_write=*/true);
-                        }
-                    } else if (in1_core_order_index >= fsdp_backward_in1_core_order_index) {
-                        // backward sender: send any local half toward the FSDP backward neighbor
-                        if (is_left_fsdp_local && fsdp_num_targets_backward > 0) {
-                            forward_in1_half_block_to_fabric_neighbor(
-                                k_block_left_tile,
-                                n_tile,
-                                k_left_tiles,
-                                k_right_tiles,
-                                current_N_block_tiles,
-                                N_block_tiles,
-                                1,
-                                in1_send_l1_addr,
-                                pwb_N_Wt,
-                                in1_reader,
-                                fsdp_mux_handle_backward,
-                                fsdp_pkt_hdrs_backward,
-                                in1_tile_size,
-                                fsdp_sem_noc_addr_backward_in_pkt,
-                                /*write_left_half=*/true,
-                                /*do_write=*/true);
-                        }
-                        if (is_right_fsdp_local && fsdp_num_targets_backward > 0) {
-                            forward_in1_half_block_to_fabric_neighbor(
-                                k_block_right_tile - k_left_tiles,
-                                n_tile,
-                                k_left_tiles,
-                                k_right_tiles,
-                                current_N_block_tiles,
-                                N_block_tiles,
-                                1,
-                                in1_send_l1_addr,
-                                pwb_N_Wt,
-                                in1_reader,
-                                fsdp_mux_handle_backward,
-                                fsdp_pkt_hdrs_backward,
-                                in1_tile_size,
-                                fsdp_sem_noc_addr_backward_in_pkt,
-                                /*write_left_half=*/false,
-                                /*do_write=*/true);
-                        }
-                    }
-                }
-#endif
             }
 #ifdef FUSE_BIAS
             if constexpr (!is_output_writer) {
