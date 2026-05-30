@@ -629,6 +629,11 @@ def merge_evidence_into_persisted(
     for name in all_names:
         old_entry = existing.get(name)
         modes: Dict[str, ComponentEvidence] = {}
+        # Track per-mode extra fields (bench, bench_verdict, ...) that
+        # don't fit in ComponentEvidence — these need to ROUND-TRIP
+        # through the merge so a profile-cold re-run doesn't wipe a
+        # prior bench-component result for the same mode.
+        mode_extras: Dict[str, dict] = {}
 
         if old_entry is not None:
             if isinstance(old_entry, dict) and isinstance(old_entry.get("modes"), dict):
@@ -637,10 +642,13 @@ def merge_evidence_into_persisted(
                     if not isinstance(mode_data, dict):
                         continue
                     modes[mode_name] = _evidence_from_dict(mode_data)
+                    # Capture non-evidence fields (bench, bench_verdict, etc.)
+                    mode_extras[mode_name] = {k: v for k, v in mode_data.items() if k not in _COMPONENT_EVIDENCE_FIELDS}
             elif isinstance(old_entry, dict):
                 # Legacy single-mode entry; promote.
                 old_mode = old_entry.get("workload_mode") or "default"
                 modes[old_mode] = _evidence_from_dict(old_entry)
+                mode_extras[old_mode] = {k: v for k, v in old_entry.items() if k not in _COMPONENT_EVIDENCE_FIELDS}
 
         if name in new_report:
             modes[workload_mode] = new_report[name]
@@ -649,10 +657,21 @@ def merge_evidence_into_persisted(
             continue
 
         union = union_evidence_across_modes(modes)
+        # Rebuild modes dict, merging extras (bench results etc.) back in.
+        modes_persisted: dict = {}
+        for m, rec in modes.items():
+            entry = asdict(rec)
+            extras = mode_extras.get(m, {})
+            for k, v in extras.items():
+                # Don't let extras overwrite freshly-measured values
+                if k not in entry:
+                    entry[k] = v
+            modes_persisted[m] = entry
+
         merged[name] = {
             "kind": union.kind,
             "evidence": union.evidence,
-            "modes": {m: asdict(rec) for m, rec in modes.items()},
+            "modes": modes_persisted,
             "frequency": union.frequency,
             "cpu_latency_ms": union.cpu_latency_ms,
             "cpu_latency_pct": union.cpu_latency_pct,
@@ -663,6 +682,23 @@ def merge_evidence_into_persisted(
             "captured_ts": time.time(),
         }
     return merged
+
+
+_COMPONENT_EVIDENCE_FIELDS = frozenset(
+    {
+        "kind",
+        "frequency",
+        "cpu_latency_ms",
+        "cpu_latency_pct",
+        "ops_count",
+        "io_bytes",
+        "compute_density",
+        "affinity_score",
+        "evidence",
+        "workload_mode",
+        "captured_ts",
+    }
+)
 
 
 def _evidence_from_dict(d: dict) -> ComponentEvidence:

@@ -34,7 +34,9 @@ def cmd_view_evidence(args) -> int:
     print(f"evidence for {model_id}  ({len(evidence)} components)")
     print()
 
-    multi_mode_count = sum(1 for e in evidence.values() if isinstance(e.get("modes"), dict))
+    # Only count entries with a NON-EMPTY modes dict — an empty modes={}
+    # is just a schema-promotion artifact, not real per-mode evidence.
+    multi_mode_count = sum(1 for e in evidence.values() if isinstance(e.get("modes"), dict) and e.get("modes"))
     if multi_mode_count:
         print(
             f"  ({multi_mode_count} components have per-workload-mode evidence; "

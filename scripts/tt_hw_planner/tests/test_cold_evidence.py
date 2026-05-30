@@ -505,6 +505,41 @@ def test_classify_hot_cold_legacy_dict_preserved() -> None:
     assert merged["comp_a"]["cpu_latency_pct"] == 50.0
 
 
+def test_merge_preserves_prior_bench_data_on_reprofile() -> None:
+    """Regression: profile-cold re-run for the SAME workload-mode used
+    to OVERWRITE the whole mode entry — wiping any prior Stage 4 bench
+    result. Fix: extras (bench, bench_verdict, etc.) are preserved.
+    """
+    from scripts.tt_hw_planner.cold_evidence import ComponentEvidence, merge_evidence_into_persisted
+
+    existing = {
+        "comp_a": {
+            "kind": "HOT",
+            "modes": {
+                "default": {
+                    "kind": "HOT",
+                    "frequency": 1.0,
+                    "cpu_latency_pct": 50.0,
+                    "workload_mode": "default",
+                    # Stage 4 bench data
+                    "bench": {"verdict": "DEVICE_WINS", "speedup": 3.0},
+                    "bench_verdict": "DEVICE_WINS",
+                }
+            },
+        }
+    }
+    # Re-run profile-cold for "default" mode with fresh evidence
+    new_report = {"comp_a": ComponentEvidence(kind="HOT", frequency=1.0, cpu_latency_pct=55.0, workload_mode="default")}
+
+    merged = merge_evidence_into_persisted(existing, new_report, workload_mode="default")
+    mode_entry = merged["comp_a"]["modes"]["default"]
+    # Fresh measurements present
+    assert mode_entry["cpu_latency_pct"] == 55.0
+    # Bench data preserved
+    assert mode_entry["bench"]["verdict"] == "DEVICE_WINS"
+    assert mode_entry["bench_verdict"] == "DEVICE_WINS"
+
+
 def test_classify_hot_cold_no_existing_writes_flat() -> None:
     """When no existing entry, write the simple kind-string (don't
     schema-lift unnecessarily)."""
