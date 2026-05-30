@@ -144,6 +144,24 @@ def _run_auto_iterate_loop(
 
     _SWEEP_CACHE = ValidationSweepCache()
 
+    # Apply any pending decomposition plan BEFORE loading the component
+    # list. cmd_decompose --write-plan writes the plan; this consumer
+    # picks it up on the next run, adds children as NEW components to
+    # bringup_status.json, and marks the parent no_emit. Idempotent —
+    # already-applied plans are archived and not re-applied.
+    try:
+        from ..decomposition_consumer import consume_decomposition_plan
+
+        _decomp_added, _decomp_notes = consume_decomposition_plan(model_id=MODEL, demo_dir=demo_dir)
+        for _line in _decomp_notes:
+            print(f"  {_line}")
+        if _decomp_added:
+            banner(f"DECOMPOSITION CONSUMER: added {_decomp_added} child component(s) " f"from decomposition_plan.json")
+    except Exception as _decomp_exc:
+        print(
+            f"  [decomposition-consume] non-fatal error: {type(_decomp_exc).__name__}: {_decomp_exc}", file=sys.stderr
+        )
+
     _persistent_skips = load_persistent_skips(MODEL)
     if _persistent_skips:
         # Auto-load only categories that are truly permanent for this
