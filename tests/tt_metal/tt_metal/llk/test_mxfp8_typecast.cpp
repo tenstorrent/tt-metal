@@ -479,7 +479,7 @@ namespace mxfp8_tc = unit_tests::llk::mxfp8_typecast;
 // Expected: no precision loss → rtol=0.0, atol=0.0.
 // ============================================================================
 
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp8RToFloat16b) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8RToFloat16b) {
     auto& mesh_device = *devices_[0];
     mxfp8_tc::run_random_typecast_test(
         mesh_device,
@@ -491,7 +491,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp8RToFloat16b) {
         /*fp32_dest_acc_en=*/false);
 }
 
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp8RToFloat16bFp32Dest) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8RToFloat16bFp32Dest) {
     auto& mesh_device = *devices_[0];
     mxfp8_tc::run_random_typecast_test(
         mesh_device,
@@ -510,7 +510,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp8RToFloat16bFp32Dest) {
 // Expected: no precision loss → rtol=0.0, atol=0.0.
 // ============================================================================
 
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp8PToFloat16b) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8PToFloat16b) {
     auto& mesh_device = *devices_[0];
     mxfp8_tc::run_random_typecast_test(
         mesh_device,
@@ -522,7 +522,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp8PToFloat16b) {
         /*fp32_dest_acc_en=*/false);
 }
 
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp8PToFloat16bFp32Dest) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8PToFloat16bFp32Dest) {
     auto& mesh_device = *devices_[0];
     mxfp8_tc::run_random_typecast_test(
         mesh_device,
@@ -540,7 +540,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp8PToFloat16bFp32Dest) {
 // has 2 mantissa bits. Tolerances are loose to account for block-scaling behavior.
 // ============================================================================
 
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8R) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8R) {
     auto& mesh_device = *devices_[0];
     mxfp8_tc::run_random_typecast_test(
         mesh_device,
@@ -552,7 +552,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8R) {
         /*fp32_dest_acc_en=*/false);
 }
 
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8RFp32Dest) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8RFp32Dest) {
     auto& mesh_device = *devices_[0];
     mxfp8_tc::run_random_typecast_test(
         mesh_device,
@@ -570,7 +570,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8RFp32Dest) {
 // has 3 mantissa bits. Tolerances are tighter than E5M2.
 // ============================================================================
 
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8P) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8P) {
     auto& mesh_device = *devices_[0];
     mxfp8_tc::run_random_typecast_test(
         mesh_device,
@@ -582,7 +582,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8P) {
         /*fp32_dest_acc_en=*/false);
 }
 
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8PFp32Dest) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8PFp32Dest) {
     auto& mesh_device = *devices_[0];
     mxfp8_tc::run_random_typecast_test(
         mesh_device,
@@ -599,7 +599,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8PFp32Dest) {
 // Same format on both sides. The round-trip should be lossless.
 // ============================================================================
 
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp8RToMxFp8R) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8RToMxFp8R) {
     auto& mesh_device = *devices_[0];
     mxfp8_tc::run_random_typecast_test(
         mesh_device,
@@ -611,7 +611,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp8RToMxFp8R) {
         /*fp32_dest_acc_en=*/false);
 }
 
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp8RToMxFp8RFp32Dest) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8RToMxFp8RFp32Dest) {
     auto& mesh_device = *devices_[0];
     mxfp8_tc::run_random_typecast_test(
         mesh_device,
@@ -628,7 +628,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp8RToMxFp8RFp32Dest) {
 // Same format on both sides. The round-trip should be lossless.
 // ============================================================================
 
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp8PToMxFp8P) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8PToMxFp8P) {
     auto& mesh_device = *devices_[0];
     mxfp8_tc::run_random_typecast_test(
         mesh_device,
@@ -640,7 +640,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp8PToMxFp8P) {
         /*fp32_dest_acc_en=*/false);
 }
 
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp8PToMxFp8PFp32Dest) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8PToMxFp8PFp32Dest) {
     auto& mesh_device = *devices_[0];
     mxfp8_tc::run_random_typecast_test(
         mesh_device,
@@ -660,7 +660,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp8PToMxFp8PFp32Dest) {
 // for NaN/Inf comparisons.
 // ============================================================================
 
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp8RToBf16SpecialCases) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8RToBf16SpecialCases) {
     auto& mesh_device = *devices_[0];
     auto layout = mxfp8_tc::get_e5m2_tile_layout();
 
@@ -698,7 +698,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp8RToBf16SpecialCases) {
     EXPECT_EQ(mxfp8_tc::bf16_raw_at(result, 96), 0x3F80u);  // BF16 +1.0
 }
 
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp8PToBf16SpecialCases) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8PToBf16SpecialCases) {
     auto& mesh_device = *devices_[0];
     auto layout = mxfp8_tc::get_e4m3_tile_layout();
 
@@ -770,7 +770,7 @@ static vector<uint32_t> build_bf16_tile_with_block_values(std::initializer_list<
 
 }  // namespace unit_tests::llk::mxfp8_typecast
 
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8RSpecialCases) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8RSpecialCases) {
     auto& mesh_device = *devices_[0];
 
     // Block layout (32 BF16 elements per block):
@@ -831,7 +831,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8RSpecialCases)
     }
 }
 
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8PSpecialCases) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8PSpecialCases) {
     auto& mesh_device = *devices_[0];
 
     // Block layout, mirroring the E5M2 test. E4M3 has no Inf encoding, so the

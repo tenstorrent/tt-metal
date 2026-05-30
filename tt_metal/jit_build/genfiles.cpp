@@ -419,9 +419,15 @@ std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack_data_f
     const tt::ARCH arch,
     uint32_t max_cbs) {
     vector<DataFormat> src_formats = tt::get_pack_src_formats(
-        desc.buf_dataformat_arr, unpack_conditional_dst_format, fp32_dest_acc_en, bfp8_pack_precise, false, arch);
+        desc.buf_dataformat_arr,
+        unpack_conditional_dst_format,
+        fp32_dest_acc_en,
+        bfp8_pack_precise,
+        false,
+        arch);
 
-    vector<DataFormat> dst_formats = tt::get_pack_dst_formats(desc.buf_dataformat_arr);
+    vector<DataFormat> dst_formats = tt::get_pack_dst_formats(
+        desc.buf_dataformat_arr);
 
     // Fp8_e4m3 is always unpacked to Float16 (A-family) in source/dest registers.
     // Without fp32_dest_acc, the dest register holds Float16 (A-family) data when
@@ -583,8 +589,8 @@ void emit_unpack_tile_dims(std::ostream& out, const tt_hlk_desc& desc, uint32_t 
     emit_formats_array(out, "constexpr uint8_t", "unpack_tile_c_dim", max_cbs, desc.buf_tile_c_dim_arr);
     emit_formats_array(out, "constexpr uint16_t", "unpack_tile_size", max_cbs, desc.buf_tile_size_arr);
 
-    auto [r_dims, c_dims] =
-        compute_num_faces_rc_dims(desc.buf_tile_r_dim_arr, desc.buf_tile_c_dim_arr, desc.buf_face_r_dim_arr);
+    auto [r_dims, c_dims] = compute_num_faces_rc_dims(
+        desc.buf_tile_r_dim_arr, desc.buf_tile_c_dim_arr, desc.buf_face_r_dim_arr);
     emit_formats_array(out, "constexpr uint8_t", "unpack_num_faces_r_dim", max_cbs, r_dims);
     emit_formats_array(out, "constexpr uint8_t", "unpack_num_faces_c_dim", max_cbs, c_dims);
 }
@@ -598,8 +604,8 @@ void emit_pack_tile_dims(std::ostream& out, const tt_hlk_desc& desc, uint32_t ma
     emit_formats_array(out, "constexpr uint8_t", "pack_tile_c_dim", max_cbs, desc.buf_tile_c_dim_arr);
     emit_formats_array(out, "constexpr uint16_t", "pack_tile_size", max_cbs, desc.buf_tile_size_arr);
 
-    auto [r_dims, c_dims] =
-        compute_num_faces_rc_dims(desc.buf_tile_r_dim_arr, desc.buf_tile_c_dim_arr, desc.buf_face_r_dim_arr);
+    auto [r_dims, c_dims] = compute_num_faces_rc_dims(
+        desc.buf_tile_r_dim_arr, desc.buf_tile_c_dim_arr, desc.buf_face_r_dim_arr);
     emit_formats_array(out, "constexpr uint8_t", "pack_num_faces_r_dim", max_cbs, r_dims);
     emit_formats_array(out, "constexpr uint8_t", "pack_num_faces_c_dim", max_cbs, c_dims);
 }
@@ -656,12 +662,11 @@ void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& opt
     emit_pack_tile_dims(out, desc, max_cbs);
     // For Blackhole tilize workaround, PACK needs access to unpack_src_format to determine
     // if the original input format is 8-bit (Int8, UInt8, Fp8_e4m3, Lf8) since those formats
-    // do not require the tilize workaround. This is needed to determine whether to skip the workaround in
-    // llk_pack_init.
+    // do not require the tilize workaround. This is needed to determine whether to skip the workaround in llk_pack_init.
     out << "#if defined(UCK_CHLKC_PACK)\n";
     emit_formats_array(out, "constexpr std::int32_t", "unpack_src_format", max_cbs, fmts.unpack_src);
-    out << "#endif\n";    // if pack
-    out << "#endif\n\n";  // if not math and not unpack
+    out << "#endif\n";   // if pack
+    out << "#endif\n\n"; // if not math and not unpack
 
     out << "#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_PACK) || defined(UCK_CHLKC_UNPACK) || "
            "defined(UCK_CHLKC_ISOLATE_SFPU)\n";

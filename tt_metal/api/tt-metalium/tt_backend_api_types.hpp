@@ -147,7 +147,7 @@ constexpr static uint32_t tile_size(const DataFormat& format) {
 
 template <>
 struct std::hash<tt::DataFormat> {
-    std::size_t operator()(const tt::DataFormat& obj) const noexcept { return static_cast<std::size_t>(obj); }
+    std::size_t operator()(tt::DataFormat const& obj) const noexcept { return static_cast<std::size_t>(obj); }
 };
 
 template <>

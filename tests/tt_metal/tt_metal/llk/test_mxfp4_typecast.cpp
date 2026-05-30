@@ -208,37 +208,37 @@ static vector<uint32_t> run_mxfp4_typecast(
 // Data generators follow the fp8_typecast tests' convention: generate
 // row-major floats in U(0, rand_max_float) + offset, then pack into tiles.
 static vector<uint32_t> create_random_vector_of_mxfp4(
-    uint32_t num_bytes, int rand_max_float, int seed, float offset = 0.0f) {
-    uint32_t single_tile_size = tt::tile_size(tt::DataFormat::MxFp4);
-    TT_FATAL(
-        num_bytes % single_tile_size == 0,
-        "num_bytes {} must be divisible by MXFP4 tile_size {}",
-        num_bytes,
-        single_tile_size);
-    uint32_t num_tiles = num_bytes / single_tile_size;
+	uint32_t num_bytes, int rand_max_float, int seed, float offset = 0.0f) {
+	uint32_t single_tile_size = tt::tile_size(tt::DataFormat::MxFp4);
+	TT_FATAL(
+		num_bytes % single_tile_size == 0,
+		"num_bytes {} must be divisible by MXFP4 tile_size {}",
+		num_bytes,
+		single_tile_size);
+	uint32_t num_tiles = num_bytes / single_tile_size;
 
-    std::mt19937 rng(seed);
-    std::uniform_real_distribution<float> dist(0.0f, static_cast<float>(rand_max_float));
+	std::mt19937 rng(seed);
+	std::uniform_real_distribution<float> dist(0.0f, static_cast<float>(rand_max_float));
 
-    constexpr uint32_t kNumFloatsPerTile = 1024;
-    vector<float> fp32_vec(num_tiles * kNumFloatsPerTile);
-    for (float& v : fp32_vec) {
-        v = dist(rng) + offset;
-    }
+	constexpr uint32_t kNumFloatsPerTile = 1024;
+	vector<float> fp32_vec(num_tiles * kNumFloatsPerTile);
+	for (float& v : fp32_vec) {
+		v = dist(rng) + offset;
+	}
 
-    vector<uint32_t> packed = pack_as_mxfp4_tiles(tt::stl::make_const_span(fp32_vec), /*row_major_input=*/true);
-    TT_FATAL(
-        packed.size() * sizeof(uint32_t) == num_tiles * single_tile_size,
-        "MXFP4 packed size {} bytes does not match expected {} bytes",
-        packed.size() * sizeof(uint32_t),
-        num_tiles * single_tile_size);
-    return packed;
+	vector<uint32_t> packed = pack_as_mxfp4_tiles(tt::stl::make_const_span(fp32_vec), /*row_major_input=*/true);
+	TT_FATAL(
+		packed.size() * sizeof(uint32_t) == num_tiles * single_tile_size,
+		"MXFP4 packed size {} bytes does not match expected {} bytes",
+		packed.size() * sizeof(uint32_t),
+		num_tiles * single_tile_size);
+	return packed;
 }
 
 // --- Format-to-float unpackers ---
 
 static vector<float> mxfp4_to_floats(const vector<uint32_t>& packed) {
-    return unpack_mxfp4_tiles_into_float_vec(tt::stl::make_const_span(packed), /*row_major_output=*/false);
+	return unpack_mxfp4_tiles_into_float_vec(tt::stl::make_const_span(packed), /*row_major_output=*/false);
 }
 
 // bf16_to_floats lives in tt_metal/test_utils/float8_utils.hpp;
