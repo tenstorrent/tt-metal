@@ -44,6 +44,8 @@ Profile warmed prefill and decode separately. Use `tt-perf-report` as a conversa
 
 Tune precision and fidelity one group at a time so regressions can be assigned. A common starting point is BF16 activations and norms, BFP8 attention/MLP weights, BFP8 KV cache if PCC allows it, and selective BFP4 trials for MLP/expert weights. After that follow tt-perf-report, read the kernels, explore and be methodically creative until you are satisfied we've got everything out of the hardware that we can without rewriting the ttnn ops themselves!
 
+Before you finish, take another look over a current tt-perf-report output. Is everything optimized that can be optimized, or were some things left deferred? If so, now is the time to take a breath and then systematically address them. After all, there *is* no "deferred". We are the optimization pass. If we defer something, it will forever be left unfinished. Now is the time to reach for our goal of a decoder that comes as close to full hardware performance as we can within the bounds of ttnn's capabilities! If there are specific ttnn op limitations preventing performance optimizations call these out in your report, we want to continue to improve it.
+
 ## Evidence To Leave
 
 Final optimized evidence should show:
