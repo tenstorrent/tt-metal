@@ -207,3 +207,7 @@
 #if SFPU_OP_BINARY_DIV_INCLUDE
 #include "api/compute/eltwise_binary_sfpu.h"
 #endif
+
+#if SFPU_OP_BINARY_ADD_INT_INCLUDE
+#include "api/compute/add_int_sfpu.h"
+#endif
