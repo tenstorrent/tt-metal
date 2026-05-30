@@ -173,7 +173,8 @@ void run_single_core_tilize_program(
         (test_config.fp32_dest_acc_en && !is_8bit_int) ? tt::DataFormat::Float32 : test_config.output_fmt;
     tt_metal::CircularBufferConfig cb_output_config =
         tt_metal::CircularBufferConfig(
-            num_output_tiles * test_config.output_single_tile_size, {{ouput_cb_index, output_cb_format}})
+            num_output_tiles * test_config.output_single_tile_size,
+            {{ouput_cb_index, output_cb_format}})
             .set_page_size(ouput_cb_index, test_config.output_single_tile_size);
     tt_metal::CreateCircularBuffer(program_, core, cb_output_config);
 
@@ -250,7 +251,7 @@ void run_single_core_tilize_program(
 
     std::vector<uint32_t> src1_vec;
 
-    if (test_config.tilize_type.has_value() && test_config.tilize_type == TilizeType::UNPACK_A_B) {
+    if(test_config.tilize_type.has_value() && test_config.tilize_type == TilizeType::UNPACK_A_B) {
         // tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary.cpp
         tt_metal::SetRuntimeArgs(
             program_,
