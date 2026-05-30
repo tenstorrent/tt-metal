@@ -65,6 +65,7 @@ class Flux2SingleTransformerBlock(Module):
         parallel_config: DiTParallelConfig,
         padding_config: PaddingConfig | None,
         is_fsdp: bool = False,
+        shard_prompt: bool = False,
     ) -> None:
         super().__init__()
 
@@ -88,6 +89,7 @@ class Flux2SingleTransformerBlock(Module):
             use_spatial_weights_for_prompt=True,
             per_head_norm=True,
             is_fsdp=is_fsdp,
+            shard_prompt=shard_prompt,
         )
 
         self.norm = DistributedLayerNorm(
@@ -234,6 +236,7 @@ class Flux2Transformer(Module):
         parallel_config: DiTParallelConfig,
         padding_config: PaddingConfig | None,
         is_fsdp: bool = False,
+        shard_prompt: bool = False,
     ) -> None:
         super().__init__()
 
@@ -273,6 +276,7 @@ class Flux2Transformer(Module):
                 padding_config=padding_config,
                 mesh_device=device,
                 is_fsdp=is_fsdp,
+                shard_prompt=shard_prompt,
             )
             for i in range(num_layers)
         )
@@ -287,6 +291,7 @@ class Flux2Transformer(Module):
                 padding_config=padding_config,
                 device=device,
                 is_fsdp=is_fsdp,
+                shard_prompt=shard_prompt,
             )
             for i in range(num_single_layers)
         )
