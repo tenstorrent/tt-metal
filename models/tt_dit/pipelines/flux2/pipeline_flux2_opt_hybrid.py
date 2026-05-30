@@ -90,10 +90,12 @@ class Flux2Pipeline:
         dynamic_load: bool = False,
         trace_warmup: bool = False,
         vae_use_conv3d: bool = False,
+        shard_prompt: bool = False,
     ) -> None:
         self._mesh_device = mesh_device
         self._parallel_config = parallel_config
         self._encoder_parallel_config = encoder_parallel_config
+        self._shard_prompt = shard_prompt
 
         self._vae_parallel = vae_parallel
         self._vae_use_conv3d = vae_use_conv3d
@@ -155,6 +157,7 @@ class Flux2Pipeline:
             parallel_config=parallel_config,
             padding_config=padding_config,
             is_fsdp=self.is_fsdp,
+            shard_prompt=self._shard_prompt,
         )
 
         self._pos_embed = self._torch_transformer.pos_embed
@@ -207,8 +210,16 @@ class Flux2Pipeline:
         self.ts._tt_spatial_rope_sin.update(
             spatial_rope_sin, False, mesh_axes=[sp_axis, None], device=self._mesh_device
         )
-        self.ts._tt_prompt_rope_cos.update(prompt_rope_cos, False, device=self._mesh_device)
-        self.ts._tt_prompt_rope_sin.update(prompt_rope_sin, False, device=self._mesh_device)
+        # When sharding the prompt across SP, the prompt rope must be sharded the same way (on the
+        # sequence dim) so per-rank tokens get their matching rope positions before the attention
+        # gathers q/k/v back to full length.
+        prompt_rope_mesh_axes = [sp_axis, None] if self._shard_prompt else None
+        self.ts._tt_prompt_rope_cos.update(
+            prompt_rope_cos, False, mesh_axes=prompt_rope_mesh_axes, device=self._mesh_device
+        )
+        self.ts._tt_prompt_rope_sin.update(
+            prompt_rope_sin, False, mesh_axes=prompt_rope_mesh_axes, device=self._mesh_device
+        )
 
         self.warmup(warmup_info="e2e warmup")  # E2E warmup. Preallocate buffers
         if trace_warmup:  # warmup for trace capture
@@ -272,6 +283,7 @@ class Flux2Pipeline:
         trace_warmup: bool = False,
         checkpoint_name: str = "black-forest-labs/FLUX.2-dev",
         vae_use_conv3d: bool = False,
+        shard_prompt: bool = False,
     ) -> Flux2Pipeline:
         dit_parallel_config = DiTGParallelConfigNoCFG(
             tensor_parallel=ParallelFactor(factor=int(mesh_device.shape[tp_axis]), mesh_axis=tp_axis),
@@ -298,6 +310,7 @@ class Flux2Pipeline:
             dynamic_load=dynamic_load,
             trace_warmup=trace_warmup,
             vae_use_conv3d=vae_use_conv3d,
+            shard_prompt=shard_prompt,
         )
 
     def __call__(
@@ -362,7 +375,12 @@ class Flux2Pipeline:
         shape = [transformer_batch_size, self._num_channels_latents, latents_height, latents_width]
         latents = self._patchify(torch.randn(shape).permute(0, 2, 3, 1))
 
-        self.ts._tt_prompt_embeds.update(prompt_embeds, traced, device=self._mesh_device)
+        # Shard the prompt sequence across SP (like spatial) when enabled, so per-block matmuls
+        # run on 1/sp of the prompt tokens; attention gathers prompt q/k/v for the joint SDPA.
+        prompt_embeds_mesh_axes = [None, sp_axis, None] if self._shard_prompt else None
+        self.ts._tt_prompt_embeds.update(
+            prompt_embeds, traced, mesh_axes=prompt_embeds_mesh_axes, device=self._mesh_device
+        )
         self.ts._tt_latents_step.update(latents, traced, mesh_axes=[None, sp_axis, None], device=self._mesh_device)
         self.ts._tt_guidance.update(guidance.unsqueeze(1), traced, device=self._mesh_device)
 

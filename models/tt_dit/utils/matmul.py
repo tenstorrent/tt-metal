@@ -563,6 +563,11 @@ fused_mmrs_configs = {
         (512, 2304, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 4, 8, 2, 2, None, 1),
         (1024, 3072, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 8, 4, 8, 2, 1, None, 1),
         (1024, 2304, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 4, 8, 1, 2, None, 1),
+        # 2048-resolution shapes — BH 4×8 ring sweep (2026-05-30, 2048.md)
+        (4096, 2304, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 3, 8, 1, 2, None, 1),  # 1546.0 μs
+        (128, 2304, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 6, 8, 1, 2, None, 1),  # 595.7 μs
+        (4096, 3072, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 4, 8, 2, 2, None, 1),  # 1642.1 μs
+        (128, 3072, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 6, 8, 1, 2, None, 1),  # 626.2 μs
     },
 }
 

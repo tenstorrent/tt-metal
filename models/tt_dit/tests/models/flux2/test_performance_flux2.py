@@ -100,6 +100,7 @@ def test_flux2_performance(
         dynamic_load=dynamic_load,
         is_fsdp=is_fsdp,
         trace_warmup=True,
+        shard_prompt=True,
     )
 
     # Performance measurement runs
