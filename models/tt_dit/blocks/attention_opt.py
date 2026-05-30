@@ -79,6 +79,7 @@ class Attention(Module):
         sdpa_chunk_size_overrides: dict | None = None,
         per_head_norm: bool = False,
         is_fsdp: bool = False,
+        shard_prompt: bool = False,
     ) -> None:
         super().__init__()
 
@@ -87,6 +88,7 @@ class Attention(Module):
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
+        self.shard_prompt = shard_prompt
         self.padding_config = padding_config
         self.use_spatial_weights_for_prompt = use_spatial_weights_for_prompt
         # True = per-head RMS (head_dim divisor, stats stay local); False = global RMS over
@@ -466,8 +468,14 @@ class Attention(Module):
             assert len(t.shape) == 2
 
         tp_axis = self.parallel_config.tensor_parallel.mesh_axis
+        sp_axis = self.parallel_config.sequence_parallel.mesh_axis
 
         is_ring = self.ccl_manager.topology == ttnn.Topology.Ring
+
+        # When the prompt is sharded across SP, its q/k/v are gathered to the full prompt length
+        # for the joint SDPA (which requires the full joint stream), and the prompt attention
+        # output is re-sharded back across SP afterwards.
+        shard_prompt = self.shard_prompt and self.parallel_config.sequence_parallel.factor > 1
 
         def _split_heads(x: ttnn.Tensor) -> ttnn.Tensor:
             # V only — Q/K head-split is fused inside DistributedRMSNorm.
@@ -527,6 +535,14 @@ class Attention(Module):
 
             if self.context_head_factors is not None:
                 add_q = add_q * self.context_head_factors.data
+
+            if shard_prompt:
+                # Prompt q/k/v are sharded on the sequence dim (dim=2) across SP. The joint SDPA
+                # needs the full prompt stream, so gather them to full prompt length. RoPE has
+                # already been applied per-rank with the matching sharded positions.
+                add_q = self.ccl_manager.all_gather(add_q, dim=2, mesh_axis=sp_axis, use_hyperparams=True)
+                add_k = self.ccl_manager.all_gather(add_k, dim=2, mesh_axis=sp_axis, use_hyperparams=True)
+                add_v = self.ccl_manager.all_gather(add_v, dim=2, mesh_axis=sp_axis, use_hyperparams=True)
         else:
             add_q = add_k = add_v = self.dummy_joint_input
 
@@ -579,6 +595,12 @@ class Attention(Module):
         spatial = ttnn.transformer.concatenate_heads(spatial)
         if prompt is not None:
             prompt = ttnn.transformer.concatenate_heads(prompt)
+
+            if shard_prompt:
+                # The joint SDPA produces the full prompt output replicated across SP ranks.
+                # Re-shard it on the sequence dim (dim=1) so the prompt residual stream stays
+                # sharded for the downstream projection and the next block.
+                prompt = ttnn.mesh_partition(prompt, dim=1, cluster_axis=sp_axis, memory_config=prompt.memory_config())
 
         spatial = self._project_out(
             spatial, self.to_out, addcmul_spatial_residual, addcmul_spatial_gate, is_ring, tp_axis
