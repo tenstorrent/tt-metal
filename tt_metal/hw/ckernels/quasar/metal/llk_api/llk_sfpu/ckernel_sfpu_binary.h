@@ -62,7 +62,7 @@ sfpi_inline sfpi::vFloat float32_to_bf16_rne(sfpi::vFloat in) {
  * @tparam is_fp32_dest_acc_en: enables FP32 DEST accumulation (skips bf16 RNE for DIV)
  * @param iterations: number of sfpi rows to process (runtime, one call per face)
  */
-template <bool APPROXIMATION_MODE, BinaryOp BINOP, bool is_fp32_dest_acc_en = false>
+template <[[maybe_unused]] bool APPROXIMATION_MODE, BinaryOp BINOP, bool is_fp32_dest_acc_en = false>
 inline void calculate_sfpu_binary(
     const int iterations,
     const std::uint32_t dst_index_in0,
@@ -113,7 +113,7 @@ inline void calculate_sfpu_binary(
  * @tparam APPROXIMATION_MODE: forwarded to the op-specific init
  * @tparam BINOP: selects which op's init to run
  */
-template <bool APPROXIMATION_MODE /*unused*/, BinaryOp BINOP>
+template <[[maybe_unused]] bool APPROXIMATION_MODE, BinaryOp BINOP>
 inline void sfpu_binary_init() {
     if constexpr (BINOP == BinaryOp::DIV) {
         _init_sfpu_reciprocal_<APPROXIMATION_MODE>();
