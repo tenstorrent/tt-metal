@@ -170,8 +170,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     for (std::uint32_t batch = 0; batch < 1; ++batch)
     {
         _llk_math_wait_for_dest_available_<dest_sync2>();
-        _llk_math_eltwise_binary_<ELWSUB, BroadcastType::COL, dest_sync2, false, ckernel::MathFidelity::LoFi, EltwiseBinaryReuseDestType::NONE>(
-            ckernel::DEFAULT_TENSOR_SHAPE, 0, false);
+        _llk_math_eltwise_binary_<
+            EltwiseBinaryType::ELWSUB,
+            BroadcastType::COL,
+            dest_sync2,
+            false,
+            ckernel::MathFidelity::LoFi,
+            EltwiseBinaryReuseDestType::NONE>(ckernel::DEFAULT_TENSOR_SHAPE, 0 /*dst_index*/, false /*clear_fp32_dst_acc*/);
         _llk_math_dest_section_done_<dest_sync2, false>();
     }
     // Operation 3: Math Setup

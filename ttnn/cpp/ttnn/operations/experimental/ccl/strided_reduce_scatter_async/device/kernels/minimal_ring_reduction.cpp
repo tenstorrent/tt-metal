@@ -150,7 +150,7 @@ void kernel_main() {
 #ifdef ADDCMUL_B_BROADCAST
                                 mul_bcast_rows_init_short(addcmul_temp_cb, addcmul_b_cb);
 #else
-                                mul_tiles_init(addcmul_temp_cb, addcmul_b_cb, false);
+                                mul_tiles_init(addcmul_temp_cb, addcmul_b_cb, 0, __builtin_LINE());
 #endif
                                 reconfig_data_format(addcmul_temp_cb, addcmul_b_cb);
                                 pack_reconfig_data_format(addcmul_temp_cb);

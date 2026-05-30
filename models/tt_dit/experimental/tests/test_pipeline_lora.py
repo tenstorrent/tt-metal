@@ -1,17 +1,18 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""End-to-end test for Wan2.2 I2V with a LoRA adapter fused into the base.
+"""End-to-end test for Wan2.2 I2V with LoRA adapters fused into the base.
 
-Reads ``LORA_HIGH_PATH`` (required) and ``LORA_LOW_PATH`` (optional) from the
-environment. All inference parameters (steps, guidance scale, boundary ratio)
-are configurable via env vars to support different LoRA types.
+Reads adapter paths via env vars (compatible with the previous experimental
+test): ``LORA_HIGH_PATH``, ``LORA_LOW_PATH``, ``LORA_SCALE``. Set
+``LORA_STACK_HIGH`` and/or ``LORA_STACK_LOW`` to a comma-separated list of
+``path[:scale]`` entries to exercise multi-LoRA stacking. If both single-LoRA
+and stack env vars are set, the stack form wins.
 """
-from __future__ import annotations
-
 import itertools
 import os
+from typing import List, Tuple
 
 import numpy as np
 import PIL
@@ -20,9 +21,43 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.tt_dit.experimental.pipelines.pipeline_wan_lora import WanLoraPipelineI2V
+from models.tt_dit.experimental.pipelines.pipeline_wan_lora import LoRASpec, WanPipelineI2VLora
 from models.tt_dit.pipelines.wan.pipeline_wan_i2v import ImagePrompt
-from models.tt_dit.utils.test import ring_params
+from models.tt_dit.utils.test import line_params, ring_params
+
+
+def _parse_stack(env_val: str) -> List[LoRASpec]:
+    """Parse ``path[:scale],path[:scale]`` into a LoRASpec list."""
+    out: List[LoRASpec] = []
+    for entry in env_val.split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        if ":" in entry:
+            path, scale_str = entry.rsplit(":", 1)
+            out.append(LoRASpec(path.strip(), float(scale_str)))
+        else:
+            out.append(LoRASpec(entry))
+    return out
+
+
+def _resolve_lora_args() -> Tuple[List[LoRASpec], List[LoRASpec], float]:
+    stack_high = os.environ.get("LORA_STACK_HIGH")
+    stack_low = os.environ.get("LORA_STACK_LOW")
+    single_high = os.environ.get("LORA_HIGH_PATH")
+    single_low = os.environ.get("LORA_LOW_PATH")
+    scale = float(os.environ.get("LORA_SCALE", "1.0"))
+
+    if stack_high or stack_low:
+        return (
+            _parse_stack(stack_high) if stack_high else [],
+            _parse_stack(stack_low) if stack_low else [],
+            scale,
+        )
+
+    high = [LoRASpec(single_high, scale)] if single_high else []
+    low = [LoRASpec(single_low, scale)] if single_low else []
+    return high, low, scale
 
 
 @pytest.mark.parametrize(
@@ -32,10 +67,10 @@ from models.tt_dit.utils.test import ring_params
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
-        # BH Galaxy 4x8 Ring -- canonical config for the LoRA bringup.
+        [(2, 4), (2, 4), 1, 0, 2, True, line_params, ttnn.Topology.Linear, False],
         [(4, 8), (4, 8), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
     ],
-    ids=["bh_4x8sp1tp0_ring"],
+    ids=["bh_2x4sp1tp0", "bh_4x8sp1tp0_ring"],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
@@ -62,8 +97,12 @@ def test_pipeline_inference(
     is_fsdp,
     no_prompt,
 ):
-    if not os.environ.get("LORA_HIGH_PATH"):
-        pytest.skip("LORA_HIGH_PATH env var is required for this test (LORA_LOW_PATH is optional).")
+    lora_high, lora_low, scale = _resolve_lora_args()
+    if not lora_high and not lora_low:
+        pytest.skip(
+            "Set LORA_HIGH_PATH / LORA_LOW_PATH (single-LoRA) or "
+            "LORA_STACK_HIGH / LORA_STACK_LOW (multi-LoRA) to run."
+        )
 
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
@@ -76,9 +115,9 @@ def test_pipeline_inference(
     num_inference_steps = int(os.environ.get("NUM_STEPS", "40"))
     guidance_scale = float(os.environ.get("GUIDANCE_SCALE", "3.5"))
     guidance_scale_2 = float(os.environ.get("GUIDANCE_SCALE_2", str(guidance_scale)))
-    lora_scale = float(os.environ.get("LORA_SCALE", "1.0"))
+    boundary_ratio = float(os.environ.get("BOUNDARY_RATIO", "0.875"))
 
-    pipeline = WanLoraPipelineI2V.create_pipeline(
+    pipeline = WanPipelineI2VLora.create_pipeline(
         mesh_device=mesh_device,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
@@ -89,15 +128,18 @@ def test_pipeline_inference(
         height=height,
         width=width,
         num_frames=num_frames,
+        boundary_ratio=boundary_ratio,
+        lora_high=lora_high if lora_high else None,
+        lora_low=lora_low if lora_low else None,
     )
 
-    prompt = "A golden retriever running on a sandy beach, waves in the background"
+    prompt = os.environ.get("PROMPT", "A golden retriever running on a sandy beach, waves in the background")
 
     def run(*, prompt, number, seed):
         logger.info(f"Running LoRA inference with prompt: '{prompt}'")
         logger.info(
             f"Parameters: {height}x{width}, {num_frames} frames, {num_inference_steps} steps, "
-            f"lora_scale={lora_scale}"
+            f"scale={scale}, stack_high={len(lora_high)}, stack_low={len(lora_low)}"
         )
 
         with torch.no_grad():
@@ -120,10 +162,7 @@ def test_pipeline_inference(
         else:
             frames = result[0] if isinstance(result, tuple) else result
 
-        logger.info("LoRA inference completed successfully")
         logger.info(f"  Output shape: {frames.shape if hasattr(frames, 'shape') else 'Unknown'}")
-        logger.info(f"  Output type: {type(frames)}")
-
         if isinstance(frames, np.ndarray):
             logger.info(f"  Video data range: [{frames.min():.3f}, {frames.max():.3f}]")
         elif isinstance(frames, torch.Tensor):

@@ -196,6 +196,14 @@
 #include "api/compute/eltwise_unary/polygamma.h"
 #endif
 
+#if SFPU_OP_MISH_INCLUDE
+#include "api/compute/eltwise_unary/mish.h"
+#endif
+
 #if SFPU_OP_COMPUTE_KERNEL_API_INCLUDE
 #include "api/compute/compute_kernel_api.h"
+#endif
+
+#if SFPU_OP_BINARY_DIV_INCLUDE
+#include "api/compute/eltwise_binary_sfpu.h"
 #endif

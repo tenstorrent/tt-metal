@@ -62,4 +62,11 @@ Tensor lerp(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& output = std::nullopt);
 
+Tensor snake_beta(
+    const Tensor& input_tensor,
+    const Tensor& alpha,
+    const Tensor& beta,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
 }  // namespace ttnn

@@ -17,7 +17,7 @@ from helpers.golden_generators import TilizeGolden, get_golden_generator
 from helpers.llk_params import DestAccumulation, format_dict
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli
+from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     LOOP_FACTOR,
@@ -263,8 +263,8 @@ def test_fast_tilize_overflow_guard(formats, dest_acc, dimensions):
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
-        const_face=True,
-        const_value_A=0.5,
+        spec_A=StimuliSpec.constant(0.5),
+        spec_B=StimuliSpec.constant(1),
     )
 
     configuration = TestConfig(
@@ -308,7 +308,7 @@ def test_fast_tilize_overflow_guard(formats, dest_acc, dimensions):
     last_g_addr = (
         stim.buf_res_addr + (tile_count + guard_tiles - 1) * stim.buf_res_tile_size
     )
-    core_loc = "0,0"  # already "x,y" string
+    core_loc = TestConfig.TENSIX_LOCATION
     raw = read_from_device(core_loc, last_g_addr, num_bytes=10)
     marker = struct.unpack_from("<H", raw, 0)[0]
     assert (

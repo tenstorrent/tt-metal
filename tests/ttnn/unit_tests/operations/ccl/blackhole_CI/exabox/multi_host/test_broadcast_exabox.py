@@ -5,7 +5,7 @@
 """Broadcast tests for multi-galaxy exabox mesh configurations (DUAL_BH / QUAD_BH).
 
 Tests cover:
-- Sync API (ttnn.broadcast) on 8x4, 16x4, and 32x4 meshes
+- Sync API (ttnn.broadcast) on 16x4 and 32x4 meshes
 - FABRIC_2D fabric config (required for 2D-mesh broadcast; FABRIC_1D hangs the op)
 - Both cluster axes (0 and 1)
 - DRAM and L1 memory configs
@@ -188,65 +188,6 @@ FABRIC_TOPOLOGY_COMBOS = [
     ids=["small_dram", "small_l1"],
 )
 def test_broadcast_16x4(
-    mesh_device,
-    cluster_axis,
-    sender_coord_tuple,
-    topology,
-    enable_trace,
-    input_shape,
-    dtype,
-    buffer_type,
-    num_links,
-):
-    _run_broadcast_test(
-        mesh_device,
-        input_shape,
-        sender_coord_tuple,
-        cluster_axis,
-        buffer_type,
-        dtype,
-        topology,
-        enable_trace,
-        num_links=num_links,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Test: sync broadcast on 8x4 mesh (SINGLE_BH)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.requires_device(["SINGLE_BH"])
-@pytest.mark.parametrize(
-    "device_params, topology",
-    [
-        pytest.param(
-            {"fabric_config": ttnn.FabricConfig.FABRIC_2D, "trace_region_size": 90112},
-            ttnn.Topology.Linear,
-            id="fabric_2d-linear",
-        ),
-    ],
-    indirect=["device_params"],
-)
-@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
-@pytest.mark.parametrize(
-    "cluster_axis, sender_coord_tuple",
-    [
-        pytest.param(0, (3, 0), id="axis0_sender_row3"),
-        pytest.param(1, (0, 2), id="axis1_sender_col2"),
-    ],
-)
-@pytest.mark.parametrize("num_links", [1], ids=["1link"])
-@pytest.mark.parametrize("enable_trace", [False])
-@pytest.mark.parametrize(
-    "input_shape, dtype, buffer_type",
-    [
-        ([1, 1, 32, 224], ttnn.bfloat16, ttnn.BufferType.DRAM),
-        ([1, 1, 32, 224], ttnn.bfloat16, ttnn.BufferType.L1),
-    ],
-    ids=["small_dram", "small_l1"],
-)
-def test_broadcast_8x4(
     mesh_device,
     cluster_axis,
     sender_coord_tuple,

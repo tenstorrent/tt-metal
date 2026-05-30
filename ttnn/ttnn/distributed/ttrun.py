@@ -1495,6 +1495,7 @@ def get_rank_environment(
             ),
             # Pass the original CWD to subprocesses so they can resolve relative paths correctly
             "TT_RUN_ORIGINAL_CWD": str(ORIGINAL_CWD),
+            "TT_RUN_RANK": str(binding.rank),  # Expose rank as an environment variable for convenience
         }
     )
 

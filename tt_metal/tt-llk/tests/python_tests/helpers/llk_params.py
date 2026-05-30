@@ -549,6 +549,28 @@ class TopKSortDirection(Enum):
     Ascending = 1
 
 
+class VectorMode(Enum):
+    """Mirrors ckernel::VectorMode in tt_llk_quasar/llk_lib/llk_defs.h.
+
+    Selects which faces an SFPU dispatch processes:
+      * ``None_``: invoke the SFPU kernel once with no face advances (covers face 0 only).
+      * ``R``: faces 0 and 1 (top face-row of the tile).
+      * ``C``: faces 0 and 2 (left face-column of the tile).
+      * ``RC``: all four faces — the default.
+    """
+
+    None_ = 0
+    R = 1
+    C = 2
+    RC = 4
+
+    @property
+    def cpp_enum_value(self):
+        return (
+            f"ckernel::VectorMode::{'None' if self == VectorMode.None_ else self.name}"
+        )
+
+
 class GoldenType(Enum):
     L1_GOLDEN = "L1_GOLDEN"
     MASTER_GOLDEN = "MASTER_GOLDEN"

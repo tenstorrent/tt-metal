@@ -55,26 +55,10 @@ void print_tile_rows(
     uint16_t end_row = 32,
     uint8_t start_col = 0,
     uint8_t end_col = 32) {
-    DPRINT << "cb_idx: " << cb_idx << " tile_idx: " << tile_idx << ENDL();
-    DEVICE_PRINT("cb_idx: {} tile_idx: {}\n", cb_idx, tile_idx);
-    DPRINT << "======" << ENDL();
-    DEVICE_PRINT("======\n");
+    DPRINT("cb_idx: {} tile_idx: {}\n", cb_idx, tile_idx);
+    DPRINT("======\n");
     for (uint16_t r = start_row; r < end_row; ++r) {
-        DPRINT << (uint)r << " : "
-               << TileSlice(
-                      cb_idx,
-                      tile_idx,
-                      SliceRange{
-                          .h0 = (uint8_t)r,
-                          .h1 = (uint8_t)(r + 1),
-                          .hs = (uint8_t)1,
-                          .w0 = (uint8_t)start_col,
-                          .w1 = (uint8_t)end_col,
-                          .ws = (uint8_t)1},
-                      true,
-                      untilize)
-               << ENDL();
-        DEVICE_PRINT(
+        DPRINT(
             "{} : {}\n",
             r,
             TileSlice(
@@ -90,8 +74,7 @@ void print_tile_rows(
                 true,
                 untilize));
     }
-    DPRINT << "++++++" << ENDL();
-    DEVICE_PRINT("++++++\n");
+    DPRINT("++++++\n");
 }
 
 // Initialize the expert activation buffer with default values:
@@ -201,11 +184,8 @@ FORCE_INLINE void print_expert_activation_buffer(
 
     volatile tt_l1_ptr uint32_t* buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_id));
 
-    DPRINT << "=== Expert Activation Buffer ===" << ENDL();
-    DEVICE_PRINT("=== Expert Activation Buffer ===\n");
-    DPRINT << "Row format: [token_id | act_0..act_" << (experts_per_device - 1) << " | score_0..score_"
-           << (experts_per_device - 1) << "]" << ENDL();
-    DEVICE_PRINT(
+    DPRINT("=== Expert Activation Buffer ===\n");
+    DPRINT(
         "Row format: [token_id | act_0..act_{} | score_0...score_{}]\n",
         experts_per_device - 1,
         experts_per_device - 1);
@@ -215,36 +195,27 @@ FORCE_INLINE void print_expert_activation_buffer(
 
         // Token ID (stored as uint32_t, but -1 means unset)
         uint32_t token_id = buffer[base];
-        DPRINT << "T" << t << ": [";
-        DEVICE_PRINT("T{}: [", t);
+        DPRINT("T{}: [", t);
         if (token_id == static_cast<uint32_t>(-1)) {
-            DPRINT << "-1";
-            DEVICE_PRINT("-1");
+            DPRINT("-1");
         } else {
-            DPRINT << token_id;
-            DEVICE_PRINT("{}", token_id);
+            DPRINT("{}", token_id);
         }
-        DPRINT << " |";
-        DEVICE_PRINT(" |");
+        DPRINT(" |");
 
         // Expert activations (k+1 means not activated, 0..k-1 means activated with that k-index)
         for (uint32_t e = 0; e < experts_per_device; e++) {
-            DPRINT << " " << buffer[base + 1 + e];
-            DEVICE_PRINT(" {}", buffer[base + 1 + e]);
+            DPRINT(" {}", buffer[base + 1 + e]);
         }
-        DPRINT << " |";
-        DEVICE_PRINT(" |");
+        DPRINT(" |");
 
         // Scores
         for (uint32_t e = 0; e < experts_per_device; e++) {
-            DPRINT << " " << BF16(static_cast<uint16_t>(buffer[base + 1 + experts_per_device + e]));
-            DEVICE_PRINT(" {}", bf16_t(static_cast<uint16_t>(buffer[base + 1 + experts_per_device + e])));
+            DPRINT(" {}", bf16_t(static_cast<uint16_t>(buffer[base + 1 + experts_per_device + e])));
         }
-        DPRINT << "]" << ENDL();
-        DEVICE_PRINT("]\n");
+        DPRINT("]\n");
     }
-    DPRINT << "================================" << ENDL();
-    DEVICE_PRINT("================================\n");
+    DPRINT("================================\n");
 }
 
 // Print the E-T buffer (Expert-Token buffer)
@@ -253,31 +224,25 @@ template <uint32_t experts_per_device, uint32_t tokens, uint32_t entry_size>
 void print_e_t_buffer(uint32_t cb_id) {
     uint32_t buffer_base = get_read_ptr(cb_id);
 
-    DPRINT << "=== E-T Buffer (Expert -> Tokens) ===" << ENDL();
-    DEVICE_PRINT("=== E-T Buffer (Expert -> Tokens) ===\n");
+    DPRINT("=== E-T Buffer (Expert -> Tokens) ===\n");
     for (uint32_t e = 0; e < experts_per_device; e++) {
-        DPRINT << "Expert " << e << ": [";
-        DEVICE_PRINT("Expert {}: [", e);
+        DPRINT("Expert {}: [", e);
         uint32_t expert_base = buffer_base + e * tokens * entry_size;
         bool first = true;
         for (uint32_t i = 0; i < tokens; i++) {
             uint32_t token_id = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(expert_base + i * entry_size);
             if (token_id == static_cast<uint32_t>(-1)) {
-                DPRINT << " -1]" << ENDL();
-                DEVICE_PRINT(" -1]\n");
+                DPRINT(" -1]\n");
                 break;
             }
             if (!first) {
-                DPRINT << ", ";
-                DEVICE_PRINT(", ");
+                DPRINT(", ");
             }
-            DPRINT << token_id;
-            DEVICE_PRINT("{}", token_id);
+            DPRINT("{}", token_id);
             first = false;
         }
     }
-    DPRINT << "======================================" << ENDL();
-    DEVICE_PRINT("======================================\n");
+    DPRINT("======================================\n");
 }
 
 void kernel_main() {
@@ -377,6 +342,10 @@ void kernel_main() {
     constexpr uint32_t previous_chunk_sent_semaphore_id =
         get_named_compile_time_arg_val("previous_chunk_sent_semaphore_id");
     constexpr uint32_t combine_sync_semaphore_id = get_named_compile_time_arg_val("combine_sync_semaphore_id");
+
+    // When compute_only=1, the fused selective_reduce_combine path is bypassed and no combine
+    // kernels run on combine cores. Skip the metadata-ready signal to combine cores.
+    constexpr bool compute_only = get_named_compile_time_arg_val("compute_only") == 1;
 
     uint32_t partial_metadata_ready_semaphore_addr = get_semaphore(partial_metadata_ready_semaphore_id);
     uint32_t metadata_ready_semaphore_addr = get_semaphore(metadata_ready_semaphore_id);
@@ -518,15 +487,11 @@ void kernel_main() {
         uint16_t expert_mesh_coord = expert_to_device_map[i];
         if (expert_mesh_coord == linearized_mesh_coord) {
             if (local_expert_count >= experts_per_device) {
-                // DEBUG: DPRINT << "Error: more than " << experts_per_device << " experts on device " <<
-                // linearized_mesh_coord << ENDL();
-                // DEBUG: DEVICE_PRINT("Error: more than {} experts on device {}\n", experts_per_device,
+                // DEBUG: DPRINT("Error: more than {} experts on device {}\n", experts_per_device,
                 // linearized_mesh_coord);
                 ASSERT(false);
             }
-            // DEBUG: DPRINT << "Device " << linearized_mesh_coord << " : Local expert " << local_expert_count << " is "
-            // << i << ENDL();
-            // DEBUG: DEVICE_PRINT("Device {} : Local expert {} is {}\n", linearized_mesh_coord, local_expert_count, i);
+            // DEBUG: DPRINT("Device {} : Local expert {} is {}\n", linearized_mesh_coord, local_expert_count, i);
 
             local_expert_ids[local_expert_count] = i;
             local_expert_count++;
@@ -953,12 +918,14 @@ void kernel_main() {
         noc_async_write_barrier();
 
         // signal to A2A combine that metadata is available. Separate signal from matmul because e_t write is also
-        // needed.
-        const uint64_t combine_sync_noc_addr =
-            safe_get_noc_addr(combine_sync_noc_x, combine_sync_noc_y, combine_sync_addr, 1);
-        noc_semaphore_inc(combine_sync_noc_addr, 1);
+        // needed. Skipped in compute_only mode (no combine kernels listening).
+        if constexpr (!compute_only) {
+            const uint64_t combine_sync_noc_addr =
+                safe_get_noc_addr(combine_sync_noc_x, combine_sync_noc_y, combine_sync_addr, 1);
+            noc_semaphore_inc(combine_sync_noc_addr, 1);
 
-        noc_async_atomic_barrier();
+            noc_async_atomic_barrier();
+        }
     }
 
     // DEBUG
