@@ -834,13 +834,14 @@ def get_model_traced_mesh_shape() -> Tuple[int, int]:
     chips).  The tracer records 2-D ``tensor_placement`` metadata that is
     only reproduced when the sweep re-executes on a mesh device.
 
-    Returns ``MESH_DEVICE_SHAPE`` from the environment when set, otherwise
-    auto-detects from available hardware so that the sweep device topology
-    matches the trace topology.
+    Priority: MESH_DEVICE_SHAPE env var > master JSON > auto-detect.
     """
-    # Read mesh shape from master JSON matching current hardware.
-    # The master may contain configs from multiple devices (N300 + BH).
-    # Only use mesh shape from configs whose device_series matches this machine.
+    # Env var takes priority — CI sets this per batch to match traced topology.
+    shape = get_mesh_shape()
+    if shape:
+        return shape
+
+    # Fall back to master JSON, filtering by current arch AND card count.
     try:
         _master_path = os.environ.get("TTNN_MASTER_JSON_PATH")
         if not _master_path:
@@ -876,14 +877,19 @@ def get_model_traced_mesh_shape() -> Tuple[int, int]:
                         _execs = _cfg_ms.get("executions", [])
                         if _execs and isinstance(_execs[0], dict):
                             _mi_ms = _execs[0].get("machine_info", {})
-                    # Filter: only use configs matching current arch
+                    # Filter: only use configs matching current arch AND device count.
                     _board = str(_mi_ms.get("board_type", "")).lower()
-                    if _is_bh and "blackhole" not in _board and "wormhole" not in _board:
-                        pass  # no board info, use anyway
-                    elif _is_bh and "wormhole" in _board:
-                        continue  # skip N300/WH configs on BH
+                    if _is_bh and "wormhole" in _board:
+                        continue
                     elif _is_wh and "blackhole" in _board:
-                        continue  # skip BH configs on WH
+                        continue
+
+                    # Filter by device count so N300 (1-2 devices) doesn't
+                    # pick up Galaxy (32) or T3K (8) mesh shapes.
+                    _num_devices = ttnn.get_num_devices()
+                    _cfg_card_count = _mi_ms.get("card_count")
+                    if _cfg_card_count is not None and int(_cfg_card_count) > _num_devices:
+                        continue
 
                     _ms_val = _mi_ms.get("mesh_device_shape")
                     if _ms_val:
@@ -894,12 +900,8 @@ def get_model_traced_mesh_shape() -> Tuple[int, int]:
                         if isinstance(_ms_val, list) and len(_ms_val) == 2:
                             return tuple(_ms_val)
     except Exception:
-        pass  # Intentionally ignored: master config parsing is best-effort, fall through to env var / auto-detect
-    # Env var override (used when master JSON is not available)
-    shape = get_mesh_shape()
-    if shape:
-        return shape
-    # Auto-detect mesh shape from available hardware when env var not set.
+        pass  # Intentionally ignored: master config parsing is best-effort, fall through to auto-detect
+    # Auto-detect mesh shape from available hardware.
     # This ensures model-traced sweeps on Galaxy (32 devices) create a [4, 8]
     # mesh matching the topology used during model tracing.
     try:
@@ -917,6 +919,41 @@ def get_model_traced_mesh_shape() -> Tuple[int, int]:
     return (1, 1)
 
 
+def _replicated_single_copy(device_tensors, to_torch_fn):
+    """Return device 0's torch tensor iff every device holds identical data.
+
+    Trace-validation inputs are built with ``replicate_with_topology``, which
+    copies identical data to every chip while stamping a Shard topology. When
+    such a tensor is gathered with ``ConcatMesh*ToTensor`` the N identical
+    per-device copies are concatenated, blowing the host tensor up by the mesh
+    factor (e.g. 8x) before golden tiling and PCC — the dominant cost (and OOM /
+    timeout risk) for large vectors whose "sharded" dim can't actually be split
+    (e.g. a size-1 dim over 8 devices).
+
+    When all devices are identical the shard is effectively a replicate, so a
+    single copy is numerically equivalent for PCC (concatenating/tiling both the
+    actual and golden by the same factor leaves the correlation unchanged).
+    Returns None when the data genuinely differs across devices (real shard) so
+    the caller falls back to the normal concat path.
+    """
+    if not device_tensors or len(device_tensors) <= 1:
+        return None
+    try:
+        ref = to_torch_fn(device_tensors[0])
+    except Exception:
+        return None
+    for t in device_tensors[1:]:
+        try:
+            other = to_torch_fn(t)
+        except Exception:
+            return None
+        identical = ref.shape == other.shape and torch.equal(ref, other)
+        del other
+        if not identical:
+            return None
+    return ref
+
+
 def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None) -> torch.Tensor:
     """Convert a TTNN mesh tensor back to torch, reassembling shards by topology.
 
@@ -924,6 +961,10 @@ def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None) -> t
     according to the tensor's TensorTopology placements. Mixed
     [Replicate, Shard(d)] cases concatenate only the unique row/col of devices
     along the shard dim. A caller-supplied mesh_composer overrides this.
+
+    Tensors whose Shard topology is backed by identical per-device data (the
+    trace-validation replicate path) collapse to a single copy to avoid an
+    N-fold host blow-up during gather.
     """
 
     def _get_torch_dtype(t):
@@ -1013,6 +1054,15 @@ def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None) -> t
             return _to_torch_safe(device_tensors[0])
 
     if len(placements) == 2 and len(dist_dims) == 2 and all(_is_shard(p) for p in placements):
+        # When the Shard topology is backed by identical per-device data (the
+        # replicate_with_topology trace-validation path), concatenating the shards
+        # just duplicates the same buffer mesh-factor times (e.g. a size-1 dim
+        # "sharded" over 8 chips -> 8x host tensor). Collapse to one copy instead;
+        # PCC is unchanged and we avoid the blow-up / OOM / 300s-timeout in CI.
+        single = _replicated_single_copy(device_tensors, _to_torch_safe)
+        if single is not None:
+            return single
+
         try:
             d0 = placements[0].dim
             d1 = placements[1].dim
@@ -1024,6 +1074,10 @@ def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None) -> t
             pass
 
     if len(placements) == 2 and len(dist_dims) == 2:
+        single = _replicated_single_copy(device_tensors, _to_torch_safe)
+        if single is not None:
+            return single
+
         rows, cols = dist_dims[0], dist_dims[1]
         if _is_shard(placements[0]) and not _is_shard(placements[1]):
             shard_dim = placements[0].dim
@@ -1050,6 +1104,9 @@ def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None) -> t
 
     shard_p = next((p for p in placements if _is_shard(p)), None)
     if shard_p is not None:
+        single = _replicated_single_copy(device_tensors, _to_torch_safe)
+        if single is not None:
+            return single
         try:
             comp = ttnn.ConcatMeshToTensor(device, dim=shard_p.dim)
             result = ttnn.to_torch(ttnn_tensor, mesh_composer=comp)
