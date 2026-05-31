@@ -97,3 +97,27 @@ class Qwen35ModelArgs:
         else:
             suffix = "tensor_cache_bf16"
         return Path(self.checkpoint_dir) / suffix
+
+    def load_state_dict(self):
+        """Load + remap this checkpoint's HF safetensors. The config owns weight loading.
+
+        Behavior-identical to the load that previously lived in Qwen35Model.from_pretrained:
+        glob the sharded safetensors, read every tensor on CPU, then run the Qwen3.5 remap.
+        """
+        import glob
+
+        from safetensors import safe_open
+
+        from models.demos.blackhole.qwen3_5_9b.tt.weight_mapping import remap_qwen35_state_dict
+
+        files = sorted(glob.glob(f"{self.checkpoint_dir}/model.safetensors-*.safetensors"))
+        if not files:
+            raise FileNotFoundError(f"No safetensors matching '{self.checkpoint_dir}/model.safetensors-*.safetensors'")
+        raw_state_dict = {}
+        for path in files:
+            with safe_open(path, framework="pt", device="cpu") as f:
+                for key in f.keys():
+                    raw_state_dict[key] = f.get_tensor(key)
+        state_dict = remap_qwen35_state_dict(raw_state_dict)
+        del raw_state_dict
+        return state_dict
