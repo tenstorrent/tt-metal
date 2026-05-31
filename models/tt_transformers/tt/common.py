@@ -470,11 +470,10 @@ def get_prefill_rot_mat(head_dim, mesh_device, seq_len, theta, scale_factor, ori
 
 
 #  Add-Multiply method of rotary embeddings for prefill
-def get_rot_transformation_mat(dhead=32):
-    # ROPE op uses a single tile
-    dhead = 32
+def get_rot_transformation_mat():
+    # ROPE op uses a single tile (always 32)
     # Delegate to TTTv2 implementation for consistency
-    return get_rot_transformation_mat_v2(dhead)
+    return get_rot_transformation_mat_v2()
 
 
 def get_single_rot_mat(
