@@ -1649,6 +1649,7 @@ def autofill_stubs(
         # NEW components (no canonical impl, no tt_reuse_target) follow
         # the existing op-synth/torch-fallback path unchanged.
         _tt_reuse_target = comp.get("tt_reuse_target")
+        _wrote_canonical_import = False
         if _tt_reuse_target and isinstance(_tt_reuse_target, str) and _tt_reuse_target.strip():
             canonical_body = _render_canonical_import_stub(
                 component_name=comp["name"],
@@ -1658,6 +1659,7 @@ def autofill_stubs(
             stub_path.write_text(canonical_body)
             actions.append((comp["name"], f"canonical-import:{_tt_reuse_target}"))
             wrote = True
+            _wrote_canonical_import = True
             stale_manifest = demo_dir / "_stubs" / f"{safe}.opplan.json"
             if stale_manifest.is_file():
                 try:
@@ -1680,12 +1682,35 @@ def autofill_stubs(
                     stale_manifest.unlink()
                 except Exception:
                     pass
-        _emit_autofill_smoke_test(
-            demo_dir=demo_dir,
-            component_name=comp["name"],
-            model_id=model_id,
-            repo_root=repo_root,
-        )
+        # Test emission: SMOKE for torch-fallback stubs (the default
+        # autofill path) so the build-time test passes immediately and
+        # the LLM can iterate later. But for canonical-import stubs
+        # (Option 2), the stub starts at NotImplementedError — there is
+        # no "passes immediately" semantics — and the only meaningful
+        # validation is a REAL PCC test against the captured HF tensors.
+        # Emitting a SMOKE test for canonical-import stubs creates a
+        # chicken-and-egg: `target_newly_graduated` requires the test
+        # NOT be SMOKE, but the SMOKE-to-PCC upgrade requires graduation.
+        # Cut the loop by emitting a real PCC test from the start when
+        # we know the stub is canonical-import.
+        if _wrote_canonical_import:
+            _emit_pcc_template(
+                demo_dir=demo_dir,
+                component_name=comp["name"],
+                model_id=model_id,
+                hf_reference=comp.get("hf_reference") or "",
+                new_shape=comp.get("new_shape") or {},
+                repo_root=repo_root,
+                overwrite=True,
+                discovered_submodule_path=comp.get("submodule_path"),
+            )
+        else:
+            _emit_autofill_smoke_test(
+                demo_dir=demo_dir,
+                component_name=comp["name"],
+                model_id=model_id,
+                repo_root=repo_root,
+            )
     return actions
 
 
