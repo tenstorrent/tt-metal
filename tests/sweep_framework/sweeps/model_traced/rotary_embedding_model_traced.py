@@ -244,7 +244,7 @@ def run(
         input_tensor_a,
         cos_cache_tt,
         sin_cache_tt,
-        token_idx=token_idx,
+        token_index=token_idx,
         **op_kwargs,
     )
 
