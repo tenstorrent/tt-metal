@@ -6,7 +6,7 @@ import inspect
 import subprocess
 import shutil
 from pathlib import Path
-from typing import Any, Optional, Tuple, Dict
+from typing import Any, List, Optional, Tuple, Dict
 
 from framework.sweeps_logger import sweeps_logger as logger
 from tracy.common import PROFILER_LOGS_DIR
@@ -45,9 +45,87 @@ def clear_disk_kernel_cache() -> None:
         logger.warning(f"Failed to clear disk kernel cache: {e}")
 
 
+def _as_number(value):
+    """Return (number, True) if value can be parsed as a float, else (value, False)."""
+    try:
+        return float(value), True
+    except (TypeError, ValueError):
+        return value, False
+
+
+def _reduce_perf_rows(rows: List[dict], reducer) -> dict:
+    """Combine perf-row dicts field-by-field, applying `reducer` to numeric fields.
+
+    Non-numeric fields keep the first row's value. String-formatted numbers are kept
+    as strings (matching the device report's CSV formatting) so downstream consumers
+    (simplify_device_perf / roofline message) behave exactly as before.
+    """
+    if not rows:
+        return {}
+    result = dict(rows[0])
+    for row in rows[1:]:
+        for key, value in row.items():
+            num, is_num = _as_number(value)
+            if not is_num:
+                if key not in result:
+                    result[key] = value
+                continue
+            base, base_is_num = _as_number(result.get(key))
+            if not base_is_num:
+                result[key] = value
+                continue
+            combined = reducer(base, num)
+            result[key] = str(combined) if isinstance(value, str) else combined
+    return result
+
+
+def aggregate_device_perf(opPerfData: List[dict], num_devices: int = 1) -> Optional[dict]:
+    """Collapse raw per-(op, device) profiler rows into a single perf dict.
+
+    ``get_device_data_generate_report`` returns device-only rows that DROP the device
+    id / op-code columns, but it emits them grouped by device in contiguous blocks (it
+    iterates each device, then that device's ops in chronological order). On a mesh the
+    same program runs on every device, so for ``num_devices`` devices the row list is
+    ``num_devices`` consecutive blocks of ``ops_per_device`` rows each, with the i-th
+    row in every block referring to the same logical op.
+
+    Aggregation is therefore two stages:
+      1. Across devices: reduce the i-th op of every device block with ``max`` — a mesh
+         op only completes once its slowest device finishes.
+      2. Across ops: sum the per-op representatives, matching the original
+         single-device "composite op" behaviour (a test may dispatch several ops).
+
+    For a single device (or when the row count is not a clean multiple of
+    ``num_devices``) this falls back to the original logic: one op returns its row,
+    multiple rows are summed as composite ops.
+    """
+    if not opPerfData:
+        return None
+
+    n = len(opPerfData)
+    if num_devices and num_devices > 1 and n % num_devices == 0:
+        ops_per_device = n // num_devices
+        rows = []
+        for i in range(ops_per_device):
+            ith_op_across_devices = [opPerfData[d * ops_per_device + i] for d in range(num_devices)]
+            rows.append(_reduce_perf_rows(ith_op_across_devices, max))
+        logger.info(f"Aggregating device perf: {ops_per_device} op(s) across {num_devices} devices ({n} rows).")
+    else:
+        if num_devices and num_devices > 1:
+            logger.warning(
+                f"Device perf rows ({n}) not divisible by device count ({num_devices}); "
+                "summing all rows without per-device collapse."
+            )
+        rows = opPerfData
+
+    if len(rows) == 1:
+        return rows[0]
+    return _reduce_perf_rows(rows, lambda a, b: a + b)
+
+
 def gather_single_test_perf(device, test_passed):
-    if device is None or device.get_num_devices() > 1:
-        logger.error("Multi-device perf is not supported. Failing.")
+    if device is None:
+        logger.error("Device is None, cannot gather device perf. Failing.")
         return None
 
     # Read profiler data from device
@@ -77,23 +155,13 @@ def gather_single_test_perf(device, test_passed):
             "DEVICE NCRISC FW DURATION [ns]": 0,
         }
         return dummy_data
-    elif len(opPerfData) > 1:
-        logger.info("Composite op detected in device perf measurement. Will aggregate results.")
+    else:
         try:
-            for key in opPerfData[0].keys():
-                value = opPerfData[0][key]
-                for i in range(1, len(opPerfData)):
-                    if key in opPerfData[i]:
-                        if type(value) == str:
-                            opPerfData[0][key] = str(float(value) + float(opPerfData[i][key]))
-                        else:
-                            opPerfData[0][key] = value + opPerfData[i][key]
-            return opPerfData[0]
+            num_devices = device.get_num_devices() if hasattr(device, "get_num_devices") else 1
+            return aggregate_device_perf(opPerfData, num_devices)
         except Exception as e:
             logger.info(e)
             return None
-    else:
-        return opPerfData[0]
 
 
 def prepare_program_cache_for_comparison(device) -> None:

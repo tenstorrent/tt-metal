@@ -15,8 +15,6 @@ from dataclasses import dataclass
 from multiprocessing import Process
 from pathlib import Path
 from queue import Empty
-import signal
-import time
 
 # third party
 import enlighten
@@ -333,21 +331,6 @@ def run(test_module_name, input_queue, output_queue, config: SweepsConfig):
 
 
 MAX_RETRIES = 1
-_CHILD_POLL_INTERVAL = 0.5
-
-
-class ChildCrash(Exception):
-    """Raised when a child process dies unexpectedly (e.g. segfault)."""
-
-    def __init__(self, exitcode):
-        self.exitcode = exitcode
-        sig = -exitcode if exitcode < 0 else exitcode
-        sig_name = ""
-        try:
-            sig_name = f" ({signal.Signals(sig).name})"
-        except (ValueError, AttributeError):
-            pass
-        super().__init__(f"child process died with exit code {exitcode}{sig_name}")
 
 
 def _create_main_proc_runner(module_name, input_queue, output_queue, config):
@@ -426,7 +409,7 @@ def _attempt_vector(
     """Send a single vector to the child process and collect the result.
 
     Returns (response_tuple, p) on success.
-    Raises Empty on timeout, ChildCrash if the child process dies.
+    Raises Empty on timeout.
     """
     if child_mode and (p is None or not p.is_alive()):
         p = Process(target=run, args=(module_name, input_queue, output_queue, config))
@@ -436,19 +419,6 @@ def _attempt_vector(
         main_proc_runner(test_vector)
     else:
         input_queue.put(test_vector)
-
-    if child_mode and p is not None:
-        deadline = time.monotonic() + timeout
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise Empty()
-            try:
-                response = output_queue.get(block=True, timeout=min(remaining, _CHILD_POLL_INTERVAL))
-                return response, p
-            except Empty:
-                if not p.is_alive():
-                    raise ChildCrash(p.exitcode)
 
     response = output_queue.get(block=True, timeout=timeout)
     return response, p
@@ -536,6 +506,28 @@ def _populate_result_from_response(result, response, config, suite_name, input_h
         result["peak_l1_memory_device"] = None
 
 
+# Signatures of a device-level hang that the child process catches and *returns*
+# as a normal exception (status=False) rather than triggering the Python-side
+# watchdog timeout. Once the mesh hangs in fetch-queue dispatch, every subsequent
+# vector throws the same error, so we must reset the device (and, under
+# skip-on-timeout, abort the rest of the suite) instead of spinning for the
+# entire job and getting the runner cancelled on the wall-clock cap.
+_DEVICE_HANG_SIGNATURES = (
+    "device timeout in fetch queue wait",
+    "potential hang detected",
+    "completion reader queue is not empty",
+    "device hang or timeout occurred",
+)
+
+
+def _is_device_hang_message(message) -> bool:
+    """Return True if a returned exception message indicates a device hang."""
+    if not message:
+        return False
+    msg = str(message).lower()
+    return any(sig in msg for sig in _DEVICE_HANG_SIGNATURES)
+
+
 def _set_crash_hang_defaults(result):
     """Populate result fields for a FAIL_CRASH_HANG outcome."""
     result["status"] = TestStatus.FAIL_CRASH_HANG
@@ -565,10 +557,10 @@ def _execute_vector_with_retry(
     result,
     main_proc_runner=None,
 ):
-    """Execute a single test vector with up to MAX_RETRIES retries on timeout or crash.
+    """Execute a single test vector with up to MAX_RETRIES retries on timeout.
 
-    On timeout or child crash: kill child -> tt-smi reset -> spawn new child -> retry.
-    If retries exhausted: mark as FAIL_CRASH_HANG -> tt-smi reset.
+    On timeout: kill child -> tt-smi reset -> spawn new child -> retry.
+    If the retry also times out: mark as FAIL_CRASH_HANG -> tt-smi reset.
 
     Returns the result dict with two internal keys:
       _child_process  – the (possibly new) child Process
@@ -588,21 +580,43 @@ def _execute_vector_with_retry(
                 main_proc_runner,
             )
             _populate_result_from_response(result, response, config, suite_name, input_hash)
+
+            # The child returned a result, but it may carry a device-hang
+            # exception (e.g. "device timeout in fetch queue wait, potential
+            # hang detected"). The Python watchdog never fired because the
+            # child responded within the timeout, yet the mesh is now wedged
+            # and every later vector will throw the same error. Treat this like
+            # a hang: kill/reset the device and (under skip-on-timeout) abort
+            # the suite so we recover instead of spinning for the whole job.
+            if _is_device_hang_message(result.get("message")):
+                logger.error(
+                    f"DEVICE HANG detected for input_hash='{input_hash}': {result.get('message')}. "
+                    f"Resetting devices and aborting suite."
+                )
+                _kill_child(p, timeout_before_rejoin)
+                p = None
+                result["status"] = TestStatus.FAIL_CRASH_HANG
+                result["exception"] = str(result.get("message", "DEVICE HANG"))
+                reset_util.reset()
+                if child_mode:
+                    p = Process(target=run, args=(module_name, input_queue, output_queue, config))
+                    p.start()
+                result["_child_process"] = p
+                result["_abort_suite"] = config.skip_on_timeout
+                return result
+
             result["_child_process"] = p
             result["_abort_suite"] = False
             return result
 
-        except (Empty, ChildCrash) as exc:
-            is_crash = isinstance(exc, ChildCrash)
+        except Empty:
             is_last_attempt = attempt == MAX_RETRIES
             _kill_child(p, timeout_before_rejoin)
             p = None
 
-            failure_kind = f"CRASHED ({exc})" if is_crash else "TIMED OUT"
-
             if not is_last_attempt:
                 logger.warning(
-                    f"TEST {failure_kind} (attempt {attempt + 1}/{1 + MAX_RETRIES}) for "
+                    f"TEST TIMED OUT (attempt {attempt + 1}/{1 + MAX_RETRIES}) for "
                     f"input_hash='{input_hash}'. Resetting devices and retrying..."
                 )
                 reset_util.reset()
@@ -612,7 +626,7 @@ def _execute_vector_with_retry(
                 continue
 
             logger.warning(
-                f"TEST {failure_kind} after {1 + MAX_RETRIES} attempt(s) for "
+                f"TEST TIMED OUT after {1 + MAX_RETRIES} attempt(s) for "
                 f"input_hash='{input_hash}'. Marking as FAIL_CRASH_HANG."
             )
             _set_crash_hang_defaults(result)
