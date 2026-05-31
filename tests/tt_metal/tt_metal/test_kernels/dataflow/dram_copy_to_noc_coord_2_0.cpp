@@ -69,6 +69,7 @@ void kernel_main() {
     std::uint32_t mcast_dst_end_x = get_arg(args::mcast_dst_end_x);
     std::uint32_t mcast_dst_end_y = get_arg(args::mcast_dst_end_y);
     bool use_write_with_state = static_cast<bool>(get_arg(args::use_write_with_state));
+    bool use_inline_dw_write_from_state = static_cast<bool>(get_arg(args::use_inline_dw_write_from_state));
 
     // We will assert later. This kernel will hang.
     // Need to signal completion to dispatcher before hanging so that
@@ -147,6 +148,19 @@ void kernel_main() {
             {},
             {.noc_x = dst_noc_x, .noc_y = dst_noc_y, .addr = buffer_dst_addr});
         noc.async_write_barrier();
+    } else if (use_inline_dw_write_from_state) {
+        // Mirror cq_noc_inline_dw_write_with_state: program the inline-write destination into the WR_REG
+        // command buffer, then sanitize it straight from those registers via DEBUG_SANITIZE_NOC_ADDR_FROM_STATE
+        // (the macro under test). The destination coordinate is invalid, so the sanitizer must flag the
+        // programmed target. We never issue the write -- the sanitizer hangs first, matching cq's
+        // sanitize-before-send ordering.
+        uint64_t dst = get_noc_addr(dst_noc_x, dst_noc_y, buffer_dst_addr);
+        noc_inline_dw_write_set_state<false /*posted*/, true /*set_val*/>(
+            dst, local_buffer[0], 0xF, NCRISC_WR_REG_CMD_BUF, noc_index);
+        // set_state leaves NOC_TARG_ADDR_MID untouched; zero it so the reconstructed 64-bit address is
+        // deterministic (inline writes target a 32-bit L1 destination, i.e. MID == 0).
+        NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_REG_CMD_BUF, NOC_TARG_ADDR_MID, 0);
+        DEBUG_SANITIZE_NOC_ADDR_FROM_STATE(noc_index, NCRISC_WR_REG_CMD_BUF);
     } else {
         noc.async_write(
             local_buffer,
