@@ -44,7 +44,12 @@ ttnn::Tensor unified_routed_expert_ffn(
     // with 4 chunks); 25k → 64 (13 chunks, was 40 with 20 chunks).
     constexpr uint32_t kGridY = 8;
     constexpr uint32_t kMinChunkMTiles = 16;  // per_core_M >= 2
-    constexpr uint32_t kMaxChunkMTiles = 64;  // per_core_M <= 8 (L1 cap)
+    // L1 cap on per_core_M differs by path. BH (11x8, narrow per_core_N)
+    // holds per_core_M up to 8 (chunk 64). WH (8x8, per_core_N doubles for
+    // the 2880 dims) only fits per_core_M up to 4 (chunk 32) — the partials /
+    // intermediate CBs scale with per_core_M and would overflow WH L1 at 8.
+    const bool wh_path = unified_routed_expert_use_wh_path(x);
+    const uint32_t kMaxChunkMTiles = wh_path ? 32u : 64u;  // per_core_M <= 4 (WH) / 8 (BH)
     const uint32_t M_tiles_full = x.padded_shape()[-2] / 32;
     uint32_t chunk_M_tiles = kMaxChunkMTiles;
     uint32_t best_num_chunks = (M_tiles_full + kMinChunkMTiles - 1) / kMinChunkMTiles + 1;

@@ -21,7 +21,7 @@ from tracy import signpost
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.utility_functions import is_blackhole
+from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping
 
 COMPUTE_KERNEL_CONFIG_LOFI = ttnn.WormholeComputeKernelConfig(
@@ -399,7 +399,19 @@ class TtRoutedExpert(LightweightModule):
             logger.warning(f"{dispatched_buffer.dtype=} typecasting to {self.activations_dtype}")
             dispatched_buffer = ttnn.typecast(dispatched_buffer, self.activations_dtype)
 
-        if is_blackhole():
+        # Branching (matches the C++ program-factory selection):
+        #   * Blackhole  -> unified MoE composite (BH kernel: 11x8 grid,
+        #     emb=7168/hidden=2048). On BH the unified op also serves the WH
+        #     kernel when the TT_UNIFIED_REXPERT_FORCE_WH passthrough env is
+        #     set (lets us validate the WH 8x8 kernel on BH silicon).
+        #   * Wormhole + emb==hidden==2880 -> unified MoE composite (WH kernel:
+        #     8x8 grid). The C++ factory auto-selects the WH config on WH arch.
+        #   * Anything else (e.g. Wormhole with non-2880 dims) -> the default
+        #     naive per-expert Python loop (extract -> routed_expert_ffn ->
+        #     insert), unchanged from before.
+        shapes_2880 = self.emb_dim == 2880 and self.hidden_dim == 2880
+        use_unified = is_blackhole() or (is_wormhole_b0() and shapes_2880)
+        if use_unified:
             signpost(header="UnifiedRoutedExpertMoe")
             expert_outputs = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
                 dispatched_buffer,
@@ -415,7 +427,8 @@ class TtRoutedExpert(LightweightModule):
             logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
             return expert_outputs
 
-        # Wormhole fallback: per-expert Python loop with extract → FFN → insert.
+        # Default fallback (e.g. Wormhole with non-2880 dims): per-expert
+        # Python loop with extract → routed_expert_ffn → insert.
         expert_outputs = dispatched_buffer
         for local_expert in range(self.experts_per_chip):
             signpost(f"Expert {local_expert+1}/{self.experts_per_chip}")

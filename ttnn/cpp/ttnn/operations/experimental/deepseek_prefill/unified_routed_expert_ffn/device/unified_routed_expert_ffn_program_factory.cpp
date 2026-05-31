@@ -5,6 +5,7 @@
 #include "unified_routed_expert_ffn_program_factory.hpp"
 
 #include <cstdint>
+#include <cstdlib>
 #include <map>
 #include <unordered_map>
 #include <utility>
@@ -44,6 +45,18 @@ constexpr uint32_t CB_IN0_DOWN_FULL = tt::CBIndex::c_12;
 constexpr uint32_t CB_PARTIALS_UP = tt::CBIndex::c_13;
 }  // namespace
 
+bool unified_routed_expert_use_wh_path(const ttnn::Tensor& x) {
+    // Wormhole hardware always takes the WH path. On any other arch (i.e.
+    // Blackhole) the TT_UNIFIED_REXPERT_FORCE_WH env var forces it on — a
+    // temporary passthrough so the WH kernel can be validated on the BH
+    // silicon we develop on. Any non-empty value enables it.
+    if (x.device()->arch() == tt::ARCH::WORMHOLE_B0) {
+        return true;
+    }
+    const char* force = std::getenv("TT_UNIFIED_REXPERT_FORCE_WH");
+    return force != nullptr && force[0] != '\0';
+}
+
 UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnProgramFactory::create(
     const UnifiedRoutedExpertFfnParams& op,
     const UnifiedRoutedExpertFfnInputs& t,
@@ -73,8 +86,15 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // covers exactly per_core_N_gu cols per step; activated cols past
     // actual_hidden are 0 (gate/up weight OOB zero-fill propagates through
     // silu and multiply).
-    constexpr uint32_t GRID_X = 11;
-    constexpr uint32_t GRID_Y = 8;
+    // Two execution paths share the SAME dataflow/compute kernels — they
+    // differ only in grid width and the gate/up K-block width:
+    //   * Blackhole: 11x8 = 88 cores, tuned for emb=7168 / hidden=2048.
+    //   * Wormhole : 8x8  = 64 cores, tuned for emb=2880 / hidden=2880.
+    // The WH path also runs when the TT_UNIFIED_REXPERT_FORCE_WH passthrough
+    // env var is set on a non-WH arch (validating the WH kernel on BH).
+    const bool wh_path = unified_routed_expert_use_wh_path(t.x);
+    const uint32_t GRID_X = wh_path ? 8u : 11u;
+    const uint32_t GRID_Y = 8u;
     const auto grid_size = t.x.device()->compute_with_storage_grid_size();
     TT_FATAL(
         grid_size.x >= GRID_X && grid_size.y >= GRID_Y,
@@ -102,11 +122,69 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     const uint32_t N_gate_tiles_padded = per_core_N_gu * GRID_X;
     const uint32_t K_down_tiles_padded = N_gate_tiles_padded;  // down K = gate N
 
-    // With 11x8 = 88 cores, per_core_N_gu (= 6) and per_core_N_d (= 21) leave
-    // ~250KB of headroom per core vs an 8x8 layout. Use it to double
-    // in0_block_w_gu, halving the gate / up K-loop iteration count.
-    const uint32_t in0_block_w_gu = 16;
     const uint32_t in0_block_w_d = per_core_N_gu;
+
+    // gate/up K-block width.
+    //   * BH (11x8): per_core_N_gu (= 6) and per_core_N_d (= 21) leave ~250KB
+    //     of headroom per core vs an 8x8 layout. Use it to double
+    //     in0_block_w_gu to 16, halving the gate/up K-loop iteration count.
+    //   * WH (8x8): per_core_N_gu doubles (= 12 for the 2880 dims) so L1 is
+    //     much tighter. Pick the LARGEST divisor of K_gate_tiles whose total
+    //     CB footprint still fits in this device's L1 (with a safety margin
+    //     for kernel binaries / runtime args / semaphores). This adapts to
+    //     the weight dtype (bfp4 vs bfp8) automatically.
+    uint32_t in0_block_w_gu = 16;
+    if (wh_path) {
+        // Tile sizes for the CB-footprint estimate (depend only on dtype).
+        const uint32_t x_ts = tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(t.x.dtype()));
+        const uint32_t gate_ts = tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(t.gate_proj.dtype()));
+        const uint32_t up_ts = tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(t.up_proj.dtype()));
+        const uint32_t down_ts = tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(t.down_proj.dtype()));
+        const uint32_t out_ts =
+            tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(tensor_return_value.dtype()));
+        const uint32_t intermed_ts = tt::tile_size(tt::DataFormat::Bfp8_b);
+        const uint32_t partials_ts = tt::tile_size(tt::DataFormat::Float16_b);
+
+        // Everything except CB_IN0_X / CB_IN1_GATE / CB_IN1_UP is independent
+        // of in0_block_w_gu. Mirror the CB sizes created further below.
+        const uint64_t fixed_bytes =
+            static_cast<uint64_t>(per_core_N_d * in0_block_w_d * 2) * down_ts +    // CB_IN1_DOWN
+            static_cast<uint64_t>(per_core_M * per_core_N_gu) * intermed_ts +      // CB_GATE_INT
+            static_cast<uint64_t>(per_core_M * per_core_N_gu) * intermed_ts +      // CB_ACTIVATED
+            static_cast<uint64_t>(per_core_M * per_core_N_gu) * partials_ts +      // CB_PARTIALS_GU
+            static_cast<uint64_t>(per_core_M * per_core_N_gu) * partials_ts +      // CB_PARTIALS_UP
+            static_cast<uint64_t>(per_core_M * per_core_N_d) * partials_ts +       // CB_PARTIALS_D
+            static_cast<uint64_t>(16) * out_ts +                                   // CB_OUT (>= 8*2 stage)
+            static_cast<uint64_t>(per_core_M * in0_block_w_d * 2) * intermed_ts +  // CB_IN0_DOWN_FULL
+            16384;                                                                 // scratch CBs + slack
+        const uint64_t per_d_bytes =
+            static_cast<uint64_t>(per_core_M * 2) * x_ts +        // CB_IN0_X    (per_core_M*d*2 tiles)
+            static_cast<uint64_t>(per_core_N_gu * 2) * gate_ts +  // CB_IN1_GATE (per_core_N_gu*d*2 tiles)
+            static_cast<uint64_t>(per_core_N_gu * 2) * up_ts;     // CB_IN1_UP
+
+        // 0.80 of L1 leaves room for kernel binaries, runtime args, the six
+        // semaphores, and CB page-alignment overhead the estimate ignores.
+        const uint64_t budget = static_cast<uint64_t>(t.x.device()->l1_size_per_core() * 0.80);
+        uint32_t best = 0;
+        for (uint32_t d = K_gate_tiles; d >= 1; --d) {
+            if (K_gate_tiles % d != 0) {
+                continue;
+            }
+            if (fixed_bytes + per_d_bytes * d <= budget) {
+                best = d;
+                break;
+            }
+        }
+        TT_FATAL(
+            best != 0,
+            "unified_routed_expert_ffn (WH path): no divisor of K_gate_tiles={} fits L1 "
+            "(budget {} B, fixed {} B, per-d {} B). Reduce chunk_M_tiles or use a smaller weight dtype.",
+            K_gate_tiles,
+            budget,
+            fixed_bytes,
+            per_d_bytes);
+        in0_block_w_gu = best;
+    }
     TT_FATAL(
         K_gate_tiles % in0_block_w_gu == 0,
         "K_gate_tiles ({}) must be divisible by in0_block_w_gu ({})",
