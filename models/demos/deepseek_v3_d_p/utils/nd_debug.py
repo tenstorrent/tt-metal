@@ -60,21 +60,30 @@ def _ordered_keys(intermediates: dict, num_layers: int) -> list[str]:
 
 
 def nd_fingerprint(intermediates: Optional[dict], num_layers: int) -> Optional[dict]:
+    # Defensive: a measurement probe must NEVER fail the test. Any error here is
+    # swallowed and reported as a sentinel so the run continues.
     if intermediates is None:
         return None
-    fp = {}
-    for k in _ordered_keys(intermediates, num_layers):
-        fp[k] = _fp_tensor(intermediates[k])
-    # Extra detail on logits: argmax + top-2 margin (how close a token flip is).
-    logits = intermediates.get("logits")
-    if isinstance(logits, torch.Tensor):
-        flat = logits.detach().float().flatten()
-        top2 = torch.topk(flat, k=min(2, flat.numel()))
-        fp["__logits_argmax__"] = int(top2.indices[0].item())
-        gap = float(top2.values[0].item() - top2.values[1].item()) if flat.numel() > 1 else float("inf")
-        fp["__logits_gap__"] = gap
-    fp["__order__"] = _ordered_keys(intermediates, num_layers)
-    return fp
+    try:
+        fp = {}
+        for k in _ordered_keys(intermediates, num_layers):
+            fp[k] = _fp_tensor(intermediates[k])
+        # Extra detail on logits: argmax + top-2 margin (how close a token flip is).
+        logits = intermediates.get("logits")
+        if isinstance(logits, torch.Tensor) and logits.numel() > 0:
+            flat = logits.detach().float().flatten()
+            top2 = torch.topk(flat, k=min(2, flat.numel()))
+            fp["__logits_argmax__"] = int(top2.indices[0].item())
+            gap = float(top2.values[0].item() - top2.values[1].item()) if flat.numel() > 1 else float("inf")
+            fp["__logits_gap__"] = gap
+        else:
+            fp["__logits_argmax__"] = -1
+            fp["__logits_gap__"] = float("nan")
+        fp["__order__"] = _ordered_keys(intermediates, num_layers)
+        return fp
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[NDPROBE] nd_fingerprint failed (non-fatal): {exc!r}")
+        return None
 
 
 def nd_fp_shard0(tt_tensor) -> Optional[dict]:

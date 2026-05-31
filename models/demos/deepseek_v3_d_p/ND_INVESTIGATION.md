@@ -108,6 +108,31 @@ its finiteness are measured.**
   non-deterministic. Hard to localize statically; pursue only if H1/H2 fail. The
   per-stage probe will point at the offending stage.
 
+## MEASURED RESULTS (on-device, 2026-05-31, this branch)
+
+### Run 1: 5 layers, 1024 tokens, iter5 (baseA), then a second process (baseB)
+- **Within-process: FULLY deterministic.** All 5 iterations bit-identical
+  (per-layer + lm_head SHA match). ⇒ the non-determinism is **not** iter-to-iter
+  leaked state; device buffers are reused at the same address with the same
+  leftover within one process.
+- **The combine/dispatch buffers DO carry non-finite garbage** (device-0 shard):
+  `02_dispatched_buf` nonfinite=8263, `04_combined_output` nonfinite=1697, with
+  ~1e40 magnitudes — exactly the uninitialized-DRAM effect of `init_zeros=False`.
+- **Across-process (baseA vs baseB @ iter0): the model output is DETERMINISTIC.**
+  Every per-layer hidden state, `norm`, and `lm_head` is **bit-identical** across
+  the two processes; `05_routed_output` and `06_final_output` are **bit-identical**
+  too. Only the garbage-bearing buffers (`02_dispatched_buf`, `02b_disp_tiled`,
+  `03_expert_outputs`, `04_combined_output`) differ — i.e. **reduce correctly
+  masks the garbage out; it never reaches valid output at this scale.**
+
+**⇒ H1 is real but HARMLESS at 5L/1024 — the combine garbage is masked.** The
+run-to-run non-determinism the symptom shows therefore needs **scale** (25600
+tokens and/or 61 layers). Hypotheses re-ranked: the trigger is something that only
+manifests at higher token-count / depth — candidates: (a) the garbage masking
+breaks at scale (e.g. an `Inf` that survives `must_zero_init`, or a dispatch-buffer
+**capacity overflow** that drops tokens), or (b) a genuinely non-deterministic
+CCL/matmul accumulation under higher load. Next: reproduce at 25600 tokens.
+
 ### Status of experiments
 - [ ] Within-process drift (iter-to-iter) — pending device (blocked by soak)
 - [ ] Across-process first-diverging stage — pending device
