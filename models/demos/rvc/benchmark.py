@@ -116,6 +116,11 @@ class BenchmarkSession:
         self.m_source = load_source_module(self.sd)
         self.emb_g = torch.nn.Embedding(109, 256)
         self.emb_g.weight.data = self.sd["emb_g.weight"].float()
+        # Persist RMVPE: avoid reloading the 173 MB checkpoint on every run.
+        self.rmvpe = None
+        if f0_method == "rmvpe":
+            from models.demos.rvc.torch_impl.rmvpe import RMVPEPitchAlgorithm
+            self.rmvpe = RMVPEPitchAlgorithm(sample_rate=SR_HUBERT, hop_size=160)
         print(f"    torch modules ready in {time.time() - t0:.2f}s")
 
         print(f"  Opening TTNN device id={device_id} (l1_small_size=32768)...")
@@ -158,7 +163,7 @@ def run_inference(session: BenchmarkSession, audio: torch.Tensor,
 
         t0 = time.time()
         if session.f0_method == "rmvpe":
-            pitch, pitchf = extract_f0_rmvpe(audio, f0_up_key)
+            pitch, pitchf = extract_f0_rmvpe(audio, f0_up_key, rmvpe=session.rmvpe)
         else:
             pitch, pitchf = extract_f0_dio(audio.squeeze(0).numpy(), f0_up_key)
         pitch = pitch[:, :num_frames]

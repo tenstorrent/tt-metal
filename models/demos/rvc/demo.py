@@ -112,10 +112,16 @@ def extract_f0_dio(audio_np, f0_up_key=0):
     return _f0_to_coarse(f0)
 
 
-def extract_f0_rmvpe(audio, f0_up_key=0):
-    """Extract F0 using RMVPE neural pitch estimator (official RVC-Project model)."""
-    from models.demos.rvc.torch_impl.rmvpe import RMVPEPitchAlgorithm
-    rmvpe = RMVPEPitchAlgorithm(sample_rate=SR_HUBERT, hop_size=WINDOW)
+def extract_f0_rmvpe(audio, f0_up_key=0, rmvpe=None):
+    """Extract F0 using RMVPE neural pitch estimator (official RVC-Project model).
+
+    If ``rmvpe`` is None a fresh ``RMVPEPitchAlgorithm`` is constructed, which
+    reloads the 173 MB checkpoint (~440 ms). Callers that run repeated
+    inference (e.g. ``BenchmarkSession``) should build it once and pass it in.
+    """
+    if rmvpe is None:
+        from models.demos.rvc.torch_impl.rmvpe import RMVPEPitchAlgorithm
+        rmvpe = RMVPEPitchAlgorithm(sample_rate=SR_HUBERT, hop_size=WINDOW)
     with torch.no_grad():
         f0 = rmvpe.extract_pitch(audio)  # [1, T]
     f0 *= pow(2, f0_up_key / 12)
