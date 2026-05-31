@@ -187,6 +187,14 @@ grid_11_10_configs = {
     (512, 6144, 4608): (4, 8, 8, (1, 4)),  # dual-grid sweep 11x10, 244.1 μs, 39.0% FLOP util
     (1024, 6144, 2304): (4, 4, 8, (4, 1)),  # dual-grid sweep 11x10, 162.9 μs, 58.5% FLOP util
     (512, 6144, 2304): (2, 6, 8, (1, 4)),  # dual-grid sweep 11x10, 128.9 μs, 37.0% FLOP util
+    # flux2 2048-res sweep rank-1 — 11×10 grid (2026-05-30, 2048.md)
+    (4096, 128, 768): (14, 2, 3, (1, 3)),  # 32.3 μs,   2.8% util  x_embedder
+    (128, 15360, 768): (2, 16, 3, (1, 3)),  # 132.0 μs,  2.6% util  context_embedder
+    (4096, 6144, 2304): (6, 4, 4, (2, 2)),  # 540.5 μs, 24.4% util  single-block to_qkv spatial
+    (128, 6144, 2304): (2, 6, 10, (2, 2)),  # 127.4 μs,  3.2% util  single-block to_qkv prompt
+    (4096, 6144, 4608): (8, 4, 14, (2, 2)),  # 1054.6 μs,25.0% util  single-block proj_mlp spatial
+    (128, 6144, 4608): (6, 12, 8, (2, 2)),  # 238.0 μs,  3.5% util  single-block proj_mlp prompt
+    (4096, 6144, 128): (4, 16, 6, (2, 2)),  # 208.7 μs,  3.5% util  proj_out
 }
 
 grid_12_9_configs = {
