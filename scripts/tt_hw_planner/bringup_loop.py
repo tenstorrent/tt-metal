@@ -1384,6 +1384,21 @@ class Tt{component_class_name}:
             "Inputs are ttnn tensors on device; outputs must be ttnn tensors "
             "on device. Do NOT round-trip through torch."
         )
+
+
+# Module-level shim. The per-component PCC test imports this name
+# (lowercase, matching the component slug) — do NOT rename or remove.
+# Keep this delegating to ``Tt{component_class_name}.build`` so the test
+# can construct the instance with the captured torch reference.
+def {component_name_for_shim}(device, torch_module=None):
+    """Test-facing factory: returns a ``Tt{component_class_name}`` instance
+    built from ``torch_module`` (typically the HF reference module captured
+    at scaffold time).
+
+    Preserve this signature exactly — the per-component PCC test imports
+    ``{component_name_for_shim}`` directly and calls it as a constructor.
+    """
+    return Tt{component_class_name}.build(device, torch_module)
 '''
 
 
@@ -1419,6 +1434,10 @@ def _render_canonical_import_stub(
     tt_reuse_target_module = tt_reuse_target_module.replace("/", ".")
     return _CANONICAL_IMPORT_STUB_TEMPLATE.format(
         component_name=component_name,
+        # Module-level shim name MUST equal the safe slug — the
+        # per-component PCC test imports it under that exact name
+        # (e.g. ``from .._stubs.r_m_s_norm import r_m_s_norm``).
+        component_name_for_shim=safe,
         component_class_name=class_name,
         model_id=model_id,
         tt_reuse_target=tt_reuse_target,
