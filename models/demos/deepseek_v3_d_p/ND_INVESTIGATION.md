@@ -1,0 +1,82 @@
+# DeepSeek-V3 prefill non-determinism investigation (branch kgrujcic/deepseek_nd)
+
+**Owner:** automated debug session (Claude) for kgrujcic
+**Started:** 2026-05-31
+**Repo under test:** `/data/kgrujcic/tt-metal-sandbox` (Blackhole galaxy, mesh-8x4 = 32 chips)
+**Symptom:** `test_prefill_transformer.py` produces a different first token across
+repeated runs on identical input.
+
+> This investigation was started **from scratch** at the user's request; prior
+> `drift_analysis/*` docs (different branch) are treated as untrusted and are not
+> relied upon. Conclusions here are only what this session measured directly.
+
+## Method / measurement discipline
+
+The sampler uses a **Gumbel-softmax trick at `temperature=0.5`**
+(`tt_prefill_transformer._sample_token`), drawing from torch's global RNG. The
+RNG advances every iteration, so the **sampled token is NOT a valid determinism
+signal** within a process. We therefore fingerprint the **logits** and
+**per-layer hidden states** (deterministic functions of the model), never the
+sampled token.
+
+Instrumentation added (all gated, pure measurement, no device-compute change):
+- `utils/nd_debug.py` — bit-exact SHA1 + f64 norm/sum + non-finite count.
+- `TT_DS_ND_DEBUG=1` — test fingerprints per-layer hidden states + logits each
+  iteration; `nd_compare_log` reports the first stage that diverges between
+  consecutive iterations (within-process).
+- `TtMoe.forward` per-stage probes (`[NDPROBE-MOE]`): gate scores/indices,
+  shared_output, dispatched_buf, metadata, expert_outputs, combined_output,
+  routed_output, final_output. Device-0-shard fingerprints (cheap).
+  Target layer via `TT_DS_ND_DEBUG_LAYER` (default 3 = first MoE layer).
+- `nd_logs/nd_compare_runs.py` — compares two run logs at the same iter index
+  (across-process) or consecutive iters (within-process); prints first divergence.
+- `TT_DS_ND_COMBINE_INIT_ZEROS=1` — flips the hardcoded `init_zeros=False` of the
+  combine module to `True` (no rebuild) for A/B.
+
+## Evidence collected so far
+
+### 1. Non-determinism is real and large (across-process)
+From a colleague's 20× soak (`nostojic`, same 61-layer/iter25/25600 test, separate
+processes, each `torch.manual_seed(42)`), the final first token across 14 runs:
+`312, 14085, 17926, 31, 3244, 260, 31, 260, 31, 260, 260, 31, 20390, 31` with
+sampled-token probabilities ranging **0.005 – 0.77**. Identical input + fixed seed
+⇒ fixed Gumbel ⇒ the **logits themselves diverge run-to-run**. Not sampling noise.
+
+## Leading hypothesis (H1): uninitialized combine-output DRAM → NaN poisoning
+
+`tt_moe.py:337` constructs the combine module with **`init_zeros=False`** (default
+is `True`). The combine op allocates its output via `create_device_tensor`
+(uninitialized DRAM) and, with `init_zeros=False`, does **not** pre-zero it.
+
+The reduce kernel
+(`post_combine_reduce/.../deepseek_moe_post_combine_reduce_compute.cpp`) streams
+`cb_combine_input` for **every** expert slot of every token (waits/pops all
+`num_experts`). For the accumulator-initializing slot (`must_zero_init` on the
+DeepSeek dispatch-table path, or `first_active` on the GPT-OSS path) it executes
+`mul_tiles_bcast(combine_input, weight=0)` — i.e. it **reads the combine buffer
+and multiplies by zero**, relying on `garbage * 0 == 0`.
+
+But for an **unwritten** combine slot with `init_zeros=False`, the buffer holds
+uninitialized DRAM. If those bits decode to **NaN/Inf** (entirely possible for
+bf16/bf8 garbage), then `NaN * 0 = NaN`, which poisons that token's reduced
+output. The *set* of poisoned tokens is deterministic (the skip decision reads
+deterministic weights / dispatch table), but the garbage *value* is
+non-deterministic per process → **non-deterministic logits run-to-run**, matching
+the symptom. Over 61 layers any poisoned token compounds through the residual
+stream into a totally different argmax/sampling outcome.
+
+**Predicted A/B result:** `TT_DS_ND_COMBINE_INIT_ZEROS=1` should remove the NaN
+poisoning. If it removes *all* run-to-run divergence → H1 is the root cause and
+the fix is to zero-init the combine buffer (or have reduce not read zero-weight
+slots). If divergence shrinks but persists → there is also a finite-garbage path
+(a genuinely missing combine write with non-zero weight) and/or a separate cause
+(kernel L1 race) to chase.
+
+### Status of experiments
+- [ ] Within-process drift (iter-to-iter) — pending device (blocked by soak)
+- [ ] Across-process first-diverging stage — pending device
+- [ ] A/B `init_zeros` True vs False — pending device
+
+> Device note: shared 32-chip galaxy was occupied ~2h by a colleague's soak that
+> `pkill -9 -f pytest` + `tt-smi -glx_reset` between iterations, so concurrent runs
+> are impossible. Experiments queued for when it frees.
