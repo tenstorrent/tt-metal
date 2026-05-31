@@ -544,7 +544,7 @@ void append_worker_to_fabric_edm_sender_rt_args(
         static_cast<uint32_t>(sender_worker_flow_control_semaphore_id),
         static_cast<uint32_t>(sender_worker_terminate_semaphore_id),
         static_cast<uint32_t>(sender_worker_buffer_index_semaphore_id)};
-    args_out.reserve(args_out.size() + (values.size() / sizeof(size_t)));
+    args_out.reserve(args_out.size() + values.size());
     std::ranges::copy(values, std::back_inserter(args_out));
 }
 
@@ -557,7 +557,7 @@ void append_worker_to_fabric_edm_sender_rt_args(
         eth_channel,
         static_cast<uint32_t>(sender_worker_terminate_semaphore_id),
         static_cast<uint32_t>(sender_worker_buffer_index_semaphore_id)};
-    args_out.reserve(args_out.size() + (values.size() / sizeof(size_t)));
+    args_out.reserve(args_out.size() + values.size());
     std::ranges::copy(values, std::back_inserter(args_out));
 }
 
@@ -614,7 +614,7 @@ void append_worker_to_fabric_edm_sender_rt_args(
         eth_channel,
         static_cast<uint32_t>(sender_worker_terminate_semaphore_id),
         static_cast<uint32_t>(sender_worker_buffer_index_semaphore_id)};
-    args_out.reserve(args_out.size() + (values.size() / sizeof(size_t)));
+    args_out.reserve(args_out.size() + values.size());
     std::ranges::copy(values, std::back_inserter(args_out));
 }
 

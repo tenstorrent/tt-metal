@@ -1,20 +1,21 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include <cstdint>
 
+#include "ckernel.h"
 #include "ckernel_addrmod.h"
+#include "ckernel_defs.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
 #include "lltt.h"
 #include "sfpi.h"
 
-namespace ckernel
-{
-namespace sfpu
-{
+namespace ckernel {
+namespace sfpu {
 
 /**
  * @brief Primes the SFPU CC stack ahead of the first ternary SFPU op.
@@ -26,10 +27,7 @@ namespace sfpu
  * hold at boot, leaving some lanes pre-disabled in @c v_if and active in
  * @c v_else — manifests as a deterministic mismatch on face 0 of tile 0.
  */
-inline void _init_where_()
-{
-    TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, sfpi::SFPENCC_MOD1_EI_RI);
-}
+inline void init_where() { TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, sfpi::SFPENCC_MOD1_EI_RI); }
 
 /**
  * @brief Per-lane ternary select: @c out = (cond == 0) ? false_val : true_val.
@@ -63,22 +61,20 @@ inline void _init_where_()
  * @param dst_index_out DEST tile index that receives the per-lane result.
  */
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void _calculate_where_(
-    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_in2, const std::uint32_t dst_index_out)
-{
+inline void calculate_where(
+    const std::uint32_t dst_index_in0,
+    const std::uint32_t dst_index_in1,
+    const std::uint32_t dst_index_in2,
+    const std::uint32_t dst_index_out) {
     constexpr std::uint32_t dst_tile_size_sfpi = 32;
 
 #pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++)
-    {
-        sfpi::vFloat cond     = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vFloat cond = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat true_val = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
-        sfpi::vFloat result   = sfpi::dst_reg[dst_index_in2 * dst_tile_size_sfpi]; // load false_val into result reg
+        sfpi::vFloat result = sfpi::dst_reg[dst_index_in2 * dst_tile_size_sfpi];  // load false_val into result reg
 
-        v_if (cond != 0)
-        {
-            result = true_val;
-        }
+        v_if(cond != 0) { result = true_val; }
         v_endif;
 
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
@@ -86,5 +82,5 @@ inline void _calculate_where_(
     }
 }
 
-} // namespace sfpu
-} // namespace ckernel
+}  // namespace sfpu
+}  // namespace ckernel

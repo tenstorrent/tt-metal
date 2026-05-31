@@ -45,7 +45,7 @@ void kernel_main() {
     for (uint32_t h = 0; h < block_height_tiles; h++) {
         uint32_t tile_id = row_start_tile_id;
         for (uint32_t w = 0; w < block_width_tiles; w++) {
-            uint64_t dst_noc_addr = get_noc_addr(tile_id, s);
+            uint64_t dst_noc_addr = s.get_noc_addr(tile_id);
             noc_async_write(l1_read_addr, dst_noc_addr, tile_bytes);
             tile_id++;
             l1_read_addr += tile_bytes;

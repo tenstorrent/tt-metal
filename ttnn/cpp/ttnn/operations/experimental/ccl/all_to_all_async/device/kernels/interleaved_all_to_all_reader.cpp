@@ -75,7 +75,7 @@ void kernel_main() {
 
                 uint32_t num_pages_to_read = std::min(shard_col_end_id - col_tile_id, packet_size_in_pages);
                 for (uint32_t j = 0; j < num_pages_to_read; j++) {
-                    noc_async_read_tile(tile_id, tensor0_addrgen, l1_write_addr);
+                    noc_async_read_page(tile_id, tensor0_addrgen, l1_write_addr);
                     l1_write_addr += tensor0_page_size;
                     tile_id++;
                 }

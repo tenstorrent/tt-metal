@@ -38,8 +38,8 @@ void kernel_main() {
                                      // Deciding how large the buffer should be is a tradeoff.
         uint32_t cb_in0_addr = get_write_ptr(cb_in0);
         uint32_t cb_in1_addr = get_write_ptr(cb_in1);
-        noc_async_read_tile(i, a, cb_in0_addr);  // read the tile into the circular buffer
-        noc_async_read_tile(i, b, cb_in1_addr);  // We can overlap async reads and writes
+        noc_async_read_page(i, a, cb_in0_addr);  // read the tile into the circular buffer
+        noc_async_read_page(i, b, cb_in1_addr);  // We can overlap async reads and writes
                                                  // to reduce the data movement overhead.
 
         // NOTE: Since circular buffers are backed by SRAM, we can actually access them by

@@ -18,6 +18,7 @@
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_relay.hpp"
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler.hpp"
+#include "tt_metal/impl/dispatch/kernels/telemetry.hpp"
 
 // The command queue write interface controls writes to the completion region, host owns the completion region read
 // interface Data requests from device and event states are written to the completion region
@@ -97,6 +98,22 @@ constexpr uint32_t num_worker_cores_to_mcast = NUM_WORKER_CORES_TO_MCAST;
 
 constexpr uint32_t is_d_variant = IS_D_VARIANT;
 constexpr uint32_t is_h_variant = IS_H_VARIANT;
+
+// Read and store telemetry values via local variables to avoid L1 reads
+static uint32_t upstream_blocked_counter = 0;
+static uint32_t program_counter = 0;
+
+constexpr bool telemetry_enabled = !DISPATCH_TELEMETRY_DISABLED;
+constexpr uint32_t dispatch_telemetry_base = DISPATCH_TELEMETRY_ADDR;
+constexpr uint32_t upstream_blocked_count_addr =
+    dispatch_telemetry_base + offsetof(tt::tt_metal::DispatchCoreTelemetry, upstream_blocked_count);
+constexpr uint32_t upstream_unblocked_count_addr =
+    dispatch_telemetry_base + offsetof(tt::tt_metal::DispatchCoreTelemetry, upstream_unblocked_count);
+using DispatchTelemetryBlockGuard = TelemetryBlockGuard<
+    upstream_blocked_count_addr,
+    upstream_unblocked_count_addr,
+    &upstream_blocked_counter,
+    telemetry_enabled>;
 
 constexpr uint8_t upstream_noc_index = UPSTREAM_NOC_INDEX;
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
@@ -1212,6 +1229,10 @@ re_run_command:
         case CQ_DISPATCH_NOTIFY_SUBORDINATE_GO_SIGNAL:
             // DPRINT("cmd_notify_dispatch_s_go_signal\n");
             process_notify_dispatch_s_go_signal_cmd();
+            if constexpr (telemetry_enabled) {
+                reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::DispatchCoreTelemetry*>(dispatch_telemetry_base)
+                    ->program_count = ++program_counter;
+            }
             break;
 
         case CQ_DISPATCH_CMD_WRITE_PACKED_LARGE:
@@ -1257,6 +1278,10 @@ re_run_command:
         case CQ_DISPATCH_CMD_SEND_GO_SIGNAL:
             // DPRINT("cmd_send_go_signal\n");
             process_go_signal_mcast_cmd();
+            if constexpr (telemetry_enabled) {
+                reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::DispatchCoreTelemetry*>(dispatch_telemetry_base)
+                    ->program_count = ++program_counter;
+            }
             break;
 
         case CQ_DISPATCH_SET_NUM_WORKER_SEMS:
@@ -1434,6 +1459,8 @@ void kernel_main() {
     to_dev_id = get_arg_val<uint32_t>(OFFSETOF_TO_DEV_ID);
     router_direction = get_arg_val<uint32_t>(OFFSETOF_ROUTER_DIRECTION);
 
+    init_telemetry<tt::tt_metal::DispatchCoreTelemetry, dispatch_telemetry_base, telemetry_enabled>();
+
     // Initialize local state of any additional nocs used instead of the default
     static_assert(my_noc_index != upstream_noc_index);
     if constexpr (my_noc_index != upstream_noc_index) {
@@ -1507,7 +1534,7 @@ void kernel_main() {
     *get_dispatch_progress_ptr() = dispatch_progress;
 
     while (!done) {
-        dispatch_cb_reader.wait_for_available_data_and_release_old_pages(cmd_ptr);
+        dispatch_cb_reader.wait_for_available_data_and_release_old_pages<DispatchTelemetryBlockGuard>(cmd_ptr);
 
         DeviceZoneScopedN("CQ-DISPATCH");
         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
