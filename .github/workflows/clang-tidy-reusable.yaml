@@ -172,11 +172,72 @@ jobs:
             -DCMAKE_CXX_CLANG_TIDY="$CLANG_TIDY_CMD" \
             -DCMAKE_C_CLANG_TIDY="$CLANG_TIDY_CMD"
 
+      # Use the cmake configure output (compile_commands.json + include paths) to
+      # determine whether any changed file actually impacts the build.  Covers:
+      #   • C++ source files  (direct entries in compile_commands.json)
+      #   • Header files      (all *.h/hpp/hh under repo-local -I paths)
+      #   • CMake files       (CMakeLists.txt / *.cmake — they change the build graph)
+      # If the intersection of {build inputs} ∩ {PR changed files} is empty we skip
+      # the expensive build + analysis steps.  Only active on pull_request events;
+      # schedule / merge_group / workflow_dispatch always run the full scan.
+      - name: Check if any build inputs changed
+        id: check-build-inputs
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          REPO=/work
+          BUILD_DIR="$REPO/.build/clang-tidy"
+
+          # Fetch the PR base commit so we can diff against it
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          git fetch --no-tags --depth=1 origin "${BASE_SHA}"
+          git tag _pr_base "${BASE_SHA}"
+
+          # Set A — source files listed in compile_commands.json
+          jq -r '.[].file' "$BUILD_DIR/compile_commands.json" \
+            | sed "s|$REPO/||" > /tmp/build_inputs.txt
+
+          # Set A — headers reachable via repo-local -I include paths
+          jq -r '.[].command' "$BUILD_DIR/compile_commands.json" \
+            | grep -oP '(?<=-I)\S+' \
+            | sort -u \
+            | while IFS= read -r dir; do
+                # Normalise relative -I paths (cmake sometimes emits them)
+                [[ "$dir" = /* ]] || dir="$BUILD_DIR/$dir"
+                # Skip paths outside the repo (system headers, external deps)
+                [[ "$dir" == "$REPO/"* ]] || continue
+                find "$dir" \( -name '*.h' -o -name '*.hpp' -o -name '*.hh' \) 2>/dev/null
+              done \
+            | sed "s|$REPO/||" >> /tmp/build_inputs.txt
+
+          # Set A — cmake files (a change here can alter the build graph)
+          git ls-files '*.cmake' 'CMakeLists.txt' '**/CMakeLists.txt' \
+            >> /tmp/build_inputs.txt
+
+          sort -u /tmp/build_inputs.txt -o /tmp/build_inputs.txt
+          echo "Build input file count: $(wc -l < /tmp/build_inputs.txt)"
+
+          # Set B — files changed in this PR
+          git diff --name-only "${BASE_SHA}" HEAD > /tmp/changed.txt
+          echo "Changed file count: $(wc -l < /tmp/changed.txt)"
+          cat /tmp/changed.txt
+
+          # Intersection: any overlap → run analysis; empty → skip
+          if grep -qFf /tmp/changed.txt /tmp/build_inputs.txt 2>/dev/null; then
+            echo "Build-impacting changes detected:"
+            grep -Ff /tmp/changed.txt /tmp/build_inputs.txt || true
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "No changed files impact the build — skipping analysis"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Prepare ccache summary
         run: ccache -z
 
       - name: Build prerequisite targets (without analysis)
-        if: ${{ inputs.prereq-targets != '' }}
+        if: ${{ inputs.prereq-targets != '' && steps.check-build-inputs.outputs.skip != 'true' }}
         timeout-minutes: 30
         run: |
           echo "Building prerequisite targets (will not be analyzed): ${{ inputs.prereq-targets }}"
@@ -186,6 +247,7 @@ jobs:
           done
 
       - name: Activate analysis shim
+        if: ${{ steps.check-build-inputs.outputs.skip != 'true' }}
         run: |
           # Overwrite the no-op shim with the real analysis wrapper.
           # The filename stays ./clang-tidy-shim so Ninja's command hash is unchanged.
@@ -211,6 +273,7 @@ jobs:
           fi
 
       - name: 🔍 Analyze code with clang-tidy
+        if: ${{ steps.check-build-inputs.outputs.skip != 'true' }}
         timeout-minutes: 120
         run: |
           if [ -n "${{ inputs.scan-targets }}" ]; then
