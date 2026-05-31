@@ -30,11 +30,11 @@ import torch
 import torch.nn.functional as F
 import ttnn
 
-from models.demos.rvc.ttnn.utils import (
+from models.demos.rvc.tt.utils import (
     to_device, to_host, preprocess_linear_weight, preprocess_linear_bias,
     preprocess_conv1d_weight, DEFAULT_DTYPE, DEFAULT_MEMORY_CONFIG,
 )
-from models.demos.rvc.ttnn.ops.conv_transpose1d import TTNNConvTranspose1d
+from models.demos.rvc.tt.ops.conv_transpose1d import TTNNConvTranspose1d
 
 
 # =====================================================================

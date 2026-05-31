@@ -3,4 +3,4 @@
 
 """TTNN operator wrappers for RVC model components."""
 
-from models.demos.rvc.ttnn.ops.conv_transpose1d import TTNNConvTranspose1d
+from models.demos.rvc.tt.ops.conv_transpose1d import TTNNConvTranspose1d
