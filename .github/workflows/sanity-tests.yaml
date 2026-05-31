@@ -431,7 +431,7 @@ jobs:
       - profiler-tests
       - t3000-apc-fast-tests
       - ops-unit-tests
-      - ttsim-integration-tests
+      - ttsim-tests
     if: always()
     runs-on: ubuntu-latest
     steps:
