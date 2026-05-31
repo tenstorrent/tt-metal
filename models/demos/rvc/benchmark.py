@@ -76,7 +76,7 @@ from models.demos.rvc.torch_impl.reference import (
     torch_flow_forward,
     torch_generator_forward,
 )
-from models.demos.rvc.ttnn.runtime import TTNNFlowDecoder, TTNNGeneratorNSF
+from models.demos.rvc.tt.runtime import TTNNFlowDecoder, TTNNGeneratorNSF
 from models.demos.rvc.utils.audio import load_audio
 from models.demos.rvc.utils.config import get_model_and_config_paths
 

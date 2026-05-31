@@ -40,7 +40,7 @@ from models.demos.rvc.torch_impl.reference import (
     build_torch_generator,
     torch_generator_forward,
 )
-from models.demos.rvc.ttnn.runtime import (
+from models.demos.rvc.tt.runtime import (
     NUM_KERNELS,
     NUM_UPSAMPLES,
     RESBLOCK_DILATIONS,

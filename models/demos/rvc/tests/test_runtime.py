@@ -20,7 +20,7 @@ import ttnn
 from safetensors.torch import load_file
 
 from models.demos.rvc.tests.pcc_utils import compute_pcc, assert_pcc
-from models.demos.rvc.ttnn.runtime import TTNNFlowDecoder, TTNNGeneratorNSF
+from models.demos.rvc.tt.runtime import TTNNFlowDecoder, TTNNGeneratorNSF
 from models.demos.rvc.torch_impl.reference import (
     load_flow_torch_modules, torch_flow_forward,
     build_torch_generator, torch_generator_forward,

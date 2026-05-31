@@ -38,7 +38,7 @@ from scipy import signal
 
 from models.demos.rvc.torch_impl.vc.hubert import HubertModel
 from models.demos.rvc.torch_impl.vc.synthesizer import TextEncoder, SourceModuleHnNSF
-from models.demos.rvc.ttnn.runtime import TTNNFlowDecoder, TTNNGeneratorNSF
+from models.demos.rvc.tt.runtime import TTNNFlowDecoder, TTNNGeneratorNSF
 from models.demos.rvc.utils.audio import load_audio
 from models.demos.rvc.utils.config import (
     Config, HubertPretrainingConfig, HubertPretrainingTask,
