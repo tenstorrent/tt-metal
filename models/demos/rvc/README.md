@@ -151,12 +151,17 @@ and produced a meaningless ~0.97.
 
 | Clip | Warm RTF (TTNN-only) | Warm RTF (full pipeline) | Audio PCC | Target |
 |---|---:|---:|---:|---|
-| 3 s | **0.539** | **0.665** | 0.998 | < 0.5 |
-| 10 s | **0.555** | **0.651** | 0.998 | < 0.5 |
+| 3 s | **0.535 ± 0.01** | **0.660 ± 0.01** | 0.998 | < 0.5 |
+| 10 s | **0.553 ± 0.005** | **0.648 ± 0.005** | 0.998 | < 0.5 |
 
-The closest result is **0.539 TTNN-only at 3 s** — the < 0.5 target is
-missed by 7.8%. This is the honest Stage 1 result; the remaining gap
-is Stage 2 territory (see below).
+Numbers are the mean of multiple independent benchmark.py invocations
+(each invocation reports the mean of 3 warm runs after 1 warmup). The
+listed ± range reflects observed inter-invocation variance; per-run cv
+inside one invocation is ~1%.
+
+The closest result is **0.535 TTNN-only at 3 s** — the < 0.5 target is
+missed by ~7%. This is the honest Stage 1 result; the remaining gap is
+Stage 2 territory (see below).
 
 #### What Stage 1 work moved RTF
 
@@ -169,7 +174,14 @@ final Stage 1 state:
 | Chunk size 50 → 75 (L1-safe max) | -14% |
 | OVERLAP 5 → 3 (boundary-smoothing tradeoff) | -4% |
 | Fused LeakyReLU on ResBlock conv1 | -1% |
-| **Stage 1 final** (cumulative) | **0.539** (-19% vs baseline) |
+| Cache `cond_linear(g)` across chunks | within noise at 3 s; -0.4% at 10 s |
+| **Stage 1 final** (cumulative) | **0.535** (-20% vs baseline) |
+
+The `cond_linear` cache is included primarily as a code-quality fix
+(the conditioning projection depends only on the speaker embedding,
+which is constant across chunks of a single inference; recomputing it
+on every chunk was redundant work) rather than for measurable RTF
+impact, which sits inside per-invocation measurement noise at 3 s.
 
 RMVPE persistence (commit `d567ae1`) shifted full-pipeline RTF from
 0.799 → 0.665 at 3 s (-17%) by eliminating a 440 ms model reload per
@@ -216,8 +228,8 @@ on the benchmark path. All correctness bullets are met by measurement,
 not by claim.
 
 **Performance target: partial — RTF.** Stage 1 hygiene took TTNN-only
-RTF from 0.667 to 0.539 (-19%) with audio PCC preserved at 0.998. The
-remaining 7.8% gap to the < 0.5 bounty target is the Stage 2 ResBlock
+RTF from 0.667 to ~0.535 (-20%) with audio PCC preserved at 0.998. The
+remaining ~7% gap to the < 0.5 bounty target is the Stage 2 ResBlock
 device-residency optimization and will be the first Stage 2 commit.
 
 ## File Structure
