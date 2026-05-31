@@ -476,8 +476,10 @@ inline void calculate_acos() {
 // fp32 path: exhaustively validated maxulperr < 0.94 for normal fp32 2^-126 <= x <= 2^103.
 template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _sfpu_reciprocal_gt0_(sfpi::vFloat x) {
+    constexpr uint MAGIC_SEED = 0xfef392e0;
+
     // initial estimate y = -reciprocal(x)
-    sfpi::vFloat y = sfpi::reinterpret<sfpi::vFloat>(0xfef392e0 - sfpi::reinterpret<sfpi::vInt>(x));
+    sfpi::vFloat y = sfpi::reinterpret<sfpi::vFloat>(MAGIC_SEED - sfpi::reinterpret<sfpi::vInt>(x));
     sfpi::vFloat e = x * y + 1.0f;
 
     if constexpr (is_fp32_dest_acc_en) {
