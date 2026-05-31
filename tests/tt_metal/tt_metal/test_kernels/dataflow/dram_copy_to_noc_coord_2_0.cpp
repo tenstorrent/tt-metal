@@ -157,9 +157,6 @@ void kernel_main() {
         uint64_t dst = get_noc_addr(dst_noc_x, dst_noc_y, buffer_dst_addr);
         noc_inline_dw_write_set_state<false /*posted*/, true /*set_val*/>(
             dst, local_buffer[0], 0xF, NCRISC_WR_REG_CMD_BUF, noc_index);
-        // set_state leaves NOC_TARG_ADDR_MID untouched; zero it so the reconstructed 64-bit address is
-        // deterministic (inline writes target a 32-bit L1 destination, i.e. MID == 0).
-        NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_REG_CMD_BUF, NOC_TARG_ADDR_MID, 0);
         DEBUG_SANITIZE_NOC_ADDR_FROM_STATE(noc_index, NCRISC_WR_REG_CMD_BUF);
     } else {
         noc.async_write(
