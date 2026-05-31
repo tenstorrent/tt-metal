@@ -450,14 +450,17 @@ class TTNNGeneratorNSF:
             xt = F.leaky_relu(x_cf, LRELU_SLOPE)
             xt_cl = xt.permute(0, 2, 1).unsqueeze(1)  # [1, 1, T, C]
             xt_tt = ttnn.from_torch(xt_cl, dtype=DEFAULT_DTYPE)
+            # conv1 fuses LeakyReLU on its output, replacing the host LRELU
+            # that would otherwise sit between conv1 and conv2.
             xt_tt, _ = self._conv1d_fused(
                 xt_tt, c1["w"], c1["b_tt"], ch, ch, c1["kernel"], seq_len,
-                dilation=d, fuse_relu=False)
+                dilation=d, fuse_relu=True)
             xt = ttnn.to_torch(xt_tt).float().squeeze(1).permute(0, 2, 1)
 
-            xt = F.leaky_relu(xt, LRELU_SLOPE)
             xt_cl = xt.permute(0, 2, 1).unsqueeze(1)
             xt_tt = ttnn.from_torch(xt_cl, dtype=DEFAULT_DTYPE)
+            # conv2 keeps raw output — the following op is a residual add,
+            # not another activation, so no fusion here.
             xt_tt, _ = self._conv1d_fused(
                 xt_tt, c2["w"], c2["b_tt"], ch, ch, c2["kernel"], seq_len,
                 fuse_relu=False)
