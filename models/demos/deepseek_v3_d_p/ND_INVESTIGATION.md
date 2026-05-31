@@ -78,6 +78,25 @@ cores), so it covers the no-local-expert slots the reduce reads. The A/B is vali
 The MoE probe also fingerprints gate scores/indices, so it distinguishes a
 routing-level cause (gate non-determinism) from the combine cause.
 
+### IMPORTANT caveat on H1 (avoid over-anchoring)
+`finite_garbage * 0 == 0` (the *correct* result). H1 only corrupts when the
+unwritten slot's DRAM decodes to **non-finite** (NaN/Inf). The observed symptom
+(nostojic soak) is **clean but different** tokens — valid IDs, finite probs
+0.005–0.77 — i.e. **dense drift, not NaN poisoning**. So H1 most likely explains
+only the *intermittent catastrophic* case, not the dense run-to-run drift. The
+dense drift is more consistent with:
+- **Non-deterministic FP accumulation order** in a multi-core matmul or a CCL
+  reduce/all-reduce (core scheduling varies per process → different fp rounding),
+  and/or **finite L1 leftovers** read with non-zero weight, then **amplified by
+  gate top-k flips** over 61 layers (tiny perturbation → different expert routing
+  in deep layers → large output change).
+
+The probe is built to tell these apart: bit-exact SHA finds the FIRST diverging
+stage even for sub-ULP drift; `nonfinite` count flags NaN/Inf (H1); gate-index
+fingerprints reveal routing flips (amplification). **Conclusion deferred to the
+on-device measurement — do not commit to H1 until the first-diverging stage and
+its finiteness are measured.**
+
 ## Backup hypotheses (if H1 A/B does not fully fix determinism)
 - **H2 — dispatch-buffer padding (FFN input).** `dispatch` output is also
   `create_device_tensor` (unzeroed); padding rows within each expert region are
