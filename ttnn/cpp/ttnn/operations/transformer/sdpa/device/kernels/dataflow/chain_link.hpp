@@ -228,14 +228,18 @@ public:
             noc_semaphore_wait(sender_sem_ptr_, sender_wait_count_);
             noc_semaphore_set(sender_sem_ptr_, 0);
             uint64_t mcast_addr = mcast_base_noc_addr_ | cb_addr;
-            noc_async_write_multicast(cb_addr, mcast_addr, num_tiles * tile_bytes, mcast_num_dests_, true);
+            // [COMPUTE-ONLY EXPERIMENT] payload mcast disabled; semaphore sync kept.
+            // noc_async_write_multicast(cb_addr, mcast_addr, num_tiles * tile_bytes, mcast_num_dests_, true);
+            (void)mcast_addr;
             noc_semaphore_set_multicast(valid_sem_addr_, mcast_sem_noc_addr_, mcast_num_dests_);
             noc_async_writes_flushed();
         } else {
             noc_semaphore_wait(sender_sem_ptr_, 1);
             noc_semaphore_set(sender_sem_ptr_, 0);
             uint64_t unicast_addr = get_noc_addr(next_core_x_, next_core_y_, cb_addr);
-            noc_async_write(cb_addr, unicast_addr, num_tiles * tile_bytes);
+            // [COMPUTE-ONLY EXPERIMENT] payload unicast disabled; semaphore sync kept.
+            // noc_async_write(cb_addr, unicast_addr, num_tiles * tile_bytes);
+            (void)unicast_addr;
             noc_async_writes_flushed();
             noc_semaphore_set_remote(valid_sem_addr_, receiver_sem_noc_addr_);
         }

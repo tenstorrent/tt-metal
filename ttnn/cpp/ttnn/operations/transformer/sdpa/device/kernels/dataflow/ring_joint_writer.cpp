@@ -51,7 +51,8 @@ void read_prev_output_and_lse(
     cb_reserve_back(cb_lse_in, Sq_chunk_t);
     uint32_t lse_addr = get_write_ptr(cb_lse_in);
     for (uint32_t i = stats_seq_start_tile; i < stats_seq_end_tile; i++) {
-        noc_async_read_page(stats_tile_logical.id_of(nb, nq, i, 0), stats_writer, lse_addr);
+        // [COMPUTE-ONLY EXPERIMENT] payload read disabled.
+        // noc_async_read_page(stats_tile_logical.id_of(nb, nq, i, 0), stats_writer, lse_addr);
         lse_addr += stats_tile_bytes;
     }
     noc_async_read_barrier();
@@ -74,7 +75,8 @@ static __attribute__((noinline, noclone)) void issue_stats_column_reads(
     const uint32_t row_stride = stats_tile_logical.stride2();
     uint32_t addr = get_write_ptr(cb_id);
     for (uint32_t r = 0; r < num_rows; ++r) {
-        noc_async_read_page(tile_id, stats_writer, addr);
+        // [COMPUTE-ONLY EXPERIMENT] payload read disabled.
+        // noc_async_read_page(tile_id, stats_writer, addr);
         tile_id += row_stride;
         addr += stats_tile_bytes;
     }
@@ -94,7 +96,8 @@ static __attribute__((noinline, noclone)) void issue_stats_column_writes(
     const uint32_t row_stride = stats_tile_logical.stride2();
     uint32_t addr = get_read_ptr(cb_id);
     for (uint32_t r = 0; r < num_rows; ++r) {
-        noc_async_write_page(tile_id, stats_writer, addr);
+        // [COMPUTE-ONLY EXPERIMENT] payload write disabled.
+        // noc_async_write_page(tile_id, stats_writer, addr);
         tile_id += row_stride;
         addr += stats_tile_bytes;
     }
@@ -290,7 +293,8 @@ void write_output_and_lse(
     cb_wait_front(cb_lse_out, Sq_chunk_t);
     uint32_t lse_addr = get_read_ptr(cb_lse_out);
     for (uint32_t i = stats_seq_start_tile; i < stats_seq_end_tile; i++) {
-        noc_async_write_page(stats_tile_logical.id_of(nb, nq, i, 0), stats_writer, lse_addr);
+        // [COMPUTE-ONLY EXPERIMENT] payload write disabled.
+        // noc_async_write_page(stats_tile_logical.id_of(nb, nq, i, 0), stats_writer, lse_addr);
         lse_addr += stats_tile_bytes;
     }
     noc_async_writes_flushed();

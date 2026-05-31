@@ -409,7 +409,9 @@ void kernel_main() {
                         }
                         return ring_iter == 0 ? local_k_generator : gathered_k_generator;
                     }();
-                    fetch_block(k_gen, k_slice, end_seq_tile, cb_k_start_address, k_tile_bytes, true /*transpose*/);
+                    // [COMPUTE-ONLY EXPERIMENT] K DRAM read disabled; CB reserve/push + chain sync kept.
+                    // fetch_block(k_gen, k_slice, end_seq_tile, cb_k_start_address, k_tile_bytes, true /*transpose*/);
+                    (void)k_gen;
                 }
 
                 // Forward K chunk via chain (uses K's data size explicitly)
@@ -442,29 +444,22 @@ void kernel_main() {
                         }
                         return q_generator;
                     }();
+                    // [COMPUTE-ONLY EXPERIMENT] Q DRAM read disabled; keep CB reserve/push so compute
+                    // still gets fed (read_block bundles reserve+read+push, so we inline reserve+push).
+                    (void)q_gen;
                     if constexpr (use_q_subblock_push) {
                         for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
                             const uint32_t sb_row_start = q_slice.d2_start + q_sub * qk_subblock_h;
                             const uint32_t sb_row_end = sb_row_start + qk_subblock_h;
                             Slice q_sub_slice(q_slice.d0, q_slice.d1, sb_row_start, sb_row_end, 0, DHt);
-                            read_block(
-                                q_gen,
-                                q_sub_slice,
-                                q_end_seq_tile,
-                                cb_q_in,
-                                q_tile_bytes,
-                                false /*transpose*/,
-                                q_barrier_threshold);
+                            const uint32_t q_sub_tiles = q_sub_slice.get_d2_size() * q_sub_slice.get_d3_size();
+                            cb_reserve_back(cb_q_in, q_sub_tiles);
+                            cb_push_back(cb_q_in, q_sub_tiles);
                         }
                     } else {
-                        read_block(
-                            q_gen,
-                            q_slice,
-                            q_end_seq_tile,
-                            cb_q_in,
-                            q_tile_bytes,
-                            false /*transpose*/,
-                            q_barrier_threshold);
+                        const uint32_t q_tiles = q_slice.get_d2_size() * q_slice.get_d3_size();
+                        cb_reserve_back(cb_q_in, q_tiles);
+                        cb_push_back(cb_q_in, q_tiles);
                     }
                     q_pushed = true;
                 }
@@ -483,7 +478,9 @@ void kernel_main() {
                         }
                         return ring_iter == 0 ? local_v_generator : gathered_v_generator;
                     }();
-                    fetch_block(v_gen, v_slice, end_seq_tile, cb_v_start_address, v_tile_bytes, false /*transpose*/);
+                    // [COMPUTE-ONLY EXPERIMENT] V DRAM read disabled; CB reserve/push + chain sync kept.
+                    // fetch_block(v_gen, v_slice, end_seq_tile, cb_v_start_address, v_tile_bytes, false /*transpose*/);
+                    (void)v_gen;
                 }
 
                 // Forward V to next core(s) before push_back — prevents compute from

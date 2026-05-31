@@ -424,6 +424,20 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
     log_debug(tt::LogOp, "out_in1_num_subblocks: {}", out_in1_num_subblocks);
     log_debug(tt::LogOp, "out_num_blocks: {}", out_num_blocks);
 
+    // Grep-able summary of the two matmul output-subblock geometries (tiles), keyed by
+    // q_chunk/k_chunk so an external sweep can attach them as a per-config field.
+    // Matmul-1 = QK^T (out Sq_chunk_t x Sk_chunk_t); Matmul-2 = attn@V (out Sq_chunk_t x vDHt).
+    log_info(
+        tt::LogOp,
+        "RJSDPA_SUBBLOCK q_chunk={} k_chunk={} qk_out_subblock(h x w)={}x{} av_out_subblock(h x w)={}x{} dst={}",
+        Sq_chunk_t * tt::constants::TILE_WIDTH,
+        Sk_chunk_t * tt::constants::TILE_WIDTH,
+        qk_out_subblock_h,
+        qk_out_subblock_w,
+        out_out_subblock_h,
+        out_out_subblock_w,
+        dst_size);
+
     // Determine granularity for statistics computation
     // Each granularity must evenly divide its tile count to avoid dropping tiles
     const uint32_t stats_granularity = detail::find_valid_granularity(Sq_chunk_t, dst_size);

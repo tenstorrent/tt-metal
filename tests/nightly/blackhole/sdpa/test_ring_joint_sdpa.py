@@ -817,6 +817,8 @@ def run_ring_joint_sdpa_chunked(
     q_chunk_size: int = None,
     k_chunk_size: int = None,
     num_iterations: int = 1,
+    do_check: bool = True,
+    only_chunk: int = None,
 ):
     """
     Validate ring joint SDPA chunked-prefill against a full-sequence torch oracle.
@@ -900,7 +902,11 @@ def run_ring_joint_sdpa_chunked(
         Q_full = fa_rand(b, nhq, total_seq, d_q)
         K_full = fa_rand(b, nhk, total_seq, d_k)
         V_full = fa_rand(b, nhv, total_seq, d_v)
-        ref_full, _ = torch_joint_sdpa_reference(Q_full, K_full, V_full, joint_Q, joint_K, joint_V, is_causal=True)
+        # The full-sequence torch oracle is only needed for PCC checks; skip it in
+        # perf mode (do_check=False) — it is the dominant host cost at long total_seq.
+        ref_full = None
+        if do_check:
+            ref_full, _ = torch_joint_sdpa_reference(Q_full, K_full, V_full, joint_Q, joint_K, joint_V, is_causal=True)
 
         sdpa_input_shard_dims = [None, None]
         sdpa_input_shard_dims[sp_axis] = 2
@@ -1082,7 +1088,11 @@ def run_ring_joint_sdpa_chunked(
         per_chunk_results = []
         for it in range(num_iterations):
             iter_outputs = [] if num_iterations > 1 else None
-            for i in range(n_chunks):
+            # Perf mode can target a single chunk: to_balanced_growing(.., only_chunk)
+            # builds the whole [0..only_chunk] prefix in one upload, so no need to
+            # replay the earlier chunks.
+            chunk_indices = [only_chunk] if only_chunk is not None else range(n_chunks)
+            for i in chunk_indices:
                 s, e = i * chunk_size, (i + 1) * chunk_size
 
                 K_balanced = to_balanced_growing(K_full, i)
@@ -1133,6 +1143,9 @@ def run_ring_joint_sdpa_chunked(
 
                 if num_iterations > 1:
                     iter_outputs.append(out_i)
+                    continue
+
+                if not do_check:
                     continue
 
                 expected_i = ref_full[:, :, s:e, :]
