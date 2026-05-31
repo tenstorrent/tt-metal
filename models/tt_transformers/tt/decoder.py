@@ -216,6 +216,76 @@ class TransformerBlock(LightweightModule):
             # If post_feedforward_layernorm is not in state_dict, we do not use it
             self.post_ff_norm = None
 
+    def update_weights(
+        self,
+        layer_hf_state_dict: dict[str, ttnn.Tensor],
+        *,
+        hf_rope: bool = False,
+    ) -> None:
+        """Strict layer-local weight update from an HF-keyed dict of
+        on-device 4D ttnn tensors.
+
+        Keys in ``layer_hf_state_dict`` are the suffix after
+        ``model.layers.{i}.`` (e.g. ``self_attn.q_proj.weight``,
+        ``mlp.gate_proj.weight``, ``input_layernorm.weight``). The
+        top-level ``Transformer.update_weights`` is responsible for
+        stripping the layer prefix and routing each layer's slice here.
+
+        Required keys (Llama-3.2-1B-Instruct):
+
+            self_attn.q_proj.weight
+            self_attn.k_proj.weight
+            self_attn.v_proj.weight
+            self_attn.o_proj.weight
+            mlp.gate_proj.weight
+            mlp.up_proj.weight
+            mlp.down_proj.weight
+            input_layernorm.weight           -> attention_norm
+            post_attention_layernorm.weight  -> ff_norm
+
+        Strict: missing required keys raise ``KeyError``; any unconsumed
+        key remaining at the end (e.g. an extra bias, q/k-norm, or
+        Gemma-style pre/post-FF norm not yet wired into the leaf
+        ``update()`` methods) raises ``ValueError``.
+
+        ``hf_rope`` is forwarded to ``Attention.update``; see
+        ``Transformer.update_weights`` for semantics.
+        """
+        unconsumed = set(layer_hf_state_dict.keys())
+
+        def consume(key: str) -> ttnn.Tensor:
+            if key not in layer_hf_state_dict:
+                raise KeyError(
+                    f"TransformerBlock.update_weights (layer {self.layer_num}): " f"missing required HF key {key!r}"
+                )
+            unconsumed.discard(key)
+            return layer_hf_state_dict[key]
+
+        self.attention.update(
+            q_proj=consume("self_attn.q_proj.weight"),
+            k_proj=consume("self_attn.k_proj.weight"),
+            v_proj=consume("self_attn.v_proj.weight"),
+            o_proj=consume("self_attn.o_proj.weight"),
+            hf_rope=hf_rope,
+        )
+        self.feed_forward.update(
+            gate_proj=consume("mlp.gate_proj.weight"),
+            up_proj=consume("mlp.up_proj.weight"),
+            down_proj=consume("mlp.down_proj.weight"),
+        )
+        self.attention_norm.update(weight=consume("input_layernorm.weight"))
+        self.ff_norm.update(weight=consume("post_attention_layernorm.weight"))
+
+        if unconsumed:
+            sample = sorted(unconsumed)[:10]
+            raise ValueError(
+                f"TransformerBlock.update_weights (layer {self.layer_num}): "
+                f"{len(unconsumed)} HF key(s) not consumed within this layer. "
+                f"This usually means an extra weight (a bias, q/k norm, or "
+                f"Gemma-style pre/post-FF norm) that the leaf .update() "
+                f"doesn't yet support. Showing up to 10: {sample}"
+            )
+
     def forward(
         self,
         x: ttnn.Tensor,
