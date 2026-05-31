@@ -520,6 +520,19 @@ targets:
             accuracy: {}
             owner_id: U0491KT8MNY # Mohamed Bahnas
             team: models
+  lfm2.5-vl-1.6b:
+    aliases: ["LFM2.5-VL-1.6B", "LiquidAI/LFM2.5-VL-1.6B"]
+    skus:
+      wh_n150:
+        entries:
+          - batch_size: 1
+            seq_len: 4096
+            status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U0491KT8MNY # Community
+            team: models
+
   phi-3-mini:
     aliases: ["Phi-3-mini", "microsoft/Phi-3-mini-128k-instruct"]
     skus:
