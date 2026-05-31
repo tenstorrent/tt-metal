@@ -129,8 +129,8 @@ void kernel_main() {
     // sized for worst-case local entries per batch). Reset after the batch-end flush.
     uint32_t local_count = 0;
 
-    DPRINT_DISPATCH << "Writer untilize: handshake done c4=" << sender_c4_l1_addr << " c5=" << sender_c5_l1_addr
-                    << " c6=" << sender_c6_l1_addr << ENDL();
+    DPRINT_DISPATCH(
+        "Writer untilize: handshake done c4={} c5={} c6={}\n", sender_c4_l1_addr, sender_c5_l1_addr, sender_c6_l1_addr);
 
     // ===== Per-batch loop — drains the route plan published by the reader RISC =====
     for (uint32_t batch_idx = core_id; batch_idx < total_batches; batch_idx += total_workers) {

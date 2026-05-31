@@ -308,7 +308,7 @@ void kernel_main() {
         plan[0] = entry_count;
         cb_push_back(cb_plan_id, 1);
 
-        DPRINT_DISPATCH << "Reader untilize batch=" << batch_idx << " entries=" << entry_count << ENDL();
+        DPRINT_DISPATCH("Reader untilize batch={} entries={}\n", batch_idx, entry_count);
     }
 
     // Send sentinel to compute so it breaks out of its loop

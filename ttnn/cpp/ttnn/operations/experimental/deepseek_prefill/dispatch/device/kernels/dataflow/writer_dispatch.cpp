@@ -233,8 +233,12 @@ void kernel_main() {
     noc_semaphore_inc(get_noc_addr(untilize_u2_noc_x, untilize_u2_noc_y, addr_ready_u2_sem_l1_offset), 1);
     noc_async_atomic_barrier();
 
-    DPRINT_DISPATCH << "Sender writer: addr handshake done u1=(" << untilize_noc_x << "," << untilize_noc_y << ") u2=("
-                    << untilize_u2_noc_x << "," << untilize_u2_noc_y << ")" << ENDL();
+    DPRINT_DISPATCH(
+        "Sender writer: addr handshake done u1=({},{}) u2=({},{})\n",
+        untilize_noc_x,
+        untilize_noc_y,
+        untilize_u2_noc_x,
+        untilize_u2_noc_y);
 #endif
 
 #ifdef DEST_CHIP_ID
@@ -302,7 +306,7 @@ void kernel_main() {
                     uint32_t page_idx = route_info[2];
                     uint32_t payload_addr = writer_payload_base + slot * aligned_output_page_size;
                     uint32_t metadata_addr = writer_metadata_base + slot * aligned_metadata_page_size;
-                    DPRINT_DISPATCH << "u1 send: route=" << route_info[0] << " page=" << page_idx << ENDL();
+                    DPRINT_DISPATCH("u1 send: route={} page={}\n", route_info[0], page_idx);
 #ifdef DEST_CHIP_ID
 
                     fabric_set_unicast_route<false>(
@@ -342,7 +346,7 @@ void kernel_main() {
                     uint32_t page_idx = route_info[2];
                     uint32_t payload_addr = writer_payload_base_2 + slot * aligned_output_page_size;
                     uint32_t metadata_addr = writer_metadata_base_2 + slot * aligned_metadata_page_size;
-                    DPRINT_DISPATCH << "u2 send: route=" << route_info[0] << " page=" << page_idx << ENDL();
+                    DPRINT_DISPATCH("u2 send: route={} page={}\n", route_info[0], page_idx);
 #ifdef DEST_CHIP_ID
                     fabric_set_unicast_route<false>(
                         (volatile tt_l1_ptr LowLatencyPacketHeader*)unicast_packet_header, distance);
