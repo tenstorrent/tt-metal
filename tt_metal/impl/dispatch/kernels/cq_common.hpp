@@ -110,21 +110,6 @@ FORCE_INLINE void tl1_publish_flush(uintptr_t cached_tl1_addr) {
 #endif
 }
 
-#if defined(PREFETCH_DEBUG_COUNTERS_L1)
-// Slot indices must match PrefetchDebugCounter in cq_prefetch_debug.hpp (CB_ACQUIRE_* only).
-enum : uint32_t {
-    PREFETCH_DBG_CB_ACQUIRE_ENTER = 18,
-    PREFETCH_DBG_CB_ACQUIRE_DONE = 19,
-    PREFETCH_DBG_CB_ACQUIRE_SPINS = 20,
-};
-
-FORCE_INLINE void prefetch_debug_counter_inc(uint32_t slot_idx) {
-    const uintptr_t addr = PREFETCH_DEBUG_COUNTERS_L1 + slot_idx * sizeof(uint32_t);
-    (*reinterpret_cast<volatile uint32_t*>(addr))++;
-    tl1_publish_flush(addr);
-}
-#endif
-
 // Quasar DM experiment: poll FetchQ (and similar host-filled scalars) via the cacheable TL1 port
 // after L2 invalidate, instead of loading through the uncached alias. Other archs: plain volatile load.
 template <typename T>
@@ -353,9 +338,6 @@ public:
     FORCE_INLINE void acquire_pages(uint32_t n) {
         volatile tt_l1_ptr uint32_t* sem_addr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(get_semaphore<fd_core_type>(my_sem_id)));
-#if defined(PREFETCH_DEBUG_COUNTERS_L1)
-        prefetch_debug_counter_inc(PREFETCH_DBG_CB_ACQUIRE_ENTER);
-#endif
         DPRINT << "CBWriter: acquire_pages: n=" << n << " sem id: " << my_sem_id
                << " additional_count: " << additional_count << ENDL();
 
@@ -370,17 +352,11 @@ public:
         // Required for trace which steals downstream credits and may make the value negative
         uint32_t heartbeat = 0;
         do {
-#if defined(PREFETCH_DEBUG_COUNTERS_L1)
-            prefetch_debug_counter_inc(PREFETCH_DBG_CB_ACQUIRE_SPINS);
-#endif
             invalidate_l1_cache();
             IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
         } while (wrap_gt(n, additional_count + *sem_addr));
         WAYPOINT("DAPD");
         additional_count -= n;
-#if defined(PREFETCH_DEBUG_COUNTERS_L1)
-        prefetch_debug_counter_inc(PREFETCH_DBG_CB_ACQUIRE_DONE);
-#endif
         DPRINT << "CBWriter: acquire_pages: after loop: additional_count=" << additional_count << ENDL();
     }
 

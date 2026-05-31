@@ -933,113 +933,7 @@ static_assert(SD_PREFETCHER_PAGE_BATCH_SIZE == 1);
 static constexpr uint32_t SD_PREFETCH_CMDDAT_LOG_PAGE_SIZE = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
 static constexpr uint32_t SD_PREFETCH_CMDDAT_PAGE_SIZE = 1u << SD_PREFETCH_CMDDAT_LOG_PAGE_SIZE;
 static constexpr uint32_t SD_PREFETCH_CMDDAT_BLOCKS = DispatchSettings::PREFETCH_D_BUFFER_BLOCKS;
-// Host-readable prefetch debug counters (see cq_prefetch_debug.hpp). Reserved from the tail of the
-// memmap cmddat allocation; kernel CMDDAT_Q_SIZE is the page-aligned prefix and debug
-// counters occupy the bytes immediately after CMDDAT_Q_BASE + CMDDAT_Q_SIZE.
-static constexpr uint32_t SD_PREFETCH_DEBUG_NUM_COUNTERS = 85u;
-static constexpr uint32_t SD_PREFETCH_DEBUG_BUILD_ID = 14u;
-static constexpr uint32_t SD_PREFETCH_DEBUG_FLUSH_ENTER_MIRROR_CODE = 0xF4u;
-static constexpr uint32_t SD_PREFETCH_DEBUG_RETIRE_MIRROR_CODE = 0xFEu;
-static constexpr uint32_t SD_PREFETCH_DEBUG_ISSUE_DONE_MIRROR_CODE = 0xFDu;
-static constexpr uint32_t SD_PREFETCH_DEBUG_BRANCH_MIRROR_CODE = 0xFCu;
-static constexpr uint32_t SD_PREFETCH_DEBUG_FETCHQ_RETURN_MIRROR_CODE = 0xFBu;
-static constexpr uint32_t SD_PREFETCH_DEBUG_STALL_REFRESH_MIRROR_CODE = 0xFAu;
-static constexpr uint32_t SD_PREFETCH_DEBUG_ISSUE_LOOP_EXIT_MIRROR_CODE = 0xF9u;
-static constexpr uint32_t SD_PREFETCH_DEBUG_RETIRE_BARRIER_ENTER_MIRROR_CODE = 0xF5u;
-static constexpr uint32_t SD_PREFETCH_DEBUG_ISSUE_WHILE_COND_MIRROR_CODE = 0xF6u;
-static constexpr uint32_t SD_PREFETCH_DEBUG_ISSUE_OK_INFLIGHT_MIRROR_CODE = 0xF7u;
-static constexpr uint32_t SD_PREFETCH_DEBUG_ISSUE_WHILE_TAIL_MIRROR_CODE = 0xF8u;
-static constexpr uint32_t SD_PREFETCH_DEBUG_BARRIER_PHASE_NONE = 0u;
-static constexpr uint32_t SD_PREFETCH_DEBUG_BARRIER_PHASE_ENTERED = 1u;
-static constexpr uint32_t SD_PREFETCH_DEBUG_BARRIER_PHASE_RETURNED = 2u;
-static constexpr uint32_t SD_PREFETCH_POST_WHILE_MILESTONE_MAX = 21u;
-static constexpr uint32_t SD_PREFETCH_POST_WHILE_MILESTONE_EPILOGUE_ENTER = 1u;
-static constexpr uint32_t SD_PREFETCH_POST_WHILE_MILESTONE_AFTER_WHILE_EXIT_MIRROR = 2u;
-static constexpr uint32_t SD_PREFETCH_POST_WHILE_MILESTONE_POST_ISSUE_LOOP_EXIT = 3u;
-static constexpr uint32_t SD_PREFETCH_POST_WHILE_MILESTONE_STALL_REEVAL = 4u;
-static constexpr uint32_t SD_PREFETCH_POST_WHILE_MILESTONE_CMD_READY_REEVAL = 5u;
-static constexpr uint32_t SD_PREFETCH_POST_WHILE_MILESTONE_POST_ISSUE_RECORD = 6u;
-static constexpr uint32_t SD_PREFETCH_POST_WHILE_MILESTONE_RETIRE_PRE_BRANCH = 7u;
-static constexpr uint32_t SD_PREFETCH_POST_WHILE_MILESTONE_RETIRE_PATH_ENTRY = 8u;
-static constexpr uint32_t SD_PREFETCH_POST_WHILE_MILESTONE_RETIRE_INFLIGHT_ENTER = 9u;
-static constexpr uint32_t SD_PREFETCH_POST_WHILE_MILESTONE_RETIRE_START = 10u;
-static constexpr uint32_t SD_PREFETCH_POST_WHILE_MILESTONE_RETIRE_TR_ACK_SNAPSHOT = 11u;
-static constexpr uint32_t SD_PREFETCH_POST_WHILE_MILESTONE_BARRIER_ENTER = 12u;
-static constexpr uint32_t SD_PREFETCH_POST_WHILE_MILESTONE_BARRIER_RETURNED = 13u;
-static constexpr uint32_t SD_PREFETCH_POST_WHILE_MILESTONE_CACHE_INVALIDATE_START = 14u;
-static constexpr uint32_t SD_PREFETCH_POST_WHILE_MILESTONE_CACHE_INVALIDATE_DONE = 15u;
-static constexpr uint32_t SD_PREFETCH_POST_WHILE_MILESTONE_RETIRE_DONE = 16u;
-static constexpr uint32_t SD_PREFETCH_POST_WHILE_MILESTONE_RETIRE_STALL_RETURN = 17u;
-static constexpr uint32_t SD_PREFETCH_POST_WHILE_MILESTONE_RETIRE_LOOP_CONTINUE = 18u;
-static constexpr uint32_t SD_PREFETCH_POST_WHILE_MILESTONE_HQW_ENTER = 19u;
-static constexpr uint32_t SD_PREFETCH_POST_WHILE_MILESTONE_FETCHQ_RETURN_PATH = 20u;
-static constexpr uint32_t SD_PREFETCH_POST_WHILE_MILESTONE_FETCHQ_RETURN = 21u;
-
-inline const char* sd_prefetch_post_while_milestone_name(uint32_t milestone_id) {
-    switch (milestone_id) {
-        case SD_PREFETCH_POST_WHILE_MILESTONE_EPILOGUE_ENTER: return "epilogue_enter";
-        case SD_PREFETCH_POST_WHILE_MILESTONE_AFTER_WHILE_EXIT_MIRROR: return "after_while_exit_mirror";
-        case SD_PREFETCH_POST_WHILE_MILESTONE_POST_ISSUE_LOOP_EXIT: return "post_issue_loop_exit";
-        case SD_PREFETCH_POST_WHILE_MILESTONE_STALL_REEVAL: return "stall_reeval";
-        case SD_PREFETCH_POST_WHILE_MILESTONE_CMD_READY_REEVAL: return "cmd_ready_reeval";
-        case SD_PREFETCH_POST_WHILE_MILESTONE_POST_ISSUE_RECORD: return "post_issue_record";
-        case SD_PREFETCH_POST_WHILE_MILESTONE_RETIRE_PRE_BRANCH: return "retire_pre_branch";
-        case SD_PREFETCH_POST_WHILE_MILESTONE_RETIRE_PATH_ENTRY: return "retire_path_entry";
-        case SD_PREFETCH_POST_WHILE_MILESTONE_RETIRE_INFLIGHT_ENTER: return "retire_inflight_enter";
-        case SD_PREFETCH_POST_WHILE_MILESTONE_RETIRE_START: return "retire_start";
-        case SD_PREFETCH_POST_WHILE_MILESTONE_RETIRE_TR_ACK_SNAPSHOT: return "retire_tr_ack_snapshot";
-        case SD_PREFETCH_POST_WHILE_MILESTONE_BARRIER_ENTER: return "barrier_enter";
-        case SD_PREFETCH_POST_WHILE_MILESTONE_BARRIER_RETURNED: return "barrier_returned";
-        case SD_PREFETCH_POST_WHILE_MILESTONE_CACHE_INVALIDATE_START: return "cache_invalidate_start";
-        case SD_PREFETCH_POST_WHILE_MILESTONE_CACHE_INVALIDATE_DONE: return "cache_invalidate_done";
-        case SD_PREFETCH_POST_WHILE_MILESTONE_RETIRE_DONE: return "retire_done";
-        case SD_PREFETCH_POST_WHILE_MILESTONE_RETIRE_STALL_RETURN: return "retire_stall_return";
-        case SD_PREFETCH_POST_WHILE_MILESTONE_RETIRE_LOOP_CONTINUE: return "retire_loop_continue";
-        case SD_PREFETCH_POST_WHILE_MILESTONE_HQW_ENTER: return "hqw_enter";
-        case SD_PREFETCH_POST_WHILE_MILESTONE_FETCHQ_RETURN_PATH: return "fetchq_return_path";
-        case SD_PREFETCH_POST_WHILE_MILESTONE_FETCHQ_RETURN: return "fetchq_return";
-        default: return milestone_id == 0 ? "none" : "unknown";
-    }
-}
-
-static constexpr uint32_t SD_PREFETCH_PRE_ISSUE_MILESTONE_MAX = 7u;
-static constexpr uint32_t SD_PREFETCH_PRE_ISSUE_MILESTONE_BLOCK_ENTER = 1u;
-static constexpr uint32_t SD_PREFETCH_PRE_ISSUE_MILESTONE_STALL_SKIP = 2u;
-static constexpr uint32_t SD_PREFETCH_PRE_ISSUE_MILESTONE_WHILE_ENTER = 3u;
-static constexpr uint32_t SD_PREFETCH_PRE_ISSUE_MILESTONE_COND_FAIL = 4u;
-static constexpr uint32_t SD_PREFETCH_PRE_ISSUE_MILESTONE_COND_OK = 5u;
-static constexpr uint32_t SD_PREFETCH_PRE_ISSUE_MILESTONE_LOOP_ENTER = 6u;
-static constexpr uint32_t SD_PREFETCH_PRE_ISSUE_MILESTONE_READ_FROM_PCIE_CALL = 7u;
-
-inline const char* sd_prefetch_pre_issue_milestone_name(uint32_t milestone_id) {
-    switch (milestone_id) {
-        case SD_PREFETCH_PRE_ISSUE_MILESTONE_BLOCK_ENTER: return "block_enter";
-        case SD_PREFETCH_PRE_ISSUE_MILESTONE_STALL_SKIP: return "stall_skip";
-        case SD_PREFETCH_PRE_ISSUE_MILESTONE_WHILE_ENTER: return "while_enter";
-        case SD_PREFETCH_PRE_ISSUE_MILESTONE_COND_FAIL: return "cond_fail";
-        case SD_PREFETCH_PRE_ISSUE_MILESTONE_COND_OK: return "cond_ok";
-        case SD_PREFETCH_PRE_ISSUE_MILESTONE_LOOP_ENTER: return "loop_enter";
-        case SD_PREFETCH_PRE_ISSUE_MILESTONE_READ_FROM_PCIE_CALL: return "read_from_pcie_call";
-        default: return milestone_id == 0 ? "none" : "unknown";
-    }
-}
 static constexpr uint32_t SD_PREFETCH_MAX_OUTSTANDING_PCIE_READS = 4u;
-static constexpr uint32_t SD_PREFETCH_DEBUG_COUNTERS_BYTES =
-    SD_PREFETCH_DEBUG_NUM_COUNTERS * static_cast<uint32_t>(sizeof(uint32_t));
-
-// Page-aligned kernel cmddat ring inside the memmap cmddat allocation. Debug counters sit
-// immediately after the ring; any memmap tail after counters+sizeof(counters) is unused slack.
-inline uint32_t sd_prefetch_cmddat_q_kernel_pages(uint32_t cmddat_q_bytes) {
-    return (cmddat_q_bytes - SD_PREFETCH_DEBUG_COUNTERS_BYTES) / SD_PREFETCH_CMDDAT_PAGE_SIZE;
-}
-
-inline uint32_t sd_prefetch_cmddat_q_kernel_bytes(uint32_t cmddat_q_bytes) {
-    return sd_prefetch_cmddat_q_kernel_pages(cmddat_q_bytes) * SD_PREFETCH_CMDDAT_PAGE_SIZE;
-}
-
-inline uint32_t sd_prefetch_debug_counters_l1(uint32_t cmddat_q_base, uint32_t cmddat_q_bytes) {
-    return cmddat_q_base + sd_prefetch_cmddat_q_kernel_bytes(cmddat_q_bytes);
-}
 // Issue + completion must fit in one device's hugepage slot (MAX_DEV_CHANNEL_SIZE = 256 MB) on
 // WH/BH. On Quasar the kSdQuasarIssueBase / kSdQuasarCompletionBase pair lives in DRAM bank 0,
 // which on this target only decodes the low 26 address bits (bits 26+ are don't-cares — see the
@@ -1458,13 +1352,12 @@ inline std::map<std::string, std::string> make_sd_prefetch_defines(
     uint32_t downstream_sync_sem_id,
     uint32_t entry_size,
     const CoreCoord& phys_prefetch,
-    const CoreCoord& phys_dispatch) {
+    const CoreCoord& phys_dispatch,
+    uint32_t prefetch_phase_marker_addr = 0) {
     const bool is_cq_dram_backed = (device->arch() == tt::ARCH::QUASAR);
     const auto my_virtual = device->virtual_noc0_coordinate(tt_metal::NOC::NOC_0, phys_prefetch);
     const auto downstream_virtual = device->virtual_noc0_coordinate(tt_metal::NOC::NOC_0, phys_dispatch);
-    const uint32_t cmddat_q_bytes = cmddat_q_pages * SD_PREFETCH_CMDDAT_PAGE_SIZE;
-    const uint32_t cmddat_q_kernel_pages = sd_prefetch_cmddat_q_kernel_pages(cmddat_q_bytes);
-    const uint32_t cmddat_q_kernel_bytes = cmddat_q_kernel_pages * SD_PREFETCH_CMDDAT_PAGE_SIZE;
+    const uint32_t cmddat_q_kernel_bytes = cmddat_q_pages * SD_PREFETCH_CMDDAT_PAGE_SIZE;
     return {
         {"MY_NOC_X", std::to_string(my_virtual.x)},
         {"MY_NOC_Y", std::to_string(my_virtual.y)},
@@ -1490,11 +1383,10 @@ inline std::map<std::string, std::string> make_sd_prefetch_defines(
         {"PREFETCH_Q_PCIE_RD_PTR_ADDR", std::to_string(prefetch_q_pcie_rd_ptr_addr)},
         {"CMDDAT_Q_BASE", std::to_string(cmddat_q_base)},
         {"CMDDAT_Q_SIZE", std::to_string(cmddat_q_kernel_bytes)},
-        {"PREFETCH_DEBUG_COUNTERS_L1", std::to_string(cmddat_q_base + cmddat_q_kernel_bytes)},
         {"SCRATCH_DB_BASE", std::to_string(scratch_db_base)},
         {"SCRATCH_DB_SIZE", std::to_string(scratch_db_size)},
         {"DOWNSTREAM_SYNC_SEM_ID", std::to_string(downstream_sync_sem_id)},
-        {"CMDDAT_Q_PAGES", std::to_string(cmddat_q_kernel_pages)},
+        {"CMDDAT_Q_PAGES", std::to_string(cmddat_q_pages)},
         {"MY_UPSTREAM_CB_SEM_ID", "0"},  // not used when IS_H_VARIANT=1
         {"UPSTREAM_CB_SEM_ID", "0"},
         {"CMDDAT_Q_LOG_PAGE_SIZE", std::to_string(SD_PREFETCH_CMDDAT_LOG_PAGE_SIZE)},
@@ -1534,6 +1426,7 @@ inline std::map<std::string, std::string> make_sd_prefetch_defines(
         {"OFFSETOF_ROUTER_DIRECTION", "2"},
         {"FD_CORE_TYPE", "0"},
         {"PREFETCH_Q_ENTRY_BITS", std::to_string(entry_size * 8)},
+        {"PREFETCH_PHASE_MARKER_ADDR", std::to_string(prefetch_phase_marker_addr)},
         // FABRIC_RELAY intentionally omitted - must be undefined for #if defined(FABRIC_RELAY) to be false
     };
 }
