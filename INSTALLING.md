@@ -206,6 +206,51 @@ TT-Topology can be used to specify different eth routing configurations for some
 
 - For more information, visit Tenstorrent's [TT-Topology README](https://github.com/tenstorrent/tt-topology/blob/main/README.md).
 
+## Rocky Linux 9 / RHEL 9
+
+Rocky Linux 9 and RHEL 9 are supported with the following additional considerations.
+
+### Step 1: Install Dependencies
+
+```sh
+sudo ./install_dependencies.sh
+```
+
+This will:
+- Enable EPEL and CRB repositories for additional packages
+- Install llvm-toolset (clang-18) from the standard repositories
+- Build libisl from source (required version 0.23+ is not available in Rocky 9 repos)
+- Configure OpenMPI paths if distributed mode is enabled
+
+### Step 2: Set Up OpenMPI (Optional)
+
+On Rocky Linux 9, OpenMPI is installed under `/usr/lib64/openmpi/`. CMake's `FindOpenMPI` may
+not locate it by default. If building with distributed support (`ENABLE_DISTRIBUTED=ON`),
+set the following environment variables:
+
+```sh
+export PATH="/usr/lib64/openmpi/bin:$PATH"
+export LD_LIBRARY_PATH="/usr/lib64/openmpi/lib:${LD_LIBRARY_PATH:-}"
+export CPATH="/usr/lib64/openmpi/include:${CPATH:-}"
+```
+
+Alternatively, install `--without-distributed` to skip MPI entirely:
+
+```sh
+./build_metal.sh --without-distributed
+```
+
+### Step 3: Build
+
+```sh
+./build_metal.sh
+```
+
+The build script auto-detects Rocky Linux and uses the `clang-18` toolchain
+(`cmake/x86_64-linux-clang-18-libstdcpp-toolchain.cmake`).
+
+---
+
 ## Virtual Machine Requirements
 
 > [!IMPORTANT]
