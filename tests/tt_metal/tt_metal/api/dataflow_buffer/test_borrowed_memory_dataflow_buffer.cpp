@@ -153,7 +153,7 @@ void run_borrowed_memory_dfb_program(
             .accessor_name         = "dst_tensor",
         }};
     }
-    consumer_spec.dfb_bindings.push_back(KernelSpec::DFBBinding{
+    consumer_spec.dfb_bindings.push_back(DFBBinding{
         .dfb_spec_name = "borrowed_dfb",
         .accessor_name = "in",
         .endpoint_type = DFBEndpointType::CONSUMER,

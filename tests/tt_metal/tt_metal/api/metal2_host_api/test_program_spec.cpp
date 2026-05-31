@@ -853,7 +853,7 @@ TEST_F(ProgramSpecTestQuasar, KernelSemaphoreBindingsSucceed) {
     sem.target_nodes = NodeCoord{0, 0};
     spec.semaphores = {sem};
 
-    KernelSpec::SemaphoreBinding binding;
+    SemaphoreBinding binding;
     binding.semaphore_spec_name = "sem_0";
     binding.accessor_name = "my_sem";
     spec.kernels[0].semaphore_bindings = {binding};
@@ -874,7 +874,7 @@ TEST_F(ProgramSpecTestQuasar, SemaphoreBoundToComputeKernelFailsOnQuasar) {
     // kernels[1] is the compute kernel in MakeMinimalValidProgramSpec
     ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
     spec.kernels[1].semaphore_bindings = {
-        KernelSpec::SemaphoreBinding{.semaphore_spec_name = "sem_0", .accessor_name = "done_flag"}};
+        SemaphoreBinding{.semaphore_spec_name = "sem_0", .accessor_name = "done_flag"}};
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
@@ -885,7 +885,7 @@ TEST_F(ProgramSpecTestQuasar, SemaphoreBoundToComputeKernelFailsOnQuasar) {
 TEST_F(ProgramSpecTestQuasar, KernelSemaphoreBindingUnknownSemaphoreFails) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
-    KernelSpec::SemaphoreBinding binding;
+    SemaphoreBinding binding;
     binding.semaphore_spec_name = "missing_sem";
     binding.accessor_name = "my_sem";
     spec.kernels[0].semaphore_bindings = {binding};
@@ -904,7 +904,7 @@ TEST_F(ProgramSpecTestQuasar, KernelSemaphoreBindingInvalidAccessorFails) {
     sem.target_nodes = NodeCoord{0, 0};
     spec.semaphores = {sem};
 
-    KernelSpec::SemaphoreBinding binding;
+    SemaphoreBinding binding;
     binding.semaphore_spec_name = "sem_0";
     binding.accessor_name = "has-dash";
     spec.kernels[0].semaphore_bindings = {binding};
@@ -929,8 +929,8 @@ TEST_F(ProgramSpecTestQuasar, KernelSemaphoreBindingDuplicateAccessorFails) {
     spec.semaphores = {sem0, sem1};
 
     spec.kernels[0].semaphore_bindings = {
-        KernelSpec::SemaphoreBinding{.semaphore_spec_name = "sem_0", .accessor_name = "same"},
-        KernelSpec::SemaphoreBinding{.semaphore_spec_name = "sem_1", .accessor_name = "same"}};
+        SemaphoreBinding{.semaphore_spec_name = "sem_0", .accessor_name = "same"},
+        SemaphoreBinding{.semaphore_spec_name = "sem_1", .accessor_name = "same"}};
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
@@ -2237,10 +2237,9 @@ static_assert(
     std::is_aggregate_v<KernelSpec::CompilerOptions>,
     "CompilerOptions must remain an aggregate to support designated initializers");
 static_assert(
-    std::is_aggregate_v<KernelSpec::DFBBinding>,
-    "DFBBinding must remain an aggregate to support designated initializers");
+    std::is_aggregate_v<DFBBinding>, "DFBBinding must remain an aggregate to support designated initializers");
 static_assert(
-    std::is_aggregate_v<KernelSpec::SemaphoreBinding>,
+    std::is_aggregate_v<SemaphoreBinding>,
     "SemaphoreBinding must remain an aggregate to support designated initializers");
 static_assert(
     std::is_aggregate_v<KernelSpec::RuntimeArgSchema>,
@@ -2398,7 +2397,7 @@ TEST(AggregateSpecTypes, ProgramSpecDesignatedInitializers) {
                     .source = KernelSpec::SourceCode{"void kernel_main() {}"},
                     .dfb_bindings =
                         {
-                            KernelSpec::DFBBinding{
+                            DFBBinding{
                                 .dfb_spec_name = "dfb",
                                 .accessor_name = "out",
                                 .endpoint_type = DFBEndpointType::PRODUCER,
@@ -2415,7 +2414,7 @@ TEST(AggregateSpecTypes, ProgramSpecDesignatedInitializers) {
                     .source = KernelSpec::SourceCode{"void kernel_main() {}"},
                     .dfb_bindings =
                         {
-                            KernelSpec::DFBBinding{
+                            DFBBinding{
                                 .dfb_spec_name = "dfb",
                                 .accessor_name = "in",
                                 .endpoint_type = DFBEndpointType::CONSUMER,
@@ -2452,7 +2451,7 @@ TEST(AggregateSpecTypes, ProgramSpecDesignatedInitializers) {
 
 TEST(AggregateSpecTypes, NestedStructsDesignatedInitializers) {
     // Demonstrates constructing nested configuration structs with designated initializers
-    KernelSpec::DFBBinding binding{
+    DFBBinding binding{
         .dfb_spec_name = "my_dfb",
         .accessor_name = "accessor",
         .endpoint_type = DFBEndpointType::PRODUCER,
@@ -2460,7 +2459,7 @@ TEST(AggregateSpecTypes, NestedStructsDesignatedInitializers) {
     };
     EXPECT_EQ(binding.dfb_spec_name, "my_dfb");
 
-    KernelSpec::SemaphoreBinding sem_binding{
+    SemaphoreBinding sem_binding{
         .semaphore_spec_name = "my_sem",
         .accessor_name = "sem_accessor",
     };
@@ -2683,7 +2682,7 @@ TEST_F(ProgramSpecTestGen1, SemaphoreBoundToComputeKernelFailsOnGen1) {
     // kernels[1] is the compute kernel in MakeMinimalGen1ValidProgramSpec
     ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
     spec.kernels[1].semaphore_bindings = {
-        KernelSpec::SemaphoreBinding{.semaphore_spec_name = "sem_0", .accessor_name = "done_flag"}};
+        SemaphoreBinding{.semaphore_spec_name = "sem_0", .accessor_name = "done_flag"}};
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
@@ -2703,7 +2702,7 @@ TEST_F(ProgramSpecTestGen1, SemaphoreBoundToDMKernelSucceedsOnGen1) {
     // kernels[0] is the DM kernel in MakeMinimalGen1ValidProgramSpec
     ASSERT_TRUE(spec.kernels[0].is_data_movement_kernel());
     spec.kernels[0].semaphore_bindings = {
-        KernelSpec::SemaphoreBinding{.semaphore_spec_name = "sem_0", .accessor_name = "done_flag"}};
+        SemaphoreBinding{.semaphore_spec_name = "sem_0", .accessor_name = "done_flag"}};
 
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
@@ -2719,7 +2718,7 @@ TEST_F(ProgramSpecTestGen1, SemaphoresWithNonZeroInitialValueSucceedOnGen1) {
     spec.semaphores = {sem};
 
     spec.kernels[0].semaphore_bindings = {
-        KernelSpec::SemaphoreBinding{.semaphore_spec_name = "sem_0", .accessor_name = "done_flag"}};
+        SemaphoreBinding{.semaphore_spec_name = "sem_0", .accessor_name = "done_flag"}};
 
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
@@ -2840,7 +2839,7 @@ TEST_F(ProgramSpecTestGen1, AccessorNamesAcrossCategoriesAreSeparateNamespaces) 
     sem.target_nodes = NodeCoord{0, 0};
     spec.semaphores = {sem};
     spec.kernels[0].semaphore_bindings = {
-        KernelSpec::SemaphoreBinding{.semaphore_spec_name = "sem_0", .accessor_name = "input_dfb"}};
+        SemaphoreBinding{.semaphore_spec_name = "sem_0", .accessor_name = "input_dfb"}};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_dfb");
 
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));

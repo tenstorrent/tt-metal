@@ -155,7 +155,7 @@ inline TensorParameter MakeMinimalTensorParameter(
 // Helper to add a TensorBinding to a kernel.
 inline void BindTensorParameterToKernel(
     KernelSpec& kernel, const std::string& tensor_parameter_name, const std::string& accessor_name) {
-    kernel.tensor_bindings.push_back(KernelSpec::TensorBinding{
+    kernel.tensor_bindings.push_back(TensorBinding{
         .tensor_parameter_name = tensor_parameter_name,
         .accessor_name = accessor_name,
     });

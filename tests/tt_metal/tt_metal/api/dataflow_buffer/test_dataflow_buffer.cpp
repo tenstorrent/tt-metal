@@ -799,7 +799,7 @@ void run_concurrent_tensix_dm_dfbs_program(
         .hw_config = experimental::ComputeHardwareConfig{},
     };
     for (uint32_t i = 0; i < num_dfbs; ++i) {
-        producer_spec.dfb_bindings.push_back(experimental::KernelSpec::DFBBinding{
+        producer_spec.dfb_bindings.push_back(experimental::DFBBinding{
             .dfb_spec_name = "dfb_" + std::to_string(i),
             .accessor_name = "dfb_" + std::to_string(i),
             .endpoint_type = experimental::DFBEndpointType::PRODUCER,
@@ -1080,24 +1080,24 @@ void run_sequential_dfbs_program(
             .spec = out_tensors[i].tensor_spec(),
         });
 
-        producer_spec.dfb_bindings.push_back(experimental::KernelSpec::DFBBinding{
+        producer_spec.dfb_bindings.push_back(experimental::DFBBinding{
             .dfb_spec_name = dfb_name,
             .accessor_name = "dfb_" + idx,
             .endpoint_type = experimental::DFBEndpointType::PRODUCER,
             .access_pattern = experimental::DFBAccessPattern::STRIDED,
         });
-        producer_spec.tensor_bindings.push_back(experimental::KernelSpec::TensorBinding{
+        producer_spec.tensor_bindings.push_back(experimental::TensorBinding{
             .tensor_parameter_name = in_tensor_name,
             .accessor_name = "src_" + idx,
         });
 
-        consumer_spec.dfb_bindings.push_back(experimental::KernelSpec::DFBBinding{
+        consumer_spec.dfb_bindings.push_back(experimental::DFBBinding{
             .dfb_spec_name = dfb_name,
             .accessor_name = "dfb_" + idx,
             .endpoint_type = experimental::DFBEndpointType::CONSUMER,
             .access_pattern = is_all ? experimental::DFBAccessPattern::ALL : experimental::DFBAccessPattern::STRIDED,
         });
-        consumer_spec.tensor_bindings.push_back(experimental::KernelSpec::TensorBinding{
+        consumer_spec.tensor_bindings.push_back(experimental::TensorBinding{
             .tensor_parameter_name = out_tensor_name,
             .accessor_name = "dst_" + idx,
         });

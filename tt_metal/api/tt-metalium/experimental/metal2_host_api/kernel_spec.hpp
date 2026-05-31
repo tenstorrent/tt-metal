@@ -194,6 +194,11 @@ struct KernelSpec {
 using DFBEndpointType = KernelSpec::DFBBinding::EndpointType;
 using DFBAccessPattern = KernelSpec::DFBBinding::AccessPattern;
 
+// These aliases lift the kernel resource-binding types to the namespace level
+using DFBBinding = KernelSpec::DFBBinding;
+using TensorBinding = KernelSpec::TensorBinding;
+using SemaphoreBinding = KernelSpec::SemaphoreBinding;
+
 //------------------------------------------------
 // Convenience factories for DFBBinding
 //------------------------------------------------
@@ -202,8 +207,8 @@ using DFBAccessPattern = KernelSpec::DFBBinding::AccessPattern;
 
 // Creates a DFB producer binding with a STRIDED access pattern
 // (All DFB producers are STRIDED)
-inline KernelSpec::DFBBinding ProducerOf(DFBSpecName dfb_spec_name, std::string accessor_name) {
-    return KernelSpec::DFBBinding{
+inline DFBBinding ProducerOf(DFBSpecName dfb_spec_name, std::string accessor_name) {
+    return DFBBinding{
         .dfb_spec_name = std::move(dfb_spec_name),
         .accessor_name = std::move(accessor_name),
         .endpoint_type = DFBEndpointType::PRODUCER,
@@ -214,8 +219,8 @@ inline KernelSpec::DFBBinding ProducerOf(DFBSpecName dfb_spec_name, std::string 
 // Use this for single-threaded kernels, where the access pattern doesn't matter.
 // For multi-threaded kernels (Quasar), prefer the explicit access pattern
 // helper factories below.
-inline KernelSpec::DFBBinding ConsumerOf(DFBSpecName dfb_spec_name, std::string accessor_name) {
-    return KernelSpec::DFBBinding{
+inline DFBBinding ConsumerOf(DFBSpecName dfb_spec_name, std::string accessor_name) {
+    return DFBBinding{
         .dfb_spec_name = std::move(dfb_spec_name),
         .accessor_name = std::move(accessor_name),
         .endpoint_type = DFBEndpointType::CONSUMER,
@@ -225,8 +230,8 @@ inline KernelSpec::DFBBinding ConsumerOf(DFBSpecName dfb_spec_name, std::string 
 
 // Creates a DFB consumer binding with a STRIDED access pattern
 // (The common case for multi-threaded DFB consumers)
-inline KernelSpec::DFBBinding StridedConsumerOf(DFBSpecName dfb_spec_name, std::string accessor_name) {
-    return KernelSpec::DFBBinding{
+inline DFBBinding StridedConsumerOf(DFBSpecName dfb_spec_name, std::string accessor_name) {
+    return DFBBinding{
         .dfb_spec_name = std::move(dfb_spec_name),
         .accessor_name = std::move(accessor_name),
         .endpoint_type = DFBEndpointType::CONSUMER,
@@ -235,8 +240,8 @@ inline KernelSpec::DFBBinding StridedConsumerOf(DFBSpecName dfb_spec_name, std::
 }
 
 // Creates a DFB consumer binding with an ALL access pattern
-inline KernelSpec::DFBBinding AllConsumerOf(DFBSpecName dfb_spec_name, std::string accessor_name) {
-    return KernelSpec::DFBBinding{
+inline DFBBinding AllConsumerOf(DFBSpecName dfb_spec_name, std::string accessor_name) {
+    return DFBBinding{
         .dfb_spec_name = std::move(dfb_spec_name),
         .accessor_name = std::move(accessor_name),
         .endpoint_type = DFBEndpointType::CONSUMER,
@@ -247,8 +252,8 @@ inline KernelSpec::DFBBinding AllConsumerOf(DFBSpecName dfb_spec_name, std::stri
 // Creates a DFB consumer binding with a BLOCKED access pattern
 // Uncomment when BLOCKED support is added (currently TT_FATALs)
 /*
-inline KernelSpec::DFBBinding BlockedConsumerOf(DFBSpecName dfb_spec_name, std::string accessor_name) {
-    return KernelSpec::DFBBinding{
+inline DFBBinding BlockedConsumerOf(DFBSpecName dfb_spec_name, std::string accessor_name) {
+    return DFBBinding{
         .dfb_spec_name = std::move(dfb_spec_name),
         .accessor_name = std::move(accessor_name),
         .endpoint_type = DFBEndpointType::CONSUMER,

@@ -425,7 +425,7 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
     using DFBEndpoint = experimental::DFBEndpointType;
     using DFBAccess = experimental::DFBAccessPattern;
     auto dfb_binding = [](const std::string& name, DFBEndpoint endpoint) {
-        return experimental::KernelSpec::DFBBinding{
+        return experimental::DFBBinding{
             .dfb_spec_name = name,
             .accessor_name = name,
             .endpoint_type = endpoint,

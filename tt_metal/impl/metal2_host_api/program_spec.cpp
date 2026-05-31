@@ -76,7 +76,7 @@ struct CollectedSpecData {
     struct DFBEndpointInfo {
         struct EndpointRecord {
             const KernelSpec* kernel = nullptr;
-            const KernelSpec::DFBBinding* binding = nullptr;
+            const DFBBinding* binding = nullptr;
         };
         std::vector<EndpointRecord> producers;
         std::vector<EndpointRecord> consumers;
@@ -1998,8 +1998,8 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
     // DFB config — we take the first.
     const KernelSpec* producer = dfb_endpoint_info.producers.front().kernel;
     const KernelSpec* consumer = dfb_endpoint_info.consumers.front().kernel;
-    const KernelSpec::DFBBinding* producer_binding = dfb_endpoint_info.producers.front().binding;
-    const KernelSpec::DFBBinding* consumer_binding = dfb_endpoint_info.consumers.front().binding;
+    const DFBBinding* producer_binding = dfb_endpoint_info.producers.front().binding;
+    const DFBBinding* consumer_binding = dfb_endpoint_info.consumers.front().binding;
 
     uint16_t producer_risc_mask = kernel_to_risc_mask.at(producer);
     uint16_t consumer_risc_mask = kernel_to_risc_mask.at(consumer);
