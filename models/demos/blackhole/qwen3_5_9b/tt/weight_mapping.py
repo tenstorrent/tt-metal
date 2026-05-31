@@ -7,7 +7,7 @@
 Handles:
 - Stripping 'model.language_model.' prefix
 - Filtering out vision encoder and MTP weights
-- Splitting combined in_proj_qkv into separate Q, K, V projections (DeltaNet layers)
+- Renaming combined in_proj_qkv → qkv_proj (DeltaNet layers; the op uses the fused weight)
 - Splitting combined conv1d.weight into separate Q, K, V conv weights (DeltaNet layers)
 - Renaming lm_head.weight → output.weight
 - Renaming embed_tokens → tok_embeddings
@@ -19,13 +19,13 @@ import torch
 # Layer indices that use full (softmax) attention
 FULL_ATTENTION_LAYERS = {3, 7, 11, 15, 19, 23, 27, 31}
 
-# DeltaNet QKV split dimensions
+# DeltaNet QKV split dimensions (used to split the combined conv1d.weight into
+# per-stream Q/K/V conv weights — the QKV projection itself stays combined).
 # Q: num_key_heads(16) × key_head_dim(128) = 2048
 # K: num_key_heads(16) × key_head_dim(128) = 2048
-# V: num_value_heads(32) × value_head_dim(128) = 4096
+# (V = num_value_heads(32) × value_head_dim(128) = 4096 is the remaining slice)
 LINEAR_Q_DIM = 2048
 LINEAR_K_DIM = 2048
-LINEAR_V_DIM = 4096
 
 
 def remap_qwen35_state_dict(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
@@ -73,18 +73,12 @@ def remap_qwen35_state_dict(state_dict: Dict[str, torch.Tensor]) -> Dict[str, to
             layer_prefix = f"layers.{layer_idx}"
             sub_key = ".".join(parts[2:])
 
-            # DeltaNet layers: keep combined QKV AND split for backward compat
+            # DeltaNet layers: keep ONLY the combined QKV weight. The split q/k/v_proj
+            # were dead — the op runs the fused QKV projection from the combined weight
+            # (it only read the splits in a fallback reached when qkv_proj_weight is None,
+            # which never happens for the 9B).
             if sub_key == "linear_attn.in_proj_qkv.weight":
-                qkv = tensor  # [8192, 4096]
-                # Keep combined weight for fused QKV projection
-                remapped[f"{layer_prefix}.linear_attn.qkv_proj.weight"] = qkv
-                # Also split for any code that still uses separate weights
-                q = qkv[:LINEAR_Q_DIM, :]
-                k = qkv[LINEAR_Q_DIM : LINEAR_Q_DIM + LINEAR_K_DIM, :]
-                v = qkv[LINEAR_Q_DIM + LINEAR_K_DIM :, :]
-                remapped[f"{layer_prefix}.linear_attn.q_proj.weight"] = q
-                remapped[f"{layer_prefix}.linear_attn.k_proj.weight"] = k
-                remapped[f"{layer_prefix}.linear_attn.v_proj.weight"] = v
+                remapped[f"{layer_prefix}.linear_attn.qkv_proj.weight"] = tensor  # [8192, 4096]
                 continue
 
             if sub_key == "linear_attn.conv1d.weight":
