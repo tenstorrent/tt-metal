@@ -12,6 +12,7 @@ Unlike TtSharedExpert, this module:
 - Each device holds weights for `experts_per_chip` local experts
 """
 
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -410,7 +411,12 @@ class TtRoutedExpert(LightweightModule):
         #     naive per-expert Python loop (extract -> routed_expert_ffn ->
         #     insert), unchanged from before.
         shapes_2880 = self.emb_dim == 2880 and self.hidden_dim == 2880
-        use_unified = is_blackhole() or (is_wormhole_b0() and shapes_2880)
+        # TEMP testing knob: TT_REXPERT_FORCE_NAIVE forces the non-unified
+        # fallback (per-expert extract -> routed_expert_ffn -> insert composite)
+        # even on Blackhole, so the naive path can be compared against the
+        # unified kernel. Not for production.
+        force_naive = bool(os.environ.get("TT_REXPERT_FORCE_NAIVE"))
+        use_unified = (not force_naive) and (is_blackhole() or (is_wormhole_b0() and shapes_2880))
         if use_unified:
             signpost(header="UnifiedRoutedExpertMoe")
             expert_outputs = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(

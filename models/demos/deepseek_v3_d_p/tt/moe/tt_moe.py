@@ -334,7 +334,12 @@ class TtMoe(LightweightModule):
             cluster_axis=0,
             num_links=self.row_num_links,
             topology=self.row_topology,
-            init_zeros=False,
+            # [ND-DEBUG] init_zeros controls whether combine pre-zeros its output
+            # buffer (created via create_device_tensor, i.e. uninitialized DRAM).
+            # Hardcoded False in prod; TT_DS_ND_COMBINE_INIT_ZEROS=1 flips it to
+            # True for A/B testing whether unwritten-slot garbage drives the
+            # run-to-run non-determinism. Default preserves prod behaviour.
+            init_zeros=os.getenv("TT_DS_ND_COMBINE_INIT_ZEROS", "0").lower() in ("1", "true", "yes"),
         )
 
         # Build (group, chip, local_expert) -> global expert id table, sharded
@@ -441,6 +446,9 @@ class TtMoe(LightweightModule):
         # Reshape 3D -> 2D for gate: (batch, seq, emb) -> (batch*seq, emb)
 
         scores, indices, gate_logits = self.gate(ttnn.view(x, (x.shape[0] * x.shape[1], x.shape[2])))
+        if nd_active:
+            _nd_moe_log(self.layer_idx, nd_it, "01a_gate_scores", scores)
+            _nd_moe_log(self.layer_idx, nd_it, "01b_gate_indices", indices)
 
         signpost(header="moe_gate_calculate_dispatch_offsets")
         tt_expert_offsets, tt_expert_token_counts, tt_expert_region_offsets, _ = self.routing_setup(
