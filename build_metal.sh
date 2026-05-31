@@ -8,9 +8,9 @@ ARCH=`uname -m`
 # VERSION_ID and BUILD_ID are standard within /etc/os-release but both optional
 source /etc/os-release
 VERSION="unknown-version"
-if [[ -v "$VERSION_ID" ]]; then
+if [[ -v VERSION_ID ]]; then
     VERSION="${VERSION_ID}"
-elif [[ -v "$BUILD_ID" ]]; then
+elif [[ -v BUILD_ID ]]; then
     VERSION="${BUILD_ID}"
 fi
 
@@ -86,7 +86,15 @@ cxx_compiler_path=""
 cpm_source_cache=""
 c_compiler_path=""
 ttnn_shared_sub_libs="OFF"
-toolchain_path="cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake"
+# Auto-detect toolchain based on distribution
+case "$FLAVOR" in
+    rocky|centos|rhel|almalinux)
+        toolchain_path="cmake/x86_64-linux-clang-18-libstdcpp-toolchain.cmake"
+        ;;
+    *)
+        toolchain_path="cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake"
+        ;;
+esac
 
 
 configure_only="OFF"

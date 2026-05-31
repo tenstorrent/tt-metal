@@ -297,6 +297,20 @@ prep_ubuntu_system() {
 prep_redhat_system() {
     echo "[INFO] Preparing Red Hat family system..."
 
+    # Enable EPEL and CRB (CodeReady Builder) repositories on RHEL-like distros
+    # CRB provides additional development libraries; EPEL provides extra packages
+    case "$OS_ID" in
+        rocky|almalinux)
+            dnf install -y epel-release
+            dnf config-manager --set-enabled crb 2>/dev/null || \
+                dnf config-manager --set-enabled rocky-crb 2>/dev/null || true
+            ;;
+        rhel|centos)
+            dnf install -y epel-release
+            dnf config-manager --set-enabled crb 2>/dev/null || true
+            ;;
+    esac
+
     # Add Intel oneAPI repository for TBB 2021+
     # Legacy tbb-devel (2020.3) has an enum-out-of-range bug (oneapi-src/oneTBB#843)
     # that is rejected by clang when gcc-toolset-15's <execution> header pulls tbb/task.h
@@ -315,27 +329,37 @@ REPO_EOF
 # However g++-12 and later should also work
 
 install_llvm() {
-    # Only install LLVM on debian-based systems
-    if ! is_debian_based; then
-        echo "[WARNING] Skipping LLVM installation for non-debian distribution ($OS_ID)"
-        return
-    fi
+    if is_debian_based; then
+        # Install LLVM 20 on Debian/Ubuntu:
+        # - clang-20: default toolchain for tt-metal (build_metal.sh) and tt-train
+        TEMP_DIR=$(mktemp -d)
+        wget -P $TEMP_DIR https://apt.llvm.org/llvm.sh
+        chmod u+x $TEMP_DIR/llvm.sh
 
-    # Install LLVM 20:
-    # - clang-20: default toolchain for tt-metal (build_metal.sh) and tt-train
-    TEMP_DIR=$(mktemp -d)
-    wget -P $TEMP_DIR https://apt.llvm.org/llvm.sh
-    chmod u+x $TEMP_DIR/llvm.sh
+        echo "[INFO] Checking if LLVM 20 is already installed..."
+        if command -v clang-20 &> /dev/null; then
+            echo "[INFO] LLVM 20 is already installed. Skipping installation."
+        else
+            echo "[INFO] Installing LLVM 20..."
+            $TEMP_DIR/llvm.sh 20
+        fi
 
-    echo "[INFO] Checking if LLVM 20 is already installed..."
-    if command -v clang-20 &> /dev/null; then
-        echo "[INFO] LLVM 20 is already installed. Skipping installation."
+        rm -rf "$TEMP_DIR"
+    elif is_redhat_based; then
+        # On RHEL/Rocky/Fedora, install clang from llvm-toolset (provided by EPEL)
+        # Rocky Linux 9 provides clang-18 which is compatible with tt-metal
+        echo "[INFO] Checking if clang is already installed..."
+        if command -v clang-18 &> /dev/null; then
+            echo "[INFO] clang-18 is already installed. Skipping installation."
+        elif command -v clang &> /dev/null; then
+            echo "[INFO] clang is already installed. Skipping installation."
+        else
+            echo "[INFO] Installing clang (llvm-toolset)..."
+            dnf install -y clang clang-tools-extra lld
+        fi
     else
-        echo "[INFO] Installing LLVM 20..."
-        $TEMP_DIR/llvm.sh 20
+        echo "[WARNING] Skipping LLVM installation for unknown distribution ($OS_ID)"
     fi
-
-    rm -rf "$TEMP_DIR"
 }
 
 install_sfpi() {
@@ -387,6 +411,64 @@ install_sfpi() {
     fi
 }
 
+build_libisl() {
+    echo "[INFO] Building libisl from source (required for LLVM on RHEL/Rocky Linux 9)..."
+
+    local ISL_VERSION="0.27"
+    local ISL_DIR="/tmp/libisl-${ISL_VERSION}"
+
+    if ldconfig -p | grep -q libisl.so; then
+        echo "[INFO] libisl is already installed on the system. Skipping build."
+        return
+    fi
+
+    if [ -d "${ISL_DIR}/install" ] && [ -f "${ISL_DIR}/install/lib/libisl.so" ]; then
+        echo "[INFO] libisl already built in ${ISL_DIR}/install. Skipping build."
+        return
+    fi
+
+    mkdir -p "$ISL_DIR"
+    local ISL_TARBALL="${ISL_DIR}/isl-${ISL_VERSION}.tar.gz"
+    if [ ! -f "$ISL_TARBALL" ]; then
+        wget -q "https://libisl.sourceforge.io/isl-${ISL_VERSION}.tar.gz" -O "$ISL_TARBALL" || \
+            wget -q "https://github.com/Meinersbur/isl/archive/refs/tags/isl-${ISL_VERSION}.tar.gz" -O "$ISL_TARBALL"
+    fi
+
+    tar -xzf "$ISL_TARBALL" -C "$ISL_DIR" --strip-components=1
+    pushd "$ISL_DIR" > /dev/null
+
+    echo "[INFO] Configuring libisl ${ISL_VERSION}..."
+    ./configure --prefix="${ISL_DIR}/install" --with-gmp-prefix=/usr
+    echo "[INFO] Building libisl ${ISL_VERSION}..."
+    make -j$(nproc)
+    echo "[INFO] Installing libisl ${ISL_VERSION}..."
+    make install
+
+    # Copy to system location if requested
+    if [ "$1" == "--system" ]; then
+        cp -P "${ISL_DIR}/install/lib/libisl"* /usr/lib64/
+        ldconfig
+    fi
+
+    popd > /dev/null
+    echo "[INFO] libisl ${ISL_VERSION} built successfully at ${ISL_DIR}/install"
+}
+
+setup_redhat_openmpi_env() {
+    # On RHEL/Rocky/Fedora, OpenMPI is installed under /usr/lib64/openmpi/
+    # CMake's FindOpenMPI may not find it by default; set environment variables
+    if [ -d "/usr/lib64/openmpi/bin" ]; then
+        echo "[INFO] Setting up OpenMPI environment for Red Hat family..."
+        export PATH="/usr/lib64/openmpi/bin:$PATH"
+        export LD_LIBRARY_PATH="/usr/lib64/openmpi/lib:${LD_LIBRARY_PATH:-}"
+        export CPATH="/usr/lib64/openmpi/include:${CPATH:-}"
+        echo "[INFO] To use OpenMPI, add these to your shell profile:"
+        echo "    export PATH=\"/usr/lib64/openmpi/bin:\$PATH\""
+        echo "    export LD_LIBRARY_PATH=\"/usr/lib64/openmpi/lib:\${LD_LIBRARY_PATH:-}\""
+        echo "    export CPATH=\"/usr/lib64/openmpi/include:\${CPATH:-}\""
+    fi
+}
+
 install_mpi_ulfm() {
     # Only install if distributed flag is set
     if [ "$distributed" -ne 1 ]; then
@@ -398,6 +480,7 @@ install_mpi_ulfm() {
     if ! is_debian_based; then
         echo "[WARNING] MPI ULFM installation is currently only supported on Ubuntu/Debian-based distributions"
         echo "[WARNING] This function needs to be expanded to support $OS_ID"
+        setup_redhat_openmpi_env
         return
     fi
 
@@ -461,6 +544,11 @@ install() {
 
     # Install core packages
     install_packages
+
+    # Build libisl from source on RHEL-like distros (not available in repos at required version)
+    if is_redhat_based; then
+        build_libisl
+    fi
 
     # Install specialized components
     install_sfpi
