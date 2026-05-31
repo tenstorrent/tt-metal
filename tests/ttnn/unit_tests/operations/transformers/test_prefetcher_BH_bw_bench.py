@@ -339,15 +339,18 @@ def test_bw_dram_core_prefetcher_recv_contig(device, op_name, shape):
         for b in range(num_dram_banks)
     ]
     gcb_size = _gcb_size_bytes(page_size, pages_per_layer)
-    gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(device, bank_to_receivers, gcb_size)
+    dual_senders = os.environ.get("BENCH_DUAL_SENDERS", "0") == "1"
+    gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(
+        device, bank_to_receivers, gcb_size, dual_senders_per_bank=dual_senders
+    )
 
     logger.info(
-        f"[dram_core_bw_rc][{op_name}] K={_K_ORIG} K_padded={_K} N={_N_ORIG} N_padded={_N} "
+        f"[dram_core_bw_rc][{op_name}] dual_senders={dual_senders} K={_K_ORIG} K_padded={_K} N={_N_ORIG} N_padded={_N} "
         f"ring={num_receivers} page_size={page_size} pages_per_layer={pages_per_layer} "
         f"gcb_size={gcb_size} trace_repeats={trace_repeats} num_prefetch_layers={num_prefetch_layers}"
     )
 
-    ttnn.experimental.start_dram_core_prefetcher(device)
+    ttnn.experimental.start_dram_core_prefetcher(device, dual_senders_per_bank=dual_senders)
     ttnn.experimental.queue_dram_core_prefetcher_request(
         device, [(tt_weight, num_receivers)] * num_prefetch_layers, global_cb=gcb
     )
@@ -385,7 +388,7 @@ def test_bw_dram_core_prefetcher_recv_contig(device, op_name, shape):
     # if AICLK is low, bw_at_ref shows what the same work would do at full clock.
     bw_at_ref = bw_total * 1350.0 / max(aiclk_post, 1)
     logger.info(
-        f"[dram_core_bw_rc][{op_name}] trace_elapsed={elapsed * 1e3:.2f}ms "
+        f"[dram_core_bw_rc][{op_name}] dual_senders={dual_senders} trace_elapsed={elapsed * 1e3:.2f}ms "
         f"bytes_per_recv={bytes_per_recv / 1e6:.1f}MB total_bytes={bytes_total / 1e9:.2f}GB "
         f"aggregate_bw={bw_total:.2f} GB/s per_recv_bw={bw_per_recv:.3f} GB/s "
         f"aiclk_pre={aiclk_pre}MHz aiclk_post={aiclk_post}MHz bw@1.35GHz={bw_at_ref:.2f} GB/s"
