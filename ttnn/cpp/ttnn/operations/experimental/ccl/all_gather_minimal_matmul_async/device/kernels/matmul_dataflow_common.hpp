@@ -864,6 +864,11 @@ struct MuxConnection {
     uint32_t termination_master_noc_x;
     uint32_t termination_master_noc_y;
 
+    // Actual number of worker clients on THIS mux (the termination master waits for
+    // num_mux_clients-1 peers). Per-mux, not a blanket num_workers_per_link: when the sender
+    // axis isn't a multiple of num_workers_per_link the last group is short, so this can be < nwpl.
+    uint32_t num_mux_clients;
+
     // Connection state
     tt::tt_fabric::WorkerToFabricMuxSender<NumBuffersPerChannel> connection;
 
@@ -921,6 +926,7 @@ FORCE_INLINE MuxConnection<NumBuffersPerChannel, ChannelBufferSizeBytes> parse_m
 
     mux.termination_master_noc_x = get_arg_val<uint32_t>(argidx++);
     mux.termination_master_noc_y = get_arg_val<uint32_t>(argidx++);
+    mux.num_mux_clients = get_arg_val<uint32_t>(argidx++);
 
     return mux;
 }
