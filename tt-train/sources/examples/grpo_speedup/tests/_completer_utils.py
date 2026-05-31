@@ -51,3 +51,50 @@ def teardown_completer(completer) -> None:
     del completer
     gc.collect()
     ttml.autograd.AutoContext.get_instance().close_device()
+
+
+def as_update_input(t, mesh_device):
+    """Build the HF-format on-device input that every ``.update()`` method
+    accepts.
+
+    Caller passes the natural HF shape (matches HF safetensors):
+        * Linear weight   -- ``(out_features, in_features)``   (2D)
+        * Embedding table -- ``(vocab_size,   hidden_size)``   (2D)
+        * RMSNorm gamma   -- ``(dim,)``                        (1D)
+        * Linear bias     -- ``(out_features,)``               (1D)
+
+    Returns the canonical update() input: 4D ``(1, 1, ..., ...)``
+    ``ttnn.Tensor``, replicated across the mesh, DRAM-interleaved,
+    ``TILE_LAYOUT``, ``bfloat16``. Non-bf16 inputs are cast; non-contiguous
+    inputs (e.g. fresh from ``.transpose``) are made contiguous before the
+    upload.
+    """
+    import torch
+    import ttnn
+
+    if t.dtype != torch.bfloat16:
+        t = t.to(torch.bfloat16)
+    while t.dim() < 4:
+        t = t.unsqueeze(0)
+    return ttnn.from_torch(
+        t.contiguous(),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+
+def to_torch_2d(t):
+    """``ttnn.to_torch`` + strip leading unit dims so callers get the
+    natural ``(rows, cols)`` shape back. Internal buffers in TTT are
+    stored as 4D ``(1, 1, rows, cols)``; squeezing those down keeps the
+    per-module snapshot inverses readable.
+    """
+    import ttnn
+
+    out = ttnn.to_torch(t)
+    while out.dim() > 2 and out.shape[0] == 1:
+        out = out.squeeze(0)
+    return out
