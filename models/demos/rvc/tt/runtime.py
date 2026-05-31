@@ -475,6 +475,99 @@ class TTNNGeneratorNSF:
             x_cf = xt + x_cf
         return x_cf
 
+    def _conv1d_device(self, x_in, w_tt, b_tt, in_ch, out_ch, k, seq_len,
+                       dilation=1):
+        """Conv1d that returns a device tensor in interleaved DRAM.
+
+        Used by ``_resblock1_device``. The input must already be on device
+        in ROW_MAJOR layout — ``ttnn.conv1d`` at the HiFi-GAN ResBlock
+        config (e.g. k=11/d=5/ch=128/seq=7200) rejects TILE inputs with
+        ``program.cpp:1403: tt::exception``, regardless of storage or
+        memory_config. The caller is responsible for the ROW_MAJOR
+        relayout. Output is forced to interleaved DRAM because sharded
+        L1 outputs accumulate bank pressure across chained calls and
+        eventually break subsequent conv halo allocations.
+        """
+        padding = dilation * (k - 1) // 2
+        result = ttnn.conv1d(
+            input_tensor=x_in, weight_tensor=w_tt, device=self._device,
+            in_channels=in_ch, out_channels=out_ch, batch_size=1,
+            input_length=seq_len, kernel_size=k, stride=1,
+            padding=padding, dilation=dilation, groups=1,
+            dtype=DEFAULT_DTYPE, return_output_dim=True,
+            bias_tensor=b_tt,
+        )
+        out_tt = result[0]
+        try:
+            out_tt = ttnn.sharded_to_interleaved(out_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        except RuntimeError:
+            out_tt = ttnn.to_memory_config(out_tt, ttnn.DRAM_MEMORY_CONFIG)
+        return out_tt
+
+    def _resblock1_device(self, x_cf, block_idx, dilations, seq_len):
+        """ResBlock1 inner loop with device-resident activations.
+
+        Sequence per dilation iteration:
+            leaky_relu (device) -> to_layout(ROW_MAJOR) -> conv1 (device)
+            -> leaky_relu (device) -> to_layout(ROW_MAJOR) -> conv2 (device)
+            -> add(residual) (device)
+
+        The ROW_MAJOR conversion between every leaky_relu and conv1d is
+        mandatory: ``ttnn.conv1d`` rejects TILE-layout input at the
+        (k=11, d=5, ch=128, seq=7200) configuration, while
+        ``ttnn.leaky_relu`` requires TILE for its compute kernel. The
+        per-step relayout is cheap on device and satisfies both.
+
+        One ``from_torch`` at entry, one ``to_torch`` at exit, regardless
+        of the three dilation iterations. All intermediates explicitly
+        deallocated to keep L1/DRAM pressure stable across chained
+        ResBlocks at long seq_len.
+        """
+        block = self._resblocks[block_idx]
+        ch = block["channels"]
+
+        x_nhwc = x_cf.permute(0, 2, 1).unsqueeze(1)
+        x_dev = ttnn.from_torch(
+            x_nhwc.float(),
+            dtype=DEFAULT_DTYPE,
+            layout=ttnn.TILE_LAYOUT,
+            device=self._device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        for idx in range(3):
+            d = dilations[idx]
+            c1 = block["convs1"][idx]
+            c2 = block["convs2"][idx]
+
+            # leaky_relu reads TILE
+            lr1 = ttnn.leaky_relu(x_dev, negative_slope=LRELU_SLOPE)
+            # conv1d rejects TILE at the HiFi-GAN config -> relayout
+            lr1_rm = ttnn.to_layout(lr1, ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.deallocate(lr1)
+            c1_out = self._conv1d_device(
+                lr1_rm, c1["w"], c1["b_tt"], ch, ch, c1["kernel"], seq_len,
+                dilation=d)
+            ttnn.deallocate(lr1_rm)
+
+            # conv1d outputs TILE; leaky_relu accepts TILE
+            lr2 = ttnn.leaky_relu(c1_out, negative_slope=LRELU_SLOPE)
+            ttnn.deallocate(c1_out)
+            lr2_rm = ttnn.to_layout(lr2, ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.deallocate(lr2)
+            c2_out = self._conv1d_device(
+                lr2_rm, c2["w"], c2["b_tt"], ch, ch, c2["kernel"], seq_len)
+            ttnn.deallocate(lr2_rm)
+
+            new_x = ttnn.add(x_dev, c2_out)
+            ttnn.deallocate(c2_out)
+            ttnn.deallocate(x_dev)
+            x_dev = new_x
+
+        out = ttnn.to_torch(x_dev).float().squeeze(1).permute(0, 2, 1)
+        ttnn.deallocate(x_dev)
+        return out
+
     def forward(self, z, har_source, g):
         """Execute full generator with persistent weights.
 
@@ -536,7 +629,7 @@ class TTNNGeneratorNSF:
             xs = None
             for j in range(NUM_KERNELS):
                 rb_idx = i * NUM_KERNELS + j
-                rb_out = self._resblock1(x_cf, rb_idx, RESBLOCK_DILATIONS[j], seq_len)
+                rb_out = self._resblock1_device(x_cf, rb_idx, RESBLOCK_DILATIONS[j], seq_len)
                 xs = rb_out if xs is None else xs + rb_out
             x_cf = xs / NUM_KERNELS
 
