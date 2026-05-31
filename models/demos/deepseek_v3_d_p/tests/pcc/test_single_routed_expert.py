@@ -285,12 +285,14 @@ def test_single_routed_expert_faked_token_count(
         (2048, 2880, 2880),  # Wormhole MoE dims, 2K tokens (2 chunks)
         (4096, 2880, 2880),  # Wormhole MoE dims, 4K tokens (4 chunks)
         (3072, 2880, 2880),  # Wormhole MoE dims, non-power-of-two (3 chunks)
+        (8192, 2880, 2880),  # Wormhole MoE dims, 8K tokens (8 chunks)
     ],
     ids=[
         "wh-2880-1k",
         "wh-2880-2k",
         "wh-2880-4k",
         "wh-2880-3k",
+        "wh-2880-8k",
     ],
 )
 @pytest.mark.parametrize(
