@@ -17,7 +17,14 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
     ttnn::bind_function<"unified_routed_expert_ffn", "ttnn.experimental.deepseek_prefill.">(
         mod,
         R"doc(
-        Single-op fused per-expert FFN for DeepSeek V3 prefill (Blackhole).
+        Single-op fused per-expert FFN for DeepSeek V3 prefill.
+
+        Two execution paths share the same dataflow/compute kernels, selected
+        by ``unified_routed_expert_use_wh_path``:
+            * Blackhole: 11x8 compute grid, tuned for emb=7168 / hidden=2048.
+            * Wormhole : 8x8 compute grid, tuned for emb=2880 / hidden=2880.
+        Set ``TT_UNIFIED_REXPERT_FORCE_WH`` to force the WH path on a non-WH
+        arch (used to validate the WH kernel on Blackhole silicon).
 
         Computes the entire SwiGLU FFN sequence in ONE device program:
             gate = matmul(x, gate_proj)
@@ -36,7 +43,7 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
               lands); gate/up/down any matmul-compatible weight dtype.
             * layout: all tensors TILE.
             * memory_config: all tensors DRAM-interleaved.
-            * Blackhole-only — host expects 11x8 compute grid.
+            * compute grid: >= 11x8 (Blackhole path) or >= 8x8 (Wormhole path).
 
         PCC target: >= 0.97 vs PyTorch reference (matches the sibling
         routed_expert_ffn subsystem norm; the existing test_unified_routed_expert

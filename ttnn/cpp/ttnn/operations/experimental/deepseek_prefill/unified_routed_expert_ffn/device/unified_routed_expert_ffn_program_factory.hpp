@@ -12,6 +12,16 @@
 
 namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn {
 
+// Returns true when the unified routed-expert op should take the Wormhole
+// execution path (8x8 compute grid, 2880-dim-tuned config) instead of the
+// Blackhole path (11x8 grid, 7168/2048-dim config). True on real Wormhole_B0,
+// or on ANY arch when the TT_UNIFIED_REXPERT_FORCE_WH passthrough env var is
+// set — the latter is a temporary knob that lets us validate the WH kernel on
+// Blackhole hardware (where the only difference is the smaller grid + config;
+// the dataflow/compute kernels are shared). Both the host-side chunk picker
+// and the program factory consult this so they agree on per_core_M / grid.
+bool unified_routed_expert_use_wh_path(const ttnn::Tensor& x);
+
 struct UnifiedRoutedExpertFfnSharedVariables {
     tt::tt_metal::KernelHandle reader_kernel_id = 0;
     tt::tt_metal::KernelHandle writer_kernel_id = 0;

@@ -450,3 +450,226 @@ def test_ttnn_routed_expert(
         logger.debug(f"{key}: {profiler.get(key) * 1000:.2f} ms")
 
     logger.debug("TtRoutedExpert PCC Test PASSED!")
+
+
+# 128 experts on a single device means experts_per_chip=128 — building 128
+# torch reference experts + their weights and looping 128 device FFN calls is
+# legitimately heavy, so raise the default 300s pytest timeout.
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize(
+    "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor",
+    [
+        (256, 2880, 2880, 128, 4, 32),
+    ],
+    ids=["wh-2880-128experts-top4"],
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        pytest.param(
+            1,
+            {"fabric_config": ttnn.FabricConfig.DISABLED},
+            id="single-1",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+def test_ttnn_routed_expert_wh_moe(
+    mesh_device,
+    device_params,
+    seq_len_per_chip,
+    emb_dim,
+    hidden_dim,
+    num_routed_experts,
+    num_experts_per_tok,
+    dispatch_buffer_capacity_factor,
+    monkeypatch,
+):
+    """
+    Routed-expert MoE PCC test for the Wormhole unified-FFN kernel with
+    128 routed experts and num_experts_per_tok=4 at emb=hidden=2880.
+
+    Single device => experts_per_chip = 128. Exercises the full
+    extract -> unified_routed_expert_ffn (WH kernel) -> insert composite via
+    the ``unified_routed_expert_moe`` C++ op, once per local expert, honoring
+    each expert's device-resident token count.
+
+    The WH kernel is forced on the Blackhole dev silicon via the
+    ``TT_UNIFIED_REXPERT_FORCE_WH`` passthrough env var (harmless on real WH).
+    """
+    monkeypatch.setenv("TT_UNIFIED_REXPERT_FORCE_WH", "1")
+
+    num_devices = mesh_device.get_num_devices()
+    mesh_config = extract_mesh_config(mesh_device)
+    dispatch_group_size = mesh_config.dispatch_group_size
+    num_dispatch_groups = mesh_config.num_dispatch_groups
+
+    (
+        experts_per_chip,
+        metadata_len,
+        max_dispatch_buffer_token_size,
+        max_dispatched_tokens_per_expert,
+    ) = compute_constants(
+        seq_len_per_chip,
+        num_routed_experts,
+        num_experts_per_tok,
+        num_devices,
+        dispatch_group_size,
+        dispatch_buffer_capacity_factor,
+    )
+
+    signpost(
+        f"TtRoutedExpertWH {mesh_device.shape=} {num_devices=} {experts_per_chip=}"
+        f"\n{seq_len_per_chip=} {emb_dim=} {hidden_dim=} {num_routed_experts=} {num_experts_per_tok=}"
+    )
+
+    total_experts = num_devices * experts_per_chip
+    logger.debug(f"WH MoE: total_experts={total_experts}, experts_per_chip={experts_per_chip}")
+
+    expert_dispatch_table = ExpertMapping.create_dispatch_table(
+        num_routed_experts=num_routed_experts,
+        dispatch_group_size=dispatch_group_size,
+        num_dispatch_groups=num_dispatch_groups,
+    )
+    _, _, routing_indices = initialize_test_inputs(
+        dispatch_group_size=dispatch_group_size,
+        seq_len_per_chip=seq_len_per_chip,
+        emb_dim=emb_dim,
+        num_routed_experts=num_routed_experts,
+        num_experts_per_tok=num_experts_per_tok,
+        max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
+        num_dispatch_groups=num_dispatch_groups,
+        skip_x_initialization=True,
+    )
+    _, expert_token_counts_torch, expert_region_offsets_torch, _ = get_gate_outputs(
+        routing_indices,
+        dispatch_group_size,
+        num_routed_experts,
+        experts_per_chip,
+        seq_len_per_chip,
+        num_experts_per_tok,
+        expert_dispatch_table=expert_dispatch_table,
+    )
+
+    per_device_shape = (max_dispatch_buffer_token_size, emb_dim)
+
+    torch.manual_seed(42)
+    dispatched_buffer_torch = torch.randn(
+        num_dispatch_groups,
+        dispatch_group_size,
+        max_dispatch_buffer_token_size,
+        emb_dim,
+        dtype=torch.float32,
+    )
+
+    torch_weights_list = []
+    for _ in range(total_experts):
+        torch_weights_list.append(
+            {
+                "gate_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * 0.02,
+                "up_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * 0.02,
+                "down_proj": torch.randn(emb_dim, hidden_dim, dtype=torch.float32) * 0.02,
+            }
+        )
+    torch_experts = [TorchExpert(emb_dim=emb_dim, hidden_dim=hidden_dim, torch_weights=w) for w in torch_weights_list]
+
+    torch_outputs = run_torch_routed_experts(
+        dispatched_buffer_torch,
+        torch_experts,
+        experts_per_chip,
+        num_dispatch_groups,
+        dispatch_group_size,
+        expert_token_counts_torch,
+    )
+
+    mesh_mapper = get_ep_mesh_mapper(mesh_device)
+    dispatched_buffer_tt = ttnn.from_torch(
+        dispatched_buffer_torch,
+        mesh_mapper=mesh_mapper,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        dtype=ttnn.bfloat8_b,
+    )
+    dispatched_buffer_tt = ttnn.reshape(dispatched_buffer_tt, per_device_shape)
+    ttnn.synchronize_device(mesh_device)
+
+    global_expert_idx_torch = ExpertMapping.create_global_expert_idx_table(
+        experts_per_chip=experts_per_chip,
+        dispatch_group_size=dispatch_group_size,
+        num_dispatch_groups=num_dispatch_groups,
+    )
+    global_expert_idx_tt = ttnn.from_torch(
+        global_expert_idx_torch,
+        mesh_mapper=get_ep_mesh_mapper(mesh_device),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        dtype=ttnn.uint32,
+    )
+    global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
+    global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
+
+    tt_routed_expert = TtRoutedExpert(
+        mesh_device=mesh_device,
+        experts_per_chip=experts_per_chip,
+        global_expert_idx_table=global_expert_idx_tt,
+        emb_dim=emb_dim,
+        hidden_dim=hidden_dim,
+        max_tokens=max_dispatched_tokens_per_expert,
+        torch_weights=torch_weights_list,
+        activations_dtype=ttnn.bfloat8_b,
+        weights_dtype=ttnn.bfloat4_b,
+    )
+    ttnn.synchronize_device(mesh_device)
+
+    expert_token_counts_tt = TtRoutedExpert.shard_expert_token_counts(mesh_device, expert_token_counts_torch)
+    expert_region_offsets_tt = TtRoutedExpert.shard_expert_token_counts(mesh_device, expert_region_offsets_torch)
+
+    ttnn_outputs = tt_routed_expert(dispatched_buffer_tt, expert_token_counts_tt, expert_region_offsets_tt)
+    ttnn.synchronize_device(mesh_device)
+
+    ttnn_outputs_expanded = ttnn.unsqueeze(ttnn.unsqueeze(ttnn_outputs, dim=0), dim=0)
+    mesh_composer = get_ep_mesh_composer(mesh_device)
+    ttnn_outputs_torch = ttnn.to_torch(ttnn_outputs_expanded, mesh_composer=mesh_composer)
+
+    pcc_values = []
+    for dg in range(num_dispatch_groups):
+        for ds in range(dispatch_group_size):
+            torch_chip = torch_outputs[dg, ds]
+            ttnn_chip = ttnn_outputs_torch[dg, ds]
+
+            inter_chip_offset = 0
+            for expert_idx in range(experts_per_chip):
+                global_expert_idx = ExpertMapping.get_global_expert_idx(
+                    group=dg,
+                    chip=ds,
+                    local_expert=expert_idx,
+                    experts_per_chip=experts_per_chip,
+                    dispatch_group_size=dispatch_group_size,
+                    num_dispatch_groups=num_dispatch_groups,
+                    is_col_major=True,
+                )
+                token_count = expert_token_counts_torch[dg, 0, global_expert_idx].item()
+                if token_count > 0:
+                    torch_expert = torch_chip[inter_chip_offset : inter_chip_offset + token_count]
+                    ttnn_expert = ttnn_chip[inter_chip_offset : inter_chip_offset + token_count]
+                    _, pcc = comp_pcc(torch_expert, ttnn_expert)
+                    pcc_values.append(pcc)
+                    # NaN/Inf is only meaningful over the rows the kernel
+                    # actually writes. The output buffer is allocated with
+                    # ttnn.empty (uninitialized DRAM); padding rows between
+                    # tile-aligned expert regions and the capacity-factor tail
+                    # are never written by the count-sparse kernel and legitimately
+                    # hold garbage (a downstream combine reads only valid rows).
+                    assert not torch.isnan(ttnn_expert).any(), f"Expert {global_expert_idx} active output contains NaN"
+                    assert not torch.isinf(ttnn_expert).any(), f"Expert {global_expert_idx} active output contains Inf"
+                inter_chip_offset += (token_count + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE * ttnn.TILE_SIZE
+
+    assert len(pcc_values) > 0, "No experts received tokens; routing setup produced an empty workload"
+    min_pcc = min(pcc_values)
+    avg_pcc = sum(pcc_values) / len(pcc_values)
+    logger.debug(f"WH MoE Min PCC: {min_pcc:.6f}, Avg PCC: {avg_pcc:.6f} (across {len(pcc_values)} active experts)")
+
+    pcc_threshold = 0.97
+    assert min_pcc >= pcc_threshold, f"PCC {min_pcc:.6f} below threshold {pcc_threshold}"
+
+    logger.debug("WH MoE PCC Test PASSED!")

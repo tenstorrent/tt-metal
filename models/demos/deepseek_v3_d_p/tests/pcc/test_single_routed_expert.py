@@ -276,3 +276,122 @@ def test_single_routed_expert_faked_token_count(
     assert pcc >= 0.97, f"PCC {pcc:.6f} below threshold 0.97"
     assert not torch.isnan(tt_output_active).any(), "Active output contains NaN"
     assert not torch.isinf(tt_output_active).any(), "Active output contains Inf"
+
+
+@pytest.mark.parametrize(
+    "num_tokens, emb_dim, hidden_dim",
+    [
+        (1024, 2880, 2880),  # Wormhole MoE dims, 1K tokens (1 chunk)
+        (2048, 2880, 2880),  # Wormhole MoE dims, 2K tokens (2 chunks)
+        (4096, 2880, 2880),  # Wormhole MoE dims, 4K tokens (4 chunks)
+        (3072, 2880, 2880),  # Wormhole MoE dims, non-power-of-two (3 chunks)
+        (8192, 2880, 2880),  # Wormhole MoE dims, 8K tokens (8 chunks)
+    ],
+    ids=[
+        "wh-2880-1k",
+        "wh-2880-2k",
+        "wh-2880-4k",
+        "wh-2880-3k",
+        "wh-2880-8k",
+    ],
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        pytest.param(
+            1,
+            {"fabric_config": ttnn.FabricConfig.DISABLED},
+            id="single-chip",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+def test_single_routed_expert_wh(
+    mesh_device,
+    device_params,
+    num_tokens: int,
+    emb_dim: int,
+    hidden_dim: int,
+    monkeypatch,
+):
+    """
+    Single-expert PCC test for the Wormhole unified-FFN kernel (8x8 grid,
+    emb=hidden=2880).
+
+    The dedicated WH kernel only differs from the Blackhole one in grid width
+    and the gate/up K-block width — it reuses the same dataflow/compute
+    kernels. To exercise it on the Blackhole silicon we develop on, set the
+    ``TT_UNIFIED_REXPERT_FORCE_WH`` passthrough env var so the C++ program
+    factory selects the WH config even though the arch reports Blackhole.
+    On real Wormhole the env var is harmless (WH always takes the WH path).
+    """
+    monkeypatch.setenv("TT_UNIFIED_REXPERT_FORCE_WH", "1")
+
+    experts_per_chip = 1
+
+    signpost(f"SingleRoutedExpertWH {num_tokens=} {emb_dim=} {hidden_dim=}")
+
+    logger.debug(f"Testing WH single routed expert: {num_tokens=}, {emb_dim=}, {hidden_dim=}")
+
+    torch.manual_seed(42)
+    weights = {
+        "gate_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * 0.02,
+        "up_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * 0.02,
+        "down_proj": torch.randn(emb_dim, hidden_dim, dtype=torch.float32) * 0.02,
+    }
+
+    torch_expert = TorchExpert(emb_dim, hidden_dim, weights)
+
+    torch_input = torch.randn(num_tokens, emb_dim, dtype=torch.float32)
+
+    with torch.no_grad():
+        torch_output = torch_expert(torch_input)
+
+    tt_input = ttnn.from_torch(
+        torch_input,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        dtype=ttnn.bfloat8_b,
+    )
+
+    def _make_idx_tensor(values):
+        return ttnn.from_torch(
+            torch.tensor(values, dtype=torch.int32),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            dtype=ttnn.uint32,
+        )
+
+    global_expert_idx_tt = _make_idx_tensor([0])
+    expert_token_counts_tt = _make_idx_tensor([num_tokens])
+    expert_region_offsets_tt = _make_idx_tensor([0])
+
+    tt_expert = TtRoutedExpert(
+        mesh_device=mesh_device,
+        experts_per_chip=experts_per_chip,
+        global_expert_idx_table=global_expert_idx_tt,
+        emb_dim=emb_dim,
+        hidden_dim=hidden_dim,
+        max_tokens=num_tokens,
+        torch_weights=[weights],
+        activations_dtype=ttnn.bfloat8_b,
+        weights_dtype=ttnn.bfloat4_b,
+    )
+
+    tt_output = tt_expert(tt_input, expert_token_counts_tt, expert_region_offsets_tt)
+
+    tt_output_torch = ttnn.to_torch(
+        tt_output,
+        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
+    )
+
+    _, pcc = comp_pcc(torch_output, tt_output_torch)
+    logger.debug(f"PCC: {pcc:.6f}")
+
+    pcc_threshold = 0.97
+    assert pcc >= pcc_threshold, f"PCC {pcc:.6f} below threshold {pcc_threshold}"
+    assert not torch.isnan(tt_output_torch).any(), "Output contains NaN"
+    assert not torch.isinf(tt_output_torch).any(), "Output contains Inf"
+
+    logger.debug("WH single-expert test PASSED!")
