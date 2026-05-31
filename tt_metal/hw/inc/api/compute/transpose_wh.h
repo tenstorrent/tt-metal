@@ -149,13 +149,11 @@ ALWI void transpose_wh_tile(uint32_t icb, uint32_t itile, uint32_t idst) {
                                        (dst_format == (std::uint32_t)DataFormat::UInt32) ||
                                        (dst_format == (std::uint32_t)DataFormat::Int32);
     if (enable_unpack_to_dest) {
-        MATH((_llk_math_dbg_feature_disable_()));
         UNPACK(
             (llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(icb, itile)));
         UNPACK((llk_unpack_set_srcb_dummy_valid()));
         MATH((llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(idst, icb)));
         MATH((llk_math_transpose_dest<false, true>(idst)));
-        MATH((_llk_math_dbg_feature_enable_()));
     } else {
         UNPACK((llk_unpack_A<BroadcastType::NONE, false>(icb, itile)));
         MATH((llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(idst, icb)));
