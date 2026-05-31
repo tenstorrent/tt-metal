@@ -190,6 +190,7 @@ ALWI void recip_tile_first_column_wh_idst0_direct() {
 // then does the 0x8000 BF16 correction, the Newton error step, and a single direct
 // SFPSTORE with normal HW instruction scoreboarding (no async macro store).
 inline void _sdpa_init_reciprocal_8b_3c_() {
+#ifndef DISABLE_SFPLOADMACRO
     // InstructionTemplate[0]: y = arecip(y)
     TTI_SFPARECIP(0, 0, 12, sfpi::SFPARECIP_MOD1_RECIP);
     // InstructionTemplate[1]: x = y (copy via indirect VD)
@@ -205,10 +206,30 @@ inline void _sdpa_init_reciprocal_8b_3c_() {
     }
     // Simple + MAD use WaitForElapsedInstructions; Store/Round unused.
     TTI_SFPCONFIG(0x300, 8, 1);
+#endif
+    // DISABLE_SFPLOADMACRO (e.g. ttsim, which does not model SFPLOADMACRO): no LOADMACRO
+    // registers to program; the non-macro calculate path below is self-contained.
 }
 
 template <int ITERATIONS>
 inline void _sdpa_calculate_reciprocal_8b_3c_() {
+#ifdef DISABLE_SFPLOADMACRO
+    // Non-macro fallback (matches the LLK DISABLE_SFPLOADMACRO path): same arecip + BF16
+    // low-bit correction issued as plain SFPU instructions, for targets where
+    // SFPLOADMACRO is unavailable/unmodeled (ttsim).
+    TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_USHORT, 0x8000);
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
+        TTI_SFPMAD(p_sfpu::LCONST_0, p_sfpu::LCONST_0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
+        TTI_SFPARECIP(0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPARECIP_MOD1_RECIP);
+        TTI_SFPOR(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
+        TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG0, p_sfpu::LCONST_neg1, p_sfpu::LREG1, 0);
+        TTI_SFPSHFT((-16) & 0xFFF, p_sfpu::LREG1, p_sfpu::LREG1, 5);
+        TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE);
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_6, 0);
+    }
+#else
     constexpr int y = p_sfpu::LREG0;
     constexpr int x = p_sfpu::LREG1;
 
@@ -228,6 +249,7 @@ inline void _sdpa_calculate_reciprocal_8b_3c_() {
     }
 
     TTI_SFPNOP;
+#endif
 }
 
 // idst-0 column reciprocal for the streaming normalize. Mirrors recip_tile<false>(idst,
