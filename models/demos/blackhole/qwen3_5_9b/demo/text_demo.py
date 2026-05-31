@@ -275,11 +275,26 @@ def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_to
     page_table = torch.arange(MAX_NUM_BLOCKS, dtype=torch.int32).unsqueeze(0)
 
     # Prefill via trace capture+replay.
+    # The chunk-seq GDN kernel is correct only at <=16 sub-chunks (2048 tokens) per call,
+    # so a single whole-sequence trace of it exceeds tt-metal's 4 GiB uint32 trace-size
+    # ceiling at long context. When chunk-seq is enabled, capture ONE chunk's all-layer
+    # forward and replay it per chunk (chunk-outer), keeping the trace small. Otherwise use
+    # the legacy whole-sequence prefill trace.
+    use_chunked_trace = any(
+        (not layer.is_full_attention) and getattr(layer.attention, "_use_chunk_seq_prefill", False)
+        for layer in model.layers
+    )
     chunk_size = 2048
     bucket_size = ((T + chunk_size - 1) // chunk_size) * chunk_size
-    logger.info(f"Capturing prefill trace at bucket_size={bucket_size} (prompt {T} tokens)...")
+    logger.info(
+        f"Capturing prefill trace at bucket_size={bucket_size} (prompt {T} tokens, "
+        f"{'chunk-outer replay' if use_chunked_trace else 'whole-sequence'})..."
+    )
     t_cap = time.time()
-    model.capture_prefill_trace_paged(device, page_table, bucket_size=bucket_size, chunk_size=chunk_size)
+    if use_chunked_trace:
+        model.capture_prefill_trace_chunked(device, page_table, chunk_size=chunk_size)
+    else:
+        model.capture_prefill_trace_paged(device, page_table, bucket_size=bucket_size, chunk_size=chunk_size)
     logger.info(f"Prefill trace captured in {time.time() - t_cap:.1f}s")
     pad_len = bucket_size - T
     # Pad with the prompt's last real token rather than 0. The DeltaNet recurrence
@@ -292,7 +307,10 @@ def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_to
     padded_token_ids = torch.cat([token_ids, last_token], dim=1)
 
     t0 = time.time()
-    logits = model.prefill_traced_paged(padded_token_ids, page_table, actual_len=T)
+    if use_chunked_trace:
+        logits = model.prefill_traced_chunked(padded_token_ids, page_table, actual_len=T)
+    else:
+        logits = model.prefill_traced_paged(padded_token_ids, page_table, actual_len=T)
     ttft = time.time() - t0
 
     logits_torch = ttnn.to_torch(logits).squeeze()

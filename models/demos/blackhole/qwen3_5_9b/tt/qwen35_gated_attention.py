@@ -79,7 +79,17 @@ class Qwen35GatedAttention:
         self.paged_kv_cache_value = None
         self.use_paged_attention = False
 
-    def forward(self, x, cos, sin, position_tensor=None, page_table=None, chunk_page_table=None, chunk_start_idx=None):
+    def forward(
+        self,
+        x,
+        cos,
+        sin,
+        position_tensor=None,
+        page_table=None,
+        chunk_page_table=None,
+        chunk_start_idx=None,
+        chunk_start_idx_tensor=None,
+    ):
         T = x.shape[1]
         mc = ttnn.L1_MEMORY_CONFIG if T == 1 else None
         ckc = self.compute_kernel_config_decode if T <= 1 else self.compute_kernel_config
@@ -109,6 +119,7 @@ class Qwen35GatedAttention:
                 paged_kv_cache_value=self.paged_kv_cache_value,
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
+                chunk_start_idx_tensor=chunk_start_idx_tensor,
             )
             return output
         elif self.use_paged_attention and T == 1:
