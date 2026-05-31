@@ -141,16 +141,18 @@ class TTNNFlowDecoder:
                     preprocess_linear_bias(state_dict[f"{prefix}.enc.res_skip_layers.{i}.bias"].float(), device))
             obj._flows.append(fw)
 
-            # Host-side conv weights (ttnn.conv1d handles device transfer internally)
+            # Host-side conv weights + ttnn-tensor biases for native conv1d bias_tensor= path
+            # (matches Generator's _prep_bias_for_conv1d pattern; eliminates host-side bias add)
             conv = {
                 "ws": [],
-                "bs": [],
+                "bs_tt": [],
             }
             for i in range(NUM_WN_LAYERS):
                 conv["ws"].append(
                     preprocess_conv1d_weight(state_dict[f"{prefix}.enc.in_layers.{i}.weight"].float()))
-                conv["bs"].append(
-                    state_dict[f"{prefix}.enc.in_layers.{i}.bias"].float())
+                bias_1d = state_dict[f"{prefix}.enc.in_layers.{i}.bias"].float()
+                conv["bs_tt"].append(
+                    ttnn.from_torch(bias_1d.reshape(1, 1, 1, -1), dtype=DEFAULT_DTYPE))
             obj._conv_weights.append(conv)
 
         return obj
@@ -165,7 +167,7 @@ class TTNNFlowDecoder:
             d = DILATION_RATE ** i
             padding = d * (KERNEL_SIZE - 1) // 2
 
-            # Conv1d (conv weight is host tensor, ttnn.conv1d manages device)
+            # Conv1d with native bias fusion (matches Generator's _conv1d_fused path)
             x_tt = ttnn.from_torch(x_cl, dtype=DEFAULT_DTYPE)
             result = ttnn.conv1d(
                 input_tensor=x_tt, weight_tensor=conv["ws"][i], device=self._device,
@@ -173,10 +175,10 @@ class TTNNFlowDecoder:
                 input_length=seq_len, kernel_size=KERNEL_SIZE, stride=1,
                 padding=padding, dilation=d, groups=1,
                 dtype=DEFAULT_DTYPE, return_output_dim=True,
+                bias_tensor=conv["bs_tt"][i],
             )
             conv_out_tt = result[0]
             conv_torch, _ = _conv1d_to_torch(result, 2 * HIDDEN_CH)
-            conv_torch = conv_torch + conv["bs"][i].unsqueeze(0).unsqueeze(0)
 
             # Conditioning
             cond_offset = i * 2 * HIDDEN_CH
