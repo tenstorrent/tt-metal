@@ -508,18 +508,31 @@ def test_prefill_transformer(
     profiler.start("tt_forward")
     logger.info("Running TtPrefillTransformer forward...")
     do_return_kv = pcc_validation and return_kv_cache
+    # [ND-DEBUG] Non-determinism probe (kgrujcic/deepseek_nd). When TT_DS_ND_DEBUG=1,
+    # force return_intermediates so we can fingerprint per-layer outputs AND the raw
+    # logits (NOT the Gumbel-sampled token, which is RNG-confounded at temperature>0)
+    # and compare them across iterations within one process to find the first
+    # stage that drifts. Pure measurement; does not change device compute.
+    from models.demos.deepseek_v3_d_p.utils.nd_debug import nd_compare_log, nd_fingerprint
+
+    nd_debug = os.getenv("TT_DS_ND_DEBUG", "0").lower() in ("1", "true", "yes")
+    nd_prev_fp = None
     for i in range(num_iterations):
         logger.info(f"Starting iteration: {i}")
         first_token_id, first_token_prob, tt_intermediates = transformer(
             tt_tokens,
             tt_kvpe_cache,
             number_of_non_padded_tokens=number_of_non_padded_tokens,
-            return_intermediates=pcc_validation,
+            return_intermediates=(pcc_validation or nd_debug),
             read_profiler=False,
             temperature=temperature,
         )
         logger.info(f"Starting completion sync on iteration: {i}")
         ttnn.synchronize_device(mesh_device)
+        if nd_debug:
+            nd_cur_fp = nd_fingerprint(tt_intermediates, num_layers)
+            nd_compare_log(i, nd_prev_fp, nd_cur_fp, first_token_id, first_token_prob)
+            nd_prev_fp = nd_cur_fp
     profiler.end("tt_forward")
     logger.info(f"Forward pass completed. First token: ID={first_token_id}, prob={first_token_prob:.4f}")
 
