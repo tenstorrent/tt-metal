@@ -107,6 +107,7 @@ void fabric_mux_connection_rt_args(
     const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
     tt::tt_metal::Program& program,
     CoreCoord termination_master_virtual_core,
+    uint32_t num_mux_clients,
     std::vector<uint32_t>& worker_rt_args) {
     worker_rt_args.push_back(mux_connection_valid);   // mux_connection_valid
     worker_rt_args.push_back(is_termination_master);  // is_termination_master
@@ -131,6 +132,7 @@ void fabric_mux_connection_rt_args(
     worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));   // local_buffer_index_address
     worker_rt_args.push_back(termination_master_virtual_core.x);                    // termination_master_noc_x
     worker_rt_args.push_back(termination_master_virtual_core.y);                    // termination_master_noc_y
+    worker_rt_args.push_back(num_mux_clients);                                      // num_mux_clients (this mux)
 }
 
 // Append tensor accessors in a consistent order
@@ -1193,6 +1195,13 @@ all_gather_minimal_matmul_async_factory_helper(
             uint32_t worker_idx = in0_idx % num_workers_per_link;
             auto last_in0_core = in0_core_order.back();
 
+            // Actual client count on this core's mux: the senders share a mux per group of
+            // num_workers_per_link along the in0 sender axis. The last group is short when the
+            // axis isn't a multiple of num_workers_per_link, so clamp to the axis size.
+            uint32_t in0_group_base = in0_idx - worker_idx;
+            uint32_t in0_mux_clients =
+                std::min(in0_group_base + num_workers_per_link, in0_parallel_axis_cores) - in0_group_base;
+
             // Each fabric-sender core only registers as a client of the mux for the SINGLE
             // direction it actually sends in. (Previously both directions were registered, with
             // the unused one returning nullptr from build_and_connect — wasting 5 semaphores per
@@ -1224,6 +1233,7 @@ all_gather_minimal_matmul_async_factory_helper(
                     mux_kernel_config,
                     program,
                     termination_master_virtual_core_backward,
+                    in0_mux_clients,
                     in0_args);
             } else {
                 // Forward fabric sender (in0_core_order_index == size - 1).
@@ -1250,6 +1260,7 @@ all_gather_minimal_matmul_async_factory_helper(
                     mux_kernel_config,
                     program,
                     termination_master_virtual_core_forward,
+                    in0_mux_clients,
                     in0_args);
             }
         }
@@ -1299,6 +1310,15 @@ all_gather_minimal_matmul_async_factory_helper(
             uint32_t worker_idx = in1_idx % num_workers_per_link;
             auto last_in1_core = in1_core_order.back();
 
+            // Actual client count on this core's FSDP mux. in1 senders share a mux per group of
+            // num_workers_per_link along the in1 sender axis (in1_parallel_axis_cores). When that
+            // axis isn't a multiple of num_workers_per_link the last group is short (e.g. an odd
+            // core_grid_y with nwpl=2 → 1 client), so num_mux_clients must be clamped to the axis
+            // — otherwise that mux's termination master waits forever for a non-existent peer.
+            uint32_t in1_group_base = in1_idx - worker_idx;
+            uint32_t in1_mux_clients =
+                std::min(in1_group_base + num_workers_per_link, in1_parallel_axis_cores) - in1_group_base;
+
             // Each FSDP fabric-sender core only registers as a client of the mux for the SINGLE
             // direction it actually sends in. Core at size-2 → backward; core at size-1 → forward.
             // Note: the in1 chain orientation is the *opposite* of in0's (in0 uses
@@ -1334,6 +1354,7 @@ all_gather_minimal_matmul_async_factory_helper(
                     fsdp_mux_kernel_config,
                     program,
                     fsdp_term_master_virtual_backward,
+                    in1_mux_clients,
                     in1_args);
             } else {
                 // Forward fabric sender (in1_core_order_index == size - 1).
@@ -1359,6 +1380,7 @@ all_gather_minimal_matmul_async_factory_helper(
                     fsdp_mux_kernel_config,
                     program,
                     fsdp_term_master_virtual_forward,
+                    in1_mux_clients,
                     in1_args);
             }
         }
