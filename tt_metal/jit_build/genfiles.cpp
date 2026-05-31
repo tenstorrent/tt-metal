@@ -514,9 +514,9 @@ ComputedDataFormats compute_data_formats(const JitBuildOptions& options, tt::ARC
     }
 
     if (std::any_of(desc.buf_dataformat_arr.begin(), desc.buf_dataformat_arr.end(), [](DataFormat f) {
-            return f == DataFormat::MxFp4;
+            return tt::is_mx_format(f);
         })) {
-        TT_FATAL(arch == tt::ARCH::QUASAR, "MxFp4 format is only supported on Quasar");
+        TT_FATAL(arch == tt::ARCH::QUASAR, "Mx formats are only supported on Quasar");
     }
 
     tt::check_valid_formats_in_out_data_formats(desc.buf_dataformat_arr);

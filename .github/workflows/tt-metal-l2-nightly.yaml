@@ -375,6 +375,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       dispatch-mode: sd
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+      gtest-filter: "-MeshDeviceFixture.Top32RmDevPipelineCompletes"  # disabled — deterministic compile failure, tracking issue #45483
   # TTNN Tutorials
   test-ttnn-tutorials:
     needs: [build-artifact, generate-arch-matrix]

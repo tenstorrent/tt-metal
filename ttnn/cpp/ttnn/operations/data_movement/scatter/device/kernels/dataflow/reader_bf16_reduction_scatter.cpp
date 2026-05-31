@@ -5,6 +5,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/numeric/bfloat16.h"
 #include "../scatter_bf16_reduction_common.hpp"
 
 #include <array>
@@ -16,17 +17,6 @@ FORCE_INLINE static float bfloat16_to_float(uint16_t bfloat_val) {
     float f;
     std::memcpy(&f, &uint32_data, sizeof(f));
     return f;
-}
-
-FORCE_INLINE std::uint16_t fp32_to_bf16(float x) {
-    std::uint32_t bits;
-    std::memcpy(&bits, &x, sizeof(bits));
-
-    std::uint32_t lsb = (bits >> 16) & 1u;
-    std::uint32_t rounding_bias = 0x7FFFu + lsb;
-    bits += rounding_bias;
-
-    return static_cast<std::uint16_t>(bits >> 16);
 }
 
 FORCE_INLINE float perform_reduction(float input, uint16_t source_value, ScatterReductionType scatter_reduction_type) {
