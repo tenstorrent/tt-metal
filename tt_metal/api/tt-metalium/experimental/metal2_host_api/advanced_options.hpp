@@ -10,7 +10,7 @@
 
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 
-namespace tt::tt_metal::experimental::metal2_host_api {
+namespace tt::tt_metal::experimental {
 
 // ============================================================================
 // Advanced options for Metal 2.0 specs
@@ -216,4 +216,4 @@ struct TensorParameterAdvancedOptions {
     bool dynamic_tensor_shape = false;
 };
 
-}  // namespace tt::tt_metal::experimental::metal2_host_api
+}  // namespace tt::tt_metal::experimental

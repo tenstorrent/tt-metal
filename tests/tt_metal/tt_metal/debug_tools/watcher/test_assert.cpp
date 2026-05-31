@@ -81,7 +81,7 @@ static void RunTest(
         case HalProgrammableCoreType::TENSIX: {
             logical_core = {0, 0};
             virtual_core = device->worker_core_from_logical_core(logical_core);
-            experimental::metal2_host_api::KernelSpec assert_kernel_spec{
+            experimental::KernelSpec assert_kernel_spec{
                 .unique_id = ASSERT_KERNEL_NAME,
                 .source = kernel,
                 .runtime_arg_schema = {.runtime_arg_names = {"a", "b", "assert_type", "hw_assert_cause"}},
@@ -109,13 +109,13 @@ static void RunTest(
                         assert_kernel_spec.num_threads = 1;
                     }
                     // Provide both gen1 and gen2 configs so the same KernelSpec runs on either arch.
-                    assert_kernel_spec.hw_config = experimental::metal2_host_api::DataMovementHardwareConfig{
+                    assert_kernel_spec.hw_config = experimental::DataMovementHardwareConfig{
                         .gen1_config =
-                            experimental::metal2_host_api::DataMovementHardwareConfig::Gen1Config{
+                            experimental::DataMovementHardwareConfig::Gen1Config{
                                 .processor = gen1_processor,
                                 .noc = gen1_noc,
                             },
-                        .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{},
+                        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
                     };
                     break;
                 }
@@ -127,22 +127,22 @@ static void RunTest(
                     // Bind trisc_id so the kernel can early-return on TRISCs that aren't the target
                     // of a Quasar compute HW-fault test.
                     assert_kernel_spec.compile_time_args = {{"trisc_id", trisc_id}};
-                    assert_kernel_spec.hw_config = experimental::metal2_host_api::ComputeHardwareConfig{};
+                    assert_kernel_spec.hw_config = experimental::ComputeHardwareConfig{};
                     break;
                 }
                 default: TT_THROW("Unsupported processor class type for TENSIX");
             }
-            experimental::metal2_host_api::WorkUnitSpec wu{
+            experimental::WorkUnitSpec wu{
                 .name = "main",
                 .kernels = {ASSERT_KERNEL_NAME},
-                .target_nodes = experimental::metal2_host_api::NodeCoord{logical_core},
+                .target_nodes = experimental::NodeCoord{logical_core},
             };
-            experimental::metal2_host_api::ProgramSpec spec{
+            experimental::ProgramSpec spec{
                 .name = "watcher_assert",
                 .kernels = {assert_kernel_spec},
                 .work_units = {wu},
             };
-            program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+            program = experimental::MakeProgramFromSpec(*mesh_device, spec);
             break;
         }
         case HalProgrammableCoreType::ACTIVE_ETH:
@@ -187,15 +187,15 @@ static void RunTest(
         if (use_legacy_api) {
             SetRuntimeArgs(prog, assert_kernel, logical_core, args);
         } else {
-            experimental::metal2_host_api::ProgramRunArgs params;
+            experimental::ProgramRunArgs params;
             params.kernel_run_args = {{
                 .kernel_spec_name = ASSERT_KERNEL_NAME,
                 .runtime_arg_values =
-                    {{.node = experimental::metal2_host_api::NodeCoord{logical_core},
+                    {{.node = experimental::NodeCoord{logical_core},
                       .args =
                           {{"a", args[0]}, {"b", args[1]}, {"assert_type", args[2]}, {"hw_assert_cause", args[3]}}}},
             }};
-            experimental::metal2_host_api::SetProgramRunArgs(prog, params);
+            experimental::SetProgramRunArgs(prog, params);
         }
     };
 

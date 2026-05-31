@@ -39,7 +39,7 @@ namespace tt::tt_metal {
 namespace {
 
 using namespace experimental;
-using namespace experimental::metal2_host_api;
+using namespace experimental;
 
 constexpr const char* ALIAS_PRODUCER_KERNEL =
     "tests/tt_metal/tt_metal/test_kernels/dataflow/alias_dfb_producer.cpp";

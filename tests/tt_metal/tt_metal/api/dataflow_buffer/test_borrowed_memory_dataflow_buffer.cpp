@@ -32,7 +32,7 @@
 namespace tt::tt_metal {
 namespace {
 
-using namespace experimental::metal2_host_api;
+using namespace experimental;
 using test_helpers::MakeMinimalComputeKernel;
 using test_helpers::MakeMinimalDMKernel;
 using test_helpers::MakeMinimalGen1DMKernel;

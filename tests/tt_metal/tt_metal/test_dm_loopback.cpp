@@ -36,7 +36,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmLoopback) {
 
     IDevice* dev = devices_[0]->get_devices()[0];
     auto mesh_device = devices_[0];
-    const experimental::metal2_host_api::NodeCoord node{0, 0};
+    const experimental::NodeCoord node{0, 0};
 
     // These addresses have been randomly chosen
     uint32_t l1_address = 1000 * 1024;
@@ -62,7 +62,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmLoopback) {
     constexpr const char* L1_TO_DRAM_2 = "l1_to_dram_2";
 
     auto make_dram_to_l1_spec = [](const char* id) {
-        return experimental::metal2_host_api::KernelSpec{
+        return experimental::KernelSpec{
             .unique_id = id,
             .source =
 
@@ -74,13 +74,13 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmLoopback) {
                     .runtime_arg_names = {"dram_addr", "l1_addr", "dram_buffer_size", "dram_bank_id", "signal_value"},
                 },
             .hw_config =
-                experimental::metal2_host_api::DataMovementHardwareConfig{
-                    .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{}},
+                experimental::DataMovementHardwareConfig{
+                    .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
         };
     };
 
     auto make_l1_to_dram_spec = [](const char* id) {
-        return experimental::metal2_host_api::KernelSpec{
+        return experimental::KernelSpec{
             .unique_id = id,
             .source =
 
@@ -92,23 +92,23 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmLoopback) {
                     .runtime_arg_names = {"dram_addr", "l1_addr", "dram_buffer_size", "dram_bank_id", "signal_value"},
                 },
             .hw_config =
-                experimental::metal2_host_api::DataMovementHardwareConfig{
-                    .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{}},
+                experimental::DataMovementHardwareConfig{
+                    .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
         };
     };
 
-    experimental::metal2_host_api::SemaphoreSpec sem{
+    experimental::SemaphoreSpec sem{
         .unique_id = "sem",
         .target_nodes = node,
     };
 
-    experimental::metal2_host_api::WorkUnitSpec main_wu{
+    experimental::WorkUnitSpec main_wu{
         .name = "main",
         .kernels = {DRAM_TO_L1_0, DRAM_TO_L1_1, DRAM_TO_L1_2, L1_TO_DRAM_0, L1_TO_DRAM_1, L1_TO_DRAM_2},
         .target_nodes = node,
     };
 
-    experimental::metal2_host_api::ProgramSpec spec{
+    experimental::ProgramSpec spec{
         .name = "dm_loopback",
         .kernels =
             {make_dram_to_l1_spec(DRAM_TO_L1_0),
@@ -120,12 +120,12 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmLoopback) {
         .semaphores = {sem},
         .work_units = {main_wu},
     };
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     const char* dram_to_l1_names[] = {DRAM_TO_L1_0, DRAM_TO_L1_1, DRAM_TO_L1_2};
     const char* l1_to_dram_names[] = {L1_TO_DRAM_0, L1_TO_DRAM_1, L1_TO_DRAM_2};
 
-    experimental::metal2_host_api::ProgramRunArgs params;
+    experimental::ProgramRunArgs params;
     uint32_t signal_value = 0;
     for (uint32_t i = 0; i < num_loopback_stages; i++) {
         params.kernel_run_args.push_back(
@@ -154,7 +154,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmLoopback) {
         l1_address += sizeof(uint32_t);
         signal_value++;
     }
-    experimental::metal2_host_api::SetProgramRunArgs(program, params);
+    experimental::SetProgramRunArgs(program, params);
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);

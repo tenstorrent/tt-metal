@@ -23,7 +23,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 
-namespace tt::tt_metal::experimental::metal2_host_api {
+namespace tt::tt_metal::experimental {
 
 // Type aliases: Node terminology for NOC endpoint coordinates
 using NodeCoord = tt::tt_metal::CoreCoord;
@@ -69,4 +69,4 @@ inline std::optional<NodeRange> select_contiguous_range_from_node_range_set(
     return tt::tt_metal::select_contiguous_range_from_corerangeset(node_ranges, x, y);
 }
 
-}  // namespace tt::tt_metal::experimental::metal2_host_api
+}  // namespace tt::tt_metal::experimental

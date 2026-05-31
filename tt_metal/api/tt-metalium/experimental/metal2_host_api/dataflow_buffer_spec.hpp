@@ -58,7 +58,7 @@
 //
 // ============================================================================
 
-namespace tt::tt_metal::experimental::metal2_host_api {
+namespace tt::tt_metal::experimental {
 
 // A name identifying a DataflowBufferSpec within a ProgramSpec.
 using DFBSpecName = std::string;
@@ -157,4 +157,4 @@ struct RemoteDataflowBufferSpec {
     ProducerConsumerMap producer_consumer_map;
 };
 
-}  // namespace tt::tt_metal::experimental::metal2_host_api
+}  // namespace tt::tt_metal::experimental

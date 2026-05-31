@@ -108,7 +108,7 @@ distributed::MeshWorkload initialize_program_data_movement_rta(
     // so defining it unconditionally is harmless on gen1.
     uint32_t max_dms = MetalContext::instance().hal().get_processor_types_count(
         HalProgrammableCoreType::TENSIX, ttsl::as_underlying_type(HalProcessorClassType::DM));
-    experimental::metal2_host_api::KernelSpec::CompilerOptions::Defines dm_defines = {
+    experimental::KernelSpec::CompilerOptions::Defines dm_defines = {
         {"DATA_MOVEMENT", "1"},
         {"NUM_RUNTIME_ARGS", std::to_string(num_unique_rt_args)},
         {"RESULTS_ADDR", std::to_string(rta_base_dm)},
@@ -122,16 +122,16 @@ distributed::MeshWorkload initialize_program_data_movement_rta(
     // Both gen1 and gen2 DM configs are populated; the runtime selects the one
     // matching the active arch. On Quasar all 6 user DMs (DM2..DM7) run the
     // kernel; on WH/BH the legacy DM was a single RISCV_0 thread.
-    experimental::metal2_host_api::DataMovementHardwareConfig dm_cfg{
+    experimental::DataMovementHardwareConfig dm_cfg{
         .gen1_config =
-            experimental::metal2_host_api::DataMovementHardwareConfig::Gen1Config{
+            experimental::DataMovementHardwareConfig::Gen1Config{
                 .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
-        .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{},
+        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
     };
     const bool is_quasar = MetalContext::instance().hal().get_arch() == tt::ARCH::QUASAR;
     const uint32_t num_threads = is_quasar ? kQuasarNumUserDms : 1u;
 
-    experimental::metal2_host_api::KernelSpec kernel_spec{
+    experimental::KernelSpec kernel_spec{
         .unique_id = KERNEL,
         .source =
 
@@ -140,23 +140,23 @@ distributed::MeshWorkload initialize_program_data_movement_rta(
         .compiler_options = {.defines = dm_defines},
         .hw_config = dm_cfg,
         .advanced_options =
-            experimental::metal2_host_api::KernelAdvancedOptions{
+            experimental::KernelAdvancedOptions{
                 .num_runtime_varargs = num_unique_rt_args,
                 .num_common_runtime_varargs = common_rtas ? num_unique_rt_args : 0u,
             },
     };
 
-    experimental::metal2_host_api::WorkUnitSpec wu{
+    experimental::WorkUnitSpec wu{
         .name = "main",
         .kernels = {KERNEL},
         .target_nodes = core_range_set,
     };
-    experimental::metal2_host_api::ProgramSpec spec{
+    experimental::ProgramSpec spec{
         .name = "dm_runtime_args",
         .kernels = {kernel_spec},
         .work_units = {wu},
     };
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     workload.add_program(device_range, std::move(program));
     return workload;
@@ -192,7 +192,7 @@ std::pair<distributed::MeshWorkload, std::vector<std::string>> initialize_progra
 
     uint32_t max_dms = MetalContext::instance().hal().get_processor_types_count(
         HalProgrammableCoreType::TENSIX, ttsl::as_underlying_type(HalProcessorClassType::DM));
-    experimental::metal2_host_api::KernelSpec::CompilerOptions::Defines defines_vec = {
+    experimental::KernelSpec::CompilerOptions::Defines defines_vec = {
         {"DATA_MOVEMENT", "1"},
         {"NUM_RUNTIME_ARGS", std::to_string(num_runtime_args)},
         {"RESULTS_ADDR", std::to_string(rta_base)},
@@ -202,14 +202,14 @@ std::pair<distributed::MeshWorkload, std::vector<std::string>> initialize_progra
     }
 
     std::vector<std::string> kernel_names(num_kernels);
-    std::vector<experimental::metal2_host_api::KernelSpec> kernel_specs;
+    std::vector<experimental::KernelSpec> kernel_specs;
     std::vector<std::string> wu_kernel_names;
     kernel_specs.reserve(num_kernels);
     wu_kernel_names.reserve(num_kernels);
 
     for (uint32_t k = 0; k < num_kernels; k++) {
         kernel_names[k] = "dm_kernel_" + std::to_string(k);
-        kernel_specs.push_back(experimental::metal2_host_api::KernelSpec{
+        kernel_specs.push_back(experimental::KernelSpec{
             .unique_id = kernel_names[k],
             .source =
 
@@ -217,10 +217,10 @@ std::pair<distributed::MeshWorkload, std::vector<std::string>> initialize_progra
             .num_threads = dm_processors_per_kernel,
             .compiler_options = {.defines = defines_vec},
             .hw_config =
-                experimental::metal2_host_api::DataMovementHardwareConfig{
-                    .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{}},
+                experimental::DataMovementHardwareConfig{
+                    .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
             .advanced_options =
-                experimental::metal2_host_api::KernelAdvancedOptions{
+                experimental::KernelAdvancedOptions{
                     .num_runtime_varargs = num_runtime_args,
                     .num_common_runtime_varargs = common_rtas ? static_cast<size_t>(num_runtime_args) : size_t{0},
                 },
@@ -228,18 +228,18 @@ std::pair<distributed::MeshWorkload, std::vector<std::string>> initialize_progra
         wu_kernel_names.push_back(kernel_names[k]);
     }
 
-    experimental::metal2_host_api::WorkUnitSpec main_wu{
+    experimental::WorkUnitSpec main_wu{
         .name = "main",
         .kernels = wu_kernel_names,
         .target_nodes = core_range_set,
     };
 
-    experimental::metal2_host_api::ProgramSpec spec{
+    experimental::ProgramSpec spec{
         .name = "quasar_crta_test",
         .kernels = kernel_specs,
         .work_units = {main_wu},
     };
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     workload.add_program(device_range, std::move(program));
     return {std::move(workload), kernel_names};
@@ -998,16 +998,16 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCRTASharedL1Address) {
         unit_tests::runtime_args::kQuasarNumUserDms);
     auto& program = workload.get_programs().at(device_range);
 
-    experimental::metal2_host_api::ProgramRunArgs params;
+    experimental::ProgramRunArgs params;
     params.kernel_run_args = {{
         .kernel_spec_name = kernel_names[0],
         .advanced_options =
-            experimental::metal2_host_api::AdvancedKernelRunArgs{
+            experimental::AdvancedKernelRunArgs{
                 .runtime_varargs = {{core, std::vector<uint32_t>(common_rtas.size(), 0)}},
                 .common_runtime_varargs = common_rtas,
             },
     }};
-    experimental::metal2_host_api::SetProgramRunArgs(program, params);
+    experimental::SetProgramRunArgs(program, params);
 
     distributed::EnqueueMeshWorkload(cq, workload, true);
     // Verify all 6 user DMs (DM2..DM7) share the same CRTA L1 address
@@ -1036,7 +1036,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCRTAUniqueL1Addresses) {
         mesh_device, core_range_set, base_crtas.size(), true, num_kernels, /*dm_processors_per_kernel*/ 1);
     auto& program = workload.get_programs().at(device_range);
 
-    experimental::metal2_host_api::ProgramRunArgs params;
+    experimental::ProgramRunArgs params;
     std::vector<std::vector<uint32_t>> all_crtas(num_kernels);
     for (uint32_t i = 0; i < num_kernels; i++) {
         std::vector<uint32_t> kernel_crtas = {base_crtas[0] + i, base_crtas[1] + i, base_crtas[2] + i};
@@ -1044,13 +1044,13 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCRTAUniqueL1Addresses) {
         params.kernel_run_args.push_back({
             .kernel_spec_name = kernel_names[i],
             .advanced_options =
-                experimental::metal2_host_api::AdvancedKernelRunArgs{
+                experimental::AdvancedKernelRunArgs{
                     .runtime_varargs = {{core, std::vector<uint32_t>(base_crtas.size(), 0)}},
                     .common_runtime_varargs = kernel_crtas,
                 },
         });
     }
-    experimental::metal2_host_api::SetProgramRunArgs(program, params);
+    experimental::SetProgramRunArgs(program, params);
 
     distributed::EnqueueMeshWorkload(cq, workload, true);
     // Verify each user DM (DM2..DM7) has a unique CRTA L1 address

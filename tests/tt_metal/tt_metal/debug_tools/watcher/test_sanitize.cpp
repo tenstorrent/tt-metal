@@ -199,8 +199,8 @@ void RunTestOnCore(
         // TENSIX kernel is launched via Metal 2.0 on both gen1 (WH/BH) and gen2 (Quasar).
         // On Quasar, user DMs (DM2..DM7) run the kernel; multi_dm_race syncs them to race, else only dm_id executes.
         // On WH/BH, BRISC or NCRISC (selected by use_ncrisc) runs the kernel.
-        experimental::metal2_host_api::KernelSpec::CompileTimeArgs cta_bindings;
-        experimental::metal2_host_api::KernelSpec::CompilerOptions::Defines defines;
+        experimental::KernelSpec::CompileTimeArgs cta_bindings;
+        experimental::KernelSpec::CompilerOptions::Defines defines;
         if (is_quasar && multi_dm_race) {
             constexpr uint32_t num_dms = 6;
             constexpr uint32_t multi_dm_base_addr = 0xFFFF0000;
@@ -229,17 +229,16 @@ void RunTestOnCore(
         auto gen1_processor =
             use_ncrisc ? tt::tt_metal::DataMovementProcessor::RISCV_1 : tt::tt_metal::DataMovementProcessor::RISCV_0;
         auto gen1_noc = use_ncrisc ? tt_metal::NOC::RISCV_1_default : tt_metal::NOC::RISCV_0_default;
-        experimental::metal2_host_api::DataMovementHardwareConfig dm_cfg{
+        experimental::DataMovementHardwareConfig dm_cfg{
             .gen1_config =
-                experimental::metal2_host_api::DataMovementHardwareConfig::Gen1Config{
-                    .processor = gen1_processor, .noc = gen1_noc},
-            .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{},
+                experimental::DataMovementHardwareConfig::Gen1Config{.processor = gen1_processor, .noc = gen1_noc},
+            .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
         };
         uint32_t num_threads = is_quasar ? 6u : 1u;
         if (!is_quasar) {
             noc = static_cast<int>(gen1_noc);
         }
-        experimental::metal2_host_api::KernelSpec dm_spec{
+        experimental::KernelSpec dm_spec{
             .unique_id = DRAM_COPY_KERNEL_NAME,
             .source = kernel_metal2,
             .num_threads = num_threads,
@@ -265,17 +264,17 @@ void RunTestOnCore(
                       "mcast_dst_end_y"}},
             .hw_config = dm_cfg,
         };
-        experimental::metal2_host_api::WorkUnitSpec wu{
+        experimental::WorkUnitSpec wu{
             .name = "main",
             .kernels = {DRAM_COPY_KERNEL_NAME},
-            .target_nodes = experimental::metal2_host_api::NodeCoord{core},
+            .target_nodes = experimental::NodeCoord{core},
         };
-        experimental::metal2_host_api::ProgramSpec spec{
+        experimental::ProgramSpec spec{
             .name = "watcher_sanitize",
             .kernels = {dm_spec},
             .work_units = {wu},
         };
-        program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+        program = experimental::MakeProgramFromSpec(*mesh_device, spec);
         if (is_quasar) {
             // Quasar SD does not yet expose a NOC index in the same way as legacy DMs; the watcher
             // log emits "noc0" for Metal 2.0 DM kernels. Match that so expected strings line up.
@@ -381,11 +380,11 @@ void RunTestOnCore(
         // ETH cores still go through the legacy API.
         tt_metal::SetRuntimeArgs(program, dram_copy_kernel, core, rta_values);
     } else {
-        experimental::metal2_host_api::ProgramRunArgs params;
+        experimental::ProgramRunArgs params;
         params.kernel_run_args = {{
             .kernel_spec_name = DRAM_COPY_KERNEL_NAME,
             .runtime_arg_values =
-                {{.node = experimental::metal2_host_api::NodeCoord{core},
+                {{.node = experimental::NodeCoord{core},
                   .args =
                       {{"local_buffer_addr", buffer_addr},
                        {"buffer_src_addr", input_buffer_addr},
@@ -404,7 +403,7 @@ void RunTestOnCore(
                        {"mcast_dst_end_x", mcast_dst_end_x},
                        {"mcast_dst_end_y", mcast_dst_end_y}}}},
         }};
-        experimental::metal2_host_api::SetProgramRunArgs(program, params);
+        experimental::SetProgramRunArgs(program, params);
     }
     workload.add_program(device_range, std::move(program));
 

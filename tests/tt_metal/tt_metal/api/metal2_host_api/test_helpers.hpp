@@ -29,7 +29,7 @@
 // See the Metal 2.0 Host API documentation and programming examples for
 // recommended patterns for constructing ProgramSpec objects in production code.
 
-namespace tt::tt_metal::experimental::metal2_host_api::test_helpers {
+namespace tt::tt_metal::experimental::test_helpers {
 
 // ============================================================================
 // Test environment helpers
@@ -236,4 +236,4 @@ inline ProgramSpec MakeMinimalValidProgramSpec() {
     return spec;
 }
 
-}  // namespace tt::tt_metal::experimental::metal2_host_api::test_helpers
+}  // namespace tt::tt_metal::experimental::test_helpers

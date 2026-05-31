@@ -568,14 +568,14 @@ public:
     // descriptor adapter's per-range build pattern.
     //
     // On cache miss: the adapter calls create_program_spec, builds one Program
-    // per coordinate range via metal2_host_api::MakeProgramFromSpec, applies
+    // per coordinate range via experimental::MakeProgramFromSpec, applies
     // the initial ProgramRunArgs via SetProgramRunArgs, then resolves
     // each TensorArgument against the io_tensors enumerated from tensor_args /
     // tensor_return_value (pointer-identity match within the call).
     //
     // On cache hit: the adapter enumerates fresh io_tensors, mutates the
     // cached TensorArgument storage in place using the stored index bindings, and
-    // applies via metal2_host_api::UpdateTensorArgs — no Program rebuild,
+    // applies via experimental::UpdateTensorArgs — no Program rebuild,
     // no heap allocation.
     //
     // Limitation: every TensorArgument returned by the factory must reference a
@@ -589,8 +589,8 @@ public:
     // -----------------------------------------------------------------------
     template <ProgramSpecFactoryConcept ProgramSpecFactory>
     struct ProgramSpecMeshWorkloadFactoryAdapter {
-        using TensorParameterName = tt::tt_metal::experimental::metal2_host_api::TensorParameterName;
-        using TensorArgument = tt::tt_metal::experimental::metal2_host_api::ProgramRunArgs::TensorArgument;
+        using TensorParameterName = tt::tt_metal::experimental::TensorParameterName;
+        using TensorArgument = tt::tt_metal::experimental::ProgramRunArgs::TensorArgument;
 
         // Stored across cache entries: for each TensorArgument in a program's
         // ProgramRunArgs, which io_tensor (by index into the deterministic
@@ -683,9 +683,8 @@ public:
             tt::tt_metal::distributed::MeshWorkload mesh_workload;
             std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
             for (const auto& range : tensor_coords.ranges()) {
-                auto program =
-                    tt::tt_metal::experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, artifacts.spec);
-                tt::tt_metal::experimental::metal2_host_api::SetProgramRunArgs(program, artifacts.run_params);
+                auto program = tt::tt_metal::experimental::MakeProgramFromSpec(*mesh_device, artifacts.spec);
+                tt::tt_metal::experimental::SetProgramRunArgs(program, artifacts.run_params);
                 shared_variables.emplace(range, shared_variables_t{.bindings = bindings});
                 mesh_workload.add_program(range, std::move(program));
             }
@@ -711,7 +710,7 @@ public:
                     fresh_tensor_args.push_back(TensorArgument{
                         .tensor_parameter_name = b.tensor_parameter_name, .tensor = io_mesh_tensors[b.io_tensor_idx]});
                 }
-                tt::tt_metal::experimental::metal2_host_api::UpdateTensorArgs(program, fresh_tensor_args);
+                tt::tt_metal::experimental::UpdateTensorArgs(program, fresh_tensor_args);
             }
         }
     };

@@ -29,7 +29,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
     auto mesh_device = devices_[0];
 
     // We are going to use the first device (0) and the first core (0, 0) on the device.
-    const experimental::metal2_host_api::NodeCoord node{0, 0};
+    const experimental::NodeCoord node{0, 0};
     // Command queue lets us submit work (execute programs and read/write buffers) to the device.
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     // Prepare a workload and a device coordinate range that spans the mesh.
@@ -52,16 +52,16 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
     constexpr const char* DM_TRANSFORM = "dm_transform";
     constexpr const char* DM_WRITER = "dm_writer";
 
-    experimental::metal2_host_api::SemaphoreSpec sem0_spec{
+    experimental::SemaphoreSpec sem0_spec{
         .unique_id = "sem0",
         .target_nodes = node,
     };
-    experimental::metal2_host_api::SemaphoreSpec sem1_spec{
+    experimental::SemaphoreSpec sem1_spec{
         .unique_id = "sem1",
         .target_nodes = node,
     };
 
-    experimental::metal2_host_api::KernelSpec dm_reader_spec{
+    experimental::KernelSpec dm_reader_spec{
         .unique_id = DM_READER,
         .source =
 
@@ -73,11 +73,11 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
                 .runtime_arg_names = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
             },
         .hw_config =
-            experimental::metal2_host_api::DataMovementHardwareConfig{
-                .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{}},
+            experimental::DataMovementHardwareConfig{
+                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
     };
 
-    experimental::metal2_host_api::KernelSpec dm_transform_spec{
+    experimental::KernelSpec dm_transform_spec{
         .unique_id = DM_TRANSFORM,
         .source =
 
@@ -96,11 +96,11 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
                 {"buf_b", buf_b_addr},
             },
         .hw_config =
-            experimental::metal2_host_api::DataMovementHardwareConfig{
-                .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{}},
+            experimental::DataMovementHardwareConfig{
+                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
     };
 
-    experimental::metal2_host_api::KernelSpec dm_writer_spec{
+    experimental::KernelSpec dm_writer_spec{
         .unique_id = DM_WRITER,
         .source =
 
@@ -112,25 +112,25 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
                 .runtime_arg_names = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
             },
         .hw_config =
-            experimental::metal2_host_api::DataMovementHardwareConfig{
-                .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{}},
+            experimental::DataMovementHardwareConfig{
+                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
     };
 
-    experimental::metal2_host_api::WorkUnitSpec main_wu{
+    experimental::WorkUnitSpec main_wu{
         .name = "main",
         .kernels = {DM_READER, DM_TRANSFORM, DM_WRITER},
         .target_nodes = node,
     };
 
-    experimental::metal2_host_api::ProgramSpec spec{
+    experimental::ProgramSpec spec{
         .name = "multi_semaphore_pipeline",
         .kernels = {dm_reader_spec, dm_transform_spec, dm_writer_spec},
         .semaphores = {sem0_spec, sem1_spec},
         .work_units = {main_wu},
     };
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
-    experimental::metal2_host_api::ProgramRunArgs params;
+    experimental::ProgramRunArgs params;
     params.kernel_run_args = {
         {.kernel_spec_name = DM_READER,
          .runtime_arg_values =
@@ -150,7 +150,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
                     {"num_elements", num_elements},
                     {"dram_bank_id", 0u}}}}},
     };
-    experimental::metal2_host_api::SetProgramRunArgs(program, params);
+    experimental::SetProgramRunArgs(program, params);
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
@@ -174,8 +174,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
 
     auto mesh_device = devices_[0];
 
-    const experimental::metal2_host_api::NodeCoord node_0{0, 0};
-    const experimental::metal2_host_api::NodeCoord node_1{1, 0};
+    const experimental::NodeCoord node_0{0, 0};
+    const experimental::NodeCoord node_1{1, 0};
 
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
 
@@ -196,19 +196,19 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
 
     const CoreCoord core_1_virtual = mesh_device->worker_core_from_logical_core(node_1);
 
-    experimental::metal2_host_api::SemaphoreSpec sem_core_0_spec{
+    experimental::SemaphoreSpec sem_core_0_spec{
         .unique_id = "sem_core_0",
         .target_nodes = node_0,
     };
-    experimental::metal2_host_api::SemaphoreSpec sem_cross_spec{
+    experimental::SemaphoreSpec sem_cross_spec{
         .unique_id = "sem_cross",
-        .target_nodes = experimental::metal2_host_api::NodeRange{node_0, node_1},
+        .target_nodes = experimental::NodeRange{node_0, node_1},
     };
-    experimental::metal2_host_api::SemaphoreSpec sem0_core_1_spec{
+    experimental::SemaphoreSpec sem0_core_1_spec{
         .unique_id = "sem0_core_1",
         .target_nodes = node_1,
     };
-    experimental::metal2_host_api::SemaphoreSpec sem1_core_1_spec{
+    experimental::SemaphoreSpec sem1_core_1_spec{
         .unique_id = "sem1_core_1",
         .target_nodes = node_1,
     };
@@ -219,7 +219,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
     constexpr const char* DM_TRANSFORM_1 = "dm_transform_1";
     constexpr const char* DM_WRITER_1 = "dm_writer_1";
 
-    experimental::metal2_host_api::KernelSpec dm_transform_0_spec{
+    experimental::KernelSpec dm_transform_0_spec{
         .unique_id = DM_TRANSFORM_0,
         .source =
 
@@ -234,11 +234,11 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
                 {"buf_b", buf_b_addr},
             },
         .hw_config =
-            experimental::metal2_host_api::DataMovementHardwareConfig{
-                .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{}},
+            experimental::DataMovementHardwareConfig{
+                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
     };
 
-    experimental::metal2_host_api::KernelSpec dm_writer_0_spec{
+    experimental::KernelSpec dm_writer_0_spec{
         .unique_id = DM_WRITER_0,
         .source =
 
@@ -256,11 +256,11 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
                     {"dram_addr", "l1_addr", "num_elements", "dram_bank_id", "remote_noc_x", "remote_noc_y"},
             },
         .hw_config =
-            experimental::metal2_host_api::DataMovementHardwareConfig{
-                .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{}},
+            experimental::DataMovementHardwareConfig{
+                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
     };
 
-    experimental::metal2_host_api::KernelSpec dm_reader_1_spec{
+    experimental::KernelSpec dm_reader_1_spec{
         .unique_id = DM_READER_1,
         .source =
 
@@ -277,11 +277,11 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
                 .runtime_arg_names = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
             },
         .hw_config =
-            experimental::metal2_host_api::DataMovementHardwareConfig{
-                .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{}},
+            experimental::DataMovementHardwareConfig{
+                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
     };
 
-    experimental::metal2_host_api::KernelSpec dm_transform_1_spec{
+    experimental::KernelSpec dm_transform_1_spec{
         .unique_id = DM_TRANSFORM_1,
         .source =
 
@@ -300,11 +300,11 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
                 {"buf_b", buf_b_addr},
             },
         .hw_config =
-            experimental::metal2_host_api::DataMovementHardwareConfig{
-                .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{}},
+            experimental::DataMovementHardwareConfig{
+                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
     };
 
-    experimental::metal2_host_api::KernelSpec dm_writer_1_spec{
+    experimental::KernelSpec dm_writer_1_spec{
         .unique_id = DM_WRITER_1,
         .source =
 
@@ -316,30 +316,30 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
                 .runtime_arg_names = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
             },
         .hw_config =
-            experimental::metal2_host_api::DataMovementHardwareConfig{
-                .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{}},
+            experimental::DataMovementHardwareConfig{
+                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
     };
 
-    experimental::metal2_host_api::WorkUnitSpec wu_core_0{
+    experimental::WorkUnitSpec wu_core_0{
         .name = "wu_core_0",
         .kernels = {DM_TRANSFORM_0, DM_WRITER_0},
         .target_nodes = node_0,
     };
-    experimental::metal2_host_api::WorkUnitSpec wu_core_1{
+    experimental::WorkUnitSpec wu_core_1{
         .name = "wu_core_1",
         .kernels = {DM_READER_1, DM_TRANSFORM_1, DM_WRITER_1},
         .target_nodes = node_1,
     };
 
-    experimental::metal2_host_api::ProgramSpec spec{
+    experimental::ProgramSpec spec{
         .name = "multi_cluster_multi_semaphore_pipeline",
         .kernels = {dm_transform_0_spec, dm_writer_0_spec, dm_reader_1_spec, dm_transform_1_spec, dm_writer_1_spec},
         .semaphores = {sem_core_0_spec, sem_cross_spec, sem0_core_1_spec, sem1_core_1_spec},
         .work_units = {wu_core_0, wu_core_1},
     };
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
-    experimental::metal2_host_api::ProgramRunArgs params;
+    experimental::ProgramRunArgs params;
     params.kernel_run_args = {
         {.kernel_spec_name = DM_TRANSFORM_0},
         {.kernel_spec_name = DM_TRANSFORM_1},
@@ -370,7 +370,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
                     {"num_elements", num_elements},
                     {"dram_bank_id", 0u}}}}},
     };
-    experimental::metal2_host_api::SetProgramRunArgs(program, params);
+    experimental::SetProgramRunArgs(program, params);
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);

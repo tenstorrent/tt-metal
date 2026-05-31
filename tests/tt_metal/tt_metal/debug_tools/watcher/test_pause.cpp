@@ -76,9 +76,9 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     // TENSIX kernels are launched via Metal 2.0 on both gen1 (WH/BH) and gen2 (Quasar).
     // On Quasar a single DM KernelSpec covers DM2..DM7 (DM0/DM1 are reserved); on WH/BH
     // gen1 requires one KernelSpec per processor, so BRISC and NCRISC are split.
-    std::vector<experimental::metal2_host_api::KernelSpec> kernel_specs;
-    std::vector<experimental::metal2_host_api::KernelSpecName> kernel_names;
-    std::vector<experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs> kernel_run_args;
+    std::vector<experimental::KernelSpec> kernel_specs;
+    std::vector<experimental::KernelSpecName> kernel_names;
+    std::vector<experimental::ProgramRunArgs::KernelRunArgs> kernel_run_args;
     auto add_dm_kernel =
         [&](const char* name, uint32_t num_threads, std::optional<tt::tt_metal::DataMovementProcessor> gen1_processor) {
             // Always provide both gen1 and gen2 configs; the runtime picks the one matching the
@@ -87,13 +87,12 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
             auto gen1_noc = (gen1_proc == tt::tt_metal::DataMovementProcessor::RISCV_1)
                                 ? tt::tt_metal::NOC::RISCV_1_default
                                 : tt::tt_metal::NOC::RISCV_0_default;
-            experimental::metal2_host_api::DataMovementHardwareConfig dm_cfg{
+            experimental::DataMovementHardwareConfig dm_cfg{
                 .gen1_config =
-                    experimental::metal2_host_api::DataMovementHardwareConfig::Gen1Config{
-                        .processor = gen1_proc, .noc = gen1_noc},
-                .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{},
+                    experimental::DataMovementHardwareConfig::Gen1Config{.processor = gen1_proc, .noc = gen1_noc},
+                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
             };
-            kernel_specs.push_back(experimental::metal2_host_api::KernelSpec{
+            kernel_specs.push_back(experimental::KernelSpec{
                 .unique_id = name,
                 .source = path_metal2,
                 .num_threads = num_threads,
@@ -117,12 +116,12 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
         add_dm_kernel("pause_ncrisc", 1, tt::tt_metal::DataMovementProcessor::RISCV_1);
 
         constexpr const char* COMPUTE_KERNEL_NAME = "pause_compute";
-        kernel_specs.push_back(experimental::metal2_host_api::KernelSpec{
+        kernel_specs.push_back(experimental::KernelSpec{
             .unique_id = COMPUTE_KERNEL_NAME,
             .source = path_metal2,
             .num_threads = 1,
             .runtime_arg_schema = {.common_runtime_arg_names = {"wait_cycles"}},
-            .hw_config = experimental::metal2_host_api::ComputeHardwareConfig{},
+            .hw_config = experimental::ComputeHardwareConfig{},
         });
         kernel_names.emplace_back(COMPUTE_KERNEL_NAME);
         kernel_run_args.push_back({
@@ -131,21 +130,21 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
         });
     }
 
-    experimental::metal2_host_api::WorkUnitSpec wu{
+    experimental::WorkUnitSpec wu{
         .name = "main",
         .kernels = kernel_names,
-        .target_nodes = experimental::metal2_host_api::NodeRange{CoreRange(xy_start, xy_end)},
+        .target_nodes = experimental::NodeRange{CoreRange(xy_start, xy_end)},
     };
-    experimental::metal2_host_api::ProgramSpec spec{
+    experimental::ProgramSpec spec{
         .name = "watcher_pause",
         .kernels = kernel_specs,
         .work_units = {wu},
     };
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
-    experimental::metal2_host_api::ProgramRunArgs params;
+    experimental::ProgramRunArgs params;
     params.kernel_run_args = std::move(kernel_run_args);
-    experimental::metal2_host_api::SetProgramRunArgs(program, params);
+    experimental::SetProgramRunArgs(program, params);
 
     // ETH cores: invoke the original (legacy) kernel via the legacy host API.
     if (!is_quasar) {

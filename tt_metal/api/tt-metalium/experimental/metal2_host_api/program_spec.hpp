@@ -16,7 +16,7 @@
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 
-namespace tt::tt_metal::experimental::metal2_host_api {
+namespace tt::tt_metal::experimental {
 
 // ============================================================================
 //  ProgramSpec API
@@ -97,4 +97,4 @@ struct ProgramSpec {
     std::vector<WorkUnitSpec> work_units;
 };
 
-}  // namespace tt::tt_metal::experimental::metal2_host_api
+}  // namespace tt::tt_metal::experimental

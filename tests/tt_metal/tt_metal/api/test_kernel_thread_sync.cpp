@@ -21,7 +21,7 @@
 #include "device_fixture.hpp"
 #include "metal2_host_api/test_helpers.hpp"
 
-namespace tt::tt_metal::experimental::metal2_host_api {
+namespace tt::tt_metal::experimental {
 namespace {
 
 using test_helpers::MakeMinimalDMKernel;
@@ -153,4 +153,4 @@ TEST_F(KernelThreadSyncTest, BarrierSynchronizesThreads) {
 }
 
 }  // namespace
-}  // namespace tt::tt_metal::experimental::metal2_host_api
+}  // namespace tt::tt_metal::experimental

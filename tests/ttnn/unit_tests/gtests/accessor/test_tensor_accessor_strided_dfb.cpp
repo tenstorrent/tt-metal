@@ -37,8 +37,8 @@ namespace {
 
 using namespace tt;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental::metal2_host_api;
-using namespace tt::tt_metal::experimental::metal2_host_api::test_helpers;
+using namespace tt::tt_metal::experimental;
+using namespace tt::tt_metal::experimental::test_helpers;
 using namespace ttnn;
 
 // ============================================================================

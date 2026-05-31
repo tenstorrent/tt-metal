@@ -10,7 +10,7 @@
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/kernel_types.hpp>  // For DataMovementProcessor, NOC, etc.
 
-namespace tt::tt_metal::experimental::metal2_host_api {
+namespace tt::tt_metal::experimental {
 
 // ============================================================================
 //  DataMovementHardwareConfig
@@ -53,4 +53,4 @@ struct DataMovementHardwareConfig {
     std::optional<Gen2Config> gen2_config = std::nullopt;
 };
 
-}  // namespace tt::tt_metal::experimental::metal2_host_api
+}  // namespace tt::tt_metal::experimental

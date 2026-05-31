@@ -364,7 +364,7 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
     const CoreCoord core = {0, 0};
     auto& cq = mesh_device->mesh_command_queue();
     auto zero_coord = distributed::MeshCoordinate(0, 0);
-    const experimental::metal2_host_api::NodeCoord node{static_cast<uint32_t>(core.x), static_cast<uint32_t>(core.y)};
+    const experimental::NodeCoord node{static_cast<uint32_t>(core.x), static_cast<uint32_t>(core.y)};
 
     distributed::DeviceLocalBufferConfig f16_dram_cfg{
         .page_size = f16_tile_size, .buffer_type = tt::tt_metal::BufferType::DRAM, .bottom_up = false};
@@ -394,7 +394,7 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
     constexpr const char* COMPUTE = "compute";
 
     auto make_f16_input_dfb = [&](const std::string& name) {
-        return experimental::metal2_host_api::DataflowBufferSpec{
+        return experimental::DataflowBufferSpec{
             .unique_id = name,
             .entry_size = f16_tile_size,
             .num_entries = 1,
@@ -402,30 +402,30 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
         };
     };
     auto make_f32_input_dfb = [&](const std::string& name) {
-        return experimental::metal2_host_api::DataflowBufferSpec{
+        return experimental::DataflowBufferSpec{
             .unique_id = name,
             .entry_size = f32_tile_size,
             .num_entries = 1,
             .data_format_metadata = tt::DataFormat::Float32,
         };
     };
-    experimental::metal2_host_api::DataflowBufferSpec inp0_dfb_spec = make_f16_input_dfb(INP0_DFB);
-    experimental::metal2_host_api::DataflowBufferSpec inp1_dfb_spec = make_f16_input_dfb(INP1_DFB);
-    experimental::metal2_host_api::DataflowBufferSpec inp2_dfb_spec = make_f32_input_dfb(INP2_DFB);
-    experimental::metal2_host_api::DataflowBufferSpec inp3_dfb_spec = make_f32_input_dfb(INP3_DFB);
-    experimental::metal2_host_api::DataflowBufferSpec inp4_dfb_spec = make_f16_input_dfb(INP4_DFB);
-    experimental::metal2_host_api::DataflowBufferSpec inp5_dfb_spec = make_f16_input_dfb(INP5_DFB);
-    experimental::metal2_host_api::DataflowBufferSpec out_dfb_spec{
+    experimental::DataflowBufferSpec inp0_dfb_spec = make_f16_input_dfb(INP0_DFB);
+    experimental::DataflowBufferSpec inp1_dfb_spec = make_f16_input_dfb(INP1_DFB);
+    experimental::DataflowBufferSpec inp2_dfb_spec = make_f32_input_dfb(INP2_DFB);
+    experimental::DataflowBufferSpec inp3_dfb_spec = make_f32_input_dfb(INP3_DFB);
+    experimental::DataflowBufferSpec inp4_dfb_spec = make_f16_input_dfb(INP4_DFB);
+    experimental::DataflowBufferSpec inp5_dfb_spec = make_f16_input_dfb(INP5_DFB);
+    experimental::DataflowBufferSpec out_dfb_spec{
         .unique_id = OUT_DFB,
         .entry_size = f16_tile_size,
         .num_entries = kNumOps,
         .data_format_metadata = tt::DataFormat::Float16_b,
     };
 
-    using DFBEndpoint = experimental::metal2_host_api::DFBEndpointType;
-    using DFBAccess = experimental::metal2_host_api::DFBAccessPattern;
+    using DFBEndpoint = experimental::DFBEndpointType;
+    using DFBAccess = experimental::DFBAccessPattern;
     auto dfb_binding = [](const std::string& name, DFBEndpoint endpoint) {
-        return experimental::metal2_host_api::KernelSpec::DFBBinding{
+        return experimental::KernelSpec::DFBBinding{
             .dfb_spec_name = name,
             .accessor_name = name,
             .endpoint_type = endpoint,
@@ -433,7 +433,7 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
         };
     };
 
-    experimental::metal2_host_api::KernelSpec reader_spec{
+    experimental::KernelSpec reader_spec{
         .unique_id = READER,
         .source =
 
@@ -462,13 +462,13 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
                   "src5_bank_id",
                   "num_tiles"}},
         .hw_config =
-            experimental::metal2_host_api::DataMovementHardwareConfig{
+            experimental::DataMovementHardwareConfig{
                 .gen2_config =
-                    experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{
+                    experimental::DataMovementHardwareConfig::Gen2Config{
                         .disable_implicit_sync_for = {INP0_DFB, INP1_DFB, INP2_DFB, INP3_DFB, INP4_DFB, INP5_DFB}}},
     };
 
-    experimental::metal2_host_api::KernelSpec writer_spec{
+    experimental::KernelSpec writer_spec{
         .unique_id = WRITER,
         .source = "tt_metal/kernels/dataflow/writer_unary.cpp",
         .num_threads = 1,
@@ -480,13 +480,12 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
         .hw_config =
-            experimental::metal2_host_api::DataMovementHardwareConfig{
+            experimental::DataMovementHardwareConfig{
                 .gen2_config =
-                    experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{
-                        .disable_implicit_sync_for = {OUT_DFB}}},
+                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_implicit_sync_for = {OUT_DFB}}},
     };
 
-    experimental::metal2_host_api::KernelSpec compute_spec{
+    experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source =
 
@@ -501,7 +500,7 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
              dfb_binding(INP5_DFB, DFBEndpoint::CONSUMER),
              dfb_binding(OUT_DFB, DFBEndpoint::PRODUCER)},
         .hw_config =
-            experimental::metal2_host_api::ComputeHardwareConfig{
+            experimental::ComputeHardwareConfig{
                 .math_fidelity = MathFidelity::HiFi4,
                 .fp32_dest_acc_en = true,
                 .unpack_to_dest_mode =
@@ -510,13 +509,13 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
             },
     };
 
-    experimental::metal2_host_api::WorkUnitSpec wu{
+    experimental::WorkUnitSpec wu{
         .name = "main",
         .kernels = {READER, WRITER, COMPUTE},
         .target_nodes = node,
     };
 
-    experimental::metal2_host_api::ProgramSpec spec{
+    experimental::ProgramSpec spec{
         .name = "reconfig_quasar",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers =
@@ -524,7 +523,7 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
         .work_units = {wu},
     };
 
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     // Random stimulus: U(0, 1) per element (keep magnitudes small so matmul output
     // stays in a sensible bfloat16 range; each output element is sum of 32 products).
@@ -604,9 +603,9 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
     }
     auto packed_golden = pack_vector<uint32_t, bfloat16>(golden);
 
-    experimental::metal2_host_api::ProgramRunArgs params;
+    experimental::ProgramRunArgs params;
     params.kernel_run_args = {
-        experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{
+        experimental::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = READER,
             .runtime_arg_values =
                 {{.node = node,
@@ -625,7 +624,7 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
                        {"src5_bank_id", 0u},
                        {"num_tiles", 1u}}}},
         },
-        experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{
+        experimental::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = WRITER,
             .runtime_arg_values =
                 {{.node = node,
@@ -634,11 +633,11 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
                        {"bank_id", 0u},
                        {"num_tiles", kNumOps}}}},
         },
-        experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{
+        experimental::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = COMPUTE,
         },
     };
-    experimental::metal2_host_api::SetProgramRunArgs(program, params);
+    experimental::SetProgramRunArgs(program, params);
 
     auto* dev = mesh_device->get_devices()[0];
     tt_metal::detail::LaunchProgram(dev, program, /*wait_until_cores_done=*/true);

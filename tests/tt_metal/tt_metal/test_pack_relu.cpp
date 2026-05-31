@@ -41,7 +41,7 @@ static void run_pack_relu_test(
     uint32_t relu_config,
     const std::function<float(float)>& golden_fn) {
     IDevice* dev = mesh_device->get_devices()[0];
-    const experimental::metal2_host_api::NodeCoord node{0, 0};
+    const experimental::NodeCoord node{0, 0};
 
     uint32_t single_tile_size = 2 * 1024;
     uint32_t num_tiles = 1;
@@ -66,46 +66,46 @@ static void run_pack_relu_test(
     // Implicit sync is enabled by default for both DFBs (no DM kernel opts out
     // via Gen2Config::disable_implicit_sync_for). The program-level
     // reservation flag set below is independent of per-DFB sync mode.
-    experimental::metal2_host_api::DataflowBufferSpec input_dfb_spec{
+    experimental::DataflowBufferSpec input_dfb_spec{
         .unique_id = INPUT_DFB,
         .entry_size = single_tile_size,
         .num_entries = 2,
         .data_format_metadata = tt::DataFormat::Float16_b,
     };
-    experimental::metal2_host_api::DataflowBufferSpec output_dfb_spec{
+    experimental::DataflowBufferSpec output_dfb_spec{
         .unique_id = OUTPUT_DFB,
         .entry_size = single_tile_size,
         .num_entries = 2,
         .data_format_metadata = tt::DataFormat::Float16_b,
     };
 
-    experimental::metal2_host_api::KernelSpec reader_spec{
+    experimental::KernelSpec reader_spec{
         .unique_id = READER,
         .source =
 
             "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary_2_0.cpp",
         .num_threads = 1,
-        .dfb_bindings = {experimental::metal2_host_api::ProducerOf(INPUT_DFB, "out")},
+        .dfb_bindings = {experimental::ProducerOf(INPUT_DFB, "out")},
         .runtime_arg_schema = {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
         .hw_config =
-            experimental::metal2_host_api::DataMovementHardwareConfig{
-                .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{}},
+            experimental::DataMovementHardwareConfig{
+                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
     };
 
-    experimental::metal2_host_api::KernelSpec writer_spec{
+    experimental::KernelSpec writer_spec{
         .unique_id = WRITER,
         .source =
 
             "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary_2_0.cpp",
         .num_threads = 1,
-        .dfb_bindings = {experimental::metal2_host_api::ConsumerOf(OUTPUT_DFB, "in")},
+        .dfb_bindings = {experimental::ConsumerOf(OUTPUT_DFB, "in")},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
         .hw_config =
-            experimental::metal2_host_api::DataMovementHardwareConfig{
-                .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{}},
+            experimental::DataMovementHardwareConfig{
+                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
     };
 
-    experimental::metal2_host_api::KernelSpec compute_spec{
+    experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source =
 
@@ -116,34 +116,34 @@ static void run_pack_relu_test(
             {{
                  .dfb_spec_name = INPUT_DFB,
                  .accessor_name = "in",
-                 .endpoint_type = experimental::metal2_host_api::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = OUTPUT_DFB,
                  .accessor_name = "out",
-                 .endpoint_type = experimental::metal2_host_api::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
              }},
         .compile_time_args = {{"per_core_tile_cnt", num_tiles}},
         .runtime_arg_schema = {.runtime_arg_names = {"relu_config"}},
-        .hw_config = experimental::metal2_host_api::ComputeHardwareConfig{},
+        .hw_config = experimental::ComputeHardwareConfig{},
     };
 
-    experimental::metal2_host_api::WorkUnitSpec wu{
+    experimental::WorkUnitSpec wu{
         .name = "main",
         .kernels = {READER, WRITER, COMPUTE},
         .target_nodes = node,
     };
 
-    experimental::metal2_host_api::ProgramSpec spec{
+    experimental::ProgramSpec spec{
         .name = "pack_relu",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {input_dfb_spec, output_dfb_spec},
         .work_units = {wu},
     };
 
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     // Stimulus: random bfloat16 in [-1, 1]
     std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(dram_buffer_size, 1.0f, 0xCAFE);
@@ -152,9 +152,9 @@ static void run_pack_relu_test(
     const uint32_t src_aligned_page_size = static_cast<uint32_t>(src_dram_buffer->aligned_page_size());
     const uint32_t dst_aligned_page_size = static_cast<uint32_t>(dst_dram_buffer->aligned_page_size());
 
-    experimental::metal2_host_api::ProgramRunArgs params;
+    experimental::ProgramRunArgs params;
     params.kernel_run_args = {
-        experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{
+        experimental::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = READER,
             .runtime_arg_values =
                 {{.node = node,
@@ -164,7 +164,7 @@ static void run_pack_relu_test(
                        {"num_tiles", num_tiles},
                        {"dram_page_stride", src_aligned_page_size}}}},
         },
-        experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{
+        experimental::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = WRITER,
             .runtime_arg_values =
                 {{.node = node,
@@ -174,12 +174,12 @@ static void run_pack_relu_test(
                        {"num_tiles", num_tiles},
                        {"dram_page_stride", dst_aligned_page_size}}}},
         },
-        experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{
+        experimental::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = COMPUTE,
             .runtime_arg_values = {{.node = node, .args = {{"relu_config", relu_config}}}},
         },
     };
-    experimental::metal2_host_api::SetProgramRunArgs(program, params);
+    experimental::SetProgramRunArgs(program, params);
 
     detail::LaunchProgram(dev, program, true);
 

@@ -19,7 +19,7 @@
 #include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 
-namespace tt::tt_metal::experimental::metal2_host_api {
+namespace tt::tt_metal::experimental {
 
 // ============================================================================
 //  KernelSpec API
@@ -257,4 +257,4 @@ inline KernelSpec::DFBBinding BlockedConsumerOf(DFBSpecName dfb_spec_name, std::
 }
 */
 
-}  // namespace tt::tt_metal::experimental::metal2_host_api
+}  // namespace tt::tt_metal::experimental

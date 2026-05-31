@@ -17,8 +17,8 @@ namespace ttnn::device_operation {
 // A future MeshWorkloadSpecFactoryConcept will return a different (multi-program)
 // artifact type for ops whose programs vary across the mesh.
 struct ProgramArtifacts {
-    tt::tt_metal::experimental::metal2_host_api::ProgramSpec spec;
-    tt::tt_metal::experimental::metal2_host_api::ProgramRunArgs run_params;
+    tt::tt_metal::experimental::ProgramSpec spec;
+    tt::tt_metal::experimental::ProgramRunArgs run_params;
 };
 
 }  // namespace ttnn::device_operation

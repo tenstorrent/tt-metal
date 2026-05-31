@@ -9,7 +9,7 @@
 #include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 
-namespace tt::tt_metal::experimental::metal2_host_api {
+namespace tt::tt_metal::experimental {
 
 // ============================================================================
 //  TensorParameter API
@@ -44,4 +44,4 @@ struct TensorParameter {
     TensorParameterAdvancedOptions advanced_options;
 };
 
-}  // namespace tt::tt_metal::experimental::metal2_host_api
+}  // namespace tt::tt_metal::experimental

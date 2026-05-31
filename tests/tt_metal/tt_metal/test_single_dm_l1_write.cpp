@@ -41,7 +41,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
     }
 
     // We are going to use the first device (0) and the first core (0, 0) on the device.
-    const experimental::metal2_host_api::NodeCoord node{0, 0};
+    const experimental::NodeCoord node{0, 0};
     tt_metal::detail::WriteToDeviceL1(dev, node, address, outputs);
     // Command queue lets us submit work (execute programs and read/write buffers) to the device.
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
@@ -50,7 +50,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     constexpr const char* DM_KERNEL = "dm_kernel";
 
-    experimental::metal2_host_api::KernelSpec dm_kernel_spec{
+    experimental::KernelSpec dm_kernel_spec{
         .unique_id = DM_KERNEL,
         .source =
 
@@ -62,30 +62,30 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
                 .common_runtime_arg_names = {"value"},
             },
         .hw_config =
-            experimental::metal2_host_api::DataMovementHardwareConfig{
-                .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{}},
+            experimental::DataMovementHardwareConfig{
+                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
     };
 
-    experimental::metal2_host_api::WorkUnitSpec main_wu{
+    experimental::WorkUnitSpec main_wu{
         .name = "main",
         .kernels = {DM_KERNEL},
         .target_nodes = node,
     };
 
-    experimental::metal2_host_api::ProgramSpec spec{
+    experimental::ProgramSpec spec{
         .name = "single_dm_l1_write",
         .kernels = {dm_kernel_spec},
         .work_units = {main_wu},
     };
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
-    experimental::metal2_host_api::ProgramRunArgs params;
+    experimental::ProgramRunArgs params;
     params.kernel_run_args = {{
         .kernel_spec_name = DM_KERNEL,
         .runtime_arg_values = {{.node = node, .args = {{"address", address}}}},
         .common_runtime_arg_values = {{"value", value}},
     }};
-    experimental::metal2_host_api::SetProgramRunArgs(program, params);
+    experimental::SetProgramRunArgs(program, params);
     std::cout << "Hello, Core {0, 0} on Device 0, Please start execution. I will standby for your communication."
               << std::endl;
 

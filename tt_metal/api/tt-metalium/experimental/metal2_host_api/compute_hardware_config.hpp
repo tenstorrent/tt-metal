@@ -10,7 +10,7 @@
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/base_types.hpp>  // For MathFidelity, UnpackToDestMode (global scope)
 
-namespace tt::tt_metal::experimental::metal2_host_api {
+namespace tt::tt_metal::experimental {
 
 // ============================================================================
 //  ComputeHardwareConfig
@@ -70,4 +70,4 @@ struct ComputeHardwareConfig {
     std::vector<DFBUnpackToDestMode> unpack_to_dest_mode;
 };
 
-}  // namespace tt::tt_metal::experimental::metal2_host_api
+}  // namespace tt::tt_metal::experimental

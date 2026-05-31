@@ -155,7 +155,7 @@ static inline tt::tt_metal::TensorSpec make_flat_dram_tensor_spec(uint32_t entry
 void run_single_core_transpose(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const TransposeConfig& test_config) {
     auto& cq = mesh_device->mesh_command_queue();
-    const experimental::metal2_host_api::NodeCoord node{0, 0};
+    const experimental::NodeCoord node{0, 0};
 
     const TransposeDims dims = compute_and_validate_transpose_dims(test_config.shape);
     const uint32_t NC = dims.NC, Wt = dims.Wt, Ht = dims.Ht, num_tensor_tiles = dims.num_tensor_tiles;
@@ -178,58 +178,56 @@ void run_single_core_transpose(
     constexpr const char* IN_TENSOR = "in_tensor";
     constexpr const char* OUT_TENSOR = "out_tensor";
 
-    experimental::metal2_host_api::DataflowBufferSpec input_dfb_spec{
+    experimental::DataflowBufferSpec input_dfb_spec{
         .unique_id = INPUT_DFB,
         .entry_size = test_config.single_tile_size,
         .num_entries = num_buffer_tiles,
         .data_format_metadata = tt::DataFormat::Float16_b,
     };
-    experimental::metal2_host_api::DataflowBufferSpec output_dfb_spec{
+    experimental::DataflowBufferSpec output_dfb_spec{
         .unique_id = OUTPUT_DFB,
         .entry_size = test_config.single_tile_size,
         .num_entries = num_output_buffer_tiles,
         .data_format_metadata = tt::DataFormat::Float16_b,
     };
 
-    experimental::metal2_host_api::KernelSpec reader_spec{
+    experimental::KernelSpec reader_spec{
         .unique_id = READER,
         .source =
 
             "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_transpose_wh_8bank.cpp",
         .num_threads = 1,
-        .dfb_bindings = {experimental::metal2_host_api::ProducerOf(INPUT_DFB, "out")},
+        .dfb_bindings = {experimental::ProducerOf(INPUT_DFB, "out")},
         .tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}},
         .runtime_arg_schema = {.runtime_arg_names = {"N", "Ht", "Wt", "HtWt"}},
         .hw_config =
-            experimental::metal2_host_api::DataMovementHardwareConfig{
+            experimental::DataMovementHardwareConfig{
                 .gen1_config =
-                    experimental::metal2_host_api::DataMovementHardwareConfig::Gen1Config{
+                    experimental::DataMovementHardwareConfig::Gen1Config{
                         .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
                 .gen2_config =
-                    experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{
-                        .disable_implicit_sync_for = {INPUT_DFB}}},
+                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_implicit_sync_for = {INPUT_DFB}}},
     };
 
-    experimental::metal2_host_api::KernelSpec writer_spec{
+    experimental::KernelSpec writer_spec{
         .unique_id = WRITER,
         .source =
 
             "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank_2_0.cpp",
         .num_threads = 1,
-        .dfb_bindings = {experimental::metal2_host_api::ConsumerOf(OUTPUT_DFB, "in")},
+        .dfb_bindings = {experimental::ConsumerOf(OUTPUT_DFB, "in")},
         .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
         .hw_config =
-            experimental::metal2_host_api::DataMovementHardwareConfig{
+            experimental::DataMovementHardwareConfig{
                 .gen1_config =
-                    experimental::metal2_host_api::DataMovementHardwareConfig::Gen1Config{
+                    experimental::DataMovementHardwareConfig::Gen1Config{
                         .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
                 .gen2_config =
-                    experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{
-                        .disable_implicit_sync_for = {OUTPUT_DFB}}},
+                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_implicit_sync_for = {OUTPUT_DFB}}},
     };
 
-    experimental::metal2_host_api::KernelSpec::CompilerOptions::Defines compute_defines;
+    experimental::KernelSpec::CompilerOptions::Defines compute_defines;
     if (test_config.short_init) {
         compute_defines.emplace_back("SHORT_INIT", "1");
     }
@@ -238,7 +236,7 @@ void run_single_core_transpose(
                                           ? "tests/tt_metal/tt_metal/test_kernels/compute/transpose_wh_dest.cpp"
                                           : "tests/tt_metal/tt_metal/test_kernels/compute/transpose_wh.cpp";
 
-    experimental::metal2_host_api::KernelSpec compute_spec{
+    experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = compute_kernel_path,
         .num_threads = 1,
@@ -247,26 +245,26 @@ void run_single_core_transpose(
             {{
                  .dfb_spec_name = INPUT_DFB,
                  .accessor_name = "in",
-                 .endpoint_type = experimental::metal2_host_api::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = OUTPUT_DFB,
                  .accessor_name = "out",
-                 .endpoint_type = experimental::metal2_host_api::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
              }},
         .compile_time_args = {{"NHtWt", Ht * Wt * NC}},
-        .hw_config = experimental::metal2_host_api::ComputeHardwareConfig{},
+        .hw_config = experimental::ComputeHardwareConfig{},
     };
 
-    experimental::metal2_host_api::WorkUnitSpec wu{
+    experimental::WorkUnitSpec wu{
         .name = "main",
         .kernels = {READER, WRITER, COMPUTE},
         .target_nodes = node,
     };
 
-    experimental::metal2_host_api::ProgramSpec spec{
+    experimental::ProgramSpec spec{
         .name = "transpose_wh",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {input_dfb_spec, output_dfb_spec},
@@ -278,7 +276,7 @@ void run_single_core_transpose(
         .work_units = {wu},
     };
 
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -286,17 +284,17 @@ void run_single_core_transpose(
     workload.add_program(device_range, std::move(program));
     auto& program_run = workload.get_programs().at(device_range);
 
-    experimental::metal2_host_api::ProgramRunArgs params;
+    experimental::ProgramRunArgs params;
     params.kernel_run_args = {
-        experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{
+        experimental::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = READER,
             .runtime_arg_values = {{.node = node, .args = {{"N", NC}, {"Ht", Ht}, {"Wt", Wt}, {"HtWt", Ht * Wt}}}},
         },
-        experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{
+        experimental::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = WRITER,
             .runtime_arg_values = {{.node = node, .args = {{"num_tiles", num_tensor_tiles}}}},
         },
-        experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{
+        experimental::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = COMPUTE,
         },
     };
@@ -304,7 +302,7 @@ void run_single_core_transpose(
         {.tensor_parameter_name = IN_TENSOR, .tensor = in_tensor},
         {.tensor_parameter_name = OUT_TENSOR, .tensor = out_tensor},
     };
-    experimental::metal2_host_api::SetProgramRunArgs(program_run, params);
+    experimental::SetProgramRunArgs(program_run, params);
 
     vector<uint32_t> src_vec = create_random_vector_of_bfloat16(dram_buffer_size, 100.0f, 0x1234);
     tt_metal::detail::WriteToBuffer(*in_tensor.mesh_buffer().get_reference_buffer(), src_vec);

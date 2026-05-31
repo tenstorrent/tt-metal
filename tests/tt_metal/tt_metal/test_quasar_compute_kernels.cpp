@@ -36,7 +36,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelMultipleThreads) {
     }
 
     // We are going to use the first device (0) and the first core (0, 0) on the device.
-    const experimental::metal2_host_api::NodeCoord node{0, 0};
+    const experimental::NodeCoord node{0, 0};
     // Command queue lets us submit work (execute programs and read/write buffers) to the device.
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     // Prepare a workload and a device coordinate range that spans the mesh.
@@ -49,7 +49,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelMultipleThreads) {
 
     constexpr const char* COMPUTE_KERNEL = "risc_math";
 
-    experimental::metal2_host_api::KernelSpec compute_kernel_spec{
+    experimental::KernelSpec compute_kernel_spec{
         .unique_id = COMPUTE_KERNEL,
         .source =
 
@@ -59,28 +59,28 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelMultipleThreads) {
             {
                 .runtime_arg_names = {"l1_address"},
             },
-        .hw_config = experimental::metal2_host_api::ComputeHardwareConfig{},
+        .hw_config = experimental::ComputeHardwareConfig{},
     };
 
-    experimental::metal2_host_api::WorkUnitSpec main_wu{
+    experimental::WorkUnitSpec main_wu{
         .name = "main",
         .kernels = {COMPUTE_KERNEL},
         .target_nodes = node,
     };
 
-    experimental::metal2_host_api::ProgramSpec spec{
+    experimental::ProgramSpec spec{
         .name = "compute_kernel_multiple_threads",
         .kernels = {compute_kernel_spec},
         .work_units = {main_wu},
     };
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
-    experimental::metal2_host_api::ProgramRunArgs params;
+    experimental::ProgramRunArgs params;
     params.kernel_run_args = {{
         .kernel_spec_name = COMPUTE_KERNEL,
         .runtime_arg_values = {{.node = node, .args = {{"l1_address", l1_address}}}},
     }};
-    experimental::metal2_host_api::SetProgramRunArgs(program, params);
+    experimental::SetProgramRunArgs(program, params);
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
@@ -112,7 +112,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelSingleThread) {
     }
 
     // We are going to use the first device (0) and the first core (0, 0) on the device.
-    const experimental::metal2_host_api::NodeCoord node{0, 0};
+    const experimental::NodeCoord node{0, 0};
     // Command queue lets us submit work (execute programs and read/write buffers) to the device.
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     // Prepare a workload and a device coordinate range that spans the mesh.
@@ -125,7 +125,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelSingleThread) {
 
     constexpr const char* COMPUTE_KERNEL = "risc_math";
 
-    experimental::metal2_host_api::KernelSpec compute_kernel_spec{
+    experimental::KernelSpec compute_kernel_spec{
         .unique_id = COMPUTE_KERNEL,
         .source =
 
@@ -135,28 +135,28 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelSingleThread) {
             {
                 .runtime_arg_names = {"l1_address"},
             },
-        .hw_config = experimental::metal2_host_api::ComputeHardwareConfig{},
+        .hw_config = experimental::ComputeHardwareConfig{},
     };
 
-    experimental::metal2_host_api::WorkUnitSpec main_wu{
+    experimental::WorkUnitSpec main_wu{
         .name = "main",
         .kernels = {COMPUTE_KERNEL},
         .target_nodes = node,
     };
 
-    experimental::metal2_host_api::ProgramSpec spec{
+    experimental::ProgramSpec spec{
         .name = "compute_kernel_single_thread",
         .kernels = {compute_kernel_spec},
         .work_units = {main_wu},
     };
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
-    experimental::metal2_host_api::ProgramRunArgs params;
+    experimental::ProgramRunArgs params;
     params.kernel_run_args = {{
         .kernel_spec_name = COMPUTE_KERNEL,
         .runtime_arg_values = {{.node = node, .args = {{"l1_address", l1_address}}}},
     }};
-    experimental::metal2_host_api::SetProgramRunArgs(program, params);
+    experimental::SetProgramRunArgs(program, params);
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
@@ -181,35 +181,35 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCreateMultipleComputeKernelsSing
     constexpr const char* COMPUTE_KERNEL_1 = "risc_math_1";
     constexpr const char* COMPUTE_KERNEL_2 = "risc_math_2";
 
-    experimental::metal2_host_api::KernelSpec compute_kernel_spec_1{
+    experimental::KernelSpec compute_kernel_spec_1{
         .unique_id = COMPUTE_KERNEL_1,
         .source =
 
             OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/compute/risc_math.cpp",
         .num_threads = 1,
-        .hw_config = experimental::metal2_host_api::ComputeHardwareConfig{},
+        .hw_config = experimental::ComputeHardwareConfig{},
     };
 
-    experimental::metal2_host_api::KernelSpec compute_kernel_spec_2{
+    experimental::KernelSpec compute_kernel_spec_2{
         .unique_id = COMPUTE_KERNEL_2,
         .source =
 
             OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/compute/risc_math.cpp",
         .num_threads = 2,
-        .hw_config = experimental::metal2_host_api::ComputeHardwareConfig{},
+        .hw_config = experimental::ComputeHardwareConfig{},
     };
 
-    experimental::metal2_host_api::WorkUnitSpec main_wu{
+    experimental::WorkUnitSpec main_wu{
         .name = "main",
         .kernels = {COMPUTE_KERNEL_1, COMPUTE_KERNEL_2},
-        .target_nodes = experimental::metal2_host_api::NodeCoord{0, 0},
+        .target_nodes = experimental::NodeCoord{0, 0},
     };
 
-    experimental::metal2_host_api::ProgramSpec spec{
+    experimental::ProgramSpec spec{
         .name = "multiple_compute_kernels",
         .kernels = {compute_kernel_spec_1, compute_kernel_spec_2},
         .work_units = {main_wu},
     };
 
-    ASSERT_THROW(experimental::metal2_host_api::MakeProgramFromSpec(*devices_[0], spec), std::runtime_error);
+    ASSERT_THROW(experimental::MakeProgramFromSpec(*devices_[0], spec), std::runtime_error);
 }

@@ -31,7 +31,7 @@
 #include <core_descriptor.hpp>
 #include <llrt/tt_cluster.hpp>
 
-namespace tt::tt_metal::experimental::metal2_host_api {
+namespace tt::tt_metal::experimental {
 
 // ============================================================================
 // Constants
@@ -2659,4 +2659,4 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
     return Program(std::move(program_impl));
 }
 
-}  // namespace tt::tt_metal::experimental::metal2_host_api
+}  // namespace tt::tt_metal::experimental

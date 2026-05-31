@@ -143,35 +143,35 @@ TEST_F(RTATestFixture, SentinelPatternHandlingAndMissingRTADetection) {
         constexpr const char* DM_KERNEL_NAME = "zero_arg_dm";
         constexpr const char* COMPUTE_KERNEL_NAME = "zero_arg_compute";
 
-        experimental::metal2_host_api::KernelSpec dm_spec{
+        experimental::KernelSpec dm_spec{
             .unique_id = DM_KERNEL_NAME,
             .source = rta_crta_kernel_path,
             .num_threads = 1,
             .compile_time_args = {{"l1_scratch_addr", l1_unreserved_base}},
             .hw_config =
-                experimental::metal2_host_api::DataMovementHardwareConfig{
+                experimental::DataMovementHardwareConfig{
                     .gen1_config =
-                        experimental::metal2_host_api::DataMovementHardwareConfig::Gen1Config{
+                        experimental::DataMovementHardwareConfig::Gen1Config{
                             .processor = DataMovementProcessor::RISCV_0}},
         };
-        experimental::metal2_host_api::KernelSpec compute_spec{
+        experimental::KernelSpec compute_spec{
             .unique_id = COMPUTE_KERNEL_NAME,
             .source = rta_crta_kernel_path,
             .num_threads = 1,
             .compile_time_args = {{"l1_scratch_addr", compute_scratch_addr}},
-            .hw_config = experimental::metal2_host_api::ComputeHardwareConfig{},
+            .hw_config = experimental::ComputeHardwareConfig{},
         };
-        experimental::metal2_host_api::WorkUnitSpec wu{
+        experimental::WorkUnitSpec wu{
             .name = "main",
             .kernels = {DM_KERNEL_NAME, COMPUTE_KERNEL_NAME},
-            .target_nodes = experimental::metal2_host_api::NodeRangeSet{core_range_set},
+            .target_nodes = experimental::NodeRangeSet{core_range_set},
         };
-        experimental::metal2_host_api::ProgramSpec spec{
+        experimental::ProgramSpec spec{
             .name = "zero_arg_schema",
             .kernels = {dm_spec, compute_spec},
             .work_units = {wu},
         };
-        Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+        Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
         distributed::MeshWorkload workload;
         workload.add_program(device_range, std::move(program));
@@ -263,20 +263,19 @@ TEST_F(RTATestFixture, CorrectArgDispatchAndPayloadValidation) {
 
     // Build a Metal 2.0 KernelSpec that works on both gen1 (single BRISC) and gen2 (all Quasar user DMs).
     // Provide both gen1 and gen2 configs so the runtime selects the one matching the current arch.
-    experimental::metal2_host_api::DataMovementHardwareConfig dm_cfg{
+    experimental::DataMovementHardwareConfig dm_cfg{
         .gen1_config =
-            experimental::metal2_host_api::DataMovementHardwareConfig::Gen1Config{
-                .processor = DataMovementProcessor::RISCV_0},
-        .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{},
+            experimental::DataMovementHardwareConfig::Gen1Config{.processor = DataMovementProcessor::RISCV_0},
+        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
     };
 
-    experimental::metal2_host_api::KernelSpec dm_spec{
+    experimental::KernelSpec dm_spec{
         .unique_id = DM_KERNEL_NAME,
         .source = rta_crta_kernel_path,
         .num_threads = is_quasar ? num_dms_ : 1u,
         .hw_config = dm_cfg,
         .advanced_options =
-            experimental::metal2_host_api::KernelAdvancedOptions{
+            experimental::KernelAdvancedOptions{
                 .num_runtime_varargs = default_rtas.size(),
                 .num_common_runtime_varargs = default_crtas.size(),
             },
@@ -286,39 +285,38 @@ TEST_F(RTATestFixture, CorrectArgDispatchAndPayloadValidation) {
     } else {
         dm_spec.compile_time_args = {{"l1_scratch_addr", l1_unreserved_base}};
     }
-    experimental::metal2_host_api::WorkUnitSpec wu{
+    experimental::WorkUnitSpec wu{
         .name = "main",
         .kernels = {DM_KERNEL_NAME},
-        .target_nodes = experimental::metal2_host_api::NodeRangeSet{core_range_set},
+        .target_nodes = experimental::NodeRangeSet{core_range_set},
     };
-    experimental::metal2_host_api::ProgramSpec spec{
+    experimental::ProgramSpec spec{
         .name = "rta_validation",
         .kernels = {dm_spec},
         .work_units = {wu},
     };
-    program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+    program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     // Note: Quasar uses only core_range1; gen1 also covers core_range2 with a different RTA payload.
     auto set_metal2_runtime_args = [&](Program& prog) {
-        experimental::metal2_host_api::ProgramRunArgs params;
-        experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs krp{
+        experimental::ProgramRunArgs params;
+        experimental::ProgramRunArgs::KernelRunArgs krp{
             .kernel_spec_name = DM_KERNEL_NAME,
             .advanced_options =
-                experimental::metal2_host_api::AdvancedKernelRunArgs{
+                experimental::AdvancedKernelRunArgs{
                     .common_runtime_varargs = default_crtas,
                 },
         };
         for (const auto& c : core_range1) {
-            krp.advanced_options.runtime_varargs.push_back({experimental::metal2_host_api::NodeCoord{c}, default_rtas});
+            krp.advanced_options.runtime_varargs.push_back({experimental::NodeCoord{c}, default_rtas});
         }
         if (!is_quasar) {
             for (const auto& c : core_range2) {
-                krp.advanced_options.runtime_varargs.push_back(
-                    {experimental::metal2_host_api::NodeCoord{c}, rtas_range2});
+                krp.advanced_options.runtime_varargs.push_back({experimental::NodeCoord{c}, rtas_range2});
             }
         }
         params.kernel_run_args = {krp};
-        experimental::metal2_host_api::SetProgramRunArgs(prog, params);
+        experimental::SetProgramRunArgs(prog, params);
     };
 
     set_metal2_runtime_args(program);
@@ -384,7 +382,7 @@ TEST_P(RTAAssertTest, OutOfBoundsArgAccessDetection) {
 
     constexpr const char* OOB_KERNEL_NAME = "rta_oob";
 
-    experimental::metal2_host_api::KernelSpec::CompilerOptions::Defines m2_defines;
+    experimental::KernelSpec::CompilerOptions::Defines m2_defines;
     if (params.test_rta) {
         m2_defines.push_back({"MAX_RTA_IDX", std::to_string(default_rtas.size())});
     } else {
@@ -393,14 +391,14 @@ TEST_P(RTAAssertTest, OutOfBoundsArgAccessDetection) {
 
     // RTA test reads index == default_rtas.size() (one past the end), so the kernel must declare
     // exactly default_rtas.size() varargs to make that access OOB.
-    experimental::metal2_host_api::KernelAdvancedOptions adv_opts;
+    experimental::KernelAdvancedOptions adv_opts;
     if (params.test_rta) {
         adv_opts.num_runtime_varargs = default_rtas.size();
     } else {
         adv_opts.num_common_runtime_varargs = default_crtas.size();
     }
 
-    experimental::metal2_host_api::KernelSpec kspec{
+    experimental::KernelSpec kspec{
         .unique_id = OOB_KERNEL_NAME,
         .source = rta_crta_kernel_path,
         .compiler_options = {.defines = m2_defines},
@@ -414,42 +412,41 @@ TEST_P(RTAAssertTest, OutOfBoundsArgAccessDetection) {
             kspec.num_threads = 1;
         }
         // Provide both gen1 and gen2 configs so the same KernelSpec runs on either arch.
-        kspec.hw_config = experimental::metal2_host_api::DataMovementHardwareConfig{
+        kspec.hw_config = experimental::DataMovementHardwareConfig{
             .gen1_config =
-                experimental::metal2_host_api::DataMovementHardwareConfig::Gen1Config{
-                    .processor = DataMovementProcessor::RISCV_0},
-            .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{},
+                experimental::DataMovementHardwareConfig::Gen1Config{.processor = DataMovementProcessor::RISCV_0},
+            .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
         };
     } else if (params.processor_class == HalProcessorClassType::COMPUTE) {
         kspec.num_threads = 1;  // On Quasar, only 1 NEO Cluster; gen1 has a single compute group.
-        kspec.hw_config = experimental::metal2_host_api::ComputeHardwareConfig{};
+        kspec.hw_config = experimental::ComputeHardwareConfig{};
     } else {
         TT_THROW("Unsupported processor class");
     }
 
-    experimental::metal2_host_api::WorkUnitSpec wu{
+    experimental::WorkUnitSpec wu{
         .name = "main",
         .kernels = {OOB_KERNEL_NAME},
-        .target_nodes = experimental::metal2_host_api::NodeRangeSet{core_range_set},
+        .target_nodes = experimental::NodeRangeSet{core_range_set},
     };
-    experimental::metal2_host_api::ProgramSpec spec{
+    experimental::ProgramSpec spec{
         .name = "rta_oob",
         .kernels = {kspec},
         .work_units = {wu},
     };
-    program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+    program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
-    experimental::metal2_host_api::ProgramRunArgs params_m2;
-    experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs krp{.kernel_spec_name = OOB_KERNEL_NAME};
+    experimental::ProgramRunArgs params_m2;
+    experimental::ProgramRunArgs::KernelRunArgs krp{.kernel_spec_name = OOB_KERNEL_NAME};
     if (params.test_rta) {
         for (const auto& c : core_range) {
-            krp.advanced_options.runtime_varargs.push_back({experimental::metal2_host_api::NodeCoord{c}, default_rtas});
+            krp.advanced_options.runtime_varargs.push_back({experimental::NodeCoord{c}, default_rtas});
         }
     } else {
         krp.advanced_options.common_runtime_varargs = default_crtas;
     }
     params_m2.kernel_run_args = {krp};
-    experimental::metal2_host_api::SetProgramRunArgs(program, params_m2);
+    experimental::SetProgramRunArgs(program, params_m2);
 
     workload.add_program(device_range, std::move(program));
     RunProgram(mesh_device, workload);
@@ -472,7 +469,7 @@ TEST_F(RTATestFixture, QuasarMultiDMOutOfBoundsArgDetection) {
     Program program;
 
     constexpr const char* MULTI_DM_KERNEL_NAME = "multi_dm_oob";
-    experimental::metal2_host_api::KernelSpec dm_spec{
+    experimental::KernelSpec dm_spec{
         .unique_id = MULTI_DM_KERNEL_NAME,
         .source = rta_crta_kernel_path,
         .num_threads = num_dms_,
@@ -480,32 +477,32 @@ TEST_F(RTATestFixture, QuasarMultiDMOutOfBoundsArgDetection) {
             {.defines = {{"MAX_RTA_IDX", std::to_string(default_rtas.size())}, {"TEST_MULTI_DM_RTA", "1"}}},
         .compile_time_args = {{"num_dms", num_dms_}, {"l1_sync_addr", l1_unreserved_base}},
         .hw_config =
-            experimental::metal2_host_api::DataMovementHardwareConfig{
-                .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{}},
+            experimental::DataMovementHardwareConfig{
+                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
         .advanced_options =
-            experimental::metal2_host_api::KernelAdvancedOptions{
+            experimental::KernelAdvancedOptions{
                 .num_runtime_varargs = default_rtas.size(),
             },
     };
-    experimental::metal2_host_api::WorkUnitSpec wu{
+    experimental::WorkUnitSpec wu{
         .name = "main",
         .kernels = {MULTI_DM_KERNEL_NAME},
-        .target_nodes = experimental::metal2_host_api::NodeRangeSet{core_range_set},
+        .target_nodes = experimental::NodeRangeSet{core_range_set},
     };
-    experimental::metal2_host_api::ProgramSpec spec{
+    experimental::ProgramSpec spec{
         .name = "multi_dm_oob",
         .kernels = {dm_spec},
         .work_units = {wu},
     };
-    program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+    program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
-    experimental::metal2_host_api::ProgramRunArgs params;
-    experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs krp{.kernel_spec_name = MULTI_DM_KERNEL_NAME};
+    experimental::ProgramRunArgs params;
+    experimental::ProgramRunArgs::KernelRunArgs krp{.kernel_spec_name = MULTI_DM_KERNEL_NAME};
     for (const auto& c : core_range) {
-        krp.advanced_options.runtime_varargs.push_back({experimental::metal2_host_api::NodeCoord{c}, default_rtas});
+        krp.advanced_options.runtime_varargs.push_back({experimental::NodeCoord{c}, default_rtas});
     }
     params.kernel_run_args = {krp};
-    experimental::metal2_host_api::SetProgramRunArgs(program, params);
+    experimental::SetProgramRunArgs(program, params);
 
     workload.add_program(device_range, std::move(program));
 

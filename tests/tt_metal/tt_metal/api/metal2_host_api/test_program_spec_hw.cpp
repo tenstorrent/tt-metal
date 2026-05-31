@@ -30,7 +30,7 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "test_helpers.hpp"
 
-namespace tt::tt_metal::experimental::metal2_host_api {
+namespace tt::tt_metal::experimental {
 namespace {
 
 using test_helpers::BindTensorParameterToKernel;
@@ -698,4 +698,4 @@ TEST_F(ProgramSpecHWTest, MultiBindingProducerMaskMismatchFails) {
 }
 
 }  // namespace
-}  // namespace tt::tt_metal::experimental::metal2_host_api
+}  // namespace tt::tt_metal::experimental

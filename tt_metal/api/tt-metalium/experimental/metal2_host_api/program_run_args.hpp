@@ -18,7 +18,7 @@
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 
-namespace tt::tt_metal::experimental::metal2_host_api {
+namespace tt::tt_metal::experimental {
 
 // ============================================================================
 //  ProgramRunArgs API
@@ -155,4 +155,4 @@ struct ProgramRunArgsView {
 
 // TODO: Consider a const version of the view object, for debug/test use?
 
-}  // namespace tt::tt_metal::experimental::metal2_host_api
+}  // namespace tt::tt_metal::experimental
