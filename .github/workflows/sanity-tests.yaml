@@ -450,6 +450,7 @@ jobs:
             else                                  "skipped"
             end')
           echo "run-result=$RESULT" >> "$GITHUB_OUTPUT"
+          echo "expected-jobs=[]" >> "$GITHUB_OUTPUT"
           echo "Combined run-result: $RESULT"
       - id: ai-run-summary
         continue-on-error: true
@@ -464,7 +465,7 @@ jobs:
             }
           api-key: ${{ secrets.TT_CHAT_API_KEY }}
           api-url: ${{ secrets.TT_CHAT_URL }}
-          expected-jobs: ""
+          expected-jobs: ${{ steps.aggregate.outputs.expected-jobs }}
           run-result: ${{ steps.aggregate.outputs.run-result }}
       - name: Show report
         if: always() && steps.ai-run-summary.outputs.report-file != ''
