@@ -954,7 +954,7 @@ def _replicated_single_copy(device_tensors, to_torch_fn):
     return ref
 
 
-def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None) -> torch.Tensor:
+def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None, force_single_device=False) -> torch.Tensor:
     """Convert a TTNN mesh tensor back to torch, reassembling shards by topology.
 
     Replicated tensors return device 0. Sharded tensors are reassembled
@@ -965,6 +965,13 @@ def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None) -> t
     Tensors whose Shard topology is backed by identical per-device data (the
     trace-validation replicate path) collapse to a single copy to avoid an
     N-fold host blow-up during gather.
+
+    Args:
+        force_single_device: When True, always return device 0's tensor
+            without any concat/gather. Use when the inputs were replicated
+            via replicate_with_topology and the golden was computed from a
+            single copy — comparing against the full gathered output would
+            produce shape mismatches.
     """
 
     def _get_torch_dtype(t):
@@ -990,6 +997,32 @@ def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None) -> t
         device = None
 
     is_mesh = device is not None and hasattr(device, "get_num_devices")
+
+    if force_single_device and is_mesh:
+        try:
+            device_tensors = ttnn.get_device_tensors(ttnn_tensor)
+            if device_tensors:
+                return _to_torch_safe(device_tensors[0])
+        except Exception:
+            pass
+        return _to_torch_safe(ttnn_tensor)
+
+    # Auto-detect replicated outputs: when all per-device tensors have the
+    # same shape, the data was replicated (not truly sharded). Return device 0
+    # to avoid N-fold shape blow-ups from concatenation.  Truly sharded outputs
+    # have different per-device shapes (each device holds a fraction).
+    if is_mesh:
+        try:
+            dt = ttnn.get_device_tensors(ttnn_tensor)
+            if len(dt) > 1:
+                shapes = [tuple(t.shape) for t in dt]
+                if len(set(shapes)) == 1:
+                    topology = ttnn_tensor.tensor_topology()
+                    placements = list(topology.placements())
+                    if any(type(p).__name__ == "PlacementShard" for p in placements):
+                        return _to_torch_safe(dt[0])
+        except Exception:
+            pass
 
     if not is_mesh:
         # Host tensor brought back from a mesh device (e.g. via from_device on a
@@ -1387,7 +1420,7 @@ def reconcile_golden_to_actual(
             if tiled.shape == actual_global.shape:
                 return tiled
 
-    # Strategy 3: placement-driven tile (legacy path).
+    # Strategy 4: placement-driven tile (legacy path).
     out = torch_golden
     for plac in placements:
         if out.shape == actual_global.shape:
