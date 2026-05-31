@@ -21,7 +21,7 @@
   auto_triage: true
   cmd: ./build/test/umd/galaxy/unit_tests_glx
   skus:
-    wh_galaxy_perf_uf:
+    wh_galaxy_perf:
       timeout: 10
 
 - id: galaxy-umd-api
@@ -31,7 +31,7 @@
   auto_triage: true
   cmd: ./build/test/umd/api/api_tests
   skus:
-    wh_galaxy_perf_uf:
+    wh_galaxy_perf:
       timeout: 20
 
 # Unusure why fabric test commands are duplicated, but keeping from original test matrix.
