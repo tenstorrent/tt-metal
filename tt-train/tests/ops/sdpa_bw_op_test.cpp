@@ -120,76 +120,6 @@ xt::xarray<float> scale_tensor(const xt::xarray<float>& tensor, const float scal
     return tensor * scale_factor;
 }
 
-// Print the top-K positions with the largest absolute differences between two
-// 4D tensors (any shape). Used to characterize where a failing-tolerance run
-// actually diverges (one cancellation-amplified outlier? broadcast drift?).
-void print_top_diffs_4d(
-    const xt::xarray<float>& result,
-    const xt::xarray<float>& reference,
-    const std::string& label,
-    std::size_t top_k = 20U) {
-    assert(result.shape() == reference.shape());
-    const auto shape = result.shape();
-    const std::size_t D0 = shape[0], D1 = shape[1], D2 = shape[2], D3 = shape[3];
-
-    struct Entry {
-        float diff;
-        float result_val;
-        float reference_val;
-        std::size_t i0, i1, i2, i3;
-    };
-    std::vector<Entry> entries;
-    entries.reserve(D0 * D1 * D2 * D3);
-
-    double sum_sq = 0.0;
-    double sum_abs = 0.0;
-    float max_diff = 0.0F;
-    for (std::size_t i0 = 0; i0 < D0; ++i0) {
-        for (std::size_t i1 = 0; i1 < D1; ++i1) {
-            for (std::size_t i2 = 0; i2 < D2; ++i2) {
-                for (std::size_t i3 = 0; i3 < D3; ++i3) {
-                    const float r = result(i0, i1, i2, i3);
-                    const float g = reference(i0, i1, i2, i3);
-                    const float diff = std::abs(r - g);
-                    sum_sq += static_cast<double>(diff) * diff;
-                    sum_abs += diff;
-                    max_diff = std::max(max_diff, diff);
-                    entries.push_back({diff, r, g, i0, i1, i2, i3});
-                }
-            }
-        }
-    }
-
-    const std::size_t k = std::min(top_k, entries.size());
-    std::partial_sort(entries.begin(), entries.begin() + k, entries.end(), [](const Entry& a, const Entry& b) {
-        return a.diff > b.diff;
-    });
-
-    fmt::print(
-        "[SDPA-BW][{}] shape=({},{},{},{}) MAE={:.3e} RMSE={:.3e} max_abs={:.3e}\n",
-        label,
-        D0,
-        D1,
-        D2,
-        D3,
-        sum_abs / entries.size(),
-        std::sqrt(sum_sq / entries.size()),
-        max_diff);
-    fmt::print("[SDPA-BW][{}] top-{} diffs (b,h,s,d) kernel  reference  abs_diff\n", label, k);
-    for (std::size_t i = 0; i < k; ++i) {
-        const auto& e = entries[i];
-        fmt::print(
-            "  ({:>3},{:>3},{:>4},{:>4})  {:>12.6e}  {:>12.6e}  {:>12.6e}\n",
-            e.i0,
-            e.i1,
-            e.i2,
-            e.i3,
-            e.result_val,
-            e.reference_val,
-            e.diff);
-    }
-}
-
 // Helper: Expand K/V from (B, G, S, D) to (B, H, S, D) for grouped query attention
 xt::xarray<float> expand_kv_heads(const xt::xarray<float>& kv, size_t H) {
     const auto shape = kv.shape();
@@ -616,7 +546,6 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
 
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
-    fmt::print("[SDPA-BW] test={} seed={}\n", config.test_name, seed);
 
     // Generate input tensors
     const std::array<std::size_t, 4> query_shape{B, qNH, S, qD};
@@ -744,28 +673,6 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
     [[maybe_unused]] const bool composite_dK_matches_float = xt::allclose(composite_dK, float_dK, rtol, atol);
     [[maybe_unused]] const bool composite_dV_matches_float = xt::allclose(composite_dV, float_dV, rtol, atol);
 
-    // Diagnostic prints: emit when an allclose check fails, OR unconditionally when
-    // SDPA_BW_PRINT_DIFFS is set in env. Use to capture top-K diff patterns in CI logs.
-    const bool always_print_diffs = std::getenv("SDPA_BW_PRINT_DIFFS") != nullptr;
-    if (!fw_attn_output_matches || always_print_diffs) {
-        print_top_diffs_4d(kernel_attn_output_cpu, composite_attn_output_cpu, "fw_attn_output_kernel_vs_composite");
-    }
-    if (!fw_attn_output_matches_float || always_print_diffs) {
-        print_top_diffs_4d(kernel_attn_output_cpu, float_attn_output, "fw_attn_output_kernel_vs_float");
-    }
-    if (!fw_intermediates_matches || always_print_diffs) {
-        print_top_diffs_4d(kernel_intermediates_cpu, float_intermediates, "fw_intermediates_kernel_vs_float");
-    }
-    if (!kernel_dQ_matches_float || always_print_diffs) {
-        print_top_diffs_4d(sdpa_bw_dQ, float_dQ, "dQ_kernel_vs_float");
-    }
-    if (!kernel_dK_matches_float || always_print_diffs) {
-        print_top_diffs_4d(sdpa_bw_dK, float_dK, "dK_kernel_vs_float");
-    }
-    if (!kernel_dV_matches_float || always_print_diffs) {
-        print_top_diffs_4d(sdpa_bw_dV, float_dV, "dV_kernel_vs_float");
-    }
-
     // Assertions
     EXPECT_TRUE(fw_attn_output_matches) << "Forward attn output (vs composite) mismatch in " << config.test_name;
     EXPECT_TRUE(fw_attn_output_matches_float) << "Forward attn output (vs float) mismatch in " << config.test_name;
@@ -858,7 +765,6 @@ TEST_F(SDPABackwardTest, TinyLlamaConfig) {
     // |d| ~ 0.020–0.022 just above the 2e-2 atol — xt::allclose passes if
     // |d| <= atol OR |d| <= rtol*max(|a|,|b|), so small-|y| elements need atol headroom.
     // 3e-2 covers the observed worst small-|y| outlier (0.022) with margin.
-    // See tt-train/docs/sdpa_accuracy_testing.md for the full analysis.
     SDPABackwardTestConfig config{
         .batch_size = 1U,
         .sequence_length = 256U,  // Using smaller seq for faster test (full is 2048)
