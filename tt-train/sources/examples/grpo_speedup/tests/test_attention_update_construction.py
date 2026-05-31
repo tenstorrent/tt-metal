@@ -7,12 +7,15 @@ Real Llama-3.2-1B-Instruct weights (HF auth required). Round-trip on
 every attention layer:
 
     1.  Generate greedily with the real, ``__init__``-loaded weights -> ``tokens_A``.
-    2.  Snapshot every layer's ``wqkv`` / ``wo`` to torch.
+    2.  Snapshot every layer's ``wqkv`` / ``wo`` back to HF-shape torch
+        tensors (one per ``q_proj`` / ``k_proj`` / ``v_proj`` /
+        ``o_proj``).
     3.  Overwrite every layer with a constant (deliberately break the model).
     4.  Generate again -> ``tokens_broken`` (sanity: must differ from
         ``tokens_A``, otherwise the overwrite was a no-op and the rest
         of the test is meaningless).
-    5.  Restore every layer via ``Attention.update(snapshot)``.
+    5.  Restore every layer via ``Attention.update(q_proj=..., k_proj=...,
+        v_proj=..., o_proj=...)``.
     6.  Generate again -> ``tokens_B``.
     7.  Assert ``tokens_A == tokens_B`` byte-for-byte.
 
@@ -26,7 +29,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from _completer_utils import build_completer, teardown_completer
+from _completer_utils import as_update_input, build_completer, teardown_completer, to_torch_2d
 
 PROMPT = "Explain a tensor in a paragraph."
 MAX_NEW_TOKENS = 32
@@ -43,72 +46,60 @@ def completer():
         teardown_completer(c)
 
 
-def _wqkv_mesh_mapper(a):
-    """Mirror the mesh mapping used in ``Attention.__init__`` for ``self.wqkv``."""
-    import ttnn
+def _snapshot_attn_hf(a):
+    """Read ``wqkv`` / ``wo`` back as HF-shape torch tensors.
 
-    return ttnn.ShardTensor2dMesh(
-        a.mesh_device,
-        dims=(3, 2) if a.TG else (2, 3),
-        mesh_shape=a.args.cluster_shape,
-    )
+    On a single-device mesh ``wqkv`` is the internal fused
+    ``(1, 1, H, n_q + n_kv + n_kv)`` tensor. Inverting the
+    constructor's chunk-transpose-concat amounts to: squeeze to 2D
+    ``(H, qkv)``, transpose to ``(qkv, H)``, split along axis 0 into
+    Q / K / V each at HF Linear shape ``(out, H)``.
 
+    ``wo`` is stored as ``(1, 1, n_q, H)`` (the constructor takes
+    HF ``(H, n_q)`` and transposes). Inverting: squeeze to ``(n_q, H)``,
+    transpose to HF ``(H, n_q)``.
 
-def _wo_mesh_mapper(a):
-    """Mirror the mesh mapping used in ``Attention.__init__`` for ``self.wo``."""
-    import ttnn
-
-    if a.use_fused_all_gather_matmul or a.TG:
-        return ttnn.ShardTensor2dMesh(a.mesh_device, dims=(2, 3), mesh_shape=a.args.cluster_shape)
-    return ttnn.ShardTensorToMesh(a.mesh_device, dim=2)
-
-
-def _ttnn_like(template, torch_t, device, mapper):
-    """Push a torch tensor onto device with the same dtype/layout/memcfg as ``template``."""
-    import ttnn
-
-    return ttnn.from_torch(
-        torch_t,
-        dtype=template.dtype,
-        layout=template.layout,
-        device=device,
-        memory_config=template.memory_config(),
-        mesh_mapper=mapper,
-    )
-
-
-def _const_like(a, template, value, mapper):
-    return _ttnn_like(
-        template,
-        torch.full(tuple(template.shape), float(value), dtype=torch.bfloat16),
-        a.mesh_device,
-        mapper,
-    )
-
-
-def _snapshot(a):
-    """Read ``wqkv`` and ``wo`` back to torch.
-
-    We only snapshot what ``Attention.update`` is responsible for. The
-    prefetcher mirror ``wo_sharded_ring`` is rederived from ``wo`` inside
-    ``_update_wo``, so it doesn't need to be snapshotted independently.
+    Returned tensors are HF Linear shape, ready for ``as_update_input``.
     """
-    import ttnn
+    n_q = a.n_heads * a.head_dim
+    n_kv = a.n_kv_heads * a.head_dim
 
-    return {"wqkv": ttnn.to_torch(a.wqkv), "wo": ttnn.to_torch(a.wo)}
+    wqkv_t = to_torch_2d(a.wqkv).transpose(0, 1)  # (qkv, H)
+    q, k, v = torch.split(wqkv_t, [n_q, n_kv, n_kv], dim=0)
+    o = to_torch_2d(a.wo).transpose(0, 1)  # (H, n_q) -- HF o_proj shape
+
+    return {
+        "q_proj": q.contiguous(),
+        "k_proj": k.contiguous(),
+        "v_proj": v.contiguous(),
+        "o_proj": o.contiguous(),
+    }
 
 
-def _restore(a, snap):
+def _restore_attn(a, snap):
+    q_in = as_update_input(snap["q_proj"], a.mesh_device)
+    k_in = as_update_input(snap["k_proj"], a.mesh_device)
+    v_in = as_update_input(snap["v_proj"], a.mesh_device)
+    o_in = as_update_input(snap["o_proj"], a.mesh_device)
+    a.update(q_proj=q_in, k_proj=k_in, v_proj=v_in, o_proj=o_in)
+
+
+def _overwrite_attn(a, value):
+    H = a.hidden_size
+    D = a.head_dim
+    n_q = a.n_heads * D
+    n_kv = a.n_kv_heads * D
+
+    q_hf = torch.full((n_q, H), value, dtype=torch.bfloat16)
+    k_hf = torch.full((n_kv, H), value, dtype=torch.bfloat16)
+    v_hf = torch.full((n_kv, H), value, dtype=torch.bfloat16)
+    o_hf = torch.full((H, n_q), value, dtype=torch.bfloat16)
+
     a.update(
-        wqkv=_ttnn_like(a.wqkv, snap["wqkv"], a.mesh_device, _wqkv_mesh_mapper(a)),
-        wo=_ttnn_like(a.wo, snap["wo"], a.mesh_device, _wo_mesh_mapper(a)),
-    )
-
-
-def _overwrite(a, value):
-    a.update(
-        wqkv=_const_like(a, a.wqkv, value, _wqkv_mesh_mapper(a)),
-        wo=_const_like(a, a.wo, value, _wo_mesh_mapper(a)),
+        q_proj=as_update_input(q_hf, a.mesh_device),
+        k_proj=as_update_input(k_hf, a.mesh_device),
+        v_proj=as_update_input(v_hf, a.mesh_device),
+        o_proj=as_update_input(o_hf, a.mesh_device),
     )
 
 
@@ -122,18 +113,18 @@ def test_attention_update_round_trip(completer):
 
     tokens_A = _generate(completer, prompt_ids)
 
-    snapshots = [_snapshot(layer.attention) for layer in completer.model.layers]
+    snapshots = [_snapshot_attn_hf(layer.attention) for layer in completer.model.layers]
 
     for layer in completer.model.layers:
-        _overwrite(layer.attention, OVERWRITE_VALUE)
+        _overwrite_attn(layer.attention, OVERWRITE_VALUE)
     tokens_broken = _generate(completer, prompt_ids)
     assert tokens_broken != tokens_A, (
-        f"overwriting wqkv/wo with {OVERWRITE_VALUE} did not change generation; "
+        f"overwriting q/k/v/o with {OVERWRITE_VALUE} did not change generation; "
         "the overwrite step was a no-op, so the rest of the test is meaningless"
     )
 
     for layer, snap in zip(completer.model.layers, snapshots):
-        _restore(layer.attention, snap)
+        _restore_attn(layer.attention, snap)
     tokens_B = _generate(completer, prompt_ids)
     assert tokens_B == tokens_A, (
         "Attention.update did not reproduce __init__-equivalent state: " f"tokens_A={tokens_A}, tokens_B={tokens_B}"

@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import List
 
 HERE = Path(__file__).resolve().parent
-REPO_ROOT = HERE.parents[3]
+REPO_ROOT = HERE.parents[4]  # .../tt-metal
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(REPO_ROOT))
 
@@ -41,32 +41,20 @@ PROMPT = "Explain a tensor in a paragraph."
 
 
 def _build_collapsed_embedding(completer):
-    """Return a ``ttnn.Tensor`` with every embedding row replaced by row 16000.
+    """Return the HF-format ``embed_tokens`` input for
+    :meth:`Embedding.update` with every row replaced by row 16000.
 
-    Shape: ``(1, 1, vocab_size, hidden_size)`` -- ready for
-    :meth:`Embedding.update`.
+    Shape: ``(1, 1, vocab_size, hidden_size)`` after ``as_update_input``
+    wraps the natural HF ``(V, H)`` shape -- replicated, DRAM-interleaved,
+    TILE_LAYOUT, bfloat16, as the new update contract requires.
     """
-    import ttnn
+    from _completer_utils import as_update_input, to_torch_2d
 
-    emb_torch = ttnn.to_torch(completer.model.embd.weights).reshape(
-        completer.model_args.vocab_size, completer.model_args.dim
-    )
-    target_row = emb_torch[TARGET_TOKEN_ID, :].clone()
-    new_emb = target_row.unsqueeze(0).expand(emb_torch.shape[0], -1).clone()
-    new_emb_4d = new_emb.unsqueeze(0).unsqueeze(0).contiguous()  # (1, 1, V, H)
+    emb_hf_2d = to_torch_2d(completer.model.embd.weights)  # (V, H)
+    target_row = emb_hf_2d[TARGET_TOKEN_ID, :].clone()
+    collapsed_hf = target_row.unsqueeze(0).expand(emb_hf_2d.shape[0], -1).contiguous()  # (V, H)
 
-    return ttnn.from_torch(
-        new_emb_4d,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=completer.mesh_device,
-        memory_config=completer.model_args.get_model_config()["EMB_WEIGHTS_MEMCFG"],
-        mesh_mapper=ttnn.ShardTensor2dMesh(
-            mesh_device=completer.mesh_device,
-            dims=(None, 3),
-            mesh_shape=completer.model_args.cluster_shape,
-        ),
-    )
+    return as_update_input(collapsed_hf, completer.mesh_device)
 
 
 def _ids_to_ttnn(completer, ids: List[int]):
@@ -126,7 +114,7 @@ def main() -> None:
     target_str = completer.tokenizer.decode([TARGET_TOKEN_ID], skip_special_tokens=False)
     print(f">>> collapsing embedding table: every row -> row {TARGET_TOKEN_ID} ({target_str!r})")
     new_weights = _build_collapsed_embedding(completer)
-    completer.model.embd.update(new_weights)
+    completer.model.embd.update(embed_tokens=new_weights)
 
     print(">>> C: collapsed embeddings x  real prompt ids")
     c_coll_real = _embed(completer, prompt_ids)
