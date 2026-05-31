@@ -133,6 +133,7 @@ jobs:
           GTEST_OUTPUT: xml:/work/test-reports/
           LSAN_OPTIONS: suppressions=/usr/share/tt-metalium/lsan.supp
           TT_METAL_WATCHER_TEST_MODE: 1
+          TT_LOGGER_LEVEL: warn
         run: |
           /usr/bin/${{ inputs.product }}-validation-smoke
 
