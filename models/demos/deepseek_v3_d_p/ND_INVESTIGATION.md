@@ -72,6 +72,23 @@ slots). If divergence shrinks but persists → there is also a finite-garbage pa
 (a genuinely missing combine write with non-zero weight) and/or a separate cause
 (kernel L1 race) to chase.
 
+**Confirmed (static):** combine `init_zeros=True` zeros the *entire* output tensor
+(`combine_program_factory.cpp:746` splits `get_num_pages(output_tensor)` across all
+cores), so it covers the no-local-expert slots the reduce reads. The A/B is valid.
+The MoE probe also fingerprints gate scores/indices, so it distinguishes a
+routing-level cause (gate non-determinism) from the combine cause.
+
+## Backup hypotheses (if H1 A/B does not fully fix determinism)
+- **H2 — dispatch-buffer padding (FFN input).** `dispatch` output is also
+  `create_device_tensor` (unzeroed); padding rows within each expert region are
+  garbage and the FFN matmul computes on them. But combine only routes *valid*
+  token rows back (by metadata), and matmul M-rows are independent, so this garbage
+  should stay in padding rows and not reach valid outputs. Lower priority.
+- **H3 — L1 leftovers / races in compute kernels.** A kernel reading an
+  un-/under-initialized CB or a multicast handshake race would also be per-process
+  non-deterministic. Hard to localize statically; pursue only if H1/H2 fail. The
+  per-stage probe will point at the offending stage.
+
 ### Status of experiments
 - [ ] Within-process drift (iter-to-iter) — pending device (blocked by soak)
 - [ ] Across-process first-diverging stage — pending device
