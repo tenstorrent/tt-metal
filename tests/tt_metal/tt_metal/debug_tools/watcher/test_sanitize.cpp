@@ -59,6 +59,7 @@ enum watcher_features_t {
     SanitizeEthSrcL1Overflow,
     SanitizeEthDestL1Overflow,
     SanitizeNOCMulticastInvalidRange,
+    SanitizeNOCWriteWithStateBadCoord,
 };
 
 tt::tt_metal::HalMemType get_buffer_mem_type_for_test(watcher_features_t feature) {
@@ -261,7 +262,8 @@ void RunTestOnCore(
                       "eth_dest_overflow_addr",
                       "use_multicast_semaphore_inc",
                       "mcast_dst_end_x",
-                      "mcast_dst_end_y"}},
+                      "mcast_dst_end_y",
+                      "use_write_with_state"}},
             .hw_config = dm_cfg,
         };
         experimental::WorkUnitSpec wu{
@@ -297,6 +299,7 @@ void RunTestOnCore(
     bool use_multicast_semaphore_inc = false;
     uint32_t mcast_dst_end_x = 0;
     uint32_t mcast_dst_end_y = 0;
+    bool use_write_with_state = false;
     switch (feature) {
         case SanitizeNOCAddress:
             output_buf_noc_xy.x = 26;
@@ -352,6 +355,17 @@ void RunTestOnCore(
             }
             break;
         }
+        case SanitizeNOCWriteWithStateBadCoord:
+            // Stateful write to a non-existent core. The destination coordinate lives in NOC_RET_ADDR; a
+            // sanitizer that mistakenly read NOC_TARG_ADDR would instead see the sender's own (valid) coordinate
+            // and fail to flag the bad target. The zero destination offset keeps the failure deterministic
+            // either way (it never silently succeeds), and the small size forces the one-packet write path.
+            output_buf_noc_xy.x = 26;
+            output_buf_noc_xy.y = 18;
+            output_buffer_addr = 0;
+            buffer_size = 32;
+            use_write_with_state = true;
+            break;
         default:
             log_warning(LogTest, "Unrecognized feature to test ({}), skipping...", feature);
             GTEST_SKIP();
@@ -374,7 +388,8 @@ void RunTestOnCore(
         eth_dest_overflow_addr_words,
         use_multicast_semaphore_inc,
         mcast_dst_end_x,
-        mcast_dst_end_y};
+        mcast_dst_end_y,
+        use_write_with_state};
 
     if (is_eth_core) {
         // ETH cores still go through the legacy API.
@@ -401,7 +416,8 @@ void RunTestOnCore(
                        {"eth_dest_overflow_addr", eth_dest_overflow_addr_words},
                        {"use_multicast_semaphore_inc", use_multicast_semaphore_inc},
                        {"mcast_dst_end_x", mcast_dst_end_x},
-                       {"mcast_dst_end_y", mcast_dst_end_y}}}},
+                       {"mcast_dst_end_y", mcast_dst_end_y},
+                       {"use_write_with_state", use_write_with_state}}}},
         }};
         experimental::SetProgramRunArgs(program, params);
     }
@@ -437,6 +453,9 @@ void RunTestOnCore(
     }
     // Note: for multi_dm_race, expected string is built but not used - verification uses regex instead
     switch (feature) {
+        // Stateful write to a bad coordinate reports the same "did not map to any known core" error as a plain
+        // bad-coordinate write; the destination coordinate is reconstructed from NOC_RET_ADDR state registers.
+        case SanitizeNOCWriteWithStateBadCoord:
         case SanitizeNOCAddress:
             expected = fmt::format(
                 "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to unicast write {} "
@@ -871,6 +890,19 @@ TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeMulticastSemaphoreInc) {
         [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
             CoreCoord core{0, 0};
             RunTestOnCore(fixture, mesh_device, core, false, SanitizeNOCMulticastInvalidRange);
+        },
+        this->devices_[0]);
+}
+
+// Regression test for the stateful-write NOC sanitizer: a write issued via set_async_write_state +
+// async_write_with_state must be sanitized against the destination coordinate held in NOC_RET_ADDR. A
+// sanitizer that reads NOC_TARG_ADDR instead would see the sender's own (valid) coordinate and report the
+// wrong error (or none), so this test fails unless the destination is reconstructed from NOC_RET_ADDR.
+TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCWriteWithState) {
+    this->RunTestOnDevice(
+        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+            CoreCoord core{0, 0};
+            RunTestOnCore(fixture, mesh_device, core, false, SanitizeNOCWriteWithStateBadCoord);
         },
         this->devices_[0]);
 }
