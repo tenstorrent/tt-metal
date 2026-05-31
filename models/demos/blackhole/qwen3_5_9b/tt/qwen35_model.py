@@ -4,7 +4,6 @@
 Assembly: tok_embeddings → 32 × Qwen35TransformerBlock → RMSNorm → LM Head
 Manages hybrid state: KV cache (8 attention layers) + recurrent state (24 DeltaNet layers).
 """
-import glob
 import math
 
 import torch
@@ -15,7 +14,6 @@ import ttnn
 from models.demos.blackhole.qwen3_5_9b.tt.model_config import Qwen35ModelArgs
 from models.demos.blackhole.qwen3_5_9b.tt.qwen35_decoder import Qwen35TransformerBlock, rms_norm_ttnn
 from models.demos.blackhole.qwen3_5_9b.tt.qwen35_rope import Qwen35RoPESetup
-from models.demos.blackhole.qwen3_5_9b.tt.weight_mapping import remap_qwen35_state_dict
 
 
 class Qwen35Model:
@@ -119,22 +117,10 @@ class Qwen35Model:
             args.n_layers = n_layers
             args.attention_type_list = args.attention_type_list[:n_layers]
 
-        logger.info("Loading weights from safetensors...")
-        raw_state_dict = {}
-        safetensor_files = sorted(glob.glob(f"{checkpoint_dir}/model.safetensors-*.safetensors"))
-        from safetensors import safe_open
-
-        for path in safetensor_files:
-            with safe_open(path, framework="pt", device="cpu") as f:
-                for key in f.keys():
-                    raw_state_dict[key] = f.get_tensor(key)
-
-        logger.info("Remapping weights...")
-        state_dict = remap_qwen35_state_dict(raw_state_dict)
-        del raw_state_dict
+        logger.info("Loading + remapping weights via Qwen35ModelArgs.load_state_dict()...")
+        state_dict = args.load_state_dict()
 
         cache_path = args.weight_cache_path()
-
         return cls(args, state_dict, device, weight_cache_path=cache_path)
 
     def prefill(self, token_ids):
