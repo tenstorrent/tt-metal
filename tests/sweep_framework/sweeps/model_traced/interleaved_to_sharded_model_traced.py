@@ -12,7 +12,7 @@ from functools import partial
 
 # Import master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader, dict_to_memory_config
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args, parse_dict_value
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     get_model_traced_mesh_shape,
     create_mesh_device,
@@ -74,11 +74,23 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, exclude={"arg1"}, output_memory_config=output_memory_config)
 
-    # arg1 is the target sharded memory config for interleaved_to_sharded
+    # Extract positional non-tensor args dropped by build_op_kwargs
+    # interleaved_to_sharded(input, output_mem_cfg, tensor_memory_layout, shard_orientation, output_dtype)
     pos_args = extract_positional_args(kwargs)
     arg1 = pos_args.get(1, None)
     if isinstance(arg1, dict):
         arg1 = dict_to_memory_config(arg1)
+
+    # arg3 = TensorMemoryLayout, arg4 = ShardOrientation, arg5 = output DataType
+    arg3 = pos_args.get(3, None)
+    if isinstance(arg3, dict):
+        arg3 = parse_dict_value("arg3", arg3)
+    arg4 = pos_args.get(4, None)
+    if isinstance(arg4, dict):
+        arg4 = parse_dict_value("arg4", arg4)
+    arg5 = pos_args.get(5, None)
+    if isinstance(arg5, dict):
+        arg5 = parse_dict_value("arg5", arg5)
 
     # arg1 IS the target sharded memory config — always prioritize it.
     # The loader's fallback sets output_memory_config from the input tensor's
@@ -132,7 +144,8 @@ def run(
         output_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.interleaved_to_sharded(input_tensor_a, output_memory_config, **op_kwargs)
+    i2s_extra_args = [a for a in [arg3, arg4, arg5] if a is not None]
+    output_tensor = ttnn.interleaved_to_sharded(input_tensor_a, output_memory_config, *i2s_extra_args, **op_kwargs)
     mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
     e2e_perf = stop_measuring_time(start_time)
