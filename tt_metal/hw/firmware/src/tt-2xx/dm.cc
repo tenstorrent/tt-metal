@@ -201,7 +201,7 @@ extern "C" uint32_t _start1() {
     do_thread_crt1(__ldm_tdata_init);
     WAYPOINT("I");
     DPRINT << "DM0-FW: initialized" << ENDL();
-    DEVICE_PRINT("DM0-FW: initialized\n");
+    DEVICE_PRINT("DM{}-FW: initialized\n", hartid);
 
     // handle noc_tobank ???
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0

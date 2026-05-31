@@ -405,7 +405,8 @@ bool DPrintImpl::core_has_outstanding_prints(
         auto from_dev =
             cluster.read_core(device_id, virtual_core, base_addr, eightbytes);
         uint32_t wpos = from_dev[0], rpos = from_dev[1];
-        if (rpos < wpos) {
+        const uint32_t wpos_data = wpos & ~DEVICE_PRINT_WRITE_STALL_FLAG;
+        if (rpos < wpos_data) {
             return true;
         }
     }
@@ -413,6 +414,43 @@ bool DPrintImpl::core_has_outstanding_prints(
 }
 
 // DEVICE_PRINT implementations — single shared buffer per core.
+
+namespace {
+
+// Match device_print_detail::align_device_print_message_size() / device_print_message_align_bytes in device_print.h.
+uint32_t device_print_message_align_bytes(
+    const tt::tt_metal::Hal& hal, tt::tt_metal::HalProgrammableCoreType programmable_core_type, uint32_t risc_id) {
+    if (hal.get_arch() == tt::ARCH::QUASAR &&
+        programmable_core_type == tt::tt_metal::HalProgrammableCoreType::TENSIX) {
+        auto [processor_class, processor_type_idx] =
+            hal.get_processor_class_and_type_from_index(programmable_core_type, risc_id);
+        (void)processor_type_idx;
+        if (processor_class == tt::tt_metal::HalProcessorClassType::DM) {
+            return 8;
+        }
+    }
+    return 4;
+}
+
+uint32_t align_device_print_message_size(uint32_t size, uint32_t align_bytes) {
+    const uint32_t mask = align_bytes - 1;
+    return (size + mask) & ~mask;
+}
+
+uint32_t device_print_message_size_bytes(
+    const DevicePrintHeader& header,
+    const tt::tt_metal::Hal& hal,
+    tt::tt_metal::HalProgrammableCoreType programmable_core_type) {
+    constexpr uint32_t header_size = sizeof(DevicePrintHeader);
+    const uint32_t align_bytes = device_print_message_align_bytes(hal, programmable_core_type, header.risc_id);
+    uint32_t raw_size = header_size;
+    if (!(header.is_kernel && header.message_payload == DevicePrintHeader::max_message_payload_size)) {
+        raw_size += header.message_payload;
+    }
+    return align_device_print_message_size(raw_size, align_bytes);
+}
+
+}  // namespace
 
 void DevicePrintImpl::print_buffer_data(
     ChipId device_id, const umd::CoreDescriptor& logical_core, std::span<uint32_t> data) {
@@ -428,8 +466,8 @@ void DevicePrintImpl::print_buffer_data(
 
     while (word_index < data.size()) {
         // New data always starts with a DevicePrintHeader, so lets parse it.
+        const std::size_t message_start_word = word_index;
         const DevicePrintHeader* header = reinterpret_cast<const DevicePrintHeader*>(data.data() + word_index);
-        word_index++;
 
         // Check if we are loading new kernel
         if (header->is_kernel && header->message_payload == DevicePrintHeader::max_message_payload_size) {
@@ -449,30 +487,27 @@ void DevicePrintImpl::print_buffer_data(
             }
             RiscKey risc_key = {device_id, logical_core, header->risc_id};
             RiscData& risc_data = risc_data_[risc_key];
-            if (risc_data.last_loaded_kernel_id == static_cast<int>(header->info_id)) {
-                // We have already loaded this kernel, no need to do load it again.
-                continue;
+            if (risc_data.last_loaded_kernel_id != static_cast<int>(header->info_id)) {
+                if (risc_data.last_loaded_kernel_id != -1) {
+                    // Remove reference to previous kernel elf parser so that it can be freed if needed.
+                    risc_data.kernel_elf_parser = nullptr;
+                }
+
+                // Update kernel id
+                auto kernel_id = static_cast<int>(header->info_id);
+                risc_data.last_loaded_kernel_id = kernel_id;
+
+                // Find elf path from inspector using kernel id
+                auto kernel_path = Inspector::get_kernel_path_from_watcher_kernel_id(header->info_id);
+                auto [processor_class, processor_type_idx] =
+                    hal.get_processor_class_and_type_from_index(programmable_core_type, header->risc_id);
+                const auto& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
+                    device_id, programmable_core_type_idx, static_cast<uint32_t>(processor_class), processor_type_idx);
+                const auto& risc_name = build_state.get_target_name();
+                auto elf_path = std::filesystem::path(kernel_path) / risc_name / (risc_name + ".elf");
+                risc_data.kernel_elf_path = elf_path.string();
+                risc_data.kernel_elf_parser = DevicePrintParser::get_parser_for_elf(elf_path);
             }
-
-            if (risc_data.last_loaded_kernel_id != -1) {
-                // Remove reference to previous kernel elf parser so that it can be freed if needed.
-                risc_data.kernel_elf_parser = nullptr;
-            }
-
-            // Update kernel id
-            auto kernel_id = static_cast<int>(header->info_id);
-            risc_data.last_loaded_kernel_id = kernel_id;
-
-            // Find elf path from inspector using kernel id
-            auto kernel_path = Inspector::get_kernel_path_from_watcher_kernel_id(header->info_id);
-            auto [processor_class, processor_type_idx] =
-                hal.get_processor_class_and_type_from_index(programmable_core_type, header->risc_id);
-            const auto& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
-                device_id, programmable_core_type_idx, static_cast<uint32_t>(processor_class), processor_type_idx);
-            const auto& risc_name = build_state.get_target_name();
-            auto elf_path = std::filesystem::path(kernel_path) / risc_name / (risc_name + ".elf");
-            risc_data.kernel_elf_path = elf_path.string();
-            risc_data.kernel_elf_parser = DevicePrintParser::get_parser_for_elf(elf_path);
         } else if (
             header->is_kernel == 0 && header->risc_id == 0 && header->message_payload == 0 &&
             header->info_id == DevicePrintHeader::max_info_id_value) {
@@ -524,7 +559,7 @@ void DevicePrintImpl::print_buffer_data(
             // Check if we found elf file for this print message.
             if (elf_parser != nullptr) {
                 // Format message
-                auto buffer_remaining_bytes = std::as_bytes(data.subspan(word_index));
+                auto buffer_remaining_bytes = std::as_bytes(data.subspan(message_start_word + 1));
                 if (buffer_remaining_bytes.size() < header->message_payload) {
                     log_error(
                         tt::LogMetal,
@@ -602,10 +637,11 @@ void DevicePrintImpl::print_buffer_data(
                     }
                 }
             }
-
-            // Move to the next message
-            word_index += (header->message_payload + 3) / 4;  // round up to nearest word
         }
+
+        // Advance by the device-aligned message size (header + payload + padding).
+        const uint32_t message_size_bytes = device_print_message_size_bytes(*header, hal, programmable_core_type);
+        word_index = message_start_word + message_size_bytes / sizeof(uint32_t);
     }
 }
 
@@ -638,6 +674,31 @@ bool DevicePrintImpl::poll_one_core(
         return false;
     }
 
+    auto pointers_valid_for_poll = [&]() -> bool {
+        if (rpos == DEVICE_PRINT_RESET_BUFFER_MAGIC) {
+            // Host requested buffer clear; device has not finished resetting yet.
+            return false;
+        }
+        const uint32_t wpos_data = wpos & ~DEVICE_PRINT_WRITE_STALL_FLAG;
+        if (wpos_data > print_buffer_size || rpos > print_buffer_size) {
+            log_warning(
+                tt::LogMetal,
+                "DEVICE_PRINT buffer pointers out of range on device {} core {} (wpos=0x{:x} rpos=0x{:x} "
+                "capacity={}), skipping poll",
+                device_id,
+                virtual_core.str(),
+                wpos,
+                rpos,
+                print_buffer_size);
+            return false;
+        }
+        return true;
+    };
+
+    if (!pointers_valid_for_poll()) {
+        return false;
+    }
+
     while (true) {
         bool stall = (wpos & DEVICE_PRINT_WRITE_STALL_FLAG) != 0;
 
@@ -646,8 +707,11 @@ bool DevicePrintImpl::poll_one_core(
 
         if (rpos > wpos) {
             // Read until end of buffer and then from beginning until wpos
-            auto data =
-                cluster.read_core(device_id, virtual_core, print_buffer_address + rpos, print_buffer_size - rpos);
+            const uint32_t nbytes = print_buffer_size - rpos;
+            if (nbytes == 0 || nbytes > print_buffer_size) {
+                return false;
+            }
+            auto data = cluster.read_core(device_id, virtual_core, print_buffer_address + rpos, nbytes);
 
             // Process buffer data
             print_buffer_data(device_id, logical_core, data);
@@ -657,7 +721,11 @@ bool DevicePrintImpl::poll_one_core(
         }
         if (rpos < wpos) {
             // Read until wpos
-            auto data = cluster.read_core(device_id, virtual_core, print_buffer_address + rpos, wpos - rpos);
+            const uint32_t nbytes = wpos - rpos;
+            if (nbytes == 0 || nbytes > print_buffer_size) {
+                return false;
+            }
+            auto data = cluster.read_core(device_id, virtual_core, print_buffer_address + rpos, nbytes);
 
             // Process buffer data
             print_buffer_data(device_id, logical_core, data);
@@ -677,6 +745,10 @@ bool DevicePrintImpl::poll_one_core(
             from_dev = cluster.read_core(device_id, virtual_core, buffer_address, eightbytes);
             wpos = from_dev[0];
             rpos = from_dev[1];
+            if (wpos == DEBUG_PRINT_SERVER_DISABLED_MAGIC || wpos == DEBUG_PRINT_SERVER_STARTING_MAGIC ||
+                wpos == rpos || !pointers_valid_for_poll()) {
+                return false;
+            }
             continue;
         }
 

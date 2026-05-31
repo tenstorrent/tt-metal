@@ -39,7 +39,6 @@ the log file is stored as well as a message each time the watcher checks the dev
 
 Watcher features can be disabled individually using the following environment variables:
 
-.. code-block::
 
    export TT_METAL_WATCHER_DISABLE_ASSERT=1
    export TT_METAL_WATCHER_DISABLE_PAUSE=1

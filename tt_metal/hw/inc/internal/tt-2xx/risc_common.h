@@ -291,8 +291,8 @@ inline void invalidate_l2_cache(uint32_t hartid) {
 // Provided for API compatibility with previous architectures.
 // Uses flush (not invalidate) for D$ since older architectures had write-through caches.
 inline void invalidate_l1_cache() {
-    flush_l1_dcache(0);
-    invalidate_l1_icache();
+//    flush_l1_dcache(0);
+//    invalidate_l1_icache();
 }
 
 // Invalidate entire cache hierarchy: L2 + L1 D$ + L1 I$.

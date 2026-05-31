@@ -20,6 +20,7 @@
 #include "internal/dataflow/dataflow_api_addrgen.h"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
+#include "tt_metal/impl/dispatch/kernels/cq_prefetch_debug.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_prefetch.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_relay.hpp"
 #include "api/debug/dprint.h"
@@ -27,6 +28,23 @@
 
 #include <array>
 #include <cstdint>
+
+#if defined(PREFETCH_DEBUG_COUNTERS_L1) && defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+FORCE_INLINE void prefetch_debug_snapshot_retire_tr_ack() {
+    prefetch_debug_set(
+        PrefetchDebugCounter::RETIRE_SCMD_TR_ACK, static_cast<uint32_t>(__builtin_riscv_ttrocc_scmdbuf_tr_ack()));
+    prefetch_debug_set(
+        PrefetchDebugCounter::RETIRE_TR_ACK_TR2, static_cast<uint32_t>(__builtin_riscv_ttrocc_scmdbuf_tr_ack_trid(2U)));
+    prefetch_debug_set(
+        PrefetchDebugCounter::RETIRE_TR_ACK_TR3, static_cast<uint32_t>(__builtin_riscv_ttrocc_scmdbuf_tr_ack_trid(3U)));
+    prefetch_debug_set(
+        PrefetchDebugCounter::RETIRE_TR_ACK_TR4, static_cast<uint32_t>(__builtin_riscv_ttrocc_scmdbuf_tr_ack_trid(4U)));
+    prefetch_debug_set(
+        PrefetchDebugCounter::RETIRE_TR_ACK_TR5, static_cast<uint32_t>(__builtin_riscv_ttrocc_scmdbuf_tr_ack_trid(5U)));
+}
+#else
+FORCE_INLINE void prefetch_debug_snapshot_retire_tr_ack() {}
+#endif
 
 constexpr uint32_t CQ_PREFETCH_CMD_BARE_MIN_SIZE = PCIE_ALIGNMENT;  // for NOC PCIe alignment
 static_assert(sizeof(CQPrefetchCmd) <= CQ_PREFETCH_CMD_BARE_MIN_SIZE);
@@ -165,6 +183,14 @@ constexpr uint32_t dispatch_s_cb_page_size = 1 << dispatch_s_cb_log_page_size;
 constexpr uint32_t downstream_cb_end = downstream_cb_base + (1 << downstream_cb_log_page_size) * downstream_cb_pages;
 constexpr uint32_t dispatch_s_buffer_end = dispatch_s_buffer_base + dispatch_s_buffer_size;
 constexpr uint32_t cmddat_q_page_size = 1 << cmddat_q_log_page_size;
+#if defined(PREFETCH_DEBUG_COUNTERS_L1)
+static_assert(
+    cmddat_q_pages * cmddat_q_page_size == cmddat_q_size,
+    "CMDDAT_Q_PAGES*page_size must equal CMDDAT_Q_SIZE when debug counters reserve cmddat tail");
+static_assert(
+    PREFETCH_DEBUG_COUNTERS_L1 == cmddat_q_base + cmddat_q_size,
+    "PREFETCH_DEBUG_COUNTERS_L1 must immediately follow the kernel cmddat ring");
+#endif
 
 constexpr uint32_t scratch_db_half_size = scratch_db_size / 2;
 constexpr uint32_t scratch_db_base0 = scratch_db_base;
@@ -369,6 +395,7 @@ FORCE_INLINE uint32_t read_from_pcie(
     const uint32_t trid,
     const bool queue_empty) {
     uint32_t pending_read_size = 0U;
+    prefetch_debug_inc(PrefetchDebugCounter::READ_FROM_PCIE_ENTER);
 #if ENABLE_PREFETCH_DPRINTS
     DPRINT << "read_from_pcie: ENTER trid=" << trid << " size=" << size << " preamble_size=" << preamble_size
            << " fence=" << fence << " cmd_ptr=" << cmd_ptr << " pcie_read_ptr=" << pcie_read_ptr
@@ -388,6 +415,8 @@ FORCE_INLINE uint32_t read_from_pcie(
     const uint32_t needed_bytes = size + preamble_size;
     // If cmd_ptr == fence, the ring is either EMPTY or FULL. The caller must disambiguate via `queue_empty`.
     if ((cmd_ptr == fence) && !queue_empty) {
+        prefetch_debug_record_pcie_early_exit(
+            PrefetchPcieEarlyExitCode::RING_FULL, static_cast<uint32_t>(fence), static_cast<uint32_t>(cmd_ptr));
 #if ENABLE_PREFETCH_DPRINTS
         DPRINT << "read_from_pcie: EARLY_EXIT (ring_full cmd_ptr==fence) trid=" << trid << " fence=" << fence
                << " cmd_ptr=" << cmd_ptr << " needed_bytes=" << needed_bytes << ENDL();
@@ -406,6 +435,10 @@ FORCE_INLINE uint32_t read_from_pcie(
         // Ensure we don't overwrite unread commands.
         const uint32_t available_bytes = cmd_ptr - fence;
         if (needed_bytes > available_bytes) {
+            prefetch_debug_record_pcie_early_exit(
+                PrefetchPcieEarlyExitCode::INSUFF_SPACE_CMD_GT_FENCE,
+                needed_bytes,
+                available_bytes);
 #if ENABLE_PREFETCH_DPRINTS
             DPRINT << "read_from_pcie: EARLY_EXIT (insufficient_space, cmd_ptr > fence) trid=" << trid
                    << " fence=" << fence << " cmd_ptr=" << cmd_ptr << " needed_bytes=" << needed_bytes
@@ -428,6 +461,10 @@ FORCE_INLINE uint32_t read_from_pcie(
         const uint32_t available_bytes_at_beginning =
             queue_empty ? (cmddat_q_end - cmddat_q_base) : (cmd_ptr - cmddat_q_base);
         if (needed_bytes > available_bytes_at_beginning) {
+            prefetch_debug_record_pcie_early_exit(
+                PrefetchPcieEarlyExitCode::INSUFF_SPACE_AT_BEGINNING,
+                needed_bytes,
+                available_bytes_at_beginning);
 #if ENABLE_PREFETCH_DPRINTS
             DPRINT << "read_from_pcie: EARLY_EXIT (insufficient_space_at_beginning) trid=" << trid << " fence=" << fence
                    << " cmd_ptr=" << cmd_ptr << " needed_bytes=" << needed_bytes << " queue_empty=" << queue_empty
@@ -446,9 +483,6 @@ FORCE_INLINE uint32_t read_from_pcie(
         }
 
 #if ENABLE_PREFETCH_DPRINTS
-        // DPRINT << "read_from_pcie: WRAP cmddat_q fence=" << fence << " -> " << cmddat_q_base
-        //        << " (needed_bytes=" << needed_bytes << " avail_begin=" << available_bytes_at_beginning << ")" <<
-        //        ENDL();
         DEVICE_PRINT(
             "read_from_pcie: WRAP cmddat_q fence={} -> {} (needed_bytes={} avail_begin={})\n",
             fence,
@@ -459,10 +493,11 @@ FORCE_INLINE uint32_t read_from_pcie(
         fence = cmddat_q_base;
     }
 
+    prefetch_debug_inc(PrefetchDebugCounter::READ_FROM_PCIE_PAST_CMDDAT);
+
     // Wrap pcie/hugepage
     if (pcie_read_ptr + size > pcie_base + pcie_size) {
 #if ENABLE_PREFETCH_DPRINTS
-        // DPRINT << "read_from_pcie: WRAP pcie pcie_read_ptr=" << pcie_read_ptr << " -> " << pcie_base << ENDL();
         DEVICE_PRINT("read_from_pcie: WRAP pcie pcie_read_ptr={} -> {}\n", pcie_read_ptr, pcie_base);
 #endif
         pcie_read_ptr = pcie_base;
@@ -470,6 +505,7 @@ FORCE_INLINE uint32_t read_from_pcie(
 #if defined(IS_CQ_DRAM_BACKED) && IS_CQ_DRAM_BACKED == 1
     uint64_t pcie_noc_xy = get_noc_addr_from_bank_id<true>(DRAM_BACKED_CQ_BANK_ID, 0);
 #endif
+    prefetch_debug_inc(PrefetchDebugCounter::PCIE_NOC_XY_READY);
 
     const uint64_t host_src_addr = pcie_noc_xy | pcie_read_ptr;
     const uint32_t dst_addr = static_cast<uint32_t>(fence + preamble_size);
@@ -483,8 +519,10 @@ FORCE_INLINE uint32_t read_from_pcie(
         dst_addr,
         size);
 #endif
+    prefetch_debug_inc(PrefetchDebugCounter::PCIE_ISSUE_ENTER);
     noc_async_read_set_trid(trid);
     noc_async_read(host_src_addr, dst_addr, size);
+    prefetch_debug_inc(PrefetchDebugCounter::PCIE_READ_ISSUED);
     // Avoid leaking this trid to unrelated reads.
     noc_async_read_set_trid(0U);
     pending_read_size = needed_bytes;
@@ -500,6 +538,8 @@ FORCE_INLINE uint32_t read_from_pcie(
         fence);
 #endif
 
+    const uintptr_t consumed_entry_cached =
+        l1_cached_addr(reinterpret_cast<uintptr_t>(prefetch_q_rd_ptr));
     *prefetch_q_rd_ptr = 0U;
 
     // Tell host we read. Store the cached-form pointer value so host comparisons against
@@ -518,6 +558,10 @@ FORCE_INLINE uint32_t read_from_pcie(
         prefetch_q_rd_ptr =
             reinterpret_cast<volatile tt_l1_ptr prefetch_q_entry_type*>(l1_uncached_addr(prefetch_q_base));
     }
+
+    tl1_publish_flush(consumed_entry_cached);
+    tl1_publish_flush(prefetch_q_rd_ptr_addr);
+    tl1_publish_flush(prefetch_q_pcie_rd_ptr_addr);
     return pending_read_size;
 }
 
@@ -583,9 +627,10 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
     // constant-expressions, and sadly the compiler doesn't convert the
     // dynamic init to a static init. The assembler permits multiple .equ
     // of the same symbol.
-    asm(".equ prefetch_q_base_, %0" ::"n"(prefetch_q_base));
-    extern volatile tt_l1_ptr prefetch_q_entry_type prefetch_q_base_[];  // See the asm above
-    static constinit volatile tt_l1_ptr prefetch_q_entry_type* prefetch_q_rd_ptr = prefetch_q_base_;
+    constexpr uintptr_t prefetch_q_uncached_base = l1_uncached_addr(prefetch_q_base);
+    asm(".equ prefetch_q_uncached_base_, %0" ::"n"(prefetch_q_uncached_base));
+    extern volatile tt_l1_ptr prefetch_q_entry_type prefetch_q_uncached_base_[];
+    static constinit volatile tt_l1_ptr prefetch_q_entry_type* prefetch_q_rd_ptr = prefetch_q_uncached_base_;
     constexpr uint32_t prefetch_q_msb_mask = 1u << (sizeof(prefetch_q_entry_type) * CHAR_BIT - 1U);
 
     if (stall_state == StallState::STALLED) {
@@ -595,6 +640,7 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
         DPRINT << "fetch_q_get_cmds: EXIT (STALLED)" << ENDL();
         DEVICE_PRINT("fetch_q_get_cmds: EXIT (STALLED)\n");
 #endif
+        prefetch_debug_record_fetchq_return(inflight_count, cmd_ptr, fence);
         return;
     }
 
@@ -611,6 +657,7 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
     }
 
     while (true) {
+        prefetch_debug_inc(PrefetchDebugCounter::FETCHQ_GET_CMDS_ITER);
         const uint32_t inflight_tail = (inflight_head + inflight_count) & INFLIGHT_MASK;
         const uint32_t next_trid = PREFETCH_TRIDS[next_trid_idx];
         DPRINT << "fetch_q_get_cmds: ENTER stall_state="
@@ -649,13 +696,16 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
         // (Avoids extra volatile PrefetchQ polling / decode on the steady-state path.)
         if (cmd_ready && (has_pending_stall_after ||
                           (inflight_count == tt::tt_metal::PrefetchConstants::PREFETCH_MAX_OUTSTANDING_PCIE_READS))) {
+            prefetch_debug_record_fetchq_return(inflight_count, cmd_ptr, fence);
             return;
         }
 
         // Local helper for reading the current prefetch_q entry.
-        uint32_t prefetch_q_rd_ptr_local = *prefetch_q_rd_ptr;
+        uint32_t prefetch_q_rd_ptr_local = fetchq_poll_load(prefetch_q_rd_ptr);
+        prefetch_debug_record_fetchq_poll(prefetch_q_rd_ptr_local);
         uint32_t fetch_size = (prefetch_q_rd_ptr_local & ~prefetch_q_msb_mask) << prefetch_q_log_minsize;
         bool stall_flag = (prefetch_q_rd_ptr_local & prefetch_q_msb_mask) != 0U;
+        prefetch_debug_set(PrefetchDebugCounter::LAST_DECODED_FETCH_SIZE, fetch_size);
 
 #if ENABLE_PREFETCH_DPRINTS
         DPRINT << "fetch_q_get_cmds: STATE cmd_ready=" << static_cast<uint32_t>(cmd_ready)
@@ -671,13 +721,38 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
 
         // Issue tagged reads (up to MAX_OUTSTANDING_READS) whenever host has work and there is capacity.
         // Stop once we encounter a stall_flag entry (do not prefetch beyond it).
-        if (!has_pending_stall_after) {
-            while ((fetch_size != 0U) &&
-                   (inflight_count < tt::tt_metal::PrefetchConstants::PREFETCH_MAX_OUTSTANDING_PCIE_READS)) {
+        prefetch_debug_pre_issue_milestone(static_cast<uint32_t>(PrefetchPreIssueMilestone::BLOCK_ENTER));
+        if (has_pending_stall_after) {
+            prefetch_debug_pre_issue_milestone(static_cast<uint32_t>(PrefetchPreIssueMilestone::STALL_SKIP));
+        } else {
+            for (;;) {
+                prefetch_debug_pre_issue_milestone(static_cast<uint32_t>(PrefetchPreIssueMilestone::WHILE_ENTER));
+
+                const bool would_continue =
+                    (fetch_size != 0U) &&
+                    (inflight_count <
+                     tt::tt_metal::PrefetchConstants::PREFETCH_MAX_OUTSTANDING_PCIE_READS);
+                prefetch_debug_mirror_issue_while_cond(
+                    PREFETCH_DEBUG_ISSUE_WHILE_WAYPOINT_COND_CHECK,
+                    inflight_count,
+                    fetch_size,
+                    stall_flag,
+                    would_continue);
+                if (!would_continue) {
+                    prefetch_debug_pre_issue_milestone(static_cast<uint32_t>(PrefetchPreIssueMilestone::COND_FAIL));
+                    break;
+                }
+                prefetch_debug_pre_issue_milestone(static_cast<uint32_t>(PrefetchPreIssueMilestone::COND_OK));
+
                 const uint32_t this_trid = PREFETCH_TRIDS[next_trid_idx];
                 uint32_t total_size = 0U;
                 const uint32_t idx = (inflight_head + inflight_count) & INFLIGHT_MASK;
                 const bool queue_empty = (inflight_count == 0U) && !cmd_ready;
+
+                prefetch_debug_pre_issue_milestone(static_cast<uint32_t>(PrefetchPreIssueMilestone::LOOP_ENTER));
+                prefetch_debug_inc(PrefetchDebugCounter::ISSUE_LOOP_ENTER);
+                prefetch_debug_set(PrefetchDebugCounter::LAST_FETCHQ_ENTRY, prefetch_q_rd_ptr_local);
+                prefetch_debug_set(PrefetchDebugCounter::LAST_FETCH_SIZE, fetch_size);
 
 #if ENABLE_PREFETCH_DPRINTS
                 DPRINT << "fetch_q_get_cmds: ISSUE_ATTEMPT idx=" << idx << " trid=" << this_trid
@@ -699,11 +774,14 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
                     stall_flag);
 #endif
 
+                prefetch_debug_pre_issue_milestone(
+                    static_cast<uint32_t>(PrefetchPreIssueMilestone::READ_FROM_PCIE_CALL));
                 total_size = read_from_pcie<preamble_size>(
                     prefetch_q_rd_ptr, issue_fence, pcie_read_ptr, cmd_ptr, fetch_size, this_trid, queue_empty);
 
                 if (total_size == 0U) {
                     // Could not issue due to cmddat_q wrap restriction. Do not consume host entry; retry later.
+                    prefetch_debug_inc(PrefetchDebugCounter::ISSUE_FAILED);
 #if ENABLE_PREFETCH_DPRINTS
                     DPRINT << "fetch_q_get_cmds: ISSUE_FAILED trid=" << this_trid << " fetch_size=" << fetch_size
                            << " issue_fence=" << issue_fence << " fence=" << fence << " cmd_ptr=" << cmd_ptr << ENDL();
@@ -715,6 +793,11 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
                         fence,
                         cmd_ptr);
 #endif
+                    prefetch_debug_mirror_issue_while_tail(
+                        PREFETCH_DEBUG_ISSUE_WHILE_WAYPOINT_ISSUE_FAIL_BREAK,
+                        inflight_count,
+                        fetch_size,
+                        stall_flag);
                     break;
                 }
 
@@ -732,6 +815,8 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
 
                 // Cycle through PREFETCH_TRIDS.
                 next_trid_idx = (next_trid_idx + 1U) & (static_cast<uint32_t>(PREFETCH_TRIDS.size()) - 1U);
+
+                prefetch_debug_record_issue_ok(inflight_count);
 
 #if ENABLE_PREFETCH_DPRINTS
                 DPRINT << "fetch_q_get_cmds: ISSUE_OK trid=" << this_trid << " read_start=" << read_fence
@@ -752,20 +837,71 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
 
                 // Stop issuing reads beyond a stall entry. We'll stall when this read is retired.
                 if (stall_flag) {
+                    prefetch_debug_mirror_issue_while_tail(
+                        PREFETCH_DEBUG_ISSUE_WHILE_WAYPOINT_STALL_BREAK,
+                        inflight_count,
+                        fetch_size,
+                        stall_flag);
                     break;
                 }
 
                 // Refresh host state for potential next issue.
-                prefetch_q_rd_ptr_local = *prefetch_q_rd_ptr;
+                prefetch_q_rd_ptr_local = fetchq_poll_load(prefetch_q_rd_ptr);
+                prefetch_debug_record_fetchq_poll(prefetch_q_rd_ptr_local);
                 fetch_size = (prefetch_q_rd_ptr_local & ~prefetch_q_msb_mask) << prefetch_q_log_minsize;
                 stall_flag = (prefetch_q_rd_ptr_local & prefetch_q_msb_mask) != 0U;
+                prefetch_debug_set(PrefetchDebugCounter::LAST_DECODED_FETCH_SIZE, fetch_size);
+                prefetch_debug_record_post_stall_refresh_done();
+                prefetch_debug_mirror_issue_while_tail(
+                    PREFETCH_DEBUG_ISSUE_WHILE_WAYPOINT_AFTER_STALL_REFRESH,
+                    inflight_count,
+                    fetch_size,
+                    stall_flag);
             }
         }
+
+        prefetch_debug_record_post_while_epilogue_enter();
+
+        prefetch_debug_mirror_issue_while_tail(
+            PREFETCH_DEBUG_ISSUE_WHILE_WAYPOINT_AFTER_WHILE_EXIT,
+            inflight_count,
+            fetch_size,
+            stall_flag);
+        prefetch_debug_post_while_milestone(
+            static_cast<uint32_t>(PrefetchPostWhileMilestone::AFTER_WHILE_EXIT_MIRROR));
+
+        prefetch_debug_record_post_issue_loop_exit();
+
+        bool has_pending_stall_after_after_issue = false;
+        if (inflight_count != 0U) {
+            const uint32_t inflight_last = (inflight_head + inflight_count - 1U) & INFLIGHT_MASK;
+            has_pending_stall_after_after_issue = (inflight[inflight_last].flags == InflightFlags::STALL_AFTER);
+        }
+        prefetch_debug_post_while_milestone(static_cast<uint32_t>(PrefetchPostWhileMilestone::STALL_REEVAL));
+        prefetch_debug_inc_no_publish(PrefetchDebugCounter::POST_ISSUE_STALL_REEVAL);
+
+        const bool cmd_ready_reeval = (cmd_ptr != fence);
+        prefetch_debug_post_while_milestone(static_cast<uint32_t>(PrefetchPostWhileMilestone::CMD_READY_REEVAL));
+        prefetch_debug_inc_no_publish(PrefetchDebugCounter::POST_ISSUE_CMD_READY_REEVAL);
+
+        prefetch_debug_record_post_issue_state(
+            cmd_ready,
+            cmd_ready_reeval,
+            has_pending_stall_after_after_issue,
+            inflight_count,
+            cmd_ptr,
+            fence);
+
+        prefetch_debug_record_retire_pre_branch(cmd_ready, cmd_ready_reeval);
 
         // If no commands are ready, retire the oldest in-flight read to advance the committed fence.
         // This preserves correctness: the main loop expects data to be present after fetch_q_get_cmds returns.
         if (!cmd_ready) {
+            prefetch_debug_record_retire_path_entry();
             if (inflight_count != 0U) {
+                prefetch_debug_inc(PrefetchDebugCounter::RETIRE_INFLIGHT_ENTER);
+                prefetch_debug_post_while_milestone(
+                    static_cast<uint32_t>(PrefetchPostWhileMilestone::RETIRE_INFLIGHT_ENTER));
                 const uint32_t idx = inflight_head;
 
 #if ENABLE_PREFETCH_DPRINTS
@@ -789,14 +925,22 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
                     cmd_ptr);
 #endif
 
+                prefetch_debug_record_retire_start(inflight[idx].trid, inflight_count);
+                prefetch_debug_snapshot_retire_tr_ack();
+                prefetch_debug_post_while_milestone(
+                    static_cast<uint32_t>(PrefetchPostWhileMilestone::RETIRE_TR_ACK_SNAPSHOT));
                 // DPRINT << "fetch_q_get_cmds: RETIRE_START -> NOC_ASYNC_READ_BARRIER_WITH_TRID trid=" <<
                 // inflight[idx].trid << ENDL();
+                prefetch_debug_record_retire_barrier_enter(inflight[idx].trid, inflight_count);
                 noc_async_read_barrier();
+                prefetch_debug_record_retire_barrier_returned();
 
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
                 // On Quasar, NoC writes land in TL1 but don't invalidate the DM core's L1 D$/L2
                 // cache. Discard (CDISCARD, not CFLUSH) every line in the committed range so
                 // subsequent CPU reads fetch fresh data from TL1 rather than stale cached zeros.
+                prefetch_debug_post_while_milestone(
+                    static_cast<uint32_t>(PrefetchPostWhileMilestone::CACHE_INVALIDATE_START));
                 {
                     uintptr_t inv_addr = inflight[idx].read_start & ~uintptr_t(63);
                     const uintptr_t inv_end = inflight[idx].read_start + inflight[idx].reserved_size;
@@ -805,6 +949,8 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
                         invalidate_l2_cache_line(inv_addr);
                     }
                 }
+                prefetch_debug_post_while_milestone(
+                    static_cast<uint32_t>(PrefetchPostWhileMilestone::CACHE_INVALIDATE_DONE));
 #endif
 
 #if ENABLE_PREFETCH_DPRINTS
@@ -822,6 +968,9 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
 
                 inflight_head = (inflight_head + 1U) & INFLIGHT_MASK;
                 --inflight_count;
+
+                prefetch_debug_inc(PrefetchDebugCounter::RETIRE_DONE);
+                prefetch_debug_post_while_milestone(static_cast<uint32_t>(PrefetchPostWhileMilestone::RETIRE_DONE));
 
 #if ENABLE_PREFETCH_DPRINTS
                 DPRINT << "fetch_q_get_cmds: RETIRE_DONE fence=" << fence << " inflight_count=" << inflight_count
@@ -842,32 +991,45 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
                     DPRINT << "fetch_q_get_cmds: RETIRE_DONE -> STALLED (stall-after read)" << ENDL();
                     DEVICE_PRINT("fetch_q_get_cmds: RETIRE_DONE -> STALLED (stall-after read)\n");
 #endif
+                    prefetch_debug_post_while_milestone(
+                        static_cast<uint32_t>(PrefetchPostWhileMilestone::RETIRE_STALL_RETURN));
+                    prefetch_debug_record_fetchq_return(inflight_count, cmd_ptr, fence);
                     return;
                 }
 
                 // We just advanced the committed fence (made commands available). Restart the loop so we can
                 // opportunistically top up the in-flight window using the unified issue logic, without duplicating a
                 // separate "re-check" issue path.
+                prefetch_debug_post_while_milestone(
+                    static_cast<uint32_t>(PrefetchPostWhileMilestone::RETIRE_LOOP_CONTINUE));
                 continue;
             } else {
                 // Nothing to fetch, nothing pending, nothing available, stall on host
-                DPRINT << "prefetch_q_rd_ptr=" << HEX() << (uintptr_t)prefetch_q_rd_ptr << " val=" << *prefetch_q_rd_ptr
-                       << ENDL();
+                prefetch_debug_post_while_milestone(static_cast<uint32_t>(PrefetchPostWhileMilestone::HQW_ENTER));
+                DPRINT << "prefetch_q_rd_ptr=" << HEX() << (uintptr_t)prefetch_q_rd_ptr
+                       << " val=" << fetchq_poll_load(prefetch_q_rd_ptr) << ENDL();
                 WAYPOINT("HQW");
                 uint32_t heartbeat = 0U;
-                while ((fetch_size = *prefetch_q_rd_ptr) == 0U) {
+                uint32_t prefetch_q_entry = fetchq_poll_load(prefetch_q_rd_ptr);
+                prefetch_debug_record_fetchq_poll(prefetch_q_entry);
+                while (prefetch_q_entry == 0U) {
+                    prefetch_debug_inc(PrefetchDebugCounter::HQW_SPINS);
                     DPRINT << "prefetch_q_rd_ptr=" << HEX() << (uintptr_t)prefetch_q_rd_ptr
-                           << " val=" << *prefetch_q_rd_ptr << ENDL();
-                    invalidate_l1_cache();
+                           << " val=" << prefetch_q_entry << ENDL();
                     IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
+                    prefetch_q_entry = fetchq_poll_load(prefetch_q_rd_ptr);
+                    prefetch_debug_record_fetchq_poll(prefetch_q_entry);
                 }
-                DPRINT << "fetch_size=" << fetch_size << ENDL();
+                DPRINT << "fetch_q_entry=" << prefetch_q_entry << ENDL();
                 WAYPOINT("HQD");
                 // Host has work now; restart without recursion.
                 continue;
             }
         }
 
+        prefetch_debug_record_fetchq_return_path(cmd_ready, cmd_ready_reeval);
+        prefetch_debug_post_while_milestone(static_cast<uint32_t>(PrefetchPostWhileMilestone::FETCHQ_RETURN));
+        prefetch_debug_record_fetchq_return(inflight_count, cmd_ptr, fence);
         return;
     }
 }
@@ -879,6 +1041,7 @@ uint32_t process_debug_cmd(uintptr_t cmd_ptr) {
 
 template <bool cmddat_wrap_enable, typename RelayInlineState>
 static uint32_t process_relay_inline_cmd(uintptr_t cmd_ptr, uint32_t& local_downstream_data_ptr) {
+    prefetch_debug_inc(PrefetchDebugCounter::RELAY_INLINE_ENTER);
     volatile CQPrefetchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQPrefetchCmd>(cmd_ptr);
     uint32_t length = cmd->relay_inline.length;
     uintptr_t data_ptr = cmd_ptr + sizeof(CQPrefetchCmd);
@@ -912,6 +1075,7 @@ static uint32_t process_relay_inline_cmd(uintptr_t cmd_ptr, uint32_t& local_down
 
     local_downstream_data_ptr = round_up_pow2(local_downstream_data_ptr, RelayInlineState::downstream_page_size);
     noc_async_writes_flushed();
+    prefetch_debug_inc(PrefetchDebugCounter::RELAY_WRITE_DONE);
     RelayInlineState::cb_writer.release_pages(npages, local_downstream_data_ptr);
     return cmd->relay_inline.stride;
 }
@@ -991,12 +1155,16 @@ static uint32_t write_pages_to_dispatcher(
         DispatchRelayInlineState::cb_writer.acquire_pages(npages);
     }
 
+#if defined(FABRIC_RELAY) || !defined(ARCH_QUASAR)
     uint64_t noc_addr;
+#endif
     if (downstream_data_ptr == downstream_cb_end) {
         downstream_data_ptr = downstream_cb_base;
     } else if (downstream_data_ptr + amt_to_write > downstream_cb_end) {  // wrap
         uint32_t last_chunk_size = downstream_cb_end - downstream_data_ptr;
+#if defined(FABRIC_RELAY) || !defined(ARCH_QUASAR)
         noc_addr = get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr);
+#endif
 #if defined(FABRIC_RELAY)
         noc_async_write(scratch_write_addr, noc_addr, last_chunk_size);
 #elif defined(ARCH_QUASAR)
@@ -1019,7 +1187,9 @@ static uint32_t write_pages_to_dispatcher(
         scratch_write_addr += last_chunk_size;
         amt_to_write -= last_chunk_size;
     }
+#if defined(FABRIC_RELAY) || !defined(ARCH_QUASAR)
     noc_addr = get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr);
+#endif
 
 #if defined(FABRIC_RELAY)
     noc_async_write(scratch_write_addr, noc_addr, amt_to_write);
@@ -2176,6 +2346,8 @@ bool process_cmd(
     volatile CQPrefetchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQPrefetchCmd>(cmd_ptr);
     bool done = false;
 
+    prefetch_debug_inc(PrefetchDebugCounter::PROCESS_CMD_ENTER);
+
     DPRINT << "process_cmd: cmd_id=" << (uint32_t)cmd->base.cmd_id << " cmd_ptr=" << cmd_ptr << " exec_buf=" << exec_buf
            << ENDL();
     switch (cmd->base.cmd_id) {
@@ -2922,6 +3094,7 @@ void kernel_main_hd() {
     // DPRINT << "prefetch: entered main dispatch loop" << ENDL();
 
     while (!done) {
+        prefetch_debug_inc(PrefetchDebugCounter::MAIN_HD_LOOP);
         DeviceZoneScopedN("CQ-PREFETCH");
         constexpr uint32_t preamble_size = 0;
         fetch_q_get_cmds<preamble_size>(fence, cmd_ptr, pcie_read_ptr);
@@ -2932,9 +3105,11 @@ void kernel_main_hd() {
                << ENDL();
 
         volatile CQPrefetchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQPrefetchCmd>(cmd_ptr);
+        const uint32_t cmd_id = cmd->base.cmd_id;
 
         uint32_t stride;
         done = process_cmd<false, false>(cmd_ptr, downstream_data_ptr, stride, l1_cache, exec_buf_state);
+        prefetch_debug_record_process_cmd(cmd_id, stride);
         DPRINT << "hd:st=" << stride << " ncp=" << (cmd_ptr + stride) << ENDL();
         cmd_ptr += stride;
     }
@@ -2942,6 +3117,7 @@ void kernel_main_hd() {
 
 void kernel_main() {
     set_l1_data_cache<true>();
+    prefetch_debug_init();
 #if defined(FABRIC_RELAY)
     DPRINT << "prefetcher_" << is_h_variant << is_d_variant << ": start (fabric relay. 2d = " << (uint32_t)is_2d_fabric
            << ")" << ENDL();

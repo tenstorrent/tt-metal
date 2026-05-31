@@ -113,7 +113,7 @@ extern "C" uint32_t _start1() {
     configure_csr();
     uint32_t hartid = internal_::get_hw_thread_idx();
     DPRINT << "hartid: " << hartid << ENDL();
-    DEVICE_PRINT("hartid: {}\n", hartid);
+    // DEVICE_PRINT("hartid: {}\n", hartid);
     volatile tt_l1_ptr uint8_t* const trisc_run = &((tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE + MEM_L1_UNCACHED_BASE))
                                                        ->subordinate_sync.map[hartid];  // first entry is for NCRISC
     WAYPOINT("I");
@@ -133,7 +133,7 @@ extern "C" uint32_t _start1() {
     setup_isr_csrs();
     DeviceProfilerInit();
     DPRINT << "TRISC-FW: initialized" << ENDL();
-    DEVICE_PRINT("TRISC-FW: initialized\n");
+    // DEVICE_PRINT("TRISC-FW: initialized\n");
     while (1) {
         WAYPOINT("W");
         while (*trisc_run != RUN_SYNC_MSG_GO) {
@@ -204,14 +204,14 @@ extern "C" uint32_t _start1() {
         auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
         record_stack_usage(stack_free);
         WAYPOINT("D");
-        DEVICE_PRINT_KERNEL_FINISHED();
+        // DEVICE_PRINT_KERNEL_FINISHED();
 
         // Signal completion
         DPRINT << "SIGNALING COMPLETION " << HEX() << (uint32_t)*trisc_run << DEC() << ENDL();
-        DEVICE_PRINT("SIGNALING COMPLETION {:x}\n", (uint32_t)*trisc_run);
+        // DEVICE_PRINT("SIGNALING COMPLETION {:x}\n", (uint32_t)*trisc_run);
         tensix_sync();
         *trisc_run = RUN_SYNC_MSG_DONE;
         DPRINT << "COMPLETION SIGNED OFF" << HEX() << (uint32_t)*trisc_run << DEC() << ENDL();
-        DEVICE_PRINT("COMPLETION SIGNED OFF {:x}\n", (uint32_t)*trisc_run);
+        // DEVICE_PRINT("COMPLETION SIGNED OFF {:x}\n", (uint32_t)*trisc_run);
     }
 }

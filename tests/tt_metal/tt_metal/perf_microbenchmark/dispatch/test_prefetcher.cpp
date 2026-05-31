@@ -5,8 +5,14 @@
 #include "gtest/gtest.h"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/experimental/host_api.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_params.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt_metal_profiler.hpp>
+#include <llrt.hpp>
+#include <unordered_set>
 
 #include "tests/tt_metal/tt_metal/common/mesh_dispatch_fixture.hpp"
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
@@ -23,13 +29,18 @@
 
 #include <umd/device/pcie/tlb_window.hpp>
 
+#include <algorithm>
+#include <array>
+#include <atomic>
 #include <chrono>
+#include <memory>
 #include <functional>
 #include <cerrno>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <span>
+#include <thread>
 #include <vector>
 
 /*
@@ -67,6 +78,9 @@ namespace tt::tt_metal::tt_dispatch_tests::prefetcher_tests {
 
 constexpr uint32_t DEFAULT_ITERATIONS = 5;
 constexpr uint32_t DEFAULT_ITERATIONS_SMOKE_RANDOM = 1000;
+// HostSmokeTest in simulation: 7 host-write commands per outer iteration (multiplier=1 only),
+// HOST_SMOKE_SIM_ITERATIONS passes → 3 * 7 = 21 host writes (hardware keeps 5 * 14 = 70).
+constexpr uint32_t HOST_SMOKE_SIM_ITERATIONS = 3;
 constexpr uint32_t DEVICE_DATA_SIZE = 768 * 1024;
 constexpr uint32_t DEVICE_DATA_SIZE_LARGE = 20 * 1024 * 1024;
 constexpr uint32_t DRAM_PAGE_SIZE_DEFAULT = 1024;
@@ -1279,7 +1293,8 @@ public:
     // This needed to be separate since it executes differently than others
     // (we skip distributed::Finish)
     void run_host_smoke_test() {
-        const uint32_t num_iterations = get_num_iterations();
+        const bool simulation = tt::tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled();
+        const uint32_t num_iterations = simulation ? HOST_SMOKE_SIM_ITERATIONS : get_num_iterations();
         const uint32_t dram_data_size_words = get_dram_data_size_words();
 
         // Setup target worker cores
@@ -1311,7 +1326,8 @@ public:
             PrefetcherHostTextFixture::pad_host_data(device_data);
         };
 
-        for (uint32_t multiplier = 1; multiplier < 3; multiplier++) {
+        const uint32_t multiplier_end = simulation ? 2U : 3U;
+        for (uint32_t multiplier = 1; multiplier < multiplier_end; multiplier++) {
             helper.add_host_write(multiplier * 32, add_host_write_func);
             helper.add_host_write(multiplier * 36, add_host_write_func);
             helper.add_host_write(multiplier * 1024, add_host_write_func);
@@ -2577,14 +2593,949 @@ class PrefetcherThroughputTestFixture : public BasePrefetcherTestFixture {};
 static constexpr uint32_t kSdQuasarIssueBase = 0x2000000u;
 static constexpr uint32_t kSdQuasarCompletionBase = kSdQuasarIssueBase + Common::SD_HUGEPAGE_ISSUE_BUFFER_SIZE;
 
+namespace {
+
+constexpr const char* SD_PREFETCH_KERNEL = "sd_cq_prefetch";
+constexpr const char* SD_DISPATCH_KERNEL = "sd_cq_dispatch";
+
+namespace metal2 = tt::tt_metal::experimental::metal2_host_api;
+
+metal2::KernelSpec::CompilerOptions::Defines map_to_compiler_defines(
+    const std::map<std::string, std::string>& defines) {
+    metal2::KernelSpec::CompilerOptions::Defines result;
+    result.reserve(defines.size());
+    for (const auto& [key, value] : defines) {
+        result.emplace_back(key, value);
+    }
+    return result;
+}
+
+metal2::DataMovementConfiguration make_sd_dm_config(tt::ARCH arch) {
+    if (arch == tt::ARCH::QUASAR) {
+        return metal2::DataMovementConfiguration{
+            .gen2_data_movement_config = metal2::DataMovementConfiguration::Gen2DataMovementConfig{},
+        };
+    }
+    return metal2::DataMovementConfiguration{
+        .gen1_data_movement_config =
+            metal2::DataMovementConfiguration::Gen1DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt_metal::NOC::NOC_0,
+            },
+    };
+}
+
+struct SdSemaphoreLayout {
+    std::vector<metal2::SemaphoreSpec> specs;
+    uint32_t credit_sem_id = 0;
+    uint32_t produced_sem_id = 0;
+    uint32_t pf_sync_sem_id = 0;
+    uint32_t di_sync_sem_id = 0;
+    CoreCoord credit_core{};
+    uint32_t credit_initial_value = 0;
+};
+
+SdSemaphoreLayout make_sd_semaphore_layout(
+    tt::ARCH arch,
+    const CoreCoord& pref_logical,
+    const CoreCoord& disp_logical,
+    bool fd_kernels_on_same_core,
+    uint32_t dispatch_buffer_pages) {
+    // Quasar cannot take a non-zero SemaphoreSpec initial_value; credits are primed via host L1 write
+    // after ConfigureDeviceWithProgram (see host_prime_quasar_sd_credit_semaphore).
+    const bool is_quasar = (arch == tt::ARCH::QUASAR);
+    const auto spec_initial_value = [&](uint32_t value) { return is_quasar ? 0u : value; };
+
+    SdSemaphoreLayout layout;
+    auto make_sem = [&](const std::string& name, const CoreCoord& node, uint32_t initial_value) {
+        return metal2::SemaphoreSpec{
+            .unique_id = name,
+            .target_nodes = metal2::NodeCoord{node},
+            .initial_value = spec_initial_value(initial_value),
+        };
+    };
+
+    if (fd_kernels_on_same_core) {
+        layout.specs = {
+            make_sem("pf_sync", disp_logical, 0),
+            make_sem("di_sync", disp_logical, 0),
+            make_sem("credit", disp_logical, dispatch_buffer_pages),
+            make_sem("produced", disp_logical, 0),
+        };
+        layout.pf_sync_sem_id = 0;
+        layout.di_sync_sem_id = 1;
+        layout.credit_sem_id = 2;
+        layout.produced_sem_id = 3;
+        layout.credit_core = disp_logical;
+    } else {
+        layout.specs = {
+            make_sem("pf_sync", pref_logical, 0),
+            make_sem("di_sync", disp_logical, 0),
+            make_sem("pf_cb", pref_logical, dispatch_buffer_pages),
+            make_sem("di_cb", disp_logical, 0),
+        };
+        layout.pf_sync_sem_id = 0;
+        layout.di_sync_sem_id = 0;
+        layout.credit_sem_id = 1;
+        layout.produced_sem_id = 1;
+        layout.credit_core = pref_logical;
+        TT_FATAL(
+            layout.pf_sync_sem_id == layout.di_sync_sem_id,
+            "prefetch_sync_sem slot mismatch ({} vs {})",
+            layout.pf_sync_sem_id,
+            layout.di_sync_sem_id);
+        TT_FATAL(
+            layout.credit_sem_id == layout.produced_sem_id,
+            "dispatch_cb sem slot mismatch ({} vs {})",
+            layout.credit_sem_id,
+            layout.produced_sem_id);
+    }
+    layout.credit_initial_value = dispatch_buffer_pages;
+    return layout;
+}
+
+// Quasar HW only supports zeroed semaphore init via ProgramSpec; post the dispatch CB credit count from the host
+// after init_semaphores() and before the GO mailbox (mirrors non-zero CreateSemaphore on Gen1).
+void host_prime_quasar_sd_credit_semaphore(
+    tt_metal::distributed::MeshDevice::IDevice* device, const Program& program, const SdSemaphoreLayout& sem_layout) {
+    if (device->arch() != tt::ARCH::QUASAR || sem_layout.credit_initial_value == 0) {
+        return;
+    }
+
+    const auto& hal = tt_metal::MetalContext::instance().hal();
+    const uint32_t worker_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+    const uint64_t sem_base = hal.get_dev_noc_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG) +
+                              program.impl().get_program_config(worker_index).sem_offset;
+    const uint32_t sem_l1_addr = sem_base + sem_layout.credit_sem_id * hal.get_alignment(tt_metal::HalMemType::L1);
+    const CoreCoord phys_core = device->worker_core_from_logical_core(sem_layout.credit_core);
+    const std::vector<uint32_t> value{sem_layout.credit_initial_value};
+    auto& cluster = tt_metal::MetalContext::instance().get_cluster();
+    const tt_cxy_pair credit_cxy(device->id(), phys_core);
+    cluster.write_core(device->id(), phys_core, value, sem_l1_addr);
+
+    uint32_t readback = 0;
+    cluster.read_core(&readback, sizeof(readback), credit_cxy, sem_l1_addr);
+    log_info(
+        tt::LogTest,
+        "Quasar credit sem prime: sem_id={} l1_addr={:#x} core={} wrote={} readback={}",
+        sem_layout.credit_sem_id,
+        sem_l1_addr,
+        phys_core.str(),
+        sem_layout.credit_initial_value,
+        readback);
+}
+
+// HostSmokeTest (and other host-writeback SD tests) pass wait_for_host_writes=true. FD polls the
+// completion queue manager for that; SD kernels still run synchronously but nothing advances the
+// device completion-queue read pointer while dispatch is writing. Mirror a host consumer by
+// copying the device write pointer to the read pointer for the duration of the kernel run.
+class SdCompletionQueueDrain {
+public:
+    SdCompletionQueueDrain(tt_metal::distributed::MeshDevice::IDevice* device, const CoreCoord& phys_disp) :
+        cxy_(device->id(), phys_disp) {
+        const auto& memmap = tt_metal::MetalContext::instance().dispatch_mem_map(CoreType::WORKER);
+        completion_q_wr_l1_ = memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
+        completion_q_rd_l1_ = memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
+        drain_thread_ = std::thread([this]() { drain_loop(); });
+    }
+
+    ~SdCompletionQueueDrain() {
+        stop_.store(true);
+        if (drain_thread_.joinable()) {
+            drain_thread_.join();
+        }
+    }
+
+    SdCompletionQueueDrain(const SdCompletionQueueDrain&) = delete;
+    SdCompletionQueueDrain& operator=(const SdCompletionQueueDrain&) = delete;
+
+private:
+    void drain_loop() {
+        auto& cluster = tt_metal::MetalContext::instance().get_cluster();
+        const auto poll_interval = tt::tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled()
+                                       ? std::chrono::milliseconds(5)
+                                       : std::chrono::milliseconds(1);
+        while (!stop_.load(std::memory_order_relaxed)) {
+            uint32_t wr_ptr_and_toggle = 0;
+            cluster.read_core(&wr_ptr_and_toggle, sizeof(wr_ptr_and_toggle), cxy_, completion_q_wr_l1_);
+            cluster.write_core(&wr_ptr_and_toggle, sizeof(wr_ptr_and_toggle), cxy_, completion_q_rd_l1_);
+            std::this_thread::sleep_for(poll_interval);
+        }
+    }
+
+    tt_cxy_pair cxy_;
+    uint32_t completion_q_wr_l1_{};
+    uint32_t completion_q_rd_l1_{};
+    std::atomic<bool> stop_{false};
+    std::thread drain_thread_;
+};
+
+namespace {
+
+bool sd_hang_probe_enabled() {
+    const char* env = std::getenv("TT_METAL_SD_HANG_PROBE");
+    return env != nullptr && env[0] != '\0' && std::strcmp(env, "0") != 0;
+}
+
+constexpr uint32_t k_quasar_l1_uncached_alias = 0x400000;
+
+uint32_t sd_cached_l1_addr(uint32_t addr) {
+    if (addr >= k_quasar_l1_uncached_alias) {
+        return addr - k_quasar_l1_uncached_alias;
+    }
+    return addr;
+}
+
+// Host NOC reads of the Quasar uncached L1 alias are rejected by watcher sanitize (see
+// sanitize_noc_host.hpp DEBUG_VALID_L1_ADDR). Kernels may use the alias; the host probe may not.
+bool sd_probe_may_read_uncached_l1(bool quasar) {
+    return quasar && !tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled();
+}
+
+void sd_probe_read_u32_cached_uncached(
+    tt::Cluster& cluster,
+    const tt_cxy_pair& cxy,
+    uint32_t addr,
+    bool read_uncached_l1,
+    uint32_t& cached,
+    uint32_t& uncached) {
+    cluster.read_core(&cached, sizeof(cached), cxy, addr);
+    if (read_uncached_l1) {
+        cluster.read_core(&uncached, sizeof(uncached), cxy, addr + k_quasar_l1_uncached_alias);
+    } else {
+        uncached = cached;
+    }
+}
+
+uint32_t sd_sem_l1_addr(const Program& program, uint32_t sem_id) {
+    const auto& hal = tt_metal::MetalContext::instance().hal();
+    const uint32_t worker_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+    const uint64_t sem_base = hal.get_dev_noc_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG) +
+                              program.impl().get_program_config(worker_index).sem_offset;
+    return static_cast<uint32_t>(sem_base + sem_id * hal.get_alignment(tt_metal::HalMemType::L1));
+}
+
+uint32_t sd_fetchq_ring_byte_offset(uint32_t fq_rd_ptr_slot, uint32_t prefetch_q_base, uint32_t prefetch_q_size) {
+    const uint32_t cached = sd_cached_l1_addr(fq_rd_ptr_slot);
+    if (cached >= prefetch_q_base && cached < prefetch_q_base + prefetch_q_size) {
+        return cached - prefetch_q_base;
+    }
+    if (fq_rd_ptr_slot < prefetch_q_size) {
+        return fq_rd_ptr_slot;
+    }
+    return 0;
+}
+
+constexpr uint32_t k_sd_prefetch_debug_num_counters = Common::SD_PREFETCH_DEBUG_NUM_COUNTERS;
+constexpr uint32_t k_sd_prefetch_debug_counters_bytes = Common::SD_PREFETCH_DEBUG_COUNTERS_BYTES;
+
+// Host-side completion-queue drain + kernel wait for SD hang debugging on RTL sim.
+// RTL simulation is not thread-safe for concurrent Cluster::read_core; hang probe reuses
+// SdCompletionQueueDrain's background thread and only samples on the main thread.
+struct SdHangProbeWaitConfig {
+    CoreCoord phys_core;
+    uint32_t prefetch_q_base{};
+    uint32_t prefetch_q_rd_ptr_addr{};
+    uint32_t prefetch_q_pcie_rd_ptr_addr{};
+    uint32_t prefetch_q_size{};
+    uint32_t entry_size{};
+    uint32_t cmddat_q_base{};
+    uint32_t prefetch_debug_counters_l1{};
+    uint32_t dispatch_cb_base{};
+    uint32_t dispatch_progress_l1{};
+    const Program* program{nullptr};
+    SdSemaphoreLayout sem_layout{};
+};
+
+// Periodic host NOC snapshot while SD kernels run. Enabled via TT_METAL_SD_HANG_PROBE=1.
+// Does not require watcher, DEVICE_PRINT, or triage (Quasar emulation).
+void sd_hang_probe(tt::ChipId device_id, const SdHangProbeWaitConfig& cfg) {
+    auto& cluster = tt_metal::MetalContext::instance().get_cluster();
+    const auto& hal = tt_metal::MetalContext::instance().hal();
+    const auto& memmap = tt_metal::MetalContext::instance().dispatch_mem_map(CoreType::WORKER);
+    const tt_cxy_pair cxy(device_id, cfg.phys_core);
+    const bool quasar = hal.get_arch() == tt::ARCH::QUASAR;
+    const bool read_uncached_l1 = sd_probe_may_read_uncached_l1(quasar);
+    auto factory = hal.get_dev_msgs_factory(HalProgrammableCoreType::TENSIX);
+
+    const uint64_t go_addr = hal.get_dev_noc_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
+    auto go_msg = factory.create<dev_msgs::go_msg_t>();
+    cluster.read_core(go_msg.data(), go_msg.size(), cxy, go_addr & ~uint64_t{3});
+    const uint8_t go_signal = go_msg.view().signal();
+
+    const uint32_t mailbox_base = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::MAILBOX);
+    const uint32_t sub_sync_off =
+        factory.offset_of<dev_msgs::mailboxes_t>(dev_msgs::mailboxes_t::Field::subordinate_sync);
+    uint8_t sub_sync[8] = {};
+    cluster.read_core(sub_sync, sizeof(sub_sync), cxy, mailbox_base + sub_sync_off);
+
+    const uint64_t launch_addr = hal.get_dev_noc_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::LAUNCH);
+    auto launch_msg = factory.create<dev_msgs::launch_msg_t>();
+    cluster.read_core(launch_msg.data(), launch_msg.size(), cxy, launch_addr);
+    const uint32_t enables = launch_msg.view().kernel_config().enables();
+
+    const uint32_t n_entries = std::min(4u, cfg.prefetch_q_size / std::max(cfg.entry_size, 1u));
+    uint32_t fq_cached[4] = {};
+    if (n_entries > 0) {
+        cluster.read_core(fq_cached, n_entries * cfg.entry_size, cxy, cfg.prefetch_q_base);
+    }
+    uint32_t fq_rd_ptr = 0;
+    cluster.read_core(&fq_rd_ptr, sizeof(fq_rd_ptr), cxy, cfg.prefetch_q_rd_ptr_addr);
+
+    uint32_t fq_uncached[4] = {};
+    if (n_entries > 0 && read_uncached_l1) {
+        cluster.read_core(
+            fq_uncached, n_entries * cfg.entry_size, cxy, cfg.prefetch_q_base + k_quasar_l1_uncached_alias);
+    } else if (n_entries > 0) {
+        std::memcpy(fq_uncached, fq_cached, sizeof(fq_cached));
+    }
+
+    const uint32_t fq_ring_off =
+        sd_fetchq_ring_byte_offset(fq_rd_ptr, cfg.prefetch_q_base, cfg.prefetch_q_size);
+    const uint32_t fq_slot_addr = cfg.prefetch_q_base + fq_ring_off;
+    uint32_t fq_slot_cached[4] = {};
+    uint32_t fq_slot_uncached[4] = {};
+    if (n_entries > 0 && fq_ring_off + n_entries * cfg.entry_size <= cfg.prefetch_q_size) {
+        cluster.read_core(fq_slot_cached, n_entries * cfg.entry_size, cxy, fq_slot_addr);
+        if (read_uncached_l1) {
+            cluster.read_core(
+                fq_slot_uncached, n_entries * cfg.entry_size, cxy, fq_slot_addr + k_quasar_l1_uncached_alias);
+        } else {
+            std::memcpy(fq_slot_uncached, fq_slot_cached, sizeof(fq_slot_cached));
+        }
+    }
+
+    uint32_t pcie_rd_ptr = 0;
+    if (cfg.prefetch_q_pcie_rd_ptr_addr != 0) {
+        cluster.read_core(&pcie_rd_ptr, sizeof(pcie_rd_ptr), cxy, cfg.prefetch_q_pcie_rd_ptr_addr);
+    }
+
+    uint32_t cmddat_cached = 0;
+    uint32_t cmddat_uncached = 0;
+    if (cfg.cmddat_q_base != 0) {
+        sd_probe_read_u32_cached_uncached(
+            cluster, cxy, cfg.cmddat_q_base, read_uncached_l1, cmddat_cached, cmddat_uncached);
+    }
+
+    uint32_t dcb_cached = 0;
+    uint32_t dcb_uncached = 0;
+    if (cfg.dispatch_cb_base != 0) {
+        sd_probe_read_u32_cached_uncached(
+            cluster, cxy, cfg.dispatch_cb_base, read_uncached_l1, dcb_cached, dcb_uncached);
+    }
+
+    uint32_t sem_pf = 0;
+    uint32_t sem_pf_u = 0;
+    uint32_t sem_di = 0;
+    uint32_t sem_di_u = 0;
+    uint32_t sem_credit = 0;
+    uint32_t sem_credit_u = 0;
+    uint32_t sem_produced = 0;
+    uint32_t sem_produced_u = 0;
+    if (cfg.program != nullptr) {
+        sd_probe_read_u32_cached_uncached(
+            cluster,
+            cxy,
+            sd_sem_l1_addr(*cfg.program, cfg.sem_layout.pf_sync_sem_id),
+            read_uncached_l1,
+            sem_pf,
+            sem_pf_u);
+        sd_probe_read_u32_cached_uncached(
+            cluster,
+            cxy,
+            sd_sem_l1_addr(*cfg.program, cfg.sem_layout.di_sync_sem_id),
+            read_uncached_l1,
+            sem_di,
+            sem_di_u);
+        sd_probe_read_u32_cached_uncached(
+            cluster,
+            cxy,
+            sd_sem_l1_addr(*cfg.program, cfg.sem_layout.credit_sem_id),
+            read_uncached_l1,
+            sem_credit,
+            sem_credit_u);
+        sd_probe_read_u32_cached_uncached(
+            cluster,
+            cxy,
+            sd_sem_l1_addr(*cfg.program, cfg.sem_layout.produced_sem_id),
+            read_uncached_l1,
+            sem_produced,
+            sem_produced_u);
+    }
+
+    const uint32_t cq_wr_l1 = memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
+    const uint32_t cq_rd_l1 = memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
+    uint32_t cq_wr = 0;
+    uint32_t cq_rd = 0;
+    cluster.read_core(&cq_wr, sizeof(cq_wr), cxy, cq_wr_l1);
+    cluster.read_core(&cq_rd, sizeof(cq_rd), cxy, cq_rd_l1);
+
+    uint32_t disp_progress = 0;
+    if (cfg.dispatch_progress_l1 != 0) {
+        cluster.read_core(&disp_progress, sizeof(disp_progress), cxy, cfg.dispatch_progress_l1);
+    }
+
+    uint32_t pf_dbg[k_sd_prefetch_debug_num_counters] = {};
+    if (cfg.prefetch_debug_counters_l1 != 0) {
+        cluster.read_core(pf_dbg, sizeof(pf_dbg), cxy, cfg.prefetch_debug_counters_l1);
+    }
+
+    const char* uncached_note = read_uncached_l1 ? "" : " (uncached L1 host reads skipped: watcher on)";
+    if (read_uncached_l1) {
+        log_info(
+            tt::LogTest,
+            "SD HANG_PROBE core={} GO={:#04x} sub_sync=[{:#04x},{:#04x},{:#04x},{:#04x},{:#04x},{:#04x},{:#04x}] "
+            "enables={:#x} fq_rd_ptr={:#x} fq_cached=[{:#x},{:#x},{:#x},{:#x}] "
+            "fq_uncached=[{:#x},{:#x},{:#x},{:#x}] cq_wr={:#x} cq_rd={:#x}",
+            cfg.phys_core.str(),
+            go_signal,
+            sub_sync[0],
+            sub_sync[1],
+            sub_sync[2],
+            sub_sync[3],
+            sub_sync[4],
+            sub_sync[5],
+            sub_sync[6],
+            enables,
+            fq_rd_ptr,
+            fq_cached[0],
+            fq_cached[1],
+            fq_cached[2],
+            fq_cached[3],
+            fq_uncached[0],
+            fq_uncached[1],
+            fq_uncached[2],
+            fq_uncached[3],
+            cq_wr,
+            cq_rd);
+    } else {
+        log_info(
+            tt::LogTest,
+            "SD HANG_PROBE core={} GO={:#04x} sub_sync=[{:#04x},{:#04x},{:#04x},{:#04x},{:#04x},{:#04x},{:#04x}] "
+            "enables={:#x} fq_rd_ptr={:#x} fq_cached=[{:#x},{:#x},{:#x},{:#x}] cq_wr={:#x} cq_rd={:#x}{}",
+            cfg.phys_core.str(),
+            go_signal,
+            sub_sync[0],
+            sub_sync[1],
+            sub_sync[2],
+            sub_sync[3],
+            sub_sync[4],
+            sub_sync[5],
+            sub_sync[6],
+            enables,
+            fq_rd_ptr,
+            fq_cached[0],
+            fq_cached[1],
+            fq_cached[2],
+            fq_cached[3],
+            cq_wr,
+            cq_rd,
+            uncached_note);
+    }
+    if (read_uncached_l1) {
+        log_info(
+            tt::LogTest,
+            "SD HANG_PROBE pipe core={} pcie_rd={:#x} fq_off={:#x} fq_slot_cached=[{:#x},{:#x},{:#x},{:#x}] "
+            "fq_slot_uncached=[{:#x},{:#x},{:#x},{:#x}] cmddat={:#x}/{:#x} dcb_base={:#x} dcb={:#x}/{:#x} "
+            "sem_pf={}/{} sem_di={}/{} sem_credit={}/{} sem_prod={}/{} disp_prog={:#x}",
+            cfg.phys_core.str(),
+            pcie_rd_ptr,
+            fq_ring_off,
+            fq_slot_cached[0],
+            fq_slot_cached[1],
+            fq_slot_cached[2],
+            fq_slot_cached[3],
+            fq_slot_uncached[0],
+            fq_slot_uncached[1],
+            fq_slot_uncached[2],
+            fq_slot_uncached[3],
+            cmddat_cached,
+            cmddat_uncached,
+            cfg.dispatch_cb_base,
+            dcb_cached,
+            dcb_uncached,
+            sem_pf,
+            sem_pf_u,
+            sem_di,
+            sem_di_u,
+            sem_credit,
+            sem_credit_u,
+            sem_produced,
+            sem_produced_u,
+            disp_progress);
+    } else {
+        log_info(
+            tt::LogTest,
+            "SD HANG_PROBE pipe core={} pcie_rd={:#x} fq_off={:#x} fq_slot=[{:#x},{:#x},{:#x},{:#x}] "
+            "cmddat={:#x} dcb_base={:#x} dcb={:#x} sem_pf={} sem_di={} sem_credit={} sem_prod={} disp_prog={:#x}",
+            cfg.phys_core.str(),
+            pcie_rd_ptr,
+            fq_ring_off,
+            fq_slot_cached[0],
+            fq_slot_cached[1],
+            fq_slot_cached[2],
+            fq_slot_cached[3],
+            cmddat_cached,
+            cfg.dispatch_cb_base,
+            dcb_cached,
+            sem_pf,
+            sem_di,
+            sem_credit,
+            sem_produced,
+            disp_progress);
+    }
+    if (cfg.prefetch_debug_counters_l1 != 0) {
+        const uint32_t last_cmd_id = pf_dbg[15] >> 16U;
+        const uint32_t last_cmd_stride = pf_dbg[15] & 0xffffU;
+        log_info(
+            tt::LogTest,
+            "SD HANG_PROBE pf_dbg core={} pf_dbg_l1={:#x} issue_ok={} issue_failed={} pcie_early_exit={} "
+            "pcie_early_arg0={:#x} pcie_early_arg1={:#x} last_fetchq_entry={:#x} last_fetch_size={} hqw_spins={} "
+            "retire_start={} retire_done={} fetchq_return={} inflight_at_return={} cmd_ptr_at_return={:#x} "
+            "fence_at_return={:#x} process_cmd={} last_cmd_id={} last_cmd_stride={} process_cmd_enter={} "
+            "relay_inline_enter={} cb_acquire_enter={} cb_acquire_done={} cb_acquire_spins={} relay_write_done={} "
+            "first_fetchq_poll={:#x} fetchq_poll_count={} last_fetchq_poll={:#x} pcie_issue_enter={} main_hd_loop={}",
+            cfg.phys_core.str(),
+            cfg.prefetch_debug_counters_l1,
+            pf_dbg[0],
+            pf_dbg[1],
+            pf_dbg[2],
+            pf_dbg[3],
+            pf_dbg[4],
+            pf_dbg[5],
+            pf_dbg[6],
+            pf_dbg[7],
+            pf_dbg[8],
+            pf_dbg[9],
+            pf_dbg[10],
+            pf_dbg[11],
+            pf_dbg[12],
+            pf_dbg[13],
+            pf_dbg[14],
+            last_cmd_id,
+            last_cmd_stride,
+            pf_dbg[16],
+            pf_dbg[17],
+            pf_dbg[18],
+            pf_dbg[19],
+            pf_dbg[20],
+            pf_dbg[21],
+            pf_dbg[22],
+            pf_dbg[23],
+            pf_dbg[24],
+            pf_dbg[25],
+            pf_dbg[26]);
+        log_info(
+            tt::LogTest,
+            "SD HANG_PROBE pf_pcie core={} issue_loop_enter={} read_from_pcie_enter={} past_cmddat={} "
+            "noc_xy_ready={} pcie_issue_enter={} pcie_read_issued={} pcie_early_exit={}",
+            cfg.phys_core.str(),
+            pf_dbg[27],
+            pf_dbg[28],
+            pf_dbg[29],
+            pf_dbg[30],
+            pf_dbg[25],
+            pf_dbg[31],
+            pf_dbg[32]);
+        log_info(
+            tt::LogTest,
+            "SD HANG_PROBE pf_fetchq core={} fetchq_get_cmds_iter={} last_decoded_fetch_size={} "
+            "issue_loop_done={} post_stall_refresh_written={} post_stall_refresh={} cmd_ready_at_issue_done={} "
+            "cmd_ready_reeval={} has_pending_stall_after={} cmd_ptr_at_issue_done={:#x} fence_at_issue_done={:#x} "
+            "inflight_at_issue_done={} retire_pre_enter={} retire_path_written={} retire_path_enter={} "
+            "retire_inflight_enter={} fetchq_return_written={} fetchq_return_enter={}",
+            cfg.phys_core.str(),
+            pf_dbg[34],
+            pf_dbg[33],
+            pf_dbg[45],
+            pf_dbg[65],
+            pf_dbg[46],
+            pf_dbg[49],
+            pf_dbg[54],
+            pf_dbg[55],
+            pf_dbg[50],
+            pf_dbg[51],
+            pf_dbg[52],
+            pf_dbg[56],
+            pf_dbg[57],
+            pf_dbg[47],
+            pf_dbg[48],
+            pf_dbg[58],
+            pf_dbg[53]);
+        log_info(
+            tt::LogTest,
+            "SD HANG_PROBE pf_post_issue core={} post_issue_loop_exit={} post_issue_stall_reeval={} "
+            "post_issue_cmd_ready_reeval={} post_issue_record_enter={}",
+            cfg.phys_core.str(),
+            pf_dbg[61],
+            pf_dbg[62],
+            pf_dbg[63],
+            pf_dbg[64]);
+        const uint32_t pre_issue_last_milestone = pf_dbg[78];
+        const char* pre_issue_milestone_name =
+            Common::sd_prefetch_pre_issue_milestone_name(pre_issue_last_milestone);
+        log_info(
+            tt::LogTest,
+            "SD HANG_PROBE pf_pre_issue core={} last_milestone={} last_milestone_name={} "
+            "milestone_step_count={} issue_loop_enter={} read_from_pcie_enter={}",
+            cfg.phys_core.str(),
+            pre_issue_last_milestone,
+            pre_issue_milestone_name,
+            pf_dbg[79],
+            pf_dbg[27],
+            pf_dbg[28]);
+        const bool flush_enter_mirror =
+            pf_dbg[2] == Common::SD_PREFETCH_DEBUG_FLUSH_ENTER_MIRROR_CODE;
+        const uint32_t flush_mirror_addr = pf_dbg[3];
+        const uint32_t flush_mirror_slot = pf_dbg[4];
+        const uint32_t flush_enter_count = pf_dbg[83];
+        const uint32_t flush_return_count = pf_dbg[84];
+        const bool flush_wedged = flush_enter_count > flush_return_count;
+        log_info(
+            tt::LogTest,
+            "SD HANG_PROBE pf_flush core={} flush_enter_mirror={} mirror_addr={:#x} mirror_slot={} "
+            "flush_target_addr={:#x} flush_line_addr={:#x} flush_target_slot={} "
+            "flush_enter_count={} flush_return_count={} flush_wedged={} "
+            "flush_mirror_matches_high_slots={}",
+            cfg.phys_core.str(),
+            flush_enter_mirror,
+            flush_mirror_addr,
+            flush_mirror_slot,
+            pf_dbg[80],
+            pf_dbg[81],
+            pf_dbg[82],
+            flush_enter_count,
+            flush_return_count,
+            flush_wedged,
+            flush_enter_mirror && pf_dbg[80] == flush_mirror_addr && pf_dbg[82] == flush_mirror_slot);
+        const uint32_t low_mirror_code = pf_dbg[2];
+        const uint32_t low_mirror_arg0 = pf_dbg[3];
+        const uint32_t low_mirror_arg1 = pf_dbg[4];
+        const bool issue_ok_inflight_mirror =
+            low_mirror_code == Common::SD_PREFETCH_DEBUG_ISSUE_OK_INFLIGHT_MIRROR_CODE;
+        const uint32_t issue_ok_mirror_inflight = low_mirror_arg0;
+        const uint32_t issue_ok_mirror_ordinal = low_mirror_arg1;
+        log_info(
+            tt::LogTest,
+            "SD HANG_PROBE pf_issue_ok core={} issue_ok_count={} inflight_at_each_issue_ok={} "
+            "issue_ok_inflight_mirror={} mirror_inflight={} mirror_issue_ok_ordinal={} "
+            "issue_ok_matches_mirror_ordinal={} inflight_at_each_issue_ok_matches_mirror={}",
+            cfg.phys_core.str(),
+            pf_dbg[0],
+            pf_dbg[66],
+            issue_ok_inflight_mirror,
+            issue_ok_mirror_inflight,
+            issue_ok_mirror_ordinal,
+            pf_dbg[0] == issue_ok_mirror_ordinal,
+            pf_dbg[66] == issue_ok_mirror_inflight);
+        const bool while_cond_mirror =
+            low_mirror_code == Common::SD_PREFETCH_DEBUG_ISSUE_WHILE_COND_MIRROR_CODE;
+        const bool barrier_enter_mirror =
+            low_mirror_code == Common::SD_PREFETCH_DEBUG_RETIRE_BARRIER_ENTER_MIRROR_CODE;
+        const uint32_t while_cond_waypoint = low_mirror_arg0 >> 24U;
+        const uint32_t while_cond_would_continue = (low_mirror_arg0 >> 17U) & 1U;
+        const uint32_t while_cond_stall = (low_mirror_arg0 >> 16U) & 1U;
+        const uint32_t while_cond_inflight = low_mirror_arg0 & 0xFFFFU;
+        const uint32_t while_cond_fetch_size = low_mirror_arg1;
+        log_info(
+            tt::LogTest,
+            "SD HANG_PROBE pf_while_cond core={} while_cond_mirror={} waypoint={} inflight={} fetch_size={} "
+            "stall_flag={} would_continue={} cond_check_count={} last_would_continue={} last_inflight={} "
+            "cond_last_matches_mirror={}",
+            cfg.phys_core.str(),
+            while_cond_mirror,
+            while_cond_waypoint,
+            while_cond_inflight,
+            while_cond_fetch_size,
+            while_cond_stall,
+            while_cond_would_continue,
+            pf_dbg[67],
+            pf_dbg[68],
+            pf_dbg[69],
+            pf_dbg[69] == while_cond_inflight && pf_dbg[68] == while_cond_would_continue);
+        const bool while_tail_mirror =
+            low_mirror_code == Common::SD_PREFETCH_DEBUG_ISSUE_WHILE_TAIL_MIRROR_CODE;
+        const uint32_t while_tail_waypoint = low_mirror_arg0 >> 24U;
+        const uint32_t while_tail_stall = (low_mirror_arg0 >> 16U) & 1U;
+        const uint32_t while_tail_inflight = low_mirror_arg0 & 0xFFFFU;
+        const uint32_t while_tail_fetch_size = low_mirror_arg1;
+        const bool while_would_continue = (while_tail_fetch_size != 0U) &&
+            (while_tail_inflight < Common::SD_PREFETCH_MAX_OUTSTANDING_PCIE_READS);
+        log_info(
+            tt::LogTest,
+            "SD HANG_PROBE pf_while_tail core={} while_tail_mirror={} waypoint={} inflight={} fetch_size={} "
+            "stall_flag={} while_would_continue={} inflight_at_each_issue_ok={} while_tail_vs_issue_ok_inflight={}",
+            cfg.phys_core.str(),
+            while_tail_mirror,
+            while_tail_waypoint,
+            while_tail_inflight,
+            while_tail_fetch_size,
+            while_tail_stall,
+            while_would_continue,
+            pf_dbg[66],
+            while_tail_inflight == pf_dbg[66] ? "match" : "mismatch");
+        log_info(
+            tt::LogTest,
+            "SD HANG_PROBE pf_branch core={} low_mirror_code={:#x} low_mirror_arg0={:#x} low_mirror_arg1={:#x} "
+            "issue_while_cond_mirror={} issue_ok_inflight_mirror={} issue_while_tail_mirror={} "
+            "barrier_enter_mirror={} issue_loop_exit_mirror={} stall_refresh_mirror={} "
+            "issue_done_mirror={} flush_enter_mirror={} "
+            "branch_mirror={} fetchq_return_mirror={} retire_mirror={} barrier_enter_written={} "
+            "barrier_returned_written={} retire_pre_barrier={} retire_post_barrier={}",
+            cfg.phys_core.str(),
+            low_mirror_code,
+            low_mirror_arg0,
+            low_mirror_arg1,
+            while_cond_mirror,
+            issue_ok_inflight_mirror,
+            while_tail_mirror,
+            barrier_enter_mirror,
+            low_mirror_code == Common::SD_PREFETCH_DEBUG_ISSUE_LOOP_EXIT_MIRROR_CODE,
+            low_mirror_code == Common::SD_PREFETCH_DEBUG_STALL_REFRESH_MIRROR_CODE,
+            low_mirror_code == Common::SD_PREFETCH_DEBUG_ISSUE_DONE_MIRROR_CODE,
+            flush_enter_mirror,
+            low_mirror_code == Common::SD_PREFETCH_DEBUG_BRANCH_MIRROR_CODE,
+            low_mirror_code == Common::SD_PREFETCH_DEBUG_FETCHQ_RETURN_MIRROR_CODE,
+            low_mirror_code == Common::SD_PREFETCH_DEBUG_RETIRE_MIRROR_CODE,
+            pf_dbg[59],
+            pf_dbg[60],
+            pf_dbg[43],
+            pf_dbg[42]);
+        const bool retire_mirror =
+            pf_dbg[2] == Common::SD_PREFETCH_DEBUG_RETIRE_MIRROR_CODE && pf_dbg[8] > pf_dbg[9];
+        const uint32_t post_while_last_milestone = pf_dbg[76];
+        const char* post_while_milestone_name =
+            Common::sd_prefetch_post_while_milestone_name(post_while_last_milestone);
+        log_info(
+            tt::LogTest,
+            "SD HANG_PROBE pf_post_while core={} last_milestone={} last_milestone_name={} "
+            "milestone_step_count={} issue_while_exited={} last_would_continue={} last_inflight={}",
+            cfg.phys_core.str(),
+            post_while_last_milestone,
+            post_while_milestone_name,
+            pf_dbg[77],
+            pf_dbg[68] == 0U,
+            pf_dbg[68],
+            pf_dbg[69]);
+        const uint32_t barrier_phase = pf_dbg[72];
+        const uint32_t retire_pre_barrier = pf_dbg[43];
+        const uint32_t retire_post_barrier = pf_dbg[42];
+        const bool barrier_hung = barrier_phase == Common::SD_PREFETCH_DEBUG_BARRIER_PHASE_ENTERED ||
+            retire_pre_barrier > retire_post_barrier;
+        const char* hang_site = "before_post_while_epilogue";
+        if (barrier_phase >= Common::SD_PREFETCH_DEBUG_BARRIER_PHASE_RETURNED) {
+            hang_site = "after_line_907";
+        } else if (barrier_phase == Common::SD_PREFETCH_DEBUG_BARRIER_PHASE_ENTERED || barrier_hung) {
+            hang_site = "at_line_907";
+        } else if (post_while_last_milestone >= Common::SD_PREFETCH_POST_WHILE_MILESTONE_RETIRE_PATH_ENTRY) {
+            hang_site = "before_line_907_retire_path";
+        } else if (post_while_last_milestone > 0) {
+            hang_site = "before_line_907_post_while";
+        } else if (flush_wedged) {
+            hang_site = "in_tl1_publish_flush";
+        } else if (pre_issue_last_milestone > 0 && pf_dbg[27] == 0) {
+            hang_site = "before_issue_loop_enter";
+        } else if (pf_dbg[47] > 0 || pf_dbg[48] > 0 || pf_dbg[8] > 0) {
+            hang_site = "before_line_907_retire_path";
+        } else if (pf_dbg[75] > 0 || pf_dbg[74] > 0 || pf_dbg[70] > 0) {
+            hang_site = "before_line_907_post_while";
+        }
+        log_info(
+            tt::LogTest,
+            "SD HANG_PROBE pf_barrier core={} hang_site={} pre_issue_last_milestone={} "
+            "pre_issue_milestone_name={} post_while_last_milestone={} "
+            "post_while_milestone_name={} barrier_phase={} barrier_hung={} "
+            "barrier_trid={} barrier_inflight={} retire_pre_barrier={} retire_post_barrier={} "
+            "post_while_epilogue={} post_issue_epilogue={} retire_branch={} retire_path_enter={} "
+            "retire_inflight_enter={} retire_start={} barrier_enter_mirror={} mirror_trid={} "
+            "mirror_inflight={}",
+            cfg.phys_core.str(),
+            hang_site,
+            pre_issue_last_milestone,
+            pre_issue_milestone_name,
+            post_while_last_milestone,
+            post_while_milestone_name,
+            barrier_phase,
+            barrier_hung,
+            pf_dbg[71],
+            pf_dbg[73],
+            retire_pre_barrier,
+            retire_post_barrier,
+            pf_dbg[70],
+            pf_dbg[74],
+            pf_dbg[75],
+            pf_dbg[47],
+            pf_dbg[48],
+            pf_dbg[8],
+            barrier_enter_mirror,
+            low_mirror_arg0,
+            low_mirror_arg1);
+        log_info(
+            tt::LogTest,
+            "SD HANG_PROBE pf_retire core={} debug_build_id={} expected_build_id={} build_id_match={} "
+            "retire_trid={} retire_inflight={} retire_trid_mirror={} retire_inflight_mirror={} retire_mirror={} "
+            "retire_pre_barrier={} retire_post_barrier={} scmd_tr_ack={:#x} tr_ack_tr2={:#x} tr_ack_tr3={:#x} "
+            "tr_ack_tr4={:#x} tr_ack_tr5={:#x}",
+            cfg.phys_core.str(),
+            pf_dbg[44],
+            Common::SD_PREFETCH_DEBUG_BUILD_ID,
+            pf_dbg[44] == Common::SD_PREFETCH_DEBUG_BUILD_ID,
+            pf_dbg[35],
+            pf_dbg[36],
+            pf_dbg[3],
+            pf_dbg[4],
+            retire_mirror,
+            pf_dbg[43],
+            pf_dbg[42],
+            pf_dbg[37],
+            pf_dbg[38],
+            pf_dbg[39],
+            pf_dbg[40],
+            pf_dbg[41]);
+    }
+}
+
+bool sd_is_core_go_done(tt::ChipId device_id, const CoreCoord& phys_core, int run_state) {
+    const tt_metal::HalProgrammableCoreType dispatch_core_type = llrt::get_core_type(device_id, phys_core);
+    const auto& hal = tt_metal::MetalContext::instance().hal();
+    auto& cluster = tt_metal::MetalContext::instance().get_cluster();
+    const uint64_t go_msg_addr = hal.get_dev_noc_addr(dispatch_core_type, HalL1MemAddrType::GO_MSG);
+    auto core_status = hal.get_dev_msgs_factory(dispatch_core_type).create<dev_msgs::go_msg_t>();
+    cluster.read_core(
+        core_status.data(),
+        core_status.size(),
+        {static_cast<size_t>(device_id), phys_core},
+        go_msg_addr & ~uint64_t{3});
+    const uint8_t run = core_status.view().signal();
+    return run == dev_msgs::RUN_MSG_DONE;
+}
+
+void sd_wait_until_cores_done_with_hang_probe(
+    tt::ChipId device_id,
+    std::unordered_set<CoreCoord>& not_done_cores,
+    const SdHangProbeWaitConfig& cfg,
+    int run_state) {
+    sd_hang_probe(device_id, cfg);
+
+    auto last_probe = std::chrono::steady_clock::now();
+    const auto probe_interval = std::chrono::seconds(2);
+    while (!not_done_cores.empty()) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now - last_probe >= probe_interval) {
+            sd_hang_probe(device_id, cfg);
+            last_probe = now;
+        }
+
+        for (auto it = not_done_cores.begin(); it != not_done_cores.end();) {
+            if (sd_is_core_go_done(device_id, *it, run_state)) {
+                it = not_done_cores.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        // Yield between polls (matches watcher/DPRINT wait_until_cores_done behavior).
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+}
+
+}  // namespace
+
+// Slow-dispatch launch with a Quasar-specific credit-semaphore prime between configure and GO.
+void launch_sd_prefetch_dispatch_program(
+    tt_metal::distributed::MeshDevice::IDevice* device, Program& program, const SdSemaphoreLayout& sem_layout) {
+    constexpr bool force_slow_dispatch = true;
+    constexpr bool wait_until_cores_done = true;
+
+    tt_metal::detail::CompileProgram(device, program, force_slow_dispatch);
+    program.impl().finalize_dataflow_buffer_configs();
+    if (!program.impl().is_finalized()) {
+        program.impl().finalize_offsets(device);
+    }
+    tt_metal::detail::WriteRuntimeArgsToDevice(device, program, force_slow_dispatch);
+    tt_metal::detail::ConfigureDeviceWithProgram(device, program, force_slow_dispatch);
+    host_prime_quasar_sd_credit_semaphore(device, program, sem_layout);
+
+    const ChipId device_id = device->id();
+    auto& cluster = tt_metal::MetalContext::instance().get_cluster();
+    cluster.dram_barrier(device_id);
+    cluster.l1_barrier(device_id);
+
+    std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.impl().logical_cores();
+    std::unordered_set<CoreCoord> not_done_cores;
+    const auto& hal = tt_metal::MetalContext::instance().hal();
+    for (uint32_t programmable_core_type_index = 0; programmable_core_type_index < logical_cores_used_in_program.size();
+         programmable_core_type_index++) {
+        const CoreType core_type = hal.get_core_type(programmable_core_type_index);
+        const HalProgrammableCoreType programmable_core_type =
+            hal.get_programmable_core_type(programmable_core_type_index);
+        for (const auto& logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
+            auto* kg = program.impl().kernels_on_core(logical_core, programmable_core_type_index);
+            kg->launch_msg.view().kernel_config().host_assigned_id() = program.get_runtime_id();
+
+            const CoreCoord physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
+            not_done_cores.insert(physical_core);
+            tt::llrt::send_reset_go_signal(device_id, physical_core);
+            tt::llrt::write_launch_msg_to_core(
+                device_id,
+                physical_core,
+                kg->launch_msg.view(),
+                kg->go_msg.view(),
+                hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::LAUNCH));
+        }
+    }
+    if (wait_until_cores_done) {
+        if (sd_hang_probe_enabled()) {
+            const auto& memmap = tt_metal::MetalContext::instance().dispatch_mem_map(CoreType::WORKER);
+            const CoreCoord pref_logical = Common::sd_prefetch_core;
+            const CoreCoord disp_logical = Common::dispatch_core(device);
+            const bool fd_kernels_on_same_core = (pref_logical == disp_logical);
+            const uint32_t page_size = Common::SD_PREFETCH_CMDDAT_PAGE_SIZE;
+            const CoreCoord phys_prefetch_core = device->worker_core_from_logical_core(pref_logical);
+            SdHangProbeWaitConfig probe_cfg;
+            probe_cfg.phys_core = phys_prefetch_core;
+            probe_cfg.entry_size = memmap.prefetch_q_entry_size_bytes();
+            probe_cfg.prefetch_q_base = memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
+            probe_cfg.prefetch_q_size = memmap.prefetch_q_size();
+            probe_cfg.prefetch_q_rd_ptr_addr =
+                memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD);
+            probe_cfg.prefetch_q_pcie_rd_ptr_addr =
+                memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_PCIE_RD);
+            probe_cfg.cmddat_q_base = memmap.cmddat_q_base();
+            probe_cfg.prefetch_debug_counters_l1 =
+                Common::sd_prefetch_debug_counters_l1(memmap.cmddat_q_base(), memmap.cmddat_q_size());
+            probe_cfg.dispatch_cb_base = fd_kernels_on_same_core
+                                             ? tt::align(memmap.scratch_db_base() + memmap.scratch_db_size(), page_size)
+                                             : memmap.dispatch_buffer_base();
+            probe_cfg.dispatch_progress_l1 =
+                memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_PROGRESS);
+            probe_cfg.program = &program;
+            probe_cfg.sem_layout = sem_layout;
+            log_info(
+                tt::LogTest,
+                "SD HANG_PROBE enabled (TT_METAL_SD_HANG_PROBE), sampling core {} every 2s on main thread",
+                phys_prefetch_core.str());
+            sd_wait_until_cores_done_with_hang_probe(device_id, not_done_cores, probe_cfg, dev_msgs::RUN_MSG_GO);
+        } else {
+            llrt::internal_::wait_until_cores_done(device_id, dev_msgs::RUN_MSG_GO, not_done_cores);
+        }
+        tt_metal::detail::ReadDeviceProfilerResults(device);
+    }
+}
+
+}  // namespace
+
 template <typename FDFixture>
 class SDPrefetchTestBase : public FDFixture {
+protected:
+    std::shared_ptr<distributed::MeshDevice> sd_mesh_device_;
+
 public:
     void SetUp() override {
         if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
             GTEST_SKIP() << "Requires TT_METAL_SLOW_DISPATCH_MODE";
         }
-        this->device_ = tt_metal::CreateDevice(0);
+        sd_mesh_device_ = distributed::MeshDevice::create_unit_mesh(0);
+        this->device_ = sd_mesh_device_->get_devices()[0];
 
         Common::DispatchPayloadGenerator::Config pgcfg;
         pgcfg.use_coherent_data = this->cfg_.use_coherent_data;
@@ -2613,10 +3564,11 @@ public:
     }
 
     void TearDown() override {
-        if (this->device_) {
-            tt_metal::CloseDevice(this->device_);
-            this->device_ = nullptr;
+        if (sd_mesh_device_) {
+            sd_mesh_device_->close();
+            sd_mesh_device_.reset();
         }
+        this->device_ = nullptr;
     }
 
     // Called just before device_data.validate() — subclasses can override to refresh
@@ -2636,7 +3588,7 @@ public:
         size_t /*num_cores_to_log*/,
         uint32_t num_iterations,
         bool /*wait_for_completion*/ = true,
-        bool /*wait_for_host_writes*/ = false) override {
+        bool wait_for_host_writes = false) override {
         const auto& memmap = tt_metal::MetalContext::instance().dispatch_mem_map(CoreType::WORKER);
         const uint32_t entry_size = memmap.prefetch_q_entry_size_bytes();
         TT_FATAL(entry_size == 4, "Entry size must be 32 bits for worker cores used to launch prefetcher in this test");
@@ -2658,6 +3610,8 @@ public:
         const uint32_t prefetch_q_size = memmap.prefetch_q_size();
         const uint32_t cmddat_q_base = memmap.cmddat_q_base();
         const uint32_t cmddat_q_pages = memmap.cmddat_q_size() / page_size;
+        const uint32_t prefetch_debug_counters_l1 =
+            Common::sd_prefetch_debug_counters_l1(cmddat_q_base, memmap.cmddat_q_size());
         const uint32_t scratch_db_base = memmap.scratch_db_base();
         const uint32_t scratch_db_size = memmap.scratch_db_size();
 
@@ -2679,7 +3633,7 @@ public:
         // Hugepage addressing
         // Use the same hugepage region that the FD runtime uses for the issue queue
         // (safe since SD mode never runs the FD runtime concurrently).
-        // Assumption: SD always runs on device 0 / cq_id 0 (see SetUp's CreateDevice(0)).
+        // Assumption: SD always runs on device 0 / cq_id 0 (see SetUp's create_unit_mesh(0)).
         // For that configuration, get_absolute_cq_offset(channel, cq_id, cq_size) = 0, so
         // dev_hugepage_base == get_host_command_queue_addr(UNRESERVED) lands in the same
         // PCIe region the FD runtime would use.  If SD is ever extended to non-zero channel/
@@ -2723,6 +3677,13 @@ public:
         // pick up stale L1 values from a prior run.  Mirrors PrefetchKernel::ConfigureCore.
         const std::vector<uint32_t> prefetch_q_zeros(prefetch_q_size / sizeof(uint32_t), 0u);
         cluster.write_core(prefetch_q_zeros.data(), prefetch_q_size, prefetch_cxy, prefetch_q_base);
+
+        const std::array<uint32_t, k_sd_prefetch_debug_num_counters> prefetch_debug_zeros{};
+        cluster.write_core(
+            prefetch_debug_zeros.data(),
+            k_sd_prefetch_debug_counters_bytes,
+            prefetch_cxy,
+            prefetch_debug_counters_l1);
 
         tt::umd::TlbWindow* prefetch_q_tlb = cluster.get_static_tlb_window(prefetch_cxy);
 
@@ -2799,36 +3760,66 @@ public:
             cluster.dram_barrier(this->device_->id());
         }
 
-        // Semaphores
-        tt_metal::Program program = tt_metal::CreateProgram();
+        // Host readback: verify FetchQ entries landed in L1 before the kernel polls them.
+        {
+            const uint32_t total_entries = prefetch_q_size / entry_size;
+            const uint32_t n_entries = std::min(total_entries, 8u);
+            std::vector<uint32_t> ring(n_entries, 0u);
+            if (n_entries > 0) {
+                cluster.read_core(ring.data(), n_entries * entry_size, prefetch_cxy, prefetch_q_base);
+            }
+            uint32_t rd_slot = 0u;
+            cluster.read_core(&rd_slot, sizeof(rd_slot), prefetch_cxy, prefetch_q_rd_ptr_addr);
 
-        // On separate cores (WH/BH) each (pf, di) pair shares a slot id across separate cores' L1
-        // instances — TT_FATALs verify the slot-id equality.  On Quasar (same core) one L1 location
-        // can't hold both init values, so the slots must be DISTINCT and we override DOWNSTREAM_CB_SEM_ID
-        // post-call.
-        uint32_t credit_sem_id;
-        uint32_t produced_sem_id;
-        uint32_t pf_sync_sem_id;
-        uint32_t di_sync_sem_id;
-        if (fd_kernels_on_same_core) {
-            pf_sync_sem_id = tt_metal::CreateSemaphore(program, {disp_logical}, 0u);
-            di_sync_sem_id = tt_metal::CreateSemaphore(program, {disp_logical}, 0u);
-            credit_sem_id = tt_metal::CreateSemaphore(program, {disp_logical}, dispatch_buffer_pages);
-            produced_sem_id = tt_metal::CreateSemaphore(program, {disp_logical}, 0u);
-        } else {
-            const uint32_t pf_sync = tt_metal::CreateSemaphore(program, {pref_logical}, 0u);
-            const uint32_t di_sync = tt_metal::CreateSemaphore(program, {disp_logical}, 0u);
-            TT_FATAL(pf_sync == di_sync, "prefetch_sync_sem slot mismatch ({} vs {})", pf_sync, di_sync);
-            const uint32_t pf_cb = tt_metal::CreateSemaphore(program, {pref_logical}, dispatch_buffer_pages);
-            const uint32_t di_cb = tt_metal::CreateSemaphore(program, {disp_logical}, 0u);
-            TT_FATAL(pf_cb == di_cb, "dispatch_cb sem slot mismatch ({} vs {})", pf_cb, di_cb);
-            credit_sem_id = pf_cb;
-            produced_sem_id = di_cb;
-            pf_sync_sem_id = pf_sync;
-            di_sync_sem_id = di_sync;
+            // After consuming the first four ring slots the prefetch kernel HQW-spins on entry index 4.
+            constexpr uint32_t k_hang_cursor_entry_idx = 4u;
+            const uint32_t hang_cursor_off = k_hang_cursor_entry_idx * entry_size;
+            const uint32_t hang_cursor_addr = prefetch_q_base + hang_cursor_off;
+            uint32_t hang_cursor_entry = 0u;
+            if (hang_cursor_off < prefetch_q_size) {
+                cluster.read_core(&hang_cursor_entry, sizeof(hang_cursor_entry), prefetch_cxy, hang_cursor_addr);
+            }
+
+            uint32_t host_entries_written = 0u;
+            if (prefetch_q_dev_ptr >= prefetch_q_base && prefetch_q_dev_ptr <= prefetch_q_dev_fence) {
+                host_entries_written = (prefetch_q_dev_ptr - prefetch_q_base) / entry_size;
+            } else if (prefetch_q_dev_ptr == prefetch_q_base && total_entries > 0) {
+                host_entries_written = total_entries;
+            }
+
+            log_info(
+                tt::LogTest,
+                "SD FetchQ probe: base={:#x} size={} entry_size={} host_write_ptr={:#x} host_entries_written={} "
+                "rd_ptr_addr={:#x} rd_slot={:#x} "
+                "entries[0..7]=[{:#x}, {:#x}, {:#x}, {:#x}, {:#x}, {:#x}, {:#x}, {:#x}] "
+                "hang_cursor_idx={} hang_cursor_addr={:#x} hang_cursor_entry={:#x} pf_dbg_l1={:#x} "
+                "(kernel waypoints: FQ0=both zero FQ+=both nonzero FQU=unc only FQR=raw only HQW/HQD=host wait)",
+                prefetch_q_base,
+                prefetch_q_size,
+                entry_size,
+                prefetch_q_dev_ptr,
+                host_entries_written,
+                prefetch_q_rd_ptr_addr,
+                rd_slot,
+                n_entries > 0 ? ring[0] : 0u,
+                n_entries > 1 ? ring[1] : 0u,
+                n_entries > 2 ? ring[2] : 0u,
+                n_entries > 3 ? ring[3] : 0u,
+                n_entries > 4 ? ring[4] : 0u,
+                n_entries > 5 ? ring[5] : 0u,
+                n_entries > 6 ? ring[6] : 0u,
+                n_entries > 7 ? ring[7] : 0u,
+                k_hang_cursor_entry_idx,
+                hang_cursor_addr,
+                hang_cursor_entry,
+                prefetch_debug_counters_l1);
         }
 
-        // Kernel defines and creation
+        // Semaphore layout must match the historical CreateSemaphore ordering so compile-time
+        // dispatch/prefetch defines continue to reference the same slot ids.
+        const SdSemaphoreLayout sem_layout = make_sd_semaphore_layout(
+            this->device_->arch(), pref_logical, disp_logical, fd_kernels_on_same_core, dispatch_buffer_pages);
+
         auto prefetch_defines = Common::make_sd_prefetch_defines(
             this->device_,
             dev_hugepage_base,
@@ -2843,23 +3834,23 @@ public:
             scratch_db_size,
             dispatch_cb_base,
             dispatch_buffer_pages,
-            credit_sem_id,
-            pf_sync_sem_id,
+            sem_layout.credit_sem_id,
+            sem_layout.pf_sync_sem_id,
             entry_size,
             phys_prefetch,
             phys_disp);
         if (fd_kernels_on_same_core) {
             // Helper hardcodes MY_DOWNSTREAM == DOWNSTREAM; same-core needs them on distinct slots.
-            prefetch_defines["DOWNSTREAM_CB_SEM_ID"] = std::to_string(produced_sem_id);
+            prefetch_defines["DOWNSTREAM_CB_SEM_ID"] = std::to_string(sem_layout.produced_sem_id);
         }
 
         const uint32_t dev_completion_base = dev_hugepage_base + Common::SD_HUGEPAGE_ISSUE_BUFFER_SIZE;
         auto dispatch_defines = Common::make_sd_dispatch_defines(
             this->device_,
             dispatch_buffer_pages,
-            produced_sem_id,
-            credit_sem_id,
-            di_sync_sem_id,
+            sem_layout.produced_sem_id,
+            sem_layout.credit_sem_id,
+            sem_layout.di_sync_sem_id,
             phys_prefetch,
             phys_disp,
             memmap,
@@ -2867,53 +3858,70 @@ public:
             dev_completion_base,
             Common::SD_COMPLETION_QUEUE_SIZE);
 
-        // LOAD-BEARING ORDER: on Quasar, the experimental kernel API auto-assigns DM0 to the first
-        // kernel created on a given core and DM1 to the second. Prefetch must be first to get DM0.
-        KernelHandle prefetch_kernel;
-        if (this->device_->arch() == tt::ARCH::QUASAR) {
-            prefetch_kernel = tt::tt_metal::experimental::quasar::CreateKernel(
-                program,
-                "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",
-                pref_logical,
-                tt::tt_metal::experimental::quasar::QuasarDataMovementConfig{
-                    .num_threads_per_cluster = 1,
-                    .defines = prefetch_defines,
-                    .is_legacy_kernel = true,
-                });
-        } else {
-            prefetch_kernel = tt_metal::CreateKernel(
-                program,
-                "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",
-                {pref_logical},
-                tt_metal::DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                    .noc = tt_metal::NOC::NOC_0,
-                    .defines = prefetch_defines});
-        }
-        tt_metal::SetRuntimeArgs(program, prefetch_kernel, pref_logical, {0u, 0u, 0u});
+        const metal2::DataMovementConfiguration dm_config = make_sd_dm_config(this->device_->arch());
+        const metal2::NodeCoord pref_node{pref_logical};
+        const metal2::NodeCoord disp_node{disp_logical};
 
-        KernelHandle dispatch_kernel;
-        if (this->device_->arch() == tt::ARCH::QUASAR) {
-            dispatch_kernel = tt::tt_metal::experimental::quasar::CreateKernel(
-                program,
-                "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
-                disp_logical,
-                tt::tt_metal::experimental::quasar::QuasarDataMovementConfig{
-                    .num_threads_per_cluster = 1,
-                    .defines = dispatch_defines,
-                    .is_legacy_kernel = true,
-                });
+        // LOAD-BEARING ORDER: prefetch kernel spec is listed first so Quasar assigns DM0 to prefetch.
+        metal2::KernelSpec prefetch_kernel_spec{
+            .unique_id = SD_PREFETCH_KERNEL,
+            .source = metal2::KernelSpec::SourceFilePath{"tt_metal/impl/dispatch/kernels/cq_prefetch.cpp"},
+            .num_threads = 1,
+            .compiler_options = {.defines = map_to_compiler_defines(prefetch_defines)},
+            .runtime_arguments_schema = {.num_runtime_varargs = 3},
+            .config_spec = dm_config,
+        };
+        metal2::KernelSpec dispatch_kernel_spec{
+            .unique_id = SD_DISPATCH_KERNEL,
+            .source = metal2::KernelSpec::SourceFilePath{"tt_metal/impl/dispatch/kernels/cq_dispatch.cpp"},
+            .num_threads = 1,
+            .compiler_options = {.defines = map_to_compiler_defines(dispatch_defines)},
+            .runtime_arguments_schema = {.num_runtime_varargs = 3},
+            .config_spec = dm_config,
+        };
+
+        // Same-core (Quasar): one WorkUnitSpec — metal2 rejects overlapping work units on the same node.
+        std::vector<metal2::WorkUnitSpec> work_units;
+        if (fd_kernels_on_same_core) {
+            work_units.push_back(metal2::WorkUnitSpec{
+                .unique_id = "prefetch_dispatch_wu",
+                .kernels = {SD_PREFETCH_KERNEL, SD_DISPATCH_KERNEL},
+                .target_nodes = pref_node,
+            });
         } else {
-            dispatch_kernel = tt_metal::CreateKernel(
-                program,
-                "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
-                {disp_logical},
-                tt_metal::DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                    .noc = tt_metal::NOC::NOC_0,
-                    .defines = dispatch_defines});
+            work_units = {
+                metal2::WorkUnitSpec{
+                    .unique_id = "prefetch_wu",
+                    .kernels = {SD_PREFETCH_KERNEL},
+                    .target_nodes = pref_node,
+                },
+                metal2::WorkUnitSpec{
+                    .unique_id = "dispatch_wu",
+                    .kernels = {SD_DISPATCH_KERNEL},
+                    .target_nodes = disp_node,
+                },
+            };
         }
-        tt_metal::SetRuntimeArgs(program, dispatch_kernel, disp_logical, {0u, 0u, 0u});
+        metal2::ProgramSpec spec{
+            .program_id = "sd_prefetch_dispatch",
+            .kernels = {prefetch_kernel_spec, dispatch_kernel_spec},
+            .semaphores = sem_layout.specs,
+            .work_units = work_units,
+        };
+
+        Program program = metal2::MakeProgramFromSpec(*sd_mesh_device_, spec);
+        metal2::ProgramRunParams params;
+        params.kernel_run_params = {
+            metal2::ProgramRunParams::KernelRunParams{
+                .kernel_spec_name = SD_PREFETCH_KERNEL,
+                .runtime_varargs = {{.node = pref_node, .args = {0u, 0u, 0u}}},
+            },
+            metal2::ProgramRunParams::KernelRunParams{
+                .kernel_spec_name = SD_DISPATCH_KERNEL,
+                .runtime_varargs = {{.node = disp_node, .args = {0u, 0u, 0u}}},
+            },
+        };
+        metal2::SetProgramRunParameters(program, params);
 
         // Initialize the dispatcher's completion queue write/read pointers in L1, mirroring
         // what topology.cpp does for FD mode.  The kernel reads this slot at startup; without
@@ -2937,7 +3945,20 @@ public:
         }
 
         device_data.overflow_check(this->device_);
-        tt_metal::detail::LaunchProgram(this->device_, program);
+        log_info(
+            tt::LogTest,
+            "SD: launching prefetch/dispatch ({} iteration(s), wait_for_host_writes={})",
+            num_iterations,
+            wait_for_host_writes);
+        std::unique_ptr<SdCompletionQueueDrain> cq_drain;
+        if (wait_for_host_writes) {
+            cq_drain = std::make_unique<SdCompletionQueueDrain>(this->device_, phys_disp);
+        }
+        log_info(tt::LogTest, "SD: prefetch/dispatch kernels part 2");
+        launch_sd_prefetch_dispatch_program(this->device_, program, sem_layout);
+        log_info(tt::LogTest, "SD: prefetch/dispatch kernels part 3");
+        cq_drain.reset();
+        log_info(tt::LogTest, "SD: prefetch/dispatch kernels finished");
         // Ensure host CPU sees any PCIe-written completion queue data before validating.
         tt_driver_atomics::mfence();
         // On Quasar, completion data lives in DRAM; subclass reads it into the host buffer here.

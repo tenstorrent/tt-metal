@@ -158,7 +158,7 @@ RelayClientType relay_client;
 struct NocReleasePolicy {
     template <uint8_t noc_idx, uint32_t noc_xy, uint32_t sem_id>
     static FORCE_INLINE void release(uint32_t pages) {
-        DPRINT << "NocReleasePolicy: release: pages=" << pages << " sem_id=" << sem_id << ENDL();
+        DEVICE_PRINT("NocReleasePolicy: release: pages={} sem_id={}\n", pages, sem_id);
         Semaphore<fd_core_type>(sem_id).up(pages);
     }
 };
@@ -166,7 +166,7 @@ struct NocReleasePolicy {
 struct RemoteReleasePolicy {
     template <uint8_t noc_idx, uint32_t noc_xy, uint32_t sem_id>
     static FORCE_INLINE void release(uint32_t pages) {
-        DPRINT << "RemoteReleasePolicy: release: pages=" << pages << " sem_id=" << sem_id << ENDL();
+        DEVICE_PRINT("RemoteReleasePolicy: release: pages={} sem_id={}\n", pages, sem_id);
         relay_client.template release_pages<noc_idx, noc_xy, sem_id>(pages);
     }
 };
@@ -310,8 +310,7 @@ void process_write_host_h() {
     // pages much simpler since we are always sending writing full pages (except for last page)
     uint64_t wlength = cmd->write_linear_host.length;
     bool is_event = cmd->write_linear_host.is_event;
-    DPRINT << "process_write_host_h: " << wlength << ENDL();
-    // DEVICE_PRINT("process_write_host_h: length {}\n", length);
+    DEVICE_PRINT("process_write_host_h: {}\n", wlength);
     uintptr_t data_ptr = cmd_ptr;
 #if !defined(FABRIC_RELAY)
 #if defined(IS_CQ_DRAM_BACKED) && IS_CQ_DRAM_BACKED == 1
@@ -405,7 +404,6 @@ CBWriter<my_downstream_cb_sem_id, 0, 0, 0> dispatch_h_cb_writer{};
 // Code below sends 1 page worth of data except at the end of a cmd
 // This means the downstream buffers are always page aligned, simplifies wrap handling
 void relay_to_next_cb(uintptr_t data_ptr, uint64_t wlength) {
-    // DPRINT << "relay_to_next_cb: " << data_ptr << " " << dispatch_cb_reader.cb_fence << " " << wlength << ENDL();
     // DEVICE_PRINT("relay_to_next_cb: data_ptr {} dispatch_cb_reader.cb_fence {} wlength {}\n", data_ptr,
     // dispatch_cb_reader.cb_fence, wlength);
 
@@ -429,13 +427,10 @@ void relay_to_next_cb(uintptr_t data_ptr, uint64_t wlength) {
             dispatch_h_cb_writer.acquire_pages(1);
 
             uint32_t xfer_size;
-            bool not_end_of_cmd;
             if (length > dispatch_cb_page_size) {
                 xfer_size = dispatch_cb_page_size;
-                not_end_of_cmd = true;
             } else {
                 xfer_size = length;
-                not_end_of_cmd = false;
             }
             length -= xfer_size;
 
@@ -519,9 +514,15 @@ void process_write_linear(uint32_t num_mcast_dests) {
     uint64_t dst_addr = cmd->write_linear.addr + write_offset[write_offset_index];
     uint64_t length = cmd->write_linear.length;
     uintptr_t data_ptr = cmd_ptr + sizeof(CQDispatchCmdLarge);
-    DPRINT << "process_write_linear noc_xy:0x" << HEX() << dst_noc << ", write_offset:" << write_offset_index
-           << ", dst_addr:0x" << dst_addr << ", length:0x" << length << ", data_ptr:0x" << data_ptr
-           << ", num_mcast_dests:" << DEC() << num_mcast_dests << ENDL();
+    DEVICE_PRINT(
+        "process_write_linear noc_xy:0x{:x}, write_offset:{}, dst_addr:0x{:x}, length:0x{:x}, data_ptr:0x{:x}, "
+        "num_mcast_dests:{}\n",
+        dst_noc,
+        write_offset_index,
+        dst_addr,
+        length,
+        data_ptr,
+        num_mcast_dests);
     if (multicast) {
         cq_noc_async_wwrite_init_state<CQ_NOC_sNDl, true>(0, dst_noc, dst_addr);
     } else {
@@ -583,10 +584,11 @@ void process_write_paged() {
     auto addr_gen = TensorAccessor(tensor_accessor::make_interleaved_dspec<is_dram>(), base_addr, page_size);
     uint32_t dst_addr_offset = 0;  // Offset into page.
 
-    DPRINT << "process_write_paged - pages: " << pages << " page_size: " << page_size
-           << " dispatch_cb_page_size: " << dispatch_cb_page_size << ENDL();
-    // DEVICE_PRINT("process_write_paged - pages: {} page_size: {} dispatch_cb_page_size: {}\n", pages, page_size,
-    // dispatch_cb_page_size);
+    DEVICE_PRINT(
+        "process_write_paged - pages: {} page_size: {} dispatch_cb_page_size: {}\n",
+        pages,
+        page_size,
+        dispatch_cb_page_size);
 
     while (write_length != 0) {
         // Transfer size is min(remaining_length, data_available_in_cb)
@@ -659,8 +661,6 @@ void process_write_packed(uint32_t flags, uint32_t* l1_cache) {
         reinterpret_cast<volatile uint32_t tt_l1_ptr*>(l1_uncached_addr(cmd_ptr + sizeof(CQDispatchCmd)));
     cq_noc_async_write_init_state<CQ_NOC_snDL, mcast>(0, dst_addr, xfer_size);
 
-    // DPRINT << "dispatch_write_packed: " << xfer_size << " " << stride << " " << data_ptr << " " << count << " " <<
-    // dst_addr << " " << ENDL();
     // DEVICE_PRINT("dispatch_write_packed: xfer_size {} stride {} data_ptr 0x{:08x} count {} dst_addr 0x{:08x}\n",
     // xfer_size, stride, data_ptr, count, dst_addr);
     uint32_t writes = 0;
@@ -1001,7 +1001,6 @@ static void process_wait() {
     uint32_t stream = cmd->wait.stream;
 
     if (barrier) {
-        // DPRINT << " DISPATCH BARRIER\n";
         // DEVICE_PRINT("dispatch barrier\n");
 #ifdef TRACE_WRITE_BARRIERS
         DeviceZoneScopedN("noc_async_write_barrier");
@@ -1014,7 +1013,6 @@ static void process_wait() {
     if (wait_memory) {
         uintptr_t addr = cmd->wait.addr;
         volatile tt_l1_ptr uint32_t* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(addr));
-        // DPRINT << " DISPATCH WAIT " << HEX() << addr << DEC() << " count " << count << ENDL();
         // DEVICE_PRINT("DISPATCH WAIT 0x{:08x} count {}\n", addr, count);
         do {
             invalidate_l1_cache();
@@ -1026,7 +1024,6 @@ static void process_wait() {
         last_wait_stream = stream;
         volatile uint32_t* sem_addr = reinterpret_cast<volatile uint32_t*>(
             static_cast<uintptr_t>(STREAM_REG_ADDR(stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX)));
-        // DPRINT << " DISPATCH WAIT STREAM " << HEX() << stream << DEC() << " count " << count << ENDL();
         // DEVICE_PRINT("DISPATCH WAIT STREAM 0x{:08x} count {}\n", stream, count);
         do {
             IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
@@ -1150,7 +1147,6 @@ void process_notify_dispatch_s_go_signal_cmd() {
     uint32_t wait = cmd->notify_dispatch_s_go_signal.wait;
     // write barrier to wait before sending the go signal
     if (wait) {
-        // DPRINT << " DISPATCH_S_NOTIFY BARRIER\n";
         // DEVICE_PRINT("dispatch_s_notify barrier\n");
 #ifdef TRACE_WRITE_BARRIERS
         DeviceZoneScopedN("noc_async_write_barrier");
@@ -1202,14 +1198,12 @@ re_run_command:
     switch (cmd->base.cmd_id) {
         case CQ_DISPATCH_CMD_WRITE_LINEAR:
             WAYPOINT("DWB");
-            // DPRINT << "cmd_write_linear\n";
             // DEVICE_PRINT("cmd_write_linear\n");
             process_write();
             WAYPOINT("DWD");
             break;
 
         case CQ_DISPATCH_CMD_WRITE_LINEAR_H:
-            // DPRINT << "cmd_write_linear_h\n";
             // DEVICE_PRINT("cmd_write_linear_h\n");
             if (is_h_variant) {
                 process_write();
@@ -1219,7 +1213,6 @@ re_run_command:
             break;
 
         case CQ_DISPATCH_CMD_WRITE_LINEAR_H_HOST:
-            // DPRINT << "cmd_write_linear_h_host\n";
             // DEVICE_PRINT("cmd_write_linear_h_host\n");
             if (is_h_variant) {
                 process_write_host_h();
@@ -1229,7 +1222,6 @@ re_run_command:
             break;
 
         case CQ_DISPATCH_CMD_WRITE_PAGED:
-            // DPRINT << "cmd_write_paged is_dram: " << (uint32_t)cmd->write_paged.is_dram << ENDL();
             // DEVICE_PRINT("cmd_write_paged is_dram: {}\n", cmd->write_paged.is_dram);
             if (cmd->write_paged.is_dram) {
                 process_write_paged<true>();
@@ -1239,7 +1231,6 @@ re_run_command:
             break;
 
         case CQ_DISPATCH_CMD_WRITE_PACKED: {
-            // DPRINT << "cmd_write_packed" << ENDL();
             // DEVICE_PRINT("cmd_write_packed\n");
             uint32_t flags = cmd->write_packed.flags;
             // Must match unpacking code in tt_metal/impl/profiler/profiler.cpp.
@@ -1255,13 +1246,11 @@ re_run_command:
         } break;
 
         case CQ_DISPATCH_NOTIFY_SUBORDINATE_GO_SIGNAL:
-            // DPRINT << "cmd_notify_dispatch_s_go_signal" << ENDL();
             // DEVICE_PRINT("cmd_notify_dispatch_s_go_signal\n");
             process_notify_dispatch_s_go_signal_cmd();
             break;
 
         case CQ_DISPATCH_CMD_WRITE_PACKED_LARGE:
-            // DPRINT << "cmd_write_packed_large" << ENDL();
             // DEVICE_PRINT("cmd_write_packed_large\n");
             // Must match unpacking code in tt_metal/impl/profiler/profiler.cpp.
             DeviceTimestampedData("packed_large_data_dispatch", cmd->write_packed_large.type);
@@ -1269,38 +1258,32 @@ re_run_command:
             break;
 
         case CQ_DISPATCH_CMD_WRITE_PACKED_LARGE_UNICAST:
-            // DPRINT << "cmd_write_packed_large_unicast" << ENDL();
             // DEVICE_PRINT("cmd_write_packed_large_unicast\n");
             DeviceTimestampedData("packed_large_unicast_data_dispatch", cmd->write_packed_large_unicast.type);
             process_write_packed_large_unicast(l1_cache);
             break;
 
         case CQ_DISPATCH_CMD_WAIT:
-            // DPRINT << "cmd_wait" << ENDL();
             // DEVICE_PRINT("cmd_wait\n");
             process_wait();
             break;
 
         case CQ_DISPATCH_CMD_SINK:
-            // DPRINT << "cmd_sink" << ENDL();
             // DEVICE_PRINT("cmd_sink\n");
             break;
 
         case CQ_DISPATCH_CMD_DEBUG:
-            // DPRINT << "cmd_debug" << ENDL();
             // DEVICE_PRINT("cmd_debug\n");
             cmd_ptr = process_debug_cmd(cmd_ptr);
             goto re_run_command;
             break;
 
         case CQ_DISPATCH_CMD_DELAY:
-            // DPRINT << "cmd_delay" << ENDL();
             // DEVICE_PRINT("cmd_delay\n");
             process_delay_cmd();
             break;
 
         case CQ_DISPATCH_CMD_EXEC_BUF_END:
-            // DPRINT << "cmd_exec_buf_end\n";
             // DEVICE_PRINT("cmd_exec_buf_end\n");
             if (is_h_variant) {
                 process_exec_buf_end_h();
@@ -1310,13 +1293,11 @@ re_run_command:
             break;
 
         case CQ_DISPATCH_CMD_SEND_GO_SIGNAL:
-            // DPRINT << "cmd_go_send_go_signal" << ENDL();
             // DEVICE_PRINT("cmd_send_go_signal\n");
             process_go_signal_mcast_cmd();
             break;
 
         case CQ_DISPATCH_SET_NUM_WORKER_SEMS:
-            // DPRINT << "cmd_set_num_worker_sems" << ENDL();
             // DEVICE_PRINT("cmd_set_num_worker_sems\n");
             // This command is only used by dispatch_s
             ASSERT(0);
@@ -1326,10 +1307,6 @@ re_run_command:
         case CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA: set_go_signal_noc_data(); break;
 
         case CQ_DISPATCH_CMD_SET_WRITE_OFFSET: {
-            // DPRINT << "write offset: " << cmd->set_write_offset.offset0 << " " << cmd->set_write_offset.offset1 << "
-            // "
-            //        << cmd->set_write_offset.offset2 << " host id " << cmd->set_write_offset.program_host_id <<
-            //        ENDL();
             // DEVICE_PRINT("write offset: {} {} {} host id {}\n", cmd->set_write_offset.offset0,
             // cmd->set_write_offset.offset1,
             //              cmd->set_write_offset.offset2, cmd->set_write_offset.program_host_id);
@@ -1354,7 +1331,6 @@ re_run_command:
         }
 
         case CQ_DISPATCH_CMD_TERMINATE:
-            // DPRINT << "dispatch terminate\n";
             // DEVICE_PRINT("dispatch terminate\n");
             if (is_d_variant && !is_h_variant) {
                 relay_to_next_cb(cmd_ptr, sizeof(CQDispatchCmd));
@@ -1402,24 +1378,20 @@ static inline bool process_cmd_h(uintptr_t& cmd_ptr) {
     DeviceTimestampedData("process_cmd_h_dispatch", (uint32_t)cmd->base.cmd_id);
     switch (cmd->base.cmd_id) {
         case CQ_DISPATCH_CMD_WRITE_LINEAR_H:
-            // DPRINT << "dispatch_h write_linear_h\n";
             // DEVICE_PRINT("dispatch_h write_linear_h\n");
             process_write();
             break;
 
         case CQ_DISPATCH_CMD_WRITE_LINEAR_H_HOST:
-            // DPRINT << "dispatch_h linear_h_host\n";
             // DEVICE_PRINT("dispatch_h linear_h_host\n");
             process_write_host_h();
             break;
 
         case CQ_DISPATCH_CMD_EXEC_BUF_END:
-            // DPRINT << "dispatch_h exec_buf_end\n";
             // DEVICE_PRINT("dispatch_h exec_buf_end\n");
             process_exec_buf_end_h();
             break;
         case CQ_DISPATCH_CMD_TERMINATE:
-            // DPRINT << "dispatch_h terminate\n";
             // DEVICE_PRINT("dispatch_h terminate\n");
             cmd_ptr += sizeof(CQDispatchCmd);
             done = true;
@@ -1522,11 +1494,11 @@ void kernel_main() {
     DEVICE_PRINT("dispatch_{}{}: start\n", is_h_variant, is_d_variant);
 #endif
     // Get runtime args
-    // DPRINT << "rta_l1_base address: " << (uintptr_t)rta_l1_base << ENDL();
-    // DPRINT << "rta_l1_base[0]: " << rta_l1_base[0] << ENDL();
-    // DPRINT << "rta_l1_base[1]: " << rta_l1_base[1] << ENDL();
-    // DPRINT << "rta_l1_base[2]: " << rta_l1_base[2] << ENDL();
-    // DPRINT << "rta_l1_base[3]: " << rta_l1_base[3] << ENDL();
+    // DEVICE_PRINT("rta_l1_base address: {}\n", (uintptr_t)rta_l1_base);
+    // DEVICE_PRINT("rta_l1_base[0]: {}\n", rta_l1_base[0]);
+    // DEVICE_PRINT("rta_l1_base[1]: {}\n", rta_l1_base[1]);
+    // DEVICE_PRINT("rta_l1_base[2]: {}\n", rta_l1_base[2]);
+    // DEVICE_PRINT("rta_l1_base[3]: {}\n", rta_l1_base[3]);
     my_dev_id = get_arg_val<uint32_t>(OFFSETOF_MY_DEV_ID);
     to_dev_id = get_arg_val<uint32_t>(OFFSETOF_TO_DEV_ID);
     router_direction = get_arg_val<uint32_t>(OFFSETOF_ROUTER_DIRECTION);
@@ -1544,7 +1516,7 @@ void kernel_main() {
         dispatch_d_noc_counter_start = snapshot_dispatch_d_noc_counters<upstream_noc_index>();
     }
 
-    DPRINT << "Initializing worker streams. num worker sems: " << max_num_worker_sems << ENDL();
+    DEVICE_PRINT("Initializing worker streams. num worker sems: {}\n", max_num_worker_sems);
     for (size_t i = 0; i < max_num_worker_sems; i++) {
         uint32_t index = i + first_stream_used;
 
@@ -1606,7 +1578,7 @@ void kernel_main() {
     // Initialize progress counter in L1 memory
     *get_dispatch_progress_ptr() = dispatch_progress;
 
-    DPRINT << "Starting dispatch loop" << ENDL();
+    DEVICE_PRINT("Starting dispatch loop\n");
     while (!done) {
         dispatch_cb_reader.wait_for_available_data_and_release_old_pages(cmd_ptr);
 
@@ -1639,7 +1611,6 @@ void kernel_main() {
     if (is_h_variant && !is_d_variant) {
         relay_client.template teardown<upstream_noc_index, upstream_noc_xy, upstream_dispatch_cb_sem_id>();
     }
-    // DPRINT << "dispatch_" << is_h_variant << is_d_variant << ": out" << ENDL();
     // DEVICE_PRINT("dispatch_{}{}: out\n", is_h_variant, is_d_variant);
     set_l1_data_cache<false>();
 }

@@ -34,6 +34,68 @@ using std::string;
 using std::to_string;
 using namespace std::literals;
 
+namespace {
+
+constexpr std::size_t k_device_print_header_size = sizeof(uint32_t);
+
+template <uint8_t PointerSize>
+std::size_t device_print_serialized_argument_size(char type_id) {
+    switch (type_id) {
+        case 'b': return sizeof(int8_t);
+        case 'B': return sizeof(uint8_t);
+        case 'h': return sizeof(int16_t);
+        case 'H': return sizeof(uint16_t);
+        case 'i': return sizeof(int32_t);
+        case 'I': return sizeof(uint32_t);
+        case 'q': return sizeof(int64_t);
+        case 'Q': return sizeof(uint64_t);
+        case 'f': return sizeof(float);
+        case 'd': return sizeof(double);
+        case '?': return sizeof(bool);
+        case 'e':
+        case 'E':
+        case 'w': return sizeof(uint16_t);
+        case 'p':
+        case 's': return PointerSize;
+        default: return 0;
+    }
+}
+
+// Match device get_arg_offsets(): 0-based payload layout with 8-byte alignment before >=8-byte args.
+template <uint8_t PointerSize>
+void align_device_print_argument_offset(std::size_t& payload_offset, char type_id) {
+    if constexpr (PointerSize == 8) {
+        const std::size_t arg_size = device_print_serialized_argument_size<PointerSize>(type_id);
+        if (arg_size >= 8) {
+            payload_offset = (payload_offset + 7) & ~std::size_t(7);
+        }
+    }
+}
+
+template <uint8_t PointerSize>
+std::size_t device_print_message_align_bytes() {
+    return PointerSize == 8 ? 8 : 4;
+}
+
+// Match device serialization::get_total_message_size() - sizeof(header).
+template <uint8_t PointerSize>
+std::size_t device_print_message_payload_size(std::span<const char> argument_types) {
+    std::size_t payload_size = 0;
+    for (char serialization_type : argument_types) {
+        if (serialization_type == '\0') {
+            continue;
+        }
+        align_device_print_argument_offset<PointerSize>(payload_size, serialization_type);
+        payload_size += device_print_serialized_argument_size<PointerSize>(serialization_type);
+    }
+    const std::size_t message_align = device_print_message_align_bytes<PointerSize>();
+    const std::size_t total_size =
+        (k_device_print_header_size + payload_size + message_align - 1) & ~(message_align - 1);
+    return total_size - k_device_print_header_size;
+}
+
+}  // namespace
+
 namespace tt::tt_metal {
 
 DPrintParser::DPrintParser(std::string line_prefix) : line_prefix_(std::move(line_prefix)) {}
@@ -668,7 +730,10 @@ typename DevicePrintParserImpl<PointerSize>::ParsedStringInfo* DevicePrintParser
                         placeholder.enum_info = get_enum_info(placeholder.enum_type_name);
                     }
                     parsed_info.argument_types[placeholder.arg_id] = serialization_type;
-                    parsed_info.arguments_size += get_argument_size_from_type_id(serialization_type);
+                }
+                if (!parsed_info.argument_types.empty()) {
+                    parsed_info.arguments_size =
+                        device_print_message_payload_size<PointerSize>(parsed_info.argument_types);
                 }
             }
         }
@@ -696,10 +761,7 @@ T read_value_from_payload(std::span<const std::byte> payload_bytes, std::size_t&
 
 template <uint8_t PointerSize>
 std::size_t DevicePrintParserImpl<PointerSize>::get_argument_size_from_type_id(char type_id) const {
-    static std::byte empty_bytes[32];
-    std::size_t offset = 0;
-    read_argument_from_payload(type_id, std::span<const std::byte>(empty_bytes), offset);
-    return offset;
+    return device_print_message_payload_size<PointerSize>(std::span<const char>(&type_id, 1));
 }
 
 template <uint8_t PointerSize>
@@ -712,6 +774,10 @@ void DevicePrintParserImpl<PointerSize>::read_arguments_from_payload(
     arguments.clear();
     arguments.reserve(argument_types.size());
     for (char argument_type : argument_types) {
+        if (argument_type == '\0') {
+            continue;
+        }
+        align_device_print_argument_offset<PointerSize>(payload_offset, argument_type);
         arguments.push_back(read_argument_from_payload(argument_type, payload_bytes, payload_offset));
     }
 }

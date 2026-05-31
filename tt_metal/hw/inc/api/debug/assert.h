@@ -20,9 +20,13 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type =
     // TODO: Remove this check once mailbox is accessed via cached memory (see dm.cc UNCACHED_MEM_MAILBOX_BASE)
     uintptr_t addr = reinterpret_cast<uintptr_t>(v);
     if (addr >= MEM_L1_UNCACHED_BASE) {
-        v = reinterpret_cast<debug_assert_msg_t*>(addr - MEM_L1_UNCACHED_BASE);
+        v = reinterpret_cast<debug_assert_msg_t tt_l1_ptr*>(addr - MEM_L1_UNCACHED_BASE);
     }
-    uint32_t old = __atomic_exchange_n(&v->claim, 0xDEADBEEF, __ATOMIC_ACQ_REL);
+    // amoswap (not __atomic_exchange_n): GCC LTO cannot prove L1 mailbox bounds and warns on the builtin.
+    volatile uint32_t tt_l1_ptr* claim_lock = &v->claim;
+    uint32_t old;
+    const uint32_t claim_sentinel = 0xDEADBEEF;
+    __asm__ volatile("amoswap.w.aqrl %0, %1, (%2)" : "=r"(old) : "r"(claim_sentinel), "r"(claim_lock) : "memory");
     if (!old)
 #else
     if (v->tripped == DebugAssertOK)

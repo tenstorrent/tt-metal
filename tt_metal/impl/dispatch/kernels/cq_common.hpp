@@ -86,6 +86,58 @@ FORCE_INLINE volatile T tt_l1_ptr* uncached_l1_ptr(uintptr_t addr) {
     return reinterpret_cast<volatile T tt_l1_ptr*>(l1_uncached_addr(addr));
 }
 
+// Drop stale CPU-side cache state before re-polling TL1 that an external agent (host NOC, another
+// core) may have updated. cached_tl1_addr is the cacheable-port offset, not +MEM_L1_UNCACHED_BASE.
+// Quasar DM: invalidate the 64B L2 line containing cached_tl1_addr so the next load refetches TL1.
+// One line is sufficient when the caller reloads a single scalar (e.g. one FetchQ entry); use
+// invalidate_l2_cache_line in a loop (see flush_l2_cache_range) if invalidating a larger span.
+// Blackhole: fence (invalidate_l1_cache). Other archs: invalidate_l1_cache (no-op on WH).
+FORCE_INLINE void tl1_poll_invalidate(uintptr_t cached_tl1_addr) {
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    invalidate_l2_cache_line(cached_tl1_addr & ~uintptr_t(63));
+#else
+    (void)cached_tl1_addr;
+    invalidate_l1_cache();
+#endif
+}
+
+// Push DM-written TL1 (cached-port offset) through L2 so host NOC and other agents see it.
+FORCE_INLINE void tl1_publish_flush(uintptr_t cached_tl1_addr) {
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    flush_l2_cache_line(cached_tl1_addr & ~uintptr_t(63));
+#else
+    (void)cached_tl1_addr;
+#endif
+}
+
+#if defined(PREFETCH_DEBUG_COUNTERS_L1)
+// Slot indices must match PrefetchDebugCounter in cq_prefetch_debug.hpp (CB_ACQUIRE_* only).
+enum : uint32_t {
+    PREFETCH_DBG_CB_ACQUIRE_ENTER = 18,
+    PREFETCH_DBG_CB_ACQUIRE_DONE = 19,
+    PREFETCH_DBG_CB_ACQUIRE_SPINS = 20,
+};
+
+FORCE_INLINE void prefetch_debug_counter_inc(uint32_t slot_idx) {
+    const uintptr_t addr = PREFETCH_DEBUG_COUNTERS_L1 + slot_idx * sizeof(uint32_t);
+    (*reinterpret_cast<volatile uint32_t*>(addr))++;
+    tl1_publish_flush(addr);
+}
+#endif
+
+// Quasar DM experiment: poll FetchQ (and similar host-filled scalars) via the cacheable TL1 port
+// after L2 invalidate, instead of loading through the uncached alias. Other archs: plain volatile load.
+template <typename T>
+FORCE_INLINE T fetchq_poll_load(volatile T tt_l1_ptr* rd_ptr) {
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    const uintptr_t cached_addr = l1_cached_addr(reinterpret_cast<uintptr_t>(rd_ptr));
+    tl1_poll_invalidate(cached_addr);
+    return *reinterpret_cast<volatile T tt_l1_ptr*>(cached_addr);
+#else
+    return *rd_ptr;
+#endif
+}
+
 constexpr bool use_fabric(uint64_t fabric_router_xy) { return fabric_router_xy != 0; }
 
 template <
@@ -301,6 +353,9 @@ public:
     FORCE_INLINE void acquire_pages(uint32_t n) {
         volatile tt_l1_ptr uint32_t* sem_addr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(get_semaphore<fd_core_type>(my_sem_id)));
+#if defined(PREFETCH_DEBUG_COUNTERS_L1)
+        prefetch_debug_counter_inc(PREFETCH_DBG_CB_ACQUIRE_ENTER);
+#endif
         DPRINT << "CBWriter: acquire_pages: n=" << n << " sem id: " << my_sem_id
                << " additional_count: " << additional_count << ENDL();
 
@@ -315,11 +370,17 @@ public:
         // Required for trace which steals downstream credits and may make the value negative
         uint32_t heartbeat = 0;
         do {
+#if defined(PREFETCH_DEBUG_COUNTERS_L1)
+            prefetch_debug_counter_inc(PREFETCH_DBG_CB_ACQUIRE_SPINS);
+#endif
             invalidate_l1_cache();
             IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
         } while (wrap_gt(n, additional_count + *sem_addr));
         WAYPOINT("DAPD");
         additional_count -= n;
+#if defined(PREFETCH_DEBUG_COUNTERS_L1)
+        prefetch_debug_counter_inc(PREFETCH_DBG_CB_ACQUIRE_DONE);
+#endif
         DPRINT << "CBWriter: acquire_pages: after loop: additional_count=" << additional_count << ENDL();
     }
 

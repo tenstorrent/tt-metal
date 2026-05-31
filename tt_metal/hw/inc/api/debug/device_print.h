@@ -651,6 +651,62 @@ constexpr std::size_t count_placeholders(const char (&format)[N]) {
 
 }  // namespace checks
 
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+// Quasar DM faults on 64-bit stores to addresses that are 4-mod-8 (e.g. uint64 args after a 4-byte header).
+constexpr uint32_t device_print_message_align_bytes = 8;
+#else
+constexpr uint32_t device_print_message_align_bytes = 4;
+#endif
+
+inline constexpr uint32_t align_device_print_message_size(uint32_t size) {
+    const uint32_t mask = device_print_message_align_bytes - 1;
+    return (size + mask) & ~mask;
+}
+
+inline uint32_t align_device_print_write_offset(uint32_t offset) {
+    const uint32_t mask = device_print_message_align_bytes - 1;
+    return (offset + mask) & ~mask;
+}
+
+inline uint32_t device_print_wpos_without_stall(uint32_t wpos) { return wpos & ~DEVICE_PRINT_WRITE_STALL_FLAG; }
+
+inline uint32_t device_print_align_wpos_preserve_stall(uint32_t wpos) {
+    const uint32_t stall = wpos & DEVICE_PRINT_WRITE_STALL_FLAG;
+    return align_device_print_write_offset(device_print_wpos_without_stall(wpos)) | stall;
+}
+
+inline uint32_t device_print_alignment_slack(uint32_t wpos) {
+    const uint32_t pos = device_print_wpos_without_stall(wpos);
+    return align_device_print_write_offset(pos) - pos;
+}
+
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+inline void device_print_store_uint64_at_offset(
+    device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, uint64_t argument) {
+    *reinterpret_cast<device_print_buffer_ptr<uint32_t>>(device_print_buffer + offset) =
+        static_cast<uint32_t>(argument);
+    *reinterpret_cast<device_print_buffer_ptr<uint32_t>>(device_print_buffer + offset + 4) =
+        static_cast<uint32_t>(argument >> 32);
+}
+
+inline void device_print_store_pointer_at_offset(
+    device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, std::uintptr_t argument) {
+    if constexpr (sizeof(std::uintptr_t) == 8) {
+        device_print_store_uint64_at_offset(device_print_buffer, offset, static_cast<uint64_t>(argument));
+    } else {
+        *reinterpret_cast<device_print_buffer_ptr<uint32_t>>(device_print_buffer + offset) =
+            static_cast<uint32_t>(argument);
+    }
+}
+
+inline constexpr uint32_t align_device_print_arg_offset(uint32_t offset, uint32_t arg_size) {
+    if (arg_size >= 8) {
+        return (offset + 7) & ~7u;
+    }
+    return offset;
+}
+#endif
+
 namespace formatting {
 
 struct device_print_type_info {
@@ -714,14 +770,22 @@ template <>
 struct device_print_type<std::int64_t> {
     static constexpr device_print_type_info value = {'q', sizeof(std::int64_t)};
     static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, int64_t argument) {
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+        device_print_store_uint64_at_offset(device_print_buffer, offset, static_cast<uint64_t>(argument));
+#else
         *reinterpret_cast<device_print_buffer_ptr<int64_t>>(device_print_buffer + offset) = argument;
+#endif
     }
 };
 template <>
 struct device_print_type<std::uint64_t> {
     static constexpr device_print_type_info value = {'Q', sizeof(std::uint64_t)};
     static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, uint64_t argument) {
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+        device_print_store_uint64_at_offset(device_print_buffer, offset, argument);
+#else
         *reinterpret_cast<device_print_buffer_ptr<uint64_t>>(device_print_buffer + offset) = argument;
+#endif
     }
 };
 template <>
@@ -735,7 +799,13 @@ template <>
 struct device_print_type<double> {
     static constexpr device_print_type_info value = {'d', sizeof(double)};
     static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, double argument) {
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+        uint64_t bits = 0;
+        __builtin_memcpy(&bits, &argument, sizeof(bits));
+        device_print_store_uint64_at_offset(device_print_buffer, offset, bits);
+#else
         *reinterpret_cast<device_print_buffer_ptr<double>>(device_print_buffer + offset) = argument;
+#endif
     }
 };
 template <>
@@ -817,8 +887,13 @@ struct device_print_type<T*> {
             *reinterpret_cast<device_print_buffer_ptr<uint32_t>>(device_print_buffer + offset) =
                 reinterpret_cast<uint32_t>(argument);
         } else if constexpr (sizeof(T*) == 8) {
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+            device_print_store_pointer_at_offset(
+                device_print_buffer, offset, reinterpret_cast<std::uintptr_t>(argument));
+#else
             *reinterpret_cast<device_print_buffer_ptr<uint64_t>>(device_print_buffer + offset) =
                 reinterpret_cast<uint64_t>(argument);
+#endif
         } else {
             static_assert(sizeof(T*) == 4 || sizeof(T*) == 8, "Unsupported pointer size");
         }
@@ -828,16 +903,24 @@ template <>
 struct device_print_type<char*> {
     static constexpr device_print_type_info value = {'s', sizeof(char*)};
     static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, char* argument) {
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+        device_print_store_pointer_at_offset(device_print_buffer, offset, reinterpret_cast<std::uintptr_t>(argument));
+#else
         *reinterpret_cast<device_print_buffer_ptr<std::uintptr_t>>(device_print_buffer + offset) =
             reinterpret_cast<std::uintptr_t>(argument);
+#endif
     }
 };
 template <>
 struct device_print_type<const char*> {
     static constexpr device_print_type_info value = {'s', sizeof(const char*)};
     static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, const char* argument) {
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+        device_print_store_pointer_at_offset(device_print_buffer, offset, reinterpret_cast<std::uintptr_t>(argument));
+#else
         *reinterpret_cast<device_print_buffer_ptr<std::uintptr_t>>(device_print_buffer + offset) =
             reinterpret_cast<std::uintptr_t>(argument);
+#endif
     }
 };
 
@@ -847,11 +930,15 @@ template <>
 struct device_print_type<ct_string> {
     static constexpr device_print_type_info value = {'s', sizeof(const char*)};
     static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, ct_string argument) {
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+        device_print_store_pointer_at_offset(
+            device_print_buffer, offset, reinterpret_cast<std::uintptr_t>(argument.ptr));
+#else
         *reinterpret_cast<device_print_buffer_ptr<std::uintptr_t>>(device_print_buffer + offset) =
             reinterpret_cast<std::uintptr_t>(argument.ptr);
+#endif
     }
 };
-
 // Array types (treat as strings)
 template <std::size_t N>
 struct device_print_type<char[N]> {
@@ -957,15 +1044,15 @@ constexpr std::array<device_print_type_info, sizeof...(Args)> get_types_info() {
 
 template <typename... Args>
 constexpr std::array<uint32_t, sizeof...(Args)> get_arg_reorder() {
-    constexpr auto type_infos = get_types_info<Args...>();
-
     // Initialize to default ordering of arguments (0, 1, 2, ...).
     std::array<uint32_t, sizeof...(Args)> arg_reorder = {};
     for (std::size_t i = 0; i < arg_reorder.size(); ++i) {
         arg_reorder[i] = i;
     }
 
-    // Sort arguments by size_in_bytes descending to optimize serialization (largest first)
+#if !(defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM))
+    // Sort arguments by size_in_bytes descending to optimize serialization (largest first).
+    constexpr auto type_infos = get_types_info<Args...>();
     for (std::size_t i = 0; i < arg_reorder.size(); ++i) {
         for (std::size_t j = i + 1; j < arg_reorder.size(); ++j) {
             if (type_infos[arg_reorder[j]].size_in_bytes > type_infos[arg_reorder[i]].size_in_bytes) {
@@ -975,6 +1062,7 @@ constexpr std::array<uint32_t, sizeof...(Args)> get_arg_reorder() {
             }
         }
     }
+#endif
     return arg_reorder;
 }
 
@@ -983,10 +1071,14 @@ constexpr std::array<uint32_t, sizeof...(Args)> get_arg_offsets() {
     constexpr auto type_infos = get_types_info<Args...>();
     constexpr auto arg_reorder = get_arg_reorder<Args...>();
     std::array<uint32_t, sizeof...(Args)> arg_memory_offsets = {};
-    uint32_t current_offset = sizeof(structures::DevicePrintHeader::value);
+    // Payload-relative offsets (0-based). The header is written separately at the message start.
+    uint32_t payload_offset = 0;
     for (std::size_t i = 0; i < arg_memory_offsets.size(); ++i) {
-        arg_memory_offsets[i] = current_offset;
-        current_offset += type_infos[arg_reorder[i]].size_in_bytes;
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+        payload_offset = align_device_print_arg_offset(payload_offset, type_infos[arg_reorder[i]].size_in_bytes);
+#endif
+        arg_memory_offsets[i] = payload_offset;
+        payload_offset += type_infos[arg_reorder[i]].size_in_bytes;
     }
     std::array<uint32_t, sizeof...(Args)> arg_offset = {};
     for (std::size_t i = 0; i < arg_offset.size(); ++i) {
@@ -1300,12 +1392,17 @@ struct index_list_to_seq<index_list<Idxs...>> {
 
 template <typename... Args>
 struct arg_reorder_seq {
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    // Keep declaration order so the host parser can walk the payload in arg_id order.
+    using type = std::index_sequence_for<Args...>;
+#else
 private:
     static constexpr std::size_t N = sizeof...(Args);
     using sorted_list = typename detail::build_sorted_indices<N, Args...>::type;
 
 public:
     using type = typename detail::index_list_to_seq<sorted_list>::type;
+#endif
 };
 
 template <typename... Args>
@@ -1402,12 +1499,13 @@ void acquire_lock() {
                 new_kernel_message.message_payload = structures::DevicePrintHeader::max_message_payload_size;
                 new_kernel_message.info_id = kernel_id;
                 auto header_value = new_kernel_message.value;
-                wait_for_space(device_print_buffer, sizeof(new_kernel_message));
-                auto write_position = device_print_buffer->aux.wpos;
+                constexpr uint32_t kernel_message_bytes = align_device_print_message_size(sizeof(header_value));
+                wait_for_space(device_print_buffer, kernel_message_bytes);
+                auto write_position = device_print_wpos_without_stall(device_print_buffer->aux.wpos);
                 auto device_print_buffer_ptr = &(device_print_buffer->data[0]) + write_position;
                 formatting::device_print_type<decltype(header_value)>::serialize(
                     device_print_buffer_ptr, 0, header_value);
-                device_print_buffer->aux.wpos += sizeof(new_kernel_message);
+                device_print_buffer->aux.wpos = write_position + kernel_message_bytes;
                 device_print_buffer->aux.risc_state[processor_index] = DevicePrintRiscCoreState::KernelPrinted;
             }
         }
@@ -1456,6 +1554,15 @@ uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintMemoryLayout* device_print
     // Read pointers
     auto write_position = device_print_buffer->aux.wpos;
     auto read_position = device_print_buffer->aux.rpos;
+
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    // Round wpos up before space checks so alignment slack is reserved and writes stay in-bounds.
+    if (write_position != DEBUG_PRINT_SERVER_STARTING_MAGIC && write_position != DEBUG_PRINT_SERVER_DISABLED_MAGIC) {
+        message_size += device_print_alignment_slack(write_position);
+        write_position = device_print_align_wpos_preserve_stall(write_position);
+        device_print_buffer->aux.wpos = write_position;
+    }
+#endif
 
     // Check if it is starting magic
     if (write_position == DEBUG_PRINT_SERVER_STARTING_MAGIC) {
@@ -1626,7 +1733,11 @@ inline void serialize_arguments_impl(
     Tuple&& tup,
     ArgOffsetsType arg_offsets,
     std::index_sequence<Is...>) {
-    (serialize_argument(device_print_buffer, arg_offsets[Is], std::get<Is>(std::forward<Tuple>(tup))), ...);
+    if constexpr (sizeof...(Is) > 0) {
+        constexpr uint32_t header_size = sizeof(structures::DevicePrintHeader::value);
+        (serialize_argument(device_print_buffer, header_size + arg_offsets[Is], std::get<Is>(std::forward<Tuple>(tup))),
+         ...);
+    }
 }
 
 template <typename... Args>
@@ -1642,14 +1753,16 @@ void serialize_arguments(volatile tt_l1_ptr uint8_t* device_print_buffer, Args&&
 template <typename... Args>
 constexpr uint32_t get_total_message_size(Args&&...) {
     constexpr auto type_infos = formatting::get_types_info<Args...>();
-    uint32_t total_size = sizeof(structures::DevicePrintHeader::value);  // Start with header size
+    constexpr auto arg_reorder = formatting::get_arg_reorder<Args...>();
+    constexpr uint32_t header_size = sizeof(structures::DevicePrintHeader::value);
+    uint32_t payload_size = 0;
     for (size_t i = 0; i < sizeof...(Args); ++i) {
-        total_size += type_infos[i].size_in_bytes;
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+        payload_size = align_device_print_arg_offset(payload_size, type_infos[arg_reorder[i]].size_in_bytes);
+#endif
+        payload_size += type_infos[arg_reorder[i]].size_in_bytes;
     }
-    if (total_size % 4 != 0) {
-        total_size += 4 - (total_size % 4);  // Pad to next multiple of 4 bytes
-    }
-    return total_size;
+    return align_device_print_message_size(header_size + payload_size);
 }
 
 }  // namespace serialization
@@ -1665,6 +1778,8 @@ begin_message_write(structures::DevicePrintHeader header, std::uintptr_t string_
     volatile tt_l1_ptr DevicePrintMemoryLayout* device_print_buffer = get_device_print_buffer();
     uint32_t message_size = sizeof(header.value) + header.message_payload;
     auto write_position = locking::wait_for_space(device_print_buffer, message_size);
+    write_position = device_print_wpos_without_stall(write_position);
+    device_print_buffer->aux.wpos = write_position;
 
     // Update header
     std::uintptr_t string_info_start_address = reinterpret_cast<std::uintptr_t>(__device_print_strings_info_start);
@@ -1698,16 +1813,31 @@ __attribute__((noinline)) void end_message_write() {
     // the message header back from the buffer to get the message size, which allows us to avoid passing message size as
     // an argument and save some code size.
     volatile tt_l1_ptr DevicePrintMemoryLayout* device_print_buffer = get_device_print_buffer();
-    auto write_position = device_print_buffer->aux.wpos;
+    auto write_position = device_print_wpos_without_stall(device_print_buffer->aux.wpos);
     if (device_print_buffer->aux.wpos != DEBUG_PRINT_SERVER_DISABLED_MAGIC) {
-        auto message_header_value =
-            *reinterpret_cast<device_print_buffer_ptr<decltype(structures::DevicePrintHeader::value)>>(
-                device_print_buffer->data + write_position);
-        structures::DevicePrintHeader message_header;
-        message_header.value = message_header_value;
-        uint32_t message_size = sizeof(message_header.value) + message_header.message_payload;
-        // Move write pointer in device_print buffer
-        device_print_buffer->aux.wpos = write_position + message_size;
+        constexpr uint32_t data_capacity = sizeof(device_print_buffer->data);
+        if (write_position >= data_capacity) {
+            device_print_buffer->aux.wpos = 0;
+        } else {
+            auto message_header_value =
+                *reinterpret_cast<device_print_buffer_ptr<decltype(structures::DevicePrintHeader::value)>>(
+                    device_print_buffer->data + write_position);
+            structures::DevicePrintHeader message_header;
+            message_header.value = message_header_value;
+            uint32_t message_size = sizeof(message_header.value) + message_header.message_payload;
+            // Ignore kernel-id markers (host reads a single header word); only advance by the bytes we wrote.
+            if (message_header.is_kernel &&
+                message_header.message_payload == structures::DevicePrintHeader::max_message_payload_size) {
+                message_size = align_device_print_message_size(sizeof(message_header.value));
+            }
+            message_size = align_device_print_message_size(message_size);
+            const uint32_t new_wpos = write_position + message_size;
+            if (new_wpos > data_capacity || new_wpos < write_position) {
+                device_print_buffer->aux.wpos = 0;
+            } else {
+                device_print_buffer->aux.wpos = new_wpos;
+            }
+        }
     }
 
     // Release buffer lock
