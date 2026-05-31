@@ -116,8 +116,16 @@ def compute_wer_score(hypothesis, reference):
     return wer
 
 
-def transcribe_wav(wav_path):
-    """Transcribe a WAV file using Whisper. Returns text or None."""
+def transcribe_wav(wav_path, max_secs=None):
+    """Transcribe a WAV file using Whisper. Returns text or None.
+
+    If ``max_secs`` is provided, the audio is truncated to that duration
+    before transcription. This is required when comparing transcriptions
+    of audio of different durations (e.g. the TTNN converted output is
+    only a few seconds, while the source file may be much longer — without
+    truncation the WER measurement is meaningless because it counts every
+    word past the TTNN output's duration as a missed word).
+    """
     try:
         import whisper
     except ImportError:
@@ -131,6 +139,11 @@ def transcribe_wav(wav_path):
     if sr != 16000:
         from scipy.signal import resample
         wav = resample(wav, int(len(wav) * 16000 / sr)).astype(np.float32)
+        sr = 16000
+
+    if max_secs is not None:
+        n_samples = min(len(wav), int(max_secs * sr))
+        wav = wav[:n_samples]
 
     if not hasattr(transcribe_wav, '_model'):
         transcribe_wav._model = whisper.load_model("base")
@@ -220,12 +233,15 @@ def main():
         print(f"  TTNN output:   \"{ttnn_text}\"")
 
         if src_wav is not None:
-            # WER: source vs output (content preservation through pipeline)
-            src_text = transcribe_wav(args.source)
+            # WER: source vs output (content preservation through pipeline).
+            # Truncate source to TTNN output duration so the two transcriptions
+            # cover the same audio span; otherwise WER is dominated by source
+            # words past the converted clip's end.
+            src_text = transcribe_wav(args.source, max_secs=ttnn_dur)
             if src_text is not None:
-                print(f"  Source input:   \"{src_text}\"")
+                print(f"  Source input ({ttnn_dur:.2f}s window):  \"{src_text}\"")
                 wer_content = compute_wer_score(ttnn_text, src_text)
-                print(f"  WER (output vs source): {wer_content:.4f}  {'✅ PASS' if wer_content < 2.5 else '❌ FAIL'} (threshold: 2.5)")
+                print(f"  WER (output vs source, matched window): {wer_content:.4f}  {'✅ PASS' if wer_content < 2.5 else '❌ FAIL'} (threshold: 2.5)")
 
         # Also compare TTNN vs Torch (correctness)
         ref_text = transcribe_wav(args.ref)
