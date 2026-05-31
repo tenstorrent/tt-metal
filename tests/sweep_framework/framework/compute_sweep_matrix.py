@@ -174,38 +174,17 @@ def _get_test_group_for_mesh_shape(mesh_shape, mesh_test_groups, run_label, defa
     return None
 
 
-def _batch_modules_for_test_group(base_modules, batch_size, batch_policy=None, device_perf_enabled=False):
-    """Batch base module names using fixed size or policy-defined parallel jobs.
-
-    When device-perf is enabled the profiler build is several times slower per test
-    (and large meshes occasionally hang -> slow tt-smi resets), so a job can only get
-    through a handful of modules within the GitHub 1h cap. ``batch_size`` is already
-    reduced for device-perf runs by the caller, but a ``parallel_jobs`` policy would
-    otherwise override it and produce oversized batches (e.g. the lead-models Galaxy
-    lane packed ~14 modules/job and timed out). Cap the policy-derived size by
-    ``batch_size`` for device-perf runs so perf batches never exceed the intended
-    (small) size; non-perf batching is unchanged.
-    """
+def _batch_modules_for_test_group(base_modules, batch_size, batch_policy=None):
+    """Batch base module names using fixed size or policy-defined parallel jobs."""
     parallel_jobs = (batch_policy or {}).get("parallel_jobs")
     if parallel_jobs:
         size = max(1, -(-len(base_modules) // parallel_jobs))
-        if device_perf_enabled and batch_size:
-            size = min(size, batch_size)
         return chunk_modules(base_modules, size)
     return chunk_modules(base_modules, batch_size)
 
 
 def _append_routed_group(
-    include_entries,
-    batches,
-    log_groups,
-    label,
-    modules,
-    test_group_name,
-    batch_size,
-    suite_name,
-    batch_policy=None,
-    device_perf_enabled=False,
+    include_entries, batches, log_groups, label, modules, test_group_name, batch_size, suite_name, batch_policy=None
 ):
     """Convert routed modules for one logical group into matrix entries."""
     if not modules or test_group_name is None:
@@ -213,7 +192,7 @@ def _append_routed_group(
 
     base = sorted(set(strip_grouping_suffix(m) for m in modules))
     runner_config = _get_runner(test_group_name)
-    runner_batches = _batch_modules_for_test_group(base, batch_size, batch_policy, device_perf_enabled)
+    runner_batches = _batch_modules_for_test_group(base, batch_size, batch_policy)
     batches.extend(runner_batches)
     include_entries.extend(_build_entries(runner_config, runner_batches, label, suite_name))
     log_groups.append((label, modules))
@@ -222,7 +201,7 @@ def _append_routed_group(
 # ── Matrix computation per run type ─────────────────────────────────────────
 
 
-def compute_lead_models_matrix(modules, batch_size, device_perf_enabled=False):
+def compute_lead_models_matrix(modules, batch_size):
     """Compute matrix for lead models with mesh-aware runner assignment."""
     mesh_test_groups = get_mesh_test_group_map("lead_models")
     mesh_modules, hw_modules, unmatched = _group_modules_by_preference(modules, "mesh")
@@ -268,7 +247,6 @@ def compute_lead_models_matrix(modules, batch_size, device_perf_enabled=False):
             batch_size,
             LEAD_MODELS_SUITE_NAME,
             LEAD_MODELS_BATCH_POLICY.get(test_group_name),
-            device_perf_enabled,
         )
 
     # Log
@@ -283,7 +261,7 @@ def compute_lead_models_matrix(modules, batch_size, device_perf_enabled=False):
     return include_entries, batches
 
 
-def compute_model_traced_matrix(modules, batch_size, suite_name, grouping_mode=None, device_perf_enabled=False):
+def compute_model_traced_matrix(modules, batch_size, suite_name, grouping_mode=None):
     """Compute matrix for model_traced runs using mesh/hardware grouped vector files."""
     mode = grouping_mode if grouping_mode in SUPPORTED_VECTOR_GROUPING_MODES else DEFAULT_MODEL_TRACED_GROUPING_MODE
     if grouping_mode not in (*SUPPORTED_VECTOR_GROUPING_MODES, None):
@@ -313,7 +291,6 @@ def compute_model_traced_matrix(modules, batch_size, suite_name, grouping_mode=N
             batch_size,
             suite_name,
             MODEL_TRACED_BATCH_POLICY.get(test_group_name),
-            device_perf_enabled,
         )
 
     grouped = sorted(hw_modules.items(), key=lambda x: x[0])
@@ -332,7 +309,6 @@ def compute_model_traced_matrix(modules, batch_size, suite_name, grouping_mode=N
             batch_size,
             suite_name,
             MODEL_TRACED_BATCH_POLICY.get(hw_test_group),
-            device_perf_enabled,
         )
 
     _log_module_groups(f"Model traced run ({mode}-grouped)", modules, log_groups)
@@ -405,12 +381,10 @@ def main():
     # Compute matrix
     ccl_batches = []
     if run_type == "lead_models":
-        include_entries, batches = compute_lead_models_matrix(modules, batch_size, device_perf_enabled)
+        include_entries, batches = compute_lead_models_matrix(modules, batch_size)
     elif run_type == "model_traced":
         grouping_mode = manifest.get("vector_grouping_mode")
-        include_entries, batches = compute_model_traced_matrix(
-            modules, batch_size, "model_traced", grouping_mode, device_perf_enabled
-        )
+        include_entries, batches = compute_model_traced_matrix(modules, batch_size, "model_traced", grouping_mode)
     else:
         suite_name = None if run_type == "comprehensive" else run_type  # "nightly" or None
         include_entries, batches, ccl_batches = compute_standard_matrix(modules, batch_size, suite_name)
