@@ -133,15 +133,13 @@ _HIGH_LEVEL_SUFFIXES: Tuple[str, ...] = (
 )
 
 
-_ADAPT_CLASS_PATTERNS: Tuple[re.Pattern, ...] = (
-    re.compile(r"^Linear$"),
-    re.compile(r"^Conv2d$"),
-    re.compile(r"^LayerNorm$"),
-    re.compile(r"^Dropout$"),
-    re.compile(r".*MLP$"),
-    re.compile(r".*PatchEmbed$"),
-    re.compile(r".*Embeddings?$"),
-)
+# ADAPT was removed 2026-05-31. The trichotomy REUSE / ADAPT / NEW
+# collapses to REUSE / NEW: REUSE is the registry's static claim
+# ("works as-is"), NEW means "needs per-component iteration". ADAPT's
+# "light parameter tweak" semantics couldn't be enforced at runtime
+# (it had the same fragility as REUSE — a static claim contradicted
+# by runtime PCC) and had no distinct iteration machinery anyway.
+# When REUSE fails PCC, force_adapt_all demotes it straight to NEW.
 
 
 _CAMEL_RE = re.compile(r"(?<!^)(?=[A-Z])")
@@ -282,9 +280,11 @@ def _try_rescue_via_op_coverage(class_name: str, info: Dict[str, Any]) -> Option
         return None
     if not ops:
         return None
-    reusable = sum(1 for o in ops if getattr(o, "is_reusable", lambda: False)())
-    if reusable / len(ops) >= 0.5:
-        return "ADAPT"
+    # ADAPT removed 2026-05-31. A class with majority-reusable ops used
+    # to be tagged ADAPT (light tweak) — now it's just NEW (full
+    # per-component iterate). The reusable-ops signal still matters for
+    # the LLM prompt (op-REUSE/op-ADAPT/op-NEW is a separate concept
+    # from component status) but doesn't influence component status.
     return "NEW"
 
 
@@ -315,15 +315,12 @@ def _log_dropped_class(
 
 
 def _classify_status_hint(class_name: str) -> str:
-    """Best-guess status (NEW / ADAPT / REUSE) for a module class.
+    """Best-guess status (NEW / REUSE) for a module class.
 
-    REUSE is reserved for things the existing TT library definitely
-    handles unchanged (we don't know that from class name alone, so we
-    never auto-emit REUSE here; the bring-up plan layer decides).
-    Returns NEW by default; ADAPT for known-vanilla classes."""
-    for pat in _ADAPT_CLASS_PATTERNS:
-        if pat.fullmatch(class_name) or pat.match(class_name):
-            return "ADAPT"
+    Always returns NEW. REUSE is reserved for the bring-up plan layer
+    when it looks up the reuse_registry; class-name alone is not
+    enough evidence to claim REUSE. ADAPT was removed 2026-05-31 —
+    the trichotomy collapsed to a dichotomy (REUSE / NEW)."""
     return "NEW"
 
 

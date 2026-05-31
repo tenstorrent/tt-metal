@@ -510,7 +510,8 @@ def _summarize_bringup_status(model_id: str) -> Tuple[Dict[str, int], List[Tuple
     from .bringup_loop import find_demo_dir
 
     demo_dir = find_demo_dir(model_id)
-    counts = {"REUSE": 0, "ADAPT": 0, "NEW": 0}
+    # ADAPT removed 2026-05-31 — REUSE / NEW only.
+    counts = {"REUSE": 0, "NEW": 0}
     rows: List[Tuple[str, str]] = []
     if demo_dir is None:
         return counts, rows
@@ -633,6 +634,8 @@ def _classify_components(model_id: str) -> Dict[str, List[str]]:
     from .bringup_loop import find_demo_dir
 
     demo_dir = find_demo_dir(model_id)
+    # ADAPT removed 2026-05-31. Keep "adapt" key as empty list so any
+    # consumer that still reads it gets [] rather than KeyError.
     out: Dict[str, List[str]] = {
         "reuse": [],
         "adapt": [],
@@ -655,8 +658,6 @@ def _classify_components(model_id: str) -> Dict[str, List[str]]:
             continue
         if status == "REUSE":
             out["reuse"].append(name)
-        elif status == "ADAPT":
-            out["adapt"].append(name)
         elif status == "NEW":
             safe = _safe_id(name)
             stub_path = demo_dir / "_stubs" / f"{safe}.py"
@@ -1005,7 +1006,9 @@ def _compute_op_split(model_id: str) -> Dict[str, object]:
         stub_path = demo_dir / "_stubs" / f"{safe}.py"
         manifest_path = demo_dir / "_stubs" / f"{safe}.opplan.json"
 
-        if status in ("REUSE", "ADAPT"):
+        # ADAPT removed 2026-05-31 — only REUSE here (and legacy
+        # bringup_status.json with "ADAPT" status falls through to NEW).
+        if status == "REUSE":
             rows.append(
                 {
                     "name": name,
@@ -6907,7 +6910,11 @@ def cmd_bringup(args) -> int:
         "auto_model_light": None,
         "auto_model_heavy": None,
         "auto_agent_timeout": 600,
-        "parallel_agents": 1,
+        # 4 parallel agents so the brain can iterate multiple
+        # ADAPT/NEW components concurrently (LLM-edit + apply happens
+        # in parallel; pytest device runs still serialize). Locked at 1
+        # used to waste time on multi-component models like Qwen2.5-14B.
+        "parallel_agents": 4,
         "auto_only_component": None,
         "phase2": False,
         "phase2_only": False,
@@ -7836,7 +7843,10 @@ def _cmd_up_core(args) -> int:
 
     banner(f"Step 3/6  LLM gate — does this model need an LLM to finish bring-up?")
     counts, _rows = _summarize_bringup_status(MODEL)
-    llm_components = counts.get("NEW", 0) + counts.get("ADAPT", 0)
+    # ADAPT removed 2026-05-31 — LLM is needed iff there are NEW
+    # components (REUSE is presumed working, force_adapt_all demotes
+    # any broken REUSE -> NEW on PCC failure).
+    llm_components = counts.get("NEW", 0)
     total_components = sum(counts.values())
 
     if total_components == 0:
@@ -7844,7 +7854,7 @@ def _cmd_up_core(args) -> int:
         print()
         print(
             f"  Component classification: {counts.get('REUSE',0)} REUSE, "
-            f"{counts.get('ADAPT',0)} ADAPT, {counts.get('NEW',0)} NEW "
+            f"{counts.get('NEW',0)} NEW "
             f"(total {total_components})"
         )
         print("  Skipping the LLM gate; the loop later will treat this as REUSE-only.")
@@ -7856,7 +7866,7 @@ def _cmd_up_core(args) -> int:
         print()
         print(
             f"  Component classification: {counts.get('REUSE',0)} REUSE, "
-            f"{counts.get('ADAPT',0)} ADAPT, {counts.get('NEW',0)} NEW "
+            f"{counts.get('NEW',0)} NEW "
             f"(total {total_components})"
         )
         print()
@@ -7868,14 +7878,13 @@ def _cmd_up_core(args) -> int:
         print("  ============================================================")
         print(f"  >>>  VERDICT: LLM REQUIRED                                <<<")
         print(
-            f"  >>>  ({llm_components}/{total_components} components need generation:"
-            f" {counts.get('NEW',0)} NEW + {counts.get('ADAPT',0)} ADAPT)  <<<"
+            f"  >>>  ({llm_components}/{total_components} components need generation: {counts.get('NEW',0)} NEW)  <<<"
         )
         print("  ============================================================")
         print()
         print(
             f"  Component classification: {counts.get('REUSE',0)} REUSE, "
-            f"{counts.get('ADAPT',0)} ADAPT, {counts.get('NEW',0)} NEW "
+            f"{counts.get('NEW',0)} NEW "
             f"(total {total_components})"
         )
         print()
@@ -8525,6 +8534,11 @@ def _load_bringup_status(model_id: str) -> Tuple[Path, Dict]:
 
 
 def _select_op_synth_targets(status: Dict, *, component: Optional[str], include_adapt: bool) -> List[Dict]:
+    # ADAPT removed 2026-05-31. include_adapt kept as a kwarg for
+    # callsite compatibility; with ADAPT gone it's always a no-op
+    # (the only target status is NEW). Legacy bringup_status.json
+    # entries with status="ADAPT" are still accepted when include_adapt
+    # is set, to keep stale-overlay loads working.
     components = status.get("components", []) or []
     allowed_status = {"NEW"}
     if include_adapt:

@@ -257,7 +257,7 @@ def test_wiring_12_scaffold_respects_escalation_bypass() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_wiring_13_escalation_writes_manifest_with_reuse_demoted_to_adapt() -> None:
+def test_wiring_13_escalation_writes_manifest_with_reuse_demoted_to_new() -> None:
     """Pin: when ``force_already_supported=True`` (escalation path),
     ``plan_scaffold``'s LLM/VLM branch must call ``build_bringup_plan``
     with ``force_adapt_all=True`` and emit a ``bringup_status.json``
@@ -270,17 +270,20 @@ def test_wiring_13_escalation_writes_manifest_with_reuse_demoted_to_adapt() -> N
 
     The shift is: registry says "REUSE" based on static info, but the
     failed global PCC is runtime evidence the registry is wrong. The
-    force-adapt-all override demotes every REUSE to ADAPT so the
+    force-adapt-all override demotes every REUSE to NEW (ADAPT was
+    removed 2026-05-31 — trichotomy collapsed to dichotomy) so the
     per-component PCC iterate loop actually verifies each one.
     Caught 2026-05-31 in the Qwen2.5-14B rewire test."""
     plan_src = _read("scripts/tt_hw_planner/bringup_plan.py")
     scaffold_src = _read("scripts/tt_hw_planner/scaffold.py")
 
-    # build_bringup_plan must accept the kwarg
+    # build_bringup_plan must accept the kwarg (name kept historical
+    # for callsite stability even though demote target is now NEW).
     assert "force_adapt_all: bool = False" in plan_src
     # And the demotion must actually happen
     assert "if force_adapt_all:" in plan_src
-    assert "_c.status = ADAPT" in plan_src
+    # Demote target is NEW (was ADAPT pre-ADAPT-removal).
+    assert "_c.status = NEW" in plan_src
 
     # scaffold's LLM/VLM branch must take the fast-path when
     # force_already_supported=True + compat is ALREADY SUPPORTED

@@ -27,11 +27,15 @@ class ReuseEntry:
 
 
 def _effort_to_status(effort: Effort, status: Status) -> str:
+    # ADAPT removed 2026-05-31. Trichotomy REUSE/ADAPT/NEW -> dichotomy
+    # REUSE/NEW. Anything that's SUPPORTED falls back to REUSE
+    # (presumed working; the global PCC gate enforces it and
+    # force_adapt_all demotes to NEW on failure). MISSING is NEW.
     if status == Status.MISSING:
         return "NEW"
-    if effort == Effort.DROP_IN and status == Status.SUPPORTED:
+    if status == Status.SUPPORTED:
         return "REUSE"
-    return "ADAPT"
+    return "NEW"
 
 
 def _concept_from_block_name(name: str) -> str:
@@ -77,8 +81,8 @@ _HANDWRITTEN_COMPOSITES: List[ReuseEntry] = [
         concept="decoder_layer",
         tt_path="models/tt_transformers/tt/decoder.py",
         tt_class="TransformerBlock",
-        status="ADAPT",
-        notes="Composite Attention+MLP+RMSNorm block; tt_transformers TransformerBlock is the template (no single BuildingBlock represents the composite).",
+        status="REUSE",
+        notes="Composite Attention+MLP+RMSNorm block; tt_transformers TransformerBlock is the template (presumed working — global PCC gate enforces, force_adapt_all demotes to NEW on failure).",
     ),
     ReuseEntry(
         model_types=("qwen3", "qwen3_embedding"),
@@ -86,8 +90,8 @@ _HANDWRITTEN_COMPOSITES: List[ReuseEntry] = [
         concept="model_root",
         tt_path="models/tt_transformers/tt/model.py",
         tt_class="Transformer",
-        status="ADAPT",
-        notes="Top-level decoder stack; tt_transformers/tt/model.py is the template (no single BuildingBlock represents the assembled model).",
+        status="REUSE",
+        notes="Top-level decoder stack; tt_transformers/tt/model.py is the template (presumed working — global PCC gate enforces, force_adapt_all demotes to NEW on failure).",
     ),
 ]
 

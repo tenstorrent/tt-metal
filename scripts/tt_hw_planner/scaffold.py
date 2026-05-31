@@ -261,9 +261,9 @@ def plan_scaffold(new_model_id: str, *, force_already_supported: bool = False) -
             compat_overall=compat.overall,
             compat_summary=(
                 f"force_already_supported: PCC-gate failure demoted all "
-                f"REUSE -> ADAPT for per-component iteration. "
+                f"REUSE -> NEW for per-component iteration. "
                 f"Plan: {c.get('REUSE', 0)} REUSE / "
-                f"{c.get('ADAPT', 0)} ADAPT / {c.get('NEW', 0)} NEW."
+                f"{c.get('NEW', 0)} NEW."
             ),
             changes=changes_esc,
             skipped=[],
@@ -487,8 +487,7 @@ def _plan_demo_folder_scaffold(*, new_model_id: str, probe: Any) -> ScaffoldPlan
     if bplan is not None:
         c = bplan.counts
         summary_extra = (
-            f" Component plan: {c.get('REUSE', 0)} REUSE / "
-            f"{c.get('ADAPT', 0)} ADAPT / {c.get('NEW', 0)} NEW — see BRING_UP_PLAN.md."
+            f" Component plan: {c.get('REUSE', 0)} REUSE / " f"{c.get('NEW', 0)} NEW — see BRING_UP_PLAN.md."
         )
 
     return ScaffoldPlan(
@@ -533,10 +532,8 @@ def apply_scaffold(plan: ScaffoldPlan) -> List[str]:
 def _render_bringup_summary(bp: BringUpPlan) -> str:
     counts = bp.counts
     lines: List[str] = []
-    lines.append("  Component status (REUSE/ADAPT/NEW):")
-    lines.append(
-        f"    Summary: {counts.get('REUSE', 0)} REUSE, " f"{counts.get('ADAPT', 0)} ADAPT, {counts.get('NEW', 0)} NEW"
-    )
+    lines.append("  Component status (REUSE/NEW):")
+    lines.append(f"    Summary: {counts.get('REUSE', 0)} REUSE, {counts.get('NEW', 0)} NEW")
     lines.append("")
     name_w = max((len(c.name) for c in bp.components), default=10)
     name_w = min(max(name_w, 10), 26)
@@ -639,9 +636,8 @@ def render_apply(plan: ScaffoldPlan, applied: List[str]) -> str:
             out.append(_render_bringup_summary(plan.bringup_plan))
         out.append("  Workflow:")
         out.append("    1. Read BRING_UP_PLAN.md.  REUSE rows = import the sibling tt-module unchanged.")
-        out.append("    2. ADAPT rows = edit shape constants in the cloned tt-file (same name).")
-        out.append("    3. NEW rows   = replace the matching `_stubs/*.py` with a real TTNN port.")
-        out.append("    4. Once every NEW stub is implemented, re-run `prepare --execute`.")
+        out.append("    2. NEW rows = replace the matching `_stubs/*.py` with a real TTNN port.")
+        out.append("    3. Once every NEW stub is implemented, re-run `prepare --execute`.")
     else:
         out.append("    git restore models/tt_transformers/tt/model_config.py")
         out.append("    git restore models/tt_transformers/demo/trace_region_config.py")

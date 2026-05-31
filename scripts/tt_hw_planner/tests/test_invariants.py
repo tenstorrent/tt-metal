@@ -5085,8 +5085,10 @@ def test_module_tree_discover_finds_high_level_components() -> None:
         collapsing ModuleList(*) numeric suffixes (the four
         Sam2HieraBlock children at `vision_encoder.blocks.{0,1,2,3}`
         collapse to a single `vision_encoder.blocks` path).
-      - Hint ADAPT vs NEW status for known-vanilla classes
-        (PatchEmbed -> ADAPT)."""
+      - Hint NEW status for every discovered component (ADAPT was
+        removed 2026-05-31; trichotomy collapsed to REUSE/NEW. The
+        reuse_registry is the only source of REUSE; class-name alone
+        is no longer enough evidence for any other label)."""
     import torch.nn as nn
     from scripts.tt_hw_planner.module_tree import discover_components
 
@@ -5138,7 +5140,11 @@ def test_module_tree_discover_finds_high_level_components() -> None:
     ), f"Singleton high-level Head class must still be emitted; got {names}"
     assert "patch_embed" in names, f"Singleton high-level PatchEmbed class must be emitted; got {names}"
 
-    assert hints.get("patch_embed") == "ADAPT", f"PatchEmbed should default to ADAPT, got {hints.get('patch_embed')}"
+    # Post-ADAPT-removal (2026-05-31): every discovered component now
+    # defaults to NEW. The reuse_registry is the only source of REUSE.
+    assert (
+        hints.get("patch_embed") == "NEW"
+    ), f"PatchEmbed should default to NEW post-ADAPT-removal, got {hints.get('patch_embed')}"
 
     for n in names:
         assert not n.startswith("sam2_"), f"Per-model prefix 'Sam2' must be stripped; got {n!r}"

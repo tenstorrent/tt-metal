@@ -130,7 +130,10 @@ def _collect_substitutions(
     notes: List[str] = []
     for c in getattr(plan, "components", []):
         status = getattr(c, "status", "NEW")
-        if status not in ("REUSE", "ADAPT", "NEW"):
+        # ADAPT removed 2026-05-31 — accept REUSE / NEW only. Legacy
+        # bringup_status.json files with "ADAPT" status drop through
+        # the continue (treat as unknown -> skip extraction).
+        if status not in ("REUSE", "NEW"):
             continue
         safe = "".join(ch if ch.isalnum() or ch in "_-" else "_" for ch in c.name)
         pcc_test = demo_dir / "tests" / "pcc" / f"test_{safe}.py"

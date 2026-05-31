@@ -250,7 +250,6 @@ def _run_auto_iterate_loop(
         _torch_ref_summary,
         _ungraduated_breakdown,
         _write_attempt_log,
-        cmd_bringup,
         cmd_prepare,
         find_demo_dir,
         hashlib,
@@ -1985,7 +1984,14 @@ def _run_auto_iterate_loop(
             quiet_handoff=True,
         )
         try:
-            cmd_bringup(handoff_argv)
+            # Use the per-component dispatcher directly. The
+            # ``cmd_bringup`` imported from ..cli is the local
+            # brain-orchestrated wrapper that re-enters cmd_up — calling
+            # it here would re-run the whole 6-step pipeline inside the
+            # iterate loop and cause cmd_up recursion.
+            from ..commands.bringup import cmd_bringup as _cmd_bringup_per_component
+
+            _cmd_bringup_per_component(handoff_argv)
         except Exception as exc:
             print(f"  handoff emission failed: {exc}", file=sys.stderr)
             return 2
@@ -2727,7 +2733,11 @@ def _run_auto_iterate_loop(
                 list_synth_targets=False,
             )
             try:
-                apply_rc = cmd_bringup(apply_argv)
+                # Per-component dispatcher (not the local cli wrapper)
+                # — see the handoff-call site above for the same fix.
+                from ..commands.bringup import cmd_bringup as _cmd_bringup_per_component
+
+                apply_rc = _cmd_bringup_per_component(apply_argv)
             except Exception as exc:
                 print(f"  apply-all-responses failed: {exc}", file=sys.stderr)
                 return 2

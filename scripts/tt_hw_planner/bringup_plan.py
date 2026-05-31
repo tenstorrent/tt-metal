@@ -15,8 +15,14 @@ from .reuse_registry import lookup_by_concept as _reuse_lookup_by_concept
 
 
 REUSE = "REUSE"
-ADAPT = "ADAPT"
 NEW = "NEW"
+# ADAPT was removed 2026-05-31. Trichotomy collapsed to REUSE / NEW.
+# Keep the symbol as an alias to NEW so any external code that still
+# imports `ADAPT` (e.g. cached overlays from prior runs) keeps
+# importing cleanly — anywhere ADAPT used to mean "needs work" it now
+# means NEW; the registry's old ADAPT entries have been migrated to
+# REUSE.
+ADAPT = NEW
 
 
 @dataclass
@@ -48,7 +54,11 @@ class BringUpPlan:
 
     @property
     def counts(self) -> Dict[str, int]:
-        out = {REUSE: 0, ADAPT: 0, NEW: 0}
+        # ADAPT removed 2026-05-31 — counts dict has REUSE / NEW only.
+        # Any stale "ADAPT" status in legacy bringup_status.json files
+        # gets bucketed under .get default (won't appear here but won't
+        # crash either).
+        out: Dict[str, int] = {REUSE: 0, NEW: 0}
         for c in self.components:
             out[c.status] = out.get(c.status, 0) + 1
         return out
@@ -109,13 +119,18 @@ def _shape(cfg: dict) -> Dict[str, Any]:
 
 
 def _diff_status(new_shape: Dict[str, Any], sibling_shape: Dict[str, Any]) -> str:
+    # ADAPT removed 2026-05-31. When shapes differ from the sibling we
+    # used to tag ADAPT ("light tweak"); now those go straight to NEW
+    # because there's no light-tweak machinery (ADAPT got no stub, no
+    # per-component test). The runtime PCC gate is the source of truth
+    # for whether a REUSE actually works.
     if not sibling_shape:
         return NEW
     shared_keys = [k for k in new_shape if k in sibling_shape]
     if not shared_keys:
         return NEW
     differ = [k for k in shared_keys if new_shape[k] != sibling_shape[k]]
-    return REUSE if not differ else ADAPT
+    return REUSE if not differ else NEW
 
 
 def _sibling_tt_file(backend: FamilyBackend, repo_root: Path, hint: str) -> Optional[str]:
@@ -245,13 +260,19 @@ def _extract_components_vision(
                     "shapes match so weight loader can clone the sibling's."
                     if status == REUSE
                     else (
-                        "Sibling has the same role but shapes differ; reuse layout, "
-                        "edit hidden_size / num_heads / intermediate_size."
-                    )
-                    if status == ADAPT
-                    else (
-                        "Architecturally distinct from sibling — write a new TTNN "
-                        "module against the HF reference impl above."
+                        # NEW covers both "architecturally distinct"
+                        # and "same role, different shapes" since the
+                        # ADAPT intermediate status was removed
+                        # 2026-05-31. The agent reads the existing
+                        # sibling file (if any) and decides at
+                        # iteration time whether to tweak constants or
+                        # rewrite the forward pass.
+                        "Either architecturally distinct from sibling, or same role "
+                        "with different shapes — write/adapt the TTNN module against "
+                        "the HF reference impl above. If a sibling tt-file with the "
+                        "same role exists, reuse its layout and update the shape "
+                        "constants (hidden_size / num_heads / intermediate_size); "
+                        "otherwise write from scratch."
                     )
                 ),
             )
@@ -419,9 +440,15 @@ def build_bringup_plan(
     global PCC gate has already FAILED on an ALREADY-SUPPORTED model.
     In that case every component that the registry tags as REUSE is
     actually broken (the global failure proves the mappings are
-    wrong) — promote them all to ADAPT so the per-component iterate
-    loop has work to do. Without this, an already-supported model
-    that produces garbage output has nothing for Path 1 to iterate on.
+    wrong) — promote them all to NEW so the per-component iterate
+    loop has stubs + PCC tests to work on. Without this, an
+    already-supported model that produces garbage output has nothing
+    for Path 1 to iterate on.
+
+    (The name ``force_adapt_all`` is historical — when this kwarg was
+    introduced 2026-05-31 the demotion target was ADAPT. ADAPT was
+    removed the same day; the demotion target is now NEW. Kwarg name
+    kept for callsite stability.)
     """
     new_model_type = (new_cfg or {}).get("model_type")
     sibling_cfg: Dict[str, Any] = {}
@@ -499,14 +526,24 @@ def build_bringup_plan(
                 pass
 
     if force_adapt_all:
+        # IMPORTANT: demote to NEW (not ADAPT). The entire downstream
+        # pipeline (autofill_stubs, _emit_pcc_template, candidate_pool,
+        # smoke-to-pcc upgrade, validation breakdown, ...) gates on
+        # status == "NEW" as the iteration trigger. ADAPT means "TT
+        # module exists and works for similar cases" — but here we know
+        # it DOESN'T work (global PCC failed). NEW is the right status
+        # so stubs + per-component PCC tests get generated and the
+        # brain has targets to iterate on. The notes still record the
+        # "was REUSE, demoted because PCC failed" provenance.
         promoted = 0
         for _c in comps:
             if _c.status == REUSE:
-                _c.status = ADAPT
+                _c.status = NEW
                 _c.notes = (
-                    f"[force_adapt_all] demoted REUSE -> ADAPT "
+                    f"[force_adapt_all] demoted REUSE -> NEW "
                     f"because global PCC gate failed on this "
-                    f"already-supported model. {_c.notes}"
+                    f"already-supported model (NEW status triggers "
+                    f"stub + PCC-test generation downstream). {_c.notes}"
                 ).strip()
                 promoted += 1
         if promoted:
@@ -515,11 +552,11 @@ def build_bringup_plan(
 
                 logger.info(
                     f"[bringup_plan] force_adapt_all promoted "
-                    f"{promoted} REUSE -> ADAPT component(s) so Path 1 "
-                    f"per-component iterate has targets"
+                    f"{promoted} REUSE -> NEW component(s) so Path 1 "
+                    f"per-component iterate has stubs + tests to work on"
                 )
             except Exception:
-                print(f"  [bringup_plan] force_adapt_all promoted " f"{promoted} REUSE -> ADAPT component(s)")
+                print(f"  [bringup_plan] force_adapt_all promoted " f"{promoted} REUSE -> NEW component(s)")
 
     plan = BringUpPlan(
         new_model_id=new_model_id,
@@ -561,10 +598,7 @@ def render_markdown(plan: BringUpPlan) -> str:
             f"New `model_type` = `{plan.new_model_type}`; " f"sibling `model_type` = `{plan.sibling_model_type}`."
         )
     parts.append("")
-    parts.append(
-        f"**Summary:** {counts.get(REUSE, 0)} REUSE · "
-        f"{counts.get(ADAPT, 0)} ADAPT · {counts.get(NEW, 0)} NEW component(s)."
-    )
+    parts.append(f"**Summary:** {counts.get(REUSE, 0)} REUSE · " f"{counts.get(NEW, 0)} NEW component(s).")
     parts.append("")
     if plan.notes:
         parts.append("> **Notes:**")
@@ -592,12 +626,17 @@ def render_markdown(plan: BringUpPlan) -> str:
 
     parts.append("## Action by status")
     parts.append("")
-    parts.append("- **REUSE**: import / call the sibling's tt-module unchanged. Weight names match.")
     parts.append(
-        "- **ADAPT**: keep the sibling's tt-module layout; edit shape constants (hidden_size, num_heads, intermediate_size, eps)."
+        "- **REUSE**: import / call the sibling's tt-module unchanged. Weight names match. "
+        "The global PCC gate enforces this — if it fails, `force_adapt_all` demotes the "
+        "REUSE component to NEW and the brain iterates per-component."
     )
     parts.append(
-        "- **NEW**: write a new TTNN port. A stub file is generated under `_stubs/` raising `NotImplementedError` with the HF reference path; replace the body."
+        "- **NEW**: write/adapt the TTNN port. A stub file is generated under `_stubs/` "
+        "(torch fallback by default), then progressively rewritten to native ttnn through "
+        "per-component PCC iteration. If a sibling tt-file with the same role exists, the "
+        "agent reuses its layout and updates shape constants (hidden_size, num_heads, "
+        "intermediate_size, eps); otherwise it writes from scratch against the HF reference."
     )
     parts.append("")
 
@@ -618,13 +657,12 @@ def render_markdown(plan: BringUpPlan) -> str:
     parts.append("## Bring-up checklist")
     parts.append("")
     parts.append(
-        "1. For each **REUSE** row above, import the sibling tt-module directly in the scaffolded demo's `tt/` instead of editing the cloned copy."
+        "1. For each **REUSE** row above, import the sibling tt-module directly in the scaffolded demo's `tt/` instead of editing the cloned copy. "
+        "The global PCC gate enforces correctness — if it fails, the brain auto-promotes REUSE to NEW via `force_adapt_all`."
     )
     parts.append(
-        "2. For each **ADAPT** row, open the cloned tt-file (same name as the sibling), update shape constants, run `pytest tests/pcc/` for that block."
-    )
-    parts.append(
-        "3. For each **NEW** row, open the matching file under `_stubs/` and replace the `NotImplementedError` with a TTNN port driven by the linked HF reference."
+        "2. For each **NEW** row, open the matching file under `_stubs/` and replace the `NotImplementedError` (or torch fallback) with a TTNN port "
+        "driven by the linked HF reference. If a sibling tt-file with the same role exists, reuse its layout and update shape constants."
     )
     parts.append(
         "4. Once every component passes its PCC test, run `python -m scripts.tt_hw_planner prepare $MODEL --execute` to confirm the assembled model runs end-to-end."

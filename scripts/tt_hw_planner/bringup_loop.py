@@ -1019,8 +1019,8 @@ def render_text(result: BringupLoopResult) -> str:
     out.append(f"  Demo folder: {result.demo_dir}")
     cb = result.counts_before
     ca = result.counts_after
-    out.append(f"  Counts before: {cb.get('REUSE', 0)} REUSE / {cb.get('ADAPT', 0)} ADAPT / {cb.get('NEW', 0)} NEW")
-    out.append(f"  Counts after:  {ca.get('REUSE', 0)} REUSE / {ca.get('ADAPT', 0)} ADAPT / {ca.get('NEW', 0)} NEW")
+    out.append(f"  Counts before: {cb.get('REUSE', 0)} REUSE / {cb.get('NEW', 0)} NEW")
+    out.append(f"  Counts after:  {ca.get('REUSE', 0)} REUSE / {ca.get('NEW', 0)} NEW")
     out.append("")
 
     if not result.actions:
