@@ -34,11 +34,13 @@
 // KernelSpec, not here. (The endpoint configuration encodes producer/consumer
 // kernel identity, number of kernel threads, and multi-threaded access patterns.)
 //
-// INVARIANT: At each node, a local DFB has exactly one producer kernel instance
-//   and exactly one consumer kernel instance. Multiple PRODUCER KernelSpecs (and
-//   multiple CONSUMER KernelSpecs) may bind the same DFB, provided they have
-//   non-overlapping node coverage and perfectly matching binding-site parameters
-//   (access_pattern, num_threads).
+// INVARIANT: At the node level, a DFB instance has exactly one producer kernel
+//   instance and exactly one consumer kernel instance. You must respect this
+//   invariant across the DataflowBufferSpec's endpoint bindings.
+//   It is legal to bind more than one KernelSpec producer (or consumer) to a
+//   DFB endpoint, provided that they have:
+//     - non-overlapping node coverage, AND
+//     - identical binding-site parameters (access_pattern, num_threads)
 //
 // INSTANCING: Like KernelSpec, a DataflowBufferSpec is a *per-node template*.
 //   One independent DFB instance is allocated per node where its endpoint
@@ -80,8 +82,9 @@ struct DataflowBufferSpec {
     // Entry format metadata
     ////////////////////////////////////
 
-    // The fields in this section are used to convey DFB entry format metadata to the LLK APIs.
-    // (They need only be considered for DFBs that are bound to a compute kernel.)
+    // The fields in this section are used to convey DFB entry format metadata to the
+    // Low-Level Kernel (LLK) device APIs (compute primitives).
+    // (These only need to be considered for DFBs that are bound to a compute kernel.)
 
     // The data format is required for any DFB bound to a compute kernel
     std::optional<tt::DataFormat> data_format_metadata = std::nullopt;
