@@ -294,6 +294,67 @@ def test_wiring_13_escalation_writes_manifest_with_reuse_demoted_to_new() -> Non
     assert "collect_bringup_plan_files(" in scaffold_src
 
 
+# ---------------------------------------------------------------------------
+# WIRING #14: canonical-import stub when tt_reuse_target is set on NEW
+# ---------------------------------------------------------------------------
+
+
+def test_wiring_14_canonical_import_stub_removes_torch_escape_hatch() -> None:
+    """Pin: when a NEW component has ``tt_reuse_target`` set (which only
+    happens via ``force_adapt_all`` on the escalation path),
+    ``autofill_stubs`` must emit a canonical-import stub instead of the
+    op-synth / torch-fallback scaffold. The canonical-import stub:
+
+      1. Points the LLM at the canonical TT impl in its header.
+      2. Has NotImplementedError bodies in __init__/build/__call__.
+      3. Contains NO ``transformers.AutoModel.from_pretrained(...)``,
+         NO ``_CANDIDATE_SUBMODULE_PATHS``, NO ``_get_torch_submodule``
+         escape hatch.
+
+    Without this, the LLM games the loop by leaving HF AutoModel
+    boilerplate in __call__ — pytest passes via torch == torch on
+    host CPU, but no component ever runs natively on TT device.
+    Caught 2026-05-31 in the Qwen2.5-14B rewire test (every component
+    PCC-passed but 0/5 graduated)."""
+    from scripts.tt_hw_planner.bringup_loop import _render_canonical_import_stub
+
+    stub = _render_canonical_import_stub(
+        component_name="attention",
+        model_id="Qwen/Qwen2.5-14B-Instruct",
+        tt_reuse_target="models/tt_transformers/tt/attention.py",
+    )
+
+    # Header points at canonical impl
+    assert "models/tt_transformers/tt/attention.py" in stub
+    assert "canonical-import path" in stub
+
+    # NotImplementedError bodies — no working CPU fallback to game
+    assert stub.count("raise NotImplementedError") >= 3, (
+        "__init__, build, __call__ must all raise NotImplementedError so "
+        "the LLM cannot pass pytest with a torch-fallback wrapper"
+    )
+
+    # No torch escape hatches in EXECUTABLE code (the docstring
+    # mentions these patterns by name as "don't do this", so we strip
+    # comments/docstrings before grepping).
+    import re as _re_local
+
+    # Drop triple-quoted docstring and # comments
+    _exec_only = stub
+    _exec_only = _re_local.sub(r'"""[\s\S]*?"""', "", _exec_only, count=1)
+    _exec_only = "\n".join(ln for ln in _exec_only.splitlines() if not ln.lstrip().startswith("#"))
+    assert "transformers.AutoModel" not in _exec_only
+    assert "_CANDIDATE_SUBMODULE_PATHS" not in _exec_only
+    assert "_get_torch_submodule" not in _exec_only
+    assert "HF_MODEL_ID" not in _exec_only
+
+    # Gating: autofill_stubs must check tt_reuse_target before falling
+    # through to op-synth/torch-fallback
+    bringup_loop_src = _read("scripts/tt_hw_planner/bringup_loop.py")
+    assert "_render_canonical_import_stub" in bringup_loop_src
+    assert "canonical-import:" in bringup_loop_src  # action label
+
+
 def test_all_touched_modules_import_cleanly() -> None:
     """Last-line-of-defense: every module touched by the wirings
     must still import. A syntax error or wrong import in any wire

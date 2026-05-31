@@ -1313,6 +1313,119 @@ def _resolve_torch_submodule_for_autofill(
     return None, candidates
 
 
+_CANONICAL_IMPORT_STUB_TEMPLATE = '''\
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+# >>> MACHINE-GENERATED stub (canonical-import path) <<<
+"""Stub for `{component_name}` of `{model_id}`.
+
+The reuse_registry mapped this component to the canonical TT
+implementation at:
+
+    {tt_reuse_target}
+
+The global PCC gate failed for this model with that mapping
+(via force_adapt_all on the escalation path), so the canonical
+impl needs adaptation for this model's shape constants.
+
+YOUR JOB:
+  1. Import the canonical class(es) from `{tt_reuse_target}` (or
+     a related file in the same package).
+  2. Wire `__init__` / `build` to instantiate it with this model's
+     shape constants (read them from the HF reference's torch_module
+     in `build(device, torch_module)`).
+  3. Wire `__call__` to forward through the canonical impl's
+     forward/__call__, returning ttnn tensors on device.
+
+DO NOT write a torch-fallback wrapper. The loop will reject any
+stub whose `__call__` delegates to a torch.nn.Module on host CPU.
+No `transformers.AutoModel.from_pretrained(...)`, no
+`_get_torch_submodule(...)`, no walking submodule paths.
+"""
+from __future__ import annotations
+import torch
+import ttnn
+
+# The canonical TT implementation lives at:
+#   {tt_reuse_target}
+# Import the relevant class(es) directly. Example:
+#   from {tt_reuse_target_module} import <CanonicalClass>
+
+
+class Tt{component_class_name}:
+    """Adapter wrapping the canonical TT impl with this model's shape constants."""
+
+    def __init__(self, device, **kwargs) -> None:
+        self._device = device
+        # TODO: instantiate the canonical class from `{tt_reuse_target}` with
+        # this model's shape constants (hidden_size, num_heads, intermediate_size,
+        # eps, etc.). Read them from the HF config or from `torch_module` in `build`.
+        raise NotImplementedError(
+            "Wire the canonical TT impl from `{tt_reuse_target}`. "
+            "Do NOT delegate to torch — the loop rejects CPU fallback."
+        )
+
+    @classmethod
+    def build(cls, device, torch_module):
+        # TODO: load weights from torch_module.state_dict() into the canonical
+        # TT class. See sibling tt_transformers/tt/* implementations for the
+        # expected state_dict key mapping.
+        raise NotImplementedError(
+            "Implement weight loading from `torch_module.state_dict()` into the "
+            "canonical TT impl. Do NOT cache torch_module — the goal is native "
+            "ttnn execution on device."
+        )
+
+    def __call__(self, *args, **kwargs):
+        # TODO: forward through the canonical TT impl's __call__/forward,
+        # returning ttnn tensors on device. Inputs are ttnn tensors on device.
+        raise NotImplementedError(
+            "Forward must call the canonical TT impl's __call__ / forward. "
+            "Inputs are ttnn tensors on device; outputs must be ttnn tensors "
+            "on device. Do NOT round-trip through torch."
+        )
+'''
+
+
+def _render_canonical_import_stub(
+    *,
+    component_name: str,
+    model_id: str,
+    tt_reuse_target: str,
+) -> str:
+    """Emit a stub whose body raises NotImplementedError and whose header
+    points the LLM at the canonical TT implementation it must adapt.
+
+    Used when a component has been demoted REUSE -> NEW via
+    ``force_adapt_all`` on the escalation path (Path 2 PCC-gate failure):
+    the canonical TT impl exists but doesn't quite work for this model's
+    shape constants, so the LLM must IMPORT it and adapt — NOT write a
+    torch-fallback wrapper. By removing the escape hatch (no
+    ``transformers.AutoModel`` bootstrap, no ``_CANDIDATE_SUBMODULE_PATHS``)
+    from the stub itself, the LLM cannot game its way to a torch wrapper:
+    the only way to make pytest pass is to actually wire the canonical impl.
+
+    Caller is responsible for gating: only call when
+    ``component["tt_reuse_target"]`` is non-empty AND
+    ``component["status"] == "NEW"``."""
+    safe = _safe_id(component_name)
+    # Derive a CamelCase-ish class name from the component slug.
+    # ("decoder_layer" -> "DecoderLayer", "r_m_s_norm" -> "RMSNorm").
+    class_name = "".join(part.capitalize() for part in safe.split("_") if part) or "Component"
+    # Convert path to module path: drop ".py" and replace "/" with "."
+    tt_reuse_target_module = tt_reuse_target.rstrip("/")
+    if tt_reuse_target_module.endswith(".py"):
+        tt_reuse_target_module = tt_reuse_target_module[:-3]
+    tt_reuse_target_module = tt_reuse_target_module.replace("/", ".")
+    return _CANONICAL_IMPORT_STUB_TEMPLATE.format(
+        component_name=component_name,
+        component_class_name=class_name,
+        model_id=model_id,
+        tt_reuse_target=tt_reuse_target,
+        tt_reuse_target_module=tt_reuse_target_module,
+    )
+
+
 def _emit_op_synth_stub(
     *,
     demo_dir: Path,
@@ -1505,7 +1618,34 @@ def autofill_stubs(
                 continue
 
         wrote = False
-        if op_synth and hf_model is not None:
+        # Canonical-import path (Option 2, 2026-05-31): when the registry
+        # mapped this component to an existing TT impl AND the component
+        # was demoted REUSE -> NEW (only happens via force_adapt_all on
+        # the escalation path), emit a stub that points the LLM at the
+        # canonical impl with no torch-fallback escape hatch. This is the
+        # closest-to-graduation starting point: the LLM cannot game pytest
+        # by leaving HF AutoModel boilerplate in `__call__` — the stub
+        # body raises NotImplementedError until the LLM actually wires
+        # the canonical class. Gated on tt_reuse_target so SAM2 cold-start
+        # NEW components (no canonical impl, no tt_reuse_target) follow
+        # the existing op-synth/torch-fallback path unchanged.
+        _tt_reuse_target = comp.get("tt_reuse_target")
+        if _tt_reuse_target and isinstance(_tt_reuse_target, str) and _tt_reuse_target.strip():
+            canonical_body = _render_canonical_import_stub(
+                component_name=comp["name"],
+                model_id=model_id,
+                tt_reuse_target=_tt_reuse_target,
+            )
+            stub_path.write_text(canonical_body)
+            actions.append((comp["name"], f"canonical-import:{_tt_reuse_target}"))
+            wrote = True
+            stale_manifest = demo_dir / "_stubs" / f"{safe}.opplan.json"
+            if stale_manifest.is_file():
+                try:
+                    stale_manifest.unlink()
+                except Exception:
+                    pass
+        if not wrote and op_synth and hf_model is not None:
             result = _emit_op_synth_stub(demo_dir=demo_dir, component=comp, model=hf_model, model_id=model_id)
             if result is not None:
                 label, _manifest = result
