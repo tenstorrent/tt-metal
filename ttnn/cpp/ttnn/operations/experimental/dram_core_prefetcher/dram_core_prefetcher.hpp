@@ -43,7 +43,7 @@ namespace ttnn::operations::experimental {
 // when start_dram_core_prefetcher would otherwise raise.
 bool is_dram_core_prefetcher_supported(tt::tt_metal::distributed::MeshDevice* mesh_device);
 
-void start_dram_core_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device);
+void start_dram_core_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device, bool dual_senders_per_bank = false);
 
 void queue_dram_core_prefetcher_request(
     tt::tt_metal::distributed::MeshDevice* mesh_device,

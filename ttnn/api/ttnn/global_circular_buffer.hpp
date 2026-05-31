@@ -33,7 +33,8 @@ GlobalCircularBuffer create_global_circular_buffer_with_dram_senders(
     MeshDevice* mesh_device,
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     uint32_t size,
-    BufferType buffer_type = BufferType::L1);
+    BufferType buffer_type = BufferType::L1,
+    bool dual_senders_per_bank = false);
 
 // Build a DRAM-sender GCB shaped to feed one or more 1D ring matmuls (gather_in0=true)
 // from the given weight tensors. The caller supplies `bank_to_receivers` (the same layout

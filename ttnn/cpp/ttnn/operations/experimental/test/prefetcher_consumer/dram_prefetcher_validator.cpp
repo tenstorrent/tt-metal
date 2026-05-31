@@ -19,6 +19,8 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
+#include <unordered_map>
+
 namespace ttnn::operations::experimental::test {
 
 namespace {
@@ -37,14 +39,6 @@ void DramPrefetcherValidatorDeviceOperation::validate_on_program_cache_miss(
 
     const auto& sr_mapping = attrs.global_cb->sender_receiver_core_mapping();
     TT_FATAL(!sr_mapping.empty(), "GCB has no senders");
-    const uint32_t num_receivers_per_sender = sr_mapping.front().second.num_cores();
-    for (const auto& [_, recv] : sr_mapping) {
-        TT_FATAL(
-            recv.num_cores() == num_receivers_per_sender,
-            "GCB has non-uniform receivers per sender ({} vs {}); validator requires uniform fanout",
-            recv.num_cores(),
-            num_receivers_per_sender);
-    }
 }
 
 void DramPrefetcherValidatorDeviceOperation::validate_on_program_cache_hit(
@@ -90,8 +84,20 @@ DramPrefetcherValidatorDeviceOperation::ProgramFactory::create_at(
     // Derive ring topology from the GCB (matches both worker-sender and DRAM-sender paths).
     const auto& sr_mapping = global_cb.sender_receiver_core_mapping();
     const uint32_t num_senders = static_cast<uint32_t>(sr_mapping.size());
-    const uint32_t num_receivers_per_sender = sr_mapping.front().second.num_cores();
-    const uint32_t num_blocks = num_senders * num_receivers_per_sender;
+    uint32_t num_blocks = 0;
+    uint32_t max_bank_id = 0;
+    for (const auto& [sender_logical, receivers] : sr_mapping) {
+        const uint32_t bank_id = static_cast<uint32_t>(sender_logical.x);
+        max_bank_id = bank_id > max_bank_id ? bank_id : max_bank_id;
+        num_blocks += receivers.num_cores();
+    }
+    const uint32_t num_dram_banks = max_bank_id + 1;
+    TT_FATAL(
+        num_dram_banks > 0 && num_blocks % num_dram_banks == 0,
+        "Validator: total receiver count ({}) must divide evenly across {} DRAM banks",
+        num_blocks,
+        num_dram_banks);
+    const uint32_t receivers_per_bank = num_blocks / num_dram_banks;
 
     // Per-tensor geometry (single-tensor path; see prefetcher_matmul_design.md §3).
     // Read shape from the tensor's logical (padded) shape so this works for
@@ -180,26 +186,32 @@ DramPrefetcherValidatorDeviceOperation::ProgramFactory::create_at(
     // Receiver enumeration order within a sender's CoreRangeSet must match the order the
     // sender uses to address them in its internal noc_xy table (row-major).
     const uint32_t bank_base_addr = static_cast<uint32_t>(tensor_buffer->address());
+    std::unordered_map<uint32_t, uint32_t> receivers_seen_by_bank;
     for (uint32_t s = 0; s < num_senders; ++s) {
         const auto& [sender_logical, receivers_set] = sr_mapping[s];
         const uint32_t bank_id = sender_logical.x;
         const auto recv_cores = corerange_to_cores(receivers_set, std::nullopt, /*row_wise=*/true);
-        TT_FATAL(
-            recv_cores.size() == num_receivers_per_sender,
-            "Sender {} has {} receivers but expected {}",
-            s,
-            recv_cores.size(),
-            num_receivers_per_sender);
+        const uint32_t recv_index_base = receivers_seen_by_bank[bank_id];
+        receivers_seen_by_bank[bank_id] = recv_index_base + static_cast<uint32_t>(recv_cores.size());
         for (uint32_t r = 0; r < recv_cores.size(); ++r) {
+            const uint32_t bank_local_recv = recv_index_base + r;
+            TT_FATAL(
+                bank_local_recv < receivers_per_bank,
+                "Sender {} on bank {} maps receiver {} past receivers_per_bank {}",
+                s,
+                bank_id,
+                bank_local_recv,
+                receivers_per_bank);
             // ring_pos formula differs by layout:
-            //   legacy K-row-major: bank b's slot r -> ring_pos = b * num_recv + r
-            //   recv-contig + strided GCB: bank b's slot r -> ring_pos = b + r * num_senders
-            const uint32_t ring_pos =
-                is_recv_contig ? (bank_id + r * num_senders) : (bank_id * num_receivers_per_sender + r);
+            //   legacy K-row-major: bank b's slot k -> ring_pos = b * receivers_per_bank + k
+            //   recv-contig + strided GCB: bank b's slot k -> ring_pos = b + k * num_dram_banks
+            // With dual senders, k is the bank-local receiver index across both senders.
+            const uint32_t ring_pos = is_recv_contig ? (bank_id + bank_local_recv * num_dram_banks)
+                                                     : (bank_id * receivers_per_bank + bank_local_recv);
             const uint32_t n_col_start = ring_pos * n_per_recv_tiles;
             std::vector<uint32_t> rt_args = {
                 bank_id,
-                r,
+                bank_local_recv,
                 bank_base_addr,
                 k_block_w_tiles,
                 total_n_tiles,

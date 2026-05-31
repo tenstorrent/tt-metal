@@ -37,9 +37,10 @@ GlobalCircularBuffer create_global_circular_buffer_with_dram_senders(
     MeshDevice* mesh_device,
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     uint32_t size,
-    BufferType buffer_type) {
+    BufferType buffer_type,
+    bool dual_senders_per_bank) {
     return tt::tt_metal::experimental::CreateGlobalCircularBufferWithDramSenders(
-        *mesh_device, bank_to_receivers, size, buffer_type);
+        *mesh_device, bank_to_receivers, size, buffer_type, dual_senders_per_bank);
 }
 
 GlobalCircularBuffer create_global_circular_buffer_for_matmul_1d(

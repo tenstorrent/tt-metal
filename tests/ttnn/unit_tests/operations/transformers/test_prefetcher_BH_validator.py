@@ -355,7 +355,7 @@ def _bank_receivers_strided(bank_idx: int, recv_per_bank: int, num_dram_banks: i
     return ttnn.CoreRangeSet(cores)
 
 
-def _setup_weight_and_gcb_recv_contig(device, K, N, dtype, recv_per_bank, num_layers):
+def _setup_weight_and_gcb_recv_contig(device, K, N, dtype, recv_per_bank, num_layers, dual_senders=False):
     """Build a DRAM-sender GCB + NdShardSpec-allocated weight for the
     receiver-contiguous DRAM-core path. num_shards = ring_size > num_dram_banks
     triggers the manager's recv-contig detection."""
@@ -394,24 +394,31 @@ def _setup_weight_and_gcb_recv_contig(device, K, N, dtype, recv_per_bank, num_la
         for b in range(num_dram_banks)
     ]
     gcb_size = _GCB_DEPTH_PAGES * push_page_size
-    gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(device, bank_to_receivers, gcb_size)
+    gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(
+        device, bank_to_receivers, gcb_size, dual_senders_per_bank=dual_senders
+    )
     num_iters_total = num_layers * ring_size
     return tt_weight, gcb, num_iters_total, push_page_size, ring_size
 
 
 @pytest.mark.parametrize(
-    "K,N,dtype,recv_per_bank,num_layers",
+    "K,N,dtype,recv_per_bank,num_layers,dual_senders",
     [
-        (2048, 3584, ttnn.bfloat8_b, 2, 1),  # ring=16, num_shards=16 > num_banks=8
-        (4096, 14336, ttnn.bfloat8_b, 8, 1),  # FF1 ring=64
+        (2048, 3584, ttnn.bfloat8_b, 2, 1, False),  # ring=16, num_shards=16 > num_banks=8
+        (4096, 14336, ttnn.bfloat8_b, 8, 1, False),  # FF1 ring=64
+        (2048, 7168, ttnn.bfloat8_b, 4, 1, False),  # ring=32, single-sender nr=4 (discriminator)
+        # Dual-sender: each bank's receivers split ceil/floor across two DRISC cores.
+        (2048, 3584, ttnn.bfloat8_b, 2, 1, True),  # ring=16, even split 1/1 per bank
+        (4096, 14336, ttnn.bfloat8_b, 8, 1, True),  # FF1 ring=64, even split 4/4 per bank
+        (2304, 5376, ttnn.bfloat8_b, 3, 1, True),  # ring=24, odd split 2/1 per bank (ceil/floor)
     ],
-    ids=["multi_ksub", "ff1"],
+    ids=["multi_ksub", "ff1", "single_r4", "multi_ksub_dual", "ff1_dual", "odd_dual"],
 )
-def test_validator_dram_sender_recv_contig(device, K, N, dtype, recv_per_bank, num_layers):
+def test_validator_dram_sender_recv_contig(device, K, N, dtype, recv_per_bank, num_layers, dual_senders):
     tt_weight, gcb, num_iters_total, push_page_size, ring_size = _setup_weight_and_gcb_recv_contig(
-        device, K, N, dtype, recv_per_bank, num_layers
+        device, K, N, dtype, recv_per_bank, num_layers, dual_senders=dual_senders
     )
-    ttnn.experimental.start_dram_core_prefetcher(device)
+    ttnn.experimental.start_dram_core_prefetcher(device, dual_senders_per_bank=dual_senders)
     ttnn.experimental.queue_dram_core_prefetcher_request(device, [(tt_weight, ring_size)] * num_layers, global_cb=gcb)
     ttnn.experimental.test_dram_prefetcher_validator(
         device,

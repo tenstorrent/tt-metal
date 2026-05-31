@@ -304,6 +304,10 @@ void kernel_main() {
         // Reading it per request lets a single prefetcher serve GCBs with different
         // receiver counts.
         const uint32_t num_receivers = state->num_receivers;
+        // Bank-local slab index of this sender's first receiver. When two DRISC cores
+        // split a bank's receivers, the second core's local receiver r maps to bank-local
+        // slab (recv_index_base + r). 0 for a single sender. Receiver-contiguous only.
+        const uint32_t recv_index_base = state->recv_index_base;
 
         // Entries follow the header (grow forward); the deduplicated layout table grows
         // backward from the end of the payload, so layout i lives at read_ptr +
@@ -553,8 +557,8 @@ void kernel_main() {
                             const uint32_t boff = civ * max_chunk_bytes;
                             const uint32_t rem = bytes_per_recv - boff;
                             const uint32_t cb = rem < max_chunk_bytes ? rem : max_chunk_bytes;
-                            const uint32_t src =
-                                tensor_base + cr * t_recv_stride + pages_sent_global * t_page_bytes_per_recv + boff;
+                            const uint32_t src = tensor_base + (recv_index_base + cr) * t_recv_stride +
+                                                 pages_sent_global * t_page_bytes_per_recv + boff;
                             PROF_DECL_TS(t_p0);
                             PROF_DECL_TS(t_p1);
                             PROF_TICK(t_p0);
@@ -641,8 +645,8 @@ void kernel_main() {
                                 const uint32_t boff = civ * max_chunk_bytes;
                                 const uint32_t rem = bytes_per_recv - boff;
                                 const uint32_t cb = rem < max_chunk_bytes ? rem : max_chunk_bytes;
-                                const uint32_t src =
-                                    tensor_base + cr * t_recv_stride + pages_sent_global * t_page_bytes_per_recv + boff;
+                                const uint32_t src = tensor_base + (recv_index_base + cr) * t_recv_stride +
+                                                     pages_sent_global * t_page_bytes_per_recv + boff;
                                 PROF_DECL_TS(t_di0);
                                 PROF_DECL_TS(t_di1);
                                 PROF_TICK(t_di0);

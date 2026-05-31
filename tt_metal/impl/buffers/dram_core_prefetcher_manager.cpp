@@ -71,29 +71,30 @@ enum class LayoutMode : uint32_t {
     ReceiverContiguous = 1,
 };
 
-LayoutMode detect_layout_mode(const Buffer& buf, uint32_t num_senders, uint32_t num_receivers) {
-    const uint32_t ring_size = num_senders * num_receivers;
+// Detection keys on DRAM bank count and the total receiver count (= ring_size), both
+// independent of how many DRISC sender cores drive each bank. KRowMajor has one shard
+// per bank; ReceiverContiguous has one shard per receiver (round-robin across banks).
+LayoutMode detect_layout_mode(const Buffer& buf, uint32_t num_banks, uint32_t total_receivers) {
     const auto& bds_opt = buf.buffer_distribution_spec();
     if (!bds_opt.has_value()) {
         // Legacy ShardSpec path: one shard per bank by construction.
         return LayoutMode::KRowMajor;
     }
     const auto num_shards = static_cast<uint32_t>(bds_opt->num_shards());
-    if (num_shards == num_senders) {
+    if (num_shards == num_banks) {
         return LayoutMode::KRowMajor;
     }
-    if (num_shards == ring_size) {
+    if (num_shards == total_receivers) {
         return LayoutMode::ReceiverContiguous;
     }
     TT_FATAL(
         false,
-        "DRAM-core prefetcher buffer has {} shards across {} DRAM senders; expected either "
-        "num_senders ({}, K-row-major) or ring_size = num_senders * num_receivers ({}, "
-        "receiver-contiguous).",
+        "DRAM-core prefetcher buffer has {} shards across {} DRAM banks; expected either "
+        "num_banks ({}, K-row-major) or total_receivers ({}, receiver-contiguous).",
         num_shards,
-        num_senders,
-        num_senders,
-        ring_size);
+        num_banks,
+        num_banks,
+        total_receivers);
 }
 
 // Address-independent per-tensor geometry for the K-row-major DRAM layout — see
@@ -325,15 +326,19 @@ DramCorePrefetcherTensorLayout compute_tensor_layout_recv_contig(
 DramCorePrefetcherTensorLayout compute_tensor_layout(
     const MeshTensor& t,
     uint32_t block_count,
-    uint32_t num_senders,
-    uint32_t num_receivers,
+    uint32_t num_banks,
+    uint32_t receivers_per_bank,
+    uint32_t total_receivers,
     uint32_t ring_half,
     uint32_t stage_third,
     ContextId context_id) {
     const auto* ref_buffer = t.mesh_buffer().get_reference_buffer();
-    const LayoutMode mode = detect_layout_mode(*ref_buffer, num_senders, num_receivers);
+    const LayoutMode mode = detect_layout_mode(*ref_buffer, num_banks, total_receivers);
     if (mode == LayoutMode::KRowMajor) {
-        return compute_tensor_layout_krow_major(t, block_count, num_receivers, ring_half, context_id);
+        // KRowMajor is single-sender-per-bank only, so receivers_per_bank is the bank's
+        // full receiver count. (Receiver-contiguous derives its geometry from the shard
+        // shape and ignores the receiver count entirely.)
+        return compute_tensor_layout_krow_major(t, block_count, receivers_per_bank, ring_half, context_id);
     }
     return compute_tensor_layout_recv_contig(t, block_count, stage_third, context_id);
 }
@@ -355,12 +360,21 @@ void DramCorePrefetcherManager::enumerate_dram_senders() {
                                .get_cluster()
                                .get_soc_desc(mesh_device_->get_view().get_devices().front()->id());
     const uint32_t num_banks = soc_desc.get_num_dram_views();
+    num_banks_ = num_banks;
     sender_logical_cores_.clear();
-    sender_logical_cores_.reserve(num_banks);
+    sender_logical_cores_.reserve((dual_senders_per_bank_ ? 2 : 1) * num_banks);
     for (uint32_t b = 0; b < num_banks; ++b) {
-        sender_logical_cores_.push_back(mesh_device_->impl().pick_unused_dram_logical_core(b));
+        if (dual_senders_per_bank_) {
+            // Two senders per bank: the free subchannel then the NOC1-endpoint subchannel.
+            // Must match the GCB factory's build_dram_sender_mapping ordering.
+            for (const CoreCoord& core : mesh_device_->impl().dram_sender_logical_cores(b)) {
+                sender_logical_cores_.push_back(core);
+            }
+        } else {
+            sender_logical_cores_.push_back(mesh_device_->impl().pick_unused_dram_logical_core(b));
+        }
     }
-    num_senders_ = num_banks;
+    num_senders_ = static_cast<uint32_t>(sender_logical_cores_.size());
 }
 
 void DramCorePrefetcherManager::allocate_sockets() {
@@ -433,7 +447,7 @@ void DramCorePrefetcherManager::build_and_launch_programs(uint32_t stage_ring_ba
 
 void DramCorePrefetcherManager::start(const experimental::DramCorePrefetcherConfig& config) {
     auto lock = lock_api_function_();
-    (void)config;
+    dual_senders_per_bank_ = config.dual_senders_per_bank;
     TT_FATAL(
         !active_, "A DRAM-core prefetcher is already active on this mesh device. Call StopDramCorePrefetcher first.");
 
@@ -540,10 +554,21 @@ std::vector<std::vector<uint8_t>> DramCorePrefetcherManager::serialize_request_p
 
     const ContextId context_id = mesh_device_->impl().get_context_id();
 
-    // Derive num_receivers from the GCB itself so each Queue call can target a
-    // GCB with a different receiver count. The DRAM-sender GCB ctor enforces a
-    // uniform receiver count across senders, so front() speaks for every sender.
-    const uint32_t gcb_num_receivers = gcb.sender_receiver_core_mapping().front().second.num_cores();
+    // Derive the receiver counts from the GCB itself so each Queue call can target a
+    // GCB with a different receiver count. total_receivers (== ring_size) and
+    // receivers_per_bank are independent of how many DRISC senders drive a bank; the
+    // per-sender split (when dual_senders_per_bank_) just partitions a bank's receivers.
+    const auto& mapping = gcb.sender_receiver_core_mapping();
+    uint32_t total_receivers = 0;
+    for (const auto& [_sender, receivers] : mapping) {
+        total_receivers += receivers.num_cores();
+    }
+    TT_FATAL(
+        num_banks_ > 0 && total_receivers % num_banks_ == 0,
+        "DRAM-core prefetcher: total receivers ({}) must divide evenly across {} banks",
+        total_receivers,
+        num_banks_);
+    const uint32_t receivers_per_bank = total_receivers / num_banks_;
     const uint32_t gcb_state_addr = static_cast<uint32_t>(experimental::sender_state_drisc_l1_base(gcb));
 
     const uint32_t pcie_alignment = MetalContext::instance(context_id).hal().get_alignment(HalMemType::HOST);
@@ -585,8 +610,9 @@ std::vector<std::vector<uint8_t>> DramCorePrefetcherManager::serialize_request_p
         const DramCorePrefetcherTensorLayout layout = compute_tensor_layout(
             input.tensor.get(),
             input.block_count,
-            num_senders_,
-            gcb_num_receivers,
+            num_banks_,
+            receivers_per_bank,
+            total_receivers,
             ring_half_,
             stage_third_,
             context_id);
