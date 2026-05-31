@@ -738,7 +738,17 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
             (uint32_t)hidden_size,
             read_batch_size,
         };
-        untilize_compute_kd.config = tt::tt_metal::ComputeConfigDescriptor{.math_fidelity = MathFidelity::HiFi4};
+        untilize_compute_kd.config = tt::tt_metal::ComputeConfigDescriptor{
+            .math_fidelity = MathFidelity::HiFi4,
+            // Blackhole requires the DEST register in 32-bit mode whenever any CB on the core uses
+            // an 8-bit float format (Fp8_e4m3). The FP8 dispatch path reinterprets UINT8 CBs as
+            // Fp8_e4m3, so fp32_dest_acc_en must be enabled there.
+            .fp32_dest_acc_en = operation_attributes.use_fp8_dispatch,
+            // 32-bit DEST halves pack_untilize block capacity: half-sync 32-bit allows only 4
+            // tiles, but pack_untilize_block uses block_ct_dim=8. Full-sync 32-bit restores the
+            // 8-tile budget so the block still fits. Only needed on the FP8 (32-bit) path.
+            .dst_full_sync_en = operation_attributes.use_fp8_dispatch,
+        };
         desc.kernels.push_back(std::move(untilize_compute_kd));
     }
 
