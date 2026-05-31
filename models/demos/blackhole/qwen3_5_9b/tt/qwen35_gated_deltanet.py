@@ -201,6 +201,12 @@ class Qwen35GatedDeltaNet:
         self.split_conv_state = None
         # Trace capture support
         self.use_inplace_state = False
+        # When True (set during chunk-outer traced-prefill capture), the chunk (prefill)
+        # path writes recurrent + conv state into the persistent external buffers IN PLACE
+        # (ttnn.copy) instead of reassigning a fresh tensor, so the state carries across
+        # execute_trace() replays (each replay re-runs the same baked buffer addresses).
+        # Eager prefill keeps the reassign path. See Qwen35Model.capture_prefill_trace_chunked.
+        self._chunk_inplace_state = False
         # Optional persistent buffer for GDN kernel output. When set, forward_prefill_kernel
         # writes here instead of allocating fresh — required for trace replay.
         self._trace_prefill_output = None
@@ -426,6 +432,21 @@ class Qwen35GatedDeltaNet:
             use_chunk_seq=use_chunk_seq,
             chunk_seq_masks=seq_masks,
         )
+
+        if self._chunk_inplace_state and mode == "chunk":
+            # Per-chunk traced-prefill replay: write state into the persistent external
+            # buffers in place so it carries across execute_trace() calls. self.recurrent_state
+            # and self.fused_conv_state keep pointing at the same (baked) buffer addresses.
+            if list(new_state.shape) != list(self.recurrent_state.shape):
+                new_state = ttnn.reshape(new_state, list(self.recurrent_state.shape))
+            ttnn.copy(new_state, self.recurrent_state)
+            ttnn.deallocate(new_state)
+            if new_fused_conv is not None and not isinstance(new_fused_conv, list):
+                if new_fused_conv.layout != ttnn.TILE_LAYOUT:
+                    new_fused_conv = ttnn.to_layout(new_fused_conv, ttnn.TILE_LAYOUT)
+                ttnn.copy(new_fused_conv, self.fused_conv_state)
+                ttnn.deallocate(new_fused_conv)
+            return output
 
         self.recurrent_state = new_state
         if isinstance(new_fused_conv, list):

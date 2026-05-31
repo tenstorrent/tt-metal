@@ -236,7 +236,7 @@ void kernel_main() {
     cb_push_back(cb_rms_scale, 1);
     cb_push_back(cb_rms_eps, 1);
 
-    generate_reduce_scaler(cb_reduce_scaler, reduce_scaler);
+    wh_generate_reduce_scaler(cb_reduce_scaler, reduce_scaler);
 
     // ---- Per-pair processing ----
     for (uint32_t pair = 0; pair < num_pairs; pair++) {

@@ -116,6 +116,20 @@ def _get_sdpa_program_config(device, seq_len, q_seq_len=None, chunk_start_idx=No
     )
 
 
+def _get_flexible_sdpa_program_config(device):
+    """Fixed SDPAProgramConfig for the FLEXIBLE chunked SDPA (chunk_start_idx supplied as a
+    runtime device tensor). q/k_chunk=64 divides every chunk_start that is a multiple of the
+    2048-token GDN chunk, so ONE program serves all chunk positions — required so a single
+    captured trace can be replayed per chunk in chunk-outer prefill.
+    """
+    return ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        q_chunk_size=64,
+        k_chunk_size=64,
+        exp_approx_mode=False,
+    )
+
+
 def _get_paged_sdpa_decode_program_config(device, max_seq_len):
     """Build SDPAProgramConfig for paged_scaled_dot_product_attention_decode.
 
@@ -184,6 +198,7 @@ def gated_attention_forward_ttnn(
     # Paged prefill: fill K/V into paged cache, attend via chunked SDPA
     chunk_page_table=None,  # [1, num_blocks_in_chunk] int32 — blocks for this chunk only
     chunk_start_idx=None,  # int — absolute position of this chunk in the full sequence
+    chunk_start_idx_tensor=None,  # device tensor [1] int32 — runtime offset for trace-replay (flexible SDPA)
 ):
     """
     TTNN forward pass for Gated Attention with KV cache support.
@@ -276,16 +291,31 @@ def gated_attention_forward_ttnn(
         ttnn.deallocate(key_states)
         ttnn.deallocate(value_states)
 
-        attn_output = ttnn.transformer.chunked_scaled_dot_product_attention(
-            query_states,
-            paged_kv_cache_key,
-            paged_kv_cache_value,
-            page_table,
-            chunk_start_idx,
-            scale=scaling,
-            program_config=_get_sdpa_program_config(device, T, chunk_start_idx=chunk_start_idx),
-            compute_kernel_config=_get_sdpa_compute_kernel_config(),
-        )
+        if chunk_start_idx_tensor is not None:
+            # Flexible chunked SDPA: chunk_start_idx is a runtime device tensor and the
+            # program config is fixed (q/k_chunk=64), so a single captured trace replays
+            # for every chunk position (chunk-outer per-chunk prefill).
+            attn_output = ttnn.transformer.chunked_scaled_dot_product_attention(
+                query_states,
+                paged_kv_cache_key,
+                paged_kv_cache_value,
+                page_table,
+                chunk_start_idx_tensor=chunk_start_idx_tensor,
+                scale=scaling,
+                program_config=_get_flexible_sdpa_program_config(device),
+                compute_kernel_config=_get_sdpa_compute_kernel_config(),
+            )
+        else:
+            attn_output = ttnn.transformer.chunked_scaled_dot_product_attention(
+                query_states,
+                paged_kv_cache_key,
+                paged_kv_cache_value,
+                page_table,
+                chunk_start_idx,
+                scale=scaling,
+                program_config=_get_sdpa_program_config(device, T, chunk_start_idx=chunk_start_idx),
+                compute_kernel_config=_get_sdpa_compute_kernel_config(),
+            )
 
         new_key = paged_kv_cache_key
         new_value = paged_kv_cache_value
