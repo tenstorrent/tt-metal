@@ -205,9 +205,9 @@ def run_demo(speaker_id=0, f0_up_key=0, device_id=0, max_secs=5.0,
     # === INFERENCE ===
     # Chunked processing: Hubert+TextEncoder run on full audio (torch),
     # then z_p is chunked for TTNN flow+generator to stay within L1 limits.
-    # Generator OOMs at T>~50 due to upsample stages (T→T*480).
-    MAX_CHUNK_FRAMES = 50  # ~0.5s output per chunk
-    OVERLAP = 5  # overlap frames on each side for context
+    # Generator L1 budget allows up to 75 frames per chunk on N300; 80+ OOMs.
+    MAX_CHUNK_FRAMES = 75  # L1-safe maximum (~0.75s output per chunk)
+    OVERLAP = 3  # boundary smoothing context per side; tuned with chunk=75
 
     print("\n--- Preprocessing (torch, full audio) ---")
     with torch.no_grad():

@@ -6,7 +6,7 @@
 What this measures
 ------------------
 The same chunked flow→generator pipeline as `demo.py`. Same modules
-(`TTNNFlowDecoder`, `TTNNGeneratorNSF`), same chunking (MAX_CHUNK_FRAMES=50,
+(`TTNNFlowDecoder`, `TTNNGeneratorNSF`), same chunking (MAX_CHUNK_FRAMES=75,
 OVERLAP=5), same overlap-add trimming, same checkpoint, same preprocessing.
 
 What this adds vs `demo.py`
@@ -81,8 +81,8 @@ from models.demos.rvc.utils.audio import load_audio
 from models.demos.rvc.utils.config import get_model_and_config_paths
 
 # Chunking parameters — must match demo.py exactly.
-MAX_CHUNK_FRAMES = 50
-OVERLAP = 5
+MAX_CHUNK_FRAMES = 75
+OVERLAP = 3
 TARGET_LEN = MAX_CHUNK_FRAMES + 2 * OVERLAP
 
 
