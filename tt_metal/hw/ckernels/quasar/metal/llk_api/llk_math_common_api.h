@@ -32,7 +32,8 @@ inline bool is_src_fmt_fp32_dest_compatible(const DataFormat src_reg_fmt) {
  * @param src_reg_fmt: The source register format
  */
 inline bool is_src_fmt_int32_dest_compatible(const DataFormat src_reg_fmt) {
-    return src_reg_fmt == DataFormat::Int8 || src_reg_fmt == DataFormat::UInt8;
+    return src_reg_fmt == DataFormat::Int32 || src_reg_fmt == DataFormat::Int16 || src_reg_fmt == DataFormat::Int8 ||
+           src_reg_fmt == DataFormat::UInt16 || src_reg_fmt == DataFormat::UInt8;
 }
 
 /**

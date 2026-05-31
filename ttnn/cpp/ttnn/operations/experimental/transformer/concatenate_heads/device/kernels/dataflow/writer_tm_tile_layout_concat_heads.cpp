@@ -29,7 +29,7 @@ void kernel_main() {
         cb_wait_front(cb_id_out0, out_num_tiles_read);
 
         for (uint32_t w_dim = 0; w_dim < in0_w_tiles; w_dim++) {
-            noc_async_write_tile(out_tensor_tile_id, s, l1_read_addr);
+            noc_async_write_page(out_tensor_tile_id, s, l1_read_addr);
             l1_read_addr += single_tile_size_bytes;
             out_tensor_tile_id++;
         }
