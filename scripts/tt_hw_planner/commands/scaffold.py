@@ -17,7 +17,10 @@ def cmd_scaffold(args) -> int:
     )
 
     try:
-        plan = plan_scaffold(args.model_id)
+        plan = plan_scaffold(
+            args.model_id,
+            force_already_supported=getattr(args, "force_already_supported", False),
+        )
     except ScaffoldError as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 2

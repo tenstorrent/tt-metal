@@ -142,7 +142,17 @@ def _build_table_insert(file_path: Path, sibling_key: str, new_key: str) -> Opti
     )
 
 
-def plan_scaffold(new_model_id: str) -> ScaffoldPlan:
+def plan_scaffold(new_model_id: str, *, force_already_supported: bool = False) -> ScaffoldPlan:
+    """Plan a scaffold for ``new_model_id``.
+
+    ``force_already_supported`` lets the escalation hook
+    (``_maybe_escalate_pcc_fail`` in cli.py) bypass the
+    "ALREADY SUPPORTED — no scaffolding needed" gate. The gate exists
+    to stop users scaffolding twice; the escalation explicitly wants
+    re-scaffolding because the ALREADY-SUPPORTED routing produced
+    output the PCC gate rejected, and we need Path 1 (scaffold +
+    per-component iterate) to take over.
+    """
     probe = probe_model(new_model_id)
     if not probe.raw_config:
         raise ScaffoldError(f"could not load config.json for {new_model_id} — set HF_TOKEN for gated repos")
@@ -160,7 +170,7 @@ def plan_scaffold(new_model_id: str) -> ScaffoldPlan:
             "does not apply here. "
             f"Run: python -m scripts.tt_hw_planner prepare {new_model_id} --box <BOX> --execute"
         )
-    if compat.overall.startswith("ALREADY SUPPORTED"):
+    if compat.overall.startswith("ALREADY SUPPORTED") and not force_already_supported:
         raise ScaffoldError(
             f"{new_model_id} is already supported — no scaffolding needed. "
             f"Run: python -m scripts.tt_hw_planner prepare {new_model_id}"
@@ -173,8 +183,94 @@ def plan_scaffold(new_model_id: str) -> ScaffoldPlan:
             "Scaffolding can't help; new TTNN kernel work is required first."
         )
 
-    if compat.overall not in ("READY", "FEASIBLE WITH WORK"):
-        raise ScaffoldError(f"unexpected compat verdict {compat.overall!r}; refusing to scaffold")
+    _allowed_verdicts = ("READY", "FEASIBLE WITH WORK")
+    if compat.overall not in _allowed_verdicts:
+        # When the escalation hook forces re-scaffolding of an already-
+        # supported model (because Path 2 PCC-gate rejected its output),
+        # the verdict is "ALREADY SUPPORTED" and we must accept it.
+        if not (force_already_supported and compat.overall.startswith("ALREADY SUPPORTED")):
+            raise ScaffoldError(f"unexpected compat verdict {compat.overall!r}; refusing to scaffold")
+
+    # WIRING #13 (2026-05-31): escalation fast-path. When
+    # force_already_supported=True and the model is genuinely
+    # ALREADY SUPPORTED, the sibling-copy logic below is a no-op
+    # (the demo files already exist at the backend's demo_path).
+    # All we need is a bringup_status.json that lists every
+    # component as ADAPT (since the global PCC gate failed, every
+    # REUSE label is suspect). The existing per-component iterate
+    # loop in auto_iterate.py reads bringup_status.json and
+    # PCC-tests each non-REUSE component — that's how Path 1 gets
+    # something to iterate on for an already-supported-but-broken
+    # model. Pairs with bringup_plan.build_bringup_plan's
+    # ``force_adapt_all`` kwarg.
+    if force_already_supported and compat.overall.startswith("ALREADY SUPPORTED"):
+        # NOTE: the routing-mode block further down does
+        # ``from .family_backends import pick_backend`` which makes
+        # Python treat the name as function-local for the whole
+        # ``plan_scaffold`` body — so reaching the module-level
+        # ``pick_backend`` from here would UnboundLocalError. Import
+        # under an alias to sidestep the shadowing.
+        from .family_backends import pick_backend as _pick_backend_esc
+
+        _be_esc = _pick_backend_esc(
+            category=probe.category,
+            model_type=(probe.raw_config or {}).get("model_type"),
+            pipeline_tag=getattr(probe, "pipeline_tag", None),
+        )
+        if _be_esc is None:
+            raise ScaffoldError(
+                f"force_already_supported=True but no backend mapped for "
+                f"{new_model_id}; cannot enumerate components for ADAPT demotion."
+            )
+        bplan_esc = build_bringup_plan(
+            new_model_id=new_model_id,
+            new_cfg=probe.raw_config or {},
+            backend=_be_esc,
+            repo_root=BRINGUP_ROOT(),
+            force_adapt_all=True,
+        )
+        demo_dir_esc_rel = Path(_be_esc.demo_path)
+        changes_esc: List[ScaffoldChange] = []
+        for target_rel, content, label in collect_bringup_plan_files(
+            plan=bplan_esc,
+            new_demo_dir_rel=demo_dir_esc_rel,
+        ):
+            # bringup_status.json/BRING_UP_PLAN.md overwrite; _stubs/
+            # only created when missing.
+            preserve = "NEW-stub" in label
+            changes_esc.append(
+                ScaffoldChange(
+                    kind="create",
+                    path=str(target_rel),
+                    new_content=content,
+                    source=None,
+                    added_lines=content.count(b"\n"),
+                    preserve_if_exists=preserve,
+                )
+            )
+        c = bplan_esc.counts
+        return ScaffoldPlan(
+            new_model_id=new_model_id,
+            new_base_name=derive_base_model_name(new_model_id),
+            new_tail=new_model_id.split("/")[-1],
+            sibling_model_id=_be_esc.canonical_hf_id or _be_esc.name,
+            sibling_base_name=Path(_be_esc.demo_path).name,
+            sibling_tail=(
+                _be_esc.canonical_hf_id.split("/")[-1] if _be_esc.canonical_hf_id else Path(_be_esc.demo_path).name
+            ),
+            compat_overall=compat.overall,
+            compat_summary=(
+                f"force_already_supported: PCC-gate failure demoted all "
+                f"REUSE -> ADAPT for per-component iteration. "
+                f"Plan: {c.get('REUSE', 0)} REUSE / "
+                f"{c.get('ADAPT', 0)} ADAPT / {c.get('NEW', 0)} NEW."
+            ),
+            changes=changes_esc,
+            skipped=[],
+            warnings=[],
+            new_demo_dir=str(demo_dir_esc_rel),
+            bringup_plan=bplan_esc,
+        )
 
     try:
         from .family_backends import pick_backend

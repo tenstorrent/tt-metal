@@ -68,6 +68,15 @@ def _runtime_repair_loop(
     info = parse_pytest_traceback(initial_output)
     repairable, reason = is_repairable_failure(info)
     if not repairable:
+        # WIRING #1 (Path 2 parity): the failure isn't repairable —
+        # classify it and persist as a known skip so the next run
+        # doesn't repeat the wasted work. Mirrors auto_iterate.py's
+        # behavior when classify_failure returns KERNEL_MISSING.
+        _classify_and_persist_skip(
+            model_id=model_id,
+            captured_output=initial_output,
+            reason_hint=f"not-repairable: {reason}",
+        )
         print(
             f"  Not repairable: {reason}\n"
             f"  Falling back to the standard FAIL banner. The original\n"
@@ -79,11 +88,30 @@ def _runtime_repair_loop(
     if info.exception_message:
         print(f"    msg: {info.exception_message}")
 
+    # WIRING #3 (Path 2 parity): consult learned-fix store. If a prior
+    # run registered a fix for the same arch+failure signature, surface
+    # it as a head-start preamble — same machinery auto_iterate uses.
+    _learned_head_start = _brain_lookup_learned_fix_head_start(
+        model_id=model_id,
+        failure_file=info.failure_file or "",
+        exception_type=info.exception_type or "",
+    )
+    if _learned_head_start:
+        print(
+            f"  [brain G8] learned-fix lookup: HIT — prior run had a "
+            f"working fix for this failure signature. Injecting as prompt "
+            f"preamble.\n  {_learned_head_start[:200]}..."
+        )
+
     previous_attempts: List[str] = []
     current_rc = initial_rc
     current_output = initial_output
 
     consecutive_no_edit_iters = 0
+    # WIRING #9 (Path 2 parity): track mismatch history for is_stagnant
+    # — so the loop can use the brain's plateau detector instead of a
+    # hardcoded "consecutive_no_edit_iters >= 2" cap.
+    _mismatch_history: List[float] = []
     for iter_idx in range(1, max_iters + 1):
         print()
         print(sep)
@@ -153,25 +181,54 @@ def _runtime_repair_loop(
                 f"escalate to the heavy model (if tiered) and inject "
                 f"a forced-edit preamble."
             )
-            if consecutive_no_edit_iters >= 2:
+            # WIRING #9: consult the brain's is_stagnant detector on
+            # top of the local "no edits" counter. Brain's plateau
+            # detector uses a mismatch-history trend; for runtime-repair
+            # we synthesize a synthetic history (1.0 = full failure)
+            # because there's no PCC progress signal here — but the
+            # "no edits" counter is itself a plateau signal we can feed.
+            _mismatch_history.append(1.0)
+            from ..agentic.convergence import is_stagnant as _brain_is_stagnant
+
+            _brain_says_stuck = len(_mismatch_history) >= 3 and _brain_is_stagnant(_mismatch_history)
+            if consecutive_no_edit_iters >= 2 or _brain_says_stuck:
                 print()
                 print(sep)
                 print(
                     f"  RUNTIME-REPAIR LOOP TERMINATED EARLY: "
                     f"{consecutive_no_edit_iters} consecutive iters "
                     f"made zero edits despite forced-edit preamble "
-                    f"and heavy-model escalation. The agent is stuck "
-                    f"on this problem; continuing would waste budget. "
-                    f"Latest failure: {info.exception_type} at "
+                    f"and heavy-model escalation"
+                    f"{' (brain is_stagnant CONFIRMED plateau)' if _brain_says_stuck else ''}. "
+                    f"The agent is stuck on this problem; continuing "
+                    f"would waste budget. Latest failure: "
+                    f"{info.exception_type} at "
                     f"{info.failure_file}:{info.failure_line}"
                 )
                 print(sep)
+                # WIRING #1 cont: classify + persist the stuck failure
+                # as a known skip.
+                _classify_and_persist_skip(
+                    model_id=model_id,
+                    captured_output=current_output,
+                    reason_hint=(
+                        f"runtime-repair terminated early: stuck on " f"{info.exception_type}@{info.failure_file}"
+                    ),
+                )
                 return current_rc
         else:
             consecutive_no_edit_iters = 0
         previous_attempts.append(
             f"asked agent to patch {info.failure_file}:{info.failure_line} " f"({info.exception_type})"
         )
+
+        if forced_edit_mode:
+            prompt = prompt  # noqa: PLW0127 — placeholder kept for clarity
+        # WIRING #3 cont: inject the learned-fix preamble (if any) on
+        # the very first iter only. Subsequent iters use the in-loop
+        # previous_attempts as feedback.
+        if iter_idx == 1 and _learned_head_start:
+            prompt = _learned_head_start + "\n\n" + prompt
 
         print()
         print(f"  re-running prepare --execute after repair attempt {iter_idx} …")
@@ -181,6 +238,15 @@ def _runtime_repair_loop(
             print(sep)
             print(f"  REPAIR LOOP GRADUATED at iter {iter_idx} -- pytest " f"now passes.")
             print(sep)
+            # WIRING #2 (Path 2 parity): persist the successful fix so
+            # next run with the same arch+failure-signature can apply
+            # the learned head-start immediately. Mirrors auto_iterate.
+            _brain_register_learned_fix(
+                model_id=model_id,
+                failure_file=info.failure_file or "",
+                exception_type=info.exception_type or "",
+                iter_idx=iter_idx,
+            )
             return 0
 
         new_info = parse_pytest_traceback(current_output)
@@ -224,7 +290,131 @@ def _runtime_repair_loop(
         f"{info.failure_file}:{info.failure_line}."
     )
     print(sep)
+    # WIRING #1 cont: budget exhausted — classify + persist.
+    _classify_and_persist_skip(
+        model_id=model_id,
+        captured_output=current_output,
+        reason_hint=(
+            f"runtime-repair exhausted {max_iters} iters; last failure " f"{info.exception_type}@{info.failure_file}"
+        ),
+    )
     return current_rc
+
+
+def _classify_and_persist_skip(
+    *,
+    model_id: str,
+    captured_output: str,
+    reason_hint: str,
+) -> None:
+    """Thin shim around failure_classifier.classify_and_persist_skip.
+
+    Kept as a thin wrapper because the runtime_repair call sites use
+    the old kwarg name `captured_output`. The SHARED implementation
+    (consolidated 2026-05-31) lives in failure_classifier.py.
+    """
+    from ..failure_classifier import classify_and_persist_skip
+
+    classify_and_persist_skip(
+        model_id=model_id,
+        failure_text=captured_output,
+        reason_hint=reason_hint,
+    )
+
+
+def _arch_signature_for_model(model_id: str) -> str:
+    """Compute the arch_signature for ``model_id`` by loading its HF
+    config and delegating to ``agentic.learnings.compute_arch_signature``.
+
+    Returns '' on any error so the caller can no-op cleanly."""
+    try:
+        from ..agentic.executor import _load_hf_config
+        from ..agentic.learnings import compute_arch_signature
+
+        cfg = _load_hf_config(model_id)
+        return compute_arch_signature(cfg)
+    except Exception:
+        return ""
+
+
+def _brain_lookup_learned_fix_head_start(
+    *,
+    model_id: str,
+    failure_file: str,
+    exception_type: str,
+) -> str:
+    """Helper for WIRING #3: consult agentic.learnings.lookup_fix and
+    return a prompt-preamble string if a prior run registered a working
+    fix for this signature. Returns '' on miss or any error."""
+    if not failure_file or not exception_type:
+        return ""
+    try:
+        from ..agentic.learnings import lookup_fix
+
+        arch_sig = _arch_signature_for_model(model_id)
+        if not arch_sig:
+            return ""
+        learned = lookup_fix(
+            arch_signature=arch_sig,
+            first_diverging_qn=failure_file,
+        )
+        if learned is None:
+            return ""
+        return (
+            "LEARNED-FIX HEAD-START (from a prior successful repair run):\n"
+            "A previous run with this same architecture signature fixed a similar\n"
+            f"failure at {failure_file}. The recorded fix:\n\n"
+            f"{getattr(learned, 'diff', '(no diff captured)')[:1500]}\n\n"
+            "Use this as a starting hint — it may not apply verbatim, but the\n"
+            "general approach (which symbols changed) is likely relevant."
+        )
+    except Exception:
+        return ""
+
+
+def _brain_register_learned_fix(
+    *,
+    model_id: str,
+    failure_file: str,
+    exception_type: str,
+    iter_idx: int,
+) -> None:
+    """Helper for WIRING #2: persist the successful fix to
+    agentic.learnings so next-run head-start works. Mirrors what
+    auto_iterate does on per-component graduation."""
+    if not failure_file:
+        return
+    try:
+        from ..agentic.executor import compute_diff
+        from ..agentic.learnings import register_fix
+        from ..cli import REPO_ROOT
+
+        arch_sig = _arch_signature_for_model(model_id)
+        if not arch_sig:
+            return
+        diff_text = ""
+        try:
+            diff_text = compute_diff(REPO_ROOT, [failure_file])
+        except Exception:
+            diff_text = ""
+        register_fix(
+            arch_signature=arch_sig,
+            first_diverging_qn=failure_file,
+            diff=diff_text,
+            diff_files=[failure_file],
+            source_model_id=model_id,
+            notes=(f"runtime-repair graduated at iter {iter_idx} for " f"{exception_type or 'unknown-exc'}"),
+        )
+        print(
+            f"  [brain G8] registered learned fix for "
+            f"{arch_sig[:32]}@{failure_file} — future bring-ups of "
+            f"this architecture get the fix as a head-start"
+        )
+    except Exception as exc:
+        print(
+            f"  [brain G8] register_fix non-fatal: " f"{type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
 
 
 _PCC_FAIL_RC: int = 17

@@ -308,3 +308,66 @@ def skip_category_for_verdict(verdict: FailureVerdict) -> str:
     active queue and is retried next session.
     """
     return SKIP_CATEGORY_FOR_CLASS.get(verdict.class_name, "ITERATION_BUDGET")
+
+
+def classify_and_persist_skip(
+    *,
+    model_id: str,
+    failure_text: str,
+    reason_hint: str = "",
+    component_name: str = "",
+) -> "FailureVerdict":
+    """Shared helper used by ALL repair loops (auto_iterate, runtime_repair,
+    and historically pcc_repair) to: (1) classify a failure, (2) persist
+    a KERNEL_MISSING skip if the verdict warrants it, (3) print a
+    user-visible trace.
+
+    Returns the FailureVerdict so callers can read .class_name / .confidence
+    and surface them in OUTCOME extras.
+
+    Non-fatal: any exception inside is caught, logged to stderr, and an
+    empty verdict is returned. The repair loop continues without a skip.
+
+    Centralized 2026-05-31 to eliminate the duplicate wrappers that
+    previously lived in pcc_repair.py and runtime_repair.py.
+    """
+    try:
+        from .overlay_manager import persist_skip
+    except Exception:
+        # If overlay_manager isn't importable, we can still classify
+        # but can't persist. Return verdict with empty class_name.
+        return FailureVerdict(class_name="", confidence="low", reason="overlay_manager import failed")
+
+    verdict = classify_failure(
+        reason=reason_hint or "",
+        failure_text=failure_text or "",
+    )
+    category = skip_category_for_verdict(verdict)
+    comp = component_name or (model_id.split("/")[-1] if "/" in model_id else model_id)
+    try:
+        if category == "KERNEL_MISSING":
+            reason_full = (
+                (f"{reason_hint} | classifier: " f"{verdict.class_name} ({verdict.confidence})")
+                if reason_hint
+                else f"classifier: {verdict.class_name}"
+            )
+            persist_skip(model_id, comp, reason_full, category="KERNEL_MISSING")
+            print(
+                f"  [brain G8] persisted KERNEL_MISSING skip for "
+                f"{model_id} ({comp}) — classifier verdict: "
+                f"{verdict.class_name} (confidence={verdict.confidence})"
+            )
+        else:
+            print(
+                f"  [brain G8] classified failure as {verdict.class_name} "
+                f"(confidence={verdict.confidence}) — not persistent "
+                f"(category={category}); will retry on next run"
+            )
+    except Exception as exc:
+        import sys as _sys
+
+        print(
+            f"  [brain G8] classify+persist non-fatal: " f"{type(exc).__name__}: {exc}",
+            file=_sys.stderr,
+        )
+    return verdict

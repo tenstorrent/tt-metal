@@ -2378,7 +2378,11 @@ def _run_pcc_gate(
     return result, prompt
 
 
-from ._cli_helpers.pcc_repair import _pcc_repair_loop  # noqa: F401
+# pcc_repair removed 2026-05-31 — the whole-model retry loop was a
+# wrong abstraction. Path 2 (ALREADY-SUPPORTED) now escalates directly
+# to Path 1 (scaffold + per-component iterate) via
+# _maybe_escalate_pcc_fail. See cli.py:7410 and cli.py:7741 for the
+# escalation call sites.
 
 
 def _final_outcome_banner(
@@ -2700,12 +2704,224 @@ def _emit_and_verify_runnable_demo(
     except subprocess.TimeoutExpired as exc:
         rc = 124
         combined = f"(demo verification timed out after 300s: {exc})"
-    tail = "\n".join(line for line in combined.splitlines()[-12:] if line.strip())
+
+    def _extract_pytest_failure_tail(text: str, max_lines: int = 50) -> str:
+        """Pull the actually-useful failure context from pytest output,
+        skipping post-test nanobind/ttnn diagnostic spam.
+
+        Strategy: prefer lines containing the ACTUAL ERROR signals
+        (``RuntimeError:``, ``AssertionError``, ``E   ``, file paths
+        like ``.py:NN`` and ``FAILED ``). Always include these even
+        if they appear far from the FAILURES header (pytest's
+        function-source dump can push the real error 50+ lines down).
+        """
+        lines = text.splitlines()
+        spam_substrings = (
+            "leaked function",
+            "leaked instance",
+            "leaked type",
+            "nanobind:",
+            "build_cache_telemetry",
+            "JitBuildState",
+            "BuildKernels",
+            "tt_cluster.cpp",
+            "Cluster destructor",
+            "Closing user mode device",
+            "Closing devices in cluster",
+            "device_manager.cpp",
+            "skipped remainder",
+        )
+        error_signals = (
+            "RuntimeError",
+            "AssertionError",
+            "TypeError",
+            "AttributeError",
+            "ValueError",
+            "ImportError",
+            "ModuleNotFoundError",
+            "TT_FATAL",
+            "FAILED ",
+            "[CPU_FALLBACK]",
+            "_CPU_FALLBACK]",
+            "E   ",
+        )
+
+        def _is_useful(line: str) -> bool:
+            s = line.strip()
+            if not s:
+                return False
+            return not any(spam in s for spam in spam_substrings)
+
+        def _is_signal(line: str) -> bool:
+            return any(sig in line for sig in error_signals) or bool(re.search(r"\.py:\d+", line))
+
+        useful = [ln for ln in lines if _is_useful(ln)]
+
+        # Find signal lines (the real error info).
+        signal_indices = [i for i, ln in enumerate(useful) if _is_signal(ln)]
+        if signal_indices:
+            # Take a window AROUND every signal line — context above
+            # gives traceback frames, context below gives the error
+            # message + summary.
+            keep = set()
+            for idx in signal_indices:
+                lo = max(0, idx - 5)
+                hi = min(len(useful), idx + 5)
+                for j in range(lo, hi):
+                    keep.add(j)
+            selected = [useful[j] for j in sorted(keep)]
+            # Cap to max_lines while ensuring the last signal line
+            # is included (the actual error usually appears late).
+            if len(selected) > max_lines:
+                # Prefer the LAST max_lines of signal+context (tail of
+                # the failure block).
+                selected = selected[-max_lines:]
+            return "\n".join(selected)
+
+        # No specific signals → fall back to last N useful lines.
+        return "\n".join(useful[-max_lines:])
+
+    tail = _extract_pytest_failure_tail(combined)
     if rc == 0:
         msg = f"  demo verification PASSED — `pytest {test_target}` is now green."
         print(msg)
         print(sep)
         return True, msg
+
+    # Brain (G8) demo-recovery: parses the pytest tail, identifies the
+    # broken wired component (PCC passed but runtime shapes differ), and
+    # disables it from the demo's WIRED_COMPONENTS so the rest of the
+    # pipeline runs end-to-end in mixed mode. Falls back to retry/archive
+    # actions for orphan-sibling and flake cases.
+    from .agentic.demo_recovery import (
+        archive_demo_files,
+        decide_demo_recovery,
+        remove_component_from_wiring,
+    )
+
+    def _extract_wired_components(demo_p: Path) -> list:
+        """Pull display-name strings out of WIRED_COMPONENTS in the
+        emitted demo. Best-effort; returns [] on any parse issue."""
+        try:
+            txt = demo_p.read_text()
+        except Exception:
+            return []
+        # Each tuple: ('submodule_path', '...stubs.<comp>', '<display_name>'),
+        names = re.findall(
+            r"\(\s*'[^']+'\s*,\s*'[^']+_stubs\.[^']+'\s*,\s*'([^']+)'\s*\)",
+            txt,
+        )
+        return names
+
+    retries_attempted = 0
+    # max_retries scales with the number of wired components — the
+    # brain's fallback disables one component per retry, so we need
+    # enough budget to potentially shrink down to a passing minimal
+    # demo. Capped at 6 so a broadly-broken model doesn't loop forever.
+    initial_wired_count = len(_extract_wired_components(demo_path))
+    max_retries = min(6, max(2, initial_wired_count))
+    demo_dir = demo_path.parent
+    model_demo_dir = demo_dir.parent if demo_dir.name == "demo" else demo_dir
+    # The parser needs the FULL pytest output (not the spam-filtered tail)
+    # to find file paths like `_stubs/<comp>.py` that the extractor may
+    # have filtered out. Tail stays for user-facing display only.
+    full_pytest_output = combined
+    while retries_attempted < max_retries:
+        wired = _extract_wired_components(demo_path)
+        verdict = decide_demo_recovery(
+            demo_dir=model_demo_dir,
+            canonical_demo=demo_path,
+            retries_attempted=retries_attempted,
+            max_retries=max_retries,
+            pytest_tail=full_pytest_output,
+            wired_components=wired,
+        )
+        print(f"  [brain G8] demo-recovery: {verdict.action} — {verdict.reason}")
+        if verdict.action == "give_up":
+            break
+        if verdict.action == "archive_and_retry" and verdict.archive_paths:
+            archived = archive_demo_files(verdict.archive_paths)
+            for a in archived:
+                print(f"    archived: {a.name}")
+        if verdict.action == "disable_component_and_retry":
+            broken = getattr(verdict, "broken_component", None)
+            if broken:
+                if remove_component_from_wiring(demo_path=demo_path, component=broken):
+                    print(f"    disabled wiring for `{broken}` in demo")
+                else:
+                    print(f"    could not disable wiring for `{broken}` — proceeding with retry anyway")
+        retries_attempted += 1
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-m", "pytest", str(rel) + "::test_demo", "-v", "--tb=long"],
+                cwd=str(rr),
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+            rc = proc.returncode
+            combined = (proc.stdout or "") + (proc.stderr or "")
+        except subprocess.TimeoutExpired as exc:
+            rc = 124
+            combined = f"(demo verification retry timed out after 300s: {exc})"
+        tail = _extract_pytest_failure_tail(combined)
+        full_pytest_output = combined
+        if rc == 0:
+            msg = f"  demo verification PASSED on retry — `pytest {test_target}` is now green " f"(brain G8 recovered)"
+            print(msg)
+            # Brain owns end-to-end delivery: if the recovery modified
+            # the demo (e.g. removed broken wiring), the modified file
+            # must land in main tree so the user can run the demo
+            # without manually re-applying the brain's fix.
+            try:
+                from .agentic.persistence import sync_demo_to_main_tree
+
+                _demo_sync = sync_demo_to_main_tree(worktree_demo_path=demo_path)
+                if _demo_sync.status == "synced":
+                    print(f"  [brain G8] synced recovered demo to main tree → {_demo_sync.synced_path}")
+                elif _demo_sync.status == "sync_failed":
+                    # B-FIX #12 (2026-05-31): a sync FAILURE used to look
+                    # identical to "not in a worktree". The brain's recovery
+                    # work product would silently NOT land in main tree and
+                    # the cli would still report PASSED. Now distinguish.
+                    print(
+                        f"  [brain G8] WARN: recovered demo did NOT sync to main tree — "
+                        f"{_demo_sync.reason}. The demo passed in worktree but main "
+                        f"tree may not reflect the brain's fix; user must manually "
+                        f"copy the demo from {demo_path}."
+                    )
+                # noop_not_in_worktree / noop_worktree_is_main_tree are
+                # legitimate quiet no-ops — no surfacing needed.
+            except Exception as _demo_sync_exc:
+                print(
+                    f"  [brain G8] demo sync non-fatal: " f"{type(_demo_sync_exc).__name__}: {_demo_sync_exc}",
+                    file=sys.stderr,
+                )
+            print(sep)
+            return True, msg
+
+    # B1-FIX: call the brain ONE MORE TIME after the retry loop exits
+    # so its give_up verdict reason gets surfaced. Without this, the
+    # brain's "all N retries exhausted" reasoning was unreachable and
+    # the user only saw the generic FAIL message.
+    try:
+        wired = _extract_wired_components(demo_path)
+        give_up_verdict = decide_demo_recovery(
+            demo_dir=model_demo_dir,
+            canonical_demo=demo_path,
+            retries_attempted=max_retries,
+            max_retries=max_retries,
+            pytest_tail=tail,
+            wired_components=wired,
+        )
+        if give_up_verdict.action == "give_up":
+            print(f"  [brain G8] demo-recovery: give_up — {give_up_verdict.reason}")
+    except Exception as _give_up_exc:
+        print(
+            f"  [brain G8] give-up logging non-fatal: " f"{type(_give_up_exc).__name__}: {_give_up_exc}",
+            file=sys.stderr,
+        )
+
     msg = (
         f"  demo verification FAILED (pytest rc={rc}). The model is on "
         f"device — the PCC suite already proved it. The demo emitter "
@@ -6379,6 +6595,53 @@ def _maybe_escalate_pcc_fail(
     print(sep_esc)
     print(f"  ESCALATING on PCC fail  model={model_id}")
     print(sep_esc)
+
+    # 2026-05-31 SHORT-CIRCUIT (audit recommendation): if a FamilyBackend
+    # already exists for this model with "exact" match quality
+    # (ALREADY-SUPPORTED case), skip cmd_auto_onboard entirely. The
+    # backend is already mapped; we just need to bypass the
+    # ALREADY-SUPPORTED detection on re-entry so cmd_up takes the
+    # scaffold + per-component iterate path (SAM2's pattern). Saves
+    # the cost of re-drafting a backend that already exists, and avoids
+    # the risk of overwriting it.
+    try:
+        from .family_backends import pick_backend_with_quality
+        from .probe import probe_model
+
+        _p_es = probe_model(model_id)
+        _be_es, _q_es = pick_backend_with_quality(
+            category=getattr(_p_es, "category", None),
+            model_type=(_p_es.raw_config or {}).get("model_type") if _p_es.raw_config else None,
+            pipeline_tag=getattr(_p_es, "pipeline_tag", None),
+        )
+        if _be_es is not None and _q_es == "exact":
+            print(
+                "  Backend ALREADY EXISTS with exact match for this "
+                "model — skipping cmd_auto_onboard (no need to draft a "
+                "new backend). Re-entering cmd_up with the "
+                "ALREADY-SUPPORTED bypass so scaffold + per-component "
+                "iterate (Path 1) takes over."
+            )
+            print(sep_esc)
+            setattr(args, "_escalated_already", True)
+            try:
+                return cmd_up(args)
+            except SystemExit as exc:
+                return int(exc.code) if exc.code is not None else original_rc
+            except Exception as exc:
+                print(
+                    f"  short-circuit re-entry failed: "
+                    f"{type(exc).__name__}: {exc}. Falling back to "
+                    f"original rc={original_rc}."
+                )
+                return original_rc
+    except Exception as _sc_exc:
+        print(
+            f"  short-circuit check non-fatal: "
+            f"{type(_sc_exc).__name__}: {_sc_exc}. Falling back to "
+            f"original auto-onboard path."
+        )
+
     print(
         "  The ALREADY-SUPPORTED routing produced output the PCC "
         "gate rejected. Drafting a NEW backend via auto-onboard "
@@ -6550,6 +6813,141 @@ def cmd_up(args) -> int:
     if not getattr(args, "isolation", "none") == "worktree":
         return _cmd_up_core(args)
     return _cmd_up_isolated(args)
+
+
+def cmd_bringup(args) -> int:
+    """Zero-flag bring-up: ``tt-hw-planner bringup <model_id>``.
+
+    Wraps :func:`cmd_up` with brain-orchestrated defaults so the user
+    doesn't have to remember every ``--auto-*`` knob. The orchestrator
+    (brain G8) decides everything from here.
+
+    Tunable knobs are locked in at sensible values:
+      - ``--auto`` ON (otherwise the brain doesn't run)
+      - ``--auto-agent claude`` (the supported LLM agent)
+      - ``--auto-model-tiered`` ON (lighter model for easy iters,
+        heavier for stuck ones — saves cost without hurting quality)
+      - ``--auto-max-iters 24`` (brain G8 can extend via
+        ``should_extend_budget`` if close to converging)
+      - ``--auto-max-attempts-per-component 5`` (brain G8 can extend
+        per component via ``should_extend_component_cap``)
+      - ``--isolation worktree`` (default — clean state, atomic capture)
+
+    The user can override any of these by using the full ``up`` command
+    with explicit flags; ``bringup`` exists purely so the common case
+    is a one-liner.
+    """
+    # Build a fully-populated args namespace that cmd_up expects. We
+    # take the existing args (which has model_id + box from the
+    # bringup subparser) and fill in every other knob with the brain-
+    # orchestrated default.
+    import argparse as _argparse
+
+    full = _argparse.Namespace(**vars(args))
+
+    # Auto-mesh: if the user didn't pass --mesh, pick the box's
+    # LARGEST canonical mesh (most chips, tiebreak toward max-TP
+    # shape — favors 1xN over balanced for typical workloads). The
+    # default planner picks the SMALLEST viable mesh, which the user
+    # explicitly asked us to override.
+    #
+    # Note: cmd_bringup is bound to BOTH the `auto-up` and `bringup`
+    # subcommands. `bringup` (per-component stub bring-up) doesn't
+    # carry --box, and cmd_up's Step 4/6 builds an autofill Namespace
+    # for cmd_bringup that omits box too. In those cases auto-mesh
+    # selection has nothing to do — skip it instead of crashing.
+    if not getattr(full, "box", None):
+        pass  # no box -> bringup-subcommand path; skip auto-mesh
+    elif not getattr(full, "mesh", None):
+        try:
+            from .hardware import HARDWARE as _HW
+
+            _box = next(b for b in _HW if b.name == full.box)
+            shapes = list(_box.mesh_shapes)
+            # Sort by: (chip_count desc, max_dim desc) so largest mesh
+            # with max-TP shape wins. e.g. QB2 → (1,4), not (2,2).
+            shapes.sort(key=lambda s: (s[0] * s[1], max(s)), reverse=True)
+            best = shapes[0]
+            full.mesh = f"{best[0]},{best[1]}"
+            print(
+                f"  [auto-up] no --mesh passed → using box's LARGEST canonical mesh: "
+                f"{full.mesh} ({best[0]*best[1]} chips on {full.box})"
+            )
+        except Exception as _mesh_exc:
+            print(
+                f"  [auto-up] mesh auto-selection failed "
+                f"({type(_mesh_exc).__name__}: {_mesh_exc}); planner will default",
+                file=sys.stderr,
+            )
+
+    # Brain-orchestrated defaults (locked in).
+    defaults = {
+        "auto": True,
+        "auto_agent": "claude",
+        "auto_model_tiered": True,
+        "auto_max_iters": 24,
+        "auto_max_attempts_per_component": 5,
+        "isolation": "worktree",
+        # Other knobs that `up` reads — set to neutral defaults so
+        # argparse-injected attributes don't surprise cmd_up.
+        # NOTE: mesh handled above (auto-mesh logic).
+        "dtype": None,
+        "batch": 1,
+        "max_seq_len": 8192,
+        "max_generated_tokens": None,
+        "accuracy": False,
+        "no_trace": False,
+        "no_paged_attention": False,
+        "no_instruct": False,
+        "execute": False,
+        "download_first": False,
+        "strict": False,
+        "no_env_fix": False,
+        "auto_model": None,
+        "auto_model_light": None,
+        "auto_model_heavy": None,
+        "auto_agent_timeout": 600,
+        "parallel_agents": 1,
+        "auto_only_component": None,
+        "phase2": False,
+        "phase2_only": False,
+        "accept_fallback": False,
+        "strict_pcc": True,
+        "no_strict_pcc": False,
+        "escalate_on_pcc_fail": True,
+        "no_escalate_on_pcc_fail": False,
+        "strict_pcc_tokens": None,
+        "strict_pcc_max_iters": 4,
+        "pcc_engine": "agentic",
+        "allow_partial_cpu": False,
+        "regen_demo_only": False,
+        "accept_closest_backend": False,
+        "no_meta_plan": False,
+        "force_fallback": False,
+        "op_synth": True,
+        "no_op_synth": False,
+        "no_kill_stale": False,
+        "no_device_reset": False,
+    }
+    for k, v in defaults.items():
+        if not hasattr(full, k):
+            setattr(full, k, v)
+
+    print()
+    print("=" * 78)
+    print(f"  BRINGUP (brain-orchestrated): {full.model_id}")
+    print("=" * 78)
+    print(
+        f"  Locked defaults: --auto --auto-agent=claude --auto-model-tiered "
+        f"--auto-max-iters=24 --auto-max-attempts-per-component=5 "
+        f"--isolation=worktree"
+    )
+    print(
+        f"  Brain G8 will orchestrate: budget-extend, cap-extend, " f"phantom-cleanup, sync, demo-emit, demo-recovery"
+    )
+    print()
+
+    return cmd_up(full)
 
 
 def _cmd_up_isolated(args) -> int:
@@ -7011,27 +7409,21 @@ def _cmd_up_core(args) -> int:
                 instruct=not getattr(args, "no_instruct", False),
             )
             if _pcc_result is not None and not _pcc_result.ok:
-                if _pcc_prompt is not None:
-                    _rc_supp = _pcc_repair_loop(
-                        model_id=MODEL,
-                        prepare_argv=prepare_argv,
-                        initial_result=_pcc_result,
-                        initial_prompt=_pcc_prompt,
-                        args=args,
-                        agent_bin=getattr(args, "auto_agent_bin", None) or "claude",
-                        agent_model=getattr(args, "auto_model", None) or "sonnet",
-                        max_iters=getattr(args, "strict_pcc_max_iters", 4),
-                        agent_timeout_s=max(
-                            getattr(args, "auto_agent_timeout", 600) or 600,
-                            1500,
-                        ),
-                        sep=sep,
-                        engine=getattr(args, "pcc_engine", "legacy"),
-                        model_light=_repair_model_light,
-                        model_heavy=_repair_model_heavy,
-                    )
-                else:
-                    _rc_supp = _PCC_FAIL_RC
+                # 2026-05-31 REWIRE: removed _pcc_repair_loop. The
+                # whole-model retry loop was the wrong abstraction —
+                # for ALREADY-SUPPORTED models that fail PCC, the
+                # right path is to escalate directly to Path 1's
+                # per-component scaffold + iterate flow (SAM2 pattern).
+                # _maybe_escalate_pcc_fail (with the short-circuit
+                # added today) does exactly this: detects "exact"
+                # backend match and re-enters cmd_up with
+                # _escalated_already=True, which bypasses the
+                # ALREADY-SUPPORTED detection so cmd_up takes the
+                # scaffold path. The brain's full per-component
+                # primitives then handle Qwen the same way SAM2 was
+                # brought up.
+                _esc_rc = _maybe_escalate_pcc_fail(args, MODEL, _PCC_FAIL_RC, _auto_mode)
+                _rc_supp = _esc_rc if _esc_rc is not None else _PCC_FAIL_RC
         if _rc_supp == 0:
             _register_bringup_success(
                 MODEL,
@@ -7039,17 +7431,123 @@ def _cmd_up_core(args) -> int:
                 sep=sep,
                 notes="Model was detected as already-supported; cmd_up auto-routed.",
             )
+            # WIRING #7 (Path 2 parity): brain G8 sync graduated stubs
+            # to main tree. Path 1's auto_iterate calls this on success;
+            # Path 2 needs the same wire so worktree-only edits during
+            # PCC-repair land in main tree. Non-fatal.
+            try:
+                from .agentic.persistence import sync_graduated_to_main_tree
+                from .bringup_loop import _safe_id, find_demo_dir
+
+                _demo_dir_path2 = find_demo_dir(MODEL)
+                if _demo_dir_path2 is not None:
+                    _subpath = (
+                        _demo_dir_path2.resolve().relative_to(Path.cwd().resolve())
+                        if str(Path.cwd().resolve()) in str(_demo_dir_path2.resolve())
+                        else None
+                    )
+                    if _subpath is not None:
+                        _sync_p2 = sync_graduated_to_main_tree(
+                            worktree_root=Path.cwd(),
+                            demo_subpath=str(_subpath),
+                            graduated_components=[],  # whole-model path; no per-comp list
+                            safe_id_fn=_safe_id,
+                        )
+                        if _sync_p2.notes:
+                            for note in _sync_p2.notes:
+                                print(f"  [brain G8 sync] {note}")
+            except Exception as _sync_p2_exc:
+                print(
+                    f"  [brain G8] Path 2 sync non-fatal: " f"{type(_sync_p2_exc).__name__}: {_sync_p2_exc}",
+                    file=sys.stderr,
+                )
+            # WIRING #8 (Path 2 parity): brain G8 e2e demo-emit decision.
+            # Path 1 consults should_emit_e2e_demo at success; Path 2
+            # needs the same wire so an ALREADY-SUPPORTED model with
+            # partial coverage gets the same emit decision quality.
+            try:
+                from .agentic.e2e import should_emit_e2e_demo as _brain_p2_emit
+                from .final_categorization import build_final_categorization
+
+                _cat = build_final_categorization(
+                    model_id=MODEL,
+                    demo_dir=find_demo_dir(MODEL) or Path("."),
+                )
+                _emit_p2 = _brain_p2_emit(
+                    on_device=_cat.on_device,
+                    kernel_missing=_cat.kernel_missing,
+                    pending=_cat.pending,
+                    final_all_passed=(_pcc_result is not None and _pcc_result.ok),
+                )
+                print(
+                    f"  [brain G8] demo-emit decision (Path 2): "
+                    f"{_emit_p2.confidence} confidence — {_emit_p2.reason}"
+                )
+            except Exception as _emit_p2_exc:
+                print(
+                    f"  [brain G8] Path 2 emit-decision non-fatal: " f"{type(_emit_p2_exc).__name__}: {_emit_p2_exc}",
+                    file=sys.stderr,
+                )
+            # B-FIX #3 (2026-05-31): surface gate-engagement state in
+            # OUTCOME. The PCC gate's soft-skip (None result) is by-design
+            # to avoid false-fails on non-text demos — but the user must
+            # know the gate didn't actually verify. Without this, SUCCESS
+            # rc=0 hides "we passed pytest but never compared decoded
+            # output to HF reference."
+            _gate_extra = []
+            if _pcc_result is None:
+                _gate_extra.append(
+                    "PCC correctness gate DID NOT engage (soft-skipped — "
+                    "see gate logs above for reason). pytest passed but "
+                    "decoded output was NOT compared to HF reference; "
+                    "the success is on basis of pytest alone."
+                )
+            elif not _pcc_result.ok:
+                # rc=0 with ok=False shouldn't normally happen (the loop
+                # would have set rc != 0), but guard for completeness.
+                _gate_extra.append(
+                    f"PCC gate verdict: ok=False but rc=0 — " f"reason: {getattr(_pcc_result, 'reason', '(none)')}"
+                )
             _final_outcome_banner(
                 rc=0,
                 model_id=MODEL,
                 path_label="ALREADY-SUPPORTED -> prepare --execute",
+                extra=_gate_extra or None,
             )
         elif _rc_supp == _PCC_FAIL_RC:
+            # WIRING #6 (Path 2 parity): consult brain G8's
+            # decide_demo_recovery before banner. The recovery primitive
+            # may recommend disabling specific wired components and
+            # retrying, or simply surface why a retry is futile. Without
+            # this, Path 2 has only the escalation hook (auto-onboard a
+            # new backend), which doesn't help when the backend exists
+            # but a kernel-level op produces wrong tokens.
+            _recovery_extra: List[str] = []
+            try:
+                from .agentic.demo_recovery import decide_demo_recovery as _brain_p2_recover
+
+                _recover_verdict = _brain_p2_recover(
+                    demo_dir=(find_demo_dir(MODEL) or Path(".")),
+                    canonical_demo=(find_demo_dir(MODEL) or Path(".")) / "demo" / "demo.py",
+                    retries_attempted=0,  # we haven't retried in Path 2 yet
+                    max_retries=1,
+                    pytest_tail=getattr(_pcc_result, "reason", "") if _pcc_result else "",
+                    wired_components=[],
+                )
+                _recovery_extra.append(
+                    f"brain G8 demo-recovery verdict: {_recover_verdict.action} — " f"{_recover_verdict.reason}"
+                )
+            except Exception as _recover_exc:
+                print(
+                    f"  [brain G8] Path 2 recovery non-fatal: " f"{type(_recover_exc).__name__}: {_recover_exc}",
+                    file=sys.stderr,
+                )
             _final_outcome_banner(
                 rc=_rc_supp,
                 model_id=MODEL,
                 path_label="ALREADY-SUPPORTED -> PCC GATE REJECTED OUTPUT",
-                extra=[
+                extra=_recovery_extra
+                + [
                     "pytest passed, but the model's actual decoded "
                     "output diverged from the HF CPU reference "
                     "beyond the configured tolerance.",
@@ -7066,11 +7564,52 @@ def _cmd_up_core(args) -> int:
             if esc is not None:
                 return esc
         else:
+            # WIRING #12 (else-branch escalation, 2026-05-31): also try
+            # _maybe_escalate_pcc_fail on non-PCC failure rcs from
+            # the ALREADY-SUPPORTED path (e.g. rc=5 from "build broke
+            # during PCC repair"). The escalation function already
+            # exists; it drafts a new FamilyBackend via cmd_auto_onboard
+            # and re-enters cmd_up with _escalated_already=True so the
+            # scaffold-and-iterate Path 1 takes over. This is the
+            # existing path that SAM2 used — Path 2 needs to delegate
+            # to it when the fast-path repair can't converge.
+            esc_else = _maybe_escalate_pcc_fail(args, MODEL, _rc_supp, _auto_mode)
+            if esc_else is not None:
+                return esc_else
+            # WIRING #6 (else-branch, 2026-05-31): generic FAILED
+            # branch (rc != 0, rc != _PCC_FAIL_RC). Surfaces brain G8
+            # demo-recovery verdict in OUTCOME extras.
+            # Note: classify+persist is now handled centrally by
+            # failure_classifier.classify_and_persist_skip when the
+            # repair paths exit; not duplicated here.
+            _generic_extra: List[str] = []
+            try:
+                from .agentic.demo_recovery import decide_demo_recovery as _brain_p2_recover_else
+                from .bringup_loop import find_demo_dir as _find_demo
+
+                _demo_dir_else = _find_demo(MODEL) or Path(".")
+                _verdict_else = _brain_p2_recover_else(
+                    demo_dir=_demo_dir_else,
+                    canonical_demo=_demo_dir_else / "demo" / "demo.py",
+                    retries_attempted=0,
+                    max_retries=1,
+                    pytest_tail="",
+                    wired_components=[],
+                )
+                _generic_extra.append(
+                    f"brain G8 demo-recovery verdict: {_verdict_else.action} — " f"{_verdict_else.reason}"
+                )
+            except Exception as _r_exc:
+                print(
+                    f"  [brain G8] Path 2 else-branch recovery non-fatal: " f"{type(_r_exc).__name__}: {_r_exc}",
+                    file=sys.stderr,
+                )
             _final_outcome_banner(
                 rc=_rc_supp,
                 model_id=MODEL,
                 path_label="ALREADY-SUPPORTED -> prepare --execute (FAILED)",
-                extra=[
+                extra=_generic_extra
+                + [
                     f"Re-run with: python -m scripts.tt_hw_planner prepare {MODEL}"
                     f" --execute (with TT_PLANNER_PER_TEST_TIMEOUT_S=3600 for"
                     f" larger models)",
@@ -7198,27 +7737,13 @@ def _cmd_up_core(args) -> int:
                 instruct=not getattr(args, "no_instruct", False),
             )
             if _pcc_result is not None and not _pcc_result.ok:
-                if _pcc_prompt is not None:
-                    _rc_cold = _pcc_repair_loop(
-                        model_id=MODEL,
-                        prepare_argv=prepare_argv,
-                        initial_result=_pcc_result,
-                        initial_prompt=_pcc_prompt,
-                        args=args,
-                        agent_bin=getattr(args, "auto_agent_bin", None) or "claude",
-                        agent_model=getattr(args, "auto_model", None) or "sonnet",
-                        max_iters=getattr(args, "strict_pcc_max_iters", 4),
-                        agent_timeout_s=max(
-                            getattr(args, "auto_agent_timeout", 600) or 600,
-                            1500,
-                        ),
-                        sep=sep,
-                        engine=getattr(args, "pcc_engine", "legacy"),
-                        model_light=_repair_model_light,
-                        model_heavy=_repair_model_heavy,
-                    )
-                else:
-                    _rc_cold = _PCC_FAIL_RC
+                # 2026-05-31 REWIRE: replaced _pcc_repair_loop with
+                # direct escalation. Same rationale as the ALREADY-
+                # SUPPORTED call site above — the whole-model retry
+                # loop was the wrong abstraction. Escalation routes
+                # through Path 1 (scaffold + per-component iterate).
+                _esc_rc_cold = _maybe_escalate_pcc_fail(args, MODEL, _PCC_FAIL_RC, _auto_mode)
+                _rc_cold = _esc_rc_cold if _esc_rc_cold is not None else _PCC_FAIL_RC
         if _rc_cold == 0:
             _register_bringup_success(
                 MODEL,
@@ -7290,6 +7815,12 @@ def _cmd_up_core(args) -> int:
         apply=True,
         format="text",
         no_diff=True,
+        # When the escalation hook (_maybe_escalate_pcc_fail) re-enters
+        # cmd_up after Path 2 PCC-gate failure, the compat verdict
+        # still reads "ALREADY SUPPORTED" — but the whole point of
+        # the escalation is to force Path 1, so the scaffold gate
+        # must skip the "already supported" early-exit.
+        force_already_supported=bool(vars(args).get("_escalated_already")),
     )
     try:
         rc = cmd_scaffold(scaffold_argv)
@@ -7495,9 +8026,25 @@ def _cmd_up_core(args) -> int:
         handoff_to_chat=False,
         apply_all_responses=False,
         list_synth_targets=False,
+        # Thread box/mesh through so cmd_bringup's child cmd_up call
+        # has them — without this, the wrapped cmd_up crashes with
+        # "'Namespace' object has no attribute 'box'" mid-cascade.
+        box=BOX,
+        mesh=getattr(args, "mesh", None),
     )
+    # IMPORTANT: cli.py defines its OWN `cmd_bringup` (the brain-
+    # orchestrated auto-up wrapper at line ~6827) which shadows the
+    # import from .commands.bringup at the top of this file. Step 4/6
+    # autofill needs the PER-COMPONENT dispatcher in commands/bringup.py
+    # (which dispatches on args.autofill / args.next / etc.), NOT the
+    # wrapper — calling the wrapper here re-enters cmd_up recursively
+    # and loops back through Step 0-6 / PCC gate / escalation, wasting
+    # time and potentially blowing the call stack. Import the
+    # per-component dispatcher directly to bypass the shadowing.
+    from .commands.bringup import cmd_bringup as _cmd_bringup_per_component
+
     try:
-        rc = cmd_bringup(autofill_argv)
+        rc = _cmd_bringup_per_component(autofill_argv)
         if rc not in (0, None):
             print(
                 f"  autofill returned non-zero ({rc}) — aborting before "
@@ -7841,16 +8388,59 @@ def _cmd_up_core(args) -> int:
 
         # ──────────────────────────────────────────────────────────────
         # DEMO EMISSION
-        # 4-bucket categorization always allows demo emission. The demo
-        # mixes native ttnn (graduated) + CPU fallback (COLD + DROPPED +
-        # KERNEL_MISSING). KERNEL_MISSING components are CPU-fallback
-        # in the demo until TTNN lands the missing ops; the user gets a
-        # working end-to-end demo + a clear list of TTNN dev work.
+        # Brain (G8) owns the decision: high-confidence full-native emit,
+        # mixed-mode emit (some on CPU fallback, still useful), or
+        # decline (mostly CPU — focus on closing gaps first). Replaces
+        # the prior `if _rc_loop == 0` flag-gate so the brain governs.
         # ──────────────────────────────────────────────────────────────
-        if _rc_loop == 0:
-            _demo_ok, _demo_msg = _emit_and_verify_runnable_demo(MODEL, sep=sep)
-            if not _demo_ok:
-                print(f"  [demo-emit] note: {_demo_msg}")
+        try:
+            from .agentic.e2e import should_emit_e2e_demo as _brain_should_emit
+
+            _final_report_for_brain = _scope_report_to_demo(_parse_pytest_report(), demo_dir)
+            _final_all_passed_for_brain = bool(_final_report_for_brain.get("all_passed", False))
+
+            _emit_verdict = _brain_should_emit(
+                on_device=_categorization.on_device,
+                kernel_missing=_categorization.kernel_missing,
+                pending=_categorization.pending,
+                final_all_passed=_final_all_passed_for_brain,
+            )
+            _demo_ok = True  # default if emit decision is "skip"
+            _demo_msg = ""
+            _demo_emit_declined = False
+            _demo_emit_decline_reason = ""
+            if _emit_verdict.emit:
+                print(
+                    f"  [brain G8] demo-emit decision: {_emit_verdict.confidence} confidence — "
+                    f"{_emit_verdict.reason}"
+                )
+                _demo_ok, _demo_msg = _emit_and_verify_runnable_demo(MODEL, sep=sep)
+                if not _demo_ok:
+                    print(f"  [demo-emit] note: {_demo_msg}")
+            else:
+                _demo_emit_declined = True
+                _demo_emit_decline_reason = _emit_verdict.reason
+                print(f"  [brain G8] declined to emit demo: {_emit_verdict.reason}")
+        except Exception as _emit_exc:
+            print(
+                f"  [brain G8] demo-emit decision non-fatal: " f"{type(_emit_exc).__name__}: {_emit_exc}",
+                file=sys.stderr,
+            )
+            _demo_ok = True  # don't penalize bring-up for a brain-decision crash
+            _demo_emit_declined = False
+            _demo_emit_decline_reason = ""
+
+        # B-FIX #1 (2026-05-31): propagate demo verification failure into
+        # the outcome rc. Without this, the iterate loop's rc=0 stays 0
+        # even when the emitted demo doesn't actually run end-to-end —
+        # OUTCOME would report SUCCESS on an unrunnable demo.
+        if _rc_loop == 0 and not _demo_ok:
+            _rc_loop = 1
+            print(
+                "  [brain G8] OUTCOME downgraded: per-component PCC passed "
+                "but end-to-end demo verification failed — reporting FAIL "
+                "so the user doesn't trust an unrunnable demo."
+            )
 
         if _rc_loop == 0:
             _register_bringup_success(
@@ -7859,10 +8449,16 @@ def _cmd_up_core(args) -> int:
                 sep=sep,
                 notes="Auto-iterate loop reached all-native graduation.",
             )
+            # B-FIX #2 (2026-05-31): surface brain G8 demo-emit decline in
+            # the OUTCOME extras so user knows the demo wasn't emitted.
+            _success_extra = []
+            if _demo_emit_declined:
+                _success_extra.append(f"brain G8 declined to emit demo: {_demo_emit_decline_reason}")
             _final_outcome_banner(
                 rc=0,
                 model_id=MODEL,
                 path_label="A. Template + iterate (all components graduated to native TTNN)",
+                extra=_success_extra or None,
             )
         else:
             _final_outcome_banner(
@@ -8485,6 +9081,40 @@ def main(argv: Optional[List[str]] = None) -> int:
         ),
     )
     pup.set_defaults(func=cmd_up)
+
+    # `auto-up` is a zero-flag entry-point: hands the model_id to `up`
+    # with all brain-orchestrated defaults locked in. Power users keep
+    # using `up` with explicit flags; everyone else just types
+    #     python -m scripts.tt_hw_planner auto-up <model_id>
+    # and the orchestrator (brain G8) handles every decision.
+    paut = sub.add_parser(
+        "auto-up",
+        help=(
+            "ZERO-FLAG entry point: hand a HuggingFace model id, the brain "
+            "does the rest. Sets sane defaults for --auto, --auto-agent, "
+            "tiered model selection, iter budget, and per-component cap so "
+            "the orchestrator drives every decision. Power users can fall "
+            "back to `up` with explicit flags."
+        ),
+    )
+    paut.add_argument("model_id", help="HuggingFace model id, e.g. facebook/sam2-hiera-tiny")
+    paut.add_argument(
+        "--box",
+        default="QB2",
+        choices=[b.name for b in HARDWARE],
+        help="target hardware (default: QB2)",
+    )
+    paut.add_argument(
+        "--mesh",
+        default=None,
+        help=(
+            "Mesh shape override, e.g. '1,4' or '2x2'. Without this flag, "
+            "auto-up picks the box's LARGEST canonical mesh (most chips, "
+            "tiebreak to max-TP shape). Pass an explicit value to use a "
+            "smaller mesh."
+        ),
+    )
+    paut.set_defaults(func=cmd_bringup)
 
     pprom = sub.add_parser(
         "promote",

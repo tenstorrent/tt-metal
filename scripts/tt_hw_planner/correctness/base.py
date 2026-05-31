@@ -204,8 +204,10 @@ def render_extra_blocks(
     """Universal renderer for ``extra_blocks`` to append to a repair
     prompt.
 
-    The :func:`scripts.tt_hw_planner.cli._pcc_repair_loop` passes
-    ``extra_blocks`` containing:
+    The per-component iterate loop
+    (``auto_iterate._run_auto_iterate_loop``) passes
+    ``extra_blocks`` containing (historically also called by
+    ``_pcc_repair_loop`` in the deleted ``_cli_helpers/pcc_repair.py``):
 
       * the HF ``config.json`` model-architecture summary,
       * the list of TT backend files for this category,

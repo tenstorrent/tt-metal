@@ -179,8 +179,11 @@ def build_repair_prompt(
     file (not 3 × 3), no iter history, no backend file surface, no
     side-by-side preview. The agent's cognitive load drops from
     ~6kB of context to ~2kB so the act-vs-analyze tradeoff tips
-    back to act. The caller (`_pcc_repair_loop`) sets this when the
-    previous iter exited without any edits.
+    back to act. The caller (the per-component iterate loop in
+    ``auto_iterate._run_auto_iterate_loop``) sets this when the
+    previous iter exited without any edits. (Historically set by
+    ``_pcc_repair_loop`` in the deleted ``_cli_helpers/pcc_repair.py``;
+    same condition now fires from Path 1.)
     """
     if forced_edit_mode:
         suspects = state.top_active(n=1)

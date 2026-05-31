@@ -27,12 +27,15 @@ WITHOUT category-specific hardcoded knowledge. The primitives are:
 
 Why a sub-package
 -----------------
-The legacy ``_pcc_repair_loop`` and the legacy ``correctness/`` package
-both have category-specific knowledge baked in (hardcoded suspects,
-hardcoded decoder paths, hardcoded prompt templates). Rewriting those
-in place would risk regressions; ``agentic/`` is a parallel,
-generic-only implementation that the legacy loop opts into via
-``--auto-engine=agentic``. When the agentic path proves out across
+The legacy ``correctness/`` package (and the now-DELETED
+``_pcc_repair_loop``, removed 2026-05-31) had category-specific
+knowledge baked in (hardcoded suspects, hardcoded decoder paths,
+hardcoded prompt templates). Rewriting those in place would risk
+regressions; ``agentic/`` is a parallel, generic-only implementation.
+Path 2 (ALREADY-SUPPORTED LLMs) used to opt into the legacy loop via
+``--auto-engine=agentic``; now Path 2 just escalates directly to
+Path 1's scaffold + per-component iterate (same flow as SAM2). When
+the agentic path proves out across
 several models the legacy code becomes dead and gets removed; until
 then both coexist.
 

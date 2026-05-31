@@ -341,6 +341,14 @@ def default_mechanical_actions(
     """
     actions: List[Action] = []
 
+    # AUDIT FIX #6 (2026-05-31): wire RevertLastEdits when recent_edits
+    # is provided. The action existed in actions.py but was never added
+    # to the default list — so executor never picked it. This is the
+    # "build broke from LLM edit" recovery path that the per-component
+    # iterate loop relies on after a failed build iteration.
+    if recent_edits:
+        actions.append(RevertLastEdits(files=list(recent_edits), workspace_root=workspace_root))
+
     actions.append(InvalidateCache(model_id=model_id, workspace_root=workspace_root))
 
     actions.append(SetEnvVar("TT_PLANNER_NO_TRACE", "1"))

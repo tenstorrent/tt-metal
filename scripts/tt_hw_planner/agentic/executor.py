@@ -1,8 +1,9 @@
 """G5: plan executor.
 
 Orchestrates the generic primitives into a single ``run_iteration``
-entry point that the legacy ``_pcc_repair_loop`` calls per iteration
-when ``--auto-engine=agentic`` is on.
+entry point that ``_run_auto_iterate_loop`` calls per iteration. The
+legacy ``_pcc_repair_loop`` was deleted 2026-05-31; Path 2 now
+escalates directly to Path 1 so this is the only iterate-loop driver.
 
 Phase order (deterministic, no LLM-driven branching):
 
@@ -401,6 +402,7 @@ def run_iteration(
         actions = default_mechanical_actions(
             model_id=ctx.model_id,
             workspace_root=ctx.workspace_root,
+            recent_edits=ctx.last_diff_files,  # AUDIT FIX #6: enable RevertLastEdits
         )
 
         class _VerdictShape:

@@ -410,7 +410,19 @@ def build_bringup_plan(
     new_cfg: dict,
     backend: FamilyBackend,
     repo_root: Path,
+    force_adapt_all: bool = False,
 ) -> BringUpPlan:
+    """Build the per-component bring-up plan.
+
+    ``force_adapt_all=True`` is used by the escalation hook
+    (``_maybe_escalate_pcc_fail`` -> Path 1 re-entry) when the
+    global PCC gate has already FAILED on an ALREADY-SUPPORTED model.
+    In that case every component that the registry tags as REUSE is
+    actually broken (the global failure proves the mappings are
+    wrong) — promote them all to ADAPT so the per-component iterate
+    loop has work to do. Without this, an already-supported model
+    that produces garbage output has nothing for Path 1 to iterate on.
+    """
     new_model_type = (new_cfg or {}).get("model_type")
     sibling_cfg: Dict[str, Any] = {}
     sibling_model_type: Optional[str] = None
@@ -485,6 +497,29 @@ def build_bringup_plan(
                 logger.warning(f"[bringup_plan] supplemental module-tree pass " f"failed: {type(exc).__name__}: {exc}")
             except Exception:
                 pass
+
+    if force_adapt_all:
+        promoted = 0
+        for _c in comps:
+            if _c.status == REUSE:
+                _c.status = ADAPT
+                _c.notes = (
+                    f"[force_adapt_all] demoted REUSE -> ADAPT "
+                    f"because global PCC gate failed on this "
+                    f"already-supported model. {_c.notes}"
+                ).strip()
+                promoted += 1
+        if promoted:
+            try:
+                from loguru import logger
+
+                logger.info(
+                    f"[bringup_plan] force_adapt_all promoted "
+                    f"{promoted} REUSE -> ADAPT component(s) so Path 1 "
+                    f"per-component iterate has targets"
+                )
+            except Exception:
+                print(f"  [bringup_plan] force_adapt_all promoted " f"{promoted} REUSE -> ADAPT component(s)")
 
     plan = BringUpPlan(
         new_model_id=new_model_id,

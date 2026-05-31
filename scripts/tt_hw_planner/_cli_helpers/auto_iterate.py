@@ -12,6 +12,152 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 
+def _brain_sync_graduated_to_main_tree(
+    *,
+    MODEL: str,
+    demo_dir: Path,
+    graduated_this_run: List[str],
+    banner_fn,
+) -> None:
+    """Brain G8 worktree → main-tree sync. Wraps the
+    agentic.persistence primitive with the local-context-handling
+    (demo subpath, _safe_id) so the call site is a 1-liner.
+
+    Safe to call from ANY success-exit point in the loop. No-ops
+    cleanly when not in a worktree, or when graduated_this_run is
+    empty. Errors are non-fatal.
+    """
+    if not graduated_this_run:
+        return
+    try:
+        from ..agentic.persistence import sync_graduated_to_main_tree
+        from ..bringup_loop import _safe_id
+
+        # B2-FIX: compute the demo path RELATIVE TO the worktree root
+        # directly. `safe_relative_to_root` returns the absolute path
+        # on miss (when demo_dir doesn't sit under BRINGUP_ROOT), which
+        # would then combine via `worktree_root / abs_path` and
+        # silently target the absolute path, not the main tree.
+        worktree_root = Path.cwd()
+        try:
+            demo_subpath = demo_dir.resolve().relative_to(worktree_root.resolve())
+        except ValueError:
+            # demo_dir is outside the worktree — caller can't meaningfully
+            # sync to main tree.
+            print(f"  [brain G8 sync] demo_dir ({demo_dir}) is outside " f"worktree ({worktree_root}); skipping sync")
+            return
+        result = sync_graduated_to_main_tree(
+            worktree_root=worktree_root,
+            demo_subpath=str(demo_subpath),
+            graduated_components=graduated_this_run,
+            safe_id_fn=_safe_id,
+        )
+        if result.synced:
+            banner_fn(
+                f"SYNC (brain G8): wrote {len(result.synced)} graduated "
+                f"stub(s) to main tree → {result.main_tree_path}"
+            )
+            for note in result.notes:
+                print(f"    {note}")
+        elif result.notes:
+            for note in result.notes:
+                print(f"  [brain G8 sync] {note}")
+    except Exception as exc:
+        print(
+            f"  [brain G8] worktree sync non-fatal: " f"{type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+
+
+def _brain_handle_phantom_failures(
+    *,
+    MODEL: str,
+    demo_dir: Path,
+    final_failed: List[str],
+    banner_fn,
+    allow_kill_stale: bool,
+    allow_device_reset: bool,
+) -> Optional[Dict[str, Any]]:
+    """Brain G8 phantom-failure handler.
+
+    For each failed component, ask the brain whether the failure is a
+    stale-decomposed-parent test (the parent was split into children
+    that carry the real work; the parent's old standalone test is a
+    phantom). If yes, archive the file. If any phantoms were archived,
+    re-run pytest and return the updated ``{"rc": int, "report": dict}``.
+    Returns ``None`` when nothing was archived (caller keeps current state).
+
+    Called from BOTH the early-exit path (everything at cap → final
+    pytest → if any failure is a phantom, clean up) AND the
+    fall-through path (loop ended normally → final pytest → same
+    check). Without dual call sites, runs that exit early skip the
+    brain check entirely — exactly the SAM2 2026-05-30 symptom.
+    """
+    if not final_failed:
+        return None
+    try:
+        from ..agentic.stale_tests import archive_stale_test, detect_stale_decomposed_test
+        from ..bringup_loop import _safe_id
+        from ..cli import _list_component_pcc_tests, _parse_pytest_report, _run_focused_pytest, _scope_report_to_demo
+        from ..overlay_manager import load_no_emit_tests
+
+        no_emit = load_no_emit_tests(MODEL)
+        archived_phantoms: List[str] = []
+        for failed_comp in final_failed:
+            verdict = detect_stale_decomposed_test(
+                component=failed_comp,
+                no_emit_tests=no_emit,
+            )
+            if verdict.is_stale and verdict.action == "archive_test":
+                archived_path = archive_stale_test(
+                    demo_dir=demo_dir,
+                    component=failed_comp,
+                    safe_id=_safe_id(failed_comp),
+                )
+                if archived_path is not None:
+                    archived_phantoms.append(failed_comp)
+                    print(f"  [brain G8] phantom failure detected: {verdict.reason}")
+                    print(f"    archived: {archived_path.name}")
+        if not archived_phantoms:
+            return None
+        banner_fn(
+            f"PHANTOM-CLEANUP (brain G8): archived {len(archived_phantoms)} "
+            f"stale decomposed-parent test(s) — re-running final pytest"
+        )
+        final_tests = _list_component_pcc_tests(demo_dir)
+        if not final_tests:
+            # G1-FIX: every PCC test was archived (all were phantoms).
+            # The pre-archive `final_failed` is stale — those failures
+            # were on tests that no longer exist. Synthesize a clean
+            # success report so the caller stops trusting stale state.
+            print(
+                "  [brain G8] all remaining PCC tests were phantoms — " "nothing left to re-run; reporting clean state"
+            )
+            return {
+                "rc": 0,
+                "report": {
+                    "all_passed": True,
+                    "passed_components": [],
+                    "failed_components": [],
+                    "skipped_components": [],
+                },
+            }
+        rc = _run_focused_pytest(
+            model_id=MODEL,
+            test_files=final_tests,
+            allow_kill_stale=allow_kill_stale,
+            allow_device_reset=allow_device_reset,
+        )
+        report = _scope_report_to_demo(_parse_pytest_report(), demo_dir)
+        return {"rc": rc, "report": report}
+    except Exception as exc:
+        print(
+            f"  [brain G8] stale-test detection non-fatal: " f"{type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        return None
+
+
 def _run_auto_iterate_loop(
     *,
     MODEL: str,
@@ -145,6 +291,11 @@ def _run_auto_iterate_loop(
     # run. We try each action at most once per component to avoid
     # re-applying the same toggle on repeated plateaus.
     tried_actions_per_component: Dict[str, set] = {}
+
+    # Per-component count of brain-granted cap extensions this run.
+    # The brain (agentic.convergence.should_extend_component_cap) uses
+    # this to enforce its own per-component cap-on-cap-extensions.
+    cap_extensions_used_per_component: Dict[str, int] = {}
 
     # Per-component set tracking which components have already had
     # auto-decompose attempted this run. Prevents re-running the
@@ -660,6 +811,21 @@ def _run_auto_iterate_loop(
         stub back to the best known floor and record the skip so the loop
         won't target it again.
 
+        WIRING #10 NOTE (2026-05-31): The PATH-AGNOSTIC CORE of this
+        function (classify failure + persist KERNEL_MISSING if
+        warranted) is consolidated in
+        ``failure_classifier.classify_and_persist_skip``;
+        ``_cli_helpers/runtime_repair.py`` exposes
+        ``_classify_and_persist_skip`` as a thin shim around it.
+        (``_cli_helpers/pcc_repair.py`` was deleted 2026-05-31 — the
+        whole-model retry loop was duplication of Path 1's
+        per-component iterate flow; Path 2 now escalates here via
+        ``_maybe_escalate_pcc_fail`` in cli.py.) The Path-1-specific
+        parts of THIS function (stub rollback from
+        .last_good_native/.best_native/.preiter_native/.bak
+        snapshots, permanently_skipped list update, decomposition
+        auto-spawn) remain here.
+
         BUG/LAYER-7: If the agent's failure trace matches a kernel-missing
         signal, ALSO persist to missing_kernels.json so the final
         categorization can put this component in KERNEL_MISSING (allowed
@@ -686,6 +852,13 @@ def _run_auto_iterate_loop(
             return
         permanently_skipped.append(comp)
         verified_fail.discard(comp)
+        # S2-FIX: also drop from graduated_this_run so a regressed
+        # component doesn't continue to inflate the brain's "momentum"
+        # proxy (`should_extend_budget`, `should_extend_component_cap`).
+        # Without this, a stale graduation could grant cap / budget
+        # extensions on a run that has actually regressed.
+        if comp in graduated_this_run:
+            graduated_this_run[:] = [g for g in graduated_this_run if g != comp]
         # Classify the failure (`failure_classifier.py`). Only a verified
         # KERNEL_MISSING verdict writes a persistent skip-list entry; the
         # rest are diagnostic — the loop logs them and the component
@@ -1252,7 +1425,43 @@ def _run_auto_iterate_loop(
                 file=sys.stderr,
             )
 
-    for it in range(1, max_iters + 1):
+    # Brain (G8) owns the run-level "should we extend the budget?"
+    # decision via agentic.convergence.should_extend_budget. The loop
+    # just consults the brain at budget exhaustion and executes the
+    # verdict. All policy (residue threshold, momentum gate, bump size,
+    # per-run cap) lives in the brain module so it tunes in ONE place.
+    budget_extensions_used = 0
+    it = 0
+    while True:
+        it += 1
+        if it > max_iters:
+            _ext_ungrad, _ext_smoke = _auto_iteration_blockers(MODEL)
+            _ext_pending = sorted((set(_ext_ungrad) | set(_ext_smoke)) - set(permanently_skipped))
+            from ..agentic.convergence import should_extend_budget as _brain_should_extend
+
+            _verdict = _brain_should_extend(
+                pending_components=_ext_pending,
+                pcc_history_per_component=pcc_history_per_component,
+                graduated_this_run=graduated_this_run,
+                max_iters=max_iters,
+                extensions_used=budget_extensions_used,
+            )
+            if _verdict.extend:
+                banner(
+                    f"AUTO-EXTEND (brain G8): max_iters {max_iters} → "
+                    f"{max_iters + _verdict.bump} — {_verdict.reason}"
+                )
+                max_iters += _verdict.bump
+                budget_extensions_used += 1
+                # Decrement so the bump translates to N real body iters,
+                # not N-1. Without this, the exhaustion-check iter
+                # "consumes" one slot from the bump.
+                it -= 1
+                continue
+            # Brain declined to extend — leave trace so users see why.
+            if _ext_pending:
+                print(f"  [brain G8] declined to extend budget: {_verdict.reason}")
+            break
         seed_failure_class = _classify_failure(last_failures, last_failure_details)
         if (
             seed_failure_class == "DEVICE_NEEDS_RESET"
@@ -1310,11 +1519,47 @@ def _run_auto_iterate_loop(
                 for c in set(last_failed_components)
                 if c not in permanently_skipped and c not in graduated_this_run and _is_at_cap(c)
             ]
+            # Brain (G8) gets the final say on each component at cap:
+            # extend the cap (component is close to converging) or route
+            # to CPU fallback. Without this, the cap is a hard flag-gated
+            # wall the brain never sees — which is exactly how today's
+            # run shortcut at iter 1 (cap exhausted → CPU fallback →
+            # budget exhaustion never reached → brain never consulted).
+            from ..agentic.convergence import should_extend_component_cap as _brain_should_extend_cap
+
+            extended_at_cap: List[str] = []
             for c in sorted(at_cap_now):
-                _skip_component_to_fallback(
-                    c,
-                    f"hit per-component attempt cap " f"(consec-same-class {_attempts_display(c)})",
+                _cap_verdict = _brain_should_extend_cap(
+                    component=c,
+                    consecutive_same_class=consecutive_same_class_attempts.get(c, 0),
+                    effective_cap=_effective_attempt_cap(c),
+                    pcc_history=pcc_history_per_component.get(c, []),
+                    last_pcc=last_pcc_per_component.get(c),
+                    last_failure_class=last_failure_class_per_component.get(c, ""),
+                    graduated_this_run=graduated_this_run,
+                    extensions_used_for_this_component=cap_extensions_used_per_component.get(c, 0),
                 )
+                if _cap_verdict.extend:
+                    # Reset the consecutive-same-class counter by the
+                    # bump amount; this is what `_effective_attempt_cap`
+                    # measures against, so a reduction here grants
+                    # `bump` more attempts effectively.
+                    new_consec = max(0, consecutive_same_class_attempts.get(c, 0) - _cap_verdict.bump)
+                    consecutive_same_class_attempts[c] = new_consec
+                    cap_extensions_used_per_component[c] = cap_extensions_used_per_component.get(c, 0) + 1
+                    banner(
+                        f"CAP-EXTEND (brain G8): `{c}` granted +{_cap_verdict.bump} "
+                        f"attempts — {_cap_verdict.reason}"
+                    )
+                    extended_at_cap.append(c)
+                else:
+                    print(f"  [brain G8] `{c}` cap-fallback: {_cap_verdict.reason}")
+                    _skip_component_to_fallback(
+                        c,
+                        f"hit per-component attempt cap " f"(consec-same-class {_attempts_display(c)})",
+                    )
+            # Only components NOT extended by brain are routed to fallback.
+            at_cap_now = [c for c in at_cap_now if c not in extended_at_cap]
             if at_cap_now:
                 last_failed_components = [c for c in last_failed_components if c not in at_cap_now]
                 if not last_failed_components:
@@ -1392,6 +1637,21 @@ def _run_auto_iterate_loop(
                         allow_device_reset=allow_device_reset,
                     )
                     final_report = _scope_report_to_demo(_parse_pytest_report(), demo_dir)
+                    # Brain G8 phantom-failure check: if any failure is a
+                    # stale-decomposed-parent test, archive it and re-pytest
+                    # BEFORE applying the "unexpected failure" fallback
+                    # logic. Otherwise SAM2-style runs report rc=1 from
+                    # phantoms that should never have run.
+                    _phantom_post = _brain_handle_phantom_failures(
+                        MODEL=MODEL,
+                        demo_dir=demo_dir,
+                        final_failed=sorted(set(final_report.get("failed_components", []) or [])),
+                        banner_fn=banner,
+                        allow_kill_stale=allow_kill_stale,
+                        allow_device_reset=allow_device_reset,
+                    )
+                    if _phantom_post is not None:
+                        final_rc, final_report = _phantom_post["rc"], _phantom_post["report"]
                     if final_rc != 0 or not bool(final_report.get("all_passed", False)):
                         unexpected_failed = sorted(
                             set(final_report.get("failed_components", []) or []) - set(permanently_skipped)
@@ -1477,6 +1737,12 @@ def _run_auto_iterate_loop(
                             f"        --box {BOX} --auto --auto-agent {provider} \\\n"
                             f"        --auto-max-iters 12 --auto-agent-timeout 1500\n"
                         )
+                        _brain_sync_graduated_to_main_tree(
+                            MODEL=MODEL,
+                            demo_dir=demo_dir,
+                            graduated_this_run=graduated_this_run,
+                            banner_fn=banner,
+                        )
                         return 0
                     still_failing = sorted(set(final_report.get("failed_components", []) or []))
                     print(
@@ -1532,6 +1798,12 @@ def _run_auto_iterate_loop(
             banner(
                 f"AUTO-ITERATE {it}/{max_iters}: all components already graduated "
                 f"to native TTNN — nothing left to do"
+            )
+            _brain_sync_graduated_to_main_tree(
+                MODEL=MODEL,
+                demo_dir=demo_dir,
+                graduated_this_run=graduated_this_run,
+                banner_fn=banner,
             )
             return 0
 
@@ -3817,6 +4089,38 @@ def _run_auto_iterate_loop(
     final_passed = sorted(set(final_report.get("passed_components", []) or []))
     final_failed = sorted(set(final_report.get("failed_components", []) or []))
     final_skipped = sorted(set(final_report.get("skipped_components", []) or []))
+
+    # Brain phantom-failure detection: ask the brain whether each
+    # failure is a stale-decomposed-parent test. If yes, archive the
+    # test file and re-run pytest. The mechanical safety net in
+    # decomposition_consumer.py covers decomposition WRITE time;
+    # this brain primitive covers OLD / external decompositions.
+    _brain_post = _brain_handle_phantom_failures(
+        MODEL=MODEL,
+        demo_dir=demo_dir,
+        final_failed=final_failed,
+        banner_fn=banner,
+        allow_kill_stale=allow_kill_stale,
+        allow_device_reset=allow_device_reset,
+    )
+    if _brain_post is not None:
+        final_rc, final_report = _brain_post["rc"], _brain_post["report"]
+        final_all_passed = bool(final_report.get("all_passed", False))
+        final_passed = sorted(set(final_report.get("passed_components", []) or []))
+        final_failed = sorted(set(final_report.get("failed_components", []) or []))
+        final_skipped = sorted(set(final_report.get("skipped_components", []) or []))
+
+    # Brain-owned worktree → main-tree sync. Bypasses the overlay-
+    # capture/apply mechanism (which has been observed to leave the
+    # main tree with scaffold-stage stubs even when worktree had the
+    # brain's iterated work product — SAM2, 2026-05-30).
+    if final_all_passed:
+        _brain_sync_graduated_to_main_tree(
+            MODEL=MODEL,
+            demo_dir=demo_dir,
+            graduated_this_run=graduated_this_run,
+            banner_fn=banner,
+        )
 
     def _print_validation_breakdown() -> None:
         """Print what actually ran on hardware vs what's structurally-but-

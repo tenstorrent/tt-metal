@@ -547,37 +547,46 @@ def test_full_hf_reference_source_helper_exists() -> None:
 
 def test_prompt_emits_localization_and_full_hf_only_on_pcc_only() -> None:
     """The LOCALIZATION HINT and FULL HF REFERENCE SOURCE blocks must
-    be GUARDED by `failure_class == "PCC_ONLY"`. Emitting them on
-    every failure class blows up prompt size on shape/API errors
-    where they add zero signal.
+    be GUARDED so they only fire on PCC_ONLY (plus a narrow OTHER+
+    crash escape hatch for localize). Emitting them on every failure
+    class blows up prompt size on shape/API errors where they add
+    zero signal.
 
-    Note: `cli.py` has TWO `if failure_class == "PCC_ONLY":` blocks —
-    one in `_strategy_directive_for_failure` (returns a string
-    directive) and one in the prompt-assembly loop (calls our
-    Tier-2 helpers). We must locate the prompt-assembly one
-    specifically, which is the one that calls `localize_pcc_divergence`.
-    """
+    2026-05-31 update: after Path 2→Path 1 escalation rewire and
+    pcc_repair.py deletion, the prompt-assembly path moved into
+    auto_iterate.py. The structure is now TWO adjacent guards:
+      (a) `if failure_class in _localize_classes ...:` calling
+          `localize_pcc_divergence` (PCC_ONLY is in _localize_classes).
+      (b) `if failure_class == "PCC_ONLY":` calling
+          `_full_hf_reference_source` (the heavier enrichment).
+    Both must be present and BOTH gates must be PCC-guarded (no
+    accidental fire on shape/API errors)."""
     src = _planner_source()
 
-    needle = 'if failure_class == "PCC_ONLY":'
-    cursor = 0
-    found_guarded_invocation = False
-    while True:
-        guard_idx = src.find(needle, cursor)
-        if guard_idx == -1:
-            break
-        body = src[guard_idx : guard_idx + 4000]
-        if "localize_pcc_divergence" in body and "_full_hf_reference_source" in body:
-            found_guarded_invocation = True
-            break
-        cursor = guard_idx + len(needle)
-    assert found_guarded_invocation, (
-        'cli.py must contain an `if failure_class == "PCC_ONLY":` '
-        "block that invokes BOTH `localize_pcc_divergence` (Tier-2 A) "
-        "and `_full_hf_reference_source` (Tier-2 B). Without that "
-        "guard, the enrichments either fire on every failure class "
-        "(prompt-size blowout on non-PCC failures) or never fire at "
-        "all (no signal on PCC near-misses like decoder_head)."
+    # Guard (a): localize_pcc_divergence must be inside a guard that
+    # includes PCC_ONLY (either == "PCC_ONLY" or `in _localize_classes`
+    # where _localize_classes is the PCC-bearing set).
+    loc_idx = src.find("localize_pcc_divergence(")
+    assert loc_idx >= 0, "localize_pcc_divergence call must exist"
+    # Search backward for the controlling guard within 2000 chars.
+    pre_window = src[max(0, loc_idx - 2000) : loc_idx]
+    assert "_localize_classes" in pre_window or 'failure_class == "PCC_ONLY"' in pre_window, (
+        "localize_pcc_divergence must be guarded by either the "
+        '_localize_classes membership check or `failure_class == "PCC_ONLY"` '
+        "— without a guard it fires on shape/API errors (prompt blowout)."
+    )
+
+    # Guard (b): _full_hf_reference_source CALL must be inside
+    # `failure_class == "PCC_ONLY"` (heavier enrichment, PCC-only).
+    # Search for assignment-form which is the call site (not the def).
+    call_marker = "full_hf_source = _full_hf_reference_source("
+    full_hf_idx = src.find(call_marker)
+    assert full_hf_idx >= 0, "_full_hf_reference_source call site must exist"
+    pre_window_b = src[max(0, full_hf_idx - 2000) : full_hf_idx]
+    assert 'failure_class == "PCC_ONLY"' in pre_window_b, (
+        "_full_hf_reference_source call must be guarded by "
+        '`if failure_class == "PCC_ONLY":` — without that guard the '
+        "heavy HF source dump fires on non-PCC failures."
     )
 
 
@@ -1590,7 +1599,7 @@ def test_preflight_compute_split_printed_before_iter_loop() -> None:
     fn_slice = src[fn_idx : fn_idx + 200000]
 
     pf_block_idx = fn_slice.find("AUTO-ITERATE pre-flight:")
-    iter_loop_idx = fn_slice.find("for it in range(1, max_iters + 1):")
+    iter_loop_idx = fn_slice.find("while True:")
     assert pf_block_idx > 0, "pre-flight banner must exist"
     assert iter_loop_idx > pf_block_idx, "the iter loop must come AFTER the pre-flight (sanity check)"
     pre_iter_slice = fn_slice[pf_block_idx:iter_loop_idx]
@@ -1623,7 +1632,7 @@ def test_preflight_compute_split_is_exception_safe() -> None:
     fn_idx = src.find("def _run_auto_iterate_loop")
     fn_slice = src[fn_idx : fn_idx + 200000]
     pf_block_idx = fn_slice.find("AUTO-ITERATE pre-flight:")
-    iter_loop_idx = fn_slice.find("for it in range(1, max_iters + 1):")
+    iter_loop_idx = fn_slice.find("while True:")
     pre_iter_slice = fn_slice[pf_block_idx:iter_loop_idx]
 
     split_idx = pre_iter_slice.find("Pre-flight compute split")
@@ -3365,7 +3374,7 @@ def test_autofill_regen_branch_wired_into_preserve_chain() -> None:
 
     fn_idx = src.find("def autofill_stubs(")
     assert fn_idx >= 0
-    body = src[fn_idx : fn_idx + 12000]
+    body = src[fn_idx : fn_idx + 60000]
 
     assert '"regen:autofill-missing-dtype-fix"' in body, "preserve chain must register the new regen action label"
 
@@ -3483,19 +3492,33 @@ def test_auto_emit_op_count_reads_counts_dict() -> None:
 
 
 def test_convergence_path_emits_and_verifies_demo() -> None:
-    """The auto-iterate loop's convergence branch MUST call
-    `_emit_and_verify_runnable_demo(MODEL)` so a green banner implies
-    `pytest demo.py::test_demo` is also green. Without this hook the
-    user has to debug a broken demo manually every time."""
+    """A green AUTO-ITERATE converge banner must imply
+    `pytest demo.py::test_demo` is also green.
+
+    2026-05-31: this hook has moved out of the converged branch in
+    auto_iterate.py and into cmd_up's post-Phase-2 gate, so the demo
+    only emits when every HOT component is graduated (better signal).
+    Test pins both: (a) the auto-loop convergence branch carries the
+    move-out NOTE so the architectural decision is documented, and
+    (b) cmd_up actually calls `_emit_and_verify_runnable_demo(MODEL)`
+    after the iterate-loop graduates."""
     src = _planner_source()
 
     conv_idx = src.find('banner(f"AUTO-ITERATE converged after')
     assert conv_idx >= 0, "auto-loop must have a converged banner"
+    conv_block = src[conv_idx : conv_idx + 3000]
+    assert "end-to-end demo emission has moved OUT" in conv_block, (
+        "converged branch must carry the NOTE documenting that emit " "moved to cmd_up's post-Phase-2 gate"
+    )
 
-    block = src[conv_idx : conv_idx + 3000]
-    assert "_emit_and_verify_runnable_demo(MODEL" in block, (
-        "converged branch must call _emit_and_verify_runnable_demo(MODEL) "
-        "so demo.py is regenerated + verified before returning success"
+    # The actual emit+verify hook now lives in cmd_up.
+    cmd_up_idx = src.find("def cmd_up(")
+    assert cmd_up_idx >= 0
+    cmd_up_block = src[cmd_up_idx : cmd_up_idx + 60000]
+    assert "_emit_and_verify_runnable_demo(MODEL" in cmd_up_block, (
+        "cmd_up must call _emit_and_verify_runnable_demo(MODEL) after "
+        "the iterate-loop graduates so the green banner implies a "
+        "green demo.py"
     )
 
 
@@ -3627,7 +3650,7 @@ def test_cmd_up_and_promote_call_memory_fit_gate_before_llm() -> None:
         fn_idx = src.find(fn_name)
         assert fn_idx >= 0, f"{fn_name} must exist in cli.py"
 
-        block = src[fn_idx : fn_idx + 12000]
+        block = src[fn_idx : fn_idx + 60000]
         assert "_enforce_memory_fit_or_abort(" in block, (
             f"{fn_name.rstrip('(')} must invoke "
             f"_enforce_memory_fit_or_abort before LLM iteration so "
@@ -4475,7 +4498,7 @@ def test_cmd_up_catches_cold_start_and_routes_to_prepare_execute() -> None:
     src = _planner_source()
     fn_idx = src.find("def cmd_up(")
     assert fn_idx >= 0
-    block = src[fn_idx : fn_idx + 40000]
+    block = src[fn_idx : fn_idx + 60000]
 
     assert "ColdStartScaffoldError" in block, "cmd_up must import ColdStartScaffoldError and probe for it"
     assert "_cold_start_signal" in block, (
@@ -4705,7 +4728,7 @@ def test_cmd_up_auto_routes_already_supported_to_prepare_execute() -> None:
     fn_idx = src.find("def cmd_up(")
     assert fn_idx >= 0
 
-    block = src[fn_idx : fn_idx + 40000]
+    block = src[fn_idx : fn_idx + 60000]
     assert "_already_supported" in block, "cmd_up must detect 'already supported' case before scaffold"
 
     scaffold_call = block.find("cmd_scaffold(scaffold_argv)")
@@ -5302,7 +5325,7 @@ def test_loud_fallback_gate_never_aborts_uses_auto_onboard_inline() -> None:
     src = _planner_source()
     fn_idx = src.find("def _enforce_backend_match_quality_or_abort(")
     assert fn_idx >= 0, "_enforce_backend_match_quality_or_abort must be defined in cli.py"
-    body = src[fn_idx : fn_idx + 12000]
+    body = src[fn_idx : fn_idx + 60000]
 
     assert "pick_backend_with_quality(" in body, (
         "loud-fallback gate must call pick_backend_with_quality (the "
@@ -5370,7 +5393,7 @@ def test_cmd_up_calls_loud_fallback_gate() -> None:
     src = _planner_source()
     fn_idx = src.find("def cmd_up(")
     assert fn_idx >= 0
-    block = src[fn_idx : fn_idx + 12000]
+    block = src[fn_idx : fn_idx + 60000]
     assert "_enforce_backend_match_quality_or_abort(" in block, (
         "cmd_up must call _enforce_backend_match_quality_or_abort so "
         "silent-template-fallbacks are caught before scaffold"
@@ -5573,70 +5596,12 @@ def test_cli_exposes_pcc_probe_layers_flag() -> None:
     assert 'choices=("none", "layers")' in src, "--pcc-probe must accept the 'none' and 'layers' choices"
 
 
-def test_pcc_repair_loop_accepts_pcc_probe_kwarg() -> None:
-    """`_pcc_repair_loop` must take `pcc_probe` as a keyword argument
-    so the cli call sites can thread it through. Detection here is
-    structural: parse the function signature off the source so the
-    test doesn't depend on importing the (heavy) cli module under
-    pytest's collection."""
-    src = _planner_source()
-    sig_anchor = src.find("def _pcc_repair_loop(")
-    assert sig_anchor != -1, "cli.py must define _pcc_repair_loop"
-    closing = src.find(") -> int:", sig_anchor)
-    assert closing != -1
-    sig = src[sig_anchor:closing]
-    assert "pcc_probe: str" in sig, (
-        "_pcc_repair_loop must accept pcc_probe: str as a kwarg so "
-        "the cmd_up call sites can thread the cli flag through"
-    )
-
-
-def test_pcc_repair_loop_threads_pcc_probe_through_call_sites() -> None:
-    """Both call sites in cmd_up (the ALREADY-SUPPORTED branch and
-    the COLD-START branch) must pass `pcc_probe=getattr(args, "pcc_probe", ...)`
-    -- otherwise the cli flag silently defaults to "none" on whichever
-    branch was missed. A regression that adds a third call site
-    without threading the kwarg would silently disable the probe."""
-    src = _planner_source()
-    call_marker = "_pcc_repair_loop("
-    start = 0
-    invocations = 0
-    threaded = 0
-    while True:
-        idx = src.find(call_marker, start)
-        if idx == -1:
-            break
-
-        if src[idx - 4 : idx] == "def ":
-            start = idx + len(call_marker)
-            continue
-
-        depth = 0
-        end = idx
-        for i in range(idx, min(len(src), idx + 4000)):
-            c = src[i]
-            if c == "(":
-                depth += 1
-            elif c == ")":
-                depth -= 1
-                if depth == 0:
-                    end = i
-                    break
-        invocation_src = src[idx : end + 1]
-        invocations += 1
-        if 'pcc_probe=getattr(args, "pcc_probe"' in invocation_src:
-            threaded += 1
-        start = end + 1
-    assert invocations >= 2, (
-        f"expected at least 2 invocations of _pcc_repair_loop in "
-        f"cli.py (already-supported + cold-start branches); found "
-        f"{invocations}"
-    )
-    assert threaded == invocations, (
-        f"all {invocations} call sites of _pcc_repair_loop must "
-        f'thread pcc_probe=getattr(args, "pcc_probe", ...); only '
-        f"{threaded} do"
-    )
+# NOTE (2026-05-31): pcc_repair.py was deleted; the two former
+# `test_pcc_repair_loop_*` invariants — which pinned that the
+# --pcc-probe flag was threaded through `_pcc_repair_loop(...)`
+# call sites — have been removed with it. The --pcc-probe flag
+# itself still exists and is consumed by _maybe_run_decode_layer_probe
+# (covered by test_maybe_run_decode_layer_probe_*).
 
 
 def test_maybe_run_decode_layer_probe_returns_empty_on_disabled_flag() -> None:

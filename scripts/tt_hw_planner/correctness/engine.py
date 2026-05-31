@@ -117,9 +117,11 @@ def run_gate(
       comparators are wired in later phases.
     * ``"agentic"`` — same gate engine as ``"evidence"`` (so the
       repair loop sees the rich text-evidence) and the difference
-      is in the *repair* path, not the gate path:
-      :func:`cli._pcc_repair_loop` switches to the agentic
-      planner when ``engine == "agentic"``.
+      is in the *repair* path, not the gate path. Historically the
+      now-deleted ``_pcc_repair_loop`` switched to the agentic
+      planner when ``engine == "agentic"``; today Path 2 escalates
+      via ``_maybe_escalate_pcc_fail`` into Path 1's per-component
+      iterate, which always uses the agentic planner.
     """
 
     if category and category not in ("LLM", "VLM", "Unknown"):
