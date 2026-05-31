@@ -5,9 +5,11 @@
 #include "ttnn/operations/data_movement/concat/device/concat_program_factory.hpp"
 
 #include <algorithm>
+#include <set>
 
 #include "ttnn/tensor/tensor.hpp"
 
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -222,13 +224,42 @@ tt::tt_metal::ProgramDescriptor ConcatProgramFactory::create_descriptor(
     }
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
+    // Pin kernel core_ranges to the full compute grid (or the full
+    // sub_core_grids when supplied), regardless of how many cores
+    // `split_work_to_cores` allocated for the work-split. Runtime args
+    // are still only emplaced on the work-split subset `cores`, so
+    // per-core work is unchanged.
+    //
+    // Why: the program-cache slow path
+    // (`apply_descriptor_runtime_args` in
+    // mesh_device_operation_adapter.hpp) re-runs `create_descriptor`
+    // on cache hit and applies the fresh descriptor's runtime_args
+    // against the cached program's compiled kernel placement. If the
+    // cached call had fewer `num_output_pages` (and thus a smaller
+    // `all_cores`) than a subsequent call that hash-collides into the
+    // same cache entry, the new call's runtime_args contain core
+    // coordinates the cached kernel was never placed on, which fires
+    //   TT_FATAL: Cannot get runtime args for kernel ... not placed on core X-Y
+    // Making the kernel placement invariant (full grid every time)
+    // means the cached program always covers any possible runtime
+    // args core, removing this mismatch class entirely.
+    const auto cores = (sub_core_grids.has_value() && !output.is_sharded())
+                           ? cores_list
+                           : grid_to_cores(num_cores, num_cores_x, num_cores_y, rm_orientation);
+    const CoreRangeSet kernel_core_ranges = (sub_core_grids.has_value() && !output.is_sharded())
+                                                ? sub_core_grids.value()
+                                                : CoreRangeSet(CoreRange(
+                                                      {0, 0},
+                                                      {device->compute_with_storage_grid_size().x - 1,
+                                                       device->compute_with_storage_grid_size().y - 1}));
+
     KernelDescriptor reader_desc;
     reader_desc.kernel_source = rm_layout ? "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/"
                                             "reader_concat_stick_layout_interleaved_start_id.cpp"
                                           : "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/"
                                             "reader_concat_interleaved_start_id.cpp";
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_cores;
+    reader_desc.core_ranges = kernel_core_ranges;
     reader_desc.compile_time_args = std::move(reader_compile_time_args);
     reader_desc.defines = std::move(concat_defines);
     reader_desc.config = ReaderConfigDescriptor{};
@@ -239,13 +270,9 @@ tt::tt_metal::ProgramDescriptor ConcatProgramFactory::create_descriptor(
             ? "ttnn/cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp"
             : "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = all_cores;
+    writer_desc.core_ranges = kernel_core_ranges;
     writer_desc.compile_time_args = std::move(writer_compile_time_args);
     writer_desc.config = WriterConfigDescriptor{};
-
-    const auto cores = (sub_core_grids.has_value() && !output.is_sharded())
-                           ? cores_list
-                           : grid_to_cores(num_cores, num_cores_x, num_cores_y, rm_orientation);
     const uint32_t g1_num_cores = core_group_1.num_cores();
     for (uint32_t i = 0, num_pages_written = 0; i < cores.size(); ++i) {
         const CoreCoord& core = cores[i];
@@ -289,6 +316,33 @@ tt::tt_metal::ProgramDescriptor ConcatProgramFactory::create_descriptor(
         reader_desc.runtime_args.emplace_back(core, std::move(reader_kernel_args));
         writer_desc.runtime_args.emplace_back(core, std::move(writer_kernel_args));
         num_pages_written += num_pages_per_core;
+    }
+
+    // Pinning the kernel to the full grid (kernel_core_ranges above)
+    // means the cached program reserves rt-args storage for every
+    // core in the full grid, sized by the slot we set on the very
+    // first call. If a later call hits the cache with a *larger*
+    // work-split (more entries in `cores`), apply_descriptor_runtime_args
+    // tries to write rt-args at slots that were never allocated on
+    // that core, surfacing as
+    //   TT_FATAL: Index N is larger than runtime args size 0
+    // Emplace a same-sized zero rt-args vector on every full-grid
+    // core not in `cores`. num_tiles=0 short-circuits the kernel's
+    // main loop, and the other zero-valued indices are read but never
+    // dereferenced because the loop never runs.
+    if (!sub_core_grids.has_value() || output.is_sharded()) {
+        std::set<CoreCoord> cores_with_work(cores.begin(), cores.end());
+        const size_t reader_rt_size = 3 + 2 * num_input_tensors + num_input_tensors;
+        const size_t writer_rt_size = rm_layout ? 4 : 3;
+        for (uint32_t x = 0; x < num_cores_x; ++x) {
+            for (uint32_t y = 0; y < num_cores_y; ++y) {
+                CoreCoord c{x, y};
+                if (cores_with_work.count(c) == 0) {
+                    reader_desc.runtime_args.emplace_back(c, std::vector<uint32_t>(reader_rt_size, 0));
+                    writer_desc.runtime_args.emplace_back(c, std::vector<uint32_t>(writer_rt_size, 0));
+                }
+            }
+        }
     }
 
     desc.kernels.push_back(std::move(reader_desc));
