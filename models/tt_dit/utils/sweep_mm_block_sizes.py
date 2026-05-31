@@ -555,15 +555,17 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
         addcmul_tensor1 = None
         addcmul_tensor2 = None
         if uc_cfg.get("use_addcmul", False):
+            # AGMM output shape is (full_M, N) replicated on every device; addcmul
+            # tensors must match that shape exactly (TT_FATAL checks ternary_a[-2]==M_full).
             addcmul_tensor1 = ttnn.from_torch(
-                torch.randn((M, N), dtype=torch.float32),
+                torch.randn((full_M, N), dtype=torch.float32),
                 dtype=dtype,
                 device=mesh_device,
                 layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=[None, None]),
             )
             addcmul_tensor2 = ttnn.from_torch(
-                torch.randn((M, N), dtype=torch.float32),
+                torch.randn((full_M, N), dtype=torch.float32),
                 dtype=dtype,
                 device=mesh_device,
                 layout=ttnn.TILE_LAYOUT,

@@ -283,7 +283,7 @@ class ColParallelLinear(Module):
                 )
                 return [_apply_activation_fn(o, self.activation_fn) for o in outputs]
 
-            if M <= 64:  # Branch B: 1D mcast_in0 matmul for small-M shapes
+            if M <= 128:  # Branch B: 1D mcast_in0 matmul for small-M shapes
                 program_config = get_1d_matmul_config(M, K, N, core_grid)
                 output = ttnn.linear(
                     x,
