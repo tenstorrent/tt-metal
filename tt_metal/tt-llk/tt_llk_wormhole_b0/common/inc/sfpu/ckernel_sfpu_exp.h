@@ -222,9 +222,9 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a)
     r = r * f + 1.66664720e-1f; // 0x1.555450p-3
     r = r * f + 4.99999851e-1f; // 0x1.fffff6p-2
     i = sfpi::abs(i);
-    r = r * f + 1.0f;
+    y = r * f + 1.0f;
     i = sfpi::reinterpret<sfpi::vInt>(sfpi::copysgn(sfpi::reinterpret<sfpi::vFloat>(i), j));
-    r = r * f + 1.0f;
+    r = y * f + 1.0f;
 
     if constexpr (unsafe)
     {
@@ -236,22 +236,28 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a)
     else
     {
         // overflow: y = infinity or NaN
-        y = a * std::numeric_limits<float>::infinity();
+        y *= std::numeric_limits<float>::infinity();
 
         e = sfpi::exexp(r, sfpi::ExponentMode::NoDebias);
         e += i;
-        v_if (e < 255)
+
+        // if e < 255
+        v_block
         {
+            sfpi::vInt e_lt_255 = __builtin_rvtt_sfpiadd_i(e.get(), -255, sfpi::SFPIADD_MOD1_CC_LT0);
+
             // y = 2**i * r
             y = sfpi::setexp(r, e);
-            v_if (e < 1)
+
+            // if e < 1
+            v_if (e_lt_255 < -254)
             {
                 // underflow, including subnormals
                 y = 0.0f;
             }
             v_endif;
         }
-        v_endif;
+        v_endblock;
     }
 
     return y;
