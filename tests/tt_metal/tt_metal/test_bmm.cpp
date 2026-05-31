@@ -122,19 +122,11 @@ experimental::metal2_host_api::ProgramSpec build_bmm_program_spec(
 
     experimental::metal2_host_api::KernelSpec reader_spec{
         .unique_id = READER,
-        .source =
-
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_bmm_8bank.cpp",
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_bmm_8bank.cpp",
         .num_threads = p.num_threads,
         .dfb_bindings =
-            {{.dfb_spec_name = SRC0_DFB,
-              .accessor_name = "src0",
-              .endpoint_type = experimental::metal2_host_api::DFBEndpointType::PRODUCER,
-              .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED},
-             {.dfb_spec_name = SRC1_DFB,
-              .accessor_name = "src1",
-              .endpoint_type = experimental::metal2_host_api::DFBEndpointType::PRODUCER,
-              .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED}},
+            {experimental::metal2_host_api::ProducerOf(SRC0_DFB, "src0"),
+             experimental::metal2_host_api::ProducerOf(SRC1_DFB, "src1")},
         .tensor_bindings =
             {{.tensor_parameter_name = SRC0_T, .accessor_name = "src0"},
              {.tensor_parameter_name = SRC1_T, .accessor_name = "src1"}},
@@ -148,15 +140,9 @@ experimental::metal2_host_api::ProgramSpec build_bmm_program_spec(
 
     experimental::metal2_host_api::KernelSpec writer_spec{
         .unique_id = WRITER,
-        .source =
-
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_bmm_8bank.cpp",
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_bmm_8bank.cpp",
         .num_threads = p.num_threads,
-        .dfb_bindings =
-            {{.dfb_spec_name = DST_DFB,
-              .accessor_name = "dst",
-              .endpoint_type = experimental::metal2_host_api::DFBEndpointType::CONSUMER,
-              .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED}},
+        .dfb_bindings = {experimental::metal2_host_api::ConsumerOf(DST_DFB, "dst")},
         .tensor_bindings = {{.tensor_parameter_name = DST_T, .accessor_name = "dst"}},
         .runtime_arg_schema = {.runtime_arg_names = {"batch_start"}, .common_runtime_arg_names = {"Mt", "Nt", "batch"}},
         .hw_config = writer_config,
@@ -164,23 +150,12 @@ experimental::metal2_host_api::ProgramSpec build_bmm_program_spec(
 
     experimental::metal2_host_api::KernelSpec compute_spec{
         .unique_id = COMPUTE,
-        .source =
-
-            "tests/tt_metal/tt_metal/test_kernels/compute/bmm.cpp",
+        .source = "tests/tt_metal/tt_metal/test_kernels/compute/bmm.cpp",
         .num_threads = p.num_threads,
         .dfb_bindings =
-            {{.dfb_spec_name = SRC0_DFB,
-              .accessor_name = "src0",
-              .endpoint_type = experimental::metal2_host_api::DFBEndpointType::CONSUMER,
-              .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED},
-             {.dfb_spec_name = SRC1_DFB,
-              .accessor_name = "src1",
-              .endpoint_type = experimental::metal2_host_api::DFBEndpointType::CONSUMER,
-              .access_pattern = experimental::metal2_host_api::DFBAccessPattern::ALL},
-             {.dfb_spec_name = DST_DFB,
-              .accessor_name = "dst",
-              .endpoint_type = experimental::metal2_host_api::DFBEndpointType::PRODUCER,
-              .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED}},
+            {experimental::metal2_host_api::ConsumerOf(SRC0_DFB, "src0"),
+             experimental::metal2_host_api::AllConsumerOf(SRC1_DFB, "src1"),
+             experimental::metal2_host_api::ProducerOf(DST_DFB, "dst")},
         .compile_time_args = {{"batch", p.B_per_core}, {"Mt", p.Mt}, {"Kt", p.Kt}, {"Nt", p.Nt}},
         .hw_config = experimental::metal2_host_api::ComputeHardwareConfig{},
     };
