@@ -174,6 +174,13 @@ USE_CASE_CONFIGS = {
         "math_approx_mode": True,
         "use_matmul_split": True,
     },
+    # Single-block to_qkv via minimal_matmul_split with chunks=3, approx math.
+    # Mirrors cross_attn_kv but splits into 3 Q/K/V chunks instead of 2.
+    "qkv_mm_split": {
+        "chunks": 3,
+        "math_approx_mode": True,
+        "use_matmul_split": True,
+    },
 }
 
 # Whether the sweep uses fp32 dest accumulator. With fp32 dest, the DEST tile
