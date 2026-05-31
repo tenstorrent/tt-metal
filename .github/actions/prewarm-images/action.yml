@@ -3,9 +3,8 @@ description: "Pull images through Harbor to warm the cache. Fails if Harbor pull
 
 inputs:
   harbor-prefix:
-    description: "Harbor prefix (empty if not using Harbor)"
-    required: false
-    default: ""
+    description: "Harbor prefix for pull-through (required; action fails if empty)"
+    required: true
   images:
     description: |
       Images to prewarm. Can be either:
@@ -36,11 +35,12 @@ runs:
       run: |
         set -euo pipefail
 
-        if [ -n "$HARBOR_PREFIX" ]; then
-          echo "Prewarming ${TITLE} from GHCR via Harbor pull-through..."
-        else
-          echo "Prewarming ${TITLE} from GHCR directly..."
+        if [ -z "$HARBOR_PREFIX" ]; then
+          echo "::error::Harbor is not available (HARBOR_PREFIX is empty). Prewarming requires Harbor pull-through; skipping is not supported."
+          exit 1
         fi
+
+        echo "Prewarming ${TITLE} from GHCR via Harbor pull-through..."
 
         # Build list of image tags to prewarm
         declare -a IMAGE_TAGS=()
