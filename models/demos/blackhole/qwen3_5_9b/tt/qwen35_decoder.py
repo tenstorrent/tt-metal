@@ -77,6 +77,7 @@ class Qwen35TransformerBlock:
         page_table=None,
         chunk_page_table=None,
         chunk_start_idx=None,
+        chunk_start_idx_tensor=None,
     ):
         mc = ttnn.L1_MEMORY_CONFIG if mode == "decode" else None
         attn_input = rms_norm_ttnn(x, self.attention_norm_weight, eps=self.norm_eps, memory_config=mc)
@@ -90,6 +91,7 @@ class Qwen35TransformerBlock:
                 page_table=page_table,
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
+                chunk_start_idx_tensor=chunk_start_idx_tensor,
             )
         else:
             deltanet_mode = "chunk" if mode == "prefill" else "recurrent"
