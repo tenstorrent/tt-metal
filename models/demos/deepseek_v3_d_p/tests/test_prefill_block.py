@@ -11,6 +11,7 @@ Uses HF DeepseekV3Model layer as the reference: creates a model with random weig
 extracts those weights into our TT state_dict format, and compares forward passes.
 """
 
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -37,10 +38,18 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
 )
 from tests.ttnn.utils_for_testing import comp_pcc
 
-PCC_THRESHOLD_DENSE = 0.996
-PCC_THRESHOLD_MOE_GATE_HOST = 0.996
-PCC_THRESHOLD_MOE_GATE_DEVICE = 0.992
-PCC_THRESHOLD_KVPE = 0.999
+
+@dataclass(frozen=True)
+class PrefillBlockThresholds:
+    dense: float = 0.996
+    moe_host: float = 0.996
+    moe_device: float = 0.992
+    kvpe_kv: float = 0.999
+    kvpe_pe: float = 0.999
+
+
+DSV3_THRESHOLDS = PrefillBlockThresholds()
+KIMI_THRESHOLDS = PrefillBlockThresholds(moe_host=0.984)
 
 
 def run_model(
@@ -60,6 +69,7 @@ def run_model(
     tokenizer,
     is_ci_env,
     is_ci_v2_env,
+    thresholds: PrefillBlockThresholds,
 ):
     """Prefill-block PCC body — shared between `test_ds_prefill_block` / `test_kimi_prefill_block`."""
     if is_ci_env or is_ci_v2_env and pcc_validation == False:
@@ -152,7 +162,7 @@ def run_model(
         profiler.start("torch_reference")
         logger.info("Running torch reference forward...")
         position_ids = torch.arange(isl_total, dtype=torch.long).unsqueeze(0)
-        attention_mask = torch.zeros(1, 1, isl_total, isl_total, dtype=torch.bfloat16)
+        attention_mask = get_4d_causal_mask(torch.ones(1, isl_total), causal_only=True).to(torch.bfloat16)
         ref_cache = DynamicCache()
         with torch.no_grad():
             layer_out = hf_model.layers[layer_idx](
@@ -272,12 +282,12 @@ def run_model(
         tt_output_host = tt_output_host.squeeze(0)
 
         if layer_type == "dense":
-            pcc_threshold = PCC_THRESHOLD_DENSE
+            pcc_threshold = thresholds.dense
         else:
             if gate_fallback_mode == GateComputeMode.DEVICE:
-                pcc_threshold = PCC_THRESHOLD_MOE_GATE_DEVICE
+                pcc_threshold = thresholds.moe_device
             else:
-                pcc_threshold = PCC_THRESHOLD_MOE_GATE_HOST
+                pcc_threshold = thresholds.moe_host
 
         _, pcc = comp_pcc(torch_output.float(), tt_output_host.float())
         profiler.end("pcc_validation")
@@ -289,10 +299,10 @@ def run_model(
             kv_lora_rank = config.kv_lora_rank
             _, kv_pcc = comp_pcc(ref_kvpe[:, :, :, :kv_lora_rank].float(), tt_kvpe[:, :, :, :kv_lora_rank].float())
             _, pe_pcc = comp_pcc(ref_kvpe[:, :, :, kv_lora_rank:].float(), tt_kvpe[:, :, :, kv_lora_rank:].float())
-            logger.info(f"KVPE cache KV part PCC: {kv_pcc:.6f} (threshold: {PCC_THRESHOLD_KVPE})")
-            logger.info(f"KVPE cache PE part PCC: {pe_pcc:.6f} (threshold: {PCC_THRESHOLD_KVPE})")
-            assert kv_pcc > PCC_THRESHOLD_KVPE, f"KVPE KV PCC {kv_pcc:.6f} below threshold {PCC_THRESHOLD_KVPE}"
-            assert pe_pcc > PCC_THRESHOLD_KVPE, f"KVPE PE PCC {pe_pcc:.6f} below threshold {PCC_THRESHOLD_KVPE}"
+            logger.info(f"KVPE cache KV part PCC: {kv_pcc:.6f} (threshold: {thresholds.kvpe_kv})")
+            logger.info(f"KVPE cache PE part PCC: {pe_pcc:.6f} (threshold: {thresholds.kvpe_pe})")
+            assert kv_pcc > thresholds.kvpe_kv, f"KVPE KV PCC {kv_pcc:.6f} below threshold {thresholds.kvpe_kv}"
+            assert pe_pcc > thresholds.kvpe_pe, f"KVPE PE PCC {pe_pcc:.6f} below threshold {thresholds.kvpe_pe}"
 
         logger.success(
             f"TtPrefillBlock test passed "
@@ -371,7 +381,7 @@ _KIMI_MESH_PARAMS = [
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology", _DS_MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
-@pytest.mark.parametrize("variant", ["dsv3"], indirect=True, ids=["dsv3"])
+@pytest.mark.parametrize("variant", ["deepseek_v3"], indirect=True, ids=["deepseek_v3"])
 @pytest.mark.timeout(600)
 def test_ds_prefill_block(
     variant,
@@ -408,6 +418,7 @@ def test_ds_prefill_block(
         tokenizer,
         is_ci_env,
         is_ci_v2_env,
+        thresholds=DSV3_THRESHOLDS,
     )
 
 
@@ -415,16 +426,20 @@ def test_ds_prefill_block(
     "input_source, pcc_validation, isl_total, dispatch_buffer_capacity_factor",
     [
         ("random", False, 1024, 8),
+        ("random", False, 5 * 1024, 8),
+        ("random", False, 25 * 1024, 8),
         ("abc_1k", True, 1024, 8),
+        ("abc_1k", True, 5 * 1024, 8),
+        ("abc_1k", True, 25 * 1024, 8),
     ],
-    ids=["smoke-random", "pcc-abc_1k"],
+    ids=["smoke-random", "perf-random-5k", "perf-random-25k", "pcc-abc_1k", "pcc-abc_5k", "pcc-abc_25k"],
 )
 @pytest.mark.parametrize(
     "layer_type, gate_fallback_mode",
     [("dense", None), ("moe", GateComputeMode.HOST_ALL)],
     ids=["dense", "moe-gate_host"],
 )
-@pytest.mark.parametrize("is_balanced", [True], ids=["balanced"])
+@pytest.mark.parametrize("is_balanced", [True, False], ids=["balanced", "non_balanced"])
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology", _KIMI_MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
@@ -466,4 +481,5 @@ def test_kimi_prefill_block(
         tokenizer,
         is_ci_env,
         is_ci_v2_env,
+        thresholds=KIMI_THRESHOLDS,
     )

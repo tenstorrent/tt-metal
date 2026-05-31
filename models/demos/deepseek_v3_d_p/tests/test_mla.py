@@ -219,13 +219,9 @@ def run_model(
     # Host comparison: Run reference forward pass if needed
     if skip_host_comparison == False:
         # Check for cached reference results to avoid expensive host attention computation
-        cache_dir = Path(os.environ.get("DEEPSEEK_V3_MLA_REF_CACHE", "/tmp/deepseek_v3_mla_ref_cache"))
-        # DSv3 uses the legacy filename (existing CI cache); other variants are
-        # name-prefixed to avoid colliding with that legacy cache.
-        cache_key = f"{weight_type.lower()}_seq{seq_len}"
-        if variant.name != "dsv3":
-            cache_key = f"{variant.name}_{cache_key}"
-        cache_path = cache_dir / f"{cache_key}.pt"
+        env = variant.mla_ref_cache_env or "DEEPSEEK_V3_MLA_REF_CACHE"
+        cache_dir = Path(os.environ.get(env, f"/tmp/{variant.name}_mla_ref_cache"))
+        cache_path = cache_dir / f"{weight_type.lower()}_seq{seq_len}.pt"
 
         if cache_path.exists():
             logger.info(f"Loading cached reference results from {cache_path}")
@@ -365,7 +361,7 @@ _MLA_COMMON_DEVICE_PARAMS = [
 )
 @pytest.mark.parametrize("skip_host_comparison", [False, True], ids=["check_pcc", "skip_check"])
 @pytest.mark.parametrize("is_balanced", [False, True], ids=["sequential", "balanced"])
-@pytest.mark.parametrize("variant", ["dsv3"], indirect=True, ids=["dsv3"])
+@pytest.mark.parametrize("variant", ["deepseek_v3"], indirect=True, ids=["deepseek_v3"])
 @pytest.mark.timeout(0)
 def test_ds_mla(
     use_pretrained,

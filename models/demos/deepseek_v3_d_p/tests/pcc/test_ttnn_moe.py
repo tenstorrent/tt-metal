@@ -592,7 +592,7 @@ def _moe_mesh_params():
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology", _moe_mesh_params(), indirect=["mesh_device", "device_params"]
 )
-@pytest.mark.parametrize("variant", ["dsv3"], indirect=True, ids=["dsv3"])
+@pytest.mark.parametrize("variant", ["deepseek_v3"], indirect=True, ids=["deepseek_v3"])
 def test_ds_moe(
     variant,
     config_only,

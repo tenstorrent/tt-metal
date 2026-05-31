@@ -44,8 +44,8 @@ class TestVariant:
         reference_attention_cls: Optional[type] = None,
         reference_moe_cls: Optional[type] = None,
         weight_cache_prefix: Optional[str] = None,
-        trace_dir_env: Optional[str] = None,
         ref_cache_env: Optional[str] = None,
+        mla_ref_cache_env: Optional[str] = None,
         moe_pcc_threshold: float = 0.999,
         mla_pcc_threshold: float = 0.999,
         supports_pretrained: bool = True,
@@ -61,15 +61,15 @@ class TestVariant:
         self.reference_attention_cls = reference_attention_cls
         self.reference_moe_cls = reference_moe_cls
         self.weight_cache_prefix = weight_cache_prefix or name
-        self.trace_dir_env = trace_dir_env
         self.ref_cache_env = ref_cache_env
+        self.mla_ref_cache_env = mla_ref_cache_env
         self.moe_pcc_threshold = moe_pcc_threshold
         self.mla_pcc_threshold = mla_pcc_threshold
         self.supports_pretrained = supports_pretrained
 
 
 DSV3 = TestVariant(
-    name="dsv3",
+    name="deepseek_v3",
     env_var="DEEPSEEK_V3_HF_MODEL",
     hf_repo_id="deepseek-ai/DeepSeek-R1-0528",
     model_config=DeepSeekV3Config,
@@ -84,8 +84,8 @@ DSV3 = TestVariant(
     reference_attention_cls=None,
     reference_moe_cls=DSv3RefMoE,
     weight_cache_prefix="deepseek_v3_d_p",
-    trace_dir_env="TT_DS_PREFILL_TRACE_DIR",
     ref_cache_env="TT_DS_PREFILL_HOST_REF_CACHE",
+    mla_ref_cache_env="DEEPSEEK_V3_MLA_REF_CACHE",
 )
 
 KIMI = TestVariant(
@@ -100,8 +100,8 @@ KIMI = TestVariant(
     reference_attention_cls=KimiRefAttention,
     reference_moe_cls=KimiRefMoE,
     weight_cache_prefix="kimi_k26",
-    trace_dir_env="TT_KIMI_PREFILL_TRACE_DIR",
     ref_cache_env="TT_KIMI_PREFILL_HOST_REF_CACHE",
+    mla_ref_cache_env="KIMI_MLA_REF_CACHE",
     supports_pretrained=False,
     mla_pcc_threshold=0.995,
     moe_pcc_threshold=0.987,

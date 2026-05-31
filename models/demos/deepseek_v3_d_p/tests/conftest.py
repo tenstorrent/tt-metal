@@ -87,7 +87,7 @@ def pytest_collection_modifyitems(config, items):
 @pytest.fixture
 def variant(request) -> TestVariant:
     """The active test variant. Driven by indirect parametrize:
-        @pytest.mark.parametrize("variant", ["dsv3"], indirect=True)
+        @pytest.mark.parametrize("variant", ["deepseek_v3"], indirect=True)
     Tests that don't parametrize fall back to DSv3.
     """
     param = getattr(request, "param", None)
@@ -399,7 +399,7 @@ def weight_cache_path(variant, model_path):
     if env_cache:
         cache_dir = Path(env_cache) / f"{variant.weight_cache_prefix}_{arch}_{num_devices}dev"
     else:
-        cache_dir = model_path / f"tensor_cache_{variant.weight_cache_prefix}_{arch}_{num_devices}dev"
+        cache_dir = model_path / f"tensor_cache_{arch}_{num_devices}dev"
     cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir
 

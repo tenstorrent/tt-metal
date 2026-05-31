@@ -201,6 +201,7 @@ class TtPrefillBlock(LightweightModule):
             mesh_device=mesh_device,
             emb_dim=emb_dim,
             torch_weight=state_dict.get("attn_norm_weight"),  # None if cache exists
+            epsilon=config.rms_norm_eps,
             cluster_axis=tp_axis,
             num_links=num_links,
             topology=topology,
@@ -226,6 +227,7 @@ class TtPrefillBlock(LightweightModule):
             mesh_device=mesh_device,
             emb_dim=emb_dim,
             torch_weight=state_dict.get("ffn_norm_weight"),  # None if cache exists
+            epsilon=config.rms_norm_eps,
             cluster_axis=tp_axis,
             num_links=num_links,
             topology=topology,

@@ -183,6 +183,7 @@ class TtPrefillTransformer(LightweightModule):
             mesh_device=mesh_device,
             emb_dim=config.hidden_size,
             torch_weight=state_dict.get("norm_weight"),  # None if cache exists
+            epsilon=config.rms_norm_eps,
             cluster_axis=tp_axis,
             num_links=num_links,
             topology=topology,

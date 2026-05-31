@@ -691,7 +691,6 @@ class ReferenceCacheKey:
     are never reused silently.
     """
 
-    variant_name: str
     weight_type: str  # "pretrained" or "random"
     input_source: str  # "random", "json_prompts", "abc_1k", or InfiniteBench subset
     isl_total: int
@@ -701,7 +700,7 @@ class ReferenceCacheKey:
 
     def __str__(self) -> str:
         return (
-            f"{self.variant_name}_{self.weight_type}_{self.input_source}"
+            f"{self.weight_type}_{self.input_source}"
             f"_isl{self.isl_total}_layers{self.num_layers}"
             f"_experts{self.n_routed_experts}_pad{self.padding_side}"
         )

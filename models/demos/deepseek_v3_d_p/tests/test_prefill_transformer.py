@@ -79,6 +79,7 @@ TRACE_PCC_THRESHOLD_DEVICE_FP32 = 0.95
 # or any InfiniteBench subset name (downloaded on first use via infinitebench_prompt fixture).
 INFINITEBENCH_SUBSET_NAMES = {"passkey", "kv_retrieval", "longdialogue_qa_eng", "longbook_qa_eng"}
 SEQ_LEN_1K = 1024
+SEQ_LEN_5K = 5120
 SEQ_LEN_25K = 25600
 
 
@@ -200,7 +201,6 @@ def run_model(
         )
 
     cache_key = ReferenceCacheKey(
-        variant_name=variant.name,
         weight_type=weight_type,
         input_source=input_source,
         isl_total=isl_total,
@@ -796,7 +796,7 @@ _KIMI_PT_MESH_PARAMS = [
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology", _DS_PT_MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
-@pytest.mark.parametrize("variant", ["dsv3"], indirect=True, ids=["dsv3"])
+@pytest.mark.parametrize("variant", ["deepseek_v3"], indirect=True, ids=["deepseek_v3"])
 @pytest.mark.timeout(0)
 def test_ds_prefill_transformer(
     variant,
@@ -851,24 +851,48 @@ def test_ds_prefill_transformer(
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
-@pytest.mark.parametrize("tokenizer", ["right"], indirect=True, ids=["right_pad"])
+@pytest.mark.parametrize("tokenizer", ["right", "left"], indirect=True, ids=["right_pad", "left_pad"])
 @pytest.mark.parametrize("temperature", [[0.5]], ids=["temp_sweep"])
 @pytest.mark.parametrize("return_kv_cache", [True], ids=["kv_cache"])
-@pytest.mark.parametrize("use_pretrained", [False], ids=["random"])
-@pytest.mark.parametrize("input_source", ["random", "json_prompts"])
+@pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
+@pytest.mark.parametrize(
+    "input_source",
+    [
+        "json_prompts",
+        "abc_1k",
+        "abc_short",
+        "p64tok",
+        "p960tok",
+        "pie960",
+        "random",
+        "passkey",
+        "kv_retrieval",
+        "longdialogue_qa_eng",
+        "longbook_qa_eng",
+    ],
+)
 @pytest.mark.parametrize("pcc_validation", [True, False], ids=["pcc", "smoke"])
-@pytest.mark.parametrize("is_balanced", [True], ids=["balanced"])
+@pytest.mark.parametrize("is_balanced", [True, False], ids=["balanced", "non_balanced"])
 @pytest.mark.parametrize(
     "isl_total, dispatch_buffer_capacity_factor",
-    [(SEQ_LEN_1K, 8)],
+    [(SEQ_LEN_1K, 8), (SEQ_LEN_5K, 8), (SEQ_LEN_25K, 8)],
+    ids=["1k", "5k", "25k"],
 )
-@pytest.mark.parametrize("num_layers", [5], ids=["5_layers"])
+@pytest.mark.parametrize(
+    "num_layers",
+    [
+        5,
+        12,
+        pytest.param(61, marks=pytest.mark.skipif(not is_galaxy(), reason="Testing entire-prefill only on Galaxy")),
+    ],
+    ids=["5_layers", "12_layers", "61_layers"],
+)
 @pytest.mark.parametrize(
     "n_routed_experts, gate_fallback_mode",
     [(384, GateComputeMode.HOST_ALL)],
     ids=["e384_host"],
 )
-@pytest.mark.parametrize("num_iterations", [1], ids=["iter1"])
+@pytest.mark.parametrize("num_iterations", [1, 25, 2000], ids=["iter1", "iter25", "iter2000"])
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology", _KIMI_PT_MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
