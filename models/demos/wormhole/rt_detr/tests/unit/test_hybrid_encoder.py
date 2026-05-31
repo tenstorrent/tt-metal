@@ -25,7 +25,7 @@ from tt.weight_utils import get_encoder_parameters
 
 from models.common.utility_functions import comp_pcc
 
-pcc_threshold = 0.90  
+pcc_threshold = 0.90
 
 _device = None
 _pt_p3, _pt_p4, _pt_p5 = None, None, None

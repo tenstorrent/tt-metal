@@ -51,9 +51,7 @@ def test_register_and_create_python_optimizer():
     """Test registering a Python optimizer and creating it via create_optimizer."""
     PyOptimizer = _make_python_optimizer_class()
 
-    ttml.optimizers.register_optimizer(
-        "PyOpt", lambda config, params: PyOptimizer(params)
-    )
+    ttml.optimizers.register_optimizer("PyOpt", lambda config, params: PyOptimizer(params))
 
     params = ttml.NamedParameters()
     opt = ttml.optimizers.create_optimizer({"type": "PyOpt"}, params)
@@ -66,9 +64,7 @@ def test_python_optimizer_methods():
     """Test that virtual method dispatch works for Python optimizers."""
     PyOptimizer = _make_python_optimizer_class()
 
-    ttml.optimizers.register_optimizer(
-        "PyOptMethods", lambda config, params: PyOptimizer(params)
-    )
+    ttml.optimizers.register_optimizer("PyOptMethods", lambda config, params: PyOptimizer(params))
 
     params = ttml.NamedParameters()
     opt = ttml.optimizers.create_optimizer({"type": "PyOptMethods"}, params)

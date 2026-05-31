@@ -156,6 +156,11 @@ Runs the full TT pipeline against the PyTorch reference and checks per-channel c
 pytest tests/test_end_to_end_pcc.py -v
 ```
 
+In order to run the unit tests, for example is we want to run the unit test for hybrid_encoder then
+```bash
+pytest tests/unit/test_hybrid_encoder.py -v
+```
+
 Expected results:
 
 | Test | Threshold | Result |
@@ -185,6 +190,17 @@ Then run:
 ```bash
 python tests/evaluate_coco.py
 ```
+
+### Device Performance
+
+To replicate the reported device performance numbers using the Tracy profiler:
+
+```sh
+# Manually inspect on-device ops (generates a CSV perf report)
+./tools/tracy/profile_this.py -n rt_detr -c "pytest --disable-warnings models/demos/wormhole/rt_detr/tests/test_end_to_end_pcc.py -v"
+```
+
+> **Note:** The deformable cross-attention step runs on CPU and is excluded from the device trace. See [issue #17076](https://github.com/tenstorrent/tt-metal/issues/17076).
 
 **End-to-end accuracy on COCO val2017:**
 
@@ -264,7 +280,7 @@ The backbone and encoder execute fully on-device. In the decoder, self-attention
 
 **Mesh device** — Targets a 1×2 Wormhole mesh. Weights are replicated via `ReplicateTensorToMesh`; outputs are pulled back with `ConcatMeshToTensor`.
 
-**Decoder cross-attention** — Deformable multi-scale attention is not yet natively implemented in TTNN for Wormhole. The cross-attention step in each of the 6 decoder layers falls back to PyTorch CPU, with one host↔device query transfer per layer. This is the primary remaining opportunity to move computation fully on-device.
+**Decoder cross-attention** — Deformable multi-scale attention is not yet natively implemented in TTNN for Wormhole (tracked in [#17076](https://github.com/tenstorrent/tt-metal/issues/17076)). The cross-attention step in each of the 6 decoder layers falls back to PyTorch CPU, with one host↔device query transfer per layer. This is the primary remaining opportunity to move computation fully on-device.
 
 **Memory management** — All intermediate TTNN tensors are explicitly deallocated with `ttnn.deallocate` to prevent L1/DRAM fragmentation across the backbone→encoder→decoder pipeline.
 

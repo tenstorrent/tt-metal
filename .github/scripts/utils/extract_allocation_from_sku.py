@@ -24,9 +24,7 @@ def main():
 
     # Verify the file exists
     if not os.path.exists(sku_config_path):
-        print(
-            f"::error::SKU config file not found at {sku_config_path}", file=sys.stderr
-        )
+        print(f"::error::SKU config file not found at {sku_config_path}", file=sys.stderr)
         sys.exit(1)
 
     # Open and parse the YAML file
@@ -41,9 +39,7 @@ def main():
         sys.exit(1)
 
     if not isinstance(config, dict):
-        print(
-            f"::error::SKU config file must contain a YAML dictionary", file=sys.stderr
-        )
+        print(f"::error::SKU config file must contain a YAML dictionary", file=sys.stderr)
         sys.exit(1)
 
     skus = config.get("skus", {})

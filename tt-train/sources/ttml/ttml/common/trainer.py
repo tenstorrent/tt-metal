@@ -10,9 +10,7 @@ from ttml.common.data import get_batch, build_causal_mask
 from tqdm import tqdm
 
 
-def get_batch_ttml(
-    ids: np.ndarray, seq_len: int, batch_size: int, use_ddp: bool = False
-):
+def get_batch_ttml(ids: np.ndarray, seq_len: int, batch_size: int, use_ddp: bool = False):
     """Prepare a batch of data for TTML training.
 
     Args:
@@ -36,18 +34,14 @@ def get_batch_ttml(
             ttnn.DataType.UINT32,
             mapper,
         )
-        tt_y = ttml.autograd.Tensor.from_numpy(
-            y_u32, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, mapper
-        )
+        tt_y = ttml.autograd.Tensor.from_numpy(y_u32, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, mapper)
     else:
         tt_x = ttml.autograd.Tensor.from_numpy(
             x_u32.reshape(batch_size, 1, 1, seq_len),
             ttnn.Layout.ROW_MAJOR,
             ttnn.DataType.UINT32,
         )
-        tt_y = ttml.autograd.Tensor.from_numpy(
-            y_u32, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32
-        )
+        tt_y = ttml.autograd.Tensor.from_numpy(y_u32, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32)
     return tt_x, tt_y
 
 
@@ -144,9 +138,7 @@ def train(
             last_val_loss = val_losses[-1]
             model.train()
             # Update bar with validation loss
-            postfix = {
-                "train_loss": f"{train_losses[-1]:.4f}" if train_losses else "N/A"
-            }
+            postfix = {"train_loss": f"{train_losses[-1]:.4f}" if train_losses else "N/A"}
             postfix["val_loss"] = f"{last_val_loss:.4f}"
             bar.set_postfix(postfix, refresh=False)
 
