@@ -38,7 +38,6 @@ namespace sfpu {
  * @note This function assumes that the programmable constants are set to the following values:
  * - vConstFloatPrgm0 = 1.4426950408889634f;
  * - vConstFloatPrgm1 = -127.0f;
- * - vConstFloatPrgm2 = std::numeric_limits<float>::quiet_NaN();
  *
  * @see Moroz et al. 2022 - "Simple Multiple Precision Algorithms for Exponential Functions"
  *      ( https://doi.org/10.1109/MSP.2022.3157460 )
@@ -121,7 +120,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
 
     // Division by 0 when base is 0 and pow is negative => set to NaN
     v_if((absbase == 0.f) && pow < 0.f) {
-        y = sfpi::vConstFloatPrgm2;  // negative powers of 0 are NaN, e.g. pow(0, -1.5)
+        y = std::numeric_limits<float>::quiet_NaN();  // negative powers of 0 are NaN, e.g. pow(0, -1.5)
     }
     v_endif;
 
@@ -133,7 +132,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
 
         // Check for integer power, if it is not then overwrite result with NaN
         v_if(pow_rounded != pow) {  // negative base and non-integer power => set to NaN
-            y = sfpi::vConstFloatPrgm2;
+            y = std::numeric_limits<float>::quiet_NaN();
         }
         v_endif;
     }
@@ -201,17 +200,14 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
     // Step 2: base**pow = 2**(pow*log2(base)). Clamp z_f32 to -127 to avoid overflow when result should be 0 (e.g.
     // 0**+inf, N**-inf).
     sfpi::vFloat z_f32 = pow * log2_result;
-    const sfpi::vFloat low_threshold = sfpi::vConstFloatPrgm1;
-    v_if(z_f32 < low_threshold) { z_f32 = low_threshold; }
-    v_endif;
 
     // 2^z_f32 = exp(z_f32 * ln(2)); use Cody-Waite + Taylor exp for <1 ULP float32 accuracy
     constexpr float LN2 = 0.693147180559945309f;
     sfpi::vFloat y = _sfpu_exp_fp32_accurate_(z_f32 * LN2);
 
     // Division by 0 when base is 0 and pow is negative => set to NaN (only for negative exponents)
-    v_if((abs_base == 0.f) && pow < 0.f) {
-        y = sfpi::vConstFloatPrgm2;  // negative powers of 0 are NaN, e.g. pow(0, -1.5)
+    v_if(base == 0.f && pow < 0.f) {
+        y = std::numeric_limits<float>::quiet_NaN();  // negative powers of 0 are NaN, e.g. pow(0, -1.5)
     }
     v_endif;
 
@@ -229,7 +225,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
 
         // Check for integer power, if it is not then overwrite result with NaN
         v_if(pow_rounded != pow) {  // negative base and non-integer power => set to NaN
-            y = sfpi::vConstFloatPrgm2;
+            y = std::numeric_limits<float>::quiet_NaN();
         }
         v_endif;
     }
@@ -272,7 +268,6 @@ template <bool APPROXIMATION_MODE>
 inline void sfpu_binary_pow_init() {
     sfpi::vConstFloatPrgm0 = 1.442695f;
     sfpi::vConstFloatPrgm1 = -127.0f;
-    sfpi::vConstFloatPrgm2 = std::numeric_limits<float>::quiet_NaN();
 }
 
 }  // namespace sfpu
