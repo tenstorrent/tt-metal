@@ -98,22 +98,26 @@ class Qwen35GatedDeltaNet:
 
         # Fused QKV projection: one matmul instead of three
         qkv_key = f"{prefix}.qkv_proj.weight"
-        if qkv_key in state_dict:
-            t = state_dict[qkv_key].T.contiguous()  # [4096, 8192]
-            self.qkv_proj_weight = ttnn.as_tensor(
-                t,
-                dtype=ttnn.bfloat8_b,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                cache_file_name=weight_cache_path / f"{prefix}.qkv_proj.weight" if weight_cache_path else None,
+        if qkv_key not in state_dict:
+            raise ValueError(
+                f"DeltaNet layer {layer_num} requires the combined qkv_proj weight "
+                f"(key '{qkv_key}' missing; the split q/k/v_proj were removed in the weight refactor)."
             )
-        else:
-            self.qkv_proj_weight = None
-        # Keep separate weights as fallback and for conv weight tap dimensions
-        self.q_proj_weight = load_weight_2d("q_proj.weight")
-        self.k_proj_weight = load_weight_2d("k_proj.weight")
-        self.v_proj_weight = load_weight_2d("v_proj.weight")
+        t = state_dict[qkv_key].T.contiguous()  # [4096, 8192]
+        self.qkv_proj_weight = ttnn.as_tensor(
+            t,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cache_file_name=weight_cache_path / f"{prefix}.qkv_proj.weight" if weight_cache_path else None,
+        )
+        # The split q/k/v_proj are dead (the op runs the fused QKV from the combined weight; it
+        # reads the splits only in a fallback reached when qkv_proj_weight is None). Not created,
+        # saving ~33MB/layer of device memory. The op still receives them as kwargs (None).
+        self.q_proj_weight = None
+        self.k_proj_weight = None
+        self.v_proj_weight = None
         self.a_proj_weight = load_weight_2d("in_proj_a.weight")
         self.b_proj_weight = load_weight_2d("in_proj_b.weight")
         self.g_proj_weight = load_weight_2d("in_proj_z.weight")

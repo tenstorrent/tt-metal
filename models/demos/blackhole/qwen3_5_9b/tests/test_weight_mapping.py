@@ -71,13 +71,13 @@ class TestTopLevelWeights:
 class TestDeltaNetLayerWeights:
     """Test layer 0 (a DeltaNet/linear attention layer)."""
 
-    def test_qkv_split(self, remapped):
-        q = remapped["layers.0.linear_attn.q_proj.weight"]
-        k = remapped["layers.0.linear_attn.k_proj.weight"]
-        v = remapped["layers.0.linear_attn.v_proj.weight"]
-        assert q.shape == (LINEAR_KEY_DIM, HIDDEN_SIZE)
-        assert k.shape == (LINEAR_KEY_DIM, HIDDEN_SIZE)
-        assert v.shape == (LINEAR_VALUE_DIM, HIDDEN_SIZE)
+    def test_qkv_combined_only(self, remapped):
+        qkv = remapped["layers.0.linear_attn.qkv_proj.weight"]
+        assert qkv.shape == (LINEAR_KEY_DIM + LINEAR_KEY_DIM + LINEAR_VALUE_DIM, HIDDEN_SIZE)  # (8192, 4096)
+        # Split q/k/v_proj are no longer emitted (the op uses the combined weight)
+        assert "layers.0.linear_attn.q_proj.weight" not in remapped
+        assert "layers.0.linear_attn.k_proj.weight" not in remapped
+        assert "layers.0.linear_attn.v_proj.weight" not in remapped
 
     def test_conv1d_split(self, remapped):
         q_conv = remapped["layers.0.linear_attn.q_conv.weight"]
@@ -153,7 +153,7 @@ class TestAllLayersPresent:
             assert f"layers.{i}.mlp.gate_proj.weight" in remapped, f"Missing MLP for layer {i}"
 
     def test_deltanet_layers_count(self, remapped):
-        deltanet_layers = [i for i in range(32) if f"layers.{i}.linear_attn.q_proj.weight" in remapped]
+        deltanet_layers = [i for i in range(32) if f"layers.{i}.linear_attn.qkv_proj.weight" in remapped]
         assert len(deltanet_layers) == 24
 
     def test_full_attn_layers_count(self, remapped):

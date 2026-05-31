@@ -245,11 +245,15 @@ class TestDeltaNet:
         def to_f32(t):
             return t.float() if t is not None else None
 
+        # The split q/k/v_proj keys were removed; derive them by slicing the combined
+        # qkv_proj.weight [8192, 4096] = [q(2048)+k(2048)+v(4096), in]. These slices are
+        # byte-identical to the old split keys, so the PCC is unchanged.
+        qkv_w = sd[f"{prefix}.qkv_proj.weight"]  # [8192, 4096] = [q(2048)+k(2048)+v(4096), in]
         ref_out, _ = gated_deltanet_forward(
             hidden_states=x.float(),
-            q_proj_weight=to_f32(sd[f"{prefix}.q_proj.weight"]),
-            k_proj_weight=to_f32(sd[f"{prefix}.k_proj.weight"]),
-            v_proj_weight=to_f32(sd[f"{prefix}.v_proj.weight"]),
+            q_proj_weight=to_f32(qkv_w[:2048, :]),
+            k_proj_weight=to_f32(qkv_w[2048:4096, :]),
+            v_proj_weight=to_f32(qkv_w[4096:, :]),
             a_proj_weight=to_f32(sd[f"{prefix}.in_proj_a.weight"]),
             b_proj_weight=to_f32(sd[f"{prefix}.in_proj_b.weight"]),
             o_proj_weight=to_f32(sd[f"{prefix}.out_proj.weight"]),
