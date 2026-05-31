@@ -221,6 +221,20 @@ class LTXPipeline:
         # One Tracer per fixed shape (e.g. "s1"/"s2"); kept resident across generate()
         # calls and freed by release_traces().
         self._tracers: dict[str, Tracer] = {}
+        # Per-trace device constants (rope/masks/cross-PE), pre-allocated before any capture
+        # and held for the session. A ttnn trace bakes absolute tensor addresses into its
+        # command stream; every held input must keep a fixed address below the traces'
+        # activation region, so these are allocated up front and never rebuilt.
+        self._trace_consts: dict[str, tuple] = {}
+        # Per-trace SP-sharded latent buffers + padding masks, also pre-allocated and held.
+        # The latent stays on device for the whole traced loop (on-device Euler), so nothing
+        # is freed/reallocated per step onto a trace buffer.
+        self._trace_latents: dict[str, tuple] = {}
+        # One prompt buffer shared by all stages (the text embedding is identical). Built on
+        # the first traced step, not pre-allocated: a pre-allocated low-address prompt buffer
+        # overlaps a video activation; building it after the constants places it clear of
+        # every stage's activations.
+        self._trace_prompt: dict[str, tuple] = {}
         if ccl_manager.topology == ttnn.Topology.Linear:
             self.vae_ccl_manager = ccl_manager
         else:
@@ -307,6 +321,9 @@ class LTXPipeline:
         for tracer in self._tracers.values():
             tracer.release_trace()
         self._tracers.clear()
+        self._trace_consts.clear()
+        self._trace_latents.clear()
+        self._trace_prompt.clear()
 
     @staticmethod
     def _resolve_checkpoint_file(checkpoint: str, default_filename: str = "ltx-2.3-22b-dev.safetensors") -> str:

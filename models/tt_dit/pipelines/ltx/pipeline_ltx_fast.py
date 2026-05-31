@@ -62,6 +62,13 @@ class LTXFastPipeline(LTXAVPipeline):
         v_p = results[0].video_encoding.float()
         a_p = results[0].audio_encoding.float()
 
+        # Allocate both stages' persistent trace I/O before any capture, so all held inputs
+        # sit below both traces' activation regions and neither trace's replay can overwrite
+        # the other's inputs. Held for the session; generate() refreshes contents in place.
+        if self._traced:
+            self._prealloc_trace_io("s1", num_frames=num_frames, height=height // 2, width=width // 2)
+            self._prealloc_trace_io("s2", num_frames=num_frames, height=height, width=width)
+
         # Sigma schedules from the real distilled paths so warmup exercises the
         # same math branches generate() does (incl. the sigma_next == 0 final step).
         s1_sigmas = list(DISTILLED_SIGMA_VALUES)[:num_inference_steps] + [0.0]
@@ -113,6 +120,83 @@ class LTXFastPipeline(LTXAVPipeline):
 
         logger.info(f"warmup (Fast 2-stage) done in {time.time() - t0:.1f}s")
 
+    def _prealloc_trace_io(self, trace_key, *, num_frames, height, width):
+        """Allocate and cache a stage's persistent trace inputs (constants, latent buffers,
+        padding masks) up front, before any capture. A ttnn trace bakes absolute tensor
+        addresses; activations allocated during capture are freed afterward and reused by the
+        next capture, so a held input sitting in another trace's activation region is
+        overwritten on replay. Allocating every held input for both stages first keeps them
+        below both traces' activations. (The prompt is built separately in _denoise.)"""
+        B = 1
+        latent_frames = (num_frames - 1) // 8 + 1
+        latent_h, latent_w = height // 32, width // 32
+        video_N_real = latent_frames * latent_h * latent_w
+        video_N = self._video_sp_pad_len(video_N_real)
+        vps = VideoPixelShape(batch=B, frames=num_frames, height=height, width=width, fps=24)
+        als = AudioLatentShape.from_video_pixel_shape(vps)
+        audio_N_real = als.frames
+        sp_factor = self.parallel_config.sequence_parallel.factor
+        audio_N = ((audio_N_real + 32 * sp_factor - 1) // (32 * sp_factor)) * (32 * sp_factor)
+        sp_axis = self.parallel_config.sequence_parallel.mesh_axis
+
+        if trace_key not in self._trace_consts:
+            v_cos, v_sin = self._prepare_rope(latent_frames, latent_h, latent_w)
+            a_cos, a_sin = self._prepare_audio_rope(audio_N, audio_N_real)
+            (
+                v_xpe_cos,
+                v_xpe_sin,
+                a_xpe_cos,
+                a_xpe_sin,
+                v_xpe_cos_full,
+                v_xpe_sin_full,
+                a_xpe_cos_full,
+                a_xpe_sin_full,
+            ) = self._prepare_av_cross_pe(latent_frames, latent_h, latent_w, audio_N, audio_N_real)
+            trans_mat = self._prepare_trans_mat()
+            tt_attn_mask, tt_pad_mask_sp, tt_pad_mask_full = self._prepare_audio_masks(audio_N, audio_N_real)
+            tt_v_pad_mask_sp, tt_v_pad_mask_full = self._prepare_video_masks(video_N, video_N_real)
+            self._trace_consts[trace_key] = (
+                v_cos,
+                v_sin,
+                a_cos,
+                a_sin,
+                v_xpe_cos,
+                v_xpe_sin,
+                a_xpe_cos,
+                a_xpe_sin,
+                v_xpe_cos_full,
+                v_xpe_sin_full,
+                a_xpe_cos_full,
+                a_xpe_sin_full,
+                trans_mat,
+                tt_attn_mask,
+                tt_pad_mask_sp,
+                tt_pad_mask_full,
+                tt_v_pad_mask_sp,
+                tt_v_pad_mask_full,
+            )
+
+        if trace_key not in self._trace_latents:
+            video_lat_dev = bf16_tensor(
+                torch.zeros(1, B, video_N, self.in_channels),
+                device=self.mesh_device,
+                mesh_axis=sp_axis,
+                shard_dim=-2,
+            )
+            audio_lat_dev = bf16_tensor(
+                torch.zeros(1, B, audio_N, self.in_channels),
+                device=self.mesh_device,
+                mesh_axis=sp_axis,
+                shard_dim=-2,
+            )
+            v_mask = torch.ones(1, B, video_N, self.in_channels)
+            v_mask[:, :, video_N_real:, :] = 0.0
+            a_mask = torch.ones(1, B, audio_N, self.in_channels)
+            a_mask[:, :, audio_N_real:, :] = 0.0
+            video_pad_mask = bf16_tensor(v_mask, device=self.mesh_device, mesh_axis=sp_axis, shard_dim=-2)
+            audio_pad_mask = bf16_tensor(a_mask, device=self.mesh_device, mesh_axis=sp_axis, shard_dim=-2)
+            self._trace_latents[trace_key] = (video_lat_dev, audio_lat_dev, video_pad_mask, audio_pad_mask)
+
     def _denoise_no_guidance(
         self,
         v_embeds: torch.Tensor,
@@ -146,26 +230,89 @@ class LTXFastPipeline(LTXAVPipeline):
             f"  shapes: vN={video_N}(real={video_N_real}), aN={audio_N}(real={audio_N_real}) " f"[sp={sp_factor}]"
         )
 
-        v_cos, v_sin = self._prepare_rope(latent_frames, latent_h, latent_w)
-        a_cos, a_sin = self._prepare_audio_rope(audio_N, audio_N_real)
-        # Without cross-PE the A↔V cross-attention runs with no positional info,
-        # destroying audio-video temporal sync (lip sync). Reference: pipeline_ltx.py.
-        (
-            v_xpe_cos,
-            v_xpe_sin,
-            a_xpe_cos,
-            a_xpe_sin,
-            v_xpe_cos_full,
-            v_xpe_sin_full,
-            a_xpe_cos_full,
-            a_xpe_sin_full,
-        ) = self._prepare_av_cross_pe(latent_frames, latent_h, latent_w, audio_N, audio_N_real)
-        trans_mat = self._prepare_trans_mat()
-        tt_attn_mask, tt_pad_mask_sp, tt_pad_mask_full = self._prepare_audio_masks(audio_N, audio_N_real)
-        tt_v_pad_mask_sp, tt_v_pad_mask_full = self._prepare_video_masks(video_N, video_N_real)
+        # Reuse the pre-allocated constants when traced; only build them on the eager path.
+        # Rebuilding them per generate would place fresh tensors at addresses the persisted
+        # trace expects to own, so the held copies (allocated at warmup) are reused as-is.
+        if traced and trace_key in self._trace_consts:
+            (
+                v_cos,
+                v_sin,
+                a_cos,
+                a_sin,
+                v_xpe_cos,
+                v_xpe_sin,
+                a_xpe_cos,
+                a_xpe_sin,
+                v_xpe_cos_full,
+                v_xpe_sin_full,
+                a_xpe_cos_full,
+                a_xpe_sin_full,
+                trans_mat,
+                tt_attn_mask,
+                tt_pad_mask_sp,
+                tt_pad_mask_full,
+                tt_v_pad_mask_sp,
+                tt_v_pad_mask_full,
+            ) = self._trace_consts[trace_key]
+        else:
+            v_cos, v_sin = self._prepare_rope(latent_frames, latent_h, latent_w)
+            a_cos, a_sin = self._prepare_audio_rope(audio_N, audio_N_real)
+            # Without cross-PE the A↔V cross-attention runs with no positional info,
+            # destroying audio-video temporal sync (lip sync). Reference: pipeline_ltx.py.
+            (
+                v_xpe_cos,
+                v_xpe_sin,
+                a_xpe_cos,
+                a_xpe_sin,
+                v_xpe_cos_full,
+                v_xpe_sin_full,
+                a_xpe_cos_full,
+                a_xpe_sin_full,
+            ) = self._prepare_av_cross_pe(latent_frames, latent_h, latent_w, audio_N, audio_N_real)
+            trans_mat = self._prepare_trans_mat()
+            tt_attn_mask, tt_pad_mask_sp, tt_pad_mask_full = self._prepare_audio_masks(audio_N, audio_N_real)
+            tt_v_pad_mask_sp, tt_v_pad_mask_full = self._prepare_video_masks(video_N, video_N_real)
 
-        tt_vp = self._prepare_prompt(v_embeds)
-        tt_ap = bf16_tensor(a_embeds.unsqueeze(0), device=self.mesh_device)
+            if traced:
+                self._trace_consts[trace_key] = (
+                    v_cos,
+                    v_sin,
+                    a_cos,
+                    a_sin,
+                    v_xpe_cos,
+                    v_xpe_sin,
+                    a_xpe_cos,
+                    a_xpe_sin,
+                    v_xpe_cos_full,
+                    v_xpe_sin_full,
+                    a_xpe_cos_full,
+                    a_xpe_sin_full,
+                    trans_mat,
+                    tt_attn_mask,
+                    tt_pad_mask_sp,
+                    tt_pad_mask_full,
+                    tt_v_pad_mask_sp,
+                    tt_v_pad_mask_full,
+                )
+
+        # One prompt buffer shared by both stages (the text embedding is identical). Built on
+        # the first traced step — before s1's capture, so it sits below both traces'
+        # activations rather than inside a prior trace's footprint. Refreshed in place each
+        # generate (WAN's prepare_text_conditioning pattern) so a new prompt is read without
+        # reallocating the buffer whose address the trace baked.
+        if traced:
+            prompt_buf = self._trace_prompt.get("shared")
+            if prompt_buf is None:
+                tt_vp = self._prepare_prompt(v_embeds)
+                tt_ap = bf16_tensor(a_embeds.unsqueeze(0), device=self.mesh_device)
+                self._trace_prompt["shared"] = (tt_vp, tt_ap)
+            else:
+                tt_vp, tt_ap = prompt_buf
+                ttnn.copy(self._prepare_prompt(v_embeds), tt_vp)
+                ttnn.copy(bf16_tensor(a_embeds.unsqueeze(0), device=self.mesh_device), tt_ap)
+        else:
+            tt_vp = self._prepare_prompt(v_embeds)
+            tt_ap = bf16_tensor(a_embeds.unsqueeze(0), device=self.mesh_device)
 
         sigmas = torch.tensor(sigma_values, dtype=torch.float32)
 
@@ -207,34 +354,54 @@ class LTXFastPipeline(LTXAVPipeline):
 
         num_steps = len(sigma_values) - 1
         sp_axis = self.parallel_config.sequence_parallel.mesh_axis
-        for step_idx in range(num_steps):
-            sigma = sigmas[step_idx].item()
-            sigma_next = sigmas[step_idx + 1].item()
 
-            # video_N / audio_N here are the LOGICAL (unpadded) counts forwarded as
-            # ``logical_n`` to ring SDPA so padded K positions get masked.
-            if traced:
-                # Per-step inputs are host-resident so the Tracer copies them into the
-                # captured device buffers; the constant args are captured once and reused.
-                video_1BNI = bf16_tensor(
-                    video_lat.unsqueeze(0), device=self.mesh_device, mesh_axis=sp_axis, shard_dim=-2, on_host=True
+        if traced:
+            # Device-resident denoise: the SP-sharded latent stays on device for the whole
+            # loop, inner_step_device returns sharded velocity (gather_output=False), and an
+            # on-device Euler steps it in place. No per-step host round-trip or fresh device
+            # allocation, so a persisted trace's baked buffer addresses stay valid across
+            # generates (a ttnn trace bakes absolute tensor addresses into its command stream).
+            if trace_key in self._trace_latents:
+                video_lat_dev, audio_lat_dev, video_pad_mask, audio_pad_mask = self._trace_latents[trace_key]
+                ttnn.copy(
+                    bf16_tensor(video_lat.unsqueeze(0), device=self.mesh_device, mesh_axis=sp_axis, shard_dim=-2),
+                    video_lat_dev,
                 )
-                audio_1BNI = bf16_tensor(
-                    audio_lat.unsqueeze(0), device=self.mesh_device, mesh_axis=sp_axis, shard_dim=-2, on_host=True
+                ttnn.copy(
+                    bf16_tensor(audio_lat.unsqueeze(0), device=self.mesh_device, mesh_axis=sp_axis, shard_dim=-2),
+                    audio_lat_dev,
                 )
+            else:
+                video_lat_dev = bf16_tensor(
+                    video_lat.unsqueeze(0), device=self.mesh_device, mesh_axis=sp_axis, shard_dim=-2
+                )
+                audio_lat_dev = bf16_tensor(
+                    audio_lat.unsqueeze(0), device=self.mesh_device, mesh_axis=sp_axis, shard_dim=-2
+                )
+                # Full-channel 0/1 masks zero the SP-padding slots (replaces host _zero_*_padding).
+                v_mask = torch.ones(1, B, video_N, self.in_channels)
+                v_mask[:, :, video_N_real:, :] = 0.0
+                a_mask = torch.ones(1, B, audio_N, self.in_channels)
+                a_mask[:, :, audio_N_real:, :] = 0.0
+                video_pad_mask = bf16_tensor(v_mask, device=self.mesh_device, mesh_axis=sp_axis, shard_dim=-2)
+                audio_pad_mask = bf16_tensor(a_mask, device=self.mesh_device, mesh_axis=sp_axis, shard_dim=-2)
+                self._trace_latents[trace_key] = (video_lat_dev, audio_lat_dev, video_pad_mask, audio_pad_mask)
+
+            for step_idx in range(num_steps):
+                sigma = sigmas[step_idx].item()
+                dt = sigmas[step_idx + 1].item() - sigma
                 timestep = bf16_tensor(
                     torch.tensor([sigma]).reshape(1, 1, B, 1) * 1000.0, device=self.mesh_device, on_host=True
                 )
-                # Capture passes the full input set; replay passes only what changes —
-                # latents/timestep per step and the prompt per generate — so the constant
-                # rope/masks/cross-PE/trans_mat reuse the captured device buffers.
+                # video_lat_dev/audio_lat_dev are the SAME persistent objects every call;
+                # updated in place below, so the trace (same buffer address) reads fresh data.
                 v_out, a_out = self._traced_step(
                     trace_key,
                     self.transformer.inner_step_device,
                     capture_inputs=dict(
-                        video_1BNI=video_1BNI,
+                        video_1BNI=video_lat_dev,
                         timestep=timestep,
-                        audio_1BNI=audio_1BNI,
+                        audio_1BNI=audio_lat_dev,
                         video_prompt_1BLP=tt_vp,
                         video_rope_cos=v_cos,
                         video_rope_sin=v_sin,
@@ -257,43 +424,74 @@ class LTXFastPipeline(LTXAVPipeline):
                         audio_padding_mask_full=tt_pad_mask_full,
                         video_padding_mask=tt_v_pad_mask_sp,
                         video_padding_mask_full=tt_v_pad_mask_full,
+                        gather_output=False,
                     ),
                     replay_inputs=dict(
-                        video_1BNI=video_1BNI,
+                        video_1BNI=video_lat_dev,
                         timestep=timestep,
-                        audio_1BNI=audio_1BNI,
+                        audio_1BNI=audio_lat_dev,
                         video_prompt_1BLP=tt_vp,
                         audio_prompt_1BLP=tt_ap,
                     ),
                 )
-            else:
-                v_out, a_out = self.transformer.inner_step(
-                    video_1BNI_torch=video_lat.unsqueeze(0),
-                    video_prompt_1BLP=tt_vp,
-                    video_rope_cos=v_cos,
-                    video_rope_sin=v_sin,
-                    video_N=video_N_real,
-                    audio_1BNI_torch=audio_lat.unsqueeze(0),
-                    audio_prompt_1BLP=tt_ap,
-                    audio_rope_cos=a_cos,
-                    audio_rope_sin=a_sin,
-                    audio_N=audio_N,
-                    trans_mat=trans_mat,
-                    timestep_torch=torch.tensor([sigma]),
-                    video_cross_pe_cos=v_xpe_cos,
-                    video_cross_pe_sin=v_xpe_sin,
-                    audio_cross_pe_cos=a_xpe_cos,
-                    audio_cross_pe_sin=a_xpe_sin,
-                    video_cross_pe_cos_full=v_xpe_cos_full,
-                    video_cross_pe_sin_full=v_xpe_sin_full,
-                    audio_cross_pe_cos_full=a_xpe_cos_full,
-                    audio_cross_pe_sin_full=a_xpe_sin_full,
-                    audio_attn_mask=tt_attn_mask,
-                    audio_padding_mask=tt_pad_mask_sp,
-                    audio_padding_mask_full=tt_pad_mask_full,
-                    video_padding_mask=tt_v_pad_mask_sp,
-                    video_padding_mask_full=tt_v_pad_mask_full,
-                )
+                # On-device flow-matching Euler x += dt*vel, padded slots zeroed (matches
+                # the host euler_step + _zero_*_padding). Step tensors free each iteration;
+                # only the latent buffers persist.
+                v_vel = ttnn.mul(ttnn.typecast(v_out, ttnn.bfloat16), video_pad_mask)
+                ttnn.copy(ttnn.mul(ttnn.add(video_lat_dev, ttnn.mul(v_vel, dt)), video_pad_mask), video_lat_dev)
+                a_vel = ttnn.mul(ttnn.typecast(a_out, ttnn.bfloat16), audio_pad_mask)
+                ttnn.copy(ttnn.mul(ttnn.add(audio_lat_dev, ttnn.mul(a_vel, dt)), audio_pad_mask), audio_lat_dev)
+                logger.info(f"  Step {step_idx + 1}/{num_steps}: σ {sigma:.4f} → {sigma + dt:.4f}")
+
+            v_final = LTXTransformerModel.device_to_host(
+                video_lat_dev,
+                ccl_manager=self.ccl_manager,
+                parallel_config=self.parallel_config,
+                sp_already_gathered=False,
+                tp_already_gathered=True,
+            ).squeeze(0)
+            a_final = LTXTransformerModel.device_to_host(
+                audio_lat_dev,
+                ccl_manager=self.ccl_manager,
+                parallel_config=self.parallel_config,
+                sp_already_gathered=False,
+                tp_already_gathered=True,
+            ).squeeze(0)
+            return v_final[:, :video_N_real, :], a_final[:, :audio_N_real, :]
+
+        for step_idx in range(num_steps):
+            sigma = sigmas[step_idx].item()
+            sigma_next = sigmas[step_idx + 1].item()
+
+            # video_N / audio_N here are the LOGICAL (unpadded) counts forwarded as
+            # ``logical_n`` to ring SDPA so padded K positions get masked.
+            v_out, a_out = self.transformer.inner_step(
+                video_1BNI_torch=video_lat.unsqueeze(0),
+                video_prompt_1BLP=tt_vp,
+                video_rope_cos=v_cos,
+                video_rope_sin=v_sin,
+                video_N=video_N_real,
+                audio_1BNI_torch=audio_lat.unsqueeze(0),
+                audio_prompt_1BLP=tt_ap,
+                audio_rope_cos=a_cos,
+                audio_rope_sin=a_sin,
+                audio_N=audio_N,
+                trans_mat=trans_mat,
+                timestep_torch=torch.tensor([sigma]),
+                video_cross_pe_cos=v_xpe_cos,
+                video_cross_pe_sin=v_xpe_sin,
+                audio_cross_pe_cos=a_xpe_cos,
+                audio_cross_pe_sin=a_xpe_sin,
+                video_cross_pe_cos_full=v_xpe_cos_full,
+                video_cross_pe_sin_full=v_xpe_sin_full,
+                audio_cross_pe_cos_full=a_xpe_cos_full,
+                audio_cross_pe_sin_full=a_xpe_sin_full,
+                audio_attn_mask=tt_attn_mask,
+                audio_padding_mask=tt_pad_mask_sp,
+                audio_padding_mask_full=tt_pad_mask_full,
+                video_padding_mask=tt_v_pad_mask_sp,
+                video_padding_mask_full=tt_v_pad_mask_full,
+            )
             v_vel = LTXTransformerModel.device_to_host(
                 v_out,
                 ccl_manager=self.ccl_manager,

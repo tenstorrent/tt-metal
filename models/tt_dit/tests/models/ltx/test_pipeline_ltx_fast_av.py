@@ -29,9 +29,9 @@ def _with_audio_dev_l1(base: dict) -> dict:
 _line_params = _with_audio_dev_l1(line_params)
 _ring_params = _with_audio_dev_l1(ring_params)
 
-# Trace region for LTX_TRACED=1. Both stage traces (s1 + larger-seq s2) stay resident,
-# so this holds ~2× one 48-block trace; 700MB fits both at 1080p.
-ring_trace_params = {**_ring_params, "trace_region_size": 700_000_000}
+# Trace region for LTX_TRACED=1. Holds both stage traces' command streams (s1 + larger-seq
+# s2); measured need is ~236 MB at 1080p (get_trace_buffers_size), so 300 MB gives headroom.
+ring_trace_params = {**_ring_params, "trace_region_size": 300_000_000}
 
 
 def _default_checkpoint() -> str:

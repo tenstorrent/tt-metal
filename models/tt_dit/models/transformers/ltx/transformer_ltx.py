@@ -827,10 +827,15 @@ class LTXTransformerModel(Module):
         audio_padding_mask_full: ttnn.Tensor | None = None,
         video_padding_mask: ttnn.Tensor | None = None,
         video_padding_mask_full: ttnn.Tensor | None = None,
+        gather_output: bool = True,
     ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
         """Device-only denoising forward. All tensor args are ttnn (no torch) so this is
         trace-capturable. ``video_1BNI``/``audio_1BNI``/``timestep`` are the per-step inputs;
-        the rest are constant across a denoise stage."""
+        the rest are constant across a denoise stage.
+
+        ``gather_output`` SP-gathers the velocity outputs to full sequence length (default,
+        for the host-Euler path). Pass ``False`` to keep them SP-sharded so an on-device
+        solver can step the latent without leaving the device (the traced WAN pattern)."""
         # Video modulation (6 or 9 params depending on cross_attention_adaln)
         adaln_coeff = 9 if self.cross_attention_adaln else 6
         video_modulation, video_emb_ts = self.adaln_single(timestep)
@@ -972,8 +977,8 @@ class LTXTransformerModel(Module):
                 audio_1BND, compute_kernel_config=self.hifi4_compute_kernel_config, dtype=ttnn.float32
             )
 
-        # SP gather
-        if self.parallel_config.sequence_parallel.factor > 1:
+        # SP gather (skipped when an on-device solver steps the still-sharded latent)
+        if gather_output and self.parallel_config.sequence_parallel.factor > 1:
             video_out = self.ccl_manager.all_gather_persistent_buffer(
                 video_out, dim=2, mesh_axis=self.parallel_config.sequence_parallel.mesh_axis
             )
