@@ -130,6 +130,9 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
+    # arg3 is token_idx (positional int, filtered by build_op_kwargs)
+    token_idx = kwargs.get("arg3", None)
+
     # Determine if this is a traced config (dict) or sample config (tuple)
     is_traced_config = isinstance(input_a_shape, dict)
 
@@ -162,7 +165,7 @@ def run(
         torch_input_tensor.float(),
         torch_cos_cache.float(),
         torch_sin_cache.float(),
-        token_idx=None,  # Prefill mode (None) for traced configs
+        token_idx=token_idx,
     ).to(torch.bfloat16)
 
     # --- Create TTNN Tensors ---
@@ -241,6 +244,7 @@ def run(
         input_tensor_a,
         cos_cache_tt,
         sin_cache_tt,
+        token_idx=token_idx,
         **op_kwargs,
     )
 
