@@ -595,7 +595,10 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape):
         )
         for b in range(num_dram_banks)
     ]
-    gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(device, bank_to_receivers, gcb_size)
+    dual_senders = os.environ.get("BENCH_DUAL_SENDERS", "0") == "1"
+    gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(
+        device, bank_to_receivers, gcb_size, dual_senders_per_bank=dual_senders
+    )
 
     cc_program_config = _build_program_config(
         ring_size=ring_size,
@@ -645,7 +648,7 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape):
             sub_device_id=receiver_sub_device_id,
         )
 
-    ttnn.experimental.start_dram_core_prefetcher(device)
+    ttnn.experimental.start_dram_core_prefetcher(device, dual_senders_per_bank=dual_senders)
     ttnn.experimental.queue_dram_core_prefetcher_request(
         device,
         [(tt_weight, ring_size)] * num_prefetch_layers,
@@ -678,8 +681,8 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape):
     per_matmul_us = elapsed / trace_repeats * 1e6
     tflops = _flops_per_matmul(_K) * trace_repeats / elapsed / 1e12
     logger.info(
-        f"[dram_core_rc][{op_name}] trace_elapsed={elapsed * 1e3:.2f}ms repeats={trace_repeats} "
-        f"per_matmul={per_matmul_us:.2f}us -> {tflops:.4f} TFLOP/s"
+        f"[dram_core_rc][{op_name}] dual_senders={dual_senders} trace_elapsed={elapsed * 1e3:.2f}ms "
+        f"repeats={trace_repeats} per_matmul={per_matmul_us:.2f}us -> {tflops:.4f} TFLOP/s"
     )
 
 
