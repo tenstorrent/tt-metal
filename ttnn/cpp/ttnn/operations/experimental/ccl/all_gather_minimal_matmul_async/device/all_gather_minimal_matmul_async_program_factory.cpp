@@ -1313,9 +1313,15 @@ all_gather_minimal_matmul_async_factory_helper(
                 }
                 auto fsdp_mux_logical_backward = CoreCoord(fsdp_mux_index_backward, full_grid_size.y - 2);
                 CoreCoord fsdp_mux_virtual_backward = device->worker_core_from_logical_core(fsdp_mux_logical_backward);
+                // The size-2 (backward) sender is the second-to-last core of the in1 chain. Read
+                // its chain-axis coordinate from the core order rather than as last_in1_core-1:
+                // in1 uses NOC_1 (decreasing) when transposed, so the chain's back() is the LOW end
+                // and the size-2 sender sits at back()+1, not back()-1. core_order[size-2] is
+                // correct for both NOC directions (for the increasing case it equals back()-1).
+                auto second_last_in1_core = in1_core_order[in1_core_order.size() - 2];
                 auto fsdp_term_master_logical_backward = transpose_core_grid
-                                                             ? CoreCoord(last_in1_core.x - 1, in1_idx - worker_idx)
-                                                             : CoreCoord(in1_idx - worker_idx, last_in1_core.y - 1);
+                                                             ? CoreCoord(second_last_in1_core.x, in1_idx - worker_idx)
+                                                             : CoreCoord(in1_idx - worker_idx, second_last_in1_core.y);
                 CoreCoord fsdp_term_master_virtual_backward =
                     device->worker_core_from_logical_core(fsdp_term_master_logical_backward);
                 fabric_mux_connection_rt_args(
