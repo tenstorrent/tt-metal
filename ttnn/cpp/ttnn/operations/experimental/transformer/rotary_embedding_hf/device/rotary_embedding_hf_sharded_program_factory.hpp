@@ -7,28 +7,15 @@
 #include "ttnn/operations/experimental/transformer/rotary_embedding_hf/device/rotary_embedding_hf_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::experimental::prim {
 
-using namespace tt::tt_metal;
-
 struct RotaryEmbeddingHfMultiCoreSharded {
-    struct shared_variables_t {
-        CBHandle cb_input;
-        CBHandle cb_cos;
-        CBHandle cb_sin;
-        CBHandle cb_output;
-    };
-
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create(
-        const RotaryEmbeddingHfParams& operation_attributes,
-        const RotaryEmbeddingHfInputs& tensor_args,
-        Tensor& output);
-
-    static void override_runtime_arguments(
-        cached_program_t& cached_program,
+    // Contract (1): single ProgramDescriptor.  All four working CBs (input/cos/sin/output)
+    // are sharded — they use CBDescriptor::buffer so the framework patches dynamic
+    // addresses on cache hit, mirroring the legacy UpdateDynamicCircularBufferAddress chain.
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
         const RotaryEmbeddingHfParams& operation_attributes,
         const RotaryEmbeddingHfInputs& tensor_args,
         Tensor& output);
