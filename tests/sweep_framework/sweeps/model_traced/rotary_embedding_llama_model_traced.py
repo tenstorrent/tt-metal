@@ -542,7 +542,7 @@ def run(
         torch_trans_mat = get_rot_transformation_mat(dhead=ttnn.TILE_SIZE).repeat(1, 1, batch, 1).to(torch.bfloat16)
     else:
         # For prefill mode, use standard transformation matrix based on head_dim
-        torch_trans_mat = get_rot_transformation_mat(head_dim).to(torch.bfloat16)
+        torch_trans_mat = get_rot_transformation_mat().to(torch.bfloat16)
 
     # --- Compute Golden Reference Output ---
     if is_decode_mode:
