@@ -20,7 +20,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from _completer_utils import build_completer, teardown_completer
+from _completer_utils import as_update_input, build_completer, teardown_completer
 
 SEQ_LEN = 32  # one decode tile
 
@@ -37,26 +37,6 @@ def completer_and_norm():
         yield completer, dn, dn.norm
     finally:
         teardown_completer(completer)
-
-
-def _zeros_replicated(rms, mesh_device):
-    """Build an all-zeros ``ttnn.Tensor`` matching ``rms.weight``.
-
-    Mirrors the constructor's ``ReplicateTensorToMesh`` -- the
-    non-distributed RMSNorm path uses a replicated weight on every
-    device in the mesh.
-    """
-    import ttnn
-
-    is_mesh = mesh_device.__class__.__name__ == "MeshDevice"
-    return ttnn.from_torch(
-        torch.zeros(tuple(rms.weight.shape), dtype=torch.bfloat16),
-        dtype=rms.weight.dtype,
-        layout=rms.weight.layout,
-        device=mesh_device,
-        memory_config=rms.weight.memory_config(),
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None,
-    )
 
 
 def _build_random_rms_input(completer):
@@ -83,7 +63,8 @@ def test_rmsnorm_forward_is_zero_when_gamma_is_zero(completer_and_norm):
 
     completer, distributed_norm, rms = completer_and_norm
 
-    distributed_norm.update(_zeros_replicated(rms, completer.mesh_device))
+    gamma_hf = torch.zeros(completer.model_args.dim, dtype=torch.bfloat16)
+    distributed_norm.update(weight=as_update_input(gamma_hf, completer.mesh_device))
     rms.eps = SMALL_EPS
 
     out = ttnn.to_torch(rms.forward(_build_random_rms_input(completer), Mode.PREFILL))
