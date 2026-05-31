@@ -326,6 +326,12 @@ class TTNNGeneratorNSF:
         self._noise_convs = []  # dicts with torch weights
         self._resblocks = []  # dicts with host ttnn tensors
         self._gen_torch = None  # torch weights for ops that stay on host
+        # Conditioning projection cache: cond_linear(g) only depends on the
+        # speaker embedding g, which is constant across chunks of a single
+        # inference. Cache cond_cl keyed by g so we don't repeat the linear
+        # + two host roundtrips on every chunk.
+        self._cond_cache_g = None
+        self._cond_cache_cl = None
 
     @classmethod
     def from_checkpoint(cls, state_dict, device):
@@ -488,15 +494,21 @@ class TTNNGeneratorNSF:
             x_cl, self._conv_pre_w, self._conv_pre_b, 192, 512, 7, seq_len)
         x_cf = x_cl.permute(0, 2, 1)
 
-        # Conditioning (persistent device weight)
-        g_cl = g.permute(0, 2, 1)
-        g_tt = to_device(g_cl, self._device)
-        cond_tt = ttnn.linear(g_tt, self._cond_w, bias=self._cond_b,
-                               memory_config=DEFAULT_MEMORY_CONFIG)
-        cond_cl = to_host(cond_tt)[:1, :1, :512]
-        ttnn.deallocate(g_tt)
-        ttnn.deallocate(cond_tt)
-        x_cf = x_cf + cond_cl.permute(0, 2, 1)
+        # Conditioning projection (persistent device weight). The output
+        # depends only on the speaker embedding g, which is constant across
+        # all chunks of a single inference — cache cond_cl keyed by g so
+        # the linear + host roundtrips run once per speaker, not per chunk.
+        if self._cond_cache_g is None or not torch.equal(g, self._cond_cache_g):
+            g_cl = g.permute(0, 2, 1)
+            g_tt = to_device(g_cl, self._device)
+            cond_tt = ttnn.linear(g_tt, self._cond_w, bias=self._cond_b,
+                                   memory_config=DEFAULT_MEMORY_CONFIG)
+            cond_cl = to_host(cond_tt)[:1, :1, :512]
+            ttnn.deallocate(g_tt)
+            ttnn.deallocate(cond_tt)
+            self._cond_cache_g = g.clone()
+            self._cond_cache_cl = cond_cl
+        x_cf = x_cf + self._cond_cache_cl.permute(0, 2, 1)
 
         for i in range(NUM_UPSAMPLES):
             x_cf = F.leaky_relu(x_cf, LRELU_SLOPE)
@@ -552,3 +564,7 @@ class TTNNGeneratorNSF:
         self._ups = []
         self._resblocks = []
         self._noise_convs = []
+        # Drop the host-side conditioning cache so we don't hold a stale
+        # cond_cl referencing weights that no longer exist on device.
+        self._cond_cache_g = None
+        self._cond_cache_cl = None
