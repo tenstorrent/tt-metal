@@ -67,33 +67,6 @@ def compute_speaker_similarity(wav1, sr1, wav2, sr2):
     return float(cos_sim)
 
 
-def compute_wer(wav_path, reference_text=None):
-    """Compute WER by transcribing audio and comparing to reference.
-
-    If reference_text is None, returns the transcription only.
-    For content preservation, we compare TTNN transcription vs reference transcription.
-    """
-    try:
-        import whisper
-    except ImportError:
-        print("  [SKIP] whisper not installed. Install with: pip install openai-whisper")
-        return None, None
-
-    # Load audio manually to avoid ffmpeg dependency
-    wav, sr = sf.read(wav_path)
-    if wav.ndim > 1:
-        wav = wav.mean(axis=1)
-    wav = wav.astype(np.float32)
-    # Resample to 16kHz if needed (whisper expects 16kHz)
-    if sr != 16000:
-        from scipy.signal import resample
-        wav = resample(wav, int(len(wav) * 16000 / sr)).astype(np.float32)
-
-    model = whisper.load_model("base")
-    result = model.transcribe(wav)
-    return result["text"], None
-
-
 def compute_wer_score(hypothesis, reference):
     """Compute word error rate between two strings."""
     ref_words = reference.lower().split()

@@ -102,19 +102,13 @@ python -m models.demos.rvc.demo \
 - `data/output/torch_reference.wav` — PyTorch reference for comparison
 - Timing summary with RTF and PCC printed to stdout
 
-### Profiling
-
-```bash
-python -m models.demos.rvc.profile --max_secs 3.0
-```
-
 ### Evaluation
 
 ```bash
 python -m models.demos.rvc.evaluate \
-  --ttnn_audio data/output/ttnn_output.wav \
-  --torch_audio data/output/torch_reference.wav \
-  --source_audio data/sample.wav
+  --ttnn data/output/ttnn_output.wav \
+  --ref data/output/torch_reference.wav \
+  --source data/speech/sample-speech-0.wav
 ```
 
 ### Tests
@@ -191,8 +185,8 @@ for this bottleneck pattern.
 ```
 models/demos/rvc/
 ├── demo.py                  # End-to-end inference with timing
-├── evaluate.py              # PCC, speaker similarity, WER evaluation
-├── profile.py               # Detailed per-component runtime profiling
+├── benchmark.py             # Authoritative RTF + audio PCC harness (no-fallback)
+├── evaluate.py              # Audio PCC, speaker similarity (resemblyzer), WER (whisper)
 ├── README.md
 ├── assets-download.sh       # Model weight download helper
 ├── .gitignore
@@ -203,13 +197,12 @@ models/demos/rvc/
 ├── torch_impl/              # PyTorch reference implementations
 │   ├── reference.py         # Torch flow/generator for PCC comparison
 │   ├── rmvpe.py             # RMVPE pitch extraction model
-│   ├── crepe.py             # CREPE pitch extraction (alternative)
 │   └── vc/
 │       ├── hubert.py        # HuBERT feature extractor
-│       ├── pipeline.py      # Reference RVC inference pipeline
 │       └── synthesizer.py   # Full VITS/RVC model architecture
 │
-├── ttnn/                    # TTNN implementations
+├── tt/                      # TTNN implementations (renamed from ttnn/ to avoid
+│   │                        # shadowing the system ttnn package)
 │   ├── runtime.py           # Persistent modules: TTNNFlowDecoder, TTNNGeneratorNSF
 │   ├── utils.py             # Device transfer and weight preprocessing
 │   └── ops/
