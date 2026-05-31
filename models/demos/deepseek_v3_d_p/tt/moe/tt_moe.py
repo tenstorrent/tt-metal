@@ -191,6 +191,11 @@ class TtMoe(LightweightModule):
                 setup and run them sequentially on the full Tensix grid.
         """
         super().__init__()
+        # [ND-DEBUG] per-(layer,iter,stage) MoE fingerprint probe (kgrujcic/deepseek_nd)
+        self.layer_idx = layer_idx
+        self._nd_debug = os.getenv("TT_DS_ND_DEBUG", "0").lower() in ("1", "true", "yes")
+        self._nd_target_layer = int(os.getenv("TT_DS_ND_DEBUG_LAYER", str(DeepSeekV3Config.NUM_DENSE_LAYERS)))
+        self._nd_iter = 0
         self.mesh_device = mesh_device
         self.dispatch_group_size = dispatch_group_size
         self.num_dispatch_groups = num_dispatch_groups
@@ -420,6 +425,16 @@ class TtMoe(LightweightModule):
         logger.debug(f"[TtMoe.forward] INPUT SHAPES:")
         logger.debug(f"  x.shape={x.shape}")
 
+        # [ND-DEBUG] activate per-stage fingerprinting for the target MoE layer.
+        nd_it = self._nd_iter
+        nd_active = self._nd_debug and self._nd_target_layer in (-1, self.layer_idx)
+        if self._nd_debug:
+            self._nd_iter += 1
+        if nd_active:
+            from models.demos.deepseek_v3_d_p.utils.nd_debug import nd_moe_log as _nd_moe_log
+
+            _nd_moe_log(self.layer_idx, nd_it, "00_moe_input", x)
+
         # ========================================
         # Gate: compute weights/indices/offsets/counts from x
         # ========================================
@@ -504,6 +519,8 @@ class TtMoe(LightweightModule):
 
         shared_output = self.shared_expert(x)
         logger.debug(f"[TtMoe.forward] Shared expert output shape: {shared_output.shape}")
+        if nd_active:
+            _nd_moe_log(self.layer_idx, nd_it, "01_shared_output", shared_output)
 
         # ========================================
         # Step 2: Dispatch (enabled)
@@ -523,6 +540,9 @@ class TtMoe(LightweightModule):
         scores = ttnn.to_memory_config(scores, ttnn.DRAM_MEMORY_CONFIG)
         indices = ttnn.to_memory_config(indices, ttnn.DRAM_MEMORY_CONFIG)
         logger.debug(f"[TtMoe.forward] Dispatch output: buffer={dispatched_buffer.shape}, metadata={metadata.shape}")
+        if nd_active:
+            _nd_moe_log(self.layer_idx, nd_it, "02_dispatched_buf", dispatched_buffer)
+            _nd_moe_log(self.layer_idx, nd_it, "02_metadata", metadata)
 
         signpost("shared_expert_and_dispatch_end")
 
@@ -554,8 +574,12 @@ class TtMoe(LightweightModule):
         # Therefore we must NOT call ttnn.deallocate(dispatched_buffer_tiled) here; doing so
         # would free the storage that expert_outputs still depends on, and the subsequent
         # ttnn.unsqueeze / combine_module calls would raise "Tensor is not allocated".
+        if nd_active:
+            _nd_moe_log(self.layer_idx, nd_it, "02b_disp_tiled", dispatched_buffer_tiled)
         expert_outputs = self.routed_expert(dispatched_buffer_tiled, tt_expert_token_counts, tt_expert_region_offsets)
         logger.debug(f"[TtMoe.forward] expert_outputs shape: {expert_outputs.shape}")
+        if nd_active:
+            _nd_moe_log(self.layer_idx, nd_it, "03_expert_outputs", expert_outputs)
 
         # Add back the batch dimensions for combine
         # (experts_per_chip, max_tokens, emb_dim) -> (1, 1, experts_per_chip, max_tokens, emb_dim)
@@ -576,6 +600,8 @@ class TtMoe(LightweightModule):
             tt_expert_region_offsets,
         )
         logger.debug(f"[TtMoe.forward] combined_output shape: {combined_output.shape} {combined_output.dtype=}")
+        if nd_active:
+            _nd_moe_log(self.layer_idx, nd_it, "04_combined_output", combined_output)
 
         # ========================================
         # Step 5: Reduce (fused weighted sum over topk + reduce-scatter for TP sharding)
@@ -593,6 +619,8 @@ class TtMoe(LightweightModule):
             expert_dispatch_table=self.tt_expert_dispatch_table,
         )
         logger.debug(f"[TtMoe.forward] routed_output (after reduce) shape: {routed_output.shape}")
+        if nd_active:
+            _nd_moe_log(self.layer_idx, nd_it, "05_routed_output", routed_output)
 
         # Remove extra batch dimensions to match shared_output shape
         # (1, 1, 256, 512) -> (1, 256, 512)
@@ -606,6 +634,8 @@ class TtMoe(LightweightModule):
         # Both should be in TILE_LAYOUT with shape (dispatch_group_size, seq_len_per_chip, emb_dim)
         final_output = ttnn.add(routed_output, shared_output)
         logger.debug(f"[TtMoe.forward] final_output (tiled) shape: {final_output.shape}")
+        if nd_active:
+            _nd_moe_log(self.layer_idx, nd_it, "06_final_output", final_output)
 
         # Build intermediates if requested
         intermediates = None

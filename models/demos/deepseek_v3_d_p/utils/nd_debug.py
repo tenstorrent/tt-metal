@@ -77,6 +77,36 @@ def nd_fingerprint(intermediates: Optional[dict], num_layers: int) -> Optional[d
     return fp
 
 
+def nd_fp_shard0(tt_tensor) -> Optional[dict]:
+    """Fingerprint device-0 shard of a ttnn tensor (cheap, no full mesh gather).
+
+    Sufficient to detect run-to-run / iter-to-iter divergence: if device 0's
+    shard differs, the op is non-deterministic. Returns None on any failure.
+    """
+    try:
+        import ttnn
+
+        shards = ttnn.get_device_tensors(tt_tensor)
+        if not shards:
+            return None
+        host = ttnn.to_torch(shards[0])
+        return _fp_tensor(host)
+    except Exception as exc:  # noqa: BLE001
+        return {"sha": "ERR", "norm": float("nan"), "sum": float("nan"), "n_nonfinite": -1, "shape": str(exc)[:40]}
+
+
+def nd_moe_log(layer_idx: int, it: int, stage: str, tt_tensor) -> None:
+    """Log a per-(layer,iter,stage) device-0-shard fingerprint of a MoE tensor."""
+    fp = nd_fp_shard0(tt_tensor)
+    if fp is None:
+        return
+    logger.info(
+        f"[NDPROBE-MOE] layer={layer_idx} iter={it} stage={stage:>16} "
+        f"sha={fp['sha']} norm={fp['norm']:.6f} sum={fp['sum']:.6e} "
+        f"nonfinite={fp['n_nonfinite']} shape={fp['shape']}"
+    )
+
+
 def nd_compare_log(it: int, prev: Optional[dict], cur: Optional[dict], token_id, token_prob) -> None:
     """Log per-stage diff vs previous iteration; flag the first diverging stage."""
     if cur is None:
