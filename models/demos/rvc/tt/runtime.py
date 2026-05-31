@@ -157,56 +157,105 @@ class TTNNFlowDecoder:
 
         return obj
 
-    def _conditioned_wn(self, x_cl, g_proj_cl, flow_idx, seq_len):
-        """Conditioned WN using persistent weights."""
+    def _conditioned_wn_device(self, h_tt, g_proj_4d, flow_idx, seq_len):
+        """Device-resident WN inner loop.
+
+        Inputs are TTNN device tensors; output is a TTNN device tensor.
+        Eliminates the per-layer to_torch/to_device roundtrip pair that
+        the host-routed path paid 48× per inference.
+
+        Args:
+            h_tt:        [1, T, HIDDEN_CH] TILE — pre_linear output (device-resident)
+            g_proj_4d:   [1, 1, 1, 2*HIDDEN*NUM_LAYERS] TILE — cond_linear output reshaped
+            flow_idx:    which of N_FLOWS
+            seq_len:     T
+
+        Returns:
+            output_acc:  [1, 1, T, HIDDEN_CH] device tensor (TILE)
+        """
         fw = self._flows[flow_idx]
         conv = self._conv_weights[flow_idx]
-        output_acc = torch.zeros(x_cl.shape[0], seq_len, HIDDEN_CH)
+
+        # Reshape h_tt to 4D NHWC-ish for conv1d: [1, 1, T, HIDDEN]
+        x_dev = ttnn.reshape(h_tt, (1, 1, seq_len, HIDDEN_CH))
+        output_acc = None
 
         for i in range(NUM_WN_LAYERS):
             d = DILATION_RATE ** i
             padding = d * (KERNEL_SIZE - 1) // 2
 
-            # Conv1d with native bias fusion (matches Generator's _conv1d_fused path)
-            x_tt = ttnn.from_torch(x_cl, dtype=DEFAULT_DTYPE)
+            # conv1d rejects TILE input at the WN config -> ROW_MAJOR
+            x_rm = ttnn.to_layout(x_dev, ttnn.ROW_MAJOR_LAYOUT)
             result = ttnn.conv1d(
-                input_tensor=x_tt, weight_tensor=conv["ws"][i], device=self._device,
+                input_tensor=x_rm, weight_tensor=conv["ws"][i], device=self._device,
                 in_channels=HIDDEN_CH, out_channels=2 * HIDDEN_CH, batch_size=1,
                 input_length=seq_len, kernel_size=KERNEL_SIZE, stride=1,
                 padding=padding, dilation=d, groups=1,
                 dtype=DEFAULT_DTYPE, return_output_dim=True,
                 bias_tensor=conv["bs_tt"][i],
             )
-            conv_out_tt = result[0]
-            conv_torch, _ = _conv1d_to_torch(result, 2 * HIDDEN_CH)
+            ttnn.deallocate(x_rm)
+            conv_out = result[0]
+            try:
+                conv_out = ttnn.sharded_to_interleaved(conv_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            except RuntimeError:
+                conv_out = ttnn.to_memory_config(conv_out, ttnn.DRAM_MEMORY_CONFIG)
 
-            # Conditioning
+            # Slice conditioning from g_proj_4d on device and broadcast-add
             cond_offset = i * 2 * HIDDEN_CH
-            g_l = g_proj_cl[:, :, cond_offset:cond_offset + 2*HIDDEN_CH]
-            conv_torch = conv_torch + g_l
+            g_l = ttnn.slice(g_proj_4d, [0, 0, 0, cond_offset],
+                              [1, 1, 1, cond_offset + 2 * HIDDEN_CH])
+            cond_in = ttnn.add(conv_out, g_l)
+            ttnn.deallocate(conv_out)
+            ttnn.deallocate(g_l)
 
-            # Gating on device
-            tanh_tt = to_device(conv_torch[:, :, :HIDDEN_CH], self._device)
-            sig_tt = to_device(conv_torch[:, :, HIDDEN_CH:], self._device)
-            gated = ttnn.mul(ttnn.tanh(tanh_tt), ttnn.sigmoid(sig_tt))
+            # Split gating halves on device
+            tanh_half = ttnn.slice(cond_in, [0, 0, 0, 0],
+                                    [1, 1, seq_len, HIDDEN_CH])
+            sig_half = ttnn.slice(cond_in, [0, 0, 0, HIDDEN_CH],
+                                   [1, 1, seq_len, 2 * HIDDEN_CH])
+            ttnn.deallocate(cond_in)
 
-            # res_skip linear (persistent weights)
+            gated = ttnn.mul(ttnn.tanh(tanh_half), ttnn.sigmoid(sig_half))
+            ttnn.deallocate(tanh_half)
+            ttnn.deallocate(sig_half)
+
+            # res_skip linear on device
             rs_out = ttnn.linear(gated, fw["rsl_ws"][i], bias=fw["rsl_bs"][i],
                                   memory_config=DEFAULT_MEMORY_CONFIG)
-            rs_torch = to_host(rs_out)[:1, :seq_len, :]
-
-            # Deallocate transient device tensors
-            ttnn.deallocate(tanh_tt)
-            ttnn.deallocate(sig_tt)
             ttnn.deallocate(gated)
-            ttnn.deallocate(rs_out)
 
             if i < NUM_WN_LAYERS - 1:
-                x_cl = x_cl + rs_torch[:, :, :HIDDEN_CH]
-                output_acc = output_acc + rs_torch[:, :, HIDDEN_CH:]
-            else:
-                output_acc = output_acc + rs_torch[:, :, :HIDDEN_CH]
+                # rs_out: [1, 1, T, 2*HIDDEN] — first half residual, second half skip
+                res_part = ttnn.slice(rs_out, [0, 0, 0, 0],
+                                       [1, 1, seq_len, HIDDEN_CH])
+                skip_part = ttnn.slice(rs_out, [0, 0, 0, HIDDEN_CH],
+                                        [1, 1, seq_len, 2 * HIDDEN_CH])
+                ttnn.deallocate(rs_out)
 
+                new_x = ttnn.add(x_dev, res_part)
+                ttnn.deallocate(x_dev)
+                ttnn.deallocate(res_part)
+                x_dev = new_x
+
+                if output_acc is None:
+                    output_acc = skip_part
+                else:
+                    new_acc = ttnn.add(output_acc, skip_part)
+                    ttnn.deallocate(output_acc)
+                    ttnn.deallocate(skip_part)
+                    output_acc = new_acc
+            else:
+                # Last layer: rs_out shape [1, 1, T, HIDDEN] = skip only
+                if output_acc is None:
+                    output_acc = rs_out
+                else:
+                    new_acc = ttnn.add(output_acc, rs_out)
+                    ttnn.deallocate(output_acc)
+                    ttnn.deallocate(rs_out)
+                    output_acc = new_acc
+
+        ttnn.deallocate(x_dev)
         return output_acc
 
     def forward(self, z_p, g):
@@ -231,32 +280,33 @@ class TTNNFlowDecoder:
             x0_cl = x_cl[:, :, :HALF_CH]
             x1_cl = x_cl[:, :, HALF_CH:]
 
-            # pre_linear (persistent weight)
+            # pre_linear (persistent weight) — output stays on device
             x0_tt = to_device(x0_cl, self._device)
             h_tt = ttnn.linear(x0_tt, fw["pre_w"], bias=fw["pre_b"],
                                 memory_config=DEFAULT_MEMORY_CONFIG)
-            h_cl = to_host(h_tt)[:1, :seq_len, :HIDDEN_CH]
             ttnn.deallocate(x0_tt)
-            ttnn.deallocate(h_tt)
 
-            # Project g (persistent weight)
+            # Project g (persistent weight) — output stays on device
             g_cl = g.permute(0, 2, 1)
             g_tt = to_device(g_cl, self._device)
             g_proj_tt = ttnn.linear(g_tt, fw["cond_w"], bias=fw["cond_b"],
                                      memory_config=DEFAULT_MEMORY_CONFIG)
-            g_proj_cl = to_host(g_proj_tt)[:1, :1, :2*HIDDEN_CH*NUM_WN_LAYERS]
             ttnn.deallocate(g_tt)
-            ttnn.deallocate(g_proj_tt)
+            # Reshape to 4D for broadcast-add against [1,1,T,2*HIDDEN] conv outputs
+            g_proj_4d = ttnn.reshape(g_proj_tt, (1, 1, 1, 2 * HIDDEN_CH * NUM_WN_LAYERS))
 
-            # Conditioned WN
-            wn_out = self._conditioned_wn(h_cl, g_proj_cl, f, seq_len)
+            # Conditioned WN — fully device-resident
+            wn_out = self._conditioned_wn_device(h_tt, g_proj_4d, f, seq_len)
+            ttnn.deallocate(g_proj_4d)
 
-            # post_linear (persistent weight)
-            wn_tt = to_device(wn_out, self._device)
-            stats_tt = ttnn.linear(wn_tt, fw["post_w"], bias=fw["post_b"],
+            # post_linear (persistent weight) — input on device
+            # Reshape wn_out from [1,1,T,HIDDEN] back to [1,T,HIDDEN] for linear
+            wn_3d = ttnn.reshape(wn_out, (1, seq_len, HIDDEN_CH))
+            ttnn.deallocate(wn_out)
+            stats_tt = ttnn.linear(wn_3d, fw["post_w"], bias=fw["post_b"],
                                     memory_config=DEFAULT_MEMORY_CONFIG)
             stats_cl = to_host(stats_tt)[:1, :seq_len, :HALF_CH]
-            ttnn.deallocate(wn_tt)
+            ttnn.deallocate(wn_3d)
             ttnn.deallocate(stats_tt)
 
             # Affine + concat
