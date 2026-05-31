@@ -470,8 +470,9 @@ sfpi_inline sfpi::vFloat _sfpu_quarter_exp_abs_(sfpi::vFloat x) {
     // j = x * log2(e); i = round(abs(j)); j = (float)i;
     sfpi::vFloat j = x * sfpi::vConstFloatPrgm0;
     sfpi::vFloat a = sfpi::setsgn(x, 0);
-    sfpi::vInt i = float_to_uint8(j, sfpi::RoundMode::NearestEven);
-    j = int32_to_float(i, sfpi::RoundMode::NearestEven);
+    // Rounds the absolute value of j, clamped to [0, 255].
+    sfpi::vInt i = sfpi::float_to_uint8(j, sfpi::RoundMode::NearestEven);
+    j = sfpi::int32_to_float(i, sfpi::RoundMode::NearestEven);
 
     sfpi::vFloat r, f, c1;
 
@@ -542,8 +543,9 @@ template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _sfpu_quarter_expm1_abs_(sfpi::vFloat x) {
     sfpi::vFloat j = x * sfpi::vConstFloatPrgm0;  // j = x * log2(e)
     sfpi::vFloat a = sfpi::setsgn(x, 0);
-    sfpi::vInt i = float_to_uint8(j, sfpi::RoundMode::NearestEven);
-    j = int32_to_float(i, sfpi::RoundMode::NearestEven);
+    // Rounds the absolute value of j, clamped to [0, 255].
+    sfpi::vInt i = sfpi::float_to_uint8(j, sfpi::RoundMode::NearestEven);
+    j = sfpi::int32_to_float(i, sfpi::RoundMode::NearestEven);
 
     sfpi::vFloat r, s, f, w, y, scale, bias, c0;
 
