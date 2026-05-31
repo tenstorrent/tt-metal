@@ -170,7 +170,6 @@ LEAD_MODELS_SUITE_NAME = "model_traced"
 
 # Absent entries use the caller-provided fixed ``batch_size``.
 LEAD_MODELS_BATCH_POLICY = {
-    "lead-models-galaxy": {"parallel_jobs": 6},
 }
 
 
