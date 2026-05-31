@@ -44,7 +44,7 @@ static vector<uint32_t> run_mxfp4_typecast(
     uint32_t num_tiles,
     bool fp32_dest_acc_en) {
     IDevice* dev = mesh_device.get_devices()[0];
-    const experimental::metal2_host_api::NodeCoord node{0, 0};
+    const experimental::NodeCoord node{0, 0};
 
     uint32_t input_tile_size = tt::tile_size(input_fmt);
     uint32_t output_tile_size = tt::tile_size(output_fmt);
@@ -69,46 +69,46 @@ static vector<uint32_t> run_mxfp4_typecast(
     constexpr const char* WRITER = "writer";
     constexpr const char* COMPUTE = "compute";
 
-    experimental::metal2_host_api::DataflowBufferSpec input_dfb_spec{
+    experimental::DataflowBufferSpec input_dfb_spec{
         .unique_id = INPUT_DFB,
         .entry_size = input_tile_size,
         .num_entries = 2,
         .data_format_metadata = input_fmt,
     };
-    experimental::metal2_host_api::DataflowBufferSpec output_dfb_spec{
+    experimental::DataflowBufferSpec output_dfb_spec{
         .unique_id = OUTPUT_DFB,
         .entry_size = output_tile_size,
         .num_entries = 2,
         .data_format_metadata = output_fmt,
     };
 
-    experimental::metal2_host_api::KernelSpec reader_spec{
+    experimental::KernelSpec reader_spec{
         .unique_id = READER,
         .source =
 
             "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary_2_0.cpp",
         .num_threads = 1,
-        .dfb_bindings = {experimental::metal2_host_api::ProducerOf(INPUT_DFB, "out")},
+        .dfb_bindings = {experimental::ProducerOf(INPUT_DFB, "out")},
         .runtime_arg_schema = {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
         .hw_config =
-            experimental::metal2_host_api::DataMovementHardwareConfig{
-                .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{}},
+            experimental::DataMovementHardwareConfig{
+                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
     };
 
-    experimental::metal2_host_api::KernelSpec writer_spec{
+    experimental::KernelSpec writer_spec{
         .unique_id = WRITER,
         .source =
 
             "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary_2_0.cpp",
         .num_threads = 1,
-        .dfb_bindings = {experimental::metal2_host_api::ConsumerOf(OUTPUT_DFB, "in")},
+        .dfb_bindings = {experimental::ConsumerOf(OUTPUT_DFB, "in")},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
         .hw_config =
-            experimental::metal2_host_api::DataMovementHardwareConfig{
-                .gen2_config = experimental::metal2_host_api::DataMovementHardwareConfig::Gen2Config{}},
+            experimental::DataMovementHardwareConfig{
+                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
     };
 
-    experimental::metal2_host_api::KernelSpec compute_spec{
+    experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source =
 
@@ -118,36 +118,36 @@ static vector<uint32_t> run_mxfp4_typecast(
             {{
                  .dfb_spec_name = INPUT_DFB,
                  .accessor_name = "in",
-                 .endpoint_type = experimental::metal2_host_api::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = OUTPUT_DFB,
                  .accessor_name = "out",
-                 .endpoint_type = experimental::metal2_host_api::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
              }},
         .compile_time_args = {{"per_core_tile_cnt", num_tiles}},
         .hw_config =
-            experimental::metal2_host_api::ComputeHardwareConfig{
+            experimental::ComputeHardwareConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
             },
     };
 
-    experimental::metal2_host_api::WorkUnitSpec wu{
+    experimental::WorkUnitSpec wu{
         .name = "main",
         .kernels = {READER, WRITER, COMPUTE},
         .target_nodes = node,
     };
 
-    experimental::metal2_host_api::ProgramSpec spec{
+    experimental::ProgramSpec spec{
         .name = "mxfp4_typecast",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {input_dfb_spec, output_dfb_spec},
         .work_units = {wu},
     };
 
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
 
     detail::WriteToBuffer(src_buffer, src_vec);
     // Pass aligned DRAM page stride so the reader/writer advance the DRAM
@@ -156,9 +156,9 @@ static vector<uint32_t> run_mxfp4_typecast(
     uint32_t src_dram_stride = static_cast<uint32_t>(src_buffer->aligned_page_size());
     uint32_t dst_dram_stride = static_cast<uint32_t>(dst_buffer->aligned_page_size());
 
-    experimental::metal2_host_api::ProgramRunArgs params;
+    experimental::ProgramRunArgs params;
     params.kernel_run_args = {
-        experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{
+        experimental::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = READER,
             .runtime_arg_values =
                 {{.node = node,
@@ -168,7 +168,7 @@ static vector<uint32_t> run_mxfp4_typecast(
                        {"num_tiles", num_tiles},
                        {"dram_page_stride", src_dram_stride}}}},
         },
-        experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{
+        experimental::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = WRITER,
             .runtime_arg_values =
                 {{.node = node,
@@ -178,11 +178,11 @@ static vector<uint32_t> run_mxfp4_typecast(
                        {"num_tiles", num_tiles},
                        {"dram_page_stride", dst_dram_stride}}}},
         },
-        experimental::metal2_host_api::ProgramRunArgs::KernelRunArgs{
+        experimental::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = COMPUTE,
         },
     };
-    experimental::metal2_host_api::SetProgramRunArgs(program, params);
+    experimental::SetProgramRunArgs(program, params);
 
     detail::LaunchProgram(dev, program, /*wait_until_cores_done=*/true);
 
