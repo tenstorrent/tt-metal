@@ -192,8 +192,8 @@ extern "C" uint8_t* __emule_noc_resolve(uint32_t x, uint32_t y, uint64_t addr) {
 //     firmware-style L1 offset. Worker L1 slots are 2 MB-aligned, so the
 //     masked low bits recover the in-slot offset.
 //  2. DRAM banks are GB-scale (2 GB on Wormhole views, 4 GB on Blackhole)
-//     and the kernel-side `InterleavedAddrGen<DRAM>::get_noc_addr` produces
-//     an `addr` field that is the true in-bank offset (already includes
+//     and the kernel-side per-bank addrgen helper produces an `addr` field
+//     that is the true in-bank offset (already includes
 //     `bank_to_dram_offset[bank_index]`). Masking to 2 MB silently aliases
 //     any DRAM access >= 2 MB to an offset within the first 2 MB of the bank.
 extern "C" uint8_t* __emule_resolve_noc_addr(uint64_t noc_addr) {
@@ -1382,7 +1382,7 @@ static std::unordered_map<uint64_t, tt_emule::Core*>* build_core_map(
         {
             auto& msoc = MetalContext::instance().get_cluster().get_soc_desc(device_id);
             for (uint32_t ch = 0; ch < msoc.get_num_dram_views() && ch < MAX_NUM_BANKS; ch++) {
-                for (uint32_t noc = 0; noc < 2; noc++) {
+                for (uint32_t noc = 0; noc < NUM_NOCS; noc++) {
                     auto dc = msoc.get_preferred_worker_core_for_dram_view(ch, noc);
                     auto* core = sw_emu->get_core(tt_xy_pair(dc.x, dc.y));
                     uint64_t key = (uint64_t(dc.x) << 32) | dc.y;
