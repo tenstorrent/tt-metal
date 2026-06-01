@@ -2,16 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Blackhole variant of the latency sender. Same protocol as the Quasar sender.cpp, but:
+//   - timing uses the memory-mapped wall-clock register instead of the rdcycle CSR
+//   - L1 is accessed directly (no MEM_L1_UNCACHED_BASE alias)
+// Compile-time argument order is identical to sender.cpp so the host can share the layout.
+
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/device_print.h"
-#include "dev_mem_map.h"
+#include "risc_common.h"
 
-// DeviceTimestampedData/DeviceZoneScopedN are not available on Quasar emulator;
-// use inline rdcycle CSR read instead.
-static inline uint32_t rdcycles() {
-    uint32_t c;
-    asm volatile("rdcycle %0" : "=r"(c));
-    return c;
+// Blackhole free-running wall-clock low word (core-cycle counter). A single volatile
+// register read, matching what the on-device profiler uses.
+static inline uint32_t read_timer() {
+    return *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
 }
 
 void kernel_main() {
@@ -36,18 +39,17 @@ void kernel_main() {
     uint64_t dst_data_noc = get_noc_addr(dst_noc_x, dst_noc_y, dst_l1_data_addr);
 
     for (uint32_t i = 0; i < num_iterations; i++) {
-        // The first word of the payload carries the iteration count, which doubles as the
-        // signal the receiver polls for. Written via the uncached alias so the NOC read picks
-        // up the new value.
-        *(volatile tt_l1_ptr uint32_t*)(src_l1_addr + MEM_L1_UNCACHED_BASE) = i + 1;
+        // First word of the payload carries the iteration count, which doubles as the signal
+        // the receiver polls for.
+        *(volatile tt_l1_ptr uint32_t*)(src_l1_addr) = i + 1;
 
         noc_async_write(src_l1_addr, dst_data_noc, transaction_size_bytes);
 
         // Measures time for the write to retire on the sender side (write ACK received).
         // t0 is placed after noc_async_write() — the write may already be in-flight.
-        uint32_t t0 = rdcycles();
+        uint32_t t0 = read_timer();
         noc_async_write_barrier();
-        uint32_t t1 = rdcycles();
+        uint32_t t1 = read_timer();
 
         DEVICE_PRINT(
             "[sender] ({},{}) -> ({},{}) iter {}: {} cycles\n", src_noc_x, src_noc_y, dst_noc_x, dst_noc_y, i, t1 - t0);
