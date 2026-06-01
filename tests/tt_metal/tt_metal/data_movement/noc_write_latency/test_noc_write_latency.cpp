@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "multi_device_fixture.hpp"
+#include "device_fixture.hpp"
 #include "dm_common.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -109,24 +109,32 @@ bool run_noc_write_latency(const shared_ptr<distributed::MeshDevice>& mesh_devic
 
 }  // namespace unit_tests::dm::noc_write_latency
 
-TEST_F(GenericMeshDeviceFixture, NocWriteLatencyFarCorners) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, NocWriteLatencyFarCorners) {
+    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
+        GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
+                        "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
+    }
     unit_tests::dm::noc_write_latency::NocWriteLatencyConfig cfg{
         .src_core = {0, 0},
         .dst_core = {8, 3},
         .num_iterations = 100,
         .transaction_size_bytes = 32,
     };
-    EXPECT_TRUE(unit_tests::dm::noc_write_latency::run_noc_write_latency(this->mesh_device_, cfg));
+    EXPECT_TRUE(unit_tests::dm::noc_write_latency::run_noc_write_latency(this->devices_[0], cfg));
 }
 
-TEST_F(GenericMeshDeviceFixture, NocWriteLatencyAdjacentCores) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, NocWriteLatencyAdjacentCores) {
+    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
+        GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
+                        "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
+    }
     unit_tests::dm::noc_write_latency::NocWriteLatencyConfig cfg{
         .src_core = {0, 0},
         .dst_core = {1, 0},
         .num_iterations = 100,
         .transaction_size_bytes = 32,
     };
-    EXPECT_TRUE(unit_tests::dm::noc_write_latency::run_noc_write_latency(this->mesh_device_, cfg));
+    EXPECT_TRUE(unit_tests::dm::noc_write_latency::run_noc_write_latency(this->devices_[0], cfg));
 }
 
 }  // namespace tt::tt_metal
