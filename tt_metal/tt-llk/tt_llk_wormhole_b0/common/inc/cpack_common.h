@@ -676,12 +676,12 @@ template <bool is_fp32_dest_acc_en, PackMode pack_mode>
 inline void configure_pack(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
-    const std::uint32_t tile_size   = 0,
-    const std::uint32_t face_r_dim  = FACE_R_DIM,
-    const std::uint32_t num_faces   = 4,
-    const bool partial_face         = false,
+    const std::uint32_t tile_size           = 0,
+    const std::uint32_t face_r_dim          = FACE_R_DIM,
+    const std::uint32_t num_faces           = 4,
+    const bool partial_face                 = false,
     [[maybe_unused]] const bool narrow_tile = false,
-    const std::uint32_t relu_config = 0)
+    const std::uint32_t relu_config         = 0)
 {
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Untilize,
@@ -746,9 +746,6 @@ inline void configure_pack(
     regfile[p_gpr_pack::TILE_HEADER + 2] = 0;
     regfile[p_gpr_pack::TILE_HEADER + 3] = 0;
     sync_regfile_write(p_gpr_pack::TILE_HEADER + 3);
-
-    // x-start/x-end (packer ADC X counter) is a transient state set by each operation's init LLK
-    // (see tt-llk#1036), so it is intentionally not programmed here in the HW config.
 }
 
 inline std::uint8_t get_packer_dest_offset_index()

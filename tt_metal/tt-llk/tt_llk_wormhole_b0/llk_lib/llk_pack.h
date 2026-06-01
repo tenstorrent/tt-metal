@@ -415,8 +415,6 @@ inline void _llk_pack_init_(
  */
 inline void _llk_pack_uninit_([[maybe_unused]] const std::uint32_t face_r_dim)
 {
-    // x-start/x-end is transient and programmed by each operation's init LLK (see tt-llk#1036);
-    // nothing to restore here.
 }
 
 /**

@@ -359,6 +359,4 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
 template <BroadcastType BType = BroadcastType::NONE>
 inline void _llk_unpack_A_uninit_([[maybe_unused]] const std::uint32_t face_r_dim)
 {
-    // x-start/x-end is transient and programmed by each operation's init LLK (see tt-llk#1036);
-    // nothing to restore here.
 }

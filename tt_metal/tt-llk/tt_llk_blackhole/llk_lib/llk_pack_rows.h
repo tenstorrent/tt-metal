@@ -163,6 +163,4 @@ inline void _llk_pack_rows_(const std::uint32_t tile_index, const std::uint32_t 
  */
 inline void _llk_pack_rows_uninit_()
 {
-    // x-start/x-end is transient and programmed by each operation's init LLK (see tt-llk#1036);
-    // nothing to restore here.
 }

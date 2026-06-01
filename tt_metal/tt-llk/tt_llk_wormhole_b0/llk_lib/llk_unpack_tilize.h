@@ -546,7 +546,6 @@ inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format, co
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     // Stalling SETDMAREG done by THCON until UNPACK finishes
     TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
-    // x-start/x-end is transient and programmed by each operation's init LLK (see tt-llk#1036); nothing to restore here.
 
     // Restore Z dim to the default operand state set by _llk_unpack_init_:
     // THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1 - word 1 of the same-named register
@@ -584,7 +583,6 @@ inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format, co
 inline void _llk_unpack_tilizeA_B_uninit_(const std::uint32_t unpack_dst_format, [[maybe_unused]] const std::uint32_t face_r_dim)
 {
     TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
-    // x-start/x-end is transient and programmed by each operation's init LLK (see tt-llk#1036); nothing to restore here.
 
     // reset z/w counters
     TTI_SETADCZW(p_setadc::UNP_AB, 0, 0, 0, 0, SETADC_CH01(p_setadc::ZW));

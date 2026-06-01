@@ -67,5 +67,4 @@ inline void _llk_unpack_AB_sub_bcast_col_custom_(const std::uint32_t address_a, 
 
 inline void _llk_unpack_AB_sub_bcast_col_uninit_custom_()
 {
-    // x-start/x-end is transient and programmed by each operation's init LLK (see tt-llk#1036); nothing to restore here.
 }

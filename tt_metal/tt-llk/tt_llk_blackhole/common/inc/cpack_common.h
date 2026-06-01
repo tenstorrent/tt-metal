@@ -640,9 +640,6 @@ inline void configure_pack(
     regfile[p_gpr_pack::TILE_HEADER + 2] = 0;
     regfile[p_gpr_pack::TILE_HEADER + 3] = 0;
     sync_regfile_write(p_gpr_pack::TILE_HEADER + 3);
-
-    // x-start/x-end (packer ADC X counter) is a transient state set by each operation's init LLK
-    // (see tt-llk#1036), so it is intentionally not programmed here in the HW config.
 }
 
 inline std::uint8_t get_packer_dest_offset_index()

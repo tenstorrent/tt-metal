@@ -863,9 +863,6 @@ inline void configure_unpack_AB(
         cfg[THCON_SEC1_REG2_Out_data_format_ADDR32 + i] = config.val[i];
     }
 
-    // x-start/x-end (unpacker ADC X counter) is a transient state set by each operation's init LLK
-    // (see tt-llk#1036), so it is intentionally not programmed here in the HW config.
-
     // Program base address for all 2 sections (each section address is loaded to corresponding context)
     // Load dummy data to unused location if face height is 0
     const std::uint32_t Dest_cntx0_address         = unpA_face_r_dim == 0 ? 22 * 16 : 4 * 16;

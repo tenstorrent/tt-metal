@@ -293,7 +293,6 @@ inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format, co
 {
     TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    // x-start/x-end is transient and programmed by each operation's init LLK (see tt-llk#1036); nothing to restore here.
 
     // Revert Z dim value back to default.
     const std::uint32_t Tile_z_dim = num_faces;
@@ -535,7 +534,6 @@ inline void _llk_unpack_tilizeA_B_(
 inline void _llk_unpack_tilizeA_B_uninit_(const std::uint32_t unpack_dst_format, [[maybe_unused]] const std::uint32_t face_r_dim)
 {
     TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
-    // x-start/x-end is transient and programmed by each operation's init LLK (see tt-llk#1036); nothing to restore here.
 
     // _llk_unpack_tilizeA_B uses y-stride and updates y counter
     TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
