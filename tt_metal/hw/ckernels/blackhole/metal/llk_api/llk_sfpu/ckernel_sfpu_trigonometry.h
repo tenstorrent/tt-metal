@@ -521,12 +521,11 @@ inline void calculate_cosh() {
         sfpi::vFloat x = sfpi::dst_reg[0];
         sfpi::vFloat a = sfpi::setsgn(x, 0);
         sfpi::vFloat q = _sfpu_quarter_exp_abs_<is_fp32_dest_acc_en>(a);
+        sfpi::vFloat r = _sfpu_reciprocal_gt0_<is_fp32_dest_acc_en>(q);
         sfpi::vFloat y = q + q;
+        r *= 0.125f;
         sfpi::vInt q_exp = sfpi::exexp(q);
-        v_if(q_exp < 24) {
-            sfpi::vFloat r = _sfpu_reciprocal_gt0_<is_fp32_dest_acc_en>(y);
-            y = y + 0.25f * r;
-        }
+        v_if(q_exp < 24) { y += r; }
         v_endif;
 
         if constexpr (!is_fp32_dest_acc_en) {
