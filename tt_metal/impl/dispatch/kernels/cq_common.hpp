@@ -90,16 +90,6 @@ constexpr FORCE_INLINE uintptr_t l1_uncached_addr(uintptr_t addr) {
 #endif
 }
 
-// Inverse of l1_uncached_addr — converts an uncached-alias address back to its cached form.
-// Used when storing a pointer that the host (or NOC) will resolve via the cached-form base.
-constexpr FORCE_INLINE uintptr_t l1_cached_addr(uintptr_t addr) {
-#ifdef ARCH_QUASAR
-    return addr - MEM_L1_UNCACHED_BASE;
-#else
-    return addr;
-#endif
-}
-
 template <typename T>
 FORCE_INLINE volatile T tt_l1_ptr* uncached_l1_ptr(uintptr_t addr) {
     return reinterpret_cast<volatile T tt_l1_ptr*>(l1_uncached_addr(addr));
@@ -543,10 +533,6 @@ public:
     template <typename T = NoTelemetryBlockGuard>
     FORCE_INLINE uint32_t wait_for_available_data_and_release_old_pages(uintptr_t& cmd_ptr) {
         static_assert(is_telemetry_block_guard<T>::value, "T must be a telemetry block guard");
-        DPRINT(
-            "wait_for_available_data_and_release_old_pages: cmd_ptr: {} available_bytes: {}\n",
-            cmd_ptr,
-            this->available_bytes(cmd_ptr));
         if (this->available_bytes(cmd_ptr) == 0) {
             if (this->cb_fence_ == this->block_next_start_addr_[this->rd_block_idx_]) {
                 if (this->rd_block_idx_ == cb_blocks - 1) {
