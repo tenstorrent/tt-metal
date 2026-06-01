@@ -20,7 +20,7 @@ from ttnn.model_preprocessing import (
 )
 
 from loguru import logger
-from models.experimental.uniad.common import load_torch_model
+from models.experimental.uniad.tests.common import load_torch_model
 
 
 def custom_preprocessor(model, name):

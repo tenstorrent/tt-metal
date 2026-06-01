@@ -9,7 +9,7 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.uniad.reference.occ_head import OccHead
 from models.experimental.uniad.tt.ttnn_occ_head import TtOccHead
-from models.experimental.uniad.common import load_torch_model
+from models.experimental.uniad.tests.common import load_torch_model
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)

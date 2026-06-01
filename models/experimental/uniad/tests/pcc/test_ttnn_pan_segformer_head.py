@@ -12,7 +12,7 @@ from models.experimental.uniad.tt.model_preprocessing_encoder import (
 
 from models.experimental.uniad.reference.pan_segformer_head import PansegformerHead
 from models.experimental.uniad.tt.ttnn_pan_segformer_head import TtPansegformerHead
-from models.experimental.uniad.common import load_torch_model
+from models.experimental.uniad.tests.common import load_torch_model
 
 
 class DotDict(dict):

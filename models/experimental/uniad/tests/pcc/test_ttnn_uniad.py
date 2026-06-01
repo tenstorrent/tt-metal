@@ -15,7 +15,7 @@ from models.experimental.uniad.tt.ttnn_utils import TtLiDARInstance3DBoxes
 import copy
 
 from models.experimental.uniad.tt.model_preprocessing_uniad import create_uniad_model_parameters_uniad
-from models.experimental.uniad.common import load_torch_model
+from models.experimental.uniad.tests.common import load_torch_model
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
