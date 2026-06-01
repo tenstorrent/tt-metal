@@ -204,14 +204,6 @@ graph_descriptors {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 31 } }
     channels { count: 8 policy: RELAXED }
   }
-  connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 31 } }
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-    channels { count: 16 policy: RELAXED }
-    assign_z_direction: true
-  }
 }
-
-mesh_colocation_pinnings { type: HOST mesh_id_a: 0 mesh_id_b: 31 }
 
 top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
