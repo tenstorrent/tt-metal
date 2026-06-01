@@ -22,6 +22,33 @@ namespace {
 std::mt19937 rng(std::time(nullptr));
 std::uniform_int_distribution<uint32_t> dist(1, 1 << 20);
 uint32_t get_random_seed() { return dist(rng); }
+
+// Work split shared by create_descriptor (cache miss) and get_dynamic_runtime_args (cache hit).
+struct BernoulliWorkSplit {
+    uint32_t num_cores;
+    CoreRangeSet all_cores;
+    CoreRangeSet core_group_1;
+    CoreRangeSet core_group_2;
+    uint32_t units_per_core_group_1;
+    uint32_t units_per_core_group_2;
+    std::vector<CoreCoord> cores;
+};
+
+BernoulliWorkSplit bernoulli_work_split(const Tensor& output) {
+    auto grid = output.device()->compute_with_storage_grid_size();
+    uint32_t units_to_divide = output.physical_volume() / constants::TILE_HW;
+    auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
+        split_work_to_cores(grid, units_to_divide);
+    auto cores = grid_to_cores(num_cores, grid.x, grid.y);
+    return {
+        num_cores,
+        all_cores,
+        core_group_1,
+        core_group_2,
+        units_per_core_group_1,
+        units_per_core_group_2,
+        std::move(cores)};
+}
 }  // namespace
 
 ProgramDescriptor BernoulliDeviceOperation::create_descriptor(
@@ -31,15 +58,8 @@ ProgramDescriptor BernoulliDeviceOperation::create_descriptor(
     const Tensor& input = tensor_args.input;
 
     IDevice* device = output.device();
-    auto grid = device->compute_with_storage_grid_size();
-
-    uint32_t units_to_divide = output.physical_volume() / constants::TILE_HW;
-    auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
-        split_work_to_cores(grid, units_to_divide);
-
-    uint32_t num_cores_x = grid.x;
-    uint32_t num_cores_y = grid.y;
-    auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y);
+    auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2, cores] =
+        bernoulli_work_split(output);
 
     // ---- Circular buffers ----
 
@@ -185,19 +205,10 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> BernoulliDeviceOperation::get_dynam
     const tensor_args_t& /*tensor_args*/,
     tensor_return_value_t& output,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    // MUST mirror create_descriptor(): kernels are pushed reader(0), writer(1), compute(2); the
-    // compute runtime args are {seed, tile_offset, units_per_core}.  Only the per-call seed is
-    // re-applied.  The work-split is recomputed (cheap host-side integer math, no rebuild) so the
-    // per-core seed offsets match create_descriptor() exactly.
+    // compute is kernel 2 (reader 0, writer 1); its args are {seed, tile_offset, units_per_core}.
+    // Only the per-call seed is re-applied.
     constexpr uint32_t kComputeKernelIdx = 2;
-
-    IDevice* device = output.device();
-    auto grid = device->compute_with_storage_grid_size();
-    uint32_t units_to_divide = output.physical_volume() / constants::TILE_HW;
-    [[maybe_unused]] auto
-        [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
-            split_work_to_cores(grid, units_to_divide);
-    auto cores = grid_to_cores(num_cores, grid.x, grid.y);
+    auto cores = bernoulli_work_split(output).cores;
 
     std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
     dynamic_args.reserve(cores.size());

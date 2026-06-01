@@ -22,6 +22,11 @@ struct BernoulliDeviceOperation {
         const DataType dtype;
         const MemoryConfig memory_config;
         const DeviceComputeKernelConfig compute_kernel_config;
+
+        // seed is re-applied via get_dynamic_runtime_args, so it's excluded from the hash.
+        // Shape/device come from the input tensor (tensor_args).
+        static constexpr auto attribute_names = std::forward_as_tuple("dtype", "memory_config", "compute_kernel_config");
+        auto attribute_values() const { return std::forward_as_tuple(dtype, memory_config, compute_kernel_config); }
     };
 
     struct tensor_args_t {
@@ -42,9 +47,7 @@ struct BernoulliDeviceOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
-    // seed is excluded from compute_program_hash (so calls differing only in seed cache-hit); it is
+    // seed is excluded from the program hash (so calls differing only in seed cache-hit); it is
     // DYNAMIC and re-applied to the cached program on every dispatch. Must mirror the compute-kernel
     // seed runtime arg built in create_descriptor().
     static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(

@@ -24,6 +24,34 @@ std::mt19937 rng(std::time(nullptr));
 std::uniform_int_distribution<int32_t> distribution(1, std::numeric_limits<int32_t>::max());
 
 uint32_t get_random_seed() { return distribution(rng); }
+
+// Work split shared by create_descriptor (cache miss) and get_dynamic_runtime_args (cache hit) so
+// both derive the identical core list.
+struct UniformWorkSplit {
+    uint32_t num_cores;
+    CoreRangeSet all_cores;
+    CoreRangeSet core_group_1;
+    CoreRangeSet core_group_2;
+    uint32_t units_per_core_group_1;
+    uint32_t units_per_core_group_2;
+    std::vector<CoreCoord> cores;
+};
+
+UniformWorkSplit uniform_work_split(Tensor& output) {
+    auto grid = output.device()->compute_with_storage_grid_size();
+    uint32_t units_to_divide = output.physical_volume() / constants::TILE_HW;
+    auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
+        split_work_to_cores(grid, units_to_divide);
+    auto cores = grid_to_cores(num_cores, grid.x, grid.y);
+    return {
+        num_cores,
+        all_cores,
+        core_group_1,
+        core_group_2,
+        units_per_core_group_1,
+        units_per_core_group_2,
+        std::move(cores)};
+}
 }  // namespace
 
 static constexpr const char* WRITER_KERNEL_PATH = "ttnn/cpp/ttnn/operations/uniform/device/kernels/writer_uniform.cpp";
@@ -35,13 +63,8 @@ ProgramDescriptor UniformDeviceOperation::create_descriptor(
     const tensor_args_t& /*tensor_args*/,
     tensor_return_value_t& output) {
     IDevice* device = output.device();
-    auto grid = device->compute_with_storage_grid_size();
-
-    uint32_t units_to_divide = output.physical_volume() / constants::TILE_HW;
-    auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
-        split_work_to_cores(grid, units_to_divide);
-
-    auto cores = grid_to_cores(num_cores, grid.x, grid.y);
+    auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2, cores] =
+        uniform_work_split(output);
     const auto num_cores_total = cores.size();
 
     DataType output_dtype = output.dtype();
@@ -161,20 +184,10 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> UniformDeviceOperation::get_dynamic
     const tensor_args_t& /*tensor_args*/,
     tensor_return_value_t& output,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    // MUST mirror create_descriptor(): writer is kernel 0, compute is kernel 1; the compute
-    // runtime args are {seed, f2u_from, f2u_to, tile_offset, units_per_core}.  Only the per-call
-    // values (seed, from, to) are re-applied; tile_offset/units_per_core are part of the static
-    // program identity.  The work-split is recomputed (cheap host-side integer math, no rebuild)
-    // so the per-core seed offsets match create_descriptor() exactly.
+    // compute is kernel 1; its runtime args are {seed, f2u_from, f2u_to, tile_offset, units_per_core}.
+    // seed/from/to are excluded from the hash and re-applied here; the rest are static.
     constexpr uint32_t kComputeKernelIdx = 1;
-
-    IDevice* device = output.device();
-    auto grid = device->compute_with_storage_grid_size();
-    uint32_t units_to_divide = output.physical_volume() / constants::TILE_HW;
-    [[maybe_unused]] auto
-        [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
-            split_work_to_cores(grid, units_to_divide);
-    auto cores = grid_to_cores(num_cores, grid.x, grid.y);
+    auto cores = uniform_work_split(output).cores;
 
     const float eps = 1e-6f;
     const uint32_t f2u_from = std::bit_cast<uint32_t>(operation_attributes.from);
