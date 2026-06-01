@@ -1,4 +1,4 @@
-name: "[internal] TTNN nightly integration tests impl"
+name: "[internal] TTNN nightly tests impl"
 
 on:
   workflow_call:
@@ -33,7 +33,7 @@ jobs:
     outputs:
       matrix: ${{ steps.filter-categories.outputs.matrix }}
     env:
-      TESTS_YAML_PATH: ./tests/pipeline_reorg/ttnn_integration_tests.yaml
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/ttnn_nightly_tests.yaml
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -51,7 +51,7 @@ jobs:
           python3 .github/scripts/utils/verify_time_budget.py \
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
-            "integration"
+            "nightly"
       - name: Build unified test matrix based on enabled SKUs
         id: build-matrix
         run: |
@@ -73,7 +73,7 @@ jobs:
           echo "$filtered" >> "$GITHUB_OUTPUT"
           echo "EOF" >> "$GITHUB_OUTPUT"
 
-  ttnn-integration-tests:
+  ttnn-nightly-tests:
     needs: load-test-matrix
     if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
     strategy:
@@ -112,9 +112,6 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
-          # data_movement/ccl entries inherited a 10s hang-detection timeout in
-          # the legacy workflow; preserve that for the broader integration mix.
-          hang-detection-timeout: 10.0
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |

@@ -74,11 +74,6 @@ ttnn:
   unit:
     wh_llmbox: 50
     wh_galaxy: 35
-    # Single-card nightly per-op tests (ttnn_unit_tests.yaml).
-    wh_n150: 190
-    wh_n300: 190
-    bh_p100: 175           # sdpa-nightly excluded on p100
-    bh_p150b_civ2: 190
   e2e:
     wh_llmbox: 90
     wh_galaxy: 90
@@ -92,12 +87,12 @@ ttnn:
   integration:
     wh_llmbox: 30   # t3k_integration_tests.yaml (ttnn entries)
     wh_galaxy: 340  # galaxy_integration_tests.yaml
-    # Single-card nightly integration tests (ttnn_integration_tests.yaml).
-    wh_n150: 75            # sdpa-stress + 3 ccl/p2p groups
-    wh_n300: 75
-    bh_p100: 45            # ccl/p2p groups only (sdpa-stress skipped)
-    bh_p150b_civ2: 75
-    wh_n150_civ2: 15       # docs_examples
+  nightly:
+    wh_n150: 265
+    wh_n300: 265
+    bh_p100: 220
+    bh_p150b_civ2: 265
+    wh_n150_civ2: 15
     wh_n300_civ2: 15
     bh_p100a_civ2_viommu: 15
     bh_p150b_civ2_viommu: 15
@@ -113,6 +108,21 @@ ttnn:
     wh_n300_civ2: 60
     bh_p100a_civ2_viommu: 60
     bh_p150b_civ2_viommu: 60
+
+train:
+  nightly:
+    wh_n150: 30
+    wh_n300: 30
+    bh_p100: 30
+    bh_p150b_civ2: 30
+
+ttsim:
+  nightly:
+    # compute-fused validation tests from tt_metal_l2_nightly_tests.yaml. The
+    # sim_* SKUs route to ubuntu-latest; arch is encoded in the SKU suffix
+    # (sim_wormhole_b0 / sim_blackhole) and resolved by .github/actions/setup-ttsim.
+    sim_wormhole_b0: 20
+    sim_blackhole: 20
 
 shield:
   e2e:
@@ -144,6 +154,7 @@ scaleout:
     bh_loudbox: 80
     bh_p300: 80
     bh_quietbox_2: 80
+
 runtime:
   sanity:
     wh_n150_civ2: 13
@@ -185,6 +196,10 @@ models:
     wh_galaxy_perf: 10
   stress:
     wh_galaxy_perf: 500
+  nightly:
+    wh_n150: 30            
+    wh_n300: 60
+    bh_p150b_civ2: 30
   e2e:
     wh_llmbox: 198
     wh_llmbox_perf: 330
@@ -241,7 +256,6 @@ models:
     bh_deskbox: 250
     bh_llmbox: 1200
     bh_loudbox: 1200
-
     bh_p300: 800
     bh_quietbox_2: 280
   sweep:

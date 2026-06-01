@@ -3,12 +3,6 @@ name: "[impl] Nightly tt-metal L2 tests impl"
 on:
   workflow_call:
     inputs:
-      arch:
-        required: true
-        type: string
-      runner-label:
-        required: true
-        type: string
       docker-image:
         required: true
         type: string
@@ -18,219 +12,165 @@ on:
       wheel-artifact-name:
         required: true
         type: string
-      timeout:
+      enabled-skus:
+        required: true
+        type: string
+        description: "Comma-separated SKUs (see .github/sku_config.yaml)."
+      additional_test_categories:
         required: false
-        type: number
-        default: 150
-      run_sdxl_tests:
+        type: string
+        default: ''
+        description: "Comma-separated category filter. Empty = run all entries; otherwise keep only entries whose `category` field appears in this list."
+      ttsim-version:
         required: false
-        type: boolean
-        default: true
-      run_train_tests:
-        required: false
-        type: boolean
-        default: true
-      run_compute_fused_tests:
-        required: false
-        type: boolean
-        default: true
+        type: string
+        default: "v1.4.6"
+        description: "Tag of the tenstorrent/ttsim release to download the libttsim_<arch>.so binary from."
       enable-llk-asserts:
         required: false
         type: boolean
         default: false
         description: "Enable LLK asserts"
-      ttsim-version:
-        required: false
-        type: string
-        default: "v1.4.6"
-      non-harbor-docker-image:
-        required: false
-        type: string
-        default: ""
-        description: "Non-harbor docker image for jobs running on ubuntu-latest (cannot pull from harbor)"
-
-# This is a fallback timeout for tests that are not marked with pytest.mark.timeout(xxx)
-env:
-  TEST_BUDGET_SECONDS: 600
 
 jobs:
-  ttnn-sdxl-tests:
-    if: ${{ inputs.run_sdxl_tests && inputs.runner-label != 'P100a' }}
-    container:
-      image: ${{ (inputs.runner-label == 'P150b' && inputs.docker-image) || inputs.non-harbor-docker-image || 'docker-image-unresolved!' }}
-      env:
-        PYTHONPATH: /work
-        LD_LIBRARY_PATH: /work/build/lib
-        ARCH_NAME: ${{ inputs.arch }}
-        LOGURU_LEVEL: INFO
-        # Only use MLPerf HF cache on non-CIv2 runners (P150b uses LFC via TT_GH_CI_INFRA)
-        HF_HUB_CACHE: ${{ inputs.runner-label == 'P150b' && '' || '/mnt/MLPerf/huggingface/hub' }}
-        TT_MM_THROTTLE_PERF: ${{ inputs.arch == 'blackhole' && '0' || '5' }}
-      volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
-        - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf:ro
-      options: "--device /dev/tenstorrent ${{ inputs.runner-label == 'P150b' && '-e TT_GH_CI_INFRA=1' || '' }}"
-    defaults:
-      run:
-        shell: bash
-        working-directory: /work # https://github.com/actions/runner/issues/878
-    name: ttnn nightly sdxl tests ${{ inputs.arch }} ${{ inputs.runner-label }}
-    runs-on: >-
-      ${{
-        ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
-        || fromJSON(format('["{0}", "in-service"]', inputs.runner-label))
-      }}
+  load-test-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.filter-categories.outputs.matrix }}
+      has-sim-entries: ${{ steps.filter-categories.outputs.has-sim-entries }}
+    env:
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/tt_metal_l2_nightly_tests.yaml
     steps:
-      - name: 🧬 Checkout Repository
+      - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
-          submodules: recursive
-          path: docker-job
-      - name: ⬇️  Setup Job
-        uses: ./docker-job/.github/actions/setup-job
-        timeout-minutes: 10
-        with:
-          build-artifact-name: ${{ inputs.build-artifact-name }}
-          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-          enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
-      - name: ttnn nightly sdxl tests (wormhole)
-        if: ${{ inputs.arch == 'wormhole_b0' }}
-        timeout-minutes: ${{ inputs.timeout }}
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+          sparse-checkout-cone-mode: true
+      - name: Install dependencies
+        run: pip3 install PyYAML
+      - name: Verify test timeouts against budget
         run: |
-          pytest models/demos/stable_diffusion_xl_base/tests/pcc/test_unet_loop.py --loop-iter-num=50 -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
-          pytest models/demos/stable_diffusion_xl_base/refiner/tests/pcc/test_unet_loop.py --loop-iter-num=50 -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
-          pytest models/demos/stable_diffusion_xl_base/lora/tests/test_lora_rollback.py -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
-      - name: ttnn nightly sdxl tests (blackhole P150b)
-        if: ${{ inputs.arch == 'blackhole' && inputs.runner-label == 'P150b' }}
-        timeout-minutes: ${{ inputs.timeout }}
+          set -e
+          echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
+          python3 .github/scripts/utils/verify_time_budget.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            ./.github/time_budget.yaml \
+            "nightly"
+      - name: Build unified test matrix based on enabled SKUs
+        id: build-matrix
         run: |
-          pytest models/demos/stable_diffusion_xl_base/tests/pcc/test_unet_loop.py --loop-iter-num=50 -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
-          pytest models/demos/stable_diffusion_xl_base/refiner/tests/pcc/test_unet_loop.py --loop-iter-num=50 -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
-      - name: ttnn nightly sdxl demo cfg parallel test (N300 only)
-        if: ${{ inputs.runner-label == 'N300' }}
-        timeout-minutes: ${{ inputs.timeout }}
-        run: pytest models/demos/stable_diffusion_xl_base/demo/demo.py -k "device_vae and device_encoders and with_trace and use_cfg_parallel" --timeout=${{ env.TEST_BUDGET_SECONDS }}
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
-        timeout-minutes: 10
-        if: ${{ !cancelled() }}
-        with:
-          prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
-        if: always()
+          python3 .github/scripts/utils/prepare_test_matrix.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            "${{ inputs.enabled-skus }}" \
+            ./.github/sku_config.yaml
+      - name: Filter matrix by additional_test_categories
+        id: filter-categories
+        run: |
+          matrix='${{ steps.build-matrix.outputs.matrix }}'
+          categories='${{ inputs.additional_test_categories }}'
+          if [ -z "$categories" ]; then
+            filtered="$matrix"
+          else
+            filtered=$(echo "$matrix" | jq -c --arg cats ",$categories," '[.[] | .category as $c | select($cats | contains(",\($c),"))]')
+          fi
+          if echo "$filtered" | jq -e 'any(.sku | startswith("sim_"))' > /dev/null; then
+            has_sim=true
+          else
+            has_sim=false
+          fi
+          {
+            echo "matrix<<EOF"
+            echo "$filtered"
+            echo "EOF"
+            echo "has-sim-entries=$has_sim"
+          } >> "$GITHUB_OUTPUT"
 
-  ttnn-train-nightly-tests:
-    if: ${{ inputs.run_train_tests }}
-    container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
-      env:
-        PYTHONPATH: /work
-        LD_LIBRARY_PATH: /work/build/lib
-        TT_METAL_HOME: /work
-        ARCH_NAME: ${{ inputs.arch }}
-        LOGURU_LEVEL: INFO
-        ENABLE_NIGHTLY_TT_TRAIN_TESTS: 1
-      volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
-        - /dev/hugepages-1G:/dev/hugepages-1G
-      options: "--device /dev/tenstorrent"
-    defaults:
-      run:
-        shell: bash
-        working-directory: /work # https://github.com/actions/runner/issues/878
-    name: tt-train nightly tests ${{ inputs.arch }} ${{ inputs.runner-label }}
-    runs-on: >-
-      ${{
-        (inputs.runner-label == 'P100a' && 'tt-ubuntu-2204-P100a-viommu-stable')
-        || format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
-      }}
-    steps:
-      - name: 🧬 Checkout Repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        timeout-minutes: 20
-        with:
-          submodules: recursive
-          path: docker-job
-      - name: ⬇️  Setup Job
-        uses: ./docker-job/.github/actions/setup-job
-        timeout-minutes: 10
-        with:
-          build-artifact-name: ${{ inputs.build-artifact-name }}
-          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-          enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
-      - name: tt-train nightly tests
-        timeout-minutes: ${{ inputs.timeout }}
-        run: build/tt-train/tests/ttml_tests --gtest_filter=*NIGHTLY_*
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
-        timeout-minutes: 10
-        if: ${{ !cancelled() }}
-        with:
-          prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
-        if: always()
-  ttnn-compute-fused-tests:
-    if: ${{ inputs.run_compute_fused_tests }}
-    container:
-      image: ${{ inputs.non-harbor-docker-image || inputs.docker-image || 'docker-image-unresolved!' }}
-      env:
-        PYTHONPATH: /work
-        LD_LIBRARY_PATH: /work/build/lib
-        TT_METAL_HOME: /work
-        ARCH_NAME: ${{ inputs.arch }}
-        LOGURU_LEVEL: INFO
-        TT_METAL_SIMULATOR_HOME: /work/sim
-        TT_METAL_SIMULATOR: /work/sim/libttsim.so
-        TT_METAL_SLOW_DISPATCH_MODE: 1
-        TT_METAL_DISABLE_SFPLOADMACRO: 1
-      volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
-    defaults:
-      run:
-        shell: bash
-        working-directory: /work # https://github.com/actions/runner/issues/878
-    name: ttnn compute-fused validation tests ${{ inputs.arch }} ${{ inputs.runner-label }}
+  fetch-ttsim:
+    needs: load-test-matrix
+    if: ${{ needs.load-test-matrix.outputs.has-sim-entries == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      - name: 🧬 Checkout Repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        timeout-minutes: 20
-        with:
-          submodules: recursive
-          path: docker-job
-      - name: ⬇️  Setup Job
-        uses: ./docker-job/.github/actions/setup-job
-        timeout-minutes: 10
-        with:
-          build-artifact-name: ${{ inputs.build-artifact-name }}
-          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-          enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
-      - name: Compute ttsim asset name
-        id: ttsim-info
-        run: |
-          case "${{ inputs.arch }}" in
-            wormhole_b0) suffix="wh"; soc="wormhole_b0_80_arch.yaml" ;;
-            blackhole)   suffix="bh"; soc="blackhole_140_arch.yaml" ;;
-            *) echo "::error::Unknown architecture: ${{ inputs.arch }}"; exit 1 ;;
-          esac
-          echo "asset_name=libttsim_${suffix}.so" >> "$GITHUB_OUTPUT"
-          echo "soc_desc=${soc}" >> "$GITHUB_OUTPUT"
-      - name: Download ttsim binary
+      - name: Download wormhole_b0 ttsim binary
         uses: robinraju/release-downloader@daf26c55d821e836577a15f77d86ddc078948b05 # v1.12
         with:
           repository: tenstorrent/ttsim
           tag: ${{ inputs.ttsim-version }}
-          fileName: ${{ steps.ttsim-info.outputs.asset_name }}
+          fileName: libttsim_wh.so
           out-file-path: /tmp/ttsim
-      - name: Install ttsim
+      - name: Download blackhole ttsim binary
+        uses: robinraju/release-downloader@daf26c55d821e836577a15f77d86ddc078948b05 # v1.12
+        with:
+          repository: tenstorrent/ttsim
+          tag: ${{ inputs.ttsim-version }}
+          fileName: libttsim_bh.so
+          out-file-path: /tmp/ttsim
+      - name: Upload ttsim binaries artifact
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ttsim-binaries
+          path: /tmp/ttsim/
+          if-no-files-found: error
+          retention-days: 1
+
+  l2-nightly-tests:
+    # `always() && ...` so HW-only matrices (where fetch-ttsim was skipped) still run.
+    needs: [load-test-matrix, fetch-ttsim]
+    if: ${{ always() && needs.load-test-matrix.outputs.matrix != '[]' && needs.load-test-matrix.result == 'success' && (needs.fetch-ttsim.result == 'success' || needs.fetch-ttsim.result == 'skipped') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
+    name: ${{ matrix.test-group.name }}
+    runs-on: ${{ matrix.test-group.runs_on }}
+    container:
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: ${{ (contains(matrix.test-group.sku, 'bh_') || contains(matrix.test-group.sku, 'blackhole')) && 'blackhole' || 'wormhole_b0' }}
+        LOGURU_LEVEL: INFO
+        HF_HUB_CACHE: ${{ matrix.test-group.sku == 'bh_p150b_civ2' && '' || '/mnt/MLPerf/huggingface/hub' }}
+        TT_MM_THROTTLE_PERF: ${{ contains(matrix.test-group.sku, 'bh_') && '0' || '5' }}
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+      # HW-only flags (--device, hugepages, MLPerf, P150b LFC token) are folded
+      # into options as a single conditional string so sim_* SKUs can omit them
+      # (volumes: list items can't be conditionally dropped).
+      options: >-
+        ${{ startsWith(matrix.test-group.sku, 'sim_') && ''
+            || format('--device /dev/tenstorrent -v /dev/hugepages-1G:/dev/hugepages-1G -v /mnt/MLPerf:/mnt/MLPerf:ro {0}',
+                     matrix.test-group.sku == 'bh_p150b_civ2' && '-e TT_GH_CI_INFRA=1' || '') }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          submodules: recursive
+          path: docker-job
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
+      - name: ⬇️  Setup TTSim
+        if: ${{ startsWith(matrix.test-group.sku, 'sim_') }}
+        uses: ./docker-job/.github/actions/setup-ttsim
+        timeout-minutes: 5
+        with:
+          sku: ${{ matrix.test-group.sku }}
+      - name: ${{ matrix.test-group.name }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
-          set -euo pipefail
-          mkdir -p $TT_METAL_SIMULATOR_HOME
-          mv /tmp/ttsim/${{ steps.ttsim-info.outputs.asset_name }} $TT_METAL_SIMULATOR_HOME/libttsim.so
-          cp /work/tt_metal/soc_descriptors/${{ steps.ttsim-info.outputs.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
-      - name: ttnn compute-fused validation tests
-        timeout-minutes: 20
-        run: pytest tests/ttnn/nightly/unit_tests/operations_compute_only/fused -xv --timeout=${{ env.TEST_BUDGET_SECONDS }}
+          ${{ matrix.test-group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
