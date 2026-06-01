@@ -373,4 +373,5 @@ void kernel_main() {
 
     noc.async_read_barrier();
     noc.async_write_barrier();
+    noc.write_zeros_l1_barrier();
 }

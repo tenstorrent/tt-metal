@@ -24,6 +24,7 @@ inline void zeroPad(uint32_t cb_output_id) {
     Noc noc;
     CircularBuffer cb(cb_output_id);
     noc.async_write_zeros(cb, stick_size_bytes);
+    noc.write_zeros_l1_barrier();
 }
 
 void kernel_main() {
@@ -81,7 +82,6 @@ void kernel_main() {
             } else {
                 cb_reserve_back(cb_output_id, 1);
                 zeroPad<stick_size>(cb_output_id);
-                noc_async_read_barrier();
                 cb_push_back(cb_output_id, 1);
             }
         }

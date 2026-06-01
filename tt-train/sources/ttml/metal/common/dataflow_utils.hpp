@@ -167,8 +167,7 @@ inline void fill_reserved_tiles_with_zero(uint32_t cb_id, uint32_t start_slot, u
  *
  * Caller must call `noc.write_zeros_l1_barrier()` before consuming the CB's contents.
  */
-inline void fill_zeros_async(uint32_t cb_id, uint32_t bytes, uint32_t offset_bytes = 0) {
-    Noc noc;
+inline void fill_zeros_async(const Noc& noc, uint32_t cb_id, uint32_t bytes, uint32_t offset_bytes = 0) {
     CircularBuffer cb(cb_id);
     noc.async_write_zeros(cb, bytes, {.offset_bytes = offset_bytes});
 }

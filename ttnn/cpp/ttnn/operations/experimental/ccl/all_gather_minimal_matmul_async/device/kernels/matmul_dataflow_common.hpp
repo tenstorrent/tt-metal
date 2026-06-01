@@ -280,8 +280,7 @@ bool is_backward_k_block_iter(uint32_t k_block_iter, uint32_t k_blocks_per_devic
     return (device_iter % 2);
 }
 
-inline void fill_zeros_async(uint32_t cb_id, uint32_t bytes, uint32_t offset_bytes = 0) {
-    Noc noc;
+inline void fill_zeros_async(const Noc& noc, uint32_t cb_id, uint32_t bytes, uint32_t offset_bytes = 0) {
     CircularBuffer cb(cb_id);
     noc.async_write_zeros(cb, bytes, {.offset_bytes = offset_bytes});
 }
@@ -341,6 +340,7 @@ void read_in0_block_sync(
     // inverted range would still be a bug, hence >=.
     ASSERT(d1_end_right >= d1_start_right);
 
+    Noc noc;
     const uint32_t cb_base_write_ptr = get_write_ptr(cb_id);
     uint32_t write_ptr = cb_base_write_ptr;
     for (uint32_t i = d0_start; i < d0_end; i++) {
@@ -362,7 +362,7 @@ void read_in0_block_sync(
                 }
 #endif
             } else {
-                fill_zeros_async(cb_id, tile_size_bytes, write_ptr - cb_base_write_ptr);
+                fill_zeros_async(noc, cb_id, tile_size_bytes, write_ptr - cb_base_write_ptr);
             }
             write_ptr += tile_size_bytes;
         }
@@ -383,7 +383,7 @@ void read_in0_block_sync(
                 }
 #endif
             } else {
-                fill_zeros_async(cb_id, tile_size_bytes, write_ptr - cb_base_write_ptr);
+                fill_zeros_async(noc, cb_id, tile_size_bytes, write_ptr - cb_base_write_ptr);
             }
             write_ptr += tile_size_bytes;
         }
@@ -391,6 +391,7 @@ void read_in0_block_sync(
         write_ptr += (d1_tiles_right - (d1_end_right - d1_start_right)) * tile_size_bytes;
     }
     noc_async_read_barrier();
+    noc.write_zeros_l1_barrier();
 }
 
 /**
@@ -414,6 +415,7 @@ void read_in1_block_sync(
     // Linear topology is unidirectional: the "right" (backward) half is legitimately empty.
     ASSERT(d0_end_right >= d0_start_right);
     ASSERT(d1_end > d1_start);
+    Noc noc;
     const uint32_t cb_base_write_ptr = get_write_ptr(cb_id);
     uint32_t write_ptr = cb_base_write_ptr;
     for (uint32_t i = d0_start_left; i < d0_end_left; i++) {
@@ -426,7 +428,7 @@ void read_in1_block_sync(
                 uint32_t tile_id = i * shape.logical_d1 + j;
                 noc_async_read_page(tile_id, tensor_accessor, write_ptr);
             } else {
-                fill_zeros_async(cb_id, tile_size_bytes, write_ptr - cb_base_write_ptr);
+                fill_zeros_async(noc, cb_id, tile_size_bytes, write_ptr - cb_base_write_ptr);
             }
             write_ptr += tile_size_bytes;
         }
@@ -443,7 +445,7 @@ void read_in1_block_sync(
                 uint32_t tile_id = i * shape.logical_d1 + j;
                 noc_async_read_page(tile_id, tensor_accessor, write_ptr);
             } else {
-                fill_zeros_async(cb_id, tile_size_bytes, write_ptr - cb_base_write_ptr);
+                fill_zeros_async(noc, cb_id, tile_size_bytes, write_ptr - cb_base_write_ptr);
             }
             write_ptr += tile_size_bytes;
         }
@@ -451,6 +453,7 @@ void read_in1_block_sync(
         write_ptr += (N_block_tiles - (d1_end - d1_start)) * tile_size_bytes;
     }
     noc_async_read_barrier();
+    noc.write_zeros_l1_barrier();
 }
 
 /**

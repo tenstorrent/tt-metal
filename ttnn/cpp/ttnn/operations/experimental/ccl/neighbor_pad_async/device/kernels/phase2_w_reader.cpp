@@ -37,6 +37,7 @@ inline void zeroPad(uint32_t cb_id) {
     Noc noc;
     CircularBuffer cb(cb_id);
     noc.async_write_zeros(cb, stick_size_bytes);
+    noc.write_zeros_l1_barrier();
 }
 
 void kernel_main() {
@@ -94,7 +95,6 @@ void kernel_main() {
                 cb_reserve_back(cb_output_id, 1);
                 if (is_t_front || h_masked || is_padding_zeros) {
                     zeroPad<stick_size>(cb_output_id);
-                    noc_async_read_barrier();
                 } else {
                     // direction=0: replicate leftmost input col; direction=1: rightmost
                     uint32_t input_col = direction ? (num_interior_sticks - 1) : 0;
@@ -114,7 +114,6 @@ void kernel_main() {
                     cb_reserve_back(cb_output_id, 1);
                     if (is_t_front || h_masked) {
                         zeroPad<stick_size>(cb_output_id);
-                        noc_async_read_barrier();
                     } else {
                         // direction=0: send rightmost boundary cols (W_in - pad_id)
                         // direction=1: send leftmost boundary cols (padding - pad_id)
@@ -154,7 +153,6 @@ void kernel_main() {
                 cb_reserve_back(cb_output_id, 1);
                 if (is_t_front || is_padding_zeros) {
                     zeroPad<stick_size>(cb_output_id);
-                    noc_async_read_barrier();
                 } else {
                     // direction=0: leftmost interior col; direction=1: rightmost
                     uint32_t col = direction ? (pad2_left + num_interior_sticks - 1) : pad2_left;
@@ -171,7 +169,6 @@ void kernel_main() {
                     cb_reserve_back(cb_output_id, 1);
                     if (is_t_front) {
                         zeroPad<stick_size>(cb_output_id);
-                        noc_async_read_barrier();
                     } else {
                         uint32_t col = direction ? (pad2_left + (padding - pad_id))
                                                  : (pad2_left + num_interior_sticks - pad_id);
@@ -193,7 +190,6 @@ void kernel_main() {
                 cb_reserve_back(cb_output_id, 1);
                 if (is_t_front || is_padding_zeros) {
                     zeroPad<stick_size>(cb_output_id);
-                    noc_async_read_barrier();
                 } else {
                     uint32_t col = direction ? (pad2_left + num_interior_sticks - 1) : pad2_left;
                     uint32_t dst_l1_addr = get_write_ptr(cb_output_id);
@@ -209,7 +205,6 @@ void kernel_main() {
                     cb_reserve_back(cb_output_id, 1);
                     if (is_t_front) {
                         zeroPad<stick_size>(cb_output_id);
-                        noc_async_read_barrier();
                     } else {
                         uint32_t col = direction ? (pad2_left + (padding - pad_id))
                                                  : (pad2_left + num_interior_sticks - pad_id);

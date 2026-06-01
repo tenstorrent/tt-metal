@@ -35,8 +35,7 @@ auto make_tensor_accessor_tuple_uniform_page_size(
     return detail::make_tensor_accessor_tuple_impl(
         args_tuple, address_rt_arg_index_start, page_size, std::make_integer_sequence<uint32_t, sizeof...(Args)>());
 }
-inline void fill_zeros_async(uint32_t cb_id, uint32_t bytes, uint32_t offset_bytes = 0) {
-    Noc noc;
+inline void fill_zeros_async(const Noc& noc, uint32_t cb_id, uint32_t bytes, uint32_t offset_bytes = 0) {
     CircularBuffer cb(cb_id);
     noc.async_write_zeros(cb, bytes, {.offset_bytes = offset_bytes});
 }
@@ -88,6 +87,7 @@ void read_in0_block_sync(
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end > d1_start);
 
+    Noc noc;
     const uint32_t cb_base_write_ptr = get_write_ptr(cb_id);
     uint32_t write_ptr = cb_base_write_ptr;
     for (uint32_t i = d0_start; i < d0_end; i++) {
@@ -109,7 +109,7 @@ void read_in0_block_sync(
                 }
 #endif
             } else {
-                fill_zeros_async(cb_id, tile_size_bytes, write_ptr - cb_base_write_ptr);
+                fill_zeros_async(noc, cb_id, tile_size_bytes, write_ptr - cb_base_write_ptr);
             }
             write_ptr += tile_size_bytes;
         }
@@ -117,6 +117,7 @@ void read_in0_block_sync(
         write_ptr += (K_block_tiles - (d1_end - d1_start)) * tile_size_bytes;
     }
     noc_async_read_barrier();
+    noc.write_zeros_l1_barrier();
 }
 
 /**
@@ -136,6 +137,7 @@ void read_in1_block_sync(
     uint32_t d1_end) {
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end > d1_start);
+    Noc noc;
     const uint32_t cb_base_write_ptr = get_write_ptr(cb_id);
     uint32_t write_ptr = cb_base_write_ptr;
     for (uint32_t i = d0_start; i < d0_end; i++) {
@@ -148,7 +150,7 @@ void read_in1_block_sync(
                 uint32_t tile_id = i * shape.logical_d1 + j;
                 noc_async_read_page(tile_id, tensor_accessor, write_ptr);
             } else {
-                fill_zeros_async(cb_id, tile_size_bytes, write_ptr - cb_base_write_ptr);
+                fill_zeros_async(noc, cb_id, tile_size_bytes, write_ptr - cb_base_write_ptr);
             }
             write_ptr += tile_size_bytes;
         }
@@ -156,6 +158,7 @@ void read_in1_block_sync(
         write_ptr += (N_block_tiles - (d1_end - d1_start)) * tile_size_bytes;
     }
     noc_async_read_barrier();
+    noc.write_zeros_l1_barrier();
 }
 
 /**
