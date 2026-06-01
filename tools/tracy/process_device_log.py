@@ -19,6 +19,7 @@ from loguru import logger
 
 from tracy.common import PROFILER_ARTIFACTS_DIR
 import tracy.device_post_proc_config as device_post_proc_config
+from tracy.device_log_schema import parse_profile_log_device_csv, validate_profile_log_device_csv
 
 SUM_MARKER_ID_START = 3000
 
@@ -137,30 +138,24 @@ def import_device_profile_log(logPath):
     arch, freq, max_compute_cores = extract_device_info(logPath)
     devicesData.update(dict(deviceInfo=dict(arch=arch, freq=freq, max_compute_cores=max_compute_cores)))
 
-    df = pd.read_csv(logPath, skiprows=1, header=0, na_filter=False)
+    validate_profile_log_device_csv(logPath)
+    df = parse_profile_log_device_csv(logPath, validate=False)
 
-    # Convert trace_id and trace_id_count columns to integers
-    df.iloc[:, 8] = pd.to_numeric(df.iloc[:, 8], errors="coerce").fillna(-1).astype(int)  # trace_id
-    df.iloc[:, 9] = pd.to_numeric(df.iloc[:, 9], errors="coerce").fillna(-1).astype(int)  # trace_id_count
-
-    for row in df.itertuples():
-        assert len(row) == 16
-
-        chipID = row[1]
-        core = (row[2], row[3])
-        risc = row[4]
-        timerID = {"id": row[5], "zone_name": "", "type": "", "src_line": "", "src_file": ""}
-        timeData = row[6]
-        attachedData = 0
-        attachedData = row[7]
-        timerID["run_host_id"] = row[8]
-        timerID["trace_id"] = row[9]
-        timerID["trace_id_count"] = row[10]
-        timerID["zone_name"] = row[11]
-        timerID["type"] = row[12]
-        timerID["src_line"] = row[13]
-        timerID["src_file"] = row[14]
-        timerID["meta_data"] = row[15]
+    for record in df.to_dict(orient="records"):
+        chipID = record["PCIe slot"]
+        core = (record["core_x"], record["core_y"])
+        risc = record["RISC processor type"]
+        timerID = {"id": record["timer_id"], "zone_name": "", "type": "", "src_line": "", "src_file": ""}
+        timeData = record["time[cycles since reset]"]
+        attachedData = record["data"]
+        timerID["run_host_id"] = record["run host ID"]
+        timerID["trace_id"] = record["trace id"]
+        timerID["trace_id_count"] = record["trace id counter"]
+        timerID["zone_name"] = record["zone name"]
+        timerID["type"] = record["type"]
+        timerID["src_line"] = record["source line"]
+        timerID["src_file"] = record["source file"]
+        timerID["meta_data"] = record["meta data"]
 
         if chipID in devicesData["devices"]:
             if core in devicesData["devices"][chipID]["cores"]:

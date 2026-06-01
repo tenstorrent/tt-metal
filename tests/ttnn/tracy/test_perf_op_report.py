@@ -15,7 +15,15 @@ from tracy.process_model_log import (
 )
 from models.common.utility_functions import skip_for_blackhole
 from tracy.compare_ops_logs import compare_ops_logs
-from tracy.common import generate_logs_folder, PROFILER_CPP_DEVICE_PERF_REPORT, PROFILER_DEFAULT_OP_SUPPORT_COUNT
+from tracy.common import (
+    generate_logs_folder,
+    PROFILER_CPP_DEVICE_PERF_REPORT,
+    PROFILER_DEFAULT_OP_SUPPORT_COUNT,
+    PROFILER_DEVICE_SIDE_LOG,
+    PROFILER_LOGS_DIR,
+)
+from tracy.device_log_schema import validate_profile_log_device_csv
+from tracy.process_device_log import import_device_profile_log
 import numpy
 
 
@@ -418,3 +426,28 @@ class TestOpSupportCountWithSumProfilingEnabled:
             assert (
                 row["DEVICE COMPUTE CB RESERVE BACK [ns]"] != 0
             ), f"DEVICE COMPUTE CB RESERVE BACK [ns] is 0 for op (GLOBAL CALL COUNT={row['GLOBAL CALL COUNT']}, METAL TRACE ID={row['METAL TRACE ID']}, METAL TRACE REPLAY SESSION ID={row['METAL TRACE REPLAY SESSION ID']})"
+
+
+device_log_schema_test = {
+    "name": "DeviceLogSchema",
+    "command": 'pytest "tests/ttnn/tracy/test_trace_runs.py::test_with_ops_single_core[100-5]"',
+}
+
+
+@skip_for_blackhole()
+@pytest.mark.parametrize(
+    "run_test",
+    [pytest.param(device_log_schema_test, id=device_log_schema_test["name"])],
+    indirect=True,
+)
+class TestDeviceLogSchema:
+    def test_profile_log_device_csv_schema(self, run_test):
+        device_log_path = PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG
+        assert device_log_path.is_file(), f"Missing device log at {device_log_path}"
+
+        validate_profile_log_device_csv(device_log_path)
+        import_device_profile_log(device_log_path)
+
+        report_device_log = get_latest_ops_log_filename(run_test["name"]).parent / PROFILER_DEVICE_SIDE_LOG
+        assert report_device_log.is_file(), f"Missing copied device log in report folder: {report_device_log}"
+        validate_profile_log_device_csv(report_device_log)
