@@ -147,6 +147,7 @@ class VoxtralTTTextModel:
     def forward(self, *args, **kwargs):
         return self.inner.forward(*args, **kwargs)
 
+    # handle the tt tensot coming from embed coming from tt
     def prefill_from_embeds(
         self,
         inputs_embeds: torch.Tensor,
@@ -174,6 +175,7 @@ class VoxtralTTTextModel:
             return last_hidden, layer_hiddens
         return last_hidden
 
+    #  handle tt tensor instead of torch tensor
     def decode_step_from_embeds(
         self,
         x_embed: torch.Tensor,
@@ -187,6 +189,7 @@ class VoxtralTTTextModel:
         activation_dtype = _decode_activation_dtype(args) or ttnn.bfloat16
         x_4d = x_embed.reshape(1, 1, 1, dim).to(dtype=torch.bfloat16).contiguous()
 
+        # for demo it should not be dummy (only for test )  ,   ii) all things move to ttnn tensor rather than torch tensor , iii) initialization shloud be done in init not during runtime untill reqiured
         dummy_token = torch.zeros(1, dtype=torch.int64)
         current_pos_t = torch.tensor([current_pos_idx], dtype=torch.int64)
         _, current_pos_tt, rope_idxs, page_table = self.prepare_inputs_decode(dummy_token, current_pos_t)
@@ -195,7 +198,7 @@ class VoxtralTTTextModel:
         rot_mats_local = (
             self.inner.rope_local_setup.get_rot_mats(rope_idxs) if hasattr(self.inner, "rope_local_setup") else None
         )
-
+        # check if it reqiured for the run time f not put it init
         decode_mem_cfg = args.get_residual_mem_config(Mode.DECODE, self.inner.prefetcher)
         x_tt = ttnn.from_torch(
             x_4d,
@@ -221,13 +224,13 @@ class VoxtralTTTextModel:
             if collect_layer_hiddens:
                 host_layer = self.inner.concat_host_output(x_tt)
                 layer_hiddens[f"layer.{i}"] = host_layer[0, 0, 0, :dim].to(dtype=torch.bfloat16)
-
+        # these aslo shlould be in init if it is one time initialization,
         lm_norm_cfg = args.get_norm_config("lm_head", Mode.DECODE, self.inner.prefetcher)
         x_norm = self.inner.norm(x_tt, mode=Mode.DECODE, norm_config=lm_norm_cfg)
         ttnn.deallocate(x_tt)
-        host = self.inner.concat_host_output(x_norm)
+        host = self.inner.concat_host_output(x_norm)  ## concat should be change into tt not i torch
         ttnn.deallocate(x_norm)
-        hidden = host[0, 0, 0, :dim].to(dtype=torch.bfloat16)
+        hidden = host[0, 0, 0, :dim].to(dtype=torch.bfloat16)  ##  check this , hidden should be in tt tensor
         if collect_layer_hiddens:
             layer_hiddens["layer.final_norm"] = hidden
             return hidden, layer_hiddens
@@ -268,3 +271,6 @@ class VoxtralTTTextModel:
         )
         ttnn.deallocate(x_tt)
         return x_norm
+
+
+# check this tt why dont call it from the text model class
