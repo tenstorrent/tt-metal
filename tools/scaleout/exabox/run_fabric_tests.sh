@@ -219,7 +219,9 @@ fi
 # Create output directory if it doesn't exist
 mkdir -p "$OUTPUT_DIR"
 
-LOG_FILE="$OUTPUT_DIR/fabric_tests_$(date +%Y%m%d_%H%M%S).log"
+RUN_TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
+LOG_FILE="$OUTPUT_DIR/fabric_tests_${RUN_TIMESTAMP}.log"
+Z_RANKFILE=""   # 4x32z OpenMPI rankfile; set below when CONFIG=4x32z
 
 echo "=========================================="
 echo "Running fabric tests..."
@@ -252,7 +254,8 @@ fi
 # Marker used to detect reports written during this run (vs. stale ones from a
 # previous run). We compare report mtimes against this file with bash's `-nt`.
 RUN_START_MARKER="$(mktemp)"
-trap 'rm -f "$RUN_START_MARKER"' EXIT
+cleanup_run_artifacts() { rm -f "$RUN_START_MARKER"; }
+trap cleanup_run_artifacts EXIT
 
 if [[ "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "4x32z" ]]; then
     # Multi-mesh Z configs: launch one MPI rank per mesh, each with its own
@@ -260,7 +263,7 @@ if [[ "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "4x32z" ]]; t
     # alongside the intra-mesh N/S/E/W links during neighbor exchange.
     # NUM_MESHES is set per-config below (2x4x4z has only 2 meshes).
     Z_VISIBLE_DEVICES=()
-    Z_RANK_HOSTS=()      # per-rank host pinning (rank i -> Z_RANK_HOSTS[i]); empty => use Z_GLOBAL_HOST
+    Z_RANK_HOSTS=()      # 4x32z host list (for rankfile + logging); empty for single-host Z configs
     Z_GLOBAL_HOST=()     # global --host args (single-host packing case)
 
     if [[ "$CONFIG" == "4x8z" ]]; then
@@ -304,9 +307,19 @@ if [[ "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "4x32z" ]]; t
             exit 1
         fi
         # mpi-docker requires --host/--hostfile in global MPI args (before the first
-        # -np). Per-rank --host below still pins rank i -> mesh i deterministically.
-        Z_GLOBAL_HOST=(--host "$HOSTS")
+        # -np). MPMD with per-segment --host or global host:1 slot syntax does NOT
+        # reliably pin ranks when each segment is a separate -np 1 (rank 0 can still
+        # land on the launch node). Use an OpenMPI rankfile + --map-by rankfile,
+        # matching scaleout_configs/full_rankfile and tt-run's production pattern.
+        Z_RANKFILE="$OUTPUT_DIR/fabric_rankfile_${RUN_TIMESTAMP}.txt"
+        : > "$Z_RANKFILE"
+        for ((i = 0; i < NUM_MESHES; i++)); do
+            echo "rank $i=${Z_RANK_HOSTS[$i]} slot=0" >> "$Z_RANKFILE"
+        done
+        Z_GLOBAL_HOST=(--hostfile "$Z_RANKFILE" --map-by "rankfile:file=$Z_RANKFILE")
         echo "Running multi-mesh 4x32z (4 Z-connected 8x4 torus galaxies); rank i pinned to host i:"
+        echo "Rankfile: $Z_RANKFILE"
+        cat "$Z_RANKFILE"
         for ((i = 0; i < NUM_MESHES; i++)); do
             echo "  rank $i -> mesh_id $i -> ${Z_RANK_HOSTS[$i]}"
         done
@@ -315,16 +328,14 @@ if [[ "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "4x32z" ]]; t
 
     # Assemble the per-rank ":"-separated MPMD segments shared by the docker
     # and no-docker launch paths. Each segment carries its own TT_MESH_ID (and,
-    # for 4x8z, TT_VISIBLE_DEVICES; for 4x32z, an explicit --host pin).
+    # for 4x8z/2x4x4z, TT_VISIBLE_DEVICES). Host placement for 4x32z is handled
+    # by the OpenMPI rankfile in Z_GLOBAL_HOST, not per-segment --host.
     # TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS matches full_rank_binding.yaml so the
     # slowest ethernet handshakes don't trip the Fabric Router Sync timeout.
     Z_SEGMENTS=()
     for ((i = 0; i < NUM_MESHES; i++)); do
         [[ $i -gt 0 ]] && Z_SEGMENTS+=(":")
         Z_SEGMENTS+=(-np 1)
-        if [[ "${#Z_RANK_HOSTS[@]}" -gt 0 ]]; then
-            Z_SEGMENTS+=(--host "${Z_RANK_HOSTS[$i]}")
-        fi
         Z_SEGMENTS+=(-x TT_MESH_ID="$i")
         if [[ "${#Z_VISIBLE_DEVICES[@]}" -gt 0 ]]; then
             Z_SEGMENTS+=(-x TT_VISIBLE_DEVICES="${Z_VISIBLE_DEVICES[$i]}")
