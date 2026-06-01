@@ -164,7 +164,9 @@ After entering the container:
    python3 -m ttnn.examples.usage.run_op_on_device
    ```
 
-If you plan to run models from a source checkout, continue with the source-based environment setup for model-specific dependencies and environment variables.
+- You are all set to explore the packaged environment. Try some [TT-NN Basic Examples](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/usage.html#basic-examples) next.
+
+If you plan to run models or edit code from a local source checkout instead of staying inside the packaged container environment, continue with the source-based environment setup for model-specific dependencies and environment variables.
 
 ---
 
