@@ -900,29 +900,27 @@ struct UnaryBcast : UnaryBcastTag {
                                                         (Policy == Pipelined);
     static constexpr bool           clashes_with_fpu  = true;
 
-    // Prev-CB fold (D2): UnaryBcast loads Cb to srca; the srca reconfig is done in init()
-    // (single-arg, format-aware). Pack-side reconfig is owned by the downstream PackTile
-    // (PackTileReconfig::Output), exactly like BinaryFpu — UnaryBcast never configures pack.
-    static constexpr uint32_t       reconfig_srca_cb  = NO_PREV_CB;
-    static constexpr uint32_t       reconfig_srcb_cb  = NO_PREV_CB;
+    // Prev-CB fold (D2): UnaryBcast binds BOTH srca and srcb to Cb. The broadcast datacopy MOP
+    // drives the FPU SrcB lane (ELWADD + SRCB_BCAST_*), so srcb must be reprogrammed too — a
+    // srca-only reconfig leaves ALU_FORMAT_SPEC_REG1_SrcB stale from a preceding two-operand op
+    // (e.g. layernorm's BinaryFpu(cb_ex2, cb_eps) leaves SrcB = cb_eps), which corrupts the bcast.
+    // Declaring both CBs lets the chain's reconfig fold (emit_pre_element_transitions) emit the
+    // reconfig before init() AND record Cb as the post-element srca/srcb state for the next
+    // element — so a subsequent srca/srcb reader sees the correct prev-CB and won't wrongly elide.
+    // Pack-side reconfig is owned by the downstream PackTile (PackTileReconfig::Output), exactly
+    // like BinaryFpu — UnaryBcast never configures pack.
+    static constexpr uint32_t       reconfig_srca_cb  = (Reconfig == UnaryBcastReconfig::Input) ? Cb : NO_PREV_CB;
+    static constexpr uint32_t       reconfig_srcb_cb  = (Reconfig == UnaryBcastReconfig::Input) ? Cb : NO_PREV_CB;
     static constexpr uint32_t       reconfig_pack_cb  = NO_PREV_CB;
 
     static ALWI void init() {
         constexpr auto bt = static_cast<ckernel::BroadcastType>(static_cast<uint8_t>(Dim));
         // Small per-element init only — the caller owns BIG init (compute_kernel_hw_startup /
-        // a boot unary_bcast_init). This does NOT re-run any hw_configure or pack init.
-        //   1. format reconfig of BOTH srca and srcb to Cb (UnaryBcastReconfig::Input). The
-        //      broadcast datacopy MOP drives the FPU SrcB lane (ELWADD + SRCB_BCAST_*), so srcb
-        //      must be reprogrammed too — a srca-only reconfig leaves ALU_FORMAT_SPEC_REG1_SrcB
-        //      stale from a preceding two-operand op (e.g. layernorm's BinaryFpu(cb_ex2, cb_eps)
-        //      leaves SrcB = cb_eps), which corrupts the bcast. No-op at the LLK level when the
-        //      formats already match.
-        //   2. the bcast datacopy MOP (unpack-A + math datacopy), icb-only — mirrors the
-        //      MOP-init portion of `unary_bcast_init`, minus every BIG hw_configure / pack line.
-        // The pack target is reconfigured by the downstream PackTile (PackTileReconfig::Output).
-        if constexpr (Reconfig == UnaryBcastReconfig::Input) {
-            reconfig_data_format(Cb, Cb);
-        }
+        // a boot unary_bcast_init). This does NOT re-run any hw_configure or pack init, and it
+        // does NOT do the srca/srcb format reconfig: that is fold-driven (see reconfig_srca_cb /
+        // reconfig_srcb_cb above), emitted by emit_pre_element_transitions() before this init().
+        // init() emits only the bcast datacopy MOP (unpack-A + math datacopy), icb-only — mirrors
+        // the MOP-init portion of `unary_bcast_init`, minus every BIG hw_configure / pack line.
 #if defined(TRISC_UNPACK) || defined(TRISC_MATH)
         const std::uint32_t dst_format = get_operand_dst_format(Cb);
 #ifndef ARCH_QUASAR
