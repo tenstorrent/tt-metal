@@ -268,7 +268,7 @@ def test_linear_fused_activation_numerical_stability(device, activation):
     in0_t = ttnn.from_torch(in0, layout=ttnn.TILE_LAYOUT, device=device)
     in1_t = ttnn.from_torch(in1, layout=ttnn.TILE_LAYOUT, device=device)
 
-    out = ttnn.matmul(in0_t, in1_t, activation=activation)
+    out = ttnn.linear(in0_t, in1_t, bias=None, activation=activation)
     ttnn.synchronize_device(device)
     out_torch = ttnn.to_torch(out).to(torch.float32)
 
@@ -1116,7 +1116,7 @@ def test_linear_bias_rejected_on_multicore_reuse_program_config(device):
         per_core_N=n // 32,
     )
 
-    with pytest.raises(RuntimeError, match="Bias is not supported for this matmul program config"):
+    with pytest.raises(RuntimeError, match="Bias is not supported for this matmul program config:"):
         ttnn.linear(in0, in1, bias=bias, program_config=program_config)
 
 

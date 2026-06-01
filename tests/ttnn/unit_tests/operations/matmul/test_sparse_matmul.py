@@ -651,15 +651,16 @@ def _make_sparse_inputs(device, b=1, s=4, m=32, k=128, n=512, num_experts=8, til
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     nnz = b * s * num_experts
+    core_x, core_y = 4, 4
     program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=ttnn.CoreCoord(4, 4),
+        compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
         in0_block_w=1,
         out_subblock_h=1,
         out_subblock_w=1,
         out_block_h=1,
         out_block_w=1,
         per_core_M=m // tile_h,
-        per_core_N=int(math.ceil(n / tile_w)) // 16,
+        per_core_N=int(math.ceil(n / tile_w)) // (core_x * core_y),
         fuse_batch=False,
         fused_activation=None,
         mcast_in0=True,

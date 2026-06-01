@@ -424,22 +424,26 @@ void validate_matmul_fused_operations(
     // Determine which fused operations the chosen program config supports.
     bool config_supports_fused_ops = false;
     std::visit(
-        [&config_supports_fused_ops](const auto& pc) {
-            using T = std::decay_t<decltype(pc)>;
-            // MultiCore and Reuse configs do not support fused bias or activation.
-            // All other configs (multicast, 1D, DRAM-sharded variants) support both.
-            config_supports_fused_ops = !std::is_same_v<T, operations::matmul::MatmulMultiCoreProgramConfig> &&
-                                        !std::is_same_v<T, operations::matmul::MatmulMultiCoreReuseProgramConfig>;
+        [&config_supports_fused_ops](const auto& program_config) {
+            using ProgramConfigType = std::decay_t<decltype(program_config)>;
+            // MatmulMultiCoreProgramConfig and MatmulMultiCoreReuseProgramConfig have no
+            // bias / fused_activation kernel paths. Other configs support both; gather_in0
+            // on 1D multicast rejects bias separately in its dedicated check below.
+            config_supports_fused_ops =
+                !std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreProgramConfig> &&
+                !std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseProgramConfig>;
         },
         chosen_program_config);
 
     // Reject bias or activation if the selected config does not support them.
     TT_FATAL(
         !optional_bias.has_value() || config_supports_fused_ops,
-        "Bias is not supported for this matmul program config");
+        "Bias is not supported for this matmul program config: {}",
+        typeid(chosen_program_config).name());
     TT_FATAL(
         !fused_activation.has_value() || config_supports_fused_ops,
-        "Fused activation is not supported for this matmul program config");
+        "Fused activation is not supported for this matmul program config: {}",
+        typeid(chosen_program_config).name());
 }
 
 bool get_broadcast_batch(
