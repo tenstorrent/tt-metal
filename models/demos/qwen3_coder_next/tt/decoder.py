@@ -1,6 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Hybrid decoder layer: DeltaNet or GQA Attention + MoE (with shared expert)."""
+"""Hybrid decoder layer: DeltaNet or GQA Attention + MoE (with shared expert).
+
+Uses EP-aware MoE (TtMoEEPLayer) when multiple chips are available,
+falling back to single-chip MoE (TtMoE) when EP is not configured.
+"""
 
 import torch
 import ttnn
@@ -8,6 +12,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.demos.qwen3_coder_next.tt.deltanet import TtGatedDeltaNet
 from models.demos.qwen3_coder_next.tt.attention import TtGatedAttention
 from models.demos.qwen3_coder_next.tt.moe import TtMoE
+from models.demos.qwen3_coder_next.tt.moe_ep import TtMoEEPLayer, EPConfig
 
 
 TILE = 32
@@ -30,7 +35,7 @@ class SimpleRMSNorm(LightweightModule):
 
 
 class TtHybridDecoderLayer(LightweightModule):
-    def __init__(self, device, state_dict, layer_idx, config, dtype=ttnn.bfloat16):
+    def __init__(self, device, state_dict, layer_idx, config, dtype=ttnn.bfloat16, ep_config=None):
         super().__init__()
         self.layer_idx = layer_idx
         self.layer_type = config.layer_types[layer_idx]
@@ -41,7 +46,10 @@ class TtHybridDecoderLayer(LightweightModule):
             self.token_mixer = TtGatedAttention(device, state_dict, layer_idx, config, dtype=dtype)
 
         # Qwen3-Coder-Next uses MoE instead of dense MLP
-        self.moe = TtMoE(device, state_dict, layer_idx, config, dtype=dtype)
+        if ep_config is not None:
+            self.moe = TtMoEEPLayer(device, state_dict, layer_idx, config, ep_config, dtype=dtype)
+        else:
+            self.moe = TtMoE(device, state_dict, layer_idx, config, dtype=dtype)
 
         prefix = f"model.layers.{layer_idx}"
         self.input_layernorm = SimpleRMSNorm(

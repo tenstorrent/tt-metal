@@ -8,6 +8,7 @@ Supports:
   2. Decode: autoregressive token generation
   3. Trace-based decode: captured trace replay for zero-dispatch overhead
      (requires all layers to be device-only — enable with use_trace=True)
+  4. EP-aware MoE dispatch (when ep_config is provided)
 """
 
 import os
@@ -17,15 +18,18 @@ import ttnn
 
 from models.demos.qwen3_coder_next.tt.model import TtQwen3CoderNextModel
 from models.demos.qwen3_coder_next.tt.model_config import Qwen3CoderNextConfig
+from models.demos.qwen3_coder_next.tt.moe_ep import EPConfig
 
 USE_TRACE = os.environ.get("QWEN_USE_TRACE", "0") == "1"
 
 
 class Qwen3CoderNextGenerator:
-    def __init__(self, model: TtQwen3CoderNextModel, config: Qwen3CoderNextConfig, tokenizer=None):
+    def __init__(self, model: TtQwen3CoderNextModel, config: Qwen3CoderNextConfig, tokenizer=None,
+                 ep_config: EPConfig = None):
         self.model = model
         self.config = config
         self.tokenizer = tokenizer
+        self.ep_config = ep_config
         self.deltanet_state = model.create_deltanet_state()
         self.kv_caches = {}
         self.position = 0

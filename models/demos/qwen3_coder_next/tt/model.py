@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Full Qwen3-Coder-Next model in TT-NN for single P150a."""
+"""Full Qwen3-Coder-Next model in TT-NN for single/multi-chip P150a."""
 
 import math
 
@@ -10,22 +10,27 @@ from models.common.lightweightmodule import LightweightModule
 from models.demos.qwen3_coder_next.tt.decoder import TtHybridDecoderLayer
 from models.demos.qwen3_coder_next.tt.deltanet import TtDeltaNetState
 from models.demos.qwen3_coder_next.tt.model_config import Qwen3CoderNextConfig
+from models.demos.qwen3_coder_next.tt.moe_ep import EPConfig
 
 
 class TtQwen3CoderNextModel(LightweightModule):
-    def __init__(self, device, state_dict, config: Qwen3CoderNextConfig, dtype=ttnn.bfloat16):
+    def __init__(self, device, state_dict, config: Qwen3CoderNextConfig, dtype=ttnn.bfloat16,
+                 ep_config: EPConfig = None):
         super().__init__()
         self.device = device
         self.config = config
         self.dtype = dtype
         self.num_layers = config.num_hidden_layers
+        self.ep_config = ep_config
 
         embed_w = state_dict["model.embed_tokens.weight"]
         self.embedding_weight = embed_w  # keep on CPU for lookup
 
         self.layers = []
         for i in range(self.num_layers):
-            layer = TtHybridDecoderLayer(device, state_dict, i, config, dtype=dtype)
+            layer = TtHybridDecoderLayer(
+                device, state_dict, i, config, dtype=dtype, ep_config=ep_config
+            )
             self.layers.append(layer)
 
         TILE = 32
