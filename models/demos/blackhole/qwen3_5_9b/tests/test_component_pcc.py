@@ -239,7 +239,8 @@ class TestDeltaNet:
     def test_deltanet_vs_torch(self, device, setup):
         """Compare TTNN deltanet against torch reference for layer 0."""
         args, sd, raw = setup
-        from models.demos.blackhole.qwen3_5_9b.tt.qwen35_gated_deltanet import Qwen35GatedDeltaNet
+        from models.demos.blackhole.qwen3_5_9b.tt.gdn import GDNConfig, Qwen35GatedDeltaNet
+        from models.demos.blackhole.qwen3_5_9b.utils.substate import substate
         from models.experimental.gated_attention_gated_deltanet.torch_functional.gated_deltanet import (
             gated_deltanet_forward,
         )
@@ -290,7 +291,9 @@ class TestDeltaNet:
         )
 
         # TTNN
-        deltanet = Qwen35GatedDeltaNet(args, sd, layer_num, device)
+        deltanet = Qwen35GatedDeltaNet(
+            device, GDNConfig.from_args(args), substate(sd, f"layers.{layer_num}.linear_attn")
+        )
         deltanet.reset_state(B)
         x_t = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
         out = ttnn.to_torch(deltanet.forward(x_t, mode="recurrent"))
