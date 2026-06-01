@@ -1134,6 +1134,69 @@ class TtTransformer(LightweightModule):
             ttnn.to_memory_config(self.tt_ccl.tt_lm_head_buffer, ttnn.DRAM_MEMORY_CONFIG)
         return lm_head_output
 
+    def prefill_chunked(
+        self,
+        x,
+        rot_mats,
+        gdn_chunk_size,
+        user_id=0,
+        page_table=None,
+        kv_cache=None,
+        chunk_start_idx_tensor=None,
+        batch_size=1,
+    ):
+        """Long-context prefill driver (GDN-only chunking).
+
+        GDN/linear-attention layers are processed in sequence-chunks of
+        ``gdn_chunk_size``, carrying conv + recurrent state across chunks via the
+        persistent dn_state_buffer / conv_state_buffer (the DeltaNet block seeds
+        from them when ``attention._pf_chunk_idx > 0``). Full-attention layers run
+        single-pass over the whole sequence (paged-KV write + flash SDPA — no
+        chunked-SDPA needed). Returns the post-layer-loop hidden (col-sharded,
+        pre-final-norm), identical to ``forward(mode='prefill')`` so the caller's
+        norm + lm_head path is unchanged.
+        """
+        seq_len = x.shape[2]
+        cos_full, sin_full = (rot_mats[0], rot_mats[1]) if rot_mats is not None else (None, None)
+        for i, layer in enumerate(self.layers):
+            is_gdn = getattr(layer, "is_linear_attention_layer", False)
+            layer_chunk = gdn_chunk_size if is_gdn else seq_len
+            outs = []
+            for ci, cs in enumerate(range(0, seq_len, layer_chunk)):
+                ce = min(cs + layer_chunk, seq_len)
+                x_chunk = x if (cs == 0 and ce == seq_len) else ttnn.slice(x, (0, 0, cs, 0), (1, 1, ce, x.shape[-1]))
+                if is_gdn:
+                    layer.attention._pf_chunk_idx = ci  # 0 => fresh state, >0 => carry from buffers
+                    rm = None
+                else:
+                    rm = [cos_full[:, :, cs:ce, :], sin_full[:, :, cs:ce, :]] if cos_full is not None else None
+                xo, _ = layer(
+                    x_chunk,
+                    None,
+                    None,
+                    rm,
+                    user_id,
+                    "prefill",
+                    page_table,
+                    chunk_page_table=None,
+                    chunk_start_idx=0,
+                    chunk_start_idx_tensor=chunk_start_idx_tensor,
+                    kv_cache=kv_cache[i] if kv_cache is not None else None,
+                    batch_size=batch_size,
+                )
+                if is_gdn:
+                    layer.attention._pf_chunk_idx = None
+                if x_chunk is not x:
+                    ttnn.deallocate(x_chunk)
+                outs.append(xo)
+            x_new = outs[0] if len(outs) == 1 else ttnn.concat(outs, dim=2)
+            if len(outs) > 1:
+                for o in outs:
+                    ttnn.deallocate(o)
+            ttnn.deallocate(x)
+            x = x_new
+        return x
+
     def __del__(self):
         # Guard against __del__ firing when __init__ raised before
         # self.tt_ccl was set (otherwise AttributeError hides the real

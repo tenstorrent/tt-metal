@@ -15,11 +15,13 @@ Why a dedicated demo (vs the existing demo/ files):
   qwen3.6 model (hybrid linear/full attention) via the proven construction
   from ``tests/test_decode_perf_intrace.py``.
 
-Prefill is measured both COLD (first call — includes program compile) and WARM
-(second call — program cache hot), so the reported TTFT is the warm number,
-matching how a served model behaves after warmup. The decode loop is captured
-as a single trace and replayed (the production decode path), so decode
-throughput is the traced steady-state number.
+Prefill runs ONCE (a 2nd in-place ``model.forward(mode="prefill")`` corrupts
+state — see the note at the prefill call site), so the reported TTFT is COLD
+(includes one-time kernel compilation); a true warm/served TTFT would route
+through ``tt/generator.py::prefill_forward_text`` (warmup-compiles every ISL
+bucket, then traces). The decode loop IS captured as a trace and replayed (the
+production decode path), so decode throughput is the warm/traced steady-state
+number.
 
 ISL is selected with ``QWEN36_PERF_T_PREFILL`` (default 128). Values >= 1024
 load the matching ``input_data_long_{N}k.json`` Gutenberg-context prompt;
@@ -234,6 +236,20 @@ def _run_prefill(model, page_table_tt, prefill_inputs):
     """Run one prefill forward over the persistent inputs. Idempotent for a
     fixed prompt (writes user_id=0 / chunk_start_idx=0 KV + DeltaNet state), so
     compile / capture / replay all target the same slots — safe to repeat."""
+    # Chunked-prefill path (long context): GDN layers processed in sequence-chunks
+    # of QWEN36_PREFILL_CHUNK tokens, carrying conv+recurrent state; full-attn single-pass.
+    _pf_chunk = os.environ.get("QWEN36_PREFILL_CHUNK")
+    if _pf_chunk:
+        return model.prefill_chunked(
+            prefill_inputs["x_tt"],
+            (prefill_inputs["cos_tt"], prefill_inputs["sin_tt"]),
+            gdn_chunk_size=int(_pf_chunk),
+            user_id=0,
+            page_table=page_table_tt,
+            kv_cache=None,
+            chunk_start_idx_tensor=prefill_inputs["chunk_start_idx_tt"],
+            batch_size=1,
+        )
     return model.forward(
         prefill_inputs["x_tt"],
         current_pos=None,
@@ -313,9 +329,22 @@ def test_qwen36_demo_batch1(bh_glx_mesh):
         model.tt_ccl.reset_gather_and_buffer_idx()
     prefill_inputs = _build_prefill_inputs(model, bh_glx_mesh, args, x_prefill, page_table_tt)
 
+    # Profiler switch (QWEN36_PREFILL_PROFILE=1): wrap prefill in tracy signposts for a
+    # device-trace capture of the prefill region (mirrors llama3_70b_galaxy text_qwen_demo).
+    # Run under `python -m tracy ...` to collect; no-op signpost if tracy unavailable.
+    _prefill_profile = os.environ.get("QWEN36_PREFILL_PROFILE", "0") == "1"
+    if _prefill_profile:
+        try:
+            from tracy import signpost
+        except ImportError:
+            signpost = lambda *_a, **_k: None  # noqa: E731
     profiler.start("inference_prefill")
+    if _prefill_profile:
+        signpost("prefill_start")
     prefill_hidden_tt = _run_prefill(model, page_table_tt, prefill_inputs)
     ttnn.synchronize_device(bh_glx_mesh)
+    if _prefill_profile:
+        signpost("prefill_stop")
     profiler.end("inference_prefill")
 
     last_prompt_logits = _gather_prefill_logits_to_cpu(
@@ -340,6 +369,29 @@ def test_qwen36_demo_batch1(bh_glx_mesh):
         layout=ttnn.ROW_MAJOR_LAYOUT,
         mesh_mapper=ttnn.ReplicateTensorToMesh(bh_glx_mesh),
     )
+    # On-device sampling (Qwen3.6 thinking-mode defaults: temp=1.0, top_p=0.95, top_k=20).
+    # Replaces greedy argmax in the decode loop — greedy degenerates into repetition on long
+    # context. Disable with QWEN36_SAMPLE=0. Params overridable via QWEN36_TEMP/TOP_P/TOP_K.
+    _use_sampling = os.environ.get("QWEN36_SAMPLE", "1") != "0"
+    tt_sampling = None
+    if _use_sampling:
+        from models.common.sampling.tt_sampling import TTSampling
+
+        # TTSampling/ttnn.sampling expects k/p/temp as per-user torch tensors of length 32
+        # (decode is 32-user packed; the op asserts k.shape == [32]), NOT scalars.
+        _bs = 32
+        _k = int(os.environ.get("QWEN36_TOP_K", "20"))
+        _p = float(os.environ.get("QWEN36_TOP_P", "0.95"))
+        _t = float(os.environ.get("QWEN36_TEMP", "1.0"))
+        tt_sampling = TTSampling(
+            mesh_device=bh_glx_mesh,
+            tt_ccl=model.tt_ccl,
+            args=args,
+            k=torch.tensor([_k] * _bs, dtype=torch.int32),
+            p=torch.tensor([_p] * _bs, dtype=torch.float32),
+            temp=torch.tensor([_t] * _bs, dtype=torch.float32),
+        )
+
     model.set_trace_decode_mode(True)
 
     def _run_decode_intrace():
@@ -371,27 +423,34 @@ def test_qwen36_demo_batch1(bh_glx_mesh):
             batch_size=1,
         )
         logits = lm_head_out[0] if isinstance(lm_head_out, list) else lm_head_out
-        num_links = min(3, model.model_config["GALAXY_NUM_LINKS"])
-        logits_bf16 = ttnn.typecast(logits, dtype=ttnn.bfloat16)
-        logits_full = model.tt_ccl.line_all_gather(
-            logits_bf16, dim=3, num_links=num_links, cluster_axis=0, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
-        logits_bf16.deallocate(True)
-        logits_untiled = ttnn.untilize(logits_full, use_multicore=True)
-        logits_full.deallocate(True)
-        V_gathered = logits_untiled.shape[-1]
-        logits_row0 = ttnn.slice(
-            logits_untiled, [0, 0, 0, 0], [1, 1, 1, V_gathered], memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
-        logits_untiled.deallocate(True)
-        tok_1x1 = ttnn.argmax(logits_row0, dim=3, keepdim=True, use_multicore=True)
-        logits_row0.deallocate(True)
-        if isinstance(tok_1x1, list):
-            tok_1x1 = tok_1x1[0]
-        tok_broadcast = ttnn.repeat(tok_1x1, ttnn.Shape((1, 1, 1, 32)))
-        tok_1x1.deallocate(True)
-        ttnn.copy(input_a=tok_broadcast, input_b=tt_out_tok)
-        tok_broadcast.deallocate(True)
+        if tt_sampling is not None:
+            # On-device top-k/top-p/temperature sampling; writes the sampled token in-place
+            # into tt_out_tok (the next decode step's embedding input), exactly like
+            # llama3_70b_galaxy/demo/demo_qwen_decode.py.
+            tt_sampling(logits, tt_out_tok=tt_out_tok)
+        else:
+            # Greedy fallback (QWEN36_SAMPLE=0): gather full vocab + argmax.
+            num_links = min(3, model.model_config["GALAXY_NUM_LINKS"])
+            logits_bf16 = ttnn.typecast(logits, dtype=ttnn.bfloat16)
+            logits_full = model.tt_ccl.line_all_gather(
+                logits_bf16, dim=3, num_links=num_links, cluster_axis=0, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            logits_bf16.deallocate(True)
+            logits_untiled = ttnn.untilize(logits_full, use_multicore=True)
+            logits_full.deallocate(True)
+            V_gathered = logits_untiled.shape[-1]
+            logits_row0 = ttnn.slice(
+                logits_untiled, [0, 0, 0, 0], [1, 1, 1, V_gathered], memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            logits_untiled.deallocate(True)
+            tok_1x1 = ttnn.argmax(logits_row0, dim=3, keepdim=True, use_multicore=True)
+            logits_row0.deallocate(True)
+            if isinstance(tok_1x1, list):
+                tok_1x1 = tok_1x1[0]
+            tok_broadcast = ttnn.repeat(tok_1x1, ttnn.Shape((1, 1, 1, 32)))
+            tok_1x1.deallocate(True)
+            ttnn.copy(input_a=tok_broadcast, input_b=tt_out_tok)
+            tok_broadcast.deallocate(True)
         ttnn.plus_one(
             cur_pos_tt,
             sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
@@ -444,6 +503,24 @@ def test_qwen36_demo_batch1(bh_glx_mesh):
     except Exception:
         pass
 
+    # ---- Warm prefill TTFT (compile EXCLUDED), matching the llama3_70b_galaxy demo ----
+    # The timed prefill above was COLD (first run compiles every kernel). Re-run prefill once
+    # more with warm kernels for a compile-excluded TTFT comparable to traced demos. Done AFTER
+    # decode so this (state-overwriting) re-run cannot affect decode coherence; output discarded.
+    ttft_warm_s = None
+    try:
+        if hasattr(model, "tt_ccl") and hasattr(model.tt_ccl, "reset_gather_and_buffer_idx"):
+            model.tt_ccl.reset_gather_and_buffer_idx()
+        warm_inputs = _build_prefill_inputs(model, bh_glx_mesh, args, x_prefill, page_table_tt)
+        profiler.start("inference_prefill_warm")
+        warm_hidden = _run_prefill(model, page_table_tt, warm_inputs)
+        ttnn.synchronize_device(bh_glx_mesh)
+        profiler.end("inference_prefill_warm")
+        ttnn.deallocate(warm_hidden)
+        ttft_warm_s = profiler.get_duration("inference_prefill_warm")
+    except Exception as _e:
+        print(f"[demo] warm prefill timing skipped: {str(_e)[:140]}")
+
     profiler.end("run")
 
     # ---- Profiler summary (llama70b-style derivations) ----
@@ -460,6 +537,9 @@ def test_qwen36_demo_batch1(bh_glx_mesh):
     print("=" * 80)
     print(f"  real prompt tokens          : {T_prompt}")
     print(f"  TTFT (cold, incl. compile)  : {ttft_s * 1000:9.1f} ms")
+    if ttft_warm_s is not None:
+        print(f"  TTFT (warm, compile excl.)  : {ttft_warm_s * 1000:9.1f} ms   <- compare vs traced demos")
+        print(f"  prefill throughput (warm)   : {_T_PREFILL / ttft_warm_s:9.1f} tok/s")
     print(f"  prefill throughput          : {prefill_tok_s:9.1f} tok/s")
     print(f"  decode latency / step       : {mean_decode_s * 1000:9.2f} ms")
     print(f"  decode throughput / user    : {decode_tok_s_user:9.2f} tok/s/user")
@@ -472,6 +552,7 @@ def test_qwen36_demo_batch1(bh_glx_mesh):
         "isl": _T_PREFILL,
         "real_prompt_tokens": T_prompt,
         "ttft_s_cold_incl_compile": ttft_s,
+        "ttft_s_warm_compile_excl": ttft_warm_s,
         "prefill_tok_s": prefill_tok_s,
         "decode_ms_per_step": mean_decode_s * 1000,
         "decode_tok_s_user": decode_tok_s_user,

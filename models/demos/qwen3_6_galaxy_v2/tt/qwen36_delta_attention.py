@@ -39,6 +39,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.qwen3_6_galaxy_v2.tt.gdn_chunk_ops_seq import chunk_gated_delta_rule_seq
 
 # Prefill chunk kernel: use the qwen35-27b vendored kernel (clip-before-exp +
 # decay-offset normalization + HiFi2/fp32) instead of the shared experimental
@@ -48,6 +49,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.demos.qwen3_6_galaxy_v2.tt.qwen35_chunk_delta_rule_ops import (
     chunk_gated_delta_rule_ttnn,
     create_chunk_masks,
+    l2_norm_ttnn,
 )
 from models.demos.qwen3_6_galaxy_v2.tt.ttnn_delta_rule_ops_fp32 import (
     _fp32_compute_cfg_hifi4,
@@ -219,6 +221,7 @@ class TtQwen36DeltaAttention(LightweightModule):
 
         self.mesh_device = mesh_device
         self.args = args
+        self.model_config = args.get_model_config()
         self.layer_num = layer_num
         self.tt_ccl = tt_ccl
         # Keep DeltaNet weights at the requested model dtype (bf8 by default).
@@ -542,12 +545,29 @@ class TtQwen36DeltaAttention(LightweightModule):
         self.w_out = self._to_device(out_proj_w_T, row_shard_out0)  # per-chip [768, 1280]
 
         # ------------------------------------------------------------------
-        # Fused-prefill kernel constants (QWEN36_GDN_FUSED_PREFILL=1).
+        # Fused-prefill kernel: DEFAULT ON (disable with QWEN36_GDN_FUSED_PREFILL=0).
         # Port of the P150 gdn_prefill_fused path: one ttnn.generic_op launch
         # for the whole-sequence recurrence (vs the op-heavy chunk reference).
         # Galaxy 8-row head sharding => half of P150's per-chip head counts.
+        # Made default because in EAGER execution it is the wall-clock win: it
+        # collapses ~856 ops/layer -> ~12, cutting per-op dispatch overhead
+        # (~814 -> ~502 ms/layer @4k, ~2.2x @128k). Tradeoff: block PCC 0.9854
+        # (< the 0.99 bar; e2e demos coherent) and higher DEVICE KERNEL DURATION
+        # (one 111 ms 6-core GenericOp vs chunk's 21 ms across many cores) -- so
+        # revisit this default if/when prefill is traced (chunk wins traced).
         # ------------------------------------------------------------------
-        self._use_fused_prefill = os.environ.get("QWEN36_GDN_FUSED_PREFILL", "0") == "1"
+        # Seq parallel-scan prefill (C++ gated_delta_attn_seq kernel, ported from
+        # the P150 qwen35 path). Default ON — takes precedence over the fused and
+        # pure-TTNN chunk paths. Disable with QWEN36_GDN_SEQ_PREFILL=0.
+        self._use_seq_prefill = os.environ.get("QWEN36_GDN_SEQ_PREFILL", "1") != "0"
+        self._seq_prefill_chunk_size = int(os.environ.get("QWEN36_SEQ_CHUNK", "128"))
+        # Pre-build chunk masks at init (NOT lazily mid-forward — see _build_seq_masks: lazy
+        # mid-prefill build corrupted DRAM under galaxy TP=32).
+        self._seq_masks = None
+        if self._use_seq_prefill:
+            self._build_seq_masks()
+
+        self._use_fused_prefill = os.environ.get("QWEN36_GDN_FUSED_PREFILL", "1") != "0"
         if self._use_fused_prefill:
             import math as _math
 
@@ -638,12 +658,20 @@ class TtQwen36DeltaAttention(LightweightModule):
             self.head_dim,
             dtype=torch.float32,
         )
+        # Seq parallel-scan prefill (gated_delta_attn_seq) needs ~157 KB of L1 on
+        # the head cores for its C×C circular buffers, which clashes with the 48×
+        # 384 KB L1-interleaved dn_state buffers. When the seq path is active, hold
+        # the state in DRAM instead (prefill computes state fresh; decode already
+        # does to_memory_config(initial_state, L1), so this only costs the L1→L1
+        # round-trip optimization, ~1.15 ms/decode step).
+        _seq = os.environ.get("QWEN36_GDN_SEQ_PREFILL", "1") != "0"
+        _state_mem = ttnn.DRAM_MEMORY_CONFIG if _seq else ttnn.L1_MEMORY_CONFIG
         return ttnn.from_torch(
             state_torch,
             device=self.mesh_device,
             dtype=ttnn.float32,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=_state_mem,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
@@ -732,9 +760,36 @@ class TtQwen36DeltaAttention(LightweightModule):
         # V2-DN-TP: x is now COL-SHARDED H/4 = 1280 per chip (was full-H 5120).
         # The matmul produces a partial output on the input dim; complete the
         # sum with an all_reduce on cluster_axis=1 (4-way col ring).
-        qkvz_partial = ttnn.linear(x, self.w_qkvz, dtype=self.dtype, memory_config=mem, compute_kernel_config=ck)
-        qkvz = ttnn.all_reduce(qkvz_partial, cluster_axis=1, num_links=1, memory_config=mem)
-        qkvz_partial.deallocate(True)
+        # QWEN36_PREFILL_OPT: pass the tuned 2D-TP prefill program config on the
+        # QKVZ matmul (T>1 only, so decode is untouched). _project_inputs is
+        # shared by prefill + decode.
+        _T_qkvz = x.shape[-2]
+        if os.environ.get("QWEN36_PREFILL_OPT", "0") == "1" and _T_qkvz > 1:
+            # Reshape long T into 2048-wide chunks (llama70b pattern) so the 2D
+            # matmul's M (per_core_M=8) fits the 10-row grid; otherwise M=T
+            # tiles / 8 exceeds the grid rows for T>2048.
+            _xh = x.shape[-1]
+            x_mm = ttnn.reshape(x, [1, _T_qkvz // 2048, 2048, _xh]) if _T_qkvz > 2048 else x
+            qkvz_partial = ttnn.linear(
+                x_mm,
+                self.w_qkvz,
+                dtype=self.dtype,
+                memory_config=mem,
+                compute_kernel_config=ck,
+                program_config=self.model_config["QWEN36_DN_QKVZ_PREFILL_PROGCFG"](_T_qkvz),
+            )
+            if x_mm is not x:
+                x_mm.deallocate(True)
+            if len(qkvz_partial.shape) == 4:
+                qkvz_partial = ttnn.reshape(qkvz_partial, [1, _T_qkvz, qkvz_partial.shape[-1]])
+        else:
+            qkvz_partial = ttnn.linear(x, self.w_qkvz, dtype=self.dtype, memory_config=mem, compute_kernel_config=ck)
+        # QWEN36_ABLATE_CCL: skip col-reduce (timing ablation; garbage values).
+        if os.environ.get("QWEN36_ABLATE_CCL", "0") == "1":
+            qkvz = qkvz_partial
+        else:
+            qkvz = ttnn.all_reduce(qkvz_partial, cluster_axis=1, num_links=1, memory_config=mem)
+            qkvz_partial.deallocate(True)
         out_rank = len(qkvz.shape)
         q_per_row = self.q_per_row  # 256
         v_per_row = self.v_per_row  # 768
@@ -771,8 +826,11 @@ class TtQwen36DeltaAttention(LightweightModule):
         # B+A fused (note: matches in_proj_ba layout which is b|a, not a|b)
         # V2-DN-TP: col-axis all_reduce to complete the inner-product sum.
         ba_partial = ttnn.linear(x, self.w_ba, dtype=self.dtype, memory_config=mem, compute_kernel_config=ck)
-        ba = ttnn.all_reduce(ba_partial, cluster_axis=1, num_links=1, memory_config=mem)
-        ba_partial.deallocate(True)
+        if os.environ.get("QWEN36_ABLATE_CCL", "0") == "1":
+            ba = ba_partial  # skip col-reduce (timing ablation)
+        else:
+            ba = ttnn.all_reduce(ba_partial, cluster_axis=1, num_links=1, memory_config=mem)
+            ba_partial.deallocate(True)
         n_v_per_row = self.n_v_per_row
         if out_rank == 3:
             B_, T_, _ = list(ba.shape)
@@ -2254,6 +2312,18 @@ class TtQwen36DeltaAttention(LightweightModule):
         # ships with bf8 here — try matching it and measure.
         _dn_out_dtype = ttnn.bfloat8_b if _os.environ.get("QWEN36_ATTN_OUT_BF8", "0") == "1" else ttnn.bfloat16
 
+        # QWEN36_PREFILL_OPT: tuned 2D-TP program config on the out-proj matmul
+        # (T>1 only). Applied to the DRAM (non-pbuf) path; the pbuf path writes
+        # width-sharded L1 and is left as-is to avoid program-config/sharded-
+        # memcfg interaction.
+        # Only for 1 < T <= 2048 (no long-T reshape needed; M fits the grid).
+        # The non-pbuf path is unused when QWEN36_DELTA_OP_TUNED=1 (pbuf path),
+        # so this stays conservative.
+        _out_progcfg = (
+            self.model_config["QWEN36_DN_OUT_PREFILL_PROGCFG"](T)
+            if (_os.environ.get("QWEN36_PREFILL_OPT", "0") == "1" and 1 < T <= 2048)
+            else None
+        )
         if not _use_pbuf:
             partial = ttnn.linear(
                 out_flat,
@@ -2261,7 +2331,10 @@ class TtQwen36DeltaAttention(LightweightModule):
                 dtype=_dn_out_dtype,
                 memory_config=mem,
                 compute_kernel_config=self.compute_kernel,
+                program_config=_out_progcfg,
             )
+            if _os.environ.get("QWEN36_ABLATE_CCL", "0") == "1":
+                return partial  # skip row-reduce (timing ablation; garbage values)
             # V2-11 (lever B): collapse `all_gather + fast_reduce_nc` (2 ops)
             # into a single `ttnn.all_reduce` (1 op).
             reduced = ttnn.all_reduce(
@@ -2335,6 +2408,124 @@ class TtQwen36DeltaAttention(LightweightModule):
         else:
             return self.forward_decode(x, current_pos, rot_mats, kv_cache=kv_cache, page_table=page_table)
 
+    def _build_seq_masks(self):
+        """Build the chunk masks ONCE (call at __init__, not mid-forward). Building these
+        from_torch/ones/triu tensors lazily during prefill collided with live activations in
+        DRAM under galaxy TP=32 and corrupted the residual stream. Built at init they are
+        stable for the whole forward."""
+        if os.environ.get("QWEN36_NO_MASK_CACHE") or getattr(self, "_seq_masks", None) is not None:
+            return
+        import torch as _torch
+
+        from models.demos.qwen3_6_galaxy_v2.tt.gdn_chunk_ops import _create_tril_ones, _create_triu_ones
+
+        C = self._seq_prefill_chunk_size
+        _dd = ttnn.DRAM_MEMORY_CONFIG
+
+        def _eye_dram(n):
+            return ttnn.from_torch(
+                _torch.eye(n, dtype=_torch.float32).unsqueeze(0),
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                memory_config=_dd,
+            )
+
+        self._seq_masks = {
+            "triu_ones": ttnn.reshape(_create_triu_ones(C, self.mesh_device, ttnn.float32, _dd), [1, C, C]),
+            "tril_mask": ttnn.reshape(_create_tril_ones(C, self.mesh_device, ttnn.float32, _dd), [1, C, C]),
+            "eye": _eye_dram(C),
+            "lower_causal": _create_tril_ones(C, self.mesh_device, ttnn.float32, _dd),
+            "eye_32": _eye_dram(32),
+        }
+
+    def _chunk_gdr_seq(self, q_exp, k_exp, v_h, beta, g, B, T, initial_state=None):
+        """Prefill DeltaNet via the C++ ``gated_delta_attn_seq`` parallel-scan
+        kernel (ported from the P150 qwen35 path). Drop-in replacement for
+        ``chunk_gated_delta_rule_ttnn``: same inputs/outputs.
+
+        Inputs:  q_exp/k_exp [B,T,H,K], v_h [B,T,H,V], beta/g [B,T,H]
+        Returns: core_out [B,T,H,V], new_state [B,H,K,V]
+
+        The [B,T,H,X] -> [BH,T,X] conversion mirrors chunk_gated_delta_rule_ttnn
+        exactly (transpose(1,2) + reshape). The seq kernel expects L2-normalized
+        q/k (the pure-TTNN chunk path normalizes internally) and applies the
+        K**-0.5 scale itself, so we normalize here and pass scale=None.
+        """
+        H = self.n_v_per_row
+        K = self.head_dim
+        V = self.head_dim
+        BH = B * H
+
+        _dram = ttnn.DRAM_MEMORY_CONFIG if T > 512 else ttnn.L1_MEMORY_CONFIG
+
+        # Chunk masks are pre-built once at __init__ (see _build_seq_masks). Building them
+        # lazily mid-forward corrupted DRAM under galaxy TP=32 (the from_torch/ones/triu
+        # allocations mid-prefill collided with live activations → exploded the residual at
+        # downstream layers). Fall back to a lazy build only if somehow not yet built.
+        if not os.environ.get("QWEN36_NO_MASK_CACHE") and getattr(self, "_seq_masks", None) is None:
+            self._build_seq_masks()
+
+        # [B,T,H,X] -> [B,H,T,X] -> [BH,T,X] float32 (mirrors chunk_gated_delta_rule_ttnn).
+        # Reshape to [BH,T,K] BEFORE l2-norm: the [B,T,H,hd] layout tile-pads the sub-tile H=6 dim
+        # to 32 (~5x memory bloat), which OOMs L1 at large ISL. [BH,T,K] tiles cleanly on [T,K].
+        q = ttnn.reshape(
+            ttnn.typecast(ttnn.transpose(q_exp, 1, 2, memory_config=_dram), ttnn.float32, memory_config=_dram),
+            [BH, T, K],
+        )
+        k = ttnn.reshape(
+            ttnn.typecast(ttnn.transpose(k_exp, 1, 2, memory_config=_dram), ttnn.float32, memory_config=_dram),
+            [BH, T, K],
+        )
+        q = l2_norm_ttnn(q, dim=-1)
+        k = l2_norm_ttnn(k, dim=-1)
+        v = ttnn.reshape(
+            ttnn.typecast(ttnn.transpose(v_h, 1, 2, memory_config=_dram), ttnn.float32, memory_config=_dram), [BH, T, V]
+        )
+        beta3 = ttnn.reshape(
+            ttnn.typecast(ttnn.transpose(beta, 1, 2, memory_config=_dram), ttnn.float32, memory_config=_dram),
+            [BH, T, 1],
+        )
+        g3 = ttnn.reshape(
+            ttnn.typecast(ttnn.transpose(g, 1, 2, memory_config=_dram), ttnn.float32, memory_config=_dram), [BH, T]
+        )
+
+        # Free the L1-resident inputs now (we hold DRAM copies). Otherwise these padded
+        # [B,T,H,hd] tensors stay co-resident in L1 with the seq kernel's circular buffers on
+        # the head cores and clash at large ISL. The caller skips its own dealloc for the seq path.
+        q_exp.deallocate(True)
+        k_exp.deallocate(True)
+        v_h.deallocate(True)
+        beta.deallocate(True)
+        g.deallocate(True)
+
+        # Carry the recurrent state across prefill chunks: the wrapper wants [BH,K,V];
+        # our persistent dn_state_buffer / prior-chunk state is [B,H,K,V].
+        init_state_bhkv = None
+        if initial_state is not None:
+            init_state_bhkv = ttnn.reshape(initial_state, [BH, K, V])
+
+        out, final_state = chunk_gated_delta_rule_seq(
+            q,
+            k,
+            v,
+            beta3,
+            g3,
+            chunk_size=self._seq_prefill_chunk_size,
+            scale=None,
+            initial_state=init_state_bhkv,
+            mesh_device=self.mesh_device,
+            cached_masks=None if os.environ.get("QWEN36_NO_MASK_CACHE") else self._seq_masks,
+        )
+
+        # out: [BH, L, V] (L = padded to chunk multiple). Slice to T, back to [B,T,H,V].
+        if out.shape[1] != T:
+            out = ttnn.slice(out, (0, 0, 0), (BH, T, V))
+        core_out = ttnn.transpose(ttnn.reshape(out, [B, H, T, V]), 1, 2)  # [B,T,H,V]
+        new_state = ttnn.reshape(final_state, [B, H, K, V])
+        return core_out, new_state
+
     def _forward_prefill_fused(self, q_conv, k_conv, v_conv, z, a, b, B, T):
         """Fused whole-sequence DeltaNet recurrence via the P150 gdn_prefill_fused
         kernel (one ttnn.generic_op launch), replacing the op-heavy chunk path.
@@ -2379,26 +2570,30 @@ class TtQwen36DeltaAttention(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
-        self._gdn_prefill_fused(
-            conv_out,
-            a,
-            b,
-            self.neg_exp_A,
-            self.dt_bias,
-            self._fused_norm_w,
-            self._fused_scale_tt,
-            self._fused_rms_scale_tt,
-            self._fused_rms_eps_tt,
-            rec_states,
-            prefill_output,
-            num_pairs=num_pairs,
-            num_tokens=T,
-            num_cores=num_pairs,
-            Nv_TP=Nv,
-            Nk_TP=self._fused_Nk_TP,
-            repeat_factor=self._fused_repeat,
-            key_dim_tp=self._fused_key_dim_tp,
-        )
+        # QWEN36_ABLATE_RECURRENCE: skip the recurrence kernel (prefill_output
+        # stays zeros) to measure how much of prefill wall-clock is the fused
+        # DeltaNet recurrence itself. Timing-only; output is garbage.
+        if os.environ.get("QWEN36_ABLATE_RECURRENCE", "0") != "1":
+            self._gdn_prefill_fused(
+                conv_out,
+                a,
+                b,
+                self.neg_exp_A,
+                self.dt_bias,
+                self._fused_norm_w,
+                self._fused_scale_tt,
+                self._fused_rms_scale_tt,
+                self._fused_rms_eps_tt,
+                rec_states,
+                prefill_output,
+                num_pairs=num_pairs,
+                num_tokens=T,
+                num_cores=num_pairs,
+                Nv_TP=Nv,
+                Nk_TP=self._fused_Nk_TP,
+                repeat_factor=self._fused_repeat,
+                key_dim_tp=self._fused_key_dim_tp,
+            )
         conv_out.deallocate(True)
 
         # per-head rms_norm, then reshape/permute to [1, T, v_per_row]
@@ -2449,18 +2644,26 @@ class TtQwen36DeltaAttention(LightweightModule):
         else:
             B, T, H = orig_shape
 
+        # Chunked-prefill carry: when driven chunk-by-chunk (self._pf_chunk_idx set by the
+        # model's prefill_chunked driver), seed conv + recurrent state from the persistent
+        # buffers for chunks after the first. Chunk 0 (and single-pass, _pf_chunk_idx=None)
+        # seeds fresh (None) — identical to the original single-pass behavior.
+        _pf_ci = getattr(self, "_pf_chunk_idx", None)
+        _pf_carry = _pf_ci is not None and _pf_ci > 0
+
         # 1. Projections
         q, k, v, z, a, b = self._project_inputs(x)
 
-        # 2. Conv1d + split (conv_state from previous prefill chunk or fresh)
-        q_conv, k_conv, v_conv, new_conv_state = self._apply_conv_and_split(q, k, v, B, T, conv_state=None)
+        # 2. Conv1d + split (conv_state carried from previous chunk, or fresh)
+        _conv_in = self.conv_state_buffer if _pf_carry else None
+        q_conv, k_conv, v_conv, new_conv_state = self._apply_conv_and_split(q, k, v, B, T, conv_state=_conv_in)
         q.deallocate(True)
         k.deallocate(True)
         v.deallocate(True)
 
         # --- Fast path: fused gdn_prefill kernel (one launch for the whole
         # sequence recurrence), mirroring the P150 gdn_prefill_fused flow. ---
-        if getattr(self, "_use_fused_prefill", False):
+        if getattr(self, "_use_fused_prefill", False) and not getattr(self, "_use_seq_prefill", False):
             output = self._forward_prefill_fused(q_conv, k_conv, v_conv, z, a, b, B, T)
             q_conv.deallocate(True)
             k_conv.deallocate(True)
@@ -2491,23 +2694,64 @@ class TtQwen36DeltaAttention(LightweightModule):
         q_h.deallocate(True)
         k_h.deallocate(True)
 
+        if os.environ.get("QWEN36_MEMLOG"):
+            try:
+                ttnn.dump_device_memory_state(
+                    self.mesh_device, prefix=f"[MEMLOG L{getattr(self,'layer_num','?')} T={T} pre-seq-kernel] "
+                )
+            except Exception as _e:
+                print(f"[MEMLOG] dump failed: {str(_e)[:100]}", flush=True)
+
         # 6. Chunked delta rule kernel
-        core_out, new_state = chunk_gated_delta_rule_ttnn(
-            q=q_exp,
-            k=k_exp,
-            v=v_h,
-            beta=beta,
-            g=g,
-            chunk_size=self.prefill_chunk_size,
-            initial_state=None,
-            device=self.mesh_device,
-            cached_masks=self._chunk_masks,
-        )
-        q_exp.deallocate(True)
-        k_exp.deallocate(True)
-        v_h.deallocate(True)
-        beta.deallocate(True)
-        g.deallocate(True)
+        if getattr(self, "_use_seq_prefill", False):
+            # Move z_h (gate, consumed in step 7) to DRAM so it doesn't co-reside in L1 with the
+            # seq kernel's circular buffers on the head cores — the large-ISL clash. The seq kernel
+            # reserves ~1.29 MB of the ~1.46 MB L1 on its 6 cores, so any big L1 tensor clashes.
+            if z_h.memory_config().buffer_type == ttnn.BufferType.L1:
+                _zd = ttnn.to_memory_config(z_h, ttnn.DRAM_MEMORY_CONFIG)
+                z_h.deallocate(True)
+                z_h = _zd
+            if os.environ.get("QWEN36_DIAG_L1"):
+                for _nm, _t in [
+                    ("x", x),
+                    ("q_conv?", None),
+                    ("new_conv_state", new_conv_state),
+                    ("q_exp", q_exp),
+                    ("k_exp", k_exp),
+                    ("v_h", v_h),
+                    ("z_h", z_h),
+                    ("beta", beta),
+                    ("g", g),
+                ]:
+                    if _t is None:
+                        continue
+                    try:
+                        _bt = _t.memory_config().buffer_type
+                        _addr = _t.buffer_address()
+                        print(f"[DIAG_L1] {_nm:16s} buf={_bt} addr={_addr} shape={list(_t.shape)}", flush=True)
+                    except Exception as _e:
+                        print(f"[DIAG_L1] {_nm:16s} (addr n/a: {str(_e)[:60]})", flush=True)
+            # C++ gated_delta_attn_seq parallel-scan kernel (ported from P150).
+            # _chunk_gdr_seq deallocates q_exp/k_exp/v_h/beta/g internally (after DRAM copies).
+            _dn_in = self.dn_state_buffer if _pf_carry else None
+            core_out, new_state = self._chunk_gdr_seq(q_exp, k_exp, v_h, beta, g, B, T, initial_state=_dn_in)
+        else:
+            core_out, new_state = chunk_gated_delta_rule_ttnn(
+                q=q_exp,
+                k=k_exp,
+                v=v_h,
+                beta=beta,
+                g=g,
+                chunk_size=self.prefill_chunk_size,
+                initial_state=(self.dn_state_buffer if _pf_carry else None),
+                device=self.mesh_device,
+                cached_masks=self._chunk_masks,
+            )
+            q_exp.deallocate(True)
+            k_exp.deallocate(True)
+            v_h.deallocate(True)
+            beta.deallocate(True)
+            g.deallocate(True)
 
         # 7. GroupRMSNormGated
         out = self._apply_norm_gated(core_out, z_h, B, T)

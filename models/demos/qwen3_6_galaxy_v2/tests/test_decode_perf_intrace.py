@@ -57,7 +57,7 @@ _B = 1
 # values use ``input_data_questions_prefill_128.json``.
 _T_PREFILL = int(os.environ.get("QWEN36_PERF_T_PREFILL", "128"))
 _H = 5120
-_N_LAYERS = 64
+_N_LAYERS = int(os.environ.get("QWEN36_N_LAYERS", "64"))
 _DECODE_STEPS = int(os.environ.get("QWEN36_DECODE_STEPS", "32"))  # set to ~3 for tracy capture
 _PATTERN = (["linear_attention"] * 3 + ["full_attention"]) * 16
 

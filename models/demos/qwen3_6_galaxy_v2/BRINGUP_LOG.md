@@ -3,6 +3,49 @@
 Live tracker. Append-only. Mirrors the format in
 `models/demos/olmo_galaxy/BRINGUP_LOG.md`.
 
+## 2026-06-01 — COHERENCE FIXED + sampling; clean ISL sweep 128→128k ✅
+
+**The coherence bug (garbage output at every ISL) — ROOT CAUSE & FIX.**
+The GDN/DeltaNet chunk masks (`triu_ones`/`tril_mask`/`eye`/`lower_causal`) were built
+**lazily mid-forward** — `ttnn.from_torch`/`ones`/`triu` ran on the *first* call of each of
+the 48 GDN layers, during prefill. Under the galaxy **TP=32** layout those mid-prefill
+allocations collided with live activation DRAM and **corrupted the residual stream** → garbage
+tokens at ALL ISLs (incl. 128). Why it was so hard to find: the seq op's own PCC was clean
+(0.9998 out / 0.99999 state), and P150 (TP=4) was unaffected because its allocator layout
+differs — so it reproduced only in the full 32-chip model, ~2 layers downstream of the op.
+Took ~50 device experiments to localize (ruled out: multi-core kernel addressing, CB
+single/double-buffering, input deallocs/UAF, core relocation, L1-vs-DRAM placement, the C++
+kernel itself, and the wrapper preprocessing — by truncation-bisecting the adapter).
+**FIX:** build the masks once at `__init__` (`TtQwen36DeltaAttention._build_seq_masks`),
+never lazily mid-forward. One-line-class change; PCC/perf unchanged.
+
+**Seq prefill scaling recap (still required):** multi-core `gated_delta_attn_seq`
+(`QWEN36_SEQ_CORES_PER_HEAD=4`, value-dim split, 24 cores) + chunked-4k prefill
+(`QWEN36_PREFILL_CHUNK=4096`) → no L1 CB clash through 128k. Inner kernel chunk `C=128` fixed.
+
+**Sampling (fixes greedy repetition).** Greedy argmax degenerated into loops at long ctx
+(64k/128k → "the the the"). Added on-device `TTSampling` (`models/common/sampling/tt_sampling.py`)
+to the demo decode loop, replacing greedy. Qwen3.6 thinking-mode defaults: **temp=1.0, top_p=0.95,
+top_k=20**. Env: `QWEN36_SAMPLE=1` (default; `=0` greedy fallback), `QWEN36_TEMP/TOP_P/TOP_K`
+override. (k/p/temp passed as torch tensors of length 32 — the decode is 32-user packed and
+`ttnn.sampling` asserts `k.shape==[32]`.) Verified varied/non-repetitive output at every ISL.
+
+**Perf (`text_demo_qwen36.py`, real Qwen3.6-27B weights, BH_GLX, batch-1):**
+
+| ISL | TTFT cold | TTFT warm | prefill tok/s (warm) | decode tok/s/u (greedy) | decode tok/s/u (sampled) | coherent |
+|---|---|---|---|---|---|---|
+| 128 | 4.0 s | 1.6 s | — | 18.7 | 18.78 | ✅ |
+| 4k  | 5.1 s | 1.7 s | 2343 | 17.7 | 17.87 | ✅ |
+| 8k  | 6.4 s | 3.4 s | 2388 | 16.9 | 17.05 | ✅ |
+| 16k | 10.2 s | 7.2 s | 2289 | 15.4 | 15.55 | ✅ |
+| 32k | 18.7 s | 15.5 s | 2112 | 13.1 | 13.19 | ✅ |
+| 64k | 39.6 s | 36.0 s | 1820 | 10.1 | 10.18 | ✅ |
+| 128k | 98.6 s | 93.6 s | 1395/1401 | 8.0 | 8.05 | ✅ |
+
+All ISLs run error-free (no clash/OOM), coherent, and non-repetitive with sampling. 128k
+greedy correctly continued the Frankenstein/Walton context; sampled outputs are varied and on-topic.
+
+
 ## Current Status
 
 **Stage:** V2-9 BLOCKED on V2-decode (dirty workspace). Prefill end-to-end PCC > 0.99 verified through 64L. Decode codepath never wired in v2; eager decode crashes at the embedding-output / decoder-input layout boundary. Trace machinery in `generator.py` is already wired; gated on V2-decode landing. See `tests/test_decode_trace_parity.py` module docstring for the full blocker chain.
