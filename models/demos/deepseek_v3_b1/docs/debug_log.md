@@ -1403,3 +1403,102 @@ To distinguish (1)/(2)/(3): would need either tt-exalens state-snapshot at the m
 **State.** Workaround committed (this commit). Anchor parametrize kept at `position_id=511`, `num_internal_iterations ∈ {1, 2}` as the multi-chunk regression test.
 
 ---
+
+## Attempts 36-40 — tt-exalens snapshot + LOADMACRO-hazard hunt + per-shard / per-device localization
+
+### Attempt 36 — tt-exalens state snapshot at flash_mla entry
+
+**What.** Added a kernel `ebreak` gate at `flash_mla.hpp` just after `tile_regs_acquire()`, controlled by a `HALT_FLASH_MLA_ITER` compile-time define injected via env var `TT_HALT_FLASH_MLA_ITER`. Ran the test with the halt at iter-1 entry, then iter-0 entry; used `ttexalens.get_tensix_state()` to dump per-TRISC GPR + ADC + CFG state from logical core (1,1) on device 6.
+
+**Result.** Same-core iter-0 vs iter-1 diff (after filtering out core-position-dependent diffs):
+
+- `gpr[2].dest_offset_hi`: 512 → 0 — PACK's GPR that holds the bank-1 base offset for `select_packer_dest_registers`.
+- 5 other PACK scratch GPRs (`tile_header`, `tmp0`, `tmp1`, `tmp_lo`, `exp0_sec_size_bfp`) similarly went from non-zero → 0.
+- A handful of `register_window_counters` fields (`rwc_math_winner`, `rwc_math_winner_thread`, `rwc0_dst_reg_addr_d`, `rwc_math_instrn`) differed — runtime pipeline state, likely just timing artifacts of the halt.
+- All packer ADC counters and pack_config / pack_strides / pack_edge_offset / pack_dest_rd_ctrl fields were **identical** between iters.
+
+**Conclusion.** `DEST_OFFSET_HI` GPR is zeroed between iter-0 and iter-1. If PACK uses this GPR at `select_packer_dest_registers` (called at every `tile_regs_release`) while `dest_offset_id == 1`, `PACK_SEC0_Offset` CFG becomes 0 → PACK addresses bank 0 instead of bank 1.
+
+### Attempt 37 — Restore `DEST_OFFSET_HI` GPR at iter top
+
+**What.** Inserted at decoder iter top:
+```cpp
+PACK(TTI_STALLWAIT(p_stall::STALL_TDMA | p_stall::STALL_THCON, p_stall::PACK));
+PACK(TTI_SETDMAREG(0, DEST_REGISTER_HALF_SIZE, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI)));
+```
+
+**Result.** PCC at iter=1 / iter=2: bit-identical to pristine (no change). Restoring just the GPR doesn't update the CFG register that PACK actually uses at the next release.
+
+### Attempt 38 — Call full LLK helper to re-init GPR + CFG
+
+**What.** Replaced with `PACK((_llk_init_packer_dest_offset_registers_<DstSync::SyncHalf>()))`. This re-inits both GPRs AND calls `select_packer_dest_registers` to update `PACK_SEC0_Offset` CFG from the current GPR.
+
+**Result.** Same as Attempt 37: no PCC effect. **`DEST_OFFSET_HI` zeroed-state isn't propagating to the CFG register in a bug-causing way** — the GPR may be transient. The dump captured a moment where the GPR was zeroed by some intermediate op, but it gets restored before the next `select_packer_dest_registers` reads it.
+
+### Attempt 39 — LOADMACRO-hazard mitigation (per Confluence "Using LOADMACRO Safely" + PR #45660)
+
+**What.** Three independent attempts targeting the LOADMACRO Dst write-to-read structural hazard described in https://tenstorrent.atlassian.net/wiki/spaces/TA/pages/2022408406/Using+LOADMACRO+Safely :
+
+1. `TT_METAL_DISABLE_SFPLOADMACRO=1` env var (via `device_kernel_defines + [("DISABLE_SFPLOADMACRO", "1")]` in op.py) — disables ALL LOADMACRO branches in recip, exp, reduce, mul_int, where, typecast. Verified `defines_generated.h` contains the define.
+2. SFPNOPs between the three back-to-back `SFPLOADMACRO`s in `ckernel_sfpu_recip.h`'s main loop (the exact pattern PR #45660 patches).
+3. 4× SFPNOPs after `SFPSTORE` at the end of `_calculate_sdpa_reduce_max_row_8x32_` and `_calculate_sdpa_reduce_sum_row_8x32_` (to drain SFPU pipe before the subsequent FPU `bcast_sub` reads the same DEST max via SRCA/SRCB).
+
+**Result.** All three: PCC at iter=1 / iter=2 bit-identical to pristine (0.9914568554511025 / 0.9916859209677518). **The bug is NOT a LOADMACRO Dst write-to-read hazard, NOT an exp/recip-specific drain issue, and NOT a reduce_max/sum → bcast_sub timing issue.**
+
+### Attempt 40 — Per-shard PCC + per-device pre-MoE localization
+
+**What.** Added to `test_decoder_mlp`: (a) per-shard PCC by splitting `decoder_mlp_output_valid` into N=8 chunks along the feature dim (validates the slicing produces sensible per-shard PCCs whose mean ≈ aggregate); (b) saves `decoder_mlp_output_valid`, golden, and the 8 per-device `attention_block_output_tensor` tensors to `/tmp/43563_outputs/iters_{1,2}_pos_511.pt`. Diffed across the two subtests.
+
+**Result @ pos=511.**
+
+| Metric | Value | Notes |
+|---|---|---|
+| Final tensor shape | `(1, 1, 1, 7168)` | 7168 features on root device |
+| iter=1 → iter=2 element-wise diff | **6739 / 7168 non-zero** (94%) | uniform across all 8 shards |
+| max abs diff | **0.14** | bf16 magnitude ~1.0 → ~14% relative |
+| mean abs diff | 0.028 | structured, not noise |
+| Pre-MoE per-device data | all 8 devices **bit-identical** within each subtest, all 8 devices show **identical diff** between subtests | post-all-reduce blends the per-core perturbation into every output position uniformly |
+| Zero-diff positions | scattered, no periodic structure | matches no head / channel / device boundary |
+
+**Conclusion.** The bug originates inside `flash_mla`. The MM4/5 → all-reduce → MoE chain takes whatever per-core SDPA-output perturbation flash_mla emitted and smears it uniformly across all 7168 output features and across all 8 devices. **Output-level localization is impossible** — we'd need to capture per-core SDPA output BEFORE the all-reduce to identify a specific compute step or a specific core. That requires a kernel-side dump that doesn't perturb the bug (the earlier `hash_cb` channel was structurally decoupled from the host output; an L1 byte dump via cb_out_in at multi-chunk would race sdpa_tail).
+
+---
+
+## Final status (post Attempts 24-40)
+
+**The fix that ships.** Austin's two-line MATH+PACK iter-top reset at `decoder_block_kernel.cpp:3056-3072`. Reduces the alternation gap from 2.29e-4 to **0** at `position_id=511, num_internal_iterations ∈ {1, 2}`.
+
+**What we know about the bug.**
+
+The bank-1-vs-bank-0 numerical asymmetry inside `flash_mla` is real, deterministic, and reproducible bit-for-bit across runs. It survives:
+- All addressing registers being correct for the active bank (per the existing comment at decoder_block_kernel.cpp:3050)
+- Zeroing the bank at flash_mla entry (Attempt 33)
+- Restoring stale-looking GPRs at iter top (Attempts 37-38)
+- Disabling all `SFPLOADMACRO` usage globally (Attempt 39.1)
+- Inserting SFPNOPs at the documented LOADMACRO Dst write-to-read pattern (Attempt 39.2)
+- Inserting SFPNOPs at the SFPU→FPU handoff at the end of reduce_max/sum (Attempt 39.3)
+
+The asymmetry uniformly perturbs every per-device pre-MoE output feature by the same magnitude/sign pattern (Attempt 40); after the all-reduce + MM4/5 + MoE it lands as a ~14%-magnitude structured noise across all 7168 final-output features. PCC stays at 0.99 because the noise is correlated with the golden output, not random.
+
+**What we've ruled out (full list).**
+
+- DEST bank residue (Attempt 33)
+- `pack_reads_per_xy_plane` LLK counter (Attempt 27)
+- `DEST_OFFSET_HI` PACK GPR being zeroed (Attempts 37-38)
+- MATH-side dest_offset_id desync alone (Attempt 34: KV-cache crash)
+- PACK-side dest_offset_id desync alone (Attempt 35: KV-cache crash)
+- All LOADMACRO usage (Attempt 39.1)
+- Recip LOADMACRO back-to-back spacing (Attempt 39.2)
+- Reduce SFPU→FPU handoff spacing (Attempt 39.3)
+- Per-device divergence (Attempt 40: all devices identical)
+- Per-output-feature concentration (Attempt 40: uniformly spread)
+
+**Open root-cause hypothesis.**
+
+A HW-level asymmetry on Blackhole's half-DEST register file between bank 0 and bank 1 in either:
+- The FPU MVMUL / MOVD2B / dest-srcb-reuse path (used by MM1, MM2, bcast_sub, bcast_mul, recip's final bcast_mul), OR
+- A subtle SFPU pipeline timing / arbitration path not covered by the documented hazards on the Confluence "Using LOADMACRO Safely" page.
+
+To distinguish: an RTL-level read of a specific FPU/SFPU op (e.g., a single MVMUL or SFPSTORE) with identical inputs on bank-0 vs bank-1 starting state — beyond what host-visible bisection can establish.
+
+---

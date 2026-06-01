@@ -1321,6 +1321,64 @@ def test_decoder_mlp(
     logger.info(f"MLP PCC (decoder vs golden): {pcc}")
     logger.info(f"Golden MLP output: {moe_output.flatten()[:8]}")
     logger.info(f"DecoderBlock MLP output: {decoder_mlp_output_valid.flatten()[:8]}")
+
+    # =====================================================================
+    # PATCH (#43563): save outputs + per-shard PCC validation
+    # =====================================================================
+    import os as _os43563
+
+    _golden = moe_output.float().detach().clone()
+    _device = decoder_mlp_output_valid.float().detach().clone()
+    logger.info(f"#43563 shape: golden={tuple(_golden.shape)} device={tuple(_device.shape)} flat={_golden.numel()}")
+
+    # Sanity-check the per-shard split. Try splitting flattened output along
+    # the last dim into K=8 equal chunks (matches the 8 mesh devices). Per-chunk
+    # PCC must all be sane (~0.99); concatenating the chunks back trivially
+    # reproduces the aggregate PCC value reported above.
+    _g_flat = _golden.flatten()
+    _d_flat = _device.flatten()
+    _N = 8
+    _chunk = _g_flat.numel() // _N
+    if _chunk * _N != _g_flat.numel():
+        logger.warning(f"#43563: tensor size {_g_flat.numel()} not divisible by {_N}; trailing tail dropped")
+    _per_shard_pccs = []
+    for _i in range(_N):
+        _s = slice(_i * _chunk, (_i + 1) * _chunk)
+        _, _p = comp_pcc(_g_flat[_s], _d_flat[_s], 0.0)
+        _per_shard_pccs.append(_p)
+    logger.info(f"#43563 per-shard PCC (N={_N}): {_per_shard_pccs}")
+
+    # Per-device pre-MoE: read all 8 attention-block tensors to localize
+    # which device(s) diverge between num_iters=1 and num_iters=2.
+    _per_dev_attn = []
+    try:
+        _dev_tensors = ttnn.get_device_tensors(attention_block_output_tensor)
+        for _di, _dt in enumerate(_dev_tensors):
+            _per_dev_attn.append(ttnn.to_torch(_dt).float().detach().clone())
+        logger.info(f"#43563 per-device attn-block shapes: {[tuple(t.shape) for t in _per_dev_attn]}")
+    except Exception as _e:
+        logger.warning(f"#43563 could not read per-device attn-block: {_e!r}")
+
+    # Save artifacts for cross-subtest diff. Keyed by num_internal_iterations
+    # so num_iters=1 and num_iters=2 land in separate files.
+    _out_dir = "/tmp/43563_outputs"
+    _os43563.makedirs(_out_dir, exist_ok=True)
+    _out_path = f"{_out_dir}/iters_{num_internal_iterations}_pos_{position_id}.pt"
+    torch.save(
+        {
+            "decoder_mlp_output_valid": _device,
+            "moe_output_golden": _golden,
+            "num_iters": num_internal_iterations,
+            "position_id": position_id,
+            "aggregate_pcc": pcc,
+            "per_shard_pccs": _per_shard_pccs,
+            "shard_N": _N,
+            "per_dev_attn": _per_dev_attn,
+        },
+        _out_path,
+    )
+    logger.info(f"#43563 saved outputs to {_out_path}")
+
     assert passing, f"DecoderBlock MLP Output PCC check failed: {pcc}"
 
     logger.info("✓ DecoderBlock MLP mesh test passed!")

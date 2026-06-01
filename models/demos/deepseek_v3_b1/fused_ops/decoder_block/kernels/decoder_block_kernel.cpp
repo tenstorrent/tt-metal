@@ -3054,17 +3054,19 @@ void kernel_main() {
         // bank. Root cause still open; iter-top re-init papers over it by forcing
         // every iter to run in bank 0.
 #if defined(COMPILE_FOR_TRISC)
-        // Workaround for #43563. Resets MATH<->PACK dest_offset_id and
-        // MATH_PACK semaphore at iter top, forcing every iteration to enter
-        // flash_mla with dest_offset_id == 0 (DEST bank 0). With pristine
-        // state (iter-1+ runs flash_mla on bank 1), chunk-loop compute
-        // produces numerically different output despite all addressing
-        // registers being correct. Bisection (see debug_log.md Attempts
-        // 33-35) confirmed: ZEROACC of the bank at flash_mla entry does
-        // NOT fix the alternation, and EITHER half of the workaround alone
-        // crashes the kernel (KV cache mismatch from MATH/PACK desync).
-        // The two halves are load-bearing together. Root cause of the
-        // bank-1-vs-bank-0 numerical asymmetry remains open.
+        // Workaround for #43563. Coordinated MATH+PACK dest_offset_id reset
+        // at iter top forces every iteration to enter flash_mla on DEST bank 0.
+        // Root cause (bank-1 numerically different from bank-0 with identical
+        // addressing registers, identical bank contents, and no LOADMACRO in
+        // play) remains open after extensive investigation — see debug_log.md
+        // Attempts 24-35. Surgical alternatives all failed:
+        //  - ZEROACC of bank at flash_mla entry (residue not the cause)
+        //  - DISABLE_SFPLOADMACRO=1 globally (LOADMACRO not the cause)
+        //  - SFPNOPs between recip back-to-back LOADMACROs (per PR #45660)
+        //  - SFPNOPs after reduce_max/sum SFPSTOREs
+        //  - MATH-only or PACK-only reset (both crash with KV cache desync)
+        // The remaining hypothesis is a HW-level bank-1 vs bank-0 asymmetry
+        // (FPU MVMUL/MOVD2B path or SFPU pipeline) that needs RTL inspection.
         MATH((llk_math_pack_sync_init<false>()));
         PACK((llk_pack_dest_init<false, false>(0)));
 #endif

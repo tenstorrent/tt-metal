@@ -400,6 +400,14 @@ class DecoderBlock:
                 my_defines = ctx["device_kernel_defines"] + moe.kernel_defines
             # PATCH (#43563 debug): enable CB-hash debug LLK to bisect iter-PCC divergence.
             my_defines = my_defines + [("DEBUG_CB_HASH", "1")]
+            # PATCH (#43563 debug): pick which flash_mla call halts the TRISC.
+            # Set via env var TT_HALT_FLASH_MLA_ITER (0 = iter-0 entry, 1 = iter-1
+            # entry). When unset, the ebreak gate is never compiled in.
+            import os as _os_43563
+
+            _halt_iter = _os_43563.environ.get("TT_HALT_FLASH_MLA_ITER")
+            if _halt_iter is not None:
+                my_defines = my_defines + [("HALT_FLASH_MLA_ITER", _halt_iter)]
             unified_kernel = UnifiedKernelDescriptor(
                 kernel_source="models/demos/deepseek_v3_b1/fused_ops/decoder_block/kernels/decoder_block_kernel.cpp",
                 core_ranges=full_device_grid,
