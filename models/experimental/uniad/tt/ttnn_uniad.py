@@ -435,6 +435,14 @@ class TtUniAD:
         Default `n_iters=2`: iter#1 compiles + warms op caches, iter#2
         captures the trace boundaries (BEV encoder + DETR encoder). After
         2 warmup iters, the next forward replays the trace and runs hot.
+
+        NOTE: reset_test_state() runs before each iteration, so every warmup
+        pass takes the first-frame path (prev_bev=None). The BEV encoder trace
+        is keyed on prev_bev presence (see _trace_key in ttnn_encoder), so the
+        temporal path (prev_bev != None) is NOT warmed here: in real sequential
+        inference the first temporal frame pays a one-time trace-capture cost
+        before steady-state replay. Outputs are unaffected — this is a warmup
+        completeness gap, not a correctness issue.
         """
         for i in range(n_iters):
             logger.info(f"[warmup] iteration {i + 1}/{n_iters} — populating ttnn caches…")

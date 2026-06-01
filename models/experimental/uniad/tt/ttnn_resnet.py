@@ -136,6 +136,18 @@ class TtModulatedDeformConv2dPack:
         mask = ttnn.sigmoid(mask)  # low pcc if we use ttnn sigmoid for mask
 
         if _USE_DEVICE_DCN:
+            # The device path samples x at the output grid and reshapes x to
+            # (B, out_h, out_w, C_in), which only holds when input and output
+            # share spatial dims — i.e. stride 1. UniAD's ResNet101 runs all
+            # 26 DCN convs at stride 1 (downsampling happens at conv1 / the
+            # downsample shortcut, never at the DCN conv2), so this is always
+            # true here. Assert it so a future config that puts DCN on a
+            # strided conv fails with a clear message instead of a cryptic
+            # reshape volume error.
+            assert self.stride == (1, 1), (
+                f"device DCN path supports stride-1 only (got stride={self.stride}); "
+                "set TT_DCN_DEVICE=0 for the host fallback to run a strided DCN."
+            )
             if _DCN_TIMING:
                 ttnn.synchronize_device(self.device)
                 _t0 = time.perf_counter()

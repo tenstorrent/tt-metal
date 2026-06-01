@@ -343,7 +343,12 @@ class TtBEVFormerEncoder:
         ref_2d = self._ref_2d_cache[_key_2d]
 
         # Cache point_sampling output by the lidar2img bytes. ref_3d and
-        # pc_range are static so they aren't part of the key.
+        # pc_range are static so they aren't part of the key. NOTE: the cached
+        # tensors also depend on img_metas[...]["img_shape"] (used to normalize
+        # reference_points_cam). That is constant for a given camera rig across
+        # a session, so it is intentionally omitted from the key — if the input
+        # resolution could change at runtime, img_shape would need to be folded
+        # into _ps_key to avoid returning a stale result.
         _lidar2img_np = np.asarray([m["lidar2img"] for m in kwargs["img_metas"]])
         _ps_key = _lidar2img_np.tobytes()
         _ps_cached = self._point_sampling_cache.get(_ps_key)
