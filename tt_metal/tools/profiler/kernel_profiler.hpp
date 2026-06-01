@@ -737,6 +737,11 @@ __attribute__((noinline)) void trace_only_init() {
 
 #else
 
+// The void(sizeof(FOO)) idiom (a) ensures FOO is syntactically and
+// semantically sane and (b) means that we avoid 'var-set-but-unused'
+// diagnostics, if the only use of a particular var is here.  The
+// sizeof argument is processed in a non-evaluating context -- no code
+// is generated.
 #define DeviceValidateProfiler(condition) (void(sizeof(condition)))
 
 #define DeviceZoneScopedMainN(name) (void(name))
