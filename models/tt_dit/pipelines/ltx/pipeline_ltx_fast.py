@@ -17,7 +17,7 @@ import ttnn
 from ...models.transformers.ltx.transformer_ltx import LTXTransformerModel
 from ...utils.ltx import AudioLatentShape, VideoPixelShape
 from ...utils.tensor import bf16_tensor
-from .pipeline_ltx import LTXPipeline, euler_step
+from .pipeline_ltx import LTXPipeline, euler_step, on_device_audio_enabled
 from .pipeline_ltx_av import LTXAVPipeline
 
 DISTILLED_SIGMA_VALUES = [1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875, 0.0]
@@ -116,6 +116,14 @@ class LTXFastPipeline(LTXAVPipeline):
 
             # Compile VAE decode at full-res (only s2 feeds decode in generate).
             self._warmup_decode(num_frames, height, width)
+
+            # Build + JIT-compile the on-device audio decode on the exact latent
+            # shape generate() produces, so the first real audio decode loads
+            # from cache instead of building from the checkpoint (cold ~64s).
+            if on_device_audio_enabled():
+                logger.info("warmup audio decode (on-device)")
+                self.decode_audio(torch.zeros(1, als.frames, self.in_channels), num_frames, fps=24.0)
+
             self._prepare_transformer(0)
 
         logger.info(f"warmup (Fast 2-stage) done in {time.time() - t0:.1f}s")

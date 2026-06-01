@@ -9,19 +9,20 @@ import pytest
 from loguru import logger
 
 import ttnn
+from models.tt_dit.pipelines.ltx.pipeline_ltx import on_device_audio_enabled
 from models.tt_dit.pipelines.ltx.pipeline_ltx_fast import LTXFastPipeline
 from models.tt_dit.utils.test import line_params, ring_params
 
 
 def _with_audio_dev_l1(base: dict) -> dict:
-    """Reserve an L1_SMALL region when the on-device audio decoder is enabled.
+    """Reserve an L1_SMALL region when on-device audio decode is enabled.
 
-    ``ttnn.conv2d`` (used by the on-device audio VAE decoder) requires an
+    The on-device audio chain's ``ttnn.conv2d``/``ttnn.conv1d`` paths require an
     L1_SMALL allocator region; the default LTX device params open with
-    ``l1_small_size=0``. When ``LTX_AUDIO_DECODER_ON_DEVICE=1`` we add it; default
-    runs return the base params object unchanged.
+    ``l1_small_size=0``. On-device audio is the default, so we add it unless
+    ``LTX_ON_DEVICE_AUDIO=0`` forces the host path.
     """
-    if os.environ.get("LTX_AUDIO_DECODER_ON_DEVICE", "0") == "1":
+    if on_device_audio_enabled():
         return {**base, "l1_small_size": 32768}
     return base
 

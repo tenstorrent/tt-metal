@@ -514,11 +514,6 @@ def set_fabric(
                 ttnn.FabricUDMMode.DISABLED,
                 fabric_manager,
             )
-    else:
-        # Clear any fabric left enabled by a prior test. Otherwise ``open_mesh_device`` with
-        # empty ``device_params`` can still run fabric init on Blackhole and time out on
-        # ethernet handshake when only a subset of chips is opened (e.g. 1×1 mesh).
-        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
 def get_default_fabric_tensix_config():

@@ -18,10 +18,15 @@ from ..layers.module import Module
 ALIGNMENT = 32
 
 
-def aligned_channels(channels):
-    ALIGN_PAD = ALIGNMENT - channels % ALIGNMENT
-    if channels % ALIGNMENT != 0:
-        channels = channels + ALIGN_PAD
+def aligned_channels(channels, unit: int = ALIGNMENT):
+    """Round ``channels`` up to a multiple of ``unit`` (default TILE_WIDTH).
+
+    Channel-TP passes ``unit = factor * TILE_WIDTH`` so each per-chip shard is
+    itself a TILE_WIDTH multiple (a 48-wide shard is illegal in TILE layout).
+    """
+    rem = channels % unit
+    if rem != 0:
+        channels = channels + (unit - rem)
     return channels
 
 
