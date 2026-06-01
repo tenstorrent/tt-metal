@@ -33,7 +33,17 @@ needs the fp32-state fix.
 """
 from __future__ import annotations
 
+import os
+
 import ttnn
+
+
+def _recur_tiled_enabled():
+    """Fuse B: keep the recurrent decode step in its matmul-ready tiled 4D
+    layout end-to-end (eliminate the per-op reshape + to_layout(TILE) churn).
+    Default-on; flag off restores the old reshape-per-op path."""
+    return os.environ.get("QWEN36_DN_RECUR_TILED", "1").strip() not in ("0", "false", "False", "")
+
 
 # Re-use the program-config helpers from the upstream module (they do not touch
 # dtype; they only construct MatmulMultiCoreReuseProgramConfig from shapes).
@@ -135,6 +145,82 @@ def _fused_decay_and_write_fp32(
     return h_new
 
 
+def _fused_decay_and_write_fp32_tiled(
+    h,
+    k_row,
+    delta_row,
+    decay_t,
+    beta_t,
+    device=None,
+    outer_product_prog_cfg=None,
+    matmul_compute_cfg=None,
+):
+    """Fuse B tiled variant of ``_fused_decay_and_write_fp32``.
+
+    Math-identical to the original, but consumes tensors already in the
+    recurrent step's tiled 4D layout so the per-op reshape+to_layout(TILE)
+    pairs vanish:
+
+      h:         fp32 [B, H, K, V] tiled (the recurrent state)
+      k_row:     fp32 [B, H, 1, K] tiled  (the step's k, NOT reshaped to [B,H,K,1])
+      delta_row: fp32 [B, H, 1, V] tiled  (the step's delta, NOT reshaped)
+      decay_t:   fp32 [B, H, 1]            (reshaped to [B,H,1,1] here — tiny)
+      beta_t:    fp32 [B, H, 1]
+
+    The ONLY layout op kept is the genuine ``k_col`` transpose of k's last two
+    dims ([B,H,1,K] -> [B,H,K,1]) for the outer product — that is a real data
+    movement, not churn.  Eliminated vs the old path: k reshape+to_layout,
+    delta reshape+to_layout.
+    """
+    B = h.shape[0]
+    H = h.shape[1]
+    K = h.shape[2]
+    V = h.shape[3]
+
+    decay = ttnn.reshape(decay_t, [B, H, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
+    beta_expanded = ttnn.reshape(beta_t, [B, H, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    # k_col: genuine K-major transpose of the tiled [B,H,1,K] k_row -> [B,H,K,1].
+    # This is the one layout op that legitimately stays (the outer product needs
+    # k as a column). No reshape / no to_layout — transpose preserves TILE.
+    k_col = ttnn.transpose(k_row, -1, -2, memory_config=ttnn.L1_MEMORY_CONFIG)
+    # d_row is delta itself, already [B,H,1,V] tiled — no reshape, no to_layout.
+    d_row = delta_row
+
+    if outer_product_prog_cfg is None and device is not None:
+        try:
+            outer_product_prog_cfg = _recurrent_outer_product_program_config(device, K, V)
+        except Exception:
+            pass
+
+    if matmul_compute_cfg is None:
+        matmul_compute_cfg = _fp32_compute_cfg_hifi4()
+
+    outer = ttnn.matmul(
+        k_col,
+        d_row,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        compute_kernel_config=matmul_compute_cfg,
+        program_config=outer_product_prog_cfg,
+    )
+    k_col.deallocate(True)
+
+    h_decayed = ttnn.multiply(h, decay, memory_config=ttnn.L1_MEMORY_CONFIG)
+    decay.deallocate(True)
+    h_new = ttnn.addcmul(
+        h_decayed,
+        outer,
+        beta_expanded,
+        value=1.0,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    h_decayed.deallocate(True)
+    outer.deallocate(True)
+    beta_expanded.deallocate(True)
+
+    return h_new
+
+
 def _recurrent_delta_rule_step_fp32(
     q_t,
     k_t,
@@ -148,7 +234,36 @@ def _recurrent_delta_rule_step_fp32(
     matmul_compute_cfg=None,
     outer_product_prog_cfg=None,
 ):
-    """fp32-state recurrent step (all tensors fp32)."""
+    """fp32-state recurrent step (all tensors fp32).
+
+    Two layout regimes (math-identical):
+      - OLD (3D inputs q_t/k_t/v_t = [B,H,K], beta/decay = [B,H]): each of
+        k_row/q_row/d_row/k_col is built per-op via reshape + to_layout(TILE),
+        then the matmul output is reshaped back — the layout churn Fuse B
+        targets.
+      - TILED (Fuse B, QWEN36_DN_RECUR_TILED=1; 4D inputs q_t/k_t/v_t =
+        [B,H,1,K] already tiled, beta/decay = [B,H,1]): tensors stay in their
+        matmul-ready tiled 4D layout end-to-end; only the genuine k_col
+        transpose remains.  Selected automatically when the inputs arrive 4D
+        and the flag is on (the pre_transposed decode path).
+    """
+    tiled = _recur_tiled_enabled() and len(q_t.shape) == 4
+
+    if tiled:
+        return _recurrent_delta_rule_step_fp32_tiled(
+            q_t,
+            k_t,
+            v_t,
+            beta_t,
+            decay_t,
+            h,
+            seq_len=seq_len,
+            device=device,
+            read_query_prog_cfg=read_query_prog_cfg,
+            matmul_compute_cfg=matmul_compute_cfg,
+            outer_product_prog_cfg=outer_product_prog_cfg,
+        )
+
     B = q_t.shape[0]
     H = q_t.shape[1]
     K = q_t.shape[2]
@@ -218,6 +333,91 @@ def _recurrent_delta_rule_step_fp32(
     q_row.deallocate(True)
     use_l1 = seq_len is not None and seq_len <= 64
     o_t = ttnn.reshape(o_t, [B, H, V], memory_config=ttnn.L1_MEMORY_CONFIG if use_l1 else None)
+    return o_t, h
+
+
+def _recurrent_delta_rule_step_fp32_tiled(
+    q_t,
+    k_t,
+    v_t,
+    beta_t,
+    decay_t,
+    h,
+    seq_len=None,
+    device=None,
+    read_query_prog_cfg=None,
+    matmul_compute_cfg=None,
+    outer_product_prog_cfg=None,
+):
+    """Fuse B: de-churned recurrent step (decode, pre_transposed path).
+
+    Inputs are ALREADY in the matmul-ready tiled 4D layout:
+      q_t, k_t, v_t: fp32 [B, H, 1, K] tiled  (no per-token slice / reshape)
+      beta_t, decay_t: fp32 [B, H, 1]
+      h: fp32 [B, H, K, V] tiled (recurrent state)
+
+    Math is bit-for-bit the same delta-rule step as
+    ``_recurrent_delta_rule_step_fp32`` — only the layout plumbing differs.
+    Eliminated reshape+to_layout(TILE) pairs vs the old path:
+      - k_row build (reshape [B,H,K]->[B,H,1,K] + to_layout)  -> k_t used as-is
+      - v_read reshape-back ([B,H,1,V]->[B,H,V])               -> kept 4D
+      - delta / d_row reshape+to_layout                        -> delta kept 4D
+      - q_row build (reshape + to_layout)                      -> q_t used as-is
+      - o_t reshape-back                                       -> kept 4D
+    The only layout op kept is the genuine k_col transpose (inside the tiled
+    decay-and-write helper).
+    """
+    B = q_t.shape[0]
+    H = q_t.shape[1]
+    K = q_t.shape[3]
+    V = v_t.shape[3]
+
+    if h.layout != ttnn.TILE_LAYOUT:
+        h = ttnn.to_layout(h, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    if matmul_compute_cfg is None:
+        matmul_compute_cfg = _fp32_compute_cfg_hifi4()
+    if read_query_prog_cfg is None and device is not None:
+        try:
+            read_query_prog_cfg = _recurrent_read_query_program_config(device, K, V)
+        except Exception:
+            pass
+
+    # READ: v_read = k @ h.  k_t is already [B,H,1,K] tiled — the read_query
+    # matmul's exact in0 contract.  Output stays [B,H,1,V] (no reshape-back).
+    v_read = ttnn.matmul(
+        k_t,
+        h,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        program_config=read_query_prog_cfg,
+        compute_kernel_config=matmul_compute_cfg,
+    )
+
+    # delta stays [B,H,1,V] tiled — directly usable as d_row.
+    delta = ttnn.subtract(v_t, v_read, memory_config=ttnn.L1_MEMORY_CONFIG)
+    v_read.deallocate(True)
+
+    h = _fused_decay_and_write_fp32_tiled(
+        h=h,
+        k_row=k_t,
+        delta_row=delta,
+        decay_t=decay_t,
+        beta_t=beta_t,
+        device=device,
+        outer_product_prog_cfg=outer_product_prog_cfg,
+        matmul_compute_cfg=matmul_compute_cfg,
+    )
+    delta.deallocate(True)
+
+    # READOUT: o = q @ h_new.  q_t is already [B,H,1,K] tiled.  Output [B,H,1,V]
+    # — returned 4D directly (the caller's reshape to [B,H,1,V] is then a no-op).
+    o_t = ttnn.matmul(
+        q_t,
+        h,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        program_config=read_query_prog_cfg,
+        compute_kernel_config=matmul_compute_cfg,
+    )
     return o_t, h
 
 
@@ -342,13 +542,26 @@ def recurrent_gated_delta_rule_ttnn_fp32(
         except Exception:
             pass
 
+    # Fuse B: in the pre_transposed decode path keep the per-token tensors in
+    # their tiled 4D [B,H,1,K] layout (q[:, :, i:i+1] keeps the T axis) so the
+    # step never has to reshape+to_layout per op.  The old path slices to 3D
+    # [B,H,K] and rebuilds the layout inside the step (its original behaviour).
+    step_tiled = pre_transposed and _recur_tiled_enabled()
+
     outputs_4d_list = []
     for i in range(T):
-        q_t = q[:, :, i]
-        k_t = k[:, :, i]
-        v_t = v[:, :, i]
-        beta_t = beta[:, :, i]
-        decay_t = g_exp[:, :, i]
+        if step_tiled:
+            q_t = q[:, :, i : i + 1]  # [B,H,1,K] tiled
+            k_t = k[:, :, i : i + 1]
+            v_t = v[:, :, i : i + 1]
+            beta_t = beta[:, :, i : i + 1]  # [B,H,1]
+            decay_t = g_exp[:, :, i : i + 1]
+        else:
+            q_t = q[:, :, i]
+            k_t = k[:, :, i]
+            v_t = v[:, :, i]
+            beta_t = beta[:, :, i]
+            decay_t = g_exp[:, :, i]
 
         o_t, h = _recurrent_delta_rule_step_fp32(
             q_t,
