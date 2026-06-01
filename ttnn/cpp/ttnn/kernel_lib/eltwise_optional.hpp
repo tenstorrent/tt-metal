@@ -96,22 +96,19 @@ struct OptionalChainElement<false, Inner>
 
     static constexpr uint32_t lane_width = 1;
     static ALWI void init() {}
+    // Shared per-tile hooks + the 2-arg exec (dest-only inner path).
     ALWI void wait_per_tile(uint32_t) const {}
-    ALWI void wait_upfront(uint32_t) const {}
     ALWI void exec(uint32_t, uint32_t) const {}
     ALWI void pop_per_tile(uint32_t) const {}
-    ALWI void pop_upfront_end(uint32_t) const {}
     ALWI void reserve_per_tile(uint32_t) const {}
-    ALWI void reserve_upfront(uint32_t) const {}
     ALWI void push_per_tile(uint32_t) const {}
-    ALWI void push_at_end(uint32_t) const {}
 
-    // 2D no-op stubs (called by `eltwise_chain(EltwiseShape, ...)` overload).
-    ALWI void wait_upfront_2d(uint32_t, uint32_t) const {}
-    ALWI void exec_2d(uint32_t, uint32_t, uint32_t, uint32_t) const {}
-    ALWI void pop_upfront_end_2d(uint32_t, uint32_t) const {}
-    ALWI void reserve_upfront_2d(uint32_t, uint32_t) const {}
-    ALWI void push_at_end_2d(uint32_t, uint32_t) const {}
+    // No-op stubs for the (Ht, Wt) walk — CB-reader/writer inner path.
+    ALWI void wait_upfront(uint32_t, uint32_t) const {}
+    ALWI void exec(uint32_t, uint32_t, uint32_t, uint32_t) const {}
+    ALWI void pop_upfront_end(uint32_t, uint32_t) const {}
+    ALWI void reserve_upfront(uint32_t, uint32_t) const {}
+    ALWI void push_at_end(uint32_t, uint32_t) const {}
 };
 
 }  // namespace compute_kernel_lib
