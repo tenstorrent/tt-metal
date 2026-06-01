@@ -364,7 +364,7 @@ class RMVPEPitchAlgorithm:
 
     def _extract_raw_pitch_and_periodicity(
         self, audio: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         audio_processed = self._preprocess_audio(audio)
 
         with torch.no_grad():

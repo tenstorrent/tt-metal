@@ -203,7 +203,7 @@ class ConvFeatureExtractionModel(nn.Module):
                     make_conv(),
                     nn.Sequential(
                         TransposeLast(),
-                        nn.LayerNorm(dim, elementwise_affine=True),
+                        nn.LayerNorm(n_out, elementwise_affine=True),
                         TransposeLast(),
                     ),
                     nn.GELU(),
@@ -211,7 +211,7 @@ class ConvFeatureExtractionModel(nn.Module):
             elif is_group_norm:
                 return nn.Sequential(
                     make_conv(),
-                    nn.GroupNorm(dim, dim, affine=True),
+                    nn.GroupNorm(n_out, n_out, affine=True),
                     nn.GELU(),
                 )
             else:

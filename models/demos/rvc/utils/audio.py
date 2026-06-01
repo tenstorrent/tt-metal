@@ -17,26 +17,23 @@ BATCH_AUDIO_SIZE = 8
 
 def transcode_audio(input_stream, output_stream, output_format, sample_rate):
     """Transcode audio between formats using PyAV."""
-    inp = av.open(input_stream, "r")
-    out = av.open(output_stream, "w", format=output_format)
     codec = output_format
     if codec == "ogg":
         codec = "libvorbis"
     if codec == "f32le":
         codec = "pcm_f32le"
 
-    ostream = out.add_stream(codec, rate=sample_rate)
-    try:
-        ostream.layout = "mono"
-    except (ValueError, AttributeError):
-        pass
+    with av.open(input_stream, "r") as inp, \
+         av.open(output_stream, "w", format=output_format) as out:
+        ostream = out.add_stream(codec, rate=sample_rate)
+        try:
+            ostream.layout = "mono"
+        except (ValueError, AttributeError):
+            pass
 
-    for frame in inp.decode(audio=0):
-        for p in ostream.encode(frame):
-            out.mux(p)
-
-    out.close()
-    inp.close()
+        for frame in inp.decode(audio=0):
+            for p in ostream.encode(frame):
+                out.mux(p)
 
 
 def _decode_audio(f, sr):

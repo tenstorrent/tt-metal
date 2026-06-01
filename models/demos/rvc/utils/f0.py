@@ -18,4 +18,10 @@ class F0Method(str, Enum):
     def from_str(cls, value: "F0Method | str") -> "F0Method":
         if isinstance(value, cls):
             return value
-        return cls(value)
+        try:
+            return cls(value)
+        except ValueError as e:
+            supported = ", ".join(m.value for m in cls)
+            raise ValueError(
+                f"Unsupported f0 method: {value!r}. Supported: {supported}"
+            ) from e
