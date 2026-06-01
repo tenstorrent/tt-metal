@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Eltwise helper API — simplification proposal</title>
+<style>
+  :root{
+    --bg:#0f1419; --panel:#171d26; --panel2:#1d2531; --ink:#e6edf3; --mut:#9aa7b4;
+    --line:#2a3441; --accent:#4ea1ff; --good:#3fb950; --warn:#d29922; --bad:#f85149;
+    --code:#0b0f14;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  .layout{display:grid;grid-template-columns:240px 1fr;max-width:1180px;margin:0 auto;min-height:100vh}
+  nav{position:sticky;top:0;align-self:start;height:100vh;overflow:auto;padding:28px 18px;border-right:1px solid var(--line)}
+  nav h4{color:var(--mut);font-size:11px;text-transform:uppercase;letter-spacing:1px;margin:18px 0 8px}
+  nav a{display:block;color:var(--ink);text-decoration:none;padding:5px 10px;border-radius:7px;font-size:13.5px;opacity:.85}
+  nav a:hover{background:#ffffff0d;opacity:1}
+  nav a.lock::before{content:"●";color:var(--good);font-size:9px;margin-right:8px;vertical-align:middle}
+  nav a.open::before{content:"○";color:var(--warn);font-size:9px;margin-right:8px;vertical-align:middle}
+  main{padding:40px 44px 120px;min-width:0}
+  h1{font-size:30px;margin:0 0 4px;letter-spacing:-.4px}
+  h2{font-size:23px;margin:50px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--line);scroll-margin-top:20px}
+  h3{font-size:17px;margin:26px 0 8px;color:var(--accent)}
+  .sub{color:var(--mut);margin:0 0 24px;font-size:15px}
+  p{margin:10px 0}
+  code{font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;font-size:.86em;
+    background:var(--code);padding:1px 6px;border-radius:5px;color:#cdd9e5}
+  pre{background:var(--code);border:1px solid var(--line);border-radius:10px;
+    padding:14px 16px;overflow:auto;font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
+    font-size:12.5px;line-height:1.55}
+  pre .c{color:#6e7b8a}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:16px 0}
+  table{border-collapse:collapse;width:100%;margin:14px 0;font-size:13.5px}
+  th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--mut);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.4px}
+  td.num{text-align:right;font-variant-numeric:tabular-nums;font-family:ui-monospace,monospace}
+  tr:hover td{background:#ffffff06}
+  .tag{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:20px;letter-spacing:.3px;white-space:nowrap}
+  .t-lock{background:#3fb95022;color:#56d364;border:1px solid #3fb95055}
+  .t-open{background:#d2992222;color:#e3b341;border:1px solid #d2992255}
+  .t-dead{background:#f8514922;color:#ff7b72;border:1px solid #f8514955}
+  .t-rej{background:#6e7b8a22;color:#9aa7b4;border:1px solid #6e7b8a55}
+  ul{margin:8px 0;padding-left:22px} li{margin:5px 0}
+  del{color:#ff7b72;text-decoration-color:#f8514988}
+  ins{color:#56d364;text-decoration:none;background:#3fb95018;padding:0 3px;border-radius:4px}
+  .change{border:1px solid var(--line);border-left:4px solid var(--good);border-radius:10px;padding:4px 22px 18px;margin:22px 0;background:var(--panel)}
+  .change.open{border-left-color:var(--warn)}
+  .change.rej{border-left-color:#6e7b8a;background:#12161c}
+  .change h2{border:0;margin:18px 0 6px}
+  .meta{display:flex;gap:22px;flex-wrap:wrap;color:var(--mut);font-size:12.5px;margin:6px 0 10px}
+  .meta b{color:var(--ink);font-weight:600}
+  .kicker{color:var(--mut);font-size:12px;text-transform:uppercase;letter-spacing:1px;margin-bottom:16px}
+  .lead{font-size:16px}
+  .foot{color:var(--mut);font-size:12px;margin-top:70px;border-top:1px solid var(--line);padding-top:16px}
+  .ba{display:grid;grid-template-columns:1fr;gap:12px}
+  .ba .lab{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--mut);margin-bottom:4px}
+</style>
+</head>
+<body>
+<div class="layout">
+<nav>
+  <div style="font-weight:700;font-size:14px;margin-bottom:4px">Eltwise API</div>
+  <div style="color:var(--mut);font-size:12px;margin-bottom:8px">simplification proposal</div>
+  <h4>Locked changes</h4>
+  <a class="lock" href="#c1">1 · Delete two dead items</a>
+  <a class="lock" href="#c2">2 · Keep reconfig (document why)</a>
+  <a class="lock" href="#c3">3 · Reorder template params</a>
+  <a class="lock" href="#c4">4 · TileOffset binary enum</a>
+  <a class="lock" href="#c5">5 · Clamp block_size to DEST</a>
+  <a class="lock" href="#c6">6 · Remove PackTile IndexMode</a>
+  <a class="lock" href="#c7">7 · UnaryBcast small init, drop CbOut</a>
+  <a class="lock" href="#c8">8 · Remove dead 1D path, drop _2d suffix</a>
+  <a class="lock" href="#c9">9 · Infer PackTile DEST slot</a>
+  <h4>Open</h4>
+  <a class="open" href="#o1">Unify reconfig enums?</a>
+  <h4>Reference</h4>
+  <a href="#rejected">Rejected / considered</a>
+  <a href="#data">Usage data appendix</a>
+</nav>
+<main>
+
+<div class="kicker">tt-metal · ttnn/cpp/ttnn/kernel_lib · eltwise_chain</div>
+<h1>Eltwise helper API — simplification proposal</h1>
+<p class="sub">A review document. <b>No code changes are proposed for now</b> — this captures what we agreed should change so it can be reviewed and used to drive the work later. Goal: make the API as simple as possible at the call site while keeping the full functionality and versatility (lifecycle taxonomy, broadcast, n-ary SFPU, dest-reuse, tile offsets) intact.</p>
+
+<div class="panel">
+<b>Scope at a glance</b>
+<table>
+  <tr><th>#</th><th>Change</th><th>Status</th><th>Blast radius</th></tr>
+  <tr><td>1</td><td>Delete two dead items (<code>eltwise_chain_with_init</code>, <code>PackTileBlock</code>) — keep the rest as migration targets</td><td><span class="tag t-lock">locked</span></td><td>none (both uncalled)</td></tr>
+  <tr><td>2</td><td>Keep the reconfig knob; document why it exists</td><td><span class="tag t-lock">locked</span></td><td>docs only</td></tr>
+  <tr><td>3</td><td>Reorder element template params + type-qualified values</td><td><span class="tag t-lock">locked</span></td><td>all ~82 call-site files (mechanical)</td></tr>
+  <tr><td>4</td><td>Collapse <code>TileBase</code> (3 types) → binary <code>TileOffset</code> enum</td><td><span class="tag t-lock">locked</span></td><td>~78 offset sites</td></tr>
+  <tr><td>5</td><td>Clamp runtime <code>block_size</code> to compile-time DEST capacity</td><td><span class="tag t-lock">locked</span></td><td>dispatch body only</td></tr>
+  <tr><td>6</td><td>Remove <code>OperandKind IndexMode</code> from <code>PackTile</code></td><td><span class="tag t-lock">locked</span></td><td>346 PackTile sites (drop a token)</td></tr>
+  <tr><td>7</td><td><code>UnaryBcast</code>: per-element small init (drop BIG init), remove <code>CbOut</code></td><td><span class="tag t-lock">locked</span></td><td>8 UnaryBcast sites; init inlined in helper</td></tr>
+  <tr><td>8</td><td>Remove the dead 1D dispatch path; drop the <code>_2d</code> suffix</td><td><span class="tag t-lock">locked</span></td><td>internal only (no call-site change)</td></tr>
+  <tr><td>9</td><td>Infer <code>PackTile</code>'s DEST slot from the preceding writer (keep explicit override)</td><td><span class="tag t-lock">locked</span></td><td>346 PackTile sites (drop the slot token)</td></tr>
+  <tr><td>—</td><td>Unify the reconfig enums into one shared two-state type</td><td><span class="tag t-open">open</span></td><td>find/replace</td></tr>
+</table>
+<p style="margin:6px 0 0;color:var(--mut);font-size:13px">Backing data: ~330 <code>eltwise_chain</code> invocations across 82 production kernel files, ~760 element instantiations. Full counts in the <a href="#data" style="color:var(--accent)">appendix</a>.</p>
+</div>
+
+<!-- ============================================================ -->
+<div class="change" id="c1">
+<h2>1 · Delete two dead items only <span class="tag t-lock">locked</span></h2>
+<div class="meta"><span>Risk: <b>none</b></span><span>Functionality lost: <b>none</b></span><span>Effort: <b>mechanical</b></span></div>
+<p>Migration onto the chain helper is <b>still in progress</b>, so "zero callers today" does <b>not</b> mean "safe to delete" — most no-caller surface (the convenience wrappers, the fuller lifecycle/reconfig sets) is intentionally retained as a <em>migration target</em> for kernels not yet converted. We delete only the two items that are <b>not</b> migration targets:</p>
+<table>
+  <tr><th>Surface</th><th>Evidence</th><th>Action</th></tr>
+  <tr><td><code>eltwise_chain_with_init</code></td><td><b>Phantom</b> — has a full doc section (U4) + worked example in <code>eltwise_chain.hpp</code>, but no definition exists. It is also an antipattern (box below), so nothing should ever migrate <em>onto</em> it.</td><td>Delete the doc references; add to <a href="#rejected" style="color:var(--accent)">rejected patterns</a> with the rationale.</td></tr>
+  <tr><td><code>PackTileBlock</code></td><td>Declared + implemented (<code>.inl</code>), <b>0</b> call sites. Superseded by <code>PackTile + OperandKind::Block</code> — that is the migration target, so <code>PackTileBlock</code> is dead, not pending.</td><td>Delete declaration + impl.</td></tr>
+</table>
+<div class="panel">
+<b>Retained during migration (do <span style="color:var(--warn)">not</span> delete yet)</b>
+<p style="margin:8px 0 0">These have no callers <em>yet</em> but are kept as migration targets / capability headroom until the migration is complete, then re-assessed:</p>
+<ul style="margin:8px 0 0">
+  <li><code>eltwise_convenience.hpp</code> — the <code>binary_add/sub/mul</code> / <code>unary</code> / <code>copy</code> / <code>binary_sfpu</code> wrappers.</li>
+  <li><code>BinaryDataFormatReconfig::{SrcA,SrcB}</code>, <code>DestReuseReconfig::{SrcA,SrcB}</code> — single-side reconfig variants.</li>
+  <li>Output lifecycles <code>OutBulkReservePerTile</code>, <code>OutBulkReservePerChunk</code>, <code>OutHeldReserve</code>.</li>
+</ul>
+<p style="margin:8px 0 0;color:var(--mut);font-size:13px">Post-migration cleanup of whatever is still uncalled is a follow-up, out of scope for this proposal.</p>
+</div>
+<div class="panel" style="border-color:#f8514944">
+<b style="color:#ff7b72">Why <code>eltwise_chain_with_init</code> is an antipattern (record this so it isn't reintroduced)</b>
+<p style="margin:8px 0 0">It folds <code>compute_kernel_hw_startup</code> (a BIG init) <em>into</em> the chain call, directly violating the library's D8 caller-init contract: the chain deliberately owns <b>only</b> per-element init and never BIG init. That contract isn't arbitrary — mid-<code>MAIN()</code> <code>compute_kernel_hw_startup</code> is undefined (MMIO-unsafe), multi-stage kernels need one boot <em>per stage</em>, and kernels mixing raw primitives need the caller to control init placement. A <code>_with_init</code> wrapper hides that placement decision and is only correct for the narrow single-stage case — so a caller reaches for the convenient one-liner, later hits a multi-stage or mid-loop chain, and gets UB. Convenience that is correct in the minority case and a footgun in the rest.</p>
+</div>
+</div>
+
+<!-- ============================================================ -->
+<div class="change" id="c2">
+<h2>2 · Keep the reconfig knob — and document why it exists <span class="tag t-lock">locked</span></h2>
+<div class="meta"><span>Risk: <b>none</b></span><span>Change: <b>documentation</b></span></div>
+<p>We considered defaulting reconfig on / removing it as a per-element parameter. <b>That is wrong — <code>Reconfig::None</code> is load-bearing.</b> This section documents the non-obvious mechanism, which today only survives as scattered call-site comments.</p>
+
+<p>The fold compile-time-elides a reconfig only when <code>prev_cb == cur_cb</code> <em>within the chain</em>. But the <b>first</b> CB-reader has no in-chain predecessor, so with <code>Reconfig::Input</code> it emits an unconditional <b>single-arg</b> reconfig on entry — and the single-arg form does <em>not</em> short-circuit on format equality the way the two-arg <code>_with_dt</code> form does. So <code>Reconfig::None</code> is the caller saying <em>"boot init already programmed this exact format — skip the redundant entry reprogram."</em></p>
+
+<p>The canonical example is typecast — it <em>changes</em> dtype (the case you'd most expect to need a reconfig) yet correctly uses <code>None</code> on both ends, because <code>init_sfpu</code> already programmed the single input and single output CB:</p>
+<pre><span class="c">// eltwise_typecast.cpp</span>
+init_sfpu(input_cb, output_cb);                <span class="c">// boot init: srca=input_cb, pack=output_cb</span>
+eltwise_chain(total_tiles,
+    CopyTile&lt;input_cb,  ..., CopyTileReconfig::None&gt;{},   <span class="c">// boot already set srca</span>
+    Typecast&lt;IN_DF, OUT_DF, D0&gt;{},
+    PackTile&lt;output_cb, ..., PackTileReconfig::None&gt;{});  <span class="c">// boot already set pack</span></pre>
+<p>The pattern across all <code>None</code> sites (copy, identity, typecast, sharded copy, bcast_h/w/hw): a single input CB and single output CB, both already programmed by the caller's boot init. Dropping the knob would add a wasted entry reprogram to the simplest, hottest kernels. <b>Keep it.</b></p>
+</div>
+
+<!-- ============================================================ -->
+<div class="change" id="c3">
+<h2>3 · Reorder element template params + type-qualified values <span class="tag t-lock">locked</span></h2>
+<div class="meta"><span>Risk: <b>low</b> (compile-checked)</span><span>Effort: <b>mechanical sweep</b></span><span>Removes: <b>~1,200 forced-default tokens</b></span></div>
+
+<h3>The problem</h3>
+<p>Today the high-variance knobs sit <em>behind</em> or <em>interleaved with</em> the near-constant ones, so callers must spell out a default just to reach the next slot. In the codebase that means <b>829</b> explicit <code>OperandKind::Scalar</code>, <b>936</b> explicit <code>Dst::D0</code>, <b>205</b> explicit <code>…Reconfig::Input</code> — overwhelmingly the parameter's own default, typed only as scaffolding. Plus bare value names like <code>Bulk</code> give no hint which axis they configure.</p>
+
+<h3>The three rules</h3>
+<ol>
+  <li><b>Mandatory args first, defaults trailing</b> — so the common case writes nothing extra.</li>
+  <li><b>Axis-major pairing</b> — the <em>same</em> arg for the two inputs sits adjacent (the two lifecycles together, the two indices together). Fixes the current bug where <code>Dst</code> is <b>wedged between <code>AIndex</code> and <code>BIndex</code></b>.</li>
+  <li><b>Type-qualified values</b> — write <code>InputLifecycle::Bulk</code>, not bare <code>Bulk</code>, so the call site says which axis is being set.</li>
+</ol>
+
+<h3>BinaryFpu — the worst offender</h3>
+<div class="ba">
+<div><div class="lab">before — 12 params, Dst wedged, Bcast/Reconfig ahead of the policies</div>
+<pre><del>BinaryFpu&lt;CbA, CbB, Op, Bcast, DfReconfig, APolicy, BPolicy,
+          AIndex, Dst, BIndex, TileBaseA, TileBaseB&gt;</del></pre></div>
+<div><div class="lab">after — mandatory up front, like-args paired, defaults trailing, qualified</div>
+<pre><ins>BinaryFpu&lt;CbA, CbB, BinaryFpuOp::Mul,                          </ins><span class="c">// mandatory</span>
+<ins>          InputLifecycle::Bulk, InputLifecycle::HeldStream,  </ins><span class="c">// 2 lifecycles — paired</span>
+<ins>          OperandKind::Block,   OperandKind::Scalar,         </ins><span class="c">// 2 indices — paired</span>
+<ins>          BroadcastDim::Col, Dst::D0, BinaryDataFormatReconfig::Input,</ins>
+<ins>          TileOffset::Unset, TileOffset::Unset&gt;              </ins><span class="c">// rare per-operand tail, paired</span></pre></div>
+</div>
+<p style="margin-top:6px">Common case collapses to <code>BinaryFpu&lt;cb_a, cb_b, BinaryFpuOp::Mul&gt;{}</code>.</p>
+
+<h3>CopyTile &amp; PackTile</h3>
+<pre><span class="c">// CopyTile — policy is the high-variance knob so it leads; Dst (D1 used 91&times;) next.</span>
+CopyTile&lt;Cb, InputLifecycle::Streaming, Dst::D0, OperandKind::Scalar,
+         CopyTileReconfig::Input, TileOffset::Unset&gt;
+<span class="c">//  common:               CopyTile&lt;cb_in&gt;{}</span>
+<span class="c">//  SFPU-binary 2nd input: CopyTile&lt;cb_b, InputLifecycle::Streaming, Dst::D1&gt;{}</span>
+
+<span class="c">// PackTile — IndexMode removed (Change 6); DEST slot inferred from the preceding</span>
+<span class="c">// writer (Change 9), with an explicit trailing override kept for fan-out.</span>
+PackTile&lt;Cb, OutputLifecycle::Streaming, PackTileReconfig::Output, TileOffset::Unset
+         /*, Dst slot override (default: inferred) */&gt;
+<span class="c">//  common:  PackTile&lt;cb_out&gt;{}</span></pre>
+
+<h3>Implementation consequence — lifecycle constants must become static members</h3>
+<p>To write <code>InputLifecycle::Bulk</code> (rather than the bare namespace constant <code>Bulk</code>), the named cells can no longer be namespace-scope <code>inline constexpr</code> constants — they become <b>static members of the lifecycle struct</b>:</p>
+<pre>struct InputLifecycle {
+    WaitPolicy wait; PopPolicy pop;
+    static const InputLifecycle Streaming, Bulk, HeldStream, <span class="c">/* … */</span>;   <span class="c">// declared in-class</span>
+};
+inline constexpr InputLifecycle InputLifecycle::Bulk{WaitPolicy::Upfront, PopPolicy::AtEnd}; <span class="c">// out-of-line</span></pre>
+<p><b>Side benefit:</b> once values are qualified by type, the <code>Out</code> prefix on outputs is redundant noise — <code>OutStreaming</code> → <code>OutputLifecycle::Streaming</code>, <code>OutBulk</code> → <code>OutputLifecycle::Bulk</code>. Fold that rename in. (The <code>Held</code> / <code>Bulk</code> / <code>Deferred</code> prefixes stay — they encode real behavior, not namespace disambiguation.)</p>
+</div>
+
+<!-- ============================================================ -->
+<div class="change" id="c4">
+<h2>4 · Collapse <code>TileBase</code> (3 types) → binary <code>TileOffset</code> enum <span class="tag t-lock">locked</span></h2>
+<div class="meta"><span>Risk: <b>low</b></span><span>Removes: <b>1 type + the CompileTime variant</b></span></div>
+
+<p>Today there are three flavors: <code>TileBaseNone</code>, <code>TileBaseCompileTime&lt;K&gt;</code>, <code>TileBaseRuntime</code>. We verified in <code>eltwise_chain.inl</code> that the base value is <b>only ever a runtime LLK argument</b> — it flows through <code>tile_base_value(...)</code> into <code>cb_wait_front</code> / <code>cb_pop_front</code> / <code>cb_reserve_back</code> / <code>cb_push_back</code> counts and into the runtime tile index. There is <b>no constexpr consumer</b> (no template arg, no <code>static_assert</code>, no array bound).</p>
+
+<p>So <code>TileBaseCompileTime&lt;K&gt;</code> buys nothing over a runtime value (a constexpr passed to the ctor still constant-propagates into the <code>add</code> immediate) and actively costs an extra type plus per-<code>K</code> template instantiations. And because the only meaningful distinction left is <b>"is there an offset or not"</b>, the whole thing is a compile-time boolean with a runtime value when true.</p>
+
+<div class="ba">
+<div><div class="lab">before — three types</div>
+<pre><del>struct TileBaseNone {};
+template&lt;uint32_t K&gt; struct TileBaseCompileTime { ... };
+struct TileBaseRuntime { uint32_t base; ... };</del></pre></div>
+<div><div class="lab">after — one binary enum; runtime value via ctor when Set</div>
+<pre><ins>enum class TileOffset : bool { Unset = false, Set = true };</ins>
+
+<span class="c">// Unset (default) — `+base` term and field fully elided via if constexpr:</span>
+CopyTile&lt;cb_in, InputLifecycle::Bulk, Dst::D0, OperandKind::Block&gt;{}
+
+<span class="c">// Set — offset present, value supplied at runtime:</span>
+CopyTile&lt;cb_scalar, InputLifecycle::CallerManaged, Dst::D0, OperandKind::Scalar,
+         CopyTileReconfig::Input, <ins>TileOffset::Set</ins>&gt;{ beta2_tile }</pre></div>
+</div>
+<p>The implementation keeps the zero-overhead path: <code>if constexpr (Offset == TileOffset::Unset)</code> elides both the runtime field and the <code>+base</code> add. The ~29 <code>CompileTime</code> sites become <code>TileOffset::Set</code> with the constant passed to the ctor — identical generated code.</p>
+<p style="color:var(--mut);font-size:13px"><b>Honest caveat:</b> the type no longer encodes the offset as a compile-time constant. Since nothing downstream needs a constant, this has zero observable effect.</p>
+</div>
+
+<!-- ============================================================ -->
+<div class="change" id="c5">
+<h2>5 · Clamp <code>block_size</code> to compile-time DEST capacity <span class="tag t-lock">locked</span></h2>
+<div class="meta"><span>Risk: <b>low</b></span><span>Change: <b>dispatch body</b></span><span>Fixes: <b>silent DEST-overflow footgun</b></span></div>
+
+<p><code>block_size</code> is now a <b>runtime</b> field of <code>EltwiseShape</code>. The dispatch reads it and only forces it to <code>1</code> for chains that don't support block mode (<code>chain_supports_block_v</code>). DEST overflow — <code>block_size &times; chain_lane_width &gt; DEST_AUTO_LIMIT</code> — is left entirely to the caller: <code>eltwise_chain.inl</code> tells the caller to "query <code>chain_max_block_v&lt;Chain&gt;</code> and <code>static_assert</code> at the call site." But because the value is runtime, most callers <b>can't</b> static_assert it, and an oversized <code>block_size</code> silently overflows DEST → corruption.</p>
+
+<p>The ceiling, however, <em>is</em> compile-time and already computed:</p>
+<pre>chain_max_block_v&lt;Chain&gt; = DEST_AUTO_LIMIT / chain_lane_width_v&lt;Chain&gt;;
+<span class="c">//                          ^^^^^^^^^^^^^^   ^^^^^^^^^^^^^^^^^^^^^^^^^^
+//                          DEST capacity    max per-lane DEST footprint across the chain's elements</span></pre>
+
+<p>So clamp the runtime <code>block_size</code> against that compile-time constant in the dispatch — it can then never overflow DEST:</p>
+<div class="ba">
+<div><div class="lab">before — caller's responsibility, silent corruption if wrong</div>
+<pre>uint32_t block_size = shape.block_size;
+if constexpr (!chain_supports_block_v&lt;Chain&gt;) {
+    block_size = 1;                <span class="c">// unsupported chains: per-tile only</span>
+}
+<del>// DEST overflow left to the caller — no guard</del></pre></div>
+<div><div class="lab">after — clamp to the chain's compile-time DEST capacity</div>
+<pre>uint32_t block_size = shape.block_size;
+if constexpr (!chain_supports_block_v&lt;Chain&gt;) {
+    block_size = 1;
+} else {
+    <ins>constexpr uint32_t max_block = chain_max_block_v&lt;Chain&gt;;   // DEST_AUTO_LIMIT / chain_lane_width</ins>
+    <ins>block_size = block_size &lt; max_block ? block_size : max_block;  // never overflow DEST</ins>
+}</pre></div>
+</div>
+
+<p><b>Correctness-safe:</b> clamping <code>block_size</code> <em>down</em> only makes the outer loop take more iterations (<code>for (wt_base += block_size)</code> still covers all <code>Wt</code> tiles) — total tile coverage is unchanged. It removes a silent-corruption footgun at the cost of one runtime compare against a compile-time constant. This also matches the library's existing philosophy: the unsupported-chain case already silently clamps to <code>1</code>.</p>
+
+<p style="color:var(--mut);font-size:13px"><b>Note:</b> a <code>static_assert</code> isn't possible — <code>block_size</code> is runtime — so a runtime clamp is the right mechanism. <b>Optional:</b> under <code>--dev</code>, also fire an <code>LLK_ASSERT(block_size &lt;= max_block)</code> so a caller's over-sized request surfaces loudly in debug builds while still being clamped in release. <em>(Dev-assert is a recommendation, not yet locked — see question below.)</em></p>
+</div>
+
+<!-- ============================================================ -->
+<div class="change" id="c6">
+<h2>6 · Remove <code>OperandKind IndexMode</code> from <code>PackTile</code> <span class="tag t-lock">locked</span></h2>
+<div class="meta"><span>Risk: <b>low</b></span><span>Functionality lost: <b>none in use</b></span><span>Removes: <b>a token from 346 sites + a footgun</b></span></div>
+
+<p>Unlike inputs, the output side has no "broadcast on write" — a pack always writes the result tile. So an <code>OperandKind</code> (a broadcast/index concept) doesn't belong on <code>PackTile</code>. The header's own design note agrees:</p>
+<pre><span class="c">// eltwise_chain.hpp</span>
+<span class="c">/// Per-input operand kind. The output kind is always `Block` … so no enum is</span>
+<span class="c">/// defined for the output side.</span></pre>
+<p>…yet a <code>OperandKind IndexMode = Scalar</code> param exists on <code>PackTile</code> anyway.</p>
+
+<h3>What it actually does — and why it's removable</h3>
+<ul>
+  <li><b>Only two of the four values are implemented:</b> <code>Scalar</code> (out_idx pinned to <code>base</code>, OutBulk window = 1) and <code>Block</code> (out_idx walks <code>base + i_flat</code>, window = <code>Ht&times;Wt</code>). <code>Row</code>/<code>Col</code> are <b>not</b> special-cased — they fall into the <code>else</code>/<code>Block</code> branch and silently mis-address the output. <span class="tag t-dead">footgun</span></li>
+  <li><b>No call site uses anything but <code>Scalar</code></b> — 0 of 346 <code>PackTile</code> instantiations pass <code>Block</code>/<code>Row</code>/<code>Col</code>.</li>
+  <li>The <code>Block</code> "walking output" branch is the multi-tile windowed-output capability. It is <b>coupled by static_assert to OutBulk-family</b> (and forbidden with <code>OutStreaming</code>) — which is exactly the evidence that the index mode is <b>redundant with the Policy</b>: whether the pack walks or stays pinned is already determined by the <code>OutputLifecycle</code>, not by an independent knob.</li>
+</ul>
+
+<h3>Walking the output window is preserved — derived from Policy</h3>
+<p>Removing the knob must not lose the ability to walk a multi-tile output window. It doesn't — the behavior is <em>derived</em> from the <code>OutputLifecycle</code>:</p>
+<table>
+  <tr><th>Output policy</th><th>Output addressing (derived)</th></tr>
+  <tr><td>Windowed / upfront — <code>OutBulk</code>, <code>OutDeferredReserve</code></td><td><b>Walk:</b> <code>out_idx = base + i_flat</code>, reserve/push window = iteration count. The general case.</td></tr>
+  <tr><td>Per-tile / per-chunk — <code>OutStreaming</code>, <code>OutChunked</code>, <code>OutHeldReserve</code></td><td><b>Pinned:</b> <code>out_idx = base</code> — the per-tile/chunk reserve+push advances the CB front each iter, so a pinned index is correct.</td></tr>
+</table>
+<p>The current <code>OutBulk + Scalar</code> sites (the <code>onetile</code> pattern) are just the <b>iteration-count = 1</b> degenerate of walking — <code>base + i_flat</code> with <code>i_flat = 0</code> <em>is</em> <code>base</code> — so "always walk for windowed policies" subsumes them. In fact <code>OutBulk + Scalar</code> with <code>n &gt; 1</code> is a silent <code>reserve(1)</code>/<code>push(n)</code> mismatch today, so deriving walk-from-Policy is strictly <b>more</b> correct and closes a latent footgun.</p>
+
+<div class="ba">
+<div><div class="lab">before</div>
+<pre><del>PackTile&lt;Cb, OutputLifecycle, OperandKind IndexMode, PackTileReconfig, Dst, TileOffset&gt;</del></pre></div>
+<div><div class="lab">after — IndexMode gone; walk-vs-pin derived from OutputLifecycle</div>
+<pre><ins>PackTile&lt;Cb, OutputLifecycle::Streaming, PackTileReconfig::Output, Dst::D0, TileOffset::Unset&gt;</ins>
+<span class="c">// common:  PackTile&lt;cb_out&gt;{}</span></pre></div>
+</div>
+
+<p><b>Net effect:</b> drops a redundant token from all 346 <code>PackTile</code> sites, removes the <code>Row</code>/<code>Col</code> footgun, fixes the latent <code>OutBulk + Scalar (n&gt;1)</code> mismatch, and aligns the code with its own stated design (no output-side kind enum). Internally, <code>exec</code> picks walk vs pinned addressing from the <code>OutputLifecycle</code> Policy — no caller knob.</p>
+</div>
+
+<!-- ============================================================ -->
+<div class="change" id="c7">
+<h2>7 · <code>UnaryBcast</code> — per-element small init, drop <code>CbOut</code> <span class="tag t-lock">locked</span></h2>
+<div class="meta"><span>Risk: <b>low–med</b></span><span>Removes: <b>a per-entry engine re-boot + the <code>CbOut</code> param</b></span><span>Adds: <b>nothing — init inlined in the helper</b></span></div>
+
+<p><code>UnaryBcast</code> is the <b>only</b> chain element that does a BIG init per entry. Its <code>init()</code> calls <code>unary_bcast_init&lt;bt&gt;(icb, ocb)</code>, which re-boots unpack/math/pack engine state:</p>
+<pre><span class="c">// unary_bcast_init — runs on every chain entry</span>
+state_configure&lt;SRCA, PACK&gt;(icb, ocb);
+llk_unpack_hw_configure(icb);                       <span class="c">// BIG</span>
+llk_unpack_A_init&lt;bcast_type, …&gt;(icb);              <span class="c">// ← the only per-element MOP work needed</span>
+llk_math_eltwise_unary_datacopy_init&lt;…, bcast_type&gt;(icb);  <span class="c">// ← needed (icb only)</span>
+llk_math_pack_sync_init();                          <span class="c">// BIG</span>
+llk_math_hw_configure(icb, icb);                    <span class="c">// BIG</span>
+llk_pack_hw_configure(<b>ocb</b>);                         <span class="c">// BIG — the only lines that need ocb</span>
+llk_pack_init(<b>ocb</b>);                                  <span class="c">// BIG</span>
+llk_pack_dest_init();                               <span class="c">// BIG</span></pre>
+
+<p>This contradicts the same D8 caller-init contract that makes <code>eltwise_chain_with_init</code> an antipattern (Change 1) and the reconfig design (Change 2): <b>chain elements do small per-element MOP init only; the caller owns BIG init.</b> Every other element already follows this — <code>CopyTile</code> → <code>copy_tile_to_dst_init_short</code>, <code>BinaryFpu</code> → <code>add_tiles_init</code>, etc. A per-entry <code>hw_configure</code> is also exactly the MMIO-unsafe mid-kernel write D8 warns about.</p>
+
+<h3>The fix</h3>
+<ol>
+  <li><b>Inline the small init directly in <code>UnaryBcast::init()</code></b> (in <code>eltwise_chain.inl</code>) — emit <b>only</b> the two MOP inits, wrapped in the usual <code>UNPACK(())</code> / <code>MATH(())</code> guards. No <code>hw_configure</code>, no pack init, and <b>no new <code>bcast.h</code> API</b> — this keeps the change contained to the helper and avoids churning the shared LLK header. It needs only <code>icb</code> (the <code>enable_unpack_to_dest</code> A2D/B2D selection reads <code>icb</code>'s format, so <code>ocb</code> isn't required).</li>
+  <li><b>Drop the <code>CbOut</code> template param</b> — it existed only to feed the pack-side of the BIG init. Pack-side configuration / reconfig moves to the downstream <code>PackTile</code> (<code>PackTileReconfig::Output</code>), exactly like <code>BinaryFpu</code>, which writes to DEST and never owns a pack target.</li>
+</ol>
+
+<div class="ba">
+<div><div class="lab">before — CbOut present, BIG init via bcast.h</div>
+<pre><del>UnaryBcast&lt;BroadcastDim Dim, uint32_t Cb, uint32_t CbOut = 0, Dst DstSlot = D0,
+           InputLifecycle Policy = Streaming, UnaryBcastReconfig Reconfig = Input&gt;</del>
+<span class="c">// init: unary_bcast_init&lt;bt&gt;(Cb, CbOut ? CbOut : Cb);   // BIG</span></pre></div>
+<div><div class="lab">after — CbOut gone, small init inlined in the element</div>
+<pre><ins>UnaryBcast&lt;BroadcastDim Dim, uint32_t Cb, Dst DstSlot = D0,
+           InputLifecycle Policy = Streaming, UnaryBcastReconfig Reconfig = Input&gt;</ins>
+<span class="c">// init() body, inlined — no new LLK API:</span>
+UNPACK((llk_unpack_A_init&lt;bt, …&gt;(<ins>Cb</ins>)));
+MATH((llk_math_eltwise_unary_datacopy_init&lt;…, bt&gt;(<ins>Cb</ins>)));</pre></div>
+</div>
+
+<p><b>Benefits:</b> removes a per-entry engine re-boot (perf + correctness hygiene), brings <code>UnaryBcast</code> in line with every other element, and drops a template param. <b>Risk note:</b> the small init relies on the caller's boot init having already done <code>hw_configure</code> — the same assumption every other chain element already depends on.</p>
+</div>
+
+<!-- ============================================================ -->
+<div class="change" id="c8">
+<h2>8 · Remove the dead 1D dispatch path; drop the <code>_2d</code> suffix <span class="tag t-lock">locked</span></h2>
+<div class="meta"><span>Risk: <b>low</b> (deleting unreachable code)</span><span>Scope: <b>internal — no call-site change</b></span><span>Removes: <b>~half the per-element lifecycle/exec surface</b></span></div>
+
+<p>There is only one public entry, <code>eltwise_chain(EltwiseShape, …)</code>. A bare <code>eltwise_chain(n_tiles, …)</code> converts via <code>EltwiseShape(uint32_t) → {Ht=1, Wt=n}</code> and runs through the <b>same 2D dispatch</b>. <b>The 2D path subsumes 1D</b> — the separate 1D dispatch and the 1D-only element methods are no longer reachable.</p>
+
+<h3>Verified dead (zero live callers)</h3>
+<ul>
+  <li>Detail phase fns (non-<code>_2d</code>): <code>apply_compute_phase</code>, <code>apply_pack_phase</code>, <code>elem_apply_compute</code>, <code>elem_apply_pack</code> — only referenced by comments and their own definitions.</li>
+  <li>1D-only element methods on CB-reader/writer elements: the standalone <code>exec(uint32_t, uint32_t)</code> (these elements also define <code>exec_2d</code>, which is what the live path calls), plus the non-<code>_2d</code> upfront/at-end variants <code>wait_upfront</code> / <code>reserve_upfront</code> / <code>pop_upfront_end</code> / <code>push_at_end</code>.</li>
+  <li><code>window_1d</code> — used only by the methods above.</li>
+</ul>
+
+<h3>Alive — the real path (keep, then rename)</h3>
+<ul>
+  <li><code>exec_2d</code> (CB-reader/writer elements) and <code>exec</code> (SFPU / DEST-only ops, which never had a <code>_2d</code> form — the 2D phase calls their <code>exec</code> directly).</li>
+  <li>Shared per-tile / per-block lifecycle methods (<code>wait_per_tile</code>, <code>reserve_per_tile</code>, <code>push_per_tile</code>, <code>*_per_block</code>, …).</li>
+  <li><code>wait_upfront_2d</code> / <code>reserve_upfront_2d</code> / <code>pop_upfront_end_2d</code> / <code>push_at_end_2d</code>, <code>window_2d</code>, and the <code>*_2d</code> phase fns.</li>
+</ul>
+
+<h3>Action</h3>
+<ol>
+  <li>Delete the dead 1D functions/methods above.</li>
+  <li>Drop the now-meaningless <code>_2d</code> suffix from the survivors (there is no 1D counterpart left to disambiguate against):</li>
+</ol>
+<pre>apply_compute_phase_2d   → apply_compute_phase
+apply_pack_phase_2d      → apply_pack_phase
+elem_apply_compute_2d    → elem_apply_compute
+elem_apply_pack_2d       → elem_apply_pack
+exec_2d                  → exec        <span class="c">// on CB-reader/writer elements, after the dead 1D exec is removed</span>
+wait_upfront_2d          → wait_upfront
+reserve_upfront_2d       → reserve_upfront
+pop_upfront_end_2d       → pop_upfront_end
+push_at_end_2d           → push_at_end
+window_2d                → window</pre>
+
+<p><b>Net effect:</b> deletes an entire unreachable dispatch path plus the duplicate per-element methods (roughly halves each element's lifecycle/exec surface), and the <code>_2d</code> suffix stops implying a 1D counterpart that no longer exists. <b>Pure internal cleanup</b> — callers keep writing <code>eltwise_chain(shape, …)</code> / <code>eltwise_chain(n_tiles, …)</code> unchanged; <code>EltwiseShape::tiles(n)</code> / <code>grid(H,W)</code> factories stay. The compiler catches any missed live reference during the rename.</p>
+</div>
+
+<!-- ============================================================ -->
+<div class="change" id="c9">
+<h2>9 · Infer <code>PackTile</code>'s DEST slot from the preceding writer <span class="tag t-lock">locked</span></h2>
+<div class="meta"><span>Risk: <b>medium</b> (compile-time inference)</span><span>Removes: <b>the explicit slot token on 346 sites</b></span><span>Bonus: <b>correct-by-construction</b></span></div>
+
+<p><code>PackTile</code> takes an explicit <code>Dst DstSlot</code> for which DEST slot to pack from — but that is always the slot the <b>preceding DEST-writing element</b> just wrote. It's redundant information the caller restates. (Confirmed: 0 of 346 <code>PackTile</code>s pack from a non-<code>D0</code> slot, because every production chain's final compute writes <code>D0</code>.)</p>
+
+<p>Infer it at compile time from the <b>nearest preceding DEST-writer</b> (<code>CopyTile</code> / <code>BinaryFpu</code> / SFPU op / <code>DestReuseBinary</code> / <code>UnaryBcast</code>). The chain already introspects the element pack at compile time — collision detection folds over <code>pack_dst_slot</code> across writers, the hoist gate folds over MOP types — so a "nearest preceding writer's output slot" fold is consistent with the existing machinery.</p>
+
+<h3>Mechanics</h3>
+<ul>
+  <li><b>Uniform output-slot accessor.</b> Writers expose their output slot under different names today — <code>dst_slot</code> (CopyTile / BinaryFpu / DestReuseBinary / UnaryBcast), <code>out</code> (SFPU binary / ternary / quaternary), <code>dst_idx</code> (SFPU unary). A small SFINAE detector unifies them.</li>
+  <li><b>Dedicated <code>Dst::Infer</code> sentinel — not a re-used <code>D0</code>.</b> A defaulted <code>Dst::D0</code> can't be told apart from a hand-set <code>D0</code>: "unset → infer" and "explicitly pinned to D0" would be the same token. So add a distinct enumerator that is <em>not</em> a valid slot, and make it the default:
+<pre>enum class Dst : uint32_t { D0 = 0, D1, …, D15, <ins>Infer = 0xFFFFFFFF</ins> };
+<span class="c">// PackTile slot-override param defaults to Dst::Infer</span></pre>
+    <ul>
+      <li><code>Dst::Infer</code> (default, nothing written) → resolve from the nearest preceding writer.</li>
+      <li><code>Dst::D0</code> (hand-set) → genuinely pinned to <code>D0</code>, distinguishable from <code>Infer</code>.</li>
+    </ul>
+  </li>
+  <li><b>Valid-vs-invalid is enforced</b> by the static_assert rules below: <code>Dst::Infer</code> is PackTile-only and inference is single-pack-only; explicit slots stay exactly <code>D0..D15</code>, capacity-bounded. (<code>Infer</code>'s value being <code>≥ DEST_AUTO_LIMIT</code> means the existing capacity check is a natural backstop, but the dedicated asserts give clear messages.)</li>
+  <li><b>Resolve before any slot-dependent computation</b> — not just in <code>exec</code>. <code>PackTile</code>'s slot also feeds the collision-detection fold (<code>A::pack_dst_slot == B::pack_dst_slot</code>) and <code>lane_width = to_u32(DstSlot) + 1</code> (DEST footprint / block sizing). If the <code>Infer</code> sentinel leaked into those, two <code>Infer</code>s would compare "equal" and <code>lane_width</code> would blow up. The chain must compute the resolved slot in a fold and inject it into <code>PackTile</code>'s slot-dependent members (rebind the element, or have it read a chain-supplied resolved slot). <em>This is the main reason Change 9 is medium-risk rather than a trivial default flip.</em></li>
+  <li><b>Explicit override preserved.</b> A caller can still pin <code>Dst::Dk</code> for fan-out / multi-output chains where the pairing isn't simply "nearest preceding writer." Versatility intact.</li>
+  <li><b>static_assert</b> if a <code>PackTile</code> resolves to no preceding DEST-writer (nothing to pack).</li>
+</ul>
+<p style="color:var(--mut);font-size:13px"><b>Alternative considered:</b> a separate <code>PackSlot { Infer, D0… }</code> type isolated to <code>PackTile</code> — rejected; it just duplicates the <code>Dst</code> values, whereas the <code>Dst::Infer</code> sentinel reuses the enum and gets the misuse-rejection above for free.</p>
+
+<h3>Compatibility with the <code>block_size</code> path</h3>
+<p>In block mode each outer iter spreads <code>block_size</code> tiles across DEST lanes: lane <code>j</code> lives at slot <code>base + j * chain_lane_width</code>, and <code>PackTile</code> already packs <code>to_u32(DstSlot) + slot_offset</code> with <code>slot_offset = j * chain_lane_width</code>. Inference and blocking compose cleanly, <b>if sequenced right</b>:</p>
+<ul>
+  <li><b>Inference resolves only the <em>base</em> slot.</b> The per-lane <code>slot_offset</code> is applied at runtime on top — identically whether the base was inferred or explicit. Block mechanics are orthogonal to <em>which</em> base slot is used, so nothing special is needed in <code>exec</code>.</li>
+  <li><b>No fold cycle.</b> Slot resolution = "nearest preceding writer's base slot," which does <em>not</em> depend on <code>lane_width</code> / <code>chain_lane_width</code>. So the order is: (1) resolve every <code>PackTile</code> base slot, (2) compute per-element <code>lane_width</code> from resolved slots, (3) fold <code>chain_lane_width</code>, (4) derive <code>chain_max_block_v</code> (the Change 5 clamp ceiling) and the runtime <code>slot_offset</code>. Acyclic.</li>
+  <li><b>The clamp is unaffected — but resolve before reading <code>lane_width</code>.</b> A resolved <code>PackTile</code> has <code>lane_width = resolved_slot + 1</code>, which equals the slot of the writer it copies — so it can never exceed the max already in the <code>chain_lane_width</code> fold, and Change 5's <code>block_size</code> clamp is unchanged. <em>But</em> the <code>Dst::Infer</code> sentinel must be replaced first: a literal <code>to_u32(Infer) + 1</code> would poison <code>lane_width</code> and blow up <code>chain_lane_width</code> / <code>chain_max_block_v</code>. This is the same "resolve before any slot-dependent computation" rule above, applied to the block-size fold specifically.</li>
+</ul>
+
+<h3>Validation rules (static_assert)</h3>
+<ol>
+  <li><b><code>Dst::Infer</code> is accepted only by <code>PackTile</code>.</b> Every other element (CopyTile / SFPU / BinaryFpu / DestReuseBinary / UnaryBcast) static_asserts <code>Slot != Dst::Infer</code> with a clear message — <code>"Dst::Infer is only valid on PackTile"</code>. (The existing <code>&lt; DEST_AUTO_LIMIT</code> capacity check is the backstop, but its message is misleading for someone who typed <code>Infer</code>, so the dedicated assert comes first.)</li>
+  <li><b>Inference is single-pack only.</b> With <b>two or more <code>PackTile</code> elements</b> in one chain (fan-out), "nearest preceding writer" is ambiguous — so inference is disallowed: a chain-level static_assert fires unless <em>every</em> <code>PackTile</code> pins an explicit <code>Dst::Dk</code>. Message: <code>"Dst slot inference unsupported with multiple PackTile elements — pin each PackTile's slot explicitly"</code>. This reuses the chain's existing pack-counting fold (the one behind collision detection). A single-<code>PackTile</code> chain resolves unambiguously and keeps <code>Dst::Infer</code> as the default.</li>
+  <li><b>Every element validates its slot range.</b> Stated as a uniform rule (mostly already present per element): each DEST-reading/writing element static_asserts its explicit slot — and in block mode its top lane <code>slot + (block_size-1) &times; chain_lane_width</code> — falls in the compile-time range <code>[0, DEST_AUTO_LIMIT)</code>. Out-of-range slots fail at compile time, not silently at runtime.</li>
+</ol>
+
+<div class="ba">
+<div><div class="lab">before — caller restates the slot the compute element already chose</div>
+<pre>CopyTile&lt;cb_in&gt;{}, Exp&lt;…, <del>Dst::D0</del>&gt;{}, PackTile&lt;cb_out, …, <del>Dst::D0</del>, …&gt;{}</pre></div>
+<div><div class="lab">after — slot inferred from the <code>Exp</code> that precedes the pack</div>
+<pre>CopyTile&lt;cb_in&gt;{}, Exp&lt;&gt;{}, PackTile&lt;cb_out&gt;{}    <span class="c">// pack slot = Exp's output slot</span>
+<span class="c">// fan-out override still available:  PackTile&lt;cb_b, …, Dst::D1&gt;{}</span></pre></div>
+</div>
+
+<p><b>Benefit:</b> removes the last explicit DEST token from <code>PackTile</code> in the common case <em>and</em> makes it correct-by-construction — it tracks the actual compute slot instead of a hardcoded <code>D0</code> that would silently mis-pack if a future chain computed into <code>D1</code>. Composes with Change 6 so the common <code>PackTile</code> is just <code>PackTile&lt;cb_out&gt;{}</code> with both index <em>and</em> slot handled internally. <b>Risk note:</b> this is a compile-time inference feature (uniform accessor + fold + ambiguity assert), more involved than the deletions — but it reuses folds the chain already performs.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="o1">Open question — unify the reconfig enums? <span class="tag t-open">not decided</span></h2>
+<p>The reconfig enums (<code>CopyTileReconfig</code>, <code>BinaryDataFormatReconfig</code>, <code>PackTileReconfig</code>, <code>DestReuseReconfig</code>) overlap heavily and could in principle be unified into one shared named type with the fold deciding which side(s) to emit.</p>
+<ul>
+  <li><b>For:</b> four near-identical enums → one; less surface.</li>
+  <li><b>Against:</b> the per-element names (<code>PackTileReconfig::Output</code> vs <code>CopyTileReconfig::Input</code>) currently telegraph <em>which side</em> at the call site, consistent with Change 3's "values self-document" rule. A single shared type loses that. Also, the <code>SrcA/SrcB</code> single-side variants are <b>retained during migration</b> (Change 1), so the enums are not yet reduced to a clean two-state shape that would make unification obvious.</li>
+</ul>
+<p><b>Recommendation:</b> defer until migration completes. Keep the per-element enums as-is for now; revisit once we know which values survive the migration. <em>Decision pending.</em></p>
+
+<!-- ============================================================ -->
+<h2 id="rejected">Rejected / considered alternatives</h2>
+<table>
+  <tr><th>Idea</th><th>Status</th><th>Why</th></tr>
+  <tr><td><code>eltwise_chain_with_init</code> (BIG-init folded into the chain)</td><td><span class="tag t-rej">rejected</span></td><td>Violates the D8 caller-init contract; correct only single-stage, UB elsewhere. See box in Change 1.</td></tr>
+  <tr><td>Deleting the convenience wrappers (<code>binary_add</code>, <code>unary</code>, …)</td><td><span class="tag t-rej">deferred</span></td><td>Only 1 caller today, but <b>retained as a migration target</b> until migration completes (Change 1). Re-assess post-migration.</td></tr>
+  <tr><td><b>Direction 2</b>: per-operand descriptor structs <code>In&lt;cb, Bulk, Block&gt;</code> / <code>Out&lt;cb, Bulk&gt;</code></td><td><span class="tag t-rej">not chosen</span></td><td>Cleaner grouping, but operand-major ordering forces spelling operand A's defaults to reach operand B's CB — hurts the dominant streaming case. Chose flat reorder (Direction 1) instead.</td></tr>
+  <tr><td>Two-axis lifecycle naming <code>In&lt;cb, Wait::Upfront, Pop::AtEnd&gt;</code></td><td><span class="tag t-rej">not chosen</span></td><td>Verbose and re-litigates the deliberately-introduced named cells. The fix for "what does <code>Bulk</code> mean" is type-qualification + a vocab table, not longer call sites.</td></tr>
+  <tr><td>Drop / default-on the reconfig knob</td><td><span class="tag t-rej">rejected</span></td><td><code>Reconfig::None</code> is load-bearing — see Change 2.</td></tr>
+  <tr><td>Reconfig as a <code>bool</code></td><td><span class="tag t-rej">rejected</span></td><td>Pre-existing rule (proposal §2.5): named enum, never bool. Change 3 keeps it a named two-state type.</td></tr>
+  <tr><td><code>TileBaseCompileTime&lt;K&gt;</code></td><td><span class="tag t-rej">removed</span></td><td>No constexpr consumer; identical codegen to a runtime value; costs an extra type + instantiations. See Change 4.</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="data">Usage data appendix</h2>
+<p style="color:var(--mut);font-size:13px">From grepping production kernels (<code>*.cpp</code> under <code>ttnn/ tt_metal/ models/</code>), excluding the <code>kernel_lib/</code> headers and docs. Counts are call-site spellings. Branch <code>astancov/eltwise_vx_migration</code>.</p>
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+<table>
+  <tr><th>Element</th><th class="num">sites</th></tr>
+  <tr><td>PackTile</td><td class="num">346</td></tr>
+  <tr><td>CopyTile</td><td class="num">204</td></tr>
+  <tr><td>BinaryFpu</td><td class="num">198</td></tr>
+  <tr><td>DestReuseBinary</td><td class="num">8</td></tr>
+  <tr><td>UnaryBcast</td><td class="num">8</td></tr>
+  <tr><td>PackTileBlock <span class="tag t-dead">DEAD</span></td><td class="num">0</td></tr>
+</table>
+<table>
+  <tr><th>Forced-default knob</th><th class="num">dominant</th><th class="num">other</th></tr>
+  <tr><td>OperandKind</td><td class="num">Scalar 829</td><td class="num">Block 95</td></tr>
+  <tr><td>Dst slot</td><td class="num">D0 936</td><td class="num">D1 91 / D2 6</td></tr>
+  <tr><td>BinaryDataFormatReconfig</td><td class="num">Input 205</td><td class="num">None 14</td></tr>
+  <tr><td>CopyTileReconfig</td><td class="num">Input 173</td><td class="num">None 32</td></tr>
+  <tr><td>PackTileReconfig</td><td class="num">Output 269</td><td class="num">None 111</td></tr>
+</table>
+</div>
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+<table>
+  <tr><th>Input lifecycle</th><th class="num">sites</th></tr>
+  <tr><td>Streaming</td><td class="num">412</td></tr>
+  <tr><td>CallerManaged</td><td class="num">193</td></tr>
+  <tr><td>HeldStream</td><td class="num">88</td></tr>
+  <tr><td>Bulk</td><td class="num">78</td></tr>
+  <tr><td>HeldBulk</td><td class="num">28</td></tr>
+  <tr><td>NoWaitPop</td><td class="num">25</td></tr>
+  <tr><td>Chunked</td><td class="num">16</td></tr>
+  <tr><td>HeldCumulative</td><td class="num">7</td></tr>
+  <tr><td>Pipelined</td><td class="num">6</td></tr>
+  <tr><td>DeferredPop / BulkDrain</td><td class="num">1 / 1</td></tr>
+</table>
+<table>
+  <tr><th>Output lifecycle</th><th class="num">sites</th></tr>
+  <tr><td>OutStreaming</td><td class="num">334</td></tr>
+  <tr><td>OutBulk</td><td class="num">48</td></tr>
+  <tr><td>OutChunked</td><td class="num">10</td></tr>
+  <tr><td>OutCallerManaged</td><td class="num">9</td></tr>
+  <tr><td>OutDeferredReserve</td><td class="num">3</td></tr>
+  <tr><td>OutBulkReservePerTile <span class="tag t-rej">kept</span></td><td class="num">0</td></tr>
+  <tr><td>OutBulkReservePerChunk <span class="tag t-rej">kept</span></td><td class="num">0</td></tr>
+  <tr><td>OutHeldReserve <span class="tag t-rej">kept</span></td><td class="num">0</td></tr>
+</table>
+</div>
+<table>
+  <tr><th>TileBase flavor</th><th class="num">sites</th><th>Fate</th></tr>
+  <tr><td>TileBaseNone (default)</td><td class="num">~99% of elements</td><td>→ <code>TileOffset::Unset</code></td></tr>
+  <tr><td>TileBaseRuntime</td><td class="num">49</td><td>→ <code>TileOffset::Set</code></td></tr>
+  <tr><td>TileBaseCompileTime</td><td class="num">29</td><td>→ <code>TileOffset::Set</code> (removed as a type)</td></tr>
+</table>
+
+<div class="foot">
+Review document — no code changes proposed yet. Decisions 1–4 are agreed; the reconfig-unification question is open. Generated from static analysis of <code>eltwise_chain.hpp/.inl</code> and production call sites on branch <code>astancov/eltwise_vx_migration</code>.
+</div>
+
+</main>
+</div>
+</body>
+</html>

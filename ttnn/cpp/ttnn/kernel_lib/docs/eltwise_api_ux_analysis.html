@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Eltwise chain helper — API UX &amp; simplification analysis</title>
+<style>
+  :root{
+    --bg:#0f1419; --panel:#171d26; --panel2:#1d2531; --ink:#e6edf3; --mut:#9aa7b4;
+    --line:#2a3441; --accent:#4ea1ff; --good:#3fb950; --warn:#d29922; --bad:#f85149;
+    --code:#0b0f14;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  .wrap{max-width:1080px;margin:0 auto;padding:40px 28px 96px}
+  h1{font-size:30px;margin:0 0 4px;letter-spacing:-.4px}
+  h2{font-size:22px;margin:48px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+  h3{font-size:17px;margin:28px 0 8px;color:var(--accent)}
+  .sub{color:var(--mut);margin:0 0 28px}
+  p{margin:10px 0}
+  code{font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;font-size:.86em;
+    background:var(--code);padding:1px 6px;border-radius:5px;color:#cdd9e5}
+  pre{background:var(--code);border:1px solid var(--line);border-radius:10px;
+    padding:14px 16px;overflow:auto;font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
+    font-size:13px;line-height:1.5}
+  pre .c{color:#6e7b8a}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:16px 0}
+  table{border-collapse:collapse;width:100%;margin:14px 0;font-size:13.5px}
+  th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--mut);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.4px}
+  td.num{text-align:right;font-variant-numeric:tabular-nums;font-family:ui-monospace,monospace}
+  tr:hover td{background:#ffffff06}
+  .tag{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:20px;letter-spacing:.3px}
+  .t-dead{background:#f8514922;color:#ff7b72;border:1px solid #f8514955}
+  .t-smell{background:#d2992222;color:#e3b341;border:1px solid #d2992255}
+  .t-keep{background:#3fb95022;color:#56d364;border:1px solid #3fb95055}
+  .bar{height:10px;border-radius:6px;background:var(--accent);display:inline-block;vertical-align:middle}
+  .barbg{display:inline-block;width:160px;height:10px;background:#ffffff10;border-radius:6px;vertical-align:middle;margin-right:8px;overflow:hidden}
+  .barbg .bar{display:block;height:100%}
+  .pill{display:inline-block;background:var(--panel2);border:1px solid var(--line);border-radius:8px;
+    padding:10px 14px;margin:6px 8px 6px 0;min-width:120px;text-align:center}
+  .pill b{display:block;font-size:24px;line-height:1.1}
+  .pill span{color:var(--mut);font-size:12px}
+  .rec{border-left:3px solid var(--accent);padding:2px 0 2px 16px;margin:18px 0}
+  .rec.safe{border-color:var(--good)} .rec.med{border-color:var(--warn)} .rec.bold{border-color:var(--bad)}
+  .lead{font-size:16px}
+  ul{margin:8px 0 8px 0;padding-left:22px} li{margin:5px 0}
+  .kicker{color:var(--mut);font-size:12px;text-transform:uppercase;letter-spacing:1px;margin-bottom:18px}
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:760px){.two{grid-template-columns:1fr}}
+  .foot{color:var(--mut);font-size:12px;margin-top:60px;border-top:1px solid var(--line);padding-top:16px}
+  del{color:#ff7b72;text-decoration-color:#f8514988}
+  ins{color:#56d364;text-decoration:none;background:#3fb95018;padding:0 3px;border-radius:4px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div class="kicker">tt-metal · kernel_lib · eltwise_chain</div>
+<h1>Eltwise helper API — UX &amp; simplification analysis</h1>
+<p class="sub">How the chain helper is actually called, where the surface is dead or redundant, and which parameters can be removed without losing functionality or versatility.</p>
+
+<div class="panel">
+  <span class="pill"><b>82</b><span>kernel files calling<br>eltwise_chain</span></span>
+  <span class="pill"><b>~330</b><span>chain invocations</span></span>
+  <span class="pill"><b>~760</b><span>element instantiations</span></span>
+  <span class="pill"><b>1</b><span>convenience-wrapper<br>call (a lab example)</span></span>
+  <span class="pill"><b>0</b><span>uses of the<br>documented "with_init"</span></span>
+</div>
+
+<p class="lead">The chain API works and is versatile, but the call sites tell a consistent story: <b>callers spell out default values constantly</b> because the high-variance knobs sit <em>behind</em> the near-constant ones in the positional template lists. Separately, a chunk of the documented/declared surface has <b>zero callers</b>. Both are addressable without removing any real capability.</p>
+
+<h2>1 · Methodology</h2>
+<p>Counts below come from grepping production kernels (<code>*.cpp</code> under <code>ttnn/</code>, <code>tt_metal/</code>, <code>models/</code>), excluding the <code>kernel_lib/</code> headers themselves and docs. "Element instantiations" = literal <code>CopyTile&lt;…&gt;</code> / <code>BinaryFpu&lt;…&gt;</code> / <code>PackTile&lt;…&gt;</code> spellings at call sites. Where a claim drives a deletion recommendation it was confirmed with a targeted grep (e.g. <code>PackTile&lt;…Dst::D[1-9]</code>).</p>
+
+<h2>2 · What callers actually instantiate</h2>
+<table>
+  <tr><th>Element</th><th class="num">Call sites</th><th>Notes</th></tr>
+  <tr><td><code>PackTile</code></td><td class="num">346</td><td>Every output stage</td></tr>
+  <tr><td><code>CopyTile</code></td><td class="num">204</td><td>CB→DEST move (unary input, SFPU-binary input)</td></tr>
+  <tr><td><code>BinaryFpu</code></td><td class="num">198</td><td>FPU add/sub/mul</td></tr>
+  <tr><td><code>DestReuseBinary</code></td><td class="num">8</td><td>niche but real</td></tr>
+  <tr><td><code>UnaryBcast</code></td><td class="num">8</td><td>experimental bcast kernels</td></tr>
+  <tr><td><code>PackTileBlock</code></td><td class="num">0</td><td><span class="tag t-dead">DEAD</span> declared + implemented, never called</td></tr>
+</table>
+
+<h3>Parameter-value distributions (the smell, quantified)</h3>
+<p>For each policy/index/reconfig knob, how often each value is passed. The pattern: one value dominates, and it is usually <em>already the struct default</em> — yet it is written out anyway.</p>
+
+<div class="two">
+<table>
+  <tr><th>OperandKind (index mode)</th><th class="num">count</th></tr>
+  <tr><td><code>Scalar</code> <span class="tag t-keep">default</span></td><td class="num">829</td></tr>
+  <tr><td><code>Block</code></td><td class="num">95</td></tr>
+  <tr><td><code>Row</code> / <code>Col</code></td><td class="num">0</td></tr>
+</table>
+<table>
+  <tr><th>Dst slot</th><th class="num">count</th></tr>
+  <tr><td><code>D0</code> <span class="tag t-keep">default</span></td><td class="num">936</td></tr>
+  <tr><td><code>D1</code></td><td class="num">91</td></tr>
+  <tr><td><code>D2</code></td><td class="num">6</td></tr>
+</table>
+</div>
+<div class="two">
+<table>
+  <tr><th>BinaryDataFormatReconfig</th><th class="num">count</th></tr>
+  <tr><td><code>Input</code> <span class="tag t-keep">default</span></td><td class="num">205</td></tr>
+  <tr><td><code>None</code></td><td class="num">14</td></tr>
+  <tr><td><code>SrcA</code> / <code>SrcB</code></td><td class="num">0 <span class="tag t-dead">DEAD</span></td></tr>
+</table>
+<table>
+  <tr><th>CopyTileReconfig</th><th class="num">count</th></tr>
+  <tr><td><code>Input</code> <span class="tag t-keep">default</span></td><td class="num">173</td></tr>
+  <tr><td><code>None</code></td><td class="num">32</td></tr>
+</table>
+</div>
+<div class="two">
+<table>
+  <tr><th>PackTileReconfig</th><th class="num">count</th></tr>
+  <tr><td><code>Output</code> <span class="tag t-keep">default</span></td><td class="num">269</td></tr>
+  <tr><td><code>None</code></td><td class="num">111</td></tr>
+</table>
+<table>
+  <tr><th>DestReuseReconfig</th><th class="num">count</th></tr>
+  <tr><td><code>Input</code> <span class="tag t-keep">default</span></td><td class="num">6</td></tr>
+  <tr><td><code>SrcA</code> / <code>SrcB</code></td><td class="num">0 <span class="tag t-dead">DEAD</span></td></tr>
+</table>
+</div>
+
+<h3>Lifecycle usage — the one genuinely high-variance axis</h3>
+<p>This is the part that earns its keep. Inputs use 11 distinct lifecycles, outputs 5. This axis should drive the API shape; everything else should get out of its way.</p>
+<table>
+  <tr><th>Input lifecycle</th><th class="num">count</th><th></th><th>Output lifecycle</th><th class="num">count</th></tr>
+  <tr><td><code>Streaming</code></td><td class="num">412</td><td></td><td><code>OutStreaming</code></td><td class="num">334</td></tr>
+  <tr><td><code>CallerManaged</code></td><td class="num">193</td><td></td><td><code>OutBulk</code></td><td class="num">48</td></tr>
+  <tr><td><code>HeldStream</code></td><td class="num">88</td><td></td><td><code>OutChunked</code></td><td class="num">10</td></tr>
+  <tr><td><code>Bulk</code></td><td class="num">78</td><td></td><td><code>OutCallerManaged</code></td><td class="num">9</td></tr>
+  <tr><td><code>HeldBulk</code></td><td class="num">28</td><td></td><td><code>OutDeferredReserve</code></td><td class="num">3</td></tr>
+  <tr><td><code>NoWaitPop</code></td><td class="num">25</td><td></td><td><code>OutBulkReservePerTile</code></td><td class="num">0 <span class="tag t-dead">DEAD</span></td></tr>
+  <tr><td><code>Chunked</code></td><td class="num">16</td><td></td><td><code>OutBulkReservePerChunk</code></td><td class="num">0 <span class="tag t-dead">DEAD</span></td></tr>
+  <tr><td><code>HeldCumulative</code></td><td class="num">7</td><td></td><td><code>OutHeldReserve</code></td><td class="num">0 <span class="tag t-dead">DEAD</span></td></tr>
+  <tr><td><code>Pipelined</code></td><td class="num">6</td><td></td><td></td><td class="num"></td></tr>
+  <tr><td><code>DeferredPop</code></td><td class="num">1</td><td></td><td></td><td class="num"></td></tr>
+  <tr><td><code>BulkDrain</code></td><td class="num">1</td><td></td><td></td><td class="num"></td></tr>
+</table>
+
+<h2>3 · Code smells</h2>
+
+<h3><span class="tag t-smell">SMELL 1</span> Positional template params force callers to write the default</h3>
+<p>This is the dominant UX problem. In every element the lower-variance knobs (<code>OperandKind</code>, the reconfig enum, <code>TileBase</code>) sit <em>after</em> or <em>interleaved with</em> high-variance ones, so to set a later parameter you must re-state every default before it.</p>
+<p>Concrete cost in the codebase: <b>829</b> explicit <code>OperandKind::Scalar</code>, <b>205</b> explicit <code>BinaryDataFormatReconfig::Input</code>, <b>173</b> explicit <code>CopyTileReconfig::Input</code>, <b>936</b> explicit <code>Dst::D0</code> — the large majority of which are the parameter's own default value, typed only to reach the next slot.</p>
+<p>The worst offender is <code>BinaryFpu</code> (12 template params), where the operand <b>DstSlot sits at position 9 — wedged between <code>AIndex</code> (8) and <code>BIndex</code> (10)</b>:</p>
+<pre><span class="c">// To pin operand B at tile 0 (BIndex, position 10) you must spell positions 3–9:</span>
+BinaryFpu&lt;cb_in, cb_max, BinaryFpuOp::Sub, BroadcastDim::Col,
+          BinaryDataFormatReconfig::None,
+          Bulk, HeldStream,            <span class="c">// A / B policy — the part that actually varies</span>
+          OperandKind::Block, Dst::D0, <span class="c">// AIndex, DstSlot — boilerplate to get past</span>
+          OperandKind::Scalar&gt;{}       <span class="c">// BIndex — the ONE thing being set</span></pre>
+<p>A typical <code>PackTile</code> shows the same tax — 4 of 5 args are effectively forced defaults:</p>
+<pre>PackTile&lt;cb_out, <span class="c">Dst::D0, OutStreaming, OperandKind::Scalar, PackTileReconfig::Output</span>&gt;{}
+         <span class="c">^^^^^^   the only thing that varies is the CB and the lifecycle</span></pre>
+
+<h3><span class="tag t-smell">SMELL 2</span> Reconfig enums are de-facto booleans (and partly dead)</h3>
+<p><code>BinaryDataFormatReconfig</code> and <code>DestReuseReconfig</code> each declare four values; the <code>SrcA</code>/<code>SrcB</code> variants have <b>zero</b> callers. Every reconfig knob in the codebase is therefore a two-state choice: "reconfig" vs "None". The header itself notes the fold already compile-time-elides a reconfig when <code>prev_cb == cur_cb</code>, and the LLK runtime-checks format equality and short-circuits — so <code>Input</code> being the 205-vs-14 default is consistent with "just always ask, it no-ops when it matches".</p>
+
+<h3><span class="tag t-dead">SMELL 3</span> Documented / declared surface with no callers</h3>
+<table>
+  <tr><th>Surface</th><th>Status</th><th>Evidence</th></tr>
+  <tr><td><code>eltwise_chain_with_init</code></td><td><span class="tag t-dead">phantom</span></td><td>Has a full doc section (U4) + worked example in <code>eltwise_chain.hpp</code>, but <b>no definition exists</b> — the only matches are comments. Stale docs describing an API that isn't there.</td></tr>
+  <tr><td>Convenience wrappers<br>(<code>binary_add/sub/mul</code>, <code>unary</code>, <code>copy</code>, <code>binary_sfpu</code>) — entire <code>eltwise_convenience.hpp</code></td><td><span class="tag t-dead">unused</span></td><td>1 call total, in <code>ttnn/examples/lab_eltwise_binary</code>. Zero production kernels. The "approachable" layer was never adopted; everyone writes raw <code>eltwise_chain</code>.</td></tr>
+  <tr><td><code>PackTileBlock</code></td><td><span class="tag t-dead">unused</span></td><td>Declared in <code>.hpp</code>, implemented in <code>.inl</code>, 0 call sites. (Block packing in practice goes through <code>PackTile + OperandKind::Block</code>.)</td></tr>
+  <tr><td><code>BinaryDataFormatReconfig::{SrcA,SrcB}</code><br><code>DestReuseReconfig::{SrcA,SrcB}</code></td><td><span class="tag t-dead">unused</span></td><td>0 callers each.</td></tr>
+  <tr><td><code>OutBulkReservePerTile</code>, <code>OutBulkReservePerChunk</code>, <code>OutHeldReserve</code></td><td><span class="tag t-dead">unused</span></td><td>0 callers each (their doc comments cite SDPA / deferred-push sites that didn't materialize).</td></tr>
+  <tr><td><code>OperandKind::Row</code> / <code>Col</code></td><td><span class="tag t-smell">unused as index</span></td><td>0 uses as an element <em>index mode</em>; row/col broadcast is done via <code>BroadcastDim</code> on <code>BinaryFpu</code>/<code>UnaryBcast</code> instead. The <code>Row</code>/<code>Col</code> index path carries a lot of compatibility logic (<code>is_legal_kind_lifecycle</code>) for no caller.</td></tr>
+</table>
+
+<h3><span class="tag t-keep">NOT a smell — keep</span></h3>
+<ul>
+  <li><b>The lifecycle taxonomy.</b> 9 input + 5 output lifecycles have real callers down to single digits; this is the versatility the library exists for. Don't prune it (only the three 0-caller output cells).</li>
+  <li><b>TileBase.</b> <code>TileBaseRuntime</code> (49) and <code>TileBaseCompileTime</code> (29) are genuinely used (Adam scalar-arg indexing, rotary decode). Keep — but see Recommendation 5 for folding it together with <code>OperandKind</code>.</li>
+  <li><b>Named enums over bools/ints.</b> Self-documenting call sites are the right call; the fix is ordering and dead-value removal, not collapsing to bools.</li>
+</ul>
+
+<h2>4 · Recommendations (ranked by safety × impact)</h2>
+
+<div class="rec safe">
+<h3>R1 — Delete the zero-caller surface <span class="tag t-keep">safe, mechanical</span></h3>
+<p>No functionality lost; nothing calls these. Highest signal-to-effort.</p>
+<ul>
+  <li>Remove the <code>eltwise_chain_with_init</code> doc section + worked example (the function doesn't exist).</li>
+  <li>Delete <code>eltwise_convenience.hpp</code> (or keep <em>only</em> if you intend to push callers onto it — currently it's pure dead weight + an extra include in <code>eltwise_helpers.hpp</code>). Migrate the one lab kernel to raw <code>eltwise_chain</code>.</li>
+  <li>Delete <code>PackTileBlock</code> (decl + <code>.inl</code> impl).</li>
+  <li>Drop enum values: <code>BinaryDataFormatReconfig::{SrcA,SrcB}</code>, <code>DestReuseReconfig::{SrcA,SrcB}</code>, output lifecycles <code>OutBulkReservePerTile/PerChunk</code>, <code>OutHeldReserve</code>. Remove their branches in the fold + <code>is_legal_*</code> checks.</li>
+</ul>
+</div>
+
+<div class="rec safe">
+<h3>R2 — Reorder element template params: variance-first <span class="tag t-keep">churny but safe</span></h3>
+<p>The single biggest verbosity win. Put the knobs that actually change (lifecycle, then DstSlot) first; push the near-constant ones (<code>OperandKind</code>, reconfig, <code>TileBase</code>) to the tail with defaults. This erases the bulk of the 829 + 205 + 173 forced-default spellings. All call sites are in-repo and the migration is already in flight, so a sweeping reorder is feasible now and cheap later.</p>
+<p>For <code>BinaryFpu</code> specifically, also <b>un-wedge DstSlot</b> from between the two operand indices and group the per-operand knobs:</p>
+<pre><span class="c">// before (DstSlot at 9, between AIndex and BIndex)</span>
+<del>BinaryFpu&lt;CbA, CbB, Op, Bcast, DfReconfig, APolicy, BPolicy, AIndex, DstSlot, BIndex, TileBaseA, TileBaseB&gt;</del>
+<span class="c">// after — CBs, op, the two policies, broadcast; everything else defaulted &amp; trailing</span>
+<ins>BinaryFpu&lt;CbA, CbB, Op, APolicy, BPolicy, Bcast=None, DstSlot=D0,
+          AIndex=Scalar, BIndex=AIndex, DfReconfig=Input,
+          TileBaseA=None, TileBaseB=None&gt;</ins></pre>
+<p>Net effect on a representative softmax-style call: from 9 spelled args down to 5.</p>
+</div>
+
+<div class="rec med">
+<h3>R3 — Collapse the reconfig enums to one shared two-state type <span class="tag t-smell">needs sign-off</span></h3>
+<p>After R1 strips the dead <code>SrcA/SrcB</code>, all three reconfig enums are <code>{None, &lt;the-side(s)&gt;}</code> — booleans wearing enum clothes. Replace them with a single shared <code>Reconfig { None, Auto }</code> (or keep per-element type aliases for readability) and let the existing fold decide which side(s) to emit. This removes three near-identical enums and the per-value fold branches while keeping a self-documenting call site.</p>
+</div>
+
+<div class="rec med">
+<h3>R4 — Make reconfig default to on and consider dropping it as a per-element param <span class="tag t-smell">needs perf check</span></h3>
+<p>205:14 and 173:32 toward "reconfig" plus the fold's compile-time elision (<code>prev_cb == cur_cb</code>) and the LLK's runtime format-equality short-circuit suggest the param rarely carries information. Proposal: always attempt reconfig (fold + LLK elide the no-ops) and remove the knob entirely, unless there's a measured case where the <code>None</code> opt-out avoids a real cost. If such cases exist (the 14 + 32 <code>None</code> sites), keep R3's two-state form instead. <em>This one needs a kernel author to confirm the <code>None</code> sites are correctness-driven vs. perf-driven before acting.</em></p>
+</div>
+
+<div class="rec med">
+<h3>R5 — Fold <code>OperandKind</code> + <code>TileBase</code> into one trailing "addressing" param <span class="tag t-smell">structural</span></h3>
+<p>They are conceptually one thing — "how to index the CB tile this iteration" (<code>base + derived_from_kind</code>). Today they're two separate template slots; combined into a single defaulted <code>Addressing = Scalar()</code> tail param, the common case writes nothing and the rare Adam/rotary case writes one token. Also lets you drop the unused <code>OperandKind::Row/Col</code> index path and its <code>is_legal_kind_lifecycle</code> machinery (broadcast already lives on <code>BroadcastDim</code>).</p>
+</div>
+
+<div class="rec bold">
+<h3>R6 — (Optional) revive a convenience layer only if you'll enforce it <span class="tag t-smell">judgment call</span></h3>
+<p>The existing wrappers failed because they were optional and less expressive than raw chains. Either delete them (R1) or, after R2/R5 make raw chains terse, the wrappers become redundant anyway. Recommendation: <b>delete, don't revive</b> — a well-ordered <code>eltwise_chain(n, BinaryFpu&lt;a,b,Mul&gt;{}, PackTile&lt;out&gt;{})</code> is already the one-liner the wrappers were trying to be.</p>
+</div>
+
+<h2>5 · Suggested target shapes</h2>
+<p>After R1+R2+R5, the four workhorse elements read like this (defaults trailing, common case = just the CBs + lifecycle):</p>
+<pre>CopyTile&lt;Cb, Policy=Streaming, DstSlot=D0, Reconfig=Input, Addr=Scalar()&gt;
+PackTile&lt;Cb, Policy=OutStreaming, DstSlot=D0, Reconfig=Output, Addr=Scalar()&gt;
+BinaryFpu&lt;CbA, CbB, Op, APolicy=Streaming, BPolicy=Streaming, Bcast=None,
+          DstSlot=D0, Reconfig=Input, AddrA=Scalar(), AddrB=AddrA&gt;
+DestReuseBinary&lt;Cb, Op, ReuseType, Policy=Streaming, DstIn=D0, DstOut=D0,
+                Reconfig=Input, Addr=Scalar()&gt;
+
+<span class="c">// common cases collapse to:</span>
+copy:        CopyTile&lt;cb_in&gt;{}, PackTile&lt;cb_out&gt;{}
+unary exp:   CopyTile&lt;cb_in&gt;{}, Exp&lt;&gt;{}, PackTile&lt;cb_out&gt;{}
+binary mul:  BinaryFpu&lt;cb_a, cb_b, Mul&gt;{}, PackTile&lt;cb_out&gt;{}</pre>
+
+<h2>6 · Effort / risk summary</h2>
+<table>
+  <tr><th>Rec</th><th>Removes</th><th>Risk</th><th>Caller churn</th></tr>
+  <tr><td>R1 delete dead surface</td><td>~1 header, 1 struct, 6 enum values, phantom docs</td><td><span class="tag t-keep">none</span></td><td>1 lab kernel</td></tr>
+  <tr><td>R2 reorder params</td><td>~1,200 forced-default tokens across call sites</td><td><span class="tag t-keep">low</span> (compile-checked)</td><td>all 82 files (mechanical)</td></tr>
+  <tr><td>R3 collapse reconfig enums</td><td>2 of 3 reconfig enums</td><td><span class="tag t-smell">low-med</span></td><td>find/replace</td></tr>
+  <tr><td>R4 default/drop reconfig</td><td>1 param per element</td><td><span class="tag t-smell">med</span> — needs perf check on the 46 <code>None</code> sites</td><td>most files</td></tr>
+  <tr><td>R5 fold OperandKind+TileBase</td><td>1 template slot + Row/Col index path</td><td><span class="tag t-smell">med</span> (structural)</td><td>~95 Block + 78 TileBase sites</td></tr>
+</table>
+<p class="lead">If you do only one thing: <b>R1 + R2</b>. They remove the bulk of the noise and all the dead surface with essentially no risk, and they don't touch any real capability — the lifecycle taxonomy, TileBase, broadcast, and n-ary SFPU all stay exactly as versatile as today.</p>
+
+<div class="foot">
+Generated from static analysis of production call sites (grep over <code>ttnn/ tt_metal/ models/</code>, excluding <code>kernel_lib/</code> headers and docs) against <code>eltwise_chain.hpp</code> / <code>.inl</code> on branch <code>astancov/eltwise_vx_migration</code>. Counts are call-site spellings, not unique kernels. Verify the R4 <code>None</code> sites with a kernel author before acting.
+</div>
+
+</div>
+</body>
+</html>
