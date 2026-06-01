@@ -45,6 +45,24 @@ def _resolve_tp(device: ttnn.Device, tp: Optional[int]) -> int:
     return 1
 
 
+def _from_torch_tile_host_first(
+    t: torch.Tensor,
+    *,
+    dtype: ttnn.DataType,
+    device: ttnn.Device,
+    mesh_mapper,
+    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+) -> ttnn.Tensor:
+    """TILE upload that tilizes on HOST before sharding/replicating to device.
+
+    ``from_torch(layout=TILE, device=…, mesh_mapper=…)`` on a single-row ``[*, 1, N]`` tensor
+    defers the 1→32 row val-padding tilize to the device — one ``TilizeWithValPadding`` device
+    op per constant (per-layer biases + LayerNorm γ/β). Tilizing on host first keeps it off-device.
+    """
+    host = ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, mesh_mapper=mesh_mapper)
+    return ttnn.to_device(host, device, memory_config=memory_config)
+
+
 def _conv1d_weight(conv: torch.nn.Conv1d, *, device: ttnn.Device) -> ttnn.Tensor:
     """Host ROW_MAJOR PyTorch-shaped weights (``[out, in/groups, K]``).
 
@@ -127,12 +145,10 @@ def _vocoder_embedding_weight_row_major(emb: torch.nn.Embedding, *, device: ttnn
 
 def _ln_to_device(param: torch.Tensor, *, device: ttnn.Device) -> ttnn.Tensor:
     x = param.detach().reshape(1, 1, -1).contiguous()
-    return ttnn.from_torch(
+    return _from_torch_tile_host_first(
         x,
         dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
         device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=_replicate_mapper(device),
     )
 
@@ -157,14 +173,7 @@ def _linear_pair(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=mm,
     )
-    b_tt = ttnn.from_torch(
-        b_torch,
-        dtype=b_dtype,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=mm,
-    )
+    b_tt = _from_torch_tile_host_first(b_torch, dtype=b_dtype, device=device, mesh_mapper=mm)
     return {"weight": w_tt, "bias": b_tt}
 
 
@@ -190,14 +199,7 @@ def _pointwise_conv1d_linear_pair(
     out = {"weight": w_tt}
     if conv.bias is not None:
         b_torch = conv.bias.detach().to(torch.bfloat16).reshape(1, 1, 1, -1).contiguous()
-        b_tt = ttnn.from_torch(
-            b_torch,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mm,
-        )
+        b_tt = _from_torch_tile_host_first(b_torch, dtype=ttnn.bfloat16, device=device, mesh_mapper=mm)
         out["bias"] = b_tt
     return out
 
@@ -409,7 +411,7 @@ def _tp_col_parallel_pair(
 
     w_tt = ttnn.from_torch(stacked_w, dtype=weight_dtype, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=mapper)
     b_4d = stacked_b.reshape(tp, 1, 1, local_out)
-    b_tt = ttnn.from_torch(b_4d, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=mapper)
+    b_tt = _from_torch_tile_host_first(b_4d, dtype=ttnn.bfloat16, device=device, mesh_mapper=mapper)
     return {"weight": w_tt, "bias": b_tt}
 
 
@@ -450,7 +452,7 @@ def _tp_row_parallel_pair(
     b_scaled = bias_torch.to(torch.bfloat16) / tp
     b_stacked = b_scaled.unsqueeze(0).expand(tp, -1).contiguous()  # [tp, out]
     b_4d = b_stacked.reshape(tp, 1, 1, out_dim)
-    b_tt = ttnn.from_torch(b_4d, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=mapper)
+    b_tt = _from_torch_tile_host_first(b_4d, dtype=ttnn.bfloat16, device=device, mesh_mapper=mapper)
     return {"weight": w_tt, "bias": b_tt}
 
 
@@ -509,7 +511,7 @@ def _tp_fused_qkv_col_parallel(
 
     w_tt = ttnn.from_torch(stacked_w, dtype=weight_dtype, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=mapper)
     b_4d = stacked_b.reshape(tp, 1, 1, 3 * local_out)
-    b_tt = ttnn.from_torch(b_4d, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=mapper)
+    b_tt = _from_torch_tile_host_first(b_4d, dtype=ttnn.bfloat16, device=device, mesh_mapper=mapper)
     return {"weight": w_tt, "bias": b_tt}
 
 
@@ -545,7 +547,7 @@ def _tp_fused_kv_col_parallel(
     stacked_b = torch.stack(bias_slices, dim=0)
     w_tt = ttnn.from_torch(stacked_w, dtype=weight_dtype, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=mapper)
     b_4d = stacked_b.reshape(tp, 1, 1, 2 * local_out)
-    b_tt = ttnn.from_torch(b_4d, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=mapper)
+    b_tt = _from_torch_tile_host_first(b_4d, dtype=ttnn.bfloat16, device=device, mesh_mapper=mapper)
     return {"weight": w_tt, "bias": b_tt}
 
 
@@ -653,7 +655,7 @@ def _tp_col_parallel_pair_gather_in0(
         stacked_w, k=in_dim, padded_n=padded_local_out, device=device, dtype=weight_dtype, mesh_mapper=mapper
     )
     b_4d = stacked_b.reshape(tp, 1, 1, padded_local_out)
-    b_tt = ttnn.from_torch(b_4d, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=mapper)
+    b_tt = _from_torch_tile_host_first(b_4d, dtype=ttnn.bfloat16, device=device, mesh_mapper=mapper)
     return {"weight": w_tt, "bias": b_tt}
 
 
@@ -699,7 +701,7 @@ def _tp_row_parallel_pair_gather_in0(
         b_scaled = torch.nn.functional.pad(b_scaled, (0, padded_out - out_dim))
     b_stacked = b_scaled.unsqueeze(0).expand(tp, -1).contiguous()  # [tp, padded_out]
     b_4d = b_stacked.reshape(tp, 1, 1, padded_out)
-    b_tt = ttnn.from_torch(b_4d, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=mapper)
+    b_tt = _from_torch_tile_host_first(b_4d, dtype=ttnn.bfloat16, device=device, mesh_mapper=mapper)
     return {"weight": w_tt, "bias": b_tt}
 
 
@@ -759,7 +761,7 @@ def _tp_fused_qkv_col_parallel_gather_in0(
         stacked_w, k=in_dim, padded_n=padded_fused, device=device, dtype=weight_dtype, mesh_mapper=mapper
     )
     b_4d = stacked_b.reshape(tp, 1, 1, padded_fused)
-    b_tt = ttnn.from_torch(b_4d, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=mapper)
+    b_tt = _from_torch_tile_host_first(b_4d, dtype=ttnn.bfloat16, device=device, mesh_mapper=mapper)
     return {"weight": w_tt, "bias": b_tt}
 
 
@@ -833,7 +835,7 @@ def _tp_fused_kv_col_parallel_gather_in0(
         stacked_w, k=in_dim, padded_n=padded_fused, device=device, dtype=weight_dtype, mesh_mapper=mapper
     )
     b_4d = stacked_b.reshape(tp, 1, 1, padded_fused)
-    b_tt = ttnn.from_torch(b_4d, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=mapper)
+    b_tt = _from_torch_tile_host_first(b_4d, dtype=ttnn.bfloat16, device=device, mesh_mapper=mapper)
     return {"weight": w_tt, "bias": b_tt}
 
 
@@ -1297,14 +1299,7 @@ def _conformer_feed_forward_params(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=mm,
     )
-    od_b_tt = ttnn.from_torch(
-        od_b_4d,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=mm,
-    )
+    od_b_tt = _from_torch_tile_host_first(od_b_4d, dtype=ttnn.bfloat16, device=device, mesh_mapper=mm)
     return make_parameter_dict(
         {
             "intermediate_dense": _linear_pair(ffn.intermediate_dense, device=device, weight_dtype=weight_dtype),
