@@ -2,15 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-LTX-2 Attention module for tt_dit.
-
-Mirrors WanAttention with LTX-2 defaults (dim=4096, 32 heads, 128 head_dim).
-Supports self-attention (fused QKV) and cross-attention (Q + fused KV).
-
-Reference: LTX-2 attention.py + Wan attention_wan.py
-"""
-
 from __future__ import annotations
 
 import torch
@@ -29,17 +20,7 @@ from ....utils.tensor import bf16_tensor
 
 
 class LTXAttention(Module):
-    """
-    LTX-2 attention block. Structurally identical to WanAttention.
-
-    Supports:
-    - Self-attention with fused QKV, RMSNorm on Q/K, RoPE
-    - Cross-attention with Q + fused KV, RMSNorm on Q/K
-    - Ring attention for sequence parallelism
-    - Fused to_out + addcmul for gated residual connections
-    - Per-head gating: 2 * sigmoid(linear(x)) applied to SDPA output
-    """
-
+    # Map from (is_blackhole, sp_factor, tp_factor) -> (q_chunk_size, k_chunk_size)
     sdpa_chunk_size_map = {
         (False, 2, 4): (256, 256),
         (False, 8, 4): (256, 256),
@@ -64,7 +45,6 @@ class LTXAttention(Module):
         query_input_dim: int | None = None,
         output_dim: int | None = None,
         apply_gated_attention: bool = False,
-        high_fidelity_sdpa: bool = False,
     ) -> None:
         super().__init__()
 
@@ -125,9 +105,7 @@ class LTXAttention(Module):
             ccl_manager=ccl_manager,
         )
 
-        # Per-head gate: ColParallel sharded on num_heads matches the SDPA-output
-        # head layout the gate multiplies. dtype=ttnn.float32 routes the matmul
-        # through HiFi4 + fp32 dest acc to match the host fp32 baseline (PCC ≥ 0.997).
+        # Per-head gate, sharded on num_heads to match the SDPA-output head layout.
         self.apply_gated_attention = apply_gated_attention
         if apply_gated_attention:
             self.to_gate_logits = ColParallelLinear(
@@ -167,26 +145,14 @@ class LTXAttention(Module):
             exp_approx_mode=False,
         )
 
-        # TEMPORARY: HiFi4 everywhere. The high_fidelity_sdpa flag/plumbing is kept so the
-        # Wan-parity HiFi2 default (else branch) can be re-enabled without re-threading it;
-        # A↔V (high_fidelity_sdpa=True) must always stay HiFi4 (HiFi2 there degrades v2a_kv
-        # to ≤0.92 by block 44+).
-        if high_fidelity_sdpa:
-            self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-                self.mesh_device.arch(),
-                math_fidelity=ttnn.MathFidelity.HiFi4,
-                math_approx_mode=False,
-                fp32_dest_acc_en=True,
-                packer_l1_acc=True,
-            )
-        else:
-            self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-                self.mesh_device.arch(),
-                math_fidelity=ttnn.MathFidelity.HiFi4,
-                math_approx_mode=False,
-                fp32_dest_acc_en=True,
-                packer_l1_acc=True,
-            )
+        # SDPA runs HiFi4 + fp32 dest acc (A2V/V2A degrade to <=0.92 PCC on HiFi2).
+        self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            self.mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
 
         self.rope_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
@@ -212,13 +178,8 @@ class LTXAttention(Module):
         rename_substate(state, "q_norm", "norm_q")
         rename_substate(state, "k_norm", "norm_k")
 
-        # Checkpoint is SPLIT-rotation (pairs Q[i] with Q[i+D/2]); runtime fuses to
-        # rotary_embedding_llama which is INTERLEAVED (pairs Q[2i] with Q[2i+1]).
-        # Permute Q/K output channels per head so the SPLIT pair lands at adjacent
-        # INTERLEAVED slots: new[2i]=old[i], new[2i+1]=old[i+D/2]. norm_q/norm_k
-        # share the channel layout and get the same permute. V is unchanged.
-        # See models/tt_dit/models/transformers/ltx/BRINGUP.md for why naïve
-        # INTERLEAVED-on-unpermuted gives PCC ~0.09.
+        # Permute Q/K (and norm_q/norm_k) channels per head from checkpoint SPLIT rotation to
+        # the INTERLEAVED layout rotary_embedding_llama expects. See BRINGUP.md.
         D = self.head_dim
         D_half = D // 2
         perm = torch.empty(D, dtype=torch.long)
@@ -286,11 +247,7 @@ class LTXAttention(Module):
         compute_kernel_config=None,
         parallel_config: DiTParallelConfig | None = None,
     ) -> ttnn.Tensor:
-        """Fused to_out projection + addcmul: output = residual + (matmul(x, W) + bias) * gate.
-
-        On Ring topology (parallel_config set, TP>1) the TP all-gather of x is fused into
-        the matmul; on Linear topology pass parallel_config=None (forward() pre-gathers x).
-        """
+        """Fused to_out projection + addcmul: output = residual + (matmul(x, W) + bias) * gate."""
         to_out = self.to_out
 
         if to_out.fsdp_mesh_axis is not None and to_out.mesh_device.shape[to_out.fsdp_mesh_axis] > 1:
@@ -353,54 +310,18 @@ class LTXAttention(Module):
     def _compute_gate(
         self, spatial_1BND: ttnn.Tensor, qkv_parallel_config: DiTParallelConfig | None
     ) -> ttnn.Tensor | None:
-        """Compute per-head gate on device with HiFi4 fp32 compute.
-
-        Pass ``qkv_parallel_config=self.parallel_config`` on Ring (fuses the AG of
-        ``spatial_1BND`` into this matmul, mirroring ``to_qkv``); pass ``None`` on
-        Linear where ``forward()`` has already AG'd ``spatial_1BND``. The ColParallel
-        matmul produces output already sharded on ``num_heads`` per TP device — the
-        BHNE layout the SDPA gate multiply expects. Returns bf16
-        ``(B, H_local, N_local, 1)``, or None if gating is disabled.
-        """
+        """Per-head gate 2 * sigmoid(to_gate_logits(x)); returns (B, H_local, N, 1) or None."""
         if not self.apply_gated_attention or self.to_gate_logits.weight._data is None:
             return None
 
-        # Apply sigmoid separately (fusing it into the matmul hit a VecMode assertion in
-        # the unary op for the num_heads-wide output). gate = 2 * sigmoid(gate_logits).
         gate_logits = self.to_gate_logits(spatial_1BND, parallel_config=qkv_parallel_config)
         gate = ttnn.multiply(ttnn.sigmoid(gate_logits), 2.0)
 
-        # (1, B, N, H_local) → (B, H_local, N, 1).
+        # (1, B, N, H_local) -> (B, H_local, N, 1)
         gate = ttnn.squeeze(gate, 0)
         gate = ttnn.transpose(gate, -2, -1)
         gate = ttnn.unsqueeze(gate, -1)
-        # No typecast: to_gate_logits (dtype=None) outputs bf16 and sigmoid/multiply preserve
-        # it, so gate is already bf16. The old cast was an unconditional bf16->bf16 no-op that
-        # still dispatched a TypecastDeviceOperation.
         return gate
-
-    def _sdpa_cross(
-        self,
-        q_BHNE: ttnn.Tensor,
-        k_BHNE: ttnn.Tensor,
-        v_BHNE: ttnn.Tensor,
-        *,
-        attn_mask: ttnn.Tensor | None = None,
-    ) -> ttnn.Tensor:
-        """Cross-attention SDPA. K/V are full-seq; Q stays SP-sharded so the output is the
-        local query shard directly (matches the "Q SP-sharded, K full-seq" design intent):
-        no Q all-gather, no output partition, no spxL redundant full-N attention per device.
-        Validated e2e on BH — the old gather-Q→full-SDPA→partition workaround was removed.
-        """
-        return ttnn.transformer.scaled_dot_product_attention(
-            q_BHNE,
-            k_BHNE,
-            v_BHNE,
-            attn_mask=attn_mask,
-            is_causal=False,
-            program_config=self.sdpa_program_config,
-            compute_kernel_config=self.sdpa_compute_kernel_config,
-        )
 
     def forward(
         self,
@@ -418,32 +339,23 @@ class LTXAttention(Module):
         skip_qk: bool = False,
         kv_replicated: bool = False,
     ) -> ttnn.Tensor:
-        """
-        Same interface as WanAttention.forward().
-
-        For cross-attention with positional embeddings (e.g. A↔V cross-attention),
-        pass rope_cos/sin for Q and k_rope_cos/sin for K.
-        """
+        """Same interface as WanAttention.forward(); pass k_rope_cos/sin for separate K RoPE
+        in A2V/V2A cross-attention."""
         if rope_cos is not None:
             assert rope_sin is not None
+            assert trans_mat is not None, "INTERLEAVED RoPE requires trans_mat (load-time Q/K permute assumes it)"
 
-        # WAN-style branch: Linear topology uses explicit AG + plain matmul; Ring
-        # topology lets `ColParallelLinear` fuse the AG into the matmul via
-        # `all_gather_minimal_matmul_async`.
         use_nonfused_agmm = (self.ccl_manager.topology == ttnn.Topology.Linear) and (
             self.parallel_config.tensor_parallel.factor > 1
         )
-        needs_explicit_ag = use_nonfused_agmm
-        if needs_explicit_ag:
+        if use_nonfused_agmm:
             spatial_1BND = self.ccl_manager.all_gather_persistent_buffer(
                 spatial_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
             )
 
-        qkv_parallel_config = None if needs_explicit_ag else self.parallel_config
+        qkv_parallel_config = None if use_nonfused_agmm else self.parallel_config
 
-        # Compute per-head gate on device (HiFi4 + fp32 dest acc) before QKV projections
-        # modify spatial_1BND. Reference: gate_logits = to_gate_logits(x), applied after
-        # SDPA as: out = out.view(B,T,H,D) * (2*sigmoid(gate_logits)).unsqueeze(-1).
+        # Per-head gate, computed before QKV consumes spatial_1BND.
         gate_bhne = self._compute_gate(spatial_1BND, qkv_parallel_config)
 
         if self.is_self:
@@ -454,15 +366,13 @@ class LTXAttention(Module):
             )
         else:
             kv_input = prompt_1BLP if prompt_1BLP is not None else spatial_1BND
-            # Cross K/V: gather TP-sharded context for to_kv. Ring folds the AG into the
-            # to_kv matmul; Linear gathers explicitly. Replicated context (text prompt) is
-            # already full and needs neither.
+            # Cross K/V: gather TP-sharded context for to_kv (replicated text prompt is already full).
             kv_parallel_config = None
             if prompt_1BLP is not None and self.parallel_config.tensor_parallel.factor > 1:
                 local_k = kv_input.shape[-1]
                 kv_is_tp_sharded = local_k * self.parallel_config.tensor_parallel.factor == self.kv_input_dim
                 if kv_is_tp_sharded:
-                    if needs_explicit_ag:
+                    if use_nonfused_agmm:
                         kv_input = self.ccl_manager.all_gather_persistent_buffer(
                             kv_input, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
                         )
@@ -479,11 +389,7 @@ class LTXAttention(Module):
                 parallel_config=kv_parallel_config,
             )
 
-        # RMSNorm on Q/K, fused with head split — `wan_fused_rmsnorm_post_allgather`
-        # accepts `num_heads_per_device` and emits the BHNE layout directly. Saves the
-        # two `nlp_create_qkv_heads` ops we'd otherwise launch for Q/K.
-        # (RoPE can't fuse the same way: LTX-2 interleaved rope is per-head and the
-        # kernel asserts rope shape `[1, 1, seq, head_dim]` — broadcast across heads.)
+        # RMSNorm on Q/K fused with the head split (emits BHNE via num_heads_per_device).
         q_BHNE = self.norm_q(q_1BNF, num_heads_per_device=self.n_local_heads)
         k_BHNE = self.norm_k(k_1BNF, num_heads_per_device=self.n_local_heads)
 
@@ -496,12 +402,7 @@ class LTXAttention(Module):
         # V still goes through the explicit reshape (no norm to fuse with).
         v_BHNE = create_heads(v_1BNF)
 
-        # Cross-attn K/V must be full-seq for SDPA (all-to-all). Gather across SP only when the
-        # context is genuinely SP-sharded:
-        #   - text prompt (kv_replicated): replicated by `_prepare_prompt` → already full, never gather
-        #     (Fix A: gathering would duplicate L → sp·L identical copies — wasteful, not needed).
-        #   - a2v: pre-gathered in LTXTransformerBlock → already full (shape == rope len) → skip.
-        #   - v2a: enters SP-sharded (shape < rope len) → gather here.
+        # Cross-attn K/V must be full-seq for SDPA; gather across SP only when genuinely sharded.
         is_cross = prompt_1BLP is not None
         sp_factor = self.parallel_config.sequence_parallel.factor
         _k_cos_pe = k_rope_cos if k_rope_cos is not None else rope_cos
@@ -519,7 +420,6 @@ class LTXAttention(Module):
                 v_BHNE = self.ccl_manager.all_gather_persistent_buffer(v_BHNE, dim=2, mesh_axis=sp_axis)
 
         if rope_cos is not None:
-            assert trans_mat is not None, "INTERLEAVED RoPE requires trans_mat (load-time Q/K permute assumes it)"
             _k_cos = _k_cos_pe if _k_cos_pe is not None else rope_cos
             _k_sin = k_rope_sin if k_rope_sin is not None else rope_sin
             q_BHNE = ttnn.experimental.rotary_embedding_llama(
@@ -531,10 +431,8 @@ class LTXAttention(Module):
 
         if skip_qk:
             # STG perturbation: skip Q/K attention, use V passthrough.
-            # Reference: out = to_v(context) when all_perturbed=True.
             spatial_BHNE = v_BHNE
         elif prompt_1BLP is None:
-            sp_factor = self.parallel_config.sequence_parallel.factor
             if sp_factor > 1 and attn_mask is None and is_blackhole():
                 spatial_BHNE, prompt_BHLE, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                     q_BHNE,
@@ -566,15 +464,7 @@ class LTXAttention(Module):
                     use_column_major_ccl=True,
                 )
             elif sp_factor > 1:
-                # Masked audio self-attn: gather K/V; keep Q sharded (mask rows match local Q).
-                # NOTE: the masked gather+SDPA path is kept for audio (not ring-joint) because this
-                # box is BH-LB (2x4) Linear topology, where ring-joint rotates K/V over a linear
-                # chain with no wraparound. Audio's sequence is tiny (audio_N/sp ≈ 2 tiles), so that
-                # ring overhead is pure loss — gather+local-SDPA is the more performant choice here.
-                # Ring-joint only helps audio on a true Ring mesh (4x8), which this box is not.
-                # A prior experiment (LTX_AUDIO_NO_ATTN_MASK=1, since reverted) suggested dropping
-                # the mask moves audio spectral metrics toward HF; if that reproduces, the fix is to
-                # correct this column mask, not to switch audio to ring-joint.
+                # Masked audio self-attn: gather K/V, keep Q sharded; gather+local SDPA beats ring-joint here.
                 sp_axis = self.parallel_config.sequence_parallel.mesh_axis
                 k_full = self.ccl_manager.all_gather_persistent_buffer(k_BHNE, dim=2, mesh_axis=sp_axis)
                 v_full = self.ccl_manager.all_gather_persistent_buffer(v_BHNE, dim=2, mesh_axis=sp_axis)
@@ -598,13 +488,18 @@ class LTXAttention(Module):
                     compute_kernel_config=self.sdpa_compute_kernel_config,
                 )
         else:
-            # Cross-attention: K/V are full-seq (text replicated / a2v pre-gathered / v2a gathered above).
-            # Q stays SP-sharded → local SDPA returns the local output shard directly.
-            spatial_BHNE = self._sdpa_cross(q_BHNE, k_BHNE, v_BHNE, attn_mask=attn_mask)
+            # Cross-attention: K/V full-seq, Q SP-sharded so local SDPA returns the local shard.
+            spatial_BHNE = ttnn.transformer.scaled_dot_product_attention(
+                q_BHNE,
+                k_BHNE,
+                v_BHNE,
+                attn_mask=attn_mask,
+                is_causal=False,
+                program_config=self.sdpa_program_config,
+                compute_kernel_config=self.sdpa_compute_kernel_config,
+            )
 
-        # Apply per-head gate in BHNE space (before concatenate_heads).
-        # Mathematically equivalent to the reference which applies gate after concat_heads
-        # in (B,T,H,D) format — both multiply each head's output by its scalar gate.
+        # Apply per-head gate in BHNE space.
         if gate_bhne is not None:
             spatial_BHNE = ttnn.multiply(spatial_BHNE, gate_bhne)
 
