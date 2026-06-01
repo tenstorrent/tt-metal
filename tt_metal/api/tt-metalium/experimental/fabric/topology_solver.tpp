@@ -95,12 +95,11 @@ void AdjacencyGraph<NodeId>::print_adjacency_map(const std::string& graph_name, 
     }
     degree_hist_str += "}";
 
-    // Always print histogram and summary in log_info
     std::stringstream summary_ss;
     summary_ss << "\n=== " << graph_name << " Adjacency Map ===" << std::endl;
     summary_ss << "Total nodes: " << nodes_cache_.size() << std::endl;
     summary_ss << "Degree histogram: " << degree_hist_str << std::endl;
-    log_info(tt::LogFabric, "{}", summary_ss.str());
+    log_trace(tt::LogFabric, "{}", summary_ss.str());
 
     // Print node details based on mode
     std::stringstream nodes_ss;
@@ -127,7 +126,7 @@ void AdjacencyGraph<NodeId>::print_adjacency_map(const std::string& graph_name, 
     if (quiet_mode) {
         log_debug(tt::LogFabric, "{}", nodes_ss.str());
     } else {
-        log_info(tt::LogFabric, "{}", nodes_ss.str());
+        log_trace(tt::LogFabric, "{}", nodes_ss.str());
     }
 }
 
@@ -527,7 +526,7 @@ void MappingConstraints<TargetNode, GlobalNode>::print_mapping_constraint_maps(
     summary_ss << "Forbidden pairs: " << forbidden_pairs_.size() << std::endl;
     summary_ss << "Cardinality constraints: " << cardinality_constraints_.size() << std::endl;
     summary_ss << "Same-rank target groups: " << same_rank_target_groups_.size() << std::endl;
-    log_info(tt::LogFabric, "{}", summary_ss.str());
+    log_trace(tt::LogFabric, "{}", summary_ss.str());
 
     std::stringstream detail_ss;
     detail_ss << "\n--- Valid (required) mappings ---" << std::endl;
@@ -2086,7 +2085,7 @@ void ConstraintIndexData<TargetNode, GlobalNode>::print_resolved_mapping_constra
     std::stringstream summary_ss;
     summary_ss << "\n=== " << label << " (indexed, resolved) ===" << std::endl;
     summary_ss << "Targets: " << graph_data.n_target << ", Globals: " << graph_data.n_global << std::endl;
-    log_info(tt::LogFabric, "{}", summary_ss.str());
+    log_trace(tt::LogFabric, "{}", summary_ss.str());
 
     std::stringstream detail_ss;
     detail_ss << "\n--- Per-target valid / forbidden / preferred (resolved to global nodes) ---" << std::endl;

@@ -59,7 +59,7 @@ void kernel_main() {
 
         cb_reserve_back(trans_mat_cb_id, onetile);
         uint32_t trans_mat_l1_write_addr = get_write_ptr(trans_mat_cb_id);
-        noc_async_read_tile(0, s3, trans_mat_l1_write_addr);
+        noc_async_read_page(0, s3, trans_mat_l1_write_addr);
         noc_async_read_barrier();
         cb_push_back(trans_mat_cb_id, onetile);
     }
@@ -88,8 +88,8 @@ void kernel_main() {
                     uint32_t cos_curr_idx = freq_per_head ? (head_num * cos_Ht * Wt + seq_tile * Wt) : (seq_tile * Wt);
                     uint32_t sin_curr_idx = freq_per_head ? (head_num * sin_Ht * Wt + seq_tile * Wt) : (seq_tile * Wt);
                     for (uint32_t j = 0; j < Wt; ++j) {
-                        noc_async_read_tile(cos_curr_idx, s1, cos_l1_write_addr);
-                        noc_async_read_tile(sin_curr_idx, s2, sin_l1_write_addr);
+                        noc_async_read_page(cos_curr_idx, s1, cos_l1_write_addr);
+                        noc_async_read_page(sin_curr_idx, s2, sin_l1_write_addr);
                         cos_curr_idx++;
                         sin_curr_idx++;
                         cos_l1_write_addr += cos_tile_bytes;
@@ -99,7 +99,7 @@ void kernel_main() {
                     uint32_t input_l1_write_addr = get_write_ptr(input_cb_id);
                     uint32_t input_curr_idx = batch_id * n_heads * Ht * Wt + head_num * Ht * Wt + seq_tile * Wt;
                     for (uint32_t j = 0; j < Wt; ++j) {
-                        noc_async_read_tile(input_curr_idx, s0, input_l1_write_addr);
+                        noc_async_read_page(input_curr_idx, s0, input_l1_write_addr);
                         input_curr_idx++;
                         input_l1_write_addr += input_tile_bytes;
                     }
@@ -157,13 +157,13 @@ void kernel_main() {
                     }
                     for (uint32_t j = 0; j < Wt; ++j) {
                         // Read input into CB
-                        noc_async_read_tile(input_curr_idx, s0, input_l1_write_addr);
+                        noc_async_read_page(input_curr_idx, s0, input_l1_write_addr);
                         input_curr_idx++;
                         input_l1_write_addr += input_tile_bytes;
 
                         if (!done_sin_cos) {
-                            noc_async_read_tile(sin_curr_idx, s2, sin_l1_write_addr);
-                            noc_async_read_tile(cos_curr_idx, s1, cos_l1_write_addr);
+                            noc_async_read_page(sin_curr_idx, s2, sin_l1_write_addr);
+                            noc_async_read_page(cos_curr_idx, s1, cos_l1_write_addr);
                             sin_curr_idx++;
                             cos_curr_idx++;
                             sin_l1_write_addr += sin_tile_bytes;
