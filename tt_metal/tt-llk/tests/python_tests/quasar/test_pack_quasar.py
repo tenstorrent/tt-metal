@@ -36,7 +36,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
 )
 from helpers.utils import passed_test
-from test_zzz_pack import is_relu_threshold_tolerance_issue
+from test_pack import is_relu_threshold_tolerance_issue
 
 
 def generate_qsr_pack_combinations(
