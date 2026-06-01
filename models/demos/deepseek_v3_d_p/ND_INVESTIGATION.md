@@ -261,6 +261,26 @@ Next experiments (when device free; all JIT, ~3 min/run, 5L/25600 GLOBAL A/B ora
 - If reader variants all fail → instrument/inspect `fused_swiglu` PACKER_L1_ACC and the
   writer (possibility 1); needs DPRINT/NoC tracing — kernel-owner tooling.
 
+## CB L1 allocation overlap — ruled out
+Checked the program factory CB allocations: all CBs use distinct indices
+(`c_0`..`c_13`) created via plain `CreateCircularBuffer`, so the tt-metal L1
+allocator places them non-overlapping. The compute partials CBs (`c_7`/`c_8`/`c_13`)
+do not overlap the reader-written input CBs (`c_0`..`c_3`, `c_12`). So a structural
+CB-overlap race is not the cause.
+
+## Hypotheses eliminated (testable ones) — what remains needs hardware tracing
+Eliminated by direct measurement/inspection: KV-cache, gate/routing, dispatch,
+shared expert, combine `init_zeros`/H1, capacity overflow, reader mcast
+synchronization (max-sync), CB L1 overlap, matmul precision config (deterministic
+given inputs). What remains — a finite, timing-dependent race producing
+non-deterministic FFN output from deterministic inputs — is most likely (a) the
+compute kernel `fused_swiglu` (PACKER_L1_ACC RMW / dual-partials / SFPU silu) or the
+writer, or (b) a posted-multicast NoC-ordering issue in the concurrent dual-sender /
+activated-loopback path that explicit barriers can't fix. Pinning it requires
+**per-core DPRINT or NoC tracing** comparing intermediate values across two runs
+(e.g. checksum `cb_out`/`cb_activated` per core) — kernel-owner tooling. The 5L/25600
+GLOBAL `routed_output` A/B remains the determinism oracle for any candidate fix.
+
 ## Comparison vs the canonical (known-deterministic) matmul mcast
 The standard tt-metal block-sharded matmul in0 sender
 (`ttnn/.../matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp`)
