@@ -96,11 +96,12 @@ def causal_conv1d_left_pad_reference(
     *,
     left_pad: int,
     stride: int = 1,
+    pad_mode: str = "constant",
 ) -> torch.Tensor:
     """Left causal pad + ``conv1d`` in bf16 (``input_proj`` / encoder strided blocks)."""
     x = x_ncl.to(torch.bfloat16)
     if left_pad:
-        x = F.pad(x, (left_pad, 0))
+        x = pad1d_non_reflect(x, (left_pad, 0), mode=pad_mode)
     return F.conv1d(x, weight_oik.to(torch.bfloat16), bias=None, stride=stride, padding=0, dilation=1, groups=1)
 
 
@@ -141,6 +142,7 @@ def decoder_transformer_block_reference(
     *,
     block_index: int,
     layer_index: int,
+    sliding_window: int | None = None,
 ) -> torch.Tensor:
     """One ``decoder_blocks.{block_index}.layers.{layer_index}`` TransformerBlock in float32."""
     prefix = f"decoder_blocks.{block_index}.layers.{layer_index}"
@@ -166,9 +168,8 @@ def decoder_transformer_block_reference(
     q = q.view(b, t, tokenizer_cfg.n_heads, tokenizer_cfg.head_dim).transpose(1, 2)
     k = k.view(b, t, tokenizer_cfg.n_kv_heads, tokenizer_cfg.head_dim).transpose(1, 2)
     v = v.view(b, t, tokenizer_cfg.n_kv_heads, tokenizer_cfg.head_dim).transpose(1, 2)
-    mask = audio_tokenizer_sliding_window_attention_bias(
-        tokenizer_cfg.n_heads, t, tokenizer_cfg.attn_sliding_window_size
-    )
+    window = tokenizer_cfg.attn_sliding_window_size if sliding_window is None else sliding_window
+    mask = audio_tokenizer_sliding_window_attention_bias(tokenizer_cfg.n_heads, t, window)
     attn = F.scaled_dot_product_attention(q, k, v, attn_mask=mask)
     attn = attn.transpose(1, 2).reshape(b, t, tokenizer_cfg.n_heads * tokenizer_cfg.head_dim)
     attn = F.linear(attn, wo)
@@ -233,6 +234,7 @@ def decoder_transformer_block_reference_bf16(
     *,
     block_index: int,
     layer_index: int,
+    sliding_window: int | None = None,
 ) -> torch.Tensor:
     """Same as :func:`decoder_transformer_block_reference` but in bf16 (RMS reductions stay float32)."""
     prefix = f"decoder_blocks.{block_index}.layers.{layer_index}"
@@ -264,9 +266,8 @@ def decoder_transformer_block_reference_bf16(
     q = q.view(b, t, tokenizer_cfg.n_heads, tokenizer_cfg.head_dim).transpose(1, 2)
     k = k.view(b, t, tokenizer_cfg.n_kv_heads, tokenizer_cfg.head_dim).transpose(1, 2)
     v = v.view(b, t, tokenizer_cfg.n_kv_heads, tokenizer_cfg.head_dim).transpose(1, 2)
-    mask = audio_tokenizer_sliding_window_attention_bias(
-        tokenizer_cfg.n_heads, t, tokenizer_cfg.attn_sliding_window_size
-    ).to(torch.bfloat16)
+    window = tokenizer_cfg.attn_sliding_window_size if sliding_window is None else sliding_window
+    mask = audio_tokenizer_sliding_window_attention_bias(tokenizer_cfg.n_heads, t, window).to(torch.bfloat16)
     attn = F.scaled_dot_product_attention(q, k, v, attn_mask=mask)
     attn = attn.transpose(1, 2).reshape(b, t, tokenizer_cfg.n_heads * tokenizer_cfg.head_dim)
     attn = F.linear(attn, wo)
@@ -290,7 +291,10 @@ def decoder_blocks_stack_reference(
     tokenizer_cfg: Any,
 ) -> torch.Tensor:
     """Full ``decoder_blocks`` 0→7 in bf16 (no ``output_proj``). Returns ``[B, T_out, dim]`` bf16."""
-    from models.experimental.voxtraltts.reference.voxtral_config import parse_csv_ints
+    from models.experimental.voxtraltts.reference.voxtral_config import (
+        decoder_transformer_window_sizes,
+        parse_csv_ints,
+    )
     from models.experimental.voxtraltts.tt.audio_tokenizer.conv import (
         resolve_decoder_block_causal_conv_fused_weight,
         resolve_decoder_block_conv_transpose_fused_weight,
@@ -298,16 +302,18 @@ def decoder_blocks_stack_reference(
 
     kerns = parse_csv_ints(tokenizer_cfg.decoder_convs_kernels_str)
     strides = parse_csv_ints(tokenizer_cfg.decoder_convs_strides_str)
+    # Per-stage sliding window (decoder_blocks.1/.3/.5/.7), e.g. (2, 4, 8, 16) for the default config.
+    windows = decoder_transformer_window_sizes(tokenizer_cfg)
     w0 = resolve_decoder_block_causal_conv_fused_weight(state_dict, 0)
     x_ncl = causal_conv1d_reference_bf16(
         latent_ncl_bf16, w0.to(torch.bfloat16), kernel_size=kerns[0], stride=strides[0], pad_mode="replicate"
     )
     x_btd = x_ncl.permute(0, 2, 1).contiguous()
 
-    for tb_idx, tr_idx in ((1, 2), (3, 4), (5, 6)):
+    for stage, (tb_idx, tr_idx) in enumerate(((1, 2), (3, 4), (5, 6))):
         for li in (0, 1):
             x_btd = decoder_transformer_block_reference_bf16(
-                x_btd, state_dict, tokenizer_cfg, block_index=tb_idx, layer_index=li
+                x_btd, state_dict, tokenizer_cfg, block_index=tb_idx, layer_index=li, sliding_window=windows[stage]
             )
         kern_i = tr_idx // 2
         w_t = resolve_decoder_block_conv_transpose_fused_weight(state_dict, tr_idx)
@@ -319,7 +325,7 @@ def decoder_blocks_stack_reference(
 
     for li in (0, 1):
         x_btd = decoder_transformer_block_reference_bf16(
-            x_btd, state_dict, tokenizer_cfg, block_index=7, layer_index=li
+            x_btd, state_dict, tokenizer_cfg, block_index=7, layer_index=li, sliding_window=windows[3]
         )
     return x_btd
 
@@ -334,14 +340,14 @@ def output_proj_mel_ncl_reference_bf16(
     w = resolve_output_proj_causal_conv_fused_weight(state_dict)
     k = int(w.shape[2])
     x_ncl = hidden_btd_bf16.permute(0, 2, 1).contiguous()
-    return causal_conv1d_reference_bf16(x_ncl, w.to(torch.bfloat16), kernel_size=k, stride=1, pad_mode="replicate")
+    return causal_conv1d_reference_bf16(x_ncl, w.to(torch.bfloat16), kernel_size=k, stride=1, pad_mode="reflect")
 
 
 def semantic_codebook_centroids_bf16(state_dict: dict[str, torch.Tensor]) -> torch.Tensor:
     """EMA centroid table ``[n_semantic, semantic_dim]`` bf16 from ``quantizer.semantic_codebook.*``."""
     es = state_dict["quantizer.semantic_codebook.embedding_sum"]
     u = state_dict["quantizer.semantic_codebook.cluster_usage"]
-    return (es.to(torch.float32) / u.to(torch.float32).clamp(min=1.0).unsqueeze(-1)).to(torch.bfloat16)
+    return (es.to(torch.float32) / u.to(torch.float32).clamp(min=1e-5).unsqueeze(-1)).to(torch.bfloat16)
 
 
 def semantic_codebook_quantize_indices_reference(
