@@ -68,6 +68,17 @@ def _pad_or_create_page_table(table, target_blocks):
     return torch.ones(1, aligned_blocks, dtype=torch.int32) * -1
 
 
+def _align_page_table_width(table, target_blocks, fill_value=-1):
+    aligned_blocks = ((target_blocks + 7) // 8) * 8
+    if table is None:
+        return None
+    num_pad = aligned_blocks - table.shape[1]
+    if num_pad <= 0:
+        return table[:, :aligned_blocks]
+    padding = torch.full((table.shape[0], num_pad), fill_value, dtype=table.dtype)
+    return torch.cat([table, padding], dim=1)
+
+
 class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
     def __init__(self, model, model_args, mesh_device, processor=None, tokenizer=None):
         """
@@ -245,7 +256,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         global_user_id=None,
         batch_size=1,
         user_id=0,
-        start_pos=0,
+        start_pos=None,
     ):
         if batch_size > 1:
             prefill_kwargs = {
@@ -431,7 +442,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         trace_key = f"{prefill_seq_len}_{model_id}_{batch_size}_{use_start_pos}"
 
         use_prefix_caching = num_cached_tokens > 0
-        chunk_start_idx = num_cached_tokens
+        chunk_start_idx = num_cached_tokens if use_prefix_caching else None
         block_size = get_block_size(kv_cache)
 
         if page_table is not None and batch_size == 1:
@@ -498,7 +509,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         model_id=-1,
         global_user_id=None,
         batch_size=1,
-        start_pos=0,
+        start_pos=None,
     ):
         # Use actual batch_size since tokens are now in batch dimension
         prefill_kwargs = {
@@ -2525,9 +2536,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             num_blocks = num_blocks_in_seq(prefill_seq_len, block_size)
             page_table = page_table[:, :num_blocks]
             if trace_enabled:
-                if page_table.shape[1] < num_blocks:
-                    padding = torch.ones(page_table.shape[0], num_blocks - page_table.shape[1], dtype=torch.int32) * -1
-                    page_table = torch.cat([page_table, padding], dim=1)
+                page_table = _align_page_table_width(page_table, num_blocks)
             padded_page_table = torch.ones(batch_dim, page_table.shape[1], dtype=torch.int32) * -1
             assert user_id is not None
             for i, user in enumerate(user_id):
@@ -2541,9 +2550,8 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             else:
                 num_blocks = num_blocks_in_seq(prefill_len, block_size)
             if trace_enabled:
-                if page_table.shape[1] < num_blocks:
-                    padding = torch.ones(1, num_blocks - page_table.shape[1], dtype=torch.int32) * -1
-                    page_table = torch.cat([page_table, padding], dim=1)
+                page_table = _align_page_table_width(page_table, num_blocks)
+                return page_table
             return page_table[:, :num_blocks]
 
     ## Destructor

@@ -42,6 +42,7 @@ class MLP(LightweightModule):
         pad_hidden_dim = lambda tensor, dim: pad_to_size(tensor, dim=dim, size=args.hidden_dim)
         # If padding was applied (e.g. via env var), add the unpadded hidden dim to the cache name to avoid loading incorrect weights
         hidden_dim_string = f".hidden_dim_{args.hidden_dim}" if args.hidden_dim != args.unpadded_hidden_dim else ""
+        self.is_ffn2_model = args.is_ffn2_model
 
         if args.dummy_weights:
             cache_name = lambda _: None
@@ -98,7 +99,44 @@ class MLP(LightweightModule):
             "w1_sharded", ff1_3_dtype, dims=w1_dims
         )  # bfp4 normally ok here but sub .99 pcc for llama 3.1 weights
         self.w2 = as_sharded_tensor("w2_sharded", ff2_dtype, dims=w2_dims)
-        self.w3 = as_sharded_tensor("w3_sharded", ff1_3_dtype, dims=w1_dims)
+        if not self.is_ffn2_model:
+            self.w3 = as_sharded_tensor("w3_sharded", ff1_3_dtype, dims=w1_dims)
+
+        def as_bias_tensors(name):
+            bias_key = f"{state_dict_prefix}.{name}.bias"
+            if bias_key not in state_dict:
+                return None, None
+
+            torch_bias = state_dict[bias_key]
+            prefill_bias = ttnn.as_tensor(
+                torch_bias.view(1, 1, 1, -1),
+                dtype=ttnn.bfloat16,
+                device=self.mesh_device,
+                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                cache_file_name=cache_name(f"{name}_bias_prefill_sharded"),
+            )
+
+            decode_biases = []
+            for batch_size in range(ttnn.TILE_SIZE, args.tile_padded_batch_rows + ttnn.TILE_SIZE, ttnn.TILE_SIZE):
+                bias_decode = torch_bias.unsqueeze(0).expand(batch_size, -1)
+                decode_biases.append(
+                    ttnn.as_tensor(
+                        bias_decode,
+                        dtype=ttnn.bfloat16,
+                        device=self.mesh_device,
+                        mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
+                        layout=ttnn.TILE_LAYOUT,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        cache_file_name=cache_name(f"{name}_bias_decode_sharded_{batch_size}"),
+                    )
+                )
+
+            return prefill_bias, decode_biases
+
+        self.w1_bias_prefill, self.w1_bias_decode = as_bias_tensors("w1")
+        self.w2_bias_prefill, self.w2_bias_decode = as_bias_tensors("w2")
 
         # Default activation is SILU
         self.activation_type = (
@@ -110,10 +148,25 @@ class MLP(LightweightModule):
 
             def register_weights():
                 self.prefetcher.insert_tensor(self.w1)
-                self.prefetcher.insert_tensor(self.w3)
+                if not self.is_ffn2_model:
+                    self.prefetcher.insert_tensor(self.w3)
                 self.prefetcher.insert_tensor(self.w2)
 
             self.prefetcher.register_callback(register_weights)
+
+    def _add_bias(self, x: ttnn.Tensor, prefill_bias, decode_biases, mode: Mode) -> ttnn.Tensor:
+        if mode == Mode.DECODE:
+            if decode_biases is None:
+                return x
+            num_tiles = (x.shape[-2] + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
+            bias = decode_biases[num_tiles - 1]
+        else:
+            if prefill_bias is None:
+                return x
+            bias = prefill_bias
+
+        bias = ttnn.to_memory_config(bias, x.memory_config())
+        return ttnn.add(x, bias)
 
     def forward(self, x: ttnn.Tensor, mode: Mode) -> ttnn.Tensor:
         """
@@ -155,20 +208,21 @@ class MLP(LightweightModule):
             if self.prefetcher is not None and mode == Mode.DECODE
             else None,
         )
-        w3_out = ttnn.linear(
-            x,
-            self.w3,
-            dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
-            core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_3 else None,
-            compute_kernel_config=li_ff1_3_compute_kernel_cfg,
-            program_config=pc_3,
-            memory_config=self.args.get_mlp_ff1_3_mem_config(mode, self.prefetcher),
-            global_cb=self.prefetcher.global_cb if self.prefetcher is not None and mode == Mode.DECODE else None,
-            sub_device_id=self.prefetcher.worker_sub_device_id
-            if self.prefetcher is not None and mode == Mode.DECODE
-            else None,
-        )
-        ttnn.deallocate(x)
+        if not self.is_ffn2_model:
+            w3_out = ttnn.linear(
+                x,
+                self.w3,
+                dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
+                core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_3 else None,
+                compute_kernel_config=li_ff1_3_compute_kernel_cfg,
+                program_config=pc_3,
+                memory_config=self.args.get_mlp_ff1_3_mem_config(mode, self.prefetcher),
+                global_cb=self.prefetcher.global_cb if self.prefetcher is not None and mode == Mode.DECODE else None,
+                sub_device_id=self.prefetcher.worker_sub_device_id
+                if self.prefetcher is not None and mode == Mode.DECODE
+                else None,
+            )
+        # ttnn.deallocate(x)
 
         if TG:
             # if mode == "decode" and self.dim!=8192:
@@ -193,22 +247,24 @@ class MLP(LightweightModule):
                     num_workers_per_link=2,
                     num_buffers_per_channel=2,
                 )
-
-                w3_out = ttnn.experimental.reduce_scatter_minimal_async(
-                    w3_out,
-                    persistent_output_buffers=None,
-                    dim=3,
-                    multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis),
-                    barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
-                    num_links=1,
-                    cluster_axis=cluster_axis,
-                    memory_config=self.model_config["FF1_OUT_REDUCE_SCATTER_MEMCFG"] if mode == Mode.DECODE else None,
-                    intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    topology=ttnn.Topology.Linear,
-                    chunks_per_sync=10,
-                    num_workers_per_link=2,
-                    num_buffers_per_channel=2,
-                )
+                if not self.is_ffn2_model:
+                    w3_out = ttnn.experimental.reduce_scatter_minimal_async(
+                        w3_out,
+                        persistent_output_buffers=None,
+                        dim=3,
+                        multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis),
+                        barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+                        num_links=1,
+                        cluster_axis=cluster_axis,
+                        memory_config=self.model_config["FF1_OUT_REDUCE_SCATTER_MEMCFG"]
+                        if mode == Mode.DECODE
+                        else None,
+                        intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        topology=ttnn.Topology.Linear,
+                        chunks_per_sync=10,
+                        num_workers_per_link=2,
+                        num_buffers_per_channel=2,
+                    )
             else:
                 # NOTE: In MLP All-reduce hard codes to 2 links, so we do not get the dynamic link count from the CCL class
                 # to avoid any performance regressions.
@@ -222,51 +278,63 @@ class MLP(LightweightModule):
                     topology=self.args.ccl_topology(),
                     memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == Mode.DECODE else None,
                 )
-                w3_out = tt_all_reduce(
-                    w3_out,
-                    self.mesh_device,
-                    self.tt_ccl,
-                    cluster_axis=1,
-                    num_all_gather_links=2,
-                    sharded=True if mode == Mode.DECODE else False,
-                    topology=self.args.ccl_topology(),
-                    memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == Mode.DECODE else None,
-                )
+                if not self.is_ffn2_model:
+                    w3_out = tt_all_reduce(
+                        w3_out,
+                        self.mesh_device,
+                        self.tt_ccl,
+                        cluster_axis=1,
+                        num_all_gather_links=2,
+                        sharded=True if mode == Mode.DECODE else False,
+                        topology=self.args.ccl_topology(),
+                        memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == Mode.DECODE else None,
+                    )
 
-        w2_in = ttnn.mul(
-            w1_out,
-            w3_out,
-            input_tensor_a_activations=[self.activation_type],
-            dtype=activation_dtype or ttnn.bfloat8_b,
-            memory_config=w1_out.memory_config(),
-        )
+        w1_out = self._add_bias(w1_out, self.w1_bias_prefill, self.w1_bias_decode, mode)
 
-        if mode == Mode.DECODE and not TG and self.prefetcher is None:
-            # w2 may use a different core grid, this is a no-op if they already match
-            w2_in = ttnn.to_memory_config(w2_in, self.args.get_mlp_binary_mult_mem_config(mode))
-
-        ttnn.deallocate(w3_out)
-        ttnn.deallocate(w1_out)
-
-        if TG and (self.dim == 8192 or mode == Mode.PREFILL):
-            cluster_axis = 1
-            w2_in = ttnn.experimental.all_gather_async(
-                w2_in,
-                persistent_output_buffer=None,
-                dim=3,
-                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
-                num_links=2,
-                cluster_axis=1,
-                topology=ttnn.Topology.Linear,
-                memory_config=input_mem_cfg,
-                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
-                chunks_per_sync=10,
-                num_workers_per_link=2,
-                num_buffers_per_channel=2,
+        if not self.is_ffn2_model:
+            w2_in = ttnn.mul(
+                w1_out,
+                w3_out,
+                input_tensor_a_activations=[self.activation_type],
+                dtype=activation_dtype or ttnn.bfloat8_b,
+                memory_config=w1_out.memory_config(),
             )
 
-            if mode == Mode.DECODE:
-                w2_in = ttnn.to_memory_config(w2_in, ttnn.L1_MEMORY_CONFIG)
+            if mode == Mode.DECODE and not TG and self.prefetcher is None:
+                # w2 may use a different core grid, this is a no-op if they already match
+                w2_in = ttnn.to_memory_config(w2_in, self.args.get_mlp_binary_mult_mem_config(mode))
+
+            ttnn.deallocate(w3_out)
+            ttnn.deallocate(w1_out)
+
+            if TG and (self.dim == 8192 or mode == Mode.PREFILL):
+                cluster_axis = 1
+                w2_in = ttnn.experimental.all_gather_async(
+                    w2_in,
+                    persistent_output_buffer=None,
+                    dim=3,
+                    multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
+                    num_links=2,
+                    cluster_axis=1,
+                    topology=ttnn.Topology.Linear,
+                    memory_config=input_mem_cfg,
+                    barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+                    chunks_per_sync=10,
+                    num_workers_per_link=2,
+                    num_buffers_per_channel=2,
+                )
+
+                if mode == Mode.DECODE:
+                    w2_in = ttnn.to_memory_config(w2_in, ttnn.L1_MEMORY_CONFIG)
+        else:
+            w2_in = ttnn.mul(
+                w1_out,
+                1.0,
+                input_tensor_a_activations=[self.activation_type],
+                dtype=activation_dtype or ttnn.bfloat8_b,
+                memory_config=w1_out.memory_config(),
+            )
 
         li_ff2_compute_kernel_cfg = self.decoders_optimizations.get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.LI_FF2, configuration=self.args
@@ -328,5 +396,7 @@ class MLP(LightweightModule):
                 w2_out_reduced,
                 self.args.get_mlp_output_mem_config(mode, self.prefetcher),
             )
+
+        w2_out_reduced = self._add_bias(w2_out_reduced, self.w2_bias_prefill, self.w2_bias_decode, mode)
 
         return w2_out_reduced

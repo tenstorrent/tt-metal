@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+from models.common.layernorm import LayerNorm
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.tt_transformers.tt.attention import Attention as DefaultAttention
@@ -47,6 +48,7 @@ class TransformerBlock(LightweightModule):
         self.current = 0
         self.model_config = args.get_model_config()
         self.is_mixture_of_experts = False
+        self.is_parallel_model = args.is_parallel_model
         self.layer_num = layer_num
         ActualAttentionClass = attention_class if attention_class is not None else DefaultAttention
 
@@ -118,8 +120,9 @@ class TransformerBlock(LightweightModule):
             or use_galaxy_row_submesh_rmsnorm_l1_workaround
         ):
             extra_rmsnorm_kwargs["fp32_dest_acc_en"] = False
+        norm_class = LayerNorm if self.args.layernorm else RMSNorm
         self.attention_norm = DistributedNorm(
-            RMSNorm(
+            norm_class(
                 device=mesh_device,
                 dim=args.dim,
                 eps=args.norm_eps,
@@ -140,28 +143,29 @@ class TransformerBlock(LightweightModule):
             TG=args.is_galaxy,
             ag_config_key="ATTN_LN_AG_CONFIG",
         )
-        self.ff_norm = DistributedNorm(
-            RMSNorm(
-                device=mesh_device,
-                dim=args.dim,
-                eps=args.norm_eps,
-                state_dict=state_dict,
-                state_dict_prefix=args.get_state_dict_prefix("", layer_num),
-                weight_cache_path=None if args.dummy_weights else weight_cache_path,
-                weight_dtype=ttnn.bfloat16,
-                weight_key="ffn_norm",
-                is_distributed=self.args.is_distributed_norm,
-                add_unit_offset=self.args.rms_norm_add_unit_offset,
-                ccl_topology=self.args.ccl_topology(),
+        if f"layers.{layer_num}.ffn_norm.weight" in state_dict:
+            self.ff_norm = DistributedNorm(
+                RMSNorm(
+                    device=mesh_device,
+                    dim=args.dim,
+                    eps=args.norm_eps,
+                    state_dict=state_dict,
+                    state_dict_prefix=args.get_state_dict_prefix("", layer_num),
+                    weight_cache_path=None if args.dummy_weights else weight_cache_path,
+                    weight_dtype=ttnn.bfloat16,
+                    weight_key="ffn_norm",
+                    is_distributed=self.args.is_distributed_norm,
+                    add_unit_offset=self.args.rms_norm_add_unit_offset,
+                    ccl_topology=self.args.ccl_topology(),
+                    tt_ccl=self.tt_ccl,
+                    **extra_rmsnorm_kwargs,
+                ),
+                args,
                 tt_ccl=self.tt_ccl,
-                **extra_rmsnorm_kwargs,
-            ),
-            args,
-            tt_ccl=self.tt_ccl,
-            prefetcher=self.prefetcher,
-            TG=args.is_galaxy,
-            ag_config_key="FFN_LN_AG_CONFIG",
-        )
+                prefetcher=self.prefetcher,
+                TG=args.is_galaxy,
+                ag_config_key="FFN_LN_AG_CONFIG",
+            )
         if f"layers.{layer_num}.pre_feedforward_layernorm.weight" in state_dict:
             self.pre_ff_norm = DistributedNorm(  # pre_feedforward_layernorm
                 RMSNorm(
@@ -230,6 +234,21 @@ class TransformerBlock(LightweightModule):
         kv_cache=None,
         batch_size=1,
     ) -> ttnn.Tensor:
+        if self.args.is_parallel_model:
+            return self._forward_parallel(
+                x,
+                current_pos,
+                rot_mats_global,
+                rot_mats_local,
+                user_id,
+                mode,
+                page_table,
+                chunk_page_table,
+                chunk_start_idx,
+                kv_cache,
+                batch_size,
+            )
+
         TG = self.args.is_galaxy
         residual = x
 
@@ -336,3 +355,94 @@ class TransformerBlock(LightweightModule):
         )
 
         return out  # fractured across devices
+
+    def _forward_parallel(
+        self,
+        x: ttnn.Tensor,
+        current_pos,
+        rot_mats_global=None,
+        rot_mats_local=None,
+        user_id=0,
+        mode="decode",
+        page_table=None,
+        chunk_page_table=None,
+        chunk_start_idx=None,
+        kv_cache=None,
+        batch_size=1,
+    ) -> ttnn.Tensor:
+        TG = self.args.is_galaxy
+        is_decode = mode == Mode.DECODE or mode == "decode"
+        residual = x
+
+        skip_mem_cfg = self.args.get_residual_mem_config(mode, self.prefetcher)
+        assert (
+            x.memory_config() == skip_mem_cfg
+        ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
+
+        rot_mats = (
+            rot_mats_local if (hasattr(self.attention, "is_sliding") and self.attention.is_sliding) else rot_mats_global
+        )
+
+        # Phi uses a single input layer norm and parallel residual (residual + attn + mlp).
+        attn_norm_config = self.args.get_norm_config("attn", mode, self.prefetcher)
+        normed_input = self.attention_norm(x, mode, norm_config=attn_norm_config)
+        attn_input = normed_input
+
+        # Mirror the standard decoder prefill path so attention sees an explicit batch dimension
+        # when batched prompts are packed along sequence upstream.
+        if mode == Mode.PREFILL and batch_size > 1:
+            attn_input = ttnn.reshape(attn_input, [batch_size, 1, attn_input.shape[-2] // batch_size, -1])
+
+        # Phi runs attention and MLP from the same normalized input. Attention frees its input
+        # internally, so keep an explicit clone alive for the parallel MLP branch.
+        mlp_input = ttnn.clone(
+            normed_input,
+            dtype=normed_input.dtype,
+            memory_config=normed_input.memory_config(),
+        )
+
+        attn_out = self.attention.forward(
+            attn_input,
+            current_pos,
+            rot_mats,
+            user_id,
+            mode,
+            page_table=page_table,
+            chunk_page_table=chunk_page_table,
+            chunk_start_idx=chunk_start_idx,
+            kv_cache=kv_cache,
+        )
+
+        if mode == Mode.PREFILL and batch_size > 1:
+            residual = ttnn.reshape(residual, [1, 1, residual.shape[-2] * residual.shape[-3] * residual.shape[0], -1])
+
+        attn_out = ttnn.to_memory_config(attn_out, skip_mem_cfg)
+
+        if TG and is_decode:
+            mlp_input = ttnn.to_memory_config(mlp_input, memory_config=self.args.get_mlp_act_mem_config(mode))
+        mlp_out = self.feed_forward.forward(mlp_input, mode)
+
+        activation_dtype = self.args.decoders_optimizations.get_tensor_dtype(
+            decoder_id=self.layer_num, tensor=TensorGroup.ACTIVATION
+        )
+
+        out = ttnn.add(
+            residual,
+            attn_out,
+            memory_config=skip_mem_cfg,
+            dtype=self.args.ccl_dtype
+            if TG and not self.args.is_distributed_norm(mode)
+            else activation_dtype or ttnn.bfloat16,
+        )
+        ttnn.deallocate(attn_out)
+
+        out = ttnn.add(
+            out,
+            mlp_out,
+            memory_config=skip_mem_cfg,
+            dtype=self.args.ccl_dtype
+            if TG and not self.args.is_distributed_norm(mode)
+            else activation_dtype or ttnn.bfloat16,
+        )
+        ttnn.deallocate(mlp_out)
+        return out

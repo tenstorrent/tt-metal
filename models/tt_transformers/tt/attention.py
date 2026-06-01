@@ -58,6 +58,7 @@ class Attention(LightweightModule):
 
         self.n_local_heads = self.n_heads // self.num_devices_per_group
         self.n_local_kv_heads = self.n_kv_heads // self.num_devices_per_group
+        self.partial_rotary_factor = configuration.partial_rotary_factor
 
         self.use_qk_fused = configuration.use_qk_fused
         self.use_hf_rope = configuration.use_hf_rope
@@ -361,6 +362,38 @@ class Attention(LightweightModule):
                 cache_name("wo_width_sharded_2d") if (self.use_fused_all_gather_matmul or self.TG) else cache_name("wo")
             ),
         )
+
+        self.wo_bias_prefill = None
+        self.wo_bias_decode = None
+        if f"{wo_str}.bias" in state_dict:
+            wo_bias = state_dict[f"{wo_str}.bias"]
+            self.wo_bias_prefill = ttnn.as_tensor(
+                wo_bias.view(1, 1, 1, -1),
+                device=self.mesh_device,
+                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                layout=ttnn.TILE_LAYOUT,
+                cache_file_name=cache_name("wo_bias_prefill_sharded"),
+            )
+            self.wo_bias_decode = []
+            for batch_size in range(
+                configuration.tile_size,
+                configuration.tile_padded_batch_rows + configuration.tile_size,
+                configuration.tile_size,
+            ):
+                wo_bias_decode = wo_bias.unsqueeze(0).expand(batch_size, -1)
+                self.wo_bias_decode.append(
+                    ttnn.as_tensor(
+                        wo_bias_decode,
+                        device=self.mesh_device,
+                        mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
+                        dtype=ttnn.bfloat16,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        layout=ttnn.TILE_LAYOUT,
+                        cache_file_name=cache_name(f"wo_bias_decode_sharded_{batch_size}"),
+                    )
+                )
         if not use_paged_kv_cache:
             # vLLM provides its own kv cache
             self.init_kv_cache(configuration, weight_cache_path)
@@ -378,6 +411,20 @@ class Attention(LightweightModule):
                 self.prefetcher.insert_tensor(self.wo_sharded_ring)
 
             self.prefetcher.register_callback(register_weights)
+
+    def _add_wo_bias(self, x: ttnn.Tensor, mode: Mode) -> ttnn.Tensor:
+        if mode == Mode.DECODE:
+            if self.wo_bias_decode is None:
+                return x
+            num_tiles = int(math.ceil(x.shape[-2] / self.tile_size))
+            bias = self.wo_bias_decode[num_tiles - 1]
+        else:
+            if self.wo_bias_prefill is None:
+                return x
+            bias = self.wo_bias_prefill
+
+        bias = ttnn.to_memory_config(bias, x.memory_config())
+        return ttnn.add(x, bias)
 
     def init_kv_cache(self, configuration, weight_cache_path):
         """
@@ -663,6 +710,74 @@ class Attention(LightweightModule):
         k_heads_pre_rot_1BKD = self.k_norm(k_heads_pre_rot_1BKD, mode=Mode.DECODE, norm_config=norm_config)
         ttnn.deallocate(xqkv_fused)
 
+        if self.partial_rotary_factor != 1.0:
+            # TODO: ttnn.chunk can only be distributed evenly at present, so it is not possible to split the matrix according to rotary_ndims.
+            rotary_ndims = int(self.head_dim * self.partial_rotary_factor)
+
+            # Shard grid must have at least batch_size_per_device_group cores so each batch slot
+            # maps to its own shard (HEIGHT-sharded: batch dim packed into shard-height dim).
+            batch_core_grid = ttnn.CoreRangeSet({num_to_corerange(self.batch_size_per_device_group)})
+            height_sharded_memory_config = ttnn.create_sharded_memory_config(
+                shape=(nearest_32(self.n_local_heads), self.head_dim),
+                core_grid=batch_core_grid,
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            k_height_sharded_memory_config = ttnn.create_sharded_memory_config(
+                shape=(nearest_32(self.n_local_kv_heads), self.head_dim),
+                core_grid=batch_core_grid,
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            # HACK: In the decoding phase, the API design of ttnn.experimental requires a Sharding layout, while splitting ttnn.tensor requires an Interleaved layout, which requires more complex memory conversion.
+            q_heads_pre_rot_1BQD = ttnn.to_memory_config(q_heads_pre_rot_1BQD, ttnn.L1_MEMORY_CONFIG)
+            k_heads_pre_rot_1BKD = ttnn.to_memory_config(k_heads_pre_rot_1BKD, ttnn.L1_MEMORY_CONFIG)
+            q_heads_pre_rot_1BQD, query_pass = ttnn.split(
+                q_heads_pre_rot_1BQD, [rotary_ndims, self.head_dim - rotary_ndims], dim=3
+            )
+            k_heads_pre_rot_1BKD, key_pass = ttnn.split(
+                k_heads_pre_rot_1BKD, [rotary_ndims, self.head_dim - rotary_ndims], dim=3
+            )
+
+            # The new rotary_embedding_hf decode kernel expects the split rotary half to use the same
+            # batch-parallel height sharding pattern as decode Q/K and the cos/sin cache. Keeping the
+            # old single-core shard here makes the tensor metadata disagree with the underlying per-core
+            # L1 allocation, which later fails while binding globally allocated circular buffers.
+            q_height_sharded_memory_config_half = ttnn.create_sharded_memory_config(
+                shape=(nearest_32(self.n_local_heads), rotary_ndims),
+                core_grid=batch_core_grid,
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            k_height_sharded_memory_config_half = ttnn.create_sharded_memory_config(
+                shape=(nearest_32(self.n_local_kv_heads), rotary_ndims),
+                core_grid=batch_core_grid,
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            q_height_sharded_memory_config_tail = ttnn.create_sharded_memory_config(
+                shape=(nearest_32(self.n_local_heads), self.head_dim - rotary_ndims),
+                core_grid=batch_core_grid,
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            k_height_sharded_memory_config_tail = ttnn.create_sharded_memory_config(
+                shape=(nearest_32(self.n_local_kv_heads), self.head_dim - rotary_ndims),
+                core_grid=batch_core_grid,
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            q_heads_pre_rot_1BQD = ttnn.to_memory_config(q_heads_pre_rot_1BQD, q_height_sharded_memory_config_half)
+            k_heads_pre_rot_1BKD = ttnn.to_memory_config(k_heads_pre_rot_1BKD, k_height_sharded_memory_config_half)
+            query_pass = ttnn.to_memory_config(query_pass, q_height_sharded_memory_config_tail)
+            key_pass = ttnn.to_memory_config(key_pass, k_height_sharded_memory_config_tail)
+
         # Q, K Rotary Embeddings
         q_heads_1BQD, k_heads_1BKD = self.rotary_embedding_decode(
             q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, rot_mats, current_pos
@@ -670,6 +785,25 @@ class Attention(LightweightModule):
 
         ttnn.deallocate(q_heads_pre_rot_1BQD)
         ttnn.deallocate(k_heads_pre_rot_1BKD)
+
+        # Partial rotary embedding
+        if self.partial_rotary_factor != 1.0:
+            # Keep both halves height-sharded and concat in place to avoid pulling the
+            # rotary output back to interleaved L1 and then resharding it for SDPA.
+            q_heads_rotary_1BQD = q_heads_1BQD
+            k_heads_rotary_1BKD = k_heads_1BKD
+            q_heads_1BQD = ttnn.concat(
+                [q_heads_rotary_1BQD, query_pass], dim=-1, memory_config=height_sharded_memory_config
+            )
+            k_heads_1BKD = ttnn.concat(
+                [k_heads_rotary_1BKD, key_pass], dim=-1, memory_config=k_height_sharded_memory_config
+            )
+
+            ttnn.deallocate(q_heads_rotary_1BQD)
+            ttnn.deallocate(k_heads_rotary_1BKD)
+            ttnn.deallocate(query_pass)
+            ttnn.deallocate(key_pass)
+
         ###
         # KV update
         ###
@@ -800,6 +934,7 @@ class Attention(LightweightModule):
                 dense_out_sharded,
                 self.args.get_attn_dense_output_mem_config(Mode.DECODE, self.prefetcher),
             )
+            dense_out_sharded = self._add_wo_bias(dense_out_sharded, Mode.DECODE)
             return dense_out_sharded
 
         else:
@@ -865,6 +1000,7 @@ class Attention(LightweightModule):
                     dense_out_reduced, self.args.get_attn_dense_output_mem_config(Mode.DECODE, None)
                 )
 
+            dense_out_reduced = self._add_wo_bias(dense_out_reduced, Mode.DECODE)
             return dense_out_reduced
 
     def forward_prefill(
@@ -877,12 +1013,19 @@ class Attention(LightweightModule):
         chunk_start_idx=None,
         kv_cache=None,
     ):
-        # For batched prefill, x_11SH has shape [B, 1, S, H] where B is batch_size
-        # concat before QKV matmul, then reshape back to batch after
-        batch_size = x_11SH.shape[0]
-        if batch_size > 1:
-            # Concatenate batch dimension into sequence for matmul compatibility
+        # For batched prefill, x_11SH arrives in one of two shapes:
+        #   (a) [B, 1, S, H]        — non-traced path, needs to be concatenated along seq
+        #   (b) [1, 1, B*S, H]      — traced path, already flattened upstream
+        # When user_id is a list, its length is authoritative for the batch size.
+        if isinstance(user_id, (list, tuple)) and len(user_id) > 1:
+            batch_size = len(user_id)
+        else:
+            batch_size = x_11SH.shape[0]
+
+        if x_11SH.shape[0] == batch_size and batch_size > 1:
+            # Case (a): concatenate batch dimension into sequence for matmul compatibility
             x_11SH = ttnn.reshape(x_11SH, [1, 1, x_11SH.shape[-2] * x_11SH.shape[-3] * x_11SH.shape[-4], -1])
+        # Case (b): already flattened; nothing to do.
 
         seq_len = x_11SH.shape[-2]
         original_seq_len = seq_len  # Track original for later unpadding
@@ -970,10 +1113,36 @@ class Attention(LightweightModule):
         # Rotary embeddings
         ###
 
+        if k_heads_1KSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
+            k_heads_1KSD_pre_rot = ttnn.typecast(k_heads_1KSD_pre_rot, dtype=ttnn.bfloat16)
+
+        # Partial rotary embedding
+        if self.partial_rotary_factor != 1.0:
+            # TODO: ttnn.chunk can only be distributed evenly at present, so it is not possible to split the matrix according to rotary_ndims.
+            rotary_ndims = int(self.head_dim * self.partial_rotary_factor)
+            q_heads_1QSD_pre_rot, query_pass = ttnn.split(
+                q_heads_1QSD_pre_rot, split_size=[rotary_ndims, self.head_dim - rotary_ndims], dim=3
+            )
+            k_heads_1KSD_pre_rot, key_pass = ttnn.split(
+                k_heads_1KSD_pre_rot, split_size=[rotary_ndims, self.head_dim - rotary_ndims], dim=3
+            )
+
         # Apply rotary embeddings using the selected implementation
         q_heads_1QSD, k_heads_1KSD = self.rotary_embedding_prefill(q_heads_1QSD_pre_rot, k_heads_1KSD_pre_rot, rot_mats)
         ttnn.deallocate(q_heads_1QSD_pre_rot)
         ttnn.deallocate(k_heads_1KSD_pre_rot)
+
+        # Partial rotary embedding
+        if self.partial_rotary_factor != 1.0:
+            q_heads_1QSD = ttnn.concat(
+                [q_heads_1QSD, query_pass], dim=-1
+            )  # Concatenate the rotary and pass-through parts of the query heads
+            k_heads_1KSD = ttnn.concat(
+                [k_heads_1KSD, key_pass], dim=-1
+            )  # Concatenate the rotary and pass-through parts of the key heads
+
+            ttnn.deallocate(query_pass)
+            ttnn.deallocate(key_pass)
 
         # Fill KV-Cache
         if kv_cache:
@@ -1179,6 +1348,7 @@ class Attention(LightweightModule):
                 dtype=self.ccl_dtype,
             )
 
+        output_11SH = self._add_wo_bias(output_11SH, Mode.PREFILL)
         return output_11SH
 
     def forward(
