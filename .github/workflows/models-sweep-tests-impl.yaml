@@ -106,14 +106,18 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        # bh_p150 / bh_loudbox / bh_galaxy[_perf] and the WH SKUs run on machines
-        # that host the canonical HF / tt_cache layout under /mnt/MLPerf, so the
-        # standard mount works as-is. bh_quietbox_2 uses QB2's in YYZ4 with a NFS mount
-        # whose equivalent layout lives at /mnt/models/huggingface
-        # — map that host path onto /mnt/MLPerf/huggingface inside the container
-        # so a single test cmd referencing /mnt/MLPerf/... resolves on both
-        # cache modes.
-        - ${{ matrix.test-group.sku == 'bh_quietbox_2' && format('/mnt/models/huggingface:/mnt/MLPerf/huggingface{0}', inputs.mlperf-read-only && ':ro' || ':rw') || format('/mnt/MLPerf:/mnt/MLPerf{0}', inputs.mlperf-read-only && ':ro' || ':rw') }}
+        # Mount the HF / tt_cache root so it always appears inside the container
+        # at /mnt/MLPerf/huggingface, regardless of which BH cache mode the
+        # runner uses. Host source comes from matrix.test-group['weights-cache-mode']
+        # (populated from .github/blackhole_demo_systems.yaml by prepare_test_matrix.py):
+        #   cloud-mlperf            → host /mnt/MLPerf/huggingface (shared NFS)
+        #   local-disk / lfc        → host /localdev/blackhole_demos/huggingface_data (per-runner)
+        #   yyz4-mnt-models         → host /mnt/models/huggingface (YYZ4 Exabox nfs storage mount)
+        #   (no mode → WH SKU)      → host /mnt/MLPerf (whole tree; preserves access to
+        #                             /mnt/MLPerf/tt_dnn-models still used by one WH entry)
+        # rw-ness: per-runner caches are :rw so first-use HF downloads can populate them;
+        # shared NFS honors mlperf-read-only.
+        - ${{ matrix.test-group['weights-cache-mode'] == 'cloud-mlperf' && format('/mnt/MLPerf/huggingface:/mnt/MLPerf/huggingface{0}', inputs.mlperf-read-only && ':ro' || ':rw') || (matrix.test-group['weights-cache-mode'] == 'yyz4-mnt-models' && format('/mnt/models/huggingface:/mnt/MLPerf/huggingface{0}', inputs.mlperf-read-only && ':ro' || ':rw')) || (matrix.test-group['weights-cache-mode'] == 'local-disk' || matrix.test-group['weights-cache-mode'] == 'lfc') && '/localdev/blackhole_demos/huggingface_data:/mnt/MLPerf/huggingface:rw' || format('/mnt/MLPerf:/mnt/MLPerf{0}', inputs.mlperf-read-only && ':ro' || ':rw') }}
       options: "--device /dev/tenstorrent --privileged -v /sys:/sys"
     defaults:
       run:
