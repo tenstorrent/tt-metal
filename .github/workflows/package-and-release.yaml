@@ -38,6 +38,7 @@ permissions:
   packages: write
   actions: write
   id-token: write
+  checks: read
 
 # =============================================================================
 # Default commit SHAs to ignore when analyzing version bumps.
