@@ -956,7 +956,7 @@ class Gemma3ForConditionalGeneration(HybridAttentionForCausalLM, SupportsMultiMo
         # hybrid path entirely and let the legacy single page_table flow
         # through Generator.prefill_forward_text reach the model untouched.
         if not self._HYBRID_KV_CACHE_GROUPS_ENABLED:
-            return super().prefill_forward_text(**kwargs)
+            return super().prefill_forward_text(*args, **kwargs)
         page_tables_per_layer = self._ensure_page_tables_per_layer(page_tables_per_layer, kwargs.get("page_table"))
         per_submesh = self._chunk_page_tables_per_dp(page_tables_per_layer)
         # Push the per-layer block IDs into the persistent device buffers
@@ -1031,7 +1031,7 @@ class GptOssForCausalLM(HybridAttentionForCausalLM):
         # hybrid path entirely and let the legacy single page_table flow
         # through Generator.prefill_forward_text reach the model untouched.
         if not self._HYBRID_KV_CACHE_GROUPS_ENABLED:
-            return super().prefill_forward_text(**kwargs)
+            return super().prefill_forward_text(*args, **kwargs)
         page_tables_per_layer = self._ensure_page_tables_per_layer(page_tables_per_layer, kwargs.get("page_table"))
         per_submesh = self._chunk_page_tables_per_dp(page_tables_per_layer)
         # See ``Gemma3ForConditionalGeneration.prefill_forward`` for why
