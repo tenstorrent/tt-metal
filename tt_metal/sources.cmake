@@ -59,13 +59,13 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/lightmetal/lightmetal_replay.hpp
     api/tt-metalium/experimental/mesh_program_descriptor.hpp
     api/tt-metalium/experimental/metal2_host_api/advanced_options.hpp
-    api/tt-metalium/experimental/metal2_host_api/compute_configuration.hpp
-    api/tt-metalium/experimental/metal2_host_api/data_movement_configuration.hpp
+    api/tt-metalium/experimental/metal2_host_api/compute_hardware_config.hpp
+    api/tt-metalium/experimental/metal2_host_api/data_movement_hardware_config.hpp
     api/tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp
     api/tt-metalium/experimental/metal2_host_api/kernel_spec.hpp
     api/tt-metalium/experimental/metal2_host_api/node_coord.hpp
     api/tt-metalium/experimental/metal2_host_api/program.hpp
-    api/tt-metalium/experimental/metal2_host_api/program_run_params.hpp
+    api/tt-metalium/experimental/metal2_host_api/program_run_args.hpp
     api/tt-metalium/experimental/metal2_host_api/program_spec.hpp
     api/tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp
     api/tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp
