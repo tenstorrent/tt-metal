@@ -37,7 +37,7 @@ void kernel_main() {
 
     const auto& global_semaphore_set = [&]() __attribute__((always_inline)) {
         reduce_sender_sem.set(VALID);
-        reduce_sender_sem.set_multicast<Noc::McastMode::INCLUDE_SRC>(
+        reduce_sender_sem.set_multicast<NocOptions::MCAST_INCL_SRC>(
             noc,
             mcast_dest_noc_start_x,
             mcast_dest_noc_start_y,
@@ -52,7 +52,7 @@ void kernel_main() {
         [&](CircularBuffer& cb_ex_obj, CircularBuffer& cb_ex_global_obj_inner)
             __attribute__((always_inline)) {
                 uint32_t l1_read_addr_ex_global = cb_ex_global_obj_inner.get_read_ptr();
-                noc.async_write_multicast<Noc::McastMode::INCLUDE_SRC>(
+                noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
                     cb_ex_obj,
                     mcast_ep,
                     stats_tiles * num_tiles_per_worker_bytes,

@@ -9,6 +9,7 @@ This guide helps developers migrate from legacy data movement APIs to the new De
 3. [Key Classes](#key-classes)
 4. [Migration Patterns](#migration-patterns)
    - [NoC Operations](#noc-operations)
+   - [NocOptVals Struct](#nocoptvals-struct)
    - [Circular Buffer Operations](#circular-buffer-operations)
    - [Semaphore Operations](#semaphore-operations)
    - [Memory Access](#memory-access)
@@ -151,7 +152,77 @@ noc.async_write(
 noc.async_write_barrier();
 ```
 
+#### Async Read with State (Optimized Repeated Reads)
+
+Use `set_async_read_state` to pre-program the source location, page size, (and optionally the transaction id and/or virtual channel) into hardware registers once, then call `async_read_with_state` in a tight loop — the hardware retains state between calls.
+
+**Legacy API:**
+```cpp
+uint64_t src_noc_addr = get_noc_addr(noc_x, noc_y, base_addr);
+noc_async_read_set_state(src_noc_addr, page_size);
+for (uint32_t i = 0; i < num_pages; i++) {
+    noc_async_read_with_state(src_base + i * page_size, dst_base + i * page_size, page_size);
+}
+noc_async_read_barrier();
+```
+
+**New API (default options):**
+```cpp
+Noc noc;
+UnicastEndpoint src;
+CoreLocalMem<uint32_t> dst(dst_l1_addr);
+
+noc.set_async_read_state(
+    src, page_size, {.noc_x = x, .noc_y = y, .addr = base_addr}
+);
+for (uint32_t i = 0; i < num_pages; i++) {
+    noc.async_read_with_state(
+        src, dst, page_size,
+        {.addr = src_base + i * page_size},
+        {.addr = dst_base + i * page_size}
+    );
+}
+noc.async_read_barrier();
+```
+
+**New API (custom virtual channel via `NocOptVals`):**
+```cpp
+noc.set_async_read_state<NocOptions::CUSTOM_VC>(
+    src, page_size, {.noc_x = x, .noc_y = y, .addr = base_addr},
+    NocOptVals{.vc = my_vc}
+);
+for (uint32_t i = 0; i < num_pages; i++) {
+    noc.async_read_with_state<NocOptions::CUSTOM_VC>(
+        src, dst, page_size,
+        {.addr = src_base + i * page_size},
+        {.addr = dst_base + i * page_size},
+        NocOptVals{.vc = my_vc}
+    );
+}
+noc.async_read_barrier();
+```
+
+**New API (transaction ID via `NocOptVals`):**
+
+```cpp
+noc.set_async_read_state<NocOptions::TXN_ID>(
+    src, page_size, {.noc_x = x, .noc_y = y, .addr = base_addr},
+    NocOptVals{.trid = curr_trid}
+);
+for (uint32_t i = 0; i < num_pages; i++) {
+    noc.async_read_with_state<NocOptions::TXN_ID>(
+        src, dst, page_size,
+        {.addr = src_base + i * page_size},
+        {.addr = dst_base + i * page_size},
+        NocOptVals{.trid = curr_trid}
+    );
+}
+noc.async_read_barrier<NocOptions::TXN_ID>({.trid = curr_trid});
+```
+
 #### Async Write with State (Optimized Repeated Writes)
+
+Use `set_async_write_state` to program the destination location, page size, and virtual channel into hardware registers once, then call `async_write_with_state` in a tight loop.
 
 **Legacy API:**
 ```cpp
@@ -162,18 +233,32 @@ for (...) {
 }
 ```
 
-**New API:**
+**New API (default options):**
 ```cpp
 Noc noc;
 UnicastEndpoint dst;
 CoreLocalMem<uint32_t> src(src_addr);
 
-noc.set_async_write_state<Noc::ResponseMode::NON_POSTED>(
+noc.set_async_write_state(
     dst, size_bytes, {.noc_x = x, .noc_y = y, .addr = base_addr}
 );
 for (...) {
-    noc.async_write_with_state<Noc::ResponseMode::NON_POSTED>(
+    noc.async_write_with_state(
         src, dst, size_bytes, {.offset_bytes = src_offset}, {.addr = dst_offset}
+    );
+}
+```
+
+**New API (custom virtual channel via `NocOptVals`):**
+```cpp
+noc.set_async_write_state<NocOptions::CUSTOM_VC>(
+    dst, size_bytes, {.noc_x = x, .noc_y = y, .addr = base_addr},
+    NocOptVals{.vc = my_vc}
+);
+for (...) {
+    noc.async_write_with_state<NocOptions::CUSTOM_VC>(
+        src, dst, size_bytes, {.offset_bytes = src_offset}, {.addr = dst_offset},
+        NocOptVals{.vc = my_vc}
     );
 }
 ```
@@ -192,7 +277,7 @@ Noc noc;
 CoreLocalMem<uint32_t> src(src_l1_addr);
 CircularBuffer cb(cb_id);  // Or any destination with mcast traits
 
-noc.async_write_multicast<Noc::McastMode::EXCLUDE_SRC>(
+noc.async_write_multicast(
     src,
     cb,
     size_bytes,
@@ -208,19 +293,39 @@ noc.async_write_multicast<Noc::McastMode::EXCLUDE_SRC>(
 **New API (Transaction IDs):**
 ```cpp
 Noc noc;
-constexpr uint32_t trid = 0;
+constexpr uint8_t trid = 1;
 
 // Write with transaction ID
-noc.async_write<Noc::TxnIdMode::ENABLED>(
+noc.async_write<NocOptions::TXN_ID>(
     src, dst, size_bytes, src_args, dst_args,
-    NOC_UNICAST_WRITE_VC, trid
+    NocOptVals{.trid = trid}
 );
 
 // Barrier on specific transaction ID
-noc.async_write_barrier<Noc::BarrierMode::TXN_ID>(trid);
+noc.async_write_barrier<NocOptions::TXN_ID>({.trid = trid});
 ```
 
 ---
+
+### NocOptVals Struct
+
+`NocOptVals` is an aggregate struct that carries the runtime values for optional `NocOptions` flags. It is accepted as the last argument of all stateful and trid-aware `Noc` APIs. Fields are only inspected when the matching flag is set in the template `opts` parameter.
+
+```cpp
+struct NocOptVals {
+    uint32_t vc   = NOC_UNICAST_WRITE_VC;  // used when NocOptions::CUSTOM_VC
+    uint32_t trid = 0;                     // used when NocOptions::TXN_ID
+};
+```
+
+**Usage summary:**
+
+| Scenario | Template `opts` | `NocOptVals` arg |
+|---|---|---|
+| Default vc, no trid | omit / `NocOptions::DEFAULT` | omit / `{}` |
+| Custom vc | `NocOptions::CUSTOM_VC` | `NocOptVals{.vc = v}` |
+| Transaction ID barrier/read/write | `NocOptions::TXN_ID` | `NocOptVals{.trid = t}` |
+| Custom vc + trid | `NocOptions::TXN_ID \| NocOptions::CUSTOM_VC` | `NocOptVals{.vc = v, .trid = t}` |
 
 ### Circular Buffer Operations
 
@@ -343,12 +448,12 @@ noc_semaphore_set_multicast(local_sem_addr, mcast_addr, num_dests);
 ```cpp
 Noc noc;
 Semaphore<> sem(sem_id);
-sem.set_multicast<Noc::McastMode::EXCLUDE_SRC>(
+sem.set_multicast<NocOptions::DEFAULT>(
     noc, x0, y0, x1, y1, num_dests
 );
 
 // Include source in multicast:
-sem.set_multicast<Noc::McastMode::INCLUDE_SRC>(
+sem.set_multicast<NocOptions::MCAST_INCL_SRC>(
     noc, x0, y0, x1, y1, num_dests
 );
 ```
