@@ -170,7 +170,7 @@ def _text_decode_multistep_compare_reference(
     prompt_len = int(prompt_tokens.shape[1])
     decode_steps = int(decode_tokens.shape[1])
 
-    tt_prompt_x, prompt_rot_global, prompt_rot_local, _, _ = model.prepare_inputs_prefill(prompt_tokens, start_pos=0)
+    tt_prompt_x, prompt_rot_global, prompt_rot_local, _, _, _ = model.prepare_inputs_prefill(prompt_tokens, start_pos=0)
     _ = model.inner.ttnn_prefill_forward(
         tt_prompt_x,
         rot_mats_global=prompt_rot_global,
