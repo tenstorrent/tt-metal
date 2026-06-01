@@ -1,7 +1,7 @@
 # models/demos/blackhole/qwen3_5_9b/tt/qwen35_model.py
 """Full Qwen3.5-9B text model for Blackhole P150.
 
-Assembly: tok_embeddings → 32 × Qwen35TransformerBlock → RMSNorm → LM Head
+Assembly: tok_embeddings → 32 × Qwen35DecoderLayer → RMSNorm → LM Head
 Manages hybrid state: KV cache (8 attention layers) + recurrent state (24 DeltaNet layers).
 """
 import math
@@ -11,9 +11,10 @@ from loguru import logger
 from tqdm import tqdm
 
 import ttnn
+from models.demos.blackhole.qwen3_5_9b.tt.layer import Qwen35DecoderLayer
 from models.demos.blackhole.qwen3_5_9b.tt.model_config import Qwen35ModelArgs
-from models.demos.blackhole.qwen3_5_9b.tt.qwen35_decoder import Qwen35TransformerBlock, rms_norm_ttnn
 from models.demos.blackhole.qwen3_5_9b.tt.qwen35_rope import Qwen35RoPESetup
+from models.demos.blackhole.qwen3_5_9b.tt.rms_norm import rms_norm_ttnn
 
 
 class Qwen35Model:
@@ -48,7 +49,7 @@ class Qwen35Model:
         logger.info(f"Loading {args.n_layers} transformer layers...")
         self.layers = []
         for i in tqdm(range(args.n_layers), desc="Loading layers"):
-            layer = Qwen35TransformerBlock(args, state_dict, i, device, weight_cache_path)
+            layer = Qwen35DecoderLayer(device, args, state_dict, i, weight_cache_path)
             self.layers.append(layer)
 
         # Final norm — pre-offset by +1 for zero-centered RMSNorm

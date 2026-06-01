@@ -12,8 +12,8 @@ import torch
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
+from models.demos.blackhole.qwen3_5_9b.tt.layer import Qwen35DecoderLayer
 from models.demos.blackhole.qwen3_5_9b.tt.model_config import Qwen35ModelArgs
-from models.demos.blackhole.qwen3_5_9b.tt.qwen35_decoder import Qwen35TransformerBlock
 from models.demos.blackhole.qwen3_5_9b.tt.weight_mapping import remap_qwen35_state_dict
 
 # HF_MODEL (hub name or local path) is the single source of truth for the config.
@@ -65,7 +65,7 @@ class TestGatedAttentionLayer:
 
     def test_gated_attention_prefill(self, device, model_fixtures):
         args, state_dict = model_fixtures
-        layer = Qwen35TransformerBlock(args, state_dict, layer_num=3, device=device)
+        layer = Qwen35DecoderLayer(device, args, state_dict, layer_num=3)
 
         B, T = 1, 128
         x_torch = torch.randn(B, T, args.dim, dtype=torch.bfloat16)
@@ -90,7 +90,7 @@ class TestDeltaNetLayer:
 
     def test_deltanet_recurrent(self, device, model_fixtures):
         args, state_dict = model_fixtures
-        layer = Qwen35TransformerBlock(args, state_dict, layer_num=0, device=device)
+        layer = Qwen35DecoderLayer(device, args, state_dict, layer_num=0)
 
         B, T = 1, 1
         x_torch = torch.randn(B, T, args.dim, dtype=torch.bfloat16)
@@ -104,7 +104,7 @@ class TestDeltaNetLayer:
 
     def test_deltanet_chunked(self, device, model_fixtures):
         args, state_dict = model_fixtures
-        layer = Qwen35TransformerBlock(args, state_dict, layer_num=0, device=device)
+        layer = Qwen35DecoderLayer(device, args, state_dict, layer_num=0)
 
         B, T = 1, 128
         x_torch = torch.randn(B, T, args.dim, dtype=torch.bfloat16)
