@@ -93,9 +93,9 @@
   <tr><td>1</td><td>Delete two dead items (<code>eltwise_chain_with_init</code>, <code>PackTileBlock</code>) — keep the rest as migration targets</td><td><span class="tag t-lock">locked</span></td><td>none (both uncalled)</td></tr>
   <tr><td>2</td><td>Keep the reconfig knob; document why it exists</td><td><span class="tag t-lock">locked</span></td><td>docs only</td></tr>
   <tr><td>3</td><td>Reorder element template params + type-qualified values</td><td><span class="tag t-lock">locked</span></td><td>all ~82 call-site files (mechanical)</td></tr>
-  <tr><td>4</td><td>Collapse <code>TileBase</code> (3 types) → binary <code>TileOffset</code> enum</td><td><span class="tag t-lock">locked</span></td><td>~78 offset sites</td></tr>
+  <tr><td>4</td><td>Collapse <code>TileBase</code> (3 types) → binary <code>TileOffset</code> enum</td><td><span class="tag t-lock">done</span></td><td>~78 offset sites</td></tr>
   <tr><td>5</td><td>Clamp runtime <code>block_size</code> to compile-time DEST capacity</td><td><span class="tag t-lock">locked</span></td><td>dispatch body only</td></tr>
-  <tr><td>6</td><td>Remove <code>OperandKind IndexMode</code> from <code>PackTile</code></td><td><span class="tag t-lock">locked</span></td><td>346 PackTile sites (drop a token)</td></tr>
+  <tr><td>6</td><td>Remove <code>OperandKind IndexMode</code> from <code>PackTile</code></td><td><span class="tag t-lock">done</span></td><td>346 PackTile sites (drop a token)</td></tr>
   <tr><td>7</td><td><code>UnaryBcast</code>: per-element small init (drop BIG init), remove <code>CbOut</code></td><td><span class="tag t-lock">done</span></td><td>8 sites; layernorm kernels emit caller-side BIG init</td></tr>
   <tr><td>8</td><td>Remove the dead 1D dispatch path; drop the <code>_2d</code> suffix</td><td><span class="tag t-lock">locked</span></td><td>internal only (no call-site change)</td></tr>
   <tr><td>9</td><td>Infer <code>PackTile</code>'s DEST slot from the preceding writer (keep explicit override)</td><td><span class="tag t-lock">locked</span></td><td>346 PackTile sites (drop the slot token)</td></tr>
