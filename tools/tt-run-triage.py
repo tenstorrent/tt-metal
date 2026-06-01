@@ -12,6 +12,9 @@ Usage:
 Everything before `--` is forwarded verbatim to `tt-run`. Everything after `--`
 is forwarded verbatim to `triage.py` (one invocation per rank).
 
+Run `tt-run-triage --help` for wrapper options, or `tt-run-triage -- --help` for
+triage flags.
+
 For single-rank usage, call `tt-triage` directly — `tt-run-triage` only wraps
 multi-rank runs (just like `tt-run` itself requires a binding flag).
 
@@ -20,10 +23,12 @@ v1 supports the two legacy-mode tt-run binding flags:
     * `--rank-bindings-mapping=<yaml>` (sub-context overlays merged into one
       global rank list)
 
-New mode (`--mesh-graph-descriptor`) is deferred to v2. As a workaround, run
-tt-run once with `--mesh-graph-descriptor` to populate the Phase 1 cache, then
-pass `--rank-binding=generated/ttrun/<fingerprint>/rank_bindings.yaml` to
-tt-run-triage.
+New mode (`--mesh-graph-descriptor`) is deferred to v2. As a workaround, launch
+your workload once with tt-run new mode (Phase 1 caches the rank bindings under
+`generated/ttrun/<fingerprint>/`), then point tt-run-triage at that file:
+
+    tt-run --mesh-graph-descriptor=mesh.textproto --hosts=host0,host1 ./build/test/my_test
+    tt-run-triage --rank-binding=generated/ttrun/<fingerprint>/rank_bindings.yaml -- --run=check_arc
 
 Examples:
     tt-run-triage --rank-binding=foo.yaml -- --run=check_arc
@@ -45,7 +50,7 @@ from tools.triage import utils
 
 TRIAGE_PY = Path(__file__).resolve().parent / "triage" / "triage.py"
 
-# prterun --tag-output line format: `[<jobid>,<rank>]<stream>: <payload>`
+# tt-run runs triage under `mpirun --tag-output`, prefixing each line: `[<jobid>,<rank>]<stream>: <payload>`
 _TAG_RE = re.compile(r"^\[\d+,(\d+)\]<(stdout|stderr)>:\s?(.*)$")
 # Triage script-section header: `script_name.py:` or `script_name.py [0.42s]:`
 _SCRIPT_HEADER_RE = re.compile(r"^[a-zA-Z_]\w*\.py(?:\s+\[[\d.]+s\])?\s*:\s*$")
@@ -53,33 +58,17 @@ _SCRIPT_HEADER_RE = re.compile(r"^[a-zA-Z_]\w*\.py(?:\s+\[[\d.]+s\])?\s*:\s*$")
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
-def _split_at_dashdash(argv: list[str]) -> tuple[list[str], list[str]]:
-    if "--" in argv:
-        i = argv.index("--")
-        return argv[:i], argv[i + 1 :]
-    return list(argv), []
-
-
-def _parse_wrapper_flags(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
-    p = argparse.ArgumentParser(add_help=False)
-    p.add_argument("-h", "--help", action="store_true")
-    return p.parse_known_args(argv)
-
-
 def _extract_flag_value(tt_run_args: list[str], flag: str) -> Optional[str]:
     """Return the value of `--flag VALUE` or `--flag=VALUE` from `tt_run_args`, else None."""
-    i = 0
-    while i < len(tt_run_args):
-        a = tt_run_args[i]
+    for i, a in enumerate(tt_run_args):
         if a == flag and i + 1 < len(tt_run_args):
             return tt_run_args[i + 1]
         if a.startswith(flag + "="):
             return a.split("=", 1)[1]
-        i += 1
     return None
 
 
-def _count_rank_binding_yaml(path: str) -> int:
+def _count_rank_binding_yaml(path: str | Path) -> int:
     import yaml
 
     with open(path) as f:
@@ -109,7 +98,7 @@ def _count_rank_bindings_mapping_yaml(path: str) -> int:
         if not overlay_path.is_absolute():
             candidate = (p.parent / overlay_path).resolve()
             overlay_path = candidate if candidate.is_file() else overlay_path
-        total += _count_rank_binding_yaml(str(overlay_path))
+        total += _count_rank_binding_yaml(overlay_path)
     return total
 
 
@@ -239,6 +228,12 @@ class TextStreamingRenderer:
 
 
 def _run_multi_rank(passthrough: list[str], tt_run_args: list[str]) -> int:
+    sys.path.insert(0, str(TRIAGE_PY.parent))
+    import triage
+
+    scripts = triage.TriageScript.discover_all_in_directory(str(TRIAGE_PY.parent))
+    triage.parse_arguments(scripts, argv=["--disable-progress", *passthrough])
+
     rank_count = _discover_rank_count(tt_run_args)
 
     triage_cmd = [
@@ -282,16 +277,21 @@ def _run_multi_rank(passthrough: list[str], tt_run_args: list[str]) -> int:
     return proc.returncode
 
 
-def _print_help() -> None:
-    print(__doc__)
-
-
 def main() -> int:
-    wrapper_argv, passthrough = _split_at_dashdash(sys.argv[1:])
-    ns, tt_run_args = _parse_wrapper_flags(wrapper_argv)
+    # Everything before `--` goes to tt-run; everything after goes to triage.py.
+    argv = sys.argv[1:]
+    if "--" in argv:
+        i = argv.index("--")
+        wrapper_argv, passthrough = argv[:i], argv[i + 1 :]
+    else:
+        wrapper_argv, passthrough = argv, []
+
+    p = argparse.ArgumentParser(add_help=False)
+    p.add_argument("-h", "--help", action="store_true")
+    ns, tt_run_args = p.parse_known_args(wrapper_argv)
 
     if ns.help:
-        _print_help()
+        print(__doc__)
         return 0
 
     return _run_multi_rank(passthrough, tt_run_args)

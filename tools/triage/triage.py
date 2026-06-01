@@ -638,20 +638,6 @@ def set_output_serializer(serializer: Any) -> None:
     _output_serializer = serializer
 
 
-def _rank_suffixed_path(path: str | None) -> str | None:
-    if not path:
-        return path
-    rank_env = os.environ.get("TT_RUN_RANK")
-    if rank_env is None:
-        return path
-    try:
-        rank = int(rank_env)
-    except ValueError:
-        return path
-    p = Path(path)
-    return str(p.with_stem(f"{p.stem}_rank_{rank}"))
-
-
 def init_output_serializer(args: ScriptArguments) -> None:
     """Build the active serializer(s) based on CLI args.
 
@@ -671,7 +657,7 @@ def init_output_serializer(args: ScriptArguments) -> None:
     else:
         serializers.append(RichSerializer(console_sink, utils, get_verbose_level))
 
-    csv_path = _rank_suffixed_path(args["--llm-output-path"])
+    csv_path = utils.safe_path(args["--llm-output-path"])
     if csv_path:
         try:
             file_sink = FileSink(csv_path)
@@ -1015,7 +1001,7 @@ def main():
                 utils.INFO(f"Total execution time: {total_time:.2f}s")
         progress.remove_task(scripts_task)
 
-    triage_summary_path = _rank_suffixed_path(args["--triage-summary-path"])
+    triage_summary_path = utils.safe_path(args["--triage-summary-path"])
     if triage_summary_path:
         try:
             os.makedirs(os.path.dirname(triage_summary_path), exist_ok=True)

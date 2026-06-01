@@ -20,6 +20,7 @@ import json
 import os
 import subprocess
 
+import utils
 from triage import ScriptConfig, log_warning, run_script, log_check_location
 from triage_session import get_triage_session
 from ttexalens.umd_device import TimeoutDeviceRegisterError
@@ -141,7 +142,7 @@ def run(args, context: Context):
 
     if all_debug_bus_data:
         all_debug_bus_data["git_commit"] = _get_git_commit_hash()
-        output_path = args["--path"] if args["--path"] else "debug_bus_signal_groups.json"
+        output_path = utils.safe_path(args["--path"] if args["--path"] else "debug_bus_signal_groups.json")
         with open(output_path, "w") as f:
             json.dump(all_debug_bus_data, f, indent=2)
         log_warning(f"Some riscs are broken. Generated JSON file with debug bus signals at {output_path}")
