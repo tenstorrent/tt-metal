@@ -90,22 +90,25 @@ def test_unpack_bcast(
     ):
         pytest.skip("32-bit formats require dest accumulation")
 
-    if (
-        get_chip_architecture() == ChipArchitecture.BLACKHOLE
-        and formats.input_format
-        in (DataFormat.Float32, DataFormat.Int32, DataFormat.UInt32, DataFormat.UInt16)
-    ):
-        pytest.skip("Unsupported for BH yet")
-
-    if (
-        dest_acc == DestAccumulation.Yes
-        and formats.input_format == DataFormat.UInt16
-        and broadcast_type == BroadcastType.None_
-    ):
-        pytest.skip(
-            "Data copy mechanism for SFPU (expects in low-bits) and Packer (expects in high-bits) conflict"
-        )
-
+# <<<<<<< HEAD
+#     if (
+#         get_chip_architecture() == ChipArchitecture.BLACKHOLE
+#         and formats.input_format
+#         in (DataFormat.Float32, DataFormat.Int32, DataFormat.UInt32, DataFormat.UInt16)
+#     ):
+#         pytest.skip("Unsupported for BH yet")
+#
+#     if (
+#         dest_acc == DestAccumulation.Yes
+#         and formats.input_format == DataFormat.UInt16
+#         and broadcast_type == BroadcastType.None_
+#     ):
+#         pytest.skip(
+#             "Data copy mechanism for SFPU (expects in low-bits) and Packer (expects in high-bits) conflict"
+#         )
+#
+# =======
+# >>>>>>> 7d51edd3e62 (32bit bcast for bh)
     # --- Skips from bugs --------------------------------------------------
 
     # TODO: pgardner - Column broadcast for tiny tiles needs kernel support
