@@ -174,3 +174,19 @@ target_link_libraries(
         gmock_main
         enchantum::enchantum
 )
+
+add_executable(test_port_lookup test_port_lookup.cpp)
+
+set_target_properties(
+    test_port_lookup
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tools/scaleout
+)
+
+target_link_libraries(
+    test_port_lookup
+    PRIVATE
+        TT::ScaleoutTools
+        gmock_main
+)

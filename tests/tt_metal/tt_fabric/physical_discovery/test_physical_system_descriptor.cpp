@@ -13,8 +13,6 @@
 #include <unordered_set>
 #include <utility>
 
-#include <board/port_lookup.hpp>
-
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
@@ -116,11 +114,6 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
                 EXPECT_EQ(dst_chip, remote_chip);
                 EXPECT_EQ(eth_conn.dst_chan, remote_chan);
 
-                const auto& src_desc = asic_descs.at(asic);
-                auto expected_port_type = tt::scaleout_tools::resolve_port_type(
-                    src_desc.board_type, *src_desc.asic_location, eth_conn.src_chan);
-                EXPECT_EQ(eth_conn.port_type, expected_port_type)
-                    << "port_type should match board lookup for local link on channel " << +eth_conn.src_chan;
                 EXPECT_EQ(physical_system_desc.get_port_type(asic, neighbor, eth_conn.src_chan), eth_conn.port_type);
                 EXPECT_TRUE(physical_system_desc.has_port_type(asic, neighbor, eth_conn.port_type));
             }
@@ -166,11 +159,6 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
             EXPECT_NE(
                 std::find(my_host_neighbors.begin(), my_host_neighbors.end(), remote_host), my_host_neighbors.end());
 
-            const auto& src_desc = asic_descs.at(src_asic);
-            auto expected_port_type =
-                tt::scaleout_tools::resolve_port_type(src_desc.board_type, *src_desc.asic_location, src_chan);
-            EXPECT_EQ(exit_node.eth_conn.port_type, expected_port_type)
-                << "port_type should match board lookup for cross-host exit node on channel " << +src_chan;
             EXPECT_EQ(physical_system_desc.get_port_type(src_asic, dst_asic, src_chan), exit_node.eth_conn.port_type);
             EXPECT_TRUE(physical_system_desc.has_port_type(src_asic, dst_asic, exit_node.eth_conn.port_type));
         }
