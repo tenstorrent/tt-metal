@@ -14,7 +14,7 @@ This document is referenced by the Stage 5 review-fix agent during Phase B.
 The review-fix agent reads this for the test generation pattern. Placeholders
 are substituted by the orchestrator when invoking Stage 5:
 - `{{LLK_CATEGORY}}` — the operation category (e.g. elementwise unary)
-- `{{PROPOSAL_FILE}}` — path to the Stage 4 proposal (e.g. `elementwise_unary_helper_proposal.md`)
+- `{{PROPOSAL_FILE}}` — path to the Stage 4 proposal (e.g. `elementwise_unary_helper_proposal.html`)
 - `{{EXISTING_TEST_REFERENCE}}` — path to an existing helper test to use as structural template (e.g. `tests/tt_metal/tt_metal/llk/test_sfpu_unary_helpers.cpp`)
 - `{{EXISTING_KERNEL_REFERENCE}}` — path to the compute kernel used by that test (e.g. `tests/tt_metal/tt_metal/test_kernels/compute/sfpu_unary_helper_test.cpp`)
 

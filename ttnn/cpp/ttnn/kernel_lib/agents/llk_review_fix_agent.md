@@ -477,7 +477,7 @@ re-enter an earlier stage, or fix the implementation directly.
 Agent(
     subagent_type="general-purpose",
     prompt=review_fix_template
-        .replace("{{TARGET_FILE}}", "{category}_helper_proposal.md")
+        .replace("{{TARGET_FILE}}", "{category}_helper_proposal.html")
         .replace("{{REFERENCE_FILES}}", """
 - ttnn/cpp/ttnn/kernel_lib/{category}_helpers.hpp
 - ttnn/cpp/ttnn/kernel_lib/{category}_helpers.inl
