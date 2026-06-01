@@ -245,12 +245,13 @@ class TtMistral4DecoderLayer(LightweightModule):
         cos: ttnn.Tensor,
         sin: ttnn.Tensor,
         kv_cache: tuple,
+        chunk_start_idx: int = 0,
     ) -> ttnn.Tensor:
-        """Prefill forward that also fills the attention KV cache in-place."""
+        """Prefill forward (one chunk) that also fills the attention KV cache in-place."""
         _mem = ttnn.L1_MEMORY_CONFIG
         residual = x
         normed = _rms_norm_sharded(x, self.input_norm_w, self.compute_kernel_config)
-        attn_out = self.attn.forward(normed, cos, sin, kv_cache=kv_cache)
+        attn_out = self.attn.forward(normed, cos, sin, kv_cache=kv_cache, chunk_start_idx=chunk_start_idx)
         ttnn.deallocate(normed)
         x = ttnn.add(residual, attn_out, memory_config=_mem)
         ttnn.deallocate(attn_out)
