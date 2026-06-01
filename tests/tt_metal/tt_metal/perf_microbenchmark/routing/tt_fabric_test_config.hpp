@@ -87,6 +87,7 @@ static const StringEnumMapper<RoutingDirection> routing_direction_mapper({
     {"S", RoutingDirection::S},
     {"E", RoutingDirection::E},
     {"W", RoutingDirection::W},
+    {"Z", RoutingDirection::Z},
 });
 
 static const StringEnumMapper<Topology> topology_mapper({
