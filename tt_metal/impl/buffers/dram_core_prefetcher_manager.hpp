@@ -22,6 +22,7 @@
 #include <tt-metalium/experimental/global_circular_buffer.hpp>
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_trace_id.hpp>
 
 #include "impl/buffers/dram_core_prefetcher_request.hpp"
 
@@ -78,10 +79,24 @@ public:
 
     void start(const experimental::DramCorePrefetcherConfig& config);
 
+    // When `cq_id`'s command queue is mid trace-capture, the serialized request pages are
+    // captured into trace_requests_ keyed by that trace's MeshTraceId instead of being sent
+    // immediately; they are (re)sent on every replay_trace() of that trace. Otherwise the
+    // pages are queued for immediate fan-out. `cq_id` == std::nullopt resolves to the
+    // current/default command queue (see MeshDevice::mesh_command_queue).
     void queue(
         const experimental::GlobalCircularBuffer& gcb,
         const std::optional<MeshCoordinateRangeSet>& device_subset,
-        const std::vector<experimental::DramCorePrefetcherInput>& tensors);
+        const std::vector<experimental::DramCorePrefetcherInput>& tensors,
+        std::optional<uint8_t> cq_id = std::nullopt);
+
+    // Re-queue every request captured under `trace_id` for immediate fan-out. No-op if no
+    // prefetcher requests were captured during that trace's capture. Called from the trace
+    // replay path so a captured request is re-sent on each trace execution.
+    void replay_trace(const MeshTraceId& trace_id);
+
+    // Drop the requests captured under `trace_id`. Called when the trace is released.
+    void release_trace(const MeshTraceId& trace_id);
 
     // Make the prefetcher wait until all work currently enqueued on command queue
     // `cq_id` has landed before it reads DRAM. Bumps a host-side per-CQ counter,
@@ -173,6 +188,11 @@ private:
     std::condition_variable queue_cv_;
     std::deque<Request> pending_;
     std::atomic<bool> stop_requested_{false};
+
+    // Requests captured during trace capture, keyed by the recording trace's id. Populated by
+    // queue() when its command queue is mid-capture; drained back onto pending_ by
+    // replay_trace() on each trace execution; erased by release_trace(). Guarded by queue_mu_.
+    std::unordered_map<MeshTraceId, std::vector<Request>> trace_requests_;
 };
 
 }  // namespace distributed
