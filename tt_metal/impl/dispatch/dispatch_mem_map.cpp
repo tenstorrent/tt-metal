@@ -12,6 +12,7 @@
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
 #include "llrt/rtoptions.hpp"
+#include <hostdevcommon/dispatch_telemetry_types.hpp>
 #include <tt_stl/enum.hpp>
 
 namespace tt::tt_metal {
@@ -94,6 +95,8 @@ DispatchMemMap::DispatchMemMap(
             device_cq_addr_sizes_[dev_addr_idx] =
                 hal.get_realtime_profiler_msgs_factory(HalProgrammableCoreType::TENSIX)
                     .size_of<realtime_profiler_msgs::realtime_profiler_msg_t>();
+        } else if (dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_TELEMETRY) {
+            device_cq_addr_sizes_[dev_addr_idx] = DISPATCH_TELEMETRY_SIZE;
         } else {
             device_cq_addr_sizes_[dev_addr_idx] = settings.other_ptrs_size;
         }
@@ -110,7 +113,8 @@ DispatchMemMap::DispatchMemMap(
             dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_PROGRESS ||
             dev_addr_type == CommandQueueDeviceAddrType::FABRIC_HEADER_RB ||
             dev_addr_type == CommandQueueDeviceAddrType::FABRIC_SYNC_STATUS ||
-            dev_addr_type == CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG) {
+            dev_addr_type == CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG ||
+            dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_TELEMETRY) {
             device_cq_addrs_[dev_addr_idx] = align(device_cq_addrs_[dev_addr_idx], l1_alignment);
         }
     }

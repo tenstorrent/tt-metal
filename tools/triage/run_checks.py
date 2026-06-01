@@ -50,7 +50,7 @@ from ttexalens.context import Context
 from ttexalens.device import Device
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.umd_device import TimeoutDeviceRegisterError
-from ttexalens.hardware.risc_debug import RiscHaltError
+from ttexalens.exceptions import RiscHaltError
 import utils
 from metal_device_id_mapping import run as get_metal_device_id_mapping, MetalDeviceIdMapping
 
