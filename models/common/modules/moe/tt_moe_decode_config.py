@@ -5,7 +5,7 @@
 from math import prod
 from typing import Any, ClassVar, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 
 def _is_subconfig(annotation: Any) -> bool:
@@ -361,6 +361,10 @@ class ExpertStateConfig(_TTOpKwargs):
         return {"mesh_shape", "cluster_axis", "has_bias", "num_routed_experts", "num_shared_experts"}
 
 
+# default drain tilize core from moe_compute
+_DEFAULT_DRAIN_COORD = ttnn.CoreCoord(6, 9)
+
+
 class BuffersConfig(_TTOpKwargs):
     """Sizing and placement params for `_TTMoEDecodeBuffers` allocation."""
 
@@ -370,7 +374,7 @@ class BuffersConfig(_TTOpKwargs):
     hidden_size: int
     effective_experts_k: int
     shard_dim: int = 0
-    compute_tilize_drain_core: CoreCoord = Field(default_factory=lambda: ttnn.CoreCoord(6, 9))
+    compute_tilize_drain_core: CoreCoord = Field(default_factory=lambda: _DEFAULT_DRAIN_COORD)
 
     @classmethod
     def adopt_fields(cls) -> set[str]:
@@ -400,9 +404,8 @@ class TTMoEDecodeConfig(BaseModel):
     has_bias: bool
 
     # Post-combine path selection. True → fused `deepseek_moe_post_combine_tilize`
-    # (requires `batch_per_device == TILE_SIZE` and a valid sharded memory config).
-    # False → generic `tilize_with_val_padding` fallback. Auto-computed in the
-    # pre-validator from those preconditions when left as None.
+    # (requires `batch_per_device == TILE_SIZE` .
+    # False → generic `tilize_with_val_padding` fallback. Auto-computed in the pre-validator from preconditions.
     use_post_combine_tilize: Optional[bool] = None
 
     # Number of outputs fast_reduce_nc_fused will produce. Equals the RS-axis size
@@ -553,7 +556,6 @@ class TTMoEDecodeConfig(BaseModel):
             _fill_default_if_missing(data, "post_combine_tilize", "output_memory_config", post_combine_default)
             _fill_default_if_missing(data, "tilize_with_val_padding", "memory_config", post_combine_default)
 
-        # Auto-pick the post-combine path when the user didn't pin it.
         # `deepseek_moe_post_combine_tilize` requires batch_per_device == TILE_SIZE AND
         # a sharded memory config (either default-computable or user-supplied).
         if data.get("use_post_combine_tilize") is None:
@@ -564,6 +566,8 @@ class TTMoEDecodeConfig(BaseModel):
             data["use_post_combine_tilize"] = adoptable["batch_per_device"] == ttnn.TILE_SIZE and (
                 post_combine_default is not None or user_mc_present
             )
+        else:
+            raise ValidationError("post combine tilize is not user configurable")
 
         if data.get("num_fast_reduce_outputs") is None:
             data["num_fast_reduce_outputs"] = adoptable["num_fast_reduce_outputs"]
@@ -647,8 +651,7 @@ class TTMoEDecodeConfig(BaseModel):
         data["mesh_shape"] = list(target_mesh_shape)
         data["num_routed_experts"] = new_num_routed
         # Force re-derivation of mesh-derived top-level fields.
-        for derived in ("num_fast_reduce_outputs", "use_post_combine_tilize"):
-            data.pop(derived, None)
+        self._drop_derived_fields(data)
         # Re-derive expert routing — the dumped expert_mapping is the expanded
         # "sequential" list for the old mesh and won't address the sliced experts.
         # Explicit (non-sequential) mappings aren't supported by the slicer.
@@ -664,12 +667,35 @@ class TTMoEDecodeConfig(BaseModel):
         # The dumped `reduce.shared_expert_scale` is the kernel-ready value
         # (logical / old_num_replicated). Restore the logical value so the
         # pre-validator can re-divide by the new num_replicated.
-        old_num_replicated = self.mesh_shape[1 - self.cluster_axis]
-        if old_num_replicated > 1 and isinstance(data.get("reduce"), dict):
+        self._unscale_shared_expert_scale(data)
+        return type(self).model_validate(data)
+
+    def _unscale_shared_expert_scale(self, data: dict) -> None:
+        """In-place: convert a dumped `reduce.shared_expert_scale` from the stored
+        kernel-ready value (logical / num_replicated) back to the logical value.
+
+        The pre-validator divides the logical input by `num_replicated` so the
+        stored field matches what the kernel sees. Any path that feeds dumped data
+        back through `model_validate` (mesh slicing, YAML round-trip) must undo that
+        first, otherwise the pre-validator divides a second time and under-scales.
+
+        TODO (AM): This is only necessary because the moe_compute flow does not properly TP shard the shared expert yet
+        https://github.com/tenstorrent/tt-metal/issues/45060
+
+        """
+        num_replicated = self.mesh_shape[1 - self.cluster_axis]
+        if num_replicated > 1 and isinstance(data.get("reduce"), dict):
             reduce_data = data["reduce"]
             if reduce_data.get("shared_expert_scale") is not None:
-                reduce_data["shared_expert_scale"] *= old_num_replicated
-        return type(self).model_validate(data)
+                reduce_data["shared_expert_scale"] *= num_replicated
+
+    @staticmethod
+    def _drop_derived_fields(data: dict) -> None:
+        """In-place: remove top-level fields the pre-validator derives (and rejects as
+        input) so they re-derive when dumped data is fed back through `model_validate`.
+        """
+        for derived in ("num_fast_reduce_outputs", "use_post_combine_tilize"):
+            data.pop(derived, None)
 
     # ---- YAML round-trip ----
 
@@ -683,10 +709,10 @@ class TTMoEDecodeConfig(BaseModel):
         """
         import yaml
 
-        return yaml.safe_dump(
-            self.model_dump(mode="json", exclude_defaults=exclude_defaults, exclude_none=exclude_none, **dump_kwargs),
-            sort_keys=False,
-        )
+        data = self.model_dump(mode="json", exclude_defaults=exclude_defaults, exclude_none=exclude_none, **dump_kwargs)
+        self._unscale_shared_expert_scale(data)
+        self._drop_derived_fields(data)
+        return yaml.safe_dump(data, sort_keys=False)
 
     @classmethod
     def from_yaml(cls, yaml_str: str) -> "TTMoEDecodeConfig":
