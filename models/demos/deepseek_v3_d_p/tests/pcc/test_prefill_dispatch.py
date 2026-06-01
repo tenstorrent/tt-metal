@@ -323,6 +323,9 @@ def test_ttnn_dispatch(
 
     # Verify dispatched data matches reference (each EP rank against its torch reference).
     # FP8 path quantizes the buffer (~3-bit mantissa), so allclose is too tight — use PCC.
+    # Pass metadata for slot alignment — the dispatch kernel's two untilizers fill each
+    # (chip, expert) bucket from both ends, so positional comparison against the
+    # forward-scan torch reference is meaningless without sorting by (coord, token, topk).
     if use_fp8_output:
         buffer_result = validate_dispatch_buffer_pcc(
             torch_dispatched,
@@ -334,6 +337,8 @@ def test_ttnn_dispatch(
             dispatch_group_size,
             experts_per_chip,
             verbose=verbose,
+            torch_metadata=torch_metadata,
+            ttnn_metadata=tt_out_metadata,
         )
     else:
         buffer_result = validate_dispatch_buffer(
@@ -346,6 +351,8 @@ def test_ttnn_dispatch(
             dispatch_group_size,
             experts_per_chip,
             verbose=verbose,
+            torch_metadata=torch_metadata,
+            ttnn_metadata=tt_out_metadata,
         )
 
     metadata_result = validate_dispatch_metadata(
