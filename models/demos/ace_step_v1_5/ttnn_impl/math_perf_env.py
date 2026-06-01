@@ -154,8 +154,13 @@ def ace_step_attn_qo_weight_dtype(ttnn: Any, default_dtype: Any) -> Any:
     Defaults to ``bfloat4_b`` when the build exposes it (halves DRAM weight BW vs ``bfloat8_b``).
     Set ``ACE_STEP_DIT_BFLOAT8_ATTN_QO=1`` to keep BFP8; ``ACE_STEP_DIT_BFLOAT4_WEIGHTS=1`` forces
     bf4 on all linears via :func:`ace_step_linear_weight_dtype`.
+    Long-clip quality preset keeps BFP8 attn Q/O (see :func:`ace_step_dit_long_clip_quality_active`).
     """
+    if ace_step_dit_long_clip_quality_active():
+        return default_dtype
     if ace_step_use_bfloat4_weights():
+        return ace_step_linear_weight_dtype(ttnn, default_dtype)
+    if ace_step_bfloat8_attn_qo_weights():
         return ace_step_linear_weight_dtype(ttnn, default_dtype)
     if not ace_step_bfloat8_attn_qo_weights():
         bf4 = getattr(ttnn, "bfloat4_b", None)
@@ -166,6 +171,8 @@ def ace_step_attn_qo_weight_dtype(ttnn: Any, default_dtype: Any) -> Any:
 
 def ace_step_linear_weight_dtype(ttnn: Any, default_dtype: Any) -> Any:
     """Weight storage dtype for **linear** projections (activations stay ``default_dtype``, usually BF16)."""
+    if ace_step_dit_long_clip_quality_active():
+        return default_dtype
     if ace_step_use_bfloat4_weights():
         return getattr(ttnn, "bfloat4_b", None) or getattr(ttnn, "bfloat8_b", None) or default_dtype
     if ace_step_lofi_bfloat8_enabled():
@@ -297,8 +304,13 @@ def ace_step_vae_quality_decode_enabled(
     latent_frames: int | None = None,
     mesh_sku: str | None = None,
     duration_sec: float | None = None,
+    clarity_mode: bool | None = None,
 ) -> bool:
-    """Prefer BF16 VAE compute/weights for long tiled decode (reduces hiss on 60s+ mesh runs)."""
+    """Prefer BF16 VAE compute/weights for very long tiled decode (reduces hiss on 60s+ mesh runs).
+
+    Default: ≥30 s / ≥750 frames on mesh (BFP8 overlap-add hiss). ``--clarity`` is the same
+    threshold; ≥40 s / ≥1000 frames also qualify without clarity.
+    """
     from models.demos.ace_step_v1_5.tt_device import ace_step_needs_split_device
 
     env = os.environ.get("ACE_STEP_VAE_QUALITY", "")
@@ -317,14 +329,26 @@ def ace_step_vae_quality_decode_enabled(
                 duration_sec = float(ds)
         except ValueError:
             pass
+    if clarity_mode is None:
+        clarity_mode = os.environ.get("ACE_STEP_VAE_CLARITY", "").lower() in ("1", "true", "yes", "on")
     if mesh_sku is None:
         mesh_sku = os.environ.get("ACE_STEP_VAE_MESH_SKU") or None
     on_mesh = mesh_sku is not None and ace_step_needs_split_device(mesh_sku)
     if not on_mesh:
         return False
-    if latent_frames is not None and int(latent_frames) >= 400:
+    if clarity_mode:
+        if latent_frames is not None and int(latent_frames) >= 750:
+            return True
+        if duration_sec is not None and float(duration_sec) >= 30.0:
+            return True
+    # 30 s mesh clips (~750 frames): BFP8 VAE overlap-add hiss is audible; BF16 by default.
+    if latent_frames is not None and int(latent_frames) >= 750:
         return True
     if duration_sec is not None and float(duration_sec) >= 30.0:
+        return True
+    if latent_frames is not None and int(latent_frames) >= 1000:
+        return True
+    if duration_sec is not None and float(duration_sec) >= 40.0:
         return True
     return False
 
@@ -1082,6 +1106,14 @@ def ace_step_dit_fused_m_tiles(*, batch_size: int, seq_len: int, tile: int = 32)
     return max(1, int(batch_size)) * s_tiles
 
 
+def ace_step_dit_dram_min_patch_seq() -> int:
+    """Patch-seq threshold (after patch_size=2) for DRAM DiT activations on long clips."""
+    try:
+        return max(1, int(os.environ.get("ACE_STEP_DIT_DRAM_MIN_PATCH_SEQ", "300")))
+    except ValueError:
+        return 300
+
+
 def ace_step_dit_prefers_dram_activations(
     *,
     batch_size: int,
@@ -1096,7 +1128,10 @@ def ace_step_dit_prefers_dram_activations(
     if ace_step_dit_force_l1_matmul():
         return False
     cap = ace_step_dit_max_fused_m_tiles() if max_fused_m is None else int(max_fused_m)
-    return ace_step_dit_fused_m_tiles(batch_size=int(batch_size), seq_len=int(seq_len)) > cap
+    if ace_step_dit_fused_m_tiles(batch_size=int(batch_size), seq_len=int(seq_len)) > cap:
+        return True
+    # 30 s @ 25 Hz → patch_seq ≈ 375 (fused_M=12): L1 1D-mcast drifts audibly vs 15 s (patch_seq ≈ 188).
+    return int(seq_len) >= ace_step_dit_dram_min_patch_seq()
 
 
 def ace_step_dit_body_trace_safe(
@@ -1178,6 +1213,74 @@ def ace_step_init_hifi2_linear_compute_kernel_config(device: Any):
     )
 
 
+def ace_step_init_hifi2_linear_fp32acc_compute_kernel_config(device: Any):
+    """HiFi2 linears with fp32 dest accumulation — long-clip DiT quality preset."""
+    import ttnn
+
+    init_ck = getattr(ttnn, "init_device_compute_kernel_config", None)
+    if not callable(init_ck):
+        return None
+    return init_ck(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+
+def ace_step_dit_long_clip_quality_active() -> bool:
+    """True when :func:`ace_step_configure_dit_long_clip_quality` armed the process env."""
+    return os.environ.get("ACE_STEP_DIT_LONG_CLIP_QUALITY", "").lower() in ("1", "true", "yes", "on")
+
+
+def ace_step_dit_long_clip_quality_enabled(
+    *,
+    latent_frames: int | None = None,
+    duration_sec: float | None = None,
+    mesh_sku: str | None = None,
+) -> bool:
+    """Default-on for mesh clips >=30 s / >=750 latent frames (LoFi+BFP4 drifts audibly)."""
+    from models.demos.ace_step_v1_5.tt_device import ace_step_needs_split_device
+
+    env = os.environ.get("ACE_STEP_DIT_LONG_CLIP_QUALITY", "")
+    if env.lower() in ("0", "false", "no", "off"):
+        return False
+    if env.lower() in ("1", "true", "yes", "on"):
+        return True
+    if mesh_sku is None or not ace_step_needs_split_device(mesh_sku):
+        return False
+    if latent_frames is not None and int(latent_frames) >= 750:
+        return True
+    if duration_sec is not None and float(duration_sec) >= 30.0:
+        return True
+    return False
+
+
+def ace_step_configure_dit_long_clip_quality(
+    *,
+    latent_frames: int,
+    duration_sec: float,
+    mesh_sku: str | None,
+) -> bool:
+    """Arm HiFi2 DiT compute + BFP8 attn Q/O before ``AceStepV15TTNNPipeline`` init."""
+    if not ace_step_dit_long_clip_quality_enabled(
+        latent_frames=int(latent_frames),
+        duration_sec=float(duration_sec),
+        mesh_sku=mesh_sku,
+    ):
+        return False
+    os.environ["ACE_STEP_DIT_LONG_CLIP_QUALITY"] = "1"
+    os.environ.pop("ACE_STEP_DIT_BFLOAT4_WEIGHTS", None)
+    os.environ.pop("ACE_STEP_DIT_BFLOAT8_ATTN_QO", None)
+    print(
+        "[ace_step_v1_5] DiT long-clip quality (>=30s mesh): HiFi2+fp32acc linears, "
+        "HiFi2 RMSNorm, BF16 DiT weights; eager denoise (--no-use-trace)",
+        flush=True,
+    )
+    return True
+
+
 def ace_step_init_hifi4_linear_compute_kernel_config(device: Any):
     """HiFi4 linear config for FLOP-bound projections (condition encoder small-seq linears)."""
     import ttnn
@@ -1215,7 +1318,9 @@ def ace_step_init_lofi_linear_compute_kernel_config(device: Any):
 
 
 def ace_step_init_dit_linear_compute_kernel_config(device: Any):
-    """DiT linear compute kernel: LoFi (production default, matches perf traces)."""
+    """DiT linear compute kernel: LoFi default; HiFi2+fp32acc when long-clip quality is armed."""
+    if ace_step_dit_long_clip_quality_active():
+        return ace_step_init_hifi2_linear_fp32acc_compute_kernel_config(device)
     return ace_step_init_lofi_linear_compute_kernel_config(device)
 
 
@@ -1463,7 +1568,9 @@ def ace_step_five_hz_lm_optimizations(model_args: Any):
 
 
 def ace_step_init_dit_rmsnorm_compute_kernel_config(device: Any):
-    """RMSNorm compute kernel for DiT blocks: LoFi (default TTNN rmsnorm uses HiFi4)."""
+    """RMSNorm compute kernel for DiT blocks: LoFi default; HiFi2 when long-clip quality is armed."""
+    if ace_step_dit_long_clip_quality_active():
+        return ace_step_init_hifi2_linear_compute_kernel_config(device)
     return ace_step_init_lofi_linear_compute_kernel_config(device)
 
 
@@ -1473,8 +1580,16 @@ def ace_step_init_cond_rmsnorm_compute_kernel_config(device: Any):
 
 
 def ace_step_dit_rms_norm_kwargs(ttnn: Any, l1_mc: Any | None = None, *, device: Any = None) -> dict:
-    """``memory_config`` + LoFi ``compute_kernel_config`` for DiT ``ttnn.rms_norm``."""
-    return ace_step_cond_rms_norm_kwargs(ttnn, l1_mc, device=device)
+    """``memory_config`` + DiT RMSNorm ``compute_kernel_config`` for ``ttnn.rms_norm``."""
+    mc = l1_mc if l1_mc is not None else ace_step_linear_l1_memory_config(ttnn)
+    kw: dict = {}
+    if mc is not None:
+        kw["memory_config"] = mc
+    if device is not None:
+        ck = ace_step_init_dit_rmsnorm_compute_kernel_config(device)
+        if ck is not None:
+            kw["compute_kernel_config"] = ck
+    return kw
 
 
 def ace_step_cond_rms_norm_kwargs(ttnn: Any, l1_mc: Any | None = None, *, device: Any = None) -> dict:
