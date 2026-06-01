@@ -110,14 +110,13 @@ FORCE_INLINE void tl1_publish_flush(uintptr_t cached_tl1_addr) {
 #endif
 }
 
-// Quasar DM experiment: poll FetchQ (and similar host-filled scalars) via the cacheable TL1 port
-// after L2 invalidate, instead of loading through the uncached alias. Other archs: plain volatile load.
+// Quasar: prefetch_q_rd_ptr is the uncached alias; load TL1 directly so host NOC-filled entries
+// are visible without stale L1 D$/L2 on the cached port (see quasar-noc-l1.mdc).
 template <typename T>
 FORCE_INLINE T fetchq_poll_load(volatile T tt_l1_ptr* rd_ptr) {
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
-    const uintptr_t cached_addr = l1_cached_addr(reinterpret_cast<uintptr_t>(rd_ptr));
-    tl1_poll_invalidate(cached_addr);
-    return *reinterpret_cast<volatile T tt_l1_ptr*>(cached_addr);
+    asm volatile("fence" ::: "memory");
+    return *rd_ptr;
 #else
     return *rd_ptr;
 #endif

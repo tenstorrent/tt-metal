@@ -52,42 +52,10 @@ using prefetch_q_entry_type = uint32_t;
 // l1_uncached_addr / l1_cached_addr / uncached_l1_ptr<T> live in cq_common.hpp.
 // On Quasar, NoC writes (PCIe / DRAM / atomic_inc from another core) land in TL1 but don't
 // invalidate the DM core's L1 D$/L2; DM command/semaphore reads use the uncached CPU alias.
-// NOC read/write APIs must use cached L1 offsets; invalidate TL1 after fetch retire before decode.
+// NOC read/write APIs must use cached L1 offsets; Quasar retire sync + invalidate before decode.
 // On non-Quasar archs the helpers are no-ops.
 
 #define ENABLE_PREFETCH_DPRINTS 0
-
-#ifndef PREFETCH_PHASE_MARKER_ADDR
-constexpr uintptr_t prefetch_phase_marker_l1 = 0;
-#else
-constexpr uintptr_t prefetch_phase_marker_l1 = PREFETCH_PHASE_MARKER_ADDR;
-#endif
-
-enum class PrefetchPhaseMarker : uint32_t {
-    HD_LOOP = 0x50490000u,
-    AFTER_FETCH_Q = 0x50490001u,
-    PROCESS_CMD_ENTER = 0x50490002u,
-    RELAY_INLINE_ENTER = 0x50490010u,
-    RELAY_INLINE_AFTER_ACQUIRE = 0x50490011u,
-    RELAY_INLINE_AFTER_WRITE = 0x50490012u,
-    RELAY_INLINE_AFTER_RELEASE = 0x50490013u,
-    FETCH_Q_RETIRE = 0x50490020u,
-};
-
-FORCE_INLINE void prefetch_publish_phase(PrefetchPhaseMarker phase, uint32_t aux = 0) {
-#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
-    if constexpr (prefetch_phase_marker_l1 != 0) {
-        volatile uint32_t* marker = uncached_l1_ptr<uint32_t>(prefetch_phase_marker_l1);
-        marker[0] = static_cast<uint32_t>(phase);
-        marker[1] = aux;
-        tl1_publish_flush(prefetch_phase_marker_l1);
-        tl1_publish_flush(prefetch_phase_marker_l1 + sizeof(uint32_t));
-    }
-#else
-    (void)phase;
-    (void)aux;
-#endif
-}
 
 // Use named defines instead of get_compile_time_arg_val indices
 constexpr uint32_t downstream_cb_base = DOWNSTREAM_CB_BASE;
@@ -158,6 +126,10 @@ constexpr uint32_t to_mesh_id = TO_MESH_ID;
 constexpr bool is_2d_fabric = FABRIC_2D;
 
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+static constexpr uint32_t quasar_cmddat_post_sync_iters = 32;
+static constexpr uint32_t quasar_cmddat_pre_retire_iters = 128;
+static constexpr uint32_t quasar_prefetch_iters = 32;
+
 // NOC fills cmddat at cached offsets; invalidate before uncached_l1_ptr decode sees fresh TL1.
 FORCE_INLINE void cmddat_invalidate_after_noc_read(uintptr_t cached_start, uint32_t size_bytes) {
     uintptr_t inv_addr = cached_start & ~uintptr_t(63);
@@ -167,8 +139,53 @@ FORCE_INLINE void cmddat_invalidate_after_noc_read(uintptr_t cached_start, uint3
         invalidate_l2_cache_line(inv_addr);
     }
 }
+
+FORCE_INLINE void quasar_cmddat_post_fetch_sync() {
+    asm volatile("fence" ::: "memory");
+    for (volatile int delay = 0; delay < static_cast<int>(quasar_cmddat_post_sync_iters); ++delay) {
+        (void)delay;
+    }
+    asm volatile("fence" ::: "memory");
+}
+
+FORCE_INLINE void quasar_cmddat_pre_retire_barrier_sync(uint32_t trid) {
+    asm volatile("fence" ::: "memory");
+    for (volatile int delay = 0; delay < static_cast<int>(quasar_cmddat_pre_retire_iters); ++delay) {
+        (void)delay;
+    }
+    (void)__builtin_riscv_ttrocc_scmdbuf_tr_ack_trid(trid);
+    asm volatile("fence" ::: "memory");
+}
+
+FORCE_INLINE void quasar_prefetch_publish_phase_replacement() {
+    asm volatile("fence" ::: "memory");
+    for (volatile int delay = 0; delay < static_cast<int>(quasar_prefetch_iters); ++delay) {
+        (void)delay;
+    }
+    asm volatile("fence" ::: "memory");
+}
+
+// Production fetch retire chain (matches quasar_prefetch_retire_repro / tier-1 repro).
+// No prefetch_publish_phase in this path: repeated uncached marker writes after L2
+// flush/invalidate stall Quasar RTL (see quasar_prefetch_retire_repro for phased diag).
+FORCE_INLINE void quasar_cmddat_retire_fetch_read(uint32_t trid, uintptr_t read_start, uint32_t size_bytes) {
+    while (!ncrisc_noc_read_with_transaction_id_flushed(noc_index, trid)) {
+    }
+
+    quasar_cmddat_pre_retire_barrier_sync(trid);
+
+    noc_async_read_barrier_with_trid(trid);
+
+    cmddat_invalidate_after_noc_read(read_start, size_bytes);
+
+    quasar_cmddat_post_fetch_sync();
+}
 #else
 FORCE_INLINE void cmddat_invalidate_after_noc_read(uintptr_t, uint32_t) {}
+FORCE_INLINE void quasar_cmddat_post_fetch_sync() {}
+FORCE_INLINE void quasar_cmddat_retire_fetch_read(uint32_t trid, uintptr_t, uint32_t) {
+    noc_async_read_barrier_with_trid(trid);
+}
 #endif
 
 constexpr uint32_t is_d_variant = IS_D_VARIANT;
@@ -846,49 +863,47 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
         if (!cmd_ready) {
             if (inflight_count != 0U) {
                 const uint32_t idx = inflight_head;
+                const InflightFlags retire_flags = inflight[idx].flags;
+                const uint32_t retire_reserved = inflight[idx].reserved_size;
+                const uint32_t retire_trid = inflight[idx].trid;
+                const uintptr_t retire_start = inflight[idx].read_start;
 
 #if ENABLE_PREFETCH_DPRINTS
-                DPRINT << "fetch_q_get_cmds: RETIRE_START idx=" << idx << " trid=" << inflight[idx].trid
-                       << " read_start=" << inflight[idx].read_start
-                       << " read_size=" << (inflight[idx].reserved_size - preamble_size)
-                       << " total_size=" << inflight[idx].reserved_size << " preamble_size=" << preamble_size
-                       << " flags=" << (inflight[idx].flags == InflightFlags::STALL_AFTER ? "STALL_AFTER" : "NOSTALL")
+                DPRINT << "fetch_q_get_cmds: RETIRE_START idx=" << idx << " trid=" << retire_trid
+                       << " read_start=" << retire_start
+                       << " read_size=" << (retire_reserved - preamble_size)
+                       << " total_size=" << retire_reserved << " preamble_size=" << preamble_size
+                       << " flags=" << (retire_flags == InflightFlags::STALL_AFTER ? "STALL_AFTER" : "NOSTALL")
                        << " fence=" << fence << " cmd_ptr=" << cmd_ptr << ENDL();
                 DEVICE_PRINT(
                     "fetch_q_get_cmds: RETIRE_START idx={} trid={} read_start={} read_size={} total_size={} "
                     "preamble_size={} flags={} fence={} cmd_ptr={}\n",
                     idx,
-                    inflight[idx].trid,
-                    inflight[idx].read_start,
-                    (inflight[idx].reserved_size - preamble_size),
-                    inflight[idx].reserved_size,
+                    retire_trid,
+                    retire_start,
+                    (retire_reserved - preamble_size),
+                    retire_reserved,
                     preamble_size,
-                    inflight[idx].flags,
+                    retire_flags,
                     fence,
                     cmd_ptr);
 #endif
-                prefetch_publish_phase(PrefetchPhaseMarker::FETCH_Q_RETIRE, inflight[idx].trid);
-
-                noc_async_read_barrier_with_trid(inflight[idx].trid);
-
-                cmddat_invalidate_after_noc_read(inflight[idx].read_start, inflight[idx].reserved_size);
+                quasar_cmddat_retire_fetch_read(retire_trid, retire_start, retire_reserved);
 
 #if ENABLE_PREFETCH_DPRINTS
-                if (inflight[idx].read_start < cmd_ptr) {
-                    DPRINT << "fetch_q_get_cmds: RETIRE_CMD_PTR_ADJUST cmd_ptr=" << cmd_ptr << " -> "
-                           << inflight[idx].read_start << ENDL();
+                if (retire_start < cmd_ptr) {
+                    DPRINT << "fetch_q_get_cmds: RETIRE_CMD_PTR_ADJUST cmd_ptr=" << cmd_ptr << " -> " << retire_start
+                           << ENDL();
                     DEVICE_PRINT(
-                        "fetch_q_get_cmds: RETIRE_CMD_PTR_ADJUST cmd_ptr={} -> {}\n",
-                        cmd_ptr,
-                        inflight[idx].read_start);
+                        "fetch_q_get_cmds: RETIRE_CMD_PTR_ADJUST cmd_ptr={} -> {}\n", cmd_ptr, retire_start);
                 }
 #endif
-                cmd_ptr = inflight[idx].read_start;
-                fence = inflight[idx].read_start + inflight[idx].reserved_size;
+                cmd_ptr = retire_start;
+                fence = retire_start + retire_reserved;
+                const uint32_t committed_bytes = static_cast<uint32_t>(fence - cmd_ptr);
 
                 inflight_head = (inflight_head + 1U) & INFLIGHT_MASK;
                 --inflight_count;
-
 
 #if ENABLE_PREFETCH_DPRINTS
                 DPRINT << "fetch_q_get_cmds: RETIRE_DONE fence=" << fence << " inflight_count=" << inflight_count
@@ -900,21 +915,15 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
                     inflight_head);
 #endif
 
-                // If this was a stall-after read, transition to STALLED now (exec_buf is next).
-                if (inflight[idx].flags == InflightFlags::STALL_AFTER) {
-                    ASSERT(inflight_count == 0U);
-                    ASSERT(issue_fence == fence);
-                    stall_state = StallState::STALLED;
-#if ENABLE_PREFETCH_DPRINTS
-                    DPRINT << "fetch_q_get_cmds: RETIRE_DONE -> STALLED (stall-after read)" << ENDL();
-                    DEVICE_PRINT("fetch_q_get_cmds: RETIRE_DONE -> STALLED (stall-after read)\n");
-#endif
+                // Committed data is available; return immediately (do not continue the loop with a
+                // consumed FetchQ cursor and other reads still in-flight — Quasar RTL hangs there).
+                if (committed_bytes != 0U) {
+                    if (retire_flags == InflightFlags::STALL_AFTER) {
+                        stall_state = StallState::STALLED;
+                    }
                     return;
                 }
 
-                // We just advanced the committed fence (made commands available). Restart the loop so we can
-                // opportunistically top up the in-flight window using the unified issue logic, without duplicating a
-                // separate "re-check" issue path.
                 continue;
             } else {
                 // Nothing to fetch, nothing pending, nothing available, stall on host
@@ -954,11 +963,9 @@ static uint32_t process_relay_inline_cmd(uintptr_t cmd_ptr, uint32_t& local_down
     uint32_t npages =
         (length + RelayInlineState::downstream_page_size - 1) >> RelayInlineState::downstream_log_page_size;
 
-    prefetch_publish_phase(PrefetchPhaseMarker::RELAY_INLINE_ENTER, length);
     // Assume the downstream buffer is big relative to cmddat command size that we can
     // grab what we need in one chunk
     RelayInlineState::cb_writer.acquire_pages(npages);
-    prefetch_publish_phase(PrefetchPhaseMarker::RELAY_INLINE_AFTER_ACQUIRE, npages);
 
     uint32_t remaining = cmddat_q_end - data_ptr;
     if (cmddat_wrap_enable && length > remaining) {
@@ -982,9 +989,7 @@ static uint32_t process_relay_inline_cmd(uintptr_t cmd_ptr, uint32_t& local_down
 
     local_downstream_data_ptr = round_up_pow2(local_downstream_data_ptr, RelayInlineState::downstream_page_size);
     noc_async_writes_flushed();
-    prefetch_publish_phase(PrefetchPhaseMarker::RELAY_INLINE_AFTER_WRITE, local_downstream_data_ptr);
     RelayInlineState::cb_writer.release_pages(npages, local_downstream_data_ptr);
-    prefetch_publish_phase(PrefetchPhaseMarker::RELAY_INLINE_AFTER_RELEASE, npages);
     return cmd->relay_inline.stride;
 }
 
@@ -2251,7 +2256,14 @@ bool process_cmd(
     uint32_t& stride,
     uint32_t* l1_cache,
     PrefetchExecBufState& exec_buf_state) {
+#if !(defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM))
+    // Fetch retire chain already invalidated + post_fetch_sync'd committed cmddat on Quasar DM.
+    quasar_cmddat_post_fetch_sync();
+#endif
     volatile CQPrefetchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQPrefetchCmd>(cmd_ptr);
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    quasar_prefetch_publish_phase_replacement();
+#endif
     bool done = false;
 
 
@@ -3002,20 +3014,10 @@ void kernel_main_hd() {
 
     while (!done) {
         DeviceZoneScopedN("CQ-PREFETCH");
-        prefetch_publish_phase(PrefetchPhaseMarker::HD_LOOP, static_cast<uint32_t>(cmd_ptr));
         constexpr uint32_t preamble_size = 0;
         fetch_q_get_cmds<preamble_size>(fence, cmd_ptr, pcie_read_ptr);
-        prefetch_publish_phase(PrefetchPhaseMarker::AFTER_FETCH_Q, static_cast<uint32_t>(cmd_ptr));
-
         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
 
-        DPRINT << "hd:cp=" << cmd_ptr << " f=" << fence << " r0=" << HEX() << *uncached_l1_ptr<uint32_t>(cmd_ptr)
-               << ENDL();
-
-        volatile CQPrefetchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQPrefetchCmd>(cmd_ptr);
-        const uint32_t cmd_id = cmd->base.cmd_id;
-
-        prefetch_publish_phase(PrefetchPhaseMarker::PROCESS_CMD_ENTER, cmd_id);
         uint32_t stride;
         done = process_cmd<false, false>(cmd_ptr, downstream_data_ptr, stride, l1_cache, exec_buf_state);
         DPRINT << "hd:st=" << stride << " ncp=" << (cmd_ptr + stride) << ENDL();

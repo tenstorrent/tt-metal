@@ -933,7 +933,6 @@ static_assert(SD_PREFETCHER_PAGE_BATCH_SIZE == 1);
 static constexpr uint32_t SD_PREFETCH_CMDDAT_LOG_PAGE_SIZE = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
 static constexpr uint32_t SD_PREFETCH_CMDDAT_PAGE_SIZE = 1u << SD_PREFETCH_CMDDAT_LOG_PAGE_SIZE;
 static constexpr uint32_t SD_PREFETCH_CMDDAT_BLOCKS = DispatchSettings::PREFETCH_D_BUFFER_BLOCKS;
-static constexpr uint32_t SD_PREFETCH_MAX_OUTSTANDING_PCIE_READS = 4u;
 // Issue + completion must fit in one device's hugepage slot (MAX_DEV_CHANNEL_SIZE = 256 MB) on
 // WH/BH. On Quasar the kSdQuasarIssueBase / kSdQuasarCompletionBase pair lives in DRAM bank 0,
 // which on this target only decodes the low 26 address bits (bits 26+ are don't-cares — see the
@@ -1352,12 +1351,10 @@ inline std::map<std::string, std::string> make_sd_prefetch_defines(
     uint32_t downstream_sync_sem_id,
     uint32_t entry_size,
     const CoreCoord& phys_prefetch,
-    const CoreCoord& phys_dispatch,
-    uint32_t prefetch_phase_marker_addr = 0) {
+    const CoreCoord& phys_dispatch) {
     const bool is_cq_dram_backed = (device->arch() == tt::ARCH::QUASAR);
     const auto my_virtual = device->virtual_noc0_coordinate(tt_metal::NOC::NOC_0, phys_prefetch);
     const auto downstream_virtual = device->virtual_noc0_coordinate(tt_metal::NOC::NOC_0, phys_dispatch);
-    const uint32_t cmddat_q_kernel_bytes = cmddat_q_pages * SD_PREFETCH_CMDDAT_PAGE_SIZE;
     return {
         {"MY_NOC_X", std::to_string(my_virtual.x)},
         {"MY_NOC_Y", std::to_string(my_virtual.y)},
@@ -1382,7 +1379,7 @@ inline std::map<std::string, std::string> make_sd_prefetch_defines(
         {"PREFETCH_Q_RD_PTR_ADDR", std::to_string(prefetch_q_rd_ptr_addr)},
         {"PREFETCH_Q_PCIE_RD_PTR_ADDR", std::to_string(prefetch_q_pcie_rd_ptr_addr)},
         {"CMDDAT_Q_BASE", std::to_string(cmddat_q_base)},
-        {"CMDDAT_Q_SIZE", std::to_string(cmddat_q_kernel_bytes)},
+        {"CMDDAT_Q_SIZE", std::to_string(cmddat_q_pages * SD_PREFETCH_CMDDAT_PAGE_SIZE)},
         {"SCRATCH_DB_BASE", std::to_string(scratch_db_base)},
         {"SCRATCH_DB_SIZE", std::to_string(scratch_db_size)},
         {"DOWNSTREAM_SYNC_SEM_ID", std::to_string(downstream_sync_sem_id)},
@@ -1426,7 +1423,6 @@ inline std::map<std::string, std::string> make_sd_prefetch_defines(
         {"OFFSETOF_ROUTER_DIRECTION", "2"},
         {"FD_CORE_TYPE", "0"},
         {"PREFETCH_Q_ENTRY_BITS", std::to_string(entry_size * 8)},
-        {"PREFETCH_PHASE_MARKER_ADDR", std::to_string(prefetch_phase_marker_addr)},
         // FABRIC_RELAY intentionally omitted - must be undefined for #if defined(FABRIC_RELAY) to be false
     };
 }
