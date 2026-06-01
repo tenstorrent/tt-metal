@@ -148,6 +148,71 @@ TEST(GenerateRankBindingsHelpersTest, WritePhase2MockMapping_NoRankEntriesRemove
     EXPECT_FALSE(std::filesystem::exists(path));
 }
 
+TEST(GenerateRankBindingsHelpersTest, LoadMgdMappingYaml_SingleDenseSubcontext_ResolvesRelativeToMappingDir) {
+    const auto dir = make_temp_dir("mgd_map");
+    const auto mgd_dummy = dir / "dummy_mgd.textproto";
+    {
+        std::ofstream f(mgd_dummy);
+        f << "# placeholder\n";
+    }
+    const auto mapping = dir / "map.yaml";
+    {
+        std::ofstream f(mapping);
+        f << kSubcontextMgdMappingYamlKey << ":\n  0: dummy_mgd.textproto\n";
+    }
+
+    const auto out = load_subcontext_id_to_mesh_graph_descriptor_mapping(mapping);
+    ASSERT_EQ(out.size(), 1u);
+    EXPECT_EQ(out.at(0), std::filesystem::weakly_canonical(mgd_dummy));
+}
+
+TEST(GenerateRankBindingsHelpersTest, LoadMgdMappingYaml_TwoDenseSubcontexts) {
+    const auto dir = make_temp_dir("mgd_map2");
+    const auto a = dir / "a.textproto";
+    const auto b = dir / "b.textproto";
+    for (const auto& p : {a, b}) {
+        std::ofstream f(p);
+        f << "x\n";
+    }
+    const auto mapping = dir / "map.yaml";
+    {
+        std::ofstream f(mapping);
+        f << kSubcontextMgdMappingYamlKey << ":\n  0: a.textproto\n  1: b.textproto\n";
+    }
+
+    const auto out = load_subcontext_id_to_mesh_graph_descriptor_mapping(mapping);
+    ASSERT_EQ(out.size(), 2u);
+    EXPECT_EQ(out.at(0), std::filesystem::weakly_canonical(a));
+    EXPECT_EQ(out.at(1), std::filesystem::weakly_canonical(b));
+}
+
+TEST(GenerateRankBindingsHelpersTest, LoadMgdMappingYaml_GapInSubcontextIds_Throws) {
+    const auto dir = make_temp_dir("mgd_gap");
+    const auto mgd = dir / "m.textproto";
+    {
+        std::ofstream f(mgd);
+        f << "x\n";
+    }
+    const auto mapping = dir / "map.yaml";
+    {
+        std::ofstream f(mapping);
+        f << kSubcontextMgdMappingYamlKey << ":\n  0: m.textproto\n  2: m.textproto\n";
+    }
+
+    EXPECT_THROW(load_subcontext_id_to_mesh_graph_descriptor_mapping(mapping), std::invalid_argument);
+}
+
+TEST(GenerateRankBindingsHelpersTest, LoadMgdMappingYaml_MissingMgdFile_Throws) {
+    const auto dir = make_temp_dir("mgd_missing");
+    const auto mapping = dir / "map.yaml";
+    {
+        std::ofstream f(mapping);
+        f << kSubcontextMgdMappingYamlKey << ":\n  0: does_not_exist.textproto\n";
+    }
+
+    EXPECT_THROW(load_subcontext_id_to_mesh_graph_descriptor_mapping(mapping), std::invalid_argument);
+}
+
 TEST(GenerateRankBindingsHelpersTest, GetActualHostname_PassesThroughNonLocalhost) {
     EXPECT_EQ(get_actual_hostname("my.cluster.host"), "my.cluster.host");
 }
