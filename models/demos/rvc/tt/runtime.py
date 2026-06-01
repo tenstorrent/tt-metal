@@ -568,27 +568,47 @@ class TTNNGeneratorNSF:
         return x_cf
 
     def _ensure_prepared_conv(self, w_host, b_host, in_ch, out_ch, k, seq_len, dilation):
-        """Lazy prepared-weight cache for Generator conv1d shapes."""
+        """Lazy prepared-weight cache for Generator conv1d shapes.
+
+        Selects HEIGHT_SHARDED config where it fits per-core L1, else DEFAULT.
+        Whitelist derived from per-shape isolated probe (40/48 unique Generator
+        shapes fit HEIGHT_SHARDED; only k=11 at ch>=128 hits the 1.92 MB
+        per-core CB limit).
+        """
         key = (id(w_host), in_ch, out_ch, k, seq_len, dilation)
         cached = self._prep_cache.get(key)
         if cached is not None:
             return cached
         padding = dilation * (k - 1) // 2
+
+        def _build(cfg):
+            common = dict(
+                input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                input_layout=ttnn.ROW_MAJOR_LAYOUT,
+                in_channels=in_ch, out_channels=out_ch, batch_size=1,
+                input_height=1, input_width=seq_len,
+                kernel_size=(1, k), stride=(1, 1),
+                padding=(0, padding), dilation=(1, dilation), groups=1,
+                device=self._device, input_dtype=DEFAULT_DTYPE,
+                conv_config=cfg,
+            )
+            w_p = ttnn.prepare_conv_weights(weight_tensor=w_host, weights_format="OIHW",
+                                              has_bias=True, **common)
+            b_p = ttnn.prepare_conv_bias(bias_tensor=b_host, **common)
+            return w_p, b_p, cfg
+
+        # Whitelist: HEIGHT_SHARDED fits when NOT (high-channel AND large-kernel).
+        sharded_safe = not (in_ch >= 128 and k >= 11)
+        if sharded_safe:
+            try:
+                cfg = ttnn.Conv2dConfig(weights_dtype=DEFAULT_DTYPE,
+                                         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED)
+                self._prep_cache[key] = _build(cfg)
+                return self._prep_cache[key]
+            except Exception:
+                pass
         cfg = ttnn.Conv2dConfig(weights_dtype=DEFAULT_DTYPE)
-        common = dict(
-            input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            input_layout=ttnn.ROW_MAJOR_LAYOUT,
-            in_channels=in_ch, out_channels=out_ch, batch_size=1,
-            input_height=1, input_width=seq_len,
-            kernel_size=(1, k), stride=(1, 1),
-            padding=(0, padding), dilation=(1, dilation), groups=1,
-            device=self._device, input_dtype=DEFAULT_DTYPE,
-            conv_config=cfg,
-        )
-        w_p = ttnn.prepare_conv_weights(weight_tensor=w_host, weights_format="OIHW",
-                                          has_bias=True, **common)
-        b_p = ttnn.prepare_conv_bias(bias_tensor=b_host, **common)
-        self._prep_cache[key] = (w_p, b_p, cfg)
+        self._prep_cache[key] = _build(cfg)
         return self._prep_cache[key]
 
     def _conv1d_device(self, x_in, w_tt, b_tt, in_ch, out_ch, k, seq_len,
