@@ -21,6 +21,7 @@ from loguru import logger
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.qwen35_27b.tt.chunk_delta_rule_ops import create_chunk_masks
+from models.demos.qwen35_27b.tt.gdn_chunk_ops_seq import chunk_gated_delta_rule_seq
 from models.demos.qwen35_27b.tt.gdn_kernel.gdn_kernel_op import gdn_full_fused_inplace, gdn_recurrence_fused_inplace
 from models.demos.qwen35_27b.tt.model_config import create_prefill_matmul_program_config
 from models.tt_transformers.tt.ccl import tt_all_reduce
