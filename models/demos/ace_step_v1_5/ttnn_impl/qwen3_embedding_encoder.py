@@ -37,6 +37,7 @@ from .math_perf_env import (
     ace_step_cond_linear_program_config,
     ace_step_cond_mlp_gate_up_linear_program_config,
     ace_step_cond_rms_norm_kwargs,
+    ace_step_encoder_2d_block_sharded_memory_config,
     ace_step_ensure_dram_activation,
     ace_step_ensure_l1_activation,
     ace_step_ensure_tile_layout,
@@ -536,7 +537,7 @@ class _TtQwen3EncoderLayer:
         kw: dict = {}
         if self._linear_ck is not None:
             kw["compute_kernel_config"] = self._linear_ck
-        out_mc = ace_step_cond_256x1024_width_sharded_memory_config(
+        out_mc = ace_step_encoder_2d_block_sharded_memory_config(
             ttnn,
             self.device,
             seq_len=int(seq_len),
@@ -545,7 +546,17 @@ class _TtQwen3EncoderLayer:
             batch_size=int(batch_size),
             for_output=True,
         )
-        use_out_bs = False
+        use_out_bs = out_mc is not None
+        if out_mc is None:
+            out_mc = ace_step_cond_256x1024_width_sharded_memory_config(
+                ttnn,
+                self.device,
+                seq_len=int(seq_len),
+                in_dim=int(in_dim),
+                out_dim=int(out_dim),
+                batch_size=int(batch_size),
+                for_output=True,
+            )
         pc = None
         if self._use_cond_linear_pc:
             key = (int(batch_size), int(seq_len), int(in_dim), int(out_dim), use_out_bs)
@@ -563,7 +574,7 @@ class _TtQwen3EncoderLayer:
                     self._attn_pc_cache[key] = pc
             if pc is not None:
                 kw["program_config"] = pc
-        if self._linear_out_l1 is not None:
+        if self._linear_out_l1 is not None and out_mc is None:
             kw["memory_config"] = self._linear_out_l1
         if out_mc is not None:
             kw["memory_config"] = out_mc
@@ -574,7 +585,7 @@ class _TtQwen3EncoderLayer:
         return kw
 
     def _maybe_shard_attn_in0(self, x: ttnn.Tensor, *, batch_size: int, seq_len: int, in_dim: int, out_dim: int):
-        in0_mc = ace_step_cond_256x1024_width_sharded_memory_config(
+        in0_mc = ace_step_encoder_2d_block_sharded_memory_config(
             ttnn,
             self.device,
             seq_len=int(seq_len),
@@ -583,6 +594,16 @@ class _TtQwen3EncoderLayer:
             batch_size=int(batch_size),
             for_output=False,
         )
+        if in0_mc is None:
+            in0_mc = ace_step_cond_256x1024_width_sharded_memory_config(
+                ttnn,
+                self.device,
+                seq_len=int(seq_len),
+                in_dim=int(in_dim),
+                out_dim=int(out_dim),
+                batch_size=int(batch_size),
+                for_output=False,
+            )
         if in0_mc is None:
             return x
         try:
@@ -705,6 +726,8 @@ class _TtQwen3EncoderLayer:
         attn_out = ttnn.linear(ctx_o, self.wo, bias=None, transpose_b=True, **lin_o)
         ace_step_safe_deallocate(ttnn, ctx_o if ctx_o is not ctx else None)
         ttnn.deallocate(ctx)
+        if _l1_mc is not None:
+            attn_out = ace_step_ensure_l1_activation(ttnn, attn_out, _l1_mc)
 
         h = ttnn.add(res, attn_out, memory_config=_act_mc)
         res2 = h

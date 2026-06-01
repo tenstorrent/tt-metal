@@ -1763,6 +1763,18 @@ def _ace_step_cond_in0_block_w_cap(*, intermediate_size: int | None = None) -> i
     return 4
 
 
+def _ace_step_cond_gate_up_in0_block_w_cap(*, intermediate_size: int) -> int:
+    """``in0_block_w`` cap for fused MLP gate+up (``256×1024×6144`` family).
+
+    Encoder sweep: ibw=8 @ 1D/96c/L1 interleaved ~1.16× vs ibw=4 heuristic (PCC=0.9931).
+    Do not use width-sharded gate_up output — downstream SiLU/slice expects L1 interleaved.
+    Wide lyric/timbre MLPs (intermediate ≥ 6144) keep cap=1 for L1 CB budget.
+    """
+    if int(intermediate_size) >= _WIDE_MLP_INTERMEDIATE_THRESHOLD:
+        return 1
+    return 8
+
+
 def _ace_step_pick_2d_out_subblock(per_core_m: int, per_core_n: int, *, out_sharded: bool) -> tuple[int, int]:
     """Subblock sizing for 2D mcast (block-sharded out requires ``out_subblock_h==1``)."""
     if out_sharded:
@@ -1986,23 +1998,22 @@ def _ace_step_cond_256x1024_1d_width_program_config(
     )
 
 
-# Pinned program configs from the encoder matmul device sweep (test_matmul_encoder_sweep,
+# Pinned program configs from the encoder matmul device sweeps (``test_matmul_256x*``,
 # M=256, in0=bf8 × in1=bf4 → out=bf8, LoFi + fp32 dest acc).  (K, N) -> (family, gx, gy,
-# in0_block_w).  All output L1 interleaved (what every consumer wants).
+# in0_block_w).
 #   "1D" = MatmulMultiCoreReuseMultiCast1D (mcast_in0); caps at Nt cores.
-#   "2D" = MatmulMultiCoreReuseMultiCast block-shard; also splits the K reduction over gx,
-#          so N-narrow + K-deep matmuls exceed the 1D Nt-core cap.
-# Measured device time vs the prior heuristic config:
-#   qkv 1024x4096 49.6->18.1us (1D, 2.74x)  wo 2048x1024 36.6->16.7us (2D, 2.19x)
-#   down 3072x1024 53.8->24.9us (2D, 2.16x).
+#   "2D" = MatmulMultiCoreReuseMultiCast block-mcast; splits K over gx for N-narrow matmuls.
+# Sweep winners (device us, PCC=0.9931 unless noted):
+#   qkv 1024×4096   1D 8×8 ibw=8 L1 interleaved          ~18.0  (pinned; ws-out ~17.6 isolated)
+#   wo  2048×1024   2D 8×8 ibw=8 bs in0+out               ~15.6  (vs ~16.7 L1 interleaved)
+#   gu  1024×6144   1D 11×10 pcN=2 ibw=8 L1 interleaved   ~18.5  (vs ~21.5 ibw=4 heuristic)
+#   down 3072×1024  2D 8×8 ibw=12 L1 interleaved         ~21.1  (vs ~24.9 ibw=6)
+# gate_up stays on the 1D heuristic (grid from device, per_core_N=2 → 96 cores) with ibw=8;
+# Nt=192 does not divide the 11×10 grid evenly so it is not in this pinned table.
 _ACE_STEP_ENCODER_MM_PINNED = {
-    (1024, 4096): ("1D", 8, 8, 8),  # qkv: Nt=128 already fills 64 cores in 1D; drops width-shard
-    (2048, 1024): ("2D", 8, 8, 8),  # wo:  Nt=32 caps 1D at 32c; 2D splits K=64t over gx=8 → 64c
-    (3072, 1024): ("2D", 8, 8, 6),  # down: Nt=32; 2D splits K=96t over gx=8 (12t/core, ibw|12)
-    # gate_up (1024x6144) intentionally NOT pinned: its 96-core mcast_1d heuristic (22.5us) is
-    # the structural optimum — Nt=192 with per_core_N=2 needs exactly 96 cores; 110 doesn't
-    # divide 192 and 2D caps at 64 (K=32t shallow). A pinned 8x8/64c measured 22.7us in
-    # production (the sweep's standalone 19.4us did not reproduce in the full encoder).
+    (1024, 4096): ("1D", 8, 8, 8),  # qkv: Nt=128 fills 64 cores in 1D
+    (2048, 1024): ("2D", 8, 8, 8),  # wo:  2D splits K=64t over gx=8 → 64c; pair with bs in0/out
+    (3072, 1024): ("2D", 8, 8, 12),  # down: Kt/gx=12; ibw=12 (was 6) ~1.18× in sweep
 }
 
 
@@ -2013,13 +2024,68 @@ def ace_step_encoder_matmul_pinned(m: int, k: int, n: int):
     return _ACE_STEP_ENCODER_MM_PINNED.get((int(k), int(n)))
 
 
+def ace_step_encoder_2d_block_sharded_memory_config(
+    ttnn: Any,
+    device: Any,
+    *,
+    seq_len: int,
+    in_dim: int,
+    out_dim: int,
+    batch_size: int = 1,
+    for_output: bool = False,
+):
+    """Block-sharded L1 memory for pinned encoder 2D matmuls (o_proj sweep: bs in0+out ~15.6 us).
+
+    Returns ``None`` when shape/device does not match a pinned 2D entry (e.g. down_proj keeps L1
+    interleaved out per its sweep winner).
+    """
+    create_sharded = getattr(ttnn, "create_sharded_memory_config", None)
+    shard_strategy = getattr(ttnn, "ShardStrategy", None)
+    shard_orientation = getattr(ttnn, "ShardOrientation", None)
+    core_grid_cls = getattr(ttnn, "CoreGrid", None)
+    if not callable(create_sharded) or shard_strategy is None or shard_orientation is None or core_grid_cls is None:
+        return None
+    if not hasattr(device, "compute_with_storage_grid_size"):
+        return None
+
+    m_dim = max(1, int(batch_size)) * max(1, int(seq_len))
+    pin = ace_step_encoder_matmul_pinned(m_dim, int(in_dim), int(out_dim))
+    if pin is None or pin[0] != "2D":
+        return None
+    # o_proj sweep winner uses block-sharded in0+out; down_proj sweep winner stays L1 interleaved.
+    if int(in_dim) != 2048:
+        return None
+
+    _, gx, gy, _ = pin
+    dev_grid = device.compute_with_storage_grid_size()
+    if gx > int(dev_grid.x) or gy > int(dev_grid.y):
+        return None
+
+    w_dim = int(out_dim) if for_output else int(in_dim)
+    try:
+        return create_sharded(
+            (1, 1, m_dim, w_dim),
+            core_grid=core_grid_cls(y=gy, x=gx),
+            strategy=shard_strategy.BLOCK,
+            orientation=shard_orientation.ROW_MAJOR,
+        )
+    except Exception:
+        return None
+
+
 def ace_step_encoder_matmul_program_config(
-    device: Any, *, seq_len: int, in_dim: int, out_dim: int, batch_size: int = 1
+    device: Any,
+    *,
+    seq_len: int,
+    in_dim: int,
+    out_dim: int,
+    batch_size: int = 1,
+    out_sharded: bool = False,
 ):
     """Pinned 1D/2D program config for the swept encoder matmuls (else ``None``).
 
-    2D configs (wo/down) accept L1-interleaved in0 — the kernel reads per-core blocks — so no
-    InterleavedToSharded is needed at the call site; output stays L1 interleaved either way.
+    2D configs accept L1-interleaved or block-sharded in0; pass ``out_sharded=True`` when the
+    matmul output is block-sharded (required for correct ``out_subblock_h`` on o_proj).
     """
     import ttnn
 
@@ -2043,11 +2109,7 @@ def ace_step_encoder_matmul_program_config(
         pcm, pcn = mt // gy, nt // gx
         if (kt // gx) % ibw:
             return None
-        sh, sw = 1, 1
-        for h, w in [(2, 2), (4, 1), (1, 4), (2, 1), (1, 2), (1, 1)]:
-            if pcm % h == 0 and pcn % w == 0:
-                sh, sw = h, w
-                break
+        sh, sw = _ace_step_pick_2d_out_subblock(pcm, pcn, out_sharded=bool(out_sharded))
         return cfg_cls(
             compute_with_storage_grid_size=(gx, gy),
             in0_block_w=ibw,
@@ -2096,7 +2158,12 @@ def ace_step_cond_linear_program_config(
 ):
     """Program config for condition / Qwen3 linears (e.g. ``256×1024×1024`` attn Q/K)."""
     pinned = ace_step_encoder_matmul_program_config(
-        device, seq_len=seq_len, in_dim=in_dim, out_dim=out_dim, batch_size=batch_size
+        device,
+        seq_len=seq_len,
+        in_dim=in_dim,
+        out_dim=out_dim,
+        batch_size=batch_size,
+        out_sharded=out_sharded,
     )
     if pinned is not None:
         return pinned
@@ -2143,26 +2210,21 @@ def ace_step_cond_mlp_gate_up_linear_program_config(
     batch_size: int = 1,
     out_dim: int | None = None,
 ):
-    """Program config for condition MLP gate/up (e.g. 32×6144×6144).
+    """Program config for condition MLP gate/up (e.g. ``256×1024×6144`` fused gate+up).
 
-    Lyric/timbre encoders use intermediate 6144×2048; ``in0_block_w=2`` plus L1-hosted
-    activations can overrun per-core circular-buffer budget (static CB vs tensor L1).
-    Use ``in0_block_w_cap=1`` when ``intermediate_size >= 4608``; ``4`` for Qwen3/DiT-scale MLPs.
+    Qwen3 encoder (intermediate=3072): 1D heuristic on device grid, per_core_N=2 → 96 cores,
+    ``in0_block_w=8`` (sweep ~18.5 us vs ~21.5 us at ibw=4).  Lyric/timbre (intermediate ≥ 6144)
+    use ``in0_block_w_cap=1`` for L1 CB budget.
     """
     short = int(seq_len) <= 64
     n_out = int(out_dim) if out_dim is not None else int(intermediate_size)
-    pinned = ace_step_encoder_matmul_program_config(
-        device, seq_len=seq_len, in_dim=hidden_size, out_dim=n_out, batch_size=batch_size
-    )
-    if pinned is not None:
-        return pinned
     return _mcast_1d_linear_program_config(
         device,
         seq_len=seq_len,
         in_dim=hidden_size,
         out_dim=n_out,
         batch_size=batch_size,
-        in0_block_w_cap=_ace_step_cond_in0_block_w_cap(intermediate_size=intermediate_size),
+        in0_block_w_cap=_ace_step_cond_gate_up_in0_block_w_cap(intermediate_size=int(intermediate_size)),
         out_subblock_h_cap=2 if short else 4,
         out_subblock_w=2 if short else 1,
     )
