@@ -181,8 +181,8 @@ void DramCorePrefetcherManager::enumerate_dram_senders() {
 }
 
 void DramCorePrefetcherManager::allocate_sockets() {
-    const uint32_t pcie_alignment =
-        MetalContext::instance(mesh_device_->impl().get_context_id()).hal().get_alignment(HalMemType::HOST);
+    const auto& hal = MetalContext::instance(mesh_device_->impl().get_context_id()).hal();
+    const uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
     const uint32_t page_size = align_up(kRequestPageBytes, pcie_alignment);
     const uint32_t fifo_size = align_up(page_size * kSocketFifoPages, pcie_alignment);
 
@@ -190,9 +190,7 @@ void DramCorePrefetcherManager::allocate_sockets() {
     sockets_.reserve(devices_.size() * num_senders_);
 
     auto mesh_device_sp = mesh_device_->shared_from_this();
-    const uint64_t dram_l1_noc_offset = MetalContext::instance(mesh_device_->impl().get_context_id())
-                                            .hal()
-                                            .get_l1_noc_offset(HalProgrammableCoreType::DRAM);
+    const uint64_t dram_l1_noc_offset = hal.get_l1_noc_offset(HalProgrammableCoreType::DRAM);
 
     for (auto* device : devices_) {
         const MeshCoordinate device_coord = mesh_device_->get_view().find_device(device->id());
@@ -219,6 +217,10 @@ void DramCorePrefetcherManager::build_and_launch_programs(uint32_t stage_ring_ba
     // socket_config_addr as a runtime arg.
     TT_FATAL(sockets_.size() == devices_.size() * num_senders_, "sockets must be allocated before programs");
 
+    const uint32_t pcie_alignment =
+        MetalContext::instance(mesh_device_->impl().get_context_id()).hal().get_alignment(HalMemType::HOST);
+    const uint32_t socket_page_size = align_up(kRequestPageBytes, pcie_alignment);
+
     programs_.clear();
     for (uint32_t d = 0; d < devices_.size(); ++d) {
         auto program = std::make_unique<Program>();
@@ -226,9 +228,6 @@ void DramCorePrefetcherManager::build_and_launch_programs(uint32_t stage_ring_ba
         for (uint32_t s = 0; s < num_senders_; ++s) {
             const CoreCoord sender_logical = sender_logical_cores_[s];
 
-            const uint32_t pcie_alignment =
-                MetalContext::instance(mesh_device_->impl().get_context_id()).hal().get_alignment(HalMemType::HOST);
-            const uint32_t socket_page_size = align_up(kRequestPageBytes, pcie_alignment);
             std::vector<uint32_t> compile_args = {
                 stage_ring_base,
                 stage_ring_size,
@@ -278,8 +277,7 @@ void DramCorePrefetcherManager::start(const experimental::DramCorePrefetcherConf
     // the layout is uniform across all DRAM cores. The MeshBuffer L1 allocator
     // can't reach DRAM-core L1, so we hand the addresses to the H2DSocket
     // bypass ctor directly (see h2d_socket_internal.hpp).
-    const uint32_t pcie_alignment_for_layout =
-        MetalContext::instance(mesh_device_->impl().get_context_id()).hal().get_alignment(HalMemType::HOST);
+    const uint32_t pcie_alignment_for_layout = hal.get_alignment(HalMemType::HOST);
     const uint32_t page_size_for_layout = align_up(kRequestPageBytes, pcie_alignment_for_layout);
     const uint32_t socket_fifo_size_for_layout =
         align_up(page_size_for_layout * kSocketFifoPages, pcie_alignment_for_layout);

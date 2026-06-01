@@ -223,13 +223,14 @@ void GlobalCircularBuffer::initialize_dram_sender_state_block(
     // added on top of the local L1 address. (Worker L1 has local==NOC space so the
     // EnqueueWriteMeshBuffer path used for the receiver-side config buffer doesn't
     // need this; DRAM-core L1 sits at a high NOC offset on Blackhole.)
-    const uint64_t dram_l1_noc_offset =
-        MetalContext::instance(context_id).hal().get_l1_noc_offset(HalProgrammableCoreType::DRAM);
+    auto& metal_ctx = MetalContext::instance(context_id);
+    const uint64_t dram_l1_noc_offset = metal_ctx.hal().get_l1_noc_offset(HalProgrammableCoreType::DRAM);
     const uint64_t write_addr = dram_l1_noc_offset + static_cast<uint64_t>(sender_state_drisc_l1_base_);
 
     const auto& devices = mesh_device->get_devices();
     const std::vector<uint8_t> pages_sent_zero_bytes(2 * sizeof(uint32_t) * max_num_receivers_per_sender, 0);
     const uint64_t pages_sent_write_addr = dram_l1_noc_offset + static_cast<uint64_t>(pages_sent_drisc_l1_base_);
+    auto& cluster = metal_ctx.get_cluster();
     for (size_t s = 0; s < sender_receiver_core_mapping_.size(); ++s) {
         const auto& [sender_logical, _receivers] = sender_receiver_core_mapping_[s];
         const auto& recv_phys = receiver_coords_per_sender_[s];
@@ -240,20 +241,16 @@ void GlobalCircularBuffer::initialize_dram_sender_state_block(
         }
         for (IDevice* dev : devices) {
             const CoreCoord virtual_core = dev->virtual_core_from_logical_core(sender_logical, CoreType::DRAM);
-            MetalContext::instance(context_id)
-                .get_cluster()
-                .write_core(
-                    dev->id(),
-                    tt_cxy_pair(dev->id(), virtual_core),
-                    std::span<const uint8_t>(pages_sent_zero_bytes.data(), pages_sent_zero_bytes.size()),
-                    pages_sent_write_addr);
-            MetalContext::instance(context_id)
-                .get_cluster()
-                .write_core(
-                    dev->id(),
-                    tt_cxy_pair(dev->id(), virtual_core),
-                    std::span<const uint8_t>(block_bytes.data(), block_bytes.size()),
-                    write_addr);
+            cluster.write_core(
+                dev->id(),
+                tt_cxy_pair(dev->id(), virtual_core),
+                std::span<const uint8_t>(pages_sent_zero_bytes.data(), pages_sent_zero_bytes.size()),
+                pages_sent_write_addr);
+            cluster.write_core(
+                dev->id(),
+                tt_cxy_pair(dev->id(), virtual_core),
+                std::span<const uint8_t>(block_bytes.data(), block_bytes.size()),
+                write_addr);
         }
     }
 }
