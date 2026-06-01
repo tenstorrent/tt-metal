@@ -122,6 +122,34 @@ std::vector<Tensor> ReduceScatterMinimalAsyncDeviceOperation::create_output_tens
     return {intermediate_buffer, output_buffer};
 }
 
+std::vector<tt::tt_metal::TensorTopology> ReduceScatterMinimalAsyncDeviceOperation::compute_output_topologies(
+    const ReduceScatterMinimalAsyncParams& operation_attributes, const ReduceScatterMinimalAsyncInputs& tensor_args) {
+    // reduce_scatter produces (intermediate, output). The output is sharded along `dim`
+    // across `cluster_axis`; the intermediate is an internal workspace whose topology is
+    // best left matching the input so that downstream introspection is not misleading.
+    const auto& input_topology = tensor_args.input_tensor.tensor_topology();
+    auto output_placements = input_topology.placements();
+
+    auto shard_placement =
+        tt::tt_metal::distributed::MeshMapperConfig::Shard{static_cast<int>(operation_attributes.dim)};
+
+    if (operation_attributes.cluster_axis.has_value()) {
+        const auto axis = operation_attributes.cluster_axis.value();
+        if (axis < output_placements.size()) {
+            output_placements[axis] = shard_placement;
+        }
+    } else {
+        for (auto& placement : output_placements) {
+            placement = shard_placement;
+        }
+    }
+
+    auto output_topology = tt::tt_metal::TensorTopology(
+        input_topology.distribution_shape(), std::move(output_placements), input_topology.mesh_coords());
+
+    return {input_topology, std::move(output_topology)};
+}
+
 ttsl::hash::hash_t ReduceScatterMinimalAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "ReduceScatterMinimalAsyncDeviceOperation::compute_program_hash is called");

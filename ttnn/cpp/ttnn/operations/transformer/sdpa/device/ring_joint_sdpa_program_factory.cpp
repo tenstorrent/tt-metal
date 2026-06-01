@@ -89,9 +89,10 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
     const auto& input_tensor_k = tensor_args.input_k;
     const auto& input_tensor_v = tensor_args.input_v;
 
-    const auto& joint_tensor_q = tensor_args.joint_q;
-    const auto& joint_tensor_k = tensor_args.joint_k;
-    const auto& joint_tensor_v = tensor_args.joint_v;
+    const bool has_joint_tensors = tensor_args.joint_q.has_value();
+    const Tensor* joint_tensor_q = has_joint_tensors ? &tensor_args.joint_q.value() : nullptr;
+    const Tensor* joint_tensor_k = has_joint_tensors ? &tensor_args.joint_k.value() : nullptr;
+    const Tensor* joint_tensor_v = has_joint_tensors ? &tensor_args.joint_v.value() : nullptr;
 
     const auto& gathered_input_tensor_k = tensor_args.gathered_k;
     const auto& gathered_input_tensor_v = tensor_args.gathered_v;
@@ -160,7 +161,6 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
 
     const auto& q_shape = input_tensor_q.logical_shape();
     const auto& k_shape = gathered_input_tensor_k.logical_shape();
-    const auto& joint_q_shape = joint_tensor_q.logical_shape();
     const auto& v_shape = gathered_input_tensor_v.logical_shape();
 
     log_debug(tt::LogOp, "q_shape: {}", q_shape);
@@ -168,14 +168,17 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
     log_debug(tt::LogOp, "v_shape (gathered): {}", v_shape);
 
     // q_local_padded_N (Q rows per device) can be shorter than kv_local_padded_N for chunked prefill.
+    const bool indexed_kv_cache = args.has_indexed_kv_cache();
     const uint32_t B = q_shape[0];
     const uint32_t NH = q_shape[1];
     const uint32_t NHK = k_shape[1];
     const uint32_t DH = q_shape[3];
     const uint32_t q_local_padded_N = q_shape[2];
-    const uint32_t kv_local_padded_N = tensor_args.input_k.logical_shape()[2];
+    const uint32_t kv_local_padded_N = tensor_args.local_kv_seq_len();
+    const uint32_t ring_size = static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size);
     const uint32_t padded_N = k_shape[2];
-    const uint32_t L = joint_q_shape[2];
+    const uint32_t cache_batch_idx = args.cache_batch_idx.value_or(0);
+    const uint32_t L = has_joint_tensors ? joint_tensor_q->logical_shape()[2] : 0;
     const uint32_t vDH = v_shape[3];
 
     const uint32_t q_local_padded_Nt = q_local_padded_N / tt::constants::TILE_HEIGHT;
@@ -200,13 +203,13 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
     // Chunked-prefill balanced layout: each device holds one per-chunk K region per chunk.
     // The region is q_local_padded_Nt tiles (Q is exactly one such region per call). The
     // diagonal-tile CB slot is shared with is_causal — needed whenever either is on.
-    const uint32_t ring_size = static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size);
     const uint32_t chunk_size_t = q_local_padded_Nt * ring_size;
-    const bool diag_tile_enabled = args.is_causal || tensor_args.is_chunked();
+    const bool is_chunked = tensor_args.is_chunked();
+    const bool diag_tile_enabled = args.is_causal || is_chunked;
     // Kernel-level is_causal flag carries the legacy local-frame causal-stamp semantics. Chunked
     // prefill is mathematically causal (args.is_causal=True) but uses absolute-coords stamps every
     // ring iter, so the chunked path supersedes the legacy path — mask the flag off here.
-    const bool kernel_is_causal = args.is_causal && !tensor_args.is_chunked();
+    const bool kernel_is_causal = args.is_causal && !is_chunked;
 
     // Lightweight mask: needed when any K/joint dimension has padding, or when causal/chunked
     // masking is active.
@@ -337,7 +340,7 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
-    uint32_t k_tiles = Sk_chunk_t * DHt * 2;  // double buffer
+    uint32_t k_tiles = Sk_chunk_t * DHt * 2;   // double buffer
     uint32_t v_tiles = Sk_chunk_t * vDHt * 2;  // double buffer
     uint32_t mask_tiles = Sq_chunk_t * Sk_chunk_t;
     uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
@@ -492,9 +495,10 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
         args.is_balanced,
         static_cast<uint32_t>(enable_zigzag_balancing),
         // Reader slot 24: chunked_enabled (writer/compute use slot 24/33 for use_streaming_compute).
-        static_cast<uint32_t>(tensor_args.is_chunked()),
+        static_cast<uint32_t>(is_chunked),
         num_active_cores,
         chunk_size_t,
+        static_cast<uint32_t>(indexed_kv_cache),
     };
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
@@ -502,9 +506,11 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
     TensorAccessorArgs(input_tensor_v.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(gathered_input_tensor_k.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(gathered_input_tensor_v.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(joint_tensor_q.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(joint_tensor_k.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(joint_tensor_v.buffer()).append_to(reader_compile_time_args);
+    if (L != 0) {
+        TensorAccessorArgs(joint_tensor_q->buffer()).append_to(reader_compile_time_args);
+        TensorAccessorArgs(joint_tensor_k->buffer()).append_to(reader_compile_time_args);
+        TensorAccessorArgs(joint_tensor_v->buffer()).append_to(reader_compile_time_args);
+    }
 
     /**
      * Create semaphores used for L1-L1 store-and-forward of KV between cores.
@@ -601,7 +607,7 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
         args.is_balanced,
         static_cast<uint32_t>(enable_zigzag_balancing),
         static_cast<std::uint32_t>(out_out_subblock_h),
-        static_cast<uint32_t>(tensor_args.is_chunked()),
+        static_cast<uint32_t>(is_chunked),
         chunk_size_t,
     };
 
@@ -649,7 +655,7 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
         kernel_is_causal,
         args.is_balanced,
         static_cast<uint32_t>(enable_zigzag_balancing),
-        static_cast<uint32_t>(tensor_args.is_chunked()),
+        static_cast<uint32_t>(is_chunked),
         chunk_size_t};
 
     std::map<std::string, std::string> defines;
@@ -779,9 +785,6 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
     auto* const v_buf = input_tensor_v.buffer();
     auto* const gathered_k_buf = gathered_input_tensor_k.buffer();
     auto* const gathered_v_buf = gathered_input_tensor_v.buffer();
-    auto* const joint_q_buf = joint_tensor_q.buffer();
-    auto* const joint_k_buf = joint_tensor_k.buffer();
-    auto* const joint_v_buf = joint_tensor_v.buffer();
     auto* const out_buf = output_tensor.buffer();
     auto* const joint_out_buf = joint_output_tensor.buffer();
     auto* const stats_buf = stats_output_tensor.buffer();
@@ -1413,11 +1416,14 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
         reader_args.push_back(v_buf);
         reader_args.push_back(gathered_k_buf);
         reader_args.push_back(gathered_v_buf);
-        reader_args.push_back(joint_q_buf);
-        reader_args.push_back(joint_k_buf);
-        reader_args.push_back(joint_v_buf);
+        if (L != 0) {
+            reader_args.push_back(joint_tensor_q->buffer());
+            reader_args.push_back(joint_tensor_k->buffer());
+            reader_args.push_back(joint_tensor_v->buffer());
+        }
         reader_args.push_back(global_q_start);
         reader_args.push_back(global_q_end);
+        reader_args.push_back(cache_batch_idx);
 
         // Append chain runtime args for store-and-forward
         const auto& head_chain = head_chain_configs.at(i);

@@ -181,9 +181,6 @@ ttnn::Tensor transpose_nd(
     return ttnn::permute(input_tensor, permutation, memory_config_arg, pad_value);
 }
 
-// Composite-fallback guard: RM + BLOCK/WIDTH sharded I/O is reshard-hopped through L1 interleaved
-// because pages span cores and local readers/writers would race. (RM HEIGHT_SHARDED is handled by
-// is_native_transpose_sharding via the interleaved TensorAccessor path — pages stay on one core.)
 inline bool is_block_or_width_sharded_mc(const tt::tt_metal::MemoryConfig& mc) {
     return mc.is_sharded() && (mc.memory_layout() == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED ||
                                mc.memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED);
@@ -198,10 +195,23 @@ ttnn::Tensor transpose_impl(
     const std::optional<MemoryConfig>& memory_config_arg,
     float pad_value = 0.0f) {
     {
+        // Two temporary L1-interleaved hops for RM + BLOCK/WIDTH-sharded endpoints:
+        //   out_bad (interleaved → sharded): permute writer can't split a row across shards
+        //                                    (#32019). Remove once permute handles sharded RM
+        //                                    outputs.
+        //   in_bad  (sharded → anything, irregular only): noc_async_*_sharded helpers misread
+        //                                                 pages_per_shard for irregular RM
+        //                                                 geometries → data corruption. Regular
+        //                                                 shapes go native. Remove once the
+        //                                                 sharded helpers handle irregular RM.
         const bool rm = input_tensor.layout() == Layout::ROW_MAJOR;
-        const bool in_bad = rm && detail::is_block_or_width_sharded_mc(input_tensor.memory_config());
-        const bool out_bad =
-            rm && memory_config_arg.has_value() && detail::is_block_or_width_sharded_mc(memory_config_arg.value());
+        const bool in_sharded = detail::is_block_or_width_sharded_mc(input_tensor.memory_config());
+        const auto& input_logical = input_tensor.logical_shape();
+        const bool irregular_hw = input_logical.rank() >= 2 && (input_logical[-1] % tt::constants::TILE_WIDTH != 0 ||
+                                                                input_logical[-2] % tt::constants::TILE_HEIGHT != 0);
+        const bool in_bad = rm && in_sharded && irregular_hw;
+        const bool out_bad = rm && !in_sharded && memory_config_arg.has_value() &&
+                             detail::is_block_or_width_sharded_mc(memory_config_arg.value());
         if (in_bad || out_bad) {
             const auto interleaved_l1 =
                 tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1);
@@ -210,8 +220,6 @@ ttnn::Tensor transpose_impl(
                 out_bad ? std::optional<MemoryConfig>(interleaved_l1) : memory_config_arg;
             Tensor result = transpose_impl(x, dim1, dim2, intermediate_mc, pad_value);
             if (out_bad) {
-                // Synthesize a shard_spec for shard-spec-less sharded outputs so to_memory_config
-                // gets a fully-specified destination.
                 MemoryConfig final_mc = memory_config_arg.value();
                 if (!final_mc.shard_spec().has_value()) {
                     auto shard_spec = operations::data_movement::transpose::generate_transpose_shard_spec(
