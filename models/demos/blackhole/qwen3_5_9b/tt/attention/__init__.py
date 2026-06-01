@@ -1,12 +1,11 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Gated full-attention for Qwen3.5-9B, split into config/weights/prefill/decode/kv_cache."""
+"""Gated full-attention for Qwen3.5-9B, split into config/weights/prefill/decode."""
 
 import ttnn
 
 from models.demos.blackhole.qwen3_5_9b.tt.attention.config import AttentionConfig
 from models.demos.blackhole.qwen3_5_9b.tt.attention.decode import decode_forward
-from models.demos.blackhole.qwen3_5_9b.tt.attention.kv_cache import attach_paged_kv_cache, reset_concat_cache
 from models.demos.blackhole.qwen3_5_9b.tt.attention.prefill import prefill_forward
 from models.demos.blackhole.qwen3_5_9b.tt.attention.weights import load_attention_weights
 
@@ -117,9 +116,12 @@ class Qwen35GatedAttention:
             return output
 
     def reset_cache(self):
-        """Clear KV cache for new sequence."""
-        reset_concat_cache(self)
+        """Clear the concat KV cache for a new sequence."""
+        self.past_key = None
+        self.past_value = None
 
     def set_paged_kv_cache(self, k_cache, v_cache):
         """Attach externally-allocated paged KV cache (called once after allocate_kv_cache)."""
-        attach_paged_kv_cache(self, k_cache, v_cache)
+        self.paged_kv_cache_key = k_cache
+        self.paged_kv_cache_value = v_cache
+        self.use_paged_attention = True
