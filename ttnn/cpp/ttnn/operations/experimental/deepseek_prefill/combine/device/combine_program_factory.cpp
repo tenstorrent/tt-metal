@@ -143,7 +143,9 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
 
     auto subdevice_cores = corerange_to_cores(worker_core_range_set);
     // Per-untilizer ring depth on the sender's receive_buf — also the initial value of the credits
-    // semaphore handed to each untilizer core (TILE_LAYOUT only).
+    // semaphore handed to each untilizer core (TILE_LAYOUT only).  Single source of truth: passed
+    // to the reader_combine and writer_untilize kernels as a compile-time arg (they no longer
+    // hardcode it).  Must remain a power of 2 (reader_combine masks with SLOTS_PER_UNTILIZER - 1).
     constexpr uint32_t SLOTS_PER_UNTILIZER = 16;
     // Maximum worker cores: one per fabric link.
     constexpr uint32_t MAX_WORKER_CORES = 4;
@@ -882,6 +884,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         // cb_counter_total_pages = full page capacity of c_1 on the untilizer (counter pages +
         // trailer page). Used so writer_untilize cb_wait_fronts the entire CB.
         zi_compile_time_args.push_back(detail::get_num_pages(expert_token_counts) + 1);  // cb_counter_total_pages
+        zi_compile_time_args.push_back(SLOTS_PER_UNTILIZER);  // per-untilizer ring depth on the sender's receive_buf
 
         std::map<std::string, std::string> zi_defines;
         zi_defines["IS_TILE_LAYOUT"] = is_tile_layout ? "1" : "0";
@@ -926,6 +929,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             per_sender_compile_args.push_back(k_s);  // num_untilizer_cores (per-sender)
             per_sender_compile_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_18));  // cb_untilize_id
             per_sender_compile_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_19));  // cb_metadata_buf_id
+            per_sender_compile_args.push_back(SLOTS_PER_UNTILIZER);                       // per-untilizer ring depth
         }
         CoreRangeSet single_sender_core({CoreRange(sender_cores[s])});
         tt::tt_metal::KernelDescriptor reader_kd;

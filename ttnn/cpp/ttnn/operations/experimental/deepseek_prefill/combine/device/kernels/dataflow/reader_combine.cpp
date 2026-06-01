@@ -109,6 +109,8 @@ void kernel_main() {
     constexpr uint32_t num_untilizer_cores_group = get_compile_time_arg_val(tile_layout_args_base);
     constexpr uint32_t cb_untilize_id = get_compile_time_arg_val(tile_layout_args_base + 1);
     constexpr uint32_t cb_metadata_buf_id = get_compile_time_arg_val(tile_layout_args_base + 2);
+    // Per-untilizer ring depth on the sender's receive_buf (drives the slot ring below).
+    constexpr uint32_t SLOTS_PER_UNTILIZER = get_compile_time_arg_val(tile_layout_args_base + 3);
 #endif
 
     // ===== Runtime Args =====
@@ -177,7 +179,6 @@ void kernel_main() {
     // Both the wait-side L1 ptr (on this sender) and the inc-side NOC address (on untilizer)
     // refer to the same logical sem; pair-scoped allocation guarantees the L1 offset is
     // identical on both cores.
-    constexpr uint32_t SLOTS_PER_UNTILIZER = 16;
     volatile tt_l1_ptr uint32_t* data_ready_sem_ptrs[num_untilizer_cores_group];
     uint64_t self_data_ready_noc_addrs[num_untilizer_cores_group];
     uint64_t untilizer_credits_noc_addrs[num_untilizer_cores_group];

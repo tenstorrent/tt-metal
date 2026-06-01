@@ -103,6 +103,7 @@ void kernel_main() {
     //  +12: full_ct_dim                           - hidden_size / tile_width (tiles per batch, for start_page_tiled)
     //  +13: cb_counter_total_pages                - full page capacity of c_1 (counter + trailer);
     //                                              used for cb_wait_front on the multicasted CB
+    //  +14: SLOTS_PER_UNTILIZER                    - per-untilizer ring depth on the sender's receive_buf
     constexpr uint32_t cb_untilize_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset());
     constexpr uint32_t cb_experts_tok_counter_id =
         get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 1);
@@ -124,6 +125,7 @@ void kernel_main() {
     constexpr uint32_t full_ct_dim = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 12);
     constexpr uint32_t cb_counter_total_pages =
         get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 13);
+    constexpr uint32_t SLOTS_PER_UNTILIZER = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 14);
     constexpr uint32_t counter_data_total_size = experts_tok_counter_pages * aligned_experts_tok_counter_page_size;
     // read_batch_size doubles as tile_height: one tile-row of input -> read_batch_size element rows.
     constexpr uint32_t tile_height = read_batch_size;
@@ -145,7 +147,6 @@ void kernel_main() {
     //                                  group; used to pick our k_s-way slice of receive_buf.
     //   num_untilizer_cores               - k_s, size of the owning sender's untilizer group (for round-robin)
     //   expert_start_idx / expert_end_idx - expert range owned by the sender (drives batch iteration)
-    constexpr uint32_t SLOTS_PER_UNTILIZER = 16;
     uint32_t counter_ready_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t sender_noc_x = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t sender_noc_y = get_arg_val<uint32_t>(rt_args_idx++);
