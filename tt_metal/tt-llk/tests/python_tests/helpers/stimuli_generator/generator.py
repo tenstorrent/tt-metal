@@ -181,12 +181,12 @@ def _generate_source_tensor(
             f"(uniform, gaussian, saw, …) instead."
         )
 
-    gen = _make_generator(spec)
     if strategy.short_circuit:
         tensor = strategy.generate_full_tensor(
-            spec, stimuli_format, num_elements, input_dimensions, gen
+            spec, stimuli_format, num_elements, input_dimensions, None
         )
     else:
+        gen = _make_generator(spec)
         tensor = _run_face_loop(spec, stimuli_format, face_r_dim, num_elements, gen)
 
     if stimuli_format == DataFormat.Bfp4_b:

@@ -32,6 +32,16 @@ def _get_dtype_for_format(stimuli_format: DataFormat) -> torch.dtype:
     return format_dict[stimuli_format]
 
 
+_INTEGER_FORMAT_DTYPE: Dict[DataFormat, torch.dtype] = {
+    DataFormat.Int8: torch.int8,
+    DataFormat.UInt8: torch.uint8,
+    DataFormat.Int16: torch.int16,
+    DataFormat.UInt16: torch.uint16,
+    DataFormat.Int32: torch.int32,
+    DataFormat.UInt32: torch.uint32,
+}
+
+
 def _get_integer_bounds(stimuli_format: DataFormat) -> tuple[int, int]:
     """Return the valid integer range (min, max) inclusive for *stimuli_format*.
 
@@ -39,19 +49,10 @@ def _get_integer_bounds(stimuli_format: DataFormat) -> tuple[int, int]:
     integer paths use sign-magnitude encoding, and the INT_MIN bit pattern cannot
     be represented correctly in that scheme.
     """
-    integer_format_dtype: Dict[DataFormat, torch.dtype] = {
-        DataFormat.Int8: torch.int8,
-        DataFormat.UInt8: torch.uint8,
-        DataFormat.Int16: torch.int16,
-        DataFormat.UInt16: torch.uint16,
-        DataFormat.Int32: torch.int32,
-        DataFormat.UInt32: torch.uint32,
-    }
-
-    if stimuli_format not in integer_format_dtype:
+    if stimuli_format not in _INTEGER_FORMAT_DTYPE:
         raise ValueError(f"Unsupported integer format: {stimuli_format}")
 
-    dtype = integer_format_dtype[stimuli_format]
+    dtype = _INTEGER_FORMAT_DTYPE[stimuli_format]
     info = torch.iinfo(dtype)
     lo = info.min + 1 if info.min < 0 else info.min
     return lo, info.max

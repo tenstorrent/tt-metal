@@ -76,5 +76,19 @@ _STRATEGIES: Dict[DistributionKind, DistributionStrategy] = {
 
 
 def lookup_strategy(kind: DistributionKind) -> DistributionStrategy:
-    """Return the strategy registered for *kind*."""
-    return _STRATEGIES[kind]
+    """Return the strategy registered for *kind*.
+
+    Raises:
+        KeyError: If no strategy is registered for *kind* (e.g. a new
+            DistributionKind member was added without a matching entry in
+            _STRATEGIES).
+    """
+    try:
+        return _STRATEGIES[kind]
+    except KeyError:
+        registered = sorted(k.name for k in _STRATEGIES)
+        raise KeyError(
+            f"No strategy registered for distribution {kind!r}. "
+            f"Add it to _STRATEGIES in strategies/__init__.py. "
+            f"Currently registered: {registered}"
+        ) from None

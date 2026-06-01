@@ -363,7 +363,13 @@ def for_op(
     if distribution_a is not None:
         _validate_distribution_override(distribution_a, result.spec_A)
         result.spec_A.distribution = distribution_a
-    if distribution_b is not None and result.spec_B is not None:
+    if distribution_b is not None:
+        if result.spec_B is None:
+            raise ValueError(
+                f"distribution_b={distribution_b!r} was given but "
+                f"MathOperation.{op.name} has no spec_B (single-operand op). "
+                f"Drop distribution_b, or override distribution_a instead."
+            )
         _validate_distribution_override(distribution_b, result.spec_B)
         result.spec_B.distribution = distribution_b
 
@@ -382,11 +388,18 @@ def _validate_distribution_override(
       - distribution must be a DistributionKind member or a callable
       - LOG_UNIFORM / LOG_UNIFORM_LINSPACE requires strictly positive bounds
         across spec.low/spec.high or every interval in spec.intervals
+      - GAUSSIAN_LINSPACE does not support spec.intervals at all
     """
     if not (callable(distribution) or isinstance(distribution, DistributionKind)):
         raise TypeError(
             f"distribution must be DistributionKind or callable, got "
             f"{type(distribution).__name__!r}: {distribution!r}"
+        )
+
+    if distribution == DistributionKind.GAUSSIAN_LINSPACE and spec.intervals:
+        raise ValueError(
+            f"Cannot override to GAUSSIAN_LINSPACE: spec carries intervals "
+            f"{spec.intervals!r}, which gaussian_linspace does not support."
         )
 
     if distribution in (

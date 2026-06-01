@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
+import functools
 from typing import List, Optional
 
 import torch
@@ -152,6 +153,7 @@ class IdentityStrategy:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+@functools.lru_cache(maxsize=None)
 def _enumerate_representable(
     stimuli_format: DataFormat,
     low: float,
@@ -163,6 +165,9 @@ def _enumerate_representable(
     Iterates every 2^16 bit pattern, reinterprets as the target dtype, keeps
     finite values inside [low, high], then sorts, deduplicates (-0.0 == +0.0),
     and clips to max_elements.
+
+    Cached: repeated calls with the same inputs return the same saved tensor.
+    Do not modify the returned tensor in place.
     """
     if stimuli_format == DataFormat.Float16_b:
         dtype = torch.bfloat16
@@ -222,7 +227,10 @@ class UlpSweepStrategy:
         input_dimensions: Optional[List[int]],
         generator: Optional[torch.Generator],
     ) -> torch.Tensor:
-        vals = _enumerate_representable(stimuli_format, spec.low, spec.high)
+        # Clone the cached tensor — the slice in the `n >= num_elements` branch
+        # below returns a view, which could leak the cache to a caller that
+        # then mutates it. Cloning here makes the downstream slice safe.
+        vals = _enumerate_representable(stimuli_format, spec.low, spec.high).clone()
         n = vals.numel()
         if n >= num_elements:
             return vals[:num_elements]
