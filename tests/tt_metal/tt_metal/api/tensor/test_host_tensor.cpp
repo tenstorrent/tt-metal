@@ -13,14 +13,18 @@
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
 
+#include <algorithm>
 #include <type_traits>
+#include <vector>
 
 #include <tt-metalium/experimental/tensor/host_tensor.hpp>
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
+#include <tt-metalium/experimental/tensor/tensor_apis.hpp>
 #include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
+#include <tt-metalium/float8.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/shape.hpp>
 
@@ -292,6 +296,120 @@ TEST(HostTensorTest, IsValuelessAfterMoveReturnsTrueAfterMoveAssignment) {
 
     EXPECT_TRUE(source.is_valueless_after_move());  // NOLINT(bugprone-use-after-move)
     EXPECT_FALSE(target.is_valueless_after_move());
+}
+
+// FP8_E4M3 host-side tensor operations.
+//
+// FP8 support in tt-metal tensor infra is intentionally limited (only what the DeepSeek V3
+// Prefill combine op needs today). These tests pin that contract on the host side:
+//   - to_layout: ROW_MAJOR is the only supported layout; any other target throws.
+//   - to_dtype: only FP8 <-> FLOAT32 is wired up; other cross-type conversions throw.
+//   - pad / unpad: not wired up, both throw.
+
+HostTensor make_fp8_host_tensor(const Shape& shape, std::vector<float8_e4m3> data) {
+    auto spec = create_simple_spec(shape, DataType::FP8_E4M3);
+    HostBuffer host_buffer(std::move(data));
+    return HostTensor(std::move(host_buffer), std::move(spec), TensorTopology());
+}
+
+TEST(HostTensorFp8Test, ToLayoutRowMajorIsNoOp) {
+    Shape shape{2, 32};
+    auto tensor = make_fp8_host_tensor(shape, std::vector<float8_e4m3>(shape.volume(), float8_e4m3(0.5f)));
+    auto out = to_layout(tensor, Layout::ROW_MAJOR);
+
+    EXPECT_EQ(out.dtype(), DataType::FP8_E4M3);
+    EXPECT_EQ(out.layout(), Layout::ROW_MAJOR);
+    EXPECT_EQ(out.logical_shape(), shape);
+}
+
+TEST(HostTensorFp8Test, ToLayoutToTileThrows) {
+    Shape shape{2, 32};
+    auto tensor = make_fp8_host_tensor(shape, std::vector<float8_e4m3>(shape.volume(), float8_e4m3(0.5f)));
+    EXPECT_ANY_THROW(to_layout(tensor, Layout::TILE));
+}
+
+TEST(HostTensorFp8Test, ToDtypeFp8ToFp8IsNoOp) {
+    Shape shape{2, 32};
+    auto tensor = make_fp8_host_tensor(shape, std::vector<float8_e4m3>(shape.volume(), float8_e4m3(0.5f)));
+    auto out = to_dtype(tensor, DataType::FP8_E4M3);
+
+    EXPECT_EQ(out.dtype(), DataType::FP8_E4M3);
+    EXPECT_EQ(out.layout(), Layout::ROW_MAJOR);
+    EXPECT_EQ(out.logical_shape(), shape);
+}
+
+TEST(HostTensorFp8Test, ToDtypeFp8ToFloat32Succeeds) {
+    Shape shape{1, 8};
+    // All values below are exactly representable in FP8 E4M3 so the FP8 round-trip is lossless.
+    std::vector<float> float_data{0.0f, 0.5f, 1.0f, 2.0f, -1.0f, -2.0f, 4.0f, -0.5f};
+    std::vector<float8_e4m3> fp8_data(float_data.size());
+    std::transform(float_data.begin(), float_data.end(), fp8_data.begin(), [](float v) { return float8_e4m3(v); });
+
+    auto tensor = make_fp8_host_tensor(shape, std::move(fp8_data));
+    auto out = to_dtype(tensor, DataType::FLOAT32);
+
+    EXPECT_EQ(out.dtype(), DataType::FLOAT32);
+    EXPECT_EQ(out.layout(), Layout::ROW_MAJOR);
+    EXPECT_EQ(out.logical_shape(), shape);
+
+    auto out_data = host_buffer::get_as<const float>(out);
+    ASSERT_EQ(out_data.size(), float_data.size());
+    for (size_t i = 0; i < float_data.size(); ++i) {
+        EXPECT_FLOAT_EQ(out_data[i], float_data[i]);
+    }
+}
+
+TEST(HostTensorFp8Test, ToDtypeFloat32ToFp8RoundTripsCleanly) {
+    Shape shape{1, 8};
+    std::vector<float> data{0.0f, 0.5f, 1.0f, 2.0f, -1.0f, -2.0f, 4.0f, -0.5f};
+    auto spec = create_simple_spec(shape, DataType::FLOAT32);
+    HostBuffer host_buffer(data);
+    HostTensor tensor(std::move(host_buffer), std::move(spec), TensorTopology());
+
+    auto fp8_tensor = to_dtype(tensor, DataType::FP8_E4M3);
+    EXPECT_EQ(fp8_tensor.dtype(), DataType::FP8_E4M3);
+    EXPECT_EQ(fp8_tensor.layout(), Layout::ROW_MAJOR);
+    EXPECT_EQ(fp8_tensor.logical_shape(), shape);
+
+    auto round_trip = to_dtype(fp8_tensor, DataType::FLOAT32);
+    auto round_trip_data = host_buffer::get_as<const float>(round_trip);
+    ASSERT_EQ(round_trip_data.size(), data.size());
+    for (size_t i = 0; i < data.size(); ++i) {
+        EXPECT_FLOAT_EQ(round_trip_data[i], data[i]);
+    }
+}
+
+TEST(HostTensorFp8Test, ToDtypeFp8ToBfloat16Throws) {
+    Shape shape{1, 8};
+    auto tensor = make_fp8_host_tensor(shape, std::vector<float8_e4m3>(shape.volume(), float8_e4m3(0.5f)));
+    EXPECT_ANY_THROW(to_dtype(tensor, DataType::BFLOAT16));
+}
+
+TEST(HostTensorFp8Test, ToDtypeFp8ToUInt32Throws) {
+    Shape shape{1, 8};
+    auto tensor = make_fp8_host_tensor(shape, std::vector<float8_e4m3>(shape.volume(), float8_e4m3(0.5f)));
+    EXPECT_ANY_THROW(to_dtype(tensor, DataType::UINT32));
+}
+
+TEST(HostTensorFp8Test, ToDtypeBfloat16ToFp8Throws) {
+    Shape shape{1, 8};
+    auto spec = create_simple_spec(shape, DataType::BFLOAT16);
+    HostBuffer host_buffer(std::vector<bfloat16>(shape.volume(), bfloat16(0.5f)));
+    HostTensor tensor(std::move(host_buffer), std::move(spec), TensorTopology());
+
+    EXPECT_ANY_THROW(to_dtype(tensor, DataType::FP8_E4M3));
+}
+
+TEST(HostTensorFp8Test, PadThrows) {
+    Shape shape{1, 8};
+    auto tensor = make_fp8_host_tensor(shape, std::vector<float8_e4m3>(shape.volume(), float8_e4m3(0.5f)));
+    EXPECT_ANY_THROW(pad(tensor, Shape{1, 16}, Shape{0, 0}, /*pad_value=*/0.0f));
+}
+
+TEST(HostTensorFp8Test, UnpadThrows) {
+    Shape shape{1, 16};
+    auto tensor = make_fp8_host_tensor(shape, std::vector<float8_e4m3>(shape.volume(), float8_e4m3(0.5f)));
+    EXPECT_ANY_THROW(unpad(tensor, Shape{0, 0}, Shape{1, 8}));
 }
 
 }  // namespace
