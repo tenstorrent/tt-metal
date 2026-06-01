@@ -21,12 +21,20 @@ MAX_SEQ_LEN = 2048
 REPO_ROOT = Path(__file__).resolve().parents[5]  # .../tt-metal
 
 
-def build_completer(*, dummy_weights: bool, max_batch_size: int = 1, max_seq_len: int = MAX_SEQ_LEN):
+def build_completer(
+    *,
+    dummy_weights: bool,
+    max_batch_size: int = 1,
+    max_seq_len: int = MAX_SEQ_LEN,
+    model_source: str = MODEL_ID,
+    instruct: bool = True,
+):
     """Construct a fresh ``LlamaGRPOCompleter``.
 
     Heavy: opens a device and (when ``dummy_weights=False``) loads real
-    Llama-3.2-1B-Instruct weights via HF auth. Tests should call this
-    from a module-scoped fixture so the cost is paid once per file.
+    HF weights for ``model_source`` (default Llama-3.2-1B-Instruct).
+    Tests should call this from a module-scoped fixture so the cost is
+    paid once per file.
     """
     from ttml.common.config import DeviceConfig, load_config
 
@@ -36,9 +44,10 @@ def build_completer(*, dummy_weights: bool, max_batch_size: int = 1, max_seq_len
     device_config = DeviceConfig(raw)
     return LlamaGRPOCompleter(
         device_config=device_config,
-        model_source=MODEL_ID,
+        model_source=model_source,
         max_batch_size=max_batch_size,
         max_seq_len=max_seq_len,
+        instruct=instruct,
         dummy_weights=dummy_weights,
     )
 
