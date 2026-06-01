@@ -274,6 +274,23 @@ def _resolve_model_path(variant_name: str) -> Path:
     return get_or_download_model(v, layer_idx=0, num_layers=v.num_layers_to_download)
 
 
+def _unwrap_multimodal_config(cfg):
+    # Kimi K2.5/K2.6 ship a multimodal wrapper config; the LM fields the rest of the
+    # code reads (hidden_size, n_routed_experts, etc.) live under `text_config`.
+    if hasattr(cfg, "text_config") and hasattr(cfg.text_config, "hidden_size"):
+        logger.info(f"Unwrapping multimodal wrapper config (inner model_type={cfg.text_config.model_type})")
+        cfg = cfg.text_config
+    # DSv3's dequant helper eagerly reads `quantization_config.weight_block_size`. When pointing
+    # at an already-dequantized Kimi checkpoint the safetensors carry only plain `.weight` keys
+    # (no `_scale_inv`), so the block path is unused — but the up-front read still fires. Stub
+    # a placeholder so the plain-weight branch runs unimpeded.
+    qc = getattr(cfg, "quantization_config", None)
+    if isinstance(qc, dict) and not qc.get("weight_block_size"):
+        qc["weight_block_size"] = [128, 128]
+        logger.info("Stubbed quantization_config.weight_block_size for pre-dequantized checkpoint")
+    return cfg
+
+
 @lru_cache(maxsize=None)
 def _resolve_config_only(variant_name: str):
     v = TEST_VARIANTS[variant_name]
@@ -288,11 +305,11 @@ def _resolve_config_only(variant_name: str):
     for p in candidates:
         if (p / "config.json").exists():
             logger.info(f"Using config from {p}")
-            return AutoConfig.from_pretrained(str(p), trust_remote_code=True)
+            return _unwrap_multimodal_config(AutoConfig.from_pretrained(str(p), trust_remote_code=True))
     logger.info(f"Config not found locally. Downloading {v.hf_repo_id} config-only from HuggingFace...")
     cache_dir = Path(os.getenv("HF_HOME", Path.home() / ".cache" / "huggingface"))
     config_path = download_model_config_only(v, cache_dir)
-    return AutoConfig.from_pretrained(str(config_path), trust_remote_code=True)
+    return _unwrap_multimodal_config(AutoConfig.from_pretrained(str(config_path), trust_remote_code=True))
 
 
 @lru_cache(maxsize=None)

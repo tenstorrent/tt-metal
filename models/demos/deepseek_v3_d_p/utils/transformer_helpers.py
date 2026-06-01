@@ -459,7 +459,9 @@ def load_and_compute_layer_by_layer(
 
         logger.info(f"Creating empty {variant.reference_model_cls.__name__} for reference computation...")
         with no_init_weights():
-            hf_model = variant.reference_model_cls(test_config)
+            # `.eval()` is required: Kimi's vendored MoE gate asserts `not self.training` in
+            # `noaux_tc` mode (modeling_deepseek.py:395). nn.Module defaults to training=True.
+            hf_model = variant.reference_model_cls(test_config).eval()
         _log_memory("After creating HF model structure")
 
         # Setup forward pass inputs

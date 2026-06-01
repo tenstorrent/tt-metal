@@ -137,10 +137,6 @@ def run_model(
     if use_pretrained and not variant.supports_pretrained:
         pytest.skip(f"{variant.name}: pretrained weights not wired")
 
-    # Skip invalid pretrained combinations
-    if use_pretrained and n_routed_experts != 256:
-        pytest.skip("Pretrained weights only available for 256 experts")
-
     profiler.clear()
     profiler.start("total_test_time")
     config.max_seq_len = isl_total
@@ -179,7 +175,7 @@ def run_model(
     profiler.start("cache_check")
 
     # Check cache states
-    experts_per_chip = 256 // (mesh_shape[0] * mesh_shape[1]) if use_pretrained else 8
+    experts_per_chip = n_routed_experts // (mesh_shape[0] * mesh_shape[1]) if use_pretrained else 8
     ttnn_cache_complete = (
         TtPrefillTransformer.check_cache_complete(effective_cache_path, num_layers, experts_per_chip)
         if effective_cache_path

@@ -102,7 +102,6 @@ KIMI = TestVariant(
     weight_cache_prefix="kimi_k26",
     ref_cache_env="TT_KIMI_PREFILL_HOST_REF_CACHE",
     mla_ref_cache_env="KIMI_MLA_REF_CACHE",
-    supports_pretrained=False,
     mla_pcc_threshold=0.995,
     moe_pcc_threshold=0.987,
 )
