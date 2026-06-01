@@ -71,6 +71,10 @@ pytest models/tt_dit/tests/models/ltx/test_pipeline_ltx_av.py -k "wh_lb_2x4sp0tp
 
 # Video-only smoke (random weights, no checkpoint)
 pytest models/tt_dit/tests/models/ltx/test_pipeline_ltx.py -k "test_pipeline_denoising_loop" -v
+
+# Consolidated audio test suites
+pytest models/tt_dit/tests/models/ltx/test_audio_components_ltx.py \
+  models/tt_dit/tests/models/ltx/test_audio_integration_ltx.py -q
 ```
 
 Override generation settings with environment variables: `PROMPT`, `NUM_FRAMES`, `HEIGHT`, `WIDTH`, `NUM_STEPS`, `SEED`, `OUTPUT_PATH`.
@@ -114,6 +118,7 @@ While output can match the CPU reference at PSNR 21–24 dB for AV video, severa
 - Denoise loop keeps latents on host: per-step H2D/D2H, host CFG/Euler, host per-head gate (see `HOST_OPS.md`)
 - Pro AV runs up to 4 serial transformer forwards per denoising step (CFG + STG + modality)
 - Matmul and Conv3D blocking tables are incomplete for LTX shapes (fallback defaults in logs)
+- Audio vocoder sharding tests are not part of the default consolidated audio suite; 2D T-sharding on `2x4` is currently unsupported.
 - Performance optimization is ongoing
 
 ## Developer Documentation

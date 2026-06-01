@@ -576,11 +576,6 @@ class LTXConvTranspose1d(Module):
         return y
 
 
-def _get_padding(kernel_size: int, dilation: int = 1) -> int:
-    """Same-pad amount for odd kernels."""
-    return int((kernel_size * dilation - dilation) / 2)
-
-
 class LTXDilatedConv1d(_AlignedOutConv1d):
     """Dilated 1D conv that passes ``dilation`` straight to ``ttnn.experimental.conv3d``.
 
