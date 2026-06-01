@@ -16,6 +16,7 @@ from models.experimental.seamless_m4t_v2_large.tt.common import (
     build_ln_sharded_config,
     dram_linear_input_mem_config,
     dram_matmul_program_config,
+    encoder_tp_block_sharded_matmul,
     ensure_interleaved_bsh,
     ensure_l1_width_sharded_activation,
     sdpa_program_config,
@@ -465,7 +466,40 @@ class TTSeamlessM4Tv2Encoder:
         Used when weights are ``ShardTensorToMesh`` distributed across devices.
         Each device computes a local partial result; the caller applies
         ``all_reduce_sum_replicate`` after row-parallel layers.
+
+        For the hot per-device shapes (QKV / out_proj / fc1 / fc2 at M=batch*seq) this uses
+        the tuned 2D block-sharded program config (see ``encoder_tp_block_sharded_matmul`` /
+        ``test_matmul_perf_report_sweep.py``), which is 10-27x faster than the ttnn default.
+        The TP activations are already L1-resident, so the interleaved->block reshard is a
+        cheap L1 op; output is resharded back to interleaved to preserve this method's
+        contract (interleaved in, interleaved out).
         """
+        k = int(weight.shape[-2])
+        n = int(weight.shape[-1])
+        m = self._linear_token_rows(x)
+        fused_activation = ttnn.UnaryOpType.RELU if activation == "relu" else None
+        tuned = encoder_tp_block_sharded_matmul(self.device, m, k, n, fused_activation=fused_activation)
+        if tuned is not None:
+            program_config, in0_mem, out_mem = tuned
+            x2d = x if len(x.shape) == 2 else ttnn.reshape(x, (m, k))
+            x_bs = ttnn.to_memory_config(x2d, in0_mem)
+            if x2d is not x:
+                ttnn.deallocate(x2d)
+            out_bs = ttnn.linear(
+                x_bs,
+                weight,
+                bias=bias,
+                program_config=program_config,
+                memory_config=out_mem,
+                compute_kernel_config=self._linear_ln_compute_cfg,
+            )
+            ttnn.deallocate(x_bs)
+            out = ttnn.sharded_to_interleaved(out_bs, memory_config, output_dtype=ttnn.bfloat16)
+            ttnn.deallocate(out_bs)
+            if len(x.shape) >= 3:
+                out = ttnn.reshape(out, (int(x.shape[0]), int(x.shape[1]), n))
+            return out
+
         kwargs = {}
         if activation == "relu":
             kwargs["activation"] = "relu"
