@@ -378,10 +378,14 @@ void kernel_main() {
         socket_notify_sender(socket);
     }
 
-    // Drain the posted pages_sent atomic increments left outstanding by
-    // prefetcher_finalize_block<skip_ptr_update=true>, then restore NoC2AXI mode.
-    // (No config writeback here: cross-request fifo_wr_ptr persistence is handled
-    // per-request by store_sender_state into the GCB's DramSenderStateBlock.)
-    noc_async_atomic_barrier();
+    // Restore NoC2AXI mode. No NoC drain is needed here: the stream is already
+    // flushed end-to-end by the remote_cb_sender_barrier at the stop sentinel, which
+    // spins until every receiver's pages_acked == pages_sent -- and the receiver can
+    // only ack pages whose posted pages_sent atomics and data writes have already
+    // landed. The pages_sent increments are posted (noc_semaphore_inc<skip_ptr_update=
+    // true>), so a noc_async_atomic_barrier would do nothing anyway: it waits on
+    // non-posted atomics, of which this kernel issues none. (Cross-request fifo_wr_ptr
+    // persistence is handled per-request by store_sender_state, not by a config
+    // writeback here.)
     experimental::drisc_set_noc2axi_mode();
 }
