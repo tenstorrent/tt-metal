@@ -109,10 +109,49 @@ uint32_t mux_worker_cap() {
     }();
     return cap;
 }
+// Diagnostic override: WAN_RMSNORM_INPUT_CB_CHUNKS dials how many chunks deep
+// the input_cb is buffered (default 2 = Phase-5 double-buffer). Deeper buffering
+// lets the reader run further ahead of compute, keeping more DRAM input reads
+// outstanding (the read path runs well below peak because the reader stalls on
+// input_cb space once it is ~2 chunks ahead). Read once, clamped to [2, 8].
+uint32_t input_cb_chunks() {
+    static const uint32_t d = [] {
+        const char* env = std::getenv("WAN_RMSNORM_INPUT_CB_CHUNKS");
+        if (env != nullptr) {
+            const long v = std::strtol(env, nullptr, 10);
+            if (v >= 2 && v <= 8) {
+                return static_cast<uint32_t>(v);
+            }
+        }
+        return 2u;
+    }();
+    return d;
+}
+// Diagnostic override: WAN_RMSNORM_FORCE_WORKERS pins the exact worker count
+// (still capped by num_tile_rows so we never over-provision). Lets a perf sweep
+// push small shapes PAST the rows/2 heuristic to test whether more parallelism
+// keeps shrinking the latency-bound wall. Read once.
+uint32_t force_num_workers() {
+    static const uint32_t v = [] {
+        const char* env = std::getenv("WAN_RMSNORM_FORCE_WORKERS");
+        if (env != nullptr) {
+            const long n = std::strtol(env, nullptr, 10);
+            if (n > 0) {
+                return static_cast<uint32_t>(n);
+            }
+        }
+        return 0u;
+    }();
+    return v;
+}
 uint32_t pick_num_workers_tp_gt_1(uint32_t num_tile_rows) {
     const uint32_t cap = mux_worker_cap();
     if (num_tile_rows < kMuxRowsThreshold) {
         return 1u;
+    }
+    const uint32_t forced = force_num_workers();
+    if (forced > 0u) {
+        return std::min<uint32_t>(forced, num_tile_rows);
     }
     if (num_tile_rows <= kSmallShapeRowsLimit) {
         return std::min<uint32_t>(cap, num_tile_rows);
@@ -447,7 +486,7 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     // current chunk, and cb_pop_front at end of chunk frees that chunk's slots
     // back to the reader.
     const uint32_t chunk_input_tiles = chunk_size_rows * num_tile_cols;
-    const uint32_t input_cb_tiles = 2 * chunk_input_tiles;
+    const uint32_t input_cb_tiles = input_cb_chunks() * chunk_input_tiles;
     create_cb(input_cb_id, program, worker_core_set, input_tile_size, input_cb_tiles, input_format);
 
     // per_head_norm produces num_heads_per_device stat tiles per row instead
