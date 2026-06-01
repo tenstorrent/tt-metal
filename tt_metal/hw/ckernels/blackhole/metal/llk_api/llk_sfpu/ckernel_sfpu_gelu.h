@@ -15,8 +15,7 @@
 #include "sfpu/ckernel_sfpu_load_config.h"
 #include "sfpi.h"
 
-namespace ckernel {
-namespace sfpu {
+namespace ckernel::sfpu {
 
 // =============================================================================
 // Fused x * exp(t) for GELU negative tail - avoids intermediate underflow
@@ -91,60 +90,6 @@ sfpi_inline sfpi::vFloat x_times_exp_negative_tail(sfpi::vFloat x, sfpi::vFloat 
     // Step 6: FTZ check on FINAL result (x * exp(t)), not intermediate exp(t)
     sfpi::vFloat result = sfpi::vConst0;
     v_if(new_exp > 0) { result = sfpi::setexp(x_poly, new_exp); }
-    v_endif;
-
-    return result;
-}
-
-// =============================================================================
-// Original GELU implementation (preserved)
-// =============================================================================
-
-#define POLYVAL15(c15, c14, c13, c12, c11, c10, c9, c8, c7, c6, c5, c4, c3, c2, c1, c0, x)                         \
-    (((((((((((((((c15) * (x) + (c14)) * (x) + (c13)) * (x) + (c12)) * (x) + (c11)) * (x) + (c10)) * (x) + (c9)) * \
-                (x) +                                                                                              \
-            (c8)) *                                                                                                \
-               (x) +                                                                                               \
-           (c7)) *                                                                                                 \
-              (x) +                                                                                                \
-          (c6)) *                                                                                                  \
-             (x) +                                                                                                 \
-         (c5)) *                                                                                                   \
-            (x) +                                                                                                  \
-        (c4)) *                                                                                                    \
-           (x) +                                                                                                   \
-       (c3)) *                                                                                                     \
-          (x) +                                                                                                    \
-      (c2)) *                                                                                                      \
-         (x) +                                                                                                     \
-     (c1)) * (x) +                                                                                                 \
-        (c0)
-
-inline sfpi::vFloat calculate_gelu_chebyshev(sfpi::vFloat val) {
-    sfpi::vFloat result = 0.0f;
-    v_if(val >= -5.5f) {
-        result = POLYVAL15(
-            -1.81205228163e-09,
-            -4.59055119276e-08,
-            -3.74540617693e-07,
-            -2.29754133825e-07,
-            1.19076782913e-05,
-            4.25116466215e-05,
-            -0.000138391838381,
-            -0.000862052441087,
-            0.000768340223025,
-            0.0092074331601,
-            -0.00208478037614,
-            -0.0656369476513,
-            0.00244542739174,
-            0.398579460781,
-            0.499174645395,
-            2.98325768482e-05,
-            val);
-
-        // Ensure result has the same sign as input using copysgn
-        result = copysgn(result, val);
-    }
     v_endif;
 
     return result;
@@ -269,24 +214,13 @@ void gelu_init() {
     if constexpr (APPROXIMATION_MODE) {
         sfpi::vConstFloatPrgm0 = 0.5f;
 
-        // // >= 3.0f
-        // lreg2_hi=0.50;//3800
-        // lreg6_hi=0.0f;//7c00
-        // // 2.0f -> 3.0f
-        // lreg2_lo= 0.5402f;//3852
-        // lreg6_lo= -0.1194f;//AFA4
-        // // 1.5f -> 2.0f
-        // lreg1_hi= .6099f; //38E1
-        // lreg5_hi= -.2635f; //B437
-        // // 1.0f -> 1.5f
-        // lreg1_lo=0.6189;//38F3
-        // lreg5_lo=-.2797;//B479
-        // // 0.5f -> 1.0f
-        // lreg0_hi=.4939f;//37E7
-        // lreg4_hi=-.1605f;//B122
-        // // 0.0f -> 0.5f
-        // lreg0_lo=0.1928f;//322B
-        // lreg4_lo=-0.0150f;//A3AE
+        // LUT segments (6-entry piecewise linear, each hi/lo pair packed into one imm32):
+        // [0.0, 0.5): slope=0.1928, intercept=-0.0150  (lreg0)
+        // [0.5, 1.0): slope=0.4939, intercept=-0.1605  (lreg0 hi / lreg4 hi)
+        // [1.0, 1.5): slope=0.6189, intercept=-0.2797  (lreg1)
+        // [1.5, 2.0): slope=0.6099, intercept=-0.2635  (lreg1 hi / lreg5 hi)
+        // [2.0, 3.0): slope=0.5402, intercept=-0.1194  (lreg2)
+        // [3.0, ∞):   slope=0.5,    intercept=0.0      (lreg2 hi / lreg6 hi)
         _sfpu_load_imm32_(0, 0x37E7322B);
         _sfpu_load_imm32_(4, 0xB12286D8);
 
@@ -297,70 +231,6 @@ void gelu_init() {
         _sfpu_load_imm32_(6, 0x7c00afa4);
     }
     // Accurate mode: no init needed (correction polynomial replaces reciprocal)
-}
-
-template <bool APPROXIMATION_MODE>
-void gelu_derivative_init() {
-    std::uint32_t imm0;
-    std::uint32_t imm1;
-    std::uint32_t imm2;
-    std::uint32_t imm3;
-    std::uint32_t imm4;
-    std::uint32_t imm5;
-
-    if constexpr (APPROXIMATION_MODE) {
-        // Using a 6 piece LUT to calculate and model gelu_derivative directly
-        // x <= 0.5 --> 0.8x + 0.5
-        // x <= 1.0 --> 0.4x + 0.7
-        // x <= 1.5 --> 0.1x + 0.99
-        // x <= 2.0 --> -0.09x + 1.27
-        // x <= 3.0 --> -0.075x + 1.235
-        // x >  3.0 --> 1.0
-        // imm0[15:0] = A0=0.8    = 0x3A66 -- imm0[31:16] = A1=0.4   = 0x3666
-        imm0 = 0x36663A66;
-        // imm1[15:0] = A2=0.1    = 0x2E66 -- imm1[31:16] = A3=-0.09 = 0xADC3
-        imm1 = 0xADC32E66;
-        // imm2[15:0] = A4=-0.075 = 0xACCD -- imm2[31:16] = A5=0     = 0x7C00
-        imm2 = 0x7C00ACCD;
-        // imm3[15:0] = B0=0.5    = 0x3800 -- imm3[31:16] = B1=0.7   = 0x399A
-        imm3 = 0x399A3800;
-        // imm4[15:0] = B2=0.99   = 0x3BEC -- imm4[31:16] = B3=1.27  = 0x3D14
-        imm4 = 0x3D143BEC;
-        // imm5[15:0] = B4=1.235  = 0x3CF1 -- imm5[31:16] = B5=1.0   = 0x3C00
-        imm5 = 0x3C003CF1;
-        _sfpu_load_imm32_(0, imm0);
-        _sfpu_load_imm32_(1, imm1);
-        _sfpu_load_imm32_(2, imm2);
-        _sfpu_load_imm32_(4, imm3);
-        _sfpu_load_imm32_(5, imm4);
-        _sfpu_load_imm32_(6, imm5);
-    } else {
-        // Initialisation for use of _calculate_exponential_body_<false>.
-        exp_init<false, 0x3F800000>();
-
-        imm0 = 0x28FF;
-        imm1 = 0x3020;
-        _sfpu_load_imm16_(0, imm0);
-        _sfpu_load_imm16_(1, imm1);
-    }
-}
-
-template <bool APPROXIMATION_MODE>
-inline sfpi::vFloat calculate_gelu_core(sfpi::vFloat in) {
-    // SFPU microcode:
-    // result = (APPROX_MODE == 1)
-    //   ? (1 + erf(x/sqrt(2)))
-    //   : (1 + tanh( sqrt(2/pi) * (x + 0.044715*x^3) )
-    sfpi::vFloat result;
-    if constexpr (APPROXIMATION_MODE) {
-        result = in;
-    } else {
-        // f = (0.044715*x^3 + x)
-        result = (in * in) * (in * sfpi::sFloat16b(0.044715f)) + in;
-        result *= sfpi::sFloat16b(0.79788f);
-    }
-
-    return result;
 }
 
 template <int ITERATIONS>
@@ -374,15 +244,6 @@ inline void calculate_gelu_appx() {
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        // sfpi::vFloat in = sfpi::dst_reg[0];
-        // sfpi::vFloat result = calculate_gelu_core<APPROXIMATION_MODE>(in);
-
-        // sfpi::vFloat half_in = in * half;
-        // result = lut(result, l0, l1, l2);
-        // result = half_in * result + half_in;
-
-        // sfpi::dst_reg[0] = result;
-
         sfpi::vFloat in = sfpi::dst_reg[0];
         sfpi::vFloat half = sfpi::vConstFloatPrgm0;
         sfpi::vFloat half_in = in * half;
@@ -390,15 +251,7 @@ inline void calculate_gelu_appx() {
         result = half_in + result;
 
         sfpi::dst_reg[0] = result;
-
         sfpi::dst_reg++;
-
-        // sfpi::dst_reg++;
-        // TTI_SFPLOAD(3, 0, 1/*load addr mode*/,0);    // load from dest
-        ////TTI_SFPMUL(3,11,9,7,0);           // lreg7 = 0.5*lreg3
-        // TTI_SFPLUTFP32(7, 2);                // lreg7= LUT(3)
-        // TTI_SFPMAD(3,12,7,3,0);            // lreg3 = 0.5*lreg3+lregm7
-        // TTI_SFPSTORE(3, 0, 3/*store_addr_mod3*/, 0);   // and INCRWC by 4 using mode 3
     }
 
     sfpi::l_reg[sfpi::LRegs::LReg0] = l0;
@@ -407,18 +260,6 @@ inline void calculate_gelu_appx() {
     sfpi::l_reg[sfpi::LRegs::LReg4] = l4;
     sfpi::l_reg[sfpi::LRegs::LReg5] = l5;
     sfpi::l_reg[sfpi::LRegs::LReg6] = l6;
-}
-
-template <int ITERATIONS>
-inline void calculate_gelu_accurate() {
-    constexpr bool scaled = true;
-#pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat in = sfpi::dst_reg[0];
-        sfpi::vFloat result = _calculate_cdf_appx_(in, scaled);
-        sfpi::dst_reg[0] = result;
-        sfpi::dst_reg++;
-    }
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
@@ -436,66 +277,6 @@ inline void calculate_gelu() {
             sfpi::dst_reg[0] = result;
             sfpi::dst_reg++;
         }
-    }
-}
-
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_gelu_derivative() {
-    if constexpr (APPROXIMATION_MODE) {
-        constexpr int lut_mode = 1;  // SFPLUTFP32_MOD0_FP16_6ENTRY_TABLE1
-
-        sfpi::vUInt l0 = sfpi::l_reg[sfpi::LRegs::LReg0];
-        sfpi::vUInt l1 = sfpi::l_reg[sfpi::LRegs::LReg1];
-        sfpi::vUInt l2 = sfpi::l_reg[sfpi::LRegs::LReg2];
-        sfpi::vUInt l4 = sfpi::l_reg[sfpi::LRegs::LReg4];
-        sfpi::vUInt l5 = sfpi::l_reg[sfpi::LRegs::LReg5];
-        sfpi::vUInt l6 = sfpi::l_reg[sfpi::LRegs::LReg6];
-
-// SFPU microcode:
-#pragma GCC unroll 0
-        for (int d = 0; d < ITERATIONS; d++) {
-            sfpi::vFloat val = sfpi::dst_reg[0];
-            val = lut2(val, l0, l1, l2, l4, l5, l6, lut_mode);
-            v_if(val < 0.0F) { val = val + 1.0f; }
-            v_endif;
-            sfpi::dst_reg[0] = val;
-            sfpi::dst_reg++;
-        }
-
-        sfpi::l_reg[sfpi::LRegs::LReg0] = l0;
-        sfpi::l_reg[sfpi::LRegs::LReg1] = l1;
-        sfpi::l_reg[sfpi::LRegs::LReg2] = l2;
-        sfpi::l_reg[sfpi::LRegs::LReg4] = l4;
-        sfpi::l_reg[sfpi::LRegs::LReg5] = l5;
-        sfpi::l_reg[sfpi::LRegs::LReg6] = l6;
-    } else {
-        constexpr std::uint32_t imm2 = 0xFF10;
-
-        sfpi::vUInt l0 = sfpi::l_reg[sfpi::LRegs::LReg0];
-        sfpi::vUInt l1 = sfpi::l_reg[sfpi::LRegs::LReg1];
-
-// SFPU microcode:
-#pragma GCC unroll 0
-        for (int d = 0; d < ITERATIONS; d++) {
-            sfpi::vFloat in = sfpi::dst_reg[0];
-            sfpi::vFloat neg_half_sq_in = in * in * -0.5f;
-
-            // exp = e^(val)
-            sfpi::vFloat exp = _calculate_exponential_body_<false>(neg_half_sq_in);
-
-            // exp = exp * 1/sqrt(2*pi)
-            sfpi::vFloat partial = exp * in * sfpi::sFloat16b(0.3989423F);
-
-            sfpi::vFloat result = calculate_gelu_core<true>(in);
-
-            result = lut(result, l0, l1, imm2);
-
-            sfpi::dst_reg[0] = partial + result + 0.5f;
-            sfpi::dst_reg++;
-        }
-
-        sfpi::l_reg[sfpi::LRegs::LReg0] = l0;
-        sfpi::l_reg[sfpi::LRegs::LReg1] = l1;
     }
 }
 
@@ -535,7 +316,7 @@ constexpr float GELU_DERIV_H8 = 4.2734988881e-09f;
 // - Zero saturation: x <= -13.375 (GELU'(x) becomes 0 in BF16)
 // - One saturation: x >= 3.1719 (GELU'(x) becomes exactly 1 in BF16)
 // Note: GELU'(x) has a "hump" exceeding 1.0 for x in [0.77, 3.16]
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
     sfpi::vFloat result = sfpi::vConst0;  // Default: 0 for x <= -13.375
 
@@ -581,7 +362,8 @@ sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
         if constexpr (APPROXIMATION_MODE) {
             result = x_exp * INV_SQRT_2PI;
         } else {
-            sfpi::vFloat inv_x2 = _sfpu_reciprocal_<2>(x2);  // 1/x²
+            // 1 NR step suffices for BF16 (7 mantissa bits); FP32 needs 2 steps (23 bits).
+            sfpi::vFloat inv_x2 = _sfpu_reciprocal_<is_fp32_dest_acc_en ? 2 : 1>(x2);
             sfpi::vFloat inv_x4 = inv_x2 * inv_x2;           // 1/x⁴
             sfpi::vFloat correction = 1.0f - inv_x2 + inv_x4;
             result = x_exp * INV_SQRT_2PI * correction;
@@ -593,12 +375,12 @@ sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
     return result;
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = false>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_gelu_derivative_polynomial() {
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat val = sfpi::dst_reg[0];
-        sfpi::vFloat result = calculate_gelu_derivative_simple<APPROXIMATION_MODE>(val);
+        sfpi::vFloat result = calculate_gelu_derivative_simple<APPROXIMATION_MODE, is_fp32_dest_acc_en>(val);
         if constexpr (!is_fp32_dest_acc_en) {
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
         }
@@ -610,7 +392,7 @@ inline void calculate_gelu_derivative_polynomial() {
 template <bool APPROXIMATION_MODE>
 inline void gelu_derivative_polynomial_init() {
     if constexpr (!APPROXIMATION_MODE) {
-        // Call _init_sfpu_reciprocal_ directly: gelu derivative uses _sfpu_reciprocal_<2>
+        // Call _init_sfpu_reciprocal_ directly: gelu derivative uses _sfpu_reciprocal_
         // inline (not _calculate_reciprocal_internal_), so SFPLOADMACRO fast-path init is
         // not needed. On BH, _init_reciprocal_ omits _init_sfpu_reciprocal_ (it only
         // configures SFPLOADMACRO macros), so vConstFloatPrgm0=2.0f would be unset.
@@ -618,5 +400,4 @@ inline void gelu_derivative_polynomial_init() {
     }
 }
 
-}  // namespace sfpu
-}  // namespace ckernel
+}  // namespace ckernel::sfpu
