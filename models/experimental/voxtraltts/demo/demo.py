@@ -27,6 +27,9 @@ Run (from tt-metal repo root)::
     ./python_env/bin/python models/experimental/voxtraltts/demo/demo.py \\
         --prompts models/experimental/voxtraltts/demo/data/sample_prompts.json \\
         --output-dir /tmp/voxtraltts_out
+
+    python models/experimental/voxtraltts/demo/demo.py --text "this is a test message for VoxtralTTS. What is the architecture of the voxtral tts and how does it work?"
+
 """
 
 from __future__ import annotations
@@ -77,6 +80,8 @@ class DataArgs:
     seed: int = 0
     default_voice: str = "casual_male"
     warmup_iters: int = 0
+    inline_texts: list[str] | None = None
+    voice: str | None = None
 
 
 @dataclass
@@ -98,6 +103,13 @@ def _parse_demo_args(argv: list[str] | None = None) -> DemoArgs:
         default=os.environ.get("VOXTRAL_TTS_MODEL") or os.environ.get("HF_MODEL") or DEFAULT_VOXTRAL_MODEL,
     )
     p.add_argument("--prompts", type=str, default=DataArgs.prompts_file)
+    p.add_argument(
+        "--text",
+        type=str,
+        action="append",
+        default=None,
+        help="Inline text prompt (text mode). Repeat --text for multiple prompts; bypasses --prompts JSON.",
+    )
     p.add_argument("--output-dir", type=str, default=DataArgs.output_dir)
     p.add_argument("--mode", type=str, choices=("text", "codes", "latents"), default="text")
     p.add_argument("--text-max-seq-len", type=int, default=4096)
@@ -106,6 +118,8 @@ def _parse_demo_args(argv: list[str] | None = None) -> DemoArgs:
     p.add_argument("--warmup-iters", type=int, default=0)
     p.add_argument("--default-voice", type=str, default="casual_male")
     ns = p.parse_args(argv)
+    if ns.text and ns.mode != "text":
+        p.error("--text is only valid with --mode text")
     return DemoArgs(
         model=ModelArgs(model_name_or_path=ns.model),
         tt=TTArgs(text_max_seq_len=ns.text_max_seq_len),
@@ -117,6 +131,7 @@ def _parse_demo_args(argv: list[str] | None = None) -> DemoArgs:
             seed=ns.seed,
             default_voice=ns.default_voice,
             warmup_iters=ns.warmup_iters,
+            inline_texts=ns.text,
         ),
     )
 
@@ -278,8 +293,10 @@ def run_latents_mode(
     )
     mel = pipe.audio_tokenizer.decode_latent_to_mel_b1tc(lt)
     ttnn.deallocate(lt)
-    wav = pipe.audio_tokenizer.pretransform_decode_torch(mel)
+    wav_tt = pipe.audio_tokenizer.pretransform_decode_tt(mel)
     ttnn.deallocate(mel)
+    wav = ttnn.to_torch(wav_tt).float()
+    ttnn.deallocate(wav_tt)
     t1 = perf_counter()
     T = int(latent.shape[2])
     _log_perf("tt_latents_decode", ttft_s=t1 - t0, n_frames=T, total_s=t1 - t0)
@@ -296,7 +313,11 @@ def run_demo(args: DemoArgs) -> None:
     cfg = load_voxtral_config(args.model.model_name_or_path)
     sample_rate = int(cfg.audio_model_args.audio_encoding_args.sampling_rate)
 
-    items = load_prompt_items(args.data.prompts_file, args.data.default_voice)
+    if args.data.inline_texts:
+        voice = args.data.voice or args.data.default_voice
+        items = [{"id": i, "text": t} for i, t in enumerate(args.data.inline_texts)]
+    else:
+        items = load_prompt_items(args.data.prompts_file, args.data.default_voice)
     out_dir = Path(args.data.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
