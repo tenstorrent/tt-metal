@@ -61,6 +61,7 @@ class Qwen35GatedAttention:
         mc = ttnn.L1_MEMORY_CONFIG if T == 1 else None
         ckc = self.compute_kernel_config_decode if T <= 1 else self.compute_kernel_config
 
+        # Branches are mutually exclusive on T; decode (T==1) is checked first to keep the hot path short.
         if self.use_paged_attention and T == 1:
             # Branch B — paged decode
             return decode_forward(

@@ -17,6 +17,9 @@ from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet i
 
 
 def recurrent_forward(gdn, x, mode="recurrent", chunk_size=None):
+    """Non-kernel GDN forward. mode='chunk' (prefill, may delegate to the prefill kernel) or
+    'recurrent' (single-token decode). Reads weights/state/dims off the gdn instance; updates
+    gdn's recurrent + conv state in place or by reassignment per the trace-capture flags."""
     w = gdn.weights
     if chunk_size is None:
         chunk_size = gdn.prefill_chunk_size if mode == "chunk" else 64
