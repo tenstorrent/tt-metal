@@ -5,6 +5,8 @@
 #include "routed_expert_ffn.hpp"
 #include "routed_expert_ffn_common.hpp"
 
+#include <cstdlib>
+
 #include "tt-metalium/math.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/creation/creation.hpp"
@@ -225,6 +227,20 @@ ttnn::Tensor routed_expert_ffn(
     std::optional<ttnn::Tensor> output) {
     const uint32_t M_tiles = x.padded_shape()[-2] / ttnn::TILE_SIZE;
     const bool is_wormhole = x.device()->arch() == tt::ARCH::WORMHOLE_B0;
+
+    // TEMP testing knob: TT_REXPERT_FORCE_DEFAULT routes to the vanilla
+    // auto-configured matmul path (gate/silu, up, multiply, down) regardless of
+    // arch/shape. Lets the naive reference run on shapes the BH/WH composite
+    // configs don't support (e.g. 2880x2880). Not for production.
+    if (std::getenv("TT_REXPERT_FORCE_DEFAULT") != nullptr) {
+        return detail::routed_expert_ffn_default(
+            /*x=*/x,
+            /*gate_proj=*/gate_proj,
+            /*up_proj=*/up_proj,
+            /*down_proj=*/down_proj,
+            /*compute_kernel_config=*/compute_kernel_config,
+            /*output=*/std::move(output));
+    }
 
     // Fall back to default (auto-configured) matmuls only on Wormhole for very
     // large M. Blackhole has the unified chunked path below which handles any M.
