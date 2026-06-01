@@ -113,6 +113,10 @@ class TTNNFlowDecoder:
         self._flows = []  # List of per-flow weight dicts
         self._conv_weights = []  # Host-side conv weights (not device-resident)
         self._device = None
+        # Lazy cache of prepared conv1d weight+bias keyed by (flow_idx, layer_idx, seq_len).
+        # prepare_conv_weights does the per-call internal weight tilization once,
+        # returning a device-resident tensor — skips that write on every conv1d call.
+        self._prep_cache = {}
 
     @classmethod
     def from_checkpoint(cls, state_dict, device):
@@ -157,6 +161,34 @@ class TTNNFlowDecoder:
 
         return obj
 
+    def _ensure_prepared_conv(self, flow_idx, layer_idx, seq_len):
+        """Get prepared conv1d (weight, bias, cfg) for this shape; prep on miss."""
+        key = (flow_idx, layer_idx, seq_len)
+        cached = self._prep_cache.get(key)
+        if cached is not None:
+            return cached
+        conv = self._conv_weights[flow_idx]
+        d = DILATION_RATE ** layer_idx
+        padding = d * (KERNEL_SIZE - 1) // 2
+        cfg = ttnn.Conv2dConfig(weights_dtype=DEFAULT_DTYPE)
+        common = dict(
+            input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            input_layout=ttnn.ROW_MAJOR_LAYOUT,
+            in_channels=HIDDEN_CH, out_channels=2 * HIDDEN_CH, batch_size=1,
+            input_height=1, input_width=seq_len,
+            kernel_size=(1, KERNEL_SIZE), stride=(1, 1),
+            padding=(0, padding), dilation=(1, d), groups=1,
+            device=self._device, input_dtype=DEFAULT_DTYPE,
+            conv_config=cfg,
+        )
+        w_p = ttnn.prepare_conv_weights(
+            weight_tensor=conv["ws"][layer_idx],
+            weights_format="OIHW", has_bias=True, **common)
+        b_p = ttnn.prepare_conv_bias(
+            bias_tensor=conv["bs_tt"][layer_idx], **common)
+        self._prep_cache[key] = (w_p, b_p, cfg)
+        return self._prep_cache[key]
+
     def _conditioned_wn_device(self, h_tt, g_proj_4d, flow_idx, seq_len):
         """Device-resident WN inner loop.
 
@@ -186,13 +218,15 @@ class TTNNFlowDecoder:
 
             # conv1d rejects TILE input at the WN config -> ROW_MAJOR
             x_rm = ttnn.to_layout(x_dev, ttnn.ROW_MAJOR_LAYOUT)
+            w_p, b_p, cfg = self._ensure_prepared_conv(flow_idx, i, seq_len)
             result = ttnn.conv1d(
-                input_tensor=x_rm, weight_tensor=conv["ws"][i], device=self._device,
+                input_tensor=x_rm, weight_tensor=w_p, device=self._device,
                 in_channels=HIDDEN_CH, out_channels=2 * HIDDEN_CH, batch_size=1,
                 input_length=seq_len, kernel_size=KERNEL_SIZE, stride=1,
                 padding=padding, dilation=d, groups=1,
                 dtype=DEFAULT_DTYPE, return_output_dim=True,
-                bias_tensor=conv["bs_tt"][i],
+                bias_tensor=b_p,
+                conv_config=cfg,
             )
             ttnn.deallocate(x_rm)
             conv_out = result[0]
