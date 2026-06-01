@@ -316,8 +316,8 @@ void run_single_core_broadcast(
     experimental::metal2_host_api::KernelSpec reader_spec{
         .unique_id = READER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary_2_0.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary_2_0.cpp",
         .num_threads = 1,
         .dfb_bindings =
             {{
@@ -347,8 +347,8 @@ void run_single_core_broadcast(
     experimental::metal2_host_api::KernelSpec writer_spec{
         .unique_id = WRITER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_2_0.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_2_0.cpp",
         .num_threads = 1,
         .dfb_bindings = {{
             .dfb_spec_name = OUT_DFB,
@@ -370,8 +370,8 @@ void run_single_core_broadcast(
     experimental::metal2_host_api::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/compute/broadcast_2_0.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/compute/broadcast_2_0.cpp",
         .num_threads = 1,
         .compiler_options = {.defines = defines_vec},
         .dfb_bindings =

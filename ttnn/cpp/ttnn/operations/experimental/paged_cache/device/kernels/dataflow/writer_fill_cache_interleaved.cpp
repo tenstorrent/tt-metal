@@ -49,6 +49,7 @@ void kernel_main() {
     constexpr uint32_t batch_idx_stick_size = get_compile_time_arg_val(10);  // per-element size, e.g. 4 for uint32
     constexpr uint32_t batch_idx_num_elements = get_compile_time_arg_val(11);
     constexpr uint32_t num_blocks_per_batch = get_compile_time_arg_val(12);  // num_heads * input_seq_len_t
+    constexpr uint32_t capacity_t = get_compile_time_arg_val(13);
     constexpr bool batched_fill = batch_idx_num_elements > 1;
 
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -63,7 +64,7 @@ void kernel_main() {
         return;  // Early exit, no work done
     }
 
-    constexpr auto s0_args = TensorAccessorArgs<13>();
+    constexpr auto s0_args = TensorAccessorArgs<14>();
     constexpr auto page_table_args = TensorAccessorArgs<s0_args.next_compile_time_args_offset()>();
     constexpr auto batch_idx_tensor_args = TensorAccessorArgs<page_table_args.next_compile_time_args_offset()>();
 
@@ -100,6 +101,14 @@ void kernel_main() {
     // once on the first row (cache miss) and then hits for all remaining rows;
     // batched path re-loads on batch boundaries within this core's row range.
     uint32_t cached_batch = (uint32_t)-1;
+    // Bounded sliding-window cache (capacity_t > 0): only the last capacity_t tiles
+    // of each head's input range will survive in the cache (earlier tiles would map
+    // to wrapped slots that get overwritten by later writes). Compute the skip
+    // count once so we can consume those earlier input tiles without committing
+    // them to DRAM — a strict bandwidth win for prefills longer than the bounded
+    // capacity. For prefills <= capacity_t this is 0 and the legacy path runs.
+    const uint32_t skip_tiles =
+        (capacity_t > 0 && num_blocks_of_work_per_head > capacity_t) ? (num_blocks_of_work_per_head - capacity_t) : 0;
 
     for (uint32_t row_id = start_row_num; row_id < start_row_num + num_rows; ++row_id) {
         // Decode row_id → (cur_batch, cur_head, seq_tile_id).
@@ -119,7 +128,16 @@ void kernel_main() {
             row_within_batch = row_id;
         }
         const uint32_t cur_head = row_within_batch / num_blocks_of_work_per_head;
-        const uint32_t seq_tile_id = row_within_batch % num_blocks_of_work_per_head;
+        uint32_t seq_tile_id = row_within_batch % num_blocks_of_work_per_head;
+
+        // Drop the early-prefill tiles whose final slot would be overwritten by a
+        // later iteration anyway. The input CB still has to be drained so the
+        // reader doesn't stall, but no NOC writes go out.
+        if (seq_tile_id < skip_tiles) {
+            cb_wait_front(cb_id_in, Wt);
+            cb_pop_front(cb_id_in, Wt);
+            continue;
+        }
 
         uint32_t batch_idx;
         if constexpr (use_batch_idx_tensor) {
@@ -136,6 +154,12 @@ void kernel_main() {
             cached_batch = batch_idx;
         }
 
+        // Bounded sliding-window cache: wrap the virtual tile index into the bounded
+        // capacity before the page_table lookup. capacity_t is a multiple of
+        // block_size_t (validated), so the wrap preserves intra-block layout.
+        if constexpr (capacity_t > 0) {
+            seq_tile_id %= capacity_t;
+        }
         uint32_t physical_tile_id =
             virtual_seq_tile_id_to_physical_tile_id<num_heads, block_size_t, Wt>(seq_tile_id, cur_head, page_table_ptr);
 

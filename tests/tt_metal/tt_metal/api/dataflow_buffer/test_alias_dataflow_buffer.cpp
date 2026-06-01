@@ -21,11 +21,9 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/experimental/host_api.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_params.hpp>
-#include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 #include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
@@ -132,65 +130,75 @@ AliasDFBProgramComponents make_alias_dfb_program_spec(
         .entry_size = entry_size_a,
         .num_entries = num_entries_a,
         .data_format_metadata = tt::DataFormat::Float16_b,
-        .alias_with = {"dfb_b"},
+        .advanced_options = DFBAdvancedOptions{.alias_with = {"dfb_b"}},
     };
     DataflowBufferSpec dfb_b{
         .unique_id = "dfb_b",
         .entry_size = entry_size_b,
         .num_entries = num_entries_b,
         .data_format_metadata = tt::DataFormat::Float16_b,
-        .alias_with = {"dfb_a"},
+        .advanced_options = DFBAdvancedOptions{.alias_with = {"dfb_a"}},
     };
 
     KernelSpec producer{
-        .unique_id   = "producer",
-        .source      = KernelSpec::SourceFilePath{ALIAS_PRODUCER_KERNEL},
+        .unique_id = "producer",
+        .source = ALIAS_PRODUCER_KERNEL,
         .num_threads = num_producers,
-        .dfb_bindings = {
-            {.dfb_spec_name = "dfb_a", .local_accessor_name = "out_a",
-             .endpoint_type = KernelSpec::DFBEndpointType::PRODUCER,
-             .access_pattern = DFBAccessPattern::STRIDED},
-            {.dfb_spec_name = "dfb_b", .local_accessor_name = "out_b",
-             .endpoint_type = KernelSpec::DFBEndpointType::PRODUCER,
-             .access_pattern = DFBAccessPattern::STRIDED},
-        },
-        .tensor_bindings = {
-            {.tensor_parameter_name = "in_tensor_a", .accessor_name = "src_a"},
-            {.tensor_parameter_name = "in_tensor_b", .accessor_name = "src_b"},
-        },
-        .compile_time_arg_bindings = {
-            {"num_entries_per_producer_a", epp_a},
-            {"num_entries_per_producer_b", epp_b},
-            {"num_producers",              static_cast<uint32_t>(num_producers)},
-        },
-        .runtime_arguments_schema = {.named_runtime_args =
-            {"chunk_offset_a", "chunk_offset_b", "entries_per_core_a", "entries_per_core_b"}},
+        .dfb_bindings =
+            {
+                {.dfb_spec_name = "dfb_a",
+                 .local_accessor_name = "out_a",
+                 .endpoint_type = KernelSpec::DFBEndpointType::PRODUCER,
+                 .access_pattern = DFBAccessPattern::STRIDED},
+                {.dfb_spec_name = "dfb_b",
+                 .local_accessor_name = "out_b",
+                 .endpoint_type = KernelSpec::DFBEndpointType::PRODUCER,
+                 .access_pattern = DFBAccessPattern::STRIDED},
+            },
+        .tensor_bindings =
+            {
+                {.tensor_parameter_name = "in_tensor_a", .accessor_name = "src_a"},
+                {.tensor_parameter_name = "in_tensor_b", .accessor_name = "src_b"},
+            },
+        .compile_time_arg_bindings =
+            {
+                {"num_entries_per_producer_a", epp_a},
+                {"num_entries_per_producer_b", epp_b},
+                {"num_producers", static_cast<uint32_t>(num_producers)},
+            },
+        .runtime_arguments_schema =
+            {.named_runtime_args = {"chunk_offset_a", "chunk_offset_b", "entries_per_core_a", "entries_per_core_b"}},
         .config_spec = producer_cfg,
     };
 
     KernelSpec consumer{
-        .unique_id   = "consumer",
-        .source      = KernelSpec::SourceFilePath{ALIAS_CONSUMER_KERNEL},
+        .unique_id = "consumer",
+        .source = ALIAS_CONSUMER_KERNEL,
         .num_threads = num_consumers,
-        .dfb_bindings = {
-            {.dfb_spec_name = "dfb_a", .local_accessor_name = "in_a",
-             .endpoint_type = KernelSpec::DFBEndpointType::CONSUMER,
-             .access_pattern = DFBAccessPattern::STRIDED},
-            {.dfb_spec_name = "dfb_b", .local_accessor_name = "in_b",
-             .endpoint_type = KernelSpec::DFBEndpointType::CONSUMER,
-             .access_pattern = DFBAccessPattern::STRIDED},
-        },
-        .tensor_bindings = {
-            {.tensor_parameter_name = "out_tensor_a", .accessor_name = "dst_a"},
-            {.tensor_parameter_name = "out_tensor_b", .accessor_name = "dst_b"},
-        },
-        .compile_time_arg_bindings = {
-            {"num_entries_per_consumer_a", epc_a},
-            {"num_entries_per_consumer_b", epc_b},
-            {"num_consumers",              static_cast<uint32_t>(num_consumers)},
-        },
-        .runtime_arguments_schema = {.named_runtime_args =
-            {"chunk_offset_a", "chunk_offset_b", "entries_per_core_a", "entries_per_core_b"}},
+        .dfb_bindings =
+            {
+                {.dfb_spec_name = "dfb_a",
+                 .local_accessor_name = "in_a",
+                 .endpoint_type = KernelSpec::DFBEndpointType::CONSUMER,
+                 .access_pattern = DFBAccessPattern::STRIDED},
+                {.dfb_spec_name = "dfb_b",
+                 .local_accessor_name = "in_b",
+                 .endpoint_type = KernelSpec::DFBEndpointType::CONSUMER,
+                 .access_pattern = DFBAccessPattern::STRIDED},
+            },
+        .tensor_bindings =
+            {
+                {.tensor_parameter_name = "out_tensor_a", .accessor_name = "dst_a"},
+                {.tensor_parameter_name = "out_tensor_b", .accessor_name = "dst_b"},
+            },
+        .compile_time_arg_bindings =
+            {
+                {"num_entries_per_consumer_a", epc_a},
+                {"num_entries_per_consumer_b", epc_b},
+                {"num_consumers", static_cast<uint32_t>(num_consumers)},
+            },
+        .runtime_arguments_schema =
+            {.named_runtime_args = {"chunk_offset_a", "chunk_offset_b", "entries_per_core_a", "entries_per_core_b"}},
         .config_spec = consumer_cfg,
     };
 
@@ -337,7 +345,7 @@ AliasBorrowedDFBComponents make_alias_borrowed_dfb_program_spec(
         .num_entries = num_entries,
         .data_format_metadata = tt::DataFormat::Float16_b,
         .borrowed_from = "ring_tensor",
-        .alias_with = {"dfb_alias"},
+        .advanced_options = DFBAdvancedOptions{.alias_with = {"dfb_alias"}},
     };
     DataflowBufferSpec dfb_alias_spec{
         .unique_id = "dfb_alias",
@@ -345,61 +353,71 @@ AliasBorrowedDFBComponents make_alias_borrowed_dfb_program_spec(
         .num_entries = num_entries,
         .data_format_metadata = tt::DataFormat::Float16_b,
         .borrowed_from = "ring_tensor",
-        .alias_with = {"dfb_borrowed"},
+        .advanced_options = DFBAdvancedOptions{.alias_with = {"dfb_borrowed"}},
     };
 
     KernelSpec producer{
-        .unique_id   = "producer",
-        .source      = KernelSpec::SourceFilePath{ALIAS_PRODUCER_KERNEL},
+        .unique_id = "producer",
+        .source = ALIAS_PRODUCER_KERNEL,
         .num_threads = 1,
-        .dfb_bindings = {
-            {.dfb_spec_name = "dfb_borrowed", .local_accessor_name = "out_a",
-             .endpoint_type = KernelSpec::DFBEndpointType::PRODUCER,
-             .access_pattern = DFBAccessPattern::STRIDED},
-            {.dfb_spec_name = "dfb_alias", .local_accessor_name = "out_b",
-             .endpoint_type = KernelSpec::DFBEndpointType::PRODUCER,
-             .access_pattern = DFBAccessPattern::STRIDED},
-        },
-        .tensor_bindings = {
-            {.tensor_parameter_name = "in_tensor_a",  .accessor_name = "src_a"},
-            {.tensor_parameter_name = "in_tensor_b",  .accessor_name = "src_b"},
-            // ring_tensor must be bound to at least one kernel even though the
-            // kernel doesn't access it directly (required by TensorParameter rules).
-            {.tensor_parameter_name = "ring_tensor",  .accessor_name = "ring"},
-        },
-        .compile_time_arg_bindings = {
-            {"num_entries_per_producer_a", epp},
-            {"num_entries_per_producer_b", epp},
-            {"num_producers",              1u},
-        },
-        .runtime_arguments_schema = {.named_runtime_args =
-            {"chunk_offset_a", "chunk_offset_b", "entries_per_core_a", "entries_per_core_b"}},
+        .dfb_bindings =
+            {
+                {.dfb_spec_name = "dfb_borrowed",
+                 .local_accessor_name = "out_a",
+                 .endpoint_type = KernelSpec::DFBEndpointType::PRODUCER,
+                 .access_pattern = DFBAccessPattern::STRIDED},
+                {.dfb_spec_name = "dfb_alias",
+                 .local_accessor_name = "out_b",
+                 .endpoint_type = KernelSpec::DFBEndpointType::PRODUCER,
+                 .access_pattern = DFBAccessPattern::STRIDED},
+            },
+        .tensor_bindings =
+            {
+                {.tensor_parameter_name = "in_tensor_a", .accessor_name = "src_a"},
+                {.tensor_parameter_name = "in_tensor_b", .accessor_name = "src_b"},
+                // ring_tensor must be bound to at least one kernel even though the
+                // kernel doesn't access it directly (required by TensorParameter rules).
+                {.tensor_parameter_name = "ring_tensor", .accessor_name = "ring"},
+            },
+        .compile_time_arg_bindings =
+            {
+                {"num_entries_per_producer_a", epp},
+                {"num_entries_per_producer_b", epp},
+                {"num_producers", 1u},
+            },
+        .runtime_arguments_schema =
+            {.named_runtime_args = {"chunk_offset_a", "chunk_offset_b", "entries_per_core_a", "entries_per_core_b"}},
         .config_spec = producer_cfg,
     };
 
     KernelSpec consumer{
-        .unique_id   = "consumer",
-        .source      = KernelSpec::SourceFilePath{ALIAS_CONSUMER_KERNEL},
+        .unique_id = "consumer",
+        .source = ALIAS_CONSUMER_KERNEL,
         .num_threads = 1,
-        .dfb_bindings = {
-            {.dfb_spec_name = "dfb_borrowed", .local_accessor_name = "in_a",
-             .endpoint_type = KernelSpec::DFBEndpointType::CONSUMER,
-             .access_pattern = DFBAccessPattern::STRIDED},
-            {.dfb_spec_name = "dfb_alias", .local_accessor_name = "in_b",
-             .endpoint_type = KernelSpec::DFBEndpointType::CONSUMER,
-             .access_pattern = DFBAccessPattern::STRIDED},
-        },
-        .tensor_bindings = {
-            {.tensor_parameter_name = "out_tensor_a", .accessor_name = "dst_a"},
-            {.tensor_parameter_name = "out_tensor_b", .accessor_name = "dst_b"},
-        },
-        .compile_time_arg_bindings = {
-            {"num_entries_per_consumer_a", epc},
-            {"num_entries_per_consumer_b", epc},
-            {"num_consumers",              1u},
-        },
-        .runtime_arguments_schema = {.named_runtime_args =
-            {"chunk_offset_a", "chunk_offset_b", "entries_per_core_a", "entries_per_core_b"}},
+        .dfb_bindings =
+            {
+                {.dfb_spec_name = "dfb_borrowed",
+                 .local_accessor_name = "in_a",
+                 .endpoint_type = KernelSpec::DFBEndpointType::CONSUMER,
+                 .access_pattern = DFBAccessPattern::STRIDED},
+                {.dfb_spec_name = "dfb_alias",
+                 .local_accessor_name = "in_b",
+                 .endpoint_type = KernelSpec::DFBEndpointType::CONSUMER,
+                 .access_pattern = DFBAccessPattern::STRIDED},
+            },
+        .tensor_bindings =
+            {
+                {.tensor_parameter_name = "out_tensor_a", .accessor_name = "dst_a"},
+                {.tensor_parameter_name = "out_tensor_b", .accessor_name = "dst_b"},
+            },
+        .compile_time_arg_bindings =
+            {
+                {"num_entries_per_consumer_a", epc},
+                {"num_entries_per_consumer_b", epc},
+                {"num_consumers", 1u},
+            },
+        .runtime_arguments_schema =
+            {.named_runtime_args = {"chunk_offset_a", "chunk_offset_b", "entries_per_core_a", "entries_per_core_b"}},
         .config_spec = consumer_cfg,
     };
 

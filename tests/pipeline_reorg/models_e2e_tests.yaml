@@ -434,8 +434,12 @@
 - name: GPT-OSS 120B e2e tests
   cmd: |
     uv pip install -r models/demos/gpt_oss/requirements.txt
-    export HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/
-    pytest models/demos/gpt_oss/demo/text_demo.py --timeout 1500
+    export HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/ TT_MM_THROTTLE_PERF=2
+    # Tensor cache is pre-built on the NAS — skip loading model weights by default.
+    # Check mlperf-write-access in the workflow to load weights and regenerate the cache.
+    SKIP_MODEL_LOAD="--skip-model-load"
+    [ "${MLPERF_READ_ONLY:-true}" = "false" ] && SKIP_MODEL_LOAD=""
+    pytest models/demos/gpt_oss/demo/text_demo.py --timeout 1500 $SKIP_MODEL_LOAD
   model: gpt-oss-120b
   skus:
     wh_galaxy_perf:
@@ -500,16 +504,13 @@
 # ── Mamba ──────────────────────────────────────────────────────────
 
 # See issue: https://github.com/tenstorrent/tt-metal/issues/42163
-# - name: Mamba-2.8B e2e tests
-#   cmd: |
-#     pytest --timeout 420 --disable-warnings -q -s --input-method=json --input-path='models/demos/wormhole/mamba/demo/prompts.json' models/demos/wormhole/mamba/demo/demo.py
-#   model: mamba-2.8b
-#   skus:
-#     wh_n150:
-#       timeout: 5
-#       tier: 3
-#     wh_n300:
-#       timeout: 5
-#       tier: 3
-#   owner_id: U06ECNVR0EN # Evan Smal
-#   team: models
+- name: Mamba-2.8B e2e tests
+  cmd: |
+    pytest --timeout 420 --disable-warnings -q -s --input-method=json --input-path='models/demos/wormhole/mamba/demo/prompts.json' models/demos/wormhole/mamba/demo/demo.py
+  model: mamba-2.8b
+  skus:
+    wh_n150:
+      timeout: 5
+      tier: 3
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models

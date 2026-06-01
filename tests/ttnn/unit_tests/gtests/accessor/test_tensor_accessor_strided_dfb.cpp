@@ -156,14 +156,14 @@ void run_strided_dfb_copy_test(
     kernel_builder_fn(reader, writer);
 
     // Inject CTA define so TensorAccessorArgs<0, 0>() resolves at compile time
-    reader.source = KernelSpec::SourceFilePath{kReaderKernelPath};
-    writer.source = KernelSpec::SourceFilePath{kWriterKernelPath};
+    reader.source = kReaderKernelPath;
+    writer.source = kWriterKernelPath;
     reader.compiler_options.defines.push_back({"KERNEL_COMPILE_TIME_ARGS", input_cta_str});
     writer.compiler_options.defines.push_back({"KERNEL_COMPILE_TIME_ARGS", output_cta_str});
 
     // Runtime varargs: [0]=base_addr, [1]=total_pages
-    reader.runtime_arguments_schema.num_runtime_varargs = 2;
-    writer.runtime_arguments_schema.num_runtime_varargs = 2;
+    reader.advanced_options.num_runtime_varargs = 2;
+    writer.advanced_options.num_runtime_varargs = 2;
 
     // DFB: one entry per page, pipelined depth = num_dfb_entries.
     // data_format_metadata must be set — set_dfb_tile_dims calls get_tile_size() unconditionally
@@ -184,11 +184,17 @@ void run_strided_dfb_copy_test(
     run_params.kernel_run_params = {
         ProgramRunParams::KernelRunParams{
             .kernel_spec_name = "reader",
-            .runtime_varargs = {{node, {input_buffer->address(), total_pages}}},
+            .advanced_options =
+                AdvancedKernelRunParams{
+                    .runtime_varargs = {{node, {input_buffer->address(), total_pages}}},
+                },
         },
         ProgramRunParams::KernelRunParams{
             .kernel_spec_name = "writer",
-            .runtime_varargs = {{node, {output_buffer->address(), total_pages}}},
+            .advanced_options =
+                AdvancedKernelRunParams{
+                    .runtime_varargs = {{node, {output_buffer->address(), total_pages}}},
+                },
         },
     };
     SetProgramRunParameters(program, run_params);
