@@ -2137,7 +2137,7 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
     // With multi-binding, all same-role KernelSpecs share kind (DM/compute), access_pattern,
     // num_threads, and risc_mask. The first three are enforced in ValidateProgramSpec; the
     // fourth is solver-guaranteed on Gen2 (the coupling-group equivalence-class constraint)
-    // and user-validated on Gen1 (see Step 2a-bis in MakeProgramFromSpec). So any
+    // and user-validated on Gen1 (see Step 2b in MakeProgramFromSpec). So any
     // representative producer/consumer gives the correct DFB config — we take the first.
     const KernelSpec* producer = dfb_endpoint_info.producers.front().kernel;
     const KernelSpec* consumer = dfb_endpoint_info.consumers.front().kernel;
@@ -2526,7 +2526,7 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
         check_uniform_mask(endpoints.consumers, "CONSUMER");
     }
 
-    // Step 2b: Resolve TensorParameters against the MeshDevice into static CTA payloads.
+    // Step 2c: Resolve TensorParameters against the MeshDevice into static CTA payloads.
     //
     // TensorBindings ride two existing kernel-arg channels:
     //   - Static layout (rank, shape, bank coords, ...) flows through the kernel's positional
