@@ -311,7 +311,7 @@ class VoxtralTTAcousticModel:
         s0_tok = _as_token_3d(s0)
         s1_tok = _as_token_3d(s1)
         s2_tok = _as_token_3d(s2)
-        h3 = ttnn.concat([s0_tok, s1_tok, s2_tok], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        h3 = ttnn.concat([s0_tok, s1_tok, s2_tok], dim=1, memory_config=self._matmul_act_mem_config)
         h = ttnn.reshape(h3, (bsz, 1, 3, self.dim))
         ttnn.deallocate(h3)
         ttnn.deallocate(s0_tok)
@@ -363,7 +363,7 @@ class VoxtralTTAcousticModel:
 
         for i in range(self.n_layers):
             residual_attn = ttnn.clone(h, dtype=self.dtype, memory_config=_residual_mc)
-            normed = self.attn_norms[i](h, mode=Mode.DECODE)
+            normed = self.attn_norms[i](h, mode=Mode.DECODE, norm_config={"output_mem_config": _residual_mc})
             if debug_out is not None:
                 debug_out[f"layer{i}.attn_norm"] = ttnn.to_torch(normed).float()
             attn_out = self.attentions[i](normed, cos, sin, attention_mask=None, activation_memory_config=_residual_mc)
@@ -380,7 +380,7 @@ class VoxtralTTAcousticModel:
                 debug_out[f"layer{i}.post_attn"] = ttnn.to_torch(h).float()
 
             residual_ffn = ttnn.clone(h, dtype=self.dtype, memory_config=_residual_mc)
-            normed_ff = self.ffn_norms[i](h, mode=Mode.DECODE)
+            normed_ff = self.ffn_norms[i](h, mode=Mode.DECODE, norm_config={"output_mem_config": _residual_mc})
             if debug_out is not None:
                 debug_out[f"layer{i}.ffn_norm"] = ttnn.to_torch(normed_ff).float()
             ff_out = self.mlps[i](normed_ff, activation_memory_config=_residual_mc)
@@ -419,15 +419,15 @@ class VoxtralTTAcousticModel:
 
     def _time_embedding_tt(self, t_val: float, bsz: int) -> ttnn.Tensor:
         """On-device sinusoidal time embedding; returns ``[bsz, 1, dim]`` ttnn tensor."""
-        emb = ttnn.multiply(self._inv_freq_tt, t_val, dtype=self.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        cos_emb = ttnn.cos(emb, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        sin_emb = ttnn.sin(emb, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        emb = ttnn.multiply(self._inv_freq_tt, t_val, dtype=self.dtype, memory_config=self._matmul_act_mem_config)
+        cos_emb = ttnn.cos(emb, memory_config=self._matmul_act_mem_config)
+        sin_emb = ttnn.sin(emb, memory_config=self._matmul_act_mem_config)
         ttnn.deallocate(emb)
-        te = ttnn.concat([cos_emb, sin_emb], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        te = ttnn.concat([cos_emb, sin_emb], dim=2, memory_config=self._matmul_act_mem_config)
         ttnn.deallocate(cos_emb)
         ttnn.deallocate(sin_emb)
         if bsz > 1:
-            te_expanded = ttnn.concat([te] * bsz, dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            te_expanded = ttnn.concat([te] * bsz, dim=0, memory_config=self._matmul_act_mem_config)
             ttnn.deallocate(te)
             te = te_expanded
         return te
@@ -512,16 +512,17 @@ class VoxtralTTAcousticModel:
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        # float32 Euler state must stay in DRAM — L1 is not supported for fp32 accumulation kernels
         sampled_tt = ttnn.typecast(sampled_tt, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         tt_llm = ttnn.from_torch(
             llm_hidden.to(torch.bfloat16).unsqueeze(1),
             device=self.mesh_device,
             dtype=self.dtype,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=self._matmul_act_mem_config,
         )
         tt_llm_zero = ttnn.zeros_like(tt_llm)
-        tt_llm_batched = ttnn.concat([tt_llm, tt_llm_zero], dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        tt_llm_batched = ttnn.concat([tt_llm, tt_llm_zero], dim=0, memory_config=self._matmul_act_mem_config)
         ttnn.deallocate(tt_llm)
         ttnn.deallocate(tt_llm_zero)
 
@@ -544,7 +545,8 @@ class VoxtralTTAcousticModel:
             x_batched = ttnn.concat([x_in, x_in], dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             if x_in is not sampled_tt and x_in.is_allocated():
                 ttnn.deallocate(x_in)
-            te_batched = ttnn.concat([te, te], dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            # te is L1 (from _time_embedding_tt); concat output must match input memory
+            te_batched = ttnn.concat([te, te], dim=0, memory_config=self._matmul_act_mem_config)
             ttnn.deallocate(te)
             if collect_fm_debug and i == 0:
                 v_out = self._predict_velocity_impl(
@@ -573,6 +575,7 @@ class VoxtralTTAcousticModel:
             v_cond = ttnn.slice(v_tt, [0, 0, 0, 0], [bsz, v_shape[1], v_shape[2], v_shape[3]])
             v_uncond = ttnn.slice(v_tt, [bsz, 0, 0, 0], [2 * bsz, v_shape[1], v_shape[2], v_shape[3]])
             ttnn.deallocate(v_tt)
+            # velocity must stay in DRAM here — feeds into _euler_integrate_sampled (float32 DRAM ops)
             v_cond_scaled = ttnn.multiply(v_cond, cfg_scalar, dtype=self.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(v_cond)
             v_uncond_scaled = ttnn.multiply(
@@ -626,7 +629,8 @@ class VoxtralTTAcousticModel:
             x_batched = ttnn.concat([x_in, x_in], dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             if x_in is not sampled_tt and x_in.is_allocated():
                 ttnn.deallocate(x_in)
-            te_batched = ttnn.concat([te, te], dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            # te is L1 (from _time_embedding_tt); concat output must match input memory
+            te_batched = ttnn.concat([te, te], dim=0, memory_config=self._matmul_act_mem_config)
             ttnn.deallocate(te)
             v_tt = self._predict_velocity_impl(
                 None,
@@ -642,6 +646,7 @@ class VoxtralTTAcousticModel:
             v_cond = ttnn.slice(v_tt, [0, 0, 0, 0], [bsz, v_shape[1], v_shape[2], v_shape[3]])
             v_uncond = ttnn.slice(v_tt, [bsz, 0, 0, 0], [2 * bsz, v_shape[1], v_shape[2], v_shape[3]])
             ttnn.deallocate(v_tt)
+            # velocity must stay in DRAM here — feeds into _euler_integrate_sampled (float32 DRAM ops)
             v_cond_scaled = ttnn.multiply(v_cond, cfg_scalar, dtype=self.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(v_cond)
             v_uncond_scaled = ttnn.multiply(
