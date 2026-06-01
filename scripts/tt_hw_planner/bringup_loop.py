@@ -1386,18 +1386,26 @@ class Tt{component_class_name}:
         )
 
 
-# Module-level shim. The per-component PCC test imports this name
-# (lowercase, matching the component slug) — do NOT rename or remove.
-# Keep this delegating to ``Tt{component_class_name}.build`` so the test
-# can construct the instance with the captured torch reference.
-def {component_name_for_shim}(device, torch_module=None):
+# Module-level `build` — PRIMARY test entry point.
+# The per-component PCC test does:
+#   if hasattr(mod, "build"): return mod.build(device, torch_module)
+# So `build` must be present at module scope, return a callable
+# ``Tt{component_class_name}`` instance, and the test then invokes the
+# instance via __call__(ttnn_input, **kwargs).
+def build(device, torch_module=None):
     """Test-facing factory: returns a ``Tt{component_class_name}`` instance
     built from ``torch_module`` (typically the HF reference module captured
-    at scaffold time).
-
-    Preserve this signature exactly — the per-component PCC test imports
-    ``{component_name_for_shim}`` directly and calls it as a constructor.
+    at scaffold time). The PCC test calls this then invokes the returned
+    instance's __call__ with (ttnn_input, **ttnn_extra_kwargs).
     """
+    return Tt{component_class_name}.build(device, torch_module)
+
+
+# Module-level shim with the component's lowercase slug name. Kept for
+# backward compatibility with the Phase-1 SMOKE test (which uses
+# ``from .._stubs.<slug> import <slug>``). Modern PCC tests find
+# ``build`` first, so this is only consulted when ``build`` is missing.
+def {component_name_for_shim}(device, torch_module=None):
     return Tt{component_class_name}.build(device, torch_module)
 '''
 
