@@ -135,12 +135,12 @@ FORCE_INLINE void prefetcher_finalize_block(
 FORCE_INLINE void load_sender_state(volatile tt_l1_ptr DramSenderStateBlock* sb, RemoteSenderCBInterface& iface) {
     iface.config_ptr = sb->config_ptr;
     iface.fifo_start_addr = sb->fifo_start_addr;
-    iface.fifo_limit_page_aligned = sb->fifo_limit_page_aligned;
-    iface.fifo_page_size = sb->fifo_page_size;
     iface.fifo_wr_ptr = sb->fifo_wr_ptr;
     iface.receiver_noc_xy_ptr = sb->receiver_noc_xy_ptr;
     iface.aligned_pages_sent_ptr = sb->aligned_pages_sent_ptr;
     iface.num_receivers_and_remote_pages_sent_ptr = sb->num_receivers_and_remote_pages_sent_ptr;
+    // fifo_limit_page_aligned / fifo_page_size are intentionally not loaded: they're
+    // recomputed per-tensor by resize_remote_sender_cb_interface before any use.
 }
 
 // Writes back only the field that needs to persist across requests targeting this

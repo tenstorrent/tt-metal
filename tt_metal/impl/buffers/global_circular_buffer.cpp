@@ -206,8 +206,6 @@ void GlobalCircularBuffer::initialize_dram_sender_state_block(
     auto* hdr = reinterpret_cast<DramSenderStateBlock*>(block_bytes.data());
     hdr->config_ptr = config_block_addr;
     hdr->fifo_start_addr = buffer_address;
-    hdr->fifo_limit_page_aligned = 0;  // set per-tensor at request time by the kernel
-    hdr->fifo_page_size = 0;           // set per-tensor at request time by the kernel
     hdr->fifo_wr_ptr = buffer_address;
     hdr->receiver_noc_xy_ptr = noc_xy_table_addr;
     hdr->aligned_pages_sent_ptr = static_cast<uint32_t>(pages_sent_drisc_l1_base_);
