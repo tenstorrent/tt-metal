@@ -164,7 +164,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     //     sender's right and can write leftward on NOC1 (the -X NOC, writer default).
     //     Cores are divided into groups, sender placed at group offset 0:
     //     [sender0, untilizer0_0..untilizer0_{k0-1}, sender1, untilizer1_0..untilizer1_{k1-1}, ...]
-    //   ROW_MAJOR: first num_cores cores are senders, remaining are untilizer (for zero-init only).
+    //   ROW_MAJOR: first num_cores cores are senders, remaining are untilizer (for output-zeroing only).
     //     [sender0, sender1, untilizer0, untilizer1, untilizer2, ...]
     // Collect all cores in the first row (y == subdevice_cores[0].y), sorted by x.
     uint32_t sender_row_y = subdevice_cores.at(0).y;
@@ -217,7 +217,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             sender_cores.push_back(all_row_cores[s]);
         }
         for (uint32_t i = num_cores; i < total_row_cores; i++) {
-            // Distribute untilizer cores round-robin across senders (for zero-init)
+            // Distribute untilizer cores round-robin across senders (for output-zeroing)
             uint32_t s = (i - num_cores) % num_cores;
             sender_untilizer_groups[s].push_back(all_row_cores[i]);
             all_untilizer_cores.push_back(all_row_cores[i]);
@@ -227,7 +227,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
 
     // Cap each sender's untilizer group at MAX_UNTILIZERS_PER_SENDER (TILE_LAYOUT only).  Required to
     // stay under the per-core 16-semaphore limit on senders that own one data_ready sem per
-    // untilizer (k_s sems on sender) on top of zero_init/zero_init_barrier/counter_ready/zi_done
+    // untilizer (k_s sems on sender) on top of output_init_complete/output_init_barrier/counter_ready/output_init_done
     // + 2 fabric sems for middle chips, totaling 6 + k_s.  Excess untilizers assigned by the
     // initial split above are dropped: their row cores stay in the worker grid but get no
     // untilizer kernels.  k_s[i] = min(k_s[i], MAX_UNTILIZERS_PER_SENDER).
@@ -311,8 +311,8 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         TT_THROW("No free L1 semaphore slot (per-core 16 limit) for the requested core range set");
     };
 
-    uint32_t zero_init_semaphore_id = add_sema(sender_core_grid);
-    uint32_t zero_init_barrier_semaphore_id = add_sema(sender_core_grid);
+    uint32_t output_init_complete_semaphore_id = add_sema(sender_core_grid);
+    uint32_t output_init_barrier_semaphore_id = add_sema(sender_core_grid);
 
     const uint32_t read_batch_size = is_tile_layout ? dispatched_buffer.tensor_spec().tile().get_height() : 8;
 
@@ -558,9 +558,9 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     reader_defines["IS_TILE_LAYOUT"] = is_tile_layout ? "1" : "0";
 
     const bool init_zeros = operation_attributes.init_zeros;
-    tt::tt_metal::KernelHandle zero_init_kernel_id = 0;
-    std::vector<CoreCoord> zero_init_cores_vec;
-    uint32_t zi_done_semaphore_id = 0;
+    tt::tt_metal::KernelHandle writer_untilize_kernel_id = 0;
+    std::vector<CoreCoord> writer_untilize_cores_vec;
+    uint32_t output_init_done_semaphore_id = 0;
     uint32_t pages_per_core = 0;
     uint32_t remainder_pages = 0;
 
@@ -688,7 +688,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             /*cb_id=*/tt::CBIndex::c_0,
             "dispatched_buffer_untilizer");
         // c_2 on untilizer cores: untilized output rows, double-buffered (2 × read_batch_size).
-        // Lets compute pack batch N+1 into the second half while zero_init_writer is still
+        // Lets compute pack batch N+1 into the second half while writer_untilize is still
         // routing batch N out of the first half — overlapping pack with NOC sends.
         detail::create_tensor_cb(
             desc,
@@ -698,10 +698,10 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             /*cb_id=*/tt::CBIndex::c_2,
             "untilize");
         // c_9 on untilizer cores: metadata-batch CB. reader_untilize on this core reads the
-        // per-batch metadata pages from DRAM and pushes them here; zero_init_writer pops
+        // per-batch metadata pages from DRAM and pushes them here; writer_untilize pops
         // batch_count pages each iteration and decides the per-batch path locally (sender
         // no longer writes to this CB).  Double-buffered (2 × read_batch_size) so
-        // reader_untilize can stage batch N+1's metadata while zero_init_writer is still
+        // reader_untilize can stage batch N+1's metadata while writer_untilize is still
         // consuming batch N — matches the double-buffered untilize CB (c_2).
         {
             uint32_t metadata_batch_page_size = detail::get_aligned_page_size(dispatched_metadata);
@@ -805,13 +805,13 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     std::map<std::string, std::string> writer_defines = fabric_defines;
     writer_defines["INIT_ZEROS"] = operation_attributes.init_zeros ? "1" : "0";
 
-    // zero_init_writer kernel is launched whenever either:
-    //   (a) init_zeros=True — it does the per-bank zero-init of the output tensor
-    //   (b) is_tile_layout — it runs the post-zero-init untilized-data send loop
+    // writer_untilize kernel is launched whenever either:
+    //   (a) init_zeros=True — it does the per-bank output-zeroing of the output tensor
+    //   (b) is_tile_layout — it runs the post-output-zeroing untilized-data send loop
     //                        (consumes cb_untilize_id, writes back to the sender's c_18).
-    // With init_zeros=False on TILE_LAYOUT only (b) applies, so the zero-init CBs/semaphore
+    // With init_zeros=False on TILE_LAYOUT only (b) applies, so the output-zeroing CBs/semaphore
     // are skipped and the kernel is compiled with INIT_ZEROS=0.
-    const bool create_zi_kernel = init_zeros || is_tile_layout;
+    const bool create_writer_untilize_kernel = init_zeros || is_tile_layout;
 
     if (init_zeros) {
         uint32_t noc_max_burst_size;
@@ -821,7 +821,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         } else if (arch == tt::ARCH::WORMHOLE_B0) {
             noc_max_burst_size = 8192;
         } else {
-            TT_THROW("Unsupported architecture for zero-init: {}", arch);
+            TT_THROW("Unsupported architecture for output-zeroing: {}", arch);
         }
 
         desc.cbs.push_back(tt::tt_metal::CBDescriptor{
@@ -834,10 +834,10 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             }}},
         });
 
-        uint32_t total_zero_init_cores = num_cores + num_untilizer_cores;
+        uint32_t total_init_cores = num_cores + num_untilizer_cores;
         uint32_t total_output_pages = detail::get_num_pages(output_tensor);
-        pages_per_core = total_output_pages / total_zero_init_cores;
-        remainder_pages = total_output_pages % total_zero_init_cores;
+        pages_per_core = total_output_pages / total_init_cores;
+        remainder_pages = total_output_pages % total_init_cores;
 
         desc.cbs.push_back(tt::tt_metal::CBDescriptor{
             .total_size = noc_max_burst_size,
@@ -849,69 +849,75 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             }}},
         });
 
-        zi_done_semaphore_id = add_sema(worker_core_range_set);
+        output_init_done_semaphore_id = add_sema(worker_core_range_set);
     }
 
-    if (create_zi_kernel) {
+    if (create_writer_untilize_kernel) {
         uint32_t output_aligned_page_size = detail::get_aligned_page_size(output_tensor);
-        std::vector<uint32_t> zi_compile_time_args = {
+        std::vector<uint32_t> writer_untilize_compile_time_args = {
             output_aligned_page_size,
             // num_sender_cores and cb_zero_buffer_id are only referenced inside the
-            // INIT_ZEROS-gated zero-init phase in the kernel; pass 0 when init_zeros=False
+            // INIT_ZEROS-gated output-zeroing phase in the kernel; pass 0 when init_zeros=False
             // (the c_6 CB is not created in that case so its index is meaningless).
             init_zeros ? num_cores : 0u,
             init_zeros ? static_cast<uint32_t>(tt::CBIndex::c_6) : 0u,
         };
-        tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(zi_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_untilize_compile_time_args);
 
-        // Tile-layout-only compile-time args used by the post-zero-init untilized-data send loop.
+        // Tile-layout-only compile-time args used by the post-output-zeroing untilized-data send loop.
         // In ROW_MAJOR the corresponding #if IS_TILE_LAYOUT block is compiled out, so these
         // trailing args are ignored — still pushed unconditionally to keep the kernel object stable.
-        zi_compile_time_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_2));     // cb_untilize_id
-        zi_compile_time_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_1));     // cb_experts_tok_counter_id
-        zi_compile_time_args.push_back(detail::get_num_pages(expert_token_counts));  // experts_tok_counter_pages
-        zi_compile_time_args.push_back(detail::get_aligned_page_size(expert_token_counts));  // counter page size
-        zi_compile_time_args.push_back(read_batch_size);
-        zi_compile_time_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_9));  // cb_metadata_batch_id
-        zi_compile_time_args.push_back(operation_attributes.num_experts_per_tok);  // num_experts_per_tok
-        zi_compile_time_args.push_back(
-            detail::get_aligned_page_size(dispatched_metadata));  // aligned_dispatched_metadata_page_size
-        zi_compile_time_args.push_back(linearized_mesh_coord);    // linearized_mesh_coord
-        zi_compile_time_args.push_back(operation_attributes.experts_per_chip);     // experts_per_chip
-        zi_compile_time_args.push_back(counter_offset);                            // counter_offset
-        zi_compile_time_args.push_back((uint32_t)max_dispatch_buffer_token_size);  // max_dispatch_buffer_token_size
-        zi_compile_time_args.push_back(full_ct_dim);                               // full_ct_dim (= hidden_size / 32)
+        writer_untilize_compile_time_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_2));  // cb_untilize_id
+        writer_untilize_compile_time_args.push_back(
+            static_cast<uint32_t>(tt::CBIndex::c_1));  // cb_experts_tok_counter_id
+        writer_untilize_compile_time_args.push_back(
+            detail::get_num_pages(expert_token_counts));  // experts_tok_counter_pages
+        writer_untilize_compile_time_args.push_back(
+            detail::get_aligned_page_size(expert_token_counts));  // counter page size
+        writer_untilize_compile_time_args.push_back(read_batch_size);
+        writer_untilize_compile_time_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_9));   // cb_metadata_batch_id
+        writer_untilize_compile_time_args.push_back(operation_attributes.num_experts_per_tok);  // num_experts_per_tok
+        writer_untilize_compile_time_args.push_back(
+            detail::get_aligned_page_size(dispatched_metadata));             // aligned_dispatched_metadata_page_size
+        writer_untilize_compile_time_args.push_back(linearized_mesh_coord);  // linearized_mesh_coord
+        writer_untilize_compile_time_args.push_back(operation_attributes.experts_per_chip);  // experts_per_chip
+        writer_untilize_compile_time_args.push_back(counter_offset);                         // counter_offset
+        writer_untilize_compile_time_args.push_back(
+            (uint32_t)max_dispatch_buffer_token_size);             // max_dispatch_buffer_token_size
+        writer_untilize_compile_time_args.push_back(full_ct_dim);  // full_ct_dim (= hidden_size / 32)
         // cb_counter_total_pages = full page capacity of c_1 on the untilizer (counter pages +
         // trailer page). Used so writer_untilize cb_wait_fronts the entire CB.
-        zi_compile_time_args.push_back(detail::get_num_pages(expert_token_counts) + 1);  // cb_counter_total_pages
-        zi_compile_time_args.push_back(SLOTS_PER_UNTILIZER);  // per-untilizer ring depth on the sender's receive_buf
+        writer_untilize_compile_time_args.push_back(
+            detail::get_num_pages(expert_token_counts) + 1);  // cb_counter_total_pages
+        writer_untilize_compile_time_args.push_back(
+            SLOTS_PER_UNTILIZER);  // per-untilizer ring depth on the sender's receive_buf
 
-        std::map<std::string, std::string> zi_defines;
-        zi_defines["IS_TILE_LAYOUT"] = is_tile_layout ? "1" : "0";
-        zi_defines["INIT_ZEROS"] = init_zeros ? "1" : "0";
+        std::map<std::string, std::string> writer_untilize_defines;
+        writer_untilize_defines["IS_TILE_LAYOUT"] = is_tile_layout ? "1" : "0";
+        writer_untilize_defines["INIT_ZEROS"] = init_zeros ? "1" : "0";
 
-        tt::tt_metal::KernelDescriptor zero_init_kd;
-        zero_init_kd.kernel_source =
+        tt::tt_metal::KernelDescriptor writer_untilize_kd;
+        writer_untilize_kd.kernel_source =
             "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/dataflow/"
             "writer_untilize.cpp";
-        zero_init_kd.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
-        zero_init_kd.core_ranges = untilizer_core_grid;
-        zero_init_kd.compile_time_args = std::move(zi_compile_time_args);
-        zero_init_kd.defines = {zi_defines.begin(), zi_defines.end()};
-        zero_init_kd.config = tt::tt_metal::DataMovementConfigDescriptor{
+        writer_untilize_kd.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+        writer_untilize_kd.core_ranges = untilizer_core_grid;
+        writer_untilize_kd.compile_time_args = std::move(writer_untilize_compile_time_args);
+        writer_untilize_kd.defines = {writer_untilize_defines.begin(), writer_untilize_defines.end()};
+        writer_untilize_kd.config = tt::tt_metal::DataMovementConfigDescriptor{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::detail::preferred_noc_for_dram_write(mesh_device->arch()),
         };
-        zero_init_kernel_id = static_cast<tt::tt_metal::KernelHandle>(desc.kernels.size());
-        desc.kernels.push_back(std::move(zero_init_kd));
+        writer_untilize_kernel_id = static_cast<tt::tt_metal::KernelHandle>(desc.kernels.size());
+        desc.kernels.push_back(std::move(writer_untilize_kd));
 
-        zero_init_cores_vec = untilizer_row_cores;
+        writer_untilize_cores_vec = untilizer_row_cores;
     }
 
     // Reader compile-time args base (without num_untilizer_cores — that is per-sender and appended below).
     std::vector<uint32_t> reader_compile_time_args_base = compile_time_args;
     if (init_zeros) {
-        reader_compile_time_args_base.push_back(static_cast<uint32_t>(tt::CBIndex::c_7));  // zi_cb_id
+        reader_compile_time_args_base.push_back(static_cast<uint32_t>(tt::CBIndex::c_7));  // zero-buffer CB id (c_7)
         reader_compile_time_args_base.push_back(
             num_untilizer_cores);  // num_total_untilizer_cores (both layouts need this)
     }
@@ -1011,37 +1017,37 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     }
 
     // Set runtime args for hybrid untilizer row cores.  Three layouts are possible:
-    //   init_zeros && tile_layout: [output_addr, page_start, page_end, zi_done_sem,
+    //   init_zeros && tile_layout: [output_addr, page_start, page_end, output_init_done_sem,
     //                               (sender_noc_x, sender_noc_y) * num_cores,
     //                               counter_ready_sem, owning_sender_noc_x, owning_sender_noc_y,
     //                               data_ready_sem, start_sem, local_core_id]
-    //   init_zeros && row_major:   [output_addr, page_start, page_end, zi_done_sem,
+    //   init_zeros && row_major:   [output_addr, page_start, page_end, output_init_done_sem,
     //                               (sender_noc_x, sender_noc_y) * num_cores]
     //   !init_zeros && tile_layout:[output_addr, counter_ready_sem, owning_sender_noc_x,
     //                               owning_sender_noc_y, data_ready_sem, start_sem, local_core_id]
-    // The kernel guards the zero-init reads with #if INIT_ZEROS so the indices match.
-    if (create_zi_kernel) {
+    // The kernel guards the output-zeroing reads with #if INIT_ZEROS so the indices match.
+    if (create_writer_untilize_kernel) {
         for (uint32_t untilizer_idx = 0; untilizer_idx < num_untilizer_cores; untilizer_idx++) {
             // Push output_tensor's buffer first as Buffer* so the framework records
             // a BufferBinding for the cache-hit fast path.
-            tt::tt_metal::KernelDescriptor::RTArgList zi_runtime_args;
-            zi_runtime_args.push_back(output_tensor.buffer());
+            tt::tt_metal::KernelDescriptor::RTArgList writer_untilize_runtime_args;
+            writer_untilize_runtime_args.push_back(output_tensor.buffer());
 
             if (init_zeros) {
                 uint32_t row_idx = num_cores + untilizer_idx;
                 uint32_t page_start = (row_idx * pages_per_core) + std::min(row_idx, remainder_pages);
                 uint32_t page_end = page_start + pages_per_core + (row_idx < remainder_pages ? 1 : 0);
-                zi_runtime_args.push_back(page_start);
-                zi_runtime_args.push_back(page_end);
-                zi_runtime_args.push_back(zi_done_semaphore_id);
-                // Each untilizer core signals all sender cores once its zero-init slice is done.
+                writer_untilize_runtime_args.push_back(page_start);
+                writer_untilize_runtime_args.push_back(page_end);
+                writer_untilize_runtime_args.push_back(output_init_done_semaphore_id);
+                // Each untilizer core signals all sender cores once its output-zeroing slice is done.
                 for (const auto& [noc_x, noc_y] : sender_noc_coords) {
-                    zi_runtime_args.push_back(noc_x);
-                    zi_runtime_args.push_back(noc_y);
+                    writer_untilize_runtime_args.push_back(noc_x);
+                    writer_untilize_runtime_args.push_back(noc_y);
                 }
             }
 
-            // TILE_LAYOUT: append owning-sender info so zero_init_writer can run its send loop.
+            // TILE_LAYOUT: append owning-sender info so writer_untilize can run its send loop.
             // In ROW_MAJOR the trailing args are ignored (kernel compiled with IS_TILE_LAYOUT=0).
             if (is_tile_layout) {
                 uint32_t s = untilizer_sender_map[untilizer_idx];
@@ -1055,19 +1061,19 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
                         local_core_id++;
                     }
                 }
-                zi_runtime_args.push_back(counter_ready_semaphore_id);
-                zi_runtime_args.push_back(sender_noc_coords[s].first);
-                zi_runtime_args.push_back(sender_noc_coords[s].second);
-                zi_runtime_args.push_back(data_ready_semaphore_ids[s][local_core_id]);
-                zi_runtime_args.push_back(credits_semaphore_ids[s][local_core_id]);
-                zi_runtime_args.push_back(local_core_id);
-                zi_runtime_args.push_back(k_s);           // num_untilizer_cores
-                zi_runtime_args.push_back(expert_start);  // expert_start_idx
-                zi_runtime_args.push_back(expert_end);    // expert_end_idx
+                writer_untilize_runtime_args.push_back(counter_ready_semaphore_id);
+                writer_untilize_runtime_args.push_back(sender_noc_coords[s].first);
+                writer_untilize_runtime_args.push_back(sender_noc_coords[s].second);
+                writer_untilize_runtime_args.push_back(data_ready_semaphore_ids[s][local_core_id]);
+                writer_untilize_runtime_args.push_back(credits_semaphore_ids[s][local_core_id]);
+                writer_untilize_runtime_args.push_back(local_core_id);
+                writer_untilize_runtime_args.push_back(k_s);           // num_untilizer_cores
+                writer_untilize_runtime_args.push_back(expert_start);  // expert_start_idx
+                writer_untilize_runtime_args.push_back(expert_end);    // expert_end_idx
             }
 
-            desc.kernels[zero_init_kernel_id].emplace_runtime_args(
-                zero_init_cores_vec[untilizer_idx], zi_runtime_args);
+            desc.kernels[writer_untilize_kernel_id].emplace_runtime_args(
+                writer_untilize_cores_vec[untilizer_idx], writer_untilize_runtime_args);
         }
     }
 
@@ -1084,8 +1090,8 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         reader_runtime_args.push_back(expert_token_counts.buffer());
         reader_runtime_args.push_back(expert_region_offsets.buffer());
         reader_runtime_args.push_back(output_tensor.buffer());
-        reader_runtime_args.push_back(zero_init_semaphore_id);
-        reader_runtime_args.push_back(zero_init_barrier_semaphore_id);
+        reader_runtime_args.push_back(output_init_complete_semaphore_id);
+        reader_runtime_args.push_back(output_init_barrier_semaphore_id);
         reader_runtime_args.push_back(num_cores);
         reader_runtime_args.push_back(expert_start);
         reader_runtime_args.push_back(expert_end);
@@ -1094,7 +1100,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             uint32_t sender_page_end = sender_page_start + pages_per_core + (core_idx < remainder_pages ? 1 : 0);
             reader_runtime_args.push_back(sender_page_start);
             reader_runtime_args.push_back(sender_page_end);
-            reader_runtime_args.push_back(zi_done_semaphore_id);
+            reader_runtime_args.push_back(output_init_done_semaphore_id);
         }
         if (is_tile_layout) {
             // Multicast targets only this sender's dedicated untilizer group
@@ -1126,10 +1132,10 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             expert_token_counts.buffer()->address(),
             expert_region_offsets.buffer()->address(),
             output_tensor.buffer()->address(),
-            zero_init_semaphore_id,
+            output_init_complete_semaphore_id,
             (uint32_t)init_semaphore.address(),
             (uint32_t)exit_semaphore.address(),
-            zero_init_barrier_semaphore_id,
+            output_init_barrier_semaphore_id,
             num_cores,
             expert_start,
             expert_end,
@@ -1197,7 +1203,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     // Layout: counter_ready_sem, dispatched_buffer_addr, expert_start, expert_end,
     //         dispatched_metadata_addr.
     // Sender NOC coords and per-sender data_ready/start semaphores are now consumed by
-    // zero_init_writer on the same core (which owns the untilized-data send).
+    // writer_untilize on the same core (which owns the untilized-data send).
     if (is_tile_layout) {
         for (uint32_t j = 0; j < num_untilizer_cores; j++) {
             uint32_t s = untilizer_sender_map[j];
