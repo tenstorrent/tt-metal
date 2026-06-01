@@ -250,10 +250,24 @@ Run twice (two processes); compare with `nd_tools/nd_compare_runs.py <logA> <log
 config reproduces in ~3 min/run; 1024 tokens does NOT reproduce (too little scale).
 
 ### Status of experiments
-- [ ] Within-process drift (iter-to-iter) — pending device (blocked by soak)
-- [ ] Across-process first-diverging stage — pending device
-- [ ] A/B `init_zeros` True vs False — pending device
+- [x] Within-process drift — measured: fully deterministic (iter0..4 bit-identical).
+- [x] Across-process first-diverging stage — layer_3 → routed-expert FFN output.
+- [x] A/B unified vs naive — unified non-deterministic, naive deterministic.
+- [x] A/B combine `init_zeros` relevance — garbage present+masked in both; not the cause.
+- [x] Kernel fix attempt: sender flush→barrier — did NOT fix (race is deeper).
+- [~] Kernel fix attempt: max-sync reader — could not complete (device re-taken by a
+      second colleague soak); the reader/compute/writer were reverted to pristine.
+- [ ] Proper unified-kernel fix — handed off to kernel owner (see RECOMMENDED FIX).
 
-> Device note: shared 32-chip galaxy was occupied ~2h by a colleague's soak that
-> `pkill -9 -f pytest` + `tt-smi -glx_reset` between iterations, so concurrent runs
-> are impossible. Experiments queued for when it frees.
+### Deliverables on this branch
+- Instrumentation: `utils/nd_debug.py` + test hooks (`TT_DS_ND_DEBUG`,
+  `TT_DS_ND_DEBUG_LAYER`, `TT_DS_ND_FULL_INTERMEDIATES`, `TT_DS_ND_COMBINE_INIT_ZEROS`).
+- Test knobs: `TT_REXPERT_FORCE_NAIVE` (python), `TT_REXPERT_FORCE_DEFAULT` (C++).
+- Tooling: `nd_tools/nd_compare_runs.py`, `nd_tools/run_nd.sh`.
+- All device kernels left UNMODIFIED (fix attempts reverted; they did not work).
+
+> Device note: the shared 32-chip galaxy was occupied by colleague `nostojic`'s
+> 20× soaks (which `pkill -9 -f pytest` + `tt-smi -glx_reset` between iterations),
+> so experiments had to be serialized into free windows. The kernel-fix iteration
+> is unfinished only because the device was re-taken, not because of a dead end —
+> it can resume via the JIT A/B in "How to reproduce / verify".
