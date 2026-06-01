@@ -305,7 +305,7 @@ class VoxtralTTSPipeline:
         request = compose_speech_request(text, self.model_name_or_path, voice=voice)
         prompt_token_ids: list[int] = request["prompt_token_ids"]
         S_prompt = len(prompt_token_ids)
-
+        #   need to modify to tt
         inputs_embeds = self._build_voice_injected_embeds(prompt_token_ids, voice)
         if debug is not None:
             debug.set("embeds.prompt", inputs_embeds)
@@ -315,7 +315,7 @@ class VoxtralTTSPipeline:
         last_hidden = self.text.prefill_from_embeds(inputs_embeds, start_pos=0)
         if debug is not None:
             debug.set("text.prefill.hidden", last_hidden)
-
+        # why torch tensor,
         cfg_alpha = torch.tensor(ACOUSTIC_CFG_ALPHA_DEFAULT, dtype=torch.bfloat16)
         generated_codes: list[torch.Tensor] = []
         current_pos = S_prompt
