@@ -86,21 +86,6 @@ FORCE_INLINE volatile T tt_l1_ptr* uncached_l1_ptr(uintptr_t addr) {
     return reinterpret_cast<volatile T tt_l1_ptr*>(l1_uncached_addr(addr));
 }
 
-// Drop stale CPU-side cache state before re-polling TL1 that an external agent (host NOC, another
-// core) may have updated. cached_tl1_addr is the cacheable-port offset, not +MEM_L1_UNCACHED_BASE.
-// Quasar DM: invalidate the 64B L2 line containing cached_tl1_addr so the next load refetches TL1.
-// One line is sufficient when the caller reloads a single scalar (e.g. one FetchQ entry); use
-// invalidate_l2_cache_line in a loop (see flush_l2_cache_range) if invalidating a larger span.
-// Blackhole: fence (invalidate_l1_cache). Other archs: invalidate_l1_cache (no-op on WH).
-FORCE_INLINE void tl1_poll_invalidate(uintptr_t cached_tl1_addr) {
-#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
-    invalidate_l2_cache_line(cached_tl1_addr & ~uintptr_t(63));
-#else
-    (void)cached_tl1_addr;
-    invalidate_l1_cache();
-#endif
-}
-
 // Push DM-written TL1 (cached-port offset) through L2 so host NOC and other agents see it.
 FORCE_INLINE void tl1_publish_flush(uintptr_t cached_tl1_addr) {
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)

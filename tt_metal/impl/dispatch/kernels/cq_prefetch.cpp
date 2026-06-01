@@ -531,7 +531,6 @@ FORCE_INLINE uint32_t read_from_pcie(
         fence = cmddat_q_base;
     }
 
-
     // Wrap pcie/hugepage
     if (pcie_read_ptr + size > pcie_base + pcie_size) {
 #if ENABLE_PREFETCH_DPRINTS
