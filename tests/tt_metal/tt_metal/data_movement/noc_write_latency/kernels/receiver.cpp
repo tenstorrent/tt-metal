@@ -9,8 +9,8 @@
 void kernel_main() {
     constexpr uint32_t flag_l1_addr = get_compile_time_arg_val(0);
     constexpr uint32_t num_iterations = get_compile_time_arg_val(1);
-    constexpr uint32_t my_noc_x = get_compile_time_arg_val(2);
-    constexpr uint32_t my_noc_y = get_compile_time_arg_val(3);
+    constexpr uint32_t my_noc_x = get_compile_time_arg_val(2);  // used only for diagnostic print
+    constexpr uint32_t my_noc_y = get_compile_time_arg_val(3);  // used only for diagnostic print
 
     volatile tt_l1_ptr uint32_t* flag_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(flag_l1_addr + MEM_L1_UNCACHED_BASE);
