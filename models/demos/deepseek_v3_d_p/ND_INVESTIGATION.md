@@ -239,6 +239,28 @@ visibility race, not an accumulation-order or uninitialized-NaN bug.
   semaphore is observed (posted-atomic vs posted-write ordering);
   (c) the concurrent dual-sender "ack both upfront" optimization.
 
+## Max-sync reader experiment (reader exonerated)
+Applied maximal synchronization to the unified **reader**: replaced all 4
+pre-valid-sem `noc_async_writes_flushed()` with `noc_async_write_barrier()` AND
+added `noc_async_atomic_barrier()` after every valid-semaphore multicast (8 barriers,
+JIT-recompiled, confirmed). Result at 5L/25600 across two processes: `routed_output`
+GLOBAL **still DIFFERS** (dnorm 3.45e-2, nonfinite=0). So the non-determinism is
+**NOT** the reader's explicit mcast synchronization. Two possibilities remain:
+1. **compute (`fused_swiglu`, PACKER_L1_ACC matmul) or writer** is the source; or
+2. the **multicast data write is posted** (no ack), so `noc_async_write_barrier()` is
+   a no-op for it and the data-vs-valid ordering relies on same-NoC delivery, which
+   the concurrent dual-sender / loopback optimization may violate — i.e. a reader race
+   that *these particular barriers cannot fix* (would need non-posted mcast writes or a
+   receiver-side data fence).
+
+Next experiments (when device free; all JIT, ~3 min/run, 5L/25600 GLOBAL A/B oracle):
+- Probe `expert_outputs` masked to valid rows to confirm FFN valid output drifts
+  (already implied: `routed_output` GLOBAL drifts).
+- Serialize the dual-sender path; replace the activated loopback mcast with local
+  copy + plain mcast (tests possibility 2 / canonical-deviation).
+- If reader variants all fail → instrument/inspect `fused_swiglu` PACKER_L1_ACC and the
+  writer (possibility 1); needs DPRINT/NoC tracing — kernel-owner tooling.
+
 ## Comparison vs the canonical (known-deterministic) matmul mcast
 The standard tt-metal block-sharded matmul in0 sender
 (`ttnn/.../matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp`)
