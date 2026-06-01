@@ -20,6 +20,7 @@ import ttnn
 from ttnn.experimental.moe_compute_utils import (
     add_shared_expert_weights as torch_add_shared_expert_weights,
     get_weight_core_shard_maps,
+    get_weight_mem_configs as torch_get_weight_mem_configs,
     prepare_w0_w1_tensor_for_moe_compute as torch_prepare_w0_w1,
     prepare_w0_w1_tensor_with_bias as torch_prepare_w0_w1_with_bias,
     prepare_w2_tensor_for_moe_compute as torch_prepare_w2,
@@ -163,6 +164,51 @@ def _torch_prepare_w2_with_bias_per_device_stacked(
 
 
 # ---------------------------------------------------------------------------
+# get_weight_core_shard_maps
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+@pytest.mark.parametrize("mesh_shape, mesh_device", MESH_PARAMS, indirect=["mesh_device"])
+@pytest.mark.parametrize("hidden_size, N", DIM_PARAMS)
+def test_get_weight_core_shard_maps_parity(mesh_device, mesh_shape, hidden_size, N):
+    py_w0_w1, py_w2, py_crs = get_weight_core_shard_maps(mesh_device, hidden_size, N)
+    tt_result = ttnn.experimental.get_weight_core_shard_maps(mesh_device, hidden_size, N)
+    assert list(tt_result.w0_w1_shard_map) == list(py_w0_w1)
+    assert [tuple(p) for p in tt_result.w2_shard_map] == [tuple(p) for p in py_w2]
+    assert tt_result.dram_core_range_set == py_crs
+
+
+# ---------------------------------------------------------------------------
+# get_weight_mem_configs
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+@pytest.mark.parametrize("mesh_shape, mesh_device", MESH_PARAMS, indirect=["mesh_device"])
+@pytest.mark.parametrize("hidden_size, N", DIM_PARAMS)
+@pytest.mark.parametrize("num_layers, experts_per_device", [(1, 2)])
+@pytest.mark.parametrize("has_bias", [False, True])
+def test_get_weight_mem_configs_parity(
+    mesh_device, mesh_shape, hidden_size, N, num_layers, experts_per_device, has_bias
+):
+    py_w0_w1_map, py_w2_map, py_crs = get_weight_core_shard_maps(mesh_device, hidden_size, N)
+    py_w0_w1_mc, py_w2_mc, _, _ = torch_get_weight_mem_configs(
+        num_layers, experts_per_device, hidden_size, N, py_w0_w1_map, py_w2_map, py_crs, has_bias=has_bias
+    )
+    tt_result = ttnn.experimental.get_weight_mem_configs(
+        mesh_device,
+        num_layers=num_layers,
+        experts_per_device=experts_per_device,
+        hidden_size=hidden_size,
+        intermediate_size=N,
+        has_bias=has_bias,
+    )
+    assert tt_result.w0_w1 == py_w0_w1_mc
+    assert tt_result.w2 == py_w2_mc
+
+
+# ---------------------------------------------------------------------------
 # prepare_w0_w1_tensor_for_moe_compute
 # ---------------------------------------------------------------------------
 
@@ -189,7 +235,7 @@ def test_prepare_w0_w1_tensor_parity(mesh_device, mesh_shape, hidden_size, N, nu
     tt_w0 = _shard_to_mesh(torch_w0, mesh_device, dim=1)
     tt_w1 = _shard_to_mesh(torch_w1, mesh_device, dim=1)
     tt_out = ttnn.experimental.prepare_w0_w1_tensor_for_moe_compute(
-        tt_w0, tt_w1, L=num_layers, E=experts_per_device, K=hidden_size, N=N, shard_map=w0_w1_shard_map
+        tt_w0, tt_w1, L=num_layers, E=experts_per_device, K=hidden_size, N=N
     )
     ttnn.synchronize_device(mesh_device)
     tt_pulled = _concat_from_mesh(tt_out, mesh_device, dim=2)
@@ -228,8 +274,6 @@ def test_prepare_w2_tensor_parity(mesh_device, mesh_shape, hidden_size, N, num_l
         E=experts_per_device,
         N=N,
         K=hidden_size,
-        w2_shard_map=w2_shard_map,
-        w0_w1_shard_map=w0_w1_shard_map,
     )
     ttnn.synchronize_device(mesh_device)
 
@@ -287,7 +331,6 @@ def test_prepare_w0_w1_tensor_with_bias_parity(mesh_device, mesh_shape, hidden_s
         E=experts_per_device,
         K=hidden_size,
         N=N,
-        shard_map=w0_w1_shard_map,
     )
     ttnn.synchronize_device(mesh_device)
 
@@ -338,8 +381,6 @@ def test_prepare_w2_tensor_with_bias_parity(mesh_device, mesh_shape, hidden_size
         E=experts_per_device,
         N=N,
         K=hidden_size,
-        w2_shard_map=w2_shard_map,
-        w0_w1_shard_map=w0_w1_shard_map,
     )
     ttnn.synchronize_device(mesh_device)
     tt_pulled = _concat_from_mesh(tt_out, mesh_device, dim=2)

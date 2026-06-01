@@ -23,8 +23,6 @@ from ttnn.operations.ccl import MoEActivationFunction
 
 from ttnn.experimental.moe_compute_utils import (
     auto_output_width_shard_dim,
-    get_weight_core_shard_maps,
-    get_weight_mem_configs,
     _shard_tiles,
     _w2_shard_tiles,
 )
@@ -1556,12 +1554,6 @@ def run_moe_compute_test(
     #########################################
     logger.info(f"Creating matmul goldens and input tensors")
 
-    # --------------------------------------------------------------------------
-    # Shard grid
-    # --------------------------------------------------------------------------
-
-    w0_w1_shard_map, w2_shard_map, dram_core_range_set = get_weight_core_shard_maps(mesh_device, hidden_size, N)
-
     torch_w0 = create_torch_w0(num_layers, experts_per_device, hidden_size, N)
     torch_w1 = create_torch_w1(num_layers, experts_per_device, hidden_size, N)
     torch_w2 = create_torch_w2(num_layers, experts_per_device, N, hidden_size)
@@ -1622,16 +1614,16 @@ def run_moe_compute_test(
     )
 
     # Get memory configurations for weights (handles bias padding)
-    w0_w1_mem_config, w2_mem_config, K_for_shard, w2_N_total = get_weight_mem_configs(
-        num_layers,
-        experts_per_device,
-        hidden_size,
-        N,
-        w0_w1_shard_map,
-        w2_shard_map,
-        dram_core_range_set,
+    weight_mem_configs = ttnn.experimental.get_weight_mem_configs(
+        mesh_device,
+        num_layers=num_layers,
+        experts_per_device=experts_per_device,
+        hidden_size=hidden_size,
+        intermediate_size=N,
         has_bias=has_bias,
     )
+    w0_w1_mem_config = weight_mem_configs.w0_w1
+    w2_mem_config = weight_mem_configs.w2
 
     # ------------------------------------------------------------------------
     # Upload raw weights/biases to mesh (replicated, bfloat16, ROW_MAJOR) so the
@@ -1666,7 +1658,6 @@ def run_moe_compute_test(
             E=experts_per_device,
             K=hidden_size,
             N=N,
-            shard_map=w0_w1_shard_map,
         )
         ttnn.deallocate(tt_b0_raw)
         ttnn.deallocate(tt_b1_raw)
@@ -1678,7 +1669,6 @@ def run_moe_compute_test(
             E=experts_per_device,
             K=hidden_size,
             N=N,
-            shard_map=w0_w1_shard_map,
         )
     ttnn.deallocate(tt_w0_raw)
     ttnn.deallocate(tt_w1_raw)
@@ -1698,8 +1688,6 @@ def run_moe_compute_test(
             E=experts_per_device,
             N=N,
             K=hidden_size,
-            w2_shard_map=w2_shard_map,
-            w0_w1_shard_map=w0_w1_shard_map,
         )
         ttnn.deallocate(tt_b2_raw)
     else:
@@ -1709,8 +1697,6 @@ def run_moe_compute_test(
             E=experts_per_device,
             N=N,
             K=hidden_size,
-            w2_shard_map=w2_shard_map,
-            w0_w1_shard_map=w0_w1_shard_map,
         )
     ttnn.deallocate(tt_w2_raw)
 

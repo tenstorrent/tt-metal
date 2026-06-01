@@ -161,6 +161,55 @@ This matches the `all_worker_cores_bounding_box` used by the tilize kernel's per
 }
 
 void bind_moe_compute_utils(nb::module_& mod) {
+    nb::class_<ttnn::experimental::WeightCoreShardMaps>(mod, "WeightCoreShardMaps")
+        .def_ro("w0_w1_shard_map", &ttnn::experimental::WeightCoreShardMaps::w0_w1_shard_map)
+        .def_ro("w2_shard_map", &ttnn::experimental::WeightCoreShardMaps::w2_shard_map)
+        .def_ro("dram_core_range_set", &ttnn::experimental::WeightCoreShardMaps::dram_core_range_set);
+
+    ttnn::bind_function<"get_weight_core_shard_maps", "ttnn.experimental.">(
+        mod,
+        R"doc(
+        Compute per-ring-position shard maps for W0/W1 and W2 weight tensors,
+        plus the DRAM-bank ``CoreRangeSet`` used by the packed weight tensors'
+        memory configs.
+
+        Uses ``shard_tiles`` (Euclidean rhythm) for W0/W1 and ``w2_shard_tiles``
+        (complementary when ``Nt%n_cores + Ht%n_cores == n_cores``) for W2. Ring
+        ordering: DRAM bank logical coords sorted by ``(y, x)`` descending.
+
+        Returns an object with ``w0_w1_shard_map``, ``w2_shard_map``, and
+        ``dram_core_range_set`` attributes.
+        )doc",
+        &ttnn::experimental::get_weight_core_shard_maps,
+        nb::arg("mesh_device"),
+        nb::arg("hidden_size"),
+        nb::arg("intermediate_size"));
+
+    nb::class_<ttnn::experimental::WeightMemoryConfigs>(mod, "WeightMemoryConfigs")
+        .def_ro("w0_w1", &ttnn::experimental::WeightMemoryConfigs::w0_w1)
+        .def_ro("w2", &ttnn::experimental::WeightMemoryConfigs::w2);
+
+    ttnn::bind_function<"get_weight_mem_configs", "ttnn.experimental.">(
+        mod,
+        R"doc(
+        Build the DRAM-sharded ``MemoryConfig`` for the packed W0/W1 and W2
+        weight tensors. Shard maps and DRAM-bank ``CoreRangeSet`` are computed
+        internally from ``hidden_size`` and ``intermediate_size``.
+
+        When ``has_bias`` is true, padded K (for W0/W1) and N (for W2) grow by
+        one tile and are re-aligned to a multiple of ``BLOCK_TILES_H`` tiles.
+
+        Returns an object with ``w0_w1`` and ``w2`` ``MemoryConfig`` attributes.
+        )doc",
+        &ttnn::experimental::get_weight_mem_configs,
+        nb::arg("mesh_device"),
+        nb::kw_only(),
+        nb::arg("num_layers"),
+        nb::arg("experts_per_device"),
+        nb::arg("hidden_size"),
+        nb::arg("intermediate_size"),
+        nb::arg("has_bias") = false);
+
     ttnn::bind_function<"add_shared_expert_weights", "ttnn.experimental.">(
         mod,
         R"doc(
@@ -190,6 +239,9 @@ void bind_moe_compute_utils(nb::module_& mod) {
         reads. See ``ttnn.experimental.moe_compute_utils`` for the layout
         contract. Output local shape:
         ``(num_cores, L, E, groups_per_core, K_padded, 4*TILE_SIZE)``.
+
+        The per-core shard map is derived internally from ``K`` (hidden_size)
+        and ``N`` (intermediate_size) via ``get_weight_core_shard_maps``.
         )doc",
         &ttnn::experimental::prepare_w0_w1_tensor_for_moe_compute,
         nb::arg("tt_w0").noconvert(),
@@ -198,8 +250,7 @@ void bind_moe_compute_utils(nb::module_& mod) {
         nb::arg("L"),
         nb::arg("E"),
         nb::arg("K"),
-        nb::arg("N"),
-        nb::arg("shard_map"));
+        nb::arg("N"));
 
     ttnn::bind_function<"prepare_w2_tensor_for_moe_compute", "ttnn.experimental.">(
         mod,
@@ -208,8 +259,8 @@ void bind_moe_compute_utils(nb::module_& mod) {
         Output local shape:
         ``(num_cores, L, E, w2_groups_per_core, N_padded, 4*TILE_SIZE)``.
 
-        ``w2_shard_map`` is a list of ``(last_group_tiles, last_group_pad_tiles)``
-        pairs, one per ring position.
+        The per-core shard maps are derived internally from ``K`` (hidden_size)
+        and ``N`` (intermediate_size) via ``get_weight_core_shard_maps``.
         )doc",
         &ttnn::experimental::prepare_w2_tensor_for_moe_compute,
         nb::arg("tt_w2").noconvert(),
@@ -217,9 +268,7 @@ void bind_moe_compute_utils(nb::module_& mod) {
         nb::arg("L"),
         nb::arg("E"),
         nb::arg("N"),
-        nb::arg("K"),
-        nb::arg("w2_shard_map"),
-        nb::arg("w0_w1_shard_map"));
+        nb::arg("K"));
 
     ttnn::bind_function<"prepare_w0_w1_tensor_with_bias", "ttnn.experimental.">(
         mod,
@@ -240,8 +289,7 @@ void bind_moe_compute_utils(nb::module_& mod) {
         nb::arg("L"),
         nb::arg("E"),
         nb::arg("K"),
-        nb::arg("N"),
-        nb::arg("shard_map"));
+        nb::arg("N"));
 
     ttnn::bind_function<"prepare_w2_tensor_with_bias", "ttnn.experimental.">(
         mod,
@@ -260,9 +308,7 @@ void bind_moe_compute_utils(nb::module_& mod) {
         nb::arg("L"),
         nb::arg("E"),
         nb::arg("N"),
-        nb::arg("K"),
-        nb::arg("w2_shard_map"),
-        nb::arg("w0_w1_shard_map"));
+        nb::arg("K"));
 
     ttnn::bind_function<"quantize_weights_via_host", "ttnn.experimental.">(
         mod,

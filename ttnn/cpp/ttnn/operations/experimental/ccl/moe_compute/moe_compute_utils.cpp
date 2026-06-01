@@ -7,11 +7,16 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <stdexcept>
-#include <string>
+#include <numeric>
+#include <sstream>
+#include <utility>
 #include <vector>
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt_stl/small_vector.hpp>
 #include <tt_stl/span.hpp>
 
@@ -36,6 +41,7 @@ namespace {
 // `BLOCK_TILES_H` in the Python module; both W0/W1 and W2 use the same value.
 // Stays in sync with moe_ring_common.h.
 constexpr uint32_t BLOCK_TILES_H = ::moe_ring::W0_W1_BLOCK_TILES_H;
+constexpr uint32_t BLOCK_TILES_W = ::moe_ring::W0_W1_BLOCK_TILES_W;
 constexpr uint32_t TILE_SIZE = tt::constants::TILE_WIDTH;
 
 inline uint32_t ceil_div(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
@@ -211,6 +217,114 @@ ttnn::Tensor prepare_w2_no_n_pad(
 
 }  // namespace
 
+WeightCoreShardMaps get_weight_core_shard_maps(
+    ttnn::MeshDevice* mesh_device, uint32_t hidden_size, uint32_t intermediate_size) {
+    const auto in0_core_coords =
+        mesh_device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default);
+    const uint32_t n_cores = static_cast<uint32_t>(in0_core_coords.size());
+
+    // Ring ordering: sort the DRAM-bank logical core coords by (y, x) descending.
+    std::vector<uint32_t> ring_to_dram_bank(n_cores);
+    std::iota(ring_to_dram_bank.begin(), ring_to_dram_bank.end(), 0u);
+    std::sort(ring_to_dram_bank.begin(), ring_to_dram_bank.end(), [&](uint32_t a, uint32_t b) {
+        const auto& ca = in0_core_coords[a];
+        const auto& cb = in0_core_coords[b];
+        if (ca.y != cb.y) {
+            return ca.y > cb.y;
+        }
+        return ca.x > cb.x;
+    });
+
+    const uint32_t Nt = intermediate_size / TILE_SIZE;
+    const uint32_t Ht = hidden_size / TILE_SIZE;
+    const uint32_t max_w2_tiles = ceil_div(Ht, n_cores);
+    const uint32_t groups_per_core = ceil_div(max_w2_tiles, BLOCK_TILES_W);
+
+    WeightCoreShardMaps result;
+    result.w0_w1_shard_map.reserve(n_cores);
+    result.w2_shard_map.reserve(n_cores);
+
+    std::vector<ttnn::CoreRange> dram_core_ranges;
+    dram_core_ranges.reserve(n_cores);
+
+    for (uint32_t ring_pos = 0; ring_pos < n_cores; ++ring_pos) {
+        const uint32_t dram_bank_id = ring_to_dram_bank[ring_pos];
+
+        const uint32_t w0_w1_tiles = ::moe_ring::shard_tiles(Nt, ring_pos, n_cores);
+        result.w0_w1_shard_map.push_back(w0_w1_tiles);
+
+        const uint32_t w2_tiles = ::moe_ring::w2_shard_tiles(Ht, ring_pos, Nt, n_cores);
+        const uint32_t last_group_tiles = w2_tiles - (groups_per_core - 1) * BLOCK_TILES_W;
+        const uint32_t last_group_pad_tiles = groups_per_core * BLOCK_TILES_W - w2_tiles;
+        result.w2_shard_map.emplace_back(last_group_tiles, last_group_pad_tiles);
+
+        const ttnn::CoreCoord dram_core(dram_bank_id, 0);
+        dram_core_ranges.emplace_back(dram_core, dram_core);
+    }
+
+    result.dram_core_range_set = ttnn::CoreRangeSet(std::move(dram_core_ranges));
+    return result;
+}
+
+WeightMemoryConfigs get_weight_mem_configs(
+    ttnn::MeshDevice* mesh_device,
+    uint32_t num_layers,
+    uint32_t experts_per_device,
+    uint32_t hidden_size,
+    uint32_t intermediate_size,
+    bool has_bias) {
+    TT_FATAL(
+        hidden_size % TILE_SIZE == 0, "hidden_size ({}) must be divisible by TILE_SIZE ({})", hidden_size, TILE_SIZE);
+    TT_FATAL(
+        intermediate_size % TILE_SIZE == 0,
+        "intermediate_size ({}) must be divisible by TILE_SIZE ({})",
+        intermediate_size,
+        TILE_SIZE);
+
+    const auto shard_maps = get_weight_core_shard_maps(mesh_device, hidden_size, intermediate_size);
+    const auto& w0_w1_shard_map = shard_maps.w0_w1_shard_map;
+    const auto& w2_shard_map = shard_maps.w2_shard_map;
+
+    // K dimension for W0/W1: with bias, grow by one tile and pad to BLOCK_TILES_H;
+    // without bias, just pad hidden_size to BLOCK_TILES_H tiles.
+    const uint32_t Ht = hidden_size / TILE_SIZE;
+    const uint32_t K_for_shard =
+        (has_bias ? ceil_div(Ht + 1, BLOCK_TILES_H) : ceil_div(Ht, BLOCK_TILES_H)) * BLOCK_TILES_H * TILE_SIZE;
+
+    const uint32_t max_w0_w1 = *std::max_element(w0_w1_shard_map.begin(), w0_w1_shard_map.end());
+    const uint32_t w1_w0_groups_per_core = (max_w0_w1 + (max_w0_w1 % 2)) / 2;
+    const uint32_t w0_w1_shard_height = num_layers * experts_per_device * w1_w0_groups_per_core * K_for_shard;
+    constexpr uint32_t shard_width = 4 * TILE_SIZE;
+
+    const ttnn::MemoryConfig w0_w1_mem_config{
+        tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+        tt::tt_metal::BufferType::DRAM,
+        tt::tt_metal::ShardSpec(
+            shard_maps.dram_core_range_set,
+            {w0_w1_shard_height, shard_width},
+            tt::tt_metal::ShardOrientation::ROW_MAJOR),
+    };
+
+    // N dimension for W2.
+    const uint32_t Nt = intermediate_size / TILE_SIZE;
+    const uint32_t w2_N_total =
+        (has_bias ? ceil_div(Nt + 1, BLOCK_TILES_H) : ceil_div(Nt, BLOCK_TILES_H)) * BLOCK_TILES_H * TILE_SIZE;
+
+    const uint32_t num_cores = static_cast<uint32_t>(w2_shard_map.size());
+    const uint32_t first_pair_sum = w2_shard_map[0].first + w2_shard_map[0].second;
+    const uint32_t w2_groups_per_core = ceil_div(Ht, num_cores * first_pair_sum);
+    const uint32_t w2_shard_height = num_layers * experts_per_device * w2_groups_per_core * w2_N_total;
+
+    const ttnn::MemoryConfig w2_mem_config{
+        tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+        tt::tt_metal::BufferType::DRAM,
+        tt::tt_metal::ShardSpec(
+            shard_maps.dram_core_range_set, {w2_shard_height, shard_width}, tt::tt_metal::ShardOrientation::ROW_MAJOR),
+    };
+
+    return {w0_w1_mem_config, w2_mem_config};
+}
+
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> add_shared_expert_weights(
     const ttnn::Tensor& routed_w0,
     const ttnn::Tensor& routed_w1,
@@ -231,24 +345,12 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> add_shared_expert_weights(
 }
 
 ttnn::Tensor prepare_w0_w1_tensor_for_moe_compute(
-    const ttnn::Tensor& tt_w0,
-    const ttnn::Tensor& tt_w1,
-    uint32_t L,
-    uint32_t E,
-    uint32_t K,
-    uint32_t N,
-    const std::vector<uint32_t>& shard_map) {
-    if (K % TILE_SIZE != 0) {
-        throw std::invalid_argument(
-            "K dimension (" + std::to_string(K) + ") must be divisible by TILE_SIZE (" + std::to_string(TILE_SIZE) +
-            ")");
-    }
-    if (N % TILE_SIZE != 0) {
-        throw std::invalid_argument(
-            "N dimension (" + std::to_string(N) + ") must be divisible by TILE_SIZE (" + std::to_string(TILE_SIZE) +
-            ")");
-    }
+    const ttnn::Tensor& tt_w0, const ttnn::Tensor& tt_w1, uint32_t L, uint32_t E, uint32_t K, uint32_t N) {
+    TT_FATAL(K % TILE_SIZE == 0, "K dimension ({}) must be divisible by TILE_SIZE ({})", K, TILE_SIZE);
+    TT_FATAL(N % TILE_SIZE == 0, "N dimension ({}) must be divisible by TILE_SIZE ({})", N, TILE_SIZE);
 
+    const auto shard_map =
+        get_weight_core_shard_maps(tt_w0.device(), /*hidden_size=*/K, /*intermediate_size=*/N).w0_w1_shard_map;
     const uint32_t Nt = N / TILE_SIZE;
     // Pad K up to a multiple of (TILE_SIZE * BLOCK_TILES_H) — matches the DRAM read transaction.
     const uint32_t Kp = ceil_div(K / TILE_SIZE, BLOCK_TILES_H) * TILE_SIZE * BLOCK_TILES_H;
@@ -304,13 +406,16 @@ ttnn::Tensor prepare_w0_w1_tensor_for_moe_compute(
     for (uint32_t x : shard_map) {
         if (!(x == max_shard_size || (max_shard_size >= 1 && x == max_shard_size - 1) ||
               (max_shard_size >= 2 && x == max_shard_size - 2))) {
-            std::string got;
+            std::stringstream got;
             for (size_t i = 0; i < shard_map.size(); ++i) {
-                got += (i ? ", " : "") + std::to_string(shard_map[i]);
+                got << (i ? ", " : "") << shard_map[i];
             }
-            throw std::runtime_error(
-                "W0W1 shard sizes must be in [" + std::to_string(max_shard_size - 2) + ", " +
-                std::to_string(max_shard_size) + "] (after rounding max to even), got: [" + got + "]");
+            TT_FATAL(
+                false,
+                "W0W1 shard sizes must be in [{}, {}] (after rounding max to even), got: [{}]",
+                max_shard_size - 2,
+                max_shard_size,
+                got.str());
         }
     }
 
@@ -380,23 +485,13 @@ ttnn::Tensor prepare_w0_w1_tensor_for_moe_compute(
 }
 
 ttnn::Tensor prepare_w2_tensor_for_moe_compute(
-    const ttnn::Tensor& tt_w2,
-    uint32_t L,
-    uint32_t E,
-    uint32_t N,
-    uint32_t K,
-    const std::vector<std::pair<uint32_t, uint32_t>>& w2_shard_map,
-    const std::vector<uint32_t>& w0_w1_shard_map) {
-    if (N % TILE_SIZE != 0) {
-        throw std::invalid_argument(
-            "N dimension (" + std::to_string(N) + ") must be divisible by TILE_SIZE (" + std::to_string(TILE_SIZE) +
-            ")");
-    }
-    if (K % TILE_SIZE != 0) {
-        throw std::invalid_argument(
-            "K dimension (" + std::to_string(K) + ") must be divisible by TILE_SIZE (" + std::to_string(TILE_SIZE) +
-            ")");
-    }
+    const ttnn::Tensor& tt_w2, uint32_t L, uint32_t E, uint32_t N, uint32_t K) {
+    TT_FATAL(N % TILE_SIZE == 0, "N dimension ({}) must be divisible by TILE_SIZE ({})", N, TILE_SIZE);
+    TT_FATAL(K % TILE_SIZE == 0, "K dimension ({}) must be divisible by TILE_SIZE ({})", K, TILE_SIZE);
+
+    const auto shard_maps = get_weight_core_shard_maps(tt_w2.device(), /*hidden_size=*/K, /*intermediate_size=*/N);
+    const auto& w0_w1_shard_map = shard_maps.w0_w1_shard_map;
+    const auto& w2_shard_map = shard_maps.w2_shard_map;
 
     auto n_reordered_no_pad = prepare_w2_no_n_pad(tt_w2, L, E, N, K, w2_shard_map, w0_w1_shard_map);
 
@@ -431,18 +526,9 @@ ttnn::Tensor prepare_w0_w1_tensor_with_bias(
     uint32_t L,
     uint32_t E,
     uint32_t K,
-    uint32_t N,
-    const std::vector<uint32_t>& shard_map) {
-    if (K % TILE_SIZE != 0) {
-        throw std::invalid_argument(
-            "K dimension (" + std::to_string(K) + ") must be divisible by TILE_SIZE (" + std::to_string(TILE_SIZE) +
-            ")");
-    }
-    if (N % TILE_SIZE != 0) {
-        throw std::invalid_argument(
-            "N dimension (" + std::to_string(N) + ") must be divisible by TILE_SIZE (" + std::to_string(TILE_SIZE) +
-            ")");
-    }
+    uint32_t N) {
+    TT_FATAL(K % TILE_SIZE == 0, "K dimension ({}) must be divisible by TILE_SIZE ({})", K, TILE_SIZE);
+    TT_FATAL(N % TILE_SIZE == 0, "N dimension ({}) must be divisible by TILE_SIZE ({})", N, TILE_SIZE);
 
     const uint32_t K_with_bias = (K / TILE_SIZE + 1) * TILE_SIZE;
 
@@ -461,31 +547,20 @@ ttnn::Tensor prepare_w0_w1_tensor_with_bias(
     b0_tiled.deallocate(/*force=*/true);
     b1_tiled.deallocate(/*force=*/true);
 
-    auto result = prepare_w0_w1_tensor_for_moe_compute(w0_b0, w1_b1, L, E, K_with_bias, N, shard_map);
+    auto result = prepare_w0_w1_tensor_for_moe_compute(w0_b0, w1_b1, L, E, K_with_bias, N);
     w0_b0.deallocate(/*force=*/true);
     w1_b1.deallocate(/*force=*/true);
     return result;
 }
 
 ttnn::Tensor prepare_w2_tensor_with_bias(
-    const ttnn::Tensor& tt_w2,
-    const ttnn::Tensor& tt_b2,
-    uint32_t L,
-    uint32_t E,
-    uint32_t N,
-    uint32_t K,
-    const std::vector<std::pair<uint32_t, uint32_t>>& w2_shard_map,
-    const std::vector<uint32_t>& w0_w1_shard_map) {
-    if (N % TILE_SIZE != 0) {
-        throw std::invalid_argument(
-            "N dimension (" + std::to_string(N) + ") must be divisible by TILE_SIZE (" + std::to_string(TILE_SIZE) +
-            ")");
-    }
-    if (K % TILE_SIZE != 0) {
-        throw std::invalid_argument(
-            "K dimension (" + std::to_string(K) + ") must be divisible by TILE_SIZE (" + std::to_string(TILE_SIZE) +
-            ")");
-    }
+    const ttnn::Tensor& tt_w2, const ttnn::Tensor& tt_b2, uint32_t L, uint32_t E, uint32_t N, uint32_t K) {
+    TT_FATAL(N % TILE_SIZE == 0, "N dimension ({}) must be divisible by TILE_SIZE ({})", N, TILE_SIZE);
+    TT_FATAL(K % TILE_SIZE == 0, "K dimension ({}) must be divisible by TILE_SIZE ({})", K, TILE_SIZE);
+
+    const auto shard_maps = get_weight_core_shard_maps(tt_w2.device(), /*hidden_size=*/K, /*intermediate_size=*/N);
+    const auto& w0_w1_shard_map = shard_maps.w0_w1_shard_map;
+    const auto& w2_shard_map = shard_maps.w2_shard_map;
 
     const uint32_t Nt = N / TILE_SIZE;
     const uint32_t Kt = K / TILE_SIZE;
