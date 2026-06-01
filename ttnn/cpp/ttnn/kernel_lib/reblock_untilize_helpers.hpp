@@ -66,33 +66,6 @@ enum class ReconfigureRegisterDatatypeMode : uint8_t {
 }  // namespace reblock_untilize_config
 
 /**
- * Standalone init/uninit wrappers for manual lifecycle control. Mirrors the
- * untilize_init/_uninit pattern so callers running in tight in0_subblock loops
- * can amortize the init AND the data-format reconfig across iterations:
- *
- *   reblock_and_untilize_init<...>(interm_buf, out_buf);   // reconfig + init once
- *   for (uint32_t i = 0; i < in0_num_subblocks; ++i) {
- *       reblock_and_untilize<..., InitUninitMode::Neither,
- *           ReconfigureRegisterDatatypeMode::NoReconfigure>(...);  // neither — _init covered both
- *   }
- *   reblock_and_untilize_uninit(interm_buf);
- *
- * reconfig_mode here selects the same srcA=interm / pack=out reconfig the main
- * reblock_and_untilize does (default UnpackAndPackReconfigure); pass NoReconfigure
- * if the caller already reconfigured externally.
- */
-template <
-    uint32_t out_subblock_w,
-    uint32_t out_block_w,
-    reblock_untilize_config::ReconfigureRegisterDatatypeMode reconfig_mode =
-        reblock_untilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
-    typename Buf = ::CircularBuffer>
-ALWI void reblock_and_untilize_init(Buf& interm_buf, Buf& out_buf);
-
-template <typename Buf = ::CircularBuffer>
-ALWI void reblock_and_untilize_uninit(Buf& interm_buf);
-
-/**
  * reblock_and_untilize: gather matmul SubblockMajor output into row-major and
  * untilize it in a single pass.
  *
@@ -100,10 +73,12 @@ ALWI void reblock_and_untilize_uninit(Buf& interm_buf);
  *   #include "api/compute/compute_kernel_hw_startup.h"  // for compute_kernel_hw_startup()
  *   #include "ttnn/cpp/ttnn/kernel_lib/reblock_untilize_helpers.hpp"
  *
- * Consumes one "row-group" worth of tiles from `interm_cb` — a band of
- * `out_subblock_h` tile rows covering all N-subblocks in the block — and writes
- * row-major untilized output into `out_cb`. Uses pack_untilize_dest per
- * subblock to walk across columns while preserving row ordering.
+ * Consumes the whole output block from `interm_cb` — `in0_num_subblocks` row-groups,
+ * each a band of `out_subblock_h` tile rows covering all N-subblocks — and writes
+ * row-major untilized output into `out_cb`. Uses pack_untilize_dest per subblock to
+ * walk across columns while preserving row ordering. The in0_subblock loop is internal
+ * (one call untilizes the whole block, like untilize(num_blocks)); there are no
+ * standalone init/uninit wrappers — a single InitAndUninit call covers the lifecycle.
  *
  * INPUT LAYOUT CONSTRAINT: this helper is SubblockMajor-only. The interm CB
  * tile addressing (n * out_subblock_num_tiles + h * out_subblock_w + w) assumes
@@ -141,9 +116,11 @@ ALWI void reblock_and_untilize_uninit(Buf& interm_buf);
  * init/uninit lifecycle are INDEPENDENT compile-time switches, matching untilize /
  * reduce / matmul_block: the helper owns short init + data-format reconfig; the
  * caller owns uninit of any prior special mode before calling in. Caller's only boot
- * responsibility is one compute_kernel_hw_startup(). For tight in0_subblock loops,
- * amortize via reblock_and_untilize_init (reconfig + init once) and the
- * InitUninitMode::Neither + ReconfigureRegisterDatatypeMode::NoReconfigure loop body.
+ * responsibility is one compute_kernel_hw_startup(). The helper loops over all
+ * in0_num_subblocks internally and reconfigs + inits + uninits once around that loop,
+ * so the default (InitAndUninit) is the only mode a single-call caller needs; the
+ * partial modes (InitOnly/UninitOnly/Neither) remain only for chaining multiple
+ * whole-block reblock calls back-to-back.
  *
  * ── Template Parameters ────────────────────────────────────────────────────
  *
@@ -161,6 +138,7 @@ ALWI void reblock_and_untilize_uninit(Buf& interm_buf);
  *
  * ── Runtime Parameters ─────────────────────────────────────────────────────
  *
+ *   in0_num_subblocks        Number of subblock row-groups along M (the internal loop count).
  *   num_subblocks_w          Number of subblocks along the N dimension.
  *   out_subblock_num_tiles   Tiles per subblock (= out_subblock_h * out_subblock_w).
  *   out_subblock_h           Subblock height in tiles.
@@ -176,7 +154,12 @@ template <
     OutputCBLayout layout = OutputCBLayout::SubblockMajor,
     typename Buf = ::CircularBuffer>
 inline void reblock_and_untilize(
-    uint32_t num_subblocks_w, uint32_t out_subblock_num_tiles, uint32_t out_subblock_h, Buf& interm_buf, Buf& out_buf);
+    uint32_t in0_num_subblocks,
+    uint32_t num_subblocks_w,
+    uint32_t out_subblock_num_tiles,
+    uint32_t out_subblock_h,
+    Buf& interm_buf,
+    Buf& out_buf);
 
 }  // namespace compute_kernel_lib
 
