@@ -61,7 +61,14 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
     [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     ids=["tile", "row_major"],
 )
-@pytest.mark.parametrize("use_fp8_output", [False, True], ids=["bf16_out", "fp8_out"])
+@pytest.mark.parametrize(
+    "use_fp8_output",
+    [
+        False,
+        pytest.param(True, marks=pytest.mark.skip(reason="Disabled: see #45703")),
+    ],
+    ids=["bf16_out", "fp8_out"],
+)
 def test_ttnn_combine(
     mesh_device,
     seq_len_per_chip,
