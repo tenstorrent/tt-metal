@@ -12,12 +12,15 @@ void kernel_main() {
     constexpr uint32_t my_noc_x = get_compile_time_arg_val(2);  // used only for diagnostic print
     constexpr uint32_t my_noc_y = get_compile_time_arg_val(3);  // used only for diagnostic print
 
+    DEVICE_PRINT("[receiver] running on core ({},{}), waiting for {} writes\n", my_noc_x, my_noc_y, num_iterations);
+
     volatile tt_l1_ptr uint32_t* flag_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(flag_l1_addr + MEM_L1_UNCACHED_BASE);
 
     for (uint32_t i = 0; i < num_iterations; i++) {
         while (*flag_ptr != i + 1) {
         }
+        DEVICE_PRINT("[receiver] ({},{}) got write {}\n", my_noc_x, my_noc_y, i + 1);
     }
 
     DEVICE_PRINT("[receiver] core ({},{}) received all {} writes\n", my_noc_x, my_noc_y, num_iterations);
