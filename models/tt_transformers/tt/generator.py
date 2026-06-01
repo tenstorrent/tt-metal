@@ -391,8 +391,13 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         prefill_seq_lens,
         enable_trace=True,
         sampling_params=None,
+        empty_slots=None,
     ):
-        """Dispatch to model's row-sharded batched prefill."""
+        """Dispatch to model's row-sharded batched prefill.
+
+        ``empty_slots`` is forwarded so the model can reorder users to match
+        their decode row mapping (tenstorrent/tt-metal#44746).
+        """
         assert (
             self.data_parallel == 1
         ), "Row-sharded batched prefill requires data_parallel=1 (model handles DP internally)"
@@ -410,6 +415,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 "inputs": self.trace_inputs_prefill,
                 "outputs": self.trace_output_prefill,
             },
+            empty_slots=empty_slots,
         )
 
     def _easy_trace_prefill(
@@ -619,6 +625,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 prefill_seq_lens=prefill_seq_lens,
                 enable_trace=enable_trace,
                 sampling_params=sampling_params,
+                empty_slots=empty_slots,
             )
 
         # Batched prefill: all prompts share the same padded length so they can
