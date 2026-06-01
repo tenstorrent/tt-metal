@@ -188,6 +188,56 @@ def _maybe_parse_unary_list(value: Any) -> Any:
     return value
 
 
+def _create_output_tensor(descriptor: dict, device, input_shape=None) -> Any:
+    """Create a preallocated output tensor from a traced output_tensor descriptor.
+
+    The descriptor has: original_shape, original_dtype, layout, memory_config.
+    We create an empty tensor on device with matching specs so the op trace
+    records the same output_tensor argument as the model.
+    """
+    import ttnn
+    import torch
+
+    shape = descriptor.get("original_shape")
+    if not shape:
+        shape = input_shape
+    if not shape:
+        return None
+
+    if isinstance(shape, dict) and "value" in shape:
+        import re
+
+        m = re.match(r"Shape\(\[([0-9,\s]+)\]\)", str(shape["value"]))
+        if m:
+            shape = [int(x.strip()) for x in m.group(1).split(",")]
+    if isinstance(shape, str):
+        import ast
+
+        try:
+            shape = ast.literal_eval(shape)
+        except Exception:
+            return None
+
+    dtype_str = descriptor.get("original_dtype", "DataType.BFLOAT16")
+    dtype = parse_dtype(dtype_str) if isinstance(dtype_str, str) else None
+    if dtype is None:
+        dtype = ttnn.bfloat16
+
+    layout_str = descriptor.get("layout", "Layout.TILE")
+    layout = parse_layout(layout_str) if isinstance(layout_str, str) else None
+    if layout is None:
+        layout = ttnn.TILE_LAYOUT
+
+    mc_dict = descriptor.get("memory_config")
+    memory_config = dict_to_memory_config(mc_dict) if isinstance(mc_dict, dict) else ttnn.DRAM_MEMORY_CONFIG
+
+    try:
+        torch_tensor = torch.zeros(shape, dtype=torch.float32)
+        return ttnn.from_torch(torch_tensor, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
+    except Exception:
+        return None
+
+
 def parse_dict_value(key: str, value: Any) -> Any:
     """Parse a dict value into the appropriate ttnn object based on its structure.
 
@@ -212,7 +262,12 @@ def parse_dict_value(key: str, value: Any) -> Any:
     except (ValueError, TypeError, KeyError):
         pass
 
-    # Return as-is if we can't parse it (sweep test can handle it)
+    # Dicts with a "type" key that we couldn't parse into a ttnn object
+    # must NOT be passed to C++ bindings — they'll cause "incompatible
+    # function arguments". Return None so build_op_kwargs drops them.
+    if isinstance(value, dict) and "type" in value:
+        return None
+
     return value
 
 
@@ -256,6 +311,7 @@ def build_op_kwargs(
     exclude: Optional[Set[str]] = None,
     include_only: Optional[Set[str]] = None,
     output_memory_config: Any = None,
+    device: Any = None,
 ) -> Dict[str, Any]:
     """Extract actual op kwargs from the full test vector kwargs.
 
@@ -327,6 +383,13 @@ def build_op_kwargs(
         list_parsed = _maybe_parse_unary_list(value)
         if list_parsed is not value:
             op_kwargs[key] = list_parsed
+            continue
+        # Create preallocated output tensor from descriptor
+        if key == "output_tensor" and isinstance(value, dict) and device is not None:
+            input_shape = kwargs.get("input_a_shape")
+            tensor = _create_output_tensor(value, device, input_shape=input_shape)
+            if tensor is not None:
+                op_kwargs[key] = tensor
             continue
         # Parse dict values into ttnn objects
         parsed = parse_dict_value(key, value)

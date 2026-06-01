@@ -422,9 +422,9 @@ def run(
             logger.warning("Skipping all_gather_async test: requires multi-device setup (2+ devices)")
             return [(True, "Skipped: requires 2+ devices"), 0.0]
 
-        # The loader remaps dim -> arg2 via _NAMED_TO_POSITIONAL_REMAP
+        # The loader remaps dim -> arg1 or arg2 depending on the overload
         if dim is None:
-            dim = kwargs.get("arg2")
+            dim = kwargs.get("arg2") or kwargs.get("arg1")
 
         input_shape = input_a_shape
         input_dtype = input_a_dtype
@@ -481,7 +481,7 @@ def run(
 
         # Determine mesh shape: prefer tensor_placement, then mesh_device param
         mesh_shape = None
-        if input_a_tensor_placement:
+        if input_a_tensor_placement and isinstance(input_a_tensor_placement, dict):
             mesh_shape = _parse_mesh_shape(input_a_tensor_placement.get("mesh_device_shape"))
         if mesh_shape is None and mesh_device is not None:
             if isinstance(mesh_device, dict):
