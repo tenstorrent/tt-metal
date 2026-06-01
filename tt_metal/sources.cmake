@@ -103,6 +103,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/udm/mesh_tensor_builder.hpp
     api/tt-metalium/experimental/udm/mesh_utils.hpp
     api/tt-metalium/experimental/udm/types.hpp
+    api/tt-metalium/face_geometry.hpp
     api/tt-metalium/global_circular_buffer.hpp
     api/tt-metalium/global_semaphore.hpp
     api/tt-metalium/graph_tracking.hpp
