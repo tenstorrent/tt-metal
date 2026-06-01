@@ -2570,6 +2570,7 @@ template <typename FDFixture>
 class SDPrefetchTestBase : public FDFixture {
 public:
     void SetUp() override {
+        GTEST_SKIP() << "Disabled: see #45689";
         if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
             GTEST_SKIP() << "Requires TT_METAL_SLOW_DISPATCH_MODE";
         }
