@@ -69,7 +69,7 @@ void kernel_main() {
         cb_pop_front(in_cb_id, 1);
         cb_pop_front(intermed_cb_id, 1);
 
-        noc_async_write_tile(i, output_addrg, intermed1_cb_write_ptr);
+        noc_async_write_page(i, output_addrg, intermed1_cb_write_ptr);
         noc_async_write_barrier();
     }
 }
