@@ -387,6 +387,7 @@ def test_transformer_profile(
         prompt_rope=(tt_prompt_rope_cos, tt_prompt_rope_sin),
         spatial_sequence_length=spatial_seq_len,
         prompt_sequence_length=prompt_seq_len,
+        compute_prompt_output=(xformer_idx in [0, 3]),  # force computing eveything
     )
     ttnn.synchronize_device(mesh_device)
     signpost("transformer_start")
@@ -399,6 +400,7 @@ def test_transformer_profile(
         prompt_rope=(tt_prompt_rope_cos, tt_prompt_rope_sin),
         spatial_sequence_length=spatial_seq_len,
         prompt_sequence_length=prompt_seq_len,
+        compute_prompt_output=(xformer_idx in [0, 3]),  # force computing eveything
     )
     ttnn.synchronize_device(mesh_device)
     signpost("transformer_end")
