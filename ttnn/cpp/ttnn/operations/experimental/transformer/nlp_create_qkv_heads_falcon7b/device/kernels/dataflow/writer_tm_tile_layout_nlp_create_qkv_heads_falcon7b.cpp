@@ -53,7 +53,7 @@ void kernel_main() {
                 out_num_tiles_read += block_size;
                 cb_wait_front(cb_id_out0, out_num_tiles_read);
 
-                noc_async_write_tile(q_out_tensor_current_tile_id, sq, l1_read_addr);
+                noc_async_write_page(q_out_tensor_current_tile_id, sq, l1_read_addr);
                 l1_read_addr += single_tile_size_bytes;
                 q_out_tensor_current_tile_id++;
             }
@@ -66,7 +66,7 @@ void kernel_main() {
             out_num_tiles_read += block_size;
             cb_wait_front(cb_id_out0, out_num_tiles_read);
 
-            noc_async_write_tile(out_tensor_current_tile_id, sk, l1_read_addr);
+            noc_async_write_page(out_tensor_current_tile_id, sk, l1_read_addr);
             l1_read_addr += single_tile_size_bytes;
             out_tensor_current_tile_id++;
         }
@@ -77,7 +77,7 @@ void kernel_main() {
             out_num_tiles_read += block_size;
             cb_wait_front(cb_id_out0, out_num_tiles_read);
 
-            noc_async_write_tile(out_tensor_current_tile_id, sv, l1_read_addr);
+            noc_async_write_page(out_tensor_current_tile_id, sv, l1_read_addr);
             l1_read_addr += single_tile_size_bytes;
             out_tensor_current_tile_id++;
         }

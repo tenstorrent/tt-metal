@@ -43,6 +43,7 @@ jobs:
       image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         LOGURU_LEVEL: INFO
+        TT_LOGGER_LEVEL: warn
         PYTHONPATH: /work
         TT_METAL_HOME: /work
         GTEST_OUTPUT: xml:/work/generated/test_reports/

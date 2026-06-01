@@ -141,6 +141,7 @@ enum class EnvVarID {
     TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE,  // Terminal command to execute on dispatch timeout.
     TT_METAL_NOC_DEBUG_DUMP,                       // Enable experimental NOC debug dump to detect missing barriers
     TT_METAL_DISPATCH_PROGRESS_UPDATE_MS,          // Dispatch kernel progress update period in milliseconds
+    TT_METAL_DISPATCH_TELEMETRY_DISABLE,           // Dispatch telemetry
 
     // ========================================
     // WATCHER SYSTEM
@@ -1022,6 +1023,14 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_DISPATCH_PROGRESS_UPDATE_MS=200
         case EnvVarID::TT_METAL_DISPATCH_PROGRESS_UPDATE_MS:
             this->dispatch_progress_update_ms = std::stoul(value);
+            break;
+
+        // TT_METAL_DISPATCH_TELEMETRY_DISABLE
+        // Disable dispatch telemetry.
+        // Default: false (dispatch telemetry enabled)
+        // Usage: export TT_METAL_DISPATCH_TELEMETRY_DISABLE=1
+        case EnvVarID::TT_METAL_DISPATCH_TELEMETRY_DISABLE:
+            this->dispatch_telemetry_disabled = is_env_enabled(value);
             break;
 
         // ========================================
