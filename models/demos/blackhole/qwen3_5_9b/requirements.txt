@@ -1,0 +1,17 @@
+# Additional Python dependencies for the Qwen3.5-9B model on Blackhole.
+#
+# Qwen3.5 (config.json `model_type: "qwen3_5"`, architecture
+# "Qwen3_5ForConditionalGeneration") is only recognized by transformers >= 5.2.0
+# (support added in huggingface/transformers PR #43830, shipped in the 5.2.0 release).
+# tt-metal's base environment pins transformers 4.53.0, which does NOT recognize this
+# architecture and raises, when loading the checkpoint through the HuggingFace Auto* classes:
+#     ValueError: The checkpoint you are trying to load has model type `qwen3_5`
+#                 but Transformers does not recognize this architecture.
+#
+# Install BEFORE running the model:
+#     pip install -r models/demos/blackhole/qwen3_5_9b/requirements.txt
+#
+# WARNING: this is a MAJOR (4.x -> 5.x) upgrade of a dependency that the rest of tt-metal
+# shares. It can affect other tt_transformers models in the same Python environment. Prefer
+# a dedicated virtualenv for the Qwen3.5-9B model if you also run other models from this repo.
+transformers>=5.2.0
