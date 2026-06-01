@@ -170,10 +170,11 @@ class TensorCache:
             data.tensorbin
     """
 
-    def __init__(self, local_root: Path):
+    def __init__(self, local_root: Path, force_cache_override: bool = False):
         self.local_root = Path(local_root)
         self.local_root.mkdir(parents=True, exist_ok=True)
         self._objects_dir = self.local_root / "objects"
+        self.force_cache_override = force_cache_override
 
     def _content_addressed_paths(self, artifact_id: str) -> ContentAddressedStoragePaths:
         object_dir = self._objects_dir / artifact_id[:2] / artifact_id
@@ -181,7 +182,7 @@ class TensorCache:
 
     def _lookup(self, artifact_id: str) -> CacheEntry:
         paths = self._content_addressed_paths(artifact_id)
-        if not paths.object_dir.exists():
+        if not paths.object_dir.exists() or self.force_cache_override:
             return AbsentCacheEntry(artifact_id=artifact_id)
         if paths.data_path.is_file():
             return PresentCacheEntry(artifact_id=artifact_id, paths=paths)
@@ -302,7 +303,7 @@ class TensorCache:
     def _lookup_compressed(self, artifact_id: str) -> "CacheEntry":
         """Check for compact BSPM cache entry (tiles.bin + assignment.npy)."""
         obj_dir = self._objects_dir / artifact_id[:2] / artifact_id
-        if not obj_dir.exists():
+        if not obj_dir.exists() or self.force_cache_override:
             return AbsentCacheEntry(artifact_id=artifact_id)
         tiles_path = obj_dir / "tiles.bin"
         assignment_path = obj_dir / "assignment.npy"
@@ -407,7 +408,7 @@ class TensorCache:
     def _lookup_sram_compressed(self, artifact_id: str) -> "CacheEntry":
         """Check for a present SRAM-compressed CAS entry (shards.bin + metadata.json)."""
         paths = self._sram_compressed_paths(artifact_id)
-        if not paths.object_dir.exists():
+        if not paths.object_dir.exists() or self.force_cache_override:
             return AbsentCacheEntry(artifact_id=artifact_id)
         if paths.data_path.is_file() and (paths.object_dir / "metadata.json").is_file():
             return PresentCacheEntry(artifact_id=artifact_id, paths=paths)
@@ -597,6 +598,7 @@ class TensorCache:
                     "use get_or_create_bspm_expert() instead of calling get_or_create() directly."
                 )
             entry = self._lookup_compressed(artifact_id)
+
             if isinstance(entry, PresentCacheEntry):
                 logger.debug("Cache hit (compressed) for {} ({})", logical, artifact_id[:12])
                 inputs = self._load_compressed(entry.paths.object_dir, target)

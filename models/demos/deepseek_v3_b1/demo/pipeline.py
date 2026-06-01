@@ -106,6 +106,7 @@ def create_single_galaxy_spec_decode_pipeline_configuration(
     *,
     fp32_dest_acc_en: bool = True,
     persistent_mode: bool = True,
+    enable_speculative_decode: bool = True,
 ) -> PipelineConfiguration:
     """4-stage single-galaxy pipeline with SpecLMHead + Embedding fused on P0:
     P0(SpecLMHead+Embed) -> P1(BaseLMHead+MTP) -> P2(Passthrough) -> P3(Passthrough) -> back to P0."""
@@ -133,6 +134,9 @@ def create_single_galaxy_spec_decode_pipeline_configuration(
 
     def stage_3(device: ttnn.MeshDevice) -> StageKind:
         return PassthroughStage(PassthroughPayload.ACTIVATION_W_TOKEN_META)
+
+    if not enable_speculative_decode:
+        stage_1 = lambda d: PassthroughStage(PassthroughPayload.ACTIVATION_W_TOKEN_META)
 
     return PipelineConfiguration(
         {
@@ -437,11 +441,11 @@ def create_pipeline_configuration_from_num_procs(
 ) -> PipelineConfiguration:
     """Pick topology from process count (4 -> single_galaxy, 16 -> single_pod, 64 -> sp4)."""
     if num_procs == 4:
-        return create_single_galaxy_pipeline_configuration(
+        return create_single_galaxy_spec_decode_pipeline_configuration(
             weight_provider,
             fp32_dest_acc_en=fp32_dest_acc_en,
             persistent_mode=persistent_mode,
-            enable_mtp=enable_mtp,
+            enable_speculative_decode=enable_speculative_decode,
         )
     if num_procs == 16:
         if enable_speculative_decode:

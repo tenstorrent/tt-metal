@@ -57,6 +57,7 @@ class ModelPipeline:
         bspm_dir: Path | None = None,
         bspm_variant: str = "B",
         bspm_budget: float = 3.5,
+        force_cache_override: bool = False,
     ):
         logger.info(
             "Initializing DeepSeek V3 B1 pod pipeline (weights={}, lm_head_fp32={}, lm_head_persistent_mode={}, speculative_decode={})",
@@ -120,6 +121,7 @@ class ModelPipeline:
                     bspm_dir=bspm_dir,
                     bspm_variant=bspm_variant,
                     bspm_budget=bspm_budget,
+                    force_cache_override=force_cache_override,
                 )
             else:
                 provider = CacheWeightProvider(
@@ -128,6 +130,7 @@ class ModelPipeline:
                     bspm_dir=bspm_dir,
                     bspm_variant=bspm_variant,
                     bspm_budget=bspm_budget,
+                    force_cache_override=force_cache_override,
                 )
         elif weights_mode == "state_dict":
             if model_path is None:
