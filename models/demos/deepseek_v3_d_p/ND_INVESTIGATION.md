@@ -157,6 +157,39 @@ Also confirmed NOT the cause: KV-cache state (within-process fully deterministic
 gate/routing (indices bit-identical), dispatch buffer (FFN input identical),
 capacity overflow (per-chip 12356 ≪ capacity 204800), shared expert.
 
+### Run 3: A/B unified vs naive routed-expert path (TT_REXPERT_FORCE_NAIVE), 5L/25600
+Across two processes each, identical input, GLOBAL all-shard fingerprints:
+
+| stage (layer 3)            | UNIFIED (D1 vs D2) | NAIVE (N1 vs N2) |
+|----------------------------|--------------------|------------------|
+| `03_expert_outputs` (FFN)  | **DIFF**           | **SAME**         |
+| `05_routed_output` GLOBAL  | **DIFF** (dnorm 3.1e-3) | **SAME**    |
+| `04_combined_output`       | DIFF (garbage)     | DIFF (garbage)   |
+| `layer_3` hidden           | **DIFF**           | **SAME**         |
+| `lm_head`                  | **DIFF** (dnorm 0.24) | **SAME**      |
+
+**CONFIRMED ROOT CAUSE: the unified fused routed-expert FFN kernel
+(`ttnn/.../unified_routed_expert_ffn`) is non-deterministic across processes given
+identical input.** The naive per-expert path (extract → `routed_expert_ffn` default
+matmuls → insert) is deterministic and yields a bit-identical `lm_head`. The combine
+buffer garbage (`04_combined_output` DIFF, from `init_zeros=False` / H1) is present
+in BOTH paths and is harmlessly masked in both — so H1 is NOT the cause.
+
+Residual: NAIVE shows a tiny layer_4 drift (dnorm 5.9e-5, `lm_head` still SAME) —
+negligible vs the unified kernel's dominant effect, but may compound over 61 layers
+(to investigate separately; likely a minor combine-garbage or CCL-order effect).
+
+## FIX
+Two options:
+1. **Low-risk config fix:** route the routed expert through the deterministic naive
+   path (gate the unified kernel off). Restores determinism; costs the unified
+   kernel's perf gain.
+2. **Proper fix:** repair the non-determinism inside the unified FFN kernel
+   (likely a per-K-block multicast-handshake ordering / L1-reuse race — the valid
+   semaphore may be observable before the mcast data fully lands, or an L1 buffer is
+   reused before all receivers consumed it). Kernels are JIT-compiled, so this can be
+   iterated and verified on-device with the 5L/25600 fingerprint A/B (no full rebuild).
+
 ### Status of experiments
 - [ ] Within-process drift (iter-to-iter) — pending device (blocked by soak)
 - [ ] Across-process first-diverging stage — pending device
