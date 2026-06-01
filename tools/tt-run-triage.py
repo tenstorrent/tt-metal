@@ -84,7 +84,12 @@ def _count_rank_binding_yaml(path: str) -> int:
 
     with open(path) as f:
         data = yaml.safe_load(f)
-    return len(data.get("rank_bindings", []))
+    if not isinstance(data, dict):
+        raise ValueError(f"{path}: expected a YAML mapping with 'rank_bindings'")
+    bindings = data.get("rank_bindings") or []
+    if not bindings:
+        raise ValueError(f"{path}: 'rank_bindings' is missing or empty")
+    return len(bindings)
 
 
 def _count_rank_bindings_mapping_yaml(path: str) -> int:
@@ -93,6 +98,8 @@ def _count_rank_bindings_mapping_yaml(path: str) -> int:
     p = Path(path).resolve()
     with open(p) as f:
         data = yaml.safe_load(f)
+    if data is not None and not isinstance(data, dict):
+        raise ValueError(f"{path}: expected a YAML mapping with 'subcontext_id_to_rank_bindings'")
     raw_map = (data or {}).get("subcontext_id_to_rank_bindings")
     if not raw_map:
         raise ValueError(f"{path}: missing or empty 'subcontext_id_to_rank_bindings'")
@@ -190,14 +197,14 @@ class TextStreamingRenderer:
         # Final script of each rank has no "next header" — flush at exit.
         for rank in list(self.rank_current_script.keys()):
             self._flush_rank(rank)
-        self._pump()
+        self._pump(final=True)
 
-    def _pump(self) -> None:
+    def _pump(self, final: bool = False) -> None:
         for script in self.seen_scripts:
             if script in self.rendered_scripts:
                 continue
             finished = len(self.script_lines.get(script, {}))
-            if finished < self.N:
+            if finished < self.N and not final:
                 self._update_progress(script, finished)
                 return
             self._render_script(script)
@@ -209,9 +216,13 @@ class TextStreamingRenderer:
 
         self.console.print()
         self.console.print(f"{script}:", markup=False, highlight=False)
-        for rank in sorted(self.script_lines[script].keys()):
+        reported = self.script_lines[script]
+        for rank in range(self.N):
             self.console.print(f"  [rank {rank}]", markup=False, highlight=False)
-            for line in self.script_lines[script][rank]:
+            if rank not in reported:
+                self.console.print("    <no output — rank exited before this script>", markup=False, highlight=False)
+                continue
+            for line in reported[rank]:
                 # Pre-colored from the subprocess
                 self.console.print(Text.from_ansi(line), highlight=False)
 
