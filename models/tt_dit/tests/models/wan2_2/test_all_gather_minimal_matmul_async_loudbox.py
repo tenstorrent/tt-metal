@@ -26,7 +26,7 @@ LOUDBOX_MESH_CONFIG = {
             LOUDBOX_MESH_CONFIG,
             ttnn.Topology.Ring,
             2,
-            6,
+            6,  # full grid requires force_transpose=True to divide core_grid_x=12
             0,
             1,
             12,
@@ -56,10 +56,11 @@ LOUDBOX_MESH_CONFIG = {
         (1024, 6144, 768, True, True, None, 1, False, 8, 8, 6, 2, 2),
         # M/K/N tiles: 16/192/24
         (512, 6144, 768, True, True, None, 1, False, 4, 8, 6, 2, 2),
-        # M/K/N tiles: 32/192/144 — N_block=16 → 144/16=9, 16 tiles/core on 10-wide grid
+        # M/K/N tiles: 32/192/144 — N_block=24 on full grid (10-wide), N_block=16 on partial (8-wide)
         (1024, 6144, 4608, True, True, None, 1, False, 1, 4, 24, 1, 4),
+        (1024, 6144, 4608, False, True, None, 1, False, 1, 4, 24, 1, 4),
     ],
-    ids=["m1024_k6144_n768", "m512_k6144_n768", "ltx"],
+    ids=["m1024_k6144_n768", "m512_k6144_n768", "ltx", "ltx_nontranspose"],
 )
 @pytest.mark.parametrize("use_non_fused", [False, True], ids=["fused", "separate"])
 @pytest.mark.parametrize(
