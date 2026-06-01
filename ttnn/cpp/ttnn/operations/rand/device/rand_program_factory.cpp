@@ -27,6 +27,62 @@ auto get_random_seed() -> uint32_t { return distribution(rng); }
 constexpr const char* WRITER_KERNEL_PATH = "ttnn/cpp/ttnn/operations/rand/device/kernels/writer_uniform.cpp";
 constexpr const char* COMPUTE_KERNEL_PATH = "ttnn/cpp/ttnn/operations/rand/device/kernels/compute_uniform.cpp";
 
+// Work split + per-device seed offset, shared by create_descriptor (cache miss) and
+// get_dynamic_runtime_args (cache hit) so both derive the identical core list and seed offset.
+struct RandWorkSplit {
+    uint32_t num_cores;
+    CoreRangeSet all_cores;
+    CoreRangeSet core_group_1;
+    CoreRangeSet core_group_2;
+    uint32_t units_per_core_group_1;
+    uint32_t units_per_core_group_2;
+    std::vector<CoreCoord> cores;
+    uint32_t device_seed_offset;
+};
+
+RandWorkSplit compute_rand_work_split(
+    const RandDeviceOperation::operation_attributes_t& attrs,
+    RandDeviceOperation::tensor_return_value_t& output,
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+    auto grid = output.device()->compute_with_storage_grid_size();
+    uint32_t units_to_divide = output.physical_volume() / constants::TILE_HW;
+    auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
+        split_work_to_cores(grid, units_to_divide);
+    auto cores = grid_to_cores(num_cores, grid.x, grid.y);
+
+    const ttnn::MeshCoordinate mesh_coordinate =
+        mesh_dispatch_coordinate.value_or(ttnn::MeshCoordinate::zero_coordinate(attrs.device->shape().dims()));
+    uint32_t device_seed_offset = 0;
+    const auto& shard_mask = attrs.mesh_dim_is_sharded;
+    if (!shard_mask.empty()) {
+        const auto& mesh_shape = attrs.device->shape();
+        size_t shard_linear_idx = 0;
+        size_t shard_stride = 1;
+        for (int i = static_cast<int>(shard_mask.size()) - 1; i >= 0; --i) {
+            if (shard_mask[i]) {
+                shard_linear_idx += mesh_coordinate[i] * shard_stride;
+                shard_stride *= mesh_shape[i];
+            }
+        }
+        device_seed_offset = static_cast<uint32_t>(shard_linear_idx) * static_cast<uint32_t>(cores.size());
+    }
+    return {
+        num_cores,
+        all_cores,
+        core_group_1,
+        core_group_2,
+        units_per_core_group_1,
+        units_per_core_group_2,
+        std::move(cores),
+        device_seed_offset};
+}
+
+// Per-core seed; shared so the miss-build and the hit-patch produce identical values.
+uint32_t rand_seed_for_core(
+    const RandDeviceOperation::operation_attributes_t& attrs, int i, uint32_t device_seed_offset) {
+    return attrs.seed != 0 ? attrs.seed + i + device_seed_offset : get_random_seed();
+}
+
 }  // namespace
 
 ProgramDescriptor RandDeviceOperation::create_descriptor(
@@ -34,14 +90,15 @@ ProgramDescriptor RandDeviceOperation::create_descriptor(
     const tensor_args_t& /*tensor_args*/,
     tensor_return_value_t& output,
     const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
-    IDevice* device = output.device();
-    auto grid = device->compute_with_storage_grid_size();
-
-    uint32_t units_to_divide = output.physical_volume() / constants::TILE_HW;
-    auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
-        split_work_to_cores(grid, units_to_divide);
-
-    auto cores = grid_to_cores(num_cores, grid.x, grid.y);
+    auto
+        [num_cores,
+         all_cores,
+         core_group_1,
+         core_group_2,
+         units_per_core_group_1,
+         units_per_core_group_2,
+         cores,
+         device_seed_offset] = compute_rand_work_split(operation_attributes, output, mesh_dispatch_coordinate);
     const auto num_cores_total = cores.size();
 
     DataType output_dtype = output.dtype();
@@ -54,24 +111,6 @@ ProgramDescriptor RandDeviceOperation::create_descriptor(
 
     constexpr uint32_t intermed_cb_id = CBIndex::c_24;
     constexpr uint32_t dst_cb_id = CBIndex::c_0;
-
-    const ttnn::MeshCoordinate mesh_coordinate = mesh_dispatch_coordinate.value_or(
-        ttnn::MeshCoordinate::zero_coordinate(operation_attributes.device->shape().dims()));
-
-    uint32_t device_seed_offset = 0;
-    const auto& shard_mask = operation_attributes.mesh_dim_is_sharded;
-    if (!shard_mask.empty()) {
-        const auto& mesh_shape = operation_attributes.device->shape();
-        size_t shard_linear_idx = 0;
-        size_t shard_stride = 1;
-        for (int i = static_cast<int>(shard_mask.size()) - 1; i >= 0; --i) {
-            if (shard_mask[i]) {
-                shard_linear_idx += mesh_coordinate[i] * shard_stride;
-                shard_stride *= mesh_shape[i];
-            }
-        }
-        device_seed_offset = static_cast<uint32_t>(shard_linear_idx) * static_cast<uint32_t>(cores.size());
-    }
 
     ProgramDescriptor desc;
 
@@ -147,8 +186,7 @@ ProgramDescriptor RandDeviceOperation::create_descriptor(
             TT_THROW("Core not in specified core ranges");
         }
 
-        uint32_t seed =
-            operation_attributes.seed != 0 ? operation_attributes.seed + i + device_seed_offset : get_random_seed();
+        uint32_t seed = rand_seed_for_core(operation_attributes, i, device_seed_offset);
 
         // seed/from/to are DYNAMIC (excluded from compute_program_hash): baked here for the
         // cache-miss build, and re-applied on every cache hit via get_dynamic_runtime_args().
@@ -173,60 +211,22 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> RandDeviceOperation::get_dynamic_ru
     const tensor_args_t& /*tensor_args*/,
     tensor_return_value_t& output,
     const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
-    // MUST mirror the seed/from/to runtime args produced in create_descriptor() above:
-    //   - writer is pushed as kernel index 0, compute as kernel index 1
-    //   - compute runtime args layout is {seed, from_bits, to_bits, tile_offset, units_per_core}
-    // Only the per-call values (seed, from, to) are re-applied here; the structural args
-    // (tile_offset, units_per_core) are part of the program identity and never change for a given
-    // cache entry.  The work-split is recomputed (cheap host-side integer math, no kernel rebuild)
-    // so the per-core seed offsets match create_descriptor() exactly.  The
-    // test_rand_different_seed_values regression test enforces this mirror.
+    // compute is kernel 1; its runtime args are {seed, from_bits, to_bits, tile_offset, units_per_core}.
+    // seed/from/to are excluded from the hash and re-applied here; the rest are static.
     constexpr uint32_t kComputeKernelIdx = 1;
-    constexpr uint32_t kSeedArgIdx = 0;
-    constexpr uint32_t kFromArgIdx = 1;
-    constexpr uint32_t kToArgIdx = 2;
-
-    IDevice* device = output.device();
-    auto grid = device->compute_with_storage_grid_size();
-    uint32_t units_to_divide = output.physical_volume() / constants::TILE_HW;
-    // Only the core count/list matter here (per-core seed offsets); the work-split groups and
-    // per-group tile counts are part of the static program identity and are not re-applied.
-    [[maybe_unused]] auto
-        [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
-            split_work_to_cores(grid, units_to_divide);
-    auto cores = grid_to_cores(num_cores, grid.x, grid.y);
-
-    const ttnn::MeshCoordinate mesh_coordinate = mesh_dispatch_coordinate.value_or(
-        ttnn::MeshCoordinate::zero_coordinate(operation_attributes.device->shape().dims()));
-
-    uint32_t device_seed_offset = 0;
-    const auto& shard_mask = operation_attributes.mesh_dim_is_sharded;
-    if (!shard_mask.empty()) {
-        const auto& mesh_shape = operation_attributes.device->shape();
-        size_t shard_linear_idx = 0;
-        size_t shard_stride = 1;
-        for (int i = static_cast<int>(shard_mask.size()) - 1; i >= 0; --i) {
-            if (shard_mask[i]) {
-                shard_linear_idx += mesh_coordinate[i] * shard_stride;
-                shard_stride *= mesh_shape[i];
-            }
-        }
-        device_seed_offset = static_cast<uint32_t>(shard_linear_idx) * static_cast<uint32_t>(cores.size());
-    }
+    auto ws = compute_rand_work_split(operation_attributes, output, mesh_dispatch_coordinate);
 
     const float eps = 1e-6f;
     const uint32_t from_bits = std::bit_cast<uint32_t>(operation_attributes.from);
     const uint32_t to_bits = std::bit_cast<uint32_t>(operation_attributes.to - eps);
 
     std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
-    dynamic_args.reserve(cores.size() * 3);
-    for (int i = 0; i < static_cast<int>(cores.size()); ++i) {
-        const auto& core = cores[i];
-        const uint32_t seed =
-            operation_attributes.seed != 0 ? operation_attributes.seed + i + device_seed_offset : get_random_seed();
-        dynamic_args.push_back({kComputeKernelIdx, core, kSeedArgIdx, seed});
-        dynamic_args.push_back({kComputeKernelIdx, core, kFromArgIdx, from_bits});
-        dynamic_args.push_back({kComputeKernelIdx, core, kToArgIdx, to_bits});
+    dynamic_args.reserve(ws.cores.size() * 3);
+    for (int i = 0; i < static_cast<int>(ws.cores.size()); ++i) {
+        const uint32_t seed = rand_seed_for_core(operation_attributes, i, ws.device_seed_offset);
+        dynamic_args.push_back({kComputeKernelIdx, ws.cores[i], 0, seed});
+        dynamic_args.push_back({kComputeKernelIdx, ws.cores[i], 1, from_bits});
+        dynamic_args.push_back({kComputeKernelIdx, ws.cores[i], 2, to_bits});
     }
     return dynamic_args;
 }

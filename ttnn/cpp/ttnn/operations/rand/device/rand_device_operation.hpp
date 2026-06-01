@@ -26,6 +26,14 @@ struct RandDeviceOperation {
         const float to;
         uint32_t seed;
         ttsl::SmallVector<bool> mesh_dim_is_sharded;
+
+        // Program identity. seed/from/to are re-applied via get_dynamic_runtime_args (excluded
+        // here). `device` must be FIRST: rand has no input tensor, so the framework discovers the
+        // mesh device via get_first_object_of_type over attribute_values(), and its tuple path only
+        // inspects element 0.
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("device", "shape", "dtype", "layout", "memory_config");
+        auto attribute_values() const { return std::forward_as_tuple(device, shape, dtype, layout, memory_config); }
     };
 
     struct tensor_args_t {};
@@ -43,9 +51,8 @@ struct RandDeviceOperation {
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
-    // seed/from/to are intentionally excluded from compute_program_hash (so calls differing only in
+    // seed/from/to are excluded from the program hash (so calls differing only in
     // those values cache-hit instead of recompiling).  They are therefore DYNAMIC: this returns the
     // current per-core (seed) and per-call (from/to) values so the framework re-applies them to the
     // cached program on every dispatch.  Must mirror the seed/from/to runtime args built in
