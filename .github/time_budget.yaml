@@ -118,9 +118,6 @@ train:
 
 ttsim:
   nightly:
-    # compute-fused validation tests from tt_metal_l2_nightly_tests.yaml. The
-    # sim_* SKUs route to ubuntu-latest; arch is encoded in the SKU suffix
-    # (sim_wormhole_b0 / sim_blackhole) and resolved by .github/actions/setup-ttsim.
     sim_wormhole_b0: 20
     sim_blackhole: 20
 
