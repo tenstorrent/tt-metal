@@ -70,6 +70,7 @@ consumers (sampling, repetition-penalty, CFG combine) keep working unchanged.
 - ``ACE_STEP_LM_DECODE_QK_NORM_SHARDED=1`` (default): sharded Q/K head norms (see :mod:`qwen_decode_qk_norm`).
 - ``ACE_STEP_LM_SDPA_GATHER_UNIFIED=1`` (default): post-SDPA gather WIDTH = residual grid (see :mod:`qwen_decode_sdpa_layout`).
 - ``ACE_STEP_LM_NARROW_AUDIO_VOCAB=1`` (default): narrow ``LMHead`` column band in codes phase (see :mod:`ace_step_lm_head_narrow`).
+- ``ACE_STEP_LM_LM_HEAD_SHARDED_NORM=1`` (default): sharded prefill final RMSNorm before ``LMHead`` (see :mod:`qwen_lm_head_sharded_norm`).
 
 **Caveats**
 
@@ -110,6 +111,7 @@ from models.demos.ace_step_v1_5.ttnn_impl.math_perf_env import (
     ace_step_five_hz_lm_bfloat8_weights_enabled,
     ace_step_five_hz_lm_optimizations,
     ace_step_lm_decode_qk_norm_sharded_enabled,
+    ace_step_lm_head_sharded_norm_enabled,
     ace_step_lm_narrow_audio_vocab_enabled,
     ace_step_lm_prefill_l1_enabled,
     ace_step_lm_sdpa_concat_width_enabled,
@@ -118,6 +120,7 @@ from models.demos.ace_step_v1_5.ttnn_impl.math_perf_env import (
 from models.demos.ace_step_v1_5.ttnn_impl.qwen_decode_qk_norm import ace_step_apply_qwen_decode_qk_norm
 from models.demos.ace_step_v1_5.ttnn_impl.qwen_decode_sdpa_layout import ace_step_patch_model_args_sdpa_gather_unified
 from models.demos.ace_step_v1_5.ttnn_impl.qwen_decode_shard import ace_step_patch_model_args_decode_unified_shard
+from models.demos.ace_step_v1_5.ttnn_impl.qwen_lm_head_sharded_norm import ace_step_apply_lm_head_sharded_norm
 from models.demos.ace_step_v1_5.ttnn_impl.qwen_prefill_l1 import (
     ace_step_apply_qwen_prefill_l1,
     ace_step_qwen_prefill_l1_op_context,
@@ -255,6 +258,8 @@ class QwenModelTtTransformers:
             ace_step_patch_model_args_sdpa_gather_unified(self.model_args)
         if ace_step_lm_decode_qk_norm_sharded_enabled():
             ace_step_apply_qwen_decode_qk_norm(self.tt_model, self.model_args)
+        if ace_step_lm_head_sharded_norm_enabled():
+            ace_step_apply_lm_head_sharded_norm(self.tt_model, self.model_args)
         if ace_step_lm_narrow_audio_vocab_enabled() and hasattr(self.tt_model, "lm_head"):
             ace_step_patch_lm_head_narrow_forward(self.tt_model.lm_head)
 
@@ -678,6 +683,160 @@ class QwenModelTtTransformers:
 
         self._cursor = cur + 1
         return logits_tt
+
+    # ------------------------------------------------------------------
+    # Post-transformer profiling (final norm + LMHead + logits postprocess)
+    # ------------------------------------------------------------------
+
+    def capture_prefill_hidden_tile(self, tokens: torch.Tensor) -> Any:
+        """Run prefill transformer only; return ``[1,1,32,H]`` tile before final norm."""
+        seq_len = int(tokens.shape[1])
+        prefill_seq_len = get_padded_prefill_len(seq_len)
+        if prefill_seq_len != seq_len:
+            pad = torch.zeros(1, prefill_seq_len - seq_len, dtype=tokens.dtype, device=tokens.device)
+            padded_tokens = torch.cat([tokens, pad], dim=-1)
+        else:
+            padded_tokens = tokens
+
+        block_size = self._paged_cfg.block_size
+        n_blocks = num_blocks_in_seq(prefill_seq_len, block_size)
+        page_table_for_prefill = self._page_table_torch[:, :n_blocks].contiguous()
+
+        inputs = self.tt_model.prepare_inputs_prefill(
+            padded_tokens,
+            page_table=page_table_for_prefill,
+            batch_size=1,
+            user_id=0,
+        )
+        (
+            prefill_input,
+            rot_mats_global,
+            rot_mats_local,
+            page_table_tt,
+            _chunk_page_table_tt,
+        ) = inputs
+
+        with self._prefill_l1_op_context():
+            hidden = self.tt_model.ttnn_prefill_forward(
+                prefill_input,
+                rot_mats_global=rot_mats_global,
+                rot_mats_local=rot_mats_local,
+                user_id=0,
+                page_table=page_table_tt,
+                chunk_page_table=None,
+                chunk_start_idx=None,
+                get_last_token=-1,
+                kv_cache=self.tt_kv_cache,
+                batch_size=1,
+            )
+
+        last_token_idx = seq_len - 1
+        get_last_token = (last_token_idx // 32) * 32
+        return ttnn.slice(
+            hidden,
+            (0, 0, get_last_token, 0),
+            (1, 1, get_last_token + 32, hidden.shape[-1]),
+        )
+
+    def forward_post_transformer_prefill(self, hidden_tile: Any) -> Any:
+        """Final RMSNorm + sharded ``LMHead`` on a prefill last-token tile."""
+        return self.tt_model._apply_norm_and_lm_head(hidden_tile)
+
+    def capture_decode_hidden_tile(self, tokens: torch.Tensor, start_pos: int) -> Any:
+        """Run decode transformer stack only; return hidden tile before final norm."""
+        from models.tt_transformers.tt.common import Mode
+        from models.tt_transformers.tt.model_config import TensorGroup
+
+        tt_model = self.tt_model
+        decode_tokens = tokens.view(1).to(torch.int32)
+        current_pos = torch.tensor([int(start_pos)], dtype=torch.int32)
+        host_inputs = tt_model.prepare_decode_inputs_host(
+            decode_tokens,
+            current_pos,
+            page_table=self._page_table_torch,
+        )
+        tt_tokens, tt_current_pos, rope_idxs, tt_page_table = copy_host_to_device(host_inputs, mesh_device=self.device)
+
+        rot_mats_global = tt_model.rope_setup.get_rot_mats(rope_idxs)
+        rot_mats_local = (
+            tt_model.rope_local_setup.get_rot_mats(rope_idxs) if hasattr(tt_model, "rope_local_setup") else None
+        )
+
+        x = tt_model._transform_decode_inputs_device(tt_tokens)
+        if tt_model.prefetcher is not None:
+            tt_model.prefetcher.run()
+
+        for i, layer in enumerate(tt_model.layers):
+            activation_dtype = tt_model.args.decoders_optimizations.get_tensor_dtype(
+                decoder_id=i, tensor=TensorGroup.ACTIVATION
+            )
+            if not tt_model.args.is_galaxy:
+                x = ttnn.to_memory_config(
+                    x,
+                    tt_model.args.get_residual_mem_config(Mode.DECODE, tt_model.prefetcher),
+                    activation_dtype,
+                )
+            elif activation_dtype is not None and x.dtype != activation_dtype:
+                x = ttnn.typecast(x, activation_dtype)
+
+            x = layer(
+                x,
+                tt_current_pos,
+                rot_mats_global=rot_mats_global,
+                rot_mats_local=rot_mats_local,
+                user_id=0,
+                mode=Mode.DECODE,
+                page_table=tt_page_table,
+                chunk_page_table=None,
+                chunk_start_idx=None,
+                kv_cache=self.tt_kv_cache[i] if self.tt_kv_cache is not None else None,
+                batch_size=1,
+            )
+
+        if tt_model.prefetcher is not None:
+            tt_model.prefetcher.stop()
+        return x
+
+    def forward_post_transformer_decode(self, hidden_tile: Any) -> Any:
+        """Decode-path final norm + ``LMHead`` (+ gather/untilize when multi-device)."""
+        from models.tt_transformers.tt.common import Mode
+
+        tt_model = self.tt_model
+        x = hidden_tile
+        x = tt_model.norm(
+            x,
+            mode=Mode.DECODE,
+            norm_config=tt_model.args.get_norm_config("lm_head", Mode.DECODE, tt_model.prefetcher),
+        )
+        if tt_model.prefetcher is not None:
+            x = ttnn.to_memory_config(x, tt_model.args.get_lm_head_input_mem_config(Mode.DECODE, tt_model.prefetcher))
+        x = tt_model.lm_head(x)
+
+        if tt_model.args.num_devices > 1:
+            cluster_axis = 0 if tt_model.args.is_galaxy else None
+            num_links = 2 if tt_model.args.is_galaxy else 1
+            x = ttnn.experimental.all_gather_async(
+                x,
+                persistent_output_buffer=None,
+                dim=3,
+                multi_device_global_semaphore=tt_model.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
+                num_links=num_links,
+                memory_config=x.memory_config() if tt_model.prefetcher is None else ttnn.DRAM_MEMORY_CONFIG,
+                cluster_axis=cluster_axis,
+                topology=tt_model.args.ccl_topology(),
+                barrier_semaphore=tt_model.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+                chunks_per_sync=10,
+                num_workers_per_link=2,
+                num_buffers_per_channel=2,
+                subdevice_id=tt_model.prefetcher.worker_sub_device_id if tt_model.prefetcher is not None else None,
+            )
+
+        return ttnn.untilize(
+            x,
+            use_multicore=True,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            sub_core_grids=tt_model.prefetcher.all_worker_cores_range_set if tt_model.prefetcher is not None else None,
+        )
 
 
 __all__ = ["QwenModelTtTransformers"]
