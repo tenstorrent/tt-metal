@@ -742,13 +742,16 @@ tt::tt_metal::WorkloadDescriptor Conv2dShardedProgramFactory::create_workload_de
     // This requires synchronization between the main reader and the second reader to prevent race conditions.
     const bool split_reader_cb_shared = enable_split_reader && overlap_act_cb && block_sharded;
 
-    // Program-scoped semaphore IDs are assigned sequentially.  The framework
-    // allocates the actual L1 addresses when realising the descriptor into a
-    // Program (see SemaphoreDescriptor entries appended to `desc.semaphores`
-    // below).  Kernels read these ids the same way they did when the legacy
-    // CreateSemaphore() return value was passed through compile-time args or
-    // runtime args (all are 0-initialised semaphores; INVALID == 0).
-    uint32_t next_sem_id = 0;
+    // Program-scoped semaphore IDs are assigned sequentially. The framework
+    // allocates the actual L1 addresses when realising the descriptor into a program
+    uint32_t next_sem_id = 0;  // being changed automatically within compose_semaphore_descriptor below
+    auto compose_semaphore_descriptor =
+        [&next_sem_id](uint32_t& semahpore_id, const CoreRangeSet& core_ranges, const uint32_t initial_value) {
+            semahpore_id = next_sem_id++;  // to the next semaphore id
+            return tt::tt_metal::SemaphoreDescriptor{
+                .id = semahpore_id, .core_ranges = core_ranges, .initial_value = initial_value};
+        };
+
     if (block_sharded) {
         const CoreCoord out_bottom_right_core = {(std::size_t)num_cores_x - 1, (std::size_t)num_cores_y - 1};
         // 2D mcast
@@ -766,74 +769,28 @@ tt::tt_metal::WorkloadDescriptor Conv2dShardedProgramFactory::create_workload_de
         if (populate_skipped_work_cores) {
             mcast_sender_cores = input_cores.subtract(mcast_receiver_cores);
         }
-        act_mcast_sender_semaphore_id = next_sem_id++;
-        desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-            .id = act_mcast_sender_semaphore_id,
-            .core_ranges = all_cores,
-            .initial_value = 0,
-        });
-        act_mcast_receiver_semaphore_id = next_sem_id++;
-        desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-            .id = act_mcast_receiver_semaphore_id,
-            .core_ranges = all_cores,
-            .initial_value = 0,
-        });
+        desc.semaphores.push_back(compose_semaphore_descriptor(act_mcast_sender_semaphore_id, all_cores, 0));
+        desc.semaphores.push_back(compose_semaphore_descriptor(act_mcast_receiver_semaphore_id, all_cores, 0));
 
         if (split_reader_cb_shared) {
-            weights_mcast_sender_semaphore_id = next_sem_id++;
-            desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-                .id = weights_mcast_sender_semaphore_id,
-                .core_ranges = all_cores,
-                .initial_value = 0,
-            });
-            weights_mcast_receiver_semaphore_id = next_sem_id++;
-            desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-                .id = weights_mcast_receiver_semaphore_id,
-                .core_ranges = all_cores,
-                .initial_value = 0,
-            });
-            act_split_reader_reserve_done_semaphore_id = next_sem_id++;
-            desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-                .id = act_split_reader_reserve_done_semaphore_id,
-                .core_ranges = all_cores,
-                .initial_value = 0,
-            });
-            act_split_reader_write_done_semaphore_id = next_sem_id++;
-            desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-                .id = act_split_reader_write_done_semaphore_id,
-                .core_ranges = all_cores,
-                .initial_value = 0,
-            });
+            desc.semaphores.push_back(compose_semaphore_descriptor(weights_mcast_sender_semaphore_id, all_cores, 0));
+            desc.semaphores.push_back(compose_semaphore_descriptor(weights_mcast_receiver_semaphore_id, all_cores, 0));
+            desc.semaphores.push_back(
+                compose_semaphore_descriptor(act_split_reader_reserve_done_semaphore_id, all_cores, 0));
+            desc.semaphores.push_back(
+                compose_semaphore_descriptor(act_split_reader_write_done_semaphore_id, all_cores, 0));
         } else {
-            weights_mcast_sender_semaphore_id = next_sem_id++;
-            desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-                .id = weights_mcast_sender_semaphore_id,
-                .core_ranges = output_cores,
-                .initial_value = 0,
-            });
-            weights_mcast_receiver_semaphore_id = next_sem_id++;
-            desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-                .id = weights_mcast_receiver_semaphore_id,
-                .core_ranges = output_cores,
-                .initial_value = 0,
-            });
+            desc.semaphores.push_back(compose_semaphore_descriptor(weights_mcast_sender_semaphore_id, output_cores, 0));
+            desc.semaphores.push_back(
+                compose_semaphore_descriptor(weights_mcast_receiver_semaphore_id, output_cores, 0));
         }
     } else {
         // 1D mcast
         if (!skip_weights_mcast) {
             mcast_receiver_cores = all_cores.subtract(mcast_sender_cores);
-            weights_mcast_sender_semaphore_id = next_sem_id++;
-            desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-                .id = weights_mcast_sender_semaphore_id,
-                .core_ranges = output_cores,
-                .initial_value = 0,
-            });
-            weights_mcast_receiver_semaphore_id = next_sem_id++;
-            desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-                .id = weights_mcast_receiver_semaphore_id,
-                .core_ranges = output_cores,
-                .initial_value = 0,
-            });
+            desc.semaphores.push_back(compose_semaphore_descriptor(weights_mcast_sender_semaphore_id, output_cores, 0));
+            desc.semaphores.push_back(
+                compose_semaphore_descriptor(weights_mcast_receiver_semaphore_id, output_cores, 0));
         }
     }
 
