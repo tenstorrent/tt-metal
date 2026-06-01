@@ -729,7 +729,12 @@ std::unordered_map<int, int> Cluster::get_worker_logical_to_virtual_y(ChipId chi
     return worker_logical_to_virtual_y;
 }
 
-int Cluster::get_device_aiclk(const ChipId& chip_id) const { return this->driver_->get_chip(chip_id)->get_clock(); }
+int Cluster::get_device_aiclk(const ChipId& chip_id) const {
+    if (this->target_type_ != tt::TargetDevice::Silicon) {
+        return 0;
+    }
+    return this->driver_->get_chip(chip_id)->get_clock();
+}
 
 uint16_t Cluster::get_bus_id(ChipId chip) const { return this->get_cluster_desc()->get_bus_id(chip); }
 
