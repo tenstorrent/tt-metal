@@ -1696,8 +1696,7 @@ def test_ring_joint_attention_sdpa_chunked_accuracy(model_name, q_chunk_size, k_
     )
 
 
-# === TEST 7: CHUNKED-PREFILL DETERMINISM (skipped on CI) ===
-@pytest.mark.skipif(os.environ.get("CI") == "true", reason="Determinism test - skip on CI")
+# === TEST 7: CHUNKED-PREFILL DETERMINISM ===
 @pytest.mark.timeout(1800)
 @pytest.mark.parametrize("chunk_size", [CHUNKED_PREFILL_CHUNK_SIZE], ids=[f"chunk{CHUNKED_PREFILL_CHUNK_SIZE}"])
 @pytest.mark.parametrize(
