@@ -239,33 +239,32 @@ closed — see Stage 2 Results below.**
 
 ## Stage 2 Results
 
-The first Stage 2 deliverable — commit `0495866`, "Stage 2.1 —
-device-resident ResBlock inner loop" — closes the Stage 1 RTF partial.
+Five commits compound across Stage 2 to take the 3 s TTNN-only RTF
+from **0.535** (Stage 1 final) down to **0.177** — a 3× reduction
+beyond what Stage 1 reached. Each commit's measured contribution:
 
-### Performance after Stage 2.1 — RTF target satisfied with margin
+| # | Commit | What | Δ TTNN-only RTF |
+|---|---|---|---:|
+| 1 | `0495866` Stage 2.1 | Device-resident ResBlock inner loop | 0.535 → 0.212 (**−60%**) |
+| 2 | `5215907` Bullet 6 | Flow conv1d uses native `bias_tensor=` path | 0.219 → 0.213 (−2.9%) |
+| 3 | `c84ed8e` Bullet 4 | Flow WN inner loop device-resident end-to-end | 0.213 → 0.208 (−2.4%) |
+| 4 | `9d72885` | Flow conv1d uses `prepare_conv_weights` | 0.208 → 0.201 (−3.0%) |
+| 5 | `8b950f5` | Generator conv1d uses `prepare_conv_weights` | 0.201 → 0.181 (−10.1%) |
+| 6 | `7d96071` | Generator conv1d HEIGHT_SHARDED where shape permits | 0.181 → 0.177 (−2.4%) |
 
-| Clip | Warm RTF (TTNN-only) | Warm RTF (full pipeline) | Audio PCC | Target |
-|---|---:|---:|---:|---|
-| 3 s | **0.212** | **0.339** | 0.998 | < 0.5 ✅ |
-| 10 s | **0.218** | **0.313** | 0.998 | < 0.5 ✅ |
+### Headline numbers (3 s clip, warm mean of 3)
 
-Multiplicative gains from the Stage 1 baseline:
-
-| Metric | Stage 1 final | Stage 2.1 | Δ |
+| Metric | Stage 1 final | After Stage 2 | Δ from S1 |
 |---|---:|---:|---:|
-| 3 s TTNN-only RTF | 0.535 | 0.212 | **-60%** |
-| 3 s full-pipeline RTF | 0.660 | 0.339 | -49% |
-| 10 s TTNN-only RTF | 0.553 | 0.218 | **-60%** |
-| 10 s full-pipeline RTF | 0.648 | 0.313 | -52% |
+| 3 s TTNN-only RTF | 0.535 | **0.177** | **−67%** |
+| 3 s full-pipeline RTF | 0.660 | **0.300** | **−55%** |
 | Audio PCC | 0.998 | 0.998 | preserved |
 
-The Stage 1 bounty target (`< 0.5`) is now cleared by **2.4× on
-TTNN-only at 3 s** and **1.5× on full pipeline at 3 s**. The Stage 3
-**stretch** target (`< 0.2`) is narrowly met on TTNN-only at 3 s
-(0.212) and approached at 10 s (0.218); the full-pipeline stretch
-remains out of reach because the torch CPU preprocessing
-(Hubert + RMVPE) is itself ~0.3-1.0 s of fixed-cost compute the
-device-residency change cannot influence.
+The bounty's < 0.5 target is cleared by **2.8× on TTNN-only** and
+**1.7× on full pipeline**. The Stage 3 stretch target (< 0.2 on
+TTNN-only) is met with margin. The full-pipeline stretch (< 0.2)
+remains out of reach because torch CPU preprocessing (HuBERT + RMVPE)
+is ~0.4 s of fixed compute that Stage 2 work cannot influence.
 
 ### What Stage 2.1 changed
 
@@ -287,23 +286,28 @@ device, no host roundtrip. Conv outputs are forced to interleaved
 DRAM because sharded L1 outputs accumulate bank pressure that breaks
 subsequent conv halo allocations.
 
-### Where time goes now (10 s clip, warm, post-Stage-2.1)
+### Where time goes now (3 s clip, warm, post all Stage 2 commits)
+
+Per-stage breakdown after all 6 Stage 2 commits land:
 
 | Stage | Time | Share of wall | Where it runs |
 |---|---:|---:|---|
-| Hubert | ~0.51 s | 16.3% | torch CPU |
-| F0 (RMVPE) | ~0.30 s | 9.6% | torch CPU |
-| TextEncoder | ~0.13 s | 4.2% | torch CPU |
-| SineGen | ~0.01 s | 0.3% | torch CPU |
-| TTNN Flow | ~0.36 s | 11.5% | N300 |
-| TTNN Generator | ~1.82 s | 58.2% | N300 |
-| Wall total | ~3.13 s | 100% | — |
+| Hubert | ~0.15 s | 16% | torch CPU |
+| F0 (RMVPE) | ~0.19 s | 21% | torch CPU |
+| TextEncoder | ~0.03 s | 4% | torch CPU |
+| SineGen | ~0.00 s | <1% | torch CPU |
+| TTNN Flow | ~0.04 s | 4% | N300 |
+| TTNN Generator | ~0.49 s | 54% | N300 |
+| Wall total | ~0.90 s | 100% | — |
 
-With device-residency, the Generator is no longer host-roundtrip-bound;
-its remaining cost is genuine `conv1d` compute time. The next biggest
-share is the torch CPU preprocessing (~30% of wall combined), which is
-out of scope for further Stage 2 work (porting Hubert / RMVPE / encoder
-to TTNN is Stage 3-flavored work).
+The TTNN Generator is still the biggest share (54%) but its cost is now
+genuine compute, not host-roundtrip overhead. Of that compute, the 8
+conv1d shapes that hit the shape-bound 1.92 MB CB limit (k=11 at ch≥128)
+use DEFAULT interleaved layout instead of HEIGHT_SHARDED — that's
+where the residual headroom lives, blocked by an upstream TTNN kernel
+constraint documented in Bullet 1. The torch CPU preprocessing
+(Hubert + RMVPE) is ~37% of wall combined and is correctly off TTNN by
+architecture (see Bullets 7 and 8 for rationale).
 
 ### Stage 2 bullet status
 
@@ -312,7 +316,7 @@ The bounty's Stage 2 specification has nine bullets. Status with evidence:
 | # | Bullet | Status |
 |---|---|---|
 | 1 | Optimal sharded/interleaved memory configs | **Done where shape permits.** Interleaved DRAM used by default. Per-shape isolated probe of 48 unique Generator conv1d shapes found 40 fit HEIGHT_SHARDED per-core L1; the 8 failures are k=11 at ch≥128 (the shape-bound 1.92 MB CB requirement of conv1d kernel halo+multi-buffer arithmetic). Whitelist `not (in_ch >= 128 and k >= 11)` selects HEIGHT_SHARDED in `_ensure_prepared_conv`, with DEFAULT fallback on prep failure. Generator NEW commit — TTNN-only RTF 0.1811 → 0.1768 (−2.4%), full-pipeline 0.3055 → 0.3005 (−1.6%), audio PCC 0.9978 → 0.9974 (well above 0.995 threshold). |
-| 2 | Sharding for encoder/flow/pitch/retrieval/vocoder | **Partial — per-module.** Encoder/retrieval: torch CPU by design (off-path). Flow: device-residency landed (Bullet 4 commit, −22% Flow time). Pitch (RMVPE): see bullet 8. Vocoder ResBlock: device-residency landed in Stage 2.1; HEIGHT_SHARDED conv1d landed for 40/48 Generator shapes (see bullet 1). |
+| 2 | Sharding for encoder/flow/pitch/retrieval/vocoder | **Partial — per-module.** The bullet text names 5 modules; 2 are TTNN-resident and optimized, 3 are correctly off TTNN by architecture. Per-module: **Encoder (HuBERT)** — torch CPU by design; porting it to TTNN is Stage 3+ work, sharding question doesn't apply yet. **Flow** — device-residency landed (Bullet 4 commit `c84ed8e`, −22% Flow time); flow-shape conv1d sharding probed (1.10× speedup, sub-noise at this scale) and left as DEFAULT to avoid program-cache contention with Generator. **Pitch (RMVPE)** — torch CPU; TTNN port investigated (Bullet 8) and ruled net-negative for our shapes. **Retrieval (FAISS)** — torch CPU; < 1% of wall time per Bullet 7, not a TTNN op. **Vocoder ResBlock (HiFi-GAN Generator)** — Stage 2.1 device-residency + `prepare_conv_weights` (commit `8b950f5`) + HEIGHT_SHARDED on 40/48 ResBlock conv1d shapes (commit `7d96071`, see Bullet 1). The 2 TTNN-resident modules have measured optimization; the 3 off-TTNN modules each have their own bullet documenting why they should stay off TTNN. |
 | 3 | Fuse simple ops (layer norm, activations) | **Done within architecture.** LeakyReLU fused into ResBlock conv1 via `Conv2dConfig.activation=UnaryWithParam(LRELU)`; tanh/sigmoid/mul on-device in the flow inner loop; LayerNorm N/A (HiFi-GAN architecture has none). TTNN ships no fused `tanh×sigmoid×mul` primitive for the WN gating pattern — verified by signature probe. |
 | 4 | Store intermediate activations in L1 where beneficial | **Done.** Bullet 4 commit `c84ed8e` — flow WN inner loop is device-resident end-to-end: −22.7% Flow time, −2.4% TTNN total, −2.4% RTF, audio PCC preserved (0.9978). |
 | 5 | Use recommended TTNN/tt-metal flows for audio models | **Done within Stage 2 scope; Trace implementation path verified for Stage 3.** Adopted Whisper-canonical patterns: persistent module classes (`TTNNFlowDecoder`, `TTNNGeneratorNSF.from_checkpoint`), device-resident weights, `Conv2dConfig.activation` fusion, native `conv1d` bias path. Trace+2CQ: investigated, verified implementable — `ttnn.conv1d` with `prepare_conv_weights`+`prepare_conv_bias` works inside `begin_trace_capture`; replay measured at 2.63× speedup vs direct, PCC = 1.000000 (bit-exact). See Metal Trace row in **Stage 2 Optimization Path** below for code-level evidence and Stage 3 unblock pattern. |
@@ -392,9 +396,18 @@ the remaining items are documented future directions.
 |---|---|---|
 | **Device-resident activations** | **✅ landed (Stage 2.1, commit `0495866`)** | Keeps activations on device across the ResBlock inner loop, eliminating 12 host roundtrips per ResBlock × 12 ResBlocks per chunk. Result: TTNN-only RTF 0.535 → 0.212 at 3 s, full RTF 0.660 → 0.339. |
 | Metal Trace | Deferred to Stage 3 — implementation path verified, target = flow path | Trace forbids host→device writes inside the captured region. Op-by-op probe on N300 found `conv1d`/`conv2d` were the only ops to fail in trace (vs `add`/`mul`/`tanh`/`relu`/`linear` which all succeed), failing at `tt_metal/distributed/fd_mesh_command_queue.cpp:624` even with device-resident weight + bias. Root cause: `ttnn.conv2d` internally **preprocesses weights into a tile-formatted layout on every invocation** by default — this preprocessing is the per-call write that violates trace. **Verified unblock:** preprocess weights and bias once outside trace via `ttnn.prepare_conv_weights` and `ttnn.prepare_conv_bias`, then call `ttnn.conv1d` with the prepared tensors inside trace. Capture **and replay** verified end-to-end on N300 at the RVC flow shape (B=1, T=75, in=192, out=384, k=5): direct conv1d 0.092 ms/call → traced replay 0.035 ms/call = **2.63× speedup**, PCC = 1.000000 (bit-exact). Generator-shape conv1d (T=7200, in=128, k=11, d=5) is also trace-capturable + replayable, but speedup is ~1.0× because device compute time dominates dispatch overhead — Trace's win comes from amortizing host→device dispatch, which only matters for small ops. Implication: Stage 3 Trace effort should target the **flow inner loop** (~12 small conv1d ops × 4 chunks per inference) for measurable RTF impact; Generator already gets its big win from Stage 2.1 device residency. API gotchas surfaced during verification: `prepare_conv_bias` requires `bias_tensor` as a 4D `[1,1,1,out_ch]` ttnn tensor and a `conv_config` with `weights_dtype` set to match the weight dtype. No upstream changes required. |
-| Op fusion (broader) | Partial | Stage 1 fused LeakyReLU into ResBlock conv1; Stage 2.1 uses on-device LeakyReLU throughout the residual loop. Remaining op chains (e.g. tanh-into-conv_post) are smaller refactors with sub-percent gains. |
-| Sharding | Future | Height/block sharding for the conv1d path per the TTNN bringup guide. Stage 1 targets are now met comfortably, so this is optional polish. |
-| LoFi math fidelity | Future | Config-level change. |
+| Op fusion (broader) | **✅ landed** | Stage 1 fused LeakyReLU into ResBlock conv1; Stage 2.1 uses on-device LeakyReLU throughout the residual loop; Bullet 6 commit `5215907` added native `conv1d(bias_tensor=)` for fused bias; Bullets 4 and the prep-weights commits added `prepare_conv_weights`/`prepare_conv_bias`. TTNN ships no fused `tanh×sigmoid×mul` primitive for the WN gating pattern — verified by signature probe. |
+| Sharding (HEIGHT_SHARDED) | **✅ landed where shape permits** | Commit `7d96071` — per-shape probe of 48 unique Generator conv1d shapes found 40 fit HEIGHT_SHARDED per-core L1. Whitelist `not (in_ch >= 128 and k >= 11)` enables HEIGHT_SHARDED with DEFAULT fallback. 8 remaining shapes (k=11 at ch≥128) hit the shape-bound 1.92 MB per-core CB requirement — a real TTNN platform limit at our HiFi-GAN ResBlock shapes. Result: TTNN-only RTF 0.181 → 0.177 (−2.4%). |
+| LoFi math fidelity | Investigated — no measurable gain | Tested with `WormholeComputeKernelConfig(math_fidelity=LoFi)` on Generator conv1d. Result: TTNN-only RTF 0.1768 → 0.1757 (−0.6%, within 2% noise band). Audio PCC unchanged. At our shapes compute is not the bottleneck enough for LoFi's precision/perf tradeoff to register above noise. Reverted. |
 
-Stage 1's RTF target is now satisfied with substantial margin; the
+### Attempted but not shipped (honest record)
+
+| Attempt | Outcome | Reason |
+|---|---|---|
+| BLOCK_SHARDED fallback for 8 HEIGHT_SHARDED-fail shapes | Reverted | Isolated probe showed 1.05–1.13× per-op speedup at Stage 0 shapes, but full-integration benchmark showed sub-noise net delta (−0.4%). Per-op savings × small-volume shapes = below measurement floor. |
+| `enable_act_double_buffer` on Generator conv1d | Reverted | Statically allocated CB region clashes with already-allocated L1 buffers at runtime (`program.cpp:1377`). Double-buffering pushes the L1 ceiling past what fits at our integration state. |
+| Trace runtime implementation (flow path) | Reverted | Trace capture+replay pattern verified end-to-end on isolated conv1d (PCC=1.000000, 2.63× per-call speedup per Bullet 5). Runtime implementation of `_conditioned_wn_device` under trace produced non-deterministic replay output (max_diff ≈1.8 even after pre-allocating accumulator buffers via `output_tensor=`). The 12+ inner-loop ops with chained slices, adds, and dynamically-allocated intermediates need pre-allocated buffers throughout for trace replay to be deterministic — that's a larger refactor and was deferred. Stage 5 Trace target remains: the flow inner loop, using the verified per-op pattern. |
+| conv_pre / conv_post `prepare_conv_weights` migration | Reverted | The 2 ops (×4 chunks = 8 calls) per inference don't have enough volume for per-call prep savings to register above the 2% noise floor (measured −0.2%). |
+
+Stage 1's RTF target is satisfied with substantial margin; the
 remaining items are optional refinements rather than gap-closing work.
