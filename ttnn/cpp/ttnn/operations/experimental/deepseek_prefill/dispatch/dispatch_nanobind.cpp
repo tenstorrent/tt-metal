@@ -81,10 +81,12 @@ void bind_dispatch(nb::module_& mod) {
                 (DRAM allocated as UINT8). Requires TILE input layout, not supported on
                 Wormhole_B0. Defaults to False.
             num_untilizers_per_sender (int, optional): Number of untilize cores per
-                sender on the tile-layout path. Currently only 2 is supported (u1 reads
-                expert_offsets_tensor incrementing, u2 reads expert_offsets_tensor and
-                expert_histograms_tensor and writes decrementing from offsets+histograms).
-                Defaults to 2.
+                sender on the tile-layout path. Must be 2; the device op asserts this
+                (reader_untilize_dispatch.cpp hardcodes a 2-core round-robin where only
+                core_id == 1 decrements from offsets+histograms, so any other value
+                would silently corrupt routing). u1 reads expert_offsets_tensor
+                incrementing; u2 reads expert_offsets_tensor and expert_histograms_tensor
+                and writes decrementing from offsets+histograms. Defaults to 2.
 
         Returns:
             Tuple[ttnn.Tensor, ttnn.Tensor]:

@@ -403,7 +403,7 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
             .core_ranges = sender_core_grid,
             .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_4),
-                .data_format = tt::DataFormat::UInt8,
+                .data_format = tt::DataFormat::UInt32,
                 .page_size = route_info_page_size,
             }}},
         });
@@ -430,7 +430,7 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
             .core_ranges = sender_core_grid,
             .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_16),
-                .data_format = tt::DataFormat::UInt8,
+                .data_format = tt::DataFormat::UInt32,
                 .page_size = route_info_page_size,
             }}},
         });
@@ -1063,7 +1063,7 @@ tt::tt_metal::ProgramDescriptor create_at_row_major(
             .core_ranges = sender_core_grid,
             .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_4),
-                .data_format = tt::DataFormat::UInt8,
+                .data_format = tt::DataFormat::UInt32,
                 .page_size = route_info_page_size,
             }}},
         });

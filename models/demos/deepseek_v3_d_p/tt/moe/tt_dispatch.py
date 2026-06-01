@@ -88,13 +88,15 @@ class TtDispatchModule(LightweightModule):
             num_links: Number of fabric links for remote token writes.
             topology: Fabric topology for remote token writes.
             fp8_output: Output dtype for the dispatched buffer.
-            num_untilizers_per_sender: Number of untilizer cores per sender (default 2).
-                With 2 untilizers, u1 reads even batches (0,2,4,...) starting from
-                tt_expert_offsets and increments; u2 reads odd batches (1,3,5,...) starting
-                from tt_expert_offsets + tt_expert_histograms (computed in L1 from the same
-                two tensors u1 and the routing setup already produce) and decrements.
-                Eliminates synchronization on the offset tensor since the two cores write
-                into non-overlapping halves.
+            num_untilizers_per_sender: Number of untilizer cores per sender. Must be 2;
+                other values are rejected by the device op (reader_untilize_dispatch.cpp
+                hardcodes a 2-core round-robin and core_id >= 2 would silently corrupt
+                routing). u1 (core_id=0) reads even batches (0,2,4,...) starting from
+                tt_expert_offsets and increments; u2 (core_id=1) reads odd batches
+                (1,3,5,...) starting from tt_expert_offsets + tt_expert_histograms
+                (computed in L1 from the same two tensors u1 and the routing setup
+                already produce) and decrements. Eliminates synchronization on the offset
+                tensor since the two cores write into non-overlapping halves.
         """
         if fp8_output and "blackhole" not in ttnn.get_arch_name():
             raise ValueError("fp8_output requires Blackhole hardware")

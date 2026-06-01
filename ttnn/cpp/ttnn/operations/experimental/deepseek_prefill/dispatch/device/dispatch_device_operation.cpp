@@ -72,6 +72,17 @@ void DispatchDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         !operation_attributes.output_mem_config.is_sharded(),
         "Output memory config must be DRAM interleaved, not sharded");
+
+    // The untilizer kernel hardcodes a 2-core round-robin: core_id == 0 increments from
+    // expert_offsets[e]; core_id == 1 folds in the histogram and decrements from the end.
+    // Any core_id >= 2 falls into the "left untilizer" branch and collides with core 0,
+    // silently corrupting dispatched tokens. Supporting N > 2 requires kernel changes.
+    TT_FATAL(
+        operation_attributes.num_untilizers_per_sender == 2,
+        "num_untilizers_per_sender must be 2; got {}. The untilizer kernel is hardcoded for "
+        "a 2-core round-robin (one left-to-right, one right-to-left). Supporting other values "
+        "requires changes to reader_untilize_dispatch.cpp.",
+        operation_attributes.num_untilizers_per_sender);
 }
 
 void DispatchDeviceOperation::validate_on_program_cache_hit(

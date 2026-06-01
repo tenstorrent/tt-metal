@@ -292,87 +292,87 @@ void kernel_main() {
     bool done_1 = false;
     bool done_2 = false;
 
-        while (!done_1 || !done_2) {
-            // ---- u1 entry ----
-            if (!done_1) {
-                noc_semaphore_wait_min(data_avail_sem_ptr, consumed_1 + 1);
-                uint32_t slot = consumed_1 % writer_cb_size;
-                volatile tt_l1_ptr uint32_t* route_info =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(writer_route_base + slot * route_info_slot_stride);
-                if (route_info[0] == ROUTE_INFO_SENTINEL) {
-                    done_1 = true;
-                } else {
-                    uint32_t distance = route_info[1];
-                    uint32_t page_idx = route_info[2];
-                    uint32_t payload_addr = writer_payload_base + slot * aligned_output_page_size;
-                    uint32_t metadata_addr = writer_metadata_base + slot * aligned_metadata_page_size;
-                    DPRINT_DISPATCH("u1 send: route={} page={}\n", route_info[0], page_idx);
+    while (!done_1 || !done_2) {
+        // ---- u1 entry ----
+        if (!done_1) {
+            noc_semaphore_wait_min(data_avail_sem_ptr, consumed_1 + 1);
+            uint32_t slot = consumed_1 % writer_cb_size;
+            volatile tt_l1_ptr uint32_t* route_info =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(writer_route_base + slot * route_info_slot_stride);
+            if (route_info[0] == ROUTE_INFO_SENTINEL) {
+                done_1 = true;
+            } else {
+                uint32_t distance = route_info[1];
+                uint32_t page_idx = route_info[2];
+                uint32_t payload_addr = writer_payload_base + slot * aligned_output_page_size;
+                uint32_t metadata_addr = writer_metadata_base + slot * aligned_metadata_page_size;
+                DPRINT_DISPATCH("u1 send: route={} page={}\n", route_info[0], page_idx);
 #ifdef DEST_CHIP_ID
 
-                    fabric_set_unicast_route<false>(
-                        (volatile tt_l1_ptr LowLatencyPacketHeader*)unicast_packet_header, distance);
-                    fabric_send_noc_unicast<fabric_max_packet_size>(
-                        output_addr_gen,
-                        fabric_connections[route_info[0]],
-                        unicast_packet_header,
-                        payload_addr,
-                        page_idx,
-                        (int)aligned_output_page_size,
-                        l1_alignment);
-                    fabric_send_noc_unicast<fabric_max_packet_size>(
-                        metadata_addr_gen,
-                        fabric_connections[route_info[0]],
-                        unicast_packet_header,
-                        metadata_addr,
-                        page_idx,
-                        (int)aligned_metadata_page_size,
-                        l1_alignment);
-                    noc_async_writes_flushed();
+                fabric_set_unicast_route<false>(
+                    (volatile tt_l1_ptr LowLatencyPacketHeader*)unicast_packet_header, distance);
+                fabric_send_noc_unicast<fabric_max_packet_size>(
+                    output_addr_gen,
+                    fabric_connections[route_info[0]],
+                    unicast_packet_header,
+                    payload_addr,
+                    page_idx,
+                    (int)aligned_output_page_size,
+                    l1_alignment);
+                fabric_send_noc_unicast<fabric_max_packet_size>(
+                    metadata_addr_gen,
+                    fabric_connections[route_info[0]],
+                    unicast_packet_header,
+                    metadata_addr,
+                    page_idx,
+                    (int)aligned_metadata_page_size,
+                    l1_alignment);
+                noc_async_writes_flushed();
 #endif
-                    noc_semaphore_inc<true>(untilize_space_avail_noc_addr, 1);
-                    consumed_1++;
-                }
-            }
-            // ---- u2 entry ----
-            if (!done_2) {
-                noc_semaphore_wait_min(data_avail_u2_sem_ptr, consumed_2 + 1);
-                uint32_t slot = consumed_2 % writer_cb_size;
-                volatile tt_l1_ptr uint32_t* route_info =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(writer_route_base_2 + slot * route_info_slot_stride);
-                if (route_info[0] == ROUTE_INFO_SENTINEL) {
-                    done_2 = true;
-                } else {
-                    uint32_t distance = route_info[1];
-                    uint32_t page_idx = route_info[2];
-                    uint32_t payload_addr = writer_payload_base_2 + slot * aligned_output_page_size;
-                    uint32_t metadata_addr = writer_metadata_base_2 + slot * aligned_metadata_page_size;
-                    DPRINT_DISPATCH("u2 send: route={} page={}\n", route_info[0], page_idx);
-#ifdef DEST_CHIP_ID
-                    fabric_set_unicast_route<false>(
-                        (volatile tt_l1_ptr LowLatencyPacketHeader*)unicast_packet_header, distance);
-                    fabric_send_noc_unicast<fabric_max_packet_size>(
-                        output_addr_gen,
-                        fabric_connections[route_info[0]],
-                        unicast_packet_header,
-                        payload_addr,
-                        page_idx,
-                        (int)aligned_output_page_size,
-                        l1_alignment);
-                    fabric_send_noc_unicast<fabric_max_packet_size>(
-                        metadata_addr_gen,
-                        fabric_connections[route_info[0]],
-                        unicast_packet_header,
-                        metadata_addr,
-                        page_idx,
-                        (int)aligned_metadata_page_size,
-                        l1_alignment);
-                    noc_async_writes_flushed();
-#endif
-                    noc_semaphore_inc<true>(untilize_u2_space_avail_noc_addr, 1);
-                    consumed_2++;
-                }
+                noc_semaphore_inc<true>(untilize_space_avail_noc_addr, 1);
+                consumed_1++;
             }
         }
+        // ---- u2 entry ----
+        if (!done_2) {
+            noc_semaphore_wait_min(data_avail_u2_sem_ptr, consumed_2 + 1);
+            uint32_t slot = consumed_2 % writer_cb_size;
+            volatile tt_l1_ptr uint32_t* route_info =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(writer_route_base_2 + slot * route_info_slot_stride);
+            if (route_info[0] == ROUTE_INFO_SENTINEL) {
+                done_2 = true;
+            } else {
+                uint32_t distance = route_info[1];
+                uint32_t page_idx = route_info[2];
+                uint32_t payload_addr = writer_payload_base_2 + slot * aligned_output_page_size;
+                uint32_t metadata_addr = writer_metadata_base_2 + slot * aligned_metadata_page_size;
+                DPRINT_DISPATCH("u2 send: route={} page={}\n", route_info[0], page_idx);
+#ifdef DEST_CHIP_ID
+                fabric_set_unicast_route<false>(
+                    (volatile tt_l1_ptr LowLatencyPacketHeader*)unicast_packet_header, distance);
+                fabric_send_noc_unicast<fabric_max_packet_size>(
+                    output_addr_gen,
+                    fabric_connections[route_info[0]],
+                    unicast_packet_header,
+                    payload_addr,
+                    page_idx,
+                    (int)aligned_output_page_size,
+                    l1_alignment);
+                fabric_send_noc_unicast<fabric_max_packet_size>(
+                    metadata_addr_gen,
+                    fabric_connections[route_info[0]],
+                    unicast_packet_header,
+                    metadata_addr,
+                    page_idx,
+                    (int)aligned_metadata_page_size,
+                    l1_alignment);
+                noc_async_writes_flushed();
+#endif
+                noc_semaphore_inc<true>(untilize_u2_space_avail_noc_addr, 1);
+                consumed_2++;
+            }
+        }
+    }
 #else
     // ===== Row-major path: standard CB protocol on c_4/c_5/c_6 pushed by the sender reader.
     while (true) {
