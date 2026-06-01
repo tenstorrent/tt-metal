@@ -787,6 +787,133 @@ class VoxtralTTAcousticModel:
         assert isinstance(out, tuple)
         return out
 
+    def forward_from_tt(
+        self,
+        llm_hidden_tt: ttnn.Tensor,
+        cfg_alpha: torch.Tensor,
+        *,
+        collect_semantic_logits: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        """AR-loop acoustic forward accepting device hidden; returns exact-integer torch codes.
+
+        Flow:
+          torch.randn noise (CPU, FIRST — respects caller's torch.manual_seed) → TT
+          llm_hidden_tt → semantic linear (TT fp32) → host fp32 argmax → exact int32 code
+          FM Euler loop (_decode_one_frame_tt) fully on device
+          acoustic codes: TT bfloat16 → host (values 2–22, exactly representable in bf16)
+          codes_host assembled from exact integer sources — no bfloat16 rounding on semantic
+
+        Why codes come to torch:
+          1. ``int(codes[0,0].item()) == end_audio_id`` — Python break condition (unavoidable)
+          2. ``generated_codes.append(...)``             — CPU list for final audio output
+          3. ``_audio_codes_to_mm_embed_device(codes)``  — 148-byte upload for TT embed lookup
+        """
+        # ── Normalize incoming hidden ───────────────────────────────────────────
+        # The text model norm outputs WIDTH_SHARDED L1 TILE 4D [B,1,1,dim].
+        # Acoustic model requires DRAM INTERLEAVED TILE 3D [B,1,dim]:
+        #   • typecast: layouts must match (WIDTH_SHARDED ≠ INTERLEAVED → fatal)
+        #   • _predict_velocity_impl: tt_llm expected as 3D [B,1,dim]
+        #   • ttnn.concat for CFG doubling: requires DRAM
+        # TILE tensors cannot change rank in ttnn.reshape → must go via ROW_MAJOR.
+        # Combining unshard + layout change in one to_layout call fails for sharded inputs
+        # (TT requires separate steps: unshard first, then change layout).
+        _dim = int(llm_hidden_tt.shape[-1])
+        needs_norm = len(llm_hidden_tt.shape) == 4 or llm_hidden_tt.memory_config() != ttnn.DRAM_MEMORY_CONFIG
+        if needs_norm:
+            # Step 1: unshard L1 → DRAM (keep TILE layout; this is a memory-only move).
+            if llm_hidden_tt.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
+                llm_dram_tile = ttnn.to_memory_config(llm_hidden_tt, ttnn.DRAM_MEMORY_CONFIG)
+                owns_dram_tile = True
+            else:
+                llm_dram_tile = llm_hidden_tt
+                owns_dram_tile = False
+            # Step 2: TILE → ROW_MAJOR (now safely on DRAM; layout-only conversion).
+            llm_rm = ttnn.to_layout(llm_dram_tile, ttnn.ROW_MAJOR_LAYOUT)
+            if owns_dram_tile and llm_dram_tile.is_allocated():
+                ttnn.deallocate(llm_dram_tile)
+            # Step 3: reshape 4D → 3D (ROW_MAJOR reshape is unrestricted).
+            if len(llm_rm.shape) == 4:
+                bsz = int(llm_rm.shape[0])
+                llm_logical = ttnn.slice(llm_rm, [0, 0, 0, 0], [bsz, 1, 1, _dim])
+                if llm_rm.is_allocated():
+                    ttnn.deallocate(llm_rm)
+                llm_rm = ttnn.reshape(llm_logical, (bsz, 1, _dim))
+                if llm_logical.is_allocated():
+                    ttnn.deallocate(llm_logical)
+            # Step 4: ROW_MAJOR → TILE DRAM for acoustic linear ops.
+            llm_norm = ttnn.to_layout(llm_rm, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            if llm_rm.is_allocated():
+                ttnn.deallocate(llm_rm)
+            owns_llm_norm = True
+        else:
+            llm_norm = llm_hidden_tt
+            owns_llm_norm = False
+        # llm_norm: [B, 1, dim] DRAM TILE — safe for typecast, concat, and linear below.
+
+        bsz = int(llm_norm.shape[0])
+        cfg_scalar = float(cfg_alpha.flatten()[0].item())
+
+        # Noise: generate FIRST — this must be the first torch.randn call after the
+        # caller's torch.manual_seed to preserve deterministic RNG seeding per step.
+        x_0 = torch.randn(bsz, self.n_acoustic_out, dtype=torch.bfloat16)
+        noise_tt = ttnn.from_torch(
+            x_0.unsqueeze(1),
+            device=self.mesh_device,
+            dtype=self.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        # Semantic: TT fp32 linear → host argmax. semantic_code_host is torch int32 — exact.
+        # Bfloat16 can only represent integers exactly up to 2^8 = 256; semantic codes reach 8193.
+        # We keep the exact int32 value and NEVER cast it through bfloat16.
+        sem_in = (
+            ttnn.typecast(llm_norm, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            if llm_norm.dtype != ttnn.float32
+            else llm_norm
+        )
+        sem_logits_host = self._semantic_logits_tt(sem_in, input_fp32=False)
+        if sem_in is not llm_norm and sem_in.is_allocated():
+            ttnn.deallocate(sem_in)
+        semantic_code_host = sem_logits_host.argmax(dim=-1, keepdim=True).to(torch.int32).contiguous()
+
+        # Upload semantic code to device only for _decode_one_frame_tt's signature.
+        # Note: _decode_one_frame_tt does NOT actually read semantic_code_tt in its body
+        # (the should_decode gating from _decode_one_frame was not ported to the TT path).
+        semantic_code_tt = ttnn.from_torch(
+            semantic_code_host,
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        # FM decode: fully on device → [B, 1, n_acoustic] bfloat16 rounded codes.
+        rounded_tt = self._decode_one_frame_tt(semantic_code_tt, llm_norm, cfg_scalar, noise_tt)
+        if noise_tt.is_allocated():
+            ttnn.deallocate(noise_tt)
+        if semantic_code_tt.is_allocated():
+            ttnn.deallocate(semantic_code_tt)
+        if owns_llm_norm and llm_norm.is_allocated():
+            ttnn.deallocate(llm_norm)
+
+        # Acoustic codes: add special-token offset (2), gather to host.
+        # Values after offset: 2–22 (all < 128) — exactly representable in bfloat16.
+        offset = float(len(AudioSpecialTokens.all_special_tokens()))
+        rounded_off = ttnn.add(rounded_tt, offset, dtype=self.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(rounded_tt)
+        acoustic_host = ttnn.to_torch(rounded_off).long().squeeze(1)  # [B, n_acoustic]
+        if rounded_off.is_allocated():
+            ttnn.deallocate(rounded_off)
+
+        # Assemble codes from exact-integer sources only — no bfloat16 intermediate.
+        # semantic_code_host [B,1] int32 (exact) + acoustic_host [B,n_acoustic] long (exact).
+        codes_host = torch.cat([semantic_code_host.long(), acoustic_host], dim=1)  # [B, 1+n_acoustic]
+
+        if collect_semantic_logits:
+            return codes_host, {"semantic_logits": sem_logits_host}
+        return codes_host
+
     def forward(
         self,
         llm_hidden: torch.Tensor,
