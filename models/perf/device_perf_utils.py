@@ -34,7 +34,12 @@ def run_device_perf(
     duration_cols = [col + " DURATION [ns]" for col in cols]
     samples_cols = [col + " SAMPLES/S" for col in cols]
 
-    clear_profiler_runtime_artifacts()
+    # Disabled: clear_profiler_runtime_artifacts() does rm(generated/profiler) — wiping ALL
+    # stage subdirs/reports, not just this run's. Removing it lets per-stage reports
+    # (each run writes its own -o .../voxtral_tts_<stage> subdir) accumulate instead of
+    # deleting each other. Note: profiler logs are large (~14 GB device log per heavy run),
+    # so prune generated/profiler manually if disk fills.
+    # clear_profiler_runtime_artifacts()
 
     results = {}
     for d_col in duration_cols:
