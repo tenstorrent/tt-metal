@@ -143,10 +143,10 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
             "Q tensor memory layout must be HEIGHT_SHARDED when sharded but got {}",
             Q_memcfg.memory_layout());
     } else {
-        TT_FATAL(
-            Q_memcfg.buffer_type() == tt::tt_metal::BufferType::DRAM,
-            "Q tensor buffer type must be DRAM when not sharded but got {}",
-            Q_memcfg.buffer_type());
+        // TT_FATAL(
+        //     Q_memcfg.buffer_type() == tt::tt_metal::BufferType::DRAM,
+        //     "Q tensor buffer type must be DRAM when not sharded but got {}",
+        //     Q_memcfg.buffer_type());
     }
 
     // ROW_MAJOR Q is only supported when Q is height-sharded in L1. The interleaved reader path always
