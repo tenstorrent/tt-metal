@@ -7,6 +7,7 @@
 #include "ttnn/device_operation.hpp"
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/device.hpp"
@@ -18,6 +19,8 @@
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_perf_model.hpp"
 #include "ttnn/tensor/types.hpp"
+
+#include <algorithm>
 
 using namespace tt::tt_metal;
 
@@ -344,10 +347,19 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> RingJointSDPADeviceO
     // Total Q dimension: N_local + L, Total K dimension: N_global + L
     const uint32_t cat_Sq = N_local + L;
     const uint32_t cat_Sk = N_global + L;
+    const uint32_t num_cores = grid.x * grid.y;
+    const uint32_t num_local_q_chunks = tt::div_up(N_local, args.get_q_chunk_size());
+    const uint32_t num_joint_q_chunks = tt::div_up(L, args.get_q_chunk_size());
+    const uint32_t num_q_chunks = num_local_q_chunks + num_joint_q_chunks;
+    const uint32_t all_heads_num_q_chunks = B * NQH * num_q_chunks;
+    const bool kernel_is_causal = args.is_causal && !tensor_args.is_chunked();
+    const bool enable_zigzag_balancing = args.is_balanced && kernel_is_causal && (num_q_chunks % 2 == 0);
+    const uint32_t active_compute_cores = enable_zigzag_balancing ? std::min(num_cores, all_heads_num_q_chunks / 2)
+                                                                  : std::min(num_cores, all_heads_num_q_chunks);
 
     // Single attention pass over concatenated dimensions
     int ideal_cycles = operations::transformer::sdpa::compute_sdpa_ideal_cycles(
-        B, NQH, cat_Sq, cat_Sk, DH, DV, args.is_causal, fidelity, grid.x * grid.y);
+        B, NQH, cat_Sq, cat_Sk, DH, DV, args.is_causal, fidelity, active_compute_cores);
 
     return operation::OpPerformanceModelGeneral<Tensors>(input_tensors, output_tensors, ideal_cycles);
 }

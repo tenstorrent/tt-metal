@@ -15,6 +15,7 @@
 #include <string>
 #include <deque>
 #include <limits>
+#include <vector>
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
@@ -278,40 +279,6 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
     CoreRangeSet core_grid_set(core_grid);
     uint32_t num_cores = grid_size.x * grid_size.y;
 
-    // Init fused op signaler — descriptor-pattern equivalent of
-    // RingSDPAFusedOpSignaler::init_fused_op. The signaler stores the receiver-cores
-    // noc list and two signal semaphore IDs (one for forward, one for backward).
-    // Semaphore IDs match insertion order into desc.semaphores.
-    {
-        sdpa_fused_op_signaler->fused_op_signaler_mode = ttnn::experimental::ccl::FusedOpSignalerMode::MULTI;
-        sdpa_fused_op_signaler->fused_op_receiver_cores_noc.clear();
-        const auto cores = tt::tt_metal::corerange_to_cores(core_grid_set, std::nullopt, /*row_wise=*/true);
-        for (const auto& core : cores) {
-            sdpa_fused_op_signaler->fused_op_receiver_cores_noc.push_back(
-                mesh_device->worker_core_from_logical_core(core));
-        }
-        const uint32_t fused_sem0_id = static_cast<uint32_t>(desc.semaphores.size());
-        desc.semaphores.push_back(SemaphoreDescriptor{
-            .id = fused_sem0_id,
-            .core_type = tt::CoreType::WORKER,
-            .core_ranges = core_grid_set,
-            .initial_value = 0,
-        });
-        const uint32_t fused_sem1_id = static_cast<uint32_t>(desc.semaphores.size());
-        desc.semaphores.push_back(SemaphoreDescriptor{
-            .id = fused_sem1_id,
-            .core_type = tt::CoreType::WORKER,
-            .core_ranges = core_grid_set,
-            .initial_value = 0,
-        });
-        sdpa_fused_op_signaler->fused_op_receiver_signal_semaphores.clear();
-        sdpa_fused_op_signaler->fused_op_receiver_signal_semaphores.push_back(fused_sem0_id);
-        sdpa_fused_op_signaler->fused_op_receiver_signal_semaphores.push_back(fused_sem1_id);
-        sdpa_fused_op_signaler->num_fused_op_cores_to_signal =
-            sdpa_fused_op_signaler->fused_op_receiver_cores_noc.size();
-        sdpa_fused_op_signaler->initialized_fused_op = true;
-    }
-
     log_debug(tt::LogOp, "num_cores: {}", num_cores);
     log_debug(
         tt::LogOp, "mesh_device->compute_with_storage_grid_size(): {}", mesh_device->compute_with_storage_grid_size());
@@ -337,7 +304,7 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
-    uint32_t k_tiles = Sk_chunk_t * DHt * 2;  // double buffer
+    uint32_t k_tiles = Sk_chunk_t * DHt * 2;   // double buffer
     uint32_t v_tiles = Sk_chunk_t * vDHt * 2;  // double buffer
     uint32_t mask_tiles = Sq_chunk_t * Sk_chunk_t;
     uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
@@ -1354,6 +1321,87 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
         log_info(tt::LogOp, "K chain mode: head (NHK != 1, {})", head_mcast_enabled ? "mcast" : "unicast");
     }
 
+    std::vector<uint8_t> reader_core_enabled(num_cores, 0);
+    std::vector<uint8_t> work_core_enabled(num_cores, 0);
+    std::vector<CoreCoord> reader_core_coords;
+    std::vector<CoreCoord> work_core_coords;
+    reader_core_coords.reserve(num_cores);
+    work_core_coords.reserve(num_cores);
+
+    for (uint32_t i = 0; i < num_cores; ++i) {
+        const bool has_q_work = core_work[i].global_q_count > 0;
+        const bool participates_in_mcast_or_chain =
+            head_chain_configs[i].participates || batch_chain_configs[i].participates;
+        const bool needs_reader_kernel = has_q_work || participates_in_mcast_or_chain;
+
+        if (has_q_work) {
+            work_core_enabled[i] = 1;
+            work_core_coords.push_back(core_work[i].logical_core);
+        }
+        if (needs_reader_kernel) {
+            reader_core_enabled[i] = 1;
+            reader_core_coords.push_back(core_work[i].logical_core);
+        }
+    }
+
+    TT_FATAL(!work_core_coords.empty(), "Ring joint SDPA must have at least one core with Q work.");
+    TT_FATAL(!reader_core_coords.empty(), "Ring joint SDPA must have at least one reader/data-movement core.");
+
+    const CoreRangeSet reader_core_set(reader_core_coords);
+    const CoreRangeSet work_core_set(work_core_coords);
+
+    log_debug(
+        tt::LogOp,
+        "Ring joint SDPA core sets: reader/data-movement cores={}, compute/write cores={}, provided grid cores={}",
+        reader_core_coords.size(),
+        work_core_coords.size(),
+        num_cores);
+
+    for (auto& cb_desc : desc.cbs) {
+        cb_desc.core_ranges = reader_core_set;
+    }
+
+    const auto update_chain_sem_core_ranges = [&](const ChainSemaphores& sems, const CoreRangeSet& cores) {
+        desc.semaphores[sems.sender_id].core_ranges = cores;
+        desc.semaphores[sems.receiver_id].core_ranges = cores;
+        desc.semaphores[sems.valid_id].core_ranges = cores;
+    };
+    update_chain_sem_core_ranges(head_sems, reader_core_set);
+    if (batch_sems.has_value()) {
+        update_chain_sem_core_ranges(batch_sems.value(), reader_core_set);
+    }
+
+    // Init fused op receiver signaling after the reader core set is known. Inactive
+    // cores do not wait on all-gather; K-mcast dummy readers remain included.
+    {
+        sdpa_fused_op_signaler->fused_op_signaler_mode = ttnn::experimental::ccl::FusedOpSignalerMode::MULTI;
+        sdpa_fused_op_signaler->fused_op_receiver_cores_noc.clear();
+        for (const auto& core : reader_core_coords) {
+            sdpa_fused_op_signaler->fused_op_receiver_cores_noc.push_back(
+                mesh_device->worker_core_from_logical_core(core));
+        }
+        const uint32_t fused_sem0_id = static_cast<uint32_t>(desc.semaphores.size());
+        desc.semaphores.push_back(SemaphoreDescriptor{
+            .id = fused_sem0_id,
+            .core_type = tt::CoreType::WORKER,
+            .core_ranges = reader_core_set,
+            .initial_value = 0,
+        });
+        const uint32_t fused_sem1_id = static_cast<uint32_t>(desc.semaphores.size());
+        desc.semaphores.push_back(SemaphoreDescriptor{
+            .id = fused_sem1_id,
+            .core_type = tt::CoreType::WORKER,
+            .core_ranges = reader_core_set,
+            .initial_value = 0,
+        });
+        sdpa_fused_op_signaler->fused_op_receiver_signal_semaphores.clear();
+        sdpa_fused_op_signaler->fused_op_receiver_signal_semaphores.push_back(fused_sem0_id);
+        sdpa_fused_op_signaler->fused_op_receiver_signal_semaphores.push_back(fused_sem1_id);
+        sdpa_fused_op_signaler->num_fused_op_cores_to_signal =
+            sdpa_fused_op_signaler->fused_op_receiver_cores_noc.size();
+        sdpa_fused_op_signaler->initialized_fused_op = true;
+    }
+
     // Convert std::map<string,string> defines to KernelDescriptor::Defines vector form.
     KernelDescriptor::Defines kernel_defines(defines.begin(), defines.end());
 
@@ -1365,7 +1413,7 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
     reader_kernel.kernel_source =
         "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_joint_reader.cpp";
     reader_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_kernel.core_ranges = core_grid_set;
+    reader_kernel.core_ranges = reader_core_set;
     reader_kernel.compile_time_args = reader_compile_time_args;
     reader_kernel.defines = kernel_defines;
     reader_kernel.config = ReaderConfigDescriptor{};
@@ -1374,7 +1422,7 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
     writer_kernel.kernel_source =
         "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_joint_writer.cpp";
     writer_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_kernel.core_ranges = core_grid_set;
+    writer_kernel.core_ranges = work_core_set;
     writer_kernel.compile_time_args = writer_compile_time_args;
     writer_kernel.defines = kernel_defines;
     writer_kernel.config = WriterConfigDescriptor{};
@@ -1383,7 +1431,7 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
     compute_kernel.kernel_source =
         "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/ring_joint_sdpa.cpp";
     compute_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_kernel.core_ranges = core_grid_set;
+    compute_kernel.core_ranges = work_core_set;
     compute_kernel.compile_time_args = compute_compile_time_args;
     compute_kernel.defines = kernel_defines;
     compute_kernel.config = ComputeConfigDescriptor{
@@ -1392,12 +1440,16 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
         .math_approx_mode = math_approx_mode,
     };
 
-    // Set reader rt args
-    for (uint32_t i = 0; i < num_cores; ++i) {
-        CoreCoord core = {i % grid_size.x, i / grid_size.x};
+    const auto append_fused_op_rt_args = [&](KernelDescriptor::RTArgList& args) {
+        std::vector<uint32_t> signaler_args;
+        sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(signaler_args);
+        args.append(signaler_args);
+    };
 
-        // Prefer the computed even distribution above for chain construction
+    // Set per-core runtime args
+    for (uint32_t i = 0; i < num_cores; ++i) {
         const auto& work = core_work.at(i);
+        const CoreCoord& core = work.logical_core;
         uint32_t global_q_start = work.global_q_start;
         uint32_t global_q_end = work.global_q_start + work.global_q_count;
 
@@ -1407,79 +1459,77 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
         log_debug(tt::LogOp, "global_q_start: {}", global_q_start);
         log_debug(tt::LogOp, "global_q_end: {}", global_q_end);
 
-        KernelDescriptor::RTArgList reader_args;
-        reader_args.push_back(q_buf);
-        reader_args.push_back(k_buf);
-        reader_args.push_back(v_buf);
-        reader_args.push_back(gathered_k_buf);
-        reader_args.push_back(gathered_v_buf);
-        reader_args.push_back(joint_q_buf);
-        reader_args.push_back(joint_k_buf);
-        reader_args.push_back(joint_v_buf);
-        reader_args.push_back(global_q_start);
-        reader_args.push_back(global_q_end);
+        if (reader_core_enabled[i]) {
+            KernelDescriptor::RTArgList reader_args;
+            reader_args.push_back(q_buf);
+            reader_args.push_back(k_buf);
+            reader_args.push_back(v_buf);
+            reader_args.push_back(gathered_k_buf);
+            reader_args.push_back(gathered_v_buf);
+            reader_args.push_back(joint_q_buf);
+            reader_args.push_back(joint_k_buf);
+            reader_args.push_back(joint_v_buf);
+            reader_args.push_back(global_q_start);
+            reader_args.push_back(global_q_end);
 
-        // Append chain runtime args for store-and-forward
-        const auto& head_chain = head_chain_configs.at(i);
-        const auto& batch_chain = batch_chain_configs.at(i);
+            // Append chain runtime args for store-and-forward
+            const auto& head_chain = head_chain_configs.at(i);
+            const auto& batch_chain = batch_chain_configs.at(i);
 
-        log_debug(
-            tt::LogOp,
-            "core logical=({},{})->phys=({},{}), q=[{},{}), head_chain={{part:{}, inj:{}, sink:{}, "
-            "b:{}, h:{}, next_cnt:{}}}",
-            core.x,
-            core.y,
-            core_work.at(i).physical_core.x,
-            core_work.at(i).physical_core.y,
-            global_q_start,
-            global_q_end,
-            head_chain.participates,
-            head_chain.is_injector,
-            head_chain.is_sink,
-            head_chain.batch,
-            head_chain.head,
-            head_chain.next_core_q_chunks);
+            log_debug(
+                tt::LogOp,
+                "core logical=({},{})->phys=({},{}), q=[{},{}), head_chain={{part:{}, inj:{}, sink:{}, "
+                "b:{}, h:{}, next_cnt:{}}}",
+                core.x,
+                core.y,
+                work.physical_core.x,
+                work.physical_core.y,
+                global_q_start,
+                global_q_end,
+                head_chain.participates,
+                head_chain.is_injector,
+                head_chain.is_sink,
+                head_chain.batch,
+                head_chain.head,
+                head_chain.next_core_q_chunks);
 
-        // Head chain (V chain, optionally K in non-MLA): 18 args via unified layout
-        std::vector<uint32_t> head_chain_args;
-        head_chain.append_to_args(head_chain_args);
-        reader_args.append(head_chain_args);
+            // Head chain (V chain, optionally K in non-MLA): 18 args via unified layout
+            std::vector<uint32_t> head_chain_args;
+            head_chain.append_to_args(head_chain_args);
+            reader_args.append(head_chain_args);
 
-        // Batch chain (K chain in MLA mode): 18 args + 1 for loop padding (only when NHK == 1)
-        if (k_uses_batch_chain) {
-            std::vector<uint32_t> batch_chain_args;
-            batch_chain.append_to_args(batch_chain_args);
-            reader_args.append(batch_chain_args);
-            reader_args.push_back(k_chain_max_q[i]);  // For K mcast loop padding (per-chain)
+            // Batch chain (K chain in MLA mode): 18 args + 1 for loop padding (only when NHK == 1)
+            if (k_uses_batch_chain) {
+                std::vector<uint32_t> batch_chain_args;
+                batch_chain.append_to_args(batch_chain_args);
+                reader_args.append(batch_chain_args);
+                reader_args.push_back(k_chain_max_q[i]);  // For K mcast loop padding (per-chain)
+            }
+
+            // Inject fused-op synchronization RT args (AllGather) here; it will append to reader_args
+            append_fused_op_rt_args(reader_args);
+
+            reader_kernel.emplace_runtime_args(core, reader_args);
         }
 
-        // Inject fused-op synchronization RT args (AllGather) here; it will append to reader_args
-        std::vector<uint32_t> reader_signaler_args;
-        sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(reader_signaler_args);
-        reader_args.append(reader_signaler_args);
+        if (work_core_enabled[i]) {
+            // Writer args
+            KernelDescriptor::RTArgList writer_args;
+            writer_args.push_back(out_buf);
+            writer_args.push_back(joint_out_buf);
+            writer_args.push_back(stats_buf);
+            writer_args.push_back(global_q_start);
+            writer_args.push_back(global_q_end);
+            append_fused_op_rt_args(writer_args);
+            writer_kernel.emplace_runtime_args(core, writer_args);
 
-        reader_kernel.emplace_runtime_args(core, reader_args);
-
-        // Writer args
-        KernelDescriptor::RTArgList writer_args;
-        writer_args.push_back(out_buf);
-        writer_args.push_back(joint_out_buf);
-        writer_args.push_back(stats_buf);
-        writer_args.push_back(global_q_start);
-        writer_args.push_back(global_q_end);
-        std::vector<uint32_t> writer_signaler_args;
-        sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(writer_signaler_args);
-        writer_args.append(writer_signaler_args);
-        writer_kernel.emplace_runtime_args(core, writer_args);
-
-        // Compute args
-        KernelDescriptor::RTArgList compute_args;
-        compute_args.push_back(global_q_start);
-        compute_args.push_back(global_q_end);
-        std::vector<uint32_t> compute_signaler_args;
-        sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(compute_signaler_args);
-        compute_args.append(compute_signaler_args);
-        compute_kernel.emplace_runtime_args(core, compute_args);
+            // Compute args
+            KernelDescriptor::RTArgList compute_args;
+            compute_args.push_back(global_q_start);
+            compute_args.push_back(global_q_end);
+            append_fused_op_rt_args(compute_args);
+            compute_kernel.emplace_runtime_args(core, compute_args);
+        }
     }
 
     // Push the SDPA kernels into desc before invoking the all-gather helper so
