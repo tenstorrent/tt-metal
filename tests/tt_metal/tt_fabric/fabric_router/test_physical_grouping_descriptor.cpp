@@ -9,7 +9,6 @@
 #include <string>
 #include <algorithm>
 #include <set>
-#include <iostream>
 #include <sstream>
 #include <cstdlib>
 
@@ -1863,16 +1862,6 @@ TEST(PhysicalGroupingDescriptorSP4Tests, GetValidGroupingsForMGD_BlitzPipeline2x
     MeshGraphDescriptor mgd{std::filesystem::path(mgd_path)};
 
     auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
-
-    // Print valid groupings
-    for (const auto& [instance_type, instances] : valid_groupings) {
-        for (const auto& [instance_name, groupings] : instances) {
-            std::cout << "Instance type: " << instance_type << ", Instance name: " << instance_name << std::endl;
-            for (const auto& grouping : groupings) {
-                std::cout << "Grouping name: " << grouping.name << ", ASIC count: " << grouping.asic_count << std::endl;
-            }
-        }
-    }
 
     // Count total groupings across all instances
     size_t total_groupings = 0;
