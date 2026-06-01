@@ -528,7 +528,7 @@ class TtMoe(LightweightModule):
         shared_output = self.shared_expert(x)
         logger.debug(f"[TtMoe.forward] Shared expert output shape: {shared_output.shape}")
         if nd_active:
-            _nd_moe_log(self.layer_idx, nd_it, "01_shared_output", shared_output)
+            _nd_moe_log(self.layer_idx, nd_it, "01_shared_output", shared_output, allshards=True)
 
         # ========================================
         # Step 2: Dispatch (enabled)
@@ -628,7 +628,7 @@ class TtMoe(LightweightModule):
         )
         logger.debug(f"[TtMoe.forward] routed_output (after reduce) shape: {routed_output.shape}")
         if nd_active:
-            _nd_moe_log(self.layer_idx, nd_it, "05_routed_output", routed_output)
+            _nd_moe_log(self.layer_idx, nd_it, "05_routed_output", routed_output, allshards=True)
 
         # Remove extra batch dimensions to match shared_output shape
         # (1, 1, 256, 512) -> (1, 256, 512)
@@ -643,7 +643,7 @@ class TtMoe(LightweightModule):
         final_output = ttnn.add(routed_output, shared_output)
         logger.debug(f"[TtMoe.forward] final_output (tiled) shape: {final_output.shape}")
         if nd_active:
-            _nd_moe_log(self.layer_idx, nd_it, "06_final_output", final_output)
+            _nd_moe_log(self.layer_idx, nd_it, "06_final_output", final_output, allshards=True)
 
         # Build intermediates if requested
         intermediates = None

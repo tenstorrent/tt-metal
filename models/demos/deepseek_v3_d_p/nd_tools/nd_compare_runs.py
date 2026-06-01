@@ -17,7 +17,7 @@ from collections import defaultdict
 LAYER_RE = re.compile(r"\[NDPROBE\]\s+iter=(\d+)\s+stage=\s*(\S+)\s+sha=(\S+)\s+norm=([\d.eE+-]+)\s+nonfinite=(-?\d+)")
 # baseline line (prev is None) prints the same shape; diff line prints sha a->b. Capture baseline form.
 MOE_RE = re.compile(
-    r"\[NDPROBE-MOE\]\s+layer=(\d+)\s+iter=(\d+)\s+stage=\s*(\S+)\s+sha=(\S+)\s+norm=([\d.eE+-]+)\s+sum=(\S+)\s+nonfinite=(-?\d+)"
+    r"\[NDPROBE-MOE\]\s+layer=(\d+)\s+iter=(\d+)\s+stage=\s*(\S+)\s+(?:scope=\S+\s+)?sha=(\S+)\s+norm=([\d.eE+-]+)\s+sum=(\S+)\s+nonfinite=(-?\d+)"
 )
 
 

@@ -104,13 +104,55 @@ def nd_fp_shard0(tt_tensor) -> Optional[dict]:
         return {"sha": "ERR", "norm": float("nan"), "sum": float("nan"), "n_nonfinite": -1, "shape": str(exc)[:40]}
 
 
-def nd_moe_log(layer_idx: int, it: int, stage: str, tt_tensor) -> None:
-    """Log a per-(layer,iter,stage) device-0-shard fingerprint of a MoE tensor."""
-    fp = nd_fp_shard0(tt_tensor)
+def nd_fp_allshards(tt_tensor) -> Optional[dict]:
+    """Fingerprint ALL device shards (global) of a ttnn tensor.
+
+    Use for small dense tensors (routed_output, final_output, shared_output) so we
+    measure determinism of the *valid* model output across the whole mesh, not just
+    device 0. SHA is computed over the concatenation of per-shard float32 bytes.
+    """
+    try:
+        import ttnn
+
+        shards = ttnn.get_device_tensors(tt_tensor)
+        if not shards:
+            return None
+        h = hashlib.sha1()
+        norm2 = 0.0
+        nfin = 0
+        n = 0
+        for s in shards:
+            t32 = ttnn.to_torch(s).detach().to(torch.float32).contiguous()
+            h.update(t32.numpy().tobytes())
+            tf = t32.to(torch.float64).flatten()
+            finite = torch.isfinite(tf)
+            nfin += int((~finite).sum())
+            tv = torch.where(finite, tf, torch.zeros_like(tf))
+            norm2 += float((tv * tv).sum())
+            n += tf.numel()
+        return {
+            "sha": h.hexdigest()[:16],
+            "norm": norm2**0.5,
+            "sum": 0.0,
+            "n_nonfinite": nfin,
+            "shape": f"{len(shards)}sh*{n//max(1,len(shards))}",
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {"sha": "ERR", "norm": float("nan"), "sum": float("nan"), "n_nonfinite": -1, "shape": str(exc)[:40]}
+
+
+def nd_moe_log(layer_idx: int, it: int, stage: str, tt_tensor, allshards: bool = False) -> None:
+    """Log a per-(layer,iter,stage) fingerprint of a MoE tensor.
+
+    allshards=True fingerprints the whole mesh (use for small dense valid outputs);
+    otherwise just device-0 shard (cheap, for the big garbage-bearing buffers).
+    """
+    fp = nd_fp_allshards(tt_tensor) if allshards else nd_fp_shard0(tt_tensor)
     if fp is None:
         return
+    scope = "GLOBAL" if allshards else "dev0"
     logger.info(
-        f"[NDPROBE-MOE] layer={layer_idx} iter={it} stage={stage:>16} "
+        f"[NDPROBE-MOE] layer={layer_idx} iter={it} stage={stage:>16} scope={scope} "
         f"sha={fp['sha']} norm={fp['norm']:.6f} sum={fp['sum']:.6e} "
         f"nonfinite={fp['n_nonfinite']} shape={fp['shape']}"
     )

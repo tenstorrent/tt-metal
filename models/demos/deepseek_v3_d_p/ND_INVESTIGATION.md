@@ -133,6 +133,30 @@ breaks at scale (e.g. an `Inf` that survives `must_zero_init`, or a dispatch-buf
 **capacity overflow** that drops tokens), or (b) a genuinely non-deterministic
 CCL/matmul accumulation under higher load. Next: reproduce at 25600 tokens.
 
+### Run 2: 5 layers, 25600 tokens, iter1 — REPRODUCED + ROOT-CAUSE LOCALIZED
+Across two separate processes (C1/C2, then D1/D2 with all-shard GLOBAL probe),
+identical input + fixed seed:
+- First diverging **layer = layer_3** (first MoE layer); dense finite drift
+  (layer_3 dnorm ~1e-4..1e-3, **nonfinite=0**), amplifying through norm → lm_head.
+- Within layer 3 (GLOBAL all-shard fingerprints):
+  - `00_moe_input`, gate scores/indices, **`01_shared_output`**, `02_dispatched_buf`
+    (FFN **input**), `02_metadata`, `02b_disp_tiled` → all **SAME** (bit-identical).
+  - `03_expert_outputs` (FFN **output**) → **DIFF**; `05_routed_output` (GLOBAL) →
+    **DIFF** (norm 54.3025 vs 54.3057, dnorm 3.1e-3, nonfinite=0); `06_final_output`
+    → DIFF.
+
+**ROOT CAUSE: the routed-expert FFN compute is non-deterministic given identical
+input.** Same FFN input buffer → different FFN output across processes. The shared
+expert (also matmuls) is GLOBALLY bit-deterministic, so this is **not** generic
+matmul non-determinism — it is specific to the **routed-expert FFN** (the unified
+fused kernel on Blackhole). The drift is **finite** (no NaN), so it is an
+L1-leftover / multicast-handshake race in the kernel, **not** the combine-buffer
+garbage (H1) — confirmed harmless at every scale here.
+
+Also confirmed NOT the cause: KV-cache state (within-process fully deterministic),
+gate/routing (indices bit-identical), dispatch buffer (FFN input identical),
+capacity overflow (per-chip 12356 ≪ capacity 204800), shared expert.
+
 ### Status of experiments
 - [ ] Within-process drift (iter-to-iter) — pending device (blocked by soak)
 - [ ] Across-process first-diverging stage — pending device
