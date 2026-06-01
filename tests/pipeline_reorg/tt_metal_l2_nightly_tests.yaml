@@ -20,7 +20,7 @@
 # For max allowed timeout refer to .github/time_budget.yaml.
 
 # =============================================================================
-# ttnn per-op nightly tests 
+# ttnn per-op nightly tests
 # =============================================================================
 
 - name: ttnn nightly conv tests

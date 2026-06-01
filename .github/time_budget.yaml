@@ -194,7 +194,7 @@ models:
   stress:
     wh_galaxy_perf: 500
   nightly:
-    wh_n150: 30            
+    wh_n150: 30
     wh_n300: 60
     bh_p150b_civ2: 30
   e2e:
