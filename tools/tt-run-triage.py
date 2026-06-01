@@ -49,7 +49,7 @@ TRIAGE_PY = Path(__file__).resolve().parent / "triage" / "triage.py"
 _TAG_RE = re.compile(r"^\[\d+,(\d+)\]<(stdout|stderr)>:\s?(.*)$")
 # Triage script-section header: `script_name.py:` or `script_name.py [0.42s]:`
 _SCRIPT_HEADER_RE = re.compile(r"^[a-zA-Z_]\w*\.py(?:\s+\[[\d.]+s\])?\s*:\s*$")
-# SGR color escapes — stripped before header matching since per-rank output is colored.
+# SGR escapes — stripped before header matching (per-rank output is colored).
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
@@ -212,8 +212,7 @@ class TextStreamingRenderer:
         for rank in sorted(self.script_lines[script].keys()):
             self.console.print(f"  [rank {rank}]", markup=False, highlight=False)
             for line in self.script_lines[script][rank]:
-                # Content arrives pre-colored from the per-rank subprocess; parse the
-                # SGR escapes so Rich measures width correctly and renders the color.
+                # Pre-colored from the subprocess
                 self.console.print(Text.from_ansi(line), highlight=False)
 
     def _update_progress(self, script: Optional[str], finished: int) -> None:
@@ -231,7 +230,6 @@ class TextStreamingRenderer:
 def _run_multi_rank(passthrough: list[str], tt_run_args: list[str]) -> int:
     rank_count = _discover_rank_count(tt_run_args)
 
-    # Wrapper owns rendering / Live progress, so force-disable per-rank's.
     triage_cmd = [
         sys.executable,
         str(TRIAGE_PY),
@@ -244,16 +242,15 @@ def _run_multi_rank(passthrough: list[str], tt_run_args: list[str]) -> int:
 
     renderer = TextStreamingRenderer(expected_ranks=rank_count)
 
-    # triage's isatty() sees the MPI pty, not the real sink. Drive width/color off the
-    # wrapper's stdout: fit a terminal, go wide + plain when redirected.
     interactive = sys.stdout.isatty()
     cols = shutil.get_terminal_size().columns if interactive else 10000
     env = {**os.environ, "COLUMNS": str(cols), "TT_TRIAGE_COLOR": "1" if interactive else "0"}
 
-    # Merge subprocess stderr into stdout so it doesn't fight the Live progress.
+    # Buffer the stderr/stdout lines and flush after progress stops so they don't fight the Live display.
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, env=env)
     assert proc.stdout is not None
 
+    stderr_lines: list[str] = []
     try:
         for raw in proc.stdout:
             line = raw.rstrip("\n")
@@ -261,12 +258,15 @@ def _run_multi_rank(passthrough: list[str], tt_run_args: list[str]) -> int:
                 continue
             m = _TAG_RE.match(line)
             if m is None or m.group(2) == "stderr":
+                stderr_lines.append(line)
                 continue
             renderer.on_line(int(m.group(1)), m.group(3))
         proc.wait()
         renderer.on_eof()
     finally:
         renderer.finalize()
+        if stderr_lines:
+            sys.stderr.write("\n".join(stderr_lines) + "\n")
 
     return proc.returncode
 
