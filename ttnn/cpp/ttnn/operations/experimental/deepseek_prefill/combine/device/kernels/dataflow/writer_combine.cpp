@@ -100,18 +100,18 @@ void kernel_main() {
     uint32_t experts_tok_counter_addr = get_arg_val<uint32_t>(rt_args_idx++);
     rt_args_idx++;  // expert_region_offsets_addr — consumed by reader only
     uint32_t output_addr = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t zero_init_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t output_init_complete_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t init_semaphore_address = get_arg_val<uint32_t>(rt_args_idx++);
     // Separate semaphore for the exit handshake. Reusing init_semaphore_address
     // for both phases is racy
     uint32_t exit_semaphore_address = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t zero_init_barrier_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t output_init_barrier_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t num_cores = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t expert_start_idx = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t expert_end_idx = get_arg_val<uint32_t>(rt_args_idx++);
 
-    uint32_t zero_init_semaphore_address = get_semaphore(zero_init_semaphore_id);
-    uint32_t zero_init_barrier_l1_offset = get_semaphore(zero_init_barrier_semaphore_id);
+    uint32_t output_init_complete_semaphore_address = get_semaphore(output_init_complete_semaphore_id);
+    uint32_t output_init_barrier_l1_offset = get_semaphore(output_init_barrier_semaphore_id);
 
     // Read NOC coordinates for all cores (for inter-core barrier signaling).
     // num_cores = effective_num_links = min(num_links, 4).
@@ -121,7 +121,7 @@ void kernel_main() {
     for (uint32_t c = 0; c < num_cores; c++) {
         uint32_t noc_x = get_arg_val<uint32_t>(rt_args_idx++);
         uint32_t noc_y = get_arg_val<uint32_t>(rt_args_idx++);
-        all_core_barrier_noc_addrs[c] = get_noc_addr(noc_x, noc_y, zero_init_barrier_l1_offset);
+        all_core_barrier_noc_addrs[c] = get_noc_addr(noc_x, noc_y, output_init_barrier_l1_offset);
     }
 
 #ifdef AXIS
@@ -138,12 +138,12 @@ void kernel_main() {
         expert_end_idx,
         linearized_mesh_coord);
 
-#if ZERO_INIT
-    // Wait for reader to complete zero-init
-    volatile tt_l1_ptr uint32_t* zero_init_sem_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zero_init_semaphore_address);
-    noc_semaphore_wait(zero_init_sem_ptr, 1);
-    noc_semaphore_set(zero_init_sem_ptr, 0);
+#if INIT_ZEROS
+    // Wait for reader to complete output-zeroing
+    volatile tt_l1_ptr uint32_t* output_init_complete_sem_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(output_init_complete_semaphore_address);
+    noc_semaphore_wait(output_init_complete_sem_ptr, 1);
+    noc_semaphore_set(output_init_complete_sem_ptr, 0);
 #endif
 
 #ifdef DEST_CHIP_ID

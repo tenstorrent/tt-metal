@@ -68,7 +68,7 @@ void kernel_main() {
     // Wait for the owning sender's expert-token-count multicast.  reader_untilize on this same
     // core pushes the counter CB once after counter_ready_sem fires, so cb_wait_front here
     // doubles as the gate for "counter data is live in L1".  The CB is never popped — both
-    // this kernel and zero_init_writer rely on the data staying resident.
+    // this kernel and writer_untilize rely on the data staying resident.
     cb_wait_front(cb_experts_tok_counter_id, cb_counter_total_pages);
 
     // Snapshot per-expert token counts.  read_tile_value has UNPACK read from L1 and broadcast

@@ -16,9 +16,9 @@
 //
 // For each assigned batch:
 //   1. Read this batch's metadata pages from DRAM into cb_metadata_batch_id (consumed by
-//      zero_init_writer).
+//      writer_untilize).
 //   2. Read dispatched_buffer tiles into cb_dispatched_buffer_id for compute to consume.
-// Compute (untilize_combine) and zero_init_writer on this same core independently walk the
+// Compute (untilize_combine) and writer_untilize on this same core independently walk the
 // same expert/batch loop using the multicasted counter in c_1, so no per-batch signal CB
 // is needed — producer-consumer ordering on c_0 / c_2 / c_9 keeps everyone in lock-step.
 //
@@ -53,7 +53,7 @@ void kernel_main() {
     //  14: aligned_output_page_size              - aligned page size of output tensor (bytes per untilized row)
     //  15: aligned_experts_tok_counter_page_size - aligned page size of expert_token_counts tensor
     //  16: cb_metadata_batch_id                  - CB this kernel pushes per-batch metadata pages into
-    //                                              (consumed by zero_init_writer on the same core)
+    //                                              (consumed by writer_untilize on the same core)
     //  17: aligned_dispatched_metadata_page_size - aligned page size of dispatched_metadata tensor
     //  18: block_ct_dim                          - tiles per chunk pushed to cb_dispatched_buffer_id;
     //                                              matches the compute kernel's per-block consumption
@@ -97,7 +97,7 @@ void kernel_main() {
     //                                    reads it locally so the sender no longer has to unicast
     //                                    per-batch metadata to this core
     // (sender NOC coords, data_ready and start semaphores are now consumed by the
-    //  zero_init_writer kernel on the same core — they no longer belong here.)
+    //  writer_untilize kernel on the same core — they no longer belong here.)
     uint32_t rt_idx = 0;
     uint32_t counter_ready_semaphore_id = get_arg_val<uint32_t>(rt_idx++);
     uint32_t dispatched_buffer_addr = get_arg_val<uint32_t>(rt_idx++);
@@ -106,7 +106,7 @@ void kernel_main() {
     uint32_t dispatched_metadata_addr = get_arg_val<uint32_t>(rt_idx++);
 
     // ===== Step 1: Wait for the owning sender to multicast expert token counts + receive_buf_addr =====
-    // Note: don't reset counter_ready_sem — zero_init_writer on this same core also waits on it
+    // Note: don't reset counter_ready_sem — writer_untilize on this same core also waits on it
     // to read the sender's receive_buf_addr from c_1. Since neither kernel re-uses the sem within
     // a single invocation, leaving it latched at >=1 is safe.
     cb_reserve_back(cb_experts_tok_counter_id, cb_counter_total_pages);
@@ -118,7 +118,7 @@ void kernel_main() {
     cb_push_back(cb_experts_tok_counter_id, cb_counter_total_pages);
 
     // ===== Step 2: Read per-expert token counts =====
-    // zero_init_writer independently reads the sender's receive_buf_addr from c_1 at offset
+    // writer_untilize independently reads the sender's receive_buf_addr from c_1 at offset
     // experts_tok_counter_pages * aligned_experts_tok_counter_page_size (same L1 layout).
     cb_wait_front(cb_experts_tok_counter_id, cb_counter_total_pages);
     uint32_t token_counter_base = get_read_ptr(cb_experts_tok_counter_id);
@@ -178,11 +178,11 @@ void kernel_main() {
                                        ? read_batch_size
                                        : (expert_tokens - batch_token_start);
 
-            // Compute and zero_init_writer independently walk this same expert/batch loop
+            // Compute and writer_untilize independently walk this same expert/batch loop
             // (reading the multicasted counter from c_1) — no per-batch signal needed.
             //
             // 1. Read this batch's metadata pages from DRAM into the local metadata batch CB.
-            //    zero_init_writer pops `batch_count` pages and decides the per-batch path
+            //    writer_untilize pops `batch_count` pages and decides the per-batch path
             //    (all-local vs non-local) locally — sender no longer writes to c_9.
             //    Per-expert metadata stride is tile-aligned, hence reusing start_token.
 
@@ -232,7 +232,7 @@ void kernel_main() {
                     cb_push_back(cb_dispatched_buffer_id, block_ct_dim);
                 }
                 // Steps 3-7 (wait for untilize, wait for sender's send signal, NOC-write to
-                // sender, signal sender, pop untilize CB) now run on zero_init_writer.
+                // sender, signal sender, pop untilize CB) now run on writer_untilize.
             }
         }
         // Advance to the next expert's region.  Buffer and metadata both use the same

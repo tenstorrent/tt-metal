@@ -5,9 +5,9 @@
 //
 // Lightweight data-movement kernel that zeroes a page range of an interleaved
 // DRAM output tensor, then signals the combine reader cores via semaphore.
-// Deployed on untilizer cores to speed up zero-init process by spreading out across more banks.
+// Deployed on untilizer cores to speed up output-zeroing process by spreading out across more banks.
 //
-// In TILE_LAYOUT, after zero-init completes this kernel also owns the per-row routing
+// In TILE_LAYOUT, after output-zeroing completes this kernel also owns the per-row routing
 // decision.  It walks the same expert/batch iteration as reader_untilize and the compute
 // kernel (driven off the multicasted per-expert token counts in c_1), so no per-batch
 // signal CB is needed.  For each batch it waits for compute to push a batch onto
@@ -41,7 +41,7 @@ void kernel_main() {
 
     // ===== Runtime args =====
     // output_addr is always needed (the all-local send-loop path writes directly to output DRAM).
-    // The zero-init phase consumes additional runtime args (page range, zi-done sem, sender NOC
+    // The output-zeroing phase consumes additional runtime args (page range, output-init-done sem, sender NOC
     // coords), but they are only present when INIT_ZEROS=1 — the program factory omits them
     // when init_zeros=False so the kernel can still run for TILE_LAYOUT's send-loop role.
     uint32_t rt_args_idx = 0;
@@ -50,18 +50,18 @@ void kernel_main() {
 #if INIT_ZEROS
     uint32_t page_start = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t page_end = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t zi_done_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t output_init_done_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
 
     // The semaphore was created on all worker cores (including this one),
     // so get_semaphore gives the correct L1 offset for any core with this ID.
-    uint32_t zi_done_sem_l1_offset = get_semaphore(zi_done_semaphore_id);
+    uint32_t output_init_done_sem_l1_offset = get_semaphore(output_init_done_semaphore_id);
 
     // Read sender core NOC coordinates for semaphore signaling
     uint64_t sender_sem_noc_addrs[num_sender_cores];
     for (uint32_t c = 0; c < num_sender_cores; c++) {
         uint32_t noc_x = get_arg_val<uint32_t>(rt_args_idx++);
         uint32_t noc_y = get_arg_val<uint32_t>(rt_args_idx++);
-        sender_sem_noc_addrs[c] = get_noc_addr(noc_x, noc_y, zi_done_sem_l1_offset);
+        sender_sem_noc_addrs[c] = get_noc_addr(noc_x, noc_y, output_init_done_sem_l1_offset);
     }
 #endif
 
@@ -72,7 +72,7 @@ void kernel_main() {
     uint32_t zero_buffer_addr = get_write_ptr(cb_zero_buffer_id);
     zero_pages(zero_buffer_addr, page_start, page_end, aligned_output_page_size, output_addr_gen);
 
-    // Signal all sender/reader cores that zero-init is complete
+    // Signal all sender/reader cores that output-zeroing is complete
     for (uint32_t c = 0; c < num_sender_cores; c++) {
         noc_semaphore_inc(sender_sem_noc_addrs[c], 1);
     }
@@ -83,7 +83,7 @@ void kernel_main() {
 #if IS_TILE_LAYOUT
     // ===== Untilized-data send path =====
     //
-    // Compile-time args (appended after the zero-init TensorAccessorArgs block):
+    // Compile-time args (appended after the output-zeroing TensorAccessorArgs block):
     //   +0: cb_untilize_id                        - CB into which compute pushes untilized batches
     //   +1: cb_experts_tok_counter_id             - CB c_1 multicasted by sender; sender's
     //                                               receive_buf_addr lives at the trailer

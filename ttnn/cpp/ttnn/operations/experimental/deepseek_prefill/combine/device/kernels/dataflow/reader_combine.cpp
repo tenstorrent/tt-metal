@@ -97,7 +97,8 @@ void kernel_main() {
 
 #if INIT_ZEROS
     // Zero-init args follow immediately after the TensorAccessorArgs block
-    constexpr uint32_t zi_cb_id = get_compile_time_arg_val(expert_region_offsets_args.next_compile_time_args_offset());
+    constexpr uint32_t cb_zero_buffer_id =
+        get_compile_time_arg_val(expert_region_offsets_args.next_compile_time_args_offset());
     constexpr uint32_t num_total_untilizer_cores =
         get_compile_time_arg_val(expert_region_offsets_args.next_compile_time_args_offset() + 1);
     constexpr uint32_t tile_layout_args_base = expert_region_offsets_args.next_compile_time_args_offset() + 2;
@@ -120,13 +121,13 @@ void kernel_main() {
     uint32_t experts_tok_counter_addr = get_arg_val<uint32_t>(rt_args++);
     uint32_t expert_region_offsets_addr = get_arg_val<uint32_t>(rt_args++);
     uint32_t output_addr = get_arg_val<uint32_t>(rt_args++);
-    uint32_t zero_init_semaphore_id = get_arg_val<uint32_t>(rt_args++);
-    uint32_t zero_init_barrier_semaphore_id = get_arg_val<uint32_t>(rt_args++);
+    uint32_t output_init_complete_semaphore_id = get_arg_val<uint32_t>(rt_args++);
+    uint32_t output_init_barrier_semaphore_id = get_arg_val<uint32_t>(rt_args++);
     uint32_t num_cores = get_arg_val<uint32_t>(rt_args++);
     uint32_t expert_start_idx = get_arg_val<uint32_t>(rt_args++);
     uint32_t expert_end_idx = get_arg_val<uint32_t>(rt_args++);
-    uint32_t zero_init_semaphore_address = get_semaphore(zero_init_semaphore_id);
-    uint32_t zero_init_barrier_address = get_semaphore(zero_init_barrier_semaphore_id);
+    uint32_t output_init_complete_semaphore_address = get_semaphore(output_init_complete_semaphore_id);
+    uint32_t output_init_barrier_address = get_semaphore(output_init_barrier_semaphore_id);
 
     DPRINT_COMBINE(
         "Combine Reader: experts=[{}, {}) linearized_mesh_coord={}\n",
@@ -137,24 +138,24 @@ void kernel_main() {
     const auto output_addr_gen = TensorAccessor(output_args, output_addr);
 
 #if INIT_ZEROS
-    // Hybrid row zero-init: this core zeroes its assigned page range, then waits for untilizer row cores
+    // Hybrid row output-zeroing: this core zeroes its assigned page range, then waits for untilizer row cores
     {
         uint32_t page_start = get_arg_val<uint32_t>(rt_args++);
         uint32_t page_end = get_arg_val<uint32_t>(rt_args++);
-        uint32_t zi_done_semaphore_id = get_arg_val<uint32_t>(rt_args++);
-        uint32_t zi_done_sem_address = get_semaphore(zi_done_semaphore_id);
-        uint32_t zero_buf = get_write_ptr(zi_cb_id);
+        uint32_t output_init_done_semaphore_id = get_arg_val<uint32_t>(rt_args++);
+        uint32_t output_init_done_sem_address = get_semaphore(output_init_done_semaphore_id);
+        uint32_t zero_buf = get_write_ptr(cb_zero_buffer_id);
 
         {
-            // DeviceZoneScopedN("combine-zero-init-SENDER-writing");
-            fill_zero_buffer(zi_cb_id);
+            // DeviceZoneScopedN("combine-output-zeroing-SENDER-writing");
+            fill_zero_buffer(cb_zero_buffer_id);
             zero_pages(zero_buf, page_start, page_end, aligned_output_page_size, output_addr_gen);
         }
 
-        volatile tt_l1_ptr uint32_t* zi_done_sem_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zi_done_sem_address);
-        noc_semaphore_wait(zi_done_sem_ptr, num_total_untilizer_cores);
-        noc_semaphore_set(zi_done_sem_ptr, 0);
+        volatile tt_l1_ptr uint32_t* output_init_done_sem_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(output_init_done_sem_address);
+        noc_semaphore_wait(output_init_done_sem_ptr, num_total_untilizer_cores);
+        noc_semaphore_set(output_init_done_sem_ptr, 0);
     }
 #endif
 
@@ -198,16 +199,16 @@ void kernel_main() {
 #endif
 
 #if INIT_ZEROS
-    // Signal writer that zero-init is complete
-    volatile tt_l1_ptr uint32_t* zero_init_sem_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zero_init_semaphore_address);
-    noc_semaphore_set(zero_init_sem_ptr, 1);
+    // Signal writer that output-zeroing is complete
+    volatile tt_l1_ptr uint32_t* output_init_complete_sem_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(output_init_complete_semaphore_address);
+    noc_semaphore_set(output_init_complete_sem_ptr, 1);
 
     // Wait for ALL writers (all cores) to complete init exchange.
     // Each writer signals all readers' barrier sems via noc_semaphore_inc,
     // so this reader waits for num_cores signals before proceeding.
     volatile tt_l1_ptr uint32_t* barrier_sem_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zero_init_barrier_address);
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(output_init_barrier_address);
     noc_semaphore_wait(barrier_sem_ptr, num_cores);
     noc_semaphore_set(barrier_sem_ptr, 0);
 #endif
