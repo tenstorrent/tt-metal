@@ -412,9 +412,7 @@ def test_validator_dram_sender_recv_contig(device, K, N, dtype, recv_per_bank, n
         device, K, N, dtype, recv_per_bank, num_layers
     )
     ttnn.experimental.start_dram_core_prefetcher(device)
-    ttnn.experimental.queue_dram_core_prefetcher_request(
-        device, [(tt_weight, ring_size)], num_layers=num_layers, global_cb=gcb
-    )
+    ttnn.experimental.queue_dram_core_prefetcher_request(device, [(tt_weight, ring_size)] * num_layers, global_cb=gcb)
     ttnn.experimental.test_dram_prefetcher_validator(
         device,
         tt_weight,
