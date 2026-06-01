@@ -220,10 +220,6 @@ def test_dram_core_prefetcher_BH_param(
     gcb = ttnn.experimental.create_global_circular_buffer_for_matmul_1d(
         device, [program_config], [tt_weight], bank_to_receivers=bank_to_receivers, size=gcb_size
     )
-    logger.info(
-        f"[{name}] M={M} K={K} N={N} ring={ring_size} recv/bank={num_receivers_per_bank} dtype={dtype} "
-        f"K_per_shard={K_per_shard} fifo_page={in1_block_size_bytes} gcb_size={gcb_size}"
-    )
     output_mem_config = ttnn.create_sharded_memory_config(
         shape=(M, N // ring_size),
         core_grid=receiver_core_range_set,
@@ -371,9 +367,6 @@ def test_create_global_circular_buffer_for_matmul_1d(device, layers_buffered):
     bank_to_receivers = [(b, _bank_receivers_row_major(b, recv_per_bank, ring_cols)) for b in range(num_dram_banks)]
     gcb = ttnn.experimental.create_global_circular_buffer_for_matmul_1d(
         device, [program_config], [tt_weight], bank_to_receivers=bank_to_receivers, size=size
-    )
-    logger.info(
-        f"[factory layers_buffered={layers_buffered}] in1_block={in1_block_size} num_blocks={num_blocks} size={size}"
     )
 
     # ---- Run: prefetcher (async) -> matmul (consumes via gcb) -> stop drains ----
@@ -542,12 +535,6 @@ def test_dram_core_prefetcher_multi_tensor(device, num_tensors, num_layers):
 
     # Per receiver per (layer, tensor): ring_size pushes.
     num_iters_total = num_layers * num_tensors * ring_size
-    logger.info(
-        f"[multi_tensor] num_tensors={num_tensors} num_layers={num_layers} K={_MT_K} N={_MT_N} "
-        f"banks={num_dram_banks} ring={num_receivers} push_page={push_page_size} gcb_size={gcb_size} "
-        f"num_iters_total={num_iters_total}"
-    )
-
     # Sender: push all `num_tensors` weights through the prefetcher, num_layers times.
     # The prefetcher has no num_layers replay count anymore, so flatten the list to
     # num_layers * num_tensors entries (layout dedup keeps the wire compact). With
@@ -567,4 +554,3 @@ def test_dram_core_prefetcher_multi_tensor(device, num_tensors, num_layers):
     )
     ttnn.experimental.stop_dram_core_prefetcher(device)
     ttnn.synchronize_device(device)
-    logger.info(f"[multi_tensor] num_tensors={num_tensors} num_layers={num_layers} completed cleanly")

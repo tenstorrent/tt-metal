@@ -403,11 +403,6 @@ def test_bench_dram_core_repeats(device, op_name, shape):
         dst_full_sync_en=True,
     )
 
-    logger.info(
-        f"[dram_core][{op_name}] K={_K} K_padded={k_padded} N={_N} banks={num_dram_banks} ring={ring_size} "
-        f"gcb_size={gcb_size} trace_repeats={trace_repeats} num_prefetch_layers={num_prefetch_layers}"
-    )
-
     optional_output_tensor = ttnn.from_torch(
         torch.zeros(1, 1, _M, _N),
         device=device,
@@ -620,11 +615,6 @@ def test_bench_workercore_repeats(device, op_name, shape):
         fp32_dest_acc_en=True,
         packer_l1_acc=True,
         dst_full_sync_en=True,
-    )
-
-    logger.info(
-        f"[workercore][{op_name}] K={_K} N={_N} ring={ring_size} gcb_size={gcb_size} "
-        f"trace_repeats={trace_repeats} num_prefetch_layers={num_prefetch_layers}"
     )
 
     def single_linear():

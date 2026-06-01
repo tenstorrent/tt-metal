@@ -18,7 +18,6 @@ import os
 import pytest
 import torch
 import ttnn
-from loguru import logger
 
 from models.common.utility_functions import run_for_blackhole
 from tests.ttnn.unit_tests.operations.prefetcher_common import round_up as _round_up
@@ -125,11 +124,6 @@ def _setup_weight_and_gcb_dram_sender(device, K, N, dtype, recv_per_bank, num_la
     gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(device, bank_to_receivers, gcb_size)
 
     num_iters_total = num_layers * ring_size
-    logger.info(
-        f"[validator-dram] K={K} K_padded={K_padded} N={N} banks={num_dram_banks} ring={ring_size} "
-        f"k_block_w_tiles={k_block_w_tiles} push_page={push_page_size} gcb_size={gcb_size} "
-        f"num_layers={num_layers} num_iters_total={num_iters_total} row_offset={row_offset}"
-    )
     return tt_weight, addrs, gcb, num_iters_total, push_page_size, ring_size
 
 
@@ -194,11 +188,6 @@ def _setup_weight_and_gcb_worker_sender(device, K, N, dtype, recv_per_bank, num_
     )
 
     num_iters_total = num_layers * ring_size
-    logger.info(
-        f"[validator-worker] K={K} K_padded={K_padded} N={N} banks={num_dram_banks} ring={ring_size} "
-        f"k_block_w_tiles={k_block_w_tiles} push_page={push_page_size} gcb_size={gcb_size} "
-        f"num_layers={num_layers} num_iters_total={num_iters_total}"
-    )
     return tt_weight, tt_addrs, gcb, num_iters_total, push_page_size, ring_size
 
 
@@ -229,7 +218,6 @@ def test_validator_dram_sender(device, K, N, dtype, recv_per_bank, num_layers):
             print_stride=max(1, ring_size // 4),
             global_cb=gcb,
         )
-    logger.info(f"[validator-dram] K={K} N={N} recv_per_bank={recv_per_bank} num_layers={num_layers} OK")
 
 
 @pytest.mark.parametrize("K,N,dtype,recv_per_bank", [(448, 1792, ttnn.bfloat16, 1)])
@@ -251,11 +239,6 @@ def test_validator_dram_sender_multi_gcb_switching(device, K, N, dtype, recv_per
         device, K, N, dtype, recv_per_bank, num_layers=1, row_offset=recv_per_bank
     )
 
-    logger.info(
-        f"[validator-dram-multi-gcb] K={K} N={N} recv_per_bank={recv_per_bank} ring={ring_size} "
-        f"A=row[0,{recv_per_bank}) B=row[{recv_per_bank},{2 * recv_per_bank})"
-    )
-
     with dram_core_prefetcher_session(device):
         # Interleave A → B → A so the third request hits A's persistent ring state
         # established by the first A request and skipped over by the B request.
@@ -271,7 +254,6 @@ def test_validator_dram_sender_multi_gcb_switching(device, K, N, dtype, recv_per
         ttnn.experimental.test_dram_prefetcher_validator(
             device, tt_weight_a, num_layers=1, print_stride=max(1, ring_size // 4), global_cb=gcb_a
         )
-    logger.info("[validator-dram-multi-gcb] A→B→A interleaved OK")
 
 
 def test_validator_dram_sender_mixed_num_receivers(device):
@@ -298,8 +280,6 @@ def test_validator_dram_sender_mixed_num_receivers(device):
         device, K, N, dtype, recv_per_bank=2, num_layers=1, row_offset=1
     )
 
-    logger.info(f"[validator-dram-mixed] A: recv=1 ring={ring_a} rows[0,1) | " f"B: recv=2 ring={ring_b} rows[1,3)")
-
     with dram_core_prefetcher_session(device):
         ttnn.experimental.queue_dram_core_prefetcher_request(device, [(tt_weight_a, ring_a)], global_cb=gcb_a)
         ttnn.experimental.test_dram_prefetcher_validator(
@@ -313,7 +293,6 @@ def test_validator_dram_sender_mixed_num_receivers(device):
         ttnn.experimental.test_dram_prefetcher_validator(
             device, tt_weight_a, num_layers=1, print_stride=max(1, ring_a // 4), global_cb=gcb_a
         )
-    logger.info("[validator-dram-mixed] mixed-num_receivers interleave OK")
 
 
 @pytest.mark.parametrize(
@@ -361,4 +340,3 @@ def test_validator_worker_sender(device, K, N, dtype, recv_per_bank, num_layers)
     finally:
         device.clear_loaded_sub_device_manager()
         device.remove_sub_device_manager(sub_device_manager)
-    logger.info(f"[validator-worker] K={K} N={N} recv_per_bank={recv_per_bank} num_layers={num_layers} OK")
