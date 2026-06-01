@@ -131,13 +131,6 @@ OPS_CSV_HEADER = [
 
 _PERF_COUNTER_CSV_HEADERS_SET = set(PERF_COUNTER_CSV_HEADERS)
 
-DEVICE_ID_NUM_BITS = 10
-
-
-def encode_run_host_id(device_id: int, base_program_id: int) -> int:
-    return (base_program_id << DEVICE_ID_NUM_BITS) | device_id
-
-
 DEVICE_PERF_INT_FIELDS = {
     "GLOBAL CALL COUNT",
     "METAL TRACE ID",
@@ -240,16 +233,6 @@ def build_sub_device_id_lookup_from_device_csv(
                 sub_device_id,
             )
         lookup[key] = sub_device_id
-
-        if "workers_runtime_id" in meta_data:
-            worker_key = (
-                key[0],
-                encode_run_host_id(key[0], int(meta_data["workers_runtime_id"])),
-                key[2],
-                key[3],
-            )
-            if worker_key not in lookup:
-                lookup[worker_key] = sub_device_id
 
     return lookup
 

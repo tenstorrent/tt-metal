@@ -861,11 +861,7 @@ def verify_sub_device_ids_in_device_csv(csv_path=None):
         sub_device_id = int(meta_data["sub_device_id"])
         manager_ids.add(int(meta_data["sub_device_manager_id"]))
 
-        base_program_id = None
-        if "workers_runtime_id" in meta_data:
-            base_program_id = int(meta_data["workers_runtime_id"])
-        else:
-            base_program_id = get_base_program_id(row[7])
+        base_program_id = get_base_program_id(row[7])
 
         expected_from_program = (
             SUBDEVICE_TEST_PROGRAM_RUNTIME_ID_TO_SUB_DEVICE.get(base_program_id)
