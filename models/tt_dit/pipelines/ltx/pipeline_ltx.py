@@ -626,15 +626,10 @@ class LTXPipeline:
             self.vae_decoder.register_coresident_exclusions(self.upsampler)
             self.upsampler.register_coresident_exclusions(self.vae_decoder)
 
-        # Audio decode runs after video decode; its fp32 vocoder conv3d activations
-        # can't share L1 with the video VAE's weights. Mirror the transformer/VAE
-        # eviction so (re)loading an audio module frees the VAE and vice versa —
-        # the on-demand load in `decode_audio_device` then handles the swap.
-        audio_modules = [m for m in (self.tt_audio_decoder, self.tt_vocoder_with_bwe) if m is not None]
-        if audio_modules and self.vae_decoder is not None:
-            for m in audio_modules:
-                m.register_coresident_exclusions(self.vae_decoder)
-            self.vae_decoder.register_coresident_exclusions(*audio_modules)
+        # Audio decoder/vocoder are intentionally NOT excluded against the VAE:
+        # measured coresident on BH-LB 2x4 (the tightest BH config) with no OOM,
+        # even with the fp32 vocoder's conv3d activations live. Excluding them only
+        # forces a redundant audio reload at decode (~6s warm) for no memory gain.
 
     def _register_encoder_exclusions(self, module) -> None:
         """Register a lazily-built Gemma encoder/connector coresident-excluded with the
