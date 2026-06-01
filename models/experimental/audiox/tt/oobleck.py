@@ -21,7 +21,7 @@ from models.experimental.audiox.tt.common import to_tt
 
 _LONG_SEQUENCE_THRESHOLD = int(os.getenv("AUDIOX_TT_LONG_SEQUENCE_THRESHOLD", "131072"))
 _LONG_SEQUENCE_CHUNK = int(os.getenv("AUDIOX_TT_LONG_SEQUENCE_CHUNK", "65536"))
-_CONV1D_DRAM_WIDTH_SLICES = int(os.getenv("AUDIOX_TT_CONV1D_WIDTH_SLICES", "128"))
+_CONV1D_DRAM_WIDTH_SLICES = int(os.getenv("AUDIOX_TT_CONV1D_WIDTH_SLICES", "96"))
 _CONV_TRANSPOSE_HEIGHT_SLICES = int(os.getenv("AUDIOX_TT_CONV_TRANSPOSE_HEIGHT_SLICES", "128"))
 
 
@@ -88,6 +88,10 @@ class TtSnakeBeta:
             s = ttnn.multiply(s, s)
             chunks.append(ttnn.add(x_chunk, ttnn.multiply(s, self.inv_beta), memory_config=ttnn.DRAM_MEMORY_CONFIG))
         return _concat_time(chunks)
+
+    def deallocate(self) -> None:
+        ttnn.deallocate(self.alpha, force=True)
+        ttnn.deallocate(self.inv_beta, force=True)
 
 
 def _conv1d(
@@ -262,6 +266,12 @@ class TtResidualUnit:
             chunks.append(ttnn.add(x_chunk, h_chunk, memory_config=ttnn.DRAM_MEMORY_CONFIG))
         return _concat_time(chunks)
 
+    def deallocate(self) -> None:
+        self.act1.deallocate()
+        self.act2.deallocate()
+        for tensor in (self.w1, self.b1, self.w2, self.b2):
+            ttnn.deallocate(tensor, force=True)
+
 
 def _conv_transpose1d(
     x: ttnn.Tensor,
@@ -377,6 +387,14 @@ class TtDecoderBlock:
         h = self.res2(h)
         return self.res3(h)
 
+    def deallocate(self) -> None:
+        self.act.deallocate()
+        for tensor in (self.up_w, self.up_b):
+            ttnn.deallocate(tensor, force=True)
+        self.res1.deallocate()
+        self.res2.deallocate()
+        self.res3.deallocate()
+
 
 class TtOobleckDecoder:
     """Full decoder: ``in_conv`` -> N DecoderBlocks -> Snake -> ``out_conv``.
@@ -469,3 +487,10 @@ class TtOobleckDecoder:
             input_length=out_length,
             label="decoder.out_conv",
         )
+
+    def deallocate(self) -> None:
+        for tensor in (self.in_w, self.in_b, self.out_w):
+            ttnn.deallocate(tensor, force=True)
+        for block in self.blocks:
+            block.deallocate()
+        self.out_act.deallocate()

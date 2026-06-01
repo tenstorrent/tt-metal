@@ -121,3 +121,86 @@ def test_parse_args_accepts_tt_warm_runs():
     )
     assert args.tt is True
     assert args.tt_warm_runs == 3
+
+
+def test_warm_tt_runs_use_last_warm_latent_for_stage_checks(tmp_path, monkeypatch):
+    report_path = tmp_path / "report.json"
+    cpu_output = tmp_path / "cpu_reference.wav"
+    tt_output = tmp_path / "tt_output.wav"
+
+    def fake_run_cpu_reference(_args, _output, *, synthetic_video_prompt):
+        assert synthetic_video_prompt is None
+        torchaudio.save(str(cpu_output), torch.zeros(2, 16000), 16000)
+        return {
+            "path": str(cpu_output),
+            "sample_rate": 16000,
+            "num_frames": 16000,
+            "num_channels": 2,
+            "duration_seconds": 1.0,
+            "valid_16khz": True,
+            "elapsed_seconds": 1.0,
+            "generation_seconds": 1.0,
+            "conditioning_tokens": 4,
+            "latent_tokens": 6,
+            "diffusion_token_steps": 12,
+            "sampling_seconds": 0.5,
+            "diffusion_tokens_per_second": 24.0,
+            "_latent": torch.tensor([1.0, 2.0]),
+        }
+
+    def fake_run_tt_reference(_args, _output, *, synthetic_video_prompt):
+        assert synthetic_video_prompt is None
+        torchaudio.save(str(tt_output), torch.zeros(2, 16000), 16000)
+        return {
+            "path": str(tt_output),
+            "sample_rate": 16000,
+            "num_frames": 16000,
+            "num_channels": 2,
+            "duration_seconds": 1.0,
+            "valid_16khz": True,
+            "elapsed_seconds": 5.0,
+            "generation_seconds": 40.0,
+            "conditioning_tokens": 4,
+            "latent_tokens": 6,
+            "diffusion_token_steps": 12,
+            "sampling_seconds": 1.0,
+            "diffusion_tokens_per_second": 12.0,
+            "warm_runs": [
+                {
+                    "run_index": 2,
+                    "elapsed_seconds": 2.0,
+                    "generation_seconds": 20.0,
+                    "sampling_seconds": 0.4,
+                    "diffusion_tokens_per_second": 30.0,
+                }
+            ],
+            "latent_comparison_anchor": "tt_warm_run_2",
+            "_latent": torch.tensor([1.0, 2.0]),
+        }
+
+    monkeypatch.setattr(validate_mod, "_run_cpu_reference", fake_run_cpu_reference)
+    monkeypatch.setattr(validate_mod, "_run_tt_reference", fake_run_tt_reference)
+
+    exit_code = validate_mod.main(
+        [
+            "--checkpoint",
+            "/tmp/fake.safetensors",
+            "--prompt",
+            "wind chimes",
+            "--tt",
+            "--tt-warm-runs",
+            "2",
+            "--output-dir",
+            str(tmp_path),
+            "--report-json",
+            str(report_path),
+        ]
+    )
+
+    assert exit_code == 0
+    report = validate_mod.json.loads(report_path.read_text())
+    assert report["latent_comparison"]["pcc"] == pytest.approx(1.0)
+    assert report["tt"]["latent_comparison_anchor"] == "tt_warm_run_2"
+    assert report["stage1_checks"]["tt_generation_time_lt_30s"] is False
+    assert report["stage1_checks"]["tt_diffusion_tps_ge_20"] is False
+    assert report["stage1_checks"]["latent_pcc_ge_0p95"] is True

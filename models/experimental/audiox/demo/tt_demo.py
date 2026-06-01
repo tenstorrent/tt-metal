@@ -206,6 +206,15 @@ class TtAudioXSession:
             self.tt_dit = _build_tt_dit(self.tt_dit_state_dict, self.device)
             _synchronize_tt_device(self.device)
 
+    def deallocate(self) -> None:
+        if self.tt_dit is not None and hasattr(self.tt_dit, "deallocate"):
+            self.tt_dit.deallocate()
+            self.tt_dit = None
+        if self.tt_decoder is not None and hasattr(self.tt_decoder, "deallocate"):
+            self.tt_decoder.deallocate()
+        self._conditioning_cache_key = None
+        self._conditioning_cache_value = None
+
     def _conditioning_key(
         self,
         *,
@@ -225,6 +234,42 @@ class TtAudioXSession:
             None if audio_prompt_tensor is None else (id(audio_prompt_tensor), tuple(audio_prompt_tensor.shape)),
         )
 
+    def prepare_conditioning(
+        self,
+        *,
+        prompt: str,
+        video_path: Path | None = None,
+        image_path: Path | None = None,
+        audio_path: Path | None = None,
+        video_prompt_tensor: torch.Tensor | None = None,
+        audio_prompt_tensor: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        conditioning_key = self._conditioning_key(
+            prompt=prompt,
+            video_path=video_path,
+            image_path=image_path,
+            audio_path=audio_path,
+            video_prompt_tensor=video_prompt_tensor,
+            audio_prompt_tensor=audio_prompt_tensor,
+        )
+        if conditioning_key == self._conditioning_cache_key and self._conditioning_cache_value is not None:
+            return self._conditioning_cache_value
+
+        audio_prompt = _resolve_audio_prompt(audio_path, audio_prompt_tensor)
+        if audio_prompt is not None and self.audio_pretransform is None:
+            self.audio_pretransform = _build_audio_pretransform()
+            load_into(self.audio_pretransform, self.encoder_sd, label="encoder")
+            self.multi.conditioners["audio_prompt"].pretransform = self.audio_pretransform
+        visual_prompt = video_prompt_tensor if video_prompt_tensor is not None else _load_visual_prompt(video_path, image_path)
+        cond_out = self.multi(
+            _build_metadata_batch_with_inputs(prompt=prompt, video_prompt=visual_prompt, audio_prompt=audio_prompt),
+            "cpu",
+        )
+        cross_attn_cond_torch = _make_cross_attn_cond(cond_out)
+        self._conditioning_cache_key = conditioning_key
+        self._conditioning_cache_value = cross_attn_cond_torch
+        return cross_attn_cond_torch
+
     def run(
         self,
         prompt: str,
@@ -235,6 +280,7 @@ class TtAudioXSession:
         audio_path: Path | None = None,
         video_prompt_tensor: torch.Tensor | None = None,
         audio_prompt_tensor: torch.Tensor | None = None,
+        cross_attn_cond_torch: torch.Tensor | None = None,
         steps: int = 100,
         seed: int = 0,
         return_details: bool = False,
@@ -246,34 +292,19 @@ class TtAudioXSession:
 
         timings = dict(self.setup_timings)
 
-        started_at = time.perf_counter()
-        conditioning_key = self._conditioning_key(
-            prompt=prompt,
-            video_path=video_path,
-            image_path=image_path,
-            audio_path=audio_path,
-            video_prompt_tensor=video_prompt_tensor,
-            audio_prompt_tensor=audio_prompt_tensor,
-        )
-        if conditioning_key == self._conditioning_cache_key and self._conditioning_cache_value is not None:
-            cross_attn_cond_torch = self._conditioning_cache_value
+        if cross_attn_cond_torch is None:
+            started_at = time.perf_counter()
+            cross_attn_cond_torch = self.prepare_conditioning(
+                prompt=prompt,
+                video_path=video_path,
+                image_path=image_path,
+                audio_path=audio_path,
+                video_prompt_tensor=video_prompt_tensor,
+                audio_prompt_tensor=audio_prompt_tensor,
+            )
+            timings["conditioning_seconds"] = time.perf_counter() - started_at
         else:
-            audio_prompt = _resolve_audio_prompt(audio_path, audio_prompt_tensor)
-            if audio_prompt is not None and self.audio_pretransform is None:
-                self.audio_pretransform = _build_audio_pretransform()
-                load_into(self.audio_pretransform, self.encoder_sd, label="encoder")
-                self.multi.conditioners["audio_prompt"].pretransform = self.audio_pretransform
-            visual_prompt = (
-                video_prompt_tensor if video_prompt_tensor is not None else _load_visual_prompt(video_path, image_path)
-            )
-            cond_out = self.multi(
-                _build_metadata_batch_with_inputs(prompt=prompt, video_prompt=visual_prompt, audio_prompt=audio_prompt),
-                "cpu",
-            )
-            cross_attn_cond_torch = _make_cross_attn_cond(cond_out)
-            self._conditioning_cache_key = conditioning_key
-            self._conditioning_cache_value = cross_attn_cond_torch
-        timings["conditioning_seconds"] = time.perf_counter() - started_at
+            timings["conditioning_seconds"] = 0.0
 
         started_at = time.perf_counter()
         samples = _HF_CONFIG["sample_rate"] * _HF_CONFIG["duration_seconds"]
