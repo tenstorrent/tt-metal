@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "api/tensor/noc_traits.h"
+
 template <typename DSpecT, typename Scratch>
 inline void Noc::async_write_zeros(
     const ::TensorAccessor<DSpecT>& accessor,
