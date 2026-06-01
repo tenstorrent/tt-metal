@@ -1,5 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
+import argparse
+
+import pytest
+
+from models.tt_transformers.demo.conftest import _cli_bool
 from models.tt_transformers.demo.simple_text_demo import (
     get_parametrized_mesh_device,
     is_greedy_sampling_request,
@@ -56,6 +61,30 @@ def test_parametrized_mesh_device_uses_env_mapping_without_hardware_probe(monkey
     monkeypatch.setenv("MESH_DEVICE", "N150")
 
     assert get_parametrized_mesh_device() == (1, 1)
+
+
+@pytest.mark.parametrize(
+    ("raw_value", "expected"),
+    [
+        ("1", True),
+        ("true", True),
+        ("True", True),
+        ("yes", True),
+        ("on", True),
+        ("0", False),
+        ("false", False),
+        ("False", False),
+        ("no", False),
+        ("off", False),
+    ],
+)
+def test_demo_cli_bool_accepts_existing_true_false_spellings(raw_value, expected):
+    assert _cli_bool(raw_value) is expected
+
+
+def test_demo_cli_bool_rejects_invalid_values():
+    with pytest.raises(argparse.ArgumentTypeError):
+        _cli_bool("maybe")
 
 
 def test_phi1_single_device_lm_head_budget_allows_one_split():

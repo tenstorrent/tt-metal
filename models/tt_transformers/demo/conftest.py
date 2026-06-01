@@ -2,7 +2,21 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import argparse
+
 from models.tt_transformers.tt.model_config import parse_optimizations
+
+
+def _cli_bool(value):
+    """argparse bool that accepts 0/1 and true/false spellings."""
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in ("1", "true", "yes", "y", "on"):
+        return True
+    if normalized in ("0", "false", "no", "n", "off"):
+        return False
+    raise argparse.ArgumentTypeError(f"expected boolean string, got {value!r}")
 
 
 # These inputs override the default inputs used by simple_text_demo.py. Check the main demo to see the default values.
@@ -17,7 +31,11 @@ def pytest_addoption(parser):
     )
     parser.addoption("--data_parallel", action="store", type=int, help="Number of data parallel workers")
     parser.addoption(
-        "--paged_attention", action="store", type=int, help="Whether to use paged attention or default attention"
+        "--paged_attention",
+        action="store",
+        default=None,
+        type=_cli_bool,
+        help="Whether to use paged attention (1/true) or default attention (0/false)",
     )
     parser.addoption("--page_params", action="store", type=dict, help="Page parameters for paged attention")
     parser.addoption("--sampling_params", action="store", type=dict, help="Sampling parameters for decoding")
@@ -42,23 +60,23 @@ def pytest_addoption(parser):
         "--token_accuracy",
         action="store",
         default=None,
-        type=int,
+        type=_cli_bool,
         help="Whether to compute top1 and top5 exact token matching accuracy",
     )
     parser.addoption(
         "--stress_test",
         action="store",
         default=None,
-        type=int,
+        type=_cli_bool,
         help="Run stress test (same decode iteration over a large number of iterations",
     )
     parser.addoption(
         "--enable_trace",
         action="store",
         nargs="?",
-        const=1,
+        const=True,
         default=None,
-        type=int,
+        type=_cli_bool,
         help="Enable tracing. Accepts --enable_trace, --enable_trace 1, or --enable_trace 0",
     )
     parser.addoption("--disable_trace", action="store_false", dest="enable_trace", default=None, help="Disable tracing")
@@ -80,7 +98,7 @@ def pytest_addoption(parser):
         "--use_prefetcher",
         action="store",
         default=None,
-        type=int,
+        type=_cli_bool,
         help="Whether to use DRAM prefetcher for prefetching weights into L1 during decode (only available on BH)",
     )
     parser.addoption(

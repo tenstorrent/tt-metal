@@ -979,24 +979,28 @@ def test_demo_text(
     batch_size = request.config.getoption("--batch_size") or batch_size
     max_generated_tokens = request.config.getoption("--max_generated_tokens") or max_generated_tokens
     data_parallel = request.config.getoption("--data_parallel") or data_parallel
-    if request.config.getoption("--paged_attention") in [0, 1]:
-        paged_attention = request.config.getoption("--paged_attention")
+    paged_attention_arg = request.config.getoption("--paged_attention")
+    if paged_attention_arg is not None:
+        paged_attention = paged_attention_arg
     page_params = request.config.getoption("--page_params") or page_params
     if isinstance(page_params, str):  # Required for proper load of a dictionary from the override command
         page_params = json.loads(page_params)
     sampling_params = request.config.getoption("--sampling_params") or sampling_params
     json_config_file = request.config.getoption("--decoder_config_file")
-    if request.config.getoption("--token_accuracy") in [0, 1]:
-        token_accuracy = request.config.getoption("--token_accuracy")
-    if request.config.getoption("--stress_test") in [0, 1]:
-        stress_test = request.config.getoption("--stress_test")
+    token_accuracy_arg = request.config.getoption("--token_accuracy")
+    if token_accuracy_arg is not None:
+        token_accuracy = token_accuracy_arg
+    stress_test_arg = request.config.getoption("--stress_test")
+    if stress_test_arg is not None:
+        stress_test = stress_test_arg
     arg_enable_trace = request.config.getoption("--enable_trace")
     if arg_enable_trace is not None:
         enable_trace = arg_enable_trace
     num_layers = request.config.getoption("--num_layers") or num_layers
     mode = request.config.getoption("--mode") or mode
-    if request.config.getoption("--use_prefetcher") in [0, 1]:
-        use_prefetcher = request.config.getoption("--use_prefetcher")
+    use_prefetcher_arg = request.config.getoption("--use_prefetcher")
+    if use_prefetcher_arg is not None:
+        use_prefetcher = use_prefetcher_arg
     use_prefetcher = (
         use_prefetcher and is_prefetcher_supported(hf_dir, num_devices) and "Llama" in hf_dir and "8B" in hf_dir
     )
