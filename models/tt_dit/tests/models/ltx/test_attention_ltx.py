@@ -13,15 +13,12 @@ LTX-2 attention unit tests. Mesh / fabric / topology parametrization mirrors
 LTX-only: ``1x1`` with empty ``device_params`` (no fabric) for single-chip runs.
 """
 
-import sys
-
 import pytest
 import torch
 from loguru import logger
 
 import ttnn
 from models.tt_dit.models.transformers.ltx.attention_ltx import LTXAttention
-from models.tt_dit.models.transformers.ltx.rope_ltx import precompute_freqs_cis
 from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.check import assert_quality
@@ -29,7 +26,9 @@ from models.tt_dit.utils.mochi import get_rot_transformation_mat
 from models.tt_dit.utils.tensor import bf16_tensor, bf16_tensor_2dshard
 from models.tt_dit.utils.test import line_params, ring_params
 
-sys.path.insert(0, "LTX-2/packages/ltx-core/src")
+# Reference model + RoPE come from the installed ``ltx_core`` package (imported lazily
+# inside each test), exactly like ``test_wan_attention`` pulls its reference from
+# diffusers. No ``sys.path.insert`` into the in-repo ``LTX-2`` clone.
 
 # Wan ``test_wan_attention`` grid + LTX single-device row (empty device_params).
 _LTX_ATTENTION_MESH_PARAMS = [
@@ -58,7 +57,7 @@ def test_ltx_self_attention(
     Test LTX-2 self-attention: compare TT LTXAttention vs PyTorch Attention.
     """
     from ltx_core.model.transformer.attention import Attention as TorchAttention
-    from ltx_core.model.transformer.rope import LTXRopeType
+    from ltx_core.model.transformer.rope import LTXRopeType, precompute_freqs_cis
 
     dim = 4096
     num_heads = 32
@@ -66,7 +65,7 @@ def test_ltx_self_attention(
     B = 1
     seq_len = 256  # Small for fast test
 
-    # INTERLEAVED matches rope_ltx.py precompute_freqs_cis which returns (B, N, D) format
+    # INTERLEAVED matches ltx_core precompute_freqs_cis which returns (B, N, D) format
     torch_model = TorchAttention(
         query_dim=dim, heads=num_heads, dim_head=head_dim, norm_eps=1e-6, rope_type=LTXRopeType.INTERLEAVED
     )
@@ -102,10 +101,17 @@ def test_ltx_self_attention(
     h_ids = torch.arange(H)
     w_ids = torch.arange(W)
     grid_t, grid_h, grid_w = torch.meshgrid(t_ids, h_ids, w_ids, indexing="ij")
-    indices_grid = torch.stack([grid_t.flatten(), grid_h.flatten(), grid_w.flatten()], dim=-1).float().unsqueeze(0)
+    # ltx_core's precompute_freqs_cis expects (B, n_dims, N) and defaults to SPLIT, so
+    # stack on dim=0 and request INTERLEAVED (the mode this attention block was built with).
+    indices_grid = torch.stack([grid_t.flatten(), grid_h.flatten(), grid_w.flatten()], dim=0).float().unsqueeze(0)
 
     cos_freq, sin_freq = precompute_freqs_cis(
-        indices_grid, dim=dim, out_dtype=torch.float32, max_pos=[20, 2048, 2048], num_attention_heads=num_heads
+        indices_grid,
+        dim=dim,
+        out_dtype=torch.float32,
+        max_pos=[20, 2048, 2048],
+        num_attention_heads=num_heads,
+        rope_type=LTXRopeType.INTERLEAVED,
     )
     # Reshape for apply: (B, seq_len, num_heads, head_dim)
     cos_apply = cos_freq.reshape(B, seq_len, num_heads, head_dim)

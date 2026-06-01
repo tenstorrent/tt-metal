@@ -7,7 +7,6 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.tt_dit.models.transformers.ltx.rope_ltx import LTXRopeType, apply_rotary_emb, precompute_freqs_cis
 from models.tt_dit.utils.check import assert_quality
 from models.tt_dit.utils.mochi import get_rot_transformation_mat
 from models.tt_dit.utils.tensor import bf16_tensor, bf16_tensor_2dshard
@@ -15,15 +14,17 @@ from models.tt_dit.utils.tensor import bf16_tensor, bf16_tensor_2dshard
 
 def make_indices_grid(F: int, H: int, W: int) -> torch.Tensor:
     """
-    Create a 3D position indices grid (seq_len, 3) for temporal + spatial dims.
-    Each row is (t_idx, h_idx, w_idx) for one token in the flattened sequence.
+    Create a 3D position indices grid (1, n_dims, seq_len) for temporal + spatial dims,
+    in the layout the ``ltx_core`` reference ``precompute_freqs_cis`` expects
+    (``indices_grid.shape[1]`` is the number of position dims).
+    Each column is (t_idx, h_idx, w_idx) for one token in the flattened sequence.
     """
     t_ids = torch.arange(F)
     h_ids = torch.arange(H)
     w_ids = torch.arange(W)
     grid_t, grid_h, grid_w = torch.meshgrid(t_ids, h_ids, w_ids, indexing="ij")
-    indices_grid = torch.stack([grid_t.flatten(), grid_h.flatten(), grid_w.flatten()], dim=-1).float()
-    return indices_grid.unsqueeze(0)  # (1, seq_len, 3)
+    indices_grid = torch.stack([grid_t.flatten(), grid_h.flatten(), grid_w.flatten()], dim=0).float()
+    return indices_grid.unsqueeze(0)  # (1, n_dims=3, seq_len)
 
 
 @pytest.mark.parametrize(
@@ -57,9 +58,17 @@ def make_indices_grid(F: int, H: int, W: int) -> torch.Tensor:
 )
 def test_ltx_rope_interleaved(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_axis: int, F: int, H: int, W: int):
     """
-    Test LTX-2 interleaved RoPE: compute cos/sin on CPU, apply via ttnn.experimental.rotary_embedding_llama,
-    compare against PyTorch reference.
+    Test LTX-2 interleaved RoPE against the official ``ltx_core`` reference.
+
+    Mirrors ``test_wan_rotary_pos_embed`` (which uses diffusers' ``WanRotaryPosEmbed``):
+    cos/sin are produced by the external ``ltx_core`` package, applied by its reference
+    ``apply_rotary_emb`` for the golden output, and the *same* cos/sin are fed to
+    ``ttnn.experimental.rotary_embedding_llama`` so we isolate the device kernel.
     """
+    # Import the reference straight from the installed ``ltx_core`` package (like Wan
+    # pulls ``WanRotaryPosEmbed`` from diffusers) — no in-repo clone / sys.path hacks.
+    from ltx_core.model.transformer.rope import LTXRopeType, apply_rotary_emb, precompute_freqs_cis
+
     dim = 4096
     num_heads = 32
     head_dim = dim // num_heads  # 128
@@ -67,12 +76,12 @@ def test_ltx_rope_interleaved(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_axi
     max_pos = [20, 2048, 2048]
     B = 1
 
-    # Build position indices grid
-    indices_grid = make_indices_grid(F, H, W)  # (1, seq_len, 3)
+    # Build position indices grid (1, n_dims=3, seq_len) for the reference.
+    indices_grid = make_indices_grid(F, H, W)
     seq_len = F * H * W
     logger.info(f"indices_grid shape: {indices_grid.shape}, seq_len: {seq_len}")
 
-    # Precompute cos/sin on CPU
+    # Precompute cos/sin on CPU with the reference implementation.
     cos_freq, sin_freq = precompute_freqs_cis(
         indices_grid,
         dim=dim,
