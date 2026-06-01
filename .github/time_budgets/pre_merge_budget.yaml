@@ -1,0 +1,57 @@
+# this file contains the time budgets allocated for merge gate and pr gate tests for each sku.
+# the calculations are based on deciding to allocate 50% of available machine hours to merge gate and pr gate tests.
+# merge gate sees an average of 15 full runs per hour during peak (13:00-21:00 UTC). Runs roughly 3x per merge.
+# pr gate sees an average of 20 full runs per hour during peak. Runs roughly 4x per merge.
+# from pools.yaml, we decide that 50% of available machine hours per week are allocated to merge gate and pr gate tests.
+# below we list the total machine hours allocated per run
+# the formula is: for each sku in pools.yaml, divide by 7 and 24 to get available machine hours per hour (or effective number of machines)
+# then divide by 2 for the total merge gate + pr gate allocation.
+# then choose to dedicate 60% of the total allocation to merge gate and 40% to pr gate.
+# divide the merge gate allocation by 15 to get the time budget per run.
+# divide the pr gate allocation by 20 to get the time budget per run.
+#
+# Closed form (minutes per run):
+#   merge_gate = weekly_hours / 140
+#   pr_gate    = weekly_hours / 280
+# Values rounded to the nearest whole minute.
+
+# sku: [merge_gate_budget, pr_gate_budget]  (minutes per run)
+
+# ── CIv2 (tt-ubuntu-2204-* runner labels) ──────────────────────────────────
+wh_n150_civ2:            [15, 8]
+wh_n300_civ2:            [53, 26]
+wh_llmbox_civ2:          [5, 2]
+bh_p100a_civ2_viommu:    [1, 0]
+bh_p150b_civ2_viommu:    [9, 5]
+bh_p150b_civ2:           [20, 10]
+bh_loudbox_civ2_viommu:  [0, 0]
+
+# ── CIv1 (comma-separated tag runner labels) ───────────────────────────────
+wh_n150:                 [6, 3]
+wh_n300:                 [5, 2]
+wh_n300_perf:            [1, 0]
+wh_llmbox:               [5, 2]
+wh_llmbox_perf:          [2, 1]
+wh_llmbox_perf_release:  [0, 0]
+wh_galaxy:               [1, 0]
+wh_galaxy_perf:          [2, 1]
+wh_galaxy_release:       [1, 0]
+wh_galaxy_perf_release:  [0, 0]
+bh_p100:                 [3, 1]
+bh_p100_perf:            [0, 0]
+bh_p150:                 [2, 1]
+bh_p150_perf:            [0, 0]
+bh_llmbox:               [1, 1]
+bh_loudbox:              [4, 2]
+bh_p300:                 [1, 1]
+bh_p300_viommu:          [0, 0]
+bh_quietbox:             [2, 1]
+bh_quietbox_perf:        [0, 0]
+bh_quietbox_2:           [1, 0]
+bh_deskbox:              [3, 1]
+bh_galaxy:               [0, 0]
+bh_galaxy_perf:          [0, 0]
+bh_galaxy_release:       [0, 0]
+bh_galaxy_perf_release:  [0, 0]
+bh_sp1:                  [0, 0]
+bh_sp4:                  [0, 0]
