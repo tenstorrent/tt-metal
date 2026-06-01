@@ -27,8 +27,8 @@ constexpr auto kComputeKernelPath =
 constexpr uint32_t kCbSrc0 = tt::CBIndex::c_0;
 constexpr uint32_t kCbOut = tt::CBIndex::c_2;
 constexpr uint32_t kCbReaderScratch = tt::CBIndex::c_3;  // reader offsets + per-expert caches
-constexpr uint32_t kCbScratch = tt::CBIndex::c_4;       // writer's scratch (zero buf, plan, md, sc, w, rmw)
-constexpr uint32_t kCbW = tt::CBIndex::c_5;             // weight tile (32×32 broadcast w[r])
+constexpr uint32_t kCbScratch = tt::CBIndex::c_4;        // writer's scratch (zero buf, offsets, plan, w)
+constexpr uint32_t kCbW = tt::CBIndex::c_5;              // COL-broadcast weight tile (only col 0 populated, w[r])
 constexpr uint32_t kCbExistingRm = tt::CBIndex::c_6;    // row-major existing rows from ungrouped (writer fills)
 constexpr uint32_t kCbExistingTile = tt::CBIndex::c_7;  // tilized existing (compute internal)
 constexpr uint32_t kCbCombined = tt::CBIndex::c_8;      // mul+add output tiles (untilize input)
@@ -114,9 +114,10 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
     create_circular_buffer_bytes(
         program, worker_all, kCbReaderScratch, tt::DataFormat::UInt32, cb_reader_scratch_bytes);
 
-    // cb_w: 32×32 broadcast weight tile (TILE bf16). BRISC writer builds this
-    // each chunk where w_tile[r,c] = bf16(w[r]); compute multiplies cb_src0
-    // against it before untilizing. Capacity: 2 (double-buffer for pipelining).
+    // cb_w: COL-broadcast weight tile (TILE bf16). BRISC writer builds this each
+    // chunk, populating only column 0 with w_tile[r,0] = bf16(w[r]); compute
+    // COL-broadcasts it against cb_src0 before untilizing. Capacity: 2
+    // (double-buffer for pipelining).
     create_circular_buffer(program, worker_all, kCbW, tt::DataFormat::Float16_b, bf16_tile_bytes, 2U);
 
     // cb_existing_rm: row-major existing rows from ungrouped DRAM (writer fills,
