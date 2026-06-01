@@ -420,7 +420,7 @@ class ComputePipeline:
 
         return code
 
-    def _math_golden(
+    def golden(
         self,
         operation: "FusedOperation",
         config: "GlobalConfig",
@@ -461,15 +461,6 @@ class ComputePipeline:
                 operation,
                 config,
             )
-        return tensor_dst
-
-    def golden(
-        self,
-        operation: "FusedOperation",
-        config: "GlobalConfig",
-        golden_type: GoldenType,
-    ):
-        math_tensor = self._math_golden(operation, config, golden_type)
 
         for pack_node in self.pack_nodes:
             config.sentinel.configure_golden(
@@ -477,7 +468,7 @@ class ComputePipeline:
             )
 
             dimensions = pack_node.output.dimensions
-            cropped = math_tensor.reshape(operation.max_output_dimensions)[
+            cropped = tensor_dst.reshape(operation.max_output_dimensions)[
                 : dimensions[0], : dimensions[1]
             ]
             result = pack_node.golden(cropped, operation, config)
