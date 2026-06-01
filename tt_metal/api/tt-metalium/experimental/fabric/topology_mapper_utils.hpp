@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <optional>
@@ -13,6 +14,7 @@
 #include <utility>
 #include <vector>
 
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
@@ -43,7 +45,8 @@ using PhysicalAdjacencyMap = std::map<tt::tt_metal::AsicID, std::vector<tt::tt_m
 // Use ASICPosition from tt::tt_metal namespace
 using AsicPosition = tt::tt_metal::ASICPosition;
 
-// Map from AsicID to its physical position (TrayID, ASICLocation); used for pinning validation and anchors.
+// Map from AsicID to its physical position (TrayID, ASICLocation)
+// Required only when using pinning constraints
 using AsicPositionMap = std::map<tt::tt_metal::AsicID, AsicPosition>;
 
 // Pinning constraint: maps an ASIC position to a FabricNodeId
@@ -74,8 +77,8 @@ struct TopologyMappingConfig {
     // specific logical nodes can be mapped to
     std::vector<PinningConstraint> pinnings;
 
-    // Map from AsicID to (TrayID, ASICLocation) from discovery — required when pinnings are non-empty, and populated
-    // for topology mapping anchors (e.g. soft preference for tray 1 / ASIC location 1 on logical mesh 0).
+    // Map from AsicID to (TrayID, ASICLocation) - required if pinnings is non-empty.
+    // Used to validate pinning constraints against the physical topology.
     AsicPositionMap asic_positions;
 
     // Per-mesh validation modes for intra-mesh mapping (fabric node to ASIC).
@@ -328,6 +331,21 @@ LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(
     const ::tt::tt_fabric::MeshGraphDescriptor& mesh_graph_descriptor);
 
 /**
+ * @brief Merge logical multi-mesh graphs into one with automatic MeshId renumbering
+ *
+ * Inputs are processed in order. For each part, all distinct MeshIds in that part (in fabric
+ * adjacency, mesh-level graph, and exit maps) are collected, sorted, and assigned consecutive
+ * global ids starting at a running base. If \p per_part_local_to_global_mesh_ids is set, it is filled
+ * with one map per input part: MGD-local mesh id -> merged global mesh id (for pinnings, validation, rank
+ * bindings, etc.).
+ *
+ * A single input is returned unchanged; the optional vector contains one identity map for that graph.
+ */
+LogicalMultiMeshGraph merge_logical_multi_mesh_adjacency_graphs(
+    const std::vector<LogicalMultiMeshGraph>& logical_multi_mesh_graphs,
+    std::vector<std::map<MeshId, MeshId>>* per_part_local_to_global_mesh_ids = nullptr);
+
+/**
  * @brief Represents a physical mesh node in a 2-layer adjacency graph
  *
  * Simplified to just be a MeshId. The internal adjacency graph is accessed via
@@ -440,6 +458,21 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
     const tt::tt_fabric::MeshGraphDescriptor& mesh_graph_descriptor,
     const std::optional<std::vector<PinningConstraint>>& pinnings = std::nullopt);
+
+/**
+ * @brief Build a physical multi-mesh adjacency graph using multiple MGDs (one PSD, one PGD)
+ *
+ * For each MGD, collects valid MESH groupings (same as the single-MGD build), then merges results.
+ * With multiple MGD files in one process, ensure PGD/MGD keys remain consistent (each descriptor may need distinct
+ * instance names when \c DistributedContext::subcontext_id() uniquifies names per split rank).
+ *
+ * @param mesh_graph_descriptors  Const reference to the caller's `std::vector` (the container is not copied;
+ *                                only a reference is passed). Elements are the loaded MGDs in order.
+ */
+PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
+    const std::vector<tt::tt_fabric::MeshGraphDescriptor>& mesh_graph_descriptors);
 
 /**
  * @brief Build a flat PhysicalAdjacencyMap from PhysicalSystemDescriptor

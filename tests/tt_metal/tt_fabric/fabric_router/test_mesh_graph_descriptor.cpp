@@ -1947,4 +1947,31 @@ TEST(MeshGraphDescriptorTests, PinningsEmpty) {
     EXPECT_TRUE(pinnings.empty()) << "Should have no pinnings when none are specified";
 }
 
+TEST(MeshGraphDescriptorTests, VectorReallocPreservesConnectionsByTypeLookup) {
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
+    const std::filesystem::path path_4x4 =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_single_4x4_mesh.textproto";
+    const std::filesystem::path path_dual =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_dual_2x4_intermesh.textproto";
+    ASSERT_TRUE(std::filesystem::exists(path_4x4));
+    ASSERT_TRUE(std::filesystem::exists(path_dual));
+
+    std::vector<MeshGraphDescriptor> mgds;
+    // No reserve(): second emplace typically reallocates and move-constructs elements — connection-by-type keys must
+    // remain valid (owning std::string keys, not string_views into moved-from InstanceData).
+    mgds.emplace_back(path_4x4);
+    const size_t mesh_conn_count = mgds[0].connections_by_type("MESH").size();
+    EXPECT_GT(mesh_conn_count, 0u) << "4x4 grid MGD should synthesize intra-mesh MESH connections";
+
+    mgds.emplace_back(path_dual);
+
+    EXPECT_EQ(mgds[0].connections_by_type("MESH").size(), mesh_conn_count)
+        << "First MGD's MESH connection index must survive vector reallocation";
+    EXPECT_FALSE(mgds[1].connections_by_type("FABRIC").empty())
+        << "Dual MGD should retain FABRIC connections after emplace";
+}
+
 }  // namespace tt::tt_fabric::fabric_router_tests
