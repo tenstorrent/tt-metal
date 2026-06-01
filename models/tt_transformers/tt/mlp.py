@@ -51,6 +51,13 @@ class MLP(LightweightModule):
         w1_w3_mem_config = args.create_dram_sharded_mem_config(args.dim, args.hidden_dim // args.num_devices)
         w2_mem_config = args.create_dram_sharded_mem_config(args.hidden_dim // args.num_devices, args.dim)
 
+        # Receiver-contiguous DRAM layout when the DRAM-core prefetcher is active (drop-in: the
+        # worker-core Prefetcher and the no-prefetcher path keep the width-sharded layout above).
+        _rc_mem_config = getattr(prefetcher, "recv_contig_weight_mem_config", None)
+        if _rc_mem_config is not None and not args.is_galaxy:
+            w1_w3_mem_config = _rc_mem_config(args.dim, args.hidden_dim // args.num_devices)
+            w2_mem_config = _rc_mem_config(args.hidden_dim // args.num_devices, args.dim)
+
         # TODO Clean up this code. With sharding, we load the normal weights and then shard them
         # Note: unsqueeze(0).unsqueeze(0) makes weights 4D [1, 1, H, W] to match attention weights
         # This is required for the dram_prefetcher to correctly interpret all weights
