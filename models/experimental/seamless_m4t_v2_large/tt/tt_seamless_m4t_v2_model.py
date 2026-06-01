@@ -374,6 +374,8 @@ class TTSeamlessM4Tv2Model:
         self.decoder_start_token_id = decoder_start_token_id
         self.vocab_size = vocab_size
         self.feature_projection_input_dim = feature_projection_input_dim
+        # Speech-encoder mel buckets already JIT-warmed this process (see prewarm_speech_encoder).
+        self._speech_prewarmed_buckets: set[int] = set()
         self.adaptor_kernel_size = adaptor_kernel_size
         self.adaptor_stride = adaptor_stride
         self.t2u_eos_token_id = t2u_eos_token_id
@@ -468,17 +470,21 @@ class TTSeamlessM4Tv2Model:
         Warm the *live* length only: warming a larger neighbour bucket compiles an oversized encoder
         program whose static CBs clash with the text-decoder decode CB budget on a later task (seen as
         an L1 ``circular buffers clash`` on the last speech task). Don't pad past the real length here.
+
+        Idempotent per process (``_speech_prewarmed_buckets``): a bucket already warmed is skipped, so
+        this is safe to call before *every* speech task — each task stays self-contained (a single task
+        run warms its own bucket and hits the steady-state number) while a chained run does the warm
+        only once.
         """
         n_mels = self.feature_projection_input_dim
-        warmed: set[int] = set()
         for sl in mel_seq_lens:
             sl = int(sl)
             if sl <= 0:
                 continue
             bucket = ((sl + _SPEECH_ENC_SEQ_BUCKET - 1) // _SPEECH_ENC_SEQ_BUCKET) * _SPEECH_ENC_SEQ_BUCKET
-            if bucket in warmed:
+            if bucket in self._speech_prewarmed_buckets:
                 continue
-            warmed.add(bucket)
+            self._speech_prewarmed_buckets.add(bucket)
             feats = ttnn.from_torch(
                 torch.zeros(1, bucket, n_mels, dtype=torch.bfloat16),
                 dtype=ttnn.bfloat16,
