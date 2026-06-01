@@ -57,9 +57,9 @@ chmod +x install.sh
 
   Install pre-built binaries for quick setup and immediate access to TT-NN APIs and AI models.
 
-- [Option 2: From Docker Release Image](#docker-release-image)
+- [Option 2: Container-Based Setup](#container-based-setup)
 
-  Installing from Docker Release Image is a quick way to access our APIs and start running AI models.
+  Container-based setup is the fastest way to access our APIs and start running AI models in a known user-space environment.
 
 - [Option 3: From Source](#source)
 
@@ -101,18 +101,70 @@ To try our pre-built models in [`tt-metal/models/`](https://github.com/tenstorre
 
 ---
 
-### Docker Release Image
+### Container-Based Setup
 
-Download the latest Docker release from our [Docker registry](https://github.com/orgs/tenstorrent/packages?q=tt-metalium-ubuntu&tab=packages&q=tt-metalium-ubuntu-22.04-release-amd64) page
+Container-based setup is recommended when you want a predictable user-space environment with minimal host-side package management.
+
+Use this path when:
+
+- you want to evaluate the stack quickly,
+- you want to run demos in a known image,
+- you want to avoid debugging host Python dependency drift,
+- you prefer Docker or rootless Podman over modifying the host environment.
+
+Use the source path instead when:
+
+- you are changing `tt-metal` source code,
+- you need editable local builds,
+- you are iterating on kernels, C++, or Python bindings,
+- you need direct control over build flags or toolchains.
+
+#### Recommended image
+
+The documented release image for TT-Metalium is:
+
+```sh
+ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64:latest-rc
+```
+
+For more information on the Docker release images, visit our [Docker registry page](https://github.com/orgs/tenstorrent/packages?q=tt-metalium-ubuntu&tab=packages&q=tt-metalium-ubuntu-22.04-release-amd64).
+
+#### Docker workflow
 
 ```sh
 docker pull ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64:latest-rc
 docker run -it --rm --device /dev/tenstorrent ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64:latest-rc bash
 ```
 
-- For more information on the Docker Release Images, visit our [Docker registry page](https://github.com/orgs/tenstorrent/packages?q=tt-metalium-ubuntu&tab=packages&q=tt-metalium-ubuntu-22.04-release-amd64).
+#### Rootless Podman workflow
 
-- You are all set! Try some [TT-NN Basic Examples](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/usage.html#basic-examples) next.
+If your environment standardizes on rootless containers, use Podman with the same image:
+
+```sh
+podman pull ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64:latest-rc
+podman run -it --rm --device /dev/tenstorrent ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64:latest-rc bash
+```
+
+> [!NOTE]
+> Device access requirements depend on your host configuration. If `/dev/tenstorrent` is not visible inside the container, confirm that the device node exists on the host and that your container runtime is configured to pass it through.
+
+#### Verification steps
+
+After entering the container:
+
+1. Confirm that the Tenstorrent device node is visible:
+
+   ```sh
+   ls /dev/tenstorrent
+   ```
+
+2. Run a basic TT-NN example:
+
+   ```sh
+   python3 -m ttnn.examples.usage.run_op_on_device
+   ```
+
+If you plan to run models from a source checkout, continue with the source-based environment setup for model-specific dependencies and environment variables.
 
 ---
 
