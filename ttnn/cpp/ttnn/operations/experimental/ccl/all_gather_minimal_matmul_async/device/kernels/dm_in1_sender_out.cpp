@@ -7,7 +7,6 @@
 #include "matmul_dataflow_common.hpp"
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/fused_receiver_utils.hpp"
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
-#include "api/debug/dprint.h"
 
 using ttnn::ccl::Topology;
 
@@ -286,6 +285,11 @@ void kernel_main() {
             uint32_t n_tile_end = std::min(n_tile + N_block_tiles, N_end_tile);
             uint32_t current_N_block_tiles = n_tile_end - n_tile;
             uint32_t current_N_tiles_bytes = current_N_block_tiles * in1_tile_size;
+            // Relay must NOT forward padding N-tiles (n >= N_tiles): the relay dst_tile is
+            // k * pwb_N_Wt + n, so a padding column (n >= pwb_N_Wt == N_tiles) wraps into the
+            // NEXT K-row's low N-tiles and corrupts them with stale CB data. Padding is always
+            // the trailing tiles of the last row's N-stripe, so clamp the relayed count to real N.
+            uint32_t relay_N_block_tiles = (n_tile < N_tiles) ? std::min(current_N_block_tiles, N_tiles - n_tile) : 0;
 
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
                 if (defer_write && k_block_iter == defer_write_k_block) {
@@ -501,7 +505,7 @@ void kernel_main() {
                                         n_tile,
                                         k_left_tiles,
                                         k_right_tiles,
-                                        current_N_block_tiles,
+                                        relay_N_block_tiles,
                                         N_block_tiles,
                                         1,
                                         in1_send_l1_addr,
@@ -523,7 +527,7 @@ void kernel_main() {
                                     n_tile,
                                     k_left_tiles,
                                     k_right_tiles,
-                                    current_N_block_tiles,
+                                    relay_N_block_tiles,
                                     N_block_tiles,
                                     1,
                                     in1_send_l1_addr,
