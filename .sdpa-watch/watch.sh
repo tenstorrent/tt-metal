@@ -19,6 +19,83 @@ DRY_RUN="${DRY_RUN:-0}"
 ts()  { date -u +'%Y-%m-%dT%H:%M:%SZ'; }
 log() { echo "[$(ts)] $*" >&2; }
 
+# Extract failure markers from a failed run's job logs. Outputs a single
+# multi-job blob suitable for inclusion in the agent prompt.
+fetch_failure_logs() {
+  local rid="$1"
+  local failed_jobs combined jid jname jlog_full jlog
+  failed_jobs=$(gh api "repos/$REPO/actions/runs/$rid/jobs" --paginate \
+                --jq '.jobs[] | select(.conclusion=="failure") | "\(.id)\t\(.name)"' 2>/dev/null)
+  if [[ -z "$failed_jobs" ]]; then
+    printf '(no failed jobs reported)'
+    return
+  fi
+  combined=""
+  while IFS=$'\t' read -r jid jname; do
+    [[ -z "$jid" ]] && continue
+    jlog_full=$(gh api "repos/$REPO/actions/jobs/$jid/logs" 2>/dev/null)
+    # Long CI logs (10MB+) bury FAILED markers in the body while the last
+    # 12k is post-job docker cleanup. Grep for failure patterns with
+    # context; fall back to 12k tail if nothing matched.
+    jlog=$(printf '%s' "$jlog_full" \
+           | { grep -E -B 5 -A 100 '##\[error\]|FAILED |AssertionError|Traceback' || true; })
+    [[ -z "$jlog" ]] && jlog=$(printf '%s' "$jlog_full" | tail -c 12000)
+    combined+="=== JOB: $jname ===
+$jlog
+
+"
+  done <<<"$failed_jobs"
+  printf '%s' "${combined:-(log fetch failed)}"
+}
+
+# Run the agent on one run and emit a summary block. Reads $display,
+# $workflow, $test_hint, $prev_sha from the caller's scope.
+analyze_run() {
+  local rid="$1" rnum="$2" rconcl="$3" rsha="$4" rurl="$5" note="$6"
+  local logs="(no log fetched)" commits ctx prompt summary rc
+
+  [[ "$rconcl" == "failure" ]] && logs=$(fetch_failure_logs "$rid")
+
+  commits="(no prior run tracked)"
+  if [[ -n "$prev_sha" && "$prev_sha" != "$rsha" ]]; then
+    commits=$(git -C "$TT_METAL_DIR" log --oneline "$prev_sha..$rsha" 2>/dev/null | head -50 \
+              || echo "(range unavailable)")
+  fi
+
+  ctx=$(cat <<EOF
+Pipeline display name: $display
+Workflow file: $workflow
+Run: #$rnum  conclusion=$rconcl  sha=$rsha
+URL: $rurl
+Test focus hint: $test_hint
+${note:+Note: $note}
+
+Commits since last analyzed run (${prev_sha:0:7}..${rsha:0:7}):
+$commits
+
+Failure log excerpt (truncated to last ~40k chars):
+$logs
+EOF
+)
+  prompt="$(cat "$PROMPT_TEMPLATE")
+
+# Context
+$ctx"
+
+  set +e
+  summary=$(cd "$TT_METAL_DIR" && \
+            claude --model "$MODEL" -p <<<"$prompt" 2>>"$AGENT_ERR")
+  rc=$?
+  set -e
+
+  if [[ $rc -ne 0 || -z "$summary" ]]; then
+    log "  agent failed on #$rnum (rc=$rc); using fallback block"
+    summary="▸ *$display*  ❌ $rconcl  _run #${rnum}_
+(agent error — see $rurl)"
+  fi
+  printf '%s' "$summary"
+}
+
 # ---------- prerequisites ----------
 [[ -f "$API_KEY_FILE" ]] || { log "FATAL: $API_KEY_FILE missing"; exit 1; }
 export ANTHROPIC_API_KEY
@@ -81,109 +158,97 @@ for entry in "${PIPELINES[@]}"; do
     fi
   fi
 
-  # New run_id but not yet completed (fresh trigger queued, or a re-attempt
-  # in flight). Prefer the previous cached block; if there is none, fall
-  # back to the latest *completed* run so we always show real data.
+  # Latest run is in-flight (fresh trigger queued, or a re-attempt). The
+  # cache-hit check above already handles re-attempts of the cached run.
+  # Here we must look past the in-flight run to the latest *completed*
+  # run: if a newer completion exists than what's cached, analyze it;
+  # otherwise the cache is still the freshest real result.
   if [[ "$status" != "completed" ]]; then
-    cached=$(jq -r --arg w "$workflow" '.[$w].summary // ""' "$STATE")
-    if [[ -n "$cached" ]]; then
-      blocks+=("$cached")
-      log "  run #$run_number is $status — reusing previous cached summary"
-      continue
+    log "  run #$run_number is $status — checking latest completed"
+    completed_run=$(gh api "repos/$REPO/actions/workflows/$workflow/runs?branch=$BRANCH&status=completed&per_page=1" \
+                    --jq '.workflow_runs[0]' 2>/dev/null || echo "null")
+    completed_id=""
+    if [[ -n "$completed_run" && "$completed_run" != "null" ]]; then
+      completed_id=$(jq -r '.id // empty' <<<"$completed_run")
     fi
-    log "  run #$run_number is $status with no cache — falling back to latest completed"
-    run=$(gh api "repos/$REPO/actions/workflows/$workflow/runs?branch=$BRANCH&status=completed&per_page=1" \
-          --jq '.workflow_runs[0]' 2>/dev/null || echo "null")
-    if [[ -z "$run" || "$run" == "null" ]]; then
-      blocks+=("▸ *$display* — _no completed runs on $BRANCH_")
-      log "  no completed runs found"
-      continue
-    fi
-    run_id=$(jq -r '.id'              <<<"$run")
-    status=$(jq -r '.status // "unknown"'     <<<"$run")
-    conclusion=$(jq -r '.conclusion // "unknown"' <<<"$run")
-    sha=$(jq -r '.head_sha'           <<<"$run")
-    url=$(jq -r '.html_url'           <<<"$run")
-    run_number=$(jq -r '.run_number'  <<<"$run")
-  fi
 
-  # Cache miss: fetch logs (only on failure) and commit range, run agent.
-  log "  new run #$run_number ($conclusion) — analyzing"
-
-  logs="(no log fetched)"
-  if [[ "$conclusion" == "failure" ]]; then
-    # `gh run view --log-failed` silently returns 0 bytes for some repos/runs.
-    # Iterate failed jobs via the API and fetch each job's log directly.
-    failed_jobs=$(gh api "repos/$REPO/actions/runs/$run_id/jobs" --paginate \
-                  --jq '.jobs[] | select(.conclusion=="failure") | "\(.id)\t\(.name)"' 2>/dev/null)
-    if [[ -n "$failed_jobs" ]]; then
-      combined=""
-      while IFS=$'\t' read -r jid jname; do
-        [[ -z "$jid" ]] && continue
-        jlog_full=$(gh api "repos/$REPO/actions/jobs/$jid/logs" 2>/dev/null)
-        # Long CI logs (10MB+) bury FAILED markers in the body while
-        # the last 12k is post-job docker cleanup. Grep for failure
-        # patterns with context — output size is bounded by the number
-        # of matches, not log size. Fall back to a 12k tail only if
-        # nothing matched, so timeout/cleanup signal still gets through.
-        jlog=$(printf '%s' "$jlog_full" \
-               | { grep -E -B 5 -A 100 '##\[error\]|FAILED |AssertionError|Traceback' || true; })
-        [[ -z "$jlog" ]] && jlog=$(printf '%s' "$jlog_full" | tail -c 12000)
-        combined+="=== JOB: $jname ===
-$jlog
-
-"
-      done <<<"$failed_jobs"
-      logs="${combined:-(log fetch failed)}"
+    if [[ -n "$completed_id" && "$completed_id" != "$prev_id" ]]; then
+      run="$completed_run"
+      run_id="$completed_id"
+      status=$(jq -r '.status // "unknown"'         <<<"$run")
+      conclusion=$(jq -r '.conclusion // "unknown"' <<<"$run")
+      sha=$(jq -r '.head_sha'                       <<<"$run")
+      url=$(jq -r '.html_url'                       <<<"$run")
+      run_number=$(jq -r '.run_number'              <<<"$run")
+      log "  latest completed is #$run_number ($conclusion) — analyzing"
     else
-      logs="(no failed jobs reported)"
+      cached=$(jq -r --arg w "$workflow" '.[$w].summary // ""' "$STATE")
+      if [[ -n "$cached" ]]; then
+        blocks+=("$cached")
+        log "  no newer completed run — reusing cached summary"
+        continue
+      fi
+      blocks+=("▸ *$display* — _no completed runs on $BRANCH_")
+      log "  no completed runs and no cache"
+      continue
     fi
   fi
 
-  commits="(no prior run tracked)"
-  if [[ -n "$prev_sha" && "$prev_sha" != "$sha" ]]; then
-    commits=$(git -C "$TT_METAL_DIR" log --oneline "$prev_sha..$sha" 2>/dev/null | head -50 \
-              || echo "(range unavailable)")
-  fi
+  # Cache miss: analyze the chosen run.
+  log "  new run #$run_number ($conclusion) — analyzing"
+  summary=$(analyze_run "$run_id" "$run_number" "$conclusion" "$sha" "$url" "")
 
-  context=$(cat <<EOF
-Pipeline display name: $display
-Workflow file: $workflow
-Run: #$run_number  conclusion=$conclusion  sha=$sha
-URL: $url
-Test focus hint: $test_hint
+  # If the primary run didn't actually run tests (per the agent's ⚠️
+  # emoji — which covers infra setup failures as well as the GH-level
+  # cancel/timeout conclusions), surface the most recent run where tests
+  # *did* run so the digest still reflects real test state.
+  primary_first_line=$(printf '%s' "$summary" | head -n1)
+  if [[ "$primary_first_line" == *⚠️* ]]; then
+    log "  primary classified ⚠️ (tests didn't run) — searching for last test-ran run"
+    # Walk back through recent completed runs (newest first), skipping
+    # the primary itself, runs whose GH conclusion already implies no
+    # test execution, and any candidate the agent also classifies ⚠️.
+    # Capped to avoid burning many agent calls when an infra outage
+    # affects a streak of runs.
+    fb_summary=""
+    fb_checked=0
+    fb_max=4
+    while IFS=$'\t' read -r cid cconcl csha curl crnum; do
+      [[ -z "$cid" || "$cid" == "$run_id" ]] && continue
+      case "$cconcl" in
+        success|failure) ;;
+        *) continue ;;
+      esac
+      (( ++fb_checked ))
+      log "  fallback candidate #$crnum ($cconcl) — analyzing"
+      cand_summary=$(analyze_run "$cid" "$crnum" "$cconcl" "$csha" "$curl" \
+                     "Latest completed run #$run_number did not execute tests. Analyze this earlier run as the current real test state.")
+      cand_first=$(printf '%s' "$cand_summary" | head -n1)
+      if [[ "$cand_first" != *⚠️* ]]; then
+        fb_summary="$cand_summary"
+        log "  fallback: #$crnum is the latest test-ran run"
+        break
+      fi
+      log "  #$crnum also classified ⚠️ — continuing"
+      (( fb_checked >= fb_max )) && { log "  giving up after $fb_max candidates"; break; }
+    done < <(gh api "repos/$REPO/actions/workflows/$workflow/runs?branch=$BRANCH&status=completed&per_page=15" \
+             --jq '.workflow_runs[] | "\(.id)\t\(.conclusion)\t\(.head_sha)\t\(.html_url)\t\(.run_number)"' 2>/dev/null)
 
-Commits since last analyzed run (${prev_sha:0:7}..${sha:0:7}):
-$commits
-
-Failure log excerpt (truncated to last ~40k chars):
-$logs
-EOF
-)
-
-  full_prompt="$(cat "$PROMPT_TEMPLATE")
-
-# Context
-$context"
-
-  # Pass the prompt over stdin, not via `-p "$full_prompt"`. Inlining a
-  # large prompt as an argv arg blows past ARG_MAX (~128 KB) when failure
-  # logs are big and the kernel rejects the exec with E2BIG.
-  set +e
-  summary=$(cd "$TT_METAL_DIR" && \
-            claude --model "$MODEL" -p <<<"$full_prompt" 2>>"$AGENT_ERR")
-  rc=$?
-  set -e
-
-  if [[ $rc -ne 0 || -z "$summary" ]]; then
-    log "  agent failed (rc=$rc); using fallback block"
-    summary="▸ *$display*  ❌ $conclusion  _run #${run_number}_
-(agent error — see $url)"
+    if [[ -n "$fb_summary" ]]; then
+      # Strip the "▸ *Name*  " prefix from the fallback so the combined
+      # block has a single pipeline header.
+      fb_stripped=$(printf '%s' "$fb_summary" | sed -E '1 s/^▸ \*[^*]+\*  ?//')
+      summary="$summary
+↳ Last test-ran: $fb_stripped"
+    else
+      summary="$summary
+↳ Last test-ran: not found within recent runs"
+    fi
   fi
 
   blocks+=("$summary")
 
-  # Persist new state.
+  # Persist new state, keyed on the primary (latest) run id.
   jq --arg w "$workflow" --arg id "$run_id" --arg sha "$sha" --arg sm "$summary" \
      '.[$w] = {run_id: $id, sha: $sha, summary: $sm, updated: now}' \
      "$STATE" > "$STATE.tmp" && mv "$STATE.tmp" "$STATE"
