@@ -441,23 +441,19 @@ void kernel_main() {
 #endif  // !FUSE_BIAS
         // This kernel manages the srcA / pack data-format reconfig externally above
         // (tangled with the FP32/PACKER_L1_ACC #ifdefs and the pack_reconfig_l1_acc
-        // ordering), so reblock is invoked with NoReconfigure on both the init and the
-        // loop body — the reblock helper adds no reconfig of its own here. (Behavior is
-        // identical to before reblock gained its reconfig switch.)
-                    reblock_and_untilize_init<
+        // ordering), so reblock is invoked with NoReconfigure — the helper adds no
+        // reconfig of its own. One call loops over all in0_num_subblocks internally.
+                    reblock_and_untilize<
                         out_subblock_w,
                         out_block_w,
+                        reblock_untilize_config::InitUninitMode::InitAndUninit,
                         reblock_untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
-                        mm_partials_buf, out_buf);
-                    for (uint32_t i = 0; i < in0_num_subblocks; ++i) {
-                        reblock_and_untilize<
-                            out_subblock_w,
-                            out_block_w,
-                            reblock_untilize_config::InitUninitMode::Neither,
-                            reblock_untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
-                            in1_num_subblocks, out_subblock_num_tiles, out_subblock_h, mm_partials_buf, out_buf);
-                    }
-                    reblock_and_untilize_uninit(mm_partials_buf);
+                        in0_num_subblocks,
+                        in1_num_subblocks,
+                        out_subblock_num_tiles,
+                        out_subblock_h,
+                        mm_partials_buf,
+                        out_buf);
                 }
 
                 // ── Reconfigure for next output block ───────────────────
