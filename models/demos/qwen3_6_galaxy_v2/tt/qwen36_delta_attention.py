@@ -197,7 +197,11 @@ class TtQwen36DeltaAttention(LightweightModule):
         # Env override is preferred (matches QWEN36_DELTA_LAR / QWEN36_FULLATTN_LAR
         # pattern) so the test plumbing doesn't need to thread the bool through
         # the TtTransformer / decoder layer hierarchy.
-        env_flag = os.environ.get("QWEN36_TT_LANG_BETA_G", "").strip()
+        # Fuse C: default-ON (validated on the 32-chip BH Galaxy — the 1×1-tile
+        # generic_op beta/g kernel runs without segfault, matches the 6-op chain
+        # at PCC>0.9999, and is faster: DeltaNet 1L decode median 7.65 vs 7.98 ms.
+        # Set QWEN36_TT_LANG_BETA_G=0 to fall back to the 6-op TTNN chain.
+        env_flag = os.environ.get("QWEN36_TT_LANG_BETA_G", "1").strip()
         self.use_tt_lang_beta_g = use_tt_lang_beta_g or (env_flag == "1")
         # V2-18: optional partial tt-lang recurrent kernel (per-head state
         # update only, readout matmul remains external).
@@ -2982,11 +2986,23 @@ class TtQwen36DeltaAttention(LightweightModule):
             v_conv.deallocate(True)
 
             # 4'. beta and g as [B, n_v, T] (= [1,6,1]) — pre-transposed.
+            # The fused tt-lang beta/g kernel emits the persistent buffers in
+            # [B, T, n_v] = [1,1,6]; the recurrent core (pre_transposed=True)
+            # wants [B, n_v, T] = [1,6,1]. At B=T=1 this is a pure relabel of
+            # the same 6 v-head elements (verified bit-identical vs a torch
+            # transpose in test_dn_beta_g.py). ttnn.reshape of the persistent
+            # [1,1,6] buffer to [1,6,1] returns a fresh DRAM COPY (NOT an alias
+            # — the persistent buffer's address is unchanged, preserving trace
+            # safety), so the reshaped handles below are per-step temporaries
+            # and MUST be deallocated after the recurrent core consumes them.
             beta, g = self._compute_beta_g(b, a, B, T)
             b.deallocate(True)
             a.deallocate(True)
             beta = ttnn.reshape(beta, [B, self.n_v_per_row, T])
             g = ttnn.reshape(g, [B, self.n_v_per_row, T])
+            # In this branch beta/g are reshape copies (own buffers), not the
+            # persistent fused-kernel outputs, so they are always deallocatable.
+            beta_g_owns_buffer = True
 
             # 5'. GQA expand q, k on the head dim (now dim 1).
             q_exp, k_exp = self._gqa_expand_q_k(q_h, k_h, B, T, head_dim_axis=1)
@@ -3006,6 +3022,11 @@ class TtQwen36DeltaAttention(LightweightModule):
             beta, g = self._compute_beta_g(b, a, B, T)
             b.deallocate(True)
             a.deallocate(True)
+            # In this (non-fused-heads) branch the fused tt-lang beta/g kernel,
+            # if active, returns the persistent beta_out/g_out buffers directly
+            # (no reshape). Those alias state that the next decode step re-uses,
+            # so they must NOT be deallocated.
+            beta_g_owns_buffer = not (self.use_tt_lang_beta_g and self._beta_g_kernel_state is not None)
 
             # 5. GQA expand q, k
             q_exp, k_exp = self._gqa_expand_q_k(q_h, k_h, B, T)
@@ -3064,10 +3085,12 @@ class TtQwen36DeltaAttention(LightweightModule):
         q_exp.deallocate(True)
         k_exp.deallocate(True)
         v_h.deallocate(True)
-        # V2-16: when the fused tt-lang kernel is active, ``beta`` and ``g``
-        # alias the persistent ``beta_out`` / ``g_out`` buffers — never
-        # deallocate them. The next decode step re-uses the same addresses.
-        if not (self.use_tt_lang_beta_g and self._beta_g_kernel_state is not None):
+        # V2-16: when the fused tt-lang kernel is active AND beta/g still alias
+        # the persistent ``beta_out`` / ``g_out`` buffers (non-fused-heads path),
+        # never deallocate them — the next decode step re-uses the same
+        # addresses. In the fused-heads path beta/g were reshaped into fresh
+        # per-step copies (``beta_g_owns_buffer`` True), so they are freed here.
+        if beta_g_owns_buffer:
             beta.deallocate(True)
             g.deallocate(True)
 
