@@ -542,92 +542,7 @@ struct PackTile : PackTileTag {
 };
 
 // =============================================================================
-// 3. PackTileBlock — atomic multi-slot pack
-// =============================================================================
-
-template <uint32_t Cb,
-          Dst FirstSlot,
-          uint32_t NTiles,
-          OutputLifecycle Policy,
-          PackTileReconfig Reconfig>
-struct PackTileBlock : PackTileTag {
-    static_assert(NTiles >= 1 && NTiles <= DEST_AUTO_LIMIT,
-                  "PackTileBlock: NTiles must be in [1, DEST_AUTO_LIMIT]");
-    static_assert(to_u32(FirstSlot) + NTiles <= DEST_AUTO_LIMIT,
-                  "PackTileBlock: FirstSlot + NTiles exceeds DEST_AUTO_LIMIT (consecutive slots required)");
-
-    static constexpr uint32_t cb           = Cb;
-    static constexpr uint32_t pack_cb_id() { return Cb; }
-    static constexpr Dst      pack_dst_slot = FirstSlot;
-    static constexpr uint32_t n_tiles      = NTiles;
-    static constexpr bool     is_upfront   = (Policy == OutBulk);
-    static constexpr bool     uses_per_block_pack = (Policy == OutChunked);
-
-    // Prev-CB fold (D2): PackTileBlock writes pack-side.
-    static constexpr uint32_t reconfig_srca_cb = NO_PREV_CB;
-    static constexpr uint32_t reconfig_srcb_cb = NO_PREV_CB;
-    static constexpr uint32_t reconfig_pack_cb =
-        (Reconfig == PackTileReconfig::Output) ? Cb : NO_PREV_CB;
-
-    static ALWI void init() {
-        // Pack reconfig is fold-driven; init() is a no-op.
-    }
-
-    ALWI void reserve_per_tile(uint32_t /*i*/, uint32_t /*block_size*/) const {
-        if constexpr (Policy == OutStreaming ||
-                      Policy == OutHeldReserve) {
-            cb_reserve_back(Cb, NTiles);
-        }
-    }
-    ALWI void reserve_per_block(uint32_t inner_count) const {
-        if constexpr (Policy == OutChunked) {
-            cb_reserve_back(Cb, inner_count * NTiles);
-        }
-    }
-    ALWI void reserve_upfront(uint32_t n) const {
-        if constexpr (Policy == OutBulk) {
-            cb_reserve_back(Cb, n * NTiles);
-        }
-    }
-    ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const {
-        pack_tile_block(to_u32(FirstSlot) + slot_offset, Cb, NTiles);
-    }
-    ALWI void exec_2d(uint32_t /*i_flat*/, uint32_t /*ht*/, uint32_t /*wt*/, uint32_t slot_offset) const {
-        pack_tile_block(to_u32(FirstSlot) + slot_offset, Cb, NTiles);
-    }
-    ALWI void reserve_upfront_2d(uint32_t Ht, uint32_t Wt) const {
-        if constexpr (Policy == OutBulk) {
-            cb_reserve_back(Cb, Ht * Wt * NTiles);
-        }
-    }
-    ALWI void push_at_end_2d(uint32_t Ht, uint32_t Wt) const {
-        if constexpr (Policy == OutDeferredReserve ||
-                      Policy == OutBulk) {
-            cb_push_back(Cb, Ht * Wt * NTiles);
-        }
-    }
-
-    static constexpr uint32_t lane_width = to_u32(FirstSlot) + NTiles;
-    ALWI void push_per_tile(uint32_t /*i*/, uint32_t /*block_size*/) const {
-        if constexpr (Policy == OutStreaming) {
-            cb_push_back(Cb, NTiles);
-        }
-    }
-    ALWI void push_per_block(uint32_t inner_count) const {
-        if constexpr (Policy == OutChunked) {
-            cb_push_back(Cb, inner_count * NTiles);
-        }
-    }
-    ALWI void push_at_end(uint32_t n) const {
-        if constexpr (Policy == OutDeferredReserve ||
-                      Policy == OutBulk) {
-            cb_push_back(Cb, n * NTiles);
-        }
-    }
-};
-
-// =============================================================================
-// 4. BinaryFpu chain element
+// 3. BinaryFpu chain element
 // =============================================================================
 
 template <uint32_t CbA,
@@ -2228,9 +2143,8 @@ ALWI void eltwise_chain(EltwiseShape shape, Es... elts) {
     constexpr bool hoist_math = chain_hoist_math_mop_v<Chain>;
     constexpr bool hoist_sfpu = chain_hoist_sfpu_v<Chain>;
 
-    // Block size lives on the shape. DEST footprint (block_size * chain_lane_width)
-    // is the caller's responsibility — query chain_max_block_v<Chain> for the max
-    // safe value and static_assert at the call site to recover the build-time check.
+    // Block size lives on the shape. The DEST footprint is block_size * chain_lane_width;
+    // the chain clamps block_size so it can never overflow DEST (see below).
     constexpr uint32_t chain_lane_w = chain_lane_width_v<Chain>;
     uint32_t block_size = shape.block_size;
     // Streaming CB-reader chains can't multi-tile their DEST window (WaitAndPop /
@@ -2239,6 +2153,17 @@ ALWI void eltwise_chain(EltwiseShape shape, Es... elts) {
     // supports block-mode.
     if constexpr (!chain_supports_block_v<Chain>) {
         block_size = 1;
+    } else {
+        // Clamp the runtime block_size to the chain's compile-time DEST capacity
+        // (chain_max_block_v = DEST_AUTO_LIMIT / chain_lane_width). block_size is a
+        // runtime field so a static_assert isn't possible; an oversized value would
+        // otherwise silently overflow DEST. Clamping down is correctness-safe — it
+        // only makes the outer loop take more iterations; total tile coverage is
+        // unchanged.
+        constexpr uint32_t max_block = chain_max_block_v<Chain>;
+        if (block_size > max_block) {
+            block_size = max_block;
+        }
     }
 
     using IdxSeq = std::make_index_sequence<sizeof...(Es)>;

@@ -67,12 +67,10 @@
  * needed. | Omit; calling `compute_kernel_hw_startup` mid-`MAIN()` here is **undefined per D5**. | | Copy-only chain
  * whose CB formats already match defaults | Omit. | N/A. |
  *
- * @section deduced_wrapper eltwise_chain_with_init — single-stage convenience (U4)
- *
- * `eltwise_chain_with_init(num_tiles, elts...)` deduces `(cb_a, cb_b, cb_out)` from the chain
- * element pack at compile time and emits `compute_kernel_hw_startup` before the chain. **Use only
- * for single-stage kernels.** Multi-stage (different PACK output CB per stage) MUST keep the
- * explicit per-stage `compute_kernel_hw_startup` pattern.
+ * Rejected pattern: a `*_with_init` convenience that folds `compute_kernel_hw_startup` into the
+ * chain call is an antipattern — it reintroduces BIG init into the chain (violating the D8
+ * caller-init contract), is only correct for single-stage kernels, and produces undefined behaviour
+ * the moment it is used in a multi-stage or mid-loop chain. The caller owns BIG init; do not add one.
  *
  * @section fp32_dest_acc FP32 DEST accumulation — build-flag-driven (no per-element opt-in)
  *
@@ -129,13 +127,6 @@
  *       BinaryFpu<cb_a, cb_b, BinaryFpuOp::Add>{},
  *       PackTile<cb_out, Dst::D0, OutStreaming,
  *                OperandKind::Scalar, PackTileReconfig::Output>{}
- *   );
- *
- *   // Single-stage with deduced wrapper — U4
- *   eltwise_chain_with_init(num_tiles,
- *       CopyTile<cb_in, Dst::D0, Streaming>{},
- *       Exp<>{},
- *       PackTile<cb_out, Dst::D0, OutStreaming>{}
  *   );
  *
  *   // Fan-out — same input, two outputs
@@ -739,8 +730,18 @@ enum class Legacy : bool { Off = false, On = true };
 /// static_assert.
 
 /// CopyTile dtype-reconfig.
+///
+/// Why `None` is load-bearing (not just a perf opt-out): the fold compile-time-elides a
+/// reconfig only when prev_cb == cur_cb *within the chain*. The FIRST CB-reader has no
+/// in-chain predecessor, so with `Input` it emits an unconditional single-arg reconfig on
+/// entry — and the single-arg form does NOT short-circuit on format equality the way the
+/// two-arg `_with_dt` form does. `None` is the caller asserting "the boot init
+/// (compute_kernel_hw_startup / init_sfpu / binary_op_init_common) already programmed this
+/// exact format — skip the redundant entry reprogram." Canonical case: a single-input,
+/// single-output kernel (copy / identity / typecast) whose CBs are set once at boot. Do not
+/// default-on or remove this knob.
 enum class CopyTileReconfig : uint8_t {
-    None,   // no reconfig
+    None,   // no reconfig (boot init already programmed this CB's format)
     Input,  // copy_tile_to_dst_init_short_with_dt(old_cb, new_cb)
 };
 
@@ -1032,14 +1033,6 @@ template <
     PackTileReconfig Reconfig = PackTileReconfig::Output,
     class TileBaseT = TileBaseNone>
 struct PackTile;
-
-template <
-    uint32_t Cb,
-    Dst FirstSlot,
-    uint32_t NTiles,
-    OutputLifecycle Policy = OutStreaming,
-    PackTileReconfig Reconfig = PackTileReconfig::Output>
-struct PackTileBlock;
 
 // Fill / Rand forward declarations — implementations live in eltwise_fill.hpp / eltwise_rand.hpp.
 template <Dst DstSlot = Dst::D0>
