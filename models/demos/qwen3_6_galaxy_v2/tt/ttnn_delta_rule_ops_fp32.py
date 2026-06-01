@@ -230,6 +230,7 @@ def recurrent_gated_delta_rule_ttnn_fp32(
     scale=None,
     initial_state=None,
     device=None,
+    pre_transposed=False,
 ):
     """Token-by-token recurrent gated delta rule, fp32-state.
 
@@ -256,11 +257,21 @@ def recurrent_gated_delta_rule_ttnn_fp32(
     q = l2_norm_ttnn(q, dim=-1)
     k = l2_norm_ttnn(k, dim=-1)
 
-    B = q.shape[0]
-    T = q.shape[1]
-    H = q.shape[2]
-    K = q.shape[3]
-    V = v.shape[3]
+    if pre_transposed:
+        # Inputs already in [B, H, T, D] (q/k/v) / [B, H, T] (beta/g) layout —
+        # the caller produced the per-head tensors directly so the 5 input
+        # transposes below can be skipped. At decode T=1 this is bit-identical.
+        B = q.shape[0]
+        H = q.shape[1]
+        T = q.shape[2]
+        K = q.shape[3]
+        V = v.shape[3]
+    else:
+        B = q.shape[0]
+        T = q.shape[1]
+        H = q.shape[2]
+        K = q.shape[3]
+        V = v.shape[3]
 
     if scale is None:
         scale = K**-0.5
@@ -269,16 +280,17 @@ def recurrent_gated_delta_rule_ttnn_fp32(
     q = ttnn.multiply(q_prev, scale, memory_config=ttnn.L1_MEMORY_CONFIG)
     q_prev.deallocate(True)
 
-    # Transpose [B, T, H, D] -> [B, H, T, D] / [B, H, T]
-    q_prev = q
-    q = ttnn.transpose(q_prev, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
-    q_prev.deallocate(True)
-    k_prev = k
-    k = ttnn.transpose(k_prev, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
-    k_prev.deallocate(True)
-    v = ttnn.transpose(v, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
-    beta = ttnn.transpose(beta, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
-    g = ttnn.transpose(g, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
+    if not pre_transposed:
+        # Transpose [B, T, H, D] -> [B, H, T, D] / [B, H, T]
+        q_prev = q
+        q = ttnn.transpose(q_prev, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        q_prev.deallocate(True)
+        k_prev = k
+        k = ttnn.transpose(k_prev, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        k_prev.deallocate(True)
+        v = ttnn.transpose(v, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        beta = ttnn.transpose(beta, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        g = ttnn.transpose(g, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     # fp32 promote — was bf16 in upstream
     q_prev = q

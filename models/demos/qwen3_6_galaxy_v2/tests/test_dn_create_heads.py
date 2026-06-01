@@ -113,6 +113,45 @@ def test_create_heads_contract(mesh):
         assert pcc > _PCC_BAR, f"{name} PCC {pcc:.5f} < {_PCC_BAR}"
 
 
+def test_direct_bhtd_create_heads(mesh):
+    """QWEN36_DN_FUSED_HEADS path: produce per-head q/k/v already in the
+    recurrent core's [B, H, T, D] = [1, 6, 1, 128] layout via a DIRECT reshape
+    (reshape q_conv->[1,2,1,128], repeat_interleave dim=1; v_conv->[1,6,1,128]),
+    with NO transpose. Proves it equals the torch reference [1,6,1,128] — i.e.
+    the current [1,1,6,128] create-heads data transposed to [B,H,T,D]. At T=1
+    the direct reshape is bit-identical to reshape([B,T,H,D])+transpose(1,2).
+    """
+    torch.manual_seed(3)
+    q_conv = torch.randn(_B, _T, _Q_PER_ROW)
+    k_conv = torch.randn(_B, _T, _Q_PER_ROW)
+    v_conv = torch.randn(_B, _T, _V_PER_ROW)
+
+    # --- torch reference: old create-heads ([1,1,6,128]) then transpose to [1,6,1,128] ---
+    q_e_old = q_conv.reshape(_B, _T, _N_K, _HEAD_DIM).repeat_interleave(_RATIO, dim=2)  # [1,1,6,128]
+    k_e_old = k_conv.reshape(_B, _T, _N_K, _HEAD_DIM).repeat_interleave(_RATIO, dim=2)
+    v_h_old = v_conv.reshape(_B, _T, _N_V, _HEAD_DIM)
+    q_ref = q_e_old.transpose(1, 2)  # [1,6,1,128]
+    k_ref = k_e_old.transpose(1, 2)
+    v_ref = v_h_old.transpose(1, 2)
+
+    # --- ttnn direct [B,H,T,D] reshape path (no transpose) ---
+    mem = ttnn.DRAM_MEMORY_CONFIG
+    q_t, k_t, v_t = _to_dev(q_conv, mesh), _to_dev(k_conv, mesh), _to_dev(v_conv, mesh)
+    q_hd = ttnn.reshape(q_t, [_B, _N_K, _T, _HEAD_DIM], memory_config=mem)  # [1,2,1,128]
+    k_hd = ttnn.reshape(k_t, [_B, _N_K, _T, _HEAD_DIM], memory_config=mem)
+    q_e = ttnn.repeat_interleave(q_hd, _RATIO, dim=1, memory_config=mem)  # [1,6,1,128]
+    k_e = ttnn.repeat_interleave(k_hd, _RATIO, dim=1, memory_config=mem)
+    v_hd = ttnn.reshape(v_t, [_B, _N_V, _T, _HEAD_DIM], memory_config=mem)  # [1,6,1,128]
+
+    shp = [_B, _N_V, _T, _HEAD_DIM]
+    for name, tt, ref in [("q", q_e, q_ref), ("k", k_e, k_ref), ("v", v_hd, v_ref)]:
+        assert list(tt.shape) == shp, f"{name} shape {list(tt.shape)} != {shp}"
+        pcc = _pcc(_first_replica(tt, mesh, shp), ref)
+        print(f"[direct BHTD] {name} PCC={pcc:.6f}")
+        assert pcc > _PCC_BAR, f"{name} PCC {pcc:.5f} < {_PCC_BAR}"
+    print("[direct BHTD] => direct [1,6,1,128] reshape == old create-heads transposed; transpose-free & PCC-safe.")
+
+
 def test_concat_heads_contract(mesh):
     """per-head core_out [1,1,6,128]  →  flat [1,1,768] (the _apply_norm_gated reshape side)."""
     torch.manual_seed(1)

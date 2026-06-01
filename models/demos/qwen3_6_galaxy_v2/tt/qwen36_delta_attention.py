@@ -219,6 +219,15 @@ class TtQwen36DeltaAttention(LightweightModule):
             self.use_tt_lang_recurrent = False
             self.use_tt_lang_recurrent_v2 = False
 
+        # GDN decode create-heads fusion: produce per-head q/k/v/beta/g already
+        # in the recurrent core's [B, H, T, D] layout so the pure-ttnn fp32
+        # recurrent core can SKIP its 5 input transposes. PCC-safe at T=1
+        # (reshape-then-transpose == direct reshape for a T=1 contiguous tensor).
+        # Only wired into the pure-ttnn else-branch (recurrent_gated_delta_rule_
+        # ttnn_fp32); the tt-lang kernel paths keep the old [B,T,H,D] layout.
+        env_flag_fused_heads = os.environ.get("QWEN36_DN_FUSED_HEADS", "1").strip()
+        self.use_dn_fused_heads = env_flag_fused_heads == "1"
+
         self.mesh_device = mesh_device
         self.args = args
         self.model_config = args.get_model_config()
@@ -2252,11 +2261,17 @@ class TtQwen36DeltaAttention(LightweightModule):
 
         return o_bf16, h
 
-    def _gqa_expand_q_k(self, q, k, B, T):
+    def _gqa_expand_q_k(self, q, k, B, T, head_dim_axis=2):
+        # head_dim_axis selects the head axis to expand:
+        #   2 -> classic [B,T,H,D] layout (decode old / prefill).
+        #   1 -> fused-heads [B,H,T,D] layout (decode create-heads fusion).
+        # repeat_interleave on the head axis yields head order
+        # [h0,h0,h0,h1,h1,h1] in BOTH cases (interleave repeats each head
+        # contiguously regardless of which axis carries the heads).
         ratio = self.n_v_per_row // self.n_k_per_row
         mem = ttnn.DRAM_MEMORY_CONFIG
-        q_e = ttnn.repeat_interleave(q, ratio, dim=2, memory_config=mem)
-        k_e = ttnn.repeat_interleave(k, ratio, dim=2, memory_config=mem)
+        q_e = ttnn.repeat_interleave(q, ratio, dim=head_dim_axis, memory_config=mem)
+        k_e = ttnn.repeat_interleave(k, ratio, dim=head_dim_axis, memory_config=mem)
         return q_e, k_e
 
     def _build_dn_norm_sharded_cfg(self, B, T):
@@ -2896,24 +2911,58 @@ class TtQwen36DeltaAttention(LightweightModule):
         k.deallocate(True)
         v.deallocate(True)
 
-        # 3. Reshape to per-head layout
-        q_h = ttnn.reshape(q_conv, [B, T, self.n_k_per_row, self.head_dim])
-        k_h = ttnn.reshape(k_conv, [B, T, self.n_k_per_row, self.head_dim])
-        v_h = ttnn.reshape(v_conv, [B, T, self.n_v_per_row, self.head_dim])
-        z_h = ttnn.reshape(z, [B, T, self.n_v_per_row, self.head_dim])
-        q_conv.deallocate(True)
-        k_conv.deallocate(True)
-        v_conv.deallocate(True)
+        # The fused-heads layout is only wired into the pure-ttnn fp32 recurrent
+        # core (the else-branch below). The tt-lang kernel paths still expect the
+        # old [B,T,H,D] layout, so disable fusion when any of them is active.
+        use_fused_heads = self.use_dn_fused_heads and not (
+            (self.use_tt_lang_recurrent_v3 and self._recurrent_v3_kernel_state is not None)
+            or (self.use_tt_lang_recurrent_v2 and self._recurrent_v2_kernel_state is not None)
+            or (self.use_tt_lang_recurrent and self._recurrent_kernel_state is not None)
+        )
 
-        # 4. beta and g
-        beta, g = self._compute_beta_g(b, a, B, T)
-        b.deallocate(True)
-        a.deallocate(True)
+        if use_fused_heads:
+            # 3'. Reshape directly into the recurrent core's [B, H, T, D] layout.
+            #     At T=1 this is bit-identical to the old reshape([B,T,H,D]) +
+            #     transpose(1,2) (same contiguous memory, different target shape).
+            #     z_h is left in [B,T,n_v,D] — the norm/output consume that layout.
+            q_h = ttnn.reshape(q_conv, [B, self.n_k_per_row, T, self.head_dim])
+            k_h = ttnn.reshape(k_conv, [B, self.n_k_per_row, T, self.head_dim])
+            v_h = ttnn.reshape(v_conv, [B, self.n_v_per_row, T, self.head_dim])
+            z_h = ttnn.reshape(z, [B, T, self.n_v_per_row, self.head_dim])
+            q_conv.deallocate(True)
+            k_conv.deallocate(True)
+            v_conv.deallocate(True)
 
-        # 5. GQA expand q, k
-        q_exp, k_exp = self._gqa_expand_q_k(q_h, k_h, B, T)
-        q_h.deallocate(True)
-        k_h.deallocate(True)
+            # 4'. beta and g as [B, n_v, T] (= [1,6,1]) — pre-transposed.
+            beta, g = self._compute_beta_g(b, a, B, T)
+            b.deallocate(True)
+            a.deallocate(True)
+            beta = ttnn.reshape(beta, [B, self.n_v_per_row, T])
+            g = ttnn.reshape(g, [B, self.n_v_per_row, T])
+
+            # 5'. GQA expand q, k on the head dim (now dim 1).
+            q_exp, k_exp = self._gqa_expand_q_k(q_h, k_h, B, T, head_dim_axis=1)
+            q_h.deallocate(True)
+            k_h.deallocate(True)
+        else:
+            # 3. Reshape to per-head layout
+            q_h = ttnn.reshape(q_conv, [B, T, self.n_k_per_row, self.head_dim])
+            k_h = ttnn.reshape(k_conv, [B, T, self.n_k_per_row, self.head_dim])
+            v_h = ttnn.reshape(v_conv, [B, T, self.n_v_per_row, self.head_dim])
+            z_h = ttnn.reshape(z, [B, T, self.n_v_per_row, self.head_dim])
+            q_conv.deallocate(True)
+            k_conv.deallocate(True)
+            v_conv.deallocate(True)
+
+            # 4. beta and g
+            beta, g = self._compute_beta_g(b, a, B, T)
+            b.deallocate(True)
+            a.deallocate(True)
+
+            # 5. GQA expand q, k
+            q_exp, k_exp = self._gqa_expand_q_k(q_h, k_h, B, T)
+            q_h.deallocate(True)
+            k_h.deallocate(True)
 
         # 6. Recurrent delta rule — read persistent recurrent state buffer.
         # V2-decode-debug: use the fp32-state fork so the recurrent state stays
@@ -2962,6 +3011,7 @@ class TtQwen36DeltaAttention(LightweightModule):
                 g=g,
                 initial_state=self.dn_state_buffer,
                 device=self.mesh_device,
+                pre_transposed=use_fused_heads,
             )
         q_exp.deallocate(True)
         k_exp.deallocate(True)
