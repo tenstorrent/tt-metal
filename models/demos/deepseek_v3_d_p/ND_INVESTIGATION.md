@@ -190,6 +190,65 @@ Two options:
    reused before all receivers consumed it). Kernels are JIT-compiled, so this can be
    iterated and verified on-device with the 5L/25600 fingerprint A/B (no full rebuild).
 
+## FINAL SUMMARY (what is proven)
+
+**Root cause:** the **unified fused routed-expert FFN kernel**
+(`ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/`)
+produces **different output for bit-identical input across separate processes**.
+This is the DeepSeek-V3 prefill non-determinism (different first token run-to-run).
+
+**Chain of proof (all on this branch, bit-exact fingerprints):**
+1. Within one process the model is fully deterministic (iter0..4 bit-identical) ⇒
+   not iter-to-iter leaked state; the issue is across-process.
+2. At 5L/1024 the whole model is deterministic across processes (combine/dispatch
+   garbage present but masked) ⇒ needs scale.
+3. At 5L/25600, first diverging layer = layer_3 (first MoE). GLOBAL fingerprints:
+   `moe_input`, gate scores/indices, `shared_output`, `dispatched_buf` (FFN INPUT) =
+   bit-identical; `expert_outputs` (FFN OUTPUT) and `routed_output` = DIFFER
+   (finite, nonfinite=0). Same input → different output = non-deterministic FFN.
+4. A/B `TT_REXPERT_FORCE_NAIVE=1` (per-expert extract→`routed_expert_ffn`→insert,
+   standard matmuls): `expert_outputs`, `routed_output`, `layer_3`, `lm_head` all
+   bit-identical across processes ⇒ the NAIVE routed FFN is deterministic; only the
+   UNIFIED fused kernel is not.
+
+**Ruled OUT as the cause** (each measured): KV-cache state, gate/routing
+(indices identical), dispatch buffer (FFN input identical), shared expert (GLOBAL
+identical), combine `init_zeros=False` garbage / H1 (present + harmlessly masked in
+BOTH unified and naive), dispatch-buffer capacity overflow (12356 ≪ 204800).
+
+**Fix attempt tried & ruled out:** replacing the unified reader's pre-valid-semaphore
+`noc_async_writes_flushed()` with `noc_async_write_barrier()` (all 4 mcast sites) did
+NOT restore determinism (kernel confirmed JIT-recompiled). So the race is **not**
+sender-side write-completion ordering — it is deeper (NoC-VC ordering of the data
+mcast vs the posted valid-semaphore atomic, a receiver-side visibility gap, or the
+concurrent dual-sender / activated-L1-mcast optimization). The drift is finite (no
+NaN), in valid rows, and timing-dependent — characteristic of a multicast/L1
+visibility race, not an accumulation-order or uninitialized-NaN bug.
+
+## RECOMMENDED FIX
+- **Immediate / low-risk (restores determinism now):** route the routed expert
+  through the deterministic naive path — set `TT_REXPERT_FORCE_NAIVE=1`, or flip the
+  `use_unified` default in `tt_routed_expert.py`. Cost: loses the unified kernel's
+  Blackhole perf gain. Verified deterministic (lm_head bit-identical) at 5L/25600.
+- **Proper fix (kernel owner):** repair the multicast/L1-visibility race inside the
+  unified FFN kernel. Reproduce + verify with the 5L/25600 GLOBAL `routed_output`
+  fingerprint A/B (kernels are JIT — no full rebuild). Likely areas, in priority:
+  (a) NoC/VC used by the activated-L1 mcast (phase 4) vs its `flushed`/valid-sem
+  (the comment says it runs on "NoC 1" while the flush is default-NoC);
+  (b) the receiver-side guarantee that mcast data is L1-visible before the valid
+  semaphore is observed (posted-atomic vs posted-write ordering);
+  (c) the concurrent dual-sender "ack both upfront" optimization.
+
+## How to reproduce / verify (fast)
+```
+TT_DS_ND_DEBUG=1 [TT_DS_ND_DEBUG_LAYER=-1] [TT_REXPERT_FORCE_NAIVE=1] \
+  <env...> pytest test_prefill_transformer.py -xvs \
+  -k "mesh-8x4 and smoke and pretrained and 5_layers and iter1 and longbook_qa_eng and 25600 and fp32 and right_pad and balanced"
+```
+Run twice (two processes); compare with `nd_tools/nd_compare_runs.py <logA> <logB> --iter 0`.
+`routed_output` GLOBAL bit-identical across the two ⇒ deterministic. The 5L/25600
+config reproduces in ~3 min/run; 1024 tokens does NOT reproduce (too little scale).
+
 ### Status of experiments
 - [ ] Within-process drift (iter-to-iter) — pending device (blocked by soak)
 - [ ] Across-process first-diverging stage — pending device
