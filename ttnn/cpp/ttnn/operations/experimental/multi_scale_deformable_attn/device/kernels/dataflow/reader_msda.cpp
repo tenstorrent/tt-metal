@@ -49,11 +49,11 @@
 
 namespace {
 
-// TODO: consolidate with the byte-identical helpers in
+// Byte-identical to the `bfloat16_to_float` / `float_to_bfloat16` helpers in
 // ttnn/cpp/ttnn/operations/pool/grid_sample/device/kernels/grid_sample_reader_common.hpp
-// (`bfloat16_to_float` / `float_to_bfloat16`) and ~4 other sites in the
-// repo. Out of scope for this PR — a cross-cutting helper-consolidation
-// PR would do it once.
+// and a handful of other reader kernels; duplicated here to keep the kernel
+// dependency-free.
+// TODO(#45742): consolidate these per-op copies into one shared kernel header.
 inline float bf16_to_float(uint16_t bf16) {
     uint32_t tmp = static_cast<uint32_t>(bf16) << 16;
     float result;
