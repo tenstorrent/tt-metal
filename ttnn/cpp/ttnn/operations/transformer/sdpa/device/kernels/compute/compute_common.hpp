@@ -742,7 +742,8 @@ void calculate_exponential_polynomial() {
 
     for (int d = 0; d < ITERATIONS; d++) {
         // Load the input.
-        constexpr uint8_t input_type = IS_FP32_DEST_ACC_EN ? InstrModLoadStore::FP32 : InstrModLoadStore::FP16B;
+        constexpr InstrModLoadStore input_type =
+            IS_FP32_DEST_ACC_EN ? InstrModLoadStore::FP32 : InstrModLoadStore::FP16B;
         TTI_SFPLOAD(p_sfpu::LREG2, input_type, ADDR_MOD_X, 0);
 
         if constexpr (SCALE_EN) {
