@@ -110,19 +110,17 @@ static int64_t compute_num_cores_across_channel(
             shard_orientation = shard_spec->orientation;
         }
         return get_group_norm_cores_across_channel(mem_layout, core_grid, shard_orientation);
-    } else {
-        uint32_t num_virtual_cols =
-            compute_num_virtual_cols(core_grid.x, num_groups, static_cast<uint32_t>(num_channel));
-        TT_FATAL(
-            num_virtual_cols > 0,
-            "group_norm: Cannot determine num_virtual_cols for core_grid x={}, num_groups={}, "
-            "num_channels={}. num_virtual_cols must satisfy (num_channels / nvc) % TILE_SIZE == 0 "
-            "and num_groups % nvc == 0.",
-            core_grid.x,
-            num_groups,
-            num_channel);
-        return static_cast<int64_t>(num_virtual_cols);
     }
+    uint32_t num_virtual_cols = compute_num_virtual_cols(core_grid.x, num_groups, static_cast<uint32_t>(num_channel));
+    TT_FATAL(
+        num_virtual_cols > 0,
+        "group_norm: Cannot determine num_virtual_cols for core_grid x={}, num_groups={}, "
+        "num_channels={}. num_virtual_cols must satisfy (num_channels / nvc) % TILE_SIZE == 0 "
+        "and num_groups % nvc == 0.",
+        core_grid.x,
+        num_groups,
+        num_channel);
+    return static_cast<int64_t>(num_virtual_cols);
 }
 
 ttnn::Tensor get_mask_tensor(const ttnn::Tensor& input_tensor, const CoreGrid& core_grid, const int num_groups) {
@@ -162,6 +160,7 @@ Tensor group_norm(
     const float epsilon,
     const std::optional<Tensor>& weight,
     const std::optional<Tensor>& bias,
+    const std::optional<Tensor>& /*input_mask*/,
     const std::optional<Tensor>& reciprocals,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DataType> /*dtype*/,
