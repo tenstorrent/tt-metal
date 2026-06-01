@@ -5,9 +5,12 @@
 #include <cmath>
 #include <utility>
 
+#include <tt-metalium/constants.hpp>
+
 #include "ttnn/operations/transformer/sdpa/sdpa.hpp"
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/joint_sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation.hpp"
@@ -176,12 +179,12 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> joint_scaled_dot_product_attention(
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_product_attention(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
-    const ttnn::Tensor& input_tensor_v,
+    const std::optional<ttnn::Tensor>& input_tensor_v,
     const ttnn::Tensor& joint_tensor_q,
     const ttnn::Tensor& joint_tensor_k,
-    const ttnn::Tensor& joint_tensor_v,
+    const std::optional<ttnn::Tensor>& joint_tensor_v,
     ttnn::Tensor& persistent_output_buffer_k,
-    ttnn::Tensor& persistent_output_buffer_v,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer_v,
     const std::string& joint_strategy,
     std::size_t logical_n,
     ttnn::operations::transformer::SDPAProgramConfig program_config,
@@ -197,7 +200,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     bool is_balanced,
     std::optional<float> scale,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-    ttnn::ccl::CoreAllocationStrategy core_allocation_strategy) {
+    ttnn::ccl::CoreAllocationStrategy core_allocation_strategy,
+    std::optional<uint32_t> head_dim_v) {
     auto output_tensors = ttnn::prim::ring_joint_scaled_dot_product_attention(
         input_tensor_q,
         input_tensor_k,  // AllGather input
@@ -222,11 +226,88 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         is_balanced,
         scale,
         compute_kernel_config,
-        core_allocation_strategy);
+        core_allocation_strategy,
+        head_dim_v);
     return {
         output_tensors[prim::RING_JOINT_SDPA_OUTPUT_IDX],
         output_tensors[prim::RING_JOINT_SDPA_JOINT_OUTPUT_IDX],
         output_tensors[prim::RING_JOINT_SDPA_STATS_OUTPUT_IDX]};
+}
+
+std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
+    const ttnn::Tensor& input_tensor_q,
+    const ttnn::Tensor& input_tensor_kv,
+    ttnn::Tensor& persistent_output_buffer_kv,
+    const uint32_t head_dim_v,
+    std::size_t logical_n,
+    ttnn::operations::transformer::SDPAProgramConfig program_config,
+    const int32_t dim,
+    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+    const uint32_t num_links,
+    const uint32_t cluster_axis,
+    const MeshDevice& mesh_device,
+    const ttnn::ccl::Topology topology,
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    const CoreCoord ccl_core_grid_offset,
+    bool is_causal,
+    bool is_balanced,
+    std::optional<float> scale,
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    ttnn::ccl::CoreAllocationStrategy core_allocation_strategy) {
+    const auto& q_shape = input_tensor_q.logical_shape();
+    const auto& kv_shape = input_tensor_kv.logical_shape();
+    TT_FATAL(head_dim_v > 0, "head_dim_v must be > 0");
+    TT_FATAL(
+        head_dim_v < kv_shape[3],
+        "ring_mla expects V to be a strict prefix of KV and smaller than K dim. Got V: {}, K: {}",
+        head_dim_v,
+        kv_shape[3]);
+    TT_FATAL(
+        head_dim_v % tt::constants::TILE_WIDTH == 0,
+        "head_dim_v must be tile aligned. Got V: {}, tile width: {}",
+        head_dim_v,
+        tt::constants::TILE_WIDTH);
+
+    auto joint_tensor_q = ttnn::empty(
+        ttnn::Shape{q_shape[0], q_shape[1], 0, q_shape[3]},
+        input_tensor_q.dtype(),
+        Layout::TILE,
+        input_tensor_q.device(),
+        input_tensor_q.memory_config());
+    auto joint_tensor_k = ttnn::empty(
+        ttnn::Shape{kv_shape[0], kv_shape[1], 0, kv_shape[3]},
+        input_tensor_kv.dtype(),
+        Layout::TILE,
+        input_tensor_kv.device(),
+        input_tensor_kv.memory_config());
+
+    auto output_tensors = ttnn::prim::ring_joint_scaled_dot_product_attention(
+        input_tensor_q,
+        input_tensor_kv,
+        std::nullopt,
+        joint_tensor_q,
+        joint_tensor_k,
+        std::nullopt,
+        persistent_output_buffer_kv,
+        std::nullopt,
+        "rear",
+        logical_n,
+        std::move(program_config),
+        dim,
+        multi_device_global_semaphore,
+        num_links,
+        cluster_axis,
+        mesh_device,
+        topology,
+        ccl_core_grid_offset,
+        subdevice_id,
+        is_causal,
+        is_balanced,
+        scale,
+        compute_kernel_config,
+        core_allocation_strategy,
+        head_dim_v);
+    return {output_tensors[prim::RING_JOINT_SDPA_OUTPUT_IDX], output_tensors[prim::RING_JOINT_SDPA_STATS_OUTPUT_IDX]};
 }
 
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteExpRingJointAttention::invoke(

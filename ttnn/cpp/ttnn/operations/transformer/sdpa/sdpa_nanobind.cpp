@@ -26,12 +26,12 @@ namespace {
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_product_attention_wrapper(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
-    const ttnn::Tensor& input_tensor_v,
+    const std::optional<ttnn::Tensor>& input_tensor_v,
     const ttnn::Tensor& joint_tensor_q,
     const ttnn::Tensor& joint_tensor_k,
-    const ttnn::Tensor& joint_tensor_v,
+    const std::optional<ttnn::Tensor>& joint_tensor_v,
     ttnn::Tensor& persistent_output_buffer_k,
-    ttnn::Tensor& persistent_output_buffer_v,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer_v,
     const std::string& joint_strategy,
     std::size_t logical_n,
     const SDPAProgramConfig& program_config,
@@ -47,7 +47,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     CoreCoord ccl_core_grid_offset,
     bool use_column_major_ccl,
     bool is_causal,
-    bool is_balanced) {
+    bool is_balanced,
+    std::optional<uint32_t> head_dim_v) {
     auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                                          : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
     auto outputs = ttnn::transformer::ring_joint_scaled_dot_product_attention(
@@ -74,8 +75,53 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         is_balanced,
         scale,
         compute_kernel_config,
-        strategy);
+        strategy,
+        head_dim_v);
     return outputs;
+}
+
+std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla_wrapper(
+    const ttnn::Tensor& input_tensor_q,
+    const ttnn::Tensor& input_tensor_kv,
+    ttnn::Tensor& persistent_output_buffer_kv,
+    uint32_t head_dim_v,
+    std::size_t logical_n,
+    const SDPAProgramConfig& program_config,
+    std::optional<float> scale,
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    int32_t dim,
+    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+    uint32_t num_links,
+    uint32_t cluster_axis,
+    const MeshDevice& mesh_device,
+    ttnn::ccl::Topology topology,
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    CoreCoord ccl_core_grid_offset,
+    bool use_column_major_ccl,
+    bool is_causal,
+    bool is_balanced) {
+    auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
+                                         : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
+    return ttnn::transformer::ring_mla(
+        input_tensor_q,
+        input_tensor_kv,
+        persistent_output_buffer_kv,
+        head_dim_v,
+        logical_n,
+        program_config,
+        dim,
+        multi_device_global_semaphore,
+        num_links,
+        cluster_axis,
+        mesh_device,
+        topology,
+        subdevice_id,
+        ccl_core_grid_offset,
+        is_causal,
+        is_balanced,
+        scale,
+        compute_kernel_config,
+        strategy);
 }
 
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> exp_ring_joint_scaled_dot_product_attention_wrapper(
@@ -394,15 +440,19 @@ void bind_sdpa(nb::module_& mod) {
         Args:
             input_tensor_q (ttnn.Tensor): Original queries  [b x nh x N/num_devices x dh].
             input_tensor_k (ttnn.Tensor): Original keys     [b x nh x N/num_devices x dh].
-            input_tensor_v (ttnn.Tensor): Original values   [b x nh x N/num_devices x dh].
+            input_tensor_v (ttnn.Tensor, optional): Original values [b x nhv x N/num_devices x dv].
+                Pass None for latent-V mode, where V is read from K's first head_dim_v columns.
 
             joint_tensor_q (ttnn.Tensor): Joint queries     [b x nh x L x dh].
             joint_tensor_k (ttnn.Tensor): Joint keys        [b x nh x L x dh].
-            joint_tensor_v (ttnn.Tensor): Joint values      [b x nh x L x dh].
+            joint_tensor_v (ttnn.Tensor, optional): Joint values [b x nhv x L x dv].
+                May be None in latent-V mode when L == 0.
 
         Keyword args:
             persistent_output_buffer_k (ttnn.Tensor): Persistent buffer for gathered K tensor.
-            persistent_output_buffer_v (ttnn.Tensor): Persistent buffer for gathered V tensor.
+            persistent_output_buffer_v (ttnn.Tensor, optional): Persistent buffer for gathered V tensor.
+                Must be None when input_tensor_v is None.
+            head_dim_v (int, optional): Required when input_tensor_v is None.
             joint_strategy (str): Strategy for joint attention. Must be "rear".
             logical_n (int): The logical sequence length N before sharding across devices.
             program_config (ttnn.SDPAProgramConfig): Program configuration for the operation.
@@ -441,14 +491,76 @@ void bind_sdpa(nb::module_& mod) {
         &ring_joint_scaled_dot_product_attention_wrapper,
         nb::arg("input_tensor_q").noconvert(),
         nb::arg("input_tensor_k").noconvert(),
-        nb::arg("input_tensor_v").noconvert(),
+        nb::arg("input_tensor_v").none(),
         nb::arg("joint_tensor_q").noconvert(),
         nb::arg("joint_tensor_k").noconvert(),
-        nb::arg("joint_tensor_v").noconvert(),
+        nb::arg("joint_tensor_v").none(),
         nb::kw_only(),
         nb::arg("persistent_output_buffer_k").noconvert(),
-        nb::arg("persistent_output_buffer_v").noconvert(),
+        nb::arg("persistent_output_buffer_v").none(),
         nb::arg("joint_strategy"),
+        nb::arg("logical_n"),
+        nb::arg("program_config").noconvert(),
+        nb::arg("scale") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("dim"),
+        nb::arg("multi_device_global_semaphore"),
+        nb::arg("num_links"),
+        nb::arg("cluster_axis"),
+        nb::arg("mesh_device"),
+        nb::arg("topology"),
+        nb::arg("subdevice_id") = nb::none(),
+        nb::arg("ccl_core_grid_offset"),
+        nb::arg("use_column_major_ccl") = false,
+        nb::arg("is_causal").noconvert() = false,
+        nb::arg("is_balanced").noconvert() = false,
+        nb::arg("head_dim_v").noconvert() = nb::none());
+
+    const auto* const ring_mla_doc = R"doc(
+        Ring MLA attention over a single KV tensor.
+
+        K and V are represented by one tensor. QK uses the full KV head dimension and
+        QKT@V uses the first head_dim_v columns as V. The V dimension must be smaller
+        than K and tile aligned.
+
+        Args:
+            input_tensor_q (ttnn.Tensor): Queries [b x nqh x N/num_devices x dh].
+            input_tensor_kv (ttnn.Tensor): Shared KV tensor [b x nkv x N/num_devices x dh].
+
+        Keyword args:
+            persistent_output_buffer_kv (ttnn.Tensor): Persistent buffer for gathered KV tensor.
+            head_dim_v (int): Tile-aligned V hidden dimension, read from KV's prefix.
+            logical_n (int): Logical global sequence length before sharding.
+            program_config (ttnn.SDPAProgramConfig): Program configuration for the operation.
+            scale (float, optional): Scale factor for QK^T. Defaults to None.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to None.
+            dim (int): Dimension for ring all-gather.
+            multi_device_global_semaphore (List[ttnn.GlobalSemaphore]): Global semaphores for CCL synchronization.
+            num_links (int): Number of CCL links.
+            cluster_axis (int): Mesh axis for all-gather.
+            mesh_device (ttnn.MeshDevice): Multi-device mesh.
+            topology (ttnn.ccl.Topology): Communication topology.
+            subdevice_id (Optional[tt.tt_metal.SubDeviceId]): Sub-device identifier. Defaults to None.
+            ccl_core_grid_offset (ttnn.CoreCoord): Core grid offset for CCL workers.
+            use_column_major_ccl (bool): If true, allocate CCL workers column-major. Defaults to False.
+            is_causal (bool): Whether to use causal attention masking. Defaults to False.
+            is_balanced (bool): Whether to use balanced causal work distribution. Defaults to False.
+
+        Returns:
+            (ttnn.Tensor, ttnn.Tensor):
+              - Attention output [b x nqh x N/num_devices x head_dim_v].
+              - Streaming statistics scratch [b x nqh x 2*N/num_devices x 1].
+        )doc";
+
+    ttnn::bind_function<"ring_mla", "ttnn.transformer.">(
+        mod,
+        ring_mla_doc,
+        &ring_mla_wrapper,
+        nb::arg("input_tensor_q").noconvert(),
+        nb::arg("input_tensor_kv").noconvert(),
+        nb::kw_only(),
+        nb::arg("persistent_output_buffer_kv").noconvert(),
+        nb::arg("head_dim_v").noconvert(),
         nb::arg("logical_n"),
         nb::arg("program_config").noconvert(),
         nb::arg("scale") = nb::none(),

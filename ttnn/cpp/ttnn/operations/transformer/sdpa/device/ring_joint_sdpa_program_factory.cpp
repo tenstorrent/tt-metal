@@ -87,14 +87,16 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
 
     const auto& input_tensor_q = tensor_args.input_q;
     const auto& input_tensor_k = tensor_args.input_k;
-    const auto& input_tensor_v = tensor_args.input_v;
+    const bool v_shares_k_buffer = tensor_args.has_latent_v();
+    const auto& input_tensor_v = tensor_args.input_v.has_value() ? tensor_args.input_v.value() : input_tensor_k;
 
     const auto& joint_tensor_q = tensor_args.joint_q;
     const auto& joint_tensor_k = tensor_args.joint_k;
-    const auto& joint_tensor_v = tensor_args.joint_v;
+    const auto& joint_tensor_v = tensor_args.joint_v.has_value() ? tensor_args.joint_v.value() : joint_tensor_k;
 
     const auto& gathered_input_tensor_k = tensor_args.gathered_k;
-    const auto& gathered_input_tensor_v = tensor_args.gathered_v;
+    const auto& gathered_input_tensor_v =
+        tensor_args.gathered_v.has_value() ? tensor_args.gathered_v.value() : gathered_input_tensor_k;
 
     auto& output_tensor = output_tensors[RING_JOINT_SDPA_OUTPUT_IDX];
     auto& joint_output_tensor = output_tensors[RING_JOINT_SDPA_JOINT_OUTPUT_IDX];
@@ -161,22 +163,32 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
     const auto& q_shape = input_tensor_q.logical_shape();
     const auto& k_shape = gathered_input_tensor_k.logical_shape();
     const auto& joint_q_shape = joint_tensor_q.logical_shape();
-    const auto& v_shape = gathered_input_tensor_v.logical_shape();
 
     log_debug(tt::LogOp, "q_shape: {}", q_shape);
     log_debug(tt::LogOp, "k_shape (gathered): {}", k_shape);
-    log_debug(tt::LogOp, "v_shape (gathered): {}", v_shape);
+    if (tensor_args.gathered_v.has_value()) {
+        log_debug(tt::LogOp, "v_shape (gathered): {}", tensor_args.gathered_v->logical_shape());
+    } else {
+        log_debug(
+            tt::LogOp,
+            "v_shape (latent): [B={}, NHV=1, N=0, DH={}]",
+            q_shape[0],
+            tensor_args.v_head_dim(args.latent_v_head_dim));
+    }
 
     // q_local_padded_N (Q rows per device) can be shorter than kv_local_padded_N for chunked prefill.
+    // Latent-V mode: V tensors are omitted; the reader reuses K's buffer and
+    // reads only the first vDHt head-dim tiles.
     const uint32_t B = q_shape[0];
     const uint32_t NH = q_shape[1];
     const uint32_t NHK = k_shape[1];
+    const uint32_t NHV = tensor_args.v_num_heads();
     const uint32_t DH = q_shape[3];
     const uint32_t q_local_padded_N = q_shape[2];
     const uint32_t kv_local_padded_N = tensor_args.input_k.logical_shape()[2];
     const uint32_t padded_N = k_shape[2];
     const uint32_t L = joint_q_shape[2];
-    const uint32_t vDH = v_shape[3];
+    const uint32_t vDH = tensor_args.v_head_dim(args.latent_v_head_dim);
 
     const uint32_t q_local_padded_Nt = q_local_padded_N / tt::constants::TILE_HEIGHT;
     const uint32_t kv_local_padded_Nt = kv_local_padded_N / tt::constants::TILE_HEIGHT;
@@ -233,6 +245,7 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
     log_debug(tt::LogOp, "B: {}", B);
     log_debug(tt::LogOp, "NH: {}", NH);
     log_debug(tt::LogOp, "NHK: {}", NHK);
+    log_debug(tt::LogOp, "NHV: {}", NHV);
     log_debug(tt::LogOp, "L: {}", L);
     log_debug(tt::LogOp, "DH: {}", DH);
     log_debug(tt::LogOp, "vDH: {}", vDH);
@@ -337,7 +350,9 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
-    uint32_t k_tiles = Sk_chunk_t * DHt * 2;  // double buffer
+    // Latent-V reuses the K CB for K^T and compact V. A third fixed-size entry lets the reader
+    // materialize next V while compute still consumes current V.
+    uint32_t k_tiles = Sk_chunk_t * DHt * (v_shares_k_buffer ? 3 : 2);
     uint32_t v_tiles = Sk_chunk_t * vDHt * 2;  // double buffer
     uint32_t mask_tiles = Sq_chunk_t * Sk_chunk_t;
     uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
@@ -377,6 +392,9 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
 
     // Ring-joint streaming supports single-Q-subblock shapes; only fp32 dest acc stays on the legacy path.
     const bool use_streaming_compute = !fp32_dest_acc_en;
+    TT_FATAL(
+        use_streaming_compute || !v_shares_k_buffer,
+        "Latent-V ring attention is implemented only for streaming compute (fp32_dest_acc_en must be false)");
     log_debug(
         tt::LogOp,
         "use_streaming_compute: {} (is_causal={}, Sq_chunk_t={}, Sk_chunk_t={}, sbh={}, sbw={})",
@@ -495,6 +513,8 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
         static_cast<uint32_t>(tensor_args.is_chunked()),
         num_active_cores,
         chunk_size_t,
+        NHV,
+        static_cast<uint32_t>(v_shares_k_buffer),
     };
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
@@ -553,12 +573,17 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
     // K chain selection: batch chain when NHK == 1 (MLA mode), else head chain
     // Computed early to gate resource allocation
     const bool k_uses_batch_chain = (NHK == 1);
+    const bool v_uses_batch_chain = !v_shares_k_buffer && (NHV == 1);
 
     const auto head_sems = ChainSemaphores::create(desc, core_grid_set);  // head chain (V, optionally K)
     // Only create batch semaphores for MLA mode (NHK == 1)
     std::optional<ChainSemaphores> batch_sems;
     if (k_uses_batch_chain) {
         batch_sems = ChainSemaphores::create(desc, core_grid_set);  // batch chain (K in MLA mode)
+    }
+    std::optional<ChainSemaphores> v_batch_sems;
+    if (v_uses_batch_chain) {
+        v_batch_sems = ChainSemaphores::create(desc, core_grid_set);
     }
 
     // Append semaphore ids to reader compile-time args (must match reader kernel expectations)
@@ -569,6 +594,10 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
     if (k_uses_batch_chain) {
         batch_sems->append_to_compile_args(reader_compile_time_args);
         reader_compile_time_args.push_back(0);  // batch_mcast_enabled placeholder (patched after chain construction)
+    }
+    if (v_uses_batch_chain) {
+        v_batch_sems->append_to_compile_args(reader_compile_time_args);
+        reader_compile_time_args.push_back(0);  // v_batch_mcast_enabled placeholder (always 0 for now)
     }
 
     std::vector<uint32_t> writer_compile_time_args = {
@@ -650,7 +679,8 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
         args.is_balanced,
         static_cast<uint32_t>(enable_zigzag_balancing),
         static_cast<uint32_t>(tensor_args.is_chunked()),
-        chunk_size_t};
+        chunk_size_t,
+        static_cast<uint32_t>(v_shares_k_buffer)};
 
     std::map<std::string, std::string> defines;
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
@@ -717,7 +747,7 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
 
     const uint32_t cb_q_in = allocate_tile_cb(q_tiles, q_tile_size, q_df);
     const uint32_t cb_k_in = allocate_tile_cb(k_tiles, k_tile_size, k_df);
-    const uint32_t cb_v_in = allocate_tile_cb(v_tiles, v_tile_size, v_df);
+    const uint32_t cb_v_in = v_shares_k_buffer ? cb_k_in : allocate_tile_cb(v_tiles, v_tile_size, v_df);
 
     // Lightweight mask CB: holds neginf + optional causal diagonal + optional partial tiles.
     // Used for both causal (ring_iter 0) and padding (ring_iter > 0) masking.
@@ -1343,8 +1373,18 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
     if (k_uses_batch_chain) {
         reader_compile_time_args[sem_args_offset + 7] = k_mcast_enabled ? 1 : 0;
     }
+    if (v_uses_batch_chain) {
+        const uint32_t v_sem_args_offset = sem_args_offset + 4 + (k_uses_batch_chain ? 4 : 0);
+        reader_compile_time_args[v_sem_args_offset + 3] = k_mcast_enabled ? 1 : 0;
+    }
 
-    log_info(tt::LogOp, "V chain mode: head ({})", head_mcast_enabled ? "mcast" : "unicast");
+    if (v_uses_batch_chain) {
+        log_info(tt::LogOp, "V chain mode: batch ({})", k_mcast_enabled ? "mcast" : "unicast");
+    } else if (v_shares_k_buffer) {
+        log_info(tt::LogOp, "V chain mode: shared with K (no separate V chain)");
+    } else {
+        log_info(tt::LogOp, "V chain mode: head ({})", head_mcast_enabled ? "mcast" : "unicast");
+    }
     if (k_uses_batch_chain) {
         log_info(
             tt::LogOp,
@@ -1453,6 +1493,14 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
             reader_args.push_back(k_chain_max_q[i]);  // For K mcast loop padding (per-chain)
         }
 
+        // V batch chain args (when NHV == 1)
+        if (v_uses_batch_chain) {
+            std::vector<uint32_t> v_batch_chain_args;
+            batch_chain.append_to_args(v_batch_chain_args);
+            reader_args.append(v_batch_chain_args);
+            reader_args.push_back(k_mcast_enabled ? k_chain_max_q[i] : work.global_q_count);
+        }
+
         // Inject fused-op synchronization RT args (AllGather) here; it will append to reader_args
         std::vector<uint32_t> reader_signaler_args;
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(reader_signaler_args);
@@ -1497,14 +1545,13 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
         sdpa_fused_op_signaler->fused_op_receiver_signal_semaphores,
         sdpa_fused_op_signaler->fused_op_signaler_mode);
 
-    std::vector<Tensor> all_gather_input_tensors = {
-        input_tensor_k,
-        input_tensor_v,
-    };
-    std::vector<Tensor> all_gather_output_tensors = {
-        gathered_input_tensor_k,
-        gathered_input_tensor_v,
-    };
+    std::vector<Tensor> all_gather_input_tensors = args.all_gather_tensor_args.input_tensor;
+    std::vector<Tensor> all_gather_output_tensors;
+    all_gather_output_tensors.reserve(args.all_gather_tensor_args.persistent_output_buffer.size());
+    for (const auto& output_buffer : args.all_gather_tensor_args.persistent_output_buffer) {
+        TT_FATAL(output_buffer.has_value(), "RingJointSDPA requires persistent all-gather output buffers");
+        all_gather_output_tensors.push_back(output_buffer.value());
+    }
     // Append the all-gather portion to `desc`. The helper assigns sequential
     // semaphore IDs starting at `desc.semaphores.size()` (current count) and
     // returns kernel indices into `desc.kernels`. Runtime args are auto-patched

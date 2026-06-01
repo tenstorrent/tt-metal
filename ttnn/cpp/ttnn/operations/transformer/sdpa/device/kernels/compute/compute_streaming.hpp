@@ -768,6 +768,7 @@ template <
     uint32_t cb_recip_scratch = 0,
     uint32_t cb_normalized_out = 0,
     uint32_t cb_mask_in = 0,
+    uint32_t v_cb_entry_width_t = vDHt,
     uint32_t KT_stride = Sk_chunk_t>
 static void sdpa_inner_loop_step(
     AccumulatorHalf& prev,
@@ -1003,7 +1004,7 @@ static void sdpa_inner_loop_step(
                 }
                 if (kt_sub == 0) {
                     cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
-                    cb_wait_front(cb_v_in, Sk_chunk_t * vDHt);
+                    cb_wait_front(cb_v_in, Sk_chunk_t * v_cb_entry_width_t);
                 }
                 if (kt_sub > 0) {
                     PACK((llk_pack_reconfig_l1_acc(1)));
@@ -1254,7 +1255,7 @@ static void sdpa_inner_loop_step(
 
         // All rows pushed individually — no bulk push needed.
 
-        cb_pop_front(cb_v_in, KT_stride * vDHt);
+        cb_pop_front(cb_v_in, KT_stride * v_cb_entry_width_t);
         cb_pop_front(cb_qkt_im, Sq_chunk_t * KT_stride);
     }
 }
@@ -1568,7 +1569,9 @@ template <
     bool global_n_mask_enabled = false,
     bool local_n_mask_enabled = false,
     bool joint_n_mask_enabled = false,
-    bool straddle_mask_enabled = false>
+    bool straddle_mask_enabled = false,
+    uint32_t v_cb_entry_width_t = vDHt,
+    bool v_shares_k_buffer = false>
 void sdpa_ring_v2(
     const uint32_t global_q_start,
     const uint32_t global_q_end,
@@ -1690,8 +1693,8 @@ void sdpa_ring_v2(
             if (is_causal_iter && k_chunk >= causal_k_limit) {
                 cb_wait_front(cb_kt_in, DHt * Sk_chunk_t);
                 sdpa_cb_pop_front_out_of_line(cb_kt_in, DHt * Sk_chunk_t);
-                cb_wait_front(cb_v_in, Sk_chunk_t * vDHt);
-                sdpa_cb_pop_front_out_of_line(cb_v_in, Sk_chunk_t * vDHt);
+                cb_wait_front(cb_v_in, Sk_chunk_t * v_cb_entry_width_t);
+                sdpa_cb_pop_front_out_of_line(cb_v_in, Sk_chunk_t * v_cb_entry_width_t);
                 KV_chunks_processed_in_iter++;
                 return true;
             }
@@ -1948,7 +1951,9 @@ void sdpa_ring_v2(
                 cb_col_identity,
                 cb_recip_scratch,
                 cb_normalized_out,
-                cb_mask_in>(
+                cb_mask_in,
+                v_cb_entry_width_t,
+                Sk_chunk_t>(
                 q_prev,
                 q_cur,
                 is_last_k_of_last_ring_iter,
@@ -2012,11 +2017,17 @@ void sdpa_ring_v2(
         // On last ring_iter: normalized output already in cb_out from normalize_row_streaming
     }
 
-    // Dummy KV pop for double-buffer alignment (same as sdpa_inner_loop for RING)
-    if (KV_chunks_processed_in_iter % 2 == 0) {
+    // Dummy KV pop for CB write-pointer phase alignment across chained reader cores.
+    uint32_t dummy_kv_chunks = 0;
+    if constexpr (v_shares_k_buffer) {
+        dummy_kv_chunks = (3 - (KV_chunks_processed_in_iter % 3)) % 3;
+    } else if (KV_chunks_processed_in_iter % 2 == 0) {
+        dummy_kv_chunks = 1;
+    }
+    for (uint32_t dummy_chunk = 0; dummy_chunk < dummy_kv_chunks; ++dummy_chunk) {
         cb_wait_front(cb_kt_in, DHt * Sk_chunk_t);
         sdpa_cb_pop_front_out_of_line(cb_kt_in, DHt * Sk_chunk_t);
-        cb_wait_front(cb_v_in, Sk_chunk_t * vDHt);
-        sdpa_cb_pop_front_out_of_line(cb_v_in, Sk_chunk_t * vDHt);
+        cb_wait_front(cb_v_in, Sk_chunk_t * v_cb_entry_width_t);
+        sdpa_cb_pop_front_out_of_line(cb_v_in, Sk_chunk_t * v_cb_entry_width_t);
     }
 }

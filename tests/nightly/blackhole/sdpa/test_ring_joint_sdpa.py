@@ -792,6 +792,194 @@ def run_ring_joint_sdpa(
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
+def run_ring_mla_sdpa(
+    mesh_config,
+    b,
+    nhq,
+    nhk,
+    sq,
+    d_q,
+    d_k,
+    d_v,
+    q_chunk_size,
+    k_chunk_size,
+    q_dtype,
+    kv_dtype,
+    *,
+    is_causal=True,
+    is_balanced=True,
+    pcc_threshold=DEFAULT_PCC_THRESHOLD,
+    rmse_threshold=DEFAULT_RMSE_THRESHOLD,
+    do_check=True,
+    num_iterations=1,
+):
+    """Run ring_mla where V is the first d_v columns of the single KV tensor."""
+    if mesh_config.sp_size < 2:
+        pytest.skip(f"ring_mla requires at least 2 devices in ring, got SP={mesh_config.sp_size}")
+    if nhk != 1:
+        pytest.skip(f"Focused ring_mla test covers MLA shared-KV-head shapes, got nhk={nhk}")
+
+    torch.manual_seed(1234)
+
+    use_ring = mesh_config.sp_size > 2
+    fabric_config = ttnn.FabricConfig.FABRIC_1D_RING if use_ring else ttnn.FabricConfig.FABRIC_1D
+    topology = Topology.Ring if use_ring else Topology.Linear
+    sp_axis = 1
+    tp_axis = 0
+
+    ttnn.set_fabric_config(
+        fabric_config,
+        ttnn.FabricReliabilityMode.STRICT_INIT,
+        None,
+        ttnn.FabricTensixConfig.DISABLED,
+        ttnn.FabricUDMMode.DISABLED,
+        ttnn.FabricManagerMode.DEFAULT,
+    )
+
+    mesh_shape = ttnn.MeshShape(mesh_config.tp_size, mesh_config.sp_size)
+    mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape)
+    num_links = 2
+
+    try:
+        sdpa_compute_grid = (mesh_config.sdpa_cols, mesh_config.grid_rows)
+        ccl_column = mesh_config.ccl_column
+        full_compute_grid = mesh_device.compute_with_storage_grid_size()
+        ccl_sub_device_crs = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(full_compute_grid.x - 1, full_compute_grid.y - 1))}
+        )
+        worker_sub_device_id = ttnn.SubDeviceId(0)
+        worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
+        sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
+        mesh_device.load_sub_device_manager(sub_device_manager)
+        mesh_device.set_sub_device_stall_group([worker_sub_device_id])
+        ccl_semaphore_handles = create_global_semaphores(mesh_device, ccl_sub_device_crs, 0)
+
+        Q = fa_rand(b, nhq, sq, d_q)
+        KV = fa_rand(b, nhk, sq, d_k)
+        V_prefix = KV[:, :, :, :d_v]
+        Q_original, KV_original, V_original = Q, KV, V_prefix
+
+        chunk_order = None
+        if is_balanced:
+            chunk_order = create_balanced_chunk_order(mesh_config.sp_size)
+            Q = reorder_tensor_chunks(Q, chunk_order)
+            KV = reorder_tensor_chunks(KV, chunk_order)
+
+        program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=sdpa_compute_grid,
+            q_chunk_size=q_chunk_size,
+            k_chunk_size=k_chunk_size,
+            exp_approx_mode=False,
+        )
+        compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
+
+        sdpa_input_shard_dims = [None, None]
+        sdpa_input_shard_dims[sp_axis] = 2
+        if mesh_config.tp_size > 1:
+            sdpa_input_shard_dims[tp_axis] = 1
+
+        sdpa_kv_shard_dims = [None, None]
+        sdpa_kv_shard_dims[sp_axis] = 2
+
+        persistent_kv_shard_dims = [None, None]
+        persistent_kv_shard_dims[sp_axis] = None
+
+        tt_Q = ttnn.from_torch(
+            Q,
+            dtype=q_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_input_shard_dims
+            ),
+        )
+        tt_KV = ttnn.from_torch(
+            KV,
+            dtype=kv_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_kv_shard_dims
+            ),
+        )
+        persistent_output_buffer_kv = ttnn.from_torch(
+            torch.zeros(b, nhk, sq, d_k),
+            dtype=kv_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device, mesh_shape=tuple(mesh_device.shape), dims=persistent_kv_shard_dims
+            ),
+        )
+
+        main_row_dim = sdpa_input_shard_dims[0] if sdpa_input_shard_dims[0] is not None else -1
+        main_col_dim = sdpa_input_shard_dims[1] if sdpa_input_shard_dims[1] is not None else -1
+        reference_output = None
+        for i in range(num_iterations):
+            tt_out, _ = ttnn.transformer.ring_mla(
+                tt_Q,
+                tt_KV,
+                persistent_output_buffer_kv=persistent_output_buffer_kv,
+                head_dim_v=d_v,
+                logical_n=sq,
+                is_causal=is_causal,
+                is_balanced=is_balanced,
+                program_config=program_config,
+                compute_kernel_config=compute_kernel_config,
+                dim=2,
+                multi_device_global_semaphore=ccl_semaphore_handles,
+                num_links=num_links,
+                cluster_axis=sp_axis,
+                mesh_device=mesh_device,
+                topology=topology,
+                subdevice_id=worker_sub_device_id,
+                ccl_core_grid_offset=(ccl_column, 0),
+                use_column_major_ccl=True,
+            )
+
+            tt_out_torch = ttnn.to_torch(
+                tt_out,
+                mesh_composer=ttnn.create_mesh_composer(
+                    mesh_device, ttnn.MeshComposerConfig(main_row_dim, main_col_dim)
+                ),
+            )
+            tt_out_torch = tt_out_torch[:, :, :sq, :d_v]
+            if is_balanced and chunk_order is not None:
+                tt_out_torch = reverse_reorder_tensor_chunks(tt_out_torch, chunk_order)
+
+            if num_iterations > 1:
+                if reference_output is None:
+                    reference_output = tt_out_torch
+                elif not torch.equal(reference_output, tt_out_torch):
+                    max_diff = (reference_output - tt_out_torch).abs().max().item()
+                    pytest.fail(f"ring_mla output at iteration {i} differs from iteration 0, max diff={max_diff}")
+
+        if num_iterations > 1 or not do_check:
+            return
+
+        empty_joint_q = torch.zeros((b, nhq, 0, d_q), dtype=torch.bfloat16)
+        empty_joint_k = torch.zeros((b, nhk, 0, d_k), dtype=torch.bfloat16)
+        empty_joint_v = torch.zeros((b, nhk, 0, d_v), dtype=torch.bfloat16)
+        gt_main, _ = torch_joint_sdpa_reference(
+            Q_original, KV_original, V_original, empty_joint_q, empty_joint_k, empty_joint_v, is_causal=is_causal
+        )
+        out_pass, out_pcc = comp_pcc(gt_main, tt_out_torch, pcc_threshold)
+        rmse = torch.sqrt(((gt_main - tt_out_torch) ** 2).mean()).item()
+        logger.info(f"ring_mla output - PCC: {out_pcc}, RMSE: {rmse:.6f}")
+        assert rmse < rmse_threshold, f"ring_mla RMSE {rmse:.6f} exceeds threshold {rmse_threshold}"
+        assert out_pass, f"ring_mla PCC {out_pcc} below threshold {pcc_threshold}"
+
+    finally:
+        ttnn.close_mesh_device(mesh_device)
+        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+
+
 # ============================================================================
 # CHUNKED-PREFILL VALIDATION
 # ============================================================================
@@ -1182,6 +1370,33 @@ TEST_CONFIGS, TEST_CONFIG_IDS = generate_test_configs(MESH_CONFIG, MODEL_CONFIGS
 TEST_CONFIG_MODELS = list(MODEL_CONFIGS.keys())
 
 
+def generate_ring_mla_test_configs(mesh_config: MeshConfig, model_configs: Dict[str, ModelConfig]):
+    if mesh_config.sp_size < 2 or "mla_100k" not in model_configs:
+        return [], []
+    model = model_configs["mla_100k"]
+    q_chunk_size = 160
+    k_chunk_size = 320
+    config = (
+        BATCH_SIZE,
+        model.seq_len * mesh_config.sp_size,
+        model.nhq * mesh_config.tp_size,
+        model.nhk,
+        model.d_q,
+        model.d_k,
+        model.d_v,
+        q_chunk_size,
+        k_chunk_size,
+        model.is_causal,
+        model.is_balanced,
+        model.q_dtype,
+        model.kv_dtype,
+    )
+    return [config], [f"ring_mla-{model.name}-q{q_chunk_size}-k{k_chunk_size}"]
+
+
+RING_MLA_TEST_CONFIGS, RING_MLA_TEST_CONFIG_IDS = generate_ring_mla_test_configs(MESH_CONFIG, MODEL_CONFIGS)
+
+
 # === TEST 1: PERFORMANCE SWEEP (skipped on CI) ===
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
 @pytest.mark.parametrize(
@@ -1226,6 +1441,46 @@ def test_ring_joint_attention_sdpa_sweep_perf_impl(
         d_k=d_k,
         d_v=d_v,
         kv_dtype=kv_dtype,
+        is_causal=is_causal,
+        is_balanced=is_balanced,
+        do_check=False,
+    )
+
+
+@pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
+@pytest.mark.parametrize(
+    "b,sq,nhq,nhk,d_q,d_k,d_v,q_chunk_size,k_chunk_size,is_causal,is_balanced,q_dtype,kv_dtype",
+    RING_MLA_TEST_CONFIGS,
+    ids=RING_MLA_TEST_CONFIG_IDS,
+)
+def test_ring_mla_sweep_perf_impl(
+    b,
+    sq,
+    nhq,
+    nhk,
+    d_q,
+    d_k,
+    d_v,
+    q_chunk_size,
+    k_chunk_size,
+    is_causal,
+    is_balanced,
+    q_dtype,
+    kv_dtype,
+):
+    run_ring_mla_sdpa(
+        MESH_CONFIG,
+        b,
+        nhq,
+        nhk,
+        sq,
+        d_q,
+        d_k,
+        d_v,
+        q_chunk_size,
+        k_chunk_size,
+        q_dtype,
+        kv_dtype,
         is_causal=is_causal,
         is_balanced=is_balanced,
         do_check=False,
@@ -1290,6 +1545,44 @@ def test_ring_joint_attention_sdpa_accuracy(
     )
 
 
+@pytest.mark.parametrize(
+    "b,sq,nhq,nhk,d_q,d_k,d_v,q_chunk_size,k_chunk_size,is_causal,is_balanced,q_dtype,kv_dtype",
+    RING_MLA_TEST_CONFIGS,
+    ids=RING_MLA_TEST_CONFIG_IDS,
+)
+def test_ring_mla_accuracy(
+    b,
+    sq,
+    nhq,
+    nhk,
+    d_q,
+    d_k,
+    d_v,
+    q_chunk_size,
+    k_chunk_size,
+    is_causal,
+    is_balanced,
+    q_dtype,
+    kv_dtype,
+):
+    run_ring_mla_sdpa(
+        MESH_CONFIG,
+        b,
+        nhq,
+        nhk,
+        sq,
+        d_q,
+        d_k,
+        d_v,
+        q_chunk_size,
+        k_chunk_size,
+        q_dtype,
+        kv_dtype,
+        is_causal=is_causal,
+        is_balanced=is_balanced,
+    )
+
+
 # === TEST 3: DETERMINISM VERIFICATION ===
 @pytest.mark.parametrize(
     "b,sq,nhq,nhk,nhv,d_q,d_k,d_v,q_chunk_size,k_chunk_size,is_causal,is_balanced,q_dtype,kv_dtype",
@@ -1335,6 +1628,46 @@ def test_ring_joint_attention_sdpa_determinism(
         is_causal=is_causal,
         is_balanced=is_balanced,
         num_iterations=num_iterations,
+    )
+
+
+@pytest.mark.parametrize(
+    "b,sq,nhq,nhk,d_q,d_k,d_v,q_chunk_size,k_chunk_size,is_causal,is_balanced,q_dtype,kv_dtype",
+    RING_MLA_TEST_CONFIGS,
+    ids=RING_MLA_TEST_CONFIG_IDS,
+)
+def test_ring_mla_determinism(
+    b,
+    sq,
+    nhq,
+    nhk,
+    d_q,
+    d_k,
+    d_v,
+    q_chunk_size,
+    k_chunk_size,
+    is_causal,
+    is_balanced,
+    q_dtype,
+    kv_dtype,
+):
+    run_ring_mla_sdpa(
+        MESH_CONFIG,
+        b,
+        nhq,
+        nhk,
+        sq,
+        d_q,
+        d_k,
+        d_v,
+        q_chunk_size,
+        k_chunk_size,
+        q_dtype,
+        kv_dtype,
+        is_causal=is_causal,
+        is_balanced=is_balanced,
+        do_check=False,
+        num_iterations=10,
     )
 
 
@@ -1634,6 +1967,71 @@ def test_ring_joint_attention_perf_check(model_name, q_chunk_size, k_chunk_size,
     assert lower <= utilization <= upper, (
         f"Math utilization {utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "
         f"(expected {expected_util:.2f}%, margin +/- {RING_JOINT_PERF_MARGIN*100:.1f}%)"
+    )
+
+
+@pytest.mark.skipif(
+    os.environ.get("SDPA_PERF_CHECKS") != "1",
+    reason="Set SDPA_PERF_CHECKS=1 to run (CI: sdpa perf tests job)",
+)
+@pytest.mark.timeout(900)
+def test_ring_mla_perf_better_than_separate_v_ring_joint():
+    """Profile ring_mla against the existing separate-V MLA ring joint path and require a speedup."""
+    from tracy.process_model_log import run_device_profiler
+
+    model_name = "mla_100k"
+    q_chunk_size = 160
+    k_chunk_size = 320
+    ring_size_expected = 4
+
+    if MESH_CONFIG.sp_size != ring_size_expected:
+        pytest.skip(f"Expected ring size {ring_size_expected}, current topology has ring size {MESH_CONFIG.sp_size}")
+    if model_name not in MODEL_CONFIGS or not RING_MLA_TEST_CONFIG_IDS:
+        pytest.skip("ring_mla perf config unavailable for current mesh")
+
+    model = MODEL_CONFIGS[model_name]
+    joint_config_id = get_test_case_id(model, q_chunk_size, k_chunk_size)
+    mla_config_id = RING_MLA_TEST_CONFIG_IDS[0]
+
+    float_cols = ["CORE COUNT", "DEVICE KERNEL DURATION [ns]"]
+    cols = ["ATTRIBUTES"]
+
+    def profile_duration(command, subdir):
+        with mock.patch.dict(os.environ, {"CI": "false"}):
+            run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
+        result = post_process_ops_log(
+            subdir,
+            float_columns=float_cols,
+            columns=cols,
+            op_name="RingJointSDPADeviceOperation",
+            sum_vals=False,
+            has_signposts=False,
+        )
+        assert len(result["DEVICE KERNEL DURATION [ns]"]) > 0, f"profiler returned no SDPA ops for {command}"
+        return int(result["DEVICE KERNEL DURATION [ns]"].max())
+
+    ring_mla_duration_ns = profile_duration(
+        (
+            "pytest tests/nightly/blackhole/sdpa/"
+            f"test_ring_joint_sdpa.py::test_ring_mla_sweep_perf_impl[{mla_config_id}]"
+        ),
+        "ttnn_ring_mla_perf_check",
+    )
+    separate_v_duration_ns = profile_duration(
+        (
+            "pytest tests/nightly/blackhole/sdpa/"
+            f"test_ring_joint_sdpa.py::test_ring_joint_attention_sdpa_sweep_perf_impl[{joint_config_id}]"
+        ),
+        "ttnn_ring_mla_baseline_perf_check",
+    )
+
+    logger.info(
+        f"ring_mla perf: {ring_mla_duration_ns/1e6:.3f} ms, "
+        f"separate-V ring_joint: {separate_v_duration_ns/1e6:.3f} ms"
+    )
+    assert ring_mla_duration_ns < separate_v_duration_ns, (
+        f"ring_mla must beat separate-V ring_joint for {model_name} q={q_chunk_size} k={k_chunk_size}: "
+        f"{ring_mla_duration_ns/1e6:.3f} ms >= {separate_v_duration_ns/1e6:.3f} ms"
     )
 
 

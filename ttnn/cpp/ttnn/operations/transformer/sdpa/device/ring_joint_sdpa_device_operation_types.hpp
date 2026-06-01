@@ -29,6 +29,7 @@ struct RingJointSDPAParams {
     experimental::prim::RingAttentionAllGatherAsyncParams all_gather_operation_attributes;
     experimental::prim::RingAttentionAllGatherAsyncInputs all_gather_tensor_args;
     CoreCoord ccl_core_grid_offset;
+    uint32_t latent_v_head_dim = 0;
 
     // We need a constructor, because all_gather_struct is not default initializable.
     RingJointSDPAParams(
@@ -43,7 +44,8 @@ struct RingJointSDPAParams {
         DeviceComputeKernelConfig compute_kernel_config,
         experimental::prim::RingAttentionAllGatherAsyncParams all_gather_operation_attributes,
         experimental::prim::RingAttentionAllGatherAsyncInputs all_gather_tensor_args,
-        CoreCoord ccl_core_grid_offset) :
+        CoreCoord ccl_core_grid_offset,
+        uint32_t latent_v_head_dim) :
         joint_strategy(std::move(joint_strategy)),
         scale(scale),
         is_causal(is_causal),
@@ -55,7 +57,8 @@ struct RingJointSDPAParams {
         compute_kernel_config(compute_kernel_config),
         all_gather_operation_attributes(std::move(all_gather_operation_attributes)),
         all_gather_tensor_args(std::move(all_gather_tensor_args)),
-        ccl_core_grid_offset(ccl_core_grid_offset) {}
+        ccl_core_grid_offset(ccl_core_grid_offset),
+        latent_v_head_dim(latent_v_head_dim) {}
 
     auto attributes() const {
         using ttsl::reflection::Attribute;
@@ -68,6 +71,7 @@ struct RingJointSDPAParams {
         attrs.emplace_back("output_memory_config", output_memory_config);
         attrs.emplace_back("compute_kernel_config", compute_kernel_config);
         attrs.emplace_back("ccl_core_grid_offset", ccl_core_grid_offset);
+        attrs.emplace_back("latent_v_head_dim", latent_v_head_dim);
         if (scale.has_value()) {
             attrs.emplace_back("scale", scale);
         }
@@ -85,16 +89,32 @@ struct RingJointSDPAParams {
 struct RingJointSDPAInputs {
     Tensor input_q;
     Tensor input_k;
-    Tensor input_v;
+    std::optional<Tensor> input_v;
     Tensor joint_q;
     Tensor joint_k;
-    Tensor joint_v;
+    std::optional<Tensor> joint_v;
     Tensor gathered_k;
-    Tensor gathered_v;
+    std::optional<Tensor> gathered_v;
 
     // Chunked-prefill is signalled implicitly by Q being shorter than the per-device K shard:
     // Q is the latest slab, K is the populated prefix from chunk 0 through the current chunk.
-    bool is_chunked() const { return input_q.logical_shape()[2] < input_k.logical_shape()[2]; }
+    uint32_t local_kv_seq_len() const { return static_cast<uint32_t>(input_k.logical_shape()[2]); }
+
+    bool is_chunked() const { return input_q.logical_shape()[2] < local_kv_seq_len(); }
+
+    // Latent-V optimization: absent V means the reader reuses K's buffer
+    // and reads the first vDHt head-dim tiles (V's logical head dim). The
+    // zero-sequence sentinel is still accepted internally for compatibility.
+    bool has_latent_v() const { return !input_v.has_value() || input_v->logical_shape()[2] == 0; }
+
+    uint32_t v_num_heads() const {
+        return input_v.has_value() ? static_cast<uint32_t>(input_v->logical_shape()[1])
+                                   : static_cast<uint32_t>(input_k.logical_shape()[1]);
+    }
+
+    uint32_t v_head_dim(uint32_t latent_v_head_dim) const {
+        return input_v.has_value() ? static_cast<uint32_t>(input_v->logical_shape()[3]) : latent_v_head_dim;
+    }
 };
 
 // Index constants for RingJointSDPAResult vector
