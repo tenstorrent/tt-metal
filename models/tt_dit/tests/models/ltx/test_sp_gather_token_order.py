@@ -7,9 +7,7 @@ import pytest
 import torch
 
 import ttnn
-from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
-from models.tt_dit.utils.mesh_gather import gather_host_1bnd
 from models.tt_dit.utils.tensor import bf16_tensor
 from models.tt_dit.utils.test import line_params
 
@@ -44,15 +42,13 @@ def test_sp_all_gather_preserves_token_order(
 
     tt = bf16_tensor(x, device=mesh_device, mesh_axis=sp_axis, shard_dim=2)
     ccl = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
-    pc = DiTParallelConfig(
-        sequence_parallel=ParallelFactor(factor=mesh_shape[sp_axis], mesh_axis=sp_axis),
-        tensor_parallel=ParallelFactor(factor=mesh_shape[tp_axis], mesh_axis=tp_axis),
-        cfg_parallel=ParallelFactor(factor=1, mesh_axis=0),
-    )
 
     gathered = ccl.all_gather_persistent_buffer(tt, dim=2, mesh_axis=sp_axis)
-    host_once = gather_host_1bnd(gathered, ccl_manager=ccl, parallel_config=pc, sp_already_gathered=True)
-    host_twice = gather_host_1bnd(gathered, ccl_manager=ccl, parallel_config=pc, sp_already_gathered=False)
+    no_gather_dims: list[int | None] = [None, None]
+    sp_gather_dims: list[int | None] = [None, None]
+    sp_gather_dims[sp_axis] = 2
+    host_once = ccl.device_to_host(gathered, no_gather_dims).float()
+    host_twice = ccl.device_to_host(gathered, sp_gather_dims).float()
 
     idx_once = host_once[0, 0, :, 0].float()
     idx_twice = host_twice[0, 0, :, 0].float()

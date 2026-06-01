@@ -1011,13 +1011,10 @@ class LTXTransformerModel(Module):
         full sequence twice (audible doubling / ghost vocals).
         """
         if ccl_manager is not None and parallel_config is not None:
-            from models.tt_dit.utils.mesh_gather import gather_host_1bnd
-
-            return gather_host_1bnd(
-                tt_tensor,
-                ccl_manager=ccl_manager,
-                parallel_config=parallel_config,
-                sp_already_gathered=sp_already_gathered,
-                tp_already_gathered=tp_already_gathered,
-            )
+            mesh_dims: list[int | None] = [None, None]
+            if not tp_already_gathered and parallel_config.tensor_parallel.factor > 1:
+                mesh_dims[parallel_config.tensor_parallel.mesh_axis] = 3
+            if not sp_already_gathered and parallel_config.sequence_parallel.factor > 1:
+                mesh_dims[parallel_config.sequence_parallel.mesh_axis] = 2
+            return ccl_manager.device_to_host(tt_tensor, mesh_dims).float().clone()
         return ttnn.to_torch(ttnn.get_device_tensors(tt_tensor)[0]).float()
