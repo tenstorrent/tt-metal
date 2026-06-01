@@ -43,7 +43,7 @@ sfpi_inline sfpi::vFloat float32_to_bf16_rne(sfpi::vFloat in) {
     return sfpi::reinterpret<sfpi::vFloat>(bits);
 }
 
-sfpi_inline sfpi::vFloat _calculate_sfpu_binary_power_(sfpi::vFloat base, sfpi::vFloat pow) {
+sfpi_inline sfpi::vFloat calculate_sfpu_binary_power(sfpi::vFloat base, sfpi::vFloat pow) {
     sfpi::vFloat original_base = base;
 
     // Check for integer power
@@ -129,7 +129,7 @@ inline void calculate_sfpu_binary(const uint dst_index_in0, const uint dst_index
         } else if constexpr (BINOP == BinaryOp::RSUB) {
             result = in1 - in0;
         } else if constexpr (BINOP == BinaryOp::POW) {
-            result = _calculate_sfpu_binary_power_(in0, in1);
+            result = calculate_sfpu_binary_power(in0, in1);
         } else if constexpr (BINOP == BinaryOp::XLOGY) {
             v_if((in1 < 0.0f) || (in1 == nan)) { result = nan; }
             v_else {

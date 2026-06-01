@@ -347,7 +347,7 @@ void gelu_derivative_init() {
 }
 
 template <bool APPROXIMATION_MODE>
-inline sfpi::vFloat _calculate_gelu_core_(sfpi::vFloat in) {
+inline sfpi::vFloat calculate_gelu_core(sfpi::vFloat in) {
     // SFPU microcode:
     // result = (APPROX_MODE == 1)
     //   ? (1 + erf(x/sqrt(2)))
@@ -365,7 +365,7 @@ inline sfpi::vFloat _calculate_gelu_core_(sfpi::vFloat in) {
 }
 
 template <int ITERATIONS>
-inline void _calculate_gelu_appx_() {
+inline void calculate_gelu_appx() {
     sfpi::vUInt l0 = sfpi::l_reg[sfpi::LRegs::LReg0];
     sfpi::vUInt l1 = sfpi::l_reg[sfpi::LRegs::LReg1];
     sfpi::vUInt l2 = sfpi::l_reg[sfpi::LRegs::LReg2];
@@ -411,7 +411,7 @@ inline void _calculate_gelu_appx_() {
 }
 
 template <int ITERATIONS>
-inline void _calculate_gelu_accurate_() {
+inline void calculate_gelu_accurate() {
     constexpr bool scaled = true;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
@@ -425,7 +425,7 @@ inline void _calculate_gelu_accurate_() {
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_gelu() {
     if constexpr (APPROXIMATION_MODE) {
-        _calculate_gelu_appx_<ITERATIONS>();
+        calculate_gelu_appx<ITERATIONS>();
     } else {
 #pragma GCC unroll 0
         for (int d = 0; d < ITERATIONS; d++) {
@@ -487,7 +487,7 @@ inline void calculate_gelu_derivative() {
             // exp = exp * 1/sqrt(2*pi)
             sfpi::vFloat partial = exp * in * sfpi::sFloat16b(0.3989423F);
 
-            sfpi::vFloat result = _calculate_gelu_core_<true>(in);
+            sfpi::vFloat result = calculate_gelu_core<true>(in);
 
             result = lut(result, l0, l1, imm2);
 
