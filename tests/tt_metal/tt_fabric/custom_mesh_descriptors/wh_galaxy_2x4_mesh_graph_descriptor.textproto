@@ -46,7 +46,7 @@ pinnings {
   }
   physical_asic_position {
     tray_id: 1
-    asic_location: 1
+    asic_location: 5
   }
 }
 pinnings {
