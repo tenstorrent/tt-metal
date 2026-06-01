@@ -534,6 +534,17 @@ class TtQwen36DeltaAttention(LightweightModule):
         norm_w_4d = norm_w.reshape(1, 1, self.head_dim // 32, 32)
         self.norm_weight = self._to_device(norm_w_4d, replicate, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
+        # T1: width-sharded GroupRMSNormGated gamma.  The sharded
+        # ``ttnn.rms_norm`` gives each core a contiguous slice of the gamma
+        # matching its shard width, so for the per-head (head_dim-wide) grouped
+        # norm with one head per core we need gamma tiled across all heads:
+        # a [1,1,1,v_per_row] vector = the head_dim weight repeated n_v_per_row
+        # times.  Replicated across the mesh (same as norm_weight).
+        norm_w_tiled = norm_w.reshape(-1).repeat(self.n_v_per_row).reshape(1, 1, 1, self.v_per_row)
+        self.norm_weight_sharded = self._to_device(
+            norm_w_tiled, replicate, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT
+        )
+
         # -- Output projection: [H, n_v*hd] -- V2-DN-TP 2D-TP layout --
         # rows split dim 0 (input n_v*hd=6144 → 768 per row, head subset)
         # cols split dim 1 (output H=5120 → 1280 per col, col-sharded output)
@@ -2248,22 +2259,102 @@ class TtQwen36DeltaAttention(LightweightModule):
         k_e = ttnn.repeat_interleave(k, ratio, dim=2, memory_config=mem)
         return q_e, k_e
 
-    def _apply_norm_gated(self, core_out, z, B, T):
-        """V2-11 (lever D): attempted silu(z) into multiply fusion, NOT LANDED.
+    def _build_dn_norm_sharded_cfg(self, B, T):
+        """Lazily build the width-sharded program config + memcfg for the
+        GroupRMSNormGated norm (T1).
 
-        The fused path
-          out = multiply(out, z, input_tensor_b_activations=[SILU])
-        ran at the same speed (~77.71 ms / step vs 77.77 baseline) but
-        the compile-pass token shifted from 248068 (<think>) → 232, and
-        subsequent decode tokens became gibberish (~96 alpha chars of
-        mojibake across 32 generated tokens). The pre-multiply SILU
-        activation evaluates at slightly different precision than the
-        standalone unary launch (likely the fused activation pipeline
-        sees an L1-vs-DRAM intermediate dtype it would not otherwise
-        hit), and the 48 DeltaNet layer compounding pushes the output
-        past tolerance. Reverted to the verified two-op pattern.
+        The DN norm is a *grouped* RMSNorm: ``norm_weight`` is head_dim (128)
+        wide and the reduction is per-head over head_dim.  A
+        ``LayerNormShardedMultiCoreProgramConfig`` reduces over the full
+        per-core shard width, so by width-sharding the [B*T, v_per_row]
+        activation so each core holds exactly ONE head (128 = 4 tiles), the
+        sharded multi-core norm reduces over head_dim per core — bit-for-bit
+        the same grouping as the single-core DRAM ``ttnn.rms_norm`` (which
+        broadcasts the 128-wide weight over the [..,H,128] last dim).
+
+        Layout: [1, 1, B*T(=32 → 1 tile), v_per_row(=768)] width-sharded over
+        ``n_v_per_row`` (=6) cores, shard (32, 128).
+        """
+        if getattr(self, "_dn_norm_sharded_cfg", None) is not None:
+            return self._dn_norm_sharded_cfg
+        MT = B * T  # 32 for decode
+        head_w = self.head_dim  # 128
+        n_heads = self.n_v_per_row  # 6
+        block_w = head_w // 32  # 4 tiles
+        # Pick a core grid covering n_heads cores; one head per core.
+        grid_x = min(n_heads, 8)
+        grid_y = (n_heads + grid_x - 1) // grid_x
+        core_range = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, grid_y - 1))
+        core_range_set = ttnn.CoreRangeSet({core_range})
+        sharded_memcfg = ttnn.create_sharded_memory_config(
+            shape=(1, 1, MT, head_w),
+            core_grid=core_range_set,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            use_height_and_width_as_shard_shape=True,
+        )
+        prgm_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=(grid_x, grid_y),
+            subblock_w=block_w,
+            block_h=MT // 32,  # 1
+            block_w=block_w,
+            inplace=False,
+        )
+        self._dn_norm_sharded_cfg = (sharded_memcfg, prgm_cfg)
+        return self._dn_norm_sharded_cfg
+
+    def _apply_norm_gated(self, core_out, z, B, T):
+        """GroupRMSNormGated: rms_norm(core_out) * silu(z).
+
+        T1: when ``QWEN36_DN_NORM_SHARDED`` (default ON), run the norm
+        width-sharded multi-core (one head per core) instead of the
+        single-core DRAM ``ttnn.rms_norm``, keep silu+multiply on the same
+        sharded L1 layout, then reshard back to DRAM at the block boundary so
+        the existing out-proj linear contract ([B,T,v_per_row] DRAM) is
+        unchanged.  Per-head reduction is identical to the DRAM path, so the
+        precision footgun that killed the fused-silu attempt (token 248068 →
+        232 + mojibake; see below) does not apply here.
+
+        V2-11 (lever D) history: attempted silu(z) into multiply fusion via
+        ``multiply(out, z, input_tensor_b_activations=[SILU])`` — ran at the
+        same speed but shifted the compile-pass token 248068 → 232 and made
+        decode gibberish (fused-activation precision drift compounding over 48
+        layers).  Reverted to the verified two-op silu+multiply pattern, which
+        is preserved here.
         """
         mem = ttnn.DRAM_MEMORY_CONFIG
+        if os.environ.get("QWEN36_DN_NORM_SHARDED", "1") == "1" and (B * T) == 32:
+            sharded_memcfg, prgm_cfg = self._build_dn_norm_sharded_cfg(B, T)
+            # core_out: [B,T,H,V] L1-interleaved from the recurrent core.
+            # Flatten to [1,1,B*T,v_per_row] and reshard to width-sharded L1.
+            core_2d = ttnn.reshape(core_out, [1, 1, B * T, self.v_per_row])
+            core_sh = ttnn.to_memory_config(core_2d, sharded_memcfg)
+            if core_sh is not core_2d:
+                core_2d.deallocate(True)
+            out = ttnn.rms_norm(
+                core_sh,
+                weight=self.norm_weight_sharded,
+                epsilon=self.eps,
+                memory_config=sharded_memcfg,
+                program_config=prgm_cfg,
+                compute_kernel_config=self.compute_kernel,
+            )
+            core_sh.deallocate(True)
+            # silu(z) * out, all on the sharded L1 layout.
+            z_2d = ttnn.reshape(z, [1, 1, B * T, self.v_per_row])
+            z_sh = ttnn.to_memory_config(z_2d, sharded_memcfg)
+            if z_sh is not z_2d:
+                z_2d.deallocate(True)
+            z_silu = ttnn.silu(z_sh, memory_config=sharded_memcfg)
+            z_sh.deallocate(True)
+            out = ttnn.multiply(out, z_silu, memory_config=sharded_memcfg)
+            z_silu.deallocate(True)
+            # Reshard back to DRAM at the block boundary (out-proj contract).
+            out_dram = ttnn.to_memory_config(out, mem)
+            if out_dram is not out:
+                out.deallocate(True)
+            out_dram = ttnn.reshape(out_dram, [B, T, self.v_per_row])
+            return out_dram
+
         out = ttnn.rms_norm(
             core_out,
             weight=self.norm_weight,
