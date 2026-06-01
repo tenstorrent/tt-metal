@@ -2,16 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-LTX-2 attention unit tests. Mesh / fabric / topology parametrization mirrors
-``test_wan_attention`` in ``tests/models/wan2_2/test_attention_wan.py``:
-
-- ``line_params`` / ``ring_params`` from ``utils.test`` (``FABRIC_1D`` vs ``FABRIC_1D_RING``)
-- explicit ``num_links`` and ``ttnn.Topology.{Linear,Ring}``
-- ``is_fsdp`` passed through to ``LTXAttention``
-
-LTX-only: ``1x1`` with empty ``device_params`` (no fabric) for single-chip runs.
-"""
+"""LTX-2 attention unit tests; mesh/fabric parametrization mirrors test_wan_attention."""
 
 import pytest
 import torch
@@ -26,22 +17,9 @@ from models.tt_dit.utils.mochi import get_rot_transformation_mat
 from models.tt_dit.utils.tensor import bf16_tensor, bf16_tensor_2dshard
 from models.tt_dit.utils.test import line_params, ring_params
 
-# Reference model + RoPE come from the installed ``diffusers`` LTX-2 implementation
-# (imported lazily inside each test), exactly like ``test_wan_attention`` pulls its
-# reference from diffusers. No ``sys.path.insert`` into the in-repo ``LTX-2`` clone.
-
 
 def _diffusers_qk_to_split(t: torch.Tensor, num_heads: int, head_dim: int) -> torch.Tensor:
-    """Convert a diffusers (INTERLEAVED-rotation) Q/K tensor to the Lightricks SPLIT
-    convention the TT loader expects as input.
-
-    ``LTXAttention._prepare_torch_state`` applies a per-head SPLIT→INTERLEAVED channel
-    permute on load (it assumes raw Lightricks/ltx_core split-rotation checkpoints).
-    diffusers LTX-2 stores Q/K already interleaved, so we pre-apply the *inverse* permute
-    here; the loader's permute then round-trips the channels back to interleaved, matching
-    the diffusers ``apply_interleaved_rotary_emb`` reference. Cross-attn Q/K (no RoPE) is
-    invariant to this, so applying it everywhere is safe.
-    """
+    """diffusers (interleaved-rotation) Q/K → Lightricks SPLIT convention the TT loader expects."""
     D = head_dim
     D_half = D // 2
     inv = torch.empty(D, dtype=torch.long)
@@ -154,8 +132,7 @@ def test_ltx_self_attention(
     cos_apply = cos_freq.reshape(B, seq_len, num_heads, head_dim)
     sin_apply = sin_freq.reshape(B, seq_len, num_heads, head_dim)
 
-    # PyTorch forward: diffusers applies interleaved RoPE to q/k on (B, T, dim) before the
-    # head split; key reuses the query RoPE for self-attention.
+    # diffusers applies interleaved RoPE to q/k on (B, T, dim) before the head split.
     with torch.no_grad():
         torch_out = torch_model(x, query_rotary_emb=(cos_freq, sin_freq))
 
@@ -166,8 +143,7 @@ def test_ltx_self_attention(
     spatial = x.unsqueeze(0)  # (1, B, N, D)
     tt_spatial = bf16_tensor_2dshard(spatial, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 3})
 
-    # RoPE for rotary_embedding_llama: expects (B, H, N, head_dim)
-    # LTX-2 has per-head RoPE (different frequencies per head), so pass full (B, H, N, D)
+    # rotary_embedding_llama expects per-head (B, H, N, head_dim)
     rope_cos_bhnd = cos_apply.permute(0, 2, 1, 3)  # (B, H, N, D)
     rope_sin_bhnd = sin_apply.permute(0, 2, 1, 3)
     tt_cos = bf16_tensor_2dshard(rope_cos_bhnd, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})

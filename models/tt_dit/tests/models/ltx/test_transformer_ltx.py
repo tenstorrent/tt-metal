@@ -2,24 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""LTX-2.3 transformer unit tests.
+"""LTX-2.3 transformer unit tests; structure mirrors test_transformer_wan.py.
 
-Structure mirrors ``test_transformer_wan.py``:
-  - module-level constants for the 22B distilled config
-  - small ``_make_*`` helpers reused by all tests
-  - three tests: block / model / inner_step
-  - shared mesh × shape × modality × run_pcc parametrize axes
-
-Modality axis (``video`` vs ``av``) selects which forward path runs. The block
-test runs a single ``LTXTransformerBlock``; model/inner_step run the full
-``LTXTransformerModel`` 1-layer slice. Set ``LTX_SKIP_PCC=1`` to skip the
-torch reference and assert only shape + finiteness (useful at production
-seq lengths where the host reference is heavy).
-
-RoPE: the torch reference consumes SPLIT-rotation freqs; the TT runtime fuses
-into ``rotary_embedding_llama`` (INTERLEAVED) with a load-time Q/K channel
-permute, so every TT feed is INTERLEAVED + ``_interleaved_to_bhnd`` and a
-``trans_mat`` is required (the runtime asserts it whenever rope is set).
+Torch reference is diffusers' LTX2VideoTransformer{Block,3DModel}. The TT runtime fuses RoPE
+into rotary_embedding_llama (INTERLEAVED + trans_mat) with a load-time Q/K permute, so every
+TT freq feed is INTERLEAVED. Modality axis selects video vs av; set LTX_SKIP_PCC=1 to assert
+shape/finiteness only.
 """
 
 import os
@@ -40,14 +28,6 @@ from models.tt_dit.utils.ltx import AudioLatentShape, VideoPixelShape
 from models.tt_dit.utils.mochi import get_rot_transformation_mat
 from models.tt_dit.utils.tensor import bf16_tensor, bf16_tensor_2dshard
 from models.tt_dit.utils.test import line_params, ring_params
-
-# The torch reference is diffusers' ``LTX2VideoTransformerBlock`` / ``LTX2VideoTransformer3DModel``
-# (installed via the ``diffusers`` package) — the same way ``test_transformer_wan`` pulls
-# ``WanTransformer3DModel`` from diffusers. No ``sys.path.insert`` into the LTX clone and no
-# dependency on ``ltx_core``. Raw Lightricks checkpoints (and ltx_core-style random weights) are
-# remapped to diffusers naming + interleaved Q/K rotation by the converters below. The TT-side
-# RoPE feed deliberately uses tt_dit's own ``precompute_freqs_cis`` because that is exactly what
-# the device runtime computes (verified PCC-1.0 against the diffusers rope).
 
 # ---------------------------------------------------------------------------
 # LTX-2.3-22B distilled transformer configuration
@@ -73,11 +53,7 @@ CROSS_PE_MAX_POS = [20]
 
 # AV-mode auxiliary
 AUDIO_N = 256  # sp-aligned for sp ∈ {1, 2, 4, 8}
-# 22B checkpoint variants (AV mode only — video mode uses random scaled weights).
-#   "fast" = distilled-1.1, what the production Fast pipeline / stage-2 actually runs.
-#   "dev"  = base 22B, the non-distilled checkpoint.
-# Both share the same architecture/shapes, so the test config is identical; only the
-# weight values differ. LTX_CHECKPOINT overrides whichever variant is selected.
+# 22B checkpoint variants (AV mode only): "fast" = distilled-1.1 (production), "dev" = base 22B.
 _CHECKPOINT_22B_VARIANTS = {
     "fast": os.path.expanduser("~/.cache/ltx-checkpoints/ltx-2.3-22b-distilled-1.1.safetensors"),
     "dev": os.path.expanduser("~/.cache/ltx-checkpoints/ltx-2.3-22b-dev.safetensors"),
@@ -92,8 +68,7 @@ _CHECKPOINT_22B_HF_FILENAMES = {
 
 
 def _resolve_checkpoint_22b(variant: str) -> str:
-    """Path for the selected 22B variant; LTX_CHECKPOINT env wins, then the local
-    ``~/.cache/ltx-checkpoints`` copy, then the huggingface_hub cache snapshot."""
+    """Path for the 22B variant: LTX_CHECKPOINT env, then local cache, then huggingface_hub snapshot."""
     env = os.environ.get("LTX_CHECKPOINT")
     if env:
         return env
@@ -109,8 +84,7 @@ def _resolve_checkpoint_22b(variant: str) -> str:
     return local
 
 
-# Block-test torch reference uses small scaled random weights; default init blows
-# up through `(1+scale)*x` adaln chains in fp32 with no training signal.
+# Block-test reference uses small scaled random weights; default init blows up the adaln chains.
 WEIGHT_SEED = 1234
 INPUT_SEED = 42
 TIMESTEP_VAL = 0.01
@@ -126,10 +100,8 @@ _LTX_TRANSFORMER_MESH_PARAMS = [
     pytest.param((1, 1), 0, 1, 1, {}, ttnn.Topology.Linear, False, id="1x1sp0tp1"),
     # 2x4sp0tp1 keeps is_fsdp=True for FSDP-path coverage on a 2D mesh.
     pytest.param((2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp0tp1"),
-    # 2x4sp1tp0 mirrors the production BH 2x4 config (from_pretrained): sp_axis=1/tp_axis=0,
-    # num_links=2, is_fsdp=False. Production handles weight residency via dynamic_load (whole-model
-    # load/evict), NOT per-layer FSDP weight all-gathers — so is_fsdp must stay False here or the
-    # profile shows phantom weight-gather collectives that the real run never issues.
+    # 2x4sp1tp0 mirrors production BH 2x4: is_fsdp=False (production loads via dynamic_load, not
+    # per-layer FSDP gathers) or the profile shows phantom weight-gather collectives.
     pytest.param((2, 4), 1, 0, 2, line_params, ttnn.Topology.Linear, False, id="2x4sp1tp0"),
     pytest.param((4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring, True, id="wh_4x8sp1tp0"),
     pytest.param((4, 8), 1, 0, 2, ring_params, ttnn.Topology.Ring, False, id="ring_bh_4x8sp1tp0"),
@@ -150,9 +122,7 @@ _LTX_TRANSFORMER_MODALITY_PARAMS = [
 
 _LTX_TRANSFORMER_RUN_PCC_PARAMS = [pytest.param(_RUN_PCC_DEFAULT, id="pcc" if _RUN_PCC_DEFAULT else "nopcc")]
 
-# Checkpoint variant for AV mode. "fast" (distilled) is the production stage-2 path and the
-# default; select "dev" with `-k ckpt_dev` to exercise the base-22B weights. Ignored in video
-# mode (random scaled weights). Override the resolved file with LTX_CHECKPOINT.
+# Checkpoint variant for AV mode ("fast" = production default); ignored in video mode.
 _LTX_TRANSFORMER_CKPT_PARAMS = [
     pytest.param("fast", id="ckpt_fast"),
     pytest.param("dev", id="ckpt_dev"),
@@ -170,15 +140,7 @@ def _interleaved_to_bhnd(t: torch.Tensor, num_heads: int) -> torch.Tensor:
 
 
 def _diffusers_qk_to_split(t: torch.Tensor, num_heads: int, head_dim: int) -> torch.Tensor:
-    """Convert a diffusers (INTERLEAVED-rotation) Q/K tensor to the Lightricks SPLIT
-    convention the TT attention loader expects as input.
-
-    ``LTXAttention._prepare_torch_state`` applies a per-head SPLIT→INTERLEAVED channel
-    permute on load (assuming raw Lightricks/ltx_core split-rotation checkpoints). diffusers
-    LTX-2 stores Q/K already interleaved, so we pre-apply the inverse permute; the loader's
-    permute then round-trips the channels back to interleaved, matching diffusers'
-    ``apply_interleaved_rotary_emb`` reference. Validated against ``test_attention_ltx``.
-    """
+    """diffusers (interleaved-rotation) Q/K → Lightricks SPLIT convention the TT loader expects."""
     D = head_dim
     D_half = D // 2
     inv = torch.empty(D, dtype=torch.long)
@@ -189,13 +151,7 @@ def _diffusers_qk_to_split(t: torch.Tensor, num_heads: int, head_dim: int) -> to
 
 
 def _convert_diffusers_video_block_to_tt(state: dict, *, num_heads: int, head_dim: int) -> dict:
-    """diffusers ``LTX2VideoTransformerBlock`` state_dict → TT video block loader input.
-
-    Keeps only the video-subset params (drops audio_* and a2v/v2a cross-modal keys, which
-    the ``has_audio=False`` TT block doesn't have) and converts attn1/attn2 Q/K to the split
-    convention. The TT block/attention loaders handle the remaining renames
-    (``ff.net.0.proj→ffn.ff1``, ``to_out.0→to_out``, scale-shift +1 baking).
-    """
+    """diffusers LTX2VideoTransformerBlock state_dict → TT video block loader input (video subset, split Q/K)."""
     keep_exact = {"scale_shift_table", "prompt_scale_shift_table"}
     out = {k: v for k, v in state.items() if k in keep_exact or k.startswith(("attn1.", "attn2.", "ff."))}
     for base in ("attn1", "attn2"):
@@ -212,11 +168,7 @@ def _convert_diffusers_video_block_to_tt(state: dict, *, num_heads: int, head_di
 
 
 def _make_diffusers_video_block():
-    """Build the diffusers LTX-2 block in the video config used as the PCC reference.
-
-    The block is structurally audio+video, but with ``use_a2v/v2a_cross_attention=False`` the
-    video output depends only on the video-subset weights (see ``_diffusers_video_block_ref``).
-    """
+    """Build the diffusers LTX-2 block in the video config used as the PCC reference."""
     from diffusers.models.transformers.transformer_ltx2 import LTX2VideoTransformerBlock
 
     return LTX2VideoTransformerBlock(
@@ -238,12 +190,7 @@ def _make_diffusers_video_block():
 
 
 def _diffusers_video_block_ref(block, *, x, context, temb, prompt_temb, cos_i, sin_i):
-    """Run the diffusers block video-only (a2v/v2a disabled) and return the video output.
-
-    temb layout matches the TT block: ``temb`` is (1, 1, 9*DIM) (self-attn, FF, text-Q mod in
-    that order, identical to diffusers ``get_mod_params`` unbind order) and ``prompt_temb`` is
-    (1, 1, 2*DIM). Dummy audio is fed but never influences the video stream with cross-modal off.
-    """
+    """Run the diffusers block video-only (a2v/v2a disabled) and return the video output."""
     B, N, _ = x.shape
     a_N = 32
     audio_hidden = torch.zeros(B, a_N, AUDIO_DIM)
@@ -273,12 +220,7 @@ def _diffusers_video_block_ref(block, *, x, context, temb, prompt_temb, cos_i, s
 
 
 def _make_diffusers_video_model(num_layers: int = 1):
-    """diffusers ``LTX2VideoTransformer3DModel`` configured to match the TT video model.
-
-    ``cross_attn_mod=True`` gives the 9-param block modulation + prompt_adaln (TT
-    ``cross_attention_adaln=True``); ``use_prompt_embeddings=False`` drops caption_projection
-    (the TT model pops it and the VideoOnly reference never had it).
-    """
+    """diffusers LTX2VideoTransformer3DModel configured to match the TT video model."""
     from diffusers.models.transformers.transformer_ltx2 import LTX2VideoTransformer3DModel
 
     return LTX2VideoTransformer3DModel(
@@ -304,12 +246,7 @@ def _make_diffusers_video_model(num_layers: int = 1):
 
 
 def _convert_diffusers_video_model_to_tt(state: dict, *, num_heads: int, head_dim: int) -> dict:
-    """diffusers ``LTX2VideoTransformer3DModel`` state_dict → TT ``LTXTransformerModel`` loader input.
-
-    Top-level renames (diffusers→Lightricks): ``proj_in→patchify_proj``,
-    ``time_embed→adaln_single``, ``prompt_adaln→prompt_adaln_single``; drops audio/cross-modal
-    and caption keys; keeps the video subset of each block and split-converts attn Q/K.
-    """
+    """diffusers LTX2VideoTransformer3DModel state_dict → TT LTXTransformerModel loader input."""
     drop_top = ("audio_", "av_cross_attn_", "caption_projection")
     rename_top = {"proj_in.": "patchify_proj.", "time_embed.": "adaln_single.", "prompt_adaln.": "prompt_adaln_single."}
     out: dict = {}
@@ -337,12 +274,7 @@ def _convert_diffusers_video_model_to_tt(state: dict, *, num_heads: int, head_di
 
 
 def _diffusers_video_model_ref(model, *, video_lat, video_prompt, sigma_val, F, H, W):
-    """Run the diffusers 3D model video-only (``isolate_modalities=True``) and return video output.
-
-    timestep + sigma are both pre-scaled by 1000 to match the TT model's host-side
-    ``timestep_torch * 1000`` (TT reuses that one scaled value for both time_embed and
-    prompt_adaln). RoPE uses the same raw integer position grid the TT side feeds.
-    """
+    """Run the diffusers 3D model video-only (isolate_modalities=True) and return video output."""
     B, N, _ = video_lat.shape
     gt, gh, gw, _ = _video_grid(F, H, W)
     video_coords = torch.stack([gt, gh, gw], dim=0).float().unsqueeze(0)  # (1, 3, N)
@@ -370,12 +302,7 @@ def _diffusers_video_model_ref(model, *, video_lat, video_prompt, sigma_val, F, 
 
 
 def _lightricks_qk_to_interleaved(t: torch.Tensor, num_heads: int, head_dim: int) -> torch.Tensor:
-    """Forward per-head SPLIT→INTERLEAVED Q/K permute (same as ``LTXAttention._permute_qk``).
-
-    Raw Lightricks/ltx_core checkpoints store Q/K in SPLIT rotation; diffusers LTX-2 applies
-    INTERLEAVED rope, so to load raw weights into a diffusers model we apply the same
-    split→interleaved channel permute the TT loader applies internally.
-    """
+    """Forward per-head SPLIT→INTERLEAVED Q/K permute (same as LTXAttention._permute_qk)."""
     D = head_dim
     D_half = D // 2
     perm = torch.empty(D, dtype=torch.long)
@@ -397,14 +324,7 @@ _AV_ATTN_HEAD_DIM = {
 
 
 def _convert_lightricks_av_to_diffusers(state: dict, *, num_heads: int) -> dict:
-    """Raw Lightricks/ltx_core AV state_dict → diffusers ``LTX2VideoTransformer3DModel`` (AV) names.
-
-    Inverse of the video converter, extended to audio + cross-modal: renames the top-level
-    adaln/proj modules, the per-block a2v/v2a tables and ``q_norm/k_norm``, and applies the
-    forward split→interleaved Q/K permute (per-attention head_dim) so the diffusers model's
-    interleaved rope matches. Unknown keys (connectors, etc.) pass through and are dropped by
-    ``load_state_dict(strict=False)``.
-    """
+    """Raw Lightricks/ltx_core AV state_dict → diffusers LTX2VideoTransformer3DModel (AV) names."""
     rename_top = {
         "patchify_proj.": "proj_in.",
         "adaln_single.": "time_embed.",
@@ -472,20 +392,13 @@ def _make_diffusers_av_model(num_layers: int = 1):
         rope_double_precision=False,
         use_prompt_embeddings=False,
         rope_type="interleaved",
-        # ltx_core uses av_ca_timestep_scale_multiplier=1 → the a2v/v2a gate adaln sees the raw
-        # sigma (= timestep*1000 * 1/1000). diffusers' gate factor is
-        # cross_attn_timestep_scale_multiplier / timestep_scale_multiplier, so =1 reproduces it.
+        # =1 matches ltx_core's av_ca_timestep_scale_multiplier (a2v/v2a gate adaln sees raw sigma).
         cross_attn_timestep_scale_multiplier=1,
     )
 
 
 def _diffusers_av_model_ref(model, *, video_lat, video_prompt, audio_lat, audio_prompt, sigma_val, F, H, W, audio_N):
-    """Run the diffusers AV model (cross-modal enabled) and return (video, audio) outputs.
-
-    Coordinates mirror the TT side: raw integer video grid + ``arange(audio_N)``; timestep/sigma
-    are pre-scaled by 1000 to match the TT host-side ``timestep_torch * 1000`` (TT reuses that one
-    value for time_embed, prompt_adaln and the a2v/v2a gate adaln).
-    """
+    """Run the diffusers AV model (cross-modal enabled) and return (video, audio) outputs."""
     gt, gh, gw, _ = _video_grid(F, H, W)
     video_coords = torch.stack([gt, gh, gw], dim=0).float().unsqueeze(0)  # (1, 3, N)
     audio_coords = torch.arange(audio_N).reshape(1, 1, audio_N).float()
@@ -583,13 +496,7 @@ def _audio_cross_pe_freqs(audio_N, rope_type=LTXRopeType.SPLIT):
 
 
 def _audio_seq_lens(F: int, sp_factor: int) -> tuple[int, int]:
-    """Fast-pipeline audio seq lengths from the *latent* frame count.
-
-    Mirrors ``pipeline_ltx_fast._denoise_no_guidance``: pixel frames =
-    ``(F-1)*8 + 1``; ``audio_N_real`` is the audio-latent length for that
-    duration (``AudioLatentShape.from_video_pixel_shape``, H/W irrelevant), and
-    ``audio_N`` rounds up to ``32 * sp_factor`` (SP/tile alignment).
-    """
+    """Fast-pipeline audio seq lengths from the latent frame count (audio_N_real, padded to 32*sp)."""
     num_frames = (F - 1) * 8 + 1
     vps = VideoPixelShape(batch=1, frames=num_frames, height=64, width=64, fps=24)
     audio_N_real = AudioLatentShape.from_video_pixel_shape(vps).frames
@@ -598,14 +505,10 @@ def _audio_seq_lens(F: int, sp_factor: int) -> tuple[int, int]:
 
 
 def _audio_masks(audio_N, audio_N_real, *, mesh_device, sp_axis):
-    """Replicate ``LTXPipeline._prepare_audio_masks``: SDPA column mask + SP/full pad masks.
-
-    Returns ``(attn_mask, pad_mask_sp, pad_mask_full)`` or all-``None`` when unpadded.
-    """
+    """Replicate LTXPipeline._prepare_audio_masks: SDPA column mask + SP/full pad masks (None if unpadded)."""
     if audio_N <= audio_N_real:
         return None, None, None
-    # Column-only mask: bar all queries from attending TO padded keys (padded-query
-    # rows are zeroed afterward by pad_mask, so we avoid -inf rows → softmax NaN).
+    # Column-only mask: bar queries from attending to padded keys (pad_mask zeros padded rows).
     mask = torch.zeros(1, 1, audio_N, audio_N)
     mask[:, :, :, audio_N_real:] = float("-inf")
     tt_attn_mask = bf16_tensor(mask.to(torch.bfloat16), device=mesh_device, mesh_axis=sp_axis, shard_dim=2)
@@ -690,10 +593,7 @@ def _make_tt_model(*, mesh_device, ccl_manager, parallel_config, is_fsdp, has_au
 
 
 def _load_22b_state_dict(num_layers: int, checkpoint_path: str) -> dict | None:
-    """Load LTX-2.3-22B weights (`checkpoint_path`) filtered to the first `num_layers` blocks.
-
-    Returns None when the checkpoint is missing (caller should skip).
-    """
+    """Load LTX-2.3-22B weights filtered to the first num_layers blocks; None if checkpoint missing."""
     if not os.path.exists(checkpoint_path):
         return None
     raw = load_file(checkpoint_path)
@@ -745,15 +645,12 @@ def test_ltx_transformer_block(
     video_N = F * H * W
     video_N_real = video_N  # test shapes are already SP/tile-aligned → no video padding
     sp_factor = tuple(mesh_device.shape)[sp_axis]
-    # Audio seq length mirrors the fast pipeline (derived from clip duration + SP pad),
-    # so the audio self-attn / FFN / A↔V op sizes and padding match production.
+    # Audio seq length mirrors the fast pipeline so op sizes / padding match production.
     audio_N, audio_N_real = _audio_seq_lens(F, sp_factor)
     assert video_N % (32 * sp_factor) == 0, f"video_N={video_N} not sp/tile-aligned for sp={sp_factor}"
     assert audio_N % (32 * sp_factor) == 0, f"audio_N={audio_N} not sp/tile-aligned for sp={sp_factor}"
 
-    # The AV-block torch reference requires LTXModel-level cross_scale_shift_timestep /
-    # cross_gate_timestep / cross-PE plumbing not provided here, so AV mode asserts
-    # shape + finiteness only; video mode runs the full PCC compare.
+    # AV mode lacks the LTXModel-level cross-PE plumbing, so it asserts shape/finiteness only.
     do_pcc = run_pcc and not has_audio
     torch_block = None
     torch_out = None
@@ -830,8 +727,7 @@ def test_ltx_transformer_block(
         video_prompt_temb=tt_prompt_temb,
     )
     if has_audio:
-        # Real tokens in [:audio_N_real], zeros in the padded tail — matches the
-        # pipeline's padded audio latent so the masks below actually do something.
+        # Real tokens in [:audio_N_real], zeros in the padded tail (matches the padded audio latent).
         a_x = torch.zeros(1, audio_N, AUDIO_DIM, dtype=torch.float32)
         a_x[:, :audio_N_real, :] = torch.randn(1, audio_N_real, AUDIO_DIM, dtype=torch.float32)
         a_ctx = torch.randn(1, PROMPT_LEN, AUDIO_CTX_DIM, dtype=torch.float32)
@@ -854,8 +750,7 @@ def test_ltx_transformer_block(
             _audio_cross_pe_freqs, audio_N, mesh_device=mesh_device, tp_axis=tp_axis
         )
 
-        # Padding masks, same construction as the fast pipeline. Audio is padded
-        # (audio_N > audio_N_real) so these are live; video is aligned so it's None.
+        # Padding masks, same construction as the fast pipeline (audio padded, video aligned).
         a_attn_mask, a_pad_sp, a_pad_full = _audio_masks(
             audio_N, audio_N_real, mesh_device=mesh_device, sp_axis=sp_axis
         )
@@ -945,12 +840,7 @@ def _run_inner_step(
     checkpoint_variant: str,
     use_forward_alias: bool,
 ):
-    """Shared body for the model forward tests.
-
-    `use_forward_alias=True` invokes ``tt_model(...)`` (via ``__call__``); `False`
-    calls ``tt_model.forward(...)`` explicitly. Used so the two tests have visibly
-    different call sites.
-    """
+    """Shared body for the model forward tests; use_forward_alias picks tt_model(...) vs .forward(...)."""
     # Checkpoint variant only affects AV weight loading; skip the redundant copy in video mode.
     if not has_audio and checkpoint_variant != "fast":
         pytest.skip("checkpoint_variant only affects AV mode (video uses random scaled weights)")
@@ -997,8 +887,7 @@ def _run_inner_step(
         audio_prompt = torch.randn(1, PROMPT_LEN, AUDIO_CTX_DIM, dtype=torch.float32)
 
     # === Reference forward (before TT to avoid weight aliasing) ===
-    # The torch LTXModel computes rope internally from `positions` (SPLIT), so the
-    # reference needs no precomputed cos/sin — only the TT side builds INTERLEAVED freqs.
+    # The torch LTXModel computes rope internally from positions; only the TT side builds freqs.
     if do_pcc and not has_audio:
         ref_video = _diffusers_video_model_ref(
             torch_model, video_lat=video_lat, video_prompt=video_prompt, sigma_val=sigma_val, F=F, H=H, W=W
@@ -1007,8 +896,7 @@ def _run_inner_step(
         del torch_model
 
     if do_pcc and has_audio:
-        # AV reference: load the raw 22B (Lightricks naming) into the diffusers AV model and
-        # run the full cross-modal forward. Validated CPU-equivalent to ltx_core at PCC 1.0.
+        # AV reference: load the raw 22B into the diffusers AV model and run the cross-modal forward.
         ref_model = _make_diffusers_av_model(num_layers=1)
         ref_model.load_state_dict(_convert_lightricks_av_to_diffusers(state_dict, num_heads=NUM_HEADS), strict=False)
         ref_model.eval()

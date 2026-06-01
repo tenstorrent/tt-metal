@@ -13,12 +13,7 @@ from models.tt_dit.utils.tensor import bf16_tensor, bf16_tensor_2dshard
 
 
 def make_indices_grid(F: int, H: int, W: int) -> torch.Tensor:
-    """
-    Create a 3D position indices grid (1, n_dims, seq_len) for temporal + spatial dims,
-    in the layout diffusers' ``LTX2AudioVideoRotaryPosEmbed.forward`` expects
-    (axis 1 is the number of position dims; raw frame/height/width indices).
-    Each column is (t_idx, h_idx, w_idx) for one token in the flattened sequence.
-    """
+    """3D position indices grid (1, n_dims=3, seq_len) in the layout diffusers' RoPE expects."""
     t_ids = torch.arange(F)
     h_ids = torch.arange(H)
     w_ids = torch.arange(W)
@@ -57,15 +52,7 @@ def make_indices_grid(F: int, H: int, W: int) -> torch.Tensor:
     ids=["small", "480p", "2k"],
 )
 def test_ltx_rope_interleaved(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_axis: int, F: int, H: int, W: int):
-    """
-    Test LTX-2 interleaved RoPE against the diffusers reference.
-
-    Mirrors ``test_wan_rotary_pos_embed`` (which uses diffusers' ``WanRotaryPosEmbed``):
-    cos/sin are produced by diffusers' ``LTX2AudioVideoRotaryPosEmbed``, applied by its
-    reference ``apply_interleaved_rotary_emb`` for the golden output, and the *same* cos/sin
-    are fed to ``ttnn.experimental.rotary_embedding_llama`` so we isolate the device kernel.
-    """
-    # Reference RoPE from diffusers' LTX-2 implementation (requires diffusers>=0.37).
+    """Test LTX-2 interleaved RoPE against the diffusers reference (mirrors test_wan_rotary_pos_embed)."""
     # double_precision=False keeps the freq grid fp32 to match the device path.
     from diffusers.models.transformers.transformer_ltx2 import (
         LTX2AudioVideoRotaryPosEmbed,
@@ -79,14 +66,11 @@ def test_ltx_rope_interleaved(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_axi
     max_pos = [20, 2048, 2048]
     B = 1
 
-    # Build raw position indices grid (1, n_dims=3, seq_len) for the reference.
     indices_grid = make_indices_grid(F, H, W)
     seq_len = F * H * W
     logger.info(f"indices_grid shape: {indices_grid.shape}, seq_len: {seq_len}")
 
-    # Compute cos/sin on CPU with the diffusers reference. Passing raw indices (ndim==3)
-    # makes forward normalize by base_{num_frames,height,width} directly — matching the
-    # fractional-position scheme the device path uses.
+    # Reference cos/sin on CPU; raw indices (ndim==3) normalize by base_{frames,height,width}.
     rope = LTX2AudioVideoRotaryPosEmbed(
         dim=dim,
         base_num_frames=max_pos[0],
@@ -116,8 +100,7 @@ def test_ltx_rope_interleaved(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_axi
     sin_for_apply = sin_freq.reshape(B, seq_len, num_heads, head_dim)
     logger.info(f"Reference output shape: {output_ref.shape}")
 
-    # Prepare ttnn tensors
-    # ttnn.experimental.rotary_embedding_llama expects (B, num_heads, seq_len, head_dim)
+    # rotary_embedding_llama expects (B, num_heads, seq_len, head_dim)
     input_bhnd = input_tensor.permute(0, 2, 1, 3)  # (B, H, N, D)
     cos_bhnd = cos_for_apply.permute(0, 2, 1, 3)  # (B, H, N, D)
     sin_bhnd = sin_for_apply.permute(0, 2, 1, 3)  # (B, H, N, D)
@@ -146,39 +129,13 @@ def test_ltx_rope_interleaved(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_axi
     logger.info("PASSED: LTX interleaved RoPE matches PyTorch reference")
 
 
-# ============================================================================================
-# RoPE cos/sin format regression guards.
-#
-# Walks the LTX-2 cos/sin chain step by step and asserts each step has the format it's
-# *supposed* to have, per the documented contract:
-#
-#     Step 1. position created with .float()             → fp32
-#     Step 2. position enters precompute_freqs_cis       → fp32
-#     Step 3. frequency table built                      → fp32
-#     Step 4. angles = position × freq                   → fp32
-#     Step 5. cos/sin of angles                          → fp32
-#     Step 6. precompute_freqs_cis returns               → fp32
-#
-# Bug history: a `.bfloat16()` cast on positions in pipeline_ltx.py once produced grainy/
-# robotic audio in LTX-2 generation. These tests guard against the same bug class returning.
-# ============================================================================================
+# Guards the LTX-2 RoPE cos/sin chain stays fp32 end-to-end: a prior .bfloat16() cast on
+# positions in pipeline_ltx.py produced grainy/robotic audio.
 
 
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True, ids=["2x4"])
 def test_pipeline_rope_positions_stay_fp32(mesh_device: ttnn.MeshDevice):
-    """Assert the LTX-2 RoPE cos/sin chain stays fp32 end-to-end in the pipeline.
-
-    (See the "Step 1-6" contract documented in the banner comment above.)
-
-    Stands up a minimal LTXPipeline (bypassing weight loading) and calls all three RoPE
-    prep methods (_prepare_rope, _prepare_audio_rope, _prepare_av_cross_pe). The four
-    cos/sin helpers (generate_freq_grid, generate_freqs, split_freqs_cis,
-    precompute_freqs_cis) are patched to assert fp32 at every step the pipeline triggers.
-
-    Catches the original bug class: a `.bfloat16()` cast in pipeline_ltx.py that silently
-    destroys positions' precision in the RoPE chain. Also catches anyone refactoring the
-    helpers to use lower precision internally.
-    """
+    """Assert the pipeline's RoPE cos/sin chain stays fp32 from positions to precompute output."""
     from types import SimpleNamespace
     from unittest.mock import patch
 
@@ -186,8 +143,7 @@ def test_pipeline_rope_positions_stay_fp32(mesh_device: ttnn.MeshDevice):
     from models.tt_dit.pipelines.ltx import pipeline_ltx as pipeline_mod
     from models.tt_dit.pipelines.ltx.pipeline_ltx import LTXPipeline
 
-    # Bypass __init__ to avoid loading model weights — we only need the attributes the three
-    # RoPE prep methods actually read.
+    # Bypass __init__ to avoid loading weights; set only what the RoPE prep methods read.
     pipe = LTXPipeline.__new__(LTXPipeline)
     pipe.mesh_device = mesh_device
     pipe.inner_dim = 4096
@@ -207,7 +163,6 @@ def test_pipeline_rope_positions_stay_fp32(mesh_device: ttnn.MeshDevice):
     orig_precompute = rope_ltx.precompute_freqs_cis
 
     def checked_grid(*args, **kwargs):
-        # Step 3: frequency table built → fp32
         result = orig_grid(*args, **kwargs)
         counts["freq_grid"] += 1
         assert (
@@ -216,7 +171,6 @@ def test_pipeline_rope_positions_stay_fp32(mesh_device: ttnn.MeshDevice):
         return result
 
     def checked_freqs(indices, indices_grid, *args, **kwargs):
-        # Step 4: angles = position × freq → fp32
         assert (
             indices.dtype == torch.float32
         ), f"[Step 4 FAIL] generate_freqs got freq table as {indices.dtype}, expected fp32."
@@ -231,7 +185,6 @@ def test_pipeline_rope_positions_stay_fp32(mesh_device: ttnn.MeshDevice):
         return result
 
     def checked_split(freqs, *args, **kwargs):
-        # Step 5: cos/sin of angles → fp32
         assert (
             freqs.dtype == torch.float32
         ), f"[Step 5 FAIL] split_freqs_cis got angles as {freqs.dtype}, expected fp32."
@@ -242,14 +195,12 @@ def test_pipeline_rope_positions_stay_fp32(mesh_device: ttnn.MeshDevice):
         return cos, sin
 
     def checked_precompute(indices_grid, *args, **kwargs):
-        # Steps 1+2: pipeline created positions with .float() and passed them in as fp32
         assert indices_grid.dtype == torch.float32, (
             f"[Step 1-2 FAIL] Pipeline passed {indices_grid.dtype} positions to "
             f"precompute_freqs_cis. Check for a .bfloat16() call on positions in pipeline_ltx.py."
         )
         cos, sin = orig_precompute(indices_grid, *args, **kwargs)
         counts["precompute"] += 1
-        # Step 6: precompute_freqs_cis returns → fp32
         assert cos.dtype == torch.float32, (
             f"[Step 6 FAIL] precompute_freqs_cis returned cos as {cos.dtype}, expected fp32. "
             f"Check the out_dtype argument at the call site."
@@ -259,11 +210,7 @@ def test_pipeline_rope_positions_stay_fp32(mesh_device: ttnn.MeshDevice):
         ), f"[Step 6 FAIL] precompute_freqs_cis returned sin as {sin.dtype}, expected fp32."
         return cos, sin
 
-    # NOTE: the pipeline binds ``precompute_freqs_cis`` directly (``from ... import
-    # precompute_freqs_cis``), so it must be patched on the pipeline module, not on
-    # ``rope_ltx`` — otherwise the pipeline's calls are never intercepted and the
-    # count assertion below trips. The other three helpers are still resolved via
-    # the ``rope_ltx`` module attribute inside the real ``precompute_freqs_cis``.
+    # precompute_freqs_cis is bound directly in the pipeline module, so patch it there.
     with patch.object(rope_ltx, "generate_freq_grid", checked_grid), patch.object(
         rope_ltx, "generate_freqs", checked_freqs
     ), patch.object(rope_ltx, "split_freqs_cis", checked_split), patch.object(
