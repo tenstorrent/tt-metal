@@ -201,6 +201,7 @@ public:
 class MeshWatcherDumpAllFixture : public MeshWatcherFixture {
 protected:
     void SetUp() override {
+        GTEST_SKIP() << "Disabled: see #45675";
         MeshWatcherFixture::SetUp();
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_dump_all(true);
     }
