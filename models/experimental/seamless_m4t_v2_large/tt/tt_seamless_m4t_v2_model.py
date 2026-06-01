@@ -49,6 +49,11 @@ from models.experimental.seamless_m4t_v2_large.tt.tt_text_to_unit import (
 )
 from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import get_tp
 
+# Bucket the speech-encoder mel-sequence length to this multiple so run-to-run length jitter reuses
+# the shape-specialized (JIT-compiled) kernels instead of recompiling cold (~7-20 s). 256 keeps the
+# extra (masked) frames — and the encoder's O(S^2) attention overhead — small (≤256, ~2-5% typical).
+_SPEECH_ENC_SEQ_BUCKET = 256
+
 # ---------------------------------------------------------------------------
 # Output dataclasses
 # ---------------------------------------------------------------------------
@@ -368,6 +373,7 @@ class TTSeamlessM4Tv2Model:
         self.pad_token_id = pad_token_id
         self.decoder_start_token_id = decoder_start_token_id
         self.vocab_size = vocab_size
+        self.feature_projection_input_dim = feature_projection_input_dim
         self.adaptor_kernel_size = adaptor_kernel_size
         self.adaptor_stride = adaptor_stride
         self.t2u_eos_token_id = t2u_eos_token_id
@@ -447,6 +453,54 @@ class TTSeamlessM4Tv2Model:
     def prewarm_vocoder_conv1d_weights(self, *, unit_seq: int, t_audio: int, batch: int = 1) -> None:
         """Prepare vocoder conv weights for ``(unit_seq, t_audio)`` (host upload only, no forward)."""
         self.vocoder.prewarm_conv1d_weights(batch=batch, seq=int(unit_seq), t_audio=int(t_audio))
+        ttnn.synchronize_device(self.device)
+
+    def prewarm_speech_encoder(self, mel_seq_lens: List[int]) -> None:
+        """Warm the JIT/disk cache for the speech-encoder kernels at the given mel-sequence lengths.
+
+        The speech-encoder kernels are shape-specialized by (bucketed) mel length, so the first encode
+        of a given bucket pays a cold compile (~7-20 s) while a warm one is ~1-2 s. Running a throwaway
+        ``_encode_speech`` here compiles each bucket once (persisted to the on-disk JIT cache), so a
+        later real encode — even after ``clear_runtime_program_cache`` wipes the in-memory device cache
+        — rebuilds from the warm disk cache quickly. Each length is bucketed internally. Caller decides
+        which lengths to warm (e.g. derived from the actual audio) — nothing here is input-specific.
+
+        Warm the *live* length only: warming a larger neighbour bucket compiles an oversized encoder
+        program whose static CBs clash with the text-decoder decode CB budget on a later task (seen as
+        an L1 ``circular buffers clash`` on the last speech task). Don't pad past the real length here.
+        """
+        n_mels = self.feature_projection_input_dim
+        warmed: set[int] = set()
+        for sl in mel_seq_lens:
+            sl = int(sl)
+            if sl <= 0:
+                continue
+            bucket = ((sl + _SPEECH_ENC_SEQ_BUCKET - 1) // _SPEECH_ENC_SEQ_BUCKET) * _SPEECH_ENC_SEQ_BUCKET
+            if bucket in warmed:
+                continue
+            warmed.add(bucket)
+            feats = ttnn.from_torch(
+                torch.zeros(1, bucket, n_mels, dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+            )
+            mask = ttnn.from_torch(
+                torch.ones(1, bucket, dtype=torch.int32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+            )
+            enc, enc_attn, owned = self._encode_speech(feats, mask)
+            ttnn.deallocate(enc)
+            if owned:
+                ttnn.deallocate(enc_attn)
+            ttnn.deallocate(feats)
+            ttnn.deallocate(mask)
         ttnn.synchronize_device(self.device)
 
     def clear_runtime_program_cache(self) -> None:
@@ -574,12 +628,32 @@ class TTSeamlessM4Tv2Model:
         """
         batch = int(input_features.shape[0])
         seq_in = int(input_features.shape[1])
-        mask_2d = attention_mask if attention_mask is not None else ones_mask(batch, seq_in, self.device)
-        owned_input_mask = attention_mask is None
+
+        # Bucket the mel-sequence length so the (shape-specialized) speech-encoder kernels are reused
+        # across calls whose real length only jitters (e.g. EOS-terminated audio that varies a few
+        # frames run-to-run). Without this, every distinct length triggers a full cold JIT recompile
+        # (~7-20 s); padding to a coarse grid makes nearby lengths share one compiled program (warm
+        # disk cache → ~1-2 s). Padded frames are masked (mask=0) so ``_subsampled_lens_dev`` (counts
+        # real 1s) and the output trim in ``_speech_encoder_trim_pad_and_cross_attn`` ignore them —
+        # the encoder output for the real frames is unchanged.
+        real_mask = attention_mask if attention_mask is not None else ones_mask(batch, seq_in, self.device)
+        bucketed = ((seq_in + _SPEECH_ENC_SEQ_BUCKET - 1) // _SPEECH_ENC_SEQ_BUCKET) * _SPEECH_ENC_SEQ_BUCKET
+        owned_feats = bucketed != seq_in
+        if owned_feats:
+            input_features = ttnn.pad(input_features, [(0, 0), (0, bucketed - seq_in), (0, 0)], value=0.0)
+            mask_2d = ttnn.pad(real_mask, [(0, 0), (0, bucketed - seq_in)], value=0)
+            if attention_mask is None:
+                ttnn.deallocate(real_mask)
+            owned_input_mask = True
+        else:
+            mask_2d = real_mask
+            owned_input_mask = attention_mask is None
 
         mask_bf16_tile = self._speech_attention_uint_to_conv_bf16(mask_2d)
         enc_raw = self.speech_encoder.forward(input_features, conv_attention_mask_1d=mask_bf16_tile)
         ttnn.deallocate(mask_bf16_tile)
+        if owned_feats:
+            ttnn.deallocate(input_features)
 
         sub_lens_tt = _subsampled_lens_dev(mask_2d, self.adaptor_kernel_size, self.adaptor_stride)
         if owned_input_mask:
