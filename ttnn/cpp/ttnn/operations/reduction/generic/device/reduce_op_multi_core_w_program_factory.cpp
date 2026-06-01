@@ -94,7 +94,10 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
 
     if (rm_path) {
         constexpr uint32_t cb_rm = tt::CBIndex::c_24;
-        constexpr uint32_t num_rm_pages = 2;
+        // CB pages are per-row (see make_rm_plan); hold 2 slabs worth of rows so the reader can
+        // produce one slab while compute drains the previous one (compute_kernel_lib::tilize waits
+        // for up to TILE_HEIGHT pages per block).
+        const uint32_t num_rm_pages = 2 * plan.rm_rows_per_tile;
         desc.cbs.push_back(CBDescriptor{
             .total_size = num_rm_pages * plan.rm_staging_page_size,
             .core_ranges = all_cores,

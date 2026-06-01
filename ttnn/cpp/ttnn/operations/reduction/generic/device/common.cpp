@@ -48,7 +48,10 @@ RmPlan make_rm_plan(
     plan.src_datum_size = tt::datum_size(src_cb_data_format);
     plan.dst_datum_size = tt::datum_size(dst_cb_data_format);
     plan.chunk_row_bytes = plan.wt_tiles_per_chunk * tile_width * plan.src_datum_size;
-    plan.rm_staging_page_size = plan.rm_rows_per_tile * plan.chunk_row_bytes;
+    // One CB page = one logical RM row (chunk-wide). The compute kernel uses
+    // compute_kernel_lib::tilize, whose asymmetric mode requires one input page per row so each
+    // tile-block consumes up to TILE_HEIGHT pages.
+    plan.rm_staging_page_size = plan.chunk_row_bytes;
     plan.padding_identity_bits = dense_rm_padding_identity_bits(src_cb_data_format, math_op);
 
     return plan;

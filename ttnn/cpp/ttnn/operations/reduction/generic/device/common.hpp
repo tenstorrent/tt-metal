@@ -63,7 +63,7 @@ struct RmPlan {
     uint32_t wt_tiles_per_chunk;     // W-reduce: min(8, max(1, Wt)); H-reduce: 1
     uint32_t ht_tiles_per_chunk;     // W-reduce: 1;                   H-reduce: min(8, max(1, Ht_rm))
     uint32_t chunk_row_bytes;        // wt_tiles_per_chunk * tile_width * src_datum_size
-    uint32_t rm_staging_page_size;   // rm_rows_per_tile * chunk_row_bytes
+    uint32_t rm_staging_page_size;   // == chunk_row_bytes (one CB page = one chunk-wide RM row)
     uint32_t padding_identity_bits;  // dense_rm_padding_identity_bits(src_df, math_op)
     uint32_t src_datum_size;
     uint32_t dst_datum_size;
