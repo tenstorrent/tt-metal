@@ -985,7 +985,16 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             // (counter pages + trailer page). Used so this kernel cb_wait_fronts the entire CB.
             detail::get_num_pages(expert_token_counts) + 1,
         };
-        compute_kd.config = tt::tt_metal::ComputeConfigDescriptor{};
+        compute_kd.config = tt::tt_metal::ComputeConfigDescriptor{
+            // Blackhole requires the DEST register in 32-bit mode whenever any CB on the core uses
+            // an 8-bit float format (Fp8_e4m3). The FP8 combine path produces an Fp8_e4m3 output
+            // CB (c_2), so fp32_dest_acc_en must be enabled there.
+            .fp32_dest_acc_en = operation_attributes.use_fp8_combine,
+            // 32-bit DEST halves pack_untilize block capacity: half-sync 32-bit allows only 4
+            // tiles, but pack_untilize_block uses block_ct_dim (up to 8). Full-sync 32-bit restores
+            // the 8-tile budget so the block still fits. Only needed on the FP8 (32-bit) path.
+            .dst_full_sync_en = operation_attributes.use_fp8_combine,
+        };
         untilize_compute_kernel_id = static_cast<tt::tt_metal::KernelHandle>(desc.kernels.size());
         desc.kernels.push_back(std::move(compute_kd));
     }
