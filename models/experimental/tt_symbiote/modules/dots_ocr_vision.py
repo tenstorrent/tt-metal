@@ -105,6 +105,7 @@ def _largest_divisor_le(value: int, limit: int) -> int:
 # decode/prefill back to eager-mode dispatch (per-op kernel launches), which
 # in TP2 makes decode 4x slower than the trace-replay path.
 _VISION_MATMUL_PC_CACHE: dict = {}
+_VISION_GATE_UP_PC_CACHE: dict = {}
 _VISION_MATMUL_BS_MEM_CACHE: dict = {}
 _VISION_O_PROJ_BS_PC_CACHE: dict = {}
 _VISION_MLP_DOWN_L1_PC_CACHE: dict = {}
@@ -334,6 +335,86 @@ def _vision_matmul_program_config(device, m_dim: int, k_dim: int, n_dim: int):
     return pc
 
 
+def _vision_gate_up_program_config(device, m_dim: int, k_dim: int, n_dim: int):
+    """Tuned 2D-mcast config for the MLP gate/up matmuls (S x 1536 x 4224).
+
+    The generic ``_vision_matmul_program_config`` runs these on the full 8x8 grid,
+    where ``per_core_N = ceil(132/8) = 17`` is prime: ``out_subblock_w`` is forced to
+    1 and 4 of every 136 column-tiles are padded/wasted. Tracy measured ~28.9% FLOPs.
+
+    A 6x8 grid makes ``per_core_N = 132/6 = 22`` -- it tiles N exactly (no padded
+    columns) and is composite, so ``out_subblock 4x2`` (DST area 8, width 2) becomes
+    legal. Standalone this lifts the gate/up matmul ~76->84 TFLOPs (~2100->1900 us,
+    -9%) with zero precision change (BFP8 in0/weight, same as baseline). Validated
+    end-to-end in the MLP context at S=12288 via ``matmul_tests/bench_mlp_ctx.py``:
+    the gate/up matmul sees only the L1 in0 (~314 KB) resident (the block residual
+    lives in DRAM during the MLP), so the larger 6x8 CBs (~756 KB) fit.
+
+    Returns ``None`` (caller falls back to ``_vision_matmul_program_config``) unless
+    the shape tiles cleanly: K divisible by in0_block_w=8, N giving per_core_N=22 on a
+    6-wide grid, and M giving per_core_M (<=64) divisible by out_block_h=8. In
+    practice this engages for the 2048/4096/6144/8192/12288/16384 buckets and falls
+    back for the rest.
+    """
+    if device is None:
+        return None
+    tile = 32
+    grid_x, grid_y = 6, 8
+    in0_block_w = 8
+    out_block_h = 8
+    out_subblock_h = 4
+    out_subblock_w = 2
+
+    cache_key = (grid_x, grid_y, m_dim, k_dim, n_dim)
+    cached = _VISION_GATE_UP_PC_CACHE.get(cache_key)
+    if cached is not None or cache_key in _VISION_GATE_UP_PC_CACHE:
+        return cached
+
+    def _reject():
+        _VISION_GATE_UP_PC_CACHE[cache_key] = None
+        return None
+
+    if m_dim % tile != 0 or k_dim % tile != 0 or n_dim % tile != 0:
+        return _reject()
+
+    m_tiles = m_dim // tile
+    k_tiles = k_dim // tile
+    n_tiles = n_dim // tile
+
+    # 6-wide grid must tile N exactly (per_core_N=22) and the K-loop must divide
+    # cleanly at in0_block_w=8.
+    if n_tiles % grid_x != 0 or k_tiles % in0_block_w != 0:
+        return _reject()
+    if m_tiles % grid_y != 0:
+        return _reject()
+
+    per_core_m = m_tiles // grid_y
+    per_core_n = n_tiles // grid_x
+
+    if per_core_n > 24 or per_core_m > 64:
+        return _reject()
+    # out_subblock 4x2 requires out_block_h % out_subblock_h == 0 and
+    # per_core_N % out_subblock_w == 0; out_block_h chunks per_core_M.
+    if per_core_m % out_block_h != 0 or per_core_n % out_subblock_w != 0:
+        return _reject()
+
+    pc = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(grid_x, grid_y),
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        out_block_h=out_block_h,
+        out_block_w=per_core_n,
+        per_core_M=per_core_m,
+        per_core_N=per_core_n,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=False,
+    )
+    _VISION_GATE_UP_PC_CACHE[cache_key] = pc
+    return pc
+
+
 def _vision_block_sharded_mem(device, m_dim: int, wid_dim: int):
     """Cached L1 BLOCK_SHARDED MemoryConfig splitting m_dim across grid_y rows and wid_dim across grid_x columns.
 
@@ -360,38 +441,67 @@ def _vision_block_sharded_mem(device, m_dim: int, wid_dim: int):
     return result
 
 
-def _vision_o_proj_bs_program_config(device):
-    """Program config for o_proj with L1-interleaved in0 and L1 BLOCK_SHARDED output (12288×1536×1536).
+def _vision_o_proj_bs_program_config(device, m_dim: int, k_dim: int, n_dim: int):
+    """Program config for o_proj with L1-interleaved in0 and L1 BLOCK_SHARDED output (S×1536×1536).
 
     matmul_device_operation.cpp:841 requires out_subblock_w == per_core_N OR
     out_subblock_h == 1 whenever the output is sharded. The generic
-    _vision_matmul_program_config returns out_subblock_h=8 / out_subblock_w=1 for this
-    shape (area=8, optimal for DRAM output) which violates the constraint for sharded
-    output. Force out_subblock_h=1, out_subblock_w=6 (= per_core_N).
-    out_block_h=6 keeps the static CB region below the model's pre-allocated L1 shard
-    address (~552 KB). Empirically: ob_h=48→1366 KB, ob_h=16→683 KB, so
-    cb_end ≈ 325 KB + 22 KB×ob_h; need cb_end < 552 KB → ob_h ≤ 10 → use ob_h=6.
-    Returns None when the device grid is smaller than 8×8.
+    _vision_matmul_program_config returns out_subblock_h=8 / out_subblock_w=1 (area=8,
+    optimal for DRAM output) which violates the constraint for sharded output, so we
+    force out_subblock_h=1 with out_subblock_w = per_core_N.
+
+    ``per_core_M`` is derived from the actual sequence bucket (``m_tiles / grid_y``)
+    rather than hard-coded for S=12288. Hard-coding per_core_M=48 mismatched the
+    block-sharded MemoryConfig the caller builds for other buckets (the
+    "Mismatch between computed and provided MemoryConfig" warning) -- the matmul
+    silently padded M up to 12288 (~9% wasted o_proj compute at S=11264) -- and would
+    assert (num_blocks_y > grid_y) for buckets above 12288 (e.g. S=16384).
+
+    ``out_block_h`` is the largest divisor of per_core_M that is <= 6; ob_h=6 keeps the
+    static CB region below the model's pre-allocated L1 shard address (~552 KB:
+    cb_end ≈ 325 KB + 22 KB×ob_h, so ob_h <= 10 is safe; 6 is conservative and matches
+    the previously validated S=12288 config, where per_core_M=48 -> ob_h=6).
+    Returns None (caller falls back to the DRAM o_proj config) for a sub-8×8 grid or a
+    shape that doesn't tile cleanly for an 8×8 block-sharded output.
     """
     if device is None:
         return None
+    tile = 32
     grid = device.compute_with_storage_grid_size()
     grid_x, grid_y = int(grid.x), int(grid.y)
     if grid_x < 8 or grid_y < 8:
-        _VISION_O_PROJ_BS_PC_CACHE[(grid_x, grid_y)] = None
         return None
-    cache_key = (grid_x, grid_y)
+    cache_key = (grid_x, grid_y, m_dim, k_dim, n_dim)
     if cache_key in _VISION_O_PROJ_BS_PC_CACHE:
         return _VISION_O_PROJ_BS_PC_CACHE[cache_key]
+
+    def _reject():
+        _VISION_O_PROJ_BS_PC_CACHE[cache_key] = None
+        return None
+
+    if m_dim % tile or k_dim % tile or n_dim % tile:
+        return _reject()
+    m_tiles, k_tiles, n_tiles = m_dim // tile, k_dim // tile, n_dim // tile
+    in0_block_w = 8
+    # Must tile cleanly across the 8×8 grid; in0_block_w must divide K_tiles.
+    if m_tiles % grid_y or n_tiles % grid_x or k_tiles % in0_block_w:
+        return _reject()
+    per_core_m = m_tiles // grid_y
+    per_core_n = n_tiles // grid_x
+    # out_subblock_w = per_core_N must fit the DST register (<=8); cap per_core_M.
+    if per_core_n > 8 or per_core_m > 64:
+        return _reject()
+    out_block_h = next((h for h in range(min(6, per_core_m), 0, -1) if per_core_m % h == 0), 1)
+
     pc = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(grid_x, grid_y),
-        in0_block_w=8,
+        in0_block_w=in0_block_w,
         out_subblock_h=1,
-        out_subblock_w=6,
-        out_block_h=6,
-        out_block_w=6,
-        per_core_M=48,
-        per_core_N=6,
+        out_subblock_w=per_core_n,
+        out_block_h=out_block_h,
+        out_block_w=per_core_n,
+        per_core_M=per_core_m,
+        per_core_N=per_core_n,
         transpose_mcast=False,
         fused_activation=None,
         fuse_batch=False,
@@ -1025,7 +1135,11 @@ class TTNNDotsVisionMLP(TTNNModule):
         # the activation L1 win is more than wiped out by the weight DRAM
         # cost. Stay on the DRAM-interleaved path.
         # in0 is L1 interleaved from norm2 (``output_l1=True`` in the block).
-        gate_up_pc = _vision_matmul_program_config(self.device, m_dim, k_dim, n_dim)
+        # 6x8 grid (per_core_N=22, out_subblock 4x2) for the gate/up shape; falls
+        # back to the generic 8x8 config for buckets that don't tile cleanly.
+        gate_up_pc = _vision_gate_up_program_config(self.device, m_dim, k_dim, n_dim) or _vision_matmul_program_config(
+            self.device, m_dim, k_dim, n_dim
+        )
         _vision_debug_mem("gate input", hidden_states)
         gate = ttnn.linear(
             hidden_states,
@@ -1582,6 +1696,7 @@ class TTNNDotsVisionAttention(TTNNModule):
         # this matmul is weight-DRAM-bound -- the 2x weight re-reads from
         # DRAM more than wipe out the activation L1 win.
         qkv_pc = _vision_matmul_program_config(self.device, qkv_m, qkv_k, qkv_n)
+        _vision_debug_mem("fused qkv input", hidden_states)
         qkv = ttnn.linear(
             hidden_states,
             self.tt_qkv_weight,
@@ -1591,6 +1706,11 @@ class TTNNDotsVisionAttention(TTNNModule):
             compute_kernel_config=self.compute_kernel_config,
             program_config=qkv_pc,
         )
+        # Free the (now L1) norm1 output immediately after the QKV matmul -- it is
+        # not used again, and freeing it here keeps it from co-residing in L1 through
+        # SDPA/o_proj (SDPA's per-core L1 is already at its budget). The block no
+        # longer deallocates ``normed`` itself; attn owns it past this point.
+        ttnn.deallocate(hidden_states)
 
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             qkv,
@@ -1632,7 +1752,7 @@ class TTNNDotsVisionAttention(TTNNModule):
         o_n = int(self.tt_o_proj_weight.shape[-1])
         o_pc = _vision_matmul_program_config(self.device, qkv_m, o_k, o_n)
         out_bs = _vision_block_sharded_mem(self.device, qkv_m, o_n)
-        o_bs_pc = _vision_o_proj_bs_program_config(self.device)
+        o_bs_pc = _vision_o_proj_bs_program_config(self.device, qkv_m, o_k, o_n)
 
         def _run_o_proj(ctx: ttnn.Tensor) -> ttnn.Tensor:
             ctx = self._concat_heads(ctx)
@@ -1772,7 +1892,14 @@ class TTNNDotsVisionBlock(TTNNModule):
 
         residual = hidden_states
         _vision_debug_mem("residual_pre_attn", residual)
-        normed = self.norm1(hidden_states, output_l1=False)
+        # norm1 output -> L1 so the QKV matmul reads in0 from L1 (the residual
+        # lives in DRAM during attention, so in0 + QKV CBs fit; freed right after
+        # the QKV matmul inside attn so it never co-resides with SDPA). Faithful
+        # bench matmul_tests/bench_qkv_ctx.py: BF16 in0 L1 + residual DRAM fits.
+        # (BFP8 norm1 output is quality-free but a net perf loss -- rms_norm has no
+        # dtype arg, and the required BF16->BFP8 typecast costs more than the matmul
+        # in0 saving; see matmul_tests/bench_norm_qkv_chain.py.)
+        normed = self.norm1(hidden_states, output_l1=True)
         _vision_debug_mem("after norm1", normed)
         attn_out = self.attn(
             normed,
@@ -1781,8 +1908,9 @@ class TTNNDotsVisionBlock(TTNNModule):
             attention_mask=attention_mask,
             attention_logical_seq_len=attention_logical_seq_len,
         )
-        _vision_debug_mem("after attn", attn_out)
         ttnn.deallocate(normed)
+        _vision_debug_mem("after attn", attn_out)
+        # ``normed`` was deallocated inside ``attn`` right after the QKV matmul.
         # Force BFP8 output on the residual stream. Without this, when one
         # operand is BF16 (older path) and the other BFP8 the binary op
         # promotes to BF16, doubling the residual tile footprint going into
