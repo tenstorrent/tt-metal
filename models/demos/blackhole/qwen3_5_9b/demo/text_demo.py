@@ -15,6 +15,7 @@ Run 2k:     pytest models/demos/blackhole/qwen3_5_9b/demo/text_demo.py -v -s -k 
 
 import hashlib
 import json
+import os
 import time
 from pathlib import Path
 
@@ -27,7 +28,9 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.blackhole.qwen3_5_9b.tt.qwen35_model import Qwen35Model
 
-CHECKPOINT_DIR = "/local/ttuser/atupe/Qwen9b"
+# HF_MODEL (hub name or local path) is the single source of truth.
+CHECKPOINT_DIR = os.environ.get("HF_MODEL", "/local/ttuser/atupe/Qwen9b")
+os.environ.setdefault("HF_MODEL", CHECKPOINT_DIR)
 
 DEVICE_PARAMS = [{"l1_small_size": 24576, "num_command_queues": 2}]
 
@@ -215,7 +218,6 @@ def test_demo_text(
     t0 = time.time()
     model = Qwen35Model.from_pretrained(
         device,
-        CHECKPOINT_DIR,
         max_batch_size=1,
         max_seq_len=max_seq_len,
         # n_layers=4,  # uncomment for fast iteration; default uses 32-layer config

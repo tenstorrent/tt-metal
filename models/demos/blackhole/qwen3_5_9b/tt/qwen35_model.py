@@ -20,7 +20,8 @@ class Qwen35Model:
     """Qwen3.5-9B text-only language model on Blackhole P150.
 
     Usage:
-        model = Qwen35Model.from_pretrained(device, checkpoint_dir)
+        # HF_MODEL env var (hub name or local path) is the single source of truth.
+        model = Qwen35Model.from_pretrained(device)
         logits = model.prefill(token_ids)
         logits = model.decode(token_id, position)
     """
@@ -105,10 +106,17 @@ class Qwen35Model:
         self._chunk_sin_buf = None
 
     @classmethod
-    def from_pretrained(cls, device, checkpoint_dir, max_batch_size=1, max_seq_len=2048, n_layers=None):
+    def from_pretrained(cls, device, max_batch_size=1, max_seq_len=2048, n_layers=None, hf_model=None):
+        # HF_MODEL (env var) is the single source of truth — a hub name or local path —
+        # resolved by Qwen35ModelArgs via the base ModelArgs. `hf_model` is an optional
+        # back-compat convenience: if given, it sets HF_MODEL before constructing args.
+        if hf_model is not None:
+            import os
+
+            os.environ["HF_MODEL"] = hf_model
+
         args = Qwen35ModelArgs(
             mesh_device=device,
-            checkpoint_dir=checkpoint_dir,
             max_batch_size=max_batch_size,
             max_seq_len=max_seq_len,
         )

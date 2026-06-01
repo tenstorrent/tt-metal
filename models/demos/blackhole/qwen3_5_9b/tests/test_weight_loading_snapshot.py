@@ -36,7 +36,10 @@ def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
 
 
 def test_prefill_logits_snapshot(device):
-    model = Qwen35Model.from_pretrained(device, CHECKPOINT_DIR, max_seq_len=2048)
+    # HF_MODEL (hub name or local path) is the single source of truth; the run
+    # command exports it, and CHECKPOINT_DIR mirrors it for the fallback default.
+    os.environ.setdefault("HF_MODEL", CHECKPOINT_DIR)
+    model = Qwen35Model.from_pretrained(device, max_seq_len=2048)
     logits_tt = model.prefill(PROMPT_TOKENS)
     logits = ttnn.to_torch(logits_tt).float().cpu()
 
