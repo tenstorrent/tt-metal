@@ -52,7 +52,6 @@ void kernel_main() {
                     cb_x,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutStreaming,
-                    compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::PackTileReconfig::None>{});
         } else {
             // cb_x = cb_input + cb_x (in-place accumulator).
@@ -74,7 +73,6 @@ void kernel_main() {
                     cb_x,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutStreaming,
-                    compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::PackTileReconfig::None>{});
         }
     }
@@ -105,7 +103,6 @@ void kernel_main() {
                 cb_xpow,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutStreaming,
-                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::PackTileReconfig::Output>{});
     } else {
         compute_kernel_lib::eltwise_chain(
@@ -121,7 +118,6 @@ void kernel_main() {
                 cb_xpow,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutStreaming,
-                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::PackTileReconfig::Output>{});
     }
 
@@ -140,7 +136,6 @@ void kernel_main() {
             cb_logx,
             compute_kernel_lib::Dst::D0,
             compute_kernel_lib::OutStreaming,
-            compute_kernel_lib::OperandKind::Scalar,
             compute_kernel_lib::PackTileReconfig::Output>{});
 
     // Stage C: exp(log(x) * decimal). cb_decimal pre-waited at top of kernel.
@@ -163,7 +158,6 @@ void kernel_main() {
             cb_exp_lxmd,
             compute_kernel_lib::Dst::D0,
             compute_kernel_lib::OutStreaming,
-            compute_kernel_lib::OperandKind::Scalar,
             compute_kernel_lib::PackTileReconfig::Output>{});
 
     // Stage D: x^p * exp(log(x) * decimal) = (x + decimal)^p -> cb_y.
@@ -184,6 +178,5 @@ void kernel_main() {
             cb_y,
             compute_kernel_lib::Dst::D0,
             compute_kernel_lib::OutStreaming,
-            compute_kernel_lib::OperandKind::Scalar,
             compute_kernel_lib::PackTileReconfig::Output>{});
 }

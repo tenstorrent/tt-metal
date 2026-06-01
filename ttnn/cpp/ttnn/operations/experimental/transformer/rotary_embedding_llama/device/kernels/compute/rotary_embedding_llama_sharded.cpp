@@ -87,7 +87,6 @@ void kernel_main() {
                 sin_interm_cb,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutBulk,
-                compute_kernel_lib::OperandKind::Block,
                 compute_kernel_lib::PackTileReconfig::None>{});
 
         // cos_interim = x * cos (bcast ROW). Same pattern as sin_interim.
@@ -108,7 +107,6 @@ void kernel_main() {
                 cos_interm_cb,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutBulk,
-                compute_kernel_lib::OperandKind::Block,
                 compute_kernel_lib::PackTileReconfig::None>{});
 
         // out = cos_interim + sin_interim. Both Bulk + Block, out_cb OutBulk + Block.
@@ -129,7 +127,6 @@ void kernel_main() {
                 out_cb,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutBulk,
-                compute_kernel_lib::OperandKind::Block,
                 compute_kernel_lib::PackTileReconfig::None>{});
     }
 

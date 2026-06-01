@@ -94,7 +94,6 @@ void kernel_main() {
                 cb_recip_sqrt_var,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutStreaming,
-                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 
         /*
@@ -136,7 +135,6 @@ void kernel_main() {
                 normed_output_cb,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutBulk,
-                compute_kernel_lib::OperandKind::Block,
                 compute_kernel_lib::PackTileReconfig::Output>{});
         cb_pop_front(cb_recip_sqrt_var, 1);
 
@@ -162,7 +160,6 @@ void kernel_main() {
                     cb_times_gamma_out,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutBulk,
-                    compute_kernel_lib::OperandKind::Block,
                     compute_kernel_lib::PackTileReconfig::Output>{});
 
             if constexpr (do_beta) {
@@ -187,7 +184,6 @@ void kernel_main() {
                         cb_out,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OutBulk,
-                        compute_kernel_lib::OperandKind::Block,
                         compute_kernel_lib::PackTileReconfig::Output>{});
             }
         }

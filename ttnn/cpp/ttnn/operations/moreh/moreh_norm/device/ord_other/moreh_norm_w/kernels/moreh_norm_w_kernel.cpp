@@ -78,7 +78,6 @@ void kernel_main() {
                         cb_val,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OutStreaming,
-                        compute_kernel_lib::OperandKind::Scalar,
                         compute_kernel_lib::PackTileReconfig::Output>{});
             } else {
                 compute_kernel_lib::eltwise_chain(
@@ -101,7 +100,6 @@ void kernel_main() {
                         cb_val,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OutStreaming,
-                        compute_kernel_lib::OperandKind::Scalar,
                         compute_kernel_lib::PackTileReconfig::Output>{});
             }
 
@@ -119,7 +117,6 @@ void kernel_main() {
                         cb_cal,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OutStreaming,
-                        compute_kernel_lib::OperandKind::Scalar,
                         compute_kernel_lib::PackTileReconfig::Output>{});
             } else {
 #ifdef IS_ZERO
@@ -140,7 +137,6 @@ void kernel_main() {
                         cb_cal,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OutStreaming,
-                        compute_kernel_lib::OperandKind::Scalar,
                         compute_kernel_lib::PackTileReconfig::Output>{});
 #else
                 compute_kernel_lib::eltwise_chain(
@@ -165,7 +161,6 @@ void kernel_main() {
                         cb_cal,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OutStreaming,
-                        compute_kernel_lib::OperandKind::Scalar,
                         compute_kernel_lib::PackTileReconfig::Output>{});
 #endif
             }
@@ -191,7 +186,6 @@ void kernel_main() {
                 cb_y,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutStreaming,
-                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::PackTileReconfig::Output>{});
     }
 

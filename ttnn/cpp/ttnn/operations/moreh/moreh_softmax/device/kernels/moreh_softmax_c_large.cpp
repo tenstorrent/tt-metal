@@ -46,7 +46,6 @@ void kernel_main() {
                         cb_max,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OutStreaming,
-                        compute_kernel_lib::OperandKind::Scalar,
                         compute_kernel_lib::PackTileReconfig::Output>{});
             } else {
                 // cb_max = max(cb_in0, cb_max) — same accumulator pattern as
@@ -73,7 +72,6 @@ void kernel_main() {
                         cb_max,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OutStreaming,
-                        compute_kernel_lib::OperandKind::Scalar,
                         compute_kernel_lib::PackTileReconfig::Output>{});
             }
         }
@@ -103,7 +101,6 @@ void kernel_main() {
                     cb_exps,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutStreaming,
-                    compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::PackTileReconfig::Output>{});
 #else
             compute_kernel_lib::eltwise_chain(
@@ -128,7 +125,6 @@ void kernel_main() {
                     cb_exps,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutStreaming,
-                    compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::PackTileReconfig::Output>{});
 #endif
 
@@ -146,7 +142,6 @@ void kernel_main() {
                         cb_add,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OutStreaming,
-                        compute_kernel_lib::OperandKind::Scalar,
                         compute_kernel_lib::PackTileReconfig::Output>{});
             } else {
                 compute_kernel_lib::eltwise_chain(
@@ -166,7 +161,6 @@ void kernel_main() {
                         cb_add,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OutStreaming,
-                        compute_kernel_lib::OperandKind::Scalar,
                         compute_kernel_lib::PackTileReconfig::Output>{});
             }
         }
@@ -186,7 +180,6 @@ void kernel_main() {
                 cb_recipsumexps,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutStreaming,
-                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 #else
         compute_kernel_lib::eltwise_chain(
@@ -202,7 +195,6 @@ void kernel_main() {
                 cb_recipsumexps,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutStreaming,
-                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 #endif
 
@@ -229,7 +221,6 @@ void kernel_main() {
                     cb_tmp,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutStreaming,
-                    compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::PackTileReconfig::Output>{});
             compute_kernel_lib::eltwise_chain(
                 onetile,
@@ -248,7 +239,6 @@ void kernel_main() {
                     cb_out0,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutStreaming,
-                    compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::PackTileReconfig::Output>{});
 #else
             // -x + max - log(sum). Same as Sub(cb_max, cb_in0) followed by Sub.
@@ -270,7 +260,6 @@ void kernel_main() {
                     cb_tmp,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutStreaming,
-                    compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::PackTileReconfig::Output>{});
             compute_kernel_lib::eltwise_chain(
                 onetile,
@@ -289,7 +278,6 @@ void kernel_main() {
                     cb_out0,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutStreaming,
-                    compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::PackTileReconfig::Output>{});
 #endif
 #else
@@ -316,7 +304,6 @@ void kernel_main() {
                     cb_exps,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutStreaming,
-                    compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::PackTileReconfig::Output>{});
             compute_kernel_lib::eltwise_chain(
                 onetile,
@@ -335,7 +322,6 @@ void kernel_main() {
                     cb_out0,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutStreaming,
-                    compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::PackTileReconfig::Output>{});
 #else
             // rexp(x - max) / sum (softmin path).
@@ -361,7 +347,6 @@ void kernel_main() {
                     cb_exps,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutStreaming,
-                    compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::PackTileReconfig::Output>{});
             compute_kernel_lib::eltwise_chain(
                 onetile,
@@ -380,7 +365,6 @@ void kernel_main() {
                     cb_out0,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutStreaming,
-                    compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::PackTileReconfig::Output>{});
 #endif
 #endif

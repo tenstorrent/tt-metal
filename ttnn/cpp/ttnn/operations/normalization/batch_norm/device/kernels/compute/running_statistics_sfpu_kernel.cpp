@@ -102,13 +102,8 @@ void kernel_main() {
                     CopyTile<cb_momentum, Dst::D2, CallerManaged, OperandKind::Scalar, CopyTileReconfig::Input>{},
                     MulBinary<Dst::D1, Dst::D2, Dst::D1>{},
                     AddBinary<Dst::D0, Dst::D1, Dst::D0>{},
-                    PackTile<
-                        cb_updated_running_mean,
-                        Dst::D0,
-                        OutStreaming,
-                        OperandKind::Scalar,
-                        PackTileReconfig::Output>{},
-                    PackTile<cb_out0, Dst::D0, OutCallerManaged, OperandKind::Scalar, PackTileReconfig::Output>{});
+                    PackTile<cb_updated_running_mean, Dst::D0, OutStreaming, PackTileReconfig::Output>{},
+                    PackTile<cb_out0, Dst::D0, OutCallerManaged, PackTileReconfig::Output>{});
             } else {
                 eltwise_chain(
                     onetile,
@@ -121,12 +116,7 @@ void kernel_main() {
                     CopyTile<cb_momentum, Dst::D2, CallerManaged, OperandKind::Scalar, CopyTileReconfig::Input>{},
                     MulBinary<Dst::D1, Dst::D2, Dst::D1>{},
                     AddBinary<Dst::D0, Dst::D1, Dst::D0>{},
-                    PackTile<
-                        cb_updated_running_mean,
-                        Dst::D0,
-                        OutStreaming,
-                        OperandKind::Scalar,
-                        PackTileReconfig::Output>{});
+                    PackTile<cb_updated_running_mean, Dst::D0, OutStreaming, PackTileReconfig::Output>{});
             }
 
             if constexpr (needs_mean_typecast) {
@@ -134,12 +124,7 @@ void kernel_main() {
                     onetile,
                     CopyTile<cb_updated_running_mean, Dst::D0, Bulk, OperandKind::Scalar, CopyTileReconfig::Input>{},
                     Typecast<tc_in_fmt, tc_out_fmt, Dst::D0>{},
-                    PackTile<
-                        cb_writer_updated_mean,
-                        Dst::D0,
-                        OutStreaming,
-                        OperandKind::Scalar,
-                        PackTileReconfig::Output>{});
+                    PackTile<cb_writer_updated_mean, Dst::D0, OutStreaming, PackTileReconfig::Output>{});
             }
         }
 
@@ -161,25 +146,15 @@ void kernel_main() {
                 CopyTile<cb_momentum, Dst::D2, CallerManaged, OperandKind::Scalar, CopyTileReconfig::Input>{},
                 MulBinary<Dst::D1, Dst::D2, Dst::D1>{},
                 AddBinary<Dst::D0, Dst::D1, Dst::D0>{},
-                PackTile<
-                    cb_updated_running_var,
-                    Dst::D0,
-                    OutStreaming,
-                    OperandKind::Scalar,
-                    PackTileReconfig::Output>{},
-                PackTile<cb_out0, Dst::D0, OutCallerManaged, OperandKind::Scalar, PackTileReconfig::Output>{});
+                PackTile<cb_updated_running_var, Dst::D0, OutStreaming, PackTileReconfig::Output>{},
+                PackTile<cb_out0, Dst::D0, OutCallerManaged, PackTileReconfig::Output>{});
 
             if constexpr (needs_var_typecast) {
                 eltwise_chain(
                     onetile,
                     CopyTile<cb_updated_running_var, Dst::D0, Bulk, OperandKind::Scalar, CopyTileReconfig::Input>{},
                     Typecast<tc_in_fmt, tc_out_fmt, Dst::D0>{},
-                    PackTile<
-                        cb_writer_updated_var,
-                        Dst::D0,
-                        OutStreaming,
-                        OperandKind::Scalar,
-                        PackTileReconfig::Output>{});
+                    PackTile<cb_writer_updated_var, Dst::D0, OutStreaming, PackTileReconfig::Output>{});
             }
         }
 

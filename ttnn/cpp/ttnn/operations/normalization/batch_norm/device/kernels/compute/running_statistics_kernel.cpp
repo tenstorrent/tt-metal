@@ -31,7 +31,7 @@ ALWI void fpu_binary_to_cb_chain() {
             OperandKind::Scalar,
             Dst::D0,
             OperandKind::Scalar>{},
-        PackTile<CbOut, Dst::D0, OutStreaming, OperandKind::Scalar, PackTileReconfig::Output>{});
+        PackTile<CbOut, Dst::D0, OutStreaming, PackTileReconfig::Output>{});
 }
 
 }  // namespace
@@ -102,13 +102,8 @@ void kernel_main() {
                         OperandKind::Scalar,
                         Dst::D0,
                         OperandKind::Scalar>{},
-                    PackTile<
-                        cb_updated_running_mean,
-                        Dst::D0,
-                        OutStreaming,
-                        OperandKind::Scalar,
-                        PackTileReconfig::Output>{},
-                    PackTile<cb_out0, Dst::D0, OutCallerManaged, OperandKind::Scalar, PackTileReconfig::None>{});
+                    PackTile<cb_updated_running_mean, Dst::D0, OutStreaming, PackTileReconfig::Output>{},
+                    PackTile<cb_out0, Dst::D0, OutCallerManaged, PackTileReconfig::None>{});
             } else {
                 eltwise_chain(
                     onetile,
@@ -123,12 +118,7 @@ void kernel_main() {
                         OperandKind::Scalar,
                         Dst::D0,
                         OperandKind::Scalar>{},
-                    PackTile<
-                        cb_updated_running_mean,
-                        Dst::D0,
-                        OutStreaming,
-                        OperandKind::Scalar,
-                        PackTileReconfig::Output>{});
+                    PackTile<cb_updated_running_mean, Dst::D0, OutStreaming, PackTileReconfig::Output>{});
             }
         }
         if constexpr (old_running_var_has_value) {
@@ -149,13 +139,8 @@ void kernel_main() {
                     OperandKind::Scalar,
                     Dst::D0,
                     OperandKind::Scalar>{},
-                PackTile<
-                    cb_updated_running_var,
-                    Dst::D0,
-                    OutStreaming,
-                    OperandKind::Scalar,
-                    PackTileReconfig::Output>{},
-                PackTile<cb_out0, Dst::D0, OutCallerManaged, OperandKind::Scalar, PackTileReconfig::None>{});
+                PackTile<cb_updated_running_var, Dst::D0, OutStreaming, PackTileReconfig::Output>{},
+                PackTile<cb_out0, Dst::D0, OutCallerManaged, PackTileReconfig::None>{});
         }
         cb_out0_obj.push_back(1);
     }

@@ -143,7 +143,6 @@ void kernel_main() {
                 cb_scale_mask,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutStreaming,
-                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::PackTileReconfig::Output>{});
         reconfig_data_format(cb_scale_mask, cb_fused_attn);
 
@@ -248,7 +247,6 @@ void kernel_main() {
                     cb_x,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutStreaming,
-                    compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::PackTileReconfig::None>{});
 
             compute_kernel_lib::eltwise_chain(
@@ -274,7 +272,6 @@ void kernel_main() {
                     cb_x,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutStreaming,
-                    compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::PackTileReconfig::None>{});
 
 // add numeric_stable
@@ -314,7 +311,6 @@ void kernel_main() {
                     cb_exps,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutStreaming,
-                    compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::PackTileReconfig::None>{});
 #endif
         }
@@ -363,7 +359,6 @@ void kernel_main() {
                 cb_out0,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutStreaming,
-                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::PackTileReconfig::Output>{});
         cb_recipsumexps_obj.pop_front(1);
     }  // NCHt loop

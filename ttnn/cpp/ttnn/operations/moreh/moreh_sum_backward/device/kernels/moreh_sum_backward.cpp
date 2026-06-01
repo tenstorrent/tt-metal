@@ -68,7 +68,6 @@ void kernel_main() {
                 cb_out0,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutStreaming,
-                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::PackTileReconfig::None>{});
     }
     cb_in1_obj.pop_front(onetile);

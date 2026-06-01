@@ -156,7 +156,6 @@ void kernel_main() {
                 cb_tmp1,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutStreaming,
-                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 
         // cb_tmp1 = 1 / (1 - cb_tmp1)  — same-CB in/out on cb_tmp1.
@@ -184,7 +183,6 @@ void kernel_main() {
                 cb_tmp1,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutStreaming,
-                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 
 #ifdef AMSGRAD
@@ -215,7 +213,6 @@ void kernel_main() {
                 tmp_cb_max_exp_avg_sq,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutStreaming,
-                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 
         // cb_max_exp_avg_sq_out = tmp_cb_max_exp_avg_sq[first_tile]
@@ -235,7 +232,6 @@ void kernel_main() {
                 cb_max_exp_avg_sq_out,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutStreaming,
-                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 #endif
 
@@ -266,7 +262,6 @@ void kernel_main() {
                 cb_tmp1,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutStreaming,
-                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::PackTileReconfig::Output>{});
         tmp_cb_max_exp_avg_sq_obj.pop_front(onetile);
 #else
@@ -288,7 +283,6 @@ void kernel_main() {
                 cb_tmp1,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutStreaming,
-                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 #endif
         tmp_cb_exp_avg_sq_obj.pop_front(onetile);
@@ -319,7 +313,6 @@ void kernel_main() {
                 cb_tmp1,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutStreaming,
-                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 
         // bias_correction1 = 1 - pow(beta1, step);
@@ -340,7 +333,6 @@ void kernel_main() {
                 cb_tmp2,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutStreaming,
-                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 
         // cb_tmp2 = 1 / (1 - cb_tmp2)  — same-CB in/out on cb_tmp2.
@@ -366,7 +358,6 @@ void kernel_main() {
                 cb_tmp2,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutStreaming,
-                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 
         // cb_tmp2 = lr * cb_tmp2;

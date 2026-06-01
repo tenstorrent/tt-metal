@@ -46,7 +46,7 @@ ALWI void mul_tiles_chain(uint32_t in1_idx) {
             OperandKind::Scalar,
             compute_kernel_lib::TileOffset::Unset,
             compute_kernel_lib::TileOffset::Set>{0u, in1_idx},
-        PackTile<out_cb, Dst::D0, OutCallerManaged, OperandKind::Scalar, PackTileReconfig::None>{});
+        PackTile<out_cb, Dst::D0, OutCallerManaged, PackTileReconfig::None>{});
     cb_pop_front(in0_cb, 1);
     cb_push_back(out_cb, 1);
     // in1 NOT popped — held across the whole walk per DECODE_MODE contract.
@@ -65,7 +65,7 @@ ALWI void mul_tiles_chain(uint32_t in1_idx) {
             OperandKind::Scalar,
             Dst::D0,
             OperandKind::Scalar>{},
-        PackTile<out_cb, Dst::D0, OutStreaming, OperandKind::Scalar, PackTileReconfig::None>{});
+        PackTile<out_cb, Dst::D0, OutStreaming, PackTileReconfig::None>{});
 #endif
 }
 
@@ -164,7 +164,6 @@ void kernel_main() {
                         rotated_in_interm_cb,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OutStreaming,
-                        compute_kernel_lib::OperandKind::Scalar,
                         compute_kernel_lib::PackTileReconfig::Output>{});
                 reconfig_data_format_srcb(scalar_cb, updated_sin_cb);
                 pack_reconfig_data_format(rotated_in_interm_cb, sin_interm_cb);
@@ -203,7 +202,6 @@ void kernel_main() {
                     out_cb,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutStreaming,
-                    compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::PackTileReconfig::Output>{});
         }
     }

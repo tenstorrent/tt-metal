@@ -61,6 +61,5 @@ void kernel_main() {
             cb_grad_in,
             compute_kernel_lib::Dst::D0,
             compute_kernel_lib::OutChunked,
-            compute_kernel_lib::OperandKind::Block,
             compute_kernel_lib::PackTileReconfig::None>{});
 }

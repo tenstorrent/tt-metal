@@ -448,7 +448,6 @@ void kernel_main() {
                                     cb_x_id,
                                     compute_kernel_lib::Dst::D0,
                                     compute_kernel_lib::OutStreaming,
-                                    compute_kernel_lib::OperandKind::Scalar,
                                     compute_kernel_lib::PackTileReconfig::None>{});
                         } else {
                             compute_kernel_lib::eltwise_chain(
@@ -468,7 +467,6 @@ void kernel_main() {
                                     cb_x_id,
                                     compute_kernel_lib::Dst::D0,
                                     compute_kernel_lib::OutStreaming,
-                                    compute_kernel_lib::OperandKind::Scalar,
                                     compute_kernel_lib::PackTileReconfig::None>{});
                         }
 
@@ -525,7 +523,6 @@ void kernel_main() {
                                 cb_x_id,
                                 compute_kernel_lib::Dst::D0,
                                 compute_kernel_lib::OutStreaming,
-                                compute_kernel_lib::OperandKind::Scalar,
                                 compute_kernel_lib::PackTileReconfig::None>{});
                     }
 
@@ -553,7 +550,6 @@ void kernel_main() {
                                 cb_x_id,
                                 compute_kernel_lib::Dst::D0,
                                 compute_kernel_lib::OutStreaming,
-                                compute_kernel_lib::OperandKind::Scalar,
                                 compute_kernel_lib::PackTileReconfig::None>{});
                     }
 
@@ -573,7 +569,6 @@ void kernel_main() {
                             cb_out_id,
                             compute_kernel_lib::Dst::D0,
                             compute_kernel_lib::OutStreaming,
-                            compute_kernel_lib::OperandKind::Scalar,
                             compute_kernel_lib::PackTileReconfig::None>{});
                 }
             }

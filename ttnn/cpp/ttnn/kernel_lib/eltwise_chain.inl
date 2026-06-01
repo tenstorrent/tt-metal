@@ -380,18 +380,11 @@ struct CopyTile : CopyTileTag {
 template <uint32_t Cb,
           Dst DstSlot,
           OutputLifecycle Policy,
-          OperandKind IndexMode,
           PackTileReconfig Reconfig,
           TileOffset Offset>
 struct PackTile : PackTileTag {
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT,
                   "PackTile: DEST slot exceeds DEST_AUTO_LIMIT");
-    static_assert(!(Policy == OutStreaming && IndexMode == OperandKind::Block),
-                  "PackTile: BlockIter index requires UpfrontReservePushAtEnd or NoReserve* policy");
-    static_assert(!(Policy == OutHeldReserve  && IndexMode == OperandKind::Block),
-                  "PackTile: BlockIter index requires UpfrontReservePushAtEnd or NoReserve* policy");
-    static_assert(!(Policy == OutDeferredReserve    && IndexMode == OperandKind::Block),
-                  "PackTile: BlockIter requires Upfront* / NoReserveNoPush");
     // TileBase != None on pack side requires caller-managed-style lifecycle on the
     // output CB (caller pre-reserved a window large enough for base + kind window).
     // Streaming / Chunked reserve+push counts can't be inflated by a runtime base
@@ -405,7 +398,11 @@ struct PackTile : PackTileTag {
     static constexpr Dst               pack_dst_slot       = DstSlot;
     static constexpr bool              is_upfront          = (Policy == OutBulk);
     static constexpr bool              uses_per_block_pack = (Policy == OutChunked);
-    static constexpr OperandKind index_mode          = IndexMode;
+    // Walk vs pinned output addressing is DERIVED from the OutputLifecycle (no caller knob):
+    // OutBulk reserves the whole window upfront and writes distinct tiles into it (walk); every
+    // other policy advances the CB front via per-tile/chunk reserve+push, so the write index
+    // stays pinned at base. (For a 1-tile output, walk and pinned are identical: base + 0 == base.)
+    static constexpr bool              walk                = (Policy == OutBulk);
 
     // Prev-CB fold (D2): PackTile writes pack-side; mark Cb under reconfig only when
     // the user opted into pack reconfig (Output). Otherwise no pack reconfig is
@@ -443,27 +440,24 @@ struct PackTile : PackTileTag {
 
 
 
-    // 2D pack exec — output is block-walked (i_flat = ht*Wt + wt) for BlockIter,
-    // or pinned to slot 0 (+ base) for FirstTile. TileBase adds runtime offset.
+    // Pack exec — walk the reserved output window (base + i_flat) for OutBulk, or stay pinned
+    // at base for per-tile/chunk policies whose CB front already advanced. TileOffset adds base.
     ALWI void exec(uint32_t i_flat, uint32_t /*ht*/, uint32_t /*wt*/, uint32_t slot_offset) const {
         const uint32_t base = tile_base_value<Offset>(tile_base);
-        const uint32_t out_idx = [&]() -> uint32_t {
-            if constexpr (IndexMode == OperandKind::Scalar) return base;
-            else /* BlockIter */                                     return base + i_flat;
-        }();
+        const uint32_t out_idx = walk ? (base + i_flat) : base;
         pack_tile(to_u32(DstSlot) + slot_offset, Cb, out_idx);
     }
 
-    // 2D upfront reserve/push — OperandKind-aware window (Scalar = 1, Block = Ht*Wt).
+    // Upfront reserve/push — OutBulk walks the full window (Ht*Wt); OutDeferredReserve is pinned (1).
     ALWI void reserve_upfront(uint32_t Ht, uint32_t Wt) const {
         if constexpr (Policy == OutBulk) {
-            cb_reserve_back(Cb, detail::window<IndexMode>(Ht, Wt) + tile_base_value<Offset>(tile_base));
+            cb_reserve_back(Cb, (Ht * Wt) + tile_base_value<Offset>(tile_base));
         }
     }
     ALWI void push_at_end(uint32_t Ht, uint32_t Wt) const {
         if constexpr (Policy == OutDeferredReserve ||
                       Policy == OutBulk) {
-            cb_push_back(Cb, detail::window<IndexMode>(Ht, Wt) + tile_base_value<Offset>(tile_base));
+            cb_push_back(Cb, (walk ? (Ht * Wt) : 1u) + tile_base_value<Offset>(tile_base));
         }
     }
 
@@ -1168,11 +1162,6 @@ template <class E, class = void>
 struct elem_has_b_index_mode : std::false_type {};
 template <class E>
 struct elem_has_b_index_mode<E, std::void_t<decltype(E::b_index_mode)>> : std::true_type {};
-
-template <class E, class = void>
-struct elem_has_index_mode : std::false_type {};
-template <class E>
-struct elem_has_index_mode<E, std::void_t<decltype(E::index_mode)>> : std::true_type {};
 
 }  // namespace detail
 

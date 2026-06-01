@@ -221,7 +221,6 @@ void kernel_main() {
                     cb_exps,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutBulk,
-                    compute_kernel_lib::OperandKind::Block,
                     compute_kernel_lib::PackTileReconfig::Output>{});
             index_subblock_w_offset += subblock_w;
         }
@@ -271,7 +270,6 @@ void kernel_main() {
                 cb_out0,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutStreaming,
-                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::PackTileReconfig::Output>{});
         cb_recipsumexps_obj.pop_front(1);
     }

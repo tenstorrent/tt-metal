@@ -159,7 +159,6 @@ void kernel_main() {
                 cb_recip_sqrt_var,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutStreaming,
-                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 
         if constexpr (do_gamma && do_beta) {

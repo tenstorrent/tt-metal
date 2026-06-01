@@ -96,7 +96,6 @@ void kernel_main() {
                 cb_recip_sqrt_var,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutStreaming,
-                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 
         // Process tiles across width in blocks
@@ -125,7 +124,6 @@ void kernel_main() {
                     cb_intermediate,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutBulk,
-                    compute_kernel_lib::OperandKind::Block,
                     compute_kernel_lib::PackTileReconfig::Output>{});
 
             // 2) normalize: (x-mean) * inv_std
@@ -211,7 +209,6 @@ void kernel_main() {
                         cb_out,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OutBulk,
-                        compute_kernel_lib::OperandKind::Block,
                         compute_kernel_lib::PackTileReconfig::Output>{});
             }
         }

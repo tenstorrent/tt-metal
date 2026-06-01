@@ -50,7 +50,6 @@ void kernel_main() {
                     cb_out0,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutStreaming,
-                    compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::PackTileReconfig::Output>{});
         } else {
             // Seed: cb_in0 * cb_in1 -> cb_intermed0 (cb_in1 = scaler, held).
@@ -71,7 +70,6 @@ void kernel_main() {
                     cb_intermed0,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutStreaming,
-                    compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::PackTileReconfig::Output>{});
             // Middle: cb_in0 * cb_intermed0 -> cb_intermed0 (n_input - 2 iters).
             if (num_input_tiles > 2) {
@@ -92,7 +90,6 @@ void kernel_main() {
                         cb_intermed0,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OutStreaming,
-                        compute_kernel_lib::OperandKind::Scalar,
                         compute_kernel_lib::PackTileReconfig::Output>{});
             }
             // Final: cb_in0 * cb_intermed0 -> cb_out0.
@@ -113,7 +110,6 @@ void kernel_main() {
                     cb_out0,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutStreaming,
-                    compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::PackTileReconfig::Output>{});
         }
     }

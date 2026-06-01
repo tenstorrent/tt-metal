@@ -143,7 +143,7 @@
  *   eltwise_chain(num_tiles,
  *       CopyTile<cb_in, Dst::D0, Bulk, OperandKind::Block>{},
  *       Exp<>{},
- *       PackTile<cb_out, Dst::D0, OutBulk, OperandKind::Block>{}
+ *       PackTile<cb_out, Dst::D0, OutBulk>{}
  *   );
  *
  *   // Asymmetric bcast walk — A streams the tile range, B pinned at tile 0
@@ -998,7 +998,6 @@ template <
     uint32_t Cb,
     Dst DstSlot = Dst::D0,
     OutputLifecycle Policy = OutStreaming,
-    OperandKind IndexMode = OperandKind::Scalar,
     PackTileReconfig Reconfig = PackTileReconfig::Output,
     TileOffset Offset = TileOffset::Unset>
 struct PackTile;

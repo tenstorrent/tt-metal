@@ -124,7 +124,6 @@ void kernel_main() {
                 cb_x_m_max,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutBulk,
-                compute_kernel_lib::OperandKind::Block,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 
         // compute exp(x - max(x)) — split into 2 chains, same pattern as
@@ -152,7 +151,6 @@ void kernel_main() {
                 cb_exps,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutStreaming,
-                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 
         compute_kernel_lib::eltwise_chain(
@@ -182,7 +180,6 @@ void kernel_main() {
                 cb_exps,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutStreaming,
-                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 
 #ifdef LOG
@@ -243,7 +240,6 @@ void kernel_main() {
                 cb_out0,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutBulk,
-                compute_kernel_lib::OperandKind::Block,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 #else
         compute_kernel_lib::eltwise_chain(
@@ -263,7 +259,6 @@ void kernel_main() {
                 cb_out0,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutBulk,
-                compute_kernel_lib::OperandKind::Block,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 #endif
         cb_x_m_max_obj.pop_front(Wt);

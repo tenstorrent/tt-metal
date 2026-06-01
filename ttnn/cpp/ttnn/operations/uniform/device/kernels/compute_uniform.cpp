@@ -36,5 +36,5 @@ void kernel_main() {
     eltwise_chain(
         num_tiles,
         RandTile<Dst::D0>{f2u_from.u, f2u_scale.u},
-        PackTile<intermed_cb_id, Dst::D0, OutStreaming, OperandKind::Scalar, PackTileReconfig::None>{});
+        PackTile<intermed_cb_id, Dst::D0, OutStreaming, PackTileReconfig::None>{});
 }

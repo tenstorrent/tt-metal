@@ -121,7 +121,6 @@ void kernel_main() {
                 sin_interm_cb,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutCallerManaged,
-                compute_kernel_lib::OperandKind::Block,
                 compute_kernel_lib::PackTileReconfig::None>{});
         cb_push_back(sin_interm_cb, Wt);
         cb_pop_front(rotated_in_interm_cb, Wt);

@@ -328,7 +328,6 @@ void kernel_main() {
                     cb_x_id,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutStreaming,
-                    compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::PackTileReconfig::None>{});
             cb_ex_global.pop_front(1);
 
@@ -440,7 +439,6 @@ void kernel_main() {
                     cb_ex2pe_id,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutStreaming,
-                    compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::PackTileReconfig::None>{});
             //  (x - Ex) * 1/[sqrt(Var + eps)]
             index_h_offset = 0;

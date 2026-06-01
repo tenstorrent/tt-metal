@@ -54,7 +54,7 @@ ALWI void batchnorm_bcast_tiles(uint32_t freq, uint32_t tile_start) {
         CopyTile<cb_eps, Dst::D1, CallerManaged, OperandKind::Scalar, CopyTileReconfig::Input>{},
         AddBinary<Dst::D0, Dst::D1, Dst::D0>{},
         Rsqrt<>{},
-        PackTile<cb_den, Dst::D0, OutStreaming, OperandKind::Scalar, PackTileReconfig::Output>{});
+        PackTile<cb_den, Dst::D0, OutStreaming, PackTileReconfig::Output>{});
 
     const uint32_t inner_count = freq - tile_start;
 
@@ -89,7 +89,7 @@ ALWI void batchnorm_bcast_tiles(uint32_t freq, uint32_t tile_start) {
         OptionalChainElement<BiasHas, CopyTile<cb_bias, Dst::D1, Bulk, OperandKind::Scalar, CopyTileReconfig::Input>>{},
         OptionalChainElement<BiasHas, AddBinary<Dst::D0, Dst::D1, Dst::D0>>{},
         OptionalChainElement<NeedsTypecast, Typecast<TcInFmt, TcOutFmt, Dst::D0>>{},
-        PackTile<cb_final_out, Dst::D0, OutStreaming, OperandKind::Scalar, PackTileReconfig::Output>{});
+        PackTile<cb_final_out, Dst::D0, OutStreaming, PackTileReconfig::Output>{});
 }
 
 void kernel_main() {

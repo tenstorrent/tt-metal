@@ -84,7 +84,6 @@ void kernel_main() {
                         cb_masked_input,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OutStreaming,
-                        compute_kernel_lib::OperandKind::Scalar,
                         compute_kernel_lib::PackTileReconfig::Output>{});
 
                 // Phase 2 with masked input: Reduce final masked tile with accumulation

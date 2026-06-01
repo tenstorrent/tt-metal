@@ -245,7 +245,6 @@ void kernel_main() {
                 cb_ex2pe,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutDeferredReserve,
-                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 
         // Broadcast the tile since cb_ex2pe is a column vector that contains the important data.
@@ -272,7 +271,6 @@ void kernel_main() {
                 cb_ex2pe,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutStreaming,
-                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::PackTileReconfig::Output>{});
         cb_ex2pe_obj.wait_front(onetile);
 

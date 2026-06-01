@@ -112,7 +112,6 @@ void kernel_main() {
                         sin_interm_cb,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OutBulk,
-                        compute_kernel_lib::OperandKind::Block,
                         compute_kernel_lib::PackTileReconfig::None>{});
 #else
                 compute_kernel_lib::eltwise_chain(
@@ -132,7 +131,6 @@ void kernel_main() {
                         sin_interm_cb,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OutBulk,
-                        compute_kernel_lib::OperandKind::Block,
                         compute_kernel_lib::PackTileReconfig::None>{});
 #endif
 
@@ -157,7 +155,6 @@ void kernel_main() {
                         cos_interm_cb,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OutBulk,
-                        compute_kernel_lib::OperandKind::Block,
                         compute_kernel_lib::PackTileReconfig::None>{});
 #else
                 compute_kernel_lib::eltwise_chain(
@@ -177,7 +174,6 @@ void kernel_main() {
                         cos_interm_cb,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OutBulk,
-                        compute_kernel_lib::OperandKind::Block,
                         compute_kernel_lib::PackTileReconfig::None>{});
 #endif
 
@@ -201,7 +197,6 @@ void kernel_main() {
                         out_cb,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OutBulk,
-                        compute_kernel_lib::OperandKind::Block,
                         compute_kernel_lib::PackTileReconfig::None>{});
 
 #if RELOAD_IMPL == 0

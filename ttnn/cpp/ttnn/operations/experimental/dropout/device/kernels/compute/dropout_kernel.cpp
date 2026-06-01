@@ -39,6 +39,5 @@ void kernel_main() {
             cb_output,
             compute_kernel_lib::Dst::D0,
             compute_kernel_lib::OutStreaming,
-            compute_kernel_lib::OperandKind::Scalar,
             compute_kernel_lib::PackTileReconfig::None>{});
 }

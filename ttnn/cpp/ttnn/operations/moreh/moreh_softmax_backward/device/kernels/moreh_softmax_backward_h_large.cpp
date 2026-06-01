@@ -57,7 +57,6 @@ void kernel_main() {
                             cb_add,
                             compute_kernel_lib::Dst::D0,
                             compute_kernel_lib::OutStreaming,
-                            compute_kernel_lib::OperandKind::Scalar,
                             compute_kernel_lib::PackTileReconfig::Output>{});
                 } else {
                     // mask cb_dy -> cb_inter0; then add to cb_add.
@@ -81,7 +80,6 @@ void kernel_main() {
                             cb_inter0,
                             compute_kernel_lib::Dst::D0,
                             compute_kernel_lib::OutStreaming,
-                            compute_kernel_lib::OperandKind::Scalar,
                             compute_kernel_lib::PackTileReconfig::Output>{});
                     compute_kernel_lib::eltwise_chain(
                         onetile,
@@ -100,7 +98,6 @@ void kernel_main() {
                             cb_add,
                             compute_kernel_lib::Dst::D0,
                             compute_kernel_lib::OutStreaming,
-                            compute_kernel_lib::OperandKind::Scalar,
                             compute_kernel_lib::PackTileReconfig::Output>{});
                 }
             } else {
@@ -117,7 +114,6 @@ void kernel_main() {
                             cb_add,
                             compute_kernel_lib::Dst::D0,
                             compute_kernel_lib::OutStreaming,
-                            compute_kernel_lib::OperandKind::Scalar,
                             compute_kernel_lib::PackTileReconfig::Output>{});
                 } else {
                     compute_kernel_lib::eltwise_chain(
@@ -137,7 +133,6 @@ void kernel_main() {
                             cb_add,
                             compute_kernel_lib::Dst::D0,
                             compute_kernel_lib::OutStreaming,
-                            compute_kernel_lib::OperandKind::Scalar,
                             compute_kernel_lib::PackTileReconfig::Output>{});
                 }
             }
@@ -166,7 +161,6 @@ void kernel_main() {
                     cb_exp,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutStreaming,
-                    compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::PackTileReconfig::Output>{});
             compute_kernel_lib::eltwise_chain(
                 onetile,
@@ -185,7 +179,6 @@ void kernel_main() {
                     cb_inter2,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutStreaming,
-                    compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::PackTileReconfig::Output>{});
             compute_kernel_lib::eltwise_chain(
                 onetile,
@@ -204,7 +197,6 @@ void kernel_main() {
                     cb_dx,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutStreaming,
-                    compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::PackTileReconfig::Output>{});
         }
 
@@ -239,7 +231,6 @@ void kernel_main() {
                         cb_ydy,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OutStreaming,
-                        compute_kernel_lib::OperandKind::Scalar,
                         compute_kernel_lib::PackTileReconfig::Output>{});
             } else {
                 compute_kernel_lib::eltwise_chain(
@@ -259,7 +250,6 @@ void kernel_main() {
                         cb_ydy,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OutStreaming,
-                        compute_kernel_lib::OperandKind::Scalar,
                         compute_kernel_lib::PackTileReconfig::Output>{});
             }
 
@@ -277,7 +267,6 @@ void kernel_main() {
                         cb_add,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OutStreaming,
-                        compute_kernel_lib::OperandKind::Scalar,
                         compute_kernel_lib::PackTileReconfig::Output>{});
             } else {
                 compute_kernel_lib::eltwise_chain(
@@ -297,7 +286,6 @@ void kernel_main() {
                         cb_add,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OutStreaming,
-                        compute_kernel_lib::OperandKind::Scalar,
                         compute_kernel_lib::PackTileReconfig::Output>{});
             }
         }
@@ -324,7 +312,6 @@ void kernel_main() {
                     cb_inter2,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutStreaming,
-                    compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::PackTileReconfig::Output>{});
 #ifdef SOFTMAX
             compute_kernel_lib::eltwise_chain(
@@ -344,7 +331,6 @@ void kernel_main() {
                     cb_dx,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutStreaming,
-                    compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::PackTileReconfig::Output>{});
 #else
             // mul_tiles_and_negative_to_cb: mul then negate.
@@ -366,7 +352,6 @@ void kernel_main() {
                     cb_dx,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutStreaming,
-                    compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::PackTileReconfig::Output>{});
 #endif
         }

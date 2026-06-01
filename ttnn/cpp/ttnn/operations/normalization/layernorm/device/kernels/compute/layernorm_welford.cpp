@@ -128,7 +128,6 @@ void kernel_main() {
                         cb_x,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OutBulk,
-                        compute_kernel_lib::OperandKind::Block,
                         compute_kernel_lib::PackTileReconfig::Output>{});
             }
             reconfig_data_format(cb_in, cb_x, cb_inb, cb_ex);
@@ -227,7 +226,6 @@ void kernel_main() {
                     cb_xmm,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutBulk,
-                    compute_kernel_lib::OperandKind::Block,
                     compute_kernel_lib::PackTileReconfig::None>{});
         }
         cb_ex_obj.pop_front(1);
@@ -263,7 +261,6 @@ void kernel_main() {
                 cb_ex2pe,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutStreaming,
-                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::PackTileReconfig::None>{});
 
         // Remainder of the layernorm operation
@@ -300,7 +297,6 @@ void kernel_main() {
                     cb_im_or_out,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutBulk,
-                    compute_kernel_lib::OperandKind::Block,
                     compute_kernel_lib::PackTileReconfig::Output>{});
 
             if constexpr (do_gamma) {
@@ -328,7 +324,6 @@ void kernel_main() {
                         cb_outg,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OutBulk,
-                        compute_kernel_lib::OperandKind::Block,
                         compute_kernel_lib::PackTileReconfig::Output>{});
             }
             if constexpr (do_beta) {
@@ -353,7 +348,6 @@ void kernel_main() {
                         cb_out,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OutBulk,
-                        compute_kernel_lib::OperandKind::Block,
                         compute_kernel_lib::PackTileReconfig::Output>{});
             }
         }

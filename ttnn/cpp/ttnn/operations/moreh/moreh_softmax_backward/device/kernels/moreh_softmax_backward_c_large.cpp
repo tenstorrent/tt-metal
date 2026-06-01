@@ -45,7 +45,6 @@ void kernel_main() {
                         cb_sum,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OutStreaming,
-                        compute_kernel_lib::OperandKind::Scalar,
                         compute_kernel_lib::PackTileReconfig::Output>{});
             } else {
                 compute_kernel_lib::eltwise_chain(
@@ -65,7 +64,6 @@ void kernel_main() {
                         cb_sum,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OutStreaming,
-                        compute_kernel_lib::OperandKind::Scalar,
                         compute_kernel_lib::PackTileReconfig::Output>{});
             }
         }
@@ -89,7 +87,6 @@ void kernel_main() {
                     cb_exp,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutStreaming,
-                    compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::PackTileReconfig::Output>{});
 
             // sum * exp(y) — cb_sum held outside, cb_exp streaming.
@@ -111,7 +108,6 @@ void kernel_main() {
                     cb_inter2,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutStreaming,
-                    compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::PackTileReconfig::Output>{});
 
             // dy - sum * exp(y).
@@ -132,7 +128,6 @@ void kernel_main() {
                     cb_dx,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutStreaming,
-                    compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::PackTileReconfig::Output>{});
         }
         cb_sum_obj.pop_front(onetile);
@@ -156,7 +151,6 @@ void kernel_main() {
                     cb_ydy,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutStreaming,
-                    compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::PackTileReconfig::Output>{});
 
             if (i == 0) {
@@ -172,7 +166,6 @@ void kernel_main() {
                         cb_sum,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OutStreaming,
-                        compute_kernel_lib::OperandKind::Scalar,
                         compute_kernel_lib::PackTileReconfig::Output>{});
             } else {
                 compute_kernel_lib::eltwise_chain(
@@ -192,7 +185,6 @@ void kernel_main() {
                         cb_sum,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OutStreaming,
-                        compute_kernel_lib::OperandKind::Scalar,
                         compute_kernel_lib::PackTileReconfig::Output>{});
             }
         }
@@ -217,7 +209,6 @@ void kernel_main() {
                     cb_dy_m_sum,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutStreaming,
-                    compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::PackTileReconfig::Output>{});
 #ifdef SOFTMAX
             // (dy - sum) * y. cb_y held outside (CallerManaged).
@@ -238,7 +229,6 @@ void kernel_main() {
                     cb_dx,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutStreaming,
-                    compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::PackTileReconfig::Output>{});
 #else
             // -(dy - sum) * y.
@@ -260,7 +250,6 @@ void kernel_main() {
                     cb_dx,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutStreaming,
-                    compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::PackTileReconfig::Output>{});
 #endif
         }

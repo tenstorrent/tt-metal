@@ -170,7 +170,6 @@ void kernel_main() {
                     cb_x,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutBulk,
-                    compute_kernel_lib::OperandKind::Block,
                     compute_kernel_lib::PackTileReconfig::Output>{});
         }
 #ifndef RMSNORM
@@ -229,7 +228,6 @@ void kernel_main() {
                     cb_xmm,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutBulk,
-                    compute_kernel_lib::OperandKind::Block,
                     compute_kernel_lib::PackTileReconfig::None>{});
         }
         cb_ex_obj.pop_front(1);
@@ -290,7 +288,6 @@ void kernel_main() {
                     cb_xmm2,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutBulk,
-                    compute_kernel_lib::OperandKind::Block,
                     compute_kernel_lib::PackTileReconfig::None>{});
         }
 #if defined RMSNORM and not defined FUSED_PRE_ADD
@@ -328,7 +325,6 @@ void kernel_main() {
                 cb_ex2pe,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutStreaming,
-                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 
         // (x-E[x]) / sqrt(Var[x] + eps) * gamma + beta
