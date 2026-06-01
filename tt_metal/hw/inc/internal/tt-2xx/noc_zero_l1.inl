@@ -5,15 +5,13 @@
 #pragma once
 
 // Single iDMA zero-device transaction with the full cmdbuf sequence
-// spelled out, plus the matching write_zeros_l1_barrier (iDMA ack spin) and
-// (DM only) the L2 invalidate-after-write for cache coherence with
-// program-cache-hit dirty lines from prior dispatches.
+// spelled out, plus the matching write_zeros_l1_barrier (iDMA ack spin).
+// No cache invalidate is needed here: zeroed buffers are assumed not resident
+// in the DM core's cache. Access to a buffer should be bracketed by lock/unlock
+// (unlock will be responsible for cache eviction). Zeroing a locked buffer
+// should be flagged by the NOC transaction debug tool -- see TODO below.
 
 #include "internal/tt-2xx/quasar/overlay/cmdbuff_api.hpp"
-
-#if defined(COMPILE_FOR_DM)
-#include "risc_common.h"  // invalidate_l2_cache_line, L2_CACHE_LINE_SIZE
-#endif
 
 template <typename Dst>
 inline void Noc::async_write_zeros(const Dst& dst, uint32_t size_bytes, const dst_args_t<Dst>& args) const {
@@ -52,21 +50,15 @@ inline void Noc::async_write_zeros(const Dst& dst, uint32_t size_bytes, const ds
     overlay::set_len_cmdbuf_0(size_bytes);
     overlay::issue_cmdbuf_0();
 
-#if defined(COMPILE_FOR_DM)
-    // The iDMA zero device writes directly to TL1 (node memory), bypassing this DM
-    // core's L1 D$ and L2. If the caller had previously CPU-written the same region,
-    // those dirty cache entries would shadow the zeros on subsequent reads. Discard
-    // L2 lines covering the destination range; L1 D$ and L2 are coherent on hardware.
-    constexpr uintptr_t kLineMask = static_cast<uintptr_t>(L2_CACHE_LINE_SIZE) - 1;
-    const uintptr_t lo = static_cast<uintptr_t>(local_addr) & ~kLineMask;
-    const uintptr_t hi = static_cast<uintptr_t>(local_addr) + size_bytes;
-    for (uintptr_t a = lo; a < hi; a += L2_CACHE_LINE_SIZE) {
-        invalidate_l2_cache_line(a);
-    }
-#endif  // COMPILE_FOR_DM
+    // TODO: this zero should record a NOC-debug write event (dst = local_addr, size_bytes) so
+    // the NOC transaction debug tool flags zeroing a locked buffer (WRITE_TO_LOCKED_*). Not
+    // wired up here yet: the RECORD_NOC_EVENT_WITH_ADDR machinery is currently only enabled for
+    // COMPILE_FOR_NCRISC/BRISC, not Quasar's COMPILE_FOR_DM.
 }
 
 inline void Noc::write_zeros_l1_barrier() const {
+    // TODO: this barrier should record a NOC-debug event so the tool can flag a missing
+    // write_zeros_l1_barrier (use-before-flush), the way read/write barriers do.
     while (!overlay::idma_acked_cmdbuf_0()) {
         // Spin until all per-backend split packets ack.
     }
