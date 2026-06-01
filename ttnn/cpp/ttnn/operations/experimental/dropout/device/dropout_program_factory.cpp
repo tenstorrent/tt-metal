@@ -143,6 +143,32 @@ inline tt::tt_metal::KernelDescriptor create_compute_kernel(
  * Set up the runtime arguments for the relevant kernels (reader, writer, compute G1, compute G2)
  *        for each core in the grid.
  */
+// Work split shared by create_descriptor (cache miss) and get_dynamic_runtime_args (cache hit).
+struct DropoutCoreSplit {
+    uint32_t num_cores;
+    uint32_t num_cores_y;
+    tt::tt_metal::CoreRangeSet all_cores;
+    tt::tt_metal::CoreRangeSet core_group_1;
+    tt::tt_metal::CoreRangeSet core_group_2;
+    uint32_t num_tiles_per_core_group_1;
+    uint32_t num_tiles_per_core_group_2;
+};
+
+DropoutCoreSplit dropout_core_split(const Tensor& input) {
+    auto grid = input.device()->compute_with_storage_grid_size();
+    uint32_t num_tiles = input.physical_volume() / tt::constants::TILE_HW;
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
+        split_work_to_cores(grid, num_tiles);
+    return {
+        num_cores,
+        grid.y,
+        all_cores,
+        core_group_1,
+        core_group_2,
+        num_tiles_per_core_group_1,
+        num_tiles_per_core_group_2};
+}
+
 inline void assign_per_core_runtime_args(
     DropoutKernels& kernels,
     tt::tt_metal::Buffer* src_buffer,
@@ -205,7 +231,6 @@ tt::tt_metal::ProgramDescriptor DropoutProgramFactory::create_descriptor(
     // 1) Setup device, data formats, tile sizes, and compute split
     // -------------------------------------------------------------------------
     const auto& input = tensor_args.input;
-    auto* device = input.device();
 
     ProgramDescriptor descriptor{};
 
@@ -215,13 +240,14 @@ tt::tt_metal::ProgramDescriptor DropoutProgramFactory::create_descriptor(
     uint32_t single_tile_size_in = tt::tile_size(data_fmt_in);
     uint32_t single_tile_size_out = tt::tile_size(data_fmt_out);
 
-    uint32_t num_tiles = input.physical_volume() / tt::constants::TILE_HW;
-
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
-
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        split_work_to_cores(compute_with_storage_grid_size, num_tiles);
+    auto
+        [num_cores,
+         num_cores_y,
+         all_cores,
+         core_group_1,
+         core_group_2,
+         num_tiles_per_core_group_1,
+         num_tiles_per_core_group_2] = dropout_core_split(input);
 
     // -------------------------------------------------------------------------
     // 2) Create and configure circular buffers
@@ -330,14 +356,14 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> DropoutDeviceOperation::get_dynamic
                               ? override_per_device_seed(args, mesh_dispatch_coordinate, tensor_args.input).seed
                               : args.seed;
 
-    const auto& input = tensor_args.input;
-    auto* device = input.device();
-    uint32_t num_tiles = input.physical_volume() / tt::constants::TILE_HW;
-    auto grid = device->compute_with_storage_grid_size();
-    uint32_t num_cores_y = grid.y;
     [[maybe_unused]] auto
-        [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-            split_work_to_cores(grid, num_tiles);
+        [num_cores,
+         num_cores_y,
+         all_cores,
+         core_group_1,
+         core_group_2,
+         num_tiles_per_core_group_1,
+         num_tiles_per_core_group_2] = dropout_core_split(tensor_args.input);
 
     // kernels are pushed reader(0), writer(1), compute_group_1(2), compute_group_2(3 if present).
     constexpr uint32_t kComputeGroup1Idx = 2;
