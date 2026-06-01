@@ -69,7 +69,6 @@ void initialize_global_circular_buffer(
     TT_FATAL(num_sender_cores > 0, "At least one sender required");
     uint32_t num_receiver_cores = 0;
     uint32_t max_num_receivers_per_sender = 0;
-    uint32_t min_num_receivers_per_sender = std::numeric_limits<uint32_t>::max();
     std::vector<CoreRange> sender_cores;
     sender_cores.reserve(num_sender_cores);
     for (const auto& [sender_core, receiver_cores] : sender_receiver_core_mapping) {
@@ -77,7 +76,6 @@ void initialize_global_circular_buffer(
         sender_cores.emplace_back(sender_core);
         receiver_cores_out = receiver_cores_out.merge(receiver_cores);
         max_num_receivers_per_sender = std::max(max_num_receivers_per_sender, receiver_cores.num_cores());
-        min_num_receivers_per_sender = std::min(min_num_receivers_per_sender, receiver_cores.num_cores());
     }
     sender_cores_out = CoreRangeSet(sender_cores);
     TT_FATAL(num_sender_cores == sender_cores_out.num_cores(), "Duplicate sender cores found");
@@ -89,18 +87,12 @@ void initialize_global_circular_buffer(
     } else {
         // DRAM senders and worker receivers live in disjoint programmable-core types, so their
         // physical NoC coords can never collide — no extra cross-type check needed.
+        // Per-sender receiver counts need not be uniform: the dual-sender split gives a bank's
+        // two senders ceil/floor receiver counts. The sender state block sizes its NOC XY table
+        // at max_num_receivers_per_sender and zero-fills the shorter senders, each sender carries
+        // its own num_receivers, and serialize_request_pages sums receivers across senders rather
+        // than assuming a uniform count.
         all_cores_out = receiver_cores_out;
-        // The DRAM-sender path is built around a single per-GCB receiver count: the sender
-        // state block sizes one NOC XY table at max_num_receivers_per_sender, the kernel walks
-        // exactly num_receivers entries, and compute_tensor_layout derives geometry from one
-        // receiver count. A non-uniform mapping would index past the shorter senders' tables
-        // and feed the wrong receiver count to those senders, so require uniformity here.
-        TT_FATAL(
-            min_num_receivers_per_sender == max_num_receivers_per_sender,
-            "DRAM-sender GlobalCircularBuffer requires the same number of receivers for every sender; got min={}, "
-            "max={}",
-            min_num_receivers_per_sender,
-            max_num_receivers_per_sender);
     }
     max_num_receivers_per_sender_out = max_num_receivers_per_sender;
 }
