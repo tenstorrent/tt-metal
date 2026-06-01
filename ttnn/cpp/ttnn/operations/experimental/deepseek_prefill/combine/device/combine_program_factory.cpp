@@ -447,12 +447,11 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
 
     // Compile-time args shared by reader and writer
     std::vector<uint32_t> compile_time_args = {
-        // CB IDs (6)
+        // CB IDs (5)
         static_cast<uint32_t>(tt::CBIndex::c_0),  // cb_dispatched_buffer_id
         static_cast<uint32_t>(tt::CBIndex::c_1),  // cb_dispatched_metadata_id
         static_cast<uint32_t>(tt::CBIndex::c_2),  // cb_experts_tok_counter_id
         static_cast<uint32_t>(tt::CBIndex::c_3),  // cb_route_info_id (merged route_info + output_data)
-        static_cast<uint32_t>(tt::CBIndex::c_3),  // cb_output_for_writer_id — same CB as route_info (merged)
         static_cast<uint32_t>(tt::CBIndex::c_5),  // cb_packet_header_id
 
         // Page counts (4)
