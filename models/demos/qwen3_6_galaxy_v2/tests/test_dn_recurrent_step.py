@@ -54,15 +54,19 @@ def mesh():
         ttnn.close_mesh_device(m)
 
 
-def _to_dev_f32(t, mesh, layout=ttnn.TILE_LAYOUT):
+def _to_dev(t, mesh, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT):
     return ttnn.from_torch(
         t,
-        dtype=ttnn.float32,
+        dtype=dtype,
         layout=layout,
         device=mesh,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
     )
+
+
+def _to_dev_f32(t, mesh, layout=ttnn.TILE_LAYOUT):
+    return _to_dev(t, mesh, dtype=ttnn.float32, layout=layout)
 
 
 def _first_replica(tt, mesh, want_shape):
@@ -151,6 +155,34 @@ def _run_device_step(mesh, q, k, v, beta, g, h, tiled: bool):
     return o_torch, h_torch
 
 
+def _run_device_step_bf16_in(mesh, q, k, v, beta, g, h):
+    """Fuse E: run ONE tiled step with q,k,v,beta as bf16 inputs (decay/g and the
+    state h stay fp32 — exactly the QWEN36_DN_RECUR_BF16_IN=1 contract, which
+    skips the q/k/v/beta up-casts in the wrapper).  The step itself is
+    dtype-agnostic: its matmuls + subtract force fp32 output so the state chain
+    stays fp32.  This pins the bf16-input PCC vs the torch fp32 reference."""
+    import os
+
+    decay_torch = torch.exp(g.double()).float()  # [B,H,1]
+
+    os.environ["QWEN36_DN_RECUR_TILED"] = "1"
+    # bf16 q/k/v (already-quantized contract); beta + decay + state stay fp32
+    # (beta/decay feed the addcmul/multiply on the fp32 state — see the wrapper's
+    # Fuse-E comment; addcmul with bf16 beta NaNs on this build).
+    q_t = _to_dev(q, mesh, dtype=ttnn.bfloat16)  # [B,H,1,D] tiled, bf16
+    k_t = _to_dev(k, mesh, dtype=ttnn.bfloat16)
+    v_t = _to_dev(v, mesh, dtype=ttnn.bfloat16)
+    beta_t = _to_dev_f32(beta, mesh)  # [B,H,1] fp32
+    decay_t = _to_dev_f32(decay_torch, mesh)  # [B,H,1] fp32
+    h_t = _to_dev_f32(h, mesh)  # [B,H,D,D] tiled fp32
+
+    o_t, h_new = _recurrent_delta_rule_step_fp32(q_t, k_t, v_t, beta_t, decay_t, h_t, seq_len=_T, device=mesh)
+
+    o_torch = _first_replica(o_t, mesh, [_B, _H, _D]).reshape(_B, _H, _T, _D)
+    h_torch = _first_replica(h_new, mesh, [_B, _H, _D, _D])
+    return o_torch, h_torch
+
+
 def _make_inputs(seed):
     g = torch.Generator().manual_seed(seed)
 
@@ -182,6 +214,33 @@ def test_recurrent_step_matches_torch(mesh, tiled):
     print(f"[dn-step:{label}] o_t PCC={pcc_o:.6f}  h_new PCC={pcc_h:.6f}")
     assert pcc_o > _PCC_BAR, f"[{label}] o_t PCC {pcc_o:.5f} < {_PCC_BAR}"
     assert pcc_h > _PCC_BAR, f"[{label}] h_new PCC {pcc_h:.5f} < {_PCC_BAR}"
+
+
+def test_recurrent_step_bf16_inputs(mesh):
+    """Fuse E: tiled step with bf16 q,k,v,beta inputs (state h + decay fp32) vs
+    the torch fp32 reference.  bf16 inputs are already-quantized, so PCC may be
+    slightly < 1.0 but must clear 0.99.  Also report the fp32-input PCC delta so
+    the precision cost of dropping the up-casts is quantified."""
+    q, k, v, beta, glog, h = _make_inputs(seed=7)
+
+    o_ref, h_ref = _torch_reference(q, k, v, beta, glog, h)
+
+    o_f32, h_f32 = _run_device_step(mesh, q, k, v, beta, glog, h, tiled=True)
+    pcc_o_f32 = _pcc(o_f32, o_ref)
+    pcc_h_f32 = _pcc(h_f32, h_ref)
+
+    o_bf, h_bf = _run_device_step_bf16_in(mesh, q, k, v, beta, glog, h)
+    pcc_o_bf = _pcc(o_bf, o_ref)
+    pcc_h_bf = _pcc(h_bf, h_ref)
+
+    print(
+        f"[dn-step:bf16-in] o_t PCC={pcc_o_bf:.6f} (fp32-in {pcc_o_f32:.6f}, "
+        f"delta {pcc_o_bf - pcc_o_f32:+.6f})  "
+        f"h_new PCC={pcc_h_bf:.6f} (fp32-in {pcc_h_f32:.6f}, "
+        f"delta {pcc_h_bf - pcc_h_f32:+.6f})"
+    )
+    assert pcc_o_bf > _PCC_BAR, f"[bf16-in] o_t PCC {pcc_o_bf:.5f} < {_PCC_BAR}"
+    assert pcc_h_bf > _PCC_BAR, f"[bf16-in] h_new PCC {pcc_h_bf:.5f} < {_PCC_BAR}"
 
 
 if __name__ == "__main__":

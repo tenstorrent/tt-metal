@@ -45,6 +45,24 @@ def _recur_tiled_enabled():
     return os.environ.get("QWEN36_DN_RECUR_TILED", "1").strip() not in ("0", "false", "False", "")
 
 
+def _recur_bf16_in_enabled():
+    """Fuse E: drop the up-front fp32 typecasts on the recurrent-decode inputs
+    q,k,v,beta (they arrive already bf16-quantized from the conv/projection, so
+    casting them UP to fp32 buys zero precision).  The recurrent STATE ``h`` and
+    every matmul accumulation / state update stay fp32 (matmuls run with
+    ``dtype=fp32`` overrides + ``fp32_dest_acc_en`` so the bf16 inputs feed
+    fp32-accumulating ops).  ``g``/decay is kept fp32 because it multiplies the
+    fp32 state directly.  Default-OFF — only flipped on after the full-model
+    coherence gate (token 248068 + coherent text) passes, since precision
+    compounds over 48 DeltaNet layers.
+
+    Flipped DEFAULT-ON after all Fuse-E gates passed: unit PCC bf16-in o_t
+    0.999997 / h 0.999999 (delta vs fp32-in only -2e-6); ISL-128 next token
+    248068 + coherent text + 20.59 tok/s (vs 20.36 off); 1L block median 6.94 ms
+    (vs 7.13 off).  Set "0" to restore the all-fp32-input path."""
+    return os.environ.get("QWEN36_DN_RECUR_BF16_IN", "1").strip() not in ("0", "false", "False", "")
+
+
 # Re-use the program-config helpers from the upstream module (they do not touch
 # dtype; they only construct MatmulMultiCoreReuseProgramConfig from shapes).
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import (
@@ -196,12 +214,16 @@ def _fused_decay_and_write_fp32_tiled(
     if matmul_compute_cfg is None:
         matmul_compute_cfg = _fp32_compute_cfg_hifi4()
 
+    # Fuse E: outer = k_col @ d_row.  Under bf16-in, k_col is bf16 (transpose of
+    # the bf16 k) and d_row=delta is fp32 — force fp32 output so the outer-product
+    # increment to the fp32 state keeps full precision.  No-op when fp32.
     outer = ttnn.matmul(
         k_col,
         d_row,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         compute_kernel_config=matmul_compute_cfg,
         program_config=outer_product_prog_cfg,
+        dtype=ttnn.float32,
     )
     k_col.deallocate(True)
 
@@ -383,6 +405,11 @@ def _recurrent_delta_rule_step_fp32_tiled(
         except Exception:
             pass
 
+    # Fuse E: when k_t/v_t arrive bf16 (QWEN36_DN_RECUR_BF16_IN), the read matmul
+    # is mixed bf16(k) x fp32(h).  Force dtype=fp32 on the output so the state
+    # read-back keeps full precision (a mixed matmul otherwise packs to bf16,
+    # which would pinch the fp32 state at the read boundary).  No-op when inputs
+    # are fp32.
     # READ: v_read = k @ h.  k_t is already [B,H,1,K] tiled — the read_query
     # matmul's exact in0 contract.  Output stays [B,H,1,V] (no reshape-back).
     v_read = ttnn.matmul(
@@ -391,10 +418,12 @@ def _recurrent_delta_rule_step_fp32_tiled(
         memory_config=ttnn.L1_MEMORY_CONFIG,
         program_config=read_query_prog_cfg,
         compute_kernel_config=matmul_compute_cfg,
+        dtype=ttnn.float32,
     )
 
-    # delta stays [B,H,1,V] tiled — directly usable as d_row.
-    delta = ttnn.subtract(v_t, v_read, memory_config=ttnn.L1_MEMORY_CONFIG)
+    # delta stays [B,H,1,V] tiled — directly usable as d_row.  Force fp32 so the
+    # subtract(v_t[bf16], v_read[fp32]) does not pack down to bf16.
+    delta = ttnn.subtract(v_t, v_read, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.float32)
     v_read.deallocate(True)
 
     h = _fused_decay_and_write_fp32_tiled(
@@ -411,12 +440,15 @@ def _recurrent_delta_rule_step_fp32_tiled(
 
     # READOUT: o = q @ h_new.  q_t is already [B,H,1,K] tiled.  Output [B,H,1,V]
     # — returned 4D directly (the caller's reshape to [B,H,1,V] is then a no-op).
+    # Force fp32 so the q[bf16] x h[fp32] readout does not pack to bf16 before
+    # the final boundary cast (matches the all-fp32 path's output precision).
     o_t = ttnn.matmul(
         q_t,
         h,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         program_config=read_query_prog_cfg,
         compute_kernel_config=matmul_compute_cfg,
+        dtype=ttnn.float32,
     )
     return o_t, h
 
@@ -492,19 +524,33 @@ def recurrent_gated_delta_rule_ttnn_fp32(
         beta = ttnn.transpose(beta, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
         g = ttnn.transpose(g, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    # fp32 promote — was bf16 in upstream
-    q_prev = q
-    q = ttnn.typecast(q_prev, ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
-    if q is not q_prev:
-        q_prev.deallocate(True)
-    k_prev = k
-    k = ttnn.typecast(k_prev, ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
-    if k is not k_prev:
-        k_prev.deallocate(True)
-    v_prev = v
-    v = ttnn.typecast(v_prev, ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
-    if v is not v_prev:
-        v_prev.deallocate(True)
+    # Fuse E: by default promote q,k,v,beta,g to fp32 (upstream was bf16).  With
+    # QWEN36_DN_RECUR_BF16_IN=1 we SKIP the q,k,v promotions — these three feed
+    # the recurrent matmuls (read v_read=k@h, outer k_col@delta, readout q@h_new)
+    # and arrive already bf16-quantized, so the up-cast buys zero precision; the
+    # state + matmul accumulation stay fp32 via the dtype=fp32 output overrides
+    # inside the tiled step (mixed bf16xfp32 matmul, fp32_dest_acc).
+    #
+    # ``beta`` and ``g`` are ALWAYS promoted to fp32: beta_expanded feeds the
+    # ``addcmul`` that increments the fp32 state (and addcmul with a bf16 scalar
+    # operand produces NaN on this build — verified), and exp(g)=decay multiplies
+    # the fp32 state in ``multiply(h, decay)``.  Keeping both fp32 avoids a
+    # state-precision pinch (and the NaN), and they are tiny per-head scalars so
+    # the two casts cost ~nothing — the win is the q/k/v casts.
+    bf16_in = _recur_bf16_in_enabled()
+    if not bf16_in:
+        q_prev = q
+        q = ttnn.typecast(q_prev, ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
+        if q is not q_prev:
+            q_prev.deallocate(True)
+        k_prev = k
+        k = ttnn.typecast(k_prev, ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
+        if k is not k_prev:
+            k_prev.deallocate(True)
+        v_prev = v
+        v = ttnn.typecast(v_prev, ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
+        if v is not v_prev:
+            v_prev.deallocate(True)
     beta_prev = beta
     beta = ttnn.typecast(beta_prev, ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
     if beta is not beta_prev:
