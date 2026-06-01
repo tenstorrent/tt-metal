@@ -668,6 +668,23 @@ mesh_device_map = {
     "bh_qb_ge": [(2, 2), 2],
 }
 
+
+@pytest.fixture(scope="function")
+def mesh_shape_or_skip(request):
+    """Skip test when requested mesh shape cannot be satisfied, without opening a mesh device."""
+    param = request.param
+
+    assert isinstance(param, tuple)
+    num_devices_requested = param[0] * param[1]
+
+    if not ttnn.using_distributed_env() and num_devices_requested > ttnn.get_num_devices():
+        pytest.skip(
+            f"Requested more devices {num_devices_requested} than available {ttnn.get_num_devices()}. Test not applicable for machine"
+        )
+
+    return param
+
+
 all_parallel_configs = list(set(config for configs in parallel_config_map.values() for config in configs.values()))
 
 
@@ -743,12 +760,12 @@ def test_ring_joint_sdpa(
 
 
 @pytest.mark.parametrize(
-    "mesh_device_id, mesh_device",
+    "mesh_device_id, mesh_shape_or_skip",
     [(k, v[0]) for k, v in mesh_device_map.items()],
     ids=mesh_device_map.keys(),
-    indirect=["mesh_device"],
+    indirect=["mesh_shape_or_skip"],
 )
-def test_ring_joint_sdpa_perf_table(mesh_device_id, mesh_device):
+def test_ring_joint_sdpa_perf_table(mesh_device_id, mesh_shape_or_skip):
     results = []
     for model_input_id, model_input_shape in benchmark_model_input_shapes.items():
         parallel_config = parallel_config_map[mesh_device_id][model_input_id]

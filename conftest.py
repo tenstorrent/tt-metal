@@ -555,7 +555,9 @@ def mesh_device(request, silicon_arch_name, device_params):
         assert len(grid_dims) == 2, "Device mesh grid shape should have exactly two elements."
         num_devices_requested = grid_dims[0] * grid_dims[1]
         if not ttnn.using_distributed_env() and num_devices_requested > ttnn.get_num_devices():
-            pytest.skip("Requested more devices than available. Test not applicable for machine")
+            pytest.skip(
+                f"Requested more devices {num_devices_requested} than available {ttnn.get_num_devices()}. Test not applicable for machine"
+            )
         mesh_shape = ttnn.MeshShape(*grid_dims)
     else:
         if not ttnn.using_distributed_env() and param > ttnn.get_num_devices():
