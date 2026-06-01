@@ -331,6 +331,48 @@ Cumulative perf wins on this branch (vs Stage 1 final RTF=0.535 baseline): Stage
 
 The remaining 8 ResBlock conv1d shapes that don't fit HEIGHT_SHARDED (k=11 at ch≥128) reflect a real TTNN platform constraint: conv1d's per-core CB requirement is shape-bound at 1.92 MB from the kernel's own halo + multi-buffer arithmetic. These shapes use DEFAULT interleaved DRAM. Documented as a finding for the Tenstorrent team.
 
+## Stage 3 Results
+
+The Stage 3 stretch bullet "Support for batch processing (5+ concurrent
+conversions)" is met end-to-end. Commit `13269e81f` threads `batch`
+through `TTNNFlowDecoder` and `TTNNGeneratorNSF` and pins
+`act_block_h_override=32` at B>1 in the Generator's `_ensure_prepared_conv`.
+
+### Headline numbers (3 s real audio, warm)
+
+| Metric | B=1 | B=6 | Δ per-sample |
+|---|---:|---:|---:|
+| TTNN-only RTF / sample | 0.171 | **0.136** | **1.26× faster** |
+| Full-pipeline RTF / sample | 0.294 | **0.258** | **1.14× faster** |
+| Flow time / sample | 7.3 ms | 1.6 ms | 4.5× faster |
+| Generator time / sample | 119 ms | 96 ms | 1.24× faster |
+| Generator audio PCC vs B=1 calls | — | 0.998 | preserved |
+
+Flow scales further on its own — B=8 measured at **5.4× per-sample**
+(1.35 ms / sample). Full-pipeline speedup is capped at 1.14× by the
+~0.37 s of serial CPU preprocess (HuBERT + RMVPE + text encoder) that
+does not shrink with batching.
+
+### What unlocked Generator B>1
+
+At `batch_size>=2`, `ttnn.conv1d`'s auto-picker statically allocates a
+circular buffer region that clashes with a prior L1 buffer (at byte
+1118848) for 24 of the 48 Generator conv1d shapes — specifically
+k≥7 at upsampled `seq_len≥9000`. Per-shape probe showed
+`act_block_h_override=32` is the only knob that makes all 48 shapes fit
+at B=2..8 (BLOCK_SHARDED, WIDTH_SHARDED, `enable_act_double_buffer=False`,
+`weights_dtype=bfloat8_b`, and larger explicit core grids all failed
+for the largest shapes). B=1 keeps the existing HEIGHT_SHARDED whitelist
+(tuned in Stage 2 commit `7d96071`); only B>1 takes the act_bh=32 path.
+
+### Stage 3 bullet status
+
+| Bullet | Status |
+|---|---|
+| Support for batch processing (5+ concurrent conversions) | **Done.** Flow native B=8 (5.4× per-sample); Generator native B=6 sweet spot (1.26× per-sample); PCC=0.998 per-sample at B=5. |
+| Full-pipeline RTF < 0.2 | **Not met.** Best achieved is 0.258 at B=6. The CPU preprocess (HuBERT + RMVPE serial) is ~0.37 s per sample and does not respond to N300 work. Achieving full-pipeline < 0.2 requires a TTNN HuBERT port (Stage 4+). |
+| Trace + 2CQ | **Verified path, not shipped.** Stage 2 documented `ttnn.conv1d` is trace-capturable with `prepare_conv_weights` + `prepare_conv_bias` (PCC=1.0, 2.63× on flow conv1d in isolation). Full pipeline integration deferred — the win amortizes dispatch on small ops only, and Generator's compute already dominates dispatch. |
+
 ## File Structure
 
 ```
