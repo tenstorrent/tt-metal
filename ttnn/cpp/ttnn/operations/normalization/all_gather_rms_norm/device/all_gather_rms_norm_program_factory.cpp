@@ -46,6 +46,7 @@ constexpr uint32_t eps = tt::CBIndex::c_5;             // epsilon (1 tile)
 constexpr uint32_t gamma = tt::CBIndex::c_6;           // weight (optional)
 constexpr uint32_t beta = tt::CBIndex::c_7;            // bias (optional)
 constexpr uint32_t var = tt::CBIndex::c_8;             // mean(E[x^2]) over devices
+constexpr uint32_t reduce_one = tt::CBIndex::c_9;      // SUM scaler (1.0) for the gather-reduce (ring>1)
 constexpr uint32_t recip_sqrt = tt::CBIndex::c_10;     // 1/sqrt(var + eps)
 constexpr uint32_t x_normed = tt::CBIndex::c_12;       // x * 1/sqrt(var + eps)
 constexpr uint32_t gamma_out = tt::CBIndex::c_13;      // x_normed * gamma (only when gamma AND beta)
@@ -92,7 +93,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
     const uint32_t ring_index = single_device ? 0
                                               : ::ttnn::ccl::get_linearized_index_from_physical_coord(
                                                     a, sender_device_coord, args.cluster_axis);
-    (void)ring_index;
 
     // Ring/line fabric neighbors for the all-gather of the stats. Only meaningful for ring_size > 1; a
     // single device performs the whole reduce locally (no fabric).
@@ -106,6 +106,14 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         TT_FATAL(
             forward_coord.has_value() || backward_coord.has_value(),
             "all_gather_rms_norm: device has no forward or backward fabric neighbor");
+    }
+
+    // Line-mcast extent for the stats all-gather (how many hops to send in each direction).
+    uint32_t num_targets_forward = 0;
+    uint32_t num_targets_backward = 0;
+    if (!single_device) {
+        std::tie(num_targets_forward, num_targets_backward) =
+            ::ttnn::ccl::get_forward_backward_line_mcast_distance(ring_size, ring_index, args.topology, false);
     }
 
     // Data formats.
@@ -141,9 +149,13 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
     const bool fuse_pre_add = residual.has_value();
 
     // The reduce keeps all Wt local-width tiles resident per row (cumulative wait + indexed pack), so
-    // input/x_squared/gamma/beta are sized to Wt (input double-buffered); the per-row scalar CBs are 1 tile.
-    desc.cbs.push_back(make_cb(cb::input, Wt * 2, in_df, worker_core_range));
+    // input/x_squared/gamma/beta are sized to Wt; the per-row scalar CBs are 1 tile. input is single-buffered
+    // (the fused kernel reuses the resident row for both x^2 and normalize) to keep the L1 footprint down.
+    desc.cbs.push_back(make_cb(cb::input, Wt, in_df, worker_core_range));
     desc.cbs.push_back(make_cb(cb::reduce_scalar, 1, tt::DataFormat::Float16_b, worker_core_range));
+    if (ring_size > 1) {
+        desc.cbs.push_back(make_cb(cb::reduce_one, 1, tt::DataFormat::Float16_b, worker_core_range));
+    }
     desc.cbs.push_back(make_cb(cb::x_squared, Wt, interm_df, worker_core_range));
     desc.cbs.push_back(make_cb(cb::local_stats, 1, interm_df, worker_core_range));
     desc.cbs.push_back(make_cb(cb::gathered_stats, ring_size, interm_df, worker_core_range));
@@ -159,24 +171,34 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
     // x_normed (and the gamma intermediate) hold a full row of Wt tiles: the single compute kernel fills
     // all Wt in the normalize loop before the (sequential) gamma/beta loop consumes them, so sizing these
     // to a block would deadlock. The output CB is drained concurrently by the writer, so a block suffices.
-    desc.cbs.push_back(make_cb(cb::x_normed, Wt, interm_df, worker_core_range));
+    // x_normed / gamma_out are block-sized: the compute kernel fuses normalize -> gamma -> beta per block,
+    // consuming each block immediately, so these never need to hold a full Wt row. This is what lets the
+    // fused single kernel fit L1 at full DiT width (Wt=128). x_normed only feeds the gamma path; the plain
+    // case writes the normalize result straight to output.
+    if (has_gamma) {
+        desc.cbs.push_back(make_cb(cb::x_normed, block_size * 2, interm_df, worker_core_range));
+    }
     if (has_gamma && has_beta) {
-        desc.cbs.push_back(make_cb(cb::gamma_out, Wt, interm_df, worker_core_range));
+        desc.cbs.push_back(make_cb(cb::gamma_out, block_size * 2, interm_df, worker_core_range));
     }
     desc.cbs.push_back(make_cb(cb::output, block_size * 2, out_df, worker_core_range));
 
-    // Reserved CB for fabric packet headers (atomic incs / unicast headers).
+    // Reserved CB for fabric packet headers (atomic incs / unicast headers). Only needed for the
+    // multi-device fabric path; get_tt_fabric_packet_header_size_bytes() touches the (uninitialized on a
+    // single device) fabric context, so skip the CB entirely when single_device.
     static constexpr uint32_t num_packet_headers_storable = 8;
-    const uint32_t packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_packet_headers_storable * packet_header_size_bytes * 2,
-        .core_ranges = worker_core_range,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(cb::packet_header),
-            .data_format = tt::DataFormat::RawUInt32,
-            .page_size = packet_header_size_bytes,
-        }}},
-    });
+    if (!single_device) {
+        const uint32_t packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = num_packet_headers_storable * packet_header_size_bytes * 2,
+            .core_ranges = worker_core_range,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb::packet_header),
+                .data_format = tt::DataFormat::RawUInt32,
+                .page_size = packet_header_size_bytes,
+            }}},
+        });
+    }
 
     // ----- Semaphores (local mcast / stats-ready coordination) -----
     // The all-gather out-ready (drain) semaphore and the cross-device init barrier are workload-scoped
@@ -202,6 +224,10 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
     defines["FUSE_GAMMA"] = has_gamma ? "1" : "0";
     defines["FUSE_BETA"] = has_beta ? "1" : "0";
     defines["FUSE_PRE_ADD"] = fuse_pre_add ? "1" : "0";
+    if (!single_device) {
+        // Gates the fabric stats all-gather path (and its fabric includes) in the writer kernel.
+        defines["RING_GT_1"] = "1";
+    }
     const KernelDescriptor::Defines defines_vec{defines.begin(), defines.end()};
 
     // A Tensix core runs exactly ONE compute kernel, so the fused op uses a single compute kernel that
@@ -221,7 +247,9 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         block_size,
         static_cast<uint32_t>(has_gamma),
         static_cast<uint32_t>(has_beta),
-        reduce_factor};
+        reduce_factor,
+        cb::reduce_one,
+        ring_size};
     TensorAccessorArgs(a.buffer()).append_to(reader_ct_args);
     if (has_gamma) {
         TensorAccessorArgs(gamma_tensor.value().buffer()).append_to(reader_ct_args);
@@ -248,7 +276,15 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         cb::gathered_stats,
         cb::packet_header,
         num_packet_headers_storable,
-        args.num_links};
+        args.num_links,
+        Wt,
+        ring_index,
+        num_targets_forward,
+        num_targets_backward,
+        forward_coord.has_value() ? 1u : 0u,                      // start_distance_in_hops_forward
+        forward_coord.has_value() ? num_targets_forward : 0u,     // range_hops_forward
+        backward_coord.has_value() ? 1u : 0u,                     // start_distance_in_hops_backward
+        backward_coord.has_value() ? num_targets_backward : 0u};  // range_hops_backward
     TensorAccessorArgs(output.buffer()).append_to(writer_ct_args);
 
     KernelDescriptor writer_desc;
@@ -279,7 +315,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         ring_size,
         static_cast<uint32_t>(has_gamma),
         static_cast<uint32_t>(has_beta),
-        static_cast<uint32_t>(fp32_dest_acc_en)};
+        static_cast<uint32_t>(fp32_dest_acc_en),
+        cb::reduce_one};
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = std::string(kKernelDir) + "compute/all_gather_rms_norm_compute.cpp";
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
@@ -301,13 +338,18 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
     constexpr tt::tt_metal::KernelHandle compute_kernel_id = 2;
 
     // ----- Runtime args -----
-    const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
+    // Fabric node ids touch the fabric context, which is uninitialized on a single-device run; only query
+    // them for the multi-device (ring_size > 1) path that actually opens fabric connections.
+    std::optional<tt::tt_fabric::FabricNodeId> sender_fabric_node_id;
     std::vector<tt::tt_fabric::FabricNodeId> dst_nodes;
-    if (forward_coord.has_value()) {
-        dst_nodes.push_back(mesh_device->get_fabric_node_id(forward_coord.value()));
-    }
-    if (backward_coord.has_value()) {
-        dst_nodes.push_back(mesh_device->get_fabric_node_id(backward_coord.value()));
+    if (!single_device) {
+        sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
+        if (forward_coord.has_value()) {
+            dst_nodes.push_back(mesh_device->get_fabric_node_id(forward_coord.value()));
+        }
+        if (backward_coord.has_value()) {
+            dst_nodes.push_back(mesh_device->get_fabric_node_id(backward_coord.value()));
+        }
     }
     const uint32_t num_connections = dst_nodes.size();
 
@@ -362,7 +404,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
             writer_rt_args.push_back(stats_ready_semaphore_id);
             tt::tt_metal::KernelHandle writer_kernel_id_mut = writer_kernel_id;
             tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
-                sender_fabric_node_id, dst_nodes, {link}, desc, writer_kernel_id_mut, core, writer_rt_args);
+                sender_fabric_node_id.value(), dst_nodes, {link}, desc, writer_kernel_id_mut, core, writer_rt_args);
         }
 
         KernelDescriptor::RTArgList writer_rt_args_builder;

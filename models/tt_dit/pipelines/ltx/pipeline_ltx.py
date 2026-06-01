@@ -689,16 +689,30 @@ class LTXPipeline:
         # later DiT reload auto-evicts the encoder) — the same mechanism the DiT/VAE use.
         self._register_encoder_exclusions(self.gemma_encoder)
 
-        weight_files = sorted(glob.glob(f"{gemma_path}/model-*.safetensors"))
-        if not weight_files:
-            weight_files = sorted(glob.glob(f"{gemma_path}/*.safetensors"))
-        state_dict = {}
-        for f in weight_files:
-            state_dict.update(load_file(f))
+        def _gemma_state_provider() -> dict[str, torch.Tensor]:
+            logger.info(f"Gemma encoder cache miss — loading safetensors from {gemma_path}")
+            wf = sorted(glob.glob(f"{gemma_path}/model-*.safetensors")) or sorted(
+                glob.glob(f"{gemma_path}/*.safetensors")
+            )
+            sd = {}
+            for f in wf:
+                sd.update(load_file(f))
+            return sd
 
+        # Route through cache_module so the 12B weights are disk-cached (.tensorbin) when
+        # TT_DIT_CACHE_DIR is set — a warm reload skips the ~40s safetensors load+shard.
+        # Falls back to a direct (uncached) load when no cache dir is configured.
+        fsdp_active = enc_parallel.sequence_parallel is not None and enc_parallel.sequence_parallel.factor > 1
         t0 = __import__("time").time()
-        self.gemma_encoder.load_torch_state_dict(state_dict)
-        del state_dict
+        cache_module.load_model(
+            self.gemma_encoder,
+            model_name=os.path.basename(gemma_path.rstrip("/")),
+            subfolder=f"gemma_{num_layers}L",
+            parallel_config=enc_parallel,
+            mesh_shape=tuple(self.mesh_device.shape),
+            is_fsdp=fsdp_active,
+            get_torch_state_dict=_gemma_state_provider,
+        )
         logger.info(f"Loaded TTNN Gemma encoder ({num_layers}L) in {__import__('time').time()-t0:.0f}s")
 
         self.gemma_tokenizer = AutoTokenizer.from_pretrained(gemma_path)

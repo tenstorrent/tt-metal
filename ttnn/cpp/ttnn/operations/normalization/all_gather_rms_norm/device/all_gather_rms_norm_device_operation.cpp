@@ -137,7 +137,11 @@ ttnn::Tensor all_gather_rms_norm(
     const auto& mesh_view = mesh_device.get_view();
     uint32_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
 
-    ttnn::ccl::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
+    // get_usable_topology() queries the fabric context, which is only initialized on multi-device runs.
+    // For a single device (num_devices == 1) the reduce is entirely local (no fabric), so skip the query
+    // and pass the requested topology through unchanged.
+    ttnn::ccl::Topology topology_ =
+        (num_devices > 1) ? ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis) : topology;
 
     auto operation_attributes = OperationType::operation_attributes_t(
         epsilon,

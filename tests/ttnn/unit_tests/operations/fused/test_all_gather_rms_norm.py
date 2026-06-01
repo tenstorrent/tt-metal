@@ -149,7 +149,9 @@ def run_all_gather_rms_norm(
 # up yet, so it is not parametrized here.
 @pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=True)
 @pytest.mark.parametrize("seq_len", [1024, 4096], ids=["seq1k", "seq4k"])
-@pytest.mark.parametrize("hidden_dim", [4096])
+# Full DiT width: the compute kernel fuses normalize -> gamma -> beta per block, so x_normed/gamma_out are
+# block-sized and the fused single-kernel pre+post fits L1 even at Wt=128.
+@pytest.mark.parametrize("hidden_dim", [2048, 4096])
 @pytest.mark.parametrize(
     "has_weight, has_bias",
     [
@@ -182,7 +184,7 @@ def test_all_gather_rms_norm_program_cache(mesh_device):
             mesh_device,
             batch_size=1,
             seq_len=1024,
-            hidden_dim=4096,
+            hidden_dim=2048,
             cluster_axis=1,
             eps=1e-6,
             has_weight=True,
@@ -192,18 +194,25 @@ def test_all_gather_rms_norm_program_cache(mesh_device):
         assert passing
 
 
-# Multi-device path (cluster_axis=1, reduction dim sharded across the ring). Requires the fabric stats
-# all-gather (ring_size > 1) in the writer/compute kernels, which is not implemented yet — kept here as the
-# target harness for that work.
-@pytest.mark.xfail(reason="ring_size > 1 stats all-gather (fabric) not implemented yet", strict=False)
-@pytest.mark.parametrize("mesh_device", [(1, 4), (1, 8)], ids=["1x4", "1x8"], indirect=True)
-@pytest.mark.parametrize("has_weight, has_bias", [(True, False)], ids=["gamma"])
-def test_all_gather_rms_norm_multi_device(mesh_device, has_weight, has_bias):
+# Multi-device path (cluster_axis=1, reduction dim sharded across the ring). Exercises the fabric stats
+# all-gather (ring_size > 1) in the writer/compute kernels. Fabric must be enabled via device_params.
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+# Use the full 1x8 ring: smaller line submeshes (1x2/1x4) don't train fabric on this host.
+@pytest.mark.parametrize("mesh_device", [(1, 8)], ids=["1x8"], indirect=True)
+@pytest.mark.parametrize("hidden_dim", [2048])
+@pytest.mark.parametrize(
+    "has_weight, has_bias",
+    [(False, False), (True, False), (True, True)],
+    ids=["plain", "gamma", "gamma_beta"],
+)
+def test_all_gather_rms_norm_multi_device(mesh_device, hidden_dim, has_weight, has_bias):
+    if mesh_device.get_num_devices() < tuple(mesh_device.shape)[1]:
+        pytest.skip("not enough devices for this mesh")
     passing = run_all_gather_rms_norm(
         mesh_device,
         batch_size=1,
         seq_len=1024,
-        hidden_dim=4096,
+        hidden_dim=hidden_dim,
         cluster_axis=1,
         eps=1e-6,
         has_weight=has_weight,

@@ -35,8 +35,10 @@ void kernel_main() {
     constexpr uint32_t has_gamma = get_compile_time_arg_val(7);
     constexpr uint32_t has_beta = get_compile_time_arg_val(8);
     constexpr uint32_t reduce_factor = get_compile_time_arg_val(9);
+    constexpr uint32_t cb_reduce_one = get_compile_time_arg_val(10);  // SUM scaler CB (for ring_size > 1)
+    constexpr uint32_t ring_size = get_compile_time_arg_val(11);
 
-    constexpr auto src_args = TensorAccessorArgs<10>();
+    constexpr auto src_args = TensorAccessorArgs<12>();
 #if FUSE_GAMMA
     constexpr auto gamma_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
 #endif
@@ -64,13 +66,26 @@ void kernel_main() {
     const uint32_t src_tile_bytes = get_tile_size(cb_inp);
 
     // Reduce scalar (AVG over reduce_factor) + epsilon broadcast tile.
+    // compute_uses_reduce_tile=false: the compute kernel reduces via compute_kernel_lib::reduce, which
+    // takes the matmul path for REDUCE_ROW SUM/AVG and expects the scaler in col-0 (matmul) layout. Using
+    // true (row-0 / reduce_tile layout) here mismatches that path and yields a wrongly-scaled E[x^2].
     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
         cb_reduce,
         ckernel::PoolType::AVG,
         ckernel::ReduceDim::REDUCE_ROW,
         reduce_factor,
-        /*compute_uses_reduce_tile=*/true>();
+        /*compute_uses_reduce_tile=*/false>();
     generate_bcast_col_scalar(cb_eps, eps_packed);
+    if constexpr (ring_size > 1) {
+        // SUM scaler (1.0) used by the compute kernel to sum the ring_size gathered partials into the
+        // global E[x^2]. reduce_factor=1 -> 1/1 = 1.0; col-0 layout to match compute_kernel_lib::reduce.
+        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+            cb_reduce_one,
+            ckernel::PoolType::AVG,
+            ckernel::ReduceDim::REDUCE_ROW,
+            /*reduce_factor=*/1,
+            /*compute_uses_reduce_tile=*/false>();
+    }
 
     const auto src_a = TensorAccessor(src_args, src_addr);
     Noc noc;
