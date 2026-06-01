@@ -727,6 +727,7 @@ def run_test_linear_fsdp(
     tp_axis,
     fsdp_axis,
     fsdp_topology,
+    fuse_fsdp=True,
     use_bias=True,
     activation=None,
     chunks=1,
@@ -763,49 +764,54 @@ def run_test_linear_fsdp(
             torch_output = torch.nn.functional.gelu(torch_output)
         torch_output_chunks = torch.chunk(torch_output, chunks, dim=-1)
 
-    # --- Skewed (a+b) K-sharding ---
-    # To make in0's tp uni-ring and in1's fsdp uni-ring consume K-stripes in the SAME order
-    # (and start local), device (tp=a, fsdp=b) must hold global K-stripe (a+b) mod N for BOTH
-    # operands. We achieve this with a per-block cyclic roll of the K dim, so that a *uniform*
-    # 2D shard of the rolled tensor places stripe (a+b) on device (a,b):
-    #   - x[M,K]: M-block b (fsdp) has its K rolled by -b*K_per_stripe, so tp-pos a -> stripe (a+b).
-    #   - W[K,N]: N-block a (tp)   has its K rolled by -a*K_per_stripe, so fsdp-pos b -> stripe (a+b).
-    # The skew is purely on the contracted K dim, so torch_output (computed above from the
-    # unrolled tensors) is unchanged — the op's output is compared against it directly.
-    assert tp_size == fsdp_size, "skewed sharding requires tp_size == fsdp_size"
-    N_ring = tp_size
-    assert K % N_ring == 0, "K must be divisible by the ring size for skewed sharding"
-    K_per_stripe = K // N_ring
+    # --- K-sharding ---
+    # FUSED: the weight is gathered in lockstep by AGMM's fsdp ring, so in0's tp ring and in1's
+    # fsdp ring must consume the same global K-block at each step. We enforce that with a skewed
+    # (a+b) K-sharding: device (tp=a, fsdp=b) holds global K-stripe (a+b) for BOTH operands, via a
+    # per-block cyclic roll of the K dim so a *uniform* 2D shard of the rolled tensor lands stripe
+    # (a+b) on device (a,b). The skew is purely on the contracted K dim, so torch_output (computed
+    # above from the unrolled tensors) is unchanged.
+    # SEPARATE: the weight is fully gathered (full K) by a standalone all-gather before the matmul,
+    # so AGMM indexes the weight by global K-offset (like run_test_linear) and no skew is needed —
+    # use the natural, contiguously-sharded tensors.
+    if fuse_fsdp:
+        assert tp_size == fsdp_size, "skewed sharding requires tp_size == fsdp_size"
+        N_ring = tp_size
+        assert K % N_ring == 0, "K must be divisible by the ring size for skewed sharding"
+        K_per_stripe = K // N_ring
 
-    x_skewed = torch_input.clone()
-    M_per_fsdp = M // fsdp_size
-    for b in range(fsdp_size):
-        rows = slice(b * M_per_fsdp, (b + 1) * M_per_fsdp)
-        x_skewed[rows, :] = torch.roll(torch_input[rows, :], shifts=-(b * K_per_stripe), dims=1)
-
-    weight_skewed = weight_input.clone()
-    N_per_tp = N // tp_size
-    for a in range(tp_size):
-        cols = slice(a * N_per_tp, (a + 1) * N_per_tp)
-        weight_skewed[:, cols] = torch.roll(weight_input[:, cols], shifts=-(a * K_per_stripe), dims=0)
-
-    # Self-consistency: after a uniform shard, device (tp=a, fsdp=b) must hold original K-stripe (a+b).
-    for a in range(tp_size):
+        x_to_load = torch_input.clone()
+        M_per_fsdp = M // fsdp_size
         for b in range(fsdp_size):
-            s = (a + b) % N_ring
-            x_local = x_skewed[b * M_per_fsdp : (b + 1) * M_per_fsdp, a * K_per_stripe : (a + 1) * K_per_stripe]
-            x_ref = torch_input[b * M_per_fsdp : (b + 1) * M_per_fsdp, s * K_per_stripe : (s + 1) * K_per_stripe]
-            assert torch.equal(x_local, x_ref), f"x skew mismatch at (a={a}, b={b})"
-            w_local = weight_skewed[b * K_per_stripe : (b + 1) * K_per_stripe, a * N_per_tp : (a + 1) * N_per_tp]
-            w_ref = weight_input[s * K_per_stripe : (s + 1) * K_per_stripe, a * N_per_tp : (a + 1) * N_per_tp]
-            assert torch.equal(w_local, w_ref), f"W skew mismatch at (a={a}, b={b})"
+            rows = slice(b * M_per_fsdp, (b + 1) * M_per_fsdp)
+            x_to_load[rows, :] = torch.roll(torch_input[rows, :], shifts=-(b * K_per_stripe), dims=1)
+
+        w_to_load = weight_input.clone()
+        N_per_tp = N // tp_size
+        for a in range(tp_size):
+            cols = slice(a * N_per_tp, (a + 1) * N_per_tp)
+            w_to_load[:, cols] = torch.roll(weight_input[:, cols], shifts=-(a * K_per_stripe), dims=0)
+
+        # Self-consistency: after a uniform shard, device (tp=a, fsdp=b) must hold original K-stripe (a+b).
+        for a in range(tp_size):
+            for b in range(fsdp_size):
+                s = (a + b) % N_ring
+                x_local = x_to_load[b * M_per_fsdp : (b + 1) * M_per_fsdp, a * K_per_stripe : (a + 1) * K_per_stripe]
+                x_ref = torch_input[b * M_per_fsdp : (b + 1) * M_per_fsdp, s * K_per_stripe : (s + 1) * K_per_stripe]
+                assert torch.equal(x_local, x_ref), f"x skew mismatch at (a={a}, b={b})"
+                w_local = w_to_load[b * K_per_stripe : (b + 1) * K_per_stripe, a * N_per_tp : (a + 1) * N_per_tp]
+                w_ref = weight_input[s * K_per_stripe : (s + 1) * K_per_stripe, a * N_per_tp : (a + 1) * N_per_tp]
+                assert torch.equal(w_local, w_ref), f"W skew mismatch at (a={a}, b={b})"
+    else:
+        x_to_load = torch_input
+        w_to_load = weight_input
 
     # x: M (dim 0) sharded on fsdp_axis (= sp_axis), K (dim 1) sharded on tp_axis
     x_shard_dims = [None, None]
     x_shard_dims[fsdp_axis] = 0
     x_shard_dims[tp_axis] = 1
     tt_input = ttnn.from_torch(
-        x_skewed,
+        x_to_load,
         dtype=dtype,
         device=device,
         layout=ttnn.TILE_LAYOUT,
@@ -817,7 +823,7 @@ def run_test_linear_fsdp(
     w_shard_dims[fsdp_axis] = 0
     w_shard_dims[tp_axis] = 1
     tt_weight = ttnn.from_torch(
-        weight_skewed,
+        w_to_load,
         dtype=dtype,
         device=device,
         layout=ttnn.TILE_LAYOUT,
@@ -901,9 +907,48 @@ def run_test_linear_fsdp(
     )
 
     def run_op(i):
+        if fuse_fsdp:
+            # Fused: AGMM gathers the weight across fsdp (into the PWB) and the activation across
+            # tp internally, then matmuls.
+            return ttnn.experimental.all_gather_minimal_matmul_async(
+                tt_input,
+                tt_weight,
+                bias_tensor=tt_bias,
+                fused_activation=activation_fn,
+                compute_kernel_config=compute_config,
+                config=matmul_config,
+                persistent_output_buffer=ag_persistent_buffers[i],
+                multi_device_global_semaphore=tp_sems[i],
+                num_links=num_links,
+                topology=topology,
+                cluster_axis=tp_axis,
+                force_transpose=True,
+                num_workers_per_link=num_workers_per_link,
+                num_buffers_per_channel=48,
+                chunks=chunks,
+                fsdp_cluster_axis=fsdp_axis,
+                fsdp_multi_device_global_semaphore=fsdp_sems[i],
+                persistent_weight_buffer=pwb_persistent_buffers[i],
+                fsdp_topology=fsdp_topology,
+            )
+
+        # Separate: standalone all-gather of the weight across fsdp (K = dim 0) -> [K, N/tp] full-K
+        # weight (reusing the [K, N/tp] PWB buffer as the gather output), then plain (non-fsdp) AGMM
+        # gathers the activation across tp and matmuls against that full-K weight.
+        gathered_weight = ttnn.experimental.all_gather_async(
+            tt_weight,
+            persistent_output_buffer=pwb_persistent_buffers[i],
+            dim=0,
+            multi_device_global_semaphore=fsdp_sems[i],
+            num_links=num_links,
+            topology=fsdp_topology,
+            cluster_axis=fsdp_axis,
+            num_workers_per_link=num_workers_per_link,
+            num_buffers_per_channel=2,
+        )
         return ttnn.experimental.all_gather_minimal_matmul_async(
             tt_input,
-            tt_weight,
+            gathered_weight,
             bias_tensor=tt_bias,
             fused_activation=activation_fn,
             compute_kernel_config=compute_config,
@@ -917,10 +962,6 @@ def run_test_linear_fsdp(
             num_workers_per_link=num_workers_per_link,
             num_buffers_per_channel=48,
             chunks=chunks,
-            fsdp_cluster_axis=fsdp_axis,
-            fsdp_multi_device_global_semaphore=fsdp_sems[i],
-            persistent_weight_buffer=pwb_persistent_buffers[i],
-            fsdp_topology=fsdp_topology,
         )
 
     tt_output_tensor_list = []
@@ -986,7 +1027,7 @@ def run_test_linear_fsdp(
             (4, 8),
             (4, 4),
             {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(4096),
                 "trace_region_size": 90112,
             },
@@ -1006,9 +1047,14 @@ def run_test_linear_fsdp(
 @pytest.mark.parametrize(
     "M, K, N, use_bias, activation, chunks, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
     [
-        (12288, 5120, 15360, True, None, 1, 8, 8, 8, 1, 2),
+        (12288, 5120, 15360, True, None, 1, 8, 8, 8, 2, 2),
     ],
     ids=["1xqkv"],
+)
+@pytest.mark.parametrize(
+    "fuse_fsdp",
+    [True, False],
+    ids=["fused", "separate"],
 )
 def test_linear_fsdp(
     mesh_device,
@@ -1032,6 +1078,7 @@ def test_linear_fsdp(
     use_bias,
     activation,
     chunks,
+    fuse_fsdp,
 ):
     """
     Exercises all_gather_minimal_matmul_async with the FSDP weight gather fused in.
@@ -1044,6 +1091,11 @@ def test_linear_fsdp(
     """
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
+
+    # Fused path uses an 8x7 grid; the separate path runs the plain (non-fsdp) AGMM, which uses the
+    # full 8x8 grid (matching test_linear).
+    if not fuse_fsdp:
+        core_grid_y = 8
 
     check_result = run_test_linear_fsdp(
         mesh_device,
@@ -1062,6 +1114,7 @@ def test_linear_fsdp(
         tp_axis=tp_axis,
         fsdp_axis=fsdp_axis,
         fsdp_topology=fsdp_topology,
+        fuse_fsdp=fuse_fsdp,
         use_bias=use_bias,
         activation=activation,
         chunks=chunks,
