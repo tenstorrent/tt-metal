@@ -429,7 +429,13 @@ void H2DSocket::set_page_size(uint32_t page_size) {
     TT_FATAL(page_size % pcie_alignment_ == 0, "Page size must be PCIE-aligned.");
     TT_FATAL(page_size <= fifo_size_, "Page size must be less than or equal to the FIFO size.");
 
-    uint32_t next_fifo_wr_ptr = align(write_ptr_, page_size);
+    // tt::align() uses a bitwise-OR formula that only produces correct
+    // results when alignment is a power of two. Socket page sizes can be
+    // non-power-of-two (e.g. 2560 = 5×512 for some shard sizes), where
+    // tt::align(5120, 2560) returns 7168 instead of 5120. Use modular
+    // arithmetic so this works for any positive alignment.
+    uint32_t next_fifo_wr_ptr =
+        ((write_ptr_ + page_size - 1) / page_size) * page_size;
     uint32_t fifo_page_aligned_size = fifo_size_ - (fifo_size_ % page_size);
 
     if (next_fifo_wr_ptr >= fifo_page_aligned_size) {
