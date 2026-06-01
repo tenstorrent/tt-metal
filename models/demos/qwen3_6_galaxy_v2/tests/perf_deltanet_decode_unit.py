@@ -102,7 +102,9 @@ def bh_glx_mesh():
         None,
         ttnn.FabricTensixConfig.DISABLED,
     )
-    mesh = ttnn.open_mesh_device(ttnn.MeshShape(*MESH_SHAPE))
+    # trace_region_size enables QWEN36_PERF_TRACE=1 (begin_trace_capture) +
+    # clean per-op device profiling of the traced replay.
+    mesh = ttnn.open_mesh_device(ttnn.MeshShape(*MESH_SHAPE), trace_region_size=50_000_000)
     yield mesh
     ttnn.close_mesh_device(mesh)
     ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
@@ -358,6 +360,12 @@ def test_perf_deltanet_decode_unit(bh_glx_mesh):
             latencies_ms.append((time.perf_counter() - t0) * 1000.0)
             ttnn.deallocate(out)
         _summary(latencies_ms, "EAGER")
+
+    # Flush device-side profiler data to host so a `python -m tracy -p -r`
+    # capture has device kernel durations to merge (otherwise the report
+    # post-process reports "No device logs found").
+    ttnn.synchronize_device(bh_glx_mesh)
+    ttnn.ReadDeviceProfiler(bh_glx_mesh)
 
     ttnn.deallocate(x_input_tt)
 
