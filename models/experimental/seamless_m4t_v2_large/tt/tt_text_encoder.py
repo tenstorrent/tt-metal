@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import math
+import os
 from typing import Optional
 
 import ttnn
@@ -55,6 +56,11 @@ class TTSeamlessM4Tv2Encoder:
         self.hidden_size = hidden_size
         self._tp = get_tp(device)
         self._cluster_axis = mesh_cluster_axis(device)
+        # Keep the long-seq TP LayerNorm BLOCK_SHARDED so its output feeds the QKV / fc1 block-sharded
+        # matmuls in the matmul's own in0 layout (== build_ln_sharded_config's), running the LN at
+        # ~41us instead of the ~63us interleaved default. On by default; set SEAMLESS_TP_BS_LN=0 to
+        # fall back to the interleaved LN (kill-switch for untested mesh/seq/arch configs).
+        self._tp_bs_ln = os.environ.get("SEAMLESS_TP_BS_LN", "1") == "1"
         self._sdpa_compute_cfg = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi3,
@@ -407,14 +413,47 @@ class TTSeamlessM4Tv2Encoder:
         input_sharded: bool = False,
         output_sharded: bool = False,
     ) -> ttnn.Tensor:
-        """Width-sharded multicore LN. Set ``output_sharded=True`` to feed matmul without S2I.
+        """Sharded multicore LN. Set ``output_sharded=True`` to feed a matmul without an S2I.
 
-        For long-seq prefill (``m_tiles > 1``) the BLOCK_SHARDED LN path is fragile when the
-        upstream tensor is WIDTH_SHARDED or 3-D interleaved (shape mismatches and layout
-        conversions inside ttnn cause silent numerical drift). Fall back to the plain unsharded
-        ``ttnn.layer_norm`` for that case — slower per call, but identical math to HF.
+        Short-seq (``m_tiles == 1``) uses a WIDTH_SHARDED LN; long-seq (``m_tiles > 1``) can't
+        width-shard (one core would hold all M rows — OOM) so it uses a BLOCK_SHARDED LN, which is
+        PCC-correct (verified in ``test_layernorm_block_sharded_drift.py``) and ~39us vs the ~63us
+        interleaved default. The long-seq block-sharded path is gated on ``SEAMLESS_TP_BS_LN`` (on by
+        default; set =0 to fall back to the plain unsharded ``ttnn.layer_norm`` — identical math to
+        HF, slower per call) and only triggers when ``output_sharded`` is set (i.e. the result feeds
+        a block-sharded QKV / fc1 matmul in the TP path).
         """
         if m_tiles > 1:
+            # Block-sharded long-seq LN (see method docstring): keep the LN sharded so the downstream
+            # block-sharded matmul skips its interleaved->block reshard. Otherwise fall through to the
+            # unsharded path below.
+            if self._tp_bs_ln and output_sharded:
+                sharded_mem_config, base_pc = self._build_ln_sharded_config(m_tiles, n_tiles)
+                if input_sharded and ttnn.is_sharded(x) and x.memory_config() == sharded_mem_config:
+                    x_sharded = x
+                else:
+                    x_sharded = ttnn.to_memory_config(x, sharded_mem_config)
+                # inplace: write the result into ``x_sharded``'s L1 region instead of allocating a
+                # fresh high-address block-sharded buffer, whose placement otherwise clashes with the
+                # downstream block-sharded matmul's static circular buffers.
+                sharded_pc = ttnn.LayerNormShardedMultiCoreProgramConfig(
+                    compute_with_storage_grid_size=base_pc.compute_with_storage_grid_size,
+                    subblock_w=base_pc.subblock_w,
+                    block_h=base_pc.block_h,
+                    block_w=base_pc.block_w,
+                    inplace=True,
+                )
+                normed = ttnn.layer_norm(
+                    x_sharded,
+                    weight=weight,
+                    bias=bias,
+                    epsilon=self.layer_norm_eps,
+                    memory_config=sharded_mem_config,
+                    program_config=sharded_pc,
+                    compute_kernel_config=self._layernorm_compute_cfg,
+                )
+                return normed
+
             x_inter = x
             if ttnn.is_sharded(x):
                 x_inter = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG, output_dtype=ttnn.bfloat16)
@@ -482,10 +521,22 @@ class TTSeamlessM4Tv2Encoder:
         tuned = encoder_tp_block_sharded_matmul(self.device, m, k, n, fused_activation=fused_activation)
         if tuned is not None:
             program_config, in0_mem, out_mem = tuned
-            x2d = x if len(x.shape) == 2 else ttnn.reshape(x, (m, k))
-            x_bs = ttnn.to_memory_config(x2d, in0_mem)
-            if x2d is not x:
-                ttnn.deallocate(x2d)
+            if ttnn.is_sharded(x) and x.memory_config() == in0_mem:
+                # Upstream (block-sharded LN) already produced this matmul's in0 layout — feed it
+                # straight in, skipping the interleaved->block reshard. Caller still owns ``x``.
+                x_bs = x
+                owns_x_bs = False
+            elif ttnn.is_sharded(x):
+                # Sharded but a different spec: reshard directly (reshape on a sharded tensor is
+                # unsafe, so avoid the 2-D reshape path here).
+                x_bs = ttnn.to_memory_config(x, in0_mem)
+                owns_x_bs = True
+            else:
+                x2d = x if len(x.shape) == 2 else ttnn.reshape(x, (m, k))
+                x_bs = ttnn.to_memory_config(x2d, in0_mem)
+                if x2d is not x:
+                    ttnn.deallocate(x2d)
+                owns_x_bs = True
             out_bs = ttnn.linear(
                 x_bs,
                 weight,
@@ -494,24 +545,36 @@ class TTSeamlessM4Tv2Encoder:
                 memory_config=out_mem,
                 compute_kernel_config=self._linear_ln_compute_cfg,
             )
-            ttnn.deallocate(x_bs)
+            if owns_x_bs:
+                ttnn.deallocate(x_bs)
             out = ttnn.sharded_to_interleaved(out_bs, memory_config, output_dtype=ttnn.bfloat16)
             ttnn.deallocate(out_bs)
             if len(x.shape) >= 3:
                 out = ttnn.reshape(out, (int(x.shape[0]), int(x.shape[1]), n))
             return out
 
+        # Untuned-shape fallback: the generic sharded matmul rejects the ``activation=`` kwarg, and a
+        # block-sharded input (e.g. from the block-sharded LN) isn't valid here. Convert any sharded
+        # input to interleaved so this path stays the plain "interleaved in, interleaved out" linear.
+        x_in = x
+        owns_x_in = False
+        if ttnn.is_sharded(x):
+            x_in = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG, output_dtype=ttnn.bfloat16)
+            owns_x_in = True
         kwargs = {}
         if activation == "relu":
             kwargs["activation"] = "relu"
-        return ttnn.linear(
-            x,
+        out = ttnn.linear(
+            x_in,
             weight,
             bias=bias,
             memory_config=memory_config,
             compute_kernel_config=self._linear_ln_compute_cfg,
             **kwargs,
         )
+        if owns_x_in:
+            ttnn.deallocate(x_in)
+        return out
 
     def _attention(
         self,
@@ -723,7 +786,7 @@ class TTSeamlessM4Tv2Encoder:
                 m_tiles=m_tiles,
                 n_tiles=n_tiles,
                 input_sharded=ttnn.is_sharded(hidden),
-                output_sharded=(not long_seq) and (tp == 1),
+                output_sharded=((not long_seq) and (tp == 1)) or (self._tp_bs_ln and tp > 1 and m_tiles > 1),
             )
             attn_out = self._attention(
                 normed,
@@ -748,7 +811,7 @@ class TTSeamlessM4Tv2Encoder:
                 m_tiles=m_tiles,
                 n_tiles=n_tiles,
                 input_sharded=ttnn.is_sharded(hidden),
-                output_sharded=(not long_seq) and (tp == 1),
+                output_sharded=((not long_seq) and (tp == 1)) or (self._tp_bs_ln and tp > 1 and m_tiles > 1),
             )
             if tp > 1:
                 # TP FFN: column-parallel fc1 (output = ffn_dim//tp), row-parallel fc2 (output = H).
