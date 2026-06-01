@@ -2450,6 +2450,12 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 MathOperation.SfpuElwLeftShift: self._left_shift,
                 MathOperation.SfpuElwLogicalRightShift: self._logical_right_shift,
                 MathOperation.SfpuAddTopRow: self._add_top_row,
+                MathOperation.SfpuElwLt: self._lt,
+                MathOperation.SfpuElwGt: self._gt,
+                MathOperation.SfpuElwLe: self._le,
+                MathOperation.SfpuElwGe: self._ge,
+                MathOperation.SfpuElwEq: self._eq,
+                MathOperation.SfpuElwNe: self._ne,
             }
         )
 
@@ -2579,6 +2585,24 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         t1_uint = t1.to(torch.int64) & 0xFFFFFFFF
         result = (t1_uint >> t2).to(torch.int32)
         return result
+
+    def _lt(self, t1, t2):
+        return float(t1 < t2)
+
+    def _gt(self, t1, t2):
+        return float(t1 > t2)
+
+    def _le(self, t1, t2):
+        return float(t1 <= t2)
+
+    def _ge(self, t1, t2):
+        return float(t1 >= t2)
+
+    def _eq(self, t1, t2):
+        return float(t1 == t2)
+
+    def _ne(self, t1, t2):
+        return float(t1 != t2)
 
     def _add_top_row(
         self,
