@@ -587,10 +587,10 @@ def tt_read_decode_traced_hidden(
     mesh_device,
     batch_slot: int = 0,
 ) -> ttnn.Tensor:
-    """Clone decode hidden for CPU LM head (caller deallocates)."""
+    """Owned copy for CPU LM head (caller deallocates); to_memory_config instead of clone."""
     if ctx.output_hidden is None:
         raise RuntimeError("Decode trace did not retain hidden states.")
-    return ttnn.clone(ctx.output_hidden, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    return ttnn.to_memory_config(ctx.output_hidden, ttnn.DRAM_MEMORY_CONFIG)
 
 
 def image_token_placeholder_positions(input_ids_1row: torch.Tensor, image_token_id: int) -> torch.LongTensor:
@@ -664,7 +664,7 @@ def tt_forward_prefill_multimodal_scatter_merge_from_device_ids(
     """Embed ids, scatter vision patches, pad, and ``forward_prefill_from_embeddings``."""
     hid = tt_lm.embed_tokens(ids_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     hid4 = ttnn.unsqueeze_to_4D(hid)
-    hid_work = ttnn.clone(hid4)
+    hid_work = ttnn.to_memory_config(hid4, ttnn.DRAM_MEMORY_CONFIG)
     merged = ttnn.scatter(hid_work, dim=2, index=scatter_idx_tt, src=img_patch_rows_tt)
     ttnn.deallocate(hid4)
 

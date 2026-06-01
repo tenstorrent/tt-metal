@@ -32,8 +32,8 @@ import torch
 import ttnn
 
 from models.common.lightweightmodule import LightweightModule
-from models.common.rmsnorm import RMSNorm
 from models.experimental.devstarl2_small.tt.tt_ministral3_decoder_layer import TtMinistral3DecoderLayer
+from models.experimental.devstarl2_small.tt.tt_ministralrmsnorm import TtMinistralRMSNorm
 from models.experimental.devstarl2_small.tt.tt_ministral_rotary_emb import TtMinistral3RotaryEmbedding
 from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.embedding import Embedding
@@ -108,19 +108,14 @@ class TtMinistral3Model(LightweightModule):
             for i in range(self.n_layers)
         ]
 
-        self.norm = RMSNorm(
-            device=mesh_device,
-            dim=model_args.dim,
-            eps=model_args.norm_eps,
-            state_dict=meta_state_dict,
-            weight_key="norm",
-            state_dict_prefix=model_args.get_state_dict_prefix("", None),
-            weight_cache_path=None if model_args.dummy_weights else weight_cache_path,
-            weight_dtype=ttnn.bfloat16,
-            is_distributed=model_args.is_distributed_norm,
-            add_unit_offset=model_args.rms_norm_add_unit_offset,
-            ccl_topology=model_args.ccl_topology(),
+        self.norm = TtMinistralRMSNorm(
+            mesh_device,
+            model_args,
+            meta_state_dict,
+            weight_cache_path,
+            layer_num=None,
             tt_ccl=tt_ccl,
+            weight_key="norm",
         )
 
     def forward_prefill_from_embeddings(
