@@ -26,9 +26,44 @@ from models.tt_dit.utils.mochi import get_rot_transformation_mat
 from models.tt_dit.utils.tensor import bf16_tensor, bf16_tensor_2dshard
 from models.tt_dit.utils.test import line_params, ring_params
 
-# Reference model + RoPE come from the installed ``ltx_core`` package (imported lazily
-# inside each test), exactly like ``test_wan_attention`` pulls its reference from
-# diffusers. No ``sys.path.insert`` into the in-repo ``LTX-2`` clone.
+# Reference model + RoPE come from the installed ``diffusers`` LTX-2 implementation
+# (imported lazily inside each test), exactly like ``test_wan_attention`` pulls its
+# reference from diffusers. No ``sys.path.insert`` into the in-repo ``LTX-2`` clone.
+
+
+def _diffusers_qk_to_split(t: torch.Tensor, num_heads: int, head_dim: int) -> torch.Tensor:
+    """Convert a diffusers (INTERLEAVED-rotation) Q/K tensor to the Lightricks SPLIT
+    convention the TT loader expects as input.
+
+    ``LTXAttention._prepare_torch_state`` applies a per-head SPLIT→INTERLEAVED channel
+    permute on load (it assumes raw Lightricks/ltx_core split-rotation checkpoints).
+    diffusers LTX-2 stores Q/K already interleaved, so we pre-apply the *inverse* permute
+    here; the loader's permute then round-trips the channels back to interleaved, matching
+    the diffusers ``apply_interleaved_rotary_emb`` reference. Cross-attn Q/K (no RoPE) is
+    invariant to this, so applying it everywhere is safe.
+    """
+    D = head_dim
+    D_half = D // 2
+    inv = torch.empty(D, dtype=torch.long)
+    inv[:D_half] = torch.arange(0, D, 2)
+    inv[D_half:] = torch.arange(1, D, 2)
+    rest = t.shape[1:]
+    return t.reshape(num_heads, D, *rest).index_select(1, inv).reshape(num_heads * D, *rest)
+
+
+def _convert_diffusers_attn_state(state: dict, num_heads: int, head_dim: int) -> dict:
+    """diffusers LTX2Attention state_dict → TT LTXAttention loader input (split Q/K convention)."""
+    out = dict(state)
+    for base in ("to_q", "to_k"):
+        for suffix in ("weight", "bias"):
+            k = f"{base}.{suffix}"
+            if k in out:
+                out[k] = _diffusers_qk_to_split(out[k], num_heads, head_dim)
+    for k in ("norm_q.weight", "norm_k.weight"):
+        if k in out:
+            out[k] = _diffusers_qk_to_split(out[k], num_heads, head_dim)
+    return out
+
 
 # Wan ``test_wan_attention`` grid + LTX single-device row (empty device_params).
 _LTX_ATTENTION_MESH_PARAMS = [
@@ -56,8 +91,7 @@ def test_ltx_self_attention(
     """
     Test LTX-2 self-attention: compare TT LTXAttention vs PyTorch Attention.
     """
-    from ltx_core.model.transformer.attention import Attention as TorchAttention
-    from ltx_core.model.transformer.rope import LTXRopeType, precompute_freqs_cis
+    from diffusers.models.transformers.transformer_ltx2 import LTX2Attention, LTX2AudioVideoRotaryPosEmbed
 
     dim = 4096
     num_heads = 32
@@ -65,9 +99,9 @@ def test_ltx_self_attention(
     B = 1
     seq_len = 256  # Small for fast test
 
-    # INTERLEAVED matches ltx_core precompute_freqs_cis which returns (B, N, D) format
-    torch_model = TorchAttention(
-        query_dim=dim, heads=num_heads, dim_head=head_dim, norm_eps=1e-6, rope_type=LTXRopeType.INTERLEAVED
+    # interleaved matches the (B, N, dim) cos/sin layout the device kernel expects
+    torch_model = LTX2Attention(
+        query_dim=dim, heads=num_heads, kv_heads=num_heads, dim_head=head_dim, norm_eps=1e-6, rope_type="interleaved"
     )
     torch_model.eval()
     torch_state = torch_model.state_dict()
@@ -89,41 +123,41 @@ def test_ltx_self_attention(
         is_fsdp=is_fsdp,
         is_self=True,
     )
-    tt_model.load_torch_state_dict(torch_state)
+    tt_model.load_torch_state_dict(_convert_diffusers_attn_state(torch_state, num_heads, head_dim))
 
     # seq_len=256 → N_local=32 for 4x8 (sp=8); exactly 1 tile, the minimum
     torch.manual_seed(42)
     x = torch.randn(B, seq_len, dim, dtype=torch.float32)
 
-    # Build RoPE (small grid for test)
+    # Build RoPE (small grid for test) with the diffusers reference, like test_rope_ltx.
     F, H, W = 4, 8, 8  # 4*8*8=256 = seq_len
     t_ids = torch.arange(F)
     h_ids = torch.arange(H)
     w_ids = torch.arange(W)
     grid_t, grid_h, grid_w = torch.meshgrid(t_ids, h_ids, w_ids, indexing="ij")
-    # ltx_core's precompute_freqs_cis expects (B, n_dims, N) and defaults to SPLIT, so
-    # stack on dim=0 and request INTERLEAVED (the mode this attention block was built with).
     indices_grid = torch.stack([grid_t.flatten(), grid_h.flatten(), grid_w.flatten()], dim=0).float().unsqueeze(0)
 
-    cos_freq, sin_freq = precompute_freqs_cis(
-        indices_grid,
+    rope = LTX2AudioVideoRotaryPosEmbed(
         dim=dim,
-        out_dtype=torch.float32,
-        max_pos=[20, 2048, 2048],
+        base_num_frames=20,
+        base_height=2048,
+        base_width=2048,
+        theta=10000.0,
+        modality="video",
+        double_precision=False,
+        rope_type="interleaved",
         num_attention_heads=num_heads,
-        rope_type=LTXRopeType.INTERLEAVED,
     )
-    # Reshape for apply: (B, seq_len, num_heads, head_dim)
+    # Interleaved cos/sin: (B, seq_len, dim)
+    cos_freq, sin_freq = rope(indices_grid)
+    # Reshape for the device kernel: (B, seq_len, num_heads, head_dim)
     cos_apply = cos_freq.reshape(B, seq_len, num_heads, head_dim)
     sin_apply = sin_freq.reshape(B, seq_len, num_heads, head_dim)
 
-    # PyTorch forward
-    # LTX-2 Attention applies RoPE to q/k in (B, T, inner_dim) shape before multi-head split.
-    # So pe should be (B, T, dim) for interleaved mode.
-    pe_flat_cos = cos_freq.squeeze(0) if cos_freq.ndim == 3 else cos_freq  # (B, T, dim)
-    pe_flat_sin = sin_freq.squeeze(0) if sin_freq.ndim == 3 else sin_freq
+    # PyTorch forward: diffusers applies interleaved RoPE to q/k on (B, T, dim) before the
+    # head split; key reuses the query RoPE for self-attention.
     with torch.no_grad():
-        torch_out = torch_model(x, pe=(pe_flat_cos, pe_flat_sin))
+        torch_out = torch_model(x, query_rotary_emb=(cos_freq, sin_freq))
 
     logger.info(f"PyTorch output shape: {torch_out.shape}")
 
@@ -178,7 +212,7 @@ def test_ltx_cross_attention(
     """
     Test LTX-2 cross-attention: compare TT LTXAttention vs PyTorch Attention.
     """
-    from ltx_core.model.transformer.attention import Attention as TorchAttention
+    from diffusers.models.transformers.transformer_ltx2 import LTX2Attention
 
     dim = 4096
     context_dim = 4096
@@ -188,9 +222,14 @@ def test_ltx_cross_attention(
     seq_len = 256
     prompt_len = 32
 
-    # Create PyTorch reference (cross-attention: context_dim != None)
-    torch_model = TorchAttention(
-        query_dim=dim, context_dim=context_dim, heads=num_heads, dim_head=head_dim, norm_eps=1e-6
+    # diffusers reference cross-attention (cross_attention_dim set; no RoPE on text K/V)
+    torch_model = LTX2Attention(
+        query_dim=dim,
+        cross_attention_dim=context_dim,
+        heads=num_heads,
+        kv_heads=num_heads,
+        dim_head=head_dim,
+        norm_eps=1e-6,
     )
     torch_model.eval()
     torch_state = torch_model.state_dict()
@@ -220,7 +259,7 @@ def test_ltx_cross_attention(
     context = torch.randn(B, prompt_len, context_dim, dtype=torch.float32)
 
     with torch.no_grad():
-        torch_out = torch_model(x, context=context)
+        torch_out = torch_model(x, encoder_hidden_states=context)
 
     logger.info(f"PyTorch cross-attn output shape: {torch_out.shape}")
 

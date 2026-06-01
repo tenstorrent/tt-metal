@@ -15,8 +15,8 @@ from models.tt_dit.utils.tensor import bf16_tensor, bf16_tensor_2dshard
 def make_indices_grid(F: int, H: int, W: int) -> torch.Tensor:
     """
     Create a 3D position indices grid (1, n_dims, seq_len) for temporal + spatial dims,
-    in the layout the ``ltx_core`` reference ``precompute_freqs_cis`` expects
-    (``indices_grid.shape[1]`` is the number of position dims).
+    in the layout diffusers' ``LTX2AudioVideoRotaryPosEmbed.forward`` expects
+    (axis 1 is the number of position dims; raw frame/height/width indices).
     Each column is (t_idx, h_idx, w_idx) for one token in the flattened sequence.
     """
     t_ids = torch.arange(F)
@@ -58,16 +58,19 @@ def make_indices_grid(F: int, H: int, W: int) -> torch.Tensor:
 )
 def test_ltx_rope_interleaved(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_axis: int, F: int, H: int, W: int):
     """
-    Test LTX-2 interleaved RoPE against the official ``ltx_core`` reference.
+    Test LTX-2 interleaved RoPE against the diffusers reference.
 
     Mirrors ``test_wan_rotary_pos_embed`` (which uses diffusers' ``WanRotaryPosEmbed``):
-    cos/sin are produced by the external ``ltx_core`` package, applied by its reference
-    ``apply_rotary_emb`` for the golden output, and the *same* cos/sin are fed to
-    ``ttnn.experimental.rotary_embedding_llama`` so we isolate the device kernel.
+    cos/sin are produced by diffusers' ``LTX2AudioVideoRotaryPosEmbed``, applied by its
+    reference ``apply_interleaved_rotary_emb`` for the golden output, and the *same* cos/sin
+    are fed to ``ttnn.experimental.rotary_embedding_llama`` so we isolate the device kernel.
     """
-    # Import the reference straight from the installed ``ltx_core`` package (like Wan
-    # pulls ``WanRotaryPosEmbed`` from diffusers) — no in-repo clone / sys.path hacks.
-    from ltx_core.model.transformer.rope import LTXRopeType, apply_rotary_emb, precompute_freqs_cis
+    # Reference RoPE from diffusers' LTX-2 implementation (requires diffusers>=0.37).
+    # double_precision=False keeps the freq grid fp32 to match the device path.
+    from diffusers.models.transformers.transformer_ltx2 import (
+        LTX2AudioVideoRotaryPosEmbed,
+        apply_interleaved_rotary_emb,
+    )
 
     dim = 4096
     num_heads = 32
@@ -76,33 +79,41 @@ def test_ltx_rope_interleaved(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_axi
     max_pos = [20, 2048, 2048]
     B = 1
 
-    # Build position indices grid (1, n_dims=3, seq_len) for the reference.
+    # Build raw position indices grid (1, n_dims=3, seq_len) for the reference.
     indices_grid = make_indices_grid(F, H, W)
     seq_len = F * H * W
     logger.info(f"indices_grid shape: {indices_grid.shape}, seq_len: {seq_len}")
 
-    # Precompute cos/sin on CPU with the reference implementation.
-    cos_freq, sin_freq = precompute_freqs_cis(
-        indices_grid,
+    # Compute cos/sin on CPU with the diffusers reference. Passing raw indices (ndim==3)
+    # makes forward normalize by base_{num_frames,height,width} directly — matching the
+    # fractional-position scheme the device path uses.
+    rope = LTX2AudioVideoRotaryPosEmbed(
         dim=dim,
-        out_dtype=torch.float32,
+        base_num_frames=max_pos[0],
+        base_height=max_pos[1],
+        base_width=max_pos[2],
         theta=theta,
-        max_pos=max_pos,
+        modality="video",
+        double_precision=False,
+        rope_type="interleaved",
         num_attention_heads=num_heads,
-        rope_type=LTXRopeType.INTERLEAVED,
     )
+    # Interleaved cos/sin: (B, seq_len, dim)
+    cos_freq, sin_freq = rope(indices_grid)
     logger.info(f"cos_freq shape: {cos_freq.shape}, sin_freq shape: {sin_freq.shape}")
 
-    # Create random input: (B, seq_len, num_heads, head_dim)
+    # Create random input on the flat (B, seq_len, dim) layout the diffusers apply expects.
     torch.manual_seed(42)
-    input_tensor = torch.randn(B, seq_len, num_heads, head_dim, dtype=torch.float32)
+    input_flat = torch.randn(B, seq_len, dim, dtype=torch.float32)
 
-    # PyTorch reference: apply RoPE
-    # cos/sin from interleaved mode have shape (B, seq_len, dim) — need to match input shape
-    # Reshape to (B, seq_len, num_heads, head_dim) for broadcasting
+    # PyTorch reference: diffusers applies interleaved RoPE on (B, N, dim).
+    output_ref_flat = apply_interleaved_rotary_emb(input_flat, (cos_freq, sin_freq))
+
+    # Reshape into (B, seq_len, num_heads, head_dim) for the device kernel + comparison.
+    input_tensor = input_flat.reshape(B, seq_len, num_heads, head_dim)
+    output_ref = output_ref_flat.reshape(B, seq_len, num_heads, head_dim)
     cos_for_apply = cos_freq.reshape(B, seq_len, num_heads, head_dim)
     sin_for_apply = sin_freq.reshape(B, seq_len, num_heads, head_dim)
-    output_ref = apply_rotary_emb(input_tensor, (cos_for_apply, sin_for_apply), LTXRopeType.INTERLEAVED)
     logger.info(f"Reference output shape: {output_ref.shape}")
 
     # Prepare ttnn tensors

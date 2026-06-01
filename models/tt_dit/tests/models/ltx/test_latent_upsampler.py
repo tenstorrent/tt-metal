@@ -67,7 +67,6 @@ def test_ltx_upsampler_resblock(mesh_device: ttnn.MeshDevice, H: int, W: int):
 
     tt_block = LTXUpsamplerResBlock(
         channels=channels,
-        input_hw=(H, W),
         gn_input_nhw=T * H * W,
         mesh_device=mesh_device,
         conv_dims=ConvDims(T=T + 2, H=padded_h // hf, W=padded_w // wf),
