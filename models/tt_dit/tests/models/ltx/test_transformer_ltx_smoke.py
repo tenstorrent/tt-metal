@@ -267,7 +267,7 @@ def test_ltx_transformer_model_smoke(
     topology: ttnn.Topology,
     is_fsdp: bool,
 ) -> None:
-    """Smoke test: run LTXTransformerModel.inner_step on device without PCC comparison.
+    """Smoke test: run LTXTransformerModel.forward on device without PCC comparison.
 
     Uses num_layers=2 (not 48) to stay within host RAM while exercising the full
     patchify → AdaLN → N×block → norm_out → proj_out pipeline.
@@ -342,8 +342,8 @@ def test_ltx_transformer_model_smoke(
     spatial_torch = latent.unsqueeze(0)  # (1, B, N, in_channels)
     timestep_torch = torch.tensor([timestep_val])
 
-    logger.info("Running inner_step...")
-    tt_out = tt_model.inner_step(
+    logger.info("Running forward...")
+    tt_out = tt_model.forward(
         video_1BNI_torch=spatial_torch,
         video_prompt_1BLP=tt_prompt,
         video_rope_cos=tt_cos,

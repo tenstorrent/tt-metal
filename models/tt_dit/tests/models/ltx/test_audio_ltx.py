@@ -487,7 +487,7 @@ def test_av_model_with_real_weights(mesh_device: ttnn.MeshDevice, sp_axis: int, 
     tt_vp = bf16_tensor(torch.randn(1, 1, 128, 4096), device=mesh_device)
     tt_ap = bf16_tensor(torch.randn(1, 1, 128, 2048), device=mesh_device)
 
-    vo, ao = model.inner_step(
+    vo, ao = model.forward(
         video_1BNI_torch=torch.randn(1, 1, video_N, 128),
         video_prompt_1BLP=tt_vp,
         video_rope_cos=tt_vc,
@@ -764,7 +764,7 @@ def test_av_model_pcc_vs_reference(mesh_device: ttnn.MeshDevice, sp_axis: int, t
     tt_vp = bf16_tensor(video_prompt.unsqueeze(0), device=mesh_device)
     tt_ap = bf16_tensor(audio_prompt.unsqueeze(0), device=mesh_device)
 
-    vo, ao = tt_model.inner_step(
+    vo, ao = tt_model.forward(
         video_1BNI_torch=video_in.unsqueeze(0),
         video_prompt_1BLP=tt_vp,
         video_rope_cos=tt_vc,

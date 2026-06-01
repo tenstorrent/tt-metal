@@ -23,7 +23,6 @@ permute, so every TT feed is INTERLEAVED + ``_interleaved_to_bhnd`` and a
 """
 
 import os
-import sys
 import time
 
 import pytest
@@ -37,11 +36,16 @@ from models.tt_dit.models.transformers.ltx.transformer_ltx import LTXTransformer
 from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.check import assert_quality
+from models.tt_dit.utils.ltx import AudioLatentShape, VideoPixelShape
 from models.tt_dit.utils.mochi import get_rot_transformation_mat
 from models.tt_dit.utils.tensor import bf16_tensor, bf16_tensor_2dshard
 from models.tt_dit.utils.test import line_params, ring_params
 
-sys.path.insert(0, "LTX-2/packages/ltx-core/src")
+# The torch reference (``BasicAVTransformerBlock`` / ``LTXModel``) is imported lazily from
+# the installed ``ltx_core`` package inside each test — the same way ``test_transformer_wan``
+# pulls ``WanTransformer3DModel`` from diffusers. No ``sys.path.insert`` into the LTX clone.
+# The TT-side RoPE feed deliberately uses tt_dit's own ``precompute_freqs_cis`` because that
+# is exactly what the device runtime computes.
 
 # ---------------------------------------------------------------------------
 # LTX-2.3-22B distilled transformer configuration
@@ -217,6 +221,49 @@ def _audio_cross_pe_freqs(audio_N, rope_type=LTXRopeType.SPLIT):
     )
 
 
+def _audio_seq_lens(F: int, sp_factor: int) -> tuple[int, int]:
+    """Fast-pipeline audio seq lengths from the *latent* frame count.
+
+    Mirrors ``pipeline_ltx_fast._denoise_no_guidance``: pixel frames =
+    ``(F-1)*8 + 1``; ``audio_N_real`` is the audio-latent length for that
+    duration (``AudioLatentShape.from_video_pixel_shape``, H/W irrelevant), and
+    ``audio_N`` rounds up to ``32 * sp_factor`` (SP/tile alignment).
+    """
+    num_frames = (F - 1) * 8 + 1
+    vps = VideoPixelShape(batch=1, frames=num_frames, height=64, width=64, fps=24)
+    audio_N_real = AudioLatentShape.from_video_pixel_shape(vps).frames
+    audio_N = ((audio_N_real + 32 * sp_factor - 1) // (32 * sp_factor)) * (32 * sp_factor)
+    return audio_N, audio_N_real
+
+
+def _audio_masks(audio_N, audio_N_real, *, mesh_device, sp_axis):
+    """Replicate ``LTXPipeline._prepare_audio_masks``: SDPA column mask + SP/full pad masks.
+
+    Returns ``(attn_mask, pad_mask_sp, pad_mask_full)`` or all-``None`` when unpadded.
+    """
+    if audio_N <= audio_N_real:
+        return None, None, None
+    # Column-only mask: bar all queries from attending TO padded keys (padded-query
+    # rows are zeroed afterward by pad_mask, so we avoid -inf rows → softmax NaN).
+    mask = torch.zeros(1, 1, audio_N, audio_N)
+    mask[:, :, :, audio_N_real:] = float("-inf")
+    tt_attn_mask = bf16_tensor(mask.to(torch.bfloat16), device=mesh_device, mesh_axis=sp_axis, shard_dim=2)
+    pad = torch.ones(1, 1, audio_N, 1, dtype=torch.bfloat16)
+    pad[:, :, audio_N_real:, :] = 0.0
+    tt_pad_sp = bf16_tensor(pad, device=mesh_device, mesh_axis=sp_axis, shard_dim=2)
+    tt_pad_full = bf16_tensor(pad, device=mesh_device)
+    return tt_attn_mask, tt_pad_sp, tt_pad_full
+
+
+def _video_masks(video_N, video_N_real, *, mesh_device, sp_axis):
+    """Replicate ``LTXPipeline._prepare_video_masks``: SP-sharded pad mask (``None`` when aligned)."""
+    if video_N <= video_N_real:
+        return None
+    pad = torch.ones(1, 1, video_N, 1, dtype=torch.bfloat16)
+    pad[:, :, video_N_real:, :] = 0.0
+    return bf16_tensor(pad, device=mesh_device, mesh_axis=sp_axis, shard_dim=2)
+
+
 def _tt_rope(freqs_fn, *args, mesh_device, sp_axis, tp_axis):
     """Build INTERLEAVED freqs for the TT runtime: precompute → BHND reshape → 2D shard."""
     cos_i, sin_i = freqs_fn(*args, rope_type=LTXRopeType.INTERLEAVED)
@@ -335,8 +382,11 @@ def test_ltx_transformer_block(
         pytest.skip("checkpoint_variant only affects AV mode (video uses random scaled weights)")
     checkpoint_22b = _resolve_checkpoint_22b(checkpoint_variant)
     video_N = F * H * W
-    audio_N = AUDIO_N
+    video_N_real = video_N  # test shapes are already SP/tile-aligned → no video padding
     sp_factor = tuple(mesh_device.shape)[sp_axis]
+    # Audio seq length mirrors the fast pipeline (derived from clip duration + SP pad),
+    # so the audio self-attn / FFN / A↔V op sizes and padding match production.
+    audio_N, audio_N_real = _audio_seq_lens(F, sp_factor)
     assert video_N % (32 * sp_factor) == 0, f"video_N={video_N} not sp/tile-aligned for sp={sp_factor}"
     assert audio_N % (32 * sp_factor) == 0, f"audio_N={audio_N} not sp/tile-aligned for sp={sp_factor}"
 
@@ -443,7 +493,10 @@ def test_ltx_transformer_block(
         video_prompt_temb=tt_prompt_temb,
     )
     if has_audio:
-        a_x = torch.randn(1, audio_N, AUDIO_DIM, dtype=torch.float32)
+        # Real tokens in [:audio_N_real], zeros in the padded tail — matches the
+        # pipeline's padded audio latent so the masks below actually do something.
+        a_x = torch.zeros(1, audio_N, AUDIO_DIM, dtype=torch.float32)
+        a_x[:, :audio_N_real, :] = torch.randn(1, audio_N_real, AUDIO_DIM, dtype=torch.float32)
         a_ctx = torch.randn(1, PROMPT_LEN, AUDIO_CTX_DIM, dtype=torch.float32)
         a_temb = torch.randn(1, 1, 9 * AUDIO_DIM, dtype=torch.float32)
         a_prompt_temb = torch.randn(1, 1, 2 * AUDIO_DIM, dtype=torch.float32)
@@ -463,6 +516,13 @@ def test_ltx_transformer_block(
         ax_cos_full, ax_sin_full = _tt_rope_full(
             _audio_cross_pe_freqs, audio_N, mesh_device=mesh_device, tp_axis=tp_axis
         )
+
+        # Padding masks, same construction as the fast pipeline. Audio is padded
+        # (audio_N > audio_N_real) so these are live; video is aligned so it's None.
+        a_attn_mask, a_pad_sp, a_pad_full = _audio_masks(
+            audio_N, audio_N_real, mesh_device=mesh_device, sp_axis=sp_axis
+        )
+        v_pad_sp = _video_masks(video_N, video_N_real, mesh_device=mesh_device, sp_axis=sp_axis)
 
         forward_kwargs.update(
             audio_1BND=bf16_tensor_2dshard(
@@ -490,6 +550,10 @@ def test_ltx_transformer_block(
             video_cross_pe_sin_full=vx_sin_full,
             audio_cross_pe_cos_full=ax_cos_full,
             audio_cross_pe_sin_full=ax_sin_full,
+            audio_attn_mask=a_attn_mask,
+            audio_padding_mask=a_pad_sp,
+            audio_padding_mask_full=a_pad_full,
+            video_padding_mask=v_pad_sp,
         )
 
     tt_out = tt_block(**forward_kwargs)
@@ -544,11 +608,11 @@ def _run_inner_step(
     checkpoint_variant: str,
     use_forward_alias: bool,
 ):
-    """Shared body for model and inner_step tests.
+    """Shared body for the model forward tests.
 
-    `use_forward_alias=True` invokes ``tt_model(...)`` (which delegates to
-    inner_step); `False` calls ``tt_model.inner_step(...)`` explicitly. Used
-    so the two tests have visibly different call sites.
+    `use_forward_alias=True` invokes ``tt_model(...)`` (via ``__call__``); `False`
+    calls ``tt_model.forward(...)`` explicitly. Used so the two tests have visibly
+    different call sites.
     """
     # Checkpoint variant only affects AV weight loading; skip the redundant copy in video mode.
     if not has_audio and checkpoint_variant != "fast":
@@ -750,7 +814,7 @@ def _run_inner_step(
 
     # === Forward ===
     t0 = time.time()
-    result = tt_model(**call_kwargs) if use_forward_alias else tt_model.inner_step(**call_kwargs)
+    result = tt_model(**call_kwargs) if use_forward_alias else tt_model.forward(**call_kwargs)
     logger.info(f"TT forward: {time.time() - t0:.1f}s")
 
     if has_audio:
@@ -800,7 +864,7 @@ def test_ltx_transformer_model(
     checkpoint_variant,
     reset_seeds,
 ) -> None:
-    """Full LTXTransformerModel forward (delegates to inner_step)."""
+    """Full LTXTransformerModel forward via ``__call__``."""
     _run_inner_step(
         mesh_device=mesh_device,
         sp_axis=sp_axis,
@@ -842,7 +906,7 @@ def test_ltx_transformer_inner_step(
     checkpoint_variant,
     reset_seeds,
 ) -> None:
-    """LTXTransformerModel.inner_step — denoising-loop path."""
+    """LTXTransformerModel.forward — explicit call, denoising-loop path."""
     _run_inner_step(
         mesh_device=mesh_device,
         sp_axis=sp_axis,
