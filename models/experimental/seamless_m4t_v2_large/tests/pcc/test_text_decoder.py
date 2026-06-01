@@ -1,68 +1,51 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Single-shot PCC test for the SeamlessM4Tv2 text decoder at the seed-1 stable prefill seq.
+"""PCC tests for the SeamlessM4Tv2 text decoder using production-shaped inputs.
 
-Decoder design max = ``max_position_embeddings = 4096`` (HF). The test below runs a full-seq
-prefill forward at decoder_seq = encoder_seq = 32 — the only (seq, seed) combination in the
-empirical sweep below that clears the 0.99 PCC threshold.
+The decoder is fed the same tensors ``generate()`` uses:
 
-Empirical sweep (random ``input_ids`` + random gaussian ``encoder_hidden``, from
-``test_sweep_max_seq.py`` on Blackhole 1×4):
+  * **T2TT** — ``text_encoder`` hidden states on a tokenized source prompt + a two-token seed
+    ``[decoder_start_token_id, tgt_lang_code]``.
+  * **S2TT** — ``speech_encoder`` hidden states on processor ``input_features`` from audio +
+    the same decoder seed, with subsampled encoder attention masks.
 
-    seq   seed=0     seed=1     seed=2     seed=3
-    ---  --------   --------   --------   --------
-     32  0.9360 ✗  0.9918 ✓  0.9694 ✗  0.9886 ✗
-     64  0.9731 ✗  0.9310 ✗  0.9838 ✗  0.9491 ✗
-    128  0.9224 ✗  0.9610 ✗  0.8715 ✗  0.9408 ✗
-    256  0.9214 ✗  0.7961 ✗  0.8532 ✗  0.9108 ✗
-    512  0.9803 ✗  0.8286 ✗     —          —
-    768  0.8345 ✗  0.8552 ✗     —          —
+Random ``input_ids`` / ``randn(encoder_hidden)`` are intentionally avoided: they do not match
+the activation distribution of the HF or TT stack and falsely cap PCC at short seq.
 
-Two distinct ceilings:
+Both HF reference and TT paths tile-pad encoder/decoder timelines and build masks the same way
+``TTSeamlessM4Tv2Model._prefill_text_decoder_kv_cache`` does before ``text_decoder.forward``.
+PCC is checked on the logical (unpadded) decoder prefix only.
 
-  1. **bf16 numerical drift** (the actual blocker here). 24 decoder layers + cross-attention
-     accumulate float error; the test's *random* ``input_ids`` and ``encoder_hidden`` amplify
-     it well beyond what the real model sees (real ``encoder_hidden`` is bounded by encoder
-     output norm; real ``input_ids`` are tokenizer output). Drift is non-monotone with seq
-     and strongly seed-dependent — only (32, 1) clears 0.99. This is a *test design* artifact
-     of using random inputs against a 24-layer bf16 pipeline; the end-to-end PCC test
-     (``test_seamless_m4t_v2_model.py``) uses realistic encoder outputs and passes cleanly.
-
-  2. **L1 CB budget for prefill SDPA**. seq=768 still runs (passes through device math, just
-     fails PCC); seq=4096 overflows L1 (~4.6 MB of static CBs vs 1.5 MB per-core budget).
-     The L1 ceiling lies between 768 and 4096 but we can't probe it here because PCC bottoms
-     out first. To use longer seqs we'd need chunked-SDPA prefill (model-side work).
-
-Production usage stays well below both ceilings: demo runs hit ~160 generated tokens, e2e perf
-uses ``max_new_tokens=10``, and the KV-cache decode path (single-token steps reading from a
-prefilled cache) is exercised by the end-to-end PCC test, not here.
-
-This test covers sinusoidal position embeddings, the causal SDPA mask, and cross-attention over
-the same-length encoder output. It compares the last hidden state (after the final
-``decoder.layer_norm``) against the HF reference at PCC ≥ 0.99.
-
-The KV-cache *decode* path (single-token steps reading from a prefilled cache) is exercised by
-the top-level ``test_seamless_m4t_v2_model.py::test_generate_matches_hf`` end-to-end test rather
-than here, because that's the configuration in which the cache is actually used in production.
-
-Real weights only — if ``huggingface_hub`` is missing or the download fails the test is skipped.
+Hardware prefill L1 for very long encoder timelines is a separate ceiling from decoder seed
+length; production only prefills the two-token seed regardless of source length.
 """
+
+from __future__ import annotations
 
 import pytest
 import torch
+import ttnn
 from loguru import logger
-from transformers.modeling_attn_mask_utils import _prepare_4d_attention_mask, _prepare_4d_causal_attention_mask
-from transformers.models.seamless_m4t_v2.modeling_seamless_m4t_v2 import create_position_ids_from_input_ids
 
 from tests.ttnn.utils_for_testing import check_with_pcc
 
-from models.experimental.seamless_m4t_v2_large.reference.torch_text_decoder import (
-    forward_torch_reference,
-    load_pretrained_text_decoder,
-)
+from models.experimental.seamless_m4t_v2_large.reference.torch_text_decoder import forward_torch_reference
 from models.experimental.seamless_m4t_v2_large.scripts.download_weights import ensure_seamless_m4t_v2_large_weights
-from models.experimental.seamless_m4t_v2_large.tt.common import to_torch_replicated_first_shard
+from models.experimental.seamless_m4t_v2_large.tests.pcc.decoder_pcc_fixtures import (
+    TextDecoderPccInputs,
+    align_case_for_tt_prefill,
+    load_hf_model_and_processor,
+    make_s2tt_decoder_pcc_inputs,
+    make_t2tt_decoder_pcc_inputs,
+)
+from models.experimental.seamless_m4t_v2_large.tests.pcc.prof_capture_limits import TEXT_DECODER_ENC_SEQ
+from models.experimental.seamless_m4t_v2_large.tt.common import (
+    build_causal_with_padding_4d,
+    build_cross_attn_mask_4d,
+    to_torch_replicated_first_shard,
+    tt_position_ids,
+)
 from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import (
     MESH_DEVICE_PARAMETRIZE_TEXT,
     from_torch_bfloat16_tile,
@@ -70,147 +53,147 @@ from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import (
     mesh_default_device,
 )
 from models.experimental.seamless_m4t_v2_large.tt.model_preprocessing import create_text_decoder_parameters
-from models.experimental.seamless_m4t_v2_large.tests.pcc.prof_capture_limits import TEXT_DECODER_SEQ
 from models.experimental.seamless_m4t_v2_large.tt.tt_text_decoder import TTSeamlessM4Tv2Decoder
 
 PCC_THRESHOLD = 0.99
-PROF_CAPTURE_SEQ = TEXT_DECODER_SEQ
-# Empirically determined by ``test_sweep_max_seq.py`` — at (seq=32, seed=1) the bf16 drift over
-# 24 decoder layers + cross-attention stays just above the 0.99 PCC threshold (0.9918). No
-# longer-seq / different-seed config in the sweep clears 0.99 (see file docstring for the full
-# scan). The hardware L1 ceiling is much higher (≥768, <4096) but PCC drift caps us first. The
-# end-to-end PCC test (``test_seamless_m4t_v2_model.py``) uses realistic encoder outputs and
-# passes regardless — random-input PCC at long seq is a test-design artifact, not a regression.
-MAX_SEQ = 32
+PROF_CAPTURE_ENC_SEQ = TEXT_DECODER_ENC_SEQ
+# Longest tokenized source length (text-encoder output) validated with production seed on BH 1×4.
+# Next power-of-two (1024) overflows L1 on cross-attention prefill at tile-padded encoder length.
+MAX_ENC_SEQ = 512
+
+
+def _weights_dir_or_skip() -> str:
+    try:
+        return ensure_seamless_m4t_v2_large_weights()
+    except ImportError as e:
+        pytest.skip(str(e))
+        raise
+    except Exception as e:
+        pytest.skip(f"Could not prepare seamless-m4t-v2-large weights: {e}")
+        raise
+
+
+def _run_decoder_pcc(
+    mesh_device,
+    decoder,
+    cfg,
+    case: TextDecoderPccInputs,
+    *,
+    log_label: str,
+) -> None:
+    aligned = align_case_for_tt_prefill(case, int(cfg.pad_token_id))
+    batch = int(aligned.input_ids.shape[0])
+    logical_dec = aligned.logical_dec_seq
+    padded_dec = aligned.padded_dec_seq
+
+    ref = forward_torch_reference(
+        decoder,
+        aligned.input_ids,
+        aligned.encoder_hidden_states,
+        aligned.attention_mask,
+        aligned.encoder_attention_mask,
+    ).to(torch.bfloat16)
+    ref = ref[:, :logical_dec, :].contiguous()
+
+    params = create_text_decoder_parameters(decoder, device=mesh_device)
+    tt_dec = TTSeamlessM4Tv2Decoder(
+        mesh_device,
+        params,
+        layer_norm_eps=cfg.layer_norm_eps,
+        num_hidden_layers=cfg.decoder_layers,
+        num_attention_heads=cfg.decoder_attention_heads,
+        hidden_size=cfg.hidden_size,
+    )
+
+    input_ids_tt = from_torch_uint32_rm(mesh_device, aligned.input_ids)
+    encoder_tt = from_torch_bfloat16_tile(mesh_device, aligned.encoder_hidden_states)
+    enc_mask_tt = from_torch_uint32_rm(mesh_device, aligned.encoder_attention_mask)
+    pos_tt = tt_position_ids(input_ids_tt, int(cfg.pad_token_id))
+    causal_tt = build_causal_with_padding_4d(None, batch, padded_dec, mesh_device)
+    cross_tt = build_cross_attn_mask_4d(enc_mask_tt, tgt_seq=padded_dec, device=mesh_device)
+
+    out_tt = tt_dec.forward(input_ids_tt, pos_tt, encoder_tt, causal_tt, cross_tt)
+    tt_cpu = (
+        to_torch_replicated_first_shard(out_tt)
+        .to(torch.bfloat16)
+        .reshape(batch, padded_dec, cfg.hidden_size)[:, :logical_dec, :]
+        .contiguous()
+    )
+
+    ttnn.deallocate(out_tt)
+    ttnn.deallocate(input_ids_tt)
+    ttnn.deallocate(encoder_tt)
+    ttnn.deallocate(enc_mask_tt)
+    ttnn.deallocate(pos_tt)
+    ttnn.deallocate(causal_tt)
+    ttnn.deallocate(cross_tt)
+
+    ok, msg = check_with_pcc(ref, tt_cpu, pcc=PCC_THRESHOLD)
+    logger.info(
+        f"SeamlessM4Tv2 text decoder PCC ({log_label}) dec_seq={logical_dec} enc_seq={aligned.logical_enc_seq}: "
+        f"{msg} (threshold {PCC_THRESHOLD})"
+    )
+    assert ok, msg
+
+
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_TEXT, indirect=["mesh_device", "device_params"])
+def test_seamless_m4t_v2_text_decoder_t2tt_prefill_pcc(mesh_device, device_params, reset_seeds):
+    """Decoder prefill PCC ≥ 0.99 on T2TT-shaped inputs (text-encoder hidden + lang seed)."""
+    _ = reset_seeds
+    _ = device_params
+    weights_dir = _weights_dir_or_skip()
+
+    with mesh_default_device(mesh_device):
+        hf_model, processor, _ = load_hf_model_and_processor(weights_dir, dtype=torch.bfloat16)
+        case = make_t2tt_decoder_pcc_inputs(hf_model, processor)
+        _run_decoder_pcc(mesh_device, hf_model.text_decoder, hf_model.config, case, log_label="T2TT")
+
+
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_TEXT, indirect=["mesh_device", "device_params"])
+def test_seamless_m4t_v2_text_decoder_s2tt_prefill_pcc(mesh_device, device_params, reset_seeds):
+    """Decoder prefill PCC ≥ 0.99 on S2TT-shaped inputs (speech-encoder hidden + lang seed)."""
+    _ = reset_seeds
+    _ = device_params
+    weights_dir = _weights_dir_or_skip()
+
+    with mesh_default_device(mesh_device):
+        hf_model, processor, _ = load_hf_model_and_processor(weights_dir, dtype=torch.bfloat16)
+        case = make_s2tt_decoder_pcc_inputs(hf_model, processor)
+        _run_decoder_pcc(mesh_device, hf_model.text_decoder, hf_model.config, case, log_label="S2TT")
 
 
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_TEXT, indirect=["mesh_device", "device_params"])
-def test_seamless_m4t_v2_text_decoder_max_seq_pcc(mesh_device, device_params, reset_seeds):
-    """Text decoder prefill forward PCC ≥ 0.99 at the seed-1 stable prefill seq (32).
+def test_seamless_m4t_v2_text_decoder_max_enc_seq_pcc(mesh_device, device_params, reset_seeds):
+    """Decoder prefill PCC ≥ 0.99 at the longest validated source length (``MAX_ENC_SEQ`` tokens).
 
-    Runs one decoder forward at decoder_seq = encoder_seq = ``MAX_SEQ``. Compares
-    ``last_hidden_state`` (includes final ``decoder.layer_norm``) vs HF, PCC ≥ 0.99.
+    Exercises cross-attention over a long text-encoder timeline while the decoder input stays the
+    production two-token seed. The next power-of-two source length (1024) overflows L1 on BH 1×4.
     """
     _ = reset_seeds
     _ = device_params
-
-    try:
-        weights_dir = ensure_seamless_m4t_v2_large_weights()
-    except ImportError as e:
-        pytest.skip(str(e))
-    except Exception as e:
-        pytest.skip(f"Could not prepare seamless-m4t-v2-large weights: {e}")
+    weights_dir = _weights_dir_or_skip()
 
     with mesh_default_device(mesh_device):
-        # Some RNG seeds land on an unfavorable activation geometry after 24 bf16 layers; seed 1
-        # is stable above 0.99 here (matches the original short-seq PCC test).
-        torch.manual_seed(1)
-        decoder, cfg = load_pretrained_text_decoder(weights_dir, dtype=torch.bfloat16)
-
-        batch = 1
-        seq = MAX_SEQ
-        enc_seq = MAX_SEQ
-        input_ids = torch.randint(1, min(cfg.vocab_size - 1, 2**31 - 1), (batch, seq), dtype=torch.int64)
-        encoder_hidden = torch.randn(batch, enc_seq, cfg.hidden_size, dtype=torch.bfloat16)
-        attn_mask = torch.ones(batch, seq, dtype=torch.long)
-        enc_mask = torch.ones(batch, enc_seq, dtype=torch.long)
-
-        inputs_embeds = decoder.embed_tokens(input_ids)
-        causal_mask = _prepare_4d_causal_attention_mask(
-            attn_mask, (batch, seq), inputs_embeds, past_key_values_length=0
-        )
-        cross_mask = _prepare_4d_attention_mask(enc_mask, inputs_embeds.dtype, tgt_len=seq)
-        position_ids = create_position_ids_from_input_ids(input_ids, cfg.pad_token_id, past_key_values_length=0)
-
-        ref = forward_torch_reference(decoder, input_ids, encoder_hidden, attn_mask, enc_mask).to(torch.bfloat16)
-
-        params = create_text_decoder_parameters(decoder, device=mesh_device)
-        tt_dec = TTSeamlessM4Tv2Decoder(
-            mesh_device,
-            params,
-            layer_norm_eps=cfg.layer_norm_eps,
-            num_hidden_layers=cfg.decoder_layers,
-            num_attention_heads=cfg.decoder_attention_heads,
-            hidden_size=cfg.hidden_size,
-        )
-
-        input_ids_tt = from_torch_uint32_rm(mesh_device, input_ids)
-        position_ids_tt = from_torch_uint32_rm(mesh_device, position_ids)
-        encoder_tt = from_torch_bfloat16_tile(mesh_device, encoder_hidden)
-        causal_tt = from_torch_bfloat16_tile(mesh_device, causal_mask)
-        cross_tt = from_torch_bfloat16_tile(mesh_device, cross_mask)
-
-        out_tt = tt_dec.forward(input_ids_tt, position_ids_tt, encoder_tt, causal_tt, cross_tt)
-        tt_cpu = (
-            to_torch_replicated_first_shard(out_tt).to(torch.bfloat16).reshape(batch, seq, cfg.hidden_size).contiguous()
-        )
-
-        ok, msg = check_with_pcc(ref, tt_cpu, pcc=PCC_THRESHOLD)
-        logger.info(f"SeamlessM4Tv2 text decoder PCC @ seq={seq}: {msg} (threshold {PCC_THRESHOLD})")
-        assert ok, msg
+        hf_model, processor, _ = load_hf_model_and_processor(weights_dir, dtype=torch.bfloat16)
+        case = make_t2tt_decoder_pcc_inputs(hf_model, processor, enc_seq_len=MAX_ENC_SEQ)
+        _run_decoder_pcc(mesh_device, hf_model.text_decoder, hf_model.config, case, log_label="T2TT-max-enc")
 
 
 @pytest.mark.timeout(1800)
 @pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_TEXT, indirect=["mesh_device", "device_params"])
 def test_seamless_m4t_v2_text_decoder_prof_capture_seq_pcc(mesh_device, device_params, reset_seeds):
-    """Text decoder prefill PCC ≥ 0.99 at the tracy-safe seq (``PROF_CAPTURE_SEQ`` = 32, seed=1).
+    """Decoder PCC ≥ 0.99 at the tracy-safe T2TT source length (``PROF_CAPTURE_ENC_SEQ`` = 32).
 
-    Matches the longest prefill that clears PCC with random inputs. Longer seq (64+) fails PCC
-    here before L1; profiling those lengths also produces too many decoder-layer zones for Tracy.
+    Uses production-shaped tensors; encoder length is the tracy budget knob (decoder seed stays 2).
     """
     _ = reset_seeds
     _ = device_params
-
-    try:
-        weights_dir = ensure_seamless_m4t_v2_large_weights()
-    except ImportError as e:
-        pytest.skip(str(e))
-    except Exception as e:
-        pytest.skip(f"Could not prepare seamless-m4t-v2-large weights: {e}")
+    weights_dir = _weights_dir_or_skip()
 
     with mesh_default_device(mesh_device):
-        torch.manual_seed(1)
-        decoder, cfg = load_pretrained_text_decoder(weights_dir, dtype=torch.bfloat16)
-
-        batch = 1
-        seq = PROF_CAPTURE_SEQ
-        enc_seq = PROF_CAPTURE_SEQ
-        input_ids = torch.randint(1, min(cfg.vocab_size - 1, 2**31 - 1), (batch, seq), dtype=torch.int64)
-        encoder_hidden = torch.randn(batch, enc_seq, cfg.hidden_size, dtype=torch.bfloat16)
-        attn_mask = torch.ones(batch, seq, dtype=torch.long)
-        enc_mask = torch.ones(batch, enc_seq, dtype=torch.long)
-
-        inputs_embeds = decoder.embed_tokens(input_ids)
-        causal_mask = _prepare_4d_causal_attention_mask(
-            attn_mask, (batch, seq), inputs_embeds, past_key_values_length=0
-        )
-        cross_mask = _prepare_4d_attention_mask(enc_mask, inputs_embeds.dtype, tgt_len=seq)
-        position_ids = create_position_ids_from_input_ids(input_ids, cfg.pad_token_id, past_key_values_length=0)
-
-        ref = forward_torch_reference(decoder, input_ids, encoder_hidden, attn_mask, enc_mask).to(torch.bfloat16)
-
-        params = create_text_decoder_parameters(decoder, device=mesh_device)
-        tt_dec = TTSeamlessM4Tv2Decoder(
-            mesh_device,
-            params,
-            layer_norm_eps=cfg.layer_norm_eps,
-            num_hidden_layers=cfg.decoder_layers,
-            num_attention_heads=cfg.decoder_attention_heads,
-            hidden_size=cfg.hidden_size,
-        )
-
-        input_ids_tt = from_torch_uint32_rm(mesh_device, input_ids)
-        position_ids_tt = from_torch_uint32_rm(mesh_device, position_ids)
-        encoder_tt = from_torch_bfloat16_tile(mesh_device, encoder_hidden)
-        causal_tt = from_torch_bfloat16_tile(mesh_device, causal_mask)
-        cross_tt = from_torch_bfloat16_tile(mesh_device, cross_mask)
-
-        out_tt = tt_dec.forward(input_ids_tt, position_ids_tt, encoder_tt, causal_tt, cross_tt)
-        tt_cpu = (
-            to_torch_replicated_first_shard(out_tt).to(torch.bfloat16).reshape(batch, seq, cfg.hidden_size).contiguous()
-        )
-
-        ok, msg = check_with_pcc(ref, tt_cpu, pcc=PCC_THRESHOLD)
-        logger.info(f"SeamlessM4Tv2 text decoder prof-capture PCC @ seq={seq}: {msg} (threshold {PCC_THRESHOLD})")
-        assert ok, msg
+        hf_model, processor, _ = load_hf_model_and_processor(weights_dir, dtype=torch.bfloat16)
+        case = make_t2tt_decoder_pcc_inputs(hf_model, processor, enc_seq_len=PROF_CAPTURE_ENC_SEQ)
+        _run_decoder_pcc(mesh_device, hf_model.text_decoder, hf_model.config, case, log_label="prof-capture")

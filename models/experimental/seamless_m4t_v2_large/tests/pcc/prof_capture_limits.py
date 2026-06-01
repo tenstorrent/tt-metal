@@ -22,8 +22,8 @@ Re-validate when profiler buffers or Seamless op counts change materially.
 # PCC ≥ 0.99 @ seed=0; mel_seq=64/128 fail PCC (bf16 drift); mel_seq=256+ breaks tracy -r -v.
 SPEECH_ENCODER_MEL_SEQ = 32
 
-# Longest power-of-two prefill where random-input PCC ≥ 0.99 (seed=1); seq=64 fails PCC.
-TEXT_DECODER_SEQ = 32
+# T2TT tokenized source length for ``test_text_decoder_prof_capture_seq_pcc`` (decoder seed = 2).
+TEXT_DECODER_ENC_SEQ = 32
 
 # Highest power-of-two T2U encoder forward that clears PCC and tracy on BH (1024 hits L1).
 TEXT_TO_UNIT_ENCODER_SEQ = 512
