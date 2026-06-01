@@ -1019,7 +1019,6 @@ struct DestReuseBinary;
 template <
     BroadcastDim Dim,
     uint32_t Cb,
-    uint32_t CbOut = 0,
     Dst DstSlot = Dst::D0,
     InputLifecycle Policy = Streaming,
     UnaryBcastReconfig Reconfig = UnaryBcastReconfig::Input>

@@ -35,7 +35,6 @@ void kernel_main() {
                 compute_kernel_lib::UnaryBcast<
                     compute_kernel_lib::BroadcastDim::Scalar,
                     cb_id_src,
-                    /*CbOut=*/cb_id_dst,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::Streaming,
                     compute_kernel_lib::UnaryBcastReconfig::Input>{},

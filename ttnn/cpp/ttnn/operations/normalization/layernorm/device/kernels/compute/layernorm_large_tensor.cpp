@@ -251,19 +251,20 @@ void kernel_main() {
         // Broadcast the tile since cb_ex2pe is a column vector that contains the important data.
         // PARTIAL migration: UnaryBcast<COL> + PackTile (same-CB in/out on cb_ex2pe).
         //
-        // Reconfig audit: unary_bcast_init bundles srca + pack reconfig (chain.inl:1033),
-        // so UnaryBcastReconfig::Input covers both. PackTile should NOT re-reconfig
-        // pack -> PackTileReconfig::None.
+        // This multi-stage kernel reconfigures unpack/pack away from cb_ex2pe between stages
+        // and does not boot-init cb_ex2pe, so the per-stage BIG init is the caller's
+        // responsibility (D8): emit unary_bcast_init for cb_ex2pe right before the chain.
+        // The chain's UnaryBcast then only needs its small per-element MOP init.
         //
         // Lifecycle: cb_ex2pe input Streaming (per-tile wait+pop), output OutStreaming
         // (per-tile reserve+push). After the chain, the new pushed tile is re-waited
         // for downstream use.
+        unary_bcast_init<BroadcastType::COL>(cb_ex2pe, cb_ex2pe);
         compute_kernel_lib::eltwise_chain(
             onetile,
             compute_kernel_lib::UnaryBcast<
                 compute_kernel_lib::BroadcastDim::Col,
                 cb_ex2pe,
-                /*CbOut=*/cb_ex2pe,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::Streaming,
                 compute_kernel_lib::UnaryBcastReconfig::Input>{},

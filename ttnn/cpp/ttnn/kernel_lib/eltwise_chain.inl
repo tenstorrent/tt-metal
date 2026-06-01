@@ -883,7 +883,6 @@ struct DestReuseBinary : DestReuseBinaryTag {
 
 template <BroadcastDim Dim,
           uint32_t Cb,
-          uint32_t CbOut,
           Dst DstSlot,
           InputLifecycle Policy,
           UnaryBcastReconfig Reconfig>
@@ -901,19 +900,52 @@ struct UnaryBcast : UnaryBcastTag {
                                                         (Policy == Pipelined);
     static constexpr bool           clashes_with_fpu  = true;
 
-    // Prev-CB fold (D2): UnaryBcast loads Cb to srca; ocb (CbOut or Cb) on pack-side.
-    // Reconfig is currently bundled into `unary_bcast_init` so no separate fold-driven
-    // reconfig fires here; sentinels remain NO_PREV_CB to keep the fold transparent.
+    // Prev-CB fold (D2): UnaryBcast loads Cb to srca; the srca reconfig is done in init()
+    // (single-arg, format-aware). Pack-side reconfig is owned by the downstream PackTile
+    // (PackTileReconfig::Output), exactly like BinaryFpu — UnaryBcast never configures pack.
     static constexpr uint32_t       reconfig_srca_cb  = NO_PREV_CB;
     static constexpr uint32_t       reconfig_srcb_cb  = NO_PREV_CB;
     static constexpr uint32_t       reconfig_pack_cb  = NO_PREV_CB;
 
     static ALWI void init() {
         constexpr auto bt = static_cast<ckernel::BroadcastType>(static_cast<uint8_t>(Dim));
-        constexpr uint32_t ocb = (CbOut != 0) ? CbOut : Cb;
-        // Reconfig path: single-arg-style — `unary_bcast_init` already does srca + ocb reconfig
-        // for the new bcast dim. No previous-CB tracking needed.
-        unary_bcast_init<bt>(Cb, ocb);
+        // Small per-element init only — the caller owns BIG init (compute_kernel_hw_startup /
+        // a boot unary_bcast_init). This does NOT re-run any hw_configure or pack init.
+        //   1. srca format reconfig (UnaryBcastReconfig::Input): switch srca to Cb's format,
+        //      covering chains that change the bcast input CB between elements (e.g. layernorm
+        //      cb_ex2 -> cb_ex2pe). No-op at the LLK level when the format already matches.
+        //   2. the bcast datacopy MOP (unpack-A + math datacopy), icb-only — mirrors the
+        //      MOP-init portion of `unary_bcast_init`, minus every BIG hw_configure / pack line.
+        // The pack target is reconfigured by the downstream PackTile (PackTileReconfig::Output).
+        if constexpr (Reconfig == UnaryBcastReconfig::Input) {
+            reconfig_data_format_srca(Cb);
+        }
+#if defined(TRISC_UNPACK) || defined(TRISC_MATH)
+        const std::uint32_t dst_format = get_operand_dst_format(Cb);
+#ifndef ARCH_QUASAR
+        const bool enable_unpack_to_dest = (dst_format == (std::uint32_t)DataFormat::Float32) ||
+                                           (dst_format == (std::uint32_t)DataFormat::UInt32) ||
+                                           (dst_format == (std::uint32_t)DataFormat::Int32);
+        if (enable_unpack_to_dest) {
+            UNPACK((llk_unpack_A_init<bt, false, ckernel::EltwiseBinaryReuseDestType::NONE, true>(false, false, Cb)));
+            MATH((llk_math_eltwise_unary_datacopy_init<ckernel::DataCopyType::A2D, DST_ACCUM_MODE, bt>(Cb)));
+        } else {
+            UNPACK((llk_unpack_A_init<bt, false, ckernel::EltwiseBinaryReuseDestType::NONE, false>(false, false, Cb)));
+            MATH((llk_math_eltwise_unary_datacopy_init<ckernel::DataCopyType::B2D, DST_ACCUM_MODE, bt>(Cb)));
+        }
+#else
+        const bool enable_unpack_to_dest =
+            (dst_format == (std::uint32_t)DataFormat::Float32) || (dst_format == (std::uint32_t)DataFormat::Int32);
+        if (enable_unpack_to_dest) {
+            ASSERT(false);  // Quasar unpack_to_dest unary bcast not implemented yet
+            UNPACK((llk_unpack_A_init<false /*TRANSPOSE_EN*/, true /*IS_32b_DEST_EN*/>(Cb)));
+            MATH((llk_math_eltwise_unary_datacopy_init<ckernel::DataCopyType::A2D, true>(Cb)));
+        } else {
+            UNPACK((llk_unpack_A_init<false, false>(Cb)));
+            MATH((llk_math_eltwise_unary_datacopy_init<ckernel::DataCopyType::B2D, false>(Cb)));
+        }
+#endif
+#endif
     }
 
     ALWI void wait_per_tile(uint32_t cumulative_count) const {
