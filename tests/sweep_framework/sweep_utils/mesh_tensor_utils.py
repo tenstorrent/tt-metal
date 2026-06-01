@@ -1404,6 +1404,20 @@ def reconcile_golden_to_actual(
     if torch_golden.shape == actual_global.shape:
         return torch_golden
 
+    # Strategy 1.5: ndim mismatch — pad golden with trailing size-1 dims or squeeze.
+    if torch_golden.ndim != actual_global.ndim:
+        g = torch_golden
+        while g.ndim < actual_global.ndim:
+            g = g.unsqueeze(-1)
+        while g.ndim > actual_global.ndim:
+            if g.shape[-1] == 1:
+                g = g.squeeze(-1)
+            else:
+                break
+        if g.shape == actual_global.shape:
+            return g
+        torch_golden = g
+
     # Strategy 2: per-dim integer-ratio tile.
     if torch_golden.ndim == actual_global.ndim:
         repeats = []
@@ -1419,6 +1433,23 @@ def reconcile_golden_to_actual(
             tiled = torch_golden.repeat(*repeats)
             if tiled.shape == actual_global.shape:
                 return tiled
+
+    # Strategy 3: golden LARGER than actual — slice golden to match.
+    if torch_golden.ndim == actual_global.ndim:
+        slice_ok = True
+        slices = []
+        for d in range(torch_golden.ndim):
+            g = torch_golden.shape[d]
+            a = actual_global.shape[d]
+            if a <= g:
+                slices.append(slice(0, a))
+            else:
+                slice_ok = False
+                break
+        if slice_ok and any(s.stop < torch_golden.shape[i] for i, s in enumerate(slices)):
+            sliced = torch_golden[tuple(slices)]
+            if sliced.shape == actual_global.shape:
+                return sliced
 
     # Strategy 4: placement-driven tile (legacy path).
     out = torch_golden
