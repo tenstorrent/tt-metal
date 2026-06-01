@@ -33,6 +33,27 @@ inline void finalize_multitile_pack_tail()
     // normal single-tile state for the next caller.
     TTI_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, 0xf, 0, 1, 0, 1);
 }
+
+static __attribute__((noinline, noclone)) void pack_multitile(const std::uint32_t tile_index, const std::uint32_t address)
+{
+    set_dst_write_addr(tile_index);
+    LLK_ASSERT(is_valid_L1_address(address), "L1 address must be in valid L1 memory region");
+    std::uint32_t new_l1_addr = (1 << 31) | address;
+    TT_SETDMAREG(0, LOWER_HALFWORD(address), 0, LO_16(p_gpr_pack::OUTPUT_ADDR));
+    TT_SETDMAREG(0, UPPER_HALFWORD(new_l1_addr), 0, HI_16(p_gpr_pack::OUTPUT_ADDR));
+    TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG1_L1_Dest_addr_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_pack::OUTPUT_ADDR);
+    // The programmed MOP performs the blocked sequence for this whole call;
+    // the explicit tail below is only the final close/reset step.
+    mop_run(1, 1);
+    if (llk_pack_internal::configured_zero_output == p_pacr::P_ZERO_OUTPUT_ENABLED)
+    {
+        finalize_multitile_pack_tail<true>();
+    }
+    else
+    {
+        finalize_multitile_pack_tail<false>();
+    }
+}
 } // namespace llk_pack_internal
 
 inline std::uint32_t _llk_pack_output_size_bytes_(const std::uint32_t pack_dst_format, const std::uint32_t datum_count)
@@ -274,24 +295,7 @@ inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t addre
     {
         if (llk_pack_internal::configured_num_tiles > 1)
         {
-            set_dst_write_addr(tile_index);
-            LLK_ASSERT(is_valid_L1_address(address), "L1 address must be in valid L1 memory region");
-            std::uint32_t new_l1_addr = (1 << 31) | address;
-            TT_SETDMAREG(0, LOWER_HALFWORD(address), 0, LO_16(p_gpr_pack::OUTPUT_ADDR));
-            TT_SETDMAREG(0, UPPER_HALFWORD(new_l1_addr), 0, HI_16(p_gpr_pack::OUTPUT_ADDR));
-            TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG1_L1_Dest_addr_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_pack::OUTPUT_ADDR);
-            // The programmed MOP performs the blocked sequence for this whole
-            // call; the explicit tail below is only the final close/reset step,
-            // not a second multi-tile MOP.
-            mop_run(1, 1);
-            if (llk_pack_internal::configured_zero_output == p_pacr::P_ZERO_OUTPUT_ENABLED)
-            {
-                llk_pack_internal::finalize_multitile_pack_tail<true>();
-            }
-            else
-            {
-                llk_pack_internal::finalize_multitile_pack_tail<false>();
-            }
+            llk_pack_internal::pack_multitile(tile_index, address);
             return;
         }
     }
