@@ -287,9 +287,8 @@ void run_single_core_broadcast(
     log_info(tt::LogTest, "Compute function is {}", defines["BCAST_OP"]);
 
     experimental::KernelSpec::CompilerOptions::Defines defines_vec;
-    defines_vec.reserve(defines.size());
     for (auto& kv : defines) {
-        defines_vec.emplace_back(kv.first, kv.second);
+        defines_vec.emplace(kv.first, kv.second);
     }
 
     constexpr const char* INP0_DFB = "inp0_dfb";

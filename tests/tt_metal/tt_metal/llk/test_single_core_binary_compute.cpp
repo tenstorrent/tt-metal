@@ -270,9 +270,8 @@ bool single_core_binary(
 
     auto defines_map = build_binary_defines(test_config);
     experimental::KernelSpec::CompilerOptions::Defines defines;
-    defines.reserve(defines_map.size());
     for (auto& kv : defines_map) {
-        defines.emplace_back(kv.first, kv.second);
+        defines.emplace(kv.first, kv.second);
     }
 
     constexpr const char* INP0_DFB = "inp0_dfb";

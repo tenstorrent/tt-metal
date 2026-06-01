@@ -9,6 +9,7 @@
 #include <vector>
 
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/experimental/metal2_host_api/table.hpp>
 
 namespace tt::tt_metal::experimental {
 
@@ -49,8 +50,8 @@ struct KernelAdvancedOptions {
     //       (It's an open question if we EVER want to support it.)
     //       It is included here just as a placeholder for use case feedback.
     //       Attempting to use it will trigger a runtime error.
-    using NodeSpecificThreadCount = std::pair<Nodes, uint32_t>;  // {node_set, num_threads}
-    using NodeSpecificThreadCounts = std::vector<NodeSpecificThreadCount>;
+    using NodeSpecificThreadCounts = Table<Nodes, uint32_t>;  // {node_set, num_threads}
+    using NodeSpecificThreadCount = NodeSpecificThreadCounts::value_type;
     NodeSpecificThreadCounts node_specific_thread_counts;
 
     ////////////////////////////////////////////////////////////////////////////////
@@ -93,7 +94,7 @@ struct KernelAdvancedOptions {
     // not listed default to num_runtime_varargs.
     // TODO: This feature is truly bizarre. It will be removed from the API once
     //       existing uses are refactored to avoid it.
-    using NumVarargsPerNode = std::vector<std::pair<Nodes, uint32_t>>;
+    using NumVarargsPerNode = Table<Nodes, uint32_t>;
     [[deprecated("Per-node-vararg-count feature is deprecated and will be removed.")]]
     NumVarargsPerNode num_runtime_varargs_per_node;
 

@@ -17,6 +17,7 @@
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/table.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 
 namespace tt::tt_metal::experimental {
@@ -98,7 +99,7 @@ struct KernelSpec {
     ///////////////////////////////////////////////////////////////////
     struct CompilerOptions {
         using IncludePaths = std::vector<std::filesystem::path>;
-        using Defines = std::vector<std::pair<std::string, std::string>>;
+        using Defines = Table<std::string, std::string>;
         using OptLevel = tt::tt_metal::KernelBuildOptLevel;
 
         IncludePaths include_paths;         // -I <path>
@@ -162,7 +163,7 @@ struct KernelSpec {
     //----------------------------------------------------------------------------
     // Compile time arguments
     // (Bound argument values cannot be changed between Program executions)
-    using CompileTimeArgs = std::vector<std::pair<std::string, uint32_t>>;
+    using CompileTimeArgs = Table<std::string, uint32_t>;
     CompileTimeArgs compile_time_args;
     // TODO -- extend to support arbitrary POD types, including user-defined structs.
 

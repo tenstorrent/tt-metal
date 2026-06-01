@@ -315,10 +315,10 @@ void run_single_core_tilize_program(
 
     experimental::KernelSpec::CompilerOptions::Defines compute_defines;
     if (test_config.fp32_dest_acc_en) {
-        compute_defines.emplace_back("DST_ACCUM_MODE", "1");
+        compute_defines.emplace("DST_ACCUM_MODE", "1");
     }
     if (test_config.fast_tilize) {
-        compute_defines.emplace_back("FAST_TILIZE", "1");
+        compute_defines.emplace("FAST_TILIZE", "1");
     }
 
     experimental::KernelSpec compute_spec{

@@ -384,9 +384,9 @@ TEST_P(RTAAssertTest, OutOfBoundsArgAccessDetection) {
 
     experimental::KernelSpec::CompilerOptions::Defines m2_defines;
     if (params.test_rta) {
-        m2_defines.push_back({"MAX_RTA_IDX", std::to_string(default_rtas.size())});
+        m2_defines.emplace("MAX_RTA_IDX", std::to_string(default_rtas.size()));
     } else {
-        m2_defines.push_back({"MAX_CRTA_IDX", std::to_string(default_crtas.size())});
+        m2_defines.emplace("MAX_CRTA_IDX", std::to_string(default_crtas.size()));
     }
 
     // RTA test reads index == default_rtas.size() (one past the end), so the kernel must declare

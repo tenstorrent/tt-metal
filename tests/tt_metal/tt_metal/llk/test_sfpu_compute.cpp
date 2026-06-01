@@ -438,7 +438,7 @@ bool run_sfpu_all_same_buffer(
 
     experimental::KernelSpec::CompilerOptions::Defines compute_defines;
     for (const auto& [k, v] : sfpu_defines) {
-        compute_defines.emplace_back(k, v);
+        compute_defines.emplace(k, v);
     }
 
     experimental::KernelSpec compute_spec{
@@ -548,11 +548,11 @@ experimental::DataflowBufferSpec make_dfb_spec(const char* id, const SfpuConfig&
     };
 }
 
-// Converts a string→string defines map to the CompilerOptions::Defines vector form.
+// Converts a string→string defines map to the CompilerOptions::Defines table form.
 experimental::KernelSpec::CompilerOptions::Defines to_kernel_defines(const std::map<std::string, std::string>& m) {
     experimental::KernelSpec::CompilerOptions::Defines defines;
     for (const auto& [k, v] : m) {
-        defines.emplace_back(k, v);
+        defines.emplace(k, v);
     }
     return defines;
 }

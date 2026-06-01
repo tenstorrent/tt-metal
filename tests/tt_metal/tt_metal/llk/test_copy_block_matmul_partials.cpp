@@ -150,7 +150,7 @@ void run_single_core_copy_block_matmul_partials(
 
     experimental::KernelSpec::CompilerOptions::Defines compute_defines;
     if (test_config.fp32_dest_acc_en) {
-        compute_defines.emplace_back("DST_ACCUM_MODE", "1");
+        compute_defines.emplace("DST_ACCUM_MODE", "1");
     }
 
     experimental::KernelSpec compute_spec{
@@ -183,9 +183,9 @@ void run_single_core_copy_block_matmul_partials(
                 // Default is unpack via SrcA/B, ~19-bit precision.
                 .unpack_to_dest_mode =
                     test_config.fp32_dest_acc_en
-                        ? std::vector<experimental::ComputeHardwareConfig::
-                                          DFBUnpackToDestMode>{{SRC0_DFB, tt::tt_metal::UnpackToDestMode::Default}}
-                        : std::vector<experimental::ComputeHardwareConfig::DFBUnpackToDestMode>{},
+                        ? experimental::ComputeHardwareConfig::UnpackToDestModes{
+                              {SRC0_DFB, tt::tt_metal::UnpackToDestMode::Default}}
+                        : experimental::ComputeHardwareConfig::UnpackToDestModes{},
             },
     };
 

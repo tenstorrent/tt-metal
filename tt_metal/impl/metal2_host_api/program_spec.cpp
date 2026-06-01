@@ -785,17 +785,16 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             }
         }
 
-        // Validate each user-supplied entry.
+        // Validate each user-supplied entry, tracking which DFBs got an explicit
+        // entry (used below to require one where the FP32 choice is real).
+        // Duplicate DFB entries are impossible now that unpack_to_dest_mode is a
+        // Table with unique keys: a repeated DFB overwrites the prior value.
         std::unordered_set<DFBSpecName> entries_seen;
         for (const auto& [dfb_name, mode] : compute_config.unpack_to_dest_mode) {
+            entries_seen.insert(dfb_name);
             TT_FATAL(
                 bound_dfbs.contains(dfb_name),
                 "Kernel '{}' unpack_to_dest_mode entry references DFB '{}', which the kernel does not bind",
-                kernel.unique_id,
-                dfb_name);
-            TT_FATAL(
-                entries_seen.insert(dfb_name).second,
-                "Kernel '{}' has duplicate unpack_to_dest_mode entries for DFB '{}'",
                 kernel.unique_id,
                 dfb_name);
 
@@ -2347,7 +2346,7 @@ DataMovementConfig MakeGen1DataMovementConfig(const KernelSpec& kernel_spec) {
 // ----------------------------------------------------------------------------
 
 std::vector<UnpackToDestMode> BuildUnpackToDestModeVector(
-    const std::vector<ComputeHardwareConfig::DFBUnpackToDestMode>& user_modes, const DFBNameToIdMap& dfb_name_to_id) {
+    const ComputeHardwareConfig::UnpackToDestModes& user_modes, const DFBNameToIdMap& dfb_name_to_id) {
     const uint32_t max_cbs = tt::tt_metal::hal::get_arch_num_circular_buffers();
     std::vector<UnpackToDestMode> unpack_modes(max_cbs, UnpackToDestMode::Default);
     for (const auto& [dfb_name, mode] : user_modes) {

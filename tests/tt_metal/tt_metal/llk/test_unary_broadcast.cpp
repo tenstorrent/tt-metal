@@ -353,7 +353,7 @@ void run_single_core_unary_broadcast_quasar(
     };
 
     experimental::KernelSpec::CompilerOptions::Defines compute_defines;
-    compute_defines.emplace_back("BCAST_DIM", broadcast_dim_to_type.at(test_config.broadcast_dim));
+    compute_defines.emplace("BCAST_DIM", broadcast_dim_to_type.at(test_config.broadcast_dim));
 
     experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
