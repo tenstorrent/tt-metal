@@ -212,8 +212,7 @@ void kernel_main() {
             uint32_t output_page_idx = route_info[2];
             uint32_t output_data_addr = cb_base + l1_alignment;
 
-            DPRINT_COMBINE << "Fabric send: route=" << route << " distance=" << distance
-                           << " page_idx=" << output_page_idx << ENDL();
+            DPRINT_COMBINE("Fabric send: route={} distance={} page_idx={}\n", route, distance, output_page_idx);
 
 #ifdef DEST_CHIP_ID
             {
