@@ -1,22 +1,19 @@
-# this file contains the time budgets allocated for merge gate and pr gate tests for each sku.
-# the calculations are based on deciding to allocate 50% of available machine hours to merge gate and pr gate tests.
-# merge gate sees an average of 15 full runs per hour during peak (13:00-21:00 UTC). Runs roughly 3x per merge.
-# pr gate sees an average of 20 full runs per hour during peak. Runs roughly 4x per merge.
-# from pools.yaml, we decide that 50% of available machine hours per week are allocated to merge gate and pr gate tests.
-# below we list the total machine hours allocated per run
-# the formula is: for each sku in pools.yaml, divide by 7 and 24 to get available machine hours per hour (or effective number of machines)
-# then divide by 2 for the total merge gate + pr gate allocation.
-# then choose to dedicate 60% of the total allocation to merge gate and 40% to pr gate.
-# divide the merge gate allocation by 15 to get the time budget per run.
-# divide the pr gate allocation by 20 to get the time budget per run.
+# Per-SKU time budgets (minutes per run) for the merge gate and PR gate.
+#
+# Capacity model:
+#   - Weekly machine hours per SKU come from pools.yaml.
+#   - 50% of weekly capacity is reserved for the combined merge + PR gates,
+#     split 60/40 between merge gate and PR gate respectively.
+#   - Peak run rates (13:00-21:00 UTC): merge gate ~15 runs/hr (~3x per merge),
+#     PR gate ~20 runs/hr (~4x per merge).
 #
 # Closed form (minutes per run):
 #   merge_gate = weekly_hours / 140
 #   pr_gate    = weekly_hours / 280
-# Values rounded to the nearest whole minute.
+# Values are rounded to the nearest whole minute.
 
 merge_gate:
-  # ── CIv2 (tt-ubuntu-2204-* runner labels) ────────────────────────────────
+  # ── CIv2 ────────────────────────────────
   wh_n150_civ2:           15
   wh_n300_civ2:           53
   wh_llmbox_civ2:          5
@@ -26,7 +23,7 @@ merge_gate:
   bh_loudbox_civ2_viommu:  0
 
 pr_gate:
-  # ── CIv2 (tt-ubuntu-2204-* runner labels) ────────────────────────────────
+  # ── CIv2 ────────────────────────────────
   wh_n150_civ2:            8
   wh_n300_civ2:           26
   wh_llmbox_civ2:          2
