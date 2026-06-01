@@ -353,6 +353,7 @@ class Flux2Transformer(Module):
         prompt_rope: tuple[ttnn.Tensor, ttnn.Tensor],
         spatial_sequence_length: int,
         prompt_sequence_length: int,
+        compute_prompt_output: bool = False,
     ) -> ttnn.Tensor:
         """Run the model forward.
 
@@ -439,7 +440,7 @@ class Flux2Transformer(Module):
                 temb_mod_params=single_stream_mod,
                 spatial_sequence_length=spatial_sequence_length,
                 skip_time_embed_activation_fn=True,
-                compute_prompt_output=(i < num_single_blocks),
+                compute_prompt_output=(i < num_single_blocks) or compute_prompt_output,
             )
 
             if i % 6 == 0:
