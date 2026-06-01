@@ -427,15 +427,15 @@ class TTNNSDPAAttention(TTNNModule):
         transpose_output: bool = True,
         **kwargs,
     ) -> ttnn.Tensor:
-        if query.layout != ttnn.TILE_LAYOUT:
-            query = ttnn.to_layout(query, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        if key.layout != ttnn.TILE_LAYOUT:
-            key = ttnn.to_layout(key, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        if value.layout != ttnn.TILE_LAYOUT:
-            value = ttnn.to_layout(value, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        query = ttnn.to_memory_config(query, ttnn.DRAM_MEMORY_CONFIG)
-        key = ttnn.to_memory_config(key, ttnn.DRAM_MEMORY_CONFIG)
-        value = ttnn.to_memory_config(value, ttnn.DRAM_MEMORY_CONFIG)
+        # if query.layout != ttnn.TILE_LAYOUT:
+        #     query = ttnn.to_layout(query, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # if key.layout != ttnn.TILE_LAYOUT:
+        #     key = ttnn.to_layout(key, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # if value.layout != ttnn.TILE_LAYOUT:
+        #     value = ttnn.to_layout(value, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # query = ttnn.to_memory_config(query, ttnn.DRAM_MEMORY_CONFIG)
+        # key = ttnn.to_memory_config(key, ttnn.DRAM_MEMORY_CONFIG)
+        # value = ttnn.to_memory_config(value, ttnn.DRAM_MEMORY_CONFIG)
         assert len(query.shape) == 4, "Query tensor must be 4D"
         assert dropout == 0.0, "TTNNSDPAAttention does not support dropout"
         is_causal = is_causal if is_causal is not None else getattr(module, "is_causal", True)

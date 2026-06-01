@@ -486,16 +486,28 @@ class TTNNDotsOCRAttention(TTNNModule):
             if v_fill is not value_states:
                 ttnn.deallocate(v_fill)
 
-        attn_output = self.sdpa(
-            self,
+        # attn_output = self.sdpa(
+        #     self,
+        #     query_states,
+        #     key_states,
+        #     value_states,
+        #     attention_mask,
+        #     dropout=0.0,
+        #     scaling=self.scaling,
+        #     is_causal=self.is_causal,
+        #     transpose_output=False,
+        # )
+        self.sdpa.memory_config = ttnn.L1_MEMORY_CONFIG
+        attn_output = ttnn.transformer.scaled_dot_product_attention(
             query_states,
             key_states,
             value_states,
-            attention_mask,
-            dropout=0.0,
-            scaling=self.scaling,
             is_causal=self.is_causal,
-            transpose_output=False,
+            scale=self.scaling,
+            program_config=self.sdpa.program_config,
+            attn_mask=attention_mask,
+            compute_kernel_config=self.sdpa.compute_kernel_config,
+            memory_config=self.sdpa.memory_config,
         )
 
         attn_output = ttnn.experimental.nlp_concat_heads(attn_output, memory_config=ttnn.L1_MEMORY_CONFIG)
