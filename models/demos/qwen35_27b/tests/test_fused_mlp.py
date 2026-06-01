@@ -61,7 +61,6 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, hf_model, tmp_path, res
         mesh_device,
         max_batch_size=batch_size,
         max_seq_len=128000,
-        cache_hf=False,
     )
 
     hf_mlp = model_args.reference_mlp()
