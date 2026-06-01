@@ -1,4 +1,4 @@
-# models/demos/blackhole/qwen3_5_9b/tt/qwen35_decoder.py
+# models/demos/blackhole/qwen3_5_9b/tt/layer.py
 """Hybrid TransformerBlock for Qwen3.5-9B.
 
 Dispatches to either Gated DeltaNet (linear attention) or Gated Full Attention
@@ -8,32 +8,20 @@ import ttnn
 from models.demos.blackhole.qwen3_5_9b.tt.attention import AttentionConfig, Qwen35GatedAttention
 from models.demos.blackhole.qwen3_5_9b.tt.gdn import GDNConfig, Qwen35GatedDeltaNet
 from models.demos.blackhole.qwen3_5_9b.tt.mlp import Qwen35MLP
+from models.demos.blackhole.qwen3_5_9b.tt.rms_norm import rms_norm_ttnn
 from models.demos.blackhole.qwen3_5_9b.utils.substate import substate
 
 
-def rms_norm_ttnn(x, weight, eps=1e-6, memory_config=None):
-    """Zero-centered RMSNorm using fused ttnn.rms_norm.
-
-    Qwen3.5 uses zero-centered RMSNorm for ALL layer norms:
-      output = x * rsqrt(mean(x^2) + eps) * (1 + weight)
-
-    The weight should be pre-offset by +1 so we can use the standard fused op.
-    Verified: fused ttnn.rms_norm works for all decode shapes on Blackhole P150:
-      [1, 1, 4096], [1, 1, 16, 256], [1, 1, 32, 128]
-    """
-    return ttnn.rms_norm(x, weight=weight, epsilon=eps, memory_config=memory_config)
-
-
-class Qwen35TransformerBlock:
+class Qwen35DecoderLayer:
     """Single transformer layer with hybrid attention dispatch.
 
     Pattern: x → attention_norm → attention → residual → ff_norm → MLP → residual
     Attention is either GatedAttention (full, with RoPE) or GatedDeltaNet (linear).
     """
 
-    def __init__(self, args, state_dict, layer_num, device, weight_cache_path=None):
+    def __init__(self, mesh_device, args, state_dict, layer_num, tensor_cache_path=None):
         self.layer_num = layer_num
-        self.device = device
+        self.device = mesh_device
         self.is_full_attention = args.is_full_attention_layer(layer_num)
 
         prefix = f"layers.{layer_num}"
@@ -51,9 +39,9 @@ class Qwen35TransformerBlock:
                 t_offset,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
-                device=device,
+                device=mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                cache_file_name=weight_cache_path / f"{prefix}.{name}" if weight_cache_path else None,
+                cache_file_name=tensor_cache_path / f"{prefix}.{name}" if tensor_cache_path else None,
             )
 
         self.attention_norm_weight = load_norm("input_layernorm.weight")
@@ -62,16 +50,16 @@ class Qwen35TransformerBlock:
 
         if self.is_full_attention:
             attn_state = substate(state_dict, f"layers.{layer_num}.self_attn")
-            attn_cache = (weight_cache_path / f"layers.{layer_num}") if weight_cache_path else None
-            self.attention = Qwen35GatedAttention(device, AttentionConfig.from_args(args), attn_state, attn_cache)
+            attn_cache = (tensor_cache_path / f"layers.{layer_num}") if tensor_cache_path else None
+            self.attention = Qwen35GatedAttention(mesh_device, AttentionConfig.from_args(args), attn_state, attn_cache)
         else:
             gdn_state = substate(state_dict, f"layers.{layer_num}.linear_attn")
-            gdn_cache = (weight_cache_path / f"layers.{layer_num}") if weight_cache_path else None
-            self.attention = Qwen35GatedDeltaNet(device, GDNConfig.from_args(args), gdn_state, gdn_cache)
+            gdn_cache = (tensor_cache_path / f"layers.{layer_num}") if tensor_cache_path else None
+            self.attention = Qwen35GatedDeltaNet(mesh_device, GDNConfig.from_args(args), gdn_state, gdn_cache)
 
         mlp_state = substate(state_dict, f"layers.{layer_num}.mlp")
-        mlp_cache = (weight_cache_path / f"layers.{layer_num}") if weight_cache_path else None
-        self.feed_forward = Qwen35MLP(device, mlp_state, mlp_cache)
+        mlp_cache = (tensor_cache_path / f"layers.{layer_num}") if tensor_cache_path else None
+        self.feed_forward = Qwen35MLP(mesh_device, mlp_state, mlp_cache)
 
     def forward(
         self,
