@@ -26,6 +26,21 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 KVPE_HEAD_DIM = 576
 
 
+def _make_metadata_tensor(mesh_device, kv_actual_global, slot_idx):
+    """Replicate the post-h2d_socket_sync state: a [1,1,1,4] uint32 DRAM tensor,
+    replicated across the mesh, holding [kv_actual_global, slot_idx, dst_slot, reserved].
+    The op's writer kernel reads index 0 and 1 on-device (no host scalars)."""
+    payload = torch.tensor([kv_actual_global, slot_idx, 0, 0], dtype=torch.int64).reshape(1, 1, 1, 4)
+    return ttnn.from_torch(
+        payload,
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+
 @pytest.mark.parametrize("mesh_device", [(2, 4), (8, 4)], ids=["2x4", "8x4"], indirect=True)
 @pytest.mark.parametrize(
     "num_users, num_layers, new_isl_tiles_per_dev, cache_tokens_per_dev",
@@ -84,13 +99,13 @@ def test_update_padded_kv_cache_single_iteration_prefill(
                     mesh_device, mesh_shape=tuple(mesh_device.shape), dims=input_shard_dims
                 ),
             )
+            metadata = _make_metadata_tensor(mesh_device, kv_actual_global=0, slot_idx=u)
             ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
                 kv_cache,
                 tt_input,
-                slot_idx=u,
+                metadata,
                 layer_idx=l,
                 num_layers=num_layers,
-                kv_actual_global=0,
                 cluster_axis=sp_axis,
             )
             if entries_after_first is None:
@@ -122,7 +137,10 @@ def test_update_padded_kv_cache_single_iteration_prefill(
             # Each chip's slab-0 prefix [0:chunk_local] holds its share of the chunk;
             # concat across chips to rebuild natural global order.
             written = torch.cat(
-                [cache_host[batch_idx, 0, c * cache_tokens_per_dev : c * cache_tokens_per_dev + chunk_local, :] for c in range(sp)],
+                [
+                    cache_host[batch_idx, 0, c * cache_tokens_per_dev : c * cache_tokens_per_dev + chunk_local, :]
+                    for c in range(sp)
+                ],
                 dim=0,
             )
             _, msg = assert_with_pcc(sent[(u, l)], written, 0.99)
@@ -164,7 +182,9 @@ def _rotated_chip_positions(kv_actual, sp, chunk_local):
     ],
     ids=["small", "repr"],
 )
-@pytest.mark.parametrize("scenario", ["nonpadded", "padded", "padded_partial"], ids=["nonpadded", "padded", "padded_partial"])
+@pytest.mark.parametrize(
+    "scenario", ["nonpadded", "padded", "padded_partial"], ids=["nonpadded", "padded", "padded_partial"]
+)
 @pytest.mark.timeout(0)
 def test_update_padded_kv_cache_multi_iteration_prefill(
     mesh_device, num_users, num_layers, new_isl_tiles_per_dev, cache_tokens_per_dev, scenario
@@ -250,13 +270,13 @@ def test_update_padded_kv_cache_multi_iteration_prefill(
                         mesh_device, mesh_shape=tuple(mesh_device.shape), dims=input_shard_dims
                     ),
                 )
+                metadata = _make_metadata_tensor(mesh_device, kv_actual_global=kv_actual, slot_idx=u)
                 ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
                     kv_cache,
                     tt_input,
-                    slot_idx=u,
+                    metadata,
                     layer_idx=l,
                     num_layers=num_layers,
-                    kv_actual_global=kv_actual,
                     cluster_axis=sp_axis,
                 )
                 if entries_after_first is None:
@@ -279,7 +299,9 @@ def test_update_padded_kv_cache_multi_iteration_prefill(
     cache_host = ttnn.to_torch(
         kv_cache,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=tuple(concat_dims), mesh_shape=mesh_device.shape),
-    ).to(torch.bfloat16)[:, :1, :, :]  # [users*layers, 1, cache_global, KVPE_HEAD_DIM]
+    ).to(torch.bfloat16)[
+        :, :1, :, :
+    ]  # [users*layers, 1, cache_global, KVPE_HEAD_DIM]
 
     # cache cell (chip c, local row lr) holds global position (lr//C)*chunk_global + c*C + (lr%C);
     # invert for every valid position to rebuild natural order from the chip-concatenated gather.

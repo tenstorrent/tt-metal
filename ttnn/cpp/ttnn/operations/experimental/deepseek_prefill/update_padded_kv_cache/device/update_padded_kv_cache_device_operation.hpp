@@ -20,16 +20,21 @@ struct UpdatePaddedKvCacheDeviceOperation {
     struct operation_attributes_t {
         // Cache slot is linearized as users-outer, layers-inner:
         //   batch_idx = slot_idx * num_layers + layer_idx
-        uint32_t slot_idx;  // TODO: should be moved to metadata
+        // `slot_idx` and `kv_actual_global` are no longer host attributes: the
+        // writer kernel reads them on-device from the `metadata` tensor (payload
+        // indices 1 and 0), keeping per-request values off the host dispatch path.
         uint32_t layer_idx;
         uint32_t num_layers;
-        uint32_t kv_actual_global;  // in tokens; tile-aligned. TODO: should be moved to metadata
         uint32_t cluster_axis;
     };
 
     struct tensor_args_t {
         const Tensor& cache;
         const Tensor& input;
+        // [1,1,1,4] uint32 DRAM, replicated across the mesh — the h2d_socket_sync
+        // metadata payload [kv_actual_global (tokens, tile-aligned), slot_idx,
+        // dst_slot, reserved]. The writer kernel reads index 0 and 1 on-device.
+        const Tensor& metadata;
     };
 
     using spec_return_value_t = TensorSpec;
@@ -60,10 +65,9 @@ namespace ttnn::prim {
 ttnn::Tensor update_padded_kv_cache(
     const ttnn::Tensor& cache,
     const ttnn::Tensor& input,
-    uint32_t slot_idx,
+    const ttnn::Tensor& metadata,
     uint32_t layer_idx,
     uint32_t num_layers,
-    uint32_t kv_actual_global,
     uint32_t cluster_axis);
 
 }  // namespace ttnn::prim

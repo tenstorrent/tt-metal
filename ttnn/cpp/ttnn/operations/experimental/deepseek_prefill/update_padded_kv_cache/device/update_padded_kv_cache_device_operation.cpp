@@ -33,6 +33,10 @@ constexpr auto kWriterKernelPath =
 
 constexpr uint32_t kSrcCbIndex = 0;
 constexpr uint32_t kNumInputTilesDoubleBuffered = 2;
+// L1-scratch CB the writer reads the metadata page into. Payload is the
+// h2d_socket_sync metadata: 4 x uint32 = [kv_actual_global, slot_idx, dst_slot, reserved].
+constexpr uint32_t kMetaCbIndex = 1;
+constexpr uint32_t kMetadataBytes = 16;
 
 // Count distinct values along the cluster axis among the participating devices to determine
 // sp_factor without round-tripping to the mesh view.
@@ -50,46 +54,21 @@ uint32_t sp_factor_for_tensor(const Tensor& tensor, uint32_t cluster_axis) {
     return max_v - min_v + 1;
 }
 
-// Validation of the runtime-arg-dependent constraints (slot_idx, layer_idx, kv_actual_global).
-// These args are intentionally kept out of the program hash so successive chunks reuse the cached
-// program, so they bypass validate_on_program_cache_miss on the 2nd+ call — this helper is invoked
-// from BOTH the miss and hit paths to keep them checked every call. Purely structural constraints
-// (shapes, dtypes, num_layers divisibility) are hashed and so stay miss-only.
+// Validation of the runtime-arg-dependent constraints. `slot_idx` and
+// `kv_actual_global` now live in the `metadata` device tensor and are read
+// on-device by the writer kernel, so their range/alignment/overflow checks
+// cannot run host-side without a device read-back — that validation is the
+// caller's responsibility (host-side, where the metadata payload is packed).
+// Only `layer_idx` (still a host attribute) is checked here; it is invoked from
+// both the cache-miss and cache-hit paths since it is not hashed.
 void validate_runtime_args(
     const UpdatePaddedKvCacheDeviceOperation::operation_attributes_t& args,
-    const UpdatePaddedKvCacheDeviceOperation::tensor_args_t& tensor_args) {
-    const auto& cache = tensor_args.cache;
-    const auto& input = tensor_args.input;
-    const auto& cache_shape = cache.padded_shape();
-    const auto& input_shape = input.padded_shape();
-
-    TT_FATAL(
-        args.kv_actual_global % TILE_HEIGHT == 0, "kv_actual_global ({}) must be tile-aligned", args.kv_actual_global);
-
+    const UpdatePaddedKvCacheDeviceOperation::tensor_args_t& /*tensor_args*/) {
     TT_FATAL(
         args.layer_idx < args.num_layers,
         "layer_idx {} out of range for num_layers {}",
         args.layer_idx,
         args.num_layers);
-    const uint32_t num_slots = cache_shape[0] / args.num_layers;
-    TT_FATAL(
-        args.slot_idx < num_slots,
-        "slot_idx {} out of range for num_slots {} (cache_batch={}, num_layers={})",
-        args.slot_idx,
-        num_slots,
-        cache_shape[0],
-        args.num_layers);
-
-    // Verify cluster-axis sizing: the cache holds `sp_factor` copies of the per-chip slot globally.
-    const uint32_t sp_factor = sp_factor_for_tensor(cache, args.cluster_axis);
-    const uint32_t chunk_local_tokens = input_shape[-2];
-    const uint32_t global_cache_capacity = sp_factor * cache_shape[-2];
-    TT_FATAL(
-        args.kv_actual_global + sp_factor * chunk_local_tokens <= global_cache_capacity,
-        "kv_actual_global ({}) + chunk_global ({}) would overflow global cache capacity ({})",
-        args.kv_actual_global,
-        sp_factor * chunk_local_tokens,
-        global_cache_capacity);
 }
 
 }  // namespace
@@ -201,7 +180,8 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     // Per-chip kernel inputs: kernel does the update_idxt + start_id math itself from these.
     const uint32_t sp_factor = sp_factor_for_tensor(cache, args.cluster_axis);
     const uint32_t my_sp_coord = ::ttnn::ccl::get_linearized_index_from_physical_coord(cache, coord, args.cluster_axis);
-    const uint32_t kv_actual_global_t = args.kv_actual_global / TILE_HEIGHT;
+    // kv_actual_global is no longer a host value — the writer kernel reads it (and
+    // slot_idx) from the metadata DRAM tensor and divides by TILE_HEIGHT on-device.
 
     // Work split: one tile per "block". num_blocks_of_work = input_C * input_Ht (= num_heads * seq_tiles).
     const uint32_t num_blocks_of_work = input_shape[1] * input_Ht;
@@ -223,6 +203,17 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
         }}},
     });
 
+    // L1-scratch CB the writer reads the metadata page into (one 16B page).
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = kMetadataBytes,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = kMetaCbIndex,
+            .data_format = tt::DataFormat::UInt32,
+            .page_size = kMetadataBytes,
+        }}},
+    });
+
     // Reader kernel descriptor.
     KernelDescriptor::CompileTimeArgs reader_compile_args;
     TensorAccessorArgs(input.buffer()).append_to(reader_compile_args);
@@ -234,8 +225,8 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     reader_kernel.compile_time_args = std::move(reader_compile_args);
     reader_kernel.config = ReaderConfigDescriptor{};
 
-    // Writer kernel descriptor.
-    KernelDescriptor::CompileTimeArgs writer_compile_args = {kSrcCbIndex};
+    // Writer kernel descriptor. Compile args: [kSrcCbIndex, kMetaCbIndex, <cache accessor...>].
+    KernelDescriptor::CompileTimeArgs writer_compile_args = {kSrcCbIndex, kMetaCbIndex};
     TensorAccessorArgs(cache.buffer()).append_to(writer_compile_args);
 
     KernelDescriptor writer_kernel;
@@ -246,18 +237,20 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     writer_kernel.config = WriterConfigDescriptor{};
 
     // Common rt-args: per-chip kernel inputs for on-device update_idxt + start_id derivation.
-    // Slot+layer kept separate (kernel composes batch_idx = slot_idx * num_layers + layer_idx).
+    // `kv_actual_global` and `slot_idx` are NOT here — the kernel reads them from the
+    // metadata tensor at `metadata_addr` (last arg). layer kept separate (kernel composes
+    // batch_idx = slot_idx * num_layers + layer_idx with the slot_idx it read).
+    const uint32_t metadata_addr = tensor_args.metadata.buffer()->address();
     writer_kernel.emplace_common_runtime_args({
-        kv_actual_global_t,
         my_sp_coord,
         sp_factor,
         input_Ht,
-        args.slot_idx,
         args.layer_idx,
         args.num_layers,
         Wt,
         cache_HtWt,
         cache_CHtWt,
+        metadata_addr,
     });
 
     // Per-core runtime args.
@@ -307,21 +300,18 @@ namespace ttnn::prim {
 ttnn::Tensor update_padded_kv_cache(
     const ttnn::Tensor& cache,
     const ttnn::Tensor& input,
-    uint32_t slot_idx,
+    const ttnn::Tensor& metadata,
     uint32_t layer_idx,
     uint32_t num_layers,
-    uint32_t kv_actual_global,
     uint32_t cluster_axis) {
     using OperationType =
         ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cache::UpdatePaddedKvCacheDeviceOperation;
     auto attrs = OperationType::operation_attributes_t{
-        .slot_idx = slot_idx,
         .layer_idx = layer_idx,
         .num_layers = num_layers,
-        .kv_actual_global = kv_actual_global,
         .cluster_axis = cluster_axis,
     };
-    auto tensor_args = OperationType::tensor_args_t{.cache = cache, .input = input};
+    auto tensor_args = OperationType::tensor_args_t{.cache = cache, .input = input, .metadata = metadata};
     return ttnn::device_operation::launch<OperationType>(attrs, tensor_args);
 }
 

@@ -38,11 +38,14 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
                     ``num_slots * num_layers``.
                 input (ttnn.Tensor): 4D input slab on device, TILE layout, same dtype and head
                     dim as cache. Per-chip seq length = chunk_local.
-                slot_idx (int): User slot in the batched prefill cache.
+                metadata (ttnn.Tensor): [1,1,1,4] uint32 DRAM tensor, replicated across the mesh
+                    (the h2d_socket_sync payload). The writer kernel reads ``kv_actual_global``
+                    from index 0 (tokens, tile-aligned) and ``slot_idx`` from index 1 on-device,
+                    so neither touches the host dispatch path. The caller packs valid values
+                    (host-side validation).
                 layer_idx (int): Transformer layer index for this call.
                 num_layers (int): Total layers folded into the cache batch dim. Structural —
                     fixed for the lifetime of the workload.
-                kv_actual_global (int): Prior valid global KV length in tokens. Tile-aligned.
                 cluster_axis (int): Cluster axis along which the cache is sharded (0 or 1).
 
             Returns:
@@ -51,10 +54,9 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
         &ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cache::update_padded_kv_cache,
         nb::arg("cache").noconvert(),
         nb::arg("input").noconvert(),
-        nb::arg("slot_idx"),
+        nb::arg("metadata").noconvert(),
         nb::arg("layer_idx"),
         nb::arg("num_layers"),
-        nb::arg("kv_actual_global"),
         nb::arg("cluster_axis"));
 }
 
