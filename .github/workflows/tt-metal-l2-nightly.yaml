@@ -70,18 +70,8 @@ on:
         required: false
         type: boolean
         default: false
-      run_ttnn_unit_tests:
-        description: 'Run TTNN nightly unit tests (per-op, ttnn_unit_tests.yaml)'
-        required: false
-        type: boolean
-        default: false
-      run_ttnn_integration_tests:
-        description: 'Run TTNN nightly integration tests (docs_examples, sdpa-stress, ccl/p2p)'
-        required: false
-        type: boolean
-        default: false
       additional_test_categories:
-        description: 'Additional test categories to run (comma-separated, e.g., sdxl,train,ops_docs_check,compute_fused)'
+        description: 'Additional test categories to run (comma-separated, e.g., conv,pool,sdxl,train,sdpa,eltwise,matmul,experimental,docs_examples,ops_docs_check,misc,moreh,fused,reduction,data_movement,transformers,compute_fused)'
         required: false
         type: string
         default: ""
@@ -328,8 +318,21 @@ jobs:
   ttnn-unit-tests:
     needs: [build-artifact, generate-arch-matrix]
     if: |
-      (github.event_name == 'schedule' || inputs.run_ttnn_unit_tests) &&
-      needs.generate-arch-matrix.outputs.ttnn-unit-skus != ''
+      needs.generate-arch-matrix.outputs.ttnn-unit-skus != '' && (
+        github.event_name == 'schedule' ||
+        contains(inputs.additional_test_categories, 'conv') ||
+        contains(inputs.additional_test_categories, 'matmul') ||
+        contains(inputs.additional_test_categories, 'fused') ||
+        contains(inputs.additional_test_categories, 'reduction') ||
+        contains(inputs.additional_test_categories, 'experimental') ||
+        contains(inputs.additional_test_categories, 'pool') ||
+        contains(inputs.additional_test_categories, 'eltwise') ||
+        contains(inputs.additional_test_categories, 'transformers') ||
+        contains(inputs.additional_test_categories, 'moreh') ||
+        contains(inputs.additional_test_categories, 'misc') ||
+        contains(inputs.additional_test_categories, 'sdpa') ||
+        contains(inputs.additional_test_categories, 'data_movement')
+      )
     secrets: inherit
     uses: ./.github/workflows/ttnn-unit-tests-impl.yaml
     with:
@@ -337,12 +340,17 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.generate-arch-matrix.outputs.ttnn-unit-skus }}
+      additional_test_categories: ${{ github.event_name == 'schedule' && '' || inputs.additional_test_categories }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   ttnn-integration-tests:
     needs: [build-artifact, generate-arch-matrix]
     if: |
-      (github.event_name == 'schedule' || inputs.run_ttnn_integration_tests) &&
-      needs.generate-arch-matrix.outputs.ttnn-integration-skus != ''
+      needs.generate-arch-matrix.outputs.ttnn-integration-skus != '' && (
+        github.event_name == 'schedule' ||
+        contains(inputs.additional_test_categories, 'docs_examples') ||
+        contains(inputs.additional_test_categories, 'sdpa') ||
+        contains(inputs.additional_test_categories, 'data_movement')
+      )
     secrets: inherit
     uses: ./.github/workflows/ttnn-integration-tests-impl.yaml
     with:
@@ -350,6 +358,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.generate-arch-matrix.outputs.ttnn-integration-skus }}
+      additional_test_categories: ${{ github.event_name == 'schedule' && '' || inputs.additional_test_categories }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   ttnn-ops-docs-check:
     needs: [build-artifact, generate-arch-matrix]

@@ -16,6 +16,11 @@ on:
         required: true
         type: string
         description: "Comma-separated SKUs (see .github/sku_config.yaml)."
+      additional_test_categories:
+        required: false
+        type: string
+        default: ''
+        description: "Comma-separated category filter. Empty = run all entries; otherwise keep only entries whose `category` field appears in this list."
       enable-llk-asserts:
         required: false
         type: boolean
@@ -26,7 +31,7 @@ jobs:
   load-test-matrix:
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.build-matrix.outputs.matrix }}
+      matrix: ${{ steps.filter-categories.outputs.matrix }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/ttnn_unit_tests.yaml
     steps:
@@ -54,6 +59,19 @@ jobs:
             ${{ env.TESTS_YAML_PATH }} \
             "${{ inputs.enabled-skus }}" \
             ./.github/sku_config.yaml
+      - name: Filter matrix by additional_test_categories
+        id: filter-categories
+        run: |
+          matrix='${{ steps.build-matrix.outputs.matrix }}'
+          categories='${{ inputs.additional_test_categories }}'
+          if [ -z "$categories" ]; then
+            filtered="$matrix"
+          else
+            filtered=$(echo "$matrix" | jq -c --arg cats ",$categories," '[.[] | .category as $c | select($cats | contains(",\($c),"))]')
+          fi
+          echo "matrix<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$filtered" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
 
   ttnn-unit-tests:
     needs: load-test-matrix

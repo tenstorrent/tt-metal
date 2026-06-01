@@ -10,6 +10,10 @@
 #   owner_id: The Slack user ID to notify on failure.
 #   team: The team that owns the test.
 #   merge_gate: false for nightly tests (never run on PR/merge gate).
+#   category: Selector used by tt-metal-l2-nightly.yaml's additional_test_categories
+#     dispatch input. On dispatch the impl filters this matrix to entries whose
+#     category appears in the comma-separated list; on schedule the filter is
+#     bypassed and every entry runs.
 #
 # For max allowed timeout refer to .github/time_budget.yaml.
 
@@ -28,6 +32,7 @@
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
   team: ttnn
   merge_gate: false
+  category: docs_examples
 
 - name: ttnn nightly sdpa stress tests
   cmd: |
@@ -44,6 +49,7 @@
   owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
   merge_gate: false
+  category: sdpa
 
 - name: ttnn nightly data_movement ccl tests group 1
   # The post-commit data_movement / ccl / point_to_point suites are re-run
@@ -61,6 +67,7 @@
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
   merge_gate: false
+  category: data_movement
 
 - name: ttnn nightly data_movement ccl tests group 2
   cmd: 'pytest tests/ttnn/unit_tests/operations/data_movement tests/ttnn/unit_tests/operations/ccl tests/ttnn/unit_tests/operations/point_to_point --splits 3 --group 2 -xv -m "not disable_fast_runtime_mode" --timeout=300'
@@ -76,6 +83,7 @@
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
   merge_gate: false
+  category: data_movement
 
 - name: ttnn nightly data_movement ccl tests group 3
   cmd: 'pytest tests/ttnn/unit_tests/operations/data_movement tests/ttnn/unit_tests/operations/ccl tests/ttnn/unit_tests/operations/point_to_point --splits 3 --group 3 -xv -m "not disable_fast_runtime_mode" --timeout=300'
@@ -91,3 +99,4 @@
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
   merge_gate: false
+  category: data_movement
