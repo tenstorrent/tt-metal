@@ -26,8 +26,6 @@ Run (full galaxy):
 """
 from __future__ import annotations
 
-import os
-
 import pytest
 import torch
 
@@ -86,13 +84,14 @@ def _first_row_shard(t):
 
 def test_fused_beta_g_matches_chain(bh_glx_mesh):
     """Gate 1: the module's fused beta/g kernel runs on galaxy AND its output
-    matches the 6-op chain at PCC > 0.99 (per-device [1,1,6] shards)."""
-    assert (
-        os.environ.get("QWEN36_TT_LANG_BETA_G") == "1"
-    ), "run with QWEN36_TT_LANG_BETA_G=1 so _beta_g_kernel_state is built at __init__"
+    matches the 6-op chain at PCC > 0.99 (per-device [1,1,6] shards).
+
+    QWEN36_TT_LANG_BETA_G is default-on (Fuse C), so the kernel state is built
+    by default; the asserts below check the effective state rather than the raw
+    env var (which need not be set explicitly)."""
     model, _ = _build_one_layer_model(bh_glx_mesh, 0)
     attn = model.layers[0].attention
-    assert attn.use_tt_lang_beta_g, "use_tt_lang_beta_g not set"
+    assert attn.use_tt_lang_beta_g, "use_tt_lang_beta_g not set (QWEN36_TT_LANG_BETA_G=0?)"
     assert attn._beta_g_kernel_state is not None, "kernel state not built"
 
     b, a, _, _ = _make_ba(bh_glx_mesh, attn)
@@ -143,6 +142,19 @@ def test_fused_beta_g_reshape_to_bht_layout(bh_glx_mesh):
 
     assert list(beta_r.shape) == [1, n_v_per_row, 1], f"beta reshape {list(beta_r.shape)}"
     assert list(g_r.shape) == [1, n_v_per_row, 1], f"g reshape {list(g_r.shape)}"
+
+    # HARDENING (final-review Important): the [1,1,6]->[1,6,1] reshape MUST return a
+    # fresh COPY, not a view aliasing the PERSISTENT beta_out/g_out buffers. The
+    # fused-heads decode path deallocates the reshaped beta/g every step (beta_g_owns_buffer);
+    # if the reshape aliased the persistent buffers that dealloc would be a use-after-free
+    # (the kernel writes into a freed buffer next step). Lock it loudly so a future ttnn
+    # change that makes this reshape a view fails here instead of silently corrupting state.
+    assert (
+        beta_r.buffer_address() != beta_f.buffer_address()
+    ), "beta [1,1,6]->[1,6,1] reshape aliases the persistent beta_out buffer — UAF risk (ttnn made it a view)"
+    assert (
+        g_r.buffer_address() != g_f.buffer_address()
+    ), "g [1,1,6]->[1,6,1] reshape aliases the persistent g_out buffer — UAF risk (ttnn made it a view)"
 
     beta_bht = _first_row_shard(beta_r)  # [1,6,1]
     g_bht = _first_row_shard(g_r)

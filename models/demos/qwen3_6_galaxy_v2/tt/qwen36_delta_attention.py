@@ -835,7 +835,8 @@ class TtQwen36DeltaAttention(LightweightModule):
             B_, T_, _ = list(qkvz.shape)
             mixed = ttnn.slice(qkvz, [0, 0, 0], [B_, T_, conv_per_row], memory_config=mem)
             z = ttnn.slice(qkvz, [0, 0, conv_per_row], [B_, T_, conv_per_row + v_per_row], memory_config=mem)
-            qkvz.deallocate(True)
+            # qkvz freed once by the unconditional deallocate after this if/elif/else
+            # (mixed/z are independent slice copies, not aliases) — do NOT free here too.
         # Slice Q | K | V | Z along the last dim.
         # Per-row layout (after the ShardTensor2dMesh split): [Q_256 | K_256 | V_768 | Z_768]
         # repeated across the 8 rows. ttnn.slice over the global dim picks the
