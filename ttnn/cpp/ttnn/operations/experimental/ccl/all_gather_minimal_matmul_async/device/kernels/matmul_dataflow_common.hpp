@@ -361,11 +361,11 @@ void read_in0_block_sync(
                 if (local_k_start <= j && j <= local_k_end) {
                     // read from self_tensor_accessor
                     uint32_t tile_id = i * input_tensor_Wt + (j - local_k_start);
-                    noc_async_read_tile(tile_id, in3_accessor, write_ptr);
+                    noc_async_read_page(tile_id, in3_accessor, write_ptr);
                 } else {
 #endif
                     uint32_t tile_id = i * shape.logical_d1 + j;
-                    noc_async_read_tile(tile_id, tensor_accessor, write_ptr);
+                    noc_async_read_page(tile_id, tensor_accessor, write_ptr);
 #ifdef READ_FROM_LOCAL_INPUT
                 }
 #endif
@@ -382,11 +382,11 @@ void read_in0_block_sync(
                 if (local_k_start <= j && j <= local_k_end) {
                     // read from self_tensor_accessor
                     uint32_t tile_id = i * input_tensor_Wt + (j - local_k_start);
-                    noc_async_read_tile(tile_id, in3_accessor, write_ptr);
+                    noc_async_read_page(tile_id, in3_accessor, write_ptr);
                 } else {
 #endif
                     uint32_t tile_id = i * shape.logical_d1 + j;
-                    noc_async_read_tile(tile_id, tensor_accessor, write_ptr);
+                    noc_async_read_page(tile_id, tensor_accessor, write_ptr);
 #ifdef READ_FROM_LOCAL_INPUT
                 }
 #endif
@@ -429,7 +429,7 @@ void read_in1_block_sync(
             }
             if (i < shape.logical_d0) {
                 uint32_t tile_id = i * shape.logical_d1 + j;
-                noc_async_read_tile(tile_id, tensor_accessor, write_ptr);
+                noc_async_read_page(tile_id, tensor_accessor, write_ptr);
             } else {
                 fill_zeros_async(write_ptr, tile_size_bytes);
             }
@@ -446,7 +446,7 @@ void read_in1_block_sync(
             }
             if (i < shape.logical_d0) {
                 uint32_t tile_id = i * shape.logical_d1 + j;
-                noc_async_read_tile(tile_id, tensor_accessor, write_ptr);
+                noc_async_read_page(tile_id, tensor_accessor, write_ptr);
             } else {
                 fill_zeros_async(write_ptr, tile_size_bytes);
             }
@@ -485,7 +485,7 @@ void write_block_sync(
                 continue;
             }
             uint32_t tile_id = i * shape.logical_d1 + j;
-            noc_async_write_tile(tile_id, tensor_accessor, read_ptr);
+            noc_async_write_page(tile_id, tensor_accessor, read_ptr);
             read_ptr += tile_size_bytes;
         }
         // finish up incrementing read_ptr if (d1_end - d1_start) < N_block_tiles
@@ -532,7 +532,7 @@ void read_ternary_blocks_sync(
             if (n_tile_id >= shape.logical_d1) {
                 break;
             }
-            noc_async_read_tile(n_tile_id, ternary_b_accessor, ternary_b_write_ptr);
+            noc_async_read_page(n_tile_id, ternary_b_accessor, ternary_b_write_ptr);
             ternary_b_write_ptr += b_tile_size_bytes;
         }
         noc_async_read_barrier();
@@ -550,7 +550,7 @@ void read_ternary_blocks_sync(
                 }
                 if (b_i < shape.logical_d0) {
                     uint32_t tile_id = b_i * shape.logical_d1 + j;
-                    noc_async_read_tile(tile_id, ternary_b_accessor, ternary_b_write_ptr);
+                    noc_async_read_page(tile_id, ternary_b_accessor, ternary_b_write_ptr);
                 }
                 ternary_b_write_ptr += b_tile_size_bytes;
             }
@@ -579,7 +579,7 @@ void read_ternary_blocks_sync(
             }
             if (i < shape.logical_d0) {
                 uint32_t tile_id = i * shape.logical_d1 + j;
-                noc_async_read_tile(tile_id, ternary_a_accessor, ternary_a_write_ptr);
+                noc_async_read_page(tile_id, ternary_a_accessor, ternary_a_write_ptr);
             }
             ternary_a_write_ptr += a_tile_size_bytes;
         }
@@ -617,7 +617,7 @@ void write_block_sync_granular(
                     break;
                 }
                 uint32_t tile_id = m_tile * shape.logical_d1 + n_tile_id;
-                noc_async_write_tile(tile_id, tensor_accessor, out_read_ptr);
+                noc_async_write_page(tile_id, tensor_accessor, out_read_ptr);
                 out_read_ptr += tile_size_bytes;
             }
         }
@@ -628,14 +628,14 @@ void write_block_sync_granular(
 
 /**
  * Helper: dispatch to correct tuple element using fold expression.
- * Each branch calls noc_async_write_tile with the concrete TensorAccessor type.
+ * Each branch calls noc_async_write_page with the concrete TensorAccessor type.
  */
 template <typename Tuple, size_t... Is>
 FORCE_INLINE void write_tile_to_chunk(
     const Tuple& accessors, uint32_t chunk_idx, uint32_t tile_id, uint32_t read_ptr, std::index_sequence<Is...>) {
     // Fold expression: expands to if/else chain at compile time
-    // Each branch calls noc_async_write_tile with the concrete type
-    ((chunk_idx == Is ? (noc_async_write_tile(tile_id, std::get<Is>(accessors), read_ptr), void()) : void()), ...);
+    // Each branch calls noc_async_write_page with the concrete type
+    ((chunk_idx == Is ? (noc_async_write_page(tile_id, std::get<Is>(accessors), read_ptr), void()) : void()), ...);
 }
 
 /**

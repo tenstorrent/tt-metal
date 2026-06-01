@@ -422,6 +422,12 @@ void bind_sdpa(nb::module_& mod) {
             is_causal (bool): Whether to use causal attention masking. Defaults to False.
             is_balanced (bool): Whether to use balanced attention computation. Defaults to False.
 
+        Chunked-prefill mode is entered implicitly when input_tensor_q's per-device seq
+        length is less than input_tensor_k's (Q is the latest slab; K is the populated
+        prefix from chunk 0 through the current chunk). The op derives chunk_size and
+        the absolute Q-row offset from the shapes plus sp_size — no extra args needed.
+        Chunked prefill is mathematically causal; callers must pass is_causal=True.
+
         Returns:
             (ttnn.Tensor, ttnn.Tensor, ttnn.Tensor):
               - The attention output for the original Q/K/V shape [b x nh x N/num_devices x dh].

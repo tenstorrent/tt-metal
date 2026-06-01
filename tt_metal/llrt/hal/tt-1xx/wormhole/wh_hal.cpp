@@ -414,9 +414,10 @@ void Hal::initialize_wh(
         }
     };
 
+    constexpr size_t kWormholePinnedMemoryBudgetBytes =
+        (2ULL * 1024ULL * 1024ULL * 1024ULL) - (512ULL * 1024ULL * 1024ULL);
     this->max_pinned_memory_count_ = 12;
-    this->total_pinned_memory_size_ =
-        4ULL * 1024ULL * 1024ULL * 1024ULL - static_cast<uint64_t>(tt::tt_metal::DispatchSettings::MAX_HUGEPAGE_SIZE);
+    this->total_pinned_memory_size_ = kWormholePinnedMemoryBudgetBytes;
 }
 
 }  // namespace tt::tt_metal

@@ -105,8 +105,6 @@ void set_math_fid_masks(
     }
 }
 
-// --- Stimulus and golden helpers (shared between QUASAR and legacy paths) ---
-
 struct BinaryStimulus {
     std::vector<uint32_t> packed_input0;
     std::vector<uint32_t> packed_input1;
@@ -182,7 +180,7 @@ static BinaryStimulus generate_binary_stimulus(const SingleCoreBinaryConfig& tes
     return s;
 }
 
-// Four DRAM buffers (3 inputs + 1 output) shared between QUASAR and legacy paths.
+// Four DRAM buffers: 3 inputs + 1 output.
 struct BinaryBuffers {
     std::shared_ptr<distributed::MeshBuffer> input0;
     std::shared_ptr<distributed::MeshBuffer> input1;
@@ -249,15 +247,21 @@ static std::map<std::string, std::string> build_binary_defines(const SingleCoreB
     return defines;
 }
 
-static bool single_core_binary_quasar(
+/// @brief Does Dramx2 --> Reader --> DFB --> Binary Compute --> DFB --> Writer --> Dram
+/// @param mesh_device - The mesh device on which to run the test
+/// @param test_config - Configuration of the test -- see SingleCoreBinaryConfig
+/// @return true if the test passed, false otherwise
+bool single_core_binary(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const SingleCoreBinaryConfig& test_config) {
+    const bool is_quasar = MetalContext::instance().get_cluster().arch() == ARCH::QUASAR;
     const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
     auto& cq = mesh_device->mesh_command_queue();
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     const experimental::metal2_host_api::NodeCoord node{
         static_cast<uint32_t>(test_config.core.x), static_cast<uint32_t>(test_config.core.y)};
 
-    auto stimulus = generate_binary_stimulus(test_config, /*is_quasar=*/true);
+    // Math-fidelity masks model WH/BH LLK behavior; Quasar HW does not apply them.
+    auto stimulus = generate_binary_stimulus(test_config, is_quasar);
     auto buffers = create_and_populate_binary_buffers(mesh_device, cq, zero_coord, byte_size, stimulus);
     auto& input0_dram_buffer = buffers.input0;
     auto& input1_dram_buffer = buffers.input1;
@@ -286,8 +290,6 @@ static bool single_core_binary_quasar(
             .num_entries = static_cast<uint32_t>(test_config.num_tiles),
             .data_format_metadata = test_config.l1_input_data_format,
             .tile_format_metadata = test_config.tile,
-            // Match pre-migration behavior: legacy DataflowBufferConfig set enable_implicit_sync=false.
-            .disable_implicit_sync = true,
         };
     };
 
@@ -300,15 +302,13 @@ static bool single_core_binary_quasar(
         .num_entries = static_cast<uint32_t>(test_config.num_tiles),
         .data_format_metadata = test_config.l1_output_data_format,
         .tile_format_metadata = test_config.tile,
-        // Match pre-migration behavior: legacy DataflowBufferConfig set enable_implicit_sync=false.
-        .disable_implicit_sync = true,
     };
 
     experimental::metal2_host_api::KernelSpec reader_spec{
         .unique_id = READER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary_2_0.cpp",
         .num_threads = 1,
         .compiler_options = {.defines = defines},
         .dfb_bindings =
@@ -335,14 +335,19 @@ static bool single_core_binary_quasar(
                  {"src0_addr", "src0_bank_id", "src1_addr", "src1_bank_id", "num_tiles", "src2_addr", "src2_bank_id"}},
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
+                .gen1_data_movement_config =
+                    experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
+                        .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
                 .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{
+                        .disable_implicit_sync_for = {INP0_DFB, INP1_DFB, INP2_DFB}}},
     };
 
     experimental::metal2_host_api::KernelSpec writer_spec{
         .unique_id = WRITER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{"tt_metal/kernels/dataflow/writer_unary.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_2_0.cpp",
         .num_threads = 1,
         .dfb_bindings = {{
             .dfb_spec_name = OUT_DFB,
@@ -353,14 +358,19 @@ static bool single_core_binary_quasar(
         .runtime_arguments_schema = {.named_runtime_args = {"dst_addr", "bank_id", "num_tiles"}},
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
+                .gen1_data_movement_config =
+                    experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
+                        .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
                 .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{
+                        .disable_implicit_sync_for = {OUT_DFB}}},
     };
 
     experimental::metal2_host_api::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{"tt_metal/kernels/compute/eltwise_binary.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_binary_2_0.cpp",
         .num_threads = 1,
         .compiler_options = {.defines = defines},
         .dfb_bindings =
@@ -447,113 +457,6 @@ static bool single_core_binary_quasar(
     return read_and_validate_binary_result(cq, output_dram_buffer, zero_coord, stimulus);
 }
 
-static bool single_core_binary_legacy(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const SingleCoreBinaryConfig& test_config) {
-    const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
-
-    auto& cq = mesh_device->mesh_command_queue();
-    distributed::MeshWorkload workload;
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    Program program = tt::tt_metal::CreateProgram();
-    workload.add_program(device_range, std::move(program));
-    auto& program_ = workload.get_programs().at(device_range);
-
-    auto stimulus = generate_binary_stimulus(test_config, /*is_quasar=*/false);
-    auto buffers = create_and_populate_binary_buffers(mesh_device, cq, zero_coord, byte_size, stimulus);
-    auto& input0_dram_buffer = buffers.input0;
-    auto& input1_dram_buffer = buffers.input1;
-    auto& input2_dram_buffer = buffers.input2;
-    auto& output_dram_buffer = buffers.output;
-
-    tt_metal::CircularBufferConfig l1_input0_cb_config =
-        tt_metal::CircularBufferConfig(byte_size, {{0, test_config.l1_input_data_format}})
-            .set_page_size(0, test_config.tile_byte_size);
-    tt_metal::CreateCircularBuffer(program_, test_config.core, l1_input0_cb_config);
-
-    tt_metal::CircularBufferConfig l1_input1_cb_config =
-        tt_metal::CircularBufferConfig(byte_size, {{1, test_config.l1_input_data_format}})
-            .set_page_size(1, test_config.tile_byte_size);
-    tt_metal::CreateCircularBuffer(program_, test_config.core, l1_input1_cb_config);
-
-    tt_metal::CircularBufferConfig l1_input2_cb_config =
-        tt_metal::CircularBufferConfig(byte_size, {{2, test_config.l1_input_data_format}})
-            .set_page_size(2, test_config.tile_byte_size);
-    tt_metal::CreateCircularBuffer(program_, test_config.core, l1_input2_cb_config);
-
-    tt_metal::CircularBufferConfig l1_output_cb_config =
-        tt_metal::CircularBufferConfig(byte_size, {{16, test_config.l1_output_data_format}})
-            .set_page_size(16, test_config.tile_byte_size);
-    tt_metal::CreateCircularBuffer(program_, test_config.core, l1_output_cb_config);
-
-    auto defines = build_binary_defines(test_config);
-    std::vector<uint32_t> compute_cta;
-
-    auto reader_kernel = tt_metal::CreateKernel(
-        program_,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary.cpp",
-        test_config.core,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt_metal::NOC::RISCV_1_default,
-            .defines = defines});
-
-    auto writer_kernel = tt_metal::CreateKernel(
-        program_,
-        "tt_metal/kernels/dataflow/writer_unary.cpp",
-        test_config.core,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
-
-    auto binary_kernel = tt_metal::CreateKernel(
-        program_,
-        "tt_metal/kernels/compute/eltwise_binary.cpp",
-        test_config.core,
-        tt_metal::ComputeConfig{
-            .math_fidelity = test_config.math_fidelity, .compile_args = compute_cta, .defines = defines});
-
-    SetRuntimeArgs(program_, binary_kernel, test_config.core, {uint32_t(test_config.num_tiles), 1});
-
-    tt_metal::SetRuntimeArgs(
-        program_,
-        reader_kernel,
-        test_config.core,
-        {
-            (uint32_t)input0_dram_buffer->address(),
-            (uint32_t)0,
-            (uint32_t)input1_dram_buffer->address(),
-            (uint32_t)0,
-            (uint32_t)test_config.num_tiles,
-            (uint32_t)input2_dram_buffer->address(),
-            (uint32_t)0,
-        });
-    tt_metal::SetRuntimeArgs(
-        program_,
-        writer_kernel,
-        test_config.core,
-        {
-            (uint32_t)output_dram_buffer->address(),
-            (uint32_t)0,
-            (uint32_t)test_config.num_tiles,
-        });
-
-    distributed::EnqueueMeshWorkload(cq, workload, false);
-    distributed::Finish(cq);
-
-    return read_and_validate_binary_result(cq, output_dram_buffer, zero_coord, stimulus);
-}
-
-/// @brief Does Dramx2 --> Reader --> CB --> Binary Compute --> CB --> Writer --> Dram
-/// @param device
-/// @param test_config - Configuration of the test -- see struct
-/// @return
-bool single_core_binary(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const SingleCoreBinaryConfig& test_config) {
-    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
-        return single_core_binary_quasar(mesh_device, test_config);
-    }
-    return single_core_binary_legacy(mesh_device, test_config);
-}
 }  // namespace unit_tests::compute::binary
 
 TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingleTileAdd) {

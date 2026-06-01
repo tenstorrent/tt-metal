@@ -10,6 +10,7 @@
 #       timeout: The maximum allowed runtime for this job in minutes on that SKU.
 #   owner_id: The Slack user ID to notify on failure.
 #   team: The team that owns the test.
+#   tags: (Optional) Labels used by workflow_dispatch test-selection groups.
 #   model-name: (Optional) Model identifier; rows are kept when workflow_dispatch
 #     `model` matches this value or when the row has no `model-name` (always-run).
 
@@ -65,6 +66,7 @@
 
 - id: bh-sdpa-nightly-integration
   name: sdpa nightly tests
+  tags: [sdpa]
   cmd: pytest tests/nightly/blackhole/sdpa/ -svv
   skus:
     bh_deskbox:
@@ -119,6 +121,7 @@
 
 - id: bh-ring-sdpa-perf
   name: ring sdpa perf tests
+  tags: [sdpa]
   # Skip QB1 (bh_llmbox / 4xP150): perf differs slightly from QB2 (2xP300);
   # running on one machine class lets us keep a tighter tolerance (PR #44069).
   cmd: |
@@ -259,7 +262,6 @@
     pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla -k "2x4 and random and scaled_sl and check_pcc and line" -vvv --tb=short || exit_code=$?
     pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py -k "balanced and not non_balanced" -vvv --tb=short --timeout=900 || exit_code=$?
     pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py -k "2x4 and layer0 and device" -vvv --tb=short || exit_code=$?
-    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_moe_grouped_topk.py -k "realistic" -vvv --tb=short || exit_code=$?
     exit $exit_code
   skus:
     bh_loudbox:

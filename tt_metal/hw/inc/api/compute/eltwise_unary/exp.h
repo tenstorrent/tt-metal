@@ -36,7 +36,12 @@ template <
     InputClamping input_clamping = InputClamping::ClampToNegative>
 ALWI void exp_tile_init() {
     MATH(SFPU_TEMPLATE_INIT_KERNEL(
-        exponential, sfpu::exp_init, approx, scale, (input_clamping == InputClamping::ClampToNegative)));
+        exponential,
+        sfpu::exp_init,
+        approx,
+        scale,
+        (input_clamping == InputClamping::ClampToNegative),
+        DST_ACCUM_MODE));
 }
 
 // clang-format off
@@ -58,7 +63,7 @@ ALWI void exp_tile_init() {
  * | Argument    | Description                                                                | Type     | Valid Range                                           | Required |
  * |-------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst        | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | vector_mode | Specifies the vector mode for computation (default: VectorMode::RC)        | int      | Subject to specific hardware/kernel limits            | False    |
+ * | vector_mode | Specifies the vector mode for computation (default: VectorMode::RC)        | VectorMode | Subject to specific hardware/kernel limits            | False    |
  * | scale       | Scale factor to apply in approximate or non-approximate mode if scale_en is true (default: 0x3F80, 1.0f in FP16b) | uint16_t | Valid FP16b representation                            | False    |
  */
 // clang-format on
@@ -67,7 +72,7 @@ template <
     bool scale_en = false,
     InputClamping input_clamping = InputClamping::ClampToNegative,
     int iterations = 8>
-ALWI void exp_tile(uint32_t idst, int vector_mode = (int)VectorMode::RC, uint16_t scale = p_sfpu::kCONST_1_FP16B) {
+ALWI void exp_tile(uint32_t idst, VectorMode vector_mode = VectorMode::RC, uint16_t scale = p_sfpu::kCONST_1_FP16B) {
     MATH(SFPU_TEMPLATE_PARAMS_KERNEL_FN(
         calculate_exponential,
         approx,
@@ -91,8 +96,8 @@ template <
     uint32_t scale = 0x3F800000,
     InputClamping input_clamping = InputClamping::ClampToNegative>
 ALWI void exp_packthread_tile_init() {
-    PACK(SFPU_TEMPLATE_INIT_KERNEL(
-        exponential, sfpu::exp_init, approx, scale, (input_clamping == InputClamping::ClampToNegative)));
+    PACK(llk_math_eltwise_unary_sfpu_init<SfpuType::exponential>(
+        sfpu::exp_init<approx, scale, (input_clamping == InputClamping::ClampToNegative), DST_ACCUM_MODE>));
 }
 
 /**
@@ -105,7 +110,7 @@ template <
     InputClamping input_clamping = InputClamping::ClampToNegative,
     int iterations = 8>
 ALWI void exp_packthread_tile(
-    uint32_t idst, int vector_mode = (int)VectorMode::RC, uint16_t scale = p_sfpu::kCONST_1_FP16B) {
+    uint32_t idst, VectorMode vector_mode = VectorMode::RC, uint16_t scale = p_sfpu::kCONST_1_FP16B) {
     PACK(SFPU_TEMPLATE_PARAMS_KERNEL_FN(
         calculate_exponential,
         approx,

@@ -5,14 +5,39 @@
 #include "ttnn/operations/data_movement/sharded/reshard/device/nd_reshard_program_factory_copy_pages.hpp"
 
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include "tt-metalium/host_api.hpp"
 
 using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
-NdReshardCopyPagesFactory::cached_program_t NdReshardCopyPagesFactory::create(
-    const ReshardParams& operation_attributes, const ReshardInputs& tensor_args, Tensor& output_tensor) {
+namespace {
+
+// Anonymous-namespace helper unique to nd_reshard_copy_pages to avoid unity-build collisions.
+void push_reshard_copy_pages_cb(
+    ProgramDescriptor& desc,
+    uint32_t cb_index,
+    tt::DataFormat data_format,
+    uint32_t total_size,
+    uint32_t page_size,
+    const CoreRangeSet& core_ranges) {
+    CBDescriptor cb;
+    cb.total_size = total_size;
+    cb.core_ranges = core_ranges;
+    cb.format_descriptors.push_back(CBFormatDescriptor{
+        .buffer_index = static_cast<uint8_t>(cb_index),
+        .data_format = data_format,
+        .page_size = page_size,
+    });
+    cb.buffer = nullptr;
+    desc.cbs.push_back(std::move(cb));
+}
+
+}  // namespace
+
+ProgramDescriptor NdReshardCopyPagesFactory::create_descriptor(
+    const ReshardParams& /*operation_attributes*/, const ReshardInputs& tensor_args, Tensor& output_tensor) {
     const auto& input = tensor_args.input;
     auto& output = output_tensor;
 
@@ -26,19 +51,19 @@ NdReshardCopyPagesFactory::cached_program_t NdReshardCopyPagesFactory::create(
 
     auto aligned_page_size = input_buffer->aligned_page_size();
 
-    // Create Program + Grid
-    auto program = CreateProgram();
+    // Create grid + cores
     auto grid_size = input.device()->compute_with_storage_grid_size();
     auto grid = CoreRangeSet({CoreRange(CoreCoord(0, 0), CoreCoord(grid_size.x - 1, grid_size.y - 1))});
     auto cores = corerange_to_cores(grid, std::nullopt, input_nd_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
 
     // Create Circular Buffer
     const auto data_format = datatype_to_dataformat_converter(input.dtype());
-    constexpr auto num_tiles_in_cb = 1;  // TODO: Try double buffering
-    CBHandle cb_in0_idx = tt::CBIndex::c_0;
-    auto c_in0_config = CircularBufferConfig(aligned_page_size * num_tiles_in_cb, {{cb_in0_idx, data_format}})
-                            .set_page_size(cb_in0_idx, aligned_page_size);
-    CreateCircularBuffer(program, grid, c_in0_config);
+    constexpr uint32_t num_tiles_in_cb = 1;  // TODO: Try double buffering
+    constexpr uint32_t cb_in0_idx = tt::CBIndex::c_0;
+
+    ProgramDescriptor desc;
+    push_reshard_copy_pages_cb(
+        desc, cb_in0_idx, data_format, aligned_page_size * num_tiles_in_cb, aligned_page_size, grid);
 
     // Prepare compile time arguments
     auto compile_time_args_reader = input_accessor_args.get_compile_time_args();
@@ -50,69 +75,34 @@ NdReshardCopyPagesFactory::cached_program_t NdReshardCopyPagesFactory::create(
     compile_time_args_writer.push_back(aligned_page_size);
 
     // Create kernels
-    KernelHandle reader_kernel_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/sharded/reshard/device/kernels/nd_reshard_copy_pages_reader.cpp",
-        grid,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
-            .compile_args = compile_time_args_reader,
-        });
+    KernelDescriptor reader_desc;
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/data_movement/sharded/reshard/device/kernels/nd_reshard_copy_pages_reader.cpp";
+    reader_desc.core_ranges = grid;
+    reader_desc.config = ReaderConfigDescriptor{};
+    reader_desc.compile_time_args = std::move(compile_time_args_reader);
 
-    KernelHandle writer_kernel_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/sharded/reshard/device/kernels/nd_reshard_copy_pages_writer.cpp",
-        grid,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1,
-            .noc = NOC::RISCV_1_default,
-            .compile_args = compile_time_args_writer,
-        });
+    KernelDescriptor writer_desc;
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/data_movement/sharded/reshard/device/kernels/nd_reshard_copy_pages_writer.cpp";
+    writer_desc.core_ranges = grid;
+    writer_desc.config = WriterConfigDescriptor{};
+    writer_desc.compile_time_args = std::move(compile_time_args_writer);
 
-    SetCommonRuntimeArgs(program, reader_kernel_id, {input.buffer()->address()});
-    SetCommonRuntimeArgs(program, writer_kernel_id, {output.buffer()->address()});
+    // Common runtime args: arg 0 is the buffer base address (binding via Buffer*).
+    // emplace_common_runtime_args registers a CommonBufferBinding for the framework
+    // fast cache-hit path.
+    reader_desc.emplace_common_runtime_args({input_buffer});
+    writer_desc.emplace_common_runtime_args({output_buffer});
 
-    for (const auto& core : cores) {
-        SetRuntimeArgs(program, reader_kernel_id, core, {0, 0});
-        SetRuntimeArgs(program, writer_kernel_id, core, {0, 0});
-    }
-
-    auto cached_program = cached_program_t{
-        std::move(program),
-        {.reader_kernel_id = reader_kernel_id, .writer_kernel_id = writer_kernel_id, .grid = grid, .cores = cores}};
-
-    // Set initial runtime arguments
-    override_runtime_arguments(cached_program, operation_attributes, tensor_args, output_tensor);
-
-    return cached_program;
-}
-
-void NdReshardCopyPagesFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const ReshardParams& /*operation_attributes*/,
-    const ReshardInputs& tensor_args,
-    Tensor& output_tensor) {
-    const auto& input = tensor_args.input;
-    const auto& output = output_tensor;
-
-    auto& program = cached_program.program;
-    const auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
-    const auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
-    const auto& cores = cached_program.shared_variables.cores;
-
-    auto& common_runtime_args_reader = GetCommonRuntimeArgs(program, reader_kernel_id);
-    auto& common_runtime_args_writer = GetCommonRuntimeArgs(program, writer_kernel_id);
-    common_runtime_args_reader[0] = input.buffer()->address();
-    common_runtime_args_writer[0] = output.buffer()->address();
-
-    auto& runtime_args_by_core_reader = GetRuntimeArgs(program, reader_kernel_id);
-    auto& runtime_args_by_core_writer = GetRuntimeArgs(program, writer_kernel_id);
-
+    // Per-core unique runtime args: [start_page, end_page]
     uint32_t start_page = 0;
-    uint32_t num_dev_pages = input.buffer()->buffer_distribution_spec()->tensor_shape_in_pages().volume();
-    uint32_t n_pages_per_core = num_dev_pages / cores.size();
-    uint32_t remainder = num_dev_pages % cores.size();
+    uint32_t num_dev_pages =
+        static_cast<uint32_t>(input_buffer->buffer_distribution_spec()->tensor_shape_in_pages().volume());
+    uint32_t n_pages_per_core = num_dev_pages / static_cast<uint32_t>(cores.size());
+    uint32_t remainder = num_dev_pages % static_cast<uint32_t>(cores.size());
 
     for (const auto& core : cores) {
         uint32_t num_pages_for_core = n_pages_per_core;
@@ -120,12 +110,15 @@ void NdReshardCopyPagesFactory::override_runtime_arguments(
             num_pages_for_core++;
             remainder--;
         }
-        runtime_args_by_core_reader[core.x][core.y][0] = start_page;
-        runtime_args_by_core_reader[core.x][core.y][1] = start_page + num_pages_for_core;
-        runtime_args_by_core_writer[core.x][core.y][0] = start_page;
-        runtime_args_by_core_writer[core.x][core.y][1] = start_page + num_pages_for_core;
+        reader_desc.emplace_runtime_args(core, {start_page, start_page + num_pages_for_core});
+        writer_desc.emplace_runtime_args(core, {start_page, start_page + num_pages_for_core});
         start_page += num_pages_for_core;
     }
+
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+
+    return desc;
 }
 
 }  // namespace ttnn::prim

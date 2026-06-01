@@ -63,9 +63,20 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     // Validate joint strategy is 'rear'
     TT_FATAL(args.joint_strategy == "rear", "Joint strategy must be 'rear'. Got: {}", args.joint_strategy);
 
-    // Validate all tensors have the same dtype
+    // Get shapes
+    const auto& q_shape = input_tensor_q.logical_shape();
+    const auto& k_shape = gathered_input_tensor_k.logical_shape();
+    const auto& v_shape = gathered_input_tensor_v.logical_shape();
+    const auto& joint_q_shape = joint_tensor_q.logical_shape();
+    const auto& joint_k_shape = joint_tensor_k.logical_shape();
+    const auto& joint_v_shape = joint_tensor_v.logical_shape();
+
+    // Chunked-prefill (`tensor_args.is_chunked()`): Q is shorter than the per-device K shard
+    // (latest slab against a growing K cache). Chunk 0 has equal shapes and uses the regular
+    // is_causal=True path.
+
     const auto dtype = input_tensor_q.dtype();
-    if (!args.is_causal) {
+    if (!args.is_causal && !tensor_args.is_chunked()) {
         for (const auto& tensor : sdpa_input_tensors) {
             TT_FATAL(
                 tensor.dtype() == dtype,
@@ -74,14 +85,6 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
                 tensor.dtype());
         }
     }
-
-    // Get shapes
-    const auto& q_shape = input_tensor_q.logical_shape();
-    const auto& k_shape = gathered_input_tensor_k.logical_shape();
-    const auto& v_shape = gathered_input_tensor_v.logical_shape();
-    const auto& joint_q_shape = joint_tensor_q.logical_shape();
-    const auto& joint_k_shape = joint_tensor_k.logical_shape();
-    const auto& joint_v_shape = joint_tensor_v.logical_shape();
 
     // Validate storage types and buffers
     for (const auto& tensor : sdpa_input_tensors) {
@@ -102,7 +105,8 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const auto NQH = q_shape[1];
     const auto NKH = k_shape[1];
     const auto NVH = v_shape[1];
-    const auto N_local = q_shape[2];
+    const auto N_local_q = q_shape[2];
+    const auto N_local_kv = tensor_args.input_k.logical_shape()[2];
     const auto N_global = k_shape[2];
     const auto L = joint_q_shape[2];
     const auto DH = q_shape[3];
@@ -113,7 +117,26 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(!(L != 0 && args.is_causal), "Causality is enabled only for ring attention");
 
     TT_FATAL(
-        !(args.is_balanced && (N_local / 2) % q_chunk_size != 0),
+        args.logical_n > 0,
+        "Logical sequence length must be > 0; kernels derive last-valid-tile = logical_nt - 1 and would underflow.");
+
+    TT_FATAL(
+        N_local_q <= N_local_kv,
+        "Per-device Q seq length must be <= per-device K/V seq length. Equal: full-prefill path. Less: "
+        "chunked-prefill path. Greater is undefined. Got N_local_q={}, N_local_kv={}",
+        N_local_q,
+        N_local_kv);
+
+    TT_FATAL(
+        !tensor_args.is_chunked() || args.is_causal,
+        "Chunked-prefill (N_local_q < N_local_kv) is mathematically causal; callers must pass is_causal=True. "
+        "Got N_local_q={}, N_local_kv={}, is_causal={}",
+        N_local_q,
+        N_local_kv,
+        args.is_causal);
+
+    TT_FATAL(
+        !(args.is_balanced && (N_local_q / 2) % q_chunk_size != 0),
         "q_chunk_size must divide half of local q seq_len in balanced case");
 
     TT_FATAL(
@@ -126,8 +149,8 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         joint_k_shape[0],
         joint_v_shape[0]);
 
-    // Validate head dimensions match
-    if (!args.is_causal) {
+    // Chunked-prefill targets MLA (K head dim == Q != V) — use is_causal's relaxed K-only check.
+    if (!args.is_causal && !tensor_args.is_chunked()) {
         TT_FATAL(
             k_shape[3] == DH && v_shape[3] == DH && joint_q_shape[3] == DH && joint_k_shape[3] == DH &&
                 joint_v_shape[3] == DH,
@@ -153,14 +176,6 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         N_global);
 
     TT_FATAL(
-        N_global == N_local * args.ring_size,
-        "Global sequence length must be equal to local sequence length times ring size. Got global sequence length: "
-        "{}, local sequence length: {}, ring size: {}",
-        N_global,
-        N_local,
-        args.ring_size);
-
-    TT_FATAL(
         args.logical_n <= N_global,
         "Logical sequence length must be less than or equal to global sequence length. Got logical sequence length: "
         "{}, global sequence length: {}",
@@ -168,26 +183,17 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         N_global);
 
     TT_FATAL(
-        (N_global - args.logical_n) < N_local,
-        "Delta between global (padded) and logical (unpadded) sequence length must be less than local (per device) "
-        "sequence length. Got delta: {}, local sequence length: {} "
-        "This implies at least one device will have only padded tokens and no real tokens to process. Either "
-        "reduce the ring size or reduce padding by reducing the chunk size.",
-        N_global - args.logical_n,
-        N_local);
-
-    TT_FATAL(
         joint_k_shape[2] == L && joint_v_shape[2] == L,
         "Joint sequence length must match. Got joint_K: {}, joint_V: {}",
         joint_k_shape[2],
         joint_v_shape[2]);
 
-    // Check shapes based on ring
     TT_FATAL(
-        q_shape[2] * args.ring_size == k_shape[2],
-        "Q sequence length times ring size must be equal to K sequence length. Got Q: {}, K: {}, ring_size: {}",
-        q_shape[2],
-        k_shape[2],
+        N_global == N_local_kv * args.ring_size,
+        "Gathered K seq length must equal per-device K shard times ring size. Got N_global: {}, N_local_kv: {}, "
+        "ring_size: {}",
+        N_global,
+        N_local_kv,
         args.ring_size);
     TT_FATAL(
         k_shape[2] == v_shape[2],
@@ -212,9 +218,14 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         tt::constants::TILE_WIDTH);
 
     TT_FATAL(
-        N_local % tt::constants::TILE_HEIGHT == 0,
-        "Local sequence length must be divisible by TILE_HEIGHT. Got N_local: {}, TILE_HEIGHT: {}",
-        N_local,
+        N_local_q % tt::constants::TILE_HEIGHT == 0,
+        "Per-device Q seq length must be divisible by TILE_HEIGHT. Got N_local_q: {}, TILE_HEIGHT: {}",
+        N_local_q,
+        tt::constants::TILE_HEIGHT);
+    TT_FATAL(
+        N_local_kv % tt::constants::TILE_HEIGHT == 0,
+        "Per-device K/V seq length must be divisible by TILE_HEIGHT. Got N_local_kv: {}, TILE_HEIGHT: {}",
+        N_local_kv,
         tt::constants::TILE_HEIGHT);
 
     // Validate padding: Only the sequence dimension may be padded
