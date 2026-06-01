@@ -55,7 +55,7 @@ UPSAMPLE_INITIAL_CH = 512
 RESBLOCK_DILATIONS = [[1, 3, 5], [1, 3, 5], [1, 3, 5]]
 
 
-def _conv1d_to_torch(result, out_channels):
+def _conv1d_to_torch(result, out_channels, batch=1):
     """Convert ttnn.conv1d result to torch tensor.
 
     Handles sharded→interleaved conversion and reshaping.
@@ -68,7 +68,7 @@ def _conv1d_to_torch(result, out_channels):
     except RuntimeError:
         pass
     out = ttnn.to_torch(ttnn.from_device(out_tt)).float()
-    out = out.reshape(1, 1, out_len, -1)[:, :, :, :out_channels].squeeze(1)
+    out = out.reshape(batch, 1, out_len, -1)[:, :, :, :out_channels].squeeze(1)
     return out, out_len
 NUM_KERNELS = 3
 NUM_UPSAMPLES = 4
@@ -161,9 +161,13 @@ class TTNNFlowDecoder:
 
         return obj
 
-    def _ensure_prepared_conv(self, flow_idx, layer_idx, seq_len):
-        """Get prepared conv1d (weight, bias, cfg) for this shape; prep on miss."""
-        key = (flow_idx, layer_idx, seq_len)
+    def _ensure_prepared_conv(self, flow_idx, layer_idx, seq_len, batch=1):
+        """Get prepared conv1d (weight, bias, cfg) for this shape; prep on miss.
+
+        Cache key includes batch_size so different batches get their own
+        prepared tensors (ttnn.prepare_conv_weights bakes the batch in).
+        """
+        key = (flow_idx, layer_idx, seq_len, batch)
         cached = self._prep_cache.get(key)
         if cached is not None:
             return cached
@@ -174,7 +178,7 @@ class TTNNFlowDecoder:
         common = dict(
             input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
             input_layout=ttnn.ROW_MAJOR_LAYOUT,
-            in_channels=HIDDEN_CH, out_channels=2 * HIDDEN_CH, batch_size=1,
+            in_channels=HIDDEN_CH, out_channels=2 * HIDDEN_CH, batch_size=batch,
             input_height=1, input_width=seq_len,
             kernel_size=(1, KERNEL_SIZE), stride=(1, 1),
             padding=(0, padding), dilation=(1, d), groups=1,
@@ -189,7 +193,7 @@ class TTNNFlowDecoder:
         self._prep_cache[key] = (w_p, b_p, cfg)
         return self._prep_cache[key]
 
-    def _conditioned_wn_device(self, h_tt, g_proj_4d, flow_idx, seq_len):
+    def _conditioned_wn_device(self, h_tt, g_proj_4d, flow_idx, seq_len, batch=1):
         """Device-resident WN inner loop.
 
         Inputs are TTNN device tensors; output is a TTNN device tensor.
@@ -208,8 +212,8 @@ class TTNNFlowDecoder:
         fw = self._flows[flow_idx]
         conv = self._conv_weights[flow_idx]
 
-        # Reshape h_tt to 4D NHWC-ish for conv1d: [1, 1, T, HIDDEN]
-        x_dev = ttnn.reshape(h_tt, (1, 1, seq_len, HIDDEN_CH))
+        # Reshape h_tt to 4D NHWC-ish for conv1d: [batch, 1, T, HIDDEN]
+        x_dev = ttnn.reshape(h_tt, (batch, 1, seq_len, HIDDEN_CH))
         output_acc = None
 
         for i in range(NUM_WN_LAYERS):
@@ -218,10 +222,10 @@ class TTNNFlowDecoder:
 
             # conv1d rejects TILE input at the WN config -> ROW_MAJOR
             x_rm = ttnn.to_layout(x_dev, ttnn.ROW_MAJOR_LAYOUT)
-            w_p, b_p, cfg = self._ensure_prepared_conv(flow_idx, i, seq_len)
+            w_p, b_p, cfg = self._ensure_prepared_conv(flow_idx, i, seq_len, batch)
             result = ttnn.conv1d(
                 input_tensor=x_rm, weight_tensor=w_p, device=self._device,
-                in_channels=HIDDEN_CH, out_channels=2 * HIDDEN_CH, batch_size=1,
+                in_channels=HIDDEN_CH, out_channels=2 * HIDDEN_CH, batch_size=batch,
                 input_length=seq_len, kernel_size=KERNEL_SIZE, stride=1,
                 padding=padding, dilation=d, groups=1,
                 dtype=DEFAULT_DTYPE, return_output_dim=True,
@@ -234,20 +238,25 @@ class TTNNFlowDecoder:
                 conv_out = ttnn.sharded_to_interleaved(conv_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             except RuntimeError:
                 conv_out = ttnn.to_memory_config(conv_out, ttnn.DRAM_MEMORY_CONFIG)
+            # conv1d may flatten [B,1,T,C] -> [1,1,B*T,C]; reshape back so
+            # downstream slices on T and broadcast-add against [B,1,1,C] g_l
+            # align correctly per batch row.
+            if batch > 1:
+                conv_out = ttnn.reshape(conv_out, (batch, 1, seq_len, 2 * HIDDEN_CH))
 
             # Slice conditioning from g_proj_4d on device and broadcast-add
             cond_offset = i * 2 * HIDDEN_CH
             g_l = ttnn.slice(g_proj_4d, [0, 0, 0, cond_offset],
-                              [1, 1, 1, cond_offset + 2 * HIDDEN_CH])
+                              [batch, 1, 1, cond_offset + 2 * HIDDEN_CH])
             cond_in = ttnn.add(conv_out, g_l)
             ttnn.deallocate(conv_out)
             ttnn.deallocate(g_l)
 
             # Split gating halves on device
             tanh_half = ttnn.slice(cond_in, [0, 0, 0, 0],
-                                    [1, 1, seq_len, HIDDEN_CH])
+                                    [batch, 1, seq_len, HIDDEN_CH])
             sig_half = ttnn.slice(cond_in, [0, 0, 0, HIDDEN_CH],
-                                   [1, 1, seq_len, 2 * HIDDEN_CH])
+                                   [batch, 1, seq_len, 2 * HIDDEN_CH])
             ttnn.deallocate(cond_in)
 
             gated = ttnn.mul(ttnn.tanh(tanh_half), ttnn.sigmoid(sig_half))
@@ -260,11 +269,11 @@ class TTNNFlowDecoder:
             ttnn.deallocate(gated)
 
             if i < NUM_WN_LAYERS - 1:
-                # rs_out: [1, 1, T, 2*HIDDEN] — first half residual, second half skip
+                # rs_out: [batch, 1, T, 2*HIDDEN] — first half residual, second half skip
                 res_part = ttnn.slice(rs_out, [0, 0, 0, 0],
-                                       [1, 1, seq_len, HIDDEN_CH])
+                                       [batch, 1, seq_len, HIDDEN_CH])
                 skip_part = ttnn.slice(rs_out, [0, 0, 0, HIDDEN_CH],
-                                        [1, 1, seq_len, 2 * HIDDEN_CH])
+                                        [batch, 1, seq_len, 2 * HIDDEN_CH])
                 ttnn.deallocate(rs_out)
 
                 new_x = ttnn.add(x_dev, res_part)
@@ -296,15 +305,15 @@ class TTNNFlowDecoder:
         """Execute 4-flow decoder with persistent weights.
 
         Args:
-            z_p: [1, 192, T] channels-first latent from TextEncoder
-            g:   [1, 256, 1] channels-first speaker embedding
+            z_p: [B, 192, T] channels-first latent from TextEncoder
+            g:   [B, 256, 1] channels-first speaker embedding
 
         Returns:
-            z: [1, 192, T] channels-first decoded latent
+            z: [B, 192, T] channels-first decoded latent
         """
-        assert z_p.shape[0] == 1, f"Only batch=1 supported, got {z_p.shape[0]}"
+        batch = z_p.shape[0]
         seq_len = z_p.shape[2]
-        x_cl = z_p.permute(0, 2, 1)  # [1, T, C]
+        x_cl = z_p.permute(0, 2, 1)  # [B, T, C]
 
         for f in range(N_FLOWS):
             fw = self._flows[f]
@@ -326,20 +335,20 @@ class TTNNFlowDecoder:
             g_proj_tt = ttnn.linear(g_tt, fw["cond_w"], bias=fw["cond_b"],
                                      memory_config=DEFAULT_MEMORY_CONFIG)
             ttnn.deallocate(g_tt)
-            # Reshape to 4D for broadcast-add against [1,1,T,2*HIDDEN] conv outputs
-            g_proj_4d = ttnn.reshape(g_proj_tt, (1, 1, 1, 2 * HIDDEN_CH * NUM_WN_LAYERS))
+            # Reshape to 4D for broadcast-add against [B,1,T,2*HIDDEN] conv outputs
+            g_proj_4d = ttnn.reshape(g_proj_tt, (batch, 1, 1, 2 * HIDDEN_CH * NUM_WN_LAYERS))
 
             # Conditioned WN — fully device-resident
-            wn_out = self._conditioned_wn_device(h_tt, g_proj_4d, f, seq_len)
+            wn_out = self._conditioned_wn_device(h_tt, g_proj_4d, f, seq_len, batch)
             ttnn.deallocate(g_proj_4d)
 
             # post_linear (persistent weight) — input on device
-            # Reshape wn_out from [1,1,T,HIDDEN] back to [1,T,HIDDEN] for linear
-            wn_3d = ttnn.reshape(wn_out, (1, seq_len, HIDDEN_CH))
+            # Reshape wn_out from [B,1,T,HIDDEN] back to [B,T,HIDDEN] for linear
+            wn_3d = ttnn.reshape(wn_out, (batch, seq_len, HIDDEN_CH))
             ttnn.deallocate(wn_out)
             stats_tt = ttnn.linear(wn_3d, fw["post_w"], bias=fw["post_b"],
                                     memory_config=DEFAULT_MEMORY_CONFIG)
-            stats_cl = to_host(stats_tt)[:1, :seq_len, :HALF_CH]
+            stats_cl = to_host(stats_tt)[:batch, :seq_len, :HALF_CH]
             ttnn.deallocate(wn_3d)
             ttnn.deallocate(stats_tt)
 
@@ -347,7 +356,7 @@ class TTNNFlowDecoder:
             x1_cl = x1_cl - stats_cl
             x_cl = torch.cat([x0_cl, x1_cl], dim=-1)
 
-        return x_cl.permute(0, 2, 1)  # [1, C, T]
+        return x_cl.permute(0, 2, 1)  # [B, C, T]
 
     def __call__(self, z_p, g):
         """Enable callable syntax: flow(z_p, g) instead of flow.forward(z_p, g)."""
@@ -488,18 +497,26 @@ class TTNNGeneratorNSF:
 
         return obj
 
-    def _conv1d_persistent(self, x_cl, w_tt, b_torch, in_ch, out_ch, k, seq_len, dilation=1):
-        """Conv1d using persistent host weight tensor (legacy path for conv_pre/conv_post)."""
+    def _conv1d_persistent(self, x_cl, w_tt, b_torch, in_ch, out_ch, k, seq_len, dilation=1, batch=1):
+        """Conv1d using persistent host weight tensor (legacy path for conv_pre/conv_post).
+
+        At batch>1, pin act_block_h_override=32 — auto-picker otherwise busts
+        L1 (static CB clashes with prior L1 buffers); 32 makes all shapes fit.
+        """
         padding = dilation * (k - 1) // 2
         x_tt = ttnn.from_torch(x_cl, dtype=DEFAULT_DTYPE)
-        result = ttnn.conv1d(
+        conv_kwargs = dict(
             input_tensor=x_tt, weight_tensor=w_tt, device=self._device,
-            in_channels=in_ch, out_channels=out_ch, batch_size=1,
+            in_channels=in_ch, out_channels=out_ch, batch_size=batch,
             input_length=seq_len, kernel_size=k, stride=1,
             padding=padding, dilation=dilation, groups=1,
             dtype=DEFAULT_DTYPE, return_output_dim=True,
         )
-        out, out_len = _conv1d_to_torch(result, out_ch)
+        if batch > 1:
+            conv_kwargs["conv_config"] = ttnn.Conv2dConfig(
+                weights_dtype=DEFAULT_DTYPE, act_block_h_override=32)
+        result = ttnn.conv1d(**conv_kwargs)
+        out, out_len = _conv1d_to_torch(result, out_ch, batch=batch)
         if b_torch is not None:
             out = out + b_torch.unsqueeze(0).unsqueeze(0)
         return out, out_len
@@ -567,15 +584,21 @@ class TTNNGeneratorNSF:
             x_cf = xt + x_cf
         return x_cf
 
-    def _ensure_prepared_conv(self, w_host, b_host, in_ch, out_ch, k, seq_len, dilation):
+    def _ensure_prepared_conv(self, w_host, b_host, in_ch, out_ch, k, seq_len, dilation, batch=1):
         """Lazy prepared-weight cache for Generator conv1d shapes.
 
-        Selects HEIGHT_SHARDED config where it fits per-core L1, else DEFAULT.
-        Whitelist derived from per-shape isolated probe (40/48 unique Generator
-        shapes fit HEIGHT_SHARDED; only k=11 at ch>=128 hits the 1.92 MB
-        per-core CB limit).
+        B=1: HEIGHT_SHARDED where it fits per-core L1 (40/48 shapes), else
+        DEFAULT — tuned for single-stream RTF.
+
+        B>1: pinned act_block_h_override=32 universally. ttnn.conv1d's
+        auto-picker at batch>=2 statically allocates a CB region that
+        clashes with prior L1 buffers (at byte 1118848) for 24/48 shapes
+        (k>=7 at upsampled seq_len>=9000). Forcing act_block_h=32 keeps
+        the CB small enough that all 48 shapes fit at B=2..8.
+
+        Cache key includes batch — prepared weights bake batch_size in.
         """
-        key = (id(w_host), in_ch, out_ch, k, seq_len, dilation)
+        key = (id(w_host), in_ch, out_ch, k, seq_len, dilation, batch)
         cached = self._prep_cache.get(key)
         if cached is not None:
             return cached
@@ -585,7 +608,7 @@ class TTNNGeneratorNSF:
             common = dict(
                 input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 input_layout=ttnn.ROW_MAJOR_LAYOUT,
-                in_channels=in_ch, out_channels=out_ch, batch_size=1,
+                in_channels=in_ch, out_channels=out_ch, batch_size=batch,
                 input_height=1, input_width=seq_len,
                 kernel_size=(1, k), stride=(1, 1),
                 padding=(0, padding), dilation=(1, dilation), groups=1,
@@ -597,7 +620,13 @@ class TTNNGeneratorNSF:
             b_p = ttnn.prepare_conv_bias(bias_tensor=b_host, **common)
             return w_p, b_p, cfg
 
-        # Whitelist: HEIGHT_SHARDED fits when NOT (high-channel AND large-kernel).
+        if batch > 1:
+            cfg = ttnn.Conv2dConfig(weights_dtype=DEFAULT_DTYPE,
+                                     act_block_h_override=32)
+            self._prep_cache[key] = _build(cfg)
+            return self._prep_cache[key]
+
+        # B=1 path: whitelist HEIGHT_SHARDED for shapes that fit.
         sharded_safe = not (in_ch >= 128 and k >= 11)
         if sharded_safe:
             try:
@@ -612,7 +641,7 @@ class TTNNGeneratorNSF:
         return self._prep_cache[key]
 
     def _conv1d_device(self, x_in, w_tt, b_tt, in_ch, out_ch, k, seq_len,
-                       dilation=1):
+                       dilation=1, batch=1):
         """Conv1d that returns a device tensor in interleaved DRAM.
 
         Used by ``_resblock1_device``. The input must already be on device
@@ -629,10 +658,10 @@ class TTNNGeneratorNSF:
         is paid once at model warmup, not on every conv1d dispatch.
         """
         padding = dilation * (k - 1) // 2
-        w_p, b_p, cfg = self._ensure_prepared_conv(w_tt, b_tt, in_ch, out_ch, k, seq_len, dilation)
+        w_p, b_p, cfg = self._ensure_prepared_conv(w_tt, b_tt, in_ch, out_ch, k, seq_len, dilation, batch)
         result = ttnn.conv1d(
             input_tensor=x_in, weight_tensor=w_p, device=self._device,
-            in_channels=in_ch, out_channels=out_ch, batch_size=1,
+            in_channels=in_ch, out_channels=out_ch, batch_size=batch,
             input_length=seq_len, kernel_size=k, stride=1,
             padding=padding, dilation=dilation, groups=1,
             dtype=DEFAULT_DTYPE, return_output_dim=True,
@@ -644,9 +673,13 @@ class TTNNGeneratorNSF:
             out_tt = ttnn.sharded_to_interleaved(out_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         except RuntimeError:
             out_tt = ttnn.to_memory_config(out_tt, ttnn.DRAM_MEMORY_CONFIG)
+        # conv1d may flatten [B,1,T,C] -> [1,1,B*T,C]; reshape back so
+        # downstream eltwise ops broadcast against x_dev [B,1,T,C] correctly.
+        if batch > 1:
+            out_tt = ttnn.reshape(out_tt, (batch, 1, seq_len, out_ch))
         return out_tt
 
-    def _resblock1_device(self, x_cf, block_idx, dilations, seq_len):
+    def _resblock1_device(self, x_cf, block_idx, dilations, seq_len, batch=1):
         """ResBlock1 inner loop with device-resident activations.
 
         Sequence per dilation iteration:
@@ -689,7 +722,7 @@ class TTNNGeneratorNSF:
             ttnn.deallocate(lr1)
             c1_out = self._conv1d_device(
                 lr1_rm, c1["w"], c1["b_tt"], ch, ch, c1["kernel"], seq_len,
-                dilation=d)
+                dilation=d, batch=batch)
             ttnn.deallocate(lr1_rm)
 
             # conv1d outputs TILE; leaky_relu accepts TILE
@@ -698,7 +731,7 @@ class TTNNGeneratorNSF:
             lr2_rm = ttnn.to_layout(lr2, ttnn.ROW_MAJOR_LAYOUT)
             ttnn.deallocate(lr2)
             c2_out = self._conv1d_device(
-                lr2_rm, c2["w"], c2["b_tt"], ch, ch, c2["kernel"], seq_len)
+                lr2_rm, c2["w"], c2["b_tt"], ch, ch, c2["kernel"], seq_len, batch=batch)
             ttnn.deallocate(lr2_rm)
 
             new_x = ttnn.add(x_dev, c2_out)
@@ -711,37 +744,40 @@ class TTNNGeneratorNSF:
         return out
 
     def forward(self, z, har_source, g):
-        """Execute full generator with persistent weights.
+        """Execute full generator with persistent weights — TTNN-native B>=1.
 
         Args:
-            z:          [1, 192, T] latent from flow decoder
-            har_source: [1, 1, T*480] harmonic source from SineGen
-            g:          [1, 256, 1] speaker embedding
+            z:          [B, 192, T] latent from flow decoder
+            har_source: [B, 1, T*480] harmonic source from SineGen
+            g:          [B, 256, 1] speaker embedding (rows usually identical
+                        for the "convert N inputs to 1 target speaker"
+                        pattern; cond cache assumes so and uses g[:1])
 
         Returns:
-            audio: [1, 1, T*480] generated waveform in [-1, 1]
+            audio: [B, 1, T*480] generated waveform in [-1, 1]
         """
+        batch = z.shape[0]
         seq_len = z.shape[2]
 
         # conv_pre (persistent host weight)
         x_cl = z.permute(0, 2, 1)
         x_cl, _ = self._conv1d_persistent(
-            x_cl, self._conv_pre_w, self._conv_pre_b, 192, 512, 7, seq_len)
+            x_cl, self._conv_pre_w, self._conv_pre_b, 192, 512, 7, seq_len, batch=batch)
         x_cf = x_cl.permute(0, 2, 1)
 
-        # Conditioning projection (persistent device weight). The output
-        # depends only on the speaker embedding g, which is constant across
-        # all chunks of a single inference — cache cond_cl keyed by g so
-        # the linear + host roundtrips run once per speaker, not per chunk.
-        if self._cond_cache_g is None or not torch.equal(g, self._cond_cache_g):
-            g_cl = g.permute(0, 2, 1)
+        # Conditioning projection. cond_cl depends only on g and is
+        # constant across chunks — cache keyed by g[:1] so a batch of
+        # same-target conversions reuses one linear pass.
+        g_for_cond = g[:1] if batch > 1 else g
+        if self._cond_cache_g is None or not torch.equal(g_for_cond, self._cond_cache_g):
+            g_cl = g_for_cond.permute(0, 2, 1)
             g_tt = to_device(g_cl, self._device)
             cond_tt = ttnn.linear(g_tt, self._cond_w, bias=self._cond_b,
                                    memory_config=DEFAULT_MEMORY_CONFIG)
             cond_cl = to_host(cond_tt)[:1, :1, :512]
             ttnn.deallocate(g_tt)
             ttnn.deallocate(cond_tt)
-            self._cond_cache_g = g.clone()
+            self._cond_cache_g = g_for_cond.clone()
             self._cond_cache_cl = cond_cl
         x_cf = x_cf + self._cond_cache_cl.permute(0, 2, 1)
 
@@ -753,8 +789,8 @@ class TTNNGeneratorNSF:
             out_ch = UPSAMPLE_INITIAL_CH // (2 ** (i + 1))
             x_nhwc = x_cf.permute(0, 2, 1).unsqueeze(1)
             x_tt = ttnn.from_torch(x_nhwc.float(), dtype=DEFAULT_DTYPE)
-            out_tt, out_len = ct(x_tt, batch_size=1, input_length=seq_len)
-            x_cf = TTNNConvTranspose1d.postprocess_output(out_tt, 1, out_len, out_ch)
+            out_tt, out_len = ct(x_tt, batch_size=batch, input_length=seq_len)
+            x_cf = TTNNConvTranspose1d.postprocess_output(out_tt, batch, out_len, out_ch)
             seq_len = out_len
 
             # Noise injection (torch — small ops)
@@ -771,7 +807,7 @@ class TTNNGeneratorNSF:
             xs = None
             for j in range(NUM_KERNELS):
                 rb_idx = i * NUM_KERNELS + j
-                rb_out = self._resblock1_device(x_cf, rb_idx, RESBLOCK_DILATIONS[j], seq_len)
+                rb_out = self._resblock1_device(x_cf, rb_idx, RESBLOCK_DILATIONS[j], seq_len, batch=batch)
                 xs = rb_out if xs is None else xs + rb_out
             x_cf = xs / NUM_KERNELS
 
@@ -779,7 +815,7 @@ class TTNNGeneratorNSF:
         x_cf = F.leaky_relu(x_cf)
         x_cl = x_cf.permute(0, 2, 1)
         x_cl, _ = self._conv1d_persistent(
-            x_cl, self._conv_post_w, None, 32, 1, 7, seq_len)
+            x_cl, self._conv_post_w, None, 32, 1, 7, seq_len, batch=batch)
         return torch.tanh(x_cl.permute(0, 2, 1))
 
     def __call__(self, z, har_source, g):
