@@ -391,7 +391,9 @@ def _run_pipeline_inference_pcc_loop(
     cpu_pkv = cpu_prefill.past_key_values
 
     tt_embeds = pipe._build_voice_injected_embeds(prompt_ids, _DEMO_VOICE)
-    tt_hidden = pipe.text.prefill_from_embeds(tt_embeds, start_pos=0).float()
+    tt_hidden_tt = pipe.text.prefill_from_embeds(tt_embeds, start_pos=0)
+    tt_hidden = pipe.text.hidden_tt_to_torch(tt_hidden_tt).float()
+    ttnn.deallocate(tt_hidden_tt)
     current_pos = prompt_len
 
     ok, msg = comp_pcc(cpu_hidden, tt_hidden, pcc=PREFILL_HIDDEN_PCC)

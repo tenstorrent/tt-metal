@@ -117,7 +117,9 @@ def test_ttnn_voxtral_tts_e2e_trial(device, reset_seeds, request):
     prompt_token_ids = speech["prompt_token_ids"]
 
     tt_embeds = pipe._build_voice_injected_embeds(prompt_token_ids, _DEMO_VOICE)
-    tt_hidden = pipe.text.prefill_from_embeds(tt_embeds, start_pos=0)
+    tt_hidden_tt = pipe.text.prefill_from_embeds(tt_embeds, start_pos=0)
+    tt_hidden = pipe.text.hidden_tt_to_torch(tt_hidden_tt)
+    ttnn.deallocate(tt_hidden_tt)
 
     cpu_prefill = cpu_trace.get("text.prefill.hidden")
     ok_prefill, prefill_pcc = comp_pcc(
