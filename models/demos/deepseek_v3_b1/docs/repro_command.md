@@ -196,6 +196,71 @@ grep 'hash\[' /tmp/flashmla_dprint.log \
 
 ---
 
+## The alternating MLP PCC (#43563) — what's reproducible and what isn't
+
+The headline #43563 symptom is the **alternating MLP PCC**: `test_decoder_mlp` gives
+`0.99318986` for `num_internal_iterations=1` and `0.99344836` for `=2`. That number is
+measured at the **decoder MLP output**, after the full downstream stack
+(post-SDPA tree-reduce → matmul4/5 → all-reduce → MoE shared expert → reduce-to-one).
+
+What craq-sim reproduces today (single chip, fast):
+
+1. **Root cause — per-core `sdpa_output_cb` bank asymmetry.** `test_flash_mla_decode`
+   shows iter-0 ≠ iter-1..9 hashes on every SDPA core (see above). This matches the
+   hardware Attempt 19 observation.
+
+2. **flash_mla final output does NOT alternate.** Reading the actual attention output
+   tensor back (`torch.equal` across the 10-iteration stress loop) gives
+   **`equal=True, max_diff=0`** at both `decode_position=127` (1 chunk) **and**
+   `decode_position=511` (4 chunks). This is the flash-attention **scale-invariance
+   cancellation** from `debug_log.md` Attempt 23: the tail `compute_sdpa_recip`
+   (mm2 ÷ sum) cancels the bank-asymmetric scale factor per core, so the normalized
+   output is bit-identical even though the intermediate accumulator differs.
+
+Consequence: **the MLP-level alternating PCC cannot be reproduced at the `flash_mla` op
+alone** — by construction the per-core recip cancels it. It only becomes observable once
+the post-SDPA tree-reduce + matmuls + MoE break that per-core cancellation across the
+multi-chunk accumulation. That requires the full `test_decoder_mlp` on the 8-chip mesh.
+
+### Why the full `test_decoder_mlp` is currently impractical on craq-sim
+
+`test_decoder_mlp` on the 8-chip sim stalls before producing a kernel iteration:
+
+- **Host weight prep** (`prepare_dense_layer_weights`) is ~150 s of pure CPU torch —
+  unavoidable, and unrelated to the simulator.
+- **Tensor creation + `synchronize_device`** enqueues a large fast-dispatch CQ backlog
+  (all decoder weights sharded across 8 chips). Draining it on the sim parks the host in
+  `FDMeshCommandQueue::finish_nolock` for tens of minutes (confirmed via gdb:
+  `Synchronize → finish → finish_nolock`, sim clocking at only a few kHz).
+
+A `TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES=1` "fastwrite" path (≈5.55× speedup, pushed to
+tt-metal on 2026-05-31 per `craq-sim/HANDOFF.md`) would mitigate the CQ-drain portion, but
+it is **not present** in the `ridvan/nkapre-multichip-metal-v2` tt-metal base used here.
+
+### Harness for the alternation (when the decoder run is feasible)
+
+`test_decoder_mlp` on this branch is wired for a golden-free alternation check:
+- golden torch reference is skipped (its KV-cache d2h also stalls the CQ),
+- after the kernel runs, the final reduce-root MLP output is saved to
+  `$CRAQSIM_ALT_PCC_DIR/decoder_mlp_out_pos{POS}_niter{N}.npy`,
+- when both `num_internal_iterations` 1 and 2 outputs exist for a position, they are
+  diffed directly (`niter=1` output vs `niter=2` output). They are the **same** golden,
+  so any difference IS the alternation.
+- parametrized over `position_id ∈ {127 (control), 511 (bug)}` × `num_internal_iterations
+  ∈ {1, 2}`.
+
+Run it (long timeout; may not finish without fastwrite):
+
+```bash
+/tmp/run_alt_pcc.sh        # see script; sets CRAQSIM_ALT_PCC_DIR + full multichip env
+```
+
+Expected once it completes: `pos=127` → niter-1 and niter-2 outputs **equal** (control);
+`pos=511` → outputs **differ** (the alternation), logged as
+`*** ALTERNATING OUTPUT REPRODUCED ***`.
+
+---
+
 ## File / branch reference
 
 - tt-metal branch: `ncvetkovic/multichip_half_dest` (base `ridvan/nkapre-multichip-metal-v2`)

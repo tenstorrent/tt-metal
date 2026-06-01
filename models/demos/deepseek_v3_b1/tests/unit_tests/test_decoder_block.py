@@ -1289,8 +1289,11 @@ def test_decoder(
 @pytest.mark.parametrize(
     "position_id",
     [
-        # #43563 half-DEST debug: pos=127 (1-chunk) is the cheap repro of Attempt 19
+        # #43563 alternating-PCC repro:
+        #   pos=127 (1 chunk)  -> control: niter=1 and niter=2 outputs expected bit-identical
+        #   pos=511 (4 chunks) -> bug:    niter=1 and niter=2 outputs expected to DIFFER
         127,
+        511,
     ],
 )
 @pytest.mark.parametrize(
@@ -1307,12 +1310,13 @@ def test_decoder(
     indirect=True,
 )
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
-@pytest.mark.parametrize("num_internal_iterations", [2])  # #43563 hash-debug: need 2-iter case
+# Run niter=1 first (saves output), then niter=2 (diffs against niter=1) -> alternation
+@pytest.mark.parametrize("num_internal_iterations", [1, 2])
 @pytest.mark.parametrize("slot_id, num_slots", [(0, 1)])
 # Dense-MLP SRAM placement (kept from main; test body uses it). Narrowed to all-dram
 # baseline for the craq-sim alt-PCC run.
 @pytest.mark.parametrize("dense_placement", ["all-dram"])
-@pytest.mark.requires_grid_size((13, 10))
+# @pytest.mark.requires_grid_size((13, 10))  # disabled for craq-sim hash/alt-PCC debug
 @requires_hybrid_allocator
 def test_decoder_mlp(
     bh_2d_mesh_device,
@@ -1482,9 +1486,57 @@ def test_decoder_mlp(
         moe_final_output_tensor, attention_block_output_tensor = DecoderBlock.execute(*decoder_program_context)
     ttnn.synchronize_device(submesh)
 
-    # craq-sim hash-only: skip post-run d2h reads, golden, and PCC. The DPRINT
-    # hash_cb output is the signal.
-    logger.info("Kernel run complete. craq-sim hash-only path: skipping post-run validation.")
+    # ========================================================================
+    # craq-sim alternating-PCC repro (#43563): skip the heavy torch golden
+    # (its KV-cache d2h stalls the sim CQ). The alternation is between the
+    # DEVICE outputs of num_internal_iterations=1 vs =2 — the golden is the
+    # same for both, so we directly diff the two device outputs across runs.
+    # Read ONLY the final reduce-root MLP output (one small shard d2h).
+    # ========================================================================
+    import numpy as np
+
+    root_coord_tuple = d["reduce_root_coord"]
+    root_device_idx = root_coord_tuple[0] * mesh_cols + root_coord_tuple[1]
+    root_device_tensor = ttnn.get_device_tensors(moe_final_output_tensor)[root_device_idx]
+    decoder_mlp_output = ttnn.to_torch(root_device_tensor)
+    out_np = decoder_mlp_output.float().flatten().numpy()
+
+    save_dir = os.environ.get("CRAQSIM_ALT_PCC_DIR", "/localdev/ncvetkovic/work/craqsim-run-logs")
+    os.makedirs(save_dir, exist_ok=True)
+    this_path = os.path.join(save_dir, f"decoder_mlp_out_pos{position_id}_niter{num_internal_iterations}.npy")
+    np.save(this_path, out_np)
+    logger.info(f"[ALT-PCC] saved device MLP output: {this_path}  shape={out_np.shape}")
+    logger.info(f"[ALT-PCC] first 8 values: {out_np[:8]}")
+
+    # If the other iteration-count's output exists, diff them => the alternation.
+    other_niter = 2 if num_internal_iterations == 1 else 1
+    other_path = os.path.join(save_dir, f"decoder_mlp_out_pos{position_id}_niter{other_niter}.npy")
+    if os.path.exists(other_path):
+        other_np = np.load(other_path)
+        if other_np.shape == out_np.shape:
+            a = torch.from_numpy(out_np)
+            b = torch.from_numpy(other_np)
+            equal = bool(torch.equal(a, b))
+            max_diff = float((a - b).abs().max())
+            mean_diff = float((a - b).abs().mean())
+            inter_pcc_pass, inter_pcc_msg = comp_pcc(a, b, 0.9999999)
+            logger.info(
+                f"[ALT-PCC] niter={num_internal_iterations} vs niter={other_niter}: "
+                f"equal={equal} max_diff={max_diff:.6e} mean_diff={mean_diff:.6e}"
+            )
+            logger.info(f"[ALT-PCC] cross-iter PCC: {inter_pcc_msg}")
+            if not equal:
+                logger.info(
+                    "[ALT-PCC] *** ALTERNATING OUTPUT REPRODUCED: niter=1 and niter=2 device outputs differ ***"
+                )
+        else:
+            logger.info(f"[ALT-PCC] shape mismatch vs {other_path}: {other_np.shape} != {out_np.shape}")
+    else:
+        logger.info(
+            f"[ALT-PCC] other-iteration output not found yet ({other_path}); run the other num_internal_iterations to compare."
+        )
+
+    logger.info("craq-sim alt-PCC path complete; skipping torch golden + KV-cache checks.")
     return
 
     # ========================================================================
