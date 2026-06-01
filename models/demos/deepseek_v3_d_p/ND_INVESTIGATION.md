@@ -239,6 +239,28 @@ visibility race, not an accumulation-order or uninitialized-NaN bug.
   semaphore is observed (posted-atomic vs posted-write ordering);
   (c) the concurrent dual-sender "ack both upfront" optimization.
 
+## Comparison vs the canonical (known-deterministic) matmul mcast
+The standard tt-metal block-sharded matmul in0 sender
+(`ttnn/.../matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp`)
+does, per block, simply: `async_write_multicast(data)` then `receiver_sem.set_multicast(VALID)`
+on the **same NoC, with no flush/barrier between** — correctness comes from same-NoC
+write ordering, and there is a **single** mcast sender per block.
+
+The unified FFN reader deviates structurally in ways that are the most likely race sites:
+1. **Concurrent dual-sender "ack-both-upfront" optimization** — receivers ack BOTH the
+   in0 (M-row) and in1 (N-col) senders before either starts, then both senders mcast in
+   parallel. Two concurrent mcasts into different CBs on overlapping receiver cores.
+2. **Activated-L1 loopback mcast** (phase 4) — `noc_async_write_multicast_loopback_src`
+   writes the activated tiles to all M-row cores *including the sender's own L1*, then a
+   loopback valid-sem. Loopback + concurrent in1_down mcast on another NoC.
+
+These are absent from the canonical pattern. The fact that swapping `flushed`→`barrier`
+on the sender did nothing is consistent with the race being in this added concurrency /
+loopback rather than in simple data→valid ordering. **Recommended for the kernel owner:**
+first try serializing the dual-sender path (do in0 mcast fully, then in1) and/or replacing
+the activated loopback mcast with a local copy + plain mcast, testing each via the
+5L/25600 GLOBAL `routed_output` A/B.
+
 ## How to reproduce / verify (fast)
 ```
 TT_DS_ND_DEBUG=1 [TT_DS_ND_DEBUG_LAYER=-1] [TT_REXPERT_FORCE_NAIVE=1] \
