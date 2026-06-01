@@ -18,6 +18,7 @@
 // 3. Add the if constexpr branches in call_unary_sfpu_operation_init() and call_unary_sfpu_operation() below
 #include "llk_sfpu/ckernel_sfpu_activations.h"
 #include "llk_sfpu/ckernel_sfpu_binary.h"
+#include "llk_sfpu/ckernel_sfpu_binary_comp.h"
 #include "llk_sfpu/ckernel_sfpu_celu.h"
 #include "llk_sfpu/ckernel_sfpu_elu.h"
 #include "llk_sfpu/ckernel_sfpu_exp.h"
@@ -447,10 +448,44 @@ void call_binary_sfpu_operation_init()
     {
         SFPU_BINARY_INIT(left_shift);
     }
+    else if constexpr (
+        BINOP == BinaryOp::LT || BINOP == BinaryOp::GT || BINOP == BinaryOp::LE || BINOP == BinaryOp::GE || BINOP == BinaryOp::EQ || BINOP == BinaryOp::NE)
+    {
+        SFPU_BINARY_INIT(lt);
+    }
     else
     {
         // BinaryOps without a dedicated SfpuType use the baseline binary addrmod setup.
         SFPU_BINARY_INIT(add1);
+    }
+}
+
+template <BinaryOp BINOP>
+constexpr SfpuType get_binary_comp_sfpu_type()
+{
+    if constexpr (BINOP == BinaryOp::LT)
+    {
+        return SfpuType::lt;
+    }
+    else if constexpr (BINOP == BinaryOp::GT)
+    {
+        return SfpuType::gt;
+    }
+    else if constexpr (BINOP == BinaryOp::LE)
+    {
+        return SfpuType::le;
+    }
+    else if constexpr (BINOP == BinaryOp::GE)
+    {
+        return SfpuType::ge;
+    }
+    else if constexpr (BINOP == BinaryOp::EQ)
+    {
+        return SfpuType::eq;
+    }
+    else
+    {
+        return SfpuType::ne;
     }
 }
 
@@ -553,6 +588,35 @@ void call_binary_sfpu_operation(
             dst_index_in1,
             dst_index_out,
             ckernel::VectorMode::RC_custom);
+    }
+    else if constexpr (
+        BINOP == BinaryOp::LT || BINOP == BinaryOp::GT || BINOP == BinaryOp::LE || BINOP == BinaryOp::GE || BINOP == BinaryOp::EQ || BINOP == BinaryOp::NE)
+    {
+        constexpr SfpuType comp_type = get_binary_comp_sfpu_type<BINOP>();
+        if constexpr (MATH_FORMAT == static_cast<std::uint32_t>(DataFormat::Int32))
+        {
+            SFPU_BINARY_CALL(
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
+                calculate_binary_comp_int32,
+                (APPROXIMATION_MODE, PER_FACE_ITERATIONS, comp_type),
+                dst_index_in0,
+                dst_index_in1,
+                dst_index_out,
+                vector_mode);
+        }
+        else
+        {
+            SFPU_BINARY_CALL(
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
+                calculate_binary_comp_fp32,
+                (APPROXIMATION_MODE, PER_FACE_ITERATIONS, comp_type),
+                dst_index_in0,
+                dst_index_in1,
+                dst_index_out,
+                vector_mode);
+        }
     }
     else
     {
