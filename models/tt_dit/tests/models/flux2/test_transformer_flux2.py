@@ -257,6 +257,13 @@ def test_transformer(
     ("batch_size", "height", "width", "prompt_seq_len"),
     [
         (1, 1024, 1024, 512),
+        (1, 2048, 2048, 512),
+        (1, 4096, 4096, 512),
+    ],
+    ids=[
+        "1024",
+        "2048",
+        "4096",
     ],
 )
 @pytest.mark.parametrize("xformer_idx", [0, 1, 3, 4], ids=["x_single", "x_double", "x_both", "x_all"])
@@ -380,7 +387,6 @@ def test_transformer_profile(
         prompt_rope=(tt_prompt_rope_cos, tt_prompt_rope_sin),
         spatial_sequence_length=spatial_seq_len,
         prompt_sequence_length=prompt_seq_len,
-        traced=True,
     )
     ttnn.synchronize_device(mesh_device)
     signpost("transformer_start")
@@ -393,7 +399,6 @@ def test_transformer_profile(
         prompt_rope=(tt_prompt_rope_cos, tt_prompt_rope_sin),
         spatial_sequence_length=spatial_seq_len,
         prompt_sequence_length=prompt_seq_len,
-        traced=True,
     )
     ttnn.synchronize_device(mesh_device)
     signpost("transformer_end")
