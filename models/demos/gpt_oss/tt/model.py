@@ -731,8 +731,14 @@ class Model:
         original_n = len(prompt_lens)
 
         # Row-aware reorder. Group users by their target decode row, pad each
-        # row to the same length with duplicates so the call shape stays
-        # rectangular, then rebuild a flat batch in row-major order.
+        # row group to the same upr-aligned length with duplicates so the
+        # flattened batch is contiguous per row at the iter stride
+        # prepare_row_sharded_prefill_iter uses (users_per_row = batch_size //
+        # num_rows). Padding each row to a multiple of upr at this stage
+        # avoids the later global-pad step inserting filler users at the end
+        # of the tensor that would land in the wrong row group when
+        # max_per_row is not itself a multiple of upr (Codex review on
+        # PR #45633).
         new_order = None
         if empty_slots is not None:
             max_local_batch_size = getattr(model_args, "max_local_batch_size", None) or max(original_n // num_rows, 1)
@@ -745,7 +751,14 @@ class Model:
             for r in range(num_rows):
                 if not users_by_row[r]:
                     users_by_row[r] = [fallback]
-                while len(users_by_row[r]) < max_per_row:
+            # Mirror the upr decision below so the per-row stride lines up
+            # with users_per_row * upr after the global-align no-op step.
+            _max_seq = max(prefill_seq_lens) if prefill_seq_lens else 128
+            _post_reorder_batch = num_rows * max_per_row
+            _upr_for_pad = 8 if (_max_seq <= 128 and _post_reorder_batch > 16) else 1
+            _max_per_row_padded = ((max_per_row + _upr_for_pad - 1) // _upr_for_pad) * _upr_for_pad
+            for r in range(num_rows):
+                while len(users_by_row[r]) < _max_per_row_padded:
                     users_by_row[r].append(users_by_row[r][0])
             new_order = []
             for r in range(num_rows):
