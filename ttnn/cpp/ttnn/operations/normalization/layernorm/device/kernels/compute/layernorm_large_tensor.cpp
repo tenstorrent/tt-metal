@@ -223,7 +223,7 @@ void kernel_main() {
         // pack_reconfig_data_format(cb_ex2pe). add_tiles_init reconfigs srca/srcb (idempotent
         // after the explicit reconfig). -> BinaryDataFormatReconfig::Input + PackTileReconfig::Output.
         // Original lacks cb_ex2pe.reserve_back (relies on CB capacity) and only does push_back.
-        // -> Use OutDeferredReserve (no reserve, push at end) to match original exactly.
+        // -> Use OutputLifecycle::DeferredReserve (no reserve, push at end) to match original exactly.
         compute_kernel_lib::eltwise_chain(
             onetile,
             compute_kernel_lib::BinaryFpu<
@@ -232,8 +232,8 @@ void kernel_main() {
                 compute_kernel_lib::BinaryFpuOp::Add,
                 compute_kernel_lib::BroadcastDim::None,
                 compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::Streaming,
-                compute_kernel_lib::CallerManaged,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
                 compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OperandKind::Scalar>{},
@@ -244,7 +244,7 @@ void kernel_main() {
             compute_kernel_lib::PackTile<
                 cb_ex2pe,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutDeferredReserve,
+                compute_kernel_lib::OutputLifecycle::DeferredReserve,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 
         // Broadcast the tile since cb_ex2pe is a column vector that contains the important data.
@@ -256,7 +256,7 @@ void kernel_main() {
         // reprogrammed. Pack-side reconfig is owned by the downstream PackTile
         // (PackTileReconfig::Output). No mid-kernel hw_configure needed.
         //
-        // Lifecycle: cb_ex2pe input Streaming (per-tile wait+pop), output OutStreaming
+        // Lifecycle: cb_ex2pe input InputLifecycle::Streaming (per-tile wait+pop), output OutputLifecycle::Streaming
         // (per-tile reserve+push). After the chain, the new pushed tile is re-waited
         // for downstream use.
         compute_kernel_lib::eltwise_chain(
@@ -265,12 +265,12 @@ void kernel_main() {
                 compute_kernel_lib::BroadcastDim::Col,
                 cb_ex2pe,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::Streaming,
+                compute_kernel_lib::InputLifecycle::Streaming,
                 compute_kernel_lib::UnaryBcastReconfig::Input>{},
             compute_kernel_lib::PackTile<
                 cb_ex2pe,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutStreaming,
+                compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::Output>{});
         cb_ex2pe_obj.wait_front(onetile);
 

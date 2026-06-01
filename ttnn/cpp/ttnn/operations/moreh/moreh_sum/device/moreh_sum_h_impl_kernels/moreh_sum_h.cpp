@@ -63,27 +63,27 @@ void kernel_main() {
                 // pack_reconfig is also FP32-only in original; PackTileReconfig::Output
                 // emits unconditional pack reconfig — same effective behavior since
                 // chain's prev-CB elision handles the no-op case at compile time.
-                // cb_input Streaming; cb_mask_h CallerManaged + Scalar (held outside);
-                // cb_masked_input OutStreaming.
+                // cb_input InputLifecycle::Streaming; cb_mask_h InputLifecycle::CallerManaged + Scalar (held outside);
+                // cb_masked_input OutputLifecycle::Streaming.
                 compute_kernel_lib::eltwise_chain(
                     onetile,
                     compute_kernel_lib::CopyTile<
                         cb_input,
                         compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::Streaming,
+                        compute_kernel_lib::InputLifecycle::Streaming,
                         compute_kernel_lib::OperandKind::Scalar,
                         compute_kernel_lib::CopyTileReconfig::Input>{},
                     compute_kernel_lib::CopyTile<
                         cb_mask_h,
                         compute_kernel_lib::Dst::D1,
-                        compute_kernel_lib::CallerManaged,
+                        compute_kernel_lib::InputLifecycle::CallerManaged,
                         compute_kernel_lib::OperandKind::Scalar,
                         compute_kernel_lib::CopyTileReconfig::Input>{},
                     compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
                     compute_kernel_lib::PackTile<
                         cb_masked_input,
                         compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OutStreaming,
+                        compute_kernel_lib::OutputLifecycle::Streaming,
                         compute_kernel_lib::PackTileReconfig::Output>{});
 
                 // Phase 2 with masked input: Reduce final masked tile with accumulation

@@ -23,18 +23,18 @@
 // Three DEST slots used (D0, D1, D2); DEST_AUTO_LIMIT is at least 4, so safe.
 //
 // CB lifecycles:
-//   cb_one, cb_momentum   CallerManaged + Scalar (held by kernel_main for the
+//   cb_one, cb_momentum   InputLifecycle::CallerManaged + Scalar (held by kernel_main for the
 //                                                  whole kernel)
 //   cb_old_stat, cb_batch_stat
-//                         Bulk + Scalar (chain emits 1-tile wait+pop per call
+//                         InputLifecycle::Bulk + Scalar (chain emits 1-tile wait+pop per call
 //                                        via window_1d<Scalar>)
 //   cb_updated_running_stat
-//                         OutStreaming + Scalar (chain reserves+packs+pushes)
-//   cb_out0               OutCallerManaged on the optional 2nd pack (kernel_main
+//                         OutputLifecycle::Streaming + Scalar (chain reserves+packs+pushes)
+//   cb_out0               OutputLifecycle::CallerManaged on the optional 2nd pack (kernel_main
 //                                                  reserves+pushes around the
 //                                                  whole per-iter block)
 //   cb_writer_updated_stat
-//                         OutStreaming on the typecast-tail pack
+//                         OutputLifecycle::Streaming on the typecast-tail pack
 
 void kernel_main() {
     using namespace compute_kernel_lib;
@@ -93,38 +93,93 @@ void kernel_main() {
             if constexpr (mean_packs_to_out0) {
                 eltwise_chain(
                     onetile,
-                    CopyTile<cb_one, Dst::D0, CallerManaged, OperandKind::Scalar, CopyTileReconfig::Input>{},
-                    CopyTile<cb_momentum, Dst::D1, CallerManaged, OperandKind::Scalar, CopyTileReconfig::Input>{},
+                    CopyTile<
+                        cb_one,
+                        Dst::D0,
+                        InputLifecycle::CallerManaged,
+                        OperandKind::Scalar,
+                        CopyTileReconfig::Input>{},
+                    CopyTile<
+                        cb_momentum,
+                        Dst::D1,
+                        InputLifecycle::CallerManaged,
+                        OperandKind::Scalar,
+                        CopyTileReconfig::Input>{},
                     SubBinary<Dst::D0, Dst::D1, Dst::D0>{},
-                    CopyTile<cb_old_running_mean, Dst::D1, Bulk, OperandKind::Scalar, CopyTileReconfig::Input>{},
+                    CopyTile<
+                        cb_old_running_mean,
+                        Dst::D1,
+                        InputLifecycle::Bulk,
+                        OperandKind::Scalar,
+                        CopyTileReconfig::Input>{},
                     MulBinary<Dst::D0, Dst::D1, Dst::D0>{},
-                    CopyTile<cb_batch_mean, Dst::D1, CallerManaged, OperandKind::Scalar, CopyTileReconfig::Input>{},
-                    CopyTile<cb_momentum, Dst::D2, CallerManaged, OperandKind::Scalar, CopyTileReconfig::Input>{},
+                    CopyTile<
+                        cb_batch_mean,
+                        Dst::D1,
+                        InputLifecycle::CallerManaged,
+                        OperandKind::Scalar,
+                        CopyTileReconfig::Input>{},
+                    CopyTile<
+                        cb_momentum,
+                        Dst::D2,
+                        InputLifecycle::CallerManaged,
+                        OperandKind::Scalar,
+                        CopyTileReconfig::Input>{},
                     MulBinary<Dst::D1, Dst::D2, Dst::D1>{},
                     AddBinary<Dst::D0, Dst::D1, Dst::D0>{},
-                    PackTile<cb_updated_running_mean, Dst::D0, OutStreaming, PackTileReconfig::Output>{},
-                    PackTile<cb_out0, Dst::D0, OutCallerManaged, PackTileReconfig::Output>{});
+                    PackTile<cb_updated_running_mean, Dst::D0, OutputLifecycle::Streaming, PackTileReconfig::Output>{},
+                    PackTile<cb_out0, Dst::D0, OutputLifecycle::CallerManaged, PackTileReconfig::Output>{});
             } else {
                 eltwise_chain(
                     onetile,
-                    CopyTile<cb_one, Dst::D0, CallerManaged, OperandKind::Scalar, CopyTileReconfig::Input>{},
-                    CopyTile<cb_momentum, Dst::D1, CallerManaged, OperandKind::Scalar, CopyTileReconfig::Input>{},
+                    CopyTile<
+                        cb_one,
+                        Dst::D0,
+                        InputLifecycle::CallerManaged,
+                        OperandKind::Scalar,
+                        CopyTileReconfig::Input>{},
+                    CopyTile<
+                        cb_momentum,
+                        Dst::D1,
+                        InputLifecycle::CallerManaged,
+                        OperandKind::Scalar,
+                        CopyTileReconfig::Input>{},
                     SubBinary<Dst::D0, Dst::D1, Dst::D0>{},
-                    CopyTile<cb_old_running_mean, Dst::D1, Bulk, OperandKind::Scalar, CopyTileReconfig::Input>{},
+                    CopyTile<
+                        cb_old_running_mean,
+                        Dst::D1,
+                        InputLifecycle::Bulk,
+                        OperandKind::Scalar,
+                        CopyTileReconfig::Input>{},
                     MulBinary<Dst::D0, Dst::D1, Dst::D0>{},
-                    CopyTile<cb_batch_mean, Dst::D1, CallerManaged, OperandKind::Scalar, CopyTileReconfig::Input>{},
-                    CopyTile<cb_momentum, Dst::D2, CallerManaged, OperandKind::Scalar, CopyTileReconfig::Input>{},
+                    CopyTile<
+                        cb_batch_mean,
+                        Dst::D1,
+                        InputLifecycle::CallerManaged,
+                        OperandKind::Scalar,
+                        CopyTileReconfig::Input>{},
+                    CopyTile<
+                        cb_momentum,
+                        Dst::D2,
+                        InputLifecycle::CallerManaged,
+                        OperandKind::Scalar,
+                        CopyTileReconfig::Input>{},
                     MulBinary<Dst::D1, Dst::D2, Dst::D1>{},
                     AddBinary<Dst::D0, Dst::D1, Dst::D0>{},
-                    PackTile<cb_updated_running_mean, Dst::D0, OutStreaming, PackTileReconfig::Output>{});
+                    PackTile<cb_updated_running_mean, Dst::D0, OutputLifecycle::Streaming, PackTileReconfig::Output>{});
             }
 
             if constexpr (needs_mean_typecast) {
                 eltwise_chain(
                     onetile,
-                    CopyTile<cb_updated_running_mean, Dst::D0, Bulk, OperandKind::Scalar, CopyTileReconfig::Input>{},
+                    CopyTile<
+                        cb_updated_running_mean,
+                        Dst::D0,
+                        InputLifecycle::Bulk,
+                        OperandKind::Scalar,
+                        CopyTileReconfig::Input>{},
                     Typecast<tc_in_fmt, tc_out_fmt, Dst::D0>{},
-                    PackTile<cb_writer_updated_mean, Dst::D0, OutStreaming, PackTileReconfig::Output>{});
+                    PackTile<cb_writer_updated_mean, Dst::D0, OutputLifecycle::Streaming, PackTileReconfig::Output>{});
             }
         }
 
@@ -137,24 +192,49 @@ void kernel_main() {
             // gets the var result.
             eltwise_chain(
                 onetile,
-                CopyTile<cb_one, Dst::D0, CallerManaged, OperandKind::Scalar, CopyTileReconfig::Input>{},
-                CopyTile<cb_momentum, Dst::D1, CallerManaged, OperandKind::Scalar, CopyTileReconfig::Input>{},
+                CopyTile<
+                    cb_one,
+                    Dst::D0,
+                    InputLifecycle::CallerManaged,
+                    OperandKind::Scalar,
+                    CopyTileReconfig::Input>{},
+                CopyTile<
+                    cb_momentum,
+                    Dst::D1,
+                    InputLifecycle::CallerManaged,
+                    OperandKind::Scalar,
+                    CopyTileReconfig::Input>{},
                 SubBinary<Dst::D0, Dst::D1, Dst::D0>{},
-                CopyTile<cb_old_running_var, Dst::D1, Bulk, OperandKind::Scalar, CopyTileReconfig::Input>{},
+                CopyTile<
+                    cb_old_running_var,
+                    Dst::D1,
+                    InputLifecycle::Bulk,
+                    OperandKind::Scalar,
+                    CopyTileReconfig::Input>{},
                 MulBinary<Dst::D0, Dst::D1, Dst::D0>{},
-                CopyTile<cb_batch_var, Dst::D1, Bulk, OperandKind::Scalar, CopyTileReconfig::Input>{},
-                CopyTile<cb_momentum, Dst::D2, CallerManaged, OperandKind::Scalar, CopyTileReconfig::Input>{},
+                CopyTile<cb_batch_var, Dst::D1, InputLifecycle::Bulk, OperandKind::Scalar, CopyTileReconfig::Input>{},
+                CopyTile<
+                    cb_momentum,
+                    Dst::D2,
+                    InputLifecycle::CallerManaged,
+                    OperandKind::Scalar,
+                    CopyTileReconfig::Input>{},
                 MulBinary<Dst::D1, Dst::D2, Dst::D1>{},
                 AddBinary<Dst::D0, Dst::D1, Dst::D0>{},
-                PackTile<cb_updated_running_var, Dst::D0, OutStreaming, PackTileReconfig::Output>{},
-                PackTile<cb_out0, Dst::D0, OutCallerManaged, PackTileReconfig::Output>{});
+                PackTile<cb_updated_running_var, Dst::D0, OutputLifecycle::Streaming, PackTileReconfig::Output>{},
+                PackTile<cb_out0, Dst::D0, OutputLifecycle::CallerManaged, PackTileReconfig::Output>{});
 
             if constexpr (needs_var_typecast) {
                 eltwise_chain(
                     onetile,
-                    CopyTile<cb_updated_running_var, Dst::D0, Bulk, OperandKind::Scalar, CopyTileReconfig::Input>{},
+                    CopyTile<
+                        cb_updated_running_var,
+                        Dst::D0,
+                        InputLifecycle::Bulk,
+                        OperandKind::Scalar,
+                        CopyTileReconfig::Input>{},
                     Typecast<tc_in_fmt, tc_out_fmt, Dst::D0>{},
-                    PackTile<cb_writer_updated_var, Dst::D0, OutStreaming, PackTileReconfig::Output>{});
+                    PackTile<cb_writer_updated_var, Dst::D0, OutputLifecycle::Streaming, PackTileReconfig::Output>{});
             }
         }
 

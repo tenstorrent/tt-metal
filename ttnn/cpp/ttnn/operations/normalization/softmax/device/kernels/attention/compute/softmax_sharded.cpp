@@ -198,9 +198,10 @@ void kernel_main() {
         //   pack_reconfig_data_format(cb_exps) ONCE outside the outer loop —
         //   chain emits per-call (fold-elided after first since prev == curr).
         //   -> CopyTileReconfig::Input + PackTileReconfig::Output.
-        // Lifecycles: cb_in0 HeldBulk + Block + compute_kernel_lib::TileOffset::Set(index_subblock_w_offset)
+        // Lifecycles: cb_in0 InputLifecycle::HeldBulk + Block +
+        // compute_kernel_lib::TileOffset::Set(index_subblock_w_offset)
         //   per outer iter — chain emits cb_wait_front(base + subblock_w) per call,
-        //   matching the caller's pre-pushed sharded input. cb_exps OutBulk + Block.
+        //   matching the caller's pre-pushed sharded input. cb_exps OutputLifecycle::Bulk + Block.
         // BlockSize=1 (subblock_w is runtime; per-tile semantics).
         index_subblock_w_offset = 0;
         for (uint32_t j = 0; j < num_subblocks_w; j++) {
@@ -209,7 +210,7 @@ void kernel_main() {
                 compute_kernel_lib::CopyTile<
                     cb_in0,
                     compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::HeldBulk,
+                    compute_kernel_lib::InputLifecycle::HeldBulk,
                     compute_kernel_lib::OperandKind::Block,
                     compute_kernel_lib::CopyTileReconfig::Input,
                     compute_kernel_lib::TileOffset::Set>{index_subblock_w_offset},
@@ -220,7 +221,7 @@ void kernel_main() {
                 compute_kernel_lib::PackTile<
                     cb_exps,
                     compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutBulk,
+                    compute_kernel_lib::OutputLifecycle::Bulk,
                     compute_kernel_lib::PackTileReconfig::Output>{});
             index_subblock_w_offset += subblock_w;
         }
@@ -247,11 +248,11 @@ void kernel_main() {
 
         // exp(x) / (sum(exp(x))) — bcast COL on cb_recipsumexps (1 tile held).
         // Original per-subblock DEST batching with sequential index becomes
-        // per-tile streaming via chain Streaming + Scalar on cb_exps.
+        // per-tile streaming via chain InputLifecycle::Streaming + Scalar on cb_exps.
         //
         // Reconfig: reconfig_data_format + mul_bcast_cols_init_short -> Input;
         // pack_reconfig_data_format(cb_out0) -> PackTileReconfig::Output.
-        // cb_recipsumexps CallerManaged (external wait/pop bracket).
+        // cb_recipsumexps InputLifecycle::CallerManaged (external wait/pop bracket).
         cb_recipsumexps_obj.wait_front(1);
         compute_kernel_lib::eltwise_chain(
             block_w,
@@ -261,15 +262,15 @@ void kernel_main() {
                 compute_kernel_lib::BinaryFpuOp::Mul,
                 compute_kernel_lib::BroadcastDim::Col,
                 compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::Streaming,
-                compute_kernel_lib::CallerManaged,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
                 compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OperandKind::Scalar>{},
             compute_kernel_lib::PackTile<
                 cb_out0,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutStreaming,
+                compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::Output>{});
         cb_recipsumexps_obj.pop_front(1);
     }

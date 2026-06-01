@@ -17,9 +17,9 @@ void kernel_main() {
 
     // cb_y = cb_x × cb_clip_coef_clamped[scalar bcast].
     // Lifecycles:
-    //   cb_x — Streaming + Scalar OperandKind (per-iter wait+pop of one tile).
-    //   cb_clip_coef_clamped — Bulk + Scalar. `window_1d<Scalar>` collapses
-    //     the Bulk window to 1 tile (the old "Bulk + Scalar over-waits"
+    //   cb_x — InputLifecycle::Streaming + Scalar OperandKind (per-iter wait+pop of one tile).
+    //   cb_clip_coef_clamped — InputLifecycle::Bulk + Scalar. `window_1d<Scalar>` collapses
+    //     the InputLifecycle::Bulk window to 1 tile (the old "InputLifecycle::Bulk + Scalar over-waits"
     //     gotcha was fixed in 14a5a61e462), so the chain emits exactly
     //     `cb_wait_front(1)` at the head and `cb_pop_front(1)` at the tail —
     //     no external wait/pop needed.
@@ -34,14 +34,14 @@ void kernel_main() {
             compute_kernel_lib::BinaryFpuOp::Mul,
             compute_kernel_lib::BroadcastDim::Scalar,
             compute_kernel_lib::BinaryDataFormatReconfig::None,
-            compute_kernel_lib::Streaming,  // cb_x
-            compute_kernel_lib::Bulk,       // cb_clip_coef_clamped (Scalar → 1-tile wait+pop)
+            compute_kernel_lib::InputLifecycle::Streaming,  // cb_x
+            compute_kernel_lib::InputLifecycle::Bulk,       // cb_clip_coef_clamped (Scalar → 1-tile wait+pop)
             compute_kernel_lib::OperandKind::Scalar,
             compute_kernel_lib::Dst::D0,
             compute_kernel_lib::OperandKind::Scalar>{},
         compute_kernel_lib::PackTile<
             cb_y,
             compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::OutStreaming,
+            compute_kernel_lib::OutputLifecycle::Streaming,
             compute_kernel_lib::PackTileReconfig::None>{});
 }

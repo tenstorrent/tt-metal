@@ -70,8 +70,8 @@ void kernel_main() {
         /*
          * 1/sqrt(var + eps)
          * BinaryFpu(Add, cb_var, cb_eps) + Rsqrt + PackTile(cb_recip_sqrt_var).
-         * cb_var: Streaming (per-tile wait/pop). cb_eps: CallerManaged (pre-waited
-         * before NCHt loop, popped once after). cb_recip_sqrt_var: OutStreaming.
+         * cb_var: InputLifecycle::Streaming (per-tile wait/pop). cb_eps: InputLifecycle::CallerManaged (pre-waited
+         * before NCHt loop, popped once after). cb_recip_sqrt_var: OutputLifecycle::Streaming.
          */
         compute_kernel_lib::eltwise_chain(
             onetile,
@@ -81,8 +81,8 @@ void kernel_main() {
                 compute_kernel_lib::BinaryFpuOp::Add,
                 compute_kernel_lib::BroadcastDim::None,
                 compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::Streaming,
-                compute_kernel_lib::CallerManaged,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
                 compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OperandKind::Scalar>{},
@@ -93,7 +93,7 @@ void kernel_main() {
             compute_kernel_lib::PackTile<
                 cb_recip_sqrt_var,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutStreaming,
+                compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 
         /*
@@ -126,15 +126,15 @@ void kernel_main() {
                 compute_kernel_lib::BinaryFpuOp::Mul,
                 compute_kernel_lib::BroadcastDim::Col,
                 compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::Bulk,
-                compute_kernel_lib::CallerManaged,
+                compute_kernel_lib::InputLifecycle::Bulk,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
                 compute_kernel_lib::OperandKind::Block,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OperandKind::Scalar>{},
             compute_kernel_lib::PackTile<
                 normed_output_cb,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutBulk,
+                compute_kernel_lib::OutputLifecycle::Bulk,
                 compute_kernel_lib::PackTileReconfig::Output>{});
         cb_pop_front(cb_recip_sqrt_var, 1);
 
@@ -151,15 +151,15 @@ void kernel_main() {
                     compute_kernel_lib::BinaryFpuOp::Mul,
                     compute_kernel_lib::BroadcastDim::Row,
                     compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::Bulk,
-                    compute_kernel_lib::CallerManaged,
+                    compute_kernel_lib::InputLifecycle::Bulk,
+                    compute_kernel_lib::InputLifecycle::CallerManaged,
                     compute_kernel_lib::OperandKind::Block,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OperandKind::Block>{},
                 compute_kernel_lib::PackTile<
                     cb_times_gamma_out,
                     compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutBulk,
+                    compute_kernel_lib::OutputLifecycle::Bulk,
                     compute_kernel_lib::PackTileReconfig::Output>{});
 
             if constexpr (do_beta) {
@@ -175,15 +175,15 @@ void kernel_main() {
                         compute_kernel_lib::BinaryFpuOp::Add,
                         compute_kernel_lib::BroadcastDim::Row,
                         compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                        compute_kernel_lib::Bulk,
-                        compute_kernel_lib::CallerManaged,
+                        compute_kernel_lib::InputLifecycle::Bulk,
+                        compute_kernel_lib::InputLifecycle::CallerManaged,
                         compute_kernel_lib::OperandKind::Block,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OperandKind::Block>{},
                     compute_kernel_lib::PackTile<
                         cb_out,
                         compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OutBulk,
+                        compute_kernel_lib::OutputLifecycle::Bulk,
                         compute_kernel_lib::PackTileReconfig::Output>{});
             }
         }

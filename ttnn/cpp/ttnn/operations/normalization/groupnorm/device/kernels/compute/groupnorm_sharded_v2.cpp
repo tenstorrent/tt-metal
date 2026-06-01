@@ -302,14 +302,14 @@ void kernel_main() {
             // Original used per-subblock acquire/release with index = w
             // (index_subblock_w_offset stays at 0 — never incremented in this block,
             // so cb_x reads from front 0..subblock_w-1, pops subblock_w, slides).
-            // Chain emits per-tile wait+pop+pack+push with Streaming + OutStreaming
+            // Chain emits per-tile wait+pop+pack+push with InputLifecycle::Streaming + OutputLifecycle::Streaming
             // on cb_x; net effect over block_hw iters is identical (cb_x slid by
             // block_hw on both ends).
             //
             // Reconfig: sub_tiles_bcast_scalar_init_short reconfigs srca/srcb ->
             // BinaryDataFormatReconfig::Input. Original used plain pack_tile (no
             // pack_reconfig) -> PackTileReconfig::None.
-            // cb_ex_global is held outside chain via wait_front(1) -> CallerManaged.
+            // cb_ex_global is held outside chain via wait_front(1) -> InputLifecycle::CallerManaged.
             cb_ex_global.wait_front(1);
             compute_kernel_lib::eltwise_chain(
                 block_hw,
@@ -319,15 +319,15 @@ void kernel_main() {
                     compute_kernel_lib::BinaryFpuOp::Sub,
                     compute_kernel_lib::BroadcastDim::Scalar,
                     compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::Streaming,
-                    compute_kernel_lib::CallerManaged,
+                    compute_kernel_lib::InputLifecycle::Streaming,
+                    compute_kernel_lib::InputLifecycle::CallerManaged,
                     compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OperandKind::Scalar>{},
                 compute_kernel_lib::PackTile<
                     cb_x_id,
                     compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutStreaming,
+                    compute_kernel_lib::OutputLifecycle::Streaming,
                     compute_kernel_lib::PackTileReconfig::None>{});
             cb_ex_global.pop_front(1);
 
@@ -414,9 +414,9 @@ void kernel_main() {
             // Reconfig audit: add_tiles_init reconfigs srca/srcb (no explicit
             // reconfig_data_format) -> BinaryDataFormatReconfig::Input. No pack_reconfig in
             // original -> PackTileReconfig::None. rsqrt_tile_init<true> -> Legacy::On.
-            // cb_ex2pe.reserve_back(1) + push_back(1) present -> OutStreaming.
-            // Lifecycles: cb_ex_global Streaming (wait+pop per call); cb_eps held by
-            // unchanged cb_eps.wait_front(1) above -> CallerManaged.
+            // cb_ex2pe.reserve_back(1) + push_back(1) present -> OutputLifecycle::Streaming.
+            // Lifecycles: cb_ex_global InputLifecycle::Streaming (wait+pop per call); cb_eps held by
+            // unchanged cb_eps.wait_front(1) above -> InputLifecycle::CallerManaged.
             cb_eps.wait_front(1);
             compute_kernel_lib::eltwise_chain(
                 1,
@@ -426,8 +426,8 @@ void kernel_main() {
                     compute_kernel_lib::BinaryFpuOp::Add,
                     compute_kernel_lib::BroadcastDim::None,
                     compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::Streaming,
-                    compute_kernel_lib::CallerManaged,
+                    compute_kernel_lib::InputLifecycle::Streaming,
+                    compute_kernel_lib::InputLifecycle::CallerManaged,
                     compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OperandKind::Scalar>{},
@@ -438,7 +438,7 @@ void kernel_main() {
                 compute_kernel_lib::PackTile<
                     cb_ex2pe_id,
                     compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutStreaming,
+                    compute_kernel_lib::OutputLifecycle::Streaming,
                     compute_kernel_lib::PackTileReconfig::None>{});
             //  (x - Ex) * 1/[sqrt(Var + eps)]
             index_h_offset = 0;

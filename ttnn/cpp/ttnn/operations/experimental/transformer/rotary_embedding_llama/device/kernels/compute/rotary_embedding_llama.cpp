@@ -82,13 +82,13 @@ void kernel_main() {
                 cb_wait_front(rotated_in_interm_cb, Wt);
 
                 // sin_interim = rotated * sin
-                // A = rotated_in_interm_cb Bulk + Block (Wt tiles waited above, popped below).
+                // A = rotated_in_interm_cb InputLifecycle::Bulk + Block (Wt tiles waited above, popped below).
                 // B = sin_cb: index = j + (sin_cos_row_cnt * Wt). Block + compute_kernel_lib::TileOffset::Set.
                 //   RELOAD_IMPL==0: sin held externally (waited my_cos_sin_tiles outside)
-                //     -> CallerManaged; sin_cos_row_cnt increments per seq_tile so offset varies.
+                //     -> InputLifecycle::CallerManaged; sin_cos_row_cnt increments per seq_tile so offset varies.
                 //   RELOAD_IMPL==1: sin waited Wt per iter (line 63), popped Wt below
-                //     -> Bulk; sin_cos_row_cnt always 0 so compute_kernel_lib::TileOffset::Set(0).
-                // Output sin_interm_cb OutBulk + Block (Wt tiles).
+                //     -> InputLifecycle::Bulk; sin_cos_row_cnt always 0 so compute_kernel_lib::TileOffset::Set(0).
+                // Output sin_interm_cb OutputLifecycle::Bulk + Block (Wt tiles).
                 // Reconfig audit: mul_tiles_init reconfigs srca/srcb -> Input.
                 //   No explicit pack_reconfig (relies on sin_interm_cb format == out_cb's
                 //   from startup) -> PackTileReconfig::None.
@@ -101,8 +101,8 @@ void kernel_main() {
                         compute_kernel_lib::BinaryFpuOp::Mul,
                         compute_kernel_lib::BroadcastDim::None,
                         compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                        compute_kernel_lib::Bulk,
-                        compute_kernel_lib::CallerManaged,
+                        compute_kernel_lib::InputLifecycle::Bulk,
+                        compute_kernel_lib::InputLifecycle::CallerManaged,
                         compute_kernel_lib::OperandKind::Block,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OperandKind::Block,
@@ -111,7 +111,7 @@ void kernel_main() {
                     compute_kernel_lib::PackTile<
                         sin_interm_cb,
                         compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OutBulk,
+                        compute_kernel_lib::OutputLifecycle::Bulk,
                         compute_kernel_lib::PackTileReconfig::None>{});
 #else
                 compute_kernel_lib::eltwise_chain(
@@ -122,15 +122,15 @@ void kernel_main() {
                         compute_kernel_lib::BinaryFpuOp::Mul,
                         compute_kernel_lib::BroadcastDim::None,
                         compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                        compute_kernel_lib::Bulk,
-                        compute_kernel_lib::Bulk,
+                        compute_kernel_lib::InputLifecycle::Bulk,
+                        compute_kernel_lib::InputLifecycle::Bulk,
                         compute_kernel_lib::OperandKind::Block,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OperandKind::Block>{},
                     compute_kernel_lib::PackTile<
                         sin_interm_cb,
                         compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OutBulk,
+                        compute_kernel_lib::OutputLifecycle::Bulk,
                         compute_kernel_lib::PackTileReconfig::None>{});
 #endif
 
@@ -144,8 +144,8 @@ void kernel_main() {
                         compute_kernel_lib::BinaryFpuOp::Mul,
                         compute_kernel_lib::BroadcastDim::None,
                         compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                        compute_kernel_lib::Bulk,
-                        compute_kernel_lib::CallerManaged,
+                        compute_kernel_lib::InputLifecycle::Bulk,
+                        compute_kernel_lib::InputLifecycle::CallerManaged,
                         compute_kernel_lib::OperandKind::Block,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OperandKind::Block,
@@ -154,7 +154,7 @@ void kernel_main() {
                     compute_kernel_lib::PackTile<
                         cos_interm_cb,
                         compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OutBulk,
+                        compute_kernel_lib::OutputLifecycle::Bulk,
                         compute_kernel_lib::PackTileReconfig::None>{});
 #else
                 compute_kernel_lib::eltwise_chain(
@@ -165,21 +165,21 @@ void kernel_main() {
                         compute_kernel_lib::BinaryFpuOp::Mul,
                         compute_kernel_lib::BroadcastDim::None,
                         compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                        compute_kernel_lib::Bulk,
-                        compute_kernel_lib::Bulk,
+                        compute_kernel_lib::InputLifecycle::Bulk,
+                        compute_kernel_lib::InputLifecycle::Bulk,
                         compute_kernel_lib::OperandKind::Block,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OperandKind::Block>{},
                     compute_kernel_lib::PackTile<
                         cos_interm_cb,
                         compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OutBulk,
+                        compute_kernel_lib::OutputLifecycle::Bulk,
                         compute_kernel_lib::PackTileReconfig::None>{});
 #endif
 
                 // out = cos_interim + sin_interim
-                // Both operands Bulk + Block (Wt tiles, popped at end), out_cb OutBulk + Block.
-                // Reconfig: add_tiles_init reconfigs srca/srcb -> Input. No pack_reconfig -> None.
+                // Both operands InputLifecycle::Bulk + Block (Wt tiles, popped at end), out_cb OutputLifecycle::Bulk +
+                // Block. Reconfig: add_tiles_init reconfigs srca/srcb -> Input. No pack_reconfig -> None.
                 compute_kernel_lib::eltwise_chain(
                     compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt),
                     compute_kernel_lib::BinaryFpu<
@@ -188,15 +188,15 @@ void kernel_main() {
                         compute_kernel_lib::BinaryFpuOp::Add,
                         compute_kernel_lib::BroadcastDim::None,
                         compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                        compute_kernel_lib::Bulk,
-                        compute_kernel_lib::Bulk,
+                        compute_kernel_lib::InputLifecycle::Bulk,
+                        compute_kernel_lib::InputLifecycle::Bulk,
                         compute_kernel_lib::OperandKind::Block,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OperandKind::Block>{},
                     compute_kernel_lib::PackTile<
                         out_cb,
                         compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OutBulk,
+                        compute_kernel_lib::OutputLifecycle::Bulk,
                         compute_kernel_lib::PackTileReconfig::None>{});
 
 #if RELOAD_IMPL == 0

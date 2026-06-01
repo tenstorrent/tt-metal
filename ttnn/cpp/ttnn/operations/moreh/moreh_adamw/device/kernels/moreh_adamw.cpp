@@ -119,7 +119,7 @@ void kernel_main() {
         // exp_avg_sq = exp_avg_sq * beta2 + grad * grad * (1 - beta2);
         // cb_tmp1 = cb_one[first_tile] - cb_scalar_args[beta2_tile]
         // Reconfig: sub_tiles_init_with_dt -> Input. pack_tile_with_dt -> Output.
-        // Both operands held externally -> CallerManaged + Scalar; cb_scalar_args at
+        // Both operands held externally -> InputLifecycle::CallerManaged + Scalar; cb_scalar_args at
         // beta2_tile -> compute_kernel_lib::TileOffset::Set.
         compute_kernel_lib::eltwise_chain(
             onetile,
@@ -129,8 +129,8 @@ void kernel_main() {
                 compute_kernel_lib::BinaryFpuOp::Sub,
                 compute_kernel_lib::BroadcastDim::None,
                 compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::CallerManaged,
-                compute_kernel_lib::CallerManaged,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
                 compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OperandKind::Scalar,
@@ -139,7 +139,7 @@ void kernel_main() {
             compute_kernel_lib::PackTile<
                 cb_tmp1,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutStreaming,
+                compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 
         // cb_tmp2 = grad * grad
@@ -167,7 +167,7 @@ void kernel_main() {
 
         // cb_tmp1 = 1 / (cb_one[first_tile] - cb_beta2_exponent[first_tile])
         // Reconfig: sub_tiles_init_with_dt -> Input. pack_tile_with_dt -> Output.
-        // Both operands held externally -> CallerManaged + Scalar (first_tile == 0
+        // Both operands held externally -> InputLifecycle::CallerManaged + Scalar (first_tile == 0
         // -> default TileBase).
         compute_kernel_lib::eltwise_chain(
             onetile,
@@ -177,8 +177,8 @@ void kernel_main() {
                 compute_kernel_lib::BinaryFpuOp::Sub,
                 compute_kernel_lib::BroadcastDim::None,
                 compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::CallerManaged,
-                compute_kernel_lib::CallerManaged,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
                 compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OperandKind::Scalar>{},
@@ -186,7 +186,7 @@ void kernel_main() {
             compute_kernel_lib::PackTile<
                 cb_tmp1,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutStreaming,
+                compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 
 #ifdef AMSGRAD
@@ -199,13 +199,13 @@ void kernel_main() {
             compute_kernel_lib::CopyTile<
                 cb_max_exp_avg_sq_in,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::CallerManaged,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
                 compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::CopyTileReconfig::Input>{},
             compute_kernel_lib::CopyTile<
                 tmp_cb_exp_avg_sq,
                 compute_kernel_lib::Dst::D1,
-                compute_kernel_lib::CallerManaged,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
                 compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::CopyTileReconfig::Input>{},
             compute_kernel_lib::
@@ -213,7 +213,7 @@ void kernel_main() {
             compute_kernel_lib::PackTile<
                 tmp_cb_max_exp_avg_sq,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutStreaming,
+                compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 
         // cb_max_exp_avg_sq_out
@@ -231,8 +231,8 @@ void kernel_main() {
                 compute_kernel_lib::BinaryFpuOp::Mul,
                 compute_kernel_lib::BroadcastDim::None,
                 compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::CallerManaged,
-                compute_kernel_lib::Streaming,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::InputLifecycle::Streaming,
                 compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OperandKind::Scalar>{},
@@ -240,7 +240,7 @@ void kernel_main() {
             compute_kernel_lib::PackTile<
                 cb_tmp1,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutStreaming,
+                compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::Output>{});
         tmp_cb_max_exp_avg_sq_obj.pop_front(onetile);
 #else
@@ -252,8 +252,8 @@ void kernel_main() {
                 compute_kernel_lib::BinaryFpuOp::Mul,
                 compute_kernel_lib::BroadcastDim::None,
                 compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::CallerManaged,
-                compute_kernel_lib::Streaming,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::InputLifecycle::Streaming,
                 compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OperandKind::Scalar>{},
@@ -261,7 +261,7 @@ void kernel_main() {
             compute_kernel_lib::PackTile<
                 cb_tmp1,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutStreaming,
+                compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 #endif
         tmp_cb_exp_avg_sq_obj.pop_front(onetile);
@@ -269,8 +269,8 @@ void kernel_main() {
         // cb_tmp1 = 1 / (cb_tmp1 + eps)  — same-CB in/out on cb_tmp1.
         // Reconfig: add_tiles_init_with_dt reconfigs srca/srcb -> Input.
         //   pack_tile_with_dt -> Output.
-        // Lifecycles: cb_tmp1 Streaming + OutStreaming (same-CB).
-        //   cb_scalar_args CallerManaged + Scalar + compute_kernel_lib::TileOffset::Set.
+        // Lifecycles: cb_tmp1 InputLifecycle::Streaming + OutputLifecycle::Streaming (same-CB).
+        //   cb_scalar_args InputLifecycle::CallerManaged + Scalar + compute_kernel_lib::TileOffset::Set.
         compute_kernel_lib::eltwise_chain(
             onetile,
             compute_kernel_lib::BinaryFpu<
@@ -279,8 +279,8 @@ void kernel_main() {
                 compute_kernel_lib::BinaryFpuOp::Add,
                 compute_kernel_lib::BroadcastDim::None,
                 compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::Streaming,
-                compute_kernel_lib::CallerManaged,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
                 compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OperandKind::Scalar,
@@ -290,7 +290,7 @@ void kernel_main() {
             compute_kernel_lib::PackTile<
                 cb_tmp1,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutStreaming,
+                compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 
         // bias_correction1 = 1 - pow(beta1, step);
@@ -298,8 +298,8 @@ void kernel_main() {
 
         // cb_tmp2 = 1 / (1 - cb_beta1_exponent)
         // Reconfig: sub_tiles_init_with_dt + pack_tile_with_dt -> Input + Output.
-        // Lifecycles: cb_one CallerManaged + Scalar; cb_beta1_exponent
-        //   CallerManaged + Scalar (held externally); cb_tmp2 OutStreaming.
+        // Lifecycles: cb_one InputLifecycle::CallerManaged + Scalar; cb_beta1_exponent
+        //   InputLifecycle::CallerManaged + Scalar (held externally); cb_tmp2 OutputLifecycle::Streaming.
         compute_kernel_lib::eltwise_chain(
             onetile,
             compute_kernel_lib::BinaryFpu<
@@ -308,8 +308,8 @@ void kernel_main() {
                 compute_kernel_lib::BinaryFpuOp::Sub,
                 compute_kernel_lib::BroadcastDim::None,
                 compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::CallerManaged,
-                compute_kernel_lib::CallerManaged,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
                 compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OperandKind::Scalar>{},
@@ -317,7 +317,7 @@ void kernel_main() {
             compute_kernel_lib::PackTile<
                 cb_tmp2,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutStreaming,
+                compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 
         // cb_tmp2 = lr * cb_tmp2;

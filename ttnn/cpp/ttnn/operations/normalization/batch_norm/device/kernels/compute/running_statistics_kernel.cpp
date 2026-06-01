@@ -12,8 +12,8 @@ namespace {
 
 // Chain replacement for moreh's `*_tiles_to_cb` helpers — emits a single-tile
 // BinaryFpu + PackTile with Input+Output reconfig, matching the moreh helper's
-// internal `*_init_with_dt` + `pack_tile_with_dt`. PopA/PopB select Streaming
-// (wait+pop per call) vs HeldStream (wait, no pop) — matches the moreh helper's
+// internal `*_init_with_dt` + `pack_tile_with_dt`. PopA/PopB select InputLifecycle::Streaming
+// (wait+pop per call) vs InputLifecycle::HeldStream (wait, no pop) — matches the moreh helper's
 // pop_a / pop_b runtime flags but expressed at compile time.
 template <compute_kernel_lib::BinaryFpuOp Op, uint32_t CbA, uint32_t CbB, uint32_t CbOut, bool PopA, bool PopB>
 ALWI void fpu_binary_to_cb_chain() {
@@ -26,12 +26,12 @@ ALWI void fpu_binary_to_cb_chain() {
             Op,
             BroadcastDim::None,
             BinaryDataFormatReconfig::Input,
-            PopA ? Streaming : HeldStream,
-            PopB ? Streaming : HeldStream,
+            PopA ? InputLifecycle::Streaming : InputLifecycle::HeldStream,
+            PopB ? InputLifecycle::Streaming : InputLifecycle::HeldStream,
             OperandKind::Scalar,
             Dst::D0,
             OperandKind::Scalar>{},
-        PackTile<CbOut, Dst::D0, OutStreaming, PackTileReconfig::Output>{});
+        PackTile<CbOut, Dst::D0, OutputLifecycle::Streaming, PackTileReconfig::Output>{});
 }
 
 }  // namespace
@@ -78,8 +78,8 @@ void kernel_main() {
         // mul/sub_tiles + `pack_tile_with_dt`) one-for-one.
         //
         // Stage 4 (add cb_tmp2 + cb_tmp3) is inlined here as an explicit chain
-        // because it needs TWO outputs: the per-stat updated CB (Streaming) AND
-        // a mirror pack to cb_out0 (CallerManaged — kernel pushes cb_out0 once
+        // because it needs TWO outputs: the per-stat updated CB (InputLifecycle::Streaming) AND
+        // a mirror pack to cb_out0 (InputLifecycle::CallerManaged — kernel pushes cb_out0 once
         // per iter). Replaces add_tiles_to_cb + the trailing pack_tile(0,
         // cb_out0). The cb_out0 PackTile uses PackTileReconfig::None to
         // preserve the original plain pack_tile(0, cb_out0) (no pack_reconfig
@@ -97,13 +97,13 @@ void kernel_main() {
                         BinaryFpuOp::Add,
                         BroadcastDim::None,
                         BinaryDataFormatReconfig::Input,
-                        Streaming,
-                        Streaming,
+                        InputLifecycle::Streaming,
+                        InputLifecycle::Streaming,
                         OperandKind::Scalar,
                         Dst::D0,
                         OperandKind::Scalar>{},
-                    PackTile<cb_updated_running_mean, Dst::D0, OutStreaming, PackTileReconfig::Output>{},
-                    PackTile<cb_out0, Dst::D0, OutCallerManaged, PackTileReconfig::None>{});
+                    PackTile<cb_updated_running_mean, Dst::D0, OutputLifecycle::Streaming, PackTileReconfig::Output>{},
+                    PackTile<cb_out0, Dst::D0, OutputLifecycle::CallerManaged, PackTileReconfig::None>{});
             } else {
                 eltwise_chain(
                     onetile,
@@ -113,12 +113,12 @@ void kernel_main() {
                         BinaryFpuOp::Add,
                         BroadcastDim::None,
                         BinaryDataFormatReconfig::Input,
-                        Streaming,
-                        Streaming,
+                        InputLifecycle::Streaming,
+                        InputLifecycle::Streaming,
                         OperandKind::Scalar,
                         Dst::D0,
                         OperandKind::Scalar>{},
-                    PackTile<cb_updated_running_mean, Dst::D0, OutStreaming, PackTileReconfig::Output>{});
+                    PackTile<cb_updated_running_mean, Dst::D0, OutputLifecycle::Streaming, PackTileReconfig::Output>{});
             }
         }
         if constexpr (old_running_var_has_value) {
@@ -134,13 +134,13 @@ void kernel_main() {
                     BinaryFpuOp::Add,
                     BroadcastDim::None,
                     BinaryDataFormatReconfig::Input,
-                    Streaming,
-                    Streaming,
+                    InputLifecycle::Streaming,
+                    InputLifecycle::Streaming,
                     OperandKind::Scalar,
                     Dst::D0,
                     OperandKind::Scalar>{},
-                PackTile<cb_updated_running_var, Dst::D0, OutStreaming, PackTileReconfig::Output>{},
-                PackTile<cb_out0, Dst::D0, OutCallerManaged, PackTileReconfig::None>{});
+                PackTile<cb_updated_running_var, Dst::D0, OutputLifecycle::Streaming, PackTileReconfig::Output>{},
+                PackTile<cb_out0, Dst::D0, OutputLifecycle::CallerManaged, PackTileReconfig::None>{});
         }
         cb_out0_obj.push_back(1);
     }

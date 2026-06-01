@@ -43,12 +43,13 @@ void kernel_main() {
     // common elements once as type aliases + value instances so the two chain
     // bodies stay readable and the type system enforces they're identical
     // across branches.
-    constexpr CopyTile<cb_input, Dst::D0, HeldStream, OperandKind::Scalar, CopyTileReconfig::None> load_x_held{};
+    constexpr CopyTile<cb_input, Dst::D0, InputLifecycle::HeldStream, OperandKind::Scalar, CopyTileReconfig::None>
+        load_x_held{};
     constexpr Tanh<Dst::D0> tanh_d0{};
     // FLOAT32 tail: load x again to D1 then SFPU MulBinary.
     constexpr OptionalChainElement<
         kIsFloat32,
-        CopyTile<cb_input, Dst::D1, NoWaitPop, OperandKind::Scalar, CopyTileReconfig::None>>
+        CopyTile<cb_input, Dst::D1, InputLifecycle::NoWaitPop, OperandKind::Scalar, CopyTileReconfig::None>>
         load_x_d1_for_sfpu{};
     constexpr OptionalChainElement<kIsFloat32, MulBinary<Dst::D0, Dst::D1, Dst::D0>> sfpu_mul_d0_d1{};
     // FLOAT tail: DestReuseBinary reads cb_input on srcb, DEST on srca.
@@ -61,10 +62,10 @@ void kernel_main() {
             Dst::D0,
             Dst::D0,
             DestReuseReconfig::Input,
-            Streaming,
+            InputLifecycle::Streaming,
             OperandKind::Scalar>>
         fpu_mul_dest_x{};
-    constexpr PackTile<cb_output, Dst::D0, OutStreaming, PackTileReconfig::None> pack_y{};
+    constexpr PackTile<cb_output, Dst::D0, OutputLifecycle::Streaming, PackTileReconfig::None> pack_y{};
 
     if (use_approx) {
         eltwise_chain(

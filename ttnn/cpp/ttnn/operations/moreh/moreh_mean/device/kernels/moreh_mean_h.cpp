@@ -62,27 +62,27 @@ void kernel_main() {
                 // CopyTile<cb_input, D0> + CopyTile<cb_mask_h, D1> + Mask + PackTile.
                 // Reconfig: copy_tile_init_with_dt -> CopyTileReconfig::Input on each.
                 //   pack_tile_with_dt -> PackTileReconfig::Output.
-                // cb_input Streaming (chain owns wait+pop); cb_mask_h CallerManaged
-                //   (held outside the loop); cb_masked_input OutStreaming.
+                // cb_input InputLifecycle::Streaming (chain owns wait+pop); cb_mask_h InputLifecycle::CallerManaged
+                //   (held outside the loop); cb_masked_input OutputLifecycle::Streaming.
                 compute_kernel_lib::eltwise_chain(
                     onetile,
                     compute_kernel_lib::CopyTile<
                         cb_input,
                         compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::Streaming,
+                        compute_kernel_lib::InputLifecycle::Streaming,
                         compute_kernel_lib::OperandKind::Scalar,
                         compute_kernel_lib::CopyTileReconfig::Input>{},
                     compute_kernel_lib::CopyTile<
                         cb_mask_h,
                         compute_kernel_lib::Dst::D1,
-                        compute_kernel_lib::CallerManaged,
+                        compute_kernel_lib::InputLifecycle::CallerManaged,
                         compute_kernel_lib::OperandKind::Scalar,
                         compute_kernel_lib::CopyTileReconfig::Input>{},
                     compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
                     compute_kernel_lib::PackTile<
                         cb_masked_input,
                         compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OutStreaming,
+                        compute_kernel_lib::OutputLifecycle::Streaming,
                         compute_kernel_lib::PackTileReconfig::Output>{});
 
                 // Phase 2 with masked input: Reduce final masked tile with accumulation

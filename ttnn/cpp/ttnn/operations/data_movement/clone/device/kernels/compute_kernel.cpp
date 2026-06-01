@@ -22,12 +22,12 @@ void kernel_main() {
         compute_kernel_lib::CopyTile<
             src_cb_id,
             compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::Streaming,
+            compute_kernel_lib::InputLifecycle::Streaming,
             compute_kernel_lib::OperandKind::Scalar,
             compute_kernel_lib::CopyTileReconfig::None>{},
         compute_kernel_lib::PackTile<
             dst_cb_id,
             compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::OutStreaming,
+            compute_kernel_lib::OutputLifecycle::Streaming,
             compute_kernel_lib::PackTileReconfig::None>{});
 }

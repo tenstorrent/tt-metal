@@ -28,7 +28,7 @@ void kernel_main() {
     //   original copy + conditional clamp + pack to cb_tmp0).
     //
     // Stage 2: cb_tmp0 (held + popped at end) ->
-    //   CopyTile<cb_tmp0, D0 HeldStream> + CopyTile<cb_tmp0, D1 NoWaitPop>
+    //   CopyTile<cb_tmp0, D0 InputLifecycle::HeldStream> + CopyTile<cb_tmp0, D1 InputLifecycle::NoWaitPop>
     //   RsubUnary<D0>{1.0f bits} -> D0 = 1 - cb_tmp0
     //   DivBinary<D1, D0, D0>    -> D0 = cb_tmp0 / (1 - cb_tmp0)
     //   Log<D0>                  -> D0 = log(D0)
@@ -41,7 +41,7 @@ void kernel_main() {
         compute_kernel_lib::CopyTile<
             cb_input,
             compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::Streaming,
+            compute_kernel_lib::InputLifecycle::Streaming,
             compute_kernel_lib::OperandKind::Scalar,
             compute_kernel_lib::CopyTileReconfig::None>{},
 #ifdef CLAMP
@@ -50,7 +50,7 @@ void kernel_main() {
         compute_kernel_lib::PackTile<
             cb_tmp0,
             compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::OutStreaming,
+            compute_kernel_lib::OutputLifecycle::Streaming,
             compute_kernel_lib::PackTileReconfig::None>{});
 
     compute_kernel_lib::eltwise_chain(
@@ -58,13 +58,13 @@ void kernel_main() {
         compute_kernel_lib::CopyTile<
             cb_tmp0,
             compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::HeldStream,
+            compute_kernel_lib::InputLifecycle::HeldStream,
             compute_kernel_lib::OperandKind::Scalar,
             compute_kernel_lib::CopyTileReconfig::None>{},
         compute_kernel_lib::CopyTile<
             cb_tmp0,
             compute_kernel_lib::Dst::D1,
-            compute_kernel_lib::NoWaitPop,
+            compute_kernel_lib::InputLifecycle::NoWaitPop,
             compute_kernel_lib::OperandKind::Scalar,
             compute_kernel_lib::CopyTileReconfig::None>{},
         compute_kernel_lib::RsubUnary<compute_kernel_lib::Dst::D0>{0x3F800000u},  // 1.0 - x
@@ -74,6 +74,6 @@ void kernel_main() {
         compute_kernel_lib::PackTile<
             cb_output,
             compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::OutStreaming,
+            compute_kernel_lib::OutputLifecycle::Streaming,
             compute_kernel_lib::PackTileReconfig::None>{});
 }

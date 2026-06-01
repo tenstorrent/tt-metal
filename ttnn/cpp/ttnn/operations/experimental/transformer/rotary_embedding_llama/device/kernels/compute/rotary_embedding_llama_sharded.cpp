@@ -68,8 +68,8 @@ void kernel_main() {
         cb_wait_front(rotated_in_interm_cb, Wt);
 
         // sin_interim = rotated * sin (bcast ROW).
-        // rotated Bulk + Block; sin HeldBulk + Block (pre-waited line 42, popped at 106).
-        // sin_interm OutBulk + Block. Reconfig Input + None (no explicit pack_reconfig).
+        // rotated InputLifecycle::Bulk + Block; sin InputLifecycle::HeldBulk + Block (pre-waited line 42, popped at
+        // 106). sin_interm OutputLifecycle::Bulk + Block. Reconfig Input + None (no explicit pack_reconfig).
         compute_kernel_lib::eltwise_chain(
             compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt),
             compute_kernel_lib::BinaryFpu<
@@ -78,15 +78,15 @@ void kernel_main() {
                 compute_kernel_lib::BinaryFpuOp::Mul,
                 compute_kernel_lib::BroadcastDim::Row,
                 compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::Bulk,
-                compute_kernel_lib::HeldBulk,
+                compute_kernel_lib::InputLifecycle::Bulk,
+                compute_kernel_lib::InputLifecycle::HeldBulk,
                 compute_kernel_lib::OperandKind::Block,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OperandKind::Block>{},
             compute_kernel_lib::PackTile<
                 sin_interm_cb,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutBulk,
+                compute_kernel_lib::OutputLifecycle::Bulk,
                 compute_kernel_lib::PackTileReconfig::None>{});
 
         // cos_interim = x * cos (bcast ROW). Same pattern as sin_interim.
@@ -98,18 +98,18 @@ void kernel_main() {
                 compute_kernel_lib::BinaryFpuOp::Mul,
                 compute_kernel_lib::BroadcastDim::Row,
                 compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::Bulk,
-                compute_kernel_lib::HeldBulk,
+                compute_kernel_lib::InputLifecycle::Bulk,
+                compute_kernel_lib::InputLifecycle::HeldBulk,
                 compute_kernel_lib::OperandKind::Block,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OperandKind::Block>{},
             compute_kernel_lib::PackTile<
                 cos_interm_cb,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutBulk,
+                compute_kernel_lib::OutputLifecycle::Bulk,
                 compute_kernel_lib::PackTileReconfig::None>{});
 
-        // out = cos_interim + sin_interim. Both Bulk + Block, out_cb OutBulk + Block.
+        // out = cos_interim + sin_interim. Both InputLifecycle::Bulk + Block, out_cb OutputLifecycle::Bulk + Block.
         compute_kernel_lib::eltwise_chain(
             compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt),
             compute_kernel_lib::BinaryFpu<
@@ -118,15 +118,15 @@ void kernel_main() {
                 compute_kernel_lib::BinaryFpuOp::Add,
                 compute_kernel_lib::BroadcastDim::None,
                 compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::Bulk,
-                compute_kernel_lib::Bulk,
+                compute_kernel_lib::InputLifecycle::Bulk,
+                compute_kernel_lib::InputLifecycle::Bulk,
                 compute_kernel_lib::OperandKind::Block,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OperandKind::Block>{},
             compute_kernel_lib::PackTile<
                 out_cb,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutBulk,
+                compute_kernel_lib::OutputLifecycle::Bulk,
                 compute_kernel_lib::PackTileReconfig::None>{});
     }
 

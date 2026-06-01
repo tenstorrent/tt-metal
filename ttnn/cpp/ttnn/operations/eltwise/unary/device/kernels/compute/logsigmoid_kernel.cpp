@@ -19,8 +19,8 @@ void kernel_main() {
     init_sfpu(cb_input, cb_output);
 
     // Logsigmoid(x) = -log(1 + exp(-x)) = -softplus(-x).
-    //   D0 = cb_input   (HeldStream — second copy reuses same tile)
-    //   D1 = -cb_input -> exp -> exp(-x) (NoWaitPop pops cb_input)
+    //   D0 = cb_input   (InputLifecycle::HeldStream — second copy reuses same tile)
+    //   D1 = -cb_input -> exp -> exp(-x) (InputLifecycle::NoWaitPop pops cb_input)
     //   Logsigmoid<D0, D1, D0> reads D0=x and D1=exp(-x), writes D0.
     //   pack_tile(D0) -> cb_output.
     compute_kernel_lib::eltwise_chain(
@@ -28,13 +28,13 @@ void kernel_main() {
         compute_kernel_lib::CopyTile<
             cb_input,
             compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::HeldStream,
+            compute_kernel_lib::InputLifecycle::HeldStream,
             compute_kernel_lib::OperandKind::Scalar,
             compute_kernel_lib::CopyTileReconfig::None>{},
         compute_kernel_lib::CopyTile<
             cb_input,
             compute_kernel_lib::Dst::D1,
-            compute_kernel_lib::NoWaitPop,
+            compute_kernel_lib::InputLifecycle::NoWaitPop,
             compute_kernel_lib::OperandKind::Scalar,
             compute_kernel_lib::CopyTileReconfig::None>{},
         compute_kernel_lib::Negative<compute_kernel_lib::Dst::D1>{},
@@ -45,6 +45,6 @@ void kernel_main() {
         compute_kernel_lib::PackTile<
             cb_output,
             compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::OutStreaming,
+            compute_kernel_lib::OutputLifecycle::Streaming,
             compute_kernel_lib::PackTileReconfig::None>{});
 }

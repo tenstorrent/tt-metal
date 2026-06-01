@@ -32,10 +32,10 @@ void kernel_main() {
     // Hardswish: x * hardsigmoid(x). Same shape as tanhshrink (27bcccc7fea)
     // with Tanh -> Hardsigmoid and Sub -> Mul.
     //
-    // FLOAT32: CopyTile(cb_input -> D0 HeldStream) + Hardsigmoid<D0>
-    //          + CopyTile(cb_input -> D1 NoWaitPop) + MulBinary<D0, D1, D0>
+    // FLOAT32: CopyTile(cb_input -> D0 InputLifecycle::HeldStream) + Hardsigmoid<D0>
+    //          + CopyTile(cb_input -> D1 InputLifecycle::NoWaitPop) + MulBinary<D0, D1, D0>
     //          + PackTile.
-    // FLOAT:   CopyTile(cb_input -> D0 HeldStream) + Hardsigmoid<D0>
+    // FLOAT:   CopyTile(cb_input -> D0 InputLifecycle::HeldStream) + Hardsigmoid<D0>
     //          + DestReuseBinary<cb_input, Mul, DEST_TO_SRCA> + PackTile.
     //          srca = DEST = hardsigmoid(x), srcb = cb_input,
     //          result = hardsigmoid(x) * cb_input.
@@ -50,17 +50,17 @@ void kernel_main() {
     //   the SFPU form is preferred under FP32_DEST_ACC because the FPU's
     //   binary_dest_reuse path loses precision on FP32 DEST inputs.
     //
-    // Both paths share the CopyTile(D0 HeldStream) + Hardsigmoid + PackTile
+    // Both paths share the CopyTile(D0 InputLifecycle::HeldStream) + Hardsigmoid + PackTile
     // outer shape. OptionalChainElement collapses the inactive branch to a
     // no-op tag (no wait, no pop, no compute emitted), so the chain "selects"
-    // between (CopyTile<D1, NoWaitPop> + MulBinary) and DestReuseBinary based
+    // between (CopyTile<D1, InputLifecycle::NoWaitPop> + MulBinary) and DestReuseBinary based
     // on kIsFloat32 / kIsFloat.
     compute_kernel_lib::eltwise_chain(
         num_tiles,
         compute_kernel_lib::CopyTile<
             cb_input,
             compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::HeldStream,
+            compute_kernel_lib::InputLifecycle::HeldStream,
             compute_kernel_lib::OperandKind::Scalar,
             compute_kernel_lib::CopyTileReconfig::None>{},
         compute_kernel_lib::Hardsigmoid<compute_kernel_lib::Dst::D0>{},
@@ -69,7 +69,7 @@ void kernel_main() {
             compute_kernel_lib::CopyTile<
                 cb_input,
                 compute_kernel_lib::Dst::D1,
-                compute_kernel_lib::NoWaitPop,
+                compute_kernel_lib::InputLifecycle::NoWaitPop,
                 compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::CopyTileReconfig::None>>{},
         compute_kernel_lib::OptionalChainElement<
@@ -85,11 +85,11 @@ void kernel_main() {
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::DestReuseReconfig::Input,
-                compute_kernel_lib::Streaming,
+                compute_kernel_lib::InputLifecycle::Streaming,
                 compute_kernel_lib::OperandKind::Scalar>>{},
         compute_kernel_lib::PackTile<
             cb_output,
             compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::OutStreaming,
+            compute_kernel_lib::OutputLifecycle::Streaming,
             compute_kernel_lib::PackTileReconfig::None>{});
 }

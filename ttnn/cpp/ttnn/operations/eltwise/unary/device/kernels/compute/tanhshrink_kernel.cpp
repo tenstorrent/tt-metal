@@ -30,7 +30,7 @@ void kernel_main() {
     // Tanhshrink: x - tanh(x).
     //
     // Common prefix: D0 = tanh(cb_input).
-    //   FLOAT32 tail: D1 = cb_input (NoWaitPop) ; SubBinary<D1, D0, D0> -> D0 = x - tanh(x).
+    //   FLOAT32 tail: D1 = cb_input (InputLifecycle::NoWaitPop) ; SubBinary<D1, D0, D0> -> D0 = x - tanh(x).
     //   FLOAT tail:   DestReuseBinary<cb_input, Sub, DEST_TO_SRCB> with srcb = DEST = tanh(x),
     //                 srca = cb_input from CB ; result = cb_input - tanh(cb_input) -> D0.
     //
@@ -42,7 +42,7 @@ void kernel_main() {
         compute_kernel_lib::CopyTile<
             cb_input,
             compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::HeldStream,
+            compute_kernel_lib::InputLifecycle::HeldStream,
             compute_kernel_lib::OperandKind::Scalar,
             compute_kernel_lib::CopyTileReconfig::None>{},
         compute_kernel_lib::Tanh<compute_kernel_lib::Dst::D0>{},
@@ -51,7 +51,7 @@ void kernel_main() {
             compute_kernel_lib::CopyTile<
                 cb_input,
                 compute_kernel_lib::Dst::D1,
-                compute_kernel_lib::NoWaitPop,
+                compute_kernel_lib::InputLifecycle::NoWaitPop,
                 compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::CopyTileReconfig::None>>{},
         compute_kernel_lib::OptionalChainElement<
@@ -67,11 +67,11 @@ void kernel_main() {
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::DestReuseReconfig::Input,
-                compute_kernel_lib::Streaming,
+                compute_kernel_lib::InputLifecycle::Streaming,
                 compute_kernel_lib::OperandKind::Scalar>>{},
         compute_kernel_lib::PackTile<
             cb_output,
             compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::OutStreaming,
+            compute_kernel_lib::OutputLifecycle::Streaming,
             compute_kernel_lib::PackTileReconfig::None>{});
 }

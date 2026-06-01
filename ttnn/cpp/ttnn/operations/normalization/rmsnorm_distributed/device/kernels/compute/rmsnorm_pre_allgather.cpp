@@ -51,10 +51,10 @@ void kernel_main() {
         // Fuse pre-add: cb_inp = cb_in0 + cb_res (no-op when !FUSE_PRE_ADD)
         pre_add::one_row<FUSE_PRE_ADD>(cb_in0, cb_res, cb_inp, Wt, blk);
 
-        // x**2 — same-CB FPU mul. cb_inp lifecycle: HeldCumulative (chain emits
+        // x**2 — same-CB FPU mul. cb_inp lifecycle: InputLifecycle::HeldCumulative (chain emits
         // cumulative `cb_wait_front(cb_inp, (i+1)*blk)` per blk-chunk; never pops).
         // The caller pops Wt from cb_inp after the reduce below. cb_x2 lifecycle:
-        // OutChunked (chain emits reserve_back(blk) + push_back(blk) per chunk;
+        // OutputLifecycle::Chunked (chain emits reserve_back(blk) + push_back(blk) per chunk;
         // pack writes absolute slots via Block index).
         compute_kernel_lib::eltwise_chain(
             squaring_shape,
@@ -64,15 +64,15 @@ void kernel_main() {
                 compute_kernel_lib::BinaryFpuOp::Mul,
                 compute_kernel_lib::BroadcastDim::None,
                 compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::HeldCumulative,
-                compute_kernel_lib::HeldCumulative,
+                compute_kernel_lib::InputLifecycle::HeldCumulative,
+                compute_kernel_lib::InputLifecycle::HeldCumulative,
                 compute_kernel_lib::OperandKind::Block,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OperandKind::Block>{},
             compute_kernel_lib::PackTile<
                 cb_x2,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutChunked,
+                compute_kernel_lib::OutputLifecycle::Chunked,
                 compute_kernel_lib::OperandKind::Block>{});
 
         // sum(x**2) — BulkWaitBulkPop: all Wt tiles already in CB.

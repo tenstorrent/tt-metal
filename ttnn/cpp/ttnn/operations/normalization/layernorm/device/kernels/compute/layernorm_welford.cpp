@@ -109,7 +109,7 @@ void kernel_main() {
             // Reconfig audit: original has explicit reconfig_data_format(cb_in, cb_inb) +
             // pack_reconfig_data_format(cb_x) + add_tiles_init ONCE outside the loop.
             // Chain emits per-call (fold elides after first iter). -> Input + Output.
-            // Lifecycles: cb_in/cb_inb Bulk + Block, cb_x OutBulk + Block.
+            // Lifecycles: cb_in/cb_inb InputLifecycle::Bulk + Block, cb_x OutputLifecycle::Bulk + Block.
             for (auto block : generic::blocks(Wt, blk)) {
                 compute_kernel_lib::eltwise_chain(
                     compute_kernel_lib::EltwiseShape::tiles(block.full_block_size(), /*block_size=*/blk),
@@ -119,15 +119,15 @@ void kernel_main() {
                         compute_kernel_lib::BinaryFpuOp::Add,
                         compute_kernel_lib::BroadcastDim::None,
                         compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                        compute_kernel_lib::Bulk,
-                        compute_kernel_lib::Bulk,
+                        compute_kernel_lib::InputLifecycle::Bulk,
+                        compute_kernel_lib::InputLifecycle::Bulk,
                         compute_kernel_lib::OperandKind::Block,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OperandKind::Block>{},
                     compute_kernel_lib::PackTile<
                         cb_x,
                         compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OutBulk,
+                        compute_kernel_lib::OutputLifecycle::Bulk,
                         compute_kernel_lib::PackTileReconfig::Output>{});
             }
             reconfig_data_format(cb_in, cb_x, cb_inb, cb_ex);
@@ -204,9 +204,10 @@ void kernel_main() {
         //   - No pack_reconfig in original -> PackTileReconfig::None.
         // Behavioral diff: original had cb_xmm.reserve_back(total_buffer_size) ONCE
         // upfront; chain BlockIter pack requires Upfront*/NoReserve* (chain.inl:361)
-        // so OutBulk emits per-block reserve+push. The total capacity is the same.
-        // cb_ex_obj.wait_front(1) outside the chain matches CallerManaged on the B side.
-        // Lifecycles: cb_x Bulk + Block, cb_ex CallerManaged + Scalar, cb_xmm OutBulk + Block.
+        // so OutputLifecycle::Bulk emits per-block reserve+push. The total capacity is the same.
+        // cb_ex_obj.wait_front(1) outside the chain matches InputLifecycle::CallerManaged on the B side.
+        // Lifecycles: cb_x InputLifecycle::Bulk + Block, cb_ex InputLifecycle::CallerManaged + Scalar, cb_xmm
+        // OutputLifecycle::Bulk + Block.
         cb_ex_obj.wait_front(onetile);  // pre-wait, never popped inside chain
         for (auto block : generic::blocks(Wt, blk)) {
             compute_kernel_lib::eltwise_chain(
@@ -217,15 +218,15 @@ void kernel_main() {
                     compute_kernel_lib::BinaryFpuOp::Sub,
                     compute_kernel_lib::BroadcastDim::Col,
                     compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::Bulk,
-                    compute_kernel_lib::CallerManaged,
+                    compute_kernel_lib::InputLifecycle::Bulk,
+                    compute_kernel_lib::InputLifecycle::CallerManaged,
                     compute_kernel_lib::OperandKind::Block,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OperandKind::Scalar>{},
                 compute_kernel_lib::PackTile<
                     cb_xmm,
                     compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutBulk,
+                    compute_kernel_lib::OutputLifecycle::Bulk,
                     compute_kernel_lib::PackTileReconfig::None>{});
         }
         cb_ex_obj.pop_front(1);
@@ -239,7 +240,8 @@ void kernel_main() {
         // PARTIAL migration: BinaryFpu(Add, cb_ex2, cb_eps) + Rsqrt + PackTile(cb_ex2pe).
         // Reconfig audit: add_tiles_init reconfigs srca/srcb regardless (matches Input);
         // no explicit pack_reconfig in original -> PackTileReconfig::None.
-        // cb_ex2: Streaming. cb_eps: CallerManaged. cb_ex2pe: OutStreaming.
+        // cb_ex2: InputLifecycle::Streaming. cb_eps: InputLifecycle::CallerManaged. cb_ex2pe:
+        // OutputLifecycle::Streaming.
         compute_kernel_lib::eltwise_chain(
             onetile,
             compute_kernel_lib::BinaryFpu<
@@ -248,8 +250,8 @@ void kernel_main() {
                 compute_kernel_lib::BinaryFpuOp::Add,
                 compute_kernel_lib::BroadcastDim::None,
                 compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::Streaming,
-                compute_kernel_lib::CallerManaged,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
                 compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OperandKind::Scalar>{},
@@ -260,17 +262,17 @@ void kernel_main() {
             compute_kernel_lib::PackTile<
                 cb_ex2pe,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutStreaming,
+                compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::None>{});
 
         // Remainder of the layernorm operation
         // norm(x) * gamma + beta, where norm(x) = (x - E[x]) / sqrt(E[(x-E[x])^2] + eps)
         //
         // No SFPU_OP_INIT_ACTIVATION macros in welford variant -> all three stages migrate
-        // cleanly into chains. cb_xmm: HeldBulk + Block + compute_kernel_lib::TileOffset::Set(block.start())
-        // (held from x-E[x] stage, popped at end of NCHt loop). cb_ex2pe: Caller-managed.
-        // cb_gamma / cb_beta: cumulative wait (block.start() + full_block_size); model as
-        // HeldBulk + Block + compute_kernel_lib::TileOffset::Set(block.start()) — chain emits
+        // cleanly into chains. cb_xmm: InputLifecycle::HeldBulk + Block +
+        // compute_kernel_lib::TileOffset::Set(block.start()) (held from x-E[x] stage, popped at end of NCHt loop).
+        // cb_ex2pe: Caller-managed. cb_gamma / cb_beta: cumulative wait (block.start() + full_block_size); model as
+        // InputLifecycle::HeldBulk + Block + compute_kernel_lib::TileOffset::Set(block.start()) — chain emits
         // cb_wait_front(cb, base + n_tiles) per call matching original.
         cb_ex2pe_obj.wait_front(onetile);
         for (auto block : generic::blocks(Wt, blk)) {
@@ -286,8 +288,8 @@ void kernel_main() {
                     compute_kernel_lib::BinaryFpuOp::Mul,
                     compute_kernel_lib::BroadcastDim::Col,
                     compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::HeldBulk,
-                    compute_kernel_lib::CallerManaged,
+                    compute_kernel_lib::InputLifecycle::HeldBulk,
+                    compute_kernel_lib::InputLifecycle::CallerManaged,
                     compute_kernel_lib::OperandKind::Block,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OperandKind::Scalar,
@@ -296,14 +298,14 @@ void kernel_main() {
                 compute_kernel_lib::PackTile<
                     cb_im_or_out,
                     compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutBulk,
+                    compute_kernel_lib::OutputLifecycle::Bulk,
                     compute_kernel_lib::PackTileReconfig::Output>{});
 
             if constexpr (do_gamma) {
                 // Stage 2: cb_outg = cb_fusion * cb_gamma (row bcast).
                 // cb_fusion was just pushed by stage 1 (intermediate when do_gamma|do_beta);
-                // Bulk wait+pop per block. cb_gamma: cumulative wait, never popped ->
-                // HeldBulk + Block + compute_kernel_lib::TileOffset::Set(block.start()).
+                // InputLifecycle::Bulk wait+pop per block. cb_gamma: cumulative wait, never popped ->
+                // InputLifecycle::HeldBulk + Block + compute_kernel_lib::TileOffset::Set(block.start()).
                 constexpr uint32_t cb_outg = do_beta ? cb_fusion : cb_out;
                 compute_kernel_lib::eltwise_chain(
                     compute_kernel_lib::EltwiseShape::tiles(block.full_block_size(), /*block_size=*/blk),
@@ -313,8 +315,8 @@ void kernel_main() {
                         compute_kernel_lib::BinaryFpuOp::Mul,
                         compute_kernel_lib::BroadcastDim::Row,
                         compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                        compute_kernel_lib::Bulk,
-                        compute_kernel_lib::HeldBulk,
+                        compute_kernel_lib::InputLifecycle::Bulk,
+                        compute_kernel_lib::InputLifecycle::HeldBulk,
                         compute_kernel_lib::OperandKind::Block,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OperandKind::Block,
@@ -323,7 +325,7 @@ void kernel_main() {
                     compute_kernel_lib::PackTile<
                         cb_outg,
                         compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OutBulk,
+                        compute_kernel_lib::OutputLifecycle::Bulk,
                         compute_kernel_lib::PackTileReconfig::Output>{});
             }
             if constexpr (do_beta) {
@@ -337,8 +339,8 @@ void kernel_main() {
                         compute_kernel_lib::BinaryFpuOp::Add,
                         compute_kernel_lib::BroadcastDim::Row,
                         compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                        compute_kernel_lib::Bulk,
-                        compute_kernel_lib::HeldBulk,
+                        compute_kernel_lib::InputLifecycle::Bulk,
+                        compute_kernel_lib::InputLifecycle::HeldBulk,
                         compute_kernel_lib::OperandKind::Block,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OperandKind::Block,
@@ -347,7 +349,7 @@ void kernel_main() {
                     compute_kernel_lib::PackTile<
                         cb_out,
                         compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OutBulk,
+                        compute_kernel_lib::OutputLifecycle::Bulk,
                         compute_kernel_lib::PackTileReconfig::Output>{});
             }
         }

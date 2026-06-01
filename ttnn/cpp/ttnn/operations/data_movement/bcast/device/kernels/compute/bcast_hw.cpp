@@ -23,15 +23,15 @@ void kernel_main() {
 
     // BCAST_SCALAR flips the cb_rhs lifecycle:
     //   defined  -> cb_rhs is held outside the entire loop with a single scalar
-    //               tile. External wait_front(1) here; chain's CallerManaged
+    //               tile. External wait_front(1) here; chain's InputLifecycle::CallerManaged
     //               emits neither wait nor pop. No pop at end of kernel (matches
     //               the original's never-popped held tile).
-    //   undefined -> cb_rhs is popped each iter (Streaming).
+    //   undefined -> cb_rhs is popped each iter (InputLifecycle::Streaming).
 #ifdef BCAST_SCALAR
     cb_wait_front(cb_rhs, onetile);
-    constexpr auto rhs_lifecycle = compute_kernel_lib::CallerManaged;
+    constexpr auto rhs_lifecycle = compute_kernel_lib::InputLifecycle::CallerManaged;
 #else
-    constexpr auto rhs_lifecycle = compute_kernel_lib::Streaming;
+    constexpr auto rhs_lifecycle = compute_kernel_lib::InputLifecycle::Streaming;
 #endif
 
     // Flat 1D chain over total tiles (B*Ht*Wt) — bcast_hw is tile-by-tile,
@@ -44,7 +44,7 @@ void kernel_main() {
             CHAIN_BCAST_OP,
             CHAIN_BCAST_DIM,
             compute_kernel_lib::BinaryDataFormatReconfig::None,
-            compute_kernel_lib::Streaming,
+            compute_kernel_lib::InputLifecycle::Streaming,
             rhs_lifecycle,
             compute_kernel_lib::OperandKind::Scalar,
             compute_kernel_lib::Dst::D0,
@@ -52,6 +52,6 @@ void kernel_main() {
         compute_kernel_lib::PackTile<
             cb_out,
             compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::OutStreaming,
+            compute_kernel_lib::OutputLifecycle::Streaming,
             compute_kernel_lib::PackTileReconfig::None>{});
 }

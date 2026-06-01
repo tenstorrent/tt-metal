@@ -396,9 +396,9 @@ void kernel_main() {
                 cb_in0.wait_front(out_block_hw_normal);
                 // x - E[x] — sub_bcast_scalar per-tile streaming over
                 // out_block_hw_actual tiles. Same shape as the Variance Calc
-                // sibling block below. cb_in0 Streaming + Scalar pops 1 per
-                // tile; cb_ex_global CallerManaged (external wait/pop bracket).
-                // cb_xmm via OutStreaming per-tile reserve+push; slack pops/
+                // sibling block below. cb_in0 InputLifecycle::Streaming + Scalar pops 1 per
+                // tile; cb_ex_global InputLifecycle::CallerManaged (external wait/pop bracket).
+                // cb_xmm via OutputLifecycle::Streaming per-tile reserve+push; slack pops/
                 // pushes handle the extra_out_block case.
                 //
                 // Reconfig: sub_tiles_bcast_scalar_init_short -> Input.
@@ -412,15 +412,15 @@ void kernel_main() {
                         compute_kernel_lib::BinaryFpuOp::Sub,
                         compute_kernel_lib::BroadcastDim::Scalar,
                         compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                        compute_kernel_lib::Streaming,
-                        compute_kernel_lib::CallerManaged,
+                        compute_kernel_lib::InputLifecycle::Streaming,
+                        compute_kernel_lib::InputLifecycle::CallerManaged,
                         compute_kernel_lib::OperandKind::Scalar,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OperandKind::Scalar>{},
                     compute_kernel_lib::PackTile<
                         cb_xmm_id,
                         compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OutStreaming,
+                        compute_kernel_lib::OutputLifecycle::Streaming,
                         compute_kernel_lib::PackTileReconfig::None>{});
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                     cb_in0.pop_front(out_block_hw_normal - out_block_hw_last);
@@ -524,9 +524,9 @@ void kernel_main() {
             //     -> BinaryDataFormatReconfig::Input.
             //   - No pack_reconfig_data_format in original -> PackTileReconfig::None.
             //   - rsqrt_tile_init<true> -> Legacy::On.
-            //   - cb_ex2pe.reserve_back + push_back present -> OutStreaming.
-            // Lifecycles: cb_ex2_global Streaming (wait+pop per iter); cb_eps held outside
-            // the chain via the unchanged cb_eps.wait_front(1) above -> CallerManaged.
+            //   - cb_ex2pe.reserve_back + push_back present -> OutputLifecycle::Streaming.
+            // Lifecycles: cb_ex2_global InputLifecycle::Streaming (wait+pop per iter); cb_eps held outside
+            // the chain via the unchanged cb_eps.wait_front(1) above -> InputLifecycle::CallerManaged.
             cb_eps.wait_front(1);
             compute_kernel_lib::eltwise_chain(
                 1,
@@ -536,8 +536,8 @@ void kernel_main() {
                     compute_kernel_lib::BinaryFpuOp::Add,
                     compute_kernel_lib::BroadcastDim::None,
                     compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::Streaming,
-                    compute_kernel_lib::CallerManaged,
+                    compute_kernel_lib::InputLifecycle::Streaming,
+                    compute_kernel_lib::InputLifecycle::CallerManaged,
                     compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OperandKind::Scalar>{},
@@ -548,7 +548,7 @@ void kernel_main() {
                 compute_kernel_lib::PackTile<
                     cb_ex2pe_id,
                     compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutStreaming,
+                    compute_kernel_lib::OutputLifecycle::Streaming,
                     compute_kernel_lib::PackTileReconfig::None>{});
             // End Variance Calc
 
@@ -575,7 +575,7 @@ void kernel_main() {
                 //
                 // Original quirks preserved:
                 //   - cb_xmm.reserve_back(out_block_hw_normal) upfront + push_back at end
-                //     becomes per-tile reserve+push (chain OutStreaming). For non-extra
+                //     becomes per-tile reserve+push (chain OutputLifecycle::Streaming). For non-extra
                 //     blocks (actual==normal) this matches exactly. For the extra-last
                 //     block, the slack (normal - actual) is reserved+pushed after the
                 //     chain so downstream wait_front(out_block_hw_normal) succeeds.
@@ -584,7 +584,7 @@ void kernel_main() {
                 //
                 // Reconfig: sub_tiles_bcast_scalar_init_short -> BinaryDataFormatReconfig::Input.
                 // Original pack_tile (no _with_dt / no pack_reconfig) -> PackTileReconfig::None.
-                // cb_ex_global held by external wait_front(1) / pop_front(1) -> CallerManaged.
+                // cb_ex_global held by external wait_front(1) / pop_front(1) -> InputLifecycle::CallerManaged.
                 cb_ex_global.wait_front(1);
                 compute_kernel_lib::eltwise_chain(
                     out_block_hw_actual,
@@ -594,15 +594,15 @@ void kernel_main() {
                         compute_kernel_lib::BinaryFpuOp::Sub,
                         compute_kernel_lib::BroadcastDim::Scalar,
                         compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                        compute_kernel_lib::Streaming,
-                        compute_kernel_lib::CallerManaged,
+                        compute_kernel_lib::InputLifecycle::Streaming,
+                        compute_kernel_lib::InputLifecycle::CallerManaged,
                         compute_kernel_lib::OperandKind::Scalar,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OperandKind::Scalar>{},
                     compute_kernel_lib::PackTile<
                         cb_xmm_id,
                         compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OutStreaming,
+                        compute_kernel_lib::OutputLifecycle::Streaming,
                         compute_kernel_lib::PackTileReconfig::None>{});
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                     cb_in0.pop_front(out_block_hw_normal - out_block_hw_last);

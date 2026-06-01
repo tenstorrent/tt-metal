@@ -148,8 +148,8 @@ void kernel_main() {
         // explicit reconfigs above — same effect, but the chain owns the lifecycle).
         // Net: same correctness; slightly different MOP placement.
         //
-        // Per-block bulk: A/B Bulk + OperandKind::Block (chain walks 0..full_block_size-1
-        // per call). cb_x: OutBulk + Block. BlockSize template = block_size so DEST lanes
+        // Per-block bulk: A/B InputLifecycle::Bulk + OperandKind::Block (chain walks 0..full_block_size-1
+        // per call). cb_x: OutputLifecycle::Bulk + Block. BlockSize template = block_size so DEST lanes
         // process all tiles in one DEST window — matches the original's `for (auto i : block.local())`
         // inside one ACQ/REL.
         for (auto block : generic::blocks(Wt, block_size)) {
@@ -161,15 +161,15 @@ void kernel_main() {
                     compute_kernel_lib::BinaryFpuOp::Add,
                     compute_kernel_lib::BroadcastDim::None,
                     compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::Bulk,
-                    compute_kernel_lib::Bulk,
+                    compute_kernel_lib::InputLifecycle::Bulk,
+                    compute_kernel_lib::InputLifecycle::Bulk,
                     compute_kernel_lib::OperandKind::Block,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OperandKind::Block>{},
                 compute_kernel_lib::PackTile<
                     cb_x,
                     compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutBulk,
+                    compute_kernel_lib::OutputLifecycle::Bulk,
                     compute_kernel_lib::PackTileReconfig::Output>{});
         }
 #ifndef RMSNORM
@@ -206,8 +206,8 @@ void kernel_main() {
         //   - Original: 1 upfront cb_xmm.reserve_back(total) + N per-block push.
         //   - Chain:   N per-block cb_xmm.reserve_back(full_block_size) + N per-block push.
         //     Chain BlockIter pack requires Upfront* / NoReserve* policy (chain.inl:361);
-        //     OutDeferredReserve / OutStreaming are static_assert'd out. OutBulk per call
-        //     emits both. The upfront reserve(total) is dropped — per-block reserves
+        //     OutputLifecycle::DeferredReserve / OutputLifecycle::Streaming are static_assert'd out.
+        //     OutputLifecycle::Bulk per call emits both. The upfront reserve(total) is dropped — per-block reserves
         //     cover the same capacity progressively. All reserves are capacity-checks;
         //     since the producer/consumer balance is unchanged, behavior is identical.
         for (auto block : generic::blocks(Wt, block_size)) {
@@ -219,15 +219,15 @@ void kernel_main() {
                     compute_kernel_lib::BinaryFpuOp::Sub,
                     compute_kernel_lib::BroadcastDim::Col,
                     compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::Bulk,
-                    compute_kernel_lib::CallerManaged,
+                    compute_kernel_lib::InputLifecycle::Bulk,
+                    compute_kernel_lib::InputLifecycle::CallerManaged,
                     compute_kernel_lib::OperandKind::Block,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OperandKind::Scalar>{},
                 compute_kernel_lib::PackTile<
                     cb_xmm,
                     compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutBulk,
+                    compute_kernel_lib::OutputLifecycle::Bulk,
                     compute_kernel_lib::PackTileReconfig::None>{});
         }
         cb_ex_obj.pop_front(1);
@@ -255,13 +255,14 @@ void kernel_main() {
          * must match A's index per static_assert -> Block + compute_kernel_lib::TileOffset::Set(block.start()).
          *
          * cb_xmm lifecycle: cumulative wait (each block waits `start + size` tiles),
-         * never popped here. Chain expresses this as HeldBulk + compute_kernel_lib::TileOffset::Set(start):
-         * the chain emits `cb_wait_front(cb_xmm, start + n_tiles)` per call (HeldBulk
-         * inflates the wait count by the runtime base — see chain.hpp §1d) and no pop.
-         * HeldCumulative isn't legal with compute_kernel_lib::TileOffset::Set (legal-with-base list at
-         * chain.hpp:553 is Bulk/HeldBulk/DeferredPop/BulkDrain/CallerManaged) and would
-         * also under-wait — HeldBulk is the correct policy match.
-         * cb_xmm2: reserve+push block.full_block_size per call -> OutBulk + Block.
+         * never popped here. Chain expresses this as InputLifecycle::HeldBulk +
+         * compute_kernel_lib::TileOffset::Set(start): the chain emits `cb_wait_front(cb_xmm, start + n_tiles)` per call
+         * (InputLifecycle::HeldBulk inflates the wait count by the runtime base — see chain.hpp §1d) and no pop.
+         * InputLifecycle::HeldCumulative isn't legal with compute_kernel_lib::TileOffset::Set (legal-with-base list at
+         * chain.hpp:553 is
+         * InputLifecycle::Bulk/InputLifecycle::HeldBulk/InputLifecycle::DeferredPop/InputLifecycle::BulkDrain/InputLifecycle::CallerManaged)
+         * and would also under-wait — InputLifecycle::HeldBulk is the correct policy match. cb_xmm2: reserve+push
+         * block.full_block_size per call -> OutputLifecycle::Bulk + Block.
          *
          * NOTE: the #ifdef RMSNORM branch waits block.full_block_size vs the
          * non-RMSNORM branch's block.size(). The chain processes n_tiles tiles
@@ -277,8 +278,8 @@ void kernel_main() {
                     compute_kernel_lib::BinaryFpuOp::Mul,
                     compute_kernel_lib::BroadcastDim::None,
                     compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::HeldBulk,
-                    compute_kernel_lib::HeldBulk,
+                    compute_kernel_lib::InputLifecycle::HeldBulk,
+                    compute_kernel_lib::InputLifecycle::HeldBulk,
                     compute_kernel_lib::OperandKind::Block,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OperandKind::Block,
@@ -287,7 +288,7 @@ void kernel_main() {
                 compute_kernel_lib::PackTile<
                     cb_xmm2,
                     compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutBulk,
+                    compute_kernel_lib::OutputLifecycle::Bulk,
                     compute_kernel_lib::PackTileReconfig::None>{});
         }
 #if defined RMSNORM and not defined FUSED_PRE_ADD
@@ -302,8 +303,8 @@ void kernel_main() {
         // PARTIAL migration: BinaryFpu(Add, cb_ex2, cb_eps) + Rsqrt + PackTile(cb_ex2pe).
         // Original: explicit reconfig_data_format(cb_ex2, cb_eps) + add_tiles_init reconfigs
         // srca/srcb; pack_reconfig_data_format(cb_ex2pe) explicitly reconfigs pack.
-        // cb_ex2: Streaming (chain owns wait/pop). cb_eps: CallerManaged (waited once
-        // outside the loop, never popped). cb_ex2pe: OutStreaming (chain owns reserve/push).
+        // cb_ex2: InputLifecycle::Streaming (chain owns wait/pop). cb_eps: InputLifecycle::CallerManaged (waited once
+        // outside the loop, never popped). cb_ex2pe: OutputLifecycle::Streaming (chain owns reserve/push).
         compute_kernel_lib::eltwise_chain(
             1,
             compute_kernel_lib::BinaryFpu<
@@ -312,8 +313,8 @@ void kernel_main() {
                 compute_kernel_lib::BinaryFpuOp::Add,
                 compute_kernel_lib::BroadcastDim::None,
                 compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::Streaming,
-                compute_kernel_lib::CallerManaged,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
                 compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OperandKind::Scalar>{},
@@ -324,7 +325,7 @@ void kernel_main() {
             compute_kernel_lib::PackTile<
                 cb_ex2pe,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutStreaming,
+                compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 
         // (x-E[x]) / sqrt(Var[x] + eps) * gamma + beta

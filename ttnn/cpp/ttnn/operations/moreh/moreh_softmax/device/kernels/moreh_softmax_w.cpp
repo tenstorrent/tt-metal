@@ -104,9 +104,9 @@ void kernel_main() {
 
         // compute x - max(x)  — COL bcast: cb_max is 1 tile broadcast across Wt cols.
         // Reconfig: sub_bcast_cols_init_short_with_dt -> Input. pack_tile_with_dt -> Output.
-        // Lifecycles: cb_in0 Bulk + Block; cb_max Bulk + Scalar (chain emits
+        // Lifecycles: cb_in0 InputLifecycle::Bulk + Block; cb_max InputLifecycle::Bulk + Scalar (chain emits
         //   wait/pop(1) via window_1d<Scalar> — commit 14a5a61e462 made the
-        //   OperandKind drive the wait count); cb_x_m_max OutBulk + Block.
+        //   OperandKind drive the wait count); cb_x_m_max OutputLifecycle::Bulk + Block.
         compute_kernel_lib::eltwise_chain(
             Wt,
             compute_kernel_lib::BinaryFpu<
@@ -115,20 +115,20 @@ void kernel_main() {
                 compute_kernel_lib::BinaryFpuOp::Sub,
                 compute_kernel_lib::BroadcastDim::Col,
                 compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::Bulk,
-                compute_kernel_lib::Bulk,
+                compute_kernel_lib::InputLifecycle::Bulk,
+                compute_kernel_lib::InputLifecycle::Bulk,
                 compute_kernel_lib::OperandKind::Block,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OperandKind::Scalar>{},
             compute_kernel_lib::PackTile<
                 cb_x_m_max,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutBulk,
+                compute_kernel_lib::OutputLifecycle::Bulk,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 
         // compute exp(x - max(x)) — split into 2 chains, same pattern as
         // moreh_softmax_h.cpp. cb_x_m_max held outside; cb_mask held outside;
-        // cb_exps OutStreaming per-tile.
+        // cb_exps OutputLifecycle::Streaming per-tile.
         //
         // Reconfig: copy_tile_init_with_dt -> Input. pack_tile_with_dt -> Output.
         cb_x_m_max_obj.wait_front(Wt);
@@ -137,7 +137,7 @@ void kernel_main() {
             compute_kernel_lib::CopyTile<
                 cb_x_m_max,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::CallerManaged,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
                 compute_kernel_lib::OperandKind::Block,
                 compute_kernel_lib::CopyTileReconfig::Input>{},
 #ifndef SOFTMAX
@@ -150,7 +150,7 @@ void kernel_main() {
             compute_kernel_lib::PackTile<
                 cb_exps,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutStreaming,
+                compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 
         compute_kernel_lib::eltwise_chain(
@@ -158,7 +158,7 @@ void kernel_main() {
             compute_kernel_lib::CopyTile<
                 cb_x_m_max,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::CallerManaged,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
                 compute_kernel_lib::OperandKind::Block,
                 compute_kernel_lib::CopyTileReconfig::Input,
                 compute_kernel_lib::TileOffset::Set>{Wt - 1},
@@ -172,14 +172,14 @@ void kernel_main() {
             compute_kernel_lib::CopyTile<
                 cb_mask,
                 compute_kernel_lib::Dst::D1,
-                compute_kernel_lib::CallerManaged,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
                 compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::CopyTileReconfig::Input>{},
             compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
             compute_kernel_lib::PackTile<
                 cb_exps,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutStreaming,
+                compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 
 #ifdef LOG
@@ -215,10 +215,10 @@ void kernel_main() {
         // compute final result — COL bcast on cb_recipsumexps (1 tile).
         // LOG: out = (x-max) - log(sum_exp). cb_x_m_max chain-read (LOG owns it).
         // !LOG: out = exp(x-max) / sum_exp. cb_exps chain-read; cb_x_m_max held
-        //   externally (chain doesn't touch it — uses CallerManaged-style outer
+        //   externally (chain doesn't touch it — uses InputLifecycle::CallerManaged-style outer
         //   wait/pop in !LOG path).
         // cb_x_m_max wait/pop wrap the chain symmetrically; chain uses
-        // CallerManaged + Scalar in LOG path to avoid double-pop.
+        // InputLifecycle::CallerManaged + Scalar in LOG path to avoid double-pop.
         // Reconfig: *_bcast_cols_init_short_with_dt + pack_tile_with_dt
         // -> Input + Output.
         cb_x_m_max_obj.wait_front(Wt);
@@ -231,15 +231,15 @@ void kernel_main() {
                 compute_kernel_lib::BinaryFpuOp::Sub,
                 compute_kernel_lib::BroadcastDim::Col,
                 compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::CallerManaged,
-                compute_kernel_lib::Bulk,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::InputLifecycle::Bulk,
                 compute_kernel_lib::OperandKind::Block,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OperandKind::Scalar>{},
             compute_kernel_lib::PackTile<
                 cb_out0,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutBulk,
+                compute_kernel_lib::OutputLifecycle::Bulk,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 #else
         compute_kernel_lib::eltwise_chain(
@@ -250,15 +250,15 @@ void kernel_main() {
                 compute_kernel_lib::BinaryFpuOp::Mul,
                 compute_kernel_lib::BroadcastDim::Col,
                 compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::Bulk,
-                compute_kernel_lib::Bulk,
+                compute_kernel_lib::InputLifecycle::Bulk,
+                compute_kernel_lib::InputLifecycle::Bulk,
                 compute_kernel_lib::OperandKind::Block,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OperandKind::Scalar>{},
             compute_kernel_lib::PackTile<
                 cb_out0,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutBulk,
+                compute_kernel_lib::OutputLifecycle::Bulk,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 #endif
         cb_x_m_max_obj.pop_front(Wt);

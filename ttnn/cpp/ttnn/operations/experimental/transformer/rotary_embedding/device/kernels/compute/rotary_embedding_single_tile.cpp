@@ -79,13 +79,13 @@ void kernel_main() {
     constexpr uint32_t updated_sin_cb = retilized_sin_cb;
     // DECODE: sin/cos held across all iters, bcast across rows.
     constexpr auto trig_bcast = BroadcastDim::Row;
-    constexpr auto trig_lifecycle = HeldStream;
+    constexpr auto trig_lifecycle = InputLifecycle::HeldStream;
 #else
     constexpr uint32_t updated_cos_cb = cos_cb;
     constexpr uint32_t updated_sin_cb = sin_cb;
     // Non-DECODE: sin/cos streamed per-iter, full-tile mul.
     constexpr auto trig_bcast = BroadcastDim::None;
-    constexpr auto trig_lifecycle = Streaming;
+    constexpr auto trig_lifecycle = InputLifecycle::Streaming;
 #endif
 
     cb_wait_front(trans_mat_cb, onetile);
@@ -117,12 +117,12 @@ void kernel_main() {
                 BinaryFpuOp::Mul,
                 trig_bcast,
                 BinaryDataFormatReconfig::Input,
-                Streaming,
+                InputLifecycle::Streaming,
                 trig_lifecycle,
                 OperandKind::Scalar,
                 Dst::D0,
                 OperandKind::Scalar>{},
-            PackTile<sin_interm_cb, Dst::D0, OutStreaming, PackTileReconfig::Output>{});
+            PackTile<sin_interm_cb, Dst::D0, OutputLifecycle::Streaming, PackTileReconfig::Output>{});
 
         // cos_interim = in * cos
         eltwise_chain(
@@ -133,12 +133,12 @@ void kernel_main() {
                 BinaryFpuOp::Mul,
                 trig_bcast,
                 BinaryDataFormatReconfig::Input,
-                Streaming,
+                InputLifecycle::Streaming,
                 trig_lifecycle,
                 OperandKind::Scalar,
                 Dst::D0,
                 OperandKind::Scalar>{},
-            PackTile<cos_interm_cb, Dst::D0, OutStreaming, PackTileReconfig::Output>{});
+            PackTile<cos_interm_cb, Dst::D0, OutputLifecycle::Streaming, PackTileReconfig::Output>{});
 
         // out = cos_interim + sin_interim
         eltwise_chain(
@@ -149,11 +149,11 @@ void kernel_main() {
                 BinaryFpuOp::Add,
                 BroadcastDim::None,
                 BinaryDataFormatReconfig::Input,
-                Streaming,
-                Streaming,
+                InputLifecycle::Streaming,
+                InputLifecycle::Streaming,
                 OperandKind::Scalar,
                 Dst::D0,
                 OperandKind::Scalar>{},
-            PackTile<out_cb, Dst::D0, OutStreaming, PackTileReconfig::Output>{});
+            PackTile<out_cb, Dst::D0, OutputLifecycle::Streaming, PackTileReconfig::Output>{});
     }
 }

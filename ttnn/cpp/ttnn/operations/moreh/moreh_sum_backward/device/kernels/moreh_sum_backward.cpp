@@ -27,8 +27,8 @@ void kernel_main() {
     // cb_out0 = add_bcast<dim>(cb_in1, cb_in0)  (or plain copy if no bcast).
     // Reconfig: original uses *_init_short (NOT _with_dt) and plain pack_tile,
     // relying on startup binary_op_init_common formats -> None + None.
-    // cb_in1 CallerManaged + Scalar (held outside loop). cb_in0 Streaming + Scalar.
-    // cb_out0 OutStreaming + Scalar.
+    // cb_in1 InputLifecycle::CallerManaged + Scalar (held outside loop). cb_in0 InputLifecycle::Streaming + Scalar.
+    // cb_out0 OutputLifecycle::Streaming + Scalar.
     //
     // The four (ht_need_bcast × wt_need_bcast) cases collapse into one chain via two
     // mutually-exclusive OptionalChainElement gates: the BinaryFpu<Add, bcast_dim>
@@ -51,8 +51,8 @@ void kernel_main() {
                     compute_kernel_lib::BinaryFpuOp::Add,
                     bcast_dim,
                     compute_kernel_lib::BinaryDataFormatReconfig::None,
-                    compute_kernel_lib::CallerManaged,
-                    compute_kernel_lib::Streaming,
+                    compute_kernel_lib::InputLifecycle::CallerManaged,
+                    compute_kernel_lib::InputLifecycle::Streaming,
                     compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OperandKind::Scalar>>{},
@@ -61,13 +61,13 @@ void kernel_main() {
                 compute_kernel_lib::CopyTile<
                     cb_in0,
                     compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::Streaming,
+                    compute_kernel_lib::InputLifecycle::Streaming,
                     compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::CopyTileReconfig::None>>{},
             compute_kernel_lib::PackTile<
                 cb_out0,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutStreaming,
+                compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::None>{});
     }
     cb_in1_obj.pop_front(onetile);

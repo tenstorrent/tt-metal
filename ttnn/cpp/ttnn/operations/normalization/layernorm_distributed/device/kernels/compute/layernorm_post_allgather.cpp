@@ -166,7 +166,7 @@ void kernel_main() {
         /*
          * E[x]**2  — same-CB Mul at index 1.
          * cb_stats_reduced: pre-waited for stats_tile_stride at line 171, held
-         *   (popped at line 229). HeldBulk + Scalar + compute_kernel_lib::TileOffset::Set.
+         *   (popped at line 229). InputLifecycle::HeldBulk + Scalar + compute_kernel_lib::TileOffset::Set.
          * Same-CB constraint: AIndex==BIndex (both Scalar + same TileBase).
          * Reconfig audit: explicit reconfig_data_format(cb_stats_reduced, cb_stats_reduced)
          *   + mul_tiles_init reconfigs (idempotent) -> Input. Explicit
@@ -181,8 +181,8 @@ void kernel_main() {
                 compute_kernel_lib::BinaryFpuOp::Mul,
                 compute_kernel_lib::BroadcastDim::None,
                 compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::HeldBulk,
-                compute_kernel_lib::HeldBulk,
+                compute_kernel_lib::InputLifecycle::HeldBulk,
+                compute_kernel_lib::InputLifecycle::HeldBulk,
                 compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OperandKind::Scalar,
@@ -191,14 +191,14 @@ void kernel_main() {
             compute_kernel_lib::PackTile<
                 cb_mean_squared,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutBulk,
+                compute_kernel_lib::OutputLifecycle::Bulk,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 
         /*
          * E[x**2] - E[x]**2  — sub at index 0.
-         * cb_stats_reduced: HeldBulk + Scalar (no TileBase, reads index 0).
-         * cb_mean_squared: Bulk + Scalar (wait at 187 / pop at 193 in original — chain owns).
-         * cb_var: OutBulk + Scalar (reserve + push 1).
+         * cb_stats_reduced: InputLifecycle::HeldBulk + Scalar (no TileBase, reads index 0).
+         * cb_mean_squared: InputLifecycle::Bulk + Scalar (wait at 187 / pop at 193 in original — chain owns).
+         * cb_var: OutputLifecycle::Bulk + Scalar (reserve + push 1).
          * Reconfig: explicit reconfig + sub_tiles_init -> Input. Explicit pack_reconfig -> Output.
          */
         compute_kernel_lib::eltwise_chain(
@@ -209,21 +209,22 @@ void kernel_main() {
                 compute_kernel_lib::BinaryFpuOp::Sub,
                 compute_kernel_lib::BroadcastDim::None,
                 compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::HeldBulk,
-                compute_kernel_lib::Bulk,
+                compute_kernel_lib::InputLifecycle::HeldBulk,
+                compute_kernel_lib::InputLifecycle::Bulk,
                 compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OperandKind::Scalar>{},
             compute_kernel_lib::PackTile<
                 cb_var,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutBulk,
+                compute_kernel_lib::OutputLifecycle::Bulk,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 
         /*
          * 1/sqrt(var + eps)  — same shape as layernorm.cpp Var+eps prologue.
-         * cb_var Streaming, cb_eps CallerManaged, cb_recip_sqrt_var OutStreaming.
-         * Reconfig: explicit reconfig + add_tiles_init -> Input. Explicit pack_reconfig -> Output.
+         * cb_var InputLifecycle::Streaming, cb_eps InputLifecycle::CallerManaged, cb_recip_sqrt_var
+         * OutputLifecycle::Streaming. Reconfig: explicit reconfig + add_tiles_init -> Input. Explicit pack_reconfig ->
+         * Output.
          */
         compute_kernel_lib::eltwise_chain(
             1,
@@ -233,8 +234,8 @@ void kernel_main() {
                 compute_kernel_lib::BinaryFpuOp::Add,
                 compute_kernel_lib::BroadcastDim::None,
                 compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::Streaming,
-                compute_kernel_lib::CallerManaged,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
                 compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OperandKind::Scalar>{},
@@ -245,7 +246,7 @@ void kernel_main() {
             compute_kernel_lib::PackTile<
                 cb_recip_sqrt_var,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutStreaming,
+                compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 
         if constexpr (do_gamma && do_beta) {

@@ -119,9 +119,9 @@ void kernel_main() {
 #if FUSED_SCALE_MASK
         // apply fused scale [*= 1/sqrt(...)] — cb_in0 * cb_fused_scale (scalar
         // bcast) -> cb_scale_mask. Per-ndst DEST batching collapsed to per-tile
-        // streaming via chain: cb_in0 Streaming + Scalar (wait+pop 1 per iter),
-        // cb_fused_scale CallerManaged (held outside via line 112 wait_front(1)),
-        // cb_scale_mask OutStreaming (per-tile reserve+push).
+        // streaming via chain: cb_in0 InputLifecycle::Streaming + Scalar (wait+pop 1 per iter),
+        // cb_fused_scale InputLifecycle::CallerManaged (held outside via line 112 wait_front(1)),
+        // cb_scale_mask OutputLifecycle::Streaming (per-tile reserve+push).
         //
         // Reconfig: reconfig_data_format(cb_in0, cb_fused_scale) +
         // mul_tiles_bcast_scalar_init_short -> BinaryDataFormatReconfig::Input.
@@ -134,15 +134,15 @@ void kernel_main() {
                 compute_kernel_lib::BinaryFpuOp::Mul,
                 compute_kernel_lib::BroadcastDim::Scalar,
                 compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::Streaming,
-                compute_kernel_lib::CallerManaged,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
                 compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OperandKind::Scalar>{},
             compute_kernel_lib::PackTile<
                 cb_scale_mask,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutStreaming,
+                compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::Output>{});
         reconfig_data_format(cb_scale_mask, cb_fused_attn);
 
@@ -222,9 +222,9 @@ void kernel_main() {
             //   A: Wt-1 iters — CopyTile(cb_in0) + [Exp if !NUMERIC_STABLE] + PackTile(cb_x)
             //   B: 1 iter — BinaryFpu(cb_in0, cb_mask_padded, Add, Row) +
             //               [Exp if !NUMERIC_STABLE] + PackTile(cb_x)
-            // cb_mask_padded held outside via wait_front(1); CallerManaged.
-            // cb_in0 Streaming + Scalar (per-tile wait+pop, total Wt).
-            // cb_x OutStreaming.
+            // cb_mask_padded held outside via wait_front(1); InputLifecycle::CallerManaged.
+            // cb_in0 InputLifecycle::Streaming + Scalar (per-tile wait+pop, total Wt).
+            // cb_x OutputLifecycle::Streaming.
             //
             // Reconfig: copy_tile_init / add_bcast_rows_init_short
             // reconfig srca/srcb -> Input.
@@ -234,7 +234,7 @@ void kernel_main() {
                 compute_kernel_lib::CopyTile<
                     cb_in0,
                     compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::Streaming,
+                    compute_kernel_lib::InputLifecycle::Streaming,
                     compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::CopyTileReconfig::Input>{},
 #ifndef NUMERIC_STABLE
@@ -246,7 +246,7 @@ void kernel_main() {
                 compute_kernel_lib::PackTile<
                     cb_x,
                     compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutStreaming,
+                    compute_kernel_lib::OutputLifecycle::Streaming,
                     compute_kernel_lib::PackTileReconfig::None>{});
 
             compute_kernel_lib::eltwise_chain(
@@ -257,8 +257,8 @@ void kernel_main() {
                     compute_kernel_lib::BinaryFpuOp::Add,
                     compute_kernel_lib::BroadcastDim::Row,
                     compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::Streaming,
-                    compute_kernel_lib::CallerManaged,
+                    compute_kernel_lib::InputLifecycle::Streaming,
+                    compute_kernel_lib::InputLifecycle::CallerManaged,
                     compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OperandKind::Scalar>{},
@@ -271,7 +271,7 @@ void kernel_main() {
                 compute_kernel_lib::PackTile<
                     cb_x,
                     compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutStreaming,
+                    compute_kernel_lib::OutputLifecycle::Streaming,
                     compute_kernel_lib::PackTileReconfig::None>{});
 
 // add numeric_stable
@@ -300,7 +300,7 @@ void kernel_main() {
                 compute_kernel_lib::CopyTile<
                     cb_in0,
                     compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::Streaming,
+                    compute_kernel_lib::InputLifecycle::Streaming,
                     compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::CopyTileReconfig::Input>{},
                 compute_kernel_lib::Exp<
@@ -310,7 +310,7 @@ void kernel_main() {
                 compute_kernel_lib::PackTile<
                     cb_exps,
                     compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutStreaming,
+                    compute_kernel_lib::OutputLifecycle::Streaming,
                     compute_kernel_lib::PackTileReconfig::None>{});
 #endif
         }
@@ -334,14 +334,14 @@ void kernel_main() {
 
         // multiply by 1/sum(exp(x)) — bcast COL on the held cb_recipsumexps.
         // Original cumulative-waited Wt tiles in cb_exps upfront + did 1 final
-        // pop_front(Wt). Chain Streaming + Scalar emits per-tile wait_front(1)
+        // pop_front(Wt). Chain InputLifecycle::Streaming + Scalar emits per-tile wait_front(1)
         // + pop_front(1) — same net effect over Wt iters since reader pushed
         // all Wt tiles upfront.
         //
         // Reconfig: reconfig_data_format(cb_exps, cb_recipsumexps) +
         // mul_bcast_cols_init_short reconfig srca/srcb -> Input.
         // pack_reconfig_data_format(cb_out0) -> PackTileReconfig::Output.
-        // cb_recipsumexps held outside (wait/pop bracket the chain) -> CallerManaged.
+        // cb_recipsumexps held outside (wait/pop bracket the chain) -> InputLifecycle::CallerManaged.
         compute_kernel_lib::eltwise_chain(
             Wt,
             compute_kernel_lib::BinaryFpu<
@@ -350,15 +350,15 @@ void kernel_main() {
                 compute_kernel_lib::BinaryFpuOp::Mul,
                 compute_kernel_lib::BroadcastDim::Col,
                 compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::Streaming,
-                compute_kernel_lib::CallerManaged,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
                 compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OperandKind::Scalar>{},
             compute_kernel_lib::PackTile<
                 cb_out0,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutStreaming,
+                compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::Output>{});
         cb_recipsumexps_obj.pop_front(1);
     }  // NCHt loop

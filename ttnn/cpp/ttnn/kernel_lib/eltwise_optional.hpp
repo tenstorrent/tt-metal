@@ -84,8 +84,8 @@ struct OptionalChainElement<false, Inner>
     static constexpr uint32_t cb_a_id() { return 0; }
     static constexpr uint32_t cb_b_id() { return 0; }
     static constexpr uint32_t pack_cb_id() { return 0; }
-    static constexpr InputLifecycle a_policy() { return CallerManaged; }
-    static constexpr InputLifecycle b_policy() { return CallerManaged; }
+    static constexpr InputLifecycle a_policy() { return InputLifecycle::CallerManaged; }
+    static constexpr InputLifecycle b_policy() { return InputLifecycle::CallerManaged; }
 
     // Variadic ctor swallows any args the caller would pass to the inner element
     // so kernel-side construction `OptionalChainElement<false, Inner>{...}` doesn't

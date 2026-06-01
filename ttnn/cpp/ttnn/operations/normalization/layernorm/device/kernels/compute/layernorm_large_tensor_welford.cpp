@@ -353,7 +353,7 @@ void kernel_main() {
         // reconfig (idempotent) -> BinaryDataFormatReconfig::Input.
         // NO pack_reconfig in original (pack stays at cb_ex2 from preceding stage; cb_ex2 and
         // cb_ex2pe formats assumed compatible) -> PackTileReconfig::None.
-        // cb_ex2pe.reserve_back IS called in original -> use OutStreaming (reserve + push per tile).
+        // cb_ex2pe.reserve_back IS called in original -> use OutputLifecycle::Streaming (reserve + push per tile).
         // Non-LEGACY rsqrt -> Legacy::Off.
         compute_kernel_lib::eltwise_chain(
             onetile,
@@ -363,8 +363,8 @@ void kernel_main() {
                 compute_kernel_lib::BinaryFpuOp::Add,
                 compute_kernel_lib::BroadcastDim::None,
                 compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::Streaming,
-                compute_kernel_lib::CallerManaged,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
                 compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OperandKind::Scalar>{},
@@ -375,7 +375,7 @@ void kernel_main() {
             compute_kernel_lib::PackTile<
                 cb_ex2pe,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutStreaming,
+                compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::None>{});
 
         // PARTIAL migration: UnaryBcast<COL> + PackTile (same-CB in/out on cb_ex2pe).
@@ -384,19 +384,19 @@ void kernel_main() {
         // preceding BinaryFpu(cb_ex2, cb_eps) left SrcB = cb_eps, so both sources must be
         // reprogrammed. Pack-side reconfig is owned by the downstream PackTile
         // (PackTileReconfig::Output). No mid-kernel hw_configure needed.
-        // Lifecycle: cb_ex2pe Streaming in, OutStreaming out.
+        // Lifecycle: cb_ex2pe InputLifecycle::Streaming in, OutputLifecycle::Streaming out.
         compute_kernel_lib::eltwise_chain(
             onetile,
             compute_kernel_lib::UnaryBcast<
                 compute_kernel_lib::BroadcastDim::Col,
                 cb_ex2pe,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::Streaming,
+                compute_kernel_lib::InputLifecycle::Streaming,
                 compute_kernel_lib::UnaryBcastReconfig::Input>{},
             compute_kernel_lib::PackTile<
                 cb_ex2pe,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutStreaming,
+                compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 
         // =====================================

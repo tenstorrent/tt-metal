@@ -72,8 +72,8 @@ void kernel_main() {
         // cb_stats_reduced tile 1 holds variance (after combine_welford_partials).
         // Reconfig: Input + Output (explicit reconfig_data_format +
         //   pack_reconfig_data_format + add_tiles_init in original).
-        // Lifecycles: cb_stats_reduced HeldBulk + Scalar + compute_kernel_lib::TileOffset::Set;
-        //   cb_eps CallerManaged + Scalar; cb_recip_sqrt_var OutStreaming.
+        // Lifecycles: cb_stats_reduced InputLifecycle::HeldBulk + Scalar + compute_kernel_lib::TileOffset::Set;
+        //   cb_eps InputLifecycle::CallerManaged + Scalar; cb_recip_sqrt_var OutputLifecycle::Streaming.
         // rsqrt_tile_init<true> -> Legacy::On.
         compute_kernel_lib::eltwise_chain(
             1,
@@ -83,8 +83,8 @@ void kernel_main() {
                 compute_kernel_lib::BinaryFpuOp::Add,
                 compute_kernel_lib::BroadcastDim::None,
                 compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::HeldBulk,
-                compute_kernel_lib::CallerManaged,
+                compute_kernel_lib::InputLifecycle::HeldBulk,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
                 compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OperandKind::Scalar,
@@ -95,15 +95,15 @@ void kernel_main() {
             compute_kernel_lib::PackTile<
                 cb_recip_sqrt_var,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutStreaming,
+                compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 
         // Process tiles across width in blocks
         for (uint32_t col_tile = 0; col_tile < Wt; col_tile += block_size) {
             // 1) x_minus_mean: cb_intermediate[i] = cb_inp[i] - cb_stats_reduced[0]
-            // (bcast cols).  cb_inp: Bulk + Block (per-block_size wait+pop).
-            // cb_stats_reduced: CallerManaged + Scalar (held by outer per-row scope).
-            // cb_intermediate: OutBulk + Block (per-block_size reserve+push).
+            // (bcast cols).  cb_inp: InputLifecycle::Bulk + Block (per-block_size wait+pop).
+            // cb_stats_reduced: InputLifecycle::CallerManaged + Scalar (held by outer per-row scope).
+            // cb_intermediate: OutputLifecycle::Bulk + Block (per-block_size reserve+push).
             // Reconfig: explicit reconfig_data_format + sub_bcast_cols_init_short ->
             // BinaryDataFormatReconfig::Input. pack_reconfig_data_format ->
             // PackTileReconfig::Output.
@@ -115,15 +115,15 @@ void kernel_main() {
                     compute_kernel_lib::BinaryFpuOp::Sub,
                     compute_kernel_lib::BroadcastDim::Col,
                     compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::Bulk,
-                    compute_kernel_lib::CallerManaged,
+                    compute_kernel_lib::InputLifecycle::Bulk,
+                    compute_kernel_lib::InputLifecycle::CallerManaged,
                     compute_kernel_lib::OperandKind::Block,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OperandKind::Scalar>{},
                 compute_kernel_lib::PackTile<
                     cb_intermediate,
                     compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutBulk,
+                    compute_kernel_lib::OutputLifecycle::Bulk,
                     compute_kernel_lib::PackTileReconfig::Output>{});
 
             // 2) normalize: (x-mean) * inv_std
@@ -181,10 +181,10 @@ void kernel_main() {
 
             // 4) optional beta (only if gamma was provided)
             // cb_out[i] = cb_intermediate[i] + cb_beta[col_tile + i] (bcast rows).
-            // Different CBs (no in-place). cb_intermediate Bulk + Block. cb_beta
-            // CallerManaged + Block + col_tile (cb_beta is held
+            // Different CBs (no in-place). cb_intermediate InputLifecycle::Bulk + Block. cb_beta
+            // InputLifecycle::CallerManaged + Block + col_tile (cb_beta is held
             // across the col_tile loop via the cumulative wait_front above).
-            // cb_out OutBulk + Block.
+            // cb_out OutputLifecycle::Bulk + Block.
             // Reconfig: reconfig_data_format + add_bcast_rows_init_short ->
             // BinaryDataFormatReconfig::Input. pack_reconfig_data_format ->
             // PackTileReconfig::Output.
@@ -198,8 +198,8 @@ void kernel_main() {
                         compute_kernel_lib::BinaryFpuOp::Add,
                         compute_kernel_lib::BroadcastDim::Row,
                         compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                        compute_kernel_lib::Bulk,
-                        compute_kernel_lib::CallerManaged,
+                        compute_kernel_lib::InputLifecycle::Bulk,
+                        compute_kernel_lib::InputLifecycle::CallerManaged,
                         compute_kernel_lib::OperandKind::Block,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OperandKind::Block,
@@ -208,7 +208,7 @@ void kernel_main() {
                     compute_kernel_lib::PackTile<
                         cb_out,
                         compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OutBulk,
+                        compute_kernel_lib::OutputLifecycle::Bulk,
                         compute_kernel_lib::PackTileReconfig::Output>{});
             }
         }

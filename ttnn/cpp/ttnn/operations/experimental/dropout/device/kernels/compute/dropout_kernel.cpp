@@ -31,13 +31,13 @@ void kernel_main() {
         compute_kernel_lib::CopyTile<
             cb_input,
             compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::Streaming,
+            compute_kernel_lib::InputLifecycle::Streaming,
             compute_kernel_lib::OperandKind::Scalar,
             compute_kernel_lib::CopyTileReconfig::None>{},
         compute_kernel_lib::Dropout<compute_kernel_lib::Dst::D0>{int_probability, int_scale_factor},
         compute_kernel_lib::PackTile<
             cb_output,
             compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::OutStreaming,
+            compute_kernel_lib::OutputLifecycle::Streaming,
             compute_kernel_lib::PackTileReconfig::None>{});
 }

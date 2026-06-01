@@ -19,10 +19,10 @@
 //
 // DECODE_MODE branch: in1_cb is the retilized sin/cos held across the entire
 // num_rows*Wt walk; we read tile at runtime offset `in1_idx` (= j) with
-// bcast-rows, never popping in1. compute_kernel_lib::TileOffset::Set requires CallerManaged
+// bcast-rows, never popping in1. compute_kernel_lib::TileOffset::Set requires InputLifecycle::CallerManaged
 // lifecycle, so the wait/reserve/pop/push are emitted externally.
 //
-// Non-DECODE_MODE branch: standard per-iter Streaming on both sides + plain
+// Non-DECODE_MODE branch: standard per-iter InputLifecycle::Streaming on both sides + plain
 // mul_tiles (no bcast).
 template <uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb>
 ALWI void mul_tiles_chain(uint32_t in1_idx) {
@@ -39,14 +39,14 @@ ALWI void mul_tiles_chain(uint32_t in1_idx) {
             BinaryFpuOp::Mul,
             BroadcastDim::Row,
             BinaryDataFormatReconfig::None,
-            CallerManaged,
-            CallerManaged,
+            InputLifecycle::CallerManaged,
+            InputLifecycle::CallerManaged,
             OperandKind::Scalar,
             Dst::D0,
             OperandKind::Scalar,
             compute_kernel_lib::TileOffset::Unset,
             compute_kernel_lib::TileOffset::Set>{0u, in1_idx},
-        PackTile<out_cb, Dst::D0, OutCallerManaged, PackTileReconfig::None>{});
+        PackTile<out_cb, Dst::D0, OutputLifecycle::CallerManaged, PackTileReconfig::None>{});
     cb_pop_front(in0_cb, 1);
     cb_push_back(out_cb, 1);
     // in1 NOT popped — held across the whole walk per DECODE_MODE contract.
@@ -60,12 +60,12 @@ ALWI void mul_tiles_chain(uint32_t in1_idx) {
             BinaryFpuOp::Mul,
             BroadcastDim::None,
             BinaryDataFormatReconfig::None,
-            Streaming,
-            Streaming,
+            InputLifecycle::Streaming,
+            InputLifecycle::Streaming,
             OperandKind::Scalar,
             Dst::D0,
             OperandKind::Scalar>{},
-        PackTile<out_cb, Dst::D0, OutStreaming, PackTileReconfig::None>{});
+        PackTile<out_cb, Dst::D0, OutputLifecycle::Streaming, PackTileReconfig::None>{});
 #endif
 }
 
@@ -144,9 +144,9 @@ void kernel_main() {
                 // Reconfig audit: explicit reconfig_data_format(rotated_in_cb, scalar_cb) +
                 //   mul_tiles_bcast_scalar_init_short reconfigs srca/srcb -> Input.
                 //   Explicit pack_reconfig_data_format(rotated_in_interm_cb) -> Output.
-                // Lifecycles: rotated_in_cb Streaming (wait+pop per iter); scalar_cb
-                //   CallerManaged (waited once at line 85, never popped); rotated_in_interm_cb
-                //   OutStreaming.
+                // Lifecycles: rotated_in_cb InputLifecycle::Streaming (wait+pop per iter); scalar_cb
+                //   InputLifecycle::CallerManaged (waited once at line 85, never popped); rotated_in_interm_cb
+                //   OutputLifecycle::Streaming.
                 compute_kernel_lib::eltwise_chain(
                     onetile,
                     compute_kernel_lib::BinaryFpu<
@@ -155,15 +155,15 @@ void kernel_main() {
                         compute_kernel_lib::BinaryFpuOp::Mul,
                         compute_kernel_lib::BroadcastDim::Scalar,
                         compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                        compute_kernel_lib::Streaming,
-                        compute_kernel_lib::CallerManaged,
+                        compute_kernel_lib::InputLifecycle::Streaming,
+                        compute_kernel_lib::InputLifecycle::CallerManaged,
                         compute_kernel_lib::OperandKind::Scalar,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OperandKind::Scalar>{},
                     compute_kernel_lib::PackTile<
                         rotated_in_interm_cb,
                         compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OutStreaming,
+                        compute_kernel_lib::OutputLifecycle::Streaming,
                         compute_kernel_lib::PackTileReconfig::Output>{});
                 reconfig_data_format_srcb(scalar_cb, updated_sin_cb);
                 pack_reconfig_data_format(rotated_in_interm_cb, sin_interm_cb);
@@ -183,8 +183,8 @@ void kernel_main() {
             // Reconfig audit: reconfig_data_format_srca(rotated_in_cb, cos_interm_cb)
             //   reconfigs srca to cos_interm_cb; add_tiles_init reconfigs srca/srcb to
             //   (cos_interm, sin_interm) -> Input. Explicit pack_reconfig to out_cb -> Output.
-            // Lifecycles: cos_interm_cb/sin_interm_cb Streaming (per-iter wait+pop);
-            //   out_cb OutStreaming.
+            // Lifecycles: cos_interm_cb/sin_interm_cb InputLifecycle::Streaming (per-iter wait+pop);
+            //   out_cb OutputLifecycle::Streaming.
             compute_kernel_lib::eltwise_chain(
                 onetile,
                 compute_kernel_lib::BinaryFpu<
@@ -193,15 +193,15 @@ void kernel_main() {
                     compute_kernel_lib::BinaryFpuOp::Add,
                     compute_kernel_lib::BroadcastDim::None,
                     compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::Streaming,
-                    compute_kernel_lib::Streaming,
+                    compute_kernel_lib::InputLifecycle::Streaming,
+                    compute_kernel_lib::InputLifecycle::Streaming,
                     compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OperandKind::Scalar>{},
                 compute_kernel_lib::PackTile<
                     out_cb,
                     compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutStreaming,
+                    compute_kernel_lib::OutputLifecycle::Streaming,
                     compute_kernel_lib::PackTileReconfig::Output>{});
         }
     }

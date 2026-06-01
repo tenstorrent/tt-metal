@@ -46,15 +46,15 @@ ALWI void batchnorm_bcast_tiles(uint32_t freq, uint32_t tile_start) {
     using namespace compute_kernel_lib;
 
     // Stage 1: cb_den = rsqrt(cb_batch_var + cb_eps).
-    // cb_batch_var: Bulk + Scalar — chain emits 1-tile wait+pop per call (window_1d<Scalar>).
-    // cb_eps:        CallerManaged + Scalar — held by kernel_main for the whole kernel.
+    // cb_batch_var: InputLifecycle::Bulk + Scalar — chain emits 1-tile wait+pop per call (window_1d<Scalar>).
+    // cb_eps:        InputLifecycle::CallerManaged + Scalar — held by kernel_main for the whole kernel.
     eltwise_chain(
         1,
-        CopyTile<cb_batch_var, Dst::D0, Bulk, OperandKind::Scalar, CopyTileReconfig::Input>{},
-        CopyTile<cb_eps, Dst::D1, CallerManaged, OperandKind::Scalar, CopyTileReconfig::Input>{},
+        CopyTile<cb_batch_var, Dst::D0, InputLifecycle::Bulk, OperandKind::Scalar, CopyTileReconfig::Input>{},
+        CopyTile<cb_eps, Dst::D1, InputLifecycle::CallerManaged, OperandKind::Scalar, CopyTileReconfig::Input>{},
         AddBinary<Dst::D0, Dst::D1, Dst::D0>{},
         Rsqrt<>{},
-        PackTile<cb_den, Dst::D0, OutStreaming, PackTileReconfig::Output>{});
+        PackTile<cb_den, Dst::D0, OutputLifecycle::Streaming, PackTileReconfig::Output>{});
 
     const uint32_t inner_count = freq - tile_start;
 
@@ -67,29 +67,31 @@ ALWI void batchnorm_bcast_tiles(uint32_t freq, uint32_t tile_start) {
     // → [Typecast] → Pack. CopyTile<…, D1> loads each new operand into D1; the SFPU binaries
     // then consume (D0, D1) and write back to D0.
     //
-    // Lifecycles: every held single-tile operand uses Bulk + Scalar — chain's
+    // Lifecycles: every held single-tile operand uses InputLifecycle::Bulk + Scalar — chain's
     // window_1d<Scalar> collapses to 1, so each side emits a single
     // cb_wait_front(cb, 1) at the chain head and cb_pop_front(cb, 1) at the tail.
     // For cb_weight / cb_bias, wrapping the CopyTile in OptionalChainElement also
     // makes the wait/pop conditional on the compile-time flag — when the option
-    // is off the wrapped element collapses to a tag with a_policy() == CallerManaged,
+    // is off the wrapped element collapses to a tag with a_policy() == InputLifecycle::CallerManaged,
     // so the chain emits NOTHING for the inactive branch (CB ids, wait, pop all
     // suppressed).
     eltwise_chain(
         inner_count,
-        CopyTile<cb_other, Dst::D0, Streaming, OperandKind::Scalar, CopyTileReconfig::Input>{},
-        CopyTile<cb_bcast, Dst::D1, Bulk, OperandKind::Scalar, CopyTileReconfig::Input>{},
+        CopyTile<cb_other, Dst::D0, InputLifecycle::Streaming, OperandKind::Scalar, CopyTileReconfig::Input>{},
+        CopyTile<cb_bcast, Dst::D1, InputLifecycle::Bulk, OperandKind::Scalar, CopyTileReconfig::Input>{},
         SubBinary<Dst::D0, Dst::D1, Dst::D0>{},
-        CopyTile<cb_den, Dst::D1, Bulk, OperandKind::Scalar, CopyTileReconfig::Input>{},
+        CopyTile<cb_den, Dst::D1, InputLifecycle::Bulk, OperandKind::Scalar, CopyTileReconfig::Input>{},
         MulBinary<Dst::D0, Dst::D1, Dst::D0>{},
         OptionalChainElement<
             WeightHas,
-            CopyTile<cb_weight, Dst::D1, Bulk, OperandKind::Scalar, CopyTileReconfig::Input>>{},
+            CopyTile<cb_weight, Dst::D1, InputLifecycle::Bulk, OperandKind::Scalar, CopyTileReconfig::Input>>{},
         OptionalChainElement<WeightHas, MulBinary<Dst::D0, Dst::D1, Dst::D0>>{},
-        OptionalChainElement<BiasHas, CopyTile<cb_bias, Dst::D1, Bulk, OperandKind::Scalar, CopyTileReconfig::Input>>{},
+        OptionalChainElement<
+            BiasHas,
+            CopyTile<cb_bias, Dst::D1, InputLifecycle::Bulk, OperandKind::Scalar, CopyTileReconfig::Input>>{},
         OptionalChainElement<BiasHas, AddBinary<Dst::D0, Dst::D1, Dst::D0>>{},
         OptionalChainElement<NeedsTypecast, Typecast<TcInFmt, TcOutFmt, Dst::D0>>{},
-        PackTile<cb_final_out, Dst::D0, OutStreaming, PackTileReconfig::Output>{});
+        PackTile<cb_final_out, Dst::D0, OutputLifecycle::Streaming, PackTileReconfig::Output>{});
 }
 
 void kernel_main() {

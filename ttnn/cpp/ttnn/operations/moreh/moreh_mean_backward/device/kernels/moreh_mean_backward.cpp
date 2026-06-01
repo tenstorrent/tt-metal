@@ -35,9 +35,9 @@ void kernel_main() {
 
     // Stage A: cb_intermed0 = add_bcast<dim>(cb_in1, cb_in0) (or plain copy if no bcast).
     //   bcast dim chosen at compile time from (ht_need_bcast, wt_need_bcast).
-    //   cb_in1 CallerManaged + Scalar (held outside the loop).
-    //   cb_in0 Streaming + Scalar (chain owns wait+pop).
-    //   cb_intermed0 OutStreaming + Scalar.
+    //   cb_in1 InputLifecycle::CallerManaged + Scalar (held outside the loop).
+    //   cb_in0 InputLifecycle::Streaming + Scalar (chain owns wait+pop).
+    //   cb_intermed0 OutputLifecycle::Streaming + Scalar.
     // Reconfig: *_init_short_with_dt + pack_tile_with_dt -> Input + Output.
     //
     // Four (ht_need_bcast × wt_need_bcast) cases collapse into one chain via two
@@ -61,8 +61,8 @@ void kernel_main() {
                     compute_kernel_lib::BinaryFpuOp::Add,
                     bcast_dim,
                     compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::CallerManaged,
-                    compute_kernel_lib::Streaming,
+                    compute_kernel_lib::InputLifecycle::CallerManaged,
+                    compute_kernel_lib::InputLifecycle::Streaming,
                     compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OperandKind::Scalar>>{},
@@ -71,13 +71,13 @@ void kernel_main() {
                 compute_kernel_lib::CopyTile<
                     cb_in0,
                     compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::Streaming,
+                    compute_kernel_lib::InputLifecycle::Streaming,
                     compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::CopyTileReconfig::Input>>{},
             compute_kernel_lib::PackTile<
                 cb_intermed0,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutStreaming,
+                compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 
         // Stage B: cb_out0 = cb_intermed0 * cb_scalar (SCALAR bcast).
@@ -89,15 +89,15 @@ void kernel_main() {
                 compute_kernel_lib::BinaryFpuOp::Mul,
                 compute_kernel_lib::BroadcastDim::Scalar,
                 compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::Streaming,
-                compute_kernel_lib::CallerManaged,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
                 compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OperandKind::Scalar>{},
             compute_kernel_lib::PackTile<
                 cb_out0,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutStreaming,
+                compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::Output>{});
     }
     cb_in1_obj.pop_front(onetile);

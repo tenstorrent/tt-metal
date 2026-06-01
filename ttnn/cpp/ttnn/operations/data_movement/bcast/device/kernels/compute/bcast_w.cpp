@@ -25,7 +25,7 @@ void kernel_main() {
 
     // bcast_w: 1 cb_rhs scalar per row, broadcast across Wt cb_lhs tiles.
     // cb_rhs is held across the inner Wt loop and popped once at end-of-row.
-    // Outer B*Ht loop flattened. HeldStream gives chain-emitted per-iter
+    // Outer B*Ht loop flattened. InputLifecycle::HeldStream gives chain-emitted per-iter
     // cb_wait_front(1) without popping; explicit pop_front after the chain
     // matches the original's cb_pop_front(cb_rhs, 1) at end of h iter.
     for (uint32_t row = 0; row < B * Ht; ++row) {
@@ -37,15 +37,15 @@ void kernel_main() {
                 CHAIN_BCAST_OP,
                 CHAIN_BCAST_DIM,
                 compute_kernel_lib::BinaryDataFormatReconfig::None,
-                compute_kernel_lib::Streaming,
-                compute_kernel_lib::HeldStream,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::HeldStream,
                 compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OperandKind::Scalar>{},
             compute_kernel_lib::PackTile<
                 cb_out,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutStreaming,
+                compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::None>{});
         cb_rhs_obj.pop_front(onetile);
     }

@@ -88,9 +88,9 @@ void kernel_main() {
          * Explicit pack_reconfig_data_format -> Output.
          * use_legacy_rsqrt forwarded via Legacy::On/Off.
          *
-         * Lifecycle: reduce_result_cb Streaming (chain owns wait+pop); epsilon_cb
-         * CallerManaged (waited once at MAIN entry); reduce_result_cb output
-         * OutStreaming (chain owns reserve+push). Same-CB in/out is fine — original
+         * Lifecycle: reduce_result_cb InputLifecycle::Streaming (chain owns wait+pop); epsilon_cb
+         * InputLifecycle::CallerManaged (waited once at MAIN entry); reduce_result_cb output
+         * OutputLifecycle::Streaming (chain owns reserve+push). Same-CB in/out is fine — original
          * popped the input tile then re-reserved+packed; chain emits the same
          * sequence.
          */
@@ -102,8 +102,8 @@ void kernel_main() {
                 compute_kernel_lib::BinaryFpuOp::Add,
                 compute_kernel_lib::BroadcastDim::None,
                 compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::Streaming,
-                compute_kernel_lib::CallerManaged,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
                 compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OperandKind::Scalar>{},
@@ -114,7 +114,7 @@ void kernel_main() {
             compute_kernel_lib::PackTile<
                 reduce_result_cb,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutStreaming,
+                compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 
         /*

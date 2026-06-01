@@ -208,9 +208,9 @@ void kernel_main() {
             // Reconfig audit: explicit reconfig_data_format(cb_var, cb_eps) +
             //   add_tiles_init reconfigs srca/srcb -> Input. Explicit
             //   pack_reconfig_data_format(cb_stats_reduced) -> Output.
-            // Lifecycles: cb_var Streaming (wait+pop per call); cb_eps Streaming
+            // Lifecycles: cb_var InputLifecycle::Streaming (wait+pop per call); cb_eps InputLifecycle::Streaming
             //   (also wait+pop per call here, unlike other rsqrt kernels where
-            //   cb_eps is held); cb_stats_reduced OutStreaming. rsqrt Legacy::On.
+            //   cb_eps is held); cb_stats_reduced OutputLifecycle::Streaming. rsqrt Legacy::On.
             compute_kernel_lib::eltwise_chain(
                 1,
                 compute_kernel_lib::BinaryFpu<
@@ -219,8 +219,8 @@ void kernel_main() {
                     compute_kernel_lib::BinaryFpuOp::Add,
                     compute_kernel_lib::BroadcastDim::None,
                     compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::Streaming,
-                    compute_kernel_lib::Streaming,
+                    compute_kernel_lib::InputLifecycle::Streaming,
+                    compute_kernel_lib::InputLifecycle::Streaming,
                     compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OperandKind::Scalar>{},
@@ -231,7 +231,7 @@ void kernel_main() {
                 compute_kernel_lib::PackTile<
                     cb_stats_reduced,
                     compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutStreaming,
+                    compute_kernel_lib::OutputLifecycle::Streaming,
                     compute_kernel_lib::PackTileReconfig::Output>{});
         }
     }

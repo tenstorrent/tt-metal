@@ -81,8 +81,8 @@ void kernel_main() {
         // out_cb (lines 33-38 select from q_*_cb / k_*_cb based on runtime is_q).
         // BLOCKED — same constexpr-CB constraint as sibling sharded.cpp.
         // Reconfig: mul_tiles_init reconfigs srca/srcb -> Input. No pack_reconfig -> None.
-        // Lifecycles: CallerManaged on both sides (outer push/pop unchanged);
-        //   OutCallerManaged on pack so chain emits no reserve/push.
+        // Lifecycles: InputLifecycle::CallerManaged on both sides (outer push/pop unchanged);
+        //   OutputLifecycle::CallerManaged on pack so chain emits no reserve/push.
         compute_kernel_lib::eltwise_chain(
             1,
             compute_kernel_lib::BinaryFpu<
@@ -91,15 +91,15 @@ void kernel_main() {
                 compute_kernel_lib::BinaryFpuOp::Mul,
                 compute_kernel_lib::BroadcastDim::None,
                 compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::CallerManaged,
-                compute_kernel_lib::CallerManaged,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
                 compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OperandKind::Scalar>{},
             compute_kernel_lib::PackTile<
                 sin_interm_cb,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutCallerManaged,
+                compute_kernel_lib::OutputLifecycle::CallerManaged,
                 compute_kernel_lib::PackTileReconfig::None>{});
         cb_push_back(sin_interm_cb, Wt);
         cb_pop_front(rotated_in_interm_cb, Wt);

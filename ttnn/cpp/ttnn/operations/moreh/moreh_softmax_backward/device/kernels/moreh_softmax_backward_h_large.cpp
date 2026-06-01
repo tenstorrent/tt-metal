@@ -43,20 +43,20 @@ void kernel_main() {
                         compute_kernel_lib::CopyTile<
                             cb_dy,
                             compute_kernel_lib::Dst::D0,
-                            compute_kernel_lib::Streaming,
+                            compute_kernel_lib::InputLifecycle::Streaming,
                             compute_kernel_lib::OperandKind::Scalar,
                             compute_kernel_lib::CopyTileReconfig::Input>{},
                         compute_kernel_lib::CopyTile<
                             cb_mask,
                             compute_kernel_lib::Dst::D1,
-                            compute_kernel_lib::HeldStream,
+                            compute_kernel_lib::InputLifecycle::HeldStream,
                             compute_kernel_lib::OperandKind::Scalar,
                             compute_kernel_lib::CopyTileReconfig::Input>{},
                         compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
                         compute_kernel_lib::PackTile<
                             cb_add,
                             compute_kernel_lib::Dst::D0,
-                            compute_kernel_lib::OutStreaming,
+                            compute_kernel_lib::OutputLifecycle::Streaming,
                             compute_kernel_lib::PackTileReconfig::Output>{});
                 } else {
                     // mask cb_dy -> cb_inter0; then add to cb_add.
@@ -66,20 +66,20 @@ void kernel_main() {
                         compute_kernel_lib::CopyTile<
                             cb_dy,
                             compute_kernel_lib::Dst::D0,
-                            compute_kernel_lib::Streaming,
+                            compute_kernel_lib::InputLifecycle::Streaming,
                             compute_kernel_lib::OperandKind::Scalar,
                             compute_kernel_lib::CopyTileReconfig::Input>{},
                         compute_kernel_lib::CopyTile<
                             cb_mask,
                             compute_kernel_lib::Dst::D1,
-                            compute_kernel_lib::HeldStream,
+                            compute_kernel_lib::InputLifecycle::HeldStream,
                             compute_kernel_lib::OperandKind::Scalar,
                             compute_kernel_lib::CopyTileReconfig::Input>{},
                         compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
                         compute_kernel_lib::PackTile<
                             cb_inter0,
                             compute_kernel_lib::Dst::D0,
-                            compute_kernel_lib::OutStreaming,
+                            compute_kernel_lib::OutputLifecycle::Streaming,
                             compute_kernel_lib::PackTileReconfig::Output>{});
                     compute_kernel_lib::eltwise_chain(
                         onetile,
@@ -89,15 +89,15 @@ void kernel_main() {
                             compute_kernel_lib::BinaryFpuOp::Add,
                             compute_kernel_lib::BroadcastDim::None,
                             compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                            compute_kernel_lib::Streaming,
-                            compute_kernel_lib::Streaming,
+                            compute_kernel_lib::InputLifecycle::Streaming,
+                            compute_kernel_lib::InputLifecycle::Streaming,
                             compute_kernel_lib::OperandKind::Scalar,
                             compute_kernel_lib::Dst::D0,
                             compute_kernel_lib::OperandKind::Scalar>{},
                         compute_kernel_lib::PackTile<
                             cb_add,
                             compute_kernel_lib::Dst::D0,
-                            compute_kernel_lib::OutStreaming,
+                            compute_kernel_lib::OutputLifecycle::Streaming,
                             compute_kernel_lib::PackTileReconfig::Output>{});
                 }
             } else {
@@ -107,13 +107,13 @@ void kernel_main() {
                         compute_kernel_lib::CopyTile<
                             cb_dy,
                             compute_kernel_lib::Dst::D0,
-                            compute_kernel_lib::Streaming,
+                            compute_kernel_lib::InputLifecycle::Streaming,
                             compute_kernel_lib::OperandKind::Scalar,
                             compute_kernel_lib::CopyTileReconfig::Input>{},
                         compute_kernel_lib::PackTile<
                             cb_add,
                             compute_kernel_lib::Dst::D0,
-                            compute_kernel_lib::OutStreaming,
+                            compute_kernel_lib::OutputLifecycle::Streaming,
                             compute_kernel_lib::PackTileReconfig::Output>{});
                 } else {
                     compute_kernel_lib::eltwise_chain(
@@ -124,15 +124,15 @@ void kernel_main() {
                             compute_kernel_lib::BinaryFpuOp::Add,
                             compute_kernel_lib::BroadcastDim::None,
                             compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                            compute_kernel_lib::Streaming,
-                            compute_kernel_lib::Streaming,
+                            compute_kernel_lib::InputLifecycle::Streaming,
+                            compute_kernel_lib::InputLifecycle::Streaming,
                             compute_kernel_lib::OperandKind::Scalar,
                             compute_kernel_lib::Dst::D0,
                             compute_kernel_lib::OperandKind::Scalar>{},
                         compute_kernel_lib::PackTile<
                             cb_add,
                             compute_kernel_lib::Dst::D0,
-                            compute_kernel_lib::OutStreaming,
+                            compute_kernel_lib::OutputLifecycle::Streaming,
                             compute_kernel_lib::PackTileReconfig::Output>{});
                 }
             }
@@ -142,7 +142,7 @@ void kernel_main() {
             cb_add, cb_bcast_scaler, cb_sum, compute_kernel_lib::ReduceInputBlockShape::single());
 
         // Per-tile: exp(y) -> mul_bcast(cb_sum, Row) -> sub(cb_dy, .) -> cb_dx.
-        // cb_sum held outside loop (CallerManaged). cb_y / cb_dy streaming pop=1.
+        // cb_sum held outside loop (InputLifecycle::CallerManaged). cb_y / cb_dy streaming pop=1.
         for (uint32_t h = 0; h < Ht; ++h) {
             constexpr auto cb_exp = tt::CBIndex::c_24;
             compute_kernel_lib::eltwise_chain(
@@ -150,7 +150,7 @@ void kernel_main() {
                 compute_kernel_lib::CopyTile<
                     cb_y,
                     compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::Streaming,
+                    compute_kernel_lib::InputLifecycle::Streaming,
                     compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::CopyTileReconfig::Input>{},
                 compute_kernel_lib::Exp<
@@ -160,7 +160,7 @@ void kernel_main() {
                 compute_kernel_lib::PackTile<
                     cb_exp,
                     compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutStreaming,
+                    compute_kernel_lib::OutputLifecycle::Streaming,
                     compute_kernel_lib::PackTileReconfig::Output>{});
             compute_kernel_lib::eltwise_chain(
                 onetile,
@@ -170,15 +170,15 @@ void kernel_main() {
                     compute_kernel_lib::BinaryFpuOp::Mul,
                     compute_kernel_lib::BroadcastDim::Row,
                     compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::Streaming,
-                    compute_kernel_lib::HeldStream,
+                    compute_kernel_lib::InputLifecycle::Streaming,
+                    compute_kernel_lib::InputLifecycle::HeldStream,
                     compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OperandKind::Scalar>{},
                 compute_kernel_lib::PackTile<
                     cb_inter2,
                     compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutStreaming,
+                    compute_kernel_lib::OutputLifecycle::Streaming,
                     compute_kernel_lib::PackTileReconfig::Output>{});
             compute_kernel_lib::eltwise_chain(
                 onetile,
@@ -188,15 +188,15 @@ void kernel_main() {
                     compute_kernel_lib::BinaryFpuOp::Sub,
                     compute_kernel_lib::BroadcastDim::None,
                     compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::Streaming,
-                    compute_kernel_lib::Streaming,
+                    compute_kernel_lib::InputLifecycle::Streaming,
+                    compute_kernel_lib::InputLifecycle::Streaming,
                     compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OperandKind::Scalar>{},
                 compute_kernel_lib::PackTile<
                     cb_dx,
                     compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutStreaming,
+                    compute_kernel_lib::OutputLifecycle::Streaming,
                     compute_kernel_lib::PackTileReconfig::Output>{});
         }
 
@@ -215,22 +215,22 @@ void kernel_main() {
                         compute_kernel_lib::BinaryFpuOp::Mul,
                         compute_kernel_lib::BroadcastDim::None,
                         compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                        compute_kernel_lib::Streaming,
-                        compute_kernel_lib::Streaming,
+                        compute_kernel_lib::InputLifecycle::Streaming,
+                        compute_kernel_lib::InputLifecycle::Streaming,
                         compute_kernel_lib::OperandKind::Scalar,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OperandKind::Scalar>{},
                     compute_kernel_lib::CopyTile<
                         cb_mask,
                         compute_kernel_lib::Dst::D1,
-                        compute_kernel_lib::HeldStream,
+                        compute_kernel_lib::InputLifecycle::HeldStream,
                         compute_kernel_lib::OperandKind::Scalar,
                         compute_kernel_lib::CopyTileReconfig::Input>{},
                     compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
                     compute_kernel_lib::PackTile<
                         cb_ydy,
                         compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OutStreaming,
+                        compute_kernel_lib::OutputLifecycle::Streaming,
                         compute_kernel_lib::PackTileReconfig::Output>{});
             } else {
                 compute_kernel_lib::eltwise_chain(
@@ -241,15 +241,15 @@ void kernel_main() {
                         compute_kernel_lib::BinaryFpuOp::Mul,
                         compute_kernel_lib::BroadcastDim::None,
                         compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                        compute_kernel_lib::Streaming,
-                        compute_kernel_lib::Streaming,
+                        compute_kernel_lib::InputLifecycle::Streaming,
+                        compute_kernel_lib::InputLifecycle::Streaming,
                         compute_kernel_lib::OperandKind::Scalar,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OperandKind::Scalar>{},
                     compute_kernel_lib::PackTile<
                         cb_ydy,
                         compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OutStreaming,
+                        compute_kernel_lib::OutputLifecycle::Streaming,
                         compute_kernel_lib::PackTileReconfig::Output>{});
             }
 
@@ -260,13 +260,13 @@ void kernel_main() {
                     compute_kernel_lib::CopyTile<
                         cb_ydy,
                         compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::Streaming,
+                        compute_kernel_lib::InputLifecycle::Streaming,
                         compute_kernel_lib::OperandKind::Scalar,
                         compute_kernel_lib::CopyTileReconfig::Input>{},
                     compute_kernel_lib::PackTile<
                         cb_add,
                         compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OutStreaming,
+                        compute_kernel_lib::OutputLifecycle::Streaming,
                         compute_kernel_lib::PackTileReconfig::Output>{});
             } else {
                 compute_kernel_lib::eltwise_chain(
@@ -277,15 +277,15 @@ void kernel_main() {
                         compute_kernel_lib::BinaryFpuOp::Add,
                         compute_kernel_lib::BroadcastDim::None,
                         compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                        compute_kernel_lib::Streaming,
-                        compute_kernel_lib::Streaming,
+                        compute_kernel_lib::InputLifecycle::Streaming,
+                        compute_kernel_lib::InputLifecycle::Streaming,
                         compute_kernel_lib::OperandKind::Scalar,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OperandKind::Scalar>{},
                     compute_kernel_lib::PackTile<
                         cb_add,
                         compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OutStreaming,
+                        compute_kernel_lib::OutputLifecycle::Streaming,
                         compute_kernel_lib::PackTileReconfig::Output>{});
             }
         }
@@ -303,15 +303,15 @@ void kernel_main() {
                     compute_kernel_lib::BinaryFpuOp::Sub,
                     compute_kernel_lib::BroadcastDim::Row,
                     compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::Streaming,
-                    compute_kernel_lib::HeldStream,
+                    compute_kernel_lib::InputLifecycle::Streaming,
+                    compute_kernel_lib::InputLifecycle::HeldStream,
                     compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OperandKind::Scalar>{},
                 compute_kernel_lib::PackTile<
                     cb_inter2,
                     compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutStreaming,
+                    compute_kernel_lib::OutputLifecycle::Streaming,
                     compute_kernel_lib::PackTileReconfig::Output>{});
 #ifdef SOFTMAX
             compute_kernel_lib::eltwise_chain(
@@ -322,15 +322,15 @@ void kernel_main() {
                     compute_kernel_lib::BinaryFpuOp::Mul,
                     compute_kernel_lib::BroadcastDim::None,
                     compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::Streaming,
-                    compute_kernel_lib::Streaming,
+                    compute_kernel_lib::InputLifecycle::Streaming,
+                    compute_kernel_lib::InputLifecycle::Streaming,
                     compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OperandKind::Scalar>{},
                 compute_kernel_lib::PackTile<
                     cb_dx,
                     compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutStreaming,
+                    compute_kernel_lib::OutputLifecycle::Streaming,
                     compute_kernel_lib::PackTileReconfig::Output>{});
 #else
             // mul_tiles_and_negative_to_cb: mul then negate.
@@ -342,8 +342,8 @@ void kernel_main() {
                     compute_kernel_lib::BinaryFpuOp::Mul,
                     compute_kernel_lib::BroadcastDim::None,
                     compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::Streaming,
-                    compute_kernel_lib::Streaming,
+                    compute_kernel_lib::InputLifecycle::Streaming,
+                    compute_kernel_lib::InputLifecycle::Streaming,
                     compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OperandKind::Scalar>{},
@@ -351,7 +351,7 @@ void kernel_main() {
                 compute_kernel_lib::PackTile<
                     cb_dx,
                     compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutStreaming,
+                    compute_kernel_lib::OutputLifecycle::Streaming,
                     compute_kernel_lib::PackTileReconfig::Output>{});
 #endif
         }

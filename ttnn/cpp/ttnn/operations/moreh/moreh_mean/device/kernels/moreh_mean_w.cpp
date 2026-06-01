@@ -76,28 +76,29 @@ void kernel_main() {
             if (do_mask_w) {
                 // CopyTile<cb_input(=c_0), D0> + CopyTile<cb_mask_w, D1> + Mask + PackTile.
                 // cb_input here is always c_0 (the runtime variable cb_input was reset to c_0
-                // at line 51 before this conditional). cb_input Streaming; cb_mask_w
-                // CallerManaged (held outside the NC×Ht loop); cb_masked_input OutStreaming.
-                // Reconfig: copy_tile_init_with_dt -> Input on each; pack_tile_with_dt -> Output.
+                // at line 51 before this conditional). cb_input InputLifecycle::Streaming; cb_mask_w
+                // InputLifecycle::CallerManaged (held outside the NC×Ht loop); cb_masked_input
+                // OutputLifecycle::Streaming. Reconfig: copy_tile_init_with_dt -> Input on each; pack_tile_with_dt ->
+                // Output.
                 compute_kernel_lib::eltwise_chain(
                     onetile,
                     compute_kernel_lib::CopyTile<
                         tt::CBIndex::c_0,
                         compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::Streaming,
+                        compute_kernel_lib::InputLifecycle::Streaming,
                         compute_kernel_lib::OperandKind::Scalar,
                         compute_kernel_lib::CopyTileReconfig::Input>{},
                     compute_kernel_lib::CopyTile<
                         cb_mask_w,
                         compute_kernel_lib::Dst::D1,
-                        compute_kernel_lib::CallerManaged,
+                        compute_kernel_lib::InputLifecycle::CallerManaged,
                         compute_kernel_lib::OperandKind::Scalar,
                         compute_kernel_lib::CopyTileReconfig::Input>{},
                     compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
                     compute_kernel_lib::PackTile<
                         cb_masked_input,
                         compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OutStreaming,
+                        compute_kernel_lib::OutputLifecycle::Streaming,
                         compute_kernel_lib::PackTileReconfig::Output>{});
                 cb_input = cb_masked_input;
             }

@@ -112,15 +112,15 @@ void kernel_main() {
                 compute_kernel_lib::BinaryFpuOp::Mul,
                 compute_kernel_lib::BroadcastDim::Row,
                 compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::CallerManaged,
-                compute_kernel_lib::CallerManaged,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
                 compute_kernel_lib::OperandKind::Block,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OperandKind::Block>{},
             compute_kernel_lib::PackTile<
                 sin_interm_cb,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutCallerManaged,
+                compute_kernel_lib::OutputLifecycle::CallerManaged,
                 compute_kernel_lib::PackTileReconfig::None>{});
         cb_push_back(sin_interm_cb, Wt);
         cb_pop_front(rotated_in_interm_cb, Wt);

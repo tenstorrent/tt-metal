@@ -19,7 +19,7 @@ namespace compute_kernel_lib {
 // =============================================================================
 //
 // Each chain element exposes static accessors describing which CB it routes to
-// each side of the math/pack pipeline. Streaming and block elements use the same
+// each side of the math/pack pipeline. InputLifecycle::Streaming and block elements use the same
 // uniform accessors so the chain pipeline can compute, at compile time, the most
 // recent CB seen on each Side (SrcA / SrcB / Pack) before any given element index.
 //
@@ -76,10 +76,10 @@ ALWI constexpr uint32_t window(uint32_t Ht, uint32_t Wt) noexcept {
 
 // Allowed (Policy × Mode) combinations. Row/Col cannot stream per-tile —
 // the producer must stage the full row/col upfront. Matches the
-// `binary_op_helpers` static_assert (ROW/SCALAR require Bulk-family or NoWait*).
+// `binary_op_helpers` static_assert (ROW/SCALAR require InputLifecycle::Bulk-family or NoWait*).
 template <InputLifecycle P, OperandKind M>
 inline constexpr bool valid_policy_mode_v =
-    !(is_bcast_mode_v<M> && (P == Streaming || P == Chunked));
+    !(is_bcast_mode_v<M> && (P == InputLifecycle::Streaming || P == InputLifecycle::Chunked));
 
 // =============================================================================
 // A. Chain typed-list machinery
@@ -255,22 +255,22 @@ struct CopyTile : CopyTileTag {
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT,
                   "CopyTile: DEST slot exceeds DEST_AUTO_LIMIT");
     // Comprehensive (IndexMode, Policy) legality. Block rejects PerTile-pop
-    // (Streaming/BulkDrain/NoWaitPop — absolute-idx footgun) and PerTile-wait-of-1
-    // (HeldStream — never tracks per-iter requirement). Scalar/Row/Col accept every
+    // (InputLifecycle::Streaming/InputLifecycle::BulkDrain/InputLifecycle::NoWaitPop — absolute-idx footgun) and PerTile-wait-of-1
+    // (InputLifecycle::HeldStream — never tracks per-iter requirement). Scalar/Row/Col accept every
     // legal lifecycle — caller-sized.
     static_assert(is_legal_kind_lifecycle(IndexMode, Policy),
                   "CopyTile: (IndexMode, Policy) is illegal for Block — exclude "
-                  "Streaming / HeldStream / BulkDrain / NoWaitPop on Block walkers.");
+                  "InputLifecycle::Streaming / InputLifecycle::HeldStream / InputLifecycle::BulkDrain / InputLifecycle::NoWaitPop on Block walkers.");
     // 2D: RowBcast / ColBcast require non-streaming policy (matches binary_op_helpers ROW/SCALAR rule).
     static_assert(detail::valid_policy_mode_v<Policy, IndexMode>,
                   "CopyTile: RowBcast / ColBcast index require non-streaming policy "
-                  "(WaitUpfrontPopAtEnd, WaitNoPop, NoWaitPop, NoWaitNoPop, CumulativeWaitPopAtEnd)");
-    // TileOffset::Set requires Bulk-family / CallerManaged lifecycle — iter-dependent
-    // counts (Streaming/Chunked/Cumulative/Held{Stream,Cumulative}/NoWaitPop) can't
+                  "(WaitUpfrontPopAtEnd, WaitNoPop, InputLifecycle::NoWaitPop, NoWaitNoPop, CumulativeWaitPopAtEnd)");
+    // TileOffset::Set requires InputLifecycle::Bulk-family / InputLifecycle::CallerManaged lifecycle — iter-dependent
+    // counts (InputLifecycle::Streaming/InputLifecycle::Chunked/Cumulative/Held{Stream,Cumulative}/InputLifecycle::NoWaitPop) can't
     // compose with runtime base offsets. Caller must size CB to base+window.
     static_assert(Offset == TileOffset::Unset || is_legal_input_lifecycle_with_base(Policy),
-                  "CopyTile: TileOffset::Set requires Bulk-family or CallerManaged lifecycle "
-                  "(Bulk / HeldBulk / DeferredPop / BulkDrain / CallerManaged)");
+                  "CopyTile: TileOffset::Set requires InputLifecycle::Bulk-family or InputLifecycle::CallerManaged lifecycle "
+                  "(InputLifecycle::Bulk / InputLifecycle::HeldBulk / InputLifecycle::DeferredPop / InputLifecycle::BulkDrain / InputLifecycle::CallerManaged)");
 
     static constexpr uint32_t       cb              = Cb;
     static constexpr uint32_t       cb_a_id()       { return Cb; }
@@ -279,10 +279,10 @@ struct CopyTile : CopyTileTag {
     static constexpr OperandKind    b_index_mode    = OperandKind::Scalar;
     static constexpr Dst            dst_slot        = DstSlot;
     static constexpr InputLifecycle a_policy()      { return Policy; }
-    static constexpr InputLifecycle b_policy()      { return CallerManaged; }
-    static constexpr bool           is_upfront      = (Policy == Bulk) ||
-                                                      (Policy == HeldBulk) ||
-                                                      (Policy == Pipelined);
+    static constexpr InputLifecycle b_policy()      { return InputLifecycle::CallerManaged; }
+    static constexpr bool           is_upfront      = (Policy == InputLifecycle::Bulk) ||
+                                                      (Policy == InputLifecycle::HeldBulk) ||
+                                                      (Policy == InputLifecycle::Pipelined);
     static constexpr bool           clashes_with_fpu= true;   // copy_tile uses unpacker MOP
 
     // Prev-CB fold (D2): CopyTile loads CbA only.
@@ -312,10 +312,10 @@ struct CopyTile : CopyTileTag {
     /// wait_upfront with full n_tiles. None scale by chain block_size — block_size
     /// only drives the inner DEST-lane loop and slot_offset.
     ALWI void wait_per_tile(uint32_t cumulative_count) const {
-        if constexpr (Policy == Streaming || Policy == HeldStream) {
+        if constexpr (Policy == InputLifecycle::Streaming || Policy == InputLifecycle::HeldStream) {
             cb_wait_front(Cb, 1);
-        } else if constexpr (Policy == Pipelined ||
-                             Policy == HeldCumulative) {
+        } else if constexpr (Policy == InputLifecycle::Pipelined ||
+                             Policy == InputLifecycle::HeldCumulative) {
             cb_wait_front(Cb, cumulative_count);
         }
     }
@@ -323,7 +323,7 @@ struct CopyTile : CopyTileTag {
     /// Per-outer-iter wait of `inner_count` tiles (chunked streaming).
     /// inner_count == BlockSize for steady iters, == tail size for the last iter.
     ALWI void wait_per_block(uint32_t inner_count) const {
-        if constexpr (Policy == Chunked) {
+        if constexpr (Policy == InputLifecycle::Chunked) {
             cb_wait_front(Cb, inner_count);
         }
     }
@@ -331,12 +331,12 @@ struct CopyTile : CopyTileTag {
 
 
     // 2D variants — Ht/Wt-aware. Routes through `idx` and `window`; TileBase
-    // adds the runtime offset on top. Streaming policies handled by the same
+    // adds the runtime offset on top. InputLifecycle::Streaming policies handled by the same
     // `wait_per_tile` / `pop_per_tile` as 1D.
     ALWI void wait_upfront(uint32_t Ht, uint32_t Wt) const {
-        if constexpr (Policy == Bulk ||
-                      Policy == HeldBulk ||
-                      Policy == BulkDrain) {
+        if constexpr (Policy == InputLifecycle::Bulk ||
+                      Policy == InputLifecycle::HeldBulk ||
+                      Policy == InputLifecycle::BulkDrain) {
             cb_wait_front(Cb, detail::window<IndexMode>(Ht, Wt) + tile_base_value<Offset>(tile_base));
         }
     }
@@ -347,9 +347,9 @@ struct CopyTile : CopyTileTag {
     }
 
     ALWI void pop_upfront_end(uint32_t Ht, uint32_t Wt) const {
-        if constexpr (Policy == Bulk ||
-                      Policy == Pipelined ||
-                      Policy == DeferredPop) {
+        if constexpr (Policy == InputLifecycle::Bulk ||
+                      Policy == InputLifecycle::Pipelined ||
+                      Policy == InputLifecycle::DeferredPop) {
             cb_pop_front(Cb, detail::window<IndexMode>(Ht, Wt) + tile_base_value<Offset>(tile_base));
         }
     }
@@ -357,16 +357,16 @@ struct CopyTile : CopyTileTag {
     static constexpr uint32_t lane_width = to_u32(DstSlot) + 1;
 
     ALWI void pop_per_tile(uint32_t /*i*/) const {
-        if constexpr (Policy == Streaming ||
-                      Policy == NoWaitPop ||
-                      Policy == BulkDrain) {
+        if constexpr (Policy == InputLifecycle::Streaming ||
+                      Policy == InputLifecycle::NoWaitPop ||
+                      Policy == InputLifecycle::BulkDrain) {
             cb_pop_front(Cb, 1);
         }
     }
 
     /// Per-outer-iter pop of `inner_count` tiles (chunked streaming).
     ALWI void pop_per_block(uint32_t inner_count) const {
-        if constexpr (Policy == Chunked) {
+        if constexpr (Policy == InputLifecycle::Chunked) {
             cb_pop_front(Cb, inner_count);
         }
     }
@@ -387,22 +387,22 @@ struct PackTile : PackTileTag {
                   "PackTile: DEST slot exceeds DEST_AUTO_LIMIT");
     // TileBase != None on pack side requires caller-managed-style lifecycle on the
     // output CB (caller pre-reserved a window large enough for base + kind window).
-    // Streaming / Chunked reserve+push counts can't be inflated by a runtime base
+    // InputLifecycle::Streaming / InputLifecycle::Chunked reserve+push counts can't be inflated by a runtime base
     // without per-iter bookkeeping the chain doesn't own.
     static_assert(Offset == TileOffset::Unset || is_legal_output_lifecycle_with_base(Policy),
-                  "PackTile: TileOffset::Set requires Bulk-family or OutCallerManaged lifecycle "
-                  "(OutBulk / OutDeferredReserve / OutHeldReserve / OutCallerManaged)");
+                  "PackTile: TileOffset::Set requires InputLifecycle::Bulk-family or OutputLifecycle::CallerManaged lifecycle "
+                  "(OutputLifecycle::Bulk / OutputLifecycle::DeferredReserve / OutputLifecycle::HeldReserve / OutputLifecycle::CallerManaged)");
 
     static constexpr uint32_t          cb                  = Cb;
     static constexpr uint32_t          pack_cb_id()        { return Cb; }
     static constexpr Dst               pack_dst_slot       = DstSlot;
-    static constexpr bool              is_upfront          = (Policy == OutBulk);
-    static constexpr bool              uses_per_block_pack = (Policy == OutChunked);
+    static constexpr bool              is_upfront          = (Policy == OutputLifecycle::Bulk);
+    static constexpr bool              uses_per_block_pack = (Policy == OutputLifecycle::Chunked);
     // Walk vs pinned output addressing is DERIVED from the OutputLifecycle (no caller knob):
-    // OutBulk reserves the whole window upfront and writes distinct tiles into it (walk); every
+    // OutputLifecycle::Bulk reserves the whole window upfront and writes distinct tiles into it (walk); every
     // other policy advances the CB front via per-tile/chunk reserve+push, so the write index
     // stays pinned at base. (For a 1-tile output, walk and pinned are identical: base + 0 == base.)
-    static constexpr bool              walk                = (Policy == OutBulk);
+    static constexpr bool              walk                = (Policy == OutputLifecycle::Bulk);
 
     // Prev-CB fold (D2): PackTile writes pack-side; mark Cb under reconfig only when
     // the user opted into pack reconfig (Output). Otherwise no pack reconfig is
@@ -425,22 +425,22 @@ struct PackTile : PackTileTag {
     }
 
     ALWI void reserve_per_tile(uint32_t /*i*/) const {
-        if constexpr (Policy == OutStreaming ||
-                      Policy == OutHeldReserve) {
+        if constexpr (Policy == OutputLifecycle::Streaming ||
+                      Policy == OutputLifecycle::HeldReserve) {
             cb_reserve_back(Cb, 1);
         }
     }
 
     /// Per-outer-iter reserve of `inner_count` tiles (chunked streaming).
     ALWI void reserve_per_block(uint32_t inner_count) const {
-        if constexpr (Policy == OutChunked) {
+        if constexpr (Policy == OutputLifecycle::Chunked) {
             cb_reserve_back(Cb, inner_count);
         }
     }
 
 
 
-    // Pack exec — walk the reserved output window (base + i_flat) for OutBulk, or stay pinned
+    // Pack exec — walk the reserved output window (base + i_flat) for OutputLifecycle::Bulk, or stay pinned
     // at base for per-tile/chunk policies whose CB front already advanced. TileOffset adds base.
     ALWI void exec(uint32_t i_flat, uint32_t /*ht*/, uint32_t /*wt*/, uint32_t slot_offset) const {
         const uint32_t base = tile_base_value<Offset>(tile_base);
@@ -448,15 +448,15 @@ struct PackTile : PackTileTag {
         pack_tile(to_u32(DstSlot) + slot_offset, Cb, out_idx);
     }
 
-    // Upfront reserve/push — OutBulk walks the full window (Ht*Wt); OutDeferredReserve is pinned (1).
+    // Upfront reserve/push — OutputLifecycle::Bulk walks the full window (Ht*Wt); OutputLifecycle::DeferredReserve is pinned (1).
     ALWI void reserve_upfront(uint32_t Ht, uint32_t Wt) const {
-        if constexpr (Policy == OutBulk) {
+        if constexpr (Policy == OutputLifecycle::Bulk) {
             cb_reserve_back(Cb, (Ht * Wt) + tile_base_value<Offset>(tile_base));
         }
     }
     ALWI void push_at_end(uint32_t Ht, uint32_t Wt) const {
-        if constexpr (Policy == OutDeferredReserve ||
-                      Policy == OutBulk) {
+        if constexpr (Policy == OutputLifecycle::DeferredReserve ||
+                      Policy == OutputLifecycle::Bulk) {
             cb_push_back(Cb, (walk ? (Ht * Wt) : 1u) + tile_base_value<Offset>(tile_base));
         }
     }
@@ -464,14 +464,14 @@ struct PackTile : PackTileTag {
     static constexpr uint32_t lane_width = to_u32(DstSlot) + 1;
 
     ALWI void push_per_tile(uint32_t /*i*/) const {
-        if constexpr (Policy == OutStreaming) {
+        if constexpr (Policy == OutputLifecycle::Streaming) {
             cb_push_back(Cb, 1);
         }
     }
 
     /// Per-outer-iter push of `inner_count` tiles (chunked streaming).
     ALWI void push_per_block(uint32_t inner_count) const {
-        if constexpr (Policy == OutChunked) {
+        if constexpr (Policy == OutputLifecycle::Chunked) {
             cb_push_back(Cb, inner_count);
         }
     }
@@ -498,15 +498,15 @@ struct BinaryFpu : BinaryFpuTag {
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT,
                   "BinaryFpu: DEST slot exceeds DEST_AUTO_LIMIT");
     // Comprehensive per-side (IndexMode, Policy) legality. Block rejects PerTile-pop
-    // (Streaming/BulkDrain/NoWaitPop — absolute-idx footgun) and PerTile-wait-of-1
-    // (HeldStream — never tracks per-iter requirement). Scalar/Row/Col accept every
+    // (InputLifecycle::Streaming/InputLifecycle::BulkDrain/InputLifecycle::NoWaitPop — absolute-idx footgun) and PerTile-wait-of-1
+    // (InputLifecycle::HeldStream — never tracks per-iter requirement). Scalar/Row/Col accept every
     // legal lifecycle — caller-sized.
     static_assert(is_legal_kind_lifecycle(AIndex, APolicy),
                   "BinaryFpu: (AIndex, APolicy) is illegal for Block — exclude "
-                  "Streaming / HeldStream / BulkDrain / NoWaitPop on Block walkers.");
+                  "InputLifecycle::Streaming / InputLifecycle::HeldStream / InputLifecycle::BulkDrain / InputLifecycle::NoWaitPop on Block walkers.");
     static_assert(is_legal_kind_lifecycle(BIndex, BPolicy),
                   "BinaryFpu: (BIndex, BPolicy) is illegal for Block — exclude "
-                  "Streaming / HeldStream / BulkDrain / NoWaitPop on Block walkers.");
+                  "InputLifecycle::Streaming / InputLifecycle::HeldStream / InputLifecycle::BulkDrain / InputLifecycle::NoWaitPop on Block walkers.");
     // same_cb dedup safety: when CbA == CbB the B-side wait/pop is skipped, so the
     // helper would under-wait if A and B walked different ranges of the shared CB.
     static_assert((CbA != CbB) || AIndex == BIndex,
@@ -517,12 +517,12 @@ struct BinaryFpu : BinaryFpuTag {
                   "BinaryFpu: A-side RowBcast / ColBcast index require non-streaming APolicy");
     static_assert(detail::valid_policy_mode_v<BPolicy, BIndex>,
                   "BinaryFpu: B-side RowBcast / ColBcast index require non-streaming BPolicy");
-    // Per-operand TileBase lifecycle compatibility — Streaming/Chunked/Cumulative
+    // Per-operand TileBase lifecycle compatibility — InputLifecycle::Streaming/InputLifecycle::Chunked/Cumulative
     // can't compose with runtime base offsets (iter-dependent wait/pop counts).
     static_assert(OffsetA == TileOffset::Unset || is_legal_input_lifecycle_with_base(APolicy),
-                  "BinaryFpu: OffsetA Set requires APolicy to be Bulk-family or CallerManaged");
+                  "BinaryFpu: OffsetA Set requires APolicy to be InputLifecycle::Bulk-family or InputLifecycle::CallerManaged");
     static_assert(OffsetB == TileOffset::Unset || is_legal_input_lifecycle_with_base(BPolicy),
-                  "BinaryFpu: OffsetB Set requires BPolicy to be Bulk-family or CallerManaged");
+                  "BinaryFpu: OffsetB Set requires BPolicy to be InputLifecycle::Bulk-family or InputLifecycle::CallerManaged");
     // Per-block streaming uses chunk-local CB front. When the two sides use
     // DIFFERENT regimes (one per-block → chunk-local index `j`; the other upfront /
     // caller-managed → absolute index `base_tile + j`), the chain dispatcher
@@ -537,12 +537,12 @@ struct BinaryFpu : BinaryFpuTag {
     static constexpr InputLifecycle a_policy(){ return APolicy; }
     static constexpr InputLifecycle b_policy(){ return BPolicy; }
     static constexpr Dst           dst_slot   = DstSlot;
-    static constexpr bool          is_upfront = (APolicy == Bulk) ||
-                                                (APolicy == HeldBulk) ||
-                                                (APolicy == Pipelined) ||
-                                                (BPolicy == Bulk) ||
-                                                (BPolicy == HeldBulk) ||
-                                                (BPolicy == Pipelined);
+    static constexpr bool          is_upfront = (APolicy == InputLifecycle::Bulk) ||
+                                                (APolicy == InputLifecycle::HeldBulk) ||
+                                                (APolicy == InputLifecycle::Pipelined) ||
+                                                (BPolicy == InputLifecycle::Bulk) ||
+                                                (BPolicy == InputLifecycle::HeldBulk) ||
+                                                (BPolicy == InputLifecycle::Pipelined);
     static constexpr bool          clashes_with_fpu = true;
     static constexpr bool          same_cb    = (CbA == CbB);
 
@@ -550,8 +550,8 @@ struct BinaryFpu : BinaryFpuTag {
     // DIFFERENT regimes (A=PerBlock + B=Upfront, or vice versa), the chain calls
     // the 3-arg exec / exec overload and passes both indices; each side picks.
     // Same-regime falls through to the 2-arg forwarder identical to today's code.
-    static constexpr bool a_uses_local_idx = (APolicy == Chunked);
-    static constexpr bool b_uses_local_idx = (BPolicy == Chunked);
+    static constexpr bool a_uses_local_idx = (APolicy == InputLifecycle::Chunked);
+    static constexpr bool b_uses_local_idx = (BPolicy == InputLifecycle::Chunked);
     static constexpr bool needs_per_side_idx = (a_uses_local_idx != b_uses_local_idx);
 
     // Prev-CB fold (D2): BinaryFpu touches srca (CbA) and srcb (CbB) only. Pack-side
@@ -616,21 +616,21 @@ struct BinaryFpu : BinaryFpuTag {
     }
 
     // ---- CB lifecycle (per-tile) ----
-    // Streaming policies (WaitAndPop / WaitNoPop) always wait 1 — they are incompatible
+    // InputLifecycle::Streaming policies (WaitAndPop / WaitNoPop) always wait 1 — they are incompatible
     // with BlockSize > 1 per-iter consumption. Cumulative scales `(i+1) * block_size`
     // — caller passes `cumulative_count = (i_outer + 1) * block_size`.
     ALWI void wait_per_tile(uint32_t cumulative_count) const {
-        if constexpr (APolicy == Streaming || APolicy == HeldStream) {
+        if constexpr (APolicy == InputLifecycle::Streaming || APolicy == InputLifecycle::HeldStream) {
             cb_wait_front(CbA, 1);
-        } else if constexpr (APolicy == Pipelined ||
-                             APolicy == HeldCumulative) {
+        } else if constexpr (APolicy == InputLifecycle::Pipelined ||
+                             APolicy == InputLifecycle::HeldCumulative) {
             cb_wait_front(CbA, cumulative_count);
         }
         if constexpr (!same_cb) {
-            if constexpr (BPolicy == Streaming || BPolicy == HeldStream) {
+            if constexpr (BPolicy == InputLifecycle::Streaming || BPolicy == InputLifecycle::HeldStream) {
                 cb_wait_front(CbB, 1);
-            } else if constexpr (BPolicy == Pipelined ||
-                                 BPolicy == HeldCumulative) {
+            } else if constexpr (BPolicy == InputLifecycle::Pipelined ||
+                                 BPolicy == InputLifecycle::HeldCumulative) {
                 cb_wait_front(CbB, cumulative_count);
             }
         }
@@ -639,10 +639,10 @@ struct BinaryFpu : BinaryFpuTag {
     /// Per-outer-iter chunked wait. Per-side: A waits `inner_count` if APolicy is
     /// per-block; same for B (same_cb dedup).
     ALWI void wait_per_block(uint32_t inner_count) const {
-        if constexpr (APolicy == Chunked) {
+        if constexpr (APolicy == InputLifecycle::Chunked) {
             cb_wait_front(CbA, inner_count);
         }
-        if constexpr (!same_cb && BPolicy == Chunked) {
+        if constexpr (!same_cb && BPolicy == InputLifecycle::Chunked) {
             cb_wait_front(CbB, inner_count);
         }
     }
@@ -651,15 +651,15 @@ struct BinaryFpu : BinaryFpuTag {
     // 2D: per-side upfront wait — A uses AIndex's window, B uses BIndex's window.
     // Same `same_cb` dedup as 1D (skip B side when CbA == CbB).
     ALWI void wait_upfront(uint32_t Ht, uint32_t Wt) const {
-        if constexpr (APolicy == Bulk ||
-                      APolicy == HeldBulk ||
-                      APolicy == BulkDrain) {
+        if constexpr (APolicy == InputLifecycle::Bulk ||
+                      APolicy == InputLifecycle::HeldBulk ||
+                      APolicy == InputLifecycle::BulkDrain) {
             const uint32_t a_base = same_cb ? same_cb_base_max() : tile_base_value<OffsetA>(tile_base_a);
             cb_wait_front(CbA, detail::window<AIndex>(Ht, Wt) + a_base);
         }
-        if constexpr (!same_cb && (BPolicy == Bulk ||
-                                   BPolicy == HeldBulk ||
-                                   BPolicy == BulkDrain)) {
+        if constexpr (!same_cb && (BPolicy == InputLifecycle::Bulk ||
+                                   BPolicy == InputLifecycle::HeldBulk ||
+                                   BPolicy == InputLifecycle::BulkDrain)) {
             cb_wait_front(CbB, detail::window<BIndex>(Ht, Wt) + tile_base_value<OffsetB>(tile_base_b));
         }
     }
@@ -676,23 +676,23 @@ struct BinaryFpu : BinaryFpuTag {
     static constexpr uint32_t lane_width = to_u32(DstSlot) + 1;
 
     ALWI void pop_per_tile(uint32_t /*i*/) const {
-        if constexpr (APolicy == Streaming ||
-                      APolicy == NoWaitPop ||
-                      APolicy == BulkDrain) {
+        if constexpr (APolicy == InputLifecycle::Streaming ||
+                      APolicy == InputLifecycle::NoWaitPop ||
+                      APolicy == InputLifecycle::BulkDrain) {
             cb_pop_front(CbA, 1);
         }
-        if constexpr (!same_cb && (BPolicy == Streaming ||
-                                   BPolicy == NoWaitPop ||
-                                   BPolicy == BulkDrain)) {
+        if constexpr (!same_cb && (BPolicy == InputLifecycle::Streaming ||
+                                   BPolicy == InputLifecycle::NoWaitPop ||
+                                   BPolicy == InputLifecycle::BulkDrain)) {
             cb_pop_front(CbB, 1);
         }
     }
 
     ALWI void pop_per_block(uint32_t inner_count) const {
-        if constexpr (APolicy == Chunked) {
+        if constexpr (APolicy == InputLifecycle::Chunked) {
             cb_pop_front(CbA, inner_count);
         }
-        if constexpr (!same_cb && BPolicy == Chunked) {
+        if constexpr (!same_cb && BPolicy == InputLifecycle::Chunked) {
             cb_pop_front(CbB, inner_count);
         }
     }
@@ -733,15 +733,15 @@ struct BinaryFpu : BinaryFpuTag {
     }
 
     ALWI void pop_upfront_end(uint32_t Ht, uint32_t Wt) const {
-        if constexpr (APolicy == Bulk ||
-                      APolicy == Pipelined ||
-                      APolicy == DeferredPop) {
+        if constexpr (APolicy == InputLifecycle::Bulk ||
+                      APolicy == InputLifecycle::Pipelined ||
+                      APolicy == InputLifecycle::DeferredPop) {
             const uint32_t a_base = same_cb ? same_cb_base_max() : tile_base_value<OffsetA>(tile_base_a);
             cb_pop_front(CbA, detail::window<AIndex>(Ht, Wt) + a_base);
         }
-        if constexpr (!same_cb && (BPolicy == Bulk ||
-                                   BPolicy == Pipelined ||
-                                   BPolicy == DeferredPop)) {
+        if constexpr (!same_cb && (BPolicy == InputLifecycle::Bulk ||
+                                   BPolicy == InputLifecycle::Pipelined ||
+                                   BPolicy == InputLifecycle::DeferredPop)) {
             cb_pop_front(CbB, detail::window<BIndex>(Ht, Wt) + tile_base_value<OffsetB>(tile_base_b));
         }
     }
@@ -765,22 +765,22 @@ struct DestReuseBinary : DestReuseBinaryTag {
                   "DestReuseBinary: DEST slot exceeds DEST_AUTO_LIMIT");
     static_assert(is_legal_kind_lifecycle(IndexMode, Policy),
                   "DestReuseBinary: (IndexMode, Policy) is illegal for Block — exclude "
-                  "Streaming / HeldStream / BulkDrain / NoWaitPop on Block walkers.");
+                  "InputLifecycle::Streaming / InputLifecycle::HeldStream / InputLifecycle::BulkDrain / InputLifecycle::NoWaitPop on Block walkers.");
     static_assert(detail::valid_policy_mode_v<Policy, IndexMode>,
                   "DestReuseBinary: RowBcast / ColBcast index require non-streaming policy");
     static_assert(Offset == TileOffset::Unset || is_legal_input_lifecycle_with_base(Policy),
-                  "DestReuseBinary: TileOffset::Set requires Bulk-family or CallerManaged lifecycle");
+                  "DestReuseBinary: TileOffset::Set requires InputLifecycle::Bulk-family or InputLifecycle::CallerManaged lifecycle");
 
     static constexpr uint32_t       cb_a_id()         { return Cb; }
     static constexpr uint32_t       cb_b_id()         { return 0;  }
     static constexpr OperandKind    a_index_mode     = IndexMode;
     static constexpr OperandKind    b_index_mode     = OperandKind::Scalar;
     static constexpr InputLifecycle a_policy()        { return Policy; }
-    static constexpr InputLifecycle b_policy()        { return CallerManaged; }
+    static constexpr InputLifecycle b_policy()        { return InputLifecycle::CallerManaged; }
     static constexpr Dst            dst_slot          = DstOut;
-    static constexpr bool           is_upfront        = (Policy == Bulk) ||
-                                                        (Policy == HeldBulk) ||
-                                                        (Policy == Pipelined);
+    static constexpr bool           is_upfront        = (Policy == InputLifecycle::Bulk) ||
+                                                        (Policy == InputLifecycle::HeldBulk) ||
+                                                        (Policy == InputLifecycle::Pipelined);
     static constexpr bool           clashes_with_fpu  = true;
 
     // Prev-CB fold (D2): DestReuseBinary loads CB into srca (when DEST → srcb) or srcb
@@ -816,24 +816,24 @@ struct DestReuseBinary : DestReuseBinaryTag {
     }
 
     ALWI void wait_per_tile(uint32_t cumulative_count) const {
-        if constexpr (Policy == Streaming || Policy == HeldStream) {
+        if constexpr (Policy == InputLifecycle::Streaming || Policy == InputLifecycle::HeldStream) {
             cb_wait_front(Cb, 1);
-        } else if constexpr (Policy == Pipelined ||
-                             Policy == HeldCumulative) {
+        } else if constexpr (Policy == InputLifecycle::Pipelined ||
+                             Policy == InputLifecycle::HeldCumulative) {
             cb_wait_front(Cb, cumulative_count);
         }
     }
     ALWI void wait_per_block(uint32_t inner_count) const {
-        if constexpr (Policy == Chunked) {
+        if constexpr (Policy == InputLifecycle::Chunked) {
             cb_wait_front(Cb, inner_count);
         }
     }
 
     // 2D variants
     ALWI void wait_upfront(uint32_t Ht, uint32_t Wt) const {
-        if constexpr (Policy == Bulk ||
-                      Policy == HeldBulk ||
-                      Policy == BulkDrain) {
+        if constexpr (Policy == InputLifecycle::Bulk ||
+                      Policy == InputLifecycle::HeldBulk ||
+                      Policy == InputLifecycle::BulkDrain) {
             cb_wait_front(Cb, detail::window<IndexMode>(Ht, Wt) + tile_base_value<Offset>(tile_base));
         }
     }
@@ -848,9 +848,9 @@ struct DestReuseBinary : DestReuseBinaryTag {
         binary_dest_reuse_tiles<et, reuse>(Cb, in_idx, to_u32(DstIn) + slot_offset);
     }
     ALWI void pop_upfront_end(uint32_t Ht, uint32_t Wt) const {
-        if constexpr (Policy == Bulk ||
-                      Policy == Pipelined ||
-                      Policy == DeferredPop) {
+        if constexpr (Policy == InputLifecycle::Bulk ||
+                      Policy == InputLifecycle::Pipelined ||
+                      Policy == InputLifecycle::DeferredPop) {
             cb_pop_front(Cb, detail::window<IndexMode>(Ht, Wt) + tile_base_value<Offset>(tile_base));
         }
     }
@@ -858,14 +858,14 @@ struct DestReuseBinary : DestReuseBinaryTag {
     static constexpr uint32_t lane_width =
         (to_u32(DstIn) > to_u32(DstOut)) ? (to_u32(DstIn) + 1) : (to_u32(DstOut) + 1);
     ALWI void pop_per_tile(uint32_t /*i*/) const {
-        if constexpr (Policy == Streaming ||
-                      Policy == NoWaitPop ||
-                      Policy == BulkDrain) {
+        if constexpr (Policy == InputLifecycle::Streaming ||
+                      Policy == InputLifecycle::NoWaitPop ||
+                      Policy == InputLifecycle::BulkDrain) {
             cb_pop_front(Cb, 1);
         }
     }
     ALWI void pop_per_block(uint32_t inner_count) const {
-        if constexpr (Policy == Chunked) {
+        if constexpr (Policy == InputLifecycle::Chunked) {
             cb_pop_front(Cb, inner_count);
         }
     }
@@ -887,11 +887,11 @@ struct UnaryBcast : UnaryBcastTag {
     static constexpr uint32_t       cb_a_id()         { return Cb; }
     static constexpr uint32_t       cb_b_id()         { return 0;  }
     static constexpr InputLifecycle a_policy()        { return Policy; }
-    static constexpr InputLifecycle b_policy()        { return CallerManaged; }
+    static constexpr InputLifecycle b_policy()        { return InputLifecycle::CallerManaged; }
     static constexpr Dst            dst_slot          = DstSlot;
-    static constexpr bool           is_upfront        = (Policy == Bulk) ||
-                                                        (Policy == HeldBulk) ||
-                                                        (Policy == Pipelined);
+    static constexpr bool           is_upfront        = (Policy == InputLifecycle::Bulk) ||
+                                                        (Policy == InputLifecycle::HeldBulk) ||
+                                                        (Policy == InputLifecycle::Pipelined);
     static constexpr bool           clashes_with_fpu  = true;
 
     // Prev-CB fold (D2): UnaryBcast binds BOTH srca and srcb to Cb. The broadcast datacopy MOP
@@ -944,15 +944,15 @@ struct UnaryBcast : UnaryBcastTag {
     }
 
     ALWI void wait_per_tile(uint32_t cumulative_count) const {
-        if constexpr (Policy == Streaming || Policy == HeldStream) {
+        if constexpr (Policy == InputLifecycle::Streaming || Policy == InputLifecycle::HeldStream) {
             cb_wait_front(Cb, 1);
-        } else if constexpr (Policy == Pipelined ||
-                             Policy == HeldCumulative) {
+        } else if constexpr (Policy == InputLifecycle::Pipelined ||
+                             Policy == InputLifecycle::HeldCumulative) {
             cb_wait_front(Cb, cumulative_count);
         }
     }
     ALWI void wait_per_block(uint32_t inner_count) const {
-        if constexpr (Policy == Chunked) {
+        if constexpr (Policy == InputLifecycle::Chunked) {
             cb_wait_front(Cb, inner_count);
         }
     }
@@ -960,9 +960,9 @@ struct UnaryBcast : UnaryBcastTag {
     // 2D variants — UnaryBcast always reads tile 0 (intra-tile bcast LLK), no per-iter
     // tile index. Upfront window in 2D = Ht * Wt (every (ht, wt) iter consumes one tile).
     ALWI void wait_upfront(uint32_t Ht, uint32_t Wt) const {
-        if constexpr (Policy == Bulk ||
-                      Policy == HeldBulk ||
-                      Policy == BulkDrain) {
+        if constexpr (Policy == InputLifecycle::Bulk ||
+                      Policy == InputLifecycle::HeldBulk ||
+                      Policy == InputLifecycle::BulkDrain) {
             cb_wait_front(Cb, Ht * Wt);
         }
     }
@@ -971,23 +971,23 @@ struct UnaryBcast : UnaryBcastTag {
         unary_bcast<bt>(Cb, /*in_tile_index=*/0, to_u32(DstSlot) + slot_offset);
     }
     ALWI void pop_upfront_end(uint32_t Ht, uint32_t Wt) const {
-        if constexpr (Policy == Bulk ||
-                      Policy == Pipelined ||
-                      Policy == DeferredPop) {
+        if constexpr (Policy == InputLifecycle::Bulk ||
+                      Policy == InputLifecycle::Pipelined ||
+                      Policy == InputLifecycle::DeferredPop) {
             cb_pop_front(Cb, Ht * Wt);
         }
     }
 
     static constexpr uint32_t lane_width = to_u32(DstSlot) + 1;
     ALWI void pop_per_tile(uint32_t /*i*/) const {
-        if constexpr (Policy == Streaming ||
-                      Policy == NoWaitPop ||
-                      Policy == BulkDrain) {
+        if constexpr (Policy == InputLifecycle::Streaming ||
+                      Policy == InputLifecycle::NoWaitPop ||
+                      Policy == InputLifecycle::BulkDrain) {
             cb_pop_front(Cb, 1);
         }
     }
     ALWI void pop_per_block(uint32_t inner_count) const {
-        if constexpr (Policy == Chunked) {
+        if constexpr (Policy == InputLifecycle::Chunked) {
             cb_pop_front(Cb, inner_count);
         }
     }
@@ -1122,17 +1122,17 @@ inline constexpr uint32_t chain_max_block_v = DEST_AUTO_LIMIT / chain_lane_width
 
 // chain_supports_block — N-element fold. True when every CB-reader element uses a
 // policy that stages a multi-tile DEST window (Upfront / Cumulative / NoWaitNoPop).
-// Streaming policies (WaitAndPop / WaitNoPop / NoWaitPop) consume ONE tile per iter
+// InputLifecycle::Streaming policies (WaitAndPop / WaitNoPop / InputLifecycle::NoWaitPop) consume ONE tile per iter
 // and are incompatible with chain BlockSize > 1 (chain consumes BlockSize tiles per
 // outer iter). The chain `static_assert`s on this predicate when `BlockSize > 1`.
 namespace detail {
 constexpr bool policy_supports_block(InputLifecycle p) {
-    return p == Bulk ||
-           p == HeldBulk ||
-           p == Pipelined ||
-           p == HeldCumulative ||
-           p == CallerManaged ||
-           p == Chunked;
+    return p == InputLifecycle::Bulk ||
+           p == InputLifecycle::HeldBulk ||
+           p == InputLifecycle::Pipelined ||
+           p == InputLifecycle::HeldCumulative ||
+           p == InputLifecycle::CallerManaged ||
+           p == InputLifecycle::Chunked;
 }
 
 template <class E>
@@ -1186,8 +1186,8 @@ struct elem_per_block_reader : std::false_type {};
 
 template <class E>
 struct elem_per_block_reader<E, std::enable_if_t<is_cb_reader_op_v<E>>>
-    : std::bool_constant<(E::a_policy() == Chunked) ||
-                         (E::b_policy() == Chunked)> {};
+    : std::bool_constant<(E::a_policy() == InputLifecycle::Chunked) ||
+                         (E::b_policy() == InputLifecycle::Chunked)> {};
 
 template <class E, class = void>
 struct elem_per_block_pack : std::false_type {};
@@ -1745,7 +1745,7 @@ ALWI void elem_apply_compute(
         (void)elem; (void)i_flat; (void)ht; (void)wt; (void)inner_count;
         (void)chain_lane_width; (void)Ht; (void)Wt;
     } else if constexpr (is_cb_reader_op_v<ElemT>) {
-        // Streaming wait fires per-tile (Block walks); upfront wait is idempotent.
+        // InputLifecycle::Streaming wait fires per-tile (Block walks); upfront wait is idempotent.
         elem.wait_per_tile(i_flat + inner_count);
         elem_wait_per_block(elem, inner_count);
         elem.wait_upfront(Ht, Wt);
@@ -1880,8 +1880,8 @@ ALWI void eltwise_chain(EltwiseShape shape, Es... elts) {
     // the chain clamps block_size so it can never overflow DEST (see below).
     constexpr uint32_t chain_lane_w = chain_lane_width_v<Chain>;
     uint32_t block_size = shape.block_size;
-    // Streaming CB-reader chains can't multi-tile their DEST window (WaitAndPop /
-    // WaitNoPop / NoWaitPop consume one tile per iter). Force block_size to 1 in that
+    // InputLifecycle::Streaming CB-reader chains can't multi-tile their DEST window (WaitAndPop /
+    // WaitNoPop / InputLifecycle::NoWaitPop consume one tile per iter). Force block_size to 1 in that
     // case — compile-time gated, so the override path emits no code when the chain
     // supports block-mode.
     if constexpr (!chain_supports_block_v<Chain>) {
