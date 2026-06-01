@@ -192,28 +192,16 @@ def get_matmul_config(M, K, N, core_grid, default_block_size=None):
 
         M_tiles = math.ceil(M / 32)
         N_tiles = math.ceil(N / 32)
-        K_tiles = math.ceil(K / 32)
 
-        # Clamp block sizes to actual tile counts. The old behaviour clamped
-        # to ``subblock_h`` (=2) on M and ``subblock_w`` (=2) on N, which
-        # leaves ``M_block_size > M_tiles`` whenever a matmul has only 1
-        # tile in the M dim (e.g. LTX audio shapes with M=32 per SP shard).
-        # That makes the matmul read past the valid M extent into adjacent
-        # L1 garbage, polluting the output with whatever previous activation
-        # happened to sit there — a structural bug that is audibly catastrophic
-        # for audio FFN even though video tolerates it.
-        M_block_size = max(1, min(M_block_size, M_tiles))
-        N_block_size = max(1, min(N_block_size, N_tiles))
-        K_block_size = max(1, min(K_block_size, K_tiles))
-
-        # Subblocks must divide their containing block; never exceed it.
-        subblock_h = max(1, min(subblock_h, M_block_size))
-        subblock_w = max(1, min(subblock_w, N_block_size))
+        if M_tiles < M_block_size:
+            M_block_size = subblock_h
+        if N_tiles < N_block_size:
+            N_block_size = subblock_w
 
         signature = (M, K, N, grid_x, grid_y)
         if signature not in _warned_matmul_signatures:
             logger.warning(
-                f"No known best blocking for (M, K, N) = ({M}, {K}, {N}) on {grid_x}x{grid_y} core grid; using default {M_block_size}x{K_block_size}x{N_block_size} subblock=({subblock_h},{subblock_w})"
+                f"No known best blocking for (M, K, N) = ({M}, {K}, {N}) on {grid_x}x{grid_y} core grid; using default {M_block_size}x{K_block_size}x{N_block_size}"
             )
             _warned_matmul_signatures.add(signature)
     else:
