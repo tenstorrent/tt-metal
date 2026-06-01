@@ -6,6 +6,7 @@
 #include <bit>
 #include <functional>
 #include <limits>
+#include <numeric>
 #include <set>
 #include <string_view>
 #include <unordered_set>
@@ -127,8 +128,9 @@ struct ProcessorMask {
 using DMProcessorMask = ProcessorMask<QUASAR_DM_CORES_PER_NODE>;
 using ComputeEngineMask = ProcessorMask<QUASAR_TENSIX_ENGINES_PER_NODE>;
 
-// Kernel -> ProcessorMask maps (Gen2/Quasar only)
-using DMProcessorMaskMap = std::unordered_map<const KernelSpec*, DMProcessorMask>;
+// Kernel -> ProcessorMask map (Gen2/Quasar only).
+// DM masks flow through KernelCouplingGroup (equivalence class) rather than per-KernelSpec, so the DM
+// counterpart of this map is defined in the dm_solver namespace and keyed by KernelCouplingGroup*.
 using ComputeEngineMaskMap = std::unordered_map<const KernelSpec*, ComputeEngineMask>;
 
 // Kernel -> DFB risc mask (passed to MakeDataflowBufferConfig)
@@ -1564,6 +1566,25 @@ namespace dm_solver {
 // WorkUnitSpec target_nodes). Used by the solver to read each kernel's placement.
 using KernelNodeSetMap = std::unordered_map<KernelSpecName, NodeRangeSet>;
 
+// Equivalence class of DM kernels coupled by shared DFB endpoint roles.
+//
+// All DM kernels bound to the same DFB on the same role (PRODUCER/CONSUMER) must end up
+// with identical DM RISC masks — the DFB's hardware config carries a single mask per role.
+// Membership is computed by union-find over DM kernels: two kernels are merged if they share
+// any DFB endpoint role; the transitive closure yields KernelCouplingGroups.
+//
+// num_threads is uniform within a group (the per-DFB-side num_threads validator + transitive
+// equality guarantees this for any chain of shared endpoints).
+//
+// The DM solver operates on KernelCouplingGroups instead of individual KernelSpecs: each group is
+// assigned one DMProcessorMask, which then applies to every member. A non-multi-bound DM
+// kernel ends up in a singleton group.
+struct KernelCouplingGroup {
+    std::vector<const KernelSpec*> members;  // ≥ 1; canonical member is members.front()
+    NodeRangeSet merged_node_set;            // union of members' node sets
+    uint8_t num_threads = 0;                 // shared across members
+};
+
 // State for tracking per-node processor usage
 class NodeUsageTracker {
 public:
@@ -1609,109 +1630,212 @@ private:
     std::map<NodeCoord, DMProcessorMask> node_used_masks_;
 };
 
-// Constraint score for sorting: higher = more constrained (RISC cores should be assigned earlier)
-int ConstraintScore(const KernelSpec* k, const NodeRangeSet& kernel_nodes) {
-    int node_count = static_cast<int>(kernel_nodes.num_cores());
-    int thread_count = static_cast<int>(k->num_threads);
+// Result map: one DMProcessorMask per KernelCouplingGroup (which expands to its member kernels).
+using KernelCouplingGroupMaskMap = std::unordered_map<const KernelCouplingGroup*, DMProcessorMask>;
+
+// Constraint score for sorting: higher = more constrained (assigned earlier)
+int ConstraintScore(const KernelCouplingGroup* g) {
+    int node_count = static_cast<int>(g->merged_node_set.num_cores());
+    int thread_count = static_cast<int>(g->num_threads);
     return (node_count * 100) + thread_count;  // nodes dominate, threads break ties
 }
 
-void SortByConstraint(std::vector<const KernelSpec*>& kernels, const KernelNodeSetMap& kernel_node_set) {
-    std::sort(kernels.begin(), kernels.end(), [&kernel_node_set](const KernelSpec* a, const KernelSpec* b) {
-        int score_a = ConstraintScore(a, kernel_node_set.at(a->unique_id));
-        int score_b = ConstraintScore(b, kernel_node_set.at(b->unique_id));
+// Deterministic tiebreaker: sort by the lexicographically-smallest member unique_id.
+// Group::members is canonicalized at construction time so members.front() is the sort key.
+const std::string& group_sort_key(const KernelCouplingGroup* g) { return g->members.front()->unique_id; }
+
+void SortByConstraint(std::vector<const KernelCouplingGroup*>& groups) {
+    std::sort(groups.begin(), groups.end(), [](const KernelCouplingGroup* a, const KernelCouplingGroup* b) {
+        int score_a = ConstraintScore(a);
+        int score_b = ConstraintScore(b);
         if (score_a != score_b) {
             return score_a > score_b;  // Higher score first
         }
-        // In the case of a tie, use unique_id as (deterministic) tiebreaker
-        return a->unique_id < b->unique_id;
+        return group_sort_key(a) < group_sort_key(b);
     });
 }
 
-// Try to assign all kernels in the given order using greedy selection
-// Returns true if successful, populates result map
+// Try to assign all groups in the given order using greedy selection.
+// Returns true if successful, populates result map.
 bool TryGreedyAssignment(
-    const std::vector<const KernelSpec*>& kernel_order,
-    const KernelNodeSetMap& kernel_node_set,
+    const std::vector<const KernelCouplingGroup*>& group_order,
     NodeUsageTracker& tracker,
-    DMProcessorMaskMap& result) {
-    for (const KernelSpec* kernel : kernel_order) {
-        const NodeRangeSet& target_nodes = kernel_node_set.at(kernel->unique_id);
-        DMProcessorMask combined_used = tracker.get_combined_used_mask(target_nodes);
+    KernelCouplingGroupMaskMap& result) {
+    for (const KernelCouplingGroup* group : group_order) {
+        DMProcessorMask combined_used = tracker.get_combined_used_mask(group->merged_node_set);
 
-        auto selected = ReserveProcessors(kernel->num_threads, combined_used);
+        auto selected = ReserveProcessors(group->num_threads, combined_used);
         if (!selected.has_value()) {
-            return false;  // Can't assign this kernel
+            return false;  // Can't assign this group
         }
 
-        result[kernel] = selected.value();
-        tracker.mark_used(target_nodes, selected.value());
+        result[group] = selected.value();
+        tracker.mark_used(group->merged_node_set, selected.value());
     }
     return true;
 }
 
-// Backtracking solver over kernel orderings
-// Note: In the worst case, this is O(N!) in the number of kernels.
+// Backtracking solver over kernel coupling group orderings.
+// Note: In the worst case, this is O(N!) in the number of groups.
 //       In practice, I expect this will almost always solve in the first greedy attempt (if sorted).
 //       The backtracking is just here for pathological cases.
-//       Even then, it shouldn't be horrendous. We won't have a a huge number of kernels in a ProgramSpec.
+//       Even then, it shouldn't be horrendous. We won't have a huge number of kernels in a ProgramSpec.
 //       And in the common case (traced), Program creation isn't on the critical path.
 //       We can revisit if this ever becomes a problem.
 bool SolveWithOrderingBacktrack(
-    std::vector<const KernelSpec*> kernels,  // by value - we'll permute it
-    const KernelNodeSetMap& kernel_node_set,
+    std::vector<const KernelCouplingGroup*> groups,  // by value - we'll permute it
     NodeUsageTracker& tracker,
-    DMProcessorMaskMap& result) {
+    KernelCouplingGroupMaskMap& result) {
     // Try current ordering
-    if (TryGreedyAssignment(kernels, kernel_node_set, tracker, result)) {
+    if (TryGreedyAssignment(groups, tracker, result)) {
         return true;
     }
 
-    // Backtrack: try all permutations
-    // (std::next_permutation requires sorted input)
-    // Sort by unique_id for deterministic permutation order
-    auto by_name = [](const KernelSpec* a, const KernelSpec* b) { return a->unique_id < b->unique_id; };
-    std::sort(kernels.begin(), kernels.end(), by_name);
+    // Backtrack: try all permutations.
+    // (std::next_permutation requires sorted input.)
+    auto by_name = [](const KernelCouplingGroup* a, const KernelCouplingGroup* b) {
+        return group_sort_key(a) < group_sort_key(b);
+    };
+    std::sort(groups.begin(), groups.end(), by_name);
     do {
         tracker.reset();
         result.clear();
-        if (TryGreedyAssignment(kernels, kernel_node_set, tracker, result)) {
+        if (TryGreedyAssignment(groups, tracker, result)) {
             return true;
         }
-    } while (std::next_permutation(kernels.begin(), kernels.end(), by_name));
+    } while (std::next_permutation(groups.begin(), groups.end(), by_name));
 
     return false;
+}
+
+// Build DM kernel groups via union-find over shared DFB endpoint roles.
+//
+// Two DM kernels are merged if they share a DFB endpoint role (both PRODUCER of the same DFB,
+// or both CONSUMER of the same DFB). The transitive closure yields equivalence classes.
+//
+// Compute kernels are not eligible — they don't participate in the DM solver. (Compute kernels
+// bound to the same DFB role share num_threads, which makes AssignComputeProcessors deterministic
+// across them, so no equivalence-class machinery is needed for compute.)
+std::vector<KernelCouplingGroup> BuildDMKernelCouplingGroups(
+    const std::vector<const KernelSpec*>& dm_kernels,
+    const CollectedSpecData& collected,
+    const KernelNodeSetMap& kernel_node_set) {
+    // Small N — flat union-find indexed by position in dm_kernels.
+    std::unordered_map<const KernelSpec*, size_t> idx_of;
+    idx_of.reserve(dm_kernels.size());
+    for (size_t i = 0; i < dm_kernels.size(); ++i) {
+        idx_of[dm_kernels[i]] = i;
+    }
+
+    std::vector<size_t> parent(dm_kernels.size());
+    std::iota(parent.begin(), parent.end(), size_t{0});
+    auto find = [&parent](size_t x) {
+        while (parent[x] != x) {
+            parent[x] = parent[parent[x]];  // path compression
+            x = parent[x];
+        }
+        return x;
+    };
+    auto unite = [&](size_t a, size_t b) {
+        size_t ra = find(a), rb = find(b);
+        if (ra != rb) {
+            parent[ra] = rb;
+        }
+    };
+
+    // For each DFB, union all DM kernels on each side (PRODUCER, CONSUMER) independently.
+    auto union_same_side = [&](const auto& endpoints) {
+        std::optional<size_t> anchor;
+        for (const auto& rec : endpoints) {
+            if (!rec.kernel->is_dm_kernel()) {
+                continue;
+            }
+            const size_t k = idx_of.at(rec.kernel);
+            if (!anchor.has_value()) {
+                anchor = k;
+            } else {
+                unite(anchor.value(), k);
+            }
+        }
+    };
+    for (const auto& [dfb_name, endpoint_info] : collected.dfb_endpoints) {
+        union_same_side(endpoint_info.producers);
+        union_same_side(endpoint_info.consumers);
+    }
+
+    // Collect classes: root index → group.
+    // Iterate dm_kernels in given order to preserve a deterministic per-class member order.
+    std::unordered_map<size_t, size_t> root_to_group_idx;
+    std::vector<KernelCouplingGroup> groups;
+    for (size_t i = 0; i < dm_kernels.size(); ++i) {
+        const size_t r = find(i);
+        auto [it, inserted] = root_to_group_idx.try_emplace(r, groups.size());
+        if (inserted) {
+            groups.emplace_back();
+        }
+        groups[it->second].members.push_back(dm_kernels[i]);
+    }
+
+    // Finalize each group: merged_node_set + num_threads + canonical member sort.
+    for (auto& g : groups) {
+        std::sort(g.members.begin(), g.members.end(), [](const KernelSpec* a, const KernelSpec* b) {
+            return a->unique_id < b->unique_id;
+        });
+        for (const KernelSpec* k : g.members) {
+            g.merged_node_set = g.merged_node_set.merge(kernel_node_set.at(k->unique_id));
+        }
+        g.num_threads = g.members.front()->num_threads;
+    }
+    return groups;
 }
 
 }  // namespace dm_solver
 
 // Gen2 (Quasar) processor assignment: runs the backtracking DM solver and returns
 // a KernelRiscMaskMap using the Gen2 bit encoding (DM: bits 0-7, compute: bits 8-15).
+//
+// The DM solver operates on KernelCouplingGroups (equivalence classes of DM kernels coupled by shared
+// DFB endpoint roles), not individual kernels. Each group is assigned one DMProcessorMask
+// which then applies to every member kernel. This ensures multi-bound same-role kernels end
+// up with identical masks, matching the per-side single-mask shape of DataflowBufferConfig.
 KernelRiscMaskMap SolveGen2KernelRiscMasks(const ProgramSpec& spec, const CollectedSpecData& collected) {
-    DMProcessorMaskMap dm_assignments;
     ComputeEngineMaskMap compute_assignments;
 
-    // Collect DM kernels and compute kernels separately
+    // Collect DM kernels and compute kernels separately.
+    // Compute kernels get a deterministic per-kernel mask (one compute kernel per node assumption;
+    // num_threads uniformity is enforced upstream, so same-role compute kernels get identical masks
+    // without any coupling-group machinery).
     std::vector<const KernelSpec*> dm_kernels;
     for (const KernelSpec& kernel : spec.kernels) {
         if (kernel.is_data_movement_kernel()) {
             dm_kernels.push_back(&kernel);
         } else {
-            // Compute kernels: trivial assignment (one compute kernel per node assumption)
             compute_assignments[&kernel] = AssignComputeProcessors(&kernel, kernel.unique_id);
         }
+    }
+
+    // Build DM kernel groups (equivalence classes via shared DFB endpoint roles).
+    // Each group's merged_node_set is the union of its members' node sets — the solver
+    // will pick a mask that's free on every node in that union.
+    std::vector<dm_solver::KernelCouplingGroup> groups =
+        dm_solver::BuildDMKernelCouplingGroups(dm_kernels, collected, collected.kernel_node_set);
+
+    std::vector<const dm_solver::KernelCouplingGroup*> group_ptrs;
+    group_ptrs.reserve(groups.size());
+    for (const auto& g : groups) {
+        group_ptrs.push_back(&g);
     }
 
     // Sort by constraint score (most constrained first)
     constexpr bool kSortByConstraint = true;  // Toggle to disable upfront sorting
     if constexpr (kSortByConstraint) {
-        dm_solver::SortByConstraint(dm_kernels, collected.kernel_node_set);
+        dm_solver::SortByConstraint(group_ptrs);
     }
 
-    // Solve DM assignments
+    // Solve DM assignments at the group level
     dm_solver::NodeUsageTracker tracker;
-    bool success =
-        dm_solver::SolveWithOrderingBacktrack(dm_kernels, collected.kernel_node_set, tracker, dm_assignments);
+    dm_solver::KernelCouplingGroupMaskMap group_assignments;
+    bool success = dm_solver::SolveWithOrderingBacktrack(group_ptrs, tracker, group_assignments);
 
     TT_FATAL(
         success,
@@ -1719,10 +1843,12 @@ KernelRiscMaskMap SolveGen2KernelRiscMasks(const ProgramSpec& spec, const Collec
         "Either the ProgramSpec is invalid, or that the \"same DM cores on every node\" "
         "simplifying assumption has been violated.");
 
-    // Convert to KernelRiscMaskMap using Gen2 bit encoding
+    // Convert to KernelRiscMaskMap using Gen2 bit encoding: expand each group's mask to all members.
     KernelRiscMaskMap result;
-    for (const auto& [kernel, mask] : dm_assignments) {
-        result[kernel] = mask.bits;  // DM processors in bits 0-7
+    for (const auto& [group, mask] : group_assignments) {
+        for (const KernelSpec* member : group->members) {
+            result[member] = mask.bits;  // DM processors in bits 0-7
+        }
     }
     for (const auto& [kernel, mask] : compute_assignments) {
         result[kernel] = static_cast<uint16_t>(mask.bits) << 8;  // Compute engines in bits 8-15
@@ -2325,26 +2451,19 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
     KernelRiscMaskMap kernel_to_risc_mask =
         is_gen2_arch() ? SolveGen2KernelRiscMasks(spec, collected) : BuildGen1KernelRiscMasks(spec);
 
-    // Step 2a-bis: For multi-binding DFBs, all KernelSpecs on the same role must end up with
+    // Step 2b: For multi-binding DFBs, all KernelSpecs on the same role must end up with
     // identical risc_masks. The DFB has a single producer_risc_mask / consumer_risc_mask in
     // its hardware config; per-node mask variation would require splitting the DFB at lowering
-    // time (deliberately not done here).
+    // time (deliberately not done yet -- awaiting LLK DFBAccessor API support before we can do
+    // 1:N DFBs, as doing so requires passing DFB IDs as implicit RTAs rather than implicit CTAs).
     //
-    // Gen1: the mask is a deterministic function of the user's KernelSpec config (compute
+    // Gen1: the mask is a deterministic function of the user's KernelSpec hw_config (compute
     //   placement is fixed; DM processor is user-specified via Gen1Config). A
-    //   mismatch is therefore a user error — the user supplied multi-binding KernelSpecs with
-    //   incompatible processor placement.
-    // Gen2 (Quasar): the mask is solver-assigned. The solver currently doesn't know about
-    //   multi-binding equivalence classes, so even when the user's intent is compatible the
-    //   solver may produce a mismatch. The proper fix is to extend the DM/compute solver to
-    //   constrain same-role multi-binding kernels to identical placements; this is intentionally
-    //   deferred. For now, on Gen2 we surface the mismatch as an internal error so a real
-    //   workload exercising the case can find us; the user can't act on it directly.
-    //
-    // TODO(quasar-multi-binding-solver): extend SolveGen2KernelRiscMasks to take the
-    // multi-binding equivalence classes (derived from collected.dfb_endpoints) and constrain
-    // same-class kernels to the same risc_mask. Then this check downgrades to a defensive
-    // assertion on both arches.
+    //   mismatch is a user error — incompatible processor placement across multi-bound kernels.
+    // Gen2 (Quasar): the mask is solver-assigned, with the solver constrained to give every
+    //   member of a DM coupling-group equivalence class the same DM mask. Compute kernel masks
+    //   are deterministic from num_threads, which is uniform per role. So on Gen2 the uniformity
+    //   property is guaranteed by construction; the check is retained as a defensive assertion.
     for (const auto& dfb : spec.dataflow_buffers) {
         const auto& endpoints = collected.dfb_endpoints.at(dfb.unique_id);
         auto check_uniform_mask = [&](const auto& records, std::string_view role) {
@@ -2359,21 +2478,15 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
                     continue;
                 }
                 if (is_gen2_arch()) {
-                    TT_FATAL(
-                        false,
-                        "Internal error: Inconsistent RISC mask solution failure. DFB '{}' has "
-                        "multiple {} KernelSpecs ('{}', '{}') that the Gen2 (Quasar) solver "
-                        "placed on different processor lanes (mask 0x{:x} vs 0x{:x}). The DFB's "
-                        "hardware config carries a single mask per role; multi-binding requires "
-                        "all same-role kernels to share a mask. The Quasar solver does not yet "
-                        "enforce this constraint; this is a known framework limitation. "
-                        "TODO(quasar-multi-binding-solver): extend the solver to constrain "
-                        "multi-binding equivalence classes.",
+                    TT_THROW(
+                        "Internal error: Gen2 solver produced disagreeing risc_masks for DFB '{}' "
+                        "{} bindings ('{}' = 0x{:x} vs '{}' = 0x{:x}). The coupling-group solver "
+                        "extension should guarantee per-role mask uniformity by construction.",
                         dfb.unique_id,
                         role,
                         first_kernel->unique_id,
-                        records[i].kernel->unique_id,
                         first_mask,
+                        records[i].kernel->unique_id,
                         mask);
                 } else {
                     TT_FATAL(

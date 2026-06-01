@@ -2012,7 +2012,7 @@ TEST_F(ProgramSpecTestQuasar, UnpackToDestModePlacedAtDfbIdSlot) {
 // ============================================================================
 // SECTION 6: Processor Assignment Edge Cases
 // ============================================================================
-// Here, we test two edge cases:
+// Here, we test several edge cases:
 //
 // A) ALGORITHM FAILURE
 //    The original naive greedy algorithm could either pass or fail on logically
@@ -2025,8 +2025,17 @@ TEST_F(ProgramSpecTestQuasar, UnpackToDestModePlacedAtDfbIdSlot) {
 //    Some strictly legal ProgramSpecs are unsolvable if we assume that a kernel
 //    must uses the same processor indices on all nodes it runs on.
 //
-// Our plan is to keep the simplifying assumption for now.
-// We issue a clear message if the assumption is ever violated in the real world.
+//    NOTE: Our plan is to keep the simplifying assumption for now.
+//    We issue a clear message if the assumption is ever violated in the real world.
+//
+// C) KERNELS COUPLED THROUGH MULTI-DFB BINDINGS
+//    Until LLK APIs adopt DFBAccessor, we cannot specialize DFBs (multiple DFBs
+//    for a single DataflowBufferSpec). This induces additional DM solver constraints
+//    when a DFB endpoint is bound by more than one KernelSpec.
+//
+//    NOTE: The plan is to lift this artificial constraint once LLK support is in
+//    place. DFB IDs will then be passed as implicit RTAs rather than implicit CTAs
+//    on Quasar only.
 
 // Category A: Order-Independence Test
 // This test verifies that the backtracking solver finds valid assignments,
@@ -2191,6 +2200,51 @@ TEST_F(ProgramSpecTestQuasar, SimplifyingAssumptionViolation_OverlappingMultiNod
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("Failed to find valid processor assignments for DM kernels")));
+}
+
+// Category C: Coupling-group constraint exercised
+// Multi-bound same-role DM kernels must end up with identical DM RISC masks (the DFB's
+// hardware config carries one producer_risc_mask / consumer_risc_mask per side). The
+// solver implements this by treating each coupling-group equivalence class as a single
+// "super-kernel" with merged node coverage. Without that constraint, an unrelated DM
+// kernel competing for lanes on one zone could push the producers to different lanes on
+// their respective nodes — passing the greedy assignment but failing per-role mask
+// uniformity.
+TEST_F(ProgramSpecTestQuasar, DFBMultiBindingForcesUniformRiscMaskAcrossProducers) {
+    // Scenario: zone-specialized DM producers (producer_a on node0, producer_b on node1)
+    // both bound as PRODUCER of the same DFB. An unrelated 2-thread DM kernel on node0
+    // consumes lanes DM2-DM3 (the lanes the un-constrained solver would greedily hand to
+    // producer_a). If the producers weren't coupled, producer_a would get bumped to DM4
+    // on node0 while producer_b kept DM2 on node1 — different masks. The coupling-group
+    // solver instead picks a lane available on BOTH producer nodes first, then lets the
+    // unrelated kernel work around it.
+    NodeCoord node0{0, 0};
+    NodeCoord node1{1, 0};
+
+    ProgramSpec spec;
+    spec.program_id = "test_program";
+
+    auto producer_a = MakeMinimalDMKernel("producer_a", /*num_threads=*/1);
+    auto producer_b = MakeMinimalDMKernel("producer_b", /*num_threads=*/1);
+    auto unrelated_dm = MakeMinimalDMKernel("unrelated_dm", /*num_threads=*/2);
+    auto consumer = MakeMinimalComputeKernel("consumer");
+
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+
+    BindDFBToKernel(producer_a, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(producer_b, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+    // unrelated_dm intentionally has no DFB bindings — it just consumes DM lanes on node0.
+
+    spec.kernels = {producer_a, producer_b, unrelated_dm, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{
+        MakeMinimalWorkUnit("wu_g1", node0, {"producer_a", "unrelated_dm", "consumer"}),
+        MakeMinimalWorkUnit("wu_g2", node1, {"producer_b", "consumer"}),
+    };
+
+    EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
 }
 
 // ============================================================================
