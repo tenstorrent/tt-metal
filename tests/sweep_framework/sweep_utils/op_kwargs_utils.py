@@ -297,8 +297,6 @@ def parse_dict_value(key: str, value: Any) -> Any:
             return dict_to_compute_kernel_config(value)
         elif _is_program_config_dict(value):
             return dict_to_program_config(value)
-        elif _is_core_range_set_dict(value):
-            return _parse_core_range_set(value)
         elif _is_core_grid_dict(value):
             return dict_to_core_grid(value)
         elif _is_dtype_dict(value):
