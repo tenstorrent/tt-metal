@@ -127,13 +127,17 @@ class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFuse
         # Fuse bias into the matmul kernel on single-device (no CCL would scale
         # the bias by num_devices). Saves one BinaryNg per layer when bias is set.
         fused_bias = None if needs_ccl else self.tt_bias
+
+        prefill_compute_config = (
+            self._gate_up_decode_compute_kernel_config if not needs_ccl else self.compute_kernel_config
+        )
         tt_output = ttnn.linear(
             input_tensor,
             self.tt_weight,
             bias=fused_bias,
             dtype=ttnn.bfloat8_b,
             memory_config=matmul_mc,
-            compute_kernel_config=self.compute_kernel_config,
+            compute_kernel_config=prefill_compute_config,
             program_config=_dp_matmul_program_config(self.device, input_shape, self.tt_weight.shape),
         )
         if needs_ccl:
