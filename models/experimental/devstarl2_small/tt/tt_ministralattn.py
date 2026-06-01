@@ -79,7 +79,7 @@ def _skip_identity_typecast():
         if tid in identity_src_ids:
             identity_src_ids.discard(tid)
             return
-        return orig_deallocate(tensor)
+        orig_deallocate(tensor)
 
     ttnn.typecast = typecast
     ttnn.deallocate = deallocate
