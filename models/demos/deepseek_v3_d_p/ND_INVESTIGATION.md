@@ -190,6 +190,69 @@ Two options:
    reused before all receivers consumed it). Kernels are JIT-compiled, so this can be
    iterated and verified on-device with the 5L/25600 fingerprint A/B (no full rebuild).
 
+## ⚠️ CORRECTION (2026-06-01, later): the CB-buffering theory below is DISPROVEN at scale
+
+The 5L/25600 GLOBAL `routed_output` oracle is **UNRELIABLE for validating kernel
+fixes**: this race is timing-dependent, and ANY timing perturbation (DPRINT, or
+single-buffering CBs) *masks* it at 5L (2 MoE layers) — a **false negative** — while
+it survives at 61L. Verified at 61L/iter25/pie960 (two runs each):
+- unified baseline: tokens 14 / 260 → ND (control).
+- single-buffer `cb_in0_down_full`: tokens **260 / 1086** → still ND.
+- single-buffer ALL input CBs: tokens **2919 / 260** → still ND.
+
+So **CB double-buffering is NOT the root cause** (it only changed 5L timing). The
+section below is kept for the record but its "fix" does not hold at 61L; all kernel
+edits were reverted to pristine. What the evidence robustly says about the race:
+- It is in the **unified FFN compute** (naive path is deterministic at 61L).
+- **Within a process it is fully deterministic** (iter-to-iter bit-identical);
+  **across processes it differs.** ⇒ the race resolves the same way for a given
+  process but differently across processes — consistent with a **fixed-per-process
+  scheduling/ordering** dependency (e.g. cross-core accumulation/arbitration order or
+  a once-per-process initial-state read), NOT a within-iteration nondeterminism.
+- Added **synchronization masks it** (DPRINT global throttle → deterministic).
+- It **scales with depth/token-count** (5L rarely manifests; 61L reliably does).
+
+**Reliable fix remains the shipped naive default** (validated deterministic at
+61L/iter25). Pinning the unified-kernel race needs a **non-Heisenbug** observation at
+61L — a DRAM-scratch per-core checksum tensor the op returns (no host-sync, unlike
+DPRINT) — then a structural fix. This is kernel-owner-level work with slow (61L)
+validation; the 5L fast oracle cannot be trusted for it.
+
+---
+## (superseded) earlier hypothesis — CB double-buffering of `cb_in0_down_full`
+
+How it was pinned (all via the 5L/25600 GLOBAL `routed_output` A/B oracle, which is
+bit-stable when deterministic):
+- DPRINT confirmed it's a **timing race** but *masks* it (Heisenbug): with DPRINT on,
+  `routed_output` GLOBAL is identical across runs; off, it differs. So DPRINT can't
+  localize it.
+- The bug reproduces with token count (more M), and is killed by **synchronization**.
+- **CB double-buffer bisection** (env `TT_DS_ND_SB_*`, single- vs double-buffering CB
+  groups), each config run twice:
+  - single-buffer ALL input CBs → deterministic (correct value `e0fa3578…`).
+  - single-buffer gate/up only (down double) → still ND (`ccd48e64` vs `9d7a964a`).
+  - single-buffer down only (gate/up double) → deterministic (`e0fa3578`).
+  - single-buffer **only `cb_in0_down_full`** (activated) → deterministic (`e0fa3578`).
+  - single-buffer only `cb_in1_down` (weights) → (control).
+
+**Mechanism:** phase 4 mcasts each K-block's activated from a **rotating sender**
+(`gx == kb`) into every M-row core's `cb_in0_down_full`, coordinated by a **single
+per-core `act_ready`/`act_valid` semaphore**. With `cb_in0_down_full` double-buffered,
+the reader prefetches K-block `kb+1` (whose sender is a *different* core) while compute
+is still consuming `kb` — so two different sender cores race on the receiver's single
+`act_valid`/`act_ready` sem, intermittently signalling the wrong slot. The gate/up
+phases use *fixed* senders, so their double-buffering is race-free. Single-buffering
+`cb_in0_down_full` forces the reader to wait until compute pops `kb` before starting
+`kb+1`'s handshake, serialising the rotating-sender sem accesses — structurally
+removing the race (deterministic AND correct value).
+
+**FIX (shipped): single-buffer `cb_in0_down_full`.** Low-risk, verified deterministic.
+The costly DRAM weight prefetch (`cb_in1_down`) stays double-buffered, so the perf cost
+is only the activated L1-mcast/down-matmul overlap (modest). **Perf-preserving
+follow-up:** give the activated mcast **per-slot (kb%2) `act_ready`/`act_valid`
+semaphores** so consecutive rotating senders use different sems — then
+`cb_in0_down_full` can stay double-buffered. (More intricate; not yet implemented.)
+
 ## FULL-SCALE VALIDATION + SHIPPED FIX (2026-06-01)
 Validated at the real scale (61 layers, iter25, 25600 tokens) using the
 drift-sensitive `pie960` input and the Gumbel-safe token oracle (two separate
