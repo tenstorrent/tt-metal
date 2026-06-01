@@ -378,7 +378,10 @@ void kernel_main() {
         socket_notify_sender(socket);
     }
 
-    experimental::update_remote_cb_config_in_l1(remote_cb_id);
+    // Drain the posted pages_sent atomic increments left outstanding by
+    // prefetcher_finalize_block<skip_ptr_update=true>, then restore NoC2AXI mode.
+    // (No config writeback here: cross-request fifo_wr_ptr persistence is handled
+    // per-request by store_sender_state into the GCB's DramSenderStateBlock.)
     noc_async_atomic_barrier();
     experimental::drisc_set_noc2axi_mode();
 }
