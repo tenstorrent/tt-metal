@@ -222,6 +222,35 @@ ProgramDescriptor PostAllGatherWelfordProgramFactory::create_descriptor(
     compute_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/experimental/transformer/dit_layernorm_post_all_gather/device/kernels/compute/"
         "layernorm_post_allgather_welford.cpp";
+
+    // Float32 input on the welford path requires fp32_dest_acc_en=true as a prerequisite for
+    // UnpackToDestFp32 (set below). UnpackToDestFp32 is what bypasses the unpacker's
+    // Float32 → TF32 truncation in SrcA; fp32_dest_acc_en provides the 32-bit DEST that
+    // UnpackToDestFp32 writes into. Without fp32 DEST, UnpackToDestFp32 can't be enabled
+    // and inputs are silently truncated to TF32 (10 mantissa bits) on the way through SrcA.
+    TT_FATAL(
+        !(in_data_format == tt::DataFormat::Float32 && !fp32_dest_acc_en),
+        "dit_layernorm_post_all_gather with Float32 input requires fp32_dest_acc_en=true in the "
+        "compute kernel config; otherwise precision is silently lost in the unpacker format "
+        "conversion.");
+
+    // UnpackToDestFp32 only helps for CBs whose only consumer is an op that supports the
+    // unpack-to-DEST path (copy_tile or transpose_wh_tile in fp32 mode). For those, setting
+    // the flag preserves the full 23-mantissa fp32 by bypassing SrcA.
+    // c_1 (stats) is consumed only by copy_tile inside combine_welford_partials.
+    // Set the flag so the per-row mean/M2 recombine reads full mantissa.
+    //
+    // Note that setting the flag on a CB consumed by any FPU op (mul_tiles, add_tiles,*_bcast_*, ...)
+    // is unsafe: per base_types.hpp the CB is "incompatible with unpacking to SRCA/B", and
+    // on Wormhole/Blackhole that combination produces garbage in SrcA (not silent TF32
+    // truncation as one might assume).
+    // c_0 (input) is consumed only by sub_tiles_bcast_cols (FPU), so we must not enable the flag on it.
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    if (fp32_dest_acc_en && stats_data_format == tt::DataFormat::Float32) {
+        unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_1)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc.core_ranges = all_cores;
     compute_desc.compile_time_args = std::move(compute_args);
@@ -229,6 +258,7 @@ ProgramDescriptor PostAllGatherWelfordProgramFactory::create_descriptor(
     compute_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
+        .unpack_to_dest_mode = unpack_to_dest_mode,
         .math_approx_mode = math_approx_mode,
     };
 

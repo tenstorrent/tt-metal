@@ -23,11 +23,11 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/distributed_context.hpp
     api/tt-metalium/distributed_host_buffer.hpp
     api/tt-metalium/experimental/blitz_decode_pipeline.hpp
+    api/tt-metalium/experimental/dispatch_telemetry.hpp
     api/tt-metalium/experimental/context/metal_env.hpp
     api/tt-metalium/experimental/core_subset_write/buffer_write.hpp
     api/tt-metalium/experimental/core_subset_write/mesh_command_queue.hpp
     api/tt-metalium/experimental/core_subset_write/tensor.hpp
-    api/tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp
     api/tt-metalium/experimental/device.hpp
     api/tt-metalium/experimental/disaggregation/kv_chunk_address_table.hpp
     api/tt-metalium/experimental/dispatch_context.hpp
@@ -50,7 +50,6 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/fabric/topology_solver.hpp
     api/tt-metalium/experimental/fabric/topology_solver.tpp
     api/tt-metalium/experimental/forge_backdoor/global_semaphore.hpp
-    api/tt-metalium/experimental/host_api.hpp
     api/tt-metalium/experimental/inspector.hpp
     api/tt-metalium/experimental/inspector_config.hpp
     api/tt-metalium/experimental/kernel_cache.hpp
@@ -59,6 +58,9 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/lightmetal/lightmetal_capture_utils.hpp
     api/tt-metalium/experimental/lightmetal/lightmetal_replay.hpp
     api/tt-metalium/experimental/mesh_program_descriptor.hpp
+    api/tt-metalium/experimental/metal2_host_api/advanced_options.hpp
+    api/tt-metalium/experimental/metal2_host_api/compute_configuration.hpp
+    api/tt-metalium/experimental/metal2_host_api/data_movement_configuration.hpp
     api/tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp
     api/tt-metalium/experimental/metal2_host_api/kernel_spec.hpp
     api/tt-metalium/experimental/metal2_host_api/node_coord.hpp
@@ -148,7 +150,7 @@ set(TT_METAL_PUBLIC_API
 )
 
 set(TT_METAL_SOURCES
-    tt_metal.cpp
+    impl/host_api/tt_metal.cpp
     impl/graph/graph_tracking.cpp
     hal.cpp
 )
@@ -189,6 +191,7 @@ set(JITAPI_FILES
     impl/dispatch/kernels/cq_prefetch.hpp
     impl/dispatch/kernels/cq_relay.hpp
     impl/dispatch/kernels/cq_helpers.hpp
+    impl/dispatch/kernels/telemetry.hpp
     impl/dispatch/kernels/realtime_profiler.hpp
     impl/dispatch/kernels/realtime_profiler_ring_buffer.hpp
     soc_descriptors/blackhole_140_arch.yaml

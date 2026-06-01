@@ -65,8 +65,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmLoopback) {
         return experimental::metal2_host_api::KernelSpec{
             .unique_id = id,
             .source =
-                experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                    OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1.cpp"},
+
+                OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1.cpp",
             .num_threads = 1,
             .semaphore_bindings = {{.semaphore_spec_name = "sem", .accessor_name = "sem"}},
             .runtime_arguments_schema =
@@ -84,8 +84,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmLoopback) {
         return experimental::metal2_host_api::KernelSpec{
             .unique_id = id,
             .source =
-                experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                    OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/l1_to_dram.cpp"},
+
+                OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/l1_to_dram.cpp",
             .num_threads = 1,
             .semaphore_bindings = {{.semaphore_spec_name = "sem", .accessor_name = "sem"}},
             .runtime_arguments_schema =

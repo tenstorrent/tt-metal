@@ -90,8 +90,8 @@ protected:
             const std::string DM_KERNEL = "dm_kernel";
             kernel_specs.push_back(experimental::metal2_host_api::KernelSpec{
                 .unique_id = DM_KERNEL,
-                .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{kernel_path},
-                .num_threads = static_cast<uint8_t>(num_dms_),
+                .source = kernel_path,
+                .num_threads = num_dms_,
                 .compiler_options = {.defines = defines_vec},
                 .runtime_arguments_schema = {.named_runtime_args = {"l1_counter_addr", "increment_times"}},
                 .config_spec =
@@ -106,7 +106,7 @@ protected:
                 const std::string name = "dm_kernel_" + std::to_string(dm_id);
                 kernel_specs.push_back(experimental::metal2_host_api::KernelSpec{
                     .unique_id = name,
-                    .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{kernel_path},
+                    .source = kernel_path,
                     .num_threads = 1,
                     .compiler_options = {.defines = defines_vec},
                     .runtime_arguments_schema = {.named_runtime_args = {"l1_counter_addr", "increment_times"}},
