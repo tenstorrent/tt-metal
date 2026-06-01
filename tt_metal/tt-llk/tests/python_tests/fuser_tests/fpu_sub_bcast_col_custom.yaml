@@ -2,13 +2,13 @@ supported_archs: ["wormhole"]
 
 operands:
   - name: "input_A"
-    dims: [256, 256]
+    dims: [32, 256]
     format: "Float16_b"
   - name: "input_B"
-    dims: [256, 256]
+    dims: [32, 256]
     format: "Float16_b"
   - name: "sub_bcast_col_custom_out"
-    dims: [256, 256]
+    dims: [32, 256]
     format: "Float16_b"
 
 operations:
@@ -19,7 +19,7 @@ operations:
         operation: "SubBcastColCustom"
         unpacker: "SubBcastColCustomUnpacker"
         math_fidelity: "LoFi"
-    block_size: [64, 128]
+    block_size: [32, 256]
     pack:
       - output: "sub_bcast_col_custom_out"
         packer: "Packer"
