@@ -224,6 +224,10 @@ tt::tt_metal::ProgramDescriptor TransposeWHShardedRMProgramFactory::create_descr
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (src0_cb_data_format == tt::DataFormat::Float32) {
+        // Keep both the tilize input (c_24) and its output (c_25, which feeds
+        // the transpose) in full Float32 on the unpack-to-dest path; otherwise
+        // the unpacker falls back to tf32 and drops the low mantissa bits.
+        unpack_to_dest_mode[in_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
         unpack_to_dest_mode[im_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
 

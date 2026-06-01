@@ -55,7 +55,7 @@ void kernel_main() {
             for (uint32_t w_dim = 0; w_dim < q_out_w_tiles; w_dim++) {
                 cb_wait_front(cb_id_qv, out_num_tiles_read);
                 l1_read_addr = get_read_ptr(cb_id_qv);
-                noc_async_write_tile(q_out_tensor_current_tile_id, sq, l1_read_addr);
+                noc_async_write_page(q_out_tensor_current_tile_id, sq, l1_read_addr);
 
                 noc_async_write_barrier();
                 cb_pop_front(cb_id_qv, out_num_tiles_read);
@@ -78,7 +78,7 @@ void kernel_main() {
             for (uint32_t w_dim = 0; w_dim < q_out_w_tiles; w_dim++) {
                 cb_wait_front(cb_id_k, out_num_tiles_read);
                 l1_read_addr = get_read_ptr(cb_id_k);
-                noc_async_write_tile(k_out_tensor_current_tile_id, sk, l1_read_addr);
+                noc_async_write_page(k_out_tensor_current_tile_id, sk, l1_read_addr);
 
                 noc_async_write_barrier();
                 cb_pop_front(cb_id_k, out_num_tiles_read);
@@ -101,7 +101,7 @@ void kernel_main() {
             for (uint32_t w_dim = 0; w_dim < q_out_w_tiles; w_dim++) {
                 cb_wait_front(cb_id_qv, out_num_tiles_read);
                 l1_read_addr = get_read_ptr(cb_id_qv);
-                noc_async_write_tile(v_out_tensor_current_tile_id, sv, l1_read_addr);
+                noc_async_write_page(v_out_tensor_current_tile_id, sv, l1_read_addr);
 
                 noc_async_write_barrier();
                 cb_pop_front(cb_id_qv, out_num_tiles_read);
