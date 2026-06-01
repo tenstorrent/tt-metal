@@ -102,43 +102,83 @@ class TtLlamaMLP(LightweightModule):
             "w3_interleaved", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim
         )
 
-        if tt_ccl.mode == "decode":
+        if tt_ccl.mode == "decode" and self.model_config.get("USE_PREFETCHER", False):
             self.prefetch(prefetcher_setup, tt_ccl)
 
     def prefetch(self, prefetcher_setup, tt_ccl):
         self.prefetcher_setup = prefetcher_setup
-        if tt_ccl.mode == "decode":
+        if tt_ccl.mode == "decode" and self.prefetcher_setup is not None:
             self.prefetcher_setup.insert_tensor(self.w1)
             self.prefetcher_setup.insert_tensor(self.w3)
             self.prefetcher_setup.insert_tensor(self.w2)
         self.tt_ccl = tt_ccl
 
-    def forward(self, x: ttnn.Tensor, mode, batch_size=1) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, mode, batch_size=1, return_intermediates=False):
         if mode == "prefill":
             return self.forward_prefill(x, batch_size=batch_size)
+
+        intermediates = {} if return_intermediates else None
 
         pc_1_3 = self.model_config["FF1_3_TG_RING_PROGCFG"]
         pc_2 = self.model_config["FF2_TG_RING_PROGCFG"]
 
-        w1_out_reduced, w3_out = self.tt_ccl.double_matmul_line_reduce_scatter(
-            x,
-            self.w1,
-            self.w3,
-            cluster_axis=1,
-            num_links=self.model_config["GALAXY_NUM_LINKS"],
-            RS_memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
-            compute_kernel_config=self.args.compute_kernel_config_lofi
-            if self.four_bit_mlp
-            else self.args.compute_kernel_config_hifi2,
-            dtype=ttnn.bfloat8_b,
-            program_config=pc_1_3,
-            memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
-            global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
-            sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
-            use_noc1_only=False,
-        )
-
-        ttnn.deallocate(x)
+        if self.args.is_blackhole and not self.model_config.get("USE_PREFETCHER", False):
+            w1_out = ttnn.linear(
+                x,
+                self.w1_interleaved,
+                compute_kernel_config=self.args.compute_kernel_config_lofi
+                if self.four_bit_mlp
+                else self.args.compute_kernel_config_hifi2,
+                dtype=ttnn.bfloat8_b,
+                program_config=None,
+                memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
+                global_cb=None,
+                sub_device_id=None,
+            )
+            w3_out = ttnn.linear(
+                x,
+                self.w3_interleaved,
+                compute_kernel_config=self.args.compute_kernel_config_lofi
+                if self.four_bit_mlp
+                else self.args.compute_kernel_config_hifi2,
+                dtype=ttnn.bfloat8_b,
+                program_config=None,
+                memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
+                global_cb=None,
+                sub_device_id=None,
+            )
+            ttnn.deallocate(x)
+            w1_out_reduced = self.tt_ccl.line_reduce_scatter(
+                w1_out,
+                cluster_axis=1,
+                num_links=self.model_config["GALAXY_NUM_LINKS"],
+                memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
+                use_noc1_only=False,
+            )
+            ttnn.deallocate(w1_out)
+        else:
+            w1_out_reduced, w3_out = self.tt_ccl.double_matmul_line_reduce_scatter(
+                x,
+                self.w1,
+                self.w3,
+                cluster_axis=1,
+                num_links=self.model_config["GALAXY_NUM_LINKS"],
+                RS_memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
+                compute_kernel_config=self.args.compute_kernel_config_lofi
+                if self.four_bit_mlp
+                else self.args.compute_kernel_config_hifi2,
+                dtype=ttnn.bfloat8_b,
+                program_config=pc_1_3,
+                memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
+                global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
+                sub_device_id=(
+                    self.prefetcher_setup.worker_sub_device_id
+                    if mode == "decode" and self.model_config.get("USE_PREFETCHER", False)
+                    else None
+                ),
+                use_noc1_only=False,
+            )
+            ttnn.deallocate(x)
 
         w3_out_reduced = self.tt_ccl.line_reduce_scatter(
             w3_out,
@@ -148,6 +188,9 @@ class TtLlamaMLP(LightweightModule):
             use_noc1_only=False,
         )
         ttnn.deallocate(w3_out)
+        if return_intermediates:
+            intermediates["ff1_reduced"] = w1_out_reduced
+            intermediates["ff3_reduced"] = w3_out_reduced
 
         ff1ff3 = ttnn.mul(
             w1_out_reduced,
@@ -157,8 +200,11 @@ class TtLlamaMLP(LightweightModule):
             memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
         )
 
-        ttnn.deallocate(w3_out_reduced)
-        ttnn.deallocate(w1_out_reduced)
+        if return_intermediates:
+            intermediates["activation"] = ff1ff3
+        else:
+            ttnn.deallocate(w3_out_reduced)
+            ttnn.deallocate(w1_out_reduced)
 
         w2_in = self.tt_ccl.line_all_gather(
             ff1ff3,
@@ -167,22 +213,72 @@ class TtLlamaMLP(LightweightModule):
             num_links=self.model_config["GALAXY_NUM_LINKS"],
             memory_config=self.model_config["FF2_IN_RING_MEMCFG"],
             buffer_key="BINARY_MUL",
-            use_optimal_ccl_for_llama=False if mode == "prefill" else True,
+            use_optimal_ccl_for_llama=(
+                mode == "decode" and (self.model_config.get("USE_PREFETCHER", False) or self.args.is_qwen)
+            ),
         )
+        if return_intermediates:
+            intermediates["ff2_input"] = w2_in
 
-        ttnn.deallocate(ff1ff3)
+        if not return_intermediates:
+            ttnn.deallocate(ff1ff3)
 
-        w2_out = ttnn.linear(
-            w2_in,
-            self.w2,
-            compute_kernel_config=self.args.compute_kernel_config_hifi2,
-            dtype=ttnn.bfloat8_b,
-            program_config=pc_2,
-            memory_config=self.model_config["FF2_OUT_RING_MEMCFG"],
-            core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
-            global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
-            sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
+        use_bh_qwen_decode_no_pf = (
+            self.args.is_qwen
+            and self.args.is_blackhole
+            and mode == "decode"
+            and not self.model_config.get("USE_PREFETCHER", False)
         )
+        w2_in_for_matmul = w2_in
+        pc_2_for_matmul = pc_2
+        if use_bh_qwen_decode_no_pf:
+            # BH Qwen decode no-prefetch: use interleaved FF2 path to avoid
+            # sharded cross-device channel ordering assumptions in W2 matmul.
+            w2_in_for_matmul = ttnn.to_memory_config(w2_in, ttnn.DRAM_MEMORY_CONFIG)
+            pc_2_for_matmul = None
+            if not return_intermediates:
+                ttnn.deallocate(w2_in)
+
+        if self.args.is_blackhole and not self.model_config.get("USE_PREFETCHER", False) and not self.args.is_qwen:
+            w2_out = ttnn.linear(
+                w2_in_for_matmul,
+                self.w2_interleaved,
+                compute_kernel_config=self.args.compute_kernel_config_hifi2,
+                dtype=ttnn.bfloat8_b,
+                program_config=None,
+                memory_config=None,
+                core_grid=None,
+                global_cb=None,
+                sub_device_id=None,
+            )
+        elif use_bh_qwen_decode_no_pf:
+            w2_out = ttnn.linear(
+                w2_in_for_matmul,
+                self.w2_interleaved,
+                compute_kernel_config=self.args.compute_kernel_config_hifi2,
+                dtype=ttnn.bfloat8_b,
+                program_config=None,
+                memory_config=None,
+                core_grid=None,
+                global_cb=None,
+                sub_device_id=None,
+            )
+        else:
+            w2_out = ttnn.linear(
+                w2_in_for_matmul,
+                self.w2,
+                compute_kernel_config=self.args.compute_kernel_config_hifi2,
+                dtype=ttnn.bfloat8_b,
+                program_config=pc_2_for_matmul,
+                memory_config=self.model_config["FF2_OUT_RING_MEMCFG"],
+                core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_2_for_matmul else None,
+                global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
+                sub_device_id=(
+                    self.prefetcher_setup.worker_sub_device_id
+                    if mode == "decode" and self.model_config.get("USE_PREFETCHER", False)
+                    else None
+                ),
+            )
         w2_out_reduced = self.tt_ccl.line_all_reduce(
             w2_out,
             cluster_axis=0,
@@ -190,6 +286,10 @@ class TtLlamaMLP(LightweightModule):
             memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"],
             use_optimal_ccl_for_llama=True,
         )
+        if return_intermediates:
+            intermediates["ff2_pre_allreduce"] = w2_out
+            intermediates["ff2_output"] = w2_out_reduced
+            return w2_out_reduced, intermediates
         ttnn.deallocate(w2_out)
 
         return w2_out_reduced

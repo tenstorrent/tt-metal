@@ -1,24 +1,20 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
-
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
 # SPDX-License-Identifier: Apache-2.0
+
+"""Galaxy-style fabric resolution for CCL tests (matches models/demos/llama3_70b_galaxy/conftest.py)."""
+
 import os
 
 import pytest
-import gc
 import ttnn
 
 
-@pytest.fixture(autouse=True)
-def ensure_gc():
-    gc.collect()
-
-
-@pytest.fixture(autouse=True)
-def ensure_devices(ensure_devices_tg):
-    pass
-
-
-def _resolve_galaxy_fabric_config(galaxy_type=None):
+def resolve_galaxy_fabric_config(galaxy_type=None):
+    """
+    WH 6U Galaxy → FABRIC_1D_RING. BH 6U UBB (BLACKHOLE_GALAXY) and TG/loudbox 4U → FABRIC_1D.
+    BH auto-discovered eth graphs are mesh (mixed degree 3/4), not a uniform ring graph.
+    """
     try:
         cluster_type = ttnn.cluster.get_cluster_type()
     except (IndexError, KeyError, RuntimeError):
@@ -34,7 +30,7 @@ def _resolve_galaxy_fabric_config(galaxy_type=None):
 def galaxy_type():
     """
     Galaxy form factor for model mesh layout. Prefer GALAXY_TYPE env.
-    BH UBB and WH Galaxy are 6U; TG / loudbox 4U uses FABRIC_1D.
+    BH UBB and WH Galaxy are 6U; TG / loudbox-style hosts are 4U.
     """
     env = os.environ.get("GALAXY_TYPE")
     if env:
@@ -52,10 +48,7 @@ def galaxy_type():
 
 @pytest.fixture
 def device_params(request, galaxy_type):
-    # Get param dict passed in from test parametrize (or default to empty dict)
     params = getattr(request, "param", {}).copy()
-
-    if "fabric_config" in params and params["fabric_config"] == True:
-        params["fabric_config"] = _resolve_galaxy_fabric_config(galaxy_type)
-
+    if params.get("fabric_config") is True:
+        params["fabric_config"] = resolve_galaxy_fabric_config(galaxy_type)
     return params

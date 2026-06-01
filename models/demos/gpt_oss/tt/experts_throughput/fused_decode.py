@@ -178,7 +178,7 @@ def fused_decode_forward(
         select_experts_k=K_sel,
         experts=global_experts,
         cluster_axis=cluster_axis,
-        topology=ttnn.Topology.Ring,
+        topology=ttnn.Topology.Linear,
         num_links=fused_config.num_links,
         token_parallel_core_dim=fused_config.combine_token_parallel_core_dim,
         data_parallel_core_dim=fused_config.combine_data_parallel_core_dim,
@@ -229,8 +229,8 @@ def fused_decode_forward(
 
     tt_output = ttnn.all_reduce(
         tt_sum,
-        num_links=4,
-        topology=ttnn.Topology.Ring,
+        num_links=2,
+        topology=ttnn.Topology.Linear,
         cluster_axis=1,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )

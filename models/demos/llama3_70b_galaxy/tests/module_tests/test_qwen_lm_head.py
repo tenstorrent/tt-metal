@@ -13,18 +13,17 @@ from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
 )
-from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 
 
 @torch.no_grad()
 @pytest.mark.parametrize(
-    "seq_len",
-    (32,),
+    "max_seq_len",
+    (256,),
 )
 @pytest.mark.parametrize(
     "batch_size",
-    (1,),
+    (32,),
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -43,12 +42,14 @@ from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
     ],
     indirect=True,
 )
-def test_qwen_lm_head_inference(seq_len, batch_size, mesh_device, reset_seeds):
+def test_qwen_lm_head_inference(max_seq_len, batch_size, mesh_device, reset_seeds):
     dtype = ttnn.bfloat8_b
 
-    model_args = TtQwenModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=seq_len, dummy_weights=False)
+    model_args = TtQwenModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, dummy_weights=False)
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
+    model_config = model_args.get_model_config()
+    model_config["USE_PREFETCHER"] = False
 
     state_dict_prefix = model_args.get_state_dict_prefix("", None)
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
@@ -60,18 +61,9 @@ def test_qwen_lm_head_inference(seq_len, batch_size, mesh_device, reset_seeds):
     reference_model = ColumnParallelLinear(model_args.dim, model_args.vocab_size, bias=False, init_method=lambda x: x)
     reference_model.load_state_dict(partial_state_dict)
 
-    prefetcher_setup = TtLlamaPrefetcherSetup(
-        mesh_device,
-        n_tensors=0,
-        n_layers=model_args.n_layers,
-        is_qwen=True,
-    )
-
-    mesh_device.set_sub_device_stall_group(
-        [prefetcher_setup.prefetcher_sub_device_id, prefetcher_setup.worker_sub_device_id]
-    )
-
-    tt_ccl = TT_CCL(mesh_device, model_args, prefetcher_setup.worker_sub_device_id, is_qwen=True)
+    prefetcher_setup = None
+    tt_ccl_worker_sub_device_id = None
+    tt_ccl = TT_CCL(mesh_device, model_args, tt_ccl_worker_sub_device_id, is_qwen=True)
 
     tt_model = LMHead(
         args=model_args,
@@ -84,20 +76,17 @@ def test_qwen_lm_head_inference(seq_len, batch_size, mesh_device, reset_seeds):
         prefetcher_setup=prefetcher_setup,
     )
 
-    torch_input = torch.randn(1, 1, seq_len, model_args.dim)
-    tt_input = ttnn.from_torch(
-        torch_input,
-        device=mesh_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 3), mesh_shape=model_args.cluster_shape),
-        dtype=ttnn.bfloat8_b,
-        memory_config=model_args.model_config["SHARDED_LM_HEAD_INPUT_RING_MEMCFG"],
-        layout=ttnn.TILE_LAYOUT,
+    seq_len = 1
+    pt_decode_input = torch.randn(batch_size, seq_len, model_args.dim)
+    tt_input = model_args.prepare_residual_tensor_decode(
+        pt_decode_input,
+        model_args.model_config["SHARDED_LM_HEAD_INPUT_RING_MEMCFG"],
     )
 
     logger.info("Run Qwen_LM_Head")
     # Pre-allocated output of AllReduce in LM Head to avoid memory cloberring
     tt_ccl.tt_lm_head_buffer_l1 = ttnn.to_memory_config(tt_ccl.tt_lm_head_buffer, tt_ccl.lm_head_buffer_mem_cfg)
-    tt_outputs = tt_model(tt_input, prefetcher_setup.worker_sub_device_id, mode="decode")
+    tt_outputs = tt_model(tt_input, tt_ccl_worker_sub_device_id, mode="decode")
     tt_outputs = [
         ttnn.to_torch(
             tt_output,
@@ -108,7 +97,7 @@ def test_qwen_lm_head_inference(seq_len, batch_size, mesh_device, reset_seeds):
     tt_output_torch = torch.concat(tt_outputs, dim=-1)
     tt_output_torch = tt_output_torch[:, 0:1, :, : model_args.vocab_size]
 
-    reference_output = reference_model(torch_input)
+    reference_output = reference_model(pt_decode_input.view(1, 1, batch_size, model_args.dim))
 
     pcc_required = 0.99
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)

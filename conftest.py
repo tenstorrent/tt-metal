@@ -51,13 +51,81 @@ def is_ci_env():
     return False
 
 
+def safe_get_cluster_type():
+    """
+    Return Metal cluster type, or None if the descriptor is not ready yet or backend lookup fails.
+
+    CCL tests resolve `device_params` → `galaxy_type` before `mesh_device` opens the mesh; on some
+    stacks (e.g. Blackhole Galaxy) `get_cluster_type()` may throw ``IndexError`` until the cluster
+    is initialized. Treat that as unknown and fall through to conservative defaults (e.g. FABRIC_1D).
+    """
+    import ttnn
+
+    try:
+        return ttnn.cluster.get_cluster_type()
+    except (IndexError, KeyError, RuntimeError):
+        return None
+
+
+def safe_get_pcie_device_ids():
+    """Return PCIe bus id list from ttnn, or None if enumeration hits a backend lookup error."""
+    import ttnn
+
+    try:
+        return ttnn.get_pcie_device_ids()
+    except (IndexError, KeyError, RuntimeError):
+        return None
+
+
+def safe_get_num_devices():
+    """Return device count, or None if enumeration fails (e.g. BH Galaxy after arch probe closes cluster)."""
+    import ttnn
+
+    try:
+        return ttnn.get_num_devices()
+    except (IndexError, KeyError, RuntimeError):
+        return None
+
+
+def safe_get_device_ids():
+    """Return device id list, or None if enumeration fails before the mesh is opened."""
+    import ttnn
+
+    try:
+        return ttnn.get_device_ids()
+    except (IndexError, KeyError, RuntimeError):
+        num_devices = safe_get_num_devices()
+        if num_devices is not None:
+            return list(range(num_devices))
+        return None
+
+
+def safe_using_distributed_env():
+    """Return whether MPI multi-host mode is active; False if Metal context is not ready."""
+    import ttnn
+
+    try:
+        return ttnn.using_distributed_env()
+    except (IndexError, KeyError, RuntimeError):
+        return False
+
+
+def _should_skip_mesh_for_device_count(num_devices_requested, num_available):
+    """Skip only when we can reliably see fewer devices than requested (non-MPI)."""
+    if safe_using_distributed_env():
+        return False
+    if num_available is None:
+        return False
+    return num_devices_requested > num_available
+
+
 @pytest.fixture(scope="function")
 def is_single_card_n300(device):
     import ttnn
 
     num_pcie = ttnn.GetNumPCIeDevices()
 
-    return num_pcie == 1 and ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.N300
+    return num_pcie == 1 and safe_get_cluster_type() == ttnn.cluster.ClusterType.N300
 
 
 @pytest.fixture(scope="function")
@@ -73,7 +141,10 @@ def galaxy_type():
 def is_galaxy():
     import ttnn
 
-    return ttnn.cluster.get_cluster_type() in [
+    ct = safe_get_cluster_type()
+    if ct is None:
+        return False
+    return ct in [
         ttnn.cluster.ClusterType.GALAXY,
         ttnn.cluster.ClusterType.TG,
         ttnn.cluster.ClusterType.BLACKHOLE_GALAXY,
@@ -84,14 +155,20 @@ def is_galaxy():
 def is_6u():
     import ttnn
 
-    return ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.GALAXY
+    ct = safe_get_cluster_type()
+    if ct is None:
+        return False
+    return ct in (
+        ttnn.cluster.ClusterType.GALAXY,
+        ttnn.cluster.ClusterType.BLACKHOLE_GALAXY,
+    )
 
 
 # TODO: Remove this when TG clusters are deprecated.
 def is_tg_cluster():
     import ttnn
 
-    return ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.TG
+    return safe_get_cluster_type() == ttnn.cluster.ClusterType.TG
 
 
 def first_available_tg_device():
@@ -477,6 +554,16 @@ def reset_fabric(fabric_config):
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
+def try_reset_fabric(fabric_config):
+    """Best-effort fabric teardown; BH Galaxy may fail if the cluster is already closed."""
+    if not fabric_config:
+        return
+    try:
+        reset_fabric(fabric_config)
+    except (IndexError, KeyError, RuntimeError) as exc:
+        logger.warning("ttnn.set_fabric_config(DISABLED) failed during teardown: {}", exc)
+
+
 # Set fabric config to passed in value
 # Do nothing if not set
 # Must be called before creating the mesh device
@@ -522,6 +609,75 @@ def set_fabric(
             )
 
 
+def try_set_fabric(
+    fabric_config, reliability_mode=None, fabric_tensix_config=None, fabric_manager=None, fabric_router_config=None
+):
+    """
+    Apply fabric config; return False if Metal context is not ready (common on BH Galaxy after arch probes).
+    Callers may open the mesh and retry.
+    """
+    if not fabric_config:
+        return True
+    try:
+        set_fabric(fabric_config, reliability_mode, fabric_tensix_config, fabric_manager, fabric_router_config)
+        return True
+    except (IndexError, KeyError, RuntimeError) as exc:
+        logger.warning("ttnn.set_fabric_config before mesh open failed: {}", exc)
+        return False
+
+
+def force_fabric_disabled():
+    """Best-effort reset so open_mesh_device can run after a failed pre-open set_fabric_config."""
+    import ttnn
+
+    try:
+        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+    except (IndexError, KeyError, RuntimeError) as exc:
+        logger.debug("set_fabric_config(DISABLED) failed: {}", exc)
+
+
+def open_mesh_device_with_fabric(
+    mesh_shape,
+    updated_device_params,
+    fabric_config,
+    reliability_mode=None,
+    fabric_tensix_config=None,
+    fabric_manager=None,
+    fabric_router_config=None,
+    defer_fabric_until_after_open=False,
+    **open_mesh_kwargs,
+):
+    """
+    Open a mesh with fabric enabled. On BH Galaxy, defer all set_fabric_config calls until after
+    open_mesh_device — pre-open fabric or enumeration leaves the cluster closed and open fails.
+    """
+    import ttnn
+
+    fabric_ready = False
+    if fabric_config and not defer_fabric_until_after_open:
+        fabric_ready = try_set_fabric(
+            fabric_config, reliability_mode, fabric_tensix_config, fabric_manager, fabric_router_config
+        )
+        if not fabric_ready:
+            force_fabric_disabled()
+
+    try:
+        mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, **updated_device_params, **open_mesh_kwargs)
+    except (IndexError, KeyError, RuntimeError) as exc:
+        logger.warning("open_mesh_device failed ({}); retrying once", exc)
+        mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, **updated_device_params, **open_mesh_kwargs)
+
+    if fabric_config and (defer_fabric_until_after_open or not fabric_ready):
+        if not try_set_fabric(
+            fabric_config, reliability_mode, fabric_tensix_config, fabric_manager, fabric_router_config
+        ):
+            logger.warning(
+                "Fabric config {} was not applied via set_fabric_config; relying on open_mesh_device fabric init",
+                fabric_config,
+            )
+    return mesh_device
+
+
 def get_default_fabric_tensix_config():
     import ttnn
 
@@ -548,24 +704,32 @@ def mesh_device(request, silicon_arch_name, device_params):
     """
     import ttnn
 
-    request.node.pci_ids = ttnn.get_pcie_device_ids()
+    # BH Galaxy: pre-open get_pcie_device_ids / get_num_devices / set_fabric_config close the
+    # cluster and open_mesh_device then fails with unordered_map::at. Open the mesh first.
+    is_bh_galaxy = silicon_arch_name == "blackhole"
 
     try:
         param = request.param
     except (ValueError, AttributeError):
-        # Get number of devices from the system mesh descriptor.
-        param = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape().mesh_size()
+        if is_bh_galaxy:
+            param = (8, 4)
+        else:
+            param = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape().mesh_size()
 
     if isinstance(param, tuple):
         grid_dims = param
         assert len(grid_dims) == 2, "Device mesh grid shape should have exactly two elements."
         num_devices_requested = grid_dims[0] * grid_dims[1]
-        if not ttnn.using_distributed_env() and num_devices_requested > ttnn.get_num_devices():
-            pytest.skip("Requested more devices than available. Test not applicable for machine")
+        if not is_bh_galaxy:
+            num_available = safe_get_num_devices()
+            if _should_skip_mesh_for_device_count(num_devices_requested, num_available):
+                pytest.skip("Requested more devices than available. Test not applicable for machine")
         mesh_shape = ttnn.MeshShape(*grid_dims)
     else:
-        if not ttnn.using_distributed_env() and param > ttnn.get_num_devices():
-            pytest.skip("Requested more devices than available. Test not applicable for machine")
+        if not is_bh_galaxy:
+            num_available = safe_get_num_devices()
+            if _should_skip_mesh_for_device_count(param, num_available):
+                pytest.skip("Requested more devices than available. Test not applicable for machine")
         mesh_shape = ttnn.MeshShape(1, param)
 
     override_trace_region_size = get_supported_trace_region_size(request, param)
@@ -573,14 +737,27 @@ def mesh_device(request, silicon_arch_name, device_params):
         device_params["trace_region_size"] = override_trace_region_size
         logger.info(f"Overriding trace region size to {override_trace_region_size}")
 
-    updated_device_params = get_updated_device_params(device_params)
+    updated_device_params = get_updated_device_params(device_params, arch_name=silicon_arch_name)
     fabric_config = updated_device_params.pop("fabric_config", None)
     fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
     reliability_mode = updated_device_params.pop("reliability_mode", None)
     fabric_manager = updated_device_params.pop("fabric_manager", None)
     fabric_router_config = updated_device_params.pop("fabric_router_config", None)
-    set_fabric(fabric_config, reliability_mode, fabric_tensix_config, fabric_manager, fabric_router_config)
-    mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, **updated_device_params)
+    mesh_device = open_mesh_device_with_fabric(
+        mesh_shape,
+        updated_device_params,
+        fabric_config,
+        reliability_mode,
+        fabric_tensix_config,
+        fabric_manager,
+        fabric_router_config,
+        defer_fabric_until_after_open=is_bh_galaxy,
+    )
+
+    if not is_bh_galaxy:
+        pci_ids = safe_get_pcie_device_ids()
+        if pci_ids is not None:
+            request.node.pci_ids = pci_ids
 
     from tests.tests_common.cache_entries_counter import CacheEntriesCounter
 
@@ -589,11 +766,19 @@ def mesh_device(request, silicon_arch_name, device_params):
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
     yield mesh_device
 
-    for submesh in mesh_device.get_submeshes():
-        ttnn.close_mesh_device(submesh)
-
-    ttnn.close_mesh_device(mesh_device)
-    reset_fabric(fabric_config)
+    # BH Galaxy: closing submeshes then the parent mesh can segfault in close_mesh_device.
+    # Disable fabric while the mesh is still open, then close the parent mesh only.
+    if is_bh_galaxy:
+        try_reset_fabric(fabric_config)
+        try:
+            ttnn.close_mesh_device(mesh_device)
+        except Exception as exc:
+            logger.warning("close_mesh_device failed during BH Galaxy teardown: {}", exc)
+    else:
+        for submesh in mesh_device.get_submeshes():
+            ttnn.close_mesh_device(submesh)
+        ttnn.close_mesh_device(mesh_device)
+        try_reset_fabric(fabric_config)
     del mesh_device
 
 
@@ -629,7 +814,9 @@ def t3k_single_board_mesh_device(request, silicon_arch_name, silicon_arch_wormho
 def pcie_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device_params):
     import ttnn
 
-    device_ids = ttnn.get_pcie_device_ids()
+    device_ids = safe_get_pcie_device_ids()
+    if device_ids is None:
+        pytest.skip("PCIe device ids not available before mesh creation on this stack")
     try:
         num_pcie_devices_requested = min(request.param, len(device_ids))
     except (ValueError, AttributeError):
@@ -644,10 +831,12 @@ def pcie_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
     fabric_config = updated_device_params.pop("fabric_config", None)
     fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
     reliability_mode = updated_device_params.pop("reliability_mode", None)
-    set_fabric(fabric_config, reliability_mode, fabric_tensix_config)
-    mesh_device = ttnn.open_mesh_device(
-        mesh_shape=ttnn.MeshShape(2, 2),
-        **updated_device_params,
+    mesh_device = open_mesh_device_with_fabric(
+        ttnn.MeshShape(2, 2),
+        updated_device_params,
+        fabric_config,
+        reliability_mode,
+        fabric_tensix_config,
         offset=ttnn.MeshCoordinate(0, 1),
     )
     mesh_device.reshape(ttnn.MeshShape(1, 4))
@@ -659,7 +848,7 @@ def pcie_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
         ttnn.close_mesh_device(submesh)
 
     ttnn.close_mesh_device(mesh_device)
-    reset_fabric(fabric_config)
+    try_reset_fabric(fabric_config)
     del mesh_device
 
 
@@ -673,18 +862,23 @@ def bh_1d_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device
     if ttnn.get_num_devices() not in [1, 2, 4, 8, 32]:
         pytest.skip()
 
-    request.node.pci_ids = ttnn.get_pcie_device_ids()
+    pci_ids = safe_get_pcie_device_ids()
+    if pci_ids is not None:
+        request.node.pci_ids = pci_ids
     updated_device_params = get_updated_device_params(device_params)
     fabric_config = updated_device_params.pop("fabric_config", None)
     fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
     reliability_mode = updated_device_params.pop("reliability_mode", None)
     fabric_manager = updated_device_params.pop("fabric_manager", None)
     fabric_router_config = updated_device_params.pop("fabric_router_config", None)
-    set_fabric(fabric_config, reliability_mode, fabric_tensix_config, fabric_manager, fabric_router_config)
-
-    mesh_device = ttnn.open_mesh_device(
-        mesh_shape=ttnn.MeshShape(ttnn.get_num_devices(), 1),
-        **updated_device_params,
+    mesh_device = open_mesh_device_with_fabric(
+        ttnn.MeshShape(ttnn.get_num_devices(), 1),
+        updated_device_params,
+        fabric_config,
+        reliability_mode,
+        fabric_tensix_config,
+        fabric_manager,
+        fabric_router_config,
     )
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
     yield mesh_device
@@ -693,7 +887,7 @@ def bh_1d_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device
         ttnn.close_mesh_device(submesh)
 
     ttnn.close_mesh_device(mesh_device)
-    reset_fabric(fabric_config)
+    try_reset_fabric(fabric_config)
     del mesh_device
 
 
@@ -709,22 +903,21 @@ def bh_2d_mesh_device_context(device_params):
     reliability_mode = updated_device_params.pop("reliability_mode", None)
     fabric_manager = updated_device_params.pop("fabric_manager", None)
     fabric_router_config = updated_device_params.pop("fabric_router_config", None)
-    set_fabric(fabric_config, reliability_mode, fabric_tensix_config, fabric_manager, fabric_router_config)
     if ttnn.get_num_devices() == 8:
-        mesh_device = ttnn.open_mesh_device(
-            mesh_shape=ttnn.MeshShape(4, 2),
-            **updated_device_params,
-        )
+        mesh_shape = ttnn.MeshShape(4, 2)
     elif ttnn.get_num_devices() == 32:
-        mesh_device = ttnn.open_mesh_device(
-            mesh_shape=ttnn.MeshShape(4, 8),
-            **updated_device_params,
-        )
+        mesh_shape = ttnn.MeshShape(4, 8)
     else:
-        mesh_device = ttnn.open_mesh_device(
-            mesh_shape=ttnn.MeshShape(ttnn.get_num_devices(), 1),
-            **updated_device_params,
-        )
+        mesh_shape = ttnn.MeshShape(ttnn.get_num_devices(), 1)
+    mesh_device = open_mesh_device_with_fabric(
+        mesh_shape,
+        updated_device_params,
+        fabric_config,
+        reliability_mode,
+        fabric_tensix_config,
+        fabric_manager,
+        fabric_router_config,
+    )
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
     try:
         yield mesh_device
@@ -732,7 +925,7 @@ def bh_2d_mesh_device_context(device_params):
         for submesh in mesh_device.get_submeshes():
             ttnn.close_mesh_device(submesh)
         ttnn.close_mesh_device(mesh_device)
-        reset_fabric(fabric_config)
+        try_reset_fabric(fabric_config)
         del mesh_device
 
 
@@ -743,7 +936,9 @@ def bh_2d_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device
     if ttnn.get_num_devices() not in [1, 2, 4, 8, 32]:
         pytest.skip()
 
-    request.node.pci_ids = ttnn.get_pcie_device_ids()
+    pci_ids = safe_get_pcie_device_ids()
+    if pci_ids is not None:
+        request.node.pci_ids = pci_ids
     with bh_2d_mesh_device_context(device_params) as mesh_device:
         yield mesh_device
 
@@ -793,9 +988,10 @@ requires_hybrid_allocator = pytest.mark.skipif(
 
 @pytest.fixture()
 def ensure_devices_tg():
-    import ttnn
-
-    device_ids = ttnn.get_device_ids()
+    device_ids = safe_get_device_ids()
+    if device_ids is None:
+        # BH Galaxy: silicon_arch_name probe may close the cluster before mesh_device opens it.
+        return
     assert len(device_ids) == 32, f"Expected 32 devices, got {len(device_ids)}"
 
 

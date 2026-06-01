@@ -41,7 +41,7 @@ class TestFactory:
         mesh_config = MeshConfig(mesh_shape, decode=ModeConfig(tp=mesh_shape[1], ep=mesh_shape[0]))
 
         # Setup CCL
-        ccl_manager = CCLManager(mesh_device, num_links=4 if mesh_shape[0] > 1 else 1)
+        ccl_manager = CCLManager(mesh_device, num_links=2 if mesh_shape[0] > 1 else 1)
 
         config = AutoConfig.from_pretrained(model_args.model_path, trust_remote_code=True)
         # state_dict = TestFactory._generate_dummy_state_dict(config)
@@ -109,7 +109,7 @@ class TestFactory:
 
 
 def parametrize_mesh_with_fabric():
-    """Universal mesh parametrization with automatic FABRIC_1D_RING - always uses 4x8 base mesh like original tests"""
+    """Universal mesh parametrization with automatic FABRIC_1D - always uses 4x8 base mesh like original tests"""
     # Always use 4x8 base mesh like original working tests
     num_devices = ttnn.get_num_devices()
     if num_devices == 8:
@@ -119,9 +119,7 @@ def parametrize_mesh_with_fabric():
     else:
         raise ValueError(f"Invalid number of devices: {num_devices}")
     fabric_params = [
-        pytest.param(
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 30000000}, id="fabric_1d_ring"
-        ),
+        pytest.param({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 30000000}, id="fabric_1d"),
     ]
 
     # Return a single decorator that combines both parametrizations

@@ -90,8 +90,8 @@ class AllToAllDispatchConfig:
 
     cluster_axis: int = 0
     memory_config: ttnn.MemoryConfig = field(default_factory=lambda: ttnn.L1_MEMORY_CONFIG)
-    num_links: int = 4
-    topology: ttnn.Topology = field(default_factory=lambda: ttnn.Topology.Ring)
+    num_links: int = 2
+    topology: ttnn.Topology = field(default_factory=lambda: ttnn.Topology.Linear)
     subdevice_id: Optional[int] = None
     output_concat_dim: Optional[int] = 2  # 2 for tokens on seq_len dim (decode and prefill)
 
@@ -118,8 +118,8 @@ class AllToAllCombineConfig:
 
     cluster_axis: int = 0
     memory_config: ttnn.MemoryConfig = field(default_factory=lambda: ttnn.L1_MEMORY_CONFIG)
-    num_links: int = 4
-    topology: ttnn.Topology = field(default_factory=lambda: ttnn.Topology.Ring)
+    num_links: int = 2
+    topology: ttnn.Topology = field(default_factory=lambda: ttnn.Topology.Linear)
     output_shard_dim: int = 2  # 1 for batch dim, 2 for seq_len dim (prefer 2 for decode)
 
     def as_dict(self):
@@ -316,7 +316,7 @@ class FusedMoeGptConfig:
         combine_mux_cores: CoreRangeSet for selective_reduce_combine mux cores
         combine_token_parallel_core_dim: Token-parallel core dimension (default: 4)
         combine_data_parallel_core_dim: Data-parallel core dimension (default: 4)
-        num_links: Number of fabric links for all ops (default: 4)
+        num_links: Number of fabric links for all ops (default: 2)
     """
 
     # Weight tensors in moe_gpt format
@@ -348,7 +348,7 @@ class FusedMoeGptConfig:
     combine_mux_cores: object = None  # ttnn.CoreRangeSet
     combine_token_parallel_core_dim: int = 4
     combine_data_parallel_core_dim: int = 4
-    num_links: int = 4
+    num_links: int = 2
 
 
 def create_expert_mapping_tensors(

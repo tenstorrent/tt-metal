@@ -324,7 +324,7 @@ def run_fused_throughput_experts_component(
         tokens_per_device=tokens_per_device,
         weight_dtype=ttnn.bfloat4_b,
         cluster_axis=cluster_axis,
-        num_links=4,
+        num_links=2,
     )
 
     # Create routing with global expert IDs (0..num_experts-1).
@@ -927,7 +927,7 @@ def run_model_forward_test(
         local_batch_size = batch_size
 
     # Create CCL manager
-    ccl_manager = CCLManager(mesh_device, num_links=4 if mesh_device.shape[0] > 1 else 1)
+    ccl_manager = CCLManager(mesh_device, num_links=2 if mesh_device.shape[0] > 1 else 1)
 
     # Create TT model with meta format weights
     # Use throughput experts for row-sharded batches (batch > 32 on multi-row mesh)

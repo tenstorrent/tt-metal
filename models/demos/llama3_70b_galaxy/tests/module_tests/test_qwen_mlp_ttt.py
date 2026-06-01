@@ -32,7 +32,7 @@ from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 )
 @pytest.mark.parametrize(
     "batch_size",
-    (1,),
+    (32,),
 )
 @pytest.mark.parametrize(
     "device_params",
@@ -73,15 +73,21 @@ def test_qwen_mlp_ttt_inference(seq_len, batch_size, mesh_device, reset_seeds):
 
     logger.info(f"Qwen3 Model Loaded")
 
+    model_config = model_args.get_model_config()
+    use_prefetcher = model_config.get("USE_PREFETCHER", False)
+
     prefetcher_setup = TtLlamaPrefetcherSetup(
         mesh_device,
-        n_tensors=3,
+        n_tensors=3 if use_prefetcher else 0,
         n_layers=1,
         is_qwen=True,
     )
-    mesh_device.set_sub_device_stall_group(
-        [prefetcher_setup.prefetcher_sub_device_id, prefetcher_setup.worker_sub_device_id]
-    )
+    if use_prefetcher:
+        mesh_device.set_sub_device_stall_group(
+            [prefetcher_setup.prefetcher_sub_device_id, prefetcher_setup.worker_sub_device_id]
+        )
+    else:
+        mesh_device.set_sub_device_stall_group([prefetcher_setup.worker_sub_device_id])
 
     tt_ccl = TT_CCL(mesh_device, model_args, prefetcher_setup.worker_sub_device_id, is_qwen=True)
 
@@ -92,7 +98,7 @@ def test_qwen_mlp_ttt_inference(seq_len, batch_size, mesh_device, reset_seeds):
         weight_cache_path=model_args.weight_cache_path(dtype),
         layer_num=0,
         dtype=dtype,
-        model_config=model_args.get_model_config(),
+        model_config=model_config,
         prefetcher_setup=prefetcher_setup,
         tt_ccl=tt_ccl,
     )
@@ -105,13 +111,15 @@ def test_qwen_mlp_ttt_inference(seq_len, batch_size, mesh_device, reset_seeds):
 
     logger.info("Run Qwen_MLP_TTT")
     # Explicitly allocate global CB to avoid memory fragmentation
-    prefetcher_setup.create_global_cb()
+    if use_prefetcher:
+        prefetcher_setup.create_global_cb()
     for i in range(20):
-        ttnn.dram_prefetcher(
-            prefetcher_setup.get_input_tensors(),
-            num_layers=1,
-            global_cb=prefetcher_setup.global_circular_buffer,
-        )
+        if use_prefetcher:
+            ttnn.dram_prefetcher(
+                prefetcher_setup.get_input_tensors(),
+                num_layers=1,
+                global_cb=prefetcher_setup.global_circular_buffer,
+            )
         mesh_device.set_sub_device_stall_group([prefetcher_setup.worker_sub_device_id])
 
         tt_input = ttnn.from_torch(

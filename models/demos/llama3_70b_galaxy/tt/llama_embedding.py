@@ -36,13 +36,17 @@ class TtLlamaEmbedding(LightweightModule):
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         x = ttnn.reshape(x, ttnn.Shape((1, 1, 1, x.shape[-2] * x.shape[-1])))
+        use_decode_memcfg = x.shape[-1] <= 32
+        # Decode token embedding feeds the attention-norm input path first.
+        # Keep it on the ATTN input ring memcfg (32-height) even if later decode residuals are 128-height.
+        out_memcfg = (
+            self.args.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"] if use_decode_memcfg else ttnn.DRAM_MEMORY_CONFIG
+        )
         x = ttnn.embedding(
             x,
             self.weights,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=(
-                self.args.model_config["DECODE_RESIDUAL_MEMCFG"] if x.shape[-1] <= 32 else ttnn.DRAM_MEMORY_CONFIG
-            ),
+            memory_config=out_memcfg,
             dtype=ttnn.bfloat8_b
             if x.shape[-1] > 32
             else ttnn.bfloat16,  # Keep bfloat16 for decode, bfloat8_b for prefill

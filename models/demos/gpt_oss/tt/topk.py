@@ -79,10 +79,10 @@ class TopKRouter:
             packer_l1_acc=False,
         )
 
-        # Fused op support: matmul + topk + softmax in one kernel
-        # The fused kernel uses 4 groups of 3 cores, one per N-tile (32 experts
-        # each), so it requires exactly 128 experts. Enable automatically when possible.
-        self.use_fused_op = self.num_experts == 128
+        # Fused op support: matmul + topk + softmax in one kernel.
+        # The fused kernel needs 12 DRAM-aligned cores; Blackhole exposes 8, so
+        # keep the standard linear + topk path there.
+        self.use_fused_op = self.num_experts == 128 and not ttnn.device.is_blackhole(mesh_device)
         self._fused_bias = None
         # Keep the original unsharded bias for fused op initialization
         # (ttnn.as_tensor shards self.bias across the mesh, but the fused op

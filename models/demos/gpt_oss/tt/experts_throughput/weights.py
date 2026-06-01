@@ -833,7 +833,7 @@ def create_fused_moe_gpt_config(
     tokens_per_device: int,
     weight_dtype=ttnn.bfloat4_b,
     cluster_axis: int = 0,
-    num_links: int = 4,
+    num_links: int = 2,
     tensor_cache_path: str = None,
 ):
     """Create a FusedMoeGptConfig with pre-allocated resources for the fused decode flow.
@@ -855,7 +855,7 @@ def create_fused_moe_gpt_config(
         tokens_per_device: Tokens per device per ring (M, e.g., 32 for 128 total / 4 rows).
         weight_dtype: Weight quantization type (default: bfloat4_b).
         cluster_axis: Mesh axis for the ring dispatch (default: 0, ring along rows).
-        num_links: Number of fabric links for all CCL ops (default: 4).
+        num_links: Number of fabric links for all CCL ops (default: 2).
 
     Returns:
         FusedMoeGptConfig with all pre-allocated tensors and semaphores.
