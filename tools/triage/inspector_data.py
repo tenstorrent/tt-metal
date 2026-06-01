@@ -169,14 +169,14 @@ def run(args, context) -> InspectorData:
     rank: int | None = None
 
     if not args["--inspector-disable-rank"]:
-        # If we're running in multi-instance, we should have
-        # TT_RUN_RANK environment variable set by the wrapper script.
-        rank_env = os.environ.get("TT_RUN_RANK")
-        if rank_env is not None:
-            try:
+        # If MPI rank is available, add rank to the RPC host and port
+        try:
+            rank_env = os.environ.get("TT_RUN_RANK")
+            if rank_env is not None:
                 rank = int(rank_env)
-            except ValueError:
-                log_warning(f"Ignoring non-integer TT_RUN_RANK={rank_env!r}; running in rank-less mode.")
+        except Exception as e:
+            log_warning(f"Warning: MPI rank is not available or failed to parse, running in rank-less mode. Error: {e}")
+            pass
 
     # First try to connect to Inspector RPC
     try:
