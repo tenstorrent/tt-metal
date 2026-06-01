@@ -172,6 +172,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/experimental/deepseek_prefill/combine/combine_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_expert_ffn_nanobind.cpp
     cpp/ttnn/operations/experimental/copy/typecast/typecast_nanobind.cpp
+    cpp/ttnn/operations/experimental/deltanet/deltanet_decode_nanobind.cpp
     cpp/ttnn/operations/experimental/dropout/dropout_nanobind.cpp
     cpp/ttnn/operations/experimental/isin/isin_nanobind.cpp
     cpp/ttnn/operations/experimental/adaptive_pool/adaptive_pools_nanobind.cpp

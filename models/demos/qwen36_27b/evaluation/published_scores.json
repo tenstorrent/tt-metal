@@ -1,0 +1,117 @@
+{
+    "model": "Qwen3.6-27B",
+    "source": "https://huggingface.co/Qwen/Qwen3.6-27B",
+    "notes": "Published scores are from full-precision model. BFP4_B quantization will show accuracy delta.",
+    "benchmarks": {
+        "mmlu_pro": {
+            "name": "MMLU-Pro",
+            "category": "Knowledge",
+            "published_score": 86.2,
+            "metric": "accuracy",
+            "eval_method": "loglikelihood",
+            "lm_eval_task": "mmlu_pro",
+            "dataset": "TIGER-Lab/MMLU-Pro",
+            "num_examples": 12032,
+            "description": "Multi-choice knowledge benchmark with 14 subjects, harder than original MMLU"
+        },
+        "mmlu_redux": {
+            "name": "MMLU-Redux",
+            "category": "Knowledge",
+            "published_score": 93.5,
+            "metric": "accuracy",
+            "eval_method": "loglikelihood",
+            "lm_eval_task": null,
+            "dataset": "edinburgh-dawg/mmlu-redux",
+            "num_examples": 3042,
+            "description": "Curated subset of MMLU with error corrections and cleaner labels"
+        },
+        "gpqa_diamond": {
+            "name": "GPQA Diamond",
+            "category": "STEM",
+            "published_score": 87.8,
+            "metric": "accuracy",
+            "eval_method": "loglikelihood",
+            "lm_eval_task": "gpqa_diamond_zeroshot",
+            "dataset": "Idavidrein/gpqa",
+            "num_examples": 198,
+            "description": "Graduate-level science questions (physics, chemistry, biology)"
+        },
+        "ceval": {
+            "name": "C-Eval",
+            "category": "Knowledge",
+            "published_score": 91.4,
+            "metric": "accuracy",
+            "eval_method": "loglikelihood",
+            "lm_eval_task": "ceval-valid",
+            "dataset": "ceval/ceval-exam",
+            "num_examples": 1346,
+            "description": "Chinese multi-subject exam benchmark (52 subjects)"
+        },
+        "supergpqa": {
+            "name": "SuperGPQA",
+            "category": "Knowledge",
+            "published_score": 66.0,
+            "metric": "accuracy",
+            "eval_method": "loglikelihood",
+            "lm_eval_task": null,
+            "dataset": "m-a-p/SuperGPQA",
+            "num_examples": 8042,
+            "description": "Extended graduate-level multi-discipline QA benchmark"
+        },
+        "aime26": {
+            "name": "AIME 2026",
+            "category": "Math",
+            "published_score": 94.1,
+            "metric": "accuracy",
+            "eval_method": "generate",
+            "lm_eval_task": null,
+            "dataset": null,
+            "num_examples": 30,
+            "description": "American Invitational Mathematics Examination 2026 problems"
+        },
+        "livecodebench_v6": {
+            "name": "LiveCodeBench v6",
+            "category": "Coding",
+            "published_score": 83.9,
+            "metric": "pass_rate",
+            "eval_method": "generate",
+            "lm_eval_task": null,
+            "dataset": "livecodebench/code_generation_lite",
+            "num_examples": null,
+            "description": "Live competitive programming benchmark (post-training cutoff problems)"
+        },
+        "hmmt_feb25": {
+            "name": "HMMT Feb 2025",
+            "category": "Math",
+            "published_score": 93.8,
+            "metric": "accuracy",
+            "eval_method": "generate",
+            "lm_eval_task": null,
+            "dataset": null,
+            "num_examples": null,
+            "description": "Harvard-MIT Mathematics Tournament February 2025 problems"
+        },
+        "hle": {
+            "name": "HLE",
+            "category": "Reasoning",
+            "published_score": 24.0,
+            "metric": "accuracy",
+            "eval_method": "loglikelihood",
+            "lm_eval_task": null,
+            "dataset": "cais/hle",
+            "num_examples": 2742,
+            "description": "Humanity's Last Exam — extremely challenging multi-domain questions"
+        },
+        "imo_answer_bench": {
+            "name": "IMOAnswerBench",
+            "category": "Math",
+            "published_score": 80.8,
+            "metric": "accuracy",
+            "eval_method": "generate",
+            "lm_eval_task": null,
+            "dataset": null,
+            "num_examples": null,
+            "description": "International Mathematical Olympiad answer-format benchmark"
+        }
+    }
+}
