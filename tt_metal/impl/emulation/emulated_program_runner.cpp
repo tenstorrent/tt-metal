@@ -137,11 +137,12 @@ thread_local std::unordered_map<uint64_t, tt_emule::Core*>* __emule_core_map = n
 // Match firmware declarations: uint16_t[NUM_NOCS][NUM_DRAM_BANKS], etc.
 // ---------------------------------------------------------------------------
 static constexpr uint32_t NUM_NOCS = 2;
-static constexpr uint32_t MAX_NUM_BANKS = 32;
+// L1 banks scale with worker grid: 64 on WH-N150, 140 on BH P100/P150.  Must
+// match the array size declared by the JIT side in
+// `include/jit_hw/internal/dataflow/dataflow_api_addrgen.h`.
+static constexpr uint32_t MAX_NUM_BANKS = 256;
 // Wormhole has 32 CBs; JIT header cb_api.h sizes unpack_tile_size[32].
 static constexpr uint32_t EMULE_NUM_CBS = 32;
-// Emulation simplification: each worker is its own L1 bank.
-static constexpr uint32_t EMULE_NUM_L1_BANKS = 1;
 // Semaphore alignment in L1 (must match firmware layout).
 static constexpr uint32_t EMULE_SEM_ALIGN = 16;
 
@@ -861,9 +862,15 @@ static tt::umd::SWEmuleChip* get_sw_emulated_chip(ChipId device_id) {
 // populate_bank_mapping: Set up DRAM/L1 bank arrays from SoC descriptor.
 // ---------------------------------------------------------------------------
 static void populate_bank_mapping(
-    tt::umd::SWEmuleChip* sw_emu, ChipId device_id, tt_emule::Core*& dram_core_out, uint32_t& num_dram_channels_out) {
+    tt::umd::SWEmuleChip* sw_emu,
+    IDevice* device,
+    ChipId device_id,
+    tt_emule::Core*& dram_core_out,
+    uint32_t& num_dram_channels_out,
+    uint32_t& num_l1_banks_out) {
     dram_core_out = nullptr;
     num_dram_channels_out = 0;
+    num_l1_banks_out = 0;
     if (!sw_emu) {
         return;
     }
@@ -910,9 +917,32 @@ static void populate_bank_mapping(
             bank_to_dram_offset[ch]);
     }
 
-    // L1 bank mapping — for now, all worker cores use themselves as bank 0.
+    // L1 bank mapping — mirror the host allocator's bank distribution so the
+    // kernel-side `interleaved_addr_gen::get_bank_index<L1>(id)` lands on the
+    // same worker core that `SWEmuleChip::write_to_device` wrote a given page
+    // to.  Without this, every page maps to bank 0 (a single core) while the
+    // host scatters across all worker cores — interleaved-L1 → sharded paths
+    // see all zeros (B8.4 in round8-sharded-harvest.md).
     std::memset(l1_bank_to_noc_xy, 0, sizeof(l1_bank_to_noc_xy));
     std::memset(bank_to_l1_offset, 0, sizeof(bank_to_l1_offset));
+    if (device) {
+        const auto& allocator = device->allocator();
+        num_l1_banks_out = allocator->get_num_banks(BufferType::L1);
+        for (uint32_t b = 0; b < num_l1_banks_out && b < MAX_NUM_BANKS; ++b) {
+            auto logical = allocator->get_logical_core_from_bank_id(b);
+            auto virt = device->virtual_core_from_logical_core(logical, CoreType::WORKER);
+            uint16_t noc_xy = (static_cast<uint16_t>(virt.y) << NOC_NODE_ID_BITS) |
+                              static_cast<uint16_t>(virt.x);
+            l1_bank_to_noc_xy[0][b] = noc_xy;  // NOC 0
+            l1_bank_to_noc_xy[1][b] = noc_xy;  // NOC 1 (same target in emule)
+            // Intentionally leave bank_to_l1_offset[b] = 0.  On silicon
+            // `allocator->get_bank_offset(L1, b)` returns the reserved-region
+            // start (~tens of MB depending on harvest mask) that the firmware
+            // skips past; in emule each core's L1 mmap starts at offset 0 with
+            // no firmware reservation, so adding a silicon-style offset would
+            // push every NOC L1 read past the end of the mmap (OOB).
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1006,6 +1036,7 @@ static std::map<std::string, std::string> build_kernel_defines(
     Kernel& kernel,
     detail::ProgramImpl& impl,
     uint32_t num_dram_channels,
+    uint32_t num_l1_banks,
     const std::string& worker_col_map_str,
     const std::string& worker_row_map_str,
     uint32_t emule_sem_base) {
@@ -1023,7 +1054,7 @@ static std::map<std::string, std::string> build_kernel_defines(
 
     {
         uint32_t num_dram = num_dram_channels ? num_dram_channels : 1;
-        uint32_t num_l1 = EMULE_NUM_L1_BANKS;
+        uint32_t num_l1 = num_l1_banks ? num_l1_banks : 1;
         defines["NUM_DRAM_BANKS"] = std::to_string(num_dram);
         defines["NUM_L1_BANKS"] = std::to_string(num_l1);
         // Mirror tt_metal/jit_build/build_env_manager.cpp:118-129. Upstream
@@ -1161,6 +1192,7 @@ static TriscMode detect_quasar_trisc_mode(bool is_quasar_compute, const std::str
 static void collect_kernels(
     detail::ProgramImpl& impl,
     uint32_t num_dram_channels,
+    uint32_t num_l1_banks,
     const std::string& worker_col_map_str,
     const std::string& worker_row_map_str,
     uint32_t emule_sem_base,
@@ -1181,7 +1213,8 @@ static void collect_kernels(
             auto compile_args = kernel->compile_time_args();
             auto named_compile_args = kernel->named_compile_time_args();
             auto defines = build_kernel_defines(
-                *kernel, impl, num_dram_channels, worker_col_map_str, worker_row_map_str, emule_sem_base);
+                *kernel, impl, num_dram_channels, num_l1_banks,
+                worker_col_map_str, worker_row_map_str, emule_sem_base);
 
             auto& common_rt = kernel->common_runtime_args();
 
@@ -1881,7 +1914,8 @@ void execute_program_emulated(IDevice* device, Program& program) {
     // Phase 0: Populate bank mapping arrays
     tt_emule::Core* dram_core = nullptr;
     uint32_t num_dram_channels = 0;
-    populate_bank_mapping(sw_emu, device_id, dram_core, num_dram_channels);
+    uint32_t num_l1_banks = 0;
+    populate_bank_mapping(sw_emu, device, device_id, dram_core, num_dram_channels, num_l1_banks);
 
     // Build worker coordinate mapping strings
     std::string worker_col_map_str, worker_row_map_str;
@@ -1912,6 +1946,7 @@ void execute_program_emulated(IDevice* device, Program& program) {
     collect_kernels(
         impl,
         num_dram_channels,
+        num_l1_banks,
         worker_col_map_str,
         worker_row_map_str,
         emule_sem_base,
