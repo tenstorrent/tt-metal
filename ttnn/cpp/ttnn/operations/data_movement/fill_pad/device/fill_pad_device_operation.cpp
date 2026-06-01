@@ -42,12 +42,14 @@ Tensor FillPadDeviceOperation::create_output_tensors(
     return input_tensor;
 }
 
-ttnn::Tensor fill_pad(const Tensor& input, float fill_value, const MemoryConfig& output_memory_config) {
+ttnn::Tensor fill_pad(
+    const Tensor& input, float fill_value, const MemoryConfig& output_memory_config, bool fill_value_is_packed_bits) {
     using OperationType = ttnn::prim::FillPadDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .fill_value = fill_value,
             .output_mem_config = output_memory_config,
+            .fill_value_is_packed_bits = fill_value_is_packed_bits,
         },
         OperationType::tensor_args_t{.input = input});
 }

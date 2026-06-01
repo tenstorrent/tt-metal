@@ -26,6 +26,9 @@ void bind_fill_pad_op(nb::module_& mod) {
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            fill_value_is_packed_bits (bool, optional): For INT32 tensors only, interpret fill_value as the raw
+                int32 bit pattern (via reinterpret) instead of decoding it numerically. Used to carry int32 fill
+                values that are not exactly float-representable. Defaults to `False` (numeric decode).
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -38,7 +41,8 @@ void bind_fill_pad_op(nb::module_& mod) {
         nb::arg("input_tensor"),
         nb::arg("fill_value"),
         nb::kw_only(),
-        nb::arg("memory_config") = nb::none());
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("fill_value_is_packed_bits") = false);
 }
 
 }  // namespace

@@ -41,15 +41,20 @@ inline uint32_t pack_fill_value(T fill_value) {
 // Float DataTypes (FLOAT32, BFLOAT16) keep the full float32 bit pattern — the
 // compute kernel reconstructs it via fill_tile_bitcast and the downstream
 // packer handles the bf16 narrowing.
-inline uint32_t pack_fill_value_for_dtype(ttnn::DataType dtype, float fill_value) {
+inline uint32_t pack_fill_value_for_dtype(
+    ttnn::DataType dtype, float fill_value, bool fill_value_is_packed_bits = false) {
     switch (dtype) {
         case ttnn::DataType::FLOAT32:
         case ttnn::DataType::BFLOAT16: return pack_fill_value(fill_value);
         case ttnn::DataType::UINT16: return pack_fill_value(static_cast<uint16_t>(fill_value));
         case ttnn::DataType::UINT32: return pack_fill_value(static_cast<uint32_t>(fill_value));
-        // INT32: recover the raw int32 bits from fill_value via std::bit_cast<uint32_t>. Host passes
-        // bit-encoded sentinels as float (generic_reductions::get_pad_value); should not decode numerically.
-        case ttnn::DataType::INT32: return std::bit_cast<uint32_t>(fill_value);
+        // INT32: numeric by default - fill_value carries the integer value (e.g. fill_implicit_tile_padding
+        // callers like prod, reshape, slice). Callers that must carry an exact int32 bit pattern that is not
+        // float-representable (reduce's min/max pad sentinels, see generic_reductions::get_pad_value) set
+        // fill_value_is_packed_bits=true to recover the raw bits via std::bit_cast<uint32_t> instead.
+        case ttnn::DataType::INT32:
+            return fill_value_is_packed_bits ? std::bit_cast<uint32_t>(fill_value)
+                                             : pack_fill_value(static_cast<int32_t>(fill_value));
         default: TT_THROW("fill_pad: unsupported dtype"); return 0u;
     }
 }

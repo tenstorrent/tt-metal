@@ -27,6 +27,10 @@ struct FillPadDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t& args, const tensor_args_t&);
 };
 
-ttnn::Tensor fill_pad(const Tensor& input, float fill_value, const MemoryConfig& output_memory_config);
+ttnn::Tensor fill_pad(
+    const Tensor& input,
+    float fill_value,
+    const MemoryConfig& output_memory_config,
+    bool fill_value_is_packed_bits = false);
 
 }  // namespace ttnn::prim

@@ -590,7 +590,12 @@ Tensor reduce(
     }
 
     bool is_tiled = input_tensor_arg.layout() == TILE_LAYOUT;
-    auto input_tensor = is_tiled ? ttnn::fill_implicit_tile_padding(input_tensor_arg, pad_value) : input_tensor_arg;
+    // For INT32 the pad sentinel is carried as a raw bit pattern (see get_pad_value), so fill_pad must
+    // recover the bits rather than decode numerically.
+    const bool pad_value_is_packed_bits = input_tensor_arg.dtype() == tt::tt_metal::DataType::INT32;
+    auto input_tensor =
+        is_tiled ? ttnn::fill_implicit_tile_padding(input_tensor_arg, pad_value, std::nullopt, pad_value_is_packed_bits)
+                 : input_tensor_arg;
 
     // bf16 multi-axis Sum precision chain: carry FP32 between stages and pack bf16
     // only on the final stage. Skipped for full-tensor reductions (dim covers every

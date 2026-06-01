@@ -488,7 +488,6 @@ ALWI void reduce(
                     if (Wt > 1) {
                         detail::sfpu_reduce_max_fold_init<reduce_format>();
                     }
-
                 }
 
                 const uint32_t dst_idx = get_dst_index(accumulate);
@@ -622,7 +621,6 @@ ALWI void reduce(
                     if (Ht > 1) {
                         detail::sfpu_reduce_max_fold_init<reduce_format>();
                     }
-
                 }
 
                 for (uint32_t ht = 0; ht < Ht; ++ht) {
