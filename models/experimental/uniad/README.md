@@ -6,8 +6,6 @@ UniAD relies on the standard tt-metal Python environment (`./create_venv.sh`).
 The host-side DCNv2 reference is implemented via `torchvision.ops.deform_conv2d`,
 so no additional MMCV / Casadi install is required.
 
-Note: UniAD model tests run successfully only on Python 3.10.12.
-
 ### Pretrained weights
 - The pre-trained weights will be downloaded automatically during sub-module testing.
 - If the weights are not downloaded automatically, you can manually fetch them using the command, `wget https://github.com/OpenDriveLab/UniAD/releases/download/v1.0.1/uniad_base_e2e.pth`. Place it in the following path `models/experimental/uniad/`.
