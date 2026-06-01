@@ -108,6 +108,7 @@ void fabric_mux_connection_rt_args(
     tt::tt_metal::Program& program,
     CoreCoord termination_master_virtual_core,
     uint32_t num_mux_clients,
+    uint32_t termination_sync_id,
     std::vector<uint32_t>& worker_rt_args) {
     worker_rt_args.push_back(mux_connection_valid);   // mux_connection_valid
     worker_rt_args.push_back(is_termination_master);  // is_termination_master
@@ -125,7 +126,7 @@ void fabric_mux_connection_rt_args(
         mux_kernel_config.get_buffer_index_address(channel_type, worker_id));  // fabric_mux_buffer_index_address
     worker_rt_args.push_back(
         mux_kernel_config.get_channel_credits_stream_id(channel_type, worker_id));  // fabric_mux_channel_id
-    worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));   // termination_sync_address
+    worker_rt_args.push_back(termination_sync_id);  // termination_sync_address (shared, uniform L1 addr)
     worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));   // local_fabric_mux_status_address
     worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));   // local_flow_control_address
     worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));   // local_teardown_address
@@ -394,6 +395,14 @@ all_gather_minimal_matmul_async_factory_helper(
     auto in1_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
     auto in1_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
     auto in1_valid_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, VALID);
+
+    // Mux termination-sync semaphores. Created ONCE on the full grid so every mux client
+    // (master and peers) sees this semaphore at the SAME L1 address — required because peers
+    // increment it on the master's core. Per-core creation diverges when a core also carries
+    // the other operand's mux semaphores (the in0/in1 sender overlap), which deadlocked teardown.
+    // Separate ids for in0 vs in1 so an overlap core's two muxes don't share a termination slot.
+    auto in0_term_sync_id = tt::tt_metal::CreateSemaphore(program, core_grid, 0);
+    auto in1_term_sync_id = tt::tt_metal::CreateSemaphore(program, core_grid, 0);
 
     uint32_t in0_cb_id = tt::CBIndex::c_0;
     tt::tt_metal::create_cb(in0_cb_id, program, core_grid, in0_tile_size, in0_cb_num_tiles, in0_data_format);
@@ -1195,6 +1204,7 @@ all_gather_minimal_matmul_async_factory_helper(
                     program,
                     termination_master_virtual_core_backward,
                     in0_mux_clients,
+                    in0_term_sync_id,
                     in0_args);
             } else {
                 // Forward fabric sender (in0_core_order_index == size - 1).
@@ -1222,6 +1232,7 @@ all_gather_minimal_matmul_async_factory_helper(
                     program,
                     termination_master_virtual_core_forward,
                     in0_mux_clients,
+                    in0_term_sync_id,
                     in0_args);
             }
         }
@@ -1316,6 +1327,7 @@ all_gather_minimal_matmul_async_factory_helper(
                     program,
                     fsdp_term_master_virtual_backward,
                     in1_mux_clients,
+                    in1_term_sync_id,
                     in1_args);
             } else {
                 // Forward fabric sender (in1_core_order_index == size - 1).
@@ -1342,6 +1354,7 @@ all_gather_minimal_matmul_async_factory_helper(
                     program,
                     fsdp_term_master_virtual_forward,
                     in1_mux_clients,
+                    in1_term_sync_id,
                     in1_args);
             }
         }
