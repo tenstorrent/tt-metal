@@ -31,6 +31,7 @@
 #include <tt-metalium/program_descriptors.hpp>
 
 #include <cstdint>
+#include <limits>
 #include <span>
 #include <vector>
 
@@ -92,9 +93,24 @@ struct ResolvedBindings {
 // because the safety check depends on workload contract — specifically whether
 // a slow-path rebuild is available to refresh raw (non-binding) runtime args.
 //
+// tensor_buffers is ordered inputs-first (see collect_tensor_buffers): the first
+// num_input_buffers entries come from tensor_args, the rest from the output(s) and any
+// workload buffers.  This split lets the resolver distinguish two kinds of aliasing:
+//   - the SAME buffer appearing twice WITHIN the inputs (e.g. matmul(X, X)) is ambiguous —
+//     a future call with distinct same-shape tensors would miscompute — so we bail to the
+//     slow path.
+//   - an OUTPUT buffer that aliases an INPUT buffer (an in-place op writing back into its
+//     input) is safe: every binding for that buffer resolves to the one shared address,
+//     which is correct on every dispatch — so we keep the fast path.
+// num_input_buffers defaults to SIZE_MAX, which treats every entry as an input (the original
+// conservative behavior: bail on any duplicate).
+//
 // Call immediately after Program{desc} on cache miss; store in shared_variables.
 ResolvedBindings resolve_bindings(
-    Program& program, const ProgramDescriptor& desc, std::span<Buffer* const> tensor_buffers);
+    Program& program,
+    const ProgramDescriptor& desc,
+    std::span<Buffer* const> tensor_buffers,
+    size_t num_input_buffers = std::numeric_limits<size_t>::max());
 
 // Apply resolved bindings to the cached program on a cache hit.
 // current_buffers must be the output of collect_tensor_buffers() for the

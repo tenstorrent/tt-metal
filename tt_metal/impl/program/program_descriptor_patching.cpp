@@ -26,24 +26,45 @@
 namespace tt::tt_metal {
 
 ResolvedBindings resolve_bindings(
-    Program& program, const ProgramDescriptor& desc, std::span<Buffer* const> tensor_buffers) {
+    Program& program,
+    const ProgramDescriptor& desc,
+    std::span<Buffer* const> tensor_buffers,
+    size_t num_input_buffers) {
     ResolvedBindings result;
 
-    // If the same Buffer* appears in tensor_buffers more than once (e.g. matmul(X, X),
-    // or an output that aliases an input), every binding for that buffer would map to
-    // the first occurrence via std::find below.  At cache hit, all of those bindings
-    // would be patched with current_buffers[first_slot].address(), so the second
-    // tensor's address would never get written.  The result is silent miscompute when
-    // a future call uses distinct tensors at the same shape/dtype.
+    // If the same Buffer* appears more than once, every binding for that buffer maps to the
+    // first occurrence via std::find below; at cache hit all of those bindings get patched with
+    // current_buffers[first_slot].address().  Whether that's safe depends on WHY it aliases:
     //
-    // We can't disambiguate which binding corresponds to which slot from Buffer* alone,
-    // so we fall back to the slow path (rebuild the descriptor) when this happens.
+    //   - Duplicate WITHIN the inputs (e.g. matmul(X, X)): the two slots are distinct logical
+    //     tensors that merely coincide on this call.  A future same-shape call with distinct
+    //     tensors would silently miscompute (the second tensor's address is never written).
+    //     We can't disambiguate from Buffer* alone, so bail to the slow path.
+    //
+    //   - An OUTPUT (or workload) buffer that aliases an INPUT: an in-place op writing back into
+    //     its input.  Both slots are the SAME buffer by construction, on every dispatch, so
+    //     mapping them to the one shared address is always correct.  Keep the fast path.
+    //
+    // tensor_buffers is ordered inputs-first; the first num_input_buffers entries are inputs.
     {
-        std::unordered_set<Buffer*> seen;
-        seen.reserve(tensor_buffers.size());
-        for (Buffer* buf : tensor_buffers) {
-            if (buf && !seen.insert(buf).second) {
-                return ResolvedBindings{};
+        std::unordered_set<Buffer*> input_buffers;   // buffers seen in the input region
+        std::unordered_set<Buffer*> output_buffers;  // buffers seen in the output/workload region
+        for (size_t i = 0; i < tensor_buffers.size(); ++i) {
+            Buffer* buf = tensor_buffers[i];
+            if (!buf) {
+                continue;
+            }
+            if (i < num_input_buffers) {
+                if (!input_buffers.insert(buf).second) {
+                    return ResolvedBindings{};  // duplicate among inputs (e.g. matmul(X, X)) — ambiguous
+                }
+            } else if (input_buffers.count(buf) == 0) {
+                // Output/workload buffer that does NOT alias an input: a duplicate here is still
+                // ambiguous, so preserve the original conservative bail.  (A buffer that DOES
+                // alias an input is the safe in-place case and falls through.)
+                if (!output_buffers.insert(buf).second) {
+                    return ResolvedBindings{};
+                }
             }
         }
     }

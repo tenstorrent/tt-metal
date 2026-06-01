@@ -123,7 +123,6 @@ ProgramDescriptor UniformDeviceOperation::create_descriptor(
     // -eps make sure that generated number is < operation_attributes.to
     const uint32_t f2u_to = std::bit_cast<uint32_t>(operation_attributes.to - eps);
 
-    const uint32_t output_addr = output.buffer()->address();
     uint32_t tile_offset = 0;
     for (int i = 0; i < static_cast<int>(cores.size()); ++i) {
         const auto& core = cores[i];
@@ -139,11 +138,14 @@ ProgramDescriptor UniformDeviceOperation::create_descriptor(
         // Each core has its own seed to increase the number of generated random numbers
         uint32_t seed = operation_attributes.seed != 0 ? operation_attributes.seed + i : get_random_seed();
 
+        // seed/from/to are DYNAMIC (excluded from compute_program_hash): baked here for the
+        // cache-miss build, re-applied on every cache hit via get_dynamic_runtime_args().
         compute_desc.runtime_args.emplace_back(
             core, KernelDescriptor::CoreRuntimeArgs{seed, f2u_from, f2u_to, tile_offset, units_per_core});
 
-        writer_desc.runtime_args.emplace_back(
-            core, KernelDescriptor::CoreRuntimeArgs{output_addr, tile_offset, units_per_core});
+        // Register the (in-place) output address as a Buffer* binding so uniform takes the fast
+        // cache-hit path; the framework allows the input==output alias (see resolve_bindings).
+        writer_desc.emplace_runtime_args(core, {output.buffer(), tile_offset, units_per_core});
 
         tile_offset += units_per_core;
     }
@@ -152,6 +154,41 @@ ProgramDescriptor UniformDeviceOperation::create_descriptor(
     desc.kernels.push_back(std::move(compute_desc));
 
     return desc;
+}
+
+std::vector<tt::tt_metal::DynamicRuntimeArg> UniformDeviceOperation::get_dynamic_runtime_args(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& /*tensor_args*/,
+    tensor_return_value_t& output,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    // MUST mirror create_descriptor(): writer is kernel 0, compute is kernel 1; the compute
+    // runtime args are {seed, f2u_from, f2u_to, tile_offset, units_per_core}.  Only the per-call
+    // values (seed, from, to) are re-applied; tile_offset/units_per_core are part of the static
+    // program identity.  The work-split is recomputed (cheap host-side integer math, no rebuild)
+    // so the per-core seed offsets match create_descriptor() exactly.
+    constexpr uint32_t kComputeKernelIdx = 1;
+
+    IDevice* device = output.device();
+    auto grid = device->compute_with_storage_grid_size();
+    uint32_t units_to_divide = output.physical_volume() / constants::TILE_HW;
+    [[maybe_unused]] auto
+        [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
+            split_work_to_cores(grid, units_to_divide);
+    auto cores = grid_to_cores(num_cores, grid.x, grid.y);
+
+    const float eps = 1e-6f;
+    const uint32_t f2u_from = std::bit_cast<uint32_t>(operation_attributes.from);
+    const uint32_t f2u_to = std::bit_cast<uint32_t>(operation_attributes.to - eps);
+
+    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
+    dynamic_args.reserve(cores.size() * 3);
+    for (int i = 0; i < static_cast<int>(cores.size()); ++i) {
+        const uint32_t seed = operation_attributes.seed != 0 ? operation_attributes.seed + i : get_random_seed();
+        dynamic_args.push_back({kComputeKernelIdx, cores[i], 0, seed});
+        dynamic_args.push_back({kComputeKernelIdx, cores[i], 1, f2u_from});
+        dynamic_args.push_back({kComputeKernelIdx, cores[i], 2, f2u_to});
+    }
+    return dynamic_args;
 }
 
 }  // namespace ttnn::operations::uniform

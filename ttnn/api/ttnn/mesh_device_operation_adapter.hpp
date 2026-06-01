@@ -397,9 +397,16 @@ public:
         static ttsl::SmallVector<tt::tt_metal::Buffer*, 16> collect_tensor_buffers(
             const tensor_args_t& tensor_args,
             const tensor_return_value_t& tensor_return_value,
-            const tt::tt_metal::WorkloadDescriptor& workload_descriptor) {
+            const tt::tt_metal::WorkloadDescriptor& workload_descriptor,
+            size_t* num_input_buffers = nullptr) {
             ttsl::SmallVector<tt::tt_metal::Buffer*, 16> buffers;
             extract_tensor_buffers_into(tensor_args, buffers);
+            // Boundary between input buffers and output/workload buffers, used by resolve_bindings
+            // to allow safe in-place aliasing (output buffer == input buffer) while still bailing
+            // on ambiguous duplicates within the inputs (e.g. matmul(X, X)).
+            if (num_input_buffers != nullptr) {
+                *num_input_buffers = buffers.size();
+            }
             extract_tensor_buffers_into(tensor_return_value, buffers);
             for (const auto& wb : workload_descriptor.buffers) {
                 buffers.push_back(wb.buffer);
@@ -477,8 +484,10 @@ public:
                 auto programs = std::move(workload_descriptor.programs);
                 for (auto& [device_range, desc] : programs) {
                     tt::tt_metal::Program program{desc};
-                    auto tensor_buffers = collect_tensor_buffers(tensor_args, tensor_return_value, workload_descriptor);
-                    auto resolved = tt::tt_metal::resolve_bindings(program, desc, tensor_buffers);
+                    size_t num_input_buffers = 0;
+                    auto tensor_buffers = collect_tensor_buffers(
+                        tensor_args, tensor_return_value, workload_descriptor, &num_input_buffers);
+                    auto resolved = tt::tt_metal::resolve_bindings(program, desc, tensor_buffers, num_input_buffers);
                     mesh_workload.add_program(device_range, std::move(program));
                     shared_variables[device_range] = shared_variables_t{
                         .workload_descriptor = workload_descriptor, .resolved_bindings = std::move(resolved)};
@@ -493,9 +502,11 @@ public:
                         const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
                         auto desc = invoke_per_coord(attrs, tensor_args, tensor_return_value, mesh_dispatch_coordinate);
                         tt::tt_metal::Program program{desc};
-                        auto tensor_buffers =
-                            collect_tensor_buffers(tensor_args, tensor_return_value, empty_descriptor);
-                        auto resolved = tt::tt_metal::resolve_bindings(program, desc, tensor_buffers);
+                        size_t num_input_buffers = 0;
+                        auto tensor_buffers = collect_tensor_buffers(
+                            tensor_args, tensor_return_value, empty_descriptor, &num_input_buffers);
+                        auto resolved =
+                            tt::tt_metal::resolve_bindings(program, desc, tensor_buffers, num_input_buffers);
                         mesh_workload.add_program(device_range, std::move(program));
                         shared_variables[device_range] = shared_variables_t{.resolved_bindings = std::move(resolved)};
                     };
