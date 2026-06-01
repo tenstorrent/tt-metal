@@ -18,6 +18,7 @@ from models.demos.ace_step_v1_5.ttnn_impl.ace_step_lm_head_narrow import (
 )
 from models.demos.ace_step_v1_5.ttnn_impl.math_perf_env import (
     ace_step_lm_decode_qk_norm_sharded_enabled,
+    ace_step_lm_head_sharded_norm_enabled,
     ace_step_lm_narrow_audio_vocab_enabled,
     ace_step_lm_prefill_l1_enabled,
     ace_step_lm_sdpa_concat_width_enabled,
@@ -25,6 +26,7 @@ from models.demos.ace_step_v1_5.ttnn_impl.math_perf_env import (
 )
 from models.demos.ace_step_v1_5.ttnn_impl.qwen_decode_sdpa_layout import ace_step_patch_model_args_sdpa_gather_unified
 from models.demos.ace_step_v1_5.ttnn_impl.qwen_decode_shard import ace_step_patch_model_args_decode_unified_shard
+from models.demos.ace_step_v1_5.ttnn_impl.qwen_lm_head_sharded_norm import ace_step_apply_lm_head_sharded_norm
 from models.tt_transformers.tt.common import Mode
 
 
@@ -32,8 +34,111 @@ def test_lm_mem_env_defaults():
     assert ace_step_lm_prefill_l1_enabled() is False
     assert ace_step_lm_unified_decode_shard_enabled() is True
     assert ace_step_lm_decode_qk_norm_sharded_enabled() is True
+    assert ace_step_lm_head_sharded_norm_enabled() is True
     assert ace_step_lm_sdpa_concat_width_enabled() is True
     assert ace_step_lm_narrow_audio_vocab_enabled() is True
+
+
+def test_lm_head_sharded_norm_patches_distributed_norm_and_apply():
+    lm_head_mem = object()
+    lm_head_cfg = {"sharded_output_config": lm_head_mem, "sharded_program_config": object()}
+    hidden = mock.Mock()
+    hidden.memory_config.return_value.is_sharded.return_value = False
+    dram_hidden = mock.Mock()
+    dram_hidden.memory_config.return_value.is_sharded.return_value = False
+    sharded_hidden = mock.Mock()
+    sharded_hidden.memory_config.return_value.is_sharded.return_value = True
+    rms = mock.Mock(return_value=sharded_hidden)
+
+    class FakeDistributedNorm:
+        def __init__(self):
+            self.args = SimpleNamespace(
+                get_norm_config=mock.Mock(return_value=lm_head_cfg),
+                get_lm_head_input_mem_config=mock.Mock(return_value=SimpleNamespace(is_sharded=lambda: True)),
+                is_multichip=False,
+                is_distributed_norm=mock.Mock(return_value=False),
+            )
+            self.prefetcher = None
+            self.tt_ccl = None
+            self.ag_config_key = None
+            self.norm = rms
+
+        def forward(self, x, mode, norm_config=None):
+            return "stock"
+
+        def __call__(self, x, mode, norm_config=None):
+            return self.forward(x, mode, norm_config)
+
+    dnorm = FakeDistributedNorm()
+    tt_model = SimpleNamespace(
+        norm=dnorm,
+        args=dnorm.args,
+        prefetcher=None,
+        _apply_norm_and_lm_head=mock.Mock(return_value="orig_logits"),
+        forward=mock.Mock(return_value="fwd"),
+    )
+
+    with mock.patch(
+        "models.demos.ace_step_v1_5.ttnn_impl.qwen_lm_head_sharded_norm.ttnn.to_memory_config",
+        side_effect=lambda x, memory_config=None: dram_hidden if x is hidden else x,
+    ) as to_mem, mock.patch(
+        "models.demos.ace_step_v1_5.ttnn_impl.qwen_lm_head_sharded_norm.ttnn.interleaved_to_sharded",
+        return_value=sharded_hidden,
+    ) as i2s, mock.patch(
+        "models.demos.ace_step_v1_5.ttnn_impl.qwen_lm_head_sharded_norm.ttnn.DRAM_MEMORY_CONFIG",
+        object(),
+    ):
+        ace_step_apply_lm_head_sharded_norm(tt_model, dnorm.args)
+
+        out = dnorm(hidden, Mode.PREFILL, norm_config=lm_head_cfg)
+        assert out is sharded_hidden
+        to_mem.assert_called()
+        i2s.assert_called()
+        assert rms.call_count == 1
+        assert rms.call_args.kwargs["in_sharded"] is True
+        assert rms.call_args.kwargs["out_sharded"] is True
+
+        tt_model.lm_head = mock.Mock(return_value="logits")
+        logits = tt_model._apply_norm_and_lm_head(hidden)
+        assert logits == "logits"
+        assert i2s.call_count == 2
+        assert rms.call_count == 2
+        tt_model.lm_head.assert_called_once_with(sharded_hidden)
+
+
+def test_sharded_prestep_skips_dram_on_sharded_input():
+    target = object()
+    sharded = mock.Mock()
+    sharded.memory_config.return_value.is_sharded.return_value = True
+    dnorm = SimpleNamespace(
+        args=SimpleNamespace(is_multichip=False, is_distributed_norm=mock.Mock(return_value=False)),
+        prefetcher=None,
+        tt_ccl=None,
+        ag_config_key=None,
+    )
+    norm_config = {"sharded_output_config": target}
+
+    with mock.patch(
+        "models.demos.ace_step_v1_5.ttnn_impl.qwen_lm_head_sharded_norm.ttnn.to_memory_config",
+    ) as to_mem, mock.patch(
+        "models.demos.ace_step_v1_5.ttnn_impl.qwen_lm_head_sharded_norm.ttnn.interleaved_to_sharded",
+    ) as i2s, mock.patch(
+        "models.demos.ace_step_v1_5.ttnn_impl.qwen_lm_head_sharded_norm._shard_for_lm_head",
+        return_value=sharded,
+    ) as shard:
+        from models.demos.ace_step_v1_5.ttnn_impl.qwen_lm_head_sharded_norm import _distributed_norm_prestep
+
+        out = _distributed_norm_prestep(
+            dnorm,
+            sharded,
+            mode=Mode.PREFILL,
+            norm_config=norm_config,
+            target_sharded_mem_cfg=target,
+        )
+        assert out is sharded
+        to_mem.assert_not_called()
+        i2s.assert_not_called()
+        shard.assert_called_once_with(sharded, target)
 
 
 def test_decode_unified_shard_routes_decode_getters_to_residual():
