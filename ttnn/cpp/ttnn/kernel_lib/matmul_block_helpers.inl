@@ -24,9 +24,9 @@ namespace compute_kernel_lib {
 /**
  * Pack a (h × w) DST sub-block to absolute row-major positions in the output CB.
  * One pack_tile<true>(dst_idx, cb, abs_tile_idx) call per tile — the LLK takes
- * an absolute tile index into the caller's reserved region, so we don't have
- * to touch fifo_wr_ptr / fifo_wr_tile_ptr at all. Earlier versions of this
- * helper batched into h pack_tile_block calls with manual fifo_wr_ptr striding;
+ * an absolute tile index into the caller's reserved region, so the helper does
+ * not need to reach into the CB interface. Earlier versions of this helper
+ * batched into h pack_tile_block calls with manual CB-pointer striding;
  * llk_matmul_pack expands to a per-tile _llk_pack_ loop internally so the
  * underlying packer call count was identical, and the per-call C++ savings
  * (one ASSERT/get_output_id per row instead of per tile) didn't justify the
@@ -95,9 +95,9 @@ ALWI void matmul_block(
 
     // OutWithUntilize requires the SubblockMajor pack path: pack_untilize_dest is
     // initialized for a fixed block_ct_dim and packs from DST starting at offset 0,
-    // which doesn't compose with the row-major pack_subblock_row_strided
-    // that manipulates fifo_wr_ptr per row. The Interm + reblock_and_untilize
-    // path handles row-major untilize end-to-end via add_bias_bcast_rows /
+    // which doesn't compose with the row-major pack_subblock_row_strided that
+    // walks per-tile absolute offsets. The Interm + reblock_and_untilize path
+    // handles row-major untilize end-to-end via add_bias_bcast_rows /
     // reblock_and_untilize, so callers needing row-major untilize go that route.
     static_assert(
         last_block_target != LastBlockTarget::OutWithUntilize || tile_order == OutputCBLayout::SubblockMajor,
@@ -235,10 +235,11 @@ ALWI void matmul_block(
     // exactly once at entry, then pack each K-block's partials to fixed tile offsets
     // within that reservation via pack_tile<true> (no per-K-block reserve/push), and
     // reload via copy_block_matmul_partials with start_in_tile_index pointing at the
-    // subblock's tile offset. Because we never push_back during the K-loop the
-    // fifo_rd_ptr / fifo_wr_ptr never advance off the captured base; the consumer
-    // (bias-add / untilize) gets one push_back(out_block_num_tiles) at exit. No
-    // direct fifo_rd_ptr / fifo_wr_ptr access anywhere in this path now.
+    // subblock's tile offset. Because we never push_back during the K-loop the CB
+    // position stays at the captured base; the consumer (bias-add / untilize) gets
+    // one push_back(out_block_num_tiles) at exit. The helper reaches no CB-interface
+    // fields directly in this path — every read and write goes through the public
+    // compute_kernel_api.
     if constexpr (pin_interm_to_captured_base) {
         interm_buf.reserve_back(out_block_num_tiles);
     }
@@ -387,11 +388,12 @@ ALWI void matmul_block(
                     if (enable_reload) {
                         copy_tile_to_dst_init_short_with_dt(in1_cb_id, interm_cb_id);
                         if constexpr (pin_interm_to_captured_base) {
-                            // Pinned reservation never advances rd_ptr; data is at a fixed
-                            // tile offset within the one-shot reservation. Use the LLK's
-                            // existing start_in_tile_index source offset (forwarded into
-                            // llk_unpack_A_block as fifo_rd_ptr + start_tile_index * page_size).
-                            // No wait_front / pop_front — reserve_back at helper entry covers
+                            // Pin reservation never advances; data sits at a fixed tile
+                            // offset within the one-shot interm reservation. start_in_tile_index
+                            // on copy_block_matmul_partials reads the block at that offset
+                            // relative to the current CB read position (see the wrapper's
+                            // docstring in tt_metal/hw/inc/api/compute/tile_move_copy.h). No
+                            // wait_front / pop_front: reserve_back at helper entry covers
                             // the full block and the consumer doesn't see anything until the
                             // single push_back at exit.
                             copy_block_matmul_partials(
@@ -619,13 +621,13 @@ ALWI void matmul_block(
                 }
             }
 
-            // (The per-K-block fifo_rd_ptr / fifo_wr_ptr reset block that used to live
-            // here in the pin path is gone: the pin flow now never push_backs or
-            // pop_fronts on interm during the K-loop. The one-shot reserve at helper
-            // entry covers the full out_block; spills/reloads land at fixed subblock
-            // offsets via pack_tile<true> and copy_block_matmul_partials's
-            // start_in_tile_index; the consumer-visible push_back happens once at
-            // exit. No direct CB-interface access remains in the helper.)
+            // (The per-K-block CB-pointer reset block that used to live here in the
+            // pin path is gone: the pin flow now never push_backs or pop_fronts on
+            // interm during the K-loop. The one-shot reserve at helper entry covers
+            // the full out_block; spills/reloads land at fixed subblock offsets via
+            // pack_tile<true> and copy_block_matmul_partials's start_in_tile_index;
+            // the consumer-visible push_back happens once at exit. No direct
+            // CB-interface access remains in the helper.)
 
             // in0_policy=WaitAndRetainOnLastBlock: SDPA reuses Q across K chunks, so
             // caller keeps in0 front on the last iteration. Intermediate blocks always

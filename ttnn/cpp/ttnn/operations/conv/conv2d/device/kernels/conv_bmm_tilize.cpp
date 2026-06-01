@@ -522,12 +522,15 @@ void kernel_main() {
                 cb_mm_in0, cb_in1, matmul_out_buf, cb_matmul_partials, shape, MatmulPostFn{}, pre_k_block);
 
             if constexpr (!partials_cb_uses_output) {
-                // The helper's pin keeps matmul_partials_cb pointers fixed across non-last
-                // K-blocks, and its post-K-loop rd_ptr reset (under pack_last_to_interm)
-                // restores rd_ptr after the last block. Wr_ptr still trails by one tile from
-                // the last block's pack — which would push downstream (bias-add / untilize)
-                // writes to the wrong L1 cell. Reset it here so matmul_partials_cb stays
-                // wholly pinned at the kernel-entry base across all outer iters.
+                // Helper's pin path now keeps matmul_partials_cb's CB pointers
+                // at the captured base throughout the K-loop (one-shot reserve at
+                // entry, per-K-block packs at fixed tile offsets, one push_back at
+                // exit). After the helper returns, the consumer (bias-add / untilize)
+                // is signaled by the helper's push_back and reads at the still-pinned
+                // rd_ptr base; both rd_ptr and wr_ptr will be re-pinned for the next
+                // outer iter by the reset block at the top of this loop. Kept here
+                // as an explicit invariant marker — redundant with the top-of-iter
+                // reset but cheap and makes the partials-pin contract local.
                 PACK(get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr = partials_cb_write_ptr;)
             }
             if constexpr (check_skip_compute) {

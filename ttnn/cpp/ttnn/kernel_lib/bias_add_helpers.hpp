@@ -47,7 +47,7 @@ struct BiasAddShape {
     // Argument order mirrors MatmulBlockShape::of's first four args, so the
     // bias call directly under a matmul_block call can reuse the same
     // (in0_num_subblocks, in1_num_subblocks, out_subblock_h, out_subblock_w)
-    // values without renaming. The K-blocking args (in0_block_w, num_k_blocks,
+    // values without renaming. The K-blocking args (in0_block_k, num_k_blocks,
     // batch) on MatmulBlockShape are NOT present here — bias_add has no
     // K dimension.
     static constexpr BiasAddShape of(

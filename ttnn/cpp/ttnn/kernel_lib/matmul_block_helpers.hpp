@@ -27,8 +27,9 @@ namespace compute_kernel_lib {
  * SubblockMajor (default): tiles in the OUTPUT CB are grouped per
  *   subblock — subblock(0,0)'s tiles, then subblock(0,1)'s tiles, ..., then the
  *   next M-row-group's subblocks. Compute issues one sequential pack_tile_block per
- *   subblock at the natural fifo_wr_ptr position. Required by writer kernels that
- *   expect a subblock-ordered tile stream (multicast bmm writers, conv2d, conv3d).
+ *   subblock at the natural sequential CB write position. Required by writer
+ *   kernels that expect a subblock-ordered tile stream (multicast bmm writers,
+ *   conv2d, conv3d).
  *
  * TileRowMajor: tiles in the OUTPUT CB are grouped per tile-row — tile(0,0),
  *   tile(0,1), ..., tile(0, N-1), then tile(1,0), tile(1,1), ..., tile(1, N-1),
@@ -549,18 +550,18 @@ struct NoIn1BaseOffset {
  *                     pack_tile<true>, and reloads via copy_block_matmul_partials
  *                     with start_in_tile_index set to the subblock's tile offset.
  *                     No per-K-block reserve/push/pop on interm and no direct
- *                     fifo_rd_ptr / fifo_wr_ptr access — the CB pointers never
- *                     advance off the captured base because the helper never
- *                     push_backs during the K-loop. On the pack_last_to_interm
- *                     path the helper push_backs out_block_num_tiles once at
- *                     exit so the downstream consumer (bias-add, untilize) sees
- *                     the accumulated block; on the !pack_last_to_interm path
+ *                     CB-interface field access — the CB pointers never advance
+ *                     off the captured base because the helper never push_backs
+ *                     during the K-loop. On the pack_last_to_interm path the
+ *                     helper push_backs out_block_num_tiles once at exit so the
+ *                     downstream consumer (bias-add, untilize) sees the
+ *                     accumulated block; on the !pack_last_to_interm path
  *                     interm holds only K-loop scratch and no end push is needed.
  *                     Required when interm_buf is allocated to alias the output
  *                     buffer in L1 (e.g. conv2d's `partials_cb_uses_output=true`
  *                     path) — without pin, the K-loop's natural push/pop would
- *                     advance the fifo ptrs past the captured base and wrap into
- *                     already-packed output. Constraints: tile_order must be
+ *                     advance the CB pointers past the captured base and wrap
+ *                     into already-packed output. Constraints: tile_order must be
  *                     SubblockMajor (offset arithmetic is subblock-aligned),
  *                     last_block_target must not be OutWithUntilize
  *                     (pack_untilize_dest doesn't compose with absolute-offset
