@@ -51,7 +51,7 @@ def test_audio_tokenizer_input_proj_pcc(device, reset_seeds, time_len):
     w = resolve_input_proj_conv_weight(sd).to(torch.bfloat16)
     b, c = 1, proj.in_channels
     mel = torch.randn(b, c, time_len, dtype=torch.bfloat16)
-    ref = causal_conv1d_left_pad_reference(mel, w, left_pad=proj.left_pad, stride=1)
+    ref = causal_conv1d_left_pad_reference(mel, w, left_pad=proj.left_pad, stride=1, pad_mode=proj.pad_mode)
 
     mel_tt = _mel_torch_to_tt_b1tc(device, mel)
     tt_out = proj(mel_tt)
