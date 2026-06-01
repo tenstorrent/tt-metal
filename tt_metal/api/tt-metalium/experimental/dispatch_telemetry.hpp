@@ -6,20 +6,28 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include <tt-metalium/device.hpp>
 
 namespace tt::tt_metal {
 
-struct DispatchTelemetryInfo {
+struct DispatchTelemetryCqInfo {
     uint8_t cq_id = 0;
     bool prefetch_waiting_on_upstream = false;
-    uint32_t prefetch_blocked_count_since_last_read = 0;
-    uint32_t prefetch_command_count_since_last_read = 0;
     bool dispatch_waiting_on_upstream = false;
+    uint32_t program_count_since_last_read = 0;
+    uint32_t prefetch_blocked_count_since_last_read = 0;
     uint32_t dispatch_blocked_count_since_last_read = 0;
-    uint32_t dispatch_program_count_since_last_read = 0;
+    uint32_t prefetch_command_count_since_last_read = 0;
+};
+
+struct DispatchTelemetryDeviceInfo {
+    // Normalized utilization ratio: 1.0 = 100%, 0.0 = 0%
+    // Requires worker dispatch
+    std::optional<float> utilization_since_last_read = 0;
+    std::vector<DispatchTelemetryCqInfo> info_cqs;
 };
 
 class DispatchTelemetry {
@@ -37,12 +45,13 @@ public:
     uint32_t version() const;
 
     /**
-     * @brief Read the dispatch telemetry info from the device.
+     * @brief Read device-wide dispatch telemetry derived from all command queues.
      *
-     * @return Dispatch telemetry info for each command queue. If there is an issue reading telemetry
+     * @return Device-wide telemetry info. If there is an issue reading telemetry from the device,
+     *         a warning is logged and an empty optional is returned. If there is an issue reading telemetry
      *         from a command queue, a warning is logged and that entry will be absent.
      */
-    std::vector<DispatchTelemetryInfo> read_info();
+    std::optional<DispatchTelemetryDeviceInfo> read_info();
 
 private:
     class Impl;

@@ -42,6 +42,10 @@ constexpr uint32_t distributed_dispatcher =
 constexpr uint32_t first_stream_used = FIRST_STREAM_USED;
 constexpr uint32_t max_num_worker_sems = MAX_NUM_WORKER_SEMS;
 constexpr uint32_t max_num_go_signal_noc_data_entries = MAX_NUM_GO_SIGNAL_NOC_DATA_ENTRIES;
+constexpr uintptr_t sub_device_update_sem_addr = SUB_DEVICE_UPDATE_SEM_ADDR;
+constexpr uintptr_t telemetry_compute_terminate_addr = TELEMETRY_COMPUTE_TERMINATE_ADDR;
+constexpr bool telemetry_enabled = !DISPATCH_TELEMETRY_DISABLED;
+constexpr uintptr_t dispatch_telemetry_base = DISPATCH_TELEMETRY_ADDR;
 constexpr uint32_t virtualize_unicast_cores = VIRTUALIZE_UNICAST_CORES;
 constexpr uint32_t num_virtual_unicast_cores = NUM_VIRTUAL_UNICAST_CORES;
 constexpr uint32_t num_physical_unicast_cores = NUM_PHYSICAL_UNICAST_CORES;
@@ -158,6 +162,9 @@ static uint32_t go_signal_noc_data[max_num_go_signal_noc_data_entries];
 
 static uint32_t num_worker_sems = 1;
 
+// The dispatch message entry limit also bounds the number of sub-devices.
+static uint32_t workers_per_sub_device[max_num_worker_sems] = {0};
+
 FORCE_INLINE
 void dispatch_s_wr_reg_cmd_buf_init() {
     uint64_t xy_local_addr = get_noc_addr_helper(my_noc_xy, 0);
@@ -242,6 +249,7 @@ void wait_for_workers(uint32_t wait_count, uint32_t wait_stream) {
     last_wait_stream = wait_stream;
     volatile uint32_t* worker_sem = reinterpret_cast<volatile uint32_t*>(
         static_cast<uintptr_t>(STREAM_REG_ADDR(wait_stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX)));
+    DEVICE_PRINT("DISPATCH_S: wait_for_workers: wait_count: {}, worker_sem: {}\n", wait_count, *worker_sem);
     while (stream_wrap_gt(wait_count, *worker_sem)) {
         if (rt_profiler_enabled) {
             record_realtime_timestamp(rt_profiler_msg, false);
@@ -400,6 +408,13 @@ void process_go_signal_mcast_cmd() {
             static_cast<uint32_t>(reinterpret_cast<uintptr_t>(aligned_go_signal_storage)), dst, sizeof(uint32_t));
     }
 
+    if (telemetry_enabled) {
+        const uint32_t stream_index = cmd->mcast.wait_stream - first_stream_used;
+        auto dispatch_telemetry =
+            reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::DispatchCoreTelemetry*>(dispatch_telemetry_base);
+        dispatch_telemetry->last_work_launch_timestamp[stream_index] = get_current_wall_time();
+    }
+
 #if DEVICE_PRINT_DISPATCH_ENABLED
     // Workers have just been notified to start a new program; reset the stall-detection
     // window so it measures THIS program's print activity rather than dispatch_s's
@@ -447,6 +462,41 @@ void set_num_worker_sems() {
     num_worker_sems = cmd->set_num_worker_sems.num_worker_sems;
     ASSERT(num_worker_sems <= max_num_worker_sems);
     cmd_ptr += sizeof(CQDispatchCmd);
+}
+
+FORCE_INLINE
+void set_sub_device_worker_counts() {
+    volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
+    uint32_t num_sub_devices = cmd->set_sub_device_worker_counts.num_sub_devices;
+    ASSERT(num_sub_devices <= max_num_worker_sems);
+    volatile tt_l1_ptr uint32_t* data_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cmd_ptr + sizeof(CQDispatchCmd));
+    volatile tt_l1_ptr uint32_t* sub_device_worker_counts_update =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sub_device_update_sem_addr);
+
+    static uint32_t local_sub_device_worker_counts_update = 0;
+
+    for (uint32_t i = 0; i < num_sub_devices; ++i) {
+        uint32_t worker_count = *(data_ptr++);
+        workers_per_sub_device[i] = worker_count;
+        if (telemetry_enabled) {
+            reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::DispatchCoreTelemetry*>(dispatch_telemetry_base)
+                ->workers_per_sub_device[i] = worker_count;
+        }
+#if DEVICE_PRINT_DISPATCH_ENABLED
+        DPRINT("dispatch_s sub_device_idx={} num_workers={}\n", i, workers_per_sub_device[i]);
+#endif
+    }
+    for (uint32_t i = num_sub_devices; i < max_num_worker_sems; ++i) {
+        workers_per_sub_device[i] = 0;
+        if (telemetry_enabled) {
+            reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::DispatchCoreTelemetry*>(dispatch_telemetry_base)
+                ->workers_per_sub_device[i] = 0;
+        }
+    }
+
+    *sub_device_worker_counts_update = ++local_sub_device_worker_counts_update;
+    cmd_ptr = round_up_pow2(reinterpret_cast<uintptr_t>(data_ptr), L1_ALIGNMENT);
 }
 
 FORCE_INLINE
@@ -573,6 +623,7 @@ void kernel_main() {
             case CQ_DISPATCH_CMD_SEND_GO_SIGNAL: process_go_signal_mcast_cmd(); break;
             case CQ_DISPATCH_SET_NUM_WORKER_SEMS: set_num_worker_sems(); break;
             case CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA: set_go_signal_noc_data(); break;
+            case CQ_DISPATCH_SET_SUB_DEVICE_WORKER_COUNTS: set_sub_device_worker_counts(); break;
             case CQ_DISPATCH_CMD_WAIT: process_dispatch_s_wait_cmd(); break;
             case CQ_DISPATCH_CMD_TERMINATE:
                 if (rt_profiler_enabled) {
@@ -589,6 +640,9 @@ void kernel_main() {
                         rt_profiler_msg->realtime_profiler_remote_state_addr);
                     dispatch_s_noc_inline_dw_write(
                         realtime_profiler_terminate_addr, REALTIME_PROFILER_STATE_TERMINATE, my_noc_index);
+                }
+                if constexpr (telemetry_enabled) {
+                    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(telemetry_compute_terminate_addr) = 1;
                 }
                 done = true;
                 break;

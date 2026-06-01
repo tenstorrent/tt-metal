@@ -1364,6 +1364,11 @@ inline std::map<std::string, std::string> make_sd_dispatch_defines(
          std::to_string(memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_PROGRESS))},
         {"REALTIME_PROFILER_MSG_ADDR",
          std::to_string(memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG))},
+        {"DISPATCH_TELEMETRY_ADDR",
+         std::to_string(memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_TELEMETRY))},
+        {"WORKER_STREAM_RESET_UPDATE_ADDR",
+         std::to_string(memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::WORKER_STREAM_RESET_UPDATE))},
+        {"DISPATCH_TELEMETRY_DISABLED", "1"},
         {"FIRST_STREAM_USED", std::to_string(memmap.get_dispatch_stream_index(0))},
         {"VIRTUALIZE_UNICAST_CORES", "0"},
         {"NUM_VIRTUAL_UNICAST_CORES", "0"},
@@ -1441,6 +1446,7 @@ inline std::map<std::string, std::string> make_sd_prefetch_defines(
     const CoreCoord& phys_dispatch) {
     const auto my_virtual = device->virtual_noc0_coordinate(tt_metal::NOC::NOC_0, phys_prefetch);
     const auto downstream_virtual = device->virtual_noc0_coordinate(tt_metal::NOC::NOC_0, phys_dispatch);
+    const auto& memmap = tt_metal::MetalContext::instance().dispatch_mem_map();
     return {
         {"MY_NOC_X", std::to_string(my_virtual.x)},
         {"MY_NOC_Y", std::to_string(my_virtual.y)},
@@ -1486,6 +1492,9 @@ inline std::map<std::string, std::string> make_sd_prefetch_defines(
         {"FABRIC_HEADER_RB_BASE", "0"},
         {"FABRIC_HEADER_RB_ENTRIES", "0"},
         {"MY_FABRIC_SYNC_STATUS_ADDR", "0"},
+        {"DISPATCH_TELEMETRY_ADDR",
+         std::to_string(memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_TELEMETRY))},
+        {"DISPATCH_TELEMETRY_DISABLED", "1"},
         {"FABRIC_MUX_X", "0"},
         {"FABRIC_MUX_Y", "0"},
         {"FABRIC_MUX_NUM_BUFFERS_PER_CHANNEL", "0"},

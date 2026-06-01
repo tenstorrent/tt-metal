@@ -43,9 +43,9 @@ FORCE_INLINE T round_up_pow2(T v, uint32_t pow2_size) {
 FORCE_INLINE
 uint32_t div_up(uint32_t n, uint32_t d) { return (n + d - 1) / d; }
 
-// Copy a datatype that can be divisible by uint32_t to L1 memory
+// Copy a datatype that can be divisible by uint32_t to L1 memory, ensuring no misaligned writes
 template <typename T>
-FORCE_INLINE volatile tt_l1_ptr T* write_to_l1(uint32_t dst_addr, const T& src_object) {
+FORCE_INLINE void write_to_l1(uint32_t dst_addr, const T& src_object) {
     static_assert(sizeof(T) % sizeof(uint32_t) == 0);
     auto* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_addr);
 
@@ -59,7 +59,6 @@ FORCE_INLINE volatile tt_l1_ptr T* write_to_l1(uint32_t dst_addr, const T& src_o
         }
         dst[i] = word;
     }
-    return reinterpret_cast<volatile tt_l1_ptr T*>(dst_addr);
 }
 
 FORCE_INLINE
@@ -695,4 +694,15 @@ FORCE_INLINE void careful_copy_from_l1_to_local_cache(
         l1_cache[n + 5] = v5;
         n += 6;
     }
+}
+
+FORCE_INLINE uint64_t get_current_wall_time() {
+    // Wall clock register indices — registers are 8 bytes apart
+    // (RISCV_DEBUG_REG_WALL_CLOCK_L (0x1F0), RISCV_DEBUG_REG_WALL_CLOCK_H (0x1F8)),
+    // so the uint32_t array stride is 2, not 1.
+    constexpr uint32_t WALL_CLOCK_LOW_INDEX = 0;
+    constexpr uint32_t WALL_CLOCK_HIGH_INDEX = 2;
+
+    volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+    return (static_cast<uint64_t>(p_reg[WALL_CLOCK_HIGH_INDEX]) << 32) | p_reg[WALL_CLOCK_LOW_INDEX];
 }

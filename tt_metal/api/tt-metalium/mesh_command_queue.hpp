@@ -149,7 +149,8 @@ public:
         bool reset_launch_msg_state,
         uint32_t num_sub_devices,
         const vector_aligned<uint32_t>& go_signal_noc_data,
-        const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping) = 0;
+        const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping,
+        ttsl::Span<const uint32_t> workers_per_sub_device) = 0;
     virtual void record_begin(const MeshTraceId& trace_id, const std::shared_ptr<MeshTraceDescriptor>& ctx) = 0;
     virtual void record_end() = 0;
     virtual void enqueue_trace(const MeshTraceId& trace_id, bool blocking) = 0;

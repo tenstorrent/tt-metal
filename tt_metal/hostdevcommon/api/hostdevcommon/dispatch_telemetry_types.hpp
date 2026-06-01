@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include <hostdevcommon/common_values.hpp>
 namespace tt::tt_metal {
 namespace detail {
 
@@ -29,6 +30,7 @@ constexpr uint32_t PREFETCH_CORE_TELEMETRY_SIGNATURE = detail::pack("PREF");
 // Used to invalidate the telemetry buffer
 constexpr uint32_t INVALID_TELEMETRY_SIGNATURE = 0;
 
+constexpr uint32_t MAX_SUB_DEVICES = DISPATCH_MAX_MESSAGE_ENTRIES;
 struct __attribute__((packed, aligned(4))) PrefetchCoreTelemetry {
     uint32_t version = DISPATCH_TELEMETRY_VERSION;
     uint32_t signature = PREFETCH_CORE_TELEMETRY_SIGNATURE;
@@ -40,9 +42,33 @@ struct __attribute__((packed, aligned(4))) PrefetchCoreTelemetry {
 struct __attribute__((packed, aligned(4))) DispatchCoreTelemetry {
     uint32_t version = DISPATCH_TELEMETRY_VERSION;
     uint32_t signature = DISPATCH_CORE_TELEMETRY_SIGNATURE;
+
+    // dispatch_d writes
     uint32_t upstream_blocked_count = 0;
     uint32_t upstream_unblocked_count = 0;
     uint32_t program_count = 0;
+
+    // dispatch_s writes
+    uint64_t last_work_launch_timestamp[MAX_SUB_DEVICES] = {0};
+
+    // dispatch_s_compute writes
+    // Computed average time a worker core was running, updated only on sub device count change
+    uint64_t avg_work_runtime_per_worker = 0;  //_per_worker
+
+    // dispatch_s_compute writes
+    // Cumulative current total worker runtime for each sub device.
+    // In the case of overflow, the value is compressed into avg_work_runtime_per_worker and then reset to 0
+    // Used to avoid dropping work cycles if they were preemptively averaged
+    uint64_t current_sub_device_work_runtime[MAX_SUB_DEVICES] = {0};
+
+    // dispatch_s_compute writes
+    uint32_t completion_count[MAX_SUB_DEVICES] = {0};
+
+    // dispatch_s writes
+    uint32_t workers_per_sub_device[MAX_SUB_DEVICES] = {0};
+
+    // dispatch_s_compute writes
+    uint64_t current_timestamp = 0;
 };
 
 // Used to determine the size of the L1 buffer that dispatch_mem_map allocates

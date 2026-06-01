@@ -63,6 +63,15 @@ SubDeviceManagerId SubDeviceManagerTracker::create_sub_device_manager(
 
 void SubDeviceManagerTracker::reset_sub_device_state(const std::unique_ptr<SubDeviceManager>& sub_device_manager) {
     auto num_sub_devices = sub_device_manager->num_sub_devices();
+    std::vector<uint32_t> workers_per_sub_device;
+    workers_per_sub_device.reserve(num_sub_devices);
+    for (uint8_t i = 0; i < num_sub_devices; ++i) {
+        const auto sub_device_id = SubDeviceId{i};
+        const auto& sub_device = sub_device_manager->sub_device(sub_device_id);
+        workers_per_sub_device.push_back(
+            sub_device.impl()->num_cores(HalProgrammableCoreType::TENSIX) +
+            sub_device.impl()->num_cores(HalProgrammableCoreType::ACTIVE_ETH));
+    }
     // Dynamic resolution of device types is unclean and poor design. This will be cleaned up
     // when MeshCommandQueue + HWCommandQueue are unified under the same API
     if (dynamic_cast<distributed::MeshDevice*>(device_)) {
@@ -73,7 +82,8 @@ void SubDeviceManagerTracker::reset_sub_device_state(const std::unique_ptr<SubDe
                 cq_id == 0,
                 num_sub_devices,
                 sub_device_manager->noc_mcast_unicast_data(),
-                sub_device_manager->get_core_go_message_mapping());
+                sub_device_manager->get_core_go_message_mapping(),
+                tt::stl::Span<const uint32_t>(workers_per_sub_device.data(), workers_per_sub_device.size()));
         }
     } else {
         TT_FATAL(false, "Sub device managers are unsupported with non-mesh devices");

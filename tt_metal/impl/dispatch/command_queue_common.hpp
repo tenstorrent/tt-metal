@@ -31,7 +31,10 @@ enum class CommandQueueDeviceAddrType : uint8_t {
     // region rather than a per-core mailbox because no worker core touches it.
     REALTIME_PROFILER_MSG = 10,
     DISPATCH_TELEMETRY = 11,
-    UNRESERVED = 12,
+    SUB_DEVICE_WORKER_COUNTS_UPDATE = 12,
+    WORKER_STREAM_RESET_UPDATE = 13,
+    TELEMETRY_COMPUTE_TERMINATE = 14,
+    UNRESERVED = 15,
 };
 
 // likely only used in impl

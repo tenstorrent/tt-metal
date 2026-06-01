@@ -105,6 +105,7 @@ static uint32_t program_counter = 0;
 
 constexpr bool telemetry_enabled = !DISPATCH_TELEMETRY_DISABLED;
 constexpr uint32_t dispatch_telemetry_base = DISPATCH_TELEMETRY_ADDR;
+constexpr uint32_t worker_stream_reset_update_addr = WORKER_STREAM_RESET_UPDATE_ADDR;
 constexpr uint32_t upstream_blocked_count_addr =
     dispatch_telemetry_base + offsetof(tt::tt_metal::DispatchCoreTelemetry, upstream_blocked_count);
 constexpr uint32_t upstream_unblocked_count_addr =
@@ -1034,6 +1035,7 @@ static void process_wait() {
     WAYPOINT("PWD");
 
     if (clear_stream) {
+        DEVICE_PRINT("DISPATCH WAIT CLEAR STREAM 0x{:08x} count {}\n", stream, count);
         volatile uint32_t* sem_addr = reinterpret_cast<volatile uint32_t*>(
             static_cast<uintptr_t>(STREAM_REG_ADDR(stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX)));
         uint32_t neg_sem_val = -(*sem_addr);
@@ -1041,6 +1043,11 @@ static void process_wait() {
             stream,
             STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX,
             neg_sem_val << REMOTE_DEST_BUF_WORDS_FREE_INC);
+        if constexpr (telemetry_enabled) {
+            volatile tt_l1_ptr uint32_t* stream_reset_update =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(worker_stream_reset_update_addr);
+            *stream_reset_update = *stream_reset_update + 1;
+        }
     }
     if (notify_prefetch) {
 #ifdef ARCH_QUASAR
@@ -1253,10 +1260,6 @@ re_run_command:
         case CQ_DISPATCH_NOTIFY_SUBORDINATE_GO_SIGNAL:
             // DPRINT("cmd_notify_dispatch_s_go_signal\n");
             process_notify_dispatch_s_go_signal_cmd();
-            if constexpr (telemetry_enabled) {
-                reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::DispatchCoreTelemetry*>(dispatch_telemetry_base)
-                    ->program_count = ++program_counter;
-            }
             break;
 
         case CQ_DISPATCH_CMD_WRITE_PACKED_LARGE:
@@ -1302,14 +1305,17 @@ re_run_command:
         case CQ_DISPATCH_CMD_SEND_GO_SIGNAL:
             // DPRINT("cmd_send_go_signal\n");
             process_go_signal_mcast_cmd();
-            if constexpr (telemetry_enabled) {
-                reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::DispatchCoreTelemetry*>(dispatch_telemetry_base)
-                    ->program_count = ++program_counter;
-            }
             break;
 
         case CQ_DISPATCH_SET_NUM_WORKER_SEMS:
             // DPRINT("cmd_set_num_worker_sems\n");
+            // This command is only used by dispatch_s
+            ASSERT(0);
+            cmd_ptr += sizeof(CQDispatchCmd);
+            break;
+
+        case CQ_DISPATCH_SET_SUB_DEVICE_WORKER_COUNTS:
+            // DPRINT("cmd_set_sub_device_worker_counts\n");
             // This command is only used by dispatch_s
             ASSERT(0);
             cmd_ptr += sizeof(CQDispatchCmd);
@@ -1322,6 +1328,10 @@ re_run_command:
             // cmd->set_write_offset.offset1,
             //              cmd->set_write_offset.offset2, cmd->set_write_offset.program_host_id);
             DeviceTimestampedData("runtime_host_id_dispatch", cmd->set_write_offset.program_host_id);
+            if constexpr (telemetry_enabled) {
+                reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::DispatchCoreTelemetry*>(dispatch_telemetry_base)
+                    ->program_count = ++program_counter;
+            }
             if (rt_profiler_msg->realtime_profiler_core_noc_xy != 0 &&
                 cmd->set_write_offset.program_host_id != REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID) {
                 while (!program_id_fifo_append(rt_profiler_msg, cmd->set_write_offset.program_host_id)) {
@@ -1482,8 +1492,6 @@ void kernel_main() {
     my_dev_id = get_arg_val<uint32_t>(OFFSETOF_MY_DEV_ID);
     to_dev_id = get_arg_val<uint32_t>(OFFSETOF_TO_DEV_ID);
     router_direction = get_arg_val<uint32_t>(OFFSETOF_ROUTER_DIRECTION);
-
-    init_telemetry<tt::tt_metal::DispatchCoreTelemetry, dispatch_telemetry_base, telemetry_enabled>();
 
     // Initialize local state of any additional nocs used instead of the default
 #ifndef ARCH_QUASAR
