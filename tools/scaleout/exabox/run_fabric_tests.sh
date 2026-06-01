@@ -259,29 +259,20 @@ fi
 
 # Resolve TT_VISIBLE_DEVICES for single-host multi-mesh Z configs from tray discovery
 # (tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py --fabric-config).
-resolve_fabric_python() {
-    local tt_metal_home="${TT_METAL_HOME:-$(pwd)}"
-    local py="${tt_metal_home}/python_env/bin/python"
-    if [[ -x "$py" ]]; then
-        echo "$py"
-    elif [[ -n "${VIRTUAL_ENV:-}" && -x "${VIRTUAL_ENV}/bin/python" ]]; then
-        echo "${VIRTUAL_ENV}/bin/python"
-    else
-        echo python3
-    fi
-}
-
-FABRIC_PYTHON="$(resolve_fabric_python)"
-
+#
+# No-docker runs use TT_METAL_HOME (or pwd) on the host, like bootstrap_pipeline_dir.sh.
+# Docker runs use the image's TT_METAL_HOME and python3, like run_dispatch_tests.sh /
+# run_validation.sh (upstream test images set both in dockerfile/upstream_test_images/).
 run_fabric_discovery_local() {
     local fabric_config="$1"
-    local tt_metal_home="${TT_METAL_HOME:-$(pwd)}"
-    local gen_rb="${tt_metal_home}/tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py"
 
     if [[ "$DOCKER_IMAGE" == "none" ]]; then
-        cd "$tt_metal_home" && \
-        LD_LIBRARY_PATH="${tt_metal_home}/build/lib:${LD_LIBRARY_PATH:-}" \
-        "$FABRIC_PYTHON" "$gen_rb" --fabric-config "$fabric_config" --print-devices --work-dir "$tt_metal_home"
+        local tt_home="${TT_METAL_HOME:-$(pwd)}"
+        local gen_rb="${tt_home}/tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py"
+        cd "$tt_home" && \
+        LD_LIBRARY_PATH="${tt_home}/build/lib:${LD_LIBRARY_PATH:-}" \
+        TT_METAL_HOME="$tt_home" \
+        python3 "$gen_rb" --fabric-config "$fabric_config" --print-devices --work-dir "$tt_home"
     else
         docker run --rm --net=host --privileged \
             -v /tmp:/tmp \
@@ -291,9 +282,8 @@ run_fabric_discovery_local() {
             -v /etc/passwd:/etc/passwd:ro \
             -v /etc/group:/etc/group:ro \
             --entrypoint="" \
-            -e "LD_LIBRARY_PATH=${tt_metal_home}/build/lib" \
             "$DOCKER_IMAGE" \
-            bash -c "cd '${tt_metal_home}' && python3 tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py --fabric-config '${fabric_config}' --print-devices --work-dir '${tt_metal_home}'"
+            bash -c 'cd "$TT_METAL_HOME" && python3 tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py --fabric-config '"$fabric_config"' --print-devices --work-dir "$TT_METAL_HOME"'
     fi
 }
 
@@ -309,10 +299,8 @@ is_local_fabric_host() {
 run_fabric_discovery_on_host() {
     local host="$1"
     local fabric_config="$2"
-    local tt_metal_home="${TT_METAL_HOME:-$(pwd)}"
-    local gen_rb="${tt_metal_home}/tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py"
+    local tt_home="${TT_METAL_HOME:-$(pwd)}"
     local ssh_opts=(-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR)
-    local remote_py="${tt_metal_home}/python_env/bin/python"
 
     if is_local_fabric_host "$host"; then
         run_fabric_discovery_local "$fabric_config"
@@ -320,8 +308,9 @@ run_fabric_discovery_on_host() {
     fi
 
     if [[ "$DOCKER_IMAGE" == "none" ]]; then
+        local gen_rb="${tt_home}/tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py"
         ssh "${ssh_opts[@]}" "$host" \
-            "PY='${remote_py}'; [[ -x \"\$PY\" ]] || PY=python3; cd '${tt_metal_home}' && LD_LIBRARY_PATH='${tt_metal_home}/build/lib:'\${LD_LIBRARY_PATH:-} \"\$PY\" '${gen_rb}' --fabric-config '${fabric_config}' --print-devices --work-dir '${tt_metal_home}'"
+            "cd '${tt_home}' && LD_LIBRARY_PATH='${tt_home}/build/lib:'\${LD_LIBRARY_PATH:-} TT_METAL_HOME='${tt_home}' python3 '${gen_rb}' --fabric-config '${fabric_config}' --print-devices --work-dir '${tt_home}'"
     else
         ssh "${ssh_opts[@]}" "$host" \
             "docker run --rm --net=host --privileged \
@@ -332,21 +321,21 @@ run_fabric_discovery_on_host() {
                 -v /etc/passwd:/etc/passwd:ro \
                 -v /etc/group:/etc/group:ro \
                 --entrypoint='' \
-                -e 'LD_LIBRARY_PATH=${tt_metal_home}/build/lib' \
                 '${DOCKER_IMAGE}' \
-                bash -c \"cd '${tt_metal_home}' && python3 tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py --fabric-config '${fabric_config}' --print-devices --work-dir '${tt_metal_home}'\""
+                bash -c 'cd \"\$TT_METAL_HOME\" && python3 tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py --fabric-config ${fabric_config} --print-devices --work-dir \"\$TT_METAL_HOME\"'"
     fi
 }
 
 resolve_single_host_z_visible_devices() {
     local fabric_config="$1"
     local expected_ranks="$2"
-    local tt_metal_home="${TT_METAL_HOME:-$(pwd)}"
-    local gen_rb="${tt_metal_home}/tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py"
 
-    if [[ ! -f "$gen_rb" ]]; then
-        echo "Error: rank binding helper not found: $gen_rb" >&2
-        exit 1
+    if [[ "$DOCKER_IMAGE" == "none" ]]; then
+        local gen_rb="${TT_METAL_HOME:-$(pwd)}/tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py"
+        if [[ ! -f "$gen_rb" ]]; then
+            echo "Error: rank binding helper not found: $gen_rb" >&2
+            exit 1
+        fi
     fi
 
     echo "Resolving TT_VISIBLE_DEVICES via tray discovery (--fabric-config ${fabric_config})..."
@@ -371,12 +360,13 @@ resolve_quad_host_z_visible_devices() {
     local num_hosts="$2"
     local ranks_per_host="$3"
     local expected_total=$((num_hosts * ranks_per_host))
-    local tt_metal_home="${TT_METAL_HOME:-$(pwd)}"
-    local gen_rb="${tt_metal_home}/tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py"
 
-    if [[ ! -f "$gen_rb" ]]; then
-        echo "Error: rank binding helper not found: $gen_rb" >&2
-        exit 1
+    if [[ "$DOCKER_IMAGE" == "none" ]]; then
+        local gen_rb="${TT_METAL_HOME:-$(pwd)}/tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py"
+        if [[ ! -f "$gen_rb" ]]; then
+            echo "Error: rank binding helper not found: $gen_rb" >&2
+            exit 1
+        fi
     fi
 
     IFS=',' read -ra Z_RANK_HOSTS <<< "$HOSTS"
