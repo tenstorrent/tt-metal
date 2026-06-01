@@ -641,20 +641,16 @@ class TtMistral4TextModel:
         on device — only a single uint32 crosses the PCIe boundary.
         """
         seq_len = input_ids.shape[1]
-        cos_tt, sin_tt = self._rope_slice(0, seq_len)
-
         x = self._embed(input_ids)
         x = ttnn.reshape(x, [1, 1, seq_len, HIDDEN_SIZE])
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
 
-        for layer, kv_cache in zip(self.decoder_layers, self.kv_caches):
-            x = layer.forward_with_cache(x, cos_tt, sin_tt, kv_cache)
-
-        ttnn.deallocate(cos_tt)
-        ttnn.deallocate(sin_tt)
+        # Chunk-major prefill over the paged cache → scales past the single-pass limit.
+        x = self._run_prefill_chunked(x, last_only=True)
 
         # Extract the last position's hidden state: [1, 1, 1, HIDDEN_SIZE].
-        x_last = ttnn.slice(x, [0, 0, seq_len - 1, 0], [1, 1, seq_len, HIDDEN_SIZE])
+        last_len = x.shape[-2]
+        x_last = ttnn.slice(x, [0, 0, last_len - 1, 0], [1, 1, last_len, HIDDEN_SIZE])
         ttnn.deallocate(x)
         token_id = self._next_token_on_device(x_last)
         ttnn.deallocate(x_last)
@@ -722,6 +718,51 @@ class TtMistral4TextModel:
 
     # ── Embedding-input entry points (multimodal) ──────────────────────────
 
+    def _run_prefill_chunked(self, x: ttnn.Tensor, last_only: bool) -> ttnn.Tensor:
+        """Run all decoder layers over the prompt in bounded chunks (chunk-major),
+        filling the paged KV caches. Each chunk passes through all 36 layers; the
+        only cross-chunk dependency is the KV cache (attention), which earlier chunks
+        fill first — so this is exact, with activations bounded to one chunk.
+
+        Returns the full ``[1,1,seq,HIDDEN]`` hidden when ``last_only=False``, or just
+        the final chunk (whose last row is the overall last token) when ``last_only=True``.
+        A single chunk (``seq ≤ chunk``) uses ``chunk_start_idx=0`` — identical to the
+        pre-chunking single-pass path.
+        """
+        seq_len = x.shape[-2]
+        chunk = int(os.environ.get("MISTRAL4_PREFILL_CHUNK", "512"))
+        if seq_len <= chunk:
+            cos_tt, sin_tt = self._rope_slice(0, seq_len)
+            for layer, kv_cache in zip(self.decoder_layers, self.kv_caches):
+                x = layer.forward_with_cache(x, cos_tt, sin_tt, kv_cache, chunk_start_idx=0)
+            ttnn.deallocate(cos_tt)
+            ttnn.deallocate(sin_tt)
+            return x
+
+        outs: list = []
+        last = None
+        for s in range(0, seq_len, chunk):
+            e = min(s + chunk, seq_len)
+            xc = ttnn.slice(x, [0, 0, s, 0], [1, 1, e, HIDDEN_SIZE])
+            cos_c, sin_c = self._rope_slice(s, e)
+            for layer, kv_cache in zip(self.decoder_layers, self.kv_caches):
+                xc = layer.forward_with_cache(xc, cos_c, sin_c, kv_cache, chunk_start_idx=s)
+            ttnn.deallocate(cos_c)
+            ttnn.deallocate(sin_c)
+            if last_only:
+                if last is not None:
+                    ttnn.deallocate(last)
+                last = xc
+            else:
+                outs.append(xc)
+        ttnn.deallocate(x)
+        if last_only:
+            return last
+        full = ttnn.concat(outs, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        for o in outs:
+            ttnn.deallocate(o)
+        return full
+
     def prefill_from_embeds(self, inputs_embeds: ttnn.Tensor) -> torch.Tensor:
         """
         Prefill from a caller-built embedding sequence (skip ``embed_tokens``).
@@ -734,15 +775,7 @@ class TtMistral4TextModel:
         Returns:
             logits: [1, seq_len, vocab_size] bf16 CPU tensor.
         """
-        seq_len = inputs_embeds.shape[-2]
-        cos_tt, sin_tt = self._rope_slice(0, seq_len)
-
-        x = inputs_embeds
-        for layer, kv_cache in zip(self.decoder_layers, self.kv_caches):
-            x = layer.forward_with_cache(x, cos_tt, sin_tt, kv_cache)
-
-        ttnn.deallocate(cos_tt)
-        ttnn.deallocate(sin_tt)
+        x = self._run_prefill_chunked(inputs_embeds, last_only=False)
         return self._to_logits(x)
 
     def prefill_from_embeds_next_token(self, inputs_embeds: ttnn.Tensor) -> int:
@@ -750,17 +783,9 @@ class TtMistral4TextModel:
         Same as ``prefill_from_embeds`` but returns the greedy next-token id with
         on-device argmax — only a single uint32 crosses the PCIe boundary.
         """
-        seq_len = inputs_embeds.shape[-2]
-        cos_tt, sin_tt = self._rope_slice(0, seq_len)
-
-        x = inputs_embeds
-        for layer, kv_cache in zip(self.decoder_layers, self.kv_caches):
-            x = layer.forward_with_cache(x, cos_tt, sin_tt, kv_cache)
-
-        ttnn.deallocate(cos_tt)
-        ttnn.deallocate(sin_tt)
-
-        x_last = ttnn.slice(x, [0, 0, seq_len - 1, 0], [1, 1, seq_len, HIDDEN_SIZE])
+        x = self._run_prefill_chunked(inputs_embeds, last_only=True)
+        last_len = x.shape[-2]
+        x_last = ttnn.slice(x, [0, 0, last_len - 1, 0], [1, 1, last_len, HIDDEN_SIZE])
         ttnn.deallocate(x)
         token_id = self._next_token_on_device(x_last)
         ttnn.deallocate(x_last)

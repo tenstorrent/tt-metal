@@ -241,6 +241,9 @@ class TtMistral4Attention(LightweightModule):
         self.kv_b_per_head = KV_B_PROJ_OUT_PER_HEAD
         self.scale = 1.0 / math.sqrt(self.head_dim)
         self.prefill_l1_reshape = os.environ.get("MISTRAL4_ATTN_L1_RESHAPE", "1") == "1"
+        # Paged latent KV cache: tokens-per-block. Must be a multiple of TILE_SIZE
+        # and of the flash-MLA q/k chunk size (128) so chunk_start_idx alignment holds.
+        self.block_size = int(os.environ.get("MISTRAL4_KV_BLOCK_SIZE", "128"))
 
         if compute_kernel_config is None:
             compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -502,15 +505,15 @@ class TtMistral4Attention(LightweightModule):
                 mcast_in0=True,
             )
 
+        # Latent caching folds kv_b into the absorption matmuls and the o_proj uses a
+        # DRAM-sharded PC, so only the q_a / kv_a / q_nope / q_rope decode projections
+        # need a 1D-mcast config here.
         H = HIDDEN_SIZE
         return {
             "q_a": _pc(H // 32, Q_LORA_RANK // 32),  # [4096,1024]: K=128, N=32
             "kv_a": _pc(H // 32, KV_A_PROJ_OUT // 32),  # [4096,320]: K=128, N=10
             "q_nope": _pc(Q_LORA_RANK // 32, N_HEADS * QK_NOPE_HEAD_DIM // 32),  # [1024,2048]: K=32, N=64
             "q_rope": _pc(Q_LORA_RANK // 32, N_HEADS * QK_ROPE_HEAD_DIM // 32),  # [1024,2048]: K=32, N=64
-            "k_nope": _pc(KV_LORA_RANK // 32, N_HEADS * QK_NOPE_HEAD_DIM // 32),  # [256,2048]: K=8, N=64
-            "v": _pc(KV_LORA_RANK // 32, N_HEADS * V_HEAD_DIM // 32),  # [256,4096]: K=8, N=128
-            "o": _pc((N_HEADS * V_HEAD_DIM) // 32, H // 32),  # [4096,4096]: K=128, N=128
         }
 
     # ------------------------------------------------------------------
@@ -593,19 +596,29 @@ class TtMistral4Attention(LightweightModule):
         cos: ttnn.Tensor,
         sin: ttnn.Tensor,
         kv_cache: tuple = None,
+        chunk_start_idx: int = 0,
     ) -> ttnn.Tensor:
         """
-        Prefill forward.
+        Prefill forward (one chunk of the prompt).
 
         Args:
             x:        [1, 1, seq_len, HIDDEN_SIZE] replicated on all devices
             cos/sin:  [1, 1, seq_len, QK_ROPE_HEAD_DIM]  (from HF rotary, on device)
-            kv_cache: optional (kvpe_cache,) — if provided, latent cache filled in-place
+            kv_cache: optional (kvpe_cache, page_table) — paged latent cache, filled in-place
+            chunk_start_idx: absolute position of this chunk's first token (0 for the
+                whole-prompt / first-chunk case). When > 0, the chunk's queries attend
+                causally over the full prefix [0, chunk_start_idx+seq_len) in the cache.
         Returns:
             [1, 1, seq_len, HIDDEN_SIZE] replicated on all devices
         """
         seq_len = x.shape[2]
-        reshape_mem = ttnn.L1_MEMORY_CONFIG if self.prefill_l1_reshape else ttnn.DRAM_MEMORY_CONFIG
+        # L1 intermediates speed up short prefill, but the per-head activations
+        # ([1, 1, seq, N_HEADS*dim]) overflow L1 for long prefill (~16k tokens →
+        # 64 MB > L1). Fall back to DRAM above a safe length so single-pass prefill
+        # scales; short prefill keeps the L1 fast path.
+        reshape_mem = (
+            ttnn.L1_MEMORY_CONFIG if (self.prefill_l1_reshape and seq_len <= 4096) else ttnn.DRAM_MEMORY_CONFIG
+        )
 
         # ── Q projection (pre-split q_b → per-head q_nope / q_rope) ─────────
         q_latent = ttnn.linear(
@@ -694,20 +707,47 @@ class TtMistral4Attention(LightweightModule):
         ttnn.deallocate(k_rope_rotated)
         # kvpe: [1, 1, seq, KV_LORA_RANK + QK_ROPE_HEAD_DIM]  (single shared KV head)
 
+        # ── Write this chunk's latent into the paged cache ─────────────────
+        end_block = 0
         if kv_cache is not None:
-            self.fill_kv_cache(kvpe, kv_cache)
+            kvpe_cache, page_table = kv_cache
+            bs = self.block_size
+            start_block = chunk_start_idx // bs
+            end_block = (chunk_start_idx + seq_len + bs - 1) // bs
+            chunk_pt = ttnn.slice(page_table, [0, start_block], [1, end_block])
+            ttnn.experimental.paged_fill_cache(kvpe_cache, kvpe, chunk_pt, batch_idx=0)
+            ttnn.deallocate(chunk_pt)
 
-        # ── Flash-MLA prefill over the latent (V = first KV_LORA_RANK dims) ─
-        attn_latent = ttnn.transformer.flash_mla_prefill(
-            q_mla,
-            kvpe,
-            self.kv_lora_rank,  # head_dim_v
-            is_causal=True,
-            scale=self.scale,
-            program_config=self.sdpa_program_config,
-            compute_kernel_config=self.attn_compute_kernel_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )  # [1, N_HEADS, seq, KV_LORA_RANK]
+        # ── Attention (V = first KV_LORA_RANK dims of the latent) ──────────
+        if kv_cache is not None and chunk_start_idx > 0:
+            # Later chunk: attend causally over the full prefix [0, chunk_start_idx+seq)
+            # using the paged cache. q/k chunk sizes (128) divide block_size (128) and
+            # chunk_start_idx, so the alignment constraints hold.
+            attend_pt = ttnn.slice(page_table, [0, 0], [1, end_block])
+            attn_latent = ttnn.transformer.chunked_flash_mla_prefill(
+                q_mla,
+                kvpe_cache,
+                self.kv_lora_rank,  # head_dim_v
+                attend_pt,
+                chunk_start_idx,
+                scale=self.scale,
+                program_config=self.sdpa_program_config,
+                compute_kernel_config=self.attn_compute_kernel_config,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )  # [1, N_HEADS, seq, KV_LORA_RANK]
+            ttnn.deallocate(attend_pt)
+        else:
+            # First chunk (or no cache): square causal over the chunk's own latent.
+            attn_latent = ttnn.transformer.flash_mla_prefill(
+                q_mla,
+                kvpe,
+                self.kv_lora_rank,  # head_dim_v
+                is_causal=True,
+                scale=self.scale,
+                program_config=self.sdpa_program_config,
+                compute_kernel_config=self.attn_compute_kernel_config,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )  # [1, N_HEADS, seq, KV_LORA_RANK]
         ttnn.deallocate(q_mla)
         ttnn.deallocate(kvpe)
 
@@ -730,13 +770,18 @@ class TtMistral4Attention(LightweightModule):
         ttnn.deallocate(attn_out_t)
 
         m_tiles = (seq_len + 31) // 32
+        # The custom 1D-mcast o_proj PC assumes a single M-block per core (per_core_M
+        # = m_tiles) and fails to build past ~32 M-tiles (seq ≳ 1024). For longer
+        # prefill fall back to the default matmul config, which tiles M and scales
+        # (slower per the helper's note, but correct at any length).
+        o_proj_pc = self._o_proj_prefill_pc(m_tiles) if m_tiles <= 32 else None
         out = ttnn.linear(
             attn_flat,
             self.o_proj,
             compute_kernel_config=self.lofi_compute_kernel_config,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=self._o_proj_prefill_pc(m_tiles),
+            program_config=o_proj_pc,
         )  # [1, 1, seq, HIDDEN_SIZE]
         ttnn.deallocate(attn_flat)
 
@@ -748,39 +793,41 @@ class TtMistral4Attention(LightweightModule):
 
     def allocate_kv_cache(self, max_seq_len: int) -> tuple:
         """
-        Pre-allocate the MLA latent cache (zeroed, DRAM, replicated).
+        Pre-allocate the PAGED MLA latent cache (zeroed, DRAM, replicated).
 
         Latent caching: a single ``kvpe`` cache holds the compressed
-        ``[kv_latent ‖ k_rope]`` shared across all heads — one "KV head" —
-        instead of expanding to full per-head K/V. This is ~25× smaller than the
-        expanded cache and is consumed directly by the flash-MLA attention ops.
+        ``[kv_latent ‖ k_rope]`` shared across all heads (one "KV head"). It is
+        block-paged so prefill can run in bounded chunks (``chunked_flash_mla_prefill``)
+        — the key to context beyond the ~32k single-pass limit.
 
-        Cache shape: ``[1, 1, padded_seq, KV_LORA_RANK + QK_ROPE_HEAD_DIM]``.
-        padded_seq is max_seq_len rounded up to the nearest 32 (flash-decode
-        k_chunk_size must be a multiple of 32). Returned as a 1-tuple so the
-        ``kv_cache`` plumbing in the decoder layer / text model is unchanged.
+        Returns ``(kvpe_cache, page_table)``:
+          - kvpe_cache: ``[num_blocks, 1, BLOCK_SIZE, KV_LORA_RANK + QK_ROPE_HEAD_DIM]``
+          - page_table: ``[1, num_blocks]`` int32, identity mapping (single stream)
         """
-        padded_seq = ((max_seq_len + 31) // 32) * 32
         kvpe_dim = self.kv_lora_rank + self.qk_rope_head_dim
+        # +1 guard block: the prefill attends with page_table[:, :end_block]. When the
+        # last chunk reaches the final block, end_block == num_blocks makes that a
+        # full-extent ttnn.slice, which ALIASES the parent — deallocating the slice
+        # would then free the real page_table and crash decode. One extra (unused)
+        # block keeps every slice a strict sub-slice (a true copy), so dealloc is safe.
+        num_blocks = (max_seq_len + self.block_size - 1) // self.block_size + 1
         kvpe_cache = ttnn.as_tensor(
-            torch.zeros(1, 1, padded_seq, kvpe_dim, dtype=torch.bfloat16),
+            torch.zeros(num_blocks, 1, self.block_size, kvpe_dim, dtype=torch.bfloat16),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        return (kvpe_cache,)
-
-    def fill_kv_cache(self, kvpe: ttnn.Tensor, kv_cache: tuple) -> None:
-        """
-        Fill the latent cache in-place from the prefill kvpe tensor.
-
-        kvpe is [1, 1, seq, KV_LORA_RANK + QK_ROPE_HEAD_DIM] (single KV head),
-        exactly what fill_cache_for_user_ expects.
-        """
-        (kvpe_cache,) = kv_cache
-        ttnn.kv_cache.fill_cache_for_user_(kvpe_cache, kvpe, 0)
+        page_table = ttnn.as_tensor(
+            torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        return (kvpe_cache, page_table)
 
     # ------------------------------------------------------------------
     # Decode forward
@@ -806,7 +853,7 @@ class TtMistral4Attention(LightweightModule):
         Returns:
             [1, 1, 1, HIDDEN_SIZE]
         """
-        (kvpe_cache,) = kv_cache
+        kvpe_cache, page_table = kv_cache
         _mem = ttnn.L1_MEMORY_CONFIG
 
         # ── Q path (seq_len=1, pre-split weights → no slice) ──────────
@@ -909,18 +956,21 @@ class TtMistral4Attention(LightweightModule):
         # kvpe → kvpe_cache[0, 0, pos, :].
         kvpe_upd = ttnn.to_memory_config(kvpe, self._kvpe_update_mem_cfg)
         ttnn.deallocate(kvpe)
-        ttnn.experimental.paged_update_cache(kvpe_cache, kvpe_upd, update_idxs_tensor=cur_pos_tensor)
+        ttnn.experimental.paged_update_cache(
+            kvpe_cache, kvpe_upd, update_idxs_tensor=cur_pos_tensor, page_table=page_table
+        )
         ttnn.deallocate(kvpe_upd)
 
-        # ── Flash-MLA decode over the latent cache ──────────────────────
+        # ── Flash-MLA decode over the paged latent cache ────────────────
         # q_mla [1, N_HEADS, 1, dh] → [1, 1, N_HEADS, dh] (op wants [1, b, nh, dh]).
         q_decode = ttnn.transpose(q_mla, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(q_mla)
-        attn_latent = ttnn.transformer.flash_multi_latent_attention_decode(
+        attn_latent = ttnn.transformer.paged_flash_multi_latent_attention_decode(
             q_decode,
             kvpe_cache,
             None,  # V reuses the kvpe cache (first head_dim_v dims)
             self.kv_lora_rank,  # head_dim_v
+            page_table,
             cur_pos_tensor=cur_pos_tensor,
             scale=self.scale,
             program_config=self._mla_decode_pc,
