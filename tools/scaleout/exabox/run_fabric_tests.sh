@@ -281,7 +281,7 @@ if [[ "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "4x32z" ]]; t
     elif [[ "$CONFIG" == "2x4x4z" ]]; then
         # Single galaxy host carved into 2 Z-connected 4x4 meshes (16 chips each)
         # -- the dual_4x4 layout. Split the 32 chips into 2 groups of 16 via
-        # TT_VISIBLE_DEVICES (mirrors dual_4x4_rank_binding.yaml). Placement order
+        # TT_VISIBLE_DEVICES. Placement order
         # is irrelevant on one host, so use a global host spec.
         NUM_MESHES=2
         SINGLE_HOST="${HOSTS%%,*}"
@@ -303,6 +303,9 @@ if [[ "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "4x32z" ]]; t
             echo "Error: --config 4x32z requires exactly $NUM_MESHES hosts in --hosts (got ${#Z_RANK_HOSTS[@]})"
             exit 1
         fi
+        # mpi-docker requires --host/--hostfile in global MPI args (before the first
+        # -np). Per-rank --host below still pins rank i -> mesh i deterministically.
+        Z_GLOBAL_HOST=(--host "$HOSTS")
         echo "Running multi-mesh 4x32z (4 Z-connected 8x4 torus galaxies); rank i pinned to host i:"
         for ((i = 0; i < NUM_MESHES; i++)); do
             echo "  rank $i -> mesh_id $i -> ${Z_RANK_HOSTS[$i]}"

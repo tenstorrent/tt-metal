@@ -7,7 +7,6 @@
 #   - non-Z links: intra-mesh 4x4 adjacency (N/S/E/W)
 #   - Z links:     inter-mesh connection (assign_z_direction)
 #
-# Mirrors models/demos/deepseek_v3_b1/scaleout_configs/dual_4x4.textproto.
 #
 # Launch: 2 MPI ranks on a single host, one per mesh (TT_MESH_ID 0..1), each
 # rank pinned to 16 chips via TT_VISIBLE_DEVICES (trays 1+2 -> mesh 0,
