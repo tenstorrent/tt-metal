@@ -1764,7 +1764,7 @@ std::vector<KernelCouplingGroup> BuildDMKernelCouplingGroups(
     auto union_same_side = [&](const auto& endpoints) {
         std::optional<size_t> anchor;
         for (const auto& rec : endpoints) {
-            if (!rec.kernel->is_dm_kernel()) {
+            if (!rec.kernel->is_data_movement_kernel()) {
                 continue;
             }
             const size_t k = idx_of.at(rec.kernel);

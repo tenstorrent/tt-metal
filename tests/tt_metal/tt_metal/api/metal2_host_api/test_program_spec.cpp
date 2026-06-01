@@ -551,7 +551,7 @@ TEST_F(ProgramSpecTestQuasar, DFBMultiBindingMixingComputeAndDMOnSameRoleFails) 
     NodeCoord node1{1, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     // Producer side mixes a DM and a compute kernel on disjoint zones. Each individually
     // would form a valid binding, but the DFB's hardware config carries a single producer
@@ -564,9 +564,9 @@ TEST_F(ProgramSpecTestQuasar, DFBMultiBindingMixingComputeAndDMOnSameRoleFails) 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
 
-    BindDFBToKernel(dm_producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(compute_producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+    dm_producer.dfb_bindings.push_back(ProducerOf("dfb", "out"));
+    compute_producer.dfb_bindings.push_back(ProducerOf("dfb", "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf("dfb", "in"));
 
     spec.kernels = {dm_producer, compute_producer, consumer};
     spec.dataflow_buffers = {dfb};
@@ -2261,7 +2261,7 @@ TEST_F(ProgramSpecTestQuasar, DFBMultiBindingForcesUniformRiscMaskAcrossProducer
     NodeCoord node1{1, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     auto producer_a = MakeMinimalDMKernel("producer_a", /*num_threads=*/1);
     auto producer_b = MakeMinimalDMKernel("producer_b", /*num_threads=*/1);
@@ -2271,9 +2271,9 @@ TEST_F(ProgramSpecTestQuasar, DFBMultiBindingForcesUniformRiscMaskAcrossProducer
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
 
-    BindDFBToKernel(producer_a, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(producer_b, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+    producer_a.dfb_bindings.push_back(ProducerOf("dfb", "out"));
+    producer_b.dfb_bindings.push_back(ProducerOf("dfb", "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf("dfb", "in"));
     // unrelated_dm intentionally has no DFB bindings — it just consumes DM lanes on node0.
 
     spec.kernels = {producer_a, producer_b, unrelated_dm, consumer};
