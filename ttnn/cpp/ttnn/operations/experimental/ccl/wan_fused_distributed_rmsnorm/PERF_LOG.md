@@ -765,3 +765,48 @@ worker-count up AND down (both regimes). **Untested larger levers** (all
 substantial, uncertain payoff): worker→DRAM-controller core placement to lift
 read BW; reshard input to DRAM-block-sharded for contiguous large reads (costs
 a reshard pass); a non-matmul RoPE formulation to cut small-shape compute.
+
+## Streaming low-L1 fallback — unblocks TP=2 (2026-06-01)
+
+**Problem:** TP=2 (`2x4sp1tp0`, H_per_device=2560 ⇒ num_tile_cols=80) failed at
+program build with `Statically allocated circular buffers … grow to 1666432 B
+which is beyond max L1 size of 1572864 B`. The resident algorithm keeps a full
+row in every CB (input + fp32 intermediate + fp32 rotated + output + weight),
+all sized ∝ num_tile_cols. At nt=80 that overflows the 1.5 MiB L1 cap; nt≤40
+(TP=4/8) stays resident (~929 KB) and is unaffected.
+
+**Fix:** a compile-time **streaming low-L1** path that makes `input_cb`
+block-sized (`4 * block_size` tiles) instead of row-resident. The reader streams
+the row **twice** in block_size pushes — pass 0 feeds the PRE sum-of-squares,
+pass 1 feeds the POST `x*(1/rms)` re-read — and compute pops each block as it
+consumes it. intermediate/rotated/output stay row-resident (they fit once input
+shrinks), so the 5 sequential POST sub-phases are untouched. Reading the row
+twice ≈ composite read bandwidth.
+
+**Gating (compile-time, fast path provably unchanged):** host
+`decide_streaming_low_l1()` estimates resident L1 bytes vs the 1572864 budget
+and sets a CT flag; compute/reader select via `if constexpr`, so for nt≤40 the
+streamed branch is dead-code-eliminated and the resident binary is identical.
+Env `WAN_RMSNORM_FORCE_STREAMING` (`1`=force on, `0`=force off, else auto) for
+testing. Invariants (host TT_FATAL): streaming requires `chunk_size_rows==1`
+(always true for wide shards via `chunk_h_cap = 128/nt`) and `nt % block_size==0`.
+
+**Correctness — bit-exact, not approximate.** The streamed PRE uses the same
+`mul_tiles` x² products and the same `pack_tile<true>` l1_acc accumulation order
+as resident (l1_acc set to 1 after the first tile); POST sub-phase 1 multiplies
+by the same per-row 1/rms. Only the input residency window changes — no fidelity
+or precision change.
+
+**Verification (2026-06-01):**
+
+| test | result |
+|---|---|
+| TP=1 N32_H256 `FORCE_STREAMING=1` (forced on) | PASS, PCC 99.9998% |
+| TP=1 N32_H256 `FORCE_STREAMING=0` (resident) | PASS, PCC 99.9998–99.9999% (matches) |
+| TP=2 Wan block `14b-720p-2x4sp1tp0` (auto-streams) | **builds + PASS**, PCC 99.9758% (composite 99.9765%) |
+| TP=4 device-op sweep (resident, streaming off) | 3/3 PASS, PCC 99.9998–99.9999% |
+| TP=4 LINE bench (resident, streaming off) | unchanged (Δ<1%, run-to-run noise) |
+
+**Perf:** TP=2 fused block 178.67 ms vs composite 178.19 ms — **parity**. The
+2× input read is the cost of fitting in L1; the win is that TP=2 *runs* at all
+(was a hard build failure). Not a speedup lever — a feasibility unblock.
