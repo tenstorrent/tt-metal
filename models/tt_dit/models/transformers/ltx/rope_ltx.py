@@ -33,20 +33,11 @@ def generate_freq_grid(
     positional_embedding_max_pos_count: int,
     inner_dim: int,
 ) -> torch.Tensor:
-    """
-    Generate frequency grid for LTX-2 RoPE.
+    """Power-law frequency grid for LTX-2 RoPE: theta^linspace(...) * pi/2.
 
-    Uses a power-law spacing: theta^linspace(log(1)/log(theta), 1, D) * pi/2
-    where D = inner_dim // (2 * max_pos_count).
-
-    NOTE: Output is fp32 even though HF's reference uses fp64 when
-    ``frequencies_precision == "float64"``. Empirically upgrading to fp64
-    here (May 2026) made TT vs HF audio correlation *worse* (0.36 → 0.15
-    on the seed=10 benchmark) — the bf16 residual stream tracks a different
-    trajectory better with fp32 grid. The chaotic compounding across
-    8 Euler × 48 blocks × 32 RoPE applies means matching HF's fp64 grid
-    bit-exactly is *not* the right target when downstream storage is bf16.
-    Keep at fp32 unless we move the entire RoPE+residual path to fp32.
+    Kept fp32, not HF's fp64: upgrading the grid to fp64 measurably hurt TT-vs-HF
+    audio correlation because the downstream residual stream is bf16. Keep fp32
+    unless the whole RoPE + residual path moves to fp32.
     """
     theta = positional_embedding_theta
     n_elem = 2 * positional_embedding_max_pos_count
@@ -159,23 +150,11 @@ def precompute_freqs_cis(
     num_attention_heads: int = 32,
     rope_type: LTXRopeType = LTXRopeType.INTERLEAVED,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """
-    Precompute cos/sin for LTX-2 RoPE.
+    """Precompute (cos, sin) for LTX-2 RoPE.
 
-    Args:
-        indices_grid: (seq_len, n_pos_dims) or (B, seq_len, n_pos_dims) position indices
-        dim: Hidden dimension (e.g. 4096 for LTX-2)
-        out_dtype: Output dtype
-        theta: Frequency base (default 10000)
-        max_pos: Max position per dimension [temporal, height, width]
-        use_middle_indices_grid: If True, average start/end indices from 4D grids
-        num_attention_heads: Number of attention heads (for split mode reshape)
-        rope_type: INTERLEAVED or SPLIT
-
-    Returns:
-        (cos_freq, sin_freq) tuple. Shape depends on rope_type:
-        - INTERLEAVED: (B, seq_len, dim) with interleaved duplicated values
-        - SPLIT: (B, num_heads, seq_len, dim // (2 * num_heads))
+    Output shape depends on rope_type:
+    - INTERLEAVED: (B, seq_len, dim), each freq duplicated for the (x0, x1) pairs.
+    - SPLIT: (B, num_heads, seq_len, dim // (2 * num_heads)).
     """
     if max_pos is None:
         max_pos = [20, 2048, 2048]
@@ -199,60 +178,3 @@ def precompute_freqs_cis(
         cos_freq, sin_freq = interleaved_freqs_cis(freqs, dim % n_elem)
 
     return cos_freq.to(out_dtype), sin_freq.to(out_dtype)
-
-
-def apply_rotary_emb(
-    input_tensor: torch.Tensor,
-    freqs_cis: tuple[torch.Tensor, torch.Tensor],
-    rope_type: LTXRopeType = LTXRopeType.INTERLEAVED,
-) -> torch.Tensor:
-    """
-    Apply LTX-2 rotary embedding to input tensor (PyTorch reference, for testing).
-
-    Args:
-        input_tensor: (B, seq_len, num_heads, head_dim) or (B, num_heads, seq_len, head_dim)
-        freqs_cis: (cos_freq, sin_freq) from precompute_freqs_cis
-        rope_type: INTERLEAVED or SPLIT
-    """
-    cos_freqs, sin_freqs = freqs_cis
-    if rope_type == LTXRopeType.INTERLEAVED:
-        return _apply_interleaved_rotary_emb(input_tensor, cos_freqs, sin_freqs)
-    elif rope_type == LTXRopeType.SPLIT:
-        return _apply_split_rotary_emb(input_tensor, cos_freqs, sin_freqs)
-    else:
-        raise ValueError(f"Invalid rope type: {rope_type}")
-
-
-def _apply_interleaved_rotary_emb(
-    input_tensor: torch.Tensor, cos_freqs: torch.Tensor, sin_freqs: torch.Tensor
-) -> torch.Tensor:
-    """Apply interleaved RoPE: pairs (x0, x1) rotated by (cos, sin)."""
-    t_dup = input_tensor.unflatten(-1, (-1, 2))
-    t1, t2 = t_dup.unbind(dim=-1)
-    t_dup = torch.stack((-t2, t1), dim=-1)
-    input_tensor_rot = t_dup.flatten(-2)
-    return input_tensor * cos_freqs + input_tensor_rot * sin_freqs
-
-
-def _apply_split_rotary_emb(
-    input_tensor: torch.Tensor, cos_freqs: torch.Tensor, sin_freqs: torch.Tensor
-) -> torch.Tensor:
-    """Apply split RoPE: first-half and second-half rotated independently."""
-    needs_reshape = False
-    if input_tensor.ndim != 4 and cos_freqs.ndim == 4:
-        b, h, t, _ = cos_freqs.shape
-        input_tensor = input_tensor.reshape(b, t, h, -1).swapaxes(1, 2)
-        needs_reshape = True
-
-    split_input = input_tensor.unflatten(-1, (2, -1))
-    first_half = split_input[..., :1, :]
-    second_half = split_input[..., 1:, :]
-
-    output = split_input * cos_freqs.unsqueeze(-2)
-    output[..., :1, :] -= sin_freqs.unsqueeze(-2) * second_half
-    output[..., 1:, :] += sin_freqs.unsqueeze(-2) * first_half
-
-    output = output.flatten(-2)
-    if needs_reshape:
-        output = output.swapaxes(1, 2).reshape(b, t, -1)
-    return output
