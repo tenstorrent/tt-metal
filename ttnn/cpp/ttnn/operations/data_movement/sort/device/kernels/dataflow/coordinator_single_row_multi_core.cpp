@@ -71,21 +71,21 @@ void kernel_main() {
             // Save index tile to output index tensor
             cb_wait_front(index_tensor_cb_index, one_tile);
             const uint32_t l1_write_addr_index_tensor_cb = get_read_ptr(index_tensor_cb_index);
-            noc_async_write_tile(h * Wt + w, output_index_tensor_addr_gen, l1_write_addr_index_tensor_cb);
+            noc_async_write_page(h * Wt + w, output_index_tensor_addr_gen, l1_write_addr_index_tensor_cb);
             noc_async_write_barrier();
             cb_pop_front(index_tensor_cb_index, one_tile);
 
             // Read input value data
             cb_reserve_back(input_tensor_cb_index, one_tile);
             const uint32_t l1_write_addr_input_tensor_cb = get_write_ptr(input_tensor_cb_index);
-            noc_async_read_tile(h * Wt + w, input_tensor_addr_ger, l1_write_addr_input_tensor_cb);
+            noc_async_read_page(h * Wt + w, input_tensor_addr_ger, l1_write_addr_input_tensor_cb);
             noc_async_read_barrier();
             cb_push_back(input_tensor_cb_index, one_tile);
 
             // Write output value data
             cb_wait_front(input_tensor_cb_index, one_tile);
             const uint32_t l1_write_addr_output_tensor_cb = get_read_ptr(input_tensor_cb_index);
-            noc_async_write_tile(h * Wt + w, output_tensor_addr_gen, l1_write_addr_output_tensor_cb);
+            noc_async_write_page(h * Wt + w, output_tensor_addr_gen, l1_write_addr_output_tensor_cb);
             noc_async_write_barrier();
             cb_pop_front(input_tensor_cb_index, one_tile);
 

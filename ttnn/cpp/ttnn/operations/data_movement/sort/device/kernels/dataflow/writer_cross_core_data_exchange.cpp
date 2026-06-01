@@ -58,7 +58,7 @@ void kernel_main() {
             const uint32_t l1_write_addr_val = get_read_ptr(value_tensor_cb_index);
             const uint32_t tile_offset = h * Wt + core_id * number_of_tiles_per_core + w;
 
-            noc_async_write_tile(tile_offset, output_tensor_accessor, l1_write_addr_val);
+            noc_async_write_page(tile_offset, output_tensor_accessor, l1_write_addr_val);
             noc_async_write_barrier();
 
             cb_pop_front(value_tensor_cb_index, one_tile);

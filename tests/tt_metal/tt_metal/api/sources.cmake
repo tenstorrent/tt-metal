@@ -42,6 +42,8 @@ set(UNIT_TESTS_API_SOURCES
     test_compiler_include_paths.cpp
     test_direct.cpp
     test_dram_kernels.cpp
+    test_dram_sender_global_cb.cpp
+    test_dram_subchannel_helper.cpp
     test_dram_to_l1_multicast.cpp
     test_dram.cpp
     test_global_circular_buffers.cpp

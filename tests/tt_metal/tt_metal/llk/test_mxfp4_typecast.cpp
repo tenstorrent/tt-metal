@@ -24,6 +24,8 @@
 #include <tt-logger/tt-logger.hpp>
 
 #include "device_fixture.hpp"
+#include "tt_metal/test_utils/comparison.hpp"
+#include "tt_metal/test_utils/float8_utils.hpp"
 
 namespace tt::tt_metal {
 
@@ -35,13 +37,13 @@ namespace unit_tests::llk::mxfp4_typecast {
 // For Quasar, data is moved via DataflowBuffers (DFBs) and the hardware
 // unpacker/packer performs the format conversion implicitly.
 static vector<uint32_t> run_mxfp4_typecast(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    const distributed::MeshDevice& mesh_device,
     tt::DataFormat input_fmt,
     tt::DataFormat output_fmt,
     const vector<uint32_t>& src_vec,
     uint32_t num_tiles,
     bool fp32_dest_acc_en) {
-    IDevice* dev = mesh_device->get_devices()[0];
+    IDevice* dev = mesh_device.get_devices()[0];
     const experimental::metal2_host_api::NodeCoord node{0, 0};
 
     uint32_t input_tile_size = tt::tile_size(input_fmt);
@@ -83,8 +85,8 @@ static vector<uint32_t> run_mxfp4_typecast(
     experimental::metal2_host_api::KernelSpec reader_spec{
         .unique_id = READER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary_2_0.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary_2_0.cpp",
         .num_threads = 1,
         .dfb_bindings = {{
             .dfb_spec_name = INPUT_DFB,
@@ -103,8 +105,8 @@ static vector<uint32_t> run_mxfp4_typecast(
     experimental::metal2_host_api::KernelSpec writer_spec{
         .unique_id = WRITER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary_2_0.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary_2_0.cpp",
         .num_threads = 1,
         .dfb_bindings = {{
             .dfb_spec_name = OUTPUT_DFB,
@@ -123,8 +125,8 @@ static vector<uint32_t> run_mxfp4_typecast(
     experimental::metal2_host_api::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_2_0.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_2_0.cpp",
         .num_threads = 1,
         .dfb_bindings =
             {{
@@ -159,7 +161,7 @@ static vector<uint32_t> run_mxfp4_typecast(
         .work_units = {wu},
     };
 
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::metal2_host_api::MakeProgramFromSpec(mesh_device, spec);
 
     detail::WriteToBuffer(src_buffer, src_vec);
     // Pass aligned DRAM page stride so the reader/writer advance the DRAM
@@ -239,62 +241,15 @@ static vector<float> mxfp4_to_floats(const vector<uint32_t>& packed) {
 	return unpack_mxfp4_tiles_into_float_vec(tt::stl::make_const_span(packed), /*row_major_output=*/false);
 }
 
-static vector<float> bf16_to_floats(const vector<uint32_t>& packed) {
-	auto bf16_vec = unpack_uint32_vec_into_bfloat16_vec(packed);
-	vector<float> floats;
-	floats.reserve(bf16_vec.size());
-	for (const auto& v : bf16_vec) {
-		floats.push_back(static_cast<float>(v));
-	}
-	return floats;
-}
+// bf16_to_floats lives in tt_metal/test_utils/float8_utils.hpp;
+// expose it in this namespace so mxfp4_tc::bf16_to_floats call sites resolve.
+using tt::test_utils::bf16_to_floats;
 
 // --- Validation ---
-
-static bool check_floats_close(const vector<float>& a, const vector<float>& b, float rtol, float atol) {
-	if (a.size() != b.size()) {
-		return false;
-	}
-	for (size_t i = 0; i < a.size(); i++) {
-		if (!is_close(a[i], b[i], rtol, atol)) {
-			log_info(tt::LogTest, "check_floats_close: mismatch at index {} - a[i] = {}, b[i] = {}", i, a[i], b[i]);
-            return false;
-		}
-	}
-	return true;
-}
-
-static double compute_pcc(const vector<float>& a, const vector<float>& b) {
-	if (a.size() != b.size() || a.empty()) {
-		return 0.0;
-	}
-	const size_t n = a.size();
-	double sum_a = 0.0, sum_b = 0.0;
-	double sum_a2 = 0.0, sum_b2 = 0.0, sum_ab = 0.0;
-	for (size_t i = 0; i < n; i++) {
-		double ai = a[i], bi = b[i];
-		sum_a += ai;
-		sum_b += bi;
-		sum_a2 += ai * ai;
-		sum_b2 += bi * bi;
-		sum_ab += ai * bi;
-	}
-	double denom_a = (n * sum_a2) - (sum_a * sum_a);
-	double denom_b = (n * sum_b2) - (sum_b * sum_b);
-	if (denom_a == 0.0 || denom_b == 0.0) {
-		return 1.0;
-	}
-	return (n * sum_ab - sum_a * sum_b) / std::sqrt(denom_a * denom_b);
-}
-
-static bool check_pcc(const vector<float>& a, const vector<float>& b, double min_pcc) {
-	double pcc = compute_pcc(a, b);
-	if (pcc < min_pcc) {
-		log_info(tt::LogTest, "check_pcc: PCC = {} < min_pcc = {}", pcc, min_pcc);
-		return false;
-	}
-	return true;
-}
+// is_close_vectors + is_close + check_pcc all live in tt_metal/test_utils/comparison.hpp.
+using tt::test_utils::check_pcc;
+using tt::test_utils::is_close;
+using tt::test_utils::is_close_vectors;
 
 // --- Special-case rule testing infrastructure ---
 //
@@ -397,7 +352,7 @@ namespace mxfp4_tc = unit_tests::llk::mxfp4_typecast;
 // ============================================================================
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp4ToFloat16b) {
-    auto mesh_device = devices_[0];
+    const auto& mesh_device = *devices_[0];
     constexpr uint32_t num_tiles = 64;
     auto src_vec = mxfp4_tc::create_random_vector_of_mxfp4(
         tt::tile_size(tt::DataFormat::MxFp4) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
@@ -405,12 +360,14 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp4ToFloat16b) {
         mesh_device, tt::DataFormat::MxFp4, tt::DataFormat::Float16_b, src_vec, num_tiles, /*fp32_dest_acc_en=*/false);
     auto src_floats = mxfp4_tc::mxfp4_to_floats(src_vec);
     auto dst_floats = mxfp4_tc::bf16_to_floats(result_vec);
-    EXPECT_TRUE(mxfp4_tc::check_floats_close(src_floats, dst_floats, /*rtol=*/0.0f, /*atol=*/0.0f));
+    EXPECT_TRUE(mxfp4_tc::is_close_vectors<float>(src_floats, dst_floats, [](float a, float b) {
+        return mxfp4_tc::is_close(a, b, /*rtol=*/0.0f, /*atol=*/0.0f);
+    }));
     EXPECT_TRUE(mxfp4_tc::check_pcc(src_floats, dst_floats, /*min_pcc=*/1.0));
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp4ToFloat16bFp32Dest) {
-    auto mesh_device = devices_[0];
+    const auto& mesh_device = *devices_[0];
     constexpr uint32_t num_tiles = 64;
     auto src_vec = mxfp4_tc::create_random_vector_of_mxfp4(
         tt::tile_size(tt::DataFormat::MxFp4) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
@@ -418,7 +375,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp4ToFloat16bFp32Dest) {
         mesh_device, tt::DataFormat::MxFp4, tt::DataFormat::Float16_b, src_vec, num_tiles, /*fp32_dest_acc_en=*/true);
     auto src_floats = mxfp4_tc::mxfp4_to_floats(src_vec);
     auto dst_floats = mxfp4_tc::bf16_to_floats(result_vec);
-    EXPECT_TRUE(mxfp4_tc::check_floats_close(src_floats, dst_floats, /*rtol=*/0.0f, /*atol=*/0.0f));
+    EXPECT_TRUE(mxfp4_tc::is_close_vectors<float>(src_floats, dst_floats, [](float a, float b) {
+        return mxfp4_tc::is_close(a, b, /*rtol=*/0.0f, /*atol=*/0.0f);
+    }));
     EXPECT_TRUE(mxfp4_tc::check_pcc(src_floats, dst_floats, /*min_pcc=*/1.0));
 }
 
@@ -429,7 +388,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp4ToFloat16bFp32Dest) {
 // ============================================================================
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp4) {
-    auto mesh_device = devices_[0];
+    const auto& mesh_device = *devices_[0];
     constexpr uint32_t num_tiles = 64;
     auto src_vec = create_random_vector_of_bfloat16(
         tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
@@ -437,12 +396,14 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp4) {
         mesh_device, tt::DataFormat::Float16_b, tt::DataFormat::MxFp4, src_vec, num_tiles, /*fp32_dest_acc_en=*/false);
     auto src_floats = mxfp4_tc::bf16_to_floats(src_vec);
     auto dst_floats = mxfp4_tc::mxfp4_to_floats(result_vec);
-    EXPECT_TRUE(mxfp4_tc::check_floats_close(src_floats, dst_floats, /*rtol=*/0.5f, /*atol=*/0.5f));
+    EXPECT_TRUE(mxfp4_tc::is_close_vectors<float>(src_floats, dst_floats, [](float a, float b) {
+        return mxfp4_tc::is_close(a, b, /*rtol=*/0.5f, /*atol=*/0.5f);
+    }));
     EXPECT_TRUE(mxfp4_tc::check_pcc(src_floats, dst_floats, /*min_pcc=*/0.98));
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp4Fp32Dest) {
-    auto mesh_device = devices_[0];
+    const auto& mesh_device = *devices_[0];
     constexpr uint32_t num_tiles = 64;
     auto src_vec = create_random_vector_of_bfloat16(
         tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
@@ -450,7 +411,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp4Fp32Dest) {
         mesh_device, tt::DataFormat::Float16_b, tt::DataFormat::MxFp4, src_vec, num_tiles, /*fp32_dest_acc_en=*/true);
     auto src_floats = mxfp4_tc::bf16_to_floats(src_vec);
     auto dst_floats = mxfp4_tc::mxfp4_to_floats(result_vec);
-    EXPECT_TRUE(mxfp4_tc::check_floats_close(src_floats, dst_floats, /*rtol=*/0.5f, /*atol=*/0.5f));
+    EXPECT_TRUE(mxfp4_tc::is_close_vectors<float>(src_floats, dst_floats, [](float a, float b) {
+        return mxfp4_tc::is_close(a, b, /*rtol=*/0.5f, /*atol=*/0.5f);
+    }));
     EXPECT_TRUE(mxfp4_tc::check_pcc(src_floats, dst_floats, /*min_pcc=*/0.98));
 }
 
@@ -460,7 +423,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp4Fp32Dest) {
 // ============================================================================
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp4ToMxFp4) {
-    auto mesh_device = devices_[0];
+    const auto& mesh_device = *devices_[0];
     constexpr uint32_t num_tiles = 64;
     auto src_vec = mxfp4_tc::create_random_vector_of_mxfp4(
         tt::tile_size(tt::DataFormat::MxFp4) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
@@ -468,12 +431,14 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp4ToMxFp4) {
         mesh_device, tt::DataFormat::MxFp4, tt::DataFormat::MxFp4, src_vec, num_tiles, /*fp32_dest_acc_en=*/false);
     auto src_floats = mxfp4_tc::mxfp4_to_floats(src_vec);
     auto dst_floats = mxfp4_tc::mxfp4_to_floats(result_vec);
-    EXPECT_TRUE(mxfp4_tc::check_floats_close(src_floats, dst_floats, /*rtol=*/0.0f, /*atol=*/0.0f));
+    EXPECT_TRUE(mxfp4_tc::is_close_vectors<float>(src_floats, dst_floats, [](float a, float b) {
+        return mxfp4_tc::is_close(a, b, /*rtol=*/0.0f, /*atol=*/0.0f);
+    }));
     EXPECT_TRUE(mxfp4_tc::check_pcc(src_floats, dst_floats, /*min_pcc=*/1.0));
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp4ToMxFp4Fp32Dest) {
-    auto mesh_device = devices_[0];
+    const auto& mesh_device = *devices_[0];
     constexpr uint32_t num_tiles = 64;
     auto src_vec = mxfp4_tc::create_random_vector_of_mxfp4(
         tt::tile_size(tt::DataFormat::MxFp4) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
@@ -481,7 +446,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp4ToMxFp4Fp32Dest) {
         mesh_device, tt::DataFormat::MxFp4, tt::DataFormat::MxFp4, src_vec, num_tiles, /*fp32_dest_acc_en=*/true);
     auto src_floats = mxfp4_tc::mxfp4_to_floats(src_vec);
     auto dst_floats = mxfp4_tc::mxfp4_to_floats(result_vec);
-    EXPECT_TRUE(mxfp4_tc::check_floats_close(src_floats, dst_floats, /*rtol=*/0.0f, /*atol=*/0.0f));
+    EXPECT_TRUE(mxfp4_tc::is_close_vectors<float>(src_floats, dst_floats, [](float a, float b) {
+        return mxfp4_tc::is_close(a, b, /*rtol=*/0.0f, /*atol=*/0.0f);
+    }));
     EXPECT_TRUE(mxfp4_tc::check_pcc(src_floats, dst_floats, /*min_pcc=*/1.0));
 }
 
@@ -506,7 +473,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp4ToMxFp4Fp32Dest) {
 // ============================================================================
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp4ToBf16SpecialCases) {
-    auto mesh_device = devices_[0];
+    const auto& mesh_device = *devices_[0];
     auto layout = mxfp4_tc::get_mxfp4_tile_layout();
 
     // Block 0: scale = 0xFF → all 32 elements should be NaN (rule 1).
