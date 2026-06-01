@@ -236,6 +236,86 @@ def matmul_program_config(
     )
 
 
+# Tuned 2D block-sharded program configs for the text-encoder TP linears (QKV / out_proj /
+# fc1 / fc2), keyed by per-device (k, n).  Found by test_matmul_perf_report_sweep.py for
+# M=4096, bf16 x bfp8_b -> bf16, LoFi on an 8x8 grid; the value is the winning in0_block_w.
+# These beat the ttnn-default config (~8-10 TFLOPs, flagged SLOW in the perf report) by
+# 10-27x.  in0 + out live in L1 BLOCK_SHARDED across the 8x8 grid.
+_ENCODER_TP_BS_GRID = 8
+_ENCODER_TP_BS_IBW = {
+    (1024, 768): 4,  # QKV       (k = hidden, n = 3*hidden/tp); per-core Kt/8 = 4
+    (256, 1024): 8,  # out_proj  (k = hidden/tp); per-core Kt/8 = 1 -> clamped to 1
+    (1024, 2048): 4,  # fc1      (k = hidden, n = ffn_dim/tp)
+    (2048, 1024): 8,  # fc2      (k = ffn_dim/tp); per-core Kt/8 = 8
+}
+
+
+def encoder_tp_block_sharded_matmul(
+    device: ttnn.Device,
+    m: int,
+    k: int,
+    n: int,
+    *,
+    fused_activation=None,
+):
+    """Tuned block-sharded 2D matmul for a text-encoder TP linear.
+
+    Returns ``(program_config, in0_block_sharded_mem, out_block_sharded_mem)`` for a tuned
+    ``(k, n)``, or ``None`` if the shape isn't tuned or doesn't tile-fit the 8x8 grid (caller
+    then falls back to its default linear).  in0 and out are L1 ``BLOCK_SHARDED`` across the
+    grid; the matmul height-shards M over grid rows and width-shards N over grid columns.
+    """
+    ibw_cap = _ENCODER_TP_BS_IBW.get((k, n))
+    if ibw_cap is None:
+        return None
+    gx = gy = _ENCODER_TP_BS_GRID
+    cg = device.compute_with_storage_grid_size()
+    if gx > cg.x or gy > cg.y:
+        return None
+    if m % TILE or k % TILE or n % TILE:
+        return None
+    mt, kt, nt = m // TILE, k // TILE, n // TILE
+    # 2D block-shard divisibility: gy | Mt, gx | Nt, gx | Kt (K split across grid columns).
+    if mt % gy or nt % gx or kt % gx:
+        return None
+    # in0 is BLOCK_SHARDED: each core owns kt_per_core = Kt/gx K-tiles (not full Kt).
+    # Sweep ibw against kt_per_core, not global Kt — e.g. out_proj Kt=8, gx=8 -> ibw must be 1.
+    kt_per_core = kt // gx
+    ibw = _largest_divisor_at_most(kt_per_core, ibw_cap)
+    if kt_per_core % ibw:
+        return None
+    per_core_m = mt // gy
+    per_core_n = nt // gx
+    # Block-sharded output requires out_subblock_h == 1; widen only along N (h*w <= 4).
+    out_subblock_w = _largest_divisor_at_most(per_core_n, 4)
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
+        in0_block_w=ibw,
+        out_subblock_h=1,
+        out_subblock_w=out_subblock_w,
+        out_block_h=per_core_m,
+        out_block_w=per_core_n,
+        per_core_M=per_core_m,
+        per_core_N=per_core_n,
+        transpose_mcast=False,
+        fused_activation=fused_activation,
+    )
+    grid = ttnn.CoreGrid(y=gy, x=gx)
+    in0_mem = ttnn.create_sharded_memory_config(
+        (1, 1, m, k),
+        core_grid=grid,
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    out_mem = ttnn.create_sharded_memory_config(
+        (1, 1, m, n),
+        core_grid=grid,
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    return program_config, in0_mem, out_mem
+
+
 def speech_encoder_matmul_program_config(
     device: ttnn.Device,
     *,
