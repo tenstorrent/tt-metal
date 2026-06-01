@@ -25,36 +25,6 @@ merge_gate:
   bh_p150b_civ2:          20
   bh_loudbox_civ2_viommu:  0
 
-  # ── CIv1 (comma-separated tag runner labels) ─────────────────────────────
-  wh_n150:                 6
-  wh_n300:                 5
-  wh_n300_perf:            1
-  wh_llmbox:               5
-  wh_llmbox_perf:          2
-  wh_llmbox_perf_release:  0
-  wh_galaxy:               1
-  wh_galaxy_perf:          2
-  wh_galaxy_release:       1
-  wh_galaxy_perf_release:  0
-  bh_p100:                 3
-  bh_p100_perf:            0
-  bh_p150:                 2
-  bh_p150_perf:            0
-  bh_llmbox:               1
-  bh_loudbox:              4
-  bh_p300:                 1
-  bh_p300_viommu:          0
-  bh_quietbox:             2
-  bh_quietbox_perf:        0
-  bh_quietbox_2:           1
-  bh_deskbox:              3
-  bh_galaxy:               0
-  bh_galaxy_perf:          0
-  bh_galaxy_release:       0
-  bh_galaxy_perf_release:  0
-  bh_sp1:                  0
-  bh_sp4:                  0
-
 pr_gate:
   # ── CIv2 (tt-ubuntu-2204-* runner labels) ────────────────────────────────
   wh_n150_civ2:            8
@@ -64,33 +34,3 @@ pr_gate:
   bh_p150b_civ2_viommu:    5
   bh_p150b_civ2:          10
   bh_loudbox_civ2_viommu:  0
-
-  # ── CIv1 (comma-separated tag runner labels) ─────────────────────────────
-  wh_n150:                 3
-  wh_n300:                 2
-  wh_n300_perf:            0
-  wh_llmbox:               2
-  wh_llmbox_perf:          1
-  wh_llmbox_perf_release:  0
-  wh_galaxy:               0
-  wh_galaxy_perf:          1
-  wh_galaxy_release:       0
-  wh_galaxy_perf_release:  0
-  bh_p100:                 1
-  bh_p100_perf:            0
-  bh_p150:                 1
-  bh_p150_perf:            0
-  bh_llmbox:               1
-  bh_loudbox:              2
-  bh_p300:                 1
-  bh_p300_viommu:          0
-  bh_quietbox:             1
-  bh_quietbox_perf:        0
-  bh_quietbox_2:           0
-  bh_deskbox:              1
-  bh_galaxy:               0
-  bh_galaxy_perf:          0
-  bh_galaxy_release:       0
-  bh_galaxy_perf_release:  0
-  bh_sp1:                  0
-  bh_sp4:                  0
