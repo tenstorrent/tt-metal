@@ -53,10 +53,7 @@ class Attention(Module):
         (False, 2, 4): {-1: (256, 256)},
         (False, 8, 4): {-1: (256, 256)},
         (True, 2, 2): {-1: (128, 512)},
-        # BH 4×8 (sp=4, tp=8): optimal for 2048×2048 (q=256 fills 108 cores exactly,
-        # k=512 maximises arithmetic intensity).  For 1024×1024 the optimal q was 128
-        # (1.5× more work items, better core fill at that resolution).
-        (True, 4, 8): {-1: (256, 512), 1024: (128, 512), 2048: (256, 512)},
+        (True, 4, 8): {-1: (256, 512), 4096: (128, 512), 4096 * 4: (256, 512)},
         (True, 8, 4): {-1: (256, 512)},
     }
     default_ring_sdpa_chunk_size: tuple[int, int] = {-1: (256, 256)}
@@ -578,7 +575,7 @@ class Attention(Module):
                 ),
                 joint_strategy="rear",
                 logical_n=spatial_sequence_length,
-                program_config=self.get_ring_sdpa_program_config(spatial.shape[1]),
+                program_config=self.get_ring_sdpa_program_config(spatial_sequence_length),
                 compute_kernel_config=self.sdpa_compute_kernel_config,
                 dim=2,
                 multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
