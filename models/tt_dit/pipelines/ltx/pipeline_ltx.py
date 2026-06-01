@@ -1467,7 +1467,7 @@ class LTXPipeline:
 
             # Forward pass (conditioned). video_N is the LOGICAL (unpadded) count and
             # is forwarded as ``logical_n`` to ring SDPA so padded K positions get masked.
-            tt_denoised = self.transformer.inner_step(
+            tt_denoised = self.transformer.forward(
                 video_1BNI_torch=spatial_torch,
                 video_prompt_1BLP=tt_prompt,
                 video_rope_cos=rope_cos,
@@ -1484,7 +1484,7 @@ class LTXPipeline:
 
             # CFG
             if do_cfg:
-                tt_uncond = self.transformer.inner_step(
+                tt_uncond = self.transformer.forward(
                     video_1BNI_torch=spatial_torch,
                     video_prompt_1BLP=tt_negative_prompt,
                     video_rope_cos=rope_cos,
@@ -1762,35 +1762,28 @@ class LTXPipeline:
         tt_pad_mask_full = bf16_tensor(pad_mask, device=self.mesh_device)
         return tt_attn_mask, tt_pad_mask_sp, tt_pad_mask_full
 
-    def _prepare_video_masks(self, video_N: int, video_N_real: int) -> tuple:
-        """Create SP-sharded + replicated padding masks for video.
+    def _prepare_video_masks(self, video_N: int, video_N_real: int) -> ttnn.Tensor | None:
+        """Create the SP-sharded video padding mask, shape (1, 1, video_N, 1).
 
-        Returns ``(pad_mask_sp, pad_mask_full)``:
-            * ``pad_mask_sp``  — shape (1, 1, video_N, 1), SP-sharded on dim 2. Multiply
-              the local (sharded) video activations by this to zero padded slots before
-              they propagate downstream (self-attn residual / cross-attn K / FF).
-            * ``pad_mask_full`` — replicated copy, used after the V→A AllGather to
-              re-mask gathered K so other chips' padded slots also get zeroed.
-
-        Returns ``(None, None)`` when no padding is needed.
+        Multiply the local (sharded) video activations by this to zero padded slots
+        before they propagate downstream (self-attn residual / cross-attn K / FF).
+        Returns ``None`` when no padding is needed.
 
         No SDPA attn_mask is returned (unlike audio) — video self-attention uses
         ring SDPA which masks padded keys via the ``logical_n=video_N_real`` arg.
         """
         if video_N <= video_N_real:
-            return None, None
+            return None
 
         sp_axis = self.parallel_config.sequence_parallel.mesh_axis
         pad_mask = torch.ones(1, 1, video_N, 1, dtype=torch.bfloat16)
         pad_mask[:, :, video_N_real:, :] = 0.0
-        tt_pad_mask_sp = bf16_tensor(
+        return bf16_tensor(
             pad_mask,
             device=self.mesh_device,
             mesh_axis=sp_axis,
             shard_dim=2,
         )
-        tt_pad_mask_full = bf16_tensor(pad_mask, device=self.mesh_device)
-        return tt_pad_mask_sp, tt_pad_mask_full
 
     @torch.no_grad()
     def call_av(
@@ -1864,7 +1857,7 @@ class LTXPipeline:
         ) = self._prepare_av_cross_pe(latent_frames, latent_h, latent_w, audio_N, audio_N_real)
         trans_mat = self._prepare_trans_mat()
         tt_attn_mask, tt_pad_mask_sp, tt_pad_mask_full = self._prepare_audio_masks(audio_N, audio_N_real)
-        tt_v_pad_mask_sp, tt_v_pad_mask_full = self._prepare_video_masks(video_N, video_N_real)
+        tt_v_pad_mask_sp = self._prepare_video_masks(video_N, video_N_real)
 
         tt_vp = self._prepare_prompt(video_prompt_embeds)
         tt_ap = bf16_tensor(audio_prompt_embeds.unsqueeze(0), device=self.mesh_device)
@@ -1936,7 +1929,7 @@ class LTXPipeline:
                 # video_N / audio_N here are LOGICAL (unpadded) — passed as ``logical_n``
                 # to ring SDPA so padded K positions get masked. Tensor shapes themselves
                 # carry the padded counts.
-                v, a = self.transformer.inner_step(
+                v, a = self.transformer.forward(
                     video_1BNI_torch=video_lat.unsqueeze(0),
                     video_prompt_1BLP=vp,
                     video_rope_cos=v_cos,
@@ -1963,7 +1956,6 @@ class LTXPipeline:
                     audio_padding_mask=tt_pad_mask_sp,
                     audio_padding_mask_full=tt_pad_mask_full,
                     video_padding_mask=tt_v_pad_mask_sp,
-                    video_padding_mask_full=tt_v_pad_mask_full,
                 )
                 vv = LTXTransformerModel.device_to_host(
                     v,

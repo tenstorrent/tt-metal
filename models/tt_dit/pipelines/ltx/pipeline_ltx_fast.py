@@ -154,7 +154,7 @@ class LTXFastPipeline(LTXAVPipeline):
             ) = self._prepare_av_cross_pe(latent_frames, latent_h, latent_w, audio_N, audio_N_real)
             trans_mat = self._prepare_trans_mat()
             tt_attn_mask, tt_pad_mask_sp, tt_pad_mask_full = self._prepare_audio_masks(audio_N, audio_N_real)
-            tt_v_pad_mask_sp, tt_v_pad_mask_full = self._prepare_video_masks(video_N, video_N_real)
+            tt_v_pad_mask_sp = self._prepare_video_masks(video_N, video_N_real)
             self._trace_consts[trace_key] = (
                 v_cos,
                 v_sin,
@@ -173,7 +173,6 @@ class LTXFastPipeline(LTXAVPipeline):
                 tt_pad_mask_sp,
                 tt_pad_mask_full,
                 tt_v_pad_mask_sp,
-                tt_v_pad_mask_full,
             )
 
         if trace_key not in self._trace_latents:
@@ -252,7 +251,6 @@ class LTXFastPipeline(LTXAVPipeline):
                 tt_pad_mask_sp,
                 tt_pad_mask_full,
                 tt_v_pad_mask_sp,
-                tt_v_pad_mask_full,
             ) = self._trace_consts[trace_key]
         else:
             v_cos, v_sin = self._prepare_rope(latent_frames, latent_h, latent_w)
@@ -271,7 +269,7 @@ class LTXFastPipeline(LTXAVPipeline):
             ) = self._prepare_av_cross_pe(latent_frames, latent_h, latent_w, audio_N, audio_N_real)
             trans_mat = self._prepare_trans_mat()
             tt_attn_mask, tt_pad_mask_sp, tt_pad_mask_full = self._prepare_audio_masks(audio_N, audio_N_real)
-            tt_v_pad_mask_sp, tt_v_pad_mask_full = self._prepare_video_masks(video_N, video_N_real)
+            tt_v_pad_mask_sp = self._prepare_video_masks(video_N, video_N_real)
 
             if traced:
                 self._trace_consts[trace_key] = (
@@ -292,7 +290,6 @@ class LTXFastPipeline(LTXAVPipeline):
                     tt_pad_mask_sp,
                     tt_pad_mask_full,
                     tt_v_pad_mask_sp,
-                    tt_v_pad_mask_full,
                 )
 
         # One prompt buffer shared by both stages (the text embedding is identical). Built on
@@ -357,7 +354,7 @@ class LTXFastPipeline(LTXAVPipeline):
 
         if traced:
             # Device-resident denoise: the SP-sharded latent stays on device for the whole
-            # loop, inner_step_device returns sharded velocity (gather_output=False), and an
+            # loop, inner_step returns sharded velocity (gather_output=False), and an
             # on-device Euler steps it in place. No per-step host round-trip or fresh device
             # allocation, so a persisted trace's baked buffer addresses stay valid across
             # generates (a ttnn trace bakes absolute tensor addresses into its command stream).
@@ -397,7 +394,7 @@ class LTXFastPipeline(LTXAVPipeline):
                 # updated in place below, so the trace (same buffer address) reads fresh data.
                 v_out, a_out = self._traced_step(
                     trace_key,
-                    self.transformer.inner_step_device,
+                    self.transformer.inner_step,
                     capture_inputs=dict(
                         video_1BNI=video_lat_dev,
                         timestep=timestep,
@@ -423,7 +420,6 @@ class LTXFastPipeline(LTXAVPipeline):
                         audio_padding_mask=tt_pad_mask_sp,
                         audio_padding_mask_full=tt_pad_mask_full,
                         video_padding_mask=tt_v_pad_mask_sp,
-                        video_padding_mask_full=tt_v_pad_mask_full,
                         gather_output=False,
                     ),
                     replay_inputs=dict(
@@ -465,7 +461,7 @@ class LTXFastPipeline(LTXAVPipeline):
 
             # video_N / audio_N here are the LOGICAL (unpadded) counts forwarded as
             # ``logical_n`` to ring SDPA so padded K positions get masked.
-            v_out, a_out = self.transformer.inner_step(
+            v_out, a_out = self.transformer.forward(
                 video_1BNI_torch=video_lat.unsqueeze(0),
                 video_prompt_1BLP=tt_vp,
                 video_rope_cos=v_cos,
@@ -490,7 +486,6 @@ class LTXFastPipeline(LTXAVPipeline):
                 audio_padding_mask=tt_pad_mask_sp,
                 audio_padding_mask_full=tt_pad_mask_full,
                 video_padding_mask=tt_v_pad_mask_sp,
-                video_padding_mask_full=tt_v_pad_mask_full,
             )
             v_vel = LTXTransformerModel.device_to_host(
                 v_out,
