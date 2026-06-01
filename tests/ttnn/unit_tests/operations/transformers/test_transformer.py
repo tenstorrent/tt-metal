@@ -118,6 +118,84 @@ def test_transformer_attention_softmax_(
     assert_with_pcc(torch_output_tensor, output_tensor, 0.996)
 
 
+# Regression tests for #28525: when softmax inputs exceed bf16's exp() overflow point (~88),
+# an unstable softmax kernel collapses entire rows to all zeros. attention_softmax (out-of-place)
+# and attention_softmax_ (in-place; trailing underscore per PyTorch's naming convention) both
+# default to numerically stable softmax, so these inputs should still produce a correct
+# distribution that matches the torch golden.
+#
+# target_sequence_size also doubles as kernel-selection coverage:
+#   - 384 (Wt=12)   exercises the typical small-kernel path.
+#   - 4096 (Wt=128) used to push the small kernel past the 90% L1 budget and fall through to
+#                   the streaming large kernel; for the in-place variant that path then hit
+#                   TT_FATAL. The CB right-sizing in softmax_program_factory_attention_optimized
+#                   keeps both Wts in the small kernel.
+@pytest.mark.parametrize(
+    "input_low, input_high",
+    [
+        (-100.0, 100.0),  # entries straddle the bf16 exp() overflow threshold
+        (-1000.0, 1000.0),  # well past it; matches the magnitudes seen in #28525
+    ],
+)
+@pytest.mark.parametrize("target_sequence_size", [384, 4096])
+def test_transformer_attention_softmax_numeric_stability(target_sequence_size, input_low, input_high, device):
+    torch.manual_seed(0)
+
+    input_shape = (1, 1, 384, target_sequence_size)
+    torch_input_tensor = torch_random(input_shape, input_low, input_high, dtype=torch.bfloat16)
+    golden_function = ttnn.get_golden_function(ttnn.transformer.attention_softmax)
+    torch_output_tensor = golden_function(torch_input_tensor, head_size=None, attention_mask=None)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        device=device,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    # Out-of-place: returns a new tensor; input_tensor is left untouched.
+    attention_softmax_out_of_place = ttnn.transformer.attention_softmax
+    output_tensor = attention_softmax_out_of_place(
+        input_tensor, head_size=None, attention_mask=None, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    output_tensor = ttnn.to_torch(ttnn.from_device(output_tensor))
+
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.99)
+
+
+# In-place counterpart of test_transformer_attention_softmax_numeric_stability.
+@pytest.mark.parametrize(
+    "input_low, input_high",
+    [
+        (-100.0, 100.0),
+        (-1000.0, 1000.0),
+    ],
+)
+@pytest.mark.parametrize("target_sequence_size", [384, 4096])
+def test_transformer_attention_softmax_inplace_numeric_stability(target_sequence_size, input_low, input_high, device):
+    torch.manual_seed(0)
+
+    input_shape = (1, 1, 384, target_sequence_size)
+    torch_input_tensor = torch_random(input_shape, input_low, input_high, dtype=torch.bfloat16)
+    torch_attention_mask = torch_random((1, 1, 384, target_sequence_size), 0, 1.0, dtype=torch.bfloat16)
+
+    golden_function = ttnn.get_golden_function(ttnn.transformer.attention_softmax_)
+    torch_output_tensor = golden_function(torch_input_tensor, head_size=None, attention_mask=torch_attention_mask)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    attention_mask = ttnn.from_torch(torch_attention_mask, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+    # In-place: mutates input_tensor; the returned handle aliases the same buffer.
+    attention_softmax_in_place = ttnn.transformer.attention_softmax_
+    output_tensor = attention_softmax_in_place(
+        input_tensor, head_size=None, attention_mask=attention_mask, causal_mask=True
+    )
+    output_tensor = ttnn.to_torch(ttnn.from_device(output_tensor))
+
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.99)
+
+
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("num_heads", [4, 16])
 @pytest.mark.parametrize("sequence_size", [384, 1024])

@@ -171,6 +171,6 @@ jobs:
       models: ${{ needs.inspect-trace-selection-registry.outputs.selected-models }}
       trace-ids: ${{ needs.inspect-trace-selection-registry.outputs.selected-trace-ids }}
       caller-id: ${{ needs.inspect-trace-selection-registry.outputs.caller-id }}
-      allow-partial-hash-changes: ${{ github.event_name == 'schedule' && true || inputs.allow-partial-hash-changes }}
-      models-filter: ${{ inputs.models-filter || '' }}
-      upload-results: ${{ github.event_name == 'schedule' && false || inputs.upload-results }}
+      allow-partial-hash-changes: ${{ github.event_name != 'workflow_dispatch' || inputs.allow-partial-hash-changes }}
+      models-filter: ${{ github.event_name == 'workflow_dispatch' && inputs.models-filter || '' }}
+      upload-results: ${{ github.event_name == 'workflow_dispatch' && inputs.upload-results || false }}
