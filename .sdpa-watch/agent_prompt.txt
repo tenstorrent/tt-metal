@@ -20,7 +20,7 @@ Scope policy (applies to every pipeline):
 - The header emoji and `<status>` are keyed on the IN-SCOPE result, not the workflow conclusion:
     ✅ success  — zero in-scope failures detected (even if the overall workflow conclusion is failure)
     ❌ failure  — one or more in-scope failures detected (test, build, or kernel)
-    ⚠️ cancelled / timed_out / startup_failure — only if these states actually prevented the in-scope subset from running
+    ⚠️ tests-did-not-run — use whenever the in-scope tests never actually executed, regardless of the workflow conclusion. This covers GH conclusions cancelled / timed_out / startup_failure AND `failure` conclusions where the failure occurred in setup (env install, runner provisioning, docker pull, dependency fetch, etc.) before the SDPA tests had a chance to start. If you're unsure whether tests ran, prefer ⚠️ over ❌ when there's no evidence the in-scope tests were invoked.
     ⏸ skipped  — in-scope subset was skipped entirely
     ❔ anything else
 - If the in-scope subset cannot be evaluated because the log excerpt has no evidence either way, default to ✅ success (we did not detect an in-scope failure).
