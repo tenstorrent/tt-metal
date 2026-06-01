@@ -151,14 +151,19 @@ class TtMinistralMLP(LightweightModule):
                 dtype=ttnn.bfloat8_b,
             )
         elif mode == Mode.DECODE and not TG and self.prefetcher is None:
-            # decode FF1/FF3 via minimal_matmul (DRAM-sharded weights)
+            # decode FF1/FF3 via minimal_matmul (DRAM-sharded weights).
+            # Config tuned by tests/matmul/test_decode_ff13_matmul_sweep.py: at
+            # decode M=32 (1 tile) the M axis maps to grid.y, so the old 8x8 grid
+            # padded M across 8 core-rows and wasted 7/8 of them. grid 8x2 +
+            # M_block_size=1 + a larger K chunk recover ~1.12x (382us -> ~342us).
             x_dram = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
-            grid = self.args.mlp1_3_grid(cfg_seq)
             mmc_ff13 = ttnn.MinimalMatmulConfig(
-                M_block_size=8,
-                K_block_size=8,
+                M_block_size=1,
+                K_block_size=16,
                 N_block_size=8,
-                compute_with_storage_grid_size=ttnn.CoreCoord(grid[0], grid[1]),
+                subblock_h=1,
+                subblock_w=4,
+                compute_with_storage_grid_size=ttnn.CoreCoord(8, 2),
             )
             w1_out = ttnn.experimental.minimal_matmul(
                 x_dram,
