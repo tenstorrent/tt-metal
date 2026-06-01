@@ -44,8 +44,9 @@ def _run_single_deltanet_layer_both_modes(device, seq_len, chunk_size=64):
 
     from safetensors import safe_open
 
-    from models.demos.blackhole.qwen3_5_9b.tt.qwen35_gated_deltanet import Qwen35GatedDeltaNet
+    from models.demos.blackhole.qwen3_5_9b.tt.gdn import GDNConfig, Qwen35GatedDeltaNet
     from models.demos.blackhole.qwen3_5_9b.tt.weight_mapping import remap_qwen35_state_dict
+    from models.demos.blackhole.qwen3_5_9b.utils.substate import substate
 
     args = Qwen35ModelArgs(mesh_device=device)
     raw = {}
@@ -58,7 +59,7 @@ def _run_single_deltanet_layer_both_modes(device, seq_len, chunk_size=64):
 
     # Use layer 0 (a DeltaNet layer)
     layer_num = 0
-    dn = Qwen35GatedDeltaNet(args, sd, layer_num, device)
+    dn = Qwen35GatedDeltaNet(device, GDNConfig.from_args(args), substate(sd, f"layers.{layer_num}.linear_attn"))
 
     # Create random input of the target seq_len
     x_torch = torch.randn(1, seq_len, 4096, dtype=torch.bfloat16)
@@ -197,8 +198,9 @@ def test_chunked_state_pcc(seq_len, device):
 
     from safetensors import safe_open
 
-    from models.demos.blackhole.qwen3_5_9b.tt.qwen35_gated_deltanet import Qwen35GatedDeltaNet
+    from models.demos.blackhole.qwen3_5_9b.tt.gdn import GDNConfig, Qwen35GatedDeltaNet
     from models.demos.blackhole.qwen3_5_9b.tt.weight_mapping import remap_qwen35_state_dict
+    from models.demos.blackhole.qwen3_5_9b.utils.substate import substate
 
     args = Qwen35ModelArgs(mesh_device=device)
     raw = {}
@@ -209,7 +211,7 @@ def test_chunked_state_pcc(seq_len, device):
     sd = remap_qwen35_state_dict(raw)
     del raw
 
-    dn = Qwen35GatedDeltaNet(args, sd, layer_num=0, device=device)
+    dn = Qwen35GatedDeltaNet(device, GDNConfig.from_args(args), substate(sd, "layers.0.linear_attn"))
 
     torch.manual_seed(42)
     x_torch = torch.randn(1, seq_len, 4096, dtype=torch.bfloat16)

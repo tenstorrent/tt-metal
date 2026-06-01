@@ -6,8 +6,8 @@ based on the layer index. Both share the same RMSNorm + residual pattern and MLP
 """
 import ttnn
 from models.demos.blackhole.qwen3_5_9b.tt.attention import AttentionConfig, Qwen35GatedAttention
+from models.demos.blackhole.qwen3_5_9b.tt.gdn import GDNConfig, Qwen35GatedDeltaNet
 from models.demos.blackhole.qwen3_5_9b.tt.mlp import Qwen35MLP
-from models.demos.blackhole.qwen3_5_9b.tt.qwen35_gated_deltanet import Qwen35GatedDeltaNet
 from models.demos.blackhole.qwen3_5_9b.utils.substate import substate
 
 
@@ -65,7 +65,9 @@ class Qwen35TransformerBlock:
             attn_cache = (weight_cache_path / f"layers.{layer_num}") if weight_cache_path else None
             self.attention = Qwen35GatedAttention(device, AttentionConfig.from_args(args), attn_state, attn_cache)
         else:
-            self.attention = Qwen35GatedDeltaNet(args, state_dict, layer_num, device, weight_cache_path)
+            gdn_state = substate(state_dict, f"layers.{layer_num}.linear_attn")
+            gdn_cache = (weight_cache_path / f"layers.{layer_num}") if weight_cache_path else None
+            self.attention = Qwen35GatedDeltaNet(device, GDNConfig.from_args(args), gdn_state, gdn_cache)
 
         mlp_state = substate(state_dict, f"layers.{layer_num}.mlp")
         mlp_cache = (weight_cache_path / f"layers.{layer_num}") if weight_cache_path else None

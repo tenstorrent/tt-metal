@@ -955,7 +955,7 @@ class Qwen35Model:
                     torch.zeros(
                         batch_size,
                         dn.conv_kernel_size - 1,
-                        dn.args.linear_q_dim + dn.args.linear_k_dim + dn.args.linear_v_dim,
+                        dn.cfg.q_dim + dn.cfg.k_dim + dn.cfg.v_dim,
                         dtype=torch.bfloat16,
                     ),
                     dtype=ttnn.bfloat16,
