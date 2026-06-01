@@ -10,7 +10,10 @@ embeddings connectors) against ``encode_prompts_reference`` (official LTX-2 CPU
 PromptEncoder) for the same prompt, reporting PCC of the final video (4096-dim)
 and audio (2048-dim) context embeddings.
 
-Single Blackhole chip (1x1 mesh, tp=1):
+Parametrized over two meshes (Blackhole): 1x1 (TP=1, no fabric) and 2x4 (TP=4,
+FABRIC_1D). Asserts video PCC > 0.999 and audio PCC > 0.998, and logs warm encode
+wall-clock. Do NOT run the 2x4 case under TT_METAL_WATCHER — the watcher overflows
+the active-eth fabric-router kernel-config buffer at device open.
     pytest models/tt_dit/tests/encoders/gemma/test_gemma_encode_av.py -s
 """
 
@@ -26,6 +29,7 @@ import torch
 from loguru import logger
 from safetensors import safe_open
 
+import ttnn
 from models.tt_dit.pipelines.ltx.pipeline_ltx_av import LTXAVPipeline
 
 PROMPT = "A plump orange tabby cat sits on a piano bench playing keys with its paws."
@@ -69,8 +73,16 @@ def pcc(a, b):
     return ((a_m * b_m).sum() / d).item() if d > 0 else 0.0
 
 
-@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=["mesh_device"])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=["device_params"])
+# 2x4 drives the encoder's TP all-gathers over CCL, which needs the 1D fabric up;
+# 1x1 is single-chip with no CCL, so it must run without fabric.
+@pytest.mark.parametrize(
+    ("mesh_device", "device_params"),
+    [
+        pytest.param((1, 1), {"l1_small_size": 8192}, id="1x1"),
+        pytest.param((2, 4), {"l1_small_size": 8192, "fabric_config": ttnn.FabricConfig.FABRIC_1D}, id="2x4"),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
 def test_encode_prompts_device_vs_reference(*, mesh_device):
     gemma = _gemma_path()
     ckpt = _ltx_ckpt()
@@ -82,7 +94,8 @@ def test_encode_prompts_device_vs_reference(*, mesh_device):
     # Bare pipeline: checkpoint_name=None skips the heavy transformer/VAE load.
     pipe = LTXAVPipeline.create_pipeline(mesh_device, checkpoint_name=None, gemma_path=gemma, mode="av")
 
-    # On-device Gemma encoder (full 48 layers, tp from the 1x1 mesh = 1).
+    # On-device Gemma encoder (full 48 layers). TP follows the T5 pattern (axis-1 width):
+    # TP=1 on 1x1, TP=4 on 2x4 — set inside the loader, no override needed.
     pipe.load_gemma_encoder(gemma, num_layers=48, sequence_length=1024)
 
     # Load only the connector weights from the 46GB checkpoint.
@@ -100,13 +113,29 @@ def test_encode_prompts_device_vs_reference(*, mesh_device):
     v_ref = ref[0].video_encoding.float()
     a_ref = ref[0].audio_encoding.float()
 
-    # Device embeds.
+    # Device embeds. First call compiles + populates the program cache; the
+    # second is warm, so it is the one we time for e2e encode latency.
+    import time
+
+    pipe.encode_prompts_device([PROMPT])
+    t0 = time.perf_counter()
     dev = pipe.encode_prompts_device([PROMPT])
+    t_warm_ms = (time.perf_counter() - t0) * 1e3
+
     v_dev = torch.as_tensor(dev[0][0]).float()
     a_dev = torch.as_tensor(dev[0][1]).float()
 
-    logger.info(f"VIDEO  ref={tuple(v_ref.shape)} dev={tuple(v_dev.shape)}  PCC={pcc(v_dev, v_ref):.4f}")
-    logger.info(f"AUDIO  ref={tuple(a_ref.shape)} dev={tuple(a_dev.shape)}  PCC={pcc(a_dev, a_ref):.4f}")
+    logger.info(f"ENCODE warm wall-clock (mesh {tuple(mesh_device.shape)}): {t_warm_ms:.1f} ms")
+
+    v_pcc = pcc(v_dev, v_ref)
+    a_pcc = pcc(a_dev, a_ref)
+    logger.info(f"VIDEO  ref={tuple(v_ref.shape)} dev={tuple(v_dev.shape)}  PCC={v_pcc:.4f}")
+    logger.info(f"AUDIO  ref={tuple(a_ref.shape)} dev={tuple(a_dev.shape)}  PCC={a_pcc:.4f}")
+
+    # Audio rides ~0.999; the looser bound reflects the longer connector chain it
+    # passes through, not a regression. Tighten if the audio path is later hardened.
+    assert v_pcc > 0.999, f"video context PCC {v_pcc:.4f} below 0.999"
+    assert a_pcc > 0.998, f"audio context PCC {a_pcc:.4f} below 0.998"
 
 
 if __name__ == "__main__":
