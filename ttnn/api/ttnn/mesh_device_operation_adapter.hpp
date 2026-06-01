@@ -337,7 +337,7 @@ public:
         // WorkloadDescriptor variant: does the factory define a static create_workload_descriptor
         // that takes the tensor coord range set AND returns a
         // tt::tt_metal::WorkloadDescriptor?  The return-type check pins
-        // the contract so an accidental wrong signature surfaces as a clean
+        // the requirement so an accidental wrong signature surfaces as a clean
         // concept failure rather than silent fallback to the ProgramDescriptor variant.
         static constexpr bool has_workload_descriptor = requires(
             const operation_attributes_t& a,

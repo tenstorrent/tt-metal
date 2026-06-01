@@ -90,7 +90,7 @@ struct ResolvedBindings {
 // declares, both runtime-arg bindings and CB `.buffer` bindings.  Deciding
 // whether the resulting `ResolvedBindings` is safe to fast-path on a given
 // cache hit is the caller's job (see DescriptorMeshWorkloadAdapter::apply_descriptor),
-// because the safety check depends on workload contract — specifically whether
+// because the safety check depends on workload variant — specifically whether
 // a slow-path rebuild is available to refresh raw (non-binding) runtime args.
 //
 // tensor_buffers is ordered inputs-first (see collect_tensor_buffers): the first

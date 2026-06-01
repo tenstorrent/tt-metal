@@ -138,10 +138,10 @@ ResolvedBindings resolve_bindings(
     // mechanism by which input/output addresses can change between dispatches.
     //
     // The CB-resolution gate (whether to use the result on cache hit) lives
-    // in DescriptorMeshWorkloadAdapter::apply_descriptor and is contract-aware:
-    //   - contract 1: fast-path only when rt-arg bindings are present;
+    // in DescriptorMeshWorkloadAdapter::apply_descriptor and is variant-aware:
+    //   - ProgramDescriptor variant: fast-path only when rt-arg bindings are present;
     //     otherwise rebuild the descriptor.
-    //   - contract 2: always fast-path; no rebuild fallback.
+    //   - WorkloadDescriptor variant: always fast-path; no rebuild fallback.
     {
         auto program_cbs = program.circular_buffers();
         for (uint32_t ci = 0; ci < static_cast<uint32_t>(desc.cbs.size()); ++ci) {
@@ -229,7 +229,7 @@ void apply_resolved_bindings(
 void apply_dynamic_runtime_args(Program& program, std::span<const DynamicRuntimeArg> dynamic_args) {
     // dynamic_args are not sorted (unlike resolved rt_args): the per-op get_dynamic_runtime_args()
     // typically emits only a handful of slots, so re-deriving the RuntimeArgsData reference per
-    // entry is cheap and avoids imposing an ordering contract on op authors.  The reference is
+    // entry is cheap and avoids imposing an ordering requirement on op authors.  The reference is
     // taken fresh on each call so first-enqueue retargeting of rt_args_data is observed correctly.
     for (const auto& d : dynamic_args) {
         auto& data =
