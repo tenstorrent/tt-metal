@@ -218,6 +218,32 @@ edits were reverted to pristine. What the evidence robustly says about the race:
 DPRINT) — then a structural fix. This is kernel-owner-level work with slow (61L)
 validation; the 5L fast oracle cannot be trusted for it.
 
+### Fix levers ruled out at 61L (all reverted to pristine)
+| lever | 61L/iter25/pie960 (two runs) | verdict |
+|-------|------------------------------|---------|
+| unified baseline | 14 / 260 | ND (control) |
+| reader sender `flushed`→`barrier` + atomic barriers | ND already at 5L (reliable) | not it |
+| single-buffer `cb_in0_down_full` | 260 / 1086 | not it |
+| single-buffer ALL input CBs | 2919 / 260 | not it |
+| `fp32_dest_acc_en=true` | 14 / 469 (both p=1.0) | not it |
+| **naive path (shipped fix)** | **2845 / 2845** | **deterministic** |
+
+⇒ Not CB double-buffering, not sender-side mcast completion ordering, not
+fp-accumulation precision. The defect is a **cross-core data race** (read-before-write)
+in the unified FFN compute path, whose outcome is fixed-per-process — i.e. it depends
+on per-process core scheduling/arbitration, which global synchronization (DPRINT)
+forces into a canonical order (hence DPRINT masks it). Each process confidently
+computes a *different* wrong result (fp32 runs both gave p=1.0 on different tokens),
+so it is corrupting real data, not just last-bit rounding.
+
+### Honest status
+The observable non-determinism is **fixed** (deterministic naive default, validated at
+full 61L/iter25). The **unified kernel's internal race is NOT structurally fixed** —
+it is precisely characterized and all accessible fix levers are ruled out, but pinning
+the exact racing access requires DRAM-scratch 61L instrumentation + likely NoC-level
+analysis (kernel-owner work). Recommended next step is exactly that; the reliable
+determinism is available now via the shipped default (perf cost) until then.
+
 ---
 ## (superseded) earlier hypothesis — CB double-buffering of `cb_in0_down_full`
 
