@@ -153,6 +153,20 @@ SHAPES = [
     (128, 6144, 768, 12, 9, True, "to_out"),  # double-block to_out prompt
     (4096, 6144, 4608, 12, 9, True, "plain"),  # double-block ff1 spatial (swiglu)
     (128, 6144, 4608, 12, 9, True, "plain"),  # double-block ff1 prompt (swiglu)
+    # -------------------------------------------------------------------------
+    # Flux2 BH 4×8 ring — untuned shapes at 1024 resolution (2026-05-31)
+    # -------------------------------------------------------------------------
+    # 11x10 non-AGMM shapes
+    (2048, 128, 1536, 11, 10, False, "plain"),  # x_embedder-like (small K)
+    (2048, 6144, 128, 11, 10, False, "plain"),  # proj_out
+    (2048, 6144, 4608, 11, 10, False, "plain"),  # proj_mlp spatial (swiglu)
+    (64, 6144, 4608, 11, 10, False, "plain"),  # proj_mlp prompt (swiglu)
+    (2048, 6144, 9216, 11, 10, False, "plain"),  # large ff / qkv spatial
+    # 12x9 AGMM shapes — to_out uses addcmul (full_M = M * sp_size fix applied)
+    (2048, 6144, 1536, 12, 9, True, "to_out"),  # double-block to_out spatial
+    (64, 6144, 1536, 12, 9, True, "to_out"),  # double-block to_out prompt
+    (2048, 6144, 9216, 12, 9, True, "plain"),  # double-block ff1 spatial
+    (64, 6144, 9216, 12, 9, True, "plain"),  # double-block ff1 prompt
 ]
 
 SHAPE_IDS = [f"{M}_{K}_{N}_{cgx}x{cgy}_{'agmm' if agmm else 'mm'}_{uc}" for M, K, N, cgx, cgy, agmm, uc in SHAPES]
@@ -339,6 +353,29 @@ def pick_subblock(m_block, n_block, max_dest_volume=4):
                 best = (h, w)
                 best_product = h * w
     return best
+
+
+# Aliases used by test_sweep_mm.py
+def get_block_candidates(per_core_tiles):
+    return get_mn_block_candidates(per_core_tiles)
+
+
+def get_divisors(k_tiles):
+    return get_k_block_candidates(k_tiles)
+
+
+def generate_subblock_combos(m_block, n_block, max_dest_volume=4):
+    """Return list of valid (sb_h, sb_w) pairs for given block sizes."""
+    combos = []
+    for h in range(1, min(m_block, max_dest_volume) + 1):
+        if m_block % h != 0:
+            continue
+        for w in range(1, min(n_block, max_dest_volume) + 1):
+            if n_block % w != 0:
+                continue
+            if h * w <= max_dest_volume:
+                combos.append((h, w))
+    return combos
 
 
 def generate_kn_combos(K_per_device, N_per_core, m_block=1, use_case="plain"):
