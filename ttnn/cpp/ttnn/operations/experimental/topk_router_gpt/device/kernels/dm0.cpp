@@ -68,8 +68,8 @@ void kernel_main() {
 
         for (uint32_t k = 0; k < block; k++) {
             uint32_t kg = k_tile_offset + tiles_done + k;
-            noc_async_read_tile(kg, input_addrgen, inp_wr + k * tile_size);
-            noc_async_read_tile(kg * n_tiles_total + n_tile_id, weight_addrgen, wt_wr + k * tile_size);
+            noc_async_read_page(kg, input_addrgen, inp_wr + k * tile_size);
+            noc_async_read_page(kg * n_tiles_total + n_tile_id, weight_addrgen, wt_wr + k * tile_size);
         }
         noc_async_read_barrier();
         cb_push_back(cb_input, block);
@@ -84,7 +84,7 @@ void kernel_main() {
 
         cb_reserve_back(cb_bias, 1);
         uint32_t bias_write_ptr = get_write_ptr(cb_bias);
-        noc_async_read_tile(n_tile_id, bias_addrgen, bias_write_ptr);
+        noc_async_read_page(n_tile_id, bias_addrgen, bias_write_ptr);
         noc_async_read_barrier();
         cb_push_back(cb_bias, 1);
     }

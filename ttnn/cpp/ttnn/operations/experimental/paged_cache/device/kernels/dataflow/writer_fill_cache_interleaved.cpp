@@ -172,7 +172,7 @@ void kernel_main() {
             cb_wait_front(cb_id_in, Wt);
             uint32_t l1_read_addr = get_read_ptr(cb_id_in);
             for (uint32_t w = 0; w < Wt; ++w) {
-                noc_async_write_tile(physical_tile_id, out_gen, l1_read_addr);
+                noc_async_write_page(physical_tile_id, out_gen, l1_read_addr);
                 l1_read_addr += tile_bytes;
                 physical_tile_id += 1;
             }
