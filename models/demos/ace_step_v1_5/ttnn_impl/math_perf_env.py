@@ -423,9 +423,28 @@ def ace_step_vae_conv1d_memory_config(ttnn: Any, *, kernel_size: int):
     return getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
 
 
+_VAE_TRACE_CAPTURE_DEPTH = 0
+
+
+def ace_step_vae_trace_capture_enter() -> None:
+    """Mark VAE trace capture active (``begin_trace_capture`` … ``end_trace_capture``)."""
+    global _VAE_TRACE_CAPTURE_DEPTH
+    _VAE_TRACE_CAPTURE_DEPTH += 1
+
+
+def ace_step_vae_trace_capture_exit() -> None:
+    global _VAE_TRACE_CAPTURE_DEPTH
+    _VAE_TRACE_CAPTURE_DEPTH = max(0, _VAE_TRACE_CAPTURE_DEPTH - 1)
+
+
+def ace_step_vae_trace_capture_active() -> bool:
+    return _VAE_TRACE_CAPTURE_DEPTH > 0
+
+
 def ace_step_vae_synchronize(ttnn: Any, device: Any) -> None:
     """Drain the device queue so ``deallocate`` / ``deallocate_activation`` frees L1 before k>7 conv compile."""
-    if device is None:
+    if device is None or ace_step_vae_trace_capture_active():
+        # ``synchronize_device`` records host events; forbidden during trace capture.
         return
     try:
         ttnn.synchronize_device(device)
@@ -525,6 +544,8 @@ def ace_step_enable_tracy_profiler_env() -> None:
 def ace_step_flush_device_profiler(device) -> None:
     """Sync and drain per-RISC device profiler rings (avoids Tracy 'Device data missing' on merge)."""
     if not ace_step_device_profiler_enabled():
+        return
+    if ace_step_vae_trace_capture_active():
         return
     if os.environ.get("ACE_STEP_USE_TRACE", "").lower() in ("1", "true", "yes"):
         return
@@ -1339,6 +1360,11 @@ def ace_step_lm_unified_decode_shard_enabled() -> bool:
 def ace_step_lm_decode_qk_norm_sharded_enabled() -> bool:
     """Sharded Q/K head RMSNorm on decode (no L1 interleaved ping-pong). Default on."""
     return os.environ.get("ACE_STEP_LM_DECODE_QK_NORM_SHARDED", "1").lower() not in ("0", "false", "no", "off")
+
+
+def ace_step_lm_head_sharded_norm_enabled() -> bool:
+    """Sharded prefill ``lm_head`` RMSNorm (skip interleaved norm + ``interleaved_to_sharded``). Default on."""
+    return os.environ.get("ACE_STEP_LM_LM_HEAD_SHARDED_NORM", "1").lower() not in ("0", "false", "no", "off")
 
 
 def ace_step_lm_sdpa_gather_unified_enabled() -> bool:
