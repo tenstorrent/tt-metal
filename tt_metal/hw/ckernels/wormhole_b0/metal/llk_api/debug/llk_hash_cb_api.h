@@ -28,6 +28,12 @@
 // All entrypoints expand to empty inlines when DEBUG_CB_HASH is undefined.
 // ===========================================================================
 
+#ifdef DEBUG_CB_HASH
+// FNV-1a-32 constants (word-granularity variant; see cb_hash.h).
+static constexpr uint32_t FNV1A32_INIT = 0x811c9dc5u;
+static constexpr uint32_t FNV1A32_PRIME = 0x01000193u;
+#endif
+
 // Scalar FNV-1a-32 over a circular buffer's L1 bytes, printed via DPRINT.
 // fifo_rd_ptr / fifo_page_size on TRISC are stored in 16B units; shift by
 // cb_addr_shift (== CIRCULAR_BUFFER_COMPUTE_ADDR_SHIFT == 4) to get bytes.
@@ -39,17 +45,16 @@ inline void llk_hash_cb_trisc(uint32_t cb_id, uint32_t num_tiles, uint32_t label
 
     // volatile to keep the FNV loop intact (no vectorization/reordering).
     volatile tt_l1_ptr uint32_t* const p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base_bytes);
-    uint32_t h = 0x811c9dc5u;
+    uint32_t h = FNV1A32_INIT;
     for (uint32_t i = 0; i < n_words; ++i) {
-        h = (h ^ p[i]) * 0x01000193u;
+        h = (h ^ p[i]) * FNV1A32_PRIME;
     }
 
     // Print the hash in the diff-friendly format documented in cb_hash.h.
     // DPRINT is safe here because hash_cb_trisc defaults to the UNPACK thread
     // (the only TRISC with a DPRINT buffer) and the hash loop above has
     // completed — no concurrent L1 access conflicts.
-    DPRINT << "hash[0x" << HEX() << label << "] cb=" << DEC() << cb_id << " tiles=" << num_tiles << " = 0x" << HEX()
-           << h << DEC() << ENDL();
+    DPRINT("hash[0x{:x}] cb={} tiles={} = 0x{:x}\n", label, cb_id, num_tiles, h);
 #else
     (void)cb_id;
     (void)num_tiles;
@@ -79,8 +84,7 @@ inline void llk_hash_cb_sfpu_print_from_l1(
         invalidate_l1_cache();
     }
     const uint32_t h = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_hash_addr);
-    DPRINT << "hash[0x" << HEX() << label << "] cb=" << DEC() << cb_id << " tiles=" << num_tiles << " = 0x" << HEX()
-           << h << DEC() << ENDL();
+    DPRINT("hash[0x{:x}] cb={} tiles={} = 0x{:x}\n", label, cb_id, num_tiles, h);
 #else
     (void)l1_hash_addr;
     (void)l1_ready_addr;
