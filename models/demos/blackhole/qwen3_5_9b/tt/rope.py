@@ -53,17 +53,20 @@ class Qwen35RoPESetup:
 
         # Pre-compute full RoPE table on device for fast decode lookups
         # Shape: [1, max_seq_len, head_dim] on device
+        # mesh_mapper replicates to all devices; on a 1-device mesh this is a no-op.
         self.cos_device = ttnn.from_torch(
             self.cos_cpu.unsqueeze(0),  # [1, max_seq_len, head_dim]
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
         )
         self.sin_device = ttnn.from_torch(
             self.sin_cpu.unsqueeze(0),  # [1, max_seq_len, head_dim]
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
         )
 
     def get_rot_mats(self, position_ids: torch.Tensor):
@@ -93,8 +96,20 @@ class Qwen35RoPESetup:
         cos = self.cos_cpu[flat_pos].reshape(B, T, self.head_dim)
         sin = self.sin_cpu[flat_pos].reshape(B, T, self.head_dim)
 
-        cos_ttnn = ttnn.from_torch(cos, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
-        sin_ttnn = ttnn.from_torch(sin, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+        cos_ttnn = ttnn.from_torch(
+            cos,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+        )
+        sin_ttnn = ttnn.from_torch(
+            sin,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+        )
         return cos_ttnn, sin_ttnn
 
     def get_cos_sin_host(self, pos):

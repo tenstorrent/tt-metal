@@ -11,10 +11,11 @@ from loguru import logger
 from tqdm import tqdm
 
 import ttnn
+from models.common.rmsnorm import RMSNorm
 from models.demos.blackhole.qwen3_5_9b.tt.layer import Qwen35DecoderLayer
 from models.demos.blackhole.qwen3_5_9b.tt.model_config import Qwen35ModelArgs
-from models.demos.blackhole.qwen3_5_9b.tt.rms_norm import rms_norm_ttnn
 from models.demos.blackhole.qwen3_5_9b.tt.rope import Qwen35RoPESetup
+from models.tt_transformers.tt.common import Mode
 
 
 class Qwen35Model:
@@ -30,16 +31,31 @@ class Qwen35Model:
     def __init__(self, mesh_device, args, state_dict, tensor_cache_path=None):
         self.args = args
         self.device = mesh_device
+        self.mesh_device = mesh_device  # Generator reads model.mesh_device
+        self.num_devices = mesh_device.get_num_devices()
+        # CCL collective for multi-device all-reduce; None on single device (the
+        # framework MLP/LMHead/all-reduce ops no-op when there is nothing to reduce).
+        if self.num_devices > 1:
+            from models.tt_transformers.tt.ccl import TT_CCL
 
-        # Embedding
-        embed_weight = state_dict["tok_embeddings.weight"]
-        self.tok_embeddings = ttnn.as_tensor(
-            embed_weight.unsqueeze(0).unsqueeze(0),
+            self.tt_ccl = TT_CCL(mesh_device)
+        else:
+            self.tt_ccl = None
+        self.configuration = args  # Generator reads model.configuration.max_seq_len
+        self.sampling = None  # host sampling only (no on-device sampler)
+        self.sampling_dp = 1
+        self._supports_on_device_sampling = False
+
+        # Embedding — framework Embedding (mesh-aware: ShardTensor2dMesh(dims=(None,3))
+        # replicates the table on a 1-device mesh, identical to the old single-device path).
+        from models.tt_transformers.tt.embedding import Embedding
+
+        self.embd = Embedding(
+            mesh_device=mesh_device,
+            args=args,
+            weight_cache_path=tensor_cache_path,
+            state_dict=state_dict,
             dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=tensor_cache_path / "tok_embeddings.weight" if tensor_cache_path else None,
         )
 
         # RoPE setup (for gated attention layers only)
@@ -52,17 +68,22 @@ class Qwen35Model:
             layer = Qwen35DecoderLayer(mesh_device, args, state_dict, i, tensor_cache_path)
             self.layers.append(layer)
 
-        # Final norm — pre-offset by +1 for zero-centered RMSNorm
-        norm_weight = state_dict["norm.weight"] + 1.0
-        self.norm_weight = ttnn.as_tensor(
-            norm_weight,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
+        # Final norm — framework RMSNorm (mesh-aware; applies the +1 zero-centered
+        # offset internally via add_unit_offset=True).
+        # NOTE (multi-device/TP handoff): is_distributed=None is correct on single device.
+        # For 27B TP, the framework Embedding shards the hidden dim, so the hidden state
+        # entering RMSNorm is sharded -> these norms must then pass is_distributed=args.is_distributed_norm
+        # + tt_ccl=<the model's self.tt_ccl> (or wrap in tt_transformers DistributedNorm) to all-gather.
+        self.norm = RMSNorm(
             device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=tensor_cache_path / "norm.weight" if tensor_cache_path else None,
+            dim=args.dim,
+            state_dict=state_dict,
+            weight_key="norm",
+            weight_cache_path=tensor_cache_path,
+            weight_dtype=ttnn.bfloat16,
+            add_unit_offset=True,
+            eps=args.norm_eps,
         )
-        self.norm_eps = args.norm_eps
 
         # LM Head — 2D [in, out] for ttnn.linear
         lm_head_weight = state_dict["output.weight"].T.contiguous()  # [4096, vocab_size]
@@ -78,8 +99,6 @@ class Qwen35Model:
         self.vocab_size = args.vocab_size
         self._paged_kv_caches = None
         self._attention_layer_indices = [i for i in range(args.n_layers) if args.is_full_attention_layer(i)]
-        self._trace_id = None
-        self._prev_page_table = None
         self._deltanet_external_states = None  # list of (recurrent, conv) tuples, set by allocate_kv_caches
         # Trace-prefill: persistent device buffers for inputs that would otherwise
         # be allocated per-call inside prefill_layer_chunked. Populated by
@@ -105,6 +124,10 @@ class Qwen35Model:
         self._chunk_full_page_table_buf = None
         self._chunk_cos_buf = None
         self._chunk_sin_buf = None
+
+    def switch_mode(self, mode):
+        """Generator calls this on mode change; Qwen has no prefetcher, so no-op."""
+        return None
 
     @classmethod
     def from_pretrained(cls, device, max_batch_size=1, max_seq_len=2048, n_layers=None, hf_model=None):
@@ -142,7 +165,7 @@ class Qwen35Model:
         self.reset_state(batch_size=B)
 
         token_ids_ttnn = ttnn.from_torch(token_ids, dtype=ttnn.uint32, device=self.device)
-        x = ttnn.embedding(token_ids_ttnn, self.tok_embeddings, layout=ttnn.TILE_LAYOUT)
+        x = self.embd(token_ids_ttnn)
 
         position_ids = torch.arange(T).unsqueeze(0).expand(B, -1)
         cos, sin = self.rope.get_rot_mats(position_ids)
@@ -150,7 +173,7 @@ class Qwen35Model:
         for layer in self.layers:
             x = layer.forward(x, cos=cos, sin=sin, mode="prefill")
 
-        x = rms_norm_ttnn(x, self.norm_weight, eps=self.norm_eps)
+        x = self.norm(x, mode=Mode.PREFILL)
 
         x_last = x[:, -1:, :]
         logits = ttnn.linear(x_last, self.lm_head_weight)
@@ -190,7 +213,7 @@ class Qwen35Model:
         else:
             token_ids_ttnn = ttnn.from_torch(token_ids, dtype=ttnn.uint32, device=self.device)
 
-        x = ttnn.embedding(token_ids_ttnn, self.tok_embeddings, layout=ttnn.TILE_LAYOUT)
+        x = self.embd(token_ids_ttnn)
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         if trace_inputs is None:
             ttnn.deallocate(token_ids_ttnn)
@@ -288,7 +311,7 @@ class Qwen35Model:
             # run rms_norm + lm_head outside the trace.
             return x
 
-        x_last = rms_norm_ttnn(x_last, self.norm_weight, eps=self.norm_eps)
+        x_last = self.norm(x_last, mode=Mode.PREFILL)
         logits = ttnn.linear(x_last, self.lm_head_weight)
         ttnn.deallocate(x)
 
@@ -298,7 +321,7 @@ class Qwen35Model:
         B = token_ids.shape[0]
 
         token_ids_ttnn = ttnn.from_torch(token_ids, dtype=ttnn.uint32, device=self.device)
-        x = ttnn.embedding(token_ids_ttnn, self.tok_embeddings, layout=ttnn.TILE_LAYOUT)
+        x = self.embd(token_ids_ttnn)
         ttnn.deallocate(token_ids_ttnn)
 
         position_ids = torch.full((B, 1), current_pos, dtype=torch.long)
@@ -317,7 +340,7 @@ class Qwen35Model:
         for i, layer in enumerate(self.layers):
             x = layer.forward(x, cos=cos, sin=sin, mode="decode", position_tensor=cur_pos_tensor)
 
-        x = rms_norm_ttnn(x, self.norm_weight, eps=self.norm_eps)
+        x = self.norm(x, mode=Mode.DECODE)
         logits = ttnn.linear(x, self.lm_head_weight)
         ttnn.deallocate(x)
 
@@ -327,98 +350,16 @@ class Qwen35Model:
         """Device-facing paged decode forward. ALL inputs are device tensors.
         Trace-safe: no host-device transfers inside this function.
         """
-        x = ttnn.embedding(token_ids_buf, self.tok_embeddings, layout=ttnn.TILE_LAYOUT)
+        x = self.embd(token_ids_buf)
         for layer in self.layers:
             if layer.is_full_attention:
                 x = layer.forward(x, cos, sin, position_tensor=cur_pos_tensor, page_table=page_table, mode="decode")
             else:
                 x = layer.forward(x, mode="decode")
-        x = rms_norm_ttnn(x, self.norm_weight, eps=self.norm_eps)
+        x = self.norm(x, mode=Mode.DECODE)
         logits = ttnn.linear(x, self.lm_head_weight)
         ttnn.deallocate(x)
         return logits
-
-    def capture_decode_trace_paged(self, device, page_table):
-        """Capture a trace for paged decode. page_table is a host torch.Tensor."""
-        assert self._deltanet_external_states is not None, "Call allocate_kv_caches first"
-
-        if self._trace_id is not None:
-            ttnn.release_trace(device, self._trace_id)
-            self._trace_id = None
-            for buf_name in ["_trace_token_ids", "_trace_cos", "_trace_sin", "_trace_cur_pos", "_trace_page_table"]:
-                buf = getattr(self, buf_name, None)
-                if buf is not None:
-                    ttnn.deallocate(buf)
-
-        self._trace_token_ids = ttnn.from_torch(
-            torch.zeros(1, 1, dtype=torch.int32),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
-        )
-        cos_host, sin_host = self.rope.get_cos_sin_host(0)
-        self._trace_cos = ttnn.to_device(cos_host, device)
-        self._trace_sin = ttnn.to_device(sin_host, device)
-        self._trace_cur_pos = ttnn.from_torch(
-            torch.zeros(1, dtype=torch.int32),
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
-        )
-        self._trace_page_table = ttnn.from_torch(
-            page_table,
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
-        )
-
-        saved = self._save_deltanet_states()
-        dummy_tokens = torch.zeros(1, 1, dtype=torch.long)
-        self.decode_paged(dummy_tokens, 0, page_table)
-        ttnn.synchronize_device(device)
-
-        self._restore_deltanet_states(saved, device)
-        saved = self._save_deltanet_states()
-
-        self._trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-        self._trace_output = self._forward_decode(
-            self._trace_token_ids,
-            self._trace_cos,
-            self._trace_sin,
-            self._trace_cur_pos,
-            self._trace_page_table,
-        )
-        ttnn.end_trace_capture(device, self._trace_id, cq_id=0)
-
-        self._restore_deltanet_states(saved, device)
-        logger.info("Paged trace captured successfully!")
-
-    def decode_traced_paged(self, token_ids, current_pos, page_table):
-        """Replay captured paged trace with updated inputs. All params are host types."""
-        assert self._trace_id is not None, "Call capture_decode_trace_paged first"
-        assert current_pos < self.args.max_seq_len, f"Position {current_pos} >= max_seq_len {self.args.max_seq_len}"
-
-        token_host = ttnn.from_torch(token_ids.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-        ttnn.copy_host_to_device_tensor(token_host, self._trace_token_ids)
-
-        cos_host, sin_host = self.rope.get_cos_sin_host(current_pos)
-        ttnn.copy_host_to_device_tensor(cos_host, self._trace_cos)
-        ttnn.copy_host_to_device_tensor(sin_host, self._trace_sin)
-
-        cur_pos_host = ttnn.from_torch(
-            torch.tensor([current_pos], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
-        )
-        ttnn.copy_host_to_device_tensor(cur_pos_host, self._trace_cur_pos)
-
-        if self._prev_page_table is None or not torch.equal(self._prev_page_table, page_table):
-            page_table_host = ttnn.from_torch(page_table, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
-            ttnn.copy_host_to_device_tensor(page_table_host, self._trace_page_table)
-            self._prev_page_table = page_table.clone()
-
-        ttnn.execute_trace(self.device, self._trace_id, cq_id=0, blocking=False)
-        ttnn.synchronize_device(self.device)
-
-        return self._trace_output
 
     def capture_prefill_trace_paged(self, device, page_table, bucket_size=4096, chunk_size=2048):
         """Capture a trace for paged prefill at a fixed bucket size.
@@ -600,7 +541,7 @@ class Qwen35Model:
         x_last = hidden[:, actual_len - 1 : actual_len, :]
         x_last = ttnn.to_layout(x_last, ttnn.TILE_LAYOUT)
         x_last = ttnn.to_memory_config(x_last, ttnn.DRAM_MEMORY_CONFIG)
-        x_last = rms_norm_ttnn(x_last, self.norm_weight, eps=self.norm_eps)
+        x_last = self.norm(x_last, mode=Mode.PREFILL)
         logits = ttnn.linear(x_last, self.lm_head_weight)
 
         ttnn.release_trace(self.device, self._prefill_trace_id)
@@ -614,7 +555,7 @@ class Qwen35Model:
         buffers (trace-safe: no host->device transfers inside). Processes one chunk through
         all layers, updating the paged KV caches and GDN recurrent/conv state IN PLACE.
         Returns the chunk's last-layer hidden state [1, chunk_size, hidden_size]."""
-        x = ttnn.embedding(token_buf, self.tok_embeddings, layout=ttnn.TILE_LAYOUT)
+        x = self.embd(token_buf)
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         for layer in self.layers:
             if layer.is_full_attention:
@@ -679,6 +620,9 @@ class Qwen35Model:
         self._chunk_page_table_buf = ttnn.from_torch(
             page_table[:, :blocks_per_chunk].contiguous(), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
         )
+        # NOTE (multi-device/TP handoff): these cos/sin trace buffers upload without a
+        # mesh_mapper (single-device). For 27B TP, add mesh_mapper=ttnn.ReplicateTensorToMesh(device)
+        # here for parity with tt/rope.py's replicated cos/sin tables.
         self._chunk_cos_buf = ttnn.from_torch(
             self.rope.cos_cpu[:chunk_size].unsqueeze(0).contiguous(),
             dtype=ttnn.bfloat16,
@@ -751,7 +695,7 @@ class Qwen35Model:
         tok = ttnn.from_torch(
             token_slice.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
         )
-        x = ttnn.embedding(tok, self.tok_embeddings, layout=ttnn.TILE_LAYOUT)
+        x = self.embd(tok)
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(tok)
         cos, sin = self.rope.get_rot_mats(torch.arange(chunk_start, chunk_start + T_tail).unsqueeze(0))
@@ -856,7 +800,7 @@ class Qwen35Model:
         x_last = hidden[:, pos_in_chunk : pos_in_chunk + 1, :]
         x_last = ttnn.to_layout(x_last, ttnn.TILE_LAYOUT)
         x_last = ttnn.to_memory_config(x_last, ttnn.DRAM_MEMORY_CONFIG)
-        x_last = rms_norm_ttnn(x_last, self.norm_weight, eps=self.norm_eps)
+        x_last = self.norm(x_last, mode=Mode.PREFILL)
         logits = ttnn.linear(x_last, self.lm_head_weight)
         return logits.cpu()
 
@@ -1008,7 +952,7 @@ class Qwen35Model:
             logits = self.prefill_layer_chunked(token_ids, chunk_size=2048, page_table=page_table_torch)
         else:
             token_ids_ttnn = ttnn.from_torch(token_ids, dtype=ttnn.uint32, device=self.device)
-            x = ttnn.embedding(token_ids_ttnn, self.tok_embeddings, layout=ttnn.TILE_LAYOUT)
+            x = self.embd(token_ids_ttnn)
             ttnn.deallocate(token_ids_ttnn)
 
             position_ids = torch.arange(T).unsqueeze(0).expand(B, -1)
@@ -1017,7 +961,7 @@ class Qwen35Model:
             for layer in self.layers:
                 x = layer.forward(x, cos=cos, sin=sin, mode="prefill")
 
-            x = rms_norm_ttnn(x, self.norm_weight, eps=self.norm_eps)
+            x = self.norm(x, mode=Mode.PREFILL)
             x_last = x[:, -1:, :]
             logits = ttnn.linear(x_last, self.lm_head_weight)
             ttnn.deallocate(x)
@@ -1072,7 +1016,7 @@ class Qwen35Model:
             page_table = ttnn.from_torch(page_table, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
 
         token_ids_ttnn = ttnn.from_torch(token_ids, dtype=ttnn.uint32, device=self.device)
-        x = ttnn.embedding(token_ids_ttnn, self.tok_embeddings, layout=ttnn.TILE_LAYOUT)
+        x = self.embd(token_ids_ttnn)
         ttnn.deallocate(token_ids_ttnn)
 
         position_ids = torch.full((B, 1), current_pos, dtype=torch.long)
@@ -1099,14 +1043,98 @@ class Qwen35Model:
             else:
                 x = layer.forward(x, cos=cos, sin=sin, mode="decode")
 
-        x = rms_norm_ttnn(x, self.norm_weight, eps=self.norm_eps)
+        x = self.norm(x, mode=Mode.DECODE)
         logits = ttnn.linear(x, self.lm_head_weight)
         ttnn.deallocate(x)
 
         return logits
 
+    # -------------------------------------------------------------------------
+    # Generator contract — decode half
+    # -------------------------------------------------------------------------
+
+    def prepare_decode_inputs_host(self, tokens, current_pos, page_table=None):
+        """Build HOST ttnn tensors for one decode step.
+
+        Returns a tuple in the order ttnn_decode_forward consumes them:
+            (tokens_tt, cur_pos_tt, rope_packed, page_table_tt)
+        All tensors are HOST (no device) so copy_host_to_device can move the
+        whole tuple in one call.
+        """
+        from models.demos.blackhole.qwen3_5_9b.tt.generator_interface import pack_rope_host
+
+        B = tokens.shape[0]
+        tokens_tt = ttnn.from_torch(tokens.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        pos = current_pos[0].item() if isinstance(current_pos, torch.Tensor) else int(current_pos)
+        cos_host, sin_host = self.rope.get_cos_sin_host(pos)  # HOST ttnn tensors [1,1,rope_head_dim]
+        rope_packed = pack_rope_host(cos_host, sin_host)  # torch-based (host)
+        cur_pos_tt = ttnn.from_torch(
+            torch.full((B,), pos, dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
+        )
+        page_table_tt = (
+            ttnn.from_torch(page_table, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+            if page_table is not None
+            else None
+        )
+        return tokens_tt, cur_pos_tt, rope_packed, page_table_tt
+
+    def prepare_inputs_decode(self, tokens, current_pos, page_table=None):
+        """Host-to-device transfer for decode inputs.
+
+        Calls prepare_decode_inputs_host then copy_host_to_device, returning
+        device tensors in the same order (tokens, cur_pos, rope_packed, page_table).
+        """
+        from models.tt_transformers.tt.common import copy_host_to_device
+
+        host = self.prepare_decode_inputs_host(tokens, current_pos, page_table=page_table)
+        return copy_host_to_device(host, mesh_device=self.mesh_device)
+
+    def ttnn_decode_forward(
+        self,
+        tokens,
+        current_pos,
+        rot_mat_idxs=None,
+        page_table=None,
+        kv_cache=None,
+        sampling_on_device=False,
+        capture_sampling_trace=False,
+        **kwargs,
+    ):
+        """Generator-contract decode forward.
+
+        Unpacks the packed rope tensor (rot_mat_idxs) and delegates to the
+        trace-safe _forward_decode. GDN and attention KV state are model-bound
+        (set by allocate_kv_caches), so kv_cache is accepted but unused.
+
+        Returns: (logits, None)
+        """
+        from models.demos.blackhole.qwen3_5_9b.tt.generator_interface import unpack_rope
+
+        cos, sin = unpack_rope(rot_mat_idxs)
+        logits = self._forward_decode(tokens, cos, sin, current_pos, page_table)
+        return logits, None
+
+    def process_output_decode(self, tt_out, B, S=1, is_tokens=False, is_log_probs=False):
+        """Convert decode logits from device ttnn to a host float tensor.
+
+        Qwen's _forward_decode returns 3D logits [B, 1, vocab_size]; slice accordingly.
+        On-device sampling / log-probs are not supported by this port (host sampling only,
+        ``_supports_on_device_sampling=False``), so the is_tokens / is_log_probs branches the
+        reference handles never fire here. Assert rather than silently return wrong-shaped data.
+        """
+        assert not (is_tokens or is_log_probs), "on-device sampling/log-probs unsupported (host sampling only)"
+        out = ttnn.to_torch(tt_out).float()
+        return out[:B, :S, : self.args.vocab_size].view(B, S, -1)
+
     def _save_deltanet_states(self):
-        """Save DeltaNet recurrent + conv states to CPU for restoration after trace capture."""
+        """Snapshot DeltaNet recurrent + conv states to host.
+
+        Used to guard the GDN in-place recurrent state across the stock Generator's
+        decode-trace capture: the capture runs the forward twice (compile + capture),
+        each advancing the recurrent state non-idempotently. Snapshot before capture
+        and restore after (see generator_interface.prime_decode_trace) so the replay
+        loop starts from the correct post-prefill state.
+        """
         saved = []
         for layer in self.layers:
             if not layer.is_full_attention:
@@ -1120,7 +1148,8 @@ class Qwen35Model:
         return saved
 
     def _restore_deltanet_states(self, saved_states, device):
-        """Restore DeltaNet states using ttnn.copy into original buffers (preserves addresses)."""
+        """Restore DeltaNet states via ttnn.copy into the original buffers (preserves
+        addresses, so a captured trace that baked those addresses stays valid)."""
         idx = 0
         for layer in self.layers:
             if not layer.is_full_attention:
@@ -1139,3 +1168,5 @@ class Qwen35Model:
                     ttnn.deallocate(restored_conv)
                     dn._restore_split_conv_from_fused()
                 idx += 1
+
+    # -------------------------------------------------------------------------

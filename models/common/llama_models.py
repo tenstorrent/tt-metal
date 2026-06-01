@@ -10,12 +10,11 @@ import torch
 from PIL import Image
 from pydantic import BaseModel, validator
 
-# ``AutoModelForImageTextToText`` (the replacement for ``AutoModelForVision2Seq``,
-# which was removed in transformers 5.x) is only consumed by the
-# ``GeneratorChat``/``GeneratorText`` constructors below — defer the imports
-# so loading this module doesn't break every downstream import chain
-# (e.g. ``tt_transformers.tt.generator``, used by every TT vLLM bridge)
-# under transformers >= 5.
+try:
+    from transformers import AutoModelForVision2Seq
+except ImportError:  # transformers >= 5.x renamed it
+    from transformers import AutoModelForImageTextToText as AutoModelForVision2Seq
+from transformers import AutoProcessor, pipeline
 
 
 class Role(Enum):
